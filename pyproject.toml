@@ -5,12 +5,12 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "asianf"
 version = "0.1.0"
-description = "Minimal DeepAgents runtime with Langfuse tracing."
+description = "Minimal LangChain agent runtime with Langfuse tracing."
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
-    "deepagents",
     "httpx>=0.28.1",
+    "langchain",
     "langchain-openai",
     "langchain-core",
     "langfuse",

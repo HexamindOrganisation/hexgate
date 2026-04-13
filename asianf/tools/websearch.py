@@ -5,21 +5,10 @@ from __future__ import annotations
 import os
 
 import httpx
+from langchain_core.tools import tool
 
 from asianf.tracing.langfuse import observe
 from asianf.utils.retry import async_retry
-
-try:
-    from langchain_core.tools import tool
-except Exception:  # pragma: no cover - dependency absent during scaffold phase
-    def tool(func=None, *args, **kwargs):
-        if func is not None and callable(func):
-            return func
-
-        def decorator(inner):
-            return inner
-
-        return decorator
 
 
 def _get_env_or_raise(key: str) -> str:

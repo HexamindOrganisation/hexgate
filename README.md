@@ -1,8 +1,8 @@
 # asianf
 
-`asianf` is a fresh DeepAgents-based runtime spike built around:
+`asianf` is a fresh LangChain-based runtime spike built around:
 
-- `deepagents`
+- `langchain`
 - `gpt-5.4`
 - `Linkup` web search
 - Tavily-based page fetch

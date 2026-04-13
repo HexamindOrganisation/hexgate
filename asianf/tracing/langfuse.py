@@ -3,22 +3,14 @@
 from __future__ import annotations
 
 from inspect import signature
-from typing import Any, Callable
+from typing import Any
+
+from langfuse import get_client, observe as langfuse_observe
+from langfuse.langchain import CallbackHandler
 
 
 def observe(*args, **kwargs):
-    """Use Langfuse observe when available, otherwise fall back to a no-op decorator."""
-    try:
-        from langfuse import observe as langfuse_observe
-    except Exception:
-        if args and callable(args[0]) and len(args) == 1 and not kwargs:
-            return args[0]
-
-        def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
-            return func
-
-        return decorator
-
+    """Apply the Langfuse observe decorator."""
     return langfuse_observe(*args, **kwargs)
 
 
@@ -28,9 +20,7 @@ def get_langfuse_handler(
     user_id: str | None = None,
     tags: list[str] | None = None,
 ):
-    """Create a Langfuse LangChain callback handler when the SDK is installed."""
-    from langfuse.langchain import CallbackHandler
-
+    """Create a Langfuse LangChain callback handler."""
     init_params = signature(CallbackHandler.__init__).parameters
     default_tags = tags or ["asianf"]
 
@@ -62,11 +52,6 @@ def get_langfuse_runnable_config(handler: Any) -> dict[str, Any]:
 
 def maybe_get_trace_url(handler: Any | None = None) -> str | None:
     """Return the current trace URL if Langfuse is active."""
-    try:
-        from langfuse import get_client
-    except Exception:
-        return None
-
     client = get_client()
     trace_id = getattr(handler, "last_trace_id", None) if handler is not None else None
     try:

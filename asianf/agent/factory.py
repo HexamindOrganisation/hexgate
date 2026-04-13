@@ -1,9 +1,11 @@
-"""Create the first asianf deep agent."""
+"""Create the first asianf agent."""
 
 from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
+
+from langchain.agents import create_agent as create_langchain_agent
 
 from asianf.config.settings import Settings
 from asianf.tools.fetch import fetch
@@ -27,16 +29,9 @@ def create_agent(
     session_id: str | None = None,
     user_id: str | None = None,
 ):
-    """Create a deep agent configured for the first asianf spike."""
-    try:
-        from deepagents import create_deep_agent
-    except Exception as exc:  # pragma: no cover - dependency absent during scaffold phase
-        raise RuntimeError(
-            "deepagents is not installed. Install project dependencies first."
-        ) from exc
-
+    """Create an agent configured for the first asianf spike."""
     tools = [web_search, fetch]
-    agent = create_deep_agent(
+    agent = create_langchain_agent(
         model=settings.model,
         tools=tools,
         system_prompt=_load_system_prompt(),
@@ -52,7 +47,7 @@ def create_agent(
 
 @observe(name="invoke_asianf_agent")
 async def invoke_agent(agent: Any, handler: Any, query: str) -> dict:
-    """Invoke the deep agent for a single query."""
+    """Invoke the agent for a single query."""
     return await agent.ainvoke(
         {"messages": [{"role": "user", "content": query}]},
         config=get_langfuse_runnable_config(handler),
@@ -61,10 +56,10 @@ async def invoke_agent(agent: Any, handler: Any, query: str) -> dict:
 
 @observe(name="stream_asianf_agent")
 async def stream_agent(agent: Any, handler: Any, query: str):
-    """Stream updates from the deep agent."""
+    """Stream message chunks from the agent."""
     async for event in agent.astream(
         {"messages": [{"role": "user", "content": query}]},
         config=get_langfuse_runnable_config(handler),
-        stream_mode="updates",
+        stream_mode="messages",
     ):
         yield event
