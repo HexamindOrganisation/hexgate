@@ -10,8 +10,10 @@ def async_retry(retries: int = 3, delay_ms: int = 200, exceptions=(Exception,)):
     delay = delay_ms / 1000.0
 
     def decorator(func):
+        """Wrap an async function with retry behavior."""
         @wraps(func)
         async def wrapper(*args, **kwargs):
+            """Execute the wrapped async function with retries."""
             last_err = None
             for attempt in range(retries + 1):
                 try:

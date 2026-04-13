@@ -18,6 +18,7 @@ from asianf.tracing.langfuse import (
 
 
 def _load_system_prompt() -> str:
+    """Load the agent system prompt from disk."""
     prompt_path = Path(__file__).parent.parent / "prompts" / "agent_system.md"
     return prompt_path.read_text(encoding="utf-8")
 
