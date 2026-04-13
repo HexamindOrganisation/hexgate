@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "asianf"
+version = "0.1.0"
+description = "Minimal DeepAgents runtime with Langfuse tracing."
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "deepagents",
+    "httpx>=0.28.1",
+    "langchain-openai",
+    "langchain-core",
+    "langfuse",
+    "pydantic>=2.12.4",
+    "python-dotenv>=1.1.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "ipykernel",
+    "jupyter",
+    "pytest>=8.4.1",
+    "pytest-asyncio>=1.0.0",
+    "ruff>=0.12.2",
+]
+
+[tool.setuptools.packages.find]
+include = ["asianf*"]
