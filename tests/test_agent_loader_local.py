@@ -1,0 +1,87 @@
+"""Tests for local project agent discovery."""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+from coolagents.agents import loader
+
+
+def _write_agent_dir(agent_dir: Path, *, name: str) -> None:
+    """Create a tiny local agent directory for loader tests."""
+    agent_dir.mkdir(parents=True, exist_ok=True)
+    (agent_dir / "agent.yaml").write_text(
+        "\n".join(
+            [
+                f"name: {name}",
+                "model: gpt-5.4",
+                "system_prompt: system.md",
+                "tools:",
+                "  - web_search",
+                "policy: policy.yaml",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (agent_dir / "policy.yaml").write_text(
+        "\n".join(
+            [
+                "version: 1",
+                "default_policy:",
+                "  mode: deny",
+                "tools:",
+                "  web_search:",
+                "    mode: allow",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (agent_dir / "system.md").write_text("You are a local test agent.", encoding="utf-8")
+
+
+def test_list_local_agents_reads_root_level_agent_dirs(tmp_path: Path) -> None:
+    """Discover local agents defined directly under the project root."""
+    _write_agent_dir(tmp_path / "example_agent", name="example_agent")
+
+    assert loader.list_local_agents(tmp_path) == ["example_agent"]
+
+
+def test_list_local_agents_reads_agents_subdirectory(tmp_path: Path) -> None:
+    """Discover local agents defined under ./agents."""
+    _write_agent_dir(tmp_path / "agents" / "project_agent", name="project_agent")
+
+    assert loader.list_local_agents(tmp_path) == ["project_agent"]
+
+
+def test_resolve_agent_source_prefers_local_over_builtin(tmp_path: Path) -> None:
+    """Prefer local agents when an id exists in both registries."""
+    _write_agent_dir(tmp_path / "researcher", name="researcher")
+
+    assert loader.resolve_agent_source("researcher", tmp_path) == "local"
+
+
+def test_load_local_agent_resolves_spec_into_create_agent(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Instantiate a local agent by wiring prompt, tools, and policy."""
+    _write_agent_dir(tmp_path / "example_agent", name="example_agent")
+    captured: dict[str, Any] = {}
+
+    def fake_create_agent(**kwargs: Any) -> tuple[str, str]:
+        """Capture loader kwargs and return fake instances."""
+        captured.update(kwargs)
+        return "agent-instance", "handler-instance"
+
+    monkeypatch.setattr(loader, "create_agent", fake_create_agent)
+
+    agent, handler = loader.load_local_agent("example_agent", base_dir=tmp_path)
+
+    assert (agent, handler) == ("agent-instance", "handler-instance")
+    assert captured["name"] == "example_agent"
+    assert [tool.name for tool in captured["tools"]] == ["web_search"]
+    assert "local test agent" in captured["system_prompt"]
+    assert captured["policy"].tools["web_search"].mode == "allow"

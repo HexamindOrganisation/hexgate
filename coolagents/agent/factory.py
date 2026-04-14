@@ -6,22 +6,24 @@ from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any, TypeAlias
 
-from langchain.agents.middleware.types import AgentMiddleware
 from langchain.agents import create_agent as create_langchain_agent
+from langchain.agents.middleware.types import AgentMiddleware
 from langchain.agents.structured_output import ResponseFormat
 from langchain_core.caches import BaseCache
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import BaseMessage
 from langchain_core.messages.system import SystemMessage
 from langchain_core.runnables.schema import StreamEvent as LangChainStreamEvent
-from langchain_core.tools import BaseTool
+from langchain_core.tools import BaseTool, tool
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.store.base import BaseStore
 from pydantic import BaseModel
 
+from coolagents.security import AgentPolicy, load_policy
 from coolagents.streaming import new_root_run_id, normalize_langchain_events
 from coolagents.stream import StreamEvent
+from coolagents.tools.decorators import TOOL_METADATA_ATTR
 from coolagents.tracing.langfuse import (
     CallbackHandler,
     get_langfuse_handler,
@@ -129,11 +131,55 @@ def extract_input_text(input: AgentInput) -> str:
     return _extract_query_from_messages(input)
 
 
+def _copy_tool_metadata(source: Any, target: Any) -> Any:
+    """Copy coolagents-specific metadata from one tool object to another."""
+    metadata = getattr(source, TOOL_METADATA_ATTR, None)
+    if metadata is not None:
+        setattr(target, TOOL_METADATA_ATTR, metadata)
+    return target
+
+
+def _wrap_tools_with_policy(
+    tools: Sequence[ToolSpec],
+    policy: AgentPolicy | None,
+) -> list[ToolSpec]:
+    """Wrap tools so policy decisions are enforced before execution."""
+    if policy is None:
+        return list(tools)
+
+    wrapped_tools: list[ToolSpec] = []
+    for tool_spec in tools:
+        if not isinstance(tool_spec, BaseTool):
+            wrapped_tools.append(tool_spec)
+            continue
+
+        async def authorized_tool(
+            _tool: BaseTool = tool_spec,
+            **kwargs: Any,
+        ) -> Any:
+            """Authorize a tool call before delegating to the real tool."""
+            from coolagents.security import authorize_tool_call
+
+            authorize_tool_call(policy, _tool.name)
+            return await _tool.ainvoke(kwargs)
+
+        wrapped = tool(
+            tool_spec.name,
+            description=tool_spec.description,
+            return_direct=tool_spec.return_direct,
+            args_schema=tool_spec.args_schema,
+            infer_schema=False,
+        )(authorized_tool)
+        wrapped_tools.append(_copy_tool_metadata(tool_spec, wrapped))
+    return wrapped_tools
+
+
 @observe(name="create_coolagents_agent")
 def create_agent(
     model: str | BaseChatModel,
     tools: Sequence[ToolSpec],
     system_prompt: str | Path | SystemMessage | None = DEFAULT_SYSTEM_PROMPT,
+    policy: str | Path | AgentPolicy | None = None,
     *,
     session_id: str | None = None,
     user_id: str | None = None,
@@ -156,9 +202,10 @@ def create_agent(
         if isinstance(system_prompt, SystemMessage)
         else load_system_prompt(system_prompt)
     )
+    resolved_policy = load_policy(policy) if policy is not None else None
     agent = create_langchain_agent(
         model=model,
-        tools=list(tools),
+        tools=_wrap_tools_with_policy(tools, resolved_policy),
         system_prompt=resolved_system_prompt,
         middleware=middleware,
         response_format=response_format,

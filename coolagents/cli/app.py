@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import argparse
 from dataclasses import dataclass
+from pathlib import Path
 
 from rich.console import Console, Group, RenderableType
 from rich.live import Live
@@ -11,14 +13,14 @@ from rich.markdown import Markdown
 from rich.spinner import Spinner
 from rich.text import Text
 
-from coolagents.agent.factory import AgentGraph, CallbackHandler, create_agent, stream_agent
+from coolagents.agent.factory import AgentGraph, CallbackHandler, stream_agent
+from coolagents.agents.loader import list_available_agents, load_agent, resolve_agent_source
 from coolagents.cli.state import ChatState, LiveRunState, ToolActivity
 from coolagents.config.settings import Settings
 from coolagents.setup import bootstrap
 from coolagents.stream import ToolCallState
+from coolagents.tools import fetch, web_search
 from coolagents.tools.decorators import format_tool_call_label
-from coolagents.tools.fetch import fetch
-from coolagents.tools.websearch import web_search
 from coolagents.tracing.langfuse import maybe_get_trace_url
 
 
@@ -28,6 +30,9 @@ class AgentRuntime:
 
     agent: AgentGraph
     handler: CallbackHandler
+    agent_name: str
+    agent_source: str
+    model: str
     tools_by_name: dict[str, object]
 
 
@@ -103,17 +108,52 @@ def _print_completed_turn(
     console.print()
 
 
-def _build_runtime(settings: Settings) -> AgentRuntime:
-    """Create the default runtime used by the terminal app."""
+def _build_runtime(settings: Settings, *, agent_name: str, base_dir: Path, model: str | None) -> AgentRuntime:
+    """Create the runtime used by the terminal app."""
     tools = [web_search, fetch]
-    agent, handler = create_agent(
-        model=settings.model,
-        tools=tools,
+    resolved_model = model or settings.model
+    agent, handler = load_agent(
+        agent_name,
+        base_dir=base_dir,
+        model=resolved_model,
         session_id="coolagents-cli",
-        tags=["coolagents", settings.search_engine, settings.model],
+        tags=["coolagents", settings.search_engine, resolved_model, agent_name],
+        extra_tools={tool.name: tool for tool in tools},
     )
     tools_by_name = {getattr(tool, "name", getattr(tool, "__name__", "tool")): tool for tool in tools}
-    return AgentRuntime(agent=agent, handler=handler, tools_by_name=tools_by_name)
+    return AgentRuntime(
+        agent=agent,
+        handler=handler,
+        agent_name=agent_name,
+        agent_source=resolve_agent_source(agent_name, base_dir),
+        model=resolved_model,
+        tools_by_name=tools_by_name,
+    )
+
+
+def _parse_args() -> argparse.Namespace:
+    """Parse command-line arguments for the inline chat app."""
+    parser = argparse.ArgumentParser(description="Run the coolagents inline chat CLI.")
+    parser.add_argument("--agent", help="Agent id to load from local or builtin definitions.")
+    parser.add_argument("--model", help="Optional model override for the selected agent.")
+    parser.add_argument(
+        "--list-agents",
+        action="store_true",
+        help="List available local and builtin agents, then exit.",
+    )
+    return parser.parse_args()
+
+
+def _default_agent_name(base_dir: Path) -> str:
+    """Return the default agent id for the current project context."""
+    available = list_available_agents(base_dir)
+    if "example_agent" in available:
+        return "example_agent"
+    if "researcher" in available:
+        return "researcher"
+    if not available:
+        raise RuntimeError("No agents found in the current project or builtin registry.")
+    return available[0]
 
 
 async def _chat_loop(console: Console, runtime: AgentRuntime) -> None:
@@ -121,6 +161,10 @@ async def _chat_loop(console: Console, runtime: AgentRuntime) -> None:
     state = ChatState()
 
     console.print("[bold white]coolagents[/] inline chat")
+    console.print(
+        f"[dim]agent: {runtime.agent_name} ({runtime.agent_source}) | "
+        f"model: {runtime.model}[/]"
+    )
     console.print("[dim]Ask a question. Use /clear to reset or /exit to quit.[/]")
     console.print()
 
@@ -167,8 +211,18 @@ async def _chat_loop(console: Console, runtime: AgentRuntime) -> None:
 def run() -> None:
     """Launch the inline terminal chat application."""
     console = Console()
+    args = _parse_args()
     settings = bootstrap()
-    runtime = _build_runtime(settings)
+    base_dir = Path.cwd()
+
+    if args.list_agents:
+        for agent_name in list_available_agents(base_dir):
+            source = resolve_agent_source(agent_name, base_dir)
+            console.print(f"{agent_name} [{source}]")
+        return
+
+    agent_name = args.agent or _default_agent_name(base_dir)
+    runtime = _build_runtime(settings, agent_name=agent_name, base_dir=base_dir, model=args.model)
     asyncio.run(_chat_loop(console, runtime))
 
 

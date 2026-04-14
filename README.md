@@ -21,6 +21,8 @@ The current curated surface is:
 - `invoke_agent`
 - `stream_agent`
 - `stream_agent_raw`
+- `load_builtin_agent`
+- `list_builtin_agents`
 - `agent_tool`
 - `web_search`
 - `fetch`
@@ -28,7 +30,34 @@ The current curated surface is:
 Example:
 
 ```python
-from coolagents import create_agent, agent_tool, web_search, fetch
+from coolagents import create_agent, agent_tool, load_builtin_agent, web_search, fetch
+```
+
+## Builtin Agents
+
+The package now ships with a small `coolagents.builtin_agents` directory for official starter agents.
+
+Current builtin agents:
+
+- `researcher`
+
+Example:
+
+```python
+from coolagents import load_builtin_agent
+
+agent, handler = load_builtin_agent("researcher")
+```
+
+The CLI also discovers local agents from:
+
+- `./<agent_dir>/agent.yaml`
+- `./agents/<agent_dir>/agent.yaml`
+
+This repo includes a root-level `example_agent/` directory, so from the project root you can simply run:
+
+```bash
+coolagents-chat --agent example_agent
 ```
 
 ## Environment

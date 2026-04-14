@@ -1,0 +1,10 @@
+version: 1
+
+default_policy:
+  mode: deny
+
+tools:
+  web_search:
+    mode: allow
+  fetch:
+    mode: allow
