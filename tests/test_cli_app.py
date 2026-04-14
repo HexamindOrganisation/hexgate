@@ -4,7 +4,14 @@ from __future__ import annotations
 
 from rich.console import Console
 
-from coolagents.cli.app import AgentRuntime, DOG_LOGO, _render_welcome, _tail_text
+from coolagents.agents import loader
+from coolagents.cli.app import (
+    AgentRuntime,
+    DOG_LOGO,
+    _load_agent_script,
+    _render_welcome,
+    _tail_text,
+)
 
 
 def test_tail_text_keeps_last_lines_of_long_output() -> None:
@@ -54,3 +61,13 @@ def test_render_welcome_includes_agent_and_model() -> None:
     assert "gpt-5.4" in rendered
     assert "coolagents" in rendered
     assert DOG_LOGO.splitlines()[0].strip() in rendered
+
+
+def test_load_agent_script_registers_code_agents() -> None:
+    """Importing a registration script should populate the code agent registry."""
+    loader.clear_registered_agents()
+
+    _load_agent_script("/Users/haquangle/workspace/upagent/upup/asianf/examples/agents.py")
+
+    assert "website_analyser" in loader.list_registered_agents()
+    assert "news_collector" in loader.list_registered_agents()

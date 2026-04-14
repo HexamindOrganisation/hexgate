@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import argparse
 from dataclasses import dataclass
+import importlib.util
 from pathlib import Path
 
 from rich.columns import Columns
@@ -179,6 +180,10 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--agent", help="Agent id to load from local or builtin definitions.")
     parser.add_argument("--model", help="Optional model override for the selected agent.")
     parser.add_argument(
+        "--use",
+        help="Python script that registers code-defined agents before loading --agent.",
+    )
+    parser.add_argument(
         "--list-agents",
         action="store_true",
         help="List available local and builtin agents, then exit.",
@@ -196,6 +201,18 @@ def _default_agent_name(base_dir: Path) -> str:
     if not available:
         raise RuntimeError("No agents found in the current project or builtin registry.")
     return available[0]
+
+
+def _load_agent_script(script_path: str | Path) -> Path:
+    """Import a Python script that registers code-defined agents."""
+    path = Path(script_path).expanduser().resolve()
+    module_name = f"coolagents_user_script_{path.stem}"
+    spec = importlib.util.spec_from_file_location(module_name, path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Could not load agent script: {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return path
 
 
 def _render_welcome(runtime: AgentRuntime) -> RenderableType:
@@ -273,6 +290,9 @@ def run() -> None:
     args = _parse_args()
     settings = bootstrap()
     base_dir = Path.cwd()
+
+    if args.use:
+        _load_agent_script(args.use)
 
     if args.list_agents:
         for agent_name in list_available_agents(base_dir):

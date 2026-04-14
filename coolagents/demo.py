@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 
-from coolagents.agent.factory import create_agent, stream_agent
+from coolagents.agent.factory import stream_agent
+from coolagents.agents.loader import list_available_agents, load_agent
 from coolagents.setup import bootstrap
 from coolagents.stream import BlockDeltaEvent, EventType, ToolEndEvent, ToolStartEvent
-from coolagents.tools.fetch import fetch
-from coolagents.tools.websearch import web_search
 from coolagents.tracing.langfuse import maybe_get_trace_url
 
 
@@ -25,17 +25,33 @@ def _render_event(event: object) -> str | None:
     return None
 
 
+def _default_demo_agent(base_dir: Path) -> str:
+    """Return the default demo agent for the current project context."""
+    available = list_available_agents(base_dir)
+    if "example_agent" in available:
+        return "example_agent"
+    if "researcher" in available:
+        return "researcher"
+    if not available:
+        raise RuntimeError("No local or builtin agents available for the demo.")
+    return available[0]
+
+
 async def main() -> None:
     """Run the demo agent and print normalized stream events."""
     settings = bootstrap()
-    agent, handler = create_agent(
+    base_dir = Path.cwd()
+    agent_name = _default_demo_agent(base_dir)
+    agent, handler = load_agent(
+        agent_name,
+        base_dir=base_dir,
         model=settings.model,
-        tools=[web_search, fetch],
         session_id="demo-session",
         tags=["coolagents", settings.search_engine, settings.model],
     )
 
     query = "Search for the latest major AI breakthroughs this month and summarize the top 5 with sources."
+    print(f"Agent: {agent_name}")
     print(f"Query: {query}\n")
 
     async for event in stream_agent(agent, handler, query):

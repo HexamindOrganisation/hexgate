@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from importlib.resources import files
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, TypeAlias
 
 import yaml
 
@@ -19,7 +19,9 @@ BUILTIN_TOOLS = {
     "fetch": fetch,
     "web_search": web_search,
 }
-AgentSource = Literal["builtin", "local"]
+AgentSource = Literal["builtin", "local", "registered"]
+AgentFactory: TypeAlias = Callable[..., tuple[AgentGraph, CallbackHandler]]
+REGISTERED_AGENTS: dict[str, AgentFactory] = {}
 
 
 def builtin_agents_root() -> Path:
@@ -64,6 +66,26 @@ def list_local_agents(base_dir: str | Path | None = None) -> list[str]:
         spec = _load_agent_spec_from_dir(agent_dir)
         names.append(spec.name)
     return sorted(names)
+
+
+def register_agent(name: str, factory: AgentFactory) -> None:
+    """Register a code-defined agent factory under a stable id."""
+    REGISTERED_AGENTS[name] = factory
+
+
+def unregister_agent(name: str) -> None:
+    """Remove a previously registered code-defined agent."""
+    REGISTERED_AGENTS.pop(name, None)
+
+
+def clear_registered_agents() -> None:
+    """Clear the in-memory code agent registry."""
+    REGISTERED_AGENTS.clear()
+
+
+def list_registered_agents() -> list[str]:
+    """List currently registered code-defined agent ids."""
+    return sorted(REGISTERED_AGENTS)
 
 
 def list_builtin_agents() -> list[str]:
@@ -115,6 +137,7 @@ def list_available_agents(base_dir: str | Path | None = None) -> list[str]:
     """List merged local and builtin agent ids."""
     names = set(list_builtin_agents())
     names.update(list_local_agents(base_dir))
+    names.update(list_registered_agents())
     return sorted(names)
 
 
@@ -190,10 +213,37 @@ def load_local_agent(
     )
 
 
+def load_registered_agent(
+    name: str,
+    *,
+    base_dir: str | Path | None = None,
+    session_id: str | None = None,
+    user_id: str | None = None,
+    tags: list[str] | None = None,
+    extra_tools: Mapping[str, Any] | None = None,
+    model: str | None = None,
+) -> tuple[AgentGraph, CallbackHandler]:
+    """Load a registered code-defined agent by id."""
+    try:
+        factory = REGISTERED_AGENTS[name]
+    except KeyError as exc:
+        raise KeyError(f'Unknown registered agent "{name}"') from exc
+    return factory(
+        base_dir=base_dir,
+        session_id=session_id,
+        user_id=user_id,
+        tags=tags,
+        extra_tools=extra_tools,
+        model=model,
+    )
+
+
 def resolve_agent_source(name: str, base_dir: str | Path | None = None) -> AgentSource:
     """Return whether an agent id resolves from local or builtin definitions."""
     if name in list_local_agents(base_dir):
         return "local"
+    if name in list_registered_agents():
+        return "registered"
     if name in list_builtin_agents():
         return "builtin"
     raise KeyError(f'Unknown agent "{name}"')
@@ -210,8 +260,19 @@ def load_agent(
     model: str | None = None,
 ) -> tuple[AgentGraph, CallbackHandler]:
     """Load either a local or builtin agent by name."""
-    if resolve_agent_source(name, base_dir) == "local":
+    source = resolve_agent_source(name, base_dir)
+    if source == "local":
         return load_local_agent(
+            name,
+            base_dir=base_dir,
+            session_id=session_id,
+            user_id=user_id,
+            tags=tags,
+            extra_tools=extra_tools,
+            model=model,
+        )
+    if source == "registered":
+        return load_registered_agent(
             name,
             base_dir=base_dir,
             session_id=session_id,
