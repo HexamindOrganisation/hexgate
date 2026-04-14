@@ -16,20 +16,26 @@ class FakeAgent:
     def __init__(self) -> None:
         """Initialize call tracking for the fake agent."""
         self.ainvoke_calls: list[dict[str, Any]] = []
-        self.astream_calls: list[dict[str, Any]] = []
+        self.astream_event_calls: list[dict[str, Any]] = []
 
     async def ainvoke(self, payload: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
         """Record an invoke call and return a fake response."""
         self.ainvoke_calls.append({"payload": payload, "config": config})
         return {"messages": ["ok"]}
 
-    async def astream(self, payload: dict[str, Any], config: dict[str, Any], stream_mode: str):
-        """Yield two fake streamed events."""
-        self.astream_calls.append(
-            {"payload": payload, "config": config, "stream_mode": stream_mode}
+    async def astream_events(
+        self,
+        payload: dict[str, Any],
+        config: dict[str, Any],
+        *,
+        version: str,
+    ):
+        """Yield two fake raw LangChain stream events."""
+        self.astream_event_calls.append(
+            {"payload": payload, "config": config, "version": version}
         )
-        yield ("chunk-1", {"node": "model"})
-        yield ("chunk-2", {"node": "model"})
+        yield {"event": "one"}
+        yield {"event": "two"}
 
 
 def make_settings() -> Settings:
@@ -112,22 +118,51 @@ async def test_invoke_agent_passes_messages_and_config(monkeypatch: pytest.Monke
 
 
 @pytest.mark.asyncio
-async def test_stream_agent_uses_message_streaming(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Stream agent events with the messages stream mode."""
+async def test_stream_agent_raw_uses_astream_events_v2(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stream raw agent events through LangChain's event stream API."""
     fake_agent = FakeAgent()
     monkeypatch.setattr(
         factory,
         "get_langfuse_runnable_config",
         lambda handler: {"callbacks": [handler]},
     )
+    monkeypatch.setattr(factory, "new_root_run_id", lambda: "run-123")
 
-    events = [event async for event in factory.stream_agent(fake_agent, "handler", "hello")]
+    events = [event async for event in factory.stream_agent_raw(fake_agent, "handler", "hello")]
 
-    assert events == [("chunk-1", {"node": "model"}), ("chunk-2", {"node": "model"})]
-    assert fake_agent.astream_calls == [
+    assert events == [{"event": "one"}, {"event": "two"}]
+    assert fake_agent.astream_event_calls == [
         {
             "payload": {"messages": [{"role": "user", "content": "hello"}]},
-            "config": {"callbacks": ["handler"]},
-            "stream_mode": "messages",
+            "config": {"callbacks": ["handler"], "run_id": "run-123"},
+            "version": "v2",
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_stream_agent_normalizes_raw_events(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Normalize raw LangChain events into app-level stream events."""
+
+    async def fake_stream_agent_raw(agent: Any, handler: Any, query: str):
+        """Yield a small fake raw event sequence."""
+        assert agent == "agent"
+        assert handler == "handler"
+        assert query == "hello"
+        yield {"event": "one"}
+        yield {"event": "two"}
+
+    async def fake_normalize(raw_events: Any, *, query: str):
+        """Yield normalized events from the fake raw stream."""
+        assert query == "hello"
+        collected = [event async for event in raw_events]
+        assert collected == [{"event": "one"}, {"event": "two"}]
+        yield {"normalized": 1}
+        yield {"normalized": 2}
+
+    monkeypatch.setattr(factory, "stream_agent_raw", fake_stream_agent_raw)
+    monkeypatch.setattr(factory, "normalize_langchain_events", fake_normalize)
+
+    events = [event async for event in factory.stream_agent("agent", "handler", "hello")]
+
+    assert events == [{"normalized": 1}, {"normalized": 2}]

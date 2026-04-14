@@ -7,6 +7,7 @@ from typing import Any
 
 from langchain.agents import create_agent as create_langchain_agent
 
+from asianf.streaming import new_root_run_id, normalize_langchain_events
 from asianf.config.settings import Settings
 from asianf.tools.fetch import fetch
 from asianf.tools.websearch import web_search
@@ -55,12 +56,23 @@ async def invoke_agent(agent: Any, handler: Any, query: str) -> dict:
     )
 
 
+async def stream_agent_raw(agent: Any, handler: Any, query: str):
+    """Stream raw LangChain events from the agent runtime."""
+    config = get_langfuse_runnable_config(handler)
+    config["run_id"] = new_root_run_id()
+    async for event in agent.astream_events(
+        {"messages": [{"role": "user", "content": query}]},
+        config=config,
+        version="v2",
+    ):
+        yield event
+
+
 @observe(name="stream_asianf_agent")
 async def stream_agent(agent: Any, handler: Any, query: str):
-    """Stream message chunks from the agent."""
-    async for event in agent.astream(
-        {"messages": [{"role": "user", "content": query}]},
-        config=get_langfuse_runnable_config(handler),
-        stream_mode="messages",
+    """Stream normalized runtime events from the agent."""
+    async for event in normalize_langchain_events(
+        stream_agent_raw(agent, handler, query),
+        query=query,
     ):
         yield event
