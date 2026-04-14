@@ -3,10 +3,18 @@
 from __future__ import annotations
 
 from inspect import signature
-from typing import Any
+from typing import Any, Protocol
 
 from langfuse import get_client, observe as langfuse_observe
 from langfuse.langchain import CallbackHandler
+from langchain_core.runnables import RunnableConfig
+
+
+class LangfuseHandler(Protocol):
+    """Protocol for the Langfuse callback handler used by asianf."""
+
+    last_trace_id: str | None
+    langfuse_metadata: dict[str, Any]
 
 
 def observe(*args, **kwargs):
@@ -19,7 +27,7 @@ def get_langfuse_handler(
     session_id: str | None = None,
     user_id: str | None = None,
     tags: list[str] | None = None,
-):
+) -> CallbackHandler:
     """Create a Langfuse LangChain callback handler."""
     init_params = signature(CallbackHandler.__init__).parameters
     default_tags = tags or ["asianf"]
@@ -40,9 +48,9 @@ def get_langfuse_handler(
     return handler
 
 
-def get_langfuse_runnable_config(handler: Any) -> dict[str, Any]:
+def get_langfuse_runnable_config(handler: CallbackHandler) -> RunnableConfig:
     """Build LangChain runnable config for the current Langfuse SDK."""
-    config: dict[str, Any] = {"callbacks": [handler]}
+    config: RunnableConfig = {"callbacks": [handler]}
     metadata = getattr(handler, "langfuse_metadata", None)
     if metadata:
         config["metadata"] = {k: v for k, v in metadata.items() if v is not None}
@@ -50,7 +58,7 @@ def get_langfuse_runnable_config(handler: Any) -> dict[str, Any]:
     return config
 
 
-def maybe_get_trace_url(handler: Any | None = None) -> str | None:
+def maybe_get_trace_url(handler: CallbackHandler | None = None) -> str | None:
     """Return the current trace URL if Langfuse is active."""
     client = get_client()
     trace_id = getattr(handler, "last_trace_id", None) if handler is not None else None
