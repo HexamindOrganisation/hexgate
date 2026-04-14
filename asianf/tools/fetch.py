@@ -5,10 +5,8 @@ from __future__ import annotations
 import os
 
 import httpx
-from langchain_core.tools import tool
 
-from asianf.tracing.langfuse import observe
-from asianf.utils.retry import async_retry
+from asianf.tools.decorators import agent_tool
 
 
 def _get_env_or_raise(key: str) -> str:
@@ -18,9 +16,7 @@ def _get_env_or_raise(key: str) -> str:
     return value
 
 
-@tool
-@observe(name="tavily_fetch")
-@async_retry(retries=3, delay_ms=1000, exceptions=(httpx.HTTPError,))
+@agent_tool(name="tavily_fetch")
 async def fetch(
     url: str,
     extract_depth: str = "basic",
