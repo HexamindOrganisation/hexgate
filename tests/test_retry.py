@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from asianf.utils.retry import async_retry
+from coolagents.utils.retry import async_retry
 
 
 @pytest.mark.asyncio

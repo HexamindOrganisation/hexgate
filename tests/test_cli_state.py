@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from asianf.cli.state import ChatState
-from asianf.stream import (
+from coolagents.cli.state import ChatState
+from coolagents.stream import (
     AgentRunResult,
     BlockDeltaEvent,
     BlockType,

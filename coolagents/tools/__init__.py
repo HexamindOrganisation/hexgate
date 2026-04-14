@@ -1,5 +1,5 @@
 """Tool definitions."""
 
-from asianf.tools.decorators import agent_tool
+from coolagents.tools.decorators import agent_tool
 
 __all__ = ["agent_tool"]

@@ -1,4 +1,4 @@
-"""Runtime settings for asianf."""
+"""Runtime settings for coolagents."""
 
 from __future__ import annotations
 
@@ -35,7 +35,7 @@ class Settings:
         )
 
     def validate_required_keys(self) -> None:
-        """Validate the minimal keys required for the first spike."""
+        """Validate the minimal keys required for the runtime."""
         missing = []
         if not self.openai_api_key:
             missing.append("OPENAI_API_KEY")

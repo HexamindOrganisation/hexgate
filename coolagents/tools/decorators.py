@@ -8,8 +8,8 @@ from typing import Any
 import httpx
 from langchain_core.tools import tool
 
-from asianf.tracing.langfuse import observe
-from asianf.utils.retry import async_retry
+from coolagents.tracing.langfuse import observe
+from coolagents.utils.retry import async_retry
 
 TOOL_METADATA_ATTR = "__tool_metadata__"
 CallFormatter = Callable[[dict[str, Any]], str]

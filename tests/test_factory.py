@@ -8,7 +8,7 @@ from typing import Any
 import pytest
 from pydantic import BaseModel
 
-from asianf.agent import factory
+from coolagents.agent import factory
 
 
 class FakeAgent:
@@ -154,7 +154,7 @@ def test_create_agent_wires_tools_and_handler(monkeypatch: pytest.MonkeyPatch) -
         tools=custom_tools,
         session_id="session-1",
         user_id="user-1",
-        tags=["asianf", "linkup", "openai:gpt-5.4"],
+        tags=["coolagents", "linkup", "openai:gpt-5.4"],
     )
 
     assert agent == "agent-instance"
@@ -165,7 +165,7 @@ def test_create_agent_wires_tools_and_handler(monkeypatch: pytest.MonkeyPatch) -
     assert calls["handler_kwargs"] == {
         "session_id": "session-1",
         "user_id": "user-1",
-        "tags": ["asianf", "linkup", "openai:gpt-5.4"],
+        "tags": ["coolagents", "linkup", "openai:gpt-5.4"],
     }
 
 

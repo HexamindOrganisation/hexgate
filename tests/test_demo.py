@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from asianf.demo import _render_event
-from asianf.stream import (
+from coolagents.demo import _render_event
+from coolagents.stream import (
     AgentRunResult,
     BlockDeltaEvent,
     BlockType,

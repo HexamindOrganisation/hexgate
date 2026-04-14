@@ -9,7 +9,7 @@ from uuid import uuid4
 
 from langchain_core.messages import AIMessageChunk
 
-from asianf.stream import (
+from coolagents.stream import (
     AgentRunResult,
     BlockDeltaEvent,
     BlockEndEvent,

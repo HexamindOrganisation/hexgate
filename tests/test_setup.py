@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from asianf import setup
+from coolagents import setup
 
 
 def test_bootstrap_loads_requested_env_file(monkeypatch: pytest.MonkeyPatch) -> None:

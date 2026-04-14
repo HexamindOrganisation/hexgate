@@ -1,4 +1,4 @@
-"""Inline terminal chat app for asianf."""
+"""Inline terminal chat app for coolagents."""
 
 from __future__ import annotations
 
@@ -11,15 +11,15 @@ from rich.markdown import Markdown
 from rich.spinner import Spinner
 from rich.text import Text
 
-from asianf.agent.factory import AgentGraph, CallbackHandler, create_agent, stream_agent
-from asianf.cli.state import ChatState, LiveRunState, ToolActivity
-from asianf.config.settings import Settings
-from asianf.setup import bootstrap
-from asianf.stream import ToolCallState
-from asianf.tools.decorators import format_tool_call_label
-from asianf.tools.fetch import fetch
-from asianf.tools.websearch import web_search
-from asianf.tracing.langfuse import maybe_get_trace_url
+from coolagents.agent.factory import AgentGraph, CallbackHandler, create_agent, stream_agent
+from coolagents.cli.state import ChatState, LiveRunState, ToolActivity
+from coolagents.config.settings import Settings
+from coolagents.setup import bootstrap
+from coolagents.stream import ToolCallState
+from coolagents.tools.decorators import format_tool_call_label
+from coolagents.tools.fetch import fetch
+from coolagents.tools.websearch import web_search
+from coolagents.tracing.langfuse import maybe_get_trace_url
 
 
 @dataclass
@@ -109,8 +109,8 @@ def _build_runtime(settings: Settings) -> AgentRuntime:
     agent, handler = create_agent(
         model=settings.model,
         tools=tools,
-        session_id="asianf-cli",
-        tags=["asianf", settings.search_engine, settings.model],
+        session_id="coolagents-cli",
+        tags=["coolagents", settings.search_engine, settings.model],
     )
     tools_by_name = {getattr(tool, "name", getattr(tool, "__name__", "tool")): tool for tool in tools}
     return AgentRuntime(agent=agent, handler=handler, tools_by_name=tools_by_name)
@@ -120,7 +120,7 @@ async def _chat_loop(console: Console, runtime: AgentRuntime) -> None:
     """Run the interactive terminal chat loop."""
     state = ChatState()
 
-    console.print("[bold white]asianf[/] inline chat")
+    console.print("[bold white]coolagents[/] inline chat")
     console.print("[dim]Ask a question. Use /clear to reset or /exit to quit.[/]")
     console.print()
 
@@ -134,7 +134,7 @@ async def _chat_loop(console: Console, runtime: AgentRuntime) -> None:
         if user_text == "/clear":
             state.clear()
             console.clear()
-            console.print("[bold white]asianf[/] inline chat")
+            console.print("[bold white]coolagents[/] inline chat")
             console.print("[dim]Ask a question. Use /clear to reset or /exit to quit.[/]")
             console.print()
             continue

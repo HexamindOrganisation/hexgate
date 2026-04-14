@@ -1,4 +1,4 @@
-"""Bootstrap helpers for asianf."""
+"""Bootstrap helpers for coolagents."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from asianf.config.settings import Settings
+from coolagents.config.settings import Settings
 
 
 def bootstrap(env_file: str = ".env") -> Settings:

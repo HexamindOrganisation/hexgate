@@ -1,4 +1,4 @@
-"""Create thin LangChain agent helpers for asianf."""
+"""Create thin LangChain agent helpers for coolagents."""
 
 from __future__ import annotations
 
@@ -20,9 +20,9 @@ from langgraph.graph.state import CompiledStateGraph
 from langgraph.store.base import BaseStore
 from pydantic import BaseModel
 
-from asianf.streaming import new_root_run_id, normalize_langchain_events
-from asianf.stream import StreamEvent
-from asianf.tracing.langfuse import (
+from coolagents.streaming import new_root_run_id, normalize_langchain_events
+from coolagents.stream import StreamEvent
+from coolagents.tracing.langfuse import (
     CallbackHandler,
     get_langfuse_handler,
     get_langfuse_runnable_config,
@@ -129,7 +129,7 @@ def extract_input_text(input: AgentInput) -> str:
     return _extract_query_from_messages(input)
 
 
-@observe(name="create_asianf_agent")
+@observe(name="create_coolagents_agent")
 def create_agent(
     model: str | BaseChatModel,
     tools: Sequence[ToolSpec],
@@ -150,7 +150,7 @@ def create_agent(
     name: str | None = None,
     cache: BaseCache[Any] | None = None,
 ) -> tuple[AgentGraph, CallbackHandler]:
-    """Create an asianf agent as a thin wrapper over LangChain."""
+    """Create a coolagents agent as a thin wrapper over LangChain."""
     resolved_system_prompt = (
         system_prompt
         if isinstance(system_prompt, SystemMessage)
@@ -176,12 +176,12 @@ def create_agent(
     handler = get_langfuse_handler(
         session_id=session_id,
         user_id=user_id,
-        tags=tags or ["asianf", str(model)],
+        tags=tags or ["coolagents", str(model)],
     )
     return agent, handler
 
 
-@observe(name="invoke_asianf_agent")
+@observe(name="invoke_coolagents_agent")
 async def invoke_agent(
     agent: AgentGraph,
     handler: CallbackHandler,
@@ -210,7 +210,7 @@ async def stream_agent_raw(
         yield event
 
 
-@observe(name="stream_asianf_agent")
+@observe(name="stream_coolagents_agent")
 async def stream_agent(
     agent: AgentGraph,
     handler: CallbackHandler,

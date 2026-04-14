@@ -8,13 +8,13 @@ from typing import Any
 import httpx
 import pytest
 
-from asianf.tools.decorators import format_tool_call_label
-from asianf.tools.fetch import _get_env_or_raise as get_fetch_env
-from asianf.tools.fetch import _format_fetch_call
-from asianf.tools.fetch import fetch
-from asianf.tools.websearch import _get_env_or_raise as get_search_env
-from asianf.tools.websearch import _format_web_search_call
-from asianf.tools.websearch import web_search
+from coolagents.tools.decorators import format_tool_call_label
+from coolagents.tools.fetch import _get_env_or_raise as get_fetch_env
+from coolagents.tools.fetch import _format_fetch_call
+from coolagents.tools.fetch import fetch
+from coolagents.tools.websearch import _get_env_or_raise as get_search_env
+from coolagents.tools.websearch import _format_web_search_call
+from coolagents.tools.websearch import web_search
 
 
 class DummyResponse:

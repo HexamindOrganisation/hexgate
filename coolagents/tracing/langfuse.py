@@ -11,7 +11,7 @@ from langchain_core.runnables import RunnableConfig
 
 
 class LangfuseHandler(Protocol):
-    """Protocol for the Langfuse callback handler used by asianf."""
+    """Protocol for the Langfuse callback handler used by coolagents."""
 
     last_trace_id: str | None
     langfuse_metadata: dict[str, Any]
@@ -30,7 +30,7 @@ def get_langfuse_handler(
 ) -> CallbackHandler:
     """Create a Langfuse LangChain callback handler."""
     init_params = signature(CallbackHandler.__init__).parameters
-    default_tags = tags or ["asianf"]
+    default_tags = tags or ["coolagents"]
 
     if "session_id" in init_params:
         return CallbackHandler(

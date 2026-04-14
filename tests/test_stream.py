@@ -6,7 +6,7 @@ from datetime import UTC
 
 from pydantic import TypeAdapter
 
-from asianf.stream import (
+from coolagents.stream import (
     AgentRunResult,
     BlockDeltaEvent,
     BlockEndEvent,

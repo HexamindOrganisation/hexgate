@@ -1,6 +1,6 @@
-# asianf
+# coolagents
 
-`asianf` is a fresh LangChain-based runtime spike built around:
+`coolagents` is a lightweight LangChain-based agent runtime built around:
 
 - `langchain`
 - `gpt-5.4`
@@ -27,6 +27,6 @@ Copy `.env.sample` to `.env` and set:
 ## Quick start
 
 ```bash
-cd asianf
-python -m asianf.demo
+cd coolagents
+python -m coolagents.demo
 ```

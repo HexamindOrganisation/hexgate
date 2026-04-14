@@ -1,4 +1,4 @@
-"""Stream and run result datatypes for asianf."""
+"""Stream and run result datatypes for coolagents."""
 
 from __future__ import annotations
 

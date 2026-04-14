@@ -1,10 +1,10 @@
-"""Conversation and live run state for the asianf terminal app."""
+"""Conversation and live run state for the coolagents terminal app."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from asianf.stream import (
+from coolagents.stream import (
     AgentRunResult,
     BlockDeltaEvent,
     BlockType,

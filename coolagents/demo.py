@@ -1,15 +1,15 @@
-"""Small CLI demo for the first asianf agent."""
+"""Small CLI demo for the coolagents runtime."""
 
 from __future__ import annotations
 
 import asyncio
 
-from asianf.agent.factory import create_agent, stream_agent
-from asianf.setup import bootstrap
-from asianf.stream import BlockDeltaEvent, EventType, ToolEndEvent, ToolStartEvent
-from asianf.tools.fetch import fetch
-from asianf.tools.websearch import web_search
-from asianf.tracing.langfuse import maybe_get_trace_url
+from coolagents.agent.factory import create_agent, stream_agent
+from coolagents.setup import bootstrap
+from coolagents.stream import BlockDeltaEvent, EventType, ToolEndEvent, ToolStartEvent
+from coolagents.tools.fetch import fetch
+from coolagents.tools.websearch import web_search
+from coolagents.tracing.langfuse import maybe_get_trace_url
 
 
 def _render_event(event: object) -> str | None:
@@ -32,7 +32,7 @@ async def main() -> None:
         model=settings.model,
         tools=[web_search, fetch],
         session_id="demo-session",
-        tags=["asianf", settings.search_engine, settings.model],
+        tags=["coolagents", settings.search_engine, settings.model],
     )
 
     query = "Search for the latest major AI breakthroughs this month and summarize the top 5 with sources."

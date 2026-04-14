@@ -7,7 +7,7 @@ from urllib.parse import urlparse
 
 import httpx
 
-from asianf.tools.decorators import agent_tool
+from coolagents.tools.decorators import agent_tool
 
 
 def _get_env_or_raise(key: str) -> str:
