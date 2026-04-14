@@ -23,6 +23,9 @@ from coolagents.tools import fetch, web_search
 from coolagents.tools.decorators import format_tool_call_label
 from coolagents.tracing.langfuse import maybe_get_trace_url
 
+MAX_LIVE_RESPONSE_LINES = 12
+MAX_LIVE_RESPONSE_CHARS = 2_400
+
 
 @dataclass
 class AgentRuntime:
@@ -53,10 +56,32 @@ def _tool_summary(runtime: AgentRuntime, tool: ToolActivity) -> str:
     return tool.tool_name
 
 
+def _tail_text(
+    text: str,
+    *,
+    max_lines: int = MAX_LIVE_RESPONSE_LINES,
+    max_chars: int = MAX_LIVE_RESPONSE_CHARS,
+) -> tuple[str, bool]:
+    """Return the tail of a long text block for live terminal rendering."""
+    truncated = False
+    if len(text) > max_chars:
+        text = text[-max_chars:]
+        truncated = True
+
+    lines = text.splitlines()
+    if len(lines) > max_lines:
+        text = "\n".join(lines[-max_lines:])
+        truncated = True
+
+    return text.lstrip("\n"), truncated
+
+
 def _render_current_run(
     runtime: AgentRuntime,
     current_run: LiveRunState,
     trace_url: str | None = None,
+    *,
+    live: bool = False,
 ) -> list[RenderableType]:
     """Render the active assistant turn inline in the transcript."""
     renderables: list[RenderableType] = []
@@ -75,7 +100,13 @@ def _render_current_run(
         renderables.append(Text(f"  {current_run.reasoning_text.rstrip()}", style="dim white"))
 
     if current_run.response_text.strip():
-        renderables.append(Markdown(current_run.response_text.rstrip()))
+        if live:
+            tailed_text, truncated = _tail_text(current_run.response_text.rstrip())
+            if truncated:
+                renderables.append(Text("...", style="dim white", justify="center"))
+            renderables.append(Text(tailed_text, style="white"))
+        else:
+            renderables.append(Markdown(current_run.response_text.rstrip()))
     elif current_run.is_streaming:
         renderables.append(Spinner("dots", text=" thinking...", style="white"))
 
@@ -94,7 +125,7 @@ def _render_live_turn(
     trace_url: str | None = None,
 ) -> RenderableType:
     """Render only the currently active assistant turn."""
-    return Group(*_render_current_run(runtime, current_run, trace_url))
+    return Group(*_render_current_run(runtime, current_run, trace_url, live=True))
 
 
 def _print_completed_turn(
@@ -104,7 +135,7 @@ def _print_completed_turn(
     trace_url: str | None = None,
 ) -> None:
     """Print one completed assistant turn as stable terminal output."""
-    console.print(_render_live_turn(runtime, current_run, trace_url))
+    console.print(Group(*_render_current_run(runtime, current_run, trace_url, live=False)))
     console.print()
 
 

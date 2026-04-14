@@ -35,7 +35,11 @@ def _format_fetch_call(arguments: dict[str, object]) -> str:
     return "fetching page"
 
 
-@agent_tool(name="tavily_fetch", call_formatter=_format_fetch_call)
+@agent_tool(
+    name="tavily_fetch",
+    call_formatter=_format_fetch_call,
+    failure_mode="result",
+)
 async def fetch(
     url: str,
     extract_depth: str = "basic",

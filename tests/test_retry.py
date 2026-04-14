@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import httpx
 import pytest
 
-from coolagents.utils.retry import async_retry
+from coolagents.utils.retry import async_retry, is_retryable_error
 
 
 @pytest.mark.asyncio
@@ -54,3 +55,21 @@ async def test_async_retry_does_not_swallow_other_exceptions() -> None:
         await wrong_error()
 
     assert attempts == 1
+
+
+def test_is_retryable_error_returns_false_for_http_400() -> None:
+    """Treat HTTP 400 responses as non-retriable."""
+    request = httpx.Request("POST", "https://example.com")
+    response = httpx.Response(400, request=request)
+    error = httpx.HTTPStatusError("bad request", request=request, response=response)
+
+    assert is_retryable_error(error) is False
+
+
+def test_is_retryable_error_returns_true_for_http_500() -> None:
+    """Treat HTTP 5xx responses as retriable."""
+    request = httpx.Request("POST", "https://example.com")
+    response = httpx.Response(500, request=request)
+    error = httpx.HTTPStatusError("server error", request=request, response=response)
+
+    assert is_retryable_error(error) is True

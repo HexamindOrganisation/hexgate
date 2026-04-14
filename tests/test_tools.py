@@ -20,12 +20,20 @@ from coolagents.tools.websearch import web_search
 class DummyResponse:
     """Provide a small stand-in for an HTTP response."""
 
-    def __init__(self, payload: dict[str, Any]) -> None:
+    def __init__(self, payload: dict[str, Any], *, status_code: int = 200) -> None:
         """Store the JSON payload for later access."""
         self._payload = payload
+        self.status_code = status_code
+        self.request = httpx.Request("POST", "https://example.com")
 
     def raise_for_status(self) -> None:
         """Pretend the HTTP response succeeded."""
+        if self.status_code >= 400:
+            raise httpx.HTTPStatusError(
+                f"Client error '{self.status_code}' for url '{self.request.url}'",
+                request=self.request,
+                response=httpx.Response(self.status_code, request=self.request),
+            )
 
     def json(self) -> dict[str, Any]:
         """Return the mocked JSON payload."""
@@ -132,6 +140,7 @@ async def test_fetch_returns_trimmed_content(monkeypatch: pytest.MonkeyPatch) ->
 
     result = await fetch.ainvoke({"url": "https://example.com"})
 
+    assert result["ok"] is True
     assert result["url"] == "https://example.com"
     assert result["title"] == "Example Title"
     assert len(result["content"]) == 20_000
@@ -175,6 +184,7 @@ async def test_web_search_normalizes_results(monkeypatch: pytest.MonkeyPatch) ->
     result = await web_search.ainvoke({"query": "langchain agents", "max_results": 1})
 
     assert result == {
+        "ok": True,
         "query": "langchain agents",
         "results": [
             {
@@ -185,3 +195,34 @@ async def test_web_search_normalizes_results(monkeypatch: pytest.MonkeyPatch) ->
             }
         ],
     }
+
+
+@pytest.mark.asyncio
+async def test_web_search_returns_structured_error_for_http_400(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Return a soft failure payload for non-retriable provider errors."""
+    monkeypatch.setenv("LINKUP_API_KEY", "linkup-key")
+    calls = 0
+
+    def responder(url: str, **kwargs: Any) -> DummyResponse:
+        """Return a mocked 400 response from Linkup."""
+        nonlocal calls
+        calls += 1
+        assert url == "https://api.linkup.so/v1/search"
+        assert kwargs["headers"]["Authorization"] == "Bearer linkup-key"
+        return DummyResponse({}, status_code=400)
+
+    monkeypatch.setattr(
+        httpx,
+        "AsyncClient",
+        lambda **kwargs: DummyAsyncClient(responder, **kwargs),
+    )
+
+    result = await web_search.ainvoke({"query": "bad query"})
+
+    assert calls == 1
+    assert result["ok"] is False
+    assert result["error"]["type"] == "http_status_error"
+    assert result["error"]["status_code"] == 400
+    assert result["error"]["retryable"] is False

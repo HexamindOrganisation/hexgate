@@ -29,7 +29,11 @@ def _format_web_search_call(arguments: dict[str, object]) -> str:
     return "searching web"
 
 
-@agent_tool(name="linkup_web_search", call_formatter=_format_web_search_call)
+@agent_tool(
+    name="linkup_web_search",
+    call_formatter=_format_web_search_call,
+    failure_mode="result",
+)
 async def web_search(
     query: str,
     max_results: int = 8,

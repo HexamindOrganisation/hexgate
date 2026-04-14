@@ -3,16 +3,18 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Any
+import inspect
+from typing import Any, Literal
 
 import httpx
 from langchain_core.tools import tool
 
 from coolagents.tracing.langfuse import observe
-from coolagents.utils.retry import async_retry
+from coolagents.utils.retry import async_retry, is_retryable_error
 
 TOOL_METADATA_ATTR = "__tool_metadata__"
 CallFormatter = Callable[[dict[str, Any]], str]
+FailureMode = Literal["raise", "result"]
 
 
 def _default_call_label(tool_name: str, arguments: dict[str, Any]) -> str:
@@ -39,6 +41,38 @@ def format_tool_call_label(tool: Any, arguments: dict[str, Any] | None = None) -
     return _default_call_label(str(tool_name), payload)
 
 
+def _humanize_tool_error(error: BaseException) -> dict[str, Any]:
+    """Return a compact structured payload for a tool execution error."""
+    if isinstance(error, httpx.HTTPStatusError):
+        status_code = error.response.status_code
+        return {
+            "type": "http_status_error",
+            "message": f"Request rejected by provider ({status_code}).",
+            "status_code": status_code,
+            "retryable": is_retryable_error(error),
+        }
+    if isinstance(error, httpx.TimeoutException):
+        return {
+            "type": "timeout_error",
+            "message": "Request timed out.",
+            "status_code": None,
+            "retryable": True,
+        }
+    if isinstance(error, httpx.ConnectError):
+        return {
+            "type": "connect_error",
+            "message": "Connection failed.",
+            "status_code": None,
+            "retryable": True,
+        }
+    return {
+        "type": error.__class__.__name__,
+        "message": str(error) or "Tool execution failed.",
+        "status_code": None,
+        "retryable": is_retryable_error(error),
+    }
+
+
 def agent_tool(
     *,
     name: str,
@@ -46,23 +80,44 @@ def agent_tool(
     delay_ms: int = 1000,
     exceptions: tuple[type[BaseException], ...] = (httpx.HTTPError,),
     call_formatter: CallFormatter | None = None,
+    failure_mode: FailureMode = "raise",
 ) -> Callable[[Callable[..., Any]], Any]:
     """Compose tracing, retry, and tool registration for agent tools."""
 
     def decorator(func: Callable[..., Any]) -> Any:
         """Wrap a function with the standard tool stack."""
-        wrapped = async_retry(
+        retried = async_retry(
             retries=retries,
             delay_ms=delay_ms,
             exceptions=exceptions,
         )(func)
-        wrapped = observe(name=name)(wrapped)
+
+        @observe(name=name)
+        async def wrapped(*args: Any, **kwargs: Any) -> dict[str, Any]:
+            """Run a tool with configured retry and failure behavior."""
+            try:
+                result = await retried(*args, **kwargs)
+            except Exception as error:
+                if failure_mode == "raise":
+                    raise
+                return {"ok": False, "error": _humanize_tool_error(error)}
+
+            if isinstance(result, dict):
+                return {"ok": True, **result}
+            return {"ok": True, "content": result}
+
+        wrapped.__name__ = func.__name__
+        wrapped.__qualname__ = getattr(func, "__qualname__", func.__name__)
+        wrapped.__doc__ = func.__doc__
+        wrapped.__annotations__ = dict(getattr(func, "__annotations__", {}))
+        wrapped.__signature__ = inspect.signature(func)
         registered_tool = tool(wrapped)
         setattr(
             registered_tool,
             TOOL_METADATA_ATTR,
             {
                 "call_formatter": call_formatter,
+                "failure_mode": failure_mode,
             },
         )
         return registered_tool
