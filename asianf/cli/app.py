@@ -7,6 +7,7 @@ from dataclasses import dataclass
 
 from rich.console import Console, Group, RenderableType
 from rich.live import Live
+from rich.markdown import Markdown
 from rich.spinner import Spinner
 from rich.text import Text
 
@@ -58,18 +59,18 @@ def _render_current_run(
     for tool in current_run.tools:
         prefix = _tool_prefix(tool)
         if isinstance(prefix, Spinner):
-            prefix.text = f"  {_tool_summary(runtime, tool)}"
+            prefix.text = f" {_tool_summary(runtime, tool)}"
             renderables.append(prefix)
         else:
             renderables.append(
-                Text.assemble("  ", prefix, "  ", (_tool_summary(runtime, tool), "white"))
+                Text.assemble(prefix, " ", (_tool_summary(runtime, tool), "white"))
             )
 
     if current_run.reasoning_text.strip():
         renderables.append(Text(f"  {current_run.reasoning_text.rstrip()}", style="dim white"))
 
     if current_run.response_text.strip():
-        renderables.append(Text(f"• {current_run.response_text.rstrip()}", style="white"))
+        renderables.append(Markdown(current_run.response_text.rstrip()))
     elif current_run.is_streaming:
         renderables.append(Spinner("dots", text=" thinking...", style="white"))
 

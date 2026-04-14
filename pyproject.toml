@@ -16,7 +16,7 @@ dependencies = [
     "langfuse",
     "pydantic>=2.12.4",
     "python-dotenv>=1.1.1",
-    "textual>=0.85.2",
+    "rich>=13.9.4",
 ]
 
 [project.scripts]
