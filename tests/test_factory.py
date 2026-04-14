@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 import pytest
 
 from asianf.agent import factory
-from asianf.config.settings import Settings
 
 
 class FakeAgent:
@@ -37,33 +37,37 @@ class FakeAgent:
         yield {"event": "one"}
         yield {"event": "two"}
 
-
-def make_settings() -> Settings:
-    """Build a valid settings object for tests."""
-    return Settings(
-        openai_api_key="openai-key",
-        linkup_api_key="linkup-key",
-        tavily_api_key="tavily-key",
-        langfuse_public_key="public-key",
-        langfuse_secret_key="secret-key",
-        langfuse_host="https://cloud.langfuse.com",
-        model="openai:gpt-5.4",
-        search_engine="linkup",
-    )
-
-
-def test_load_system_prompt_reads_prompt_file() -> None:
-    """Load the markdown system prompt text from disk."""
-    prompt = factory._load_system_prompt()
+def test_load_system_prompt_reads_default_prompt_file() -> None:
+    """Load the default prompt file into prompt text."""
+    prompt = factory.load_system_prompt(factory.DEFAULT_SYSTEM_PROMPT)
 
     assert "web research assistant" in prompt
     assert "web_search" in prompt
     assert "fetch" in prompt
 
 
+def test_load_system_prompt_accepts_inline_text() -> None:
+    """Return inline prompt text unchanged."""
+    prompt = factory.load_system_prompt("You are a direct assistant.")
+
+    assert prompt == "You are a direct assistant."
+
+
+def test_load_system_prompt_resolves_relative_prompt_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Load prompt contents from a relative file path when requested."""
+    prompt_file = tmp_path / "prompt.txt"
+    prompt_file.write_text("Prompt from file.", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    prompt = factory.load_system_prompt("prompt.txt")
+
+    assert prompt == "Prompt from file."
+
+
 def test_create_agent_wires_tools_and_handler(monkeypatch: pytest.MonkeyPatch) -> None:
     """Create the LangChain agent with the expected tools and prompt."""
     calls: dict[str, Any] = {}
+    custom_tools = ["tool-one", "tool-two"]
 
     def fake_create_langchain_agent(**kwargs: Any) -> str:
         """Capture the agent creation kwargs."""
@@ -79,15 +83,17 @@ def test_create_agent_wires_tools_and_handler(monkeypatch: pytest.MonkeyPatch) -
     monkeypatch.setattr(factory, "get_langfuse_handler", fake_get_langfuse_handler)
 
     agent, handler = factory.create_agent(
-        make_settings(),
+        model="openai:gpt-5.4",
+        tools=custom_tools,
         session_id="session-1",
         user_id="user-1",
+        tags=["asianf", "linkup", "openai:gpt-5.4"],
     )
 
     assert agent == "agent-instance"
     assert handler == "handler-instance"
     assert calls["agent_kwargs"]["model"] == "openai:gpt-5.4"
-    assert calls["agent_kwargs"]["tools"] == [factory.web_search, factory.fetch]
+    assert calls["agent_kwargs"]["tools"] == custom_tools
     assert "web research assistant" in calls["agent_kwargs"]["system_prompt"]
     assert calls["handler_kwargs"] == {
         "session_id": "session-1",

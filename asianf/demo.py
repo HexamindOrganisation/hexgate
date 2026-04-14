@@ -7,6 +7,8 @@ import asyncio
 from asianf.agent.factory import create_agent, stream_agent
 from asianf.setup import bootstrap
 from asianf.stream import BlockDeltaEvent, EventType, ToolEndEvent, ToolStartEvent
+from asianf.tools.fetch import fetch
+from asianf.tools.websearch import web_search
 from asianf.tracing.langfuse import maybe_get_trace_url
 
 
@@ -26,7 +28,12 @@ def _render_event(event: object) -> str | None:
 async def main() -> None:
     """Run the demo agent and print normalized stream events."""
     settings = bootstrap()
-    agent, handler = create_agent(settings, session_id="demo-session")
+    agent, handler = create_agent(
+        model=settings.model,
+        tools=[web_search, fetch],
+        session_id="demo-session",
+        tags=["asianf", settings.search_engine, settings.model],
+    )
 
     query = "Search for the latest major AI breakthroughs this month and summarize the top 5 with sources."
     print(f"Query: {query}\n")
