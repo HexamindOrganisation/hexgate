@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from urllib.parse import urlparse
 
 import httpx
 
@@ -10,13 +11,31 @@ from asianf.tools.decorators import agent_tool
 
 
 def _get_env_or_raise(key: str) -> str:
+    """Return an environment variable value or raise when missing."""
     value = os.environ.get(key)
     if not value:
         raise RuntimeError(f"Missing required environment variable: {key}")
     return value
 
 
-@agent_tool(name="tavily_fetch")
+def _truncate_url(url: str, *, max_length: int = 48) -> str:
+    """Return a compact display version of a URL."""
+    parsed = urlparse(url)
+    compact = f"{parsed.netloc}{parsed.path}" if parsed.netloc else url
+    if len(compact) <= max_length:
+        return compact
+    return f"{compact[: max_length - 3]}..."
+
+
+def _format_fetch_call(arguments: dict[str, object]) -> str:
+    """Format a compact label for a fetch invocation."""
+    url = arguments.get("url")
+    if isinstance(url, str) and url.strip():
+        return f"fetching {_truncate_url(url.strip())}"
+    return "fetching page"
+
+
+@agent_tool(name="tavily_fetch", call_formatter=_format_fetch_call)
 async def fetch(
     url: str,
     extract_depth: str = "basic",

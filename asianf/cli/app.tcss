@@ -1,0 +1,37 @@
+Screen {
+    background: #08111f;
+    color: #e5edf7;
+}
+
+#shell {
+    layout: horizontal;
+    height: 1fr;
+    margin: 1 2 0 2;
+}
+
+#transcript {
+    width: 2fr;
+    min-width: 60;
+    border: round #33c3b3;
+    background: #0e1728;
+    padding: 1 2;
+    overflow-y: auto;
+}
+
+#activity {
+    width: 1fr;
+    min-width: 34;
+    border: round #f2a93b;
+    background: #101826;
+    padding: 1 2;
+    margin-left: 1;
+    overflow-y: auto;
+}
+
+#prompt {
+    dock: bottom;
+    margin: 1 2 1 2;
+    border: round #52b8ff;
+    background: #0d1725;
+    color: #f8fbff;
+}

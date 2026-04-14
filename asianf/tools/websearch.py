@@ -10,13 +10,26 @@ from asianf.tools.decorators import agent_tool
 
 
 def _get_env_or_raise(key: str) -> str:
+    """Return an environment variable value or raise when missing."""
     value = os.environ.get(key)
     if not value:
         raise RuntimeError(f"Missing required environment variable: {key}")
     return value
 
 
-@agent_tool(name="linkup_web_search")
+def _format_web_search_call(arguments: dict[str, object]) -> str:
+    """Format a compact label for a web search invocation."""
+    query = arguments.get("query")
+    if isinstance(query, str) and query.strip():
+        words = query.strip().split()
+        preview = " ".join(words[:4])
+        if len(words) > 4:
+            preview += "..."
+        return f"searching {preview}"
+    return "searching web"
+
+
+@agent_tool(name="linkup_web_search", call_formatter=_format_web_search_call)
 async def web_search(
     query: str,
     max_results: int = 8,

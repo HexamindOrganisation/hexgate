@@ -8,9 +8,12 @@ from typing import Any
 import httpx
 import pytest
 
+from asianf.tools.decorators import format_tool_call_label
 from asianf.tools.fetch import _get_env_or_raise as get_fetch_env
+from asianf.tools.fetch import _format_fetch_call
 from asianf.tools.fetch import fetch
 from asianf.tools.websearch import _get_env_or_raise as get_search_env
+from asianf.tools.websearch import _format_web_search_call
 from asianf.tools.websearch import web_search
 
 
@@ -58,6 +61,45 @@ def test_get_env_or_raise_requires_present_value(monkeypatch: pytest.MonkeyPatch
 
     with pytest.raises(RuntimeError, match="LINKUP_API_KEY"):
         get_search_env("LINKUP_API_KEY")
+
+
+def test_format_tool_call_label_defaults_to_tool_name() -> None:
+    """Fall back to the tool name when no custom formatter is attached."""
+
+    class PlainTool:
+        """Provide a tiny stand-in tool with only a name."""
+
+        name = "plain_tool"
+
+    assert format_tool_call_label(PlainTool(), {"foo": "bar"}) == "plain_tool"
+
+
+def test_web_search_call_formatter_is_human_friendly() -> None:
+    """Render web search calls with the user query."""
+    assert _format_web_search_call({"query": "latest ai breakthroughs"}) == (
+        "searching latest ai breakthroughs"
+    )
+    assert format_tool_call_label(web_search, {"query": "latest ai breakthroughs"}) == (
+        "searching latest ai breakthroughs"
+    )
+
+
+def test_fetch_call_formatter_truncates_url() -> None:
+    """Render fetch calls with a shortened URL."""
+    label = _format_fetch_call(
+        {
+            "url": (
+                "https://example.com/really/long/path/to/article/about/ai/"
+                "breakthroughs/index.html"
+            )
+        }
+    )
+
+    assert label.startswith("fetching example.com/")
+    assert label.endswith("...")
+    assert format_tool_call_label(fetch, {"url": "https://example.com/post"}) == (
+        "fetching example.com/post"
+    )
 
 
 @pytest.mark.asyncio
