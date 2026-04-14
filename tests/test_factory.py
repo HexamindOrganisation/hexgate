@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from pydantic import BaseModel
 
 from asianf.agent import factory
 
@@ -37,6 +38,13 @@ class FakeAgent:
         yield {"event": "one"}
         yield {"event": "two"}
 
+
+class FakeRequest(BaseModel):
+    """Provide a tiny Pydantic request model for agent input tests."""
+
+    messages: list[object]
+    thread_id: str | None = None
+
 def test_load_system_prompt_reads_default_prompt_file() -> None:
     """Load the default prompt file into prompt text."""
     prompt = factory.load_system_prompt(factory.DEFAULT_SYSTEM_PROMPT)
@@ -62,6 +70,65 @@ def test_load_system_prompt_resolves_relative_prompt_file(tmp_path: Path, monkey
     prompt = factory.load_system_prompt("prompt.txt")
 
     assert prompt == "Prompt from file."
+
+
+def test_normalize_input_wraps_plain_query() -> None:
+    """Wrap a plain query string into LangChain message state."""
+    payload = factory.normalize_input("hello")
+
+    assert payload == {"messages": [{"role": "user", "content": "hello"}]}
+
+
+def test_normalize_input_preserves_mapping_state() -> None:
+    """Leave mapping-based state payloads unchanged."""
+    payload = factory.normalize_input(
+        {"messages": [{"role": "user", "content": "hello"}], "thread_id": "t-1"}
+    )
+
+    assert payload == {
+        "messages": [{"role": "user", "content": "hello"}],
+        "thread_id": "t-1",
+    }
+
+
+def test_normalize_input_wraps_message_lists() -> None:
+    """Treat a top-level message list as LangChain messages state."""
+    payload = factory.normalize_input([("user", "hello"), ("assistant", "hi")])
+
+    assert payload == {"messages": [("user", "hello"), ("assistant", "hi")]}
+
+
+def test_normalize_input_supports_pydantic_models() -> None:
+    """Accept a Pydantic request model as agent input."""
+    payload = factory.normalize_input(
+        FakeRequest(messages=[{"role": "user", "content": "hello"}], thread_id="t-1")
+    )
+
+    assert payload == {
+        "messages": [{"role": "user", "content": "hello"}],
+        "thread_id": "t-1",
+    }
+
+
+def test_extract_input_text_prefers_query_field() -> None:
+    """Use an explicit query field when one is present."""
+    query = factory.extract_input_text(
+        {"query": "hello", "messages": [{"role": "user", "content": "ignored"}]}
+    )
+
+    assert query == "hello"
+
+
+def test_extract_input_text_reads_last_user_message() -> None:
+    """Pull the last user message from a message list."""
+    query = factory.extract_input_text(
+        [
+            {"role": "assistant", "content": "hi"},
+            {"role": "user", "content": "latest ai news"},
+        ]
+    )
+
+    assert query == "latest ai news"
 
 
 def test_create_agent_wires_tools_and_handler(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -124,6 +191,34 @@ async def test_invoke_agent_passes_messages_and_config(monkeypatch: pytest.Monke
 
 
 @pytest.mark.asyncio
+async def test_invoke_agent_accepts_mapping_state(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pass through full mapping state when invoking the agent."""
+    fake_agent = FakeAgent()
+    monkeypatch.setattr(
+        factory,
+        "get_langfuse_runnable_config",
+        lambda handler: {"callbacks": [handler]},
+    )
+
+    result = await factory.invoke_agent(
+        fake_agent,
+        "handler",
+        {"messages": [{"role": "user", "content": "hello"}], "thread_id": "t-1"},
+    )
+
+    assert result == {"messages": ["ok"]}
+    assert fake_agent.ainvoke_calls == [
+        {
+            "payload": {
+                "messages": [{"role": "user", "content": "hello"}],
+                "thread_id": "t-1",
+            },
+            "config": {"callbacks": ["handler"]},
+        }
+    ]
+
+
+@pytest.mark.asyncio
 async def test_stream_agent_raw_uses_astream_events_v2(monkeypatch: pytest.MonkeyPatch) -> None:
     """Stream raw agent events through LangChain's event stream API."""
     fake_agent = FakeAgent()
@@ -147,14 +242,42 @@ async def test_stream_agent_raw_uses_astream_events_v2(monkeypatch: pytest.Monke
 
 
 @pytest.mark.asyncio
+async def test_stream_agent_raw_accepts_message_lists(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Wrap a top-level message list before calling LangChain streaming."""
+    fake_agent = FakeAgent()
+    monkeypatch.setattr(
+        factory,
+        "get_langfuse_runnable_config",
+        lambda handler: {"callbacks": [handler]},
+    )
+    monkeypatch.setattr(factory, "new_root_run_id", lambda: "run-123")
+
+    events = [
+        event
+        async for event in factory.stream_agent_raw(
+            fake_agent, "handler", [{"role": "user", "content": "hello"}]
+        )
+    ]
+
+    assert events == [{"event": "one"}, {"event": "two"}]
+    assert fake_agent.astream_event_calls == [
+        {
+            "payload": {"messages": [{"role": "user", "content": "hello"}]},
+            "config": {"callbacks": ["handler"], "run_id": "run-123"},
+            "version": "v2",
+        }
+    ]
+
+
+@pytest.mark.asyncio
 async def test_stream_agent_normalizes_raw_events(monkeypatch: pytest.MonkeyPatch) -> None:
     """Normalize raw LangChain events into app-level stream events."""
 
-    async def fake_stream_agent_raw(agent: Any, handler: Any, query: str):
+    async def fake_stream_agent_raw(agent: Any, handler: Any, agent_input: object):
         """Yield a small fake raw event sequence."""
         assert agent == "agent"
         assert handler == "handler"
-        assert query == "hello"
+        assert agent_input == [{"role": "user", "content": "hello"}]
         yield {"event": "one"}
         yield {"event": "two"}
 
@@ -169,6 +292,13 @@ async def test_stream_agent_normalizes_raw_events(monkeypatch: pytest.MonkeyPatc
     monkeypatch.setattr(factory, "stream_agent_raw", fake_stream_agent_raw)
     monkeypatch.setattr(factory, "normalize_langchain_events", fake_normalize)
 
-    events = [event async for event in factory.stream_agent("agent", "handler", "hello")]
+    events = [
+        event
+        async for event in factory.stream_agent(
+            "agent",
+            "handler",
+            [{"role": "user", "content": "hello"}],
+        )
+    ]
 
     assert events == [{"normalized": 1}, {"normalized": 2}]

@@ -1,8 +1,8 @@
-"""Create the first asianf agent."""
+"""Create thin LangChain agent helpers for asianf."""
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Callable, Sequence
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any, TypeAlias
 
@@ -11,12 +11,14 @@ from langchain.agents import create_agent as create_langchain_agent
 from langchain.agents.structured_output import ResponseFormat
 from langchain_core.caches import BaseCache
 from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_core.messages import BaseMessage
 from langchain_core.messages.system import SystemMessage
 from langchain_core.runnables.schema import StreamEvent as LangChainStreamEvent
 from langchain_core.tools import BaseTool
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.store.base import BaseStore
+from pydantic import BaseModel
 
 from asianf.streaming import new_root_run_id, normalize_langchain_events
 from asianf.stream import StreamEvent
@@ -29,6 +31,8 @@ from asianf.tracing.langfuse import (
 
 AgentGraph: TypeAlias = CompiledStateGraph
 ToolSpec: TypeAlias = BaseTool | Callable[..., Any] | dict[str, Any]
+AgentState: TypeAlias = dict[str, Any]
+AgentInput: TypeAlias = str | Sequence[object] | Mapping[str, object] | BaseModel
 DEFAULT_SYSTEM_PROMPT = Path(__file__).parent.parent / "prompts" / "agent_system.md"
 
 def _resolve_prompt_path(prompt_path: str | Path) -> Path:
@@ -50,6 +54,79 @@ def load_system_prompt(system_prompt: str | Path | None) -> str | None:
     if system_prompt.endswith((".txt", ".jinja", ".md")):
         return _resolve_prompt_path(system_prompt).read_text(encoding="utf-8")
     return system_prompt
+
+
+def _coerce_message_text(content: object) -> str | None:
+    """Return readable text content from a message-like payload."""
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list):
+        return None
+
+    parts: list[str] = []
+    for item in content:
+        if isinstance(item, str):
+            parts.append(item)
+            continue
+        if not isinstance(item, dict):
+            continue
+        text = item.get("text")
+        if isinstance(text, str):
+            parts.append(text)
+    return "".join(parts) or None
+
+
+def _extract_query_from_messages(messages: Sequence[object]) -> str:
+    """Return the last user message text from a message list when possible."""
+    for message in reversed(messages):
+        if isinstance(message, BaseMessage):
+            if getattr(message, "type", None) != "human":
+                continue
+            text = _coerce_message_text(message.content)
+            if text:
+                return text
+            continue
+        if isinstance(message, Mapping):
+            role = message.get("role")
+            if role not in {"user", "human"}:
+                continue
+            text = _coerce_message_text(message.get("content"))
+            if text:
+                return text
+            continue
+        if isinstance(message, tuple) and len(message) >= 2 and message[0] in {"user", "human"}:
+            text = _coerce_message_text(message[1])
+            if text:
+                return text
+    return ""
+
+
+def normalize_input(input: AgentInput) -> AgentState:
+    """Normalize wrapper-friendly input into LangChain agent state."""
+    if isinstance(input, str):
+        return {"messages": [{"role": "user", "content": input}]}
+    if isinstance(input, BaseModel):
+        return dict(input.model_dump(exclude_none=True))
+    if isinstance(input, Mapping):
+        return dict(input)
+    return {"messages": list(input)}
+
+
+def extract_input_text(input: AgentInput) -> str:
+    """Extract readable user text from wrapper-friendly input."""
+    if isinstance(input, str):
+        return input
+    if isinstance(input, BaseModel):
+        return extract_input_text(input.model_dump(exclude_none=True))
+    if isinstance(input, Mapping):
+        query = input.get("query")
+        if isinstance(query, str):
+            return query
+        messages = input.get("messages")
+        if isinstance(messages, Sequence) and not isinstance(messages, str):
+            return _extract_query_from_messages(messages)
+        return ""
+    return _extract_query_from_messages(input)
 
 
 @observe(name="create_asianf_agent")
@@ -105,10 +182,14 @@ def create_agent(
 
 
 @observe(name="invoke_asianf_agent")
-async def invoke_agent(agent: AgentGraph, handler: CallbackHandler, query: str) -> dict:
-    """Invoke the agent for a single query."""
+async def invoke_agent(
+    agent: AgentGraph,
+    handler: CallbackHandler,
+    input: AgentInput,
+) -> dict[str, Any]:
+    """Invoke the agent for one normalized input payload."""
     return await agent.ainvoke(
-        {"messages": [{"role": "user", "content": query}]},
+        normalize_input(input),
         config=get_langfuse_runnable_config(handler),
     )
 
@@ -116,13 +197,13 @@ async def invoke_agent(agent: AgentGraph, handler: CallbackHandler, query: str) 
 async def stream_agent_raw(
     agent: AgentGraph,
     handler: CallbackHandler,
-    query: str,
+    input: AgentInput,
 ) -> AsyncIterator[LangChainStreamEvent]:
     """Stream raw LangChain events from the agent runtime."""
     config = get_langfuse_runnable_config(handler)
     config["run_id"] = new_root_run_id()
     async for event in agent.astream_events(
-        {"messages": [{"role": "user", "content": query}]},
+        normalize_input(input),
         config=config,
         version="v2",
     ):
@@ -133,11 +214,11 @@ async def stream_agent_raw(
 async def stream_agent(
     agent: AgentGraph,
     handler: CallbackHandler,
-    query: str,
+    input: AgentInput,
 ) -> AsyncIterator[StreamEvent]:
     """Stream normalized runtime events from the agent."""
     async for event in normalize_langchain_events(
-        stream_agent_raw(agent, handler, query),
-        query=query,
+        stream_agent_raw(agent, handler, input),
+        query=extract_input_text(input),
     ):
         yield event
