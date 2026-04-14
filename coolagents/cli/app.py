@@ -7,9 +7,11 @@ import argparse
 from dataclasses import dataclass
 from pathlib import Path
 
+from rich.columns import Columns
 from rich.console import Console, Group, RenderableType
 from rich.live import Live
 from rich.markdown import Markdown
+from rich.panel import Panel
 from rich.spinner import Spinner
 from rich.text import Text
 
@@ -25,6 +27,15 @@ from coolagents.tracing.langfuse import maybe_get_trace_url
 
 MAX_LIVE_RESPONSE_LINES = 12
 MAX_LIVE_RESPONSE_CHARS = 2_400
+DOG_LOGO = "\n".join(
+    [
+        " / \\__",
+        "(    @\\___",
+        " /         O",
+        "/   (_____/",
+        "/_____/   U",
+    ]
+)
 
 
 @dataclass
@@ -187,15 +198,32 @@ def _default_agent_name(base_dir: Path) -> str:
     return available[0]
 
 
+def _render_welcome(runtime: AgentRuntime) -> RenderableType:
+    """Render a compact startup card for the terminal chat."""
+    logo = Text(DOG_LOGO, style="bold bright_yellow", justify="center")
+    info = Group(
+        Text("coolagents", style="bold white"),
+        Text("a calm little terminal swarm", style="dim"),
+        Text(""),
+        Text(f"agent  {runtime.agent_name} ({runtime.agent_source})", style="white"),
+        Text(f"model  {runtime.model}", style="white"),
+        Text(""),
+        Text("/clear  reset chat", style="dim"),
+        Text("/exit   leave chat", style="dim"),
+    )
+    return Panel(
+        Columns([logo, info], expand=True, equal=False),
+        title="[bold bright_yellow]Welcome Back[/]",
+        border_style="bright_yellow",
+        padding=(1, 2),
+    )
+
+
 async def _chat_loop(console: Console, runtime: AgentRuntime) -> None:
     """Run the interactive terminal chat loop."""
     state = ChatState()
 
-    console.print("[bold white]coolagents[/] inline chat")
-    console.print(
-        f"[dim]agent: {runtime.agent_name} ({runtime.agent_source}) | "
-        f"model: {runtime.model}[/]"
-    )
+    console.print(_render_welcome(runtime))
     console.print("[dim]Ask a question. Use /clear to reset or /exit to quit.[/]")
     console.print()
 
@@ -209,7 +237,7 @@ async def _chat_loop(console: Console, runtime: AgentRuntime) -> None:
         if user_text == "/clear":
             state.clear()
             console.clear()
-            console.print("[bold white]coolagents[/] inline chat")
+            console.print(_render_welcome(runtime))
             console.print("[dim]Ask a question. Use /clear to reset or /exit to quit.[/]")
             console.print()
             continue

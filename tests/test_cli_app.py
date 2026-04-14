@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from coolagents.cli.app import _tail_text
+from rich.console import Console
+
+from coolagents.cli.app import AgentRuntime, DOG_LOGO, _render_welcome, _tail_text
 
 
 def test_tail_text_keeps_last_lines_of_long_output() -> None:
@@ -31,3 +33,24 @@ def test_tail_text_reports_when_text_is_not_truncated() -> None:
 
     assert tailed == "short answer"
     assert truncated is False
+
+
+def test_render_welcome_includes_agent_and_model() -> None:
+    """Render a startup card with the active runtime metadata."""
+    runtime = AgentRuntime(
+        agent="agent",  # type: ignore[arg-type]
+        handler="handler",  # type: ignore[arg-type]
+        agent_name="example_agent",
+        agent_source="local",
+        model="gpt-5.4",
+        tools_by_name={},
+    )
+
+    console = Console(record=True, width=100)
+    console.print(_render_welcome(runtime))
+    rendered = console.export_text()
+
+    assert "example_agent" in rendered
+    assert "gpt-5.4" in rendered
+    assert "coolagents" in rendered
+    assert DOG_LOGO.splitlines()[0].strip() in rendered
