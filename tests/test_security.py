@@ -8,7 +8,7 @@ import pytest
 from langchain_core.tools import tool
 
 from coolagents.agent import factory
-from coolagents.agent.security import enforce_policy
+from coolagents.agent.security import enforce_policy, with_before_action
 from coolagents.security import (
     AgentPolicy,
     ApprovalRequiredError,
@@ -97,3 +97,76 @@ async def test_enforce_policy_denies_tool_invocation(monkeypatch: pytest.MonkeyP
 
     with pytest.raises(PolicyDeniedError, match='Policy denied tool "sample_tool"'):
         await secured_agent.tools[0].ainvoke({"value": "hello"})
+
+
+@pytest.mark.asyncio
+async def test_with_before_action_receives_action_and_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Run the hosted pre-tool hook before the actual tool call."""
+
+    @tool
+    async def sample_tool(value: str) -> str:
+        """Return a transformed string."""
+        return value.upper()
+
+    monkeypatch.setattr(factory, "create_langchain_agent", lambda **_kwargs: object())
+    monkeypatch.setattr(factory, "get_langfuse_handler", lambda **_kwargs: "handler")
+
+    seen: dict[str, object] = {}
+
+    async def before_action(action: dict[str, object], context: dict[str, object] | None) -> None:
+        seen["action"] = action
+        seen["context"] = context
+
+    agent, _handler = factory.create_agent(
+        model="openai:gpt-5.4",
+        tools=[sample_tool],
+        system_prompt="You are a test assistant.",
+        name="sample-agent",
+    )
+
+    guarded_agent = with_before_action(
+        agent,
+        before_action,
+        context_provider=lambda: {"tenant_id": "acme"},
+    )
+
+    result = await guarded_agent.tools[0].ainvoke({"value": "hello"})
+
+    assert result == "HELLO"
+    assert seen["action"] == {
+        "tool_name": "sample_tool",
+        "arguments": {"value": "hello"},
+        "agent_name": "sample-agent",
+    }
+    assert seen["context"] == {"tenant_id": "acme"}
+
+
+@pytest.mark.asyncio
+async def test_with_before_action_can_block_tool_invocation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Let the hosted pre-tool hook abort execution by raising."""
+
+    @tool
+    async def sample_tool(value: str) -> str:
+        """Return a transformed string."""
+        return value.upper()
+
+    monkeypatch.setattr(factory, "create_langchain_agent", lambda **_kwargs: object())
+    monkeypatch.setattr(factory, "get_langfuse_handler", lambda **_kwargs: "handler")
+
+    def before_action(_action: dict[str, object], _context: dict[str, object] | None) -> None:
+        raise RuntimeError("blocked by host platform")
+
+    agent, _handler = factory.create_agent(
+        model="openai:gpt-5.4",
+        tools=[sample_tool],
+        system_prompt="You are a test assistant.",
+    )
+
+    guarded_agent = with_before_action(agent, before_action)
+
+    with pytest.raises(RuntimeError, match="blocked by host platform"):
+        await guarded_agent.tools[0].ainvoke({"value": "hello"})

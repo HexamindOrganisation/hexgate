@@ -44,6 +44,7 @@ The current curated surface includes:
 
 - `create_agent`
 - `enforce_policy`
+- `with_before_action`
 - `invoke_agent`
 - `stream_agent`
 - `stream_agent_raw`
@@ -59,6 +60,7 @@ Example:
 from coolagents import (
     create_agent,
     enforce_policy,
+    with_before_action,
     agent_tool,
     load_agent,
     load_builtin_agent,
@@ -186,17 +188,46 @@ That means the same agent code can stay simple in development, while deployment 
 
 ## 🚪 Gate 2: Hosted `before_action` Hooks
 
-Gate 2 is the next intended layer for platform-level enforcement.
+Gate 2 is the next layer for platform-level enforcement.
 
-The idea is:
+Why call this a Gate 2 primitive:
 
-- agent authors define tools and prompts
-- the hosting platform passes runtime context down
-- a `before_action(...)` hook can check identity, tenant, approvals, or external policy engines before the tool runs
+- Gate 1 answers: "is this tool allowed at all for this agent?"
+- Gate 2 answers: "given who is calling, where they are deployed, and the current runtime context, should this specific action be allowed right now?"
 
-This hook is not implemented yet, but the intended shape is:
+So the design intent is:
+
+- agent authors define tools, prompts, and behavior
+- platform or admin layers inject hosted enforcement later
+- runtime context flows down from the host platform, not from the tool author
+
+The primitive is intentionally small:
+
+- `before_action(action, context)`
+- optional `context_provider()`
+
+It runs after Gate 1 and before the real tool executes.
+
+Example:
 
 ```python
+from coolagents import (
+    create_agent,
+    enforce_policy,
+    fetch,
+    web_search,
+    with_before_action,
+)
+
+def before_action(action: dict, context: dict | None) -> None:
+    if context is None:
+        raise RuntimeError("missing runtime context")
+    if context.get("tenant_id") != "acme":
+        raise RuntimeError("tenant is not allowed to run this action")
+
+def context_provider() -> dict:
+    return {"tenant_id": "acme", "request_id": "req-123"}
+
 agent, handler = create_agent(
     model="openai:gpt-5.4",
     tools=[web_search, fetch],
@@ -204,20 +235,24 @@ agent, handler = create_agent(
 )
 
 agent = enforce_policy(agent, "policy.yaml")  # Gate 1
-
-# Future direction, not available yet:
-# agent = with_before_action(
-#     agent,
-#     before_action=my_before_action,
-#     context_provider=my_context_provider,
-# )
+agent = with_before_action(
+    agent,
+    before_action=before_action,
+    context_provider=context_provider,
+)  # Gate 2
 ```
 
 So the design split is:
 
 - `create_agent(...)`: build the base agent
 - `enforce_policy(...)`: local Gate 1 tool authorization
-- future `before_action(...)`: Gate 2 platform / IAM / approval integration
+- `with_before_action(...)`: Gate 2 platform / IAM / approval integration
+
+This is intentionally an open chantier:
+
+- Gate 1 is already concrete and useful
+- Gate 2 starts as a tiny hook, not a full enterprise framework
+- later evolution can add richer approval semantics, external policy engines, or audit sinks without bloating `create_agent(...)`
 
 ## 🔧 Environment
 

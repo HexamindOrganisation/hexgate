@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Callable, Mapping, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any, Self, TypeAlias
 
@@ -33,6 +33,10 @@ LangChainAgentGraph: TypeAlias = CompiledStateGraph
 ToolSpec: TypeAlias = BaseTool | Callable[..., Any] | dict[str, Any]
 AgentState: TypeAlias = dict[str, Any]
 AgentInput: TypeAlias = str | Sequence[object] | Mapping[str, object] | BaseModel
+ActionPayload: TypeAlias = dict[str, Any]
+ActionContext: TypeAlias = dict[str, Any] | None
+BeforeActionHook: TypeAlias = Callable[[ActionPayload, ActionContext], object | Awaitable[object]]
+ContextProvider: TypeAlias = Callable[[], ActionContext]
 DEFAULT_SYSTEM_PROMPT = Path(__file__).parent.parent / "prompts" / "agent_system.md"
 
 
@@ -260,6 +264,24 @@ class CoolAgent:
         from coolagents.security import load_policy
 
         return self.with_tools(wrap_tools_with_policy(self.tools, load_policy(policy)))
+
+    def with_before_action(
+        self,
+        before_action: BeforeActionHook,
+        *,
+        context_provider: ContextProvider | None = None,
+    ) -> Self:
+        """Return a new agent runtime with a pre-tool Gate 2 hook applied."""
+        from coolagents.agent.security import wrap_tools_with_before_action
+
+        return self.with_tools(
+            wrap_tools_with_before_action(
+                self.tools,
+                before_action,
+                context_provider=context_provider,
+                agent_name=self.name,
+            )
+        )
 
 
 AgentGraph: TypeAlias = CoolAgent
