@@ -1,6 +1,7 @@
 """Public package surface for coolagents."""
 
 from coolagents.agent.factory import create_agent, invoke_agent, stream_agent, stream_agent_raw
+from coolagents.agent.security import enforce_policy
 from coolagents.agents.loader import (
     clear_registered_agents,
     list_available_agents,
@@ -24,6 +25,7 @@ __all__ = [
     "agent_tool",
     "clear_registered_agents",
     "create_agent",
+    "enforce_policy",
     "fetch",
     "invoke_agent",
     "list_available_agents",

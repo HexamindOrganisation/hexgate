@@ -43,13 +43,20 @@ def test_resolve_builtin_tools_raises_for_unknown_tools() -> None:
 def test_load_builtin_agent_resolves_spec_into_create_agent(monkeypatch: pytest.MonkeyPatch) -> None:
     """Instantiate a builtin agent by wiring prompt, tools, and policy."""
     captured: dict[str, Any] = {}
+    captured_policy: dict[str, Any] = {}
 
     def fake_create_agent(**kwargs: Any) -> tuple[str, str]:
         """Capture builtin loader kwargs and return fake instances."""
         captured.update(kwargs)
         return "agent-instance", "handler-instance"
 
+    def fake_enforce_policy(tools: list[Any], policy: Any) -> list[Any]:
+        """Capture policy application while leaving tools unchanged."""
+        captured_policy["policy"] = policy
+        return tools
+
     monkeypatch.setattr(loader, "create_agent", fake_create_agent)
+    monkeypatch.setattr(loader, "enforce_policy", fake_enforce_policy)
 
     agent, handler = loader.load_builtin_agent("researcher", session_id="s-1")
 
@@ -59,4 +66,4 @@ def test_load_builtin_agent_resolves_spec_into_create_agent(monkeypatch: pytest.
     assert captured["model"] == "gpt-5.4"
     assert [tool.name for tool in captured["tools"]] == ["web_search", "fetch"]
     assert "web research assistant" in captured["system_prompt"]
-    assert captured["policy"].tools["web_search"].mode == "allow"
+    assert captured_policy["policy"].tools["web_search"].mode == "allow"

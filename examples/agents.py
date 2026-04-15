@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from coolagents import AgentPolicy, create_agent, register_agent
+from coolagents import AgentPolicy, create_agent, enforce_policy, register_agent
 from coolagents.tools import fetch, web_search
 
 
@@ -31,7 +31,7 @@ def build_website_analyser(
     extra_tools: dict[str, object] | None = None,
     model: str | None = None,
 ):
-    """Build a code-defined website analysis agent."""
+    """Build a code-defined website analysis agent without policy concerns."""
     _ = base_dir
     _ = user_id
     tools = [web_search, fetch]
@@ -45,7 +45,6 @@ def build_website_analyser(
             "Use web_search to find the official site and fetch to inspect its content, "
             "then summarize structure, messaging, product, and trust signals."
         ),
-        policy=_shared_policy(),
         session_id=session_id,
         tags=tags or ["coolagents", "website-analyser"],
     )
@@ -60,13 +59,13 @@ def build_news_collector(
     extra_tools: dict[str, object] | None = None,
     model: str | None = None,
 ):
-    """Build a code-defined news collection agent."""
+    """Build a code-defined news collection agent with hosted policy enforcement."""
     _ = base_dir
     _ = user_id
     tools = [web_search, fetch]
     if extra_tools:
         tools.extend(tool for tool in extra_tools.values() if tool not in tools)
-    return create_agent(
+    agent, handler = create_agent(
         model=model or "gpt-5.4",
         tools=tools,
         system_prompt=(
@@ -74,10 +73,10 @@ def build_news_collector(
             "Use web_search to identify current coverage, fetch the strongest sources, "
             "and return a concise source-backed roundup."
         ),
-        policy=_shared_policy(),
         session_id=session_id,
         tags=tags or ["coolagents", "news-collector"],
     )
+    return enforce_policy(agent, _shared_policy()), handler
 
 
 register_agent("website_analyser", build_website_analyser)

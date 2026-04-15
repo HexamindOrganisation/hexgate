@@ -70,13 +70,20 @@ def test_load_local_agent_resolves_spec_into_create_agent(
     """Instantiate a local agent by wiring prompt, tools, and policy."""
     _write_agent_dir(tmp_path / "example_agent", name="example_agent")
     captured: dict[str, Any] = {}
+    captured_policy: dict[str, Any] = {}
 
     def fake_create_agent(**kwargs: Any) -> tuple[str, str]:
         """Capture loader kwargs and return fake instances."""
         captured.update(kwargs)
         return "agent-instance", "handler-instance"
 
+    def fake_enforce_policy(tools: list[Any], policy: Any) -> list[Any]:
+        """Capture policy application while leaving tools unchanged."""
+        captured_policy["policy"] = policy
+        return tools
+
     monkeypatch.setattr(loader, "create_agent", fake_create_agent)
+    monkeypatch.setattr(loader, "enforce_policy", fake_enforce_policy)
 
     agent, handler = loader.load_local_agent("example_agent", base_dir=tmp_path)
 
@@ -84,4 +91,4 @@ def test_load_local_agent_resolves_spec_into_create_agent(
     assert captured["name"] == "example_agent"
     assert [tool.name for tool in captured["tools"]] == ["web_search"]
     assert "local test agent" in captured["system_prompt"]
-    assert captured["policy"].tools["web_search"].mode == "allow"
+    assert captured_policy["policy"].tools["web_search"].mode == "allow"

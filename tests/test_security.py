@@ -8,6 +8,7 @@ import pytest
 from langchain_core.tools import tool
 
 from coolagents.agent import factory
+from coolagents.agent.security import enforce_policy
 from coolagents.security import (
     AgentPolicy,
     ApprovalRequiredError,
@@ -70,20 +71,29 @@ def test_authorize_tool_call_requires_approval_when_configured() -> None:
 
 
 @pytest.mark.asyncio
-async def test_create_agent_policy_wrapper_denies_tool_invocation() -> None:
-    """Wrap BaseTool instances so denied invocations fail before execution."""
+async def test_enforce_policy_denies_tool_invocation(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Wrap created agents so denied invocations fail before execution."""
 
     @tool
     async def sample_tool(value: str) -> str:
         """Return a transformed string."""
         return value.upper()
 
-    [wrapped] = factory._wrap_tools_with_policy(  # pyright: ignore[reportPrivateUsage]
-        [sample_tool],
+    monkeypatch.setattr(factory, "create_langchain_agent", lambda **_kwargs: object())
+    monkeypatch.setattr(factory, "get_langfuse_handler", lambda **_kwargs: "handler")
+
+    agent, _handler = factory.create_agent(
+        model="openai:gpt-5.4",
+        tools=[sample_tool],
+        system_prompt="You are a test assistant.",
+    )
+
+    secured_agent = enforce_policy(
+        agent,
         AgentPolicy.model_validate(
             {"default_policy": {"mode": "deny"}, "tools": {"sample_tool": {"mode": "deny"}}}
         ),
     )
 
     with pytest.raises(PolicyDeniedError, match='Policy denied tool "sample_tool"'):
-        await wrapped.ainvoke({"value": "hello"})
+        await secured_agent.tools[0].ainvoke({"value": "hello"})

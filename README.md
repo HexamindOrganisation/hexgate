@@ -23,7 +23,7 @@ The two main primitives are:
 Use them when you want to define everything directly in Python.
 
 ```python
-from coolagents import AgentPolicy, agent_tool, create_agent
+from coolagents import agent_tool, create_agent
 
 
 @agent_tool(name="my_lookup")
@@ -31,33 +31,19 @@ async def my_lookup(query: str) -> dict:
     """Look up something useful."""
     return {"query": query, "results": []}
 
-
-policy = AgentPolicy.model_validate(
-    {
-        "version": 1,
-        "default_policy": {"mode": "deny"},
-        "tools": {"my_lookup": {"mode": "allow"}},
-    }
-)
-
 agent, handler = create_agent(
     model="openai:gpt-5.4",
     tools=[my_lookup],
     system_prompt="You are a helpful research assistant.",
-    policy=policy,
 )
 ```
-
-`create_agent(...)` accepts policy as either:
-
-- a Pydantic `AgentPolicy`
-- or a YAML file path
 
 ## 📦 What You Can Import
 
 The current curated surface includes:
 
 - `create_agent`
+- `enforce_policy`
 - `invoke_agent`
 - `stream_agent`
 - `stream_agent_raw`
@@ -72,6 +58,7 @@ Example:
 ```python
 from coolagents import (
     create_agent,
+    enforce_policy,
     agent_tool,
     load_agent,
     load_builtin_agent,
@@ -93,8 +80,8 @@ A small end-to-end example registry lives in:
 
 It demonstrates:
 
-- defining a policy in Python
-- building an agent with `create_agent(...)`
+- building one agent with `create_agent(...)` only
+- building another with `create_agent(...)` plus `enforce_policy(...)`
 - registering it with `register_agent(...)`
 - loading it through the shared `load_agent(...)` path
 
@@ -155,6 +142,83 @@ Supported modes:
 - `deny`
 - `approval_required`
 
+## 🛡️ Gate 1: Local Policy Enforcement
+
+Gate 1 is the current built-in security layer.
+
+Use it when:
+
+- developers should be able to build and test agents freely
+- a host platform or admin layer wants to constrain tool access later
+- you want deny-by-default behavior before a tool actually runs
+
+`create_agent(...)` stays close to LangChain. Policy enforcement is applied after agent creation:
+
+```python
+from coolagents import AgentPolicy, create_agent, enforce_policy, fetch, web_search
+
+policy = AgentPolicy.model_validate(
+    {
+        "version": 1,
+        "default_policy": {"mode": "deny"},
+        "tools": {
+            "web_search": {"mode": "allow"},
+            "fetch": {"mode": "allow"},
+        },
+    }
+)
+
+agent, handler = create_agent(
+    model="openai:gpt-5.4",
+    tools=[web_search, fetch],
+    system_prompt="You are a careful research assistant.",
+)
+
+agent = enforce_policy(agent, policy)
+```
+
+`enforce_policy(...)` accepts either:
+
+- a Pydantic `AgentPolicy`
+- a YAML file path
+
+That means the same agent code can stay simple in development, while deployment systems can inject policy later.
+
+## 🚪 Gate 2: Hosted `before_action` Hooks
+
+Gate 2 is the next intended layer for platform-level enforcement.
+
+The idea is:
+
+- agent authors define tools and prompts
+- the hosting platform passes runtime context down
+- a `before_action(...)` hook can check identity, tenant, approvals, or external policy engines before the tool runs
+
+This hook is not implemented yet, but the intended shape is:
+
+```python
+agent, handler = create_agent(
+    model="openai:gpt-5.4",
+    tools=[web_search, fetch],
+    system_prompt="You are a careful research assistant.",
+)
+
+agent = enforce_policy(agent, "policy.yaml")  # Gate 1
+
+# Future direction, not available yet:
+# agent = with_before_action(
+#     agent,
+#     before_action=my_before_action,
+#     context_provider=my_context_provider,
+# )
+```
+
+So the design split is:
+
+- `create_agent(...)`: build the base agent
+- `enforce_policy(...)`: local Gate 1 tool authorization
+- future `before_action(...)`: Gate 2 platform / IAM / approval integration
+
 ## 🔧 Environment
 
 Copy `.env.sample` to `.env` and set:
@@ -190,6 +254,7 @@ Run the CLI with code-defined agents from a Python script:
 
 ```bash
 coolagents-chat --use examples/agents.py --agent website_analyser
+coolagents-chat --use examples/agents.py --agent news_collector
 ```
 
 List what the CLI can currently resolve:

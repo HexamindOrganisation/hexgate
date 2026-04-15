@@ -6,13 +6,9 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from langchain_core.tools import tool
 from pydantic import BaseModel
 
 from coolagents.agent import factory
-from coolagents.security import AgentPolicy
-
-
 class FakeAgent:
     """Provide a tiny async agent for factory tests."""
 
@@ -159,8 +155,9 @@ def test_create_agent_wires_tools_and_handler(monkeypatch: pytest.MonkeyPatch) -
         tags=["coolagents", "linkup", "openai:gpt-5.4"],
     )
 
-    assert agent == "agent-instance"
+    assert agent.graph == "agent-instance"
     assert handler == "handler-instance"
+    assert agent.tools == custom_tools
     assert calls["agent_kwargs"]["model"] == "openai:gpt-5.4"
     assert calls["agent_kwargs"]["tools"] == custom_tools
     assert "web research assistant" in calls["agent_kwargs"]["system_prompt"]
@@ -169,40 +166,6 @@ def test_create_agent_wires_tools_and_handler(monkeypatch: pytest.MonkeyPatch) -
         "user_id": "user-1",
         "tags": ["coolagents", "linkup", "openai:gpt-5.4"],
     }
-
-
-def test_create_agent_wraps_tools_with_policy(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Wrap tool instances with policy enforcement when requested."""
-    calls: dict[str, Any] = {}
-
-    @tool
-    async def sample_tool(value: str) -> str:
-        """Return a transformed string."""
-        return value.upper()
-
-    def fake_create_langchain_agent(**kwargs: Any) -> str:
-        """Capture the wrapped tool list."""
-        calls["agent_kwargs"] = kwargs
-        return "agent-instance"
-
-    monkeypatch.setattr(factory, "create_langchain_agent", fake_create_langchain_agent)
-    monkeypatch.setattr(factory, "get_langfuse_handler", lambda **_kwargs: "handler-instance")
-
-    agent, handler = factory.create_agent(
-        model="openai:gpt-5.4",
-        tools=[sample_tool],
-        policy=AgentPolicy.model_validate(
-            {
-                "default_policy": {"mode": "deny"},
-                "tools": {"sample_tool": {"mode": "allow"}},
-            }
-        ),
-    )
-
-    assert (agent, handler) == ("agent-instance", "handler-instance")
-    [wrapped_tool] = calls["agent_kwargs"]["tools"]
-    assert wrapped_tool is not sample_tool
-    assert wrapped_tool.name == "sample_tool"
 
 
 @pytest.mark.asyncio

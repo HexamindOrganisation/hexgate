@@ -10,6 +10,7 @@ from typing import Any, Literal, TypeAlias
 import yaml
 
 from coolagents.agent.factory import AgentGraph, create_agent
+from coolagents.agent.security import enforce_policy
 from coolagents.agents.models import AgentSpec
 from coolagents.security import AgentPolicy, load_policy
 from coolagents.tools import fetch, web_search
@@ -173,16 +174,16 @@ def load_builtin_agent(
     system_prompt = (agent_dir / spec.system_prompt).read_text(encoding="utf-8")
     policy = load_policy(agent_dir / spec.policy)
     tools = resolve_builtin_tools(spec.tools, extra_tools=extra_tools)
-    return create_agent(
+    agent, handler = create_agent(
         model=model or spec.model,
         tools=tools,
         system_prompt=system_prompt,
-        policy=policy,
         session_id=session_id,
         user_id=user_id,
         tags=tags,
         name=spec.name,
     )
+    return enforce_policy(agent, policy), handler
 
 
 def load_local_agent(
@@ -201,16 +202,16 @@ def load_local_agent(
     system_prompt = (agent_dir / spec.system_prompt).read_text(encoding="utf-8")
     policy = load_policy(agent_dir / spec.policy)
     tools = resolve_builtin_tools(spec.tools, extra_tools=extra_tools)
-    return create_agent(
+    agent, handler = create_agent(
         model=model or spec.model,
         tools=tools,
         system_prompt=system_prompt,
-        policy=policy,
         session_id=session_id,
         user_id=user_id,
         tags=tags,
         name=spec.name,
     )
+    return enforce_policy(agent, policy), handler
 
 
 def load_registered_agent(
