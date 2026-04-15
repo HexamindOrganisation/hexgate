@@ -13,8 +13,8 @@ def test_from_env_reads_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("LINKUP_API_KEY", "linkup-key")
     monkeypatch.setenv("TAVILY_API_KEY", "tavily-key")
     monkeypatch.delenv("LANGFUSE_HOST", raising=False)
-    monkeypatch.delenv("ASIANF_MODEL", raising=False)
-    monkeypatch.delenv("ASIANF_SEARCH_ENGINE", raising=False)
+    monkeypatch.delenv("COOLAGENTS_DEFAULT_MODEL", raising=False)
+    monkeypatch.delenv("COOLAGENTS_DEFAULT_SEARCH_ENGINE", raising=False)
 
     settings = Settings.from_env()
 

@@ -13,6 +13,40 @@ This package is intentionally small. The first milestone is a single assistant w
 - `web_search`
 - `fetch`
 
+## ⚡ Quick Start
+
+If you just want to install `coolagents` and try the CLI quickly:
+
+1. Install the package in editable mode.
+2. Copy the sample environment file.
+3. Fill in the required API keys.
+4. Run the chat CLI against the included local example agent.
+
+```bash
+python -m pip install -e .
+cp .env.sample .env
+coolagents-chat --agent example_agent
+```
+
+Required keys for the example CLI flow:
+
+- `OPENAI_API_KEY`
+- `LINKUP_API_KEY`
+- `TAVILY_API_KEY`
+
+Useful next commands:
+
+```bash
+coolagents-chat --list-agents
+coolagents-chat --agent researcher
+coolagents-chat --use examples/agents.py --agent website_analyser
+```
+
+The included local agent lives in `example_agent/`, and the CLI can also load:
+
+- builtin packaged agents like `researcher`
+- code-defined agents registered from `examples/agents.py`
+
 ## ✨ Core Primitives
 
 The two main primitives are:
