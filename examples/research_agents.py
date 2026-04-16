@@ -28,8 +28,22 @@ def _update_researcher_policy() -> AgentPolicy:
                 "glob": {"mode": "allow"},
                 "grep": {"mode": "allow"},
                 "read_file": {"mode": "allow"},
-                "write_file": {"mode": "approval_required"},
-                "edit_file": {"mode": "approval_required"},
+                "write_file": {
+                    "mode": "approval_required",
+                    "file_scope": {
+                        "allowed_paths": [
+                            "research_notes/*.md"
+                        ]
+                    }
+                },
+                "edit_file": {
+                    "mode": "approval_required",
+                    "file_scope": {
+                        "allowed_paths": [
+                            "research_notes/*.md"
+                        ]
+                    }
+                },
             },
         }
     )

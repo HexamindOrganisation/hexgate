@@ -22,8 +22,10 @@ from coolagents.agent.factory import (
 from coolagents.security import (
     AgentPolicy,
     ApprovalRequiredError,
+    FileToolPolicy,
     PolicyDeniedError,
 )
+from coolagents.security.file_scope import build_file_scope_hint
 from coolagents.tools.decorators import TOOL_METADATA_ATTR
 
 
@@ -62,14 +64,21 @@ class GuardedTool(BaseTool):
     def _security_result(self, error_type: str, message: str) -> dict[str, Any]:
         """Return a structured governance failure payload."""
         # TODO: evolve this into a richer interruption/decision shape for UI pause-resume flows.
+        error_payload: dict[str, Any] = {
+            "type": error_type,
+            "message": message,
+            "tool_name": self.name,
+            "retryable": False,
+        }
+        if self.policy is not None:
+            tool_policy = self.policy.tools.get(self.name)
+            if isinstance(tool_policy, FileToolPolicy):
+                hint = build_file_scope_hint(tool_policy)
+                if hint is not None:
+                    error_payload["hint"] = hint
         return {
             "ok": False,
-            "error": {
-                "type": error_type,
-                "message": message,
-                "tool_name": self.name,
-                "retryable": False,
-            },
+            "error": error_payload,
         }
 
     async def _invoke_wrapped_async(self, *args: Any, **kwargs: Any) -> Any:
@@ -87,13 +96,13 @@ class GuardedTool(BaseTool):
             return self.wrapped_tool.func(*args, **kwargs)
         return self.wrapped_tool._run(*args, **kwargs)
 
-    def _authorize(self) -> None:
+    def _authorize(self, kwargs: dict[str, Any]) -> None:
         """Apply local Gate 1 authorization when configured."""
         if self.policy is None:
             return
         from coolagents.security import authorize_tool_call
 
-        authorize_tool_call(self.policy, self.name)
+        authorize_tool_call(self.policy, self.name, kwargs)
 
     async def _check_before_action(self, kwargs: dict[str, Any]) -> dict[str, Any] | None:
         """Apply the hosted Gate 2 hook when configured."""
@@ -134,7 +143,7 @@ class GuardedTool(BaseTool):
     def _run(self, *args: Any, **kwargs: Any) -> Any:
         """Invoke the wrapped tool synchronously with security checks."""
         try:
-            self._authorize()
+            self._authorize(kwargs)
         except PolicyDeniedError as error:
             return self._security_result("policy_denied", str(error))
         except ApprovalRequiredError:
@@ -152,7 +161,7 @@ class GuardedTool(BaseTool):
     async def _arun(self, *args: Any, **kwargs: Any) -> Any:
         """Invoke the wrapped tool asynchronously with security checks."""
         try:
-            self._authorize()
+            self._authorize(kwargs)
         except PolicyDeniedError as error:
             return self._security_result("policy_denied", str(error))
         except ApprovalRequiredError:

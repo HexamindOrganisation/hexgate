@@ -16,6 +16,8 @@ from coolagents.agent.security import (
 from coolagents.security import (
     AgentPolicy,
     ApprovalRequiredError,
+    BaseToolPolicy,
+    FileToolPolicy,
     PolicyDeniedError,
     authorize_tool_call,
     load_policy,
@@ -44,6 +46,94 @@ def test_load_policy_reads_yaml_file(tmp_path: Path) -> None:
     assert isinstance(policy, AgentPolicy)
     assert policy.tools["web_search"].mode == "allow"
     assert policy.default_policy.mode == "deny"
+
+
+def test_agent_policy_parses_file_tool_policy_scope() -> None:
+    """Parse file-specific scope fields into the specialized file policy model."""
+    policy = AgentPolicy.model_validate(
+        {
+            "default_policy": {"mode": "deny"},
+            "tools": {
+                "read_file": {
+                    "mode": "allow",
+                    "file_scope": {
+                        "allowed_paths": ["docs/**"],
+                        "denied_paths": ["secrets/**"],
+                    },
+                }
+            },
+        }
+    )
+
+    tool_policy = policy.tools["read_file"]
+
+    assert isinstance(tool_policy, FileToolPolicy)
+    assert tool_policy.file_scope is not None
+    assert tool_policy.file_scope.allowed_paths == ["docs/**"]
+    assert tool_policy.file_scope.denied_paths == ["secrets/**"]
+    assert isinstance(policy.default_policy, BaseToolPolicy)
+
+
+def test_authorize_tool_call_denies_out_of_scope_file_path() -> None:
+    """Deny file-tool calls when the requested path falls outside the allowlist."""
+    policy = AgentPolicy.model_validate(
+        {
+            "default_policy": {"mode": "deny"},
+            "tools": {
+                "read_file": {
+                    "mode": "allow",
+                    "file_scope": {"allowed_paths": ["docs/**"]},
+                }
+            },
+        }
+    )
+
+    authorize_tool_call(policy, "read_file", {"file_path": "docs/guide.md"})
+
+    with pytest.raises(PolicyDeniedError, match='requested path'):
+        authorize_tool_call(policy, "read_file", {"file_path": "notes/todo.md"})
+
+
+def test_authorize_tool_call_denied_paths_override_allowed_paths() -> None:
+    """Let explicit denied paths win even when an allowlist would otherwise match."""
+    policy = AgentPolicy.model_validate(
+        {
+            "default_policy": {"mode": "deny"},
+            "tools": {
+                "edit_file": {
+                    "mode": "approval_required",
+                    "file_scope": {
+                        "allowed_paths": ["docs/**"],
+                        "denied_paths": ["docs/private/**"],
+                    },
+                }
+            },
+        }
+    )
+
+    with pytest.raises(ApprovalRequiredError):
+        authorize_tool_call(policy, "edit_file", {"file_path": "docs/report.md"})
+
+    with pytest.raises(PolicyDeniedError, match='requested path'):
+        authorize_tool_call(policy, "edit_file", {"file_path": "docs/private/plan.md"})
+
+
+def test_authorize_tool_call_denies_scoped_search_without_explicit_path() -> None:
+    """Treat scoped search tools without a path anchor as out of scope."""
+    policy = AgentPolicy.model_validate(
+        {
+            "default_policy": {"mode": "deny"},
+            "tools": {
+                "grep": {
+                    "mode": "allow",
+                    "file_scope": {"allowed_paths": ["docs/**"]},
+                }
+            },
+        }
+    )
+
+    with pytest.raises(PolicyDeniedError, match='requested path'):
+        authorize_tool_call(policy, "grep", {"pattern": "Napoleon"})
 
 
 def test_authorize_tool_call_respects_allow_and_default_deny() -> None:
@@ -108,6 +198,61 @@ async def test_enforce_policy_denies_tool_invocation(monkeypatch: pytest.MonkeyP
             "message": 'Policy denied tool "sample_tool"',
             "tool_name": "sample_tool",
             "retryable": False,
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_enforce_policy_includes_file_scope_hint_for_out_of_scope_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Include allowed/denied path hints when a file tool is blocked by file scope."""
+
+    @tool
+    async def read_file(file_path: str) -> str:
+        """Read a file."""
+        return file_path
+
+    monkeypatch.setattr(factory, "create_langchain_agent", lambda **_kwargs: object())
+    monkeypatch.setattr(factory, "get_langfuse_handler", lambda **_kwargs: "handler")
+
+    agent, _handler = factory.create_agent(
+        model="openai:gpt-5.4",
+        tools=[read_file],
+        system_prompt="You are a test assistant.",
+    )
+
+    secured_agent = enforce_policy(
+        agent,
+        AgentPolicy.model_validate(
+            {
+                "default_policy": {"mode": "deny"},
+                "tools": {
+                    "read_file": {
+                        "mode": "allow",
+                        "file_scope": {
+                            "allowed_paths": ["docs/**"],
+                            "denied_paths": ["docs/private/**"],
+                        },
+                    }
+                },
+            }
+        ),
+    )
+
+    result = await secured_agent.tools[0].ainvoke({"file_path": "notes/todo.md"})
+
+    assert result == {
+        "ok": False,
+        "error": {
+            "type": "policy_denied",
+            "message": 'Policy denied tool "read_file" for the requested path',
+            "tool_name": "read_file",
+            "retryable": False,
+            "hint": {
+                "allowed_paths": ["docs/**"],
+                "denied_paths": ["docs/private/**"],
+            },
         },
     }
 
