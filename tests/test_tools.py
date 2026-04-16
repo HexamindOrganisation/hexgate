@@ -10,7 +10,13 @@ import httpx
 import pytest
 
 from coolagents.agent.factory import create_agent, invoke_agent
-from coolagents.runtime import LocalWorkspace, ToolUseContext
+from coolagents.runtime import (
+    LocalWorkspace,
+    ToolUseContext,
+    reset_current_tool_use_context,
+    set_current_tool_use_context,
+)
+from coolagents.tools import edit_file, glob, grep, read_file, write_file
 from coolagents.tools.decorators import format_tool_call_label
 from coolagents.tools import agent_tool
 from coolagents.tools.fetch import _get_env_or_raise as get_fetch_env
@@ -360,3 +366,156 @@ def test_local_workspace_blocks_parent_directory_escape(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError):
         workspace.resolve_path("../outside.txt")
+
+
+@pytest.mark.asyncio
+async def test_read_file_reads_from_workspace(tmp_path: Path) -> None:
+    """Read a text file through the built-in workspace-backed tool."""
+    workspace = LocalWorkspace(tmp_path)
+    workspace.write_text("notes.txt", "hello\nworld")
+    token = set_current_tool_use_context(ToolUseContext(workspace=workspace))
+    try:
+        result = await read_file.ainvoke({"file_path": "notes.txt"})
+    finally:
+        reset_current_tool_use_context(token)
+
+    assert result == {
+        "ok": True,
+        "file_path": "notes.txt",
+        "content": "hello\nworld",
+        "num_lines": 2,
+    }
+
+
+@pytest.mark.asyncio
+async def test_write_file_creates_and_updates_files(tmp_path: Path) -> None:
+    """Create a new file and then overwrite it through the built-in tool."""
+    workspace = LocalWorkspace(tmp_path)
+    token = set_current_tool_use_context(ToolUseContext(workspace=workspace))
+    try:
+        created = await write_file.ainvoke(
+            {
+                "file_path": "draft.txt",
+                "content": "first version",
+            }
+        )
+        updated = await write_file.ainvoke(
+            {
+                "file_path": "draft.txt",
+                "content": "second version",
+            }
+        )
+    finally:
+        reset_current_tool_use_context(token)
+
+    assert created["ok"] is True
+    assert created["operation"] == "create"
+    assert updated["ok"] is True
+    assert updated["operation"] == "update"
+    assert workspace.read_text("draft.txt") == "second version"
+
+
+@pytest.mark.asyncio
+async def test_edit_file_replaces_exact_string(tmp_path: Path) -> None:
+    """Edit a file by exact string replacement."""
+    workspace = LocalWorkspace(tmp_path)
+    workspace.write_text("draft.txt", "const x = 1\n")
+    token = set_current_tool_use_context(ToolUseContext(workspace=workspace))
+    try:
+        result = await edit_file.ainvoke(
+            {
+                "file_path": "draft.txt",
+                "old_string": "const x = 1",
+                "new_string": "const x = 2",
+            }
+        )
+    finally:
+        reset_current_tool_use_context(token)
+
+    assert result["ok"] is True
+    assert result["num_replacements"] == 1
+    assert workspace.read_text("draft.txt") == "const x = 2\n"
+
+
+@pytest.mark.asyncio
+async def test_edit_file_rejects_ambiguous_replacement(tmp_path: Path) -> None:
+    """Reject multiple matches unless replace_all is explicitly enabled."""
+    workspace = LocalWorkspace(tmp_path)
+    workspace.write_text("draft.txt", "hello\nhello\n")
+    token = set_current_tool_use_context(ToolUseContext(workspace=workspace))
+    try:
+        with pytest.raises(ValueError, match="multiple locations"):
+            await edit_file.ainvoke(
+                {
+                    "file_path": "draft.txt",
+                    "old_string": "hello",
+                    "new_string": "hi",
+                }
+            )
+    finally:
+        reset_current_tool_use_context(token)
+
+
+@pytest.mark.asyncio
+async def test_glob_returns_relative_matches(tmp_path: Path) -> None:
+    """Find files by glob pattern and return workspace-relative paths."""
+    workspace = LocalWorkspace(tmp_path)
+    workspace.write_text("src/a.py", "print('a')")
+    workspace.write_text("src/b.py", "print('b')")
+    workspace.write_text("src/c.txt", "ignore")
+    token = set_current_tool_use_context(ToolUseContext(workspace=workspace))
+    try:
+        result = await glob.ainvoke({"pattern": "**/*.py"})
+    finally:
+        reset_current_tool_use_context(token)
+
+    assert result == {
+        "ok": True,
+        "pattern": "**/*.py",
+        "filenames": ["src/a.py", "src/b.py"],
+        "num_files": 2,
+        "truncated": False,
+        "search_root": ".",
+    }
+
+
+@pytest.mark.asyncio
+async def test_grep_supports_files_and_content_modes(tmp_path: Path) -> None:
+    """Search file contents within the workspace and return structured results."""
+    workspace = LocalWorkspace(tmp_path)
+    workspace.write_text("src/a.py", "def alpha():\n    pass\n")
+    workspace.write_text("src/b.py", "def beta():\n    pass\n")
+    workspace.write_text("notes.txt", "alpha appears here too\n")
+    token = set_current_tool_use_context(ToolUseContext(workspace=workspace))
+    try:
+        files_result = await grep.ainvoke(
+            {
+                "pattern": "alpha",
+                "glob": "*.py",
+            }
+        )
+        content_result = await grep.ainvoke(
+            {
+                "pattern": "def",
+                "glob": "*.py",
+                "output_mode": "content",
+            }
+        )
+    finally:
+        reset_current_tool_use_context(token)
+
+    assert files_result == {
+        "ok": True,
+        "pattern": "alpha",
+        "mode": "files_with_matches",
+        "num_files": 1,
+        "num_matches": 1,
+        "filenames": ["src/a.py"],
+        "truncated": False,
+    }
+    assert content_result["ok"] is True
+    assert content_result["mode"] == "content"
+    assert content_result["num_files"] == 2
+    assert content_result["num_matches"] == 2
+    assert "src/a.py:1:def alpha():" in content_result["content"]
+    assert "src/b.py:1:def beta():" in content_result["content"]

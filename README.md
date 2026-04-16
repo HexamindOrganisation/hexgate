@@ -39,13 +39,13 @@ Useful next commands:
 ```bash
 coolagents-chat --list-agents
 coolagents-chat --agent researcher
-coolagents-chat --use examples/agents.py --agent website_analyser
+coolagents-chat --use examples/file_agents.py --agent workspace_explorer
 ```
 
 The included local agent lives in `example_agent/`, and the CLI can also load:
 
 - builtin packaged agents like `researcher`
-- code-defined agents registered from `examples/agents.py`
+- code-defined agents registered from `examples/file_agents.py`
 
 ## ✨ Core Primitives
 
@@ -93,14 +93,19 @@ Example:
 ```python
 from coolagents import (
     create_agent,
+    edit_file,
     enforce_policy,
+    glob,
+    grep,
+    read_file,
+    write_file,
     with_before_action,
     agent_tool,
     load_agent,
     load_builtin_agent,
     register_agent,
-    web_search,
     fetch,
+    web_search,
 )
 ```
 
@@ -112,7 +117,7 @@ If you want the CLI and shared loader to resolve that agent by name, register it
 
 A small end-to-end example registry lives in:
 
-- `examples/agents.py`
+- `examples/file_agents.py`
 
 It demonstrates:
 
@@ -124,8 +129,8 @@ It demonstrates:
 For the CLI, you can import that script and then pick one of its registered agents:
 
 ```bash
-coolagents-chat --use examples/agents.py --agent website_analyser
-coolagents-chat --use examples/agents.py --agent news_collector
+coolagents-chat --use examples/file_agents.py --agent workspace_explorer
+coolagents-chat --use examples/file_agents.py --agent repo_editor
 ```
 
 ## 🗂️ Builtin And Local Agents
@@ -322,8 +327,8 @@ coolagents-chat --agent example_agent
 Run the CLI with code-defined agents from a Python script:
 
 ```bash
-coolagents-chat --use examples/agents.py --agent website_analyser
-coolagents-chat --use examples/agents.py --agent news_collector
+coolagents-chat --use examples/file_agents.py --agent workspace_explorer
+coolagents-chat --use examples/file_agents.py --agent repo_editor
 ```
 
 List what the CLI can currently resolve:

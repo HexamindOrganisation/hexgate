@@ -67,7 +67,7 @@ def test_load_agent_script_registers_code_agents() -> None:
     """Importing a registration script should populate the code agent registry."""
     loader.clear_registered_agents()
 
-    _load_agent_script("/Users/haquangle/workspace/upagent/upup/asianf/examples/agents.py")
+    _load_agent_script("/Users/haquangle/workspace/upagent/upup/asianf/examples/file_agents.py")
 
-    assert "website_analyser" in loader.list_registered_agents()
-    assert "news_collector" in loader.list_registered_agents()
+    assert "workspace_explorer" in loader.list_registered_agents()
+    assert "repo_editor" in loader.list_registered_agents()
