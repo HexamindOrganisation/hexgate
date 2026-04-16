@@ -2,16 +2,20 @@
 
 from __future__ import annotations
 
-from rich.console import Console
+from rich.console import Console, Group
 
 from coolagents.agents import loader
 from coolagents.cli.app import (
     AgentRuntime,
     DOG_LOGO,
     _load_agent_script,
+    _render_current_run,
     _render_welcome,
     _tail_text,
 )
+from coolagents.cli.state import LiveRunState, ToolActivity
+from coolagents.stream import ToolCallState
+from coolagents.tools import edit_file, read_file
 
 
 def test_tail_text_keeps_last_lines_of_long_output() -> None:
@@ -61,6 +65,69 @@ def test_render_welcome_includes_agent_and_model() -> None:
     assert "gpt-5.4" in rendered
     assert "coolagents" in rendered
     assert DOG_LOGO.splitlines()[0].strip() in rendered
+
+
+def test_render_current_run_uses_tool_arguments_and_timeline_spacing() -> None:
+    """Render tool rows with readable labels and connector spacing."""
+    runtime = AgentRuntime(
+        agent="agent",  # type: ignore[arg-type]
+        handler="handler",  # type: ignore[arg-type]
+        agent_name="repo_editor",
+        agent_source="local",
+        model="gpt-5.4",
+        tools_by_name={
+            read_file.name: read_file,
+            edit_file.name: edit_file,
+        },
+    )
+    current_run = LiveRunState(
+        query="update napoleon.md",
+        is_streaming=False,
+        tools=[
+            ToolActivity(
+                tool_id="tool-1",
+                tool_name="read_file",
+                status=ToolCallState.COMPLETED,
+                arguments={"file_path": "napoleon.md"},
+            ),
+            ToolActivity(
+                tool_id="tool-2",
+                tool_name="edit_file",
+                status=ToolCallState.COMPLETED,
+                arguments={"file_path": "napoleon.md"},
+            ),
+        ],
+    )
+
+    console = Console(record=True, width=100)
+    console.print(Group(*_render_current_run(runtime, current_run, live=True)))
+    rendered = console.export_text()
+
+    assert "reading napoleon.md" in rendered
+    assert "editing napoleon.md" in rendered
+    assert "│" in rendered
+
+
+def test_render_current_run_uses_spinner_for_thinking_state() -> None:
+    """Render a live spinner when the assistant is still thinking."""
+    runtime = AgentRuntime(
+        agent="agent",  # type: ignore[arg-type]
+        handler="handler",  # type: ignore[arg-type]
+        agent_name="repo_editor",
+        agent_source="local",
+        model="gpt-5.4",
+        tools_by_name={},
+    )
+    current_run = LiveRunState(
+        query="think a bit",
+        is_streaming=True,
+    )
+
+    console = Console(record=True, width=100)
+    console.print(Group(*_render_current_run(runtime, current_run, live=True)))
+    rendered = console.export_text()
+
+    assert "thinking..." in rendered
 
 
 def test_load_agent_script_registers_code_agents() -> None:

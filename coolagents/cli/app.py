@@ -54,10 +54,10 @@ class AgentRuntime:
 def _tool_prefix(tool: ToolActivity) -> RenderableType:
     """Return a compact renderable prefix for a tool activity."""
     if tool.status == ToolCallState.STARTED:
-        return Spinner("dots", text="")
+        return Text("◉", style="bold cyan")
     if tool.status == ToolCallState.FAILED:
-        return Text("✗", style="bold red")
-    return Text("✓", style="bold green")
+        return Text("◉", style="bold red")
+    return Text("◉", style="bold green")
 
 
 def _tool_summary(runtime: AgentRuntime, tool: ToolActivity) -> str:
@@ -98,15 +98,14 @@ def _render_current_run(
     """Render the active assistant turn inline in the transcript."""
     renderables: list[RenderableType] = []
 
-    for tool in current_run.tools:
-        prefix = _tool_prefix(tool)
-        if isinstance(prefix, Spinner):
-            prefix.text = f" {_tool_summary(runtime, tool)}"
-            renderables.append(prefix)
-        else:
-            renderables.append(
-                Text.assemble(prefix, " ", (_tool_summary(runtime, tool), "white"))
-            )
+    for index, tool in enumerate(current_run.tools):
+        renderables.append(
+            Text.assemble(_tool_prefix(tool), " ", (_tool_summary(runtime, tool), "white"))
+        )
+        if tool.summary and tool.status == ToolCallState.FAILED:
+            renderables.append(Text(f"  {tool.summary}", style="dim red"))
+        if index < len(current_run.tools) - 1:
+            renderables.append(Text("│", style="dim white"))
 
     if current_run.reasoning_text.strip():
         renderables.append(Text(f"  {current_run.reasoning_text.rstrip()}", style="dim white"))
@@ -163,7 +162,10 @@ def _build_runtime(settings: Settings, *, agent_name: str, base_dir: Path, model
         tags=["coolagents", settings.search_engine, resolved_model, agent_name],
         extra_tools={tool.name: tool for tool in tools},
     )
-    tools_by_name = {getattr(tool, "name", getattr(tool, "__name__", "tool")): tool for tool in tools}
+    runtime_tools = list(getattr(agent, "tools", [])) + list(tools)
+    tools_by_name = {
+        getattr(tool, "name", getattr(tool, "__name__", "tool")): tool for tool in runtime_tools
+    }
     return AgentRuntime(
         agent=agent,
         handler=handler,

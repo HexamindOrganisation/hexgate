@@ -170,3 +170,40 @@ async def test_with_before_action_can_block_tool_invocation(
 
     with pytest.raises(RuntimeError, match="blocked by host platform"):
         await guarded_agent.tools[0].ainvoke({"value": "hello"})
+
+
+@pytest.mark.asyncio
+async def test_enforced_tool_emits_single_tool_lifecycle(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Avoid nested duplicate tool runs when policy wrapping is applied."""
+
+    @tool
+    async def sample_tool(value: str) -> str:
+        """Return a transformed string."""
+        return value.upper()
+
+    monkeypatch.setattr(factory, "create_langchain_agent", lambda **_kwargs: object())
+    monkeypatch.setattr(factory, "get_langfuse_handler", lambda **_kwargs: "handler")
+
+    agent, _handler = factory.create_agent(
+        model="openai:gpt-5.4",
+        tools=[sample_tool],
+        system_prompt="You are a test assistant.",
+    )
+
+    secured_agent = enforce_policy(
+        agent,
+        AgentPolicy.model_validate(
+            {"default_policy": {"mode": "deny"}, "tools": {"sample_tool": {"mode": "allow"}}}
+        ),
+    )
+
+    event_names: list[str] = []
+    async for event in secured_agent.tools[0].astream_events({"value": "hello"}, version="v2"):
+        name = event.get("event")
+        if isinstance(name, str):
+            event_names.append(name)
+
+    assert event_names.count("on_tool_start") == 1
+    assert event_names.count("on_tool_end") == 1
