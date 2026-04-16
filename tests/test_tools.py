@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 import httpx
 import pytest
 
+from coolagents.agent.factory import create_agent, invoke_agent
+from coolagents.runtime import LocalWorkspace, ToolUseContext
 from coolagents.tools.decorators import format_tool_call_label
+from coolagents.tools import agent_tool
 from coolagents.tools.fetch import _get_env_or_raise as get_fetch_env
 from coolagents.tools.fetch import _format_fetch_call
 from coolagents.tools.fetch import fetch
@@ -226,3 +230,133 @@ async def test_web_search_returns_structured_error_for_http_400(
     assert result["error"]["type"] == "http_status_error"
     assert result["error"]["status_code"] == 400
     assert result["error"]["retryable"] is False
+
+
+def test_agent_tool_hides_tool_use_context_from_schema() -> None:
+    """Keep the runtime meta-argument out of the model-visible tool schema."""
+
+    @agent_tool(name="read_from_workspace")
+    async def read_from_workspace(
+        path: str,
+        tool_use_context: ToolUseContext,
+    ) -> dict[str, str]:
+        """Read a file from the current workspace."""
+        assert tool_use_context.workspace is not None
+        return {"content": tool_use_context.workspace.read_text(path)}
+
+    assert "tool_use_context" not in read_from_workspace.args
+    assert "path" in read_from_workspace.args
+
+
+@pytest.mark.asyncio
+async def test_agent_tool_injects_tool_use_context_during_agent_run(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Inject runtime workspace context into tools without exposing it to the model."""
+    workspace = LocalWorkspace(tmp_path)
+    workspace.write_text("notes.txt", "hello from workspace")
+    captured: dict[str, Any] = {}
+
+    @agent_tool(name="read_from_workspace")
+    async def read_from_workspace(
+        path: str,
+        tool_use_context: ToolUseContext,
+    ) -> dict[str, str]:
+        """Read a file from the current workspace."""
+        assert tool_use_context.workspace is not None
+        captured["workspace_root"] = str(tool_use_context.workspace.root_dir)
+        return {"content": tool_use_context.workspace.read_text(path)}
+
+    class FakeGraph:
+        async def ainvoke(self, payload: dict[str, Any], *, config: dict[str, Any]) -> dict[str, Any]:
+            _ = payload
+            _ = config
+            tool_result = await read_from_workspace.ainvoke({"path": "notes.txt"})
+            return {"messages": [tool_result["content"]]}
+
+    monkeypatch.setattr(
+        "coolagents.agent.factory.create_langchain_agent",
+        lambda **_kwargs: FakeGraph(),
+    )
+    monkeypatch.setattr(
+        "coolagents.agent.factory.get_langfuse_handler",
+        lambda **_kwargs: "handler",
+    )
+    monkeypatch.setattr(
+        "coolagents.agent.factory.get_langfuse_runnable_config",
+        lambda _handler: {"callbacks": ["handler"]},
+    )
+
+    agent, handler = create_agent(
+        model="openai:gpt-5.4",
+        tools=[read_from_workspace],
+        system_prompt="You are a file assistant.",
+        name="file-agent",
+    )
+
+    result = await invoke_agent(
+        agent,
+        handler,
+        "read the file",
+        tool_use_context=ToolUseContext(workspace=workspace),
+    )
+
+    assert result == {"messages": ["hello from workspace"]}
+    assert captured["workspace_root"] == str(tmp_path.resolve())
+
+
+@pytest.mark.asyncio
+async def test_agent_tool_defaults_to_local_workspace_during_run(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Default each run to a LocalWorkspace rooted at the current directory."""
+    captured: dict[str, Any] = {}
+
+    @agent_tool(name="inspect_workspace")
+    async def inspect_workspace(tool_use_context: ToolUseContext) -> dict[str, str]:
+        """Return the active workspace root."""
+        assert tool_use_context.workspace is not None
+        captured["workspace_root"] = str(tool_use_context.workspace.root_dir)
+        return {"workspace_root": str(tool_use_context.workspace.root_dir)}
+
+    class FakeGraph:
+        async def ainvoke(self, payload: dict[str, Any], *, config: dict[str, Any]) -> dict[str, Any]:
+            _ = payload
+            _ = config
+            tool_result = await inspect_workspace.ainvoke({})
+            return {"messages": [tool_result["workspace_root"]]}
+
+    monkeypatch.setattr(
+        "coolagents.agent.factory.create_langchain_agent",
+        lambda **_kwargs: FakeGraph(),
+    )
+    monkeypatch.setattr(
+        "coolagents.agent.factory.get_langfuse_handler",
+        lambda **_kwargs: "handler",
+    )
+    monkeypatch.setattr(
+        "coolagents.agent.factory.get_langfuse_runnable_config",
+        lambda _handler: {"callbacks": ["handler"]},
+    )
+    monkeypatch.chdir(tmp_path)
+
+    agent, handler = create_agent(
+        model="openai:gpt-5.4",
+        tools=[inspect_workspace],
+        system_prompt="You are a file assistant.",
+    )
+
+    result = await invoke_agent(agent, handler, "inspect the workspace")
+
+    assert result == {"messages": [str(tmp_path.resolve())]}
+    assert captured["workspace_root"] == str(tmp_path.resolve())
+
+
+def test_local_workspace_blocks_parent_directory_escape(tmp_path: Path) -> None:
+    """Keep local workspace access scoped to its root directory."""
+    workspace = LocalWorkspace(tmp_path)
+
+    with pytest.raises(ValueError):
+        workspace.resolve_path("../outside.txt")

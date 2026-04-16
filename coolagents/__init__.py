@@ -15,6 +15,7 @@ from coolagents.agents.loader import (
     register_agent,
     unregister_agent,
 )
+from coolagents.runtime import LocalWorkspace, ToolUseContext, Workspace
 from coolagents.security import AgentPolicy
 from coolagents.tools import agent_tool
 from coolagents.tools.fetch import fetch
@@ -22,6 +23,9 @@ from coolagents.tools.websearch import web_search
 
 __all__ = [
     "AgentPolicy",
+    "LocalWorkspace",
+    "ToolUseContext",
+    "Workspace",
     "agent_tool",
     "clear_registered_agents",
     "create_agent",
