@@ -42,6 +42,9 @@ AgentInput: TypeAlias = str | Sequence[object] | Mapping[str, object] | BaseMode
 ActionPayload: TypeAlias = dict[str, Any]
 ActionContext: TypeAlias = dict[str, Any] | None
 BeforeActionHook: TypeAlias = Callable[[ActionPayload, ActionContext], object | Awaitable[object]]
+ApprovalHandler: TypeAlias = (
+    bool | Callable[[ActionPayload, ActionContext], bool | Awaitable[bool]]
+)
 ContextProvider: TypeAlias = Callable[[], ActionContext]
 DEFAULT_SYSTEM_PROMPT = Path(__file__).parent.parent / "prompts" / "agent_system.md"
 
@@ -302,6 +305,24 @@ class CoolAgent:
             wrap_tools_with_before_action(
                 self.tools,
                 before_action,
+                context_provider=context_provider,
+                agent_name=self.name,
+            )
+        )
+
+    def with_approval_handler(
+        self,
+        approval_handler: ApprovalHandler,
+        *,
+        context_provider: ContextProvider | None = None,
+    ) -> Self:
+        """Return a new agent runtime with a Gate 1 approval resolver."""
+        from coolagents.agent.security import wrap_tools_with_approval_handler
+
+        return self.with_tools(
+            wrap_tools_with_approval_handler(
+                self.tools,
+                approval_handler,
                 context_provider=context_provider,
                 agent_name=self.name,
             )

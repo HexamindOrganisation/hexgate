@@ -1,7 +1,7 @@
 """Public package surface for coolagents."""
 
 from coolagents.agent.factory import create_agent, invoke_agent, stream_agent, stream_agent_raw
-from coolagents.agent.security import enforce_policy, with_before_action
+from coolagents.agent.security import enforce_policy, with_approval_handler, with_before_action
 from coolagents.agents.loader import (
     clear_registered_agents,
     list_available_agents,
@@ -48,6 +48,7 @@ __all__ = [
     "stream_agent",
     "stream_agent_raw",
     "unregister_agent",
+    "with_approval_handler",
     "with_before_action",
     "web_search",
     "write_file",

@@ -7,6 +7,7 @@ import argparse
 from dataclasses import dataclass
 import importlib.util
 from pathlib import Path
+from typing import Literal
 
 from rich.columns import Columns
 from rich.console import Console, Group, RenderableType
@@ -16,6 +17,7 @@ from rich.panel import Panel
 from rich.spinner import Spinner
 from rich.text import Text
 
+from coolagents import with_approval_handler
 from coolagents.agent.factory import AgentGraph, CallbackHandler, stream_agent
 from coolagents.agents.loader import list_available_agents, load_agent, resolve_agent_source
 from coolagents.cli.state import ChatState, LiveRunState, ToolActivity
@@ -37,6 +39,7 @@ DOG_LOGO = "\n".join(
         "/_____/   U",
     ]
 )
+ApprovalMode = Literal["ask", "auto-approve", "auto-deny"]
 
 
 @dataclass
@@ -176,6 +179,64 @@ def _build_runtime(settings: Settings, *, agent_name: str, base_dir: Path, model
     )
 
 
+def _truncate_approval_value(value: object, *, limit: int = 80) -> str:
+    """Return a compact single-line representation for approval prompts."""
+    text = str(value).replace("\n", "\\n")
+    if len(text) <= limit:
+        return text
+    return f"{text[: limit - 3]}..."
+
+
+def _prompt_for_approval(
+    console: Console,
+    action: dict[str, object],
+) -> bool:
+    """Ask the user to approve one tool invocation in the terminal."""
+    tool_name = str(action.get("tool_name", "tool"))
+    arguments = action.get("arguments", {})
+
+    console.print()
+    console.print(
+        Panel(
+            Group(
+                Text(f"Approval required for {tool_name}", style="bold yellow"),
+                *(
+                    Text(
+                        f"{key}: {_truncate_approval_value(value)}",
+                        style="white",
+                    )
+                    for key, value in (
+                        arguments.items() if isinstance(arguments, dict) else [("arguments", arguments)]
+                    )
+                ),
+                Text("Type y to approve or n to deny, then press Enter.", style="dim"),
+            ),
+            border_style="yellow",
+            title="[bold yellow]Approval[/]",
+            padding=(0, 1),
+        )
+    )
+    answer = console.input("[bold yellow]Approve? [y/N] [/]").strip().lower()
+    console.print()
+    return answer in {"y", "yes"}
+
+
+def _build_approval_handler(
+    console: Console,
+    mode: ApprovalMode,
+):
+    """Return the CLI approval handler for the selected mode."""
+    if mode == "auto-approve":
+        return True
+    if mode == "auto-deny":
+        return False
+
+    def approval_handler(action: dict[str, object], _context: dict[str, object] | None) -> bool:
+        return _prompt_for_approval(console, action)
+
+    return approval_handler
+
+
 def _parse_args() -> argparse.Namespace:
     """Parse command-line arguments for the inline chat app."""
     parser = argparse.ArgumentParser(description="Run the coolagents inline chat CLI.")
@@ -189,6 +250,12 @@ def _parse_args() -> argparse.Namespace:
         "--list-agents",
         action="store_true",
         help="List available local and builtin agents, then exit.",
+    )
+    parser.add_argument(
+        "--approval-mode",
+        choices=("ask", "auto-approve", "auto-deny"),
+        default="ask",
+        help="How the CLI should handle approval-required tools.",
     )
     return parser.parse_args()
 
@@ -304,6 +371,11 @@ def run() -> None:
 
     agent_name = args.agent or _default_agent_name(base_dir)
     runtime = _build_runtime(settings, agent_name=agent_name, base_dir=base_dir, model=args.model)
+    runtime.agent = with_approval_handler(
+        runtime.agent,
+        _build_approval_handler(console, args.approval_mode),
+        context_provider=lambda: {"surface": "cli", "agent_name": runtime.agent_name},
+    )
     asyncio.run(_chat_loop(console, runtime))
 
 

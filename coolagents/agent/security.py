@@ -11,12 +11,19 @@ from langchain_core.tools.structured import StructuredTool
 from pydantic import ConfigDict
 
 from coolagents.agent.factory import (
+    ActionContext,
+    ActionPayload,
     AgentGraph,
+    ApprovalHandler,
     BeforeActionHook,
     ContextProvider,
     ToolSpec,
 )
-from coolagents.security import AgentPolicy
+from coolagents.security import (
+    AgentPolicy,
+    ApprovalRequiredError,
+    PolicyDeniedError,
+)
 from coolagents.tools.decorators import TOOL_METADATA_ATTR
 
 
@@ -35,9 +42,35 @@ class GuardedTool(BaseTool):
 
     wrapped_tool: BaseTool
     policy: AgentPolicy | None = None
+    approval_handler: ApprovalHandler | None = None
     before_action: BeforeActionHook | None = None
     context_provider: ContextProvider | None = None
     agent_name: str | None = None
+
+    def _build_action(self, kwargs: dict[str, Any]) -> ActionPayload:
+        """Build a host-facing action payload for approval and veto hooks."""
+        return {
+            "tool_name": self.name,
+            "arguments": kwargs,
+            "agent_name": self.agent_name,
+        }
+
+    def _build_context(self) -> ActionContext:
+        """Return the current host context for approval and veto hooks."""
+        return self.context_provider() if self.context_provider is not None else None
+
+    def _security_result(self, error_type: str, message: str) -> dict[str, Any]:
+        """Return a structured governance failure payload."""
+        # TODO: evolve this into a richer interruption/decision shape for UI pause-resume flows.
+        return {
+            "ok": False,
+            "error": {
+                "type": error_type,
+                "message": message,
+                "tool_name": self.name,
+                "retryable": False,
+            },
+        }
 
     async def _invoke_wrapped_async(self, *args: Any, **kwargs: Any) -> Any:
         """Call the original tool implementation without creating another tool run."""
@@ -62,23 +95,54 @@ class GuardedTool(BaseTool):
 
         authorize_tool_call(self.policy, self.name)
 
-    async def _check_before_action(self, kwargs: dict[str, Any]) -> None:
+    async def _check_before_action(self, kwargs: dict[str, Any]) -> dict[str, Any] | None:
         """Apply the hosted Gate 2 hook when configured."""
         if self.before_action is None:
-            return
-        action = {
-            "tool_name": self.name,
-            "arguments": kwargs,
-            "agent_name": self.agent_name,
-        }
-        context = self.context_provider() if self.context_provider is not None else None
-        decision = self.before_action(action, context)
+            return None
+        try:
+            decision = self.before_action(self._build_action(kwargs), self._build_context())
+            if isawaitable(decision):
+                await decision
+        except Exception as error:
+            return self._security_result("before_action_denied", str(error))
+        return None
+
+    async def _resolve_approval_async(self, kwargs: dict[str, Any]) -> bool:
+        """Return whether an approval-required action has been approved."""
+        if self.approval_handler is None:
+            return False
+        if isinstance(self.approval_handler, bool):
+            return self.approval_handler
+        decision = self.approval_handler(self._build_action(kwargs), self._build_context())
         if isawaitable(decision):
-            await decision
+            decision = await decision
+        return bool(decision)
+
+    def _resolve_approval_sync(self, kwargs: dict[str, Any]) -> bool:
+        """Return whether an approval-required action has been approved."""
+        if self.approval_handler is None:
+            return False
+        if isinstance(self.approval_handler, bool):
+            return self.approval_handler
+        decision = self.approval_handler(self._build_action(kwargs), self._build_context())
+        if isawaitable(decision):
+            raise RuntimeError(
+                "approval_handler requires async tool execution when it returns an awaitable"
+            )
+        return bool(decision)
 
     def _run(self, *args: Any, **kwargs: Any) -> Any:
         """Invoke the wrapped tool synchronously with security checks."""
-        self._authorize()
+        try:
+            self._authorize()
+        except PolicyDeniedError as error:
+            return self._security_result("policy_denied", str(error))
+        except ApprovalRequiredError:
+            if not self._resolve_approval_sync(kwargs):
+                return self._security_result(
+                    "approval_required",
+                    f'Tool "{self.name}" requires approval before execution',
+                )
         if self.before_action is not None:
             raise RuntimeError(
                 "before_action requires async tool execution; use ainvoke/astream_events"
@@ -87,8 +151,19 @@ class GuardedTool(BaseTool):
 
     async def _arun(self, *args: Any, **kwargs: Any) -> Any:
         """Invoke the wrapped tool asynchronously with security checks."""
-        self._authorize()
-        await self._check_before_action(kwargs)
+        try:
+            self._authorize()
+        except PolicyDeniedError as error:
+            return self._security_result("policy_denied", str(error))
+        except ApprovalRequiredError:
+            if not await self._resolve_approval_async(kwargs):
+                return self._security_result(
+                    "approval_required",
+                    f'Tool "{self.name}" requires approval before execution',
+                )
+        before_action_result = await self._check_before_action(kwargs)
+        if before_action_result is not None:
+            return before_action_result
         return await self._invoke_wrapped_async(*args, **kwargs)
 
 
@@ -96,6 +171,7 @@ def _wrap_tool(
     tool_spec: BaseTool,
     *,
     policy: AgentPolicy | None = None,
+    approval_handler: ApprovalHandler | None = None,
     before_action: BeforeActionHook | None = None,
     context_provider: ContextProvider | None = None,
     agent_name: str | None = None,
@@ -117,6 +193,9 @@ def _wrap_tool(
             extras=tool_spec.extras,
             wrapped_tool=tool_spec.wrapped_tool,
             policy=policy or tool_spec.policy,
+            approval_handler=approval_handler
+            if approval_handler is not None
+            else tool_spec.approval_handler,
             before_action=before_action or tool_spec.before_action,
             context_provider=context_provider or tool_spec.context_provider,
             agent_name=agent_name or tool_spec.agent_name,
@@ -138,6 +217,7 @@ def _wrap_tool(
         extras=tool_spec.extras,
         wrapped_tool=tool_spec,
         policy=policy,
+        approval_handler=approval_handler,
         before_action=before_action,
         context_provider=context_provider,
         agent_name=agent_name,
@@ -168,6 +248,30 @@ def enforce_policy(
 ) -> AgentGraph:
     """Return an agent runtime with Gate 1 policy enforcement applied."""
     return agent.enforce_policy(policy)
+
+
+def wrap_tools_with_approval_handler(
+    tools: Sequence[ToolSpec],
+    approval_handler: ApprovalHandler,
+    *,
+    context_provider: ContextProvider | None = None,
+    agent_name: str | None = None,
+) -> list[ToolSpec]:
+    """Wrap tools so approval-required policy outcomes can consult a host handler."""
+    wrapped_tools: list[ToolSpec] = []
+    for tool_spec in tools:
+        if not isinstance(tool_spec, BaseTool):
+            wrapped_tools.append(tool_spec)
+            continue
+        wrapped_tools.append(
+            _wrap_tool(
+                tool_spec,
+                approval_handler=approval_handler,
+                context_provider=context_provider,
+                agent_name=agent_name,
+            )
+        )
+    return wrapped_tools
 
 
 def wrap_tools_with_before_action(
@@ -202,3 +306,13 @@ def with_before_action(
 ) -> AgentGraph:
     """Return an agent runtime with a Gate 2 pre-tool hook applied."""
     return agent.with_before_action(before_action, context_provider=context_provider)
+
+
+def with_approval_handler(
+    agent: AgentGraph,
+    approval_handler: ApprovalHandler,
+    *,
+    context_provider: ContextProvider | None = None,
+) -> AgentGraph:
+    """Return an agent runtime with a Gate 1 approval resolver applied."""
+    return agent.with_approval_handler(approval_handler, context_provider=context_provider)

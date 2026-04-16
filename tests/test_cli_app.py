@@ -8,7 +8,9 @@ from coolagents.agents import loader
 from coolagents.cli.app import (
     AgentRuntime,
     DOG_LOGO,
+    _build_approval_handler,
     _load_agent_script,
+    _prompt_for_approval,
     _render_current_run,
     _render_welcome,
     _tail_text,
@@ -130,6 +132,46 @@ def test_render_current_run_uses_spinner_for_thinking_state() -> None:
     assert "thinking..." in rendered
 
 
+def test_build_approval_handler_supports_auto_modes() -> None:
+    """Map CLI approval modes to simple boolean handlers when possible."""
+    console = Console(record=True, width=100)
+
+    assert _build_approval_handler(console, "auto-approve") is True
+    assert _build_approval_handler(console, "auto-deny") is False
+
+
+def test_prompt_for_approval_asks_user_with_tool_arguments() -> None:
+    """Render a compact approval prompt and return the user's decision."""
+    console = Console(record=True, width=100)
+    captured_prompts: list[str] = []
+
+    def fake_input(prompt: str) -> str:
+        captured_prompts.append(prompt)
+        return "y"
+
+    console.input = fake_input  # type: ignore[method-assign]
+
+    approved = _prompt_for_approval(
+        console,
+        {
+            "tool_name": "write_file",
+            "arguments": {
+                "file_path": "napoleon.md",
+                "content": "new section",
+            },
+        },
+    )
+
+    rendered = console.export_text()
+
+    assert approved is True
+    assert "Approval required for write_file" in rendered
+    assert "file_path: napoleon.md" in rendered
+    assert "content: new section" in rendered
+    assert "Type y to approve or n to deny, then press Enter." in rendered
+    assert captured_prompts == ["[bold yellow]Approve? [y/N] [/]"]
+
+
 def test_load_agent_script_registers_code_agents() -> None:
     """Importing a registration script should populate the code agent registry."""
     loader.clear_registered_agents()
@@ -138,3 +180,12 @@ def test_load_agent_script_registers_code_agents() -> None:
 
     assert "workspace_explorer" in loader.list_registered_agents()
     assert "repo_editor" in loader.list_registered_agents()
+
+
+def test_load_research_agent_script_registers_update_researcher() -> None:
+    """Importing the research example script should register the update researcher agent."""
+    loader.clear_registered_agents()
+
+    _load_agent_script("/Users/haquangle/workspace/upagent/upup/asianf/examples/research_agents.py")
+
+    assert "update_researcher" in loader.list_registered_agents()
