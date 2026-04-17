@@ -167,3 +167,143 @@ async def test_normalize_langchain_events_tracks_nested_hierarchy() -> None:
     assert tool_start.root_run_id == "root-run"
     assert tool_start.parent_run_id == "subagent-run"
     assert tool_start.depth == 2
+
+
+@pytest.mark.asyncio
+async def test_normalize_langchain_events_marks_graceful_tool_failure_as_failed() -> None:
+    """Treat structured tool failures as failed tool steps in the normalized stream."""
+    raw_events = [
+        {
+            "event": "on_chain_start",
+            "run_id": "root-run",
+            "parent_ids": [],
+            "data": {"input": {"messages": [{"role": "user", "content": "hi"}]}},
+        },
+        {
+            "event": "on_tool_start",
+            "run_id": "tool-run",
+            "name": "write_file",
+            "parent_ids": ["root-run"],
+            "data": {"input": {"file_path": "ai_news_report.md"}},
+        },
+        {
+            "event": "on_tool_end",
+            "run_id": "tool-run",
+            "name": "write_file",
+            "parent_ids": ["root-run"],
+            "data": {
+                "input": {"file_path": "ai_news_report.md"},
+                "output": {
+                    "ok": False,
+                    "error": {
+                        "type": "policy_denied",
+                        "message": 'Policy denied tool "write_file" for the requested path',
+                    },
+                },
+            },
+        },
+    ]
+
+    events = [
+        event
+        async for event in normalize_langchain_events(_aiter(raw_events), query="hi")
+    ]
+
+    tool_end = next(event for event in events if isinstance(event, ToolEndEvent))
+    result = events[-1].result
+    tool_step = next(step for step in result.steps if step.type == StepType.TOOL_CALL)
+
+    assert tool_end.state == ToolCallState.FAILED
+    assert tool_end.output_summary == 'Policy denied tool "write_file" for the requested path'
+    assert tool_step.state == ToolCallState.FAILED
+    assert tool_step.output_summary == 'Policy denied tool "write_file" for the requested path'
+
+
+@pytest.mark.asyncio
+async def test_normalize_langchain_events_marks_json_string_tool_failure_as_failed() -> None:
+    """Treat serialized JSON tool failures as failed tool steps too."""
+    raw_events = [
+        {
+            "event": "on_chain_start",
+            "run_id": "root-run",
+            "parent_ids": [],
+            "data": {"input": {"messages": [{"role": "user", "content": "hi"}]}},
+        },
+        {
+            "event": "on_tool_start",
+            "run_id": "tool-run",
+            "name": "write_file",
+            "parent_ids": ["root-run"],
+            "data": {"input": {"file_path": "latest-ai-breakthroughs.md"}},
+        },
+        {
+            "event": "on_tool_end",
+            "run_id": "tool-run",
+            "name": "write_file",
+            "parent_ids": ["root-run"],
+            "data": {
+                "input": {"file_path": "latest-ai-breakthroughs.md"},
+                "output": '{"ok": false, "error": {"type": "policy_denied", "message": "Policy denied tool \\"write_file\\" for the requested path", "tool_name": "write_file", "retryable": false, "hint": {"allowed_paths": ["research_notes/*.md"]}}}',
+            },
+        },
+    ]
+
+    events = [
+        event
+        async for event in normalize_langchain_events(_aiter(raw_events), query="hi")
+    ]
+
+    tool_end = next(event for event in events if isinstance(event, ToolEndEvent))
+    result = events[-1].result
+    tool_step = next(step for step in result.steps if step.type == StepType.TOOL_CALL)
+
+    assert tool_end.state == ToolCallState.FAILED
+    assert tool_end.output_summary == 'Policy denied tool "write_file" for the requested path'
+    assert tool_step.state == ToolCallState.FAILED
+    assert tool_step.output_summary == 'Policy denied tool "write_file" for the requested path'
+
+
+@pytest.mark.asyncio
+async def test_normalize_langchain_events_marks_wrapped_content_tool_failure_as_failed() -> None:
+    """Treat content-wrapped JSON tool failures as failed tool steps too."""
+    raw_events = [
+        {
+            "event": "on_chain_start",
+            "run_id": "root-run",
+            "parent_ids": [],
+            "data": {"input": {"messages": [{"role": "user", "content": "hi"}]}},
+        },
+        {
+            "event": "on_tool_start",
+            "run_id": "tool-run",
+            "name": "write_file",
+            "parent_ids": ["root-run"],
+            "data": {"input": {"file_path": "latest-ai-breakthroughs.md"}},
+        },
+        {
+            "event": "on_tool_end",
+            "run_id": "tool-run",
+            "name": "write_file",
+            "parent_ids": ["root-run"],
+            "data": {
+                "input": {"file_path": "latest-ai-breakthroughs.md"},
+                "output": {
+                    "content": '{"ok": false, "error": {"type": "policy_denied", "message": "Policy denied tool \\"write_file\\" for the requested path"}}'
+                },
+            },
+        },
+    ]
+
+    events = [
+        event
+        async for event in normalize_langchain_events(_aiter(raw_events), query="hi")
+    ]
+
+    tool_end = next(event for event in events if isinstance(event, ToolEndEvent))
+    result = events[-1].result
+    tool_step = next(step for step in result.steps if step.type == StepType.TOOL_CALL)
+
+    assert tool_end.state == ToolCallState.FAILED
+    assert tool_end.output_summary == 'Policy denied tool "write_file" for the requested path'
+    assert tool_step.state == ToolCallState.FAILED
+    assert tool_step.output_summary == 'Policy denied tool "write_file" for the requested path'

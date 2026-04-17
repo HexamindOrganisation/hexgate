@@ -77,6 +77,30 @@ def test_apply_event_accumulates_text_and_tool_activity() -> None:
     assert state.current_run.tools[0].summary == "5 results"
 
 
+def test_duplicate_tool_start_updates_existing_activity() -> None:
+    """Avoid duplicating a tool row when the same start event is seen twice."""
+    state = ChatState()
+    state.start_turn("update the file")
+
+    start_event = ToolStartEvent(
+        run_id="tool-run",
+        root_run_id="run-1",
+        parent_run_id="run-1",
+        depth=1,
+        sequence=2,
+        tool_id="tool-1",
+        tool_name="read_file",
+        arguments={"file_path": "notes.md"},
+    )
+
+    state.apply_event(start_event)
+    state.apply_event(start_event)
+
+    assert state.current_run is not None
+    assert len(state.current_run.tools) == 1
+    assert state.current_run.tools[0].arguments == {"file_path": "notes.md"}
+
+
 def test_run_end_appends_assistant_message() -> None:
     """Persist the final assistant message back into the conversation."""
     state = ChatState()

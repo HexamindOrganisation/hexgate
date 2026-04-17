@@ -100,14 +100,20 @@ class ChatState:
             return
 
         if isinstance(event, ToolStartEvent):
-            self.current_run.tools.append(
-                ToolActivity(
-                    tool_id=event.tool_id,
-                    tool_name=event.tool_name,
-                    status=ToolCallState.STARTED,
-                    arguments=dict(event.arguments),
+            activity = self._find_tool(event.tool_id)
+            if activity is None:
+                self.current_run.tools.append(
+                    ToolActivity(
+                        tool_id=event.tool_id,
+                        tool_name=event.tool_name,
+                        status=ToolCallState.STARTED,
+                        arguments=dict(event.arguments),
+                    )
                 )
-            )
+            else:
+                activity.tool_name = event.tool_name
+                activity.status = ToolCallState.STARTED
+                activity.arguments = dict(event.arguments)
             return
 
         if isinstance(event, ToolEndEvent):

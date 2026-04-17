@@ -20,6 +20,12 @@ from langgraph.graph.state import CompiledStateGraph
 from langgraph.store.base import BaseStore
 from pydantic import BaseModel
 
+from coolagents.runtime import (
+    LocalWorkspace,
+    ToolUseContext,
+    reset_current_tool_use_context,
+    set_current_tool_use_context,
+)
 from coolagents.streaming import new_root_run_id, normalize_langchain_events
 from coolagents.stream import StreamEvent
 from coolagents.tracing.langfuse import (
@@ -36,6 +42,9 @@ AgentInput: TypeAlias = str | Sequence[object] | Mapping[str, object] | BaseMode
 ActionPayload: TypeAlias = dict[str, Any]
 ActionContext: TypeAlias = dict[str, Any] | None
 BeforeActionHook: TypeAlias = Callable[[ActionPayload, ActionContext], object | Awaitable[object]]
+ApprovalHandler: TypeAlias = (
+    bool | Callable[[ActionPayload, ActionContext], bool | Awaitable[bool]]
+)
 ContextProvider: TypeAlias = Callable[[], ActionContext]
 DEFAULT_SYSTEM_PROMPT = Path(__file__).parent.parent / "prompts" / "agent_system.md"
 
@@ -169,6 +178,24 @@ def extract_input_text(input: AgentInput) -> str:
     return _extract_query_from_messages(input)
 
 
+def _resolve_tool_use_context(
+    agent: "CoolAgent",
+    tool_use_context: ToolUseContext | None,
+) -> ToolUseContext:
+    """Return the runtime tool context for a run."""
+    agent_name = getattr(agent, "name", None)
+    if tool_use_context is not None:
+        if tool_use_context.agent_name is None:
+            tool_use_context.agent_name = agent_name
+        if tool_use_context.workspace is None:
+            tool_use_context.workspace = LocalWorkspace(Path.cwd())
+        return tool_use_context
+    return ToolUseContext(
+        workspace=LocalWorkspace(Path.cwd()),
+        agent_name=agent_name,
+    )
+
+
 class CoolAgent:
     """A small wrapper around a LangChain agent graph with room for layering."""
 
@@ -283,6 +310,24 @@ class CoolAgent:
             )
         )
 
+    def with_approval_handler(
+        self,
+        approval_handler: ApprovalHandler,
+        *,
+        context_provider: ContextProvider | None = None,
+    ) -> Self:
+        """Return a new agent runtime with a Gate 1 approval resolver."""
+        from coolagents.agent.security import wrap_tools_with_approval_handler
+
+        return self.with_tools(
+            wrap_tools_with_approval_handler(
+                self.tools,
+                approval_handler,
+                context_provider=context_provider,
+                agent_name=self.name,
+            )
+        )
+
 
 AgentGraph: TypeAlias = CoolAgent
 
@@ -361,28 +406,40 @@ async def invoke_agent(
     agent: AgentGraph,
     handler: CallbackHandler,
     input: AgentInput,
+    *,
+    tool_use_context: ToolUseContext | None = None,
 ) -> dict[str, Any]:
     """Invoke the agent for one normalized input payload."""
-    return await agent.ainvoke(
-        normalize_input(input),
-        config=get_langfuse_runnable_config(handler),
-    )
+    token = set_current_tool_use_context(_resolve_tool_use_context(agent, tool_use_context))
+    try:
+        return await agent.ainvoke(
+            normalize_input(input),
+            config=get_langfuse_runnable_config(handler),
+        )
+    finally:
+        reset_current_tool_use_context(token)
 
 
 async def stream_agent_raw(
     agent: AgentGraph,
     handler: CallbackHandler,
     input: AgentInput,
+    *,
+    tool_use_context: ToolUseContext | None = None,
 ) -> AsyncIterator[LangChainStreamEvent]:
     """Stream raw LangChain events from the agent runtime."""
     config = get_langfuse_runnable_config(handler)
     config["run_id"] = new_root_run_id()
-    async for event in agent.astream_events(
-        normalize_input(input),
-        config=config,
-        version="v2",
-    ):
-        yield event
+    token = set_current_tool_use_context(_resolve_tool_use_context(agent, tool_use_context))
+    try:
+        async for event in agent.astream_events(
+            normalize_input(input),
+            config=config,
+            version="v2",
+        ):
+            yield event
+    finally:
+        reset_current_tool_use_context(token)
 
 
 @observe(name="stream_coolagents_agent")
@@ -390,10 +447,17 @@ async def stream_agent(
     agent: AgentGraph,
     handler: CallbackHandler,
     input: AgentInput,
+    *,
+    tool_use_context: ToolUseContext | None = None,
 ) -> AsyncIterator[StreamEvent]:
     """Stream normalized runtime events from the agent."""
+    raw_events = (
+        stream_agent_raw(agent, handler, input)
+        if tool_use_context is None
+        else stream_agent_raw(agent, handler, input, tool_use_context=tool_use_context)
+    )
     async for event in normalize_langchain_events(
-        stream_agent_raw(agent, handler, input),
+        raw_events,
         query=extract_input_text(input),
     ):
         yield event

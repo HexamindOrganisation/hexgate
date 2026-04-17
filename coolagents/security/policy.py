@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import yaml
 
 from coolagents.security.errors import ApprovalRequiredError, PolicyDeniedError
-from coolagents.security.models import AgentPolicy, ToolPolicy
+from coolagents.security.file_scope import is_path_allowed
+from coolagents.security.models import AgentPolicy, FileToolPolicy, ToolPolicy
 
 
 def default_agent_policy() -> AgentPolicy:
@@ -32,9 +34,21 @@ def get_tool_policy(policy: AgentPolicy, tool_name: str) -> ToolPolicy:
     return policy.tools.get(tool_name, policy.default_policy)
 
 
-def authorize_tool_call(policy: AgentPolicy, tool_name: str) -> None:
+def authorize_tool_call(
+    policy: AgentPolicy,
+    tool_name: str,
+    arguments: dict[str, Any] | None = None,
+) -> None:
     """Raise when a tool call is denied or requires approval."""
     tool_policy = get_tool_policy(policy, tool_name)
+    if tool_policy.mode == "deny":
+        raise PolicyDeniedError(f'Policy denied tool "{tool_name}"')
+
+    if isinstance(tool_policy, FileToolPolicy) and not is_path_allowed(
+        tool_name, arguments, tool_policy
+    ):
+        raise PolicyDeniedError(f'Policy denied tool "{tool_name}" for the requested path')
+
     if tool_policy.mode == "allow":
         return
     if tool_policy.mode == "approval_required":

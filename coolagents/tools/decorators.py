@@ -9,12 +9,14 @@ from typing import Any, Literal
 import httpx
 from langchain_core.tools import tool
 
+from coolagents.runtime import get_current_tool_use_context
 from coolagents.tracing.langfuse import observe
 from coolagents.utils.retry import async_retry, is_retryable_error
 
 TOOL_METADATA_ATTR = "__tool_metadata__"
 CallFormatter = Callable[[dict[str, Any]], str]
 FailureMode = Literal["raise", "result"]
+TOOL_USE_CONTEXT_PARAM = "tool_use_context"
 
 
 def _default_call_label(tool_name: str, arguments: dict[str, Any]) -> str:
@@ -73,6 +75,24 @@ def _humanize_tool_error(error: BaseException) -> dict[str, Any]:
     }
 
 
+def _exposed_signature(func: Callable[..., Any]) -> inspect.Signature:
+    """Return the model-visible signature with hidden meta-args removed."""
+    signature = inspect.signature(func)
+    parameters = [
+        parameter
+        for parameter in signature.parameters.values()
+        if parameter.name != TOOL_USE_CONTEXT_PARAM
+    ]
+    return signature.replace(parameters=parameters)
+
+
+def _exposed_annotations(func: Callable[..., Any]) -> dict[str, Any]:
+    """Return model-visible annotations with hidden meta-args removed."""
+    annotations = dict(getattr(func, "__annotations__", {}))
+    annotations.pop(TOOL_USE_CONTEXT_PARAM, None)
+    return annotations
+
+
 def agent_tool(
     *,
     name: str,
@@ -86,6 +106,9 @@ def agent_tool(
 
     def decorator(func: Callable[..., Any]) -> Any:
         """Wrap a function with the standard tool stack."""
+        exposed_signature = _exposed_signature(func)
+        accepts_tool_use_context = TOOL_USE_CONTEXT_PARAM in inspect.signature(func).parameters
+
         retried = async_retry(
             retries=retries,
             delay_ms=delay_ms,
@@ -95,8 +118,16 @@ def agent_tool(
         @observe(name=name)
         async def wrapped(*args: Any, **kwargs: Any) -> dict[str, Any]:
             """Run a tool with configured retry and failure behavior."""
+            call_kwargs = dict(kwargs)
+            if accepts_tool_use_context:
+                tool_use_context = get_current_tool_use_context()
+                if tool_use_context is None:
+                    raise RuntimeError(
+                        "tool_use_context is not available outside an active agent run"
+                    )
+                call_kwargs[TOOL_USE_CONTEXT_PARAM] = tool_use_context
             try:
-                result = await retried(*args, **kwargs)
+                result = await retried(*args, **call_kwargs)
             except Exception as error:
                 if failure_mode == "raise":
                     raise
@@ -109,8 +140,8 @@ def agent_tool(
         wrapped.__name__ = func.__name__
         wrapped.__qualname__ = getattr(func, "__qualname__", func.__name__)
         wrapped.__doc__ = func.__doc__
-        wrapped.__annotations__ = dict(getattr(func, "__annotations__", {}))
-        wrapped.__signature__ = inspect.signature(func)
+        wrapped.__annotations__ = _exposed_annotations(func)
+        wrapped.__signature__ = exposed_signature
         registered_tool = tool(wrapped)
         setattr(
             registered_tool,

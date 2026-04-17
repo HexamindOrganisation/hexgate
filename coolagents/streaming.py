@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
+import json
 from typing import Any
 from uuid import uuid4
 
@@ -86,6 +87,50 @@ def _summarize_output(output: Any) -> str | None:
     if isinstance(output, list):
         return f"{len(output)} items"
     return str(output)
+
+
+def _coerce_tool_output(output: Any) -> Any:
+    """Decode common wrapped or serialized tool outputs into structured data."""
+    if isinstance(output, str):
+        try:
+            return json.loads(output)
+        except json.JSONDecodeError:
+            return output
+
+    if isinstance(output, dict):
+        if "ok" in output:
+            return output
+        if "artifact" in output:
+            return _coerce_tool_output(output.get("artifact"))
+        if "content" in output:
+            return _coerce_tool_output(output.get("content"))
+        return output
+
+    if isinstance(output, list) and len(output) == 1:
+        return _coerce_tool_output(output[0])
+
+    content = getattr(output, "content", None)
+    if content is not None:
+        return _coerce_tool_output(content)
+
+    artifact = getattr(output, "artifact", None)
+    if artifact is not None:
+        return _coerce_tool_output(artifact)
+
+    return output
+
+
+def _tool_end_state(output: Any) -> tuple[ToolCallState, str | None]:
+    """Infer the semantic tool state from its final output payload."""
+    output = _coerce_tool_output(output)
+    if isinstance(output, dict) and output.get("ok") is False:
+        error = output.get("error")
+        if isinstance(error, dict):
+            message = error.get("message")
+            if isinstance(message, str) and message:
+                return ToolCallState.FAILED, message
+        return ToolCallState.FAILED, _summarize_output(output)
+    return ToolCallState.COMPLETED, _summarize_output(output)
 
 
 @dataclass
@@ -278,6 +323,7 @@ class _RunAccumulator:
 
         if event_name == "on_tool_end":
             data = raw_event.get("data", {})
+            state, output_summary = _tool_end_state(data.get("output"))
             emitted.append(
                 ToolEndEvent(
                     run_id=run_id,
@@ -287,8 +333,8 @@ class _RunAccumulator:
                     sequence=self._next_sequence(),
                     tool_id=run_id,
                     tool_name=raw_event.get("name", "tool"),
-                    state=ToolCallState.COMPLETED,
-                    output_summary=_summarize_output(data.get("output")),
+                    state=state,
+                    output_summary=output_summary,
                 )
             )
             self.steps.append(
@@ -302,8 +348,8 @@ class _RunAccumulator:
                     arguments=data.get("input", {})
                     if isinstance(data.get("input"), dict)
                     else {},
-                    state=ToolCallState.COMPLETED,
-                    output_summary=_summarize_output(data.get("output")),
+                    state=state,
+                    output_summary=output_summary,
                     raw_output=data.get("output"),
                 )
             )

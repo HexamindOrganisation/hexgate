@@ -39,13 +39,15 @@ Useful next commands:
 ```bash
 coolagents-chat --list-agents
 coolagents-chat --agent researcher
-coolagents-chat --use examples/agents.py --agent website_analyser
+coolagents-chat --use examples/file_agents.py --agent workspace_explorer
+coolagents-chat --use examples/research_agents.py --agent update_researcher
 ```
 
 The included local agent lives in `example_agent/`, and the CLI can also load:
 
 - builtin packaged agents like `researcher`
-- code-defined agents registered from `examples/agents.py`
+- code-defined agents registered from `examples/file_agents.py`
+- code-defined research agents registered from `examples/research_agents.py`
 
 ## ✨ Core Primitives
 
@@ -78,6 +80,7 @@ The current curated surface includes:
 
 - `create_agent`
 - `enforce_policy`
+- `with_approval_handler`
 - `with_before_action`
 - `invoke_agent`
 - `stream_agent`
@@ -93,14 +96,20 @@ Example:
 ```python
 from coolagents import (
     create_agent,
+    edit_file,
     enforce_policy,
+    glob,
+    grep,
+    read_file,
+    write_file,
+    with_approval_handler,
     with_before_action,
     agent_tool,
     load_agent,
     load_builtin_agent,
     register_agent,
-    web_search,
     fetch,
+    web_search,
 )
 ```
 
@@ -112,20 +121,23 @@ If you want the CLI and shared loader to resolve that agent by name, register it
 
 A small end-to-end example registry lives in:
 
-- `examples/agents.py`
+- `examples/file_agents.py`
+- `examples/research_agents.py`
 
 It demonstrates:
 
 - building one agent with `create_agent(...)` only
 - building another with `create_agent(...)` plus `enforce_policy(...)`
+- building a research agent with approval-gated file writes
 - registering it with `register_agent(...)`
 - loading it through the shared `load_agent(...)` path
 
 For the CLI, you can import that script and then pick one of its registered agents:
 
 ```bash
-coolagents-chat --use examples/agents.py --agent website_analyser
-coolagents-chat --use examples/agents.py --agent news_collector
+coolagents-chat --use examples/file_agents.py --agent workspace_explorer
+coolagents-chat --use examples/file_agents.py --agent repo_editor
+coolagents-chat --use examples/research_agents.py --agent update_researcher
 ```
 
 ## 🗂️ Builtin And Local Agents
@@ -220,6 +232,78 @@ agent = enforce_policy(agent, policy)
 
 That means the same agent code can stay simple in development, while deployment systems can inject policy later.
 
+`approval_required` is special:
+
+- if no approval handler is attached, it behaves like a graceful block
+- if an approval handler is attached, the host can decide whether to allow the action at runtime
+- if approval is not granted, the tool returns a structured `ok: False` result so the agent can try a fallback instead of crashing
+
+## ✅ Approval-Required Tool Calls
+
+Approval handlers are the bridge between static Gate 1 policy and real product interaction.
+
+Use them when a tool should be:
+
+- generally allowed in principle
+- but only after a user, CLI host, or UI host explicitly approves the specific call
+
+The runtime shape is intentionally small:
+
+- `with_approval_handler(agent, handler, context_provider=...)`
+- `handler` can be:
+  - `True`
+  - `False`
+  - sync function returning `bool`
+  - async function returning `bool`
+
+Example:
+
+```python
+from coolagents import (
+    AgentPolicy,
+    create_agent,
+    edit_file,
+    enforce_policy,
+    read_file,
+    with_approval_handler,
+)
+
+policy = AgentPolicy.model_validate(
+    {
+        "version": 1,
+        "default_policy": {"mode": "deny"},
+        "tools": {
+            "read_file": {"mode": "allow"},
+            "edit_file": {"mode": "approval_required"},
+        },
+    }
+)
+
+def approval_handler(action: dict, context: dict | None) -> bool:
+    print("approval requested:", action["tool_name"], action["arguments"])
+    return True
+
+agent, handler = create_agent(
+    model="openai:gpt-5.4",
+    tools=[read_file, edit_file],
+    system_prompt="You are a careful editor.",
+)
+
+agent = enforce_policy(agent, policy)
+agent = with_approval_handler(agent, approval_handler)
+```
+
+Today the handler returns a boolean.
+
+Future evolution:
+
+- richer approval decisions
+- interrupt / resume flows
+- UI approval cards
+- audit metadata on approval outcomes
+
+That evolution is intentionally left open, but the current API is enough for CLI and simple hosted apps.
+
 ## 🚪 Gate 2: Hosted `before_action` Hooks
 
 Gate 2 is the next layer for platform-level enforcement.
@@ -280,11 +364,13 @@ So the design split is:
 
 - `create_agent(...)`: build the base agent
 - `enforce_policy(...)`: local Gate 1 tool authorization
+- `with_approval_handler(...)`: resolve `approval_required` tools at runtime
 - `with_before_action(...)`: Gate 2 platform / IAM / approval integration
 
 This is intentionally an open chantier:
 
 - Gate 1 is already concrete and useful
+- approval handlers are the first real host interaction layer
 - Gate 2 starts as a tiny hook, not a full enterprise framework
 - later evolution can add richer approval semantics, external policy engines, or audit sinks without bloating `create_agent(...)`
 
@@ -322,8 +408,10 @@ coolagents-chat --agent example_agent
 Run the CLI with code-defined agents from a Python script:
 
 ```bash
-coolagents-chat --use examples/agents.py --agent website_analyser
-coolagents-chat --use examples/agents.py --agent news_collector
+coolagents-chat --use examples/file_agents.py --agent workspace_explorer
+coolagents-chat --use examples/file_agents.py --agent repo_editor
+coolagents-chat --use examples/research_agents.py --agent update_researcher
+coolagents-chat --use examples/research_agents.py --agent update_researcher --approval-mode ask
 ```
 
 List what the CLI can currently resolve:
