@@ -16,7 +16,7 @@ from coolagents.runtime import (
     reset_current_tool_use_context,
     set_current_tool_use_context,
 )
-from coolagents.tools import edit_file, glob, grep, read_file, write_file
+from coolagents.tools import bash, edit_file, glob, grep, read_file, write_file
 from coolagents.tools.decorators import format_tool_call_label
 from coolagents.tools import agent_tool
 from coolagents.tools.fetch import _get_env_or_raise as get_fetch_env
@@ -519,3 +519,97 @@ async def test_grep_supports_files_and_content_modes(tmp_path: Path) -> None:
     assert content_result["num_matches"] == 2
     assert "src/a.py:1:def alpha():" in content_result["content"]
     assert "src/b.py:1:def beta():" in content_result["content"]
+
+
+@pytest.mark.asyncio
+async def test_local_workspace_run_command_uses_workspace_cwd(tmp_path: Path) -> None:
+    """Execute shell commands relative to the workspace root."""
+    workspace = LocalWorkspace(tmp_path)
+
+    result = await workspace.run_command("pwd")
+
+    assert result.exit_code == 0
+    assert result.stdout.strip() == str(tmp_path.resolve())
+    assert result.stderr == ""
+
+
+@pytest.mark.asyncio
+async def test_local_workspace_run_command_preserves_nonzero_exit_code(
+    tmp_path: Path,
+) -> None:
+    """Return non-zero shell exits as normal command results."""
+    workspace = LocalWorkspace(tmp_path)
+
+    result = await workspace.run_command("printf 'nope' >&2; exit 7")
+
+    assert result.exit_code == 7
+    assert result.stdout == ""
+    assert result.stderr == "nope"
+
+
+@pytest.mark.asyncio
+async def test_local_workspace_run_command_times_out(tmp_path: Path) -> None:
+    """Raise a clear timeout error for long-running commands."""
+    workspace = LocalWorkspace(tmp_path)
+
+    with pytest.raises(TimeoutError, match="Command timed out"):
+        await workspace.run_command("sleep 1", timeout_seconds=0)
+
+
+def test_bash_call_formatter_is_human_friendly() -> None:
+    """Render bash calls with a shortened command preview."""
+    assert format_tool_call_label(bash, {"command": "ls -la"}) == "running ls -la"
+    assert format_tool_call_label(
+        bash,
+        {
+            "command": (
+                "python -m pytest tests/test_tools.py::test_grep_supports_files_and_content_modes"
+            )
+        },
+    ).startswith("running python -m pytest")
+
+
+@pytest.mark.asyncio
+async def test_bash_tool_returns_command_result_for_nonzero_exit_code(
+    tmp_path: Path,
+) -> None:
+    """Treat shell exit failures as tool output instead of tool errors."""
+    workspace = LocalWorkspace(tmp_path)
+    token = set_current_tool_use_context(ToolUseContext(workspace=workspace))
+    try:
+        result = await bash.ainvoke(
+            {
+                "command": "printf 'boom' >&2; exit 3",
+            }
+        )
+    finally:
+        reset_current_tool_use_context(token)
+
+    assert result == {
+        "ok": True,
+        "command": "printf 'boom' >&2; exit 3",
+        "exit_code": 3,
+        "stdout": "",
+        "stderr": "boom",
+        "stdout_truncated": False,
+        "stderr_truncated": False,
+    }
+
+
+@pytest.mark.asyncio
+async def test_bash_tool_returns_structured_timeout_error(tmp_path: Path) -> None:
+    """Surface command timeouts as tool failures."""
+    workspace = LocalWorkspace(tmp_path)
+    token = set_current_tool_use_context(ToolUseContext(workspace=workspace))
+    try:
+        result = await bash.ainvoke(
+            {
+                "command": "sleep 1",
+                "timeout_seconds": 0,
+            }
+        )
+    finally:
+        reset_current_tool_use_context(token)
+
+    assert result["ok"] is False
+    assert result["error"]["type"] == "TimeoutError"

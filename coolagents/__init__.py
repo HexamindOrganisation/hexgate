@@ -17,7 +17,7 @@ from coolagents.agents.loader import (
 )
 from coolagents.runtime import LocalWorkspace, ToolUseContext, Workspace
 from coolagents.security import AgentPolicy
-from coolagents.tools import agent_tool, edit_file, glob, grep, read_file, write_file
+from coolagents.tools import agent_tool, bash, edit_file, glob, grep, read_file, write_file
 from coolagents.tools.fetch import fetch
 from coolagents.tools.websearch import web_search
 
@@ -27,6 +27,7 @@ __all__ = [
     "ToolUseContext",
     "Workspace",
     "agent_tool",
+    "bash",
     "edit_file",
     "clear_registered_agents",
     "create_agent",

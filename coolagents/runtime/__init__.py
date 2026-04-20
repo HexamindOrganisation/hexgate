@@ -7,9 +7,10 @@ from coolagents.runtime.context import (
     set_current_tool_use_context,
 )
 from coolagents.runtime.sandbox_runtime import build_sandbox_runtime_config
-from coolagents.runtime.workspace import LocalWorkspace, Workspace
+from coolagents.runtime.workspace import CommandResult, LocalWorkspace, Workspace
 
 __all__ = [
+    "CommandResult",
     "LocalWorkspace",
     "ToolUseContext",
     "Workspace",
