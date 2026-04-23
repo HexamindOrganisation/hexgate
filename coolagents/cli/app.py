@@ -155,6 +155,8 @@ def _print_completed_turn(
 
 def _build_runtime(settings: Settings, *, agent_name: str, base_dir: Path, model: str | None) -> AgentRuntime:
     """Create the runtime used by the terminal app."""
+    import os
+
     tools = [web_search, fetch]
     resolved_model = model or settings.model
     agent, handler = load_agent(
@@ -169,11 +171,15 @@ def _build_runtime(settings: Settings, *, agent_name: str, base_dir: Path, model
     tools_by_name = {
         getattr(tool, "name", getattr(tool, "__name__", "tool")): tool for tool in runtime_tools
     }
+    if os.environ.get("FORTIFY_KEY"):
+        agent_source = "fortify"
+    else:
+        agent_source = resolve_agent_source(agent_name, base_dir)
     return AgentRuntime(
         agent=agent,
         handler=handler,
         agent_name=agent_name,
-        agent_source=resolve_agent_source(agent_name, base_dir),
+        agent_source=agent_source,
         model=resolved_model,
         tools_by_name=tools_by_name,
     )
@@ -256,6 +262,14 @@ def _parse_args() -> argparse.Namespace:
         choices=("ask", "auto-approve", "auto-deny"),
         default="ask",
         help="How the CLI should handle approval-required tools.",
+    )
+    parser.add_argument(
+        "--serve",
+        action="store_true",
+        help=(
+            "Serve-mode: relay the agent to Fortify dashboard Playground tabs "
+            "over WebSocket instead of running the interactive terminal chat."
+        ),
     )
     return parser.parse_args()
 
@@ -369,8 +383,31 @@ def run() -> None:
             console.print(f"{agent_name} [{source}]")
         return
 
-    agent_name = args.agent or _default_agent_name(base_dir)
+    if args.serve:
+        # Serve mode routes through Fortify, not the local agent registry,
+        # so agent name resolves via FORTIFY_AGENT_NAME / "default" fallback.
+        from coolagents.fortify.client import resolve_agent_name
+
+        agent_name = args.agent or resolve_agent_name()
+    else:
+        agent_name = args.agent or _default_agent_name(base_dir)
+
     runtime = _build_runtime(settings, agent_name=agent_name, base_dir=base_dir, model=args.model)
+
+    if args.serve:
+        # In serve mode, approval-ask doesn't make sense (no tty for prompts).
+        # Coerce to auto-approve unless the caller explicitly picked auto-deny.
+        approval_mode = args.approval_mode if args.approval_mode == "auto-deny" else "auto-approve"
+        runtime.agent = with_approval_handler(
+            runtime.agent,
+            _build_approval_handler(console, approval_mode),
+            context_provider=lambda: {"surface": "serve", "agent_name": runtime.agent_name},
+        )
+        from coolagents.cli.serve import run_serve
+
+        asyncio.run(run_serve(runtime))
+        return
+
     runtime.agent = with_approval_handler(
         runtime.agent,
         _build_approval_handler(console, args.approval_mode),

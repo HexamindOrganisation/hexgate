@@ -1,10 +1,11 @@
 from contextlib import asynccontextmanager
 
-from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException
+from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from sqlmodel import Session
 
 from db import engine, init_db
+from relay import registry
 from schemas import (
     AgentRead,
     AgentUpdate,
@@ -197,6 +198,36 @@ def api_update_agent(
         system_md=agent.system_md,
         updated_at=agent.updated_at,
     )
+
+
+@v1.websocket("/projects/{project_id}/serve")
+async def ws_serve(websocket: WebSocket, project_id: str) -> None:
+    """Producer socket for an agent serve process."""
+    await websocket.accept()
+    await registry.attach_serve(project_id, websocket)
+    try:
+        while True:
+            payload = await websocket.receive_json()
+            await registry.relay_to_chat(project_id, payload)
+    except WebSocketDisconnect:
+        pass
+    finally:
+        await registry.detach_serve(project_id, websocket)
+
+
+@v1.websocket("/projects/{project_id}/chat")
+async def ws_chat(websocket: WebSocket, project_id: str) -> None:
+    """Consumer socket for dashboard Playground sessions."""
+    await websocket.accept()
+    await registry.attach_chat(project_id, websocket)
+    try:
+        while True:
+            payload = await websocket.receive_json()
+            await registry.relay_to_serve(project_id, payload)
+    except WebSocketDisconnect:
+        pass
+    finally:
+        await registry.detach_chat(project_id, websocket)
 
 
 app.include_router(v1)

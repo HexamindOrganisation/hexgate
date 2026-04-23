@@ -18,6 +18,7 @@ dependencies = [
     "python-dotenv>=1.1.1",
     "pyyaml>=6.0.2",
     "rich>=13.9.4",
+    "websockets>=13.0",
 ]
 
 [project.scripts]
