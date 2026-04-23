@@ -6,3 +6,5 @@ __pycache__/
 *.pyd
 *.egg-info/
 build/
+.DS_Store
+.venv/

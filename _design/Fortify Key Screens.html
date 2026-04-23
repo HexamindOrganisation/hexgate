@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Fortify — Key Screens</title>
+<link rel="stylesheet" href="styles.css" />
+<style>
+  html, body { margin: 0; padding: 0; height: 100%; background: #0B0F17; color: #F1F5F9; font-family: 'Geist', system-ui, sans-serif; }
+  #root { height: 100vh; }
+  /* Canvas background tweak */
+  .dc-root { background: #07090d !important; }
+</style>
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/lucide@0.446.0/dist/umd/lucide.min.js"></script>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="text/babel" src="design-canvas.jsx"></script>
+<script type="text/babel" src="components/Shell.jsx"></script>
+<script type="text/babel" src="components/Dashboard.jsx"></script>
+<script type="text/babel" src="components/Graph.jsx"></script>
+<script type="text/babel" src="components/Playground.jsx"></script>
+<script type="text/babel" src="components/OtherScreens.jsx"></script>
+
+<script type="text/babel">
+const { DesignCanvas, DCSection, DCArtboard } = window;
+const {
+  OnboardingScreen, DashboardScreen, GraphScreen, PlaygroundScreen, AuditScreen, TokensScreen,
+} = window;
+
+function App() {
+  // Re-render lucide icons after screens mount / re-render
+  React.useEffect(() => {
+    const tick = () => window.lucide && window.lucide.createIcons();
+    tick();
+    const id = setInterval(tick, 400);
+    return () => clearInterval(id);
+  }, []);
+
+  return (
+    <DesignCanvas title="Fortify — Key Screens" subtitle="Dark-mode hi-fi per spec · Geist + Geist Mono · indigo-blue on deep slate">
+      <DCSection id="hero" title="Hero screens" subtitle="The three surfaces that sell the product">
+        <DCArtboard id="graph" label="Resource map — Graph editor" width={1440} height={900}>
+          <GraphScreen />
+        </DCArtboard>
+        <DCArtboard id="playground" label="Playground — Agent simulator" width={1440} height={900}>
+          <PlaygroundScreen />
+        </DCArtboard>
+        <DCArtboard id="dashboard" label="Dashboard — Overview" width={1440} height={900}>
+          <DashboardScreen />
+        </DCArtboard>
+      </DCSection>
+
+      <DCSection id="supporting" title="Supporting screens" subtitle="Audit, tokens, and the first-run moment">
+        <DCArtboard id="audit" label="Audit — Signed event log" width={1440} height={900}>
+          <AuditScreen />
+        </DCArtboard>
+        <DCArtboard id="tokens" label="Tokens — Just minted" width={1440} height={900}>
+          <TokensScreen />
+        </DCArtboard>
+        <DCArtboard id="onboarding" label="Onboarding — First project" width={1440} height={900}>
+          <OnboardingScreen />
+        </DCArtboard>
+      </DCSection>
+    </DesignCanvas>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
