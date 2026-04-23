@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
+import { Link } from 'react-router-dom'
+import { Streamdown } from 'streamdown'
 import {
   Bot,
   MessageSquareCode,
@@ -65,6 +67,22 @@ export function PlaygroundPage() {
             Simulate an agent session against the active bundle.
           </p>
         </div>
+
+        {state.agentName && (
+          <div className="flex flex-col gap-1.5">
+            <div className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+              Serving
+            </div>
+            <Link
+              to={`/agents`}
+              className="flex items-center gap-2 rounded-md border border-border bg-background px-2.5 py-1.5 text-sm font-mono hover:border-primary hover:bg-primary/5 transition-colors"
+            >
+              <Bot className="size-3.5 text-primary" />
+              <span className="flex-1 truncate">{state.agentName}</span>
+              <span className="text-[10px] text-muted-foreground">open</span>
+            </Link>
+          </div>
+        )}
 
         {!state.agentOnline && (
           <div className="rounded-md border border-approval/40 bg-approval/5 p-3 text-xs leading-relaxed">
@@ -135,27 +153,23 @@ export function PlaygroundPage() {
         </div>
 
         <footer className="border-t border-border p-4">
-          <div className="flex items-end gap-2">
-            <textarea
+          <div className="flex items-center gap-2">
+            <input
               value={composer}
               onChange={(e) => setComposer(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+                if (e.key === 'Enter' && !e.shiftKey) {
                   e.preventDefault()
                   submit()
                 }
               }}
               placeholder="Ask the agent to do something…"
-              rows={2}
-              className="flex-1 resize-none rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              className="flex-1 h-10 rounded-md border border-border bg-background px-3 text-sm focus:outline-none focus-visible:ring-1 focus-visible:ring-ring"
             />
-            <Button onClick={submit} disabled={!composer.trim()} className="gap-2">
+            <Button onClick={submit} disabled={!composer.trim()} className="gap-2 h-10">
               <Send className="size-4" />
               Send
             </Button>
-          </div>
-          <div className="mt-2 text-[11px] text-muted-foreground">
-            <span className="font-mono">⌘⏎</span> to send
           </div>
         </footer>
       </section>
@@ -219,7 +233,9 @@ function MessageView({ message }: { message: ChatMessage }) {
         )}
         {turn?.tools.map((t) => <ToolCallBlock key={t.id} call={t} />)}
         {message.content && (
-          <div className="text-sm whitespace-pre-wrap">{message.content}</div>
+          <div className="text-sm prose prose-sm prose-invert max-w-none">
+            <Streamdown parseIncompleteMarkdown>{message.content}</Streamdown>
+          </div>
         )}
         {turn?.streaming && !message.content && (
           <div className="flex items-center gap-1.5 text-xs text-muted-foreground">

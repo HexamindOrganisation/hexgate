@@ -208,6 +208,12 @@ async def ws_serve(websocket: WebSocket, project_id: str) -> None:
     try:
         while True:
             payload = await websocket.receive_json()
+            if isinstance(payload, dict) and payload.get("type") == "hello":
+                agent_name = payload.get("agent")
+                await registry.set_agent_name(
+                    project_id, agent_name if isinstance(agent_name, str) else None
+                )
+                continue
             await registry.relay_to_chat(project_id, payload)
     except WebSocketDisconnect:
         pass

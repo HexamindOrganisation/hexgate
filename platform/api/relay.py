@@ -25,7 +25,15 @@ from fastapi import WebSocket
 @dataclass
 class ProjectRelay:
     serve: WebSocket | None = None
+    agent_name: str | None = None
     chats: set[WebSocket] = field(default_factory=set)
+
+
+def _status_payload(online: bool, agent: str | None) -> dict[str, Any]:
+    payload: dict[str, Any] = {"type": "agent_online", "online": online}
+    if agent:
+        payload["agent"] = agent
+    return payload
 
 
 class ConnectionRegistry:
@@ -41,13 +49,22 @@ class ConnectionRegistry:
             entry = self._projects[project_id]
             previous = entry.serve
             entry.serve = ws
+            # New serve session — reset agent metadata until its hello lands.
+            entry.agent_name = None
         if previous is not None and previous is not ws:
             try:
                 await previous.close(code=1000, reason="replaced by new serve connection")
             except Exception:
                 pass
-        await self._broadcast_chat(project_id, {"type": "agent_online", "online": True})
+        await self._broadcast_chat(project_id, _status_payload(True, None))
         return previous
+
+    async def set_agent_name(self, project_id: str, agent_name: str | None) -> None:
+        async with self._lock:
+            entry = self._projects[project_id]
+            entry.agent_name = agent_name
+            online = entry.serve is not None
+        await self._broadcast_chat(project_id, _status_payload(online, agent_name))
 
     async def detach_serve(self, project_id: str, ws: WebSocket) -> None:
         async with self._lock:
@@ -55,13 +72,16 @@ class ConnectionRegistry:
             if entry is None or entry.serve is not ws:
                 return
             entry.serve = None
-        await self._broadcast_chat(project_id, {"type": "agent_online", "online": False})
+            entry.agent_name = None
+        await self._broadcast_chat(project_id, _status_payload(False, None))
 
     async def attach_chat(self, project_id: str, ws: WebSocket) -> None:
         async with self._lock:
             self._projects[project_id].chats.add(ws)
-            online = self._projects[project_id].serve is not None
-        await _safe_send(ws, {"type": "agent_online", "online": online})
+            entry = self._projects[project_id]
+            online = entry.serve is not None
+            agent = entry.agent_name
+        await _safe_send(ws, _status_payload(online, agent))
 
     async def detach_chat(self, project_id: str, ws: WebSocket) -> None:
         async with self._lock:
