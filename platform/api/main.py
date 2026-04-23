@@ -5,13 +5,22 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlmodel import Session
 
 from db import engine, init_db
-from schemas import TokenListItem, TokenMintRequest, TokenMintResponse
+from schemas import (
+    AgentRead,
+    AgentUpdate,
+    TokenListItem,
+    TokenMintRequest,
+    TokenMintResponse,
+)
 from services import (
     delete_dev_token,
     ensure_default_project,
+    get_agent,
+    list_agents,
     list_dev_tokens,
     mask_secret,
     mint_dev_token,
+    update_agent,
 )
 
 
@@ -102,6 +111,68 @@ def revoke_token(
     ok = delete_dev_token(session, project_id, token_id)
     if not ok:
         raise HTTPException(status_code=404, detail="token not found")
+
+
+@v1.get("/projects/{project_id}/agents", response_model=list[AgentRead])
+def api_list_agents(project_id: str, session: Session = Depends(get_session)) -> list[AgentRead]:
+    ensure_default_project(session)
+    agents = list_agents(session, project_id)
+    return [
+        AgentRead(
+            id=a.id,
+            name=a.name,
+            agent_yaml=a.agent_yaml,
+            policy_yaml=a.policy_yaml,
+            system_md=a.system_md,
+            updated_at=a.updated_at,
+        )
+        for a in agents
+    ]
+
+
+@v1.get("/projects/{project_id}/agents/{name}", response_model=AgentRead)
+def api_get_agent(
+    project_id: str, name: str, session: Session = Depends(get_session)
+) -> AgentRead:
+    ensure_default_project(session)
+    agent = get_agent(session, project_id, name)
+    if agent is None:
+        raise HTTPException(status_code=404, detail="agent not found")
+    return AgentRead(
+        id=agent.id,
+        name=agent.name,
+        agent_yaml=agent.agent_yaml,
+        policy_yaml=agent.policy_yaml,
+        system_md=agent.system_md,
+        updated_at=agent.updated_at,
+    )
+
+
+@v1.put("/projects/{project_id}/agents/{name}", response_model=AgentRead)
+def api_update_agent(
+    project_id: str,
+    name: str,
+    body: AgentUpdate,
+    session: Session = Depends(get_session),
+) -> AgentRead:
+    agent = update_agent(
+        session,
+        project_id,
+        name,
+        agent_yaml=body.agent_yaml,
+        policy_yaml=body.policy_yaml,
+        system_md=body.system_md,
+    )
+    if agent is None:
+        raise HTTPException(status_code=404, detail="agent not found")
+    return AgentRead(
+        id=agent.id,
+        name=agent.name,
+        agent_yaml=agent.agent_yaml,
+        policy_yaml=agent.policy_yaml,
+        system_md=agent.system_md,
+        updated_at=agent.updated_at,
+    )
 
 
 app.include_router(v1)

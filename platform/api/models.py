@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from typing import Optional
 
-from sqlmodel import Field, SQLModel
+from sqlmodel import Field, SQLModel, UniqueConstraint
 
 
 def utcnow() -> datetime:
@@ -23,3 +23,15 @@ class DevToken(SQLModel, table=True):
     scopes_csv: str = ""  # comma-separated for now
     created_at: datetime = Field(default_factory=utcnow)
     last_used_at: Optional[datetime] = None
+
+
+class Agent(SQLModel, table=True):
+    __table_args__ = (UniqueConstraint("project_id", "name", name="uq_agent_project_name"),)
+
+    id: str = Field(primary_key=True)
+    project_id: str = Field(foreign_key="project.id", index=True)
+    name: str = Field(index=True)
+    agent_yaml: str
+    policy_yaml: str
+    system_md: str = ""
+    updated_at: datetime = Field(default_factory=utcnow)

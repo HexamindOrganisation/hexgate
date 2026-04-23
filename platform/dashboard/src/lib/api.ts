@@ -35,6 +35,21 @@ export interface TokenMintRequest {
   env?: 'test' | 'live'
 }
 
+export interface AgentRead {
+  id: string
+  name: string
+  agent_yaml: string
+  policy_yaml: string
+  system_md: string
+  updated_at: string
+}
+
+export interface AgentUpdate {
+  agent_yaml?: string
+  policy_yaml?: string
+  system_md?: string
+}
+
 export const api = {
   listTokens: (projectId = DEFAULT_PROJECT_ID) =>
     request<TokenListItem[]>(`/v1/projects/${projectId}/tokens`),
@@ -48,5 +63,17 @@ export const api = {
   revokeToken: (tokenId: string, projectId = DEFAULT_PROJECT_ID) =>
     request<void>(`/v1/projects/${projectId}/tokens/${tokenId}`, {
       method: 'DELETE',
+    }),
+
+  listAgents: (projectId = DEFAULT_PROJECT_ID) =>
+    request<AgentRead[]>(`/v1/projects/${projectId}/agents`),
+
+  getAgent: (name: string, projectId = DEFAULT_PROJECT_ID) =>
+    request<AgentRead>(`/v1/projects/${projectId}/agents/${name}`),
+
+  updateAgent: (name: string, body: AgentUpdate, projectId = DEFAULT_PROJECT_ID) =>
+    request<AgentRead>(`/v1/projects/${projectId}/agents/${name}`, {
+      method: 'PUT',
+      body: JSON.stringify(body),
     }),
 }

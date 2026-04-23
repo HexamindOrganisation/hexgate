@@ -26,3 +26,18 @@ class TokenMintResponse(BaseModel):
     masked: str
     scopes: list[str]
     created_at: datetime
+
+
+class AgentRead(BaseModel):
+    id: str
+    name: str
+    agent_yaml: str
+    policy_yaml: str
+    system_md: str
+    updated_at: datetime
+
+
+class AgentUpdate(BaseModel):
+    agent_yaml: str | None = None
+    policy_yaml: str | None = None
+    system_md: str | None = None

@@ -9,12 +9,14 @@ import {
   Server,
   Fingerprint,
   Shield,
+  FileCode,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 const workspaceLinks = [
   { to: '/', label: 'Dashboard', icon: LayoutDashboard, end: true },
-  { to: '/graph', label: 'Resource map', icon: Network },
+  { to: '/agents', label: 'Agents', icon: FileCode },
+  { to: '/graph', label: 'Graph', icon: Network },
   { to: '/playground', label: 'Playground', icon: MessageSquareCode },
   { to: '/audit', label: 'Audit', icon: ScrollText, badge: '24h' },
   { to: '/tokens', label: 'Tokens', icon: KeyRound },
