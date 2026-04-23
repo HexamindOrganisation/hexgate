@@ -4,10 +4,11 @@ import string
 from sqlmodel import Session, select
 
 from models import Agent, DevToken, Project
-from seeds import SEED_AGENTS
+from seeds import DEFAULT_AGENT_NAME, SEED_AGENTS
 
 DEFAULT_PROJECT_ID = "support-bot"
 DEFAULT_PROJECT_NAME = "support-bot"
+PROTECTED_AGENT_NAMES = {DEFAULT_AGENT_NAME}
 
 _SECRET_ALPHABET = string.ascii_letters + string.digits
 _SECRET_LEN = 32
@@ -20,23 +21,32 @@ def ensure_default_project(session: Session) -> Project:
         session.add(project)
         session.commit()
         session.refresh(project)
-        _seed_agents(session, project.id)
+    # Always ensure seeded agents exist — idempotent, so existing projects
+    # pick up the `default` guarantee on any subsequent boot.
+    ensure_seeded_agents(session, project.id)
     return project
 
 
-def _seed_agents(session: Session, project_id: str) -> None:
-    """Populate a fresh project with example agents from coolagents."""
+def ensure_seeded_agents(session: Session, project_id: str) -> None:
+    """Idempotently add any missing seeded agents to a project."""
+    existing = {a.name for a in list_agents(session, project_id)}
+    added = False
     for seed in SEED_AGENTS:
-        agent = Agent(
-            id=f"agt_{secrets.token_hex(6)}",
-            project_id=project_id,
-            name=seed["name"],
-            agent_yaml=seed["agent_yaml"],
-            policy_yaml=seed["policy_yaml"],
-            system_md=seed["system_md"],
+        if seed["name"] in existing:
+            continue
+        session.add(
+            Agent(
+                id=f"agt_{secrets.token_hex(6)}",
+                project_id=project_id,
+                name=seed["name"],
+                agent_yaml=seed["agent_yaml"],
+                policy_yaml=seed["policy_yaml"],
+                system_md=seed["system_md"],
+            )
         )
-        session.add(agent)
-    session.commit()
+        added = True
+    if added:
+        session.commit()
 
 
 def list_agents(session: Session, project_id: str) -> list[Agent]:
@@ -105,6 +115,19 @@ def mint_dev_token(
 def list_dev_tokens(session: Session, project_id: str) -> list[DevToken]:
     stmt = select(DevToken).where(DevToken.project_id == project_id).order_by(DevToken.created_at.desc())  # type: ignore[attr-defined]
     return list(session.exec(stmt))
+
+
+def find_token_by_secret(session: Session, secret: str) -> DevToken | None:
+    """Look up a token by its full secret value. Updates last_used_at on hit."""
+    from datetime import datetime, timezone
+
+    stmt = select(DevToken).where(DevToken.secret == secret)
+    token = session.exec(stmt).first()
+    if token is not None:
+        token.last_used_at = datetime.now(timezone.utc)
+        session.add(token)
+        session.commit()
+    return token
 
 
 def delete_dev_token(session: Session, project_id: str, token_id: str) -> bool:

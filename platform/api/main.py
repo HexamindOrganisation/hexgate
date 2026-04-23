@@ -1,6 +1,6 @@
 from contextlib import asynccontextmanager
 
-from fastapi import APIRouter, Depends, FastAPI, HTTPException
+from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from sqlmodel import Session
 
@@ -15,6 +15,7 @@ from schemas import (
 from services import (
     delete_dev_token,
     ensure_default_project,
+    find_token_by_secret,
     get_agent,
     list_agents,
     list_dev_tokens,
@@ -46,6 +47,26 @@ app.add_middleware(
 def get_session():
     with Session(engine) as session:
         yield session
+
+
+def optional_dev_token(
+    authorization: str | None = Header(default=None),
+    session: Session = Depends(get_session),
+) -> None:
+    """Validate Authorization: Bearer <fortify_key> when present.
+
+    POC behaviour: the header is optional so the dashboard (which has no user
+    session concept yet) can keep calling these endpoints. When the header is
+    present we validate it, reject on mismatch, and touch last_used_at so the
+    UI shows real activity. Tighten to required in Phase C.
+    """
+    if authorization is None:
+        return
+    if not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="malformed authorization header")
+    secret = authorization.removeprefix("Bearer ").strip()
+    if find_token_by_secret(session, secret) is None:
+        raise HTTPException(status_code=401, detail="invalid fortify key")
 
 
 @app.get("/health")
@@ -132,7 +153,10 @@ def api_list_agents(project_id: str, session: Session = Depends(get_session)) ->
 
 @v1.get("/projects/{project_id}/agents/{name}", response_model=AgentRead)
 def api_get_agent(
-    project_id: str, name: str, session: Session = Depends(get_session)
+    project_id: str,
+    name: str,
+    session: Session = Depends(get_session),
+    _auth: None = Depends(optional_dev_token),
 ) -> AgentRead:
     ensure_default_project(session)
     agent = get_agent(session, project_id, name)
