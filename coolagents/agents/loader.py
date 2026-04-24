@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from collections.abc import Callable, Mapping
 from importlib.resources import files
 from pathlib import Path
@@ -13,12 +14,18 @@ from coolagents.agent.factory import AgentGraph, create_agent
 from coolagents.agent.security import enforce_policy
 from coolagents.agents.models import AgentSpec
 from coolagents.security import AgentPolicy, load_policy
-from coolagents.tools import fetch, web_search
+from coolagents.tools import bash, edit_file, fetch, glob, grep, read_file, web_search, write_file
 from coolagents.tracing.langfuse import CallbackHandler
 
 BUILTIN_TOOLS = {
+    "bash": bash,
+    "edit_file": edit_file,
     "fetch": fetch,
+    "glob": glob,
+    "grep": grep,
+    "read_file": read_file,
     "web_search": web_search,
+    "write_file": write_file,
 }
 AgentSource = Literal["builtin", "local", "registered"]
 AgentFactory: TypeAlias = Callable[..., tuple[AgentGraph, CallbackHandler]]
@@ -251,7 +258,7 @@ def resolve_agent_source(name: str, base_dir: str | Path | None = None) -> Agent
 
 
 def load_agent(
-    name: str,
+    name: str | None = None,
     *,
     base_dir: str | Path | None = None,
     session_id: str | None = None,
@@ -260,7 +267,28 @@ def load_agent(
     extra_tools: Mapping[str, Any] | None = None,
     model: str | None = None,
 ) -> tuple[AgentGraph, CallbackHandler]:
-    """Load either a local or builtin agent by name."""
+    """Load an agent from Fortify (when FORTIFY_KEY is set), local, or builtin.
+
+    When FORTIFY_KEY is set, `name` is optional: the SDK falls back to
+    FORTIFY_AGENT_NAME and finally to `"default"`. For the local/builtin
+    paths, `name` is required — we can't guess which local directory you
+    meant.
+    """
+    if os.environ.get("FORTIFY_KEY"):
+        from coolagents.fortify.loader import load_fortify_agent
+
+        return load_fortify_agent(
+            name,
+            session_id=session_id,
+            user_id=user_id,
+            tags=tags,
+            extra_tools=extra_tools,
+            model=model,
+        )
+    if name is None:
+        raise ValueError(
+            "load_agent() requires a name when FORTIFY_KEY is not set"
+        )
     source = resolve_agent_source(name, base_dir)
     if source == "local":
         return load_local_agent(
