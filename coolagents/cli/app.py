@@ -398,14 +398,26 @@ def run() -> None:
         # In serve mode, approval-ask doesn't make sense (no tty for prompts).
         # Coerce to auto-approve unless the caller explicitly picked auto-deny.
         approval_mode = args.approval_mode if args.approval_mode == "auto-deny" else "auto-approve"
-        runtime.agent = with_approval_handler(
-            runtime.agent,
-            _build_approval_handler(console, approval_mode),
-            context_provider=lambda: {"surface": "serve", "agent_name": runtime.agent_name},
-        )
+        approval_handler = _build_approval_handler(console, approval_mode)
+
+        def _wrap_for_serve(rt: AgentRuntime) -> AgentRuntime:
+            rt.agent = with_approval_handler(
+                rt.agent,
+                approval_handler,
+                context_provider=lambda: {"surface": "serve", "agent_name": rt.agent_name},
+            )
+            return rt
+
+        runtime = _wrap_for_serve(runtime)
+
+        def _rebuild() -> AgentRuntime:
+            """Re-fetch YAMLs and rebuild the agent with the latest policy."""
+            fresh = _build_runtime(settings, agent_name=agent_name, base_dir=base_dir, model=args.model)
+            return _wrap_for_serve(fresh)
+
         from coolagents.cli.serve import run_serve
 
-        asyncio.run(run_serve(runtime))
+        asyncio.run(run_serve(runtime, rebuild=_rebuild))
         return
 
     runtime.agent = with_approval_handler(

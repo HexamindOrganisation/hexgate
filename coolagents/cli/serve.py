@@ -14,7 +14,9 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Any
 
 from rich.console import Console
 from websockets.asyncio.client import connect
@@ -35,8 +37,19 @@ PING_INTERVAL = 20.0
 class ServeContext:
     """Runtime context required to service remote chat messages."""
 
-    runtime: object  # AgentRuntime from cli/app.py — avoid circular import
+    runtime: Any  # AgentRuntime from cli/app.py — avoid circular import
     state: ChatState
+    rebuild: Callable[[], Any] | None = None  # returns a fresh AgentRuntime
+
+
+async def _refresh_runtime(context: ServeContext) -> None:
+    """Rebuild the agent at turn start so policy edits land without a restart."""
+    if context.rebuild is None:
+        return
+    try:
+        context.runtime = await asyncio.to_thread(context.rebuild)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("serve: policy refresh failed, using stale runtime: %s", exc)
 
 
 async def _handle_message(
@@ -51,6 +64,7 @@ async def _handle_message(
         text = str(payload.get("message", "")).strip()
         if not text:
             return
+        await _refresh_runtime(context)
         context.state.start_turn(text)
         async for event in stream_agent(
             context.runtime.agent,
@@ -100,8 +114,12 @@ async def _serve_loop(context: ServeContext, url: str, console: Console) -> None
             console.print("[yellow]disconnected[/]")
 
 
-async def run_serve(runtime) -> None:  # noqa: ANN001 — runtime is AgentRuntime
-    """Top-level serve loop with reconnect + graceful shutdown."""
+async def run_serve(runtime, *, rebuild: Callable[[], Any] | None = None) -> None:  # noqa: ANN001
+    """Top-level serve loop with reconnect + graceful shutdown.
+
+    If ``rebuild`` is provided, it will be invoked at the start of every chat
+    turn to pick up policy edits made in the dashboard without a restart.
+    """
     console = Console()
     config = FortifyConfig.from_env()
     base = config.base_url.rstrip("/")
@@ -113,7 +131,7 @@ async def run_serve(runtime) -> None:  # noqa: ANN001 — runtime is AgentRuntim
         ws_base = f"ws://{base}"
     url = f"{ws_base}/v1/projects/{config.project_id}/serve"
 
-    context = ServeContext(runtime=runtime, state=ChatState())
+    context = ServeContext(runtime=runtime, state=ChatState(), rebuild=rebuild)
     backoff = RECONNECT_BASE
 
     console.print(f"[bold]fortify-serve[/] agent=[cyan]{runtime.agent_name}[/] project=[cyan]{config.project_id}[/]")
