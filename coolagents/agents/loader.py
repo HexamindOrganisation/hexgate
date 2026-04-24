@@ -14,12 +14,18 @@ from coolagents.agent.factory import AgentGraph, create_agent
 from coolagents.agent.security import enforce_policy
 from coolagents.agents.models import AgentSpec
 from coolagents.security import AgentPolicy, load_policy
-from coolagents.tools import fetch, web_search
+from coolagents.tools import bash, edit_file, fetch, glob, grep, read_file, web_search, write_file
 from coolagents.tracing.langfuse import CallbackHandler
 
 BUILTIN_TOOLS = {
+    "bash": bash,
+    "edit_file": edit_file,
     "fetch": fetch,
+    "glob": glob,
+    "grep": grep,
+    "read_file": read_file,
     "web_search": web_search,
+    "write_file": write_file,
 }
 AgentSource = Literal["builtin", "local", "registered"]
 AgentFactory: TypeAlias = Callable[..., tuple[AgentGraph, CallbackHandler]]
