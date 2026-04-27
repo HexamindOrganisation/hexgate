@@ -1,6 +1,6 @@
-# coolagents
+# fortify
 
-`coolagents` is a lightweight LangChain-based agent runtime built around:
+`fortify` is a lightweight LangChain-based agent runtime built around:
 
 - `langchain`
 - `gpt-5.4`
@@ -13,9 +13,9 @@ This package is intentionally small. The first milestone is a single assistant w
 - `web_search`
 - `fetch`
 
-## ⚡ Quick Start
+## ⚡ Quick Start — Local CLI
 
-If you just want to install `coolagents` and try the CLI quickly:
+If you just want to install `fortify` and try the terminal chat:
 
 1. Install the package in editable mode.
 2. Copy the sample environment file.
@@ -25,7 +25,7 @@ If you just want to install `coolagents` and try the CLI quickly:
 ```bash
 python -m pip install -e .
 cp .env.sample .env
-coolagents-chat --agent example_agent
+fortify --agent example_agent
 ```
 
 Required keys for the example CLI flow:
@@ -37,10 +37,10 @@ Required keys for the example CLI flow:
 Useful next commands:
 
 ```bash
-coolagents-chat --list-agents
-coolagents-chat --agent researcher
-coolagents-chat --use examples/file_agents.py --agent workspace_explorer
-coolagents-chat --use examples/research_agents.py --agent update_researcher
+fortify --list-agents
+fortify --agent researcher
+fortify --use examples/file_agents.py --agent workspace_explorer
+fortify --use examples/research_agents.py --agent update_researcher
 ```
 
 The included local agent lives in `example_agent/`, and the CLI can also load:
@@ -48,6 +48,33 @@ The included local agent lives in `example_agent/`, and the CLI can also load:
 - builtin packaged agents like `researcher`
 - code-defined agents registered from `examples/file_agents.py`
 - code-defined research agents registered from `examples/research_agents.py`
+
+## 🚀 Quick Start — Platform
+
+To run the full Fortify control plane locally (backend + dashboard + your local agent serving over WebSocket), you need three terminals:
+
+```bash
+# Terminal 1 — backend (FastAPI + SQLite)
+cd platform/api
+uv run uvicorn main:app --reload --port 8000
+
+# Terminal 2 — dashboard (Vite + React)
+cd platform/dashboard
+pnpm install        # first run only
+pnpm dev
+
+# Terminal 3 — mint a token, then serve your local agent
+# 1. Open http://localhost:5173/tokens
+# 2. Click "Mint new token", copy the value
+# 3. Add to asianf/.env:
+#        FORTIFY_KEY=fty_test_support-bot_...
+# 4. Start serve mode:
+uv run fortify --serve
+```
+
+Then open http://localhost:5173/playground — type a message, watch the live stream of tool calls and policy decisions from your local agent.
+
+The dashboard's `/agents` page lets you edit each agent's YAML and policy. `fortify --serve` re-fetches at every turn boundary, so your edits take effect on the next chat message without a restart.
 
 ## ✨ Core Primitives
 
@@ -59,7 +86,7 @@ The two main primitives are:
 Use them when you want to define everything directly in Python.
 
 ```python
-from coolagents import agent_tool, create_agent
+from fortify import agent_tool, create_agent
 
 
 @agent_tool(name="my_lookup")
@@ -94,7 +121,7 @@ The current curated surface includes:
 Example:
 
 ```python
-from coolagents import (
+from fortify import (
     create_agent,
     edit_file,
     enforce_policy,
@@ -135,14 +162,14 @@ It demonstrates:
 For the CLI, you can import that script and then pick one of its registered agents:
 
 ```bash
-coolagents-chat --use examples/file_agents.py --agent workspace_explorer
-coolagents-chat --use examples/file_agents.py --agent repo_editor
-coolagents-chat --use examples/research_agents.py --agent update_researcher
+fortify --use examples/file_agents.py --agent workspace_explorer
+fortify --use examples/file_agents.py --agent repo_editor
+fortify --use examples/research_agents.py --agent update_researcher
 ```
 
 ## 🗂️ Builtin And Local Agents
 
-The package now ships with a small `coolagents.builtin_agents` directory for official starter agents.
+The package now ships with a small `fortify.builtin_agents` directory for official starter agents.
 
 Current builtin agents:
 
@@ -151,7 +178,7 @@ Current builtin agents:
 Example:
 
 ```python
-from coolagents import load_builtin_agent
+from fortify import load_builtin_agent
 
 agent, handler = load_builtin_agent("researcher")
 ```
@@ -164,7 +191,7 @@ The CLI also discovers local agents from:
 This repo includes a root-level `example_agent/` directory, so from the project root you can simply run:
 
 ```bash
-coolagents-chat --agent example_agent
+fortify --agent example_agent
 ```
 
 ## 🔐 Policy Shape
@@ -203,7 +230,7 @@ Use it when:
 `create_agent(...)` stays close to LangChain. Policy enforcement is applied after agent creation:
 
 ```python
-from coolagents import AgentPolicy, create_agent, enforce_policy, fetch, web_search
+from fortify import AgentPolicy, create_agent, enforce_policy, fetch, web_search
 
 policy = AgentPolicy.model_validate(
     {
@@ -259,7 +286,7 @@ The runtime shape is intentionally small:
 Example:
 
 ```python
-from coolagents import (
+from fortify import (
     AgentPolicy,
     create_agent,
     edit_file,
@@ -329,7 +356,7 @@ It runs after Gate 1 and before the real tool executes.
 Example:
 
 ```python
-from coolagents import (
+from fortify import (
     create_agent,
     enforce_policy,
     fetch,
@@ -396,36 +423,138 @@ python -m pip install -e .
 Run the config-driven demo:
 
 ```bash
-python -m coolagents.demo
+python -m fortify.demo
 ```
 
 Run the inline chat CLI with a local or builtin YAML agent:
 
 ```bash
-coolagents-chat --agent example_agent
+fortify --agent example_agent
 ```
 
 Run the CLI with code-defined agents from a Python script:
 
 ```bash
-coolagents-chat --use examples/file_agents.py --agent workspace_explorer
-coolagents-chat --use examples/file_agents.py --agent repo_editor
-coolagents-chat --use examples/research_agents.py --agent update_researcher
-coolagents-chat --use examples/research_agents.py --agent update_researcher --approval-mode ask
+fortify --use examples/file_agents.py --agent workspace_explorer
+fortify --use examples/file_agents.py --agent repo_editor
+fortify --use examples/research_agents.py --agent update_researcher
+fortify --use examples/research_agents.py --agent update_researcher --approval-mode ask
 ```
 
 List what the CLI can currently resolve:
 
 ```bash
-coolagents-chat --list-agents
+fortify --list-agents
 ```
+
+## 🌐 Fortify Platform
+
+The `platform/` directory contains an optional control plane that hosts agent definitions, dev tokens, and a live debug surface. The SDK works fully without it (`load_local_agent`, `load_builtin_agent` keep their existing semantics) — but with it you get:
+
+- A web dashboard for editing agent YAMLs and viewing the project graph
+- Mintable dev tokens (`fty_test_*`, `fty_live_*`) that authenticate the SDK
+- A live Playground that streams tool calls and decisions from your running agent
+- **Turn-level policy refresh** — edit YAML in the UI, the next chat picks it up
+
+### Backend (`platform/api/`)
+
+FastAPI over SQLite. Run with:
+
+```bash
+cd platform/api
+uv run uvicorn main:app --reload --port 8000
+```
+
+The default `support-bot` project is seeded on first boot with two agents — `default` (broad access, side-effects gated by `approval_required`) and `read_only` (everything mutating denied).
+
+Endpoints:
+
+- `POST /v1/projects/:id/tokens` — mint a dev token (returned in full once)
+- `GET /v1/projects/:id/tokens` — list dev tokens (masked)
+- `DELETE /v1/projects/:id/tokens/:tid` — revoke
+- `GET /v1/projects/:id/agents` — list agents with their YAMLs
+- `GET /v1/projects/:id/agents/:name` — read one agent
+- `PUT /v1/projects/:id/agents/:name` — save agent / policy / system YAMLs
+- `WS /v1/projects/:id/serve` — producer socket (the `--serve` CLI dials here)
+- `WS /v1/projects/:id/chat` — consumer socket (the dashboard Playground dials here)
+
+DB lives at `platform/api/fortify.db`. Delete it and restart to wipe state.
+
+### Dashboard (`platform/dashboard/`)
+
+Vite + React + Tailwind + shadcn/ui + React Flow.
+
+```bash
+cd platform/dashboard
+pnpm install        # first time
+pnpm dev
+```
+
+Routes:
+
+- `/` — overview KPIs
+- `/agents` — file-tree YAML editor + live mini-graph per agent
+- `/graph` — read-only project overview (everyone → agents → tools)
+- `/playground` — chat with a serving agent, watch tool decisions stream live
+- `/tokens` — mint, list, revoke dev tokens
+- `/settings` — project settings
+
+The dev server proxies `/v1/*` (HTTP and WebSocket) to `localhost:8000`, so HMR works through the same origin as the API.
+
+### Serve Mode (`fortify --serve`)
+
+Bridges your local agent runtime to the dashboard via the platform's WebSocket relay — same pattern as Cloudflare Tunnel or ngrok.
+
+```bash
+# in asianf/.env
+FORTIFY_KEY=fty_test_support-bot_...
+FORTIFY_AGENT_NAME=default                  # optional, defaults to "default"
+FORTIFY_PROJECT_ID=support-bot              # optional, parsed from key prefix
+FORTIFY_API_URL=http://localhost:8000       # optional, defaults to localhost:8000
+
+# run
+uv run fortify --serve
+```
+
+Behaviour:
+
+- Connects `ws://${FORTIFY_API_URL}/v1/projects/${pid}/serve` with `Authorization: Bearer ${FORTIFY_KEY}`
+- Sends a `hello` frame announcing the agent name (so the dashboard's "Serving" indicator can show it)
+- On each inbound `chat` message, **rebuilds the runtime** (re-fetches agent + policy YAML from the platform) before running, so dashboard edits take effect at turn boundaries without a restart
+- Streams every `StreamEvent` (text deltas, tool start/end, run end) back as JSON
+- Auto-approves any `approval_required` tools — there's no TTY in serve mode for prompts (planned: dashboard-side approval UI)
+- Reconnects with exponential backoff on socket drop
+
+To override the agent at the CLI:
+
+```bash
+fortify --serve --agent read_only
+fortify --serve --use examples/file_agents.py --agent workspace_explorer
+```
+
+### How `load_agent()` resolves with `FORTIFY_KEY`
+
+```python
+from fortify import load_agent
+
+agent, handler = load_agent()                # → "default"
+agent, handler = load_agent("read_only")     # explicit name wins
+```
+
+Resolution chain when `FORTIFY_KEY` is set:
+
+1. `name` arg if passed
+2. `FORTIFY_AGENT_NAME` env var
+3. Falls back to `"default"` (always present, protected from deletion)
+
+When `FORTIFY_KEY` is not set, `load_agent()` keeps its existing local / registered / builtin behaviour — no platform call.
 
 ## 📡 Stream Results
 
 For direct Python usage, the simplest runtime path is:
 
 ```python
-from coolagents import stream_agent
+from fortify import stream_agent
 
 async for event in stream_agent(agent, handler, "latest AI breakthroughs"):
     ...

@@ -6,7 +6,7 @@ from datetime import UTC
 
 from pydantic import TypeAdapter
 
-from coolagents.stream import (
+from fortify.stream import (
     AgentRunResult,
     BlockDeltaEvent,
     BlockEndEvent,

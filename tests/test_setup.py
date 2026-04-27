@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from coolagents import setup
+from fortify import setup
 
 
 def test_bootstrap_loads_requested_env_file(monkeypatch: pytest.MonkeyPatch) -> None:

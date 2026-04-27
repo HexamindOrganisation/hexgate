@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from coolagents.demo import _render_event
-from coolagents.stream import (
+from fortify.demo import _render_event
+from fortify.stream import (
     AgentRunResult,
     BlockDeltaEvent,
     BlockType,

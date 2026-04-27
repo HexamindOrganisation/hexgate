@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from coolagents import AgentPolicy, create_agent, enforce_policy, register_agent
-from coolagents.tools import (
+from fortify import AgentPolicy, create_agent, enforce_policy, register_agent
+from fortify.tools import (
     edit_file,
     fetch,
     glob,
@@ -75,7 +75,7 @@ def build_update_researcher(
             "write_file and edit_file only when an update is truly needed."
         ),
         session_id=session_id,
-        tags=tags or ["coolagents", "update-researcher"],
+        tags=tags or ["fortify", "update-researcher"],
     )
     return enforce_policy(agent, _update_researcher_policy()), handler
 

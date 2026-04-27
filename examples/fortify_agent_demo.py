@@ -27,9 +27,9 @@ from dotenv import load_dotenv
 # Load asianf/.env before importing anything that reads FORTIFY_KEY.
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
-from coolagents import AgentPolicy, FortifyClient, FortifyConfig  # noqa: E402
-from coolagents.fortify.client import FortifyError, resolve_agent_name  # noqa: E402
-from coolagents.security.models import FileToolPolicy  # noqa: E402
+from fortify import AgentPolicy, FortifyClient, FortifyConfig  # noqa: E402
+from fortify.cloud.client import FortifyError, resolve_agent_name  # noqa: E402
+from fortify.security.models import FileToolPolicy  # noqa: E402
 
 
 def _resolve_agent_name() -> str:

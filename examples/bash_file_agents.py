@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from coolagents import AgentPolicy, create_agent, enforce_policy, register_agent
-from coolagents.tools import bash, edit_file, glob, grep, read_file, write_file
+from fortify import AgentPolicy, create_agent, enforce_policy, register_agent
+from fortify.tools import bash, edit_file, glob, grep, read_file, write_file
 
 
 def _coding_agent_policy() -> AgentPolicy:
@@ -53,7 +53,7 @@ def build_repo_operator(
             "and use bash sparingly when file tools are enough."
         ),
         session_id=session_id,
-        tags=tags or ["coolagents", "repo-operator"],
+        tags=tags or ["fortify", "repo-operator"],
     )
     return enforce_policy(agent, _coding_agent_policy()), handler
 

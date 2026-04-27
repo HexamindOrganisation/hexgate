@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 
-from coolagents.agents import loader
+from fortify.agents import loader
 
 
 @pytest.fixture(autouse=True)
@@ -55,13 +55,13 @@ def test_load_registered_agent_passes_runtime_overrides_through() -> None:
         "code_agent",
         model="openai:gpt-5.4",
         session_id="s-1",
-        tags=["coolagents"],
+        tags=["fortify"],
     )
 
     assert (agent, handler) == ("agent-instance", "handler-instance")
     assert captured["model"] == "openai:gpt-5.4"
     assert captured["session_id"] == "s-1"
-    assert captured["tags"] == ["coolagents"]
+    assert captured["tags"] == ["fortify"]
 
 
 def test_list_available_agents_includes_registered_ids() -> None:

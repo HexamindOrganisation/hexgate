@@ -7,7 +7,7 @@ from collections.abc import AsyncIterator
 import pytest
 from langchain_core.messages import AIMessage, AIMessageChunk
 
-from coolagents.stream import (
+from fortify.stream import (
     BlockDeltaEvent,
     BlockEndEvent,
     BlockStartEvent,
@@ -19,7 +19,7 @@ from coolagents.stream import (
     ToolEndEvent,
     ToolStartEvent,
 )
-from coolagents.streaming import normalize_langchain_events
+from fortify.streaming import normalize_langchain_events
 
 
 async def _aiter(items: list[dict]) -> AsyncIterator[dict]:

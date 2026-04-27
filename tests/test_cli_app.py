@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from rich.console import Console, Group
 
-from coolagents.agents import loader
-from coolagents.cli.app import (
+from fortify.agents import loader
+from fortify.cli.app import (
     AgentRuntime,
     DOG_LOGO,
     _build_approval_handler,
@@ -15,9 +15,9 @@ from coolagents.cli.app import (
     _render_welcome,
     _tail_text,
 )
-from coolagents.cli.state import LiveRunState, ToolActivity
-from coolagents.stream import ToolCallState
-from coolagents.tools import edit_file, read_file
+from fortify.cli.state import LiveRunState, ToolActivity
+from fortify.stream import ToolCallState
+from fortify.tools import edit_file, read_file
 
 
 def test_tail_text_keeps_last_lines_of_long_output() -> None:
@@ -65,7 +65,7 @@ def test_render_welcome_includes_agent_and_model() -> None:
 
     assert "example_agent" in rendered
     assert "gpt-5.4" in rendered
-    assert "coolagents" in rendered
+    assert "fortify" in rendered
     assert DOG_LOGO.splitlines()[0].strip() in rendered
 
 

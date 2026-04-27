@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from coolagents.config.settings import Settings
+from fortify.config.settings import Settings
 
 
 def test_from_env_reads_defaults(monkeypatch: pytest.MonkeyPatch) -> None:

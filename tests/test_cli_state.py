@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from coolagents.cli.state import ChatState
-from coolagents.stream import (
+from fortify.cli.state import ChatState
+from fortify.stream import (
     AgentRunResult,
     BlockDeltaEvent,
     BlockType,

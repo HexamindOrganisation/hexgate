@@ -6,8 +6,8 @@ from typing import Any
 
 import pytest
 
-from coolagents.agents import loader
-from coolagents.agents.models import AgentSpec
+from fortify.agents import loader
+from fortify.agents.models import AgentSpec
 
 
 def test_list_builtin_agents_includes_researcher() -> None:

@@ -3,9 +3,9 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "coolagents"
+name = "fortify"
 version = "0.1.0"
-description = "Minimal LangChain agent runtime with Langfuse tracing."
+description = "Authorization infrastructure for AI agents — agent runtime + Fortify Cloud client."
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
@@ -22,7 +22,7 @@ dependencies = [
 ]
 
 [project.scripts]
-coolagents-chat = "coolagents.cli:run"
+fortify = "fortify.cli:run"
 
 [project.optional-dependencies]
 dev = [
@@ -34,7 +34,7 @@ dev = [
 ]
 
 [tool.setuptools.packages.find]
-include = ["coolagents*"]
+include = ["fortify*"]
 
 [tool.setuptools.package-data]
-coolagents = ["builtin_agents/*/*.md", "builtin_agents/*/*.yaml"]
+fortify = ["builtin_agents/*/*.md", "builtin_agents/*/*.yaml"]
