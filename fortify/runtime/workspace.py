@@ -12,6 +12,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+from fortify.runtime.command_policy import Rejected, check_command
 from fortify.runtime.sandbox_runtime import build_sandbox_runtime_config
 from fortify.runtime.srt import ensure_srt_available
 
@@ -106,6 +107,7 @@ class CommandResult:
     stderr: str
     stdout_truncated: bool = False
     stderr_truncated: bool = False
+    policy_violation: bool = False
 
 
 class Workspace(ABC):
@@ -159,6 +161,8 @@ class LocalWorkspace(Workspace):
         allow_unix_sockets: Sequence[str | Path] = (),
         allow_local_binding: bool = False,
         extra_env: Mapping[str, str] | None = None,
+        allowed_commands: Sequence[str] | None = None,
+        allow_command_substitution: bool = False,
     ) -> None:
         self._root_dir = Path(root_dir).expanduser().resolve()
         self._extra_read_paths = tuple(extra_read_paths)
@@ -169,6 +173,10 @@ class LocalWorkspace(Workspace):
         self._allow_unix_sockets = tuple(allow_unix_sockets)
         self._allow_local_binding = allow_local_binding
         self._extra_env = dict(extra_env) if extra_env else {}
+        self._allowed_commands = (
+            None if allowed_commands is None else tuple(allowed_commands)
+        )
+        self._allow_command_substitution = allow_command_substitution
 
     @property
     def root_dir(self) -> Path:
@@ -199,16 +207,44 @@ class LocalWorkspace(Workspace):
     ) -> CommandResult:
         """Run one shell command inside an ``srt`` sandbox over the workspace.
 
-        Fails closed if ``srt`` is not installed: there is no fallback to
-        unsandboxed execution. Env is rebuilt from a small allowlist (PATH,
-        HOME, locale, plus operator ``extra_env``) so parent-process secrets
-        like AWS_*/OPENAI_API_KEY/GH_TOKEN don't leak into the child.
+        Two gates run before the subprocess is spawned:
 
-        Note on argv: srt does not honour POSIX ``--`` as an end-of-options
-        marker. Passing ``"--"`` between flags and the command silently
-        breaks argv handling (the first token runs, the rest get dropped).
-        Keep the command tokens directly after the last flag.
+        1. **Static command allowlist** (``allowed_commands``). When set, the
+           command is parsed with ``bashlex`` and rejected if it shells out
+           to anything not on the list (or uses always-banned constructs like
+           ``eval``, ``source``, process substitution). Disabled by default
+           for back-compat — the OS sandbox is the real boundary; this is
+           intent-shaping against prompt-injected curl/nc/git-push.
+        2. **OS sandbox** via ``srt``. Fails closed if ``srt`` is missing —
+           no fallback to unsandboxed execution. Env is rebuilt from a small
+           allowlist (PATH, HOME, locale, plus operator ``extra_env``) so
+           parent-process secrets like AWS_*/OPENAI_API_KEY/GH_TOKEN don't
+           leak into the child.
+
+        Note on argv: ``srt`` does not honour POSIX ``--`` as an
+        end-of-options marker. Passing ``"--"`` between flags and the
+        command silently breaks argv handling (the first token runs, the
+        rest get dropped). Keep the command tokens directly after the last
+        flag.
         """
+        policy = check_command(
+            command,
+            self._allowed_commands,
+            allow_command_substitution=self._allow_command_substitution,
+        )
+        if isinstance(policy, Rejected):
+            # Bash convention: 126 = "command found but cannot be executed".
+            return CommandResult(
+                command=command,
+                exit_code=126,
+                stdout="",
+                stderr=(
+                    f"fortify: command not allowed: {policy.offending_token!r} "
+                    f"({policy.reason})"
+                ),
+                policy_violation=True,
+            )
+
         ensure_srt_available()
         settings_path = self._write_sandbox_settings_file()
         try:

@@ -11,6 +11,8 @@ from typing import Any
 
 import pytest
 
+import pytest
+
 from fortify.runtime import LocalWorkspace, build_sandbox_runtime_config
 from fortify.runtime import workspace as workspace_module
 from fortify.runtime.srt import SrtUnavailableError
@@ -478,3 +480,103 @@ async def test_run_command_unlinks_settings_file_on_timeout(
     assert not os.path.exists(captured["settings_path"])
     # SIGTERM was attempted on the fake process group.
     assert any(sig == signal.SIGTERM for _, sig in killed)
+# ---------------------------------------------------------------------------
+# Command allowlist integration.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_run_command_default_workspace_runs_anything(tmp_path: Path) -> None:
+    """Without an allowlist, run_command behavior is unchanged (back-compat)."""
+    workspace = LocalWorkspace(tmp_path)
+
+    result = await workspace.run_command("echo ok")
+
+    assert result.exit_code == 0
+    assert result.policy_violation is False
+    assert "ok" in result.stdout
+
+
+@pytest.mark.asyncio
+async def test_run_command_allowed_by_policy_executes(tmp_path: Path) -> None:
+    """A command on the allowlist executes and reports policy_violation=False."""
+    workspace = LocalWorkspace(tmp_path, allowed_commands=["echo"])
+
+    result = await workspace.run_command("echo hello")
+
+    assert result.exit_code == 0
+    assert result.policy_violation is False
+    assert "hello" in result.stdout
+
+
+@pytest.mark.asyncio
+async def test_run_command_rejected_by_policy_does_not_execute(
+    tmp_path: Path,
+) -> None:
+    """A disallowed command returns 126 + policy_violation without spawning a shell."""
+    sentinel = tmp_path / "marker"
+    workspace = LocalWorkspace(tmp_path, allowed_commands=["echo"])
+
+    # If policy enforcement bypasses the shell, this `touch` never runs.
+    result = await workspace.run_command(f"touch {sentinel}")
+
+    assert result.exit_code == 126
+    assert result.policy_violation is True
+    assert "touch" in result.stderr
+    assert sentinel.exists() is False
+
+
+@pytest.mark.asyncio
+async def test_run_command_rejects_pipeline_with_one_disallowed_leg(
+    tmp_path: Path,
+) -> None:
+    """Composite shell pipelines fail closed if any leg is disallowed."""
+    workspace = LocalWorkspace(tmp_path, allowed_commands=["echo"])
+
+    result = await workspace.run_command("echo hi | xargs -I{} curl {}")
+
+    assert result.exit_code == 126
+    assert result.policy_violation is True
+
+
+@pytest.mark.asyncio
+async def test_run_command_rejects_eval_even_if_allowlisted(tmp_path: Path) -> None:
+    """`eval` is statically banned regardless of allowlist content."""
+    workspace = LocalWorkspace(tmp_path, allowed_commands=["eval", "echo"])
+
+    result = await workspace.run_command('eval "echo $PATH"')
+
+    assert result.exit_code == 126
+    assert result.policy_violation is True
+    assert "eval" in result.stderr
+
+
+@pytest.mark.asyncio
+async def test_run_command_allow_command_substitution_opt_in(
+    tmp_path: Path,
+) -> None:
+    """allow_command_substitution=True permits $(...) when its inner command is allowed."""
+    workspace = LocalWorkspace(
+        tmp_path,
+        allowed_commands=["echo"],
+        allow_command_substitution=True,
+    )
+
+    result = await workspace.run_command("echo $(echo nested)")
+
+    assert result.exit_code == 0
+    assert result.policy_violation is False
+    assert "nested" in result.stdout
+
+
+@pytest.mark.asyncio
+async def test_run_command_command_substitution_blocked_by_default(
+    tmp_path: Path,
+) -> None:
+    """By default, $(...) is rejected even when its inner command is allowed."""
+    workspace = LocalWorkspace(tmp_path, allowed_commands=["echo"])
+
+    result = await workspace.run_command("echo $(echo nested)")
+
+    assert result.exit_code == 126
+    assert result.policy_violation is True

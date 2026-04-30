@@ -597,6 +597,7 @@ async def test_bash_tool_returns_command_result_for_nonzero_exit_code(
         "stderr": "boom",
         "stdout_truncated": False,
         "stderr_truncated": False,
+        "policy_violation": False,
     }
 
 
