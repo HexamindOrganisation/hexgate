@@ -13,6 +13,20 @@ This package is intentionally small. The first milestone is a single assistant w
 - `web_search`
 - `fetch`
 
+## 🛠️ Prerequisites
+
+The SDK itself only needs Python — but a few of the bundled tools shell out to native binaries that you'll want installed on the host before running an agent that uses them.
+
+| Required when you use… | Install |
+|---|---|
+| **`grep`, `glob`, `bash`, `read_file`, `edit_file`, `write_file`** — anything filesystem-shaped | [`ripgrep`](https://github.com/BurntSushi/ripgrep) — `brew install ripgrep` (macOS), `apt install ripgrep` (Debian/Ubuntu), `winget install BurntSushi.ripgrep.MSVC` (Windows) |
+| **The dashboard** under `platform/dashboard/` | Node 18+ and `pnpm` — `corepack enable` or `npm i -g pnpm` |
+| **The control plane** under `platform/api/` | [`uv`](https://docs.astral.sh/uv/) — `curl -LsSf https://astral.sh/uv/install.sh \| sh` |
+
+`web_search` and `fetch` have no system dependencies — pure Python. If you're only using those, ignore the table above.
+
+The runtime preflights `ripgrep` at agent build time and refuses to start when it's missing — fail-fast is friendlier than silently falling back to a 100× slower path.
+
 ## ⚡ Quick Start — Local CLI
 
 If you just want to install `fortify` and try the terminal chat:

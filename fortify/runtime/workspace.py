@@ -203,6 +203,11 @@ class LocalWorkspace(Workspace):
         unsandboxed execution. Env is rebuilt from a small allowlist (PATH,
         HOME, locale, plus operator ``extra_env``) so parent-process secrets
         like AWS_*/OPENAI_API_KEY/GH_TOKEN don't leak into the child.
+
+        Note on argv: srt does not honour POSIX ``--`` as an end-of-options
+        marker. Passing ``"--"`` between flags and the command silently
+        breaks argv handling (the first token runs, the rest get dropped).
+        Keep the command tokens directly after the last flag.
         """
         ensure_srt_available()
         settings_path = self._write_sandbox_settings_file()
@@ -211,7 +216,6 @@ class LocalWorkspace(Workspace):
                 "srt",
                 "--settings",
                 settings_path,
-                "--",
                 "sh",
                 "-c",
                 command,
