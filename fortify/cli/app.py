@@ -153,8 +153,20 @@ def _print_completed_turn(
     console.print()
 
 
-def _build_runtime(settings: Settings, *, agent_name: str, base_dir: Path, model: str | None) -> AgentRuntime:
-    """Create the runtime used by the terminal app."""
+def _build_runtime(
+    settings: Settings,
+    *,
+    agent_name: str,
+    base_dir: Path,
+    model: str | None,
+    local_only: bool = False,
+) -> AgentRuntime:
+    """Create the runtime used by the terminal app.
+
+    ``local_only=True`` keeps the loader off the Fortify Cloud path even
+    when ``FORTIFY_KEY`` is present in the environment — what terminal chat
+    uses, since it doesn't need cloud-fetched policy or a serve tunnel.
+    """
     import os
 
     tools = [web_search, fetch]
@@ -166,12 +178,13 @@ def _build_runtime(settings: Settings, *, agent_name: str, base_dir: Path, model
         session_id="fortify-cli",
         tags=["fortify", settings.search_engine, resolved_model, agent_name],
         extra_tools={tool.name: tool for tool in tools},
+        local_only=local_only,
     )
     runtime_tools = list(getattr(agent, "tools", [])) + list(tools)
     tools_by_name = {
         getattr(tool, "name", getattr(tool, "__name__", "tool")): tool for tool in runtime_tools
     }
-    if os.environ.get("FORTIFY_KEY"):
+    if not local_only and os.environ.get("FORTIFY_KEY"):
         agent_source = "fortify"
     else:
         agent_source = resolve_agent_source(agent_name, base_dir)
@@ -392,7 +405,16 @@ def run() -> None:
     else:
         agent_name = args.agent or _default_agent_name(base_dir)
 
-    runtime = _build_runtime(settings, agent_name=agent_name, base_dir=base_dir, model=args.model)
+    # Terminal chat (no --serve) deliberately ignores FORTIFY_KEY: there's no
+    # playground to feed and policy enforcement still works via the agent's own
+    # YAML or registered factory. Serve mode keeps the cloud path.
+    runtime = _build_runtime(
+        settings,
+        agent_name=agent_name,
+        base_dir=base_dir,
+        model=args.model,
+        local_only=not args.serve,
+    )
 
     if args.serve:
         # In serve mode, approval-ask doesn't make sense (no tty for prompts).
@@ -412,7 +434,13 @@ def run() -> None:
 
         def _rebuild() -> AgentRuntime:
             """Re-fetch YAMLs and rebuild the agent with the latest policy."""
-            fresh = _build_runtime(settings, agent_name=agent_name, base_dir=base_dir, model=args.model)
+            fresh = _build_runtime(
+                settings,
+                agent_name=agent_name,
+                base_dir=base_dir,
+                model=args.model,
+                local_only=False,
+            )
             return _wrap_for_serve(fresh)
 
         from fortify.cli.serve import run_serve

@@ -45,4 +45,5 @@ async def bash(
         "stderr": result.stderr,
         "stdout_truncated": result.stdout_truncated,
         "stderr_truncated": result.stderr_truncated,
+        "policy_violation": result.policy_violation,
     }
