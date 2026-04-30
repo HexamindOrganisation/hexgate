@@ -522,7 +522,9 @@ async def test_grep_supports_files_and_content_modes(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_local_workspace_run_command_uses_workspace_cwd(tmp_path: Path) -> None:
+async def test_local_workspace_run_command_uses_workspace_cwd(
+    tmp_path: Path, srt_required: None
+) -> None:
     """Execute shell commands relative to the workspace root."""
     workspace = LocalWorkspace(tmp_path)
 
@@ -535,7 +537,7 @@ async def test_local_workspace_run_command_uses_workspace_cwd(tmp_path: Path) ->
 
 @pytest.mark.asyncio
 async def test_local_workspace_run_command_preserves_nonzero_exit_code(
-    tmp_path: Path,
+    tmp_path: Path, srt_required: None
 ) -> None:
     """Return non-zero shell exits as normal command results."""
     workspace = LocalWorkspace(tmp_path)
@@ -548,7 +550,9 @@ async def test_local_workspace_run_command_preserves_nonzero_exit_code(
 
 
 @pytest.mark.asyncio
-async def test_local_workspace_run_command_times_out(tmp_path: Path) -> None:
+async def test_local_workspace_run_command_times_out(
+    tmp_path: Path, srt_required: None
+) -> None:
     """Raise a clear timeout error for long-running commands."""
     workspace = LocalWorkspace(tmp_path)
 
@@ -571,7 +575,7 @@ def test_bash_call_formatter_is_human_friendly() -> None:
 
 @pytest.mark.asyncio
 async def test_bash_tool_returns_command_result_for_nonzero_exit_code(
-    tmp_path: Path,
+    tmp_path: Path, srt_required: None
 ) -> None:
     """Treat shell exit failures as tool output instead of tool errors."""
     workspace = LocalWorkspace(tmp_path)
@@ -597,7 +601,9 @@ async def test_bash_tool_returns_command_result_for_nonzero_exit_code(
 
 
 @pytest.mark.asyncio
-async def test_bash_tool_returns_structured_timeout_error(tmp_path: Path) -> None:
+async def test_bash_tool_returns_structured_timeout_error(
+    tmp_path: Path, srt_required: None
+) -> None:
     """Surface command timeouts as tool failures."""
     workspace = LocalWorkspace(tmp_path)
     token = set_current_tool_use_context(ToolUseContext(workspace=workspace))
