@@ -94,7 +94,20 @@ class FortifyRunner:
         """Run the OpenAI agent streamed asynchronously"""
         self._setup_observability()
         wrapped_agent = wrap_openai_agent(agent, user_context, self.api_key)
+
         with self._propagate(user_context, agent.name):
-            return Runner.run_streamed(
+            result = Runner.run_streamed(
                 wrapped_agent, input, run_config=run_config, **kwargs
             )
+
+        # Runner.run_streamed returns synchronously: wrap the iterator so propagation is
+        # re-entered for the lifetime of the stream.
+        original_stream_events = result.stream_events
+
+        async def _stream_events_with_propagation():
+            with self._propagate(user_context, agent.name):
+                async for event in original_stream_events():
+                    yield event
+
+        result.stream_events = _stream_events_with_propagation
+        return result
