@@ -27,9 +27,9 @@ class FortifyPydanticAgent:
         self._agent = agent
         self._user_context = user_context
         self._langfuse = get_client()
-        self.setup_tracing()
+        self._setup_observability()
     
-    def setup_tracing(self) -> None:
+    def _setup_observability(self) -> None:
         """Setup tracing for the agents to be globally instrumented"""
         Agent.instrument_all()
 

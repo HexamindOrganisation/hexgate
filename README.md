@@ -140,6 +140,280 @@ from fortify import (
 )
 ```
 
+## 🤝 Framework Agent Wrapping
+
+In addition to its native `create_agent(...)` runtime, `fortify` ships adapters that wrap agents built with **OpenAI Agents SDK**, **LangChain / LangGraph**, **Google ADK**, or **Pydantic AI** to add two things without touching the agent's logic:
+
+1. **Tool-call policy enforcement.** Each tool the agent can invoke is gated by an `AgentPolicy` that decides allow/deny per call. Denied calls return a denial string (or framework-native exception) to the model rather than aborting the run, so the agent can recover.
+2. **User-aware observability.** Every run is traced through Langfuse with the caller's `UserContext` (user id, session id, role) propagated onto the spans.
+
+The four integrations differ in shape because the underlying SDKs do:
+
+| | OpenAI Agents SDK | LangChain / LangGraph | Google ADK | Pydantic AI |
+| --- | --- | --- | --- | --- |
+| Entry point | `FortifyRunner` (replaces `Runner`) | `wrap_langchain_agent` (returns a proxy) | `FortifyRunner` (replaces `Runner`) | `wrap_pydantic_agent` (returns a proxy) |
+| Tool wrapping | Copies each `FunctionTool`, replaces `on_invoke_tool` with a guarded version | Mutates each `BaseTool` in place, replaces `func`/`coroutine`, sets `handle_tool_error=True` | Copies each `BaseTool` (normalizing bare callables to `FunctionTool`), replaces `run_async` with a guarded version | Copies each `Tool` and overrides `function_schema.call` with a guarded version |
+| Denial behavior | Guard returns the denial text as tool output | Guard raises `ToolDeniedError` (a `ToolException`); LangChain converts it to a `ToolMessage` | Guard returns the denial text as tool output | Guard raises `ToolDeniedError` (a `ModelRetry`); pydantic_ai surfaces it back to the model as a tool-result message |
+| Tracing | `OpenAIAgentsInstrumentor` + `propagate_attributes` | Langfuse `CallbackHandler` injected into each call's `RunnableConfig` + `propagate_attributes` | `GoogleADKInstrumentor` + `propagate_attributes` | `Agent.instrument_all()` + `propagate_attributes` |
+
+In all cases, the original agent object is left intact (or, for LangChain tools, mutated by design so the same `tools` list flows through `create_react_agent`); the wrapper holds the policy and the user context.
+
+All adapters resolve the API key the same way: from the explicit `api_key=` argument, falling back to the `FORTIFY_KEY` environment variable.
+
+### OpenAI Agents SDK — `FortifyRunner`
+
+`FortifyRunner` is a drop-in replacement for `agents.Runner`. It wraps the agent's tools with the policy resolved for the user, then dispatches to `Runner.run` / `run_sync` / `run_streamed`.
+
+```python
+import asyncio
+from agents import Agent, function_tool
+from dotenv import load_dotenv
+
+from fortify.user_context import UserContext
+from fortify.adapters.openai import FortifyRunner
+
+
+@function_tool
+def get_weather(city: str) -> str:
+    return f"{city}: sunny, 23°C"
+
+
+async def main():
+    load_dotenv()
+
+    agent = Agent(
+        name="Weather Agent",
+        instructions="Use get_weather when asked about weather.",
+        tools=[get_weather],
+        model="gpt-4o-mini",
+    )
+
+    runner = FortifyRunner()  # picks up FORTIFY_KEY from env
+    result = await runner.run(
+        agent,
+        "What's the weather in Cherbourg?",
+        user_context=UserContext(
+            user_id="user_1", session_id="session_1", user_role="member",
+        ),
+    )
+    print(result)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+What happens under the hood:
+
+- `FortifyRunner.run` calls `wrap_openai_agent`, which builds an `AgentPolicy` for `(user_context, agent.name, tool_names)` and returns a `dataclasses.replace`'d copy of the agent with policy-gated tool copies — your original `agent` is untouched.
+- When the model calls a tool, the guard checks the policy. On deny, it returns `"Tool '<name>' is denied by the agent policy. The tool was not executed."` so the model sees a tool result and can adapt.
+- The run executes inside `propagate_attributes(user_id=..., session_id=..., metadata={"user_role": ...})`, so Langfuse spans carry the caller identity.
+
+`run_sync` and `run_streamed` work the same way.
+
+### LangChain / LangGraph — `wrap_langchain_agent`
+
+`wrap_langchain_agent` mutates the tools you pass in (so the same instances inside the compiled graph become policy-gated) and returns a `FortifyLangchainAgent` proxy that injects a Langfuse callback into every `invoke` / `ainvoke` / `stream` / `astream` / `astream_events` call.
+
+```python
+import asyncio
+from dotenv import load_dotenv
+from langchain_core.tools import tool
+from langchain_openai import ChatOpenAI
+from langgraph.prebuilt import create_react_agent
+
+from fortify.user_context import UserContext
+from fortify.adapters.langchain import wrap_langchain_agent
+
+
+@tool
+def get_weather(city: str) -> str:
+    """Return a weather report for a city."""
+    return f"The weather in {city} is 21°C and sunny."
+
+
+@tool
+def delete_user(user_id: str) -> str:
+    """Delete a user account. Destructive."""
+    return f"User {user_id} deleted."
+
+
+TOOLS = [get_weather, delete_user]
+
+
+async def main():
+    load_dotenv()
+
+    llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+    graph = create_react_agent(llm, TOOLS)
+
+    agent = wrap_langchain_agent(
+        agent=graph,
+        tools=TOOLS,          # same list passed to create_react_agent — wrapped in place
+        user_context=UserContext(
+            user_id="user_42",
+            user_role="member",
+            session_id="session_abc",
+        ),
+        api_key="sk-...",     # or rely on FORTIFY_KEY
+    )
+
+    result = await agent.ainvoke(
+        {"messages": [{"role": "user", "content": "What is the weather in Tokyo?"}]}
+    )
+    print(result)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+What happens under the hood:
+
+- `wrap_langchain_agent` builds the `AgentPolicy` and calls `wrap_tools(tools, policy)`. Each tool's `func` and `coroutine` are replaced with guarded versions, and `handle_tool_error` is forced to `True`.
+- A denied call raises `ToolDeniedError` (a `ToolException`); LangChain catches it because of `handle_tool_error=True` and emits a `ToolMessage` with the denial text — the tool body never runs.
+- The returned `FortifyLangchainAgent` is a proxy: it forwards every method to the underlying `CompiledStateGraph` but wraps the call in `propagate_attributes(...)` and merges a Langfuse `CallbackHandler` into the `RunnableConfig.callbacks`. Anything not explicitly proxied falls through via `__getattr__`.
+
+### Google ADK — `FortifyRunner`
+
+The Google ADK wrapper exposes its own `FortifyRunner`. Unlike the OpenAI variant, it is constructed up front with the agent, app name, and session service (mirroring the ADK `Runner` constructor); `run` / `run_async` then yield ADK events.
+
+```python
+import asyncio
+from datetime import datetime
+
+from dotenv import load_dotenv
+from google.adk.agents import Agent
+from google.adk.models.lite_llm import LiteLlm
+from google.adk.sessions import InMemorySessionService
+from google.genai import types
+
+from fortify.user_context import UserContext
+from fortify.adapters.google import FortifyRunner
+
+
+def get_weather(city: str) -> str:
+    """Get the current weather for a given city."""
+    return f"{city}: sunny, 23°C, humidity 50%, wind 10 m/s"
+
+
+def get_current_time() -> str:
+    """Return the current local time as an ISO-8601 string."""
+    return datetime.now().isoformat()
+
+
+async def main():
+    load_dotenv()
+
+    agent = Agent(
+        name="google_runner_example_agent",
+        model=LiteLlm(model="openai/gpt-4o"),
+        instruction="Use get_current_time and get_weather when asked.",
+        tools=[get_current_time, get_weather],
+    )
+
+    user_context = UserContext(
+        user_id="google_user_1",
+        session_id="google_session_1",
+        user_role="user",
+    )
+
+    session_service = InMemorySessionService()
+    await session_service.create_session(
+        app_name="google_runner_example",
+        user_id=user_context.user_id,
+        session_id=user_context.session_id,
+    )
+
+    runner = FortifyRunner(
+        agent=agent,
+        app_name="google_runner_example",
+        session_service=session_service,
+    )  # picks up FORTIFY_KEY from env
+
+    user_msg = types.Content(
+        role="user", parts=[types.Part(text="What is the weather in New Delhi?")]
+    )
+
+    async for event in runner.run_async(
+        new_message=user_msg, user_context=user_context
+    ):
+        if event.is_final_response():
+            print(event.content.parts[0].text)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+What happens under the hood:
+
+- On each `run` / `run_async`, `FortifyRunner` calls `wrap_google_agent`, which builds an `AgentPolicy` for `(user_context, agent.name, tool_names)` and returns `agent.model_copy(update={"tools": guarded_tools})` — your original `agent` is untouched.
+- Each tool is normalized first: bare callables in `agent.tools` are wrapped into `FunctionTool` (matching what ADK does internally) so the guard has a stable `BaseTool` surface. Each tool is then `copy.copy`'d and its `run_async` replaced with a guarded version.
+- On deny, the guard returns `"Tool '<name>' is denied by the agent policy. The tool was not executed."` so the ADK runtime forwards it to the model as the tool output instead of aborting the run.
+- Observability is set up lazily on each call: `GoogleADKInstrumentor().instrument()` plus `nest_asyncio.apply()` (ADK's runner spins its own loop), and the run executes inside `propagate_attributes(user_id=..., session_id=..., metadata={"user_role": ...}, tags=["google.runner.run.<agent_name>"])` so Langfuse spans carry the caller identity.
+
+### Pydantic AI — `wrap_pydantic_agent`
+
+`wrap_pydantic_agent` returns a `FortifyPydanticAgent` proxy backed by a clone of the original agent whose tools are gated by the policy. Tools registered via the `Agent(...)` constructor or via `@agent.tool` / `@agent.tool_plain` are all picked up.
+
+```python
+import asyncio
+from dotenv import load_dotenv
+from pydantic_ai import Agent
+
+from fortify.user_context import UserContext
+from fortify.adapters.pydantic_ai import wrap_pydantic_agent
+
+
+async def main():
+    load_dotenv()
+
+    agent = Agent("openai:gpt-4o-mini")
+
+    @agent.tool_plain
+    def get_weather(city: str) -> str:
+        """Return a weather report for a city."""
+        return f"The weather in {city} is 21°C and sunny."
+
+    @agent.tool_plain
+    def delete_user(user_id: str) -> str:
+        """Delete a user account. Destructive."""
+        return f"User {user_id} deleted."
+
+    agent = wrap_pydantic_agent(
+        agent=agent,
+        user_context=UserContext(
+            user_id="pydantic_ai_user_1",
+            user_role="member",
+            session_id="pydantic_ai_session_1",
+        ),
+        api_key="sk-...",  # or rely on FORTIFY_KEY
+    )
+
+    result = await agent.run("What is the weather in Tokyo?")
+    print(result.output)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+What happens under the hood:
+
+- `wrap_pydantic_agent` reads tools off the agent's internal `_function_toolset`, builds an `AgentPolicy` for `(user_context, agent.name, tool_names)`, and returns a shallow-copied agent whose toolset holds policy-gated tool copies — your original `agent` is untouched, so it can be reused or wrapped again with a different user/policy independently.
+- Each tool copy overrides `function_schema.call` with a guarded version. On deny, the guard raises `ToolDeniedError` (a `ModelRetry`); pydantic_ai surfaces it back to the model as a tool-result message instead of aborting the run.
+- The returned `FortifyPydanticAgent` is a proxy: it forwards `run` / `run_sync` / `run_stream` / `iter` (and anything else via `__getattr__`) to the underlying `Agent`, wrapping the call in `propagate_attributes(...)` so Langfuse spans carry the caller identity. Global tracing is enabled via `Agent.instrument_all()` on construction.
+
+### Runnable examples
+
+Working scripts in `examples/`:
+
+- `examples/openai.py` — `FortifyRunner` (OpenAI Agents SDK) end-to-end.
+- `examples/langchain.py` — `wrap_langchain_agent` (LangChain) end-to-end with `create_react_agent`.
+- `examples/google.py` — `FortifyRunner` (Google ADK) end-to-end with `InMemorySessionService`.
+- `examples/pydantic_ai.py` — `wrap_pydantic_agent` (Pydantic AI) end-to-end.
+
 ## 🧠 Define Agents In Code
 
 You can define agents directly in Python with `create_agent(...)`.
