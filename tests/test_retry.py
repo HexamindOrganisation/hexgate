@@ -5,7 +5,7 @@ from __future__ import annotations
 import httpx
 import pytest
 
-from coolagents.utils.retry import async_retry, is_retryable_error
+from fortify.utils.retry import async_retry, is_retryable_error
 
 
 @pytest.mark.asyncio

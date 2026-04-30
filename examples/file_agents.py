@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from coolagents import AgentPolicy, create_agent, enforce_policy, register_agent
-from coolagents.tools import edit_file, glob, grep, read_file, write_file
+from fortify import AgentPolicy, create_agent, enforce_policy, register_agent
+from fortify.tools import edit_file, glob, grep, read_file, write_file
 
 
 def _shared_policy() -> AgentPolicy:
@@ -50,7 +50,7 @@ def build_workspace_explorer(
             "Do not propose edits unless the user explicitly asks."
         ),
         session_id=session_id,
-        tags=tags or ["coolagents", "workspace-explorer"],
+        tags=tags or ["fortify", "workspace-explorer"],
     )
 
 
@@ -79,7 +79,7 @@ def build_repo_editor(
             "make focused changes."
         ),
         session_id=session_id,
-        tags=tags or ["coolagents", "repo-editor"],
+        tags=tags or ["fortify", "repo-editor"],
     )
     return enforce_policy(agent, _shared_policy()), handler
 

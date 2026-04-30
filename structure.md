@@ -1,10 +1,10 @@
-# `coolagents` Structure
+# `fortify` Structure
 
-This document summarizes how `coolagents` is structured, how the runtime flows, and what each file is responsible for.
+This document summarizes how `fortify` is structured, how the runtime flows, and what each file is responsible for.
 
 ## High-Level Shape
 
-`coolagents` is a small LangChain-based agent runtime with:
+`fortify` is a small LangChain-based agent runtime with:
 
 - one demo entrypoint
 - one agent factory
@@ -15,20 +15,20 @@ This document summarizes how `coolagents` is structured, how the runtime flows, 
 
 The runtime flow is:
 
-1. `coolagents/demo.py` starts the demo.
-2. `coolagents/setup.py` loads `.env` and validates required keys.
-3. `coolagents/agent/factory.py` builds the agent and Langfuse handler.
-4. The agent uses the system prompt from `coolagents/prompts/agent_system.md`.
-5. The agent can call `coolagents/tools/websearch.py` and `coolagents/tools/fetch.py`.
-6. Tracing is handled through `coolagents/tracing/langfuse.py`.
+1. `fortify/demo.py` starts the demo.
+2. `fortify/setup.py` loads `.env` and validates required keys.
+3. `fortify/agent/factory.py` builds the agent and Langfuse handler.
+4. The agent uses the system prompt from `fortify/prompts/agent_system.md`.
+5. The agent can call `fortify/tools/websearch.py` and `fortify/tools/fetch.py`.
+6. Tracing is handled through `fortify/tracing/langfuse.py`.
 
 ## Directory Layout
 
 ```text
-coolagents/
+fortify/
 ├── pyproject.toml
 ├── structure.md
-└── coolagents/
+└── fortify/
     ├── __init__.py
     ├── demo.py
     ├── setup.py
@@ -62,7 +62,7 @@ Key snippet:
 
 ```toml
 [project]
-name = "coolagents"
+name = "fortify"
 version = "0.1.0"
 requires-python = ">=3.13"
 dependencies = [
@@ -86,9 +86,9 @@ Meaning:
 
 ## Package Files
 
-### `coolagents/__init__.py`
+### `fortify/__init__.py`
 
-This marks `coolagents/` as a Python package.
+This marks `fortify/` as a Python package.
 
 Key snippet:
 
@@ -98,7 +98,7 @@ Key snippet:
 
 Right now it is intentionally minimal.
 
-### `coolagents/setup.py`
+### `fortify/setup.py`
 
 This is the bootstrap layer. It loads environment variables and returns a validated `Settings` object.
 
@@ -120,7 +120,7 @@ Role:
 - create typed settings
 - fail early if required keys are missing
 
-### `coolagents/demo.py`
+### `fortify/demo.py`
 
 This is the runnable demo entrypoint. It shows the happy path for the first agent.
 
@@ -142,11 +142,11 @@ Role:
 - print streaming updates
 - print the Langfuse trace URL if tracing is active
 
-### `coolagents/agent/__init__.py`
+### `fortify/agent/__init__.py`
 
 This marks the `agent/` directory as a package. It currently has no extra logic.
 
-### `coolagents/agent/factory.py`
+### `fortify/agent/factory.py`
 
 This is the core composition file. It wires together the model, tools, prompt, and tracing.
 
@@ -165,7 +165,7 @@ agent = create_deep_agent(
 handler = get_langfuse_handler(
     session_id=session_id,
     user_id=user_id,
-    tags=["coolagents", settings.search_engine, settings.model],
+    tags=["fortify", settings.search_engine, settings.model],
 )
 ```
 
@@ -186,11 +186,11 @@ Responsibilities:
 
 This file is effectively the runtime assembly point.
 
-### `coolagents/config/__init__.py`
+### `fortify/config/__init__.py`
 
 This marks the config folder as a package.
 
-### `coolagents/config/settings.py`
+### `fortify/config/settings.py`
 
 This defines the typed runtime settings model and validates required API keys.
 
@@ -227,7 +227,7 @@ Responsibilities:
 - provide defaults for model and Langfuse host
 - validate the minimum keys needed by the runtime
 
-### `coolagents/prompts/agent_system.md`
+### `fortify/prompts/agent_system.md`
 
 This is the agent’s system prompt, kept outside Python so it is easy to edit separately.
 
@@ -248,11 +248,11 @@ It tells the model:
 
 Keeping prompts in Markdown makes prompt iteration cleaner than embedding long strings in Python.
 
-### `coolagents/tools/__init__.py`
+### `fortify/tools/__init__.py`
 
 This marks the tools folder as a package.
 
-### `coolagents/tools/websearch.py`
+### `fortify/tools/websearch.py`
 
 This implements a Linkup-backed search tool exposed to the agent.
 
@@ -296,7 +296,7 @@ Responsibilities:
 
 One note: this file still contains a fallback `try/except` import for `tool`, unlike `fetch.py`, so the codebase is not fully consistent yet.
 
-### `coolagents/tools/fetch.py`
+### `fortify/tools/fetch.py`
 
 This implements a Tavily-backed URL extraction tool.
 
@@ -341,11 +341,11 @@ Together, `websearch.py` and `fetch.py` give the agent a simple two-step researc
 1. search the web for candidate sources
 2. fetch a specific URL for more detailed extraction
 
-### `coolagents/tracing/__init__.py`
+### `fortify/tracing/__init__.py`
 
 This marks the tracing folder as a package.
 
-### `coolagents/tracing/langfuse.py`
+### `fortify/tracing/langfuse.py`
 
 This file isolates Langfuse integration details so the rest of the app does not have to care about SDK differences.
 
@@ -393,11 +393,11 @@ Responsibilities:
 
 This file is a compatibility boundary. That is useful because vendor SDKs change more often than your own app logic should.
 
-### `coolagents/utils/__init__.py`
+### `fortify/utils/__init__.py`
 
 This marks the utils folder as a package.
 
-### `coolagents/utils/retry.py`
+### `fortify/utils/retry.py`
 
 This provides a lightweight async retry decorator used by the tools.
 
@@ -472,7 +472,7 @@ Storing the system prompt in `prompts/agent_system.md` is a good call. It keeps 
 
 ## Small Gaps / Cleanup Opportunities
 
-- `coolagents/tools/websearch.py` still has the scaffold-style `try/except` import for `tool`, while `fetch.py` now imports it directly.
+- `fortify/tools/websearch.py` still has the scaffold-style `try/except` import for `tool`, while `fetch.py` now imports it directly.
 - `demo.py` uses a hardcoded question; later you may want a CLI arg or interactive prompt.
 - There are no tests yet for settings validation, retry behavior, or tool normalization.
 - The demo path currently assumes all three provider keys are present, even if a future agent might not always need both tools.
@@ -481,4 +481,4 @@ Storing the system prompt in `prompts/agent_system.md` is a good call. It keeps 
 
 If I had to describe the structure in one sentence:
 
-`coolagents` is a compact agent runtime where `demo.py` boots the app, `factory.py` assembles the agent, `settings.py` validates config, `websearch.py` and `fetch.py` provide capabilities, `langfuse.py` handles tracing compatibility, and `retry.py` supports resilient tool calls.
+`fortify` is a compact agent runtime where `demo.py` boots the app, `factory.py` assembles the agent, `settings.py` validates config, `websearch.py` and `fetch.py` provide capabilities, `langfuse.py` handles tracing compatibility, and `retry.py` supports resilient tool calls.

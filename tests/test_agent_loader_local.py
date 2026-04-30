@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 
-from coolagents.agents import loader
+from fortify.agents import loader
 
 
 def _write_agent_dir(agent_dir: Path, *, name: str) -> None:

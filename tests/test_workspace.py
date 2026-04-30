@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from coolagents.runtime import LocalWorkspace, build_sandbox_runtime_config
+from fortify.runtime import LocalWorkspace, build_sandbox_runtime_config
 
 
 def test_local_workspace_generates_sandbox_runtime_config(tmp_path: Path) -> None:

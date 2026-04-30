@@ -7,13 +7,13 @@ from pathlib import Path
 import pytest
 from langchain_core.tools import tool
 
-from coolagents.agent import factory
-from coolagents.agent.security import (
+from fortify.agent import factory
+from fortify.agent.security import (
     enforce_policy,
     with_approval_handler,
     with_before_action,
 )
-from coolagents.security import (
+from fortify.security import (
     AgentPolicy,
     ApprovalRequiredError,
     BaseToolPolicy,

@@ -9,22 +9,22 @@ from typing import Any
 import httpx
 import pytest
 
-from coolagents.agent.factory import create_agent, invoke_agent
-from coolagents.runtime import (
+from fortify.agent.factory import create_agent, invoke_agent
+from fortify.runtime import (
     LocalWorkspace,
     ToolUseContext,
     reset_current_tool_use_context,
     set_current_tool_use_context,
 )
-from coolagents.tools import bash, edit_file, glob, grep, read_file, write_file
-from coolagents.tools.decorators import format_tool_call_label
-from coolagents.tools import agent_tool
-from coolagents.tools.fetch import _get_env_or_raise as get_fetch_env
-from coolagents.tools.fetch import _format_fetch_call
-from coolagents.tools.fetch import fetch
-from coolagents.tools.websearch import _get_env_or_raise as get_search_env
-from coolagents.tools.websearch import _format_web_search_call
-from coolagents.tools.websearch import web_search
+from fortify.tools import bash, edit_file, glob, grep, read_file, write_file
+from fortify.tools.decorators import format_tool_call_label
+from fortify.tools import agent_tool
+from fortify.tools.fetch import _get_env_or_raise as get_fetch_env
+from fortify.tools.fetch import _format_fetch_call
+from fortify.tools.fetch import fetch
+from fortify.tools.websearch import _get_env_or_raise as get_search_env
+from fortify.tools.websearch import _format_web_search_call
+from fortify.tools.websearch import web_search
 
 
 class DummyResponse:
@@ -282,15 +282,15 @@ async def test_agent_tool_injects_tool_use_context_during_agent_run(
             return {"messages": [tool_result["content"]]}
 
     monkeypatch.setattr(
-        "coolagents.agent.factory.create_langchain_agent",
+        "fortify.agent.factory.create_langchain_agent",
         lambda **_kwargs: FakeGraph(),
     )
     monkeypatch.setattr(
-        "coolagents.agent.factory.get_langfuse_handler",
+        "fortify.agent.factory.get_langfuse_handler",
         lambda **_kwargs: "handler",
     )
     monkeypatch.setattr(
-        "coolagents.agent.factory.get_langfuse_runnable_config",
+        "fortify.agent.factory.get_langfuse_runnable_config",
         lambda _handler: {"callbacks": ["handler"]},
     )
 
@@ -335,15 +335,15 @@ async def test_agent_tool_defaults_to_local_workspace_during_run(
             return {"messages": [tool_result["workspace_root"]]}
 
     monkeypatch.setattr(
-        "coolagents.agent.factory.create_langchain_agent",
+        "fortify.agent.factory.create_langchain_agent",
         lambda **_kwargs: FakeGraph(),
     )
     monkeypatch.setattr(
-        "coolagents.agent.factory.get_langfuse_handler",
+        "fortify.agent.factory.get_langfuse_handler",
         lambda **_kwargs: "handler",
     )
     monkeypatch.setattr(
-        "coolagents.agent.factory.get_langfuse_runnable_config",
+        "fortify.agent.factory.get_langfuse_runnable_config",
         lambda _handler: {"callbacks": ["handler"]},
     )
     monkeypatch.chdir(tmp_path)
