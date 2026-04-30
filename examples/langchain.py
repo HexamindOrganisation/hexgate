@@ -37,7 +37,7 @@ async def main():
             user_role="member",
             session_id="langchain_session_1",
         ),
-        api_key="sk-...",  # or rely on FORTIFY_API_KEY
+        api_key="sk-...",  # or rely on FORTIFY_KEY
     )
 
     result = await agent.ainvoke(

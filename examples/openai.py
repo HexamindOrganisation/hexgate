@@ -27,7 +27,7 @@ async def main():
         input="What's the weather in Cherbourg?",
         user_context=UserContext(
             user_id="openai_user_1",
-            session_id="session_1",
+            session_id="openai_session_1",
             user_role="member",
         ),
     )

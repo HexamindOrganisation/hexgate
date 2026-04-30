@@ -17,6 +17,7 @@ def build_agent_policy(
     tool_names: list[str],
 ) -> AgentPolicy:
     """Build the relevant agent policy for the user"""
+    # TODO: Implement the logic to build the agent policy based on the user context
     # mint_token = retrieve_mint_token(api_key, context, agent_name)
     # policy = retrieve_policy(mint_token)
     return AgentPolicy(
@@ -70,7 +71,6 @@ def wrap_pydantic_agent(
         user_context: The user context
         api_key: The Fortify API key
     """
-    Agent.instrument_all()
     resolved_key = api_key or os.getenv("FORTIFY_KEY")
     if not resolved_key:
         raise ValueError(

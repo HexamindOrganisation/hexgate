@@ -15,6 +15,7 @@ def build_agent_policy(
     tool_names: list[str],
 ) -> AgentPolicy:
     """Build the relevant agent policy for the user"""
+    # TODO: Implement the logic to build the agent policy based on the user context
     # mint_token = retrieve_mint_token(api_key, context, agent_name)
     # policy = retrieve_policy(mint_token)
     return AgentPolicy(
