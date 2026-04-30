@@ -23,6 +23,7 @@ from pydantic import BaseModel
 from fortify.runtime import (
     LocalWorkspace,
     ToolUseContext,
+    Workspace,
     reset_current_tool_use_context,
     set_current_tool_use_context,
 )
@@ -182,16 +183,24 @@ def _resolve_tool_use_context(
     agent: "CoolAgent",
     tool_use_context: ToolUseContext | None,
 ) -> ToolUseContext:
-    """Return the runtime tool context for a run."""
+    """Return the runtime tool context for a run.
+
+    Resolution order for the workspace:
+    1. ``tool_use_context.workspace`` — caller-supplied at invocation time.
+    2. ``agent.workspace`` — wired in at ``create_agent(...)``-time.
+    3. ``LocalWorkspace(Path.cwd())`` — last-resort default.
+    """
     agent_name = getattr(agent, "name", None)
+    agent_workspace = getattr(agent, "workspace", None)
+    fallback_workspace = agent_workspace or LocalWorkspace(Path.cwd())
     if tool_use_context is not None:
         if tool_use_context.agent_name is None:
             tool_use_context.agent_name = agent_name
         if tool_use_context.workspace is None:
-            tool_use_context.workspace = LocalWorkspace(Path.cwd())
+            tool_use_context.workspace = fallback_workspace
         return tool_use_context
     return ToolUseContext(
-        workspace=LocalWorkspace(Path.cwd()),
+        workspace=fallback_workspace,
         agent_name=agent_name,
     )
 
@@ -217,6 +226,7 @@ class CoolAgent:
         debug: bool = False,
         name: str | None = None,
         cache: BaseCache[Any] | None = None,
+        workspace: Workspace | None = None,
     ) -> None:
         self.graph = graph
         self.model = model
@@ -233,6 +243,7 @@ class CoolAgent:
         self.debug = debug
         self.name = name
         self.cache = cache
+        self.workspace = workspace
 
     async def ainvoke(self, payload: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
         """Delegate invocation to the underlying graph."""
@@ -283,6 +294,7 @@ class CoolAgent:
             debug=self.debug,
             name=self.name,
             cache=self.cache,
+            workspace=self.workspace,
         )
 
     def enforce_policy(self, policy: object) -> Self:
@@ -352,6 +364,7 @@ def create_agent(
     debug: bool = False,
     name: str | None = None,
     cache: BaseCache[Any] | None = None,
+    workspace: Workspace | None = None,
 ) -> tuple[AgentGraph, CallbackHandler]:
     """Create a fortify agent as a thin wrapper over LangChain."""
     resolved_system_prompt = (
@@ -391,6 +404,7 @@ def create_agent(
         debug=debug,
         name=name,
         cache=cache,
+        workspace=workspace,
     )
 
     handler = get_langfuse_handler(
