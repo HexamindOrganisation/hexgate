@@ -14,6 +14,20 @@ def _resolve_runtime_path(workspace_root: Path, path: str | Path) -> Path:
     return candidate.resolve()
 
 
+def _resolve_socket_path(workspace_root: Path, path: str | Path) -> Path:
+    """Resolve a Unix-socket path without following symlinks.
+
+    Sockets like ``/var/run/docker.sock`` are commonly symlinked (e.g. to
+    ``$HOME/.docker/run/docker.sock`` on macOS). The operator's literal is
+    what programs pass to ``connect()``; canonicalizing here would cause
+    the sandbox filter to miss against the user-space syscall argument.
+    """
+    candidate = Path(path).expanduser()
+    if not candidate.is_absolute():
+        candidate = workspace_root / candidate
+    return candidate
+
+
 def _normalize_domain_list(domains: Sequence[str]) -> list[str]:
     """Return unique domain entries while preserving order."""
     seen: set[str] = set()
@@ -58,8 +72,17 @@ def build_sandbox_runtime_config(
     deny_write_paths: Sequence[str | Path] = (),
     allowed_domains: Sequence[str] = (),
     denied_domains: Sequence[str] = (),
+    allow_unix_sockets: Sequence[str | Path] = (),
+    allow_local_binding: bool = False,
 ) -> dict[str, object]:
-    """Build an Anthropic sandbox-runtime config from workspace intent."""
+    """Build an Anthropic sandbox-runtime config from workspace intent.
+
+    ``allow_unix_sockets`` lists Unix-domain socket paths that the sandbox
+    should permit (e.g. ``/var/run/docker.sock``); on Linux ``srt`` blocks
+    ``AF_UNIX`` socket creation by default. ``allow_local_binding`` opts
+    into letting sandboxed processes bind to localhost ports. Both default
+    to the most restrictive value so widening the boundary is opt-in.
+    """
     resolved_root = Path(workspace_root).expanduser().resolve()
     resolved_extra_reads = [
         _resolve_runtime_path(resolved_root, path) for path in extra_read_paths
@@ -69,6 +92,9 @@ def build_sandbox_runtime_config(
     ]
     resolved_deny_writes = [
         _resolve_runtime_path(resolved_root, path) for path in deny_write_paths
+    ]
+    resolved_unix_sockets = [
+        _resolve_socket_path(resolved_root, path) for path in allow_unix_sockets
     ]
 
     return {
@@ -83,5 +109,7 @@ def build_sandbox_runtime_config(
         "network": {
             "allowedDomains": _normalize_domain_list(allowed_domains),
             "deniedDomains": _normalize_domain_list(denied_domains),
+            "allowUnixSockets": _normalize_path_list(resolved_unix_sockets),
+            "allowLocalBinding": allow_local_binding,
         },
     }

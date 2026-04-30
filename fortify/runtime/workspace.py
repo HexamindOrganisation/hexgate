@@ -71,6 +71,8 @@ class LocalWorkspace(Workspace):
         deny_write_paths: Sequence[str | Path] = (),
         allowed_domains: Sequence[str] = (),
         denied_domains: Sequence[str] = (),
+        allow_unix_sockets: Sequence[str | Path] = (),
+        allow_local_binding: bool = False,
     ) -> None:
         self._root_dir = Path(root_dir).expanduser().resolve()
         self._extra_read_paths = tuple(extra_read_paths)
@@ -78,6 +80,8 @@ class LocalWorkspace(Workspace):
         self._deny_write_paths = tuple(deny_write_paths)
         self._allowed_domains = tuple(allowed_domains)
         self._denied_domains = tuple(denied_domains)
+        self._allow_unix_sockets = tuple(allow_unix_sockets)
+        self._allow_local_binding = allow_local_binding
 
     @property
     def root_dir(self) -> Path:
@@ -149,6 +153,8 @@ class LocalWorkspace(Workspace):
             deny_write_paths=self._deny_write_paths,
             allowed_domains=self._allowed_domains,
             denied_domains=self._denied_domains,
+            allow_unix_sockets=self._allow_unix_sockets,
+            allow_local_binding=self._allow_local_binding,
         )
 
     def _truncate_command_output(self, output: str) -> tuple[str, bool]:
