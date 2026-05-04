@@ -41,16 +41,16 @@ async def main():
     agent = wrap_langchain_agent(
         agent=agent,
         tools=TOOLS,  # same list passed to create_deep_agent — wrapped in place
+        api_key="sk-...",  # or rely on FORTIFY_KEY
+    )
+
+    result = await agent.ainvoke(
+        {"messages": [{"role": "user", "content": "What is the weather in Tokyo?"}]},
         user_context=UserContext(
             user_id="deepagent_user_1",
             user_role="member",
             session_id="deepagent_session_1",
         ),
-        api_key="sk-...",  # or rely on FORTIFY_KEY
-    )
-
-    result = await agent.ainvoke(
-        {"messages": [{"role": "user", "content": "What is the weather in Tokyo?"}]}
     )
     print(result)
 

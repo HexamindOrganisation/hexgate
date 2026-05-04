@@ -152,7 +152,7 @@ The four integrations differ in shape because the underlying SDKs do:
 | | OpenAI Agents SDK | LangChain / LangGraph | Google ADK | Pydantic AI |
 | --- | --- | --- | --- | --- |
 | Entry point | `FortifyRunner` (replaces `Runner`) | `wrap_langchain_agent` (returns a proxy) | `FortifyRunner` (replaces `Runner`) | `wrap_pydantic_agent` (returns a proxy) |
-| Tool wrapping | Copies each `FunctionTool`, replaces `on_invoke_tool` with a guarded version | Mutates each `BaseTool` in place, replaces `func`/`coroutine`, sets `handle_tool_error=True` | Copies each `BaseTool` (normalizing bare callables to `FunctionTool`), replaces `run_async` with a guarded version | Copies each `Tool` and overrides `function_schema.call` with a guarded version |
+| Tool wrapping | Copies each `FunctionTool`, replaces `on_invoke_tool` with a guarded version | Mutates each `BaseTool` in place, replaces `func`/`coroutine` with contextvar-driven gates, sets `handle_tool_error=True` | Copies each `BaseTool` (normalizing bare callables to `FunctionTool`), replaces `run_async` with a guarded version | Copies each `Tool` and overrides `function_schema.call` with a guarded version |
 | Denial behavior | Guard returns the denial text as tool output | Guard raises `ToolDeniedError` (a `ToolException`); LangChain converts it to a `ToolMessage` | Guard returns the denial text as tool output | Guard raises `ToolDeniedError` (a `ModelRetry`); pydantic_ai surfaces it back to the model as a tool-result message |
 | Tracing | `OpenAIAgentsInstrumentor` + `propagate_attributes` | Langfuse `CallbackHandler` injected into each call's `RunnableConfig` + `propagate_attributes` | `GoogleADKInstrumentor` + `propagate_attributes` | `Agent.instrument_all()` + `propagate_attributes` |
 
@@ -213,7 +213,7 @@ What happens under the hood:
 
 ### LangChain / LangGraph — `wrap_langchain_agent`
 
-`wrap_langchain_agent` mutates the tools you pass in (so the same instances inside the compiled graph become policy-gated) and returns a `FortifyLangchainAgent` proxy that injects a Langfuse callback into every `invoke` / `ainvoke` / `stream` / `astream` / `astream_events` call.
+`wrap_langchain_agent` mutates the tools you pass in (so the same instances inside the compiled graph become policy-gated) and returns a `FortifyLangchainAgent` proxy that injects a Langfuse callback into every `invoke` / `ainvoke` / `stream` / `astream` / `astream_events` call. The `user_context` is supplied **per call**, not at wrap time, so a single wrapped agent can serve many users concurrently — each call resolves its own `AgentPolicy` and identity propagation.
 
 ```python
 import asyncio
@@ -250,16 +250,16 @@ async def main():
     agent = wrap_langchain_agent(
         agent=graph,
         tools=TOOLS,          # same list passed to create_react_agent — wrapped in place
-        user_context=UserContext(
-            user_id="user_42",
-            user_role="member",
-            session_id="session_abc",
-        ),
         api_key="sk-...",     # or rely on FORTIFY_KEY
     )
 
     result = await agent.ainvoke(
-        {"messages": [{"role": "user", "content": "What is the weather in Tokyo?"}]}
+        {"messages": [{"role": "user", "content": "What is the weather in Tokyo?"}]},
+        user_context=UserContext(
+            user_id="langchain_user_1",
+            user_role="member",
+            session_id="session_abc",
+        ),
     )
     print(result)
 
@@ -270,9 +270,10 @@ if __name__ == "__main__":
 
 What happens under the hood:
 
-- `wrap_langchain_agent` builds the `AgentPolicy` and calls `wrap_tools(tools, policy)`. Each tool's `func` and `coroutine` are replaced with guarded versions, and `handle_tool_error` is forced to `True`.
-- A denied call raises `ToolDeniedError` (a `ToolException`); LangChain catches it because of `handle_tool_error=True` and emits a `ToolMessage` with the denial text — the tool body never runs.
-- The returned `FortifyLangchainAgent` is a proxy: it forwards every method to the underlying `CompiledStateGraph` but wraps the call in `propagate_attributes(...)` and merges a Langfuse `CallbackHandler` into the `RunnableConfig.callbacks`. Anything not explicitly proxied falls through via `__getattr__`.
+- `wrap_langchain_agent` calls `wrap_tools(tools)`, which replaces each tool's `func` and `coroutine` with guards that read the active policy from a `ContextVar` at call time. `handle_tool_error` is forced to `True`. Wrapping is idempotent — the same tool instance can be passed through `wrap_langchain_agent` multiple times without double-installing.
+- Each invocation method on `FortifyLangchainAgent` takes `user_context=` and, before delegating to the underlying `CompiledStateGraph`, resolves an `AgentPolicy` for `(user_context, agent.name, tool_names)` and binds it to the contextvar via `active_policy(...)`. The contextvar is per-task, so concurrent `ainvoke` calls for different users do not see each other's policies.
+- A denied call raises `ToolDeniedError` (a `ToolException`); LangChain catches it because of `handle_tool_error=True` and emits a `ToolMessage` with the denial text — the tool body never runs. If a guarded tool is invoked outside any `active_policy(...)` scope (i.e. without going through the wrapped agent), it denies by default.
+- The wrapper also enters `propagate_attributes(user_id=..., session_id=..., metadata={"user_role": ...})` for the duration of the call and merges a Langfuse `CallbackHandler` into the `RunnableConfig.callbacks`. Anything not explicitly proxied falls through via `__getattr__`.
 
 ### Google ADK — `FortifyRunner`
 
