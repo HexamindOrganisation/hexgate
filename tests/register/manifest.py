@@ -1,7 +1,8 @@
-from fortify_cli.register.models import AgentFramework, InputProperty, InputSchema, ToolDefinition
-from fortify_cli.register.models import AgentManifest
+from fortify_cli.register.manifest import create_manifest
+from fortify_cli.register.models import AgentManifest, AgentFramework, InputProperty, InputSchema, ToolDefinition
 from fortify_cli.register.openai import create_openai_manifest
 from fortify_cli.register.google import create_google_manifest
+from fortify_cli.register.langchain import create_langchain_manifest
 from fortify_cli.register.pydantic_ai import create_pydantic_ai_manifest
 
 def test_agent_manifest_schema():
@@ -9,7 +10,7 @@ def test_agent_manifest_schema():
     manifest = AgentManifest(
         name="test-agent",
         description="A test agent",
-        framework="fortify",
+        framework=AgentFramework.FORTIFY,
         tools=[],
     )
     assert manifest.name == "test-agent"
@@ -54,6 +55,10 @@ def test_openai_manifest_schema():
     assert isinstance(manifest, AgentManifest)
     assert manifest == expected_manifest
 
+    manifest = create_manifest(agent, description="A test agent")
+    assert isinstance(manifest, AgentManifest)
+    assert manifest == expected_manifest
+
 def test_google_manifest_schema():
     """Test the schema of the Google ADK manifest."""
     from google.adk.agents import Agent
@@ -92,6 +97,10 @@ def test_google_manifest_schema():
     assert isinstance(manifest, AgentManifest)
     assert manifest == expected_manifest
 
+    manifest = create_manifest(agent, description="A test agent")
+    assert isinstance(manifest, AgentManifest)
+    assert manifest == expected_manifest
+
 def test_pydantic_ai_manifest_schema():
     """Test the schema of the Pydantic AI manifest."""
     from pydantic_ai import Agent
@@ -123,5 +132,55 @@ def test_pydantic_ai_manifest_schema():
         )],
     )
     manifest = create_pydantic_ai_manifest(agent)
+    assert isinstance(manifest, AgentManifest)
+    assert manifest == expected_manifest
+
+    manifest = create_manifest(agent, description="A test agent")
+    assert isinstance(manifest, AgentManifest)
+    assert manifest == expected_manifest
+
+def test_langchain_manifest_schema():
+    """Test the schema of the LangChain manifest."""
+    from langchain_core.tools import tool
+    from langgraph.graph import END, START, StateGraph
+
+    @tool
+    def example_tool(example_input: str) -> str:
+        """A test tool."""
+        return f"Hello, {example_input}! This is a test tool."
+
+    builder = StateGraph(dict)
+    builder.add_node("noop", lambda state: state)
+    builder.add_edge(START, "noop")
+    builder.add_edge("noop", END)
+    graph = builder.compile(name="test-agent")
+
+    expected_manifest = AgentManifest(
+        name="test-agent",
+        description="A test agent",
+        framework=AgentFramework.LANGCHAIN,
+        tools=[ToolDefinition(
+            name="example_tool",
+            description="A test tool.",
+            input_schema=InputSchema(
+                properties={
+                    "example_input": InputProperty(
+                        title="Example Input",
+                        type="string",
+                    ),
+                },
+                required=["example_input"],
+            ),
+        )],
+    )
+    manifest = create_langchain_manifest(
+        graph,
+        [example_tool],
+        description="A test agent",
+    )
+    assert isinstance(manifest, AgentManifest)
+    assert manifest == expected_manifest
+
+    manifest = create_manifest(graph, tools=[example_tool], description="A test agent")
     assert isinstance(manifest, AgentManifest)
     assert manifest == expected_manifest

@@ -12,12 +12,12 @@ from agents import Agent
 from agents.tool import FunctionTool
 
 
-def create_openai_manifest(agent: Agent) -> AgentManifest:
+def create_openai_manifest(agent: Agent, *, description: str | None = None) -> AgentManifest:
     """Build an AgentManifest from an OpenAI Agents SDK agent."""
     instructions = agent.instructions if isinstance(agent.instructions, str) else None
     return AgentManifest(
         name=agent.name,
-        description=instructions,
+        description=description or instructions,
         framework=AgentFramework.OPENAI,
         tools=[_to_tool_definition(t) for t in agent.tools],
     )

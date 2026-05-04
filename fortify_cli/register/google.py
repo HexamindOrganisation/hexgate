@@ -14,7 +14,7 @@ from google.adk.agents import Agent
 from google.adk.tools.base_tool import BaseTool
 
 
-def create_google_manifest(agent: Agent) -> AgentManifest:
+def create_google_manifest(agent: Agent, *, description: str | None = None) -> AgentManifest:
     """Build an AgentManifest from a Google ADK agent."""
     from google.adk.tools.function_tool import FunctionTool
 
@@ -24,10 +24,13 @@ def create_google_manifest(agent: Agent) -> AgentManifest:
         definition = _to_tool_definition(tool)
         if definition is not None:
             tools.append(definition)
+    
+    # resolve description from agent or provided description
+    description = description or agent.description or None
 
     return AgentManifest(
         name=agent.name,
-        description=agent.description or None,
+        description=description,
         framework=AgentFramework.GOOGLE,
         tools=tools,
     )

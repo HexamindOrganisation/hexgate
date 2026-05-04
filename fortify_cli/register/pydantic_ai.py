@@ -12,10 +12,10 @@ from pydantic_ai import Agent
 from pydantic_ai.tools import Tool
 
 
-def create_pydantic_ai_manifest(agent: Agent) -> AgentManifest:
+def create_pydantic_ai_manifest(agent: Agent, *, description: str | None = None) -> AgentManifest:
     """Build an AgentManifest from a Pydantic AI agent."""
-    instructions = agent.instructions if isinstance(agent.instructions, str) else None
-    description = agent.description or instructions
+    # resolve description from parameters or agent
+    description = description or agent.description or agent.instructions or None
 
     # Build the tool definitions from the toolsets
     tools: list[ToolDefinition] = []
