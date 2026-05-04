@@ -21,7 +21,6 @@ dependencies = [
     "rich>=13.9.4",
     "websockets>=13.0",
     "openai-agents>=0.0.10",
-    "logfire>=3.0",
     "langgraph>=0.2",
     "nest_asyncio>=1.6",
     "openinference-instrumentation-openai-agents>=0.1",
@@ -29,7 +28,6 @@ dependencies = [
     "google-genai>=1.0",
     "litellm>=1.50",
     "openinference-instrumentation-google-adk>=0.1",
-    "deepagents>=0.0.1",
     "pydantic-ai-slim>=1.88.0",
 ]
 

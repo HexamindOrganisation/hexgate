@@ -1,3 +1,4 @@
+# Requires: pip install deepagents
 import asyncio
 from dotenv import load_dotenv
 from deepagents import create_deep_agent
