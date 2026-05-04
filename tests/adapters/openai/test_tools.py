@@ -1,0 +1,231 @@
+"""Tests for the OpenAI Agents adapter policy gate on tools."""
+
+from __future__ import annotations
+
+from typing import Any
+
+import pytest
+from agents import FunctionTool
+
+from fortify.adapters.openai.tools import (
+    _denial_message,
+    _parse_args,
+    wrap_tool,
+    wrap_tools,
+)
+from fortify.security import AgentPolicy
+
+
+def _allow_policy(tool_name: str = "echo") -> AgentPolicy:
+    """Build a policy that allows a single named tool, denying everything else."""
+    return AgentPolicy.model_validate(
+        {
+            "default_policy": {"mode": "deny"},
+            "tools": {tool_name: {"mode": "allow"}},
+        }
+    )
+
+
+def _deny_policy() -> AgentPolicy:
+    """Build a policy that denies every tool by default."""
+    return AgentPolicy.model_validate({"default_policy": {"mode": "deny"}})
+
+
+def _approval_required_policy(tool_name: str = "echo") -> AgentPolicy:
+    """Build a policy where the named tool requires approval."""
+    return AgentPolicy.model_validate(
+        {
+            "default_policy": {"mode": "deny"},
+            "tools": {tool_name: {"mode": "approval_required"}},
+        }
+    )
+
+
+def _make_tool(name: str = "echo", calls: list[Any] | None = None) -> FunctionTool:
+    """Build a minimal FunctionTool that records every invocation."""
+    record: list[Any] = calls if calls is not None else []
+
+    async def on_invoke(ctx: Any, raw_args: str) -> str:
+        record.append({"ctx": ctx, "args": raw_args})
+        return f"invoked:{raw_args}"
+
+    return FunctionTool(
+        name=name,
+        description="Echo tool",
+        params_json_schema={
+            "type": "object",
+            "properties": {"text": {"type": "string"}},
+            "required": ["text"],
+        },
+        on_invoke_tool=on_invoke,
+    )
+
+
+def test_denial_message_includes_tool_name() -> None:
+    """The denial message identifies the blocked tool by name."""
+    msg = _denial_message("read_file")
+
+    assert "read_file" in msg
+    assert "denied" in msg
+    assert "not executed" in msg
+
+
+def test_parse_args_returns_none_for_empty_string() -> None:
+    """Treat an empty payload as 'no parsable arguments'."""
+    assert _parse_args("") is None
+
+
+def test_parse_args_returns_none_for_invalid_json() -> None:
+    """Tolerate junk payloads by returning None."""
+    assert _parse_args("not json") is None
+
+
+def test_parse_args_returns_none_for_non_object_json() -> None:
+    """Only object payloads count — lists and scalars yield None."""
+    assert _parse_args("[1, 2, 3]") is None
+    assert _parse_args('"just a string"') is None
+    assert _parse_args("42") is None
+
+
+def test_parse_args_parses_object_payload() -> None:
+    """Round-trip a JSON object into a dict for policy checks."""
+    assert _parse_args('{"text": "hi", "n": 1}') == {"text": "hi", "n": 1}
+
+
+def test_wrap_tool_rejects_non_function_tool() -> None:
+    """Refuse to wrap anything that is not a FunctionTool."""
+
+    class NotAFunctionTool:
+        name = "fake"
+
+    with pytest.raises(TypeError, match="FunctionTool"):
+        wrap_tool(NotAFunctionTool(), _allow_policy())  # type: ignore[arg-type]
+
+
+def test_wrap_tool_returns_a_distinct_copy() -> None:
+    """wrap_tool returns a new FunctionTool instance, leaving the original alone."""
+    original = _make_tool()
+    original_invoke = original.on_invoke_tool
+
+    wrapped = wrap_tool(original, _allow_policy())
+
+    assert wrapped is not original
+    assert wrapped.on_invoke_tool is not original_invoke
+    assert original.on_invoke_tool is original_invoke
+
+
+def test_wrap_tool_preserves_metadata() -> None:
+    """The wrapped tool keeps name, description, and schema for the model."""
+    original = _make_tool("custom_tool")
+
+    wrapped = wrap_tool(original, _allow_policy("custom_tool"))
+
+    assert wrapped.name == "custom_tool"
+    assert wrapped.description == original.description
+    assert wrapped.params_json_schema == original.params_json_schema
+
+
+@pytest.mark.asyncio
+async def test_wrapped_tool_returns_denial_message_when_policy_denies() -> None:
+    """A deny-mode policy short-circuits to the denial string instead of raising."""
+    calls: list[Any] = []
+    wrapped = wrap_tool(_make_tool(calls=calls), _deny_policy())
+
+    result = await wrapped.on_invoke_tool(None, '{"text": "hi"}')
+
+    assert isinstance(result, str)
+    assert "denied" in result
+    assert "echo" in result
+    assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_wrapped_tool_returns_denial_message_when_policy_requires_approval() -> (
+    None
+):
+    """approval_required is treated as denied — the underlying tool never runs."""
+    calls: list[Any] = []
+    wrapped = wrap_tool(_make_tool(calls=calls), _approval_required_policy())
+
+    result = await wrapped.on_invoke_tool(None, '{"text": "hi"}')
+
+    assert "denied" in result
+    assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_wrapped_tool_invokes_original_when_policy_allows() -> None:
+    """An allow-mode policy forwards to the original on_invoke_tool callable."""
+    calls: list[Any] = []
+    wrapped = wrap_tool(_make_tool(calls=calls), _allow_policy())
+
+    result = await wrapped.on_invoke_tool("ctx-sentinel", '{"text": "hi"}')
+
+    assert result == 'invoked:{"text": "hi"}'
+    assert calls == [{"ctx": "ctx-sentinel", "args": '{"text": "hi"}'}]
+
+
+@pytest.mark.asyncio
+async def test_wrapped_tool_handles_unparseable_arguments() -> None:
+    """Junk argument payloads still go through the policy; a valid policy lets them run."""
+    calls: list[Any] = []
+    wrapped = wrap_tool(_make_tool(calls=calls), _allow_policy())
+
+    result = await wrapped.on_invoke_tool(None, "not-json")
+
+    assert result == "invoked:not-json"
+    assert calls and calls[0]["args"] == "not-json"
+
+
+@pytest.mark.asyncio
+async def test_original_tool_is_not_mutated_by_wrap_tool() -> None:
+    """The original tool can still be invoked directly with its original behavior."""
+    calls: list[Any] = []
+    original = _make_tool(calls=calls)
+
+    wrap_tool(original, _deny_policy())
+
+    result = await original.on_invoke_tool("ctx", '{"text": "hi"}')
+    assert result == 'invoked:{"text": "hi"}'
+    assert len(calls) == 1
+
+
+def test_wrap_tools_returns_distinct_list_of_copies() -> None:
+    """wrap_tools returns a fresh list of fresh wrapped copies."""
+    originals = [_make_tool("a"), _make_tool("b")]
+    policy = AgentPolicy.model_validate(
+        {
+            "default_policy": {"mode": "deny"},
+            "tools": {"a": {"mode": "allow"}, "b": {"mode": "allow"}},
+        }
+    )
+
+    wrapped = wrap_tools(originals, policy)
+
+    assert wrapped is not originals
+    assert len(wrapped) == 2
+    for original_tool, wrapped_tool in zip(originals, wrapped):
+        assert wrapped_tool is not original_tool
+        assert wrapped_tool.name == original_tool.name
+
+
+@pytest.mark.asyncio
+async def test_wrap_tools_isolates_policy_decisions_per_tool() -> None:
+    """Each wrapped tool follows its own per-name decision under the same policy."""
+    originals = [_make_tool("tool_a"), _make_tool("tool_b")]
+    policy = AgentPolicy.model_validate(
+        {
+            "default_policy": {"mode": "deny"},
+            "tools": {
+                "tool_a": {"mode": "allow"},
+                "tool_b": {"mode": "deny"},
+            },
+        }
+    )
+    [tool_a, tool_b] = wrap_tools(originals, policy)
+
+    allowed = await tool_a.on_invoke_tool(None, '{"text": "x"}')
+    denied = await tool_b.on_invoke_tool(None, '{"text": "x"}')
+
+    assert allowed == 'invoked:{"text": "x"}'
+    assert "denied" in denied
