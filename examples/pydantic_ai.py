@@ -23,15 +23,17 @@ async def main():
 
     agent = wrap_pydantic_agent(
         agent=agent,
+        api_key="sk-...",  # or rely on FORTIFY_KEY
+    )
+
+    result = await agent.run(
+        "What is the weather in Tokyo?",
         user_context=UserContext(
             user_id="pydantic_ai_user_1",
             user_role="member",
             session_id="pydantic_ai_session_1",
         ),
-        api_key="sk-...",  # or rely on FORTIFY_KEY
     )
-
-    result = await agent.run("What is the weather in Tokyo?")
     print(result.output)
 
 

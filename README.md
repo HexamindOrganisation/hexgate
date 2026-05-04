@@ -152,7 +152,7 @@ The four integrations differ in shape because the underlying SDKs do:
 | | OpenAI Agents SDK | LangChain / LangGraph | Google ADK | Pydantic AI |
 | --- | --- | --- | --- | --- |
 | Entry point | `FortifyRunner` (replaces `Runner`) | `wrap_langchain_agent` (returns a proxy) | `FortifyRunner` (replaces `Runner`) | `wrap_pydantic_agent` (returns a proxy) |
-| Tool wrapping | Copies each `FunctionTool`, replaces `on_invoke_tool` with a guarded version | Mutates each `BaseTool` in place, replaces `func`/`coroutine` with contextvar-driven gates, sets `handle_tool_error=True` | Copies each `BaseTool` (normalizing bare callables to `FunctionTool`), replaces `run_async` with a guarded version | Copies each `Tool` and overrides `function_schema.call` with a guarded version |
+| Tool wrapping | Copies each `FunctionTool`, replaces `on_invoke_tool` with a guarded version | Mutates each `BaseTool` in place, replaces `func`/`coroutine` with contextvar-driven gates, sets `handle_tool_error=True` | Copies each `BaseTool` (normalizing bare callables to `FunctionTool`), replaces `run_async` with a guarded version | Copies each `Tool` and overrides `function_schema.call` with a contextvar-driven gate |
 | Denial behavior | Guard returns the denial text as tool output | Guard raises `ToolDeniedError` (a `ToolException`); LangChain converts it to a `ToolMessage` | Guard returns the denial text as tool output | Guard raises `ToolDeniedError` (a `ModelRetry`); pydantic_ai surfaces it back to the model as a tool-result message |
 | Tracing | `OpenAIAgentsInstrumentor` + `propagate_attributes` | Langfuse `CallbackHandler` injected into each call's `RunnableConfig` + `propagate_attributes` | `GoogleADKInstrumentor` + `propagate_attributes` | `Agent.instrument_all()` + `propagate_attributes` |
 
@@ -356,7 +356,7 @@ What happens under the hood:
 
 ### Pydantic AI — `wrap_pydantic_agent`
 
-`wrap_pydantic_agent` returns a `FortifyPydanticAgent` proxy backed by a clone of the original agent whose tools are gated by the policy. Tools registered via the `Agent(...)` constructor or via `@agent.tool` / `@agent.tool_plain` are all picked up.
+`wrap_pydantic_agent` returns a `FortifyPydanticAgent` proxy backed by a clone of the original agent whose tools are gated by the policy. Tools registered via the `Agent(...)` constructor or via `@agent.tool` / `@agent.tool_plain` are all picked up. The `user_context` is supplied **per call**, not at wrap time, so a single wrapped agent can serve many users concurrently — each call resolves its own `AgentPolicy` and identity propagation.
 
 ```python
 import asyncio
@@ -384,15 +384,17 @@ async def main():
 
     agent = wrap_pydantic_agent(
         agent=agent,
+        api_key="sk-...",  # or rely on FORTIFY_KEY
+    )
+
+    result = await agent.run(
+        "What is the weather in Tokyo?",
         user_context=UserContext(
             user_id="pydantic_ai_user_1",
             user_role="member",
             session_id="pydantic_ai_session_1",
         ),
-        api_key="sk-...",  # or rely on FORTIFY_KEY
     )
-
-    result = await agent.run("What is the weather in Tokyo?")
     print(result.output)
 
 
@@ -402,9 +404,10 @@ if __name__ == "__main__":
 
 What happens under the hood:
 
-- `wrap_pydantic_agent` reads tools off the agent's internal `_function_toolset`, builds an `AgentPolicy` for `(user_context, agent.name, tool_names)`, and returns a shallow-copied agent whose toolset holds policy-gated tool copies — your original `agent` is untouched, so it can be reused or wrapped again with a different user/policy independently.
-- Each tool copy overrides `function_schema.call` with a guarded version. On deny, the guard raises `ToolDeniedError` (a `ModelRetry`); pydantic_ai surfaces it back to the model as a tool-result message instead of aborting the run.
-- The returned `FortifyPydanticAgent` is a proxy: it forwards `run` / `run_sync` / `run_stream` / `iter` (and anything else via `__getattr__`) to the underlying `Agent`, wrapping the call in `propagate_attributes(...)` so Langfuse spans carry the caller identity. Global tracing is enabled via `Agent.instrument_all()` on construction.
+- `wrap_pydantic_agent` reads tools off the agent's internal `_function_toolset`, copies each tool with a guarded `function_schema.call` that reads the active policy from a `ContextVar` at call time, and returns a shallow-copied agent whose toolset holds those gated copies — your original `agent` is untouched, so it can be reused or wrapped again independently.
+- Each invocation method on `FortifyPydanticAgent` (`run` / `run_sync` / `run_stream` / `iter`) takes `user_context=` and, before delegating to the underlying `Agent`, resolves an `AgentPolicy` for `(user_context, agent.name, tool_names)` and binds it to the contextvar via `active_policy(...)`. The contextvar is per-task, so concurrent `run` calls for different users do not see each other's policies.
+- A denied call raises `ToolDeniedError` (a `ModelRetry`); pydantic_ai surfaces it back to the model as a tool-result message instead of aborting the run. If a guarded tool is invoked outside any `active_policy(...)` scope (i.e. without going through the wrapped agent), it denies by default.
+- Identity propagation uses `propagate_attributes(...)` so Langfuse spans carry the caller identity. Global tracing is enabled via `Agent.instrument_all()` on construction.
 
 ### Runnable examples
 

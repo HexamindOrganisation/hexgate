@@ -4,25 +4,8 @@ import os
 from pydantic_ai import Agent
 from pydantic_ai.tools import Tool
 
-from fortify.user_context import UserContext
-from fortify.security import AgentPolicy, BaseToolPolicy
 from fortify.adapters.pydantic_ai.agent import FortifyPydanticAgent
 from fortify.adapters.pydantic_ai.tools import wrap_tools
-
-
-def build_agent_policy(
-    api_key: str,
-    context: UserContext,
-    agent_name: str,
-    tool_names: list[str],
-) -> AgentPolicy:
-    """Build the relevant agent policy for the user"""
-    # TODO: Implement the logic to build the agent policy based on the user context
-    # mint_token = retrieve_mint_token(api_key, context, agent_name)
-    # policy = retrieve_policy(mint_token)
-    return AgentPolicy(
-        tools={name: BaseToolPolicy(mode="allow") for name in tool_names}
-    )
 
 
 def _extract_tools(agent: Agent) -> list[Tool]:
@@ -54,22 +37,25 @@ def _clone_agent_with_tools(agent: Agent, wrapped_tools: list[Tool]) -> Agent:
 def wrap_pydantic_agent(
     *,
     agent: Agent,
-    user_context: UserContext,
     api_key: str | None = None,
 ) -> FortifyPydanticAgent:
     """Wrap the pydantic_ai agent with the Fortify tool policy and observability.
 
     Returns a `FortifyPydanticAgent` backed by a clone of `agent` whose
     tools are gated by the policy. The caller's original `agent` is not
-    mutated, so it can be reused or wrapped again with a different
-    user/policy independently.
+    mutated, so it can be reused or wrapped again independently.
+
+    The returned proxy expects a `user_context` keyword argument on each
+    invocation method (`run`, `run_sync`, `run_stream`, `iter`). The
+    active policy is resolved per call from that context, so a single
+    wrapped agent can serve many users concurrently.
 
     Args:
         agent: The pydantic_ai agent to wrap. Tools are read directly off
             the agent, so any tool registered via the constructor or via
             `@agent.tool` / `@agent.tool_plain` is gated.
-        user_context: The user context
-        api_key: The Fortify API key
+        api_key: The Fortify API key. Falls back to the `FORTIFY_KEY`
+            environment variable.
     """
     resolved_key = api_key or os.getenv("FORTIFY_KEY")
     if not resolved_key:
@@ -79,13 +65,12 @@ def wrap_pydantic_agent(
 
     agent_name = getattr(agent, "name", None) or "default"
     tools = _extract_tools(agent)
-    policy = build_agent_policy(
-        resolved_key, user_context, agent_name, [tool.name for tool in tools]
-    )
-    wrapped_tools = wrap_tools(tools, policy)
+    wrapped_tools = wrap_tools(tools)
     cloned_agent = _clone_agent_with_tools(agent, wrapped_tools)
 
     return FortifyPydanticAgent(
         agent=cloned_agent,
-        user_context=user_context,
+        api_key=resolved_key,
+        agent_name=agent_name,
+        tool_names=[tool.name for tool in tools],
     )
