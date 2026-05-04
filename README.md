@@ -13,6 +13,20 @@ This package is intentionally small. The first milestone is a single assistant w
 - `web_search`
 - `fetch`
 
+## 🛠️ Prerequisites
+
+The SDK itself only needs Python — but a few of the bundled tools shell out to native binaries that you'll want installed on the host before running an agent that uses them.
+
+| Required when you use… | Install |
+|---|---|
+| **`grep`, `glob`, `bash`, `read_file`, `edit_file`, `write_file`** — anything filesystem-shaped | [`ripgrep`](https://github.com/BurntSushi/ripgrep) — `brew install ripgrep` (macOS), `apt install ripgrep` (Debian/Ubuntu), `winget install BurntSushi.ripgrep.MSVC` (Windows) |
+| **The dashboard** under `platform/dashboard/` | Node 18+ and `pnpm` — `corepack enable` or `npm i -g pnpm` |
+| **The control plane** under `platform/api/` | [`uv`](https://docs.astral.sh/uv/) — `curl -LsSf https://astral.sh/uv/install.sh \| sh` |
+
+`web_search` and `fetch` have no system dependencies — pure Python. If you're only using those, ignore the table above.
+
+The runtime preflights `ripgrep` at agent build time and refuses to start when it's missing — fail-fast is friendlier than silently falling back to a 100× slower path.
+
 ## ⚡ Quick Start — Local CLI
 
 If you just want to install `fortify` and try the terminal chat:
@@ -678,6 +692,88 @@ This is intentionally an open chantier:
 - approval handlers are the first real host interaction layer
 - Gate 2 starts as a tiny hook, not a full enterprise framework
 - later evolution can add richer approval semantics, external policy engines, or audit sinks without bloating `create_agent(...)`
+
+## 🧱 Workspace Sandbox
+
+When the `bash` tool executes a command it runs inside an OS-level sandbox configured from the agent's workspace. This is filesystem + network enforcement at the kernel level — a separate concern from Gates 1/2, which decide *whether* a tool may be invoked at all.
+
+### Runtime requirement
+
+The `bash` tool depends on **`srt`** (Anthropic's `sandbox-runtime`). It wraps each command in `sandbox-exec` + a Seatbelt profile (macOS) or `bubblewrap` + a network namespace + a seccomp filter (Linux).
+
+Install before using the `bash` tool:
+
+```bash
+npm install -g @anthropic-ai/sandbox-runtime
+```
+
+Supported on **macOS and Linux only** (Windows is unsupported). If `srt` is not on `PATH`, `run_command` raises `SrtUnavailableError` rather than falling back to unsandboxed execution — *fail closed by design*.
+
+### Configuration
+
+Tune the boundary through `LocalWorkspace`:
+
+```python
+from fortify.runtime import LocalWorkspace
+
+workspace = LocalWorkspace(
+    root_dir="./project",
+    allowed_domains=["api.github.com", "*.pypi.org"],
+    extra_read_paths=["/etc/ssl"],
+    extra_write_paths=["/tmp/build"],
+    deny_write_paths=[".env"],
+    allow_unix_sockets=["/var/run/docker.sock"],
+    allow_local_binding=False,
+    extra_env={"NODE_ENV": "test"},
+)
+```
+
+| Knob | What it controls | Default |
+|---|---|---|
+| `root_dir` | Workspace root; reads + writes allowed inside | required |
+| `allowed_domains` | Hostnames the proxy forwards | `()` — no egress |
+| `denied_domains` | Hostnames the proxy refuses | `()` |
+| `extra_read_paths` | Read-only paths beyond the workspace | `()` |
+| `extra_write_paths` | Writable paths beyond workspace + `/tmp` | `()` |
+| `deny_write_paths` | Paths the agent can never write to | `()` |
+| `allow_unix_sockets` | Unix sockets the agent can `connect()` | `()` — no IPC |
+| `allow_local_binding` | Whether the agent can `bind(127.0.0.1, …)` | `False` |
+| `extra_env` | Env vars passed into the sandbox | `{}` |
+
+Defaults add up to: no network egress, no IPC sockets, no localhost bind, reads allowed inside the workspace and on system paths but not `$HOME`, writes allowed only inside the workspace + `/tmp`.
+
+`allowUnixSockets` and `allowLocalBinding` exist because they're the two ways traffic can leave the proxy lane (Unix-domain IPC and inbound localhost). Default-deny on both; opt in per-deployment when you actually need docker-socket access, a local dev server, etc.
+
+### Env scrubbing
+
+The sandboxed child does **not** inherit the parent process's environment. Only an explicit allowlist passes through:
+
+- `PATH` (curated baseline including `/opt/homebrew/bin` for Apple Silicon)
+- `HOME` (set to the workspace root, so cache writes land inside `allowWrite`)
+- `TMPDIR`, `TERM`
+- Locale keys: `LANG`, `LC_ALL`, `LC_CTYPE`, `LC_COLLATE`, `LC_MESSAGES`
+- Anything operator-supplied via `extra_env`
+
+This means parent-process secrets — `AWS_SECRET_ACCESS_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GH_TOKEN`, `SSH_AUTH_SOCK`, etc. — **don't leak** into the agent. Tools that legitimately need credentials should receive them through `extra_env`, where you control exactly what's passed.
+
+### Layering with Gates 1/2
+
+| Layer | Question | Mechanism |
+|---|---|---|
+| **Gate 1** | Is this tool allowed at all? | `enforce_policy(...)` |
+| **Approval** | Should this specific call go ahead? | `with_approval_handler(...)` |
+| **Gate 2** | Should this call run *given runtime context*? | `with_before_action(...)` |
+| **Sandbox** | What can the spawned shell actually do? | OS-level via `srt` |
+
+Gate 1 decides whether the `bash` tool is callable for an agent. Approval and Gate 2 inspect each invocation. The sandbox bounds reach *if a call does run*. They're complementary — deploy whichever combination matches your threat model.
+
+### What the sandbox does NOT do
+
+Worth being explicit about the gaps so operators know where to layer their own checks:
+
+- **Resource limits.** No CPU/memory/fork caps. A fork-bomb runs to completion. Use cgroups or `ulimit` if that matters.
+- **Command-string semantics.** `srt` sees `sh -c "<command>"` as an opaque arg. The sandbox bounds *reach*, not intent — `rm -rf <workspace>` is permitted because the workspace is in `allowWrite`.
+- **Inside-sandbox actions.** The sandbox stops the agent from exfiltrating a workspace file over the network or writing outside the boundary, but doesn't reason about what the agent does *within* the boundary.
 
 ## 🔧 Environment
 

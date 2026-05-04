@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from fortify import AgentPolicy, create_agent, enforce_policy, register_agent
+from fortify.runtime import LocalWorkspace
 from fortify.tools import bash, edit_file, glob, grep, read_file, write_file
 
 
@@ -26,6 +27,34 @@ def _coding_agent_policy() -> AgentPolicy:
     )
 
 
+def _build_repo_workspace(base_dir: str | Path | None) -> LocalWorkspace:
+    """Build a tightly-scoped sandbox workspace for the repo operator."""
+    root = Path(base_dir).expanduser().resolve() if base_dir else Path.cwd()
+    return LocalWorkspace(
+        root_dir=root,
+        # Block the agent from writing common secrets even via bash.
+        deny_write_paths=[
+            ".env",
+            ".env.local",
+            ".env.production",
+            "secrets/",
+            ".git/config",
+            ".git/credentials",
+        ],
+        # Allow bash to reach pypi for `pip install` flows; lock everything else out.
+        allowed_domains=[
+            "pypi.org",
+            "*.pypi.org",
+            "files.pythonhosted.org",
+        ],
+        # Pass a few env knobs the agent's tooling commonly expects.
+        extra_env={
+            "PYTHONDONTWRITEBYTECODE": "1",
+            "PIP_DISABLE_PIP_VERSION_CHECK": "1",
+        },
+    )
+
+
 def build_repo_operator(
     *,
     base_dir: str | Path | None = None,
@@ -36,11 +65,12 @@ def build_repo_operator(
     model: str | None = None,
 ):
     """Build a coding-style agent that can inspect, edit, and run commands carefully."""
-    _ = base_dir
     _ = user_id
     tools = [glob, grep, read_file, write_file, edit_file, bash]
     if extra_tools:
         tools.extend(tool for tool in extra_tools.values() if tool not in tools)
+
+    workspace = _build_repo_workspace(base_dir)
 
     agent, handler = create_agent(
         model=model or "gpt-5.4",
@@ -54,6 +84,7 @@ def build_repo_operator(
         ),
         session_id=session_id,
         tags=tags or ["fortify", "repo-operator"],
+        workspace=workspace,
     )
     return enforce_policy(agent, _coding_agent_policy()), handler
 

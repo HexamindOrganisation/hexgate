@@ -9,6 +9,7 @@ description = "Authorization infrastructure for AI agents — agent runtime + Fo
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
+    "bashlex>=0.18",
     "httpx>=0.28.1",
     "langchain",
     "langchain-openai",

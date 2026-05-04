@@ -275,6 +275,7 @@ def load_agent(
     tags: list[str] | None = None,
     extra_tools: Mapping[str, Any] | None = None,
     model: str | None = None,
+    local_only: bool = False,
 ) -> tuple[AgentGraph, CallbackHandler]:
     """Load an agent from Fortify (when FORTIFY_KEY is set), local, or builtin.
 
@@ -282,8 +283,12 @@ def load_agent(
     FORTIFY_AGENT_NAME and finally to `"default"`. For the local/builtin
     paths, `name` is required — we can't guess which local directory you
     meant.
+
+    Pass ``local_only=True`` to force resolution from local / registered /
+    builtin sources even when ``FORTIFY_KEY`` is set in the environment.
+    Useful for terminal-chat workflows that don't need cloud-fetched policy.
     """
-    if os.environ.get("FORTIFY_KEY"):
+    if not local_only and os.environ.get("FORTIFY_KEY"):
         from fortify.cloud.loader import load_fortify_agent
 
         return load_fortify_agent(
@@ -295,7 +300,7 @@ def load_agent(
             model=model,
         )
     if name is None:
-        raise ValueError("load_agent() requires a name when FORTIFY_KEY is not set")
+        raise ValueError("load_agent() requires a name when not using Fortify Cloud")
     source = resolve_agent_source(name, base_dir)
     if source == "local":
         return load_local_agent(
