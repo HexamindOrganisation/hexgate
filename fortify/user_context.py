@@ -1,5 +1,6 @@
 from pydantic import BaseModel
 
+
 class UserContext(BaseModel):
     """User specific context for Fortify agents."""
 

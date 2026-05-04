@@ -244,7 +244,11 @@ class _RunAccumulator:
 
         if self.root_run_id is None and not parent_ids:
             self.root_run_id = run_id
-        if not self.started and self.root_run_id == run_id and event_name.endswith("_start"):
+        if (
+            not self.started
+            and self.root_run_id == run_id
+            and event_name.endswith("_start")
+        ):
             emitted.append(
                 self._emit_run_start(
                     run_id=run_id,

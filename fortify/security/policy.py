@@ -47,7 +47,9 @@ def authorize_tool_call(
     if isinstance(tool_policy, FileToolPolicy) and not is_path_allowed(
         tool_name, arguments, tool_policy
     ):
-        raise PolicyDeniedError(f'Policy denied tool "{tool_name}" for the requested path')
+        raise PolicyDeniedError(
+            f'Policy denied tool "{tool_name}" for the requested path'
+        )
 
     if tool_policy.mode == "allow":
         return

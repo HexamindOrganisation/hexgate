@@ -27,7 +27,9 @@ def get_current_tool_use_context() -> ToolUseContext | None:
     return _CURRENT_TOOL_USE_CONTEXT.get()
 
 
-def set_current_tool_use_context(context: ToolUseContext) -> Token[ToolUseContext | None]:
+def set_current_tool_use_context(
+    context: ToolUseContext,
+) -> Token[ToolUseContext | None]:
     """Install a tool-use context for the current execution flow."""
     return _CURRENT_TOOL_USE_CONTEXT.set(context)
 

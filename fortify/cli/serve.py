@@ -87,7 +87,9 @@ async def _serve_loop(context: ServeContext, url: str, console: Console) -> None
     """Receive loop for a single WebSocket session."""
     async with connect(url, ping_interval=PING_INTERVAL) as ws:
         console.print(f"[green]connected[/] — relaying through {url}")
-        await ws.send(json.dumps({"type": "hello", "agent": context.runtime.agent_name}))
+        await ws.send(
+            json.dumps({"type": "hello", "agent": context.runtime.agent_name})
+        )
         try:
             async for message in ws:
                 try:
@@ -134,7 +136,9 @@ async def run_serve(runtime, *, rebuild: Callable[[], Any] | None = None) -> Non
     context = ServeContext(runtime=runtime, state=ChatState(), rebuild=rebuild)
     backoff = RECONNECT_BASE
 
-    console.print(f"[bold]fortify-serve[/] agent=[cyan]{runtime.agent_name}[/] project=[cyan]{config.project_id}[/]")
+    console.print(
+        f"[bold]fortify-serve[/] agent=[cyan]{runtime.agent_name}[/] project=[cyan]{config.project_id}[/]"
+    )
     console.print("[dim]Ctrl+C to stop[/]")
 
     while True:
@@ -142,7 +146,9 @@ async def run_serve(runtime, *, rebuild: Callable[[], Any] | None = None) -> Non
             await _serve_loop(context, url, console)
             backoff = RECONNECT_BASE
         except (ConnectionClosed, OSError) as exc:
-            console.print(f"[yellow]connection lost[/] ({exc}); retrying in {backoff:.1f}s")
+            console.print(
+                f"[yellow]connection lost[/] ({exc}); retrying in {backoff:.1f}s"
+            )
             await asyncio.sleep(backoff)
             backoff = min(backoff * 2, RECONNECT_CAP)
         except asyncio.CancelledError:

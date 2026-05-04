@@ -6,7 +6,11 @@ from fortify.agent.factory import (
     stream_agent,
     stream_agent_raw,
 )
-from fortify.agent.security import enforce_policy, with_approval_handler, with_before_action
+from fortify.agent.security import (
+    enforce_policy,
+    with_approval_handler,
+    with_before_action,
+)
 from fortify.agents.loader import load_builtin_agent
 from fortify.runtime import ToolUseContext
 

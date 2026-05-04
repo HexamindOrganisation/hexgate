@@ -139,7 +139,9 @@ class ChatState:
             self.current_run.result = event.result
             self.current_run.response_text = event.result.message
             if event.result.message:
-                self.messages.append({"role": "assistant", "content": event.result.message})
+                self.messages.append(
+                    {"role": "assistant", "content": event.result.message}
+                )
                 self.transcript.append(
                     TranscriptTurn(role="assistant", content=event.result.message)
                 )

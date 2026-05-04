@@ -69,7 +69,9 @@ class DummyAsyncClient:
         return self._responder(*args, **kwargs)
 
 
-def test_get_env_or_raise_requires_present_value(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_get_env_or_raise_requires_present_value(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Raise when a required environment variable is missing."""
     monkeypatch.delenv("TAVILY_API_KEY", raising=False)
     monkeypatch.delenv("LINKUP_API_KEY", raising=False)
@@ -275,7 +277,9 @@ async def test_agent_tool_injects_tool_use_context_during_agent_run(
         return {"content": tool_use_context.workspace.read_text(path)}
 
     class FakeGraph:
-        async def ainvoke(self, payload: dict[str, Any], *, config: dict[str, Any]) -> dict[str, Any]:
+        async def ainvoke(
+            self, payload: dict[str, Any], *, config: dict[str, Any]
+        ) -> dict[str, Any]:
             _ = payload
             _ = config
             tool_result = await read_from_workspace.ainvoke({"path": "notes.txt"})
@@ -328,7 +332,9 @@ async def test_agent_tool_defaults_to_local_workspace_during_run(
         return {"workspace_root": str(tool_use_context.workspace.root_dir)}
 
     class FakeGraph:
-        async def ainvoke(self, payload: dict[str, Any], *, config: dict[str, Any]) -> dict[str, Any]:
+        async def ainvoke(
+            self, payload: dict[str, Any], *, config: dict[str, Any]
+        ) -> dict[str, Any]:
             _ = payload
             _ = config
             tool_result = await inspect_workspace.ainvoke({})

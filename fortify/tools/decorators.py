@@ -107,7 +107,9 @@ def agent_tool(
     def decorator(func: Callable[..., Any]) -> Any:
         """Wrap a function with the standard tool stack."""
         exposed_signature = _exposed_signature(func)
-        accepts_tool_use_context = TOOL_USE_CONTEXT_PARAM in inspect.signature(func).parameters
+        accepts_tool_use_context = (
+            TOOL_USE_CONTEXT_PARAM in inspect.signature(func).parameters
+        )
 
         retried = async_retry(
             retries=retries,

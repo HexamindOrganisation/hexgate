@@ -14,7 +14,16 @@ from fortify.agent.factory import AgentGraph, create_agent
 from fortify.agent.security import enforce_policy
 from fortify.agents.models import AgentSpec
 from fortify.security import AgentPolicy, load_policy
-from fortify.tools import bash, edit_file, fetch, glob, grep, read_file, web_search, write_file
+from fortify.tools import (
+    bash,
+    edit_file,
+    fetch,
+    glob,
+    grep,
+    read_file,
+    web_search,
+    write_file,
+)
 from fortify.tracing.langfuse import CallbackHandler
 
 BUILTIN_TOOLS = {
@@ -286,9 +295,7 @@ def load_agent(
             model=model,
         )
     if name is None:
-        raise ValueError(
-            "load_agent() requires a name when FORTIFY_KEY is not set"
-        )
+        raise ValueError("load_agent() requires a name when FORTIFY_KEY is not set")
     source = resolve_agent_source(name, base_dir)
     if source == "local":
         return load_local_agent(

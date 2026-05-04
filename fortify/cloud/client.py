@@ -52,7 +52,9 @@ class FortifyConfig:
                 "FORTIFY_KEY not set — export it or pass api_key= explicitly"
             )
 
-        url = (base_url or os.environ.get("FORTIFY_API_URL") or DEFAULT_BASE_URL).rstrip("/")
+        url = (
+            base_url or os.environ.get("FORTIFY_API_URL") or DEFAULT_BASE_URL
+        ).rstrip("/")
 
         resolved_project = (
             project_id
@@ -83,7 +85,9 @@ def _parse_project_from_key(key: str) -> str | None:
 class FortifyClient:
     """Minimal HTTP client scoped to a single project + key."""
 
-    def __init__(self, config: FortifyConfig, *, timeout: float = DEFAULT_TIMEOUT) -> None:
+    def __init__(
+        self, config: FortifyConfig, *, timeout: float = DEFAULT_TIMEOUT
+    ) -> None:
         self.config = config
         self.timeout = timeout
 
@@ -94,8 +98,7 @@ class FortifyClient:
     def get_agent(self, name: str) -> dict[str, Any]:
         """Fetch {agent_yaml, policy_yaml, system_md, ...} for a named agent."""
         url = (
-            f"{self.config.base_url}/v1/projects/"
-            f"{self.config.project_id}/agents/{name}"
+            f"{self.config.base_url}/v1/projects/{self.config.project_id}/agents/{name}"
         )
         return self._get(url)
 
@@ -117,7 +120,9 @@ class FortifyClient:
                 f"Fortify API error {exc.code} calling {url}: {detail[:200]}"
             ) from exc
         except urllib.error.URLError as exc:
-            raise FortifyError(f"Fortify API unreachable at {url}: {exc.reason}") from exc
+            raise FortifyError(
+                f"Fortify API unreachable at {url}: {exc.reason}"
+            ) from exc
         try:
             return json.loads(payload)
         except json.JSONDecodeError as exc:

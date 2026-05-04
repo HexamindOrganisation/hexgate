@@ -9,6 +9,8 @@ import pytest
 from pydantic import BaseModel
 
 from fortify.agent import factory
+
+
 class FakeAgent:
     """Provide a tiny async agent for factory tests."""
 
@@ -17,7 +19,9 @@ class FakeAgent:
         self.ainvoke_calls: list[dict[str, Any]] = []
         self.astream_event_calls: list[dict[str, Any]] = []
 
-    async def ainvoke(self, payload: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
+    async def ainvoke(
+        self, payload: dict[str, Any], config: dict[str, Any]
+    ) -> dict[str, Any]:
         """Record an invoke call and return a fake response."""
         self.ainvoke_calls.append({"payload": payload, "config": config})
         return {"messages": ["ok"]}
@@ -43,6 +47,7 @@ class FakeRequest(BaseModel):
     messages: list[object]
     thread_id: str | None = None
 
+
 def test_load_system_prompt_reads_default_prompt_file() -> None:
     """Load the default prompt file into prompt text."""
     prompt = factory.load_system_prompt(factory.DEFAULT_SYSTEM_PROMPT)
@@ -59,7 +64,9 @@ def test_load_system_prompt_accepts_inline_text() -> None:
     assert prompt == "You are a direct assistant."
 
 
-def test_load_system_prompt_resolves_relative_prompt_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_load_system_prompt_resolves_relative_prompt_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Load prompt contents from a relative file path when requested."""
     prompt_file = tmp_path / "prompt.txt"
     prompt_file.write_text("Prompt from file.", encoding="utf-8")
@@ -169,7 +176,9 @@ def test_create_agent_wires_tools_and_handler(monkeypatch: pytest.MonkeyPatch) -
 
 
 @pytest.mark.asyncio
-async def test_invoke_agent_passes_messages_and_config(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_invoke_agent_passes_messages_and_config(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Invoke the agent with the expected message payload."""
     fake_agent = FakeAgent()
     monkeypatch.setattr(
@@ -190,7 +199,9 @@ async def test_invoke_agent_passes_messages_and_config(monkeypatch: pytest.Monke
 
 
 @pytest.mark.asyncio
-async def test_invoke_agent_accepts_mapping_state(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_invoke_agent_accepts_mapping_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Pass through full mapping state when invoking the agent."""
     fake_agent = FakeAgent()
     monkeypatch.setattr(
@@ -218,7 +229,9 @@ async def test_invoke_agent_accepts_mapping_state(monkeypatch: pytest.MonkeyPatc
 
 
 @pytest.mark.asyncio
-async def test_stream_agent_raw_uses_astream_events_v2(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_stream_agent_raw_uses_astream_events_v2(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Stream raw agent events through LangChain's event stream API."""
     fake_agent = FakeAgent()
     monkeypatch.setattr(
@@ -228,7 +241,10 @@ async def test_stream_agent_raw_uses_astream_events_v2(monkeypatch: pytest.Monke
     )
     monkeypatch.setattr(factory, "new_root_run_id", lambda: "run-123")
 
-    events = [event async for event in factory.stream_agent_raw(fake_agent, "handler", "hello")]
+    events = [
+        event
+        async for event in factory.stream_agent_raw(fake_agent, "handler", "hello")
+    ]
 
     assert events == [{"event": "one"}, {"event": "two"}]
     assert fake_agent.astream_event_calls == [
@@ -241,7 +257,9 @@ async def test_stream_agent_raw_uses_astream_events_v2(monkeypatch: pytest.Monke
 
 
 @pytest.mark.asyncio
-async def test_stream_agent_raw_accepts_message_lists(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_stream_agent_raw_accepts_message_lists(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Wrap a top-level message list before calling LangChain streaming."""
     fake_agent = FakeAgent()
     monkeypatch.setattr(
@@ -269,7 +287,9 @@ async def test_stream_agent_raw_accepts_message_lists(monkeypatch: pytest.Monkey
 
 
 @pytest.mark.asyncio
-async def test_stream_agent_normalizes_raw_events(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_stream_agent_normalizes_raw_events(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Normalize raw LangChain events into app-level stream events."""
 
     async def fake_stream_agent_raw(agent: Any, handler: Any, agent_input: object):

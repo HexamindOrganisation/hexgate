@@ -170,7 +170,9 @@ async def test_normalize_langchain_events_tracks_nested_hierarchy() -> None:
 
 
 @pytest.mark.asyncio
-async def test_normalize_langchain_events_marks_graceful_tool_failure_as_failed() -> None:
+async def test_normalize_langchain_events_marks_graceful_tool_failure_as_failed() -> (
+    None
+):
     """Treat structured tool failures as failed tool steps in the normalized stream."""
     raw_events = [
         {
@@ -214,13 +216,21 @@ async def test_normalize_langchain_events_marks_graceful_tool_failure_as_failed(
     tool_step = next(step for step in result.steps if step.type == StepType.TOOL_CALL)
 
     assert tool_end.state == ToolCallState.FAILED
-    assert tool_end.output_summary == 'Policy denied tool "write_file" for the requested path'
+    assert (
+        tool_end.output_summary
+        == 'Policy denied tool "write_file" for the requested path'
+    )
     assert tool_step.state == ToolCallState.FAILED
-    assert tool_step.output_summary == 'Policy denied tool "write_file" for the requested path'
+    assert (
+        tool_step.output_summary
+        == 'Policy denied tool "write_file" for the requested path'
+    )
 
 
 @pytest.mark.asyncio
-async def test_normalize_langchain_events_marks_json_string_tool_failure_as_failed() -> None:
+async def test_normalize_langchain_events_marks_json_string_tool_failure_as_failed() -> (
+    None
+):
     """Treat serialized JSON tool failures as failed tool steps too."""
     raw_events = [
         {
@@ -258,13 +268,21 @@ async def test_normalize_langchain_events_marks_json_string_tool_failure_as_fail
     tool_step = next(step for step in result.steps if step.type == StepType.TOOL_CALL)
 
     assert tool_end.state == ToolCallState.FAILED
-    assert tool_end.output_summary == 'Policy denied tool "write_file" for the requested path'
+    assert (
+        tool_end.output_summary
+        == 'Policy denied tool "write_file" for the requested path'
+    )
     assert tool_step.state == ToolCallState.FAILED
-    assert tool_step.output_summary == 'Policy denied tool "write_file" for the requested path'
+    assert (
+        tool_step.output_summary
+        == 'Policy denied tool "write_file" for the requested path'
+    )
 
 
 @pytest.mark.asyncio
-async def test_normalize_langchain_events_marks_wrapped_content_tool_failure_as_failed() -> None:
+async def test_normalize_langchain_events_marks_wrapped_content_tool_failure_as_failed() -> (
+    None
+):
     """Treat content-wrapped JSON tool failures as failed tool steps too."""
     raw_events = [
         {
@@ -304,6 +322,12 @@ async def test_normalize_langchain_events_marks_wrapped_content_tool_failure_as_
     tool_step = next(step for step in result.steps if step.type == StepType.TOOL_CALL)
 
     assert tool_end.state == ToolCallState.FAILED
-    assert tool_end.output_summary == 'Policy denied tool "write_file" for the requested path'
+    assert (
+        tool_end.output_summary
+        == 'Policy denied tool "write_file" for the requested path'
+    )
     assert tool_step.state == ToolCallState.FAILED
-    assert tool_step.output_summary == 'Policy denied tool "write_file" for the requested path'
+    assert (
+        tool_step.output_summary
+        == 'Policy denied tool "write_file" for the requested path'
+    )
