@@ -90,7 +90,7 @@ def test_authorize_tool_call_denies_out_of_scope_file_path() -> None:
 
     authorize_tool_call(policy, "read_file", {"file_path": "docs/guide.md"})
 
-    with pytest.raises(PolicyDeniedError, match='requested path'):
+    with pytest.raises(PolicyDeniedError, match="requested path"):
         authorize_tool_call(policy, "read_file", {"file_path": "notes/todo.md"})
 
 
@@ -114,7 +114,7 @@ def test_authorize_tool_call_denied_paths_override_allowed_paths() -> None:
     with pytest.raises(ApprovalRequiredError):
         authorize_tool_call(policy, "edit_file", {"file_path": "docs/report.md"})
 
-    with pytest.raises(PolicyDeniedError, match='requested path'):
+    with pytest.raises(PolicyDeniedError, match="requested path"):
         authorize_tool_call(policy, "edit_file", {"file_path": "docs/private/plan.md"})
 
 
@@ -132,7 +132,7 @@ def test_authorize_tool_call_denies_scoped_search_without_explicit_path() -> Non
         }
     )
 
-    with pytest.raises(PolicyDeniedError, match='requested path'):
+    with pytest.raises(PolicyDeniedError, match="requested path"):
         authorize_tool_call(policy, "grep", {"pattern": "Napoleon"})
 
 
@@ -165,7 +165,9 @@ def test_authorize_tool_call_requires_approval_when_configured() -> None:
 
 
 @pytest.mark.asyncio
-async def test_enforce_policy_denies_tool_invocation(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_enforce_policy_denies_tool_invocation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Wrap created agents so denied invocations become graceful tool results."""
 
     @tool
@@ -185,7 +187,10 @@ async def test_enforce_policy_denies_tool_invocation(monkeypatch: pytest.MonkeyP
     secured_agent = enforce_policy(
         agent,
         AgentPolicy.model_validate(
-            {"default_policy": {"mode": "deny"}, "tools": {"sample_tool": {"mode": "deny"}}}
+            {
+                "default_policy": {"mode": "deny"},
+                "tools": {"sample_tool": {"mode": "deny"}},
+            }
         ),
     )
 
@@ -316,7 +321,9 @@ async def test_with_before_action_receives_action_and_context(
 
     seen: dict[str, object] = {}
 
-    async def before_action(action: dict[str, object], context: dict[str, object] | None) -> None:
+    async def before_action(
+        action: dict[str, object], context: dict[str, object] | None
+    ) -> None:
         seen["action"] = action
         seen["context"] = context
 
@@ -358,7 +365,9 @@ async def test_with_before_action_can_block_tool_invocation(
     monkeypatch.setattr(factory, "create_langchain_agent", lambda **_kwargs: object())
     monkeypatch.setattr(factory, "get_langfuse_handler", lambda **_kwargs: "handler")
 
-    def before_action(_action: dict[str, object], _context: dict[str, object] | None) -> None:
+    def before_action(
+        _action: dict[str, object], _context: dict[str, object] | None
+    ) -> None:
         raise RuntimeError("blocked by host platform")
 
     agent, _handler = factory.create_agent(
@@ -506,12 +515,17 @@ async def test_enforced_tool_emits_single_tool_lifecycle(
     secured_agent = enforce_policy(
         agent,
         AgentPolicy.model_validate(
-            {"default_policy": {"mode": "deny"}, "tools": {"sample_tool": {"mode": "allow"}}}
+            {
+                "default_policy": {"mode": "deny"},
+                "tools": {"sample_tool": {"mode": "allow"}},
+            }
         ),
     )
 
     event_names: list[str] = []
-    async for event in secured_agent.tools[0].astream_events({"value": "hello"}, version="v2"):
+    async for event in secured_agent.tools[0].astream_events(
+        {"value": "hello"}, version="v2"
+    ):
         name = event.get("event")
         if isinstance(name, str):
             event_names.append(name)

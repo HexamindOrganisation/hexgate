@@ -39,7 +39,9 @@ def test_validate_required_keys_raises_for_missing_keys() -> None:
         search_engine="linkup",
     )
 
-    with pytest.raises(RuntimeError, match="OPENAI_API_KEY, LINKUP_API_KEY, TAVILY_API_KEY"):
+    with pytest.raises(
+        RuntimeError, match="OPENAI_API_KEY, LINKUP_API_KEY, TAVILY_API_KEY"
+    ):
         settings.validate_required_keys()
 
 

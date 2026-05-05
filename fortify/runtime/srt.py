@@ -38,8 +38,7 @@ def find_srt() -> str:
     """
     if sys.platform == "win32":
         raise SrtUnavailableError(
-            "sandbox-runtime does not support Windows. "
-            "Run the agent on macOS or Linux."
+            "sandbox-runtime does not support Windows. Run the agent on macOS or Linux."
         )
     path = shutil.which(_SRT_BINARY)
     if path is None:

@@ -127,7 +127,9 @@ class Workspace(ABC):
         """Read text from a workspace-relative file."""
 
     @abstractmethod
-    def write_text(self, path: str | Path, content: str, *, encoding: str = "utf-8") -> None:
+    def write_text(
+        self, path: str | Path, content: str, *, encoding: str = "utf-8"
+    ) -> None:
         """Write text to a workspace-relative file."""
 
     @abstractmethod
@@ -193,7 +195,9 @@ class LocalWorkspace(Workspace):
         """Read a text file from the local workspace."""
         return self.resolve_path(path).read_text(encoding=encoding)
 
-    def write_text(self, path: str | Path, content: str, *, encoding: str = "utf-8") -> None:
+    def write_text(
+        self, path: str | Path, content: str, *, encoding: str = "utf-8"
+    ) -> None:
         """Write a text file into the local workspace."""
         target = self.resolve_path(path)
         target.parent.mkdir(parents=True, exist_ok=True)

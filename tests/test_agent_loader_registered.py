@@ -28,7 +28,9 @@ def test_list_registered_agents_tracks_registered_ids() -> None:
     assert loader.list_registered_agents() == ["code_agent"]
 
 
-def test_resolve_agent_source_prefers_registered_over_builtin_when_no_local(tmp_path: Path) -> None:
+def test_resolve_agent_source_prefers_registered_over_builtin_when_no_local(
+    tmp_path: Path,
+) -> None:
     """Resolve registered agents ahead of builtin ones when local is absent."""
 
     def factory(**_kwargs: Any) -> tuple[str, str]:
