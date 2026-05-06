@@ -9,6 +9,8 @@ from relay import registry
 from schemas import (
     AgentRead,
     AgentUpdate,
+    RegisterAgentRequest,
+    RegisterAgentResponse,
     TokenListItem,
     TokenMintRequest,
     TokenMintResponse,
@@ -22,6 +24,7 @@ from services import (
     list_dev_tokens,
     mask_secret,
     mint_dev_token,
+    register_manifest,
     update_agent,
 )
 
@@ -68,6 +71,24 @@ def optional_dev_token(
     secret = authorization.removeprefix("Bearer ").strip()
     if find_token_by_secret(session, secret) is None:
         raise HTTPException(status_code=401, detail="invalid fortify key")
+
+
+def require_project(
+    authorization: str | None = Header(default=None),
+    session: Session = Depends(get_session),
+) -> str:
+    """Resolve `Authorization: Bearer <fortify_key>` to a project_id.
+
+    Used by SDK-facing endpoints (e.g. POST /v1/agents) where the caller
+    has only an API key, not a project id in the URL.
+    """
+    if authorization is None or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="missing or malformed authorization header")
+    secret = authorization.removeprefix("Bearer ").strip()
+    token = find_token_by_secret(session, secret)
+    if token is None:
+        raise HTTPException(status_code=401, detail="invalid fortify key")
+    return token.project_id
 
 
 @app.get("/health")
@@ -197,6 +218,24 @@ def api_update_agent(
         policy_yaml=agent.policy_yaml,
         system_md=agent.system_md,
         updated_at=agent.updated_at,
+    )
+
+
+@v1.post("/agents", response_model=RegisterAgentResponse, status_code=201)
+def api_register_agent(
+    body: RegisterAgentRequest,
+    project_id: str = Depends(require_project),
+    session: Session = Depends(get_session),
+) -> RegisterAgentResponse:
+    """SDK-facing: register/upsert an agent manifest under the bearer's project."""
+    version, created = register_manifest(session, project_id, body.manifest)
+    return RegisterAgentResponse(
+        agent_id=version.agent_id,
+        agent_version_id=version.id,
+        name=body.manifest.name,
+        version=version.version,
+        content_hash=version.content_hash,
+        created=created,
     )
 
 
