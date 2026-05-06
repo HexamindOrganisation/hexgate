@@ -11,8 +11,6 @@ from typing import Any
 
 import pytest
 
-import pytest
-
 from fortify.runtime import LocalWorkspace, build_sandbox_runtime_config
 from fortify.runtime import workspace as workspace_module
 from fortify.runtime.srt import SrtUnavailableError

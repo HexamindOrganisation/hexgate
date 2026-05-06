@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlmodel import Session
 
 from db import engine, init_db
+from keystore import FileKeyStore
 from relay import registry
 from schemas import (
     AgentRead,
@@ -26,9 +27,13 @@ from services import (
 )
 
 
+keystore = FileKeyStore()
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     init_db()
+    keystore.ensure_keypair()
     with Session(engine) as session:
         ensure_default_project(session)
     yield
@@ -82,6 +87,31 @@ v1 = APIRouter(prefix="/v1")
 @v1.get("/health")
 def v1_health() -> dict[str, str]:
     return {"status": "ok", "service": "fortify-api", "version": "v1"}
+
+
+@v1.get("/.well-known/keys")
+def well_known_keys() -> dict[str, object]:
+    """Publish the platform's signing public key + fingerprint.
+
+    JWKS-shaped so we can grow into multi-key publishing later without
+    breaking clients. Lets dashboards and CLIs sanity-check that what
+    their SDK has embedded matches what this platform is signing with.
+    """
+    import base64
+
+    return {
+        "keys": [
+            {
+                "kty": "OKP",
+                "crv": "Ed25519",
+                "use": "sig",
+                "x": base64.urlsafe_b64encode(keystore.public_key_bytes())
+                .rstrip(b"=")
+                .decode("ascii"),
+                "fingerprint": keystore.fingerprint(),
+            }
+        ]
+    }
 
 
 @v1.get("/projects/{project_id}/tokens", response_model=list[TokenListItem])

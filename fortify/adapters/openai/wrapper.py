@@ -1,5 +1,4 @@
 import dataclasses
-import os
 from agents import Agent
 
 from fortify.user_context import UserContext

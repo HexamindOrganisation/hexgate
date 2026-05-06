@@ -5,3 +5,9 @@ __pycache__/
 *.db
 *.db-journal
 .env
+
+# Root signing keypair — never commit. Loss of fortify.priv invalidates
+# every Biscuit token this platform has ever minted.
+data/
+*.priv
+*.pub
