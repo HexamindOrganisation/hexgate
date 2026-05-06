@@ -57,7 +57,7 @@ fortify --use examples/file_agents.py --agent workspace_explorer
 fortify --use examples/research_agents.py --agent update_researcher
 ```
 
-The included local agent lives in `example_agent/`, and the CLI can also load:
+The included local agent lives in `examples/example_agent/`, and the CLI can also load:
 
 - builtin packaged agents like `researcher`
 - code-defined agents registered from `examples/file_agents.py`
@@ -481,8 +481,9 @@ The CLI also discovers local agents from:
 
 - `./<agent_dir>/agent.yaml`
 - `./agents/<agent_dir>/agent.yaml`
+- `./examples/<agent_dir>/agent.yaml`
 
-This repo includes a root-level `example_agent/` directory, so from the project root you can simply run:
+This repo ships a demo agent at `examples/example_agent/`, so from the project root you can simply run:
 
 ```bash
 fortify --agent example_agent

@@ -60,7 +60,7 @@ def local_agents_root(base_dir: str | Path | None = None) -> Path:
 
 
 def iter_local_agent_dirs(base_dir: str | Path | None = None) -> list[Path]:
-    """Discover local agent directories in the project root and ./agents."""
+    """Discover local agent directories in the project root, ./agents, and ./examples."""
     root = local_agents_root(base_dir)
     discovered: dict[Path, None] = {}
 
@@ -68,11 +68,12 @@ def iter_local_agent_dirs(base_dir: str | Path | None = None) -> list[Path]:
         if child.is_dir() and (child / "agent.yaml").exists():
             discovered[child] = None
 
-    agents_dir = root / "agents"
-    if agents_dir.exists():
-        for child in agents_dir.iterdir():
-            if child.is_dir() and (child / "agent.yaml").exists():
-                discovered[child] = None
+    for sub in ("agents", "examples"):
+        sub_dir = root / sub
+        if sub_dir.exists():
+            for child in sub_dir.iterdir():
+                if child.is_dir() and (child / "agent.yaml").exists():
+                    discovered[child] = None
 
     return sorted(discovered)
 
