@@ -183,7 +183,7 @@ import asyncio
 from agents import Agent, function_tool
 from dotenv import load_dotenv
 
-from fortify.user_context import UserContext
+from fortify.runtime import UserContext
 from fortify.adapters.openai import FortifyRunner
 
 
@@ -236,7 +236,7 @@ from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI
 from langgraph.prebuilt import create_react_agent
 
-from fortify.user_context import UserContext
+from fortify.runtime import UserContext
 from fortify.adapters.langchain import wrap_langchain_agent
 
 
@@ -303,7 +303,7 @@ from google.adk.models.lite_llm import LiteLlm
 from google.adk.sessions import InMemorySessionService
 from google.genai import types
 
-from fortify.user_context import UserContext
+from fortify.runtime import UserContext
 from fortify.adapters.google import FortifyRunner
 
 
@@ -377,7 +377,7 @@ import asyncio
 from dotenv import load_dotenv
 from pydantic_ai import Agent
 
-from fortify.user_context import UserContext
+from fortify.runtime import UserContext
 from fortify.adapters.pydantic_ai import wrap_pydantic_agent
 
 
@@ -829,7 +829,7 @@ python -m pip install -e .
 Run the config-driven demo:
 
 ```bash
-python -m fortify.demo
+python examples/demo.py
 ```
 
 Run the inline chat CLI with a local or builtin YAML agent:

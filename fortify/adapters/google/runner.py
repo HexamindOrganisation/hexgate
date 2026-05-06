@@ -12,7 +12,7 @@ from openinference.instrumentation.google_adk import GoogleADKInstrumentor
 
 from langfuse import get_client, propagate_attributes
 
-from fortify.user_context import UserContext
+from fortify.runtime import UserContext
 from fortify.adapters.google.wrapper import wrap_google_agent
 
 

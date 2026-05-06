@@ -11,7 +11,7 @@ from google.adk.sessions import InMemorySessionService
 from google.adk.tools.function_tool import FunctionTool
 
 from fortify.adapters.google.runner import FortifyRunner
-from fortify.user_context import UserContext
+from fortify.runtime import UserContext
 
 
 def _user_context() -> UserContext:

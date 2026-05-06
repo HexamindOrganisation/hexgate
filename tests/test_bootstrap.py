@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from fortify import setup
+from fortify import bootstrap
 
 
 def test_bootstrap_loads_requested_env_file(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -23,11 +23,11 @@ def test_bootstrap_loads_requested_env_file(monkeypatch: pytest.MonkeyPatch) -> 
         monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "public-key")
         monkeypatch.setenv("LANGFUSE_SECRET_KEY", "secret-key")
 
-    monkeypatch.setattr(setup, "load_dotenv", fake_load_dotenv)
+    monkeypatch.setattr(bootstrap, "load_dotenv", fake_load_dotenv)
 
-    settings = setup.bootstrap("test.env")
+    settings = bootstrap.bootstrap("test.env")
 
-    assert seen["path"] == Path(setup.__file__).parent.parent / "test.env"
+    assert seen["path"] == Path(bootstrap.__file__).parent.parent / "test.env"
     assert settings.openai_api_key == "openai-key"
     assert settings.linkup_api_key == "linkup-key"
     assert settings.tavily_api_key == "tavily-key"

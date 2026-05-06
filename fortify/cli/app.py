@@ -26,7 +26,7 @@ from fortify.agents.loader import (
 )
 from fortify.cli.state import ChatState, LiveRunState, ToolActivity
 from fortify.config.settings import Settings
-from fortify.setup import bootstrap
+from fortify.bootstrap import bootstrap
 from fortify.streaming import ToolCallState
 from fortify.tools import fetch, web_search
 from fortify.tools.decorators import format_tool_call_label

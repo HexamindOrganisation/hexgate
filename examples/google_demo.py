@@ -10,7 +10,7 @@ from google.adk.models.lite_llm import LiteLlm
 from google.adk.sessions import InMemorySessionService
 from google.genai import types
 
-from fortify.user_context import UserContext
+from fortify.runtime import UserContext
 from fortify.adapters.google import FortifyRunner
 
 

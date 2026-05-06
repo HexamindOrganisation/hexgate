@@ -10,7 +10,7 @@ from google.adk.tools.function_tool import FunctionTool
 
 from fortify.adapters.google.wrapper import build_agent_policy, wrap_google_agent
 from fortify.security import AgentPolicy
-from fortify.user_context import UserContext
+from fortify.runtime import UserContext
 
 
 def _user_context() -> UserContext:

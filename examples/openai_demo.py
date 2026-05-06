@@ -2,7 +2,7 @@ import asyncio
 from agents import Agent, function_tool
 from dotenv import load_dotenv
 
-from fortify.user_context import UserContext
+from fortify.runtime import UserContext
 from fortify.adapters.openai import FortifyRunner
 
 

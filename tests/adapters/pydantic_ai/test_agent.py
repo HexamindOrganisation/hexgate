@@ -10,7 +10,7 @@ import pytest
 from fortify.adapters.pydantic_ai import tools as pa_tools
 from fortify.adapters.pydantic_ai.agent import FortifyPydanticAgent
 from fortify.security import AgentPolicy
-from fortify.user_context import UserContext
+from fortify.runtime import UserContext
 
 
 def _user_context() -> UserContext:

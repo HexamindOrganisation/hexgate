@@ -2,7 +2,7 @@ import asyncio
 from dotenv import load_dotenv
 from pydantic_ai import Agent
 
-from fortify.user_context import UserContext
+from fortify.runtime import UserContext
 from fortify.adapters.pydantic_ai import wrap_pydantic_agent
 
 

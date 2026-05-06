@@ -7,7 +7,7 @@ from pathlib import Path
 
 from fortify.agents.factory import stream_agent
 from fortify.agents.loader import list_available_agents, load_agent
-from fortify.setup import bootstrap
+from fortify.bootstrap import bootstrap
 from fortify.streaming import BlockDeltaEvent, EventType, ToolEndEvent, ToolStartEvent
 from fortify.tracing.langfuse import maybe_get_trace_url
 
