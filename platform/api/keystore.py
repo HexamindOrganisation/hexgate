@@ -130,6 +130,26 @@ class FileKeyStore:
             format=serialization.PublicFormat.Raw,
         )
 
+    def _private_key_bytes(self) -> bytes:
+        """Return the raw 32-byte Ed25519 private key.
+
+        Internal only. Exposed so signing libraries that need their own
+        ``PrivateKey`` objects (e.g. ``biscuit_auth.PrivateKey``) can
+        construct one from the same key material. Never log, serialize, or
+        transmit these bytes — callers should hand the result straight
+        into the signing library and discard.
+
+        A future ``KMSKeyStore`` would not implement this method; callers
+        that target multiple keystore backends should use ``sign()`` instead.
+        """
+        if self._private_key is None:
+            raise RuntimeError("keystore not initialised; call ensure_keypair() first")
+        return self._private_key.private_bytes(
+            encoding=serialization.Encoding.Raw,
+            format=serialization.PrivateFormat.Raw,
+            encryption_algorithm=serialization.NoEncryption(),
+        )
+
     def fingerprint(self) -> str:
         """Return a short stable identifier for the public key.
 

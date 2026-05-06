@@ -143,6 +143,7 @@ def mint_token(
         name=body.name,
         scopes=body.scopes,
         env=body.env,
+        signing_key_bytes=keystore._private_key_bytes(),
     )
     return TokenMintResponse(
         id=token.id,

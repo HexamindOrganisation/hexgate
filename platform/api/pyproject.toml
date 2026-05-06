@@ -9,6 +9,7 @@ dependencies = [
     "sqlmodel>=0.0.22",
     "pydantic>=2.9",
     "cryptography>=42",
+    "biscuit-python>=0.4",
 ]
 
 [dependency-groups]
@@ -17,6 +18,10 @@ dev = [
     "httpx>=0.27",
     "ruff>=0.8",
 ]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
 
 [tool.uv]
 package = false
