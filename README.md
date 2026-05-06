@@ -788,6 +788,35 @@ Copy `.env.sample` to `.env` and set:
 - `LANGFUSE_PUBLIC_KEY`
 - optional `LANGFUSE_HOST`
 
+## 🧪 Tests
+
+The SDK suite (367 cases) lives at `tests/` and runs with `pytest`. The platform suite (36 cases) lives at `platform/api/tests/`.
+
+If you're already in a project virtualenv (`asianf/.venv/`):
+
+```bash
+uv run pytest tests/                                # SDK
+cd platform/api && uv run pytest tests/             # platform
+```
+
+If you keep your dev env elsewhere (e.g. a `micromamba` env), point `uv` at it and pass `--active` so it doesn't try to manage `.venv` for you:
+
+```bash
+# Make uv use your current micromamba env as the project environment.
+export UV_PROJECT_ENVIRONMENT=/Users/<you>/micromamba/envs/<your-env>
+
+# First time only: pull dev-only deps (pytest-asyncio, ruff, etc.) into it.
+uv sync --extra dev
+
+# Run any uv-driven command against that env from now on.
+uv run --active pytest tests/
+uv run --active ruff check .
+```
+
+Without `--extra dev` you'll see *"async functions are not natively supported"* across every `@pytest.mark.asyncio` test — `pytest-asyncio` lives in the dev group and isn't installed by a plain `uv sync`. Same trap if you bring up a fresh env and forget the flag.
+
+Drop the `UV_PROJECT_ENVIRONMENT` export into your shell rc (or a per-project `direnv` `.envrc`) if you don't want to type it every shell.
+
 ## ▶️ Run It
 
 Install the package into your current environment:
