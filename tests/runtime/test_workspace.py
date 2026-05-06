@@ -301,7 +301,13 @@ def _patch_subprocess_exec(
 async def test_run_command_spawns_srt_with_settings_and_command(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """run_command should exec `srt --settings <json> -- sh -c <command>`."""
+    """run_command should exec `srt --settings <json> sh -c <command>`.
+
+    Note the absence of a POSIX ``--`` between flags and the command:
+    srt's CLI does not honour end-of-options, and including ``--`` silently
+    drops every command token after the first. See the docstring on
+    ``LocalWorkspace.run_command`` for context.
+    """
     _patch_srt_present(monkeypatch)
     captured = _patch_subprocess_exec(monkeypatch)
 
@@ -311,9 +317,8 @@ async def test_run_command_spawns_srt_with_settings_and_command(
     argv = captured["argv"]
     assert argv[0] == "srt"
     assert argv[1] == "--settings"
-    # argv[2] is a temp path; assert via the captured snapshot below.
-    assert argv[3] == "--"
-    assert argv[4:] == ("sh", "-c", "echo hi")
+    # argv[2] is a temp settings-file path; structure asserted via the snapshot below.
+    assert argv[3:] == ("sh", "-c", "echo hi")
     assert "filesystem" in captured["settings"]
     assert "network" in captured["settings"]
 
