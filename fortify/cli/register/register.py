@@ -1,5 +1,6 @@
 import os
 import requests
+from dotenv import load_dotenv
 from langchain.tools import BaseTool
 
 from fortify.cli.register.manifest import create_manifest
@@ -13,7 +14,8 @@ def register_agent(
     description: str | None = None,
     tools: list[BaseTool] | None = None,
 ) -> dict:
-    """Create and register an agent manifest to platform /agents/register."""
+    """Create and register an agent manifest to platform /agents."""
+    load_dotenv()
     manifest = create_manifest(agent, description=description, tools=tools)
 
     api_key = os.environ.get("FORTIFY_KEY")

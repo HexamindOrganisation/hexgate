@@ -45,7 +45,7 @@ def _load_tools(spec: str) -> list[BaseTool]:
     return tools
 
 
-def main(argv: list[str] | None = None) -> None:
+def main(argv: list[str]) -> None:
     """Register an agent to the Fortify platform."""
     parser = argparse.ArgumentParser(
         prog="fortify register",
@@ -73,7 +73,3 @@ def main(argv: list[str] | None = None) -> None:
     tools = _load_tools(args.tools) if args.tools is not None else None
 
     register_agent(agent, description=args.description, tools=tools)
-
-
-if __name__ == "__main__":
-    sys.exit(main())

@@ -7,10 +7,12 @@ import sys
 
 def run() -> None:
     """Dispatch `fortify <subcommand>` or fall through to the chat app."""
-    if len(sys.argv) > 1 and sys.argv[1] == "register":
+    arguments = sys.argv
+    if len(arguments) > 1 and arguments[1] == "register":
         from fortify.cli.register.main import main as run_register
 
-        sys.exit(run_register(sys.argv[2:]))
+        run_register(arguments[2:])
+        return
 
     from fortify.cli.app import run as run_app
 
