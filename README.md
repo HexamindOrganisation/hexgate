@@ -543,6 +543,26 @@ List what the CLI can currently resolve:
 fortify --list-agents
 ```
 
+Register a code-defined agent's manifest with the Fortify platform. `--agent`
+takes a Python import path of the form `module.path:attribute`, the same shape
+as ASGI/WSGI entrypoints. The CLI imports the module, grabs the agent object,
+and POSTs its manifest to `${FORTIFY_API_URL}/v1/agents/register` using
+`${FORTIFY_KEY}` as the bearer token:
+
+```bash
+fortify register --agent examples.simple_agent:agent
+fortify register --agent my_app.agents:my_agent --description "Customer support bot"
+```
+
+LangGraph compiled graphs don't expose their tool nodes for inspection, so
+when registering one you also need to pass an import path to the tool list:
+
+```bash
+fortify register --agent my_app.agents:graph --tools my_app.tools:my_tools
+```
+
+Supported frameworks: OpenAI Agents SDK, Google ADK, Pydantic AI, LangChain/LangGraph.
+
 ## 🌐 Fortify Platform
 
 The `platform/` directory contains an optional control plane that hosts agent definitions, dev tokens, and a live debug surface. The SDK works fully without it (`load_local_agent`, `load_builtin_agent` keep their existing semantics) — but with it you get:

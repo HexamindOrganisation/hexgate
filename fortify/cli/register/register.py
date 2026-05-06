@@ -5,6 +5,8 @@ from langchain.tools import BaseTool
 from fortify.cli.register.manifest import create_manifest
 from fortify.cli.register.models import AgentType
 
+DEFAULT_API_URL = "http://localhost:8000"
+
 def register_agent(
     agent: AgentType,
     *,
@@ -14,16 +16,17 @@ def register_agent(
     """Create and register an agent manifest to platform /agents/register."""
     manifest = create_manifest(agent, description=description, tools=tools)
 
-    api_key, api_url = os.environ.get("FORTIFY_KEY"), os.environ.get("FORTIFY_API_URL")
-    if api_key is None or api_url is None:
-        raise ValueError("FORTIFY_KEY and FORTIFY_API_URL must be set")
+    api_key = os.environ.get("FORTIFY_KEY")
+    if api_key is None:
+        raise ValueError("FORTIFY_KEY must be set")
+    api_url = os.environ.get("FORTIFY_API_URL", DEFAULT_API_URL)
 
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
     }
     response = requests.post(
-        f"{api_url}/v1/agents/register",
+        f"{api_url}/v1/agents",
         headers=headers,
         json={"manifest": manifest.model_dump()},
     )
