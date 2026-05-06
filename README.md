@@ -427,10 +427,12 @@ What happens under the hood:
 
 Working scripts in `examples/`:
 
-- `examples/openai.py` — `FortifyRunner` (OpenAI Agents SDK) end-to-end.
-- `examples/langchain.py` — `wrap_langchain_agent` (LangChain) end-to-end with `create_react_agent`.
-- `examples/google.py` — `FortifyRunner` (Google ADK) end-to-end with `InMemorySessionService`.
-- `examples/pydantic_ai.py` — `wrap_pydantic_agent` (Pydantic AI) end-to-end.
+- `examples/openai_demo.py` — `FortifyRunner` (OpenAI Agents SDK) end-to-end.
+- `examples/langchain_demo.py` — `wrap_langchain_agent` (LangChain) end-to-end with `create_react_agent`.
+- `examples/google_demo.py` — `FortifyRunner` (Google ADK) end-to-end with `InMemorySessionService`.
+- `examples/pydantic_ai_demo.py` — `wrap_pydantic_agent` (Pydantic AI) end-to-end.
+
+> **Note on naming.** These demo files end in `_demo.py` so their filenames don't shadow the installed packages they import (`agents`, `google`, `langchain`, `openai`, `pydantic_ai`). Without the suffix, running any script inside `examples/` would put the directory on `sys.path[0]` and Python would import the demo files instead of the real packages.
 
 ## 🧠 Define Agents In Code
 

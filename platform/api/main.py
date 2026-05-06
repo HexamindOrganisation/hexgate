@@ -4,6 +4,12 @@ from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, WebSocke
 from fastapi.middleware.cors import CORSMiddleware
 from sqlmodel import Session
 
+from biscuits import (
+    TokenError,
+    TokenSignatureError,
+    parse_envelope,
+    verify_token,
+)
 from db import engine, init_db
 from keystore import FileKeyStore
 from relay import registry
@@ -61,18 +67,38 @@ def optional_dev_token(
 ) -> None:
     """Validate Authorization: Bearer <fortify_key> when present.
 
-    POC behaviour: the header is optional so the dashboard (which has no user
-    session concept yet) can keep calling these endpoints. When the header is
-    present we validate it, reject on mismatch, and touch last_used_at so the
-    UI shows real activity. Tighten to required in Phase C.
+    Two gates run when a header is supplied:
+
+    1. **Signature verification** — parse the envelope, decode the Biscuit,
+       check it chains to the platform's root public key. Rejects tampered
+       tokens and tokens minted by some other platform instance.
+    2. **Revocation lookup** — confirm the exact secret is still in the
+       ``DevToken`` table and update ``last_used_at``. Catches revocation
+       even if the Biscuit signature is intrinsically valid.
+
+    POC behaviour: the header itself remains optional so the dashboard
+    (no user-session concept yet) can keep calling these endpoints
+    unauthenticated. Tighten to required once the dashboard auth lands.
     """
     if authorization is None:
         return
     if not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="malformed authorization header")
     secret = authorization.removeprefix("Bearer ").strip()
+
+    # Signature gate
+    try:
+        _, _, biscuit_b64 = parse_envelope(secret)
+    except TokenError:
+        raise HTTPException(status_code=401, detail="malformed fortify key") from None
+    try:
+        verify_token(biscuit_b64, keystore.public_key_bytes())
+    except TokenSignatureError:
+        raise HTTPException(status_code=401, detail="invalid fortify key signature") from None
+
+    # Revocation gate
     if find_token_by_secret(session, secret) is None:
-        raise HTTPException(status_code=401, detail="invalid fortify key")
+        raise HTTPException(status_code=401, detail="unknown or revoked fortify key")
 
 
 @app.get("/health")
