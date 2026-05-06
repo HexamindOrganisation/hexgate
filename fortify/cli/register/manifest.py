@@ -4,13 +4,14 @@ from langchain_core.tools import BaseTool
 from langgraph.graph.state import CompiledStateGraph as LangChainAgent
 from pydantic_ai import Agent as PydanticAIAgent
 
+from fortify.agent.factory import CoolAgent
+from fortify.cli.register.fortify import create_fortify_manifest
 from fortify.cli.register.google import create_google_manifest
 from fortify.cli.register.langchain import create_langchain_manifest
-from fortify.cli.register.models import AgentManifest
+from fortify.cli.register.models import AgentManifest, AgentType
 from fortify.cli.register.openai import create_openai_manifest
 from fortify.cli.register.pydantic_ai import create_pydantic_ai_manifest
 
-AgentType = OpenAIAgent | GoogleAgent | LangChainAgent | PydanticAIAgent
 
 def create_manifest(
     agent: AgentType,
@@ -20,9 +21,12 @@ def create_manifest(
 ) -> AgentManifest:
     """Create an AgentManifest from an Agent.
 
-    `tools` is required only when `agent` is a LangChain compiled graph,
-    since those graphs do not reliably expose their tool nodes.
+    `tools` is required only when `agent` is a raw LangChain compiled graph,
+    since those graphs do not reliably expose their tool nodes. Fortify
+    `CoolAgent` instances carry their tool list on the wrapper itself.
     """
+    if isinstance(agent, CoolAgent):
+        return create_fortify_manifest(agent, description=description)
     if isinstance(agent, OpenAIAgent):
         return create_openai_manifest(agent, description=description)
     if isinstance(agent, GoogleAgent):

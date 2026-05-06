@@ -1,5 +1,6 @@
 from fortify.cli.register.manifest import create_manifest
 from fortify.cli.register.models import AgentManifest, AgentFramework, InputProperty, InputSchema, ToolDefinition
+from fortify.cli.register.fortify import create_fortify_manifest
 from fortify.cli.register.openai import create_openai_manifest
 from fortify.cli.register.google import create_google_manifest
 from fortify.cli.register.langchain import create_langchain_manifest
@@ -182,5 +183,57 @@ def test_langchain_manifest_schema():
     assert manifest == expected_manifest
 
     manifest = create_manifest(graph, tools=[example_tool], description="A test agent")
+    assert isinstance(manifest, AgentManifest)
+    assert manifest == expected_manifest
+
+def test_fortify_manifest_schema():
+    """Test the schema of the Fortify manifest (CoolAgent from create_agent)."""
+    from langchain_core.tools import tool
+    from langgraph.graph import END, START, StateGraph
+
+    from fortify.agent.factory import CoolAgent
+
+    @tool
+    def example_tool(example_input: str) -> str:
+        """A test tool."""
+        return f"Hello, {example_input}! This is a test tool."
+
+    builder = StateGraph(dict)
+    builder.add_node("noop", lambda state: state)
+    builder.add_edge(START, "noop")
+    builder.add_edge("noop", END)
+    graph = builder.compile(name="test-agent")
+
+    agent = CoolAgent(
+        graph=graph,
+        model="test-model",
+        tools=[example_tool],
+        system_prompt=None,
+        name="test-agent",
+    )
+
+    expected_manifest = AgentManifest(
+        name="test-agent",
+        description="A test agent",
+        framework=AgentFramework.FORTIFY,
+        tools=[ToolDefinition(
+            name="example_tool",
+            description="A test tool.",
+            input_schema=InputSchema(
+                properties={
+                    "example_input": InputProperty(
+                        title="Example Input",
+                        type="string",
+                    ),
+                },
+                required=["example_input"],
+            ),
+        )],
+    )
+    manifest = create_fortify_manifest(agent, description="A test agent")
+    assert isinstance(manifest, AgentManifest)
+    assert manifest == expected_manifest
+
+    manifest = create_manifest(agent, description="A test agent")
     assert isinstance(manifest, AgentManifest)
     assert manifest == expected_manifest

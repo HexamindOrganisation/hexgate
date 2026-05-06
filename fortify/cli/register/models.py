@@ -9,7 +9,9 @@ from google.adk.agents import Agent as GoogleAgent
 from langgraph.graph.state import CompiledStateGraph as LangChainAgent
 from pydantic_ai import Agent as PydanticAIAgent
 
-AgentType = OpenAIAgent | GoogleAgent | LangChainAgent | PydanticAIAgent
+from fortify.agent.factory import CoolAgent as FortifyAgent
+
+AgentType = OpenAIAgent | GoogleAgent | LangChainAgent | PydanticAIAgent | FortifyAgent
 
 
 class AgentFramework(StrEnum):
