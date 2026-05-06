@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from fortify.cli.state import ChatState
-from fortify.stream import (
+from fortify.streaming import (
     AgentRunResult,
     BlockDeltaEvent,
     BlockType,

@@ -16,7 +16,7 @@ from fortify.cli.app import (
     _tail_text,
 )
 from fortify.cli.state import LiveRunState, ToolActivity
-from fortify.stream import ToolCallState
+from fortify.streaming import ToolCallState
 from fortify.tools import edit_file, read_file
 
 

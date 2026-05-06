@@ -10,7 +10,7 @@ from uuid import uuid4
 
 from langchain_core.messages import AIMessageChunk
 
-from fortify.stream import (
+from fortify.streaming.events import (
     AgentRunResult,
     BlockDeltaEvent,
     BlockEndEvent,

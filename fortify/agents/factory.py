@@ -27,8 +27,7 @@ from fortify.runtime import (
     reset_current_tool_use_context,
     set_current_tool_use_context,
 )
-from fortify.streaming import new_root_run_id, normalize_langchain_events
-from fortify.stream import StreamEvent
+from fortify.streaming import StreamEvent, new_root_run_id, normalize_langchain_events
 from fortify.tracing.langfuse import (
     CallbackHandler,
     get_langfuse_handler,

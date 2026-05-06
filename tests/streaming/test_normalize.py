@@ -7,7 +7,7 @@ from collections.abc import AsyncIterator
 import pytest
 from langchain_core.messages import AIMessage, AIMessageChunk
 
-from fortify.stream import (
+from fortify.streaming import (
     BlockDeltaEvent,
     BlockEndEvent,
     BlockStartEvent,
