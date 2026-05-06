@@ -13,6 +13,7 @@ import yaml
 from fortify.agents.factory import AgentGraph, create_agent
 from fortify.agents.security import enforce_policy
 from fortify.agents.models import AgentSpec
+from fortify.cloud.client import FortifyClient, FortifyConfig, resolve_agent_name
 from fortify.security import AgentPolicy, load_policy
 from fortify.tools import (
     bash,
@@ -266,6 +267,54 @@ def resolve_agent_source(name: str, base_dir: str | Path | None = None) -> Agent
     raise KeyError(f'Unknown agent "{name}"')
 
 
+def load_fortify_agent(
+    name: str | None = None,
+    *,
+    project_id: str | None = None,
+    base_url: str | None = None,
+    api_key: str | None = None,
+    session_id: str | None = None,
+    user_id: str | None = None,
+    tags: list[str] | None = None,
+    extra_tools: Mapping[str, Any] | None = None,
+    model: str | None = None,
+) -> tuple[AgentGraph, CallbackHandler]:
+    """Fetch an agent from Fortify and return it with policy enforcement applied.
+
+    Agent name resolution: explicit arg → FORTIFY_AGENT_NAME env → "default".
+    Every project is guaranteed to have a `default` agent, so zero-config use
+    (set only FORTIFY_KEY) works.
+
+    Mirrors `load_local_agent` but sources the three YAMLs (agent, policy, system)
+    from the Fortify API instead of disk. Tool resolution and enforcement are
+    identical — only the bytes' origin differs.
+    """
+    _ = user_id  # reserved for future user-scoped token attenuation
+
+    resolved_name = resolve_agent_name(name)
+    config = FortifyConfig.from_env(
+        project_id=project_id, base_url=base_url, api_key=api_key
+    )
+    client = FortifyClient(config)
+    payload = client.get_agent(resolved_name)
+
+    spec = AgentSpec.model_validate(yaml.safe_load(payload["agent_yaml"]) or {})
+    policy = AgentPolicy.model_validate(yaml.safe_load(payload["policy_yaml"]) or {})
+    system_prompt = payload.get("system_md") or ""
+
+    tools = resolve_builtin_tools(spec.tools, extra_tools=extra_tools)
+
+    agent, handler = create_agent(
+        model=model or spec.model,
+        tools=tools,
+        system_prompt=system_prompt,
+        session_id=session_id,
+        tags=tags or ["fortify", "fortify", config.project_id],
+        name=spec.name,
+    )
+    return enforce_policy(agent, policy), handler
+
+
 def load_agent(
     name: str | None = None,
     *,
@@ -289,8 +338,6 @@ def load_agent(
     Useful for terminal-chat workflows that don't need cloud-fetched policy.
     """
     if not local_only and os.environ.get("FORTIFY_KEY"):
-        from fortify.cloud.loader import load_fortify_agent
-
         return load_fortify_agent(
             name,
             session_id=session_id,

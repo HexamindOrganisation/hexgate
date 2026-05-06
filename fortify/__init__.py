@@ -19,12 +19,13 @@ from fortify.agents.loader import (
     list_registered_agents,
     load_agent,
     load_builtin_agent,
+    load_fortify_agent,
     load_local_agent,
     load_registered_agent,
     register_agent,
     unregister_agent,
 )
-from fortify.cloud import FortifyClient, FortifyConfig, load_fortify_agent
+from fortify.cloud import FortifyClient, FortifyConfig
 from fortify.runtime import LocalWorkspace, ToolUseContext, Workspace
 from fortify.security import AgentPolicy
 from fortify.tools import agent_tool, bash, edit_file, glob, grep, read_file, write_file
