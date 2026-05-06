@@ -10,8 +10,8 @@ from typing import Any, Literal, TypeAlias
 
 import yaml
 
-from fortify.agent.factory import AgentGraph, create_agent
-from fortify.agent.security import enforce_policy
+from fortify.agents.factory import AgentGraph, create_agent
+from fortify.agents.security import enforce_policy
 from fortify.agents.models import AgentSpec
 from fortify.security import AgentPolicy, load_policy
 from fortify.tools import (
@@ -43,7 +43,7 @@ REGISTERED_AGENTS: dict[str, AgentFactory] = {}
 
 def builtin_agents_root() -> Path:
     """Return the filesystem path for packaged builtin agents."""
-    return Path(str(files("fortify.builtin_agents")))
+    return Path(str(files("fortify.agents.builtin")))
 
 
 def _load_agent_spec_from_dir(agent_dir: Path) -> AgentSpec:

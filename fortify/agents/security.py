@@ -10,7 +10,7 @@ from langchain_core.tools import BaseTool
 from langchain_core.tools.structured import StructuredTool
 from pydantic import ConfigDict
 
-from fortify.agent.factory import (
+from fortify.agents.factory import (
     ActionContext,
     ActionPayload,
     AgentGraph,

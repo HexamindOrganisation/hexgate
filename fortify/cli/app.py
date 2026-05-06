@@ -18,7 +18,7 @@ from rich.spinner import Spinner
 from rich.text import Text
 
 from fortify import with_approval_handler
-from fortify.agent.factory import AgentGraph, CallbackHandler, stream_agent
+from fortify.agents.factory import AgentGraph, CallbackHandler, stream_agent
 from fortify.agents.loader import (
     list_available_agents,
     load_agent,

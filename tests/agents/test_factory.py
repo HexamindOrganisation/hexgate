@@ -8,7 +8,7 @@ from typing import Any
 import pytest
 from pydantic import BaseModel
 
-from fortify.agent import factory
+from fortify.agents import factory
 
 
 class FakeAgent:

@@ -7,8 +7,8 @@ from pathlib import Path
 import pytest
 from langchain_core.tools import tool
 
-from fortify.agent import factory
-from fortify.agent.security import (
+from fortify.agents import factory
+from fortify.agents.security import (
     enforce_policy,
     with_approval_handler,
     with_before_action,

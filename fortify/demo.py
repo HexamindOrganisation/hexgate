@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
-from fortify.agent.factory import stream_agent
+from fortify.agents.factory import stream_agent
 from fortify.agents.loader import list_available_agents, load_agent
 from fortify.setup import bootstrap
 from fortify.stream import BlockDeltaEvent, EventType, ToolEndEvent, ToolStartEvent

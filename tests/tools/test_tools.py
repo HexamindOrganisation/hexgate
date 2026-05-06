@@ -9,7 +9,7 @@ from typing import Any
 import httpx
 import pytest
 
-from fortify.agent.factory import create_agent, invoke_agent
+from fortify.agents.factory import create_agent, invoke_agent
 from fortify.runtime import (
     LocalWorkspace,
     ToolUseContext,
@@ -286,15 +286,15 @@ async def test_agent_tool_injects_tool_use_context_during_agent_run(
             return {"messages": [tool_result["content"]]}
 
     monkeypatch.setattr(
-        "fortify.agent.factory.create_langchain_agent",
+        "fortify.agents.factory.create_langchain_agent",
         lambda **_kwargs: FakeGraph(),
     )
     monkeypatch.setattr(
-        "fortify.agent.factory.get_langfuse_handler",
+        "fortify.agents.factory.get_langfuse_handler",
         lambda **_kwargs: "handler",
     )
     monkeypatch.setattr(
-        "fortify.agent.factory.get_langfuse_runnable_config",
+        "fortify.agents.factory.get_langfuse_runnable_config",
         lambda _handler: {"callbacks": ["handler"]},
     )
 
@@ -341,15 +341,15 @@ async def test_agent_tool_defaults_to_local_workspace_during_run(
             return {"messages": [tool_result["workspace_root"]]}
 
     monkeypatch.setattr(
-        "fortify.agent.factory.create_langchain_agent",
+        "fortify.agents.factory.create_langchain_agent",
         lambda **_kwargs: FakeGraph(),
     )
     monkeypatch.setattr(
-        "fortify.agent.factory.get_langfuse_handler",
+        "fortify.agents.factory.get_langfuse_handler",
         lambda **_kwargs: "handler",
     )
     monkeypatch.setattr(
-        "fortify.agent.factory.get_langfuse_runnable_config",
+        "fortify.agents.factory.get_langfuse_runnable_config",
         lambda _handler: {"callbacks": ["handler"]},
     )
     monkeypatch.chdir(tmp_path)

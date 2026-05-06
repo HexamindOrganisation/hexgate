@@ -1,12 +1,12 @@
 """Public package surface for fortify."""
 
-from fortify.agent.factory import (
+from fortify.agents.factory import (
     create_agent,
     invoke_agent,
     stream_agent,
     stream_agent_raw,
 )
-from fortify.agent.security import (
+from fortify.agents.security import (
     enforce_policy,
     with_approval_handler,
     with_before_action,

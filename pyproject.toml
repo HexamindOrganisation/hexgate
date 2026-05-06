@@ -48,4 +48,8 @@ dev = [
 include = ["fortify*"]
 
 [tool.setuptools.package-data]
-fortify = ["builtin_agents/*/*.md", "builtin_agents/*/*.yaml"]
+fortify = [
+    "agents/builtin/*/*.md",
+    "agents/builtin/*/*.yaml",
+    "agents/prompts/*.md",
+]

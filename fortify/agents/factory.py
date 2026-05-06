@@ -49,7 +49,7 @@ ApprovalHandler: TypeAlias = (
     bool | Callable[[ActionPayload, ActionContext], bool | Awaitable[bool]]
 )
 ContextProvider: TypeAlias = Callable[[], ActionContext]
-DEFAULT_SYSTEM_PROMPT = Path(__file__).parent.parent / "prompts" / "agent_system.md"
+DEFAULT_SYSTEM_PROMPT = Path(__file__).parent / "prompts" / "agent_system.md"
 
 
 def _build_langchain_agent(
@@ -310,7 +310,7 @@ class CoolAgent:
 
     def enforce_policy(self, policy: object) -> Self:
         """Return a new agent runtime with Gate 1 policy enforcement applied."""
-        from fortify.agent.security import wrap_tools_with_policy
+        from fortify.agents.security import wrap_tools_with_policy
         from fortify.security import load_policy
 
         return self.with_tools(wrap_tools_with_policy(self.tools, load_policy(policy)))
@@ -322,7 +322,7 @@ class CoolAgent:
         context_provider: ContextProvider | None = None,
     ) -> Self:
         """Return a new agent runtime with a pre-tool Gate 2 hook applied."""
-        from fortify.agent.security import wrap_tools_with_before_action
+        from fortify.agents.security import wrap_tools_with_before_action
 
         return self.with_tools(
             wrap_tools_with_before_action(
@@ -340,7 +340,7 @@ class CoolAgent:
         context_provider: ContextProvider | None = None,
     ) -> Self:
         """Return a new agent runtime with a Gate 1 approval resolver."""
-        from fortify.agent.security import wrap_tools_with_approval_handler
+        from fortify.agents.security import wrap_tools_with_approval_handler
 
         return self.with_tools(
             wrap_tools_with_approval_handler(
