@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fortify_cli.register.models import (
+from fortify.cli.register.models import (
     AgentFramework,
     AgentManifest,
     InputProperty,
@@ -12,11 +12,11 @@ from fortify_cli.register.models import (
 
 from google.adk.agents import Agent
 from google.adk.tools.base_tool import BaseTool
+from google.adk.tools.function_tool import FunctionTool
 
 
 def create_google_manifest(agent: Agent, *, description: str | None = None) -> AgentManifest:
     """Build an AgentManifest from a Google ADK agent."""
-    from google.adk.tools.function_tool import FunctionTool
 
     tools: list[ToolDefinition] = []
     for entry in agent.tools:
@@ -37,6 +37,7 @@ def create_google_manifest(agent: Agent, *, description: str | None = None) -> A
 
 
 def _to_tool_definition(tool: BaseTool) -> ToolDefinition | None:
+    """Convert a Google ADK tool to a ToolDefinition."""
     declaration = tool._get_declaration()
     if declaration is None:
         return None

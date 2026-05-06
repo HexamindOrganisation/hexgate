@@ -1,9 +1,9 @@
-from fortify_cli.register.manifest import create_manifest
-from fortify_cli.register.models import AgentManifest, AgentFramework, InputProperty, InputSchema, ToolDefinition
-from fortify_cli.register.openai import create_openai_manifest
-from fortify_cli.register.google import create_google_manifest
-from fortify_cli.register.langchain import create_langchain_manifest
-from fortify_cli.register.pydantic_ai import create_pydantic_ai_manifest
+from fortify.cli.register.manifest import create_manifest
+from fortify.cli.register.models import AgentManifest, AgentFramework, InputProperty, InputSchema, ToolDefinition
+from fortify.cli.register.openai import create_openai_manifest
+from fortify.cli.register.google import create_google_manifest
+from fortify.cli.register.langchain import create_langchain_manifest
+from fortify.cli.register.pydantic_ai import create_pydantic_ai_manifest
 
 def test_agent_manifest_schema():
     """Test the schema of the agent manifest."""

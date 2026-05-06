@@ -4,6 +4,13 @@ from enum import StrEnum
 
 from pydantic import BaseModel, Field
 
+from agents import Agent as OpenAIAgent
+from google.adk.agents import Agent as GoogleAgent
+from langgraph.graph.state import CompiledStateGraph as LangChainAgent
+from pydantic_ai import Agent as PydanticAIAgent
+
+AgentType = OpenAIAgent | GoogleAgent | LangChainAgent | PydanticAIAgent
+
 
 class AgentFramework(StrEnum):
     """Enum for the framework of an agent."""

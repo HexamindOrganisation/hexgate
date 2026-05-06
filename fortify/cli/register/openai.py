@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fortify_cli.register.models import (
+from fortify.cli.register.models import (
     AgentFramework,
     AgentManifest,
     InputProperty,
@@ -14,10 +14,9 @@ from agents.tool import FunctionTool
 
 def create_openai_manifest(agent: Agent, *, description: str | None = None) -> AgentManifest:
     """Build an AgentManifest from an OpenAI Agents SDK agent."""
-    instructions = agent.instructions if isinstance(agent.instructions, str) else None
     return AgentManifest(
         name=agent.name,
-        description=description or instructions,
+        description=description,
         framework=AgentFramework.OPENAI,
         tools=[_to_tool_definition(t) for t in agent.tools],
     )

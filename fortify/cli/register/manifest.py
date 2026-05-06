@@ -4,11 +4,11 @@ from langchain_core.tools import BaseTool
 from langgraph.graph.state import CompiledStateGraph as LangChainAgent
 from pydantic_ai import Agent as PydanticAIAgent
 
-from fortify_cli.register.google import create_google_manifest
-from fortify_cli.register.langchain import create_langchain_manifest
-from fortify_cli.register.models import AgentManifest
-from fortify_cli.register.openai import create_openai_manifest
-from fortify_cli.register.pydantic_ai import create_pydantic_ai_manifest
+from fortify.cli.register.google import create_google_manifest
+from fortify.cli.register.langchain import create_langchain_manifest
+from fortify.cli.register.models import AgentManifest
+from fortify.cli.register.openai import create_openai_manifest
+from fortify.cli.register.pydantic_ai import create_pydantic_ai_manifest
 
 AgentType = OpenAIAgent | GoogleAgent | LangChainAgent | PydanticAIAgent
 

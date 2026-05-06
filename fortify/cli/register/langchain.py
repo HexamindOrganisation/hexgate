@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fortify_cli.register.models import (
+from fortify.cli.register.models import (
     AgentFramework,
     AgentManifest,
     InputProperty,
@@ -35,6 +35,7 @@ def create_langchain_manifest(
 
 
 def _to_tool_definition(tool: BaseTool) -> ToolDefinition:
+    """Convert a LangChain/LangGraph tool to a ToolDefinition."""
     schema = _tool_schema(tool)
     properties = {
         prop_name: InputProperty(

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fortify_cli.register.models import (
+from fortify.cli.register.models import (
     AgentFramework,
     AgentManifest,
     InputProperty,
@@ -14,8 +14,7 @@ from pydantic_ai.tools import Tool
 
 def create_pydantic_ai_manifest(agent: Agent, *, description: str | None = None) -> AgentManifest:
     """Build an AgentManifest from a Pydantic AI agent."""
-    # resolve description from parameters or agent
-    description = description or agent.description or agent.instructions or None
+    description = description or agent.description or None
 
     # Build the tool definitions from the toolsets
     tools: list[ToolDefinition] = []
