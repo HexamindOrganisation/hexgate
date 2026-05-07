@@ -546,7 +546,7 @@ fortify --list-agents
 Register a code-defined agent's manifest with the Fortify platform. `--agent`
 takes a Python import path of the form `module.path:attribute`, the same shape
 as ASGI/WSGI entrypoints. The CLI imports the module, grabs the agent object,
-and POSTs its manifest to `${FORTIFY_API_URL}/v1/agents/register` using
+and POSTs its manifest to `${FORTIFY_API_URL}/v1/agents` using
 `${FORTIFY_KEY}` as the bearer token:
 
 ```bash
@@ -561,7 +561,7 @@ when registering one you also need to pass an import path to the tool list:
 fortify register --agent my_app.agents:graph --tools my_app.tools:my_tools
 ```
 
-Supported frameworks: OpenAI Agents SDK, Google ADK, Pydantic AI, LangChain/LangGraph.
+Supported frameworks: OpenAI Agents SDK, Google ADK, Pydantic AI, LangChain/LangGraph, Fortify agents.
 
 ## 🌐 Fortify Platform
 
