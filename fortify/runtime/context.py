@@ -1,11 +1,21 @@
-"""Execution-time tool context propagation."""
+"""Execution-time context propagation — tool-scope and user-scope."""
 
 from __future__ import annotations
 
 from contextvars import ContextVar, Token
 from dataclasses import dataclass
 
+from pydantic import BaseModel
+
 from fortify.runtime.workspace import Workspace
+
+
+class UserContext(BaseModel):
+    """Per-invocation user identity propagated into traces and policy decisions."""
+
+    user_id: str
+    session_id: str
+    user_role: str
 
 
 @dataclass(slots=True)

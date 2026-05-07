@@ -1,4 +1,4 @@
-from fortify.user_context import UserContext
+from fortify.runtime import UserContext
 from fortify.security import AgentPolicy, BaseToolPolicy
 
 

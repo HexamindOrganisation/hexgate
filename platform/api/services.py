@@ -1,20 +1,17 @@
 import hashlib
 import json
 import secrets
-import string
 
 from sqlmodel import Session, select
 
 from models import Agent, AgentVersion, DevToken, Project, Tool
 from schemas import AgentManifest, ToolDefinition
+from biscuits import MintRequest, make_envelope, mint_token
 from seeds import DEFAULT_AGENT_NAME, SEED_AGENTS
 
 DEFAULT_PROJECT_ID = "support-bot"
 DEFAULT_PROJECT_NAME = "support-bot"
 PROTECTED_AGENT_NAMES = {DEFAULT_AGENT_NAME}
-
-_SECRET_ALPHABET = string.ascii_letters + string.digits
-_SECRET_LEN = 32
 
 # Prefix map for human-readable row IDs (e.g. agt_a1b2c3…). Centralized here so
 # entropy / format changes happen in one place; class-keyed so a typo is a
@@ -110,11 +107,37 @@ def mint_dev_token(
     name: str,
     scopes: list[str],
     env: str,
+    *,
+    signing_key_bytes: bytes,
 ) -> tuple[DevToken, str]:
-    """Create a new dev token. Returns the row + the full secret (shown once)."""
-    secret_chars = "".join(secrets.choice(_SECRET_ALPHABET) for _ in range(_SECRET_LEN))
+    """Create a new dev token, signed as a Biscuit by the platform's root key.
+
+    The wire format stays human-readable: ``fty_<env>_<project>_<biscuit_b64>``.
+    Project id is duplicated in the prefix (for grep / GitHub-secret-scanning)
+    and inside the Biscuit's claims (the source of truth at verification time).
+
+    ``signing_key_bytes`` are the raw 32-byte Ed25519 private key from the
+    platform's keystore. Pulled out of the keystore at the call site so this
+    function stays decoupled from where the key actually lives.
+
+    Returns the persisted row + the full token string (the b64 form is what
+    the operator copies out of the dashboard — shown once, never stored
+    in the row outside of the ``secret`` column for revocation lookup).
+    """
+    token_id = new_id(DevToken)
+    biscuit_b64 = mint_token(
+        signing_key_bytes,
+        MintRequest(
+            project_id=project_id,
+            token_id=token_id,
+            name=name,
+            scopes=scopes,
+            env=env,
+            ttl_seconds=None,  # dev tokens don't expire by default; revoke explicitly.
+        ),
+    )
     prefix = f"fty_{env}"
-    full_token = f"{prefix}_{project_id}_{secret_chars}"
+    full_token = make_envelope(env, project_id, biscuit_b64)
 
     token = DevToken(
         id=new_id(DevToken),
@@ -162,11 +185,16 @@ def delete_dev_token(session: Session, project_id: str, token_id: str) -> bool:
 
 
 def mask_secret(full: str) -> str:
-    """Return e.g. `fty_live_8F3d…k29P` for list display."""
+    """Return e.g. ``fty_live_8F3d…k29P`` for list display.
+
+    Skips trailing ``=`` base64 padding when computing the tail so masked
+    Biscuit envelopes don't end on a meaningless ``=`` character.
+    """
     if len(full) <= 16:
         return full
     head = full[:12]
-    tail = full[-4:]
+    body = full.rstrip("=")
+    tail = body[-4:] if len(body) >= 4 else body
     return f"{head}\u2026{tail}"
 
 

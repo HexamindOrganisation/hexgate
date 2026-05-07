@@ -1,12 +1,12 @@
 """Public package surface for fortify."""
 
-from fortify.agent.factory import (
+from fortify.agents.factory import (
     create_agent,
     invoke_agent,
     stream_agent,
     stream_agent_raw,
 )
-from fortify.agent.security import (
+from fortify.agents.security import (
     enforce_policy,
     with_approval_handler,
     with_before_action,
@@ -19,12 +19,13 @@ from fortify.agents.loader import (
     list_registered_agents,
     load_agent,
     load_builtin_agent,
+    load_fortify_agent,
     load_local_agent,
     load_registered_agent,
     register_agent,
     unregister_agent,
 )
-from fortify.cloud import FortifyClient, FortifyConfig, load_fortify_agent
+from fortify.cloud import FortifyClient, FortifyConfig
 from fortify.runtime import LocalWorkspace, ToolUseContext, Workspace
 from fortify.security import AgentPolicy
 from fortify.tools import agent_tool, bash, edit_file, glob, grep, read_file, write_file

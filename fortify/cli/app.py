@@ -18,7 +18,7 @@ from rich.spinner import Spinner
 from rich.text import Text
 
 from fortify import with_approval_handler
-from fortify.agent.factory import AgentGraph, CallbackHandler, stream_agent
+from fortify.agents.factory import AgentGraph, CallbackHandler, stream_agent
 from fortify.agents.loader import (
     list_available_agents,
     load_agent,
@@ -26,8 +26,8 @@ from fortify.agents.loader import (
 )
 from fortify.cli.state import ChatState, LiveRunState, ToolActivity
 from fortify.config.settings import Settings
-from fortify.setup import bootstrap
-from fortify.stream import ToolCallState
+from fortify.bootstrap import bootstrap
+from fortify.streaming import ToolCallState
 from fortify.tools import fetch, web_search
 from fortify.tools.decorators import format_tool_call_label
 from fortify.tracing.langfuse import maybe_get_trace_url
