@@ -12,7 +12,9 @@ from agents import Agent
 from agents.tool import FunctionTool
 
 
-def create_openai_manifest(agent: Agent, *, description: str | None = None) -> AgentManifest:
+def create_openai_manifest(
+    agent: Agent, *, description: str | None = None
+) -> AgentManifest:
     """Build an AgentManifest from an OpenAI Agents SDK agent."""
     return AgentManifest(
         name=agent.name,

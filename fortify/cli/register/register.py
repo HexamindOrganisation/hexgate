@@ -8,6 +8,7 @@ from fortify.cli.register.models import AgentType
 
 DEFAULT_API_URL = "http://localhost:8000"
 
+
 def register_agent(
     agent: AgentType,
     *,

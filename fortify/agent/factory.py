@@ -42,7 +42,9 @@ AgentState: TypeAlias = dict[str, Any]
 AgentInput: TypeAlias = str | Sequence[object] | Mapping[str, object] | BaseModel
 ActionPayload: TypeAlias = dict[str, Any]
 ActionContext: TypeAlias = dict[str, Any] | None
-BeforeActionHook: TypeAlias = Callable[[ActionPayload, ActionContext], object | Awaitable[object]]
+BeforeActionHook: TypeAlias = Callable[
+    [ActionPayload, ActionContext], object | Awaitable[object]
+]
 ApprovalHandler: TypeAlias = (
     bool | Callable[[ActionPayload, ActionContext], bool | Awaitable[bool]]
 )
@@ -84,6 +86,7 @@ def _build_langchain_agent(
         name=name,
         cache=cache,
     )
+
 
 def _resolve_prompt_path(prompt_path: str | Path) -> Path:
     """Resolve a prompt path relative to the package root when needed."""
@@ -144,7 +147,11 @@ def _extract_query_from_messages(messages: Sequence[object]) -> str:
             if text:
                 return text
             continue
-        if isinstance(message, tuple) and len(message) >= 2 and message[0] in {"user", "human"}:
+        if (
+            isinstance(message, tuple)
+            and len(message) >= 2
+            and message[0] in {"user", "human"}
+        ):
             text = _coerce_message_text(message[1])
             if text:
                 return text
@@ -245,7 +252,9 @@ class CoolAgent:
         self.cache = cache
         self.workspace = workspace
 
-    async def ainvoke(self, payload: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
+    async def ainvoke(
+        self, payload: dict[str, Any], config: dict[str, Any]
+    ) -> dict[str, Any]:
         """Delegate invocation to the underlying graph."""
         return await self.graph.ainvoke(payload, config=config)
 
@@ -257,7 +266,9 @@ class CoolAgent:
         version: str,
     ) -> AsyncIterator[LangChainStreamEvent]:
         """Delegate event streaming to the underlying graph."""
-        async for event in self.graph.astream_events(payload, config=config, version=version):
+        async for event in self.graph.astream_events(
+            payload, config=config, version=version
+        ):
             yield event
 
     def with_tools(self, tools: Sequence[ToolSpec]) -> Self:
@@ -424,7 +435,9 @@ async def invoke_agent(
     tool_use_context: ToolUseContext | None = None,
 ) -> dict[str, Any]:
     """Invoke the agent for one normalized input payload."""
-    token = set_current_tool_use_context(_resolve_tool_use_context(agent, tool_use_context))
+    token = set_current_tool_use_context(
+        _resolve_tool_use_context(agent, tool_use_context)
+    )
     try:
         return await agent.ainvoke(
             normalize_input(input),
@@ -444,7 +457,9 @@ async def stream_agent_raw(
     """Stream raw LangChain events from the agent runtime."""
     config = get_langfuse_runnable_config(handler)
     config["run_id"] = new_root_run_id()
-    token = set_current_tool_use_context(_resolve_tool_use_context(agent, tool_use_context))
+    token = set_current_tool_use_context(
+        _resolve_tool_use_context(agent, tool_use_context)
+    )
     try:
         async for event in agent.astream_events(
             normalize_input(input),

@@ -19,7 +19,11 @@ from rich.text import Text
 
 from fortify import with_approval_handler
 from fortify.agent.factory import AgentGraph, CallbackHandler, stream_agent
-from fortify.agents.loader import list_available_agents, load_agent, resolve_agent_source
+from fortify.agents.loader import (
+    list_available_agents,
+    load_agent,
+    resolve_agent_source,
+)
 from fortify.cli.state import ChatState, LiveRunState, ToolActivity
 from fortify.config.settings import Settings
 from fortify.setup import bootstrap
@@ -103,7 +107,9 @@ def _render_current_run(
 
     for index, tool in enumerate(current_run.tools):
         renderables.append(
-            Text.assemble(_tool_prefix(tool), " ", (_tool_summary(runtime, tool), "white"))
+            Text.assemble(
+                _tool_prefix(tool), " ", (_tool_summary(runtime, tool), "white")
+            )
         )
         if tool.summary and tool.status == ToolCallState.FAILED:
             renderables.append(Text(f"  {tool.summary}", style="dim red"))
@@ -111,7 +117,9 @@ def _render_current_run(
             renderables.append(Text("│", style="dim white"))
 
     if current_run.reasoning_text.strip():
-        renderables.append(Text(f"  {current_run.reasoning_text.rstrip()}", style="dim white"))
+        renderables.append(
+            Text(f"  {current_run.reasoning_text.rstrip()}", style="dim white")
+        )
 
     if current_run.response_text.strip():
         if live:
@@ -149,7 +157,9 @@ def _print_completed_turn(
     trace_url: str | None = None,
 ) -> None:
     """Print one completed assistant turn as stable terminal output."""
-    console.print(Group(*_render_current_run(runtime, current_run, trace_url, live=False)))
+    console.print(
+        Group(*_render_current_run(runtime, current_run, trace_url, live=False))
+    )
     console.print()
 
 
@@ -182,7 +192,8 @@ def _build_runtime(
     )
     runtime_tools = list(getattr(agent, "tools", [])) + list(tools)
     tools_by_name = {
-        getattr(tool, "name", getattr(tool, "__name__", "tool")): tool for tool in runtime_tools
+        getattr(tool, "name", getattr(tool, "__name__", "tool")): tool
+        for tool in runtime_tools
     }
     if not local_only and os.environ.get("FORTIFY_KEY"):
         agent_source = "fortify"
@@ -225,7 +236,9 @@ def _prompt_for_approval(
                         style="white",
                     )
                     for key, value in (
-                        arguments.items() if isinstance(arguments, dict) else [("arguments", arguments)]
+                        arguments.items()
+                        if isinstance(arguments, dict)
+                        else [("arguments", arguments)]
                     )
                 ),
                 Text("Type y to approve or n to deny, then press Enter.", style="dim"),
@@ -250,7 +263,9 @@ def _build_approval_handler(
     if mode == "auto-deny":
         return False
 
-    def approval_handler(action: dict[str, object], _context: dict[str, object] | None) -> bool:
+    def approval_handler(
+        action: dict[str, object], _context: dict[str, object] | None
+    ) -> bool:
         return _prompt_for_approval(console, action)
 
     return approval_handler
@@ -259,8 +274,12 @@ def _build_approval_handler(
 def _parse_args() -> argparse.Namespace:
     """Parse command-line arguments for the inline chat app."""
     parser = argparse.ArgumentParser(description="Run the fortify inline chat CLI.")
-    parser.add_argument("--agent", help="Agent id to load from local or builtin definitions.")
-    parser.add_argument("--model", help="Optional model override for the selected agent.")
+    parser.add_argument(
+        "--agent", help="Agent id to load from local or builtin definitions."
+    )
+    parser.add_argument(
+        "--model", help="Optional model override for the selected agent."
+    )
     parser.add_argument(
         "--use",
         help="Python script that registers code-defined agents before loading --agent.",
@@ -295,7 +314,9 @@ def _default_agent_name(base_dir: Path) -> str:
     if "researcher" in available:
         return "researcher"
     if not available:
-        raise RuntimeError("No agents found in the current project or builtin registry.")
+        raise RuntimeError(
+            "No agents found in the current project or builtin registry."
+        )
     return available[0]
 
 
@@ -351,7 +372,9 @@ async def _chat_loop(console: Console, runtime: AgentRuntime) -> None:
             state.clear()
             console.clear()
             console.print(_render_welcome(runtime))
-            console.print("[dim]Ask a question. Use /clear to reset or /exit to quit.[/]")
+            console.print(
+                "[dim]Ask a question. Use /clear to reset or /exit to quit.[/]"
+            )
             console.print()
             continue
 
@@ -366,7 +389,9 @@ async def _chat_loop(console: Console, runtime: AgentRuntime) -> None:
             refresh_per_second=20,
             transient=True,
         ) as live:
-            async for event in stream_agent(runtime.agent, runtime.handler, state.build_input()):
+            async for event in stream_agent(
+                runtime.agent, runtime.handler, state.build_input()
+            ):
                 state.apply_event(event)
                 if state.current_run is not None:
                     current_run = state.current_run
@@ -419,14 +444,19 @@ def run() -> None:
     if args.serve:
         # In serve mode, approval-ask doesn't make sense (no tty for prompts).
         # Coerce to auto-approve unless the caller explicitly picked auto-deny.
-        approval_mode = args.approval_mode if args.approval_mode == "auto-deny" else "auto-approve"
+        approval_mode = (
+            args.approval_mode if args.approval_mode == "auto-deny" else "auto-approve"
+        )
         approval_handler = _build_approval_handler(console, approval_mode)
 
         def _wrap_for_serve(rt: AgentRuntime) -> AgentRuntime:
             rt.agent = with_approval_handler(
                 rt.agent,
                 approval_handler,
-                context_provider=lambda: {"surface": "serve", "agent_name": rt.agent_name},
+                context_provider=lambda: {
+                    "surface": "serve",
+                    "agent_name": rt.agent_name,
+                },
             )
             return rt
 

@@ -38,7 +38,9 @@ async def grep(
     tool_use_context: ToolUseContext,
     path: str | None = None,
     glob: str | None = None,
-    output_mode: Literal["files_with_matches", "content", "count"] = "files_with_matches",
+    output_mode: Literal[
+        "files_with_matches", "content", "count"
+    ] = "files_with_matches",
     case_insensitive: bool = False,
     head_limit: int = DEFAULT_GREP_LIMIT,
 ) -> dict[str, object]:

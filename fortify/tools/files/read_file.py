@@ -4,7 +4,11 @@ from __future__ import annotations
 
 from fortify.runtime import ToolUseContext
 from fortify.tools.decorators import agent_tool
-from fortify.tools.files._common import display_path, ensure_text_file, require_workspace
+from fortify.tools.files._common import (
+    display_path,
+    ensure_text_file,
+    require_workspace,
+)
 
 
 def _format_read_file_call(arguments: dict[str, object]) -> str:

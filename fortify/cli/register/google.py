@@ -15,7 +15,9 @@ from google.adk.tools.base_tool import BaseTool
 from google.adk.tools.function_tool import FunctionTool
 
 
-def create_google_manifest(agent: Agent, *, description: str | None = None) -> AgentManifest:
+def create_google_manifest(
+    agent: Agent, *, description: str | None = None
+) -> AgentManifest:
     """Build an AgentManifest from a Google ADK agent."""
 
     tools: list[ToolDefinition] = []
@@ -24,7 +26,7 @@ def create_google_manifest(agent: Agent, *, description: str | None = None) -> A
         definition = _to_tool_definition(tool)
         if definition is not None:
             tools.append(definition)
-    
+
     # resolve description from agent or provided description
     description = description or agent.description or None
 
@@ -43,7 +45,9 @@ def _to_tool_definition(tool: BaseTool) -> ToolDefinition | None:
         return None
 
     parameters = declaration.parameters
-    raw_properties: dict[str, Any] = dict(parameters.properties or {}) if parameters else {}
+    raw_properties: dict[str, Any] = (
+        dict(parameters.properties or {}) if parameters else {}
+    )
     properties = {
         prop_name: InputProperty(
             title=prop_name,

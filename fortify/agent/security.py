@@ -92,7 +92,10 @@ class GuardedTool(BaseTool):
 
     def _invoke_wrapped_sync(self, *args: Any, **kwargs: Any) -> Any:
         """Call the original sync implementation without re-entering tool instrumentation."""
-        if isinstance(self.wrapped_tool, StructuredTool) and self.wrapped_tool.func is not None:
+        if (
+            isinstance(self.wrapped_tool, StructuredTool)
+            and self.wrapped_tool.func is not None
+        ):
             return self.wrapped_tool.func(*args, **kwargs)
         return self.wrapped_tool._run(*args, **kwargs)
 
@@ -104,12 +107,16 @@ class GuardedTool(BaseTool):
 
         authorize_tool_call(self.policy, self.name, kwargs)
 
-    async def _check_before_action(self, kwargs: dict[str, Any]) -> dict[str, Any] | None:
+    async def _check_before_action(
+        self, kwargs: dict[str, Any]
+    ) -> dict[str, Any] | None:
         """Apply the hosted Gate 2 hook when configured."""
         if self.before_action is None:
             return None
         try:
-            decision = self.before_action(self._build_action(kwargs), self._build_context())
+            decision = self.before_action(
+                self._build_action(kwargs), self._build_context()
+            )
             if isawaitable(decision):
                 await decision
         except Exception as error:
@@ -122,7 +129,9 @@ class GuardedTool(BaseTool):
             return False
         if isinstance(self.approval_handler, bool):
             return self.approval_handler
-        decision = self.approval_handler(self._build_action(kwargs), self._build_context())
+        decision = self.approval_handler(
+            self._build_action(kwargs), self._build_context()
+        )
         if isawaitable(decision):
             decision = await decision
         return bool(decision)
@@ -133,7 +142,9 @@ class GuardedTool(BaseTool):
             return False
         if isinstance(self.approval_handler, bool):
             return self.approval_handler
-        decision = self.approval_handler(self._build_action(kwargs), self._build_context())
+        decision = self.approval_handler(
+            self._build_action(kwargs), self._build_context()
+        )
         if isawaitable(decision):
             raise RuntimeError(
                 "approval_handler requires async tool execution when it returns an awaitable"
@@ -324,4 +335,6 @@ def with_approval_handler(
     context_provider: ContextProvider | None = None,
 ) -> AgentGraph:
     """Return an agent runtime with a Gate 1 approval resolver applied."""
-    return agent.with_approval_handler(approval_handler, context_provider=context_provider)
+    return agent.with_approval_handler(
+        approval_handler, context_provider=context_provider
+    )

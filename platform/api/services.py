@@ -131,7 +131,11 @@ def mint_dev_token(
 
 
 def list_dev_tokens(session: Session, project_id: str) -> list[DevToken]:
-    stmt = select(DevToken).where(DevToken.project_id == project_id).order_by(DevToken.created_at.desc())  # type: ignore[attr-defined]
+    stmt = (
+        select(DevToken)
+        .where(DevToken.project_id == project_id)
+        .order_by(DevToken.created_at.desc())
+    )  # type: ignore[attr-defined]
     return list(session.exec(stmt))
 
 
@@ -176,7 +180,9 @@ def compute_manifest_hash(manifest: AgentManifest) -> str:
     always hashes to the same hex digest regardless of Python dict ordering.
     """
     payload = manifest.model_dump(mode="json")
-    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    canonical = json.dumps(
+        payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    )
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
@@ -200,7 +206,9 @@ def register_manifest(
             return existing, False
 
     next_version = 1 if agent_created else _next_version_number(session, agent.id)
-    version = _create_agent_version(session, agent.id, manifest, content_hash, next_version)
+    version = _create_agent_version(
+        session, agent.id, manifest, content_hash, next_version
+    )
     _create_tools(session, version.id, manifest.tools)
 
     session.commit()

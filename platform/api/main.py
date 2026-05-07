@@ -1,6 +1,14 @@
 from contextlib import asynccontextmanager
 
-from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import (
+    APIRouter,
+    Depends,
+    FastAPI,
+    Header,
+    HTTPException,
+    WebSocket,
+    WebSocketDisconnect,
+)
 from fastapi.middleware.cors import CORSMiddleware
 from sqlmodel import Session
 
@@ -83,7 +91,9 @@ def require_project(
     has only an API key, not a project id in the URL.
     """
     if authorization is None or not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="missing or malformed authorization header")
+        raise HTTPException(
+            status_code=401, detail="missing or malformed authorization header"
+        )
     secret = authorization.removeprefix("Bearer ").strip()
     token = find_token_by_secret(session, secret)
     if token is None:
@@ -106,7 +116,9 @@ def v1_health() -> dict[str, str]:
 
 
 @v1.get("/projects/{project_id}/tokens", response_model=list[TokenListItem])
-def list_tokens(project_id: str, session: Session = Depends(get_session)) -> list[TokenListItem]:
+def list_tokens(
+    project_id: str, session: Session = Depends(get_session)
+) -> list[TokenListItem]:
     tokens = list_dev_tokens(session, project_id)
     return [
         TokenListItem(
@@ -121,13 +133,17 @@ def list_tokens(project_id: str, session: Session = Depends(get_session)) -> lis
     ]
 
 
-@v1.post("/projects/{project_id}/tokens", response_model=TokenMintResponse, status_code=201)
+@v1.post(
+    "/projects/{project_id}/tokens", response_model=TokenMintResponse, status_code=201
+)
 def mint_token(
     project_id: str,
     body: TokenMintRequest,
     session: Session = Depends(get_session),
 ) -> TokenMintResponse:
-    ensure_default_project(session)  # POC: lazy-create so single project works out of the box
+    ensure_default_project(
+        session
+    )  # POC: lazy-create so single project works out of the box
     token, full = mint_dev_token(
         session,
         project_id=project_id,
@@ -157,7 +173,9 @@ def revoke_token(
 
 
 @v1.get("/projects/{project_id}/agents", response_model=list[AgentRead])
-def api_list_agents(project_id: str, session: Session = Depends(get_session)) -> list[AgentRead]:
+def api_list_agents(
+    project_id: str, session: Session = Depends(get_session)
+) -> list[AgentRead]:
     ensure_default_project(session)
     agents = list_agents(session, project_id)
     return [

@@ -27,7 +27,9 @@ class DevToken(SQLModel, table=True):
 
 
 class Agent(SQLModel, table=True):
-    __table_args__ = (UniqueConstraint("project_id", "name", name="uq_agent_project_name"),)
+    __table_args__ = (
+        UniqueConstraint("project_id", "name", name="uq_agent_project_name"),
+    )
 
     id: str = Field(primary_key=True)
     project_id: str = Field(foreign_key="project.id", index=True)
