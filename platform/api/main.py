@@ -6,6 +6,7 @@ from fastapi import (
     FastAPI,
     Header,
     HTTPException,
+    Response,
     WebSocket,
     WebSocketDisconnect,
 )
@@ -239,14 +240,16 @@ def api_update_agent(
     )
 
 
-@v1.post("/agents", response_model=RegisterAgentResponse, status_code=201)
+@v1.post("/agents", response_model=RegisterAgentResponse)
 def api_register_agent(
     body: RegisterAgentRequest,
+    response: Response,
     project_id: str = Depends(require_project),
     session: Session = Depends(get_session),
 ) -> RegisterAgentResponse:
     """SDK-facing: register/upsert an agent manifest under the bearer's project."""
     version, created = register_manifest(session, project_id, body.manifest)
+    response.status_code = 201 if created else 200
     return RegisterAgentResponse(
         agent_id=version.agent_id,
         agent_version_id=version.id,

@@ -1,7 +1,7 @@
 import os
 import requests
 from dotenv import load_dotenv
-from langchain.tools import BaseTool
+from langchain_core.tools import BaseTool
 
 from fortify.cli.register.manifest import create_manifest
 from fortify.cli.register.models import AgentType

@@ -11,8 +11,7 @@ def run() -> None:
     if len(arguments) > 1 and arguments[1] == "register":
         from fortify.cli.register.main import main as run_register
 
-        run_register(arguments[2:])
-        return
+        sys.exit(run_register(arguments[2:]))
 
     from fortify.cli.app import run as run_app
 

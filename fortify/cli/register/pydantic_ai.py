@@ -16,6 +16,11 @@ def create_pydantic_ai_manifest(
     agent: Agent, *, description: str | None = None
 ) -> AgentManifest:
     """Build an AgentManifest from a Pydantic AI agent."""
+    if not agent.name:
+        raise ValueError(
+            "Pydantic AI agent has no name — pass `Agent(name=...)` so the "
+            "manifest can identify it on the platform."
+        )
     description = description or agent.description or None
 
     # Build the tool definitions from the toolsets

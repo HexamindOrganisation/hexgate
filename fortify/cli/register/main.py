@@ -7,7 +7,7 @@ import importlib
 import sys
 from typing import Any
 
-from langchain.tools import BaseTool
+from langchain_core.tools import BaseTool
 
 from fortify.cli.register.register import register_agent
 

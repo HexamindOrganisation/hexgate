@@ -9,7 +9,7 @@ from fortify.cli.register.models import (
 )
 
 from agents import Agent
-from agents.tool import FunctionTool
+from agents.tool import FunctionTool, Tool
 
 
 def create_openai_manifest(
@@ -24,20 +24,26 @@ def create_openai_manifest(
     )
 
 
-def _to_tool_definition(tool: FunctionTool) -> ToolDefinition:
-    schema = tool.params_json_schema or {}
-    properties = {
-        prop_name: InputProperty(
-            title=prop.get("title", prop_name),
-            type=prop.get("type", "string"),
+def _to_tool_definition(tool: Tool) -> ToolDefinition:
+    if isinstance(tool, FunctionTool):
+        schema = tool.params_json_schema or {}
+        properties = {
+            prop_name: InputProperty(
+                title=prop.get("title", prop_name),
+                type=prop.get("type", "string"),
+            )
+            for prop_name, prop in schema.get("properties", {}).items()
+        }
+        return ToolDefinition(
+            name=tool.name,
+            description=tool.description or "",
+            input_schema=InputSchema(
+                properties=properties,
+                required=list(schema.get("required", [])),
+            ),
         )
-        for prop_name, prop in schema.get("properties", {}).items()
-    }
     return ToolDefinition(
-        name=tool.name,
-        description=tool.description or "",
-        input_schema=InputSchema(
-            properties=properties,
-            required=list(schema.get("required", [])),
-        ),
+        name=getattr(tool, "name", type(tool).__name__),
+        description="",
+        input_schema=InputSchema(properties={}, required=[]),
     )

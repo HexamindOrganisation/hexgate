@@ -18,8 +18,13 @@ def create_fortify_manifest(
     agent: CoolAgent, *, description: str | None = None
 ) -> AgentManifest:
     """Build an AgentManifest from a Fortify agent created by `create_agent`."""
+    if not agent.name:
+        raise ValueError(
+            "Fortify agent has no name — set a name on the CoolAgent so the "
+            "manifest can identify it on the platform."
+        )
     return AgentManifest(
-        name=agent.name or "fortify_agent",
+        name=agent.name,
         description=description,
         framework=AgentFramework.FORTIFY,
         tools=[_to_tool_definition(t) for t in agent.tools],

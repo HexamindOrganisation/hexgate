@@ -21,9 +21,8 @@ def create_manifest(
 ) -> AgentManifest:
     """Create an AgentManifest from an Agent.
 
-    `tools` is required only when `agent` is a raw LangChain compiled graph,
-    since those graphs do not reliably expose their tool nodes. Fortify
-    `CoolAgent` instances carry their tool list on the wrapper itself.
+    `tools` is required and used explicitly only when `agent` is a raw LangChain 
+    compiled graph, since those graphs do not reliably expose their tool nodes.
     """
     if isinstance(agent, CoolAgent):
         return create_fortify_manifest(agent, description=description)
