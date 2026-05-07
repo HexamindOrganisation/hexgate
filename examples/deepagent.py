@@ -5,7 +5,7 @@ from deepagents import create_deep_agent
 from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI
 
-from fortify.user_context import UserContext
+from fortify.runtime import UserContext
 from fortify.adapters.langchain import wrap_langchain_agent
 
 

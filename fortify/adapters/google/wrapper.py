@@ -1,6 +1,6 @@
 from google.adk.agents import BaseAgent
 
-from fortify.user_context import UserContext
+from fortify.runtime import UserContext
 from fortify.adapters.google.tools import wrap_tools
 from fortify.security import AgentPolicy, BaseToolPolicy
 

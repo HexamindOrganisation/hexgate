@@ -22,7 +22,7 @@ from rich.console import Console
 from websockets.asyncio.client import connect
 from websockets.exceptions import ConnectionClosed
 
-from fortify.agent.factory import stream_agent
+from fortify.agents.factory import stream_agent
 from fortify.cli.state import ChatState
 from fortify.cloud.client import FortifyConfig
 

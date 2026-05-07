@@ -8,7 +8,7 @@ from langfuse import get_client, propagate_attributes
 from langfuse.langchain import CallbackHandler
 from langgraph.graph.state import CompiledStateGraph
 
-from fortify.user_context import UserContext
+from fortify.runtime import UserContext
 from fortify.adapters.langchain.policy import build_agent_policy
 from fortify.adapters.langchain.tools import active_policy
 

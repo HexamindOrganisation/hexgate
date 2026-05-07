@@ -16,7 +16,7 @@ from openinference.instrumentation.openai_agents import OpenAIAgentsInstrumentor
 
 from langfuse import get_client, propagate_attributes
 
-from fortify.user_context import UserContext
+from fortify.runtime import UserContext
 from fortify.adapters.openai.wrapper import wrap_openai_agent
 
 

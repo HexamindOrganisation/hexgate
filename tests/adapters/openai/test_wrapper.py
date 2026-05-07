@@ -9,7 +9,7 @@ from agents import Agent, FunctionTool
 
 from fortify.adapters.openai.wrapper import build_agent_policy, wrap_openai_agent
 from fortify.security import AgentPolicy
-from fortify.user_context import UserContext
+from fortify.runtime import UserContext
 
 
 def _user_context() -> UserContext:

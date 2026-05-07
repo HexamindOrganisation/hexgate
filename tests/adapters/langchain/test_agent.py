@@ -9,7 +9,7 @@ import pytest
 from fortify.adapters.langchain import tools as langchain_tools
 from fortify.adapters.langchain.agent import FortifyLangchainAgent
 from fortify.security import AgentPolicy
-from fortify.user_context import UserContext
+from fortify.runtime import UserContext
 
 
 def _user_context() -> UserContext:

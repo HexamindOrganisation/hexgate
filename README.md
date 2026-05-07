@@ -57,7 +57,7 @@ fortify --use examples/file_agents.py --agent workspace_explorer
 fortify --use examples/research_agents.py --agent update_researcher
 ```
 
-The included local agent lives in `example_agent/`, and the CLI can also load:
+The included local agent lives in `examples/example_agent/`, and the CLI can also load:
 
 - builtin packaged agents like `researcher`
 - code-defined agents registered from `examples/file_agents.py`
@@ -183,7 +183,7 @@ import asyncio
 from agents import Agent, function_tool
 from dotenv import load_dotenv
 
-from fortify.user_context import UserContext
+from fortify.runtime import UserContext
 from fortify.adapters.openai import FortifyRunner
 
 
@@ -236,7 +236,7 @@ from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI
 from langgraph.prebuilt import create_react_agent
 
-from fortify.user_context import UserContext
+from fortify.runtime import UserContext
 from fortify.adapters.langchain import wrap_langchain_agent
 
 
@@ -303,7 +303,7 @@ from google.adk.models.lite_llm import LiteLlm
 from google.adk.sessions import InMemorySessionService
 from google.genai import types
 
-from fortify.user_context import UserContext
+from fortify.runtime import UserContext
 from fortify.adapters.google import FortifyRunner
 
 
@@ -377,7 +377,7 @@ import asyncio
 from dotenv import load_dotenv
 from pydantic_ai import Agent
 
-from fortify.user_context import UserContext
+from fortify.runtime import UserContext
 from fortify.adapters.pydantic_ai import wrap_pydantic_agent
 
 
@@ -427,10 +427,12 @@ What happens under the hood:
 
 Working scripts in `examples/`:
 
-- `examples/openai.py` — `FortifyRunner` (OpenAI Agents SDK) end-to-end.
-- `examples/langchain.py` — `wrap_langchain_agent` (LangChain) end-to-end with `create_react_agent`.
-- `examples/google.py` — `FortifyRunner` (Google ADK) end-to-end with `InMemorySessionService`.
-- `examples/pydantic_ai.py` — `wrap_pydantic_agent` (Pydantic AI) end-to-end.
+- `examples/openai_demo.py` — `FortifyRunner` (OpenAI Agents SDK) end-to-end.
+- `examples/langchain_demo.py` — `wrap_langchain_agent` (LangChain) end-to-end with `create_react_agent`.
+- `examples/google_demo.py` — `FortifyRunner` (Google ADK) end-to-end with `InMemorySessionService`.
+- `examples/pydantic_ai_demo.py` — `wrap_pydantic_agent` (Pydantic AI) end-to-end.
+
+> **Note on naming.** These demo files end in `_demo.py` so their filenames don't shadow the installed packages they import (`agents`, `google`, `langchain`, `openai`, `pydantic_ai`). Without the suffix, running any script inside `examples/` would put the directory on `sys.path[0]` and Python would import the demo files instead of the real packages.
 
 ## 🧠 Define Agents In Code
 
@@ -479,8 +481,9 @@ The CLI also discovers local agents from:
 
 - `./<agent_dir>/agent.yaml`
 - `./agents/<agent_dir>/agent.yaml`
+- `./examples/<agent_dir>/agent.yaml`
 
-This repo includes a root-level `example_agent/` directory, so from the project root you can simply run:
+This repo ships a demo agent at `examples/example_agent/`, so from the project root you can simply run:
 
 ```bash
 fortify --agent example_agent
@@ -786,6 +789,35 @@ Copy `.env.sample` to `.env` and set:
 - `LANGFUSE_PUBLIC_KEY`
 - optional `LANGFUSE_HOST`
 
+## 🧪 Tests
+
+The SDK suite (367 cases) lives at `tests/` and runs with `pytest`. The platform suite (36 cases) lives at `platform/api/tests/`.
+
+If you're already in a project virtualenv (`asianf/.venv/`):
+
+```bash
+uv run pytest tests/                                # SDK
+cd platform/api && uv run pytest tests/             # platform
+```
+
+If you keep your dev env elsewhere (e.g. a `micromamba` env), point `uv` at it and pass `--active` so it doesn't try to manage `.venv` for you:
+
+```bash
+# Make uv use your current micromamba env as the project environment.
+export UV_PROJECT_ENVIRONMENT=/Users/<you>/micromamba/envs/<your-env>
+
+# First time only: pull dev-only deps (pytest-asyncio, ruff, etc.) into it.
+uv sync --extra dev
+
+# Run any uv-driven command against that env from now on.
+uv run --active pytest tests/
+uv run --active ruff check .
+```
+
+Without `--extra dev` you'll see *"async functions are not natively supported"* across every `@pytest.mark.asyncio` test — `pytest-asyncio` lives in the dev group and isn't installed by a plain `uv sync`. Same trap if you bring up a fresh env and forget the flag.
+
+Drop the `UV_PROJECT_ENVIRONMENT` export into your shell rc (or a per-project `direnv` `.envrc`) if you don't want to type it every shell.
+
 ## ▶️ Run It
 
 Install the package into your current environment:
@@ -797,7 +829,7 @@ python -m pip install -e .
 Run the config-driven demo:
 
 ```bash
-python -m fortify.demo
+python examples/demo.py
 ```
 
 Run the inline chat CLI with a local or builtin YAML agent:

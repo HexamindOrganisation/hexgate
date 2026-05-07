@@ -4,7 +4,14 @@ from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, WebSocke
 from fastapi.middleware.cors import CORSMiddleware
 from sqlmodel import Session
 
+from biscuits import (
+    TokenError,
+    TokenSignatureError,
+    parse_envelope,
+    verify_token,
+)
 from db import engine, init_db
+from keystore import FileKeyStore
 from relay import registry
 from schemas import (
     AgentRead,
@@ -26,9 +33,13 @@ from services import (
 )
 
 
+keystore = FileKeyStore()
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     init_db()
+    keystore.ensure_keypair()
     with Session(engine) as session:
         ensure_default_project(session)
     yield
@@ -56,18 +67,38 @@ def optional_dev_token(
 ) -> None:
     """Validate Authorization: Bearer <fortify_key> when present.
 
-    POC behaviour: the header is optional so the dashboard (which has no user
-    session concept yet) can keep calling these endpoints. When the header is
-    present we validate it, reject on mismatch, and touch last_used_at so the
-    UI shows real activity. Tighten to required in Phase C.
+    Two gates run when a header is supplied:
+
+    1. **Signature verification** — parse the envelope, decode the Biscuit,
+       check it chains to the platform's root public key. Rejects tampered
+       tokens and tokens minted by some other platform instance.
+    2. **Revocation lookup** — confirm the exact secret is still in the
+       ``DevToken`` table and update ``last_used_at``. Catches revocation
+       even if the Biscuit signature is intrinsically valid.
+
+    POC behaviour: the header itself remains optional so the dashboard
+    (no user-session concept yet) can keep calling these endpoints
+    unauthenticated. Tighten to required once the dashboard auth lands.
     """
     if authorization is None:
         return
     if not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="malformed authorization header")
     secret = authorization.removeprefix("Bearer ").strip()
+
+    # Signature gate
+    try:
+        _, _, biscuit_b64 = parse_envelope(secret)
+    except TokenError:
+        raise HTTPException(status_code=401, detail="malformed fortify key") from None
+    try:
+        verify_token(biscuit_b64, keystore.public_key_bytes())
+    except TokenSignatureError:
+        raise HTTPException(status_code=401, detail="invalid fortify key signature") from None
+
+    # Revocation gate
     if find_token_by_secret(session, secret) is None:
-        raise HTTPException(status_code=401, detail="invalid fortify key")
+        raise HTTPException(status_code=401, detail="unknown or revoked fortify key")
 
 
 @app.get("/health")
@@ -82,6 +113,31 @@ v1 = APIRouter(prefix="/v1")
 @v1.get("/health")
 def v1_health() -> dict[str, str]:
     return {"status": "ok", "service": "fortify-api", "version": "v1"}
+
+
+@v1.get("/.well-known/keys")
+def well_known_keys() -> dict[str, object]:
+    """Publish the platform's signing public key + fingerprint.
+
+    JWKS-shaped so we can grow into multi-key publishing later without
+    breaking clients. Lets dashboards and CLIs sanity-check that what
+    their SDK has embedded matches what this platform is signing with.
+    """
+    import base64
+
+    return {
+        "keys": [
+            {
+                "kty": "OKP",
+                "crv": "Ed25519",
+                "use": "sig",
+                "x": base64.urlsafe_b64encode(keystore.public_key_bytes())
+                .rstrip(b"=")
+                .decode("ascii"),
+                "fingerprint": keystore.fingerprint(),
+            }
+        ]
+    }
 
 
 @v1.get("/projects/{project_id}/tokens", response_model=list[TokenListItem])
@@ -113,6 +169,7 @@ def mint_token(
         name=body.name,
         scopes=body.scopes,
         env=body.env,
+        signing_key_bytes=keystore._private_key_bytes(),
     )
     return TokenMintResponse(
         id=token.id,

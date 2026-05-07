@@ -1,5 +1,11 @@
-"""Helpers for loading packaged agent definitions."""
+"""Public surface for the agents package — factory, policy enforcement, loaders."""
 
+from fortify.agents.factory import (
+    create_agent,
+    invoke_agent,
+    stream_agent,
+    stream_agent_raw,
+)
 from fortify.agents.loader import (
     clear_registered_agents,
     list_available_agents,
@@ -7,6 +13,7 @@ from fortify.agents.loader import (
     load_builtin_agent_policy,
     load_builtin_agent_spec,
     load_agent,
+    load_fortify_agent,
     load_local_agent,
     load_local_agent_policy,
     load_local_agent_spec,
@@ -20,10 +27,18 @@ from fortify.agents.loader import (
     unregister_agent,
 )
 from fortify.agents.models import AgentSpec
+from fortify.agents.security import (
+    enforce_policy,
+    with_approval_handler,
+    with_before_action,
+)
 
 __all__ = [
     "AgentSpec",
     "clear_registered_agents",
+    "create_agent",
+    "enforce_policy",
+    "invoke_agent",
     "list_available_agents",
     "list_builtin_agents",
     "list_local_agents",
@@ -32,6 +47,7 @@ __all__ = [
     "load_builtin_agent",
     "load_builtin_agent_policy",
     "load_builtin_agent_spec",
+    "load_fortify_agent",
     "load_local_agent",
     "load_local_agent_policy",
     "load_local_agent_spec",
@@ -39,5 +55,9 @@ __all__ = [
     "register_agent",
     "resolve_agent_source",
     "resolve_builtin_tools",
+    "stream_agent",
+    "stream_agent_raw",
     "unregister_agent",
+    "with_approval_handler",
+    "with_before_action",
 ]

@@ -1,8 +1,7 @@
 import dataclasses
-import os
 from agents import Agent
 
-from fortify.user_context import UserContext
+from fortify.runtime import UserContext
 from fortify.adapters.openai.tools import wrap_tools
 from fortify.security import AgentPolicy, BaseToolPolicy
 

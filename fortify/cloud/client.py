@@ -1,13 +1,33 @@
-"""HTTP client for the Fortify control plane — stdlib only, no added deps."""
+"""HTTP client for the Fortify control plane.
+
+The client trusts ``FORTIFY_KEY`` only after verifying its Biscuit signature
+against the platform's public key. The public key is resolved in this order:
+
+1. Explicit ``public_key`` arg passed to ``FortifyConfig``.
+2. ``FORTIFY_PUBLIC_KEY`` env var (base64 url-safe, 32 raw bytes).
+3. Fetched from ``GET /v1/.well-known/keys`` on first use (TOFU for POC;
+   embed a build-time constant for hosted Fortify Cloud later).
+
+If none of the above produces a verifying key, the client raises with a
+clear error rather than blindly forwarding the bearer token.
+"""
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import urllib.error
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
+
+from fortify.cloud.biscuit import (
+    TokenError,
+    TokenSignatureError,
+    parse_envelope,
+    verify_biscuit,
+)
 
 DEFAULT_BASE_URL = "http://localhost:8000"
 DEFAULT_TIMEOUT = 10.0
@@ -36,6 +56,7 @@ class FortifyConfig:
     base_url: str
     api_key: str
     project_id: str
+    public_key: bytes | None = field(default=None, repr=False)
 
     @classmethod
     def from_env(
@@ -44,8 +65,15 @@ class FortifyConfig:
         project_id: str | None = None,
         base_url: str | None = None,
         api_key: str | None = None,
+        public_key: bytes | None = None,
     ) -> "FortifyConfig":
-        """Resolve configuration from explicit args → env → key prefix."""
+        """Resolve configuration from explicit args → env → key prefix.
+
+        ``public_key`` is optional here — when omitted, the client fetches
+        it from ``/v1/.well-known/keys`` on first use. Pass it (or set
+        ``FORTIFY_PUBLIC_KEY`` env var) when you want signature verification
+        without a startup network round-trip, e.g. in CI or on cold boots.
+        """
         key = api_key or os.environ.get("FORTIFY_KEY")
         if not key:
             raise FortifyError(
@@ -68,7 +96,27 @@ class FortifyConfig:
                 "(fty_<env>_<project>_<secret>)"
             )
 
-        return cls(base_url=url, api_key=key, project_id=resolved_project)
+        resolved_pub = public_key if public_key is not None else _public_key_from_env()
+
+        return cls(
+            base_url=url,
+            api_key=key,
+            project_id=resolved_project,
+            public_key=resolved_pub,
+        )
+
+
+def _public_key_from_env() -> bytes | None:
+    """Decode ``FORTIFY_PUBLIC_KEY`` (base64 url-safe) if set, else None."""
+    raw = os.environ.get("FORTIFY_PUBLIC_KEY")
+    if not raw:
+        return None
+    try:
+        # urlsafe_b64decode requires padding; tolerate keys minted without it.
+        padded = raw + "=" * (-len(raw) % 4)
+        return base64.urlsafe_b64decode(padded)
+    except (ValueError, TypeError) as exc:
+        raise FortifyError(f"FORTIFY_PUBLIC_KEY is not valid base64: {exc}") from exc
 
 
 def _parse_project_from_key(key: str) -> str | None:
@@ -90,6 +138,8 @@ class FortifyClient:
     ) -> None:
         self.config = config
         self.timeout = timeout
+        self._public_key: bytes | None = config.public_key
+        self._verified: bool = False
 
     @classmethod
     def from_env(cls, **kwargs: Any) -> "FortifyClient":
@@ -97,20 +147,78 @@ class FortifyClient:
 
     def get_agent(self, name: str) -> dict[str, Any]:
         """Fetch {agent_yaml, policy_yaml, system_md, ...} for a named agent."""
+        self._ensure_key_verified()
         url = (
             f"{self.config.base_url}/v1/projects/{self.config.project_id}/agents/{name}"
         )
         return self._get(url)
 
+    # ------------------------------------------------------------------
+    # Biscuit verification
+    # ------------------------------------------------------------------
+
+    def _ensure_key_verified(self) -> None:
+        """Verify the Biscuit signature once before trusting the API key.
+
+        Lazy on first use so that ``FortifyClient(...)`` itself stays cheap
+        and side-effect-free. Subsequent calls are no-ops.
+        """
+        if self._verified:
+            return
+        try:
+            _, _, biscuit_b64 = parse_envelope(self.config.api_key)
+        except TokenError as exc:
+            raise FortifyError(f"FORTIFY_KEY is malformed: {exc}") from exc
+
+        pub = self._resolve_public_key()
+        try:
+            verify_biscuit(biscuit_b64, pub)
+        except TokenSignatureError as exc:
+            raise FortifyError(
+                "FORTIFY_KEY signature does not chain to the platform's public key. "
+                "Either the key is from a different platform, or it has been tampered with."
+            ) from exc
+        self._verified = True
+
+    def _resolve_public_key(self) -> bytes:
+        """Return the platform's signing public key, fetching JWKS if needed."""
+        if self._public_key is not None:
+            return self._public_key
+        self._public_key = self._fetch_public_key()
+        return self._public_key
+
+    def _fetch_public_key(self) -> bytes:
+        """GET /v1/.well-known/keys and return the first key's raw bytes."""
+        url = f"{self.config.base_url}/v1/.well-known/keys"
+        payload = self._raw_get(url, authorize=False)
+        try:
+            keys = payload["keys"]
+            x = keys[0]["x"]
+        except (KeyError, IndexError, TypeError) as exc:
+            raise FortifyError(
+                f"unexpected JWKS shape from {url}: {payload!r}"
+            ) from exc
+        try:
+            padded = x + "=" * (-len(x) % 4)
+            return base64.urlsafe_b64decode(padded)
+        except (ValueError, TypeError) as exc:
+            raise FortifyError(f"JWKS 'x' field is not base64: {exc}") from exc
+
+    # ------------------------------------------------------------------
+    # HTTP plumbing
+    # ------------------------------------------------------------------
+
     def _get(self, url: str) -> dict[str, Any]:
-        request = urllib.request.Request(
-            url,
-            headers={
-                "Authorization": f"Bearer {self.config.api_key}",
-                "Accept": "application/json",
-                "User-Agent": "fortify-fortify/0.1",
-            },
-        )
+        return self._raw_get(url, authorize=True)
+
+    def _raw_get(self, url: str, *, authorize: bool) -> dict[str, Any]:
+        headers: dict[str, str] = {
+            "Accept": "application/json",
+            "User-Agent": "fortify-sdk/0.1",
+        }
+        if authorize:
+            headers["Authorization"] = f"Bearer {self.config.api_key}"
+        request = urllib.request.Request(url, headers=headers)
         try:
             with urllib.request.urlopen(request, timeout=self.timeout) as response:
                 payload = response.read().decode("utf-8")

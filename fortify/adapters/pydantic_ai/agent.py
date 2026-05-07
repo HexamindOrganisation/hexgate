@@ -8,7 +8,7 @@ from pydantic_ai import Agent
 from pydantic_ai.agent import AgentRun, AgentRunResult
 from pydantic_ai.result import StreamedRunResult
 
-from fortify.user_context import UserContext
+from fortify.runtime import UserContext
 from fortify.adapters.pydantic_ai.policy import build_agent_policy
 from fortify.adapters.pydantic_ai.tools import active_policy
 

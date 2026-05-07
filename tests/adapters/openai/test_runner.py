@@ -8,7 +8,7 @@ import pytest
 from agents import Agent, FunctionTool
 
 from fortify.adapters.openai.runner import FortifyRunner
-from fortify.user_context import UserContext
+from fortify.runtime import UserContext
 
 
 def _user_context() -> UserContext:

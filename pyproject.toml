@@ -10,6 +10,7 @@ readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "bashlex>=0.18",
+    "biscuit-python>=0.4",
     "httpx>=0.28.1",
     "langchain",
     "langchain-openai",
@@ -47,4 +48,8 @@ dev = [
 include = ["fortify*"]
 
 [tool.setuptools.package-data]
-fortify = ["builtin_agents/*/*.md", "builtin_agents/*/*.yaml"]
+fortify = [
+    "agents/builtin/*/*.md",
+    "agents/builtin/*/*.yaml",
+    "agents/prompts/*.md",
+]
