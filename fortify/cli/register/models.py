@@ -1,17 +1,24 @@
 from __future__ import annotations
 
 from enum import StrEnum
+from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, Field
 
-from agents import Agent as OpenAIAgent
-from google.adk.agents import Agent as GoogleAgent
-from langgraph.graph.state import CompiledStateGraph as LangChainAgent
-from pydantic_ai import Agent as PydanticAIAgent
+# Enable AgentType type checking, without requiring the agents package to be installed
+if TYPE_CHECKING:
+    from agents import Agent as OpenAIAgent
+    from google.adk.agents import Agent as GoogleAgent
+    from langgraph.graph.state import CompiledStateGraph as LangChainAgent
+    from pydantic_ai import Agent as PydanticAIAgent
 
-from fortify.agent.factory import CoolAgent as FortifyAgent
+    from fortify.agents.factory import CoolAgent as FortifyAgent
 
-AgentType = OpenAIAgent | GoogleAgent | LangChainAgent | PydanticAIAgent | FortifyAgent
+    AgentType = (
+        OpenAIAgent | GoogleAgent | LangChainAgent | PydanticAIAgent | FortifyAgent
+    )
+else:
+    AgentType = object
 
 
 class AgentFramework(StrEnum):

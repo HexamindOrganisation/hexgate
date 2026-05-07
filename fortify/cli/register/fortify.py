@@ -4,7 +4,7 @@ from typing import Any
 
 from langchain_core.tools import BaseTool, StructuredTool
 
-from fortify.agent.factory import CoolAgent
+from fortify.agents.factory import CoolAgent
 from fortify.cli.register.models import (
     AgentFramework,
     AgentManifest,

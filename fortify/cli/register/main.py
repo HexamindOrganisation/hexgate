@@ -5,11 +5,12 @@ from __future__ import annotations
 import argparse
 import importlib
 import sys
-from typing import Any
-
-from langchain_core.tools import BaseTool
+from typing import TYPE_CHECKING, Any
 
 from fortify.cli.register.register import register_agent
+
+if TYPE_CHECKING:
+    from langchain_core.tools import BaseTool
 
 
 def _load_spec(spec: str) -> Any:
@@ -37,6 +38,8 @@ def _load_agent(spec: str) -> Any:
 
 def _load_tools(spec: str) -> list[BaseTool]:
     """Resolve a list of LangChain BaseTools from a `module.path:attr` spec."""
+    from langchain_core.tools import BaseTool
+
     tools = _load_spec(spec)
     if not isinstance(tools, list) or not all(isinstance(t, BaseTool) for t in tools):
         raise TypeError(

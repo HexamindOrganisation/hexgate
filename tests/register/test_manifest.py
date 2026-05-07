@@ -52,7 +52,7 @@ def test_openai_manifest_schema():
             ),
         )],
     )
-    manifest = create_openai_manifest(agent)
+    manifest = create_openai_manifest(agent, description="A test agent")
     assert isinstance(manifest, AgentManifest)
     assert manifest == expected_manifest
 
@@ -191,7 +191,7 @@ def test_fortify_manifest_schema():
     from langchain_core.tools import tool
     from langgraph.graph import END, START, StateGraph
 
-    from fortify.agent.factory import CoolAgent
+    from fortify.agents.factory import CoolAgent
 
     @tool
     def example_tool(example_input: str) -> str:
