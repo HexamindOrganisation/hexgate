@@ -310,7 +310,7 @@ def load_fortify_agent(
         tools=tools,
         system_prompt=system_prompt,
         session_id=session_id,
-        tags=tags or ["fortify", "fortify", config.project_id],
+        tags=tags or ["fortify", "fortify-cloud", config.project_id],
         name=spec.name,
     )
     return enforce_policy(agent, policy), handler
