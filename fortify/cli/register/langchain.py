@@ -25,14 +25,14 @@ def create_langchain_manifest(
     Tools are passed explicitly because compiled LangGraph graphs do not
     reliably expose their tool nodes for inspection.
     """
-    resolved_name = getattr(graph, "name", None)
-    if resolved_name is None:
+    agent_name = getattr(graph, "name", None)
+    if agent_name is None:
         raise ValueError(
             "LangChain graph has no name — set a name on the graph so the "
             "manifest can identify it on the platform."
         )
     return AgentManifest(
-        name=resolved_name,
+        name=agent_name,
         description=description,
         framework=AgentFramework.LANGCHAIN,
         tools=[_to_tool_definition(t) for t in tools],

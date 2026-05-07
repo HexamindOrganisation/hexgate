@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import argparse
 import importlib
+from re import L
 import sys
 from typing import TYPE_CHECKING, Any
+
+from dotenv import load_dotenv
 
 from fortify.cli.register.register import register_agent
 
@@ -50,6 +53,7 @@ def _load_tools(spec: str) -> list[BaseTool]:
 
 def main(argv: list[str]) -> None:
     """Register an agent to the Fortify platform."""
+    load_dotenv()
     parser = argparse.ArgumentParser(
         prog="fortify register",
         description="Register an agent to the Fortify platform.",
