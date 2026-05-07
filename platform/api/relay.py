@@ -53,7 +53,9 @@ class ConnectionRegistry:
             entry.agent_name = None
         if previous is not None and previous is not ws:
             try:
-                await previous.close(code=1000, reason="replaced by new serve connection")
+                await previous.close(
+                    code=1000, reason="replaced by new serve connection"
+                )
             except Exception:
                 pass
         await self._broadcast_chat(project_id, _status_payload(True, None))

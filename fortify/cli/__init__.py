@@ -2,9 +2,17 @@
 
 from __future__ import annotations
 
+import sys
+
 
 def run() -> None:
-    """Launch the terminal chat application lazily."""
+    """Dispatch `fortify <subcommand>` or fall through to the chat app."""
+    arguments = sys.argv
+    if len(arguments) > 1 and arguments[1] == "register":
+        from fortify.cli.register.main import main as run_register
+
+        sys.exit(run_register(arguments[2:]))
+
     from fortify.cli.app import run as run_app
 
     run_app()

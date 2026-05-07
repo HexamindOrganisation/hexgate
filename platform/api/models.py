@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 from typing import Optional
 
+from sqlalchemy import JSON, Column
 from sqlmodel import Field, SQLModel, UniqueConstraint
 
 
@@ -26,7 +27,9 @@ class DevToken(SQLModel, table=True):
 
 
 class Agent(SQLModel, table=True):
-    __table_args__ = (UniqueConstraint("project_id", "name", name="uq_agent_project_name"),)
+    __table_args__ = (
+        UniqueConstraint("project_id", "name", name="uq_agent_project_name"),
+    )
 
     id: str = Field(primary_key=True)
     project_id: str = Field(foreign_key="project.id", index=True)
@@ -35,3 +38,32 @@ class Agent(SQLModel, table=True):
     policy_yaml: str
     system_md: str = ""
     updated_at: datetime = Field(default_factory=utcnow)
+
+
+class AgentVersion(SQLModel, table=True):
+    __tablename__ = "agent_version"
+    __table_args__ = (
+        UniqueConstraint("agent_id", "version", name="uq_agent_version"),
+        UniqueConstraint("agent_id", "content_hash", name="uq_agent_content_hash"),
+    )
+
+    id: str = Field(primary_key=True)
+    agent_id: str = Field(foreign_key="agent.id", index=True)
+    version: int
+    description: Optional[str] = None
+    content_hash: str
+    manifest: Optional[dict] = Field(default=None, sa_column=Column(JSON))
+    created_at: datetime = Field(default_factory=utcnow)
+
+
+class Tool(SQLModel, table=True):
+    __tablename__ = "tool"
+    __table_args__ = (
+        UniqueConstraint("agent_version_id", "name", name="uq_tool_agent_version_name"),
+    )
+
+    id: str = Field(primary_key=True)
+    agent_version_id: str = Field(foreign_key="agent_version.id", index=True)
+    name: str
+    description: Optional[str] = None
+    input_schema: dict = Field(sa_column=Column(JSON, nullable=False))

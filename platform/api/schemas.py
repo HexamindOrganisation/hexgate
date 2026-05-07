@@ -1,4 +1,5 @@
 from datetime import datetime
+from enum import StrEnum
 from typing import Optional
 
 from pydantic import BaseModel, Field
@@ -41,3 +42,51 @@ class AgentUpdate(BaseModel):
     agent_yaml: str | None = None
     policy_yaml: str | None = None
     system_md: str | None = None
+
+
+# --- Agent manifest registration ---------------------------------------------
+# These mirror fortify/cli/register/models.py so SDK and platform stay in sync.
+
+
+class AgentFramework(StrEnum):
+    FORTIFY = "fortify"
+    PYDANTIC_AI = "pydantic-ai"
+    LANGCHAIN = "langchain"
+    GOOGLE = "google"
+    OPENAI = "openai"
+
+
+class InputProperty(BaseModel):
+    title: str
+    type: str
+
+
+class InputSchema(BaseModel):
+    properties: dict[str, InputProperty]
+    required: list[str]
+
+
+class ToolDefinition(BaseModel):
+    name: str
+    description: str
+    input_schema: InputSchema
+
+
+class AgentManifest(BaseModel):
+    name: str
+    description: Optional[str] = None
+    framework: AgentFramework
+    tools: list[ToolDefinition]
+
+
+class RegisterAgentRequest(BaseModel):
+    manifest: AgentManifest
+
+
+class RegisterAgentResponse(BaseModel):
+    agent_id: str
+    agent_version_id: str
+    name: str
+    version: int
+    content_hash: str
+    created: bool  # False if the same content_hash already existed (no-op)

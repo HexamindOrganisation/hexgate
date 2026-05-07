@@ -1,6 +1,15 @@
 from contextlib import asynccontextmanager
 
-from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import (
+    APIRouter,
+    Depends,
+    FastAPI,
+    Header,
+    HTTPException,
+    Response,
+    WebSocket,
+    WebSocketDisconnect,
+)
 from fastapi.middleware.cors import CORSMiddleware
 from sqlmodel import Session
 
@@ -16,6 +25,8 @@ from relay import registry
 from schemas import (
     AgentRead,
     AgentUpdate,
+    RegisterAgentRequest,
+    RegisterAgentResponse,
     TokenListItem,
     TokenMintRequest,
     TokenMintResponse,
@@ -29,6 +40,7 @@ from services import (
     list_dev_tokens,
     mask_secret,
     mint_dev_token,
+    register_manifest,
     update_agent,
 )
 
@@ -101,6 +113,26 @@ def optional_dev_token(
         raise HTTPException(status_code=401, detail="unknown or revoked fortify key")
 
 
+def require_project(
+    authorization: str | None = Header(default=None),
+    session: Session = Depends(get_session),
+) -> str:
+    """Resolve `Authorization: Bearer <fortify_key>` to a project_id.
+
+    Used by SDK-facing endpoints (e.g. POST /v1/agents) where the caller
+    has only an API key, not a project id in the URL.
+    """
+    if authorization is None or not authorization.startswith("Bearer "):
+        raise HTTPException(
+            status_code=401, detail="missing or malformed authorization header"
+        )
+    secret = authorization.removeprefix("Bearer ").strip()
+    token = find_token_by_secret(session, secret)
+    if token is None:
+        raise HTTPException(status_code=401, detail="invalid fortify key")
+    return token.project_id
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
     """Unversioned liveness probe."""
@@ -141,7 +173,9 @@ def well_known_keys() -> dict[str, object]:
 
 
 @v1.get("/projects/{project_id}/tokens", response_model=list[TokenListItem])
-def list_tokens(project_id: str, session: Session = Depends(get_session)) -> list[TokenListItem]:
+def list_tokens(
+    project_id: str, session: Session = Depends(get_session)
+) -> list[TokenListItem]:
     tokens = list_dev_tokens(session, project_id)
     return [
         TokenListItem(
@@ -156,13 +190,17 @@ def list_tokens(project_id: str, session: Session = Depends(get_session)) -> lis
     ]
 
 
-@v1.post("/projects/{project_id}/tokens", response_model=TokenMintResponse, status_code=201)
+@v1.post(
+    "/projects/{project_id}/tokens", response_model=TokenMintResponse, status_code=201
+)
 def mint_token(
     project_id: str,
     body: TokenMintRequest,
     session: Session = Depends(get_session),
 ) -> TokenMintResponse:
-    ensure_default_project(session)  # POC: lazy-create so single project works out of the box
+    ensure_default_project(
+        session
+    )  # POC: lazy-create so single project works out of the box
     token, full = mint_dev_token(
         session,
         project_id=project_id,
@@ -193,7 +231,9 @@ def revoke_token(
 
 
 @v1.get("/projects/{project_id}/agents", response_model=list[AgentRead])
-def api_list_agents(project_id: str, session: Session = Depends(get_session)) -> list[AgentRead]:
+def api_list_agents(
+    project_id: str, session: Session = Depends(get_session)
+) -> list[AgentRead]:
     ensure_default_project(session)
     agents = list_agents(session, project_id)
     return [
@@ -254,6 +294,26 @@ def api_update_agent(
         policy_yaml=agent.policy_yaml,
         system_md=agent.system_md,
         updated_at=agent.updated_at,
+    )
+
+
+@v1.post("/agents", response_model=RegisterAgentResponse)
+def api_register_agent(
+    body: RegisterAgentRequest,
+    response: Response,
+    project_id: str = Depends(require_project),
+    session: Session = Depends(get_session),
+) -> RegisterAgentResponse:
+    """SDK-facing: register/upsert an agent manifest under the bearer's project."""
+    version, created = register_manifest(session, project_id, body.manifest)
+    response.status_code = 201 if created else 200
+    return RegisterAgentResponse(
+        agent_id=version.agent_id,
+        agent_version_id=version.id,
+        name=body.manifest.name,
+        version=version.version,
+        content_hash=version.content_hash,
+        created=created,
     )
 
 
