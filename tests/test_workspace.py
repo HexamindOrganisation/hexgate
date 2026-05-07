@@ -351,9 +351,7 @@ async def test_run_command_settings_file_contains_resolved_workspace_paths(
 
     settings = captured["settings"]
     assert str(tmp_path.resolve()) in settings["filesystem"]["allowWrite"]
-    assert settings["filesystem"]["denyWrite"] == [
-        str((tmp_path / ".env").resolve())
-    ]
+    assert settings["filesystem"]["denyWrite"] == [str((tmp_path / ".env").resolve())]
     assert settings["network"]["allowedDomains"] == ["example.com"]
 
 
@@ -438,9 +436,7 @@ async def test_run_command_returns_command_result_from_fake_subprocess(
 ) -> None:
     """End-to-end shape check: stdout/stderr/exit_code flow through unchanged."""
     _patch_srt_present(monkeypatch)
-    process = _FakeAsyncProcess(
-        stdout=b"hello\n", stderr=b"warn\n", returncode=2
-    )
+    process = _FakeAsyncProcess(stdout=b"hello\n", stderr=b"warn\n", returncode=2)
     _patch_subprocess_exec(monkeypatch, process=process)
 
     workspace = LocalWorkspace(tmp_path)
@@ -480,6 +476,8 @@ async def test_run_command_unlinks_settings_file_on_timeout(
     assert not os.path.exists(captured["settings_path"])
     # SIGTERM was attempted on the fake process group.
     assert any(sig == signal.SIGTERM for _, sig in killed)
+
+
 # ---------------------------------------------------------------------------
 # Command allowlist integration.
 # ---------------------------------------------------------------------------

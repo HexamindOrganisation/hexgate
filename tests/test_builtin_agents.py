@@ -40,7 +40,9 @@ def test_resolve_builtin_tools_raises_for_unknown_tools() -> None:
         loader.resolve_builtin_tools(["missing_tool"])
 
 
-def test_load_builtin_agent_resolves_spec_into_create_agent(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_load_builtin_agent_resolves_spec_into_create_agent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Instantiate a builtin agent by wiring prompt, tools, and policy."""
     captured: dict[str, Any] = {}
     captured_policy: dict[str, Any] = {}

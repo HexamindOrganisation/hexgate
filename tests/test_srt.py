@@ -170,9 +170,7 @@ def test_srt_version_returns_none_on_nonzero_exit(
     """A non-zero exit from `srt --version` shouldn't surface garbage."""
     monkeypatch.setattr(srt_module.sys, "platform", "linux")
     monkeypatch.setattr(srt_module.shutil, "which", lambda name: "/usr/local/bin/srt")
-    _stub_subprocess_run(
-        monkeypatch, stdout="unknown flag --version", returncode=2
-    )
+    _stub_subprocess_run(monkeypatch, stdout="unknown flag --version", returncode=2)
 
     assert srt_version() is None
 

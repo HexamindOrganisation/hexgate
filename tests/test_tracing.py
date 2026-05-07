@@ -47,7 +47,9 @@ class DummyClient:
         return f"https://langfuse.example/{trace_id or 'current'}"
 
 
-def test_get_langfuse_handler_supports_legacy_signature(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_get_langfuse_handler_supports_legacy_signature(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Construct a callback with legacy constructor arguments when available."""
     monkeypatch.setattr(lf, "CallbackHandler", LegacyCallbackHandler)
 
@@ -62,7 +64,9 @@ def test_get_langfuse_handler_supports_legacy_signature(monkeypatch: pytest.Monk
     assert handler.tags == ["fortify", "linkup"]
 
 
-def test_get_langfuse_handler_supports_modern_signature(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_get_langfuse_handler_supports_modern_signature(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Attach metadata manually for modern callback signatures."""
     monkeypatch.setattr(lf, "CallbackHandler", ModernCallbackHandler)
 
@@ -100,7 +104,9 @@ def test_get_langfuse_runnable_config_includes_metadata() -> None:
     }
 
 
-def test_maybe_get_trace_url_uses_handler_trace_id(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_maybe_get_trace_url_uses_handler_trace_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Resolve the trace URL for the last streamed trace id."""
     client = DummyClient()
     monkeypatch.setattr(lf, "get_client", lambda: client)
@@ -116,7 +122,9 @@ def test_maybe_get_trace_url_uses_handler_trace_id(monkeypatch: pytest.MonkeyPat
     assert client.trace_ids == ["trace-123"]
 
 
-def test_maybe_get_trace_url_returns_none_on_client_error(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_maybe_get_trace_url_returns_none_on_client_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Return none when the Langfuse client cannot resolve the trace URL."""
     monkeypatch.setattr(lf, "get_client", lambda: DummyClient(should_fail=True))
 

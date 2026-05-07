@@ -39,7 +39,9 @@ def _write_agent_dir(agent_dir: Path, *, name: str) -> None:
         ),
         encoding="utf-8",
     )
-    (agent_dir / "system.md").write_text("You are a local test agent.", encoding="utf-8")
+    (agent_dir / "system.md").write_text(
+        "You are a local test agent.", encoding="utf-8"
+    )
 
 
 def test_list_local_agents_reads_root_level_agent_dirs(tmp_path: Path) -> None:
