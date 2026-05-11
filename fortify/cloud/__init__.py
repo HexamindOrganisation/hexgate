@@ -8,6 +8,7 @@ client and token verification primitives the loader uses.
 from fortify.cloud.biscuit import (
     TokenError,
     TokenSignatureError,
+    extract_facts,
     parse_envelope,
     verify_biscuit,
 )
@@ -26,6 +27,7 @@ __all__ = [
     "FortifyError",
     "TokenError",
     "TokenSignatureError",
+    "extract_facts",
     "parse_envelope",
     "resolve_agent_name",
     "verify_biscuit",
