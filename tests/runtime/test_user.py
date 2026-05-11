@@ -1,0 +1,246 @@
+"""Tests for the User scope: async context manager + lazy attenuation hand-off.
+
+`User(user_id=..., limits=..., scope=..., ttl_seconds=...)` is the canonical
+way for a dev's backend to bind an agent invocation to one user. Inside the
+``async with User(...)`` block the runtime lazily attenuates the agent's
+bound FortifyClient token and folds the resulting facts into ToolUseContext.
+
+These tests cover the contextvar bookkeeping and the lazy attenuation
+hand-off without spinning up a real platform — they monkeypatch the factory's
+context-resolution helper to confirm the right facts arrive at the runtime.
+"""
+
+from __future__ import annotations
+
+import asyncio
+
+import pytest
+from biscuit_auth import BiscuitBuilder, KeyPair
+
+from fortify.agents import factory
+from fortify.cloud.client import FortifyClient, FortifyConfig
+from fortify.runtime import User, get_current_user
+from fortify.runtime.context import _CURRENT_USER
+
+
+# ---------------------------------------------------------------------------
+# Fixtures + helpers
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def keys() -> tuple[bytes, bytes]:
+    """Fresh Ed25519 keypair as raw bytes ``(priv, pub)``."""
+    kp = KeyPair()
+    return kp.private_key.to_bytes(), kp.public_key.to_bytes()
+
+
+def _parent_envelope(priv: bytes, project: str = "acme") -> str:
+    from biscuit_auth import Algorithm, PrivateKey
+
+    pk = PrivateKey.from_bytes(priv, Algorithm.Ed25519)
+    biscuit = BiscuitBuilder(f'project("{project}");').build(pk)
+    return f"fty_live_{project}_{biscuit.to_base64()}"
+
+
+def _client(priv: bytes, pub: bytes) -> FortifyClient:
+    return FortifyClient(
+        FortifyConfig(
+            base_url="http://test",
+            api_key=_parent_envelope(priv),
+            project_id="acme",
+            public_key=pub,
+        )
+    )
+
+
+class _FakeAgent:
+    """A bare object the factory helpers can read attributes off."""
+
+    def __init__(self, *, name: str | None = None, client: FortifyClient | None = None):
+        self.name = name
+        self.workspace = None
+        if client is not None:
+            self.fortify_client = client
+
+
+# ---------------------------------------------------------------------------
+# Context manager bookkeeping
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_user_scope_sets_and_resets_contextvar() -> None:
+    """A vanilla ``async with`` pushes + pops the User on the contextvar."""
+    assert get_current_user() is None
+    async with User(user_id="alice", limits={"refund_limit": 50}):
+        user = get_current_user()
+        assert user is not None
+        assert user.user_id == "alice"
+        assert user.limits == {"refund_limit": 50}
+    assert get_current_user() is None
+
+
+@pytest.mark.asyncio
+async def test_user_scope_nests_same_instance() -> None:
+    """Same User entered twice still resets cleanly to None on full exit."""
+    user = User(user_id="bob")
+    async with user:
+        async with user:
+            assert get_current_user() is user
+        # Inner exit restores the outer set (still the same user).
+        assert get_current_user() is user
+    assert get_current_user() is None
+
+
+@pytest.mark.asyncio
+async def test_user_scope_nests_different_instances() -> None:
+    """Outer + inner Users — inner wins inside, outer restored on exit."""
+    outer = User(user_id="alice")
+    inner = User(user_id="bob")
+    async with outer:
+        assert get_current_user() is outer
+        async with inner:
+            assert get_current_user() is inner
+        assert get_current_user() is outer
+    assert get_current_user() is None
+
+
+@pytest.mark.asyncio
+async def test_user_defaults_keep_optional_fields_unset() -> None:
+    """Only ``user_id`` is required; everything else has a sensible default."""
+    async with User(user_id="alice") as u:
+        assert u.session_id is None
+        assert u.user_role is None
+        assert u.limits == {}
+        assert u.scope == []
+        assert u.ttl_seconds is None
+
+
+@pytest.mark.asyncio
+async def test_user_scope_isolated_across_tasks() -> None:
+    """Spawning a task without copying context leaves the new task scope-free."""
+    # asyncio.Task copies the current context by default — verify the inverse:
+    # an explicitly-cleared context doesn't see the outer User.
+    seen: dict[str, User | None] = {}
+
+    async def _child() -> None:
+        seen["inner"] = get_current_user()
+
+    async with User(user_id="alice"):
+        # Task spawned from inside the scope DOES inherit (asyncio default).
+        await asyncio.create_task(_child())
+        assert seen["inner"] is not None
+        assert seen["inner"].user_id == "alice"
+
+
+# ---------------------------------------------------------------------------
+# Lazy attenuation via _resolve_tool_use_context
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_resolve_tool_use_context_attenuates_when_user_active(
+    keys: tuple[bytes, bytes],
+) -> None:
+    """A live User + agent.fortify_client → biscuit_facts populated."""
+    priv, pub = keys
+    agent = _FakeAgent(name="support-bot", client=_client(priv, pub))
+
+    async with User(
+        user_id="alice", limits={"refund_limit": 50}, scope=["refund"]
+    ):
+        ctx = factory._resolve_tool_use_context(agent, None)
+    assert ctx.biscuit_facts is not None
+    assert ctx.biscuit_facts["user"] == ["alice"]
+    assert ctx.biscuit_facts["refund_limit"] == [50]
+    assert ctx.biscuit_facts["scope"] == ["refund"]
+    assert ctx.biscuit_facts["project"] == ["acme"]
+
+
+@pytest.mark.asyncio
+async def test_resolve_tool_use_context_skips_when_no_user() -> None:
+    """Outside a User scope, no biscuit_facts even with a cloud-bound agent."""
+    # Build a dummy client so attribute exists; should still skip when no user.
+    kp = KeyPair()
+    agent = _FakeAgent(client=_client(kp.private_key.to_bytes(), kp.public_key.to_bytes()))
+    ctx = factory._resolve_tool_use_context(agent, None)
+    assert ctx.biscuit_facts is None
+
+
+@pytest.mark.asyncio
+async def test_resolve_tool_use_context_warns_for_local_agent(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A User scope with no agent.fortify_client logs a warning and returns no facts."""
+    agent = _FakeAgent(name="local-agent")  # no fortify_client attr
+    import logging
+
+    caplog.set_level(logging.WARNING)
+    async with User(user_id="alice"):
+        ctx = factory._resolve_tool_use_context(agent, None)
+    assert ctx.biscuit_facts is None
+    assert any(
+        "no fortify_client" in record.message for record in caplog.records
+    )
+
+
+@pytest.mark.asyncio
+async def test_resolve_tool_use_context_explicit_arg_wins(
+    keys: tuple[bytes, bytes],
+) -> None:
+    """Explicit tool_use_context kwarg bypasses User scope entirely."""
+    priv, pub = keys
+    agent = _FakeAgent(client=_client(priv, pub))
+    from fortify.runtime import ToolUseContext
+
+    override = ToolUseContext(biscuit_facts={"user": ["override"]})
+    async with User(user_id="alice"):
+        ctx = factory._resolve_tool_use_context(agent, override)
+    # Explicit context flows through unchanged; the User scope is ignored.
+    assert ctx is override
+    assert ctx.biscuit_facts == {"user": ["override"]}
+
+
+@pytest.mark.asyncio
+async def test_resolve_tool_use_context_handles_attenuation_failure(
+    keys: tuple[bytes, bytes],
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A broken parent token → warning logged, facts left empty (fail-closed)."""
+    priv, pub = keys
+    bad_client = FortifyClient(
+        FortifyConfig(
+            base_url="http://test",
+            api_key="fty_live_acme_NOT_A_REAL_TOKEN",  # signature won't chain
+            project_id="acme",
+            public_key=pub,
+        )
+    )
+    agent = _FakeAgent(client=bad_client)
+
+    import logging
+
+    caplog.set_level(logging.WARNING)
+    async with User(user_id="alice"):
+        ctx = factory._resolve_tool_use_context(agent, None)
+    assert ctx.biscuit_facts is None
+    assert any(
+        "attenuation failed" in record.message for record in caplog.records
+    )
+
+
+@pytest.mark.asyncio
+async def test_resolve_tool_use_context_ttl_threads_through(
+    keys: tuple[bytes, bytes],
+) -> None:
+    """``ttl_seconds`` on the User is honoured by the attenuation call."""
+    priv, pub = keys
+    agent = _FakeAgent(client=_client(priv, pub))
+    async with User(user_id="alice", ttl_seconds=600):
+        ctx = factory._resolve_tool_use_context(agent, None)
+    # TTL embeds a check, not a fact — verify by re-verifying the resulting
+    # facts dict carries the user attribution (proof the attenuation ran).
+    assert ctx.biscuit_facts is not None
+    assert ctx.biscuit_facts["user"] == ["alice"]

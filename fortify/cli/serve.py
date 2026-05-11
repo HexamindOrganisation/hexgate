@@ -7,6 +7,12 @@ messages sent by dashboard Playground tabs, runs the agent via the same
 
 Handles reconnection with exponential backoff so a backend bounce doesn't
 permanently break the connection.
+
+When a payload includes ``user_attenuation`` metadata (the Playground's
+"Act as alice" affordance), the turn is wrapped in an ``async with User(...)``
+scope. The runtime then lazily attenuates the agent's bound FortifyClient
+token inside ``stream_agent`` — same code path a production dev's backend
+uses when serving a real user.
 """
 
 from __future__ import annotations
@@ -15,24 +21,19 @@ import asyncio
 import json
 import logging
 from collections.abc import Callable
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Any
 
+from pydantic import ValidationError
 from rich.console import Console
 from websockets.asyncio.client import connect
 from websockets.exceptions import ConnectionClosed
 
 from fortify.agents.factory import stream_agent
 from fortify.cli.state import ChatState
-from fortify.cloud.attenuate import attenuate_for_user
-from fortify.cloud.biscuit import (
-    TokenError,
-    TokenSignatureError,
-    extract_facts,
-    parse_envelope,
-)
-from fortify.cloud.client import FortifyClient, FortifyConfig
-from fortify.runtime import ToolUseContext
+from fortify.cloud.client import FortifyConfig
+from fortify.runtime import User
 
 logger = logging.getLogger(__name__)
 
@@ -43,53 +44,42 @@ PING_INTERVAL = 20.0
 
 @dataclass
 class ServeContext:
-    """Runtime context required to service remote chat messages.
-
-    ``client`` is a lazily-initialised :class:`FortifyClient` used to resolve
-    the platform's public key once per process. Per-turn attenuation reuses
-    that cached pubkey so each "act as <user>" message doesn't trigger a
-    fresh JWKS fetch.
-    """
+    """Runtime context required to service remote chat messages."""
 
     runtime: Any  # AgentRuntime from cli/app.py — avoid circular import
     state: ChatState
     rebuild: Callable[[], Any] | None = None  # returns a fresh AgentRuntime
-    client: FortifyClient | None = None
 
 
-def _build_attenuated_context(
-    context: ServeContext, attenuation: dict[str, Any]
-) -> ToolUseContext | None:
-    """Attenuate the parent FORTIFY_KEY using ``attenuation`` metadata.
+def _user_from_payload(attenuation: Any) -> User | None:
+    """Build a :class:`User` from a chat payload's ``user_attenuation`` dict.
 
-    Returns a :class:`ToolUseContext` whose ``biscuit_facts`` field carries
-    the union of the parent's facts plus the per-user attribution the
-    dashboard requested. Returns ``None`` and logs a warning when the dev's
-    process isn't configured for cloud (no FORTIFY_KEY / no client) — the
-    turn falls back to the runtime's default context.
+    Returns ``None`` (and logs a warning) when the payload is missing or
+    malformed — the turn proceeds without an active User scope and the
+    agent runs as if no attenuation was requested.
     """
-    if context.client is None:
-        logger.warning(
-            "serve: user_attenuation in payload but no FortifyClient — "
-            "ignoring; agent will run with no per-user facts"
-        )
+    if not isinstance(attenuation, dict) or not attenuation.get("user"):
         return None
     try:
-        pub = context.client.public_key_bytes()
-        child_envelope = attenuate_for_user(
-            context.client.config.api_key,
-            pub,
-            user=str(attenuation["user"]),
-            scope=list(attenuation.get("scope") or []) or None,
-            limits=dict(attenuation.get("limits") or {}) or None,
+        return User(
+            user_id=str(attenuation["user"]),
+            scope=list(attenuation.get("scope") or []),
+            limits=dict(attenuation.get("limits") or {}),
             ttl_seconds=attenuation.get("ttl_seconds"),
         )
-        _, _, biscuit_b64 = parse_envelope(child_envelope)
-        facts = extract_facts(biscuit_b64, pub)
-    except (TokenError, TokenSignatureError, KeyError, TypeError) as exc:
-        logger.warning("serve: attenuation failed (%s); turn will run anyway", exc)
+    except (TypeError, ValueError, ValidationError) as exc:
+        logger.warning("serve: invalid user_attenuation %r: %s", attenuation, exc)
         return None
-    return ToolUseContext(biscuit_facts=facts)
+
+
+@asynccontextmanager
+async def _maybe_user_scope(user: User | None):
+    """No-op async context manager when ``user`` is ``None``."""
+    if user is None:
+        yield
+    else:
+        async with user:
+            yield
 
 
 async def _refresh_runtime(context: ServeContext) -> None:
@@ -116,23 +106,15 @@ async def _handle_message(
             return
         await _refresh_runtime(context)
         context.state.start_turn(text)
-        attenuation = payload.get("user_attenuation")
-        tool_use_context: ToolUseContext | None = None
-        if isinstance(attenuation, dict) and attenuation.get("user"):
-            tool_use_context = _build_attenuated_context(context, attenuation)
-        stream_kwargs = (
-            {"tool_use_context": tool_use_context}
-            if tool_use_context is not None
-            else {}
-        )
-        async for event in stream_agent(
-            context.runtime.agent,
-            context.runtime.handler,
-            context.state.build_input(),
-            **stream_kwargs,
-        ):
-            context.state.apply_event(event)
-            await ws.send(event.model_dump_json())
+        user = _user_from_payload(payload.get("user_attenuation"))
+        async with _maybe_user_scope(user):
+            async for event in stream_agent(
+                context.runtime.agent,
+                context.runtime.handler,
+                context.state.build_input(),
+            ):
+                context.state.apply_event(event)
+                await ws.send(event.model_dump_json())
         return
 
     if kind == "reset":
@@ -193,18 +175,7 @@ async def run_serve(runtime, *, rebuild: Callable[[], Any] | None = None) -> Non
         ws_base = f"ws://{base}"
     url = f"{ws_base}/v1/projects/{config.project_id}/serve"
 
-    # Build a FortifyClient up front so per-turn attenuation reuses one
-    # JWKS fetch instead of paying it on every "act as <user>" turn. Local-
-    # only flows (no FORTIFY_KEY) can't run user attenuation at all, so
-    # leaving client=None is the right fallback there.
-    try:
-        client = FortifyClient(config)
-    except Exception as exc:  # noqa: BLE001
-        logger.info("serve: FortifyClient unavailable (%s); attenuation disabled", exc)
-        client = None
-    context = ServeContext(
-        runtime=runtime, state=ChatState(), rebuild=rebuild, client=client
-    )
+    context = ServeContext(runtime=runtime, state=ChatState(), rebuild=rebuild)
     backoff = RECONNECT_BASE
 
     console.print(

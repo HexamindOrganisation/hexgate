@@ -185,6 +185,60 @@ def extract_input_text(input: AgentInput) -> str:
     return _extract_query_from_messages(input)
 
 
+def _resolve_user_facts(agent: "CoolAgent") -> dict[str, list[str | int]] | None:
+    """Lazily attenuate when a :class:`User` scope is active.
+
+    Returns the extracted facts dict for the active user, or ``None`` if
+    no User scope is in play, the agent isn't cloud-bound, or attenuation
+    fails (logged as a warning — the agent runs without facts and any
+    predicate requiring them will fail-closed).
+    """
+    from fortify.runtime.context import get_current_user
+
+    user = get_current_user()
+    if user is None:
+        return None
+    client = getattr(agent, "fortify_client", None)
+    if client is None:
+        # Local agent or test stub — User scope is set but there's nothing to
+        # attenuate against. Surface a single warning so devs see why their
+        # `requires_user` predicate isn't firing on a local-loaded agent.
+        import logging
+
+        logging.getLogger(__name__).warning(
+            "User scope active but agent has no fortify_client; "
+            "biscuit_facts will be empty (use load_fortify_agent for attenuation)"
+        )
+        return None
+    from fortify.cloud.attenuate import attenuate_for_user
+    from fortify.cloud.biscuit import (
+        TokenError,
+        TokenSignatureError,
+        extract_facts,
+        parse_envelope,
+    )
+
+    try:
+        pub = client.public_key_bytes()
+        child_envelope = attenuate_for_user(
+            client.config.api_key,
+            pub,
+            user=user.user_id,
+            scope=list(user.scope) or None,
+            limits=dict(user.limits) or None,
+            ttl_seconds=user.ttl_seconds,
+        )
+        _, _, biscuit_b64 = parse_envelope(child_envelope)
+        return extract_facts(biscuit_b64, pub)
+    except (TokenError, TokenSignatureError) as exc:
+        import logging
+
+        logging.getLogger(__name__).warning(
+            "user-scope attenuation failed: %s; agent runs without facts", exc
+        )
+        return None
+
+
 def _resolve_tool_use_context(
     agent: "CoolAgent",
     tool_use_context: ToolUseContext | None,
@@ -195,6 +249,13 @@ def _resolve_tool_use_context(
     1. ``tool_use_context.workspace`` — caller-supplied at invocation time.
     2. ``agent.workspace`` — wired in at ``create_agent(...)``-time.
     3. ``LocalWorkspace(Path.cwd())`` — last-resort default.
+
+    When ``tool_use_context`` is None and an :class:`~fortify.runtime.User`
+    scope is active, this also runs lazy biscuit attenuation against the
+    agent's bound ``fortify_client`` and folds the resulting facts into the
+    fresh context. An explicit ``tool_use_context`` argument always wins —
+    that's how callers pass their own facts in (e.g. tests, or production
+    code that wants to bypass the User scope for a specific call).
     """
     agent_name = getattr(agent, "name", None)
     agent_workspace = getattr(agent, "workspace", None)
@@ -208,6 +269,7 @@ def _resolve_tool_use_context(
     return ToolUseContext(
         workspace=fallback_workspace,
         agent_name=agent_name,
+        biscuit_facts=_resolve_user_facts(agent),
     )
 
 

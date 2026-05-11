@@ -26,7 +26,7 @@ from fortify.agents.loader import (
     unregister_agent,
 )
 from fortify.cloud import FortifyClient, FortifyConfig
-from fortify.runtime import LocalWorkspace, ToolUseContext, Workspace
+from fortify.runtime import LocalWorkspace, ToolUseContext, User, UserContext, Workspace
 from fortify.security import AgentPolicy
 from fortify.tools import agent_tool, bash, edit_file, glob, grep, read_file, write_file
 from fortify.tools.fetch import fetch
@@ -38,6 +38,8 @@ __all__ = [
     "FortifyConfig",
     "LocalWorkspace",
     "ToolUseContext",
+    "User",
+    "UserContext",
     "Workspace",
     "agent_tool",
     "bash",

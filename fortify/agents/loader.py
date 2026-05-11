@@ -275,7 +275,6 @@ def load_fortify_agent(
     base_url: str | None = None,
     api_key: str | None = None,
     session_id: str | None = None,
-    user_id: str | None = None,
     tags: list[str] | None = None,
     extra_tools: Mapping[str, Any] | None = None,
     model: str | None = None,
@@ -289,9 +288,12 @@ def load_fortify_agent(
     Mirrors `load_local_agent` but sources the three YAMLs (agent, policy, system)
     from the Fortify API instead of disk. Tool resolution and enforcement are
     identical — only the bytes' origin differs.
-    """
-    _ = user_id  # reserved for future user-scoped token attenuation
 
+    The returned agent carries a ``fortify_client`` attribute referencing the
+    :class:`~fortify.cloud.FortifyClient` used to fetch it; the runtime reads
+    this attribute when an :class:`~fortify.runtime.User` scope is active to
+    mint per-request attenuated tokens lazily.
+    """
     resolved_name = resolve_agent_name(name)
     config = FortifyConfig.from_env(
         project_id=project_id, base_url=base_url, api_key=api_key
@@ -313,7 +315,11 @@ def load_fortify_agent(
         tags=tags or ["fortify", "fortify-cloud", config.project_id],
         name=spec.name,
     )
-    return enforce_policy(agent, policy), handler
+    enforced = enforce_policy(agent, policy)
+    # Attach the client so the runtime can do lazy attenuation inside an
+    # active User scope without the caller having to thread it through.
+    enforced.fortify_client = client
+    return enforced, handler
 
 
 def load_agent(
