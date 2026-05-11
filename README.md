@@ -128,6 +128,8 @@ The current curated surface includes:
 - `stream_agent_raw`
 - `load_builtin_agent`
 - `list_builtin_agents`
+- `load_fortify_agent`
+- `User` — async context manager for per-request user attenuation (see [User Scope](#-user-scope))
 - `agent_tool`
 - `web_search`
 - `fetch`
@@ -148,9 +150,11 @@ from fortify import (
     agent_tool,
     load_agent,
     load_builtin_agent,
+    load_fortify_agent,
     register_agent,
     fetch,
     web_search,
+    User,
 )
 ```
 
@@ -974,6 +978,95 @@ Resolution chain when `FORTIFY_KEY` is set:
 3. Falls back to `"default"` (always present, protected from deletion)
 
 When `FORTIFY_KEY` is not set, `load_agent()` keeps its existing local / registered / builtin behaviour — no platform call.
+
+## 👤 User Scope
+
+When your backend serves many users with the same agent, scope each invocation to one user via the `User` async context manager. Inside the block, the runtime lazily attenuates the agent's bound Fortify token with a fresh per-request Biscuit carrying the user's identity, scope grants, and numeric caps. The structured policy predicates (`requires_user`, `requires_scope`, `numeric_limit`) read those facts and gate tool calls accordingly.
+
+```python
+from fortify import User, load_fortify_agent, stream_agent
+
+agent, handler = load_fortify_agent("support-bot")  # client attached at load
+
+async with User(
+    user_id="alice",
+    limits={"refund_limit": 50},
+    scope=["refund", "read"],
+    ttl_seconds=300,
+):
+    async for event in stream_agent(agent, handler, "refund customer 30"):
+        ...
+```
+
+That's it — no manual `attenuate_for_user`, `extract_facts`, or `ToolUseContext` plumbing at the call site. The runtime mints the per-request token inside `stream_agent` against the `FortifyClient` `load_fortify_agent` bound to the agent.
+
+### FastAPI middleware pattern
+
+The cleanest production shape — set the scope once in middleware, every endpoint runs in the right user's context:
+
+```python
+from fastapi import FastAPI
+from fortify import User, load_fortify_agent, stream_agent
+
+app = FastAPI()
+agent, handler = load_fortify_agent("support-bot")          # at startup
+
+@app.middleware("http")
+async def attach_user(request, call_next):
+    auth = await authenticate(request)                       # your auth
+    async with User(
+        user_id=auth.id,
+        session_id=request.state.session_id,
+        user_role=auth.role,
+        limits={"refund_limit": auth.refund_cap},
+        ttl_seconds=300,
+    ):
+        return await call_next(request)
+
+@app.post("/chat")
+async def chat(req):
+    async for event in stream_agent(agent, handler, req.message):
+        yield event                                          # already scoped
+```
+
+### Fields
+
+| Field | Type | Required | Effect |
+|---|---|---|---|
+| `user_id` | `str` | ✅ | Becomes `user("alice")` in the attenuated Biscuit. Matched against the policy's `requires_user` list. |
+| `session_id` | `str?` | optional | Trace tagging only. Surfaces on Langfuse spans. |
+| `user_role` | `str?` | optional | Trace tagging only. |
+| `scope` | `list[str]` | optional | Each becomes a `scope("...")` fact. Matched against the policy's `requires_scope` list. |
+| `limits` | `dict[str, int]` | optional | Each `(name, N)` becomes a `name(N)` fact. The policy's `numeric_limit={"amount": "refund_limit"}` then caps the tool argument `amount` by the fact `refund_limit`. |
+| `ttl_seconds` | `int?` | optional | Embeds a `check if time($t), $t < now+ttl` predicate in the attenuation block. |
+
+### Policy that reacts to the User
+
+A matching `policy.yaml`:
+
+```yaml
+tools:
+  refund:
+    mode: allow
+    requires_user: [alice, carol]
+    requires_scope: [refund]
+    numeric_limit:
+      amount: refund_limit
+```
+
+With `User(user_id="alice", limits={"refund_limit": 50}, scope=["refund"])`:
+
+- `refund(amount=30)` → ✅ allowed (alice in list, scope present, 30 ≤ 50)
+- `refund(amount=200)` → ❌ denied (over the cap from the token)
+- `refund(amount=30)` as `User(user_id="bob", ...)` → ❌ denied (bob not in list)
+
+### Notes
+
+- **Lazy attenuation.** `User.__aenter__` only pushes a contextvar — the cryptographic work happens inside `stream_agent`/`invoke_agent` the first time the agent runs. Errors surface at first agent call, not at scope entry.
+- **Local agents don't attenuate.** A `User` scope around a `load_local_agent` / `load_builtin_agent` agent logs a warning and proceeds without facts. Policies with `requires_user` will fail-closed in that path — use `load_fortify_agent` for the cryptographic chain.
+- **Explicit override.** Passing `tool_use_context=` explicitly to `stream_agent` / `invoke_agent` wins over an active `User` scope. Useful for tests or one-off bypass.
+- **Sync callers.** `User` is async-only by design (room for KMS / audit / JWKS I/O in `__aenter__` / `__aexit__` later). From a sync context, `asyncio.run(main())` works fine.
+- **Tracing vs attenuation.** `UserContext` (the legacy adapter input — three required string fields) is unchanged. `User` carries everything `UserContext` does plus the attenuation hints; the two coexist.
 
 ## 📡 Stream Results
 
