@@ -532,3 +532,189 @@ async def test_enforced_tool_emits_single_tool_lifecycle(
 
     assert event_names.count("on_tool_start") == 1
     assert event_names.count("on_tool_end") == 1
+
+
+# ---------------------------------------------------------------------------
+# Biscuit-fact predicates wired through authorize_tool_call + GuardedTool
+# ---------------------------------------------------------------------------
+
+
+def test_authorize_tool_call_passes_user_predicate_via_facts() -> None:
+    """An allowed user fact lets the call through."""
+    policy = AgentPolicy(
+        tools={
+            "refund": BaseToolPolicy(mode="allow", requires_user=["alice"]),
+        }
+    )
+    authorize_tool_call(
+        policy, "refund", {"amount": 5}, facts={"user": ["alice"]}
+    )  # no exception
+
+
+def test_authorize_tool_call_denies_when_user_predicate_misses() -> None:
+    """A user fact outside the allowed set denies before the mode check."""
+    policy = AgentPolicy(
+        tools={
+            "refund": BaseToolPolicy(mode="allow", requires_user=["alice"]),
+        }
+    )
+    with pytest.raises(PolicyDeniedError, match="requires user"):
+        authorize_tool_call(
+            policy, "refund", {"amount": 5}, facts={"user": ["bob"]}
+        )
+
+
+def test_authorize_tool_call_caps_numeric_argument_by_fact() -> None:
+    """A numeric_limit mapping enforces the bound from the token."""
+    policy = AgentPolicy(
+        tools={
+            "refund": BaseToolPolicy(
+                mode="allow",
+                numeric_limit={"amount": "refund_limit"},
+            ),
+        }
+    )
+    authorize_tool_call(
+        policy, "refund", {"amount": 30}, facts={"refund_limit": [50]}
+    )
+    with pytest.raises(PolicyDeniedError, match="caps argument"):
+        authorize_tool_call(
+            policy, "refund", {"amount": 200}, facts={"refund_limit": [50]}
+        )
+
+
+def test_authorize_tool_call_predicates_are_noop_without_facts_and_requirements() -> None:
+    """Backwards-compat: a policy with no fact predicates ignores facts entirely."""
+    policy = AgentPolicy(
+        tools={"web_search": BaseToolPolicy(mode="allow")}
+    )
+    # Both legacy (no facts kwarg) and modern (None) call shapes work.
+    authorize_tool_call(policy, "web_search", {})
+    authorize_tool_call(policy, "web_search", {}, facts=None)
+    authorize_tool_call(policy, "web_search", {}, facts={})
+
+
+@pytest.mark.asyncio
+async def test_guarded_tool_reads_facts_from_tool_use_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """End-to-end: facts on the contextvar drive predicate denial in the tool."""
+    from fortify.runtime import (
+        ToolUseContext,
+        reset_current_tool_use_context,
+        set_current_tool_use_context,
+    )
+
+    @tool
+    def refund(amount: int) -> str:
+        """Refund the customer."""
+        return f"refunded {amount}"
+
+    monkeypatch.setattr(factory, "create_langchain_agent", lambda **_kwargs: object())
+    monkeypatch.setattr(factory, "get_langfuse_handler", lambda **_kwargs: "handler")
+
+    policy = AgentPolicy(
+        tools={
+            "refund": BaseToolPolicy(
+                mode="allow",
+                requires_user=["alice"],
+                numeric_limit={"amount": "refund_limit"},
+            ),
+        }
+    )
+    agent, _ = factory.create_agent(
+        model="openai:gpt-5.4",
+        tools=[refund],
+        system_prompt="You are a helpful assistant.",
+    )
+    secured = enforce_policy(agent, policy)
+    guarded_refund = secured.tools[0]
+
+    # Case 1: alice, under cap → allowed
+    ctx_token = set_current_tool_use_context(
+        ToolUseContext(
+            agent_name=None,
+            workspace=None,
+            biscuit_facts={"user": ["alice"], "refund_limit": [50]},
+        )
+    )
+    try:
+        result = await guarded_refund.ainvoke({"amount": 30})
+        assert "refunded 30" in str(result)
+    finally:
+        reset_current_tool_use_context(ctx_token)
+
+    # Case 2: bob (wrong user) → guarded denial payload
+    ctx_token = set_current_tool_use_context(
+        ToolUseContext(
+            agent_name=None,
+            workspace=None,
+            biscuit_facts={"user": ["bob"], "refund_limit": [50]},
+        )
+    )
+    try:
+        result = await guarded_refund.ainvoke({"amount": 30})
+        assert isinstance(result, dict) and result.get("ok") is False
+        assert result["error"]["type"] == "policy_denied"
+        assert "requires user" in result["error"]["message"]
+    finally:
+        reset_current_tool_use_context(ctx_token)
+
+    # Case 3: alice, over cap → guarded denial payload
+    ctx_token = set_current_tool_use_context(
+        ToolUseContext(
+            agent_name=None,
+            workspace=None,
+            biscuit_facts={"user": ["alice"], "refund_limit": [50]},
+        )
+    )
+    try:
+        result = await guarded_refund.ainvoke({"amount": 200})
+        assert isinstance(result, dict) and result.get("ok") is False
+        assert "caps argument" in result["error"]["message"]
+    finally:
+        reset_current_tool_use_context(ctx_token)
+
+
+@pytest.mark.asyncio
+async def test_guarded_tool_denies_when_facts_absent_and_predicate_set(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Local-only flow + a fact-requiring policy → fail-closed."""
+    from fortify.runtime import (
+        ToolUseContext,
+        reset_current_tool_use_context,
+        set_current_tool_use_context,
+    )
+
+    @tool
+    def refund(amount: int) -> str:
+        """Refund the customer."""
+        return f"refunded {amount}"
+
+    monkeypatch.setattr(factory, "create_langchain_agent", lambda **_kwargs: object())
+    monkeypatch.setattr(factory, "get_langfuse_handler", lambda **_kwargs: "handler")
+
+    policy = AgentPolicy(
+        tools={
+            "refund": BaseToolPolicy(mode="allow", requires_user=["alice"]),
+        }
+    )
+    agent, _ = factory.create_agent(
+        model="openai:gpt-5.4",
+        tools=[refund],
+        system_prompt="You are a helpful assistant.",
+    )
+    secured = enforce_policy(agent, policy)
+    guarded = secured.tools[0]
+
+    # No biscuit_facts on context → predicate has nothing to match → deny.
+    ctx_token = set_current_tool_use_context(
+        ToolUseContext(agent_name=None, workspace=None, biscuit_facts=None)
+    )
+    try:
+        result = await guarded.ainvoke({"amount": 30})
+        assert result.get("ok") is False
+        assert "token carries none" in result["error"]["message"]
+    finally:
+        reset_current_tool_use_context(ctx_token)

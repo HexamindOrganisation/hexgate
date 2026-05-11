@@ -10,9 +10,19 @@ PolicyMode = Literal["allow", "deny", "approval_required"]
 
 
 class BaseToolPolicy(BaseModel):
-    """Define the access mode for a single tool."""
+    """Define the access mode for a single tool.
+
+    The ``requires_*`` / ``numeric_limit`` fields gate the call on facts
+    extracted from the bearer's Biscuit envelope (see
+    :mod:`fortify.security.predicates`). ``None`` everywhere means "no
+    fact-based gating" — backwards-compatible with policies that predate
+    user-token attenuation.
+    """
 
     mode: PolicyMode = "deny"
+    requires_user: list[str] | None = None
+    requires_scope: list[str] | None = None
+    numeric_limit: dict[str, str] | None = None
 
 
 class FileScope(BaseModel):

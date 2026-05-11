@@ -20,10 +20,19 @@ class UserContext(BaseModel):
 
 @dataclass(slots=True)
 class ToolUseContext:
-    """Runtime context injected into tools as a hidden meta-argument."""
+    """Runtime context injected into tools as a hidden meta-argument.
+
+    ``biscuit_facts`` carries the single-arity facts the SDK extracted from
+    a verified Biscuit envelope — ``user``, ``scope``, numeric limits, etc.
+    The policy engine reads them through this context so callers don't have
+    to thread facts down to each tool by hand. ``None`` means *no token
+    facts present* (local-only flows); ``{}`` means *facts checked but
+    nothing extracted*.
+    """
 
     workspace: Workspace | None = None
     agent_name: str | None = None
+    biscuit_facts: dict[str, list[str | int]] | None = None
 
 
 _CURRENT_TOOL_USE_CONTEXT: ContextVar[ToolUseContext | None] = ContextVar(

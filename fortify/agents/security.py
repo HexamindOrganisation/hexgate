@@ -100,12 +100,22 @@ class GuardedTool(BaseTool):
         return self.wrapped_tool._run(*args, **kwargs)
 
     def _authorize(self, kwargs: dict[str, Any]) -> None:
-        """Apply local Gate 1 authorization when configured."""
+        """Apply local Gate 1 authorization when configured.
+
+        Reads the active :class:`ToolUseContext` from the contextvar so the
+        per-request Biscuit facts (``user``, ``scope``, numeric limits) flow
+        into the predicate evaluators in
+        :mod:`fortify.security.predicates`. Local-only flows (no token in
+        play) supply ``facts=None`` and the predicates short-circuit.
+        """
         if self.policy is None:
             return
+        from fortify.runtime import get_current_tool_use_context
         from fortify.security import authorize_tool_call
 
-        authorize_tool_call(self.policy, self.name, kwargs)
+        ctx = get_current_tool_use_context()
+        facts = ctx.biscuit_facts if ctx is not None else None
+        authorize_tool_call(self.policy, self.name, kwargs, facts=facts)
 
     async def _check_before_action(
         self, kwargs: dict[str, Any]
