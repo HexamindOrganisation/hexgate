@@ -199,6 +199,16 @@ class FortifyClient:
         assert self._facts is not None  # populated by _ensure_key_verified
         return {name: list(values) for name, values in self._facts.items()}
 
+    def public_key_bytes(self) -> bytes:
+        """Return the platform's signing public key as raw 32 bytes.
+
+        Triggers the JWKS fetch (or returns the cached / explicitly-configured
+        key) without requiring a full verify roundtrip on the API key. Callers
+        feed this into :func:`fortify.cloud.attenuate_for_user` so the
+        attenuation primitive can verify the parent envelope before appending.
+        """
+        return self._resolve_public_key()
+
     def _resolve_public_key(self) -> bytes:
         """Return the platform's signing public key, fetching JWKS if needed."""
         if self._public_key is not None:

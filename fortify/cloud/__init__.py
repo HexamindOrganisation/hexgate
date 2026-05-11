@@ -5,6 +5,7 @@ alongside `load_local_agent` / `load_builtin_agent`; this package only carries t
 client and token verification primitives the loader uses.
 """
 
+from fortify.cloud.attenuate import attenuate_for_user
 from fortify.cloud.biscuit import (
     TokenError,
     TokenSignatureError,
@@ -27,6 +28,7 @@ __all__ = [
     "FortifyError",
     "TokenError",
     "TokenSignatureError",
+    "attenuate_for_user",
     "extract_facts",
     "parse_envelope",
     "resolve_agent_name",
