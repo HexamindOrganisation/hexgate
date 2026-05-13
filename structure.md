@@ -208,8 +208,8 @@ class Settings:
 
 ```python
 langfuse_host=os.getenv("LANGFUSE_HOST", "https://cloud.langfuse.com"),
-model=os.getenv("COOLAGENTS_DEFAULT_MODEL", "openai:gpt-5.4"),
-search_engine=os.getenv("COOLAGENTS_DEFAULT_SEARCH_ENGINE", "linkup"),
+model=os.getenv("FORTIFY_DEFAULT_MODEL", "openai:gpt-5.4"),
+search_engine=os.getenv("FORTIFY_DEFAULT_SEARCH_ENGINE", "linkup"),
 ```
 
 ```python

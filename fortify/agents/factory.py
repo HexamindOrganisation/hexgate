@@ -186,7 +186,7 @@ def extract_input_text(input: AgentInput) -> str:
 
 
 def _resolve_tool_use_context(
-    agent: "CoolAgent",
+    agent: "FortifyAgent",
     tool_use_context: ToolUseContext | None,
 ) -> ToolUseContext:
     """Return the runtime tool context for a run.
@@ -211,7 +211,7 @@ def _resolve_tool_use_context(
     )
 
 
-class CoolAgent:
+class FortifyAgent:
     """A small wrapper around a LangChain agent graph with room for layering."""
 
     def __init__(
@@ -351,7 +351,7 @@ class CoolAgent:
         )
 
 
-AgentGraph: TypeAlias = CoolAgent
+AgentGraph: TypeAlias = FortifyAgent
 
 
 @observe(name="create_fortify_agent")
@@ -398,7 +398,7 @@ def create_agent(
         name=name,
         cache=cache,
     )
-    agent = CoolAgent(
+    agent = FortifyAgent(
         graph=graph,
         model=model,
         tools=tools,

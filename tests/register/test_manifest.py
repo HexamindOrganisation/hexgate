@@ -187,11 +187,11 @@ def test_langchain_manifest_schema():
     assert manifest == expected_manifest
 
 def test_fortify_manifest_schema():
-    """Test the schema of the Fortify manifest (CoolAgent from create_agent)."""
+    """Test the schema of the Fortify manifest (FortifyAgent from create_agent)."""
     from langchain_core.tools import tool
     from langgraph.graph import END, START, StateGraph
 
-    from fortify.agents.factory import CoolAgent
+    from fortify.agents.factory import FortifyAgent
 
     @tool
     def example_tool(example_input: str) -> str:
@@ -204,7 +204,7 @@ def test_fortify_manifest_schema():
     builder.add_edge("noop", END)
     graph = builder.compile(name="test-agent")
 
-    agent = CoolAgent(
+    agent = FortifyAgent(
         graph=graph,
         model="test-model",
         tools=[example_tool],
