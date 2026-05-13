@@ -5,12 +5,14 @@ from __future__ import annotations
 from rich.console import Console, Group
 
 from fortify.agents import loader
-from fortify.cli.app import (
+from fortify.cli._common import (
     AgentRuntime,
+    build_approval_handler as _build_approval_handler,
+    load_agent_script as _load_agent_script,
+    prompt_for_approval as _prompt_for_approval,
+)
+from fortify.cli.chat import (
     DOG_LOGO,
-    _build_approval_handler,
-    _load_agent_script,
-    _prompt_for_approval,
     _render_current_run,
     _render_welcome,
     _tail_text,
