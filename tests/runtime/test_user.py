@@ -73,11 +73,11 @@ class _FakeAgent:
 async def test_user_scope_sets_and_resets_contextvar() -> None:
     """A vanilla ``async with`` pushes + pops the User on the contextvar."""
     assert get_current_user() is None
-    async with User(user_id="alice", limits={"refund_limit": 50}):
+    async with User(user_id="alice", role="billing"):
         user = get_current_user()
         assert user is not None
         assert user.user_id == "alice"
-        assert user.limits == {"refund_limit": 50}
+        assert user.role == "billing"
     assert get_current_user() is None
 
 
@@ -110,10 +110,9 @@ async def test_user_scope_nests_different_instances() -> None:
 async def test_user_defaults_keep_optional_fields_unset() -> None:
     """Only ``user_id`` is required; everything else has a sensible default."""
     async with User(user_id="alice") as u:
+        assert u.role is None
         assert u.session_id is None
         assert u.user_role is None
-        assert u.limits == {}
-        assert u.scope == []
         assert u.ttl_seconds is None
 
 
@@ -147,14 +146,11 @@ async def test_resolve_tool_use_context_attenuates_when_user_active(
     priv, pub = keys
     agent = _FakeAgent(name="support-bot", client=_client(priv, pub))
 
-    async with User(
-        user_id="alice", limits={"refund_limit": 50}, scope=["refund"]
-    ):
+    async with User(user_id="alice", role="billing"):
         ctx = factory._resolve_tool_use_context(agent, None)
     assert ctx.biscuit_facts is not None
     assert ctx.biscuit_facts["user"] == ["alice"]
-    assert ctx.biscuit_facts["refund_limit"] == [50]
-    assert ctx.biscuit_facts["scope"] == ["refund"]
+    assert ctx.biscuit_facts["role"] == ["billing"]
     assert ctx.biscuit_facts["project"] == ["acme"]
 
 

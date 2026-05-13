@@ -224,8 +224,7 @@ def _resolve_user_facts(agent: "CoolAgent") -> dict[str, list[str | int]] | None
             client.config.api_key,
             pub,
             user=user.user_id,
-            scope=list(user.scope) or None,
-            limits=dict(user.limits) or None,
+            role=user.role,
             ttl_seconds=user.ttl_seconds,
         )
         _, _, biscuit_b64 = parse_envelope(child_envelope)
@@ -370,11 +369,17 @@ class CoolAgent:
         )
 
     def enforce_policy(self, policy: object) -> Self:
-        """Return a new agent runtime with Gate 1 policy enforcement applied."""
-        from fortify.agents.security import wrap_tools_with_policy
-        from fortify.security import load_policy
+        """Return a new agent runtime with Gate 1 policy enforcement applied.
 
-        return self.with_tools(wrap_tools_with_policy(self.tools, load_policy(policy)))
+        Accepts a path to a single YAML, a path to a ``policies/`` directory
+        of role policies, an :class:`AgentPolicy`, an existing
+        :class:`PolicySet`, or ``None`` (deny-by-default).
+        """
+        from fortify.agents.security import wrap_tools_with_policy
+        from fortify.security.policy_set import PolicySet, load_policy_set
+
+        policy_set = policy if isinstance(policy, PolicySet) else load_policy_set(policy)
+        return self.with_tools(wrap_tools_with_policy(self.tools, policy_set))
 
     def with_before_action(
         self,

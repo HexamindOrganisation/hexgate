@@ -77,23 +77,27 @@ def test_attenuate_adds_user_fact_and_chains(keys: tuple[bytes, bytes]) -> None:
     }
 
 
-def test_attenuate_adds_scope_and_limits(keys: tuple[bytes, bytes]) -> None:
-    """Scope list + numeric limits flow through as facts."""
+def test_attenuate_adds_role_fact(keys: tuple[bytes, bytes]) -> None:
+    """The optional role param stamps a ``role("...")`` fact."""
     priv, pub = keys
     parent = _parent_envelope(priv)
 
-    child = attenuate_for_user(
-        parent,
-        pub,
-        user="alice",
-        scope=["refund", "audit"],
-        limits={"refund_limit": 50, "rate_limit": 100},
-    )
+    child = attenuate_for_user(parent, pub, user="alice", role="billing")
     facts = extract_facts(_biscuit_b64(child), pub)
     assert facts["user"] == ["alice"]
-    assert facts["scope"] == ["read", "refund", "audit"]  # union, source order
-    assert facts["refund_limit"] == [50]
-    assert facts["rate_limit"] == [100]
+    assert facts["role"] == ["billing"]
+    # Parent's facts still flow through
+    assert facts["project"] == ["acme"]
+    assert facts["scope"] == ["read"]
+
+
+def test_attenuate_without_role_omits_role_fact(keys: tuple[bytes, bytes]) -> None:
+    """No role param means no ``role(...)`` fact in the attenuation block."""
+    priv, pub = keys
+    parent = _parent_envelope(priv)
+    child = attenuate_for_user(parent, pub, user="alice")
+    facts = extract_facts(_biscuit_b64(child), pub)
+    assert "role" not in facts
 
 
 def test_attenuate_with_ttl_inserts_time_check(keys: tuple[bytes, bytes]) -> None:
@@ -117,16 +121,15 @@ def test_attenuate_stacks_multiple_times(keys: tuple[bytes, bytes]) -> None:
     priv, pub = keys
     parent = _parent_envelope(priv)
 
-    first = attenuate_for_user(parent, pub, user="alice", limits={"refund_limit": 50})
-    second = attenuate_for_user(
-        first, pub, user="alice", limits={"refund_limit": 20}
-    )
+    first = attenuate_for_user(parent, pub, user="alice", role="support")
+    second = attenuate_for_user(first, pub, user="alice", role="billing")
 
     facts = extract_facts(_biscuit_b64(second), pub)
-    # `user("alice")` shows up twice (once per attenuation); UNION semantics
+    # `user("alice")` shows up twice (once per attenuation); UNION semantics.
     assert facts["user"] == ["alice", "alice"]
-    # Both refund_limit values present; predicate evaluator picks the min
-    assert sorted(facts["refund_limit"]) == [20, 50]
+    # Both role values present — last-write doesn't override; the runtime
+    # picks one. Biscuit's safety property: appending never elides prior facts.
+    assert sorted(facts["role"]) == ["billing", "support"]
 
 
 # ---------------------------------------------------------------------------
@@ -134,28 +137,12 @@ def test_attenuate_stacks_multiple_times(keys: tuple[bytes, bytes]) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_attenuate_rejects_invalid_limit_name(keys: tuple[bytes, bytes]) -> None:
-    """Limit names must match the Datalog identifier pattern."""
+def test_attenuate_rejects_empty_role(keys: tuple[bytes, bytes]) -> None:
+    """Empty role string is rejected — must be either omitted or non-empty."""
     priv, pub = keys
     parent = _parent_envelope(priv)
-    with pytest.raises(TokenError, match="invalid limit name"):
-        attenuate_for_user(parent, pub, user="alice", limits={"Refund-Limit": 50})
-
-
-def test_attenuate_rejects_non_int_limit_value(keys: tuple[bytes, bytes]) -> None:
-    """Limit values must be int — strings/floats are rejected with a clear error."""
-    priv, pub = keys
-    parent = _parent_envelope(priv)
-    with pytest.raises(TokenError, match="must be int"):
-        attenuate_for_user(parent, pub, user="alice", limits={"refund_limit": "50"})
-
-
-def test_attenuate_rejects_bool_limit_value(keys: tuple[bytes, bytes]) -> None:
-    """``bool`` is a subclass of int in Python — reject it explicitly anyway."""
-    priv, pub = keys
-    parent = _parent_envelope(priv)
-    with pytest.raises(TokenError, match="must be int"):
-        attenuate_for_user(parent, pub, user="alice", limits={"refund_limit": True})
+    with pytest.raises(TokenError, match="role must be a non-empty"):
+        attenuate_for_user(parent, pub, user="alice", role="")
 
 
 def test_attenuate_rejects_non_positive_ttl(keys: tuple[bytes, bytes]) -> None:
@@ -230,29 +217,13 @@ def test_attenuate_rejects_malformed_envelope(keys: tuple[bytes, bytes]) -> None
 # ---------------------------------------------------------------------------
 
 
-def test_attenuate_user_only_works_without_scope_limits_ttl(
+def test_attenuate_user_only_is_minimum_required(
     keys: tuple[bytes, bytes],
 ) -> None:
     """The simplest call shape: just bind a user, nothing else."""
     priv, pub = keys
     parent = _parent_envelope(priv)
     child = attenuate_for_user(parent, pub, user="alice")
-    assert extract_facts(_biscuit_b64(child), pub)["user"] == ["alice"]
-
-
-def test_attenuate_with_empty_scope_list_is_noop(keys: tuple[bytes, bytes]) -> None:
-    """Empty ``scope=[]`` adds no scope facts — same as ``scope=None``."""
-    priv, pub = keys
-    parent = _parent_envelope(priv)
-    child = attenuate_for_user(parent, pub, user="alice", scope=[])
     facts = extract_facts(_biscuit_b64(child), pub)
-    assert facts["scope"] == ["read"]  # only the parent's scope
-
-
-def test_attenuate_with_empty_limits_dict_is_noop(keys: tuple[bytes, bytes]) -> None:
-    """Empty ``limits={}`` adds no limit facts."""
-    priv, pub = keys
-    parent = _parent_envelope(priv)
-    child = attenuate_for_user(parent, pub, user="alice", limits={})
-    facts = extract_facts(_biscuit_b64(child), pub)
-    assert "refund_limit" not in facts
+    assert facts["user"] == ["alice"]
+    assert "role" not in facts

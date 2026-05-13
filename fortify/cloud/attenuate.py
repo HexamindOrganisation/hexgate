@@ -15,7 +15,6 @@ the agent. Same code path, same chain, different trigger.
 
 from __future__ import annotations
 
-import re
 from datetime import datetime, timedelta, timezone
 
 from fortify.cloud.biscuit import (
@@ -23,11 +22,6 @@ from fortify.cloud.biscuit import (
     TokenSignatureError,
     parse_envelope,
 )
-
-# Datalog identifier rule: lowercase head, then alnum + underscore. Matches
-# what ``extract_facts`` parses, so attenuation never mints a fact name that
-# the SDK can't read back.
-_IDENT_RE = re.compile(r"^[a-z][a-zA-Z0-9_]*$")
 
 
 def _escape_datalog_string(value: str) -> str:
@@ -46,8 +40,7 @@ def attenuate_for_user(
     public_key_bytes: bytes,
     *,
     user: str,
-    scope: list[str] | None = None,
-    limits: dict[str, int] | None = None,
+    role: str | None = None,
     ttl_seconds: int | None = None,
 ) -> str:
     """Return a new envelope with a user-attribution block appended.
@@ -55,19 +48,23 @@ def attenuate_for_user(
     Verifies ``parent_envelope`` against ``public_key_bytes`` first, then
     appends a Biscuit block carrying:
 
-    * ``user("...")``  — the authenticated user id.
-    * ``scope("...")`` facts — one per entry in ``scope``.
-    * ``name(N)`` facts — one per ``(name, N)`` pair in ``limits`` (e.g.
-      ``refund_limit(50)``). Names must match ``[a-z][a-zA-Z0-9_]*``.
+    * ``user("...")`` — the authenticated user id.
+    * ``role("...")`` — the user's role (when supplied), used by the agent
+      runtime to pick the matching role policy file.
     * ``check if time($t), $t < <now+ttl_seconds>`` when ``ttl_seconds`` is
       set, narrowing the parent's TTL (or adding one if the parent had none).
 
     The resulting envelope keeps the ``fty_<env>_<project>_<...>`` wire
     format unchanged — only the biscuit payload grows by one block.
 
+    Capability granularity (which tools the user can call, with what
+    constraints) is no longer carried in the token — it lives in the role's
+    ``policy.yaml`` file the agent loads. Tokens carry identity facts;
+    policies carry rules.
+
     Raises:
-        TokenError: malformed envelope, invalid limit name, non-integer
-            limit value.
+        TokenError: malformed envelope, malformed role string, or non-positive
+            ``ttl_seconds``.
         TokenSignatureError: malformed public key, or parent biscuit fails
             to verify (tampered / wrong key / corrupt payload).
     """
@@ -91,28 +88,16 @@ def attenuate_for_user(
         raise TokenSignatureError(str(exc)) from exc
 
     source_lines: list[str] = [f'user("{_escape_datalog_string(user)}");']
-    for scope_value in scope or []:
-        source_lines.append(f'scope("{_escape_datalog_string(scope_value)}");')
-    for name, value in (limits or {}).items():
-        if not _IDENT_RE.match(name):
-            raise TokenError(
-                f"invalid limit name {name!r}; must match {_IDENT_RE.pattern}"
-            )
-        if isinstance(value, bool) or not isinstance(value, int):
-            raise TokenError(
-                f"limit value for {name!r} must be int, got "
-                f"{type(value).__name__}"
-            )
-        source_lines.append(f"{name}({value});")
+    if role is not None:
+        if not isinstance(role, str) or not role:
+            raise TokenError(f"role must be a non-empty string, got {role!r}")
+        source_lines.append(f'role("{_escape_datalog_string(role)}");')
     if ttl_seconds is not None:
         if not isinstance(ttl_seconds, int) or ttl_seconds <= 0:
             raise TokenError(
                 f"ttl_seconds must be a positive int, got {ttl_seconds!r}"
             )
         expiry = datetime.now(timezone.utc) + timedelta(seconds=ttl_seconds)
-        # Biscuit's Datalog parses ISO-8601 datetimes; second-resolution is
-        # plenty for capability expiry (tokens that need finer windows would
-        # use a different primitive).
         source_lines.append(
             f"check if time($t), $t < {expiry.strftime('%Y-%m-%dT%H:%M:%SZ')};"
         )

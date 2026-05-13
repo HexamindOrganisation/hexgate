@@ -29,15 +29,15 @@ def test_user_from_payload_returns_user_with_all_fields() -> None:
     user = _user_from_payload(
         {
             "user": "alice",
-            "scope": ["refund", "read"],
-            "limits": {"refund_limit": 50},
+            "role": "billing",
+            "session_id": "sess_abc",
             "ttl_seconds": 300,
         }
     )
     assert user is not None
     assert user.user_id == "alice"
-    assert user.scope == ["refund", "read"]
-    assert user.limits == {"refund_limit": 50}
+    assert user.role == "billing"
+    assert user.session_id == "sess_abc"
     assert user.ttl_seconds == 300
 
 
@@ -46,8 +46,7 @@ def test_user_from_payload_returns_user_with_just_user_id() -> None:
     user = _user_from_payload({"user": "bob"})
     assert user is not None
     assert user.user_id == "bob"
-    assert user.scope == []
-    assert user.limits == {}
+    assert user.role is None
 
 
 def test_user_from_payload_returns_none_for_empty_dict() -> None:
@@ -68,9 +67,11 @@ def test_user_from_payload_returns_none_for_non_dict() -> None:
 
 
 def test_user_from_payload_returns_none_on_invalid_shape() -> None:
-    """A payload with the wrong type for limits surfaces a warning, returns None."""
-    # limits expects dict[str, int]; passing a list trips Pydantic validation
-    assert _user_from_payload({"user": "alice", "limits": [1, 2, 3]}) is None
+    """A payload with the wrong type for ttl trips Pydantic validation."""
+    assert (
+        _user_from_payload({"user": "alice", "ttl_seconds": "not-a-number"})
+        is None
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -122,7 +123,7 @@ async def test_handle_message_chat_with_attenuation_enters_user_scope(
             "message": "refund 30",
             "user_attenuation": {
                 "user": "alice",
-                "limits": {"refund_limit": 50},
+                "role": "billing",
             },
         },
     )
@@ -130,7 +131,7 @@ async def test_handle_message_chat_with_attenuation_enters_user_scope(
     captured_user: User | None = captured["user_during_stream"]
     assert captured_user is not None
     assert captured_user.user_id == "alice"
-    assert captured_user.limits == {"refund_limit": 50}
+    assert captured_user.role == "billing"
 
     # After the handler returns the scope must be cleanly popped.
     assert get_current_user() is None

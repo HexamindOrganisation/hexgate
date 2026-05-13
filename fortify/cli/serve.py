@@ -63,8 +63,8 @@ def _user_from_payload(attenuation: Any) -> User | None:
     try:
         return User(
             user_id=str(attenuation["user"]),
-            scope=list(attenuation.get("scope") or []),
-            limits=dict(attenuation.get("limits") or {}),
+            role=attenuation.get("role"),
+            session_id=attenuation.get("session_id"),
             ttl_seconds=attenuation.get("ttl_seconds"),
         )
     except (TypeError, ValueError, ValidationError) as exc:

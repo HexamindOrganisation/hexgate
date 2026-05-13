@@ -23,7 +23,7 @@ from contextvars import ContextVar, Token
 from dataclasses import dataclass
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
+from pydantic import BaseModel, ConfigDict, PrivateAttr
 
 from fortify.runtime.workspace import Workspace
 
@@ -81,17 +81,16 @@ class User(BaseModel):
 
     Use within a request handler to bind the agent to one user for the
     duration of a block. The agent runtime checks for an active User on
-    each invocation and lazily mints a per-request Biscuit by attenuating
-    the agent's bound :class:`~fortify.cloud.FortifyClient` parent token.
-    Extracted facts flow into :class:`ToolUseContext.biscuit_facts`, where
-    the structured policy predicates (``requires_user`` / ``requires_scope``
-    / ``numeric_limit``) read them.
+    each invocation, lazily mints a per-request Biscuit (signed by the
+    platform-bound :class:`~fortify.cloud.FortifyClient`), and selects the
+    role's policy from the agent's loaded set. The policy's per-tool
+    ``constraints`` then evaluate against each call's arguments.
 
     Two invocation styles, same machinery underneath:
 
     * Ambient (FastAPI-friendly)::
 
-          async with User(user_id="alice", limits={"refund_limit": 50}):
+          async with User(user_id="alice", role="billing"):
               async for event in stream_agent(agent, handler, input):
                   ...
 
@@ -113,10 +112,9 @@ class User(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     user_id: str
+    role: str | None = None
     session_id: str | None = None
     user_role: str | None = None
-    limits: dict[str, int] = Field(default_factory=dict)
-    scope: list[str] = Field(default_factory=list)
     ttl_seconds: int | None = None
 
     # Stack so the same User instance survives nested ``async with`` blocks.

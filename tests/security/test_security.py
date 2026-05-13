@@ -539,71 +539,60 @@ async def test_enforced_tool_emits_single_tool_lifecycle(
 # ---------------------------------------------------------------------------
 
 
-def test_authorize_tool_call_passes_user_predicate_via_facts() -> None:
-    """An allowed user fact lets the call through."""
+def test_authorize_tool_call_passes_when_constraint_satisfied() -> None:
+    """A satisfied constraint lets the call through."""
     policy = AgentPolicy(
         tools={
-            "refund": BaseToolPolicy(mode="allow", requires_user=["alice"]),
+            "refund": BaseToolPolicy(
+                mode="allow", constraints=["args.amount <= 50"]
+            ),
         }
     )
-    authorize_tool_call(
-        policy, "refund", {"amount": 5}, facts={"user": ["alice"]}
-    )  # no exception
+    authorize_tool_call(policy, "refund", {"amount": 30})  # no exception
 
 
-def test_authorize_tool_call_denies_when_user_predicate_misses() -> None:
-    """A user fact outside the allowed set denies before the mode check."""
+def test_authorize_tool_call_denies_when_constraint_fails() -> None:
+    """An unsatisfied constraint denies with the offending source in the message."""
     policy = AgentPolicy(
         tools={
-            "refund": BaseToolPolicy(mode="allow", requires_user=["alice"]),
+            "refund": BaseToolPolicy(
+                mode="allow", constraints=["args.amount <= 50"]
+            ),
         }
     )
-    with pytest.raises(PolicyDeniedError, match="requires user"):
-        authorize_tool_call(
-            policy, "refund", {"amount": 5}, facts={"user": ["bob"]}
-        )
+    with pytest.raises(PolicyDeniedError, match="args.amount <= 50"):
+        authorize_tool_call(policy, "refund", {"amount": 200})
 
 
-def test_authorize_tool_call_caps_numeric_argument_by_fact() -> None:
-    """A numeric_limit mapping enforces the bound from the token."""
+def test_authorize_tool_call_evaluates_multiple_constraints_as_and() -> None:
+    """Multiple constraints all must pass — implicit AND across the list."""
     policy = AgentPolicy(
         tools={
             "refund": BaseToolPolicy(
                 mode="allow",
-                numeric_limit={"amount": "refund_limit"},
+                constraints=[
+                    "args.amount <= 50",
+                    'args.currency == "USD"',
+                ],
             ),
         }
     )
-    authorize_tool_call(
-        policy, "refund", {"amount": 30}, facts={"refund_limit": [50]}
-    )
-    with pytest.raises(PolicyDeniedError, match="caps argument"):
-        authorize_tool_call(
-            policy, "refund", {"amount": 200}, facts={"refund_limit": [50]}
-        )
+    authorize_tool_call(policy, "refund", {"amount": 30, "currency": "USD"})
+    with pytest.raises(PolicyDeniedError, match="currency"):
+        authorize_tool_call(policy, "refund", {"amount": 30, "currency": "EUR"})
 
 
-def test_authorize_tool_call_predicates_are_noop_without_facts_and_requirements() -> None:
-    """Backwards-compat: a policy with no fact predicates ignores facts entirely."""
-    policy = AgentPolicy(
-        tools={"web_search": BaseToolPolicy(mode="allow")}
-    )
-    # Both legacy (no facts kwarg) and modern (None) call shapes work.
+def test_authorize_tool_call_no_constraints_is_pure_mode_check() -> None:
+    """A policy with mode=allow and no constraints just passes."""
+    policy = AgentPolicy(tools={"web_search": BaseToolPolicy(mode="allow")})
     authorize_tool_call(policy, "web_search", {})
-    authorize_tool_call(policy, "web_search", {}, facts=None)
-    authorize_tool_call(policy, "web_search", {}, facts={})
 
 
 @pytest.mark.asyncio
-async def test_guarded_tool_reads_facts_from_tool_use_context(
+async def test_guarded_tool_constraints_gate_argument(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """End-to-end: facts on the contextvar drive predicate denial in the tool."""
-    from fortify.runtime import (
-        ToolUseContext,
-        reset_current_tool_use_context,
-        set_current_tool_use_context,
-    )
+    """End-to-end: a per-tool constraint denies an out-of-bounds argument."""
 
     @tool
     def refund(amount: int) -> str:
@@ -616,9 +605,7 @@ async def test_guarded_tool_reads_facts_from_tool_use_context(
     policy = AgentPolicy(
         tools={
             "refund": BaseToolPolicy(
-                mode="allow",
-                requires_user=["alice"],
-                numeric_limit={"amount": "refund_limit"},
+                mode="allow", constraints=["args.amount <= 50"]
             ),
         }
     )
@@ -630,62 +617,24 @@ async def test_guarded_tool_reads_facts_from_tool_use_context(
     secured = enforce_policy(agent, policy)
     guarded_refund = secured.tools[0]
 
-    # Case 1: alice, under cap → allowed
-    ctx_token = set_current_tool_use_context(
-        ToolUseContext(
-            agent_name=None,
-            workspace=None,
-            biscuit_facts={"user": ["alice"], "refund_limit": [50]},
-        )
-    )
-    try:
-        result = await guarded_refund.ainvoke({"amount": 30})
-        assert "refunded 30" in str(result)
-    finally:
-        reset_current_tool_use_context(ctx_token)
+    # Under cap → allowed (tool runs).
+    result = await guarded_refund.ainvoke({"amount": 30})
+    assert "refunded 30" in str(result)
 
-    # Case 2: bob (wrong user) → guarded denial payload
-    ctx_token = set_current_tool_use_context(
-        ToolUseContext(
-            agent_name=None,
-            workspace=None,
-            biscuit_facts={"user": ["bob"], "refund_limit": [50]},
-        )
-    )
-    try:
-        result = await guarded_refund.ainvoke({"amount": 30})
-        assert isinstance(result, dict) and result.get("ok") is False
-        assert result["error"]["type"] == "policy_denied"
-        assert "requires user" in result["error"]["message"]
-    finally:
-        reset_current_tool_use_context(ctx_token)
-
-    # Case 3: alice, over cap → guarded denial payload
-    ctx_token = set_current_tool_use_context(
-        ToolUseContext(
-            agent_name=None,
-            workspace=None,
-            biscuit_facts={"user": ["alice"], "refund_limit": [50]},
-        )
-    )
-    try:
-        result = await guarded_refund.ainvoke({"amount": 200})
-        assert isinstance(result, dict) and result.get("ok") is False
-        assert "caps argument" in result["error"]["message"]
-    finally:
-        reset_current_tool_use_context(ctx_token)
+    # Over cap → guarded denial payload, source string surfaced.
+    result = await guarded_refund.ainvoke({"amount": 200})
+    assert isinstance(result, dict) and result.get("ok") is False
+    assert result["error"]["type"] == "policy_denied"
+    assert "args.amount <= 50" in result["error"]["message"]
 
 
 @pytest.mark.asyncio
-async def test_guarded_tool_denies_when_facts_absent_and_predicate_set(
+async def test_guarded_tool_role_policy_selection(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Local-only flow + a fact-requiring policy → fail-closed."""
-    from fortify.runtime import (
-        ToolUseContext,
-        reset_current_tool_use_context,
-        set_current_tool_use_context,
-    )
+    """A PolicySet binds different policies per role; the active User picks."""
+    from fortify.runtime import User
+    from fortify.security import PolicySet
 
     @tool
     def refund(amount: int) -> str:
@@ -695,9 +644,26 @@ async def test_guarded_tool_denies_when_facts_absent_and_predicate_set(
     monkeypatch.setattr(factory, "create_langchain_agent", lambda **_kwargs: object())
     monkeypatch.setattr(factory, "get_langfuse_handler", lambda **_kwargs: "handler")
 
-    policy = AgentPolicy(
-        tools={
-            "refund": BaseToolPolicy(mode="allow", requires_user=["alice"]),
+    # Two roles + a deny-all default.
+    policy_set = PolicySet(
+        {
+            "default": AgentPolicy(
+                tools={"refund": BaseToolPolicy(mode="deny")}
+            ),
+            "support": AgentPolicy(
+                tools={
+                    "refund": BaseToolPolicy(
+                        mode="allow", constraints=["args.amount <= 50"]
+                    )
+                }
+            ),
+            "billing": AgentPolicy(
+                tools={
+                    "refund": BaseToolPolicy(
+                        mode="allow", constraints=["args.amount <= 500"]
+                    )
+                }
+            ),
         }
     )
     agent, _ = factory.create_agent(
@@ -705,16 +671,23 @@ async def test_guarded_tool_denies_when_facts_absent_and_predicate_set(
         tools=[refund],
         system_prompt="You are a helpful assistant.",
     )
-    secured = enforce_policy(agent, policy)
+    secured = enforce_policy(agent, policy_set)
     guarded = secured.tools[0]
 
-    # No biscuit_facts on context → predicate has nothing to match → deny.
-    ctx_token = set_current_tool_use_context(
-        ToolUseContext(agent_name=None, workspace=None, biscuit_facts=None)
-    )
-    try:
-        result = await guarded.ainvoke({"amount": 30})
-        assert result.get("ok") is False
-        assert "token carries none" in result["error"]["message"]
-    finally:
-        reset_current_tool_use_context(ctx_token)
+    # support: 50 is the cap → 30 allowed, 200 denied
+    async with User(user_id="alice", role="support"):
+        ok = await guarded.ainvoke({"amount": 30})
+        assert "refunded 30" in str(ok)
+        nope = await guarded.ainvoke({"amount": 200})
+        assert nope.get("ok") is False
+        assert "args.amount <= 50" in nope["error"]["message"]
+
+    # billing: cap is 500 → 200 allowed
+    async with User(user_id="alice", role="billing"):
+        ok = await guarded.ainvoke({"amount": 200})
+        assert "refunded 200" in str(ok)
+
+    # No active User → falls back to default (deny)
+    fallback = await guarded.ainvoke({"amount": 1})
+    assert fallback.get("ok") is False
+    assert fallback["error"]["type"] == "policy_denied"
