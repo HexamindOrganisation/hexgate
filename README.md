@@ -48,6 +48,8 @@ Required keys for the example CLI flow:
 - `LINKUP_API_KEY`
 - `TAVILY_API_KEY`
 
+Run `fortify --help` to see all subcommands (`chat`, `serve`, `register`), and `fortify <subcommand> --help` for the flags each one accepts.
+
 Useful next commands:
 
 ```bash
