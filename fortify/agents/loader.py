@@ -22,6 +22,7 @@ from fortify.tools import (
     glob,
     grep,
     read_file,
+    refund_order,
     web_search,
     write_file,
 )
@@ -34,6 +35,7 @@ BUILTIN_TOOLS = {
     "glob": glob,
     "grep": grep,
     "read_file": read_file,
+    "refund_order": refund_order,
     "web_search": web_search,
     "write_file": write_file,
 }
@@ -294,6 +296,8 @@ def load_fortify_agent(
     this attribute when an :class:`~fortify.runtime.User` scope is active to
     mint per-request attenuated tokens lazily.
     """
+    from fortify.security.policy_set import load_policy_map
+
     resolved_name = resolve_agent_name(name)
     config = FortifyConfig.from_env(
         project_id=project_id, base_url=base_url, api_key=api_key
@@ -302,8 +306,22 @@ def load_fortify_agent(
     payload = client.get_agent(resolved_name)
 
     spec = AgentSpec.model_validate(yaml.safe_load(payload["agent_yaml"]) or {})
-    policy = AgentPolicy.model_validate(yaml.safe_load(payload["policy_yaml"]) or {})
     system_prompt = payload.get("system_md") or ""
+
+    # If the platform returned a non-empty `roles` map, build a role-aware
+    # PolicySet — each value is a role's policy.yaml text, resolved via
+    # load_policy_map (handles inheritance + mixin filtering). Otherwise
+    # fall back to the legacy single `policy_yaml` field as the default
+    # role; behaviour-preserving for agents that haven't been migrated.
+    roles_payload = payload.get("roles") or {}
+    if roles_payload:
+        role_policies = {
+            name: AgentPolicy.model_validate(yaml.safe_load(text) or {})
+            for name, text in roles_payload.items()
+        }
+        policy: AgentPolicy | object = load_policy_map(role_policies)
+    else:
+        policy = AgentPolicy.model_validate(yaml.safe_load(payload["policy_yaml"]) or {})
 
     tools = resolve_builtin_tools(spec.tools, extra_tools=extra_tools)
 
@@ -345,10 +363,12 @@ def load_agent(
     Useful for terminal-chat workflows that don't need cloud-fetched policy.
     """
     if not local_only and os.environ.get("FORTIFY_KEY"):
+        # load_fortify_agent dropped its reserved ``user_id`` placeholder
+        # in phase 3.5 — per-request user identity comes from a User scope
+        # at invocation time, not from the loader.
         return load_fortify_agent(
             name,
             session_id=session_id,
-            user_id=user_id,
             tags=tags,
             extra_tools=extra_tools,
             model=model,

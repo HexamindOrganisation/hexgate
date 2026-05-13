@@ -230,23 +230,25 @@ def revoke_token(
         raise HTTPException(status_code=404, detail="token not found")
 
 
+def _agent_read(agent) -> AgentRead:  # noqa: ANN001 — Agent model not imported at top
+    """Shared serialiser so the three endpoints can't drift in the role field."""
+    return AgentRead(
+        id=agent.id,
+        name=agent.name,
+        agent_yaml=agent.agent_yaml,
+        policy_yaml=agent.policy_yaml,
+        system_md=agent.system_md,
+        roles=dict(agent.roles_json or {}),
+        updated_at=agent.updated_at,
+    )
+
+
 @v1.get("/projects/{project_id}/agents", response_model=list[AgentRead])
 def api_list_agents(
     project_id: str, session: Session = Depends(get_session)
 ) -> list[AgentRead]:
     ensure_default_project(session)
-    agents = list_agents(session, project_id)
-    return [
-        AgentRead(
-            id=a.id,
-            name=a.name,
-            agent_yaml=a.agent_yaml,
-            policy_yaml=a.policy_yaml,
-            system_md=a.system_md,
-            updated_at=a.updated_at,
-        )
-        for a in agents
-    ]
+    return [_agent_read(a) for a in list_agents(session, project_id)]
 
 
 @v1.get("/projects/{project_id}/agents/{name}", response_model=AgentRead)
@@ -260,14 +262,7 @@ def api_get_agent(
     agent = get_agent(session, project_id, name)
     if agent is None:
         raise HTTPException(status_code=404, detail="agent not found")
-    return AgentRead(
-        id=agent.id,
-        name=agent.name,
-        agent_yaml=agent.agent_yaml,
-        policy_yaml=agent.policy_yaml,
-        system_md=agent.system_md,
-        updated_at=agent.updated_at,
-    )
+    return _agent_read(agent)
 
 
 @v1.put("/projects/{project_id}/agents/{name}", response_model=AgentRead)
@@ -277,6 +272,7 @@ def api_update_agent(
     body: AgentUpdate,
     session: Session = Depends(get_session),
 ) -> AgentRead:
+    ensure_default_project(session)
     agent = update_agent(
         session,
         project_id,
@@ -284,17 +280,11 @@ def api_update_agent(
         agent_yaml=body.agent_yaml,
         policy_yaml=body.policy_yaml,
         system_md=body.system_md,
+        roles=body.roles,
     )
     if agent is None:
         raise HTTPException(status_code=404, detail="agent not found")
-    return AgentRead(
-        id=agent.id,
-        name=agent.name,
-        agent_yaml=agent.agent_yaml,
-        policy_yaml=agent.policy_yaml,
-        system_md=agent.system_md,
-        updated_at=agent.updated_at,
-    )
+    return _agent_read(agent)
 
 
 @v1.post("/agents", response_model=RegisterAgentResponse)

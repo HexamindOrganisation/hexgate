@@ -35,6 +35,8 @@ class AgentRead(BaseModel):
     agent_yaml: str
     policy_yaml: str
     system_md: str
+    # Empty dict for single-policy agents; populated for role-aware ones.
+    roles: dict[str, str] = Field(default_factory=dict)
     updated_at: datetime
 
 
@@ -42,6 +44,7 @@ class AgentUpdate(BaseModel):
     agent_yaml: str | None = None
     policy_yaml: str | None = None
     system_md: str | None = None
+    roles: dict[str, str] | None = None
 
 
 # --- Agent manifest registration ---------------------------------------------

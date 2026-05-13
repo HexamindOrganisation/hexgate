@@ -349,7 +349,7 @@ class CoolAgent:
             name=self.name,
             cache=self.cache,
         )
-        return type(self)(
+        rebuilt = type(self)(
             graph=graph,
             model=self.model,
             tools=tools,
@@ -367,6 +367,15 @@ class CoolAgent:
             cache=self.cache,
             workspace=self.workspace,
         )
+        # Propagate the optional fortify_client attribute that load_fortify_agent
+        # attaches to the cloud-loaded runtime — every `.with_*` transform
+        # funnels through here, so this keeps the client reachable for lazy
+        # user-scope attenuation after enforce_policy / with_approval_handler /
+        # with_before_action chains.
+        client = getattr(self, "fortify_client", None)
+        if client is not None:
+            rebuilt.fortify_client = client
+        return rebuilt
 
     def enforce_policy(self, policy: object) -> Self:
         """Return a new agent runtime with Gate 1 policy enforcement applied.

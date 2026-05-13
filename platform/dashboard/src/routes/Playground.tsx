@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Streamdown } from 'streamdown'
 import {
@@ -14,17 +14,79 @@ import {
   X,
   CircleDashed,
   ShieldAlert,
+  UserCog,
 } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { usePlayground, type ChatMessage, type ToolCall } from '@/lib/playground'
-import { DEFAULT_PROJECT_ID } from '@/lib/api'
+import { api, DEFAULT_PROJECT_ID, type AgentRead } from '@/lib/api'
 import { cn } from '@/lib/utils'
+
+/**
+ * Build the role-picker option list from an agent's roles map.
+ *
+ * Roles whose YAML declares `is_mixin: true` are dropped — they're
+ * inheritance helpers, not selectable personas. ``default`` is always
+ * surfaced first when present; the rest follow alphabetically.
+ */
+function selectableRoles(roles: Record<string, string>): string[] {
+  const concrete: string[] = []
+  for (const [name, yaml] of Object.entries(roles)) {
+    if (/^\s*is_mixin\s*:\s*true\s*$/m.test(yaml)) continue
+    concrete.push(name)
+  }
+  concrete.sort()
+  if (concrete.includes('default')) {
+    return ['default', ...concrete.filter((r) => r !== 'default')]
+  }
+  return concrete
+}
 
 export function PlaygroundPage() {
   const { state, sendChat, reset } = usePlayground({ projectId: DEFAULT_PROJECT_ID })
   const [composer, setComposer] = useState('')
+  const [agent, setAgent] = useState<AgentRead | null>(null)
+  const [activeRole, setActiveRole] = useState<string | null>(null)
   const transcriptRef = useRef<HTMLDivElement>(null)
+
+  // Fetch the serving agent so we know which roles are available. Roles
+  // are a per-agent concept today (M1); when the dashboard later owns
+  // a global role registry this useEffect moves into a shared hook.
+  useEffect(() => {
+    if (!state.agentName) {
+      setAgent(null)
+      return
+    }
+    let cancelled = false
+    api
+      .getAgent(state.agentName)
+      .then((a) => {
+        if (!cancelled) setAgent(a)
+      })
+      .catch(() => {
+        if (!cancelled) setAgent(null)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [state.agentName])
+
+  const roleOptions = useMemo(
+    () => (agent ? selectableRoles(agent.roles) : []),
+    [agent],
+  )
+
+  // Auto-select a sensible default when the role list changes:
+  // prefer 'default', else first option, else null (single-policy agents).
+  useEffect(() => {
+    if (roleOptions.length === 0) {
+      setActiveRole(null)
+      return
+    }
+    setActiveRole((prev) =>
+      prev && roleOptions.includes(prev) ? prev : roleOptions[0],
+    )
+  }, [roleOptions])
 
   useEffect(() => {
     transcriptRef.current?.scrollTo({
@@ -36,7 +98,7 @@ export function PlaygroundPage() {
   function submit() {
     const text = composer.trim()
     if (!text) return
-    sendChat(text)
+    sendChat(text, activeRole ? { role: activeRole } : undefined)
     setComposer('')
   }
 
@@ -97,6 +159,32 @@ export function PlaygroundPage() {
           </div>
         )}
 
+        {roleOptions.length > 0 && (
+          <div className="flex flex-col gap-1.5">
+            <div className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
+              <UserCog className="size-3" />
+              Acting as
+            </div>
+            <select
+              value={activeRole ?? ''}
+              onChange={(e) => setActiveRole(e.target.value || null)}
+              className="h-9 rounded-md border border-border bg-background px-2.5 text-sm font-mono focus:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            >
+              {roleOptions.map((role) => (
+                <option key={role} value={role}>
+                  {role}
+                </option>
+              ))}
+            </select>
+            <p className="text-[11px] text-muted-foreground leading-snug">
+              Each chat turn attenuates the agent's token with{' '}
+              <span className="font-mono">role(&quot;{activeRole}&quot;)</span>. The
+              role's policy bundle decides which tools fire and with what
+              constraints.
+            </p>
+          </div>
+        )}
+
         <div className="flex flex-col gap-1.5">
           <div className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
             Session
@@ -132,6 +220,15 @@ export function PlaygroundPage() {
             <span className="font-medium">Session</span>
             <span className="text-muted-foreground text-xs">live relay via control plane</span>
           </div>
+          {activeRole && (
+            <Badge
+              variant="outline"
+              className="gap-1.5 font-mono text-[11px] border-primary/40 text-primary"
+            >
+              <UserCog className="size-3" />
+              acting as {activeRole}
+            </Badge>
+          )}
         </header>
 
         <div ref={transcriptRef} className="flex-1 overflow-y-auto px-6 py-6 space-y-5">

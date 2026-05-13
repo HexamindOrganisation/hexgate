@@ -41,6 +41,8 @@ export interface AgentRead {
   agent_yaml: string
   policy_yaml: string
   system_md: string
+  /** Map of role name → policy.yaml text. Empty for single-policy agents. */
+  roles: Record<string, string>
   updated_at: string
 }
 
@@ -48,6 +50,7 @@ export interface AgentUpdate {
   agent_yaml?: string
   policy_yaml?: string
   system_md?: string
+  roles?: Record<string, string>
 }
 
 export const api = {
