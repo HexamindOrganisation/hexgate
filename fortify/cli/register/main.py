@@ -7,8 +7,6 @@ import importlib
 import sys
 from typing import TYPE_CHECKING, Any
 
-from dotenv import load_dotenv
-
 from fortify.cli.register.register import register_agent
 
 if TYPE_CHECKING:
@@ -77,8 +75,6 @@ def add_parser(subparsers: argparse._SubParsersAction) -> None:
 
 def main(args: argparse.Namespace) -> int:
     """Entrypoint for the `fortify register` subcommand."""
-    load_dotenv()
-
     agent = _load_agent(args.agent)
     tools = _load_tools(args.tools) if args.tools is not None else None
 

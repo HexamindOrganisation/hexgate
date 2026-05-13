@@ -11,6 +11,8 @@ from __future__ import annotations
 import argparse
 import sys
 
+from dotenv import load_dotenv
+
 
 def _build_parser() -> argparse.ArgumentParser:
     """Build the top-level argparse parser and register every subcommand."""
@@ -31,6 +33,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def run() -> None:
     """Dispatch one of `fortify {chat,serve,register} ...`."""
+    load_dotenv()
     parser = _build_parser()
     args = parser.parse_args()
     exit_code = args.func(args) or 0

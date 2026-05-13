@@ -40,10 +40,13 @@ def build_runtime(
     model: str | None,
     local_only: bool = False,
 ) -> AgentRuntime:
-    """Create the runtime used by the terminal app.
+    """Create the runtime shared by ``fortify chat`` and ``fortify serve``.
 
     ``local_only=True`` keeps the loader off the Fortify Cloud path even
-    when ``FORTIFY_KEY`` is present in the environment.
+    when ``FORTIFY_KEY`` is present in the environment — what terminal
+    chat uses, since it doesn't need cloud-fetched policy or a serve
+    tunnel. ``fortify serve`` passes ``local_only=False`` so policy edits
+    in the dashboard land at the next turn boundary.
     """
     import os
 
