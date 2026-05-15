@@ -20,27 +20,8 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { usePlayground, type ChatMessage, type ToolCall } from '@/lib/playground'
 import { api, DEFAULT_PROJECT_ID, type AgentRead } from '@/lib/api'
+import { parseRolesFromPolicy } from '@/lib/policy'
 import { cn } from '@/lib/utils'
-
-/**
- * Build the role-picker option list from an agent's roles map.
- *
- * Roles whose YAML declares `is_mixin: true` are dropped — they're
- * inheritance helpers, not selectable personas. ``default`` is always
- * surfaced first when present; the rest follow alphabetically.
- */
-function selectableRoles(roles: Record<string, string>): string[] {
-  const concrete: string[] = []
-  for (const [name, yaml] of Object.entries(roles)) {
-    if (/^\s*is_mixin\s*:\s*true\s*$/m.test(yaml)) continue
-    concrete.push(name)
-  }
-  concrete.sort()
-  if (concrete.includes('default')) {
-    return ['default', ...concrete.filter((r) => r !== 'default')]
-  }
-  return concrete
-}
 
 export function PlaygroundPage() {
   const { state, sendChat, reset } = usePlayground({ projectId: DEFAULT_PROJECT_ID })
@@ -72,7 +53,7 @@ export function PlaygroundPage() {
   }, [state.agentName])
 
   const roleOptions = useMemo(
-    () => (agent ? selectableRoles(agent.roles) : []),
+    () => (agent ? parseRolesFromPolicy(agent.policy_yaml) : []),
     [agent],
   )
 
