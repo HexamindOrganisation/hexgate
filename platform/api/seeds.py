@@ -98,10 +98,11 @@ tools:
         ),
     },
     # ----- support-bot: role-aware demo agent -------------------------------
-    # Same agent, three role policies. The Playground's "Acting as" dropdown
+    # Same agent, three role policies expressed inline under a top-level
+    # ``roles:`` key in policy.yaml. The Playground's "Acting as" dropdown
     # exercises the role-driven policy selection added in phase 4a; the
-    # `refund_order` tool's constraints fire differently per role to make
-    # the demo visible (allow with cap → allow with bigger cap → deny).
+    # ``refund_order`` tool's constraints fire differently per role to make
+    # the demo visible (deny → small cap → large cap).
     {
         "name": "support_bot",
         "agent_yaml": """name: support_bot
@@ -113,17 +114,44 @@ tools:
   - refund_order
 policy: policy.yaml
 """,
-        # Legacy single-policy field — kept as the deny-all default so an
-        # SDK call without a role still has somewhere to land.
         "policy_yaml": """version: 1
 
-default_policy:
-  mode: deny
+# Role-aware policy bundle for support_bot. read_only is an inheritance
+# helper (is_mixin: true) — not selectable from the Playground, but composed
+# into every other role. `default` is the deny-everything fallback when no
+# User scope is active.
+roles:
+  read_only:
+    is_mixin: true
+    default_policy:
+      mode: deny
+    tools:
+      web_search: { mode: allow }
+      read_file:  { mode: allow }
 
-tools:
-  web_search: { mode: allow }
-  read_file:  { mode: allow }
-  refund_order: { mode: deny }
+  default:
+    inherits: [read_only]
+    tools:
+      refund_order:
+        mode: deny
+
+  support:
+    inherits: [read_only]
+    tools:
+      refund_order:
+        mode: allow
+        constraints:
+          - args.amount <= 50
+          - args.currency == "USD"
+
+  billing:
+    inherits: [read_only]
+    tools:
+      refund_order:
+        mode: allow
+        constraints:
+          - args.amount <= 500
+          - args.currency in ["USD", "EUR"]
 """,
         "system_md": (
             "You are a support assistant. You can look up information, read "
@@ -131,43 +159,5 @@ tools:
             "customer orders. Always confirm the amount and customer id "
             "before calling refund_order.\n"
         ),
-        # New role-aware bundle. Mixin `read_only` shares the safe base; the
-        # two concrete roles add `refund_order` with different caps via
-        # constraints. `default` is the deny-everything fallback (mirrors
-        # `policy_yaml` above).
-        "roles": {
-            "read_only": """version: 1
-is_mixin: true
-default_policy:
-  mode: deny
-tools:
-  web_search: { mode: allow }
-  read_file:  { mode: allow }
-""",
-            "default": """version: 1
-inherits: [read_only]
-tools:
-  refund_order:
-    mode: deny
-""",
-            "support": """version: 1
-inherits: [read_only]
-tools:
-  refund_order:
-    mode: allow
-    constraints:
-      - args.amount <= 50
-      - args.currency == "USD"
-""",
-            "billing": """version: 1
-inherits: [read_only]
-tools:
-  refund_order:
-    mode: allow
-    constraints:
-      - args.amount <= 500
-      - args.currency in ["USD", "EUR"]
-""",
-        },
     },
 ]

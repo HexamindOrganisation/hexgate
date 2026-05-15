@@ -28,6 +28,7 @@ from fortify.security.policy_set import (
     PolicySetError,
     load_policy_map,
     load_policy_set,
+    load_policy_set_from_dict,
 )
 
 __all__ = [
@@ -52,5 +53,6 @@ __all__ = [
     "load_policy",
     "load_policy_map",
     "load_policy_set",
+    "load_policy_set_from_dict",
     "parse_constraint",
 ]

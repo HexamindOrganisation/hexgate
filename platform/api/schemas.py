@@ -35,8 +35,6 @@ class AgentRead(BaseModel):
     agent_yaml: str
     policy_yaml: str
     system_md: str
-    # Empty dict for single-policy agents; populated for role-aware ones.
-    roles: dict[str, str] = Field(default_factory=dict)
     updated_at: datetime
 
 
@@ -44,7 +42,41 @@ class AgentUpdate(BaseModel):
     agent_yaml: str | None = None
     policy_yaml: str | None = None
     system_md: str | None = None
-    roles: dict[str, str] | None = None
+
+
+class PolicyValidationError(BaseModel):
+    """One diagnostic from the policy-document linter.
+
+    ``role`` is set when the failure was inside a specific entry of a
+    role-aware ``policy.yaml``'s ``roles:`` section; ``None`` for errors
+    at the top level (e.g. invalid YAML, schema violation).
+    """
+
+    role: str | None = None
+    line: int | None = None
+    message: str
+
+
+class ValidatePolicyRequest(BaseModel):
+    """Body for the policy-document validation endpoint.
+
+    Validates a single ``policy.yaml`` text — either a flat single-policy
+    shape or an inline-roles shape with a top-level ``roles:`` map. The
+    endpoint runs the same parsing the SDK uses at enforcement time.
+    """
+
+    policy_yaml: str
+
+
+class ValidatePolicyResponse(BaseModel):
+    """Result of validating a policy document.
+
+    ``ok`` is True when the document and every nested role parsed cleanly.
+    ``errors`` carries per-issue diagnostics.
+    """
+
+    ok: bool
+    errors: list[PolicyValidationError] = Field(default_factory=list)
 
 
 # --- Agent manifest registration ---------------------------------------------

@@ -1,10 +1,14 @@
-"""Tests for the role-aware agent shape on the platform API.
+"""Tests for the inline-roles policy shape on the platform API.
 
-The phase 4b seed adds a ``support_bot`` agent with a three-role policy
-bundle (``read_only`` mixin, plus ``support`` and ``billing`` concrete
-roles). These tests make sure the storage round-trips, the GET endpoint
-returns the ``roles`` map verbatim, and PUT can update it without
-clobbering the legacy single-policy field.
+After phase 4c-A the per-agent storage collapsed to three string columns —
+``agent_yaml``, ``policy_yaml``, ``system_md``. Role bundles live inline
+under a top-level ``roles:`` key in ``policy_yaml`` rather than in a
+separate ``roles_json`` column. These tests cover the new shape:
+
+  * seeded support_bot's policy.yaml carries inline roles
+  * GET / list / PUT round-trip the three string fields cleanly
+  * /validate accepts a single policy_yaml document (flat or inline-roles)
+    and surfaces YAML / schema / constraint errors with role attribution
 """
 
 from __future__ import annotations
@@ -49,53 +53,74 @@ def client() -> TestClient:
         app.dependency_overrides.clear()
 
 
-def test_get_support_bot_returns_roles_map(client: TestClient) -> None:
-    """The seed plants three roles on support_bot; GET surfaces them."""
+# ---------------------------------------------------------------------------
+# Seed shape
+# ---------------------------------------------------------------------------
+
+
+def test_support_bot_policy_carries_inline_roles(client: TestClient) -> None:
+    """The seed plants four inline roles inside support_bot's policy.yaml."""
     resp = client.get(f"/v1/projects/{DEFAULT_PROJECT_ID}/agents/support_bot")
     assert resp.status_code == 200
     body = resp.json()
-    assert set(body["roles"]) == {"read_only", "default", "support", "billing"}
-    # Each role's value parses as a YAML policy.
-    for role_name, yaml_text in body["roles"].items():
-        parsed = yaml.safe_load(yaml_text)
-        assert isinstance(parsed, dict), role_name
-        assert parsed.get("version") == 1
+    # Wire format is three string fields — no roles map at the top level.
+    assert set(body.keys()) >= {"agent_yaml", "policy_yaml", "system_md"}
+    assert "roles" not in body
+    # Roles live inline in policy.yaml.
+    parsed = yaml.safe_load(body["policy_yaml"])
+    assert isinstance(parsed.get("roles"), dict)
+    assert set(parsed["roles"].keys()) == {
+        "read_only",
+        "default",
+        "support",
+        "billing",
+    }
+    # The mixin marker survives the round-trip.
+    assert parsed["roles"]["read_only"].get("is_mixin") is True
 
 
-def test_get_default_agent_returns_empty_roles(client: TestClient) -> None:
-    """The legacy seed agents stay single-policy — ``roles`` empty dict."""
+def test_default_agent_policy_stays_flat(client: TestClient) -> None:
+    """Legacy seed agents keep the single-policy shape — no ``roles:`` key."""
     resp = client.get(f"/v1/projects/{DEFAULT_PROJECT_ID}/agents/default")
     assert resp.status_code == 200
-    assert resp.json()["roles"] == {}
+    parsed = yaml.safe_load(resp.json()["policy_yaml"])
+    assert "roles" not in parsed
+    assert "tools" in parsed
 
 
-def test_put_agent_updates_roles_map(client: TestClient) -> None:
-    """PUT with a fresh ``roles`` dict overwrites the stored map."""
+# ---------------------------------------------------------------------------
+# PUT / GET round-trip
+# ---------------------------------------------------------------------------
+
+
+def test_put_agent_updates_policy_yaml(client: TestClient) -> None:
+    """PUT updates policy_yaml; subsequent GET reflects the change."""
+    new_policy = (
+        "version: 1\n"
+        "roles:\n"
+        "  default:\n"
+        "    tools:\n"
+        "      refund_order: { mode: allow }\n"
+    )
     resp = client.put(
-        f"/v1/projects/{DEFAULT_PROJECT_ID}/agents/default",
-        json={
-            "roles": {
-                "default": "version: 1\ntools:\n  refund_order:\n    mode: allow\n"
-            }
-        },
+        f"/v1/projects/{DEFAULT_PROJECT_ID}/agents/support_bot",
+        json={"policy_yaml": new_policy},
     )
     assert resp.status_code == 200
-    assert resp.json()["roles"].keys() == {"default"}
+    assert resp.json()["policy_yaml"] == new_policy
 
-    # GET picks up the update.
-    resp = client.get(f"/v1/projects/{DEFAULT_PROJECT_ID}/agents/default")
-    assert resp.json()["roles"].keys() == {"default"}
+    resp = client.get(f"/v1/projects/{DEFAULT_PROJECT_ID}/agents/support_bot")
+    assert resp.json()["policy_yaml"] == new_policy
 
 
-def test_put_agent_without_roles_keeps_existing(client: TestClient) -> None:
-    """An update that doesn't touch ``roles`` preserves what was there."""
-    # Snapshot the seeded support_bot's roles first.
+def test_put_agent_partial_update_preserves_other_fields(
+    client: TestClient,
+) -> None:
+    """An update touching one field leaves the others alone."""
     before = client.get(
         f"/v1/projects/{DEFAULT_PROJECT_ID}/agents/support_bot"
-    ).json()["roles"]
-    assert before  # sanity: there's something to preserve
+    ).json()
 
-    # Touch only the system prompt.
     resp = client.put(
         f"/v1/projects/{DEFAULT_PROJECT_ID}/agents/support_bot",
         json={"system_md": "Updated prompt."},
@@ -103,14 +128,131 @@ def test_put_agent_without_roles_keeps_existing(client: TestClient) -> None:
     assert resp.status_code == 200
     after = resp.json()
     assert after["system_md"] == "Updated prompt."
-    assert after["roles"] == before
+    assert after["policy_yaml"] == before["policy_yaml"]
+    assert after["agent_yaml"] == before["agent_yaml"]
 
 
-def test_list_agents_returns_roles_field(client: TestClient) -> None:
-    """The /agents collection endpoint also surfaces the new field."""
+def test_list_agents_returns_three_string_fields(client: TestClient) -> None:
+    """The /agents collection endpoint returns the same three-field shape."""
     resp = client.get(f"/v1/projects/{DEFAULT_PROJECT_ID}/agents")
     assert resp.status_code == 200
-    agents = {a["name"]: a for a in resp.json()}
-    assert "support_bot" in agents
-    assert "roles" in agents["support_bot"]
-    assert agents["default"]["roles"] == {}
+    for agent in resp.json():
+        assert "agent_yaml" in agent
+        assert "policy_yaml" in agent
+        assert "system_md" in agent
+        assert "roles" not in agent
+
+
+# ---------------------------------------------------------------------------
+# /agents/{name}/validate — single-document linter
+# ---------------------------------------------------------------------------
+
+
+def test_validate_inline_roles_clean(client: TestClient) -> None:
+    """A well-formed inline-roles document → ok=True, no errors."""
+    resp = client.post(
+        f"/v1/projects/{DEFAULT_PROJECT_ID}/agents/support_bot/validate",
+        json={
+            "policy_yaml": (
+                "version: 1\n"
+                "roles:\n"
+                "  default:\n"
+                "    tools:\n"
+                "      refund_order:\n"
+                "        mode: allow\n"
+                "        constraints:\n"
+                "          - args.amount <= 50\n"
+            )
+        },
+    )
+    assert resp.status_code == 200
+    assert resp.json() == {"ok": True, "errors": []}
+
+
+def test_validate_flat_single_policy_clean(client: TestClient) -> None:
+    """A legacy single-policy document also validates."""
+    resp = client.post(
+        f"/v1/projects/{DEFAULT_PROJECT_ID}/agents/default/validate",
+        json={
+            "policy_yaml": (
+                "version: 1\n"
+                "default_policy: { mode: deny }\n"
+                "tools:\n"
+                "  web_search: { mode: allow }\n"
+            )
+        },
+    )
+    assert resp.status_code == 200
+    assert resp.json() == {"ok": True, "errors": []}
+
+
+def test_validate_reports_yaml_parse_error_with_line(client: TestClient) -> None:
+    """A YAML lex error surfaces with the offending line; ``role`` is None."""
+    resp = client.post(
+        f"/v1/projects/{DEFAULT_PROJECT_ID}/agents/support_bot/validate",
+        json={"policy_yaml": "tools: [bad: unclosed\n"},
+    )
+    body = resp.json()
+    assert body["ok"] is False
+    [err] = body["errors"]
+    assert err["role"] is None
+    assert err["line"] is not None and err["line"] >= 1
+    assert "YAML parse" in err["message"]
+
+
+def test_validate_reports_constraint_grammar_error_inside_role(
+    client: TestClient,
+) -> None:
+    """An unsupported constraint operator is attributed to its role."""
+    resp = client.post(
+        f"/v1/projects/{DEFAULT_PROJECT_ID}/agents/support_bot/validate",
+        json={
+            "policy_yaml": (
+                "version: 1\n"
+                "roles:\n"
+                "  billing:\n"
+                "    tools:\n"
+                "      refund_order:\n"
+                "        mode: allow\n"
+                "        constraints:\n"
+                "          - args.amount ~~ 50\n"
+            )
+        },
+    )
+    body = resp.json()
+    assert body["ok"] is False
+    [err] = body["errors"]
+    assert err["role"] == "billing"
+    assert "no recognised operator" in err["message"]
+
+
+def test_validate_accumulates_errors_across_roles(client: TestClient) -> None:
+    """Multiple bad roles → multiple diagnostics, one per failure."""
+    resp = client.post(
+        f"/v1/projects/{DEFAULT_PROJECT_ID}/agents/support_bot/validate",
+        json={
+            "policy_yaml": (
+                "version: 1\n"
+                "roles:\n"
+                "  good:\n"
+                "    tools:\n"
+                "      refund_order: { mode: allow }\n"
+                "  bad1:\n"
+                "    tools:\n"
+                "      refund_order:\n"
+                "        mode: allow\n"
+                "        constraints:\n"
+                "          - args.amount %%% 50\n"
+                "  bad2:\n"
+                "    tools:\n"
+                "      refund_order:\n"
+                "        mode: allow\n"
+                "        constraints:\n"
+                "          - args.amount @@@ 50\n"
+            )
+        },
+    )
+    body = resp.json()
+    assert body["ok"] is False
+    roles_with_errors = {e["role"] for e in body["errors"]}
+    assert roles_with_errors == {"bad1", "bad2"}

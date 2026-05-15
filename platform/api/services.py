@@ -57,7 +57,6 @@ def ensure_seeded_agents(session: Session, project_id: str) -> None:
                 agent_yaml=seed["agent_yaml"],
                 policy_yaml=seed["policy_yaml"],
                 system_md=seed["system_md"],
-                roles_json=dict(seed.get("roles") or {}),
             )
         )
         added = True
@@ -83,7 +82,6 @@ def update_agent(
     agent_yaml: str | None = None,
     policy_yaml: str | None = None,
     system_md: str | None = None,
-    roles: dict[str, str] | None = None,
 ) -> Agent | None:
     from datetime import datetime, timezone
 
@@ -96,8 +94,6 @@ def update_agent(
         agent.policy_yaml = policy_yaml
     if system_md is not None:
         agent.system_md = system_md
-    if roles is not None:
-        agent.roles_json = roles
     agent.updated_at = datetime.now(timezone.utc)
     session.add(agent)
     session.commit()

@@ -25,11 +25,14 @@ from relay import registry
 from schemas import (
     AgentRead,
     AgentUpdate,
+    PolicyValidationError,
     RegisterAgentRequest,
     RegisterAgentResponse,
     TokenListItem,
     TokenMintRequest,
     TokenMintResponse,
+    ValidatePolicyRequest,
+    ValidatePolicyResponse,
 )
 from services import (
     delete_dev_token,
@@ -231,14 +234,13 @@ def revoke_token(
 
 
 def _agent_read(agent) -> AgentRead:  # noqa: ANN001 — Agent model not imported at top
-    """Shared serialiser so the three endpoints can't drift in the role field."""
+    """Shared serialiser used by GET, list, and PUT — keeps the wire format aligned."""
     return AgentRead(
         id=agent.id,
         name=agent.name,
         agent_yaml=agent.agent_yaml,
         policy_yaml=agent.policy_yaml,
         system_md=agent.system_md,
-        roles=dict(agent.roles_json or {}),
         updated_at=agent.updated_at,
     )
 
@@ -280,11 +282,103 @@ def api_update_agent(
         agent_yaml=body.agent_yaml,
         policy_yaml=body.policy_yaml,
         system_md=body.system_md,
-        roles=body.roles,
     )
     if agent is None:
         raise HTTPException(status_code=404, detail="agent not found")
     return _agent_read(agent)
+
+
+@v1.post(
+    "/projects/{project_id}/agents/{name}/validate",
+    response_model=ValidatePolicyResponse,
+)
+def api_validate_policy(
+    project_id: str,  # noqa: ARG001 — routed by FastAPI, scope-checked by future auth
+    name: str,  # noqa: ARG001 — same
+    body: ValidatePolicyRequest,
+) -> ValidatePolicyResponse:
+    """Parse ``policy.yaml`` end-to-end + check every ``constraints`` string.
+
+    Server-side validation keeps one source of truth on grammar — the same
+    parsers the SDK enforces with at run time. Handles both shapes:
+
+    * flat single-policy document → validated as one :class:`AgentPolicy`
+    * inline-roles document (top-level ``roles:`` map) → each entry
+      validated as an :class:`AgentPolicy`, then every constraint inside
+      every tool is parsed against the M1 grammar.
+
+    Returns a flat list of ``{role, line, message}`` diagnostics. ``role``
+    is ``None`` for top-level YAML / schema errors; populated when the
+    failure lives inside a specific role's section.
+    """
+    import yaml
+    from yaml.error import MarkedYAMLError
+    from pydantic import ValidationError
+
+    from fortify.security import AgentPolicy
+    from fortify.security.constraints import (
+        ConstraintParseError,
+        parse_constraint,
+    )
+
+    errors: list[PolicyValidationError] = []
+    try:
+        parsed = yaml.safe_load(body.policy_yaml) or {}
+    except MarkedYAMLError as exc:
+        line = exc.problem_mark.line + 1 if exc.problem_mark else None
+        return ValidatePolicyResponse(
+            ok=False,
+            errors=[
+                PolicyValidationError(
+                    line=line,
+                    message=f"YAML parse: {exc.problem or exc}",
+                )
+            ],
+        )
+
+    def _check_policy(policy: AgentPolicy, role_name: str | None) -> None:
+        for tool_name, tool_policy in policy.tools.items():
+            for constraint in tool_policy.constraints:
+                try:
+                    parse_constraint(constraint)
+                except ConstraintParseError as exc:
+                    errors.append(
+                        PolicyValidationError(
+                            role=role_name,
+                            message=f"{tool_name}: {exc}",
+                        )
+                    )
+
+    if isinstance(parsed.get("roles"), dict):
+        # Inline-roles shape: validate each role's policy.
+        for role_name, role_spec in parsed["roles"].items():
+            try:
+                role_policy = AgentPolicy.model_validate(role_spec or {})
+            except ValidationError as exc:
+                errors.append(
+                    PolicyValidationError(
+                        role=role_name,
+                        message=f"policy schema: {exc.errors()[0]['msg']}",
+                    )
+                )
+                continue
+            _check_policy(role_policy, role_name)
+    else:
+        # Flat single-policy shape.
+        try:
+            policy = AgentPolicy.model_validate(parsed)
+        except ValidationError as exc:
+            return ValidatePolicyResponse(
+                ok=False,
+                errors=[
+                    PolicyValidationError(
+                        message=f"policy schema: {exc.errors()[0]['msg']}",
+                    )
+                ],
+            )
+        _check_policy(policy, None)
+
+    return ValidatePolicyResponse(ok=not errors, errors=errors)
 
 
 @v1.post("/agents", response_model=RegisterAgentResponse)

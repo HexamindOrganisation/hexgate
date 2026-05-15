@@ -112,14 +112,22 @@ def load_policy_map(
 ) -> PolicySet:
     """Build a :class:`PolicySet` from a plain ``{role: AgentPolicy}`` dict.
 
-    Used by the cloud loader which receives role policies as a JSON map
-    from the platform API. Inheritance must already be resolved.
-    ``default`` names the role to use as the fallback — defaults to
-    ``"default"`` if the dict contains it, otherwise the first key.
+    Used by the cloud loader and by inline-roles ``policy.yaml`` files. Each
+    role's ``inherits`` field is resolved against the rest of the map before
+    mixin filtering — mirrors the ``_load_from_directory`` path so both
+    storage shapes produce the same effective policies.
+
+    ``default`` names the role to use as the fallback. Defaults to
+    ``"default"`` if the dict contains it, otherwise the first concrete key.
     """
     if not policy_map:
         raise PolicySetError("policy_map must contain at least one role")
-    resolved = {name: pol for name, pol in policy_map.items() if not pol.is_mixin}
+    # Resolve inheritance against the full map (including mixins, which can
+    # only be referenced via ``inherits``).
+    fully_resolved: dict[str, AgentPolicy] = {}
+    for role_name in policy_map:
+        fully_resolved[role_name] = _resolve_inheritance(role_name, policy_map, chain=[])
+    resolved = {name: pol for name, pol in fully_resolved.items() if not pol.is_mixin}
     if not resolved:
         raise PolicySetError("policy_map contains only mixins; need a concrete role")
     default_name = default or (DEFAULT_ROLE_NAME if DEFAULT_ROLE_NAME in resolved else next(iter(resolved)))
@@ -133,8 +141,34 @@ def load_policy_map(
 
 
 def _load_legacy_file(path: Path) -> PolicySet:
-    """Wrap a single ``policy.yaml`` as the ``default`` role."""
+    """Load a single ``policy.yaml`` — flat or inline-roles shape."""
     payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    return load_policy_set_from_dict(payload)
+
+
+def load_policy_set_from_dict(payload: dict[str, Any]) -> PolicySet:
+    """Build a :class:`PolicySet` from an already-parsed YAML document.
+
+    Detects which shape the document carries and dispatches accordingly:
+
+    * **Inline roles shape** — has a top-level ``roles:`` key whose value is
+      a mapping of ``{role_name: agent_policy_spec}``. Each value is validated
+      as an :class:`AgentPolicy`; the resulting map is wrapped via
+      :func:`load_policy_map` so inheritance and mixin filtering apply.
+
+    * **Flat single-policy shape** (legacy) — anything else is treated as a
+      single :class:`AgentPolicy` and wrapped as the ``default`` role.
+
+    Used by the cloud loader (the platform returns one ``policy_yaml`` string
+    per agent, with roles potentially inline) and by ``_load_legacy_file``
+    for SDK-local agents.
+    """
+    if isinstance(payload.get("roles"), dict):
+        role_policies = {
+            role_name: AgentPolicy.model_validate(spec or {})
+            for role_name, spec in payload["roles"].items()
+        }
+        return load_policy_map(role_policies)
     return PolicySet({DEFAULT_ROLE_NAME: AgentPolicy.model_validate(payload)})
 
 

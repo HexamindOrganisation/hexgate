@@ -296,7 +296,7 @@ def load_fortify_agent(
     this attribute when an :class:`~fortify.runtime.User` scope is active to
     mint per-request attenuated tokens lazily.
     """
-    from fortify.security.policy_set import load_policy_map
+    from fortify.security.policy_set import load_policy_set_from_dict
 
     resolved_name = resolve_agent_name(name)
     config = FortifyConfig.from_env(
@@ -308,20 +308,12 @@ def load_fortify_agent(
     spec = AgentSpec.model_validate(yaml.safe_load(payload["agent_yaml"]) or {})
     system_prompt = payload.get("system_md") or ""
 
-    # If the platform returned a non-empty `roles` map, build a role-aware
-    # PolicySet — each value is a role's policy.yaml text, resolved via
-    # load_policy_map (handles inheritance + mixin filtering). Otherwise
-    # fall back to the legacy single `policy_yaml` field as the default
-    # role; behaviour-preserving for agents that haven't been migrated.
-    roles_payload = payload.get("roles") or {}
-    if roles_payload:
-        role_policies = {
-            name: AgentPolicy.model_validate(yaml.safe_load(text) or {})
-            for name, text in roles_payload.items()
-        }
-        policy: AgentPolicy | object = load_policy_map(role_policies)
-    else:
-        policy = AgentPolicy.model_validate(yaml.safe_load(payload["policy_yaml"]) or {})
+    # The platform returns one canonical ``policy.yaml`` text per agent. The
+    # role bundle lives inline under a top-level ``roles:`` key when present;
+    # otherwise the document is a flat single-policy doc. load_policy_set_from_dict
+    # dispatches on shape — inheritance + mixin filtering applied either way.
+    policy_payload = yaml.safe_load(payload["policy_yaml"]) or {}
+    policy = load_policy_set_from_dict(policy_payload)
 
     tools = resolve_builtin_tools(spec.tools, extra_tools=extra_tools)
 
