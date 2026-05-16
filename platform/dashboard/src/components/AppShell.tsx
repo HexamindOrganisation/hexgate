@@ -10,12 +10,14 @@ import {
   Fingerprint,
   Shield,
   FileCode,
+  ShieldCheck,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 const workspaceLinks = [
   { to: '/', label: 'Dashboard', icon: LayoutDashboard, end: true },
   { to: '/agents', label: 'Agents', icon: FileCode },
+  { to: '/policies', label: 'Policies', icon: ShieldCheck },
   { to: '/graph', label: 'Graph', icon: Network },
   { to: '/playground', label: 'Playground', icon: MessageSquareCode },
   { to: '/audit', label: 'Audit', icon: ScrollText, badge: '24h' },
