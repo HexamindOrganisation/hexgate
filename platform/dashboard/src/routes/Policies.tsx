@@ -1,15 +1,19 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
+  AlertTriangle,
   Bot,
   FileCode,
   Network,
   Save,
   ShieldCheck,
 } from 'lucide-react'
+import { ReactFlow, Background, BackgroundVariant, Controls } from '@xyflow/react'
 import { api, type PolicyValidationError } from '@/lib/api'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
+import { nodeTypes } from '@/components/graph/nodes'
+import { buildPolicyGraph } from '@/lib/policy_graph'
 import { cn } from '@/lib/utils'
 
 type Tab = 'yaml' | 'graph'
@@ -59,7 +63,7 @@ export function PoliciesPage() {
           tab === 'yaml' ? (
             <YamlEditor agentName={selectedAgent} />
           ) : (
-            <GraphPlaceholder />
+            <PolicyGraphTab agentName={selectedAgent} />
           )
         ) : (
           <div className="h-full grid place-items-center text-sm text-muted-foreground">
@@ -259,19 +263,74 @@ function YamlEditor({ agentName }: { agentName: string }) {
 }
 
 /**
- * Graph tab placeholder — the node-edge visualization lands in commit 2/3.
- * Keeps the tab present today so the IA is stable.
+ * Graph tab — react-flow visualization of the agent's inline-roles policy.
+ *
+ * Two columns: roles on the left, tools on the right. Each role → tool
+ * edge is colored by mode (green allow / amber approval_required / red
+ * deny) and labeled with the constraint count when present. Inheritance
+ * edges between roles are dashed and labeled "inherits". Mixin roles get
+ * the muted RoleNode styling so they read as helpers, not personas.
+ *
+ * The view is read-only. Edit happens in the YAML tab; the graph updates
+ * on the next tab-flip (no live re-layout during typing — keeps the
+ * mental model "one source of truth, two views").
  */
-function GraphPlaceholder() {
-  return (
-    <div className="h-full grid place-items-center text-center px-8">
-      <div className="max-w-md space-y-2">
-        <Network className="size-8 text-muted-foreground mx-auto" />
-        <p className="text-sm text-muted-foreground">
-          Graph view coming next — node-edge visualization of roles → tools
-          colored by mode, with inheritance edges between role nodes.
+function PolicyGraphTab({ agentName }: { agentName: string }) {
+  const agent = useQuery({
+    queryKey: ['agent', agentName],
+    queryFn: () => api.getAgent(agentName),
+  })
+
+  const graph = useMemo(() => {
+    if (!agent.data) return null
+    return buildPolicyGraph(agent.data.policy_yaml)
+  }, [agent.data])
+
+  if (!graph) {
+    return (
+      <div className="h-full grid place-items-center text-sm text-muted-foreground">
+        Loading policy…
+      </div>
+    )
+  }
+
+  if (!graph.ok) {
+    return (
+      <div className="h-full grid place-items-center gap-2 text-center px-8">
+        <AlertTriangle className="size-6 text-approval mx-auto" />
+        <p className="text-sm text-muted-foreground max-w-md">
+          Fix the YAML to render the graph. The document must parse cleanly
+          and declare a top-level <span className="font-mono">roles:</span> map.
         </p>
       </div>
+    )
+  }
+
+  return (
+    <div className="h-full">
+      <ReactFlow
+        nodes={graph.nodes}
+        edges={graph.edges}
+        nodeTypes={nodeTypes}
+        nodesDraggable={true}
+        nodesConnectable={false}
+        edgesFocusable={false}
+        fitView
+        fitViewOptions={{ padding: 0.2 }}
+        proOptions={{ hideAttribution: true }}
+      >
+        <Background
+          variant={BackgroundVariant.Dots}
+          gap={20}
+          size={1}
+          color="hsl(var(--border))"
+        />
+        <Controls
+          position="bottom-right"
+          showInteractive={false}
+          className="!bg-card !border-border [&>button]:!bg-card [&>button]:!border-border"
+        />
+      </ReactFlow>
     </div>
   )
 }
