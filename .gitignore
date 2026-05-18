@@ -9,3 +9,6 @@ __pycache__/
 build/
 .DS_Store
 .venv/
+
+# Vendored numpy etc. show up here when shell PYTHONPATH points at ~/Library
+Library/

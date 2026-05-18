@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from rich.console import Console, Group
 
 from fortify.agents import loader
@@ -18,6 +20,11 @@ from fortify.cli.app import (
 from fortify.cli.state import LiveRunState, ToolActivity
 from fortify.streaming import ToolCallState
 from fortify.tools import edit_file, read_file
+
+# Repo root, derived from this test file's location — keeps the
+# ``_load_agent_script`` tests below portable across machines / CI.
+REPO_ROOT = Path(__file__).resolve().parents[2]
+EXAMPLES_DIR = REPO_ROOT / "examples"
 
 
 def test_tail_text_keeps_last_lines_of_long_output() -> None:
@@ -176,9 +183,7 @@ def test_load_agent_script_registers_code_agents() -> None:
     """Importing a registration script should populate the code agent registry."""
     loader.clear_registered_agents()
 
-    _load_agent_script(
-        "/Users/haquangle/workspace/upagent/upup/asianf/examples/file_agents.py"
-    )
+    _load_agent_script(str(EXAMPLES_DIR / "file_agents.py"))
 
     assert "workspace_explorer" in loader.list_registered_agents()
     assert "repo_editor" in loader.list_registered_agents()
@@ -188,9 +193,7 @@ def test_load_research_agent_script_registers_update_researcher() -> None:
     """Importing the research example script should register the update researcher agent."""
     loader.clear_registered_agents()
 
-    _load_agent_script(
-        "/Users/haquangle/workspace/upagent/upup/asianf/examples/research_agents.py"
-    )
+    _load_agent_script(str(EXAMPLES_DIR / "research_agents.py"))
 
     assert "update_researcher" in loader.list_registered_agents()
 
@@ -199,8 +202,6 @@ def test_load_bash_file_agent_script_registers_repo_operator() -> None:
     """Importing the bash+file example script should register the repo operator agent."""
     loader.clear_registered_agents()
 
-    _load_agent_script(
-        "/Users/haquangle/workspace/upagent/upup/asianf/examples/bash_file_agents.py"
-    )
+    _load_agent_script(str(EXAMPLES_DIR / "bash_file_agents.py"))
 
     assert "repo_operator" in loader.list_registered_agents()
