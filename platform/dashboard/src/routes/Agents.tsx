@@ -13,11 +13,11 @@ import { Badge } from '@/components/ui/badge'
 /**
  * /agents — read-only manifest view.
  *
- * Renders each agent's *registered* manifest, sourced from the latest
- * AgentVersion + its joined Tool rows in Postgres (not from the legacy
- * agent.yaml text). When an Agent row exists but no version has been
- * registered yet (e.g. YAML-seeded fixtures), the view degrades to an
- * empty-state telling the user to register first.
+ * Renders each agent's *registered* manifest, reconstructed from the
+ * JSON snapshot stored on the latest AgentVersion row in Postgres (not
+ * from the legacy agent.yaml text). When an Agent row exists but no
+ * version has been registered yet (e.g. YAML-seeded fixtures), the view
+ * degrades to an empty-state telling the user to register first.
  *
  * Editing happens elsewhere: policy authoring lives in /policies,
  * manifest registration goes through the SDK's ``fortify register``.

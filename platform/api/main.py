@@ -42,7 +42,7 @@ from services import (
     ensure_default_project,
     find_token_by_secret,
     get_agent,
-    get_latest_agent_version,
+    get_latest_agent_versions_map,
     list_agents,
     list_dev_tokens,
     mask_secret,
@@ -264,9 +264,11 @@ def _build_agent_manifest_view(
 
     Rehydrates ``AgentVersion.manifest`` (a JSON snapshot, validated against
     :class:`AgentManifest` at registration time) back into the typed shape,
-    or returns the envelope with ``manifest=None`` when no version exists.
+    or returns the envelope with ``manifest=None`` when no usable version
+    exists — either no version row at all, or a row whose ``manifest`` column
+    is NULL (nullable on the model; only reachable via direct DB writes).
     """
-    if agent_version is None:
+    if agent_version is None or agent_version.manifest is None:
         return AgentManifestView(name=agent.name, updated_at=agent.updated_at)
     return AgentManifestView(
         name=agent.name,
@@ -293,11 +295,11 @@ def api_list_agent_manifests(
     """
     ensure_default_project(session)
     agents = list_agents(session, project_id)
-    manifest_views = []
-    for agent in agents:
-        agent_version = get_latest_agent_version(session, agent.id)
-        manifest_views.append(_build_agent_manifest_view(agent, agent_version))
-    return manifest_views
+    latest_by_agent = get_latest_agent_versions_map(session, [a.id for a in agents])
+    return [
+        _build_agent_manifest_view(agent, latest_by_agent.get(agent.id))
+        for agent in agents
+    ]
 
 
 @v1.get("/projects/{project_id}/agents/{name}", response_model=AgentRead)

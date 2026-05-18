@@ -265,7 +265,8 @@ def test_validate_accumulates_errors_across_roles(client: TestClient) -> None:
 
 
 # ---------------------------------------------------------------------------
-# GET /agents/manifest — dashboard read path sourced from AgentVersion + Tool
+# GET /agents/manifest — dashboard read path rehydrated from the JSON snapshot
+# stored on the latest AgentVersion.manifest (not from joined Tool rows).
 # ---------------------------------------------------------------------------
 
 
