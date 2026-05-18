@@ -7,6 +7,8 @@ import importlib
 import sys
 from typing import TYPE_CHECKING, Any
 
+from dotenv import load_dotenv
+
 from fortify.cli.register.register import register_agent
 
 if TYPE_CHECKING:
@@ -50,6 +52,7 @@ def _load_tools(spec: str) -> list[BaseTool]:
 
 def add_parser(subparsers: argparse._SubParsersAction) -> None:
     """Register the `register` subcommand on the top-level fortify CLI."""
+    load_dotenv()
     parser = subparsers.add_parser(
         "register",
         help="Register an agent to the Fortify platform.",
