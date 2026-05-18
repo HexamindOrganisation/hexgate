@@ -1,37 +1,41 @@
 import { useEffect, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Streamdown } from 'streamdown'
-import { Bot, FileCode, FileText, ShieldCheck, Wrench } from 'lucide-react'
+import { Bot, ShieldCheck, Wrench } from 'lucide-react'
 import { Link } from 'react-router-dom'
-import { api, type AgentRead } from '@/lib/api'
+import {
+  api,
+  type AgentManifestView,
+  type InputSchema,
+  type ToolDefinition,
+} from '@/lib/api'
 import { Badge } from '@/components/ui/badge'
-import { parseAgent } from '@/lib/policy'
-import { parseRolesFromPolicy } from '@/lib/policy'
 
 /**
  * /agents — read-only manifest view.
  *
- * Renders each agent's static identity: name, model, tool list, system
- * prompt, and the role names declared in its policy.yaml. Edit happens
- * elsewhere — policy authoring lives in /policies. Keeping this page
- * static makes the IA boundary obvious: agents = "who is this", policies
- * = "what can they do".
+ * Renders each agent's *registered* manifest, sourced from the latest
+ * AgentVersion + its joined Tool rows in Postgres (not from the legacy
+ * agent.yaml text). When an Agent row exists but no version has been
+ * registered yet (e.g. YAML-seeded fixtures), the view degrades to an
+ * empty-state telling the user to register first.
  *
- * Future editors for agent.yaml / system.md (when devs want to rename
- * an agent or rewrite a prompt from the UI) slot here as opt-in edit
- * affordances, but the default is inspect-only.
+ * Editing happens elsewhere: policy authoring lives in /policies,
+ * manifest registration goes through the SDK's ``fortify register``.
  */
 export function AgentsPage() {
-  const agents = useQuery({ queryKey: ['agents'], queryFn: () => api.listAgents() })
-  const [selectedAgent, setSelectedAgent] = useState<string | null>(null)
+  const manifests = useQuery({
+    queryKey: ['agent-manifests'],
+    queryFn: () => api.listAgentManifests(),
+  })
+  const [selectedName, setSelectedName] = useState<string | null>(null)
 
   useEffect(() => {
-    if (!selectedAgent && agents.data && agents.data.length > 0) {
-      setSelectedAgent(agents.data[0].name)
+    if (!selectedName && manifests.data && manifests.data.length > 0) {
+      setSelectedName(manifests.data[0].name)
     }
-  }, [agents.data, selectedAgent])
+  }, [manifests.data, selectedName])
 
-  const active = agents.data?.find((a) => a.name === selectedAgent)
+  const active = manifests.data?.find((m) => m.name === selectedName)
 
   return (
     <div className="-mx-8 -my-6 h-[calc(100vh-56px)] flex flex-col overflow-hidden">
@@ -39,10 +43,10 @@ export function AgentsPage() {
         <Bot className="size-4 text-muted-foreground" />
         <span className="text-sm font-medium">Agent</span>
         <AgentPicker
-          agents={agents.data ?? []}
-          value={selectedAgent}
-          onChange={(name) => setSelectedAgent(name)}
-          loading={agents.isLoading}
+          agents={manifests.data ?? []}
+          value={selectedName}
+          onChange={setSelectedName}
+          loading={manifests.isLoading}
         />
         <div className="flex-1" />
         {active && (
@@ -57,9 +61,11 @@ export function AgentsPage() {
       </header>
 
       <div className="flex-1 overflow-y-auto px-8 py-6">
-        {active ? <ManifestView agent={active} /> : (
+        {active ? (
+          <ManifestView agent={active} />
+        ) : (
           <div className="h-full grid place-items-center text-sm text-muted-foreground">
-            {agents.isLoading ? 'Loading agents…' : 'No agents to inspect.'}
+            {manifests.isLoading ? 'Loading agents…' : 'No agents to inspect.'}
           </div>
         )}
       </div>
@@ -94,119 +100,120 @@ function AgentPicker({
   )
 }
 
-function ManifestView({ agent }: { agent: AgentRead }) {
-  const parsedManifest = parseAgent(agent.agent_yaml, agent.policy_yaml)
-  const roles = parseRolesFromPolicy(agent.policy_yaml)
-
+function ManifestView({ agent }: { agent: AgentManifestView }) {
   return (
     <div className="mx-auto max-w-3xl space-y-6">
-      {/* Summary card */}
-      <section className="rounded-lg border border-border bg-card">
-        <div className="px-5 py-4 border-b border-border flex items-center gap-2">
-          <Bot className="size-4 text-primary" />
-          <span className="text-sm font-medium">Manifest</span>
-        </div>
-        <dl className="divide-y divide-border text-sm">
-          <ManifestRow label="Name" value={parsedManifest?.name ?? agent.name} mono />
-          <ManifestRow label="Model" value={parsedManifest?.model || '—'} mono />
-          <ManifestRow label="Last updated" value={formatDate(agent.updated_at)} />
-        </dl>
-      </section>
-
-      {/* Tools */}
-      <section className="rounded-lg border border-border bg-card">
-        <div className="px-5 py-4 border-b border-border flex items-center gap-2">
-          <Wrench className="size-4 text-muted-foreground" />
-          <span className="text-sm font-medium">Tools</span>
-          <Badge variant="outline" className="ml-1 font-mono text-[11px]">
-            {parsedManifest?.tools.length ?? 0}
-          </Badge>
-        </div>
-        <div className="px-5 py-4">
-          {parsedManifest?.tools.length ? (
-            <div className="flex flex-wrap gap-1.5">
-              {parsedManifest.tools.map((t) => (
-                <Badge
-                  key={t}
-                  variant="outline"
-                  className="font-mono text-[11px] py-0.5"
-                >
-                  {t}
-                </Badge>
-              ))}
-            </div>
-          ) : (
-            <p className="text-xs text-muted-foreground">No tools declared.</p>
-          )}
-        </div>
-      </section>
-
-      {/* Roles */}
-      <section className="rounded-lg border border-border bg-card">
-        <div className="px-5 py-4 border-b border-border flex items-center gap-2">
-          <ShieldCheck className="size-4 text-muted-foreground" />
-          <span className="text-sm font-medium">Roles</span>
-          <Badge variant="outline" className="ml-1 font-mono text-[11px]">
-            {roles.length}
-          </Badge>
-          <div className="flex-1" />
-          <Link
-            to="/policies"
-            className="text-[11px] text-muted-foreground hover:text-foreground"
-          >
-            manage in /policies →
-          </Link>
-        </div>
-        <div className="px-5 py-4">
-          {roles.length > 0 ? (
-            <div className="flex flex-wrap gap-1.5">
-              {roles.map((r) => (
-                <Badge
-                  key={r}
-                  variant="outline"
-                  className="font-mono text-[11px] py-0.5"
-                >
-                  {r}
-                </Badge>
-              ))}
-            </div>
-          ) : (
-            <p className="text-xs text-muted-foreground">
-              Single-policy agent — no per-role differentiation.
-            </p>
-          )}
-        </div>
-      </section>
-
-      {/* System prompt */}
-      <section className="rounded-lg border border-border bg-card">
-        <div className="px-5 py-4 border-b border-border flex items-center gap-2">
-          <FileText className="size-4 text-muted-foreground" />
-          <span className="text-sm font-medium font-mono">system.md</span>
-        </div>
-        <div className="px-5 py-4 prose prose-sm prose-invert max-w-none">
-          {agent.system_md.trim() ? (
-            <Streamdown>{agent.system_md}</Streamdown>
-          ) : (
-            <p className="text-xs text-muted-foreground">No system prompt set.</p>
-          )}
-        </div>
-      </section>
-
-      {/* Raw agent.yaml — collapsed by default to keep the page calm */}
-      <details className="rounded-lg border border-border bg-card group">
-        <summary className="px-5 py-3 cursor-pointer flex items-center gap-2 text-sm font-medium select-none">
-          <FileCode className="size-4 text-muted-foreground" />
-          <span className="font-mono">agent.yaml</span>
-          <span className="text-[10px] text-muted-foreground ml-auto group-open:hidden">
-            click to expand
-          </span>
-        </summary>
-        <pre className="px-5 py-4 text-xs font-mono whitespace-pre-wrap break-words text-foreground bg-background/40 border-t border-border">
-          {agent.agent_yaml}
-        </pre>
-      </details>
+      <ManifestSummary agent={agent} />
+      <ToolsSection
+        tools={agent.manifest?.tools ?? []}
+        unregistered={agent.manifest === null}
+      />
     </div>
+  )
+}
+
+function ManifestSummary({ agent }: { agent: AgentManifestView }) {
+  const versionLabel =
+    agent.version !== null ? `v${agent.version}` : 'not registered'
+  return (
+    <section className="rounded-lg border border-border bg-card">
+      <div className="px-5 py-4 border-b border-border flex items-center gap-2">
+        <Bot className="size-4 text-primary" />
+        <span className="text-sm font-medium">Manifest</span>
+        <Badge variant="outline" className="ml-1 font-mono text-[11px]">
+          {versionLabel}
+        </Badge>
+      </div>
+      <dl className="divide-y divide-border text-sm">
+        <ManifestRow label="Name" value={agent.name} mono />
+        <ManifestRow
+          label="Description"
+          value={agent.manifest?.description?.trim() || '—'}
+        />
+        <ManifestRow label="Last updated" value={formatDate(agent.updated_at)} />
+      </dl>
+    </section>
+  )
+}
+
+function ToolsSection({
+  tools,
+  unregistered,
+}: {
+  tools: ToolDefinition[]
+  unregistered: boolean
+}) {
+  return (
+    <section className="rounded-lg border border-border bg-card">
+      <div className="px-5 py-4 border-b border-border flex items-center gap-2">
+        <Wrench className="size-4 text-muted-foreground" />
+        <span className="text-sm font-medium">Tools</span>
+        <Badge variant="outline" className="ml-1 font-mono text-[11px]">
+          {tools.length}
+        </Badge>
+      </div>
+      {tools.length === 0 ? (
+        <p className="px-5 py-4 text-xs text-muted-foreground">
+          {unregistered
+            ? 'Agent not registered yet — run `fortify register` to populate.'
+            : 'No tools declared.'}
+        </p>
+      ) : (
+        <ul className="divide-y divide-border">
+          {tools.map((t) => (
+            <ToolRow key={t.name} tool={t} />
+          ))}
+        </ul>
+      )}
+    </section>
+  )
+}
+
+function ToolRow({ tool }: { tool: ToolDefinition }) {
+  return (
+    <li className="px-5 py-4 space-y-2">
+      <div className="flex items-baseline gap-3">
+        <span className="font-mono text-sm text-foreground">{tool.name}</span>
+      </div>
+      {tool.description?.trim() ? (
+        <p className="text-xs text-muted-foreground">{tool.description}</p>
+      ) : null}
+      <InputSchemaDetails schema={tool.input_schema} />
+    </li>
+  )
+}
+
+function InputSchemaDetails({ schema }: { schema: InputSchema }) {
+  const entries = Object.entries(schema.properties)
+  const required = new Set(schema.required)
+  return (
+    <details className="rounded-md border border-border bg-background/40 group">
+      <summary className="px-3 py-2 cursor-pointer flex items-center gap-2 text-[11px] text-muted-foreground select-none">
+        <span>inputs</span>
+        <Badge variant="outline" className="font-mono text-[10px] py-0">
+          {entries.length}
+        </Badge>
+      </summary>
+      {entries.length === 0 ? (
+        <p className="px-3 pb-2 text-[11px] text-muted-foreground">
+          No inputs.
+        </p>
+      ) : (
+        <ul className="px-3 pb-2 space-y-1 text-[11px] font-mono">
+          {entries.map(([key, prop]) => (
+            <li key={key} className="flex items-baseline gap-2">
+              <span className="text-foreground">{key}</span>
+              <span className="text-muted-foreground">: {prop.type}</span>
+              {required.has(key) && (
+                <Badge variant="outline" className="text-[9px] py-0">
+                  required
+                </Badge>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+    </details>
   )
 }
 
