@@ -20,7 +20,6 @@ from biscuit_auth import BiscuitBuilder, KeyPair
 from fortify.agents import factory
 from fortify.cloud.client import FortifyClient, FortifyConfig
 from fortify.runtime import User, get_current_user
-from fortify.runtime.context import _CURRENT_USER
 
 
 # ---------------------------------------------------------------------------

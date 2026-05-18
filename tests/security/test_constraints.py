@@ -6,7 +6,6 @@ import pytest
 
 from fortify.security import PolicyDeniedError
 from fortify.security.constraints import (
-    Constraint,
     ConstraintParseError,
     check_constraints,
     evaluate_constraint,
