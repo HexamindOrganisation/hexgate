@@ -74,6 +74,19 @@ def get_agent(session: Session, project_id: str, name: str) -> Agent | None:
     return session.exec(stmt).first()
 
 
+def get_latest_agent_version(
+    session: Session, agent_id: str
+) -> AgentVersion | None:
+    """Return the latest AgentVersion for an agent, 
+    or None when no version exists."""
+    stmt = (
+        select(AgentVersion)
+        .where(AgentVersion.agent_id == agent_id)
+        .order_by(AgentVersion.version.desc())  # type: ignore[attr-defined]
+    )
+    return session.exec(stmt).first()
+
+
 def update_agent(
     session: Session,
     project_id: str,

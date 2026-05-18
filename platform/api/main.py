@@ -11,6 +11,7 @@ from fastapi import (
     WebSocketDisconnect,
 )
 from fastapi.middleware.cors import CORSMiddleware
+from models import Agent, AgentVersion
 from sqlmodel import Session
 
 from biscuits import (
@@ -23,6 +24,8 @@ from db import engine, init_db
 from keystore import FileKeyStore
 from relay import registry
 from schemas import (
+    AgentManifest,
+    AgentManifestView,
     AgentRead,
     AgentUpdate,
     PolicyValidationError,
@@ -39,6 +42,7 @@ from services import (
     ensure_default_project,
     find_token_by_secret,
     get_agent,
+    get_latest_agent_version,
     list_agents,
     list_dev_tokens,
     mask_secret,
@@ -251,6 +255,49 @@ def api_list_agents(
 ) -> list[AgentRead]:
     ensure_default_project(session)
     return [_agent_read(a) for a in list_agents(session, project_id)]
+
+
+def _build_agent_manifest_view(
+    agent: Agent, agent_version: AgentVersion | None
+) -> AgentManifestView: 
+    """Build the dashboard manifest envelope from an Agent + its latest version.
+
+    Rehydrates ``AgentVersion.manifest`` (a JSON snapshot, validated against
+    :class:`AgentManifest` at registration time) back into the typed shape,
+    or returns the envelope with ``manifest=None`` when no version exists.
+    """
+    if agent_version is None:
+        return AgentManifestView(name=agent.name, updated_at=agent.updated_at)
+    return AgentManifestView(
+        name=agent.name,
+        manifest=AgentManifest.model_validate(agent_version.manifest),
+        version=agent_version.version,
+        content_hash=agent_version.content_hash,
+        updated_at=agent_version.created_at,
+    )
+
+
+# Declared before the ``/agents/{name}`` route so FastAPI matches the literal
+# ``manifest`` segment instead of binding it as a name path parameter.
+@v1.get(
+    "/projects/{project_id}/agents/manifest",
+    response_model=list[AgentManifestView],
+)
+def api_list_agent_manifests(
+    project_id: str, session: Session = Depends(get_session)
+) -> list[AgentManifestView]:
+    """Bulk read of every agent's latest registered manifest.
+
+    One row per Agent. Agents that exist but have no version registered
+    come back with ``manifest=None``.
+    """
+    ensure_default_project(session)
+    agents = list_agents(session, project_id)
+    manifest_views = []
+    for agent in agents:
+        agent_version = get_latest_agent_version(session, agent.id)
+        manifest_views.append(_build_agent_manifest_view(agent, agent_version))
+    return manifest_views
 
 
 @v1.get("/projects/{project_id}/agents/{name}", response_model=AgentRead)
