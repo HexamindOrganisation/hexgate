@@ -91,7 +91,7 @@ export function PlaygroundPage() {
               No agent serving
             </div>
             <div className="mt-2 text-muted-foreground">
-              Run <span className="font-mono text-foreground">coolagents-chat --serve</span> with
+              Run <span className="font-mono text-foreground">fortify serve</span> with
               your FORTIFY_KEY to expose an agent session here.
             </div>
           </div>

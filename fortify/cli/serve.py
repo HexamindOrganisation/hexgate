@@ -1,4 +1,4 @@
-"""Serve-mode loop: bridge a local agent to the Fortify control plane.
+"""Serve subcommand: bridge a local agent to the Fortify control plane.
 
 Connects to `ws://{API_URL}/v1/projects/{project_id}/serve`, receives chat
 messages sent by dashboard Playground tabs, runs the agent via the same
@@ -11,20 +11,30 @@ permanently break the connection.
 
 from __future__ import annotations
 
+import argparse
 import asyncio
 import json
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any
+from pathlib import Path
 
 from rich.console import Console
 from websockets.asyncio.client import connect
 from websockets.exceptions import ConnectionClosed
 
+from fortify import with_approval_handler
 from fortify.agents.factory import stream_agent
+from fortify.bootstrap import bootstrap
+from fortify.cli._common import (
+    AgentRuntime,
+    add_shared_agent_flags,
+    build_approval_handler,
+    build_runtime,
+    load_agent_script,
+)
 from fortify.cli.state import ChatState
-from fortify.cloud.client import FortifyConfig
+from fortify.cloud.client import FortifyConfig, resolve_agent_name
 
 logger = logging.getLogger(__name__)
 
@@ -37,9 +47,9 @@ PING_INTERVAL = 20.0
 class ServeContext:
     """Runtime context required to service remote chat messages."""
 
-    runtime: Any  # AgentRuntime from cli/app.py — avoid circular import
+    runtime: AgentRuntime
     state: ChatState
-    rebuild: Callable[[], Any] | None = None  # returns a fresh AgentRuntime
+    rebuild: Callable[[], AgentRuntime] | None = None
 
 
 async def _refresh_runtime(context: ServeContext) -> None:
@@ -116,7 +126,11 @@ async def _serve_loop(context: ServeContext, url: str, console: Console) -> None
             console.print("[yellow]disconnected[/]")
 
 
-async def run_serve(runtime, *, rebuild: Callable[[], Any] | None = None) -> None:  # noqa: ANN001
+async def run_serve(
+    runtime: AgentRuntime,
+    *,
+    rebuild: Callable[[], AgentRuntime] | None = None,
+) -> None:
     """Top-level serve loop with reconnect + graceful shutdown.
 
     If ``rebuild`` is provided, it will be invoked at the start of every chat
@@ -157,3 +171,76 @@ async def run_serve(runtime, *, rebuild: Callable[[], Any] | None = None) -> Non
             console.print(f"[red]unexpected error:[/] {exc}")
             await asyncio.sleep(backoff)
             backoff = min(backoff * 2, RECONNECT_CAP)
+
+
+def add_parser(subparsers: argparse._SubParsersAction) -> None:
+    """Register the `serve` subcommand on the top-level fortify CLI."""
+    parser = subparsers.add_parser(
+        "serve",
+        help="Relay the local agent to the Fortify dashboard over WebSocket.",
+        description=(
+            "Serve a local agent to the Fortify dashboard Playground over "
+            "WebSocket. Policy edits in the dashboard take effect at the next "
+            "turn boundary."
+        ),
+    )
+    add_shared_agent_flags(parser)
+    parser.set_defaults(func=main)
+
+
+def main(args: argparse.Namespace) -> int:
+    """Entrypoint for the `fortify serve` subcommand."""
+    console = Console()
+    settings = bootstrap()
+    base_dir = Path.cwd()
+
+    if args.use:
+        load_agent_script(args.use)
+
+    # Serve mode routes through Fortify, not the local agent registry, so the
+    # agent name resolves via FORTIFY_AGENT_NAME / "default" fallback when not
+    # explicitly passed.
+    agent_name = args.agent or resolve_agent_name()
+
+    # `ask` doesn't make sense without a TTY for prompts. Coerce to
+    # auto-approve unless the caller explicitly picked auto-deny.
+    approval_mode = (
+        args.approval_mode if args.approval_mode == "auto-deny" else "auto-approve"
+    )
+    approval_handler = build_approval_handler(console, approval_mode)
+
+    def _wrap_for_serve(rt: AgentRuntime) -> AgentRuntime:
+        rt.agent = with_approval_handler(
+            rt.agent,
+            approval_handler,
+            context_provider=lambda: {
+                "surface": "serve",
+                "agent_name": rt.agent_name,
+            },
+        )
+        return rt
+
+    runtime = _wrap_for_serve(
+        build_runtime(
+            settings,
+            agent_name=agent_name,
+            base_dir=base_dir,
+            model=args.model,
+            local_only=False,
+        )
+    )
+
+    def _rebuild() -> AgentRuntime:
+        """Re-fetch YAMLs and rebuild the agent with the latest policy."""
+        return _wrap_for_serve(
+            build_runtime(
+                settings,
+                agent_name=agent_name,
+                base_dir=base_dir,
+                model=args.model,
+                local_only=False,
+            )
+        )
+
+    asyncio.run(run_serve(runtime, rebuild=_rebuild))
+    return 0
