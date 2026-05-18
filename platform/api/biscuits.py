@@ -114,9 +114,7 @@ def mint_token(private_key_bytes: bytes, request: MintRequest) -> str:
     if request.ttl_seconds is not None:
         expires_at = issued_at.timestamp() + request.ttl_seconds
         expires_iso = datetime.fromtimestamp(expires_at, tz=timezone.utc)
-        builder_source += (
-            f" check if time($t), $t < {_datalog_datetime(expires_iso)};"
-        )
+        builder_source += f" check if time($t), $t < {_datalog_datetime(expires_iso)};"
 
     biscuit = BiscuitBuilder(builder_source).build(priv)
     return biscuit.to_base64()

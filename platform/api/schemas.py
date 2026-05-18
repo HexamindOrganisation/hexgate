@@ -109,6 +109,7 @@ class ToolDefinition(BaseModel):
 
 class AgentManifest(BaseModel):
     """Schema for the manifest of an agent."""
+
     name: str
     description: Optional[str] = None
     framework: AgentFramework
@@ -132,7 +133,7 @@ class AgentManifestView(BaseModel):
     """Resolved latest manifest of an agent, for the dashboard read path.
 
     ``manifest`` is None when the Agent row exists but no AgentVersion has
-    been registered yet. 
+    been registered yet.
     ``name`` lives on the envelope so the picker can display it directly.
     """
 

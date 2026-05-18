@@ -123,9 +123,7 @@ def test_put_agent_partial_update_preserves_other_fields(
     client: TestClient,
 ) -> None:
     """An update touching one field leaves the others alone."""
-    before = client.get(
-        f"/v1/projects/{DEFAULT_PROJECT_ID}/agents/support_bot"
-    ).json()
+    before = client.get(f"/v1/projects/{DEFAULT_PROJECT_ID}/agents/support_bot").json()
 
     resp = client.put(
         f"/v1/projects/{DEFAULT_PROJECT_ID}/agents/support_bot",
@@ -326,9 +324,7 @@ def test_manifest_endpoint_returns_registered_manifest_with_tools(
     assert row["manifest"]["tools"][0]["input_schema"]["required"] == ["msg"]
 
 
-def test_manifest_endpoint_returns_latest_version(
-    client: TestClient, engine
-) -> None:
+def test_manifest_endpoint_returns_latest_version(client: TestClient, engine) -> None:
     """When multiple versions exist, only the highest one is returned."""
     from schemas import AgentManifest
     from services import register_manifest

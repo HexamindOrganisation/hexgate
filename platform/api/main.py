@@ -113,7 +113,9 @@ def optional_dev_token(
     try:
         verify_token(biscuit_b64, keystore.public_key_bytes())
     except TokenSignatureError:
-        raise HTTPException(status_code=401, detail="invalid fortify key signature") from None
+        raise HTTPException(
+            status_code=401, detail="invalid fortify key signature"
+        ) from None
 
     # Revocation gate
     if find_token_by_secret(session, secret) is None:
@@ -259,7 +261,7 @@ def api_list_agents(
 
 def _build_agent_manifest_view(
     agent: Agent, agent_version: AgentVersion | None
-) -> AgentManifestView: 
+) -> AgentManifestView:
     """Build the dashboard manifest envelope from an Agent + its latest version.
 
     Rehydrates ``AgentVersion.manifest`` (a JSON snapshot, validated against
