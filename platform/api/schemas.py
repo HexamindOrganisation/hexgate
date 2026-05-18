@@ -103,14 +103,12 @@ class InputSchema(BaseModel):
 
 class ToolDefinition(BaseModel):
     name: str
-    # Optional on read-back: the `tool.description` column is nullable, so
-    # rehydrating a stored manifest must tolerate missing values. The SDK
-    # still emits a string at registration time.
     description: Optional[str] = None
     input_schema: InputSchema
 
 
 class AgentManifest(BaseModel):
+    """Schema for the manifest of an agent."""
     name: str
     description: Optional[str] = None
     framework: AgentFramework
@@ -134,8 +132,8 @@ class AgentManifestView(BaseModel):
     """Resolved latest manifest of an agent, for the dashboard read path.
 
     ``manifest`` is None when the Agent row exists but no AgentVersion has
-    been registered yet (e.g. YAML-seeded fixtures). ``name`` lives on the
-    envelope so the picker can render the row regardless.
+    been registered yet. 
+    ``name`` lives on the envelope so the picker can display it directly.
     """
 
     name: str
