@@ -185,7 +185,7 @@ def extract_input_text(input: AgentInput) -> str:
     return _extract_query_from_messages(input)
 
 
-def _resolve_user_facts(agent: "CoolAgent") -> dict[str, list[str | int]] | None:
+def _resolve_user_facts(agent: "FortifyAgent") -> dict[str, list[str | int]] | None:
     """Lazily attenuate when a :class:`User` scope is active.
 
     Returns the extracted facts dict for the active user, or ``None`` if
@@ -239,7 +239,7 @@ def _resolve_user_facts(agent: "CoolAgent") -> dict[str, list[str | int]] | None
 
 
 def _resolve_tool_use_context(
-    agent: "CoolAgent",
+    agent: "FortifyAgent",
     tool_use_context: ToolUseContext | None,
 ) -> ToolUseContext:
     """Return the runtime tool context for a run.
@@ -272,7 +272,7 @@ def _resolve_tool_use_context(
     )
 
 
-class CoolAgent:
+class FortifyAgent:
     """A small wrapper around a LangChain agent graph with room for layering."""
 
     def __init__(
@@ -427,7 +427,7 @@ class CoolAgent:
         )
 
 
-AgentGraph: TypeAlias = CoolAgent
+AgentGraph: TypeAlias = FortifyAgent
 
 
 @observe(name="create_fortify_agent")
@@ -474,7 +474,7 @@ def create_agent(
         name=name,
         cache=cache,
     )
-    agent = CoolAgent(
+    agent = FortifyAgent(
         graph=graph,
         model=model,
         tools=tools,

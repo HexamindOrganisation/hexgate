@@ -4,7 +4,7 @@ from typing import Any
 
 from langchain_core.tools import BaseTool, StructuredTool
 
-from fortify.agents.factory import CoolAgent
+from fortify.agents.factory import FortifyAgent
 from fortify.cli.register.models import (
     AgentFramework,
     AgentManifest,
@@ -15,12 +15,12 @@ from fortify.cli.register.models import (
 
 
 def create_fortify_manifest(
-    agent: CoolAgent, *, description: str | None = None
+    agent: FortifyAgent, *, description: str | None = None
 ) -> AgentManifest:
     """Build an AgentManifest from a Fortify agent created by `create_agent`."""
     if not agent.name:
         raise ValueError(
-            "Fortify agent has no name — set a name on the CoolAgent so the "
+            "Fortify agent has no name — set a name on the FortifyAgent so the "
             "manifest can identify it on the platform."
         )
     return AgentManifest(
