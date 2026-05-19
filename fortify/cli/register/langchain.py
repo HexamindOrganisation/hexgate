@@ -10,8 +10,6 @@ from fortify.cli.register.models import (
     ToolDefinition,
 )
 
-from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_core.messages.system import SystemMessage
 from langchain_core.tools import BaseTool
 from langgraph.graph.state import CompiledStateGraph
 
