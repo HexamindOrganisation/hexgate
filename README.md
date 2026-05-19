@@ -877,12 +877,22 @@ fortify register --agent examples.simple_agent:agent
 fortify register --agent my_app.agents:my_agent --description "Customer support bot"
 ```
 
-LangGraph compiled graphs don't expose their tool nodes for inspection, so
-when registering one you also need to pass an import path to the tool list:
+LangGraph compiled graphs don't expose their tool nodes — nor the model or
+system prompt baked into them — after compilation, so when registering one
+you can pass each of those pieces explicitly. Only `--tools` is required;
+`--model` and `--system-prompt` are optional and just populate the matching
+fields on the manifest so the dashboard can show them:
 
 ```bash
-fortify register --agent my_app.agents:graph --tools my_app.tools:my_tools
+fortify register \
+    --agent my_app.agents:graph \
+    --tools my_app.tools:my_tools \
+    --model gpt-4o-mini \
+    --system-prompt prompts/support.md
 ```
+
+`--system-prompt` accepts either a literal string or a path to a `.md` /
+`.txt` / `.jinja` file (read as text at register time).
 
 Supported frameworks: OpenAI Agents SDK, Google ADK, Pydantic AI, LangChain/LangGraph, Fortify agents.
 

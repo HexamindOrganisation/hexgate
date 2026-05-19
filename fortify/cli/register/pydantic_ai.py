@@ -9,6 +9,7 @@ from fortify.cli.register.models import (
 )
 
 from pydantic_ai import Agent
+from pydantic_ai.models import Model
 from pydantic_ai.tools import Tool
 
 
@@ -33,8 +34,49 @@ def create_pydantic_ai_manifest(
         name=agent.name,
         description=description,
         framework=AgentFramework.PYDANTIC_AI,
+        model=_extract_model(agent.model),
+        system_prompt=_extract_system_prompt(agent),
         tools=tools,
     )
+
+
+def _extract_model(model: Model | str | None) -> str | None:
+    """Return the model id for a Pydantic AI agent.
+
+    Pydantic AI's ``Model`` interface exposes ``.model_name`` as the
+    canonical identifier (``"gpt-4o-mini"``, ``"test"`` for ``TestModel``,
+    etc). Strings are also accepted as a shorthand at construction time.
+    """
+    if model is None:
+        return None
+    if isinstance(model, str):
+        return model or None
+    name = getattr(model, "model_name", None)
+    if isinstance(name, str) and name:
+        return name
+    return type(model).__name__
+
+
+def _extract_system_prompt(agent: Agent) -> str | None:
+    """Collect every static prompt string a Pydantic AI agent will emit.
+
+    Pydantic AI splits the prompt across two private fields: ``_system_prompts``
+    (the legacy ``system_prompt=`` constructor arg, always a tuple of strings)
+    and ``_instructions`` (the newer ``instructions=`` arg, which mixes literal
+    strings with dynamic callables). At run time the agent concatenates them;
+    we mirror that for the manifest snapshot, dropping callables since there's
+    no single text to record.
+    """
+    parts: list[str] = []
+    for prompt in getattr(agent, "_system_prompts", ()) or ():
+        if isinstance(prompt, str) and prompt:
+            parts.append(prompt)
+    for instruction in getattr(agent, "_instructions", ()) or ():
+        if isinstance(instruction, str) and instruction:
+            parts.append(instruction)
+    if not parts:
+        return None
+    return "\n\n".join(parts)
 
 
 def _to_tool_definition(tool: Tool) -> ToolDefinition:

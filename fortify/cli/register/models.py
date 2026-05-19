@@ -39,6 +39,22 @@ class AgentManifest(BaseModel):
         default=None, description="The description of the agent"
     )
     framework: AgentFramework = Field(description="The framework of the agent")
+    model: str | None = Field(
+        default=None,
+        description=(
+            "Human-readable identifier of the LLM the agent runs on, when the "
+            "framework exposes it. Best-effort: None for raw LangGraph graphs "
+            "and for callable / runtime-resolved models we cannot stringify."
+        ),
+    )
+    system_prompt: str | None = Field(
+        default=None,
+        description=(
+            "Resolved system prompt text, when the framework exposes a static "
+            "one. None when the prompt is a callable, dynamically composed, "
+            "or otherwise not introspectable at registration time."
+        ),
+    )
     tools: list[ToolDefinition] = Field(description="The tools of the agent")
 
 

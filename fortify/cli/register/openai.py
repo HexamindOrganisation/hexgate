@@ -9,6 +9,7 @@ from fortify.cli.register.models import (
 )
 
 from agents import Agent
+from agents.models.interface import Model
 from agents.tool import FunctionTool, Tool
 
 
@@ -20,8 +21,38 @@ def create_openai_manifest(
         name=agent.name,
         description=description,
         framework=AgentFramework.OPENAI,
+        model=_extract_model(agent.model),
+        system_prompt=_extract_system_prompt(agent.instructions),
         tools=[_to_tool_definition(t) for t in agent.tools],
     )
+
+
+def _extract_model(model: str | Model | None) -> str | None:
+    """Return the model id for an OpenAI Agents SDK agent.
+
+    ``Agent.model`` is ``str | Model | None``; when None the agent falls back
+    to the SDK's default at run time. The Model implementation type is opaque
+    (no canonical name attribute), so for non-string instances we record the
+    concrete class name — at least the dashboard sees *something* rather than
+    silently dropping the field.
+    """
+    if model is None:
+        return None
+    if isinstance(model, str):
+        return model or None
+    return type(model).__name__
+
+
+def _extract_system_prompt(instructions: object) -> str | None:
+    """Return the static instructions string for an OpenAI Agents SDK agent.
+
+    ``Agent.instructions`` can be a string or a callable resolved per run; we
+    only snapshot the static string form because there's no single text to
+    record for a dynamic resolver.
+    """
+    if isinstance(instructions, str):
+        return instructions or None
+    return None
 
 
 def _to_tool_definition(tool: Tool) -> ToolDefinition:

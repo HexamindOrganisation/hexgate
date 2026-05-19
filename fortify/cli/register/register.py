@@ -20,10 +20,23 @@ def register_agent(
     *,
     description: str | None = None,
     tools: list[BaseTool] | None = None,
+    model: str | None = None,
+    system_prompt: str | None = None,
     timeout: float = DEFAULT_REGISTER_TIMEOUT,
 ) -> dict:
-    """Create and register an agent manifest to platform /agents."""
-    manifest = create_manifest(agent, description=description, tools=tools)
+    """Create and register an agent manifest to platform /agents.
+
+    ``tools``, ``model`` and ``system_prompt`` are only consulted for LangChain graphs —
+    every other framework reads them off the agent object directly. See
+    ``create_manifest`` for the dispatch logic.
+    """
+    manifest = create_manifest(
+        agent,
+        description=description,
+        tools=tools,
+        model=model,
+        system_prompt=system_prompt,
+    )
 
     api_key = os.environ.get("FORTIFY_KEY")
     if api_key is None:
