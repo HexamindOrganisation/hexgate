@@ -22,6 +22,7 @@ from biscuits import (
 )
 from db import engine, init_db
 from keystore import FileKeyStore
+from models import Agent
 from relay import registry
 from schemas import (
     AgentManifest,
@@ -239,7 +240,7 @@ def revoke_token(
         raise HTTPException(status_code=404, detail="token not found")
 
 
-def _agent_read(agent) -> AgentRead:  # noqa: ANN001 — Agent model not imported at top
+def _agent_read(agent: Agent) -> AgentRead:
     """Shared serialiser used by GET, list, and PUT — keeps the wire format aligned."""
     return AgentRead(
         id=agent.id,

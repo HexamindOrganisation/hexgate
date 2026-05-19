@@ -243,3 +243,30 @@ function formatDate(iso: string): string {
     return iso
   }
 }
+
+function ManifestRow({
+  label,
+  value,
+  mono,
+}: {
+  label: string
+  value: string
+  mono?: boolean
+}) {
+  return (
+    <div className="grid grid-cols-[120px_1fr] gap-4 px-5 py-2.5">
+      <dt className="text-xs text-muted-foreground">{label}</dt>
+      <dd className={mono ? 'font-mono text-foreground' : 'text-foreground'}>
+        {value}
+      </dd>
+    </div>
+  )
+}
+
+function formatDate(iso: string): string {
+  try {
+    return new Date(iso).toLocaleString()
+  } catch {
+    return iso
+  }
+}

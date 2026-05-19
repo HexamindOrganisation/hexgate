@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from fortify.agents.factory import CoolAgent
+from fortify.agents.factory import FortifyAgent
 from fortify.cli.register.models import AgentManifest, AgentType
 
 if TYPE_CHECKING:
@@ -23,7 +23,7 @@ def create_manifest(
     Framework-specific submodules (and their SDK imports) are loaded lazily so
     callers only import the SDK they actually use.
     """
-    if isinstance(agent, CoolAgent):
+    if isinstance(agent, FortifyAgent):
         from fortify.cli.register.fortify import create_fortify_manifest
 
         return create_fortify_manifest(agent, description=description)

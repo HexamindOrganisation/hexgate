@@ -52,7 +52,10 @@ def client(engine) -> TestClient:
         with Session(engine) as session:
             yield session
 
+    # Endpoints use the local main.get_session, so we override that one.
     app.dependency_overrides[main.get_session] = override_session
+    with Session(engine) as bootstrap:
+        ensure_default_project(bootstrap)
     try:
         yield TestClient(app)
     finally:
@@ -123,7 +126,9 @@ def test_put_agent_partial_update_preserves_other_fields(
     client: TestClient,
 ) -> None:
     """An update touching one field leaves the others alone."""
-    before = client.get(f"/v1/projects/{DEFAULT_PROJECT_ID}/agents/support_bot").json()
+    before = client.get(
+        f"/v1/projects/{DEFAULT_PROJECT_ID}/agents/support_bot"
+    ).json()
 
     resp = client.put(
         f"/v1/projects/{DEFAULT_PROJECT_ID}/agents/support_bot",
