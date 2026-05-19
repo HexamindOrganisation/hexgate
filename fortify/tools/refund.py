@@ -3,6 +3,10 @@
 Doesn't actually move money. Returns a synthetic confirmation so the playground
 can show the policy gate firing before the tool runs, and the role-aware
 constraints can fail vs succeed visibly per role.
+
+TODO(M2): relocate to ``examples/`` once demo agents move out of
+``BUILTIN_TOOLS`` and the platform's ``support_bot`` seed; this tool only
+exists as a builtin to keep the seeded support_bot YAML resolvable today.
 """
 
 from __future__ import annotations
