@@ -132,6 +132,28 @@ def test_load_policy_set_child_overrides_parent(tmp_path: Path) -> None:
     assert ps.policy_for(None).tools["refund"].mode == "allow"
 
 
+def test_load_policy_set_child_explicit_deny_default_overrides_allow_parent(
+    tmp_path: Path,
+) -> None:
+    """Explicit ``default_policy: { mode: deny }`` on a child must override a
+    permissive parent default — equality against ``BaseToolPolicy()`` would
+    silently fall through and yield ``allow`` (fail-open)."""
+    root = tmp_path / "policies"
+    root.mkdir()
+    _write_policy(
+        root,
+        "open_base",
+        "is_mixin: true\ndefault_policy:\n  mode: allow\n",
+    )
+    _write_policy(
+        root,
+        "default",
+        "inherits: [open_base]\ndefault_policy:\n  mode: deny\n",
+    )
+    ps = load_policy_set(root)
+    assert ps.policy_for(None).default_policy.mode == "deny"
+
+
 def test_load_policy_set_detects_cyclic_inheritance(tmp_path: Path) -> None:
     """A cycle (A inherits B, B inherits A) raises with the chain spelled out."""
     root = tmp_path / "policies"

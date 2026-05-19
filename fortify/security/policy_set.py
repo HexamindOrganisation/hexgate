@@ -232,9 +232,13 @@ def _resolve_inheritance(
         merged_tools.update(parent.tools)
         merged_default = parent.default_policy
 
-    # Self overrides everything from parents.
+    # Self overrides everything from parents. Check ``model_fields_set`` rather
+    # than comparing against ``BaseToolPolicy()``: a child that explicitly says
+    # ``default_policy: { mode: deny }`` is value-equal to the default but the
+    # user's intent is to override, and silently inheriting an ``allow`` from a
+    # parent would be fail-open.
     merged_tools.update(own.tools)
-    if own.default_policy != BaseToolPolicy():
+    if "default_policy" in own.model_fields_set:
         merged_default = own.default_policy
 
     return AgentPolicy(

@@ -50,11 +50,12 @@ def _load_tools(spec: str) -> list[BaseTool]:
     return tools
 
 
-def main(argv: list[str]) -> None:
-    """Register an agent to the Fortify platform."""
+def add_parser(subparsers: argparse._SubParsersAction) -> None:
+    """Register the `register` subcommand on the top-level fortify CLI."""
     load_dotenv()
-    parser = argparse.ArgumentParser(
-        prog="fortify register",
+    parser = subparsers.add_parser(
+        "register",
+        help="Register an agent to the Fortify platform.",
         description="Register an agent to the Fortify platform.",
     )
     parser.add_argument(
@@ -72,10 +73,13 @@ def main(argv: list[str]) -> None:
         default=None,
         help="Optional import path to a list of BaseTool, e.g. my_app.tools:my_tools",
     )
+    parser.set_defaults(func=main)
 
-    args = parser.parse_args(argv)
 
+def main(args: argparse.Namespace) -> int:
+    """Entrypoint for the `fortify register` subcommand."""
     agent = _load_agent(args.agent)
     tools = _load_tools(args.tools) if args.tools is not None else None
 
     register_agent(agent, description=args.description, tools=tools)
+    return 0

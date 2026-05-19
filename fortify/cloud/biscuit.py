@@ -160,8 +160,11 @@ def extract_facts(token_b64: str, public_key_bytes: bytes) -> dict[str, list[str
                 continue
             name = match.group("name")
             if match.group("str") is not None:
-                value: str | int = match.group("str").encode("utf-8").decode(
-                    "unicode_escape"
+                # Biscuit string literals only define two escapes (\\" and \\\\);
+                # unescape them directly. ``unicode_escape`` would re-decode the
+                # bytes as Latin-1 and mangle multibyte UTF-8 (``café`` → ``cafÃ©``).
+                value: str | int = re.sub(
+                    r'\\(["\\])', r"\1", match.group("str")
                 )
             else:
                 value = int(match.group("int"))
