@@ -25,6 +25,7 @@ from typing import Any
 from fortify.cloud.biscuit import (
     TokenError,
     TokenSignatureError,
+    extract_facts,
     parse_envelope,
     verify_biscuit,
 )
@@ -140,6 +141,7 @@ class FortifyClient:
         self.timeout = timeout
         self._public_key: bytes | None = config.public_key
         self._verified: bool = False
+        self._facts: dict[str, list[str | int]] | None = None
 
     @classmethod
     def from_env(cls, **kwargs: Any) -> "FortifyClient":
@@ -162,6 +164,11 @@ class FortifyClient:
 
         Lazy on first use so that ``FortifyClient(...)`` itself stays cheap
         and side-effect-free. Subsequent calls are no-ops.
+
+        Also caches the token's single-arity facts (``user``, ``scope``,
+        numeric limits, …) for the policy engine to consume — see
+        :meth:`biscuit_facts`. Extraction happens behind the same signature
+        gate so callers can never read facts from an untrusted token.
         """
         if self._verified:
             return
@@ -173,12 +180,34 @@ class FortifyClient:
         pub = self._resolve_public_key()
         try:
             verify_biscuit(biscuit_b64, pub)
+            self._facts = extract_facts(biscuit_b64, pub)
         except TokenSignatureError as exc:
             raise FortifyError(
                 "FORTIFY_KEY signature does not chain to the platform's public key. "
                 "Either the key is from a different platform, or it has been tampered with."
             ) from exc
         self._verified = True
+
+    def biscuit_facts(self) -> dict[str, list[str | int]]:
+        """Return the cached, verified facts from the current API key.
+
+        Triggers the lazy verify gate on first call, so even direct callers
+        can never read facts from an unverified token. Returned dict is a
+        copy — mutating it doesn't affect the cached extraction.
+        """
+        self._ensure_key_verified()
+        assert self._facts is not None  # populated by _ensure_key_verified
+        return {name: list(values) for name, values in self._facts.items()}
+
+    def public_key_bytes(self) -> bytes:
+        """Return the platform's signing public key as raw 32 bytes.
+
+        Triggers the JWKS fetch (or returns the cached / explicitly-configured
+        key) without requiring a full verify roundtrip on the API key. Callers
+        feed this into :func:`fortify.cloud.attenuate_for_user` so the
+        attenuation primitive can verify the parent envelope before appending.
+        """
+        return self._resolve_public_key()
 
     def _resolve_public_key(self) -> bytes:
         """Return the platform's signing public key, fetching JWKS if needed."""

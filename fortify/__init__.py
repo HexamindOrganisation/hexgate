@@ -26,9 +26,18 @@ from fortify.agents.loader import (
     unregister_agent,
 )
 from fortify.cloud import FortifyClient, FortifyConfig
-from fortify.runtime import LocalWorkspace, ToolUseContext, Workspace
+from fortify.runtime import LocalWorkspace, ToolUseContext, User, UserContext, Workspace
 from fortify.security import AgentPolicy
-from fortify.tools import agent_tool, bash, edit_file, glob, grep, read_file, write_file
+from fortify.tools import (
+    agent_tool,
+    bash,
+    edit_file,
+    glob,
+    grep,
+    read_file,
+    refund_order,
+    write_file,
+)
 from fortify.tools.fetch import fetch
 from fortify.tools.websearch import web_search
 
@@ -38,6 +47,8 @@ __all__ = [
     "FortifyConfig",
     "LocalWorkspace",
     "ToolUseContext",
+    "User",
+    "UserContext",
     "Workspace",
     "agent_tool",
     "bash",
@@ -60,6 +71,7 @@ __all__ = [
     "load_registered_agent",
     "register_agent",
     "read_file",
+    "refund_order",
     "stream_agent",
     "stream_agent_raw",
     "unregister_agent",

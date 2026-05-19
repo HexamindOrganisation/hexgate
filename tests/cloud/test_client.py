@@ -32,10 +32,21 @@ def keys() -> tuple[bytes, bytes]:
     return kp.private_key.to_bytes(), kp.public_key.to_bytes()
 
 
-def _envelope(priv: bytes, project: str = "support-bot", env: str = "live") -> str:
-    """Mint a fully-formed ``fty_<env>_<project>_<biscuit_b64>`` envelope."""
+def _envelope(
+    priv: bytes,
+    project: str = "support-bot",
+    env: str = "live",
+    *,
+    extra_facts: str = "",
+) -> str:
+    """Mint a fully-formed ``fty_<env>_<project>_<biscuit_b64>`` envelope.
+
+    Pass ``extra_facts='user("alice"); refund_limit(50);'`` to add
+    extraction-test-friendly facts to the authority block.
+    """
     pk = PrivateKey.from_bytes(priv, Algorithm.Ed25519)
-    biscuit = BiscuitBuilder(f'project("{project}"); env("{env}");').build(pk)
+    source = f'project("{project}"); env("{env}"); {extra_facts}'.strip()
+    biscuit = BiscuitBuilder(source).build(pk)
     return f"fty_{env}_{project}_{biscuit.to_base64()}"
 
 
@@ -332,3 +343,69 @@ def test_client_jwks_response_with_unexpected_shape_raises(
 
     with pytest.raises(FortifyError, match="unexpected JWKS shape"):
         client.get_agent("default")
+
+
+# ---------------------------------------------------------------------------
+# FortifyClient.biscuit_facts() — fact extraction behind the verify gate
+# ---------------------------------------------------------------------------
+
+
+def test_client_biscuit_facts_returns_token_facts(
+    keys: tuple[bytes, bytes],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """biscuit_facts() runs the verify gate and returns the cached facts."""
+    priv, pub = keys
+    config = FortifyConfig(
+        base_url="http://test",
+        api_key=_envelope(
+            priv, extra_facts='user("alice"); refund_limit(50); scope("refund");'
+        ),
+        project_id="support-bot",
+        public_key=pub,
+    )
+    client = FortifyClient(config)
+
+    facts = client.biscuit_facts()
+    # project + env are stamped by _envelope itself
+    assert facts["user"] == ["alice"]
+    assert facts["refund_limit"] == [50]
+    assert facts["scope"] == ["refund"]
+    assert facts["project"] == ["support-bot"]
+
+
+def test_client_biscuit_facts_runs_verify_gate(
+    keys: tuple[bytes, bytes],
+) -> None:
+    """A tampered token must surface as FortifyError, not return partial facts."""
+    priv, pub = keys
+    tampered = _envelope(priv)[:-4] + "AAAA"
+    config = FortifyConfig(
+        base_url="http://test",
+        api_key=tampered,
+        project_id="support-bot",
+        public_key=pub,
+    )
+    client = FortifyClient(config)
+
+    with pytest.raises(FortifyError, match="signature does not chain"):
+        client.biscuit_facts()
+
+
+def test_client_biscuit_facts_returns_independent_copy(
+    keys: tuple[bytes, bytes],
+) -> None:
+    """Mutating the returned dict must not poison the cached extraction."""
+    priv, pub = keys
+    config = FortifyConfig(
+        base_url="http://test",
+        api_key=_envelope(priv, extra_facts='user("alice");'),
+        project_id="support-bot",
+        public_key=pub,
+    )
+    client = FortifyClient(config)
+
+    first = client.biscuit_facts()
+    first["user"].append("bob")
+    second = client.biscuit_facts()
+    assert second["user"] == ["alice"]

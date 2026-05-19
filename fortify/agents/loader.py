@@ -22,6 +22,7 @@ from fortify.tools import (
     glob,
     grep,
     read_file,
+    refund_order,
     web_search,
     write_file,
 )
@@ -34,6 +35,7 @@ BUILTIN_TOOLS = {
     "glob": glob,
     "grep": grep,
     "read_file": read_file,
+    "refund_order": refund_order,
     "web_search": web_search,
     "write_file": write_file,
 }
@@ -275,7 +277,6 @@ def load_fortify_agent(
     base_url: str | None = None,
     api_key: str | None = None,
     session_id: str | None = None,
-    user_id: str | None = None,
     tags: list[str] | None = None,
     extra_tools: Mapping[str, Any] | None = None,
     model: str | None = None,
@@ -289,8 +290,13 @@ def load_fortify_agent(
     Mirrors `load_local_agent` but sources the three YAMLs (agent, policy, system)
     from the Fortify API instead of disk. Tool resolution and enforcement are
     identical — only the bytes' origin differs.
+
+    The returned agent carries a ``fortify_client`` attribute referencing the
+    :class:`~fortify.cloud.FortifyClient` used to fetch it; the runtime reads
+    this attribute when an :class:`~fortify.runtime.User` scope is active to
+    mint per-request attenuated tokens lazily.
     """
-    _ = user_id  # reserved for future user-scoped token attenuation
+    from fortify.security.policy_set import load_policy_set_from_dict
 
     resolved_name = resolve_agent_name(name)
     config = FortifyConfig.from_env(
@@ -300,8 +306,14 @@ def load_fortify_agent(
     payload = client.get_agent(resolved_name)
 
     spec = AgentSpec.model_validate(yaml.safe_load(payload["agent_yaml"]) or {})
-    policy = AgentPolicy.model_validate(yaml.safe_load(payload["policy_yaml"]) or {})
     system_prompt = payload.get("system_md") or ""
+
+    # The platform returns one canonical ``policy.yaml`` text per agent. The
+    # role bundle lives inline under a top-level ``roles:`` key when present;
+    # otherwise the document is a flat single-policy doc. load_policy_set_from_dict
+    # dispatches on shape — inheritance + mixin filtering applied either way.
+    policy_payload = yaml.safe_load(payload["policy_yaml"]) or {}
+    policy = load_policy_set_from_dict(policy_payload)
 
     tools = resolve_builtin_tools(spec.tools, extra_tools=extra_tools)
 
@@ -313,7 +325,11 @@ def load_fortify_agent(
         tags=tags or ["fortify", "fortify-cloud", config.project_id],
         name=spec.name,
     )
-    return enforce_policy(agent, policy), handler
+    enforced = enforce_policy(agent, policy)
+    # Attach the client so the runtime can do lazy attenuation inside an
+    # active User scope without the caller having to thread it through.
+    enforced.fortify_client = client
+    return enforced, handler
 
 
 def load_agent(
@@ -339,10 +355,12 @@ def load_agent(
     Useful for terminal-chat workflows that don't need cloud-fetched policy.
     """
     if not local_only and os.environ.get("FORTIFY_KEY"):
+        # load_fortify_agent dropped its reserved ``user_id`` placeholder
+        # in phase 3.5 — per-request user identity comes from a User scope
+        # at invocation time, not from the loader.
         return load_fortify_agent(
             name,
             session_id=session_id,
-            user_id=user_id,
             tags=tags,
             extra_tools=extra_tools,
             model=model,

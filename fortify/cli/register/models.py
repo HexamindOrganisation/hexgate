@@ -12,7 +12,7 @@ if TYPE_CHECKING:
     from langgraph.graph.state import CompiledStateGraph as LangChainAgent
     from pydantic_ai import Agent as PydanticAIAgent
 
-    from fortify.agents.factory import CoolAgent as FortifyAgent
+    from fortify.agents.factory import FortifyAgent as FortifyAgent
 
     AgentType = (
         OpenAIAgent | GoogleAgent | LangChainAgent | PydanticAIAgent | FortifyAgent

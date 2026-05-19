@@ -185,8 +185,61 @@ def extract_input_text(input: AgentInput) -> str:
     return _extract_query_from_messages(input)
 
 
+def _resolve_user_facts(agent: "FortifyAgent") -> dict[str, list[str | int]] | None:
+    """Lazily attenuate when a :class:`User` scope is active.
+
+    Returns the extracted facts dict for the active user, or ``None`` if
+    no User scope is in play, the agent isn't cloud-bound, or attenuation
+    fails (logged as a warning — the agent runs without facts and any
+    predicate requiring them will fail-closed).
+    """
+    from fortify.runtime.context import get_current_user
+
+    user = get_current_user()
+    if user is None:
+        return None
+    client = getattr(agent, "fortify_client", None)
+    if client is None:
+        # Local agent or test stub — User scope is set but there's nothing to
+        # attenuate against. Surface a single warning so devs see why their
+        # `requires_user` predicate isn't firing on a local-loaded agent.
+        import logging
+
+        logging.getLogger(__name__).warning(
+            "User scope active but agent has no fortify_client; "
+            "biscuit_facts will be empty (use load_fortify_agent for attenuation)"
+        )
+        return None
+    from fortify.cloud.attenuate import attenuate_for_user
+    from fortify.cloud.biscuit import (
+        TokenError,
+        TokenSignatureError,
+        extract_facts,
+        parse_envelope,
+    )
+
+    try:
+        pub = client.public_key_bytes()
+        child_envelope = attenuate_for_user(
+            client.config.api_key,
+            pub,
+            user=user.user_id,
+            role=user.role,
+            ttl_seconds=user.ttl_seconds,
+        )
+        _, _, biscuit_b64 = parse_envelope(child_envelope)
+        return extract_facts(biscuit_b64, pub)
+    except (TokenError, TokenSignatureError) as exc:
+        import logging
+
+        logging.getLogger(__name__).warning(
+            "user-scope attenuation failed: %s; agent runs without facts", exc
+        )
+        return None
+
+
 def _resolve_tool_use_context(
-    agent: "CoolAgent",
+    agent: "FortifyAgent",
     tool_use_context: ToolUseContext | None,
 ) -> ToolUseContext:
     """Return the runtime tool context for a run.
@@ -195,6 +248,13 @@ def _resolve_tool_use_context(
     1. ``tool_use_context.workspace`` — caller-supplied at invocation time.
     2. ``agent.workspace`` — wired in at ``create_agent(...)``-time.
     3. ``LocalWorkspace(Path.cwd())`` — last-resort default.
+
+    When ``tool_use_context`` is None and an :class:`~fortify.runtime.User`
+    scope is active, this also runs lazy biscuit attenuation against the
+    agent's bound ``fortify_client`` and folds the resulting facts into the
+    fresh context. An explicit ``tool_use_context`` argument always wins —
+    that's how callers pass their own facts in (e.g. tests, or production
+    code that wants to bypass the User scope for a specific call).
     """
     agent_name = getattr(agent, "name", None)
     agent_workspace = getattr(agent, "workspace", None)
@@ -208,10 +268,11 @@ def _resolve_tool_use_context(
     return ToolUseContext(
         workspace=fallback_workspace,
         agent_name=agent_name,
+        biscuit_facts=_resolve_user_facts(agent),
     )
 
 
-class CoolAgent:
+class FortifyAgent:
     """A small wrapper around a LangChain agent graph with room for layering."""
 
     def __init__(
@@ -288,7 +349,7 @@ class CoolAgent:
             name=self.name,
             cache=self.cache,
         )
-        return type(self)(
+        rebuilt = type(self)(
             graph=graph,
             model=self.model,
             tools=tools,
@@ -306,13 +367,28 @@ class CoolAgent:
             cache=self.cache,
             workspace=self.workspace,
         )
+        # Propagate the optional fortify_client attribute that load_fortify_agent
+        # attaches to the cloud-loaded runtime — every `.with_*` transform
+        # funnels through here, so this keeps the client reachable for lazy
+        # user-scope attenuation after enforce_policy / with_approval_handler /
+        # with_before_action chains.
+        client = getattr(self, "fortify_client", None)
+        if client is not None:
+            rebuilt.fortify_client = client
+        return rebuilt
 
     def enforce_policy(self, policy: object) -> Self:
-        """Return a new agent runtime with Gate 1 policy enforcement applied."""
-        from fortify.agents.security import wrap_tools_with_policy
-        from fortify.security import load_policy
+        """Return a new agent runtime with Gate 1 policy enforcement applied.
 
-        return self.with_tools(wrap_tools_with_policy(self.tools, load_policy(policy)))
+        Accepts a path to a single YAML, a path to a ``policies/`` directory
+        of role policies, an :class:`AgentPolicy`, an existing
+        :class:`PolicySet`, or ``None`` (deny-by-default).
+        """
+        from fortify.agents.security import wrap_tools_with_policy
+        from fortify.security.policy_set import PolicySet, load_policy_set
+
+        policy_set = policy if isinstance(policy, PolicySet) else load_policy_set(policy)
+        return self.with_tools(wrap_tools_with_policy(self.tools, policy_set))
 
     def with_before_action(
         self,
@@ -351,7 +427,7 @@ class CoolAgent:
         )
 
 
-AgentGraph: TypeAlias = CoolAgent
+AgentGraph: TypeAlias = FortifyAgent
 
 
 @observe(name="create_fortify_agent")
@@ -398,7 +474,7 @@ def create_agent(
         name=name,
         cache=cache,
     )
-    agent = CoolAgent(
+    agent = FortifyAgent(
         graph=graph,
         model=model,
         tools=tools,

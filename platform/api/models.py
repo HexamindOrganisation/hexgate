@@ -34,7 +34,11 @@ class Agent(SQLModel, table=True):
     id: str = Field(primary_key=True)
     project_id: str = Field(foreign_key="project.id", index=True)
     name: str = Field(index=True)
-    agent_yaml: str
+    agent_yaml: str  # manifest: name, model, tool list
+    # Canonical policy document. May be a flat single-policy YAML (legacy
+    # one-role-per-agent shape) or an inline-roles YAML with a top-level
+    # ``roles:`` section. The SDK's load_policy_set_from_dict dispatches on
+    # which shape is present.
     policy_yaml: str
     system_md: str = ""
     updated_at: datetime = Field(default_factory=utcnow)

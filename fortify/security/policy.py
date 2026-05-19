@@ -7,6 +7,7 @@ from typing import Any
 
 import yaml
 
+from fortify.security.constraints import check_constraints
 from fortify.security.errors import ApprovalRequiredError, PolicyDeniedError
 from fortify.security.file_scope import is_path_allowed
 from fortify.security.models import AgentPolicy, FileToolPolicy, ToolPolicy
@@ -39,10 +40,18 @@ def authorize_tool_call(
     tool_name: str,
     arguments: dict[str, Any] | None = None,
 ) -> None:
-    """Raise when a tool call is denied or requires approval."""
+    """Raise when a tool call is denied or requires approval.
+
+    Evaluates the tool's ``constraints`` list against the invocation's
+    arguments (see :mod:`fortify.security.constraints` for the grammar).
+    Every constraint must pass for the call to authorize — fail-closed by
+    design.
+    """
     tool_policy = get_tool_policy(policy, tool_name)
     if tool_policy.mode == "deny":
         raise PolicyDeniedError(f'Policy denied tool "{tool_name}"')
+
+    check_constraints(tool_policy.constraints, arguments, tool_name)
 
     if isinstance(tool_policy, FileToolPolicy) and not is_path_allowed(
         tool_name, arguments, tool_policy

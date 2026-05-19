@@ -7,6 +7,12 @@ messages sent by dashboard Playground tabs, runs the agent via the same
 
 Handles reconnection with exponential backoff so a backend bounce doesn't
 permanently break the connection.
+
+When a payload includes ``user_attenuation`` metadata (the Playground's
+"Act as alice" affordance), the turn is wrapped in an ``async with User(...)``
+scope. The runtime then lazily attenuates the agent's bound FortifyClient
+token inside ``stream_agent`` — same code path a production dev's backend
+uses when serving a real user.
 """
 
 from __future__ import annotations
@@ -16,9 +22,12 @@ import asyncio
 import json
 import logging
 from collections.abc import Callable
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
+from pydantic import ValidationError
 from rich.console import Console
 from websockets.asyncio.client import connect
 from websockets.exceptions import ConnectionClosed
@@ -35,6 +44,7 @@ from fortify.cli._common import (
 )
 from fortify.cli.state import ChatState
 from fortify.cloud.client import FortifyConfig, resolve_agent_name
+from fortify.runtime import User
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +60,37 @@ class ServeContext:
     runtime: AgentRuntime
     state: ChatState
     rebuild: Callable[[], AgentRuntime] | None = None
+
+
+def _user_from_payload(attenuation: Any) -> User | None:
+    """Build a :class:`User` from a chat payload's ``user_attenuation`` dict.
+
+    Returns ``None`` (and logs a warning) when the payload is missing or
+    malformed — the turn proceeds without an active User scope and the
+    agent runs as if no attenuation was requested.
+    """
+    if not isinstance(attenuation, dict) or not attenuation.get("user"):
+        return None
+    try:
+        return User(
+            user_id=str(attenuation["user"]),
+            role=attenuation.get("role"),
+            session_id=attenuation.get("session_id"),
+            ttl_seconds=attenuation.get("ttl_seconds"),
+        )
+    except (TypeError, ValueError, ValidationError) as exc:
+        logger.warning("serve: invalid user_attenuation %r: %s", attenuation, exc)
+        return None
+
+
+@asynccontextmanager
+async def _maybe_user_scope(user: User | None):
+    """No-op async context manager when ``user`` is ``None``."""
+    if user is None:
+        yield
+    else:
+        async with user:
+            yield
 
 
 async def _refresh_runtime(context: ServeContext) -> None:
@@ -76,13 +117,15 @@ async def _handle_message(
             return
         await _refresh_runtime(context)
         context.state.start_turn(text)
-        async for event in stream_agent(
-            context.runtime.agent,
-            context.runtime.handler,
-            context.state.build_input(),
-        ):
-            context.state.apply_event(event)
-            await ws.send(event.model_dump_json())
+        user = _user_from_payload(payload.get("user_attenuation"))
+        async with _maybe_user_scope(user):
+            async for event in stream_agent(
+                context.runtime.agent,
+                context.runtime.handler,
+                context.state.build_input(),
+            ):
+                context.state.apply_event(event)
+                await ws.send(event.model_dump_json())
         return
 
     if kind == "reset":

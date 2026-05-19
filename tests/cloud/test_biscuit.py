@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import pytest
-from biscuit_auth import Algorithm, BiscuitBuilder, KeyPair, PrivateKey
+from biscuit_auth import Algorithm, BiscuitBuilder, BlockBuilder, KeyPair, PrivateKey
 
 from fortify.cloud.biscuit import (
     TokenError,
     TokenSignatureError,
+    extract_facts,
     parse_envelope,
     verify_biscuit,
 )
@@ -33,6 +34,17 @@ def _mint_biscuit(priv_bytes: bytes, source: str = 'project("test");') -> str:
     """
     pk = PrivateKey.from_bytes(priv_bytes, Algorithm.Ed25519)
     return BiscuitBuilder(source).build(pk).to_base64()
+
+
+def _mint_attenuated(priv_bytes: bytes, authority: str, *blocks: str) -> str:
+    """Mint a multi-block biscuit: authority signed by ``priv_bytes``, then
+    each block in ``blocks`` appended in order. Block signers are ephemeral
+    keypairs managed internally by biscuit-python."""
+    pk = PrivateKey.from_bytes(priv_bytes, Algorithm.Ed25519)
+    biscuit = BiscuitBuilder(authority).build(pk)
+    for source in blocks:
+        biscuit = biscuit.append(BlockBuilder(source))
+    return biscuit.to_base64()
 
 
 # ---------------------------------------------------------------------------
@@ -132,3 +144,146 @@ def test_verify_rejects_tampered_payload(keys: tuple[bytes, bytes]) -> None:
     tampered = good[: len(good) - 6] + "AAAA" + good[-2:]
     with pytest.raises(TokenSignatureError):
         verify_biscuit(tampered, pub)
+
+
+# ---------------------------------------------------------------------------
+# extract_facts
+# ---------------------------------------------------------------------------
+
+
+def test_extract_facts_returns_authority_facts(keys: tuple[bytes, bytes]) -> None:
+    """Single-block (authority-only) tokens yield their flat facts."""
+    priv, pub = keys
+    token = _mint_biscuit(
+        priv,
+        'project("acme"); scope("read"); refund_limit(50);',
+    )
+    assert extract_facts(token, pub) == {
+        "project": ["acme"],
+        "scope": ["read"],
+        "refund_limit": [50],
+    }
+
+
+def test_extract_facts_unions_across_blocks(keys: tuple[bytes, bytes]) -> None:
+    """Authority + attenuation blocks contribute to the same dict (UNION)."""
+    priv, pub = keys
+    token = _mint_attenuated(
+        priv,
+        'project("acme"); scope("read");',
+        'user("alice"); scope("write");',
+    )
+    facts = extract_facts(token, pub)
+    assert facts["project"] == ["acme"]
+    assert facts["user"] == ["alice"]
+    # source order across all blocks → ["read", "write"]
+    assert facts["scope"] == ["read", "write"]
+
+
+def test_extract_facts_accepts_integer_values(keys: tuple[bytes, bytes]) -> None:
+    """Bare integer facts decode as int, not str — needed for numeric limits."""
+    priv, pub = keys
+    token = _mint_biscuit(priv, "refund_limit(50); max_tokens(1000); negative(-5);")
+    facts = extract_facts(token, pub)
+    assert facts == {
+        "refund_limit": [50],
+        "max_tokens": [1000],
+        "negative": [-5],
+    }
+    assert all(isinstance(v, int) for vs in facts.values() for v in vs)
+
+
+def test_extract_facts_skips_checks_and_rules(keys: tuple[bytes, bytes]) -> None:
+    """Checks and rules belong to the authorizer, not the structured policy."""
+    priv, pub = keys
+    token = _mint_attenuated(
+        priv,
+        'user("alice"); refund_limit(50);',
+        # A check (skipped) and a rule (skipped); the bare facts pass through.
+        'check if time($t), $t < 2027-01-01T00:00:00Z;'
+        ' admin($u) <- user($u), role("admin");'
+        ' scope("read");',
+    )
+    facts = extract_facts(token, pub)
+    assert facts == {
+        "user": ["alice"],
+        "refund_limit": [50],
+        "scope": ["read"],
+    }
+
+
+def test_extract_facts_silently_skips_multi_arg_facts(
+    keys: tuple[bytes, bytes],
+) -> None:
+    """M1 only consumes single-arity facts; multi-arg shapes are skipped."""
+    priv, pub = keys
+    token = _mint_biscuit(
+        priv,
+        'user("alice"); pair("x", "y"); refund_limit(50);',
+    )
+    facts = extract_facts(token, pub)
+    assert "pair" not in facts
+    assert facts["user"] == ["alice"]
+    assert facts["refund_limit"] == [50]
+
+
+def test_extract_facts_returns_empty_dict_when_no_facts(
+    keys: tuple[bytes, bytes],
+) -> None:
+    """A check-only block still yields a verified token with empty facts."""
+    priv, pub = keys
+    token = _mint_biscuit(
+        priv, "check if time($t), $t < 2027-01-01T00:00:00Z;"
+    )
+    assert extract_facts(token, pub) == {}
+
+
+def test_extract_facts_repeated_predicate_preserves_order(
+    keys: tuple[bytes, bytes],
+) -> None:
+    """``scope("read"); scope("write"); scope("admin");`` → list in source order."""
+    priv, pub = keys
+    token = _mint_biscuit(
+        priv, 'scope("read"); scope("write"); scope("admin");'
+    )
+    assert extract_facts(token, pub) == {"scope": ["read", "write", "admin"]}
+
+
+def test_extract_facts_rejects_tampered_token(keys: tuple[bytes, bytes]) -> None:
+    """Tampered token must surface as TokenSignatureError before any parse."""
+    priv, pub = keys
+    good = _mint_biscuit(priv, 'user("alice");')
+    tampered = good[: len(good) - 6] + "AAAA" + good[-2:]
+    with pytest.raises(TokenSignatureError):
+        extract_facts(tampered, pub)
+
+
+def test_extract_facts_rejects_wrong_public_key(keys: tuple[bytes, bytes]) -> None:
+    """Verifying against a different pubkey must fail before fact extraction."""
+    priv, _ = keys
+    other_pub = KeyPair().public_key.to_bytes()
+    token = _mint_biscuit(priv, 'user("alice");')
+    with pytest.raises(TokenSignatureError):
+        extract_facts(token, other_pub)
+
+
+def test_extract_facts_rejects_malformed_public_key(
+    keys: tuple[bytes, bytes],
+) -> None:
+    """Garbage public key bytes raise a clean TokenSignatureError."""
+    priv, _ = keys
+    token = _mint_biscuit(priv, 'user("alice");')
+    with pytest.raises(TokenSignatureError, match="malformed public key"):
+        extract_facts(token, b"too short")
+
+
+def test_extract_facts_preserves_underscores_in_predicate_names(
+    keys: tuple[bytes, bytes],
+) -> None:
+    """Predicate names may contain underscores (refund_limit, max_tokens, ...)."""
+    priv, pub = keys
+    token = _mint_biscuit(priv, "refund_limit(50); max_token_count(1000);")
+    assert extract_facts(token, pub) == {
+        "refund_limit": [50],
+        "max_token_count": [1000],
+    }

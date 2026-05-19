@@ -26,6 +26,7 @@ from fortify.security import (
     PolicyDeniedError,
 )
 from fortify.security.file_scope import build_file_scope_hint
+from fortify.security.policy_set import PolicySet, load_policy_set
 from fortify.tools.decorators import TOOL_METADATA_ATTR
 
 
@@ -38,16 +39,31 @@ def _copy_tool_metadata(source: Any, target: Any) -> Any:
 
 
 class GuardedTool(BaseTool):
-    """A tool wrapper that enforces local policy and hosted hooks inline."""
+    """A tool wrapper that enforces local policy and hosted hooks inline.
+
+    ``policy_set`` is a role-aware bundle; at call time the active
+    :class:`~fortify.runtime.User.role` selects which policy applies. When
+    no User scope is active the bundle's ``default`` role is used.
+    """
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     wrapped_tool: BaseTool
-    policy: AgentPolicy | None = None
+    policy_set: PolicySet | None = None
     approval_handler: ApprovalHandler | None = None
     before_action: BeforeActionHook | None = None
     context_provider: ContextProvider | None = None
     agent_name: str | None = None
+
+    def _active_policy(self) -> AgentPolicy | None:
+        """Resolve the effective :class:`AgentPolicy` for the current User role."""
+        if self.policy_set is None:
+            return None
+        from fortify.runtime.context import get_current_user
+
+        active_user = get_current_user()
+        role = active_user.role if active_user is not None else None
+        return self.policy_set.policy_for(role)
 
     def _build_action(self, kwargs: dict[str, Any]) -> ActionPayload:
         """Build a host-facing action payload for approval and veto hooks."""
@@ -70,8 +86,9 @@ class GuardedTool(BaseTool):
             "tool_name": self.name,
             "retryable": False,
         }
-        if self.policy is not None:
-            tool_policy = self.policy.tools.get(self.name)
+        active_policy = self._active_policy()
+        if active_policy is not None:
+            tool_policy = active_policy.tools.get(self.name)
             if isinstance(tool_policy, FileToolPolicy):
                 hint = build_file_scope_hint(tool_policy)
                 if hint is not None:
@@ -100,12 +117,20 @@ class GuardedTool(BaseTool):
         return self.wrapped_tool._run(*args, **kwargs)
 
     def _authorize(self, kwargs: dict[str, Any]) -> None:
-        """Apply local Gate 1 authorization when configured."""
-        if self.policy is None:
+        """Apply local Gate 1 authorization when configured.
+
+        Picks the effective :class:`AgentPolicy` from ``policy_set`` based
+        on the active :class:`~fortify.runtime.User.role`, then runs the
+        tool's ``mode`` + ``constraints`` check against the invocation
+        arguments. When no User scope is active the ``default`` role
+        applies — keeps local-only flows working unchanged.
+        """
+        active_policy = self._active_policy()
+        if active_policy is None:
             return
         from fortify.security import authorize_tool_call
 
-        authorize_tool_call(self.policy, self.name, kwargs)
+        authorize_tool_call(active_policy, self.name, kwargs)
 
     async def _check_before_action(
         self, kwargs: dict[str, Any]
@@ -190,7 +215,7 @@ class GuardedTool(BaseTool):
 def _wrap_tool(
     tool_spec: BaseTool,
     *,
-    policy: AgentPolicy | None = None,
+    policy_set: PolicySet | None = None,
     approval_handler: ApprovalHandler | None = None,
     before_action: BeforeActionHook | None = None,
     context_provider: ContextProvider | None = None,
@@ -212,7 +237,7 @@ def _wrap_tool(
             response_format=tool_spec.response_format,
             extras=tool_spec.extras,
             wrapped_tool=tool_spec.wrapped_tool,
-            policy=policy or tool_spec.policy,
+            policy_set=policy_set or tool_spec.policy_set,
             approval_handler=approval_handler
             if approval_handler is not None
             else tool_spec.approval_handler,
@@ -236,7 +261,7 @@ def _wrap_tool(
         response_format=tool_spec.response_format,
         extras=tool_spec.extras,
         wrapped_tool=tool_spec,
-        policy=policy,
+        policy_set=policy_set,
         approval_handler=approval_handler,
         before_action=before_action,
         context_provider=context_provider,
@@ -247,26 +272,39 @@ def _wrap_tool(
 
 def wrap_tools_with_policy(
     tools: Sequence[ToolSpec],
-    policy: AgentPolicy | None,
+    policy: AgentPolicy | PolicySet | None,
 ) -> list[ToolSpec]:
-    """Wrap tools so policy decisions are enforced before execution."""
+    """Wrap tools so policy decisions are enforced before execution.
+
+    ``policy`` may be a legacy single :class:`AgentPolicy` (which becomes
+    a one-role ``default`` :class:`PolicySet`) or an already-built
+    :class:`PolicySet` with multiple roles.
+    """
     if policy is None:
         return list(tools)
+    policy_set = (
+        policy if isinstance(policy, PolicySet) else load_policy_set(policy)
+    )
 
     wrapped_tools: list[ToolSpec] = []
     for tool_spec in tools:
         if not isinstance(tool_spec, BaseTool):
             wrapped_tools.append(tool_spec)
             continue
-        wrapped_tools.append(_wrap_tool(tool_spec, policy=policy))
+        wrapped_tools.append(_wrap_tool(tool_spec, policy_set=policy_set))
     return wrapped_tools
 
 
 def enforce_policy(
     agent: AgentGraph,
-    policy: str | AgentPolicy | None,
+    policy: str | AgentPolicy | PolicySet | None,
 ) -> AgentGraph:
-    """Return an agent runtime with Gate 1 policy enforcement applied."""
+    """Return an agent runtime with Gate 1 policy enforcement applied.
+
+    ``policy`` may be a path to a single YAML file (legacy), a directory of
+    role policies (the new shape), an :class:`AgentPolicy` model, or a
+    pre-built :class:`PolicySet`.
+    """
     return agent.enforce_policy(policy)
 
 

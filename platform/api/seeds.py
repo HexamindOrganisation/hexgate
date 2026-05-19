@@ -97,4 +97,67 @@ tools:
             "needs any of those, explain why you cannot and stop.\n"
         ),
     },
+    # ----- support-bot: role-aware demo agent -------------------------------
+    # Same agent, three role policies expressed inline under a top-level
+    # ``roles:`` key in policy.yaml. The Playground's "Acting as" dropdown
+    # exercises the role-driven policy selection added in phase 4a; the
+    # ``refund_order`` tool's constraints fire differently per role to make
+    # the demo visible (deny → small cap → large cap).
+    {
+        "name": "support_bot",
+        "agent_yaml": """name: support_bot
+model: gpt-5.4
+system_prompt: system.md
+tools:
+  - web_search
+  - read_file
+  - refund_order
+policy: policy.yaml
+""",
+        "policy_yaml": """version: 1
+
+# Role-aware policy bundle for support_bot. read_only is an inheritance
+# helper (is_mixin: true) — not selectable from the Playground, but composed
+# into every other role. `default` is the deny-everything fallback when no
+# User scope is active.
+roles:
+  read_only:
+    is_mixin: true
+    default_policy:
+      mode: deny
+    tools:
+      web_search: { mode: allow }
+      read_file:  { mode: allow }
+
+  default:
+    inherits: [read_only]
+    tools:
+      refund_order:
+        mode: deny
+
+  support:
+    inherits: [read_only]
+    tools:
+      refund_order:
+        mode: allow
+        constraints:
+          - args.amount <= 50
+          - args.currency == "USD"
+
+  billing:
+    inherits: [read_only]
+    tools:
+      refund_order:
+        mode: allow
+        constraints:
+          - args.amount <= 500
+          - args.currency in ["USD", "EUR"]
+""",
+        "system_md": (
+            "You are a support assistant. You can look up information, read "
+            "internal docs, and — if your role permits — issue refunds for "
+            "customer orders. Always confirm the amount and customer id "
+            "before calling refund_order.\n"
+        ),
+    },
 ]

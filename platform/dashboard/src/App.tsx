@@ -3,6 +3,7 @@ import { AppShell } from '@/components/AppShell'
 import { DashboardPage } from '@/routes/Dashboard'
 import { GraphPage } from '@/routes/Graph'
 import { AgentsPage } from '@/routes/Agents'
+import { PoliciesPage } from '@/routes/Policies'
 import { PlaygroundPage } from '@/routes/Playground'
 import { AuditPage } from '@/routes/Audit'
 import { TokensPage } from '@/routes/Tokens'
@@ -15,6 +16,7 @@ export default function App() {
         <Route element={<AppShell />}>
           <Route index element={<DashboardPage />} />
           <Route path="agents" element={<AgentsPage />} />
+          <Route path="policies" element={<PoliciesPage />} />
           <Route path="graph" element={<GraphPage />} />
           <Route path="playground" element={<PlaygroundPage />} />
           <Route path="audit" element={<AuditPage />} />

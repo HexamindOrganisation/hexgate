@@ -130,6 +130,8 @@ The current curated surface includes:
 - `stream_agent_raw`
 - `load_builtin_agent`
 - `list_builtin_agents`
+- `load_fortify_agent`
+- `User` — async context manager for per-request user attenuation (see [User Scope](#-user-scope))
 - `agent_tool`
 - `web_search`
 - `fetch`
@@ -150,9 +152,11 @@ from fortify import (
     agent_tool,
     load_agent,
     load_builtin_agent,
+    load_fortify_agent,
     register_agent,
     fetch,
     web_search,
+    User,
 )
 ```
 
@@ -493,7 +497,7 @@ fortify chat --agent example_agent
 
 ## 🔐 Policy Shape
 
-Policies are intentionally simple for now:
+Each tool gets a mode and an optional list of constraints:
 
 ```yaml
 version: 1
@@ -506,6 +510,11 @@ tools:
     mode: allow
   fetch:
     mode: allow
+  refund_order:
+    mode: allow
+    constraints:
+      - args.amount <= 500
+      - args.currency == "USD"
 ```
 
 Supported modes:
@@ -513,6 +522,8 @@ Supported modes:
 - `allow`
 - `deny`
 - `approval_required`
+
+Constraint operators: `==`, `!=`, `<`, `<=`, `>`, `>=`, `in`, `not in`. Strings on the right use JSON double quotes. Every constraint must pass for the call to authorize (implicit AND). See [User Scope + Roles](#-user-scope--roles) for the role-aware policy bundle shape that picks a per-role policy at call time.
 
 ## 🛡️ Gate 1: Local Policy Enforcement
 
@@ -976,6 +987,144 @@ Resolution chain when `FORTIFY_KEY` is set:
 3. Falls back to `"default"` (always present, protected from deletion)
 
 When `FORTIFY_KEY` is not set, `load_agent()` keeps its existing local / registered / builtin behaviour — no platform call.
+
+## 👤 User Scope + Roles
+
+Real backends serve many users, and different users get different capabilities. Fortify splits that into two pieces:
+
+- **`User`** — the per-request scope. Marks "this invocation acts on behalf of alice, in role X." Async context manager; pushes a fact-bearing Biscuit through the agent runtime.
+- **Role policies** — one `policy.yaml` per role, optionally inheriting from a base mixin. The runtime picks the right one at call time based on the active `User.role`.
+
+The two are deliberately decoupled: tokens carry **identity** (who is calling), policy files carry **rules** (what they can do).
+
+### Minimal example
+
+```python
+from fortify import User, load_fortify_agent, stream_agent
+
+agent, handler = load_fortify_agent("support-bot")          # client + roles attached at load
+
+async with User(user_id="alice", role="billing", ttl_seconds=300):
+    async for event in stream_agent(agent, handler, "refund customer 30"):
+        ...
+```
+
+That's it — no manual `attenuate_for_user`, `extract_facts`, or `ToolUseContext` plumbing at the call site. The runtime mints the per-request token, picks the `billing` role's policy file, and evaluates its constraints against each tool call.
+
+### FastAPI middleware pattern
+
+The cleanest production shape — set the scope once in middleware, every endpoint runs in the right user's role:
+
+```python
+from fastapi import FastAPI
+from fortify import User, load_fortify_agent, stream_agent
+
+app = FastAPI()
+agent, handler = load_fortify_agent("support-bot")          # at startup
+
+@app.middleware("http")
+async def attach_user(request, call_next):
+    auth = await authenticate(request)                       # your auth
+    async with User(
+        user_id=auth.id,
+        role=auth.role,                                       # e.g. "billing"
+        session_id=request.state.session_id,
+        ttl_seconds=300,
+    ):
+        return await call_next(request)
+
+@app.post("/chat")
+async def chat(req):
+    async for event in stream_agent(agent, handler, req.message):
+        yield event                                          # already scoped
+```
+
+### `User` fields
+
+| Field | Type | Required | Effect |
+|---|---|---|---|
+| `user_id` | `str` | ✅ | Becomes `user("alice")` in the attenuated Biscuit. |
+| `role` | `str?` | optional | Becomes `role("billing")` in the Biscuit. Selects which role policy file applies at tool-call time. Fall-back: the `default` role. |
+| `session_id` | `str?` | optional | Trace tagging — surfaces on Langfuse spans. |
+| `user_role` | `str?` | optional | Legacy tracing alias — kept for adapter compatibility. |
+| `ttl_seconds` | `int?` | optional | Embeds a `check if time($t), $t < now+ttl` predicate so the token can't outlive the request. |
+
+### Role policies — one file per role
+
+Agents that need per-role behaviour ship a `policies/` directory instead of a single `policy.yaml`:
+
+```text
+agent/
+├── agent.yaml
+├── system.md
+└── policies/
+    ├── default.yaml          # fallback when User.role is None / unknown
+    ├── read_only.yaml        # mixin — is_mixin: true
+    ├── support.yaml          # inherits: [read_only]
+    └── billing.yaml          # inherits: [read_only, support]
+```
+
+Each role file is a complete `AgentPolicy`. Inheritance is left-to-right, child wins on conflicts:
+
+```yaml
+# policies/read_only.yaml  (mixin — safe base)
+version: 1
+is_mixin: true
+default_policy:
+  mode: deny
+tools:
+  view_orders:  { mode: allow }
+  list_tickets: { mode: allow }
+```
+
+```yaml
+# policies/billing.yaml
+version: 1
+inherits: [read_only]
+tools:
+  refund_order:
+    mode: allow
+    constraints:
+      - args.amount <= 500
+      - args.currency == "USD"
+  wire_transfer:
+    mode: approval_required
+    constraints:
+      - args.amount <= 100000
+```
+
+### Constraints — Rego-compatible expressions
+
+Each tool can carry a `constraints:` list of string expressions evaluated against the call's arguments. Every constraint must pass for the call to authorize (implicit AND).
+
+| Operator | Example | Notes |
+|---|---|---|
+| `==` `!=` | `args.currency == "USD"` | Strings use JSON double quotes |
+| `<` `<=` `>` `>=` | `args.amount <= 500` | Type-mismatched comparisons fail-closed |
+| `in` | `args.template in ["a", "b"]` | RHS must be a JSON list |
+| `not in` | `args.priority not in ["urgent"]` | Two-word operator, treated as one |
+
+Constraints intentionally look like Rego conditions — when the policy engine swaps in OPA in a later milestone, the strings carry through unchanged. To compose with AND, emit multiple lines; to compose with OR, emit two tools or two roles.
+
+### Policy + role end-to-end
+
+With the `billing.yaml` policy above and `async with User(user_id="alice", role="billing")`:
+
+- `refund_order(amount=200, currency="USD")` → ✅ allowed
+- `refund_order(amount=600, currency="USD")` → ❌ denied — constraint `args.amount <= 500`
+- `refund_order(amount=200, currency="EUR")` → ❌ denied — constraint `args.currency == "USD"`
+- `wire_transfer(amount=50000)` → ✋ requires approval (mode = `approval_required`)
+
+Switch to `User(user_id="alice", role="default")` and `refund_order` itself is missing from the policy — falls through to the `default_policy.mode` (deny).
+
+### Notes
+
+- **Single-file policies still work.** A legacy `policy.yaml` is treated as the `default` role — no migration needed for agents that don't yet differentiate by role.
+- **Lazy attenuation.** `User.__aenter__` only pushes a contextvar — the cryptographic work happens inside `stream_agent` / `invoke_agent` the first time the agent runs. Errors surface at first agent call, not at scope entry.
+- **Local agents skip attenuation.** A `User` scope around a `load_local_agent` / `load_builtin_agent` agent logs a warning and runs with no facts. The `default` policy still applies — use `load_fortify_agent` for the full signed chain.
+- **Explicit override.** Passing `tool_use_context=` explicitly to `stream_agent` / `invoke_agent` wins over an active `User` scope. Useful for tests or one-off bypass.
+- **Sync callers.** `User` is async-only by design (room for KMS / audit / JWKS I/O in `__aenter__` / `__aexit__` later). From a sync context, `asyncio.run(main())` works fine.
+- **Tracing vs attenuation.** `UserContext` (the legacy adapter input — three required string fields) is unchanged. `User` is a separate primitive carrying identity + role; the two coexist in the same request.
 
 ## 📡 Stream Results
 

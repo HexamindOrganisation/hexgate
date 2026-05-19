@@ -186,7 +186,15 @@ export function usePlayground({ projectId }: Options) {
     }
   }, [projectId])
 
-  function sendChat(message: string) {
+  /**
+   * Send a chat message, optionally scoped to a role.
+   *
+   * When `role` is set, the platform forwards a `user_attenuation` block to
+   * the dev's local `fortify --serve` process, which attenuates its parent
+   * Fortify token to carry `user("playground"), role("<role>")` for this
+   * turn. The role's policy bundle then drives tool authorization.
+   */
+  function sendChat(message: string, opts?: { role?: string | null }) {
     const ws = socketRef.current
     if (!ws || ws.readyState !== WebSocket.OPEN) return
     const turnId = randomId()
@@ -211,7 +219,15 @@ export function usePlayground({ projectId }: Options) {
         { id: turn.id, role: 'assistant', content: '', turn },
       ],
     }))
-    ws.send(JSON.stringify({ type: 'chat', message }))
+    const frame: Record<string, unknown> = { type: 'chat', message }
+    if (opts?.role) {
+      frame.user_attenuation = {
+        user: 'playground',
+        role: opts.role,
+        ttl_seconds: 300,
+      }
+    }
+    ws.send(JSON.stringify(frame))
   }
 
   function reset() {

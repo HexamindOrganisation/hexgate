@@ -39,6 +39,13 @@ export interface AgentRead {
   id: string
   name: string
   agent_yaml: string
+  /**
+   * Canonical policy document. Flat single-policy YAML or — when the agent
+   * declares per-role behaviour — an inline-roles YAML with a top-level
+   * ``roles:`` map. See ``parseRolesFromPolicy`` in lib/policy.ts for the
+   * client-side helper that extracts the role list (for the Playground
+   * picker, etc).
+   */
   policy_yaml: string
   system_md: string
   updated_at: string
@@ -48,6 +55,18 @@ export interface AgentUpdate {
   agent_yaml?: string
   policy_yaml?: string
   system_md?: string
+}
+
+export interface PolicyValidationError {
+  /** Role name when the failure was inside an inline-roles entry; null otherwise. */
+  role: string | null
+  line: number | null
+  message: string
+}
+
+export interface ValidatePolicyResponse {
+  ok: boolean
+  errors: PolicyValidationError[]
 }
 
 export const api = {
@@ -76,4 +95,14 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify(body),
     }),
+
+  validatePolicy: (
+    name: string,
+    policy_yaml: string,
+    projectId = DEFAULT_PROJECT_ID,
+  ) =>
+    request<ValidatePolicyResponse>(
+      `/v1/projects/${projectId}/agents/${name}/validate`,
+      { method: 'POST', body: JSON.stringify({ policy_yaml }) },
+    ),
 }

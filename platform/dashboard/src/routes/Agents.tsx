@@ -1,247 +1,238 @@
-import { useEffect, useMemo, useState } from 'react'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ReactFlow, Background, BackgroundVariant } from '@xyflow/react'
-import { Bot, FileCode, FileText, Save, AlertTriangle } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { useQuery } from '@tanstack/react-query'
+import { Streamdown } from 'streamdown'
+import { Bot, FileCode, FileText, ShieldCheck, Wrench } from 'lucide-react'
+import { Link } from 'react-router-dom'
 import { api, type AgentRead } from '@/lib/api'
-import { buildAgentGraph } from '@/lib/graph'
-import { nodeTypes } from '@/components/graph/nodes'
-import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { cn } from '@/lib/utils'
+import { parseAgent } from '@/lib/policy'
+import { parseRolesFromPolicy } from '@/lib/policy'
 
-type FileKind = 'policy_yaml' | 'agent_yaml' | 'system_md'
-
-const FILE_LABEL: Record<FileKind, string> = {
-  policy_yaml: 'policy.yaml',
-  agent_yaml: 'agent.yaml',
-  system_md: 'system.md',
-}
-
-const FILE_ICON: Record<FileKind, typeof FileCode> = {
-  policy_yaml: FileCode,
-  agent_yaml: FileCode,
-  system_md: FileText,
-}
-
+/**
+ * /agents — read-only manifest view.
+ *
+ * Renders each agent's static identity: name, model, tool list, system
+ * prompt, and the role names declared in its policy.yaml. Edit happens
+ * elsewhere — policy authoring lives in /policies. Keeping this page
+ * static makes the IA boundary obvious: agents = "who is this", policies
+ * = "what can they do".
+ *
+ * Future editors for agent.yaml / system.md (when devs want to rename
+ * an agent or rewrite a prompt from the UI) slot here as opt-in edit
+ * affordances, but the default is inspect-only.
+ */
 export function AgentsPage() {
   const agents = useQuery({ queryKey: ['agents'], queryFn: () => api.listAgents() })
-
   const [selectedAgent, setSelectedAgent] = useState<string | null>(null)
-  const [selectedFile, setSelectedFile] = useState<FileKind>('policy_yaml')
 
-  // When the list loads for the first time, auto-select the first agent.
   useEffect(() => {
     if (!selectedAgent && agents.data && agents.data.length > 0) {
       setSelectedAgent(agents.data[0].name)
     }
   }, [agents.data, selectedAgent])
 
-  return (
-    <div className="-mx-8 -my-6 h-[calc(100vh-56px)] grid grid-cols-[260px_1fr_1fr] overflow-hidden">
-      {/* File tree */}
-      <aside className="border-r border-border bg-card overflow-y-auto">
-        <div className="px-4 py-3 border-b border-border">
-          <div className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-            Agents
-          </div>
-        </div>
-        {agents.isLoading ? (
-          <div className="p-4 text-xs text-muted-foreground">Loading…</div>
-        ) : (
-          <div className="py-2">
-            {agents.data?.map((a) => (
-              <AgentTreeItem
-                key={a.name}
-                agent={a}
-                expanded={selectedAgent === a.name}
-                selectedFile={selectedAgent === a.name ? selectedFile : null}
-                onSelect={(file) => {
-                  setSelectedAgent(a.name)
-                  setSelectedFile(file)
-                }}
-              />
-            ))}
-          </div>
-        )}
-      </aside>
+  const active = agents.data?.find((a) => a.name === selectedAgent)
 
-      {selectedAgent ? (
-        <AgentWorkspace
-          agentName={selectedAgent}
-          file={selectedFile}
+  return (
+    <div className="-mx-8 -my-6 h-[calc(100vh-56px)] flex flex-col overflow-hidden">
+      <header className="flex items-center gap-3 px-6 py-3 border-b border-border bg-card">
+        <Bot className="size-4 text-muted-foreground" />
+        <span className="text-sm font-medium">Agent</span>
+        <AgentPicker
+          agents={agents.data ?? []}
+          value={selectedAgent}
+          onChange={(name) => setSelectedAgent(name)}
+          loading={agents.isLoading}
         />
-      ) : (
-        <div className="col-span-2 grid place-items-center text-sm text-muted-foreground">
-          Select an agent to edit.
-        </div>
-      )}
-    </div>
-  )
-}
-
-function AgentTreeItem({
-  agent,
-  expanded,
-  selectedFile,
-  onSelect,
-}: {
-  agent: AgentRead
-  expanded: boolean
-  selectedFile: FileKind | null
-  onSelect: (file: FileKind) => void
-}) {
-  return (
-    <div>
-      <button
-        onClick={() => onSelect('policy_yaml')}
-        className={cn(
-          'flex w-full items-center gap-2 px-4 py-1.5 text-sm transition-colors',
-          expanded ? 'text-foreground' : 'text-muted-foreground hover:text-foreground',
-        )}
-      >
-        <Bot className="size-3.5" />
-        <span className="font-medium">{agent.name}</span>
-      </button>
-      {expanded && (
-        <div className="pb-1">
-          {(['policy_yaml', 'agent_yaml', 'system_md'] as const).map((kind) => {
-            const Icon = FILE_ICON[kind]
-            return (
-              <button
-                key={kind}
-                onClick={() => onSelect(kind)}
-                className={cn(
-                  'flex w-full items-center gap-2 pl-10 pr-4 py-1 text-xs transition-colors',
-                  selectedFile === kind
-                    ? 'bg-primary/10 text-primary'
-                    : 'text-muted-foreground hover:text-foreground',
-                )}
-              >
-                <Icon className="size-3" />
-                <span className="font-mono">{FILE_LABEL[kind]}</span>
-              </button>
-            )
-          })}
-        </div>
-      )}
-    </div>
-  )
-}
-
-function AgentWorkspace({ agentName, file }: { agentName: string; file: FileKind }) {
-  const qc = useQueryClient()
-  const agent = useQuery({
-    queryKey: ['agent', agentName],
-    queryFn: () => api.getAgent(agentName),
-  })
-
-  const [draft, setDraft] = useState<string>('')
-  const [dirty, setDirty] = useState(false)
-
-  // Sync draft from server when agent or file changes
-  useEffect(() => {
-    if (!agent.data) return
-    setDraft(agent.data[file])
-    setDirty(false)
-  }, [agent.data, file])
-
-  const saveMutation = useMutation({
-    mutationFn: (patch: { agent_yaml?: string; policy_yaml?: string; system_md?: string }) =>
-      api.updateAgent(agentName, patch),
-    onSuccess: () => {
-      setDirty(false)
-      qc.invalidateQueries({ queryKey: ['agent', agentName] })
-      qc.invalidateQueries({ queryKey: ['agents'] })
-    },
-  })
-
-  // Build a live preview agent by combining the server copy with the unsaved draft
-  const previewAgent = useMemo<AgentRead | null>(() => {
-    if (!agent.data) return null
-    return { ...agent.data, [file]: draft }
-  }, [agent.data, file, draft])
-
-  const graph = useMemo(() => {
-    if (!previewAgent) return { nodes: [], edges: [], view: null }
-    return buildAgentGraph(previewAgent)
-  }, [previewAgent])
-
-  return (
-    <>
-      {/* Editor column */}
-      <section className="flex flex-col border-r border-border overflow-hidden">
-        <header className="flex items-center justify-between px-6 py-3 border-b border-border">
-          <div className="flex items-center gap-2 text-sm">
-            <FileCode className="size-4 text-muted-foreground" />
-            <span className="font-mono">{agentName}/{FILE_LABEL[file]}</span>
-            {dirty && <Badge variant="approval">unsaved</Badge>}
-          </div>
-          <Button
-            size="sm"
-            onClick={() => saveMutation.mutate({ [file]: draft })}
-            disabled={!dirty || saveMutation.isPending}
-            className="gap-2"
+        <div className="flex-1" />
+        {active && (
+          <Link
+            to="/policies"
+            className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1.5"
           >
-            <Save className="size-3.5" />
-            {saveMutation.isPending ? 'Saving…' : 'Save'}
-          </Button>
-        </header>
-        <textarea
-          value={draft}
-          onChange={(e) => {
-            setDraft(e.target.value)
-            setDirty(e.target.value !== (agent.data?.[file] ?? ''))
-          }}
-          spellCheck={false}
-          className="flex-1 resize-none bg-background p-6 font-mono text-sm leading-relaxed text-foreground focus:outline-none"
-        />
+            <ShieldCheck className="size-3" />
+            edit policy →
+          </Link>
+        )}
+      </header>
+
+      <div className="flex-1 overflow-y-auto px-8 py-6">
+        {active ? <ManifestView agent={active} /> : (
+          <div className="h-full grid place-items-center text-sm text-muted-foreground">
+            {agents.isLoading ? 'Loading agents…' : 'No agents to inspect.'}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function AgentPicker({
+  agents,
+  value,
+  onChange,
+  loading,
+}: {
+  agents: { name: string }[]
+  value: string | null
+  onChange: (name: string) => void
+  loading: boolean
+}) {
+  if (loading) return <span className="text-xs text-muted-foreground">loading…</span>
+  return (
+    <select
+      value={value ?? ''}
+      onChange={(e) => onChange(e.target.value)}
+      className="h-8 rounded-md border border-border bg-background px-3 text-sm font-mono focus:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+    >
+      {agents.map((a) => (
+        <option key={a.name} value={a.name}>
+          {a.name}
+        </option>
+      ))}
+    </select>
+  )
+}
+
+function ManifestView({ agent }: { agent: AgentRead }) {
+  const parsedManifest = parseAgent(agent.agent_yaml, agent.policy_yaml)
+  const roles = parseRolesFromPolicy(agent.policy_yaml)
+
+  return (
+    <div className="mx-auto max-w-3xl space-y-6">
+      {/* Summary card */}
+      <section className="rounded-lg border border-border bg-card">
+        <div className="px-5 py-4 border-b border-border flex items-center gap-2">
+          <Bot className="size-4 text-primary" />
+          <span className="text-sm font-medium">Manifest</span>
+        </div>
+        <dl className="divide-y divide-border text-sm">
+          <ManifestRow label="Name" value={parsedManifest?.name ?? agent.name} mono />
+          <ManifestRow label="Model" value={parsedManifest?.model || '—'} mono />
+          <ManifestRow label="Last updated" value={formatDate(agent.updated_at)} />
+        </dl>
       </section>
 
-      {/* Live graph column */}
-      <section className="flex flex-col overflow-hidden">
-        <header className="flex items-center justify-between px-6 py-3 border-b border-border">
-          <div className="flex items-center gap-2 text-sm">
-            <span className="font-medium">Live preview</span>
-            <span className="text-muted-foreground text-xs">
-              updates as you type
-            </span>
-          </div>
-          <div className="flex items-center gap-1.5 text-xs">
-            <Badge variant="allow">allow</Badge>
-            <Badge variant="approval">approval</Badge>
-            <Badge variant="deny">deny</Badge>
-          </div>
-        </header>
-        <div className="flex-1 relative">
-          {graph.view === null ? (
-            <div className="absolute inset-0 grid place-items-center gap-2 text-center">
-              <AlertTriangle className="size-6 text-approval" />
-              <div className="text-sm text-muted-foreground">
-                Invalid YAML — fix to render the graph.
-              </div>
+      {/* Tools */}
+      <section className="rounded-lg border border-border bg-card">
+        <div className="px-5 py-4 border-b border-border flex items-center gap-2">
+          <Wrench className="size-4 text-muted-foreground" />
+          <span className="text-sm font-medium">Tools</span>
+          <Badge variant="outline" className="ml-1 font-mono text-[11px]">
+            {parsedManifest?.tools.length ?? 0}
+          </Badge>
+        </div>
+        <div className="px-5 py-4">
+          {parsedManifest?.tools.length ? (
+            <div className="flex flex-wrap gap-1.5">
+              {parsedManifest.tools.map((t) => (
+                <Badge
+                  key={t}
+                  variant="outline"
+                  className="font-mono text-[11px] py-0.5"
+                >
+                  {t}
+                </Badge>
+              ))}
             </div>
           ) : (
-            <ReactFlow
-              nodes={graph.nodes}
-              edges={graph.edges}
-              nodeTypes={nodeTypes}
-              nodesDraggable={false}
-              nodesConnectable={false}
-              edgesFocusable={false}
-              fitView
-              fitViewOptions={{ padding: 0.25 }}
-              proOptions={{ hideAttribution: true }}
-            >
-              <Background
-                variant={BackgroundVariant.Dots}
-                gap={20}
-                size={1}
-                color="hsl(var(--border))"
-              />
-            </ReactFlow>
+            <p className="text-xs text-muted-foreground">No tools declared.</p>
           )}
         </div>
       </section>
-    </>
+
+      {/* Roles */}
+      <section className="rounded-lg border border-border bg-card">
+        <div className="px-5 py-4 border-b border-border flex items-center gap-2">
+          <ShieldCheck className="size-4 text-muted-foreground" />
+          <span className="text-sm font-medium">Roles</span>
+          <Badge variant="outline" className="ml-1 font-mono text-[11px]">
+            {roles.length}
+          </Badge>
+          <div className="flex-1" />
+          <Link
+            to="/policies"
+            className="text-[11px] text-muted-foreground hover:text-foreground"
+          >
+            manage in /policies →
+          </Link>
+        </div>
+        <div className="px-5 py-4">
+          {roles.length > 0 ? (
+            <div className="flex flex-wrap gap-1.5">
+              {roles.map((r) => (
+                <Badge
+                  key={r}
+                  variant="outline"
+                  className="font-mono text-[11px] py-0.5"
+                >
+                  {r}
+                </Badge>
+              ))}
+            </div>
+          ) : (
+            <p className="text-xs text-muted-foreground">
+              Single-policy agent — no per-role differentiation.
+            </p>
+          )}
+        </div>
+      </section>
+
+      {/* System prompt */}
+      <section className="rounded-lg border border-border bg-card">
+        <div className="px-5 py-4 border-b border-border flex items-center gap-2">
+          <FileText className="size-4 text-muted-foreground" />
+          <span className="text-sm font-medium font-mono">system.md</span>
+        </div>
+        <div className="px-5 py-4 prose prose-sm prose-invert max-w-none">
+          {agent.system_md.trim() ? (
+            <Streamdown>{agent.system_md}</Streamdown>
+          ) : (
+            <p className="text-xs text-muted-foreground">No system prompt set.</p>
+          )}
+        </div>
+      </section>
+
+      {/* Raw agent.yaml — collapsed by default to keep the page calm */}
+      <details className="rounded-lg border border-border bg-card group">
+        <summary className="px-5 py-3 cursor-pointer flex items-center gap-2 text-sm font-medium select-none">
+          <FileCode className="size-4 text-muted-foreground" />
+          <span className="font-mono">agent.yaml</span>
+          <span className="text-[10px] text-muted-foreground ml-auto group-open:hidden">
+            click to expand
+          </span>
+        </summary>
+        <pre className="px-5 py-4 text-xs font-mono whitespace-pre-wrap break-words text-foreground bg-background/40 border-t border-border">
+          {agent.agent_yaml}
+        </pre>
+      </details>
+    </div>
   )
+}
+
+function ManifestRow({
+  label,
+  value,
+  mono,
+}: {
+  label: string
+  value: string
+  mono?: boolean
+}) {
+  return (
+    <div className="grid grid-cols-[120px_1fr] gap-4 px-5 py-2.5">
+      <dt className="text-xs text-muted-foreground">{label}</dt>
+      <dd className={mono ? 'font-mono text-foreground' : 'text-foreground'}>
+        {value}
+      </dd>
+    </div>
+  )
+}
+
+function formatDate(iso: string): string {
+  try {
+    return new Date(iso).toLocaleString()
+  } catch {
+    return iso
+  }
 }

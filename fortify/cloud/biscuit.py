@@ -5,7 +5,7 @@ SDK verifies them locally before trusting them for any call. We deliberately
 mirror only the *verify-side* of the platform's wrapper — minting and
 attenuation are platform/dev concerns and don't belong in the SDK runtime.
 
-Two responsibilities live here:
+Three responsibilities live here:
 
 1. Parse the human-readable envelope ``fty_<env>_<project>_<biscuit_b64>``
    into its parts. The Biscuit payload itself contains underscores
@@ -15,12 +15,18 @@ Two responsibilities live here:
    that was tampered with, signed by a different key, or just garbled
    raises :class:`TokenSignatureError`.
 
+3. Extract single-arity facts from every block of a verified token, so the
+   policy engine can read user attribution / scope / numeric-limit metadata
+   stamped in by the dev's backend during attenuation.
+
 Defense in depth — the platform also verifies on the bearer-auth path,
 but verifying client-side catches misconfiguration at startup instead of
 on the first failed API call.
 """
 
 from __future__ import annotations
+
+import re
 
 ENVELOPE_PREFIX = "fty"
 
@@ -31,6 +37,28 @@ class TokenError(RuntimeError):
 
 class TokenSignatureError(TokenError):
     """Raised when a Biscuit's signature does not chain to the expected key."""
+
+
+# Matches a single-arity Datalog fact `predicate(value);` where value is either
+# a double-quoted string or a bare integer literal. Multi-arg facts, dates,
+# bytes, sets, and rules are intentionally skipped — M1's policy engine only
+# needs flat user / scope / limit metadata. The full Datalog grammar is biscuit-
+# python's job; we just want the cheap, common shape here.
+_FACT_LINE_RE = re.compile(
+    r"""
+    ^\s*                            # leading whitespace
+    (?P<name>[a-z][a-zA-Z0-9_]*)    # predicate name (Datalog convention: lowercase head)
+    \s*\(\s*                        # opening paren
+    (?:
+        "(?P<str>(?:[^"\\]|\\.)*)"  # double-quoted string (with \" / \\ escapes)
+      |
+        (?P<int>-?\d+)              # bare integer
+    )
+    \s*\)\s*;                       # closing paren + semicolon
+    \s*$                            # trailing whitespace
+    """,
+    re.VERBOSE,
+)
 
 
 def parse_envelope(envelope: str) -> tuple[str, str, str]:
@@ -76,3 +104,69 @@ def verify_biscuit(token_b64: str, public_key_bytes: bytes) -> None:
         Biscuit.from_base64(token_b64, pub)
     except BiscuitValidationError as exc:
         raise TokenSignatureError(str(exc)) from exc
+
+
+def extract_facts(token_b64: str, public_key_bytes: bytes) -> dict[str, list[str | int]]:
+    """Verify ``token_b64`` and return single-arity facts across every block.
+
+    Returns ``{predicate: [value, ...]}`` where each value is a ``str`` or
+    ``int``, in source order, unioned across the authority block and all
+    attenuation blocks. The same predicate appearing in multiple blocks (e.g.
+    ``scope("read")`` in the authority and ``scope("write")`` in a child
+    block) accumulates — Datalog's natural union semantics, and the safety
+    property that prevents an attenuator from "removing" a prior fact.
+
+    Multi-arg facts, rules, checks, and non-string/non-integer literals are
+    silently skipped: M1's structured policy predicates only consume the
+    common ``name("value")`` / ``name(N)`` shape. The full Datalog surface
+    is left to biscuit-python's own authorizer once we move to Datalog-native
+    policy rules in M2.
+
+    Raises :class:`TokenSignatureError` for the same reasons as
+    :func:`verify_biscuit` — we re-verify here so callers never use facts
+    from an untrusted token by mistake.
+    """
+    from biscuit_auth import (
+        Algorithm,
+        Biscuit,
+        BiscuitValidationError,
+        PublicKey,
+    )
+
+    try:
+        pub = PublicKey.from_bytes(public_key_bytes, Algorithm.Ed25519)
+    except (ValueError, TypeError) as exc:
+        raise TokenSignatureError(f"malformed public key: {exc}") from exc
+    try:
+        biscuit = Biscuit.from_base64(token_b64, pub)
+    except BiscuitValidationError as exc:
+        raise TokenSignatureError(str(exc)) from exc
+
+    facts: dict[str, list[str | int]] = {}
+    for idx in range(biscuit.block_count()):
+        source = biscuit.block_source(idx)
+        if source is None:
+            continue
+        for line in source.splitlines():
+            stripped = line.strip()
+            if not stripped or stripped.startswith("//"):
+                continue
+            if stripped.startswith("check ") or "<-" in stripped:
+                # checks and rules — biscuit's authorizer enforces these;
+                # the SDK policy engine only wants ground facts.
+                continue
+            match = _FACT_LINE_RE.match(line)
+            if match is None:
+                continue
+            name = match.group("name")
+            if match.group("str") is not None:
+                # Biscuit string literals only define two escapes (\\" and \\\\);
+                # unescape them directly. ``unicode_escape`` would re-decode the
+                # bytes as Latin-1 and mangle multibyte UTF-8 (``café`` → ``cafÃ©``).
+                value: str | int = re.sub(
+                    r'\\(["\\])', r"\1", match.group("str")
+                )
+            else:
+                value = int(match.group("int"))
+            facts.setdefault(name, []).append(value)
+    return facts
