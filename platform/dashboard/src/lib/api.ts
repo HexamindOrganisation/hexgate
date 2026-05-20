@@ -57,6 +57,57 @@ export interface AgentUpdate {
   system_md?: string
 }
 
+/**
+ * Tool input parameter, mirroring InputProperty in platform/api/schemas.py.
+ */
+export interface InputProperty {
+  title: string
+  type: string
+}
+
+/**
+ * Tool input schema, mirroring InputSchema in platform/api/schemas.py.
+ */
+export interface InputSchema {
+  properties: Record<string, InputProperty>
+  required: string[]
+}
+
+/**
+ * Tool definition as stored in the registered manifest. ``description`` is
+ * nullable on read-back to match the platform-side schema.
+ */
+export interface ToolDefinition {
+  name: string
+  description: string | null
+  input_schema: InputSchema
+}
+
+/**
+ * Registered manifest body, mirroring AgentManifest in platform/api/schemas.py.
+ */
+export interface AgentManifest {
+  name: string
+  description: string | null
+  framework: string
+  tools: ToolDefinition[]
+}
+
+/**
+ * Dashboard-facing envelope for the latest registered manifest of an agent.
+ *
+ * ``manifest`` / ``version`` / ``content_hash`` are null when the agent
+ * exists but has never been registered via ``POST /v1/agents``. ``name``
+ * always reflects the Agent row's name (the picker uses it directly).
+ */
+export interface AgentManifestView {
+  name: string
+  manifest: AgentManifest | null
+  version: number | null
+  content_hash: string | null
+  updated_at: string
+}
+
 export interface PolicyValidationError {
   /** Role name when the failure was inside an inline-roles entry; null otherwise. */
   role: string | null
@@ -86,6 +137,11 @@ export const api = {
 
   listAgents: (projectId = DEFAULT_PROJECT_ID) =>
     request<AgentRead[]>(`/v1/projects/${projectId}/agents`),
+
+  listAgentManifests: (projectId = DEFAULT_PROJECT_ID) =>
+    request<AgentManifestView[]>(
+      `/v1/projects/${projectId}/agents/manifest`,
+    ),
 
   getAgent: (name: string, projectId = DEFAULT_PROJECT_ID) =>
     request<AgentRead>(`/v1/projects/${projectId}/agents/${name}`),

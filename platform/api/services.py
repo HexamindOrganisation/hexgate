@@ -2,6 +2,7 @@ import hashlib
 import json
 import secrets
 
+from sqlalchemy import func
 from sqlmodel import Session, select
 
 from models import Agent, AgentVersion, DevToken, Project, Tool
@@ -72,6 +73,33 @@ def list_agents(session: Session, project_id: str) -> list[Agent]:
 def get_agent(session: Session, project_id: str, name: str) -> Agent | None:
     stmt = select(Agent).where(Agent.project_id == project_id, Agent.name == name)
     return session.exec(stmt).first()
+
+
+def get_latest_agent_versions_map(
+    session: Session, agent_ids: list[str]
+) -> dict[str, AgentVersion]:
+    """Return a map of {agent_id: latest AgentVersion}
+    for a list of agent ids in a single query.
+
+    Agents with no registered version are omitted from the map.
+    """
+    if not agent_ids:
+        return {}
+    max_version_per_agent = (
+        select(
+            AgentVersion.agent_id,
+            func.max(AgentVersion.version).label("max_version"),
+        )
+        .where(AgentVersion.agent_id.in_(agent_ids))
+        .group_by(AgentVersion.agent_id)
+        .subquery()
+    )
+    statement = select(AgentVersion).join(
+        max_version_per_agent,
+        (AgentVersion.agent_id == max_version_per_agent.c.agent_id)
+        & (AgentVersion.version == max_version_per_agent.c.max_version),
+    )
+    return {version.agent_id: version for version in session.exec(statement)}
 
 
 def update_agent(

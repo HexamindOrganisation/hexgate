@@ -103,11 +103,13 @@ class InputSchema(BaseModel):
 
 class ToolDefinition(BaseModel):
     name: str
-    description: str
+    description: Optional[str] = None
     input_schema: InputSchema
 
 
 class AgentManifest(BaseModel):
+    """Schema for the manifest of an agent."""
+
     name: str
     description: Optional[str] = None
     framework: AgentFramework
@@ -125,3 +127,18 @@ class RegisterAgentResponse(BaseModel):
     version: int
     content_hash: str
     created: bool  # False if the same content_hash already existed (no-op)
+
+
+class AgentManifestView(BaseModel):
+    """Resolved latest manifest of an agent, for the dashboard read path.
+
+    ``manifest`` is None when the Agent row exists but no AgentVersion has
+    been registered yet.
+    ``name`` lives on the envelope so the picker can display it directly.
+    """
+
+    name: str
+    manifest: Optional[AgentManifest] = None
+    version: Optional[int] = None
+    content_hash: Optional[str] = None
+    updated_at: datetime
