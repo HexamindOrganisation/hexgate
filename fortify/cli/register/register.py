@@ -26,9 +26,9 @@ def register_agent(
 ) -> dict:
     """Create and register an agent manifest to platform /agents.
 
-    ``tools``, ``model`` and ``system_prompt`` are only consulted for LangChain graphs —
-    every other framework reads them off the agent object directly. See
-    ``create_manifest`` for the dispatch logic.
+    `tools`, `model` and `system_prompt` are only consulted for LangChain graphs —
+    every other framework reads them off the agent object directly. 
+    See `create_manifest` for the dispatch logic.
     """
     manifest = create_manifest(
         agent,

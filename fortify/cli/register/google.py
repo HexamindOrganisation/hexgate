@@ -43,13 +43,10 @@ def create_google_manifest(
 
 def _extract_model(model: str | BaseLlm) -> str | None:
     """Return the model id for a Google ADK agent.
-
-    ``LlmAgent.model`` is ``str | BaseLlm`` (defaults to ``""`` when unset).
-    ``BaseLlm`` itself carries a ``model: str`` field — its model id — so we
-    surface that for the dashboard rather than the BaseLlm class name.
     """
     if isinstance(model, str):
         return model or None
+    # BaseLlm exposes the model under .model
     name = getattr(model, "model", None)
     if isinstance(name, str) and name:
         return name

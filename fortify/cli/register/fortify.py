@@ -38,16 +38,13 @@ def create_fortify_manifest(
 def _extract_model(model: str | BaseChatModel | None) -> str | None:
     """Return a human-readable identifier for a FortifyAgent's model.
 
-    ``FortifyAgent.model`` is typed as ``str | BaseChatModel``. For chat-model
-    objects we prefer the ``.model`` / ``.model_name`` attribute LangChain
-    providers set (e.g. ``ChatOpenAI(model="gpt-4o-mini")`` exposes
-    ``model="gpt-4o-mini"``) so the manifest shows the LLM id, not the
-    wrapper class name.
+    ``FortifyAgent.model`` is typed as ``str | BaseChatModel``.
     """
     if model is None:
         return None
     if isinstance(model, str):
         return model or None
+    # BaseChatModel expose the model under .model or .model_name
     for attr in ("model", "model_name"):
         value = getattr(model, attr, None)
         if isinstance(value, str) and value:
@@ -61,8 +58,7 @@ def _extract_system_prompt(prompt: str | SystemMessage | None) -> str | None:
     ``create_agent`` resolves file paths to text before constructing the
     agent (see ``load_system_prompt`` in ``agents/factory.py``), so by the
     time we see ``agent.system_prompt`` it's always either a string or a
-    ``SystemMessage`` — never a Path.
-    """
+    ``SystemMessage`` — never a Path. """
     if prompt is None:
         return None
     if isinstance(prompt, str):

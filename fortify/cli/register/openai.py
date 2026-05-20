@@ -30,16 +30,13 @@ def create_openai_manifest(
 def _extract_model(model: str | Model | None) -> str | None:
     """Return the model id for an OpenAI Agents SDK agent.
 
-    ``Agent.model`` is ``str | Model | None``; when None the agent falls back
-    to the SDK's default at run time. The Model implementation type is opaque
-    (no canonical name attribute), so for non-string instances we record the
-    concrete class name — at least the dashboard sees *something* rather than
-    silently dropping the field.
+    ``Agent.model`` is ``str | Model | None``
     """
     if model is None:
         return None
     if isinstance(model, str):
         return model or None
+    # Fallback to the model class name when no model is set
     return type(model).__name__
 
 
@@ -47,8 +44,7 @@ def _extract_system_prompt(instructions: object) -> str | None:
     """Return the static instructions string for an OpenAI Agents SDK agent.
 
     ``Agent.instructions`` can be a string or a callable resolved per run; we
-    only snapshot the static string form because there's no single text to
-    record for a dynamic resolver.
+    only snapshot the static string
     """
     if isinstance(instructions, str):
         return instructions or None

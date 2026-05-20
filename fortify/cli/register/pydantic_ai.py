@@ -43,9 +43,7 @@ def create_pydantic_ai_manifest(
 def _extract_model(model: Model | str | None) -> str | None:
     """Return the model id for a Pydantic AI agent.
 
-    Pydantic AI's ``Model`` interface exposes ``.model_name`` as the
-    canonical identifier (``"gpt-4o-mini"``, ``"test"`` for ``TestModel``,
-    etc). Strings are also accepted as a shorthand at construction time.
+    ``Model`` exposes ``.model_name`` as the canonical identifier
     """
     if model is None:
         return None
@@ -61,11 +59,8 @@ def _extract_system_prompt(agent: Agent) -> str | None:
     """Collect every static prompt string a Pydantic AI agent will emit.
 
     Pydantic AI splits the prompt across two private fields: ``_system_prompts``
-    (the legacy ``system_prompt=`` constructor arg, always a tuple of strings)
     and ``_instructions`` (the newer ``instructions=`` arg, which mixes literal
-    strings with dynamic callables). At run time the agent concatenates them;
-    we mirror that for the manifest snapshot, dropping callables since there's
-    no single text to record.
+    strings with dynamic callables). At run time the agent concatenates them.
     """
     parts: list[str] = []
     for prompt in getattr(agent, "_system_prompts", ()) or ():
