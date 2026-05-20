@@ -19,6 +19,8 @@ reads off a contextvar. They can coexist in the same request.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 from contextvars import ContextVar, Token
 from dataclasses import dataclass
 from typing import Any
@@ -127,6 +129,21 @@ class User(BaseModel):
     async def __aexit__(self, *_: object) -> None:
         if self._tokens:
             _CURRENT_USER.reset(self._tokens.pop())
+
+    @contextmanager
+    def sync_scope(self) -> Iterator["User"]:
+        """Sync mirror of ``async with self`` — pushes/pops the contextvar.
+
+        For sync entry points (CLI loops, ``Runner.run_sync``) where the
+        async ctxmgr protocol is unavailable. Same semantics: stack-safe,
+        nest-safe, no I/O.
+        """
+        self._tokens.append(_CURRENT_USER.set(self))
+        try:
+            yield self
+        finally:
+            if self._tokens:
+                _CURRENT_USER.reset(self._tokens.pop())
 
 
 _CURRENT_USER: ContextVar[User | None] = ContextVar(

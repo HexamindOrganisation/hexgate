@@ -2,7 +2,7 @@ import asyncio
 from agents import Agent, function_tool
 from dotenv import load_dotenv
 
-from fortify.runtime import UserContext
+from fortify.runtime import User
 from fortify.adapters.openai import FortifyRunner
 
 
@@ -25,10 +25,10 @@ async def main():
     result = await runner.run(
         agent=agent,
         input="What's the weather in Cherbourg?",
-        user_context=UserContext(
+        user=User(
             user_id="openai_user_1",
             session_id="openai_session_1",
-            user_role="member",
+            role="member",
         ),
     )
     print(result)

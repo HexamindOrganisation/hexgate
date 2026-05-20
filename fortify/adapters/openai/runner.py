@@ -1,23 +1,31 @@
+"""Runner that wraps the OpenAI Agents ``Runner`` with Fortify policy + tracing.
+
+Each entry point opens a :class:`~fortify.runtime.User` scope around the
+delegated ``Runner.run*`` call so the wrapped tools' enforcers can resolve
+the active role from the contextvar at call time. Langfuse propagation
+mirrors the User identity into trace metadata.
+"""
+
 import asyncio
-from contextlib import contextmanager
 import os
+from contextlib import contextmanager
+
+import nest_asyncio
 from agents import (
+    Agent,
+    RunConfig,
+    Runner,
     RunResult,
     RunResultStreaming,
     RunState,
-    Runner,
-    Agent,
-    RunConfig,
     TContext,
     TResponseInputItem,
 )
-import nest_asyncio
+from langfuse import get_client, propagate_attributes
 from openinference.instrumentation.openai_agents import OpenAIAgentsInstrumentor
 
-from langfuse import get_client, propagate_attributes
-
-from fortify.runtime import UserContext
 from fortify.adapters.openai.wrapper import wrap_openai_agent
+from fortify.runtime import User
 
 
 class FortifyRunner:
@@ -42,12 +50,12 @@ class FortifyRunner:
         OpenAIAgentsInstrumentor().instrument()
 
     @contextmanager
-    def _propagate(self, user_context: UserContext, agent_name: str):
-        """Propagate the user context to the Langfuse trace/span"""
+    def _propagate(self, user: User, agent_name: str):
+        """Propagate the user identity to the Langfuse trace/span."""
         kwargs: dict[str, any] = {"tags": [f"openai.runner.run.{agent_name}"]}
-        kwargs["user_id"] = user_context.user_id
-        kwargs["session_id"] = user_context.session_id
-        kwargs["metadata"] = {"user_role": user_context.user_role}
+        kwargs["user_id"] = user.user_id
+        kwargs["session_id"] = user.session_id
+        kwargs["metadata"] = {"user_role": user.role}
         with propagate_attributes(**kwargs):
             yield
 
@@ -55,59 +63,68 @@ class FortifyRunner:
         self,
         agent: Agent,
         input: str | list[TResponseInputItem] | RunState[TContext],
-        user_context: UserContext,
+        user: User,
         run_config: RunConfig | None = None,
         **kwargs,
     ) -> RunResult:
-        """Run the OpenAI agent asynchronously"""
+        """Run the OpenAI agent asynchronously inside a User scope."""
         self._setup_observability()
-        wrapped_agent = wrap_openai_agent(agent, user_context, self.api_key)
-        with self._propagate(user_context, agent.name):
-            return await Runner.run(
-                wrapped_agent, input, run_config=run_config, **kwargs
-            )
+        wrapped_agent = wrap_openai_agent(agent, api_key=self.api_key)
+        async with user:
+            with self._propagate(user, agent.name):
+                return await Runner.run(
+                    wrapped_agent, input, run_config=run_config, **kwargs
+                )
 
     def run_sync(
         self,
         agent: Agent,
         input: str | list[TResponseInputItem] | RunState[TContext],
-        user_context: UserContext,
+        user: User,
         run_config: RunConfig | None = None,
         **kwargs,
     ) -> RunResult:
-        """Run the OpenAI agent synchronously"""
+        """Run the OpenAI agent synchronously inside a User scope."""
         self._setup_observability()
-        wrapped_agent = wrap_openai_agent(agent, user_context, self.api_key)
-        with self._propagate(user_context, agent.name):
-            return Runner.run_sync(
-                wrapped_agent, input, run_config=run_config, **kwargs
-            )
+        wrapped_agent = wrap_openai_agent(agent, api_key=self.api_key)
+        with user.sync_scope():
+            with self._propagate(user, agent.name):
+                return Runner.run_sync(
+                    wrapped_agent, input, run_config=run_config, **kwargs
+                )
 
     def run_streamed(
         self,
         agent: Agent,
         input: str | list[TResponseInputItem] | RunState[TContext],
-        user_context: UserContext,
+        user: User,
         run_config: RunConfig | None = None,
         **kwargs,
     ) -> RunResultStreaming:
-        """Run the OpenAI agent streamed asynchronously"""
-        self._setup_observability()
-        wrapped_agent = wrap_openai_agent(agent, user_context, self.api_key)
+        """Run the OpenAI agent streamed asynchronously inside a User scope.
 
-        with self._propagate(user_context, agent.name):
+        ``Runner.run_streamed`` returns synchronously — it builds the run
+        state and hands back a ``RunResultStreaming`` whose ``stream_events``
+        async iterator is where tools actually run. The User scope is only
+        needed during iteration, so it's opened inside the wrapped iterator;
+        Langfuse propagation, in contrast, must be live for the setup call
+        so the trace span attaches correctly.
+        """
+        self._setup_observability()
+        wrapped_agent = wrap_openai_agent(agent, api_key=self.api_key)
+
+        with self._propagate(user, agent.name):
             result = Runner.run_streamed(
                 wrapped_agent, input, run_config=run_config, **kwargs
             )
 
-        # Runner.run_streamed returns synchronously: wrap the iterator so propagation is
-        # re-entered for the lifetime of the stream.
         original_stream_events = result.stream_events
 
-        async def _stream_events_with_propagation():
-            with self._propagate(user_context, agent.name):
-                async for event in original_stream_events():
-                    yield event
+        async def _stream_events_with_scope():
+            async with user:
+                with self._propagate(user, agent.name):
+                    async for event in original_stream_events():
+                        yield event
 
-        result.stream_events = _stream_events_with_propagation
+        result.stream_events = _stream_events_with_scope
         return result
