@@ -1,10 +1,10 @@
-"""Tests for the PolicyEnforcer-based GuardedTool LangChain wrapper.
+"""Tests for the :class:`GuardedTool` LangChain adapter.
 
-These cover the new path added in step 1 of the GuardedTool refactor —
-``fortify/adapters/langchain/tools.py::GuardedTool``. The legacy in-place
-``wrap_tool`` / ``ToolDeniedError`` machinery in the same module is tested
-separately in ``test_tools.py`` and remains untouched until step 4 of the
-migration.
+``GuardedTool`` is the BaseTool-subclass path used by
+:meth:`FortifyAgent.enforce_policy`. The sibling in-place
+:func:`install_enforcer_on_tool` (used by ``wrap_langchain_agent`` to
+retrofit pre-built ``CompiledStateGraph`` instances) is covered in
+``test_tools.py``.
 """
 
 from __future__ import annotations

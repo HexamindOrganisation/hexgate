@@ -1,144 +1,40 @@
+"""LangChain adapter for :class:`~fortify.security.enforcer.PolicyEnforcer`.
+
+Two ways to install enforcement on a LangChain tool live here:
+
+* :class:`GuardedTool` — wraps a :class:`BaseTool` in a new ``BaseTool``
+  subclass. Used by :meth:`FortifyAgent.enforce_policy`, which controls
+  its own graph and can swap tools by rebuilding.
+
+* :func:`install_enforcer_on_tool` — mutates a ``StructuredTool``'s
+  ``func`` / ``coroutine`` callables in place. Used by
+  :func:`wrap_langchain_agent` to retrofit a pre-built
+  ``CompiledStateGraph`` whose tool references can't be replaced.
+
+Both paths consult the same :class:`PolicyEnforcer`, render
+:class:`Decision` failures the same way, and accept the same optional
+``approval_handler`` for inline ``NEEDS_APPROVAL`` resolution.
+"""
+
 from __future__ import annotations
 
 import functools
 from collections.abc import Awaitable, Callable
-from contextlib import contextmanager
-from contextvars import ContextVar
 from inspect import isawaitable
-from typing import Any, Iterator, Union
+from typing import Any, Union
 
-from langchain_core.tools import BaseTool, ToolException
+from langchain_core.tools import BaseTool
 from langchain_core.tools.structured import StructuredTool
 from pydantic import ConfigDict
 
-from fortify.security import (
-    AgentPolicy,
-    ApprovalRequiredError,
-    PolicyDeniedError,
-    authorize_tool_call,
-)
 from fortify.security.decision import Decision, DecisionOutcome
 from fortify.security.enforcer import PolicyEnforcer
 from fortify.tools.decorators import TOOL_METADATA_ATTR
 
 
-_active_policy: ContextVar[AgentPolicy | None] = ContextVar(
-    "fortify_active_policy", default=None
-)
-
-_FORTIFY_WRAPPED_ATTR = "_fortify_wrapped"
-
-
-@contextmanager
-def active_policy(policy: AgentPolicy) -> Iterator[None]:
-    """Bind `policy` for the current async/thread context.
-
-    Tool gates installed by `wrap_tool` consult this contextvar at call
-    time, so callers must enter this context manager before invoking the
-    agent. `ContextVar` is per-task, so concurrent invocations for
-    different users do not see each other's policies.
-    """
-    token = _active_policy.set(policy)
-    try:
-        yield
-    finally:
-        _active_policy.reset(token)
-
-
-class ToolDeniedError(ToolException):
-    """Raised when a tool call is blocked by the `AgentPolicy`.
-
-    Inherits from `ToolException` so that `BaseTool.run` catches it
-    (when `handle_tool_error=True` on the tool) and turns the denial
-    message into tool output content, rather than letting it bubble up
-    and abort the graph.
-    """
-
-    def __init__(self, tool_name: str, reason: str | None = None) -> None:
-        self.tool_name = tool_name
-        suffix = f" ({reason})" if reason else ""
-        message = (
-            f"Tool '{tool_name}' is denied by the agent policy {suffix}. "
-            "The tool was not executed."
-        )
-        super().__init__(message)
-
-
-def wrap_tool(tool: BaseTool) -> BaseTool:
-    """Install a contextvar-driven policy gate on `tool` in place.
-
-    Returns the same object so call sites can keep chaining. Idempotent:
-    a tool that has already been wrapped is returned untouched.
-    """
-    if getattr(tool, _FORTIFY_WRAPPED_ATTR, False):
-        return tool
-
-    name = tool.name
-    original_func = getattr(tool, "func", None)
-    original_coroutine = getattr(tool, "coroutine", None)
-
-    if original_func is None and original_coroutine is None:
-        raise TypeError(
-            f"Cannot install policy on tool {name!r}: it is a "
-            f"{type(tool).__name__} without `func`/`coroutine` attributes. "
-            "In-place wrapping only supports StructuredTool-style tools."
-        )
-
-    if original_func is not None:
-
-        @functools.wraps(original_func)
-        def guarded_func(*args: Any, **kwargs: Any) -> Any:
-            policy = _active_policy.get()
-            if policy is None:
-                raise ToolDeniedError(name, "no active Fortify policy")
-            try:
-                authorize_tool_call(policy, name, kwargs)
-            except (PolicyDeniedError, ApprovalRequiredError):
-                raise ToolDeniedError(name)
-            return original_func(*args, **kwargs)
-
-        tool.func = guarded_func
-
-    if original_coroutine is not None:
-
-        @functools.wraps(original_coroutine)
-        async def guarded_coroutine(*args: Any, **kwargs: Any) -> Any:
-            policy = _active_policy.get()
-            if policy is None:
-                raise ToolDeniedError(name, "no active Fortify policy")
-            try:
-                authorize_tool_call(policy, name, kwargs)
-            except (PolicyDeniedError, ApprovalRequiredError):
-                raise ToolDeniedError(name)
-            return await original_coroutine(*args, **kwargs)
-
-        tool.coroutine = guarded_coroutine
-
-    tool.handle_tool_error = True
-    setattr(tool, _FORTIFY_WRAPPED_ATTR, True)
-    return tool
-
-
-def wrap_tools(tools: list[BaseTool]) -> list[BaseTool]:
-    """Install policy gates on `tools` in place, returning the same list."""
-    for t in tools:
-        wrap_tool(t)
-    return tools
-
-
-# ---------------------------------------------------------------------------
-# GuardedTool — PolicyEnforcer-based wrapper (the new path).
-#
-# Coexists with the legacy in-place ``wrap_tool`` / ``ToolDeniedError`` above
-# during the migration. Step 1 of the refactor: this class is reachable but
-# not wired into any production call site yet. ``AgentGraph.enforce_policy``
-# and ``FortifyLangchainAgent`` still use the legacy machinery; they get
-# switched over in later steps.
-# ---------------------------------------------------------------------------
-
 # Optional adapter-level callback for resolving NEEDS_APPROVAL decisions.
-# ``bool`` shorthand: True = always approve, False = always deny — matches the
-# CLI's --approval-mode=auto-approve / auto-deny semantics.
+# ``bool`` shorthand: True = always approve, False = always deny — matches
+# the CLI's --approval-mode=auto-approve / auto-deny semantics.
 ApprovalHandler = Union[
     Callable[[Decision], "bool | Awaitable[bool]"],
     bool,
@@ -146,11 +42,36 @@ ApprovalHandler = Union[
 
 
 def _copy_tool_metadata(source: Any, target: Any) -> Any:
-    """Copy fortify-specific tool metadata (e.g. tracing labels) onto the wrapper."""
+    """Copy fortify-specific tool metadata (e.g. tracing labels) onto a wrapper."""
     metadata = getattr(source, TOOL_METADATA_ATTR, None)
     if metadata is not None:
         setattr(target, TOOL_METADATA_ATTR, metadata)
     return target
+
+
+def _resolve_approval_sync(handler: ApprovalHandler, decision: Decision) -> bool:
+    """Resolve a NEEDS_APPROVAL decision against ``handler`` in a sync caller."""
+    if isinstance(handler, bool):
+        return handler
+    result = handler(decision)
+    if isawaitable(result):
+        raise RuntimeError(
+            "approval_handler returned a coroutine; sync tool invocation cannot "
+            "await it — use ainvoke/astream/astream_events"
+        )
+    return bool(result)
+
+
+async def _resolve_approval_async(
+    handler: ApprovalHandler, decision: Decision
+) -> bool:
+    """Resolve a NEEDS_APPROVAL decision against ``handler`` in an async caller."""
+    if isinstance(handler, bool):
+        return handler
+    result = handler(decision)
+    if isawaitable(result):
+        result = await result
+    return bool(result)
 
 
 class GuardedTool(BaseTool):
@@ -216,7 +137,7 @@ class GuardedTool(BaseTool):
         if (
             decision.outcome is DecisionOutcome.NEEDS_APPROVAL
             and self.approval_handler is not None
-            and await self._resolve_approval_async(decision)
+            and await _resolve_approval_async(self.approval_handler, decision)
         ):
             return await self._invoke_wrapped_async(*args, **kwargs)
         return {"ok": False, "error": decision.as_error_payload()}
@@ -228,29 +149,10 @@ class GuardedTool(BaseTool):
         if (
             decision.outcome is DecisionOutcome.NEEDS_APPROVAL
             and self.approval_handler is not None
-            and self._resolve_approval_sync(decision)
+            and _resolve_approval_sync(self.approval_handler, decision)
         ):
             return self._invoke_wrapped_sync(*args, **kwargs)
         return {"ok": False, "error": decision.as_error_payload()}
-
-    async def _resolve_approval_async(self, decision: Decision) -> bool:
-        if isinstance(self.approval_handler, bool):
-            return self.approval_handler
-        result = self.approval_handler(decision)
-        if isawaitable(result):
-            result = await result
-        return bool(result)
-
-    def _resolve_approval_sync(self, decision: Decision) -> bool:
-        if isinstance(self.approval_handler, bool):
-            return self.approval_handler
-        result = self.approval_handler(decision)
-        if isawaitable(result):
-            raise RuntimeError(
-                "approval_handler returned a coroutine; sync tool invocation "
-                "cannot await it — use ainvoke/astream_events"
-            )
-        return bool(result)
 
     async def _invoke_wrapped_async(self, *args: Any, **kwargs: Any) -> Any:
         """Call the wrapped tool's implementation without re-entering instrumentation."""
@@ -268,3 +170,105 @@ class GuardedTool(BaseTool):
         ):
             return self.wrapped_tool.func(*args, **kwargs)
         return self.wrapped_tool._run(*args, **kwargs)
+
+
+# ---------------------------------------------------------------------------
+# In-place installer for retrofitting existing CompiledStateGraph tools.
+# ---------------------------------------------------------------------------
+
+_ORIGINAL_FUNC_ATTR = "_fortify_original_func"
+_ORIGINAL_COROUTINE_ATTR = "_fortify_original_coroutine"
+_INSTALLED_ATTR = "_fortify_enforcer_installed"
+
+
+def install_enforcer_on_tool(
+    tool: BaseTool,
+    *,
+    enforcer: PolicyEnforcer,
+    approval_handler: ApprovalHandler | None = None,
+) -> BaseTool:
+    """Install :class:`PolicyEnforcer` gating on ``tool`` in place.
+
+    Mirrors :class:`GuardedTool` semantics — call the enforcer, render
+    the :class:`Decision` as a structured error on non-allow — but
+    mutates the underlying ``StructuredTool``'s ``func`` and
+    ``coroutine`` callables rather than constructing a new BaseTool.
+    Use when the tool is already bound to a LangGraph
+    ``CompiledStateGraph`` and cannot be replaced.
+
+    Idempotent: re-installing on an already-installed tool restores the
+    captured originals first so the new enforcer + handler take effect
+    without stacking gates.
+    """
+    name = tool.name
+    original_func: Callable[..., Any] | None = getattr(tool, _ORIGINAL_FUNC_ATTR, None)
+    if original_func is None:
+        original_func = getattr(tool, "func", None)
+    original_coroutine: Callable[..., Awaitable[Any]] | None = getattr(
+        tool, _ORIGINAL_COROUTINE_ATTR, None
+    )
+    if original_coroutine is None:
+        original_coroutine = getattr(tool, "coroutine", None)
+
+    if original_func is None and original_coroutine is None:
+        raise TypeError(
+            f"Cannot install policy on tool {name!r}: it is a "
+            f"{type(tool).__name__} without `func`/`coroutine` attributes. "
+            "In-place wrapping only supports StructuredTool-style tools."
+        )
+
+    if original_func is not None:
+        captured_func = original_func
+
+        @functools.wraps(captured_func)
+        def guarded_func(*args: Any, **kwargs: Any) -> Any:
+            decision = enforcer.decide(name, kwargs)
+            if decision.allowed:
+                return captured_func(*args, **kwargs)
+            if (
+                decision.outcome is DecisionOutcome.NEEDS_APPROVAL
+                and approval_handler is not None
+                and _resolve_approval_sync(approval_handler, decision)
+            ):
+                return captured_func(*args, **kwargs)
+            return {"ok": False, "error": decision.as_error_payload()}
+
+        setattr(tool, _ORIGINAL_FUNC_ATTR, captured_func)
+        tool.func = guarded_func
+
+    if original_coroutine is not None:
+        captured_coroutine = original_coroutine
+
+        @functools.wraps(captured_coroutine)
+        async def guarded_coroutine(*args: Any, **kwargs: Any) -> Any:
+            decision = enforcer.decide(name, kwargs)
+            if decision.allowed:
+                return await captured_coroutine(*args, **kwargs)
+            if (
+                decision.outcome is DecisionOutcome.NEEDS_APPROVAL
+                and approval_handler is not None
+                and await _resolve_approval_async(approval_handler, decision)
+            ):
+                return await captured_coroutine(*args, **kwargs)
+            return {"ok": False, "error": decision.as_error_payload()}
+
+        setattr(tool, _ORIGINAL_COROUTINE_ATTR, captured_coroutine)
+        tool.coroutine = guarded_coroutine
+
+    tool.handle_tool_error = True
+    setattr(tool, _INSTALLED_ATTR, True)
+    return tool
+
+
+def install_enforcer_on_tools(
+    tools: list[BaseTool],
+    *,
+    enforcer: PolicyEnforcer,
+    approval_handler: ApprovalHandler | None = None,
+) -> list[BaseTool]:
+    """Install enforcement on every StructuredTool-style tool in place."""
+    for t in tools:
+        install_enforcer_on_tool(
+            t, enforcer=enforcer, approval_handler=approval_handler
+        )
+    return tools

@@ -4,7 +4,7 @@ from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI
 from langgraph.prebuilt import create_react_agent
 
-from fortify.runtime import UserContext
+from fortify.runtime import User
 from fortify.adapters.langchain import wrap_langchain_agent
 
 
@@ -37,9 +37,9 @@ async def main():
 
     result = await agent.ainvoke(
         {"messages": [{"role": "user", "content": "What is the weather in Tokyo?"}]},
-        user_context=UserContext(
+        user=User(
             user_id="langchain_user_1",
-            user_role="member",
+            role="member",
             session_id="langchain_session_1",
         ),
     )
