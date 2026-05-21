@@ -24,7 +24,13 @@ class DecisionOutcome(str, Enum):
 
 @dataclass(frozen=True, slots=True)
 class Decision:
-    """One policy decision for a proposed tool invocation."""
+    """One policy decision for a proposed tool invocation.
+
+    ``arguments`` is the proposed tool input the enforcer evaluated. It is
+    deliberately not included in :meth:`as_error_payload` — the LLM already
+    sent these values — but adapters expose it to host-side approval
+    handlers so the human approving the call can see what they're approving.
+    """
 
     outcome: DecisionOutcome
     tool_name: str
@@ -32,6 +38,7 @@ class Decision:
     reason: str = ""
     error_type: str | None = None
     hint: dict[str, Any] | None = None
+    arguments: dict[str, Any] | None = None
 
     @property
     def allowed(self) -> bool:

@@ -377,7 +377,12 @@ class FortifyAgent:
             rebuilt.fortify_client = client
         return rebuilt
 
-    def enforce_policy(self, policy: object) -> Self:
+    def enforce_policy(
+        self,
+        policy: object,
+        *,
+        approval_handler: Any = None,
+    ) -> Self:
         """Return a new agent runtime with Gate 1 policy enforcement applied.
 
         Accepts a path to a single YAML, a path to a ``policies/`` directory
@@ -387,9 +392,13 @@ class FortifyAgent:
         Tools are wrapped with the :class:`~fortify.adapters.langchain.tools.GuardedTool`
         backed by :class:`~fortify.security.enforcer.PolicyEnforcer`. Role
         resolution happens at call time from the active
-        :class:`~fortify.runtime.User`; ``approval_required`` outcomes render
-        as structured tool errors unless a separate
-        :meth:`with_approval_handler` chain (legacy path) is applied.
+        :class:`~fortify.runtime.User`.
+
+        ``approval_handler`` resolves ``NEEDS_APPROVAL`` decisions inline. It
+        may be a ``bool`` shorthand (``True`` = auto-approve, ``False`` =
+        auto-deny) or a callable ``(Decision) -> bool | Awaitable[bool]``.
+        When ``None`` (the default), ``approval_required`` outcomes render as
+        structured tool errors and the underlying tool is not invoked.
         """
         from langchain_core.tools import BaseTool
 
@@ -408,7 +417,13 @@ class FortifyAgent:
         wrapped: list[ToolSpec] = []
         for tool_spec in self.tools:
             if isinstance(tool_spec, BaseTool):
-                wrapped.append(GuardedTool.wrap(tool_spec, enforcer=enforcer))
+                wrapped.append(
+                    GuardedTool.wrap(
+                        tool_spec,
+                        enforcer=enforcer,
+                        approval_handler=approval_handler,
+                    )
+                )
             else:
                 wrapped.append(tool_spec)
         return self.with_tools(wrapped)

@@ -298,14 +298,19 @@ def wrap_tools_with_policy(
 def enforce_policy(
     agent: AgentGraph,
     policy: str | AgentPolicy | PolicySet | None,
+    *,
+    approval_handler: Any = None,
 ) -> AgentGraph:
     """Return an agent runtime with Gate 1 policy enforcement applied.
 
     ``policy`` may be a path to a single YAML file (legacy), a directory of
     role policies (the new shape), an :class:`AgentPolicy` model, or a
     pre-built :class:`PolicySet`.
+
+    ``approval_handler`` resolves ``NEEDS_APPROVAL`` outcomes inline at the
+    adapter level — see :meth:`AgentGraph.enforce_policy` for the contract.
     """
-    return agent.enforce_policy(policy)
+    return agent.enforce_policy(policy, approval_handler=approval_handler)
 
 
 def wrap_tools_with_approval_handler(

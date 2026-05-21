@@ -14,7 +14,6 @@ from rich.panel import Panel
 from rich.spinner import Spinner
 from rich.text import Text
 
-from fortify import with_approval_handler
 from fortify.agents.factory import stream_agent
 from fortify.agents.loader import list_available_agents, resolve_agent_source
 from fortify.bootstrap import bootstrap
@@ -277,12 +276,7 @@ def main(args: argparse.Namespace) -> int:
         base_dir=base_dir,
         model=args.model,
         local_only=True,
-    )
-
-    runtime.agent = with_approval_handler(
-        runtime.agent,
-        build_approval_handler(console, args.approval_mode),
-        context_provider=lambda: {"surface": "cli", "agent_name": runtime.agent_name},
+        approval_handler=build_approval_handler(console, args.approval_mode),
     )
     asyncio.run(_chat_loop(console, runtime))
     return 0

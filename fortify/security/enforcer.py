@@ -48,9 +48,10 @@ class PolicyEnforcer:
         user = get_current_user()
         role = user.role if user is not None else None
         policy = self.policy_set.policy_for(role)
+        args_snapshot = dict(arguments)
 
         try:
-            authorize_tool_call(policy, tool_name, dict(arguments))
+            authorize_tool_call(policy, tool_name, args_snapshot)
         except PolicyDeniedError as exc:
             return Decision(
                 outcome=DecisionOutcome.DENY,
@@ -59,6 +60,7 @@ class PolicyEnforcer:
                 reason=str(exc),
                 error_type="policy_denied",
                 hint=_hint_for(policy, tool_name),
+                arguments=args_snapshot,
             )
         except ApprovalRequiredError as exc:
             return Decision(
@@ -67,12 +69,14 @@ class PolicyEnforcer:
                 role=role,
                 reason=str(exc),
                 error_type="approval_required",
+                arguments=args_snapshot,
             )
 
         return Decision(
             outcome=DecisionOutcome.ALLOW,
             tool_name=tool_name,
             role=role,
+            arguments=args_snapshot,
         )
 
 

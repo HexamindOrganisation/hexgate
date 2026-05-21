@@ -309,6 +309,66 @@ async def test_enforce_policy_approval_required_defaults_to_graceful_block(
 
 
 @pytest.mark.asyncio
+async def test_enforce_policy_with_approval_handler_allows_approval_required_tool(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``enforce_policy(approval_handler=...)`` resolves NEEDS_APPROVAL inline.
+
+    The new path threads the approval handler down into the GuardedTool at
+    wrap time. A handler that returns True (bool shorthand or callable)
+    lets the proposed tool call run; a callable that returns False renders
+    the same structured error as the no-handler path, but exposes the
+    Decision (including ``arguments``) to the host code.
+    """
+    from fortify.security.decision import Decision
+
+    @tool
+    async def sample_tool(value: str) -> str:
+        """Return a transformed string."""
+        return value.upper()
+
+    monkeypatch.setattr(factory, "create_langchain_agent", lambda **_kwargs: object())
+    monkeypatch.setattr(factory, "get_langfuse_handler", lambda **_kwargs: "handler")
+
+    agent, _handler = factory.create_agent(
+        model="openai:gpt-5.4",
+        tools=[sample_tool],
+        system_prompt="You are a test assistant.",
+        name="sample-agent",
+    )
+
+    policy = AgentPolicy.model_validate(
+        {
+            "default_policy": {"mode": "deny"},
+            "tools": {"sample_tool": {"mode": "approval_required"}},
+        }
+    )
+
+    # True shorthand → always approve.
+    auto_approved = enforce_policy(agent, policy, approval_handler=True)
+    assert await auto_approved.tools[0].ainvoke({"value": "hello"}) == "HELLO"
+
+    # False shorthand → always deny; structured error is rendered.
+    auto_denied = enforce_policy(agent, policy, approval_handler=False)
+    denied_result = await auto_denied.tools[0].ainvoke({"value": "hello"})
+    assert denied_result["ok"] is False
+    assert denied_result["error"]["type"] == "approval_required"
+
+    # Callable handler → receives the Decision (including arguments) and decides.
+    seen: list[Decision] = []
+
+    async def approval_handler(decision: Decision) -> bool:
+        seen.append(decision)
+        return True
+
+    handled = enforce_policy(agent, policy, approval_handler=approval_handler)
+    assert await handled.tools[0].ainvoke({"value": "ciao"}) == "CIAO"
+    assert len(seen) == 1
+    assert seen[0].tool_name == "sample_tool"
+    assert seen[0].arguments == {"value": "ciao"}
+
+
+@pytest.mark.asyncio
 async def test_with_before_action_receives_action_and_context(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

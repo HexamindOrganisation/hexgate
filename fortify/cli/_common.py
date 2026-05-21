@@ -6,7 +6,7 @@ import argparse
 import importlib.util
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from rich.console import Console, Group
 from rich.panel import Panel
@@ -15,6 +15,7 @@ from rich.text import Text
 from fortify.agents.factory import AgentGraph, CallbackHandler
 from fortify.agents.loader import load_agent, resolve_agent_source
 from fortify.config.settings import Settings
+from fortify.security.decision import Decision
 from fortify.tools import fetch, web_search
 
 ApprovalMode = Literal["ask", "auto-approve", "auto-deny"]
@@ -39,6 +40,7 @@ def build_runtime(
     base_dir: Path,
     model: str | None,
     local_only: bool = False,
+    approval_handler: Any = None,
 ) -> AgentRuntime:
     """Create the runtime shared by ``fortify chat`` and ``fortify serve``.
 
@@ -47,6 +49,9 @@ def build_runtime(
     chat uses, since it doesn't need cloud-fetched policy or a serve
     tunnel. ``fortify serve`` passes ``local_only=False`` so policy edits
     in the dashboard land at the next turn boundary.
+
+    ``approval_handler`` is threaded into :func:`load_agent` so each
+    policy-wrapped tool can resolve ``NEEDS_APPROVAL`` decisions inline.
     """
     import os
 
@@ -60,6 +65,7 @@ def build_runtime(
         tags=["fortify", settings.search_engine, resolved_model, agent_name],
         extra_tools={tool.name: tool for tool in tools},
         local_only=local_only,
+        approval_handler=approval_handler,
     )
     runtime_tools = list(getattr(agent, "tools", [])) + list(tools)
     tools_by_name = {
@@ -100,29 +106,38 @@ def _truncate_approval_value(value: object, *, limit: int = 80) -> str:
     return f"{text[: limit - 3]}..."
 
 
-def prompt_for_approval(
-    console: Console,
-    action: dict[str, object],
-) -> bool:
-    """Ask the user to approve one tool invocation in the terminal."""
-    tool_name = str(action.get("tool_name", "tool"))
-    arguments = action.get("arguments", {})
+def prompt_for_approval(console: Console, decision: Decision) -> bool:
+    """Ask the user to approve one tool invocation in the terminal.
+
+    Reads the proposed tool name, arguments, and policy role straight off
+    the :class:`Decision`. The arguments come from
+    :attr:`Decision.arguments` (set by :meth:`PolicyEnforcer.decide`) — the
+    LLM-facing :meth:`Decision.as_error_payload` omits them, but the human
+    approving the call needs them to make an informed choice.
+    """
+    arguments = decision.arguments or {}
+
+    header = Text(
+        f"Approval required for {decision.tool_name}", style="bold yellow"
+    )
+    role_line = (
+        [Text(f"role: {decision.role}", style="dim")]
+        if decision.role is not None
+        else []
+    )
 
     console.print()
     console.print(
         Panel(
             Group(
-                Text(f"Approval required for {tool_name}", style="bold yellow"),
+                header,
+                *role_line,
                 *(
                     Text(
                         f"{key}: {_truncate_approval_value(value)}",
                         style="white",
                     )
-                    for key, value in (
-                        arguments.items()
-                        if isinstance(arguments, dict)
-                        else [("arguments", arguments)]
-                    )
+                    for key, value in arguments.items()
                 ),
                 Text("Type y to approve or n to deny, then press Enter.", style="dim"),
             ),
@@ -137,16 +152,19 @@ def prompt_for_approval(
 
 
 def build_approval_handler(console: Console, mode: ApprovalMode):
-    """Return the CLI approval handler for the selected mode."""
+    """Return the CLI approval handler for the selected mode.
+
+    Return shape matches the new :class:`Decision`-based contract: either
+    a ``bool`` shorthand (auto-approve / auto-deny) or a callable
+    ``(Decision) -> bool`` that prompts the user.
+    """
     if mode == "auto-approve":
         return True
     if mode == "auto-deny":
         return False
 
-    def approval_handler(
-        action: dict[str, object], _context: dict[str, object] | None
-    ) -> bool:
-        return prompt_for_approval(console, action)
+    def approval_handler(decision: Decision) -> bool:
+        return prompt_for_approval(console, decision)
 
     return approval_handler
 
