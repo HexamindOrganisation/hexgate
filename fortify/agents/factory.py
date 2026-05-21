@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any, Self, TypeAlias
 
@@ -39,15 +39,6 @@ LangChainAgentGraph: TypeAlias = CompiledStateGraph
 ToolSpec: TypeAlias = BaseTool | Callable[..., Any] | dict[str, Any]
 AgentState: TypeAlias = dict[str, Any]
 AgentInput: TypeAlias = str | Sequence[object] | Mapping[str, object] | BaseModel
-ActionPayload: TypeAlias = dict[str, Any]
-ActionContext: TypeAlias = dict[str, Any] | None
-BeforeActionHook: TypeAlias = Callable[
-    [ActionPayload, ActionContext], object | Awaitable[object]
-]
-ApprovalHandler: TypeAlias = (
-    bool | Callable[[ActionPayload, ActionContext], bool | Awaitable[bool]]
-)
-ContextProvider: TypeAlias = Callable[[], ActionContext]
 DEFAULT_SYSTEM_PROMPT = Path(__file__).parent / "prompts" / "agent_system.md"
 
 
@@ -368,10 +359,9 @@ class FortifyAgent:
             workspace=self.workspace,
         )
         # Propagate the optional fortify_client attribute that load_fortify_agent
-        # attaches to the cloud-loaded runtime — every `.with_*` transform
-        # funnels through here, so this keeps the client reachable for lazy
-        # user-scope attenuation after enforce_policy / with_approval_handler /
-        # with_before_action chains.
+        # attaches to the cloud-loaded runtime — enforce_policy funnels through
+        # here, so this keeps the client reachable for lazy user-scope
+        # attenuation after the rebuild.
         client = getattr(self, "fortify_client", None)
         if client is not None:
             rebuilt.fortify_client = client
@@ -427,42 +417,6 @@ class FortifyAgent:
             else:
                 wrapped.append(tool_spec)
         return self.with_tools(wrapped)
-
-    def with_before_action(
-        self,
-        before_action: BeforeActionHook,
-        *,
-        context_provider: ContextProvider | None = None,
-    ) -> Self:
-        """Return a new agent runtime with a pre-tool Gate 2 hook applied."""
-        from fortify.agents.security import wrap_tools_with_before_action
-
-        return self.with_tools(
-            wrap_tools_with_before_action(
-                self.tools,
-                before_action,
-                context_provider=context_provider,
-                agent_name=self.name,
-            )
-        )
-
-    def with_approval_handler(
-        self,
-        approval_handler: ApprovalHandler,
-        *,
-        context_provider: ContextProvider | None = None,
-    ) -> Self:
-        """Return a new agent runtime with a Gate 1 approval resolver."""
-        from fortify.agents.security import wrap_tools_with_approval_handler
-
-        return self.with_tools(
-            wrap_tools_with_approval_handler(
-                self.tools,
-                approval_handler,
-                context_provider=context_provider,
-                agent_name=self.name,
-            )
-        )
 
 
 AgentGraph: TypeAlias = FortifyAgent

@@ -6,11 +6,7 @@ from fortify.agents.factory import (
     stream_agent,
     stream_agent_raw,
 )
-from fortify.agents.security import (
-    enforce_policy,
-    with_approval_handler,
-    with_before_action,
-)
+from fortify.agents.security import enforce_policy
 from fortify.agents.loader import (
     clear_registered_agents,
     list_available_agents,
@@ -75,8 +71,6 @@ __all__ = [
     "stream_agent",
     "stream_agent_raw",
     "unregister_agent",
-    "with_approval_handler",
-    "with_before_action",
     "web_search",
     "write_file",
 ]

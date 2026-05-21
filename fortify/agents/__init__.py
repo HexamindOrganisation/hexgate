@@ -27,11 +27,7 @@ from fortify.agents.loader import (
     unregister_agent,
 )
 from fortify.agents.models import AgentSpec
-from fortify.agents.security import (
-    enforce_policy,
-    with_approval_handler,
-    with_before_action,
-)
+from fortify.agents.security import enforce_policy
 
 __all__ = [
     "AgentSpec",
@@ -58,6 +54,4 @@ __all__ = [
     "stream_agent",
     "stream_agent_raw",
     "unregister_agent",
-    "with_approval_handler",
-    "with_before_action",
 ]
