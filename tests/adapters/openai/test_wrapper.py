@@ -53,9 +53,7 @@ def test_build_policy_set_returns_allow_for_each_tool() -> None:
 
 def test_build_policy_set_with_no_tools_returns_empty_tools_dict() -> None:
     """No tool names → no per-tool entries; default policy still applies."""
-    policy_set = build_policy_set(
-        api_key="k", agent_name="my-agent", tool_names=[]
-    )
+    policy_set = build_policy_set(api_key="k", agent_name="my-agent", tool_names=[])
 
     assert policy_set.policy_for(None).tools == {}
 
@@ -119,9 +117,7 @@ async def test_wrap_openai_agent_installs_policy_gates_on_clone(
             }
         )
 
-    monkeypatch.setattr(
-        "fortify.adapters.openai.wrapper.build_policy_set", fake_build
-    )
+    monkeypatch.setattr("fortify.adapters.openai.wrapper.build_policy_set", fake_build)
 
     original = _make_agent()
 

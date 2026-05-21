@@ -29,9 +29,7 @@ from fortify.security.policy_set import DEFAULT_ROLE_NAME
 
 def _policy_set(spec: dict[str, Any]) -> PolicySet:
     """Build a one-role PolicySet from a flat AgentPolicy spec."""
-    return PolicySet(
-        {DEFAULT_ROLE_NAME: AgentPolicy.model_validate(spec)}
-    )
+    return PolicySet({DEFAULT_ROLE_NAME: AgentPolicy.model_validate(spec)})
 
 
 def _enforcer(spec: dict[str, Any]) -> PolicyEnforcer:

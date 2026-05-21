@@ -149,35 +149,9 @@ async def test_sync_tool_denied_raises_model_retry_with_marker() -> None:
 
 
 @pytest.mark.asyncio
-async def test_sync_tool_needs_approval_without_handler_raises_marker() -> None:
+async def test_sync_tool_needs_approval_raises_marker() -> None:
+    """NEEDS_APPROVAL always raises ModelRetry with the approval_required marker."""
     wrapped = wrap_tool(_make_sync_tool(), _approval_enforcer())
-
-    with pytest.raises(ModelRetry, match="approval_required"):
-        await wrapped.function_schema.call({"text": "hi"}, None)
-
-
-@pytest.mark.asyncio
-async def test_sync_tool_needs_approval_with_true_bool_handler_invokes() -> None:
-    wrapped = wrap_tool(
-        _make_sync_tool(), _approval_enforcer(), approval_handler=True
-    )
-
-    result = await wrapped.function_schema.call({"text": "hi"}, None)
-
-    assert result == "echo:hi"
-
-
-@pytest.mark.asyncio
-async def test_sync_tool_needs_approval_with_async_callable_handler_is_awaited() -> (
-    None
-):
-    async def approve(decision: Decision) -> bool:
-        assert decision.tool_name == "echo"
-        return False
-
-    wrapped = wrap_tool(
-        _make_sync_tool(), _approval_enforcer(), approval_handler=approve
-    )
 
     with pytest.raises(ModelRetry, match="approval_required"):
         await wrapped.function_schema.call({"text": "hi"}, None)

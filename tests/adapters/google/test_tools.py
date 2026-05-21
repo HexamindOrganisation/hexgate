@@ -192,51 +192,14 @@ async def test_deny_renders_structured_marker() -> None:
 
 
 @pytest.mark.asyncio
-async def test_needs_approval_without_handler_renders_marker() -> None:
-    """approval_required without a handler renders the marker, tool never runs."""
+async def test_needs_approval_renders_marker_and_skips_tool() -> None:
+    """NEEDS_APPROVAL always renders the marker — the tool never runs."""
     wrapped = wrap_tool(_make_function_tool(), _approval_enforcer())
 
     result = await wrapped.run_async(args={"text": "hi"}, tool_context=None)
 
     assert "approval_required" in result
     assert "policy_denied" not in result
-
-
-@pytest.mark.asyncio
-async def test_needs_approval_with_true_bool_handler_invokes() -> None:
-    wrapped = wrap_tool(
-        _make_function_tool(), _approval_enforcer(), approval_handler=True
-    )
-
-    result = await wrapped.run_async(args={"text": "hi"}, tool_context=None)
-
-    assert result == "echo:hi"
-
-
-@pytest.mark.asyncio
-async def test_needs_approval_with_false_bool_handler_renders_marker() -> None:
-    wrapped = wrap_tool(
-        _make_function_tool(), _approval_enforcer(), approval_handler=False
-    )
-
-    result = await wrapped.run_async(args={"text": "hi"}, tool_context=None)
-
-    assert "approval_required" in result
-
-
-@pytest.mark.asyncio
-async def test_needs_approval_with_async_callable_handler_is_awaited() -> None:
-    async def approve(decision: Decision) -> bool:
-        assert decision.tool_name == "echo"
-        return False
-
-    wrapped = wrap_tool(
-        _make_function_tool(), _approval_enforcer(), approval_handler=approve
-    )
-
-    result = await wrapped.run_async(args={"text": "hi"}, tool_context=None)
-
-    assert "approval_required" in result
 
 
 @pytest.mark.asyncio

@@ -126,9 +126,7 @@ async def test_wrap_google_agent_installs_enforcer_with_built_policy_set(
             }
         )
 
-    monkeypatch.setattr(
-        "fortify.adapters.google.wrapper.build_policy_set", fake_build
-    )
+    monkeypatch.setattr("fortify.adapters.google.wrapper.build_policy_set", fake_build)
 
     original = _make_agent()
     wrapped = wrap_google_agent(original, api_key="api-123")
@@ -193,9 +191,7 @@ def test_wrap_google_agent_passes_tool_names_for_callable_tools(
         captured["tool_names"] = list(tool_names)
         return build_policy_set(api_key, agent_name, tool_names)
 
-    monkeypatch.setattr(
-        "fortify.adapters.google.wrapper.build_policy_set", fake_build
-    )
+    monkeypatch.setattr("fortify.adapters.google.wrapper.build_policy_set", fake_build)
 
     wrap_google_agent(_make_agent(), api_key="k")
 

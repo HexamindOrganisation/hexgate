@@ -12,8 +12,7 @@ from __future__ import annotations
 
 import copy
 import functools
-from collections.abc import Awaitable, Callable
-from inspect import isawaitable
+from collections.abc import Callable
 from typing import Any, Union
 
 from google.adk.tools.base_tool import BaseTool
@@ -27,12 +26,6 @@ from fortify.security.enforcer import PolicyEnforcer
 ToolEntry = Union[BaseTool, Callable[..., Any]]
 
 
-ApprovalHandler = Union[
-    Callable[[Decision], "bool | Awaitable[bool]"],
-    bool,
-]
-
-
 def _render_decision(decision: Decision) -> str:
     """Format a non-allow :class:`Decision` as the LLM-facing tool result."""
     if decision.outcome is DecisionOutcome.NEEDS_APPROVAL:
@@ -44,18 +37,6 @@ def _render_decision(decision: Decision) -> str:
         f"[policy_denied] Tool '{decision.tool_name}' is denied by the agent "
         "policy. The tool was not executed."
     )
-
-
-async def _resolve_approval_async(
-    handler: ApprovalHandler, decision: Decision
-) -> bool:
-    """Resolve a NEEDS_APPROVAL decision against ``handler``."""
-    if isinstance(handler, bool):
-        return handler
-    result = handler(decision)
-    if isawaitable(result):
-        result = await result
-    return bool(result)
 
 
 def _normalize(tool: ToolEntry) -> BaseTool:
@@ -75,12 +56,7 @@ def _normalize(tool: ToolEntry) -> BaseTool:
     )
 
 
-def wrap_tool(
-    tool: ToolEntry,
-    enforcer: PolicyEnforcer,
-    *,
-    approval_handler: ApprovalHandler | None = None,
-) -> BaseTool:
+def wrap_tool(tool: ToolEntry, enforcer: PolicyEnforcer) -> BaseTool:
     """Return a policy-gated copy of ``tool``.
 
     The original tool is left untouched. The copy shares all fields with
@@ -99,12 +75,6 @@ def wrap_tool(
         decision = enforcer.decide(name, args or {})
         if decision.allowed:
             return await original_run_async(args=args, tool_context=tool_context)
-        if (
-            decision.outcome is DecisionOutcome.NEEDS_APPROVAL
-            and approval_handler is not None
-            and await _resolve_approval_async(approval_handler, decision)
-        ):
-            return await original_run_async(args=args, tool_context=tool_context)
         return _render_decision(decision)
 
     wrapped = copy.copy(base)
@@ -112,13 +82,6 @@ def wrap_tool(
     return wrapped
 
 
-def wrap_tools(
-    tools: list[ToolEntry],
-    enforcer: PolicyEnforcer,
-    *,
-    approval_handler: ApprovalHandler | None = None,
-) -> list[BaseTool]:
+def wrap_tools(tools: list[ToolEntry], enforcer: PolicyEnforcer) -> list[BaseTool]:
     """Return a new list of policy-gated copies of ``tools``."""
-    return [
-        wrap_tool(t, enforcer, approval_handler=approval_handler) for t in tools
-    ]
+    return [wrap_tool(t, enforcer) for t in tools]

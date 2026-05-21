@@ -1,10 +1,17 @@
 from fortify.cli.register.manifest import create_manifest
-from fortify.cli.register.models import AgentManifest, AgentFramework, InputProperty, InputSchema, ToolDefinition
+from fortify.cli.register.models import (
+    AgentManifest,
+    AgentFramework,
+    InputProperty,
+    InputSchema,
+    ToolDefinition,
+)
 from fortify.cli.register.fortify import create_fortify_manifest
 from fortify.cli.register.openai import create_openai_manifest
 from fortify.cli.register.google import create_google_manifest
 from fortify.cli.register.langchain import create_langchain_manifest
 from fortify.cli.register.pydantic_ai import create_pydantic_ai_manifest
+
 
 def test_agent_manifest_schema():
     """Test the schema of the agent manifest."""
@@ -18,6 +25,7 @@ def test_agent_manifest_schema():
     assert manifest.description == "A test agent"
     assert manifest.framework == AgentFramework.FORTIFY
     assert manifest.tools == []
+
 
 def test_openai_manifest_schema():
     """Test the schema of the OpenAI manifest."""
@@ -38,19 +46,21 @@ def test_openai_manifest_schema():
         name="test-agent",
         description="A test agent",
         framework=AgentFramework.OPENAI,
-        tools=[ToolDefinition(
-            name="example_tool",
-            description="A test tool.",
-            input_schema=InputSchema(
-                properties={
-                    "example_input": InputProperty(
-                        title="Example Input",
-                        type="string",
-                    ),
-                },
-                required=["example_input"],
-            ),
-        )],
+        tools=[
+            ToolDefinition(
+                name="example_tool",
+                description="A test tool.",
+                input_schema=InputSchema(
+                    properties={
+                        "example_input": InputProperty(
+                            title="Example Input",
+                            type="string",
+                        ),
+                    },
+                    required=["example_input"],
+                ),
+            )
+        ],
     )
     manifest = create_openai_manifest(agent, description="A test agent")
     assert isinstance(manifest, AgentManifest)
@@ -59,6 +69,7 @@ def test_openai_manifest_schema():
     manifest = create_manifest(agent, description="A test agent")
     assert isinstance(manifest, AgentManifest)
     assert manifest == expected_manifest
+
 
 def test_google_manifest_schema():
     """Test the schema of the Google ADK manifest."""
@@ -80,19 +91,21 @@ def test_google_manifest_schema():
         name="test_agent",
         description="A test agent",
         framework=AgentFramework.GOOGLE,
-        tools=[ToolDefinition(
-            name="example_tool",
-            description="A test tool.",
-            input_schema=InputSchema(
-                properties={
-                    "example_input": InputProperty(
-                        title="example_input",
-                        type="string",
-                    ),
-                },
-                required=["example_input"],
-            ),
-        )],
+        tools=[
+            ToolDefinition(
+                name="example_tool",
+                description="A test tool.",
+                input_schema=InputSchema(
+                    properties={
+                        "example_input": InputProperty(
+                            title="example_input",
+                            type="string",
+                        ),
+                    },
+                    required=["example_input"],
+                ),
+            )
+        ],
     )
     manifest = create_google_manifest(agent)
     assert isinstance(manifest, AgentManifest)
@@ -101,6 +114,7 @@ def test_google_manifest_schema():
     manifest = create_manifest(agent, description="A test agent")
     assert isinstance(manifest, AgentManifest)
     assert manifest == expected_manifest
+
 
 def test_pydantic_ai_manifest_schema():
     """Test the schema of the Pydantic AI manifest."""
@@ -118,19 +132,21 @@ def test_pydantic_ai_manifest_schema():
         name="test-agent",
         description="A test agent",
         framework=AgentFramework.PYDANTIC_AI,
-        tools=[ToolDefinition(
-            name="example_tool",
-            description="A test tool.",
-            input_schema=InputSchema(
-                properties={
-                    "example_input": InputProperty(
-                        title="example_input",
-                        type="string",
-                    ),
-                },
-                required=["example_input"],
-            ),
-        )],
+        tools=[
+            ToolDefinition(
+                name="example_tool",
+                description="A test tool.",
+                input_schema=InputSchema(
+                    properties={
+                        "example_input": InputProperty(
+                            title="example_input",
+                            type="string",
+                        ),
+                    },
+                    required=["example_input"],
+                ),
+            )
+        ],
     )
     manifest = create_pydantic_ai_manifest(agent)
     assert isinstance(manifest, AgentManifest)
@@ -139,6 +155,7 @@ def test_pydantic_ai_manifest_schema():
     manifest = create_manifest(agent, description="A test agent")
     assert isinstance(manifest, AgentManifest)
     assert manifest == expected_manifest
+
 
 def test_langchain_manifest_schema():
     """Test the schema of the LangChain manifest."""
@@ -160,19 +177,21 @@ def test_langchain_manifest_schema():
         name="test-agent",
         description="A test agent",
         framework=AgentFramework.LANGCHAIN,
-        tools=[ToolDefinition(
-            name="example_tool",
-            description="A test tool.",
-            input_schema=InputSchema(
-                properties={
-                    "example_input": InputProperty(
-                        title="Example Input",
-                        type="string",
-                    ),
-                },
-                required=["example_input"],
-            ),
-        )],
+        tools=[
+            ToolDefinition(
+                name="example_tool",
+                description="A test tool.",
+                input_schema=InputSchema(
+                    properties={
+                        "example_input": InputProperty(
+                            title="Example Input",
+                            type="string",
+                        ),
+                    },
+                    required=["example_input"],
+                ),
+            )
+        ],
     )
     manifest = create_langchain_manifest(
         graph,
@@ -185,6 +204,7 @@ def test_langchain_manifest_schema():
     manifest = create_manifest(graph, tools=[example_tool], description="A test agent")
     assert isinstance(manifest, AgentManifest)
     assert manifest == expected_manifest
+
 
 def test_fortify_manifest_schema():
     """Test the schema of the Fortify manifest (FortifyAgent from create_agent)."""
@@ -216,19 +236,21 @@ def test_fortify_manifest_schema():
         name="test-agent",
         description="A test agent",
         framework=AgentFramework.FORTIFY,
-        tools=[ToolDefinition(
-            name="example_tool",
-            description="A test tool.",
-            input_schema=InputSchema(
-                properties={
-                    "example_input": InputProperty(
-                        title="Example Input",
-                        type="string",
-                    ),
-                },
-                required=["example_input"],
-            ),
-        )],
+        tools=[
+            ToolDefinition(
+                name="example_tool",
+                description="A test tool.",
+                input_schema=InputSchema(
+                    properties={
+                        "example_input": InputProperty(
+                            title="Example Input",
+                            type="string",
+                        ),
+                    },
+                    required=["example_input"],
+                ),
+            )
+        ],
     )
     manifest = create_fortify_manifest(agent, description="A test agent")
     assert isinstance(manifest, AgentManifest)

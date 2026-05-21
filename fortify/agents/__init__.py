@@ -28,6 +28,7 @@ from fortify.agents.loader import (
     unregister_agent,
 )
 from fortify.agents.models import AgentSpec
+
 __all__ = [
     "AgentSpec",
     "clear_registered_agents",

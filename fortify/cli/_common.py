@@ -117,9 +117,7 @@ def prompt_for_approval(console: Console, decision: Decision) -> bool:
     """
     arguments = decision.arguments or {}
 
-    header = Text(
-        f"Approval required for {decision.tool_name}", style="bold yellow"
-    )
+    header = Text(f"Approval required for {decision.tool_name}", style="bold yellow")
     role_line = (
         [Text(f"role: {decision.role}", style="dim")]
         if decision.role is not None

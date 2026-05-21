@@ -12,9 +12,7 @@ from __future__ import annotations
 
 import copy
 import functools
-from collections.abc import Awaitable, Callable
-from inspect import isawaitable
-from typing import Any, Union
+from typing import Any
 
 from pydantic_ai import RunContext
 from pydantic_ai.exceptions import ModelRetry
@@ -22,12 +20,6 @@ from pydantic_ai.tools import Tool
 
 from fortify.security.decision import Decision, DecisionOutcome
 from fortify.security.enforcer import PolicyEnforcer
-
-
-ApprovalHandler = Union[
-    Callable[[Decision], "bool | Awaitable[bool]"],
-    bool,
-]
 
 
 def _render_decision(decision: Decision) -> str:
@@ -43,24 +35,7 @@ def _render_decision(decision: Decision) -> str:
     )
 
 
-async def _resolve_approval_async(
-    handler: ApprovalHandler, decision: Decision
-) -> bool:
-    """Resolve a NEEDS_APPROVAL decision against ``handler``."""
-    if isinstance(handler, bool):
-        return handler
-    result = handler(decision)
-    if isawaitable(result):
-        result = await result
-    return bool(result)
-
-
-def wrap_tool(
-    tool: Tool,
-    enforcer: PolicyEnforcer,
-    *,
-    approval_handler: ApprovalHandler | None = None,
-) -> Tool:
+def wrap_tool(tool: Tool, enforcer: PolicyEnforcer) -> Tool:
     """Return a copy of ``tool`` with a policy gate installed.
 
     The original :class:`Tool` and its ``function_schema`` are left
@@ -68,7 +43,7 @@ def wrap_tool(
     replaces ``function_schema.call`` with a closure that asks the
     enforcer for a :class:`Decision` and either delegates (allow) or
     raises :class:`ModelRetry` with the rendered failure message
-    (deny / approval-required without a truthy handler decision).
+    (deny / approval-required).
     """
     name = tool.name
     tool_copy = copy.copy(tool)
@@ -76,17 +51,9 @@ def wrap_tool(
     original_call = tool_copy.function_schema.call
 
     @functools.wraps(original_call)
-    async def guarded_call(
-        args_dict: dict[str, Any], context: RunContext[Any]
-    ) -> Any:
+    async def guarded_call(args_dict: dict[str, Any], context: RunContext[Any]) -> Any:
         decision = enforcer.decide(name, args_dict or {})
         if decision.allowed:
-            return await original_call(args_dict, context)
-        if (
-            decision.outcome is DecisionOutcome.NEEDS_APPROVAL
-            and approval_handler is not None
-            and await _resolve_approval_async(approval_handler, decision)
-        ):
             return await original_call(args_dict, context)
         raise ModelRetry(_render_decision(decision))
 
@@ -94,13 +61,6 @@ def wrap_tool(
     return tool_copy
 
 
-def wrap_tools(
-    tools: list[Tool],
-    enforcer: PolicyEnforcer,
-    *,
-    approval_handler: ApprovalHandler | None = None,
-) -> list[Tool]:
+def wrap_tools(tools: list[Tool], enforcer: PolicyEnforcer) -> list[Tool]:
     """Return copies of ``tools``, each carrying a policy gate."""
-    return [
-        wrap_tool(t, enforcer, approval_handler=approval_handler) for t in tools
-    ]
+    return [wrap_tool(t, enforcer) for t in tools]

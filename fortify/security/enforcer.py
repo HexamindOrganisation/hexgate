@@ -29,15 +29,11 @@ from fortify.security.policy_set import PolicySet
 class PolicyEnforcer:
     """Evaluate proposed tool calls against a role-aware PolicySet."""
 
-    def __init__(
-        self, policy_set: PolicySet, *, agent_name: str | None = None
-    ) -> None:
+    def __init__(self, policy_set: PolicySet, *, agent_name: str | None = None) -> None:
         self.policy_set = policy_set
         self.agent_name = agent_name
 
-    def decide(
-        self, tool_name: str, arguments: Mapping[str, Any]
-    ) -> Decision:
+    def decide(self, tool_name: str, arguments: Mapping[str, Any]) -> Decision:
         """Run the enforcement pipeline and return a typed Decision.
 
         Resolves the active role from the contextvar, selects the matching

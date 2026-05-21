@@ -193,8 +193,7 @@ async def test_astream_events_forwards_version_and_opens_scope() -> None:
     user = _user()
 
     events = [
-        evt
-        async for evt in proxy.astream_events({"input": "hi"}, "v2", user=user)
+        evt async for evt in proxy.astream_events({"input": "hi"}, "v2", user=user)
     ]
 
     assert events == [{"event": "start"}, {"event": "end"}]

@@ -19,7 +19,6 @@ from google.genai import types
 from langfuse import get_client, propagate_attributes
 from openinference.instrumentation.google_adk import GoogleADKInstrumentor
 
-from fortify.adapters.google.tools import ApprovalHandler
 from fortify.adapters.google.wrapper import wrap_google_agent
 from fortify.runtime import User
 
@@ -34,7 +33,6 @@ class FortifyRunner:
         app_name: str,
         session_service: BaseSessionService,
         api_key: str | None = None,
-        approval_handler: ApprovalHandler | None = None,
         **runner_kwargs: Any,
     ):
         self.api_key = api_key or os.getenv("FORTIFY_KEY")
@@ -45,9 +43,7 @@ class FortifyRunner:
         # Policy is baked once at construction; role resolution happens at call
         # time via the User contextvar. The underlying Runner can therefore be
         # built once and reused across invocations.
-        self._wrapped_agent = wrap_google_agent(
-            agent, api_key=self.api_key, approval_handler=approval_handler
-        )
+        self._wrapped_agent = wrap_google_agent(agent, api_key=self.api_key)
         self._runner = Runner(
             agent=self._wrapped_agent,
             app_name=app_name,

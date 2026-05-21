@@ -84,9 +84,7 @@ class FortifyLangchainAgent:
         """Invoke the agent synchronously inside a User scope."""
         with user.sync_scope():
             with propagate_attributes(**self._propagate_kwargs(user, "invoke")):
-                return self._agent.invoke(
-                    input, self._with_callbacks(config), **kwargs
-                )
+                return self._agent.invoke(input, self._with_callbacks(config), **kwargs)
 
     async def astream(
         self,

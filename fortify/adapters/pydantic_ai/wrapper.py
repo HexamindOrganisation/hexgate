@@ -16,7 +16,7 @@ from pydantic_ai import Agent
 from pydantic_ai.tools import Tool
 
 from fortify.adapters.pydantic_ai.agent import FortifyPydanticAgent
-from fortify.adapters.pydantic_ai.tools import ApprovalHandler, wrap_tools
+from fortify.adapters.pydantic_ai.tools import wrap_tools
 from fortify.security import AgentPolicy, BaseToolPolicy, PolicySet
 from fortify.security.enforcer import PolicyEnforcer
 from fortify.security.policy_set import DEFAULT_ROLE_NAME
@@ -69,7 +69,6 @@ def wrap_pydantic_agent(
     *,
     agent: Agent,
     api_key: str | None = None,
-    approval_handler: ApprovalHandler | None = None,
 ) -> FortifyPydanticAgent:
     """Wrap a pydantic_ai agent with Fortify tool policy and observability.
 
@@ -81,7 +80,10 @@ def wrap_pydantic_agent(
     The returned proxy expects a ``user`` keyword argument on each
     invocation method (``run``, ``run_sync``, ``run_stream``, ``iter``).
     Role resolution happens at call time from the active
-    :class:`~fortify.runtime.User`.
+    :class:`~fortify.runtime.User`. ``NEEDS_APPROVAL`` outcomes raise
+    :class:`~pydantic_ai.exceptions.ModelRetry` with an
+    ``[approval_required]`` marker so the LLM sees the failure as a
+    tool-result message.
 
     Args:
         agent: The pydantic_ai agent to wrap. Tools are read directly off
@@ -89,11 +91,6 @@ def wrap_pydantic_agent(
             ``@agent.tool`` / ``@agent.tool_plain`` is gated.
         api_key: The Fortify API key. Falls back to the ``FORTIFY_KEY``
             environment variable.
-        approval_handler: Resolves ``NEEDS_APPROVAL`` outcomes inline.
-            ``True`` / ``False`` short-circuit; a callable receives the
-            :class:`Decision` and returns ``bool``. When ``None``,
-            approval-required tool calls raise ``ModelRetry`` so the LLM
-            sees the failure as a tool-result message.
     """
     resolved_key = api_key or os.getenv("FORTIFY_KEY")
     if not resolved_key:
@@ -107,7 +104,7 @@ def wrap_pydantic_agent(
     policy_set = build_policy_set(resolved_key, agent_name, tool_names)
     enforcer = PolicyEnforcer(policy_set, agent_name=agent_name)
 
-    wrapped_tools = wrap_tools(tools, enforcer, approval_handler=approval_handler)
+    wrapped_tools = wrap_tools(tools, enforcer)
     cloned_agent = _clone_agent_with_tools(agent, wrapped_tools)
 
     return FortifyPydanticAgent(

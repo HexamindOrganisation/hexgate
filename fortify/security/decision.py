@@ -47,7 +47,7 @@ class Decision:
     def as_error_payload(self) -> dict[str, Any]:
         """Default rendering for LLM-facing tool results.
 
-        Adapters that need a different shape should ignore this 
+        Adapters that need a different shape should ignore this
         and build their own from the Decision fields directly.
         """
         payload: dict[str, Any] = {

@@ -223,7 +223,9 @@ def test_client_verifies_on_first_call_then_caches(
 
     calls: list[tuple[str, bool]] = []
 
-    def fake_raw_get(self: FortifyClient, url: str, *, authorize: bool) -> dict[str, Any]:
+    def fake_raw_get(
+        self: FortifyClient, url: str, *, authorize: bool
+    ) -> dict[str, Any]:
         calls.append((url, authorize))
         return _stub_get_agent_response()
 
@@ -303,10 +305,14 @@ def test_client_fetches_jwks_when_pubkey_unset(
 
     calls: list[tuple[str, bool]] = []
 
-    def fake_raw_get(self: FortifyClient, url: str, *, authorize: bool) -> dict[str, Any]:
+    def fake_raw_get(
+        self: FortifyClient, url: str, *, authorize: bool
+    ) -> dict[str, Any]:
         calls.append((url, authorize))
         if url.endswith("/.well-known/keys"):
-            return {"keys": [{"x": _b64url(pub), "fingerprint": "sha256:abcdef0123456789"}]}
+            return {
+                "keys": [{"x": _b64url(pub), "fingerprint": "sha256:abcdef0123456789"}]
+            }
         return _stub_get_agent_response()
 
     monkeypatch.setattr(FortifyClient, "_raw_get", fake_raw_get)

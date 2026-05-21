@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from google.adk.agents import BaseAgent
 
-from fortify.adapters.google.tools import ApprovalHandler, wrap_tools
+from fortify.adapters.google.tools import wrap_tools
 from fortify.security import AgentPolicy, BaseToolPolicy, PolicySet
 from fortify.security.enforcer import PolicyEnforcer
 from fortify.security.policy_set import DEFAULT_ROLE_NAME
@@ -38,12 +38,7 @@ def build_policy_set(
     return PolicySet({DEFAULT_ROLE_NAME: default_policy})
 
 
-def wrap_google_agent(
-    agent: BaseAgent,
-    *,
-    api_key: str,
-    approval_handler: ApprovalHandler | None = None,
-) -> BaseAgent:
+def wrap_google_agent(agent: BaseAgent, *, api_key: str) -> BaseAgent:
     """Return a clone of ``agent`` whose tools are policy-gated.
 
     Role resolution and constraint evaluation happen lazily inside the
@@ -51,11 +46,15 @@ def wrap_google_agent(
     :class:`~fortify.runtime.User` from the contextvar — so the caller
     must open a ``User`` scope (``async with User(...)`` or
     ``User(...).sync_scope()``) around the agent run.
+
+    ``NEEDS_APPROVAL`` outcomes render as structured strings via
+    :func:`~fortify.adapters.google.tools._render_decision`; the host
+    can recognize the ``[approval_required]`` marker in tool results.
     """
     agent_name = getattr(agent, "name", "default")
     tools = list(getattr(agent, "tools", []) or [])
     tool_names = [getattr(t, "name", getattr(t, "__name__", "tool")) for t in tools]
     policy_set = build_policy_set(api_key, agent_name, tool_names)
     enforcer = PolicyEnforcer(policy_set, agent_name=agent_name)
-    guarded_tools = wrap_tools(tools, enforcer, approval_handler=approval_handler)
+    guarded_tools = wrap_tools(tools, enforcer)
     return agent.model_copy(update={"tools": guarded_tools})

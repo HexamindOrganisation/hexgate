@@ -225,10 +225,7 @@ async def test_run_async_opens_user_scope_and_yields_events(
     )
     user = _user()
 
-    events = [
-        event
-        async for event in runner.run_async(new_message="hello", user=user)
-    ]
+    events = [event async for event in runner.run_async(new_message="hello", user=user)]
 
     assert events == [{"event": "first"}, {"event": "second"}]
     assert setup_counts["setup"] == 1

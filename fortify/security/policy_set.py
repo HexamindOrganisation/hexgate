@@ -126,11 +126,15 @@ def load_policy_map(
     # only be referenced via ``inherits``).
     fully_resolved: dict[str, AgentPolicy] = {}
     for role_name in policy_map:
-        fully_resolved[role_name] = _resolve_inheritance(role_name, policy_map, chain=[])
+        fully_resolved[role_name] = _resolve_inheritance(
+            role_name, policy_map, chain=[]
+        )
     resolved = {name: pol for name, pol in fully_resolved.items() if not pol.is_mixin}
     if not resolved:
         raise PolicySetError("policy_map contains only mixins; need a concrete role")
-    default_name = default or (DEFAULT_ROLE_NAME if DEFAULT_ROLE_NAME in resolved else next(iter(resolved)))
+    default_name = default or (
+        DEFAULT_ROLE_NAME if DEFAULT_ROLE_NAME in resolved else next(iter(resolved))
+    )
     if default_name not in resolved:
         raise PolicySetError(
             f"requested default role {default_name!r} not in {sorted(resolved)!r}"
@@ -191,7 +195,9 @@ def _load_from_directory(root: Path) -> PolicySet:
 
     concrete = {name: pol for name, pol in resolved.items() if not pol.is_mixin}
     if not concrete:
-        raise PolicySetError(f"every policy in {root} is a mixin; need at least one concrete role")
+        raise PolicySetError(
+            f"every policy in {root} is a mixin; need at least one concrete role"
+        )
 
     if DEFAULT_ROLE_NAME not in concrete:
         # No explicit default — pick the first concrete role alphabetically and
@@ -213,9 +219,7 @@ def _resolve_inheritance(
     earlier parents.
     """
     if name in chain:
-        raise PolicySetError(
-            f"cyclic inheritance: {' -> '.join(chain + [name])}"
-        )
+        raise PolicySetError(f"cyclic inheritance: {' -> '.join(chain + [name])}")
     if name not in raw:
         raise PolicySetError(
             f"role {name!r} not found (inherited from {chain[-1] if chain else '<root>'})"

@@ -95,7 +95,7 @@ def parse_constraint(source: str) -> Constraint:
         )
 
     lhs_raw = text[:op_index].rstrip()
-    rhs_raw = text[op_index + len(op):].lstrip()
+    rhs_raw = text[op_index + len(op) :].lstrip()
 
     path = _parse_path(lhs_raw, source)
     value = _parse_rhs(rhs_raw, source)
@@ -245,11 +245,8 @@ def check_constraints(
         return
     context = {"args": dict(arguments or {})}
     for entry in constraints:
-        parsed = (
-            entry if isinstance(entry, Constraint) else parse_constraint(entry)
-        )
+        parsed = entry if isinstance(entry, Constraint) else parse_constraint(entry)
         if not evaluate_constraint(parsed, context):
             raise PolicyDeniedError(
-                f'Policy on "{tool_name}" denied: constraint failed — '
-                f"{parsed.source}"
+                f'Policy on "{tool_name}" denied: constraint failed — {parsed.source}'
             )

@@ -62,9 +62,7 @@ def _resolve_approval_sync(handler: ApprovalHandler, decision: Decision) -> bool
     return bool(result)
 
 
-async def _resolve_approval_async(
-    handler: ApprovalHandler, decision: Decision
-) -> bool:
+async def _resolve_approval_async(handler: ApprovalHandler, decision: Decision) -> bool:
     """Resolve a NEEDS_APPROVAL decision against ``handler`` in an async caller."""
     if isinstance(handler, bool):
         return handler

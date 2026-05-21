@@ -415,9 +415,7 @@ def test_authorize_tool_call_passes_when_constraint_satisfied() -> None:
     """A satisfied constraint lets the call through."""
     policy = AgentPolicy(
         tools={
-            "refund": BaseToolPolicy(
-                mode="allow", constraints=["args.amount <= 50"]
-            ),
+            "refund": BaseToolPolicy(mode="allow", constraints=["args.amount <= 50"]),
         }
     )
     authorize_tool_call(policy, "refund", {"amount": 30})  # no exception
@@ -427,9 +425,7 @@ def test_authorize_tool_call_denies_when_constraint_fails() -> None:
     """An unsatisfied constraint denies with the offending source in the message."""
     policy = AgentPolicy(
         tools={
-            "refund": BaseToolPolicy(
-                mode="allow", constraints=["args.amount <= 50"]
-            ),
+            "refund": BaseToolPolicy(mode="allow", constraints=["args.amount <= 50"]),
         }
     )
     with pytest.raises(PolicyDeniedError, match="args.amount <= 50"):
@@ -476,9 +472,7 @@ async def test_guarded_tool_constraints_gate_argument(
 
     policy = AgentPolicy(
         tools={
-            "refund": BaseToolPolicy(
-                mode="allow", constraints=["args.amount <= 50"]
-            ),
+            "refund": BaseToolPolicy(mode="allow", constraints=["args.amount <= 50"]),
         }
     )
     agent, _ = factory.create_agent(
@@ -519,9 +513,7 @@ async def test_guarded_tool_role_policy_selection(
     # Two roles + a deny-all default.
     policy_set = PolicySet(
         {
-            "default": AgentPolicy(
-                tools={"refund": BaseToolPolicy(mode="deny")}
-            ),
+            "default": AgentPolicy(tools={"refund": BaseToolPolicy(mode="deny")}),
             "support": AgentPolicy(
                 tools={
                     "refund": BaseToolPolicy(
