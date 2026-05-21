@@ -1,11 +1,6 @@
-"""Policy-gated wrappers around Google ADK ``BaseTool`` instances.
-
-Each tool is wrapped so its ``run_async`` consults a shared
-:class:`~fortify.security.enforcer.PolicyEnforcer` before delegating to
-the original implementation. The ADK runtime expects a string tool
-result, so denials and approval-required outcomes are rendered as short
-strings the model can interpret — denied or approval-required calls
-never reach the underlying tool.
+"""Google ADK adapter: wrap ``BaseTool`` so ``run_async`` consults a
+:class:`PolicyEnforcer` first. Non-allow outcomes render as markered
+strings the model sees as tool output.
 """
 
 from __future__ import annotations
@@ -27,7 +22,7 @@ ToolEntry = Union[BaseTool, Callable[..., Any]]
 
 
 def _render_decision(decision: Decision) -> str:
-    """Format a non-allow :class:`Decision` as the LLM-facing tool result."""
+    """Format a non-allow :class:`Decision` as a string tool result."""
     if decision.outcome is DecisionOutcome.NEEDS_APPROVAL:
         return (
             f"[approval_required] Tool '{decision.tool_name}' requires human "
@@ -40,12 +35,7 @@ def _render_decision(decision: Decision) -> str:
 
 
 def _normalize(tool: ToolEntry) -> BaseTool:
-    """Coerce an agent tool entry into a ``BaseTool``.
-
-    Google ADK accepts plain callables in ``LlmAgent.tools`` and wraps
-    them into ``FunctionTool`` internally. We do the same up front so
-    the policy gate has a stable ``BaseTool`` surface to attach to.
-    """
+    """Coerce a tool entry into a ``BaseTool`` (plain callables → FunctionTool)."""
     if isinstance(tool, BaseTool):
         return tool
     if callable(tool):
@@ -57,13 +47,7 @@ def _normalize(tool: ToolEntry) -> BaseTool:
 
 
 def wrap_tool(tool: ToolEntry, enforcer: PolicyEnforcer) -> BaseTool:
-    """Return a policy-gated copy of ``tool``.
-
-    The original tool is left untouched. The copy shares all fields with
-    the original except ``run_async``, which is replaced by a guard that
-    consults the enforcer and either delegates (allow) or returns a
-    rendered string (deny / approval-required).
-    """
+    """Return a copy of ``tool`` with ``run_async`` gated by ``enforcer``."""
     base = _normalize(tool)
     name = base.name
     original_run_async = base.run_async
@@ -83,5 +67,5 @@ def wrap_tool(tool: ToolEntry, enforcer: PolicyEnforcer) -> BaseTool:
 
 
 def wrap_tools(tools: list[ToolEntry], enforcer: PolicyEnforcer) -> list[BaseTool]:
-    """Return a new list of policy-gated copies of ``tools``."""
+    """Return a fresh list of policy-gated copies."""
     return [wrap_tool(t, enforcer) for t in tools]

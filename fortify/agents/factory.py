@@ -373,22 +373,13 @@ class FortifyAgent:
         *,
         approval_handler: Any = None,
     ) -> Self:
-        """Return a new agent runtime with Gate 1 policy enforcement applied.
+        """Return a new agent with Gate 1 policy enforcement applied.
 
-        Accepts a path to a single YAML, a path to a ``policies/`` directory
-        of role policies, an :class:`AgentPolicy`, an existing
-        :class:`PolicySet`, or ``None`` (no-op rebuild).
-
-        Tools are wrapped with the :class:`~fortify.adapters.langchain.tools.GuardedTool`
-        backed by :class:`~fortify.security.enforcer.PolicyEnforcer`. Role
-        resolution happens at call time from the active
-        :class:`~fortify.runtime.User`.
-
-        ``approval_handler`` resolves ``NEEDS_APPROVAL`` decisions inline. It
-        may be a ``bool`` shorthand (``True`` = auto-approve, ``False`` =
-        auto-deny) or a callable ``(Decision) -> bool | Awaitable[bool]``.
-        When ``None`` (the default), ``approval_required`` outcomes render as
-        structured tool errors and the underlying tool is not invoked.
+        ``policy`` may be a YAML path, a ``policies/`` directory,
+        :class:`AgentPolicy`, :class:`PolicySet`, or ``None`` (no-op).
+        Role resolves at call time from the active :class:`User`.
+        ``approval_handler`` (callable or ``bool``) resolves NEEDS_APPROVAL
+        inline; ``None`` renders structured errors.
         """
         from langchain_core.tools import BaseTool
 
@@ -424,17 +415,13 @@ class FortifyAgent:
         *,
         context_provider: Any = None,
     ) -> Self:
-        """Return a new agent runtime with a Gate 2 pre-tool hook applied.
+        """Return a new agent with a Gate 2 pre-tool hook applied.
 
-        ``before_action`` is the legacy
-        ``Callable[[ActionPayload, ActionContext], object | Awaitable[object]]``
-        shape: it receives a dict carrying ``tool_name`` / ``arguments`` /
-        ``agent_name`` and an opaque context dict produced by
-        ``context_provider``. Raising any exception inside the hook vetoes
-        the call with a structured ``before_action_denied`` payload.
-
-        Re-wrapping a tool that has already been policy-enforced preserves
-        the enforcer; passing a raw tool adds Gate 2 without Gate 1.
+        ``before_action(action_dict, context_dict)`` — raising vetoes the
+        call with a structured ``before_action_denied`` payload. The
+        ``action_dict`` carries ``tool_name`` / ``arguments`` /
+        ``agent_name``; ``context_dict`` is produced by ``context_provider``.
+        Re-wrapping a policy-enforced tool preserves its enforcer.
         """
         from langchain_core.tools import BaseTool
 
@@ -465,16 +452,7 @@ def enforce_policy(
     *,
     approval_handler: Any = None,
 ) -> AgentGraph:
-    """Apply policy enforcement to ``agent``.
-
-    Functional alias for :meth:`FortifyAgent.enforce_policy`. ``policy``
-    may be a path to a single YAML file (legacy), a directory of role
-    policies, an :class:`~fortify.security.AgentPolicy`, an existing
-    :class:`~fortify.security.PolicySet`, or ``None`` (no-op rebuild).
-    ``approval_handler`` resolves ``NEEDS_APPROVAL`` outcomes inline at
-    the adapter level — see :meth:`FortifyAgent.enforce_policy` for the
-    full contract.
-    """
+    """Functional alias for :meth:`FortifyAgent.enforce_policy`."""
     return agent.enforce_policy(policy, approval_handler=approval_handler)
 
 

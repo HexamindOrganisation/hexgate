@@ -268,13 +268,10 @@ def load_registered_agent(
 
 
 def _apply_approval_handler(agent: AgentGraph, approval_handler: Any) -> AgentGraph:
-    """Re-stamp every PolicyEnforcer-backed GuardedTool with ``approval_handler``.
+    """Re-stamp every :class:`GuardedTool` on ``agent`` with ``approval_handler``.
 
-    Used for code-registered agents whose factories applied ``enforce_policy``
-    internally without seeing the CLI's approval callback. Walks the agent's
-    tools, finds new :class:`~fortify.adapters.langchain.tools.GuardedTool`
-    instances, and re-wraps them via :meth:`GuardedTool.wrap` carrying the
-    handler. Tools that aren't policy-enforced are left untouched.
+    For code-registered agents whose factories ran ``enforce_policy``
+    internally and never saw the CLI's approval callback.
     """
     from langchain_core.tools import BaseTool
 

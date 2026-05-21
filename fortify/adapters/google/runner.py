@@ -1,9 +1,6 @@
-"""Runner that wraps the Google ADK ``Runner`` with Fortify policy + tracing.
-
-Each entry point opens a :class:`~fortify.runtime.User` scope around the
-delegated ``Runner.run*`` call so the wrapped tools' enforcers can
-resolve the active role from the contextvar at call time. Langfuse
-propagation mirrors the User identity into trace metadata.
+"""Google ADK ``Runner`` wrapper: opens a :class:`User` scope around each
+``Runner.run*`` call so the wrapped tools' enforcers can resolve the
+active role. Langfuse propagation mirrors User identity into spans.
 """
 
 import asyncio
@@ -40,9 +37,8 @@ class FortifyRunner:
             raise ValueError(
                 "FORTIFY_KEY is not set. Pass api_key= explicitly or set FORTIFY_KEY environment variable."
             )
-        # Policy is baked once at construction; role resolution happens at call
-        # time via the User contextvar. The underlying Runner can therefore be
-        # built once and reused across invocations.
+        # Policy is baked at construction; the Runner is built once and reused
+        # since role resolution happens at call time via the User contextvar.
         self._wrapped_agent = wrap_google_agent(agent, api_key=self.api_key)
         self._runner = Runner(
             agent=self._wrapped_agent,
@@ -53,7 +49,7 @@ class FortifyRunner:
         self._agent_name = getattr(agent, "name", "default")
 
     def _setup_observability(self):
-        """Setup langfuse observability for the Google ADK agent."""
+        """Install Langfuse + GoogleADKInstrumentor (idempotent)."""
         try:
             asyncio.get_running_loop()
         except RuntimeError:
@@ -65,7 +61,7 @@ class FortifyRunner:
 
     @contextmanager
     def _propagate(self, user: User):
-        """Propagate the user identity to the Langfuse trace/span."""
+        """Propagate User identity into Langfuse spans for the block."""
         kwargs: dict[str, Any] = {"tags": [f"google.runner.run.{self._agent_name}"]}
         kwargs["user_id"] = user.user_id
         kwargs["session_id"] = user.session_id

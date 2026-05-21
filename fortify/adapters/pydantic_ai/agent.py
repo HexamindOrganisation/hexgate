@@ -16,17 +16,11 @@ from fortify.runtime import User
 class FortifyPydanticAgent:
     """Proxy around a pydantic_ai ``Agent`` that opens a User scope per call.
 
-    Policy enforcement is already installed on the wrapped tools at
-    construction time (by :func:`wrap_pydantic_agent` calling
-    :func:`~fortify.adapters.pydantic_ai.tools.wrap_tool`). This proxy is
-    the call-time half: it pushes the active
-    :class:`~fortify.runtime.User` onto the contextvar so the enforcer
-    resolves the matching role, and it propagates user identity into
-    every Langfuse trace/span emitted inside the call.
-
-    ``user`` is supplied per invocation, not at construction — one
-    wrapped agent can serve many users concurrently because the scope
-    is per-call and contextvar-isolated.
+    Tools are already enforcer-installed at construction (by
+    :func:`wrap_pydantic_agent`). This proxy pushes the active
+    :class:`User` onto the contextvar and propagates identity into
+    Langfuse spans. ``user`` is per-call, so one proxy serves many
+    users concurrently.
     """
 
     def __init__(
@@ -45,7 +39,7 @@ class FortifyPydanticAgent:
         self._setup_observability()
 
     def _setup_observability(self) -> None:
-        """Setup tracing for the agents to be globally instrumented."""
+        """Globally instrument all pydantic_ai Agents (idempotent)."""
         Agent.instrument_all()
 
     def _propagate_kwargs(self, user: User, method: str) -> dict[str, Any]:
@@ -58,14 +52,14 @@ class FortifyPydanticAgent:
 
     @asynccontextmanager
     async def _abind(self, user: User, method: str) -> AsyncIterator[None]:
-        """Open the User scope + Langfuse propagation for an async call."""
+        """Async User scope + Langfuse propagation."""
         async with user:
             with propagate_attributes(**self._propagate_kwargs(user, method)):
                 yield
 
     @contextmanager
     def _bind(self, user: User, method: str) -> Iterator[None]:
-        """Open the User scope + Langfuse propagation for a sync call."""
+        """Sync User scope + Langfuse propagation."""
         with user.sync_scope():
             with propagate_attributes(**self._propagate_kwargs(user, method)):
                 yield

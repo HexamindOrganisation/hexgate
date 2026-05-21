@@ -1,19 +1,11 @@
-"""LangChain adapter for :class:`~fortify.security.enforcer.PolicyEnforcer`.
+"""LangChain adapter for :class:`PolicyEnforcer`.
 
-Two ways to install enforcement on a LangChain tool live here:
-
-* :class:`GuardedTool` — wraps a :class:`BaseTool` in a new ``BaseTool``
-  subclass. Used by :meth:`FortifyAgent.enforce_policy`, which controls
-  its own graph and can swap tools by rebuilding.
-
-* :func:`install_enforcer_on_tool` — mutates a ``StructuredTool``'s
-  ``func`` / ``coroutine`` callables in place. Used by
-  :func:`wrap_langchain_agent` to retrofit a pre-built
-  ``CompiledStateGraph`` whose tool references can't be replaced.
-
-Both paths consult the same :class:`PolicyEnforcer`, render
-:class:`Decision` failures the same way, and accept the same optional
-``approval_handler`` for inline ``NEEDS_APPROVAL`` resolution.
+:class:`GuardedTool` wraps a ``BaseTool`` (used by
+:meth:`FortifyAgent.enforce_policy`, which rebuilds the graph);
+:func:`install_enforcer_on_tool` mutates ``StructuredTool``'s ``func``/
+``coroutine`` in place (used by :func:`wrap_langchain_agent` for
+pre-built ``CompiledStateGraph``s). Both render :class:`Decision`
+failures identically and accept the same optional ``approval_handler``.
 """
 
 from __future__ import annotations
@@ -32,17 +24,14 @@ from fortify.security.enforcer import PolicyEnforcer
 from fortify.tools.decorators import TOOL_METADATA_ATTR
 
 
-# Optional adapter-level callback for resolving NEEDS_APPROVAL decisions.
-# ``bool`` shorthand: True = always approve, False = always deny — matches
-# the CLI's --approval-mode=auto-approve / auto-deny semantics.
+# NEEDS_APPROVAL resolver. ``bool`` is shorthand (always approve / deny).
 ApprovalHandler = Union[
     Callable[[Decision], "bool | Awaitable[bool]"],
     bool,
 ]
 
 
-# Gate 2 host-facing types — kept compatible with the ``with_before_action``
-# shim, which calls the hook with these dict shapes.
+# Gate 2 hook contract — legacy dict shapes the ``with_before_action`` shim uses.
 ActionPayload = dict[str, Any]
 ActionContext = Union[dict[str, Any], None]
 BeforeActionHook = Callable[
@@ -52,7 +41,7 @@ ContextProvider = Callable[[], ActionContext]
 
 
 def _copy_tool_metadata(source: Any, target: Any) -> Any:
-    """Copy fortify-specific tool metadata (e.g. tracing labels) onto a wrapper."""
+    """Copy fortify tool metadata (tracing labels, etc.) onto a wrapper."""
     metadata = getattr(source, TOOL_METADATA_ATTR, None)
     if metadata is not None:
         setattr(target, TOOL_METADATA_ATTR, metadata)
@@ -60,7 +49,7 @@ def _copy_tool_metadata(source: Any, target: Any) -> Any:
 
 
 def _resolve_approval_sync(handler: ApprovalHandler, decision: Decision) -> bool:
-    """Resolve a NEEDS_APPROVAL decision against ``handler`` in a sync caller."""
+    """Resolve a NEEDS_APPROVAL decision in a sync caller (rejects coroutines)."""
     if isinstance(handler, bool):
         return handler
     result = handler(decision)
@@ -73,7 +62,7 @@ def _resolve_approval_sync(handler: ApprovalHandler, decision: Decision) -> bool
 
 
 async def _resolve_approval_async(handler: ApprovalHandler, decision: Decision) -> bool:
-    """Resolve a NEEDS_APPROVAL decision against ``handler`` in an async caller."""
+    """Resolve a NEEDS_APPROVAL decision in an async caller."""
     if isinstance(handler, bool):
         return handler
     result = handler(decision)
@@ -85,17 +74,10 @@ async def _resolve_approval_async(handler: ApprovalHandler, decision: Decision) 
 class GuardedTool(BaseTool):
     """LangChain tool wrapper that consults a :class:`PolicyEnforcer`.
 
-    Each invocation asks the enforcer for a :class:`Decision`. Allowed
-    calls delegate to the wrapped tool. Denied calls return a structured
-    error payload (``Decision.as_error_payload()``) so the LLM sees the
-    governance failure as tool output rather than an exception.
-
-    NEEDS_APPROVAL is treated as denial by default. If the adapter is
-    constructed with ``approval_handler``, the handler is consulted: it
-    may return ``bool``, a coroutine resolving to ``bool``, or be a plain
-    ``bool`` shorthand (always-approve / always-deny). A truthy handler
-    decision lets the wrapped tool run; a falsy one renders the same
-    structured error as denial.
+    ALLOW delegates to the wrapped tool; non-ALLOW renders
+    ``Decision.as_error_payload()`` so the LLM sees governance failures
+    as tool output. NEEDS_APPROVAL is treated as denial unless
+    ``approval_handler`` (callable or ``bool`` shorthand) returns truthy.
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
@@ -121,13 +103,12 @@ class GuardedTool(BaseTool):
         context_provider: ContextProvider | None = None,
         agent_name: str | None = None,
     ) -> "GuardedTool":
-        """Return a GuardedTool that delegates to ``tool`` after policy check.
+        """Return a GuardedTool delegating to ``tool`` after policy check.
 
-        Idempotent on re-wrap: if ``tool`` is already a ``GuardedTool``,
-        the inner wrapped_tool is unwrapped first so we don't stack
-        enforcers. Hook fields fall through from the existing wrapper when
-        not explicitly overridden — so chaining ``.with_before_action()``
-        after ``.enforce_policy(...)`` preserves the enforcer.
+        Idempotent re-wrap: an existing ``GuardedTool`` is unwrapped once
+        so enforcers don't stack; hook fields fall through unless
+        explicitly overridden (so chaining ``.with_before_action()`` after
+        ``.enforce_policy(...)`` preserves the enforcer).
         """
         if isinstance(tool, cls):
             inner = tool.wrapped_tool
@@ -174,7 +155,7 @@ class GuardedTool(BaseTool):
         return _copy_tool_metadata(inner, guarded)
 
     def _build_action(self, kwargs: dict[str, Any]) -> ActionPayload:
-        """Build the legacy-shaped action payload for a Gate 2 hook."""
+        """Legacy-shaped action payload for a Gate 2 hook."""
         return {
             "tool_name": self.name,
             "arguments": kwargs,
@@ -182,11 +163,11 @@ class GuardedTool(BaseTool):
         }
 
     def _build_context(self) -> ActionContext:
-        """Return the current host context for the Gate 2 hook, when configured."""
+        """Host context for the Gate 2 hook (None when no provider configured)."""
         return self.context_provider() if self.context_provider is not None else None
 
     def _before_action_denied(self, message: str) -> dict[str, Any]:
-        """Render a Gate 2 veto as the structured tool failure the LLM sees."""
+        """Structured Gate 2 veto payload."""
         return {
             "ok": False,
             "error": {
@@ -200,7 +181,7 @@ class GuardedTool(BaseTool):
     async def _check_before_action(
         self, kwargs: dict[str, Any]
     ) -> dict[str, Any] | None:
-        """Apply the Gate 2 hook; return a structured veto payload on raise."""
+        """Apply the Gate 2 hook; return a veto payload on raise."""
         if self.before_action is None:
             return None
         try:
@@ -249,7 +230,7 @@ class GuardedTool(BaseTool):
         return self._invoke_wrapped_sync(*args, **kwargs)
 
     async def _invoke_wrapped_async(self, *args: Any, **kwargs: Any) -> Any:
-        """Call the wrapped tool's implementation without re-entering instrumentation."""
+        """Call the wrapped tool without re-entering LangChain instrumentation."""
         if isinstance(self.wrapped_tool, StructuredTool):
             if self.wrapped_tool.coroutine is not None:
                 return await self.wrapped_tool.coroutine(*args, **kwargs)
@@ -283,16 +264,10 @@ def install_enforcer_on_tool(
 ) -> BaseTool:
     """Install :class:`PolicyEnforcer` gating on ``tool`` in place.
 
-    Mirrors :class:`GuardedTool` semantics — call the enforcer, render
-    the :class:`Decision` as a structured error on non-allow — but
-    mutates the underlying ``StructuredTool``'s ``func`` and
-    ``coroutine`` callables rather than constructing a new BaseTool.
-    Use when the tool is already bound to a LangGraph
-    ``CompiledStateGraph`` and cannot be replaced.
-
-    Idempotent: re-installing on an already-installed tool restores the
-    captured originals first so the new enforcer + handler take effect
-    without stacking gates.
+    Same semantics as :class:`GuardedTool` but mutates ``StructuredTool``'s
+    ``func``/``coroutine`` instead of constructing a wrapper — use when
+    the tool is already bound to a ``CompiledStateGraph``. Idempotent:
+    re-install restores captured originals first so gates don't stack.
     """
     name = tool.name
     original_func: Callable[..., Any] | None = getattr(tool, _ORIGINAL_FUNC_ATTR, None)

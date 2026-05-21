@@ -1,14 +1,7 @@
-"""Agent-level wrapping for the OpenAI Agents adapter.
-
-Builds the :class:`~fortify.security.policy_set.PolicySet` for an agent
-(today a stub — TODO to fetch from the Fortify control plane), constructs
-one :class:`~fortify.security.enforcer.PolicyEnforcer` per agent, and
-returns a clone of the agent whose tools are policy-gated via
-:func:`fortify.adapters.openai.tools.wrap_tool`.
-
-The wrapper itself is user-agnostic: role resolution happens inside the
-enforcer at call time via the :class:`~fortify.runtime.User` contextvar,
-so callers do not need to thread user identity through here.
+"""OpenAI Agents adapter: build a :class:`PolicySet`, construct one
+:class:`PolicyEnforcer`, and return a clone of the agent whose tools
+are policy-gated. User-agnostic at wrap time — role resolution happens
+inside the enforcer via the :class:`User` contextvar.
 """
 
 from __future__ import annotations
@@ -28,14 +21,7 @@ def build_policy_set(
     agent_name: str,  # noqa: ARG001 — same
     tool_names: list[str],
 ) -> PolicySet:
-    """Build the :class:`PolicySet` for an agent.
-
-    Placeholder: returns a one-role bundle that allows every named tool.
-    TODO: fetch the canonical PolicySet for ``agent_name`` from the
-    Fortify control plane via :class:`~fortify.cloud.FortifyClient` and
-    parse it with ``load_policy_set_from_dict`` — keeps the SDK and
-    platform in sync on policy shape.
-    """
+    """Placeholder allow-all one-role bundle. TODO: cloud-fetch via FortifyClient."""
     default_policy = AgentPolicy(
         tools={name: BaseToolPolicy(mode="allow") for name in tool_names}
     )
@@ -43,13 +29,10 @@ def build_policy_set(
 
 
 def wrap_openai_agent(agent: Agent, *, api_key: str) -> Agent:
-    """Return a clone of ``agent`` whose tools are policy-gated.
+    """Return a clone of ``agent`` with policy-gated tools.
 
-    Role resolution and constraint evaluation happen lazily inside the
-    enforcer at call time, reading the active
-    :class:`~fortify.runtime.User` from the contextvar — so the caller
-    must open a ``User`` scope (``async with User(...)`` or
-    ``User(...).sync_scope()``) around the agent run.
+    Caller must open a :class:`User` scope around the run — role/constraints
+    resolve at call time from the contextvar.
     """
     agent_name = getattr(agent, "name", "default")
     tool_names = [tool.name for tool in agent.tools]

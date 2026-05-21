@@ -1,11 +1,4 @@
-"""Typed result of evaluating one proposed tool call against a PolicySet.
-
-A :class:`Decision` is a pure value. The enforcer never executes a tool —
-it returns one of these and stops. Adapters (LangChain, OpenAI, MCP, plain
-callables) translate the decision into whatever their host expects;
-host runtimes (``fortify --serve``, CLI loops, test harnesses) consume the
-``NEEDS_APPROVAL`` signal and decide whether and how to resume.
-"""
+"""Typed result of evaluating one proposed tool call against a PolicySet."""
 
 from __future__ import annotations
 
@@ -15,7 +8,7 @@ from typing import Any
 
 
 class DecisionOutcome(str, Enum):
-    """The shape of the authorization decision."""
+    """Authorization outcome."""
 
     ALLOW = "allow"
     DENY = "deny"
@@ -24,13 +17,9 @@ class DecisionOutcome(str, Enum):
 
 @dataclass(frozen=True, slots=True)
 class Decision:
-    """One policy decision for a proposed tool invocation.
-
-    ``arguments`` is the proposed tool input the enforcer evaluated. It is
-    deliberately not included in :meth:`as_error_payload` — the LLM already
-    sent these values — but adapters expose it to host-side approval
-    handlers so the human approving the call can see what they're approving.
-    """
+    """One policy decision. ``arguments`` is exposed to host-side approval
+    handlers but omitted from :meth:`as_error_payload` (the LLM already
+    sent them)."""
 
     outcome: DecisionOutcome
     tool_name: str
@@ -45,11 +34,7 @@ class Decision:
         return self.outcome is DecisionOutcome.ALLOW
 
     def as_error_payload(self) -> dict[str, Any]:
-        """Default rendering for LLM-facing tool results.
-
-        Adapters that need a different shape should ignore this
-        and build their own from the Decision fields directly.
-        """
+        """Default LLM-facing rendering. Adapters can build their own."""
         payload: dict[str, Any] = {
             "type": self.error_type or self.outcome.value,
             "message": self.reason,

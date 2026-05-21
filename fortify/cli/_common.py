@@ -48,10 +48,8 @@ def build_runtime(
     when ``FORTIFY_KEY`` is present in the environment — what terminal
     chat uses, since it doesn't need cloud-fetched policy or a serve
     tunnel. ``fortify serve`` passes ``local_only=False`` so policy edits
-    in the dashboard land at the next turn boundary.
-
-    ``approval_handler`` is threaded into :func:`load_agent` so each
-    policy-wrapped tool can resolve ``NEEDS_APPROVAL`` decisions inline.
+    in the dashboard land at the next turn boundary. ``approval_handler``
+    threads to :func:`load_agent` for inline ``NEEDS_APPROVAL`` resolution.
     """
     import os
 
@@ -107,14 +105,7 @@ def _truncate_approval_value(value: object, *, limit: int = 80) -> str:
 
 
 def prompt_for_approval(console: Console, decision: Decision) -> bool:
-    """Ask the user to approve one tool invocation in the terminal.
-
-    Reads the proposed tool name, arguments, and policy role straight off
-    the :class:`Decision`. The arguments come from
-    :attr:`Decision.arguments` (set by :meth:`PolicyEnforcer.decide`) — the
-    LLM-facing :meth:`Decision.as_error_payload` omits them, but the human
-    approving the call needs them to make an informed choice.
-    """
+    """Prompt the user in the terminal to approve one tool invocation."""
     arguments = decision.arguments or {}
 
     header = Text(f"Approval required for {decision.tool_name}", style="bold yellow")
@@ -150,12 +141,8 @@ def prompt_for_approval(console: Console, decision: Decision) -> bool:
 
 
 def build_approval_handler(console: Console, mode: ApprovalMode):
-    """Return the CLI approval handler for the selected mode.
-
-    Return shape matches the new :class:`Decision`-based contract: either
-    a ``bool`` shorthand (auto-approve / auto-deny) or a callable
-    ``(Decision) -> bool`` that prompts the user.
-    """
+    """Return a CLI approval handler — ``bool`` for auto modes, ``(Decision)
+    -> bool`` for ``ask``."""
     if mode == "auto-approve":
         return True
     if mode == "auto-deny":

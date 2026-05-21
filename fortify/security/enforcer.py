@@ -1,15 +1,9 @@
 """Tool-shape-agnostic policy enforcement.
 
-:class:`PolicyEnforcer` is the single entry point for evaluating a proposed
-tool call against a :class:`~fortify.security.policy_set.PolicySet`. It is
-stateless across calls: each :meth:`PolicyEnforcer.decide` re-reads the
-active :class:`~fortify.runtime.User` from the contextvar so the same
-enforcer instance can serve callers in different role scopes.
-
-The enforcer never executes a tool. It returns a
-:class:`~fortify.security.decision.Decision` and stops. Adapters
-(LangChain, OpenAI, MCP, plain callables) sit on top of this and translate
-the decision into whatever their host expects.
+:class:`PolicyEnforcer` returns a :class:`Decision` for a proposed tool
+call and stops — adapters translate it for their host. Stateless across
+calls: each :meth:`decide` re-reads the active :class:`User` from the
+contextvar.
 """
 
 from __future__ import annotations
@@ -34,13 +28,8 @@ class PolicyEnforcer:
         self.agent_name = agent_name
 
     def decide(self, tool_name: str, arguments: Mapping[str, Any]) -> Decision:
-        """Run the enforcement pipeline and return a typed Decision.
-
-        Resolves the active role from the contextvar, selects the matching
-        :class:`~fortify.security.models.AgentPolicy` from the bundle, then
-        runs the deterministic mode/constraints/file-scope checks via
-        :func:`~fortify.security.policy.authorize_tool_call`.
-        """
+        """Resolve role from the contextvar, run mode/constraints/file-scope
+        checks via :func:`authorize_tool_call`, return a :class:`Decision`."""
         user = get_current_user()
         role = user.role if user is not None else None
         policy = self.policy_set.policy_for(role)
@@ -77,7 +66,7 @@ class PolicyEnforcer:
 
 
 def _hint_for(policy: AgentPolicy, tool_name: str) -> dict[str, Any] | None:
-    """Return a machine-readable hint when a denial is path-shaped."""
+    """Return a machine-readable hint when the denial is path-shaped."""
     tool_policy = policy.tools.get(tool_name)
     if isinstance(tool_policy, FileToolPolicy):
         return build_file_scope_hint(tool_policy)

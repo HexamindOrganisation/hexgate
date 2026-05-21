@@ -15,17 +15,11 @@ from fortify.runtime import User
 class FortifyLangchainAgent:
     """Proxy around a ``CompiledStateGraph`` that opens a User scope per call.
 
-    Policy enforcement is already installed on the wrapped tools at
-    construction time (by :func:`wrap_langchain_agent` calling
-    :func:`~fortify.adapters.langchain.tools.install_enforcer_on_tool`).
-    This proxy is the call-time half: it pushes the active
-    :class:`~fortify.runtime.User` onto the contextvar so the enforcer
-    resolves the matching role, and it propagates user identity into
-    every Langfuse trace/span emitted inside the call.
-
-    ``user`` is supplied per invocation, not at construction — one
-    wrapped agent can serve many users concurrently because the scope
-    is per-call and contextvar-isolated.
+    Tools are already enforcer-installed at construction (by
+    :func:`wrap_langchain_agent`). This proxy pushes the active
+    :class:`User` onto the contextvar and propagates identity into
+    Langfuse spans. ``user`` is per-call, so one proxy serves many
+    users concurrently.
     """
 
     def __init__(
@@ -50,7 +44,7 @@ class FortifyLangchainAgent:
         }
 
     def _with_callbacks(self, config: RunnableConfig | None) -> RunnableConfig:
-        """Add the Fortify callback handler to the LangChain config."""
+        """Append the Fortify callback handler to ``config['callbacks']``."""
         merged: RunnableConfig = dict(config) if config else {}
         callbacks = list(merged.get("callbacks") or [])
         if self._callback_handler not in callbacks:

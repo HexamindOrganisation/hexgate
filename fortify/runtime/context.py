@@ -1,16 +1,6 @@
-"""Execution-time context propagation — tool-scope and user-scope.
-
-:class:`User` is the canonical user-scope primitive. It carries user
-identity plus attenuation hints (``role`` / ``session_id`` /
-``ttl_seconds``) the agent runtime uses to lazily mint a per-request
-Biscuit, and doubles as an ``async with`` (or :meth:`User.sync_scope`)
-context manager so request handlers can scope a whole invocation under
-one identity without threading kwargs. All Fortify SDK adapters
-(LangChain, OpenAI Agents, Google ADK, Pydantic AI) consume this via
-the :func:`get_current_user` contextvar lookup.
-
-:class:`ToolUseContext` is the tool-level hidden meta-argument carrying
-Biscuit-extracted facts down into individual tool calls.
+"""Execution-time context — :class:`User` (per-invocation scope, read via
+:func:`get_current_user` by all SDK adapters) and :class:`ToolUseContext`
+(per-tool meta-argument carrying Biscuit-extracted facts).
 """
 
 from __future__ import annotations
@@ -120,12 +110,7 @@ class User(BaseModel):
 
     @contextmanager
     def sync_scope(self) -> Iterator["User"]:
-        """Sync mirror of ``async with self`` — pushes/pops the contextvar.
-
-        For sync entry points (CLI loops, ``Runner.run_sync``) where the
-        async ctxmgr protocol is unavailable. Same semantics: stack-safe,
-        nest-safe, no I/O.
-        """
+        """Sync mirror of ``async with self`` for sync entry points."""
         self._tokens.append(_CURRENT_USER.set(self))
         try:
             yield self

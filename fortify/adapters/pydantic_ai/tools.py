@@ -1,11 +1,7 @@
-"""Policy-gated wrappers around pydantic_ai ``Tool`` instances.
-
-Each tool is wrapped so its ``function_schema.call`` consults a shared
-:class:`~fortify.security.enforcer.PolicyEnforcer` before delegating to
-the original implementation. pydantic_ai's idiom for "feed this back to
-the model as a tool result" is :class:`~pydantic_ai.exceptions.ModelRetry`,
-so denials and approval-required outcomes are raised as ModelRetry with a
-rendered :class:`~fortify.security.decision.Decision` message.
+"""pydantic_ai adapter: wrap ``Tool.function_schema.call`` so it consults
+a :class:`PolicyEnforcer` first. Non-allow outcomes raise
+:class:`ModelRetry` with a rendered :class:`Decision` message (pydantic_ai's
+idiom for feeding a tool failure back to the model).
 """
 
 from __future__ import annotations
@@ -23,7 +19,7 @@ from fortify.security.enforcer import PolicyEnforcer
 
 
 def _render_decision(decision: Decision) -> str:
-    """Format a non-allow :class:`Decision` as the message body of a ModelRetry."""
+    """Format a non-allow :class:`Decision` as a ModelRetry message."""
     if decision.outcome is DecisionOutcome.NEEDS_APPROVAL:
         return (
             f"[approval_required] Tool '{decision.tool_name}' requires human "
@@ -36,15 +32,7 @@ def _render_decision(decision: Decision) -> str:
 
 
 def wrap_tool(tool: Tool, enforcer: PolicyEnforcer) -> Tool:
-    """Return a copy of ``tool`` with a policy gate installed.
-
-    The original :class:`Tool` and its ``function_schema`` are left
-    untouched — only the returned copy carries the gate. The gate
-    replaces ``function_schema.call`` with a closure that asks the
-    enforcer for a :class:`Decision` and either delegates (allow) or
-    raises :class:`ModelRetry` with the rendered failure message
-    (deny / approval-required).
-    """
+    """Return a copy of ``tool`` with ``function_schema.call`` gated by ``enforcer``."""
     name = tool.name
     tool_copy = copy.copy(tool)
     tool_copy.function_schema = copy.copy(tool.function_schema)
@@ -62,5 +50,5 @@ def wrap_tool(tool: Tool, enforcer: PolicyEnforcer) -> Tool:
 
 
 def wrap_tools(tools: list[Tool], enforcer: PolicyEnforcer) -> list[Tool]:
-    """Return copies of ``tools``, each carrying a policy gate."""
+    """Return a fresh list of policy-gated copies."""
     return [wrap_tool(t, enforcer) for t in tools]

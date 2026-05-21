@@ -1,11 +1,6 @@
-"""Policy-gated wrappers around OpenAI Agents ``FunctionTool`` instances.
-
-Each tool is wrapped so its ``on_invoke_tool`` consults a shared
-:class:`~fortify.security.enforcer.PolicyEnforcer` before delegating to the
-original implementation. The OpenAI Agents runtime expects a string tool
-result, so denials and approval-required outcomes are rendered as short
-strings the model can interpret — denied or approval-required calls never
-reach the underlying tool.
+"""OpenAI Agents adapter: wrap ``FunctionTool`` so ``on_invoke_tool``
+consults a :class:`PolicyEnforcer` first. Non-allow outcomes render as
+markered strings the model sees as tool output.
 """
 
 from __future__ import annotations
@@ -23,7 +18,7 @@ from fortify.security.enforcer import PolicyEnforcer
 
 
 def _parse_args(raw: str) -> dict[str, Any] | None:
-    """Best-effort parse of a tool-call JSON payload into a dict for policy checks."""
+    """Best-effort JSON-to-dict parse of a tool-call payload."""
     if not raw:
         return None
     try:
@@ -34,7 +29,7 @@ def _parse_args(raw: str) -> dict[str, Any] | None:
 
 
 def _render_decision(decision: Decision) -> str:
-    """Format a non-allow :class:`Decision` as the LLM-facing tool result."""
+    """Format a non-allow :class:`Decision` as a string tool result."""
     if decision.outcome is DecisionOutcome.NEEDS_APPROVAL:
         return (
             f"[approval_required] Tool '{decision.tool_name}' requires human "
@@ -47,13 +42,7 @@ def _render_decision(decision: Decision) -> str:
 
 
 def wrap_tool(tool: FunctionTool, enforcer: PolicyEnforcer) -> FunctionTool:
-    """Return a policy-gated copy of ``tool``.
-
-    The original tool is left untouched. The copy shares all fields with
-    the original except ``on_invoke_tool``, which is replaced by a guard
-    that asks the enforcer for a :class:`Decision` and either delegates
-    (allow) or returns a rendered denial string (deny / approval-required).
-    """
+    """Return a copy of ``tool`` with ``on_invoke_tool`` gated by ``enforcer``."""
     if not isinstance(tool, FunctionTool):
         raise TypeError(
             f"Cannot install policy on tool {getattr(tool, 'name', tool)!r}: "
@@ -78,5 +67,5 @@ def wrap_tool(tool: FunctionTool, enforcer: PolicyEnforcer) -> FunctionTool:
 def wrap_tools(
     tools: list[FunctionTool], enforcer: PolicyEnforcer
 ) -> list[FunctionTool]:
-    """Return a new list of policy-gated copies of ``tools``."""
+    """Return a fresh list of policy-gated copies."""
     return [wrap_tool(t, enforcer) for t in tools]

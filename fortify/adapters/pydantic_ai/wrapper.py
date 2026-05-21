@@ -1,10 +1,7 @@
-"""Entry point for wrapping a pydantic_ai ``Agent`` with Fortify policy.
-
-Builds the :class:`~fortify.security.policy_set.PolicySet` for the
-agent (today a stub — TODO to fetch from the Fortify control plane),
-constructs one :class:`~fortify.security.enforcer.PolicyEnforcer`, and
-returns a :class:`FortifyPydanticAgent` proxy whose underlying ``Agent``
-is a clone of the caller's with policy-gated tools.
+"""pydantic_ai adapter: build a :class:`PolicySet`, construct one
+:class:`PolicyEnforcer`, and return a :class:`FortifyPydanticAgent`
+proxy backed by a clone of the caller's ``Agent`` with policy-gated
+tools.
 """
 
 from __future__ import annotations
@@ -27,12 +24,7 @@ def build_policy_set(
     agent_name: str,  # noqa: ARG001 — same
     tool_names: list[str],
 ) -> PolicySet:
-    """Build the :class:`PolicySet` for a pydantic_ai agent.
-
-    Placeholder: returns a one-role bundle that allows every named tool.
-    TODO: fetch the canonical ``policy_yaml`` for ``agent_name`` from the
-    Fortify control plane via :class:`~fortify.cloud.FortifyClient`.
-    """
+    """Placeholder allow-all one-role bundle. TODO: cloud-fetch via FortifyClient."""
     default_policy = AgentPolicy(
         tools={name: BaseToolPolicy(mode="allow") for name in tool_names}
     )
@@ -40,12 +32,8 @@ def build_policy_set(
 
 
 def _extract_tools(agent: Agent) -> list[Tool]:
-    """Extract the Tool instances registered on ``agent``.
-
-    Pydantic AI normalizes both constructor-passed tools and
-    ``@agent.tool`` / ``@agent.tool_plain`` registrations into the
-    same ``_function_toolset.tools`` dict, keyed by tool name.
-    """
+    """Return Tool instances from ``agent._function_toolset`` (constructor
+    args and ``@agent.tool``/``tool_plain`` decorators normalize there)."""
     toolset = getattr(agent, "_function_toolset", None)
     tools = getattr(toolset, "tools", None) if toolset is not None else None
     if tools is None:
@@ -54,7 +42,7 @@ def _extract_tools(agent: Agent) -> list[Tool]:
 
 
 def _clone_agent_with_tools(agent: Agent, wrapped_tools: list[Tool]) -> Agent:
-    """Return a shallow copy of ``agent`` whose function toolset holds ``wrapped_tools``."""
+    """Return a shallow copy of ``agent`` with ``wrapped_tools`` installed."""
     agent_copy = copy.copy(agent)
     agent_copy.instrument = True
     toolset = getattr(agent, "_function_toolset", None)
@@ -70,27 +58,14 @@ def wrap_pydantic_agent(
     agent: Agent,
     api_key: str | None = None,
 ) -> FortifyPydanticAgent:
-    """Wrap a pydantic_ai agent with Fortify tool policy and observability.
+    """Wrap a pydantic_ai agent with Fortify policy + observability.
 
-    Returns a :class:`FortifyPydanticAgent` backed by a clone of
-    ``agent`` whose tools are gated by a freshly built
-    :class:`PolicyEnforcer`. The caller's original ``agent`` is not
-    mutated, so it can be reused or wrapped again independently.
-
-    The returned proxy expects a ``user`` keyword argument on each
-    invocation method (``run``, ``run_sync``, ``run_stream``, ``iter``).
-    Role resolution happens at call time from the active
-    :class:`~fortify.runtime.User`. ``NEEDS_APPROVAL`` outcomes raise
-    :class:`~pydantic_ai.exceptions.ModelRetry` with an
-    ``[approval_required]`` marker so the LLM sees the failure as a
-    tool-result message.
-
-    Args:
-        agent: The pydantic_ai agent to wrap. Tools are read directly off
-            the agent, so any tool registered via the constructor or via
-            ``@agent.tool`` / ``@agent.tool_plain`` is gated.
-        api_key: The Fortify API key. Falls back to the ``FORTIFY_KEY``
-            environment variable.
+    Returns a :class:`FortifyPydanticAgent` backed by a clone of the
+    caller's ``agent``; the original is not mutated. The proxy takes
+    ``user`` per call; role resolves at call time from the active
+    :class:`User`. ``NEEDS_APPROVAL`` raises :class:`ModelRetry` with
+    an ``[approval_required]`` marker. ``api_key`` falls back to
+    ``FORTIFY_KEY``.
     """
     resolved_key = api_key or os.getenv("FORTIFY_KEY")
     if not resolved_key:

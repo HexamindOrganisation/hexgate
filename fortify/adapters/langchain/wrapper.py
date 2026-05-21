@@ -1,16 +1,8 @@
-"""Entry point for retrofitting a pre-built LangGraph agent with Fortify.
-
-:func:`wrap_langchain_agent` is for the BYO-agent path: the caller built
-their own ``CompiledStateGraph`` via LangGraph and just wants Fortify
-policy enforcement layered on. The tools are mutated in place via
-:func:`~fortify.adapters.langchain.tools.install_enforcer_on_tool` so
-the existing graph keeps its references; the returned
-:class:`FortifyLangchainAgent` proxy binds a :class:`User` scope and
-Langfuse propagation per call.
-
-For the manifest-driven path (load an agent from disk or Fortify Cloud,
-let the SDK build the graph), use :func:`fortify.enforce_policy` on the
-returned :class:`FortifyAgent` instead.
+"""BYO-graph entry point: retrofit a pre-built ``CompiledStateGraph`` with
+Fortify policy. Tools are mutated in place so the graph keeps its
+references; the returned :class:`FortifyLangchainAgent` opens a User
+scope + Langfuse propagation per call. For the manifest-driven path,
+use :func:`fortify.enforce_policy` instead.
 """
 
 from __future__ import annotations
@@ -35,13 +27,7 @@ def build_policy_set(
     agent_name: str,  # noqa: ARG001 — same
     tool_names: list[str],
 ) -> PolicySet:
-    """Build the :class:`PolicySet` for a wrapped LangChain agent.
-
-    Placeholder: returns a one-role bundle that allows every named tool.
-    TODO: fetch the canonical ``policy_yaml`` for ``agent_name`` from the
-    Fortify control plane via :class:`~fortify.cloud.FortifyClient` and
-    parse it with ``load_policy_set_from_dict``.
-    """
+    """Placeholder allow-all one-role bundle. TODO: cloud-fetch via FortifyClient."""
     default_policy = AgentPolicy(
         tools={name: BaseToolPolicy(mode="allow") for name in tool_names}
     )
@@ -57,28 +43,11 @@ def wrap_langchain_agent(
 ) -> FortifyLangchainAgent:
     """Wrap a pre-built LangGraph agent with Fortify policy enforcement.
 
-    Mutates the caller's tool instances in place — every ``func`` /
-    ``coroutine`` is rebound to consult the new
-    :class:`~fortify.security.enforcer.PolicyEnforcer` before delegating.
-    The wrapped ``CompiledStateGraph`` keeps its existing tool
-    references and acquires enforcement transparently.
-
-    The returned proxy expects a ``user`` keyword argument on each
-    invocation method (``invoke``, ``ainvoke``, ``stream``, ``astream``,
-    ``astream_events``). Role resolution happens at call time from the
-    active :class:`~fortify.runtime.User`.
-
-    Args:
-        agent: The compiled LangGraph agent to wrap.
-        tools: The list of tools the agent was instantiated with. Mutated
-            in place; the same list is read back by the proxy for the
-            policy set's tool surface.
-        api_key: The Fortify API key. Falls back to the ``FORTIFY_KEY``
-            environment variable.
-        approval_handler: Resolves ``NEEDS_APPROVAL`` outcomes inline.
-            ``True`` / ``False`` short-circuit; a callable receives the
-            :class:`Decision` and returns ``bool``. When ``None``,
-            approval-required tool calls render as structured errors.
+    Mutates ``tools`` in place so the graph keeps its references.
+    The returned proxy takes ``user`` per invocation; role resolves at
+    call time from the active :class:`User`. ``approval_handler``
+    (callable or ``bool``) resolves ``NEEDS_APPROVAL`` inline; ``None``
+    renders structured errors. ``api_key`` falls back to ``FORTIFY_KEY``.
     """
     resolved_key = api_key if api_key else os.getenv("FORTIFY_KEY")
     if not resolved_key:

@@ -1,9 +1,6 @@
-"""Runner that wraps the OpenAI Agents ``Runner`` with Fortify policy + tracing.
-
-Each entry point opens a :class:`~fortify.runtime.User` scope around the
-delegated ``Runner.run*`` call so the wrapped tools' enforcers can resolve
-the active role from the contextvar at call time. Langfuse propagation
-mirrors the User identity into trace metadata.
+"""``Runner`` wrapper: opens a :class:`User` scope around each ``Runner.run*``
+call so the wrapped tools' enforcers can resolve the active role.
+Langfuse propagation mirrors the User identity into trace metadata.
 """
 
 import asyncio
@@ -39,7 +36,7 @@ class FortifyRunner:
             )
 
     def _setup_observability(self):
-        """Setup langfuse observability for the OpenAI agents."""
+        """Install Langfuse + OpenAIAgentsInstrumentor (idempotent)."""
         try:
             asyncio.get_running_loop()
         except RuntimeError:
@@ -51,7 +48,7 @@ class FortifyRunner:
 
     @contextmanager
     def _propagate(self, user: User, agent_name: str):
-        """Propagate the user identity to the Langfuse trace/span."""
+        """Propagate User identity into Langfuse spans for the block."""
         kwargs: dict[str, any] = {"tags": [f"openai.runner.run.{agent_name}"]}
         kwargs["user_id"] = user.user_id
         kwargs["session_id"] = user.session_id
@@ -101,14 +98,12 @@ class FortifyRunner:
         run_config: RunConfig | None = None,
         **kwargs,
     ) -> RunResultStreaming:
-        """Run the OpenAI agent streamed asynchronously inside a User scope.
+        """Stream the OpenAI agent inside a User scope.
 
-        ``Runner.run_streamed`` returns synchronously — it builds the run
-        state and hands back a ``RunResultStreaming`` whose ``stream_events``
-        async iterator is where tools actually run. The User scope is only
-        needed during iteration, so it's opened inside the wrapped iterator;
-        Langfuse propagation, in contrast, must be live for the setup call
-        so the trace span attaches correctly.
+        ``Runner.run_streamed`` returns sync; tools only run during
+        ``stream_events`` iteration. The User scope is opened inside the
+        wrapped iterator. Langfuse propagation runs during setup so the
+        trace span attaches.
         """
         self._setup_observability()
         wrapped_agent = wrap_openai_agent(agent, api_key=self.api_key)
