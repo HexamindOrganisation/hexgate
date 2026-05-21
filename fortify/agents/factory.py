@@ -382,13 +382,36 @@ class FortifyAgent:
 
         Accepts a path to a single YAML, a path to a ``policies/`` directory
         of role policies, an :class:`AgentPolicy`, an existing
-        :class:`PolicySet`, or ``None`` (deny-by-default).
+        :class:`PolicySet`, or ``None`` (no-op rebuild).
+
+        Tools are wrapped with the :class:`~fortify.adapters.langchain.tools.GuardedTool`
+        backed by :class:`~fortify.security.enforcer.PolicyEnforcer`. Role
+        resolution happens at call time from the active
+        :class:`~fortify.runtime.User`; ``approval_required`` outcomes render
+        as structured tool errors unless a separate
+        :meth:`with_approval_handler` chain (legacy path) is applied.
         """
-        from fortify.agents.security import wrap_tools_with_policy
+        from langchain_core.tools import BaseTool
+
+        from fortify.adapters.langchain.tools import GuardedTool
+        from fortify.security.enforcer import PolicyEnforcer
         from fortify.security.policy_set import PolicySet, load_policy_set
 
-        policy_set = policy if isinstance(policy, PolicySet) else load_policy_set(policy)
-        return self.with_tools(wrap_tools_with_policy(self.tools, policy_set))
+        if policy is None:
+            return self.with_tools(list(self.tools))
+
+        policy_set = (
+            policy if isinstance(policy, PolicySet) else load_policy_set(policy)
+        )
+        enforcer = PolicyEnforcer(policy_set, agent_name=self.name)
+
+        wrapped: list[ToolSpec] = []
+        for tool_spec in self.tools:
+            if isinstance(tool_spec, BaseTool):
+                wrapped.append(GuardedTool.wrap(tool_spec, enforcer=enforcer))
+            else:
+                wrapped.append(tool_spec)
+        return self.with_tools(wrapped)
 
     def with_before_action(
         self,
