@@ -8,7 +8,7 @@ import pytest
 from langchain_core.tools import tool
 
 from fortify.agents import factory
-from fortify.agents.security import enforce_policy
+from fortify.agents.factory import enforce_policy
 from fortify.security import (
     AgentPolicy,
     ApprovalRequiredError,

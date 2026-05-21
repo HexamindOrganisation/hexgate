@@ -1,71 +1,74 @@
+"""Policy-gated wrappers around pydantic_ai ``Tool`` instances.
+
+Each tool is wrapped so its ``function_schema.call`` consults a shared
+:class:`~fortify.security.enforcer.PolicyEnforcer` before delegating to
+the original implementation. pydantic_ai's idiom for "feed this back to
+the model as a tool result" is :class:`~pydantic_ai.exceptions.ModelRetry`,
+so denials and approval-required outcomes are raised as ModelRetry with a
+rendered :class:`~fortify.security.decision.Decision` message.
+"""
+
 from __future__ import annotations
 
 import copy
 import functools
-from contextlib import contextmanager
-from contextvars import ContextVar
-from typing import Any, Iterator
+from collections.abc import Awaitable, Callable
+from inspect import isawaitable
+from typing import Any, Union
 
 from pydantic_ai import RunContext
 from pydantic_ai.exceptions import ModelRetry
 from pydantic_ai.tools import Tool
 
-from fortify.security import (
-    AgentPolicy,
-    ApprovalRequiredError,
-    PolicyDeniedError,
-    authorize_tool_call,
-)
+from fortify.security.decision import Decision, DecisionOutcome
+from fortify.security.enforcer import PolicyEnforcer
 
 
-_active_policy: ContextVar[AgentPolicy | None] = ContextVar(
-    "fortify_active_policy_pydantic_ai", default=None
-)
+ApprovalHandler = Union[
+    Callable[[Decision], "bool | Awaitable[bool]"],
+    bool,
+]
 
 
-@contextmanager
-def active_policy(policy: AgentPolicy) -> Iterator[None]:
-    """Bind `policy` for the current async/thread context.
-
-    Tool gates installed by `wrap_tool` consult this contextvar at call
-    time, so callers must enter this context manager before invoking the
-    agent. `ContextVar` is per-task, so concurrent invocations for
-    different users do not see each other's policies.
-    """
-    token = _active_policy.set(policy)
-    try:
-        yield
-    finally:
-        _active_policy.reset(token)
-
-
-class ToolDeniedError(ModelRetry):
-    """Raised when a tool call is blocked by the `AgentPolicy`.
-
-    Inherits from `ModelRetry` so pydantic_ai surfaces the denial back
-    to the model as a tool-result message rather than aborting the run,
-    matching the behavior of the Langchain wrapper's `ToolException`.
-    """
-
-    def __init__(self, tool_name: str, reason: str | None = None) -> None:
-        self.tool_name = tool_name
-        suffix = f" ({reason})" if reason else ""
-        message = (
-            f"Tool '{tool_name}' is denied by the agent policy{suffix}. "
-            "The tool was not executed."
+def _render_decision(decision: Decision) -> str:
+    """Format a non-allow :class:`Decision` as the message body of a ModelRetry."""
+    if decision.outcome is DecisionOutcome.NEEDS_APPROVAL:
+        return (
+            f"[approval_required] Tool '{decision.tool_name}' requires human "
+            "approval before execution. The tool was not executed."
         )
-        super().__init__(message)
+    return (
+        f"[policy_denied] Tool '{decision.tool_name}' is denied by the agent "
+        "policy. The tool was not executed."
+    )
 
 
-def wrap_tool(tool: Tool) -> Tool:
-    """Return a copy of `tool` with a policy gate installed.
+async def _resolve_approval_async(
+    handler: ApprovalHandler, decision: Decision
+) -> bool:
+    """Resolve a NEEDS_APPROVAL decision against ``handler``."""
+    if isinstance(handler, bool):
+        return handler
+    result = handler(decision)
+    if isawaitable(result):
+        result = await result
+    return bool(result)
 
-    The original `Tool` and its `function_schema` are left untouched —
-    only the returned copy carries the gate. The gate is applied by
-    overriding `function_schema.call`, the single async entrypoint
-    pydantic_ai uses to invoke the tool. The gate consults the
-    `_active_policy` contextvar at call time, so the same wrapped tool
-    can serve many users concurrently.
+
+def wrap_tool(
+    tool: Tool,
+    enforcer: PolicyEnforcer,
+    *,
+    approval_handler: ApprovalHandler | None = None,
+) -> Tool:
+    """Return a copy of ``tool`` with a policy gate installed.
+
+    The original :class:`Tool` and its ``function_schema`` are left
+    untouched — only the returned copy carries the gate. The gate
+    replaces ``function_schema.call`` with a closure that asks the
+    enforcer for a :class:`Decision` and either delegates (allow) or
+    raises :class:`ModelRetry` with the rendered failure message
+    (deny / approval-required without a truthy handler decision).
     """
     name = tool.name
     tool_copy = copy.copy(tool)
@@ -73,20 +76,31 @@ def wrap_tool(tool: Tool) -> Tool:
     original_call = tool_copy.function_schema.call
 
     @functools.wraps(original_call)
-    async def guarded_call(args_dict: dict[str, Any], context: RunContext[Any]) -> Any:
-        policy = _active_policy.get()
-        if policy is None:
-            raise ToolDeniedError(name, "no active Fortify policy")
-        try:
-            authorize_tool_call(policy, name, args_dict)
-        except (PolicyDeniedError, ApprovalRequiredError):
-            raise ToolDeniedError(name)
-        return await original_call(args_dict, context)
+    async def guarded_call(
+        args_dict: dict[str, Any], context: RunContext[Any]
+    ) -> Any:
+        decision = enforcer.decide(name, args_dict or {})
+        if decision.allowed:
+            return await original_call(args_dict, context)
+        if (
+            decision.outcome is DecisionOutcome.NEEDS_APPROVAL
+            and approval_handler is not None
+            and await _resolve_approval_async(approval_handler, decision)
+        ):
+            return await original_call(args_dict, context)
+        raise ModelRetry(_render_decision(decision))
 
     tool_copy.function_schema.call = guarded_call
     return tool_copy
 
 
-def wrap_tools(tools: list[Tool]) -> list[Tool]:
-    """Return copies of `tools`, each carrying a policy gate."""
-    return [wrap_tool(t) for t in tools]
+def wrap_tools(
+    tools: list[Tool],
+    enforcer: PolicyEnforcer,
+    *,
+    approval_handler: ApprovalHandler | None = None,
+) -> list[Tool]:
+    """Return copies of ``tools``, each carrying a policy gate."""
+    return [
+        wrap_tool(t, enforcer, approval_handler=approval_handler) for t in tools
+    ]

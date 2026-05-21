@@ -422,6 +422,25 @@ class FortifyAgent:
 AgentGraph: TypeAlias = FortifyAgent
 
 
+def enforce_policy(
+    agent: AgentGraph,
+    policy: object,
+    *,
+    approval_handler: Any = None,
+) -> AgentGraph:
+    """Apply policy enforcement to ``agent``.
+
+    Functional alias for :meth:`FortifyAgent.enforce_policy`. ``policy``
+    may be a path to a single YAML file (legacy), a directory of role
+    policies, an :class:`~fortify.security.AgentPolicy`, an existing
+    :class:`~fortify.security.PolicySet`, or ``None`` (no-op rebuild).
+    ``approval_handler`` resolves ``NEEDS_APPROVAL`` outcomes inline at
+    the adapter level — see :meth:`FortifyAgent.enforce_policy` for the
+    full contract.
+    """
+    return agent.enforce_policy(policy, approval_handler=approval_handler)
+
+
 @observe(name="create_fortify_agent")
 def create_agent(
     model: str | BaseChatModel,

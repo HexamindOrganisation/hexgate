@@ -2,6 +2,7 @@
 
 from fortify.agents.factory import (
     create_agent,
+    enforce_policy,
     invoke_agent,
     stream_agent,
     stream_agent_raw,
@@ -27,8 +28,6 @@ from fortify.agents.loader import (
     unregister_agent,
 )
 from fortify.agents.models import AgentSpec
-from fortify.agents.security import enforce_policy
-
 __all__ = [
     "AgentSpec",
     "clear_registered_agents",

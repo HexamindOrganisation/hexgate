@@ -11,7 +11,7 @@ from typing import Any, Literal, TypeAlias
 import yaml
 
 from fortify.agents.factory import AgentGraph, create_agent
-from fortify.agents.security import enforce_policy
+from fortify.agents.factory import enforce_policy
 from fortify.agents.models import AgentSpec
 from fortify.cloud.client import FortifyClient, FortifyConfig, resolve_agent_name
 from fortify.security import AgentPolicy, load_policy

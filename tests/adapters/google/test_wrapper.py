@@ -8,14 +8,9 @@ import pytest
 from google.adk.agents import LlmAgent
 from google.adk.tools.function_tool import FunctionTool
 
-from fortify.adapters.google.wrapper import build_agent_policy, wrap_google_agent
-from fortify.security import AgentPolicy
-from fortify.runtime import UserContext
-
-
-def _user_context() -> UserContext:
-    """Build a minimal UserContext for wrapper tests."""
-    return UserContext(user_id="u-1", session_id="s-1", user_role="developer")
+from fortify.adapters.google.wrapper import build_policy_set, wrap_google_agent
+from fortify.runtime import User
+from fortify.security import PolicySet
 
 
 def _make_callable(name: str = "echo") -> Any:
@@ -39,34 +34,39 @@ def _make_agent(name: str = "my_agent", *, with_tools: bool = True) -> LlmAgent:
     return LlmAgent(name=name, model="gemini-2.0-flash", tools=tools)
 
 
-def test_build_agent_policy_returns_allow_for_each_tool() -> None:
+# ---------------------------------------------------------------------------
+# build_policy_set
+# ---------------------------------------------------------------------------
+
+
+def test_build_policy_set_allows_each_tool_under_default_role() -> None:
     """The placeholder policy builder allows every tool name it receives."""
-    policy = build_agent_policy(
-        api_key="k",
-        context=_user_context(),
-        agent_name="my_agent",
-        tool_names=["echo", "shout"],
+    policy_set = build_policy_set(
+        api_key="k", agent_name="my_agent", tool_names=["echo", "shout"]
     )
 
-    assert isinstance(policy, AgentPolicy)
-    assert policy.tools["echo"].mode == "allow"
-    assert policy.tools["shout"].mode == "allow"
+    assert isinstance(policy_set, PolicySet)
+    default_policy = policy_set.policy_for(None)
+    assert default_policy.tools["echo"].mode == "allow"
+    assert default_policy.tools["shout"].mode == "allow"
 
 
-def test_build_agent_policy_with_no_tools_returns_empty_tools_dict() -> None:
-    """No tool names → no per-tool entries; default policy still applies."""
-    policy = build_agent_policy(
-        api_key="k", context=_user_context(), agent_name="my_agent", tool_names=[]
-    )
+def test_build_policy_set_with_no_tools_returns_empty_tools_map() -> None:
+    policy_set = build_policy_set("k", "my_agent", [])
 
-    assert policy.tools == {}
+    assert policy_set.policy_for(None).tools == {}
+
+
+# ---------------------------------------------------------------------------
+# wrap_google_agent — clone + non-mutation
+# ---------------------------------------------------------------------------
 
 
 def test_wrap_google_agent_returns_a_new_agent_with_wrapped_tools() -> None:
-    """wrap_google_agent returns a clone whose tools are policy-gated copies."""
+    """Returns a clone whose tools are policy-gated copies."""
     original = _make_agent()
 
-    wrapped = wrap_google_agent(original, _user_context(), api_key="k")
+    wrapped = wrap_google_agent(original, api_key="k")
 
     assert wrapped is not original
     assert wrapped.name == original.name
@@ -78,89 +78,125 @@ def test_wrap_google_agent_does_not_mutate_original_agent() -> None:
     original = _make_agent()
     original_tools = list(original.tools)
 
-    wrap_google_agent(original, _user_context(), api_key="k")
+    wrap_google_agent(original, api_key="k")
 
     assert list(original.tools) == original_tools
 
 
+def test_wrap_google_agent_with_no_tools_returns_clone_with_empty_tools() -> None:
+    original = _make_agent(with_tools=False)
+
+    wrapped = wrap_google_agent(original, api_key="k")
+
+    assert wrapped is not original
+    assert list(wrapped.tools) == []
+
+
+# ---------------------------------------------------------------------------
+# wrap_google_agent — enforcer wiring (verified end-to-end via a stubbed policy)
+# ---------------------------------------------------------------------------
+
+
 @pytest.mark.asyncio
-async def test_wrap_google_agent_installs_policy_gates_built_from_user_context(
+async def test_wrap_google_agent_installs_enforcer_with_built_policy_set(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The cloned agent's tools enforce the policy returned by build_agent_policy."""
+    """The cloned agent's tools enforce the PolicySet returned by build_policy_set."""
+    from fortify.security import AgentPolicy
+    from fortify.security.policy_set import DEFAULT_ROLE_NAME
+
     captured: dict[str, Any] = {}
 
-    def fake_build(
-        api_key: str,
-        context: UserContext,
-        agent_name: str,
-        tool_names: list[str],
-    ) -> AgentPolicy:
+    def fake_build(api_key: str, agent_name: str, tool_names: list[str]) -> PolicySet:
         captured.update(
             {
                 "api_key": api_key,
-                "context": context,
                 "agent_name": agent_name,
                 "tool_names": list(tool_names),
             }
         )
-        return AgentPolicy.model_validate(
+        return PolicySet(
             {
-                "default_policy": {"mode": "deny"},
-                "tools": {name: {"mode": "deny"} for name in tool_names},
+                DEFAULT_ROLE_NAME: AgentPolicy.model_validate(
+                    {
+                        "default_policy": {"mode": "deny"},
+                        "tools": {n: {"mode": "deny"} for n in tool_names},
+                    }
+                )
             }
         )
 
     monkeypatch.setattr(
-        "fortify.adapters.google.wrapper.build_agent_policy", fake_build
+        "fortify.adapters.google.wrapper.build_policy_set", fake_build
     )
 
     original = _make_agent()
-    ctx = _user_context()
-
-    wrapped = wrap_google_agent(original, ctx, api_key="api-123")
+    wrapped = wrap_google_agent(original, api_key="api-123")
 
     assert captured["api_key"] == "api-123"
-    assert captured["context"] is ctx
     assert captured["agent_name"] == "my_agent"
     assert sorted(captured["tool_names"]) == ["echo", "shout"]
 
+    # Role resolution at call time → no User scope → default → deny.
     [echo_tool, shout_tool] = wrapped.tools
     echo_result = await echo_tool.run_async(args={"text": "hi"}, tool_context=None)
     shout_result = await shout_tool.run_async(args={"text": "hi"}, tool_context=None)
-    assert "denied" in echo_result
-    assert "denied" in shout_result
+    assert "policy_denied" in echo_result
+    assert "policy_denied" in shout_result
 
 
-def test_wrap_google_agent_uses_function_name_for_callable_tools(
+@pytest.mark.asyncio
+async def test_wrap_google_agent_resolves_role_at_call_time(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A role-aware PolicySet routes per-call via the active User's role."""
+    from fortify.security import AgentPolicy
+    from fortify.security.policy_set import DEFAULT_ROLE_NAME
+
+    monkeypatch.setattr(
+        "fortify.adapters.google.wrapper.build_policy_set",
+        lambda api_key, agent_name, tool_names: PolicySet(
+            {
+                DEFAULT_ROLE_NAME: AgentPolicy.model_validate(
+                    {"default_policy": {"mode": "deny"}}
+                ),
+                "support": AgentPolicy.model_validate(
+                    {
+                        "default_policy": {"mode": "deny"},
+                        "tools": {n: {"mode": "allow"} for n in tool_names},
+                    }
+                ),
+            }
+        ),
+    )
+
+    wrapped = wrap_google_agent(_make_agent(), api_key="k")
+    [echo_tool, _] = wrapped.tools
+
+    # No User → deny.
+    denied = await echo_tool.run_async(args={"text": "hi"}, tool_context=None)
+    assert "policy_denied" in denied
+
+    # support → allow.
+    async with User(user_id="u-1", role="support"):
+        allowed = await echo_tool.run_async(args={"text": "hi"}, tool_context=None)
+    assert allowed == "echo:hi"
+
+
+def test_wrap_google_agent_passes_tool_names_for_callable_tools(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Plain callables expose their __name__ as the policy tool name."""
     captured: dict[str, list[str]] = {}
 
-    def fake_build(
-        api_key: str,
-        context: UserContext,
-        agent_name: str,
-        tool_names: list[str],
-    ) -> AgentPolicy:
+    def fake_build(api_key: str, agent_name: str, tool_names: list[str]) -> PolicySet:
         captured["tool_names"] = list(tool_names)
-        return AgentPolicy.model_validate({"default_policy": {"mode": "allow"}})
+        return build_policy_set(api_key, agent_name, tool_names)
 
     monkeypatch.setattr(
-        "fortify.adapters.google.wrapper.build_agent_policy", fake_build
+        "fortify.adapters.google.wrapper.build_policy_set", fake_build
     )
 
-    wrap_google_agent(_make_agent(), _user_context(), api_key="k")
+    wrap_google_agent(_make_agent(), api_key="k")
 
     assert sorted(captured["tool_names"]) == ["echo", "shout"]
-
-
-def test_wrap_google_agent_with_no_tools_returns_clone_with_empty_tools() -> None:
-    """An agent with no tools wraps cleanly to a clone with no tools."""
-    original = _make_agent(with_tools=False)
-
-    wrapped = wrap_google_agent(original, _user_context(), api_key="k")
-
-    assert wrapped is not original
-    assert list(wrapped.tools) == []

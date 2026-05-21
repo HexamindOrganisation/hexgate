@@ -10,7 +10,7 @@ from google.adk.models.lite_llm import LiteLlm
 from google.adk.sessions import InMemorySessionService
 from google.genai import types
 
-from fortify.runtime import UserContext
+from fortify.runtime import User
 from fortify.adapters.google import FortifyRunner
 
 
@@ -36,17 +36,17 @@ async def main():
         tools=[get_current_time, get_weather],
     )
 
-    user_context = UserContext(
+    user = User(
         user_id="google_user_1",
         session_id="google_session_1",
-        user_role="user",
+        role="user",
     )
 
     session_service = InMemorySessionService()
     await session_service.create_session(
         app_name="google_runner_example",
-        user_id=user_context.user_id,
-        session_id=user_context.session_id,
+        user_id=user.user_id,
+        session_id=user.session_id,
     )
 
     runner = FortifyRunner(
@@ -60,9 +60,7 @@ async def main():
         role="user", parts=[types.Part(text="what is the weather in New Delhi?")]
     )
 
-    async for event in runner.run_async(
-        new_message=user_msg, user_context=user_context
-    ):
+    async for event in runner.run_async(new_message=user_msg, user=user):
         if event.is_final_response():
             print(event.content.parts[0].text)
 

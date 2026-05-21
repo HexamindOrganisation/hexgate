@@ -1,20 +1,16 @@
 """Execution-time context propagation — tool-scope and user-scope.
 
-Two layers of "who is this for?" live here:
+:class:`User` is the canonical user-scope primitive. It carries user
+identity plus attenuation hints (``role`` / ``session_id`` /
+``ttl_seconds``) the agent runtime uses to lazily mint a per-request
+Biscuit, and doubles as an ``async with`` (or :meth:`User.sync_scope`)
+context manager so request handlers can scope a whole invocation under
+one identity without threading kwargs. All Fortify SDK adapters
+(LangChain, OpenAI Agents, Google ADK, Pydantic AI) consume this via
+the :func:`get_current_user` contextvar lookup.
 
-* :class:`UserContext` — the legacy tracing identity required by the
-  adapters (LangChain, Google ADK, OpenAI Agents, Pydantic AI). Three
-  fixed string fields; consumed by Langfuse span tagging.
-
-* :class:`User` — the M1 user-scope primitive. Carries user identity plus
-  the attenuation hints (``limits`` / ``scope`` / ``ttl_seconds``) the
-  agent runtime uses to lazily mint a per-request Biscuit. Doubles as an
-  ``async with`` context manager so the dev's request handler can scope a
-  whole invocation under one user identity without threading kwargs.
-
-The two classes don't share a base — ``UserContext`` is what adapters
-already require; ``User`` is what the new attenuation-aware runtime
-reads off a contextvar. They can coexist in the same request.
+:class:`ToolUseContext` is the tool-level hidden meta-argument carrying
+Biscuit-extracted facts down into individual tool calls.
 """
 
 from __future__ import annotations
@@ -28,14 +24,6 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, PrivateAttr
 
 from fortify.runtime.workspace import Workspace
-
-
-class UserContext(BaseModel):
-    """Per-invocation user identity propagated into traces and policy decisions."""
-
-    user_id: str
-    session_id: str
-    user_role: str
 
 
 @dataclass(slots=True)

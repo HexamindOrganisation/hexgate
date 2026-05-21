@@ -2,7 +2,7 @@ import asyncio
 from dotenv import load_dotenv
 from pydantic_ai import Agent
 
-from fortify.runtime import UserContext
+from fortify.runtime import User
 from fortify.adapters.pydantic_ai import wrap_pydantic_agent
 
 
@@ -28,9 +28,9 @@ async def main():
 
     result = await agent.run(
         "What is the weather in Tokyo?",
-        user_context=UserContext(
+        user=User(
             user_id="pydantic_ai_user_1",
-            user_role="member",
+            role="member",
             session_id="pydantic_ai_session_1",
         ),
     )
