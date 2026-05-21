@@ -6,6 +6,7 @@ from fortify.agents.factory import (
     invoke_agent,
     stream_agent,
     stream_agent_raw,
+    with_before_action,
 )
 from fortify.agents.loader import (
     clear_registered_agents,
@@ -71,5 +72,6 @@ __all__ = [
     "stream_agent_raw",
     "unregister_agent",
     "web_search",
+    "with_before_action",
     "write_file",
 ]

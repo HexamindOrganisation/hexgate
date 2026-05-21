@@ -418,6 +418,43 @@ class FortifyAgent:
                 wrapped.append(tool_spec)
         return self.with_tools(wrapped)
 
+    def with_before_action(
+        self,
+        before_action: Any,
+        *,
+        context_provider: Any = None,
+    ) -> Self:
+        """Return a new agent runtime with a Gate 2 pre-tool hook applied.
+
+        ``before_action`` is the legacy
+        ``Callable[[ActionPayload, ActionContext], object | Awaitable[object]]``
+        shape: it receives a dict carrying ``tool_name`` / ``arguments`` /
+        ``agent_name`` and an opaque context dict produced by
+        ``context_provider``. Raising any exception inside the hook vetoes
+        the call with a structured ``before_action_denied`` payload.
+
+        Re-wrapping a tool that has already been policy-enforced preserves
+        the enforcer; passing a raw tool adds Gate 2 without Gate 1.
+        """
+        from langchain_core.tools import BaseTool
+
+        from fortify.adapters.langchain.tools import GuardedTool
+
+        wrapped: list[ToolSpec] = []
+        for tool_spec in self.tools:
+            if isinstance(tool_spec, BaseTool):
+                wrapped.append(
+                    GuardedTool.wrap(
+                        tool_spec,
+                        before_action=before_action,
+                        context_provider=context_provider,
+                        agent_name=self.name,
+                    )
+                )
+            else:
+                wrapped.append(tool_spec)
+        return self.with_tools(wrapped)
+
 
 AgentGraph: TypeAlias = FortifyAgent
 
@@ -439,6 +476,18 @@ def enforce_policy(
     full contract.
     """
     return agent.enforce_policy(policy, approval_handler=approval_handler)
+
+
+def with_before_action(
+    agent: AgentGraph,
+    before_action: Any,
+    *,
+    context_provider: Any = None,
+) -> AgentGraph:
+    """Return an agent runtime with a Gate 2 pre-tool hook applied."""
+    return agent.with_before_action(
+        before_action, context_provider=context_provider
+    )
 
 
 @observe(name="create_fortify_agent")

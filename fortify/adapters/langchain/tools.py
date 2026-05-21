@@ -41,6 +41,16 @@ ApprovalHandler = Union[
 ]
 
 
+# Gate 2 host-facing types — kept compatible with the ``with_before_action``
+# shim, which calls the hook with these dict shapes.
+ActionPayload = dict[str, Any]
+ActionContext = Union[dict[str, Any], None]
+BeforeActionHook = Callable[
+    [ActionPayload, ActionContext], "object | Awaitable[object]"
+]
+ContextProvider = Callable[[], ActionContext]
+
+
 def _copy_tool_metadata(source: Any, target: Any) -> Any:
     """Copy fortify-specific tool metadata (e.g. tracing labels) onto a wrapper."""
     metadata = getattr(source, TOOL_METADATA_ATTR, None)
@@ -91,25 +101,57 @@ class GuardedTool(BaseTool):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     wrapped_tool: BaseTool
-    enforcer: PolicyEnforcer
+    enforcer: PolicyEnforcer | None = None
     approval_handler: ApprovalHandler | None = None
+    # Gate 2: hosted pre-tool hook. Runs after Gate 1 ALLOW (or no enforcer)
+    # and before the wrapped tool. Raising any exception inside vetoes the
+    # call with a ``before_action_denied`` structured error.
+    before_action: BeforeActionHook | None = None
+    context_provider: ContextProvider | None = None
+    agent_name: str | None = None
 
     @classmethod
     def wrap(
         cls,
         tool: BaseTool,
         *,
-        enforcer: PolicyEnforcer,
+        enforcer: PolicyEnforcer | None = None,
         approval_handler: ApprovalHandler | None = None,
+        before_action: BeforeActionHook | None = None,
+        context_provider: ContextProvider | None = None,
+        agent_name: str | None = None,
     ) -> "GuardedTool":
         """Return a GuardedTool that delegates to ``tool`` after policy check.
 
         Idempotent on re-wrap: if ``tool`` is already a ``GuardedTool``,
         the inner wrapped_tool is unwrapped first so we don't stack
-        enforcers. The new enforcer and approval_handler replace whatever
-        the previous wrapper carried.
+        enforcers. Hook fields fall through from the existing wrapper when
+        not explicitly overridden — so chaining ``.with_before_action()``
+        after ``.enforce_policy(...)`` preserves the enforcer.
         """
-        inner = tool.wrapped_tool if isinstance(tool, cls) else tool
+        if isinstance(tool, cls):
+            inner = tool.wrapped_tool
+            resolved_enforcer = enforcer if enforcer is not None else tool.enforcer
+            resolved_approval = (
+                approval_handler if approval_handler is not None else tool.approval_handler
+            )
+            resolved_before = (
+                before_action if before_action is not None else tool.before_action
+            )
+            resolved_context = (
+                context_provider
+                if context_provider is not None
+                else tool.context_provider
+            )
+            resolved_agent_name = agent_name or tool.agent_name
+        else:
+            inner = tool
+            resolved_enforcer = enforcer
+            resolved_approval = approval_handler
+            resolved_before = before_action
+            resolved_context = context_provider
+            resolved_agent_name = agent_name
+
         guarded = cls(
             name=inner.name,
             description=inner.description,
@@ -123,34 +165,88 @@ class GuardedTool(BaseTool):
             handle_validation_error=inner.handle_validation_error,
             response_format=inner.response_format,
             wrapped_tool=inner,
-            enforcer=enforcer,
-            approval_handler=approval_handler,
+            enforcer=resolved_enforcer,
+            approval_handler=resolved_approval,
+            before_action=resolved_before,
+            context_provider=resolved_context,
+            agent_name=resolved_agent_name,
         )
         return _copy_tool_metadata(inner, guarded)
 
+    def _build_action(self, kwargs: dict[str, Any]) -> ActionPayload:
+        """Build the legacy-shaped action payload for a Gate 2 hook."""
+        return {
+            "tool_name": self.name,
+            "arguments": kwargs,
+            "agent_name": self.agent_name,
+        }
+
+    def _build_context(self) -> ActionContext:
+        """Return the current host context for the Gate 2 hook, when configured."""
+        return self.context_provider() if self.context_provider is not None else None
+
+    def _before_action_denied(self, message: str) -> dict[str, Any]:
+        """Render a Gate 2 veto as the structured tool failure the LLM sees."""
+        return {
+            "ok": False,
+            "error": {
+                "type": "before_action_denied",
+                "message": message,
+                "tool_name": self.name,
+                "retryable": False,
+            },
+        }
+
+    async def _check_before_action(
+        self, kwargs: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        """Apply the Gate 2 hook; return a structured veto payload on raise."""
+        if self.before_action is None:
+            return None
+        try:
+            result = self.before_action(
+                self._build_action(kwargs), self._build_context()
+            )
+            if isawaitable(result):
+                await result
+        except Exception as error:
+            return self._before_action_denied(str(error))
+        return None
+
     async def _arun(self, *args: Any, **kwargs: Any) -> Any:
-        decision = self.enforcer.decide(self.name, kwargs)
-        if decision.allowed:
-            return await self._invoke_wrapped_async(*args, **kwargs)
-        if (
-            decision.outcome is DecisionOutcome.NEEDS_APPROVAL
-            and self.approval_handler is not None
-            and await _resolve_approval_async(self.approval_handler, decision)
-        ):
-            return await self._invoke_wrapped_async(*args, **kwargs)
-        return {"ok": False, "error": decision.as_error_payload()}
+        if self.enforcer is not None:
+            decision = self.enforcer.decide(self.name, kwargs)
+            if not decision.allowed:
+                if (
+                    decision.outcome is DecisionOutcome.NEEDS_APPROVAL
+                    and self.approval_handler is not None
+                    and await _resolve_approval_async(self.approval_handler, decision)
+                ):
+                    pass  # approved → fall through to Gate 2 and invoke
+                else:
+                    return {"ok": False, "error": decision.as_error_payload()}
+        veto = await self._check_before_action(kwargs)
+        if veto is not None:
+            return veto
+        return await self._invoke_wrapped_async(*args, **kwargs)
 
     def _run(self, *args: Any, **kwargs: Any) -> Any:
-        decision = self.enforcer.decide(self.name, kwargs)
-        if decision.allowed:
-            return self._invoke_wrapped_sync(*args, **kwargs)
-        if (
-            decision.outcome is DecisionOutcome.NEEDS_APPROVAL
-            and self.approval_handler is not None
-            and _resolve_approval_sync(self.approval_handler, decision)
-        ):
-            return self._invoke_wrapped_sync(*args, **kwargs)
-        return {"ok": False, "error": decision.as_error_payload()}
+        if self.enforcer is not None:
+            decision = self.enforcer.decide(self.name, kwargs)
+            if not decision.allowed:
+                if (
+                    decision.outcome is DecisionOutcome.NEEDS_APPROVAL
+                    and self.approval_handler is not None
+                    and _resolve_approval_sync(self.approval_handler, decision)
+                ):
+                    pass
+                else:
+                    return {"ok": False, "error": decision.as_error_payload()}
+        if self.before_action is not None:
+            raise RuntimeError(
+                "before_action requires async tool execution; use ainvoke/astream_events"
+            )
+        return self._invoke_wrapped_sync(*args, **kwargs)
 
     async def _invoke_wrapped_async(self, *args: Any, **kwargs: Any) -> Any:
         """Call the wrapped tool's implementation without re-entering instrumentation."""
