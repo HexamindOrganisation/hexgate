@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Bot, ShieldCheck, Wrench } from 'lucide-react'
+import { Bot, FileText, ShieldCheck, Wrench } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import {
   api,
@@ -108,6 +108,10 @@ function ManifestView({ agent }: { agent: AgentManifestView }) {
         tools={agent.manifest?.tools ?? []}
         unregistered={agent.manifest === null}
       />
+      <SystemPromptSection
+        prompt={agent.manifest?.system_prompt ?? null}
+        unregistered={agent.manifest === null}
+      />
     </div>
   )
 }
@@ -126,6 +130,11 @@ function ManifestSummary({ agent }: { agent: AgentManifestView }) {
       </div>
       <dl className="divide-y divide-border text-sm">
         <ManifestRow label="Name" value={agent.name} mono />
+        <ManifestRow
+          label="Model"
+          value={agent.manifest?.model?.trim() || '—'}
+          mono
+        />
         <ManifestRow
           label="Description"
           value={agent.manifest?.description?.trim() || '—'}
@@ -164,6 +173,44 @@ function ToolsSection({
             <ToolRow key={t.name} tool={t} />
           ))}
         </ul>
+      )}
+    </section>
+  )
+}
+
+function SystemPromptSection({
+  prompt,
+  unregistered,
+}: {
+  prompt: string | null
+  unregistered: boolean
+}) {
+  return (
+    <section className="rounded-lg border border-border bg-card">
+      <div className="px-5 py-4 border-b border-border flex items-center gap-2">
+        <FileText className="size-4 text-muted-foreground" />
+        <span className="text-sm font-medium">System prompt</span>
+        {prompt && (
+          <Badge variant="outline" className="ml-1 font-mono text-[11px]">
+            {prompt.length} chars
+          </Badge>
+        )}
+      </div>
+      {prompt ? (
+        <details className="group" open>
+          <summary className="px-5 py-2 text-[11px] text-muted-foreground cursor-pointer select-none">
+            show / hide
+          </summary>
+          <pre className="px-5 pb-4 text-[12px] font-mono text-foreground whitespace-pre-wrap break-words">
+            {prompt}
+          </pre>
+        </details>
+      ) : (
+        <p className="px-5 py-4 text-xs text-muted-foreground">
+          {unregistered
+            ? 'Agent not registered yet — run `fortify register` to populate.'
+            : 'No system prompt declared.'}
+        </p>
       )}
     </section>
   )

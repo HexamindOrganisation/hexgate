@@ -90,6 +90,8 @@ export interface AgentManifest {
   name: string
   description: string | null
   framework: string
+  model: string | null
+  system_prompt: string | null
   tools: ToolDefinition[]
 }
 

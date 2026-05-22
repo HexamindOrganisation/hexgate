@@ -14,11 +14,14 @@ def create_manifest(
     *,
     description: str | None = None,
     tools: list[BaseTool] | None = None,
+    model: object | None = None,
+    system_prompt: object | None = None,
 ) -> AgentManifest:
     """Create an AgentManifest from an Agent.
 
     `tools` is required and used explicitly only when `agent` is a raw LangChain
     compiled graph, since those graphs do not reliably expose their tool nodes.
+    The same is true of `model` and `system_prompt`.
 
     Framework-specific submodules (and their SDK imports) are loaded lazily so
     callers only import the SDK they actually use.
@@ -46,7 +49,13 @@ def create_manifest(
             raise ValueError(
                 "LangChain graphs require `tools` to be passed explicitly to create_manifest()"
             )
-        return create_langchain_manifest(agent, tools, description=description)
+        return create_langchain_manifest(
+            agent,
+            tools,
+            description=description,
+            model=model,
+            system_prompt=system_prompt,
+        )
 
     if module == "pydantic_ai" or module.startswith("pydantic_ai."):
         from fortify.cli.register.pydantic_ai import create_pydantic_ai_manifest

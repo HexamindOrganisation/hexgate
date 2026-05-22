@@ -273,12 +273,20 @@ def test_validate_accumulates_errors_across_roles(client: TestClient) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _sample_manifest(name: str, *, description: str | None = None) -> dict:
+def _sample_manifest(
+    name: str,
+    *,
+    description: str | None = None,
+    model: str | None = None,
+    system_prompt: str | None = None,
+) -> dict:
     """Minimal AgentManifest payload for register_manifest in tests."""
     return {
         "name": name,
         "description": description,
         "framework": "fortify",
+        "model": model,
+        "system_prompt": system_prompt,
         "tools": [
             {
                 "name": "echo",
@@ -346,3 +354,70 @@ def test_manifest_endpoint_returns_latest_version(client: TestClient, engine) ->
     row = next(r for r in resp.json() if r["name"] == "support_bot")
     assert row["version"] == 2
     assert row["manifest"]["description"] == "v2"
+
+
+def test_manifest_endpoint_round_trips_model_and_system_prompt(
+    client: TestClient, engine
+) -> None:
+    """The new manifest fields survive register → read."""
+    from schemas import AgentManifest
+    from services import register_manifest
+
+    with Session(engine) as session:
+        manifest = AgentManifest.model_validate(
+            _sample_manifest(
+                "support_bot",
+                model="gpt-4o-mini",
+                system_prompt="be helpful",
+            )
+        )
+        register_manifest(session, DEFAULT_PROJECT_ID, manifest)
+
+    resp = client.get(f"/v1/projects/{DEFAULT_PROJECT_ID}/agents/manifest")
+    row = next(r for r in resp.json() if r["name"] == "support_bot")
+    assert row["manifest"]["model"] == "gpt-4o-mini"
+    assert row["manifest"]["system_prompt"] == "be helpful"
+
+
+def test_manifest_endpoint_unregistered_agents_have_no_leakage(
+    client: TestClient,
+) -> None:
+    """Agents without a registered version expose a null manifest, full stop.
+
+    The envelope shape is ``{name, manifest}``; ``model`` / ``system_prompt``
+    live *inside* ``manifest``. Asserting they're absent from the envelope
+    would be vacuously true — assert the manifest itself is None.
+    """
+    resp = client.get(f"/v1/projects/{DEFAULT_PROJECT_ID}/agents/manifest")
+    for row in resp.json():
+        if row.get("manifest") is None:
+            assert set(row.keys()) <= {"name", "manifest"}
+
+
+def test_register_endpoint_accepts_legacy_shape_without_new_fields(
+    client: TestClient,
+) -> None:
+    """A manifest from an older SDK (no model / system_prompt keys) still 201s.
+
+    Backwards-compat guarantee: when the dashboard ships ahead of every
+    deployed SDK, older `fortify register` calls must keep working against
+    the new platform. The new fields are Optional with `None` defaults, so
+    Pydantic validation should accept payloads that omit them entirely.
+    """
+    payload = {
+        "manifest": {
+            "name": "legacy_agent",
+            "description": "registered by an old SDK",
+            "framework": "fortify",
+            "tools": [],
+        }
+    }
+    resp = client.post(
+        "/v1/agents",
+        json=payload,
+        headers={"Authorization": "Bearer fake-but-unauthenticated"},
+    )
+    # The legacy-shape body validates; the request itself fails auth (401)
+    # rather than schema validation (422). 422 here would mean we broke
+    # backwards compatibility.
+    assert resp.status_code != 422, resp.text

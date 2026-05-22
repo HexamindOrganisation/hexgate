@@ -234,8 +234,14 @@ def compute_manifest_hash(manifest: AgentManifest) -> str:
 
     Canonical JSON encoding (sorted keys, no whitespace) so the same manifest
     always hashes to the same hex digest regardless of Python dict ordering.
+
+    ``exclude_none=True`` keeps hash continuity across schema growth: when a
+    new ``Optional`` field lands with a ``None`` default, an old manifest
+    re-registered against the new schema still produces the same digest it
+    did before — so ``_find_version_by_hash`` matches and we don't create a
+    duplicate ``AgentVersion`` row for what is functionally the same content.
     """
-    payload = manifest.model_dump(mode="json")
+    payload = manifest.model_dump(mode="json", exclude_none=True)
     canonical = json.dumps(
         payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False
     )

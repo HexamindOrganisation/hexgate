@@ -113,6 +113,8 @@ class AgentManifest(BaseModel):
     name: str
     description: Optional[str] = None
     framework: AgentFramework
+    model: Optional[str] = None
+    system_prompt: Optional[str] = None
     tools: list[ToolDefinition]
 
 
