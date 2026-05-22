@@ -87,7 +87,6 @@ def test_constructor_calls_setup_observability(
         agent=_RecordingAgent(),  # type: ignore[arg-type]
         api_key="k",
         agent_name="recording-agent",
-        tool_names=[],
     )
 
     assert calls == [True]
@@ -101,13 +100,11 @@ def test_constructor_stores_inputs() -> None:
         agent=inner,  # type: ignore[arg-type]
         api_key="api-123",
         agent_name="custom-name",
-        tool_names=["a", "b"],
     )
 
     assert proxy._agent is inner
     assert proxy._api_key == "api-123"
     assert proxy._agent_name == "custom-name"
-    assert proxy._tool_names == ["a", "b"]
 
 
 # ---------------------------------------------------------------------------
@@ -128,7 +125,6 @@ async def test_run_opens_user_scope_and_delegates(
         agent=inner,  # type: ignore[arg-type]
         api_key="k",
         agent_name="recording-agent",
-        tool_names=["echo"],
     )
     user = _user()
 
@@ -155,7 +151,6 @@ def test_run_sync_opens_user_scope_and_delegates(
         agent=inner,  # type: ignore[arg-type]
         api_key="k",
         agent_name="recording-agent",
-        tool_names=["echo"],
     )
     user = _user()
 
@@ -180,7 +175,6 @@ async def test_run_stream_opens_user_scope_and_yields_result(
         agent=inner,  # type: ignore[arg-type]
         api_key="k",
         agent_name="recording-agent",
-        tool_names=["echo"],
     )
     user = _user()
 
@@ -207,7 +201,6 @@ async def test_iter_opens_user_scope_and_yields_run(
         agent=inner,  # type: ignore[arg-type]
         api_key="k",
         agent_name="recording-agent",
-        tool_names=["echo"],
     )
     user = _user()
 
@@ -236,7 +229,6 @@ def test_user_scope_is_unwound_when_run_sync_raises(
         agent=BoomAgent(),  # type: ignore[arg-type]
         api_key="k",
         agent_name="boom",
-        tool_names=[],
     )
 
     with pytest.raises(RuntimeError, match="boom"):
@@ -262,7 +254,6 @@ def test_proxy_delegates_unknown_attributes_to_wrapped_agent(
         agent=inner,  # type: ignore[arg-type]
         api_key="k",
         agent_name="recording-agent",
-        tool_names=[],
     )
 
     assert proxy.some_attribute() == "delegated"

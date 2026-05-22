@@ -1,11 +1,13 @@
 """LangChain adapter for :class:`PolicyEnforcer`.
 
 :class:`GuardedTool` wraps a ``BaseTool`` (used by
-:meth:`FortifyAgent.enforce_policy`, which rebuilds the graph);
+:meth:`FortifyAgent.enforce_policy`, which rebuilds the graph) and
+carries an optional ``approval_handler`` for inline ``NEEDS_APPROVAL``
+resolution.
 :func:`install_enforcer_on_tool` mutates ``StructuredTool``'s ``func``/
 ``coroutine`` in place (used by :func:`wrap_langchain_agent` for
-pre-built ``CompiledStateGraph``s). Both render :class:`Decision`
-failures identically and accept the same optional ``approval_handler``.
+pre-built ``CompiledStateGraph``s) and always renders non-allow as a
+structured error — approval flows wire in on the host side.
 """
 
 from __future__ import annotations
@@ -263,7 +265,6 @@ def install_enforcer_on_tool(
     tool: BaseTool,
     *,
     enforcer: PolicyEnforcer,
-    approval_handler: ApprovalHandler | None = None,
 ) -> BaseTool:
     """Install :class:`PolicyEnforcer` gating on ``tool`` in place.
 
@@ -271,6 +272,8 @@ def install_enforcer_on_tool(
     ``func``/``coroutine`` instead of constructing a wrapper — use when
     the tool is already bound to a ``CompiledStateGraph``. Idempotent:
     re-install restores captured originals first so gates don't stack.
+    Non-allow outcomes render as the structured error dict; approval
+    flows belong on the host side, not on this in-place installer.
     """
     name = tool.name
     original_func: Callable[..., Any] | None = getattr(tool, _ORIGINAL_FUNC_ATTR, None)
@@ -289,9 +292,6 @@ def install_enforcer_on_tool(
             "In-place wrapping only supports StructuredTool-style tools."
         )
 
-    def _action(kwargs: dict[str, Any]) -> ActionPayload:
-        return {"tool_name": name, "arguments": kwargs, "agent_name": None}
-
     if original_func is not None:
         captured_func = original_func
 
@@ -299,12 +299,6 @@ def install_enforcer_on_tool(
         def guarded_func(*args: Any, **kwargs: Any) -> Any:
             decision = enforcer.decide(name, kwargs)
             if decision.allowed:
-                return captured_func(*args, **kwargs)
-            if (
-                decision.outcome is DecisionOutcome.NEEDS_APPROVAL
-                and approval_handler is not None
-                and _resolve_approval_sync(approval_handler, _action(kwargs), None)
-            ):
                 return captured_func(*args, **kwargs)
             return {"ok": False, "error": decision.as_error_payload()}
 
@@ -318,14 +312,6 @@ def install_enforcer_on_tool(
         async def guarded_coroutine(*args: Any, **kwargs: Any) -> Any:
             decision = enforcer.decide(name, kwargs)
             if decision.allowed:
-                return await captured_coroutine(*args, **kwargs)
-            if (
-                decision.outcome is DecisionOutcome.NEEDS_APPROVAL
-                and approval_handler is not None
-                and await _resolve_approval_async(
-                    approval_handler, _action(kwargs), None
-                )
-            ):
                 return await captured_coroutine(*args, **kwargs)
             return {"ok": False, "error": decision.as_error_payload()}
 
@@ -341,11 +327,8 @@ def install_enforcer_on_tools(
     tools: list[BaseTool],
     *,
     enforcer: PolicyEnforcer,
-    approval_handler: ApprovalHandler | None = None,
 ) -> list[BaseTool]:
     """Install enforcement on every StructuredTool-style tool in place."""
     for t in tools:
-        install_enforcer_on_tool(
-            t, enforcer=enforcer, approval_handler=approval_handler
-        )
+        install_enforcer_on_tool(t, enforcer=enforcer)
     return tools

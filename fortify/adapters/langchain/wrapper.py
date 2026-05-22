@@ -13,10 +13,7 @@ from langchain_core.tools import BaseTool
 from langgraph.graph.state import CompiledStateGraph
 
 from fortify.adapters.langchain.agent import FortifyLangchainAgent
-from fortify.adapters.langchain.tools import (
-    ApprovalHandler,
-    install_enforcer_on_tools,
-)
+from fortify.adapters.langchain.tools import install_enforcer_on_tools
 from fortify.security import AgentPolicy, BaseToolPolicy, PolicySet
 from fortify.security.enforcer import PolicyEnforcer
 from fortify.security.policy_set import DEFAULT_ROLE_NAME
@@ -39,15 +36,14 @@ def wrap_langchain_agent(
     agent: CompiledStateGraph,
     tools: list[BaseTool],
     api_key: str | None = None,
-    approval_handler: ApprovalHandler | None = None,
 ) -> FortifyLangchainAgent:
     """Wrap a pre-built LangGraph agent with Fortify policy enforcement.
 
     Mutates ``tools`` in place so the graph keeps its references.
     The returned proxy takes ``user`` per invocation; role resolves at
-    call time from the active :class:`User`. ``approval_handler``
-    (callable or ``bool``) resolves ``NEEDS_APPROVAL`` inline; ``None``
-    renders structured errors. ``api_key`` falls back to ``FORTIFY_KEY``.
+    call time from the active :class:`User`. ``api_key`` falls back to
+    ``FORTIFY_KEY``. ``NEEDS_APPROVAL`` outcomes render as structured
+    errors — wire any host-side approval flow outside the SDK.
     """
     resolved_key = api_key if api_key else os.getenv("FORTIFY_KEY")
     if not resolved_key:
@@ -60,9 +56,7 @@ def wrap_langchain_agent(
     policy_set = build_policy_set(resolved_key, agent_name, tool_names)
     enforcer = PolicyEnforcer(policy_set, agent_name=agent_name)
 
-    install_enforcer_on_tools(
-        tools, enforcer=enforcer, approval_handler=approval_handler
-    )
+    install_enforcer_on_tools(tools, enforcer=enforcer)
 
     return FortifyLangchainAgent(
         agent=agent,

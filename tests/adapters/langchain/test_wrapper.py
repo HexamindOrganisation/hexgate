@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Any
-
 import pytest
 from langchain_core.tools import BaseTool, tool
 
@@ -142,46 +140,3 @@ def test_wrap_passes_through_with_empty_tool_list() -> None:
     )
 
     assert wrapped._tool_names == []
-
-
-def test_wrap_threads_approval_handler_into_enforcer(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """approval_handler reaches the per-tool gate (verified via a NEEDS_APPROVAL policy)."""
-    from fortify.security import AgentPolicy
-    from fortify.security.policy_set import DEFAULT_ROLE_NAME
-
-    # Patch build_policy_set so the stub returns an approval_required policy
-    # rather than the default allow-all — exercises the approval handler path.
-    monkeypatch.setattr(
-        "fortify.adapters.langchain.wrapper.build_policy_set",
-        lambda api_key, agent_name, tool_names: PolicySet(
-            {
-                DEFAULT_ROLE_NAME: AgentPolicy.model_validate(
-                    {
-                        "default_policy": {"mode": "deny"},
-                        "tools": {n: {"mode": "approval_required"} for n in tool_names},
-                    }
-                )
-            }
-        ),
-    )
-
-    seen: list[Any] = []
-
-    def approve(action: dict[str, Any], _context: dict[str, Any] | None) -> bool:
-        seen.append(action["tool_name"])
-        return True
-
-    tools = [_make_tool("echo")]
-    wrap_langchain_agent(
-        agent=_FakeCompiledGraph(),
-        tools=tools,
-        api_key="k",
-        approval_handler=approve,
-    )
-
-    result = tools[0].func(text="hi")
-
-    assert result == "echo:hi"
-    assert seen == ["echo"]

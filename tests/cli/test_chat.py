@@ -13,13 +13,13 @@ from fortify.cli._common import (
     load_agent_script as _load_agent_script,
     prompt_for_approval as _prompt_for_approval,
 )
-from fortify.security.decision import Decision, DecisionOutcome
 from fortify.cli.chat import (
     DOG_LOGO,
     _render_current_run,
     _render_welcome,
     _tail_text,
 )
+from fortify.runtime import User
 from fortify.cli.state import LiveRunState, ToolActivity
 from fortify.streaming import ToolCallState
 from fortify.tools import edit_file, read_file
@@ -152,6 +152,8 @@ def test_build_approval_handler_supports_auto_modes() -> None:
 
 def test_prompt_for_approval_asks_user_with_tool_arguments() -> None:
     """Render a compact approval prompt and return the user's decision."""
+    import asyncio
+
     console = Console(record=True, width=100)
     captured_prompts: list[str] = []
 
@@ -161,20 +163,21 @@ def test_prompt_for_approval_asks_user_with_tool_arguments() -> None:
 
     console.input = fake_input  # type: ignore[method-assign]
 
-    decision = Decision(
-        outcome=DecisionOutcome.NEEDS_APPROVAL,
-        agent_name="test-agent",
-        tool_name="write_file",
-        role="support",
-        reason='Policy requires approval for tool "write_file"',
-        error_type="approval_required",
-        arguments={
+    action = {
+        "tool_name": "write_file",
+        "arguments": {
             "file_path": "napoleon.md",
             "content": "new section",
         },
-    )
+        "agent_name": "test-agent",
+    }
 
-    approved = _prompt_for_approval(console, decision)
+    async def _run() -> bool:
+        # Open a User scope so the prompt can read the role from the contextvar.
+        async with User(user_id="u-1", role="support"):
+            return _prompt_for_approval(console, action, None)
+
+    approved = asyncio.run(_run())
 
     rendered = console.export_text()
 

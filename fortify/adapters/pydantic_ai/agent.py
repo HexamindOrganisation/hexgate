@@ -29,12 +29,10 @@ class FortifyPydanticAgent:
         agent: Agent,
         api_key: str,
         agent_name: str,
-        tool_names: list[str],
     ) -> None:
         self._agent = agent
         self._api_key = api_key
         self._agent_name = agent_name
-        self._tool_names = tool_names
         self._langfuse = get_client()
         self._setup_observability()
 

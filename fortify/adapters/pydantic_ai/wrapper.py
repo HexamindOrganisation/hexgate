@@ -86,5 +86,4 @@ def wrap_pydantic_agent(
         agent=cloned_agent,
         api_key=resolved_key,
         agent_name=agent_name,
-        tool_names=tool_names,
     )

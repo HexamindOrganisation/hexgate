@@ -15,7 +15,7 @@ from rich.text import Text
 from fortify.agents.factory import AgentGraph, CallbackHandler
 from fortify.agents.loader import load_agent, resolve_agent_source
 from fortify.config.settings import Settings
-from fortify.security.decision import Decision
+from fortify.runtime.context import get_current_user
 from fortify.tools import fetch, web_search
 
 ApprovalMode = Literal["ask", "auto-approve", "auto-deny"]
@@ -104,15 +104,27 @@ def _truncate_approval_value(value: object, *, limit: int = 80) -> str:
     return f"{text[: limit - 3]}..."
 
 
-def prompt_for_approval(console: Console, decision: Decision) -> bool:
-    """Prompt the user in the terminal to approve one tool invocation."""
-    arguments = decision.arguments or {}
+def prompt_for_approval(
+    console: Console,
+    action: dict[str, object],
+    _context: dict[str, object] | None = None,
+) -> bool:
+    """Prompt the user in the terminal to approve one tool invocation.
 
-    header = Text(f"Approval required for {decision.tool_name}", style="bold yellow")
-    role_line = (
-        [Text(f"role: {decision.role}", style="dim")]
-        if decision.role is not None
-        else []
+    Matches the legacy ``(ActionPayload, ActionContext) -> bool`` shape that
+    ``ApprovalHandler`` expects. The active :class:`User.role` is read from
+    the contextvar so the prompt can still display it alongside the action.
+    """
+    tool_name = str(action.get("tool_name", "tool"))
+    arguments = action.get("arguments") or {}
+    user = get_current_user()
+    role = user.role if user is not None else None
+
+    header = Text(f"Approval required for {tool_name}", style="bold yellow")
+    role_line = [Text(f"role: {role}", style="dim")] if role is not None else []
+
+    arg_items = (
+        arguments.items() if isinstance(arguments, dict) else [("arguments", arguments)]
     )
 
     console.print()
@@ -126,7 +138,7 @@ def prompt_for_approval(console: Console, decision: Decision) -> bool:
                         f"{key}: {_truncate_approval_value(value)}",
                         style="white",
                     )
-                    for key, value in arguments.items()
+                    for key, value in arg_items
                 ),
                 Text("Type y to approve or n to deny, then press Enter.", style="dim"),
             ),
@@ -141,15 +153,17 @@ def prompt_for_approval(console: Console, decision: Decision) -> bool:
 
 
 def build_approval_handler(console: Console, mode: ApprovalMode):
-    """Return a CLI approval handler — ``bool`` for auto modes, ``(Decision)
-    -> bool`` for ``ask``."""
+    """Return a CLI approval handler — ``bool`` for auto modes, an
+    ``(action, context) -> bool`` callable for ``ask``."""
     if mode == "auto-approve":
         return True
     if mode == "auto-deny":
         return False
 
-    def approval_handler(decision: Decision) -> bool:
-        return prompt_for_approval(console, decision)
+    def approval_handler(
+        action: dict[str, object], context: dict[str, object] | None
+    ) -> bool:
+        return prompt_for_approval(console, action, context)
 
     return approval_handler
 
