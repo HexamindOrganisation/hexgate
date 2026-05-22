@@ -19,11 +19,14 @@ def create_langchain_manifest(
     tools: list[BaseTool],
     *,
     description: str | None = None,
+    model: str | None = None,
+    system_prompt: str | None = None,
 ) -> AgentManifest:
     """Build an AgentManifest from a LangChain/LangGraph agent.
 
-    Tools are passed explicitly because compiled LangGraph graphs do not
-    reliably expose their tool nodes for inspection.
+    Tools — and, for the same reason, ``model`` and ``system_prompt`` — are
+    passed explicitly because compiled LangGraph graphs do not reliably expose
+    these fields after compilation.
     """
     agent_name = getattr(graph, "name", None)
     if agent_name is None:
@@ -35,6 +38,8 @@ def create_langchain_manifest(
         name=agent_name,
         description=description,
         framework=AgentFramework.LANGCHAIN,
+        model=model,
+        system_prompt=system_prompt,
         tools=[_to_tool_definition(t) for t in tools],
     )
 

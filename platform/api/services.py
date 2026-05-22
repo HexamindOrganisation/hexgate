@@ -2,6 +2,7 @@ import hashlib
 import json
 import secrets
 
+from sqlalchemy import func
 from sqlmodel import Session, select
 
 from models import Agent, AgentVersion, DevToken, Project, Tool
@@ -72,6 +73,33 @@ def list_agents(session: Session, project_id: str) -> list[Agent]:
 def get_agent(session: Session, project_id: str, name: str) -> Agent | None:
     stmt = select(Agent).where(Agent.project_id == project_id, Agent.name == name)
     return session.exec(stmt).first()
+
+
+def get_latest_agent_versions_map(
+    session: Session, agent_ids: list[str]
+) -> dict[str, AgentVersion]:
+    """Return a map of {agent_id: latest AgentVersion}
+    for a list of agent ids in a single query.
+
+    Agents with no registered version are omitted from the map.
+    """
+    if not agent_ids:
+        return {}
+    max_version_per_agent = (
+        select(
+            AgentVersion.agent_id,
+            func.max(AgentVersion.version).label("max_version"),
+        )
+        .where(AgentVersion.agent_id.in_(agent_ids))
+        .group_by(AgentVersion.agent_id)
+        .subquery()
+    )
+    statement = select(AgentVersion).join(
+        max_version_per_agent,
+        (AgentVersion.agent_id == max_version_per_agent.c.agent_id)
+        & (AgentVersion.version == max_version_per_agent.c.max_version),
+    )
+    return {version.agent_id: version for version in session.exec(statement)}
 
 
 def update_agent(
@@ -206,8 +234,14 @@ def compute_manifest_hash(manifest: AgentManifest) -> str:
 
     Canonical JSON encoding (sorted keys, no whitespace) so the same manifest
     always hashes to the same hex digest regardless of Python dict ordering.
+
+    ``exclude_none=True`` keeps hash continuity across schema growth: when a
+    new ``Optional`` field lands with a ``None`` default, an old manifest
+    re-registered against the new schema still produces the same digest it
+    did before — so ``_find_version_by_hash`` matches and we don't create a
+    duplicate ``AgentVersion`` row for what is functionally the same content.
     """
-    payload = manifest.model_dump(mode="json")
+    payload = manifest.model_dump(mode="json", exclude_none=True)
     canonical = json.dumps(
         payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False
     )

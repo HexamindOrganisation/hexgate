@@ -73,6 +73,23 @@ def add_parser(subparsers: argparse._SubParsersAction) -> None:
         default=None,
         help="Optional import path to a list of BaseTool, e.g. my_app.tools:my_tools",
     )
+    parser.add_argument(
+        "--model",
+        default=None,
+        help=(
+            "Optional model identifier for LangChain graphs (other frameworks "
+            "read it off the agent object). Plain string, e.g. 'gpt-4o-mini'."
+        ),
+    )
+    parser.add_argument(
+        "--system-prompt",
+        dest="system_prompt",
+        default=None,
+        help=(
+            "Optional system prompt for LangChain graphs. Either a literal "
+            "string or a path to a .md / .txt / .jinja file (loaded as text)."
+        ),
+    )
     parser.set_defaults(func=main)
 
 
@@ -80,6 +97,25 @@ def main(args: argparse.Namespace) -> int:
     """Entrypoint for the `fortify register` subcommand."""
     agent = _load_agent(args.agent)
     tools = _load_tools(args.tools) if args.tools is not None else None
+    system_prompt = (
+        _load_system_prompt(args.system_prompt)
+        if args.system_prompt is not None
+        else None
+    )
 
-    register_agent(agent, description=args.description, tools=tools)
+    register_agent(
+        agent,
+        description=args.description,
+        tools=tools,
+        model=args.model,
+        system_prompt=system_prompt,
+    )
     return 0
+
+
+def _load_system_prompt(value: str) -> str:
+    """Reuse the agent-factory's file-path resolver so .md paths work here too."""
+    from fortify.agents.factory import load_system_prompt
+
+    resolved = load_system_prompt(value)
+    return resolved if resolved is not None else value

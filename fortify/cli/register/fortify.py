@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_core.messages.system import SystemMessage
 from langchain_core.tools import BaseTool, StructuredTool
 
 from fortify.agents.factory import FortifyAgent
@@ -27,8 +29,55 @@ def create_fortify_manifest(
         name=agent.name,
         description=description,
         framework=AgentFramework.FORTIFY,
+        model=_extract_model(agent.model),
+        system_prompt=_extract_system_prompt(agent.system_prompt),
         tools=[_to_tool_definition(t) for t in agent.tools],
     )
+
+
+def _extract_model(model: str | BaseChatModel | None) -> str | None:
+    """Return a human-readable identifier for a FortifyAgent's model.
+
+    ``FortifyAgent.model`` is typed as ``str | BaseChatModel``.
+    """
+    if model is None:
+        return None
+    if isinstance(model, str):
+        return model or None
+    # BaseChatModel expose the model under .model or .model_name
+    for attr in ("model", "model_name"):
+        value = getattr(model, attr, None)
+        if isinstance(value, str) and value:
+            return value
+    # No introspectable id — return None so content_hash isn't sensitive to
+    # SDK class renames. The dashboard renders "—" for the missing field.
+    return None
+
+
+def _extract_system_prompt(prompt: str | SystemMessage | None) -> str | None:
+    """Return the system-prompt text from a FortifyAgent's resolved prompt.
+
+    ``create_agent`` resolves file paths to text before constructing the
+    agent (see ``load_system_prompt`` in ``agents/factory.py``), so by the
+    time we see ``agent.system_prompt`` it's always either a string or a
+    ``SystemMessage`` — never a Path. """
+    if prompt is None:
+        return None
+    if isinstance(prompt, str):
+        return prompt or None
+    content = prompt.content
+    if isinstance(content, str):
+        return content or None
+    # LangChain allows SystemMessage.content to be a list of str/dict parts.
+    # Join with a blank line so multi-part prompts read as distinct sections
+    # rather than running together — matches what pydantic_ai's extractor does.
+    parts = [
+        item if isinstance(item, str) else item.get("text", "")
+        for item in content
+        if isinstance(item, (str, dict))
+    ]
+    joined = "\n\n".join(p for p in parts if isinstance(p, str) and p)
+    return joined or None
 
 
 def _to_tool_definition(spec: Any) -> ToolDefinition:

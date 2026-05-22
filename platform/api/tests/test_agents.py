@@ -25,12 +25,13 @@ from services import DEFAULT_PROJECT_ID, ensure_default_project
 
 
 @pytest.fixture
-def client() -> TestClient:
-    """A fresh in-memory DB + TestClient, seeded with the default project.
+def engine():
+    """A fresh in-memory SQLite engine shared across sessions.
 
-    Uses a StaticPool so every Session shares the same SQLite connection —
-    otherwise each :memory: handle gets its own private DB and the tables
-    we created in the fixture vanish from the endpoint's session view.
+    StaticPool keeps every Session bound to the same connection — otherwise
+    each :memory: handle gets its own private DB and the tables vanish.
+    Split out from ``client`` so tests that need to seed rows directly
+    (e.g. registering an AgentVersion) can take both fixtures.
     """
     engine = create_engine(
         "sqlite:///:memory:",
@@ -38,6 +39,14 @@ def client() -> TestClient:
         poolclass=StaticPool,
     )
     SQLModel.metadata.create_all(engine)
+    with Session(engine) as bootstrap:
+        ensure_default_project(bootstrap)
+    return engine
+
+
+@pytest.fixture
+def client(engine) -> TestClient:
+    """TestClient that routes ``get_session`` through the shared test engine."""
 
     def override_session():
         with Session(engine) as session:
@@ -256,3 +265,159 @@ def test_validate_accumulates_errors_across_roles(client: TestClient) -> None:
     assert body["ok"] is False
     roles_with_errors = {e["role"] for e in body["errors"]}
     assert roles_with_errors == {"bad1", "bad2"}
+
+
+# ---------------------------------------------------------------------------
+# GET /agents/manifest — dashboard read path rehydrated from the JSON snapshot
+# stored on the latest AgentVersion.manifest (not from joined Tool rows).
+# ---------------------------------------------------------------------------
+
+
+def _sample_manifest(
+    name: str,
+    *,
+    description: str | None = None,
+    model: str | None = None,
+    system_prompt: str | None = None,
+) -> dict:
+    """Minimal AgentManifest payload for register_manifest in tests."""
+    return {
+        "name": name,
+        "description": description,
+        "framework": "fortify",
+        "model": model,
+        "system_prompt": system_prompt,
+        "tools": [
+            {
+                "name": "echo",
+                "description": "Repeat back the input.",
+                "input_schema": {
+                    "properties": {"msg": {"title": "Message", "type": "string"}},
+                    "required": ["msg"],
+                },
+            }
+        ],
+    }
+
+
+def test_manifest_endpoint_returns_envelope_for_unregistered_agents(
+    client: TestClient,
+) -> None:
+    """Seeded agents have YAML but no AgentVersion → manifest is null."""
+    resp = client.get(f"/v1/projects/{DEFAULT_PROJECT_ID}/agents/manifest")
+    assert resp.status_code == 200
+    rows = resp.json()
+    by_name = {row["name"]: row for row in rows}
+    assert {"default", "support_bot"} <= set(by_name)
+    for row in by_name.values():
+        assert row["manifest"] is None
+        assert row["version"] is None
+        assert row["content_hash"] is None
+
+
+def test_manifest_endpoint_returns_registered_manifest_with_tools(
+    client: TestClient, engine
+) -> None:
+    """After register_manifest, the endpoint surfaces the full manifest."""
+    from schemas import AgentManifest
+    from services import register_manifest
+
+    with Session(engine) as session:
+        manifest = AgentManifest.model_validate(
+            _sample_manifest("support_bot", description="customer support")
+        )
+        register_manifest(session, DEFAULT_PROJECT_ID, manifest)
+
+    resp = client.get(f"/v1/projects/{DEFAULT_PROJECT_ID}/agents/manifest")
+    row = next(r for r in resp.json() if r["name"] == "support_bot")
+    assert row["version"] == 1
+    assert row["content_hash"]
+    assert row["manifest"]["description"] == "customer support"
+    assert [t["name"] for t in row["manifest"]["tools"]] == ["echo"]
+    assert row["manifest"]["tools"][0]["input_schema"]["required"] == ["msg"]
+
+
+def test_manifest_endpoint_returns_latest_version(client: TestClient, engine) -> None:
+    """When multiple versions exist, only the highest one is returned."""
+    from schemas import AgentManifest
+    from services import register_manifest
+
+    with Session(engine) as session:
+        v1 = AgentManifest.model_validate(_sample_manifest("support_bot"))
+        v2 = AgentManifest.model_validate(
+            {**_sample_manifest("support_bot"), "description": "v2"}
+        )
+        register_manifest(session, DEFAULT_PROJECT_ID, v1)
+        register_manifest(session, DEFAULT_PROJECT_ID, v2)
+
+    resp = client.get(f"/v1/projects/{DEFAULT_PROJECT_ID}/agents/manifest")
+    row = next(r for r in resp.json() if r["name"] == "support_bot")
+    assert row["version"] == 2
+    assert row["manifest"]["description"] == "v2"
+
+
+def test_manifest_endpoint_round_trips_model_and_system_prompt(
+    client: TestClient, engine
+) -> None:
+    """The new manifest fields survive register → read."""
+    from schemas import AgentManifest
+    from services import register_manifest
+
+    with Session(engine) as session:
+        manifest = AgentManifest.model_validate(
+            _sample_manifest(
+                "support_bot",
+                model="gpt-4o-mini",
+                system_prompt="be helpful",
+            )
+        )
+        register_manifest(session, DEFAULT_PROJECT_ID, manifest)
+
+    resp = client.get(f"/v1/projects/{DEFAULT_PROJECT_ID}/agents/manifest")
+    row = next(r for r in resp.json() if r["name"] == "support_bot")
+    assert row["manifest"]["model"] == "gpt-4o-mini"
+    assert row["manifest"]["system_prompt"] == "be helpful"
+
+
+def test_manifest_endpoint_unregistered_agents_have_no_leakage(
+    client: TestClient,
+) -> None:
+    """Agents without a registered version expose a null manifest, full stop.
+
+    The envelope shape is ``{name, manifest}``; ``model`` / ``system_prompt``
+    live *inside* ``manifest``. Asserting they're absent from the envelope
+    would be vacuously true — assert the manifest itself is None.
+    """
+    resp = client.get(f"/v1/projects/{DEFAULT_PROJECT_ID}/agents/manifest")
+    for row in resp.json():
+        if row.get("manifest") is None:
+            assert set(row.keys()) <= {"name", "manifest"}
+
+
+def test_register_endpoint_accepts_legacy_shape_without_new_fields(
+    client: TestClient,
+) -> None:
+    """A manifest from an older SDK (no model / system_prompt keys) still 201s.
+
+    Backwards-compat guarantee: when the dashboard ships ahead of every
+    deployed SDK, older `fortify register` calls must keep working against
+    the new platform. The new fields are Optional with `None` defaults, so
+    Pydantic validation should accept payloads that omit them entirely.
+    """
+    payload = {
+        "manifest": {
+            "name": "legacy_agent",
+            "description": "registered by an old SDK",
+            "framework": "fortify",
+            "tools": [],
+        }
+    }
+    resp = client.post(
+        "/v1/agents",
+        json=payload,
+        headers={"Authorization": "Bearer fake-but-unauthenticated"},
+    )
+    # The legacy-shape body validates; the request itself fails auth (401)
+    # rather than schema validation (422). 422 here would mean we broke
+    # backwards compatibility.
+    assert resp.status_code != 422, resp.text
