@@ -23,7 +23,7 @@ from fortify.security.policy_set import PolicySet
 class PolicyEnforcer:
     """Evaluate proposed tool calls against a role-aware PolicySet."""
 
-    def __init__(self, policy_set: PolicySet, *, agent_name: str | None = None) -> None:
+    def __init__(self, policy_set: PolicySet, *, agent_name: str = "default") -> None:
         self.policy_set = policy_set
         self.agent_name = agent_name
 
@@ -40,6 +40,7 @@ class PolicyEnforcer:
         except PolicyDeniedError as exc:
             return Decision(
                 outcome=DecisionOutcome.DENY,
+                agent_name=self.agent_name,
                 tool_name=tool_name,
                 role=role,
                 reason=str(exc),
@@ -50,6 +51,7 @@ class PolicyEnforcer:
         except ApprovalRequiredError as exc:
             return Decision(
                 outcome=DecisionOutcome.NEEDS_APPROVAL,
+                agent_name=self.agent_name,
                 tool_name=tool_name,
                 role=role,
                 reason=str(exc),
@@ -59,6 +61,7 @@ class PolicyEnforcer:
 
         return Decision(
             outcome=DecisionOutcome.ALLOW,
+            agent_name=self.agent_name,
             tool_name=tool_name,
             role=role,
             arguments=args_snapshot,

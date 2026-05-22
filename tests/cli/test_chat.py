@@ -163,6 +163,7 @@ def test_prompt_for_approval_asks_user_with_tool_arguments() -> None:
 
     decision = Decision(
         outcome=DecisionOutcome.NEEDS_APPROVAL,
+        agent_name="test-agent",
         tool_name="write_file",
         role="support",
         reason='Policy requires approval for tool "write_file"',

@@ -8,14 +8,9 @@ import pytest
 from pydantic_ai.exceptions import ModelRetry
 from pydantic_ai.tools import Tool
 
-from fortify.adapters.pydantic_ai.tools import (
-    _render_decision,
-    wrap_tool,
-    wrap_tools,
-)
+from fortify.adapters.pydantic_ai.tools import wrap_tool, wrap_tools
 from fortify.runtime import User
 from fortify.security import AgentPolicy, PolicySet
-from fortify.security.decision import Decision, DecisionOutcome
 from fortify.security.enforcer import PolicyEnforcer
 from fortify.security.policy_set import DEFAULT_ROLE_NAME
 
@@ -66,40 +61,6 @@ def _make_async_tool(name: str = "echo") -> Tool:
         return f"async:{text}"
 
     return Tool(echo, name=name)
-
-
-# ---------------------------------------------------------------------------
-# Decision rendering
-# ---------------------------------------------------------------------------
-
-
-def test_render_decision_for_deny_uses_policy_denied_marker() -> None:
-    msg = _render_decision(
-        Decision(
-            outcome=DecisionOutcome.DENY,
-            tool_name="read_file",
-            reason="Policy denied tool",
-            error_type="policy_denied",
-        )
-    )
-
-    assert "read_file" in msg
-    assert "policy_denied" in msg
-    assert "not executed" in msg
-
-
-def test_render_decision_for_needs_approval_uses_distinct_marker() -> None:
-    msg = _render_decision(
-        Decision(
-            outcome=DecisionOutcome.NEEDS_APPROVAL,
-            tool_name="write_file",
-            reason="Policy requires approval",
-            error_type="approval_required",
-        )
-    )
-
-    assert "write_file" in msg
-    assert "approval_required" in msg
 
 
 # ---------------------------------------------------------------------------

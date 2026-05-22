@@ -13,7 +13,6 @@ from typing import Any
 from agents import FunctionTool
 from agents.tool import ToolContext
 
-from fortify.security.decision import Decision, DecisionOutcome
 from fortify.security.enforcer import PolicyEnforcer
 
 
@@ -26,19 +25,6 @@ def _parse_args(raw: str) -> dict[str, Any] | None:
     except (TypeError, ValueError):
         return None
     return parsed if isinstance(parsed, dict) else None
-
-
-def _render_decision(decision: Decision) -> str:
-    """Format a non-allow :class:`Decision` as a string tool result."""
-    if decision.outcome is DecisionOutcome.NEEDS_APPROVAL:
-        return (
-            f"[approval_required] Tool '{decision.tool_name}' requires human "
-            "approval before execution. The tool was not executed."
-        )
-    return (
-        f"[policy_denied] Tool '{decision.tool_name}' is denied by the agent "
-        "policy. The tool was not executed."
-    )
 
 
 def wrap_tool(tool: FunctionTool, enforcer: PolicyEnforcer) -> FunctionTool:
@@ -57,7 +43,7 @@ def wrap_tool(tool: FunctionTool, enforcer: PolicyEnforcer) -> FunctionTool:
         decision = enforcer.decide(name, _parse_args(input) or {})
         if decision.allowed:
             return await original_invoke(ctx, input)
-        return _render_decision(decision)
+        return decision.as_error_message()
 
     wrapped = copy.copy(tool)
     wrapped.on_invoke_tool = guarded_invoke

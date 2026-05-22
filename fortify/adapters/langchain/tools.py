@@ -26,7 +26,7 @@ from fortify.agents.factory import (
     BeforeActionHook,
     ContextProvider,
 )
-from fortify.security.decision import Decision, DecisionOutcome
+from fortify.security.decision import DecisionOutcome
 from fortify.security.enforcer import PolicyEnforcer
 from fortify.tools.decorators import TOOL_METADATA_ATTR
 

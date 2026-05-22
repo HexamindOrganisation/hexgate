@@ -14,21 +14,7 @@ from pydantic_ai import RunContext
 from pydantic_ai.exceptions import ModelRetry
 from pydantic_ai.tools import Tool
 
-from fortify.security.decision import Decision, DecisionOutcome
 from fortify.security.enforcer import PolicyEnforcer
-
-
-def _render_decision(decision: Decision) -> str:
-    """Format a non-allow :class:`Decision` as a ModelRetry message."""
-    if decision.outcome is DecisionOutcome.NEEDS_APPROVAL:
-        return (
-            f"[approval_required] Tool '{decision.tool_name}' requires human "
-            "approval before execution. The tool was not executed."
-        )
-    return (
-        f"[policy_denied] Tool '{decision.tool_name}' is denied by the agent "
-        "policy. The tool was not executed."
-    )
 
 
 def wrap_tool(tool: Tool, enforcer: PolicyEnforcer) -> Tool:
@@ -43,7 +29,7 @@ def wrap_tool(tool: Tool, enforcer: PolicyEnforcer) -> Tool:
         decision = enforcer.decide(name, args_dict or {})
         if decision.allowed:
             return await original_call(args_dict, context)
-        raise ModelRetry(_render_decision(decision))
+        raise ModelRetry(decision.as_error_message())
 
     tool_copy.function_schema.call = guarded_call
     return tool_copy

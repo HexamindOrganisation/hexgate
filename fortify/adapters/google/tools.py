@@ -14,24 +14,10 @@ from google.adk.tools.base_tool import BaseTool
 from google.adk.tools.function_tool import FunctionTool
 from google.adk.tools.tool_context import ToolContext
 
-from fortify.security.decision import Decision, DecisionOutcome
 from fortify.security.enforcer import PolicyEnforcer
 
 
 ToolEntry = Union[BaseTool, Callable[..., Any]]
-
-
-def _render_decision(decision: Decision) -> str:
-    """Format a non-allow :class:`Decision` as a string tool result."""
-    if decision.outcome is DecisionOutcome.NEEDS_APPROVAL:
-        return (
-            f"[approval_required] Tool '{decision.tool_name}' requires human "
-            "approval before execution. The tool was not executed."
-        )
-    return (
-        f"[policy_denied] Tool '{decision.tool_name}' is denied by the agent "
-        "policy. The tool was not executed."
-    )
 
 
 def _normalize(tool: ToolEntry) -> BaseTool:
@@ -59,7 +45,7 @@ def wrap_tool(tool: ToolEntry, enforcer: PolicyEnforcer) -> BaseTool:
         decision = enforcer.decide(name, args or {})
         if decision.allowed:
             return await original_run_async(args=args, tool_context=tool_context)
-        return _render_decision(decision)
+        return decision.as_error_message()
 
     wrapped = copy.copy(base)
     wrapped.run_async = guarded_run_async

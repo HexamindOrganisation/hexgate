@@ -8,15 +8,9 @@ import pytest
 from google.adk.tools.base_tool import BaseTool
 from google.adk.tools.function_tool import FunctionTool
 
-from fortify.adapters.google.tools import (
-    _normalize,
-    _render_decision,
-    wrap_tool,
-    wrap_tools,
-)
+from fortify.adapters.google.tools import _normalize, wrap_tool, wrap_tools
 from fortify.runtime import User
 from fortify.security import AgentPolicy, PolicySet
-from fortify.security.decision import Decision, DecisionOutcome
 from fortify.security.enforcer import PolicyEnforcer
 from fortify.security.policy_set import DEFAULT_ROLE_NAME
 
@@ -63,43 +57,6 @@ def _make_callable(name: str = "echo") -> Any:
 def _make_function_tool(name: str = "echo") -> FunctionTool:
     """Create an ADK FunctionTool wrapping a sync echo function."""
     return FunctionTool(func=_make_callable(name))
-
-
-# ---------------------------------------------------------------------------
-# Decision rendering
-# ---------------------------------------------------------------------------
-
-
-def test_render_decision_for_deny_uses_policy_denied_marker() -> None:
-    """A DENY decision renders with the policy_denied marker and tool name."""
-    msg = _render_decision(
-        Decision(
-            outcome=DecisionOutcome.DENY,
-            tool_name="read_file",
-            reason="Policy denied tool",
-            error_type="policy_denied",
-        )
-    )
-
-    assert "read_file" in msg
-    assert "policy_denied" in msg
-    assert "not executed" in msg
-
-
-def test_render_decision_for_needs_approval_uses_distinct_marker() -> None:
-    """NEEDS_APPROVAL renders with a distinct marker — never overlaps with deny."""
-    msg = _render_decision(
-        Decision(
-            outcome=DecisionOutcome.NEEDS_APPROVAL,
-            tool_name="write_file",
-            reason="Policy requires approval",
-            error_type="approval_required",
-        )
-    )
-
-    assert "write_file" in msg
-    assert "approval_required" in msg
-    assert "approval" in msg.lower()
 
 
 # ---------------------------------------------------------------------------

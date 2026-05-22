@@ -198,6 +198,7 @@ async def test_enforce_policy_denies_tool_invocation(
             "type": "policy_denied",
             "message": 'Policy denied tool "sample_tool"',
             "tool_name": "sample_tool",
+            "agent_name": "default",
             "retryable": False,
         },
     }
@@ -249,6 +250,7 @@ async def test_enforce_policy_includes_file_scope_hint_for_out_of_scope_path(
             "type": "policy_denied",
             "message": 'Policy denied tool "read_file" for the requested path',
             "tool_name": "read_file",
+            "agent_name": "default",
             "retryable": False,
             "hint": {
                 "allowed_paths": ["docs/**"],
@@ -299,6 +301,7 @@ async def test_enforce_policy_approval_required_defaults_to_graceful_block(
             # being substituted by the old _security_result helper.
             "message": 'Policy requires approval for tool "sample_tool"',
             "tool_name": "sample_tool",
+            "agent_name": "default",
             "retryable": False,
         },
     }

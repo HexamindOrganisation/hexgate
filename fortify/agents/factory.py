@@ -402,7 +402,7 @@ class FortifyAgent:
         policy_set = (
             policy if isinstance(policy, PolicySet) else load_policy_set(policy)
         )
-        enforcer = PolicyEnforcer(policy_set, agent_name=self.name)
+        enforcer = PolicyEnforcer(policy_set, agent_name=self.name or "default")
 
         wrapped: list[ToolSpec] = []
         for tool_spec in self.tools:
