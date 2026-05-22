@@ -60,3 +60,4 @@ class Decision:
         else:
             body = f"Tool '{self.tool_name}' is denied by the agent policy"
         return f"[{marker}] {body}. The tool was not executed."
+
