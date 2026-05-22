@@ -231,7 +231,11 @@ async def test_arun_needs_approval_with_sync_callable_handler_sees_action() -> N
 
     assert result == "echo-async:hi"
     assert len(seen) == 1
-    assert seen[0] == {"tool_name": "echo", "arguments": {"text": "hi"}, "agent_name": None}
+    assert seen[0] == {
+        "tool_name": "echo",
+        "arguments": {"text": "hi"},
+        "agent_name": None,
+    }
 
 
 @pytest.mark.asyncio

@@ -271,7 +271,9 @@ def load_registered_agent(
     return agent, handler
 
 
-def _apply_approval_handler(agent: AgentGraph, approval_handler: ApprovalHandler | None) -> AgentGraph:
+def _apply_approval_handler(
+    agent: AgentGraph, approval_handler: ApprovalHandler | None
+) -> AgentGraph:
     """Re-stamp every :class:`GuardedTool` on ``agent`` with ``approval_handler``.
 
     For code-registered agents whose factories ran ``enforce_policy``

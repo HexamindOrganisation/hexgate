@@ -472,9 +472,7 @@ def with_before_action(
     context_provider: ContextProvider | None = None,
 ) -> AgentGraph:
     """Return an agent runtime with a Gate 2 pre-tool hook applied."""
-    return agent.with_before_action(
-        before_action, context_provider=context_provider
-    )
+    return agent.with_before_action(before_action, context_provider=context_provider)
 
 
 @observe(name="create_fortify_agent")

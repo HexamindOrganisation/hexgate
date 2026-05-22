@@ -54,10 +54,7 @@ class Decision:
         """
         marker = self.error_type or self.outcome.value
         if self.outcome is DecisionOutcome.NEEDS_APPROVAL:
-            body = (
-                f"Tool '{self.tool_name}' requires human approval before execution"
-            )
+            body = f"Tool '{self.tool_name}' requires human approval before execution"
         else:
             body = f"Tool '{self.tool_name}' is denied by the agent policy"
         return f"[{marker}] {body}. The tool was not executed."
-

@@ -111,7 +111,9 @@ class GuardedTool(BaseTool):
             inner = tool.wrapped_tool
             resolved_enforcer = enforcer if enforcer is not None else tool.enforcer
             resolved_approval = (
-                approval_handler if approval_handler is not None else tool.approval_handler
+                approval_handler
+                if approval_handler is not None
+                else tool.approval_handler
             )
             resolved_before = (
                 before_action if before_action is not None else tool.before_action
