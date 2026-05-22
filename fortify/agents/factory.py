@@ -27,6 +27,7 @@ from fortify.runtime import (
     reset_current_tool_use_context,
     set_current_tool_use_context,
 )
+from fortify.security.decision import Decision
 from fortify.streaming import StreamEvent, new_root_run_id, normalize_langchain_events
 from fortify.tracing.langfuse import (
     CallbackHandler,
@@ -39,14 +40,8 @@ LangChainAgentGraph: TypeAlias = CompiledStateGraph
 ToolSpec: TypeAlias = BaseTool | Callable[..., Any] | dict[str, Any]
 AgentState: TypeAlias = dict[str, Any]
 AgentInput: TypeAlias = str | Sequence[object] | Mapping[str, object] | BaseModel
-ApprovalHandler: TypeAlias = (
-    bool | Callable[["Decision"], bool | Awaitable[bool]]
-)
+ApprovalHandler: TypeAlias = bool | Callable[[Decision], bool | Awaitable[bool]]
 DEFAULT_SYSTEM_PROMPT = Path(__file__).parent / "prompts" / "agent_system.md"
-
-
-if False:  # pragma: no cover — typing-only import to avoid a runtime cycle
-    from fortify.security.decision import Decision
 
 
 def _build_langchain_agent(
