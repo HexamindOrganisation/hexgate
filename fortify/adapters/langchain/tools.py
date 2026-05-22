@@ -142,6 +142,7 @@ class GuardedTool(BaseTool):
             handle_tool_error=inner.handle_tool_error,
             handle_validation_error=inner.handle_validation_error,
             response_format=inner.response_format,
+            extras=inner.extras,
             wrapped_tool=inner,
             enforcer=resolved_enforcer,
             approval_handler=resolved_approval,

@@ -271,9 +271,15 @@ def _apply_approval_handler(agent: AgentGraph, approval_handler: Any) -> AgentGr
     """Re-stamp every :class:`GuardedTool` on ``agent`` with ``approval_handler``.
 
     For code-registered agents whose factories ran ``enforce_policy``
-    internally and never saw the CLI's approval callback.
+    internally and never saw the CLI's approval callback. Pass the
+    ``GuardedTool`` itself (not its inner tool) so the idempotent
+    re-wrap branch preserves any previously configured ``before_action``
+    / ``context_provider`` / ``agent_name``. Logs a warning when the
+    agent has no ``GuardedTool`` tools (e.g. registered agent backed by
+    a non-LangChain framework) so the caller knows the handler was
+    silently dropped.
     """
-    from langchain_core.tools import BaseTool
+    import logging
 
     from fortify.adapters.langchain.tools import GuardedTool
 
@@ -283,17 +289,21 @@ def _apply_approval_handler(agent: AgentGraph, approval_handler: Any) -> AgentGr
         if isinstance(tool_spec, GuardedTool):
             rewrapped.append(
                 GuardedTool.wrap(
-                    tool_spec.wrapped_tool,
-                    enforcer=tool_spec.enforcer,
+                    tool_spec,
                     approval_handler=approval_handler,
                 )
             )
             touched = True
-        elif isinstance(tool_spec, BaseTool):
-            rewrapped.append(tool_spec)
         else:
             rewrapped.append(tool_spec)
-    return agent.with_tools(rewrapped) if touched else agent
+    if not touched:
+        logging.getLogger(__name__).warning(
+            "approval_handler was supplied but %r has no GuardedTool tools to apply "
+            "it to; approval prompts will not fire for this agent",
+            getattr(agent, "name", None) or "agent",
+        )
+        return agent
+    return agent.with_tools(rewrapped)
 
 
 def resolve_agent_source(name: str, base_dir: str | Path | None = None) -> AgentSource:
