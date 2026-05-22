@@ -49,7 +49,9 @@ def _extract_model(model: str | BaseChatModel | None) -> str | None:
         value = getattr(model, attr, None)
         if isinstance(value, str) and value:
             return value
-    return type(model).__name__
+    # No introspectable id — return None so content_hash isn't sensitive to
+    # SDK class renames. The dashboard renders "—" for the missing field.
+    return None
 
 
 def _extract_system_prompt(prompt: str | SystemMessage | None) -> str | None:
@@ -67,12 +69,14 @@ def _extract_system_prompt(prompt: str | SystemMessage | None) -> str | None:
     if isinstance(content, str):
         return content or None
     # LangChain allows SystemMessage.content to be a list of str/dict parts.
+    # Join with a blank line so multi-part prompts read as distinct sections
+    # rather than running together — matches what pydantic_ai's extractor does.
     parts = [
         item if isinstance(item, str) else item.get("text", "")
         for item in content
         if isinstance(item, (str, dict))
     ]
-    joined = "".join(p for p in parts if isinstance(p, str))
+    joined = "\n\n".join(p for p in parts if isinstance(p, str) and p)
     return joined or None
 
 

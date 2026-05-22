@@ -30,14 +30,16 @@ def create_openai_manifest(
 def _extract_model(model: str | Model | None) -> str | None:
     """Return the model id for an OpenAI Agents SDK agent.
 
-    ``Agent.model`` is ``str | Model | None``
+    ``Agent.model`` is ``str | Model | None``. A ``Model`` instance has no
+    public identifier attribute we can rely on, so we return None rather
+    than the Python class name — keeping content_hash insensitive to SDK
+    refactors. The dashboard renders "—" for the missing field.
     """
     if model is None:
         return None
     if isinstance(model, str):
         return model or None
-    # Fallback to the model class name when no model is set
-    return type(model).__name__
+    return None
 
 
 def _extract_system_prompt(instructions: object) -> str | None:

@@ -43,6 +43,10 @@ def create_google_manifest(
 
 def _extract_model(model: str | BaseLlm) -> str | None:
     """Return the model id for a Google ADK agent.
+
+    Returns None when neither the string form nor ``BaseLlm.model``
+    yields an identifier — better than baking a Python class name into
+    content_hash and making the hash drift on SDK refactors.
     """
     if isinstance(model, str):
         return model or None
@@ -50,7 +54,7 @@ def _extract_model(model: str | BaseLlm) -> str | None:
     name = getattr(model, "model", None)
     if isinstance(name, str) and name:
         return name
-    return type(model).__name__
+    return None
 
 
 def _extract_system_prompt(instruction: object) -> str | None:

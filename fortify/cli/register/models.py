@@ -3,7 +3,15 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import TYPE_CHECKING
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+# Hard cap on the serialized system prompt. The dashboard renders the full
+# prompt inside a <pre> block; a multi-MB prompt would lock the browser tab.
+# 64 KiB is well above any realistic hand-written prompt and still cheap to
+# render. Measured in UTF-8 bytes so the limit is meaningful for non-ASCII
+# prompts too.
+MAX_SYSTEM_PROMPT_BYTES = 64 * 1024
+_TRUNCATION_MARKER = "\n\n… [truncated by fortify register]"
 
 # Enable AgentType type checking, without requiring the agents package to be installed
 if TYPE_CHECKING:
@@ -52,10 +60,27 @@ class AgentManifest(BaseModel):
         description=(
             "Resolved system prompt text, when the framework exposes a static "
             "one. None when the prompt is a callable, dynamically composed, "
-            "or otherwise not introspectable at registration time."
+            "or otherwise not introspectable at registration time. "
+            f"Capped at {MAX_SYSTEM_PROMPT_BYTES // 1024} KiB UTF-8 — anything "
+            "longer is truncated with a marker so the dashboard can render "
+            "it safely."
         ),
     )
     tools: list[ToolDefinition] = Field(description="The tools of the agent")
+
+    @field_validator("system_prompt")
+    @classmethod
+    def _cap_system_prompt(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        encoded = value.encode("utf-8")
+        if len(encoded) <= MAX_SYSTEM_PROMPT_BYTES:
+            return value
+        # Trim by bytes, then decode-ignore to land on a codepoint boundary
+        # without splitting a multi-byte sequence. Reserve room for the marker.
+        budget = MAX_SYSTEM_PROMPT_BYTES - len(_TRUNCATION_MARKER.encode("utf-8"))
+        head = encoded[:budget].decode("utf-8", errors="ignore")
+        return head + _TRUNCATION_MARKER
 
 
 class ToolDefinition(BaseModel):

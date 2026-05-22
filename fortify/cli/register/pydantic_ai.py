@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 from fortify.cli.register.models import (
     AgentFramework,
     AgentManifest,
@@ -11,6 +13,10 @@ from fortify.cli.register.models import (
 from pydantic_ai import Agent
 from pydantic_ai.models import Model
 from pydantic_ai.tools import Tool
+
+logger = logging.getLogger(__name__)
+
+_MISSING = object()
 
 
 def create_pydantic_ai_manifest(
@@ -43,7 +49,9 @@ def create_pydantic_ai_manifest(
 def _extract_model(model: Model | str | None) -> str | None:
     """Return the model id for a Pydantic AI agent.
 
-    ``Model`` exposes ``.model_name`` as the canonical identifier
+    ``Model`` exposes ``.model_name`` as the canonical identifier; if it
+    isn't a string we return None rather than the Python class name —
+    content_hash should be insensitive to SDK refactors.
     """
     if model is None:
         return None
@@ -52,7 +60,7 @@ def _extract_model(model: Model | str | None) -> str | None:
     name = getattr(model, "model_name", None)
     if isinstance(name, str) and name:
         return name
-    return type(model).__name__
+    return None
 
 
 def _extract_system_prompt(agent: Agent) -> str | None:
@@ -61,12 +69,25 @@ def _extract_system_prompt(agent: Agent) -> str | None:
     Pydantic AI splits the prompt across two private fields: ``_system_prompts``
     and ``_instructions`` (the newer ``instructions=`` arg, which mixes literal
     strings with dynamic callables). At run time the agent concatenates them.
+
+    Reading private attrs is fragile to upstream renames — if both are gone
+    we log once and return None so the manifest still registers cleanly.
     """
+    system_prompts = getattr(agent, "_system_prompts", _MISSING)
+    instructions = getattr(agent, "_instructions", _MISSING)
+    if system_prompts is _MISSING and instructions is _MISSING:
+        logger.warning(
+            "pydantic_ai Agent exposes neither _system_prompts nor "
+            "_instructions; the manifest will have system_prompt=None. "
+            "This usually means pydantic_ai renamed the internals — update "
+            "fortify.cli.register.pydantic_ai._extract_system_prompt."
+        )
+        return None
     parts: list[str] = []
-    for prompt in getattr(agent, "_system_prompts", ()) or ():
+    for prompt in (system_prompts if system_prompts is not _MISSING else ()) or ():
         if isinstance(prompt, str) and prompt:
             parts.append(prompt)
-    for instruction in getattr(agent, "_instructions", ()) or ():
+    for instruction in (instructions if instructions is not _MISSING else ()) or ():
         if isinstance(instruction, str) and instruction:
             parts.append(instruction)
     if not parts:
