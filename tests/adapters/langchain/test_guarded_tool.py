@@ -215,12 +215,12 @@ async def test_arun_needs_approval_with_falsy_bool_handler_renders_error() -> No
 
 
 @pytest.mark.asyncio
-async def test_arun_needs_approval_with_sync_callable_handler_sees_decision() -> None:
-    """A sync callable approval_handler receives the Decision and gates the call."""
-    seen: list[Decision] = []
+async def test_arun_needs_approval_with_sync_callable_handler_sees_action() -> None:
+    """A sync callable approval_handler receives (action, context) and gates the call."""
+    seen: list[dict[str, object]] = []
 
-    def approve(decision: Decision) -> bool:
-        seen.append(decision)
+    def approve(action: dict[str, object], _context: dict[str, object] | None) -> bool:
+        seen.append(action)
         return True
 
     guarded = GuardedTool.wrap(
@@ -231,16 +231,17 @@ async def test_arun_needs_approval_with_sync_callable_handler_sees_decision() ->
 
     assert result == "echo-async:hi"
     assert len(seen) == 1
-    assert seen[0].outcome is DecisionOutcome.NEEDS_APPROVAL
-    assert seen[0].tool_name == "echo"
+    assert seen[0] == {"tool_name": "echo", "arguments": {"text": "hi"}, "agent_name": None}
 
 
 @pytest.mark.asyncio
 async def test_arun_needs_approval_with_async_callable_handler_is_awaited() -> None:
     """An async callable approval_handler is awaited before the decision is honored."""
 
-    async def approve(decision: Decision) -> bool:
-        assert decision.outcome is DecisionOutcome.NEEDS_APPROVAL
+    async def approve(
+        action: dict[str, object], _context: dict[str, object] | None
+    ) -> bool:
+        assert action["tool_name"] == "echo"
         return False
 
     invocations: list[str] = []
@@ -286,13 +287,11 @@ def test_run_deny_returns_structured_error() -> None:
 
 @pytest.mark.filterwarnings("ignore::RuntimeWarning")
 def test_run_with_async_approval_handler_raises_runtime_error() -> None:
-    """A sync invocation can't await an async approval_handler — must raise clearly.
+    """A sync invocation can't await an async approval_handler — must raise clearly."""
 
-    The orphan-coroutine RuntimeWarning is expected: the wrapper detects the
-    awaitable and raises before awaiting it, which is the contract being tested.
-    """
-
-    async def approve(_decision: Decision) -> bool:
+    async def approve(
+        _action: dict[str, object], _context: dict[str, object] | None
+    ) -> bool:
         return True
 
     guarded = GuardedTool.wrap(

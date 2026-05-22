@@ -169,8 +169,8 @@ def test_wrap_threads_approval_handler_into_enforcer(
 
     seen: list[Any] = []
 
-    def approve(decision: Any) -> bool:
-        seen.append(decision.tool_name)
+    def approve(action: dict[str, Any], _context: dict[str, Any] | None) -> bool:
+        seen.append(action["tool_name"])
         return True
 
     tools = [_make_tool("echo")]

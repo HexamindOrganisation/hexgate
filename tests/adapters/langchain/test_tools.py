@@ -170,25 +170,29 @@ def test_sync_needs_approval_with_false_bool_handler_renders_error() -> None:
     assert result["error"]["type"] == "approval_required"
 
 
-def test_sync_needs_approval_with_callable_sees_decision() -> None:
-    seen: list[Decision] = []
+def test_sync_needs_approval_with_callable_sees_action() -> None:
+    seen: list[dict[str, object]] = []
 
-    def approve(decision: Decision) -> bool:
-        seen.append(decision)
+    def approve(
+        action: dict[str, object], _context: dict[str, object] | None
+    ) -> bool:
+        seen.append(action)
         return True
 
     t = _make_sync_tool()
     install_enforcer_on_tool(t, enforcer=_approval_enforcer(), approval_handler=approve)
 
     assert t.func(text="hi") == "echo:hi"
-    assert seen[0].tool_name == "echo"
-    assert seen[0].arguments == {"text": "hi"}
+    assert seen[0]["tool_name"] == "echo"
+    assert seen[0]["arguments"] == {"text": "hi"}
 
 
 def test_sync_async_approval_handler_raises_runtime_error() -> None:
     """A sync invocation can't await an async handler."""
 
-    async def approve(_decision: Decision) -> bool:
+    async def approve(
+        _action: dict[str, object], _context: dict[str, object] | None
+    ) -> bool:
         return True
 
     t = _make_sync_tool()
@@ -224,8 +228,10 @@ async def test_async_deny_returns_structured_error() -> None:
 
 @pytest.mark.asyncio
 async def test_async_needs_approval_with_async_callable_is_awaited() -> None:
-    async def approve(decision: Decision) -> bool:
-        assert decision.tool_name == "echo"
+    async def approve(
+        action: dict[str, object], _context: dict[str, object] | None
+    ) -> bool:
+        assert action["tool_name"] == "echo"
         return False
 
     t = _make_async_tool()

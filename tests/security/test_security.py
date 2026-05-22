@@ -310,13 +310,10 @@ async def test_enforce_policy_with_approval_handler_allows_approval_required_too
 ) -> None:
     """``enforce_policy(approval_handler=...)`` resolves NEEDS_APPROVAL inline.
 
-    The new path threads the approval handler down into the GuardedTool at
-    wrap time. A handler that returns True (bool shorthand or callable)
-    lets the proposed tool call run; a callable that returns False renders
-    the same structured error as the no-handler path, but exposes the
-    Decision (including ``arguments``) to the host code.
+    The handler uses the legacy ``(ActionPayload, ActionContext) -> bool``
+    shape. True/False short-circuit; callable forms receive the action dict
+    and decide.
     """
-    from fortify.security.decision import Decision
 
     @tool
     async def sample_tool(value: str) -> str:
@@ -350,18 +347,20 @@ async def test_enforce_policy_with_approval_handler_allows_approval_required_too
     assert denied_result["ok"] is False
     assert denied_result["error"]["type"] == "approval_required"
 
-    # Callable handler → receives the Decision (including arguments) and decides.
-    seen: list[Decision] = []
+    # Callable handler → receives (action, context) and decides.
+    seen: list[dict[str, object]] = []
 
-    async def approval_handler(decision: Decision) -> bool:
-        seen.append(decision)
+    async def approval_handler(
+        action: dict[str, object], _context: dict[str, object] | None
+    ) -> bool:
+        seen.append(action)
         return True
 
     handled = enforce_policy(agent, policy, approval_handler=approval_handler)
     assert await handled.tools[0].ainvoke({"value": "ciao"}) == "CIAO"
     assert len(seen) == 1
-    assert seen[0].tool_name == "sample_tool"
-    assert seen[0].arguments == {"value": "ciao"}
+    assert seen[0]["tool_name"] == "sample_tool"
+    assert seen[0]["arguments"] == {"value": "ciao"}
 
 
 @pytest.mark.asyncio

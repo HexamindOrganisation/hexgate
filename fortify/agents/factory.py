@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Callable, Mapping, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any, Self, TypeAlias
 
@@ -39,6 +39,15 @@ LangChainAgentGraph: TypeAlias = CompiledStateGraph
 ToolSpec: TypeAlias = BaseTool | Callable[..., Any] | dict[str, Any]
 AgentState: TypeAlias = dict[str, Any]
 AgentInput: TypeAlias = str | Sequence[object] | Mapping[str, object] | BaseModel
+ActionPayload: TypeAlias = dict[str, Any]
+ActionContext: TypeAlias = dict[str, Any] | None
+BeforeActionHook: TypeAlias = Callable[
+    [ActionPayload, ActionContext], object | Awaitable[object]
+]
+ApprovalHandler: TypeAlias = (
+    bool | Callable[[ActionPayload, ActionContext], bool | Awaitable[bool]]
+)
+ContextProvider: TypeAlias = Callable[[], ActionContext]
 DEFAULT_SYSTEM_PROMPT = Path(__file__).parent / "prompts" / "agent_system.md"
 
 

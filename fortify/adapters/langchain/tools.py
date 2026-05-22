@@ -13,31 +13,22 @@ from __future__ import annotations
 import functools
 from collections.abc import Awaitable, Callable
 from inspect import isawaitable
-from typing import Any, Union
+from typing import Any
 
 from langchain_core.tools import BaseTool
 from langchain_core.tools.structured import StructuredTool
 from pydantic import ConfigDict
 
+from fortify.agents.factory import (
+    ActionContext,
+    ActionPayload,
+    ApprovalHandler,
+    BeforeActionHook,
+    ContextProvider,
+)
 from fortify.security.decision import Decision, DecisionOutcome
 from fortify.security.enforcer import PolicyEnforcer
 from fortify.tools.decorators import TOOL_METADATA_ATTR
-
-
-# NEEDS_APPROVAL resolver. ``bool`` is shorthand (always approve / deny).
-ApprovalHandler = Union[
-    Callable[[Decision], "bool | Awaitable[bool]"],
-    bool,
-]
-
-
-# Gate 2 hook contract — legacy dict shapes the ``with_before_action`` shim uses.
-ActionPayload = dict[str, Any]
-ActionContext = Union[dict[str, Any], None]
-BeforeActionHook = Callable[
-    [ActionPayload, ActionContext], "object | Awaitable[object]"
-]
-ContextProvider = Callable[[], ActionContext]
 
 
 def _copy_tool_metadata(source: Any, target: Any) -> Any:
@@ -48,11 +39,13 @@ def _copy_tool_metadata(source: Any, target: Any) -> Any:
     return target
 
 
-def _resolve_approval_sync(handler: ApprovalHandler, decision: Decision) -> bool:
+def _resolve_approval_sync(
+    handler: ApprovalHandler, action: ActionPayload, context: ActionContext
+) -> bool:
     """Resolve a NEEDS_APPROVAL decision in a sync caller (rejects coroutines)."""
     if isinstance(handler, bool):
         return handler
-    result = handler(decision)
+    result = handler(action, context)
     if isawaitable(result):
         raise RuntimeError(
             "approval_handler returned a coroutine; sync tool invocation cannot "
@@ -61,11 +54,13 @@ def _resolve_approval_sync(handler: ApprovalHandler, decision: Decision) -> bool
     return bool(result)
 
 
-async def _resolve_approval_async(handler: ApprovalHandler, decision: Decision) -> bool:
+async def _resolve_approval_async(
+    handler: ApprovalHandler, action: ActionPayload, context: ActionContext
+) -> bool:
     """Resolve a NEEDS_APPROVAL decision in an async caller."""
     if isinstance(handler, bool):
         return handler
-    result = handler(decision)
+    result = handler(action, context)
     if isawaitable(result):
         result = await result
     return bool(result)
@@ -201,7 +196,11 @@ class GuardedTool(BaseTool):
                 if (
                     decision.outcome is DecisionOutcome.NEEDS_APPROVAL
                     and self.approval_handler is not None
-                    and await _resolve_approval_async(self.approval_handler, decision)
+                    and await _resolve_approval_async(
+                        self.approval_handler,
+                        self._build_action(kwargs),
+                        self._build_context(),
+                    )
                 ):
                     pass  # approved → fall through to Gate 2 and invoke
                 else:
@@ -218,7 +217,11 @@ class GuardedTool(BaseTool):
                 if (
                     decision.outcome is DecisionOutcome.NEEDS_APPROVAL
                     and self.approval_handler is not None
-                    and _resolve_approval_sync(self.approval_handler, decision)
+                    and _resolve_approval_sync(
+                        self.approval_handler,
+                        self._build_action(kwargs),
+                        self._build_context(),
+                    )
                 ):
                     pass
                 else:
@@ -286,6 +289,9 @@ def install_enforcer_on_tool(
             "In-place wrapping only supports StructuredTool-style tools."
         )
 
+    def _action(kwargs: dict[str, Any]) -> ActionPayload:
+        return {"tool_name": name, "arguments": kwargs, "agent_name": None}
+
     if original_func is not None:
         captured_func = original_func
 
@@ -297,7 +303,7 @@ def install_enforcer_on_tool(
             if (
                 decision.outcome is DecisionOutcome.NEEDS_APPROVAL
                 and approval_handler is not None
-                and _resolve_approval_sync(approval_handler, decision)
+                and _resolve_approval_sync(approval_handler, _action(kwargs), None)
             ):
                 return captured_func(*args, **kwargs)
             return {"ok": False, "error": decision.as_error_payload()}
@@ -316,7 +322,9 @@ def install_enforcer_on_tool(
             if (
                 decision.outcome is DecisionOutcome.NEEDS_APPROVAL
                 and approval_handler is not None
-                and await _resolve_approval_async(approval_handler, decision)
+                and await _resolve_approval_async(
+                    approval_handler, _action(kwargs), None
+                )
             ):
                 return await captured_coroutine(*args, **kwargs)
             return {"ok": False, "error": decision.as_error_payload()}
