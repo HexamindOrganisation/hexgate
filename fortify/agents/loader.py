@@ -10,8 +10,12 @@ from typing import Any, Literal, TypeAlias
 
 import yaml
 
-from fortify.agents.factory import AgentGraph, create_agent
-from fortify.agents.factory import enforce_policy
+from fortify.agents.factory import (
+    AgentGraph,
+    ApprovalHandler,
+    create_agent,
+    enforce_policy,
+)
 from fortify.agents.models import AgentSpec
 from fortify.cloud.client import FortifyClient, FortifyConfig, resolve_agent_name
 from fortify.security import AgentPolicy, load_policy
@@ -187,7 +191,7 @@ def load_builtin_agent(
     tags: list[str] | None = None,
     extra_tools: Mapping[str, Any] | None = None,
     model: str | None = None,
-    approval_handler: Any = None,
+    approval_handler: ApprovalHandler | None = None,
 ) -> tuple[AgentGraph, CallbackHandler]:
     """Load and instantiate a packaged builtin agent."""
     spec = load_builtin_agent_spec(name)
@@ -216,7 +220,7 @@ def load_local_agent(
     tags: list[str] | None = None,
     extra_tools: Mapping[str, Any] | None = None,
     model: str | None = None,
-    approval_handler: Any = None,
+    approval_handler: ApprovalHandler | None = None,
 ) -> tuple[AgentGraph, CallbackHandler]:
     """Load and instantiate a local project agent."""
     spec = load_local_agent_spec(name, base_dir)
@@ -245,7 +249,7 @@ def load_registered_agent(
     tags: list[str] | None = None,
     extra_tools: Mapping[str, Any] | None = None,
     model: str | None = None,
-    approval_handler: Any = None,
+    approval_handler: ApprovalHandler | None = None,
 ) -> tuple[AgentGraph, CallbackHandler]:
     """Load a registered code-defined agent by id."""
     try:
@@ -267,7 +271,7 @@ def load_registered_agent(
     return agent, handler
 
 
-def _apply_approval_handler(agent: AgentGraph, approval_handler: Any) -> AgentGraph:
+def _apply_approval_handler(agent: AgentGraph, approval_handler: ApprovalHandler | None) -> AgentGraph:
     """Re-stamp every :class:`GuardedTool` on ``agent`` with ``approval_handler``.
 
     For code-registered agents whose factories ran ``enforce_policy``
@@ -327,7 +331,7 @@ def load_fortify_agent(
     tags: list[str] | None = None,
     extra_tools: Mapping[str, Any] | None = None,
     model: str | None = None,
-    approval_handler: Any = None,
+    approval_handler: ApprovalHandler | None = None,
 ) -> tuple[AgentGraph, CallbackHandler]:
     """Fetch an agent from Fortify and return it with policy enforcement applied.
 
@@ -390,7 +394,7 @@ def load_agent(
     extra_tools: Mapping[str, Any] | None = None,
     model: str | None = None,
     local_only: bool = False,
-    approval_handler: Any = None,
+    approval_handler: ApprovalHandler | None = None,
 ) -> tuple[AgentGraph, CallbackHandler]:
     """Load an agent from Fortify (when FORTIFY_KEY is set), local, or builtin.
 

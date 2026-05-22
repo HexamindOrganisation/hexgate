@@ -380,7 +380,7 @@ class FortifyAgent:
         self,
         policy: object,
         *,
-        approval_handler: Any = None,
+        approval_handler: ApprovalHandler | None = None,
     ) -> Self:
         """Return a new agent with Gate 1 policy enforcement applied.
 
@@ -420,9 +420,9 @@ class FortifyAgent:
 
     def with_before_action(
         self,
-        before_action: Any,
+        before_action: BeforeActionHook,
         *,
-        context_provider: Any = None,
+        context_provider: ContextProvider | None = None,
     ) -> Self:
         """Return a new agent with a Gate 2 pre-tool hook applied.
 
@@ -459,7 +459,7 @@ def enforce_policy(
     agent: AgentGraph,
     policy: object,
     *,
-    approval_handler: Any = None,
+    approval_handler: ApprovalHandler | None = None,
 ) -> AgentGraph:
     """Functional alias for :meth:`FortifyAgent.enforce_policy`."""
     return agent.enforce_policy(policy, approval_handler=approval_handler)
@@ -467,9 +467,9 @@ def enforce_policy(
 
 def with_before_action(
     agent: AgentGraph,
-    before_action: Any,
+    before_action: BeforeActionHook,
     *,
-    context_provider: Any = None,
+    context_provider: ContextProvider | None = None,
 ) -> AgentGraph:
     """Return an agent runtime with a Gate 2 pre-tool hook applied."""
     return agent.with_before_action(

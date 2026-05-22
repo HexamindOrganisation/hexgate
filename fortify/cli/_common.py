@@ -6,13 +6,13 @@ import argparse
 import importlib.util
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal
+from typing import Literal
 
 from rich.console import Console, Group
 from rich.panel import Panel
 from rich.text import Text
 
-from fortify.agents.factory import AgentGraph, CallbackHandler
+from fortify.agents.factory import AgentGraph, ApprovalHandler, CallbackHandler
 from fortify.agents.loader import load_agent, resolve_agent_source
 from fortify.config.settings import Settings
 from fortify.runtime.context import get_current_user
@@ -40,7 +40,7 @@ def build_runtime(
     base_dir: Path,
     model: str | None,
     local_only: bool = False,
-    approval_handler: Any = None,
+    approval_handler: ApprovalHandler | None = None,
 ) -> AgentRuntime:
     """Create the runtime shared by ``fortify chat`` and ``fortify serve``.
 
