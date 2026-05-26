@@ -23,11 +23,15 @@ from fortify.security import (
     AgentPolicy,
     ApprovalRequiredError,
     FileToolPolicy,
+    PolicyBundle,
     PolicyDeniedError,
 )
 from fortify.security.file_scope import build_file_scope_hint
 from fortify.security.policy_set import PolicySet, load_policy_set
 from fortify.tools.decorators import TOOL_METADATA_ATTR
+
+
+_DEFAULT_ROLE = "default"
 
 
 def _copy_tool_metadata(source: Any, target: Any) -> Any:
@@ -41,15 +45,21 @@ def _copy_tool_metadata(source: Any, target: Any) -> Any:
 class GuardedTool(BaseTool):
     """A tool wrapper that enforces local policy and hosted hooks inline.
 
-    ``policy_set`` is a role-aware bundle; at call time the active
-    :class:`~fortify.runtime.User.role` selects which policy applies. When
-    no User scope is active the bundle's ``default`` role is used.
+    Carries exactly one of ``policy_set`` (the pydantic engine) or
+    ``policy_bundle`` (the WASM engine). Bundles win when both are set —
+    that's the local-override path (FORTIFY_LOCAL_POLICY) overriding
+    whatever the agent was originally configured with.
+
+    At call time the active :class:`~fortify.runtime.User.role` selects
+    which role's rules apply. When no User scope is active the
+    ``default`` role is used.
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     wrapped_tool: BaseTool
     policy_set: PolicySet | None = None
+    policy_bundle: PolicyBundle | None = None
     approval_handler: ApprovalHandler | None = None
     before_action: BeforeActionHook | None = None
     context_provider: ContextProvider | None = None
@@ -116,15 +126,32 @@ class GuardedTool(BaseTool):
             return self.wrapped_tool.func(*args, **kwargs)
         return self.wrapped_tool._run(*args, **kwargs)
 
+    def _active_role(self) -> str:
+        """Return the active user's role, or ``"default"`` when no scope is set."""
+        from fortify.runtime.context import get_current_user
+
+        active_user = get_current_user()
+        if active_user is not None and active_user.role is not None:
+            return active_user.role
+        return _DEFAULT_ROLE
+
     def _authorize(self, kwargs: dict[str, Any]) -> None:
         """Apply local Gate 1 authorization when configured.
 
-        Picks the effective :class:`AgentPolicy` from ``policy_set`` based
-        on the active :class:`~fortify.runtime.User.role`, then runs the
-        tool's ``mode`` + ``constraints`` check against the invocation
-        arguments. When no User scope is active the ``default`` role
-        applies — keeps local-only flows working unchanged.
+        Dispatches to the WASM engine if a :class:`PolicyBundle` is
+        attached, otherwise to the pydantic engine. Both paths raise
+        :class:`PolicyDeniedError` / :class:`ApprovalRequiredError` with
+        identical shape — the rest of GuardedTool doesn't care which
+        engine produced the decision.
         """
+        if self.policy_bundle is not None:
+            from fortify.security import authorize_tool_call_wasm
+
+            authorize_tool_call_wasm(
+                self.policy_bundle, self._active_role(), self.name, kwargs
+            )
+            return
+
         active_policy = self._active_policy()
         if active_policy is None:
             return
@@ -216,6 +243,7 @@ def _wrap_tool(
     tool_spec: BaseTool,
     *,
     policy_set: PolicySet | None = None,
+    policy_bundle: PolicyBundle | None = None,
     approval_handler: ApprovalHandler | None = None,
     before_action: BeforeActionHook | None = None,
     context_provider: ContextProvider | None = None,
@@ -238,6 +266,7 @@ def _wrap_tool(
             extras=tool_spec.extras,
             wrapped_tool=tool_spec.wrapped_tool,
             policy_set=policy_set or tool_spec.policy_set,
+            policy_bundle=policy_bundle or tool_spec.policy_bundle,
             approval_handler=approval_handler
             if approval_handler is not None
             else tool_spec.approval_handler,
@@ -262,6 +291,7 @@ def _wrap_tool(
         extras=tool_spec.extras,
         wrapped_tool=tool_spec,
         policy_set=policy_set,
+        policy_bundle=policy_bundle,
         approval_handler=approval_handler,
         before_action=before_action,
         context_provider=context_provider,
@@ -272,21 +302,37 @@ def _wrap_tool(
 
 def wrap_tools_with_policy(
     tools: Sequence[ToolSpec],
-    policy: AgentPolicy | PolicySet | None,
+    policy: AgentPolicy | PolicySet | PolicyBundle | None,
 ) -> list[ToolSpec]:
     """Wrap tools so policy decisions are enforced before execution.
 
-    ``policy`` may be a legacy single :class:`AgentPolicy` (which becomes
-    a one-role ``default`` :class:`PolicySet`) or an already-built
-    :class:`PolicySet` with multiple roles.
+    ``policy`` may be:
+
+      * a legacy single :class:`AgentPolicy` (wrapped as a one-role
+        ``default`` :class:`PolicySet`) — pydantic engine;
+      * a pre-built :class:`PolicySet` with multiple roles — pydantic;
+      * a :class:`PolicyBundle` loaded from disk — WASM engine.
+
+    The two engines yield the same exception shape, so callers don't
+    need to care which one ran.
     """
     if policy is None:
         return list(tools)
+
+    if isinstance(policy, PolicyBundle):
+        wrapped_tools: list[ToolSpec] = []
+        for tool_spec in tools:
+            if not isinstance(tool_spec, BaseTool):
+                wrapped_tools.append(tool_spec)
+                continue
+            wrapped_tools.append(_wrap_tool(tool_spec, policy_bundle=policy))
+        return wrapped_tools
+
     policy_set = (
         policy if isinstance(policy, PolicySet) else load_policy_set(policy)
     )
 
-    wrapped_tools: list[ToolSpec] = []
+    wrapped_tools = []
     for tool_spec in tools:
         if not isinstance(tool_spec, BaseTool):
             wrapped_tools.append(tool_spec)

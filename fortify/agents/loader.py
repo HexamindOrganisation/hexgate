@@ -14,7 +14,8 @@ from fortify.agents.factory import AgentGraph, create_agent
 from fortify.agents.security import enforce_policy
 from fortify.agents.models import AgentSpec
 from fortify.cloud.client import FortifyClient, FortifyConfig, resolve_agent_name
-from fortify.security import AgentPolicy, load_policy
+from fortify.security import AgentPolicy, PolicyBundle, load_policy
+from fortify.security.bundle import BundleIntegrityError, BundleLoadError
 from fortify.tools import (
     bash,
     edit_file,
@@ -42,6 +43,44 @@ BUILTIN_TOOLS = {
 AgentSource = Literal["builtin", "local", "registered"]
 AgentFactory: TypeAlias = Callable[..., tuple[AgentGraph, CallbackHandler]]
 REGISTERED_AGENTS: dict[str, AgentFactory] = {}
+
+
+_LOCAL_POLICY_ENV_VAR = "FORTIFY_LOCAL_POLICY"
+
+
+def _local_policy_override() -> PolicyBundle | None:
+    """Load a :class:`PolicyBundle` from ``$FORTIFY_LOCAL_POLICY`` if set.
+
+    The env var points at a directory containing a ``*.bundle.json`` +
+    matching ``.yaml`` / ``.rego`` / ``.wasm``. Hash-integrity is checked
+    eagerly so a stale or corrupt bundle fails loudly at startup rather
+    than at the first denied tool call.
+
+    A loud stderr line announces the override — silent overrides of
+    security-relevant config would be a footgun, especially when the dev
+    forgets they have the env var set.
+    """
+    override_path = os.environ.get(_LOCAL_POLICY_ENV_VAR)
+    if not override_path:
+        return None
+    try:
+        bundle = PolicyBundle.from_disk(Path(override_path))
+        bundle.verify_integrity()
+    except (BundleLoadError, BundleIntegrityError) as exc:
+        raise RuntimeError(
+            f"{_LOCAL_POLICY_ENV_VAR} is set to {override_path!r} but the "
+            f"bundle could not be loaded: {exc}"
+        ) from exc
+
+    import sys
+
+    short = bundle.wasm_hash[:12] if bundle.wasm_hash else "?"
+    print(
+        f"[fortify] {_LOCAL_POLICY_ENV_VAR} active: "
+        f"{override_path} (wasm_hash={short})",
+        file=sys.stderr,
+    )
+    return bundle
 
 
 def builtin_agents_root() -> Path:
@@ -192,7 +231,7 @@ def load_builtin_agent(
     spec = load_builtin_agent_spec(name)
     agent_dir = builtin_agents_root() / name
     system_prompt = (agent_dir / spec.system_prompt).read_text(encoding="utf-8")
-    policy = load_policy(agent_dir / spec.policy)
+    policy: object = load_policy(agent_dir / spec.policy)
     tools = resolve_builtin_tools(spec.tools, extra_tools=extra_tools)
     agent, handler = create_agent(
         model=model or spec.model,
@@ -203,6 +242,9 @@ def load_builtin_agent(
         tags=tags,
         name=spec.name,
     )
+    override = _local_policy_override()
+    if override is not None:
+        policy = override
     return enforce_policy(agent, policy), handler
 
 
@@ -220,7 +262,7 @@ def load_local_agent(
     spec = load_local_agent_spec(name, base_dir)
     agent_dir = find_local_agent_dir(name, base_dir)
     system_prompt = (agent_dir / spec.system_prompt).read_text(encoding="utf-8")
-    policy = load_policy(agent_dir / spec.policy)
+    policy: object = load_policy(agent_dir / spec.policy)
     tools = resolve_builtin_tools(spec.tools, extra_tools=extra_tools)
     agent, handler = create_agent(
         model=model or spec.model,
@@ -231,6 +273,9 @@ def load_local_agent(
         tags=tags,
         name=spec.name,
     )
+    override = _local_policy_override()
+    if override is not None:
+        policy = override
     return enforce_policy(agent, policy), handler
 
 
@@ -313,7 +358,7 @@ def load_fortify_agent(
     # otherwise the document is a flat single-policy doc. load_policy_set_from_dict
     # dispatches on shape — inheritance + mixin filtering applied either way.
     policy_payload = yaml.safe_load(payload["policy_yaml"]) or {}
-    policy = load_policy_set_from_dict(policy_payload)
+    policy: object = load_policy_set_from_dict(policy_payload)
 
     tools = resolve_builtin_tools(spec.tools, extra_tools=extra_tools)
 
@@ -325,6 +370,9 @@ def load_fortify_agent(
         tags=tags or ["fortify", "fortify-cloud", config.project_id],
         name=spec.name,
     )
+    override = _local_policy_override()
+    if override is not None:
+        policy = override
     enforced = enforce_policy(agent, policy)
     # Attach the client so the runtime can do lazy attenuation inside an
     # active User scope without the caller having to thread it through.

@@ -16,8 +16,14 @@ from fortify.security.constraints import (
     evaluate_constraint,
     parse_constraint,
 )
+from fortify.security.bundle import (
+    BundleIntegrityError,
+    BundleLoadError,
+    PolicyBundle,
+)
 from fortify.security.policy import (
     authorize_tool_call,
+    authorize_tool_call_wasm,
     default_agent_policy,
     get_tool_policy,
     load_policy,
@@ -57,7 +63,10 @@ __all__ = [
     "FileScope",
     "FileToolPolicy",
     "ApprovalRequiredError",
+    "BundleIntegrityError",
+    "BundleLoadError",
     "OpaNotFoundError",
+    "PolicyBundle",
     "PolicyDeniedError",
     "PolicyMode",
     "PolicySet",
@@ -68,6 +77,7 @@ __all__ = [
     "WasmEvalError",
     "WasmPolicy",
     "authorize_tool_call",
+    "authorize_tool_call_wasm",
     "check_constraints",
     "compile_default_only",
     "compile_to_rego",
