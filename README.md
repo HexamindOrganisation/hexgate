@@ -579,6 +579,114 @@ That means the same agent code can stay simple in development, while deployment 
 - if an approval handler is attached, the host can decide whether to allow the action at runtime
 - if approval is not granted, the tool returns a structured `ok: False` result so the agent can try a fallback instead of crashing
 
+## 🧩 Policy Bundles — Compile, Sign, Enforce (WASM)
+
+Fortify has **two policy enforcement engines** that return identical decisions (there's a parity test suite that proves it):
+
+- **pydantic** (default) — evaluates constraints in-process. Zero setup; this is what every example above uses.
+- **WASM** — compiles `policy.yaml` → Rego → a WebAssembly module evaluated via `wasmtime`. This is the path production ships: one compiled artifact, byte-for-byte reproducible, cryptographically signed by the platform.
+
+Why a second engine: the WASM path produces a **portable, signed artifact** (a "bundle"), surfaces **structured deny reasons** (exactly which constraints failed), and chains trust back to the platform's signing key — the same key that signs your biscuit tokens.
+
+### Prerequisite — `opa`
+
+The WASM compile step shells out to the [Open Policy Agent](https://www.openpolicyagent.org/) binary. Install it once:
+
+```bash
+brew install opa            # macOS
+# or see https://www.openpolicyagent.org/docs/latest/#running-opa
+```
+
+Without `opa` on `PATH`, `fortify policy build --no-wasm` still emits the yaml + rego (no `.wasm`), and the pydantic engine keeps working.
+
+### The `fortify policy` CLI
+
+```bash
+# Validate a policy.yaml without the network — parse + check every constraint
+fortify policy validate policy.yaml
+
+# See the Rego your YAML compiles to (stdout)
+fortify policy show-rego policy.yaml
+
+# Dry-run a single decision. --engine wasm compiles + evaluates in wasmtime
+# (matching production); the default pydantic engine needs no opa.
+fortify policy test policy.yaml --role billing --tool refund_order \
+    --args '{"amount": 200, "currency": "USD"}' --engine wasm
+
+# Compile a bundle: writes {stem}.yaml + .rego + .wasm + .bundle.json
+fortify policy build policy.yaml --out ./bundle
+```
+
+On a denied wasm decision, `test` prints the violated constraint strings verbatim:
+
+```text
+✗ DENY · billing → refund_order({"amount": 700})
+  violations:
+    • args.amount <= 500
+```
+
+### What's in a bundle
+
+`fortify policy build` produces a directory:
+
+| File | Contents |
+|---|---|
+| `{stem}.yaml` | the source policy (verbatim) |
+| `{stem}.rego` | the compiled Rego module |
+| `{stem}.wasm` | the WebAssembly module — what actually evaluates at runtime |
+| `{stem}.bundle.json` | manifest: sha256 of each artifact + a `wasm_hash` |
+| `{stem}.bundle.json.sig` | detached Ed25519 signature over the manifest (signed bundles only) |
+
+The manifest's hashes authenticate the files; the signature authenticates the manifest. Verifying both proves the whole bundle came from the trusted signer, untampered.
+
+### Local enforcement — `FORTIFY_LOCAL_POLICY`
+
+Point an agent at a local bundle and every tool call routes through the WASM engine instead of pydantic — no platform needed. This is the dev-iteration path: edit `policy.yaml`, rebuild, restart, see the change.
+
+```bash
+fortify policy build policy.yaml --out ./bundle
+FORTIFY_LOCAL_POLICY=./bundle fortify chat --agent researcher
+# [fortify] FORTIFY_LOCAL_POLICY active: ./bundle (wasm_hash=7e6d1f8b..., unsigned)
+```
+
+The bundle's integrity (files match the manifest) is verified eagerly at startup — a stale or corrupt bundle fails immediately, not at the first tool call.
+
+### Signing & verification
+
+Production bundles are signed so the runtime can prove a bundle is genuine before trusting it. The integrity hash chain catches accidental corruption; the signature catches a malicious author who edits a file *and* updates the manifest to match.
+
+Generate a keypair and sign a bundle locally:
+
+```bash
+fortify policy keygen --out ./keys/dev          # → dev.private (0600) + dev.public
+fortify policy build policy.yaml --out ./bundle --sign-key ./keys/dev.private
+# → ./bundle/policy.bundle.json.sig
+```
+
+At runtime, point the verifier at the public key:
+
+```bash
+FORTIFY_LOCAL_POLICY=./bundle \
+FORTIFY_BUNDLE_PUBKEY_PATH=./keys/dev.public \
+FORTIFY_BUNDLE_REQUIRE_SIGNATURE=true \
+fortify chat --agent researcher
+# [fortify] FORTIFY_LOCAL_POLICY active: ./bundle (wasm_hash=..., signed)
+```
+
+`FORTIFY_BUNDLE_REQUIRE_SIGNATURE` controls strictness — warn-by-default keeps local dev frictionless; opt into refusal for CI/prod:
+
+| Bundle | `PUBKEY_PATH` set | `REQUIRE_SIGNATURE` | Outcome |
+|---|---|---|---|
+| signed | yes | either | verify; **refuse if it fails** |
+| signed | no | `false` | load with warning (can't verify) |
+| signed | no | `true` | **refuse** (no key to check against) |
+| unsigned | — | `false` (default) | load with warning |
+| unsigned | — | `true` | **refuse** |
+
+Keys are raw Ed25519, base64url-encoded — the same format the platform's JWKS endpoint publishes, so production verification reuses the public key your SDK already trusts for biscuit tokens. One root key, two artifacts.
+
+> **Keys are gitignored.** `*.private` and `*.pem` are in `.gitignore` so a signing key never lands in version control. Public keys (`*.public`) are safe to commit.
+
 ## ✅ Approval-Required Tool Calls
 
 Approval handlers are the bridge between static Gate 1 policy and real product interaction.
@@ -807,6 +915,15 @@ Copy `.env.sample` to `.env` and set:
 - `LANGFUSE_SECRET_KEY`
 - `LANGFUSE_PUBLIC_KEY`
 - optional `LANGFUSE_HOST`
+
+Policy-bundle enforcement (see [Policy Bundles](#-policy-bundles--compile-sign-enforce-wasm)) reads a few more, all optional:
+
+| Env var | Purpose |
+|---|---|
+| `FORTIFY_LOCAL_POLICY` | Path to a bundle directory; overrides the agent's policy with the WASM engine |
+| `FORTIFY_BUNDLE_PUBKEY_PATH` | base64url Ed25519 public key used to verify a bundle's signature |
+| `FORTIFY_BUNDLE_REQUIRE_SIGNATURE` | `true` to refuse unsigned or unverifiable bundles (default: warn only) |
+| `FORTIFY_OPA_BIN` | Override the `opa` binary location (default: search `PATH`) |
 
 ## 🧪 Tests & Dev Tooling
 
@@ -1140,7 +1257,7 @@ Each tool can carry a `constraints:` list of string expressions evaluated agains
 | `in` | `args.template in ["a", "b"]` | RHS must be a JSON list |
 | `not in` | `args.priority not in ["urgent"]` | Two-word operator, treated as one |
 
-Constraints intentionally look like Rego conditions — when the policy engine swaps in OPA in a later milestone, the strings carry through unchanged. To compose with AND, emit multiple lines; to compose with OR, emit two tools or two roles.
+Constraints are Rego conditions by design: the [WASM engine](#-policy-bundles--compile-sign-enforce-wasm) compiles them to OPA Rego unchanged, and the pydantic engine evaluates the same strings in-process — both produce identical decisions. To compose with AND, emit multiple lines; to compose with OR, emit two tools or two roles.
 
 ### Policy + role end-to-end
 
