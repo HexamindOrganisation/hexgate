@@ -31,25 +31,37 @@ from fortify.security.policy_set import (
     load_policy_set_from_dict,
 )
 from fortify.security.rego import compile_default_only, compile_to_rego
+from fortify.security.rego_wasm import (
+    DEFAULT_ENTRYPOINTS,
+    OpaNotFoundError,
+    WasmArtifact,
+    WasmCompileError,
+    compile_to_wasm,
+)
 
 __all__ = [
     "AgentPolicy",
     "BaseToolPolicy",
     "Constraint",
     "ConstraintParseError",
+    "DEFAULT_ENTRYPOINTS",
     "DEFAULT_ROLE_NAME",
     "FileScope",
     "FileToolPolicy",
     "ApprovalRequiredError",
+    "OpaNotFoundError",
     "PolicyDeniedError",
     "PolicyMode",
     "PolicySet",
     "PolicySetError",
     "ToolPolicy",
+    "WasmArtifact",
+    "WasmCompileError",
     "authorize_tool_call",
     "check_constraints",
     "compile_default_only",
     "compile_to_rego",
+    "compile_to_wasm",
     "default_agent_policy",
     "evaluate_constraint",
     "get_tool_policy",

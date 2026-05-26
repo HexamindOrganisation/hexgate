@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 from pathlib import Path
 
 import pytest
@@ -23,6 +24,12 @@ from fortify.cli.policy.main import (
     _main_show_rego,
     _main_test,
     _main_validate,
+)
+
+_OPA_AVAILABLE = shutil.which("opa") is not None
+needs_opa = pytest.mark.skipif(
+    not _OPA_AVAILABLE,
+    reason="opa not on PATH — install via `brew install opa` to run these tests",
 )
 
 
@@ -163,38 +170,40 @@ def test_show_rego_filters_mixin(
 def test_build_writes_bundle_files(
     policy_file: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """build produces {stem}.yaml + {stem}.rego + {stem}.bundle.json."""
+    """build --no-wasm produces {stem}.yaml + {stem}.rego + {stem}.bundle.json."""
     out_dir = tmp_path / "build"
     rc = _main_build(
-        _ns(source=str(policy_file), out=str(out_dir))
+        _ns(source=str(policy_file), out=str(out_dir), no_wasm=True)
     )
     capsys.readouterr()  # drain
     assert rc == 0
     assert (out_dir / "billing.yaml").exists()
     assert (out_dir / "billing.rego").exists()
     assert (out_dir / "billing.bundle.json").exists()
+    # --no-wasm should leave the wasm artifact absent.
+    assert not (out_dir / "billing.wasm").exists()
 
 
-def test_build_bundle_manifest_carries_hashes(
+def test_build_no_wasm_manifest_carries_only_yaml_and_rego_hashes(
     policy_file: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """The bundle.json records source + rego hashes; wasm_hash is None today."""
+    """With --no-wasm the manifest records source + rego hashes; wasm_hash is None."""
     out_dir = tmp_path / "build"
-    _main_build(_ns(source=str(policy_file), out=str(out_dir)))
+    _main_build(_ns(source=str(policy_file), out=str(out_dir), no_wasm=True))
     capsys.readouterr()
     bundle = json.loads((out_dir / "billing.bundle.json").read_text())
     assert bundle["version"] == 1
     assert bundle["source"] == "billing.yaml"
     assert len(bundle["source_hash"]) == 64
     assert len(bundle["rego_hash"]) == 64
-    assert bundle["wasm_hash"] is None  # phase 3 fills this in
+    assert bundle["wasm_hash"] is None
 
 
 def test_build_defaults_output_to_source_dir(
     policy_file: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """Without --out, artifacts land next to the source file."""
-    rc = _main_build(_ns(source=str(policy_file), out=None))
+    rc = _main_build(_ns(source=str(policy_file), out=None, no_wasm=True))
     capsys.readouterr()
     assert rc == 0
     assert (policy_file.parent / "billing.rego").exists()
@@ -212,12 +221,42 @@ def test_build_rejects_unparseable_constraint(
         encoding="utf-8",
     )
     out_dir = tmp_path / "build"
-    rc = _main_build(_ns(source=str(bad), out=str(out_dir)))
+    rc = _main_build(_ns(source=str(bad), out=str(out_dir), no_wasm=True))
     err = capsys.readouterr().err
     assert rc == 1
     assert "compile error" in err
     # Nothing should have been written into the output dir.
     assert not out_dir.exists() or not list(out_dir.iterdir())
+
+
+@needs_opa
+def test_build_writes_wasm_when_opa_available(
+    policy_file: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Default build path (no --no-wasm) drops a {stem}.wasm next to the rego."""
+    out_dir = tmp_path / "build"
+    rc = _main_build(_ns(source=str(policy_file), out=str(out_dir), no_wasm=False))
+    capsys.readouterr()
+    assert rc == 0
+    wasm_path = out_dir / "billing.wasm"
+    assert wasm_path.exists()
+    # Magic header sanity check — full validation lives in test_rego_wasm.
+    assert wasm_path.read_bytes().startswith(b"\x00asm")
+
+
+@needs_opa
+def test_build_with_wasm_records_wasm_hash(
+    policy_file: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The bundle.json's wasm_hash matches sha256(billing.wasm)."""
+    import hashlib
+
+    out_dir = tmp_path / "build"
+    _main_build(_ns(source=str(policy_file), out=str(out_dir), no_wasm=False))
+    capsys.readouterr()
+    bundle = json.loads((out_dir / "billing.bundle.json").read_text())
+    expected = hashlib.sha256((out_dir / "billing.wasm").read_bytes()).hexdigest()
+    assert bundle["wasm_hash"] == expected
 
 
 # ---------------------------------------------------------------------------

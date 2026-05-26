@@ -28,10 +28,13 @@ from yaml.error import MarkedYAMLError
 from fortify.security import (
     AgentPolicy,
     ApprovalRequiredError,
+    OpaNotFoundError,
     PolicyDeniedError,
     PolicySetError,
+    WasmCompileError,
     authorize_tool_call,
     compile_to_rego,
+    compile_to_wasm,
     load_policy_set_from_dict,
 )
 from fortify.security.constraints import ConstraintParseError, parse_constraint
@@ -56,11 +59,12 @@ def add_parser(subparsers: argparse._SubParsersAction) -> None:
     # ---- build ----
     p_build = sub.add_parser(
         "build",
-        help="Compile a policy.yaml to a bundle (yaml + rego today; wasm in M2 phase 3).",
+        help="Compile a policy.yaml to a bundle (yaml + rego + wasm).",
         description=(
-            "Compile a policy.yaml to a bundle directory. Today produces the "
-            "original yaml + the compiled rego next to it; the .wasm artifact "
-            "lands when phase 3 adds the opa build step."
+            "Compile a policy.yaml to a bundle directory. Produces the "
+            "original yaml, the compiled rego, the wasm module, and a "
+            "bundle.json manifest with content hashes. Skip the wasm step "
+            "with --no-wasm when opa is not available."
         ),
     )
     p_build.add_argument("source", help="Path to the source policy.yaml file.")
@@ -68,6 +72,11 @@ def add_parser(subparsers: argparse._SubParsersAction) -> None:
         "--out",
         default=None,
         help="Output directory (defaults to the source file's directory).",
+    )
+    p_build.add_argument(
+        "--no-wasm",
+        action="store_true",
+        help="Skip the opa build -t wasm step (useful when opa is unavailable).",
     )
     p_build.set_defaults(func=_main_build)
 
@@ -150,7 +159,7 @@ def _main_unknown(args: argparse.Namespace) -> int:
 
 
 def _main_build(args: argparse.Namespace) -> int:
-    """Compile + write the bundle artifacts (yaml + rego)."""
+    """Compile + write the bundle artifacts (yaml + rego + wasm)."""
     source_path = Path(args.source)
     source_text, payload, err = _read_and_parse(source_path)
     if err is not None:
@@ -164,27 +173,46 @@ def _main_build(args: argparse.Namespace) -> int:
         print(f"compile error: {exc}", file=sys.stderr)
         return 1
 
+    wasm_bytes: bytes | None = None
+    if not args.no_wasm:
+        try:
+            wasm_bytes = compile_to_wasm(rego).wasm
+        except OpaNotFoundError as exc:
+            print(
+                f"wasm compile skipped — {exc}\n"
+                "Pass --no-wasm to suppress this and emit yaml+rego only.",
+                file=sys.stderr,
+            )
+            return 1
+        except WasmCompileError as exc:
+            print(f"wasm compile error: {exc}", file=sys.stderr)
+            return 1
+
     out_dir = Path(args.out) if args.out else source_path.parent
     out_dir.mkdir(parents=True, exist_ok=True)
 
     stem = source_path.stem  # "billing.yaml" → "billing"
     yaml_out = out_dir / f"{stem}.yaml"
     rego_out = out_dir / f"{stem}.rego"
+    wasm_out = out_dir / f"{stem}.wasm"
     bundle_out = out_dir / f"{stem}.bundle.json"
 
-    # Always rewrite all three so the bundle stays consistent — if the dev
+    # Always rewrite the trio so the bundle stays consistent — if the dev
     # is reusing the source dir as the output dir, the YAML write is a
     # no-op (same bytes).
     yaml_out.write_text(source_text, encoding="utf-8")
     rego_out.write_text(rego, encoding="utf-8")
     rego_hash = hashlib.sha256(rego.encode("utf-8")).hexdigest()
+    wasm_hash: str | None = None
+    if wasm_bytes is not None:
+        wasm_out.write_bytes(wasm_bytes)
+        wasm_hash = hashlib.sha256(wasm_bytes).hexdigest()
     manifest = {
         "version": 1,
         "source": str(source_path.name),
         "source_hash": source_hash,
         "rego_hash": rego_hash,
-        # WASM hash lands in phase 3 when opa build wires in.
-        "wasm_hash": None,
+        "wasm_hash": wasm_hash,
     }
     bundle_out.write_text(
         json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
@@ -192,12 +220,11 @@ def _main_build(args: argparse.Namespace) -> int:
 
     print(f"✓ Wrote {yaml_out.relative_to(Path.cwd()) if _is_under_cwd(yaml_out) else yaml_out}")
     print(f"✓ Wrote {rego_out.relative_to(Path.cwd()) if _is_under_cwd(rego_out) else rego_out}")
+    if wasm_bytes is not None:
+        print(f"✓ Wrote {wasm_out.relative_to(Path.cwd()) if _is_under_cwd(wasm_out) else wasm_out}")
+    else:
+        print("ⓘ wasm step skipped (--no-wasm)", file=sys.stderr)
     print(f"✓ Wrote {bundle_out.relative_to(Path.cwd()) if _is_under_cwd(bundle_out) else bundle_out}")
-    print(
-        "ⓘ .wasm output not yet implemented — coming in phase 3 with the "
-        "`opa build` step.",
-        file=sys.stderr,
-    )
     return 0
 
 
