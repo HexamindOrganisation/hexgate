@@ -1,3 +1,4 @@
+import base64
 from contextlib import asynccontextmanager
 
 from fastapi import (
@@ -164,8 +165,6 @@ def well_known_keys() -> dict[str, object]:
     breaking clients. Lets dashboards and CLIs sanity-check that what
     their SDK has embedded matches what this platform is signing with.
     """
-    import base64
-
     return {
         "keys": [
             {
@@ -248,6 +247,17 @@ def _agent_read(agent: Agent) -> AgentRead:
         policy_yaml=agent.policy_yaml,
         system_md=agent.system_md,
         updated_at=agent.updated_at,
+        bundle_wasm_b64=(
+            base64.b64encode(agent.compiled_wasm).decode("ascii")
+            if agent.compiled_wasm is not None
+            else None
+        ),
+        bundle_manifest=agent.bundle_manifest,
+        bundle_signature_b64=(
+            base64.b64encode(agent.bundle_signature).decode("ascii")
+            if agent.bundle_signature is not None
+            else None
+        ),
     )
 
 
@@ -333,6 +343,9 @@ def api_update_agent(
         agent_yaml=body.agent_yaml,
         policy_yaml=body.policy_yaml,
         system_md=body.system_md,
+        # Compile + sign the policy into a WASM bundle at save time, using
+        # the platform's root key (same key that signs biscuits).
+        sign=keystore.sign,
     )
     if agent is None:
         raise HTTPException(status_code=404, detail="agent not found")
