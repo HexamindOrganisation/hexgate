@@ -67,25 +67,31 @@ The included local agent lives in `examples/example_agent/`, and the CLI can als
 
 ## 🚀 Quick Start — Platform
 
-To run the full Fortify control plane locally (backend + dashboard + your local agent serving over WebSocket), you need three terminals:
+To run the full Fortify control plane locally (FastAPI backend + dashboard + your local agent serving over WebSocket), you need **three terminals**. The Makefile has a target that prints the recipe:
 
 ```bash
-# Terminal 1 — backend (FastAPI + SQLite)
-cd platform/api
-uv run uvicorn main:app --reload --port 8000
+make demo-platform     # prints the 3-terminal recipe below
+```
 
-# Terminal 2 — dashboard (Vite + React)
-cd platform/dashboard
-pnpm install        # first run only
-pnpm dev
+```bash
+# Terminal 1 — backend (FastAPI + SQLite on :8000)
+make platform-api
+
+# Terminal 2 — dashboard (Vite + React on :5173)
+make dashboard
 
 # Terminal 3 — mint a token, then serve your local agent
-# 1. Open http://localhost:5173/tokens
-# 2. Click "Mint new token", copy the value
-# 3. Add to asianf/.env:
-#        FORTIFY_KEY=fty_test_support-bot_...
-# 4. Start serve mode:
-uv run fortify serve
+#   1. Open http://localhost:5173/tokens, click "Mint new token", copy the value.
+#   2. Add to asianf/.env:  FORTIFY_KEY=fty_test_...
+#   3. Run:
+make serve
+```
+
+First-time setup (each sub-project has its own deps):
+
+```bash
+make platform-api-install   # uv sync inside platform/api/
+make dashboard-install      # pnpm install inside platform/dashboard/
 ```
 
 Then open http://localhost:5173/playground — type a message, watch the live stream of tool calls and policy decisions from your local agent.
@@ -818,13 +824,21 @@ Targets at a glance:
 
 | Target | What it runs |
 |---|---|
+| **SDK dev loop** | |
 | `test` / `test-verbose` / `test-failed` / `test-one` | `pytest tests/` with various flags |
 | `lint` / `lint-fix` | `ruff check` (with `--fix` for autofixes) |
 | `fmt` / `fmt-check` | `ruff format` |
-| `check` | All of `lint` + `fmt-check` + `test` — pre-push gate |
+| `check` | `lint` + `fmt-check` + `test` — pre-push gate |
+| **M2 policy demo** | |
 | `policy-build` | Compile the example policy.yaml to a bundle |
-| `policy-test-wasm` | Smoke a WASM-engine decision (M2 demo) |
-| `demo-override` | Build a deny bundle + chat with `FORTIFY_LOCAL_POLICY` set |
+| `policy-test-wasm` | Smoke a WASM-engine decision |
+| `demo-override` | Build a deny bundle + chat with `FORTIFY_LOCAL_POLICY` |
+| **Platform demo** (multi-terminal — see `make demo-platform`) | |
+| `platform-api` / `platform-api-install` / `platform-api-test` | FastAPI control plane in `platform/api/` |
+| `dashboard` / `dashboard-install` | Vite + React app in `platform/dashboard/` |
+| `serve` | `fortify serve` — bridge this SDK to the platform |
+| `demo-platform` | Print the 3-terminal recipe |
+| **Misc** | |
 | `build` / `clean` | Package + tidy |
 
 By default `uv` manages its own `.venv` (created by `make install-dev`). If you keep your dev environment elsewhere — e.g. a `micromamba` env — point `uv` at it once and `make` picks it up:

@@ -92,6 +92,72 @@ demo-override: ## Build a deny-everything bundle + chat with FORTIFY_LOCAL_POLIC
 	@echo ""
 	FORTIFY_LOCAL_POLICY=/tmp/m2-deny-bundle $(UV) fortify chat --agent researcher --approval-mode auto-deny
 
+# -------- Platform API (FastAPI control plane) --------
+#
+# The platform API is a separate uv project under platform/api/ with its
+# own pyproject.toml. We invoke uv from there directly so it uses the
+# platform's venv, not the SDK's.
+
+.PHONY: platform-api-install
+platform-api-install: ## Install platform API deps (first time)
+	cd platform/api && uv sync --extra dev
+
+.PHONY: platform-api
+platform-api: ## Run the platform API dev server (FastAPI on :8000)
+	cd platform/api && uv run uvicorn main:app --reload --port 8000
+
+.PHONY: platform-api-test
+platform-api-test: ## Run the platform API test suite
+	cd platform/api && uv run pytest tests/
+
+# -------- Dashboard (Vite + React) --------
+#
+# Uses pnpm. `pnpm dev` runs Vite on :5173 and proxies /v1/* to :8000,
+# so the dashboard needs the platform-api target running in another
+# terminal.
+
+.PHONY: dashboard-install
+dashboard-install: ## Install dashboard JS deps (first time)
+	cd platform/dashboard && pnpm install
+
+.PHONY: dashboard
+dashboard: ## Run the dashboard dev server (Vite on :5173)
+	cd platform/dashboard && pnpm dev
+
+# -------- SDK → platform bridge --------
+
+.PHONY: serve
+serve: ## Run `fortify serve` — bridges this SDK to the platform's relay
+# Reads FORTIFY_KEY from asianf/.env via dotenv at startup (not from the
+# shell env), so we don't pre-check here — `fortify serve` will fail
+# loudly if the key is missing. Mint one at http://localhost:5173/tokens.
+	$(UV) fortify serve
+
+# -------- Full platform demo (multi-terminal) --------
+
+.PHONY: demo-platform
+demo-platform: ## Print 3-terminal instructions for the full platform demo
+	@echo ""
+	@echo "Platform demo — open three terminals in this directory (asianf/):"
+	@echo ""
+	@echo "  Terminal 1 — FastAPI backend (control plane):"
+	@echo "      make platform-api"
+	@echo ""
+	@echo "  Terminal 2 — dashboard (Vite + React, http://localhost:5173):"
+	@echo "      make dashboard"
+	@echo ""
+	@echo "  Terminal 3 — your local agent bridged to the platform:"
+	@echo "      1. Open  http://localhost:5173/tokens  and mint a dev token"
+	@echo "      2. Add to asianf/.env:  FORTIFY_KEY=fty_test_..."
+	@echo "      3. make serve"
+	@echo ""
+	@echo "Then chat with the live agent at  http://localhost:5173/playground"
+	@echo ""
+	@echo "First-time setup (run once):"
+	@echo "      make platform-api-install"
+	@echo "      make dashboard-install"
+	@echo ""
+
 # -------- Package --------
 
 .PHONY: build
