@@ -22,7 +22,6 @@ from biscuits import (
 )
 from db import engine, init_db
 from keystore import FileKeyStore
-from models import Agent, AgentVersion
 from relay import registry
 from schemas import (
     AgentManifest,

@@ -802,34 +802,46 @@ Copy `.env.sample` to `.env` and set:
 - `LANGFUSE_PUBLIC_KEY`
 - optional `LANGFUSE_HOST`
 
-## 🧪 Tests
+## 🧪 Tests & Dev Tooling
 
-The SDK suite (367 cases) lives at `tests/` and runs with `pytest`. The platform suite (36 cases) lives at `platform/api/tests/`.
-
-If you're already in a project virtualenv (`asianf/.venv/`):
+A `Makefile` at the repo root wraps the day-to-day commands so you don't have to remember the `uv` incantations.
 
 ```bash
-uv run pytest tests/                                # SDK
-cd platform/api && uv run pytest tests/             # platform
+make help            # list every target with descriptions
+make install-dev     # uv sync --extra dev (first time only)
+make test            # full SDK test suite, quiet
+make check           # lint + fmt-check + test (matches CI)
+make test-one T=tests/security/test_bundle.py   # single file
 ```
 
-If you keep your dev env elsewhere (e.g. a `micromamba` env), point `uv` at it and pass `--active` so it doesn't try to manage `.venv` for you:
+Targets at a glance:
+
+| Target | What it runs |
+|---|---|
+| `test` / `test-verbose` / `test-failed` / `test-one` | `pytest tests/` with various flags |
+| `lint` / `lint-fix` | `ruff check` (with `--fix` for autofixes) |
+| `fmt` / `fmt-check` | `ruff format` |
+| `check` | All of `lint` + `fmt-check` + `test` — pre-push gate |
+| `policy-build` | Compile the example policy.yaml to a bundle |
+| `policy-test-wasm` | Smoke a WASM-engine decision (M2 demo) |
+| `demo-override` | Build a deny bundle + chat with `FORTIFY_LOCAL_POLICY` set |
+| `build` / `clean` | Package + tidy |
+
+By default `uv` manages its own `.venv` (created by `make install-dev`). If you keep your dev environment elsewhere — e.g. a `micromamba` env — point `uv` at it once and `make` picks it up:
 
 ```bash
-# Make uv use your current micromamba env as the project environment.
 export UV_PROJECT_ENVIRONMENT=/Users/<you>/micromamba/envs/<your-env>
-
-# First time only: pull dev-only deps (pytest-asyncio, ruff, etc.) into it.
-uv sync --extra dev
-
-# Run any uv-driven command against that env from now on.
-uv run --active pytest tests/
-uv run --active ruff check .
+uv sync --extra dev           # one-time: install dev deps into that env
+make test                     # now runs against the micromamba env
 ```
 
-Without `--extra dev` you'll see *"async functions are not natively supported"* across every `@pytest.mark.asyncio` test — `pytest-asyncio` lives in the dev group and isn't installed by a plain `uv sync`. Same trap if you bring up a fresh env and forget the flag.
+Drop the `export` into your shell rc (or a `direnv` `.envrc`) and forget about it. Without `--extra dev`, `pytest-asyncio` is missing and you'll see *"async functions are not natively supported"* across every async test — same trap on a fresh env.
 
-Drop the `UV_PROJECT_ENVIRONMENT` export into your shell rc (or a per-project `direnv` `.envrc`) if you don't want to type it every shell.
+The platform-side test suite is separate and lives at `platform/api/tests/`:
+
+```bash
+cd platform/api && uv run pytest tests/
+```
 
 ## ▶️ Run It
 
