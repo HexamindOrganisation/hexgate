@@ -30,6 +30,7 @@ from fortify.security.policy_set import (
     load_policy_set,
     load_policy_set_from_dict,
 )
+from fortify.security.rego import compile_default_only, compile_to_rego
 
 __all__ = [
     "AgentPolicy",
@@ -47,6 +48,8 @@ __all__ = [
     "ToolPolicy",
     "authorize_tool_call",
     "check_constraints",
+    "compile_default_only",
+    "compile_to_rego",
     "default_agent_policy",
     "evaluate_constraint",
     "get_tool_policy",
