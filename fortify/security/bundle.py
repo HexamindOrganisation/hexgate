@@ -21,6 +21,7 @@ import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from fortify.security.signing import SignatureError, verify_bytes
 from fortify.security.wasm_engine import WasmPolicy
 
 
@@ -37,6 +38,16 @@ class BundleLoadError(RuntimeError):
     """A bundle directory is missing required files or is malformed."""
 
 
+class BundleSignatureError(RuntimeError):
+    """A bundle's signature is missing, malformed, or fails verification.
+
+    Distinct from :class:`BundleIntegrityError`: integrity is the local
+    hash chain (files match the manifest); signature is *authenticity*
+    (the manifest was signed by a key the runtime trusts). A bundle can
+    have valid integrity but a bad/absent signature.
+    """
+
+
 @dataclass
 class PolicyBundle:
     """A loaded policy bundle, ready to evaluate via WASM.
@@ -51,6 +62,13 @@ class PolicyBundle:
     rego_text: str
     wasm_bytes: bytes
     manifest: dict
+    # Exact on-disk manifest bytes — what the signature is computed over.
+    # We keep the raw bytes (not a re-serialization of `manifest`) so
+    # signature verification never depends on JSON canonicalization.
+    manifest_bytes: bytes = b""
+    # Detached signature over `manifest_bytes` (raw 64-byte Ed25519), or
+    # None for unsigned bundles (dev / FORTIFY_LOCAL_POLICY path).
+    signature: bytes | None = None
     _wasm_policy: WasmPolicy | None = field(default=None, repr=False, compare=False)
 
     # ---- Construction --------------------------------------------------
@@ -85,8 +103,9 @@ class PolicyBundle:
         stem = manifest_path.name[: -len(".bundle.json")]
 
         try:
-            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
+            manifest_bytes = manifest_path.read_bytes()
+            manifest = json.loads(manifest_bytes.decode("utf-8"))
+        except (OSError, json.JSONDecodeError, UnicodeDecodeError) as exc:
             raise BundleLoadError(f"cannot read {manifest_path}: {exc}") from exc
 
         source_path = directory / f"{stem}.yaml"
@@ -99,11 +118,19 @@ class PolicyBundle:
                     f"bundle at {directory} is missing {required.name}"
                 )
 
+        # Detached signature is optional — present only for platform-signed
+        # (or `--sign-key`-built) bundles. Unsigned bundles load fine; the
+        # caller decides whether to require a signature.
+        sig_path = directory / f"{stem}.bundle.json.sig"
+        signature = sig_path.read_bytes() if sig_path.is_file() else None
+
         return cls(
             source_path=source_path,
             rego_text=rego_path.read_text(encoding="utf-8"),
             wasm_bytes=wasm_path.read_bytes(),
             manifest=manifest,
+            manifest_bytes=manifest_bytes,
+            signature=signature,
         )
 
     # ---- Integrity -----------------------------------------------------
@@ -111,10 +138,11 @@ class PolicyBundle:
     def verify_integrity(self) -> None:
         """Confirm every on-disk artifact matches the hash in the manifest.
 
-        Today this is the only trust mechanism. Phase 6 will add Ed25519
-        signature verification on top — the manifest itself becomes
-        signed, so an attacker tampering with files OR the manifest is
-        detected.
+        This is the *integrity* check (files match the manifest). For
+        *authenticity* (the manifest was signed by a trusted key), see
+        :meth:`verify_signature`. Run both for full assurance: signature
+        proves the manifest is genuine, integrity proves the files match
+        the manifest.
         """
         expected_source_hash = self.manifest.get("source_hash")
         if expected_source_hash:
@@ -150,6 +178,38 @@ class PolicyBundle:
                 f"wasm hash mismatch: manifest says {expected_wasm_hash}, "
                 f"got {actual}"
             )
+
+    # ---- Authenticity --------------------------------------------------
+
+    @property
+    def is_signed(self) -> bool:
+        """Whether a detached signature was loaded alongside this bundle."""
+        return self.signature is not None
+
+    def verify_signature(self, public_key_raw: bytes) -> None:
+        """Verify the detached signature over the manifest bytes.
+
+        ``public_key_raw`` is the raw 32-byte Ed25519 public key — the
+        same key the SDK trusts for biscuit verification (the platform
+        signs both with one root). Raises :class:`BundleSignatureError`
+        if there's no signature, or if it doesn't verify.
+
+        Signature authenticates the manifest; the manifest's hashes
+        authenticate the files. So a valid signature + a passing
+        :meth:`verify_integrity` together prove the whole bundle came
+        from the trusted signer untampered. Callers should run both.
+        """
+        if self.signature is None:
+            raise BundleSignatureError(
+                "bundle has no signature (no *.bundle.json.sig alongside the "
+                "manifest); cannot verify authenticity."
+            )
+        try:
+            verify_bytes(self.manifest_bytes, self.signature, public_key_raw)
+        except SignatureError as exc:
+            raise BundleSignatureError(
+                f"bundle signature verification failed: {exc}"
+            ) from exc
 
     # ---- Evaluation ----------------------------------------------------
 

@@ -18,10 +18,13 @@ import pytest
 from fortify.security import (
     BundleIntegrityError,
     BundleLoadError,
+    BundleSignatureError,
     PolicyBundle,
     WasmPolicy,
     compile_to_rego,
     compile_to_wasm,
+    generate_keypair,
+    sign_bytes,
 )
 
 
@@ -93,6 +96,13 @@ def bundle_dir(tmp_path: Path) -> Path:
     if not _OPA_AVAILABLE:
         pytest.skip("opa not on PATH")
     return _build_bundle(tmp_path)
+
+
+def _sign_bundle(directory: Path, private_key_raw: bytes, stem: str = "policy") -> None:
+    """Write a detached signature over the manifest's exact on-disk bytes."""
+    manifest_bytes = (directory / f"{stem}.bundle.json").read_bytes()
+    sig = sign_bytes(manifest_bytes, private_key_raw)
+    (directory / f"{stem}.bundle.json.sig").write_bytes(sig)
 
 
 # ---------------------------------------------------------------------------
@@ -211,3 +221,76 @@ def test_policy_is_cached(bundle_dir: Path) -> None:
     """Repeated .policy() calls return the same instance — no re-instantiate."""
     bundle = PolicyBundle.from_disk(bundle_dir)
     assert bundle.policy() is bundle.policy()
+
+
+# ---------------------------------------------------------------------------
+# Signatures (authenticity)
+# ---------------------------------------------------------------------------
+
+
+@needs_opa
+def test_unsigned_bundle_has_no_signature(bundle_dir: Path) -> None:
+    """A bundle built without --sign-key loads with signature=None."""
+    bundle = PolicyBundle.from_disk(bundle_dir)
+    assert bundle.is_signed is False
+    assert bundle.signature is None
+
+
+@needs_opa
+def test_from_disk_loads_detached_signature(bundle_dir: Path) -> None:
+    """A *.bundle.json.sig sidecar populates the signature field."""
+    private_raw, _ = generate_keypair()
+    _sign_bundle(bundle_dir, private_raw)
+    bundle = PolicyBundle.from_disk(bundle_dir)
+    assert bundle.is_signed is True
+    assert len(bundle.signature) == 64
+
+
+@needs_opa
+def test_verify_signature_passes_for_genuine_signature(bundle_dir: Path) -> None:
+    """A signature over the real manifest verifies under the matching pubkey."""
+    private_raw, public_raw = generate_keypair()
+    _sign_bundle(bundle_dir, private_raw)
+    bundle = PolicyBundle.from_disk(bundle_dir)
+    bundle.verify_signature(public_raw)  # no raise == pass
+
+
+@needs_opa
+def test_verify_signature_rejects_wrong_key(bundle_dir: Path) -> None:
+    """A signature from the platform key doesn't verify under a stranger's key."""
+    signer_priv, _ = generate_keypair()
+    _, other_pub = generate_keypair()
+    _sign_bundle(bundle_dir, signer_priv)
+    bundle = PolicyBundle.from_disk(bundle_dir)
+    with pytest.raises(BundleSignatureError, match="verification failed"):
+        bundle.verify_signature(other_pub)
+
+
+@needs_opa
+def test_verify_signature_rejects_tampered_manifest(bundle_dir: Path) -> None:
+    """Sign, then edit the manifest on disk — the signature no longer matches.
+
+    This is the attack Phase 5's integrity check couldn't catch: editing
+    a file AND updating the manifest hash to match. With signing, the
+    altered manifest bytes break the signature.
+    """
+    private_raw, public_raw = generate_keypair()
+    _sign_bundle(bundle_dir, private_raw)
+    # Tamper with the manifest after signing.
+    manifest_path = bundle_dir / "policy.bundle.json"
+    doctored = json.loads(manifest_path.read_text())
+    doctored["wasm_hash"] = "0" * 64
+    manifest_path.write_text(json.dumps(doctored, indent=2, sort_keys=True) + "\n")
+
+    bundle = PolicyBundle.from_disk(bundle_dir)
+    with pytest.raises(BundleSignatureError, match="verification failed"):
+        bundle.verify_signature(public_raw)
+
+
+@needs_opa
+def test_verify_signature_raises_when_unsigned(bundle_dir: Path) -> None:
+    """Calling verify_signature on an unsigned bundle is a clear error."""
+    _, public_raw = generate_keypair()
+    bundle = PolicyBundle.from_disk(bundle_dir)
+    with pytest.raises(BundleSignatureError, match="no signature"):
+        bundle.verify_signature(public_raw)

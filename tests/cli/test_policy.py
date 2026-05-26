@@ -21,6 +21,7 @@ import pytest
 
 from fortify.cli.policy.main import (
     _main_build,
+    _main_keygen,
     _main_show_rego,
     _main_test,
     _main_validate,
@@ -257,6 +258,107 @@ def test_build_with_wasm_records_wasm_hash(
     bundle = json.loads((out_dir / "billing.bundle.json").read_text())
     expected = hashlib.sha256((out_dir / "billing.wasm").read_bytes()).hexdigest()
     assert bundle["wasm_hash"] == expected
+
+
+# ---------------------------------------------------------------------------
+# keygen + build --sign-key
+# ---------------------------------------------------------------------------
+
+
+def test_keygen_writes_key_pair(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """keygen writes a .private + .public, private is 0600."""
+    import stat
+
+    prefix = tmp_path / "keys" / "devkey"
+    rc = _main_keygen(_ns(out=str(prefix), force=False))
+    capsys.readouterr()
+    assert rc == 0
+    priv = tmp_path / "keys" / "devkey.private"
+    pub = tmp_path / "keys" / "devkey.public"
+    assert priv.is_file() and pub.is_file()
+    # Private key is mode 0600 — it's a signing secret.
+    assert stat.S_IMODE(priv.stat().st_mode) == 0o600
+
+
+def test_keygen_refuses_overwrite_without_force(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    prefix = tmp_path / "devkey"
+    _main_keygen(_ns(out=str(prefix), force=False))
+    capsys.readouterr()
+    rc = _main_keygen(_ns(out=str(prefix), force=False))
+    err = capsys.readouterr().err
+    assert rc == 1
+    assert "already exists" in err
+
+
+def test_keygen_keys_roundtrip_for_signing(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The emitted keys actually work as a sign/verify pair."""
+    from fortify.security import decode_key, sign_bytes, verify_bytes
+
+    prefix = tmp_path / "devkey"
+    _main_keygen(_ns(out=str(prefix), force=False))
+    capsys.readouterr()
+    priv = decode_key((tmp_path / "devkey.private").read_text().strip())
+    pub = decode_key((tmp_path / "devkey.public").read_text().strip())
+    sig = sign_bytes(b"payload", priv)
+    verify_bytes(b"payload", sig, pub)  # no raise == pass
+
+
+@needs_opa
+def test_build_sign_key_emits_verifiable_signature(
+    policy_file: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """build --sign-key writes a .sig that verifies under the public key."""
+    from fortify.security import PolicyBundle, decode_key
+
+    key_prefix = tmp_path / "k"
+    _main_keygen(_ns(out=str(key_prefix), force=False))
+    capsys.readouterr()
+
+    out_dir = tmp_path / "build"
+    rc = _main_build(
+        _ns(
+            source=str(policy_file),
+            out=str(out_dir),
+            no_wasm=False,
+            sign_key=str(tmp_path / "k.private"),
+        )
+    )
+    capsys.readouterr()
+    assert rc == 0
+    assert (out_dir / "billing.bundle.json.sig").exists()
+
+    bundle = PolicyBundle.from_disk(out_dir)
+    assert bundle.is_signed
+    pub = decode_key((tmp_path / "k.public").read_text().strip())
+    bundle.verify_signature(pub)  # no raise == pass
+
+
+def test_build_sign_key_rejects_bad_key(
+    policy_file: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A malformed --sign-key fails before any files are written."""
+    bad_key = tmp_path / "bad.private"
+    bad_key.write_text("not-a-real-key", encoding="utf-8")
+    out_dir = tmp_path / "build"
+    rc = _main_build(
+        _ns(
+            source=str(policy_file),
+            out=str(out_dir),
+            no_wasm=True,
+            sign_key=str(bad_key),
+        )
+    )
+    err = capsys.readouterr().err
+    assert rc == 1
+    assert "--sign-key" in err
+    # Nothing written — fail-fast before touching the output dir.
+    assert not out_dir.exists() or not list(out_dir.iterdir())
 
 
 # ---------------------------------------------------------------------------

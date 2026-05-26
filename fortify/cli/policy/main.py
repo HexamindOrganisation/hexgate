@@ -31,13 +31,18 @@ from fortify.security import (
     OpaNotFoundError,
     PolicyDeniedError,
     PolicySetError,
+    SignatureError,
     WasmCompileError,
     WasmEvalError,
     WasmPolicy,
     authorize_tool_call,
     compile_to_rego,
     compile_to_wasm,
+    decode_key,
+    encode_key,
+    generate_keypair,
     load_policy_set_from_dict,
+    sign_bytes,
 )
 from fortify.security.constraints import ConstraintParseError, parse_constraint
 
@@ -80,7 +85,43 @@ def add_parser(subparsers: argparse._SubParsersAction) -> None:
         action="store_true",
         help="Skip the opa build -t wasm step (useful when opa is unavailable).",
     )
+    p_build.add_argument(
+        "--sign-key",
+        default=None,
+        metavar="PATH",
+        help=(
+            "Path to an Ed25519 private key (base64url, from `fortify policy "
+            "keygen`). When set, signs the bundle manifest and writes a "
+            "detached {stem}.bundle.json.sig. Production bundles come signed "
+            "by the platform; this flag is for local/CI signing."
+        ),
+    )
     p_build.set_defaults(func=_main_build)
+
+    # ---- keygen ----
+    p_keygen = sub.add_parser(
+        "keygen",
+        help="Generate an Ed25519 keypair for signing bundles locally.",
+        description=(
+            "Write a fresh Ed25519 keypair (raw keys, base64url-encoded) to "
+            "disk: <out>.private for signing (`build --sign-key`) and "
+            "<out>.public for verifying (FORTIFY_BUNDLE_PUBKEY_PATH). For "
+            "local/CI use — production signing keys live in the platform "
+            "keystore."
+        ),
+    )
+    p_keygen.add_argument(
+        "--out",
+        required=True,
+        metavar="PREFIX",
+        help="Output path prefix; writes PREFIX.private + PREFIX.public.",
+    )
+    p_keygen.add_argument(
+        "--force",
+        action="store_true",
+        help="Overwrite existing key files at the prefix.",
+    )
+    p_keygen.set_defaults(func=_main_keygen)
 
     # ---- validate ----
     p_val = sub.add_parser(
@@ -170,13 +211,58 @@ def _main_unknown(args: argparse.Namespace) -> int:
 # ---------------------------------------------------------------------------
 
 
+def _main_keygen(args: argparse.Namespace) -> int:
+    """Generate an Ed25519 keypair and write it base64url-encoded to disk."""
+    prefix = Path(args.out)
+    private_out = prefix.with_name(prefix.name + ".private")
+    public_out = prefix.with_name(prefix.name + ".public")
+
+    if not args.force:
+        for existing in (private_out, public_out):
+            if existing.exists():
+                print(
+                    f"{existing} already exists — pass --force to overwrite.",
+                    file=sys.stderr,
+                )
+                return 1
+
+    parent = prefix.parent
+    if str(parent):
+        parent.mkdir(parents=True, exist_ok=True)
+
+    private_raw, public_raw = generate_keypair()
+    # 0600 the private key — it's a signing secret.
+    private_out.write_text(encode_key(private_raw) + "\n", encoding="utf-8")
+    private_out.chmod(0o600)
+    public_out.write_text(encode_key(public_raw) + "\n", encoding="utf-8")
+
+    print(f"✓ Wrote {private_out} (private signing key — keep secret, .gitignore it)")
+    print(f"✓ Wrote {public_out} (public verify key)")
+    print(
+        "\nSign a bundle:   fortify policy build <policy.yaml> "
+        f"--sign-key {private_out}"
+    )
+    print(
+        f"Verify at runtime:  export FORTIFY_BUNDLE_PUBKEY_PATH={public_out}"
+    )
+    return 0
+
+
 def _main_build(args: argparse.Namespace) -> int:
-    """Compile + write the bundle artifacts (yaml + rego + wasm)."""
+    """Compile + write the bundle artifacts (yaml + rego + wasm [+ signature])."""
     source_path = Path(args.source)
     source_text, payload, err = _read_and_parse(source_path)
     if err is not None:
         print(err, file=sys.stderr)
         return 1
+
+    # Load the signing key early so a bad key fails before we write anything.
+    sign_key: bytes | None = None
+    if getattr(args, "sign_key", None):
+        sign_key, err = _read_signing_key(Path(args.sign_key))
+        if err is not None:
+            print(err, file=sys.stderr)
+            return 1
 
     source_hash = hashlib.sha256(source_text.encode("utf-8")).hexdigest()
     try:
@@ -226,9 +312,16 @@ def _main_build(args: argparse.Namespace) -> int:
         "rego_hash": rego_hash,
         "wasm_hash": wasm_hash,
     }
-    bundle_out.write_text(
-        json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-    )
+    # Capture the exact bytes we write — the signature is computed over
+    # these, so there's no JSON-canonicalization gap at verify time.
+    manifest_bytes = (
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n"
+    ).encode("utf-8")
+    bundle_out.write_bytes(manifest_bytes)
+
+    sig_out = out_dir / f"{stem}.bundle.json.sig"
+    if sign_key is not None:
+        sig_out.write_bytes(sign_bytes(manifest_bytes, sign_key))
 
     print(f"✓ Wrote {yaml_out.relative_to(Path.cwd()) if _is_under_cwd(yaml_out) else yaml_out}")
     print(f"✓ Wrote {rego_out.relative_to(Path.cwd()) if _is_under_cwd(rego_out) else rego_out}")
@@ -237,6 +330,8 @@ def _main_build(args: argparse.Namespace) -> int:
     else:
         print("ⓘ wasm step skipped (--no-wasm)", file=sys.stderr)
     print(f"✓ Wrote {bundle_out.relative_to(Path.cwd()) if _is_under_cwd(bundle_out) else bundle_out}")
+    if sign_key is not None:
+        print(f"✓ Wrote {sig_out.relative_to(Path.cwd()) if _is_under_cwd(sig_out) else sig_out} (signed)")
     return 0
 
 
@@ -412,6 +507,26 @@ def _read_and_parse(
     if not isinstance(parsed, dict):
         return text, {}, f"{source_path} must contain a YAML mapping at top level"
     return text, parsed, None
+
+
+def _read_signing_key(key_path: Path) -> tuple[bytes | None, str | None]:
+    """Read + decode a base64url Ed25519 private key. Returns (key, error?)."""
+    if not key_path.is_file():
+        return None, f"--sign-key: no such file: {key_path}"
+    try:
+        encoded = key_path.read_text(encoding="utf-8").strip()
+    except OSError as exc:
+        return None, f"--sign-key: cannot read {key_path}: {exc}"
+    try:
+        raw = decode_key(encoded)
+    except SignatureError as exc:
+        return None, f"--sign-key: {key_path} is not a valid base64url key: {exc}"
+    if len(raw) != 32:
+        return None, (
+            f"--sign-key: {key_path} decodes to {len(raw)} bytes, expected 32 "
+            "(raw Ed25519 private key from `fortify policy keygen`)."
+        )
+    return raw, None
 
 
 def _is_under_cwd(path: Path) -> bool:

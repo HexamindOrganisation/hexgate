@@ -19,7 +19,17 @@ from fortify.security.constraints import (
 from fortify.security.bundle import (
     BundleIntegrityError,
     BundleLoadError,
+    BundleSignatureError,
     PolicyBundle,
+)
+from fortify.security.signing import (
+    SignatureError,
+    decode_key,
+    encode_key,
+    generate_keypair,
+    public_key_for,
+    sign_bytes,
+    verify_bytes,
 )
 from fortify.security.policy import (
     authorize_tool_call,
@@ -65,8 +75,10 @@ __all__ = [
     "ApprovalRequiredError",
     "BundleIntegrityError",
     "BundleLoadError",
+    "BundleSignatureError",
     "OpaNotFoundError",
     "PolicyBundle",
+    "SignatureError",
     "PolicyDeniedError",
     "PolicyMode",
     "PolicySet",
@@ -82,6 +94,12 @@ __all__ = [
     "compile_default_only",
     "compile_to_rego",
     "compile_to_wasm",
+    "decode_key",
+    "encode_key",
+    "generate_keypair",
+    "public_key_for",
+    "sign_bytes",
+    "verify_bytes",
     "default_agent_policy",
     "evaluate_constraint",
     "get_tool_policy",

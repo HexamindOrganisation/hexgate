@@ -11,6 +11,7 @@ requires-python = ">=3.13"
 dependencies = [
     "bashlex>=0.18",
     "biscuit-python>=0.4",
+    "cryptography>=42",
     "httpx>=0.28.1",
     "langchain",
     "langchain-openai",

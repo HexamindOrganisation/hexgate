@@ -23,7 +23,13 @@ from pathlib import Path
 import pytest
 
 from fortify.agents import loader
-from fortify.security import compile_to_rego, compile_to_wasm
+from fortify.security import (
+    compile_to_rego,
+    compile_to_wasm,
+    encode_key,
+    generate_keypair,
+    sign_bytes,
+)
 
 
 _OPA_AVAILABLE = shutil.which("opa") is not None
@@ -80,6 +86,24 @@ def _build_bundle_dir(directory: Path) -> Path:
         json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
     return directory
+
+
+def _sign_bundle_dir(directory: Path, private_key_raw: bytes) -> None:
+    """Write a detached signature over the manifest bytes in ``directory``."""
+    manifest_bytes = (directory / "policy.bundle.json").read_bytes()
+    sig = sign_bytes(manifest_bytes, private_key_raw)
+    (directory / "policy.bundle.json.sig").write_bytes(sig)
+
+
+def _write_pubkey(path: Path, public_key_raw: bytes) -> Path:
+    """Write a base64url public key file (FORTIFY_BUNDLE_PUBKEY_PATH format)."""
+    path.write_text(encode_key(public_key_raw) + "\n", encoding="utf-8")
+    return path
+
+
+def _clear_signature_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("FORTIFY_BUNDLE_PUBKEY_PATH", raising=False)
+    monkeypatch.delenv("FORTIFY_BUNDLE_REQUIRE_SIGNATURE", raising=False)
 
 
 # ---------------------------------------------------------------------------
@@ -197,3 +221,94 @@ def test_load_builtin_agent_uses_original_policy_without_override(
     loader.load_builtin_agent("researcher")
     assert isinstance(captured["policy"], AgentPolicy)
     assert not isinstance(captured["policy"], PolicyBundle)
+
+
+# ---------------------------------------------------------------------------
+# Signature enforcement (FORTIFY_BUNDLE_PUBKEY_PATH / REQUIRE_SIGNATURE)
+# ---------------------------------------------------------------------------
+
+
+@needs_opa
+def test_unsigned_bundle_loads_with_warning_by_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Default (no REQUIRE): an unsigned bundle loads but warns on stderr."""
+    _clear_signature_env(monkeypatch)
+    bundle_dir = _build_bundle_dir(tmp_path / "bundle")
+    monkeypatch.setenv("FORTIFY_LOCAL_POLICY", str(bundle_dir))
+
+    bundle = loader._local_policy_override()
+    assert bundle is not None
+    err = capsys.readouterr().err
+    assert "unsigned" in err
+
+
+@needs_opa
+def test_unsigned_bundle_refused_when_signature_required(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """REQUIRE_SIGNATURE=true rejects an unsigned bundle at load time."""
+    _clear_signature_env(monkeypatch)
+    bundle_dir = _build_bundle_dir(tmp_path / "bundle")
+    monkeypatch.setenv("FORTIFY_LOCAL_POLICY", str(bundle_dir))
+    monkeypatch.setenv("FORTIFY_BUNDLE_REQUIRE_SIGNATURE", "true")
+
+    with pytest.raises(RuntimeError, match="has no signature"):
+        loader._local_policy_override()
+
+
+@needs_opa
+def test_signed_bundle_verifies_against_pubkey(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A signed bundle + matching pubkey loads cleanly, even with REQUIRE on."""
+    _clear_signature_env(monkeypatch)
+    private_raw, public_raw = generate_keypair()
+    bundle_dir = _build_bundle_dir(tmp_path / "bundle")
+    _sign_bundle_dir(bundle_dir, private_raw)
+    pubkey_path = _write_pubkey(tmp_path / "key.public", public_raw)
+
+    monkeypatch.setenv("FORTIFY_LOCAL_POLICY", str(bundle_dir))
+    monkeypatch.setenv("FORTIFY_BUNDLE_PUBKEY_PATH", str(pubkey_path))
+    monkeypatch.setenv("FORTIFY_BUNDLE_REQUIRE_SIGNATURE", "true")
+
+    bundle = loader._local_policy_override()
+    assert bundle is not None and bundle.is_signed
+    err = capsys.readouterr().err
+    assert "signed" in err
+
+
+@needs_opa
+def test_signed_bundle_wrong_pubkey_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A signature that doesn't match the configured pubkey is refused."""
+    _clear_signature_env(monkeypatch)
+    signer_priv, _ = generate_keypair()
+    _, stranger_pub = generate_keypair()
+    bundle_dir = _build_bundle_dir(tmp_path / "bundle")
+    _sign_bundle_dir(bundle_dir, signer_priv)
+    pubkey_path = _write_pubkey(tmp_path / "key.public", stranger_pub)
+
+    monkeypatch.setenv("FORTIFY_LOCAL_POLICY", str(bundle_dir))
+    monkeypatch.setenv("FORTIFY_BUNDLE_PUBKEY_PATH", str(pubkey_path))
+
+    with pytest.raises(RuntimeError, match="failed signature verification"):
+        loader._local_policy_override()
+
+
+@needs_opa
+def test_signed_bundle_no_pubkey_required_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Signed bundle + REQUIRE on + no pubkey configured → refuse (no key to check)."""
+    _clear_signature_env(monkeypatch)
+    private_raw, _ = generate_keypair()
+    bundle_dir = _build_bundle_dir(tmp_path / "bundle")
+    _sign_bundle_dir(bundle_dir, private_raw)
+
+    monkeypatch.setenv("FORTIFY_LOCAL_POLICY", str(bundle_dir))
+    monkeypatch.setenv("FORTIFY_BUNDLE_REQUIRE_SIGNATURE", "true")
+
+    with pytest.raises(RuntimeError, match="is unset"):
+        loader._local_policy_override()

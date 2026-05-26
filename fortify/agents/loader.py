@@ -15,7 +15,12 @@ from fortify.agents.security import enforce_policy
 from fortify.agents.models import AgentSpec
 from fortify.cloud.client import FortifyClient, FortifyConfig, resolve_agent_name
 from fortify.security import AgentPolicy, PolicyBundle, load_policy
-from fortify.security.bundle import BundleIntegrityError, BundleLoadError
+from fortify.security.bundle import (
+    BundleIntegrityError,
+    BundleLoadError,
+    BundleSignatureError,
+)
+from fortify.security.signing import SignatureError, decode_key
 from fortify.tools import (
     bash,
     edit_file,
@@ -46,6 +51,86 @@ REGISTERED_AGENTS: dict[str, AgentFactory] = {}
 
 
 _LOCAL_POLICY_ENV_VAR = "FORTIFY_LOCAL_POLICY"
+_BUNDLE_PUBKEY_ENV_VAR = "FORTIFY_BUNDLE_PUBKEY_PATH"
+_REQUIRE_SIGNATURE_ENV_VAR = "FORTIFY_BUNDLE_REQUIRE_SIGNATURE"
+
+
+def _truthy(value: str | None) -> bool:
+    """Parse a boolean-ish env var ('1', 'true', 'yes' → True)."""
+    return (value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _verify_bundle_signature(bundle: PolicyBundle, override_path: str) -> None:
+    """Apply the signature policy to a locally-loaded override bundle.
+
+    The matrix, controlled by two env vars:
+
+      * ``FORTIFY_BUNDLE_PUBKEY_PATH`` — path to a base64url public key.
+      * ``FORTIFY_BUNDLE_REQUIRE_SIGNATURE`` — when truthy, refuse
+        anything that isn't signed-and-verified.
+
+    | signature | pubkey set | require | outcome              |
+    |-----------|-----------|---------|----------------------|
+    | present   | yes       | either  | verify; raise if bad |
+    | present   | no        | false   | warn (can't verify)  |
+    | present   | no        | true    | refuse (no key)      |
+    | absent    | —         | false   | warn + proceed       |
+    | absent    | —         | true    | refuse               |
+
+    Local dev (unsigned bundles via `fortify policy build`) stays
+    frictionless by default; CI/prod opt into strictness with
+    REQUIRE_SIGNATURE=true.
+    """
+    import sys
+
+    require = _truthy(os.environ.get(_REQUIRE_SIGNATURE_ENV_VAR))
+    pubkey_path = os.environ.get(_BUNDLE_PUBKEY_ENV_VAR)
+
+    if not bundle.is_signed:
+        if require:
+            raise RuntimeError(
+                f"{_REQUIRE_SIGNATURE_ENV_VAR} is set but the bundle at "
+                f"{override_path!r} has no signature (no *.bundle.json.sig). "
+                "Build it with `fortify policy build --sign-key ...`."
+            )
+        print(
+            f"[fortify] warning: override bundle at {override_path} is "
+            "unsigned — authenticity not verified. Set "
+            f"{_REQUIRE_SIGNATURE_ENV_VAR}=true to refuse unsigned bundles.",
+            file=sys.stderr,
+        )
+        return
+
+    # Bundle is signed. We need a public key to check it against.
+    if not pubkey_path:
+        if require:
+            raise RuntimeError(
+                f"{_REQUIRE_SIGNATURE_ENV_VAR} is set and the bundle is signed, "
+                f"but {_BUNDLE_PUBKEY_ENV_VAR} is unset — no key to verify "
+                "against."
+            )
+        print(
+            f"[fortify] warning: override bundle is signed but "
+            f"{_BUNDLE_PUBKEY_ENV_VAR} is unset — signature NOT verified.",
+            file=sys.stderr,
+        )
+        return
+
+    try:
+        public_key_raw = decode_key(Path(pubkey_path).read_text(encoding="utf-8").strip())
+    except (OSError, SignatureError) as exc:
+        raise RuntimeError(
+            f"{_BUNDLE_PUBKEY_ENV_VAR}={pubkey_path!r} could not be read as a "
+            f"base64url public key: {exc}"
+        ) from exc
+
+    try:
+        bundle.verify_signature(public_key_raw)
+    except BundleSignatureError as exc:
+        raise RuntimeError(
+            f"override bundle at {override_path!r} failed signature "
+            f"verification: {exc}"
+        ) from exc
 
 
 def _local_policy_override() -> PolicyBundle | None:
@@ -54,7 +139,8 @@ def _local_policy_override() -> PolicyBundle | None:
     The env var points at a directory containing a ``*.bundle.json`` +
     matching ``.yaml`` / ``.rego`` / ``.wasm``. Hash-integrity is checked
     eagerly so a stale or corrupt bundle fails loudly at startup rather
-    than at the first denied tool call.
+    than at the first denied tool call. Signature (authenticity) is then
+    checked per :func:`_verify_bundle_signature`.
 
     A loud stderr line announces the override — silent overrides of
     security-relevant config would be a footgun, especially when the dev
@@ -72,12 +158,15 @@ def _local_policy_override() -> PolicyBundle | None:
             f"bundle could not be loaded: {exc}"
         ) from exc
 
+    _verify_bundle_signature(bundle, override_path)
+
     import sys
 
     short = bundle.wasm_hash[:12] if bundle.wasm_hash else "?"
+    signed = "signed" if bundle.is_signed else "unsigned"
     print(
         f"[fortify] {_LOCAL_POLICY_ENV_VAR} active: "
-        f"{override_path} (wasm_hash={short})",
+        f"{override_path} (wasm_hash={short}, {signed})",
         file=sys.stderr,
     )
     return bundle
