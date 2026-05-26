@@ -294,3 +294,81 @@ def test_verify_signature_raises_when_unsigned(bundle_dir: Path) -> None:
     bundle = PolicyBundle.from_disk(bundle_dir)
     with pytest.raises(BundleSignatureError, match="no signature"):
         bundle.verify_signature(public_raw)
+
+
+# ---------------------------------------------------------------------------
+# from_parts — in-memory bundles (the shape the platform serves over HTTP)
+# ---------------------------------------------------------------------------
+
+
+def _make_parts(constraints=("args.amount <= 500",)):
+    """Compile a tiny policy and return (wasm_bytes, manifest_bytes)."""
+    payload = {
+        "version": 1,
+        "roles": {
+            "billing": {
+                "tools": {
+                    "refund_order": {"mode": "allow", "constraints": list(constraints)}
+                }
+            }
+        },
+    }
+    rego = compile_to_rego(payload)
+    wasm = compile_to_wasm(rego).wasm
+    manifest = {
+        "version": 1,
+        "source": "policy.yaml",
+        "source_hash": "0" * 64,
+        "rego_hash": hashlib.sha256(rego.encode("utf-8")).hexdigest(),
+        "wasm_hash": hashlib.sha256(wasm).hexdigest(),
+    }
+    manifest_bytes = (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode("utf-8")
+    return wasm, manifest_bytes
+
+
+@needs_opa
+def test_from_parts_builds_evaluable_bundle() -> None:
+    """An in-memory bundle (no source/rego files) is still evaluable."""
+    wasm, manifest_bytes = _make_parts()
+    bundle = PolicyBundle.from_parts(wasm_bytes=wasm, manifest_bytes=manifest_bytes)
+    assert bundle.source_path is None
+    assert bundle.rego_text == ""
+    d = bundle.policy().decide(role="billing", tool="refund_order", args={"amount": 200})
+    assert d.allow is True
+
+
+@needs_opa
+def test_from_parts_integrity_checks_wasm_hash_only() -> None:
+    """Integrity passes (source/rego skipped), and a wasm/hash mismatch fails."""
+    wasm, manifest_bytes = _make_parts()
+    PolicyBundle.from_parts(
+        wasm_bytes=wasm, manifest_bytes=manifest_bytes
+    ).verify_integrity()  # no raise — source/rego checks skipped, wasm matches
+
+    tampered = wasm[:-1] + bytes([wasm[-1] ^ 1])
+    with pytest.raises(BundleIntegrityError, match="wasm hash mismatch"):
+        PolicyBundle.from_parts(
+            wasm_bytes=tampered, manifest_bytes=manifest_bytes
+        ).verify_integrity()
+
+
+@needs_opa
+def test_from_parts_signature_round_trip() -> None:
+    """A signature over the manifest bytes verifies under the matching key."""
+    wasm, manifest_bytes = _make_parts()
+    priv, pub = generate_keypair()
+    sig = sign_bytes(manifest_bytes, priv)
+    bundle = PolicyBundle.from_parts(
+        wasm_bytes=wasm, manifest_bytes=manifest_bytes, signature=sig
+    )
+    assert bundle.is_signed
+    bundle.verify_signature(pub)  # no raise
+
+    _, stranger = generate_keypair()
+    with pytest.raises(BundleSignatureError, match="verification failed"):
+        bundle.verify_signature(stranger)
+
+
+def test_from_parts_rejects_non_json_manifest() -> None:
+    with pytest.raises(BundleLoadError, match="not valid JSON"):
+        PolicyBundle.from_parts(wasm_bytes=b"\x00asm", manifest_bytes=b"not json{")

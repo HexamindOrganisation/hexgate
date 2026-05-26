@@ -206,3 +206,66 @@ def test_agent_read_nulls_when_unsigned(session) -> None:
     assert view.bundle_wasm_b64 is None
     assert view.bundle_manifest is None
     assert view.bundle_signature_b64 is None
+
+
+# ---------------------------------------------------------------------------
+# Cross-seam parity: platform-compiled bundle, consumed by the SDK, agrees
+# with the pydantic engine on the same policy. This is the load-bearing
+# check that 7a (producer) and 7b (consumer) line up across the wire.
+# ---------------------------------------------------------------------------
+
+
+_PARITY_CASES = [
+    ("default", "web_search", {}, True),
+    ("billing", "refund_order", {"amount": 200}, True),
+    ("billing", "refund_order", {"amount": 700}, False),
+    ("default", "refund_order", {"amount": 1}, False),  # no rule → deny
+]
+
+
+@needs_opa
+@pytest.mark.parametrize(("role", "tool", "args", "expect_allow"), _PARITY_CASES)
+def test_platform_bundle_matches_pydantic(role, tool, args, expect_allow, signer):
+    """The platform's signed bundle, loaded via the SDK's from_parts +
+    verified, decides exactly what the pydantic engine decides on the same
+    policy_yaml."""
+    from fortify.security import (
+        ApprovalRequiredError,
+        PolicyBundle,
+        PolicyDeniedError,
+        authorize_tool_call,
+        load_policy_set_from_dict,
+    )
+
+    sign, public_raw = signer
+
+    # Producer side: the platform compiles + signs.
+    out = compile_bundle(_DEMO_POLICY, sign)
+    assert out is not None
+    wasm, manifest_text, signature = out
+
+    # Consumer side: the SDK rebuilds from the served parts + verifies.
+    bundle = PolicyBundle.from_parts(
+        wasm_bytes=wasm,
+        manifest_bytes=manifest_text.encode("utf-8"),
+        signature=signature,
+    )
+    bundle.verify_signature(public_raw)
+    bundle.verify_integrity()
+    wasm_allow = bundle.policy().decide(role=role, tool=tool, args=args).allow
+
+    # Pydantic baseline on the same source.
+    import yaml as _yaml
+
+    ps = load_policy_set_from_dict(_yaml.safe_load(_DEMO_POLICY))
+    policy = ps.policy_for(role)
+    try:
+        authorize_tool_call(policy, tool, args)
+        py_allow = True
+    except (PolicyDeniedError, ApprovalRequiredError):
+        py_allow = False
+
+    assert wasm_allow == expect_allow
+    assert wasm_allow == py_allow, (
+        f"platform-bundle wasm disagrees with pydantic for {role}/{tool}/{args}"
+    )

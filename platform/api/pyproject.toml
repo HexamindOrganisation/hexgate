@@ -2,7 +2,9 @@
 name = "fortify-api"
 version = "0.1.0"
 description = "Fortify control plane API — policy bundles, tokens, audit ingestion"
-requires-python = ">=3.11"
+# Matches the fortify SDK's floor (>=3.13) — the control plane now depends on
+# it for compile_to_rego / compile_to_wasm.
+requires-python = ">=3.13"
 dependencies = [
     "fastapi>=0.115",
     "uvicorn[standard]>=0.32",

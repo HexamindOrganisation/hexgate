@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import os
 from collections.abc import Callable, Mapping
 from importlib.resources import files
@@ -169,6 +170,52 @@ def _local_policy_override() -> PolicyBundle | None:
         f"{override_path} (wasm_hash={short}, {signed})",
         file=sys.stderr,
     )
+    return bundle
+
+
+def _platform_bundle(payload: dict, client: FortifyClient) -> PolicyBundle | None:
+    """Build + verify the signed bundle the platform served, if any.
+
+    The platform's agent response carries ``bundle_wasm_b64`` /
+    ``bundle_manifest`` / ``bundle_signature_b64`` when it could compile +
+    sign the policy (phase 7a). We rebuild the bundle in memory, verify its
+    signature against the platform's published key — the *same* key the
+    client already trusts for biscuit verification — and check the wasm
+    matches the signed manifest.
+
+    Returns a verified :class:`PolicyBundle`, or ``None`` when the platform
+    served no bundle (older agent, or a control plane without opa). Raises
+    when a bundle *was* served but fails verification — a bad signature is
+    fatal, never a silent downgrade to the pydantic engine.
+    """
+    wasm_b64 = payload.get("bundle_wasm_b64")
+    manifest_text = payload.get("bundle_manifest")
+    sig_b64 = payload.get("bundle_signature_b64")
+    if not wasm_b64 or not manifest_text or not sig_b64:
+        return None
+
+    try:
+        wasm = base64.b64decode(wasm_b64)
+        signature = base64.b64decode(sig_b64)
+    except (ValueError, TypeError) as exc:
+        raise RuntimeError(
+            f"platform served a bundle but its base64 is malformed: {exc}"
+        ) from exc
+
+    bundle = PolicyBundle.from_parts(
+        wasm_bytes=wasm,
+        manifest_bytes=manifest_text.encode("utf-8"),
+        signature=signature,
+    )
+    try:
+        bundle.verify_signature(client.public_key_bytes())
+        bundle.verify_integrity()
+    except (BundleSignatureError, BundleIntegrityError) as exc:
+        raise RuntimeError(
+            f"platform-served policy bundle failed verification: {exc}. "
+            "Refusing to run rather than silently downgrading to the "
+            "pydantic engine."
+        ) from exc
     return bundle
 
 
@@ -459,9 +506,25 @@ def load_fortify_agent(
         tags=tags or ["fortify", "fortify-cloud", config.project_id],
         name=spec.name,
     )
+    # Policy precedence:
+    #   1. FORTIFY_LOCAL_POLICY override (dev iteration) — wins outright.
+    #   2. Platform-served signed bundle — verified, WASM-enforced.
+    #   3. policy_yaml + pydantic — fallback when no bundle was served.
     override = _local_policy_override()
     if override is not None:
         policy = override
+    else:
+        platform_bundle = _platform_bundle(payload, client)
+        if platform_bundle is not None:
+            policy = platform_bundle
+        elif _truthy(os.environ.get(_REQUIRE_SIGNATURE_ENV_VAR)):
+            raise RuntimeError(
+                f"{_REQUIRE_SIGNATURE_ENV_VAR} is set but the platform served "
+                f"no signed bundle for agent {resolved_name!r} — the policy may "
+                "not have compiled (is opa available on the control plane?). "
+                "Refusing to fall back to the pydantic engine."
+            )
+
     enforced = enforce_policy(agent, policy)
     # Attach the client so the runtime can do lazy attenuation inside an
     # active User scope without the caller having to thread it through.

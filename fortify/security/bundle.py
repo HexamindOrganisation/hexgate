@@ -52,13 +52,23 @@ class BundleSignatureError(RuntimeError):
 class PolicyBundle:
     """A loaded policy bundle, ready to evaluate via WASM.
 
-    The dataclass holds the raw bytes / text as loaded from disk; the
-    ``WasmPolicy`` instance is created lazily on first ``policy()`` call
-    so callers that only want metadata (e.g. the dashboard's bundle
-    inspector) don't pay the wasmtime setup cost.
+    The dataclass holds the raw bytes / text; the ``WasmPolicy`` instance
+    is created lazily on first ``policy()`` call so callers that only want
+    metadata (e.g. the dashboard's bundle inspector) don't pay the
+    wasmtime setup cost.
+
+    Two construction paths:
+
+      * :meth:`from_disk` — a `fortify policy build` directory (yaml + rego
+        + wasm + manifest [+ sig]). All artifacts present.
+      * :meth:`from_parts` — a bundle pulled from the platform over HTTP:
+        wasm + manifest + signature only, no source/rego files. ``source_path``
+        is ``None`` and ``rego_text`` is empty for these; integrity then
+        rests on the wasm-hash check + the signature.
     """
 
-    source_path: Path
+    # None for platform-served (from_parts) bundles — no source file locally.
+    source_path: Path | None
     rego_text: str
     wasm_bytes: bytes
     manifest: dict
@@ -133,30 +143,71 @@ class PolicyBundle:
             signature=signature,
         )
 
+    @classmethod
+    def from_parts(
+        cls,
+        *,
+        wasm_bytes: bytes,
+        manifest_bytes: bytes,
+        signature: bytes | None = None,
+    ) -> "PolicyBundle":
+        """Build an in-memory bundle from the parts the platform serves.
+
+        No source yaml or rego files come over the wire — only the wasm,
+        the exact manifest bytes (what the signature covers), and the
+        detached signature. ``manifest_bytes`` is parsed for metadata but
+        kept verbatim for :meth:`verify_signature`.
+
+        Trust for these bundles rests on two checks the caller should run:
+        :meth:`verify_signature` (the manifest is genuinely the platform's)
+        and :meth:`verify_integrity` (the wasm matches the manifest's
+        ``wasm_hash``). source/rego hashes are informational — there are no
+        local files to check them against.
+        """
+        try:
+            manifest = json.loads(manifest_bytes.decode("utf-8"))
+        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+            raise BundleLoadError(f"bundle manifest is not valid JSON: {exc}") from exc
+        if not isinstance(manifest, dict):
+            raise BundleLoadError("bundle manifest is not a JSON object")
+        return cls(
+            source_path=None,
+            rego_text="",
+            wasm_bytes=wasm_bytes,
+            manifest=manifest,
+            manifest_bytes=manifest_bytes,
+            signature=signature,
+        )
+
     # ---- Integrity -----------------------------------------------------
 
     def verify_integrity(self) -> None:
-        """Confirm every on-disk artifact matches the hash in the manifest.
+        """Confirm the on-hand artifacts match the hashes in the manifest.
 
-        This is the *integrity* check (files match the manifest). For
+        This is the *integrity* check (artifacts match the manifest). For
         *authenticity* (the manifest was signed by a trusted key), see
-        :meth:`verify_signature`. Run both for full assurance: signature
-        proves the manifest is genuine, integrity proves the files match
-        the manifest.
+        :meth:`verify_signature`. Run both for full assurance.
+
+        For ``from_disk`` bundles all three artifacts are present and all
+        three hashes are checked. For ``from_parts`` (platform-served)
+        bundles there's no local source yaml or rego file, so those checks
+        are skipped — only the wasm-hash check applies. The wasm check is
+        the load-bearing one: it ties the actual module to the
+        signature-authenticated manifest.
         """
+        # source.yaml — only checkable when we hold the file (from_disk).
         expected_source_hash = self.manifest.get("source_hash")
-        if expected_source_hash:
-            actual = hashlib.sha256(
-                self.source_path.read_bytes()
-            ).hexdigest()
+        if expected_source_hash and self.source_path is not None:
+            actual = hashlib.sha256(self.source_path.read_bytes()).hexdigest()
             if actual != expected_source_hash:
                 raise BundleIntegrityError(
                     f"source.yaml hash mismatch: manifest says "
                     f"{expected_source_hash}, got {actual}"
                 )
 
+        # rego — only checkable when we hold the text (from_disk).
         expected_rego_hash = self.manifest.get("rego_hash")
-        if expected_rego_hash:
+        if expected_rego_hash and self.rego_text:
             actual = hashlib.sha256(self.rego_text.encode("utf-8")).hexdigest()
             if actual != expected_rego_hash:
                 raise BundleIntegrityError(
