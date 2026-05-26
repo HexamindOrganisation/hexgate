@@ -139,6 +139,11 @@ function ManifestSummary({ agent }: { agent: AgentManifestView }) {
           label="Description"
           value={agent.manifest?.description?.trim() || '—'}
         />
+        <ManifestRow
+          label="Framework"
+          value={agent.manifest?.framework?.trim() || '—'}
+          mono
+        />
         <ManifestRow label="Last updated" value={formatDate(agent.updated_at)} />
       </dl>
     </section>
