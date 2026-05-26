@@ -32,6 +32,8 @@ from fortify.security import (
     PolicyDeniedError,
     PolicySetError,
     WasmCompileError,
+    WasmEvalError,
+    WasmPolicy,
     authorize_tool_call,
     compile_to_rego,
     compile_to_wasm,
@@ -132,6 +134,16 @@ def add_parser(subparsers: argparse._SubParsersAction) -> None:
         "--args",
         default="{}",
         help='Tool arguments as a JSON object (e.g. \'{"amount": 30, "currency": "USD"}\'). Defaults to {}.',
+    )
+    p_test.add_argument(
+        "--engine",
+        choices=("pydantic", "wasm"),
+        default="pydantic",
+        help=(
+            "Decision engine: pydantic (default — fast, no opa needed) or "
+            "wasm (compiles the policy via opa and evaluates in wasmtime; "
+            "matches what production will run)."
+        ),
     )
     p_test.set_defaults(func=_main_test)
 
@@ -286,7 +298,7 @@ def _main_show_rego(args: argparse.Namespace) -> int:
 
 
 def _main_test(args: argparse.Namespace) -> int:
-    """Dry-run a single (role, tool, args) decision through the engine."""
+    """Dry-run a single (role, tool, args) decision through the chosen engine."""
     source_path = Path(args.source)
     source_text, payload, err = _read_and_parse(source_path)
     if err is not None:
@@ -316,11 +328,21 @@ def _main_test(args: argparse.Namespace) -> int:
         )
         return 1
 
-    policy: AgentPolicy = policy_set.policy_for(args.role)
-
     label = f'{args.role} → {args.tool}({json.dumps(tool_args, sort_keys=True)})'
+    engine = getattr(args, "engine", "pydantic")
+
+    if engine == "wasm":
+        return _test_via_wasm(payload, args.role, args.tool, tool_args, label)
+    return _test_via_pydantic(policy_set, args.role, args.tool, tool_args, label)
+
+
+def _test_via_pydantic(
+    policy_set: Any, role: str, tool: str, tool_args: dict, label: str
+) -> int:
+    """Run the decision through the in-process constraint evaluator."""
+    policy: AgentPolicy = policy_set.policy_for(role)
     try:
-        authorize_tool_call(policy, args.tool, tool_args)
+        authorize_tool_call(policy, tool, tool_args)
     except ApprovalRequiredError as exc:
         print(f"⚠ APPROVAL_REQUIRED · {label}\n  reason: {exc}")
         return 0
@@ -329,6 +351,41 @@ def _main_test(args: argparse.Namespace) -> int:
         return 1
     print(f"✓ ALLOW · {label}")
     return 0
+
+
+def _test_via_wasm(
+    payload: dict, role: str, tool: str, tool_args: dict, label: str
+) -> int:
+    """Compile to wasm on the fly + evaluate — matches production semantics."""
+    try:
+        rego = compile_to_rego(payload)
+    except (PolicySetError, ConstraintParseError, ValidationError) as exc:
+        print(f"compile error: {exc}", file=sys.stderr)
+        return 1
+    try:
+        artifact = compile_to_wasm(rego)
+    except (OpaNotFoundError, WasmCompileError) as exc:
+        print(f"wasm compile error: {exc}", file=sys.stderr)
+        return 1
+    try:
+        wasm_policy = WasmPolicy.from_bytes(artifact.wasm)
+        decision = wasm_policy.decide(role=role, tool=tool, args=tool_args)
+    except WasmEvalError as exc:
+        print(f"wasm eval error: {exc}", file=sys.stderr)
+        return 1
+
+    if decision.allow:
+        print(f"✓ ALLOW · {label}")
+        return 0
+    if decision.requires_approval:
+        print(f"⚠ APPROVAL_REQUIRED · {label}")
+        return 0
+    print(f"✗ DENY · {label}")
+    if decision.violations:
+        print("  violations:")
+        for v in decision.violations:
+            print(f"    • {v}")
+    return 1
 
 
 # ---------------------------------------------------------------------------

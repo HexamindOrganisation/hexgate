@@ -414,32 +414,44 @@ def test_decision_default_includes_empty_state() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Parity with the pydantic engine (predictive — will become semantic when
-# the wasmtime-py adapter lands)
+# Parity with the pydantic engine
+#
+# Two parametrized tests share the same fixture table:
+#
+#   * The "predictive" one walks the rule structure with regex + the same
+#     parse_constraint engine the SDK enforces with. Cheap, no opa needed,
+#     catches emitter regressions.
+#
+#   * The "semantic" one compiles the rego all the way to WASM and runs it
+#     through the wasm_engine. This is the load-bearing check — when this
+#     matches pydantic, phase 6's enforcement cutover is a flag flip.
 # ---------------------------------------------------------------------------
+
+_PARITY_CASES: list[tuple[str, str, dict, bool]] = [
+    ("billing", "refund_order", {"amount": 30, "currency": "USD"}, True),
+    ("billing", "refund_order", {"amount": 600, "currency": "USD"}, False),
+    ("billing", "refund_order", {"amount": 30, "currency": "JPY"}, False),
+    ("support", "refund_order", {"amount": 30, "currency": "USD"}, True),
+    ("support", "refund_order", {"amount": 200, "currency": "USD"}, False),
+    ("support", "refund_order", {"amount": 30, "currency": "EUR"}, False),
+    ("default", "refund_order", {"amount": 5, "currency": "USD"}, False),
+    ("billing", "web_search", {}, True),
+    ("default", "web_search", {}, True),
+]
 
 
 @pytest.mark.parametrize(
-    ("role", "tool", "args", "expect_allow"),
-    [
-        ("billing", "refund_order", {"amount": 30, "currency": "USD"}, True),
-        ("billing", "refund_order", {"amount": 600, "currency": "USD"}, False),
-        ("billing", "refund_order", {"amount": 30, "currency": "JPY"}, False),
-        ("support", "refund_order", {"amount": 30, "currency": "USD"}, True),
-        ("support", "refund_order", {"amount": 200, "currency": "USD"}, False),
-        ("support", "refund_order", {"amount": 30, "currency": "EUR"}, False),
-        ("default", "refund_order", {"amount": 5, "currency": "USD"}, False),
-        ("billing", "web_search", {}, True),
-        ("default", "web_search", {}, True),
-    ],
+    ("role", "tool", "args", "expect_allow"), _PARITY_CASES
 )
-def test_parity_with_pydantic_engine(
+def test_parity_predicted_rego_vs_pydantic(
     role: str, tool: str, args: dict, expect_allow: bool
 ) -> None:
-    """For every input, the pydantic engine + the would-be Rego decision
-    agree. Today the Rego decision is inferred from the rule structure;
-    when the wasm adapter lands, this becomes a true semantic parity test
-    (same input, same allow/deny from both engines)."""
+    """Cheap structural parity — no opa needed.
+
+    Walks the emitted rules with regex and re-evaluates each constraint
+    with the SDK's :func:`parse_constraint` engine. Catches emitter bugs
+    (wrong operator, wrong path) without needing a wasm runtime.
+    """
     ps = load_policy_set_from_dict(_SUPPORT_BOT_POLICY)
     policy = ps.policy_for(role)
     try:
@@ -449,12 +461,53 @@ def test_parity_with_pydantic_engine(
         py_allow = False
     assert py_allow is expect_allow, f"pydantic engine disagrees for {role}/{tool}/{args}"
 
-    # Predict the Rego decision from the source: is there a matching allow
-    # rule whose constraints are all satisfied by the args?
     rego = compile_to_rego(_SUPPORT_BOT_POLICY)
     rego_allow = _predict_rego_allow(rego, role, tool, args)
     assert rego_allow is expect_allow, (
         f"emitted Rego predicts the wrong decision for {role}/{tool}/{args}"
+    )
+
+
+# Compile the wasm once for all semantic-parity cases — opa build takes
+# ~100ms, multiplied by 9 cases that's a noticeable slice of the suite.
+@pytest.fixture(scope="module")
+def _support_bot_wasm() -> bytes:
+    import shutil
+    if shutil.which("opa") is None:
+        pytest.skip("opa not on PATH")
+    from fortify.security import compile_to_wasm
+    rego = compile_to_rego(_SUPPORT_BOT_POLICY)
+    return compile_to_wasm(rego).wasm
+
+
+@pytest.mark.parametrize(
+    ("role", "tool", "args", "expect_allow"), _PARITY_CASES
+)
+def test_parity_wasm_vs_pydantic(
+    role: str, tool: str, args: dict, expect_allow: bool, _support_bot_wasm: bytes
+) -> None:
+    """Semantic parity — what the wasm runtime would actually decide.
+
+    This is the load-bearing check for the enforcement cutover in M2 phase
+    6. If this matches pydantic for every input shape we care about, we
+    can swap the enforcer with confidence.
+    """
+    from fortify.security import WasmPolicy
+
+    ps = load_policy_set_from_dict(_SUPPORT_BOT_POLICY)
+    policy = ps.policy_for(role)
+    try:
+        authorize_tool_call(policy, tool, args)
+        py_allow = True
+    except PolicyDeniedError:
+        py_allow = False
+    assert py_allow is expect_allow, f"pydantic engine disagrees for {role}/{tool}/{args}"
+
+    wasm_policy = WasmPolicy.from_bytes(_support_bot_wasm)
+    decision = wasm_policy.decide(role=role, tool=tool, args=args)
+    assert decision.allow is expect_allow, (
+        f"wasm engine disagrees with pydantic for {role}/{tool}/{args}: "
+        f"got {decision}, expected allow={expect_allow}"
     )
 
 

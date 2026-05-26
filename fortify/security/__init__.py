@@ -38,14 +38,22 @@ from fortify.security.rego_wasm import (
     WasmCompileError,
     compile_to_wasm,
 )
+from fortify.security.wasm_engine import (
+    DEFAULT_ENTRYPOINT,
+    Decision,
+    WasmEvalError,
+    WasmPolicy,
+)
 
 __all__ = [
     "AgentPolicy",
     "BaseToolPolicy",
     "Constraint",
     "ConstraintParseError",
+    "DEFAULT_ENTRYPOINT",
     "DEFAULT_ENTRYPOINTS",
     "DEFAULT_ROLE_NAME",
+    "Decision",
     "FileScope",
     "FileToolPolicy",
     "ApprovalRequiredError",
@@ -57,6 +65,8 @@ __all__ = [
     "ToolPolicy",
     "WasmArtifact",
     "WasmCompileError",
+    "WasmEvalError",
+    "WasmPolicy",
     "authorize_tool_call",
     "check_constraints",
     "compile_default_only",

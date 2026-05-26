@@ -30,6 +30,7 @@ dependencies = [
     "litellm>=1.50",
     "openinference-instrumentation-google-adk>=0.1",
     "pydantic-ai-slim>=1.88.0",
+    "wasmtime>=20.0",
 ]
 
 [project.scripts]

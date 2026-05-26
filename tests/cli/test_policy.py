@@ -367,6 +367,49 @@ def test_test_rejects_non_object_args(
     assert "JSON object" in err
 
 
+# --- engine=wasm path -------------------------------------------------------
+
+
+@needs_opa
+def test_test_engine_wasm_allows(
+    policy_file: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`--engine wasm` compiles + evaluates against wasm — same allow verdict."""
+    rc = _main_test(
+        _ns(
+            source=str(policy_file),
+            role="billing",
+            tool="refund_order",
+            args='{"amount": 200, "currency": "USD"}',
+            engine="wasm",
+        )
+    )
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "ALLOW" in out
+
+
+@needs_opa
+def test_test_engine_wasm_surfaces_violations(
+    policy_file: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """On deny, the wasm path prints the actual violated constraint strings."""
+    rc = _main_test(
+        _ns(
+            source=str(policy_file),
+            role="billing",
+            tool="refund_order",
+            args='{"amount": 700, "currency": "GBP"}',
+            engine="wasm",
+        )
+    )
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert "DENY" in out
+    assert "args.amount <= 500" in out
+    assert 'args.currency in ["USD", "EUR"]' in out
+
+
 # ---------------------------------------------------------------------------
 # Wiring — confirm fortify policy reaches our subcommand handlers
 # ---------------------------------------------------------------------------
