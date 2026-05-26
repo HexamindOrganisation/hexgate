@@ -33,11 +33,11 @@ from pathlib import Path
 # bump from a much older opa.
 _OPA_MIN_VERSION = (0, 60, 0)
 
-# Both rule heads live in this package — keep in sync with rego.py.
-DEFAULT_ENTRYPOINTS: tuple[str, ...] = (
-    "fortify/policy/allow",
-    "fortify/policy/requires_approval",
-)
+# Single structured-decision entrypoint — kept in sync with rego.py.
+# The bundled wasm exposes one query that returns the full verdict object
+# ({allow, requires_approval, violations}) so the runtime only needs one
+# eval call per tool-call decision.
+DEFAULT_ENTRYPOINTS: tuple[str, ...] = ("fortify/policy/decision",)
 
 
 class WasmCompileError(RuntimeError):

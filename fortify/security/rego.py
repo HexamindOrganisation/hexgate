@@ -13,33 +13,44 @@ Ed25519 signature on the resulting bundle.
 Output structure
 ----------------
 
-For each concrete role's allowed / approval-required tool, the compiler
-emits one Rego rule per ``(role, tool)`` pair, guarded by ``input.role``
-and ``input.tool``:
+The module exposes a single ``decision`` entrypoint that returns the
+full verdict as a structured object. The runtime evaluates one query
+per tool-call and receives back ``{allow, requires_approval, violations}``:
 
     package fortify.policy
 
+    import rego.v1
+
     default allow := false
     default requires_approval := false
+
+    # The single entrypoint the runtime queries.
+    decision := {
+        "allow": allow,
+        "requires_approval": requires_approval,
+        "violations": violations,
+    }
 
     # ---- role: billing ----
     allow if {
         input.role == "billing"
         input.tool == "refund_order"
         input.args.amount <= 500
-        input.args.currency in ["USD", "EUR"]
     }
 
-    # ---- role: support ----
-    requires_approval if {
-        input.role == "support"
-        input.tool == "issue_credit"
-        input.args.amount <= 500
+    violations contains `args.amount <= 500` if {
+        input.role == "billing"
+        input.tool == "refund_order"
+        not input.args.amount <= 500
     }
 
-Deny is implicit — a tool with ``mode: deny`` produces no rule, so neither
-``allow`` nor ``requires_approval`` fires, and the runtime treats absence
-of an allow as deny (fail-closed).
+Deny is implicit — a tool with ``mode: deny`` produces no allow rule and
+no violation rules, so ``allow`` stays false and the deny reason is
+just "no allow rule matched" (caller's job to surface that).
+
+The ``violations`` set carries the raw constraint string from the YAML
+verbatim, so deny reasons in production match exactly what the dev
+wrote in their policy file.
 
 Constraint translation
 ----------------------
@@ -47,7 +58,9 @@ Constraint translation
 The grammar already mirrors Rego conditions, so translation is one step:
 each ``args.<field>`` path becomes ``input.args.<field>``. We re-use
 :func:`parse_constraint` for the AST so the path / operator / literal are
-already structured — we don't text-substitute.
+already structured — we don't text-substitute. Every constraint emits
+*two* contributions: one positive (added to the allow rule body) and
+one negative (a ``violations contains`` rule).
 """
 
 from __future__ import annotations
@@ -93,8 +106,9 @@ def compile_to_rego(
 
     lines: list[str] = []
     lines.extend(_header(source_hash, package))
-    lines.extend(_default_rules())
+    lines.extend(_decision_scaffold())
     lines.extend(_role_rules(policy_set))
+    lines.extend(_violations_sentinel())
     # Trailing newline — POSIX-friendly + a few editors complain otherwise.
     return "\n".join(lines) + "\n"
 
@@ -107,19 +121,49 @@ def _header(source_hash: str, package: str) -> list[str]:
         "",
         f"package {package}",
         "",
+        "import rego.v1",
+        "",
     ]
 
 
-def _default_rules() -> list[str]:
+def _decision_scaffold() -> list[str]:
+    """The top-level decision object + default boolean rules.
+
+    Every rendered module has exactly this scaffold; the per-role rules
+    contribute to ``allow``, ``requires_approval``, and ``violations``
+    via the rules emitted below.
+    """
     return [
         "default allow := false",
         "default requires_approval := false",
+        "",
+        "# Single entrypoint — runtime queries data.fortify.policy.decision.",
+        "decision := {",
+        '    "allow": allow,',
+        '    "requires_approval": requires_approval,',
+        '    "violations": violations,',
+        "}",
+        "",
+    ]
+
+
+def _violations_sentinel() -> list[str]:
+    """Keep ``violations`` defined even for constraint-free policies.
+
+    Without at least one ``violations contains`` rule in the module,
+    opa flags the symbol as unsafe and refuses to build. The sentinel
+    body is ``false`` so it never contributes — the set stays empty
+    in the happy path.
+    """
+    return [
+        "# Sentinel: keeps `violations` defined even when no constraint rules exist.",
+        'violations contains "__never__" if false',
         "",
     ]
 
 
 def _role_rules(policy_set: PolicySet) -> list[str]:
-    """Emit one allow/requires_approval rule per (role, tool) decision.
+    """Emit per-role allow / requires_approval / violations rules.
 
     Roles ordered alphabetically and tools within a role ordered the same
     way so the output is deterministic regardless of dict insertion order
@@ -139,44 +183,84 @@ def _role_rules(policy_set: PolicySet) -> list[str]:
 
 
 def _rules_for_role(role: str, policy: AgentPolicy) -> list[str]:
-    """Render rules for one resolved role."""
+    """Render rules for one resolved role (allow + violations per tool)."""
     out: list[str] = []
     for tool_name in sorted(policy.tools):
         tool_policy = policy.tools[tool_name]
-        rendered = _rule_for_tool(role, tool_name, tool_policy)
+        rendered = _rules_for_tool(role, tool_name, tool_policy)
         if rendered:
             out.extend(rendered)
-            out.append("")
     return out
 
 
-def _rule_for_tool(
+def _rules_for_tool(
     role: str, tool_name: str, tool_policy: BaseToolPolicy
-) -> list[str] | None:
-    """Render the rule body for a (role, tool) pair, or None for deny."""
+) -> list[str]:
+    """Render the rule(s) for a (role, tool) pair.
+
+    For ``deny`` mode: emit nothing (absence of a rule IS the deny).
+    For ``allow`` / ``approval_required``: emit the positive rule plus
+    one ``violations contains`` rule per constraint (the negation).
+    """
     mode = tool_policy.mode
     if mode == "deny":
-        return None
+        return []
     head = "allow" if mode == "allow" else "requires_approval"
 
-    body: list[str] = [
-        f'    input.role == "{_escape_string(role)}"',
-        f'    input.tool == "{_escape_string(tool_name)}"',
-    ]
+    # Parse all constraints up-front — surfaces bad grammar at compile time.
+    parsed: list[tuple[str, Constraint]] = []
     for raw_constraint in tool_policy.constraints:
         try:
-            constraint = parse_constraint(raw_constraint)
+            parsed.append((raw_constraint, parse_constraint(raw_constraint)))
         except Exception as exc:
-            # Compile-time validation: refuse to emit Rego for a constraint
-            # the SDK can't even parse — keeps platform / CLI artifacts
-            # consistent with what the runtime would accept.
             raise PolicySetError(
                 f"role {role!r} tool {tool_name!r}: invalid constraint "
                 f"{raw_constraint!r}: {exc}"
             ) from exc
-        body.append(f"    {_constraint_to_rego(constraint)}")
 
+    out: list[str] = []
+    out.extend(_positive_rule(role, tool_name, head, parsed))
+    out.append("")
+    for raw, constraint in parsed:
+        out.extend(_violation_rule(role, tool_name, raw, constraint))
+        out.append("")
+    return out
+
+
+def _positive_rule(
+    role: str,
+    tool_name: str,
+    head: str,
+    parsed: list[tuple[str, Constraint]],
+) -> list[str]:
+    """``allow if { role; tool; constraint1; constraint2; ... }``."""
+    body = [
+        f'    input.role == "{_escape_string(role)}"',
+        f'    input.tool == "{_escape_string(tool_name)}"',
+    ]
+    for _, constraint in parsed:
+        body.append(f"    {_constraint_to_rego(constraint)}")
     return [f"{head} if {{", *body, "}"]
+
+
+def _violation_rule(
+    role: str,
+    tool_name: str,
+    raw_constraint: str,
+    constraint: Constraint,
+) -> list[str]:
+    """``violations contains <raw> if { role; tool; not constraint }``.
+
+    The membership value is the original constraint string from the YAML
+    so deny reasons match exactly what the dev wrote.
+    """
+    return [
+        f"violations contains {_rego_string(raw_constraint)} if {{",
+        f'    input.role == "{_escape_string(role)}"',
+        f'    input.tool == "{_escape_string(tool_name)}"',
+        f"    not {_constraint_to_rego(constraint)}",
+        "}",
+    ]
 
 
 def _constraint_to_rego(constraint: Constraint) -> str:
@@ -219,6 +303,19 @@ def _escape_string(value: str) -> str:
     use json.dumps + slice to share the implementation.
     """
     return json.dumps(value)[1:-1]
+
+
+def _rego_string(value: str) -> str:
+    """Render a string as a Rego literal — backticks when safe, else JSON.
+
+    Backticks are Rego's raw-string syntax: no escape processing inside.
+    That's perfect for constraint strings like ``args.currency in ["USD"]``
+    where double-quote escaping would be noisy. The fallback to JSON
+    handles the rare case where the constraint itself contains a backtick.
+    """
+    if "`" not in value:
+        return f"`{value}`"
+    return json.dumps(value)
 
 
 def compile_default_only(policy: AgentPolicy, *, package: str = "fortify.policy") -> str:

@@ -91,6 +91,24 @@ def _approval_rules(rego: str) -> list[str]:
     return out
 
 
+def _violation_rules(rego: str) -> list[str]:
+    """Return each ``violations contains ... if { ... }`` rule's body.
+
+    The membership value can be a backtick raw-string (which the emitter
+    prefers, since it skips escape processing) or a JSON-escaped double-
+    quoted string for the rare backtick-containing case. Match both
+    flavours and the sentinel; let the caller filter the sentinel out.
+    """
+    out: list[str] = []
+    pattern = re.compile(
+        r"violations contains (?:`[^`]+`|\"[^\"]*\") if \{\n(.*?)\n\}",
+        re.DOTALL,
+    )
+    for match in pattern.finditer(rego):
+        out.append(match.group(1))
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Header / module structure
 # ---------------------------------------------------------------------------
@@ -320,6 +338,79 @@ def test_empty_inline_roles_compiles_to_default_only() -> None:
     }
     with pytest.raises(PolicySetError):
         compile_to_rego(payload)
+
+
+# ---------------------------------------------------------------------------
+# Structured decision object (M2 phase 3.5)
+# ---------------------------------------------------------------------------
+
+
+def test_emits_decision_object_with_all_three_fields() -> None:
+    """The module's single entrypoint is `decision := {allow, requires_approval, violations}`."""
+    rego = compile_to_rego(_SUPPORT_BOT_POLICY)
+    assert "decision := {" in rego
+    assert '"allow": allow,' in rego
+    assert '"requires_approval": requires_approval,' in rego
+    assert '"violations": violations,' in rego
+
+
+def test_emits_rego_v1_import() -> None:
+    """Modern opa needs `import rego.v1` for the contains / if syntax."""
+    rego = compile_to_rego(_SUPPORT_BOT_POLICY)
+    assert "import rego.v1" in rego
+
+
+def test_emits_violations_rule_per_constraint() -> None:
+    """Each constraint emits its own `violations contains <raw> if {...}` rule."""
+    rego = compile_to_rego(_SUPPORT_BOT_POLICY)
+    # support_bot has 4 constraints total:
+    # support.refund_order: amount <= 50, currency == "USD"
+    # billing.refund_order: amount <= 500, currency in ["USD","EUR"]
+    assert len(_violation_rules(rego)) == 4
+
+
+def test_violation_rule_uses_raw_constraint_string() -> None:
+    """The membership value is the original YAML string verbatim — that's
+    the dev's deny reason at runtime."""
+    rego = compile_to_rego(_SUPPORT_BOT_POLICY)
+    assert "violations contains `args.amount <= 500` if" in rego
+    assert "violations contains `args.amount <= 50` if" in rego
+    assert "violations contains `args.currency in [\"USD\", \"EUR\"]` if" in rego
+    assert "violations contains `args.currency == \"USD\"` if" in rego
+
+
+def test_violation_rule_body_negates_constraint() -> None:
+    """The rule body matches role/tool and asserts `not <constraint>`."""
+    rego = compile_to_rego(_SUPPORT_BOT_POLICY)
+    # Pick out billing's amount violation rule and inspect.
+    pattern = re.compile(
+        r"violations contains `args\.amount <= 500` if \{\n(.*?)\n\}", re.DOTALL
+    )
+    [body] = pattern.findall(rego)
+    assert 'input.role == "billing"' in body
+    assert 'input.tool == "refund_order"' in body
+    assert "not input.args.amount <= 500" in body
+
+
+def test_violations_sentinel_emitted_for_constraint_free_policy() -> None:
+    """Policies with zero constraints still need `violations` defined —
+    a `false`-bodied sentinel keeps the decision rule safe to build."""
+    payload = {
+        "version": 1,
+        "roles": {
+            "default": {"tools": {"web_search": {"mode": "allow"}}},
+        },
+    }
+    rego = compile_to_rego(payload)
+    assert 'violations contains "__never__" if false' in rego
+
+
+def test_decision_default_includes_empty_state() -> None:
+    """`default allow`/`default requires_approval` cover the fall-through;
+    `violations` defaults to the empty set by construction."""
+    rego = compile_to_rego(_SUPPORT_BOT_POLICY)
+    assert "default allow := false" in rego
+    assert "default requires_approval := false" in rego
 
 
 # ---------------------------------------------------------------------------

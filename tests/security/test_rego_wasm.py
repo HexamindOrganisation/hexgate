@@ -83,11 +83,14 @@ def test_compile_to_wasm_is_deterministic(demo_rego: str) -> None:
 
 
 @needs_opa
-def test_compile_to_wasm_manifest_lists_both_entrypoints(demo_rego: str) -> None:
-    """Bundle manifest records both allow + requires_approval entrypoints."""
+def test_compile_to_wasm_manifest_lists_decision_entrypoint(demo_rego: str) -> None:
+    """Bundle manifest records the single structured-decision entrypoint."""
     artifact = compile_to_wasm(demo_rego)
     entries = [e["entrypoint"] for e in artifact.manifest.get("wasm", [])]
     assert set(DEFAULT_ENTRYPOINTS) <= set(entries)
+    # And no stale legacy entrypoints leaked through from prior phases.
+    assert "fortify/policy/allow" not in entries
+    assert "fortify/policy/requires_approval" not in entries
 
 
 @needs_opa
