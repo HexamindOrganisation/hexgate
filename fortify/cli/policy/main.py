@@ -1,15 +1,15 @@
 """`fortify policy` subcommand — author + inspect + dry-run policy documents.
 
-Wraps the M2 phase 1 compiler library and the existing pydantic engine in
-a four-verb CLI: ``build``, ``validate``, ``show-rego``, ``test``. Every
+Wraps the compiler library and both enforcement engines in a five-verb
+CLI: ``build``, ``validate``, ``show-rego``, ``test``, ``keygen``. Every
 verb is a thin wrapper — the heavy lifting lives in
 :mod:`fortify.security`. That symmetry lets the platform's save flow use
 the same code without duplication.
 
-Phase 3 will extend ``build`` with the ``opa build -t wasm`` step;
-Phase 4 will extend ``test`` to evaluate against the compiled WASM
-directly (today it uses the pydantic engine — same decisions but a
-different evaluator path).
+``build`` compiles the policy to a signed WASM bundle (yaml + rego +
+wasm + manifest, ``--sign-key`` to sign); ``test`` evaluates a decision
+through either engine (``--engine pydantic`` by default, ``--engine
+wasm`` to run the compiled module).
 """
 
 from __future__ import annotations
@@ -188,22 +188,10 @@ def add_parser(subparsers: argparse._SubParsersAction) -> None:
     )
     p_test.set_defaults(func=_main_test)
 
-    parser.set_defaults(func=_main_unknown)
-
 
 def main(args: argparse.Namespace) -> int:
     """Entry point used by the top-level dispatcher in fortify/cli/__init__.py."""
     return args.func(args)
-
-
-def _main_unknown(args: argparse.Namespace) -> int:
-    """argparse fallback for ``fortify policy`` with no subcommand."""
-    print(
-        "fortify policy: choose a subcommand (build / validate / show-rego / test). "
-        "See `fortify policy --help`.",
-        file=sys.stderr,
-    )
-    return 2
 
 
 # ---------------------------------------------------------------------------

@@ -8,13 +8,14 @@ embedding an interpreter.
 The implementation shells out to ``opa build -t wasm`` rather than
 linking against an opa library — opa is the canonical reference
 implementation and pinning to a release line gives us a clean spec to
-test against. Discovery checks PATH first, then ``$FORTIFY_OPA_BIN``;
-both raise a friendly install hint if missing.
+test against. Discovery checks ``$FORTIFY_OPA_BIN`` first, then falls
+back to ``opa`` on ``PATH``; both raise a friendly install hint if missing.
 
-The emitted Rego exposes two rule heads (``allow`` and
-``requires_approval``); we compile both into one bundle so the runtime
-only loads a single module. The returned ``WasmArtifact`` carries the
-raw ``.wasm`` bytes plus the manifest opa writes alongside it.
+The emitted Rego exposes a single ``decision`` entrypoint (returning
+``{allow, requires_approval, violations}``); we compile it into one
+bundle so the runtime loads a single module. The returned
+``WasmArtifact`` carries the raw ``.wasm`` bytes plus the manifest opa
+writes alongside it.
 """
 
 from __future__ import annotations

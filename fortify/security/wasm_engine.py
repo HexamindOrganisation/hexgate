@@ -38,15 +38,18 @@ and it makes each call independent of previous ones (no carry-over state).
 Thread safety
 -------------
 
-``wasmtime.Store`` is not thread-safe — share a ``WasmPolicy`` from
-one thread only, or wrap calls in a lock. Per-call evaluation is cheap
-enough that re-creating the policy per request is also viable for
-strict isolation, though we don't do that yet.
+``wasmtime.Store`` is not thread-safe, and the runtime attaches one
+shared ``WasmPolicy`` to every guarded tool — so parallel tool calls
+(LangGraph can fan them out) would otherwise race on the same store's
+memory + heap pointer. ``evaluate`` therefore serializes the whole
+write-input → eval → read-result sequence under a per-instance lock.
+Decisions are microseconds, so the contention is negligible.
 """
 
 from __future__ import annotations
 
 import json
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -118,6 +121,9 @@ class WasmPolicy:
         self._exports = exports
         self._entrypoint_id = entrypoint_id
         self._base_heap_ptr = base_heap_ptr
+        # Serializes evaluate() — the shared store isn't thread-safe and the
+        # same WasmPolicy is attached to every guarded tool (see module docs).
+        self._lock = threading.Lock()
 
     @classmethod
     def from_bytes(
@@ -193,30 +199,36 @@ class WasmPolicy:
 
         Mostly useful for tests that want to probe odd shapes. Production
         callers should use :meth:`decide`.
+
+        The whole heap-reset → write-input → eval → read-result sequence
+        runs under a lock: the wasmtime store is shared across every
+        guarded tool, so concurrent calls would otherwise corrupt each
+        other's memory + heap pointer.
         """
         store = self._store
         mem = self._memory
         exports = self._exports
 
-        # Reset to the base heap pointer so this call doesn't leak into the next.
-        exports["opa_heap_ptr_set"](store, self._base_heap_ptr)
+        with self._lock:
+            # Reset to the base heap pointer so this call doesn't leak into the next.
+            exports["opa_heap_ptr_set"](store, self._base_heap_ptr)
 
-        input_bytes = json.dumps(input_obj).encode("utf-8")
-        input_addr = exports["opa_malloc"](store, len(input_bytes))
-        mem.write(store, input_bytes, input_addr)
-        heap_after_input = exports["opa_heap_ptr_get"](store)
+            input_bytes = json.dumps(input_obj).encode("utf-8")
+            input_addr = exports["opa_malloc"](store, len(input_bytes))
+            mem.write(store, input_bytes, input_addr)
+            heap_after_input = exports["opa_heap_ptr_get"](store)
 
-        result_addr = exports["opa_eval"](
-            store,
-            0,                       # reserved
-            self._entrypoint_id,     # entrypoint id
-            0,                       # data addr (no external data)
-            input_addr,
-            len(input_bytes),
-            heap_after_input,
-            0,                       # format: 0 = JSON output
-        )
-        raw = _read_c_string(store, mem, result_addr)
+            result_addr = exports["opa_eval"](
+                store,
+                0,                       # reserved
+                self._entrypoint_id,     # entrypoint id
+                0,                       # data addr (no external data)
+                input_addr,
+                len(input_bytes),
+                heap_after_input,
+                0,                       # format: 0 = JSON output
+            )
+            raw = _read_c_string(store, mem, result_addr)
         parsed = json.loads(raw)
         return _parse_decision(parsed)
 
