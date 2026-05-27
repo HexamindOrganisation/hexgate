@@ -99,23 +99,25 @@ This work adds a `fortify policy` command group for authoring, inspecting, and s
 
 > **Prerequisite:** the compile-to-WASM steps shell out to `opa`. Install it once: `brew install opa` (macOS) or see the [OPA downloads page](https://www.openpolicyagent.org/docs/latest/#running-opa). Commands that don't compile to WASM (`validate`, `test --engine pydantic`) don't need it.
 
+The examples below use the demo policy shipped at `examples/demo_policy.yaml` (a support agent with `default` / `support` / `billing` roles), run from the repo root — so they're copy-paste runnable.
+
 ### `fortify policy validate` — check a policy without the network
 
 Parses the YAML and checks every constraint against the grammar. Same checks the platform runs at save time, but local and offline.
 
 ```bash
-fortify policy validate policy.yaml
+fortify policy validate examples/demo_policy.yaml
 ```
 
 Exit 0 on success, 1 with all errors printed otherwise. Good for a pre-commit hook or CI.
 
 ### `fortify policy show-rego` — see what your YAML compiles to
 
-Prints the generated Rego to stdout. Useful for understanding (or debugging) what rules your policy actually produces.
+Prints the generated Rego to stdout. Useful for understanding (or debugging) what rules your policy actually produces — pipe it to a file or to `opa`.
 
 ```bash
-fortify policy show-rego policy.yaml
-fortify policy show-rego policy.yaml | opa eval -d /dev/stdin 'data.fortify.policy.decision'
+fortify policy show-rego examples/demo_policy.yaml
+fortify policy show-rego examples/demo_policy.yaml > policy.rego
 ```
 
 ### `fortify policy build` — compile a bundle
@@ -124,16 +126,16 @@ Compiles `policy.yaml` to a bundle directory (yaml + rego + wasm + manifest).
 
 ```bash
 # Compile next to the source
-fortify policy build policy.yaml
+fortify policy build examples/demo_policy.yaml
 
 # Compile into a specific directory
-fortify policy build policy.yaml --out ./bundle
+fortify policy build examples/demo_policy.yaml --out ./bundle
 
 # Skip the WASM step (no opa needed — emits yaml + rego only)
-fortify policy build policy.yaml --no-wasm
+fortify policy build examples/demo_policy.yaml --no-wasm
 
 # Compile AND sign (see keygen below)
-fortify policy build policy.yaml --out ./bundle --sign-key ./keys/dev.private
+fortify policy build examples/demo_policy.yaml --out ./bundle --sign-key ./keys/dev.private
 ```
 
 With `--sign-key`, it also writes `policy.bundle.json.sig`. A malformed key fails fast before anything is written.
@@ -144,12 +146,12 @@ Evaluate a single role/tool/args decision without spinning up an agent. Great fo
 
 ```bash
 # Default pydantic engine (no opa needed)
-fortify policy test policy.yaml \
+fortify policy test examples/demo_policy.yaml \
     --role billing --tool refund_order \
     --args '{"amount": 200, "currency": "USD"}'
 
 # Evaluate through the real WASM engine (matches production)
-fortify policy test policy.yaml \
+fortify policy test examples/demo_policy.yaml \
     --role billing --tool refund_order \
     --args '{"amount": 700}' --engine wasm
 ```
@@ -214,15 +216,15 @@ Putting it together — author, sign, and test a policy end to end without the p
 fortify policy keygen --out ./keys/dev
 
 # 2. Validate as you edit
-fortify policy validate policy.yaml
+fortify policy validate examples/demo_policy.yaml
 
 # 3. Build + sign a bundle
-fortify policy build policy.yaml --out ./bundle --sign-key ./keys/dev.private
+fortify policy build examples/demo_policy.yaml --out ./bundle --sign-key ./keys/dev.private
 
 # 4. Confirm a decision through the real WASM engine
-fortify policy test policy.yaml \
+fortify policy test examples/demo_policy.yaml \
     --role billing --tool refund_order \
-    --args '{"amount": 200}' --engine wasm
+    --args '{"amount": 200, "currency": "USD"}' --engine wasm
 
 # 5. Run an agent against the signed bundle, verifying the signature
 FORTIFY_LOCAL_POLICY=./bundle \
