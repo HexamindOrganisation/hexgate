@@ -67,25 +67,31 @@ The included local agent lives in `examples/example_agent/`, and the CLI can als
 
 ## 🚀 Quick Start — Platform
 
-To run the full Fortify control plane locally (backend + dashboard + your local agent serving over WebSocket), you need three terminals:
+To run the full Fortify control plane locally (FastAPI backend + dashboard + your local agent serving over WebSocket), you need **three terminals**. The Makefile has a target that prints the recipe:
 
 ```bash
-# Terminal 1 — backend (FastAPI + SQLite)
-cd platform/api
-uv run uvicorn main:app --reload --port 8000
+make demo-platform     # prints the 3-terminal recipe below
+```
 
-# Terminal 2 — dashboard (Vite + React)
-cd platform/dashboard
-pnpm install        # first run only
-pnpm dev
+```bash
+# Terminal 1 — backend (FastAPI + SQLite on :8000)
+make platform-api
+
+# Terminal 2 — dashboard (Vite + React on :5173)
+make dashboard
 
 # Terminal 3 — mint a token, then serve your local agent
-# 1. Open http://localhost:5173/tokens
-# 2. Click "Mint new token", copy the value
-# 3. Add to asianf/.env:
-#        FORTIFY_KEY=fty_test_support-bot_...
-# 4. Start serve mode:
-uv run fortify serve
+#   1. Open http://localhost:5173/tokens, click "Mint new token", copy the value.
+#   2. Add to asianf/.env:  FORTIFY_KEY=fty_test_...
+#   3. Run:
+make serve
+```
+
+First-time setup (each sub-project has its own deps):
+
+```bash
+make platform-api-install   # uv sync inside platform/api/
+make dashboard-install      # pnpm install inside platform/dashboard/
 ```
 
 Then open http://localhost:5173/playground — type a message, watch the live stream of tool calls and policy decisions from your local agent.
@@ -563,6 +569,114 @@ That means the same agent code can stay simple in development, while deployment 
 - if no approval handler is attached, it behaves like a graceful block — the tool returns a structured `ok: False` result with `error_type: "approval_required"` so the agent can try a fallback instead of crashing
 - if an approval handler is attached (via `enforce_policy(..., approval_handler=...)`), the host can decide whether to allow the action at runtime
 
+## 🧩 Policy Bundles — Compile, Sign, Enforce (WASM)
+
+Fortify has **two policy enforcement engines** that return identical decisions (there's a parity test suite that proves it):
+
+- **pydantic** (default) — evaluates constraints in-process. Zero setup; this is what every example above uses.
+- **WASM** — compiles `policy.yaml` → Rego → a WebAssembly module evaluated via `wasmtime`. This is the path production ships: one compiled artifact, byte-for-byte reproducible, cryptographically signed by the platform.
+
+Why a second engine: the WASM path produces a **portable, signed artifact** (a "bundle"), surfaces **structured deny reasons** (exactly which constraints failed), and chains trust back to the platform's signing key — the same key that signs your biscuit tokens.
+
+### Prerequisite — `opa`
+
+The WASM compile step shells out to the [Open Policy Agent](https://www.openpolicyagent.org/) binary. Install it once:
+
+```bash
+brew install opa            # macOS
+# or see https://www.openpolicyagent.org/docs/latest/#running-opa
+```
+
+Without `opa` on `PATH`, `fortify policy build --no-wasm` still emits the yaml + rego (no `.wasm`), and the pydantic engine keeps working.
+
+### The `fortify policy` CLI
+
+```bash
+# Validate a policy.yaml without the network — parse + check every constraint
+fortify policy validate policy.yaml
+
+# See the Rego your YAML compiles to (stdout)
+fortify policy show-rego policy.yaml
+
+# Dry-run a single decision. --engine wasm compiles + evaluates in wasmtime
+# (matching production); the default pydantic engine needs no opa.
+fortify policy test policy.yaml --role billing --tool refund_order \
+    --args '{"amount": 200, "currency": "USD"}' --engine wasm
+
+# Compile a bundle: writes {stem}.yaml + .rego + .wasm + .bundle.json
+fortify policy build policy.yaml --out ./bundle
+```
+
+On a denied wasm decision, `test` prints the violated constraint strings verbatim:
+
+```text
+✗ DENY · billing → refund_order({"amount": 700})
+  violations:
+    • args.amount <= 500
+```
+
+### What's in a bundle
+
+`fortify policy build` produces a directory:
+
+| File | Contents |
+|---|---|
+| `{stem}.yaml` | the source policy (verbatim) |
+| `{stem}.rego` | the compiled Rego module |
+| `{stem}.wasm` | the WebAssembly module — what actually evaluates at runtime |
+| `{stem}.bundle.json` | manifest: sha256 of each artifact + a `wasm_hash` |
+| `{stem}.bundle.json.sig` | detached Ed25519 signature over the manifest (signed bundles only) |
+
+The manifest's hashes authenticate the files; the signature authenticates the manifest. Verifying both proves the whole bundle came from the trusted signer, untampered.
+
+### Local enforcement — `FORTIFY_LOCAL_POLICY`
+
+Point an agent at a local bundle and every tool call routes through the WASM engine instead of pydantic — no platform needed. This is the dev-iteration path: edit `policy.yaml`, rebuild, restart, see the change.
+
+```bash
+fortify policy build policy.yaml --out ./bundle
+FORTIFY_LOCAL_POLICY=./bundle fortify chat --agent researcher
+# [fortify] FORTIFY_LOCAL_POLICY active: ./bundle (wasm_hash=7e6d1f8b..., unsigned)
+```
+
+The bundle's integrity (files match the manifest) is verified eagerly at startup — a stale or corrupt bundle fails immediately, not at the first tool call.
+
+### Signing & verification
+
+Production bundles are signed so the runtime can prove a bundle is genuine before trusting it. The integrity hash chain catches accidental corruption; the signature catches a malicious author who edits a file *and* updates the manifest to match.
+
+Generate a keypair and sign a bundle locally:
+
+```bash
+fortify policy keygen --out ./keys/dev          # → dev.private (0600) + dev.public
+fortify policy build policy.yaml --out ./bundle --sign-key ./keys/dev.private
+# → ./bundle/policy.bundle.json.sig
+```
+
+At runtime, point the verifier at the public key:
+
+```bash
+FORTIFY_LOCAL_POLICY=./bundle \
+FORTIFY_BUNDLE_PUBKEY_PATH=./keys/dev.public \
+FORTIFY_BUNDLE_REQUIRE_SIGNATURE=true \
+fortify chat --agent researcher
+# [fortify] FORTIFY_LOCAL_POLICY active: ./bundle (wasm_hash=..., signed)
+```
+
+`FORTIFY_BUNDLE_REQUIRE_SIGNATURE` controls strictness — warn-by-default keeps local dev frictionless; opt into refusal for CI/prod:
+
+| Bundle | `PUBKEY_PATH` set | `REQUIRE_SIGNATURE` | Outcome |
+|---|---|---|---|
+| signed | yes | either | verify; **refuse if it fails** |
+| signed | no | `false` | load with warning (can't verify) |
+| signed | no | `true` | **refuse** (no key to check against) |
+| unsigned | — | `false` (default) | load with warning |
+| unsigned | — | `true` | **refuse** |
+
+Keys are raw Ed25519, base64url-encoded — the same format the platform's JWKS endpoint publishes, so production verification reuses the public key your SDK already trusts for biscuit tokens. One root key, two artifacts.
+
+> **Keys are gitignored.** `*.private` and `*.pem` are in `.gitignore` so a signing key never lands in version control. Public keys (`*.public`) are safe to commit.
+
 ## ✅ Approval-Required Tool Calls
 
 Approval handlers are the bridge between static Gate 1 policy and real product interaction. Use them when a tool should be **generally allowed in principle** but only after a user, CLI host, or UI host explicitly approves the specific call.
@@ -777,34 +891,63 @@ Copy `.env.sample` to `.env` and set:
 - `LANGFUSE_PUBLIC_KEY`
 - optional `LANGFUSE_HOST`
 
-## 🧪 Tests
+Policy-bundle enforcement (see [Policy Bundles](#-policy-bundles--compile-sign-enforce-wasm)) reads a few more, all optional:
 
-The SDK suite (367 cases) lives at `tests/` and runs with `pytest`. The platform suite (36 cases) lives at `platform/api/tests/`.
+| Env var | Purpose |
+|---|---|
+| `FORTIFY_LOCAL_POLICY` | Path to a bundle directory; overrides the agent's policy with the WASM engine |
+| `FORTIFY_BUNDLE_PUBKEY_PATH` | base64url Ed25519 public key used to verify a bundle's signature |
+| `FORTIFY_BUNDLE_REQUIRE_SIGNATURE` | `true` to refuse unsigned or unverifiable bundles (default: warn only) |
+| `FORTIFY_OPA_BIN` | Override the `opa` binary location (default: search `PATH`) |
 
-If you're already in a project virtualenv (`asianf/.venv/`):
+## 🧪 Tests & Dev Tooling
+
+A `Makefile` at the repo root wraps the day-to-day commands so you don't have to remember the `uv` incantations.
 
 ```bash
-uv run pytest tests/                                # SDK
-cd platform/api && uv run pytest tests/             # platform
+make help            # list every target with descriptions
+make install-dev     # uv sync --extra dev (first time only)
+make test            # full SDK test suite, quiet
+make check           # lint + fmt-check + test (matches CI)
+make test-one T=tests/security/test_bundle.py   # single file
 ```
 
-If you keep your dev env elsewhere (e.g. a `micromamba` env), point `uv` at it and pass `--active` so it doesn't try to manage `.venv` for you:
+Targets at a glance:
+
+| Target | What it runs |
+|---|---|
+| **SDK dev loop** | |
+| `test` / `test-verbose` / `test-failed` / `test-one` | `pytest tests/` with various flags |
+| `lint` / `lint-fix` | `ruff check` (with `--fix` for autofixes) |
+| `fmt` / `fmt-check` | `ruff format` |
+| `check` | `lint` + `fmt-check` + `test` — pre-push gate |
+| **M2 policy demo** | |
+| `policy-build` | Compile the example policy.yaml to a bundle |
+| `policy-test-wasm` | Smoke a WASM-engine decision |
+| `demo-override` | Build a deny bundle + chat with `FORTIFY_LOCAL_POLICY` |
+| **Platform demo** (multi-terminal — see `make demo-platform`) | |
+| `platform-api` / `platform-api-install` / `platform-api-test` | FastAPI control plane in `platform/api/` |
+| `dashboard` / `dashboard-install` | Vite + React app in `platform/dashboard/` |
+| `serve` | `fortify serve` — bridge this SDK to the platform |
+| `demo-platform` | Print the 3-terminal recipe |
+| **Misc** | |
+| `build` / `clean` | Package + tidy |
+
+By default `uv` manages its own `.venv` (created by `make install-dev`). If you keep your dev environment elsewhere — e.g. a `micromamba` env — point `uv` at it once and `make` picks it up:
 
 ```bash
-# Make uv use your current micromamba env as the project environment.
 export UV_PROJECT_ENVIRONMENT=/Users/<you>/micromamba/envs/<your-env>
-
-# First time only: pull dev-only deps (pytest-asyncio, ruff, etc.) into it.
-uv sync --extra dev
-
-# Run any uv-driven command against that env from now on.
-uv run --active pytest tests/
-uv run --active ruff check .
+uv sync --extra dev           # one-time: install dev deps into that env
+make test                     # now runs against the micromamba env
 ```
 
-Without `--extra dev` you'll see *"async functions are not natively supported"* across every `@pytest.mark.asyncio` test — `pytest-asyncio` lives in the dev group and isn't installed by a plain `uv sync`. Same trap if you bring up a fresh env and forget the flag.
+Drop the `export` into your shell rc (or a `direnv` `.envrc`) and forget about it. Without `--extra dev`, `pytest-asyncio` is missing and you'll see *"async functions are not natively supported"* across every async test — same trap on a fresh env.
 
-Drop the `UV_PROJECT_ENVIRONMENT` export into your shell rc (or a per-project `direnv` `.envrc`) if you don't want to type it every shell.
+The platform-side test suite is separate and lives at `platform/api/tests/`:
+
+```bash
+cd platform/api && uv run pytest tests/
+```
 
 ## ▶️ Run It
 
@@ -1088,7 +1231,7 @@ Each tool can carry a `constraints:` list of string expressions evaluated agains
 | `in` | `args.template in ["a", "b"]` | RHS must be a JSON list |
 | `not in` | `args.priority not in ["urgent"]` | Two-word operator, treated as one |
 
-Constraints intentionally look like Rego conditions — when the policy engine swaps in OPA in a later milestone, the strings carry through unchanged. To compose with AND, emit multiple lines; to compose with OR, emit two tools or two roles.
+Constraints are Rego conditions by design: the [WASM engine](#-policy-bundles--compile-sign-enforce-wasm) compiles them to OPA Rego unchanged, and the pydantic engine evaluates the same strings in-process — both produce identical decisions. To compose with AND, emit multiple lines; to compose with OR, emit two tools or two roles.
 
 ### Policy + role end-to-end
 

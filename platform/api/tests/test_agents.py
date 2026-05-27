@@ -45,8 +45,9 @@ def engine():
 
 
 @pytest.fixture
-def client(engine) -> TestClient:
+def client(engine, tmp_path) -> TestClient:
     """TestClient that routes ``get_session`` through the shared test engine."""
+    from keystore import FileKeyStore
 
     def override_session():
         with Session(engine) as session:
@@ -54,12 +55,20 @@ def client(engine) -> TestClient:
 
     # Endpoints use the local main.get_session, so we override that one.
     app.dependency_overrides[main.get_session] = override_session
+    # PUT /agents now compiles + signs the policy bundle, so the endpoint
+    # needs an initialised keystore. The fixture doesn't run the app
+    # lifespan, so wire up a throwaway temp-dir keystore here and restore
+    # the original afterward.
+    original_keystore = main.keystore
+    main.keystore = FileKeyStore(base_dir=tmp_path / "keystore")
+    main.keystore.ensure_keypair()
     with Session(engine) as bootstrap:
         ensure_default_project(bootstrap)
     try:
         yield TestClient(app)
     finally:
         app.dependency_overrides.clear()
+        main.keystore = original_keystore
 
 
 # ---------------------------------------------------------------------------

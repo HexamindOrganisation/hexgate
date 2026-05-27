@@ -36,6 +36,13 @@ class AgentRead(BaseModel):
     policy_yaml: str
     system_md: str
     updated_at: datetime
+    # Signed WASM bundle compiled from policy_yaml at save time. Null when
+    # the platform couldn't compile (opa missing or bad policy) — the SDK
+    # then falls back to the pydantic engine. wasm + signature are base64;
+    # manifest is the exact signed JSON text (verified over its bytes).
+    bundle_wasm_b64: Optional[str] = None
+    bundle_manifest: Optional[str] = None
+    bundle_signature_b64: Optional[str] = None
 
 
 class AgentUpdate(BaseModel):
