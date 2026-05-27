@@ -169,6 +169,41 @@ def test_update_agent_without_sign_stores_no_bundle(session) -> None:
 
 
 # ---------------------------------------------------------------------------
+# backfill_bundles — seeded agents get bundles at startup
+# ---------------------------------------------------------------------------
+
+
+@needs_opa
+def test_backfill_signs_seeded_agents(session, signer) -> None:
+    """Seeded agents start bundle-less; backfill compiles + signs them so
+    they're served via WASM on the first request, not just after an edit."""
+    from sqlmodel import select
+    from models import Agent
+
+    sign, public_raw = signer
+
+    # Seeds are inserted without a bundle.
+    assert all(a.compiled_wasm is None for a in session.exec(select(Agent)).all())
+
+    n = services.backfill_bundles(session, sign)
+    assert n >= 1
+
+    # Every agent now carries a verifiable bundle.
+    for a in session.exec(select(Agent)).all():
+        assert a.compiled_wasm is not None
+        verify_bytes(a.bundle_manifest.encode("utf-8"), a.bundle_signature, public_raw)
+
+
+@needs_opa
+def test_backfill_is_idempotent(session, signer) -> None:
+    """A second backfill touches nothing — already-bundled agents are skipped."""
+    sign, _ = signer
+    first = services.backfill_bundles(session, sign)
+    assert first >= 1
+    assert services.backfill_bundles(session, sign) == 0
+
+
+# ---------------------------------------------------------------------------
 # Wire format (_agent_read serializer)
 # ---------------------------------------------------------------------------
 

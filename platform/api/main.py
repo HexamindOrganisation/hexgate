@@ -39,6 +39,7 @@ from schemas import (
     ValidatePolicyResponse,
 )
 from services import (
+    backfill_bundles,
     delete_dev_token,
     ensure_default_project,
     find_token_by_secret,
@@ -62,6 +63,9 @@ async def lifespan(_: FastAPI):
     keystore.ensure_keypair()
     with Session(engine) as session:
         ensure_default_project(session)
+        # Backfill signed bundles for seeded agents so they're served via
+        # WASM on the first request, not just after their first edit.
+        backfill_bundles(session, keystore.sign)
     yield
 
 

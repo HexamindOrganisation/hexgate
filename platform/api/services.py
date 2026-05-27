@@ -203,6 +203,34 @@ def update_agent(
     return agent
 
 
+def backfill_bundles(session: Session, sign: Callable[[bytes], bytes]) -> int:
+    """Compile + sign a bundle for every agent that doesn't already have one.
+
+    Seeded agents are inserted directly (``ensure_default_project`` builds
+    ``Agent(...)`` without the save-time compile hook), so on a fresh DB
+    they start bundle-less and would be served via the pydantic fallback.
+    Running this at startup means even a brand-new platform serves signed
+    WASM bundles for the seeds on the very first request.
+
+    Idempotent: agents that already carry a bundle are skipped, and a
+    policy that won't compile (or a platform without opa) is simply left
+    bundle-less. Returns the number of agents backfilled.
+    """
+    count = 0
+    for agent in session.exec(select(Agent)).all():
+        if agent.compiled_wasm is not None:
+            continue
+        bundle = compile_bundle(agent.policy_yaml, sign)
+        if bundle is None:
+            continue
+        agent.compiled_wasm, agent.bundle_manifest, agent.bundle_signature = bundle
+        session.add(agent)
+        count += 1
+    if count:
+        session.commit()
+    return count
+
+
 def mint_dev_token(
     session: Session,
     project_id: str,
