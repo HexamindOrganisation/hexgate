@@ -4,7 +4,6 @@ import logging
 import secrets
 from typing import Callable
 
-import yaml
 from sqlalchemy import func
 from sqlmodel import Session, select
 
@@ -124,18 +123,14 @@ def compile_bundle(
     never touches the event loop.
     """
     # Imported lazily so the platform still boots if the SDK / opa aren't
-    # present — only save-time compilation needs them.
-    from fortify.security import compile_to_rego, compile_to_wasm
+    # present — only save-time compilation needs them. build_signed_bundle
+    # is the SAME helper `fortify policy build` uses, so the manifest format
+    # and its byte-exact serialization can't drift between the two.
+    from fortify.security import build_signed_bundle
     from fortify.security.rego_wasm import OpaNotFoundError
 
     try:
-        payload = yaml.safe_load(policy_yaml) or {}
-        if not isinstance(payload, dict):
-            logger.warning("compile_bundle: policy is not a YAML mapping; skipping")
-            return None
-        source_hash = hashlib.sha256(policy_yaml.encode("utf-8")).hexdigest()
-        rego = compile_to_rego(payload, source_hash=source_hash)
-        wasm = compile_to_wasm(rego).wasm
+        bundle = build_signed_bundle(policy_yaml, sign=sign)
     except OpaNotFoundError:
         logger.warning(
             "compile_bundle: opa not on PATH — storing no bundle "
@@ -148,18 +143,7 @@ def compile_bundle(
         logger.warning("compile_bundle: policy did not compile: %s", exc)
         return None
 
-    manifest = {
-        "version": 1,
-        "source": "policy.yaml",
-        "source_hash": source_hash,
-        "rego_hash": hashlib.sha256(rego.encode("utf-8")).hexdigest(),
-        "wasm_hash": hashlib.sha256(wasm).hexdigest(),
-    }
-    # Serialize with the SAME convention as `fortify policy build` so the
-    # bytes are reproducible; sign these exact bytes.
-    manifest_text = json.dumps(manifest, indent=2, sort_keys=True) + "\n"
-    signature = sign(manifest_text.encode("utf-8"))
-    return wasm, manifest_text, signature
+    return bundle.wasm_bytes, bundle.manifest_bytes.decode("utf-8"), bundle.signature
 
 
 def update_agent(

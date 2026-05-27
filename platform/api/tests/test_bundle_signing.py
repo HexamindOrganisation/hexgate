@@ -112,8 +112,9 @@ def test_compile_bundle_returns_none_when_opa_missing(
     def boom(*_a, **_k):
         raise OpaNotFoundError("opa not found (simulated)")
 
-    # Patch the symbol as imported inside compile_bundle's function scope.
-    monkeypatch.setattr("fortify.security.compile_to_wasm", boom)
+    # build_signed_bundle imports compile_to_wasm from rego_wasm directly,
+    # so patch it there (not the fortify.security package re-export).
+    monkeypatch.setattr("fortify.security.rego_wasm.compile_to_wasm", boom)
     sign, _ = signer
     assert compile_bundle(_DEMO_POLICY, sign) is None
 

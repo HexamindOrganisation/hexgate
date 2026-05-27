@@ -21,6 +21,8 @@ from fortify.security.bundle import (
     BundleLoadError,
     BundleSignatureError,
     PolicyBundle,
+    SignedBundle,
+    build_signed_bundle,
 )
 from fortify.security.signing import (
     SignatureError,
@@ -83,6 +85,7 @@ __all__ = [
     "PolicyMode",
     "PolicySet",
     "PolicySetError",
+    "SignedBundle",
     "ToolPolicy",
     "WasmArtifact",
     "WasmCompileError",
@@ -90,6 +93,7 @@ __all__ = [
     "WasmPolicy",
     "authorize_tool_call",
     "authorize_tool_call_wasm",
+    "build_signed_bundle",
     "check_constraints",
     "compile_default_only",
     "compile_to_rego",

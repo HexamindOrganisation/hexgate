@@ -18,8 +18,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
+
+import yaml
 
 from fortify.security.signing import SignatureError, verify_bytes
 from fortify.security.wasm_engine import WasmPolicy
@@ -279,3 +282,92 @@ class PolicyBundle:
     @property
     def wasm_hash(self) -> str | None:
         return self.manifest.get("wasm_hash")
+
+
+# ---------------------------------------------------------------------------
+# Producer side — compile (+ optionally sign) a bundle from policy YAML
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class SignedBundle:
+    """The artifacts ``fortify policy build`` and the platform both emit.
+
+    ``manifest_bytes`` are the *exact* bytes the signature covers — callers
+    must persist/transmit these verbatim, never a re-serialization of
+    ``manifest`` (that's the canonicalization-free invariant
+    :meth:`PolicyBundle.verify_signature` relies on).
+    """
+
+    rego_text: str
+    wasm_bytes: bytes | None        # None when compile_wasm=False (--no-wasm)
+    manifest: dict
+    manifest_bytes: bytes
+    signature: bytes | None         # None when no `sign` callback was given
+
+    @property
+    def source_hash(self) -> str | None:
+        return self.manifest.get("source_hash")
+
+    @property
+    def wasm_hash(self) -> str | None:
+        return self.manifest.get("wasm_hash")
+
+
+def build_signed_bundle(
+    policy_yaml: str,
+    *,
+    source_name: str = "policy.yaml",
+    sign: Callable[[bytes], bytes] | None = None,
+    compile_wasm: bool = True,
+    opa_bin: str | None = None,
+) -> SignedBundle:
+    """Compile policy YAML to a (optionally signed) bundle — one source of truth.
+
+    Both ``fortify policy build`` (the CLI) and the platform's save-time
+    pipeline call this, so the manifest schema + its byte-exact
+    serialization live in exactly one place. Two divergent copies would
+    silently break signature verification across the SDK↔platform seam,
+    since the signature is computed over those exact bytes.
+
+    Raises on failure — ``PolicySetError`` / ``ConstraintParseError`` /
+    ``ValidationError`` from the Rego compile, ``OpaNotFoundError`` /
+    ``WasmCompileError`` from the WASM compile. Callers translate to their
+    own UX (the CLI prints + exits; the platform logs + degrades to a
+    bundle-less save).
+    """
+    # Lazy import keeps bundle.py importable (and the platform booting) even
+    # when the opa-backed compiler isn't needed — only producers hit this.
+    from fortify.security.rego import compile_to_rego
+    from fortify.security.rego_wasm import compile_to_wasm
+
+    payload = yaml.safe_load(policy_yaml) or {}
+    source_hash = hashlib.sha256(policy_yaml.encode("utf-8")).hexdigest()
+    rego_text = compile_to_rego(payload, source_hash=source_hash)
+
+    wasm_bytes: bytes | None = None
+    wasm_hash: str | None = None
+    if compile_wasm:
+        wasm_bytes = compile_to_wasm(rego_text, opa_bin=opa_bin).wasm
+        wasm_hash = hashlib.sha256(wasm_bytes).hexdigest()
+
+    manifest = {
+        "version": 1,
+        "source": source_name,
+        "source_hash": source_hash,
+        "rego_hash": hashlib.sha256(rego_text.encode("utf-8")).hexdigest(),
+        "wasm_hash": wasm_hash,
+    }
+    # The one canonical serialization. Sign these exact bytes.
+    manifest_bytes = (
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n"
+    ).encode("utf-8")
+    signature = sign(manifest_bytes) if sign is not None else None
+
+    return SignedBundle(
+        rego_text=rego_text,
+        wasm_bytes=wasm_bytes,
+        manifest=manifest,
+        manifest_bytes=manifest_bytes,
+        signature=signature,
+    )

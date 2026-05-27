@@ -36,6 +36,7 @@ from fortify.security import (
     WasmEvalError,
     WasmPolicy,
     authorize_tool_call,
+    build_signed_bundle,
     compile_to_rego,
     compile_to_wasm,
     decode_key,
@@ -252,27 +253,32 @@ def _main_build(args: argparse.Namespace) -> int:
             print(err, file=sys.stderr)
             return 1
 
-    source_hash = hashlib.sha256(source_text.encode("utf-8")).hexdigest()
+    # One source of truth for compile + manifest + sign — shared with the
+    # platform's save-time pipeline (see build_signed_bundle). We only
+    # translate its exceptions into the CLI's print + exit-code UX here.
+    sign_cb = (
+        (lambda data: sign_bytes(data, sign_key)) if sign_key is not None else None
+    )
     try:
-        rego = compile_to_rego(payload, source_hash=source_hash)
+        bundle = build_signed_bundle(
+            source_text,
+            source_name=source_path.name,
+            sign=sign_cb,
+            compile_wasm=not args.no_wasm,
+        )
     except (PolicySetError, ConstraintParseError, ValidationError) as exc:
         print(f"compile error: {exc}", file=sys.stderr)
         return 1
-
-    wasm_bytes: bytes | None = None
-    if not args.no_wasm:
-        try:
-            wasm_bytes = compile_to_wasm(rego).wasm
-        except OpaNotFoundError as exc:
-            print(
-                f"wasm compile skipped — {exc}\n"
-                "Pass --no-wasm to suppress this and emit yaml+rego only.",
-                file=sys.stderr,
-            )
-            return 1
-        except WasmCompileError as exc:
-            print(f"wasm compile error: {exc}", file=sys.stderr)
-            return 1
+    except OpaNotFoundError as exc:
+        print(
+            f"wasm compile skipped — {exc}\n"
+            "Pass --no-wasm to suppress this and emit yaml+rego only.",
+            file=sys.stderr,
+        )
+        return 1
+    except WasmCompileError as exc:
+        print(f"wasm compile error: {exc}", file=sys.stderr)
+        return 1
 
     # Resolve to an absolute path up front so all derived paths are
     # unambiguous — a relative --out otherwise breaks the relative_to()
@@ -290,29 +296,15 @@ def _main_build(args: argparse.Namespace) -> int:
     # is reusing the source dir as the output dir, the YAML write is a
     # no-op (same bytes).
     yaml_out.write_text(source_text, encoding="utf-8")
-    rego_out.write_text(rego, encoding="utf-8")
-    rego_hash = hashlib.sha256(rego.encode("utf-8")).hexdigest()
-    wasm_hash: str | None = None
+    rego_out.write_text(bundle.rego_text, encoding="utf-8")
+    wasm_bytes = bundle.wasm_bytes
     if wasm_bytes is not None:
         wasm_out.write_bytes(wasm_bytes)
-        wasm_hash = hashlib.sha256(wasm_bytes).hexdigest()
-    manifest = {
-        "version": 1,
-        "source": str(source_path.name),
-        "source_hash": source_hash,
-        "rego_hash": rego_hash,
-        "wasm_hash": wasm_hash,
-    }
-    # Capture the exact bytes we write — the signature is computed over
-    # these, so there's no JSON-canonicalization gap at verify time.
-    manifest_bytes = (
-        json.dumps(manifest, indent=2, sort_keys=True) + "\n"
-    ).encode("utf-8")
-    bundle_out.write_bytes(manifest_bytes)
+    bundle_out.write_bytes(bundle.manifest_bytes)
 
     sig_out = out_dir / f"{stem}.bundle.json.sig"
-    if sign_key is not None:
-        sig_out.write_bytes(sign_bytes(manifest_bytes, sign_key))
+    if bundle.signature is not None:
+        sig_out.write_bytes(bundle.signature)
 
     print(f"✓ Wrote {_display_path(yaml_out)}")
     print(f"✓ Wrote {_display_path(rego_out)}")
