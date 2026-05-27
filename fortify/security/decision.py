@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 
 
 class DecisionOutcome(str, Enum):
@@ -13,6 +14,58 @@ class DecisionOutcome(str, Enum):
     ALLOW = "allow"
     DENY = "deny"
     NEEDS_APPROVAL = "needs_approval"
+
+
+@dataclass(frozen=True, slots=True)
+class Verdict:
+    """Engine-agnostic result of evaluating one tool call.
+
+    What a policy engine knows on its own — the outcome plus any
+    structured detail it produced — with none of the host context
+    (agent name, role, argument snapshot) that :class:`PolicyEnforcer`
+    layers on top when it builds a :class:`Decision`.
+
+    Both engines return this shape so the enforcer never branches on
+    which one ran:
+
+      * ``violations`` — raw constraint strings the call failed (WASM
+        engine); empty otherwise.
+      * ``hint`` — machine-readable file-scope hint on a path denial
+        (pydantic engine); ``None`` otherwise.
+    """
+
+    outcome: DecisionOutcome
+    reason: str = ""
+    violations: tuple[str, ...] = ()
+    hint: dict[str, Any] | None = None
+
+    @property
+    def allowed(self) -> bool:
+        return self.outcome is DecisionOutcome.ALLOW
+
+
+@runtime_checkable
+class PolicyEngine(Protocol):
+    """Evaluates one proposed tool call into a :class:`Verdict`.
+
+    Implemented by :class:`~fortify.security.policy_set.PolicySet` (the
+    pydantic engine) and :class:`~fortify.security.bundle.PolicyBundle`
+    (the WASM engine). The two are interchangeable from
+    :class:`~fortify.security.enforcer.PolicyEnforcer`'s point of view —
+    it depends on this protocol, not on either concrete type.
+    """
+
+    def evaluate(
+        self, *, role: str | None, tool: str, args: Mapping[str, Any]
+    ) -> Verdict: ...
+
+
+# Outcome → the legacy ``error_type`` tag adapters key off of in rendered
+# payloads/messages. ALLOW has no error tag.
+_ERROR_TYPE_BY_OUTCOME: dict[DecisionOutcome, str] = {
+    DecisionOutcome.DENY: "policy_denied",
+    DecisionOutcome.NEEDS_APPROVAL: "approval_required",
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -26,7 +79,37 @@ class Decision:
     reason: str = ""
     error_type: str | None = None
     hint: dict[str, Any] | None = None
+    violations: tuple[str, ...] = ()
     arguments: dict[str, Any] | None = None
+
+    @classmethod
+    def from_verdict(
+        cls,
+        verdict: Verdict,
+        *,
+        agent_name: str,
+        tool_name: str,
+        role: str | None = None,
+        arguments: dict[str, Any] | None = None,
+    ) -> "Decision":
+        """Lift an engine :class:`Verdict` into a host-facing decision.
+
+        The verdict carries the outcome and any structured detail the
+        engine produced (reason, file-scope hint); this stamps on the
+        host context the engine doesn't know — agent name, role, and the
+        argument snapshot — and derives the ``error_type`` tag.
+        """
+        return cls(
+            outcome=verdict.outcome,
+            agent_name=agent_name,
+            tool_name=tool_name,
+            role=role,
+            reason=verdict.reason,
+            error_type=_ERROR_TYPE_BY_OUTCOME.get(verdict.outcome),
+            hint=verdict.hint,
+            violations=verdict.violations,
+            arguments=arguments,
+        )
 
     @property
     def allowed(self) -> bool:
@@ -45,6 +128,8 @@ class Decision:
             payload["role"] = self.role
         if self.hint is not None:
             payload["hint"] = self.hint
+        if self.violations:
+            payload["violations"] = list(self.violations)
         return payload
 
     def as_error_message(self) -> str:

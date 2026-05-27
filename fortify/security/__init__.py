@@ -33,12 +33,21 @@ from fortify.security.signing import (
     sign_bytes,
     verify_bytes,
 )
+from fortify.security.decision import (
+    Decision,
+    DecisionOutcome,
+    PolicyEngine,
+    Verdict,
+)
 from fortify.security.policy import (
     authorize_tool_call,
     authorize_tool_call_wasm,
     default_agent_policy,
+    evaluate_tool_call,
+    evaluate_tool_call_wasm,
     get_tool_policy,
     load_policy,
+    verdict_from_rego,
 )
 from fortify.security.policy_set import (
     DEFAULT_ROLE_NAME,
@@ -58,7 +67,7 @@ from fortify.security.rego_wasm import (
 )
 from fortify.security.wasm_engine import (
     DEFAULT_ENTRYPOINT,
-    Decision,
+    RegoVerdict,
     WasmEvalError,
     WasmPolicy,
 )
@@ -84,6 +93,7 @@ __all__ = [
     "PolicyDeniedError",
     "PolicyMode",
     "PolicySet",
+    "RegoVerdict",
     "PolicySetError",
     "SignedBundle",
     "ToolPolicy",
@@ -91,8 +101,14 @@ __all__ = [
     "WasmCompileError",
     "WasmEvalError",
     "WasmPolicy",
+    "DecisionOutcome",
+    "PolicyEngine",
+    "Verdict",
     "authorize_tool_call",
     "authorize_tool_call_wasm",
+    "evaluate_tool_call",
+    "evaluate_tool_call_wasm",
+    "verdict_from_rego",
     "build_signed_bundle",
     "check_constraints",
     "compile_default_only",

@@ -8,8 +8,9 @@ from typing import TYPE_CHECKING, Any
 import yaml
 
 from fortify.security.constraints import check_constraints
+from fortify.security.decision import DecisionOutcome, Verdict
 from fortify.security.errors import ApprovalRequiredError, PolicyDeniedError
-from fortify.security.file_scope import is_path_allowed
+from fortify.security.file_scope import build_file_scope_hint, is_path_allowed
 from fortify.security.models import AgentPolicy, FileToolPolicy, ToolPolicy
 
 if TYPE_CHECKING:
@@ -38,6 +39,67 @@ def get_tool_policy(policy: AgentPolicy, tool_name: str) -> ToolPolicy:
     return policy.tools.get(tool_name, policy.default_policy)
 
 
+def evaluate_tool_call(
+    policy: AgentPolicy,
+    tool_name: str,
+    arguments: dict[str, Any] | None = None,
+) -> Verdict:
+    """Return a :class:`Verdict` for a proposed tool call (pydantic engine).
+
+    Evaluates the tool's ``constraints`` list against the invocation's
+    arguments (see :mod:`fortify.security.constraints` for the grammar).
+    Every constraint must pass for the call to authorize — fail-closed by
+    design. A path denial carries a machine-readable ``hint`` so the host
+    can tell the model what scope it stayed within.
+
+    Returns rather than raises; :func:`authorize_tool_call` wraps this for
+    callers that want the legacy raise-on-deny contract. A malformed
+    constraint (:class:`~fortify.security.constraints.ConstraintParseError`)
+    is a config error, not a denial, so it propagates instead of becoming
+    a DENY verdict.
+    """
+    tool_policy = get_tool_policy(policy, tool_name)
+    if tool_policy.mode == "deny":
+        return Verdict(
+            outcome=DecisionOutcome.DENY,
+            reason=f'Policy denied tool "{tool_name}"',
+        )
+
+    try:
+        check_constraints(tool_policy.constraints, arguments, tool_name)
+    except PolicyDeniedError as exc:
+        return Verdict(outcome=DecisionOutcome.DENY, reason=str(exc))
+
+    if isinstance(tool_policy, FileToolPolicy) and not is_path_allowed(
+        tool_name, arguments, tool_policy
+    ):
+        return Verdict(
+            outcome=DecisionOutcome.DENY,
+            reason=f'Policy denied tool "{tool_name}" for the requested path',
+            hint=build_file_scope_hint(tool_policy),
+        )
+
+    if tool_policy.mode == "allow":
+        return Verdict(outcome=DecisionOutcome.ALLOW)
+    if tool_policy.mode == "approval_required":
+        return Verdict(
+            outcome=DecisionOutcome.NEEDS_APPROVAL,
+            reason=f'Policy requires approval for tool "{tool_name}"',
+        )
+    return Verdict(
+        outcome=DecisionOutcome.DENY,
+        reason=f'Policy denied tool "{tool_name}"',
+    )
+
+
+def _raise_for_verdict(verdict: Verdict) -> None:
+    """Translate a non-allow :class:`Verdict` into the legacy exception."""
+    if verdict.outcome is DecisionOutcome.DENY:
+        raise PolicyDeniedError(verdict.reason)
+    if verdict.outcome is DecisionOutcome.NEEDS_APPROVAL:
+        raise ApprovalRequiredError(verdict.reason)
+
+
 def authorize_tool_call(
     policy: AgentPolicy,
     tool_name: str,
@@ -45,29 +107,67 @@ def authorize_tool_call(
 ) -> None:
     """Raise when a tool call is denied or requires approval.
 
-    Evaluates the tool's ``constraints`` list against the invocation's
-    arguments (see :mod:`fortify.security.constraints` for the grammar).
-    Every constraint must pass for the call to authorize — fail-closed by
-    design.
+    Thin raise-on-deny wrapper over :func:`evaluate_tool_call`, kept for
+    callers (the CLI, direct API users) that prefer the exception contract.
     """
-    tool_policy = get_tool_policy(policy, tool_name)
-    if tool_policy.mode == "deny":
-        raise PolicyDeniedError(f'Policy denied tool "{tool_name}"')
+    _raise_for_verdict(evaluate_tool_call(policy, tool_name, arguments))
 
-    check_constraints(tool_policy.constraints, arguments, tool_name)
 
-    if isinstance(tool_policy, FileToolPolicy) and not is_path_allowed(
-        tool_name, arguments, tool_policy
-    ):
-        raise PolicyDeniedError(
-            f'Policy denied tool "{tool_name}" for the requested path'
+def evaluate_tool_call_wasm(
+    bundle: PolicyBundle,
+    role: str,
+    tool_name: str,
+    arguments: dict[str, Any] | None = None,
+) -> Verdict:
+    """WASM-backed counterpart of :func:`evaluate_tool_call`.
+
+    Evaluates the policy bundle's compiled wasm module for the given
+    role + tool + args and maps the raw verdict onto an engine-agnostic
+    :class:`Verdict`, so callers can't tell which engine produced it.
+
+    On deny, ``violations`` carries the raw constraint strings the dev
+    wrote in their YAML (kept as a list, not flattened), and ``reason``
+    embeds them for a human-readable message. When no rule matched at all
+    (deny-by-absence rather than deny-by-constraint), the reason surfaces
+    a "no allow rule matched" hint so the message isn't silently empty.
+    """
+    decision = bundle.policy().decide(
+        role=role, tool=tool_name, args=arguments or {}
+    )
+    return verdict_from_rego(decision, tool_name=tool_name, role=role)
+
+
+def verdict_from_rego(rego: Any, *, tool_name: str, role: str) -> Verdict:
+    """Map a raw :class:`~fortify.security.wasm_engine.RegoVerdict` onto an
+    engine-agnostic :class:`Verdict`.
+
+    Shared by :func:`evaluate_tool_call_wasm` (production) and the CLI's
+    ``fortify policy test --engine wasm`` so both render WASM decisions
+    identically. Kept argument-typed as ``Any`` to avoid importing the
+    wasm engine eagerly — it only needs the ``allow`` /
+    ``requires_approval`` / ``violations`` attributes.
+    """
+    if rego.allow:
+        return Verdict(outcome=DecisionOutcome.ALLOW)
+    if rego.requires_approval:
+        return Verdict(
+            outcome=DecisionOutcome.NEEDS_APPROVAL,
+            reason=f'Policy requires approval for tool "{tool_name}"',
         )
-
-    if tool_policy.mode == "allow":
-        return
-    if tool_policy.mode == "approval_required":
-        raise ApprovalRequiredError(f'Policy requires approval for tool "{tool_name}"')
-    raise PolicyDeniedError(f'Policy denied tool "{tool_name}"')
+    if rego.violations:
+        reasons = "; ".join(rego.violations)
+        return Verdict(
+            outcome=DecisionOutcome.DENY,
+            reason=f'Policy denied tool "{tool_name}": {reasons}',
+            violations=tuple(rego.violations),
+        )
+    return Verdict(
+        outcome=DecisionOutcome.DENY,
+        reason=(
+            f'Policy denied tool "{tool_name}" '
+            f"(no allow rule matched for role={role!r})"
+        ),
+    )
 
 
 def authorize_tool_call_wasm(
@@ -76,33 +176,9 @@ def authorize_tool_call_wasm(
     tool_name: str,
     arguments: dict[str, Any] | None = None,
 ) -> None:
-    """WASM-backed counterpart of :func:`authorize_tool_call`.
+    """Raise-on-deny wrapper over :func:`evaluate_tool_call_wasm`.
 
-    Evaluates the policy bundle's compiled wasm module for the given
-    role + tool + args, then raises the same exception shape so call
+    Raises the same exception shape as :func:`authorize_tool_call` so call
     sites don't care which engine produced the decision.
-
-    On deny, the error message embeds the wasm ``violations`` list — the
-    raw constraint strings the dev wrote in their YAML. When no rule
-    matched at all (deny-by-absence rather than deny-by-constraint),
-    we surface a "no allow rule matched" hint so the message isn't
-    silently empty.
     """
-    decision = bundle.policy().decide(
-        role=role, tool=tool_name, args=arguments or {}
-    )
-    if decision.allow:
-        return
-    if decision.requires_approval:
-        raise ApprovalRequiredError(
-            f'Policy requires approval for tool "{tool_name}"'
-        )
-    if decision.violations:
-        reasons = "; ".join(decision.violations)
-        raise PolicyDeniedError(
-            f'Policy denied tool "{tool_name}": {reasons}'
-        )
-    raise PolicyDeniedError(
-        f'Policy denied tool "{tool_name}" '
-        f"(no allow rule matched for role={role!r})"
-    )
+    _raise_for_verdict(evaluate_tool_call_wasm(bundle, role, tool_name, arguments))

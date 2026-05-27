@@ -28,11 +28,13 @@ Mixin policies (``is_mixin: true``) can only be referenced via ``inherits``
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
 import yaml
 
+from fortify.security.decision import Verdict
 from fortify.security.models import AgentPolicy, BaseToolPolicy, ToolPolicy
 
 
@@ -65,6 +67,16 @@ class PolicySet:
         if role is None:
             return self._policies[DEFAULT_ROLE_NAME]
         return self._policies.get(role, self._policies[DEFAULT_ROLE_NAME])
+
+    def evaluate(
+        self, *, role: str | None, tool: str, args: Mapping[str, Any]
+    ) -> Verdict:
+        """:class:`~fortify.security.decision.PolicyEngine` entry point.
+
+        Resolves the role's policy and runs the pydantic engine."""
+        from fortify.security.policy import evaluate_tool_call
+
+        return evaluate_tool_call(self.policy_for(role), tool, dict(args))
 
     @property
     def roles(self) -> list[str]:

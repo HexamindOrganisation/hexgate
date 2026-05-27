@@ -18,12 +18,14 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 import yaml
 
+from fortify.security.decision import Verdict
 from fortify.security.signing import SignatureError, verify_bytes
 from fortify.security.wasm_engine import WasmPolicy
 
@@ -272,6 +274,20 @@ class PolicyBundle:
         if self._wasm_policy is None:
             self._wasm_policy = WasmPolicy.from_bytes(self.wasm_bytes)
         return self._wasm_policy
+
+    def evaluate(
+        self, *, role: str | None, tool: str, args: Mapping[str, Any]
+    ) -> Verdict:
+        """:class:`~fortify.security.decision.PolicyEngine` entry point.
+
+        Runs the compiled WASM module; ``None`` role falls back to the
+        ``default`` role, matching the pydantic engine."""
+        from fortify.security.policy import evaluate_tool_call_wasm
+        from fortify.security.policy_set import DEFAULT_ROLE_NAME
+
+        return evaluate_tool_call_wasm(
+            self, role or DEFAULT_ROLE_NAME, tool, dict(args)
+        )
 
     # ---- Metadata ------------------------------------------------------
 

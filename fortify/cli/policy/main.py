@@ -27,23 +27,24 @@ from yaml.error import MarkedYAMLError
 
 from fortify.security import (
     AgentPolicy,
-    ApprovalRequiredError,
+    DecisionOutcome,
     OpaNotFoundError,
-    PolicyDeniedError,
     PolicySetError,
     SignatureError,
+    Verdict,
     WasmCompileError,
     WasmEvalError,
     WasmPolicy,
-    authorize_tool_call,
     build_signed_bundle,
     compile_to_rego,
     compile_to_wasm,
     decode_key,
     encode_key,
+    evaluate_tool_call,
     generate_keypair,
     load_policy_set_from_dict,
     sign_bytes,
+    verdict_from_rego,
 )
 from fortify.security.constraints import ConstraintParseError, parse_constraint
 
@@ -155,7 +156,7 @@ def add_parser(subparsers: argparse._SubParsersAction) -> None:
         "test",
         help="Dry-run a tool-call decision against the policy.",
         description=(
-            "Runs authorize_tool_call against the given role/tool/args without "
+            "Evaluates the policy against the given role/tool/args without "
             "spinning up the agent. Prints ALLOW / DENY / APPROVAL_REQUIRED "
             "with the offending constraint when relevant. Designed for "
             "CI policy-test suites."
@@ -414,21 +415,35 @@ def _main_test(args: argparse.Namespace) -> int:
     return _test_via_pydantic(policy_set, args.role, args.tool, tool_args, label)
 
 
+def _render_verdict(verdict: Verdict, label: str) -> int:
+    """Print a verdict uniformly and return the process exit code.
+
+    Shared by both engines so pydantic and wasm decisions render the same
+    — including the structured ``violations`` / ``hint`` detail when the
+    engine produced it.
+    """
+    if verdict.outcome is DecisionOutcome.ALLOW:
+        print(f"✓ ALLOW · {label}")
+        return 0
+    if verdict.outcome is DecisionOutcome.NEEDS_APPROVAL:
+        print(f"⚠ APPROVAL_REQUIRED · {label}\n  reason: {verdict.reason}")
+        return 0
+    print(f"✗ DENY · {label}\n  reason: {verdict.reason}")
+    if verdict.violations:
+        print("  violations:")
+        for v in verdict.violations:
+            print(f"    • {v}")
+    if verdict.hint is not None:
+        print(f"  hint: {verdict.hint}")
+    return 1
+
+
 def _test_via_pydantic(
     policy_set: Any, role: str, tool: str, tool_args: dict, label: str
 ) -> int:
     """Run the decision through the in-process constraint evaluator."""
     policy: AgentPolicy = policy_set.policy_for(role)
-    try:
-        authorize_tool_call(policy, tool, tool_args)
-    except ApprovalRequiredError as exc:
-        print(f"⚠ APPROVAL_REQUIRED · {label}\n  reason: {exc}")
-        return 0
-    except PolicyDeniedError as exc:
-        print(f"✗ DENY · {label}\n  reason: {exc}")
-        return 1
-    print(f"✓ ALLOW · {label}")
-    return 0
+    return _render_verdict(evaluate_tool_call(policy, tool, tool_args), label)
 
 
 def _test_via_wasm(
@@ -452,18 +467,7 @@ def _test_via_wasm(
         print(f"wasm eval error: {exc}", file=sys.stderr)
         return 1
 
-    if decision.allow:
-        print(f"✓ ALLOW · {label}")
-        return 0
-    if decision.requires_approval:
-        print(f"⚠ APPROVAL_REQUIRED · {label}")
-        return 0
-    print(f"✗ DENY · {label}")
-    if decision.violations:
-        print("  violations:")
-        for v in decision.violations:
-            print(f"    • {v}")
-    return 1
+    return _render_verdict(verdict_from_rego(decision, tool_name=tool, role=role), label)
 
 
 # ---------------------------------------------------------------------------

@@ -2,7 +2,7 @@
 
 This module is the runtime counterpart to :mod:`fortify.security.rego_wasm`:
 that one *compiles* YAML → Rego → WASM, this one *evaluates* WASM →
-:class:`Decision`. The two together give us "same compiler the platform
+:class:`RegoVerdict`. The two together give us "same compiler the platform
 runs, same evaluator the agent runs" with no implementation drift.
 
 How OPA's WASM ABI works (short version)
@@ -73,8 +73,13 @@ class WasmEvalError(RuntimeError):
 
 
 @dataclass(frozen=True)
-class Decision:
-    """Structured verdict from a single tool-call evaluation.
+class RegoVerdict:
+    """Raw verdict from evaluating the compiled Rego/WASM module.
+
+    The low-level ``{allow, requires_approval, violations}`` shape OPA
+    emits — mapped into an engine-agnostic
+    :class:`~fortify.security.decision.Verdict` by
+    :func:`~fortify.security.policy.evaluate_tool_call_wasm`.
 
     Mirrors the ``decision`` rule the Phase 1 compiler emits:
 
@@ -185,16 +190,16 @@ class WasmPolicy:
             raise WasmEvalError(f"no such file: {p}")
         return cls.from_bytes(p.read_bytes(), entrypoint=entrypoint)
 
-    def decide(self, *, role: str, tool: str, args: dict[str, Any]) -> Decision:
+    def decide(self, *, role: str, tool: str, args: dict[str, Any]) -> RegoVerdict:
         """Evaluate one tool-call decision.
 
         Composes ``input = {role, tool, args}``, runs the entrypoint, and
-        returns the parsed ``Decision``. The eval is hermetic — heap is
+        returns the parsed ``RegoVerdict``. The eval is hermetic — heap is
         reset before the call so repeated decisions don't accumulate state.
         """
         return self.evaluate({"role": role, "tool": tool, "args": args})
 
-    def evaluate(self, input_obj: dict[str, Any]) -> Decision:
+    def evaluate(self, input_obj: dict[str, Any]) -> RegoVerdict:
         """Lower-level: evaluate with an arbitrary input dict.
 
         Mostly useful for tests that want to probe odd shapes. Production
@@ -367,7 +372,7 @@ def _read_c_string(
     return bytes(data[addr:end]).decode("utf-8")
 
 
-def _parse_decision(raw: Any) -> Decision:
+def _parse_decision(raw: Any) -> RegoVerdict:
     """Pull ``{allow, requires_approval, violations}`` out of opa_eval's output.
 
     OPA's fast-path eval wraps the result in a list-of-one: ``[{"result": {...}}]``.
@@ -386,7 +391,7 @@ def _parse_decision(raw: Any) -> Decision:
         raise WasmEvalError(
             f"opa_eval result.result is not an object: {payload!r}"
         )
-    return Decision(
+    return RegoVerdict(
         allow=bool(payload.get("allow", False)),
         requires_approval=bool(payload.get("requires_approval", False)),
         violations=list(payload.get("violations", []) or []),

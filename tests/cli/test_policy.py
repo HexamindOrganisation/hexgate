@@ -432,6 +432,38 @@ def test_test_denies_when_mode_is_deny(
     assert "DENY" in capsys.readouterr().out
 
 
+def test_test_pydantic_denial_surfaces_file_scope_hint(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The pydantic engine now renders the structured file-scope hint —
+    a detail the old exception-only path couldn't reach."""
+    policy = tmp_path / "scoped.yaml"
+    policy.write_text(
+        "version: 1\n"
+        "roles:\n"
+        "  default:\n"
+        "    tools:\n"
+        "      read_file:\n"
+        "        mode: allow\n"
+        "        file_scope:\n"
+        "          allowed_paths: ['docs/**']\n",
+        encoding="utf-8",
+    )
+    rc = _main_test(
+        _ns(
+            source=str(policy),
+            role="default",
+            tool="read_file",
+            args='{"file_path": "secrets/key.pem"}',
+        )
+    )
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert "DENY" in out
+    assert "hint" in out
+    assert "docs/**" in out
+
+
 def test_test_rejects_unknown_role(
     policy_file: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
