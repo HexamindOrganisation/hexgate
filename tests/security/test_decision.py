@@ -124,6 +124,34 @@ def test_as_error_payload_includes_hint_when_set() -> None:
     assert payload["hint"] == {"allowed_paths": ["docs/**"]}
 
 
+def test_as_error_payload_includes_violations_when_set() -> None:
+    """WASM constraint violations reach the LLM as a structured list."""
+    decision = Decision(
+        outcome=DecisionOutcome.DENY,
+        agent_name="agent",
+        tool_name="refund",
+        reason='Policy denied tool "refund": args.amount <= 100',
+        error_type="policy_denied",
+        violations=("args.amount <= 100",),
+    )
+
+    payload = decision.as_error_payload()
+
+    assert payload["violations"] == ["args.amount <= 100"]
+
+
+def test_as_error_payload_omits_violations_when_empty() -> None:
+    decision = Decision(
+        outcome=DecisionOutcome.DENY,
+        agent_name="agent",
+        tool_name="tool",
+        reason="...",
+        error_type="policy_denied",
+    )
+
+    assert "violations" not in decision.as_error_payload()
+
+
 def test_as_error_payload_does_not_leak_arguments_to_the_llm() -> None:
     """``arguments`` is for host-side approval handlers, not the LLM payload."""
     payload = _approval_decision().as_error_payload()

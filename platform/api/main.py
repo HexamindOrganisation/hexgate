@@ -1,3 +1,4 @@
+import base64
 from contextlib import asynccontextmanager
 
 from fastapi import (
@@ -11,6 +12,7 @@ from fastapi import (
     WebSocketDisconnect,
 )
 from fastapi.middleware.cors import CORSMiddleware
+from models import Agent, AgentVersion
 from sqlmodel import Session
 
 from biscuits import (
@@ -21,9 +23,10 @@ from biscuits import (
 )
 from db import engine, init_db
 from keystore import FileKeyStore
-from models import Agent
 from relay import registry
 from schemas import (
+    AgentManifest,
+    AgentManifestView,
     AgentRead,
     AgentUpdate,
     PolicyValidationError,
@@ -36,10 +39,12 @@ from schemas import (
     ValidatePolicyResponse,
 )
 from services import (
+    backfill_bundles,
     delete_dev_token,
     ensure_default_project,
     find_token_by_secret,
     get_agent,
+    get_latest_agent_versions_map,
     list_agents,
     list_dev_tokens,
     mask_secret,
@@ -58,6 +63,9 @@ async def lifespan(_: FastAPI):
     keystore.ensure_keypair()
     with Session(engine) as session:
         ensure_default_project(session)
+        # Backfill signed bundles for seeded agents so they're served via
+        # WASM on the first request, not just after their first edit.
+        backfill_bundles(session, keystore.sign)
     yield
 
 
@@ -110,7 +118,9 @@ def optional_dev_token(
     try:
         verify_token(biscuit_b64, keystore.public_key_bytes())
     except TokenSignatureError:
-        raise HTTPException(status_code=401, detail="invalid fortify key signature") from None
+        raise HTTPException(
+            status_code=401, detail="invalid fortify key signature"
+        ) from None
 
     # Revocation gate
     if find_token_by_secret(session, secret) is None:
@@ -159,8 +169,6 @@ def well_known_keys() -> dict[str, object]:
     breaking clients. Lets dashboards and CLIs sanity-check that what
     their SDK has embedded matches what this platform is signing with.
     """
-    import base64
-
     return {
         "keys": [
             {
@@ -243,6 +251,17 @@ def _agent_read(agent: Agent) -> AgentRead:
         policy_yaml=agent.policy_yaml,
         system_md=agent.system_md,
         updated_at=agent.updated_at,
+        bundle_wasm_b64=(
+            base64.b64encode(agent.compiled_wasm).decode("ascii")
+            if agent.compiled_wasm is not None
+            else None
+        ),
+        bundle_manifest=agent.bundle_manifest,
+        bundle_signature_b64=(
+            base64.b64encode(agent.bundle_signature).decode("ascii")
+            if agent.bundle_signature is not None
+            else None
+        ),
     )
 
 
@@ -252,6 +271,51 @@ def api_list_agents(
 ) -> list[AgentRead]:
     ensure_default_project(session)
     return [_agent_read(a) for a in list_agents(session, project_id)]
+
+
+def _build_agent_manifest_view(
+    agent: Agent, agent_version: AgentVersion | None
+) -> AgentManifestView:
+    """Build the dashboard manifest envelope from an Agent + its latest version.
+
+    Rehydrates ``AgentVersion.manifest`` (a JSON snapshot, validated against
+    :class:`AgentManifest` at registration time) back into the typed shape,
+    or returns the envelope with ``manifest=None`` when no usable version
+    exists — either no version row at all, or a row whose ``manifest`` column
+    is NULL (nullable on the model; only reachable via direct DB writes).
+    """
+    if agent_version is None or agent_version.manifest is None:
+        return AgentManifestView(name=agent.name, updated_at=agent.updated_at)
+    return AgentManifestView(
+        name=agent.name,
+        manifest=AgentManifest.model_validate(agent_version.manifest),
+        version=agent_version.version,
+        content_hash=agent_version.content_hash,
+        updated_at=agent_version.created_at,
+    )
+
+
+# Declared before the ``/agents/{name}`` route so FastAPI matches the literal
+# ``manifest`` segment instead of binding it as a name path parameter.
+@v1.get(
+    "/projects/{project_id}/agents/manifest",
+    response_model=list[AgentManifestView],
+)
+def api_list_agent_manifests(
+    project_id: str, session: Session = Depends(get_session)
+) -> list[AgentManifestView]:
+    """Bulk read of every agent's latest registered manifest.
+
+    One row per Agent. Agents that exist but have no version registered
+    come back with ``manifest=None``.
+    """
+    ensure_default_project(session)
+    agents = list_agents(session, project_id)
+    latest_by_agent = get_latest_agent_versions_map(session, [a.id for a in agents])
+    return [
+        _build_agent_manifest_view(agent, latest_by_agent.get(agent.id))
+        for agent in agents
+    ]
 
 
 @v1.get("/projects/{project_id}/agents/{name}", response_model=AgentRead)
@@ -283,6 +347,9 @@ def api_update_agent(
         agent_yaml=body.agent_yaml,
         policy_yaml=body.policy_yaml,
         system_md=body.system_md,
+        # Compile + sign the policy into a WASM bundle at save time, using
+        # the platform's root key (same key that signs biscuits).
+        sign=keystore.sign,
     )
     if agent is None:
         raise HTTPException(status_code=404, detail="agent not found")

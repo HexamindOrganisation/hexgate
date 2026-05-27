@@ -12,65 +12,44 @@ from collections.abc import Mapping
 from typing import Any
 
 from fortify.runtime.context import get_current_user
-from fortify.security.decision import Decision, DecisionOutcome
-from fortify.security.errors import ApprovalRequiredError, PolicyDeniedError
-from fortify.security.file_scope import build_file_scope_hint
-from fortify.security.models import AgentPolicy, FileToolPolicy
-from fortify.security.policy import authorize_tool_call
-from fortify.security.policy_set import PolicySet
+from fortify.security.decision import Decision, PolicyEngine
 
 
 class PolicyEnforcer:
-    """Evaluate proposed tool calls against a role-aware PolicySet."""
+    """Evaluate proposed tool calls against a policy engine.
 
-    def __init__(self, policy_set: PolicySet, *, agent_name: str = "default") -> None:
-        self.policy_set = policy_set
+    ``policy`` is any :class:`~fortify.security.decision.PolicyEngine` —
+    in practice a :class:`~fortify.security.policy_set.PolicySet` (the
+    role-aware pydantic engine) or a
+    :class:`~fortify.security.bundle.PolicyBundle` (a compiled WASM bundle,
+    the Rego enforcement path). The enforcer only knows the protocol, so
+    it never branches on which engine ran.
+    """
+
+    def __init__(
+        self,
+        policy: PolicyEngine,
+        *,
+        agent_name: str = "default",
+    ) -> None:
+        self.policy = policy
         self.agent_name = agent_name
 
     def decide(self, tool_name: str, arguments: Mapping[str, Any]) -> Decision:
-        """Resolve role from the contextvar, run mode/constraints/file-scope
-        checks via :func:`authorize_tool_call`, return a :class:`Decision`."""
+        """Resolve role from the contextvar, ask the engine for a
+        :class:`~fortify.security.decision.Verdict`, and lift it into a
+        host-facing :class:`Decision` with this agent's context."""
         user = get_current_user()
         role = user.role if user is not None else None
-        policy = self.policy_set.policy_for(role)
         args_snapshot = dict(arguments)
 
-        try:
-            authorize_tool_call(policy, tool_name, args_snapshot)
-        except PolicyDeniedError as exc:
-            return Decision(
-                outcome=DecisionOutcome.DENY,
-                agent_name=self.agent_name,
-                tool_name=tool_name,
-                role=role,
-                reason=str(exc),
-                error_type="policy_denied",
-                hint=_hint_for(policy, tool_name),
-                arguments=args_snapshot,
-            )
-        except ApprovalRequiredError as exc:
-            return Decision(
-                outcome=DecisionOutcome.NEEDS_APPROVAL,
-                agent_name=self.agent_name,
-                tool_name=tool_name,
-                role=role,
-                reason=str(exc),
-                error_type="approval_required",
-                arguments=args_snapshot,
-            )
-
-        return Decision(
-            outcome=DecisionOutcome.ALLOW,
+        verdict = self.policy.evaluate(
+            role=role, tool=tool_name, args=args_snapshot
+        )
+        return Decision.from_verdict(
+            verdict,
             agent_name=self.agent_name,
             tool_name=tool_name,
             role=role,
             arguments=args_snapshot,
         )
-
-
-def _hint_for(policy: AgentPolicy, tool_name: str) -> dict[str, Any] | None:
-    """Return a machine-readable hint when the denial is path-shaped."""
-    tool_policy = policy.tools.get(tool_name)
-    if isinstance(tool_policy, FileToolPolicy):
-        return build_file_scope_hint(tool_policy)
-    return None

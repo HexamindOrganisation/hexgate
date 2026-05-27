@@ -46,21 +46,21 @@ def test_openai_manifest_schema():
         name="test-agent",
         description="A test agent",
         framework=AgentFramework.OPENAI,
-        tools=[
-            ToolDefinition(
-                name="example_tool",
-                description="A test tool.",
-                input_schema=InputSchema(
-                    properties={
-                        "example_input": InputProperty(
-                            title="Example Input",
-                            type="string",
-                        ),
-                    },
-                    required=["example_input"],
-                ),
-            )
-        ],
+        model=None,
+        system_prompt="A test agent",
+        tools=[ToolDefinition(
+            name="example_tool",
+            description="A test tool.",
+            input_schema=InputSchema(
+                properties={
+                    "example_input": InputProperty(
+                        title="Example Input",
+                        type="string",
+                    ),
+                },
+                required=["example_input"],
+            ),
+        )],
     )
     manifest = create_openai_manifest(agent, description="A test agent")
     assert isinstance(manifest, AgentManifest)
@@ -91,21 +91,21 @@ def test_google_manifest_schema():
         name="test_agent",
         description="A test agent",
         framework=AgentFramework.GOOGLE,
-        tools=[
-            ToolDefinition(
-                name="example_tool",
-                description="A test tool.",
-                input_schema=InputSchema(
-                    properties={
-                        "example_input": InputProperty(
-                            title="example_input",
-                            type="string",
-                        ),
-                    },
-                    required=["example_input"],
-                ),
-            )
-        ],
+        model="gemini-2.0-flash",
+        system_prompt="Greet the user.",
+        tools=[ToolDefinition(
+            name="example_tool",
+            description="A test tool.",
+            input_schema=InputSchema(
+                properties={
+                    "example_input": InputProperty(
+                        title="example_input",
+                        type="string",
+                    ),
+                },
+                required=["example_input"],
+            ),
+        )],
     )
     manifest = create_google_manifest(agent)
     assert isinstance(manifest, AgentManifest)
@@ -132,21 +132,21 @@ def test_pydantic_ai_manifest_schema():
         name="test-agent",
         description="A test agent",
         framework=AgentFramework.PYDANTIC_AI,
-        tools=[
-            ToolDefinition(
-                name="example_tool",
-                description="A test tool.",
-                input_schema=InputSchema(
-                    properties={
-                        "example_input": InputProperty(
-                            title="example_input",
-                            type="string",
-                        ),
-                    },
-                    required=["example_input"],
-                ),
-            )
-        ],
+        model="test",
+        system_prompt=None,
+        tools=[ToolDefinition(
+            name="example_tool",
+            description="A test tool.",
+            input_schema=InputSchema(
+                properties={
+                    "example_input": InputProperty(
+                        title="example_input",
+                        type="string",
+                    ),
+                },
+                required=["example_input"],
+            ),
+        )],
     )
     manifest = create_pydantic_ai_manifest(agent)
     assert isinstance(manifest, AgentManifest)
@@ -177,21 +177,21 @@ def test_langchain_manifest_schema():
         name="test-agent",
         description="A test agent",
         framework=AgentFramework.LANGCHAIN,
-        tools=[
-            ToolDefinition(
-                name="example_tool",
-                description="A test tool.",
-                input_schema=InputSchema(
-                    properties={
-                        "example_input": InputProperty(
-                            title="Example Input",
-                            type="string",
-                        ),
-                    },
-                    required=["example_input"],
-                ),
-            )
-        ],
+        model=None,
+        system_prompt=None,
+        tools=[ToolDefinition(
+            name="example_tool",
+            description="A test tool.",
+            input_schema=InputSchema(
+                properties={
+                    "example_input": InputProperty(
+                        title="Example Input",
+                        type="string",
+                    ),
+                },
+                required=["example_input"],
+            ),
+        )],
     )
     manifest = create_langchain_manifest(
         graph,
@@ -236,21 +236,21 @@ def test_fortify_manifest_schema():
         name="test-agent",
         description="A test agent",
         framework=AgentFramework.FORTIFY,
-        tools=[
-            ToolDefinition(
-                name="example_tool",
-                description="A test tool.",
-                input_schema=InputSchema(
-                    properties={
-                        "example_input": InputProperty(
-                            title="Example Input",
-                            type="string",
-                        ),
-                    },
-                    required=["example_input"],
-                ),
-            )
-        ],
+        model="test-model",
+        system_prompt=None,
+        tools=[ToolDefinition(
+            name="example_tool",
+            description="A test tool.",
+            input_schema=InputSchema(
+                properties={
+                    "example_input": InputProperty(
+                        title="Example Input",
+                        type="string",
+                    ),
+                },
+                required=["example_input"],
+            ),
+        )],
     )
     manifest = create_fortify_manifest(agent, description="A test agent")
     assert isinstance(manifest, AgentManifest)
@@ -259,3 +259,80 @@ def test_fortify_manifest_schema():
     manifest = create_manifest(agent, description="A test agent")
     assert isinstance(manifest, AgentManifest)
     assert manifest == expected_manifest
+
+
+def test_fortify_manifest_system_message_prompt():
+    """SystemMessage system prompts are flattened to their text content."""
+    from langchain_core.messages import SystemMessage
+    from langgraph.graph import END, START, StateGraph
+
+    from fortify.agents.factory import FortifyAgent
+
+    builder = StateGraph(dict)
+    builder.add_node("noop", lambda state: state)
+    builder.add_edge(START, "noop")
+    builder.add_edge("noop", END)
+    graph = builder.compile(name="sm-agent")
+
+    agent = FortifyAgent(
+        graph=graph,
+        model="test-model",
+        tools=[],
+        system_prompt=SystemMessage(content="hi"),
+        name="sm-agent",
+    )
+
+    manifest = create_fortify_manifest(agent)
+    assert manifest.system_prompt == "hi"
+    assert manifest.model == "test-model"
+
+
+def test_openai_manifest_callable_instructions():
+    """Callable ``instructions`` is dropped (no static text to snapshot)."""
+    from agents import Agent
+
+    agent = Agent(
+        name="callable-agent",
+        instructions=lambda *_args, **_kwargs: "ignored",
+        tools=[],
+    )
+
+    manifest = create_openai_manifest(agent)
+    assert manifest.system_prompt is None
+
+
+def test_langchain_manifest_explicit_model_and_prompt():
+    """LangChain kwargs flow through ``create_manifest`` to the manifest."""
+    from langgraph.graph import END, START, StateGraph
+
+    builder = StateGraph(dict)
+    builder.add_node("noop", lambda state: state)
+    builder.add_edge(START, "noop")
+    builder.add_edge("noop", END)
+    graph = builder.compile(name="lc-agent")
+
+    manifest = create_manifest(
+        graph,
+        tools=[],
+        model="gpt-4o-mini",
+        system_prompt="be helpful",
+    )
+    assert manifest.model == "gpt-4o-mini"
+    assert manifest.system_prompt == "be helpful"
+
+
+def test_pydantic_ai_manifest_static_prompts():
+    """Static ``system_prompt`` + ``instructions`` strings are concatenated."""
+    from pydantic_ai import Agent
+    from pydantic_ai.models.test import TestModel
+
+    agent = Agent(
+        TestModel(),
+        name="prompty-agent",
+        system_prompt="part one",
+        instructions="part two",
+    )
+
+    manifest = create_pydantic_ai_manifest(agent)
+    assert manifest.system_prompt == "part one\n\npart two"
+    assert manifest.model == "test"

@@ -378,24 +378,29 @@ class FortifyAgent:
         """Return a new agent with Gate 1 policy enforcement applied.
 
         ``policy`` may be a YAML path, a ``policies/`` directory,
-        :class:`AgentPolicy`, :class:`PolicySet`, or ``None`` (no-op).
-        Role resolves at call time from the active :class:`User`.
-        ``approval_handler`` (callable or ``bool``) resolves NEEDS_APPROVAL
-        inline; ``None`` renders structured errors.
+        :class:`AgentPolicy`, :class:`PolicySet`, a
+        :class:`~fortify.security.PolicyBundle` (the WASM enforcement
+        path), or ``None`` (no-op). Role resolves at call time from the
+        active :class:`User`. ``approval_handler`` (callable or ``bool``)
+        resolves NEEDS_APPROVAL inline; ``None`` renders structured errors.
         """
         from langchain_core.tools import BaseTool
 
         from fortify.adapters.langchain.tools import GuardedTool
+        from fortify.security.bundle import PolicyBundle
         from fortify.security.enforcer import PolicyEnforcer
         from fortify.security.policy_set import PolicySet, load_policy_set
 
         if policy is None:
             return self.with_tools(list(self.tools))
 
-        policy_set = (
-            policy if isinstance(policy, PolicySet) else load_policy_set(policy)
-        )
-        enforcer = PolicyEnforcer(policy_set, agent_name=self.name or "default")
+        if isinstance(policy, PolicyBundle):
+            resolved = policy
+        elif isinstance(policy, PolicySet):
+            resolved = policy
+        else:
+            resolved = load_policy_set(policy)
+        enforcer = PolicyEnforcer(resolved, agent_name=self.name or "default")
 
         wrapped: list[ToolSpec] = []
         for tool_spec in self.tools:

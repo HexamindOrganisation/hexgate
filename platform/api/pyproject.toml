@@ -2,7 +2,9 @@
 name = "fortify-api"
 version = "0.1.0"
 description = "Fortify control plane API — policy bundles, tokens, audit ingestion"
-requires-python = ">=3.11"
+# Matches the fortify SDK's floor (>=3.13) — the control plane now depends on
+# it for compile_to_rego / compile_to_wasm.
+requires-python = ">=3.13"
 dependencies = [
     "fastapi>=0.115",
     "uvicorn[standard]>=0.32",
@@ -10,6 +12,11 @@ dependencies = [
     "pydantic>=2.9",
     "cryptography>=42",
     "biscuit-python>=0.4",
+    # The control plane compiles + signs policy bundles at save time, so it
+    # needs the SDK's compiler (compile_to_rego / compile_to_wasm). Requires
+    # the `opa` binary on PATH at runtime. Unpublished local SDK — resolved
+    # via [tool.uv.sources] below until it's on an index.
+    "fortify",
 ]
 
 [dependency-groups]
@@ -25,3 +32,8 @@ pythonpath = ["."]
 
 [tool.uv]
 package = false
+
+[tool.uv.sources]
+# Local, editable pointer to the Fortify SDK (asianf/). Delete this block
+# once `fortify` is published to an index — the [project] dependency stays.
+fortify = { path = "../..", editable = true }
