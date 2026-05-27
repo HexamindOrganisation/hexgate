@@ -382,13 +382,20 @@ class FortifyAgent:
 
         Accepts a path to a single YAML, a path to a ``policies/`` directory
         of role policies, an :class:`AgentPolicy`, an existing
-        :class:`PolicySet`, or ``None`` (deny-by-default).
+        :class:`PolicySet`, a :class:`~fortify.security.PolicyBundle` (the
+        WASM enforcement path), or ``None`` (deny-by-default).
         """
         from fortify.agents.security import wrap_tools_with_policy
+        from fortify.security.bundle import PolicyBundle
         from fortify.security.policy_set import PolicySet, load_policy_set
 
-        policy_set = policy if isinstance(policy, PolicySet) else load_policy_set(policy)
-        return self.with_tools(wrap_tools_with_policy(self.tools, policy_set))
+        if isinstance(policy, PolicyBundle):
+            resolved: object = policy
+        elif isinstance(policy, PolicySet):
+            resolved = policy
+        else:
+            resolved = load_policy_set(policy)
+        return self.with_tools(wrap_tools_with_policy(self.tools, resolved))
 
     def with_before_action(
         self,

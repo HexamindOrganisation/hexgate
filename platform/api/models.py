@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from typing import Optional
 
-from sqlalchemy import JSON, Column
+from sqlalchemy import JSON, Column, LargeBinary
 from sqlmodel import Field, SQLModel, UniqueConstraint
 
 
@@ -42,6 +42,20 @@ class Agent(SQLModel, table=True):
     policy_yaml: str
     system_md: str = ""
     updated_at: datetime = Field(default_factory=utcnow)
+
+    # Compiled + signed WASM bundle, produced from policy_yaml at save time
+    # (see services.compile_bundle). Null when opa is unavailable or the
+    # policy fails to compile — the SDK then falls back to the pydantic
+    # engine on policy_yaml. The signature is over bundle_manifest's exact
+    # bytes, signed by the platform's root key (the same key that signs
+    # biscuits), so the SDK verifies it against the published JWKS pubkey.
+    compiled_wasm: Optional[bytes] = Field(
+        default=None, sa_column=Column(LargeBinary, nullable=True)
+    )
+    bundle_manifest: Optional[str] = None  # exact signed JSON bytes, as text
+    bundle_signature: Optional[bytes] = Field(
+        default=None, sa_column=Column(LargeBinary, nullable=True)
+    )
 
 
 class AgentVersion(SQLModel, table=True):

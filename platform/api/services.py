@@ -1,6 +1,8 @@
 import hashlib
 import json
+import logging
 import secrets
+from typing import Callable
 
 from sqlalchemy import func
 from sqlmodel import Session, select
@@ -9,6 +11,8 @@ from models import Agent, AgentVersion, DevToken, Project, Tool
 from schemas import AgentManifest, ToolDefinition
 from biscuits import MintRequest, make_envelope, mint_token
 from seeds import DEFAULT_AGENT_NAME, SEED_AGENTS
+
+logger = logging.getLogger("fortify.platform.services")
 
 DEFAULT_PROJECT_ID = "support-bot"
 DEFAULT_PROJECT_NAME = "support-bot"
@@ -102,6 +106,46 @@ def get_latest_agent_versions_map(
     return {version.agent_id: version for version in session.exec(statement)}
 
 
+def compile_bundle(
+    policy_yaml: str, sign: Callable[[bytes], bytes]
+) -> tuple[bytes, str, bytes] | None:
+    """Compile ``policy_yaml`` to a signed WASM bundle.
+
+    Runs the SDK's YAML → Rego → WASM compiler, builds a manifest with the
+    content hashes, and signs the manifest's exact bytes with ``sign`` (the
+    platform's root key). Returns ``(wasm_bytes, manifest_text, signature)``,
+    or ``None`` when compilation can't happen — ``opa`` not installed, or the
+    policy is malformed. A ``None`` return is not an error: the caller stores
+    no bundle and the SDK falls back to the pydantic engine.
+
+    This shells out to ``opa`` (via the SDK), which blocks. It's safe here
+    because FastAPI runs sync route handlers in a worker thread, so the call
+    never touches the event loop.
+    """
+    # Imported lazily so the platform still boots if the SDK / opa aren't
+    # present — only save-time compilation needs them. build_signed_bundle
+    # is the SAME helper `fortify policy build` uses, so the manifest format
+    # and its byte-exact serialization can't drift between the two.
+    from fortify.security import build_signed_bundle
+    from fortify.security.rego_wasm import OpaNotFoundError
+
+    try:
+        bundle = build_signed_bundle(policy_yaml, sign=sign)
+    except OpaNotFoundError:
+        logger.warning(
+            "compile_bundle: opa not on PATH — storing no bundle "
+            "(SDK will fall back to pydantic). Install opa to ship signed bundles."
+        )
+        return None
+    except Exception as exc:
+        # Any other compile failure (bad constraint, schema error, opa build
+        # error) degrades gracefully — the save still succeeds without a bundle.
+        logger.warning("compile_bundle: policy did not compile: %s", exc)
+        return None
+
+    return bundle.wasm_bytes, bundle.manifest_bytes.decode("utf-8"), bundle.signature
+
+
 def update_agent(
     session: Session,
     project_id: str,
@@ -110,6 +154,7 @@ def update_agent(
     agent_yaml: str | None = None,
     policy_yaml: str | None = None,
     system_md: str | None = None,
+    sign: Callable[[bytes], bytes] | None = None,
 ) -> Agent | None:
     from datetime import datetime, timezone
 
@@ -122,11 +167,52 @@ def update_agent(
         agent.policy_yaml = policy_yaml
     if system_md is not None:
         agent.system_md = system_md
+
+    # Recompile + re-sign the bundle from the (possibly updated) policy. We
+    # always rebuild rather than diff so a fixed policy re-acquires a bundle
+    # and a newly-broken one drops its stale (now-wrong) bundle.
+    if sign is not None:
+        bundle = compile_bundle(agent.policy_yaml, sign)
+        if bundle is not None:
+            agent.compiled_wasm, agent.bundle_manifest, agent.bundle_signature = bundle
+        else:
+            agent.compiled_wasm = None
+            agent.bundle_manifest = None
+            agent.bundle_signature = None
+
     agent.updated_at = datetime.now(timezone.utc)
     session.add(agent)
     session.commit()
     session.refresh(agent)
     return agent
+
+
+def backfill_bundles(session: Session, sign: Callable[[bytes], bytes]) -> int:
+    """Compile + sign a bundle for every agent that doesn't already have one.
+
+    Seeded agents are inserted directly (``ensure_default_project`` builds
+    ``Agent(...)`` without the save-time compile hook), so on a fresh DB
+    they start bundle-less and would be served via the pydantic fallback.
+    Running this at startup means even a brand-new platform serves signed
+    WASM bundles for the seeds on the very first request.
+
+    Idempotent: agents that already carry a bundle are skipped, and a
+    policy that won't compile (or a platform without opa) is simply left
+    bundle-less. Returns the number of agents backfilled.
+    """
+    count = 0
+    for agent in session.exec(select(Agent)).all():
+        if agent.compiled_wasm is not None:
+            continue
+        bundle = compile_bundle(agent.policy_yaml, sign)
+        if bundle is None:
+            continue
+        agent.compiled_wasm, agent.bundle_manifest, agent.bundle_signature = bundle
+        session.add(agent)
+        count += 1
+    if count:
+        session.commit()
+    return count
 
 
 def mint_dev_token(
