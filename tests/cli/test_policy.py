@@ -211,6 +211,21 @@ def test_build_defaults_output_to_source_dir(
     assert (policy_file.parent / "billing.bundle.json").exists()
 
 
+def test_build_accepts_relative_out_dir(
+    policy_file: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A relative --out resolves cleanly — regression for the relative_to()
+    crash where the under-cwd check resolved paths but the display didn't."""
+    monkeypatch.chdir(tmp_path)
+    rc = _main_build(_ns(source=str(policy_file), out="rel-bundle", no_wasm=True))
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert (tmp_path / "rel-bundle" / "billing.rego").exists()
+    # Output renders the path relative to cwd, not a crash.
+    assert "rel-bundle/billing.rego" in out
+
+
 def test_build_rejects_unparseable_constraint(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

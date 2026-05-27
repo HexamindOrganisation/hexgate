@@ -286,7 +286,10 @@ def _main_build(args: argparse.Namespace) -> int:
             print(f"wasm compile error: {exc}", file=sys.stderr)
             return 1
 
-    out_dir = Path(args.out) if args.out else source_path.parent
+    # Resolve to an absolute path up front so all derived paths are
+    # unambiguous — a relative --out otherwise breaks the relative_to()
+    # display math below.
+    out_dir = (Path(args.out) if args.out else source_path.parent).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
 
     stem = source_path.stem  # "billing.yaml" → "billing"
@@ -323,15 +326,15 @@ def _main_build(args: argparse.Namespace) -> int:
     if sign_key is not None:
         sig_out.write_bytes(sign_bytes(manifest_bytes, sign_key))
 
-    print(f"✓ Wrote {yaml_out.relative_to(Path.cwd()) if _is_under_cwd(yaml_out) else yaml_out}")
-    print(f"✓ Wrote {rego_out.relative_to(Path.cwd()) if _is_under_cwd(rego_out) else rego_out}")
+    print(f"✓ Wrote {_display_path(yaml_out)}")
+    print(f"✓ Wrote {_display_path(rego_out)}")
     if wasm_bytes is not None:
-        print(f"✓ Wrote {wasm_out.relative_to(Path.cwd()) if _is_under_cwd(wasm_out) else wasm_out}")
+        print(f"✓ Wrote {_display_path(wasm_out)}")
     else:
         print("ⓘ wasm step skipped (--no-wasm)", file=sys.stderr)
-    print(f"✓ Wrote {bundle_out.relative_to(Path.cwd()) if _is_under_cwd(bundle_out) else bundle_out}")
+    print(f"✓ Wrote {_display_path(bundle_out)}")
     if sign_key is not None:
-        print(f"✓ Wrote {sig_out.relative_to(Path.cwd()) if _is_under_cwd(sig_out) else sig_out} (signed)")
+        print(f"✓ Wrote {_display_path(sig_out)} (signed)")
     return 0
 
 
@@ -529,10 +532,15 @@ def _read_signing_key(key_path: Path) -> tuple[bytes | None, str | None]:
     return raw, None
 
 
-def _is_under_cwd(path: Path) -> bool:
-    """Best-effort check used only to prettify path output."""
+def _display_path(path: Path) -> str:
+    """Render a path relative to cwd when it's underneath, else absolute.
+
+    Resolves both sides so the comparison and the rendered string stay
+    consistent — a relative ``--out`` would otherwise pass an "under cwd"
+    check but blow up on ``relative_to`` against an absolute cwd.
+    """
+    resolved = path.resolve()
     try:
-        path.resolve().relative_to(Path.cwd().resolve())
-        return True
+        return str(resolved.relative_to(Path.cwd().resolve()))
     except ValueError:
-        return False
+        return str(resolved)
