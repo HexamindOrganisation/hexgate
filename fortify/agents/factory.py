@@ -401,11 +401,8 @@ class FortifyAgent:
         if policy is None:
             return self.with_tools(list(self.tools))
 
-        # Resolve to the enforcer's narrow contract: a PolicyBundle (WASM)
-        # passes through; everything else (path, AgentPolicy, PolicySet)
-        # becomes a PolicySet. The enforcer dispatches on the type itself.
         if isinstance(policy, PolicyBundle):
-            resolved: PolicySet | PolicyBundle = policy
+            resolved = policy
         elif isinstance(policy, PolicySet):
             resolved = policy
         else:
