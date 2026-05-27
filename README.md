@@ -607,10 +607,11 @@ fortify policy test policy.yaml --role billing --tool refund_order \
 fortify policy build policy.yaml --out ./bundle
 ```
 
-On a denied wasm decision, `test` prints the violated constraint strings verbatim:
+On a denied decision, `test` prints the reason; the wasm engine additionally lists each violated constraint string verbatim:
 
 ```text
 ✗ DENY · billing → refund_order({"amount": 700})
+  reason: Policy denied tool "refund_order": args.amount <= 500
   violations:
     • args.amount <= 500
 ```
