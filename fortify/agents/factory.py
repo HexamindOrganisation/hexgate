@@ -27,6 +27,7 @@ from fortify.runtime import (
     reset_current_tool_use_context,
     set_current_tool_use_context,
 )
+from fortify.security.decision import Decision
 from fortify.streaming import StreamEvent, new_root_run_id, normalize_langchain_events
 from fortify.tracing.langfuse import (
     CallbackHandler,
@@ -39,15 +40,7 @@ LangChainAgentGraph: TypeAlias = CompiledStateGraph
 ToolSpec: TypeAlias = BaseTool | Callable[..., Any] | dict[str, Any]
 AgentState: TypeAlias = dict[str, Any]
 AgentInput: TypeAlias = str | Sequence[object] | Mapping[str, object] | BaseModel
-ActionPayload: TypeAlias = dict[str, Any]
-ActionContext: TypeAlias = dict[str, Any] | None
-BeforeActionHook: TypeAlias = Callable[
-    [ActionPayload, ActionContext], object | Awaitable[object]
-]
-ApprovalHandler: TypeAlias = (
-    bool | Callable[[ActionPayload, ActionContext], bool | Awaitable[bool]]
-)
-ContextProvider: TypeAlias = Callable[[], ActionContext]
+ApprovalHandler: TypeAlias = bool | Callable[[Decision], bool | Awaitable[bool]]
 DEFAULT_SYSTEM_PROMPT = Path(__file__).parent / "prompts" / "agent_system.md"
 
 
@@ -423,39 +416,6 @@ class FortifyAgent:
                 wrapped.append(tool_spec)
         return self.with_tools(wrapped)
 
-    def with_before_action(
-        self,
-        before_action: BeforeActionHook,
-        *,
-        context_provider: ContextProvider | None = None,
-    ) -> Self:
-        """Return a new agent with a Gate 2 pre-tool hook applied.
-
-        ``before_action(action_dict, context_dict)`` — raising vetoes the
-        call with a structured ``before_action_denied`` payload. The
-        ``action_dict`` carries ``tool_name`` / ``arguments`` /
-        ``agent_name``; ``context_dict`` is produced by ``context_provider``.
-        Re-wrapping a policy-enforced tool preserves its enforcer.
-        """
-        from langchain_core.tools import BaseTool
-
-        from fortify.adapters.langchain.tools import GuardedTool
-
-        wrapped: list[ToolSpec] = []
-        for tool_spec in self.tools:
-            if isinstance(tool_spec, BaseTool):
-                wrapped.append(
-                    GuardedTool.wrap(
-                        tool_spec,
-                        before_action=before_action,
-                        context_provider=context_provider,
-                        agent_name=self.name,
-                    )
-                )
-            else:
-                wrapped.append(tool_spec)
-        return self.with_tools(wrapped)
-
 
 AgentGraph: TypeAlias = FortifyAgent
 
@@ -468,16 +428,6 @@ def enforce_policy(
 ) -> AgentGraph:
     """Functional alias for :meth:`FortifyAgent.enforce_policy`."""
     return agent.enforce_policy(policy, approval_handler=approval_handler)
-
-
-def with_before_action(
-    agent: AgentGraph,
-    before_action: BeforeActionHook,
-    *,
-    context_provider: ContextProvider | None = None,
-) -> AgentGraph:
-    """Return an agent runtime with a Gate 2 pre-tool hook applied."""
-    return agent.with_before_action(before_action, context_provider=context_provider)
 
 
 @observe(name="create_fortify_agent")

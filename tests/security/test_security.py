@@ -8,7 +8,7 @@ import pytest
 from langchain_core.tools import tool
 
 from fortify.agents import factory
-from fortify.agents.factory import enforce_policy, with_before_action
+from fortify.agents.factory import enforce_policy
 from fortify.security import (
     AgentPolicy,
     ApprovalRequiredError,
@@ -313,10 +313,11 @@ async def test_enforce_policy_with_approval_handler_allows_approval_required_too
 ) -> None:
     """``enforce_policy(approval_handler=...)`` resolves NEEDS_APPROVAL inline.
 
-    The handler uses the legacy ``(ActionPayload, ActionContext) -> bool``
-    shape. True/False short-circuit; callable forms receive the action dict
-    and decide.
+    The handler takes a :class:`Decision`. True/False short-circuit;
+    callables receive the full Decision (including ``arguments``) so the
+    host can render any approval UI.
     """
+    from fortify.security.decision import Decision
 
     @tool
     async def sample_tool(value: str) -> str:
@@ -350,106 +351,18 @@ async def test_enforce_policy_with_approval_handler_allows_approval_required_too
     assert denied_result["ok"] is False
     assert denied_result["error"]["type"] == "approval_required"
 
-    # Callable handler → receives (action, context) and decides.
-    seen: list[dict[str, object]] = []
+    # Callable handler → receives the Decision and decides.
+    seen: list[Decision] = []
 
-    async def approval_handler(
-        action: dict[str, object], _context: dict[str, object] | None
-    ) -> bool:
-        seen.append(action)
+    async def approval_handler(decision: Decision) -> bool:
+        seen.append(decision)
         return True
 
     handled = enforce_policy(agent, policy, approval_handler=approval_handler)
     assert await handled.tools[0].ainvoke({"value": "ciao"}) == "CIAO"
     assert len(seen) == 1
-    assert seen[0]["tool_name"] == "sample_tool"
-    assert seen[0]["arguments"] == {"value": "ciao"}
-
-
-@pytest.mark.asyncio
-async def test_with_before_action_receives_action_and_context(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Run the hosted pre-tool hook before the actual tool call."""
-
-    @tool
-    async def sample_tool(value: str) -> str:
-        """Return a transformed string."""
-        return value.upper()
-
-    monkeypatch.setattr(factory, "create_langchain_agent", lambda **_kwargs: object())
-    monkeypatch.setattr(factory, "get_langfuse_handler", lambda **_kwargs: "handler")
-
-    seen: dict[str, object] = {}
-
-    async def before_action(
-        action: dict[str, object], context: dict[str, object] | None
-    ) -> None:
-        seen["action"] = action
-        seen["context"] = context
-
-    agent, _handler = factory.create_agent(
-        model="openai:gpt-5.4",
-        tools=[sample_tool],
-        system_prompt="You are a test assistant.",
-        name="sample-agent",
-    )
-
-    guarded_agent = with_before_action(
-        agent,
-        before_action,
-        context_provider=lambda: {"tenant_id": "acme"},
-    )
-
-    result = await guarded_agent.tools[0].ainvoke({"value": "hello"})
-
-    assert result == "HELLO"
-    assert seen["action"] == {
-        "tool_name": "sample_tool",
-        "arguments": {"value": "hello"},
-        "agent_name": "sample-agent",
-    }
-    assert seen["context"] == {"tenant_id": "acme"}
-
-
-@pytest.mark.asyncio
-async def test_with_before_action_can_block_tool_invocation(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Convert hosted vetoes into graceful tool results."""
-
-    @tool
-    async def sample_tool(value: str) -> str:
-        """Return a transformed string."""
-        return value.upper()
-
-    monkeypatch.setattr(factory, "create_langchain_agent", lambda **_kwargs: object())
-    monkeypatch.setattr(factory, "get_langfuse_handler", lambda **_kwargs: "handler")
-
-    def before_action(
-        _action: dict[str, object], _context: dict[str, object] | None
-    ) -> None:
-        raise RuntimeError("blocked by host platform")
-
-    agent, _handler = factory.create_agent(
-        model="openai:gpt-5.4",
-        tools=[sample_tool],
-        system_prompt="You are a test assistant.",
-    )
-
-    guarded_agent = with_before_action(agent, before_action)
-
-    result = await guarded_agent.tools[0].ainvoke({"value": "hello"})
-
-    assert result == {
-        "ok": False,
-        "error": {
-            "type": "before_action_denied",
-            "message": "blocked by host platform",
-            "tool_name": "sample_tool",
-            "retryable": False,
-        },
-    }
+    assert seen[0].tool_name == "sample_tool"
+    assert seen[0].arguments == {"value": "ciao"}
 
 
 @pytest.mark.asyncio

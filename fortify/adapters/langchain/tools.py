@@ -21,14 +21,8 @@ from langchain_core.tools import BaseTool
 from langchain_core.tools.structured import StructuredTool
 from pydantic import ConfigDict
 
-from fortify.agents.factory import (
-    ActionContext,
-    ActionPayload,
-    ApprovalHandler,
-    BeforeActionHook,
-    ContextProvider,
-)
-from fortify.security.decision import DecisionOutcome
+from fortify.agents.factory import ApprovalHandler
+from fortify.security.decision import Decision, DecisionOutcome
 from fortify.security.enforcer import PolicyEnforcer
 from fortify.tools.decorators import TOOL_METADATA_ATTR
 
@@ -41,13 +35,11 @@ def _copy_tool_metadata(source: Any, target: Any) -> Any:
     return target
 
 
-def _resolve_approval_sync(
-    handler: ApprovalHandler, action: ActionPayload, context: ActionContext
-) -> bool:
+def _resolve_approval_sync(handler: ApprovalHandler, decision: Decision) -> bool:
     """Resolve a NEEDS_APPROVAL decision in a sync caller (rejects coroutines)."""
     if isinstance(handler, bool):
         return handler
-    result = handler(action, context)
+    result = handler(decision)
     if isawaitable(result):
         raise RuntimeError(
             "approval_handler returned a coroutine; sync tool invocation cannot "
@@ -56,13 +48,11 @@ def _resolve_approval_sync(
     return bool(result)
 
 
-async def _resolve_approval_async(
-    handler: ApprovalHandler, action: ActionPayload, context: ActionContext
-) -> bool:
+async def _resolve_approval_async(handler: ApprovalHandler, decision: Decision) -> bool:
     """Resolve a NEEDS_APPROVAL decision in an async caller."""
     if isinstance(handler, bool):
         return handler
-    result = handler(action, context)
+    result = handler(decision)
     if isawaitable(result):
         result = await result
     return bool(result)
@@ -74,7 +64,8 @@ class GuardedTool(BaseTool):
     ALLOW delegates to the wrapped tool; non-ALLOW renders
     ``Decision.as_error_payload()`` so the LLM sees governance failures
     as tool output. NEEDS_APPROVAL is treated as denial unless
-    ``approval_handler`` (callable or ``bool`` shorthand) returns truthy.
+    ``approval_handler`` (callable taking the :class:`Decision`, or a
+    ``bool`` shorthand) returns truthy.
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
@@ -82,12 +73,6 @@ class GuardedTool(BaseTool):
     wrapped_tool: BaseTool
     enforcer: PolicyEnforcer | None = None
     approval_handler: ApprovalHandler | None = None
-    # Gate 2: hosted pre-tool hook. Runs after Gate 1 ALLOW (or no enforcer)
-    # and before the wrapped tool. Raising any exception inside vetoes the
-    # call with a ``before_action_denied`` structured error.
-    before_action: BeforeActionHook | None = None
-    context_provider: ContextProvider | None = None
-    agent_name: str | None = None
 
     @classmethod
     def wrap(
@@ -96,16 +81,12 @@ class GuardedTool(BaseTool):
         *,
         enforcer: PolicyEnforcer | None = None,
         approval_handler: ApprovalHandler | None = None,
-        before_action: BeforeActionHook | None = None,
-        context_provider: ContextProvider | None = None,
-        agent_name: str | None = None,
     ) -> "GuardedTool":
         """Return a GuardedTool delegating to ``tool`` after policy check.
 
         Idempotent re-wrap: an existing ``GuardedTool`` is unwrapped once
-        so enforcers don't stack; hook fields fall through unless
-        explicitly overridden (so chaining ``.with_before_action()`` after
-        ``.enforce_policy(...)`` preserves the enforcer).
+        so enforcers don't stack; fields fall through unless explicitly
+        overridden.
         """
         if isinstance(tool, cls):
             inner = tool.wrapped_tool
@@ -115,22 +96,10 @@ class GuardedTool(BaseTool):
                 if approval_handler is not None
                 else tool.approval_handler
             )
-            resolved_before = (
-                before_action if before_action is not None else tool.before_action
-            )
-            resolved_context = (
-                context_provider
-                if context_provider is not None
-                else tool.context_provider
-            )
-            resolved_agent_name = agent_name or tool.agent_name
         else:
             inner = tool
             resolved_enforcer = enforcer
             resolved_approval = approval_handler
-            resolved_before = before_action
-            resolved_context = context_provider
-            resolved_agent_name = agent_name
 
         guarded = cls(
             name=inner.name,
@@ -148,51 +117,8 @@ class GuardedTool(BaseTool):
             wrapped_tool=inner,
             enforcer=resolved_enforcer,
             approval_handler=resolved_approval,
-            before_action=resolved_before,
-            context_provider=resolved_context,
-            agent_name=resolved_agent_name,
         )
         return _copy_tool_metadata(inner, guarded)
-
-    def _build_action(self, kwargs: dict[str, Any]) -> ActionPayload:
-        """Legacy-shaped action payload for a Gate 2 hook."""
-        return {
-            "tool_name": self.name,
-            "arguments": kwargs,
-            "agent_name": self.agent_name,
-        }
-
-    def _build_context(self) -> ActionContext:
-        """Host context for the Gate 2 hook (None when no provider configured)."""
-        return self.context_provider() if self.context_provider is not None else None
-
-    def _before_action_denied(self, message: str) -> dict[str, Any]:
-        """Structured Gate 2 veto payload."""
-        return {
-            "ok": False,
-            "error": {
-                "type": "before_action_denied",
-                "message": message,
-                "tool_name": self.name,
-                "retryable": False,
-            },
-        }
-
-    async def _check_before_action(
-        self, kwargs: dict[str, Any]
-    ) -> dict[str, Any] | None:
-        """Apply the Gate 2 hook; return a veto payload on raise."""
-        if self.before_action is None:
-            return None
-        try:
-            result = self.before_action(
-                self._build_action(kwargs), self._build_context()
-            )
-            if isawaitable(result):
-                await result
-        except Exception as error:
-            return self._before_action_denied(str(error))
-        return None
 
     async def _arun(self, *args: Any, **kwargs: Any) -> Any:
         if self.enforcer is not None:
@@ -201,18 +127,11 @@ class GuardedTool(BaseTool):
                 if (
                     decision.outcome is DecisionOutcome.NEEDS_APPROVAL
                     and self.approval_handler is not None
-                    and await _resolve_approval_async(
-                        self.approval_handler,
-                        self._build_action(kwargs),
-                        self._build_context(),
-                    )
+                    and await _resolve_approval_async(self.approval_handler, decision)
                 ):
-                    pass  # approved → fall through to Gate 2 and invoke
+                    pass  # approved → fall through and invoke
                 else:
                     return {"ok": False, "error": decision.as_error_payload()}
-        veto = await self._check_before_action(kwargs)
-        if veto is not None:
-            return veto
         return await self._invoke_wrapped_async(*args, **kwargs)
 
     def _run(self, *args: Any, **kwargs: Any) -> Any:
@@ -222,19 +141,11 @@ class GuardedTool(BaseTool):
                 if (
                     decision.outcome is DecisionOutcome.NEEDS_APPROVAL
                     and self.approval_handler is not None
-                    and _resolve_approval_sync(
-                        self.approval_handler,
-                        self._build_action(kwargs),
-                        self._build_context(),
-                    )
+                    and _resolve_approval_sync(self.approval_handler, decision)
                 ):
                     pass
                 else:
                     return {"ok": False, "error": decision.as_error_payload()}
-        if self.before_action is not None:
-            raise RuntimeError(
-                "before_action requires async tool execution; use ainvoke/astream_events"
-            )
         return self._invoke_wrapped_sync(*args, **kwargs)
 
     async def _invoke_wrapped_async(self, *args: Any, **kwargs: Any) -> Any:
