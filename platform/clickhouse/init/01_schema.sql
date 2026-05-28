@@ -1,5 +1,5 @@
 -- Audit log for PolicyEnforcer decisions.
--- The first nine columns are the envelope shared with future event
+-- The first eight columns are the envelope shared with future event
 -- tables (tool_invocation, ...) — same names, types, and order.
 -- This init dir runs once on an empty volume; edits afterward are
 -- ignored. Don't add 02_*.sql — use a real migration runner instead.
@@ -14,8 +14,7 @@ CREATE TABLE IF NOT EXISTS fortify_audit.policy_decision
     received_at         DateTime64(3, 'UTC') DEFAULT now64(3),
     project_id          LowCardinality(String),
     agent_name          LowCardinality(String),
-    agent_version       LowCardinality(String) DEFAULT '',
-    policy_content_hash LowCardinality(String) DEFAULT '',
+    agent_version_id    LowCardinality(String) DEFAULT '',
     session_id          String DEFAULT '',
     user_id             LowCardinality(String) DEFAULT '',
 
@@ -31,6 +30,6 @@ CREATE TABLE IF NOT EXISTS fortify_audit.policy_decision
 )
 ENGINE = MergeTree
 PARTITION BY toYYYYMM(occurred_at)
-ORDER BY (project_id, occurred_at, agent_name, outcome)
+ORDER BY (project_id, agent_name, outcome, occurred_at)
 TTL toDateTime(occurred_at) + INTERVAL 90 DAY
 SETTINGS index_granularity = 8192;
