@@ -1,36 +1,20 @@
-# Local dev infrastructure for the Fortify platform.
-#
-# Currently provides ClickHouse for the policy-decision audit log.
-# The FastAPI control plane and the Vite dashboard still run via the
-# existing Makefile targets (`make platform-api`, `make dashboard`).
-#
-# Bring up:    make clickhouse-up
-# Tear down:   make clickhouse-down       (keeps data)
-# Reset:       make clickhouse-reset      (wipes the named volume)
-# CLI:         make clickhouse-cli
+# Local dev infrastructure for the platform. Driven via `make clickhouse-*` targets.
 
 services:
   clickhouse:
     image: clickhouse/clickhouse-server:24.10
     container_name: fortify-clickhouse
     ports:
-      # Host ports offset by one from the ClickHouse defaults (8123/9000) so
-      # this service coexists with other local ClickHouse instances (e.g. a
-      # Langfuse-bundled one). PR 2's settings module will default to 8124.
-      - "8124:8123"   # HTTP — used by clickhouse-connect from the platform API
-      - "9001:9000"   # native — used by the clickhouse-client CLI
+      # Offset from the 8123/9000 defaults so we coexist with other local
+      # ClickHouse instances (e.g. a Langfuse-bundled one).
+      - "8124:8123"
+      - "9001:9000"
     volumes:
       - clickhouse-data:/var/lib/clickhouse
-      # NOT a migration system. The init dir runs exactly once: on first
-      # container start with an empty data volume. Edits to files here
-      # are ignored after that point — apply schema changes by hand via
-      # `make clickhouse-cli`, or wipe and re-init with `make clickhouse-reset`.
-      # Replace this mechanism with a real migration runner when the
-      # second schema change lands.
+      # Applied once on an empty data volume; not a migration system.
       - ./clickhouse/init:/docker-entrypoint-initdb.d:ro
     environment:
-      # LOCAL DEV ONLY — never reuse these credentials in any deployed env.
-      # PR 2 will source these from the platform API's settings module.
+      # LOCAL DEV ONLY — never reuse these credentials anywhere deployed.
       CLICKHOUSE_DB: fortify_audit
       CLICKHOUSE_USER: fortify
       CLICKHOUSE_PASSWORD: fortify-dev-password
