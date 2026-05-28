@@ -7,24 +7,22 @@ from typing import Any, AsyncIterator
 
 import pytest
 
-from fortify.adapters.pydantic_ai import tools as pa_tools
 from fortify.adapters.pydantic_ai.agent import FortifyPydanticAgent
-from fortify.security import AgentPolicy
-from fortify.runtime import UserContext
+from fortify.runtime import User
+from fortify.runtime.context import get_current_user
 
 
-def _user_context() -> UserContext:
-    """Build a minimal UserContext for invocation tests."""
-    return UserContext(user_id="u-1", session_id="s-1", user_role="developer")
+def _user() -> User:
+    """Build a minimal User for invocation tests."""
+    return User(user_id="u-1", session_id="s-1", role="developer")
 
 
 class _RecordingAgent:
-    """Capture the active policy and call args seen by each Agent method."""
+    """Capture the active User and call args seen by each Agent method."""
 
     name = "recording-agent"
 
     def __init__(self) -> None:
-        """Initialize empty capture slots."""
         self.run_calls: list[dict[str, Any]] = []
         self.run_sync_calls: list[dict[str, Any]] = []
         self.run_stream_calls: list[dict[str, Any]] = []
@@ -33,9 +31,9 @@ class _RecordingAgent:
     def _snapshot(
         self, args: tuple[Any, ...], kwargs: dict[str, Any]
     ) -> dict[str, Any]:
-        """Capture the active policy plus call arguments."""
+        """Capture the active User plus call arguments."""
         return {
-            "policy": pa_tools._active_policy.get(),
+            "user": get_current_user(),
             "args": args,
             "kwargs": kwargs,
         }
@@ -52,7 +50,7 @@ class _RecordingAgent:
 
     @asynccontextmanager
     async def run_stream(self, *args: Any, **kwargs: Any) -> AsyncIterator[str]:
-        """Async-context yield while capturing the active policy."""
+        """Async-context yield while capturing the active User."""
         self.run_stream_calls.append(self._snapshot(args, kwargs))
         yield "stream-result"
 
@@ -67,41 +65,9 @@ class _RecordingAgent:
         return "delegated"
 
 
-def _stub_build_agent_policy(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
-    """Replace policy resolution with a deterministic stub.
-
-    Returns a dict that captures every call and the policy returned, so
-    tests can assert on what was forwarded into the active context.
-    """
-    captured: dict[str, Any] = {"calls": []}
-
-    def fake_build(
-        api_key: str,
-        context: UserContext,
-        agent_name: str,
-        tool_names: list[str],
-    ) -> AgentPolicy:
-        policy = AgentPolicy.model_validate(
-            {
-                "default_policy": {"mode": "deny"},
-                "tools": {name: {"mode": "allow"} for name in tool_names},
-            }
-        )
-        captured["calls"].append(
-            {
-                "api_key": api_key,
-                "context": context,
-                "agent_name": agent_name,
-                "tool_names": list(tool_names),
-                "returned_policy": policy,
-            }
-        )
-        return policy
-
-    monkeypatch.setattr(
-        "fortify.adapters.pydantic_ai.agent.build_agent_policy", fake_build
-    )
-    return captured
+# ---------------------------------------------------------------------------
+# Construction
+# ---------------------------------------------------------------------------
 
 
 def test_constructor_calls_setup_observability(
@@ -121,7 +87,6 @@ def test_constructor_calls_setup_observability(
         agent=_RecordingAgent(),  # type: ignore[arg-type]
         api_key="k",
         agent_name="recording-agent",
-        tool_names=[],
     )
 
     assert calls == [True]
@@ -135,141 +100,128 @@ def test_constructor_stores_inputs() -> None:
         agent=inner,  # type: ignore[arg-type]
         api_key="api-123",
         agent_name="custom-name",
-        tool_names=["a", "b"],
     )
 
     assert proxy._agent is inner
     assert proxy._api_key == "api-123"
     assert proxy._agent_name == "custom-name"
-    assert proxy._tool_names == ["a", "b"]
+
+
+# ---------------------------------------------------------------------------
+# User scope binding per invocation method
+# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_run_binds_active_policy_and_delegates(
+async def test_run_opens_user_scope_and_delegates(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Bind the policy for the call and forward to the underlying agent."""
-    captured = _stub_build_agent_policy(monkeypatch)
+    monkeypatch.setattr(
+        "fortify.adapters.pydantic_ai.agent.Agent.instrument_all", lambda: None
+    )
+
     inner = _RecordingAgent()
     proxy = FortifyPydanticAgent(
         agent=inner,  # type: ignore[arg-type]
-        api_key="api-key-123",
+        api_key="k",
         agent_name="recording-agent",
-        tool_names=["echo"],
     )
+    user = _user()
 
-    assert pa_tools._active_policy.get() is None
+    assert get_current_user() is None
 
-    result = await proxy.run("hello", user_context=_user_context())
+    result = await proxy.run("hello", user=user)
 
     assert result == "run-ok"
     [call] = inner.run_calls
-    assert call["policy"] is captured["calls"][0]["returned_policy"]
+    assert call["user"] is user
     assert call["args"] == ("hello",)
-    assert pa_tools._active_policy.get() is None
+    assert get_current_user() is None
 
 
-@pytest.mark.asyncio
-async def test_run_forwards_user_context_into_policy_builder(
+def test_run_sync_opens_user_scope_and_delegates(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Pass api_key, user_context, agent name, and tool names to build_agent_policy."""
-    captured = _stub_build_agent_policy(monkeypatch)
-    inner = _RecordingAgent()
-    proxy = FortifyPydanticAgent(
-        agent=inner,  # type: ignore[arg-type]
-        api_key="api-key-123",
-        agent_name="recording-agent",
-        tool_names=["echo", "search"],
+    monkeypatch.setattr(
+        "fortify.adapters.pydantic_ai.agent.Agent.instrument_all", lambda: None
     )
-    ctx = _user_context()
 
-    await proxy.run("hello", user_context=ctx)
-
-    [policy_call] = captured["calls"]
-    assert policy_call["api_key"] == "api-key-123"
-    assert policy_call["context"] is ctx
-    assert policy_call["agent_name"] == "recording-agent"
-    assert policy_call["tool_names"] == ["echo", "search"]
-
-
-def test_run_sync_binds_active_policy_and_delegates(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Sync-run binds and delegates the same way as async run."""
-    captured = _stub_build_agent_policy(monkeypatch)
     inner = _RecordingAgent()
     proxy = FortifyPydanticAgent(
         agent=inner,  # type: ignore[arg-type]
         api_key="k",
         agent_name="recording-agent",
-        tool_names=["echo"],
     )
+    user = _user()
 
-    result = proxy.run_sync("hello", user_context=_user_context())
+    result = proxy.run_sync("hello", user=user)
 
     assert result == "run-sync-ok"
     [call] = inner.run_sync_calls
-    assert call["policy"] is captured["calls"][0]["returned_policy"]
-    assert call["args"] == ("hello",)
-    assert pa_tools._active_policy.get() is None
+    assert call["user"] is user
+    assert get_current_user() is None
 
 
 @pytest.mark.asyncio
-async def test_run_stream_binds_active_policy_and_yields_result(
+async def test_run_stream_opens_user_scope_and_yields_result(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """run_stream binds the policy for the lifetime of the streamed result."""
-    captured = _stub_build_agent_policy(monkeypatch)
+    monkeypatch.setattr(
+        "fortify.adapters.pydantic_ai.agent.Agent.instrument_all", lambda: None
+    )
+
     inner = _RecordingAgent()
     proxy = FortifyPydanticAgent(
         agent=inner,  # type: ignore[arg-type]
         api_key="k",
         agent_name="recording-agent",
-        tool_names=["echo"],
     )
+    user = _user()
 
-    async with proxy.run_stream("hello", user_context=_user_context()) as result:
+    async with proxy.run_stream("hello", user=user) as result:
         assert result == "stream-result"
-        assert pa_tools._active_policy.get() is captured["calls"][0]["returned_policy"]
+        # Scope is live during the body.
+        assert get_current_user() is user
 
-    assert pa_tools._active_policy.get() is None
     [call] = inner.run_stream_calls
-    assert call["args"] == ("hello",)
+    assert call["user"] is user
+    assert get_current_user() is None
 
 
 @pytest.mark.asyncio
-async def test_iter_binds_active_policy_and_yields_run(
+async def test_iter_opens_user_scope_and_yields_run(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """iter binds the policy for the lifetime of the async iterator."""
-    captured = _stub_build_agent_policy(monkeypatch)
+    monkeypatch.setattr(
+        "fortify.adapters.pydantic_ai.agent.Agent.instrument_all", lambda: None
+    )
+
     inner = _RecordingAgent()
     proxy = FortifyPydanticAgent(
         agent=inner,  # type: ignore[arg-type]
         api_key="k",
         agent_name="recording-agent",
-        tool_names=["echo"],
     )
+    user = _user()
 
-    async with proxy.iter("hello", user_context=_user_context()) as agent_run:
-        assert agent_run == "iter-result"
-        assert pa_tools._active_policy.get() is captured["calls"][0]["returned_policy"]
+    async with proxy.iter("hello", user=user) as run:
+        assert run == "iter-result"
+        assert get_current_user() is user
 
-    assert pa_tools._active_policy.get() is None
     [call] = inner.iter_calls
-    assert call["args"] == ("hello",)
+    assert call["user"] is user
+    assert get_current_user() is None
 
 
-def test_active_policy_is_unset_when_run_sync_raises(
+def test_user_scope_is_unwound_when_run_sync_raises(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Tear down the active policy even when the wrapped agent raises."""
-    _stub_build_agent_policy(monkeypatch)
+    """The contextvar unwinds even when the wrapped agent raises."""
+    monkeypatch.setattr(
+        "fortify.adapters.pydantic_ai.agent.Agent.instrument_all", lambda: None
+    )
 
     class BoomAgent:
-        name = "boom"
-
         def run_sync(self, *_args: Any, **_kwargs: Any) -> str:
             raise RuntimeError("boom")
 
@@ -277,44 +229,31 @@ def test_active_policy_is_unset_when_run_sync_raises(
         agent=BoomAgent(),  # type: ignore[arg-type]
         api_key="k",
         agent_name="boom",
-        tool_names=[],
     )
 
     with pytest.raises(RuntimeError, match="boom"):
-        proxy.run_sync("hi", user_context=_user_context())
+        proxy.run_sync("hi", user=_user())
 
-    assert pa_tools._active_policy.get() is None
+    assert get_current_user() is None
 
 
-@pytest.mark.asyncio
-async def test_active_policy_is_unset_when_run_stream_raises(
+# ---------------------------------------------------------------------------
+# __getattr__ delegation
+# ---------------------------------------------------------------------------
+
+
+def test_proxy_delegates_unknown_attributes_to_wrapped_agent(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Tear down the active policy when the streamed body raises inside the context."""
-    _stub_build_agent_policy(monkeypatch)
-    inner = _RecordingAgent()
-    proxy = FortifyPydanticAgent(
-        agent=inner,  # type: ignore[arg-type]
-        api_key="k",
-        agent_name="recording-agent",
-        tool_names=[],
+    monkeypatch.setattr(
+        "fortify.adapters.pydantic_ai.agent.Agent.instrument_all", lambda: None
     )
 
-    with pytest.raises(RuntimeError, match="boom"):
-        async with proxy.run_stream("hi", user_context=_user_context()):
-            raise RuntimeError("boom")
-
-    assert pa_tools._active_policy.get() is None
-
-
-def test_proxy_delegates_unknown_attributes_to_wrapped_agent() -> None:
-    """__getattr__ falls through to the wrapped pydantic_ai Agent."""
     inner = _RecordingAgent()
     proxy = FortifyPydanticAgent(
         agent=inner,  # type: ignore[arg-type]
         api_key="k",
         agent_name="recording-agent",
-        tool_names=[],
     )
 
     assert proxy.some_attribute() == "delegated"

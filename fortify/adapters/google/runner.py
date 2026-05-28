@@ -1,6 +1,11 @@
+"""Google ADK ``Runner`` wrapper: opens a :class:`User` scope around each
+``Runner.run*`` call so the wrapped tools' enforcers can resolve the
+active role. Langfuse propagation mirrors User identity into spans.
+"""
+
 import asyncio
-from contextlib import contextmanager
 import os
+from contextlib import contextmanager
 from typing import Any, AsyncGenerator, Generator
 
 import nest_asyncio
@@ -8,12 +13,11 @@ from google.adk.agents import BaseAgent
 from google.adk.runners import Runner
 from google.adk.sessions import BaseSessionService
 from google.genai import types
+from langfuse import get_client, propagate_attributes
 from openinference.instrumentation.google_adk import GoogleADKInstrumentor
 
-from langfuse import get_client, propagate_attributes
-
-from fortify.runtime import UserContext
 from fortify.adapters.google.wrapper import wrap_google_agent
+from fortify.runtime import User
 
 
 class FortifyRunner:
@@ -33,13 +37,19 @@ class FortifyRunner:
             raise ValueError(
                 "FORTIFY_KEY is not set. Pass api_key= explicitly or set FORTIFY_KEY environment variable."
             )
-        self._agent = agent
-        self._app_name = app_name
-        self._session_service = session_service
-        self._runner_kwargs = runner_kwargs
+        # Policy is baked at construction; the Runner is built once and reused
+        # since role resolution happens at call time via the User contextvar.
+        self._wrapped_agent = wrap_google_agent(agent, api_key=self.api_key)
+        self._runner = Runner(
+            agent=self._wrapped_agent,
+            app_name=app_name,
+            session_service=session_service,
+            **runner_kwargs,
+        )
+        self._agent_name = getattr(agent, "name", "default")
 
     def _setup_observability(self):
-        """Setup langfuse observability for the Google ADK agent."""
+        """Install Langfuse + GoogleADKInstrumentor (idempotent)."""
         try:
             asyncio.get_running_loop()
         except RuntimeError:
@@ -50,39 +60,28 @@ class FortifyRunner:
         GoogleADKInstrumentor().instrument()
 
     @contextmanager
-    def _propagate(self, user_context: UserContext, agent_name: str):
-        """Propagate the user context to the Langfuse trace/span"""
-        kwargs: dict[str, Any] = {"tags": [f"google.runner.run.{agent_name}"]}
-        kwargs["user_id"] = user_context.user_id
-        kwargs["session_id"] = user_context.session_id
-        kwargs["metadata"] = {"user_role": user_context.user_role}
+    def _propagate(self, user: User):
+        """Propagate User identity into Langfuse spans for the block."""
+        kwargs: dict[str, Any] = {"tags": [f"google.runner.run.{self._agent_name}"]}
+        kwargs["user_id"] = user.user_id
+        kwargs["session_id"] = user.session_id
+        kwargs["metadata"] = {"user_role": user.role}
         with propagate_attributes(**kwargs):
             yield
-
-    def _build_runner(self, user_context: UserContext) -> Runner:
-        """Build the Google ADK runner with the wrapped agent and the session service"""
-        wrapped_agent = wrap_google_agent(self._agent, user_context, self.api_key)
-        return Runner(
-            agent=wrapped_agent,
-            app_name=self._app_name,
-            session_service=self._session_service,
-            **self._runner_kwargs,
-        )
 
     def run(
         self,
         *,
         new_message: types.Content,
-        user_context: UserContext,
+        user: User,
         **kwargs: Any,
     ) -> Generator[Any, None, None]:
         """Run the Google ADK agent synchronously, yielding events."""
         self._setup_observability()
-        runner = self._build_runner(user_context)
-        with self._propagate(user_context, self._agent.name):
-            yield from runner.run(
-                user_id=user_context.user_id,
-                session_id=user_context.session_id,
+        with user.sync_scope(), self._propagate(user):
+            yield from self._runner.run(
+                user_id=user.user_id,
+                session_id=user.session_id,
                 new_message=new_message,
                 **kwargs,
             )
@@ -91,17 +90,17 @@ class FortifyRunner:
         self,
         *,
         new_message: types.Content | None = None,
-        user_context: UserContext,
+        user: User,
         **kwargs: Any,
     ) -> AsyncGenerator[Any, None]:
         """Run the Google ADK agent asynchronously, yielding events."""
         self._setup_observability()
-        runner = self._build_runner(user_context)
-        with self._propagate(user_context, self._agent.name):
-            async for event in runner.run_async(
-                user_id=user_context.user_id,
-                session_id=user_context.session_id,
-                new_message=new_message,
-                **kwargs,
-            ):
-                yield event
+        async with user:
+            with self._propagate(user):
+                async for event in self._runner.run_async(
+                    user_id=user.user_id,
+                    session_id=user.session_id,
+                    new_message=new_message,
+                    **kwargs,
+                ):
+                    yield event

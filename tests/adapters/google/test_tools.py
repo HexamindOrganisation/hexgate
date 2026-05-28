@@ -8,18 +8,21 @@ import pytest
 from google.adk.tools.base_tool import BaseTool
 from google.adk.tools.function_tool import FunctionTool
 
-from fortify.adapters.google.tools import (
-    _denial_message,
-    _normalize,
-    wrap_tool,
-    wrap_tools,
-)
-from fortify.security import AgentPolicy
+from fortify.adapters.google.tools import _normalize, wrap_tool, wrap_tools
+from fortify.runtime import User
+from fortify.security import AgentPolicy, PolicySet
+from fortify.security.enforcer import PolicyEnforcer
+from fortify.security.policy_set import DEFAULT_ROLE_NAME
 
 
-def _allow_policy(tool_name: str = "echo") -> AgentPolicy:
-    """Build a policy that allows a single named tool, denying everything else."""
-    return AgentPolicy.model_validate(
+def _enforcer_for(spec: dict[str, Any]) -> PolicyEnforcer:
+    return PolicyEnforcer(
+        PolicySet({DEFAULT_ROLE_NAME: AgentPolicy.model_validate(spec)})
+    )
+
+
+def _allow_enforcer(tool_name: str = "echo") -> PolicyEnforcer:
+    return _enforcer_for(
         {
             "default_policy": {"mode": "deny"},
             "tools": {tool_name: {"mode": "allow"}},
@@ -27,14 +30,12 @@ def _allow_policy(tool_name: str = "echo") -> AgentPolicy:
     )
 
 
-def _deny_policy() -> AgentPolicy:
-    """Build a policy that denies every tool by default."""
-    return AgentPolicy.model_validate({"default_policy": {"mode": "deny"}})
+def _deny_enforcer() -> PolicyEnforcer:
+    return _enforcer_for({"default_policy": {"mode": "deny"}})
 
 
-def _approval_required_policy(tool_name: str = "echo") -> AgentPolicy:
-    """Build a policy where the named tool requires approval."""
-    return AgentPolicy.model_validate(
+def _approval_enforcer(tool_name: str = "echo") -> PolicyEnforcer:
+    return _enforcer_for(
         {
             "default_policy": {"mode": "deny"},
             "tools": {tool_name: {"mode": "approval_required"}},
@@ -58,13 +59,9 @@ def _make_function_tool(name: str = "echo") -> FunctionTool:
     return FunctionTool(func=_make_callable(name))
 
 
-def test_denial_message_includes_tool_name() -> None:
-    """The denial message identifies the blocked tool by name."""
-    msg = _denial_message("read_file")
-
-    assert "read_file" in msg
-    assert "denied" in msg
-    assert "not executed" in msg
+# ---------------------------------------------------------------------------
+# _normalize
+# ---------------------------------------------------------------------------
 
 
 def test_normalize_passes_base_tool_through() -> None:
@@ -90,11 +87,16 @@ def test_normalize_rejects_non_callable_non_tool() -> None:
         _normalize(42)  # type: ignore[arg-type]
 
 
+# ---------------------------------------------------------------------------
+# wrap_tool — basic shape
+# ---------------------------------------------------------------------------
+
+
 def test_wrap_tool_returns_a_distinct_copy() -> None:
     """wrap_tool returns a new BaseTool instance, leaving the original alone."""
     original = _make_function_tool()
 
-    wrapped = wrap_tool(original, _allow_policy())
+    wrapped = wrap_tool(original, _allow_enforcer())
 
     assert wrapped is not original
     assert wrapped.run_async != original.run_async
@@ -104,7 +106,7 @@ def test_wrap_tool_preserves_metadata() -> None:
     """The wrapped tool keeps the original tool's name."""
     original = _make_function_tool("custom_tool")
 
-    wrapped = wrap_tool(original, _allow_policy("custom_tool"))
+    wrapped = wrap_tool(original, _allow_enforcer("custom_tool"))
 
     assert wrapped.name == "custom_tool"
 
@@ -113,44 +115,48 @@ def test_wrap_tool_accepts_plain_callable() -> None:
     """Wrapping a callable normalizes it into a FunctionTool with a gate."""
     fn = _make_callable("custom_name")
 
-    wrapped = wrap_tool(fn, _allow_policy("custom_name"))
+    wrapped = wrap_tool(fn, _allow_enforcer("custom_name"))
 
     assert isinstance(wrapped, BaseTool)
     assert wrapped.name == "custom_name"
 
 
-@pytest.mark.asyncio
-async def test_wrapped_tool_returns_denial_message_when_policy_denies() -> None:
-    """A deny-mode policy short-circuits to the denial string instead of raising."""
-    wrapped = wrap_tool(_make_function_tool(), _deny_policy())
-
-    result = await wrapped.run_async(args={"text": "hi"}, tool_context=None)
-
-    assert isinstance(result, str)
-    assert "denied" in result
-    assert "echo" in result
+# ---------------------------------------------------------------------------
+# run_async branches
+# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_wrapped_tool_returns_denial_message_when_policy_requires_approval() -> (
-    None
-):
-    """approval_required is treated as denied — the underlying tool never runs."""
-    wrapped = wrap_tool(_make_function_tool(), _approval_required_policy())
-
-    result = await wrapped.run_async(args={"text": "hi"}, tool_context=None)
-
-    assert "denied" in result
-
-
-@pytest.mark.asyncio
-async def test_wrapped_tool_invokes_original_when_policy_allows() -> None:
+async def test_allow_delegates_to_original_run_async() -> None:
     """An allow-mode policy forwards to the original run_async."""
-    wrapped = wrap_tool(_make_function_tool(), _allow_policy())
+    wrapped = wrap_tool(_make_function_tool(), _allow_enforcer())
 
     result = await wrapped.run_async(args={"text": "hi"}, tool_context=None)
 
     assert result == "echo:hi"
+
+
+@pytest.mark.asyncio
+async def test_deny_renders_structured_marker() -> None:
+    """A deny-mode policy short-circuits to the rendered denial — tool never runs."""
+    wrapped = wrap_tool(_make_function_tool(), _deny_enforcer())
+
+    result = await wrapped.run_async(args={"text": "hi"}, tool_context=None)
+
+    assert isinstance(result, str)
+    assert "policy_denied" in result
+    assert "echo" in result
+
+
+@pytest.mark.asyncio
+async def test_needs_approval_renders_marker_and_skips_tool() -> None:
+    """NEEDS_APPROVAL always renders the marker — the tool never runs."""
+    wrapped = wrap_tool(_make_function_tool(), _approval_enforcer())
+
+    result = await wrapped.run_async(args={"text": "hi"}, tool_context=None)
+
+    assert "approval_required" in result
+    assert "policy_denied" not in result
 
 
 @pytest.mark.asyncio
@@ -158,23 +164,62 @@ async def test_original_tool_is_not_mutated_by_wrap_tool() -> None:
     """The original tool can still be invoked directly with its original behavior."""
     original = _make_function_tool()
 
-    wrap_tool(original, _deny_policy())
+    wrap_tool(original, _deny_enforcer())
 
     result = await original.run_async(args={"text": "hi"}, tool_context=None)
     assert result == "echo:hi"
 
 
-def test_wrap_tools_returns_distinct_list_of_copies() -> None:
-    """wrap_tools returns a fresh list of fresh wrapped copies."""
-    originals = [_make_function_tool("a"), _make_function_tool("b")]
-    policy = AgentPolicy.model_validate(
+# ---------------------------------------------------------------------------
+# Role resolution via User contextvar
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_user_role_selects_matching_policy() -> None:
+    """The active User's role drives which AgentPolicy the enforcer applies."""
+    policy_set = PolicySet(
         {
-            "default_policy": {"mode": "deny"},
-            "tools": {"a": {"mode": "allow"}, "b": {"mode": "allow"}},
+            DEFAULT_ROLE_NAME: AgentPolicy.model_validate(
+                {"default_policy": {"mode": "deny"}}
+            ),
+            "support": AgentPolicy.model_validate(
+                {
+                    "default_policy": {"mode": "deny"},
+                    "tools": {"echo": {"mode": "allow"}},
+                }
+            ),
         }
     )
+    wrapped = wrap_tool(_make_function_tool(), PolicyEnforcer(policy_set))
 
-    wrapped = wrap_tools(originals, policy)
+    # No User → default → denied.
+    denied = await wrapped.run_async(args={"text": "hi"}, tool_context=None)
+    assert "policy_denied" in denied
+
+    # support → allowed.
+    async with User(user_id="u-1", role="support"):
+        allowed = await wrapped.run_async(args={"text": "hi"}, tool_context=None)
+    assert allowed == "echo:hi"
+
+
+# ---------------------------------------------------------------------------
+# Batch wrap_tools
+# ---------------------------------------------------------------------------
+
+
+def test_wrap_tools_returns_distinct_list_of_copies() -> None:
+    originals = [_make_function_tool("a"), _make_function_tool("b")]
+
+    wrapped = wrap_tools(
+        originals,
+        _enforcer_for(
+            {
+                "default_policy": {"mode": "deny"},
+                "tools": {"a": {"mode": "allow"}, "b": {"mode": "allow"}},
+            }
+        ),
+    )
 
     assert wrapped is not originals
     assert len(wrapped) == 2
@@ -184,25 +229,27 @@ def test_wrap_tools_returns_distinct_list_of_copies() -> None:
 
 
 @pytest.mark.asyncio
-async def test_wrap_tools_isolates_policy_decisions_per_tool() -> None:
-    """Each wrapped tool follows its own per-name decision under the same policy."""
+async def test_wrap_tools_isolates_decisions_per_tool() -> None:
+    """Each wrapped tool follows its own per-name decision under the same enforcer."""
     originals = [_make_function_tool("tool_a"), _make_function_tool("tool_b")]
-    policy = AgentPolicy.model_validate(
-        {
-            "default_policy": {"mode": "deny"},
-            "tools": {
-                "tool_a": {"mode": "allow"},
-                "tool_b": {"mode": "deny"},
-            },
-        }
+    [tool_a, tool_b] = wrap_tools(
+        originals,
+        _enforcer_for(
+            {
+                "default_policy": {"mode": "deny"},
+                "tools": {
+                    "tool_a": {"mode": "allow"},
+                    "tool_b": {"mode": "deny"},
+                },
+            }
+        ),
     )
-    [tool_a, tool_b] = wrap_tools(originals, policy)
 
     allowed = await tool_a.run_async(args={"text": "x"}, tool_context=None)
     denied = await tool_b.run_async(args={"text": "x"}, tool_context=None)
 
     assert allowed == "echo:x"
-    assert "denied" in denied
+    assert "policy_denied" in denied
 
 
 @pytest.mark.asyncio
@@ -210,17 +257,19 @@ async def test_wrap_tools_accepts_mixed_callables_and_base_tools() -> None:
     """A mix of callables and BaseTools is normalized and gated uniformly."""
     fn = _make_callable("plain_fn")
     tool = _make_function_tool("tool_obj")
-    policy = AgentPolicy.model_validate(
-        {
-            "default_policy": {"mode": "deny"},
-            "tools": {
-                "plain_fn": {"mode": "allow"},
-                "tool_obj": {"mode": "deny"},
-            },
-        }
-    )
 
-    wrapped = wrap_tools([fn, tool], policy)
+    wrapped = wrap_tools(
+        [fn, tool],
+        _enforcer_for(
+            {
+                "default_policy": {"mode": "deny"},
+                "tools": {
+                    "plain_fn": {"mode": "allow"},
+                    "tool_obj": {"mode": "deny"},
+                },
+            }
+        ),
+    )
 
     [plain, gated] = wrapped
     assert plain.name == "plain_fn"
@@ -228,4 +277,4 @@ async def test_wrap_tools_accepts_mixed_callables_and_base_tools() -> None:
     allowed = await plain.run_async(args={"text": "x"}, tool_context=None)
     denied = await gated.run_async(args={"text": "x"}, tool_context=None)
     assert allowed == "echo:x"
-    assert "denied" in denied
+    assert "policy_denied" in denied

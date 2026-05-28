@@ -106,7 +106,9 @@ def verify_biscuit(token_b64: str, public_key_bytes: bytes) -> None:
         raise TokenSignatureError(str(exc)) from exc
 
 
-def extract_facts(token_b64: str, public_key_bytes: bytes) -> dict[str, list[str | int]]:
+def extract_facts(
+    token_b64: str, public_key_bytes: bytes
+) -> dict[str, list[str | int]]:
     """Verify ``token_b64`` and return single-arity facts across every block.
 
     Returns ``{predicate: [value, ...]}`` where each value is a ``str`` or
@@ -163,9 +165,7 @@ def extract_facts(token_b64: str, public_key_bytes: bytes) -> dict[str, list[str
                 # Biscuit string literals only define two escapes (\\" and \\\\);
                 # unescape them directly. ``unicode_escape`` would re-decode the
                 # bytes as Latin-1 and mangle multibyte UTF-8 (``café`` → ``cafÃ©``).
-                value: str | int = re.sub(
-                    r'\\(["\\])', r"\1", match.group("str")
-                )
+                value: str | int = re.sub(r'\\(["\\])', r"\1", match.group("str"))
             else:
                 value = int(match.group("int"))
             facts.setdefault(name, []).append(value)

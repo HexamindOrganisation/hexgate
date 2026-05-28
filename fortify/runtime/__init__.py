@@ -13,7 +13,6 @@ from fortify.runtime.command_policy import (
 from fortify.runtime.context import (
     ToolUseContext,
     User,
-    UserContext,
     get_current_tool_use_context,
     get_current_user,
     reset_current_tool_use_context,
@@ -41,7 +40,6 @@ __all__ = [
     "SrtUnavailableError",
     "ToolUseContext",
     "User",
-    "UserContext",
     "Workspace",
     "build_sandbox_runtime_config",
     "check_command",

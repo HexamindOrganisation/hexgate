@@ -32,7 +32,6 @@ from rich.console import Console
 from websockets.asyncio.client import connect
 from websockets.exceptions import ConnectionClosed
 
-from fortify import with_approval_handler
 from fortify.agents.factory import stream_agent
 from fortify.bootstrap import bootstrap
 from fortify.cli._common import (
@@ -252,37 +251,24 @@ def main(args: argparse.Namespace) -> int:
     )
     approval_handler = build_approval_handler(console, approval_mode)
 
-    def _wrap_for_serve(rt: AgentRuntime) -> AgentRuntime:
-        rt.agent = with_approval_handler(
-            rt.agent,
-            approval_handler,
-            context_provider=lambda: {
-                "surface": "serve",
-                "agent_name": rt.agent_name,
-            },
-        )
-        return rt
+    runtime = build_runtime(
+        settings,
+        agent_name=agent_name,
+        base_dir=base_dir,
+        model=args.model,
+        local_only=False,
+        approval_handler=approval_handler,
+    )
 
-    runtime = _wrap_for_serve(
-        build_runtime(
+    def _rebuild() -> AgentRuntime:
+        """Re-fetch YAMLs and rebuild the agent with the latest policy."""
+        return build_runtime(
             settings,
             agent_name=agent_name,
             base_dir=base_dir,
             model=args.model,
             local_only=False,
-        )
-    )
-
-    def _rebuild() -> AgentRuntime:
-        """Re-fetch YAMLs and rebuild the agent with the latest policy."""
-        return _wrap_for_serve(
-            build_runtime(
-                settings,
-                agent_name=agent_name,
-                base_dir=base_dir,
-                model=args.model,
-                local_only=False,
-            )
+            approval_handler=approval_handler,
         )
 
     asyncio.run(run_serve(runtime, rebuild=_rebuild))

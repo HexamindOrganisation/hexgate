@@ -20,6 +20,7 @@ from fortify.cli.chat import (
     _tail_text,
 )
 from fortify.cli.state import LiveRunState, ToolActivity
+from fortify.security.decision import Decision, DecisionOutcome
 from fortify.streaming import ToolCallState
 from fortify.tools import edit_file, read_file
 
@@ -160,21 +161,26 @@ def test_prompt_for_approval_asks_user_with_tool_arguments() -> None:
 
     console.input = fake_input  # type: ignore[method-assign]
 
-    approved = _prompt_for_approval(
-        console,
-        {
-            "tool_name": "write_file",
-            "arguments": {
-                "file_path": "napoleon.md",
-                "content": "new section",
-            },
+    decision = Decision(
+        outcome=DecisionOutcome.NEEDS_APPROVAL,
+        agent_name="test-agent",
+        tool_name="write_file",
+        role="support",
+        reason='Policy requires approval for tool "write_file"',
+        error_type="approval_required",
+        arguments={
+            "file_path": "napoleon.md",
+            "content": "new section",
         },
     )
+
+    approved = _prompt_for_approval(console, decision)
 
     rendered = console.export_text()
 
     assert approved is True
     assert "Approval required for write_file" in rendered
+    assert "role: support" in rendered
     assert "file_path: napoleon.md" in rendered
     assert "content: new section" in rendered
     assert "Type y to approve or n to deny, then press Enter." in rendered

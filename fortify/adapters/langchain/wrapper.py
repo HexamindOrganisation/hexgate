@@ -1,9 +1,34 @@
+"""BYO-graph entry point: retrofit a pre-built ``CompiledStateGraph`` with
+Fortify policy. Tools are mutated in place so the graph keeps its
+references; the returned :class:`FortifyLangchainAgent` opens a User
+scope + Langfuse propagation per call. For the manifest-driven path,
+use :func:`fortify.enforce_policy` instead.
+"""
+
+from __future__ import annotations
+
 import os
-from langgraph.graph.state import CompiledStateGraph
+
 from langchain_core.tools import BaseTool
+from langgraph.graph.state import CompiledStateGraph
 
 from fortify.adapters.langchain.agent import FortifyLangchainAgent
-from fortify.adapters.langchain.tools import wrap_tools
+from fortify.adapters.langchain.tools import install_enforcer_on_tools
+from fortify.security import AgentPolicy, BaseToolPolicy, PolicySet
+from fortify.security.enforcer import PolicyEnforcer
+from fortify.security.policy_set import DEFAULT_ROLE_NAME
+
+
+def build_policy_set(
+    api_key: str,  # noqa: ARG001 — reserved for the future Fortify-cloud fetch
+    agent_name: str,  # noqa: ARG001 — same
+    tool_names: list[str],
+) -> PolicySet:
+    """Placeholder allow-all one-role bundle. TODO: cloud-fetch via FortifyClient."""
+    default_policy = AgentPolicy(
+        tools={name: BaseToolPolicy(mode="allow") for name in tool_names}
+    )
+    return PolicySet({DEFAULT_ROLE_NAME: default_policy})
 
 
 def wrap_langchain_agent(
@@ -12,32 +37,29 @@ def wrap_langchain_agent(
     tools: list[BaseTool],
     api_key: str | None = None,
 ) -> FortifyLangchainAgent:
-    """Wrap the Langchain agent with the Fortify tool policy and observability.
+    """Wrap a pre-built LangGraph agent with Fortify policy enforcement.
 
-    The returned proxy expects a `user_context` keyword argument on each
-    invocation method (`invoke`, `ainvoke`, `stream`, `astream`,
-    `astream_events`). The active policy is resolved per call from that
-    context, so a single wrapped agent can serve many users concurrently.
-
-    Args:
-        agent: The Langchain agent to wrap.
-        tools: The Langchain tools the agent has been instantiated with.
-            Mutated in place to install policy gates that read from a
-            `ContextVar`.
-        api_key: The Fortify API key. Falls back to the `FORTIFY_KEY`
-            environment variable.
+    Mutates ``tools`` in place so the graph keeps its references.
+    The returned proxy takes ``user`` per invocation; role resolves at
+    call time from the active :class:`User`. ``api_key`` falls back to
+    ``FORTIFY_KEY``. ``NEEDS_APPROVAL`` outcomes render as structured
+    errors — wire any host-side approval flow outside the SDK.
     """
-    resolved_key = api_key or os.getenv("FORTIFY_KEY")
+    resolved_key = api_key if api_key else os.getenv("FORTIFY_KEY")
     if not resolved_key:
         raise ValueError(
             "No API key provided. Pass api_key= explicitly or set FORTIFY_KEY environment variable."
         )
 
-    # Mutate the caller's tool instances in place; idempotent.
-    wrap_tools(tools)
+    agent_name = getattr(agent, "name", "default")
+    tool_names = [tool.name for tool in tools]
+    policy_set = build_policy_set(resolved_key, agent_name, tool_names)
+    enforcer = PolicyEnforcer(policy_set, agent_name=agent_name)
+
+    install_enforcer_on_tools(tools, enforcer=enforcer)
 
     return FortifyLangchainAgent(
         agent=agent,
         api_key=resolved_key,
-        tool_names=[tool.name for tool in tools],
+        tool_names=tool_names,
     )

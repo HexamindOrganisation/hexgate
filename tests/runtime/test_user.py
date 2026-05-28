@@ -158,7 +158,9 @@ async def test_resolve_tool_use_context_skips_when_no_user() -> None:
     """Outside a User scope, no biscuit_facts even with a cloud-bound agent."""
     # Build a dummy client so attribute exists; should still skip when no user.
     kp = KeyPair()
-    agent = _FakeAgent(client=_client(kp.private_key.to_bytes(), kp.public_key.to_bytes()))
+    agent = _FakeAgent(
+        client=_client(kp.private_key.to_bytes(), kp.public_key.to_bytes())
+    )
     ctx = factory._resolve_tool_use_context(agent, None)
     assert ctx.biscuit_facts is None
 
@@ -175,9 +177,7 @@ async def test_resolve_tool_use_context_warns_for_local_agent(
     async with User(user_id="alice"):
         ctx = factory._resolve_tool_use_context(agent, None)
     assert ctx.biscuit_facts is None
-    assert any(
-        "no fortify_client" in record.message for record in caplog.records
-    )
+    assert any("no fortify_client" in record.message for record in caplog.records)
 
 
 @pytest.mark.asyncio
@@ -221,9 +221,7 @@ async def test_resolve_tool_use_context_handles_attenuation_failure(
     async with User(user_id="alice"):
         ctx = factory._resolve_tool_use_context(agent, None)
     assert ctx.biscuit_facts is None
-    assert any(
-        "attenuation failed" in record.message for record in caplog.records
-    )
+    assert any("attenuation failed" in record.message for record in caplog.records)
 
 
 @pytest.mark.asyncio
