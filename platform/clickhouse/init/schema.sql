@@ -2,7 +2,8 @@
 -- The first eight columns are the envelope shared with future event
 -- tables (tool_invocation, ...) — same names, types, and order.
 -- This init dir runs once on an empty volume; edits afterward are
--- ignored. Don't add 02_*.sql — use a real migration runner instead.
+-- ignored. Don't add more files here — use a real migration runner
+-- instead.
 
 CREATE DATABASE IF NOT EXISTS fortify_audit;
 
