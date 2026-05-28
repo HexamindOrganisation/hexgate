@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import base64
 import os
 from collections.abc import Callable, Mapping
 from importlib.resources import files
@@ -180,47 +179,15 @@ def _local_policy_override() -> PolicyBundle | None:
 def _platform_bundle(payload: dict, client: FortifyClient) -> PolicyBundle | None:
     """Build + verify the signed bundle the platform served, if any.
 
-    The platform's agent response carries ``bundle_wasm_b64`` /
-    ``bundle_manifest`` / ``bundle_signature_b64`` when it could compile +
-    sign the policy (phase 7a). We rebuild the bundle in memory, verify its
-    signature against the platform's published key — the *same* key the
-    client already trusts for biscuit verification — and check the wasm
-    matches the signed manifest.
-
-    Returns a verified :class:`PolicyBundle`, or ``None`` when the platform
-    served no bundle (older agent, or a control plane without opa). Raises
-    when a bundle *was* served but fails verification — a bad signature is
-    fatal, never a silent downgrade to the pydantic engine.
+    Thin one-shot wrapper around the shared decode-and-verify helper in
+    :mod:`fortify.security.source`. Kept here for back-compat with code
+    that wants a stateless decode of a single response — the stateful
+    refresh path (``If-None-Match``, cache by ``wasm_hash``) lives in
+    :class:`~fortify.security.source.PlatformPolicySource`.
     """
-    wasm_b64 = payload.get("bundle_wasm_b64")
-    manifest_text = payload.get("bundle_manifest")
-    sig_b64 = payload.get("bundle_signature_b64")
-    if not wasm_b64 or not manifest_text or not sig_b64:
-        return None
+    from fortify.security.source import decode_and_verify_platform_bundle
 
-    try:
-        wasm = base64.b64decode(wasm_b64)
-        signature = base64.b64decode(sig_b64)
-    except (ValueError, TypeError) as exc:
-        raise RuntimeError(
-            f"platform served a bundle but its base64 is malformed: {exc}"
-        ) from exc
-
-    bundle = PolicyBundle.from_parts(
-        wasm_bytes=wasm,
-        manifest_bytes=manifest_text.encode("utf-8"),
-        signature=signature,
-    )
-    try:
-        bundle.verify_signature(client.public_key_bytes())
-        bundle.verify_integrity()
-    except (BundleSignatureError, BundleIntegrityError) as exc:
-        raise RuntimeError(
-            f"platform-served policy bundle failed verification: {exc}. "
-            "Refusing to run rather than silently downgrading to the "
-            "pydantic engine."
-        ) from exc
-    return bundle
+    return decode_and_verify_platform_bundle(payload, client.public_key_bytes())
 
 
 def builtin_agents_root() -> Path:
@@ -537,7 +504,8 @@ def load_fortify_agent(
         project_id=project_id, base_url=base_url, api_key=api_key
     )
     client = FortifyClient(config)
-    payload = client.get_agent(resolved_name)
+    payload, initial_etag = client.get_agent(resolved_name)
+    assert payload is not None, "first get_agent has no If-None-Match — 304 impossible"
 
     spec = AgentSpec.model_validate(yaml.safe_load(payload["agent_yaml"]) or {})
     system_prompt = payload.get("system_md") or ""
@@ -563,9 +531,14 @@ def load_fortify_agent(
     #   1. FORTIFY_LOCAL_POLICY override (dev iteration) — wins outright.
     #   2. Platform-served signed bundle — verified, WASM-enforced.
     #   3. policy_yaml + pydantic — fallback when no bundle was served.
+    from fortify.security.source import PlatformPolicySource
+
     override = _local_policy_override()
+    platform_source: PlatformPolicySource | None = None
     if override is not None:
         policy = override
+        # Local override has its own (8b) refresh mechanism — no platform
+        # source attached.
     else:
         platform_bundle = _platform_bundle(payload, client)
         if platform_bundle is not None:
@@ -577,11 +550,23 @@ def load_fortify_agent(
                 "not have compiled (is opa available on the control plane?). "
                 "Refusing to fall back to the pydantic engine."
             )
+        # Phase 8a: attach a PolicySource so refresh_policy() can pull
+        # updates at every agent run via If-None-Match. Pre-seed with the
+        # bundle + etag we just fetched so the first refresh is a 304
+        # unless the policy actually changed.
+        platform_source = PlatformPolicySource(
+            client,
+            resolved_name,
+            initial_bundle=platform_bundle,
+            initial_etag=initial_etag,
+        )
 
     enforced = enforce_policy(agent, policy, approval_handler=approval_handler)
     # Attach the client so the runtime can do lazy attenuation inside an
     # active User scope without the caller having to thread it through.
     enforced.fortify_client = client
+    if platform_source is not None:
+        enforced._policy_source = platform_source
     return enforced, handler
 
 

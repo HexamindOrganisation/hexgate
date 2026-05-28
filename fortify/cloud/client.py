@@ -147,13 +147,26 @@ class FortifyClient:
     def from_env(cls, **kwargs: Any) -> "FortifyClient":
         return cls(FortifyConfig.from_env(**kwargs))
 
-    def get_agent(self, name: str) -> dict[str, Any]:
-        """Fetch {agent_yaml, policy_yaml, system_md, ...} for a named agent."""
+    def get_agent(
+        self, name: str, *, if_none_match: str | None = None
+    ) -> tuple[dict[str, Any] | None, str | None]:
+        """Fetch ``{agent_yaml, policy_yaml, system_md, ...}`` for a named agent.
+
+        Returns ``(payload, etag)``. When ``if_none_match`` is provided and
+        the platform replies ``304 Not Modified`` (the bundle hasn't changed
+        since the supplied ETag), ``payload`` is ``None`` and the same etag
+        is echoed back — so the caller can keep using its cached
+        :class:`PolicyBundle` without re-decoding or re-verifying anything.
+
+        Without ``if_none_match`` the call always returns ``(payload, etag)``
+        with a fresh body, matching the pre-Phase-8 behavior aside from
+        the now-paired etag.
+        """
         self._ensure_key_verified()
         url = (
             f"{self.config.base_url}/v1/projects/{self.config.project_id}/agents/{name}"
         )
-        return self._get(url)
+        return self._raw_get(url, authorize=True, if_none_match=if_none_match)
 
     # ------------------------------------------------------------------
     # Biscuit verification
@@ -219,7 +232,7 @@ class FortifyClient:
     def _fetch_public_key(self) -> bytes:
         """GET /v1/.well-known/keys and return the first key's raw bytes."""
         url = f"{self.config.base_url}/v1/.well-known/keys"
-        payload = self._raw_get(url, authorize=False)
+        payload, _ = self._raw_get(url, authorize=False)
         try:
             keys = payload["keys"]
             x = keys[0]["x"]
@@ -238,20 +251,45 @@ class FortifyClient:
     # ------------------------------------------------------------------
 
     def _get(self, url: str) -> dict[str, Any]:
-        return self._raw_get(url, authorize=True)
+        """Body-only GET. ``_raw_get`` is the unified HTTP entry point;
+        this drops the ETag tuple for callers that don't care about
+        conditional requests."""
+        payload, _ = self._raw_get(url, authorize=True)
+        assert payload is not None, "_get is never called with If-None-Match"
+        return payload
 
-    def _raw_get(self, url: str, *, authorize: bool) -> dict[str, Any]:
+    def _raw_get(
+        self,
+        url: str,
+        *,
+        authorize: bool,
+        if_none_match: str | None = None,
+    ) -> tuple[dict[str, Any] | None, str | None]:
+        """Single HTTP entry point — returns ``(payload, etag)``.
+
+        ``payload`` is ``None`` when the server replies ``304 Not Modified``
+        (only possible when ``if_none_match`` is set). All callers go
+        through here so tests have one place to mock and the ETag-aware
+        refresh path doesn't duplicate the urllib dance.
+        """
         headers: dict[str, str] = {
             "Accept": "application/json",
             "User-Agent": "fortify-sdk/0.1",
         }
         if authorize:
             headers["Authorization"] = f"Bearer {self.config.api_key}"
+        if if_none_match is not None:
+            headers["If-None-Match"] = if_none_match
         request = urllib.request.Request(url, headers=headers)
         try:
             with urllib.request.urlopen(request, timeout=self.timeout) as response:
+                etag = response.headers.get("ETag")
                 payload = response.read().decode("utf-8")
         except urllib.error.HTTPError as exc:
+            # urllib treats 304 as an HTTPError; it's actually a success
+            # case for conditional GETs.
+            if exc.code == 304:
+                return None, exc.headers.get("ETag") or if_none_match
             detail = exc.read().decode("utf-8", errors="replace")
             raise FortifyError(
                 f"Fortify API error {exc.code} calling {url}: {detail[:200]}"
@@ -261,6 +299,6 @@ class FortifyClient:
                 f"Fortify API unreachable at {url}: {exc.reason}"
             ) from exc
         try:
-            return json.loads(payload)
+            return json.loads(payload), etag
         except json.JSONDecodeError as exc:
             raise FortifyError(f"Fortify API returned non-JSON from {url}") from exc

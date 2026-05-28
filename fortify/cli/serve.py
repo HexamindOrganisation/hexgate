@@ -21,7 +21,6 @@ import argparse
 import asyncio
 import json
 import logging
-from collections.abc import Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -58,7 +57,6 @@ class ServeContext:
 
     runtime: AgentRuntime
     state: ChatState
-    rebuild: Callable[[], AgentRuntime] | None = None
 
 
 def _user_from_payload(attenuation: Any) -> User | None:
@@ -92,16 +90,6 @@ async def _maybe_user_scope(user: User | None):
             yield
 
 
-async def _refresh_runtime(context: ServeContext) -> None:
-    """Rebuild the agent at turn start so policy edits land without a restart."""
-    if context.rebuild is None:
-        return
-    try:
-        context.runtime = await asyncio.to_thread(context.rebuild)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("serve: policy refresh failed, using stale runtime: %s", exc)
-
-
 async def _handle_message(
     context: ServeContext,
     ws,
@@ -114,7 +102,9 @@ async def _handle_message(
         text = str(payload.get("message", "")).strip()
         if not text:
             return
-        await _refresh_runtime(context)
+        # Policy refresh is handled inside stream_agent now (Phase 8a) —
+        # the attached PolicySource sends If-None-Match and reuses the
+        # cached bundle on 304. No need for serve to rebuild the runtime.
         context.state.start_turn(text)
         user = _user_from_payload(payload.get("user_attenuation"))
         async with _maybe_user_scope(user):
@@ -168,15 +158,14 @@ async def _serve_loop(context: ServeContext, url: str, console: Console) -> None
             console.print("[yellow]disconnected[/]")
 
 
-async def run_serve(
-    runtime: AgentRuntime,
-    *,
-    rebuild: Callable[[], AgentRuntime] | None = None,
-) -> None:
+async def run_serve(runtime: AgentRuntime) -> None:
     """Top-level serve loop with reconnect + graceful shutdown.
 
-    If ``rebuild`` is provided, it will be invoked at the start of every chat
-    turn to pick up policy edits made in the dashboard without a restart.
+    Policy hot-reload is handled by the agent's attached :class:`~fortify.
+    security.source.PolicySource`: ``stream_agent`` calls
+    ``agent.refresh_policy()`` at the start of every turn, the source
+    sends ``If-None-Match`` to the platform, and a ``304`` short-circuits
+    to the cached bundle. No bespoke runtime rebuild needed here.
     """
     console = Console()
     config = FortifyConfig.from_env()
@@ -189,7 +178,7 @@ async def run_serve(
         ws_base = f"ws://{base}"
     url = f"{ws_base}/v1/projects/{config.project_id}/serve"
 
-    context = ServeContext(runtime=runtime, state=ChatState(), rebuild=rebuild)
+    context = ServeContext(runtime=runtime, state=ChatState())
     backoff = RECONNECT_BASE
 
     console.print(
@@ -260,16 +249,5 @@ def main(args: argparse.Namespace) -> int:
         approval_handler=approval_handler,
     )
 
-    def _rebuild() -> AgentRuntime:
-        """Re-fetch YAMLs and rebuild the agent with the latest policy."""
-        return build_runtime(
-            settings,
-            agent_name=agent_name,
-            base_dir=base_dir,
-            model=args.model,
-            local_only=False,
-            approval_handler=approval_handler,
-        )
-
-    asyncio.run(run_serve(runtime, rebuild=_rebuild))
+    asyncio.run(run_serve(runtime))
     return 0

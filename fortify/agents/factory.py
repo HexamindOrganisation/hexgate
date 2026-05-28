@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import logging
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any, Self, TypeAlias
@@ -367,6 +369,14 @@ class FortifyAgent:
         client = getattr(self, "fortify_client", None)
         if client is not None:
             rebuilt.fortify_client = client
+        # Phase 8: keep the enforcement seam alive across with_tools rebuilds
+        # so refresh_policy() can still swap engines after the rebuild.
+        enforcer = getattr(self, "_enforcer", None)
+        if enforcer is not None:
+            rebuilt._enforcer = enforcer
+        source = getattr(self, "_policy_source", None)
+        if source is not None:
+            rebuilt._policy_source = source
         return rebuilt
 
     def enforce_policy(
@@ -414,7 +424,40 @@ class FortifyAgent:
                 )
             else:
                 wrapped.append(tool_spec)
-        return self.with_tools(wrapped)
+        rebuilt = self.with_tools(wrapped)
+        # Stash the enforcer so refresh_policy() can swap its policy in
+        # place when the platform serves a new bundle, without rebuilding
+        # the tool wrappers.
+        rebuilt._enforcer = enforcer
+        return rebuilt
+
+    def refresh_policy(self) -> None:
+        """Pull the current policy from the attached source and swap it in.
+
+        Called at the top of every agent run (see :func:`stream_agent` /
+        :func:`invoke_agent` / serve mode) so policy edits land at the
+        next run no matter how the user invokes the agent. The
+        :class:`~fortify.security.source.PlatformPolicySource` does the
+        ETag/304 dance, and the content-addressed
+        :class:`~fortify.security.wasm_engine._WasmPolicyCache` makes the
+        unchanged case a single small HTTP round-trip — no wasmtime
+        re-instantiation, no signature re-verify.
+
+        No-op when no source is attached (programmatic callers that
+        constructed the agent without one) or no enforcer exists (no
+        policy was applied). Failures from the source propagate so
+        callers see them at run boundary, not as silent staleness.
+        """
+        source = getattr(self, "_policy_source", None)
+        enforcer = getattr(self, "_enforcer", None)
+        if source is None or enforcer is None:
+            return
+        new_policy = source.fetch()
+        if new_policy is None or new_policy is enforcer.policy:
+            # Source has nothing to offer, or the same object came back
+            # (e.g. PlatformPolicySource returns the cached bundle on 304).
+            return
+        enforcer.policy = new_policy
 
 
 AgentGraph: TypeAlias = FortifyAgent
@@ -501,6 +544,29 @@ def create_agent(
     return agent, handler
 
 
+_logger = logging.getLogger("fortify.agents.factory")
+
+
+async def _refresh_policy_safely(agent: "AgentGraph") -> None:
+    """Pull the latest policy from the agent's attached source, off the loop.
+
+    Called at the top of every async invocation so policy changes land at
+    the next run without anyone having to know which entry point they're
+    going through. No-op when no source is attached (programmatic
+    construction). Failures log a warning and keep the previous policy —
+    a transient network blip should never crash a chat turn.
+    """
+    refresh = getattr(agent, "refresh_policy", None)
+    if refresh is None:
+        return
+    try:
+        await asyncio.to_thread(refresh)
+    except Exception as exc:  # noqa: BLE001 — refresh failures must not crash the run
+        _logger.warning(
+            "policy refresh failed: %s — keeping previously loaded policy", exc
+        )
+
+
 @observe(name="invoke_fortify_agent")
 async def invoke_agent(
     agent: AgentGraph,
@@ -510,6 +576,7 @@ async def invoke_agent(
     tool_use_context: ToolUseContext | None = None,
 ) -> dict[str, Any]:
     """Invoke the agent for one normalized input payload."""
+    await _refresh_policy_safely(agent)
     token = set_current_tool_use_context(
         _resolve_tool_use_context(agent, tool_use_context)
     )
@@ -530,6 +597,7 @@ async def stream_agent_raw(
     tool_use_context: ToolUseContext | None = None,
 ) -> AsyncIterator[LangChainStreamEvent]:
     """Stream raw LangChain events from the agent runtime."""
+    await _refresh_policy_safely(agent)
     config = get_langfuse_runnable_config(handler)
     config["run_id"] = new_root_run_id()
     token = set_current_tool_use_context(

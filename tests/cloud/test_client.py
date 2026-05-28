@@ -224,10 +224,14 @@ def test_client_verifies_on_first_call_then_caches(
     calls: list[tuple[str, bool]] = []
 
     def fake_raw_get(
-        self: FortifyClient, url: str, *, authorize: bool
-    ) -> dict[str, Any]:
+        self: FortifyClient,
+        url: str,
+        *,
+        authorize: bool,
+        if_none_match: str | None = None,
+    ) -> tuple[dict[str, Any] | None, str | None]:
         calls.append((url, authorize))
-        return _stub_get_agent_response()
+        return _stub_get_agent_response(), None
 
     monkeypatch.setattr(FortifyClient, "_raw_get", fake_raw_get)
 
@@ -306,14 +310,23 @@ def test_client_fetches_jwks_when_pubkey_unset(
     calls: list[tuple[str, bool]] = []
 
     def fake_raw_get(
-        self: FortifyClient, url: str, *, authorize: bool
-    ) -> dict[str, Any]:
+        self: FortifyClient,
+        url: str,
+        *,
+        authorize: bool,
+        if_none_match: str | None = None,
+    ) -> tuple[dict[str, Any] | None, str | None]:
         calls.append((url, authorize))
         if url.endswith("/.well-known/keys"):
-            return {
-                "keys": [{"x": _b64url(pub), "fingerprint": "sha256:abcdef0123456789"}]
-            }
-        return _stub_get_agent_response()
+            return (
+                {
+                    "keys": [
+                        {"x": _b64url(pub), "fingerprint": "sha256:abcdef0123456789"}
+                    ]
+                },
+                None,
+            )
+        return _stub_get_agent_response(), None
 
     monkeypatch.setattr(FortifyClient, "_raw_get", fake_raw_get)
 
@@ -344,7 +357,10 @@ def test_client_jwks_response_with_unexpected_shape_raises(
     monkeypatch.setattr(
         FortifyClient,
         "_raw_get",
-        lambda self, url, *, authorize: {"unexpected": "shape"},
+        lambda self, url, *, authorize, if_none_match=None: (
+            {"unexpected": "shape"},
+            None,
+        ),
     )
 
     with pytest.raises(FortifyError, match="unexpected JWKS shape"):
