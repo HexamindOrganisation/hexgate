@@ -19,6 +19,7 @@ from fortify.cli.chat import (
     _render_welcome,
     _tail_text,
 )
+from fortify.runtime import User
 from fortify.cli.state import LiveRunState, ToolActivity
 from fortify.streaming import ToolCallState
 from fortify.tools import edit_file, read_file
@@ -151,6 +152,8 @@ def test_build_approval_handler_supports_auto_modes() -> None:
 
 def test_prompt_for_approval_asks_user_with_tool_arguments() -> None:
     """Render a compact approval prompt and return the user's decision."""
+    import asyncio
+
     console = Console(record=True, width=100)
     captured_prompts: list[str] = []
 
@@ -160,21 +163,27 @@ def test_prompt_for_approval_asks_user_with_tool_arguments() -> None:
 
     console.input = fake_input  # type: ignore[method-assign]
 
-    approved = _prompt_for_approval(
-        console,
-        {
-            "tool_name": "write_file",
-            "arguments": {
-                "file_path": "napoleon.md",
-                "content": "new section",
-            },
+    action = {
+        "tool_name": "write_file",
+        "arguments": {
+            "file_path": "napoleon.md",
+            "content": "new section",
         },
-    )
+        "agent_name": "test-agent",
+    }
+
+    async def _run() -> bool:
+        # Open a User scope so the prompt can read the role from the contextvar.
+        async with User(user_id="u-1", role="support"):
+            return _prompt_for_approval(console, action, None)
+
+    approved = asyncio.run(_run())
 
     rendered = console.export_text()
 
     assert approved is True
     assert "Approval required for write_file" in rendered
+    assert "role: support" in rendered
     assert "file_path: napoleon.md" in rendered
     assert "content: new section" in rendered
     assert "Type y to approve or n to deny, then press Enter." in rendered

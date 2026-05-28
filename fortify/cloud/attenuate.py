@@ -94,9 +94,7 @@ def attenuate_for_user(
         source_lines.append(f'role("{_escape_datalog_string(role)}");')
     if ttl_seconds is not None:
         if not isinstance(ttl_seconds, int) or ttl_seconds <= 0:
-            raise TokenError(
-                f"ttl_seconds must be a positive int, got {ttl_seconds!r}"
-            )
+            raise TokenError(f"ttl_seconds must be a positive int, got {ttl_seconds!r}")
         expiry = datetime.now(timezone.utc) + timedelta(seconds=ttl_seconds)
         source_lines.append(
             f"check if time($t), $t < {expiry.strftime('%Y-%m-%dT%H:%M:%SZ')};"

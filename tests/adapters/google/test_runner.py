@@ -11,12 +11,13 @@ from google.adk.sessions import InMemorySessionService
 from google.adk.tools.function_tool import FunctionTool
 
 from fortify.adapters.google.runner import FortifyRunner
-from fortify.runtime import UserContext
+from fortify.runtime import User
+from fortify.runtime.context import get_current_user
 
 
-def _user_context() -> UserContext:
-    """Build a minimal UserContext for runner tests."""
-    return UserContext(user_id="u-1", session_id="s-1", user_role="developer")
+def _user() -> User:
+    """Build a minimal User for runner tests."""
+    return User(user_id="u-1", session_id="s-1", role="developer")
 
 
 def _make_callable(name: str = "echo") -> Any:
@@ -56,21 +57,24 @@ class _FakeRunner:
     instances: list["_FakeRunner"] = []
 
     def __init__(self, **kwargs: Any) -> None:
-        """Record construction kwargs and reset call captures."""
         self.kwargs = kwargs
         self.run_calls: list[dict[str, Any]] = []
         self.run_async_calls: list[dict[str, Any]] = []
+        # Capture which User was active at each call (verifies the scope is live).
+        self.active_users: list[Any] = []
         _FakeRunner.instances.append(self)
 
     def run(self, **kwargs: Any) -> Any:
         """Yield two synthetic events while capturing the call kwargs."""
         self.run_calls.append(kwargs)
+        self.active_users.append(get_current_user())
         yield {"event": "first"}
         yield {"event": "second"}
 
     async def run_async(self, **kwargs: Any) -> AsyncIterator[dict[str, str]]:
         """Async-yield two synthetic events while capturing the call kwargs."""
         self.run_async_calls.append(kwargs)
+        self.active_users.append(get_current_user())
         yield {"event": "first"}
         yield {"event": "second"}
 
@@ -82,8 +86,15 @@ def _install_fake_runner(monkeypatch: pytest.MonkeyPatch) -> type[_FakeRunner]:
     return _FakeRunner
 
 
-def test_constructor_uses_explicit_api_key() -> None:
+# ---------------------------------------------------------------------------
+# Constructor
+# ---------------------------------------------------------------------------
+
+
+def test_constructor_uses_explicit_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
     """An explicit api_key argument is stored verbatim."""
+    _install_fake_runner(monkeypatch)
+
     runner = FortifyRunner(
         agent=_make_agent(),
         app_name="app",
@@ -97,6 +108,7 @@ def test_constructor_uses_explicit_api_key() -> None:
 def test_constructor_falls_back_to_env_var(monkeypatch: pytest.MonkeyPatch) -> None:
     """Resolve the API key from FORTIFY_KEY when no explicit key is given."""
     monkeypatch.setenv("FORTIFY_KEY", "from-env")
+    _install_fake_runner(monkeypatch)
 
     runner = FortifyRunner(
         agent=_make_agent(),
@@ -112,6 +124,7 @@ def test_constructor_prefers_explicit_api_key_over_env(
 ) -> None:
     """The explicit api_key argument wins when both sources are populated."""
     monkeypatch.setenv("FORTIFY_KEY", "from-env")
+    _install_fake_runner(monkeypatch)
 
     runner = FortifyRunner(
         agent=_make_agent(),
@@ -137,9 +150,13 @@ def test_constructor_raises_when_no_api_key_available(
         )
 
 
-def test_constructor_stores_extra_runner_kwargs() -> None:
-    """Extra kwargs are stashed for the eventual Runner construction."""
-    runner = FortifyRunner(
+def test_constructor_builds_underlying_runner_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Construction wraps the agent + builds the Runner exactly once."""
+    fake = _install_fake_runner(monkeypatch)
+
+    FortifyRunner(
         agent=_make_agent(),
         app_name="app",
         session_service=InMemorySessionService(),
@@ -147,48 +164,22 @@ def test_constructor_stores_extra_runner_kwargs() -> None:
         custom_kwarg="value",
     )
 
-    assert runner._runner_kwargs == {"custom_kwarg": "value"}
-
-
-def test_run_yields_events_and_constructs_runner_with_wrapped_agent(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """run() builds a Runner with a wrapped agent and yields events from it."""
-    setup_counts = _silence_observability(monkeypatch)
-    fake = _install_fake_runner(monkeypatch)
-
-    session_service = InMemorySessionService()
-    agent = _make_agent()
-    runner = FortifyRunner(
-        agent=agent,
-        app_name="my-app",
-        session_service=session_service,
-        api_key="k",
-    )
-
-    events = list(runner.run(new_message="hello", user_context=_user_context()))
-
-    assert events == [{"event": "first"}, {"event": "second"}]
-    assert setup_counts["setup"] == 1
     [fake_runner] = fake.instances
-    assert fake_runner.kwargs["app_name"] == "my-app"
-    assert fake_runner.kwargs["session_service"] is session_service
-    wrapped_agent = fake_runner.kwargs["agent"]
-    assert wrapped_agent is not agent
-    assert wrapped_agent.name == agent.name
-    [run_call] = fake_runner.run_calls
-    assert run_call == {
-        "user_id": "u-1",
-        "session_id": "s-1",
-        "new_message": "hello",
-    }
+    assert fake_runner.kwargs["app_name"] == "app"
+    assert fake_runner.kwargs["custom_kwarg"] == "value"
+    # The wrapped agent is a clone, not the original.
+    assert fake_runner.kwargs["agent"].name == "my_agent"
 
 
-@pytest.mark.asyncio
-async def test_run_async_yields_events_and_constructs_runner(
+# ---------------------------------------------------------------------------
+# run / run_async — User scope + delegation
+# ---------------------------------------------------------------------------
+
+
+def test_run_opens_user_scope_and_yields_events(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """run_async() builds a Runner with a wrapped agent and yields events."""
+    """run() opens a User scope around the underlying Runner.run."""
     setup_counts = _silence_observability(monkeypatch)
     fake = _install_fake_runner(monkeypatch)
 
@@ -198,13 +189,43 @@ async def test_run_async_yields_events_and_constructs_runner(
         session_service=InMemorySessionService(),
         api_key="k",
     )
+    user = _user()
 
-    events = [
-        event
-        async for event in runner.run_async(
-            new_message="hello", user_context=_user_context()
-        )
-    ]
+    events = list(runner.run(new_message="hello", user=user))
+
+    assert events == [{"event": "first"}, {"event": "second"}]
+    assert setup_counts["setup"] == 1
+    [fake_runner] = fake.instances
+    [run_call] = fake_runner.run_calls
+    assert run_call == {
+        "user_id": "u-1",
+        "session_id": "s-1",
+        "new_message": "hello",
+    }
+    # User scope was live during the underlying call.
+    [active] = fake_runner.active_users
+    assert active is user
+    # Scope unwound after the call.
+    assert get_current_user() is None
+
+
+@pytest.mark.asyncio
+async def test_run_async_opens_user_scope_and_yields_events(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """run_async() opens a User scope around the underlying Runner.run_async."""
+    setup_counts = _silence_observability(monkeypatch)
+    fake = _install_fake_runner(monkeypatch)
+
+    runner = FortifyRunner(
+        agent=_make_agent(),
+        app_name="my-app",
+        session_service=InMemorySessionService(),
+        api_key="k",
+    )
+    user = _user()
+
+    events = [event async for event in runner.run_async(new_message="hello", user=user)]
 
     assert events == [{"event": "first"}, {"event": "second"}]
     assert setup_counts["setup"] == 1
@@ -215,9 +236,17 @@ async def test_run_async_yields_events_and_constructs_runner(
         "session_id": "s-1",
         "new_message": "hello",
     }
+    [active] = fake_runner.active_users
+    assert active is user
+    assert get_current_user() is None
 
 
-def test_run_propagates_user_context_to_langfuse(
+# ---------------------------------------------------------------------------
+# Langfuse propagation
+# ---------------------------------------------------------------------------
+
+
+def test_run_propagates_user_identity_to_langfuse(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """run() enters propagate_attributes with user identity and an agent-tagged scope."""
@@ -243,7 +272,7 @@ def test_run_propagates_user_context_to_langfuse(
         api_key="k",
     )
 
-    list(runner.run(new_message="hi", user_context=_user_context()))
+    list(runner.run(new_message="hi", user=_user()))
 
     [call] = propagate_calls
     assert call["tags"] == ["google.runner.run.custom_agent"]
@@ -253,10 +282,10 @@ def test_run_propagates_user_context_to_langfuse(
 
 
 @pytest.mark.asyncio
-async def test_run_async_propagates_user_context_to_langfuse(
+async def test_run_async_propagates_user_identity_to_langfuse(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """run_async() also propagates the user context for each invocation."""
+    """run_async() also propagates the user identity for each invocation."""
     _silence_observability(monkeypatch)
     _install_fake_runner(monkeypatch)
 
@@ -279,7 +308,7 @@ async def test_run_async_propagates_user_context_to_langfuse(
         api_key="k",
     )
 
-    async for _ in runner.run_async(new_message="hi", user_context=_user_context()):
+    async for _ in runner.run_async(new_message="hi", user=_user()):
         pass
 
     [call] = propagate_calls
@@ -288,22 +317,25 @@ async def test_run_async_propagates_user_context_to_langfuse(
     assert call["session_id"] == "s-1"
 
 
-def test_build_runner_passes_extra_kwargs_through(
+# ---------------------------------------------------------------------------
+# Extra kwargs threading
+# ---------------------------------------------------------------------------
+
+
+def test_extra_kwargs_reach_underlying_runner(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Extra kwargs given to the constructor reach the underlying Runner."""
     _silence_observability(monkeypatch)
     fake = _install_fake_runner(monkeypatch)
 
-    runner = FortifyRunner(
+    FortifyRunner(
         agent=_make_agent(),
         app_name="app",
         session_service=InMemorySessionService(),
         api_key="k",
         custom_kwarg="value",
     )
-
-    list(runner.run(new_message="hi", user_context=_user_context()))
 
     [fake_runner] = fake.instances
     assert fake_runner.kwargs["custom_kwarg"] == "value"

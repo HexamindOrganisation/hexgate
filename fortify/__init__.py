@@ -2,13 +2,10 @@
 
 from fortify.agents.factory import (
     create_agent,
+    enforce_policy,
     invoke_agent,
     stream_agent,
     stream_agent_raw,
-)
-from fortify.agents.security import (
-    enforce_policy,
-    with_approval_handler,
     with_before_action,
 )
 from fortify.agents.loader import (
@@ -26,7 +23,7 @@ from fortify.agents.loader import (
     unregister_agent,
 )
 from fortify.cloud import FortifyClient, FortifyConfig
-from fortify.runtime import LocalWorkspace, ToolUseContext, User, UserContext, Workspace
+from fortify.runtime import LocalWorkspace, ToolUseContext, User, Workspace
 from fortify.security import AgentPolicy
 from fortify.tools import (
     agent_tool,
@@ -48,7 +45,6 @@ __all__ = [
     "LocalWorkspace",
     "ToolUseContext",
     "User",
-    "UserContext",
     "Workspace",
     "agent_tool",
     "bash",
@@ -75,8 +71,7 @@ __all__ = [
     "stream_agent",
     "stream_agent_raw",
     "unregister_agent",
-    "with_approval_handler",
-    "with_before_action",
     "web_search",
+    "with_before_action",
     "write_file",
 ]

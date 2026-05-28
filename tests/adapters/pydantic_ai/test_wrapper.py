@@ -82,7 +82,7 @@ def test_clone_agent_with_tools_installs_provided_tools_on_clone() -> None:
 
 
 def test_wrap_pydantic_agent_returns_fortify_proxy() -> None:
-    """Return a FortifyPydanticAgent populated with tool names and api key."""
+    """Return a FortifyPydanticAgent populated with agent name and api key."""
     agent = _make_agent()
 
     wrapped = wrap_pydantic_agent(agent=agent, api_key="fortify-key")
@@ -90,7 +90,6 @@ def test_wrap_pydantic_agent_returns_fortify_proxy() -> None:
     assert isinstance(wrapped, FortifyPydanticAgent)
     assert wrapped._api_key == "fortify-key"
     assert wrapped._agent_name == "my-agent"
-    assert sorted(wrapped._tool_names) == ["echo", "shout"]
 
 
 def test_wrap_pydantic_agent_does_not_mutate_original_agent() -> None:
@@ -173,10 +172,9 @@ def test_wrap_pydantic_agent_clone_has_wrapped_tools() -> None:
 
 
 def test_wrap_pydantic_agent_with_no_tools() -> None:
-    """An agent with no tools wraps cleanly to an empty tool name list."""
+    """An agent with no tools wraps cleanly to an empty toolset."""
     agent = _make_agent(with_tools=False)
 
     wrapped = wrap_pydantic_agent(agent=agent, api_key="k")
 
-    assert wrapped._tool_names == []
     assert wrapped._agent._function_toolset.tools == {}

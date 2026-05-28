@@ -368,34 +368,60 @@ class FortifyAgent:
             workspace=self.workspace,
         )
         # Propagate the optional fortify_client attribute that load_fortify_agent
-        # attaches to the cloud-loaded runtime — every `.with_*` transform
-        # funnels through here, so this keeps the client reachable for lazy
-        # user-scope attenuation after enforce_policy / with_approval_handler /
-        # with_before_action chains.
+        # attaches to the cloud-loaded runtime — enforce_policy funnels through
+        # here, so this keeps the client reachable for lazy user-scope
+        # attenuation after the rebuild.
         client = getattr(self, "fortify_client", None)
         if client is not None:
             rebuilt.fortify_client = client
         return rebuilt
 
-    def enforce_policy(self, policy: object) -> Self:
-        """Return a new agent runtime with Gate 1 policy enforcement applied.
+    def enforce_policy(
+        self,
+        policy: object,
+        *,
+        approval_handler: ApprovalHandler | None = None,
+    ) -> Self:
+        """Return a new agent with Gate 1 policy enforcement applied.
 
-        Accepts a path to a single YAML, a path to a ``policies/`` directory
-        of role policies, an :class:`AgentPolicy`, an existing
-        :class:`PolicySet`, a :class:`~fortify.security.PolicyBundle` (the
-        WASM enforcement path), or ``None`` (deny-by-default).
+        ``policy`` may be a YAML path, a ``policies/`` directory,
+        :class:`AgentPolicy`, :class:`PolicySet`, a
+        :class:`~fortify.security.PolicyBundle` (the WASM enforcement
+        path), or ``None`` (no-op). Role resolves at call time from the
+        active :class:`User`. ``approval_handler`` (callable or ``bool``)
+        resolves NEEDS_APPROVAL inline; ``None`` renders structured errors.
         """
-        from fortify.agents.security import wrap_tools_with_policy
+        from langchain_core.tools import BaseTool
+
+        from fortify.adapters.langchain.tools import GuardedTool
         from fortify.security.bundle import PolicyBundle
+        from fortify.security.enforcer import PolicyEnforcer
         from fortify.security.policy_set import PolicySet, load_policy_set
 
+        if policy is None:
+            return self.with_tools(list(self.tools))
+
         if isinstance(policy, PolicyBundle):
-            resolved: object = policy
+            resolved = policy
         elif isinstance(policy, PolicySet):
             resolved = policy
         else:
             resolved = load_policy_set(policy)
-        return self.with_tools(wrap_tools_with_policy(self.tools, resolved))
+        enforcer = PolicyEnforcer(resolved, agent_name=self.name or "default")
+
+        wrapped: list[ToolSpec] = []
+        for tool_spec in self.tools:
+            if isinstance(tool_spec, BaseTool):
+                wrapped.append(
+                    GuardedTool.wrap(
+                        tool_spec,
+                        enforcer=enforcer,
+                        approval_handler=approval_handler,
+                    )
+                )
+            else:
+                wrapped.append(tool_spec)
+        return self.with_tools(wrapped)
 
     def with_before_action(
         self,
@@ -403,38 +429,55 @@ class FortifyAgent:
         *,
         context_provider: ContextProvider | None = None,
     ) -> Self:
-        """Return a new agent runtime with a pre-tool Gate 2 hook applied."""
-        from fortify.agents.security import wrap_tools_with_before_action
+        """Return a new agent with a Gate 2 pre-tool hook applied.
 
-        return self.with_tools(
-            wrap_tools_with_before_action(
-                self.tools,
-                before_action,
-                context_provider=context_provider,
-                agent_name=self.name,
-            )
-        )
+        ``before_action(action_dict, context_dict)`` — raising vetoes the
+        call with a structured ``before_action_denied`` payload. The
+        ``action_dict`` carries ``tool_name`` / ``arguments`` /
+        ``agent_name``; ``context_dict`` is produced by ``context_provider``.
+        Re-wrapping a policy-enforced tool preserves its enforcer.
+        """
+        from langchain_core.tools import BaseTool
 
-    def with_approval_handler(
-        self,
-        approval_handler: ApprovalHandler,
-        *,
-        context_provider: ContextProvider | None = None,
-    ) -> Self:
-        """Return a new agent runtime with a Gate 1 approval resolver."""
-        from fortify.agents.security import wrap_tools_with_approval_handler
+        from fortify.adapters.langchain.tools import GuardedTool
 
-        return self.with_tools(
-            wrap_tools_with_approval_handler(
-                self.tools,
-                approval_handler,
-                context_provider=context_provider,
-                agent_name=self.name,
-            )
-        )
+        wrapped: list[ToolSpec] = []
+        for tool_spec in self.tools:
+            if isinstance(tool_spec, BaseTool):
+                wrapped.append(
+                    GuardedTool.wrap(
+                        tool_spec,
+                        before_action=before_action,
+                        context_provider=context_provider,
+                        agent_name=self.name,
+                    )
+                )
+            else:
+                wrapped.append(tool_spec)
+        return self.with_tools(wrapped)
 
 
 AgentGraph: TypeAlias = FortifyAgent
+
+
+def enforce_policy(
+    agent: AgentGraph,
+    policy: object,
+    *,
+    approval_handler: ApprovalHandler | None = None,
+) -> AgentGraph:
+    """Functional alias for :meth:`FortifyAgent.enforce_policy`."""
+    return agent.enforce_policy(policy, approval_handler=approval_handler)
+
+
+def with_before_action(
+    agent: AgentGraph,
+    before_action: BeforeActionHook,
+    *,
+    context_provider: ContextProvider | None = None,
+) -> AgentGraph:
+    """Return an agent runtime with a Gate 2 pre-tool hook applied."""
+    return agent.with_before_action(before_action, context_provider=context_provider)
 
 
 @observe(name="create_fortify_agent")

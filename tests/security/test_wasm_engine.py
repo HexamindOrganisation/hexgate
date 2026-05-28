@@ -15,7 +15,7 @@ from typing import Any
 import pytest
 
 from fortify.security import (
-    Decision,
+    RegoVerdict,
     WasmEvalError,
     WasmPolicy,
     compile_to_rego,
@@ -87,7 +87,7 @@ def test_allow_when_all_constraints_satisfied(policy: WasmPolicy) -> None:
     d = policy.decide(
         role="billing", tool="refund_order", args={"amount": 200, "currency": "USD"}
     )
-    assert d == Decision(allow=True, requires_approval=False, violations=[])
+    assert d == RegoVerdict(allow=True, requires_approval=False, violations=[])
 
 
 @needs_opa
@@ -127,7 +127,7 @@ def test_deny_by_absence_of_allow_rule(policy: WasmPolicy) -> None:
     """Unknown role/tool combos get a clean deny with empty violations —
     the policy never had a rule for them, so there's nothing to violate."""
     d = policy.decide(role="billing", tool="not_a_tool", args={})
-    assert d == Decision(allow=False, requires_approval=False, violations=[])
+    assert d == RegoVerdict(allow=False, requires_approval=False, violations=[])
 
 
 # ---------------------------------------------------------------------------

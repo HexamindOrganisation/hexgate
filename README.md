@@ -128,8 +128,7 @@ agent, handler = create_agent(
 The current curated surface includes:
 
 - `create_agent`
-- `enforce_policy`
-- `with_approval_handler`
+- `enforce_policy` — accepts an optional `approval_handler=` for `NEEDS_APPROVAL` outcomes
 - `with_before_action`
 - `invoke_agent`
 - `stream_agent`
@@ -153,7 +152,6 @@ from fortify import (
     grep,
     read_file,
     write_file,
-    with_approval_handler,
     with_before_action,
     agent_tool,
     load_agent,
@@ -170,32 +168,33 @@ from fortify import (
 
 In addition to its native `create_agent(...)` runtime, `fortify` ships adapters that wrap agents built with **OpenAI Agents SDK**, **LangChain / LangGraph**, **Google ADK**, or **Pydantic AI** to add two things without touching the agent's logic:
 
-1. **Tool-call policy enforcement.** Each tool the agent can invoke is gated by an `AgentPolicy` that decides allow/deny per call. Denied calls return a denial string (or framework-native exception) to the model rather than aborting the run, so the agent can recover.
-2. **User-aware observability.** Every run is traced through Langfuse with the caller's `UserContext` (user id, session id, role) propagated onto the spans.
+1. **Tool-call policy enforcement.** Each tool the agent can invoke is gated by a `PolicyEnforcer` that returns a typed `Decision` (allow / deny / needs-approval) per call. Non-allow outcomes render as a `[policy_denied]` / `[approval_required]` marker the model sees as tool output (or, for pydantic_ai, a `ModelRetry`) rather than aborting the run, so the agent can recover.
+2. **User-aware observability.** Every run is traced through Langfuse with the active `User`'s identity (user id, session id, role) propagated onto the spans.
 
 The four integrations differ in shape because the underlying SDKs do:
 
 | | OpenAI Agents SDK | LangChain / LangGraph | Google ADK | Pydantic AI |
 | --- | --- | --- | --- | --- |
 | Entry point | `FortifyRunner` (replaces `Runner`) | `wrap_langchain_agent` (returns a proxy) | `FortifyRunner` (replaces `Runner`) | `wrap_pydantic_agent` (returns a proxy) |
-| Tool wrapping | Copies each `FunctionTool`, replaces `on_invoke_tool` with a guarded version | Mutates each `BaseTool` in place, replaces `func`/`coroutine` with contextvar-driven gates, sets `handle_tool_error=True` | Copies each `BaseTool` (normalizing bare callables to `FunctionTool`), replaces `run_async` with a guarded version | Copies each `Tool` and overrides `function_schema.call` with a contextvar-driven gate |
-| Denial behavior | Guard returns the denial text as tool output | Guard raises `ToolDeniedError` (a `ToolException`); LangChain converts it to a `ToolMessage` | Guard returns the denial text as tool output | Guard raises `ToolDeniedError` (a `ModelRetry`); pydantic_ai surfaces it back to the model as a tool-result message |
+| Tool wrapping | Copies each `FunctionTool`, replaces `on_invoke_tool` with a `PolicyEnforcer`-gated version | Mutates each `BaseTool` in place (`install_enforcer_on_tool`), replaces `func`/`coroutine` with enforcer-gated versions, sets `handle_tool_error=True` | Copies each `BaseTool` (normalizing bare callables to `FunctionTool`), replaces `run_async` with a gated version | Copies each `Tool` and overrides `function_schema.call` with a gated version |
+| Denial behavior | Returns `decision.as_error_message()` as the tool output (`[policy_denied]` / `[approval_required]` markered string) | Returns `{"ok": False, "error": decision.as_error_payload()}` so LangChain emits the structured dict as the tool result | Returns `decision.as_error_message()` as the tool output | Raises `ModelRetry(decision.as_error_message())`; pydantic_ai surfaces it back to the model as a tool-result message |
 | Tracing | `OpenAIAgentsInstrumentor` + `propagate_attributes` | Langfuse `CallbackHandler` injected into each call's `RunnableConfig` + `propagate_attributes` | `GoogleADKInstrumentor` + `propagate_attributes` | `Agent.instrument_all()` + `propagate_attributes` |
+| Per-call identity | `user: User` keyword on `run` / `run_sync` / `run_streamed` | `user: User` keyword on `invoke` / `ainvoke` / `stream` / `astream` / `astream_events` | `user: User` keyword on `run` / `run_async` | `user: User` keyword on `run` / `run_sync` / `run_stream` / `iter` |
 
-In all cases, the original agent object is left intact (or, for LangChain tools, mutated by design so the same `tools` list flows through `create_react_agent`); the wrapper holds the policy and the user context.
+Role resolution happens **at call time** from the active `User` contextvar — one wrapped agent serves many users concurrently because the scope is per-call. The original agent object is left intact (or, for LangChain BYO-graph tools, mutated by design so the same `tools` list flows through `create_react_agent`); the wrapper holds the policy.
 
 All adapters resolve the API key the same way: from the explicit `api_key=` argument, falling back to the `FORTIFY_KEY` environment variable.
 
 ### OpenAI Agents SDK — `FortifyRunner`
 
-`FortifyRunner` is a drop-in replacement for `agents.Runner`. It wraps the agent's tools with the policy resolved for the user, then dispatches to `Runner.run` / `run_sync` / `run_streamed`.
+`FortifyRunner` is a drop-in replacement for `agents.Runner`. It wraps the agent's tools with a `PolicyEnforcer` at construction time and opens a `User` scope around each `Runner.run` / `run_sync` / `run_streamed` call so role resolution happens at call time.
 
 ```python
 import asyncio
 from agents import Agent, function_tool
 from dotenv import load_dotenv
 
-from fortify.runtime import UserContext
+from fortify.runtime import User
 from fortify.adapters.openai import FortifyRunner
 
 
@@ -218,9 +217,7 @@ async def main():
     result = await runner.run(
         agent,
         "What's the weather in Cherbourg?",
-        user_context=UserContext(
-            user_id="user_1", session_id="session_1", user_role="member",
-        ),
+        user=User(user_id="user_1", session_id="session_1", role="member"),
     )
     print(result)
 
@@ -231,15 +228,15 @@ if __name__ == "__main__":
 
 What happens under the hood:
 
-- `FortifyRunner.run` calls `wrap_openai_agent`, which builds an `AgentPolicy` for `(user_context, agent.name, tool_names)` and returns a `dataclasses.replace`'d copy of the agent with policy-gated tool copies — your original `agent` is untouched.
-- When the model calls a tool, the guard checks the policy. On deny, it returns `"Tool '<name>' is denied by the agent policy. The tool was not executed."` so the model sees a tool result and can adapt.
+- `FortifyRunner.run` calls `wrap_openai_agent`, which builds a `PolicySet` for `(api_key, agent.name, tool_names)`, constructs one `PolicyEnforcer`, and returns a `dataclasses.replace`'d copy of the agent with policy-gated tool copies — your original `agent` is untouched.
+- The runner opens an `async with user:` scope around the underlying `Runner.run*` call. When the model calls a tool, the guard asks `enforcer.decide(...)` for a `Decision`. On non-allow, it returns `decision.as_error_message()` — a `[policy_denied]` or `[approval_required]` markered string the model can interpret and recover from.
 - The run executes inside `propagate_attributes(user_id=..., session_id=..., metadata={"user_role": ...})`, so Langfuse spans carry the caller identity.
 
 `run_sync` and `run_streamed` work the same way.
 
 ### LangChain / LangGraph — `wrap_langchain_agent`
 
-`wrap_langchain_agent` mutates the tools you pass in (so the same instances inside the compiled graph become policy-gated) and returns a `FortifyLangchainAgent` proxy that injects a Langfuse callback into every `invoke` / `ainvoke` / `stream` / `astream` / `astream_events` call. The `user_context` is supplied **per call**, not at wrap time, so a single wrapped agent can serve many users concurrently — each call resolves its own `AgentPolicy` and identity propagation.
+`wrap_langchain_agent` builds a `PolicyEnforcer` once and installs it on each tool in place (`install_enforcer_on_tool`) so the same instances inside the compiled graph become policy-gated. It returns a `FortifyLangchainAgent` proxy that opens a `User` scope and injects a Langfuse callback into every `invoke` / `ainvoke` / `stream` / `astream` / `astream_events` call. The `user` is supplied **per call**, so a single wrapped agent can serve many users concurrently — role resolution happens at call time from the contextvar.
 
 ```python
 import asyncio
@@ -248,7 +245,7 @@ from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI
 from langgraph.prebuilt import create_react_agent
 
-from fortify.runtime import UserContext
+from fortify.runtime import User
 from fortify.adapters.langchain import wrap_langchain_agent
 
 
@@ -281,11 +278,7 @@ async def main():
 
     result = await agent.ainvoke(
         {"messages": [{"role": "user", "content": "What is the weather in Tokyo?"}]},
-        user_context=UserContext(
-            user_id="langchain_user_1",
-            user_role="member",
-            session_id="session_abc",
-        ),
+        user=User(user_id="langchain_user_1", role="member", session_id="session_abc"),
     )
     print(result)
 
@@ -296,14 +289,14 @@ if __name__ == "__main__":
 
 What happens under the hood:
 
-- `wrap_langchain_agent` calls `wrap_tools(tools)`, which replaces each tool's `func` and `coroutine` with guards that read the active policy from a `ContextVar` at call time. `handle_tool_error` is forced to `True`. Wrapping is idempotent — the same tool instance can be passed through `wrap_langchain_agent` multiple times without double-installing.
-- Each invocation method on `FortifyLangchainAgent` takes `user_context=` and, before delegating to the underlying `CompiledStateGraph`, resolves an `AgentPolicy` for `(user_context, agent.name, tool_names)` and binds it to the contextvar via `active_policy(...)`. The contextvar is per-task, so concurrent `ainvoke` calls for different users do not see each other's policies.
-- A denied call raises `ToolDeniedError` (a `ToolException`); LangChain catches it because of `handle_tool_error=True` and emits a `ToolMessage` with the denial text — the tool body never runs. If a guarded tool is invoked outside any `active_policy(...)` scope (i.e. without going through the wrapped agent), it denies by default.
-- The wrapper also enters `propagate_attributes(user_id=..., session_id=..., metadata={"user_role": ...})` for the duration of the call and merges a Langfuse `CallbackHandler` into the `RunnableConfig.callbacks`. Anything not explicitly proxied falls through via `__getattr__`.
+- `wrap_langchain_agent` builds a `PolicySet` for the agent, constructs one `PolicyEnforcer(policy_set, agent_name=…)`, and calls `install_enforcer_on_tools(tools, enforcer=…)` to mutate each tool's `func` and `coroutine` with enforcer-gated closures. `handle_tool_error` is forced to `True`. Installation is idempotent — re-installing rebinds the captured originals to the new enforcer without stacking gates.
+- Each invocation method on `FortifyLangchainAgent` takes `user=` and opens an `async with user:` (or `user.sync_scope()` for sync) around the delegated `CompiledStateGraph` call. The active `User` is pushed onto a contextvar; the guards read it at tool-call time to resolve the matching role's policy.
+- A non-allow `Decision` is rendered as `{"ok": False, "error": decision.as_error_payload()}` so the LangChain runtime surfaces the structured dict as the tool result instead of raising.
+- The wrapper also enters `propagate_attributes(user_id=..., session_id=..., metadata={"user_role": ...})` and merges a Langfuse `CallbackHandler` into the `RunnableConfig.callbacks` for the duration of the call. Anything not explicitly proxied falls through via `__getattr__`.
 
 ### Google ADK — `FortifyRunner`
 
-The Google ADK wrapper exposes its own `FortifyRunner`. Unlike the OpenAI variant, it is constructed up front with the agent, app name, and session service (mirroring the ADK `Runner` constructor); `run` / `run_async` then yield ADK events.
+The Google ADK wrapper exposes its own `FortifyRunner`. It's constructed up front with the agent, app name, and session service (mirroring the ADK `Runner` constructor) — the underlying ADK `Runner` is built once and reused since role resolution happens at call time. `run` / `run_async` then yield ADK events.
 
 ```python
 import asyncio
@@ -315,7 +308,7 @@ from google.adk.models.lite_llm import LiteLlm
 from google.adk.sessions import InMemorySessionService
 from google.genai import types
 
-from fortify.runtime import UserContext
+from fortify.runtime import User
 from fortify.adapters.google import FortifyRunner
 
 
@@ -339,17 +332,17 @@ async def main():
         tools=[get_current_time, get_weather],
     )
 
-    user_context = UserContext(
+    user = User(
         user_id="google_user_1",
         session_id="google_session_1",
-        user_role="user",
+        role="user",
     )
 
     session_service = InMemorySessionService()
     await session_service.create_session(
         app_name="google_runner_example",
-        user_id=user_context.user_id,
-        session_id=user_context.session_id,
+        user_id=user.user_id,
+        session_id=user.session_id,
     )
 
     runner = FortifyRunner(
@@ -362,9 +355,7 @@ async def main():
         role="user", parts=[types.Part(text="What is the weather in New Delhi?")]
     )
 
-    async for event in runner.run_async(
-        new_message=user_msg, user_context=user_context
-    ):
+    async for event in runner.run_async(new_message=user_msg, user=user):
         if event.is_final_response():
             print(event.content.parts[0].text)
 
@@ -375,21 +366,21 @@ if __name__ == "__main__":
 
 What happens under the hood:
 
-- On each `run` / `run_async`, `FortifyRunner` calls `wrap_google_agent`, which builds an `AgentPolicy` for `(user_context, agent.name, tool_names)` and returns `agent.model_copy(update={"tools": guarded_tools})` — your original `agent` is untouched.
-- Each tool is normalized first: bare callables in `agent.tools` are wrapped into `FunctionTool` (matching what ADK does internally) so the guard has a stable `BaseTool` surface. Each tool is then `copy.copy`'d and its `run_async` replaced with a guarded version.
-- On deny, the guard returns `"Tool '<name>' is denied by the agent policy. The tool was not executed."` so the ADK runtime forwards it to the model as the tool output instead of aborting the run.
+- At construction, `FortifyRunner` calls `wrap_google_agent`, which builds a `PolicySet`, constructs one `PolicyEnforcer`, and returns `agent.model_copy(update={"tools": guarded_tools})` — your original `agent` is untouched.
+- Each tool is normalized first: bare callables in `agent.tools` are wrapped into `FunctionTool` (matching what ADK does internally) so the guard has a stable `BaseTool` surface. Each tool is then `copy.copy`'d and its `run_async` replaced with an enforcer-gated version.
+- Each `run` / `run_async` call opens a `User` scope (`user.sync_scope()` / `async with user:`) and dispatches to the cached underlying `Runner`. On non-allow, the guard returns `decision.as_error_message()` — a `[policy_denied]` or `[approval_required]` markered string — so the ADK runtime forwards it to the model as the tool output instead of aborting the run.
 - Observability is set up lazily on each call: `GoogleADKInstrumentor().instrument()` plus `nest_asyncio.apply()` (ADK's runner spins its own loop), and the run executes inside `propagate_attributes(user_id=..., session_id=..., metadata={"user_role": ...}, tags=["google.runner.run.<agent_name>"])` so Langfuse spans carry the caller identity.
 
 ### Pydantic AI — `wrap_pydantic_agent`
 
-`wrap_pydantic_agent` returns a `FortifyPydanticAgent` proxy backed by a clone of the original agent whose tools are gated by the policy. Tools registered via the `Agent(...)` constructor or via `@agent.tool` / `@agent.tool_plain` are all picked up. The `user_context` is supplied **per call**, not at wrap time, so a single wrapped agent can serve many users concurrently — each call resolves its own `AgentPolicy` and identity propagation.
+`wrap_pydantic_agent` returns a `FortifyPydanticAgent` proxy backed by a clone of the original agent whose tools are gated by a freshly built `PolicyEnforcer`. Tools registered via the `Agent(...)` constructor or via `@agent.tool` / `@agent.tool_plain` are all picked up. The `user` is supplied **per call**, so a single wrapped agent can serve many users concurrently — role resolution happens at call time from the contextvar.
 
 ```python
 import asyncio
 from dotenv import load_dotenv
 from pydantic_ai import Agent
 
-from fortify.runtime import UserContext
+from fortify.runtime import User
 from fortify.adapters.pydantic_ai import wrap_pydantic_agent
 
 
@@ -415,9 +406,9 @@ async def main():
 
     result = await agent.run(
         "What is the weather in Tokyo?",
-        user_context=UserContext(
+        user=User(
             user_id="pydantic_ai_user_1",
-            user_role="member",
+            role="member",
             session_id="pydantic_ai_session_1",
         ),
     )
@@ -430,9 +421,9 @@ if __name__ == "__main__":
 
 What happens under the hood:
 
-- `wrap_pydantic_agent` reads tools off the agent's internal `_function_toolset`, copies each tool with a guarded `function_schema.call` that reads the active policy from a `ContextVar` at call time, and returns a shallow-copied agent whose toolset holds those gated copies — your original `agent` is untouched, so it can be reused or wrapped again independently.
-- Each invocation method on `FortifyPydanticAgent` (`run` / `run_sync` / `run_stream` / `iter`) takes `user_context=` and, before delegating to the underlying `Agent`, resolves an `AgentPolicy` for `(user_context, agent.name, tool_names)` and binds it to the contextvar via `active_policy(...)`. The contextvar is per-task, so concurrent `run` calls for different users do not see each other's policies.
-- A denied call raises `ToolDeniedError` (a `ModelRetry`); pydantic_ai surfaces it back to the model as a tool-result message instead of aborting the run. If a guarded tool is invoked outside any `active_policy(...)` scope (i.e. without going through the wrapped agent), it denies by default.
+- `wrap_pydantic_agent` builds a `PolicySet`, constructs one `PolicyEnforcer`, reads tools off the agent's internal `_function_toolset`, copies each tool with an enforcer-gated `function_schema.call`, and returns a shallow-copied agent whose toolset holds those gated copies — your original `agent` is untouched, so it can be reused or wrapped again independently.
+- Each invocation method on `FortifyPydanticAgent` (`run` / `run_sync` / `run_stream` / `iter`) takes `user=` and opens a `User` scope around the delegated `Agent` call. The contextvar is per-task, so concurrent `run` calls for different users do not see each other's policies.
+- A non-allow `Decision` raises `ModelRetry(decision.as_error_message())`; pydantic_ai surfaces it back to the model as a tool-result message — `[policy_denied]` / `[approval_required]` markers in the same shape as the OpenAI/Google adapters — instead of aborting the run.
 - Identity propagation uses `propagate_attributes(...)` so Langfuse spans carry the caller identity. Global tracing is enabled via `Agent.instrument_all()` on construction.
 
 ### Runnable examples
@@ -461,7 +452,7 @@ It demonstrates:
 
 - building one agent with `create_agent(...)` only
 - building another with `create_agent(...)` plus `enforce_policy(...)`
-- building a research agent with approval-gated file writes
+- building a research agent with approval-gated file writes via `enforce_policy(..., approval_handler=...)`
 - registering it with `register_agent(...)`
 - loading it through the shared `load_agent(...)` path
 
@@ -575,9 +566,8 @@ That means the same agent code can stay simple in development, while deployment 
 
 `approval_required` is special:
 
-- if no approval handler is attached, it behaves like a graceful block
-- if an approval handler is attached, the host can decide whether to allow the action at runtime
-- if approval is not granted, the tool returns a structured `ok: False` result so the agent can try a fallback instead of crashing
+- if no approval handler is attached, it behaves like a graceful block — the tool returns a structured `ok: False` result with `error_type: "approval_required"` so the agent can try a fallback instead of crashing
+- if an approval handler is attached (via `enforce_policy(..., approval_handler=...)`), the host can decide whether to allow the action at runtime
 
 ## 🧩 Policy Bundles — Compile, Sign, Enforce (WASM)
 
@@ -617,10 +607,11 @@ fortify policy test policy.yaml --role billing --tool refund_order \
 fortify policy build policy.yaml --out ./bundle
 ```
 
-On a denied wasm decision, `test` prints the violated constraint strings verbatim:
+On a denied decision, `test` prints the reason; the wasm engine additionally lists each violated constraint string verbatim:
 
 ```text
 ✗ DENY · billing → refund_order({"amount": 700})
+  reason: Policy denied tool "refund_order": args.amount <= 500
   violations:
     • args.amount <= 500
 ```
@@ -689,21 +680,18 @@ Keys are raw Ed25519, base64url-encoded — the same format the platform's JWKS 
 
 ## ✅ Approval-Required Tool Calls
 
-Approval handlers are the bridge between static Gate 1 policy and real product interaction.
+Approval handlers are the bridge between static Gate 1 policy and real product interaction. Use them when a tool should be **generally allowed in principle** but only after a user, CLI host, or UI host explicitly approves the specific call.
 
-Use them when a tool should be:
+The handler is threaded through `enforce_policy(...)` at wrap time:
 
-- generally allowed in principle
-- but only after a user, CLI host, or UI host explicitly approves the specific call
-
-The runtime shape is intentionally small:
-
-- `with_approval_handler(agent, handler, context_provider=...)`
+- `enforce_policy(agent, policy, approval_handler=handler)`
 - `handler` can be:
-  - `True`
-  - `False`
-  - sync function returning `bool`
-  - async function returning `bool`
+  - `True` — auto-approve every approval-required call
+  - `False` — auto-deny every approval-required call
+  - sync function `(action: dict, context: dict | None) -> bool`
+  - async function `(action: dict, context: dict | None) -> bool | Awaitable[bool]`
+
+The `action` dict carries `{"tool_name", "arguments", "agent_name"}`; `context` comes from an optional `context_provider` (only used when chained with `with_before_action`).
 
 Example:
 
@@ -714,7 +702,6 @@ from fortify import (
     edit_file,
     enforce_policy,
     read_file,
-    with_approval_handler,
 )
 
 policy = AgentPolicy.model_validate(
@@ -728,7 +715,7 @@ policy = AgentPolicy.model_validate(
     }
 )
 
-def approval_handler(action: dict, context: dict | None) -> bool:
+def approval_handler(action: dict, _context: dict | None) -> bool:
     print("approval requested:", action["tool_name"], action["arguments"])
     return True
 
@@ -738,20 +725,10 @@ agent, handler = create_agent(
     system_prompt="You are a careful editor.",
 )
 
-agent = enforce_policy(agent, policy)
-agent = with_approval_handler(agent, approval_handler)
+agent = enforce_policy(agent, policy, approval_handler=approval_handler)
 ```
 
-Today the handler returns a boolean.
-
-Future evolution:
-
-- richer approval decisions
-- interrupt / resume flows
-- UI approval cards
-- audit metadata on approval outcomes
-
-That evolution is intentionally left open, but the current API is enough for CLI and simple hosted apps.
+The handler returns a boolean today. Future evolution (richer approval decisions, interrupt/resume flows, UI approval cards, audit metadata) is intentionally left open — the current `(action, context) -> bool` API is enough for CLI and simple hosted apps.
 
 ## 🚪 Gate 2: Hosted `before_action` Hooks
 
@@ -812,8 +789,7 @@ agent = with_before_action(
 So the design split is:
 
 - `create_agent(...)`: build the base agent
-- `enforce_policy(...)`: local Gate 1 tool authorization
-- `with_approval_handler(...)`: resolve `approval_required` tools at runtime
+- `enforce_policy(..., approval_handler=...)`: local Gate 1 tool authorization, optionally with inline approval resolution for `approval_required` tools
 - `with_before_action(...)`: Gate 2 platform / IAM / approval integration
 
 This is intentionally an open chantier:
@@ -891,7 +867,7 @@ This means parent-process secrets — `AWS_SECRET_ACCESS_KEY`, `OPENAI_API_KEY`,
 | Layer | Question | Mechanism |
 |---|---|---|
 | **Gate 1** | Is this tool allowed at all? | `enforce_policy(...)` |
-| **Approval** | Should this specific call go ahead? | `with_approval_handler(...)` |
+| **Approval** | Should this specific call go ahead? | `enforce_policy(..., approval_handler=...)` |
 | **Gate 2** | Should this call run *given runtime context*? | `with_before_action(...)` |
 | **Sandbox** | What can the spawned shell actually do? | OS-level via `srt` |
 
@@ -1199,7 +1175,6 @@ async def chat(req):
 | `user_id` | `str` | ✅ | Becomes `user("alice")` in the attenuated Biscuit. |
 | `role` | `str?` | optional | Becomes `role("billing")` in the Biscuit. Selects which role policy file applies at tool-call time. Fall-back: the `default` role. |
 | `session_id` | `str?` | optional | Trace tagging — surfaces on Langfuse spans. |
-| `user_role` | `str?` | optional | Legacy tracing alias — kept for adapter compatibility. |
 | `ttl_seconds` | `int?` | optional | Embeds a `check if time($t), $t < now+ttl` predicate so the token can't outlive the request. |
 
 ### Role policies — one file per role
@@ -1276,8 +1251,7 @@ Switch to `User(user_id="alice", role="default")` and `refund_order` itself is m
 - **Lazy attenuation.** `User.__aenter__` only pushes a contextvar — the cryptographic work happens inside `stream_agent` / `invoke_agent` the first time the agent runs. Errors surface at first agent call, not at scope entry.
 - **Local agents skip attenuation.** A `User` scope around a `load_local_agent` / `load_builtin_agent` agent logs a warning and runs with no facts. The `default` policy still applies — use `load_fortify_agent` for the full signed chain.
 - **Explicit override.** Passing `tool_use_context=` explicitly to `stream_agent` / `invoke_agent` wins over an active `User` scope. Useful for tests or one-off bypass.
-- **Sync callers.** `User` is async-only by design (room for KMS / audit / JWKS I/O in `__aenter__` / `__aexit__` later). From a sync context, `asyncio.run(main())` works fine.
-- **Tracing vs attenuation.** `UserContext` (the legacy adapter input — three required string fields) is unchanged. `User` is a separate primitive carrying identity + role; the two coexist in the same request.
+- **Sync callers.** `User` exposes both `async with user:` and `user.sync_scope()`. The async form is the primary API (room for KMS / audit / JWKS I/O in `__aenter__` / `__aexit__` later); the sync mirror exists for CLI loops and `Runner.run_sync`-style callers where the async ctxmgr protocol is unavailable.
 
 ## 📡 Stream Results
 

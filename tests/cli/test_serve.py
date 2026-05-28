@@ -68,10 +68,7 @@ def test_user_from_payload_returns_none_for_non_dict() -> None:
 
 def test_user_from_payload_returns_none_on_invalid_shape() -> None:
     """A payload with the wrong type for ttl trips Pydantic validation."""
-    assert (
-        _user_from_payload({"user": "alice", "ttl_seconds": "not-a-number"})
-        is None
-    )
+    assert _user_from_payload({"user": "alice", "ttl_seconds": "not-a-number"}) is None
 
 
 # ---------------------------------------------------------------------------
@@ -105,7 +102,9 @@ async def test_handle_message_chat_with_attenuation_enters_user_scope(
     """A chat payload with ``user_attenuation`` enters a User scope around stream_agent."""
     captured: dict[str, Any] = {"user_during_stream": None}
 
-    async def fake_stream_agent(agent: object, handler: object, input: object, **kw: Any):
+    async def fake_stream_agent(
+        agent: object, handler: object, input: object, **kw: Any
+    ):
         captured["user_during_stream"] = get_current_user()
         if False:
             yield None  # pragma: no cover
@@ -144,7 +143,9 @@ async def test_handle_message_chat_without_attenuation_runs_with_no_user(
     """Backward-compat: messages without ``user_attenuation`` see no User scope."""
     captured: dict[str, Any] = {"user_during_stream": "sentinel"}
 
-    async def fake_stream_agent(agent: object, handler: object, input: object, **kw: Any):
+    async def fake_stream_agent(
+        agent: object, handler: object, input: object, **kw: Any
+    ):
         captured["user_during_stream"] = get_current_user()
         if False:
             yield None  # pragma: no cover
@@ -154,9 +155,7 @@ async def test_handle_message_chat_without_attenuation_runs_with_no_user(
     context = ServeContext(runtime=_FakeRuntime(), state=ChatState())
     ws = _FakeWebSocket()
 
-    await serve._handle_message(
-        context, ws, {"type": "chat", "message": "hello"}
-    )
+    await serve._handle_message(context, ws, {"type": "chat", "message": "hello"})
 
     assert captured["user_during_stream"] is None
 
@@ -168,7 +167,9 @@ async def test_handle_message_malformed_attenuation_runs_without_scope(
     """A malformed user_attenuation payload still lets the turn run (no scope)."""
     captured: dict[str, Any] = {"user_during_stream": "sentinel"}
 
-    async def fake_stream_agent(agent: object, handler: object, input: object, **kw: Any):
+    async def fake_stream_agent(
+        agent: object, handler: object, input: object, **kw: Any
+    ):
         captured["user_during_stream"] = get_current_user()
         if False:
             yield None  # pragma: no cover

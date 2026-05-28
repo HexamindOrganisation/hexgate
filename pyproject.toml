@@ -29,7 +29,7 @@ dependencies = [
     "google-adk>=1.0",
     "google-genai>=1.0",
     "litellm>=1.50",
-    "openinference-instrumentation-google-adk>=0.1",
+    "openinference-instrumentation-google-adk>=0.1.11",
     "pydantic-ai-slim>=1.88.0",
     "wasmtime>=20.0",
 ]

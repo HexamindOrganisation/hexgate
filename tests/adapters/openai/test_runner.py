@@ -8,12 +8,13 @@ import pytest
 from agents import Agent, FunctionTool
 
 from fortify.adapters.openai.runner import FortifyRunner
-from fortify.runtime import UserContext
+from fortify.runtime import User
+from fortify.runtime.context import get_current_user
 
 
-def _user_context() -> UserContext:
-    """Build a minimal UserContext for runner tests."""
-    return UserContext(user_id="u-1", session_id="s-1", user_role="developer")
+def _user() -> User:
+    """Build a minimal User for runner tests."""
+    return User(user_id="u-1", session_id="s-1", role="developer")
 
 
 def _make_tool(name: str = "echo") -> FunctionTool:
@@ -97,10 +98,10 @@ def test_constructor_raises_when_no_api_key_available(
 
 
 @pytest.mark.asyncio
-async def test_run_wraps_agent_and_calls_runner_run(
+async def test_run_wraps_agent_opens_user_scope_and_calls_runner_run(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """run() wraps the agent with policy gates and forwards to Runner.run."""
+    """run() wraps the agent, opens the User scope, and forwards to Runner.run."""
     setup_counts = _silence_observability(monkeypatch)
     captured: dict[str, Any] = {}
 
@@ -108,6 +109,7 @@ async def test_run_wraps_agent_and_calls_runner_run(
         captured["agent"] = starting_agent
         captured["input"] = input
         captured["kwargs"] = kwargs
+        captured["active_user"] = get_current_user()
         return "run-result"
 
     monkeypatch.setattr(
@@ -116,8 +118,9 @@ async def test_run_wraps_agent_and_calls_runner_run(
 
     runner = FortifyRunner(api_key="k")
     agent = _make_agent()
+    user = _user()
 
-    result = await runner.run(agent, "hello", user_context=_user_context())
+    result = await runner.run(agent, "hello", user=user)
 
     assert result == "run-result"
     assert setup_counts["setup"] == 1
@@ -125,12 +128,16 @@ async def test_run_wraps_agent_and_calls_runner_run(
     assert captured["agent"].name == agent.name
     assert captured["input"] == "hello"
     assert captured["kwargs"] == {"run_config": None}
+    # User scope was live for the duration of Runner.run.
+    assert captured["active_user"] is user
+    # Scope unwound on exit — no leak.
+    assert get_current_user() is None
 
 
-def test_run_sync_wraps_agent_and_calls_runner_run_sync(
+def test_run_sync_opens_user_scope_and_calls_runner_run_sync(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """run_sync() wraps the agent and forwards to Runner.run_sync."""
+    """run_sync() opens the User scope via sync_scope and forwards to Runner.run_sync."""
     setup_counts = _silence_observability(monkeypatch)
     captured: dict[str, Any] = {}
 
@@ -138,6 +145,7 @@ def test_run_sync_wraps_agent_and_calls_runner_run_sync(
         captured["agent"] = starting_agent
         captured["input"] = input
         captured["kwargs"] = kwargs
+        captured["active_user"] = get_current_user()
         return "run-sync-result"
 
     monkeypatch.setattr(
@@ -146,20 +154,23 @@ def test_run_sync_wraps_agent_and_calls_runner_run_sync(
 
     runner = FortifyRunner(api_key="k")
     agent = _make_agent()
+    user = _user()
 
-    result = runner.run_sync(agent, "hello", user_context=_user_context())
+    result = runner.run_sync(agent, "hello", user=user)
 
     assert result == "run-sync-result"
     assert setup_counts["setup"] == 1
     assert captured["agent"] is not agent
     assert captured["input"] == "hello"
+    assert captured["active_user"] is user
+    assert get_current_user() is None
 
 
 @pytest.mark.asyncio
-async def test_run_streamed_wraps_stream_events_to_re_enter_propagation(
+async def test_run_streamed_wraps_stream_events_to_re_enter_scope_and_propagation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """run_streamed swaps stream_events for a wrapper that re-enters propagation."""
+    """run_streamed swaps stream_events for a wrapper that re-enters User + propagation."""
     _silence_observability(monkeypatch)
 
     fake_result = _FakeStreamingResult()
@@ -194,8 +205,9 @@ async def test_run_streamed_wraps_stream_events_to_re_enter_propagation(
 
     runner = FortifyRunner(api_key="k")
     agent = _make_agent()
+    user = _user()
 
-    result = runner.run_streamed(agent, "hello", user_context=_user_context())
+    result = runner.run_streamed(agent, "hello", user=user)
 
     assert result is fake_result
     assert captured["agent"].name == agent.name
@@ -211,7 +223,7 @@ async def test_run_streamed_wraps_stream_events_to_re_enter_propagation(
 
 
 @pytest.mark.asyncio
-async def test_run_propagates_user_context_to_langfuse(
+async def test_run_propagates_user_identity_to_langfuse(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """run() enters propagate_attributes with user identity and an agent-tagged scope."""
@@ -240,7 +252,7 @@ async def test_run_propagates_user_context_to_langfuse(
 
     runner = FortifyRunner(api_key="k")
 
-    await runner.run(_make_agent("custom-name"), "hi", user_context=_user_context())
+    await runner.run(_make_agent("custom-name"), "hi", user=_user())
 
     [call] = propagate_calls
     assert call["tags"] == ["openai.runner.run.custom-name"]

@@ -200,7 +200,7 @@ def test_extract_facts_skips_checks_and_rules(keys: tuple[bytes, bytes]) -> None
         priv,
         'user("alice"); refund_limit(50);',
         # A check (skipped) and a rule (skipped); the bare facts pass through.
-        'check if time($t), $t < 2027-01-01T00:00:00Z;'
+        "check if time($t), $t < 2027-01-01T00:00:00Z;"
         ' admin($u) <- user($u), role("admin");'
         ' scope("read");',
     )
@@ -232,9 +232,7 @@ def test_extract_facts_returns_empty_dict_when_no_facts(
 ) -> None:
     """A check-only block still yields a verified token with empty facts."""
     priv, pub = keys
-    token = _mint_biscuit(
-        priv, "check if time($t), $t < 2027-01-01T00:00:00Z;"
-    )
+    token = _mint_biscuit(priv, "check if time($t), $t < 2027-01-01T00:00:00Z;")
     assert extract_facts(token, pub) == {}
 
 
@@ -243,9 +241,7 @@ def test_extract_facts_repeated_predicate_preserves_order(
 ) -> None:
     """``scope("read"); scope("write"); scope("admin");`` → list in source order."""
     priv, pub = keys
-    token = _mint_biscuit(
-        priv, 'scope("read"); scope("write"); scope("admin");'
-    )
+    token = _mint_biscuit(priv, 'scope("read"); scope("write"); scope("admin");')
     assert extract_facts(token, pub) == {"scope": ["read", "write", "admin"]}
 
 

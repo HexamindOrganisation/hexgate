@@ -11,8 +11,12 @@ from typing import Any, Literal, TypeAlias
 
 import yaml
 
-from fortify.agents.factory import AgentGraph, create_agent
-from fortify.agents.security import enforce_policy
+from fortify.agents.factory import (
+    AgentGraph,
+    ApprovalHandler,
+    create_agent,
+    enforce_policy,
+)
 from fortify.agents.models import AgentSpec
 from fortify.cloud.client import FortifyClient, FortifyConfig, resolve_agent_name
 from fortify.security import AgentPolicy, PolicyBundle, load_policy
@@ -362,6 +366,7 @@ def load_builtin_agent(
     tags: list[str] | None = None,
     extra_tools: Mapping[str, Any] | None = None,
     model: str | None = None,
+    approval_handler: ApprovalHandler | None = None,
 ) -> tuple[AgentGraph, CallbackHandler]:
     """Load and instantiate a packaged builtin agent."""
     spec = load_builtin_agent_spec(name)
@@ -381,7 +386,7 @@ def load_builtin_agent(
     override = _local_policy_override()
     if override is not None:
         policy = override
-    return enforce_policy(agent, policy), handler
+    return enforce_policy(agent, policy, approval_handler=approval_handler), handler
 
 
 def load_local_agent(
@@ -393,6 +398,7 @@ def load_local_agent(
     tags: list[str] | None = None,
     extra_tools: Mapping[str, Any] | None = None,
     model: str | None = None,
+    approval_handler: ApprovalHandler | None = None,
 ) -> tuple[AgentGraph, CallbackHandler]:
     """Load and instantiate a local project agent."""
     spec = load_local_agent_spec(name, base_dir)
@@ -412,7 +418,7 @@ def load_local_agent(
     override = _local_policy_override()
     if override is not None:
         policy = override
-    return enforce_policy(agent, policy), handler
+    return enforce_policy(agent, policy, approval_handler=approval_handler), handler
 
 
 def load_registered_agent(
@@ -424,13 +430,14 @@ def load_registered_agent(
     tags: list[str] | None = None,
     extra_tools: Mapping[str, Any] | None = None,
     model: str | None = None,
+    approval_handler: ApprovalHandler | None = None,
 ) -> tuple[AgentGraph, CallbackHandler]:
     """Load a registered code-defined agent by id."""
     try:
         factory = REGISTERED_AGENTS[name]
     except KeyError as exc:
         raise KeyError(f'Unknown registered agent "{name}"') from exc
-    return factory(
+    agent, handler = factory(
         base_dir=base_dir,
         session_id=session_id,
         user_id=user_id,
@@ -438,6 +445,52 @@ def load_registered_agent(
         extra_tools=extra_tools,
         model=model,
     )
+    # Registered factories don't know about the CLI's approval flow; layer it
+    # on after the fact by re-stamping each policy-wrapped tool.
+    if approval_handler is not None:
+        agent = _apply_approval_handler(agent, approval_handler)
+    return agent, handler
+
+
+def _apply_approval_handler(
+    agent: AgentGraph, approval_handler: ApprovalHandler | None
+) -> AgentGraph:
+    """Re-stamp every :class:`GuardedTool` on ``agent`` with ``approval_handler``.
+
+    For code-registered agents whose factories ran ``enforce_policy``
+    internally and never saw the CLI's approval callback. Pass the
+    ``GuardedTool`` itself (not its inner tool) so the idempotent
+    re-wrap branch preserves any previously configured ``before_action``
+    / ``context_provider`` / ``agent_name``. Logs a warning when the
+    agent has no ``GuardedTool`` tools (e.g. registered agent backed by
+    a non-LangChain framework) so the caller knows the handler was
+    silently dropped.
+    """
+    import logging
+
+    from fortify.adapters.langchain.tools import GuardedTool
+
+    rewrapped: list[Any] = []
+    touched = False
+    for tool_spec in agent.tools:
+        if isinstance(tool_spec, GuardedTool):
+            rewrapped.append(
+                GuardedTool.wrap(
+                    tool_spec,
+                    approval_handler=approval_handler,
+                )
+            )
+            touched = True
+        else:
+            rewrapped.append(tool_spec)
+    if not touched:
+        logging.getLogger(__name__).warning(
+            "approval_handler was supplied but %r has no GuardedTool tools to apply "
+            "it to; approval prompts will not fire for this agent",
+            getattr(agent, "name", None) or "agent",
+        )
+        return agent
+    return agent.with_tools(rewrapped)
 
 
 def resolve_agent_source(name: str, base_dir: str | Path | None = None) -> AgentSource:
@@ -461,6 +514,7 @@ def load_fortify_agent(
     tags: list[str] | None = None,
     extra_tools: Mapping[str, Any] | None = None,
     model: str | None = None,
+    approval_handler: ApprovalHandler | None = None,
 ) -> tuple[AgentGraph, CallbackHandler]:
     """Fetch an agent from Fortify and return it with policy enforcement applied.
 
@@ -525,7 +579,7 @@ def load_fortify_agent(
                 "Refusing to fall back to the pydantic engine."
             )
 
-    enforced = enforce_policy(agent, policy)
+    enforced = enforce_policy(agent, policy, approval_handler=approval_handler)
     # Attach the client so the runtime can do lazy attenuation inside an
     # active User scope without the caller having to thread it through.
     enforced.fortify_client = client
@@ -542,6 +596,7 @@ def load_agent(
     extra_tools: Mapping[str, Any] | None = None,
     model: str | None = None,
     local_only: bool = False,
+    approval_handler: ApprovalHandler | None = None,
 ) -> tuple[AgentGraph, CallbackHandler]:
     """Load an agent from Fortify (when FORTIFY_KEY is set), local, or builtin.
 
@@ -564,6 +619,7 @@ def load_agent(
             tags=tags,
             extra_tools=extra_tools,
             model=model,
+            approval_handler=approval_handler,
         )
     if name is None:
         raise ValueError("load_agent() requires a name when not using Fortify Cloud")
@@ -577,6 +633,7 @@ def load_agent(
             tags=tags,
             extra_tools=extra_tools,
             model=model,
+            approval_handler=approval_handler,
         )
     if source == "registered":
         return load_registered_agent(
@@ -587,6 +644,7 @@ def load_agent(
             tags=tags,
             extra_tools=extra_tools,
             model=model,
+            approval_handler=approval_handler,
         )
     return load_builtin_agent(
         name,
@@ -595,4 +653,5 @@ def load_agent(
         tags=tags,
         extra_tools=extra_tools,
         model=model,
+        approval_handler=approval_handler,
     )

@@ -1,24 +1,12 @@
-"""Execution-time context propagation — tool-scope and user-scope.
-
-Two layers of "who is this for?" live here:
-
-* :class:`UserContext` — the legacy tracing identity required by the
-  adapters (LangChain, Google ADK, OpenAI Agents, Pydantic AI). Three
-  fixed string fields; consumed by Langfuse span tagging.
-
-* :class:`User` — the M1 user-scope primitive. Carries user identity plus
-  the attenuation hints (``limits`` / ``scope`` / ``ttl_seconds``) the
-  agent runtime uses to lazily mint a per-request Biscuit. Doubles as an
-  ``async with`` context manager so the dev's request handler can scope a
-  whole invocation under one user identity without threading kwargs.
-
-The two classes don't share a base — ``UserContext`` is what adapters
-already require; ``User`` is what the new attenuation-aware runtime
-reads off a contextvar. They can coexist in the same request.
+"""Execution-time context — :class:`User` (per-invocation scope, read via
+:func:`get_current_user` by all SDK adapters) and :class:`ToolUseContext`
+(per-tool meta-argument carrying Biscuit-extracted facts).
 """
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 from contextvars import ContextVar, Token
 from dataclasses import dataclass
 from typing import Any
@@ -26,14 +14,6 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, PrivateAttr
 
 from fortify.runtime.workspace import Workspace
-
-
-class UserContext(BaseModel):
-    """Per-invocation user identity propagated into traces and policy decisions."""
-
-    user_id: str
-    session_id: str
-    user_role: str
 
 
 @dataclass(slots=True)
@@ -127,6 +107,16 @@ class User(BaseModel):
     async def __aexit__(self, *_: object) -> None:
         if self._tokens:
             _CURRENT_USER.reset(self._tokens.pop())
+
+    @contextmanager
+    def sync_scope(self) -> Iterator["User"]:
+        """Sync mirror of ``async with self`` for sync entry points."""
+        self._tokens.append(_CURRENT_USER.set(self))
+        try:
+            yield self
+        finally:
+            if self._tokens:
+                _CURRENT_USER.reset(self._tokens.pop())
 
 
 _CURRENT_USER: ContextVar[User | None] = ContextVar(

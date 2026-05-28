@@ -1,4 +1,10 @@
-"""Tests for the LangChain adapter policy gate on tools."""
+"""Tests for the in-place :func:`install_enforcer_on_tool` LangChain mutator.
+
+The new ``GuardedTool`` (used by ``FortifyAgent.enforce_policy``) is
+covered in :mod:`test_guarded_tool`. This file targets the alternate
+path used by :func:`wrap_langchain_agent` to retrofit pre-built
+``CompiledStateGraph`` instances whose tool references can't be swapped.
+"""
 
 from __future__ import annotations
 
@@ -8,17 +14,24 @@ import pytest
 from langchain_core.tools import BaseTool, tool
 
 from fortify.adapters.langchain.tools import (
-    ToolDeniedError,
-    active_policy,
-    wrap_tool,
-    wrap_tools,
+    install_enforcer_on_tool,
+    install_enforcer_on_tools,
 )
-from fortify.security import AgentPolicy
+from fortify.runtime import User
+from fortify.security import AgentPolicy, PolicySet
+from fortify.security.enforcer import PolicyEnforcer
+from fortify.security.policy_set import DEFAULT_ROLE_NAME
 
 
-def _allow_policy(tool_name: str = "echo") -> AgentPolicy:
-    """Build a policy that allows a single named tool, denying everything else."""
-    return AgentPolicy.model_validate(
+def _enforcer_for(spec: dict[str, Any]) -> PolicyEnforcer:
+    """Build a one-role enforcer from a flat AgentPolicy spec."""
+    return PolicyEnforcer(
+        PolicySet({DEFAULT_ROLE_NAME: AgentPolicy.model_validate(spec)})
+    )
+
+
+def _allow_enforcer(tool_name: str = "echo") -> PolicyEnforcer:
+    return _enforcer_for(
         {
             "default_policy": {"mode": "deny"},
             "tools": {tool_name: {"mode": "allow"}},
@@ -26,14 +39,12 @@ def _allow_policy(tool_name: str = "echo") -> AgentPolicy:
     )
 
 
-def _deny_policy() -> AgentPolicy:
-    """Build a policy that denies every tool by default."""
-    return AgentPolicy.model_validate({"default_policy": {"mode": "deny"}})
+def _deny_enforcer() -> PolicyEnforcer:
+    return _enforcer_for({"default_policy": {"mode": "deny"}})
 
 
-def _approval_required_policy(tool_name: str = "echo") -> AgentPolicy:
-    """Build a policy where the named tool requires approval."""
-    return AgentPolicy.model_validate(
+def _approval_enforcer(tool_name: str = "echo") -> PolicyEnforcer:
+    return _enforcer_for(
         {
             "default_policy": {"mode": "deny"},
             "tools": {tool_name: {"mode": "approval_required"}},
@@ -42,7 +53,7 @@ def _approval_required_policy(tool_name: str = "echo") -> AgentPolicy:
 
 
 def _make_sync_tool(name: str = "echo") -> BaseTool:
-    """Create a StructuredTool-style sync tool returning its argument."""
+    """StructuredTool-style sync echo tool."""
 
     @tool(name)
     def echo(text: str) -> str:
@@ -53,7 +64,7 @@ def _make_sync_tool(name: str = "echo") -> BaseTool:
 
 
 def _make_async_tool(name: str = "echo") -> BaseTool:
-    """Create a StructuredTool-style async tool returning its argument."""
+    """StructuredTool-style async echo tool."""
 
     @tool(name)
     async def echo(text: str) -> str:
@@ -63,76 +74,24 @@ def _make_async_tool(name: str = "echo") -> BaseTool:
     return echo
 
 
-def test_tool_denied_error_message_includes_reason() -> None:
-    """Format the denial message with the tool name and optional reason."""
-    err = ToolDeniedError("read_file", "no active Fortify policy")
-
-    assert err.tool_name == "read_file"
-    assert "read_file" in str(err)
-    assert "no active Fortify policy" in str(err)
-    assert "not executed" in str(err)
+# ---------------------------------------------------------------------------
+# install_enforcer_on_tool — basic shape
+# ---------------------------------------------------------------------------
 
 
-def test_tool_denied_error_omits_reason_suffix_when_none() -> None:
-    """Render a clean message when no reason is supplied."""
-    err = ToolDeniedError("read_file")
+def test_install_returns_same_tool_and_sets_handle_tool_error() -> None:
+    """Mutates the tool in place; returns the same object."""
+    t = _make_sync_tool()
 
-    assert err.tool_name == "read_file"
-    assert "()" not in str(err)
-    assert "read_file" in str(err)
+    result = install_enforcer_on_tool(t, enforcer=_allow_enforcer())
 
-
-def test_active_policy_sets_and_resets_contextvar() -> None:
-    """Bind the policy only inside the context manager."""
-    from fortify.adapters.langchain import tools as langchain_tools
-
-    assert langchain_tools._active_policy.get() is None
-
-    policy = _allow_policy()
-    with active_policy(policy):
-        assert langchain_tools._active_policy.get() is policy
-
-    assert langchain_tools._active_policy.get() is None
+    assert result is t
+    assert t.handle_tool_error is True
+    assert getattr(t, "_fortify_enforcer_installed") is True
 
 
-def test_active_policy_resets_after_exception() -> None:
-    """Reset the contextvar even when the body raises."""
-    from fortify.adapters.langchain import tools as langchain_tools
-
-    policy = _allow_policy()
-    with pytest.raises(RuntimeError, match="boom"):
-        with active_policy(policy):
-            assert langchain_tools._active_policy.get() is policy
-            raise RuntimeError("boom")
-
-    assert langchain_tools._active_policy.get() is None
-
-
-def test_wrap_tool_sets_handle_tool_error_and_marks_wrapped() -> None:
-    """Mark wrapped tools so `BaseTool.run` converts denials into output."""
-    sync_tool = _make_sync_tool()
-
-    wrapped = wrap_tool(sync_tool)
-
-    assert wrapped is sync_tool
-    assert wrapped.handle_tool_error is True
-    assert getattr(wrapped, "_fortify_wrapped") is True
-
-
-def test_wrap_tool_is_idempotent() -> None:
-    """Skip re-wrapping a tool that has already been wrapped."""
-    sync_tool = _make_sync_tool()
-
-    wrap_tool(sync_tool)
-    guarded_func = sync_tool.func
-
-    wrap_tool(sync_tool)
-
-    assert sync_tool.func is guarded_func
-
-
-def test_wrap_tool_rejects_tool_without_func_or_coroutine() -> None:
-    """Raise TypeError for tools that are not StructuredTool-compatible."""
+def test_install_rejects_tool_without_func_or_coroutine() -> None:
+    """Raise TypeError when the tool isn't StructuredTool-compatible."""
 
     class BareTool(BaseTool):
         name: str = "bare"
@@ -142,131 +101,168 @@ def test_wrap_tool_rejects_tool_without_func_or_coroutine() -> None:
             """Pretend to do work."""
             return "ok"
 
-    bare = BareTool()
-
     with pytest.raises(TypeError, match="StructuredTool-style"):
-        wrap_tool(bare)
+        install_enforcer_on_tool(BareTool(), enforcer=_allow_enforcer())
 
 
-def test_sync_tool_denied_when_no_active_policy() -> None:
-    """Raise ToolDeniedError when invoked outside an active_policy block."""
-    sync_tool = wrap_tool(_make_sync_tool())
+def test_reinstall_replaces_enforcer_without_stacking() -> None:
+    """Re-installing rebinds the original ``func`` to the new enforcer."""
+    t = _make_sync_tool()
+    install_enforcer_on_tool(t, enforcer=_allow_enforcer())
+    first_guard = t.func
 
-    with pytest.raises(ToolDeniedError, match="no active Fortify policy"):
-        sync_tool.func(text="hello")
+    install_enforcer_on_tool(t, enforcer=_deny_enforcer())
 
-
-def test_sync_tool_denied_when_policy_denies() -> None:
-    """Raise ToolDeniedError when the active policy denies the tool."""
-    sync_tool = wrap_tool(_make_sync_tool())
-
-    with active_policy(_deny_policy()):
-        with pytest.raises(ToolDeniedError):
-            sync_tool.func(text="hello")
-
-
-def test_sync_tool_denied_when_policy_requires_approval() -> None:
-    """Treat approval_required as denied (until an approval handler intervenes)."""
-    sync_tool = wrap_tool(_make_sync_tool())
-
-    with active_policy(_approval_required_policy()):
-        with pytest.raises(ToolDeniedError):
-            sync_tool.func(text="hello")
+    # New closure replaced the previous one.
+    assert t.func is not first_guard
+    # Calling it goes through the NEW enforcer → deny.
+    result = t.func(text="hello")
+    assert isinstance(result, dict)
+    assert result["error"]["type"] == "policy_denied"
 
 
-def test_sync_tool_runs_when_policy_allows() -> None:
-    """Forward to the original sync function when the tool is allowed."""
-    sync_tool = wrap_tool(_make_sync_tool())
-
-    with active_policy(_allow_policy()):
-        result = sync_tool.func(text="hello")
-
-    assert result == "echo:hello"
+# ---------------------------------------------------------------------------
+# Sync ``func`` branches
+# ---------------------------------------------------------------------------
 
 
-def test_sync_tool_invoke_returns_denial_message_via_handle_tool_error() -> None:
-    """Surface the denial as tool output rather than aborting the graph."""
-    sync_tool = wrap_tool(_make_sync_tool())
+def test_sync_allow_delegates_to_original() -> None:
+    t = _make_sync_tool()
+    install_enforcer_on_tool(t, enforcer=_allow_enforcer())
 
-    result = sync_tool.invoke({"text": "hello"})
-
-    assert isinstance(result, str)
-    assert "denied by the agent policy" in result
-    assert "echo" in result
+    assert t.func(text="hi") == "echo:hi"
 
 
-@pytest.mark.asyncio
-async def test_async_tool_denied_when_no_active_policy() -> None:
-    """Raise ToolDeniedError when an async tool runs without a policy bound."""
-    async_tool = wrap_tool(_make_async_tool())
+def test_sync_deny_returns_structured_error() -> None:
+    t = _make_sync_tool()
+    install_enforcer_on_tool(t, enforcer=_deny_enforcer())
 
-    with pytest.raises(ToolDeniedError, match="no active Fortify policy"):
-        await async_tool.coroutine(text="hello")
+    result = t.func(text="hi")
+
+    assert result["ok"] is False
+    assert result["error"]["type"] == "policy_denied"
+    assert result["error"]["tool_name"] == "echo"
 
 
-@pytest.mark.asyncio
-async def test_async_tool_denied_when_policy_denies() -> None:
-    """Raise ToolDeniedError when the active policy denies the async tool."""
-    async_tool = wrap_tool(_make_async_tool())
+def test_sync_needs_approval_renders_structured_error() -> None:
+    """install_enforcer_on_tool always renders NEEDS_APPROVAL as a structured
+    error — no inline approval flow on the in-place mutator."""
+    t = _make_sync_tool()
+    install_enforcer_on_tool(t, enforcer=_approval_enforcer())
 
-    with active_policy(_deny_policy()):
-        with pytest.raises(ToolDeniedError):
-            await async_tool.coroutine(text="hello")
+    result = t.func(text="hi")
+
+    assert result["error"]["type"] == "approval_required"
+
+
+# ---------------------------------------------------------------------------
+# Async ``coroutine`` branches
+# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_async_tool_runs_when_policy_allows() -> None:
-    """Forward to the original async function when the tool is allowed."""
-    async_tool = wrap_tool(_make_async_tool())
+async def test_async_allow_delegates_to_original() -> None:
+    t = _make_async_tool()
+    install_enforcer_on_tool(t, enforcer=_allow_enforcer())
 
-    with active_policy(_allow_policy()):
-        result = await async_tool.coroutine(text="hello")
-
-    assert result == "async:hello"
+    assert await t.coroutine(text="hi") == "async:hi"
 
 
 @pytest.mark.asyncio
-async def test_async_tool_ainvoke_returns_denial_message_via_handle_tool_error() -> (
-    None
-):
-    """Surface async denials as tool output instead of bubbling the exception."""
-    async_tool = wrap_tool(_make_async_tool())
+async def test_async_deny_returns_structured_error() -> None:
+    t = _make_async_tool()
+    install_enforcer_on_tool(t, enforcer=_deny_enforcer())
 
-    result = await async_tool.ainvoke({"text": "hello"})
+    result = await t.coroutine(text="hi")
 
-    assert isinstance(result, str)
-    assert "denied by the agent policy" in result
+    assert result["error"]["type"] == "policy_denied"
 
 
-def test_wrap_tools_wraps_each_tool_and_returns_same_list() -> None:
-    """Apply wrap_tool to every tool in-place and return the original list."""
-    tools = [_make_sync_tool("echo_a"), _make_sync_tool("echo_b")]
+@pytest.mark.asyncio
+async def test_async_needs_approval_renders_structured_error() -> None:
+    t = _make_async_tool()
+    install_enforcer_on_tool(t, enforcer=_approval_enforcer())
 
-    result = wrap_tools(tools)
+    result = await t.coroutine(text="hi")
+
+    assert result["error"]["type"] == "approval_required"
+
+
+# ---------------------------------------------------------------------------
+# Role resolution via User contextvar
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_user_role_selects_matching_policy() -> None:
+    """The active User's role drives which AgentPolicy the enforcer applies."""
+    policy_set = PolicySet(
+        {
+            DEFAULT_ROLE_NAME: AgentPolicy.model_validate(
+                {"default_policy": {"mode": "deny"}}
+            ),
+            "support": AgentPolicy.model_validate(
+                {
+                    "default_policy": {"mode": "deny"},
+                    "tools": {"echo": {"mode": "allow"}},
+                }
+            ),
+        }
+    )
+    enforcer = PolicyEnforcer(policy_set)
+    t = _make_async_tool()
+    install_enforcer_on_tool(t, enforcer=enforcer)
+
+    # No User → default role → denied.
+    denied = await t.coroutine(text="hi")
+    assert denied["error"]["type"] == "policy_denied"
+
+    # support role → allowed.
+    async with User(user_id="u-1", role="support"):
+        allowed = await t.coroutine(text="hi")
+    assert allowed == "async:hi"
+
+
+# ---------------------------------------------------------------------------
+# Batch installer
+# ---------------------------------------------------------------------------
+
+
+def test_install_on_tools_installs_each_and_returns_same_list() -> None:
+    tools = [_make_sync_tool("a"), _make_sync_tool("b")]
+
+    result = install_enforcer_on_tools(
+        tools,
+        enforcer=_enforcer_for(
+            {
+                "default_policy": {"mode": "deny"},
+                "tools": {"a": {"mode": "allow"}, "b": {"mode": "allow"}},
+            }
+        ),
+    )
 
     assert result is tools
     for t in tools:
-        assert getattr(t, "_fortify_wrapped") is True
-        assert t.handle_tool_error is True
+        assert getattr(t, "_fortify_enforcer_installed") is True
 
 
-def test_wrap_tools_isolates_policies_per_tool() -> None:
-    """Each tool consults the active policy independently of the others."""
+def test_install_on_tools_isolates_decisions_per_tool() -> None:
+    """Each tool consults the enforcer independently — same enforcer, per-name decision."""
     tool_a = _make_sync_tool("tool_a")
     tool_b = _make_sync_tool("tool_b")
-    wrap_tools([tool_a, tool_b])
-
-    policy = AgentPolicy.model_validate(
-        {
-            "default_policy": {"mode": "deny"},
-            "tools": {
-                "tool_a": {"mode": "allow"},
-                "tool_b": {"mode": "deny"},
-            },
-        }
+    install_enforcer_on_tools(
+        [tool_a, tool_b],
+        enforcer=_enforcer_for(
+            {
+                "default_policy": {"mode": "deny"},
+                "tools": {
+                    "tool_a": {"mode": "allow"},
+                    "tool_b": {"mode": "deny"},
+                },
+            }
+        ),
     )
 
-    with active_policy(policy):
-        assert tool_a.func(text="x") == "echo:x"
-        with pytest.raises(ToolDeniedError):
-            tool_b.func(text="x")
+    assert tool_a.func(text="x") == "echo:x"
+    denied = tool_b.func(text="x")
+    assert denied["error"]["type"] == "policy_denied"

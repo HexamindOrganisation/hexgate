@@ -175,8 +175,9 @@ def _patched_loader(monkeypatch):
         # A namespace (not a str) so the loader can set .fortify_client on it.
         return types.SimpleNamespace(name="agent"), "handler-instance"
 
-    def fake_enforce_policy(_agent, policy):
+    def fake_enforce_policy(_agent, policy, *, approval_handler=None):
         captured["policy"] = policy
+        captured["approval_handler"] = approval_handler
         return _agent
 
     monkeypatch.setattr(loader, "FortifyConfig", _FakeConfig)

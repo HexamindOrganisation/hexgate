@@ -12,9 +12,10 @@ from rich.console import Console, Group
 from rich.panel import Panel
 from rich.text import Text
 
-from fortify.agents.factory import AgentGraph, CallbackHandler
+from fortify.agents.factory import AgentGraph, ApprovalHandler, CallbackHandler
 from fortify.agents.loader import load_agent, resolve_agent_source
 from fortify.config.settings import Settings
+from fortify.runtime.context import get_current_user
 from fortify.tools import fetch, web_search
 
 ApprovalMode = Literal["ask", "auto-approve", "auto-deny"]
@@ -39,6 +40,7 @@ def build_runtime(
     base_dir: Path,
     model: str | None,
     local_only: bool = False,
+    approval_handler: ApprovalHandler | None = None,
 ) -> AgentRuntime:
     """Create the runtime shared by ``fortify chat`` and ``fortify serve``.
 
@@ -46,7 +48,8 @@ def build_runtime(
     when ``FORTIFY_KEY`` is present in the environment — what terminal
     chat uses, since it doesn't need cloud-fetched policy or a serve
     tunnel. ``fortify serve`` passes ``local_only=False`` so policy edits
-    in the dashboard land at the next turn boundary.
+    in the dashboard land at the next turn boundary. ``approval_handler``
+    threads to :func:`load_agent` for inline ``NEEDS_APPROVAL`` resolution.
     """
     import os
 
@@ -60,6 +63,7 @@ def build_runtime(
         tags=["fortify", settings.search_engine, resolved_model, agent_name],
         extra_tools={tool.name: tool for tool in tools},
         local_only=local_only,
+        approval_handler=approval_handler,
     )
     runtime_tools = list(getattr(agent, "tools", [])) + list(tools)
     tools_by_name = {
@@ -103,26 +107,38 @@ def _truncate_approval_value(value: object, *, limit: int = 80) -> str:
 def prompt_for_approval(
     console: Console,
     action: dict[str, object],
+    _context: dict[str, object] | None = None,
 ) -> bool:
-    """Ask the user to approve one tool invocation in the terminal."""
+    """Prompt the user in the terminal to approve one tool invocation.
+
+    Matches the legacy ``(ActionPayload, ActionContext) -> bool`` shape that
+    ``ApprovalHandler`` expects. The active :class:`User.role` is read from
+    the contextvar so the prompt can still display it alongside the action.
+    """
     tool_name = str(action.get("tool_name", "tool"))
-    arguments = action.get("arguments", {})
+    arguments = action.get("arguments") or {}
+    user = get_current_user()
+    role = user.role if user is not None else None
+
+    header = Text(f"Approval required for {tool_name}", style="bold yellow")
+    role_line = [Text(f"role: {role}", style="dim")] if role is not None else []
+
+    arg_items = (
+        arguments.items() if isinstance(arguments, dict) else [("arguments", arguments)]
+    )
 
     console.print()
     console.print(
         Panel(
             Group(
-                Text(f"Approval required for {tool_name}", style="bold yellow"),
+                header,
+                *role_line,
                 *(
                     Text(
                         f"{key}: {_truncate_approval_value(value)}",
                         style="white",
                     )
-                    for key, value in (
-                        arguments.items()
-                        if isinstance(arguments, dict)
-                        else [("arguments", arguments)]
-                    )
+                    for key, value in arg_items
                 ),
                 Text("Type y to approve or n to deny, then press Enter.", style="dim"),
             ),
@@ -137,16 +153,17 @@ def prompt_for_approval(
 
 
 def build_approval_handler(console: Console, mode: ApprovalMode):
-    """Return the CLI approval handler for the selected mode."""
+    """Return a CLI approval handler — ``bool`` for auto modes, an
+    ``(action, context) -> bool`` callable for ``ask``."""
     if mode == "auto-approve":
         return True
     if mode == "auto-deny":
         return False
 
     def approval_handler(
-        action: dict[str, object], _context: dict[str, object] | None
+        action: dict[str, object], context: dict[str, object] | None
     ) -> bool:
-        return prompt_for_approval(console, action)
+        return prompt_for_approval(console, action, context)
 
     return approval_handler
 
