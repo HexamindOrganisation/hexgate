@@ -92,6 +92,38 @@ demo-override: ## Build a deny-everything bundle + chat with FORTIFY_LOCAL_POLIC
 	@echo ""
 	FORTIFY_LOCAL_POLICY=/tmp/m2-deny-bundle $(UV) fortify chat --agent researcher --approval-mode auto-deny
 
+# -------- Platform infra (ClickHouse audit log) --------
+#
+# Docker Compose service definition lives in platform/docker-compose.yml.
+# First `make clickhouse-up` on an empty volume runs the init scripts in
+# platform/clickhouse/init/ and creates the policy_decision table.
+# Subsequent schema changes don't auto-apply — use `make clickhouse-reset`
+# (wipes data) or apply by hand via `make clickhouse-cli`.
+
+COMPOSE := docker compose -f platform/docker-compose.yml
+
+.PHONY: clickhouse-up
+clickhouse-up: ## Start the local ClickHouse server (creates schema on first run)
+	$(COMPOSE) up -d clickhouse
+
+.PHONY: clickhouse-down
+clickhouse-down: ## Stop ClickHouse (keeps the data volume)
+	$(COMPOSE) down
+
+.PHONY: clickhouse-logs
+clickhouse-logs: ## Tail ClickHouse server logs
+	$(COMPOSE) logs -f clickhouse
+
+.PHONY: clickhouse-cli
+clickhouse-cli: ## Open an interactive SQL shell against the local ClickHouse
+	docker exec -it fortify-clickhouse clickhouse-client \
+	    --user fortify --password fortify-dev-password --database fortify_audit
+
+.PHONY: clickhouse-reset
+clickhouse-reset: ## Wipe the data volume and re-run init scripts
+	$(COMPOSE) down -v
+	$(COMPOSE) up -d clickhouse
+
 # -------- Platform API (FastAPI control plane) --------
 #
 # The platform API is a separate uv project under platform/api/ with its

@@ -96,6 +96,23 @@ make dashboard-install      # pnpm install inside platform/dashboard/
 
 Then open http://localhost:5173/playground — type a message, watch the live stream of tool calls and policy decisions from your local agent.
 
+### Audit log (ClickHouse)
+
+Policy decisions are written to a local ClickHouse instance for the audit dashboard. Requires Docker.
+
+```bash
+make clickhouse-up        # start the server (first run also creates the schema)
+make clickhouse-cli       # interactive SQL shell
+make clickhouse-down      # stop (keeps data)
+make clickhouse-reset     # wipe and recreate (also re-applies the schema)
+```
+
+Schema lives in `platform/clickhouse/init/01_schema.sql`.
+
+**Not a migration system.** That init directory is a POC scaffold — the Docker image runs it exactly once, on first container start with an empty data volume. Editing the SQL after that point is silently ignored on existing environments; adding a `02_*.sql` neighbor would only apply to fresh volumes, not migrate anyone whose volume already exists. To apply schema changes locally, either `make clickhouse-reset` (wipes data) or `make clickhouse-cli` and run the SQL by hand. A real migration runner should replace this directory the first time a second schema change is needed.
+
+The service binds to **host ports 8124 (HTTP) and 9001 (native)** rather than ClickHouse's default 8123/9000, so it coexists with any other local ClickHouse instance (e.g. a Langfuse-bundled one). PR 2's settings module will default to 8124.
+
 The dashboard's `/agents` page lets you edit each agent's YAML and policy. `fortify serve` re-fetches at every turn boundary, so your edits take effect on the next chat message without a restart.
 
 ## ✨ Core Primitives
