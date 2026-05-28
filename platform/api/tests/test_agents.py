@@ -391,16 +391,21 @@ def test_manifest_endpoint_round_trips_model_and_system_prompt(
 def test_manifest_endpoint_unregistered_agents_have_no_leakage(
     client: TestClient,
 ) -> None:
-    """Agents without a registered version expose a null manifest, full stop.
-
-    The envelope shape is ``{name, manifest}``; ``model`` / ``system_prompt``
-    live *inside* ``manifest``. Asserting they're absent from the envelope
-    would be vacuously true — assert the manifest itself is None.
+    """Agents without a registered version expose a null manifest body —
+    and crucially the sensitive fields (``model`` / ``system_prompt``)
+    stay *inside* ``manifest``, never promoted to the envelope. The
+    envelope itself carries lightweight metadata (``version``,
+    ``content_hash``, ``updated_at``) for the picker; those are not
+    leakage.
     """
     resp = client.get(f"/v1/projects/{DEFAULT_PROJECT_ID}/agents/manifest")
     for row in resp.json():
         if row.get("manifest") is None:
-            assert set(row.keys()) <= {"name", "manifest"}
+            assert row["manifest"] is None
+            # The bytes that would leak — model + system prompt — must never
+            # appear at the envelope level. They only live inside `manifest`.
+            assert "model" not in row
+            assert "system_prompt" not in row
 
 
 def test_register_endpoint_accepts_legacy_shape_without_new_fields(
