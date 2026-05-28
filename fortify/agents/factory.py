@@ -416,6 +416,7 @@ class FortifyAgent:
                 wrapped.append(tool_spec)
         return self.with_tools(wrapped)
 
+
 AgentGraph: TypeAlias = FortifyAgent
 
 
