@@ -21,6 +21,7 @@ from fortify.agents.loader import (
     register_agent,
     unregister_agent,
 )
+from fortify.cli.register import AgentManifest, create_manifest
 from fortify.cloud import FortifyClient, FortifyConfig
 from fortify.runtime import LocalWorkspace, ToolUseContext, User, Workspace
 from fortify.security import AgentPolicy
@@ -38,6 +39,7 @@ from fortify.tools.fetch import fetch
 from fortify.tools.websearch import web_search
 
 __all__ = [
+    "AgentManifest",
     "AgentPolicy",
     "FortifyClient",
     "FortifyConfig",
@@ -50,6 +52,7 @@ __all__ = [
     "edit_file",
     "clear_registered_agents",
     "create_agent",
+    "create_manifest",
     "enforce_policy",
     "fetch",
     "glob",

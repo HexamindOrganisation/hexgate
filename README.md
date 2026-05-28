@@ -128,6 +128,10 @@ agent, handler = create_agent(
 The current curated surface includes:
 
 - `create_agent`
+- `create_manifest`
+- `AgentManifest`
+- `enforce_policy`
+- `with_approval_handler`
 - `enforce_policy` — accepts an optional `approval_handler=` for `NEEDS_APPROVAL` outcomes
 - `with_before_action`
 - `invoke_agent`
@@ -1014,6 +1018,30 @@ fortify register \
 `.txt` / `.jinja` file (read as text at register time).
 
 Supported frameworks: OpenAI Agents SDK, Google ADK, Pydantic AI, LangChain/LangGraph, Fortify agents.
+
+### Build A Manifest Programmatically — `create_manifest`
+
+If you need the manifest object without POSTing it to the platform — to
+inspect it, persist it elsewhere, diff it across versions, or wire it
+into a custom registration flow — call `create_manifest` directly:
+
+```python
+from fortify import create_manifest
+
+manifest = create_manifest(agent, description="Customer support bot")
+print(manifest.model_dump())
+```
+
+`create_manifest` dispatches on the framework of `agent`. The supported
+types are the same set `fortify register` accepts: Fortify, OpenAI Agents
+SDK, Google ADK, Pydantic AI, and LangChain/LangGraph compiled graphs.
+For LangGraph you must pass `tools=` explicitly, and may pass `model=` /
+`system_prompt=`, since compiled graphs don't expose those fields after
+compilation.
+
+The return value is an `AgentManifest` (a Pydantic model, also re-exported
+from `fortify` for type annotations) — the same schema the platform
+stores and the dashboard renders.
 
 ## 🌐 Fortify Platform
 
