@@ -19,3 +19,15 @@ def srt_required() -> None:
         ensure_srt_available()
     except SrtUnavailableError as error:
         pytest.skip(f"srt not installed; {error}")
+
+
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    """Skip @pytest.mark.integration tests unless run with `pytest -m integration`."""
+    if config.getoption("-m") == "integration":
+        return
+    skip_integration = pytest.mark.skip(
+        reason="opt-in: run with `pytest -m integration`"
+    )
+    for item in items:
+        if "integration" in item.keywords:
+            item.add_marker(skip_integration)
