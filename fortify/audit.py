@@ -1,7 +1,7 @@
 """Per-decision audit emission to the platform's /v1/audit/decisions endpoint.
 
 Fire-and-forget POST per decision; bounded concurrency; drops on saturation.
-Lifecycle: configure() once, await start(), await shutdown() at process exit.
+Lifecycle: configure() once, await shutdown() at process exit.
 """
 from __future__ import annotations
 
@@ -68,20 +68,18 @@ class AuditSender:
         http_timeout: float = 5.0,
     ) -> None:
         self._endpoint = endpoint
-        self._headers = {"Authorization": f"Bearer {api_key}"}
         self._http_timeout = http_timeout
         self._semaphore = asyncio.Semaphore(max_in_flight)
-        self._client: httpx.AsyncClient | None = None
+        # httpx.AsyncClient is loop-agnostic at construction; it binds to a
+        # loop only at first use, so eager init keeps configure() sync.
+        self._client: httpx.AsyncClient | None = httpx.AsyncClient(
+            timeout=http_timeout,
+            headers={"Authorization": f"Bearer {api_key}"},
+        )
         self._tasks: set[asyncio.Task[None]] = set()
         self._closing = False
         self._dropped = 0
         self._warned_no_loop = False
-
-    async def start(self) -> None:
-        self._client = httpx.AsyncClient(
-            timeout=self._http_timeout,
-            headers=self._headers,
-        )
 
     def emit(self, event: AuditEvent) -> None:
         if self._closing or self._client is None:
