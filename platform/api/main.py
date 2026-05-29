@@ -51,6 +51,7 @@ from services import (
     ensure_default_project,
     find_token_by_secret,
     get_agent,
+    get_latest_agent_version_id,
     get_latest_agent_versions_map,
     list_agents,
     list_dev_tokens,
@@ -507,10 +508,18 @@ RETENTION_WINDOW = timedelta(days=90)
 def ingest_decision(
     body: DecisionEvent,
     project_id: str = Depends(require_project),
-    ch=Depends(get_clickhouse),
+    session: Session = Depends(get_session),
+    clickhouse_client=Depends(get_clickhouse),
 ) -> DecisionAccepted:
-    """Ingest one policy decision. Project resolved from bearer; received_at
-    stamped server-side via the ClickHouse column default."""
+    """Ingest one policy decision.
+
+    Server-side resolution stamps three things the body never carries:
+    ``project_id`` from the bearer, ``received_at`` from the ClickHouse
+    column default, and ``agent_version_id`` from the relational store
+    (so the canonical version always wins over whatever the SDK is
+    running). Decisions for unregistered agents land with an empty
+    ``agent_version_id`` — surfaceable as "unresolved" in the dashboard.
+    """
     now = datetime.now(timezone.utc)
     if body.occurred_at > now + CLOCK_SKEW_FUTURE:
         raise HTTPException(status_code=400, detail="occurred_at is in the future")
@@ -519,8 +528,15 @@ def ingest_decision(
             status_code=400, detail="occurred_at is older than retention window"
         )
 
+    agent_version_id = get_latest_agent_version_id(session, project_id, body.agent_name)
+
     try:
-        insert_decision(ch, event=body, project_id=project_id)
+        insert_decision(
+            clickhouse_client,
+            event=body,
+            project_id=project_id,
+            agent_version_id=agent_version_id,
+        )
     except AuditPayloadTooLarge as exc:
         raise HTTPException(status_code=413, detail=str(exc))
     except ClickHouseError:

@@ -25,7 +25,7 @@ from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
 import audit
-from main import app, get_clickhouse, require_project
+from main import app, get_clickhouse, get_session, require_project
 from schemas import DecisionEvent
 
 
@@ -57,10 +57,9 @@ def _event(**overrides) -> dict:
 
 def test_minimal_event_constructs_with_envelope_defaults() -> None:
     e = DecisionEvent(**_event())
-    # Envelope defaults
+    # Envelope defaults (agent_version_id is server-resolved, not in the wire model)
     assert e.session_id == ""
     assert e.user_id == ""
-    assert e.agent_version_id == ""
     # Decision-detail defaults
     assert e.role == ""
     assert e.error_type == ""
@@ -70,20 +69,17 @@ def test_minimal_event_constructs_with_envelope_defaults() -> None:
 
 
 def test_envelope_fields_inherited_via_mixin() -> None:
-    """DecisionEvent inherits the full envelope from AuditEnvelope.
+    """DecisionEvent inherits the wire envelope from AuditEnvelope.
 
-    Mirrors the envelope prefix of platform/clickhouse/init/schema.sql.
-    project_id and received_at are intentionally absent — server-resolved
-    and server-stamped respectively, never trusted from the body.
+    The wire envelope is narrower than the ClickHouse storage envelope —
+    fields the server resolves on its own never appear here.
     """
-    expected = {
-        "event_id", "occurred_at", "agent_name",
-        "agent_version_id", "session_id", "user_id",
-    }
+    expected = {"event_id", "occurred_at", "agent_name", "session_id", "user_id"}
     assert expected <= DecisionEvent.model_fields.keys()
-    # And the inverse: server-managed fields stay out of the wire model.
+    # And the inverse: server-resolved/stamped fields stay out of the wire model.
     assert "project_id" not in DecisionEvent.model_fields
     assert "received_at" not in DecisionEvent.model_fields
+    assert "agent_version_id" not in DecisionEvent.model_fields
 
 
 def test_bad_outcome_rejected() -> None:
@@ -121,15 +117,32 @@ def fake_clickhouse() -> MagicMock:
     return MagicMock()
 
 
-@pytest.fixture
-def client(fake_clickhouse: MagicMock) -> TestClient:
-    """TestClient with require_project + get_clickhouse stubbed.
+# Sentinel returned by the stubbed agent_version_id lookup; tests assert
+# this value lands in the inserted row, proving the resolution came from
+# the platform and not from the body.
+_STUB_AGENT_VERSION_ID = "stub_v_id_xyz"
 
-    ``require_project`` returns the literal ``proj_test`` so assertions
-    on the server-stamped ``project_id`` row value stay deterministic.
+
+@pytest.fixture
+def client(fake_clickhouse: MagicMock, monkeypatch: pytest.MonkeyPatch) -> TestClient:
+    """TestClient with the handler's three dependencies stubbed.
+
+    * ``require_project`` returns ``"proj_test"`` so the server-stamped
+      project_id in the row is deterministic.
+    * ``get_clickhouse`` returns the MagicMock so tests can inspect what
+      the domain wrote.
+    * ``get_session`` returns a MagicMock — never used in practice
+      because we also stub the version lookup.
+    * ``main.get_latest_agent_version_id`` is patched to a constant so
+      tests assert "the value in the row came from the platform lookup."
     """
     app.dependency_overrides[require_project] = lambda: "proj_test"
     app.dependency_overrides[get_clickhouse] = lambda: fake_clickhouse
+    app.dependency_overrides[get_session] = lambda: MagicMock()
+    monkeypatch.setattr(
+        "main.get_latest_agent_version_id",
+        lambda _session, _project_id, _agent_name: _STUB_AGENT_VERSION_ID,
+    )
     try:
         yield TestClient(app)
     finally:
@@ -151,11 +164,27 @@ def test_happy_path_returns_202_and_inserts_row(
     rows = args[1]
     assert len(rows) == 1
     assert len(rows[0]) == 15  # column count matches schema (received_at absent)
-    # project_id stamped from bearer (override returned "proj_test"), index 2
-    assert rows[0][2] == "proj_test"
+    # Indices match the _DECISION_COLUMNS order in audit.py.
+    assert rows[0][2] == "proj_test"                 # project_id ← bearer
+    assert rows[0][4] == _STUB_AGENT_VERSION_ID      # agent_version_id ← platform lookup
     assert kwargs["column_names"] == audit._DECISION_COLUMNS
     assert kwargs["settings"]["async_insert"] == 1
     assert kwargs["settings"]["wait_for_async_insert"] == 0
+
+
+def test_agent_version_id_comes_from_platform_lookup(
+    client: TestClient, fake_clickhouse: MagicMock
+) -> None:
+    """Even if the SDK tries to sneak agent_version_id into the body, the
+    Pydantic model strips it and the platform lookup is the only source."""
+    payload = {**_event(), "agent_version_id": "sdk_provided_should_be_ignored"}
+    r = client.post("/v1/audit/decisions", json=payload)
+    assert r.status_code == 202
+
+    rows = fake_clickhouse.insert.call_args.args[1]
+    assert rows[0][4] == _STUB_AGENT_VERSION_ID
+    # And the payload's body value never reached storage.
+    assert "sdk_provided_should_be_ignored" not in rows[0]
 
 
 def test_future_occurred_at_rejected(client: TestClient) -> None:
@@ -216,11 +245,11 @@ def test_real_clickhouse_round_trip() -> None:
     """
     from clickhouse import get_clickhouse as real_get_clickhouse
 
-    ch = real_get_clickhouse()
+    clickhouse_client = real_get_clickhouse()
     event_id = uuid.uuid4()
     project_id = f"test_proj_{uuid.uuid4().hex[:8]}"
 
-    ch.insert(
+    clickhouse_client.insert(
         "policy_decision",
         [[
             event_id,
@@ -246,7 +275,7 @@ def test_real_clickhouse_round_trip() -> None:
     )
 
     try:
-        rows = ch.query(
+        rows = clickhouse_client.query(
             "SELECT event_id, project_id, outcome, received_at, agent_version_id "
             "FROM policy_decision WHERE project_id = {pid:String}",
             parameters={"pid": project_id},
@@ -259,7 +288,7 @@ def test_real_clickhouse_round_trip() -> None:
         assert received_at is not None  # server-stamped via column default
         assert av_id == "9f1e3c5a-test"
     finally:
-        ch.command(
+        clickhouse_client.command(
             "ALTER TABLE policy_decision DELETE WHERE project_id = {pid:String}",
             parameters={"pid": project_id},
         )

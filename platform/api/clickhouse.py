@@ -21,14 +21,14 @@ _log = logging.getLogger(__name__)
 @lru_cache
 def get_clickhouse() -> Client:
     """Return the process-wide ClickHouse client, configured from settings."""
-    s = get_settings()
+    settings = get_settings()
     return clickhouse_connect.get_client(
-        host=s.clickhouse_host,
-        port=s.clickhouse_port,
-        username=s.clickhouse_user,
-        password=s.clickhouse_password,
-        database=s.clickhouse_database,
-        secure=s.clickhouse_secure,
+        host=settings.clickhouse_host,
+        port=settings.clickhouse_port,
+        username=settings.clickhouse_user,
+        password=settings.clickhouse_password,
+        database=settings.clickhouse_database,
+        secure=settings.clickhouse_secure,
         compress=True,
         connect_timeout=5,
         send_receive_timeout=30,

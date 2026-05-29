@@ -79,6 +79,34 @@ def get_agent(session: Session, project_id: str, name: str) -> Agent | None:
     return session.exec(stmt).first()
 
 
+def get_latest_agent_version_id(
+    session: Session, project_id: str, agent_name: str
+) -> str:
+    """Return the latest registered AgentVersion.id for an agent.
+
+    Used by the audit ingest endpoint to stamp the canonical version_id on
+    each decision row from the platform's relational store, rather than
+    trusting an SDK-supplied value. Returns ``""`` when:
+
+      * no Agent row exists for ``(project_id, agent_name)`` — e.g. the
+        decision came from a locally-overridden bundle, or an SDK is
+        ingesting before its first /v1/agents registration.
+      * the Agent exists but has no AgentVersion yet.
+
+    Caller can treat the empty string as "unresolved" without branching.
+    """
+    agent = get_agent(session, project_id, agent_name)
+    if agent is None:
+        return ""
+    stmt = (
+        select(AgentVersion.id)
+        .where(AgentVersion.agent_id == agent.id)
+        .order_by(AgentVersion.version.desc())  # type: ignore[attr-defined]
+        .limit(1)
+    )
+    return session.exec(stmt).first() or ""
+
+
 def get_latest_agent_versions_map(
     session: Session, agent_ids: list[str]
 ) -> dict[str, AgentVersion]:

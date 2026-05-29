@@ -164,21 +164,26 @@ class AgentManifestView(BaseModel):
 class AuditEnvelope(BaseModel):
     """Fields shared by every audit event type.
 
-    Matches the envelope prefix of platform/clickhouse/init/schema.sql so
-    future event models (ToolInvocationEvent, ToolCompletionEvent, ...) can
-    inherit the full envelope and add only their event-specific fields.
+    The *wire* envelope: what the SDK actually sends on the body. The
+    *storage* envelope in platform/clickhouse/init/schema.sql is wider —
+    it adds three fields the platform fills in on the server side and
+    never trusts from the body:
 
-    ``project_id`` and ``received_at`` are intentionally absent: the server
-    resolves project_id from the bearer and stamps received_at via the
-    ClickHouse column default. Neither is ever trusted from the body.
+      * ``project_id`` — resolved from the bearer token
+      * ``received_at`` — stamped by ClickHouse via the column default
+      * ``agent_version_id`` — looked up from the relational store by
+        (project_id, agent_name) at ingest time, so the canonical
+        version always wins over whatever the SDK happens to be running
+
+    Future event models (ToolInvocationEvent, ToolCompletionEvent, ...)
+    inherit this wire envelope and add only their event-specific fields.
     """
 
-    event_id:         UUID
-    occurred_at:      datetime
-    agent_name:       str = Field(min_length=1, max_length=256)
-    agent_version_id: str = Field(default="", max_length=64)
-    session_id:       str = Field(default="", max_length=128)
-    user_id:          str = Field(default="", max_length=256)
+    event_id:    UUID
+    occurred_at: datetime
+    agent_name:  str = Field(min_length=1, max_length=256)
+    session_id:  str = Field(default="", max_length=128)
+    user_id:     str = Field(default="", max_length=256)
 
 
 class DecisionEvent(AuditEnvelope):

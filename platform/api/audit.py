@@ -58,15 +58,18 @@ _DECISION_INSERT_SETTINGS = {
 
 
 def insert_decision(
-    ch: Client,
+    clickhouse_client: Client,
     *,
     event: DecisionEvent,
     project_id: str,
+    agent_version_id: str,
 ) -> None:
     """Write one decision row to the policy_decision table.
 
-    ``project_id`` is supplied by the caller (the HTTP layer resolves it
-    from the bearer token); it is never read from the event body.
+    ``project_id`` and ``agent_version_id`` are both server-resolved by
+    the caller and passed in here — they are never read from the event
+    body. (The HTTP layer derives ``project_id`` from the bearer and
+    looks up ``agent_version_id`` from the relational store.)
 
     Raises:
         AuditPayloadTooLarge: serialized ``arguments`` or ``hint``
@@ -86,9 +89,9 @@ def insert_decision(
     row = [
         event.event_id,
         event.occurred_at,
-        project_id,                # server-stamped, never from body
+        project_id,                # server-resolved from bearer
         event.agent_name,
-        event.agent_version_id,
+        agent_version_id,          # server-resolved from relational store
         event.session_id,
         event.user_id,
         event.tool_name,
@@ -100,7 +103,7 @@ def insert_decision(
         hint_json,
         args_json,
     ]
-    ch.insert(
+    clickhouse_client.insert(
         "policy_decision",
         [row],
         column_names=_DECISION_COLUMNS,
