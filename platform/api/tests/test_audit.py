@@ -248,6 +248,36 @@ def test_clickhouse_unreachable_at_connect_returns_503(
 
 
 # ---------------------------------------------------------------------------
+# Health (liveness) vs readiness split
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("path", ["/health", "/v1/health"])
+def test_liveness_does_not_ping_clickhouse(
+    monkeypatch: pytest.MonkeyPatch, path: str
+) -> None:
+    """Liveness must not touch ClickHouse, so an outage can't cascade into restarts."""
+    def _fail() -> bool:
+        raise AssertionError("liveness probe must not ping ClickHouse")
+
+    monkeypatch.setattr("main.clickhouse_ping", _fail)
+    r = TestClient(app).get(path)
+    assert r.status_code == 200
+    assert r.json()["status"] == "ok"
+    assert "clickhouse" not in r.json()
+
+
+@pytest.mark.parametrize("path", ["/ready", "/v1/ready"])
+def test_readiness_reports_clickhouse(
+    monkeypatch: pytest.MonkeyPatch, path: str
+) -> None:
+    monkeypatch.setattr("main.clickhouse_ping", lambda: False)
+    r = TestClient(app).get(path)
+    assert r.status_code == 200
+    assert r.json()["clickhouse"] == "unreachable"
+
+
+# ---------------------------------------------------------------------------
 # Integration — requires `make clickhouse-up` first; opt-in via marker
 # ---------------------------------------------------------------------------
 

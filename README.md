@@ -113,7 +113,7 @@ Schema lives in `platform/clickhouse/init/schema.sql`.
 
 The service binds to **host ports 8124 (HTTP) and 9001 (native)** rather than ClickHouse's default 8123/9000, so it coexists with any other local ClickHouse instance (e.g. a Langfuse-bundled one).
 
-Once both `make clickhouse-up` and `make platform-api` are running, `GET /health` reports `"clickhouse": "ok"` and the ingest endpoint `POST /v1/audit/decisions` accepts one decision per request:
+Once both `make clickhouse-up` and `make platform-api` are running, `GET /ready` reports `"clickhouse": "ok"` (the `/health` liveness probe stays dependency-free) and the ingest endpoint `POST /v1/audit/decisions` accepts one decision per request:
 
 ```bash
 curl -X POST localhost:8000/v1/audit/decisions \

@@ -161,14 +161,25 @@ def require_project(
     return token.project_id
 
 
-@app.get("/health")
-def health() -> dict[str, str]:
-    """Unversioned liveness probe."""
+def _readiness() -> dict[str, str]:
     return {
         "status":     "ok",
         "service":    "fortify-api",
         "clickhouse": "ok" if clickhouse_ping() else "unreachable",
     }
+
+
+@app.get("/health")
+def health() -> dict[str, str]:
+    """Liveness — must not touch downstream deps, or an outage cascades into
+    restarts. Dependency checks live in /ready."""
+    return {"status": "ok", "service": "fortify-api"}
+
+
+@app.get("/ready")
+def ready() -> dict[str, str]:
+    """Readiness — pings ClickHouse."""
+    return _readiness()
 
 
 v1 = APIRouter(prefix="/v1")
@@ -176,12 +187,12 @@ v1 = APIRouter(prefix="/v1")
 
 @v1.get("/health")
 def v1_health() -> dict[str, str]:
-    return {
-        "status":     "ok",
-        "service":    "fortify-api",
-        "version":    "v1",
-        "clickhouse": "ok" if clickhouse_ping() else "unreachable",
-    }
+    return {"status": "ok", "service": "fortify-api", "version": "v1"}
+
+
+@v1.get("/ready")
+def v1_ready() -> dict[str, str]:
+    return {**_readiness(), "version": "v1"}
 
 
 @v1.get("/.well-known/keys")
@@ -498,7 +509,6 @@ RETENTION_WINDOW = timedelta(days=90)
 
 
 def _audit_unavailable() -> HTTPException:
-    """503 for a transient ClickHouse outage; clients should retry."""
     return HTTPException(
         status_code=503,
         detail="audit log temporarily unavailable",
@@ -507,13 +517,9 @@ def _audit_unavailable() -> HTTPException:
 
 
 def require_clickhouse():
-    """Resolve the ClickHouse client, mapping connect-time failures to 503.
-
-    get_clickhouse() connects eagerly and raises ClickHouseError when the server
-    is unreachable; since it's @lru_cache'd (which doesn't cache raises) and the
-    startup ping is tolerated, that exception would otherwise escape during
-    dependency resolution as an uncaught 500 instead of the documented 503.
-    """
+    """Resolve the ClickHouse client as a dependency, mapping connect failures
+    to 503 — get_clickhouse() connects eagerly, so without this the raise
+    escapes dependency resolution as an uncaught 500."""
     try:
         return get_clickhouse()
     except ClickHouseError as exc:
@@ -553,13 +559,10 @@ def ingest_decision(
         )
     except AuditPayloadTooLarge as exc:
         raise HTTPException(status_code=413, detail=str(exc))
-    except OperationalError as exc:
-        # Transport / retried-transient failure — retrying may succeed.
+    except OperationalError as exc:  # transient transport failure — retryable
         _log.warning("audit insert failed (transient): %s", exc)
         raise _audit_unavailable()
-    except ClickHouseError as exc:
-        # Deterministic storage rejection (bad type/enum/value). Retrying won't
-        # help, so signal a permanent client error instead of a retryable 503.
+    except ClickHouseError as exc:  # storage rejected the row — retry won't help
         _log.error("audit insert rejected by ClickHouse: %s", exc)
         raise HTTPException(
             status_code=422, detail="audit event rejected by storage"
