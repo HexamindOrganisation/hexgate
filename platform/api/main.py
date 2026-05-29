@@ -1,5 +1,4 @@
 import base64
-import json
 import logging
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
@@ -19,6 +18,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from models import Agent, AgentVersion
 from sqlmodel import Session
 
+from audit import AuditPayloadTooLarge, insert_decision
 from biscuits import (
     TokenError,
     TokenSignatureError,
@@ -492,35 +492,11 @@ def api_register_agent(
     )
 
 
-# --- Audit ingest ------------------------------------------------------------
-# Per-event caps and time windows for /v1/audit/decisions. Module constants
-# rather than Settings entries — they're shape-of-the-protocol decisions,
-# not environment-overridable knobs. Promote to settings.py if that changes.
-
-MAX_ARGS_BYTES = 8 * 1024   # serialized arguments JSON
-MAX_HINT_BYTES = 4 * 1024   # serialized hint JSON
+# Time-window for accepting decision events. Handler-layer concerns — they
+# bound which requests we'll accept rather than how rows are stored. Storage
+# concerns (column shape, byte caps, insert settings) live in audit.py.
 CLOCK_SKEW_FUTURE = timedelta(minutes=5)
 RETENTION_WINDOW = timedelta(days=90)
-
-# Column order matches platform/clickhouse/init/schema.sql. `received_at`
-# is intentionally absent — ClickHouse stamps it via the column default,
-# which keeps the server's clock as the source of truth.
-_AUDIT_COLUMNS = [
-    "event_id", "occurred_at",
-    "project_id", "agent_name", "agent_version_id",
-    "session_id", "user_id",
-    "tool_name", "role", "outcome", "error_type",
-    "reason", "violations", "hint", "arguments",
-]
-
-# async_insert: ClickHouse buffers inserts server-side and flushes in
-# bigger physical writes — fast endpoint, ~1s dashboard read-after-write
-# lag. async_insert_deduplicate catches retried-identical-batch inserts.
-_AUDIT_INSERT_SETTINGS = {
-    "async_insert":             1,
-    "wait_for_async_insert":    0,
-    "async_insert_deduplicate": 1,
-}
 
 
 @v1.post(
@@ -533,12 +509,8 @@ def ingest_decision(
     project_id: str = Depends(require_project),
     ch=Depends(get_clickhouse),
 ) -> DecisionAccepted:
-    """Ingest one policy decision into the ClickHouse audit log.
-
-    Project is resolved from the bearer — never trusted from the body.
-    `received_at` is stamped server-side via the column default, so the
-    SDK clock and the platform clock are both captured.
-    """
+    """Ingest one policy decision. Project resolved from bearer; received_at
+    stamped server-side via the ClickHouse column default."""
     now = datetime.now(timezone.utc)
     if body.occurred_at > now + CLOCK_SKEW_FUTURE:
         raise HTTPException(status_code=400, detail="occurred_at is in the future")
@@ -547,42 +519,10 @@ def ingest_decision(
             status_code=400, detail="occurred_at is older than retention window"
         )
 
-    args_json = json.dumps(body.arguments, default=str) if body.arguments is not None else ""
-    hint_json = json.dumps(body.hint, default=str) if body.hint is not None else ""
-    if len(args_json.encode("utf-8")) > MAX_ARGS_BYTES:
-        raise HTTPException(
-            status_code=413, detail=f"arguments exceeds {MAX_ARGS_BYTES} bytes"
-        )
-    if len(hint_json.encode("utf-8")) > MAX_HINT_BYTES:
-        raise HTTPException(
-            status_code=413, detail=f"hint exceeds {MAX_HINT_BYTES} bytes"
-        )
-
-    row = [
-        body.event_id,
-        body.occurred_at,
-        project_id,                # server-stamped from bearer
-        body.agent_name,
-        body.agent_version_id,
-        body.session_id,
-        body.user_id,
-        body.tool_name,
-        body.role,
-        body.outcome,
-        body.error_type,
-        body.reason,
-        list(body.violations),
-        hint_json,
-        args_json,
-    ]
-
     try:
-        ch.insert(
-            "policy_decision",
-            [row],
-            column_names=_AUDIT_COLUMNS,
-            settings=_AUDIT_INSERT_SETTINGS,
-        )
+        insert_decision(ch, event=body, project_id=project_id)
+    except AuditPayloadTooLarge as exc:
+        raise HTTPException(status_code=413, detail=str(exc))
     except ClickHouseError:
         raise HTTPException(
             status_code=503,

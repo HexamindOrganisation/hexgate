@@ -24,7 +24,7 @@ from clickhouse_connect.driver.exceptions import ClickHouseError
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
-import main
+import audit
 from main import app, get_clickhouse, require_project
 from schemas import DecisionEvent
 
@@ -70,8 +70,20 @@ def test_minimal_event_constructs_with_envelope_defaults() -> None:
 
 
 def test_envelope_fields_inherited_via_mixin() -> None:
-    expected = {"session_id", "user_id", "agent_version_id"}
+    """DecisionEvent inherits the full envelope from AuditEnvelope.
+
+    Mirrors the envelope prefix of platform/clickhouse/init/schema.sql.
+    project_id and received_at are intentionally absent — server-resolved
+    and server-stamped respectively, never trusted from the body.
+    """
+    expected = {
+        "event_id", "occurred_at", "agent_name",
+        "agent_version_id", "session_id", "user_id",
+    }
     assert expected <= DecisionEvent.model_fields.keys()
+    # And the inverse: server-managed fields stay out of the wire model.
+    assert "project_id" not in DecisionEvent.model_fields
+    assert "received_at" not in DecisionEvent.model_fields
 
 
 def test_bad_outcome_rejected() -> None:
@@ -141,7 +153,7 @@ def test_happy_path_returns_202_and_inserts_row(
     assert len(rows[0]) == 15  # column count matches schema (received_at absent)
     # project_id stamped from bearer (override returned "proj_test"), index 2
     assert rows[0][2] == "proj_test"
-    assert kwargs["column_names"] == main._AUDIT_COLUMNS
+    assert kwargs["column_names"] == audit._DECISION_COLUMNS
     assert kwargs["settings"]["async_insert"] == 1
     assert kwargs["settings"]["wait_for_async_insert"] == 0
 
@@ -161,14 +173,14 @@ def test_too_old_occurred_at_rejected(client: TestClient) -> None:
 
 
 def test_oversized_arguments_rejected(client: TestClient) -> None:
-    big = {"key": "x" * (main.MAX_ARGS_BYTES + 100)}
+    big = {"key": "x" * (audit.MAX_ARGS_BYTES + 100)}
     r = client.post("/v1/audit/decisions", json=_event(arguments=big))
     assert r.status_code == 413
     assert "arguments" in r.json()["detail"]
 
 
 def test_oversized_hint_rejected(client: TestClient) -> None:
-    big = {"globs": "y" * (main.MAX_HINT_BYTES + 100)}
+    big = {"globs": "y" * (audit.MAX_HINT_BYTES + 100)}
     r = client.post("/v1/audit/decisions", json=_event(hint=big))
     assert r.status_code == 413
     assert "hint" in r.json()["detail"]
@@ -227,7 +239,7 @@ def test_real_clickhouse_round_trip() -> None:
             json.dumps({"glob": "/workspace/**"}),
             json.dumps({"path": "/etc/passwd"}),
         ]],
-        column_names=main._AUDIT_COLUMNS,
+        column_names=audit._DECISION_COLUMNS,
         # wait_for_async_insert=1 so the row is queryable immediately on
         # the SELECT below — otherwise we'd race the server-side buffer.
         settings={"async_insert": 1, "wait_for_async_insert": 1},

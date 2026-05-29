@@ -162,36 +162,42 @@ class AgentManifestView(BaseModel):
 
 
 class AuditEnvelope(BaseModel):
-    """Caller/run identity fields shared by every audit event type.
+    """Fields shared by every audit event type.
 
-    ``project_id`` is intentionally absent — the server resolves it from
-    the bearer token, never from the body.
+    Matches the envelope prefix of platform/clickhouse/init/schema.sql so
+    future event models (ToolInvocationEvent, ToolCompletionEvent, ...) can
+    inherit the full envelope and add only their event-specific fields.
+
+    ``project_id`` and ``received_at`` are intentionally absent: the server
+    resolves project_id from the bearer and stamps received_at via the
+    ClickHouse column default. Neither is ever trusted from the body.
     """
 
+    event_id:         UUID
+    occurred_at:      datetime
+    agent_name:       str = Field(min_length=1, max_length=256)
+    agent_version_id: str = Field(default="", max_length=64)
     session_id:       str = Field(default="", max_length=128)
     user_id:          str = Field(default="", max_length=256)
-    agent_version_id: str = Field(default="", max_length=64)
 
 
 class DecisionEvent(AuditEnvelope):
-    """One policy decision the SDK is asking us to log."""
+    """One policy decision the SDK is asking us to log.
 
-    # Required — SDK-stamped at decide time
-    event_id:    UUID
-    occurred_at: datetime
-    agent_name:  str = Field(min_length=1, max_length=256)
-    tool_name:   str = Field(min_length=1, max_length=256)
-    outcome:     Literal["allow", "deny", "needs_approval"]
+    Adds only the decision-specific fields on top of the envelope —
+    mirrors the layout of the policy_decision ClickHouse table.
+    """
 
-    # Optional decision detail
-    role:        str         = Field(default="", max_length=256)
-    error_type:  str         = Field(default="", max_length=64)
-    reason:      str         = Field(default="", max_length=4096)
-    violations:  list[str]   = Field(default_factory=list, max_length=64)
+    tool_name:  str = Field(min_length=1, max_length=256)
+    outcome:    Literal["allow", "deny", "needs_approval"]
+    role:       str       = Field(default="", max_length=256)
+    error_type: str       = Field(default="", max_length=64)
+    reason:     str       = Field(default="", max_length=4096)
+    violations: list[str] = Field(default_factory=list, max_length=64)
     # JSON dicts; per-field byte-size caps are enforced by the handler
     # after serialization, since Pydantic can't size dict payloads directly.
-    hint:        Optional[dict] = None
-    arguments:   Optional[dict] = None
+    hint:       Optional[dict] = None
+    arguments:  Optional[dict] = None
 
 
 class DecisionAccepted(BaseModel):
