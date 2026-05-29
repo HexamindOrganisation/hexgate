@@ -1,6 +1,7 @@
 from datetime import datetime
 from enum import StrEnum
-from typing import Optional
+from typing import Literal, Optional
+from uuid import UUID
 
 from pydantic import BaseModel, Field
 
@@ -151,3 +152,49 @@ class AgentManifestView(BaseModel):
     version: Optional[int] = None
     content_hash: Optional[str] = None
     updated_at: datetime
+
+
+# --- Audit event ingest ------------------------------------------------------
+# Body shapes for POST /v1/audit/decisions. AuditEnvelope is the prefix shared
+# across every future audit event endpoint (tool_invocation, tool_completion,
+# ...) so per-event models inherit it by mixin rather than duplicating the
+# fields. Mirrors the envelope of platform/clickhouse/init/schema.sql.
+
+
+class AuditEnvelope(BaseModel):
+    """Caller/run identity fields shared by every audit event type.
+
+    ``project_id`` is intentionally absent — the server resolves it from
+    the bearer token, never from the body.
+    """
+
+    session_id:       str = Field(default="", max_length=128)
+    user_id:          str = Field(default="", max_length=256)
+    agent_version_id: str = Field(default="", max_length=64)
+
+
+class DecisionEvent(AuditEnvelope):
+    """One policy decision the SDK is asking us to log."""
+
+    # Required — SDK-stamped at decide time
+    event_id:    UUID
+    occurred_at: datetime
+    agent_name:  str = Field(min_length=1, max_length=256)
+    tool_name:   str = Field(min_length=1, max_length=256)
+    outcome:     Literal["allow", "deny", "needs_approval"]
+
+    # Optional decision detail
+    role:        str         = Field(default="", max_length=256)
+    error_type:  str         = Field(default="", max_length=64)
+    reason:      str         = Field(default="", max_length=4096)
+    violations:  list[str]   = Field(default_factory=list, max_length=64)
+    # JSON dicts; per-field byte-size caps are enforced by the handler
+    # after serialization, since Pydantic can't size dict payloads directly.
+    hint:        Optional[dict] = None
+    arguments:   Optional[dict] = None
+
+
+class DecisionAccepted(BaseModel):
+    """Response shape for POST /v1/audit/decisions."""
+
+    event_id: UUID
