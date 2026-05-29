@@ -9,7 +9,7 @@ import asyncio
 import logging
 import os
 from dataclasses import dataclass
-from typing import Any, Protocol, runtime_checkable
+from typing import Any
 
 import httpx
 
@@ -44,14 +44,6 @@ class AuditEvent:
             "user_id":     self.user_id,
             "session_id":  self.session_id,
         }
-
-
-@runtime_checkable
-class AuditSink(Protocol):
-    """Emission seam — swap AuditSender for AuditBatcher later without call-site changes."""
-
-    def emit(self, event: AuditEvent) -> None: ...
-    async def close(self) -> None: ...
 
 
 class AuditSender:
@@ -145,41 +137,41 @@ class AuditSender:
 
 _AUDIT_PATH = "/v1/audit/decisions"
 _DEFAULT_API_URL = "http://localhost:8000"
-_sink: AuditSink | None = None
+_audit_sender: AuditSender | None = None
 
 
 def configure(
     api_key: str | None = None,
     base_url: str | None = None,
-) -> AuditSink | None:
-    """Initialize the process-wide audit sink. Idempotent.
+) -> AuditSender | None:
+    """Initialize the process-wide audit sender. Idempotent.
 
     Both args fall back to ``FORTIFY_KEY`` / ``FORTIFY_API_URL`` env vars.
     Returns ``None`` when no api_key is resolvable — audit stays inert.
     """
-    global _sink
-    if _sink is not None:
-        return _sink
+    global _audit_sender
+    if _audit_sender is not None:
+        return _audit_sender
     resolved_key = api_key or os.environ.get("FORTIFY_KEY")
     if not resolved_key:
         return None
     resolved_url = base_url or os.environ.get("FORTIFY_API_URL", _DEFAULT_API_URL)
-    _sink = AuditSender(
+    _audit_sender = AuditSender(
         endpoint=f"{resolved_url.rstrip('/')}{_AUDIT_PATH}",
         api_key=resolved_key,
     )
-    return _sink
+    return _audit_sender
 
 
-def get_sink() -> AuditSink | None:
-    """Return the process-wide audit sink, or None if not configured."""
-    return _sink
+def get_sender() -> AuditSender | None:
+    """Return the process-wide audit sender, or None if not configured."""
+    return _audit_sender
 
 
 async def shutdown() -> None:
-    """Drain in-flight emits and close the sink. Safe to call multiple times."""
-    global _sink
-    sink = _sink
-    _sink = None
-    if sink is not None:
-        await sink.close()
+    """Drain in-flight emits and close the sender. Safe to call multiple times."""
+    global _audit_sender
+    sender = _audit_sender
+    _audit_sender = None
+    if sender is not None:
+        await sender.close()

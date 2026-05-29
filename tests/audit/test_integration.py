@@ -56,11 +56,11 @@ async def test_wire_format_accepted_by_platform() -> None:
 async def test_sender_emits_end_to_end_without_errors() -> None:
     """Drives the full SDK path: configure → emit → drain. Confirms no raised exceptions."""
     _need_token()
-    audit_mod._sink = None  # reset for a clean configure
-    sink = audit_mod.configure(TOKEN, PLATFORM_URL)
+    audit_mod._audit_sender = None  # reset for a clean configure
+    sender = audit_mod.configure(TOKEN, PLATFORM_URL)
     try:
-        sink.emit(_event())
-        results = await asyncio.gather(*sink._tasks, return_exceptions=True)  # type: ignore[attr-defined]
+        sender.emit(_event())
+        results = await asyncio.gather(*sender._tasks, return_exceptions=True)  # type: ignore[attr-defined]
         for r in results:
             assert not isinstance(r, BaseException), f"task raised: {r}"
     finally:

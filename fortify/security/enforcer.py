@@ -11,7 +11,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from fortify.audit import AuditEvent, get_sink
+from fortify.audit import AuditEvent, get_sender
 from fortify.runtime.context import get_current_user
 from fortify.security.decision import Decision, PolicyEngine
 
@@ -58,9 +58,9 @@ class PolicyEnforcer:
             arguments=args_snapshot,
         )
 
-        sink = get_sink()
-        if sink is not None:
-            sink.emit(AuditEvent(
+        sender = get_sender()
+        if sender is not None:
+            sender.emit(AuditEvent(
                 decision=decision,
                 user_id=user.user_id if user is not None else "",
                 session_id=user.session_id if (user is not None and user.session_id) else "",
