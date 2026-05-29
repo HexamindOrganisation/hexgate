@@ -21,7 +21,7 @@ async def main():
         model="gpt-4o-mini",
     )
 
-    runner = FortifyRunner(api_key="sk-fortify-...")  # or rely on FORTIFY_KEY
+    runner = FortifyRunner()
     result = await runner.run(
         agent=agent,
         input="What's the weather in Cherbourg?",

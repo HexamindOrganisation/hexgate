@@ -20,6 +20,7 @@ from langgraph.graph.state import CompiledStateGraph
 from langgraph.store.base import BaseStore
 from pydantic import BaseModel
 
+from fortify import audit
 from fortify.runtime import (
     LocalWorkspace,
     ToolUseContext,
@@ -401,6 +402,7 @@ class FortifyAgent:
         else:
             resolved = load_policy_set(policy)
         enforcer = PolicyEnforcer(resolved, agent_name=self.name or "default")
+        audit.configure()
 
         wrapped: list[ToolSpec] = []
         for tool_spec in self.tools:
