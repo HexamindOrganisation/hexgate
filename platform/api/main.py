@@ -1,5 +1,6 @@
 import base64
 import json
+import logging
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 
@@ -24,7 +25,7 @@ from biscuits import (
     parse_envelope,
     verify_token,
 )
-from clickhouse import get_clickhouse
+from clickhouse import get_clickhouse, ping as clickhouse_ping
 from db import engine, init_db
 from keystore import FileKeyStore
 from relay import registry
@@ -72,6 +73,13 @@ async def lifespan(_: FastAPI):
         # Backfill signed bundles for seeded agents so they're served via
         # WASM on the first request, not just after their first edit.
         backfill_bundles(session, keystore.sign)
+    # ClickHouse is best-effort — don't fail startup if it's unreachable.
+    # Audit ingest will 503 until the server comes back; /health surfaces
+    # the state so contributors notice immediately.
+    if not clickhouse_ping():
+        logging.getLogger(__name__).warning(
+            "ClickHouse unreachable at startup; /v1/audit/decisions will 503 until reachable"
+        )
     yield
 
 
@@ -156,7 +164,11 @@ def require_project(
 @app.get("/health")
 def health() -> dict[str, str]:
     """Unversioned liveness probe."""
-    return {"status": "ok", "service": "fortify-api"}
+    return {
+        "status":     "ok",
+        "service":    "fortify-api",
+        "clickhouse": "ok" if clickhouse_ping() else "unreachable",
+    }
 
 
 v1 = APIRouter(prefix="/v1")
@@ -164,7 +176,12 @@ v1 = APIRouter(prefix="/v1")
 
 @v1.get("/health")
 def v1_health() -> dict[str, str]:
-    return {"status": "ok", "service": "fortify-api", "version": "v1"}
+    return {
+        "status":     "ok",
+        "service":    "fortify-api",
+        "version":    "v1",
+        "clickhouse": "ok" if clickhouse_ping() else "unreachable",
+    }
 
 
 @v1.get("/.well-known/keys")

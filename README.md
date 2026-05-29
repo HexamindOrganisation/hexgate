@@ -113,6 +113,20 @@ Schema lives in `platform/clickhouse/init/schema.sql`.
 
 The service binds to **host ports 8124 (HTTP) and 9001 (native)** rather than ClickHouse's default 8123/9000, so it coexists with any other local ClickHouse instance (e.g. a Langfuse-bundled one).
 
+Once both `make clickhouse-up` and `make platform-api` are running, `GET /health` reports `"clickhouse": "ok"` and the ingest endpoint `POST /v1/audit/decisions` accepts one decision per request:
+
+```bash
+curl -X POST localhost:8000/v1/audit/decisions \
+  -H "Authorization: Bearer fty_test_..." \
+  -H "Content-Type: application/json" \
+  -d '{"event_id":"9f1e3c5a-4d2b-4b8e-9c8a-1f4e2d8a7c3b",
+       "occurred_at":"2026-05-29T14:00:00Z",
+       "agent_name":"researcher","tool_name":"read_file","outcome":"deny"}'
+# → 202 {"event_id":"9f1e3c5a-..."}
+```
+
+Integration tests (`pytest -m integration`) round-trip rows through the live ClickHouse — opt-in so the default `make platform-api-test` stays offline-friendly.
+
 The dashboard's `/agents` page lets you edit each agent's YAML and policy. `fortify serve` re-fetches at every turn boundary, so your edits take effect on the next chat message without a restart.
 
 ## ✨ Core Primitives
