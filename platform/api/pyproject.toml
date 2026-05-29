@@ -12,6 +12,13 @@ dependencies = [
     "pydantic>=2.9",
     "cryptography>=42",
     "biscuit-python>=0.4",
+    # Audit log: HTTP client for the local ClickHouse instance backing
+    # /v1/audit/decisions. Sync client; the endpoint relies on ClickHouse's
+    # server-side async_insert buffering rather than client-side batching.
+    "clickhouse-connect>=0.8",
+    # pydantic-settings is in a separate package from pydantic v2 onwards —
+    # used by settings.py for env-driven config.
+    "pydantic-settings>=2.5",
     # The control plane compiles + signs policy bundles at save time, so it
     # needs the SDK's compiler (compile_to_rego / compile_to_wasm). Requires
     # the `opa` binary on PATH at runtime. Unpublished local SDK — resolved
