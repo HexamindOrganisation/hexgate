@@ -1,0 +1,168 @@
+"""Per-decision audit emission to the platform's /v1/audit/decisions endpoint.
+
+Fire-and-forget POST per decision; bounded concurrency; drops on saturation.
+Lifecycle: configure() once, await start(), await shutdown() at process exit.
+"""
+from __future__ import annotations
+
+import asyncio
+import logging
+from dataclasses import dataclass
+from typing import Any, Protocol, runtime_checkable
+
+import httpx
+
+from fortify.security.decision import Decision
+
+_log = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class AuditEvent:
+    """Decision plus caller identity from the active User scope."""
+
+    decision: Decision
+    user_id: str = ""
+    session_id: str = ""
+
+    def to_wire(self) -> dict[str, Any]:
+        """Flat JSON payload matching the platform's DecisionEvent body."""
+        d = self.decision
+        return {
+            "event_id":    str(d.event_id),
+            "occurred_at": d.occurred_at.isoformat(),
+            "agent_name":  d.agent_name,
+            "tool_name":   d.tool_name,
+            "outcome":     d.outcome.value,
+            "role":        d.role or "",
+            "error_type":  d.error_type or "",
+            "reason":      d.reason,
+            "violations":  list(d.violations),
+            "hint":        d.hint,
+            "arguments":   d.arguments,
+            "user_id":     self.user_id,
+            "session_id":  self.session_id,
+        }
+
+
+@runtime_checkable
+class AuditSink(Protocol):
+    """Emission seam — swap AuditSender for AuditBatcher later without call-site changes."""
+
+    def emit(self, event: AuditEvent) -> None: ...
+
+
+class AuditSender:
+    """Per-decision fire-and-forget POST. Bounded by an asyncio.Semaphore.
+
+    emit() is sync and non-blocking — schedules a background task. Drops with
+    a periodic log when the semaphore is saturated (platform slow/unreachable).
+    """
+
+    def __init__(
+        self,
+        endpoint: str,
+        api_key: str,
+        *,
+        max_in_flight: int = 32,
+        http_timeout: float = 5.0,
+    ) -> None:
+        self._endpoint = endpoint
+        self._headers = {"Authorization": f"Bearer {api_key}"}
+        self._http_timeout = http_timeout
+        self._semaphore = asyncio.Semaphore(max_in_flight)
+        self._client: httpx.AsyncClient | None = None
+        self._tasks: set[asyncio.Task[None]] = set()
+        self._closing = False
+        self._dropped = 0
+        self._warned_no_loop = False
+
+    async def start(self) -> None:
+        self._client = httpx.AsyncClient(
+            timeout=self._http_timeout,
+            headers=self._headers,
+        )
+
+    def emit(self, event: AuditEvent) -> None:
+        if self._closing or self._client is None:
+            return
+        if self._semaphore.locked():
+            self._dropped += 1
+            if self._dropped % 100 == 1:
+                _log.warning(
+                    "audit sender saturated; %d events dropped (platform slow?)",
+                    self._dropped,
+                )
+            return
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            if not self._warned_no_loop:
+                _log.warning("audit emit called without a running event loop; skipping")
+                self._warned_no_loop = True
+            return
+        task = asyncio.create_task(self._send(event), name="fortify-audit-send")
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+
+    async def _send(self, event: AuditEvent) -> None:
+        assert self._client is not None
+        async with self._semaphore:
+            payload = event.to_wire()
+            try:
+                response = await self._client.post(self._endpoint, json=payload)
+                if response.status_code == 503:
+                    await asyncio.sleep(min(self._http_timeout, 2.0))
+                    response = await self._client.post(self._endpoint, json=payload)
+                if response.status_code >= 400:
+                    _log.error(
+                        "audit ingest failed: %s %s",
+                        response.status_code, response.text[:200],
+                    )
+            except httpx.RequestError as exc:
+                _log.warning("audit ingest network error: %s", exc)
+
+    async def close(self, drain_timeout: float = 5.0) -> None:
+        """Stop accepting new emits; drain in-flight tasks; close the HTTP client."""
+        self._closing = True
+        if self._tasks:
+            try:
+                await asyncio.wait_for(
+                    asyncio.gather(*self._tasks, return_exceptions=True),
+                    timeout=drain_timeout,
+                )
+            except asyncio.TimeoutError:
+                _log.warning(
+                    "audit close: drain timed out with %d tasks pending",
+                    len(self._tasks),
+                )
+        if self._client is not None:
+            await self._client.aclose()
+
+
+# --- Process-wide singleton ---------------------------------------------------
+
+
+_sink: AuditSink | None = None
+
+
+def configure(endpoint: str, api_key: str) -> AuditSink:
+    """Initialize the process-wide audit sink. Idempotent; subsequent calls are no-ops."""
+    global _sink
+    if _sink is None:
+        _sink = AuditSender(endpoint=endpoint, api_key=api_key)
+    return _sink
+
+
+def get_sink() -> AuditSink | None:
+    """Return the process-wide audit sink, or None if not configured."""
+    return _sink
+
+
+async def shutdown() -> None:
+    """Drain in-flight emits and close the underlying client. Safe to call multiple times."""
+    global _sink
+    sink = _sink
+    _sink = None
+    if isinstance(sink, AuditSender):
+        await sink.close()
