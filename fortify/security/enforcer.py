@@ -11,6 +11,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
+from fortify.audit import AuditEvent, get_sink
 from fortify.runtime.context import get_current_user
 from fortify.security.decision import Decision, PolicyEngine
 
@@ -38,7 +39,10 @@ class PolicyEnforcer:
     def decide(self, tool_name: str, arguments: Mapping[str, Any]) -> Decision:
         """Resolve role from the contextvar, ask the engine for a
         :class:`~fortify.security.decision.Verdict`, and lift it into a
-        host-facing :class:`Decision` with this agent's context."""
+        host-facing :class:`Decision` with this agent's context.
+
+        Emits an :class:`~fortify.audit.AuditEvent` to the configured sink
+        after the decision is built. No-op when no sink is configured."""
         user = get_current_user()
         role = user.role if user is not None else None
         args_snapshot = dict(arguments)
@@ -46,10 +50,20 @@ class PolicyEnforcer:
         verdict = self.policy.evaluate(
             role=role, tool=tool_name, args=args_snapshot
         )
-        return Decision.from_verdict(
+        decision = Decision.from_verdict(
             verdict,
             agent_name=self.agent_name,
             tool_name=tool_name,
             role=role,
             arguments=args_snapshot,
         )
+
+        sink = get_sink()
+        if sink is not None:
+            sink.emit(AuditEvent(
+                decision=decision,
+                user_id=user.user_id if user is not None else "",
+                session_id=user.session_id if (user is not None and user.session_id) else "",
+            ))
+
+        return decision
