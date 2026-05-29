@@ -1,9 +1,9 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import StrEnum
 from typing import Literal, Optional
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class TokenMintRequest(BaseModel):
@@ -170,6 +170,15 @@ class AuditEnvelope(BaseModel):
     agent_name:  str = Field(min_length=1, max_length=256)
     session_id:  str = Field(default="", max_length=128)
     user_id:     str = Field(default="", max_length=256)
+
+    @field_validator("occurred_at")
+    @classmethod
+    def _assume_utc(cls, v: datetime) -> datetime:
+        # Naive timestamps are interpreted as UTC (the storage column is
+        # DateTime64(3, 'UTC')). Normalizing here keeps occurred_at tz-aware so
+        # the handler's clock-skew/retention comparisons never hit a naive value
+        # — comparing naive vs aware datetimes raises TypeError (an uncaught 500).
+        return v if v.tzinfo is not None else v.replace(tzinfo=timezone.utc)
 
 
 class DecisionEvent(AuditEnvelope):

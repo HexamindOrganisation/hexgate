@@ -16,7 +16,7 @@ from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
 import audit
-from main import app, get_clickhouse, get_session, require_project
+from main import app, get_session, require_clickhouse, require_project
 from schemas import DecisionEvent
 
 
@@ -107,7 +107,7 @@ _STUB_AGENT_VERSION_ID = "stub_v_id_xyz"
 def client(fake_clickhouse: MagicMock, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     """TestClient with auth, ClickHouse, session, and version-lookup stubbed."""
     app.dependency_overrides[require_project] = lambda: "proj_test"
-    app.dependency_overrides[get_clickhouse] = lambda: fake_clickhouse
+    app.dependency_overrides[require_clickhouse] = lambda: fake_clickhouse
     app.dependency_overrides[get_session] = lambda: MagicMock()
     monkeypatch.setattr(
         "main.get_latest_agent_version_id",
@@ -197,6 +197,37 @@ def test_clickhouse_error_returns_503_with_retry_after(
     assert r.status_code == 503
     assert r.headers.get("retry-after") == "5"
     assert "unavailable" in r.json()["detail"]
+
+
+def test_naive_occurred_at_accepted_as_utc(
+    client: TestClient, fake_clickhouse: MagicMock
+) -> None:
+    """A timezone-naive occurred_at is treated as UTC, not a 500 from the skew check."""
+    naive = _now().replace(tzinfo=None).isoformat()  # UTC wall-clock, no offset/Z
+    r = client.post("/v1/audit/decisions", json=_event(occurred_at=naive))
+    assert r.status_code == 202, r.text
+    fake_clickhouse.insert.assert_called_once()
+    # occurred_at lands tz-aware in the row (index 1 per _DECISION_COLUMNS).
+    stored = fake_clickhouse.insert.call_args.args[1][0][1]
+    assert stored.tzinfo is not None
+
+
+def test_clickhouse_unreachable_at_connect_returns_503(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """get_clickhouse() raising during dependency resolution maps to 503, not 500."""
+    from fastapi import HTTPException
+
+    from main import require_clickhouse
+
+    def _boom() -> None:
+        raise ClickHouseError("connection refused")
+
+    monkeypatch.setattr("main.get_clickhouse", _boom)
+    with pytest.raises(HTTPException) as exc:
+        require_clickhouse()
+    assert exc.value.status_code == 503
+    assert exc.value.headers.get("Retry-After") == "5"
 
 
 # ---------------------------------------------------------------------------

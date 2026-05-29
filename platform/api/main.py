@@ -496,6 +496,29 @@ CLOCK_SKEW_FUTURE = timedelta(minutes=5)
 RETENTION_WINDOW = timedelta(days=90)
 
 
+def _audit_unavailable() -> HTTPException:
+    """503 for a transient ClickHouse outage; clients should retry."""
+    return HTTPException(
+        status_code=503,
+        detail="audit log temporarily unavailable",
+        headers={"Retry-After": "5"},
+    )
+
+
+def require_clickhouse():
+    """Resolve the ClickHouse client, mapping connect-time failures to 503.
+
+    get_clickhouse() connects eagerly and raises ClickHouseError when the server
+    is unreachable; since it's @lru_cache'd (which doesn't cache raises) and the
+    startup ping is tolerated, that exception would otherwise escape during
+    dependency resolution as an uncaught 500 instead of the documented 503.
+    """
+    try:
+        return get_clickhouse()
+    except ClickHouseError:
+        raise _audit_unavailable()
+
+
 @v1.post(
     "/audit/decisions",
     response_model=DecisionAccepted,
@@ -505,7 +528,7 @@ def ingest_decision(
     body: DecisionEvent,
     project_id: str = Depends(require_project),
     session: Session = Depends(get_session),
-    clickhouse_client=Depends(get_clickhouse),
+    clickhouse_client=Depends(require_clickhouse),
 ) -> DecisionAccepted:
     """Ingest one policy decision. project_id (bearer), received_at (CH default),
     and agent_version_id (platform lookup) are server-resolved."""
@@ -529,11 +552,7 @@ def ingest_decision(
     except AuditPayloadTooLarge as exc:
         raise HTTPException(status_code=413, detail=str(exc))
     except ClickHouseError:
-        raise HTTPException(
-            status_code=503,
-            detail="audit log temporarily unavailable",
-            headers={"Retry-After": "5"},
-        )
+        raise _audit_unavailable()
 
     return DecisionAccepted(event_id=body.event_id)
 
