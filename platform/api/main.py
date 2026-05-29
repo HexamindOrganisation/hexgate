@@ -75,7 +75,7 @@ async def lifespan(_: FastAPI):
         # Backfill signed bundles for seeded agents so they're served via
         # WASM on the first request, not just after their first edit.
         backfill_bundles(session, keystore.sign)
-    # Don't fail startup on unreachable ClickHouse — /health surfaces it.
+    # Don't fail startup on unreachable ClickHouse — /ready surfaces it.
     if not clickhouse_ping():
         _log.warning(
             "ClickHouse unreachable at startup; /v1/audit/decisions will 503 until reachable"
@@ -161,12 +161,17 @@ def require_project(
     return token.project_id
 
 
-def _readiness() -> dict[str, str]:
-    return {
-        "status":     "ok",
+def _readiness() -> tuple[dict[str, str], int]:
+    """Build the readiness body and its HTTP status. Returns 503 when ClickHouse
+    is unreachable so probes deroute the pod instead of sending it ingest traffic
+    that would only 503 — k8s keys off the status code, not the body."""
+    reachable = clickhouse_ping()
+    body = {
+        "status":     "ok" if reachable else "unavailable",
         "service":    "fortify-api",
-        "clickhouse": "ok" if clickhouse_ping() else "unreachable",
+        "clickhouse": "ok" if reachable else "unreachable",
     }
+    return body, 200 if reachable else 503
 
 
 @app.get("/health")
@@ -177,9 +182,10 @@ def health() -> dict[str, str]:
 
 
 @app.get("/ready")
-def ready() -> dict[str, str]:
-    """Readiness — pings ClickHouse."""
-    return _readiness()
+def ready(response: Response) -> dict[str, str]:
+    """Readiness — pings ClickHouse; 503 when unreachable."""
+    body, response.status_code = _readiness()
+    return body
 
 
 v1 = APIRouter(prefix="/v1")
@@ -191,8 +197,9 @@ def v1_health() -> dict[str, str]:
 
 
 @v1.get("/ready")
-def v1_ready() -> dict[str, str]:
-    return {**_readiness(), "version": "v1"}
+def v1_ready(response: Response) -> dict[str, str]:
+    body, response.status_code = _readiness()
+    return {**body, "version": "v1"}
 
 
 @v1.get("/.well-known/keys")

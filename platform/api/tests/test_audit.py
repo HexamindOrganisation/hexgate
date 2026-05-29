@@ -273,7 +273,7 @@ def test_readiness_reports_clickhouse(
 ) -> None:
     monkeypatch.setattr("main.clickhouse_ping", lambda: False)
     r = TestClient(app).get(path)
-    assert r.status_code == 200
+    assert r.status_code == 503
     assert r.json()["clickhouse"] == "unreachable"
 
 
