@@ -25,6 +25,9 @@ class _CapturingSink:
     def emit(self, event: AuditEvent) -> None:
         self.events.append(event)
 
+    async def close(self) -> None:
+        """No resources to clean up — satisfies the AuditSink contract."""
+
 
 @pytest.fixture(autouse=True)
 def _reset_audit_sink() -> None:

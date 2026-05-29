@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from google.adk.agents import BaseAgent
 
+from fortify import audit
 from fortify.adapters.google.tools import wrap_tools
 from fortify.security import AgentPolicy, BaseToolPolicy, PolicySet
 from fortify.security.enforcer import PolicyEnforcer
@@ -33,6 +34,8 @@ def wrap_google_agent(agent: BaseAgent, *, api_key: str) -> BaseAgent:
     ``NEEDS_APPROVAL`` outcomes surface as ``[approval_required]``-prefixed
     strings in tool results; ``[policy_denied]`` for denials.
     """
+    audit.configure(api_key)
+
     agent_name = getattr(agent, "name", "default")
     tools = list(getattr(agent, "tools", []) or [])
     tool_names = [getattr(t, "name", getattr(t, "__name__", "tool")) for t in tools]

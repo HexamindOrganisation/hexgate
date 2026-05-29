@@ -12,6 +12,7 @@ import os
 from langchain_core.tools import BaseTool
 from langgraph.graph.state import CompiledStateGraph
 
+from fortify import audit
 from fortify.adapters.langchain.agent import FortifyLangchainAgent
 from fortify.adapters.langchain.tools import install_enforcer_on_tools
 from fortify.security import AgentPolicy, BaseToolPolicy, PolicySet
@@ -50,6 +51,8 @@ def wrap_langchain_agent(
         raise ValueError(
             "No API key provided. Pass api_key= explicitly or set FORTIFY_KEY environment variable."
         )
+
+    audit.configure(resolved_key)
 
     agent_name = getattr(agent, "name", "default")
     tool_names = [tool.name for tool in tools]

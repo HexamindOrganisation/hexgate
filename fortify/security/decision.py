@@ -84,7 +84,7 @@ class Decision:
     violations: tuple[str, ...] = ()
     arguments: dict[str, Any] | None = None
     # Stamped at construction for audit emission; names mirror the platform's
-    # AuditEnvelope so AuditEvent.to_wire() is a plain field dump.
+    # AuditEnvelope so AuditEvent.as_payload() is a plain field dump.
     event_id: UUID = field(default_factory=uuid4)
     occurred_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 

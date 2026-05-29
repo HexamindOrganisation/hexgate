@@ -12,6 +12,7 @@ import os
 from pydantic_ai import Agent
 from pydantic_ai.tools import Tool
 
+from fortify import audit
 from fortify.adapters.pydantic_ai.agent import FortifyPydanticAgent
 from fortify.adapters.pydantic_ai.tools import wrap_tools
 from fortify.security import AgentPolicy, BaseToolPolicy, PolicySet
@@ -72,6 +73,8 @@ def wrap_pydantic_agent(
         raise ValueError(
             "No API key provided. Pass api_key= explicitly or set FORTIFY_KEY environment variable."
         )
+
+    audit.configure(resolved_key)
 
     agent_name = getattr(agent, "name", None) or "default"
     tools = _extract_tools(agent)

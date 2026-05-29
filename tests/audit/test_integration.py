@@ -47,7 +47,7 @@ async def test_wire_format_accepted_by_platform() -> None:
         response = await client.post(
             f"{PLATFORM_URL}/v1/audit/decisions",
             headers={"Authorization": f"Bearer {TOKEN}"},
-            json=ev.to_wire(),
+            json=ev.as_payload(),
         )
     assert response.status_code == 202, f"{response.status_code}: {response.text}"
     assert response.json()["event_id"] == str(ev.decision.event_id)
@@ -57,7 +57,7 @@ async def test_sender_emits_end_to_end_without_errors() -> None:
     """Drives the full SDK path: configure → emit → drain. Confirms no raised exceptions."""
     _need_token()
     audit_mod._sink = None  # reset for a clean configure
-    sink = audit_mod.configure(f"{PLATFORM_URL}/v1/audit/decisions", TOKEN)
+    sink = audit_mod.configure(TOKEN, PLATFORM_URL)
     try:
         sink.emit(_event())
         results = await asyncio.gather(*sink._tasks, return_exceptions=True)  # type: ignore[attr-defined]

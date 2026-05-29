@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
 
@@ -25,7 +26,7 @@ class AuditEvent:
     user_id: str = ""
     session_id: str = ""
 
-    def to_wire(self) -> dict[str, Any]:
+    def as_payload(self) -> dict[str, Any]:
         """Flat JSON payload matching the platform's DecisionEvent body."""
         d = self.decision
         return {
@@ -50,6 +51,7 @@ class AuditSink(Protocol):
     """Emission seam — swap AuditSender for AuditBatcher later without call-site changes."""
 
     def emit(self, event: AuditEvent) -> None: ...
+    async def close(self) -> None: ...
 
 
 class AuditSender:
@@ -106,7 +108,7 @@ class AuditSender:
     async def _send(self, event: AuditEvent) -> None:
         assert self._client is not None
         async with self._semaphore:
-            payload = event.to_wire()
+            payload = event.as_payload()
             try:
                 response = await self._client.post(self._endpoint, json=payload)
                 if response.status_code == 503:
@@ -141,14 +143,31 @@ class AuditSender:
 # --- Process-wide singleton ---------------------------------------------------
 
 
+_AUDIT_PATH = "/v1/audit/decisions"
+_DEFAULT_API_URL = "http://localhost:8000"
 _sink: AuditSink | None = None
 
 
-def configure(endpoint: str, api_key: str) -> AuditSink:
-    """Initialize the process-wide audit sink. Idempotent; subsequent calls are no-ops."""
+def configure(
+    api_key: str | None = None,
+    base_url: str | None = None,
+) -> AuditSink | None:
+    """Initialize the process-wide audit sink. Idempotent.
+
+    Both args fall back to ``FORTIFY_KEY`` / ``FORTIFY_API_URL`` env vars.
+    Returns ``None`` when no api_key is resolvable — audit stays inert.
+    """
     global _sink
-    if _sink is None:
-        _sink = AuditSender(endpoint=endpoint, api_key=api_key)
+    if _sink is not None:
+        return _sink
+    resolved_key = api_key or os.environ.get("FORTIFY_KEY")
+    if not resolved_key:
+        return None
+    resolved_url = base_url or os.environ.get("FORTIFY_API_URL", _DEFAULT_API_URL)
+    _sink = AuditSender(
+        endpoint=f"{resolved_url.rstrip('/')}{_AUDIT_PATH}",
+        api_key=resolved_key,
+    )
     return _sink
 
 
@@ -158,9 +177,9 @@ def get_sink() -> AuditSink | None:
 
 
 async def shutdown() -> None:
-    """Drain in-flight emits and close the underlying client. Safe to call multiple times."""
+    """Drain in-flight emits and close the sink. Safe to call multiple times."""
     global _sink
     sink = _sink
     _sink = None
-    if isinstance(sink, AuditSender):
+    if sink is not None:
         await sink.close()
