@@ -1,9 +1,6 @@
-"""ClickHouse client + reachability probe for the platform API.
+"""ClickHouse client + reachability probe.
 
-A single process-wide ``Client`` is enough — clickhouse-connect manages
-its own HTTP connection pool internally (via urllib3) and the resulting
-client is thread-safe, so the FastAPI handlers share it via the
-``get_clickhouse`` dependency rather than each constructing their own.
+Single shared Client — clickhouse-connect manages its own HTTP pool internally.
 """
 from __future__ import annotations
 
@@ -36,11 +33,7 @@ def get_clickhouse() -> Client:
 
 
 def ping() -> bool:
-    """Cheap reachability probe used by the /health endpoint.
-
-    Returns False on any failure (connection refused, timeout, auth) —
-    callers only care about reachable-vs-not, not the reason.
-    """
+    """Return True if ClickHouse is reachable. Suppresses all errors."""
     try:
         return bool(get_clickhouse().ping())
     except Exception as exc:

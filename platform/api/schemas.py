@@ -155,28 +155,14 @@ class AgentManifestView(BaseModel):
 
 
 # --- Audit event ingest ------------------------------------------------------
-# Body shapes for POST /v1/audit/decisions. AuditEnvelope is the prefix shared
-# across every future audit event endpoint (tool_invocation, tool_completion,
-# ...) so per-event models inherit it by mixin rather than duplicating the
-# fields. Mirrors the envelope of platform/clickhouse/init/schema.sql.
 
 
 class AuditEnvelope(BaseModel):
-    """Fields shared by every audit event type.
+    """Wire envelope shared by every audit event type.
 
-    The *wire* envelope: what the SDK actually sends on the body. The
-    *storage* envelope in platform/clickhouse/init/schema.sql is wider —
-    it adds three fields the platform fills in on the server side and
-    never trusts from the body:
-
-      * ``project_id`` — resolved from the bearer token
-      * ``received_at`` — stamped by ClickHouse via the column default
-      * ``agent_version_id`` — looked up from the relational store by
-        (project_id, agent_name) at ingest time, so the canonical
-        version always wins over whatever the SDK happens to be running
-
-    Future event models (ToolInvocationEvent, ToolCompletionEvent, ...)
-    inherit this wire envelope and add only their event-specific fields.
+    Narrower than the ClickHouse storage envelope: project_id (bearer),
+    received_at (column default), and agent_version_id (platform lookup)
+    are server-resolved and never trusted from the body.
     """
 
     event_id:    UUID
@@ -187,11 +173,7 @@ class AuditEnvelope(BaseModel):
 
 
 class DecisionEvent(AuditEnvelope):
-    """One policy decision the SDK is asking us to log.
-
-    Adds only the decision-specific fields on top of the envelope —
-    mirrors the layout of the policy_decision ClickHouse table.
-    """
+    """One policy decision; mirrors the policy_decision table."""
 
     tool_name:  str = Field(min_length=1, max_length=256)
     outcome:    Literal["allow", "deny", "needs_approval"]
@@ -199,8 +181,7 @@ class DecisionEvent(AuditEnvelope):
     error_type: str       = Field(default="", max_length=64)
     reason:     str       = Field(default="", max_length=4096)
     violations: list[str] = Field(default_factory=list, max_length=64)
-    # JSON dicts; per-field byte-size caps are enforced by the handler
-    # after serialization, since Pydantic can't size dict payloads directly.
+    # Byte caps enforced after serialization in audit.insert_decision.
     hint:       Optional[dict] = None
     arguments:  Optional[dict] = None
 

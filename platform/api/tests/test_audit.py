@@ -1,16 +1,7 @@
 """Tests for /v1/audit/decisions and the audit Pydantic models.
 
-Two tiers:
-  * Pydantic + endpoint tests run with the ClickHouse client and the auth
-    dependency stubbed via FastAPI ``dependency_overrides``. Fast, offline,
-    no Docker needed.
-  * Integration tests carry the ``@pytest.mark.integration`` marker, skipped
-    by default; opt in with ``pytest -m integration`` once
-    ``make clickhouse-up`` is running.
-
-The bearer-resolution path itself is exercised by ``test_biscuits.py`` and
-``test_keystore.py``; this module focuses on the audit handler's own
-validation, byte caps, ClickHouse interaction, and response shape.
+Endpoint tests stub auth + ClickHouse via dependency_overrides. Integration
+tests under @pytest.mark.integration round-trip against a real local ClickHouse.
 """
 from __future__ import annotations
 
@@ -69,14 +60,9 @@ def test_minimal_event_constructs_with_envelope_defaults() -> None:
 
 
 def test_envelope_fields_inherited_via_mixin() -> None:
-    """DecisionEvent inherits the wire envelope from AuditEnvelope.
-
-    The wire envelope is narrower than the ClickHouse storage envelope —
-    fields the server resolves on its own never appear here.
-    """
+    """DecisionEvent inherits the wire envelope; server-resolved fields stay out."""
     expected = {"event_id", "occurred_at", "agent_name", "session_id", "user_id"}
     assert expected <= DecisionEvent.model_fields.keys()
-    # And the inverse: server-resolved/stamped fields stay out of the wire model.
     assert "project_id" not in DecisionEvent.model_fields
     assert "received_at" not in DecisionEvent.model_fields
     assert "agent_version_id" not in DecisionEvent.model_fields
@@ -109,33 +95,17 @@ def test_oversized_agent_name_rejected() -> None:
 
 @pytest.fixture
 def fake_clickhouse() -> MagicMock:
-    """A MagicMock standing in for the ClickHouse client.
-
-    Tests inspect ``.insert.call_args`` to assert what the handler wrote,
-    and set ``.insert.side_effect`` to simulate failures.
-    """
+    """MagicMock for the ClickHouse client."""
     return MagicMock()
 
 
-# Sentinel returned by the stubbed agent_version_id lookup; tests assert
-# this value lands in the inserted row, proving the resolution came from
-# the platform and not from the body.
+# Stub return value for the agent_version_id lookup; tests assert it lands in the row.
 _STUB_AGENT_VERSION_ID = "stub_v_id_xyz"
 
 
 @pytest.fixture
 def client(fake_clickhouse: MagicMock, monkeypatch: pytest.MonkeyPatch) -> TestClient:
-    """TestClient with the handler's three dependencies stubbed.
-
-    * ``require_project`` returns ``"proj_test"`` so the server-stamped
-      project_id in the row is deterministic.
-    * ``get_clickhouse`` returns the MagicMock so tests can inspect what
-      the domain wrote.
-    * ``get_session`` returns a MagicMock — never used in practice
-      because we also stub the version lookup.
-    * ``main.get_latest_agent_version_id`` is patched to a constant so
-      tests assert "the value in the row came from the platform lookup."
-    """
+    """TestClient with auth, ClickHouse, session, and version-lookup stubbed."""
     app.dependency_overrides[require_project] = lambda: "proj_test"
     app.dependency_overrides[get_clickhouse] = lambda: fake_clickhouse
     app.dependency_overrides[get_session] = lambda: MagicMock()
@@ -163,10 +133,10 @@ def test_happy_path_returns_202_and_inserts_row(
     assert args[0] == "policy_decision"
     rows = args[1]
     assert len(rows) == 1
-    assert len(rows[0]) == 15  # column count matches schema (received_at absent)
-    # Indices match the _DECISION_COLUMNS order in audit.py.
-    assert rows[0][2] == "proj_test"                 # project_id ← bearer
-    assert rows[0][4] == _STUB_AGENT_VERSION_ID      # agent_version_id ← platform lookup
+    assert len(rows[0]) == 15
+    # Indices match _DECISION_COLUMNS in audit.py.
+    assert rows[0][2] == "proj_test"             # project_id (bearer)
+    assert rows[0][4] == _STUB_AGENT_VERSION_ID  # agent_version_id (platform)
     assert kwargs["column_names"] == audit._DECISION_COLUMNS
     assert kwargs["settings"]["async_insert"] == 1
     assert kwargs["settings"]["wait_for_async_insert"] == 0
@@ -175,15 +145,13 @@ def test_happy_path_returns_202_and_inserts_row(
 def test_agent_version_id_comes_from_platform_lookup(
     client: TestClient, fake_clickhouse: MagicMock
 ) -> None:
-    """Even if the SDK tries to sneak agent_version_id into the body, the
-    Pydantic model strips it and the platform lookup is the only source."""
+    """Even if the SDK sneaks agent_version_id into the body, the platform lookup wins."""
     payload = {**_event(), "agent_version_id": "sdk_provided_should_be_ignored"}
     r = client.post("/v1/audit/decisions", json=payload)
     assert r.status_code == 202
 
     rows = fake_clickhouse.insert.call_args.args[1]
     assert rows[0][4] == _STUB_AGENT_VERSION_ID
-    # And the payload's body value never reached storage.
     assert "sdk_provided_should_be_ignored" not in rows[0]
 
 
@@ -216,7 +184,7 @@ def test_oversized_hint_rejected(client: TestClient) -> None:
 
 
 def test_pydantic_validation_returns_422(client: TestClient) -> None:
-    """Bad outcome trips Pydantic before our handler runs."""
+    """Bad outcome trips Pydantic before the handler runs."""
     r = client.post("/v1/audit/decisions", json=_event(outcome="maybe"))
     assert r.status_code == 422
 
@@ -238,11 +206,7 @@ def test_clickhouse_error_returns_503_with_retry_after(
 
 @pytest.mark.integration
 def test_real_clickhouse_round_trip() -> None:
-    """Insert a row through the real client; SELECT it back; assert shape.
-
-    Uses a uniquely-tagged ``project_id`` so concurrent runs don't collide,
-    and cleans up its own rows on the way out.
-    """
+    """Insert a row through the real client; SELECT it back; clean up."""
     from clickhouse import get_clickhouse as real_get_clickhouse
 
     clickhouse_client = real_get_clickhouse()
@@ -269,8 +233,7 @@ def test_real_clickhouse_round_trip() -> None:
             json.dumps({"path": "/etc/passwd"}),
         ]],
         column_names=audit._DECISION_COLUMNS,
-        # wait_for_async_insert=1 so the row is queryable immediately on
-        # the SELECT below — otherwise we'd race the server-side buffer.
+        # wait_for_async_insert=1 so the SELECT below sees the row.
         settings={"async_insert": 1, "wait_for_async_insert": 1},
     )
 

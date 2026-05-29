@@ -74,9 +74,7 @@ async def lifespan(_: FastAPI):
         # Backfill signed bundles for seeded agents so they're served via
         # WASM on the first request, not just after their first edit.
         backfill_bundles(session, keystore.sign)
-    # ClickHouse is best-effort — don't fail startup if it's unreachable.
-    # Audit ingest will 503 until the server comes back; /health surfaces
-    # the state so contributors notice immediately.
+    # Don't fail startup on unreachable ClickHouse — /health surfaces it.
     if not clickhouse_ping():
         logging.getLogger(__name__).warning(
             "ClickHouse unreachable at startup; /v1/audit/decisions will 503 until reachable"
@@ -493,9 +491,7 @@ def api_register_agent(
     )
 
 
-# Time-window for accepting decision events. Handler-layer concerns — they
-# bound which requests we'll accept rather than how rows are stored. Storage
-# concerns (column shape, byte caps, insert settings) live in audit.py.
+# Time-window for accepting decision events.
 CLOCK_SKEW_FUTURE = timedelta(minutes=5)
 RETENTION_WINDOW = timedelta(days=90)
 
@@ -511,15 +507,8 @@ def ingest_decision(
     session: Session = Depends(get_session),
     clickhouse_client=Depends(get_clickhouse),
 ) -> DecisionAccepted:
-    """Ingest one policy decision.
-
-    Server-side resolution stamps three things the body never carries:
-    ``project_id`` from the bearer, ``received_at`` from the ClickHouse
-    column default, and ``agent_version_id`` from the relational store
-    (so the canonical version always wins over whatever the SDK is
-    running). Decisions for unregistered agents land with an empty
-    ``agent_version_id`` — surfaceable as "unresolved" in the dashboard.
-    """
+    """Ingest one policy decision. project_id (bearer), received_at (CH default),
+    and agent_version_id (platform lookup) are server-resolved."""
     now = datetime.now(timezone.utc)
     if body.occurred_at > now + CLOCK_SKEW_FUTURE:
         raise HTTPException(status_code=400, detail="occurred_at is in the future")
