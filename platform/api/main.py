@@ -3,7 +3,7 @@ import logging
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 
-from clickhouse_connect.driver.exceptions import ClickHouseError
+from clickhouse_connect.driver.exceptions import ClickHouseError, OperationalError
 from fastapi import (
     APIRouter,
     Depends,
@@ -63,6 +63,7 @@ from services import (
 
 
 keystore = FileKeyStore()
+_log = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -76,7 +77,7 @@ async def lifespan(_: FastAPI):
         backfill_bundles(session, keystore.sign)
     # Don't fail startup on unreachable ClickHouse — /health surfaces it.
     if not clickhouse_ping():
-        logging.getLogger(__name__).warning(
+        _log.warning(
             "ClickHouse unreachable at startup; /v1/audit/decisions will 503 until reachable"
         )
     yield
@@ -515,7 +516,8 @@ def require_clickhouse():
     """
     try:
         return get_clickhouse()
-    except ClickHouseError:
+    except ClickHouseError as exc:
+        _log.warning("ClickHouse unreachable resolving audit client: %s", exc)
         raise _audit_unavailable()
 
 
@@ -551,8 +553,17 @@ def ingest_decision(
         )
     except AuditPayloadTooLarge as exc:
         raise HTTPException(status_code=413, detail=str(exc))
-    except ClickHouseError:
+    except OperationalError as exc:
+        # Transport / retried-transient failure — retrying may succeed.
+        _log.warning("audit insert failed (transient): %s", exc)
         raise _audit_unavailable()
+    except ClickHouseError as exc:
+        # Deterministic storage rejection (bad type/enum/value). Retrying won't
+        # help, so signal a permanent client error instead of a retryable 503.
+        _log.error("audit insert rejected by ClickHouse: %s", exc)
+        raise HTTPException(
+            status_code=422, detail="audit event rejected by storage"
+        )
 
     return DecisionAccepted(event_id=body.event_id)
 

@@ -11,7 +11,11 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock
 
 import pytest
-from clickhouse_connect.driver.exceptions import ClickHouseError
+from clickhouse_connect.driver.exceptions import (
+    ClickHouseError,
+    DataError,
+    OperationalError,
+)
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
@@ -139,7 +143,8 @@ def test_happy_path_returns_202_and_inserts_row(
     assert rows[0][4] == _STUB_AGENT_VERSION_ID  # agent_version_id (platform)
     assert kwargs["column_names"] == audit._DECISION_COLUMNS
     assert kwargs["settings"]["async_insert"] == 1
-    assert kwargs["settings"]["wait_for_async_insert"] == 0
+    # Durable: block until flush so insert failures surface synchronously.
+    assert kwargs["settings"]["wait_for_async_insert"] == 1
 
 
 def test_agent_version_id_comes_from_platform_lookup(
@@ -189,14 +194,26 @@ def test_pydantic_validation_returns_422(client: TestClient) -> None:
     assert r.status_code == 422
 
 
-def test_clickhouse_error_returns_503_with_retry_after(
+def test_transient_clickhouse_error_returns_503_with_retry_after(
     client: TestClient, fake_clickhouse: MagicMock
 ) -> None:
-    fake_clickhouse.insert.side_effect = ClickHouseError("connection refused")
+    """A transport/transient failure is retryable → 503 Retry-After."""
+    fake_clickhouse.insert.side_effect = OperationalError("connection refused")
     r = client.post("/v1/audit/decisions", json=_event())
     assert r.status_code == 503
     assert r.headers.get("retry-after") == "5"
     assert "unavailable" in r.json()["detail"]
+
+
+def test_deterministic_clickhouse_error_returns_422(
+    client: TestClient, fake_clickhouse: MagicMock
+) -> None:
+    """A storage rejection (bad type/value) is permanent → 422, not a retryable 503."""
+    fake_clickhouse.insert.side_effect = DataError("unknown enum value")
+    r = client.post("/v1/audit/decisions", json=_event())
+    assert r.status_code == 422
+    assert "retry-after" not in {k.lower() for k in r.headers}
+    assert "rejected" in r.json()["detail"]
 
 
 def test_naive_occurred_at_accepted_as_utc(
