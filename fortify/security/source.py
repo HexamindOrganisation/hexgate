@@ -1,38 +1,41 @@
 """Policy sources — abstractions over "where the current policy lives."
 
 The runtime fetches a :class:`PolicyBundle` (or ``None``) from a source at
-every agent run; the source decides whether that's cheap or not. Today's
-implementation:
+every agent run; the source decides whether that's cheap or not. Three
+implementations cover the production + local-dev workflows:
 
   * :class:`PlatformPolicySource` — HTTP fetch with ``If-None-Match`` /
     ``304 Not Modified``, so unchanged bundles cost one tiny round trip
     instead of a full payload + signature verify + wasm re-instantiation.
-
-Phase 8b will add:
-
-  * ``BundleDirPolicySource`` — refresh a bundle directory on disk
-    (today's ``FORTIFY_LOCAL_POLICY=<dir>`` path, made stat-aware).
-  * ``YamlPolicySource`` — auto-recompile + re-sign a ``policy.yaml`` when
-    its mtime changes, so dev iteration matches the platform's hot-reload
-    UX without the platform in the loop.
+  * :class:`BundleDirPolicySource` — refresh a pre-built bundle directory
+    on disk (today's ``FORTIFY_LOCAL_POLICY=<dir>`` path, made mtime-aware
+    so a rebuild via ``fortify policy build`` takes effect on the next run).
+  * :class:`YamlPolicySource` — auto-recompile a ``policy.yaml`` when its
+    mtime changes. The dev edits → saves → runs loop matches the platform's
+    hot-reload UX without the platform in the loop.
 
 The common interface is :class:`PolicySource`; the agent runtime depends
-on the protocol, not on either concrete type.
+on the protocol, not on any concrete type.
 """
 
 from __future__ import annotations
 
 import base64
 import logging
+from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
 
 from fortify.security.bundle import (
     BundleIntegrityError,
+    BundleLoadError,
     BundleSignatureError,
     PolicyBundle,
+    build_signed_bundle,
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from fortify.cloud.client import FortifyClient
 
 
@@ -152,3 +155,193 @@ def decode_and_verify_platform_bundle(
             "pydantic engine."
         ) from exc
     return bundle
+
+
+# ---------------------------------------------------------------------------
+# Local sources — for FORTIFY_LOCAL_POLICY without a platform in the loop
+# ---------------------------------------------------------------------------
+
+
+class BundleDirPolicySource:
+    """Refresh a pre-built bundle directory on every fetch via mtime.
+
+    Wraps :meth:`PolicyBundle.from_disk` with two pieces of dev-loop polish:
+
+      * ``fetch()`` only reloads when the bundle manifest's mtime has
+        changed since the last load — so a quiet run pays one ``stat()``
+        and reuses the cached :class:`PolicyBundle` instance (identity
+        match → the agent runtime's refresh seam skips its swap).
+      * Verification (``verify_integrity`` + an optional
+        ``verify_signature``) runs on every reload, so a hand-edited
+        wasm/manifest pair never slips through.
+
+    Layout mirrors what ``fortify policy build`` emits — a directory
+    containing ``{stem}.yaml``, ``{stem}.rego``, ``{stem}.wasm``,
+    ``{stem}.bundle.json``, and optionally ``{stem}.bundle.json.sig``.
+    """
+
+    def __init__(
+        self,
+        directory: Path | str,
+        *,
+        verify_with: bytes | None = None,
+    ) -> None:
+        self._directory = Path(directory)
+        # When set, every reload's signature is verified against this raw
+        # Ed25519 public key. None disables the check (still enforces
+        # integrity — wasm matches the manifest's wasm_hash).
+        self._verify_with = verify_with
+        self._cached: PolicyBundle | None = None
+        self._cached_mtime_ns: int | None = None
+
+    def fetch(self) -> PolicyBundle | None:
+        manifest_path = self._locate_manifest()
+        try:
+            mtime_ns = manifest_path.stat().st_mtime_ns
+        except OSError as exc:
+            raise RuntimeError(
+                f"FORTIFY_LOCAL_POLICY bundle at {self._directory} disappeared: {exc}"
+            ) from exc
+
+        if self._cached is not None and mtime_ns == self._cached_mtime_ns:
+            return self._cached
+
+        try:
+            bundle = PolicyBundle.from_disk(self._directory)
+            bundle.verify_integrity()
+        except (BundleLoadError, BundleIntegrityError) as exc:
+            raise RuntimeError(
+                f"FORTIFY_LOCAL_POLICY bundle at {self._directory} failed to load: {exc}"
+            ) from exc
+
+        if self._verify_with is not None:
+            try:
+                bundle.verify_signature(self._verify_with)
+            except BundleSignatureError as exc:
+                raise RuntimeError(
+                    f"FORTIFY_LOCAL_POLICY bundle at {self._directory} failed "
+                    f"signature verification: {exc}"
+                ) from exc
+
+        self._cached = bundle
+        self._cached_mtime_ns = mtime_ns
+        return bundle
+
+    def _locate_manifest(self) -> Path:
+        """Find the single ``*.bundle.json`` we're refreshing against.
+
+        Same disambiguation rule as :meth:`PolicyBundle.from_disk`: one
+        manifest per directory; refuse rather than guess if there are
+        zero or multiple.
+        """
+        if not self._directory.is_dir():
+            raise RuntimeError(
+                f"FORTIFY_LOCAL_POLICY={self._directory} is not a directory."
+            )
+        manifests = sorted(self._directory.glob("*.bundle.json"))
+        if not manifests:
+            raise RuntimeError(
+                f"FORTIFY_LOCAL_POLICY={self._directory}: no *.bundle.json found. "
+                "Build with `fortify policy build` first."
+            )
+        if len(manifests) > 1:
+            raise RuntimeError(
+                f"FORTIFY_LOCAL_POLICY={self._directory}: multiple bundle "
+                f"manifests {[m.name for m in manifests]} — pass an explicit "
+                "directory containing one."
+            )
+        return manifests[0]
+
+
+class YamlPolicySource:
+    """Recompile a ``policy.yaml`` into a bundle whenever the file changes.
+
+    Closes the dev iteration loop without a platform: edit the yaml,
+    save, re-run the agent → the new policy is live. Behaves like
+    :class:`PlatformPolicySource` from the runtime's perspective —
+    cached when nothing's changed, fresh instance when it has.
+
+    Recompilation shells out to ``opa`` via :func:`build_signed_bundle`
+    (same path the platform uses at save time), so the produced
+    :class:`PolicyBundle` is byte-for-byte what the platform would have
+    served — minus the platform's signature, unless ``sign`` is supplied.
+
+    The default unsigned mode is the happy path for dev. Production /
+    CI that requires authenticity should run against the platform
+    (PlatformPolicySource) or use a pre-built signed bundle directory
+    (BundleDirPolicySource) — local yaml signing is mostly noise since
+    the dev box holds the signing key.
+    """
+
+    def __init__(
+        self,
+        yaml_path: Path | str,
+        *,
+        sign: "Callable[[bytes], bytes] | None" = None,
+        opa_bin: str | None = None,
+    ) -> None:
+        self._yaml_path = Path(yaml_path)
+        self._sign = sign
+        self._opa_bin = opa_bin
+        self._cached: PolicyBundle | None = None
+        self._cached_mtime_ns: int | None = None
+
+    def fetch(self) -> PolicyBundle | None:
+        try:
+            mtime_ns = self._yaml_path.stat().st_mtime_ns
+        except OSError as exc:
+            raise RuntimeError(
+                f"FORTIFY_LOCAL_POLICY yaml at {self._yaml_path} disappeared: {exc}"
+            ) from exc
+
+        if self._cached is not None and mtime_ns == self._cached_mtime_ns:
+            return self._cached
+
+        try:
+            yaml_text = self._yaml_path.read_text(encoding="utf-8")
+        except OSError as exc:
+            raise RuntimeError(
+                f"FORTIFY_LOCAL_POLICY yaml at {self._yaml_path} could not be "
+                f"read: {exc}"
+            ) from exc
+
+        try:
+            built = build_signed_bundle(
+                yaml_text,
+                source_name=self._yaml_path.name,
+                sign=self._sign,
+                opa_bin=self._opa_bin,
+            )
+        except Exception as exc:  # opa missing, malformed yaml, bad constraints
+            raise RuntimeError(
+                f"FORTIFY_LOCAL_POLICY yaml at {self._yaml_path} failed to "
+                f"compile: {exc}"
+            ) from exc
+
+        if built.wasm_bytes is None:
+            # build_signed_bundle returns wasm_bytes=None only with compile_wasm=False;
+            # we never set that, so this is paranoia for future-proofing.
+            raise RuntimeError(
+                f"FORTIFY_LOCAL_POLICY yaml at {self._yaml_path} compiled "
+                "without wasm — refusing to enforce a non-wasm bundle."
+            )
+
+        bundle = PolicyBundle.from_parts(
+            wasm_bytes=built.wasm_bytes,
+            manifest_bytes=built.manifest_bytes,
+            signature=built.signature,
+        )
+        # Integrity is trivially satisfied (we just produced both halves),
+        # but the check catches bugs in build_signed_bundle and keeps the
+        # invariant uniform across sources.
+        try:
+            bundle.verify_integrity()
+        except BundleIntegrityError as exc:
+            raise RuntimeError(
+                f"FORTIFY_LOCAL_POLICY yaml at {self._yaml_path}: freshly "
+                f"built bundle failed integrity: {exc}"
+            ) from exc
+
+        self._cached = bundle
+        self._cached_mtime_ns = mtime_ns
+        return bundle

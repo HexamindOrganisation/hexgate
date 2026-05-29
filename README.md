@@ -636,15 +636,27 @@ The manifest's hashes authenticate the files; the signature authenticates the ma
 
 ### Local enforcement — `FORTIFY_LOCAL_POLICY`
 
-Point an agent at a local bundle and every tool call routes through the WASM engine instead of pydantic — no platform needed. This is the dev-iteration path: edit `policy.yaml`, rebuild, restart, see the change.
+Point an agent at a local source and every tool call routes through the WASM engine instead of pydantic — no platform needed. Two shapes are accepted, and both **hot-reload on save** (no restart, no manual rebuild between turns):
+
+| `FORTIFY_LOCAL_POLICY=…` | What happens | When to use |
+|---|---|---|
+| **`./bundle/`** (output of `fortify policy build`) | Stat the bundle manifest each turn; reload if its mtime changed. | Production-shaped local testing — exercises the exact signed-bundle path. |
+| **`./policy.yaml`** | Stat the yaml each turn; recompile via `opa` when its mtime changed. | The tight dev loop — edit yaml, save, ask again. No build step. |
 
 ```bash
+# Pre-built bundle dir — rebuild it mid-session, next chat picks it up
 fortify policy build policy.yaml --out ./bundle
 FORTIFY_LOCAL_POLICY=./bundle fortify chat --agent researcher
-# [fortify] FORTIFY_LOCAL_POLICY active: ./bundle (wasm_hash=7e6d1f8b..., unsigned)
+# [fortify] FORTIFY_LOCAL_POLICY active (bundle-dir): ./bundle (wasm_hash=7e6d1f8b..., unsigned)
+
+# Raw yaml — edit policy.yaml in your editor, save, next chat sees the new policy
+FORTIFY_LOCAL_POLICY=./policy.yaml fortify chat --agent researcher
+# [fortify] FORTIFY_LOCAL_POLICY active (yaml): ./policy.yaml (wasm_hash=ab12..., unsigned)
 ```
 
-The bundle's integrity (files match the manifest) is verified eagerly at startup — a stale or corrupt bundle fails immediately, not at the first tool call.
+The bundle's integrity (files match the manifest) is verified on every reload — a stale or corrupt bundle fails immediately, not at the first tool call. Yaml sources default to **unsigned**: set `FORTIFY_BUNDLE_SIGN_KEY_PATH=./keys/dev.private` to sign each recompile with your `fortify policy keygen` key, so downstream gates that check `bundle.is_signed` see what they expect.
+
+> **Same refresh seam as the platform.** Under the hood both sources implement `PolicySource.fetch()`; the agent runtime calls it at the top of every turn and only swaps the active policy when the returned bundle is a new instance. Unchanged → identity match → no work. That's the same hot-reload path `fortify serve` uses for platform-edited YAML.
 
 ### Signing & verification
 
@@ -665,7 +677,7 @@ FORTIFY_LOCAL_POLICY=./bundle \
 FORTIFY_BUNDLE_PUBKEY_PATH=./keys/dev.public \
 FORTIFY_BUNDLE_REQUIRE_SIGNATURE=true \
 fortify chat --agent researcher
-# [fortify] FORTIFY_LOCAL_POLICY active: ./bundle (wasm_hash=..., signed)
+# [fortify] FORTIFY_LOCAL_POLICY active (bundle-dir): ./bundle (wasm_hash=..., signed)
 ```
 
 `FORTIFY_BUNDLE_REQUIRE_SIGNATURE` controls strictness — warn-by-default keeps local dev frictionless; opt into refusal for CI/prod:
@@ -900,8 +912,9 @@ Policy-bundle enforcement (see [Policy Bundles](#-policy-bundles--compile-sign-e
 
 | Env var | Purpose |
 |---|---|
-| `FORTIFY_LOCAL_POLICY` | Path to a bundle directory; overrides the agent's policy with the WASM engine |
+| `FORTIFY_LOCAL_POLICY` | Path to a bundle directory **or** a `policy.yaml`; routes enforcement through the WASM engine and hot-reloads on save |
 | `FORTIFY_BUNDLE_PUBKEY_PATH` | base64url Ed25519 public key used to verify a bundle's signature |
+| `FORTIFY_BUNDLE_SIGN_KEY_PATH` | base64url Ed25519 private key used to sign locally-compiled yaml sources (so `bundle.is_signed` is True) |
 | `FORTIFY_BUNDLE_REQUIRE_SIGNATURE` | `true` to refuse unsigned or unverifiable bundles (default: warn only) |
 | `FORTIFY_OPA_BIN` | Override the `opa` binary location (default: search `PATH`) |
 
@@ -1116,7 +1129,7 @@ Behaviour:
 
 - Connects `ws://${FORTIFY_API_URL}/v1/projects/${pid}/serve` with `Authorization: Bearer ${FORTIFY_KEY}`
 - Sends a `hello` frame announcing the agent name (so the dashboard's "Serving" indicator can show it)
-- On each inbound `chat` message, **rebuilds the runtime** (re-fetches agent + policy YAML from the platform) before running, so dashboard edits take effect at turn boundaries without a restart
+- On each inbound `chat` message, **refreshes the active policy** before running. Refresh is an `If-None-Match` round-trip to the platform: a 304 reuses the cached WASM module, a 200 swaps in the new bundle. Dashboard edits take effect at turn boundaries without restarting the process or re-wrapping the tools.
 - Streams every `StreamEvent` (text deltas, tool start/end, run end) back as JSON
 - Auto-approves any `approval_required` tools — there's no TTY in serve mode for prompts (planned: dashboard-side approval UI)
 - Reconnects with exponential backoff on socket drop
