@@ -14,43 +14,51 @@ separate ``roles_json`` column. These tests cover the new shape:
 from __future__ import annotations
 
 import pytest
+import pytest_asyncio
 import yaml
 from fastapi.testclient import TestClient
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
-from sqlmodel import Session, SQLModel, create_engine
+from sqlmodel import SQLModel
+from sqlmodel.ext.asyncio.session import AsyncSession
 
 import main
 from main import app
 from services import DEFAULT_PROJECT_ID, DEFAULT_USER_ID, ensure_default_project
 
 
-@pytest.fixture
-def engine():
-    """A fresh in-memory SQLite engine shared across sessions.
+@pytest_asyncio.fixture
+async def session_factory():
+    """A fresh in-memory async engine + session factory.
 
     StaticPool keeps every Session bound to the same connection — otherwise
     each :memory: handle gets its own private DB and the tables vanish.
-    Split out from ``client`` so tests that need to seed rows directly
-    (e.g. registering an AgentVersion) can take both fixtures.
+    Returns the factory so tests + the client fixture can both build
+    sessions against the same in-memory DB.
     """
-    engine = create_engine(
-        "sqlite:///:memory:",
+    engine = create_async_engine(
+        "sqlite+aiosqlite:///:memory:",
         connect_args={"check_same_thread": False},
         poolclass=StaticPool,
     )
-    SQLModel.metadata.create_all(engine)
-    with Session(engine) as bootstrap:
-        ensure_default_project(bootstrap)
-    return engine
+    async with engine.begin() as conn:
+        await conn.run_sync(SQLModel.metadata.create_all)
+    factory = async_sessionmaker(
+        engine, class_=AsyncSession, expire_on_commit=False
+    )
+    async with factory() as bootstrap:
+        await ensure_default_project(bootstrap)
+    yield factory
+    await engine.dispose()
 
 
-@pytest.fixture
-def client(engine, tmp_path) -> TestClient:
-    """TestClient that routes ``get_session`` through the shared test engine."""
+@pytest_asyncio.fixture
+async def client(session_factory, tmp_path) -> TestClient:
+    """TestClient that routes ``get_session`` through the shared test factory."""
     from keystore import FileKeyStore
 
-    def override_session():
-        with Session(engine) as session:
+    async def override_session():
+        async with session_factory() as session:
             yield session
 
     # Endpoints use the local main.get_session, so we override that one.
@@ -62,8 +70,6 @@ def client(engine, tmp_path) -> TestClient:
     original_keystore = main.keystore
     main.keystore = FileKeyStore(base_dir=tmp_path / "keystore")
     main.keystore.ensure_keypair()
-    with Session(engine) as bootstrap:
-        ensure_default_project(bootstrap)
     try:
         # Bake the dev-user header into every request so M3 Phase 2's
         # require_org_member dependency lets these tests through. The
@@ -327,18 +333,18 @@ def test_manifest_endpoint_returns_envelope_for_unregistered_agents(
         assert row["content_hash"] is None
 
 
-def test_manifest_endpoint_returns_registered_manifest_with_tools(
-    client: TestClient, engine
+async def test_manifest_endpoint_returns_registered_manifest_with_tools(
+    client: TestClient, session_factory
 ) -> None:
     """After register_manifest, the endpoint surfaces the full manifest."""
     from schemas import AgentManifest
     from services import register_manifest
 
-    with Session(engine) as session:
+    async with session_factory() as session:
         manifest = AgentManifest.model_validate(
             _sample_manifest("support_bot", description="customer support")
         )
-        register_manifest(session, DEFAULT_PROJECT_ID, manifest)
+        await register_manifest(session, DEFAULT_PROJECT_ID, manifest)
 
     resp = client.get(f"/v1/projects/{DEFAULT_PROJECT_ID}/agents/manifest")
     row = next(r for r in resp.json() if r["name"] == "support_bot")
@@ -349,18 +355,20 @@ def test_manifest_endpoint_returns_registered_manifest_with_tools(
     assert row["manifest"]["tools"][0]["input_schema"]["required"] == ["msg"]
 
 
-def test_manifest_endpoint_returns_latest_version(client: TestClient, engine) -> None:
+async def test_manifest_endpoint_returns_latest_version(
+    client: TestClient, session_factory
+) -> None:
     """When multiple versions exist, only the highest one is returned."""
     from schemas import AgentManifest
     from services import register_manifest
 
-    with Session(engine) as session:
+    async with session_factory() as session:
         v1 = AgentManifest.model_validate(_sample_manifest("support_bot"))
         v2 = AgentManifest.model_validate(
             {**_sample_manifest("support_bot"), "description": "v2"}
         )
-        register_manifest(session, DEFAULT_PROJECT_ID, v1)
-        register_manifest(session, DEFAULT_PROJECT_ID, v2)
+        await register_manifest(session, DEFAULT_PROJECT_ID, v1)
+        await register_manifest(session, DEFAULT_PROJECT_ID, v2)
 
     resp = client.get(f"/v1/projects/{DEFAULT_PROJECT_ID}/agents/manifest")
     row = next(r for r in resp.json() if r["name"] == "support_bot")
@@ -368,14 +376,14 @@ def test_manifest_endpoint_returns_latest_version(client: TestClient, engine) ->
     assert row["manifest"]["description"] == "v2"
 
 
-def test_manifest_endpoint_round_trips_model_and_system_prompt(
-    client: TestClient, engine
+async def test_manifest_endpoint_round_trips_model_and_system_prompt(
+    client: TestClient, session_factory
 ) -> None:
     """The new manifest fields survive register → read."""
     from schemas import AgentManifest
     from services import register_manifest
 
-    with Session(engine) as session:
+    async with session_factory() as session:
         manifest = AgentManifest.model_validate(
             _sample_manifest(
                 "support_bot",
@@ -383,7 +391,7 @@ def test_manifest_endpoint_round_trips_model_and_system_prompt(
                 system_prompt="be helpful",
             )
         )
-        register_manifest(session, DEFAULT_PROJECT_ID, manifest)
+        await register_manifest(session, DEFAULT_PROJECT_ID, manifest)
 
     resp = client.get(f"/v1/projects/{DEFAULT_PROJECT_ID}/agents/manifest")
     row = next(r for r in resp.json() if r["name"] == "support_bot")

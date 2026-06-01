@@ -12,6 +12,14 @@ dependencies = [
     "pydantic>=2.9",
     "cryptography>=42",
     "biscuit-python>=0.4",
+    # Async SQLite driver — required by SQLAlchemy's async engine. SQLite
+    # itself is single-writer; aiosqlite just stops the event loop from
+    # blocking on disk I/O. Future Postgres switch swaps this for asyncpg.
+    "aiosqlite>=0.20",
+    # SQLAlchemy's async engine bridges sync ORM internals to async DB
+    # drivers via greenlet — it's a transitive dep but not auto-installed
+    # on every distribution, so pin it explicitly.
+    "greenlet>=3.0",
     # The control plane compiles + signs policy bundles at save time, so it
     # needs the SDK's compiler (compile_to_rego / compile_to_wasm). Requires
     # the `opa` binary on PATH at runtime. Unpublished local SDK — resolved
@@ -22,6 +30,7 @@ dependencies = [
 [dependency-groups]
 dev = [
     "pytest>=8.3",
+    "pytest-asyncio>=0.24",
     "httpx>=0.27",
     "ruff>=0.8",
 ]
@@ -29,6 +38,10 @@ dev = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+# Routes are now async; tests await responses through FastAPI's lifespan.
+# `auto` mode means every `async def test_…` runs as an asyncio test
+# without needing a per-test marker.
+asyncio_mode = "auto"
 
 [tool.uv]
 package = false

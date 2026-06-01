@@ -14,7 +14,8 @@ from fastapi import (
 )
 from fastapi.middleware.cors import CORSMiddleware
 from models import Agent, AgentVersion, OrganizationMember, Project, User
-from sqlmodel import Session, select
+from sqlmodel import select
+from sqlmodel.ext.asyncio.session import AsyncSession
 
 from biscuits import (
     TokenError,
@@ -22,7 +23,7 @@ from biscuits import (
     parse_envelope,
     verify_token,
 )
-from db import engine, init_db
+from db import async_session_factory, init_db
 from keystore import FileKeyStore
 from relay import registry
 from schemas import (
@@ -60,13 +61,13 @@ keystore = FileKeyStore()
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    init_db()
+    await init_db()
     keystore.ensure_keypair()
-    with Session(engine) as session:
-        ensure_default_project(session)
+    async with async_session_factory() as session:
+        await ensure_default_project(session)
         # Backfill signed bundles for seeded agents so they're served via
         # WASM on the first request, not just after their first edit.
-        backfill_bundles(session, keystore.sign)
+        await backfill_bundles(session, keystore.sign)
     yield
 
 
@@ -81,32 +82,27 @@ app.add_middleware(
 )
 
 
-def get_session():
-    with Session(engine) as session:
+async def get_session():
+    """Yield an ``AsyncSession`` bound to the platform's async engine.
+
+    Each request gets a fresh session; commit boundaries are explicit
+    inside service functions. The context manager ensures the session
+    is closed even when a route raises mid-handler.
+    """
+    async with async_session_factory() as session:
         yield session
 
 
-def optional_dev_token(
-    authorization: str | None = Header(default=None),
-    session: Session = Depends(get_session),
+async def _validate_sdk_token(
+    authorization: str, session: AsyncSession
 ) -> None:
-    """Validate Authorization: Bearer <fortify_key> when present.
+    """Validate an ``Authorization: Bearer <fortify_key>`` biscuit envelope.
 
-    Two gates run when a header is supplied:
-
-    1. **Signature verification** — parse the envelope, decode the Biscuit,
-       check it chains to the platform's root public key. Rejects tampered
-       tokens and tokens minted by some other platform instance.
-    2. **Revocation lookup** — confirm the exact secret is still in the
-       ``DevToken`` table and update ``last_used_at``. Catches revocation
-       even if the Biscuit signature is intrinsically valid.
-
-    POC behaviour: the header itself remains optional so the dashboard
-    (no user-session concept yet) can keep calling these endpoints
-    unauthenticated. Tighten to required once the dashboard auth lands.
+    Shared between ``optional_dev_token`` (allows missing header) and
+    ``require_user_or_sdk_token`` (uses the biscuit as one of two
+    permissibility paths). Raises 401 on signature or revocation failure;
+    returns None on success.
     """
-    if authorization is None:
-        return
     if not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="malformed authorization header")
     secret = authorization.removeprefix("Bearer ").strip()
@@ -124,13 +120,37 @@ def optional_dev_token(
         ) from None
 
     # Revocation gate
-    if find_token_by_secret(session, secret) is None:
+    if await find_token_by_secret(session, secret) is None:
         raise HTTPException(status_code=401, detail="unknown or revoked fortify key")
 
 
-def require_project(
+async def optional_dev_token(
     authorization: str | None = Header(default=None),
-    session: Session = Depends(get_session),
+    session: AsyncSession = Depends(get_session),
+) -> None:
+    """Validate Authorization: Bearer <fortify_key> when present.
+
+    Two gates run when a header is supplied:
+
+    1. **Signature verification** — parse the envelope, decode the Biscuit,
+       check it chains to the platform's root public key.
+    2. **Revocation lookup** — confirm the exact secret is still in the
+       ``DevToken`` table and update ``last_used_at``.
+
+    POC behaviour: the header itself remains optional so the dashboard
+    (no user-session concept yet) can keep calling these endpoints
+    unauthenticated. Routes that DO require some auth use
+    ``require_org_member`` (humans) or ``require_user_or_sdk_token``
+    (either).
+    """
+    if authorization is None:
+        return
+    await _validate_sdk_token(authorization, session)
+
+
+async def require_project(
+    authorization: str | None = Header(default=None),
+    session: AsyncSession = Depends(get_session),
 ) -> str:
     """Resolve `Authorization: Bearer <fortify_key>` to a project_id.
 
@@ -142,7 +162,7 @@ def require_project(
             status_code=401, detail="missing or malformed authorization header"
         )
     secret = authorization.removeprefix("Bearer ").strip()
-    token = find_token_by_secret(session, secret)
+    token = await find_token_by_secret(session, secret)
     if token is None:
         raise HTTPException(status_code=401, detail="invalid fortify key")
     return token.project_id
@@ -162,9 +182,9 @@ def require_project(
 # ---------------------------------------------------------------------------
 
 
-def require_user(
+async def require_user(
     x_dev_user: str | None = Header(default=None, alias="X-Dev-User"),
-    session: Session = Depends(get_session),
+    session: AsyncSession = Depends(get_session),
 ) -> User:
     """Resolve the active dashboard user from the ``X-Dev-User`` header.
 
@@ -176,7 +196,7 @@ def require_user(
         raise HTTPException(
             status_code=401, detail="missing X-Dev-User header"
         )
-    user = session.get(User, x_dev_user)
+    user = await session.get(User, x_dev_user)
     if user is None:
         raise HTTPException(
             status_code=401, detail="unknown user"
@@ -184,10 +204,10 @@ def require_user(
     return user
 
 
-def require_org_member(
+async def require_org_member(
     project_id: str,
     user: User = Depends(require_user),
-    session: Session = Depends(get_session),
+    session: AsyncSession = Depends(get_session),
 ) -> User:
     """Gate a project-scoped route on the active user's org membership.
 
@@ -199,25 +219,25 @@ def require_org_member(
     fact by 403'ing); ``403`` if the project exists but the user isn't
     a member of its org.
     """
-    project = session.get(Project, project_id)
+    project = await session.get(Project, project_id)
     if project is None:
         raise HTTPException(status_code=404, detail="project not found")
-    membership = session.exec(
+    membership = (await session.exec(
         select(OrganizationMember).where(
             OrganizationMember.user_id == user.id,
             OrganizationMember.org_id == project.org_id,
         )
-    ).first()
+    )).first()
     if membership is None:
         raise HTTPException(status_code=403, detail="not a member of this org")
     return user
 
 
-def require_user_or_sdk_token(
+async def require_user_or_sdk_token(
     project_id: str,
     x_dev_user: str | None = Header(default=None, alias="X-Dev-User"),
     authorization: str | None = Header(default=None),
-    session: Session = Depends(get_session),
+    session: AsyncSession = Depends(get_session),
 ) -> None:
     """Accept EITHER an SDK biscuit OR a dashboard user with org membership.
 
@@ -232,7 +252,7 @@ def require_user_or_sdk_token(
     # SDK path: Authorization header carries a biscuit. Validate it via
     # the same signature + revocation gates the existing dependency uses.
     if authorization:
-        optional_dev_token(authorization=authorization, session=session)
+        await _validate_sdk_token(authorization, session)
         return
 
     # Dashboard path: X-Dev-User + org membership.
@@ -241,24 +261,24 @@ def require_user_or_sdk_token(
             status_code=401,
             detail="missing authentication (X-Dev-User or Bearer token)",
         )
-    user = session.get(User, x_dev_user)
+    user = await session.get(User, x_dev_user)
     if user is None:
         raise HTTPException(status_code=401, detail="unknown user")
-    project = session.get(Project, project_id)
+    project = await session.get(Project, project_id)
     if project is None:
         raise HTTPException(status_code=404, detail="project not found")
-    membership = session.exec(
+    membership = (await session.exec(
         select(OrganizationMember).where(
             OrganizationMember.user_id == user.id,
             OrganizationMember.org_id == project.org_id,
         )
-    ).first()
+    )).first()
     if membership is None:
         raise HTTPException(status_code=403, detail="not a member of this org")
 
 
 @app.get("/health")
-def health() -> dict[str, str]:
+async def health() -> dict[str, str]:
     """Unversioned liveness probe."""
     return {"status": "ok", "service": "fortify-api"}
 
@@ -267,12 +287,12 @@ v1 = APIRouter(prefix="/v1")
 
 
 @v1.get("/health")
-def v1_health() -> dict[str, str]:
+async def v1_health() -> dict[str, str]:
     return {"status": "ok", "service": "fortify-api", "version": "v1"}
 
 
 @v1.get("/.well-known/keys")
-def well_known_keys() -> dict[str, object]:
+async def well_known_keys() -> dict[str, object]:
     """Publish the platform's signing public key + fingerprint.
 
     JWKS-shaped so we can grow into multi-key publishing later without
@@ -299,10 +319,10 @@ def well_known_keys() -> dict[str, object]:
     response_model=list[TokenListItem],
     dependencies=[Depends(require_org_member)],
 )
-def list_tokens(
-    project_id: str, session: Session = Depends(get_session)
+async def list_tokens(
+    project_id: str, session: AsyncSession = Depends(get_session)
 ) -> list[TokenListItem]:
-    tokens = list_dev_tokens(session, project_id)
+    tokens = await list_dev_tokens(session, project_id)
     return [
         TokenListItem(
             id=t.id,
@@ -322,15 +342,15 @@ def list_tokens(
     status_code=201,
     dependencies=[Depends(require_org_member)],
 )
-def mint_token(
+async def mint_token(
     project_id: str,
     body: TokenMintRequest,
-    session: Session = Depends(get_session),
+    session: AsyncSession = Depends(get_session),
 ) -> TokenMintResponse:
-    ensure_default_project(
+    await ensure_default_project(
         session
     )  # POC: lazy-create so single project works out of the box
-    token, full = mint_dev_token(
+    token, full = await mint_dev_token(
         session,
         project_id=project_id,
         name=body.name,
@@ -353,12 +373,12 @@ def mint_token(
     status_code=204,
     dependencies=[Depends(require_org_member)],
 )
-def revoke_token(
+async def revoke_token(
     project_id: str,
     token_id: str,
-    session: Session = Depends(get_session),
+    session: AsyncSession = Depends(get_session),
 ) -> None:
-    ok = delete_dev_token(session, project_id, token_id)
+    ok = await delete_dev_token(session, project_id, token_id)
     if not ok:
         raise HTTPException(status_code=404, detail="token not found")
 
@@ -391,11 +411,11 @@ def _agent_read(agent: Agent) -> AgentRead:
     response_model=list[AgentRead],
     dependencies=[Depends(require_org_member)],
 )
-def api_list_agents(
-    project_id: str, session: Session = Depends(get_session)
+async def api_list_agents(
+    project_id: str, session: AsyncSession = Depends(get_session)
 ) -> list[AgentRead]:
-    ensure_default_project(session)
-    return [_agent_read(a) for a in list_agents(session, project_id)]
+    await ensure_default_project(session)
+    return [_agent_read(a) for a in await list_agents(session, project_id)]
 
 
 def _build_agent_manifest_view(
@@ -427,17 +447,19 @@ def _build_agent_manifest_view(
     response_model=list[AgentManifestView],
     dependencies=[Depends(require_org_member)],
 )
-def api_list_agent_manifests(
-    project_id: str, session: Session = Depends(get_session)
+async def api_list_agent_manifests(
+    project_id: str, session: AsyncSession = Depends(get_session)
 ) -> list[AgentManifestView]:
     """Bulk read of every agent's latest registered manifest.
 
     One row per Agent. Agents that exist but have no version registered
     come back with ``manifest=None``.
     """
-    ensure_default_project(session)
-    agents = list_agents(session, project_id)
-    latest_by_agent = get_latest_agent_versions_map(session, [a.id for a in agents])
+    await ensure_default_project(session)
+    agents = await list_agents(session, project_id)
+    latest_by_agent = await get_latest_agent_versions_map(
+        session, [a.id for a in agents]
+    )
     return [
         _build_agent_manifest_view(agent, latest_by_agent.get(agent.id))
         for agent in agents
@@ -449,11 +471,11 @@ def api_list_agent_manifests(
     response_model=AgentRead,
     dependencies=[Depends(require_user_or_sdk_token)],
 )
-def api_get_agent(
+async def api_get_agent(
     project_id: str,
     name: str,
     response: Response,
-    session: Session = Depends(get_session),
+    session: AsyncSession = Depends(get_session),
     if_none_match: str | None = Header(default=None, alias="If-None-Match"),
 ) -> AgentRead | Response:
     """Return an agent's YAMLs + signed bundle.
@@ -464,8 +486,8 @@ def api_get_agent(
     when the bundle hasn't changed — so the SDK's per-run refresh costs
     one short round-trip instead of base64-decoding the wasm again.
     """
-    ensure_default_project(session)
-    agent = get_agent(session, project_id, name)
+    await ensure_default_project(session)
+    agent = await get_agent(session, project_id, name)
     if agent is None:
         raise HTTPException(status_code=404, detail="agent not found")
 
@@ -492,14 +514,14 @@ def api_get_agent(
     response_model=AgentRead,
     dependencies=[Depends(require_org_member)],
 )
-def api_update_agent(
+async def api_update_agent(
     project_id: str,
     name: str,
     body: AgentUpdate,
-    session: Session = Depends(get_session),
+    session: AsyncSession = Depends(get_session),
 ) -> AgentRead:
-    ensure_default_project(session)
-    agent = update_agent(
+    await ensure_default_project(session)
+    agent = await update_agent(
         session,
         project_id,
         name,
@@ -520,7 +542,7 @@ def api_update_agent(
     response_model=ValidatePolicyResponse,
     dependencies=[Depends(require_org_member)],
 )
-def api_validate_policy(
+async def api_validate_policy(
     project_id: str,  # noqa: ARG001 — routed by FastAPI, scope-checked by future auth
     name: str,  # noqa: ARG001 — same
     body: ValidatePolicyRequest,
@@ -610,14 +632,14 @@ def api_validate_policy(
 
 
 @v1.post("/agents", response_model=RegisterAgentResponse)
-def api_register_agent(
+async def api_register_agent(
     body: RegisterAgentRequest,
     response: Response,
     project_id: str = Depends(require_project),
-    session: Session = Depends(get_session),
+    session: AsyncSession = Depends(get_session),
 ) -> RegisterAgentResponse:
     """SDK-facing: register/upsert an agent manifest under the bearer's project."""
-    version, created = register_manifest(session, project_id, body.manifest)
+    version, created = await register_manifest(session, project_id, body.manifest)
     response.status_code = 201 if created else 200
     return RegisterAgentResponse(
         agent_id=version.agent_id,
