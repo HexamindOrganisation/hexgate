@@ -13,7 +13,6 @@ separate ``roles_json`` column. These tests cover the new shape:
 
 from __future__ import annotations
 
-import pytest
 import pytest_asyncio
 import yaml
 from fastapi.testclient import TestClient
