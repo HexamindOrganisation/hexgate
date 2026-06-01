@@ -124,3 +124,27 @@ def test_no_running_loop_skips_silently(caplog: "logging.LogCaptureFixture") -> 
         r for r in caplog.records if "without a running event loop" in r.message
     ]
     assert len(no_loop_warnings) == 1
+
+
+def test_rebuilds_loop_bound_state_across_event_loops() -> None:
+    """A sender reused across two asyncio.run() loops rebuilds its loop-bound
+    client + semaphore instead of raising 'bound to a different event loop'."""
+    sender = AuditSender("http://x/y", "k")
+    sender._new_client = _stub_client  # rebuild uses a stub, not a real client
+    sender._client = _stub_client()
+
+    async def _emit_and_drain() -> None:
+        sender.emit(_event())
+        await asyncio.gather(*sender._tasks)
+
+    asyncio.run(_emit_and_drain())
+    first_loop, first_client, first_sem = (
+        sender._loop, sender._client, sender._semaphore,
+    )
+
+    asyncio.run(_emit_and_drain())  # fresh loop — must not raise
+
+    assert sender._loop is not first_loop
+    assert sender._client is not first_client       # rebuilt on the new loop
+    assert sender._semaphore is not first_sem
+    sender._client.post.assert_called_once()

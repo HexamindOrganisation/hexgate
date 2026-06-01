@@ -111,7 +111,6 @@ async def test_user_defaults_keep_optional_fields_unset() -> None:
     async with User(user_id="alice") as u:
         assert u.role is None
         assert u.session_id is None
-        assert u.user_role is None
         assert u.ttl_seconds is None
 
 

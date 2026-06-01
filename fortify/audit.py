@@ -62,22 +62,51 @@ class AuditSender:
         http_timeout: float = 5.0,
     ) -> None:
         self._endpoint = endpoint
+        self._api_key = api_key
+        self._max_in_flight = max_in_flight
         self._http_timeout = http_timeout
+        # The semaphore and httpx client are loop-bound: asyncio primitives
+        # latch onto the first loop that drives them and reject any other
+        # (e.g. a second asyncio.run()). Build them eagerly so configure()
+        # stays sync, but track the loop and rebuild if it rotates.
+        self._loop: asyncio.AbstractEventLoop | None = None
         self._semaphore = asyncio.Semaphore(max_in_flight)
-        # httpx.AsyncClient is loop-agnostic at construction; it binds to a
-        # loop only at first use, so eager init keeps configure() sync.
-        self._client: httpx.AsyncClient | None = httpx.AsyncClient(
-            timeout=http_timeout,
-            headers={"Authorization": f"Bearer {api_key}"},
-        )
+        self._client: httpx.AsyncClient | None = self._new_client()
         self._tasks: set[asyncio.Task[None]] = set()
         self._closing = False
         self._dropped = 0
         self._warned_no_loop = False
 
+    def _new_client(self) -> httpx.AsyncClient:
+        return httpx.AsyncClient(
+            timeout=self._http_timeout,
+            headers={"Authorization": f"Bearer {self._api_key}"},
+        )
+
+    def _ensure_loop_state(self, loop: asyncio.AbstractEventLoop) -> None:
+        """Adopt the running loop on first use; rebuild on loop rotation.
+
+        The previous client/semaphore are bound to a now-defunct loop, so
+        drop them (GC closes the old client) and rebuild on ``loop``."""
+        if self._loop is loop:
+            return
+        if self._loop is not None:
+            self._semaphore = asyncio.Semaphore(self._max_in_flight)
+            self._client = self._new_client()
+            self._dropped = 0
+        self._loop = loop
+
     def emit(self, event: AuditEvent) -> None:
         if self._closing or self._client is None:
             return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            if not self._warned_no_loop:
+                _log.warning("audit emit called without a running event loop; skipping")
+                self._warned_no_loop = True
+            return
+        self._ensure_loop_state(loop)
         if self._semaphore.locked():
             self._dropped += 1
             if self._dropped % 100 == 1:
@@ -85,13 +114,6 @@ class AuditSender:
                     "audit sender saturated; %d events dropped (platform slow?)",
                     self._dropped,
                 )
-            return
-        try:
-            asyncio.get_running_loop()
-        except RuntimeError:
-            if not self._warned_no_loop:
-                _log.warning("audit emit called without a running event loop; skipping")
-                self._warned_no_loop = True
             return
         task = asyncio.create_task(self._send(event), name="fortify-audit-send")
         self._tasks.add(task)
