@@ -249,6 +249,71 @@ def test_callback_creates_new_user_and_oauth_link(
     asyncio.get_event_loop().run_until_complete(_check())
 
 
+def test_callback_returning_user_reuses_existing_row(
+    oauth_client: TestClient, session_factory
+) -> None:
+    """A second sign-in by the same Google account → no duplicate.
+
+    fastapi-users looks up the existing User via
+    (oauth_name, account_id) and reissues a session for it. Without
+    this guarantee, the unique constraint on
+    ``(oauth_name, account_id)`` in OAuthAccount would raise on the
+    second callback, OR a duplicate User row would slip in if the
+    lookup were wrong. We pin both invariants explicitly.
+    """
+    import asyncio
+
+    oauth_client.fake["email"] = "returning@example.com"  # type: ignore[attr-defined]
+    oauth_client.fake["account_id"] = "google-sub-returning"  # type: ignore[attr-defined]
+
+    def _do_one_signin() -> dict:
+        """Run a full /authorize → /callback dance, return the cookie set."""
+        r_auth = oauth_client.get(
+            "/v1/auth/google/authorize",
+            params={"scopes": ["openid", "email"]},
+        )
+        state = _state_from_authorize_url(r_auth.json()["authorization_url"])
+        r_cb = oauth_client.get(
+            "/v1/auth/google/callback",
+            params={"code": "fake-code", "state": state},
+            follow_redirects=False,
+        )
+        assert r_cb.status_code in (200, 204, 302, 307), r_cb.text
+        return r_cb.headers
+
+    # First sign-in — creates the rows.
+    headers1 = _do_one_signin()
+    assert "fortify_session=" in headers1.get("set-cookie", "")
+
+    # Second sign-in by the same Google account — must succeed without
+    # tripping the unique constraint, and must NOT create duplicates.
+    headers2 = _do_one_signin()
+    assert "fortify_session=" in headers2.get("set-cookie", "")
+
+    async def _check_no_duplicates():
+        async with session_factory() as s:
+            users = (
+                await s.exec(
+                    select(User).where(User.email == "returning@example.com")
+                )
+            ).all()
+            assert len(users) == 1, (
+                f"duplicate Users after returning sign-in: {len(users)}"
+            )
+            links = (
+                await s.exec(
+                    select(OAuthAccount).where(
+                        OAuthAccount.account_id == "google-sub-returning"
+                    )
+                )
+            ).all()
+            assert len(links) == 1, (
+                f"duplicate OAuthAccounts after returning sign-in: {len(links)}"
+            )
+
+    asyncio.get_event_loop().run_until_complete(_check_no_duplicates())
+
+
 def test_callback_links_to_existing_email_user(
     oauth_client: TestClient, session_factory
 ) -> None:
