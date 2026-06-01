@@ -52,12 +52,14 @@ def wrap_langchain_agent(
             "No API key provided. Pass api_key= explicitly or set FORTIFY_KEY environment variable."
         )
 
-    audit.configure(resolved_key)
+    audit_sender = audit.configure(resolved_key)
 
     agent_name = getattr(agent, "name", "default")
     tool_names = [tool.name for tool in tools]
     policy_set = build_policy_set(resolved_key, agent_name, tool_names)
-    enforcer = PolicyEnforcer(policy_set, agent_name=agent_name)
+    enforcer = PolicyEnforcer(
+        policy_set, agent_name=agent_name, audit_sender=audit_sender
+    )
 
     install_enforcer_on_tools(tools, enforcer=enforcer)
 

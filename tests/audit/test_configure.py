@@ -10,12 +10,12 @@ import fortify.audit as audit_mod
 
 @pytest.fixture(autouse=True)
 def _isolate_audit_state(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
-    """Reset the singleton + clear FORTIFY_* env between tests."""
-    audit_mod._audit_sender = None
+    """Reset the sender registry + clear FORTIFY_* env between tests."""
+    audit_mod._senders.clear()
     monkeypatch.delenv("FORTIFY_KEY", raising=False)
     monkeypatch.delenv("FORTIFY_API_URL", raising=False)
     yield
-    audit_mod._audit_sender = None
+    audit_mod._senders.clear()
 
 
 def test_returns_none_when_no_key_anywhere() -> None:
@@ -56,9 +56,21 @@ def test_explicit_base_url_wins_over_env(monkeypatch: pytest.MonkeyPatch) -> Non
     assert sender._endpoint == "https://explicit.example.com/v1/audit/decisions"
 
 
-def test_idempotent_returns_first_sender() -> None:
+def test_idempotent_per_key_returns_same_sender() -> None:
     first = audit_mod.configure("k1")
-    second = audit_mod.configure("k2")  # later call with different args
+    second = audit_mod.configure("k1")  # same key → reuse
     assert first is second
-    # And the first key is what was kept.
-    assert first._client.headers["Authorization"] == "Bearer k1"
+
+
+def test_distinct_keys_get_distinct_senders() -> None:
+    sender_a = audit_mod.configure("k1")
+    sender_b = audit_mod.configure("k2")
+    assert sender_a is not sender_b
+    assert sender_a._client.headers["Authorization"] == "Bearer k1"
+    assert sender_b._client.headers["Authorization"] == "Bearer k2"
+
+
+def test_get_sender_scoped_by_key() -> None:
+    sender = audit_mod.configure("k1")
+    assert audit_mod.get_sender("k1") is sender
+    assert audit_mod.get_sender("k2") is None

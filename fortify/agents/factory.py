@@ -401,8 +401,10 @@ class FortifyAgent:
             resolved = policy
         else:
             resolved = load_policy_set(policy)
-        enforcer = PolicyEnforcer(resolved, agent_name=self.name or "default")
-        audit.configure()
+        audit_sender = audit.configure()
+        enforcer = PolicyEnforcer(
+            resolved, agent_name=self.name or "default", audit_sender=audit_sender
+        )
 
         wrapped: list[ToolSpec] = []
         for tool_spec in self.tools:

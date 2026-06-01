@@ -1,7 +1,7 @@
 """Per-decision audit emission to the platform's /v1/audit/decisions endpoint.
 
 Fire-and-forget POST per decision; bounded concurrency; drops on saturation.
-Lifecycle: configure() once, await shutdown() at process exit.
+Lifecycle: configure() per api_key, await shutdown() at process exit.
 """
 from __future__ import annotations
 
@@ -132,46 +132,58 @@ class AuditSender:
             await self._client.aclose()
 
 
-# --- Process-wide singleton ---------------------------------------------------
+# --- Per-key sender registry --------------------------------------------------
 
 
 _AUDIT_PATH = "/v1/audit/decisions"
 _DEFAULT_API_URL = "http://localhost:8000"
-_audit_sender: AuditSender | None = None
+# One sender per resolved api_key. A single process may wrap agents for
+# several tenants/keys, and each must emit with its own bearer token — so
+# senders are keyed by api_key rather than kept as a first-wins singleton.
+_senders: dict[str, AuditSender] = {}
 
 
 def configure(
     api_key: str | None = None,
     base_url: str | None = None,
 ) -> AuditSender | None:
-    """Initialize the process-wide audit sender. Idempotent.
+    """Get-or-create the audit sender for ``api_key``. Idempotent per key.
 
     Both args fall back to ``FORTIFY_KEY`` / ``FORTIFY_API_URL`` env vars.
-    Returns ``None`` when no api_key is resolvable — audit stays inert.
+    Reuses the existing sender when the same key was already configured;
+    distinct keys get distinct senders. Returns ``None`` when no api_key is
+    resolvable — audit stays inert.
     """
-    global _audit_sender
-    if _audit_sender is not None:
-        return _audit_sender
     resolved_key = api_key or os.environ.get("FORTIFY_KEY")
     if not resolved_key:
         return None
+    existing = _senders.get(resolved_key)
+    if existing is not None:
+        return existing
     resolved_url = base_url or os.environ.get("FORTIFY_API_URL", _DEFAULT_API_URL)
-    _audit_sender = AuditSender(
+    sender = AuditSender(
         endpoint=f"{resolved_url.rstrip('/')}{_AUDIT_PATH}",
         api_key=resolved_key,
     )
-    return _audit_sender
+    _senders[resolved_key] = sender
+    return sender
 
 
-def get_sender() -> AuditSender | None:
-    """Return the process-wide audit sender, or None if not configured."""
-    return _audit_sender
+def get_sender(api_key: str | None = None) -> AuditSender | None:
+    """Return the audit sender for ``api_key`` (or ``FORTIFY_KEY``), if configured.
+
+    Production code should use the sender injected into
+    :class:`~fortify.security.enforcer.PolicyEnforcer`; this lookup exists for
+    diagnostics and is unambiguous only when scoped to a key.
+    """
+    resolved_key = api_key or os.environ.get("FORTIFY_KEY")
+    if not resolved_key:
+        return None
+    return _senders.get(resolved_key)
 
 
 async def shutdown() -> None:
-    """Drain in-flight emits and close the sender. Safe to call multiple times."""
-    global _audit_sender
-    sender = _audit_sender
-    _audit_sender = None
-    if sender is not None:
-        await sender.close()
+    """Drain in-flight emits and close every sender. Safe to call multiple times."""
+    senders = list(_senders.values())
+    _senders.clear()
+    await asyncio.gather(*(s.close() for s in senders), return_exceptions=True)

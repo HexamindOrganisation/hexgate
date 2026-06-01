@@ -11,7 +11,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from fortify.audit import AuditEvent, get_sender
+from fortify.audit import AuditEvent, AuditSender
 from fortify.runtime.context import get_current_user
 from fortify.security.decision import Decision, PolicyEngine
 
@@ -32,17 +32,22 @@ class PolicyEnforcer:
         policy: PolicyEngine,
         *,
         agent_name: str = "default",
+        audit_sender: AuditSender | None = None,
     ) -> None:
         self.policy = policy
         self.agent_name = agent_name
+        # Injected per-agent so each agent emits with its own api_key's sender.
+        # ``None`` means audit is inert for this enforcer.
+        self._audit_sender = audit_sender
 
     def decide(self, tool_name: str, arguments: Mapping[str, Any]) -> Decision:
         """Resolve role from the contextvar, ask the engine for a
         :class:`~fortify.security.decision.Verdict`, and lift it into a
         host-facing :class:`Decision` with this agent's context.
 
-        Emits an :class:`~fortify.audit.AuditEvent` to the configured sink
-        after the decision is built. No-op when no sink is configured."""
+        Emits an :class:`~fortify.audit.AuditEvent` to this enforcer's
+        injected sender after the decision is built. No-op when no sender
+        was injected."""
         user = get_current_user()
         role = user.role if user is not None else None
         args_snapshot = dict(arguments)
@@ -58,9 +63,8 @@ class PolicyEnforcer:
             arguments=args_snapshot,
         )
 
-        sender = get_sender()
-        if sender is not None:
-            sender.emit(AuditEvent(
+        if self._audit_sender is not None:
+            self._audit_sender.emit(AuditEvent(
                 decision=decision,
                 user_id=user.user_id if user is not None else "",
                 session_id=user.session_id if (user is not None and user.session_id) else "",

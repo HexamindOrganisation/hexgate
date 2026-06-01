@@ -74,13 +74,15 @@ def wrap_pydantic_agent(
             "No API key provided. Pass api_key= explicitly or set FORTIFY_KEY environment variable."
         )
 
-    audit.configure(resolved_key)
+    audit_sender = audit.configure(resolved_key)
 
     agent_name = getattr(agent, "name", None) or "default"
     tools = _extract_tools(agent)
     tool_names = [tool.name for tool in tools]
     policy_set = build_policy_set(resolved_key, agent_name, tool_names)
-    enforcer = PolicyEnforcer(policy_set, agent_name=agent_name)
+    enforcer = PolicyEnforcer(
+        policy_set, agent_name=agent_name, audit_sender=audit_sender
+    )
 
     wrapped_tools = wrap_tools(tools, enforcer)
     cloned_agent = _clone_agent_with_tools(agent, wrapped_tools)

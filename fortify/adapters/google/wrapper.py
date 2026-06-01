@@ -34,12 +34,14 @@ def wrap_google_agent(agent: BaseAgent, *, api_key: str) -> BaseAgent:
     ``NEEDS_APPROVAL`` outcomes surface as ``[approval_required]``-prefixed
     strings in tool results; ``[policy_denied]`` for denials.
     """
-    audit.configure(api_key)
+    audit_sender = audit.configure(api_key)
 
     agent_name = getattr(agent, "name", "default")
     tools = list(getattr(agent, "tools", []) or [])
     tool_names = [getattr(t, "name", getattr(t, "__name__", "tool")) for t in tools]
     policy_set = build_policy_set(api_key, agent_name, tool_names)
-    enforcer = PolicyEnforcer(policy_set, agent_name=agent_name)
+    enforcer = PolicyEnforcer(
+        policy_set, agent_name=agent_name, audit_sender=audit_sender
+    )
     guarded_tools = wrap_tools(tools, enforcer)
     return agent.model_copy(update={"tools": guarded_tools})

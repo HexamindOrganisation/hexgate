@@ -29,23 +29,23 @@ class _CapturingSender:
 
 
 @pytest.fixture(autouse=True)
-def _reset_audit_sender() -> None:
-    audit_mod._audit_sender = None
+def _reset_audit_senders() -> None:
+    audit_mod._senders.clear()
     yield
-    audit_mod._audit_sender = None
+    audit_mod._senders.clear()
 
 
 def test_no_sender_means_no_emit() -> None:
-    enforcer = PolicyEnforcer(_StubEngine(), agent_name="r")
+    enforcer = PolicyEnforcer(_StubEngine(), agent_name="r")  # no audit_sender
     decision = enforcer.decide("read_file", {"path": "/x"})
     assert decision.outcome is DecisionOutcome.DENY
-    assert audit_mod.get_sender() is None
 
 
 def test_sender_no_user_emits_with_empty_envelope() -> None:
     sender = _CapturingSender()
-    audit_mod._audit_sender = sender
-    PolicyEnforcer(_StubEngine(), agent_name="r").decide("read_file", {})
+    PolicyEnforcer(_StubEngine(), agent_name="r", audit_sender=sender).decide(
+        "read_file", {}
+    )
     assert len(sender.events) == 1
     assert sender.events[0].user_id == ""
     assert sender.events[0].session_id == ""
@@ -53,8 +53,7 @@ def test_sender_no_user_emits_with_empty_envelope() -> None:
 
 async def test_sender_with_user_populates_envelope_from_user() -> None:
     sender = _CapturingSender()
-    audit_mod._audit_sender = sender
-    enforcer = PolicyEnforcer(_StubEngine(), agent_name="r")
+    enforcer = PolicyEnforcer(_StubEngine(), agent_name="r", audit_sender=sender)
     async with User(user_id="alice", role="analyst", session_id="sess_42"):
         decision = enforcer.decide("read_file", {})
     ev = sender.events[0]
@@ -66,8 +65,7 @@ async def test_sender_with_user_populates_envelope_from_user() -> None:
 
 async def test_user_session_id_none_normalizes_to_empty_string() -> None:
     sender = _CapturingSender()
-    audit_mod._audit_sender = sender
-    enforcer = PolicyEnforcer(_StubEngine(), agent_name="r")
+    enforcer = PolicyEnforcer(_StubEngine(), agent_name="r", audit_sender=sender)
     async with User(user_id="bob", role="reader"):  # session_id defaults to None
         enforcer.decide("read_file", {})
     ev = sender.events[0]
