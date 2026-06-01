@@ -2,6 +2,7 @@ import base64
 import logging
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
+from typing import Literal, Optional
 
 from clickhouse_connect.driver.exceptions import ClickHouseError, OperationalError
 from fastapi import (
@@ -18,7 +19,16 @@ from fastapi.middleware.cors import CORSMiddleware
 from models import Agent, AgentVersion
 from sqlmodel import Session
 
-from audit import AuditPayloadTooLarge, insert_decision
+from audit import (
+    NO_VALUE_LABEL,
+    WINDOW_HOURS,
+    AuditPayloadTooLarge,
+    bucket_minutes_for,
+    insert_decision,
+    list_decisions,
+    summarize,
+    timeseries,
+)
 from biscuits import (
     TokenError,
     TokenSignatureError,
@@ -34,6 +44,10 @@ from schemas import (
     AgentManifestView,
     AgentRead,
     AgentUpdate,
+    AuditDecisionPage,
+    AuditSummary,
+    AuditTimeseriesPoint,
+    AuditWindow,
     DecisionAccepted,
     DecisionEvent,
     PolicyValidationError,
@@ -576,6 +590,82 @@ def ingest_decision(
         )
 
     return DecisionAccepted(event_id=body.event_id)
+
+
+# Dashboard audit read path — project-scoped aggregation over policy_decision.
+# Unauthenticated POC posture, matching the other dashboard reads (/agents,
+# /tokens); the eventual gate is the read_audit scope (see below). All three
+# window off WINDOW_HOURS (bounded by the 90-day TTL); FastAPI 422s a bad window
+# via the AuditWindow Literal.
+#
+# TODO(auth): gate behind the read_audit scope once dashboard auth lands —
+# same future-auth hook the other /projects/{project_id} reads carry.
+@v1.get("/projects/{project_id}/audit/summary", response_model=AuditSummary)
+def api_audit_summary(
+    project_id: str,
+    window: AuditWindow = "24h",
+    clickhouse_client=Depends(require_clickhouse),
+) -> AuditSummary:
+    try:
+        data = summarize(
+            clickhouse_client, project_id=project_id, since_hours=WINDOW_HOURS[window]
+        )
+    except ClickHouseError:
+        raise _audit_unavailable()
+    return AuditSummary.model_validate(data)
+
+
+@v1.get(
+    "/projects/{project_id}/audit/timeseries",
+    response_model=list[AuditTimeseriesPoint],
+)
+def api_audit_timeseries(
+    project_id: str,
+    window: AuditWindow = "24h",
+    clickhouse_client=Depends(require_clickhouse),
+) -> list[AuditTimeseriesPoint]:
+    try:
+        return timeseries(
+            clickhouse_client,
+            project_id=project_id,
+            since_hours=WINDOW_HOURS[window],
+            bucket_minutes=bucket_minutes_for(window),
+        )
+    except ClickHouseError:
+        raise _audit_unavailable()
+
+
+@v1.get(
+    "/projects/{project_id}/audit/decisions",
+    response_model=AuditDecisionPage,
+)
+def api_audit_decisions(
+    project_id: str,
+    window: AuditWindow = "24h",
+    agent: Optional[str] = None,
+    role: Optional[str] = None,
+    outcome: Optional[Literal["allow", "deny", "needs_approval"]] = None,
+    limit: int = 25,
+    offset: int = 0,
+    clickhouse_client=Depends(require_clickhouse),
+) -> AuditDecisionPage:
+    # NO_VALUE_LABEL is the breakdown label for an empty role; translate it back
+    # to "" so drill-down on the "(none)" bucket filters real no-role rows.
+    role_filter = "" if role == NO_VALUE_LABEL else role
+    try:
+        page = list_decisions(
+            clickhouse_client,
+            project_id=project_id,
+            since_hours=WINDOW_HOURS[window],
+            agent=agent,
+            role=role_filter,
+            outcome=outcome,
+            limit=max(1, min(limit, 200)),
+            offset=max(0, offset),
+        )
+    except ClickHouseError:
+        raise _audit_unavailable()
+    return page
 
 
 @v1.websocket("/projects/{project_id}/serve")
