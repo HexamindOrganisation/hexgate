@@ -711,6 +711,20 @@ v1.include_router(
     prefix="/auth",
     tags=["auth"],
 )
+# Phase 3b — email verification (POST /auth/request-verify-token + /auth/verify)
+# and password reset (POST /auth/forgot-password + /auth/reset-password). Both
+# routers use the UserManager email hooks (on_after_request_verify +
+# on_after_forgot_password) to send the magic-link tokens through the mailer.
+v1.include_router(
+    fastapi_users.get_verify_router(UserRead),
+    prefix="/auth",
+    tags=["auth"],
+)
+v1.include_router(
+    fastapi_users.get_reset_password_router(),
+    prefix="/auth",
+    tags=["auth"],
+)
 v1.include_router(
     fastapi_users.get_users_router(UserRead, UserUpdate),
     prefix="/users",

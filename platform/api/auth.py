@@ -36,6 +36,7 @@ from fastapi_users.db import SQLAlchemyUserDatabase
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from db import get_session
+from mailer import get_email_sender
 from models import User
 
 logger = logging.getLogger("fortify.platform.auth")
@@ -131,9 +132,11 @@ class UserManager(BaseUserManager[User, str]):
     ) -> None:
         """Hook after a successful ``POST /v1/auth/register``.
 
-        Phase 3b will send a verification email here. For now we just
-        log — operators can confirm registration succeeded by reading
-        the platform's stderr.
+        We don't auto-send a verification email here — registering and
+        verifying are deliberately separate so the dashboard can decide
+        whether to gate destructive actions on ``is_verified`` and call
+        ``POST /auth/request-verify-token`` at its own moment. The hook
+        stays for logging + future Slack-style 'someone joined' webhooks.
         """
         logger.info("user registered: %s (id=%s)", user.email, user.id)
 
@@ -142,20 +145,45 @@ class UserManager(BaseUserManager[User, str]):
     ) -> None:
         """Hook when a password reset is requested.
 
-        Phase 3b sends a real email; for now print the token to stderr
-        so dev can copy the link and exercise the reset flow without
-        SMTP set up.
+        Sends a magic-link email containing ``token`` so the recipient
+        can call ``POST /auth/reset-password`` with it. The link URL is
+        the dashboard's job to render — the platform only mints + mails
+        the token. Dev mode prints the email to stderr via
+        :class:`StderrEmailSender`; production swaps in a real provider.
         """
-        logger.info(
-            "password reset requested for %s — token: %s", user.email, token
+        body = (
+            f"Hi {user.email},\n\n"
+            f"Someone requested a password reset for your HexaGate account.\n"
+            f"If that was you, use this token at the reset form within the\n"
+            f"next hour:\n\n"
+            f"    {token}\n\n"
+            f"If it wasn't you, ignore this email — your password stays put.\n"
+        )
+        await get_email_sender().send(
+            to=user.email,
+            subject="Reset your HexaGate password",
+            body=body,
         )
 
     async def on_after_request_verify(
         self, user: User, token: str, request: Request | None = None
     ) -> None:
-        """Hook when a verification email is requested. Same shape as above."""
-        logger.info(
-            "verification requested for %s — token: %s", user.email, token
+        """Hook when a verification email is requested.
+
+        Same shape as the reset flow: mints a token, hands the dashboard
+        the bytes via email, ``POST /auth/verify`` consumes it.
+        """
+        body = (
+            f"Hi {user.email},\n\n"
+            f"Welcome to HexaGate. Use this token to verify the account:\n\n"
+            f"    {token}\n\n"
+            f"Unverified accounts can sign in but won't be able to invite\n"
+            f"teammates or mint API tokens until verification completes.\n"
+        )
+        await get_email_sender().send(
+            to=user.email,
+            subject="Verify your HexaGate account",
+            body=body,
         )
 
 
