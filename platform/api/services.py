@@ -1,22 +1,54 @@
 import hashlib
 import json
 import logging
+import os
 import secrets
 from typing import Callable
 
 from sqlalchemy import func
 from sqlmodel import Session, select
 
-from models import Agent, AgentVersion, DevToken, Project, Tool
+from models import (
+    Agent,
+    AgentVersion,
+    DevToken,
+    Organization,
+    OrganizationMember,
+    Project,
+    Tool,
+    User,
+)
 from schemas import AgentManifest, ToolDefinition
 from biscuits import MintRequest, make_envelope, mint_token
 from seeds import DEFAULT_AGENT_NAME, SEED_AGENTS
 
 logger = logging.getLogger("fortify.platform.services")
 
-DEFAULT_PROJECT_ID = "support-bot"
+# Triple-default seed identity (M3). Fixed UUIDs so every fresh dev DB
+# produces identical rows — tests and integration scripts can reference
+# these constants directly instead of looking up by name.
+#
+# Production (hosted HexaGate) sets FORTIFY_SEED=skip to start with a
+# truly empty DB. Self-hosters and `make platform-api` get a working
+# install on first boot without any setup.
+DEFAULT_ORG_ID = "00000000-0000-0000-0000-000000000001"
+DEFAULT_ORG_SLUG = "default"
+DEFAULT_ORG_NAME = "Default Organization"
+
+DEFAULT_USER_ID = "00000000-0000-0000-0000-000000000002"
+DEFAULT_USER_EMAIL = "admin@hexagate.local"
+
+DEFAULT_PROJECT_ID = "00000000-0000-0000-0000-000000000003"
 DEFAULT_PROJECT_NAME = "support-bot"
+
+DEFAULT_MEMBERSHIP_ID = "00000000-0000-0000-0000-000000000004"
+
 PROTECTED_AGENT_NAMES = {DEFAULT_AGENT_NAME}
+
+
+def _seed_disabled() -> bool:
+    """``FORTIFY_SEED=skip`` opts a deployment out of the triple-default."""
+    return os.environ.get("FORTIFY_SEED", "").strip().lower() == "skip"
 
 # Prefix map for human-readable row IDs (e.g. agt_a1b2c3…). Centralized here so
 # entropy / format changes happen in one place; class-keyed so a typo is a
@@ -34,17 +66,71 @@ def new_id(kind: type) -> str:
     return f"{_ID_PREFIXES[kind]}_{secrets.token_hex(6)}"
 
 
-def ensure_default_project(session: Session) -> Project:
+def ensure_default_seed(session: Session) -> Project | None:
+    """Idempotently create the triple-default: Org + User + Membership + Project + agents.
+
+    First-boot UX for self-hosters and `make platform-api`. Every step is
+    individually idempotent so calling this on an already-seeded DB is a
+    no-op — same shape `ensure_default_project` used to have, just broader.
+
+    Returns the default Project, or ``None`` when ``FORTIFY_SEED=skip``
+    is set (production hosted deployments). When skipped, callers must
+    handle the empty-DB case explicitly — there is no implicit project.
+    """
+    if _seed_disabled():
+        return None
+
+    # Org first — Project FKs to it, so it has to exist before the project.
+    org = session.get(Organization, DEFAULT_ORG_ID)
+    if org is None:
+        org = Organization(
+            id=DEFAULT_ORG_ID,
+            slug=DEFAULT_ORG_SLUG,
+            name=DEFAULT_ORG_NAME,
+        )
+        session.add(org)
+
+    # Default admin user. No password column yet (lands in Phase 3 with
+    # FastAPI Users); for the prototype phase, the row exists so tests
+    # and dev fixtures have a stable user_id to reference.
+    user = session.get(User, DEFAULT_USER_ID)
+    if user is None:
+        user = User(id=DEFAULT_USER_ID, email=DEFAULT_USER_EMAIL)
+        session.add(user)
+
+    # Owner membership wiring user → org. The unique constraint on
+    # (user_id, org_id) makes this safe to re-add on subsequent boots.
+    member = session.get(OrganizationMember, DEFAULT_MEMBERSHIP_ID)
+    if member is None:
+        member = OrganizationMember(
+            id=DEFAULT_MEMBERSHIP_ID,
+            user_id=DEFAULT_USER_ID,
+            org_id=DEFAULT_ORG_ID,
+            role="owner",
+        )
+        session.add(member)
+
     project = session.get(Project, DEFAULT_PROJECT_ID)
     if project is None:
-        project = Project(id=DEFAULT_PROJECT_ID, name=DEFAULT_PROJECT_NAME)
+        project = Project(
+            id=DEFAULT_PROJECT_ID,
+            org_id=DEFAULT_ORG_ID,
+            name=DEFAULT_PROJECT_NAME,
+        )
         session.add(project)
-        session.commit()
-        session.refresh(project)
+
+    session.commit()
+    session.refresh(project)
     # Always ensure seeded agents exist — idempotent, so existing projects
     # pick up the `default` guarantee on any subsequent boot.
     ensure_seeded_agents(session, project.id)
     return project
+
+
+# Back-compat alias for callers that still use the old name. New code uses
+# ``ensure_default_seed`` directly; this one-liner keeps existing imports
+# (main.py, tests) working without a renaming sweep this turn.
+ensure_default_project = ensure_default_seed
 
 
 def ensure_seeded_agents(session: Session, project_id: str) -> None:

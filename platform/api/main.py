@@ -13,8 +13,8 @@ from fastapi import (
     WebSocketDisconnect,
 )
 from fastapi.middleware.cors import CORSMiddleware
-from models import Agent, AgentVersion
-from sqlmodel import Session
+from models import Agent, AgentVersion, OrganizationMember, Project, User
+from sqlmodel import Session, select
 
 from biscuits import (
     TokenError,
@@ -148,6 +148,115 @@ def require_project(
     return token.project_id
 
 
+# ---------------------------------------------------------------------------
+# M3 Phase 2 — dashboard-user dependencies (auth-as-dev-header scaffolding)
+#
+# These are the human-facing equivalents of ``require_project``: they gate
+# routes by which org the active user belongs to. The "active user" today
+# comes from an ``X-Dev-User: <user_id>`` request header — a placeholder
+# that Phase 3 replaces with a real session cookie from FastAPI Users
+# without touching any caller of these dependencies.
+#
+# The two auth surfaces (dashboard humans vs SDK machines) stay separate
+# by design — see m3-platform-auth.md, "The dual-auth-surface insight".
+# ---------------------------------------------------------------------------
+
+
+def require_user(
+    x_dev_user: str | None = Header(default=None, alias="X-Dev-User"),
+    session: Session = Depends(get_session),
+) -> User:
+    """Resolve the active dashboard user from the ``X-Dev-User`` header.
+
+    Phase 2 scaffolding. Phase 3 swaps the header lookup for a cookie
+    session read but keeps the dependency's return shape (``User``)
+    identical — every route handler is unaffected by the swap.
+    """
+    if not x_dev_user:
+        raise HTTPException(
+            status_code=401, detail="missing X-Dev-User header"
+        )
+    user = session.get(User, x_dev_user)
+    if user is None:
+        raise HTTPException(
+            status_code=401, detail="unknown user"
+        )
+    return user
+
+
+def require_org_member(
+    project_id: str,
+    user: User = Depends(require_user),
+    session: Session = Depends(get_session),
+) -> User:
+    """Gate a project-scoped route on the active user's org membership.
+
+    Resolves the project's ``org_id``, then confirms the active user has
+    an ``OrganizationMember`` row for that org. Returns the ``User`` so
+    handlers can use it directly without a second lookup.
+
+    Status codes: ``404`` if the project doesn't exist (don't leak that
+    fact by 403'ing); ``403`` if the project exists but the user isn't
+    a member of its org.
+    """
+    project = session.get(Project, project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="project not found")
+    membership = session.exec(
+        select(OrganizationMember).where(
+            OrganizationMember.user_id == user.id,
+            OrganizationMember.org_id == project.org_id,
+        )
+    ).first()
+    if membership is None:
+        raise HTTPException(status_code=403, detail="not a member of this org")
+    return user
+
+
+def require_user_or_sdk_token(
+    project_id: str,
+    x_dev_user: str | None = Header(default=None, alias="X-Dev-User"),
+    authorization: str | None = Header(default=None),
+    session: Session = Depends(get_session),
+) -> None:
+    """Accept EITHER an SDK biscuit OR a dashboard user with org membership.
+
+    Used on routes both humans (via dashboard) and machines (via SDK)
+    legitimately hit — today that's ``GET /v1/projects/{p}/agents/{name}``,
+    which the SDK polls every turn for policy refresh and the dashboard
+    reads to render the agent editor.
+
+    Either path succeeds independently; the request is only rejected if
+    neither is present-and-valid.
+    """
+    # SDK path: Authorization header carries a biscuit. Validate it via
+    # the same signature + revocation gates the existing dependency uses.
+    if authorization:
+        optional_dev_token(authorization=authorization, session=session)
+        return
+
+    # Dashboard path: X-Dev-User + org membership.
+    if not x_dev_user:
+        raise HTTPException(
+            status_code=401,
+            detail="missing authentication (X-Dev-User or Bearer token)",
+        )
+    user = session.get(User, x_dev_user)
+    if user is None:
+        raise HTTPException(status_code=401, detail="unknown user")
+    project = session.get(Project, project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="project not found")
+    membership = session.exec(
+        select(OrganizationMember).where(
+            OrganizationMember.user_id == user.id,
+            OrganizationMember.org_id == project.org_id,
+        )
+    ).first()
+    if membership is None:
+        raise HTTPException(status_code=403, detail="not a member of this org")
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
     """Unversioned liveness probe."""
@@ -185,7 +294,11 @@ def well_known_keys() -> dict[str, object]:
     }
 
 
-@v1.get("/projects/{project_id}/tokens", response_model=list[TokenListItem])
+@v1.get(
+    "/projects/{project_id}/tokens",
+    response_model=list[TokenListItem],
+    dependencies=[Depends(require_org_member)],
+)
 def list_tokens(
     project_id: str, session: Session = Depends(get_session)
 ) -> list[TokenListItem]:
@@ -204,7 +317,10 @@ def list_tokens(
 
 
 @v1.post(
-    "/projects/{project_id}/tokens", response_model=TokenMintResponse, status_code=201
+    "/projects/{project_id}/tokens",
+    response_model=TokenMintResponse,
+    status_code=201,
+    dependencies=[Depends(require_org_member)],
 )
 def mint_token(
     project_id: str,
@@ -232,7 +348,11 @@ def mint_token(
     )
 
 
-@v1.delete("/projects/{project_id}/tokens/{token_id}", status_code=204)
+@v1.delete(
+    "/projects/{project_id}/tokens/{token_id}",
+    status_code=204,
+    dependencies=[Depends(require_org_member)],
+)
 def revoke_token(
     project_id: str,
     token_id: str,
@@ -266,7 +386,11 @@ def _agent_read(agent: Agent) -> AgentRead:
     )
 
 
-@v1.get("/projects/{project_id}/agents", response_model=list[AgentRead])
+@v1.get(
+    "/projects/{project_id}/agents",
+    response_model=list[AgentRead],
+    dependencies=[Depends(require_org_member)],
+)
 def api_list_agents(
     project_id: str, session: Session = Depends(get_session)
 ) -> list[AgentRead]:
@@ -301,6 +425,7 @@ def _build_agent_manifest_view(
 @v1.get(
     "/projects/{project_id}/agents/manifest",
     response_model=list[AgentManifestView],
+    dependencies=[Depends(require_org_member)],
 )
 def api_list_agent_manifests(
     project_id: str, session: Session = Depends(get_session)
@@ -319,14 +444,17 @@ def api_list_agent_manifests(
     ]
 
 
-@v1.get("/projects/{project_id}/agents/{name}", response_model=AgentRead)
+@v1.get(
+    "/projects/{project_id}/agents/{name}",
+    response_model=AgentRead,
+    dependencies=[Depends(require_user_or_sdk_token)],
+)
 def api_get_agent(
     project_id: str,
     name: str,
     response: Response,
     session: Session = Depends(get_session),
     if_none_match: str | None = Header(default=None, alias="If-None-Match"),
-    _auth: None = Depends(optional_dev_token),
 ) -> AgentRead | Response:
     """Return an agent's YAMLs + signed bundle.
 
@@ -359,7 +487,11 @@ def api_get_agent(
     return _agent_read(agent)
 
 
-@v1.put("/projects/{project_id}/agents/{name}", response_model=AgentRead)
+@v1.put(
+    "/projects/{project_id}/agents/{name}",
+    response_model=AgentRead,
+    dependencies=[Depends(require_org_member)],
+)
 def api_update_agent(
     project_id: str,
     name: str,
@@ -386,6 +518,7 @@ def api_update_agent(
 @v1.post(
     "/projects/{project_id}/agents/{name}/validate",
     response_model=ValidatePolicyResponse,
+    dependencies=[Depends(require_org_member)],
 )
 def api_validate_policy(
     project_id: str,  # noqa: ARG001 — routed by FastAPI, scope-checked by future auth
