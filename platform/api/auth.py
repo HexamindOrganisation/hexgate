@@ -21,11 +21,12 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
 import uuid
 from collections.abc import AsyncGenerator
 from typing import Any
 
-from fastapi import Depends, Request
+from fastapi import APIRouter, Depends, Request
 from fastapi_users import BaseUserManager, FastAPIUsers, schemas
 from fastapi_users.authentication import (
     AuthenticationBackend,
@@ -33,11 +34,12 @@ from fastapi_users.authentication import (
     JWTStrategy,
 )
 from fastapi_users.db import SQLAlchemyUserDatabase
+from httpx_oauth.clients.google import GoogleOAuth2
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from db import get_session
 from mailer import get_email_sender
-from models import User
+from models import OAuthAccount, User
 
 logger = logging.getLogger("fortify.platform.auth")
 
@@ -80,8 +82,11 @@ async def get_user_db(
 
     Same ``get_session`` every other route handler uses — one async
     session per request, scoped to the dependency-injection lifecycle.
+    Passes ``oauth_account_table=OAuthAccount`` so the adapter can write
+    OAuth links (Phase 3c) into the same DB transaction as the User
+    upsert during the OAuth callback flow.
     """
-    yield SQLAlchemyUserDatabase(session, User)
+    yield SQLAlchemyUserDatabase(session, User, OAuthAccount)
 
 
 def _session_secret() -> str:
@@ -242,3 +247,75 @@ current_active_user = fastapi_users.current_user(active=True)
 # ``require_user`` actually uses, so it can fall back to X-Dev-User
 # during the transition without a try/except.
 current_active_user_optional = fastapi_users.current_user(active=True, optional=True)
+
+
+# ---------------------------------------------------------------------------
+# Phase 3c — Google OAuth
+#
+# The OAuth router is mounted conditionally — only when the operator has
+# set FORTIFY_GOOGLE_CLIENT_ID + FORTIFY_GOOGLE_CLIENT_SECRET. That keeps
+# `make platform-api` working out of the box without any Google Cloud
+# Console setup, and turns OAuth on as a single env flip when ready.
+# ---------------------------------------------------------------------------
+
+
+def _oauth_state_secret() -> str:
+    """Derive the OAuth state-token signing secret from the keystore.
+
+    Same domain-separated SHA-256 trick as :func:`_session_secret`, with
+    a distinct prefix so the same keystore can't be exploited via
+    cross-purpose tokens. State tokens are short-lived (the lifetime of
+    one authorize/callback round trip) so rotation cost is essentially
+    zero — a key rotation invalidates any pending OAuth flows, which is
+    exactly what you'd want.
+    """
+    from main import keystore
+
+    return hashlib.sha256(
+        b"hexagate-oauth-state-v1:" + keystore._private_key_bytes()
+    ).hexdigest()
+
+
+def build_google_oauth_router() -> APIRouter | None:
+    """Return the Google OAuth router if env-configured, else ``None``.
+
+    Two endpoints get mounted:
+      * ``GET /authorize`` → returns the Google consent URL with a
+        state token the SDK / dashboard then redirects the user to.
+      * ``GET /callback``  → handles Google's redirect back, exchanges
+        the code for tokens, upserts the User + OAuthAccount, and
+        issues the same ``fortify_session`` cookie a password login
+        would have set.
+
+    ``associate_by_email=True``: if a Google account's email matches an
+    existing User (from email/password registration), link the OAuth
+    account onto that user instead of creating a duplicate row. Stops
+    "you already have an account" deadends on first Google sign-in for
+    users who used email/password earlier.
+
+    ``is_verified_by_default=True``: a user that successfully completed
+    Google OAuth has, by definition, a verified email — Google verified
+    it for us. Skip the platform's own verify-email step in that case.
+
+    Env vars are read at call time (not module import) so tests can
+    monkeypatch them before the lifespan triggers this builder.
+    """
+    client_id = os.environ.get("FORTIFY_GOOGLE_CLIENT_ID")
+    client_secret = os.environ.get("FORTIFY_GOOGLE_CLIENT_SECRET")
+    if not (client_id and client_secret):
+        return None
+    google_client = GoogleOAuth2(client_id, client_secret)
+    return fastapi_users.get_oauth_router(
+        google_client,
+        auth_backend,
+        _oauth_state_secret(),
+        associate_by_email=True,
+        is_verified_by_default=True,
+        # FastAPI Users defaults the CSRF cookie to ``secure=True`` (HTTPS
+        # only). That breaks ``make platform-api`` over localhost HTTP +
+        # tests over http://testserver — the browser sets the cookie but
+        # never sends it back on /callback, so state verification fails.
+        # Same trade-off as the session cookie: relaxed in dev, prod's
+        # HTTPS terminator flips it back via a future env knob.
+        csrf_token_cookie_secure=False,
+    )

@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from sqlalchemy import JSON, Column, LargeBinary
-from sqlmodel import Field, SQLModel, UniqueConstraint
+from sqlmodel import Field, Relationship, SQLModel, UniqueConstraint
 
 
 def utcnow() -> datetime:
@@ -84,6 +84,52 @@ class User(SQLModel, table=True):
     # unverified; production gates destructive actions until verified.
     is_verified: bool = Field(default=False)
     created_at: datetime = Field(default_factory=utcnow)
+
+    # Link to the provider rows (Google, GitHub, …) FastAPI Users uses to
+    # find a returning OAuth user. ``lazy="selectin"`` so every User
+    # fetch eagerly loads OAuth links via a second IN-clause query;
+    # ``"joined"`` would do it in one SQL but produce duplicate rows
+    # (one per OAuthAccount), which trips SQLAlchemy 2.0's "call
+    # .unique()" guard inside fastapi-users-db-sqlalchemy's select().
+    # selectin is the idiomatic load strategy for one-to-many.
+    oauth_accounts: list["OAuthAccount"] = Relationship(
+        sa_relationship_kwargs={"lazy": "selectin", "cascade": "all, delete-orphan"},
+    )
+
+
+class OAuthAccount(SQLModel, table=True):
+    """Links a User to a (provider, account_id) tuple from an OAuth login.
+
+    Created by FastAPI Users when an unknown Google account logs in
+    (Phase 3c). The same User can have multiple OAuthAccount rows
+    (Google + GitHub later); the unique constraint on
+    ``(oauth_name, account_id)`` stops the same Google account from
+    binding to two different Users.
+
+    Columns mirror FastAPI Users' ``SQLAlchemyBaseOAuthAccountTable``
+    protocol so :class:`SQLAlchemyUserDatabase` can read+write the
+    table directly when wired with ``oauth_account_table=OAuthAccount``.
+    """
+
+    __tablename__ = "oauth_account"
+    __table_args__ = (
+        UniqueConstraint(
+            "oauth_name", "account_id", name="uq_oauth_provider_account"
+        ),
+    )
+
+    id: str = Field(default_factory=new_uuid_str, primary_key=True)
+    user_id: str = Field(foreign_key="user.id", index=True)
+    oauth_name: str                                # "google" | "github" | ...
+    access_token: str
+    # Unix epoch seconds; can be None for providers that don't expire tokens.
+    expires_at: Optional[int] = None
+    refresh_token: Optional[str] = None
+    # Provider's stable user identifier (Google's ``sub`` claim, GitHub's
+    # numeric user id, etc.). Together with ``oauth_name`` it's the lookup
+    # key when a returning user lands on /callback.
+    account_id: str = Field(index=True)
+    account_email: str
 
 
 class OrganizationMember(SQLModel, table=True):
