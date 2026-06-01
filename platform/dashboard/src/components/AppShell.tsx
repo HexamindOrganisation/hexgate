@@ -1,17 +1,22 @@
-import { NavLink, Outlet } from 'react-router-dom'
+import { useNavigate, NavLink, Outlet } from 'react-router-dom'
 import {
-  LayoutDashboard,
-  Network,
-  MessageSquareCode,
-  ScrollText,
-  KeyRound,
-  Settings2,
-  Server,
-  Fingerprint,
-  Shield,
   FileCode,
+  Fingerprint,
+  KeyRound,
+  LayoutDashboard,
+  LogOut,
+  MessageSquareCode,
+  Network,
+  ScrollText,
+  Server,
+  Settings2,
+  Shield,
   ShieldCheck,
 } from 'lucide-react'
+
+import { Button } from '@/components/ui/button'
+import { VerifyEmailBanner } from '@/components/VerifyEmailBanner'
+import { useLogout, useUser } from '@/lib/auth'
 import { cn } from '@/lib/utils'
 
 const workspaceLinks = [
@@ -130,17 +135,53 @@ export function AppShell() {
               <span className="text-muted-foreground">production</span>
             </span>
           </div>
-          <div className="flex items-center gap-3 text-muted-foreground">
-            <span className="size-8 rounded-full bg-primary/20 text-primary grid place-items-center text-xs font-medium">
-              MG
-            </span>
-          </div>
+          <UserMenu />
         </header>
+
+        <VerifyEmailBanner />
 
         <main className="flex-1 overflow-y-auto px-8 py-6">
           <Outlet />
         </main>
       </div>
+    </div>
+  )
+}
+
+/** Top-right corner: shows the signed-in user's initial + a sign-out
+ * button. Phase 5 will replace this with a proper dropdown menu (and
+ * an org switcher next to it); for now a flat layout is enough. */
+function UserMenu() {
+  const { user } = useUser()
+  const logout = useLogout()
+  const navigate = useNavigate()
+
+  if (!user) return null
+
+  const initial = user.email.slice(0, 1).toUpperCase()
+
+  return (
+    <div className="flex items-center gap-3 text-muted-foreground">
+      <div className="flex items-center gap-2">
+        <span className="size-8 rounded-full bg-primary/20 text-primary grid place-items-center text-xs font-medium">
+          {initial}
+        </span>
+        <span className="hidden text-xs text-foreground sm:inline">
+          {user.email}
+        </span>
+      </div>
+      <Button
+        variant="ghost"
+        size="icon"
+        title="Sign out"
+        disabled={logout.isPending}
+        onClick={async () => {
+          await logout.mutateAsync().catch(() => undefined)
+          navigate('/sign-in', { replace: true })
+        }}
+      >
+        <LogOut className="h-4 w-4" />
+      </Button>
     </div>
   )
 }

@@ -37,7 +37,12 @@ DEFAULT_ORG_SLUG = "default"
 DEFAULT_ORG_NAME = "Default Organization"
 
 DEFAULT_USER_ID = "00000000-0000-0000-0000-000000000002"
-DEFAULT_USER_EMAIL = "admin@hexagate.local"
+# ``.local`` is a reserved TLD per RFC 6762 — pydantic's EmailStr (used in
+# fastapi-users' UserRead schema) rejects it, so /users/me crashes when the
+# admin's email goes through serialization. Use ``.dev`` (a real TLD Google
+# owns) so the email is syntactically valid while still clearly identifying
+# this as the default-seed admin, not a real mailbox.
+DEFAULT_USER_EMAIL = "admin@hexagate.dev"
 
 DEFAULT_PROJECT_ID = "00000000-0000-0000-0000-000000000003"
 DEFAULT_PROJECT_NAME = "support-bot"

@@ -107,6 +107,16 @@ def _session_secret() -> str:
 _SESSION_TTL_SECONDS = 7 * 24 * 3600  # 7 days; rolling refresh comes later
 
 
+def _dashboard_url() -> str:
+    """Base URL the verify/reset emails render their magic links against.
+
+    Env-overridable so production deployments can point at their hosted
+    dashboard while dev defaults to the Vite server on localhost:5173.
+    Trailing slash is stripped so f"{url}/path" always renders cleanly.
+    """
+    return os.environ.get("FORTIFY_DASHBOARD_URL", "http://localhost:5173").rstrip("/")
+
+
 class UserManager(BaseUserManager[User, str]):
     """User lifecycle hooks (register / login / password reset).
 
@@ -150,17 +160,18 @@ class UserManager(BaseUserManager[User, str]):
         """Hook when a password reset is requested.
 
         Sends a magic-link email containing ``token`` so the recipient
-        can call ``POST /auth/reset-password`` with it. The link URL is
-        the dashboard's job to render — the platform only mints + mails
-        the token. Dev mode prints the email to stderr via
-        :class:`StderrEmailSender`; production swaps in a real provider.
+        can land on the dashboard's reset form pre-loaded with it. The
+        link URL is rendered from ``FORTIFY_DASHBOARD_URL`` (defaults
+        to localhost:5173 for dev). Dev mode prints the email to stderr
+        via :class:`StderrEmailSender`; production swaps in a real
+        provider via :func:`mailer.set_email_sender`.
         """
+        link = f"{_dashboard_url()}/reset-password/{token}"
         body = (
             f"Hi {user.email},\n\n"
             f"Someone requested a password reset for your HexaGate account.\n"
-            f"If that was you, use this token at the reset form within the\n"
-            f"next hour:\n\n"
-            f"    {token}\n\n"
+            f"If that was you, use this link within the next hour:\n\n"
+            f"    {link}\n\n"
             f"If it wasn't you, ignore this email — your password stays put.\n"
         )
         await get_email_sender().send(
@@ -174,13 +185,15 @@ class UserManager(BaseUserManager[User, str]):
     ) -> None:
         """Hook when a verification email is requested.
 
-        Same shape as the reset flow: mints a token, hands the dashboard
-        the bytes via email, ``POST /auth/verify`` consumes it.
+        Same shape as the reset flow: mints a token, mails a dashboard
+        link that consumes it. ``FORTIFY_DASHBOARD_URL`` controls the
+        host.
         """
+        link = f"{_dashboard_url()}/verify-email/{token}"
         body = (
             f"Hi {user.email},\n\n"
-            f"Welcome to HexaGate. Use this token to verify the account:\n\n"
-            f"    {token}\n\n"
+            f"Welcome to HexaGate. Click this link to verify your email:\n\n"
+            f"    {link}\n\n"
             f"Unverified accounts can sign in but won't be able to invite\n"
             f"teammates or mint API tokens until verification completes.\n"
         )

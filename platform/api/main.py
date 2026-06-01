@@ -181,23 +181,40 @@ from auth import current_active_user_optional  # noqa: E402 — placed after  # 
 # the keystore is defined so auth.py's _session_secret() lazy-import works.
 
 
+def _dev_user_header_allowed() -> bool:
+    """Whether the ``X-Dev-User`` test-only auth seam is enabled.
+
+    Defaults to off — production servers MUST NOT accept this header,
+    since it bypasses the cookie/session check and trusts whatever
+    UUID the caller asserts. Tests opt in via ``conftest.py`` setting
+    ``FORTIFY_ALLOW_DEV_USER_HEADER=1`` in the environment.
+    """
+    import os
+
+    return (
+        os.environ.get("FORTIFY_ALLOW_DEV_USER_HEADER", "").strip().lower()
+        in {"1", "true", "yes", "on"}
+    )
+
+
 async def require_user(
     cookie_user: User | None = Depends(current_active_user_optional),
     x_dev_user: str | None = Header(default=None, alias="X-Dev-User"),
     session: AsyncSession = Depends(get_session),
 ) -> User:
-    """Resolve the active dashboard user, cookie-first, header-fallback.
+    """Resolve the active dashboard user via session cookie.
 
-    The cookie session (FastAPI Users) is the production path from
-    Phase 3a onward; ``X-Dev-User`` stays accepted during the
-    transition so the existing dashboard keeps working unchanged
-    until Phase 5 builds the real sign-in UI. The header path comes
-    out once the dashboard switches.
+    Cookie-first (production path). ``X-Dev-User`` is a TEST-ONLY
+    seam gated behind ``FORTIFY_ALLOW_DEV_USER_HEADER`` — the dashboard
+    no longer sends this header from Phase 3d onward; only the test
+    suite uses it, via the conftest that flips the env on. Production
+    deployments must leave the env unset (the default) so the header
+    is silently ignored.
     """
     if cookie_user is not None:
         return cookie_user
 
-    if x_dev_user:
+    if x_dev_user and _dev_user_header_allowed():
         user = await session.get(User, x_dev_user)
         if user is not None and user.is_active:
             return user
@@ -238,31 +255,54 @@ async def require_org_member(
 
 async def require_user_or_sdk_token(
     project_id: str,
+    cookie_user: User | None = Depends(current_active_user_optional),
     x_dev_user: str | None = Header(default=None, alias="X-Dev-User"),
     authorization: str | None = Header(default=None),
     session: AsyncSession = Depends(get_session),
 ) -> None:
-    """Accept EITHER an SDK biscuit OR a dashboard user with org membership.
+    """Accept EITHER an SDK biscuit OR a dashboard user (cookie or
+    test-only header) with org membership.
 
     Used on routes both humans (via dashboard) and machines (via SDK)
     legitimately hit — today that's ``GET /v1/projects/{p}/agents/{name}``,
     which the SDK polls every turn for policy refresh and the dashboard
-    reads to render the agent editor.
+    reads to render the agent editor (and the Playground page reads on
+    mount to surface available roles).
 
-    Either path succeeds independently; the request is only rejected if
-    neither is present-and-valid.
+    Any of the three paths succeeds independently; the request is only
+    rejected if none is present-and-valid.
     """
+    # Cookie path: signed-in dashboard user via FastAPI Users session.
+    # Phase 3d wired this — without it the Playground page 401s on the
+    # ``api.getAgent`` call, the global 401-redirect bounces to /sign-in,
+    # which then forwards a logged-in user back to / (the "homepage"
+    # symptom).
+    if cookie_user is not None:
+        project = await session.get(Project, project_id)
+        if project is None:
+            raise HTTPException(status_code=404, detail="project not found")
+        membership = (await session.exec(
+            select(OrganizationMember).where(
+                OrganizationMember.user_id == cookie_user.id,
+                OrganizationMember.org_id == project.org_id,
+            )
+        )).first()
+        if membership is None:
+            raise HTTPException(status_code=403, detail="not a member of this org")
+        return
+
     # SDK path: Authorization header carries a biscuit. Validate it via
     # the same signature + revocation gates the existing dependency uses.
     if authorization:
         await _validate_sdk_token(authorization, session)
         return
 
-    # Dashboard path: X-Dev-User + org membership.
-    if not x_dev_user:
+    # Test-only path: X-Dev-User + org membership. Same env gate as
+    # require_user — production rejects the header (default-off).
+    if not (x_dev_user and _dev_user_header_allowed()):
         raise HTTPException(
             status_code=401,
-            detail="missing authentication (X-Dev-User or Bearer token)",
+            detail="missing authentication (cookie or Bearer token)",
         )
     user = await session.get(User, x_dev_user)
     if user is None:
