@@ -6,7 +6,8 @@ import secrets
 from typing import Callable
 
 from sqlalchemy import func
-from sqlmodel import Session, select
+from sqlmodel import select
+from sqlmodel.ext.asyncio.session import AsyncSession
 
 from models import (
     Agent,
@@ -50,6 +51,7 @@ def _seed_disabled() -> bool:
     """``FORTIFY_SEED=skip`` opts a deployment out of the triple-default."""
     return os.environ.get("FORTIFY_SEED", "").strip().lower() == "skip"
 
+
 # Prefix map for human-readable row IDs (e.g. agt_a1b2c3…). Centralized here so
 # entropy / format changes happen in one place; class-keyed so a typo is a
 # NameError at import, not a runtime bug.
@@ -66,7 +68,7 @@ def new_id(kind: type) -> str:
     return f"{_ID_PREFIXES[kind]}_{secrets.token_hex(6)}"
 
 
-def ensure_default_seed(session: Session) -> Project | None:
+async def ensure_default_seed(session: AsyncSession) -> Project | None:
     """Idempotently create the triple-default: Org + User + Membership + Project + agents.
 
     First-boot UX for self-hosters and `make platform-api`. Every step is
@@ -81,7 +83,7 @@ def ensure_default_seed(session: Session) -> Project | None:
         return None
 
     # Org first — Project FKs to it, so it has to exist before the project.
-    org = session.get(Organization, DEFAULT_ORG_ID)
+    org = await session.get(Organization, DEFAULT_ORG_ID)
     if org is None:
         org = Organization(
             id=DEFAULT_ORG_ID,
@@ -93,14 +95,14 @@ def ensure_default_seed(session: Session) -> Project | None:
     # Default admin user. No password column yet (lands in Phase 3 with
     # FastAPI Users); for the prototype phase, the row exists so tests
     # and dev fixtures have a stable user_id to reference.
-    user = session.get(User, DEFAULT_USER_ID)
+    user = await session.get(User, DEFAULT_USER_ID)
     if user is None:
         user = User(id=DEFAULT_USER_ID, email=DEFAULT_USER_EMAIL)
         session.add(user)
 
     # Owner membership wiring user → org. The unique constraint on
     # (user_id, org_id) makes this safe to re-add on subsequent boots.
-    member = session.get(OrganizationMember, DEFAULT_MEMBERSHIP_ID)
+    member = await session.get(OrganizationMember, DEFAULT_MEMBERSHIP_ID)
     if member is None:
         member = OrganizationMember(
             id=DEFAULT_MEMBERSHIP_ID,
@@ -110,7 +112,7 @@ def ensure_default_seed(session: Session) -> Project | None:
         )
         session.add(member)
 
-    project = session.get(Project, DEFAULT_PROJECT_ID)
+    project = await session.get(Project, DEFAULT_PROJECT_ID)
     if project is None:
         project = Project(
             id=DEFAULT_PROJECT_ID,
@@ -119,11 +121,11 @@ def ensure_default_seed(session: Session) -> Project | None:
         )
         session.add(project)
 
-    session.commit()
-    session.refresh(project)
+    await session.commit()
+    await session.refresh(project)
     # Always ensure seeded agents exist — idempotent, so existing projects
     # pick up the `default` guarantee on any subsequent boot.
-    ensure_seeded_agents(session, project.id)
+    await ensure_seeded_agents(session, project.id)
     return project
 
 
@@ -133,9 +135,9 @@ def ensure_default_seed(session: Session) -> Project | None:
 ensure_default_project = ensure_default_seed
 
 
-def ensure_seeded_agents(session: Session, project_id: str) -> None:
+async def ensure_seeded_agents(session: AsyncSession, project_id: str) -> None:
     """Idempotently add any missing seeded agents to a project."""
-    existing = {a.name for a in list_agents(session, project_id)}
+    existing = {a.name for a in await list_agents(session, project_id)}
     added = False
     for seed in SEED_AGENTS:
         if seed["name"] in existing:
@@ -152,21 +154,23 @@ def ensure_seeded_agents(session: Session, project_id: str) -> None:
         )
         added = True
     if added:
-        session.commit()
+        await session.commit()
 
 
-def list_agents(session: Session, project_id: str) -> list[Agent]:
+async def list_agents(session: AsyncSession, project_id: str) -> list[Agent]:
     stmt = select(Agent).where(Agent.project_id == project_id).order_by(Agent.name)  # type: ignore[attr-defined]
-    return list(session.exec(stmt))
+    return list((await session.exec(stmt)).all())
 
 
-def get_agent(session: Session, project_id: str, name: str) -> Agent | None:
+async def get_agent(
+    session: AsyncSession, project_id: str, name: str
+) -> Agent | None:
     stmt = select(Agent).where(Agent.project_id == project_id, Agent.name == name)
-    return session.exec(stmt).first()
+    return (await session.exec(stmt)).first()
 
 
-def get_latest_agent_versions_map(
-    session: Session, agent_ids: list[str]
+async def get_latest_agent_versions_map(
+    session: AsyncSession, agent_ids: list[str]
 ) -> dict[str, AgentVersion]:
     """Return a map of {agent_id: latest AgentVersion}
     for a list of agent ids in a single query.
@@ -189,7 +193,7 @@ def get_latest_agent_versions_map(
         (AgentVersion.agent_id == max_version_per_agent.c.agent_id)
         & (AgentVersion.version == max_version_per_agent.c.max_version),
     )
-    return {version.agent_id: version for version in session.exec(statement)}
+    return {version.agent_id: version for version in (await session.exec(statement)).all()}
 
 
 def compile_bundle(
@@ -204,9 +208,11 @@ def compile_bundle(
     policy is malformed. A ``None`` return is not an error: the caller stores
     no bundle and the SDK falls back to the pydantic engine.
 
-    This shells out to ``opa`` (via the SDK), which blocks. It's safe here
-    because FastAPI runs sync route handlers in a worker thread, so the call
-    never touches the event loop.
+    Stays sync because it doesn't touch the DB — only shells out to ``opa``
+    via the SDK. Callers run it inside an async handler via the default
+    threadpool (``asyncio.to_thread``) if they need to keep the event loop
+    responsive during a long compile; for our tiny policies a direct call
+    is fine.
     """
     # Imported lazily so the platform still boots if the SDK / opa aren't
     # present — only save-time compilation needs them. build_signed_bundle
@@ -232,8 +238,8 @@ def compile_bundle(
     return bundle.wasm_bytes, bundle.manifest_bytes.decode("utf-8"), bundle.signature
 
 
-def update_agent(
-    session: Session,
+async def update_agent(
+    session: AsyncSession,
     project_id: str,
     name: str,
     *,
@@ -244,7 +250,7 @@ def update_agent(
 ) -> Agent | None:
     from datetime import datetime, timezone
 
-    agent = get_agent(session, project_id, name)
+    agent = await get_agent(session, project_id, name)
     if agent is None:
         return None
     if agent_yaml is not None:
@@ -268,12 +274,14 @@ def update_agent(
 
     agent.updated_at = datetime.now(timezone.utc)
     session.add(agent)
-    session.commit()
-    session.refresh(agent)
+    await session.commit()
+    await session.refresh(agent)
     return agent
 
 
-def backfill_bundles(session: Session, sign: Callable[[bytes], bytes]) -> int:
+async def backfill_bundles(
+    session: AsyncSession, sign: Callable[[bytes], bytes]
+) -> int:
     """Compile + sign a bundle for every agent that doesn't already have one.
 
     Seeded agents are inserted directly (``ensure_default_project`` builds
@@ -287,7 +295,8 @@ def backfill_bundles(session: Session, sign: Callable[[bytes], bytes]) -> int:
     bundle-less. Returns the number of agents backfilled.
     """
     count = 0
-    for agent in session.exec(select(Agent)).all():
+    agents = (await session.exec(select(Agent))).all()
+    for agent in agents:
         if agent.compiled_wasm is not None:
             continue
         bundle = compile_bundle(agent.policy_yaml, sign)
@@ -297,12 +306,12 @@ def backfill_bundles(session: Session, sign: Callable[[bytes], bytes]) -> int:
         session.add(agent)
         count += 1
     if count:
-        session.commit()
+        await session.commit()
     return count
 
 
-def mint_dev_token(
-    session: Session,
+async def mint_dev_token(
+    session: AsyncSession,
     project_id: str,
     name: str,
     scopes: list[str],
@@ -348,39 +357,45 @@ def mint_dev_token(
         scopes_csv=",".join(scopes),
     )
     session.add(token)
-    session.commit()
-    session.refresh(token)
+    await session.commit()
+    await session.refresh(token)
     return token, full_token
 
 
-def list_dev_tokens(session: Session, project_id: str) -> list[DevToken]:
+async def list_dev_tokens(
+    session: AsyncSession, project_id: str
+) -> list[DevToken]:
     stmt = (
         select(DevToken)
         .where(DevToken.project_id == project_id)
         .order_by(DevToken.created_at.desc())
     )  # type: ignore[attr-defined]
-    return list(session.exec(stmt))
+    return list((await session.exec(stmt)).all())
 
 
-def find_token_by_secret(session: Session, secret: str) -> DevToken | None:
+async def find_token_by_secret(
+    session: AsyncSession, secret: str
+) -> DevToken | None:
     """Look up a token by its full secret value. Updates last_used_at on hit."""
     from datetime import datetime, timezone
 
     stmt = select(DevToken).where(DevToken.secret == secret)
-    token = session.exec(stmt).first()
+    token = (await session.exec(stmt)).first()
     if token is not None:
         token.last_used_at = datetime.now(timezone.utc)
         session.add(token)
-        session.commit()
+        await session.commit()
     return token
 
 
-def delete_dev_token(session: Session, project_id: str, token_id: str) -> bool:
-    token = session.get(DevToken, token_id)
+async def delete_dev_token(
+    session: AsyncSession, project_id: str, token_id: str
+) -> bool:
+    token = await session.get(DevToken, token_id)
     if token is None or token.project_id != project_id:
         return False
-    session.delete(token)
-    session.commit()
+    await session.delete(token)
+    await session.commit()
     return True
 
 
@@ -395,7 +410,7 @@ def mask_secret(full: str) -> str:
     head = full[:12]
     body = full.rstrip("=")
     tail = body[-4:] if len(body) >= 4 else body
-    return f"{head}\u2026{tail}"
+    return f"{head}…{tail}"
 
 
 # --- Agent manifest registration --------------------------------------------
@@ -420,38 +435,38 @@ def compute_manifest_hash(manifest: AgentManifest) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
-def register_manifest(
-    session: Session,
+async def register_manifest(
+    session: AsyncSession,
     project_id: str,
     manifest: AgentManifest,
 ) -> tuple[AgentVersion, bool]:
     """Upsert an agent + version from an AgentManifest.
 
     Returns ``(version, created)`` where ``created`` is False if a version
-    with the same content_hash already existed under this agent \u2014 in which
+    with the same content_hash already existed under this agent — in which
     case nothing is written and the existing row is returned.
     """
     content_hash = compute_manifest_hash(manifest)
-    agent, agent_created = _get_or_create_agent(session, project_id, manifest.name)
+    agent, agent_created = await _get_or_create_agent(session, project_id, manifest.name)
 
     if not agent_created:
-        existing = _find_version_by_hash(session, agent.id, content_hash)
+        existing = await _find_version_by_hash(session, agent.id, content_hash)
         if existing is not None:
             return existing, False
 
-    next_version = 1 if agent_created else _next_version_number(session, agent.id)
-    version = _create_agent_version(
+    next_version = 1 if agent_created else await _next_version_number(session, agent.id)
+    version = await _create_agent_version(
         session, agent.id, manifest, content_hash, next_version
     )
-    _create_tools(session, version.id, manifest.tools)
+    await _create_tools(session, version.id, manifest.tools)
 
-    session.commit()
-    session.refresh(version)
+    await session.commit()
+    await session.refresh(version)
     return version, True
 
 
-def _get_or_create_agent(
-    session: Session, project_id: str, name: str
+async def _get_or_create_agent(
+    session: AsyncSession, project_id: str, name: str
 ) -> tuple[Agent, bool]:
     """Return the Agent for (project_id, name), creating it if missing.
 
@@ -459,7 +474,7 @@ def _get_or_create_agent(
     YAML-edited dashboard flow; code-defined agents leave them empty since the
     actual content lives on each AgentVersion.
     """
-    agent = get_agent(session, project_id, name)
+    agent = await get_agent(session, project_id, name)
     if agent is not None:
         return agent, False
     agent = Agent(
@@ -471,33 +486,33 @@ def _get_or_create_agent(
         system_md="",
     )
     session.add(agent)
-    session.flush()
+    await session.flush()
     return agent, True
 
 
-def _find_version_by_hash(
-    session: Session, agent_id: str, content_hash: str
+async def _find_version_by_hash(
+    session: AsyncSession, agent_id: str, content_hash: str
 ) -> AgentVersion | None:
     """Return the existing AgentVersion with this content_hash, if any."""
     stmt = select(AgentVersion).where(
         AgentVersion.agent_id == agent_id,
         AgentVersion.content_hash == content_hash,
     )
-    return session.exec(stmt).first()
+    return (await session.exec(stmt)).first()
 
 
-def _next_version_number(session: Session, agent_id: str) -> int:
+async def _next_version_number(session: AsyncSession, agent_id: str) -> int:
     """Return the next sequential version number for an agent."""
-    last = session.exec(
+    last = (await session.exec(
         select(AgentVersion)
         .where(AgentVersion.agent_id == agent_id)
         .order_by(AgentVersion.version.desc())  # type: ignore[attr-defined]
-    ).first()
+    )).first()
     return (last.version + 1) if last is not None else 1
 
 
-def _create_agent_version(
-    session: Session,
+async def _create_agent_version(
+    session: AsyncSession,
     agent_id: str,
     manifest: AgentManifest,
     content_hash: str,
@@ -513,12 +528,12 @@ def _create_agent_version(
         manifest=manifest.model_dump(mode="json"),
     )
     session.add(row)
-    session.flush()
+    await session.flush()
     return row
 
 
-def _create_tools(
-    session: Session,
+async def _create_tools(
+    session: AsyncSession,
     agent_version_id: str,
     tools: list[ToolDefinition],
 ) -> None:

@@ -14,10 +14,12 @@ return 403; missing-auth requests return 401.
 
 from __future__ import annotations
 
-import pytest
+import pytest_asyncio
 from fastapi.testclient import TestClient
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
-from sqlmodel import Session, SQLModel, create_engine
+from sqlmodel import SQLModel
+from sqlmodel.ext.asyncio.session import AsyncSession
 
 import main
 from main import app
@@ -46,29 +48,34 @@ _PROJECT_B_ID = "bbbbbbbb-0000-0000-0000-000000000003"
 _STRANGER_USER_ID = "cccccccc-0000-0000-0000-000000000002"
 
 
-@pytest.fixture
-def engine():
-    """In-memory SQLite engine with the schema + the triple-default seed."""
-    engine = create_engine(
-        "sqlite:///:memory:",
+@pytest_asyncio.fixture
+async def session_factory():
+    """In-memory async SQLite + factory, with schema + triple-default seed."""
+    engine = create_async_engine(
+        "sqlite+aiosqlite:///:memory:",
         connect_args={"check_same_thread": False},
         poolclass=StaticPool,
     )
-    SQLModel.metadata.create_all(engine)
-    with Session(engine) as bootstrap:
-        ensure_default_project(bootstrap)
-    return engine
+    async with engine.begin() as conn:
+        await conn.run_sync(SQLModel.metadata.create_all)
+    factory = async_sessionmaker(
+        engine, class_=AsyncSession, expire_on_commit=False
+    )
+    async with factory() as bootstrap:
+        await ensure_default_project(bootstrap)
+    yield factory
+    await engine.dispose()
 
 
-@pytest.fixture
-def two_tenants(engine) -> dict:
+@pytest_asyncio.fixture
+async def two_tenants(session_factory) -> dict:
     """Provision Org A + User A + Project A, and Org B + User B + Project B.
 
     Plus a stranger user that belongs to neither org — the third leg of
     the isolation test (logged-in but unauthorised). Returns a dict of
     the IDs for tests to reference.
     """
-    with Session(engine) as s:
+    async with session_factory() as s:
         # Org A
         s.add(Organization(id=_ORG_A_ID, slug="org-a", name="Org A"))
         s.add(User(id=_USER_A_ID, email="alice@a.local"))
@@ -94,7 +101,7 @@ def two_tenants(engine) -> dict:
         # Stranger — exists, belongs to neither.
         s.add(User(id=_STRANGER_USER_ID, email="stranger@nowhere.local"))
 
-        s.commit()
+        await s.commit()
 
     return {
         "org_a": _ORG_A_ID,
@@ -134,8 +141,8 @@ def _id_counter() -> int:
     return _counter["n"]
 
 
-@pytest.fixture
-def client(engine) -> TestClient:
+@pytest_asyncio.fixture
+async def client(session_factory) -> TestClient:
     """TestClient wired to the in-memory engine, no default header.
 
     Tests add the X-Dev-User header per-request so we can exercise the
@@ -143,8 +150,8 @@ def client(engine) -> TestClient:
     client three times.
     """
 
-    def override_session():
-        with Session(engine) as session:
+    async def override_session():
+        async with session_factory() as session:
             yield session
 
     app.dependency_overrides[main.get_session] = override_session
