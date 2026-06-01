@@ -3,24 +3,83 @@
 // org's project list once Phase 5 (org switcher + project list) lands.
 export const DEFAULT_PROJECT_ID = '00000000-0000-0000-0000-000000000003'
 
-// M3 Phase 2: the dashboard authenticates by sending the default seed user's
-// UUID as an X-Dev-User header. Phase 3 replaces this with a session cookie
-// issued by FastAPI Users after real sign-in; until then, every dashboard
-// request rides on the default-admin identity.
-const DEV_USER_ID = '00000000-0000-0000-0000-000000000002'
+/** Routes that are reachable without a session cookie — never redirect
+ * away from these on a 401, otherwise we'd bounce the sign-in form itself
+ * back to /sign-in in a loop when the user has bad credentials. */
+const PUBLIC_AUTH_PATHS = [
+  '/sign-in',
+  '/sign-up',
+  '/forgot-password',
+  '/reset-password',
+  '/verify-email',
+]
+
+/** Thrown by ``request`` when the backend returns 401, after the global
+ * "redirect to /sign-in" side-effect has fired. Tests assert against the
+ * error type; production code rarely catches it (the redirect already
+ * happened). */
+export class UnauthenticatedError extends Error {
+  constructor(message = 'not authenticated') {
+    super(message)
+    this.name = 'UnauthenticatedError'
+  }
+}
+
+/** Thrown for any non-2xx response other than 401 — carries the parsed
+ * detail when the backend returns one (FastAPI Users speaks JSON with
+ * a ``detail`` field). Fields are declared explicitly (not via TS
+ * constructor parameter properties) because the project's tsconfig
+ * enables ``erasableSyntaxOnly``. */
+export class ApiError extends Error {
+  readonly status: number
+  readonly detail: unknown
+
+  constructor(status: number, detail: unknown, message: string) {
+    super(message)
+    this.name = 'ApiError'
+    this.status = status
+    this.detail = detail
+  }
+}
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, {
     ...init,
+    // ``include`` so the fortify_session cookie rides on cross-origin
+    // dev (vite on 5173 → api on 8000) and on prod where the dashboard
+    // and API may live on different subdomains.
+    credentials: 'include',
     headers: {
       'Content-Type': 'application/json',
-      'X-Dev-User': DEV_USER_ID,
       ...(init?.headers ?? {}),
     },
   })
+  if (res.status === 401) {
+    // Single global redirect — every component that does a request gets
+    // sent to sign-in if their session expired. Public auth routes are
+    // exempt: a 401 there is just "wrong password", surface it normally.
+    const onAuthPage = PUBLIC_AUTH_PATHS.some((p) =>
+      window.location.pathname.startsWith(p),
+    )
+    if (!onAuthPage) {
+      window.location.href = '/sign-in'
+    }
+    throw new UnauthenticatedError()
+  }
   if (!res.ok) {
-    const body = await res.text().catch(() => '')
-    throw new Error(`${res.status} ${res.statusText}: ${body}`)
+    let detail: unknown
+    let bodyText = ''
+    try {
+      bodyText = await res.text()
+      detail = bodyText ? JSON.parse(bodyText) : null
+    } catch {
+      detail = bodyText
+    }
+    const message =
+      typeof detail === 'object' && detail !== null && 'detail' in detail
+        ? String((detail as { detail: unknown }).detail)
+        : `${res.status} ${res.statusText}`
+    throw new ApiError(res.status, detail, message)
   }
   if (res.status === 204) return undefined as T
   return (await res.json()) as T

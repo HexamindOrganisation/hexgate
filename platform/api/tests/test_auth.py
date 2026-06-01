@@ -22,7 +22,12 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 import main
 import mailer
 from main import app
-from services import DEFAULT_PROJECT_ID, DEFAULT_USER_ID, ensure_default_project
+from services import (
+    DEFAULT_PROJECT_ID,
+    DEFAULT_USER_EMAIL,
+    DEFAULT_USER_ID,
+    ensure_default_project,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -217,7 +222,7 @@ def test_me_returns_logged_in_user(client: TestClient) -> None:
 def test_project_route_accepts_cookie_auth(client: TestClient) -> None:
     """A logged-in user (via cookie) can read their org's project.
 
-    The default seed user (admin@hexagate.local) is a member of
+    The default seed user (admin@hexagate.dev) is a member of
     support-bot's org and gets verified=True / superuser=True on seed,
     so we can log in as them with the default-boot password.
     Generating that password fresh per test would require capturing
@@ -240,14 +245,130 @@ def test_project_route_accepts_cookie_auth(client: TestClient) -> None:
     assert "member" in r.json()["detail"].lower()
 
 
-def test_project_route_still_accepts_x_dev_user_header(client: TestClient) -> None:
-    """During the Phase 3a transition, X-Dev-User keeps working so the
-    existing dashboard doesn't break before Phase 5 swaps in cookie UI."""
+def test_project_route_accepts_x_dev_user_header_in_test_mode(
+    client: TestClient,
+) -> None:
+    """The conftest sets FORTIFY_ALLOW_DEV_USER_HEADER=1 for the whole
+    test session so existing tests can use X-Dev-User as a cheap
+    impersonation seam. Mirrors the production behaviour when an
+    operator explicitly opts in (e.g. for a staging environment)."""
     r = client.get(
         f"/v1/projects/{DEFAULT_PROJECT_ID}/agents",
         headers={"X-Dev-User": DEFAULT_USER_ID},
     )
     assert r.status_code == 200
+
+
+def test_dual_auth_route_accepts_cookie_session(
+    client: TestClient, session_factory
+) -> None:
+    """Regression for the "Playground reverts to homepage" bug.
+
+    The dual-auth route ``GET /v1/projects/{p}/agents/{name}`` must
+    accept a cookie session from a logged-in dashboard user — not just
+    SDK biscuits and the test-only X-Dev-User header. The Playground
+    page calls ``api.getAgent`` on mount; without cookie support here
+    the request 401s, the dashboard's global handler redirects to
+    /sign-in, and a still-logged-in user gets forwarded to / — which
+    looks like Playground "reverts to the homepage".
+
+    We register + log in a fresh user, add them to the default org
+    membership directly (skipping the not-yet-built invite flow), and
+    then hit the dual-auth route with NO X-Dev-User — only the session
+    cookie. Success ⇒ cookies are accepted.
+    """
+    import asyncio
+    import uuid
+
+    from models import OrganizationMember, User
+    from services import DEFAULT_ORG_ID
+
+    # Register + log in so the client carries the session cookie.
+    client.post(
+        "/v1/auth/register",
+        json={"email": "cookie-user@example.com", "password": "correcthorsebattery"},
+    )
+    r_login = client.post(
+        "/v1/auth/cookie/login",
+        data={
+            "username": "cookie-user@example.com",
+            "password": "correcthorsebattery",
+        },
+    )
+    assert r_login.status_code == 204
+
+    # Wire this user into the default org so the route's membership
+    # check passes.
+    async def _add_to_default_org():
+        async with session_factory() as s:
+            from sqlmodel import select
+
+            user = (
+                await s.exec(
+                    select(User).where(User.email == "cookie-user@example.com")
+                )
+            ).one()
+            s.add(
+                OrganizationMember(
+                    id=str(uuid.uuid4()),
+                    user_id=user.id,
+                    org_id=DEFAULT_ORG_ID,
+                    role="member",
+                )
+            )
+            await s.commit()
+
+    asyncio.get_event_loop().run_until_complete(_add_to_default_org())
+
+    # Hit the dual-auth route with NO X-Dev-User and NO Authorization —
+    # cookie auth alone must carry it through to 200.
+    r = client.get(
+        f"/v1/projects/{DEFAULT_PROJECT_ID}/agents/default",
+        headers={"X-Dev-User": ""},  # explicitly blank to defeat any fixture default
+    )
+    assert r.status_code == 200, r.text
+
+
+def test_default_admin_email_passes_pydantic_validation() -> None:
+    """Regression: ``DEFAULT_USER_EMAIL`` must pass pydantic's EmailStr.
+
+    fastapi-users' UserRead schema declares email as EmailStr, which
+    runs through email-validator. Reserved TLDs (``.local``, ``.test``,
+    ``.example``, ``.invalid``, ``.localhost``) get rejected — so a
+    seed admin with one of those emails crashes ``/v1/users/me`` on
+    serialization, and the dashboard's ``useUser()`` can never resolve.
+
+    This test catches that class of regression at CI time rather than
+    when a self-hoster first opens the dashboard. If the assertion
+    fails after a refactor, change DEFAULT_USER_EMAIL to a real TLD
+    (``.dev``, ``.io``, ``.com`` …).
+    """
+    from auth import UserRead
+
+    # Should not raise. The dummy values for the other fields don't
+    # matter — only the email goes through validation that depends on
+    # the runtime config.
+    UserRead(
+        id=DEFAULT_USER_ID,
+        email=DEFAULT_USER_EMAIL,
+        is_active=True,
+        is_superuser=True,
+        is_verified=True,
+    )
+
+
+def test_project_route_rejects_x_dev_user_in_production_mode(
+    client: TestClient, monkeypatch
+) -> None:
+    """X-Dev-User MUST be ignored when ``FORTIFY_ALLOW_DEV_USER_HEADER``
+    is unset (the production default). Anyone with a guessed User UUID
+    would otherwise impersonate that user, which would be a CVE."""
+    monkeypatch.delenv("FORTIFY_ALLOW_DEV_USER_HEADER", raising=False)
+    r = client.get(
+        f"/v1/projects/{DEFAULT_PROJECT_ID}/agents",
+        headers={"X-Dev-User": DEFAULT_USER_ID},
+    )
+    assert r.status_code == 401
 
 
 def test_inactive_user_cannot_authenticate_via_cookie(
