@@ -1,5 +1,7 @@
 # `fortify` Structure
 
+> ⚠️ Status: STALE — predates the multi-adapter + platform refactor. It still describes a small single-agent LangChain demo (`fortify/demo.py`, `fortify/setup.py`, two tools) that no longer reflects the codebase. Do not trust paths or flow here until refreshed.
+
 This document summarizes how `fortify` is structured, how the runtime flows, and what each file is responsible for.
 
 ## High-Level Shape
