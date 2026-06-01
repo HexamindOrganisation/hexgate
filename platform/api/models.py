@@ -156,6 +156,38 @@ class OrganizationMember(SQLModel, table=True):
     created_at: datetime = Field(default_factory=utcnow)
 
 
+class Invitation(SQLModel, table=True):
+    """Pending invite to join an Organization. M3 Phase 4.
+
+    The row's ``id`` doubles as the link token — emails embed
+    ``${dashboard_url}/invites/{id}/accept``, and the accept handler
+    looks the row up by id. Unguessable enough on its own (UUID v4);
+    rate-limit the accept endpoint anyway. ``revoked_at`` /
+    ``accepted_at`` are mutually exclusive terminal states; both null
+    means the invite is still pending.
+
+    The (email, org_id) pair is unique among NON-terminal rows — we
+    enforce that at the service layer rather than via a partial unique
+    index (which SQLite doesn't reliably support). A second invite to
+    the same email replaces the first.
+    """
+
+    id: str = Field(default_factory=new_uuid_str, primary_key=True)
+    org_id: str = Field(foreign_key="organization.id", index=True)
+    # Lowercase email at insertion time so accept-by-email matching is
+    # case-insensitive even on SQLite (no native CI collations).
+    email: str = Field(index=True)
+    # Role granted on accept. Validated against the role-permissions
+    # matrix in services.invite_to_org — caller can't escalate above
+    # their own role.
+    role: str
+    invited_by_user_id: str = Field(foreign_key="user.id")
+    expires_at: datetime
+    accepted_at: Optional[datetime] = None
+    revoked_at: Optional[datetime] = None
+    created_at: datetime = Field(default_factory=utcnow)
+
+
 # ---------------------------------------------------------------------------
 # Existing tables — Project gains an org_id FK so it inherits tenancy.
 # ---------------------------------------------------------------------------
