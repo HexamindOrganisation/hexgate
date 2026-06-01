@@ -694,6 +694,7 @@ dependencies = [
     { name = "fastapi-users", extra = ["sqlalchemy"] },
     { name = "fortify" },
     { name = "greenlet" },
+    { name = "httpx-oauth" },
     { name = "pydantic" },
     { name = "sqlmodel" },
     { name = "uvicorn", extra = ["standard"] },
@@ -716,6 +717,7 @@ requires-dist = [
     { name = "fastapi-users", extras = ["sqlalchemy"], specifier = ">=14.0" },
     { name = "fortify", editable = "../../" },
     { name = "greenlet", specifier = ">=3.0" },
+    { name = "httpx-oauth", specifier = ">=0.16" },
     { name = "pydantic", specifier = ">=2.9" },
     { name = "sqlmodel", specifier = ">=0.0.22" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.32" },
@@ -1070,6 +1072,18 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/b1/df/48c586a5fe32a0f01324ee087459e112ebb7224f646c0b5023f5e79e9956/httpx-0.28.1.tar.gz", hash = "sha256:75e98c5f16b0f35b567856f597f06ff2270a374470a5c2392242528e3e3e42fc", size = 141406, upload-time = "2024-12-06T15:37:23.222Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/2a/39/e50c7c3a983047577ee07d2a9e53faf5a69493943ec3f6a384bdc792deb2/httpx-0.28.1-py3-none-any.whl", hash = "sha256:d909fcccc110f8c7faf814ca82a9a4d816bc5a6dbfea25d6591d6985b8ba59ad", size = 73517, upload-time = "2024-12-06T15:37:21.509Z" },
+]
+
+[[package]]
+name = "httpx-oauth"
+version = "0.17.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "httpx" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/7f/91/8b9f58cbf6e8914577183731233e66d3e586f1397b23190f46a929206b96/httpx_oauth-0.17.0.tar.gz", hash = "sha256:d279997ea80e7fc6f713acc8ed0fcc07ec319bae939753a2579d1fb7a753167b", size = 124506, upload-time = "2026-05-13T14:47:08.744Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b5/23/db1df57aeb6b96ad6c2c3b84bf45d22fc3293949cee7c506cbd5aa1805a3/httpx_oauth-0.17.0-py3-none-any.whl", hash = "sha256:8098e48dfeb97d0f35a83aa7bfaf18d2e7dcd9f3962f19f60fc0ec939e5d6bd2", size = 38083, upload-time = "2026-05-13T14:47:07.659Z" },
 ]
 
 [[package]]

@@ -60,9 +60,15 @@ keystore = FileKeyStore()
 
 
 @asynccontextmanager
-async def lifespan(_: FastAPI):
+async def lifespan(app_: FastAPI):
     await init_db()
     keystore.ensure_keypair()
+    # OAuth router mounting waits on the keystore — its state-token
+    # secret is derived from the keystore's private key (see
+    # auth._oauth_state_secret). Doing this at module load would race
+    # the lifespan; the include here runs once at startup, before any
+    # request reaches the app.
+    _maybe_mount_oauth_routers()
     async with async_session_factory() as session:
         await ensure_default_project(session)
         # Backfill signed bundles for seeded agents so they're served via
@@ -698,6 +704,7 @@ from auth import (  # noqa: E402 — placed late so keystore is initialised
     UserRead,
     UserUpdate,
     auth_backend,
+    build_google_oauth_router,
     fastapi_users,
 )
 
@@ -730,6 +737,37 @@ v1.include_router(
     prefix="/users",
     tags=["users"],
 )
+
+def _maybe_mount_oauth_routers() -> None:
+    """Mount the Phase 3c OAuth router(s) iff env-configured.
+
+    Called from the lifespan once the keystore is initialised — its
+    private key derives the OAuth state-token secret. With no Google
+    credentials in env, this is a no-op and ``make platform-api``
+    works out of the box; flipping the two env vars and restarting
+    the server turns Google sign-in on. The router goes onto ``app``
+    directly (not ``v1``) so we don't double-include the rest of v1
+    that ``app.include_router(v1)`` below already mounted.
+    """
+    import sys
+
+    google_router = build_google_oauth_router()
+    if google_router is not None:
+        app.include_router(
+            google_router,
+            prefix="/v1/auth/google",
+            tags=["auth"],
+        )
+        print(
+            "[fortify] Google OAuth enabled (FORTIFY_GOOGLE_CLIENT_ID set)",
+            file=sys.stderr,
+        )
+    else:
+        print(
+            "[fortify] Google OAuth disabled — set FORTIFY_GOOGLE_CLIENT_ID "
+            "+ FORTIFY_GOOGLE_CLIENT_SECRET to enable",
+            file=sys.stderr,
+        )
 
 
 app.include_router(v1)
