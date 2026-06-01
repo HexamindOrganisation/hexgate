@@ -146,13 +146,31 @@ class UserManager(BaseUserManager[User, str]):
     ) -> None:
         """Hook after a successful ``POST /v1/auth/register``.
 
-        We don't auto-send a verification email here — registering and
-        verifying are deliberately separate so the dashboard can decide
-        whether to gate destructive actions on ``is_verified`` and call
-        ``POST /auth/request-verify-token`` at its own moment. The hook
-        stays for logging + future Slack-style 'someone joined' webhooks.
+        Two things happen on first registration:
+
+          1. Log it. Operators tail stderr for "user registered" lines
+             during demos; later this becomes a webhook.
+          2. **Atomically create a personal "default" Org owned by the
+             new user** so the dashboard never lands on an empty
+             "no orgs yet" state. The org's slug is derived from the
+             email prefix with collision fallback (see
+             :func:`services._generate_unique_org_slug`).
+
+        Verification stays separate — registering and verifying are
+        decoupled so the dashboard can gate destructive actions on
+        ``is_verified`` at its own moment and call
+        ``POST /auth/request-verify-token`` independently.
         """
+        from services import ensure_personal_default_org
+
         logger.info("user registered: %s (id=%s)", user.email, user.id)
+        # Reuse the active session the user_db is bound to — same
+        # transaction lineage as the User insert so any downstream
+        # failure rolls back together. ``ensure_personal_default_org``
+        # is idempotent so a retried registration after a transient
+        # error doesn't create duplicate default orgs.
+        session = self.user_db.session  # SQLAlchemyUserDatabase exposes this
+        await ensure_personal_default_org(session, user)
 
     async def on_after_forgot_password(
         self, user: User, token: str, request: Request | None = None
