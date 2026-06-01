@@ -52,6 +52,34 @@ def _seed_disabled() -> bool:
     return os.environ.get("FORTIFY_SEED", "").strip().lower() == "skip"
 
 
+def _announce_default_admin_credentials(email: str, password: str) -> None:
+    """Loud one-shot stderr print of the freshly-generated admin password.
+
+    Same posture as ``FileKeyStore._announce_first_run`` — operators
+    only see this once, ever; subsequent boots are silent. The password
+    is never logged again from anywhere in the codebase.
+    """
+    import sys
+
+    bar = "=" * 72
+    print(
+        f"\n{bar}\n"
+        f"FIRST-BOOT DEFAULT ADMIN CREDENTIALS\n"
+        f"   email:    {email}\n"
+        f"   password: {password}\n\n"
+        f"This is printed ONCE on first boot. Save it now — there is no\n"
+        f"second display. Sign in at the dashboard and rotate the password\n"
+        f"via your account settings as soon as you're in.\n"
+        f"\n"
+        f"Self-hosted deployments that don't want a default account at\n"
+        f"all should set FORTIFY_SEED=skip and POST /v1/auth/register\n"
+        f"to bootstrap their first user from scratch.\n"
+        f"{bar}\n",
+        file=sys.stderr,
+        flush=True,
+    )
+
+
 # Prefix map for human-readable row IDs (e.g. agt_a1b2c3…). Centralized here so
 # entropy / format changes happen in one place; class-keyed so a typo is a
 # NameError at import, not a runtime bug.
@@ -92,13 +120,31 @@ async def ensure_default_seed(session: AsyncSession) -> Project | None:
         )
         session.add(org)
 
-    # Default admin user. No password column yet (lands in Phase 3 with
-    # FastAPI Users); for the prototype phase, the row exists so tests
-    # and dev fixtures have a stable user_id to reference.
+    # Default admin user. M3 Phase 3a: first boot generates a fresh
+    # random password, hashes it via FastAPI Users' PasswordHelper, and
+    # prints the plaintext to stderr ONCE for the operator to copy. On
+    # every subsequent boot the row already exists → no print, no
+    # re-hash, no behaviour change. Production deployments that don't
+    # want a default account set FORTIFY_SEED=skip and create their
+    # first user via POST /v1/auth/register instead.
     user = await session.get(User, DEFAULT_USER_ID)
     if user is None:
-        user = User(id=DEFAULT_USER_ID, email=DEFAULT_USER_EMAIL)
+        from fastapi_users.password import PasswordHelper
+
+        password_plain = secrets.token_urlsafe(16)
+        hashed = PasswordHelper().hash(password_plain)
+        user = User(
+            id=DEFAULT_USER_ID,
+            email=DEFAULT_USER_EMAIL,
+            hashed_password=hashed,
+            is_active=True,
+            # Default seed user is auto-verified — no email flow runs at
+            # `make platform-api`. Real registered users start unverified.
+            is_verified=True,
+            is_superuser=True,
+        )
         session.add(user)
+        _announce_default_admin_credentials(DEFAULT_USER_EMAIL, password_plain)
 
     # Owner membership wiring user → org. The unique constraint on
     # (user_id, org_id) makes this safe to re-add on subsequent boots.

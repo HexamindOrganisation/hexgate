@@ -1,3 +1,4 @@
+import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -7,6 +8,19 @@ from sqlmodel import Field, SQLModel, UniqueConstraint
 
 def utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def new_uuid_str() -> str:
+    """Default factory for str-typed UUID primary keys.
+
+    UUID-format string so the value is content-addressable and
+    immutable across renames (the property we wanted for project IDs);
+    str-typed so the column maps to TEXT on SQLite and VARCHAR on
+    Postgres without a UUID column-type cascade. FastAPI Users'
+    SQLAlchemyUserDatabase is generic over the ID type, so this works
+    end-to-end without subclassing the library's UUID base class.
+    """
+    return str(uuid.uuid4())
 
 
 # ---------------------------------------------------------------------------
@@ -33,7 +47,7 @@ class Organization(SQLModel, table=True):
     access to anything inside this org.
     """
 
-    id: str = Field(primary_key=True)              # uuid
+    id: str = Field(default_factory=new_uuid_str, primary_key=True)
     # URL-safe stable identifier — used in human-facing URLs like
     # /orgs/{slug}/dashboard. Globally unique across the platform; mutable
     # (rarely — renaming the slug breaks bookmarks but that's the user's
@@ -46,13 +60,29 @@ class Organization(SQLModel, table=True):
 class User(SQLModel, table=True):
     """A person. One email, one account, many org memberships.
 
-    Auth-specific columns (hashed_password, is_verified, is_active,
-    is_superuser, oauth_accounts) come in Phase 3 when we wire FastAPI
-    Users — its ``SQLAlchemyBaseUserTableUUID`` extends this shape.
+    Columns mirror what FastAPI Users' ``SQLAlchemyBaseUserTable``
+    exposes — ``hashed_password`` / ``is_active`` / ``is_verified`` /
+    ``is_superuser`` are the protocol attributes its UserManager +
+    SQLAlchemyUserDatabase look up by name. We declare them directly
+    instead of inheriting the mixin so the column types stay aligned
+    with the rest of our SQLModel-based tables (str ID, no UUID mixin).
     """
 
-    id: str = Field(primary_key=True)              # uuid
+    id: str = Field(default_factory=new_uuid_str, primary_key=True)
     email: str = Field(index=True, unique=True)
+    # Bcrypt/argon2 digest of the password; empty for OAuth-only users
+    # who never set one (Phase 3c, Google sign-in). ``""`` not ``None``
+    # because FastAPI Users' protocol types this as ``str``.
+    hashed_password: str = Field(default="")
+    # Soft-disable a user without deleting the row. Inactive users can't log in
+    # but their projects + tokens stay intact for an admin to restore.
+    is_active: bool = Field(default=True)
+    # Platform-staff flag. No M3 routes check it yet; reserved for the
+    # eventual /admin/* surface (impersonation, cross-org diagnostics, etc.).
+    is_superuser: bool = Field(default=False)
+    # Email verified via the magic-link flow (Phase 3b). Created users start
+    # unverified; production gates destructive actions until verified.
+    is_verified: bool = Field(default=False)
     created_at: datetime = Field(default_factory=utcnow)
 
 
@@ -73,7 +103,7 @@ class OrganizationMember(SQLModel, table=True):
         UniqueConstraint("user_id", "org_id", name="uq_org_member"),
     )
 
-    id: str = Field(primary_key=True)              # surrogate uuid PK
+    id: str = Field(default_factory=new_uuid_str, primary_key=True)
     user_id: str = Field(foreign_key="user.id", index=True)
     org_id: str = Field(foreign_key="organization.id", index=True)
     role: str                                      # "owner" | "admin" | "member"

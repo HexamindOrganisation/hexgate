@@ -45,3 +45,14 @@ async def init_db() -> None:
     """
     async with engine.begin() as conn:
         await conn.run_sync(SQLModel.metadata.create_all)
+
+
+async def get_session():
+    """FastAPI dependency that yields a per-request async session.
+
+    Lives in ``db.py`` (not ``main.py``) so the auth layer can depend
+    on it without inducing a cycle through ``main``. Every route
+    handler in ``main.py`` continues to import it from here.
+    """
+    async with async_session_factory() as session:
+        yield session

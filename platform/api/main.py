@@ -23,7 +23,7 @@ from biscuits import (
     parse_envelope,
     verify_token,
 )
-from db import async_session_factory, init_db
+from db import async_session_factory, get_session, init_db
 from keystore import FileKeyStore
 from relay import registry
 from schemas import (
@@ -80,17 +80,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-
-async def get_session():
-    """Yield an ``AsyncSession`` bound to the platform's async engine.
-
-    Each request gets a fresh session; commit boundaries are explicit
-    inside service functions. The context manager ensures the session
-    is closed even when a route raises mid-handler.
-    """
-    async with async_session_factory() as session:
-        yield session
 
 
 async def _validate_sdk_token(
@@ -182,26 +171,34 @@ async def require_project(
 # ---------------------------------------------------------------------------
 
 
+from auth import current_active_user_optional  # noqa: E402 — placed after  # type: ignore[import]
+# the keystore is defined so auth.py's _session_secret() lazy-import works.
+
+
 async def require_user(
+    cookie_user: User | None = Depends(current_active_user_optional),
     x_dev_user: str | None = Header(default=None, alias="X-Dev-User"),
     session: AsyncSession = Depends(get_session),
 ) -> User:
-    """Resolve the active dashboard user from the ``X-Dev-User`` header.
+    """Resolve the active dashboard user, cookie-first, header-fallback.
 
-    Phase 2 scaffolding. Phase 3 swaps the header lookup for a cookie
-    session read but keeps the dependency's return shape (``User``)
-    identical — every route handler is unaffected by the swap.
+    The cookie session (FastAPI Users) is the production path from
+    Phase 3a onward; ``X-Dev-User`` stays accepted during the
+    transition so the existing dashboard keeps working unchanged
+    until Phase 5 builds the real sign-in UI. The header path comes
+    out once the dashboard switches.
     """
-    if not x_dev_user:
-        raise HTTPException(
-            status_code=401, detail="missing X-Dev-User header"
-        )
-    user = await session.get(User, x_dev_user)
-    if user is None:
-        raise HTTPException(
-            status_code=401, detail="unknown user"
-        )
-    return user
+    if cookie_user is not None:
+        return cookie_user
+
+    if x_dev_user:
+        user = await session.get(User, x_dev_user)
+        if user is not None and user.is_active:
+            return user
+
+    raise HTTPException(
+        status_code=401, detail="missing or invalid authentication"
+    )
 
 
 async def require_org_member(
@@ -685,6 +682,40 @@ async def ws_chat(websocket: WebSocket, project_id: str) -> None:
         pass
     finally:
         await registry.detach_chat(project_id, websocket)
+
+
+# ---------------------------------------------------------------------------
+# M3 Phase 3a — FastAPI Users routers
+#
+# Mounted under /v1/auth/* and /v1/users/* so they ride the same versioned
+# prefix as the rest of the API. The library provides one router per
+# concern; we include the cookie auth + register routers now and the
+# verify / reset-password / oauth routers in 3b / 3c.
+# ---------------------------------------------------------------------------
+
+from auth import (  # noqa: E402 — placed late so keystore is initialised
+    UserCreate,
+    UserRead,
+    UserUpdate,
+    auth_backend,
+    fastapi_users,
+)
+
+v1.include_router(
+    fastapi_users.get_auth_router(auth_backend),
+    prefix="/auth/cookie",
+    tags=["auth"],
+)
+v1.include_router(
+    fastapi_users.get_register_router(UserRead, UserCreate),
+    prefix="/auth",
+    tags=["auth"],
+)
+v1.include_router(
+    fastapi_users.get_users_router(UserRead, UserUpdate),
+    prefix="/users",
+    tags=["users"],
+)
 
 
 app.include_router(v1)
