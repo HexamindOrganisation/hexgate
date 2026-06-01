@@ -20,6 +20,7 @@ from sqlmodel import SQLModel
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 import main
+import mailer
 from main import app
 from services import DEFAULT_PROJECT_ID, DEFAULT_USER_ID, ensure_default_project
 
@@ -284,5 +285,202 @@ def test_inactive_user_cannot_authenticate_via_cookie(
     r = client.post(
         "/v1/auth/cookie/login",
         data={"username": "ghost@example.com", "password": "correcthorsebattery"},
+    )
+    assert r.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# Phase 3b — email verification + password reset
+#
+# The flows mint a single-use JWT, hand it to ``UserManager.on_after_*``,
+# which sends it through the mailer. Tests substitute a list-capturing
+# sender so they can read the token without an SMTP server set up.
+# ---------------------------------------------------------------------------
+
+
+class _CapturingSender:
+    """Mailer that pushes every email into a list, for tests."""
+
+    def __init__(self) -> None:
+        self.outbox: list[dict] = []
+
+    async def send(self, *, to: str, subject: str, body: str) -> None:
+        self.outbox.append({"to": to, "subject": subject, "body": body})
+
+
+@pytest_asyncio.fixture
+async def outbox():
+    """Replaces the module-level mailer with a capturing sender.
+
+    Yields the outbox list so tests can ``assert outbox[-1]["body"]
+    contains the token``. Restores the StderrEmailSender on teardown
+    so subsequent test modules aren't affected.
+    """
+    original = mailer.get_email_sender()
+    capturing = _CapturingSender()
+    mailer.set_email_sender(capturing)
+    yield capturing.outbox
+    mailer.set_email_sender(original)
+
+
+def _extract_token(body: str) -> str:
+    """Pull the token out of a mailed body — it's the only word that
+    fits the JWT shape (three dot-separated chunks, all base64url)."""
+    import re
+
+    match = re.search(r"\b[\w-]+\.[\w-]+\.[\w-]+\b", body)
+    assert match is not None, f"no JWT-shaped token in:\n{body}"
+    return match.group(0)
+
+
+# ---- /auth/request-verify-token + /auth/verify ---------------------------
+
+
+def test_request_verify_sends_email_to_registered_user(
+    client: TestClient, outbox: list[dict]
+) -> None:
+    """Newly-registered users start unverified; requesting verification
+    mails them a token via the configured sender."""
+    client.post(
+        "/v1/auth/register",
+        json={"email": "verify@example.com", "password": "correcthorsebattery"},
+    )
+    outbox.clear()  # ignore any post-register email
+
+    r = client.post(
+        "/v1/auth/request-verify-token",
+        json={"email": "verify@example.com"},
+    )
+    assert r.status_code == 202, r.text
+    assert len(outbox) == 1
+    msg = outbox[0]
+    assert msg["to"] == "verify@example.com"
+    assert "verify" in msg["subject"].lower()
+    # The token is the magic part — make sure it's in the body.
+    _extract_token(msg["body"])
+
+
+def test_request_verify_silent_for_unknown_email(
+    client: TestClient, outbox: list[dict]
+) -> None:
+    """Unknown email → 202 with no email sent.
+
+    The same opaque status code as the happy path means we don't leak
+    which emails are registered via this endpoint.
+    """
+    r = client.post(
+        "/v1/auth/request-verify-token",
+        json={"email": "nobody@example.com"},
+    )
+    assert r.status_code == 202
+    assert outbox == []
+
+
+def test_verify_with_valid_token_marks_user_verified(
+    client: TestClient, outbox: list[dict]
+) -> None:
+    """Posting the mailed token to /auth/verify flips is_verified True."""
+    client.post(
+        "/v1/auth/register",
+        json={"email": "newuser@example.com", "password": "correcthorsebattery"},
+    )
+    client.post(
+        "/v1/auth/request-verify-token",
+        json={"email": "newuser@example.com"},
+    )
+    token = _extract_token(outbox[-1]["body"])
+
+    r = client.post("/v1/auth/verify", json={"token": token})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["email"] == "newuser@example.com"
+    assert body["is_verified"] is True
+
+
+def test_verify_with_invalid_token_rejects(client: TestClient) -> None:
+    """A bogus token → 400 (VERIFY_USER_BAD_TOKEN)."""
+    r = client.post("/v1/auth/verify", json={"token": "totally.made.up"})
+    assert r.status_code == 400
+
+
+# ---- /auth/forgot-password + /auth/reset-password ------------------------
+
+
+def test_forgot_password_sends_reset_token_to_registered_user(
+    client: TestClient, outbox: list[dict]
+) -> None:
+    """The forgot-password flow mails a token the user can present to
+    /auth/reset-password to set a new password."""
+    client.post(
+        "/v1/auth/register",
+        json={"email": "reset@example.com", "password": "old-password-12"},
+    )
+    outbox.clear()
+
+    r = client.post(
+        "/v1/auth/forgot-password",
+        json={"email": "reset@example.com"},
+    )
+    assert r.status_code == 202, r.text
+    assert len(outbox) == 1
+    msg = outbox[0]
+    assert msg["to"] == "reset@example.com"
+    assert "reset" in msg["subject"].lower()
+    _extract_token(msg["body"])
+
+
+def test_forgot_password_silent_for_unknown_email(
+    client: TestClient, outbox: list[dict]
+) -> None:
+    """Same opaque 202 + no email sent. Stops the endpoint from leaking
+    which emails are registered."""
+    r = client.post(
+        "/v1/auth/forgot-password",
+        json={"email": "nobody@example.com"},
+    )
+    assert r.status_code == 202
+    assert outbox == []
+
+
+def test_reset_password_with_valid_token_changes_password(
+    client: TestClient, outbox: list[dict]
+) -> None:
+    """End-to-end: request → consume token → log in with the new password."""
+    client.post(
+        "/v1/auth/register",
+        json={"email": "rotator@example.com", "password": "before-rotation"},
+    )
+    client.post(
+        "/v1/auth/forgot-password",
+        json={"email": "rotator@example.com"},
+    )
+    token = _extract_token(outbox[-1]["body"])
+
+    r = client.post(
+        "/v1/auth/reset-password",
+        json={"token": token, "password": "after-rotation"},
+    )
+    assert r.status_code == 200, r.text
+
+    # Old password no longer works.
+    r_old = client.post(
+        "/v1/auth/cookie/login",
+        data={"username": "rotator@example.com", "password": "before-rotation"},
+    )
+    assert r_old.status_code == 400
+
+    # New password does.
+    r_new = client.post(
+        "/v1/auth/cookie/login",
+        data={"username": "rotator@example.com", "password": "after-rotation"},
+    )
+    assert r_new.status_code == 204
+
+
+def test_reset_password_with_invalid_token_rejects(client: TestClient) -> None:
+    """A bogus reset token → 400, no password change."""
+    r = client.post(
+        "/v1/auth/reset-password",
+        json={"token": "not.a.real-token", "password": "doesn't-matter"},
     )
     assert r.status_code == 400
