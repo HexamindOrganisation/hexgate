@@ -318,8 +318,13 @@ def test_get_agent_returns_etag_header_when_bundle_present() -> None:
     from fastapi.testclient import TestClient
     import main
 
-    with TestClient(main.app) as c:
-        r = c.get("/v1/projects/support-bot/agents/default")
+    # M3 Phase 2: routes require the X-Dev-User header. The default seed user
+    # is a member of support-bot's org, so baking it onto the client passes
+    # the require_user_or_sdk_token gate.
+    with TestClient(
+        main.app, headers={"X-Dev-User": services.DEFAULT_USER_ID}
+    ) as c:
+        r = c.get(f"/v1/projects/{services.DEFAULT_PROJECT_ID}/agents/default")
         assert r.status_code == 200
         etag = r.headers.get("etag")
         assert etag and etag.startswith('"') and etag.endswith('"')
@@ -336,12 +341,17 @@ def test_if_none_match_returns_304_when_unchanged() -> None:
     from fastapi.testclient import TestClient
     import main
 
-    with TestClient(main.app) as c:
-        r1 = c.get("/v1/projects/support-bot/agents/default")
+    # M3 Phase 2: routes require the X-Dev-User header. The default seed user
+    # is a member of support-bot's org, so baking it onto the client passes
+    # the require_user_or_sdk_token gate.
+    with TestClient(
+        main.app, headers={"X-Dev-User": services.DEFAULT_USER_ID}
+    ) as c:
+        r1 = c.get(f"/v1/projects/{services.DEFAULT_PROJECT_ID}/agents/default")
         etag = r1.headers["etag"]
 
         r2 = c.get(
-            "/v1/projects/support-bot/agents/default",
+            f"/v1/projects/{services.DEFAULT_PROJECT_ID}/agents/default",
             headers={"If-None-Match": etag},
         )
         assert r2.status_code == 304
@@ -356,9 +366,14 @@ def test_if_none_match_stale_etag_returns_fresh_200() -> None:
     from fastapi.testclient import TestClient
     import main
 
-    with TestClient(main.app) as c:
+    # M3 Phase 2: routes require the X-Dev-User header. The default seed user
+    # is a member of support-bot's org, so baking it onto the client passes
+    # the require_user_or_sdk_token gate.
+    with TestClient(
+        main.app, headers={"X-Dev-User": services.DEFAULT_USER_ID}
+    ) as c:
         r = c.get(
-            "/v1/projects/support-bot/agents/default",
+            f"/v1/projects/{services.DEFAULT_PROJECT_ID}/agents/default",
             headers={"If-None-Match": '"obviously-stale"'},
         )
         assert r.status_code == 200

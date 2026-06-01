@@ -21,7 +21,7 @@ from sqlmodel import Session, SQLModel, create_engine
 
 import main
 from main import app
-from services import DEFAULT_PROJECT_ID, ensure_default_project
+from services import DEFAULT_PROJECT_ID, DEFAULT_USER_ID, ensure_default_project
 
 
 @pytest.fixture
@@ -65,7 +65,10 @@ def client(engine, tmp_path) -> TestClient:
     with Session(engine) as bootstrap:
         ensure_default_project(bootstrap)
     try:
-        yield TestClient(app)
+        # Bake the dev-user header into every request so M3 Phase 2's
+        # require_org_member dependency lets these tests through. The
+        # default seed user is a member of support-bot's org.
+        yield TestClient(app, headers={"X-Dev-User": DEFAULT_USER_ID})
     finally:
         app.dependency_overrides.clear()
         main.keystore = original_keystore

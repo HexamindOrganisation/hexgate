@@ -1,10 +1,20 @@
-export const DEFAULT_PROJECT_ID = 'support-bot'
+// Matches services.DEFAULT_PROJECT_ID on the backend — the fixed UUID the
+// triple-default seed populates on first boot. Will be replaced by the active
+// org's project list once Phase 5 (org switcher + project list) lands.
+export const DEFAULT_PROJECT_ID = '00000000-0000-0000-0000-000000000003'
+
+// M3 Phase 2: the dashboard authenticates by sending the default seed user's
+// UUID as an X-Dev-User header. Phase 3 replaces this with a session cookie
+// issued by FastAPI Users after real sign-in; until then, every dashboard
+// request rides on the default-admin identity.
+const DEV_USER_ID = '00000000-0000-0000-0000-000000000002'
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, {
     ...init,
     headers: {
       'Content-Type': 'application/json',
+      'X-Dev-User': DEV_USER_ID,
       ...(init?.headers ?? {}),
     },
   })

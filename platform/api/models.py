@@ -9,8 +9,91 @@ def utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+# ---------------------------------------------------------------------------
+# Identity + tenancy (M3 — multi-tenant platform)
+#
+# Three tables make HexaGate multi-tenant: ``User`` (a person), ``Organization``
+# (a tenant — what customers see as their "workspace" or "team"), and
+# ``OrganizationMember`` (the many-to-many that grants a user access to an
+# org, with a role on the edge).
+#
+# Auth-specific columns on User (hashed_password, is_verified, OAuth accounts)
+# land later when we wire FastAPI Users. For v1 schema, identity = an email
+# we can correlate later; tenancy is the load-bearing structure that gates
+# access to every other table.
+# ---------------------------------------------------------------------------
+
+
+class Organization(SQLModel, table=True):
+    """A tenant. Customers see this as their workspace / team.
+
+    All other tenant-scoped data (Projects, Agents via projects, etc.) hangs
+    off ``Organization`` by FK. Tenant isolation is enforced at the API layer
+    by checking ``OrganizationMember`` for the active user before every
+    access to anything inside this org.
+    """
+
+    id: str = Field(primary_key=True)              # uuid
+    # URL-safe stable identifier — used in human-facing URLs like
+    # /orgs/{slug}/dashboard. Globally unique across the platform; mutable
+    # (rarely — renaming the slug breaks bookmarks but that's the user's
+    # call), but the immutable ``id`` is what every FK points at.
+    slug: str = Field(index=True, unique=True)
+    name: str
+    created_at: datetime = Field(default_factory=utcnow)
+
+
+class User(SQLModel, table=True):
+    """A person. One email, one account, many org memberships.
+
+    Auth-specific columns (hashed_password, is_verified, is_active,
+    is_superuser, oauth_accounts) come in Phase 3 when we wire FastAPI
+    Users — its ``SQLAlchemyBaseUserTableUUID`` extends this shape.
+    """
+
+    id: str = Field(primary_key=True)              # uuid
+    email: str = Field(index=True, unique=True)
+    created_at: datetime = Field(default_factory=utcnow)
+
+
+class OrganizationMember(SQLModel, table=True):
+    """User <-> Organization edge, with a role.
+
+    A user can belong to many orgs; an org can have many members. The
+    unique constraint on (user_id, org_id) enforces "at most one
+    membership per pair" — role changes update the existing row.
+
+    Role is a string (not an Enum) so we can add ``billing_admin`` /
+    ``read_only`` / etc. without an Alembic migration; validation happens
+    at the API layer.
+    """
+
+    __tablename__ = "organization_member"
+    __table_args__ = (
+        UniqueConstraint("user_id", "org_id", name="uq_org_member"),
+    )
+
+    id: str = Field(primary_key=True)              # surrogate uuid PK
+    user_id: str = Field(foreign_key="user.id", index=True)
+    org_id: str = Field(foreign_key="organization.id", index=True)
+    role: str                                      # "owner" | "admin" | "member"
+    created_at: datetime = Field(default_factory=utcnow)
+
+
+# ---------------------------------------------------------------------------
+# Existing tables — Project gains an org_id FK so it inherits tenancy.
+# ---------------------------------------------------------------------------
+
+
 class Project(SQLModel, table=True):
+    # UUID, immutable. Existing seed (``support-bot``) is reseeded with the
+    # fixed ``DEFAULT_PROJECT_ID`` UUID in seeds.py so dev environments stay
+    # reproducible across rebuilds.
     id: str = Field(primary_key=True)
+    # Project belongs to exactly one org. Tenant isolation is enforced by
+    # checking the active user's OrganizationMember row for this org_id
+    # before any access to project-scoped data.
+    org_id: str = Field(foreign_key="organization.id", index=True)
     name: str
     created_at: datetime = Field(default_factory=utcnow)
 
