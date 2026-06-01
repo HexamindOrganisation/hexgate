@@ -25,6 +25,11 @@ dependencies = [
     # the `opa` binary on PATH at runtime. Unpublished local SDK — resolved
     # via [tool.uv.sources] below until it's on an index.
     "fortify",
+    # M3 Phase 3 — user identity. Email/password registration + cookie
+    # sessions + (later) Google OAuth, all wired against our existing
+    # async SQLAlchemy stack via SQLAlchemyUserDatabase. The [sqlalchemy]
+    # extra pulls fastapi-users-db-sqlalchemy in.
+    "fastapi-users[sqlalchemy]>=14.0",
 ]
 
 [dependency-groups]
