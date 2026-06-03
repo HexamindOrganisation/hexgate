@@ -1,6 +1,7 @@
 import base64
 import hashlib
 from contextlib import asynccontextmanager
+from urllib.parse import unquote
 
 from fastapi import (
     APIRouter,
@@ -227,7 +228,13 @@ async def ws_require_project(
     bearer: str | None = None
     for sp in subprotocols:
         if sp.startswith("bearer."):
-            bearer = sp.removeprefix("bearer.")
+            # The CLI percent-encodes the envelope before placing it
+            # in the subprotocol — biscuit base64 has '=' padding,
+            # which RFC 7230 token grammar forbids. ``unquote`` is a
+            # no-op on un-encoded input, so tests that pass raw
+            # envelopes (TestClient doesn't enforce the grammar) keep
+            # working unchanged.
+            bearer = unquote(sp.removeprefix("bearer."))
             break
 
     if not bearer:
