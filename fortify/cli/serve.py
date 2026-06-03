@@ -1,18 +1,24 @@
 """Serve subcommand: bridge a local agent to the Fortify control plane.
 
-Connects to `ws://{API_URL}/v1/projects/{project_id}/serve`, receives chat
-messages sent by dashboard Playground tabs, runs the agent via the same
-`stream_agent` engine the terminal chat uses, and ships every normalized
-`StreamEvent` back over the socket.
+Connects to ``ws://{API_URL}/v1/serve`` and authenticates via the
+``bearer.<envelope>`` WebSocket subprotocol — the server derives the
+project from the bearer token (Phase 6, token-implicit project). The
+``fortify.v1`` marker subprotocol is offered alongside and must come
+back echoed on the accepted handshake; a missing echo means the
+platform is older than Phase 6 and we error out fast.
 
-Handles reconnection with exponential backoff so a backend bounce doesn't
-permanently break the connection.
+Receives chat messages sent by dashboard Playground tabs, runs the
+agent via the same ``stream_agent`` engine the terminal chat uses,
+and ships every normalized ``StreamEvent`` back over the socket.
+
+Handles reconnection with exponential backoff so a backend bounce
+doesn't permanently break the connection.
 
 When a payload includes ``user_attenuation`` metadata (the Playground's
-"Act as alice" affordance), the turn is wrapped in an ``async with User(...)``
-scope. The runtime then lazily attenuates the agent's bound FortifyClient
-token inside ``stream_agent`` — same code path a production dev's backend
-uses when serving a real user.
+"Act as alice" affordance), the turn is wrapped in an ``async with
+User(...)`` scope. The runtime then lazily attenuates the agent's
+bound FortifyClient token inside ``stream_agent`` — same code path a
+production dev's backend uses when serving a real user.
 """
 
 from __future__ import annotations
@@ -41,7 +47,7 @@ from fortify.cli._common import (
     load_agent_script,
 )
 from fortify.cli.state import ChatState
-from fortify.cloud.client import FortifyConfig, resolve_agent_name
+from fortify.cloud.client import FortifyConfig, FortifyError, resolve_agent_name
 from fortify.runtime import User
 
 logger = logging.getLogger(__name__)
@@ -49,6 +55,9 @@ logger = logging.getLogger(__name__)
 RECONNECT_BASE = 1.0
 RECONNECT_CAP = 15.0
 PING_INTERVAL = 20.0
+# Marker subprotocol the platform echoes back on a successful bearer
+# handshake (matches ``_WS_PROTOCOL_MARKER`` in platform/api/main.py).
+WS_PROTOCOL_MARKER = "fortify.v1"
 
 
 @dataclass
@@ -57,6 +66,10 @@ class ServeContext:
 
     runtime: AgentRuntime
     state: ChatState
+    # Bearer token used to build the WS subprotocol on each (re)connect.
+    # Carried on the context so reconnect loops don't need to rebuild
+    # the FortifyConfig on every retry.
+    api_key: str
 
 
 def _user_from_payload(attenuation: Any) -> User | None:
@@ -126,8 +139,24 @@ async def _handle_message(
 
 
 async def _serve_loop(context: ServeContext, url: str, console: Console) -> None:
-    """Receive loop for a single WebSocket session."""
-    async with connect(url, ping_interval=PING_INTERVAL) as ws:
+    """Receive loop for a single WebSocket session.
+
+    Auth is via the ``bearer.<envelope>`` subprotocol — the server reads
+    the token there, resolves the project, and rejects the handshake
+    with close code 4401 on any failure. The ``fortify.v1`` marker comes
+    back echoed; an absent echo means we're talking to a pre-Phase-6
+    platform and we bail out clean rather than running with no auth.
+    """
+    subprotocols = [f"bearer.{context.api_key}", WS_PROTOCOL_MARKER]
+    async with connect(
+        url, ping_interval=PING_INTERVAL, subprotocols=subprotocols
+    ) as ws:
+        if ws.subprotocol != WS_PROTOCOL_MARKER:
+            raise FortifyError(
+                f"platform did not negotiate the {WS_PROTOCOL_MARKER} "
+                "subprotocol — deployment may be running an older API. "
+                "Update the platform or pin to a matching fortify CLI."
+            )
         console.print(f"[green]connected[/] — relaying through {url}")
         await ws.send(
             json.dumps({"type": "hello", "agent": context.runtime.agent_name})
@@ -176,13 +205,22 @@ async def run_serve(runtime: AgentRuntime) -> None:
         ws_base = "ws://" + base.removeprefix("http://")
     else:
         ws_base = f"ws://{base}"
-    url = f"{ws_base}/v1/projects/{config.project_id}/serve"
+    # No ``project_id`` in the URL — the bearer subprotocol carries it.
+    url = f"{ws_base}/v1/serve"
 
-    context = ServeContext(runtime=runtime, state=ChatState())
+    context = ServeContext(
+        runtime=runtime, state=ChatState(), api_key=config.api_key
+    )
     backoff = RECONNECT_BASE
 
+    # ``project_id`` is best-effort display now (Phase 6); show a
+    # placeholder when the envelope didn't carry it. The token itself
+    # is the source of truth and the server logs the resolved project
+    # on its side.
+    project_display = config.project_id or "<from token>"
     console.print(
-        f"[bold]fortify-serve[/] agent=[cyan]{runtime.agent_name}[/] project=[cyan]{config.project_id}[/]"
+        f"[bold]fortify-serve[/] agent=[cyan]{runtime.agent_name}[/] "
+        f"project=[cyan]{project_display}[/]"
     )
     console.print("[dim]Ctrl+C to stop[/]")
 
