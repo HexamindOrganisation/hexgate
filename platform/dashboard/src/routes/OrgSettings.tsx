@@ -6,6 +6,8 @@ import { z } from 'zod'
 import { toast } from 'sonner'
 import { AlertTriangle, ArrowLeft } from 'lucide-react'
 
+import { Users } from 'lucide-react'
+
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
@@ -232,6 +234,25 @@ export function OrgSettingsPage() {
             </CardFooter>
           )}
         </form>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Members</CardTitle>
+          <CardDescription>
+            See who has access, invite teammates, change roles, or remove
+            members.
+          </CardDescription>
+        </CardHeader>
+        <CardFooter>
+          <Button
+            variant="outline"
+            onClick={() => navigate(`/orgs/${org.id}/members`)}
+          >
+            <Users className="h-4 w-4" />
+            Manage members
+          </Button>
+        </CardFooter>
       </Card>
 
       <Card className="border-destructive/40">

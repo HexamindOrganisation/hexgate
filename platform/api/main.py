@@ -1156,10 +1156,12 @@ async def api_remove_member(
 
 def _invitation_read(invitation: Invitation, inviter: User) -> InvitationRead:
     """Shape the (Invitation, inviter User) join into the dashboard
-    list row. Crucially does NOT include the invitation's id — that
-    would let an admin reading the list copy out the accept URL and
-    impersonate the invitee."""
+    list row. Includes the invitation id so the dashboard's Cancel
+    button has a row to address; the strict email-match guard on
+    ``POST /invites/{id}/accept`` keeps id exposure from being an
+    impersonation vector — see InvitationRead's docstring."""
     return InvitationRead(
+        id=invitation.id,
         email=invitation.email,
         role=invitation.role,
         invited_by_email=inviter.email,

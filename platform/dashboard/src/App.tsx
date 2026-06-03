@@ -7,6 +7,7 @@ import { AuditPage } from '@/routes/Audit'
 import { DashboardPage } from '@/routes/Dashboard'
 import { ForgotPasswordPage } from '@/routes/ForgotPassword'
 import { GraphPage } from '@/routes/Graph'
+import { OrgMembersPage } from '@/routes/OrgMembers'
 import { OrgSettingsPage } from '@/routes/OrgSettings'
 import { OrgsPage } from '@/routes/Orgs'
 import { PlaygroundPage } from '@/routes/Playground'
@@ -50,6 +51,7 @@ export default function App() {
           <Route path="tokens" element={<TokensPage />} />
           <Route path="orgs" element={<OrgsPage />} />
           <Route path="orgs/:orgId/settings" element={<OrgSettingsPage />} />
+          <Route path="orgs/:orgId/members" element={<OrgMembersPage />} />
           <Route path="settings" element={<SettingsPage />} />
         </Route>
       </Routes>
