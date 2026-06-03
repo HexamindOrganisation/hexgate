@@ -31,6 +31,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 from pydantic import ValidationError
 from rich.console import Console
@@ -146,8 +147,16 @@ async def _serve_loop(context: ServeContext, url: str, console: Console) -> None
     with close code 4401 on any failure. The ``fortify.v1`` marker comes
     back echoed; an absent echo means we're talking to a pre-Phase-6
     platform and we bail out clean rather than running with no auth.
+
+    The envelope is percent-encoded before being placed in the
+    subprotocol value — the biscuit's base64 payload ends with ``=``
+    padding, but WS subprotocols inherit the RFC 7230 token grammar
+    which doesn't allow ``=``. The server unquotes it back on the
+    other side; the grammar does allow ``%`` so percent-encoding
+    survives the handshake intact.
     """
-    subprotocols = [f"bearer.{context.api_key}", WS_PROTOCOL_MARKER]
+    bearer_value = quote(context.api_key, safe="")
+    subprotocols = [f"bearer.{bearer_value}", WS_PROTOCOL_MARKER]
     async with connect(
         url, ping_interval=PING_INTERVAL, subprotocols=subprotocols
     ) as ws:

@@ -241,6 +241,11 @@ async def test_serve_loop_offers_bearer_and_marker_subprotocols(
     handshake from a browser; we match the contract from native
     Python for consistency). Without the bearer subprotocol the
     server closes with 4401 before accept.
+
+    Real biscuit tokens end with ``=`` padding, which the RFC 7230
+    token grammar (inherited by WebSocket subprotocols) forbids. The
+    CLI percent-encodes the envelope before placing it in the
+    subprotocol value — exercised here with a key containing ``=``.
     """
     captured: dict[str, Any] = {}
 
@@ -252,18 +257,25 @@ async def test_serve_loop_offers_bearer_and_marker_subprotocols(
 
     monkeypatch.setattr(serve, "connect", fake_connect)
 
+    # Realistic shape: includes the ``=`` padding biscuit emits.
+    api_key = "fty_live_acme_AbCdEf123-_=="
     context = ServeContext(
         runtime=_FakeRuntime(),
         state=ChatState(),
-        api_key="fty_live_acme_secret",
+        api_key=api_key,
     )
     await serve._serve_loop(context, "ws://test/v1/serve", Console())
 
     assert captured["url"] == "ws://test/v1/serve"
+    # The bearer subprotocol carries the percent-encoded envelope:
+    # ``=`` → ``%3D`` (the only non-token char in URL-safe base64).
     assert captured["subprotocols"] == [
-        "bearer.fty_live_acme_secret",
+        "bearer.fty_live_acme_AbCdEf123-_%3D%3D",
         "fortify.v1",
     ]
+    # No ``=`` survives into the wire format — sanity check for
+    # anyone inspecting the subprotocol grammar.
+    assert "=" not in captured["subprotocols"][0]
     assert captured["ping_interval"] == serve.PING_INTERVAL
 
 
