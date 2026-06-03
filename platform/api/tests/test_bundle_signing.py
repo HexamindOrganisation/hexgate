@@ -330,7 +330,7 @@ def test_get_agent_returns_etag_header_when_bundle_present() -> None:
 
     # M3 Phase 2: routes require the X-Dev-User header. The default seed user
     # is a member of support-bot's org, so baking it onto the client passes
-    # the require_user_or_sdk_token gate.
+    # the require_org_member gate.
     with TestClient(
         main.app, headers={"X-Dev-User": services.DEFAULT_USER_ID}
     ) as c:
@@ -353,7 +353,7 @@ def test_if_none_match_returns_304_when_unchanged() -> None:
 
     # M3 Phase 2: routes require the X-Dev-User header. The default seed user
     # is a member of support-bot's org, so baking it onto the client passes
-    # the require_user_or_sdk_token gate.
+    # the require_org_member gate.
     with TestClient(
         main.app, headers={"X-Dev-User": services.DEFAULT_USER_ID}
     ) as c:
@@ -378,7 +378,7 @@ def test_if_none_match_stale_etag_returns_fresh_200() -> None:
 
     # M3 Phase 2: routes require the X-Dev-User header. The default seed user
     # is a member of support-bot's org, so baking it onto the client passes
-    # the require_user_or_sdk_token gate.
+    # the require_org_member gate.
     with TestClient(
         main.app, headers={"X-Dev-User": services.DEFAULT_USER_ID}
     ) as c:

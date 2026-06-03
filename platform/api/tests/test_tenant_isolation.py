@@ -226,12 +226,13 @@ def test_nonexistent_project_returns_404(
 
 
 # ---------------------------------------------------------------------------
-# Dual-auth route: GET /v1/projects/{p}/agents/{name}
-# Both the SDK (via biscuit) and the dashboard (via X-Dev-User) hit this.
+# Dashboard get-agent route: GET /v1/projects/{p}/agents/{name}
+# Cookie / X-Dev-User auth only; the SDK-facing bearer counterpart is at
+# GET /v1/agents/{name} and tested in test_agents.py (Phase 6 step 1).
 # ---------------------------------------------------------------------------
 
 
-def test_dual_auth_route_accepts_dashboard_user(
+def test_get_agent_accepts_dashboard_user(
     client: TestClient, two_tenants: dict
 ) -> None:
     """A dashboard request with X-Dev-User goes through the membership gate."""
@@ -242,10 +243,10 @@ def test_dual_auth_route_accepts_dashboard_user(
     assert r.status_code == 200
 
 
-def test_dual_auth_route_rejects_cross_tenant_dashboard_user(
+def test_get_agent_rejects_cross_tenant_dashboard_user(
     client: TestClient, two_tenants: dict
 ) -> None:
-    """Same gate fires on the dual-auth route — User A can't peek into Org B."""
+    """User A can't peek into Org B even with a valid dashboard session."""
     r = client.get(
         f"/v1/projects/{two_tenants['project_b']}/agents/default",
         headers={"X-Dev-User": two_tenants["user_a"]},
@@ -253,10 +254,10 @@ def test_dual_auth_route_rejects_cross_tenant_dashboard_user(
     assert r.status_code == 403
 
 
-def test_dual_auth_route_rejects_unauthenticated(
+def test_get_agent_rejects_unauthenticated(
     client: TestClient, two_tenants: dict
 ) -> None:
-    """No header AND no Bearer token → 401."""
+    """No cookie AND no X-Dev-User → 401."""
     r = client.get(f"/v1/projects/{two_tenants['project_a']}/agents/default")
     assert r.status_code == 401
 
