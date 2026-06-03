@@ -52,11 +52,18 @@ class FortifyError(RuntimeError):
 
 @dataclass
 class FortifyConfig:
-    """Resolved configuration for a Fortify client."""
+    """Resolved configuration for a Fortify client.
+
+    ``project_id`` is best-effort only — used by display surfaces
+    (log lines, langchain tags) but never threaded through API URLs.
+    The bearer token carries the authoritative project context;
+    server-side ``GET /v1/me/key`` is the canonical lookup if
+    something needs the resolved id at runtime.
+    """
 
     base_url: str
     api_key: str
-    project_id: str
+    project_id: str | None = field(default=None)
     public_key: bytes | None = field(default=None, repr=False)
 
     @classmethod
@@ -74,6 +81,12 @@ class FortifyConfig:
         it from ``/v1/.well-known/keys`` on first use. Pass it (or set
         ``FORTIFY_PUBLIC_KEY`` env var) when you want signature verification
         without a startup network round-trip, e.g. in CI or on cold boots.
+
+        ``project_id`` is also optional — when the key carries it in the
+        envelope prefix (``fty_<env>_<project>_<biscuit>``) we surface it
+        for display; when it can't be derived we return ``None`` and let
+        callers either ask the platform (``GET /v1/me/key``) or display
+        a placeholder. URLs never use it any more.
         """
         key = api_key or os.environ.get("FORTIFY_KEY")
         if not key:
@@ -85,17 +98,14 @@ class FortifyConfig:
             base_url or os.environ.get("FORTIFY_API_URL") or DEFAULT_BASE_URL
         ).rstrip("/")
 
+        # Display-only — never raises. A key whose envelope doesn't carry
+        # the project prefix is still usable; we just won't be able to
+        # show "project=..." until the server tells us.
         resolved_project = (
             project_id
             or os.environ.get("FORTIFY_PROJECT_ID")
             or _parse_project_from_key(key)
         )
-        if not resolved_project:
-            raise FortifyError(
-                "Unable to resolve project id — set FORTIFY_PROJECT_ID, pass "
-                "project_id=, or use a key that encodes the project "
-                "(fty_<env>_<project>_<secret>)"
-            )
 
         resolved_pub = public_key if public_key is not None else _public_key_from_env()
 
@@ -163,9 +173,12 @@ class FortifyClient:
         the now-paired etag.
         """
         self._ensure_key_verified()
-        url = (
-            f"{self.config.base_url}/v1/projects/{self.config.project_id}/agents/{name}"
-        )
+        # Token-implicit project: ``/v1/agents/{name}`` resolves the
+        # project from the bearer on the server side (Phase 6). The
+        # legacy ``/v1/projects/{id}/agents/{name}`` URL still works on
+        # the platform but only via cookie auth; we deliberately route
+        # the SDK through the new bearer-only route.
+        url = f"{self.config.base_url}/v1/agents/{name}"
         return self._raw_get(url, authorize=True, if_none_match=if_none_match)
 
     # ------------------------------------------------------------------
