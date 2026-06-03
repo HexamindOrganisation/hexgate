@@ -2,6 +2,7 @@ import { BrowserRouter, Route, Routes } from 'react-router-dom'
 
 import { AppShell } from '@/components/AppShell'
 import { ProtectedRoute } from '@/components/ProtectedRoute'
+import { AcceptInvitationPage } from '@/routes/AcceptInvitation'
 import { AgentsPage } from '@/routes/Agents'
 import { AuditPage } from '@/routes/Audit'
 import { DashboardPage } from '@/routes/Dashboard'
@@ -31,6 +32,18 @@ export default function App() {
         <Route path="/forgot-password" element={<ForgotPasswordPage />} />
         <Route path="/reset-password/:token" element={<ResetPasswordPage />} />
         <Route path="/verify-email/:token" element={<VerifyEmailPage />} />
+
+        {/* Public-but-auth-aware. The emailed magic-link lands here.
+            The page itself handles the "you need to sign in" branch
+            (it preserves the invite URL as ``state.from`` so SignIn
+            bounces back here after login) — putting it inside
+            ProtectedRoute would force the user to sign in BEFORE
+            seeing what they're being invited to, which is hostile to
+            the new-account-from-invite flow. */}
+        <Route
+          path="/invites/:inviteId/accept"
+          element={<AcceptInvitationPage />}
+        />
 
         {/* Authenticated dashboard. ProtectedRoute checks /v1/users/me
             and bounces signed-out visitors to /sign-in (preserving the
