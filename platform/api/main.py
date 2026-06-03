@@ -13,7 +13,14 @@ from fastapi import (
     WebSocketDisconnect,
 )
 from fastapi.middleware.cors import CORSMiddleware
-from models import Agent, AgentVersion, OrganizationMember, Project, User
+from models import (
+    Agent,
+    AgentVersion,
+    Organization,
+    OrganizationMember,
+    Project,
+    User,
+)
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -31,6 +38,10 @@ from schemas import (
     AgentManifestView,
     AgentRead,
     AgentUpdate,
+    OrgCreate,
+    OrgRead,
+    OrgUpdate,
+    OrgWithRole,
     PolicyValidationError,
     RegisterAgentRequest,
     RegisterAgentResponse,
@@ -251,6 +262,56 @@ async def require_org_member(
     if membership is None:
         raise HTTPException(status_code=403, detail="not a member of this org")
     return user
+
+
+# ---------------------------------------------------------------------------
+# M3 Phase 4 — org-scoped dependencies
+#
+# Mirror of ``require_org_member`` but for routes whose path carries
+# ``{org_id}`` directly (no Project resolution needed). They return a
+# ``(User, OrganizationMember)`` tuple so handlers can use both the
+# caller and the role on the edge without a second DB hit.
+# ---------------------------------------------------------------------------
+
+
+async def require_org_membership(
+    org_id: str,
+    user: User = Depends(require_user),
+    session: AsyncSession = Depends(get_session),
+) -> tuple[User, OrganizationMember]:
+    """Gate an org-scoped route on the active user's membership.
+
+    ``404`` if the org doesn't exist (don't leak which IDs are taken);
+    ``403`` if the org exists but the user isn't a member.
+    """
+    org = await session.get(Organization, org_id)
+    if org is None:
+        raise HTTPException(status_code=404, detail="org not found")
+    membership = (await session.exec(
+        select(OrganizationMember).where(
+            OrganizationMember.org_id == org_id,
+            OrganizationMember.user_id == user.id,
+        )
+    )).first()
+    if membership is None:
+        raise HTTPException(status_code=403, detail="not a member of this org")
+    return user, membership
+
+
+async def require_org_admin(
+    membership: tuple[User, OrganizationMember] = Depends(require_org_membership),
+) -> tuple[User, OrganizationMember]:
+    """Stricter variant of :func:`require_org_membership` — caller must
+    be ``admin`` or ``owner``. Used by management endpoints (PATCH org,
+    invite member, remove member, change role)."""
+    from services import ROLE_ADMIN, ROLE_OWNER
+
+    _, member = membership
+    if member.role not in {ROLE_OWNER, ROLE_ADMIN}:
+        raise HTTPException(
+            status_code=403, detail="admin or owner role required for this action"
+        )
+    return membership
 
 
 async def require_user_or_sdk_token(
@@ -777,6 +838,138 @@ v1.include_router(
     prefix="/users",
     tags=["users"],
 )
+
+
+# ---------------------------------------------------------------------------
+# M3 Phase 4 — Organization CRUD
+#
+# Read-your-own / create-new / read-by-id / update-name. Member
+# management + invitations land in subsequent steps but share these
+# dependencies and schemas.
+# ---------------------------------------------------------------------------
+
+
+def _org_read(org: Organization) -> OrgRead:
+    return OrgRead(id=org.id, slug=org.slug, name=org.name, created_at=org.created_at)
+
+
+@v1.get("/orgs", tags=["orgs"])
+async def api_list_orgs(
+    user: User = Depends(require_user),
+    session: AsyncSession = Depends(get_session),
+) -> list[OrgWithRole]:
+    """List every org the active user belongs to, with their role on each.
+
+    Used by the dashboard's org switcher (Phase 5) — one request, no
+    N+1 over memberships, role on the edge so the UI knows what
+    actions to enable per row.
+    """
+    from services import list_orgs_for_user
+
+    rows = await list_orgs_for_user(session, user.id)
+    return [
+        OrgWithRole(
+            id=o.id, slug=o.slug, name=o.name, created_at=o.created_at, role=role
+        )
+        for o, role in rows
+    ]
+
+
+@v1.post("/orgs", status_code=201, tags=["orgs"])
+async def api_create_org(
+    body: OrgCreate,
+    user: User = Depends(require_user),
+    session: AsyncSession = Depends(get_session),
+) -> OrgRead:
+    """Create a new Organization. Caller becomes the owner in the same
+    transaction (no transient state with zero members).
+
+    ``body.slug`` is optional — derived from the name when omitted, with
+    the same collision-fallback chain :func:`ensure_personal_default_org`
+    uses for signup. When the caller-supplied slug collides, we return
+    409 rather than silently picking a different one — explicit failure
+    so the UI can prompt for a tweak.
+    """
+    from services import (
+        _email_to_slug_base,
+        _generate_unique_org_slug,
+        create_org,
+    )
+
+    if body.slug:
+        existing = (
+            await session.exec(
+                select(Organization).where(Organization.slug == body.slug)
+            )
+        ).first()
+        if existing is not None:
+            raise HTTPException(
+                status_code=409, detail=f"slug {body.slug!r} is already taken"
+            )
+        slug = body.slug
+    else:
+        # Derive from name using the same sanitizer as the email-prefix
+        # path; if the derived slug is contested, the helper picks a
+        # numbered or hex-suffixed variant.
+        slug = await _generate_unique_org_slug(session, _email_to_slug_base(body.name))
+
+    org = await create_org(
+        session, name=body.name, slug=slug, owner_user_id=user.id
+    )
+    return _org_read(org)
+
+
+@v1.get("/orgs/{org_id}", tags=["orgs"])
+async def api_get_org(
+    membership: tuple[User, OrganizationMember] = Depends(require_org_membership),
+    session: AsyncSession = Depends(get_session),
+) -> OrgRead:
+    """Detail view of one org. Membership required (any role)."""
+    _, member = membership
+    org = await session.get(Organization, member.org_id)
+    # ``require_org_membership`` already 404'd if org is missing; the
+    # `is not None` is paranoia for the type checker.
+    assert org is not None
+    return _org_read(org)
+
+
+@v1.patch("/orgs/{org_id}", tags=["orgs"])
+async def api_update_org(
+    body: OrgUpdate,
+    membership: tuple[User, OrganizationMember] = Depends(require_org_admin),
+    session: AsyncSession = Depends(get_session),
+) -> OrgRead:
+    """Update name and/or slug. ``admin`` or ``owner`` role required.
+
+    Slug changes break existing /orgs/{old-slug}/... bookmarks; we let
+    callers do it because the row's ``id`` is the stable handle every
+    FK points at (the slug is a URL helper, mutable on purpose).
+    Returns 409 if the new slug collides with another org's.
+    """
+    _, member = membership
+    org = await session.get(Organization, member.org_id)
+    assert org is not None
+
+    if body.slug is not None and body.slug != org.slug:
+        existing = (
+            await session.exec(
+                select(Organization).where(Organization.slug == body.slug)
+            )
+        ).first()
+        if existing is not None:
+            raise HTTPException(
+                status_code=409, detail=f"slug {body.slug!r} is already taken"
+            )
+        org.slug = body.slug
+
+    if body.name is not None:
+        org.name = body.name
+
+    session.add(org)
+    await session.commit()
+    await session.refresh(org)
+    return _org_read(org)
+
 
 def _maybe_mount_oauth_routers() -> None:
     """Mount the Phase 3c OAuth router(s) iff env-configured.
