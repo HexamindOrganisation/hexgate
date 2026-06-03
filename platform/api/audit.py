@@ -88,12 +88,17 @@ def insert_decision(
 # LowCardinality columns make these scans cheap. All time-axis logic keys off
 # occurred_at (event time), never received_at.
 
-# Selectable dashboard windows → hours. The 90-day TTL is the hard ceiling.
-WINDOW_HOURS: dict[str, int] = {"24h": 24, "7d": 24 * 7, "30d": 24 * 30}
+# Selectable dashboard windows → hours. 90d == the 90-day TTL (hard ceiling).
+WINDOW_HOURS: dict[str, int] = {"24h": 24, "7d": 24 * 7, "30d": 24 * 30, "90d": 24 * 90}
 
-# Time-bucket granularity per window, chosen to keep the series at ~24-30 points
-# regardless of range (24h→hourly, 7d→6h, 30d→daily).
-_WINDOW_BUCKET_MINUTES: dict[str, int] = {"24h": 60, "7d": 360, "30d": 1440}
+# Time-bucket granularity per window, chosen to keep the series at ~24-90 points
+# regardless of range (24h→hourly; 7d→6h; 30d/90d→daily).
+_WINDOW_BUCKET_MINUTES: dict[str, int] = {
+    "24h": 60,
+    "7d": 360,
+    "30d": 1440,
+    "90d": 1440,
+}
 
 # Empty agent/role render as this in breakdowns (a real "no role" bucket, not
 # dropped). The list endpoint translates it back to "" when filtering.
@@ -112,43 +117,93 @@ def _zero_counts() -> dict[str, int]:
     return {"all": 0, "allow": 0, "deny": 0, "needs_approval": 0}
 
 
-# One round trip: grand total + per-outcome + per-(agent|role|tool, outcome).
+# Free-text search haystack: the fields the dashboard search box covers.
+_SEARCH_HAYSTACK = (
+    "concat(tool_name, ' ', agent_name, ' ', role, ' ', reason, ' ', "
+    "session_id, ' ', user_id, ' ', arrayStringConcat(violations, ' '))"
+)
+
+
+def _scope(
+    project_id: str,
+    since_hours: int,
+    *,
+    agent: str | None = None,
+    role: str | None = None,
+    tool: str | None = None,
+    q: str | None = None,
+) -> tuple[list[str], dict[str, object]]:
+    """Build the shared WHERE clauses + params for the dashboard scope filters
+    (project + window + agent/role/tool/free-text). These narrow the slice that
+    KPIs, charts, breakdowns and the events table all reflect. ``outcome`` and
+    ``session_id`` are list-only and applied by the caller on top.
+
+    ``role`` matches exactly when given — pass "" to select the no-role bucket.
+    """
+    where = [
+        "project_id = {pid:String}",
+        "occurred_at >= now() - INTERVAL {hrs:UInt32} HOUR",
+    ]
+    params: dict[str, object] = {"pid": project_id, "hrs": since_hours}
+    if agent:
+        where.append("agent_name = {agent:String}")
+        params["agent"] = agent
+    if role is not None:
+        where.append("role = {role:String}")
+        params["role"] = role
+    if tool:
+        where.append("tool_name = {tool:String}")
+        params["tool"] = tool
+    if q:
+        where.append(
+            f"positionCaseInsensitiveUTF8({_SEARCH_HAYSTACK}, {{q:String}}) > 0"
+        )
+        params["q"] = q
+    return where, params
+
+
+# Grouping sets: grand total + per-outcome + per-(agent|role|tool, outcome).
 # GROUPING(col)=1 marks a column rolled up for that row, so we classify each row
 # by which grouping set produced it rather than trusting the (default) value of a
 # rolled-up column. Every set except () keys on outcome, so g_outcome=1 uniquely
 # identifies the grand-total row.
-_SUMMARY_SQL = """
-SELECT
-    agent_name, role, tool_name, outcome,
-    GROUPING(agent_name) AS g_agent,
-    GROUPING(role)       AS g_role,
-    GROUPING(tool_name)  AS g_tool,
-    GROUPING(outcome)    AS g_outcome,
-    count() AS n
-FROM policy_decision
-WHERE project_id = {pid:String}
-  AND occurred_at >= now() - INTERVAL {hrs:UInt32} HOUR
-GROUP BY GROUPING SETS (
-    (),
-    (outcome),
-    (agent_name, outcome),
-    (role, outcome),
-    (tool_name, outcome)
+_GROUPING_SETS = (
+    "GROUPING SETS ((), (outcome), (agent_name, outcome), "
+    "(role, outcome), (tool_name, outcome))"
 )
-"""
 
 
-def summarize(client: Client, *, project_id: str, since_hours: int) -> dict:
-    """Totals and categorical breakdowns for a project over the window.
+def summarize(
+    client: Client,
+    *,
+    project_id: str,
+    since_hours: int,
+    agent: str | None = None,
+    role: str | None = None,
+    tool: str | None = None,
+    q: str | None = None,
+) -> dict:
+    """Totals and categorical breakdowns for the scoped slice over the window.
 
-    Returns ``{totals, by_agent, by_role, by_tool}`` where ``totals`` is a
-    counts dict and each breakdown is a list of ``{key, all, allow, deny,
-    needs_approval}`` sorted by ``all`` descending. Empty agent/role keys map to
-    NO_VALUE_LABEL. An empty window yields zeroed totals and empty breakdowns.
+    The scope filters (agent/role/tool/q) narrow the slice so the KPIs, donut,
+    area chart and breakdowns all reflect the same set the events table shows.
+    Returns ``{totals, by_agent, by_role, by_tool, by_reason}``: ``totals`` is a
+    counts dict; each ``by_*`` breakdown is a list of ``{key, all, allow, deny,
+    needs_approval}`` sorted by ``all`` descending (empty agent/role → NO_VALUE_LABEL);
+    ``by_reason`` is the top denial reasons as ``{key, n}``. An empty slice
+    yields zeroed totals and empty lists.
     """
-    result = client.query(
-        _SUMMARY_SQL, parameters={"pid": project_id, "hrs": since_hours}
+    where, params = _scope(
+        project_id, since_hours, agent=agent, role=role, tool=tool, q=q
     )
+    where_sql = " AND ".join(where)
+    summary_sql = (
+        "SELECT agent_name, role, tool_name, outcome, "
+        "GROUPING(agent_name) AS g_agent, GROUPING(role) AS g_role, "
+        "GROUPING(tool_name) AS g_tool, GROUPING(outcome) AS g_outcome, count() AS n "
+        f"FROM policy_decision WHERE {where_sql} GROUP BY {_GROUPING_SETS}"
+    )
+    result = client.query(summary_sql, parameters=params)
 
     totals = _zero_counts()
     by_agent: dict[str, dict[str, int]] = {}
@@ -182,37 +237,50 @@ def summarize(client: Client, *, project_id: str, since_hours: int) -> dict:
             reverse=True,
         )
 
+    # Top denial reasons — separate scan (denies, non-empty reason) over the
+    # same scope.
+    reasons_sql = (
+        f"SELECT reason, count() AS n FROM policy_decision WHERE {where_sql} "
+        "AND outcome = 'deny' AND reason != '' "
+        "GROUP BY reason ORDER BY n DESC LIMIT 20"
+    )
+    reasons = client.query(reasons_sql, parameters=params)
+    by_reason = [{"key": reason, "n": int(n)} for reason, n in reasons.result_rows]
+
     return {
         "totals": totals,
         "by_agent": _ranked(by_agent),
         "by_role": _ranked(by_role),
         "by_tool": _ranked(by_tool),
+        "by_reason": by_reason,
     }
 
 
-_TIMESERIES_SQL = """
-SELECT
-    toStartOfInterval(occurred_at, INTERVAL {bucket:UInt32} MINUTE) AS t,
-    outcome,
-    count() AS n
-FROM policy_decision
-WHERE project_id = {pid:String}
-  AND occurred_at >= now() - INTERVAL {hrs:UInt32} HOUR
-GROUP BY t, outcome
-ORDER BY t
-"""
-
-
 def timeseries(
-    client: Client, *, project_id: str, since_hours: int, bucket_minutes: int
+    client: Client,
+    *,
+    project_id: str,
+    since_hours: int,
+    bucket_minutes: int,
+    agent: str | None = None,
+    role: str | None = None,
+    tool: str | None = None,
+    q: str | None = None,
 ) -> list[dict]:
-    """Per-bucket outcome counts. Returns ``[{bucket, allow, deny,
-    needs_approval}]`` ordered by bucket. Sparse: buckets with no events are
-    absent (the chart can gap-fill); an empty window returns ``[]``."""
-    result = client.query(
-        _TIMESERIES_SQL,
-        parameters={"pid": project_id, "hrs": since_hours, "bucket": bucket_minutes},
+    """Per-bucket outcome counts for the scoped slice. Returns ``[{bucket, allow,
+    deny, needs_approval}]`` ordered by bucket. Sparse: buckets with no events
+    are absent (the chart gap-fills); an empty slice returns ``[]``."""
+    where, params = _scope(
+        project_id, since_hours, agent=agent, role=role, tool=tool, q=q
     )
+    params["bucket"] = bucket_minutes
+    where_sql = " AND ".join(where)
+    ts_sql = (
+        "SELECT toStartOfInterval(occurred_at, INTERVAL {bucket:UInt32} MINUTE) AS t, "
+        f"outcome, count() AS n FROM policy_decision WHERE {where_sql} "
+        "GROUP BY t, outcome ORDER BY t"
+    )
+    result = client.query(ts_sql, parameters=params)
     points: dict[object, dict] = {}
     for t, outcome, n in result.result_rows:
         point = points.setdefault(t, {"bucket": t, "allow": 0, "deny": 0, "needs_approval": 0})
@@ -247,31 +315,30 @@ def list_decisions(
     since_hours: int,
     agent: str | None = None,
     role: str | None = None,
+    tool: str | None = None,
     outcome: str | None = None,
+    session_id: str | None = None,
+    q: str | None = None,
     limit: int = 25,
     offset: int = 0,
 ) -> dict:
     """Filterable detail rows for the events table, newest first by occurred_at.
 
-    ``agent``/``outcome`` match exactly; ``role`` matches exactly too — pass ""
-    to select the no-role bucket (the endpoint maps NO_VALUE_LABEL → ""). Returns
-    ``{rows, total, limit, offset}`` where ``total`` is the unpaginated match
-    count (for pager state) and each row has hint/arguments decoded to objects.
+    Shares the scope filters (agent/role/tool/q) with summarize/timeseries, plus
+    ``outcome`` and ``session_id`` which apply to the table only. ``role`` matches
+    exactly — pass "" for the no-role bucket (the endpoint maps NO_VALUE_LABEL → "").
+    Returns ``{rows, total, limit, offset}`` where ``total`` is the unpaginated
+    match count (for pager state) and each row has hint/arguments decoded.
     """
-    where = [
-        "project_id = {pid:String}",
-        "occurred_at >= now() - INTERVAL {hrs:UInt32} HOUR",
-    ]
-    params: dict[str, object] = {"pid": project_id, "hrs": since_hours}
-    if agent:
-        where.append("agent_name = {agent:String}")
-        params["agent"] = agent
-    if role is not None:
-        where.append("role = {role:String}")
-        params["role"] = role
+    where, params = _scope(
+        project_id, since_hours, agent=agent, role=role, tool=tool, q=q
+    )
     if outcome:
         where.append("outcome = {outcome:String}")
         params["outcome"] = outcome
+    if session_id:
+        where.append("session_id = {session_id:String}")
+        params["session_id"] = session_id
     where_sql = " AND ".join(where)
 
     total = client.query(

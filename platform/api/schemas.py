@@ -203,7 +203,7 @@ class DecisionAccepted(BaseModel):
 # Mirror the dict shapes returned by audit.summarize / timeseries /
 # list_decisions. Selectable windows are bounded by the 90-day storage TTL.
 
-AuditWindow = Literal["24h", "7d", "30d"]
+AuditWindow = Literal["24h", "7d", "30d", "90d"]
 
 
 class OutcomeCounts(BaseModel):
@@ -222,6 +222,13 @@ class AuditBreakdownRow(OutcomeCounts):
     key: str
 
 
+class AuditReasonRow(BaseModel):
+    """One top-denial-reason bucket: ``key`` is the reason text, ``n`` its count."""
+
+    key: str
+    n: int
+
+
 class AuditSummary(BaseModel):
     """Totals + breakdowns powering the KPI cards and breakdown panels."""
 
@@ -229,6 +236,7 @@ class AuditSummary(BaseModel):
     by_agent: list[AuditBreakdownRow]
     by_role: list[AuditBreakdownRow]
     by_tool: list[AuditBreakdownRow]
+    by_reason: list[AuditReasonRow]
 
 
 class AuditTimeseriesPoint(BaseModel):

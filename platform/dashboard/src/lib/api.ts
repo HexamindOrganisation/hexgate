@@ -122,6 +122,100 @@ export interface ValidatePolicyResponse {
   errors: PolicyValidationError[]
 }
 
+// --- Audit dashboard --------------------------------------------------------
+// Mirror the read models in platform/api/schemas.py. Windows are bounded by the
+// 90-day storage TTL; "(none)" is the breakdown label for an empty agent/role.
+
+export type AuditWindow = '24h' | '7d' | '30d' | '90d'
+export type AuditOutcome = 'allow' | 'deny' | 'needs_approval'
+
+export interface OutcomeCounts {
+  all: number
+  allow: number
+  deny: number
+  needs_approval: number
+}
+
+/** One categorical bucket (agent / role / tool). `key` is "(none)" when empty. */
+export interface AuditBreakdownRow extends OutcomeCounts {
+  key: string
+}
+
+/** One top-denial-reason bucket: `key` is the reason text, `n` its count. */
+export interface AuditReasonRow {
+  key: string
+  n: number
+}
+
+export interface AuditSummary {
+  totals: OutcomeCounts
+  by_agent: AuditBreakdownRow[]
+  by_role: AuditBreakdownRow[]
+  by_tool: AuditBreakdownRow[]
+  by_reason: AuditReasonRow[]
+}
+
+/** One time bucket of the outcome-over-time chart. `bucket` is an ISO string. */
+export interface AuditTimeseriesPoint {
+  bucket: string
+  allow: number
+  deny: number
+  needs_approval: number
+}
+
+/** One detail row. `hint`/`arguments` are decoded JSON (object, or raw string). */
+export interface AuditDecisionRow {
+  event_id: string
+  occurred_at: string
+  received_at: string
+  agent_name: string
+  agent_version_id: string
+  session_id: string
+  user_id: string
+  tool_name: string
+  role: string
+  outcome: AuditOutcome
+  error_type: string
+  reason: string
+  violations: string[]
+  hint: unknown
+  arguments: unknown
+}
+
+export interface AuditDecisionPage {
+  rows: AuditDecisionRow[]
+  total: number
+  limit: number
+  offset: number
+}
+
+/** Scope filters shared by summary/timeseries/list — they narrow the slice the
+ * KPIs, charts and breakdowns all reflect. Pass `role: '(none)'` for no-role. */
+export interface AuditScope {
+  window?: AuditWindow
+  agent?: string
+  role?: string
+  tool?: string
+  q?: string
+}
+
+/** Decisions list filters: scope + table-only outcome/session_id + paging. */
+export interface AuditDecisionFilters extends AuditScope {
+  outcome?: AuditOutcome
+  session_id?: string
+  limit?: number
+  offset?: number
+}
+
+function qs(params: Record<string, string | number | undefined>): string {
+  const search = new URLSearchParams()
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined && value !== '') search.set(key, String(value))
+  }
+  const str = search.toString()
+  return str ? `?${str}` : ''
+}
+
 export const api = {
   listTokens: (projectId = DEFAULT_PROJECT_ID) =>
     request<TokenListItem[]>(`/v1/projects/${projectId}/tokens`),
@@ -162,5 +256,23 @@ export const api = {
     request<ValidatePolicyResponse>(
       `/v1/projects/${projectId}/agents/${name}/validate`,
       { method: 'POST', body: JSON.stringify({ policy_yaml }) },
+    ),
+
+  getAuditSummary: (scope: AuditScope = {}, projectId = DEFAULT_PROJECT_ID) =>
+    request<AuditSummary>(
+      `/v1/projects/${projectId}/audit/summary${qs({ ...scope })}`,
+    ),
+
+  getAuditTimeseries: (scope: AuditScope = {}, projectId = DEFAULT_PROJECT_ID) =>
+    request<AuditTimeseriesPoint[]>(
+      `/v1/projects/${projectId}/audit/timeseries${qs({ ...scope })}`,
+    ),
+
+  listAuditDecisions: (
+    filters: AuditDecisionFilters = {},
+    projectId = DEFAULT_PROJECT_ID,
+  ) =>
+    request<AuditDecisionPage>(
+      `/v1/projects/${projectId}/audit/decisions${qs({ ...filters })}`,
     ),
 }

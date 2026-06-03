@@ -1,0 +1,336 @@
+/* Audit dashboard styles — ported from the design drop (design-import/audit).
+ * Only the classes the Audit page uses; tokens live in index.css. The original
+ * `.fortify .mono` ancestor scoping is dropped (the page renders inside AppShell,
+ * not a `.fortify` root). */
+
+.mono {
+  font-family: var(--font-mono);
+}
+
+/* ——— Page header ——— */
+.fty-page {
+  padding: 28px 32px 40px;
+  max-width: 1400px;
+  margin: 0 auto;
+}
+.fty-page-hd {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  margin-bottom: 24px;
+}
+.fty-page-title {
+  font-size: 28px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+}
+.fty-page-sub {
+  font-size: 13px;
+  color: hsl(var(--muted-foreground));
+  margin-top: 4px;
+}
+
+/* ——— Card ——— */
+.fty-card {
+  background: hsl(var(--card));
+  border: 1px solid hsl(var(--border));
+  border-radius: 8px;
+  padding: 20px;
+}
+.fty-card.pad-lg {
+  padding: 24px;
+}
+.fty-card-hd {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+.fty-card-title {
+  font-size: 13px;
+  font-weight: 500;
+  color: hsl(var(--muted-foreground));
+  letter-spacing: 0.01em;
+}
+
+/* ——— Button ——— */
+.fty-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 12px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: background 100ms, border-color 100ms;
+  font-family: inherit;
+  white-space: nowrap;
+}
+.fty-btn.primary {
+  background: hsl(var(--primary));
+  color: hsl(var(--primary-foreground));
+}
+.fty-btn.primary:hover {
+  background: hsl(226 78% 70%);
+}
+.fty-btn.secondary {
+  background: hsl(var(--secondary));
+  color: hsl(var(--foreground));
+  border-color: hsl(var(--border));
+}
+.fty-btn.secondary:hover {
+  background: hsl(var(--accent));
+}
+.fty-btn.ghost {
+  background: transparent;
+  color: hsl(var(--muted-foreground));
+}
+.fty-btn.ghost:hover {
+  background: hsl(var(--accent));
+  color: hsl(var(--foreground));
+}
+.fty-btn.sm {
+  height: 26px;
+  padding: 0 8px;
+  font-size: 12px;
+}
+
+/* ——— Badge ——— */
+.fty-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+}
+.fty-badge.allow {
+  background: hsl(var(--semantic-allow-soft));
+  color: hsl(var(--semantic-allow));
+}
+.fty-badge.deny {
+  background: hsl(var(--semantic-deny-soft));
+  color: hsl(var(--semantic-deny));
+}
+.fty-badge.approval {
+  background: hsl(var(--semantic-approval-soft));
+  color: hsl(var(--semantic-approval));
+}
+.fty-badge.muted {
+  background: hsl(var(--secondary));
+  color: hsl(var(--muted-foreground));
+}
+
+/* ——— Table ——— */
+.fty-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+.fty-table th {
+  text-align: left;
+  font-weight: 500;
+  font-size: 11px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: hsl(var(--muted-foreground));
+  padding: 10px 12px;
+  border-bottom: 1px solid hsl(var(--border));
+}
+.fty-table td {
+  padding: 12px;
+  font-size: 13px;
+  border-bottom: 1px solid hsl(var(--border));
+  height: 44px;
+}
+.fty-table.compact td {
+  height: 36px;
+  padding: 7px 12px;
+}
+.fty-table tr:hover td {
+  background: hsl(var(--accent));
+}
+.fty-table tr:last-child td {
+  border-bottom: 0;
+}
+
+/* ——— KPI ——— */
+.fty-kpi {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.fty-kpi-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: hsl(var(--muted-foreground));
+}
+.fty-kpi-val {
+  font-size: 28px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+}
+.fty-kpi-val.allow {
+  color: hsl(var(--semantic-allow));
+}
+.fty-kpi-val.deny {
+  color: hsl(var(--semantic-deny));
+}
+.fty-kpi-val.approval {
+  color: hsl(var(--semantic-approval));
+}
+.fty-kpi-sub {
+  font-size: 11.5px;
+  color: hsl(var(--muted-foreground));
+}
+.fty-kpi-spark {
+  margin-top: 6px;
+}
+
+/* ——— Code / key block ——— */
+.fty-code {
+  background: hsl(var(--muted));
+  border: 1px solid hsl(var(--border));
+  border-radius: 6px;
+  padding: 10px 12px;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* ——— Tabs ——— */
+.fty-tabs {
+  display: inline-flex;
+  gap: 2px;
+  padding: 3px;
+  background: hsl(var(--secondary));
+  border: 1px solid hsl(var(--border));
+  border-radius: 6px;
+}
+.fty-tabs button {
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  padding: 4px 10px;
+  border-radius: 4px;
+  font-size: 12.5px;
+  color: hsl(var(--muted-foreground));
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-family: inherit;
+}
+.fty-tabs button.active {
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
+}
+
+/* ——— Select ——— */
+.fty-select {
+  background: hsl(var(--card));
+  border: 1px solid hsl(var(--border));
+  border-radius: 6px;
+  padding: 0 26px 0 10px;
+  height: 30px;
+  font-size: 13px;
+  color: hsl(var(--foreground));
+  font-family: inherit;
+  appearance: none;
+  cursor: pointer;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%238896A6' stroke-width='2'><polyline points='6 9 12 15 18 9'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right 8px center;
+}
+
+/* ——— Input ——— */
+.fty-input {
+  background: hsl(var(--muted));
+  border: 1px solid hsl(var(--border));
+  border-radius: 6px;
+  padding: 0 10px;
+  height: 30px;
+  font-size: 13px;
+  color: hsl(var(--foreground));
+  font-family: inherit;
+  outline: none;
+}
+.fty-input:focus {
+  border-color: hsl(var(--ring));
+}
+
+/* ——— Segmented ——— */
+.fty-seg {
+  display: flex;
+  border: 1px solid hsl(var(--border));
+  border-radius: 6px;
+  overflow: hidden;
+}
+.fty-seg button {
+  flex: 1;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  padding: 7px 10px;
+  font-size: 12px;
+  font-family: inherit;
+  color: hsl(var(--muted-foreground));
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border-right: 1px solid hsl(var(--border));
+}
+.fty-seg button:last-child {
+  border-right: 0;
+}
+.fty-seg button.active {
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
+}
+.fty-seg button.active.allow {
+  background: hsl(var(--semantic-allow-soft));
+  color: hsl(var(--semantic-allow));
+}
+.fty-seg button.active.deny {
+  background: hsl(var(--semantic-deny-soft));
+  color: hsl(var(--semantic-deny));
+}
+.fty-seg button.active.approval {
+  background: hsl(var(--semantic-approval-soft));
+  color: hsl(var(--semantic-approval));
+}
+
+/* ——— Icon button ——— */
+.fty-iconbtn {
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  border-radius: 6px;
+  color: hsl(var(--muted-foreground));
+  cursor: pointer;
+  transition: background 100ms, color 100ms;
+  border: 0;
+  background: transparent;
+}
+.fty-iconbtn:hover {
+  background: hsl(var(--accent));
+  color: hsl(var(--foreground));
+}
+
+@keyframes pulse {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.3); opacity: 0.7; }
+}

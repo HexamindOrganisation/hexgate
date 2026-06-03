@@ -600,15 +600,31 @@ def ingest_decision(
 #
 # TODO(auth): gate behind the read_audit scope once dashboard auth lands —
 # same future-auth hook the other /projects/{project_id} reads carry.
+# NO_VALUE_LABEL ("(none)") is the breakdown label for an empty role; drill-down
+# on it must filter real no-role rows, so translate it back to "".
+def _role_filter(role: Optional[str]) -> Optional[str]:
+    return "" if role == NO_VALUE_LABEL else role
+
+
 @v1.get("/projects/{project_id}/audit/summary", response_model=AuditSummary)
 def api_audit_summary(
     project_id: str,
     window: AuditWindow = "24h",
+    agent: Optional[str] = None,
+    role: Optional[str] = None,
+    tool: Optional[str] = None,
+    q: Optional[str] = None,
     clickhouse_client=Depends(require_clickhouse),
 ) -> AuditSummary:
     try:
         data = summarize(
-            clickhouse_client, project_id=project_id, since_hours=WINDOW_HOURS[window]
+            clickhouse_client,
+            project_id=project_id,
+            since_hours=WINDOW_HOURS[window],
+            agent=agent,
+            role=_role_filter(role),
+            tool=tool,
+            q=q,
         )
     except ClickHouseError:
         raise _audit_unavailable()
@@ -622,6 +638,10 @@ def api_audit_summary(
 def api_audit_timeseries(
     project_id: str,
     window: AuditWindow = "24h",
+    agent: Optional[str] = None,
+    role: Optional[str] = None,
+    tool: Optional[str] = None,
+    q: Optional[str] = None,
     clickhouse_client=Depends(require_clickhouse),
 ) -> list[AuditTimeseriesPoint]:
     try:
@@ -630,6 +650,10 @@ def api_audit_timeseries(
             project_id=project_id,
             since_hours=WINDOW_HOURS[window],
             bucket_minutes=bucket_minutes_for(window),
+            agent=agent,
+            role=_role_filter(role),
+            tool=tool,
+            q=q,
         )
     except ClickHouseError:
         raise _audit_unavailable()
@@ -644,7 +668,10 @@ def api_audit_decisions(
     window: AuditWindow = "24h",
     agent: Optional[str] = None,
     role: Optional[str] = None,
+    tool: Optional[str] = None,
     outcome: Optional[Literal["allow", "deny", "needs_approval"]] = None,
+    session_id: Optional[str] = None,
+    q: Optional[str] = None,
     limit: int = 25,
     offset: int = 0,
     clickhouse_client=Depends(require_clickhouse),
@@ -659,7 +686,10 @@ def api_audit_decisions(
             since_hours=WINDOW_HOURS[window],
             agent=agent,
             role=role_filter,
+            tool=tool,
             outcome=outcome,
+            session_id=session_id,
+            q=q,
             limit=max(1, min(limit, 200)),
             offset=max(0, offset),
         )
