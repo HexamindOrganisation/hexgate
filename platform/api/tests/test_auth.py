@@ -259,23 +259,23 @@ def test_project_route_accepts_x_dev_user_header_in_test_mode(
     assert r.status_code == 200
 
 
-def test_dual_auth_route_accepts_cookie_session(
+def test_cookie_route_accepts_cookie_session(
     client: TestClient, session_factory
 ) -> None:
     """Regression for the "Playground reverts to homepage" bug.
 
-    The dual-auth route ``GET /v1/projects/{p}/agents/{name}`` must
-    accept a cookie session from a logged-in dashboard user — not just
-    SDK biscuits and the test-only X-Dev-User header. The Playground
-    page calls ``api.getAgent`` on mount; without cookie support here
-    the request 401s, the dashboard's global handler redirects to
+    ``GET /v1/projects/{p}/agents/{name}`` (the dashboard get-agent
+    route) must accept a cookie session from a logged-in user — not
+    just the test-only X-Dev-User header. The Playground page calls
+    ``api.getAgent`` on mount; without cookie support here the
+    request 401s, the dashboard's global handler redirects to
     /sign-in, and a still-logged-in user gets forwarded to / — which
     looks like Playground "reverts to the homepage".
 
     We register + log in a fresh user, add them to the default org
     membership directly (skipping the not-yet-built invite flow), and
-    then hit the dual-auth route with NO X-Dev-User — only the session
-    cookie. Success ⇒ cookies are accepted.
+    then hit the route with NO X-Dev-User — only the session cookie.
+    Success ⇒ cookies are accepted.
     """
     import asyncio
     import uuid
@@ -320,8 +320,8 @@ def test_dual_auth_route_accepts_cookie_session(
 
     asyncio.get_event_loop().run_until_complete(_add_to_default_org())
 
-    # Hit the dual-auth route with NO X-Dev-User and NO Authorization —
-    # cookie auth alone must carry it through to 200.
+    # Hit the route with NO X-Dev-User — cookie auth alone must carry
+    # it through to 200.
     r = client.get(
         f"/v1/projects/{DEFAULT_PROJECT_ID}/agents/default",
         headers={"X-Dev-User": ""},  # explicitly blank to defeat any fixture default

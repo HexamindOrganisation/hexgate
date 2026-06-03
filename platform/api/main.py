@@ -114,10 +114,10 @@ async def _validate_sdk_token(
 ) -> None:
     """Validate an ``Authorization: Bearer <fortify_key>`` biscuit envelope.
 
-    Shared between ``optional_dev_token`` (allows missing header) and
-    ``require_user_or_sdk_token`` (uses the biscuit as one of two
-    permissibility paths). Raises 401 on signature or revocation failure;
-    returns None on success.
+    Used by :func:`optional_dev_token` (allows a missing header) and
+    indirectly by :func:`require_project` / :func:`ws_require_project`
+    (the bearer-implicit SDK routes). Raises 401 on signature or
+    revocation failure; returns None on success.
     """
     if not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="malformed authorization header")
@@ -155,9 +155,12 @@ async def optional_dev_token(
 
     POC behaviour: the header itself remains optional so the dashboard
     (no user-session concept yet) can keep calling these endpoints
-    unauthenticated. Routes that DO require some auth use
-    ``require_org_member`` (humans) or ``require_user_or_sdk_token``
-    (either).
+    unauthenticated. Routes that DO require some auth pick the
+    appropriate dep:
+
+      * cookie/dashboard humans → :func:`require_org_member`
+      * bearer/SDK machines → :func:`require_project` (HTTP) or
+        :func:`ws_require_project` (WebSocket)
     """
     if authorization is None:
         return
@@ -458,73 +461,6 @@ async def require_project_admin(
     return user, membership
 
 
-async def require_user_or_sdk_token(
-    project_id: str,
-    cookie_user: User | None = Depends(current_active_user_optional),
-    x_dev_user: str | None = Header(default=None, alias="X-Dev-User"),
-    authorization: str | None = Header(default=None),
-    session: AsyncSession = Depends(get_session),
-) -> None:
-    """Accept EITHER an SDK biscuit OR a dashboard user (cookie or
-    test-only header) with org membership.
-
-    Used on routes both humans (via dashboard) and machines (via SDK)
-    legitimately hit — today that's ``GET /v1/projects/{p}/agents/{name}``,
-    which the SDK polls every turn for policy refresh and the dashboard
-    reads to render the agent editor (and the Playground page reads on
-    mount to surface available roles).
-
-    Any of the three paths succeeds independently; the request is only
-    rejected if none is present-and-valid.
-    """
-    # Cookie path: signed-in dashboard user via FastAPI Users session.
-    # Phase 3d wired this — without it the Playground page 401s on the
-    # ``api.getAgent`` call, the global 401-redirect bounces to /sign-in,
-    # which then forwards a logged-in user back to / (the "homepage"
-    # symptom).
-    if cookie_user is not None:
-        project = await session.get(Project, project_id)
-        if project is None:
-            raise HTTPException(status_code=404, detail="project not found")
-        membership = (await session.exec(
-            select(OrganizationMember).where(
-                OrganizationMember.user_id == cookie_user.id,
-                OrganizationMember.org_id == project.org_id,
-            )
-        )).first()
-        if membership is None:
-            raise HTTPException(status_code=403, detail="not a member of this org")
-        return
-
-    # SDK path: Authorization header carries a biscuit. Validate it via
-    # the same signature + revocation gates the existing dependency uses.
-    if authorization:
-        await _validate_sdk_token(authorization, session)
-        return
-
-    # Test-only path: X-Dev-User + org membership. Same env gate as
-    # require_user — production rejects the header (default-off).
-    if not (x_dev_user and _dev_user_header_allowed()):
-        raise HTTPException(
-            status_code=401,
-            detail="missing authentication (cookie or Bearer token)",
-        )
-    user = await session.get(User, x_dev_user)
-    if user is None:
-        raise HTTPException(status_code=401, detail="unknown user")
-    project = await session.get(Project, project_id)
-    if project is None:
-        raise HTTPException(status_code=404, detail="project not found")
-    membership = (await session.exec(
-        select(OrganizationMember).where(
-            OrganizationMember.user_id == user.id,
-            OrganizationMember.org_id == project.org_id,
-        )
-    )).first()
-    if membership is None:
-        raise HTTPException(status_code=403, detail="not a member of this org")
-
-
 @app.get("/health")
 async def health() -> dict[str, str]:
     """Unversioned liveness probe."""
@@ -717,7 +653,7 @@ async def api_list_agent_manifests(
 @v1.get(
     "/projects/{project_id}/agents/{name}",
     response_model=AgentRead,
-    dependencies=[Depends(require_user_or_sdk_token)],
+    dependencies=[Depends(require_org_member)],
 )
 async def api_get_agent(
     project_id: str,
@@ -726,13 +662,17 @@ async def api_get_agent(
     session: AsyncSession = Depends(get_session),
     if_none_match: str | None = Header(default=None, alias="If-None-Match"),
 ) -> AgentRead | Response:
-    """Return an agent's YAMLs + signed bundle.
+    """Return an agent's YAMLs + signed bundle (dashboard read path).
+
+    Cookie-authed via :func:`require_org_member`. The SDK's bearer-only
+    equivalent is :func:`api_get_agent_by_token` at ``GET
+    /v1/agents/{name}`` — same response shape, project derived from
+    the token instead of the URL.
 
     Supports ETag-based conditional GETs: the response carries the
     bundle's ``wasm_hash`` as an ``ETag`` header. A subsequent request
     with ``If-None-Match: <wasm_hash>`` returns ``304 Not Modified``
-    when the bundle hasn't changed — so the SDK's per-run refresh costs
-    one short round-trip instead of base64-decoding the wasm again.
+    when the bundle hasn't changed.
     """
     await ensure_default_project(session)
     agent = await get_agent(session, project_id, name)
@@ -909,14 +849,14 @@ async def api_get_agent_by_token(
 ) -> AgentRead | Response:
     """SDK-facing read of an agent — project comes from the bearer token.
 
-    Replacement for the bearer half of ``GET /v1/projects/{p}/agents/{name}``.
-    The dashboard side of that dual-auth route stays mounted for cookie
-    auth; this route is the CLI's policy-refresh entry point and is
-    purely bearer-authed via :func:`require_project`.
+    The cookie-authed dashboard counterpart at
+    ``GET /v1/projects/{id}/agents/{name}`` returns the same shape;
+    this route is the CLI's policy-refresh entry point and is
+    bearer-only via :func:`require_project`.
 
-    ETag semantics mirror the legacy route exactly — the SDK's
-    per-run conditional GET (``If-None-Match: <wasm_hash>`` → ``304``)
-    keeps working without any client-side changes beyond the URL.
+    ETag semantics mirror the cookie route — the SDK's per-run
+    conditional GET (``If-None-Match: <wasm_hash>`` → ``304``) costs
+    one short round-trip when the bundle hasn't changed.
     """
     await ensure_default_project(session)
     agent = await get_agent(session, project_id, name)
@@ -979,7 +919,7 @@ async def api_introspect_key(
 
 
 @v1.websocket("/serve")
-async def ws_serve_v2(
+async def ws_serve(
     websocket: WebSocket,
     session: AsyncSession = Depends(get_session),
 ) -> None:
@@ -991,36 +931,10 @@ async def ws_serve_v2(
     biscuit *is* the project context). On a successful handshake the
     server echoes ``fortify.v1`` back; the bearer subprotocol is
     consumed and never mirrored.
-
-    Body is the same relay loop as the legacy ``/projects/{id}/serve``
-    route (which stays mounted for one cycle to avoid breaking deploys
-    still running an older CLI). The legacy route gets removed in
-    Commit 3 of this phase.
     """
     project_id = await ws_require_project(websocket, session)
     if project_id is None:
         return  # handshake already closed with 4401
-    await registry.attach_serve(project_id, websocket)
-    try:
-        while True:
-            payload = await websocket.receive_json()
-            if isinstance(payload, dict) and payload.get("type") == "hello":
-                agent_name = payload.get("agent")
-                await registry.set_agent_name(
-                    project_id, agent_name if isinstance(agent_name, str) else None
-                )
-                continue
-            await registry.relay_to_chat(project_id, payload)
-    except WebSocketDisconnect:
-        pass
-    finally:
-        await registry.detach_serve(project_id, websocket)
-
-
-@v1.websocket("/projects/{project_id}/serve")
-async def ws_serve(websocket: WebSocket, project_id: str) -> None:
-    """Producer socket for an agent serve process."""
-    await websocket.accept()
     await registry.attach_serve(project_id, websocket)
     try:
         while True:

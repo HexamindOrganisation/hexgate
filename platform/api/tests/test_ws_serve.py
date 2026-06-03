@@ -16,10 +16,10 @@ Five branches, one per test:
                                                 serve socket under the
                                                 token's project
 
-The legacy ``/v1/projects/{id}/serve`` route is unchanged for now
-(removed in Commit 3 of this phase). These tests pin the new contract
-only — the legacy route was never test-covered and will get tests
-when it gets deleted (regression: it goes away).
+The legacy ``/v1/projects/{id}/serve`` route was removed in Phase 6
+step 3; this file is the sole coverage of the serve socket. The
+legacy route never had its own tests — going away was a no-op for
+the test suite.
 """
 
 from __future__ import annotations
