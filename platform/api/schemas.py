@@ -196,6 +196,22 @@ class TokenMintResponse(BaseModel):
     created_at: datetime
 
 
+class KeyIntrospection(BaseModel):
+    """``GET /v1/me/key`` response — what a fortify key resolves to.
+
+    Used by the CLI to look up its own context at startup (project, env,
+    scopes) without parsing the envelope. The token never round-trips —
+    only its descriptive metadata. Authentication is the bearer itself,
+    so possessing the key proves the right to read its description.
+    """
+
+    token_id: str
+    name: str
+    project_id: str
+    env: str  # "test" | "live"
+    scopes: list[str]
+
+
 class AgentRead(BaseModel):
     id: str
     name: str
