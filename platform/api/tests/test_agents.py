@@ -445,3 +445,155 @@ def test_register_endpoint_accepts_legacy_shape_without_new_fields(
     # rather than schema validation (422). 422 here would mean we broke
     # backwards compatibility.
     assert resp.status_code != 422, resp.text
+
+
+# ---------------------------------------------------------------------------
+# Phase 6: bearer-only ``GET /v1/agents/{name}`` + ``GET /v1/me/key``
+#
+# Both routes derive project_id from the bearer token; no project_id in
+# the URL. Counterparts of the legacy ``GET /v1/projects/{p}/agents/{n}``
+# dual-auth route and the CLI's startup introspection call.
+# ---------------------------------------------------------------------------
+
+
+def _mint_token_for_test(session_factory) -> str:
+    """Helper: mint a real biscuit-backed token for the seed project.
+
+    Returns the full ``fty_<env>_<project>_<biscuit>`` envelope so the
+    test can drop it into an ``Authorization: Bearer …`` header.
+    """
+    import asyncio
+
+    from services import mint_dev_token
+
+    async def _mint():
+        async with session_factory() as session:
+            _row, full = await mint_dev_token(
+                session,
+                DEFAULT_PROJECT_ID,
+                name="phase6-test",
+                scopes=["read"],
+                env="live",
+                signing_key_bytes=main.keystore._private_key_bytes(),
+            )
+            await session.commit()
+            return full
+
+    return asyncio.get_event_loop().run_until_complete(_mint())
+
+
+def test_bearer_get_agent_resolves_project_from_token(
+    client: TestClient, session_factory
+) -> None:
+    """``GET /v1/agents/default`` with a valid bearer → 200 + AgentRead.
+
+    The seed project has a ``default`` agent (created by
+    ``ensure_default_project``); the bearer is freshly minted against
+    that same project, so the lookup must succeed.
+    """
+    token = _mint_token_for_test(session_factory)
+    r = client.get(
+        "/v1/agents/default",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["name"] == "default"
+    # Project resolution is implicit — confirm by asserting the response
+    # carries the agent's policy_yaml (a non-trivial column the legacy
+    # path would surface identically).
+    assert "policy_yaml" in body and len(body["policy_yaml"]) > 0
+
+
+def test_bearer_get_agent_rejects_missing_authorization(
+    client: TestClient,
+) -> None:
+    """No ``Authorization`` header → 401, not a 404 or 422.
+
+    The route's auth gate must fire before the path lookup; otherwise
+    an unauthenticated caller could probe agent names by status code
+    (404 = doesn't exist, 200 = leaks existence).
+    """
+    r = client.get("/v1/agents/anything")
+    assert r.status_code == 401
+
+
+def test_bearer_get_agent_returns_304_on_matching_etag(
+    client: TestClient, session_factory
+) -> None:
+    """Conditional GET with the bundle's ETag → 304 Not Modified.
+
+    Mirrors the legacy route's behaviour so the SDK's per-run
+    refresh logic keeps working when the bundle hasn't changed. We
+    PUT first so a signed bundle exists in the test DB — the fixture
+    skips the lifespan's ``backfill_bundles`` step so the seed agent
+    starts unsigned.
+    """
+    # Touch the agent so the platform compiles + signs the bundle. Use
+    # the cookie-authed PUT path with the X-Dev-User test seam (already
+    # enabled by conftest).
+    put = client.put(
+        f"/v1/projects/{DEFAULT_PROJECT_ID}/agents/default",
+        headers={"X-Dev-User": DEFAULT_USER_ID},
+        json={"policy_yaml": _trivial_policy_yaml()},
+    )
+    assert put.status_code == 200, put.text
+
+    token = _mint_token_for_test(session_factory)
+    first = client.get(
+        "/v1/agents/default",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    etag = first.headers.get("etag")
+    assert etag is not None, first.headers
+
+    second = client.get(
+        "/v1/agents/default",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "If-None-Match": etag,
+        },
+    )
+    assert second.status_code == 304
+
+
+def _trivial_policy_yaml() -> str:
+    """A policy that compiles cleanly — enough to trigger bundle signing."""
+    return (
+        "version: 1\n"
+        "name: default\n"
+        "rules:\n"
+        "  - effect: allow\n"
+        "    when:\n"
+        "      tool: any\n"
+    )
+
+
+def test_me_key_introspects_token_metadata(
+    client: TestClient, session_factory
+) -> None:
+    """``GET /v1/me/key`` describes the bearer without round-tripping it.
+
+    Returns project_id + env + name + scopes. Doesn't echo the token
+    value or any secret material — the bearer authenticates the
+    request, the response is metadata only.
+    """
+    token = _mint_token_for_test(session_factory)
+    r = client.get(
+        "/v1/me/key",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["project_id"] == DEFAULT_PROJECT_ID
+    assert body["env"] == "live"
+    assert body["name"] == "phase6-test"
+    assert body["scopes"] == ["read"]
+    # Defensive: the full envelope must never leak in the body.
+    assert token not in r.text
+
+
+def test_me_key_rejects_missing_bearer(client: TestClient) -> None:
+    """No ``Authorization`` header → 401."""
+    r = client.get("/v1/me/key")
+    assert r.status_code == 401

@@ -42,6 +42,7 @@ from schemas import (
     InvitationCreate,
     InvitationPreview,
     InvitationRead,
+    KeyIntrospection,
     MemberRead,
     MemberUpdate,
     OrgCreate,
@@ -180,6 +181,77 @@ async def require_project(
     token = await find_token_by_secret(session, secret)
     if token is None:
         raise HTTPException(status_code=401, detail="invalid fortify key")
+    return token.project_id
+
+
+# Marker subprotocol the server echoes on a successful WS handshake. The
+# CLI client asserts it back so it knows the platform understands the
+# bearer-in-subprotocol contract (i.e., we're talking to a Phase-6+
+# server, not an older deployment that ignored unknown subprotocols).
+_WS_PROTOCOL_MARKER = "fortify.v1"
+
+# WS close code for "auth failed at handshake". 4000-4999 is the
+# application-private range per RFC 6455; 4401 is chosen to mirror the
+# HTTP 401 mnemonic so logs read consistently across the two layers.
+_WS_CLOSE_UNAUTHENTICATED = 4401
+
+
+async def ws_require_project(
+    websocket: WebSocket,
+    session: AsyncSession,
+) -> str | None:
+    """Authenticate a WebSocket via a bearer token in the subprotocol header.
+
+    Browsers can't set custom headers on WS handshakes; the standard
+    workaround is to overload ``Sec-WebSocket-Protocol``. The CLI client
+    offers two subprotocols on ``connect``:
+
+      * ``bearer.<envelope>`` — the actual fortify key, consumed by the
+        server and never echoed back (kept out of any proxy mirror logs).
+      * ``fortify.v1`` — protocol marker; the server echoes this so the
+        client knows the handshake bound a real auth context.
+
+    On any reject path we ``close(code=4401)`` before ``accept()`` — the
+    handshake never completes, the client sees a clean rejection
+    instead of an immediate disconnect after an accepted upgrade. The
+    handler that consumes this dependency must ``return`` when the
+    result is ``None``.
+
+    Reuses :func:`require_project`'s signature + revocation gates so
+    HTTP and WS paths can't drift on what counts as a valid token.
+    """
+    subprotocols = websocket.scope.get("subprotocols") or []
+    bearer: str | None = None
+    for sp in subprotocols:
+        if sp.startswith("bearer."):
+            bearer = sp.removeprefix("bearer.")
+            break
+
+    if not bearer:
+        await websocket.close(code=_WS_CLOSE_UNAUTHENTICATED)
+        return None
+
+    # Signature gate — same parse_envelope + verify_token the HTTP path
+    # runs. Any failure here is a 4401, no detail leaked.
+    try:
+        _, _, biscuit_b64 = parse_envelope(bearer)
+        verify_token(biscuit_b64, keystore.public_key_bytes())
+    except (TokenError, TokenSignatureError):
+        await websocket.close(code=_WS_CLOSE_UNAUTHENTICATED)
+        return None
+
+    # Revocation gate. ``find_token_by_secret`` also bumps last_used_at,
+    # which is what makes the dashboard's "last used" column work for
+    # serve sessions.
+    token = await find_token_by_secret(session, bearer)
+    if token is None:
+        await websocket.close(code=_WS_CLOSE_UNAUTHENTICATED)
+        return None
+
+    # Echo only the marker — the bearer subprotocol is consumed
+    # internally so it doesn't end up in any access log that captures
+    # Sec-WebSocket-Protocol response headers.
+    await websocket.accept(subprotocol=_WS_PROTOCOL_MARKER)
     return token.project_id
 
 
@@ -825,6 +897,124 @@ async def api_register_agent(
         content_hash=version.content_hash,
         created=created,
     )
+
+
+@v1.get("/agents/{name}", response_model=AgentRead)
+async def api_get_agent_by_token(
+    name: str,
+    response: Response,
+    project_id: str = Depends(require_project),
+    session: AsyncSession = Depends(get_session),
+    if_none_match: str | None = Header(default=None, alias="If-None-Match"),
+) -> AgentRead | Response:
+    """SDK-facing read of an agent — project comes from the bearer token.
+
+    Replacement for the bearer half of ``GET /v1/projects/{p}/agents/{name}``.
+    The dashboard side of that dual-auth route stays mounted for cookie
+    auth; this route is the CLI's policy-refresh entry point and is
+    purely bearer-authed via :func:`require_project`.
+
+    ETag semantics mirror the legacy route exactly — the SDK's
+    per-run conditional GET (``If-None-Match: <wasm_hash>`` → ``304``)
+    keeps working without any client-side changes beyond the URL.
+    """
+    await ensure_default_project(session)
+    agent = await get_agent(session, project_id, name)
+    if agent is None:
+        raise HTTPException(status_code=404, detail="agent not found")
+
+    bundle_hash = (
+        hashlib.sha256(agent.compiled_wasm).hexdigest()
+        if agent.compiled_wasm is not None
+        else None
+    )
+    etag = f'"{bundle_hash}"' if bundle_hash else None
+
+    if etag and if_none_match and if_none_match.strip() == etag:
+        return Response(status_code=304, headers={"ETag": etag})
+
+    if etag:
+        response.headers["ETag"] = etag
+    return _agent_read(agent)
+
+
+@v1.get("/me/key", response_model=KeyIntrospection)
+async def api_introspect_key(
+    authorization: str | None = Header(default=None),
+    session: AsyncSession = Depends(get_session),
+) -> KeyIntrospection:
+    """Describe the bearer token (project + env + scopes).
+
+    Useful for the CLI's startup log line — ``fortify serve`` can show
+    ``project=acme-prod env=live`` without parsing the envelope itself,
+    and we keep the parse-envelope contract on one side (the server).
+
+    Authentication is the bearer; possessing the key proves the right
+    to read its own description. ``find_token_by_secret`` already bumps
+    ``last_used_at`` so this call counts as activity (visible in the
+    dashboard's "last used" column).
+    """
+    if authorization is None or not authorization.startswith("Bearer "):
+        raise HTTPException(
+            status_code=401, detail="missing or malformed authorization header"
+        )
+    secret = authorization.removeprefix("Bearer ").strip()
+    token = await find_token_by_secret(session, secret)
+    if token is None:
+        raise HTTPException(status_code=401, detail="invalid fortify key")
+
+    # ``prefix`` on the row is ``fty_test`` or ``fty_live``; strip the
+    # leading ``fty_`` to expose just the env value the CLI cares about.
+    env = token.prefix.removeprefix("fty_")
+    scopes = (
+        [s for s in token.scopes_csv.split(",") if s] if token.scopes_csv else []
+    )
+    return KeyIntrospection(
+        token_id=token.id,
+        name=token.name,
+        project_id=token.project_id,
+        env=env,
+        scopes=scopes,
+    )
+
+
+@v1.websocket("/serve")
+async def ws_serve_v2(
+    websocket: WebSocket,
+    session: AsyncSession = Depends(get_session),
+) -> None:
+    """Producer socket for ``fortify serve`` — project derived from token.
+
+    The CLI connects with two subprotocols offered: ``bearer.<key>`` and
+    ``fortify.v1``. ``ws_require_project`` validates the bearer and
+    resolves it to the token's project (no project_id in the URL — the
+    biscuit *is* the project context). On a successful handshake the
+    server echoes ``fortify.v1`` back; the bearer subprotocol is
+    consumed and never mirrored.
+
+    Body is the same relay loop as the legacy ``/projects/{id}/serve``
+    route (which stays mounted for one cycle to avoid breaking deploys
+    still running an older CLI). The legacy route gets removed in
+    Commit 3 of this phase.
+    """
+    project_id = await ws_require_project(websocket, session)
+    if project_id is None:
+        return  # handshake already closed with 4401
+    await registry.attach_serve(project_id, websocket)
+    try:
+        while True:
+            payload = await websocket.receive_json()
+            if isinstance(payload, dict) and payload.get("type") == "hello":
+                agent_name = payload.get("agent")
+                await registry.set_agent_name(
+                    project_id, agent_name if isinstance(agent_name, str) else None
+                )
+                continue
+            await registry.relay_to_chat(project_id, payload)
+    except WebSocketDisconnect:
+        pass
+    finally:
+        await registry.detach_serve(project_id, websocket)
 
 
 @v1.websocket("/projects/{project_id}/serve")
