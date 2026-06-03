@@ -199,9 +199,7 @@ class DecisionAccepted(BaseModel):
     event_id: UUID
 
 
-# --- Audit dashboard read models ---------------------------------------------
-# Mirror the dict shapes returned by audit.summarize / timeseries /
-# list_decisions. Selectable windows are bounded by the 90-day storage TTL.
+# --- Audit dashboard read models (mirror audit.py return shapes) -------------
 
 AuditWindow = Literal["24h", "7d", "30d", "90d"]
 
@@ -216,17 +214,9 @@ class OutcomeCounts(BaseModel):
 
 
 class AuditBreakdownRow(OutcomeCounts):
-    """One categorical bucket (agent / role / tool) with its outcome counts.
-    ``key`` is the bucket label; empty agent/role is reported as "(none)"."""
+    """One agent/role/tool bucket; ``key`` is "(none)" when empty."""
 
     key: str
-
-
-class AuditReasonRow(BaseModel):
-    """One top-denial-reason bucket: ``key`` is the reason text, ``n`` its count."""
-
-    key: str
-    n: int
 
 
 class AuditSummary(BaseModel):
@@ -236,7 +226,6 @@ class AuditSummary(BaseModel):
     by_agent: list[AuditBreakdownRow]
     by_role: list[AuditBreakdownRow]
     by_tool: list[AuditBreakdownRow]
-    by_reason: list[AuditReasonRow]
 
 
 class AuditTimeseriesPoint(BaseModel):
@@ -249,8 +238,7 @@ class AuditTimeseriesPoint(BaseModel):
 
 
 class AuditDecisionRow(BaseModel):
-    """One detail row for the events table. hint/arguments are decoded back to
-    objects (or the raw string if storage held malformed JSON)."""
+    """One events-table row; hint/arguments are decoded JSON."""
 
     event_id: UUID
     occurred_at: datetime
@@ -270,8 +258,7 @@ class AuditDecisionRow(BaseModel):
 
 
 class AuditDecisionPage(BaseModel):
-    """A page of detail rows. ``total`` is the unpaginated match count for
-    pager state."""
+    """A page of rows; ``total`` is the unpaginated match count."""
 
     rows: list[AuditDecisionRow]
     total: int

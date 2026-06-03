@@ -592,16 +592,12 @@ def ingest_decision(
     return DecisionAccepted(event_id=body.event_id)
 
 
-# Dashboard audit read path — project-scoped aggregation over policy_decision.
-# Unauthenticated POC posture, matching the other dashboard reads (/agents,
-# /tokens); the eventual gate is the read_audit scope (see below). All three
-# window off WINDOW_HOURS (bounded by the 90-day TTL); FastAPI 422s a bad window
-# via the AuditWindow Literal.
-#
-# TODO(auth): gate behind the read_audit scope once dashboard auth lands —
-# same future-auth hook the other /projects/{project_id} reads carry.
-# NO_VALUE_LABEL ("(none)") is the breakdown label for an empty role; drill-down
-# on it must filter real no-role rows, so translate it back to "".
+# Dashboard audit reads — project-scoped aggregation, unauthenticated POC like
+# the other dashboard reads. TODO(auth): gate behind the read_audit scope.
+
+
+# Translate the "(none)" breakdown label back to "" so drill-down filters real
+# no-role rows.
 def _role_filter(role: Optional[str]) -> Optional[str]:
     return "" if role == NO_VALUE_LABEL else role
 
@@ -613,7 +609,6 @@ def api_audit_summary(
     agent: Optional[str] = None,
     role: Optional[str] = None,
     tool: Optional[str] = None,
-    q: Optional[str] = None,
     clickhouse_client=Depends(require_clickhouse),
 ) -> AuditSummary:
     try:
@@ -624,7 +619,6 @@ def api_audit_summary(
             agent=agent,
             role=_role_filter(role),
             tool=tool,
-            q=q,
         )
     except ClickHouseError:
         raise _audit_unavailable()
@@ -641,7 +635,6 @@ def api_audit_timeseries(
     agent: Optional[str] = None,
     role: Optional[str] = None,
     tool: Optional[str] = None,
-    q: Optional[str] = None,
     clickhouse_client=Depends(require_clickhouse),
 ) -> list[AuditTimeseriesPoint]:
     try:
@@ -653,7 +646,6 @@ def api_audit_timeseries(
             agent=agent,
             role=_role_filter(role),
             tool=tool,
-            q=q,
         )
     except ClickHouseError:
         raise _audit_unavailable()
@@ -671,25 +663,20 @@ def api_audit_decisions(
     tool: Optional[str] = None,
     outcome: Optional[Literal["allow", "deny", "needs_approval"]] = None,
     session_id: Optional[str] = None,
-    q: Optional[str] = None,
     limit: int = 25,
     offset: int = 0,
     clickhouse_client=Depends(require_clickhouse),
 ) -> AuditDecisionPage:
-    # NO_VALUE_LABEL is the breakdown label for an empty role; translate it back
-    # to "" so drill-down on the "(none)" bucket filters real no-role rows.
-    role_filter = "" if role == NO_VALUE_LABEL else role
     try:
         page = list_decisions(
             clickhouse_client,
             project_id=project_id,
             since_hours=WINDOW_HOURS[window],
             agent=agent,
-            role=role_filter,
+            role=_role_filter(role),
             tool=tool,
             outcome=outcome,
             session_id=session_id,
-            q=q,
             limit=max(1, min(limit, 200)),
             offset=max(0, offset),
         )

@@ -158,9 +158,8 @@ export function AuditPage() {
   const [sel, setSel] = useState<AuditDecisionRow | null>(null)
   const [tableLimit, setTableLimit] = useState(40)
 
-  // Any filter/window change also resets the table window, so a stale limit
-  // can't show a short page against a different result set. Wrapping the setter
-  // (rather than a setState-in-effect) keeps the two updates in one render.
+  // Any filter change resets the table page (wrapping the setter avoids a
+  // setState-in-effect).
   const setF: (u: (p: Filters) => Filters) => void = (updater) => {
     setFState(updater)
     setTableLimit(40)
@@ -168,13 +167,12 @@ export function AuditPage() {
 
   const scope = { window: f.range, agent: f.agent, role: f.role, tool: f.tool }
 
-  // Unscoped (range-only) summary: powers the filter dropdown options and the
-  // "X of Y" total, which must list every agent/role/tool in the window.
+  // Range-only (unscoped) summary: filter dropdown options + the "X of Y" total.
   const optionsQ = useQuery({
     queryKey: ['audit', 'options', f.range],
     queryFn: () => api.getAuditSummary({ window: f.range }),
   })
-  // Scoped summary/timeseries: KPIs, donut, area, breakdown, reasons.
+  // Scoped summary/timeseries: KPIs, donut, area, breakdown.
   const summaryQ = useQuery({
     queryKey: ['audit', 'summary', scope],
     queryFn: () => api.getAuditSummary(scope),

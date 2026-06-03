@@ -29,12 +29,8 @@ def get_clickhouse() -> Client:
         compress=True,
         connect_timeout=5,
         send_receive_timeout=30,
-        # This client is process-global (lru_cache) and shared across FastAPI's
-        # request threadpool. A per-client session_id makes ClickHouse reject
-        # concurrent queries ("concurrent queries within the same session") —
-        # which the dashboard trips by firing several audit reads at once.
-        # Disabling the session lets the thread-safe HTTP pool serve them in
-        # parallel; we use no session-scoped state (temp tables, SET, etc.).
+        # No session_id: this client is shared across the request threadpool,
+        # and a session would reject concurrent queries. We use no session state.
         autogenerate_session_id=False,
     )
 

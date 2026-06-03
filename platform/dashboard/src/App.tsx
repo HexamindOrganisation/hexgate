@@ -1,6 +1,5 @@
-import { BrowserRouter, Routes, Route } from 'react-router-dom'
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { AppShell } from '@/components/AppShell'
-import { DashboardPage } from '@/routes/Dashboard'
 import { GraphPage } from '@/routes/Graph'
 import { AgentsPage } from '@/routes/Agents'
 import { PoliciesPage } from '@/routes/Policies'
@@ -14,7 +13,7 @@ export default function App() {
     <BrowserRouter>
       <Routes>
         <Route element={<AppShell />}>
-          <Route index element={<DashboardPage />} />
+          <Route index element={<Navigate to="/agents" replace />} />
           <Route path="agents" element={<AgentsPage />} />
           <Route path="policies" element={<PoliciesPage />} />
           <Route path="graph" element={<GraphPage />} />

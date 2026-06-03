@@ -8,14 +8,11 @@ import {
   Filter,
   Lightbulb,
   List,
-  Search,
-  ShieldX,
   X,
   type LucideIcon,
 } from 'lucide-react'
 
-// Maps the design's kebab-case `data-lucide` names to lucide-react components.
-// Only the icons the Audit page uses are registered.
+// kebab `data-lucide` name → lucide-react component (only icons the page uses).
 const ICONS: Record<string, LucideIcon> = {
   activity: Activity,
   check: Check,
@@ -25,8 +22,6 @@ const ICONS: Record<string, LucideIcon> = {
   filter: Filter,
   lightbulb: Lightbulb,
   list: List,
-  search: Search,
-  'shield-x': ShieldX,
   x: X,
 }
 

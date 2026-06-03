@@ -122,9 +122,7 @@ export interface ValidatePolicyResponse {
   errors: PolicyValidationError[]
 }
 
-// --- Audit dashboard --------------------------------------------------------
-// Mirror the read models in platform/api/schemas.py. Windows are bounded by the
-// 90-day storage TTL; "(none)" is the breakdown label for an empty agent/role.
+// --- Audit dashboard (mirrors platform/api/schemas.py) ----------------------
 
 export type AuditWindow = '24h' | '7d' | '30d' | '90d'
 export type AuditOutcome = 'allow' | 'deny' | 'needs_approval'
@@ -136,15 +134,9 @@ export interface OutcomeCounts {
   needs_approval: number
 }
 
-/** One categorical bucket (agent / role / tool). `key` is "(none)" when empty. */
+/** One agent/role/tool bucket; `key` is "(none)" when empty. */
 export interface AuditBreakdownRow extends OutcomeCounts {
   key: string
-}
-
-/** One top-denial-reason bucket: `key` is the reason text, `n` its count. */
-export interface AuditReasonRow {
-  key: string
-  n: number
 }
 
 export interface AuditSummary {
@@ -152,10 +144,9 @@ export interface AuditSummary {
   by_agent: AuditBreakdownRow[]
   by_role: AuditBreakdownRow[]
   by_tool: AuditBreakdownRow[]
-  by_reason: AuditReasonRow[]
 }
 
-/** One time bucket of the outcome-over-time chart. `bucket` is an ISO string. */
+/** One time bucket; `bucket` is an ISO string. */
 export interface AuditTimeseriesPoint {
   bucket: string
   allow: number
@@ -163,7 +154,7 @@ export interface AuditTimeseriesPoint {
   needs_approval: number
 }
 
-/** One detail row. `hint`/`arguments` are decoded JSON (object, or raw string). */
+/** One events-table row; `hint`/`arguments` are decoded JSON. */
 export interface AuditDecisionRow {
   event_id: string
   occurred_at: string
@@ -189,17 +180,15 @@ export interface AuditDecisionPage {
   offset: number
 }
 
-/** Scope filters shared by summary/timeseries/list — they narrow the slice the
- * KPIs, charts and breakdowns all reflect. Pass `role: '(none)'` for no-role. */
+/** Scope filters shared by summary/timeseries/list. `role: '(none)'` = no-role. */
 export interface AuditScope {
   window?: AuditWindow
   agent?: string
   role?: string
   tool?: string
-  q?: string
 }
 
-/** Decisions list filters: scope + table-only outcome/session_id + paging. */
+/** List filters: scope + table-only outcome/session_id + paging. */
 export interface AuditDecisionFilters extends AuditScope {
   outcome?: AuditOutcome
   session_id?: string

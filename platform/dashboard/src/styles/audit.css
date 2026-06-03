@@ -1,7 +1,4 @@
-/* Audit dashboard styles — ported from the design drop (design-import/audit).
- * Only the classes the Audit page uses; tokens live in index.css. The original
- * `.fortify .mono` ancestor scoping is dropped (the page renders inside AppShell,
- * not a `.fortify` root). */
+/* Audit dashboard styles (.fty-* classes); design tokens live in index.css. */
 
 .mono {
   font-family: var(--font-mono);

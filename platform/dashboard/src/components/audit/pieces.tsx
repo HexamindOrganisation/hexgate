@@ -8,8 +8,7 @@ import { Icon } from './icon'
 import { BreakdownBar, type BreakdownDatum, DecisionBadge, Sparkline } from './charts'
 import { CHART_COLORS, OUT_LABEL } from './chart-tokens'
 
-// Filter state shared across the dashboard. '' means "all"; range drives the
-// time window. outcome is applied to the table only (KPIs/charts stay scoped).
+// Shared filter state. '' = "all"; outcome applies to the table only.
 export interface Filters {
   agent: string
   role: string
@@ -34,8 +33,7 @@ const toDatum = (r: AuditBreakdownRow): BreakdownDatum => ({
   needs_approval: r.needs_approval,
 })
 
-// Module-level so it isn't re-created each render (and to satisfy the
-// no-components-in-render rule).
+// Module-level (not re-created per render).
 function FilterSelect({ value, all, opts, onChange }: { value: string; all: string; opts: string[]; onChange: (v: string) => void }) {
   return (
     <select className="fty-select" value={value} onChange={(e) => onChange(e.target.value)}>

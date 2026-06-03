@@ -82,17 +82,12 @@ def insert_decision(
     )
 
 
-# --- Read path: dashboard aggregation ----------------------------------------
-# Query-time GROUP BY over policy_decision; no rollups/materialized views (v1).
-# The table's sort key (project_id, agent_name, outcome, occurred_at) and
-# LowCardinality columns make these scans cheap. All time-axis logic keys off
-# occurred_at (event time), never received_at.
+# --- Read path: dashboard aggregation (query-time GROUP BY, no rollups) -------
 
-# Selectable dashboard windows → hours. 90d == the 90-day TTL (hard ceiling).
+# Dashboard windows → hours; 90d is the 90-day TTL ceiling.
 WINDOW_HOURS: dict[str, int] = {"24h": 24, "7d": 24 * 7, "30d": 24 * 30, "90d": 24 * 90}
 
-# Time-bucket granularity per window, chosen to keep the series at ~24-90 points
-# regardless of range (24h→hourly; 7d→6h; 30d/90d→daily).
+# Bucket size per window (~24-90 points): 24h→hourly, 7d→6h, 30d/90d→daily.
 _WINDOW_BUCKET_MINUTES: dict[str, int] = {
     "24h": 60,
     "7d": 360,
@@ -100,28 +95,19 @@ _WINDOW_BUCKET_MINUTES: dict[str, int] = {
     "90d": 1440,
 }
 
-# Empty agent/role render as this in breakdowns (a real "no role" bucket, not
-# dropped). The list endpoint translates it back to "" when filtering.
+# Breakdown label for an empty agent/role; the list endpoint maps it back to "".
 NO_VALUE_LABEL = "(none)"
 
 _OUTCOMES = ("allow", "deny", "needs_approval")
 
 
 def bucket_minutes_for(window: str) -> int:
-    """Bucket size (minutes) for a window key. KeyError on unknown window —
-    callers validate the window against WINDOW_HOURS first."""
+    """Bucket size (minutes) for a window key (KeyError on unknown window)."""
     return _WINDOW_BUCKET_MINUTES[window]
 
 
 def _zero_counts() -> dict[str, int]:
     return {"all": 0, "allow": 0, "deny": 0, "needs_approval": 0}
-
-
-# Free-text search haystack: the fields the dashboard search box covers.
-_SEARCH_HAYSTACK = (
-    "concat(tool_name, ' ', agent_name, ' ', role, ' ', reason, ' ', "
-    "session_id, ' ', user_id, ' ', arrayStringConcat(violations, ' '))"
-)
 
 
 def _scope(
@@ -131,15 +117,9 @@ def _scope(
     agent: str | None = None,
     role: str | None = None,
     tool: str | None = None,
-    q: str | None = None,
 ) -> tuple[list[str], dict[str, object]]:
-    """Build the shared WHERE clauses + params for the dashboard scope filters
-    (project + window + agent/role/tool/free-text). These narrow the slice that
-    KPIs, charts, breakdowns and the events table all reflect. ``outcome`` and
-    ``session_id`` are list-only and applied by the caller on top.
-
-    ``role`` matches exactly when given — pass "" to select the no-role bucket.
-    """
+    """Shared WHERE + params for the scope filters (project/window/agent/role/
+    tool) that all reads narrow by. Pass role="" for the no-role bucket."""
     where = [
         "project_id = {pid:String}",
         "occurred_at >= now() - INTERVAL {hrs:UInt32} HOUR",
@@ -154,19 +134,12 @@ def _scope(
     if tool:
         where.append("tool_name = {tool:String}")
         params["tool"] = tool
-    if q:
-        where.append(
-            f"positionCaseInsensitiveUTF8({_SEARCH_HAYSTACK}, {{q:String}}) > 0"
-        )
-        params["q"] = q
     return where, params
 
 
-# Grouping sets: grand total + per-outcome + per-(agent|role|tool, outcome).
-# GROUPING(col)=1 marks a column rolled up for that row, so we classify each row
-# by which grouping set produced it rather than trusting the (default) value of a
-# rolled-up column. Every set except () keys on outcome, so g_outcome=1 uniquely
-# identifies the grand-total row.
+# Grand total + per-outcome + per-(agent|role|tool, outcome) in one scan.
+# Rows are classified by their GROUPING() flags (1 = column rolled up); only the
+# () set rolls up outcome, so g_outcome=1 marks the grand-total row.
 _GROUPING_SETS = (
     "GROUPING SETS ((), (outcome), (agent_name, outcome), "
     "(role, outcome), (tool_name, outcome))"
@@ -181,20 +154,12 @@ def summarize(
     agent: str | None = None,
     role: str | None = None,
     tool: str | None = None,
-    q: str | None = None,
 ) -> dict:
-    """Totals and categorical breakdowns for the scoped slice over the window.
-
-    The scope filters (agent/role/tool/q) narrow the slice so the KPIs, donut,
-    area chart and breakdowns all reflect the same set the events table shows.
-    Returns ``{totals, by_agent, by_role, by_tool, by_reason}``: ``totals`` is a
-    counts dict; each ``by_*`` breakdown is a list of ``{key, all, allow, deny,
-    needs_approval}`` sorted by ``all`` descending (empty agent/role → NO_VALUE_LABEL);
-    ``by_reason`` is the top denial reasons as ``{key, n}``. An empty slice
-    yields zeroed totals and empty lists.
-    """
+    """Totals + breakdowns for the scoped slice. Returns ``{totals, by_agent,
+    by_role, by_tool}``; each breakdown is ``{key, all, allow, deny,
+    needs_approval}`` sorted by ``all`` desc (empty agent/role → NO_VALUE_LABEL)."""
     where, params = _scope(
-        project_id, since_hours, agent=agent, role=role, tool=tool, q=q
+        project_id, since_hours, agent=agent, role=role, tool=tool
     )
     where_sql = " AND ".join(where)
     summary_sql = (
@@ -237,22 +202,11 @@ def summarize(
             reverse=True,
         )
 
-    # Top denial reasons — separate scan (denies, non-empty reason) over the
-    # same scope.
-    reasons_sql = (
-        f"SELECT reason, count() AS n FROM policy_decision WHERE {where_sql} "
-        "AND outcome = 'deny' AND reason != '' "
-        "GROUP BY reason ORDER BY n DESC LIMIT 20"
-    )
-    reasons = client.query(reasons_sql, parameters=params)
-    by_reason = [{"key": reason, "n": int(n)} for reason, n in reasons.result_rows]
-
     return {
         "totals": totals,
         "by_agent": _ranked(by_agent),
         "by_role": _ranked(by_role),
         "by_tool": _ranked(by_tool),
-        "by_reason": by_reason,
     }
 
 
@@ -265,13 +219,11 @@ def timeseries(
     agent: str | None = None,
     role: str | None = None,
     tool: str | None = None,
-    q: str | None = None,
 ) -> list[dict]:
-    """Per-bucket outcome counts for the scoped slice. Returns ``[{bucket, allow,
-    deny, needs_approval}]`` ordered by bucket. Sparse: buckets with no events
-    are absent (the chart gap-fills); an empty slice returns ``[]``."""
+    """Per-bucket outcome counts, ordered by bucket. Sparse: empty buckets are
+    omitted. Returns ``[{bucket, allow, deny, needs_approval}]``."""
     where, params = _scope(
-        project_id, since_hours, agent=agent, role=role, tool=tool, q=q
+        project_id, since_hours, agent=agent, role=role, tool=tool
     )
     params["bucket"] = bucket_minutes
     where_sql = " AND ".join(where)
@@ -290,9 +242,7 @@ def timeseries(
 
 
 def _decode_json_column(raw: str) -> object:
-    """hint/arguments are stored as JSON strings ("" for null). Decode back to
-    objects for the API; leave malformed values as the raw string rather than
-    failing the whole read."""
+    """Decode a stored JSON string ("" → None); leave malformed values as-is."""
     if not raw:
         return None
     try:
@@ -318,20 +268,14 @@ def list_decisions(
     tool: str | None = None,
     outcome: str | None = None,
     session_id: str | None = None,
-    q: str | None = None,
     limit: int = 25,
     offset: int = 0,
 ) -> dict:
-    """Filterable detail rows for the events table, newest first by occurred_at.
-
-    Shares the scope filters (agent/role/tool/q) with summarize/timeseries, plus
-    ``outcome`` and ``session_id`` which apply to the table only. ``role`` matches
-    exactly — pass "" for the no-role bucket (the endpoint maps NO_VALUE_LABEL → "").
-    Returns ``{rows, total, limit, offset}`` where ``total`` is the unpaginated
-    match count (for pager state) and each row has hint/arguments decoded.
-    """
+    """Detail rows for the events table, newest first. Scope filters plus
+    table-only ``outcome``/``session_id``. Returns ``{rows, total, limit,
+    offset}`` with ``total`` the unpaginated match count."""
     where, params = _scope(
-        project_id, since_hours, agent=agent, role=role, tool=tool, q=q
+        project_id, since_hours, agent=agent, role=role, tool=tool
     )
     if outcome:
         where.append("outcome = {outcome:String}")
