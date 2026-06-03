@@ -1,4 +1,3 @@
-import { useEffect, useRef } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { CheckCircle2, MailX } from 'lucide-react'
 
@@ -23,22 +22,18 @@ import { AuthCardLayout } from './SignIn'
  *     signed out → /sign-in)
  *   - failure → expired/invalid token, link to resend
  *   - missing token → invalid URL
+ *
+ * The verify call is modelled as a one-shot ``useQuery`` keyed by the
+ * token (see ``useVerifyEmail`` in lib/auth.ts). Previous useMutation +
+ * useEffect + useRef pattern hung at "Verifying…" forever under React
+ * 18+ StrictMode dev because the mutation observer got torn down
+ * during the simulated unmount/remount and the remount's fresh observer
+ * never reconnected to the in-flight request.
  */
 export function VerifyEmailPage() {
   const { token } = useParams<{ token: string }>()
-  const verify = useVerifyEmail()
+  const verify = useVerifyEmail(token)
   const { user } = useUser()
-  const firedRef = useRef(false)
-
-  useEffect(() => {
-    // React StrictMode in dev mounts each component twice; the token
-    // can only be consumed once, so guard against the double-fire.
-    if (token && !firedRef.current) {
-      firedRef.current = true
-      verify.mutate(token)
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token])
 
   if (!token) {
     return (
@@ -61,7 +56,9 @@ export function VerifyEmailPage() {
     )
   }
 
-  if (verify.isPending || verify.isIdle) {
+  // Query is in flight on first mount + while the request runs.
+  // ``isLoading`` is the "no data yet, not errored" state.
+  if (verify.isLoading) {
     return (
       <AuthCardLayout>
         <Card className="w-full max-w-md">
