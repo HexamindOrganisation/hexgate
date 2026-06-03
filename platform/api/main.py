@@ -38,6 +38,8 @@ from schemas import (
     AgentManifestView,
     AgentRead,
     AgentUpdate,
+    MemberRead,
+    MemberUpdate,
     OrgCreate,
     OrgRead,
     OrgUpdate,
@@ -312,6 +314,34 @@ async def require_org_admin(
             status_code=403, detail="admin or owner role required for this action"
         )
     return membership
+
+
+async def require_org_admin_or_self(
+    user_id: str,
+    membership: tuple[User, OrganizationMember] = Depends(require_org_membership),
+) -> tuple[User, OrganizationMember]:
+    """Variant for ``DELETE /v1/orgs/{org_id}/members/{user_id}``.
+
+    Admin/owner can remove anyone in the org; plain members can only
+    remove themselves (the "leave organization" flow). The path
+    parameter ``user_id`` is the *target* of the removal — compared
+    against the caller's ``user.id`` to decide whether self-only
+    permission is sufficient.
+
+    The last-owner guard fires inside :func:`services.remove_member`
+    so either path is rejected when removal would orphan the org.
+    """
+    from services import ROLE_ADMIN, ROLE_OWNER
+
+    caller, member = membership
+    if member.role in {ROLE_OWNER, ROLE_ADMIN}:
+        return membership
+    if caller.id == user_id:
+        return membership
+    raise HTTPException(
+        status_code=403,
+        detail="only admins / owners can manage other members",
+    )
 
 
 async def require_user_or_sdk_token(
@@ -969,6 +999,107 @@ async def api_update_org(
     await session.commit()
     await session.refresh(org)
     return _org_read(org)
+
+
+# ---------------------------------------------------------------------------
+# M3 Phase 4 step 3 — Organization member management
+#
+# Service-layer helpers (list_org_members / change_member_role /
+# remove_member / LastOwnerError) already exist; these handlers just
+# wrap them with HTTP semantics.
+# ---------------------------------------------------------------------------
+
+
+def _member_read(member: OrganizationMember, user: User) -> MemberRead:
+    """Shape the (membership, user) join into the wire row."""
+    return MemberRead(
+        user_id=user.id,
+        email=user.email,
+        role=member.role,
+        joined_at=member.created_at,
+    )
+
+
+@v1.get("/orgs/{org_id}/members", tags=["orgs"])
+async def api_list_members(
+    membership: tuple[User, OrganizationMember] = Depends(require_org_membership),
+    session: AsyncSession = Depends(get_session),
+) -> list[MemberRead]:
+    """List all members of an org. Any member can read.
+
+    The role gating intentionally stops at "any member" rather than
+    "admin/owner" — every member has a legitimate need to know who
+    else is in the org (e.g., to know who to ask for promotion).
+    """
+    from services import list_org_members
+
+    _, member = membership
+    rows = await list_org_members(session, member.org_id)
+    return [_member_read(m, u) for m, u in rows]
+
+
+@v1.patch("/orgs/{org_id}/members/{user_id}", tags=["orgs"])
+async def api_update_member_role(
+    user_id: str,
+    body: MemberUpdate,
+    membership: tuple[User, OrganizationMember] = Depends(require_org_admin),
+    session: AsyncSession = Depends(get_session),
+) -> MemberRead:
+    """Promote / demote a member. Admin or owner role required.
+
+    ``LastOwnerError`` from the service layer surfaces as 409 — demoting
+    the only owner would orphan the org. The route doesn't block self-
+    demotion explicitly; the same guard catches it via the owner count.
+    Returns the updated row so the dashboard can re-render the badge
+    without a follow-up GET.
+    """
+    from services import LastOwnerError, change_member_role
+
+    _, caller_member = membership
+    try:
+        updated = await change_member_role(
+            session,
+            org_id=caller_member.org_id,
+            user_id=user_id,
+            new_role=body.role,
+        )
+    except LastOwnerError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if updated is None:
+        raise HTTPException(status_code=404, detail="member not found")
+
+    # Look up the user so we can return MemberRead's email field.
+    user = await session.get(User, user_id)
+    assert user is not None  # FK guarantee
+    return _member_read(updated, user)
+
+
+@v1.delete("/orgs/{org_id}/members/{user_id}", status_code=204, tags=["orgs"])
+async def api_remove_member(
+    user_id: str,
+    membership: tuple[User, OrganizationMember] = Depends(require_org_admin_or_self),
+    session: AsyncSession = Depends(get_session),
+) -> Response:
+    """Remove a member. Admin/owner can remove anyone; plain members
+    can only remove themselves (the "leave organization" flow).
+
+    Refuses with 409 when the removal would leave the org with zero
+    owners — promote another member to owner first, then leave.
+
+    Returns 204 No Content on success (REST norm for DELETE).
+    """
+    from services import LastOwnerError, remove_member
+
+    _, caller_member = membership
+    try:
+        removed = await remove_member(
+            session, org_id=caller_member.org_id, user_id=user_id
+        )
+    except LastOwnerError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if not removed:
+        raise HTTPException(status_code=404, detail="member not found")
+    return Response(status_code=204)
 
 
 def _maybe_mount_oauth_routers() -> None:

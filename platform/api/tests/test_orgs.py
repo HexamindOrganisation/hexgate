@@ -660,3 +660,296 @@ def test_patch_org_403_for_plain_member(
     r = client.patch(f"/v1/orgs/{DEFAULT_ORG_ID}", json={"name": "Renamed"})
     assert r.status_code == 403
     assert "admin or owner" in r.json()["detail"].lower()
+
+
+# ---------------------------------------------------------------------------
+# Member management routes (Phase 4 step 3)
+#
+# Each test signs the caller into a fresh personal org (the on-signup
+# default) and then either:
+#   - operates inside that org (always a single owner — themselves)
+#   - or directly adds a second member via the session_factory to set
+#     up the "two members" / "two owners" scenarios.
+# ---------------------------------------------------------------------------
+
+
+async def _add_member(
+    session_factory, *, email: str, org_id: str, role: str
+) -> str:
+    """Test helper: add (or create) a user as a member of an org.
+
+    Returns the user's id. If the email already exists, just adds the
+    membership row — useful for the same TestClient handling multiple
+    test scenarios.
+    """
+    import uuid
+
+    async with session_factory() as s:
+        from sqlmodel import select
+
+        existing = (
+            await s.exec(select(User).where(User.email == email))
+        ).first()
+        if existing is None:
+            existing = User(email=email)
+            s.add(existing)
+            await s.commit()
+            await s.refresh(existing)
+        s.add(
+            OrganizationMember(
+                id=str(uuid.uuid4()),
+                user_id=existing.id,
+                org_id=org_id,
+                role=role,
+            )
+        )
+        await s.commit()
+        return existing.id
+
+
+# ---- GET /v1/orgs/{id}/members -------------------------------------------
+
+
+def test_list_members_returns_self_for_fresh_user(client: TestClient) -> None:
+    """A user with only their personal default org sees themselves in
+    the members list."""
+    _signup_and_login(client, "solo@example.com", "correcthorsebattery")
+    org_id = client.get("/v1/orgs").json()[0]["id"]
+
+    r = client.get(f"/v1/orgs/{org_id}/members")
+    assert r.status_code == 200, r.text
+    members = r.json()
+    assert len(members) == 1
+    assert members[0]["email"] == "solo@example.com"
+    assert members[0]["role"] == ROLE_OWNER
+
+
+def test_list_members_403_for_non_member(client: TestClient) -> None:
+    """User A creates an org; User B (different account) can't list
+    its members."""
+    _signup_and_login(client, "ownerA@example.com", "correcthorsebattery")
+    org_id = client.get("/v1/orgs").json()[0]["id"]
+    client.cookies.clear()
+    _signup_and_login(client, "strangerB@example.com", "correcthorsebattery")
+
+    r = client.get(f"/v1/orgs/{org_id}/members")
+    assert r.status_code == 403
+
+
+def test_list_members_404_for_unknown_org(client: TestClient) -> None:
+    _signup_and_login(client, "wanderer@example.com", "correcthorsebattery")
+    r = client.get("/v1/orgs/00000000-0000-0000-0000-deadbeef0000/members")
+    assert r.status_code == 404
+
+
+# ---- PATCH /v1/orgs/{id}/members/{uid} -----------------------------------
+
+
+def test_promote_member_to_admin_as_owner(
+    client: TestClient, session_factory
+) -> None:
+    """Owner can promote a plain member to admin via PATCH."""
+    import asyncio
+
+    _signup_and_login(client, "boss@example.com", "correcthorsebattery")
+    org_id = client.get("/v1/orgs").json()[0]["id"]
+    member_id = asyncio.get_event_loop().run_until_complete(
+        _add_member(
+            session_factory, email="newbie@example.com", org_id=org_id, role=ROLE_MEMBER
+        )
+    )
+
+    r = client.patch(
+        f"/v1/orgs/{org_id}/members/{member_id}", json={"role": ROLE_ADMIN}
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["role"] == ROLE_ADMIN
+
+
+def test_patch_member_role_403_for_plain_member(
+    client: TestClient, session_factory
+) -> None:
+    """A plain member can't promote anyone — even themselves.
+
+    The helper-created member has no password (added via direct DB
+    write), so we impersonate them via the X-Dev-User header gated
+    behind ``FORTIFY_ALLOW_DEV_USER_HEADER`` (enabled by the conftest
+    for the test session). The dashboard never sends this header.
+    """
+    import asyncio
+
+    _signup_and_login(client, "ownerX@example.com", "correcthorsebattery")
+    org_id = client.get("/v1/orgs").json()[0]["id"]
+    member_user_id = asyncio.get_event_loop().run_until_complete(
+        _add_member(
+            session_factory, email="memberX@example.com", org_id=org_id, role=ROLE_MEMBER
+        )
+    )
+
+    # Drop the owner cookie + assume the member identity via X-Dev-User.
+    client.cookies.clear()
+    r = client.patch(
+        f"/v1/orgs/{org_id}/members/{member_user_id}",
+        json={"role": ROLE_ADMIN},
+        headers={"X-Dev-User": member_user_id},
+    )
+    assert r.status_code == 403
+    assert "admin or owner" in r.json()["detail"].lower()
+
+
+def test_demote_last_owner_returns_409(client: TestClient) -> None:
+    """Owner tries to demote themselves while sole owner → 409. The
+    last-owner guard fires in services.change_member_role; the route
+    translates LastOwnerError to HTTP 409 with the same message."""
+    _signup_and_login(client, "lone@example.com", "correcthorsebattery")
+    org_id = client.get("/v1/orgs").json()[0]["id"]
+    me_id = client.get("/v1/users/me").json()["id"]
+
+    r = client.patch(
+        f"/v1/orgs/{org_id}/members/{me_id}", json={"role": ROLE_MEMBER}
+    )
+    assert r.status_code == 409
+    assert "last owner" in r.json()["detail"].lower()
+
+
+def test_demote_owner_succeeds_when_other_owners_exist(
+    client: TestClient, session_factory
+) -> None:
+    """With a second owner around, either one can be demoted."""
+    import asyncio
+
+    _signup_and_login(client, "co1@example.com", "correcthorsebattery")
+    org_id = client.get("/v1/orgs").json()[0]["id"]
+    co_id = asyncio.get_event_loop().run_until_complete(
+        _add_member(
+            session_factory, email="co2@example.com", org_id=org_id, role=ROLE_OWNER
+        )
+    )
+
+    r = client.patch(
+        f"/v1/orgs/{org_id}/members/{co_id}", json={"role": ROLE_MEMBER}
+    )
+    assert r.status_code == 200
+    assert r.json()["role"] == ROLE_MEMBER
+
+
+def test_patch_member_404_for_unknown_user(client: TestClient) -> None:
+    """User isn't in the org → 404 (matches services contract)."""
+    _signup_and_login(client, "looker@example.com", "correcthorsebattery")
+    org_id = client.get("/v1/orgs").json()[0]["id"]
+
+    r = client.patch(
+        f"/v1/orgs/{org_id}/members/00000000-0000-0000-0000-deadbeef0000",
+        json={"role": ROLE_MEMBER},
+    )
+    assert r.status_code == 404
+
+
+def test_patch_member_422_for_invalid_role(client: TestClient) -> None:
+    """Role outside the allowed set → 422 (pydantic body validation)."""
+    _signup_and_login(client, "validator@example.com", "correcthorsebattery")
+    org_id = client.get("/v1/orgs").json()[0]["id"]
+    me_id = client.get("/v1/users/me").json()["id"]
+
+    r = client.patch(
+        f"/v1/orgs/{org_id}/members/{me_id}", json={"role": "superadmin"}
+    )
+    assert r.status_code == 422
+
+
+# ---- DELETE /v1/orgs/{id}/members/{uid} ---------------------------------
+
+
+def test_owner_removes_member(client: TestClient, session_factory) -> None:
+    """Owner removes a plain member → 204, member is gone from list."""
+    import asyncio
+
+    _signup_and_login(client, "remover@example.com", "correcthorsebattery")
+    org_id = client.get("/v1/orgs").json()[0]["id"]
+    victim_id = asyncio.get_event_loop().run_until_complete(
+        _add_member(
+            session_factory, email="victim@example.com", org_id=org_id, role=ROLE_MEMBER
+        )
+    )
+
+    r = client.delete(f"/v1/orgs/{org_id}/members/{victim_id}")
+    assert r.status_code == 204, r.text
+    # And the member list no longer includes them.
+    members = client.get(f"/v1/orgs/{org_id}/members").json()
+    assert victim_id not in {m["user_id"] for m in members}
+
+
+def test_member_can_remove_self(
+    client: TestClient, session_factory
+) -> None:
+    """A plain member can leave the org by DELETEing their own row.
+
+    We exercise self-removal via X-Dev-User since the manually-added
+    member doesn't have a password. The dashboard's "Leave org" button
+    will hit the same endpoint with a cookie session in production.
+    """
+    import asyncio
+
+    _signup_and_login(client, "stayer@example.com", "correcthorsebattery")
+    org_id = client.get("/v1/orgs").json()[0]["id"]
+    leaver_id = asyncio.get_event_loop().run_until_complete(
+        _add_member(
+            session_factory, email="leaver@example.com", org_id=org_id, role=ROLE_MEMBER
+        )
+    )
+
+    client.cookies.clear()
+    r = client.delete(
+        f"/v1/orgs/{org_id}/members/{leaver_id}",
+        headers={"X-Dev-User": leaver_id},
+    )
+    assert r.status_code == 204
+
+
+def test_member_cannot_remove_someone_else(
+    client: TestClient, session_factory
+) -> None:
+    """Plain member tries to remove a third party → 403. The
+    require_org_admin_or_self gate fires."""
+    import asyncio
+
+    _signup_and_login(client, "obs@example.com", "correcthorsebattery")
+    org_id = client.get("/v1/orgs").json()[0]["id"]
+    mem_a = asyncio.get_event_loop().run_until_complete(
+        _add_member(
+            session_factory, email="ma@example.com", org_id=org_id, role=ROLE_MEMBER
+        )
+    )
+    mem_b = asyncio.get_event_loop().run_until_complete(
+        _add_member(
+            session_factory, email="mb@example.com", org_id=org_id, role=ROLE_MEMBER
+        )
+    )
+
+    client.cookies.clear()
+    r = client.delete(
+        f"/v1/orgs/{org_id}/members/{mem_b}",
+        headers={"X-Dev-User": mem_a},
+    )
+    assert r.status_code == 403
+
+
+def test_remove_last_owner_returns_409(client: TestClient) -> None:
+    """Owner tries to remove themselves while sole owner → 409."""
+    _signup_and_login(client, "alone@example.com", "correcthorsebattery")
+    org_id = client.get("/v1/orgs").json()[0]["id"]
+    me_id = client.get("/v1/users/me").json()["id"]
+
+    r = client.delete(f"/v1/orgs/{org_id}/members/{me_id}")
+    assert r.status_code == 409
+    assert "last owner" in r.json()["detail"].lower()
+
+
+def test_delete_member_404_for_unknown_user(client: TestClient) -> None:
+    _signup_and_login(client, "explorer@example.com", "correcthorsebattery")
+    org_id = client.get("/v1/orgs").json()[0]["id"]
+
+    r = client.delete(
+        f"/v1/orgs/{org_id}/members/00000000-0000-0000-0000-deadbeef0000"
+    )
+    assert r.status_code == 404
