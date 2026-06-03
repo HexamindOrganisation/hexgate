@@ -61,6 +61,33 @@ class OrgUpdate(BaseModel):
     )
 
 
+class MemberRead(BaseModel):
+    """Row in ``GET /v1/orgs/{org_id}/members``.
+
+    Keeps ``email`` on the row even though the relationship is on
+    ``user_id`` — the dashboard's member list renders ``<email> · <role>``
+    per row, so denormalizing the email here saves a JOIN-per-row
+    on the frontend.
+    """
+
+    user_id: str
+    email: str
+    role: str  # "owner" | "admin" | "member"
+    joined_at: datetime
+
+
+class MemberUpdate(BaseModel):
+    """``PATCH /v1/orgs/{id}/members/{user_id}`` body.
+
+    Only ``role`` is mutable — promoting / demoting an existing
+    member. Adding a member happens via the invitation flow (Phase 4
+    step 4); removing is ``DELETE`` (step 3); changing the user's
+    email is a self-service action on the user itself, not here.
+    """
+
+    role: str = Field(pattern="^(owner|admin|member)$")
+
+
 class TokenMintRequest(BaseModel):
     name: str = Field(min_length=1, max_length=64)
     scopes: list[str] = Field(default_factory=lambda: ["mint_user_token", "read_audit"])
