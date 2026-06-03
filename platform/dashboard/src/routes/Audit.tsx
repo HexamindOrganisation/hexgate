@@ -193,9 +193,9 @@ export function AuditPage() {
     refetchInterval: 30_000,
   })
   const relatedQ = useQuery({
-    queryKey: ['audit', 'session', sel?.session_id],
+    queryKey: ['audit', 'session', f.range, sel?.session_id],
     enabled: !!sel?.session_id,
-    queryFn: () => api.listAuditDecisions({ window: '90d', session_id: sel!.session_id, limit: 12 }),
+    queryFn: () => api.listAuditDecisions({ window: f.range, session_id: sel!.session_id, limit: 12 }),
   })
 
   const summary = summaryQ.data

@@ -343,9 +343,9 @@ columns make these scans cheap. All time-axis logic keys off `occurred_at`
 | `GET /v1/projects/{id}/audit/timeseries?window=` | Per-bucket outcome counts (`toStartOfInterval`); bucket size tracks the window. |
 | `GET /v1/projects/{id}/audit/decisions?window=&agent=&role=&outcome=&limit=&offset=` | Filterable detail rows, newest first, with `total` for pagination; `hint`/`arguments` decoded back to objects. |
 
-- **`window`** is `24h` / `7d` / `30d`, validated by a `Literal` (bad value →
-  422) and bounded by the 90-day storage TTL. `role="(none)"` selects the
-  empty-role bucket.
+- **`window`** is `24h` / `7d` / `30d` / `90d`, validated by a `Literal` (bad
+  value → 422) and bounded by the 90-day storage TTL. `role="(none)"` selects
+  the empty-role bucket.
 - **Concurrency.** A client firing several of these reads at once (e.g. a
   dashboard loading summary + timeseries + decisions together) would otherwise
   hit "concurrent queries within the same session". The shared, process-global

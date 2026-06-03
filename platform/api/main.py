@@ -92,7 +92,7 @@ async def lifespan(_: FastAPI):
     # Don't fail startup on unreachable ClickHouse — /ready surfaces it.
     if not clickhouse_ping():
         _log.warning(
-            "ClickHouse unreachable at startup; /v1/audit/decisions will 503 until reachable"
+            "ClickHouse unreachable at startup; audit endpoints will 503 until reachable"
         )
     yield
 

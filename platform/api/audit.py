@@ -95,10 +95,8 @@ _WINDOW_BUCKET_MINUTES: dict[str, int] = {
     "90d": 1440,
 }
 
-# Breakdown label for an empty agent/role; the list endpoint maps it back to "".
+# Breakdown label for an empty agent/role; the read endpoints map it back to "".
 NO_VALUE_LABEL = "(none)"
-
-_OUTCOMES = ("allow", "deny", "needs_approval")
 
 
 def bucket_minutes_for(window: str) -> int:
@@ -285,22 +283,35 @@ def list_decisions(
         params["session_id"] = session_id
     where_sql = " AND ".join(where)
 
-    total = client.query(
-        f"SELECT count() FROM policy_decision WHERE {where_sql}", parameters=params
-    ).result_rows[0][0]
-
+    # One scan yields the page and its ``total`` together: a separate ``count()``
+    # would re-evaluate ``now()`` and could disagree with the page as rows arrive.
+    # ``count() OVER ()`` is computed before LIMIT, so it carries the full match
+    # count on every returned row.
     page_params = {**params, "lim": limit, "off": offset}
     result = client.query(
-        f"SELECT {_LIST_COLUMNS} FROM policy_decision WHERE {where_sql} "
+        f"SELECT {_LIST_COLUMNS}, count() OVER () AS total_matches "
+        f"FROM policy_decision WHERE {where_sql} "
         "ORDER BY occurred_at DESC LIMIT {lim:UInt32} OFFSET {off:UInt32}",
         parameters=page_params,
     )
     rows = []
+    total = 0
     for raw in result.result_rows:
         row = dict(zip(result.column_names, raw))
+        total = int(row.pop("total_matches"))
         row["violations"] = list(row.get("violations") or [])
         row["hint"] = _decode_json_column(row.get("hint") or "")
         row["arguments"] = _decode_json_column(row.get("arguments") or "")
         rows.append(row)
 
-    return {"rows": rows, "total": int(total), "limit": limit, "offset": offset}
+    # An empty page past the end (offset > 0) carries no window value, so the
+    # match count is unavailable; fall back to a plain count for that rare case.
+    if not rows and offset:
+        total = int(
+            client.query(
+                f"SELECT count() FROM policy_decision WHERE {where_sql}",
+                parameters=params,
+            ).result_rows[0][0]
+        )
+
+    return {"rows": rows, "total": total, "limit": limit, "offset": offset}
