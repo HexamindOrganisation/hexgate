@@ -2,7 +2,7 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, EmailStr, Field
 
 
 # ---------------------------------------------------------------------------
@@ -86,6 +86,55 @@ class MemberUpdate(BaseModel):
     """
 
     role: str = Field(pattern="^(owner|admin|member)$")
+
+
+# ---------------------------------------------------------------------------
+# M3 Phase 4 step 4 — Invitations
+# ---------------------------------------------------------------------------
+
+
+class InvitationCreate(BaseModel):
+    """``POST /v1/orgs/{org_id}/invites`` body."""
+
+    email: EmailStr
+    role: str = Field(pattern="^(owner|admin|member)$")
+
+
+class InvitationRead(BaseModel):
+    """Row in ``GET /v1/orgs/{org_id}/invites`` — pending invitations
+    visible to org admins/owners.
+
+    The invitation ``id`` is intentionally NOT exposed here. That id
+    doubles as the magic-link token; surfacing it on a list a third
+    admin can read would let them grab the accept URL and impersonate
+    the invitee. Only the email + role + inviter context goes out.
+    """
+
+    email: str
+    role: str
+    invited_by_email: str
+    expires_at: datetime
+    created_at: datetime
+
+
+class InvitationPreview(BaseModel):
+    """``GET /v1/invites/{id}`` response — what the invitee sees on
+    the accept landing page before clicking through.
+
+    Public-readable: the invite id is unguessable (UUID v4) so anyone
+    with the link can preview it. Includes the org's name/slug so the
+    invitee knows what they're joining without needing an account
+    yet. The accept POST is what requires authentication + a matching
+    email.
+    """
+
+    email: str
+    role: str
+    invited_by_email: str
+    org_id: str
+    org_name: str
+    org_slug: str
+    expires_at: datetime
 
 
 class TokenMintRequest(BaseModel):
