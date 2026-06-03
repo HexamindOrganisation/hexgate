@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
 import { useNavigate, NavLink, Outlet } from 'react-router-dom'
 import {
+  Building2,
   FileCode,
   Fingerprint,
   KeyRound,
@@ -91,6 +92,7 @@ const workspaceLinks = [
   { to: '/playground', label: 'Playground', icon: MessageSquareCode },
   { to: '/audit', label: 'Audit', icon: ScrollText, badge: '24h' },
   { to: '/tokens', label: 'Tokens', icon: KeyRound },
+  { to: '/orgs', label: 'Organizations', icon: Building2 },
   { to: '/settings', label: 'Settings', icon: Settings2 },
 ]
 
