@@ -216,11 +216,43 @@ async function verifyEmailRequest(token: string): Promise<UserRead> {
   return (await res.json()) as UserRead
 }
 
-export function useVerifyEmail() {
+/**
+ * Verify an email token, modelled as a one-shot query keyed by the
+ * token itself.
+ *
+ * Originally a ``useMutation`` fired from a ``useEffect`` on mount —
+ * but that interacts badly with React 18+ StrictMode dev. StrictMode
+ * mounts the component, fires the mutation, tears the observer down,
+ * remounts with a fresh observer in ``isIdle``, and never reconnects
+ * to the in-flight request. The result was a permanent "Verifying…"
+ * card despite the backend having already flipped ``is_verified``.
+ *
+ * Using ``useQuery`` puts the state on the global ``queryClient``
+ * keyed by ``['verify-email', token]``, so it survives the remount
+ * cycle. ``staleTime: Infinity`` + ``retry: false`` makes the
+ * semantics one-shot — the token can only be consumed once, so
+ * retrying or refetching would just churn 400s.
+ *
+ * On success, the global ``/users/me`` cache is invalidated so any
+ * other open tab sees ``is_verified: true`` on its next read.
+ */
+export function useVerifyEmail(token: string | undefined) {
   const qc = useQueryClient()
-  return useMutation({
-    mutationFn: verifyEmailRequest,
-    onSuccess: () => qc.invalidateQueries({ queryKey: USER_QUERY_KEY }),
+  return useQuery({
+    queryKey: ['verify-email', token],
+    queryFn: async () => {
+      const user = await verifyEmailRequest(token as string)
+      // Same cache-bust the old useMutation onSuccess did — runs once
+      // when the query resolves, never on cache reads.
+      qc.invalidateQueries({ queryKey: USER_QUERY_KEY })
+      return user
+    },
+    enabled: !!token,
+    retry: false,
+    staleTime: Infinity,
+    refetchOnMount: false,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
   })
 }
 
