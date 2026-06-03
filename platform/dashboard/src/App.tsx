@@ -7,6 +7,8 @@ import { AuditPage } from '@/routes/Audit'
 import { DashboardPage } from '@/routes/Dashboard'
 import { ForgotPasswordPage } from '@/routes/ForgotPassword'
 import { GraphPage } from '@/routes/Graph'
+import { OrgSettingsPage } from '@/routes/OrgSettings'
+import { OrgsPage } from '@/routes/Orgs'
 import { PlaygroundPage } from '@/routes/Playground'
 import { PoliciesPage } from '@/routes/Policies'
 import { ResetPasswordPage } from '@/routes/ResetPassword'
@@ -46,6 +48,8 @@ export default function App() {
           <Route path="playground" element={<PlaygroundPage />} />
           <Route path="audit" element={<AuditPage />} />
           <Route path="tokens" element={<TokensPage />} />
+          <Route path="orgs" element={<OrgsPage />} />
+          <Route path="orgs/:orgId/settings" element={<OrgSettingsPage />} />
           <Route path="settings" element={<SettingsPage />} />
         </Route>
       </Routes>
