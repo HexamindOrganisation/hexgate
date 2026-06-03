@@ -2,17 +2,28 @@ import { useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { ReactFlow, Background, Controls, MiniMap, BackgroundVariant } from '@xyflow/react'
 import { api } from '@/lib/api'
+import { useProjectScoped } from '@/lib/active'
 import { buildOverviewGraph } from '@/lib/graph'
 import { nodeTypes } from '@/components/graph/nodes'
+import { NoProjectEmptyState } from '@/components/NoProjectEmptyState'
 import { Badge } from '@/components/ui/badge'
 
 export function GraphPage() {
-  const agents = useQuery({ queryKey: ['agents'], queryFn: () => api.listAgents() })
+  const scope = useProjectScoped()
+  const agents = useQuery({
+    queryKey: ['agents', scope.projectId],
+    queryFn: () => api.listAgents(scope.projectId as string),
+    enabled: !!scope.projectId,
+  })
 
   const { nodes, edges, agentViews } = useMemo(() => {
     if (!agents.data) return { nodes: [], edges: [], agentViews: [] }
     return buildOverviewGraph(agents.data)
   }, [agents.data])
+
+  if (scope.status === 'no-project') {
+    return <NoProjectEmptyState resource="graph" />
+  }
 
   return (
     <div className="-mx-8 -my-6 h-[calc(100vh-56px)] flex flex-col">

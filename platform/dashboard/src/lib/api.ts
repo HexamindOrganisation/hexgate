@@ -1,8 +1,3 @@
-// Matches services.DEFAULT_PROJECT_ID on the backend — the fixed UUID the
-// triple-default seed populates on first boot. Will be replaced by the active
-// org's project list once Phase 5 (org switcher + project list) lands.
-export const DEFAULT_PROJECT_ID = '00000000-0000-0000-0000-000000000003'
-
 /** Routes that are reachable without a session cookie — never redirect
  * away from these on a 401, otherwise we'd bounce the sign-in form itself
  * back to /sign-in in a loop when the user has bad credentials. */
@@ -191,33 +186,39 @@ export interface ValidatePolicyResponse {
   errors: PolicyValidationError[]
 }
 
+/**
+ * Project-scoped API surface. ``projectId`` is required on every method
+ * — there's no fallback constant. Callers read it from
+ * :func:`useProjectScoped` and the page only mounts these calls once
+ * the scope resolves to ``ready``.
+ */
 export const api = {
-  listTokens: (projectId = DEFAULT_PROJECT_ID) =>
+  listTokens: (projectId: string) =>
     request<TokenListItem[]>(`/v1/projects/${projectId}/tokens`),
 
-  mintToken: (body: TokenMintRequest, projectId = DEFAULT_PROJECT_ID) =>
+  mintToken: (body: TokenMintRequest, projectId: string) =>
     request<TokenMintResponse>(`/v1/projects/${projectId}/tokens`, {
       method: 'POST',
       body: JSON.stringify(body),
     }),
 
-  revokeToken: (tokenId: string, projectId = DEFAULT_PROJECT_ID) =>
+  revokeToken: (tokenId: string, projectId: string) =>
     request<void>(`/v1/projects/${projectId}/tokens/${tokenId}`, {
       method: 'DELETE',
     }),
 
-  listAgents: (projectId = DEFAULT_PROJECT_ID) =>
+  listAgents: (projectId: string) =>
     request<AgentRead[]>(`/v1/projects/${projectId}/agents`),
 
-  listAgentManifests: (projectId = DEFAULT_PROJECT_ID) =>
+  listAgentManifests: (projectId: string) =>
     request<AgentManifestView[]>(
       `/v1/projects/${projectId}/agents/manifest`,
     ),
 
-  getAgent: (name: string, projectId = DEFAULT_PROJECT_ID) =>
+  getAgent: (name: string, projectId: string) =>
     request<AgentRead>(`/v1/projects/${projectId}/agents/${name}`),
 
-  updateAgent: (name: string, body: AgentUpdate, projectId = DEFAULT_PROJECT_ID) =>
+  updateAgent: (name: string, body: AgentUpdate, projectId: string) =>
     request<AgentRead>(`/v1/projects/${projectId}/agents/${name}`, {
       method: 'PUT',
       body: JSON.stringify(body),
@@ -226,7 +227,7 @@ export const api = {
   validatePolicy: (
     name: string,
     policy_yaml: string,
-    projectId = DEFAULT_PROJECT_ID,
+    projectId: string,
   ) =>
     request<ValidatePolicyResponse>(
       `/v1/projects/${projectId}/agents/${name}/validate`,

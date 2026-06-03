@@ -16,6 +16,9 @@
 import { create } from 'zustand'
 import { createJSONStorage, persist } from 'zustand/middleware'
 
+import { useOrgs } from './orgs'
+import { useProjects } from './projects'
+
 interface ActiveState {
   /** Currently-active organization id (UUID), or null when the user
    * is signed out / has no orgs (impossible after Phase 4 step 1's
@@ -58,3 +61,50 @@ export const useActive = create<ActiveState>()(
     },
   ),
 )
+
+
+/**
+ * Resolved view of "what project is the dashboard currently scoped to?"
+ *
+ * Three states:
+ *   - ``loading``    — orgs or projects still fetching
+ *   - ``no-project`` — active org has no projects yet (or no org)
+ *   - ``ready``      — ``projectId`` is non-null and usable in URLs
+ *
+ * Every project-scoped page (Tokens, Agents, Policies, Graph,
+ * Playground) calls this and renders one of three branches off the
+ * status. Keeps the "are we ready to fetch?" plumbing in a single
+ * helper rather than re-deriving it on each page.
+ *
+ * The AppShell bootstrap effect normally populates ``activeProjectId``
+ * before any project-scoped page mounts, so ``loading`` and
+ * ``no-project`` are the edge cases (first visit, mid-org-switch, or a
+ * user whose org happens to have zero projects).
+ */
+export interface ProjectScope {
+  /** Resolved active project id, or null when not ready. */
+  projectId: string | null
+  status: 'loading' | 'no-project' | 'ready'
+}
+
+export function useProjectScoped(): ProjectScope {
+  const activeOrgId = useActive((s) => s.activeOrgId)
+  const activeProjectId = useActive((s) => s.activeProjectId)
+  // useOrgs() is the load-bearing query — once it resolves, the
+  // AppShell bootstrap kicks in and picks a default project. We touch
+  // it here mostly to surface its ``isLoading`` state; the cache is
+  // already populated by the time any project-scoped page mounts.
+  const orgsQuery = useOrgs()
+  const projectsQuery = useProjects(activeOrgId)
+
+  if (
+    orgsQuery.isLoading ||
+    (activeOrgId !== null && projectsQuery.isLoading)
+  ) {
+    return { projectId: null, status: 'loading' }
+  }
+  if (!activeProjectId) {
+    return { projectId: null, status: 'no-project' }
+  }
+  return { projectId: activeProjectId, status: 'ready' }
+}
