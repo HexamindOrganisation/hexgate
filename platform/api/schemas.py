@@ -104,12 +104,17 @@ class InvitationRead(BaseModel):
     """Row in ``GET /v1/orgs/{org_id}/invites`` — pending invitations
     visible to org admins/owners.
 
-    The invitation ``id`` is intentionally NOT exposed here. That id
-    doubles as the magic-link token; surfacing it on a list a third
-    admin can read would let them grab the accept URL and impersonate
-    the invitee. Only the email + role + inviter context goes out.
+    The invitation ``id`` IS exposed here despite doubling as the
+    magic-link token. Reasoning: the strict email-match guard on
+    ``POST /invites/{id}/accept`` is the load-bearing protection —
+    even with the URL, only the invited email's signed-in user can
+    accept. Hiding the id from this admin-only list was earlier
+    defense-in-depth, but the dashboard needs to address invitations
+    to cancel them, and adding a parallel "DELETE by email" endpoint
+    just to avoid surfacing the id would cost more code than it buys.
     """
 
+    id: str
     email: str
     role: str
     invited_by_email: str

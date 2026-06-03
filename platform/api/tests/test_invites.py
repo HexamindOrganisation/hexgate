@@ -300,10 +300,11 @@ def test_list_invitations_returns_pending_only(
     )
     listed = client.get(f"/v1/orgs/{org_id}/invites").json()
     assert {i["email"] for i in listed} == {"p1@example.com", "p2@example.com"}
-    # The list view never exposes invitation ids (they double as
-    # magic-link tokens — leaking them would let any admin impersonate
-    # an invitee).
-    assert all("id" not in i for i in listed)
+    # Each pending invite carries its id so the dashboard's "Cancel"
+    # button has a row to address. The strict email-match guard on
+    # accept is the load-bearing protection — id exposure isn't an
+    # impersonation vector (only the invited user can accept).
+    assert all("id" in i and i["id"] for i in listed)
 
 
 def test_list_invitations_403_for_plain_member(
