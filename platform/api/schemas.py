@@ -117,6 +117,36 @@ class InvitationRead(BaseModel):
     created_at: datetime
 
 
+class ProjectCreate(BaseModel):
+    """``POST /v1/orgs/{org_id}/projects`` body. Name only — projects
+    don't have user-visible slugs today; dashboards address by name,
+    the API by UUID. Slugs can land later when a URL like
+    ``/orgs/acme/projects/customer-bot`` becomes a need."""
+
+    name: str = Field(min_length=1, max_length=64)
+
+
+class ProjectRead(BaseModel):
+    """Wire shape for project read endpoints. Mirrors the columns the
+    dashboard cares about on the row — the WASM bundle and version
+    fields live on the existing ``AgentRead`` shape for individual
+    agents, not here."""
+
+    id: str
+    org_id: str
+    name: str
+    created_at: datetime
+
+
+class ProjectUpdate(BaseModel):
+    """``PATCH /v1/projects/{project_id}`` body. Rename only for now;
+    moving a project to a different org is its own larger feature
+    (transfer + ownership change + member-access reconciliation) that
+    doesn't land in Phase 4."""
+
+    name: str = Field(min_length=1, max_length=64)
+
+
 class InvitationPreview(BaseModel):
     """``GET /v1/invites/{id}`` response — what the invitee sees on
     the accept landing page before clicking through.

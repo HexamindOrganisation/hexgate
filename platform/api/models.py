@@ -194,6 +194,15 @@ class Invitation(SQLModel, table=True):
 
 
 class Project(SQLModel, table=True):
+    # Unique-per-org name. A duplicate Create lands the user back on
+    # 409 so the UI prompts for a different name (most likely they
+    # meant to switch into the existing one instead of creating
+    # another). Doesn't constrain rename — the user can pick whatever
+    # name they want, just not one already taken in this org.
+    __table_args__ = (
+        UniqueConstraint("org_id", "name", name="uq_project_org_name"),
+    )
+
     # UUID, immutable. Existing seed (``support-bot``) is reseeded with the
     # fixed ``DEFAULT_PROJECT_ID`` UUID in seeds.py so dev environments stay
     # reproducible across rebuilds.

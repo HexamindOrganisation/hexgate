@@ -49,6 +49,9 @@ from schemas import (
     OrgUpdate,
     OrgWithRole,
     PolicyValidationError,
+    ProjectCreate,
+    ProjectRead,
+    ProjectUpdate,
     RegisterAgentRequest,
     RegisterAgentResponse,
     TokenListItem,
@@ -346,6 +349,41 @@ async def require_org_admin_or_self(
         status_code=403,
         detail="only admins / owners can manage other members",
     )
+
+
+async def require_project_admin(
+    project_id: str,
+    user: User = Depends(require_user),
+    session: AsyncSession = Depends(get_session),
+) -> tuple[User, OrganizationMember]:
+    """Like :func:`require_org_member` (path-param ``project_id``,
+    resolves project's org_id, requires membership) but additionally
+    requires ``admin`` or ``owner`` role.
+
+    Used by management endpoints on a project — PATCH name today;
+    later DELETE and any "settings"-tab operations. The returned
+    tuple gives handlers both the caller and their membership row so
+    they can reference ``member.org_id`` without a second lookup.
+    """
+    from services import ROLE_ADMIN, ROLE_OWNER
+
+    project = await session.get(Project, project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="project not found")
+    membership = (await session.exec(
+        select(OrganizationMember).where(
+            OrganizationMember.user_id == user.id,
+            OrganizationMember.org_id == project.org_id,
+        )
+    )).first()
+    if membership is None:
+        raise HTTPException(status_code=403, detail="not a member of this org")
+    if membership.role not in {ROLE_OWNER, ROLE_ADMIN}:
+        raise HTTPException(
+            status_code=403,
+            detail="admin or owner role required for this action",
+        )
+    return user, membership
 
 
 async def require_user_or_sdk_token(
@@ -1332,6 +1370,104 @@ async def api_revoke_invitation(
 
     await revoke_invitation(session, invitation)
     return Response(status_code=204)
+
+
+# ---------------------------------------------------------------------------
+# M3 Phase 4 step 5 — Project CRUD
+#
+# Create + list live under /orgs/{org_id}/projects (need to know the
+# org); read + rename live under /projects/{project_id} (the project
+# row knows its own org). DELETE intentionally not shipped here —
+# cascade across Agent / DevToken / AgentVersion / Tool needs its
+# own focused commit.
+# ---------------------------------------------------------------------------
+
+
+def _project_read(project: Project) -> ProjectRead:
+    return ProjectRead(
+        id=project.id,
+        org_id=project.org_id,
+        name=project.name,
+        created_at=project.created_at,
+    )
+
+
+@v1.post("/orgs/{org_id}/projects", status_code=201, tags=["orgs"])
+async def api_create_project(
+    body: ProjectCreate,
+    membership: tuple[User, OrganizationMember] = Depends(require_org_membership),
+    session: AsyncSession = Depends(get_session),
+) -> ProjectRead:
+    """Create a project under an org. Any member can create — projects
+    are a workspace primitive, not a destructive op. The intent is to
+    tighten to admin-only later if needed (one-line change in the dep).
+
+    409 if a project with the same name already exists in this org
+    (the user probably meant to switch to the existing one).
+    """
+    from services import ProjectNameTakenError, create_project
+
+    _, caller_member = membership
+    try:
+        project = await create_project(
+            session, org_id=caller_member.org_id, name=body.name
+        )
+    except ProjectNameTakenError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return _project_read(project)
+
+
+@v1.get("/orgs/{org_id}/projects", tags=["orgs"])
+async def api_list_projects(
+    membership: tuple[User, OrganizationMember] = Depends(require_org_membership),
+    session: AsyncSession = Depends(get_session),
+) -> list[ProjectRead]:
+    """List every project inside an org. Any member can list — the
+    dashboard's project picker consumes this."""
+    from services import list_projects
+
+    _, caller_member = membership
+    rows = await list_projects(session, caller_member.org_id)
+    return [_project_read(p) for p in rows]
+
+
+@v1.get("/projects/{project_id}", tags=["projects"])
+async def api_get_project(
+    project_id: str,
+    _user: User = Depends(require_org_member),
+    session: AsyncSession = Depends(get_session),
+) -> ProjectRead:
+    """Detail view of a single project. The ``require_org_member`` dep
+    resolves the project's org_id and gates on the caller being a
+    member — same shape as the existing project-scoped routes
+    (/agents, /tokens) so the auth surface stays uniform."""
+    project = await session.get(Project, project_id)
+    assert project is not None  # require_org_member already 404'd
+    return _project_read(project)
+
+
+@v1.patch("/projects/{project_id}", tags=["projects"])
+async def api_update_project(
+    project_id: str,
+    body: ProjectUpdate,
+    _membership: tuple[User, OrganizationMember] = Depends(require_project_admin),
+    session: AsyncSession = Depends(get_session),
+) -> ProjectRead:
+    """Rename a project. Admin or owner required. 409 on name collision
+    with another project in the same org."""
+    from services import ProjectNameTakenError, update_project_name
+
+    try:
+        project = await update_project_name(
+            session, project_id=project_id, name=body.name
+        )
+    except ProjectNameTakenError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    # require_project_admin already 404'd if the project was missing;
+    # update_project_name returning None at this point would be a race.
+    if project is None:
+        raise HTTPException(status_code=404, detail="project not found")
+    return _project_read(project)
 
 
 def _maybe_mount_oauth_routers() -> None:
