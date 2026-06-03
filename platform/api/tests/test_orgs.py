@@ -440,3 +440,223 @@ async def test_list_org_members_returns_membership_and_user(
         assert len(rows) >= 1
         emails = {u.email for _m, u in rows}
         assert "admin@hexagate.dev" in emails
+
+
+# ---------------------------------------------------------------------------
+# HTTP route tests — /v1/orgs CRUD
+#
+# Every test signs up a fresh user (gets a personal default org via the
+# on_after_register hook), logs in, and uses the resulting cookie to
+# exercise the routes. Cross-tenant isolation is pinned by signing up
+# TWO users and asserting one can't read or update the other's org.
+# ---------------------------------------------------------------------------
+
+
+def _signup_and_login(client: TestClient, email: str, password: str) -> None:
+    """Register a fresh user then exchange password for a session cookie.
+
+    Leaves the cookie on the client's cookie jar for subsequent calls.
+    The default `client` fixture's cookie jar persists across requests.
+    """
+    r = client.post(
+        "/v1/auth/register",
+        json={"email": email, "password": password},
+    )
+    assert r.status_code == 201, r.text
+    r = client.post(
+        "/v1/auth/cookie/login",
+        data={"username": email, "password": password},
+    )
+    assert r.status_code == 204, r.text
+
+
+# ---- GET /v1/orgs ---------------------------------------------------------
+
+
+def test_list_orgs_returns_only_callers_orgs(client: TestClient) -> None:
+    """A fresh user sees exactly one org (their personal default) with
+    role=owner. They do NOT see other tenants' orgs."""
+    _signup_and_login(client, "alice@example.com", "correcthorsebattery")
+
+    r = client.get("/v1/orgs")
+    assert r.status_code == 200
+    body = r.json()
+    assert len(body) == 1
+    only = body[0]
+    assert only["name"] == "default"
+    assert only["slug"] == "alice"
+    assert only["role"] == ROLE_OWNER
+
+
+def test_list_orgs_requires_authentication(client: TestClient) -> None:
+    """No cookie → 401 (the global 401 handler in the dashboard
+    redirects to /sign-in; here we just confirm the backend rejects)."""
+    r = client.get("/v1/orgs")
+    assert r.status_code == 401
+
+
+# ---- POST /v1/orgs --------------------------------------------------------
+
+
+def test_create_org_makes_caller_owner(client: TestClient) -> None:
+    """POST /v1/orgs → 201 with the new org; caller is owner."""
+    _signup_and_login(client, "bob@example.com", "correcthorsebattery")
+
+    r = client.post("/v1/orgs", json={"name": "Acme"})
+    assert r.status_code == 201, r.text
+    body = r.json()
+    assert body["name"] == "Acme"
+    # Server-derived slug from "Acme" → "acme".
+    assert body["slug"] == "acme"
+
+    # The caller now sees BOTH orgs in their list — personal + Acme.
+    listed = client.get("/v1/orgs").json()
+    names = {o["name"] for o in listed}
+    assert names == {"default", "Acme"}
+    # And they're owner of both.
+    assert all(o["role"] == ROLE_OWNER for o in listed)
+
+
+def test_create_org_accepts_explicit_slug(client: TestClient) -> None:
+    """Client-supplied slug is used verbatim when valid + unique."""
+    _signup_and_login(client, "carol@example.com", "correcthorsebattery")
+    r = client.post("/v1/orgs", json={"name": "Carol Co", "slug": "carol-co"})
+    assert r.status_code == 201
+    assert r.json()["slug"] == "carol-co"
+
+
+def test_create_org_rejects_collision_with_explicit_slug(
+    client: TestClient,
+) -> None:
+    """Explicit slug that's already taken → 409. Server doesn't
+    silently rewrite (would surprise the caller); UI prompts for a tweak."""
+    _signup_and_login(client, "dave@example.com", "correcthorsebattery")
+
+    # First create succeeds — slug "shared" is free.
+    r = client.post("/v1/orgs", json={"name": "First", "slug": "shared"})
+    assert r.status_code == 201
+    # Second create with the same slug 409s.
+    r = client.post("/v1/orgs", json={"name": "Second", "slug": "shared"})
+    assert r.status_code == 409
+    assert "taken" in r.json()["detail"].lower()
+
+
+def test_create_org_rejects_malformed_slug(client: TestClient) -> None:
+    """Slugs are DNS-label-shaped (lowercase letters / digits / hyphens,
+    must start with a letter, can't end with hyphen). 422 on violation."""
+    _signup_and_login(client, "eve@example.com", "correcthorsebattery")
+
+    for bad in ("Foo", "-bad", "bad-", "foo!bar", ""):
+        r = client.post(
+            "/v1/orgs", json={"name": "X", "slug": bad}
+        )
+        assert r.status_code == 422, f"expected 422 for slug={bad!r}, got {r.status_code}"
+
+
+# ---- GET /v1/orgs/{id} ---------------------------------------------------
+
+
+def test_get_org_succeeds_for_member(client: TestClient) -> None:
+    _signup_and_login(client, "frank@example.com", "correcthorsebattery")
+    listed = client.get("/v1/orgs").json()
+    org_id = listed[0]["id"]
+    r = client.get(f"/v1/orgs/{org_id}")
+    assert r.status_code == 200
+    assert r.json()["id"] == org_id
+
+
+def test_get_org_404_when_unknown(client: TestClient) -> None:
+    """Unknown id → 404 (don't leak existence by 403'ing only on known
+    ids)."""
+    _signup_and_login(client, "grace@example.com", "correcthorsebattery")
+    r = client.get("/v1/orgs/00000000-0000-0000-0000-deadbeef0000")
+    assert r.status_code == 404
+
+
+def test_get_org_403_for_non_member(client: TestClient) -> None:
+    """User A creates an org; User B (different account) can't read it.
+
+    This is the tenant-isolation guarantee for the org surface — same
+    invariant we pin for projects."""
+    # User A creates an org.
+    _signup_and_login(client, "owner@example.com", "correcthorsebattery")
+    r = client.post("/v1/orgs", json={"name": "Private", "slug": "private"})
+    private_org_id = r.json()["id"]
+    # Drop user A's cookie so the next sign-in is a clean session.
+    client.cookies.clear()
+    # User B signs in.
+    _signup_and_login(client, "stranger@example.com", "correcthorsebattery")
+    r = client.get(f"/v1/orgs/{private_org_id}")
+    assert r.status_code == 403
+
+
+# ---- PATCH /v1/orgs/{id} -------------------------------------------------
+
+
+def test_patch_org_updates_name_for_owner(client: TestClient) -> None:
+    _signup_and_login(client, "hank@example.com", "correcthorsebattery")
+    org_id = client.get("/v1/orgs").json()[0]["id"]
+    r = client.patch(f"/v1/orgs/{org_id}", json={"name": "Hank Inc"})
+    assert r.status_code == 200
+    assert r.json()["name"] == "Hank Inc"
+
+
+def test_patch_org_updates_slug_when_unique(client: TestClient) -> None:
+    _signup_and_login(client, "ivy@example.com", "correcthorsebattery")
+    org_id = client.get("/v1/orgs").json()[0]["id"]
+    r = client.patch(f"/v1/orgs/{org_id}", json={"slug": "ivy-renamed"})
+    assert r.status_code == 200
+    assert r.json()["slug"] == "ivy-renamed"
+
+
+def test_patch_org_409_on_slug_collision(client: TestClient) -> None:
+    """Trying to rename to a slug another org owns → 409. Same shape as
+    POST /v1/orgs slug-collision handling."""
+    # User A creates two orgs; tries to rename one to the other's slug.
+    _signup_and_login(client, "jane@example.com", "correcthorsebattery")
+    r = client.post("/v1/orgs", json={"name": "Y", "slug": "alpha"})
+    alpha_id = r.json()["id"]
+    client.post("/v1/orgs", json={"name": "Z", "slug": "beta"})
+    r = client.patch(f"/v1/orgs/{alpha_id}", json={"slug": "beta"})
+    assert r.status_code == 409
+
+
+def test_patch_org_403_for_plain_member(
+    client: TestClient, session_factory
+) -> None:
+    """Members (not admin/owner) can't update the org. Pre-create a
+    user as plain member of the default org and try."""
+    import asyncio
+    import uuid
+
+    _signup_and_login(client, "memberonly@example.com", "correcthorsebattery")
+
+    # Demote the seeded membership from owner→member by adding the
+    # memberonly user as a member of DEFAULT_ORG_ID (which they don't
+    # belong to by default). The user already has their own personal
+    # org; we want to test the PATCH gate on an org they're a plain
+    # member of.
+    async def _join_default_as_member():
+        async with session_factory() as s:
+            from sqlmodel import select
+
+            u = (
+                await s.exec(
+                    select(User).where(User.email == "memberonly@example.com")
+                )
+            ).one()
+            s.add(
+                OrganizationMember(
+                    id=str(uuid.uuid4()),
+                    user_id=u.id,
+                    org_id=DEFAULT_ORG_ID,
+                    role=ROLE_MEMBER,
+                )
+            )
+            await s.commit()
+
+    asyncio.get_event_loop().run_until_complete(_join_default_as_member())
+
+    r = client.patch(f"/v1/orgs/{DEFAULT_ORG_ID}", json={"name": "Renamed"})
+    assert r.status_code == 403
+    assert "admin or owner" in r.json()["detail"].lower()

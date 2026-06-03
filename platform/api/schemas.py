@@ -5,6 +5,62 @@ from typing import Optional
 from pydantic import BaseModel, Field
 
 
+# ---------------------------------------------------------------------------
+# M3 Phase 4 — Organization wire shapes
+# ---------------------------------------------------------------------------
+
+
+class OrgRead(BaseModel):
+    """Shared base — what an org looks like over the wire."""
+
+    id: str
+    slug: str
+    name: str
+    created_at: datetime
+
+
+class OrgWithRole(OrgRead):
+    """Org enriched with the caller's role. Returned by ``GET /v1/orgs``
+    so the dashboard knows which actions the active user can take in
+    each listed org without a second round-trip."""
+
+    role: str  # "owner" | "admin" | "member"
+
+
+class OrgCreate(BaseModel):
+    """``POST /v1/orgs`` body.
+
+    ``slug`` is optional — when omitted, the server derives one from
+    ``name`` (sanitised + collision-fallback). Constraints match
+    DNS-label rules + a 32-char ceiling so the slug fits comfortably
+    in any URL we'd ever render.
+    """
+
+    name: str = Field(min_length=1, max_length=64)
+    slug: Optional[str] = Field(
+        default=None,
+        min_length=1,
+        max_length=32,
+        # Lowercase letters, digits, hyphens. Must start with a letter
+        # and not end with a hyphen — matches DNS-label conventions so
+        # the slug can later double as a hostname/subdomain.
+        pattern=r"^[a-z][a-z0-9-]*[a-z0-9]$|^[a-z]$",
+    )
+
+
+class OrgUpdate(BaseModel):
+    """``PATCH /v1/orgs/{id}`` body. Both fields optional; omitted
+    fields are left unchanged on the row."""
+
+    name: Optional[str] = Field(default=None, min_length=1, max_length=64)
+    slug: Optional[str] = Field(
+        default=None,
+        min_length=1,
+        max_length=32,
+        pattern=r"^[a-z][a-z0-9-]*[a-z0-9]$|^[a-z]$",
+    )
+
+
 class TokenMintRequest(BaseModel):
     name: str = Field(min_length=1, max_length=64)
     scopes: list[str] = Field(default_factory=lambda: ["mint_user_token", "read_audit"])
