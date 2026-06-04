@@ -1086,6 +1086,188 @@ def mask_secret(full: str) -> str:
 # --- Agent manifest registration --------------------------------------------
 
 
+# Tool-name heuristics used by ``_classify_tool`` to bucket a tool into one of
+# four categories. Matched against the LOWERCASED tool name with a substring
+# search — so ``Read_File`` and ``read_file`` both land in "read". The
+# patterns are deliberately broad: misclassification on a brand-new agent is
+# a one-time editing chore, while missing a write-shape tool would silently
+# hand a freshly-registered agent more power than the operator intended.
+_SHELL_PATTERNS = (
+    "bash",
+    "shell",
+    "exec",
+    "run_command",
+    "subprocess",
+    "spawn",
+)
+_WRITE_PATTERNS = (
+    "write_",
+    "_write",
+    "edit_",
+    "create_",
+    "update_",
+    "delete_",
+    "remove_",
+    "patch_",
+    "post_",
+    "put_",
+)
+_READ_PATTERNS = (
+    "read_",
+    "_read",
+    "search",
+    "fetch",
+    "list_",
+    "get_",
+    "find_",
+    "grep",
+    "glob",
+    "view_",
+    "describe_",
+    "inspect_",
+)
+
+
+def _classify_tool(name: str) -> str:
+    """Return one of ``"read" | "write" | "shell" | "unknown"`` for a tool name.
+
+    Order matters: shell wins over write (a tool literally named
+    ``run_command`` matches both ``run_command`` and ``_command``), and read
+    is checked last so write-prefix takes precedence over a misleading
+    ``read_`` substring elsewhere in the name.
+
+    ``"unknown"`` is the fail-closed bucket — callers should treat it as
+    write-shape so a brand-new agent doesn't silently inherit power the
+    operator didn't authorize.
+    """
+    lower = name.lower()
+    if any(p in lower for p in _SHELL_PATTERNS):
+        return "shell"
+    if any(p in lower for p in _WRITE_PATTERNS):
+        return "write"
+    if any(p in lower for p in _READ_PATTERNS):
+        return "read"
+    return "unknown"
+
+
+def _emit_tool_lines(names: list[str], mode: str, indent: int = 6) -> str:
+    """Render ``{name: { mode: ... }}`` lines for a YAML policy block.
+
+    Returns an empty string when ``names`` is empty — the caller can drop
+    the surrounding ``tools:`` key entirely if all its buckets are empty,
+    keeping the generated YAML clean (no dangling ``tools:`` with no
+    children, which the AgentPolicy validator rejects).
+    """
+    pad = " " * indent
+    return "".join(f"{pad}{n}: {{ mode: {mode} }}\n" for n in names)
+
+
+def _default_policy_for_manifest(manifest: AgentManifest) -> str:
+    """Build a starter role-aware ``policy_yaml`` from a manifest's tools.
+
+    Modeled on the ``support_bot`` seed at :mod:`platform.api.seeds`:
+
+      - ``read_only`` (mixin) — every read-shape tool from the manifest.
+      - ``default`` — inherits ``read_only``, used when no User scope is set.
+      - ``member`` — inherits ``read_only``; writes + shells + unknowns
+        require approval.
+      - ``admin`` — inherits ``read_only``; writes pass through, shells
+        still require approval.
+
+    Unknown tools (those that didn't match any heuristic) land in the
+    write bucket — fail-closed, surfaced to the operator via a comment so
+    they can reclassify in the dashboard editor.
+
+    Only called for brand-new agents (first POST /v1/agents for a given
+    name); re-registers of an existing agent leave the operator's edited
+    policy alone.
+    """
+    reads: list[str] = []
+    writes: list[str] = []
+    shells: list[str] = []
+    unknowns: list[str] = []
+    for tool in manifest.tools:
+        bucket = _classify_tool(tool.name)
+        if bucket == "read":
+            reads.append(tool.name)
+        elif bucket == "shell":
+            shells.append(tool.name)
+        elif bucket == "write":
+            writes.append(tool.name)
+        else:
+            unknowns.append(tool.name)
+
+    # Heads-up comment for unknown-bucket tools — the operator sees them
+    # in the dashboard editor and can move them to a more appropriate
+    # bucket. Empty when every tool classified cleanly.
+    unknown_note = (
+        "# Heuristic could not classify these tools — treating as writes\n"
+        "# (fail-closed). Move them to read_only or shells as appropriate:\n"
+        + "".join(f"#   - {n}\n" for n in unknowns)
+        + "\n"
+        if unknowns
+        else ""
+    )
+
+    # ``read_only`` body — drop the ``tools:`` key when the manifest has
+    # zero read-shape tools to avoid emitting ``tools:`` with no children
+    # (rejected by the policy parser).
+    read_only_tools = (
+        f"    tools:\n{_emit_tool_lines(reads, 'allow')}" if reads else ""
+    )
+
+    # member + admin override blocks. ``writes + unknowns`` always get the
+    # role-appropriate mode; shells are pinned to approval_required across
+    # both roles because shells are the highest-blast-radius primitive
+    # and shouldn't differ between operator personas.
+    member_overrides = writes + unknowns + shells
+    member_tools = (
+        f"    tools:\n"
+        f"{_emit_tool_lines(writes + unknowns, 'approval_required')}"
+        f"{_emit_tool_lines(shells, 'approval_required')}"
+        if member_overrides
+        else ""
+    )
+    admin_overrides = writes + unknowns + shells
+    admin_tools = (
+        f"    tools:\n"
+        f"{_emit_tool_lines(writes + unknowns, 'allow')}"
+        f"{_emit_tool_lines(shells, 'approval_required')}"
+        if admin_overrides
+        else ""
+    )
+
+    return f"""version: 1
+# Generated by `fortify register`. Edit freely — re-running register
+# never overwrites this; it only updates the manifest snapshot.
+#
+# Four entries:
+#   read_only  (mixin)  factored-out 'safe to read' allowlist
+#   default             fallback when no User scope is set
+#   member              typical user; writes + shells require approval
+#   admin               power user; writes allow, shells still gate
+#
+# Note: 'admin' here is an AGENT policy role (used by the SDK at request
+# time via User(role="admin")), distinct from the ORG admin role on
+# /orgs/:id/members.
+
+{unknown_note}roles:
+  read_only:
+    is_mixin: true
+    default_policy:
+      mode: deny
+{read_only_tools}
+  default:
+    inherits: [read_only]
+
+  member:
+    inherits: [read_only]
+{member_tools}
+  admin:
+    inherits: [read_only]
+{admin_tools}"""
+
+
 def compute_manifest_hash(manifest: AgentManifest) -> str:
     """Reproducible SHA-256 of an agent manifest.
 
@@ -1109,15 +1291,43 @@ async def register_manifest(
     session: AsyncSession,
     project_id: str,
     manifest: AgentManifest,
+    *,
+    sign: Callable[[bytes], bytes],
 ) -> tuple[AgentVersion, bool]:
     """Upsert an agent + version from an AgentManifest.
 
     Returns ``(version, created)`` where ``created`` is False if a version
     with the same content_hash already existed under this agent — in which
     case nothing is written and the existing row is returned.
+
+    On FIRST registration of an agent (the ``Agent`` row is being created
+    for the first time), this also:
+
+      1. Generates a starter role-aware ``policy_yaml`` from the manifest's
+         tool list (see :func:`_default_policy_for_manifest`). The dev sees
+         this in the dashboard's policy editor and edits from there.
+      2. Compiles + signs the bundle so ``fortify serve`` runs against
+         signed WASM from the very first request, not the pydantic
+         fallback. Signing failures degrade gracefully (no bundle stored,
+         SDK falls through to pydantic) — same shape as ``update_agent``.
+
+    On subsequent registers of an existing agent, ``agent.policy_yaml`` is
+    left alone — policy belongs to the operator, manifest updates are just
+    snapshot churn.
     """
     content_hash = compute_manifest_hash(manifest)
     agent, agent_created = await _get_or_create_agent(session, project_id, manifest.name)
+
+    if agent_created:
+        # Brand-new agent — seed the policy + bundle so the dashboard's
+        # Policies editor has something to render and ``fortify serve``
+        # has a signed bundle to ship.
+        agent.policy_yaml = _default_policy_for_manifest(manifest)
+        bundle = compile_bundle(agent.policy_yaml, sign)
+        if bundle is not None:
+            agent.compiled_wasm, agent.bundle_manifest, agent.bundle_signature = bundle
+        # Already in session via _get_or_create_agent; the mutation flushes
+        # at commit time below alongside the AgentVersion + Tool rows.
 
     if not agent_created:
         existing = await _find_version_by_hash(session, agent.id, content_hash)
