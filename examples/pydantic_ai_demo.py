@@ -21,10 +21,7 @@ async def main():
         """Delete a user account. Destructive."""
         return f"User {user_id} deleted."
 
-    agent = wrap_pydantic_agent(
-        agent=agent,
-        api_key="sk-...",  # or rely on FORTIFY_KEY
-    )
+    agent = wrap_pydantic_agent(agent=agent)
 
     result = await agent.run(
         "What is the weather in Tokyo?",

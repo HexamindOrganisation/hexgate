@@ -53,7 +53,6 @@ async def main():
         agent=agent,
         app_name="google_runner_example",
         session_service=session_service,
-        api_key="sk-test",  # or rely on FORTIFY_KEY
     )
 
     user_msg = types.Content(
