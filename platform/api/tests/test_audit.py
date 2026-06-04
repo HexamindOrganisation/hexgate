@@ -113,10 +113,10 @@ def client(fake_clickhouse: MagicMock, monkeypatch: pytest.MonkeyPatch) -> TestC
     app.dependency_overrides[require_project] = lambda: "proj_test"
     app.dependency_overrides[require_clickhouse] = lambda: fake_clickhouse
     app.dependency_overrides[get_session] = lambda: MagicMock()
-    monkeypatch.setattr(
-        "main.get_latest_agent_version_id",
-        lambda _session, _project_id, _agent_name: _STUB_AGENT_VERSION_ID,
-    )
+    async def _stub_version_lookup(_session, _project_id, _agent_name) -> str:
+        return _STUB_AGENT_VERSION_ID
+
+    monkeypatch.setattr("main.get_latest_agent_version_id", _stub_version_lookup)
     try:
         yield TestClient(app)
     finally:
@@ -186,6 +186,15 @@ def test_oversized_hint_rejected(client: TestClient) -> None:
     r = client.post("/v1/audit/decisions", json=_event(hint=big))
     assert r.status_code == 413
     assert "hint" in r.json()["detail"]
+
+
+def test_oversized_violation_item_rejected(client: TestClient) -> None:
+    # Item count is capped at 64, but each item must also be bounded —
+    # otherwise 64 unbounded strings get a multi-MB body past validation.
+    r = client.post(
+        "/v1/audit/decisions", json=_event(violations=["z" * 2048])
+    )
+    assert r.status_code == 422
 
 
 def test_pydantic_validation_returns_422(client: TestClient) -> None:

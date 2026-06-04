@@ -13,7 +13,7 @@ from fortify.config.settings import Settings
 def bootstrap(env_file: str = ".env") -> Settings:
     """Load environment variables and return validated settings.
 
-    Also configures the process-wide audit sink (silent no-op when
+    Also configures the process-wide audit sender (silent no-op when
     FORTIFY_KEY isn't set — local-only runs work without it). Callers
     that want graceful drain on shutdown should `await audit.shutdown()`
     explicitly in their teardown path; the httpx client is otherwise

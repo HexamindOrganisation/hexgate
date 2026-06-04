@@ -119,14 +119,23 @@ def test_config_raises_when_key_missing(clean_env: None) -> None:
         FortifyConfig.from_env()
 
 
-def test_config_raises_when_project_unresolvable(
+def test_config_allows_unresolvable_project(
     monkeypatch: pytest.MonkeyPatch,
     clean_env: None,
 ) -> None:
-    """A key without the fty_ prefix and no FORTIFY_PROJECT_ID can't be resolved."""
+    """A key without the fty_ prefix is still usable post-Phase-6.
+
+    Project id is display-only now — the bearer carries it for
+    routing on the server side, and the CLI/SDK no longer threads
+    it through URLs. A missing project_id surfaces as ``None``,
+    not an error.
+    """
     monkeypatch.setenv("FORTIFY_KEY", "completely_unparseable_key")
-    with pytest.raises(FortifyError, match="Unable to resolve project id"):
-        FortifyConfig.from_env()
+    config = FortifyConfig.from_env()
+    assert config.project_id is None
+    # The key still goes through verbatim — the server is the
+    # authority on whether it's actually valid.
+    assert config.api_key == "completely_unparseable_key"
 
 
 # ---------------------------------------------------------------------------
@@ -224,10 +233,14 @@ def test_client_verifies_on_first_call_then_caches(
     calls: list[tuple[str, bool]] = []
 
     def fake_raw_get(
-        self: FortifyClient, url: str, *, authorize: bool
-    ) -> dict[str, Any]:
+        self: FortifyClient,
+        url: str,
+        *,
+        authorize: bool,
+        if_none_match: str | None = None,
+    ) -> tuple[dict[str, Any] | None, str | None]:
         calls.append((url, authorize))
-        return _stub_get_agent_response()
+        return _stub_get_agent_response(), None
 
     monkeypatch.setattr(FortifyClient, "_raw_get", fake_raw_get)
 
@@ -306,14 +319,23 @@ def test_client_fetches_jwks_when_pubkey_unset(
     calls: list[tuple[str, bool]] = []
 
     def fake_raw_get(
-        self: FortifyClient, url: str, *, authorize: bool
-    ) -> dict[str, Any]:
+        self: FortifyClient,
+        url: str,
+        *,
+        authorize: bool,
+        if_none_match: str | None = None,
+    ) -> tuple[dict[str, Any] | None, str | None]:
         calls.append((url, authorize))
         if url.endswith("/.well-known/keys"):
-            return {
-                "keys": [{"x": _b64url(pub), "fingerprint": "sha256:abcdef0123456789"}]
-            }
-        return _stub_get_agent_response()
+            return (
+                {
+                    "keys": [
+                        {"x": _b64url(pub), "fingerprint": "sha256:abcdef0123456789"}
+                    ]
+                },
+                None,
+            )
+        return _stub_get_agent_response(), None
 
     monkeypatch.setattr(FortifyClient, "_raw_get", fake_raw_get)
 
@@ -323,7 +345,8 @@ def test_client_fetches_jwks_when_pubkey_unset(
     assert len(calls) == 2
     assert calls[0][0].endswith("/v1/.well-known/keys")
     assert calls[0][1] is False
-    assert "/v1/projects/support-bot/agents/default" in calls[1][0]
+    # Phase 6: agent fetch is token-implicit, no project_id in URL.
+    assert calls[1][0].endswith("/v1/agents/default")
     assert calls[1][1] is True
 
 
@@ -344,7 +367,10 @@ def test_client_jwks_response_with_unexpected_shape_raises(
     monkeypatch.setattr(
         FortifyClient,
         "_raw_get",
-        lambda self, url, *, authorize: {"unexpected": "shape"},
+        lambda self, url, *, authorize, if_none_match=None: (
+            {"unexpected": "shape"},
+            None,
+        ),
     )
 
     with pytest.raises(FortifyError, match="unexpected JWKS shape"):
