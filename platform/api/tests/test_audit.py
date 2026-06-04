@@ -113,10 +113,10 @@ def client(fake_clickhouse: MagicMock, monkeypatch: pytest.MonkeyPatch) -> TestC
     app.dependency_overrides[require_project] = lambda: "proj_test"
     app.dependency_overrides[require_clickhouse] = lambda: fake_clickhouse
     app.dependency_overrides[get_session] = lambda: MagicMock()
-    monkeypatch.setattr(
-        "main.get_latest_agent_version_id",
-        lambda _session, _project_id, _agent_name: _STUB_AGENT_VERSION_ID,
-    )
+    async def _stub_version_lookup(_session, _project_id, _agent_name) -> str:
+        return _STUB_AGENT_VERSION_ID
+
+    monkeypatch.setattr("main.get_latest_agent_version_id", _stub_version_lookup)
     try:
         yield TestClient(app)
     finally:

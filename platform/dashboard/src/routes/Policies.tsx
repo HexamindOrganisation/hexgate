@@ -10,8 +10,10 @@ import {
 } from 'lucide-react'
 import { ReactFlow, Background, BackgroundVariant, Controls } from '@xyflow/react'
 import { api, type PolicyValidationError } from '@/lib/api'
+import { useProjectScoped } from '@/lib/active'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
+import { NoProjectEmptyState } from '@/components/NoProjectEmptyState'
 import { nodeTypes } from '@/components/graph/nodes'
 import { buildPolicyGraph } from '@/lib/policy_graph'
 import { cn } from '@/lib/utils'
@@ -29,9 +31,20 @@ const TAB_ICON: Record<Tab, typeof FileCode> = {
 }
 
 export function PoliciesPage() {
-  const agents = useQuery({ queryKey: ['agents'], queryFn: () => api.listAgents() })
+  const scope = useProjectScoped()
+  const agents = useQuery({
+    queryKey: ['agents', scope.projectId],
+    queryFn: () => api.listAgents(scope.projectId as string),
+    enabled: !!scope.projectId,
+  })
   const [selectedAgent, setSelectedAgent] = useState<string | null>(null)
   const [tab, setTab] = useState<Tab>('yaml')
+
+  // Wipe the selection on project switch — the previous project's
+  // agents don't exist over here.
+  useEffect(() => {
+    setSelectedAgent(null)
+  }, [scope.projectId])
 
   // Auto-select the first agent once the list loads.
   useEffect(() => {
@@ -39,6 +52,10 @@ export function PoliciesPage() {
       setSelectedAgent(agents.data[0].name)
     }
   }, [agents.data, selectedAgent])
+
+  if (scope.status === 'no-project') {
+    return <NoProjectEmptyState resource="policies" />
+  }
 
   return (
     <div className="-mx-8 -my-6 h-[calc(100vh-56px)] flex flex-col overflow-hidden">
@@ -59,11 +76,17 @@ export function PoliciesPage() {
 
       {/* Content */}
       <div className="flex-1 overflow-hidden">
-        {selectedAgent ? (
+        {selectedAgent && scope.projectId ? (
           tab === 'yaml' ? (
-            <YamlEditor agentName={selectedAgent} />
+            <YamlEditor
+              agentName={selectedAgent}
+              projectId={scope.projectId}
+            />
           ) : (
-            <PolicyGraphTab agentName={selectedAgent} />
+            <PolicyGraphTab
+              agentName={selectedAgent}
+              projectId={scope.projectId}
+            />
           )
         ) : (
           <div className="h-full grid place-items-center text-sm text-muted-foreground">
@@ -157,11 +180,17 @@ function AgentPicker({
  * here as the write-path for policies. The /agents page now only shows
  * manifest data, no policy editing.
  */
-function YamlEditor({ agentName }: { agentName: string }) {
+function YamlEditor({
+  agentName,
+  projectId,
+}: {
+  agentName: string
+  projectId: string
+}) {
   const qc = useQueryClient()
   const agent = useQuery({
-    queryKey: ['agent', agentName],
-    queryFn: () => api.getAgent(agentName),
+    queryKey: ['agent', projectId, agentName],
+    queryFn: () => api.getAgent(agentName, projectId),
   })
 
   const [draft, setDraft] = useState<string>('')
@@ -177,16 +206,17 @@ function YamlEditor({ agentName }: { agentName: string }) {
   }, [agent.data])
 
   const saveMutation = useMutation({
-    mutationFn: () => api.updateAgent(agentName, { policy_yaml: draft }),
+    mutationFn: () =>
+      api.updateAgent(agentName, { policy_yaml: draft }, projectId),
     onSuccess: () => {
       setDirty(false)
-      qc.invalidateQueries({ queryKey: ['agent', agentName] })
-      qc.invalidateQueries({ queryKey: ['agents'] })
+      qc.invalidateQueries({ queryKey: ['agent', projectId, agentName] })
+      qc.invalidateQueries({ queryKey: ['agents', projectId] })
     },
   })
 
   const validateMutation = useMutation({
-    mutationFn: () => api.validatePolicy(agentName, draft),
+    mutationFn: () => api.validatePolicy(agentName, draft, projectId),
     onSuccess: (resp) => setErrors(resp.errors),
   })
 
@@ -275,10 +305,16 @@ function YamlEditor({ agentName }: { agentName: string }) {
  * on the next tab-flip (no live re-layout during typing — keeps the
  * mental model "one source of truth, two views").
  */
-function PolicyGraphTab({ agentName }: { agentName: string }) {
+function PolicyGraphTab({
+  agentName,
+  projectId,
+}: {
+  agentName: string
+  projectId: string
+}) {
   const agent = useQuery({
-    queryKey: ['agent', agentName],
-    queryFn: () => api.getAgent(agentName),
+    queryKey: ['agent', projectId, agentName],
+    queryFn: () => api.getAgent(agentName, projectId),
   })
 
   const graph = useMemo(() => {

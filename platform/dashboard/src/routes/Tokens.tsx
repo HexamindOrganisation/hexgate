@@ -28,7 +28,9 @@ import {
   DialogTitle,
   DialogTrigger,
 } from '@/components/ui/dialog'
+import { NoProjectEmptyState } from '@/components/NoProjectEmptyState'
 import { api, type TokenMintResponse } from '@/lib/api'
+import { useProjectScoped } from '@/lib/active'
 import { cn } from '@/lib/utils'
 
 function formatRelative(iso: string | null): string {
@@ -136,8 +138,10 @@ function JustMintedBanner({
 }
 
 function MintDialog({
+  projectId,
   onSuccess,
 }: {
+  projectId: string
   onSuccess: (token: TokenMintResponse) => void
 }) {
   const [open, setOpen] = useState(false)
@@ -146,9 +150,10 @@ function MintDialog({
   const qc = useQueryClient()
 
   const mutation = useMutation({
-    mutationFn: (body: Parameters<typeof api.mintToken>[0]) => api.mintToken(body),
+    mutationFn: (body: Parameters<typeof api.mintToken>[0]) =>
+      api.mintToken(body, projectId),
     onSuccess: (token) => {
-      qc.invalidateQueries({ queryKey: ['tokens'] })
+      qc.invalidateQueries({ queryKey: ['tokens', projectId] })
       onSuccess(token)
       setOpen(false)
       setName('')
@@ -241,12 +246,31 @@ function MintDialog({
 
 export function TokensPage() {
   const [justMinted, setJustMinted] = useState<TokenMintResponse | null>(null)
-  const tokens = useQuery({ queryKey: ['tokens'], queryFn: () => api.listTokens() })
+  const scope = useProjectScoped()
+  // ``enabled: !!scope.projectId`` keeps React Query quiet while we
+  // wait for the active-project bootstrap; the cache key includes the
+  // id so switching projects doesn't show stale rows.
+  const tokens = useQuery({
+    queryKey: ['tokens', scope.projectId],
+    queryFn: () => api.listTokens(scope.projectId as string),
+    enabled: !!scope.projectId,
+  })
   const qc = useQueryClient()
   const revoke = useMutation({
-    mutationFn: (tokenId: string) => api.revokeToken(tokenId),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['tokens'] }),
+    mutationFn: (tokenId: string) =>
+      api.revokeToken(tokenId, scope.projectId as string),
+    onSuccess: () =>
+      qc.invalidateQueries({ queryKey: ['tokens', scope.projectId] }),
   })
+
+  if (scope.status === 'no-project') {
+    return (
+      <div className="max-w-[1400px] mx-auto">
+        <h1 className="text-2xl font-semibold tracking-tight">Tokens</h1>
+        <NoProjectEmptyState resource="tokens" />
+      </div>
+    )
+  }
 
   return (
     <div className="max-w-[1400px] mx-auto">
@@ -262,7 +286,9 @@ export function TokensPage() {
             <BookOpen className="size-4" />
             Token docs
           </Button>
-          <MintDialog onSuccess={setJustMinted} />
+          {scope.projectId && (
+            <MintDialog projectId={scope.projectId} onSuccess={setJustMinted} />
+          )}
         </div>
       </div>
 

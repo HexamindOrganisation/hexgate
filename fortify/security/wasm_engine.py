@@ -50,6 +50,8 @@ from __future__ import annotations
 
 import json
 import threading
+from collections import OrderedDict
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -161,6 +163,28 @@ class WasmPolicy:
             exports=exports,
             entrypoint_id=entrypoint_id,
             base_heap_ptr=base_heap_ptr,
+        )
+
+    @classmethod
+    def from_bytes_cached(
+        cls,
+        wasm: bytes,
+        wasm_hash: str,
+        *,
+        entrypoint: str = DEFAULT_ENTRYPOINT,
+    ) -> "WasmPolicy":
+        """Return a cached :class:`WasmPolicy` for ``wasm_hash``, instantiating
+        it (via :meth:`from_bytes`) on the first miss.
+
+        The hot path for policy refresh is "the bundle changed; the wasm
+        didn't" — most policy edits leave the wasm bytes alone or the dev
+        re-saves an identical policy. A content-addressed cache by
+        ``wasm_hash`` makes those refreshes ~free (no wasmtime
+        re-instantiation). The per-hash lock prevents N concurrent first-
+        loads from racing into N stores for the same hash.
+        """
+        return _wasm_policy_cache.get_or_load(
+            wasm_hash, lambda: cls.from_bytes(wasm, entrypoint=entrypoint)
         )
 
     @classmethod
@@ -396,3 +420,74 @@ def _parse_decision(raw: Any) -> RegoVerdict:
         requires_approval=bool(payload.get("requires_approval", False)),
         violations=list(payload.get("violations", []) or []),
     )
+
+
+# ---------------------------------------------------------------------------
+# Content-addressed WasmPolicy cache (used by from_bytes_cached)
+# ---------------------------------------------------------------------------
+
+
+class _WasmPolicyCache:
+    """Tiny LRU keyed by ``wasm_hash``.
+
+    Policy refreshes typically receive a bundle whose wasm bytes haven't
+    changed (the dev edited an unrelated field, the policy compiled to
+    the same module, or it's the same agent we already loaded once). The
+    cache makes that case ~free — a dict hit instead of a fresh wasmtime
+    instantiation (~50–100ms). Per-key locks prevent N concurrent first-
+    loads from racing into N stores for the same hash.
+
+    Memory bound: 16 entries × ~150 KB per ``WasmPolicy`` instance = a
+    handful of MB worst-case, plenty for any realistic agent count.
+    """
+
+    _MAX_ENTRIES = 16
+
+    def __init__(self) -> None:
+        self._policies: "OrderedDict[str, WasmPolicy]" = OrderedDict()
+        # One Lock for cache mutation, plus a per-hash Lock that prevents
+        # cache stampedes during the first concurrent load of a hash.
+        self._mutex = threading.Lock()
+        self._inflight: dict[str, threading.Lock] = {}
+
+    def get_or_load(
+        self, wasm_hash: str, loader: Callable[[], "WasmPolicy"]
+    ) -> "WasmPolicy":
+        # Fast path: already cached. Move-to-end to keep LRU semantics.
+        with self._mutex:
+            cached = self._policies.get(wasm_hash)
+            if cached is not None:
+                self._policies.move_to_end(wasm_hash)
+                return cached
+            # Reserve a per-hash lock so concurrent first-loads serialize.
+            slot = self._inflight.setdefault(wasm_hash, threading.Lock())
+
+        with slot:
+            # Re-check under the slot lock — another caller may have populated
+            # the cache while we waited.
+            with self._mutex:
+                cached = self._policies.get(wasm_hash)
+                if cached is not None:
+                    self._policies.move_to_end(wasm_hash)
+                    return cached
+
+            # Heavy work happens outside the global mutex so other hashes
+            # aren't blocked by this hash's wasmtime instantiation.
+            policy = loader()
+
+            with self._mutex:
+                self._policies[wasm_hash] = policy
+                self._policies.move_to_end(wasm_hash)
+                while len(self._policies) > self._MAX_ENTRIES:
+                    self._policies.popitem(last=False)
+                self._inflight.pop(wasm_hash, None)
+            return policy
+
+    def clear(self) -> None:
+        """Reset the cache. Mostly useful in tests."""
+        with self._mutex:
+            self._policies.clear()
+            self._inflight.clear()
+
+
+_wasm_policy_cache = _WasmPolicyCache()

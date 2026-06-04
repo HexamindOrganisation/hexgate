@@ -244,3 +244,48 @@ def test_unknown_entrypoint_raises_with_helpful_listing(demo_wasm: bytes) -> Non
         WasmPolicy.from_bytes(demo_wasm, entrypoint="fortify/policy/no_such_rule")
     # The error names what *is* available so the caller can self-correct.
     assert "fortify/policy/decision" in str(exc.value)
+
+
+# ---------------------------------------------------------------------------
+# from_bytes_cached — content-addressed cache by wasm_hash (Phase 8a)
+# ---------------------------------------------------------------------------
+
+
+@needs_opa
+def test_from_bytes_cached_reuses_instance_on_same_hash(demo_wasm: bytes) -> None:
+    """Two loads of the same hash reuse one wasmtime store — the whole point.
+
+    Without this, every policy refresh would re-instantiate wasmtime even
+    when the bundle hadn't actually changed.
+    """
+    import hashlib
+    from fortify.security.wasm_engine import _wasm_policy_cache
+
+    _wasm_policy_cache.clear()
+    h = hashlib.sha256(demo_wasm).hexdigest()
+    a = WasmPolicy.from_bytes_cached(demo_wasm, h)
+    b = WasmPolicy.from_bytes_cached(demo_wasm, h)
+    assert a is b
+    # And the cached instance still evaluates correctly.
+    assert a.decide(role="billing", tool="web_search", args={}).allow is True
+
+
+@needs_opa
+def test_from_bytes_cached_distinguishes_hashes(demo_wasm: bytes) -> None:
+    """Different hash → different cached instance (no false collisions)."""
+    import hashlib
+    from fortify.security import compile_to_rego, compile_to_wasm
+    from fortify.security.wasm_engine import _wasm_policy_cache
+
+    _wasm_policy_cache.clear()
+    other_rego = compile_to_rego(
+        {"version": 1, "roles": {"default": {"tools": {"fetch": {"mode": "allow"}}}}}
+    )
+    other_wasm = compile_to_wasm(other_rego).wasm
+
+    h1 = hashlib.sha256(demo_wasm).hexdigest()
+    h2 = hashlib.sha256(other_wasm).hexdigest()
+    p1 = WasmPolicy.from_bytes_cached(demo_wasm, h1)
+    p2 = WasmPolicy.from_bytes_cached(other_wasm, h2)
+    assert p1 is not p2
+    assert h1 != h2

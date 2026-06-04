@@ -8,7 +8,7 @@ import pytest
 from agents import FunctionTool
 
 from fortify.adapters.openai.tools import _parse_args, wrap_tool, wrap_tools
-from fortify.security import AgentPolicy, BaseToolPolicy, PolicySet
+from fortify.security import AgentPolicy, PolicySet
 from fortify.security.enforcer import PolicyEnforcer
 from fortify.security.policy_set import DEFAULT_ROLE_NAME
 
