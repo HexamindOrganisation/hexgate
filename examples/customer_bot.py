@@ -1,9 +1,11 @@
-"""End-to-end demo for the Phase 7 register-time default policy.
+"""Canonical end-to-end demo: a customer-support agent driven through
+the Fortify dashboard.
 
-Uses ``fortify.create_agent()`` so the returned ``FortifyAgent`` carries
-its name, tools, model, and system prompt as plain attributes. The
-manifest builder reads everything off the object — no ``--tools`` /
-``--system-prompt`` / ``--model`` flags needed when registering.
+Built with ``fortify.create_agent()`` so the returned ``FortifyAgent``
+carries its name, tools, model, and system prompt as plain attributes.
+The manifest builder reads everything off the object — no
+``--tools`` / ``--system-prompt`` / ``--model`` flags needed when
+registering.
 
 Workflow
 --------
@@ -16,7 +18,7 @@ Workflow
 
    .. code-block:: bash
 
-      uv run fortify register --agent examples.phase7_demo:agent
+      uv run fortify register --agent examples.customer_bot:agent
 
    ✓ Look at the dashboard → /agents → ``customer_bot`` is listed with
      its manifest (description, model, tools, system prompt).
@@ -31,8 +33,9 @@ Workflow
 
       FORTIFY_AGENT_NAME=customer_bot uv run fortify serve
 
-   (Phase 7 step 2 will collapse this to ``fortify serve
-   examples.phase7_demo:agent`` — no env var needed.)
+   (Until the uvicorn-style serve lands, the agent name has to be
+   set via the env var. After that this becomes
+   ``fortify serve examples.customer_bot:agent``.)
 
 4. Open /playground in the dashboard, pick a role ("Acting as: admin /
    member / default"), and send a message that touches each tool. Watch
@@ -144,7 +147,7 @@ def lookup_product(sku: str) -> str:
 # ---------------------------------------------------------------------------
 # The FortifyAgent. create_agent() returns (FortifyAgent, CallbackHandler);
 # we expose the agent as ``agent`` for ``fortify register --agent
-# examples.phase7_demo:agent``. The FortifyAgent's .name, .tools,
+# examples.customer_bot:agent``. The FortifyAgent's .name, .tools,
 # .model, and .system_prompt fields are read directly by
 # create_fortify_manifest — no need to repeat them on the CLI.
 # ---------------------------------------------------------------------------
@@ -173,7 +176,7 @@ agent, _handler = create_agent(
 # ---------------------------------------------------------------------------
 # Optional: local smoke without going through the platform. Confirms the
 # tools wire up + the agent runs before the register/serve cycle.
-#   uv run python examples/phase7_demo.py
+#   uv run python examples/customer_bot.py
 # ---------------------------------------------------------------------------
 
 
