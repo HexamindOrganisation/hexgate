@@ -512,8 +512,8 @@ What happens under the hood:
 
 Working scripts in `examples/`:
 
+- `examples/customer_bot.py` — canonical Fortify path: `create_agent(...)` + the dashboard register/serve loop end-to-end.
 - `examples/openai_demo.py` — `FortifyRunner` (OpenAI Agents SDK) end-to-end.
-- `examples/langchain_demo.py` — `wrap_langchain_agent` (LangChain) end-to-end with `create_react_agent`.
 - `examples/google_demo.py` — `FortifyRunner` (Google ADK) end-to-end with `InMemorySessionService`.
 - `examples/pydantic_ai_demo.py` — `wrap_pydantic_agent` (Pydantic AI) end-to-end.
 
