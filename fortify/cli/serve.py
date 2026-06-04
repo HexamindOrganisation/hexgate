@@ -29,7 +29,6 @@ import json
 import logging
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
@@ -42,13 +41,12 @@ from fortify.agents.factory import stream_agent
 from fortify.bootstrap import bootstrap
 from fortify.cli._common import (
     AgentRuntime,
-    add_shared_agent_flags,
     build_approval_handler,
-    build_runtime,
-    load_agent_script,
+    build_runtime_from_local_agent,
+    load_spec,
 )
 from fortify.cli.state import ChatState
-from fortify.cloud.client import FortifyConfig, FortifyError, resolve_agent_name
+from fortify.cloud.client import FortifyConfig, FortifyError
 from fortify.runtime import User
 
 logger = logging.getLogger(__name__)
@@ -255,46 +253,87 @@ def add_parser(subparsers: argparse._SubParsersAction) -> None:
     """Register the `serve` subcommand on the top-level fortify CLI."""
     parser = subparsers.add_parser(
         "serve",
-        help="Relay the local agent to the Fortify dashboard over WebSocket.",
+        help="Relay a local agent to the Fortify dashboard over WebSocket.",
         description=(
             "Serve a local agent to the Fortify dashboard Playground over "
-            "WebSocket. Policy edits in the dashboard take effect at the next "
-            "turn boundary."
+            "WebSocket. Takes a module:attr spec — the same form as "
+            "`fortify register --agent ...` — and brings the agent up "
+            "end-to-end: auto-registers the manifest (idempotent), fetches "
+            "the cloud's policy, applies enforcement, then opens the relay. "
+            "Policy edits in the dashboard take effect at the next turn."
         ),
     )
-    add_shared_agent_flags(parser)
+    parser.add_argument(
+        "agent_spec",
+        help=(
+            "Agent to serve as module:attr — e.g. "
+            "examples.customer_bot:agent. Same spec form as "
+            "`fortify register --agent ...`."
+        ),
+    )
+    parser.add_argument(
+        "--description",
+        default=None,
+        help="Optional description for the registered manifest.",
+    )
+    parser.add_argument(
+        "--approval-mode",
+        choices=("ask", "auto-approve", "auto-deny"),
+        default="ask",
+        help=(
+            "How approval-required tool calls are handled. ``ask`` is the "
+            "default and prompts in the terminal; serve coerces it to "
+            "``auto-approve`` since the terminal isn't interactive during "
+            "a WebSocket session."
+        ),
+    )
+    parser.add_argument(
+        "--no-auto-register",
+        action="store_true",
+        help=(
+            "Skip the auto-register POST at startup. Errors if the agent "
+            "isn't already on the platform. Useful for CI / deliberate "
+            "deployments where registration is a separate step."
+        ),
+    )
     parser.set_defaults(func=main)
 
 
 def main(args: argparse.Namespace) -> int:
-    """Entrypoint for the `fortify serve` subcommand."""
+    """Entrypoint for the `fortify serve` subcommand.
+
+    The uvicorn-style flow: load the agent object from a module:attr
+    spec, derive a manifest from it (no flags needed — the object
+    carries name, tools, model, and system_prompt), auto-register
+    on the platform, fetch the operator's policy, and relay.
+    """
     console = Console()
     settings = bootstrap()
-    base_dir = Path.cwd()
 
-    if args.use:
-        load_agent_script(args.use)
+    agent_obj = load_spec(args.agent_spec)
 
-    # Serve mode routes through Fortify, not the local agent registry, so the
-    # agent name resolves via FORTIFY_AGENT_NAME / "default" fallback when not
-    # explicitly passed.
-    agent_name = args.agent or resolve_agent_name()
-
-    # `ask` doesn't make sense without a TTY for prompts. Coerce to
-    # auto-approve unless the caller explicitly picked auto-deny.
+    # ``ask`` doesn't make sense in serve mode — no TTY prompt during
+    # a relay session. Coerce to auto-approve unless the operator
+    # explicitly picked auto-deny.
     approval_mode = (
         args.approval_mode if args.approval_mode == "auto-deny" else "auto-approve"
     )
     approval_handler = build_approval_handler(console, approval_mode)
 
-    runtime = build_runtime(
-        settings,
-        agent_name=agent_name,
-        base_dir=base_dir,
-        model=args.model,
-        local_only=False,
-        approval_handler=approval_handler,
-    )
+    try:
+        runtime = build_runtime_from_local_agent(
+            settings,
+            agent_obj=agent_obj,
+            description=args.description,
+            approval_handler=approval_handler,
+            auto_register=not args.no_auto_register,
+            console=console,
+        )
+    except FortifyError as exc:
+        # Token + handshake + registration errors all bubble through
+        # FortifyError; surface the message and exit cleanly.
+        console.print(f"[red]✗[/] {exc}")
+        return 1
 
     asyncio.run(run_serve(runtime))
     return 0

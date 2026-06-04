@@ -33,17 +33,6 @@ from fortify.cloud.biscuit import (
 DEFAULT_BASE_URL = "http://localhost:8000"
 DEFAULT_TIMEOUT = 10.0
 TOKEN_PREFIX = "fty_"
-DEFAULT_AGENT_NAME = "default"
-
-
-def resolve_agent_name(explicit: str | None = None) -> str:
-    """Resolve the agent name for a Fortify call.
-
-    Precedence: explicit arg → FORTIFY_AGENT_NAME env → "default".
-    """
-    if explicit:
-        return explicit
-    return os.environ.get("FORTIFY_AGENT_NAME") or DEFAULT_AGENT_NAME
 
 
 class FortifyError(RuntimeError):

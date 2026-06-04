@@ -12,40 +12,39 @@ Workflow
 1. Run platform API + dashboard, sign in, create/select a project, mint a
    token. Add it to ``asianf/.env`` as ``FORTIFY_KEY=fty_live_...``.
 
-2. Register this agent — the manifest is derived in one call from the
-   FortifyAgent object, and the platform auto-generates the starter
-   role-aware policy:
+2. Serve the agent — one command. ``fortify serve`` auto-registers the
+   manifest on first run (the platform generates a starter role-aware
+   policy from the tool list), then opens the relay:
 
    .. code-block:: bash
 
-      uv run fortify register --agent examples.customer_bot:agent
+      uv run fortify serve examples.customer_bot:agent
 
-   ✓ Look at the dashboard → /agents → ``customer_bot`` is listed with
-     its manifest (description, model, tools, system prompt).
-   ✓ Open /policies → the editor shows the four-role generated YAML
-     plus a heads-up comment naming ``refund_customer`` and
-     ``lookup_product`` (the heuristic couldn't classify them — they
-     land in the write bucket, fail-closed).
+   ✓ Console prints "Registered agent 'customer_bot' (v1)" on first
+     run, "already registered (manifest unchanged)" on subsequent runs.
+   ✓ Dashboard → /agents → ``customer_bot`` listed with its manifest
+     (description, model, tools, system prompt).
+   ✓ Dashboard → /policies → four-role generated YAML plus a
+     heads-up comment naming ``refund_customer`` and ``lookup_product``
+     (the heuristic couldn't classify them — they land in the write
+     bucket, fail-closed).
 
-3. Serve the agent so the dashboard Playground can drive it:
-
-   .. code-block:: bash
-
-      FORTIFY_AGENT_NAME=customer_bot uv run fortify serve
-
-   (Until the uvicorn-style serve lands, the agent name has to be
-   set via the env var. After that this becomes
-   ``fortify serve examples.customer_bot:agent``.)
-
-4. Open /playground in the dashboard, pick a role ("Acting as: admin /
+3. Open /playground in the dashboard, pick a role ("Acting as: admin /
    member / default"), and send a message that touches each tool. Watch
    the Decisions sidebar — admin's writes pass through; member's
    writes trigger approval prompts; shells gate even for admin.
 
-5. Edit the policy in /policies → save → the SDK's next turn picks up
+4. Edit the policy in /policies → save → the SDK's next turn picks up
    the change via the ETag conditional GET. Demote ``admin``'s
    ``update_order_status`` to ``approval_required``, send a follow-up
    message, and watch admin now hit the approval gate too.
+
+5. CI-style invocation: ``--no-auto-register`` errors cleanly if the
+   agent isn't already on the platform:
+
+   .. code-block:: bash
+
+      uv run fortify serve examples.customer_bot:agent --no-auto-register
 
 Tool layout — exercises every branch of the classifier
 ------------------------------------------------------
