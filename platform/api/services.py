@@ -256,19 +256,45 @@ async def remove_member(
     return True
 
 
+class RoleEscalationError(PermissionError):
+    """Raised when a caller tries to set a member role above their own.
+
+    Mirrors the :func:`_can_invite_role` rank check so the
+    PATCH-member-role surface stays consistent with the invitation
+    surface. Without this guard, an admin could PATCH their own
+    membership row to ``{"role": "owner"}`` and seize the org —
+    bypassing every other gate this layer enforces.
+    """
+
+
 async def change_member_role(
     session: AsyncSession,
     *,
     org_id: str,
     user_id: str,
     new_role: str,
+    caller_role: str,
 ) -> OrganizationMember | None:
     """Update a member's role. Returns the updated row, or None when
-    the membership doesn't exist. Refuses with :class:`LastOwnerError`
-    if demoting the last owner.
+    the membership doesn't exist.
+
+    Two refusal gates:
+      * :class:`RoleEscalationError` — the caller can't assign a role
+        above their own rank. Owner can set anything; admin can set
+        admin + member; member can't reach this code path (the route
+        layer rejects them via ``require_org_admin``).
+      * :class:`LastOwnerError` — demoting the only owner is refused.
+
+    ``caller_role`` is the caller's role on this org (resolved by the
+    route layer via :func:`require_org_admin`).
     """
     if new_role not in ALL_ROLES:
         raise ValueError(f"unknown role: {new_role!r}")
+    if not _can_invite_role(caller_role, new_role):
+        raise RoleEscalationError(
+            f"{caller_role} cannot assign role {new_role!r} — "
+            "callers can only set roles at or below their own rank"
+        )
     member = await find_member(session, org_id=org_id, user_id=user_id)
     if member is None:
         return None

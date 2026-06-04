@@ -380,7 +380,11 @@ async def test_change_member_role_updates_existing_row(session_factory) -> None:
         await s.commit()
 
         member = await change_member_role(
-            s, org_id=DEFAULT_ORG_ID, user_id=u.id, new_role=ROLE_ADMIN
+            s,
+            org_id=DEFAULT_ORG_ID,
+            user_id=u.id,
+            new_role=ROLE_ADMIN,
+            caller_role=ROLE_OWNER,
         )
         assert member is not None
         assert member.role == ROLE_ADMIN
@@ -401,6 +405,7 @@ async def test_change_member_role_refuses_demoting_last_owner(
                 org_id=DEFAULT_ORG_ID,
                 user_id=DEFAULT_USER_ID,
                 new_role=ROLE_MEMBER,
+                caller_role=ROLE_OWNER,
             )
 
 
@@ -421,7 +426,11 @@ async def test_change_member_role_allows_demoting_when_others_owners(
 
         # Two owners → either one can be demoted.
         member = await change_member_role(
-            s, org_id=DEFAULT_ORG_ID, user_id=u.id, new_role=ROLE_MEMBER
+            s,
+            org_id=DEFAULT_ORG_ID,
+            user_id=u.id,
+            new_role=ROLE_MEMBER,
+            caller_role=ROLE_OWNER,
         )
         assert member is not None and member.role == ROLE_MEMBER
 
@@ -795,6 +804,62 @@ def test_patch_member_role_403_for_plain_member(
     )
     assert r.status_code == 403
     assert "admin or owner" in r.json()["detail"].lower()
+
+
+def test_admin_cannot_promote_to_owner(
+    client: TestClient, session_factory
+) -> None:
+    """Privilege escalation guard — an admin PATCHing themselves (or
+    anyone else) to owner is refused with 403.
+
+    The invitation path enforces this via :func:`_can_invite_role`;
+    the PATCH-member-role path now does too. Before the fix, any admin
+    could seize an org by promoting themselves.
+    """
+    import asyncio
+
+    _signup_and_login(client, "ownerY@example.com", "correcthorsebattery")
+    org_id = client.get("/v1/orgs").json()[0]["id"]
+    admin_user_id = asyncio.get_event_loop().run_until_complete(
+        _add_member(
+            session_factory, email="adminY@example.com", org_id=org_id, role=ROLE_ADMIN
+        )
+    )
+
+    # Drop the owner cookie + impersonate the admin via X-Dev-User.
+    client.cookies.clear()
+    r = client.patch(
+        f"/v1/orgs/{org_id}/members/{admin_user_id}",
+        json={"role": ROLE_OWNER},
+        headers={"X-Dev-User": admin_user_id},
+    )
+    assert r.status_code == 403
+    # Defensive: the message names the offending role transition so
+    # the dashboard can surface it sensibly.
+    assert "owner" in r.json()["detail"].lower()
+
+
+def test_owner_can_promote_admin_to_owner(
+    client: TestClient, session_factory
+) -> None:
+    """Sanity-check the other side of the rank check — owners can still
+    set any role. The fix shouldn't restrict the owner path."""
+    import asyncio
+
+    _signup_and_login(client, "ownerZ@example.com", "correcthorsebattery")
+    org_id = client.get("/v1/orgs").json()[0]["id"]
+    admin_user_id = asyncio.get_event_loop().run_until_complete(
+        _add_member(
+            session_factory, email="adminZ@example.com", org_id=org_id, role=ROLE_ADMIN
+        )
+    )
+
+    r = client.patch(
+        f"/v1/orgs/{org_id}/members/{admin_user_id}",
+        json={"role": ROLE_OWNER},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["role"] == ROLE_OWNER
 
 
 def test_demote_last_owner_returns_409(client: TestClient) -> None:

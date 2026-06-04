@@ -814,3 +814,73 @@ def test_register_with_different_tools_leaves_existing_policy_alone(
     # auto-generation only fires on first create.
     assert agent_after_second.policy_yaml == starter
     assert "write_file" not in agent_after_second.policy_yaml
+
+
+# ---------------------------------------------------------------------------
+# require_project — the SDK bearer-auth gate
+#
+# Pre-fix, the gate only ran ``find_token_by_secret`` (a plain
+# secret-string lookup) — a forged biscuit whose payload happened to
+# match a stored secret would pass. The fix routes through
+# ``_validate_sdk_token`` first, which adds the signature gate
+# ws_require_project already had.
+# ---------------------------------------------------------------------------
+
+
+def test_require_project_rejects_token_with_bad_signature(
+    client: TestClient, session_factory
+) -> None:
+    """A bearer whose envelope decodes but signature doesn't chain to
+    the platform's root key → 401, even when the surrounding token
+    string is byte-identical to a stored secret.
+
+    Synthesised by minting a valid token, then tampering the last few
+    chars of the biscuit b64 payload before sending it. The DB still
+    has the original (untampered) secret, so the revocation lookup
+    would silently accept the tampered string under the pre-fix
+    behaviour. The signature gate now catches it first.
+    """
+    token = _mint_token_for_test(session_factory)
+    # Flip the trailing 4 chars of the biscuit_b64 payload. The
+    # envelope is ``fty_<env>_<project>_<biscuit>`` — keep the prefix
+    # intact so parse_envelope succeeds, mutate the signed payload so
+    # verify_token fails.
+    tampered = token[:-4] + ("AAAA" if not token.endswith("AAAA") else "BBBB")
+    assert tampered != token  # sanity
+
+    r = client.post(
+        "/v1/agents",
+        json={
+            "manifest": {
+                "name": "tampered_test",
+                "description": None,
+                "framework": "langchain",
+                "tools": [],
+            }
+        },
+        headers={"Authorization": f"Bearer {tampered}"},
+    )
+    assert r.status_code == 401, r.text
+    assert "signature" in r.json()["detail"].lower() or "malformed" in r.json()["detail"].lower()
+
+
+def test_require_project_accepts_valid_signed_token(
+    client: TestClient, session_factory
+) -> None:
+    """Happy-path sanity check — a freshly-minted token still works
+    after the signature gate is added. Guards against the regression
+    where adding _validate_sdk_token would over-reject."""
+    token = _mint_token_for_test(session_factory)
+    r = client.post(
+        "/v1/agents",
+        json={
+            "manifest": {
+                "name": "sig_gate_happy_path",
+                "description": None,
+                "framework": "langchain",
+                "tools": [],
+            }
+        },
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert r.status_code == 201, r.text

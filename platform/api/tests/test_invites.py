@@ -28,7 +28,6 @@ import mailer
 from main import app
 from models import (
     Invitation,
-    Organization,
     OrganizationMember,
     User,
 )

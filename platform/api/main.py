@@ -176,15 +176,37 @@ async def require_project(
 
     Used by SDK-facing endpoints (e.g. POST /v1/agents) where the caller
     has only an API key, not a project id in the URL.
+
+    Two gates run in order, matching :func:`ws_require_project` and
+    :func:`optional_dev_token` so all three bearer-auth surfaces agree
+    on what counts as a valid token:
+
+      1. **Signature verification** via :func:`_validate_sdk_token` —
+         parse the envelope, verify the biscuit chains to the platform's
+         root public key. A revocation lookup runs inside the helper.
+      2. **Project resolution** — read ``DevToken.project_id`` for the
+         already-validated secret.
+
+    The signature gate was missing before — a forged biscuit whose
+    secret string happened to match a stored ``DevToken.secret`` would
+    have been accepted. Defense-in-depth + consistency with the WS
+    bearer path.
     """
     if authorization is None or not authorization.startswith("Bearer "):
         raise HTTPException(
             status_code=401, detail="missing or malformed authorization header"
         )
+    # Signature + revocation gate. Raises HTTPException(401) on any
+    # failure (malformed envelope, bad signature, unknown/revoked
+    # secret) so the project lookup below only fires on a verified
+    # token.
+    await _validate_sdk_token(authorization, session)
     secret = authorization.removeprefix("Bearer ").strip()
     token = await find_token_by_secret(session, secret)
-    if token is None:
-        raise HTTPException(status_code=401, detail="invalid fortify key")
+    # ``_validate_sdk_token`` already confirmed find_token_by_secret
+    # returns a row; the second lookup is to read .project_id, not
+    # to re-gate access. assert guards against a logic regression.
+    assert token is not None, "find_token_by_secret returned None after signature gate"
     return token.project_id
 
 
@@ -263,6 +285,87 @@ async def ws_require_project(
     # Sec-WebSocket-Protocol response headers.
     await websocket.accept(subprotocol=_WS_PROTOCOL_MARKER)
     return token.project_id
+
+
+async def ws_require_org_member(
+    websocket: WebSocket,
+    project_id: str,
+    session: AsyncSession,
+) -> User | None:
+    """Authenticate a dashboard-driven WebSocket via the session cookie.
+
+    Counterpart of :func:`ws_require_project` for the cookie-auth side.
+    Browsers can't set custom headers on WS upgrades — fine for
+    ``ws_serve`` (the CLI sends a bearer subprotocol) but the dashboard
+    drives ``ws_chat`` from JavaScript and can't reach for an
+    Authorization header. We extract the ``fortify_session`` cookie
+    directly from the handshake.
+
+    Three gates run in order:
+
+      1. Cookie present → decode the JWT via the same strategy the
+         HTTP cookie path uses.
+      2. Decoded user exists + is active.
+      3. User is a member of the project's org (any role).
+
+    Any failure → ``close(code=4401)`` before ``accept()`` and return
+    ``None``. On success → ``accept()`` and return the ``User``.
+
+    Before this gate landed, ``ws_chat`` was a wide-open eavesdrop /
+    inject surface: anyone who could guess or enumerate a ``project_id``
+    could relay arbitrary JSON to a running serve process and read its
+    replies. The bearer-subprotocol pattern from ``ws_require_project``
+    doesn't work here because JS WebSocket can't set
+    ``Sec-WebSocket-Protocol`` cookies — cookie auth is the only
+    browser-compatible option.
+    """
+    # Cookie extraction. ``websocket.cookies`` is Starlette's parsed
+    # mapping; absent cookies show up as missing keys, not empty
+    # strings.
+    cookie_token = websocket.cookies.get("fortify_session")
+    if not cookie_token:
+        await websocket.close(code=_WS_CLOSE_UNAUTHENTICATED)
+        return None
+
+    # JWT decode via the same strategy + user_manager wiring the HTTP
+    # cookie path uses. Importing locally so this module can be
+    # imported without forcing the auth package to load — keeps
+    # require_user_or_sdk_token (gone) and friends out of the cycle.
+    from fastapi_users.db import SQLAlchemyUserDatabase
+
+    from auth import OAuthAccount, UserManager, get_jwt_strategy
+
+    user_db = SQLAlchemyUserDatabase(session, User, OAuthAccount)
+    user_manager = UserManager(user_db)
+    strategy = get_jwt_strategy()
+    try:
+        user = await strategy.read_token(cookie_token, user_manager)
+    except Exception:  # noqa: BLE001 — any decode failure is auth failure
+        user = None
+    if user is None or not user.is_active:
+        await websocket.close(code=_WS_CLOSE_UNAUTHENTICATED)
+        return None
+
+    # Org-membership check. ``ws_chat`` is project-scoped; the cookie
+    # only proves identity, not access to this particular project.
+    project = await session.get(Project, project_id)
+    if project is None:
+        await websocket.close(code=_WS_CLOSE_UNAUTHENTICATED)
+        return None
+    membership = (
+        await session.exec(
+            select(OrganizationMember).where(
+                OrganizationMember.user_id == user.id,
+                OrganizationMember.org_id == project.org_id,
+            )
+        )
+    ).first()
+    if membership is None:
+        await websocket.close(code=_WS_CLOSE_UNAUTHENTICATED)
+        return None
+
+    await websocket.accept()
+    return user
 
 
 # ---------------------------------------------------------------------------
@@ -968,9 +1071,22 @@ async def ws_serve(
 
 
 @v1.websocket("/projects/{project_id}/chat")
-async def ws_chat(websocket: WebSocket, project_id: str) -> None:
-    """Consumer socket for dashboard Playground sessions."""
-    await websocket.accept()
+async def ws_chat(
+    websocket: WebSocket,
+    project_id: str,
+    session: AsyncSession = Depends(get_session),
+) -> None:
+    """Consumer socket for dashboard Playground sessions.
+
+    Cookie-authed: the dashboard's JS WebSocket reaches for the
+    ``fortify_session`` cookie automatically. ``ws_require_org_member``
+    verifies it + checks the caller is a member of the project's org
+    before ``accept()`` runs. Anonymous / cross-org connects close
+    with 4401 before the handshake completes.
+    """
+    user = await ws_require_org_member(websocket, project_id, session)
+    if user is None:
+        return  # close already sent
     await registry.attach_chat(project_id, websocket)
     try:
         while True:
@@ -1208,13 +1324,20 @@ async def api_update_member_role(
 ) -> MemberRead:
     """Promote / demote a member. Admin or owner role required.
 
-    ``LastOwnerError`` from the service layer surfaces as 409 — demoting
-    the only owner would orphan the org. The route doesn't block self-
-    demotion explicitly; the same guard catches it via the owner count.
+    Two service-layer refusals surface here as HTTP errors:
+
+      * ``RoleEscalationError`` → 403 — the caller (admin or owner)
+        tried to assign a role above their own rank. Admins can't
+        mint owners by going through PATCH any more than they can
+        through the invitation path; the rank check is centralised
+        on :func:`_can_invite_role`.
+      * ``LastOwnerError`` → 409 — demoting the only owner would
+        orphan the org. Catches self-demotion too via the owner count.
+
     Returns the updated row so the dashboard can re-render the badge
     without a follow-up GET.
     """
-    from services import LastOwnerError, change_member_role
+    from services import LastOwnerError, RoleEscalationError, change_member_role
 
     _, caller_member = membership
     try:
@@ -1223,7 +1346,10 @@ async def api_update_member_role(
             org_id=caller_member.org_id,
             user_id=user_id,
             new_role=body.role,
+            caller_role=caller_member.role,
         )
+    except RoleEscalationError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
     except LastOwnerError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     if updated is None:
