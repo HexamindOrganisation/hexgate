@@ -833,8 +833,16 @@ async def api_register_agent(
     project_id: str = Depends(require_project),
     session: AsyncSession = Depends(get_session),
 ) -> RegisterAgentResponse:
-    """SDK-facing: register/upsert an agent manifest under the bearer's project."""
-    version, created = await register_manifest(session, project_id, body.manifest)
+    """SDK-facing: register/upsert an agent manifest under the bearer's project.
+
+    Threads ``keystore.sign`` through so first-time registers get a real
+    signed WASM bundle (and a starter role-aware policy) — re-registers
+    don't touch the agent's policy_yaml, so the operator's dashboard
+    edits are preserved.
+    """
+    version, created = await register_manifest(
+        session, project_id, body.manifest, sign=keystore.sign
+    )
     response.status_code = 201 if created else 200
     return RegisterAgentResponse(
         agent_id=version.agent_id,
