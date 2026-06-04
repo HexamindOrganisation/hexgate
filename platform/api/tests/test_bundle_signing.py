@@ -16,7 +16,10 @@ import json
 import shutil
 
 import pytest
-from sqlmodel import Session, SQLModel, create_engine
+import pytest_asyncio
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlmodel import SQLModel
+from sqlmodel.ext.asyncio.session import AsyncSession
 
 import services
 from fortify.security import generate_keypair, sign_bytes, verify_bytes
@@ -63,14 +66,19 @@ def signer() -> tuple:
     return (lambda data: sign_bytes(data, private_raw)), public_raw
 
 
-@pytest.fixture
-def session(tmp_path):
-    """A fresh temp-file SQLite session with the schema + seeded agents."""
-    engine = create_engine(f"sqlite:///{tmp_path / 'test.db'}")
-    SQLModel.metadata.create_all(engine)
-    with Session(engine) as s:
-        ensure_default_project(s)
+@pytest_asyncio.fixture
+async def session(tmp_path):
+    """A fresh temp-file async SQLite session with the schema + seeded agents."""
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'test.db'}")
+    async with engine.begin() as conn:
+        await conn.run_sync(SQLModel.metadata.create_all)
+    factory = async_sessionmaker(
+        engine, class_=AsyncSession, expire_on_commit=False
+    )
+    async with factory() as s:
+        await ensure_default_project(s)
         yield s
+    await engine.dispose()
 
 
 # ---------------------------------------------------------------------------
@@ -125,9 +133,9 @@ def test_compile_bundle_returns_none_when_opa_missing(
 
 
 @needs_opa
-def test_update_agent_stores_signed_bundle(session, signer) -> None:
+async def test_update_agent_stores_signed_bundle(session, signer) -> None:
     sign, public_raw = signer
-    agent = update_agent(
+    agent = await update_agent(
         session,
         services.DEFAULT_PROJECT_ID,
         "default",
@@ -144,14 +152,14 @@ def test_update_agent_stores_signed_bundle(session, signer) -> None:
 
 
 @needs_opa
-def test_update_agent_clears_stale_bundle_on_bad_policy(session, signer) -> None:
+async def test_update_agent_clears_stale_bundle_on_bad_policy(session, signer) -> None:
     """A good save then a broken save drops the now-wrong bundle."""
     sign, _ = signer
-    update_agent(
+    await update_agent(
         session, services.DEFAULT_PROJECT_ID, "default",
         policy_yaml=_DEMO_POLICY, sign=sign,
     )
-    agent = update_agent(
+    agent = await update_agent(
         session, services.DEFAULT_PROJECT_ID, "default",
         policy_yaml=_BAD_POLICY, sign=sign,
     )
@@ -160,9 +168,9 @@ def test_update_agent_clears_stale_bundle_on_bad_policy(session, signer) -> None
     assert agent.bundle_signature is None
 
 
-def test_update_agent_without_sign_stores_no_bundle(session) -> None:
+async def test_update_agent_without_sign_stores_no_bundle(session) -> None:
     """No signer → no bundle (pure yaml save, e.g. tests / opa-less envs)."""
-    agent = update_agent(
+    agent = await update_agent(
         session, services.DEFAULT_PROJECT_ID, "default",
         policy_yaml=_DEMO_POLICY,
     )
@@ -175,33 +183,34 @@ def test_update_agent_without_sign_stores_no_bundle(session) -> None:
 
 
 @needs_opa
-def test_backfill_signs_seeded_agents(session, signer) -> None:
+async def test_backfill_signs_seeded_agents(session, signer) -> None:
     """Seeded agents start bundle-less; backfill compiles + signs them so
     they're served via WASM on the first request, not just after an edit."""
     from sqlmodel import select
-    from models import Agent
 
     sign, public_raw = signer
 
     # Seeds are inserted without a bundle.
-    assert all(a.compiled_wasm is None for a in session.exec(select(Agent)).all())
+    rows = (await session.exec(select(Agent))).all()
+    assert all(a.compiled_wasm is None for a in rows)
 
-    n = services.backfill_bundles(session, sign)
+    n = await services.backfill_bundles(session, sign)
     assert n >= 1
 
     # Every agent now carries a verifiable bundle.
-    for a in session.exec(select(Agent)).all():
+    rows = (await session.exec(select(Agent))).all()
+    for a in rows:
         assert a.compiled_wasm is not None
         verify_bytes(a.bundle_manifest.encode("utf-8"), a.bundle_signature, public_raw)
 
 
 @needs_opa
-def test_backfill_is_idempotent(session, signer) -> None:
+async def test_backfill_is_idempotent(session, signer) -> None:
     """A second backfill touches nothing — already-bundled agents are skipped."""
     sign, _ = signer
-    first = services.backfill_bundles(session, sign)
+    first = await services.backfill_bundles(session, sign)
     assert first >= 1
-    assert services.backfill_bundles(session, sign) == 0
+    assert (await services.backfill_bundles(session, sign)) == 0
 
 
 # ---------------------------------------------------------------------------
@@ -210,11 +219,11 @@ def test_backfill_is_idempotent(session, signer) -> None:
 
 
 @needs_opa
-def test_agent_read_serializes_bundle_as_base64(session, signer) -> None:
+async def test_agent_read_serializes_bundle_as_base64(session, signer) -> None:
     import main
 
     sign, public_raw = signer
-    agent = update_agent(
+    agent = await update_agent(
         session, services.DEFAULT_PROJECT_ID, "default",
         policy_yaml=_DEMO_POLICY, sign=sign,
     )
@@ -231,8 +240,8 @@ def test_agent_read_serializes_bundle_as_base64(session, signer) -> None:
     assert json.loads(view.bundle_manifest)["wasm_hash"] == hashlib.sha256(wasm).hexdigest()
 
 
-def test_agent_read_nulls_when_unsigned(session) -> None:
-    agent = update_agent(
+async def test_agent_read_nulls_when_unsigned(session) -> None:
+    agent = await update_agent(
         session, services.DEFAULT_PROJECT_ID, "default",
         policy_yaml=_DEMO_POLICY,
     )
@@ -305,3 +314,77 @@ def test_platform_bundle_matches_pydantic(role, tool, args, expect_allow, signer
     assert wasm_allow == py_allow, (
         f"platform-bundle wasm disagrees with pydantic for {role}/{tool}/{args}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Phase 8a — ETag / If-None-Match on the agent fetch endpoint
+# ---------------------------------------------------------------------------
+
+
+@needs_opa
+def test_get_agent_returns_etag_header_when_bundle_present() -> None:
+    """The endpoint exposes the bundle's wasm_hash as a quoted ETag so
+    the SDK can use it on subsequent conditional GETs."""
+    from fastapi.testclient import TestClient
+    import main
+
+    # M3 Phase 2: routes require the X-Dev-User header. The default seed user
+    # is a member of support-bot's org, so baking it onto the client passes
+    # the require_org_member gate.
+    with TestClient(
+        main.app, headers={"X-Dev-User": services.DEFAULT_USER_ID}
+    ) as c:
+        r = c.get(f"/v1/projects/{services.DEFAULT_PROJECT_ID}/agents/default")
+        assert r.status_code == 200
+        etag = r.headers.get("etag")
+        assert etag and etag.startswith('"') and etag.endswith('"')
+        # Server-side ETag matches the wasm sha256 the SDK can compute.
+        body = r.json()
+        served_wasm = base64.b64decode(body["bundle_wasm_b64"])
+        assert etag == f'"{hashlib.sha256(served_wasm).hexdigest()}"'
+
+
+@needs_opa
+def test_if_none_match_returns_304_when_unchanged() -> None:
+    """A conditional GET with the prior ETag returns 304 + empty body —
+    the cheap path the per-run refresh leans on."""
+    from fastapi.testclient import TestClient
+    import main
+
+    # M3 Phase 2: routes require the X-Dev-User header. The default seed user
+    # is a member of support-bot's org, so baking it onto the client passes
+    # the require_org_member gate.
+    with TestClient(
+        main.app, headers={"X-Dev-User": services.DEFAULT_USER_ID}
+    ) as c:
+        r1 = c.get(f"/v1/projects/{services.DEFAULT_PROJECT_ID}/agents/default")
+        etag = r1.headers["etag"]
+
+        r2 = c.get(
+            f"/v1/projects/{services.DEFAULT_PROJECT_ID}/agents/default",
+            headers={"If-None-Match": etag},
+        )
+        assert r2.status_code == 304
+        assert r2.content == b""
+        # ETag is echoed so the client can re-confirm the match.
+        assert r2.headers.get("etag") == etag
+
+
+@needs_opa
+def test_if_none_match_stale_etag_returns_fresh_200() -> None:
+    """A stale or wrong ETag → server resends the full body (200)."""
+    from fastapi.testclient import TestClient
+    import main
+
+    # M3 Phase 2: routes require the X-Dev-User header. The default seed user
+    # is a member of support-bot's org, so baking it onto the client passes
+    # the require_org_member gate.
+    with TestClient(
+        main.app, headers={"X-Dev-User": services.DEFAULT_USER_ID}
+    ) as c:
+        r = c.get(
+            f"/v1/projects/{services.DEFAULT_PROJECT_ID}/agents/default",
+            headers={"If-None-Match": '"obviously-stale"'},
+        )
+        assert r.status_code == 200
+        assert r.json().get("bundle_wasm_b64") is not None

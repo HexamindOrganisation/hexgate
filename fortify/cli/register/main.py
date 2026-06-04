@@ -3,46 +3,25 @@
 from __future__ import annotations
 
 import argparse
-import importlib
-import sys
 from typing import TYPE_CHECKING, Any
 
-from dotenv import load_dotenv
-
+from fortify.cli._common import load_spec
 from fortify.cli.register.register import register_agent
 
 if TYPE_CHECKING:
     from langchain_core.tools import BaseTool
 
 
-def _load_spec(spec: str) -> Any:
-    """Resolve a `module.path:attr` spec to its target object."""
-    module_path, sep, attr = spec.partition(":")
-    if not sep or not module_path or not attr:
-        raise ValueError(
-            f"Invalid spec {spec!r}: expected 'module.path:attr' (e.g. my_app.module:my_attr)"
-        )
-
-    if "" not in sys.path:
-        sys.path.insert(0, "")
-
-    module = importlib.import_module(module_path)
-    try:
-        return getattr(module, attr)
-    except AttributeError as e:
-        raise AttributeError(f"Module {module_path!r} has no attribute {attr!r}") from e
-
-
 def _load_agent(spec: str) -> Any:
     """Resolve an agent from a `module.path:attr` spec."""
-    return _load_spec(spec)
+    return load_spec(spec)
 
 
 def _load_tools(spec: str) -> list[BaseTool]:
     """Resolve a list of LangChain BaseTools from a `module.path:attr` spec."""
     from langchain_core.tools import BaseTool
 
-    tools = _load_spec(spec)
+    tools = load_spec(spec)
     if not isinstance(tools, list) or not all(isinstance(t, BaseTool) for t in tools):
         raise TypeError(
             f"Expected {spec!r} to resolve to a list of langchain BaseTool instances"
@@ -51,8 +30,14 @@ def _load_tools(spec: str) -> list[BaseTool]:
 
 
 def add_parser(subparsers: argparse._SubParsersAction) -> None:
-    """Register the `register` subcommand on the top-level fortify CLI."""
-    load_dotenv()
+    """Register the `register` subcommand on the top-level fortify CLI.
+
+    No env-loading side-effects here — the previous
+    ``load_dotenv()`` call leaked env vars into the process whenever
+    the top-level parser was built (e.g., from another subcommand's
+    test). ``main()`` calls :func:`bootstrap` at invocation time,
+    which loads ``.env`` with ``override=False`` so the shell wins.
+    """
     parser = subparsers.add_parser(
         "register",
         help="Register an agent to the Fortify platform.",
@@ -95,6 +80,13 @@ def add_parser(subparsers: argparse._SubParsersAction) -> None:
 
 def main(args: argparse.Namespace) -> int:
     """Entrypoint for the `fortify register` subcommand."""
+    # Load .env at invocation time (not at parser-build time, which
+    # would pollute the env for siblings that don't expect it). The
+    # post-Phase-7 dotenv contract is ``override=False`` — shell wins
+    # over file — see fortify/bootstrap.py.
+    from fortify.bootstrap import bootstrap
+
+    bootstrap()
     agent = _load_agent(args.agent)
     tools = _load_tools(args.tools) if args.tools is not None else None
     system_prompt = (

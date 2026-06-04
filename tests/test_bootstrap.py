@@ -16,7 +16,9 @@ def test_bootstrap_loads_requested_env_file(monkeypatch: pytest.MonkeyPatch) -> 
     def fake_load_dotenv(path: Path, override: bool) -> None:
         """Capture the env file path and populate environment values."""
         seen["path"] = path
-        assert override is True
+        # Phase 7: ``override=False`` so the shell wins over .env, matching
+        # the convention every other tool (uvicorn, vite, cargo, npm) follows.
+        assert override is False
         monkeypatch.setenv("OPENAI_API_KEY", "openai-key")
         monkeypatch.setenv("LINKUP_API_KEY", "linkup-key")
         monkeypatch.setenv("TAVILY_API_KEY", "tavily-key")

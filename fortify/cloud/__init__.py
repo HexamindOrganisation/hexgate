@@ -14,15 +14,12 @@ from fortify.cloud.biscuit import (
     verify_biscuit,
 )
 from fortify.cloud.client import (
-    DEFAULT_AGENT_NAME,
     FortifyClient,
     FortifyConfig,
     FortifyError,
-    resolve_agent_name,
 )
 
 __all__ = [
-    "DEFAULT_AGENT_NAME",
     "FortifyClient",
     "FortifyConfig",
     "FortifyError",
@@ -31,6 +28,5 @@ __all__ = [
     "attenuate_for_user",
     "extract_facts",
     "parse_envelope",
-    "resolve_agent_name",
     "verify_biscuit",
 ]

@@ -65,6 +65,12 @@ from fortify.security.rego_wasm import (
     WasmCompileError,
     compile_to_wasm,
 )
+from fortify.security.source import (
+    BundleDirPolicySource,
+    PlatformPolicySource,
+    PolicySource,
+    YamlPolicySource,
+)
 from fortify.security.wasm_engine import (
     DEFAULT_ENTRYPOINT,
     RegoVerdict,
@@ -84,11 +90,15 @@ __all__ = [
     "FileScope",
     "FileToolPolicy",
     "ApprovalRequiredError",
+    "BundleDirPolicySource",
     "BundleIntegrityError",
     "BundleLoadError",
     "BundleSignatureError",
     "OpaNotFoundError",
+    "PlatformPolicySource",
     "PolicyBundle",
+    "PolicySource",
+    "YamlPolicySource",
     "SignatureError",
     "PolicyDeniedError",
     "PolicyMode",
