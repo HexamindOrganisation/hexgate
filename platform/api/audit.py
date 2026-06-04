@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta, timezone
 
 from clickhouse_connect.driver.client import Client
 
@@ -17,8 +18,27 @@ class AuditPayloadTooLarge(Exception):
         self.limit = limit
 
 
+class AuditEventOutOfWindow(Exception):
+    """occurred_at falls outside the accepted ingest window."""
+
+
 MAX_ARGS_BYTES = 8 * 1024
 MAX_HINT_BYTES = 4 * 1024
+
+# Accepted occurred_at window: small future skew for client clocks, and no
+# older than retention — rows past TTL would be merged away on arrival.
+CLOCK_SKEW_FUTURE = timedelta(minutes=5)
+RETENTION_WINDOW = timedelta(days=90)
+
+
+def validate_event_window(occurred_at: datetime) -> None:
+    """Raise :class:`AuditEventOutOfWindow` when occurred_at is outside
+    [now - retention, now + skew]. Mapped to 400 in main.py."""
+    now = datetime.now(timezone.utc)
+    if occurred_at > now + CLOCK_SKEW_FUTURE:
+        raise AuditEventOutOfWindow("occurred_at is in the future")
+    if occurred_at < now - RETENTION_WINDOW:
+        raise AuditEventOutOfWindow("occurred_at is older than retention window")
 
 # Order matches schema.sql; received_at absent (server-stamped via column default).
 _DECISION_COLUMNS = [

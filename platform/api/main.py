@@ -2,7 +2,6 @@ import base64
 import hashlib
 import logging
 from contextlib import asynccontextmanager
-from datetime import datetime, timedelta, timezone
 from urllib.parse import unquote
 
 from clickhouse_connect.driver.exceptions import ClickHouseError, OperationalError
@@ -29,7 +28,12 @@ from models import (
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from audit import AuditPayloadTooLarge, insert_decision
+from audit import (
+    AuditEventOutOfWindow,
+    AuditPayloadTooLarge,
+    insert_decision,
+    validate_event_window,
+)
 from biscuits import (
     TokenError,
     TokenSignatureError,
@@ -998,11 +1002,6 @@ async def api_register_agent(
     )
 
 
-# Time-window for accepting decision events.
-CLOCK_SKEW_FUTURE = timedelta(minutes=5)
-RETENTION_WINDOW = timedelta(days=90)
-
-
 def _audit_unavailable() -> HTTPException:
     return HTTPException(
         status_code=503,
@@ -1034,14 +1033,19 @@ async def ingest_decision(
     clickhouse_client=Depends(require_clickhouse),
 ) -> DecisionAccepted:
     """Ingest one policy decision. project_id (bearer), received_at (CH default),
-    and agent_version_id (platform lookup) are server-resolved."""
-    now = datetime.now(timezone.utc)
-    if body.occurred_at > now + CLOCK_SKEW_FUTURE:
-        raise HTTPException(status_code=400, detail="occurred_at is in the future")
-    if body.occurred_at < now - RETENTION_WINDOW:
-        raise HTTPException(
-            status_code=400, detail="occurred_at is older than retention window"
-        )
+    and agent_version_id (platform lookup) are server-resolved.
+
+    Idempotency: the SDK SHOULD retry a failed or ambiguous send (503,
+    timeout) with the SAME event_id. The ingest path is idempotent because
+    the storage engine (ReplacingMergeTree, event_id in the sort key)
+    collapses duplicates on background merges — eventual, so counts may
+    briefly include a retry until the next merge. Do NOT mint a fresh
+    event_id per attempt; that turns a retry into a real duplicate.
+    """
+    try:
+        validate_event_window(body.occurred_at)
+    except AuditEventOutOfWindow as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
     agent_version_id = await get_latest_agent_version_id(
         session, project_id, body.agent_name

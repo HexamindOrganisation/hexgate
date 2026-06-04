@@ -1,9 +1,9 @@
 from datetime import datetime, timezone
 from enum import StrEnum
-from typing import Literal, Optional
+from typing import Annotated, Literal, Optional
 from uuid import UUID
 
-from pydantic import BaseModel, EmailStr, Field, field_validator
+from pydantic import BaseModel, EmailStr, Field, StringConstraints, field_validator
 
 
 # ---------------------------------------------------------------------------
@@ -370,7 +370,10 @@ class DecisionEvent(AuditEnvelope):
     role:       str       = Field(default="", max_length=256)
     error_type: str       = Field(default="", max_length=64)
     reason:     str       = Field(default="", max_length=4096)
-    violations: list[str] = Field(default_factory=list, max_length=64)
+    # Per-item cap so 64 unbounded strings can't smuggle a multi-MB body.
+    violations: list[Annotated[str, StringConstraints(max_length=1024)]] = Field(
+        default_factory=list, max_length=64
+    )
     # Byte caps enforced after serialization in audit.insert_decision.
     hint:       Optional[dict] = None
     arguments:  Optional[dict] = None
