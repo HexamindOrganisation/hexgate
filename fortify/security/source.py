@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import base64
 import logging
+import threading
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
 
@@ -91,27 +92,37 @@ class PlatformPolicySource:
         # get a cheap 304.
         self._cached_bundle: PolicyBundle | None = initial_bundle
         self._cached_etag: str | None = initial_etag
+        # Serialize the (read cached_etag → HTTP → write cached_*) cycle.
+        # Refresh runs on a to_thread worker, so two concurrent agent runs
+        # sharing one source could otherwise interleave a write to
+        # _cached_bundle with another's read of _cached_etag and pair the
+        # bundle from one response with the etag from another → a later
+        # spurious 200/304. The cost is serializing refreshes for shared
+        # sources, which is fine: refresh is best-effort and rare-ish per
+        # turn (most calls hit a cheap 304).
+        self._lock = threading.Lock()
 
     def fetch(self) -> PolicyBundle | None:
-        payload, etag = self._client.get_agent(
-            self._agent_name, if_none_match=self._cached_etag
-        )
-        # 304 — nothing changed since last fetch. Cheap path.
-        if payload is None:
-            return self._cached_bundle
+        with self._lock:
+            payload, etag = self._client.get_agent(
+                self._agent_name, if_none_match=self._cached_etag
+            )
+            # 304 — nothing changed since last fetch. Cheap path.
+            if payload is None:
+                return self._cached_bundle
 
-        bundle = decode_and_verify_platform_bundle(
-            payload, self._client.public_key_bytes()
-        )
-        self._cached_bundle = bundle
-        # Server-supplied ETag wins; fall back to wasm_hash for when the
-        # response lacked an ETag header (older platform versions).
-        self._cached_etag = etag or (
-            f'"{bundle.wasm_hash}"'
-            if bundle is not None and bundle.wasm_hash
-            else None
-        )
-        return bundle
+            bundle = decode_and_verify_platform_bundle(
+                payload, self._client.public_key_bytes()
+            )
+            self._cached_bundle = bundle
+            # Server-supplied ETag wins; fall back to wasm_hash for when the
+            # response lacked an ETag header (older platform versions).
+            self._cached_etag = etag or (
+                f'"{bundle.wasm_hash}"'
+                if bundle is not None and bundle.wasm_hash
+                else None
+            )
+            return bundle
 
 
 def decode_and_verify_platform_bundle(
@@ -193,6 +204,11 @@ class BundleDirPolicySource:
         self._verify_with = verify_with
         self._cached: PolicyBundle | None = None
         self._cached_mtime_ns: int | None = None
+        # Same concurrency guard as PlatformPolicySource — protect the
+        # (read cached_mtime → stat → maybe reload → write cached_*)
+        # cycle so two concurrent fetches can't pair an old mtime with a
+        # new bundle (or vice versa).
+        self._lock = threading.Lock()
 
     def fetch(self) -> PolicyBundle | None:
         manifest_path = self._locate_manifest()
@@ -203,29 +219,30 @@ class BundleDirPolicySource:
                 f"FORTIFY_LOCAL_POLICY bundle at {self._directory} disappeared: {exc}"
             ) from exc
 
-        if self._cached is not None and mtime_ns == self._cached_mtime_ns:
-            return self._cached
+        with self._lock:
+            if self._cached is not None and mtime_ns == self._cached_mtime_ns:
+                return self._cached
 
-        try:
-            bundle = PolicyBundle.from_disk(self._directory)
-            bundle.verify_integrity()
-        except (BundleLoadError, BundleIntegrityError) as exc:
-            raise RuntimeError(
-                f"FORTIFY_LOCAL_POLICY bundle at {self._directory} failed to load: {exc}"
-            ) from exc
-
-        if self._verify_with is not None:
             try:
-                bundle.verify_signature(self._verify_with)
-            except BundleSignatureError as exc:
+                bundle = PolicyBundle.from_disk(self._directory)
+                bundle.verify_integrity()
+            except (BundleLoadError, BundleIntegrityError) as exc:
                 raise RuntimeError(
-                    f"FORTIFY_LOCAL_POLICY bundle at {self._directory} failed "
-                    f"signature verification: {exc}"
+                    f"FORTIFY_LOCAL_POLICY bundle at {self._directory} failed to load: {exc}"
                 ) from exc
 
-        self._cached = bundle
-        self._cached_mtime_ns = mtime_ns
-        return bundle
+            if self._verify_with is not None:
+                try:
+                    bundle.verify_signature(self._verify_with)
+                except BundleSignatureError as exc:
+                    raise RuntimeError(
+                        f"FORTIFY_LOCAL_POLICY bundle at {self._directory} failed "
+                        f"signature verification: {exc}"
+                    ) from exc
+
+            self._cached = bundle
+            self._cached_mtime_ns = mtime_ns
+            return bundle
 
     def _locate_manifest(self) -> Path:
         """Find the single ``*.bundle.json`` we're refreshing against.
@@ -285,6 +302,13 @@ class YamlPolicySource:
         self._opa_bin = opa_bin
         self._cached: PolicyBundle | None = None
         self._cached_mtime_ns: int | None = None
+        # Same concurrency guard as the other sources. Note: compiling
+        # yaml under the lock means concurrent agent runs sharing this
+        # source serialize on every recompile — that's fine, OPA
+        # compilation is the slow step we already to_thread off the
+        # event loop, and the unchanged-mtime cheap path is lock-free
+        # in practice (the comparison itself is microseconds).
+        self._lock = threading.Lock()
 
     def fetch(self) -> PolicyBundle | None:
         try:
@@ -294,54 +318,55 @@ class YamlPolicySource:
                 f"FORTIFY_LOCAL_POLICY yaml at {self._yaml_path} disappeared: {exc}"
             ) from exc
 
-        if self._cached is not None and mtime_ns == self._cached_mtime_ns:
-            return self._cached
+        with self._lock:
+            if self._cached is not None and mtime_ns == self._cached_mtime_ns:
+                return self._cached
 
-        try:
-            yaml_text = self._yaml_path.read_text(encoding="utf-8")
-        except OSError as exc:
-            raise RuntimeError(
-                f"FORTIFY_LOCAL_POLICY yaml at {self._yaml_path} could not be "
-                f"read: {exc}"
-            ) from exc
+            try:
+                yaml_text = self._yaml_path.read_text(encoding="utf-8")
+            except OSError as exc:
+                raise RuntimeError(
+                    f"FORTIFY_LOCAL_POLICY yaml at {self._yaml_path} could not be "
+                    f"read: {exc}"
+                ) from exc
 
-        try:
-            built = build_signed_bundle(
-                yaml_text,
-                source_name=self._yaml_path.name,
-                sign=self._sign,
-                opa_bin=self._opa_bin,
+            try:
+                built = build_signed_bundle(
+                    yaml_text,
+                    source_name=self._yaml_path.name,
+                    sign=self._sign,
+                    opa_bin=self._opa_bin,
+                )
+            except Exception as exc:  # opa missing, malformed yaml, bad constraints
+                raise RuntimeError(
+                    f"FORTIFY_LOCAL_POLICY yaml at {self._yaml_path} failed to "
+                    f"compile: {exc}"
+                ) from exc
+
+            if built.wasm_bytes is None:
+                # build_signed_bundle returns wasm_bytes=None only with compile_wasm=False;
+                # we never set that, so this is paranoia for future-proofing.
+                raise RuntimeError(
+                    f"FORTIFY_LOCAL_POLICY yaml at {self._yaml_path} compiled "
+                    "without wasm — refusing to enforce a non-wasm bundle."
+                )
+
+            bundle = PolicyBundle.from_parts(
+                wasm_bytes=built.wasm_bytes,
+                manifest_bytes=built.manifest_bytes,
+                signature=built.signature,
             )
-        except Exception as exc:  # opa missing, malformed yaml, bad constraints
-            raise RuntimeError(
-                f"FORTIFY_LOCAL_POLICY yaml at {self._yaml_path} failed to "
-                f"compile: {exc}"
-            ) from exc
+            # Integrity is trivially satisfied (we just produced both halves),
+            # but the check catches bugs in build_signed_bundle and keeps the
+            # invariant uniform across sources.
+            try:
+                bundle.verify_integrity()
+            except BundleIntegrityError as exc:
+                raise RuntimeError(
+                    f"FORTIFY_LOCAL_POLICY yaml at {self._yaml_path}: freshly "
+                    f"built bundle failed integrity: {exc}"
+                ) from exc
 
-        if built.wasm_bytes is None:
-            # build_signed_bundle returns wasm_bytes=None only with compile_wasm=False;
-            # we never set that, so this is paranoia for future-proofing.
-            raise RuntimeError(
-                f"FORTIFY_LOCAL_POLICY yaml at {self._yaml_path} compiled "
-                "without wasm — refusing to enforce a non-wasm bundle."
-            )
-
-        bundle = PolicyBundle.from_parts(
-            wasm_bytes=built.wasm_bytes,
-            manifest_bytes=built.manifest_bytes,
-            signature=built.signature,
-        )
-        # Integrity is trivially satisfied (we just produced both halves),
-        # but the check catches bugs in build_signed_bundle and keeps the
-        # invariant uniform across sources.
-        try:
-            bundle.verify_integrity()
-        except BundleIntegrityError as exc:
-            raise RuntimeError(
-                f"FORTIFY_LOCAL_POLICY yaml at {self._yaml_path}: freshly "
-                f"built bundle failed integrity: {exc}"
-            ) from exc
-
-        self._cached = bundle
-        self._cached_mtime_ns = mtime_ns
-        return bundle
+            self._cached = bundle
+            self._cached_mtime_ns = mtime_ns
+            return bundle

@@ -32,6 +32,12 @@ from fortify.cloud.biscuit import (
 
 DEFAULT_BASE_URL = "http://localhost:8000"
 DEFAULT_TIMEOUT = 10.0
+# Tight timeout for the conditional-GET hot path (refresh_policy runs at
+# the top of every chat turn). The default 10s would stall every turn up
+# to 10s when the platform is slow, even though policy refresh falls back
+# to the cached bundle on failure anyway — a tight timeout makes the
+# fallback fire fast.
+DEFAULT_REFRESH_TIMEOUT = 2.0
 TOKEN_PREFIX = "fty_"
 DEFAULT_AGENT_NAME = "default"
 
@@ -135,10 +141,20 @@ class FortifyClient:
     """Minimal HTTP client scoped to a single project + key."""
 
     def __init__(
-        self, config: FortifyConfig, *, timeout: float = DEFAULT_TIMEOUT
+        self,
+        config: FortifyConfig,
+        *,
+        timeout: float = DEFAULT_TIMEOUT,
+        refresh_timeout: float = DEFAULT_REFRESH_TIMEOUT,
     ) -> None:
         self.config = config
         self.timeout = timeout
+        # Used only by the conditional-GET path (``if_none_match`` set).
+        # That path runs on every chat turn via ``refresh_policy`` and
+        # tolerates failure (falls back to the cached bundle), so a
+        # slow platform shouldn't tax every turn for up to ``timeout``
+        # seconds.
+        self.refresh_timeout = refresh_timeout
         self._public_key: bytes | None = config.public_key
         self._verified: bool = False
         self._facts: dict[str, list[str | int]] | None = None
@@ -280,9 +296,14 @@ class FortifyClient:
             headers["Authorization"] = f"Bearer {self.config.api_key}"
         if if_none_match is not None:
             headers["If-None-Match"] = if_none_match
+        # Conditional GETs run on the per-turn hot path and fall back to
+        # the cached bundle when they fail — use the tight refresh
+        # timeout so a slow platform doesn't stall every chat turn for
+        # up to ``self.timeout`` seconds.
+        timeout = self.refresh_timeout if if_none_match is not None else self.timeout
         request = urllib.request.Request(url, headers=headers)
         try:
-            with urllib.request.urlopen(request, timeout=self.timeout) as response:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
                 etag = response.headers.get("ETag")
                 payload = response.read().decode("utf-8")
         except urllib.error.HTTPError as exc:

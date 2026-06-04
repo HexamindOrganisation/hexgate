@@ -120,7 +120,9 @@ def test_platform_bundle_verifies_and_returns(monkeypatch) -> None:
     bundle = loader._platform_bundle(client.get_agent("default")[0], client)
     assert isinstance(bundle, PolicyBundle)
     assert bundle.is_signed
-    d = bundle.policy().decide(role="billing", tool="refund_order", args={"amount": 200})
+    d = bundle.policy().decide(
+        role="billing", tool="refund_order", args={"amount": 200}
+    )
     assert d.allow is True
 
 
@@ -212,7 +214,9 @@ def test_load_fortify_agent_uses_signed_bundle(_patched_loader) -> None:
     assert isinstance(captured["policy"], PolicyBundle)
 
 
-def test_load_fortify_agent_falls_back_to_pydantic_without_bundle(_patched_loader) -> None:
+def test_load_fortify_agent_falls_back_to_pydantic_without_bundle(
+    _patched_loader,
+) -> None:
     """No bundle served → enforce with the pydantic PolicySet, not a bundle."""
     from fortify.security.policy_set import PolicySet
 
@@ -302,9 +306,16 @@ def test_refresh_policy_skips_when_source_returns_same_instance() -> None:
 
 def test_refresh_policy_noop_without_source_or_enforcer() -> None:
     """Agents constructed programmatically without enforcement: refresh
-    is a quiet no-op, not a crash."""
+    is a quiet no-op, not a crash.
+
+    Bypasses ``__init__`` and sets the seam fields explicitly so the test
+    isn't dependent on the rest of ``FortifyAgent``'s required args
+    (model, graph, tools, ...). The contract we're pinning is just
+    ``refresh_policy() must not raise when both seam fields are None.``
+    """
     from fortify.agents.factory import FortifyAgent
 
     agent = FortifyAgent.__new__(FortifyAgent)
-    # Neither _enforcer nor _policy_source is set.
+    agent._enforcer = None
+    agent._policy_source = None
     agent.refresh_policy()  # must not raise
