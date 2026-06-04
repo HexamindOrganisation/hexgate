@@ -205,3 +205,45 @@ def test_pre_seeded_source_skips_first_round_trip() -> None:
 
     assert result is initial
     assert fc.calls == [f'"{initial.wasm_hash}"']
+
+
+def test_concurrent_fetches_serialize() -> None:
+    """The source owns its cache, so it owns its lock: two threads fetching
+    at once never overlap inside fetch() (cached bundle/etag can't interleave)."""
+    import threading
+    import time
+
+    _, pub = generate_keypair()
+
+    class _SlowOverlapClient(_FakeClient):
+        def __init__(self, public_raw: bytes) -> None:
+            super().__init__(public_raw)
+            self._gauge = threading.Lock()
+            self.active = 0
+            self.max_active = 0
+
+        def get_agent(self, name, *, if_none_match=None):
+            with self._gauge:
+                self.active += 1
+                self.max_active = max(self.max_active, self.active)
+            time.sleep(0.02)  # widen the window an overlap would need
+            try:
+                return super().get_agent(name, if_none_match=if_none_match)
+            finally:
+                with self._gauge:
+                    self.active -= 1
+
+    fc = _SlowOverlapClient(pub)
+    # Bundle-less payloads keep this opa-free; fetch() returns None for both.
+    fc.serve({"policy_yaml": "version: 1\n"}, etag='"a"')
+    fc.serve({"policy_yaml": "version: 1\n"}, etag='"b"')
+    src = PlatformPolicySource(fc, "default")
+
+    threads = [threading.Thread(target=src.fetch) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=5)
+
+    assert all(not t.is_alive() for t in threads)
+    assert fc.max_active == 1  # serialized — never two fetches in flight

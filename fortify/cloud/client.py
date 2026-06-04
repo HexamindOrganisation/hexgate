@@ -36,7 +36,16 @@ TOKEN_PREFIX = "fty_"
 
 
 class FortifyError(RuntimeError):
-    """Raised for any Fortify API interaction failure."""
+    """Raised for any Fortify API interaction failure.
+
+    ``status`` carries the HTTP status code when the failure was an HTTP
+    error response (``None`` for transport-level failures), so callers
+    can branch on e.g. 404 without string-matching the message.
+    """
+
+    def __init__(self, message: str, *, status: int | None = None) -> None:
+        super().__init__(message)
+        self.status = status
 
 
 @dataclass
@@ -294,7 +303,8 @@ class FortifyClient:
                 return None, exc.headers.get("ETag") or if_none_match
             detail = exc.read().decode("utf-8", errors="replace")
             raise FortifyError(
-                f"Fortify API error {exc.code} calling {url}: {detail[:200]}"
+                f"Fortify API error {exc.code} calling {url}: {detail[:200]}",
+                status=exc.code,
             ) from exc
         except urllib.error.URLError as exc:
             raise FortifyError(
