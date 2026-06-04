@@ -192,7 +192,6 @@ def _patched_loader(monkeypatch):
     monkeypatch.setattr(loader, "FortifyConfig", _FakeConfig)
     monkeypatch.setattr(loader, "create_agent", fake_create_agent)
     monkeypatch.setattr(loader, "enforce_policy", fake_enforce_policy)
-    monkeypatch.setattr(loader, "resolve_agent_name", lambda name: name or "default")
     monkeypatch.setattr(loader, "resolve_builtin_tools", lambda *a, **k: [])
     monkeypatch.delenv("FORTIFY_LOCAL_POLICY", raising=False)
     monkeypatch.delenv("FORTIFY_BUNDLE_REQUIRE_SIGNATURE", raising=False)

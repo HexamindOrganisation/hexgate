@@ -17,7 +17,7 @@ from fortify.agents.factory import (
     enforce_policy,
 )
 from fortify.agents.models import AgentSpec
-from fortify.cloud.client import FortifyClient, FortifyConfig, resolve_agent_name
+from fortify.cloud.client import FortifyClient, FortifyConfig
 from fortify.security import AgentPolicy, PolicyBundle, load_policy
 from fortify.security.signing import SignatureError, decode_key
 from fortify.security.source import (
@@ -624,13 +624,15 @@ def load_fortify_agent(
 ) -> tuple[AgentGraph, CallbackHandler]:
     """Fetch an agent from Fortify and return it with policy enforcement applied.
 
-    Agent name resolution: explicit arg → FORTIFY_AGENT_NAME env → "default".
-    Every project is guaranteed to have a `default` agent, so zero-config use
-    (set only FORTIFY_KEY) works.
-
     Mirrors `load_local_agent` but sources the three YAMLs (agent, policy, system)
     from the Fortify API instead of disk. Tool resolution and enforcement are
     identical — only the bytes' origin differs.
+
+    ``name`` is required. The Phase-7 env-var fallback chain
+    (explicit → FORTIFY_AGENT_NAME → "default") was removed when the
+    canonical serve path moved to ``build_runtime_from_local_agent``
+    (which derives the name from the agent object). Direct callers of
+    this API must pass an explicit name.
 
     The returned agent carries a ``fortify_client`` attribute referencing the
     :class:`~fortify.cloud.FortifyClient` used to fetch it; the runtime reads
@@ -639,7 +641,12 @@ def load_fortify_agent(
     """
     from fortify.security.policy_set import load_policy_set_from_dict
 
-    resolved_name = resolve_agent_name(name)
+    if not name:
+        raise ValueError(
+            "load_fortify_agent(name=...) requires an explicit agent name. "
+            "FORTIFY_AGENT_NAME / 'default' fallback was removed in Phase 7."
+        )
+    resolved_name = name
     config = FortifyConfig.from_env(
         project_id=project_id, base_url=base_url, api_key=api_key
     )
@@ -729,10 +736,9 @@ def load_agent(
 ) -> tuple[AgentGraph, CallbackHandler]:
     """Load an agent from Fortify (when FORTIFY_KEY is set), local, or builtin.
 
-    When FORTIFY_KEY is set, `name` is optional: the SDK falls back to
-    FORTIFY_AGENT_NAME and finally to `"default"`. For the local/builtin
-    paths, `name` is required — we can't guess which local directory you
-    meant.
+    ``name`` is required for every path post-Phase 7 — the
+    FORTIFY_AGENT_NAME env-var fallback was removed when ``fortify
+    serve`` moved to the uvicorn-style ``module:attr`` spec.
 
     Pass ``local_only=True`` to force resolution from local / registered /
     builtin sources even when ``FORTIFY_KEY`` is set in the environment.
