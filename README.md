@@ -82,10 +82,18 @@ make dashboard
 
 # Terminal 3 — mint a token, then serve your local agent
 #   1. Open http://localhost:5173/tokens, click "Mint new token", copy the value.
-#   2. Add to asianf/.env:  FORTIFY_KEY=fty_test_...
-#   3. Run:
-make serve
+#   2. Add to asianf/.env:  FORTIFY_KEY=fty_live_...
+#   3. Pick the agent's Python entrypoint (module:attr — uvicorn-style)
+#      and let `fortify serve` take over:
+make serve                                          # default — examples.customer_bot:agent
+# or, for a different agent:
+uv run fortify serve my_app.agents:my_agent
 ```
+
+On first serve, `fortify serve` auto-registers the agent's manifest on
+the platform (the server generates a starter role-aware policy from the
+tool list). Subsequent serves short-circuit if the manifest hasn't
+changed. Pass `--no-auto-register` for CI / deliberate-deployment flows.
 
 First-time setup (each sub-project has its own deps):
 
@@ -96,7 +104,7 @@ make dashboard-install      # pnpm install inside platform/dashboard/
 
 Then open http://localhost:5173/playground — type a message, watch the live stream of tool calls and policy decisions from your local agent.
 
-The dashboard's `/agents` page lets you edit each agent's YAML and policy. `fortify serve` re-fetches at every turn boundary, so your edits take effect on the next chat message without a restart.
+The dashboard's `/policies` page lets you edit each agent's policy. `fortify serve` re-fetches at every turn boundary, so your edits take effect on the next chat message without a restart.
 
 ## ✨ Core Primitives
 
@@ -157,7 +165,7 @@ Dev authored the agent's `agent.yaml` / `policy.yaml` / `system.md` in the dashb
 ```python
 from fortify import load_fortify_agent, stream_agent, User
 
-agent, handler = load_fortify_agent("default")      # name optional, falls back to FORTIFY_AGENT_NAME → "default"
+agent, handler = load_fortify_agent("default")      # explicit name — the SDK's loader requires it
 
 async with User(user_id="alice", role="billing"):
     async for ev in stream_agent(agent, handler, "refund 30"):
@@ -170,8 +178,7 @@ Same enforcement seam, same `User` scope. The difference is whose system of reco
 
 | What dev sets | What changes |
 |---|---|
-| `FORTIFY_KEY=fty_test_<project>_…` | Wakes up the platform path. Without it, adapters / `load_agent` fall back to local / builtin. |
-| `FORTIFY_AGENT_NAME=default` *(optional)* | Which agent to fetch. Falls back to `"default"`. |
+| `FORTIFY_KEY=fty_live_<project>_…` | Wakes up the platform path. Without it, adapters / `load_agent` fall back to local / builtin. |
 | `FORTIFY_API_URL=http://localhost:8000` *(optional)* | Platform endpoint. Defaults to localhost. |
 | `FORTIFY_LOCAL_POLICY=./policy.yaml` *or* `./bundle/` | Dev escape hatch: enforce a policy from disk, hot-reload on save. Wins over the platform's bundle. |
 | `FORTIFY_BUNDLE_SIGN_KEY_PATH=./keys/dev.private` *(optional)* | Sign locally-recompiled yaml so `bundle.is_signed` reads True. |
@@ -512,8 +519,8 @@ What happens under the hood:
 
 Working scripts in `examples/`:
 
+- `examples/customer_bot.py` — canonical Fortify path: `create_agent(...)` + the dashboard register/serve loop end-to-end.
 - `examples/openai_demo.py` — `FortifyRunner` (OpenAI Agents SDK) end-to-end.
-- `examples/langchain_demo.py` — `wrap_langchain_agent` (LangChain) end-to-end with `create_react_agent`.
 - `examples/google_demo.py` — `FortifyRunner` (Google ADK) end-to-end with `InMemorySessionService`.
 - `examples/pydantic_ai_demo.py` — `wrap_pydantic_agent` (Pydantic AI) end-to-end.
 
@@ -1004,6 +1011,8 @@ List what the CLI can currently resolve:
 fortify chat --list-agents
 ```
 
+### `fortify register` — push a manifest to the platform
+
 Register a code-defined agent's manifest with the Fortify platform. `--agent`
 takes a Python import path of the form `module.path:attribute`, the same shape
 as ASGI/WSGI entrypoints. The CLI imports the module, grabs the agent object,
@@ -1011,9 +1020,16 @@ and POSTs its manifest to `${FORTIFY_API_URL}/v1/agents` using
 `${FORTIFY_KEY}` as the bearer token:
 
 ```bash
-fortify register --agent examples.simple_agent:agent
+fortify register --agent examples.customer_bot:agent
 fortify register --agent my_app.agents:my_agent --description "Customer support bot"
 ```
+
+On first register, the platform auto-generates a starter role-aware
+policy from the manifest's tool list (`read_only` mixin + `default` +
+`member` + `admin`) and signs a WASM bundle so `fortify serve` runs
+against real enforcement from the first request. Edit the policy in
+the dashboard's `/policies` page; subsequent re-registers preserve
+those edits — only the manifest snapshot grows.
 
 LangGraph compiled graphs don't expose their tool nodes — nor the model or
 system prompt baked into them — after compilation, so when registering one
@@ -1029,10 +1045,35 @@ fortify register \
     --system-prompt prompts/support.md
 ```
 
+For everyone else — agents built with `fortify.create_agent(...)`, OpenAI
+Agents, Pydantic AI, Google ADK — the manifest reads tools, model, and
+system prompt directly off the object. No flags needed.
+
 `--system-prompt` accepts either a literal string or a path to a `.md` /
 `.txt` / `.jinja` file (read as text at register time).
 
 Supported frameworks: OpenAI Agents SDK, Google ADK, Pydantic AI, LangChain/LangGraph, Fortify agents.
+
+### `fortify serve` — bridge a local agent to the platform's relay
+
+`fortify serve` takes the **same** `module:attr` spec as `fortify register`.
+The CLI imports the agent, derives the manifest in one call, auto-registers
+on the platform (idempotent — content-hash short-circuits no-ops), fetches
+the operator's policy from the cloud, and opens the WebSocket relay so the
+dashboard's Playground can drive it. Policy edits in `/policies` take
+effect at the next chat-turn boundary.
+
+```bash
+fortify serve examples.customer_bot:agent
+
+# CI / deliberate-deploy: error if not pre-registered
+fortify serve examples.customer_bot:agent --no-auto-register
+```
+
+There is **no** `FORTIFY_AGENT_NAME` env var anymore — the name lives in
+the agent's `.name` attribute (or the `name=` kwarg you passed to
+`create_react_agent` / `create_agent`). The platform is the source of
+truth for policy; your Python file is the source of truth for code.
 
 ### Build A Manifest Programmatically — `create_manifest`
 
@@ -1118,47 +1159,62 @@ Bridges your local agent runtime to the dashboard via the platform's WebSocket r
 
 ```bash
 # in asianf/.env
-FORTIFY_KEY=fty_test_support-bot_...
-FORTIFY_AGENT_NAME=default                  # optional, defaults to "default"
-FORTIFY_PROJECT_ID=support-bot              # optional, parsed from key prefix
+FORTIFY_KEY=fty_live_<project>_<biscuit>
 FORTIFY_API_URL=http://localhost:8000       # optional, defaults to localhost:8000
 
-# run
-uv run fortify serve
+# pick an agent module:attr — uvicorn-style spec
+uv run fortify serve examples.customer_bot:agent
 ```
 
 Behaviour:
 
-- Connects `ws://${FORTIFY_API_URL}/v1/projects/${pid}/serve` with `Authorization: Bearer ${FORTIFY_KEY}`
-- Sends a `hello` frame announcing the agent name (so the dashboard's "Serving" indicator can show it)
-- On each inbound `chat` message, **refreshes the active policy** before running. Refresh is an `If-None-Match` round-trip to the platform: a 304 reuses the cached WASM module, a 200 swaps in the new bundle. Dashboard edits take effect at turn boundaries without restarting the process or re-wrapping the tools.
-- Streams every `StreamEvent` (text deltas, tool start/end, run end) back as JSON
-- Auto-approves any `approval_required` tools — there's no TTY in serve mode for prompts (planned: dashboard-side approval UI)
-- Reconnects with exponential backoff on socket drop
+- Loads the agent object from the `module:attr` spec — same form as
+  `fortify register`. The agent's name, tools, model, and system
+  prompt come from the object directly (no flags duplicating
+  what's already in code).
+- Auto-registers the manifest on first run via `POST /v1/agents`
+  (idempotent — content-hash short-circuits no-ops). Skip with
+  `--no-auto-register` for CI / deliberate deployments.
+- Fetches the operator's policy from `GET /v1/agents/{name}`. Local
+  code is authoritative for code; the platform is authoritative for
+  policy.
+- Connects `wss://${FORTIFY_API_URL}/v1/serve` with the bearer
+  percent-encoded into the WebSocket subprotocol (Phase 6 — the WS
+  handshake grammar doesn't allow `=` padding in plain headers).
+  Server echoes `fortify.v1` to confirm the contract.
+- Sends a `hello` frame announcing the agent name (the dashboard's
+  "Serving" indicator reads this).
+- On each inbound `chat` message, **refreshes the active policy**
+  before running. Refresh is an `If-None-Match` round-trip to the
+  platform: a 304 reuses the cached WASM module, a 200 swaps in the
+  new bundle. Dashboard edits take effect at turn boundaries without
+  restarting the process or re-wrapping the tools.
+- Streams every `StreamEvent` (text deltas, tool start/end, run end)
+  back as JSON.
+- Auto-approves any `approval_required` tools — there's no TTY in
+  serve mode for prompts (planned: dashboard-side approval UI).
+- Reconnects with exponential backoff on socket drop.
 
-To override the agent at the CLI:
-
-```bash
-fortify serve --agent read_only
-fortify serve --use examples/file_agents.py --agent workspace_explorer
-```
+There's no longer a `FORTIFY_AGENT_NAME` env var, `--agent` flag, or
+`--use` flag — the spec carries everything. If you've been setting
+`FORTIFY_AGENT_NAME` in `.env`, drop it.
 
 ### How `load_agent()` resolves with `FORTIFY_KEY`
 
 ```python
 from fortify import load_agent
 
-agent, handler = load_agent()                # → "default"
-agent, handler = load_agent("read_only")     # explicit name wins
+agent, handler = load_agent("read_only")     # explicit name required
 ```
 
-Resolution chain when `FORTIFY_KEY` is set:
+When `FORTIFY_KEY` is set, `load_agent(name)` fetches the named agent from
+the platform (via `load_fortify_agent`). When `FORTIFY_KEY` is not set, it
+falls back to local / registered / builtin resolution — no platform call.
 
-1. `name` arg if passed
-2. `FORTIFY_AGENT_NAME` env var
-3. Falls back to `"default"` (always present, protected from deletion)
-
-When `FORTIFY_KEY` is not set, `load_agent()` keeps its existing local / registered / builtin behaviour — no platform call.
+The legacy `FORTIFY_AGENT_NAME` env-var fallback was removed in Phase 7;
+direct callers of `load_fortify_agent` / `load_agent` must pass an
+explicit name. For the CLI workflow, `fortify serve <module:attr>` derives
+the name from the loaded agent's `.name` attribute — no env var needed.
 
 ## 👤 User Scope + Roles
 

@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import argparse
+import importlib
 import importlib.util
+import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from rich.console import Console, Group
 from rich.panel import Panel
@@ -82,6 +84,134 @@ def build_runtime(
         model=resolved_model,
         tools_by_name=tools_by_name,
     )
+
+
+def build_runtime_from_local_agent(
+    settings: Settings,
+    *,
+    agent_obj: Any,
+    description: str | None,
+    approval_handler: ApprovalHandler | None,
+    auto_register: bool,
+    console: Console,
+) -> AgentRuntime:
+    """Build an :class:`AgentRuntime` from a Python-loaded agent object.
+
+    The uvicorn-style serve flow:
+      1. ``create_manifest(agent_obj)`` — same dispatch ``fortify register``
+         uses. FortifyAgent / OpenAI / Pydantic-AI agents introspect cleanly;
+         raw LangGraph errors out with a clear message (the user should
+         wrap with ``create_agent(...)`` or pass ``--tools`` to the legacy
+         register flow).
+      2. If ``auto_register`` and ``FORTIFY_KEY`` is set: POST the manifest
+         to ``/v1/agents``. Idempotent — server short-circuits when the
+         content_hash hasn't changed. Print "Registered" / "unchanged" so
+         the operator sees what just happened.
+      3. Fetch the cloud's policy YAML for this agent name via the bearer
+         GET ``/v1/agents/{name}`` route. The operator may have edited it
+         in the dashboard since last register; we pick up that edit.
+      4. ``enforce_policy(agent_obj, policy, approval_handler=...)`` —
+         wraps the LOCAL agent's tools with the cloud's policy. Local
+         code stays authoritative for code (tools / model / prompt);
+         platform is authoritative for policy.
+
+    Returns an :class:`AgentRuntime` whose ``agent`` is the policy-wrapped
+    FortifyAgent and ``agent_name`` is the manifest's name (matches what
+    we'll announce to the relay's ``hello`` message).
+    """
+    import os
+
+    import yaml
+
+    from fortify.agents.factory import enforce_policy
+    from fortify.cli.register.manifest import create_manifest
+    from fortify.cli.register.register import post_manifest
+    from fortify.cloud.client import FortifyClient, FortifyConfig
+    from fortify.security.policy_set import load_policy_set_from_dict
+    from fortify.tracing.langfuse import get_langfuse_handler
+
+    manifest = create_manifest(agent_obj, description=description)
+    agent_name = manifest.name
+
+    if auto_register and os.environ.get("FORTIFY_KEY"):
+        # Idempotent POST. ``created`` flag in the response distinguishes
+        # "first registered" from "manifest unchanged" so we can give the
+        # operator a meaningful console line.
+        result = post_manifest(manifest)
+        if result.get("created"):
+            console.print(
+                f"[dim]ℹ Registered agent[/] [cyan]{agent_name}[/] "
+                f"[dim](v{result.get('version', '?')})[/]"
+            )
+        else:
+            console.print(
+                f"[dim]ℹ Agent[/] [cyan]{agent_name}[/] "
+                f"[dim]already registered (manifest unchanged)[/]"
+            )
+
+    config = FortifyConfig.from_env()
+    client = FortifyClient(config)
+    payload, _etag = client.get_agent(agent_name)
+    assert payload is not None, "first get_agent has no If-None-Match"
+
+    policy_payload = yaml.safe_load(payload["policy_yaml"]) or {}
+    policy = load_policy_set_from_dict(policy_payload)
+
+    enforced = enforce_policy(
+        agent_obj, policy, approval_handler=approval_handler
+    )
+
+    # Fresh handler for the streaming layer. The user's create_agent() call
+    # built its own handler but discarded it; we make a new one bound to
+    # this serve session's session_id so traces don't mix across runs.
+    handler = get_langfuse_handler(
+        session_id="fortify-serve",
+        tags=["fortify", "fortify-serve", agent_name],
+    )
+
+    return AgentRuntime(
+        agent=enforced,
+        handler=handler,
+        agent_name=agent_name,
+        agent_source="fortify",
+        model=settings.model,
+        tools_by_name={
+            getattr(t, "name", getattr(t, "__name__", "tool")): t
+            for t in getattr(enforced, "tools", [])
+        },
+    )
+
+
+def load_spec(spec: str) -> Any:
+    """Resolve a ``module.path:attr`` spec to its target object.
+
+    The shared loader for ``fortify register --agent <spec>`` and
+    ``fortify serve <spec>`` — both subcommands take the same shape so
+    devs only learn one form. ``file/path.py:attr`` works too via the
+    leading ``sys.path.insert(0, '')`` (cwd) trick.
+
+    Raises ``ValueError`` for malformed specs and ``AttributeError``
+    for valid specs whose target object doesn't exist on the module.
+    """
+    module_path, sep, attr = spec.partition(":")
+    if not sep or not module_path or not attr:
+        raise ValueError(
+            f"Invalid spec {spec!r}: expected 'module.path:attr' "
+            f"(e.g. my_app.module:my_attr)"
+        )
+
+    # cwd on sys.path so a user can run from their project root and
+    # spec their own module — same trick uvicorn / pytest pull.
+    if "" not in sys.path:
+        sys.path.insert(0, "")
+
+    module = importlib.import_module(module_path)
+    try:
+        return getattr(module, attr)
+    except AttributeError as exc:
+        raise AttributeError(
+            f"Module {module_path!r} has no attribute {attr!r}"
+        ) from exc
 
 
 def load_agent_script(script_path: str | Path) -> Path:

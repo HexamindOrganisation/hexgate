@@ -126,12 +126,24 @@ dashboard: ## Run the dashboard dev server (Vite on :5173)
 
 # -------- SDK → platform bridge --------
 
+# Make's rule parser treats colons specially, so a positional
+# `make serve examples.foo:bar` won't work — the colon makes Make
+# read it as a target+prerequisite. Two clean ways to pick a
+# different agent:
+#
+#   make serve AGENT_SPEC=examples.foo:bar        # variable form
+#   uv run fortify serve examples.foo:bar         # skip make entirely
+#
+# Bare `make serve` defaults to the customer_bot demo for the
+# fortify-canonical workflow.
+AGENT_SPEC ?= examples.customer_bot:agent
+
 .PHONY: serve
-serve: ## Run `fortify serve` — bridges this SDK to the platform's relay
-# Reads FORTIFY_KEY from asianf/.env via dotenv at startup (not from the
-# shell env), so we don't pre-check here — `fortify serve` will fail
-# loudly if the key is missing. Mint one at http://localhost:5173/tokens.
-	$(UV) fortify serve
+serve: ## Run `fortify serve` on the customer_bot demo (override with AGENT_SPEC=)
+# Reads FORTIFY_KEY from asianf/.env at startup. Uvicorn-style spec —
+# the agent name + tools come from the loaded object, no env vars to
+# keep in sync.
+	$(UV) fortify serve $(AGENT_SPEC)
 
 # -------- Full platform demo (multi-terminal) --------
 
@@ -148,8 +160,8 @@ demo-platform: ## Print 3-terminal instructions for the full platform demo
 	@echo ""
 	@echo "  Terminal 3 — your local agent bridged to the platform:"
 	@echo "      1. Open  http://localhost:5173/tokens  and mint a dev token"
-	@echo "      2. Add to asianf/.env:  FORTIFY_KEY=fty_test_..."
-	@echo "      3. make serve"
+	@echo "      2. Add to asianf/.env:  FORTIFY_KEY=fty_live_..."
+	@echo "      3. make serve  (or: fortify serve <your.module:agent>)"
 	@echo ""
 	@echo "Then chat with the live agent at  http://localhost:5173/playground"
 	@echo ""

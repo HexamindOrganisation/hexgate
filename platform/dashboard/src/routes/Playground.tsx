@@ -19,12 +19,33 @@ import {
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { usePlayground, type ChatMessage, type ToolCall } from '@/lib/playground'
-import { api, DEFAULT_PROJECT_ID, type AgentRead } from '@/lib/api'
+import { api, type AgentRead } from '@/lib/api'
+import { useProjectScoped } from '@/lib/active'
+import { NoProjectEmptyState } from '@/components/NoProjectEmptyState'
 import { parseRolesFromPolicy } from '@/lib/policy'
 import { cn } from '@/lib/utils'
 
 export function PlaygroundPage() {
-  const { state, sendChat, reset } = usePlayground({ projectId: DEFAULT_PROJECT_ID })
+  const scope = useProjectScoped()
+  if (scope.status === 'no-project') {
+    return <NoProjectEmptyState resource="playground" />
+  }
+  if (scope.status === 'loading' || !scope.projectId) {
+    // Brief while the bootstrap effect picks a default project. The
+    // live UI opens a WS keyed on projectId — don't mount it until we
+    // have a real one, otherwise the reconnect loop would spam ``ws://
+    // …/v1/projects//chat`` and burn cycles in jsdom tests.
+    return (
+      <div className="grid place-items-center h-full text-sm text-muted-foreground">
+        Loading…
+      </div>
+    )
+  }
+  return <PlaygroundLive projectId={scope.projectId} />
+}
+
+function PlaygroundLive({ projectId }: { projectId: string }) {
+  const { state, sendChat, reset } = usePlayground({ projectId })
   const [composer, setComposer] = useState('')
   const [agent, setAgent] = useState<AgentRead | null>(null)
   const [activeRole, setActiveRole] = useState<string | null>(null)
@@ -40,7 +61,7 @@ export function PlaygroundPage() {
     }
     let cancelled = false
     api
-      .getAgent(state.agentName)
+      .getAgent(state.agentName, projectId)
       .then((a) => {
         if (!cancelled) setAgent(a)
       })
@@ -50,7 +71,7 @@ export function PlaygroundPage() {
     return () => {
       cancelled = true
     }
-  }, [state.agentName])
+  }, [state.agentName, projectId])
 
   const roleOptions = useMemo(
     () => (agent ? parseRolesFromPolicy(agent.policy_yaml) : []),
