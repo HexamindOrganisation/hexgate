@@ -123,6 +123,88 @@ agent, handler = create_agent(
 )
 ```
 
+## 🚀 Build an Agent — End to End
+
+Devs pick one of two shapes. Both end up at the same enforcement seam — they differ only in **where the policy comes from**.
+
+### Shape A — "I have an existing framework agent"
+
+Dev wrote an OpenAI Agents / LangChain / Google ADK / Pydantic AI agent. They wrap it once and they're done:
+
+```python
+from fortify.adapters.openai import FortifyRunner   # or .langchain.wrap_langchain_agent, .google.FortifyRunner, .pydantic_ai.wrap_pydantic_agent
+from fortify.runtime import User
+
+runner = FortifyRunner()                            # picks up FORTIFY_KEY from env
+await runner.run(
+    my_agent,
+    "refund 30",
+    user=User(user_id="alice", role="billing"),     # per-call scope
+)
+```
+
+That's it. They get:
+
+- Tool-call enforcement at every tool boundary (`PolicyEnforcer.decide()`)
+- Role resolution from the active `User.role` at call time
+- Per-request biscuit attenuation
+- Langfuse traces tagged with the caller's identity
+
+### Shape B — "I want the platform to own the agent's YAML"
+
+Dev authored the agent's `agent.yaml` / `policy.yaml` / `system.md` in the dashboard. SDK fetches them:
+
+```python
+from fortify import load_fortify_agent, stream_agent, User
+
+agent, handler = load_fortify_agent("default")      # name optional, falls back to FORTIFY_AGENT_NAME → "default"
+
+async with User(user_id="alice", role="billing"):
+    async for ev in stream_agent(agent, handler, "refund 30"):
+        ...
+```
+
+Same enforcement seam, same `User` scope. The difference is whose system of record holds the YAML — the dev's code vs the dashboard.
+
+### Env vars: that *is* the whole config surface
+
+| What dev sets | What changes |
+|---|---|
+| `FORTIFY_KEY=fty_test_<project>_…` | Wakes up the platform path. Without it, adapters / `load_agent` fall back to local / builtin. |
+| `FORTIFY_AGENT_NAME=default` *(optional)* | Which agent to fetch. Falls back to `"default"`. |
+| `FORTIFY_API_URL=http://localhost:8000` *(optional)* | Platform endpoint. Defaults to localhost. |
+| `FORTIFY_LOCAL_POLICY=./policy.yaml` *or* `./bundle/` | Dev escape hatch: enforce a policy from disk, hot-reload on save. Wins over the platform's bundle. |
+| `FORTIFY_BUNDLE_SIGN_KEY_PATH=./keys/dev.private` *(optional)* | Sign locally-recompiled yaml so `bundle.is_signed` reads True. |
+| `FORTIFY_BUNDLE_PUBKEY_PATH=./keys/prod.public` *(optional)* | Verify a pre-built bundle dir against this pubkey on every reload. |
+| `FORTIFY_BUNDLE_REQUIRE_SIGNATURE=true` *(optional)* | Strict mode — refuse any unsigned or unverifiable bundle at startup. |
+
+No config object to instantiate, no `enforce_policy(...)` call to remember on the platform path. The adapter / loader threads it all through.
+
+### Where enforcement actually happens
+
+Walk through one tool call:
+
+1. The model emits a tool call. The framework's tool dispatcher invokes the tool.
+2. The tool is *not the dev's original* — it's a copy our adapter made, whose body starts with `enforcer.decide(role, tool_name, args)`.
+3. `PolicyEnforcer.decide` reads `self.policy` — that's either a `PolicySet` (pydantic engine, default fallback) or a `PolicyBundle` (WASM engine, what production runs).
+4. Decision is `allow` → the original tool runs. `deny` → returns a `[policy_denied]` marker the model sees as the tool result. `approval_required` → either calls the dev-supplied approval handler or returns an `[approval_required]` marker.
+5. **Before step 2, every turn:** `refresh_policy()` calls `self._policy_source.fetch()`. If the source returns a new bundle instance, `enforcer.policy` is swapped in place. Tools don't get re-wrapped — they hold a reference to the enforcer, not the bundle.
+
+`_policy_source` is set automatically by the loader based on env:
+
+- `FORTIFY_LOCAL_POLICY` set → `YamlPolicySource` or `BundleDirPolicySource` (mtime-driven refresh)
+- `FORTIFY_KEY` set, no local override → `PlatformPolicySource` (ETag / `304 Not Modified` refresh)
+- Neither → no source attached; enforcement uses whatever was loaded once
+
+**Scope of the per-turn refresh:** only the policy bundle. `system_prompt`, the manifest's tool list, and the model id are read once at agent construction and stay fixed for the lifetime of the process. Edit those on the dashboard and the change lands at the next `fortify serve` restart — not at the next turn. The split is deliberate: policy is the operator's primary lever (and the one that needs to be auditable per-decision), while the manifest is an author-time concept.
+
+### Two carve-outs worth knowing
+
+1. **Per-call identity stays explicit.** `User` is the one piece the adapter can't infer from env, because it's per-request, not per-process. One line wrapping each call (`user=User(...)` kwarg on adapters, `async with User(...)` for native).
+2. **`approval_required` tools.** If the policy uses that mode, dev decides what happens — pass `approval_handler=` (True / False / callable) when wrapping. Default for `fortify serve` is auto-approve; for `fortify chat` it prompts the TTY. Native code gets whatever the dev wires.
+
+Everything else — fetch, verify, hot-reload, role selection, signature check, decision rendering, tracing — the runtime handles. Set `FORTIFY_KEY` and wrap, or set `FORTIFY_LOCAL_POLICY` and wrap. That's the surface.
+
 ## 📦 What You Can Import
 
 The current curated surface includes:
@@ -130,10 +212,7 @@ The current curated surface includes:
 - `create_agent`
 - `create_manifest`
 - `AgentManifest`
-- `enforce_policy`
-- `with_approval_handler`
 - `enforce_policy` — accepts an optional `approval_handler=` for `NEEDS_APPROVAL` outcomes
-- `with_before_action`
 - `invoke_agent`
 - `stream_agent`
 - `stream_agent_raw`
@@ -156,7 +235,6 @@ from fortify import (
     grep,
     read_file,
     write_file,
-    with_before_action,
     agent_tool,
     load_agent,
     load_builtin_agent,
@@ -526,15 +604,9 @@ Supported modes:
 
 Constraint operators: `==`, `!=`, `<`, `<=`, `>`, `>=`, `in`, `not in`. Strings on the right use JSON double quotes. Every constraint must pass for the call to authorize (implicit AND). See [User Scope + Roles](#-user-scope--roles) for the role-aware policy bundle shape that picks a per-role policy at call time.
 
-## 🛡️ Gate 1: Local Policy Enforcement
+## 🛡️ Tool-Call Policy Enforcement
 
-Gate 1 is the current built-in security layer.
-
-Use it when:
-
-- developers should be able to build and test agents freely
-- a host platform or admin layer wants to constrain tool access later
-- you want deny-by-default behavior before a tool actually runs
+Every tool call routes through a `PolicyEnforcer` that returns `allow` / `deny` / `approval_required`. Deny-by-default; the policy file lists what's allowed.
 
 `create_agent(...)` stays close to LangChain. Policy enforcement is applied after agent creation:
 
@@ -636,15 +708,27 @@ The manifest's hashes authenticate the files; the signature authenticates the ma
 
 ### Local enforcement — `FORTIFY_LOCAL_POLICY`
 
-Point an agent at a local bundle and every tool call routes through the WASM engine instead of pydantic — no platform needed. This is the dev-iteration path: edit `policy.yaml`, rebuild, restart, see the change.
+Point an agent at a local source and every tool call routes through the WASM engine instead of pydantic — no platform needed. Two shapes are accepted, and both **hot-reload on save** (no restart, no manual rebuild between turns):
+
+| `FORTIFY_LOCAL_POLICY=…` | What happens | When to use |
+|---|---|---|
+| **`./bundle/`** (output of `fortify policy build`) | Stat the bundle manifest each turn; reload if its mtime changed. | Production-shaped local testing — exercises the exact signed-bundle path. |
+| **`./policy.yaml`** | Stat the yaml each turn; recompile via `opa` when its mtime changed. | The tight dev loop — edit yaml, save, ask again. No build step. |
 
 ```bash
+# Pre-built bundle dir — rebuild it mid-session, next chat picks it up
 fortify policy build policy.yaml --out ./bundle
 FORTIFY_LOCAL_POLICY=./bundle fortify chat --agent researcher
-# [fortify] FORTIFY_LOCAL_POLICY active: ./bundle (wasm_hash=7e6d1f8b..., unsigned)
+# [fortify] FORTIFY_LOCAL_POLICY active (bundle-dir): ./bundle (wasm_hash=7e6d1f8b..., unsigned)
+
+# Raw yaml — edit policy.yaml in your editor, save, next chat sees the new policy
+FORTIFY_LOCAL_POLICY=./policy.yaml fortify chat --agent researcher
+# [fortify] FORTIFY_LOCAL_POLICY active (yaml): ./policy.yaml (wasm_hash=ab12..., unsigned)
 ```
 
-The bundle's integrity (files match the manifest) is verified eagerly at startup — a stale or corrupt bundle fails immediately, not at the first tool call.
+The bundle's integrity (files match the manifest) is verified on every reload — a stale or corrupt bundle fails immediately, not at the first tool call. Yaml sources default to **unsigned**: set `FORTIFY_BUNDLE_SIGN_KEY_PATH=./keys/dev.private` to sign each recompile with your `fortify policy keygen` key, so downstream gates that check `bundle.is_signed` see what they expect.
+
+> **Same refresh seam as the platform.** Under the hood both sources implement `PolicySource.fetch()`; the agent runtime calls it at the top of every turn and only swaps the active policy when the returned bundle is a new instance. Unchanged → identity match → no work. That's the same hot-reload path `fortify serve` uses for platform-edited YAML.
 
 ### Signing & verification
 
@@ -665,7 +749,7 @@ FORTIFY_LOCAL_POLICY=./bundle \
 FORTIFY_BUNDLE_PUBKEY_PATH=./keys/dev.public \
 FORTIFY_BUNDLE_REQUIRE_SIGNATURE=true \
 fortify chat --agent researcher
-# [fortify] FORTIFY_LOCAL_POLICY active: ./bundle (wasm_hash=..., signed)
+# [fortify] FORTIFY_LOCAL_POLICY active (bundle-dir): ./bundle (wasm_hash=..., signed)
 ```
 
 `FORTIFY_BUNDLE_REQUIRE_SIGNATURE` controls strictness — warn-by-default keeps local dev frictionless; opt into refusal for CI/prod:
@@ -684,7 +768,7 @@ Keys are raw Ed25519, base64url-encoded — the same format the platform's JWKS 
 
 ## ✅ Approval-Required Tool Calls
 
-Approval handlers are the bridge between static Gate 1 policy and real product interaction. Use them when a tool should be **generally allowed in principle** but only after a user, CLI host, or UI host explicitly approves the specific call.
+Approval handlers are the bridge between static policy and real product interaction. Use them when a tool should be **generally allowed in principle** but only after a user, CLI host, or UI host explicitly approves the specific call.
 
 The handler is threaded through `enforce_policy(...)` at wrap time:
 
@@ -695,7 +779,7 @@ The handler is threaded through `enforce_policy(...)` at wrap time:
   - sync function `(action: dict, context: dict | None) -> bool`
   - async function `(action: dict, context: dict | None) -> bool | Awaitable[bool]`
 
-The `action` dict carries `{"tool_name", "arguments", "agent_name"}`; `context` comes from an optional `context_provider` (only used when chained with `with_before_action`).
+The `action` dict carries `{"tool_name", "arguments", "agent_name"}`; `context` is reserved for future host-supplied runtime metadata and is `None` today.
 
 Example:
 
@@ -734,78 +818,9 @@ agent = enforce_policy(agent, policy, approval_handler=approval_handler)
 
 The handler returns a boolean today. Future evolution (richer approval decisions, interrupt/resume flows, UI approval cards, audit metadata) is intentionally left open — the current `(action, context) -> bool` API is enough for CLI and simple hosted apps.
 
-## 🚪 Gate 2: Hosted `before_action` Hooks
-
-Gate 2 is the next layer for platform-level enforcement.
-
-Why call this a Gate 2 primitive:
-
-- Gate 1 answers: "is this tool allowed at all for this agent?"
-- Gate 2 answers: "given who is calling, where they are deployed, and the current runtime context, should this specific action be allowed right now?"
-
-So the design intent is:
-
-- agent authors define tools, prompts, and behavior
-- platform or admin layers inject hosted enforcement later
-- runtime context flows down from the host platform, not from the tool author
-
-The primitive is intentionally small:
-
-- `before_action(action, context)`
-- optional `context_provider()`
-
-It runs after Gate 1 and before the real tool executes.
-
-Example:
-
-```python
-from fortify import (
-    create_agent,
-    enforce_policy,
-    fetch,
-    web_search,
-    with_before_action,
-)
-
-def before_action(action: dict, context: dict | None) -> None:
-    if context is None:
-        raise RuntimeError("missing runtime context")
-    if context.get("tenant_id") != "acme":
-        raise RuntimeError("tenant is not allowed to run this action")
-
-def context_provider() -> dict:
-    return {"tenant_id": "acme", "request_id": "req-123"}
-
-agent, handler = create_agent(
-    model="openai:gpt-5.4",
-    tools=[web_search, fetch],
-    system_prompt="You are a careful research assistant.",
-)
-
-agent = enforce_policy(agent, "policy.yaml")  # Gate 1
-agent = with_before_action(
-    agent,
-    before_action=before_action,
-    context_provider=context_provider,
-)  # Gate 2
-```
-
-So the design split is:
-
-- `create_agent(...)`: build the base agent
-- `enforce_policy(..., approval_handler=...)`: local Gate 1 tool authorization, optionally with inline approval resolution for `approval_required` tools
-- `with_before_action(...)`: Gate 2 platform / IAM / approval integration
-
-This is intentionally an open chantier:
-
-- Gate 1 is already concrete and useful
-- approval handlers are the first real host interaction layer
-- Gate 2 starts as a tiny hook, not a full enterprise framework
-- later evolution can add richer approval semantics, external policy engines, or audit sinks without bloating `create_agent(...)`
-
 ## 🧱 Workspace Sandbox
 
-When the `bash` tool executes a command it runs inside an OS-level sandbox configured from the agent's workspace. This is filesystem + network enforcement at the kernel level — a separate concern from Gates 1/2, which decide *whether* a tool may be invoked at all.
+When the `bash` tool executes a command it runs inside an OS-level sandbox configured from the agent's workspace. This is filesystem + network enforcement at the kernel level — a separate concern from policy enforcement, which decides *whether* a tool may be invoked at all.
 
 ### Runtime requirement
 
@@ -866,16 +881,15 @@ The sandboxed child does **not** inherit the parent process's environment. Only 
 
 This means parent-process secrets — `AWS_SECRET_ACCESS_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GH_TOKEN`, `SSH_AUTH_SOCK`, etc. — **don't leak** into the agent. Tools that legitimately need credentials should receive them through `extra_env`, where you control exactly what's passed.
 
-### Layering with Gates 1/2
+### Layering with policy + approval
 
 | Layer | Question | Mechanism |
 |---|---|---|
-| **Gate 1** | Is this tool allowed at all? | `enforce_policy(...)` |
+| **Policy** | Is this tool allowed at all for this caller's role? | adapter / `enforce_policy(...)` |
 | **Approval** | Should this specific call go ahead? | `enforce_policy(..., approval_handler=...)` |
-| **Gate 2** | Should this call run *given runtime context*? | `with_before_action(...)` |
 | **Sandbox** | What can the spawned shell actually do? | OS-level via `srt` |
 
-Gate 1 decides whether the `bash` tool is callable for an agent. Approval and Gate 2 inspect each invocation. The sandbox bounds reach *if a call does run*. They're complementary — deploy whichever combination matches your threat model.
+Policy decides whether the `bash` tool is callable. The approval handler inspects each call gated by `approval_required`. The sandbox bounds reach *if a call does run*. They're complementary — deploy whichever combination matches your threat model.
 
 ### What the sandbox does NOT do
 
@@ -900,8 +914,9 @@ Policy-bundle enforcement (see [Policy Bundles](#-policy-bundles--compile-sign-e
 
 | Env var | Purpose |
 |---|---|
-| `FORTIFY_LOCAL_POLICY` | Path to a bundle directory; overrides the agent's policy with the WASM engine |
+| `FORTIFY_LOCAL_POLICY` | Path to a bundle directory **or** a `policy.yaml`; routes enforcement through the WASM engine and hot-reloads on save |
 | `FORTIFY_BUNDLE_PUBKEY_PATH` | base64url Ed25519 public key used to verify a bundle's signature |
+| `FORTIFY_BUNDLE_SIGN_KEY_PATH` | base64url Ed25519 private key used to sign locally-compiled yaml sources (so `bundle.is_signed` is True) |
 | `FORTIFY_BUNDLE_REQUIRE_SIGNATURE` | `true` to refuse unsigned or unverifiable bundles (default: warn only) |
 | `FORTIFY_OPA_BIN` | Override the `opa` binary location (default: search `PATH`) |
 
@@ -1116,7 +1131,7 @@ Behaviour:
 
 - Connects `ws://${FORTIFY_API_URL}/v1/projects/${pid}/serve` with `Authorization: Bearer ${FORTIFY_KEY}`
 - Sends a `hello` frame announcing the agent name (so the dashboard's "Serving" indicator can show it)
-- On each inbound `chat` message, **rebuilds the runtime** (re-fetches agent + policy YAML from the platform) before running, so dashboard edits take effect at turn boundaries without a restart
+- On each inbound `chat` message, **refreshes the active policy** before running. Refresh is an `If-None-Match` round-trip to the platform: a 304 reuses the cached WASM module, a 200 swaps in the new bundle. Dashboard edits take effect at turn boundaries without restarting the process or re-wrapping the tools.
 - Streams every `StreamEvent` (text deltas, tool start/end, run end) back as JSON
 - Auto-approves any `approval_required` tools — there's no TTY in serve mode for prompts (planned: dashboard-side approval UI)
 - Reconnects with exponential backoff on socket drop

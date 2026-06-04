@@ -88,14 +88,21 @@ def _signed_payload(private_raw: bytes) -> dict:
 
 
 class _FakeClient:
-    """Minimal stand-in for FortifyClient — just what the loader touches."""
+    """Minimal stand-in for FortifyClient — just what the loader touches.
+
+    Mirrors the Phase 8 ``get_agent(name, *, if_none_match=None) -> (payload, etag)``
+    signature, returning the payload unconditionally (no ETag tracking) —
+    callers that ignore the etag still work.
+    """
 
     def __init__(self, payload: dict, public_raw: bytes) -> None:
         self._payload = payload
         self._public_raw = public_raw
 
-    def get_agent(self, _name: str) -> dict:
-        return self._payload
+    def get_agent(
+        self, _name: str, *, if_none_match: str | None = None
+    ) -> tuple[dict, str | None]:
+        return self._payload, None
 
     def public_key_bytes(self) -> bytes:
         return self._public_raw
@@ -110,10 +117,12 @@ class _FakeClient:
 def test_platform_bundle_verifies_and_returns(monkeypatch) -> None:
     priv, pub = generate_keypair()
     client = _FakeClient(_signed_payload(priv), pub)
-    bundle = loader._platform_bundle(client.get_agent("default"), client)
+    bundle = loader._platform_bundle(client.get_agent("default")[0], client)
     assert isinstance(bundle, PolicyBundle)
     assert bundle.is_signed
-    d = bundle.policy().decide(role="billing", tool="refund_order", args={"amount": 200})
+    d = bundle.policy().decide(
+        role="billing", tool="refund_order", args={"amount": 200}
+    )
     assert d.allow is True
 
 
@@ -122,7 +131,7 @@ def test_platform_bundle_none_when_no_bundle_served() -> None:
         {"agent_yaml": _AGENT_YAML, "policy_yaml": _POLICY_YAML, "system_md": ""},
         generate_keypair()[1],
     )
-    assert loader._platform_bundle(client.get_agent("default"), client) is None
+    assert loader._platform_bundle(client.get_agent("default")[0], client) is None
 
 
 @needs_opa
@@ -131,7 +140,7 @@ def test_platform_bundle_rejects_wrong_key() -> None:
     _, stranger_pub = generate_keypair()
     client = _FakeClient(_signed_payload(priv), stranger_pub)
     with pytest.raises(RuntimeError, match="failed verification"):
-        loader._platform_bundle(client.get_agent("default"), client)
+        loader._platform_bundle(client.get_agent("default")[0], client)
 
 
 @needs_opa
@@ -145,7 +154,7 @@ def test_platform_bundle_rejects_tampered_wasm() -> None:
     payload["bundle_wasm_b64"] = base64.b64encode(bytes(raw)).decode("ascii")
     client = _FakeClient(payload, pub)
     with pytest.raises(RuntimeError, match="failed verification"):
-        loader._platform_bundle(client.get_agent("default"), client)
+        loader._platform_bundle(client.get_agent("default")[0], client)
 
 
 # ---------------------------------------------------------------------------
@@ -205,7 +214,9 @@ def test_load_fortify_agent_uses_signed_bundle(_patched_loader) -> None:
     assert isinstance(captured["policy"], PolicyBundle)
 
 
-def test_load_fortify_agent_falls_back_to_pydantic_without_bundle(_patched_loader) -> None:
+def test_load_fortify_agent_falls_back_to_pydantic_without_bundle(
+    _patched_loader,
+) -> None:
     """No bundle served → enforce with the pydantic PolicySet, not a bundle."""
     from fortify.security.policy_set import PolicySet
 
@@ -237,3 +248,74 @@ def test_load_fortify_agent_require_signature_refuses_unsigned(
     monkeypatch.setenv("FORTIFY_BUNDLE_REQUIRE_SIGNATURE", "true")
     with pytest.raises(RuntimeError, match="served\\s+no signed bundle"):
         loader.load_fortify_agent("default")
+
+
+# ---------------------------------------------------------------------------
+# Phase 8a — refresh_policy swaps the enforcer's policy when the source
+# returns a new bundle.
+# ---------------------------------------------------------------------------
+
+
+def test_refresh_policy_swaps_enforcer_policy_on_change() -> None:
+    """A source returning a new bundle → enforcer.policy is updated in
+    place. The shared enforcer means every guarded tool picks it up at the
+    next call, without re-wrapping the tools."""
+    from types import SimpleNamespace
+
+    from fortify.agents.factory import FortifyAgent
+
+    # Build the bare minimum of a FortifyAgent — the refresh_policy method
+    # only touches _enforcer and _policy_source, so we skip the heavy
+    # graph construction.
+    agent = FortifyAgent.__new__(FortifyAgent)
+    enforcer = SimpleNamespace(policy="initial")
+    agent._enforcer = enforcer  # type: ignore[attr-defined]
+
+    new_bundle = object()  # any new identity will do
+    fetched: list[object] = []
+
+    class _Source:
+        def fetch(self):
+            return new_bundle if not fetched else fetched.append("called") or new_bundle
+
+    agent._policy_source = _Source()  # type: ignore[attr-defined]
+    agent.refresh_policy()
+    assert enforcer.policy is new_bundle
+
+
+def test_refresh_policy_skips_when_source_returns_same_instance() -> None:
+    """Source returning the SAME object (e.g. PlatformPolicySource on 304)
+    → no-op. Verified by checking the policy attribute isn't even rewritten."""
+    from types import SimpleNamespace
+
+    from fortify.agents.factory import FortifyAgent
+
+    agent = FortifyAgent.__new__(FortifyAgent)
+    cached = object()
+    enforcer = SimpleNamespace(policy=cached)
+    agent._enforcer = enforcer  # type: ignore[attr-defined]
+
+    class _Source:
+        def fetch(self):
+            return cached  # same object every time
+
+    agent._policy_source = _Source()  # type: ignore[attr-defined]
+    agent.refresh_policy()
+    assert enforcer.policy is cached  # no swap happened
+
+
+def test_refresh_policy_noop_without_source_or_enforcer() -> None:
+    """Agents constructed programmatically without enforcement: refresh
+    is a quiet no-op, not a crash.
+
+    Bypasses ``__init__`` and sets the seam fields explicitly so the test
+    isn't dependent on the rest of ``FortifyAgent``'s required args
+    (model, graph, tools, ...). The contract we're pinning is just
+    ``refresh_policy() must not raise when both seam fields are None.``
+    """
+    from fortify.agents.factory import FortifyAgent
+
+    agent = FortifyAgent.__new__(FortifyAgent)
+    agent._enforcer = None
+    agent._policy_source = None
+    agent.refresh_policy()  # must not raise

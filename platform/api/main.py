@@ -1,4 +1,5 @@
 import base64
+import hashlib
 from contextlib import asynccontextmanager
 
 from fastapi import (
@@ -322,13 +323,39 @@ def api_list_agent_manifests(
 def api_get_agent(
     project_id: str,
     name: str,
+    response: Response,
     session: Session = Depends(get_session),
+    if_none_match: str | None = Header(default=None, alias="If-None-Match"),
     _auth: None = Depends(optional_dev_token),
-) -> AgentRead:
+) -> AgentRead | Response:
+    """Return an agent's YAMLs + signed bundle.
+
+    Supports ETag-based conditional GETs: the response carries the
+    bundle's ``wasm_hash`` as an ``ETag`` header. A subsequent request
+    with ``If-None-Match: <wasm_hash>`` returns ``304 Not Modified``
+    when the bundle hasn't changed — so the SDK's per-run refresh costs
+    one short round-trip instead of base64-decoding the wasm again.
+    """
     ensure_default_project(session)
     agent = get_agent(session, project_id, name)
     if agent is None:
         raise HTTPException(status_code=404, detail="agent not found")
+
+    # ETag is a quoted opaque string per RFC 7232. We use the wasm_hash
+    # (a sha256 hex digest); falls back to None when no bundle is stored.
+    bundle_hash = (
+        hashlib.sha256(agent.compiled_wasm).hexdigest()
+        if agent.compiled_wasm is not None
+        else None
+    )
+    etag = f'"{bundle_hash}"' if bundle_hash else None
+
+    if etag and if_none_match and if_none_match.strip() == etag:
+        # 304 — no body, just the ETag so the client can re-confirm.
+        return Response(status_code=304, headers={"ETag": etag})
+
+    if etag:
+        response.headers["ETag"] = etag
     return _agent_read(agent)
 
 

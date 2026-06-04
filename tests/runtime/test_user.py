@@ -54,13 +54,18 @@ def _client(priv: bytes, pub: bytes) -> FortifyClient:
 
 
 class _FakeAgent:
-    """A bare object the factory helpers can read attributes off."""
+    """A bare object the factory helpers can read attributes off.
+
+    Mirrors the real ``FortifyAgent``'s seam fields as first-class
+    attributes (set to ``None`` when not provided) so production code
+    can read them via direct attribute access without falling back to
+    ``getattr(agent, ..., None)``.
+    """
 
     def __init__(self, *, name: str | None = None, client: FortifyClient | None = None):
         self.name = name
         self.workspace = None
-        if client is not None:
-            self.fortify_client = client
+        self.fortify_client: FortifyClient | None = client
 
 
 # ---------------------------------------------------------------------------

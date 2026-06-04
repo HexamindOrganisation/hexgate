@@ -123,12 +123,19 @@ def test_override_returns_none_when_env_unset(
 def test_override_loads_bundle_when_env_set(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Env var pointing at a fresh bundle yields a verified PolicyBundle."""
+    """Env var pointing at a fresh bundle yields (bundle, source).
+
+    Phase 8b returns both halves: the initial PolicyBundle for
+    enforce_policy and the PolicySource for per-run refresh.
+    """
     bundle_dir = _build_bundle_dir(tmp_path / "bundle")
     monkeypatch.setenv("FORTIFY_LOCAL_POLICY", str(bundle_dir))
 
-    bundle = loader._local_policy_override()
+    out = loader._local_policy_override()
+    assert out is not None
+    bundle, source = out
     assert bundle is not None
+    assert hasattr(source, "fetch")  # PolicySource protocol
     # The override prints a loud announcement to stderr.
     err = capsys.readouterr().err
     assert "FORTIFY_LOCAL_POLICY active" in err
@@ -137,9 +144,9 @@ def test_override_loads_bundle_when_env_set(
 def test_override_raises_for_missing_directory(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Pointing at a non-existent directory fails loudly, not silently."""
+    """Pointing at a non-existent path fails loudly, not silently."""
     monkeypatch.setenv("FORTIFY_LOCAL_POLICY", str(tmp_path / "nope"))
-    with pytest.raises(RuntimeError, match="bundle could not be loaded"):
+    with pytest.raises(RuntimeError, match="expected a bundle"):
         loader._local_policy_override()
 
 
@@ -169,8 +176,11 @@ def test_load_builtin_agent_picks_up_override(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """``load_builtin_agent`` forwards the bundle to ``enforce_policy`` when
-    the env var is set, replacing the agent's own policy.yaml."""
+    the env var is set, replacing the agent's own policy.yaml, AND attaches
+    the local PolicySource so per-run refresh picks up later edits."""
+    import types
     from typing import Any
+
     from fortify.security import PolicyBundle
 
     bundle_dir = _build_bundle_dir(tmp_path / "bundle")
@@ -178,8 +188,9 @@ def test_load_builtin_agent_picks_up_override(
 
     captured: dict[str, Any] = {}
 
-    def fake_create_agent(**kwargs: Any) -> tuple[str, str]:
-        return "agent", "handler"
+    def fake_create_agent(**kwargs: Any) -> tuple[Any, str]:
+        # Return a namespace so the loader can set ._policy_source on it.
+        return types.SimpleNamespace(name="agent"), "handler"
 
     def fake_enforce_policy(_agent: Any, policy: Any, *, approval_handler: Any = None) -> Any:
         captured["policy"] = policy
@@ -188,11 +199,15 @@ def test_load_builtin_agent_picks_up_override(
     monkeypatch.setattr(loader, "create_agent", fake_create_agent)
     monkeypatch.setattr(loader, "enforce_policy", fake_enforce_policy)
 
-    loader.load_builtin_agent("researcher")
+    enforced, _handler = loader.load_builtin_agent("researcher")
     assert isinstance(captured["policy"], PolicyBundle), (
         "load_builtin_agent should have substituted the env-var bundle "
         f"for the on-disk policy.yaml; got {type(captured['policy'])}"
     )
+    # And the source rode along, so refresh_policy() will have something
+    # to call into on the next run.
+    assert hasattr(enforced, "_policy_source")
+    assert hasattr(enforced._policy_source, "fetch")
 
 
 @needs_opa
@@ -247,13 +262,19 @@ def test_unsigned_bundle_loads_with_warning_by_default(
 def test_unsigned_bundle_refused_when_signature_required(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """REQUIRE_SIGNATURE=true rejects an unsigned bundle at load time."""
+    """REQUIRE_SIGNATURE=true rejects an unsigned bundle at load time.
+
+    Phase 8b moved the check earlier: without a pubkey configured we
+    can't verify ANYTHING, so the loader refuses at construction time
+    with the pubkey-is-unset message rather than waiting to inspect
+    the (always-missing) signature on the bundle.
+    """
     _clear_signature_env(monkeypatch)
     bundle_dir = _build_bundle_dir(tmp_path / "bundle")
     monkeypatch.setenv("FORTIFY_LOCAL_POLICY", str(bundle_dir))
     monkeypatch.setenv("FORTIFY_BUNDLE_REQUIRE_SIGNATURE", "true")
 
-    with pytest.raises(RuntimeError, match="has no signature"):
+    with pytest.raises(RuntimeError, match="no key to verify"):
         loader._local_policy_override()
 
 
@@ -272,8 +293,10 @@ def test_signed_bundle_verifies_against_pubkey(
     monkeypatch.setenv("FORTIFY_BUNDLE_PUBKEY_PATH", str(pubkey_path))
     monkeypatch.setenv("FORTIFY_BUNDLE_REQUIRE_SIGNATURE", "true")
 
-    bundle = loader._local_policy_override()
-    assert bundle is not None and bundle.is_signed
+    out = loader._local_policy_override()
+    assert out is not None
+    bundle, _source = out
+    assert bundle.is_signed
     err = capsys.readouterr().err
     assert "signed" in err
 

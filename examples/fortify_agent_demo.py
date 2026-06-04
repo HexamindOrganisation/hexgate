@@ -67,14 +67,19 @@ def main() -> int:
     try:
         config = FortifyConfig.from_env()
         client = FortifyClient(config)
-        payload = client.get_agent(agent_name)
+        # get_agent returns (payload, etag) — the etag is for the SDK's
+        # conditional-GET hot-reload path, which this demo doesn't need.
+        payload, _etag = client.get_agent(agent_name)
     except FortifyError as exc:
         print(f"fortify error: {exc}", file=sys.stderr)
         return 1
 
+    assert payload is not None, "first get_agent has no If-None-Match — 304 impossible"
     policy = AgentPolicy.model_validate(yaml.safe_load(payload["policy_yaml"]) or {})
 
-    print(f"fetched '{agent_name}' from {config.base_url}/v1/projects/{config.project_id}")
+    print(
+        f"fetched '{agent_name}' from {config.base_url}/v1/projects/{config.project_id}"
+    )
     print(f"updated_at: {payload['updated_at']}")
     print()
     print("policy:")

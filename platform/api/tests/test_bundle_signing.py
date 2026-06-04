@@ -179,7 +179,6 @@ def test_backfill_signs_seeded_agents(session, signer) -> None:
     """Seeded agents start bundle-less; backfill compiles + signs them so
     they're served via WASM on the first request, not just after an edit."""
     from sqlmodel import select
-    from models import Agent
 
     sign, public_raw = signer
 
@@ -305,3 +304,62 @@ def test_platform_bundle_matches_pydantic(role, tool, args, expect_allow, signer
     assert wasm_allow == py_allow, (
         f"platform-bundle wasm disagrees with pydantic for {role}/{tool}/{args}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Phase 8a — ETag / If-None-Match on the agent fetch endpoint
+# ---------------------------------------------------------------------------
+
+
+@needs_opa
+def test_get_agent_returns_etag_header_when_bundle_present() -> None:
+    """The endpoint exposes the bundle's wasm_hash as a quoted ETag so
+    the SDK can use it on subsequent conditional GETs."""
+    from fastapi.testclient import TestClient
+    import main
+
+    with TestClient(main.app) as c:
+        r = c.get("/v1/projects/support-bot/agents/default")
+        assert r.status_code == 200
+        etag = r.headers.get("etag")
+        assert etag and etag.startswith('"') and etag.endswith('"')
+        # Server-side ETag matches the wasm sha256 the SDK can compute.
+        body = r.json()
+        served_wasm = base64.b64decode(body["bundle_wasm_b64"])
+        assert etag == f'"{hashlib.sha256(served_wasm).hexdigest()}"'
+
+
+@needs_opa
+def test_if_none_match_returns_304_when_unchanged() -> None:
+    """A conditional GET with the prior ETag returns 304 + empty body —
+    the cheap path the per-run refresh leans on."""
+    from fastapi.testclient import TestClient
+    import main
+
+    with TestClient(main.app) as c:
+        r1 = c.get("/v1/projects/support-bot/agents/default")
+        etag = r1.headers["etag"]
+
+        r2 = c.get(
+            "/v1/projects/support-bot/agents/default",
+            headers={"If-None-Match": etag},
+        )
+        assert r2.status_code == 304
+        assert r2.content == b""
+        # ETag is echoed so the client can re-confirm the match.
+        assert r2.headers.get("etag") == etag
+
+
+@needs_opa
+def test_if_none_match_stale_etag_returns_fresh_200() -> None:
+    """A stale or wrong ETag → server resends the full body (200)."""
+    from fastapi.testclient import TestClient
+    import main
+
+    with TestClient(main.app) as c:
+        r = c.get(
+            "/v1/projects/support-bot/agents/default",
+            headers={"If-None-Match": '"obviously-stale"'},
+        )
+        assert r.status_code == 200
+        assert r.json().get("bundle_wasm_b64") is not None
