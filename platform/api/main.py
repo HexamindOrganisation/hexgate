@@ -1170,10 +1170,23 @@ async def api_list_orgs(
     Used by the dashboard's org switcher (Phase 5) — one request, no
     N+1 over memberships, role on the edge so the UI knows what
     actions to enable per row.
+
+    **Repair path:** if the user has zero orgs (e.g., the
+    ``on_after_register`` hook errored after FastAPI-Users committed
+    the User row, or the user predates the personal-default-org
+    bootstrap), call :func:`ensure_personal_default_org` here. The
+    dashboard's first call on each session goes through this endpoint,
+    so the repair is opportunistic and silent. The helper is
+    idempotent on the "user already owns an org" invariant, so a
+    concurrent repair-then-create race can't double-bootstrap.
     """
-    from services import list_orgs_for_user
+    from services import ensure_personal_default_org, list_orgs_for_user
 
     rows = await list_orgs_for_user(session, user.id)
+    if not rows:
+        await ensure_personal_default_org(session, user)
+        await session.commit()
+        rows = await list_orgs_for_user(session, user.id)
     return [
         OrgWithRole(
             id=o.id, slug=o.slug, name=o.name, created_at=o.created_at, role=role

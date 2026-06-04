@@ -605,3 +605,38 @@ def test_reset_password_with_invalid_token_rejects(client: TestClient) -> None:
         json={"token": "not.a.real-token", "password": "doesn't-matter"},
     )
     assert r.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# Cookie ``Secure`` flag — environment toggle
+# ---------------------------------------------------------------------------
+
+
+def test_cookie_secure_defaults_to_false_for_localhost_dev(monkeypatch) -> None:
+    """Default of ``FORTIFY_COOKIE_SECURE`` (unset) → ``Secure`` off.
+
+    A Secure cookie is silently dropped by every browser on http://, so
+    if this regressed to ``True`` ``make platform-api`` would 401 on
+    every request after login. The ergonomic default is off."""
+    from auth import _cookie_secure
+
+    monkeypatch.delenv("FORTIFY_COOKIE_SECURE", raising=False)
+    assert _cookie_secure() is False
+
+
+def test_cookie_secure_respects_env_var(monkeypatch) -> None:
+    """``FORTIFY_COOKIE_SECURE=1`` (or true/yes/on) → Secure on.
+
+    The whole point of this knob is that prod deployments behind an
+    HTTPS terminator can flip the Secure flag on with one env var. If
+    any of the documented truthy values stopped working, prod would
+    silently ship insecure cookies."""
+    from auth import _cookie_secure
+
+    for truthy in ("1", "true", "TRUE", "yes", "on"):
+        monkeypatch.setenv("FORTIFY_COOKIE_SECURE", truthy)
+        assert _cookie_secure() is True, f"{truthy!r} should be truthy"
+
+    for falsy in ("0", "false", "no", "off", ""):
+        monkeypatch.setenv("FORTIFY_COOKIE_SECURE", falsy)
+        assert _cookie_secure() is False, f"{falsy!r} should be falsy"

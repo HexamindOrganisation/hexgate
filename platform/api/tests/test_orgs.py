@@ -504,6 +504,96 @@ def test_list_orgs_requires_authentication(client: TestClient) -> None:
     assert r.status_code == 401
 
 
+def test_list_orgs_repairs_missing_personal_org(
+    client: TestClient, session_factory
+) -> None:
+    """If a logged-in user somehow has zero org memberships, hitting
+    ``GET /v1/orgs`` lazily creates their personal default org rather
+    than returning the empty list that would render the dashboard's
+    "no orgs yet" dead-end.
+
+    Simulates the edge case where the ``on_after_register`` hook
+    failed after FastAPI-Users committed the User row — the listing
+    endpoint is the recovery net for that.
+    """
+    import asyncio
+
+    _signup_and_login(client, "orphan@example.com", "correcthorsebattery")
+
+    # Manually nuke the user's memberships to simulate a botched
+    # registration. The User row stays; only the OrganizationMember
+    # link (and the org itself, since it had a sole owner) disappear.
+    async def _strip_org() -> None:
+        async with session_factory() as s:
+            u = (
+                await s.exec(
+                    select(User).where(User.email == "orphan@example.com")
+                )
+            ).one()
+            membership = (
+                await s.exec(
+                    select(OrganizationMember).where(
+                        OrganizationMember.user_id == u.id
+                    )
+                )
+            ).one()
+            org_id = membership.org_id
+            await s.delete(membership)
+            org = (
+                await s.exec(
+                    select(Organization).where(Organization.id == org_id)
+                )
+            ).one()
+            await s.delete(org)
+            await s.commit()
+
+    asyncio.get_event_loop().run_until_complete(_strip_org())
+
+    # First listing call repairs — caller sees their fresh personal org.
+    r = client.get("/v1/orgs")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert len(body) == 1
+    repaired = body[0]
+    assert repaired["name"] == "default"
+    assert repaired["role"] == ROLE_OWNER
+
+    # Second call is a no-op — idempotent, no extra org row.
+    r2 = client.get("/v1/orgs")
+    assert r2.status_code == 200
+    assert len(r2.json()) == 1
+
+
+def test_list_orgs_skips_repair_when_org_already_present(
+    client: TestClient, session_factory
+) -> None:
+    """Healthy users (the common case) must NOT trigger the repair
+    branch — the listing endpoint stays a pure GET on the happy path.
+    Asserts a fresh signup ends with exactly one org and no duplicate
+    after the first listing call.
+    """
+    import asyncio
+
+    _signup_and_login(client, "healthy@example.com", "correcthorsebattery")
+
+    # Hit the listing endpoint to give the repair path a chance to fire.
+    r = client.get("/v1/orgs")
+    assert r.status_code == 200
+    assert len(r.json()) == 1
+
+    # Confirm via the DB that no second org was bootstrapped.
+    async def _count_orgs() -> int:
+        async with session_factory() as s:
+            u = (
+                await s.exec(
+                    select(User).where(User.email == "healthy@example.com")
+                )
+            ).one()
+            return len(await list_orgs_for_user(s, u.id))
+
+    assert asyncio.get_event_loop().run_until_complete(_count_orgs()) == 1
+
+
 # ---- POST /v1/orgs --------------------------------------------------------
 
 
