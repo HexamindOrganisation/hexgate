@@ -31,10 +31,12 @@ _DECISION_COLUMNS = [
 
 # async_insert batches small inserts; wait_for_async_insert=1 blocks until flush
 # so write failures surface synchronously — an audit log must not ack-then-drop.
+# Retry dedup is NOT handled here: insert-level dedup settings no-op on
+# non-replicated tables. The ReplacingMergeTree(received_at) engine collapses
+# duplicate event_ids on background merges instead (see schema.sql).
 _DECISION_INSERT_SETTINGS = {
-    "async_insert":             1,
-    "wait_for_async_insert":    1,
-    "async_insert_deduplicate": 1,
+    "async_insert":          1,
+    "wait_for_async_insert": 1,
 }
 
 
