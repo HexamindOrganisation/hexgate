@@ -10,8 +10,10 @@ import json
 import logging
 import os
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any
+from uuid import UUID, uuid4
 
 import httpx
 
@@ -76,11 +78,17 @@ def _truncate_args(arguments: dict[str, Any]) -> dict[str, Any]:
 
 @dataclass(frozen=True, slots=True)
 class AuditEvent:
-    """Decision plus caller identity from the active User scope."""
+    """Decision plus caller identity from the active User scope.
+
+    ``event_id`` / ``occurred_at`` are stamped here, not on ``Decision`` —
+    they exist only for audit emission, and the no-audit path never
+    constructs an event. Names mirror the platform's AuditEnvelope."""
 
     decision: Decision
     user_id: str = ""
     session_id: str = ""
+    event_id: UUID = field(default_factory=uuid4)
+    occurred_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
     def as_payload(self) -> dict[str, Any]:
         """Flat JSON payload matching the platform's DecisionEvent body.
@@ -94,8 +102,8 @@ class AuditEvent:
             else None
         )
         return {
-            "event_id":    str(d.event_id),
-            "occurred_at": d.occurred_at.isoformat(),
+            "event_id":    str(self.event_id),
+            "occurred_at": self.occurred_at.isoformat(),
             "agent_name":  d.agent_name,
             "tool_name":   d.tool_name,
             "outcome":     d.outcome.value,

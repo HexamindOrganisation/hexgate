@@ -72,19 +72,23 @@ it never changes, blocks, or fails the decision the agent acts on.
 
 ## 2. The audit record
 
-### 2.1 Stamped at the decision site
+### 2.1 Stamped at the emission site
 
-`fortify/security/decision.py` — `Decision` is a frozen dataclass. Two fields
-exist specifically for audit and are stamped at construction:
+`fortify/audit.py` — `AuditEvent` stamps the two audit identifiers at
+construction. They live on the event, not on `Decision`: they exist only for
+audit emission, and the no-audit path never constructs an event (so a
+`decide()` call without a sender mints neither).
 
 | Field | Type | Source |
 |-------|------|--------|
-| `event_id` | `UUID` | `uuid4()` per decision — the idempotency key end-to-end |
+| `event_id` | `UUID` | `uuid4()` per event — the idempotency key end-to-end |
 | `occurred_at` | `datetime` (UTC) | `datetime.now(timezone.utc)` at construction |
 
-The remaining decision fields (`agent_name`, `tool_name`, `outcome`, `role`,
-`reason`, `error_type`, `violations`, `hint`, `arguments`) are populated by
-`Decision.from_verdict()` from the policy engine's `Verdict` plus host context.
+The enforcer builds the `AuditEvent` immediately after the `Decision`, so
+`occurred_at` is decision time for practical purposes. The decision fields
+(`agent_name`, `tool_name`, `outcome`, `role`, `reason`, `error_type`,
+`violations`, `hint`, `arguments`) are populated by `Decision.from_verdict()`
+from the policy engine's `Verdict` plus host context.
 
 ### 2.2 Outcome and error_type
 
@@ -392,5 +396,16 @@ SETTINGS index_granularity = 8192;
 6. **At-least-once, not exactly-once end to end** — the SDK can drop on
    saturation/network failure (audit is best-effort); `event_id` dedup prevents
    duplicates but not gaps.
+7. **Write path is unscoped within a project** — `POST /v1/audit/decisions`
+   authorizes via `require_project` (signature + project resolution only); any
+   valid SDK bearer for the project can write audit, fetch policy, and register
+   agents interchangeably. The biscuit attenuation primitive already exists
+   (`platform/api/biscuits.py`); an `emit_audit` scope fact + endpoint check is
+   the natural fix. Note existing minted tokens won't carry the fact — needs a
+   deprecation window or re-mint.
+8. **No rate limit or volume alerting on ingest** — an exfiltrated key can
+   flood the log to bury real activity. Needs a per-project token bucket
+   (`429 + Retry-After`; the SDK already logs-and-drops on ≥400) plus an
+   ingest-volume-per-project alert.
 </content>
 </invoke>

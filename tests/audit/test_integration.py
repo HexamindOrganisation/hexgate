@@ -50,7 +50,7 @@ async def test_wire_format_accepted_by_platform() -> None:
             json=ev.as_payload(),
         )
     assert response.status_code == 202, f"{response.status_code}: {response.text}"
-    assert response.json()["event_id"] == str(ev.decision.event_id)
+    assert response.json()["event_id"] == str(ev.event_id)
 
 
 async def test_sender_emits_end_to_end_without_errors() -> None:

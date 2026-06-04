@@ -3,11 +3,9 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Protocol, runtime_checkable
-from uuid import UUID, uuid4
 
 
 class DecisionOutcome(str, Enum):
@@ -83,10 +81,6 @@ class Decision:
     hint: dict[str, Any] | None = None
     violations: tuple[str, ...] = ()
     arguments: dict[str, Any] | None = None
-    # Stamped at construction for audit emission; names mirror the platform's
-    # AuditEnvelope so AuditEvent.as_payload() is a plain field dump.
-    event_id: UUID = field(default_factory=uuid4)
-    occurred_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
     @classmethod
     def from_verdict(

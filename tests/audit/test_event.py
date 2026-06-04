@@ -26,8 +26,8 @@ def test_as_payload_full_payload() -> None:
     ev = AuditEvent(decision=d, user_id="alice", session_id="sess_1")
     wire = ev.as_payload()
 
-    assert wire["event_id"] == str(d.event_id)
-    assert wire["occurred_at"] == d.occurred_at.isoformat()
+    assert wire["event_id"] == str(ev.event_id)
+    assert wire["occurred_at"] == ev.occurred_at.isoformat()
     assert wire["agent_name"] == "researcher"
     assert wire["tool_name"] == "read_file"
     assert wire["outcome"] == "deny"
@@ -103,7 +103,7 @@ def test_as_payload_small_arguments_pass_through_untruncated() -> None:
     assert wire["arguments"] == {"path": "/x"}
 
 
-def test_event_id_and_occurred_at_unique_per_decision() -> None:
+def test_event_id_and_occurred_at_unique_per_event() -> None:
     w1 = AuditEvent(decision=_decision()).as_payload()
     w2 = AuditEvent(decision=_decision()).as_payload()
     assert w1["event_id"] != w2["event_id"]
