@@ -6,8 +6,10 @@ Lifecycle: configure() per api_key, await shutdown() at process exit.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -16,6 +18,60 @@ import httpx
 from fortify.security.decision import Decision
 
 _log = logging.getLogger(__name__)
+
+# Mirrors the platform's MAX_ARGS_BYTES (platform/api/audit.py). The platform
+# rejects (413) rather than truncates, so an over-cap event would be lost
+# entirely unless the SDK trims it first.
+MAX_ARGS_BYTES = 8 * 1024
+
+# Keys whose values are stripped from the audit copy of ``arguments`` before
+# transmission. A seatbelt, not a guarantee: values that are sensitive by
+# content rather than key name (SQL strings, email bodies) are NOT caught.
+_SENSITIVE_KEY_RE = re.compile(
+    r"password|passwd|secret|token|api[-_]?key|credential|authorization",
+    re.IGNORECASE,
+)
+_REDACTED = "[REDACTED]"
+
+
+def _redact(value: Any) -> Any:
+    """Return a copy of ``value`` with sensitive-keyed values replaced.
+
+    Pure — never mutates the input, so the ``Decision`` the caller holds
+    keeps its full arguments; only the wire payload is redacted."""
+    if isinstance(value, dict):
+        return {
+            k: _REDACTED if isinstance(k, str) and _SENSITIVE_KEY_RE.search(k)
+            else _redact(v)
+            for k, v in value.items()
+        }
+    if isinstance(value, (list, tuple)):
+        return [_redact(v) for v in value]
+    return value
+
+
+def _truncate_args(arguments: dict[str, Any]) -> dict[str, Any]:
+    """Trim ``arguments`` to fit the platform's byte cap.
+
+    Serialization mirrors the platform's measurement (``default=str``). Over
+    the cap, the dict is replaced by a marker wrapping a JSON-text preview,
+    shrunk until the wrapper itself fits — lossy, but stored; the platform
+    would 413-reject the raw payload and lose the event entirely."""
+    args_json = json.dumps(arguments, default=str)
+    if len(args_json.encode("utf-8")) <= MAX_ARGS_BYTES:
+        return arguments
+    preview_bytes = MAX_ARGS_BYTES - 512
+    while True:
+        wrapper = {
+            "_truncated": True,
+            "original_bytes": len(args_json.encode("utf-8")),
+            "preview": args_json.encode("utf-8")[:preview_bytes].decode(
+                "utf-8", errors="ignore"
+            ),
+        }
+        if len(json.dumps(wrapper).encode("utf-8")) <= MAX_ARGS_BYTES:
+            return wrapper
+        preview_bytes //= 2
 
 
 @dataclass(frozen=True, slots=True)
@@ -27,8 +83,16 @@ class AuditEvent:
     session_id: str = ""
 
     def as_payload(self) -> dict[str, Any]:
-        """Flat JSON payload matching the platform's DecisionEvent body."""
+        """Flat JSON payload matching the platform's DecisionEvent body.
+
+        ``arguments`` are redacted (sensitive key names) and truncated to the
+        platform byte cap here — the single choke point onto the wire."""
         d = self.decision
+        arguments = (
+            _truncate_args(_redact(d.arguments))
+            if d.arguments is not None
+            else None
+        )
         return {
             "event_id":    str(d.event_id),
             "occurred_at": d.occurred_at.isoformat(),
@@ -40,7 +104,7 @@ class AuditEvent:
             "reason":      d.reason,
             "violations":  list(d.violations),
             "hint":        d.hint,
-            "arguments":   d.arguments,
+            "arguments":   arguments,
             "user_id":     self.user_id,
             "session_id":  self.session_id,
         }

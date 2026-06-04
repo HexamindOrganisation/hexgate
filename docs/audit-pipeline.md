@@ -315,15 +315,25 @@ SETTINGS index_granularity = 8192;
 
 ## 6. Privacy & data-handling notes
 
-- **`arguments` carries raw tool inputs** (paths, payloads, possibly secrets or
-  PII). It is transmitted to the platform and stored (compressed) for up to 90
-  days. The default `base_url` is **plaintext `http://localhost:8000`**;
-  production deployments must set `FORTIFY_API_URL` to a TLS endpoint. Consider
-  redaction/allowlisting of `arguments` before relying on this in production.
-- **Truncation is lossy and asymmetric.** The SDK may already truncate
-  `arguments`; the platform additionally **rejects** (413) oversize payloads
-  rather than truncating. An over-cap decision is therefore *not stored at all*
-  unless the SDK trims it first.
+- **`arguments` carries tool inputs** (paths, payloads, possibly PII). It is
+  transmitted to the platform and stored (compressed) for up to 90 days. The
+  default `base_url` is **plaintext `http://localhost:8000`**; production
+  deployments must set `FORTIFY_API_URL` to a TLS endpoint.
+- **Default key-name redaction, always on.** `AuditEvent.as_payload()` replaces
+  values whose key matches `password|passwd|secret|token|api[-_]?key|
+  credential|authorization` (case-insensitive, recursive into nested
+  dicts/lists) with `"[REDACTED]"` before transmission. **This is a seatbelt,
+  not a guarantee**: values sensitive by *content* rather than key name — SQL
+  strings, email bodies, free text — are captured verbatim. Operators whose
+  tools carry such data need their own redaction before relying on this in
+  production.
+- **SDK truncation at the platform cap.** `as_payload()` measures `arguments`
+  as the platform does (JSON, `default=str`); over 8 KiB it replaces the dict
+  with `{"_truncated": true, "original_bytes": N, "preview": <JSON prefix>}`
+  sized to fit the cap. Lossy, but the event is stored — the platform
+  **rejects** (413) oversize payloads, so an untrimmed over-cap decision would
+  not be stored at all. `hint` (4 KiB cap) is policy-engine-generated and is
+  *not* SDK-trimmed.
 
 ---
 
@@ -370,8 +380,9 @@ SETTINGS index_granularity = 8192;
 
 1. **Read path auth & scoping** — `GET /v1/audit/decisions` is unauthenticated
    and cross-project (POC). Needs `read_audit` scope + `project_id` filter.
-2. **`arguments` redaction** — no field-level redaction before transmit/store;
-   relies on byte caps only.
+2. **`arguments` redaction is key-name-only** — the default redactor strips
+   sensitive-keyed values, but content-sensitive values (SQL, email bodies)
+   pass through; no per-tool allow/deny lists or `redact` callable yet.
 3. **Default transport is plaintext HTTP** — safe only for localhost; require
    TLS via `FORTIFY_API_URL` elsewhere.
 4. **Sync agents emit nothing** — `emit()` requires a running loop; sync entry

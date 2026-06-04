@@ -1,7 +1,9 @@
 """AuditEvent.as_payload() field mapping for the platform's audit endpoint."""
 from __future__ import annotations
 
-from fortify.audit import AuditEvent
+import json
+
+from fortify.audit import MAX_ARGS_BYTES, AuditEvent
 from fortify.security.decision import Decision, DecisionOutcome
 
 
@@ -61,6 +63,44 @@ def test_as_payload_violations_tuple_serializes_as_list() -> None:
     wire = AuditEvent(decision=_decision(violations=("a", "b", "c"))).as_payload()
     assert wire["violations"] == ["a", "b", "c"]
     assert isinstance(wire["violations"], list)
+
+
+def test_as_payload_redacts_sensitive_keys_recursively() -> None:
+    args = {
+        "path": "/x",
+        "Password": "hunter2",
+        "config": {"api_key": "sk-123", "mode": "safe"},
+        "headers": [{"AUTHORIZATION": "Bearer abc"}, {"trace": "t1"}],
+    }
+    wire = AuditEvent(decision=_decision(arguments=args)).as_payload()
+    assert wire["arguments"] == {
+        "path": "/x",
+        "Password": "[REDACTED]",
+        "config": {"api_key": "[REDACTED]", "mode": "safe"},
+        "headers": [{"AUTHORIZATION": "[REDACTED]"}, {"trace": "t1"}],
+    }
+
+
+def test_as_payload_redaction_does_not_mutate_decision_arguments() -> None:
+    d = _decision(arguments={"secret": "s3cr3t", "nested": {"token": "t"}})
+    AuditEvent(decision=d).as_payload()
+    assert d.arguments == {"secret": "s3cr3t", "nested": {"token": "t"}}
+
+
+def test_as_payload_truncates_oversize_arguments_under_platform_cap() -> None:
+    big = {"data": "x" * (MAX_ARGS_BYTES * 2)}
+    wire = AuditEvent(decision=_decision(arguments=big)).as_payload()
+    args = wire["arguments"]
+    assert args["_truncated"] is True
+    assert args["original_bytes"] > MAX_ARGS_BYTES
+    assert args["preview"].startswith('{"data": "xxx')
+    # The wire form must fit the platform cap, measured as the platform does.
+    assert len(json.dumps(args, default=str).encode("utf-8")) <= MAX_ARGS_BYTES
+
+
+def test_as_payload_small_arguments_pass_through_untruncated() -> None:
+    wire = AuditEvent(decision=_decision(arguments={"path": "/x"})).as_payload()
+    assert wire["arguments"] == {"path": "/x"}
 
 
 def test_event_id_and_occurred_at_unique_per_decision() -> None:
