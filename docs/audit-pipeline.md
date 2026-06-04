@@ -402,9 +402,8 @@ columns make these scans cheap. All time-axis logic keys off `occurred_at`
 
 ## 9. Open items / known gaps
 
-1. **Read path auth** — the read endpoints are now project-scoped (§7), but
-   still **unauthenticated**: they need the `read_audit` scope gate (a
-   `TODO(auth)` marker is in place). `project_id` filtering is done.
+1. **Read path auth & scoping** — `GET /v1/audit/decisions` is unauthenticated
+   and cross-project (POC). Needs `read_audit` scope + `project_id` filter.
 2. **`arguments` redaction is key-name-only** — the default redactor strips
    sensitive-keyed values, but content-sensitive values (SQL, email bodies)
    pass through; no per-tool allow/deny lists or `redact` callable yet.
