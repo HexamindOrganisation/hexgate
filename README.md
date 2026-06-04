@@ -119,7 +119,7 @@ Schema lives in `platform/clickhouse/init/schema.sql`.
 
 **Not a migration system.** That init directory is a POC scaffold — the Docker image runs it exactly once, on first container start with an empty data volume. Editing the SQL after that point is silently ignored on existing environments. To apply schema changes locally, either `make clickhouse-reset` (wipes data) or `make clickhouse-cli` and run the SQL by hand. A real migration runner should replace this directory the first time a second schema change is needed.
 
-The service binds to **host ports 8124 (HTTP) and 9001 (native)** rather than ClickHouse's default 8123/9000, so it coexists with any other local ClickHouse instance (e.g. a Langfuse-bundled one).
+The service binds to **127.0.0.1 only, on host ports 8124 (HTTP) and 9001 (native)** rather than ClickHouse's default 8123/9000, so it coexists with any other local ClickHouse instance (e.g. a Langfuse-bundled one).
 
 Once both `make clickhouse-up` and `make platform-api` are running, `GET /ready` reports `"clickhouse": "ok"` (the `/health` liveness probe stays dependency-free) and the ingest endpoint `POST /v1/audit/decisions` accepts one decision per request:
 

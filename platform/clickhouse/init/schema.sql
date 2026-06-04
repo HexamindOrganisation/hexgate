@@ -29,8 +29,12 @@ CREATE TABLE IF NOT EXISTS fortify_audit.policy_decision
     hint                String CODEC(ZSTD(3)),
     arguments           String COMMENT 'SDK-truncated JSON snapshot; may be lossy' CODEC(ZSTD(3))
 )
-ENGINE = MergeTree
-PARTITION BY toYYYYMM(occurred_at)
-ORDER BY (project_id, agent_name, outcome, occurred_at)
-TTL toDateTime(occurred_at) + INTERVAL 90 DAY
+-- ReplacingMergeTree: SDK retries (same event_id) collapse on background
+-- merges — eventual dedup; exact counts use FINAL or count(DISTINCT event_id).
+ENGINE = ReplacingMergeTree(received_at)
+-- Partition + TTL anchor on server-stamped received_at, not the
+-- client-supplied occurred_at (clock skew would break retention).
+PARTITION BY toYYYYMM(received_at)
+ORDER BY (project_id, agent_name, outcome, occurred_at, event_id)
+TTL toDateTime(received_at) + INTERVAL 90 DAY
 SETTINGS index_granularity = 8192;
