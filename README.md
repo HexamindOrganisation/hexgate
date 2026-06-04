@@ -196,6 +196,8 @@ Walk through one tool call:
 - `FORTIFY_KEY` set, no local override → `PlatformPolicySource` (ETag / `304 Not Modified` refresh)
 - Neither → no source attached; enforcement uses whatever was loaded once
 
+**Scope of the per-turn refresh:** only the policy bundle. `system_prompt`, the manifest's tool list, and the model id are read once at agent construction and stay fixed for the lifetime of the process. Edit those on the dashboard and the change lands at the next `fortify serve` restart — not at the next turn. The split is deliberate: policy is the operator's primary lever (and the one that needs to be auditable per-decision), while the manifest is an author-time concept.
+
 ### Two carve-outs worth knowing
 
 1. **Per-call identity stays explicit.** `User` is the one piece the adapter can't infer from env, because it's per-request, not per-process. One line wrapping each call (`user=User(...)` kwarg on adapters, `async with User(...)` for native).

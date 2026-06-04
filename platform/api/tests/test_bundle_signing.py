@@ -179,7 +179,6 @@ def test_backfill_signs_seeded_agents(session, signer) -> None:
     """Seeded agents start bundle-less; backfill compiles + signs them so
     they're served via WASM on the first request, not just after an edit."""
     from sqlmodel import select
-    from models import Agent
 
     sign, public_raw = signer
 

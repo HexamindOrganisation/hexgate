@@ -182,7 +182,16 @@ def _verify_local_source_signature_policy(
 def _announce_local_override(
     bundle: PolicyBundle, source: PolicySource, override_path: str
 ) -> None:
-    """Loud stderr line so devs notice when the local override is active."""
+    """Loud stderr line so devs notice when the local override is active.
+
+    Also surfaces an explicit "signature NOT verified" warning when a
+    signed bundle is loaded without a configured pubkey — without the
+    warning the dev sees "signed" in the log and reasonably assumes
+    authenticity was checked. Strict mode
+    (``FORTIFY_BUNDLE_REQUIRE_SIGNATURE=true``) would already have
+    refused the load via :func:`_resolve_pubkey_for_verification`; the
+    permissive default just emits the heads-up here.
+    """
     import sys
 
     short = bundle.wasm_hash[:12] if bundle.wasm_hash else "?"
@@ -193,6 +202,15 @@ def _announce_local_override(
         f"{override_path} (wasm_hash={short}, {signed})",
         file=sys.stderr,
     )
+
+    # Signed-but-unverified is permissive-mode only; strict mode would
+    # have raised in _resolve_pubkey_for_verification before we got here.
+    if bundle.is_signed and not os.environ.get(_BUNDLE_PUBKEY_ENV_VAR):
+        print(
+            f"[fortify] warning: override bundle is signed but "
+            f"{_BUNDLE_PUBKEY_ENV_VAR} is unset — signature NOT verified.",
+            file=sys.stderr,
+        )
 
 
 def _local_policy_override() -> tuple[PolicyBundle, PolicySource] | None:
