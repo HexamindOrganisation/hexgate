@@ -1,9 +1,176 @@
 from datetime import datetime, timezone
 from enum import StrEnum
-from typing import Any, Literal, Optional
+from typing import Annotated, Any, Literal, Optional
 from uuid import UUID
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, EmailStr, Field, StringConstraints, field_validator
+
+
+# ---------------------------------------------------------------------------
+# M3 Phase 4 — Organization wire shapes
+# ---------------------------------------------------------------------------
+
+
+class OrgRead(BaseModel):
+    """Shared base — what an org looks like over the wire."""
+
+    id: str
+    slug: str
+    name: str
+    created_at: datetime
+
+
+class OrgWithRole(OrgRead):
+    """Org enriched with the caller's role. Returned by ``GET /v1/orgs``
+    so the dashboard knows which actions the active user can take in
+    each listed org without a second round-trip."""
+
+    role: str  # "owner" | "admin" | "member"
+
+
+class OrgCreate(BaseModel):
+    """``POST /v1/orgs`` body.
+
+    ``slug`` is optional — when omitted, the server derives one from
+    ``name`` (sanitised + collision-fallback). Constraints match
+    DNS-label rules + a 32-char ceiling so the slug fits comfortably
+    in any URL we'd ever render.
+    """
+
+    name: str = Field(min_length=1, max_length=64)
+    slug: Optional[str] = Field(
+        default=None,
+        min_length=1,
+        max_length=32,
+        # Lowercase letters, digits, hyphens. Must start with a letter
+        # and not end with a hyphen — matches DNS-label conventions so
+        # the slug can later double as a hostname/subdomain.
+        pattern=r"^[a-z][a-z0-9-]*[a-z0-9]$|^[a-z]$",
+    )
+
+
+class OrgUpdate(BaseModel):
+    """``PATCH /v1/orgs/{id}`` body. Both fields optional; omitted
+    fields are left unchanged on the row."""
+
+    name: Optional[str] = Field(default=None, min_length=1, max_length=64)
+    slug: Optional[str] = Field(
+        default=None,
+        min_length=1,
+        max_length=32,
+        pattern=r"^[a-z][a-z0-9-]*[a-z0-9]$|^[a-z]$",
+    )
+
+
+class MemberRead(BaseModel):
+    """Row in ``GET /v1/orgs/{org_id}/members``.
+
+    Keeps ``email`` on the row even though the relationship is on
+    ``user_id`` — the dashboard's member list renders ``<email> · <role>``
+    per row, so denormalizing the email here saves a JOIN-per-row
+    on the frontend.
+    """
+
+    user_id: str
+    email: str
+    role: str  # "owner" | "admin" | "member"
+    joined_at: datetime
+
+
+class MemberUpdate(BaseModel):
+    """``PATCH /v1/orgs/{id}/members/{user_id}`` body.
+
+    Only ``role`` is mutable — promoting / demoting an existing
+    member. Adding a member happens via the invitation flow (Phase 4
+    step 4); removing is ``DELETE`` (step 3); changing the user's
+    email is a self-service action on the user itself, not here.
+    """
+
+    role: str = Field(pattern="^(owner|admin|member)$")
+
+
+# ---------------------------------------------------------------------------
+# M3 Phase 4 step 4 — Invitations
+# ---------------------------------------------------------------------------
+
+
+class InvitationCreate(BaseModel):
+    """``POST /v1/orgs/{org_id}/invites`` body."""
+
+    email: EmailStr
+    role: str = Field(pattern="^(owner|admin|member)$")
+
+
+class InvitationRead(BaseModel):
+    """Row in ``GET /v1/orgs/{org_id}/invites`` — pending invitations
+    visible to org admins/owners.
+
+    The invitation ``id`` IS exposed here despite doubling as the
+    magic-link token. Reasoning: the strict email-match guard on
+    ``POST /invites/{id}/accept`` is the load-bearing protection —
+    even with the URL, only the invited email's signed-in user can
+    accept. Hiding the id from this admin-only list was earlier
+    defense-in-depth, but the dashboard needs to address invitations
+    to cancel them, and adding a parallel "DELETE by email" endpoint
+    just to avoid surfacing the id would cost more code than it buys.
+    """
+
+    id: str
+    email: str
+    role: str
+    invited_by_email: str
+    expires_at: datetime
+    created_at: datetime
+
+
+class ProjectCreate(BaseModel):
+    """``POST /v1/orgs/{org_id}/projects`` body. Name only — projects
+    don't have user-visible slugs today; dashboards address by name,
+    the API by UUID. Slugs can land later when a URL like
+    ``/orgs/acme/projects/customer-bot`` becomes a need."""
+
+    name: str = Field(min_length=1, max_length=64)
+
+
+class ProjectRead(BaseModel):
+    """Wire shape for project read endpoints. Mirrors the columns the
+    dashboard cares about on the row — the WASM bundle and version
+    fields live on the existing ``AgentRead`` shape for individual
+    agents, not here."""
+
+    id: str
+    org_id: str
+    name: str
+    created_at: datetime
+
+
+class ProjectUpdate(BaseModel):
+    """``PATCH /v1/projects/{project_id}`` body. Rename only for now;
+    moving a project to a different org is its own larger feature
+    (transfer + ownership change + member-access reconciliation) that
+    doesn't land in Phase 4."""
+
+    name: str = Field(min_length=1, max_length=64)
+
+
+class InvitationPreview(BaseModel):
+    """``GET /v1/invites/{id}`` response — what the invitee sees on
+    the accept landing page before clicking through.
+
+    Public-readable: the invite id is unguessable (UUID v4) so anyone
+    with the link can preview it. Includes the org's name/slug so the
+    invitee knows what they're joining without needing an account
+    yet. The accept POST is what requires authentication + a matching
+    email.
+    """
+
+    email: str
+    role: str
+    invited_by_email: str
+    org_id: str
+    org_name: str
+    org_slug: str
+    expires_at: datetime
 
 
 class TokenMintRequest(BaseModel):
@@ -28,6 +195,22 @@ class TokenMintResponse(BaseModel):
     masked: str
     scopes: list[str]
     created_at: datetime
+
+
+class KeyIntrospection(BaseModel):
+    """``GET /v1/me/key`` response — what a fortify key resolves to.
+
+    Used by the CLI to look up its own context at startup (project, env,
+    scopes) without parsing the envelope. The token never round-trips —
+    only its descriptive metadata. Authentication is the bearer itself,
+    so possessing the key proves the right to read its description.
+    """
+
+    token_id: str
+    name: str
+    project_id: str
+    env: str  # "test" | "live"
+    scopes: list[str]
 
 
 class AgentRead(BaseModel):
@@ -187,7 +370,10 @@ class DecisionEvent(AuditEnvelope):
     role:       str       = Field(default="", max_length=256)
     error_type: str       = Field(default="", max_length=64)
     reason:     str       = Field(default="", max_length=4096)
-    violations: list[str] = Field(default_factory=list, max_length=64)
+    # Per-item cap so 64 unbounded strings can't smuggle a multi-MB body.
+    violations: list[Annotated[str, StringConstraints(max_length=1024)]] = Field(
+        default_factory=list, max_length=64
+    )
     # Byte caps enforced after serialization in audit.insert_decision.
     hint:       Optional[dict] = None
     arguments:  Optional[dict] = None

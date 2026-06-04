@@ -8,7 +8,9 @@ import {
   type InputSchema,
   type ToolDefinition,
 } from '@/lib/api'
+import { useProjectScoped } from '@/lib/active'
 import { Badge } from '@/components/ui/badge'
+import { NoProjectEmptyState } from '@/components/NoProjectEmptyState'
 
 /**
  * /agents — read-only manifest view.
@@ -23,11 +25,19 @@ import { Badge } from '@/components/ui/badge'
  * manifest registration goes through the SDK's ``fortify register``.
  */
 export function AgentsPage() {
+  const scope = useProjectScoped()
   const manifests = useQuery({
-    queryKey: ['agent-manifests'],
-    queryFn: () => api.listAgentManifests(),
+    queryKey: ['agent-manifests', scope.projectId],
+    queryFn: () => api.listAgentManifests(scope.projectId as string),
+    enabled: !!scope.projectId,
   })
   const [selectedName, setSelectedName] = useState<string | null>(null)
+
+  // Switching projects clears the selected agent — the previous
+  // project's agent names mean nothing in the new project.
+  useEffect(() => {
+    setSelectedName(null)
+  }, [scope.projectId])
 
   useEffect(() => {
     if (!selectedName && manifests.data && manifests.data.length > 0) {
@@ -36,6 +46,10 @@ export function AgentsPage() {
   }, [manifests.data, selectedName])
 
   const active = manifests.data?.find((m) => m.name === selectedName)
+
+  if (scope.status === 'no-project') {
+    return <NoProjectEmptyState resource="agents" />
+  }
 
   return (
     <div className="-mx-8 -my-6 h-[calc(100vh-56px)] flex flex-col overflow-hidden">

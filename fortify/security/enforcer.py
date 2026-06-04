@@ -8,6 +8,7 @@ contextvar.
 
 from __future__ import annotations
 
+import copy
 from collections.abc import Mapping
 from typing import Any
 
@@ -50,7 +51,14 @@ class PolicyEnforcer:
         was injected."""
         user = get_current_user()
         role = user.role if user is not None else None
-        args_snapshot = dict(arguments)
+        # Deep-copy when auditing: emission is async, so a shallow copy
+        # would let the caller mutate nested args before the payload is
+        # serialized, making the audit record lie about what was decided.
+        args_snapshot = (
+            copy.deepcopy(dict(arguments))
+            if self._audit_sender is not None
+            else dict(arguments)
+        )
 
         verdict = self.policy.evaluate(
             role=role, tool=tool_name, args=args_snapshot

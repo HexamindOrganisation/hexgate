@@ -1,7 +1,9 @@
 """AuditEvent.as_payload() field mapping for the platform's audit endpoint."""
 from __future__ import annotations
 
-from fortify.audit import AuditEvent
+import json
+
+from fortify.audit import MAX_ARGS_BYTES, AuditEvent
 from fortify.security.decision import Decision, DecisionOutcome
 
 
@@ -24,8 +26,8 @@ def test_as_payload_full_payload() -> None:
     ev = AuditEvent(decision=d, user_id="alice", session_id="sess_1")
     wire = ev.as_payload()
 
-    assert wire["event_id"] == str(d.event_id)
-    assert wire["occurred_at"] == d.occurred_at.isoformat()
+    assert wire["event_id"] == str(ev.event_id)
+    assert wire["occurred_at"] == ev.occurred_at.isoformat()
     assert wire["agent_name"] == "researcher"
     assert wire["tool_name"] == "read_file"
     assert wire["outcome"] == "deny"
@@ -63,7 +65,45 @@ def test_as_payload_violations_tuple_serializes_as_list() -> None:
     assert isinstance(wire["violations"], list)
 
 
-def test_event_id_and_occurred_at_unique_per_decision() -> None:
+def test_as_payload_redacts_sensitive_keys_recursively() -> None:
+    args = {
+        "path": "/x",
+        "Password": "hunter2",
+        "config": {"api_key": "sk-123", "mode": "safe"},
+        "headers": [{"AUTHORIZATION": "Bearer abc"}, {"trace": "t1"}],
+    }
+    wire = AuditEvent(decision=_decision(arguments=args)).as_payload()
+    assert wire["arguments"] == {
+        "path": "/x",
+        "Password": "[REDACTED]",
+        "config": {"api_key": "[REDACTED]", "mode": "safe"},
+        "headers": [{"AUTHORIZATION": "[REDACTED]"}, {"trace": "t1"}],
+    }
+
+
+def test_as_payload_redaction_does_not_mutate_decision_arguments() -> None:
+    d = _decision(arguments={"secret": "s3cr3t", "nested": {"token": "t"}})
+    AuditEvent(decision=d).as_payload()
+    assert d.arguments == {"secret": "s3cr3t", "nested": {"token": "t"}}
+
+
+def test_as_payload_truncates_oversize_arguments_under_platform_cap() -> None:
+    big = {"data": "x" * (MAX_ARGS_BYTES * 2)}
+    wire = AuditEvent(decision=_decision(arguments=big)).as_payload()
+    args = wire["arguments"]
+    assert args["_truncated"] is True
+    assert args["original_bytes"] > MAX_ARGS_BYTES
+    assert args["preview"].startswith('{"data": "xxx')
+    # The wire form must fit the platform cap, measured as the platform does.
+    assert len(json.dumps(args, default=str).encode("utf-8")) <= MAX_ARGS_BYTES
+
+
+def test_as_payload_small_arguments_pass_through_untruncated() -> None:
+    wire = AuditEvent(decision=_decision(arguments={"path": "/x"})).as_payload()
+    assert wire["arguments"] == {"path": "/x"}
+
+
+def test_event_id_and_occurred_at_unique_per_event() -> None:
     w1 = AuditEvent(decision=_decision()).as_payload()
     w2 = AuditEvent(decision=_decision()).as_payload()
     assert w1["event_id"] != w2["event_id"]

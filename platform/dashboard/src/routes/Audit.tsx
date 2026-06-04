@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
 import { keepPreviousData, useQuery } from '@tanstack/react-query'
 import { api, type AuditDecisionRow, type AuditOutcome } from '@/lib/api'
+import { useProjectScoped } from '@/lib/active'
+import { NoProjectEmptyState } from '@/components/NoProjectEmptyState'
 import { Icon } from '@/components/audit/icon'
 import {
   AreaChart,
@@ -154,6 +156,8 @@ function DetailDrawer({
 const EMPTY_FILTERS: Filters = { agent: '', role: '', tool: '', outcome: '', range: '30d' }
 
 export function AuditPage() {
+  const projectScope = useProjectScoped()
+  const projectId = projectScope.projectId
   const [f, setFState] = useState<Filters>(EMPTY_FILTERS)
   const [sel, setSel] = useState<AuditDecisionRow | null>(null)
   const [tableLimit, setTableLimit] = useState(40)
@@ -169,33 +173,41 @@ export function AuditPage() {
 
   // Range-only (unscoped) summary: filter dropdown options + the "X of Y" total.
   const optionsQ = useQuery({
-    queryKey: ['audit', 'options', f.range],
-    queryFn: () => api.getAuditSummary({ window: f.range }),
+    queryKey: ['audit', 'options', projectId, f.range],
+    enabled: !!projectId,
+    queryFn: () => api.getAuditSummary({ window: f.range }, projectId as string),
   })
   // Scoped summary/timeseries: KPIs, donut, area, breakdown.
   const summaryQ = useQuery({
-    queryKey: ['audit', 'summary', scope],
-    queryFn: () => api.getAuditSummary(scope),
+    queryKey: ['audit', 'summary', projectId, scope],
+    enabled: !!projectId,
+    queryFn: () => api.getAuditSummary(scope, projectId as string),
     placeholderData: keepPreviousData,
     refetchInterval: 30_000,
   })
   const tsQ = useQuery({
-    queryKey: ['audit', 'ts', scope],
-    queryFn: () => api.getAuditTimeseries(scope),
+    queryKey: ['audit', 'ts', projectId, scope],
+    enabled: !!projectId,
+    queryFn: () => api.getAuditTimeseries(scope, projectId as string),
     placeholderData: keepPreviousData,
     refetchInterval: 30_000,
   })
   const listFilters = { ...scope, outcome: f.outcome || undefined, limit: tableLimit }
   const listQ = useQuery({
-    queryKey: ['audit', 'list', listFilters],
-    queryFn: () => api.listAuditDecisions(listFilters),
+    queryKey: ['audit', 'list', projectId, listFilters],
+    enabled: !!projectId,
+    queryFn: () => api.listAuditDecisions(listFilters, projectId as string),
     placeholderData: keepPreviousData,
     refetchInterval: 30_000,
   })
   const relatedQ = useQuery({
-    queryKey: ['audit', 'session', f.range, sel?.session_id],
-    enabled: !!sel?.session_id,
-    queryFn: () => api.listAuditDecisions({ window: f.range, session_id: sel!.session_id, limit: 12 }),
+    queryKey: ['audit', 'session', projectId, f.range, sel?.session_id],
+    enabled: !!sel?.session_id && !!projectId,
+    queryFn: () =>
+      api.listAuditDecisions(
+        { window: f.range, session_id: sel!.session_id, limit: 12 },
+        projectId as string,
+      ),
   })
 
   const summary = summaryQ.data
@@ -240,6 +252,10 @@ export function AuditPage() {
     a.download = 'decisions.jsonl'
     a.click()
     URL.revokeObjectURL(url)
+  }
+
+  if (projectScope.status === 'no-project') {
+    return <NoProjectEmptyState resource="audit events" />
   }
 
   return (

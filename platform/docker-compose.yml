@@ -5,10 +5,10 @@ services:
     image: clickhouse/clickhouse-server:24.10
     container_name: fortify-clickhouse
     ports:
-      # Offset from the 8123/9000 defaults so we coexist with other local
-      # ClickHouse instances (e.g. a Langfuse-bundled one).
-      - "8124:8123"
-      - "9001:9000"
+      # Offset from the 8123/9000 defaults to coexist with other local
+      # instances; loopback-only since the dev credentials are committed.
+      - "127.0.0.1:8124:8123"
+      - "127.0.0.1:9001:9000"
     volumes:
       - clickhouse-data:/var/lib/clickhouse
       # Applied once on an empty data volume; not a migration system.
@@ -17,7 +17,7 @@ services:
       # LOCAL DEV ONLY — never reuse these credentials anywhere deployed.
       CLICKHOUSE_DB: fortify_audit
       CLICKHOUSE_USER: fortify
-      CLICKHOUSE_PASSWORD: fortify-dev-password
+      CLICKHOUSE_PASSWORD: ${FORTIFY_CLICKHOUSE_PASSWORD:-fortify-dev-password}
       CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
     ulimits:
       nofile:

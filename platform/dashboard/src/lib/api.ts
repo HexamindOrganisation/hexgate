@@ -1,16 +1,80 @@
-export const DEFAULT_PROJECT_ID = 'support-bot'
+/** Routes that are reachable without a session cookie — never redirect
+ * away from these on a 401, otherwise we'd bounce the sign-in form itself
+ * back to /sign-in in a loop when the user has bad credentials. */
+const PUBLIC_AUTH_PATHS = [
+  '/sign-in',
+  '/sign-up',
+  '/forgot-password',
+  '/reset-password',
+  '/verify-email',
+]
+
+/** Thrown by ``request`` when the backend returns 401, after the global
+ * "redirect to /sign-in" side-effect has fired. Tests assert against the
+ * error type; production code rarely catches it (the redirect already
+ * happened). */
+export class UnauthenticatedError extends Error {
+  constructor(message = 'not authenticated') {
+    super(message)
+    this.name = 'UnauthenticatedError'
+  }
+}
+
+/** Thrown for any non-2xx response other than 401 — carries the parsed
+ * detail when the backend returns one (FastAPI Users speaks JSON with
+ * a ``detail`` field). Fields are declared explicitly (not via TS
+ * constructor parameter properties) because the project's tsconfig
+ * enables ``erasableSyntaxOnly``. */
+export class ApiError extends Error {
+  readonly status: number
+  readonly detail: unknown
+
+  constructor(status: number, detail: unknown, message: string) {
+    super(message)
+    this.name = 'ApiError'
+    this.status = status
+    this.detail = detail
+  }
+}
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, {
     ...init,
+    // ``include`` so the fortify_session cookie rides on cross-origin
+    // dev (vite on 5173 → api on 8000) and on prod where the dashboard
+    // and API may live on different subdomains.
+    credentials: 'include',
     headers: {
       'Content-Type': 'application/json',
       ...(init?.headers ?? {}),
     },
   })
+  if (res.status === 401) {
+    // Single global redirect — every component that does a request gets
+    // sent to sign-in if their session expired. Public auth routes are
+    // exempt: a 401 there is just "wrong password", surface it normally.
+    const onAuthPage = PUBLIC_AUTH_PATHS.some((p) =>
+      window.location.pathname.startsWith(p),
+    )
+    if (!onAuthPage) {
+      window.location.href = '/sign-in'
+    }
+    throw new UnauthenticatedError()
+  }
   if (!res.ok) {
-    const body = await res.text().catch(() => '')
-    throw new Error(`${res.status} ${res.statusText}: ${body}`)
+    let detail: unknown
+    let bodyText = ''
+    try {
+      bodyText = await res.text()
+      detail = bodyText ? JSON.parse(bodyText) : null
+    } catch {
+      detail = bodyText
+    }
+    const message =
+      typeof detail === 'object' && detail !== null && 'detail' in detail
+        ? String((detail as { detail: unknown }).detail)
+        : `${res.status} ${res.statusText}`
+    throw new ApiError(res.status, detail, message)
   }
   if (res.status === 204) return undefined as T
   return (await res.json()) as T
@@ -205,33 +269,39 @@ function qs(params: Record<string, string | number | undefined>): string {
   return str ? `?${str}` : ''
 }
 
+/**
+ * Project-scoped API surface. ``projectId`` is required on every method
+ * — there's no fallback constant. Callers read it from
+ * :func:`useProjectScoped` and the page only mounts these calls once
+ * the scope resolves to ``ready``.
+ */
 export const api = {
-  listTokens: (projectId = DEFAULT_PROJECT_ID) =>
+  listTokens: (projectId: string) =>
     request<TokenListItem[]>(`/v1/projects/${projectId}/tokens`),
 
-  mintToken: (body: TokenMintRequest, projectId = DEFAULT_PROJECT_ID) =>
+  mintToken: (body: TokenMintRequest, projectId: string) =>
     request<TokenMintResponse>(`/v1/projects/${projectId}/tokens`, {
       method: 'POST',
       body: JSON.stringify(body),
     }),
 
-  revokeToken: (tokenId: string, projectId = DEFAULT_PROJECT_ID) =>
+  revokeToken: (tokenId: string, projectId: string) =>
     request<void>(`/v1/projects/${projectId}/tokens/${tokenId}`, {
       method: 'DELETE',
     }),
 
-  listAgents: (projectId = DEFAULT_PROJECT_ID) =>
+  listAgents: (projectId: string) =>
     request<AgentRead[]>(`/v1/projects/${projectId}/agents`),
 
-  listAgentManifests: (projectId = DEFAULT_PROJECT_ID) =>
+  listAgentManifests: (projectId: string) =>
     request<AgentManifestView[]>(
       `/v1/projects/${projectId}/agents/manifest`,
     ),
 
-  getAgent: (name: string, projectId = DEFAULT_PROJECT_ID) =>
+  getAgent: (name: string, projectId: string) =>
     request<AgentRead>(`/v1/projects/${projectId}/agents/${name}`),
 
-  updateAgent: (name: string, body: AgentUpdate, projectId = DEFAULT_PROJECT_ID) =>
+  updateAgent: (name: string, body: AgentUpdate, projectId: string) =>
     request<AgentRead>(`/v1/projects/${projectId}/agents/${name}`, {
       method: 'PUT',
       body: JSON.stringify(body),
@@ -240,27 +310,24 @@ export const api = {
   validatePolicy: (
     name: string,
     policy_yaml: string,
-    projectId = DEFAULT_PROJECT_ID,
+    projectId: string,
   ) =>
     request<ValidatePolicyResponse>(
       `/v1/projects/${projectId}/agents/${name}/validate`,
       { method: 'POST', body: JSON.stringify({ policy_yaml }) },
     ),
 
-  getAuditSummary: (scope: AuditScope = {}, projectId = DEFAULT_PROJECT_ID) =>
+  getAuditSummary: (scope: AuditScope, projectId: string) =>
     request<AuditSummary>(
       `/v1/projects/${projectId}/audit/summary${qs({ ...scope })}`,
     ),
 
-  getAuditTimeseries: (scope: AuditScope = {}, projectId = DEFAULT_PROJECT_ID) =>
+  getAuditTimeseries: (scope: AuditScope, projectId: string) =>
     request<AuditTimeseriesPoint[]>(
       `/v1/projects/${projectId}/audit/timeseries${qs({ ...scope })}`,
     ),
 
-  listAuditDecisions: (
-    filters: AuditDecisionFilters = {},
-    projectId = DEFAULT_PROJECT_ID,
-  ) =>
+  listAuditDecisions: (filters: AuditDecisionFilters, projectId: string) =>
     request<AuditDecisionPage>(
       `/v1/projects/${projectId}/audit/decisions${qs({ ...filters })}`,
     ),

@@ -72,19 +72,23 @@ it never changes, blocks, or fails the decision the agent acts on.
 
 ## 2. The audit record
 
-### 2.1 Stamped at the decision site
+### 2.1 Stamped at the emission site
 
-`fortify/security/decision.py` — `Decision` is a frozen dataclass. Two fields
-exist specifically for audit and are stamped at construction:
+`fortify/audit.py` — `AuditEvent` stamps the two audit identifiers at
+construction. They live on the event, not on `Decision`: they exist only for
+audit emission, and the no-audit path never constructs an event (so a
+`decide()` call without a sender mints neither).
 
 | Field | Type | Source |
 |-------|------|--------|
-| `event_id` | `UUID` | `uuid4()` per decision — the idempotency key end-to-end |
+| `event_id` | `UUID` | `uuid4()` per event — the idempotency key end-to-end |
 | `occurred_at` | `datetime` (UTC) | `datetime.now(timezone.utc)` at construction |
 
-The remaining decision fields (`agent_name`, `tool_name`, `outcome`, `role`,
-`reason`, `error_type`, `violations`, `hint`, `arguments`) are populated by
-`Decision.from_verdict()` from the policy engine's `Verdict` plus host context.
+The enforcer builds the `AuditEvent` immediately after the `Decision`, so
+`occurred_at` is decision time for practical purposes. The decision fields
+(`agent_name`, `tool_name`, `outcome`, `role`, `reason`, `error_type`,
+`violations`, `hint`, `arguments`) are populated by `Decision.from_verdict()`
+from the policy engine's `Verdict` plus host context.
 
 ### 2.2 Outcome and error_type
 
@@ -188,8 +192,10 @@ Each adapter wrapper (`wrap_langchain_agent`, `wrap_openai_agent`,
 local runs work without an explicit key.
 
 `async shutdown()` drains in-flight tasks and closes every sender's HTTP client.
-It is safe to call multiple times and is the recommended teardown hook; absent
-it, the httpx client is closed by GC at process exit.
+It is safe to call multiple times and is the recommended teardown hook. Absent
+it, background sends still pending when the event loop tears down are
+**cancelled, not finished** — events emitted shortly before process exit are
+lost. GC closing the httpx client does not flush anything.
 
 | Function | Purpose |
 |----------|---------|
@@ -315,15 +321,25 @@ SETTINGS index_granularity = 8192;
 
 ## 6. Privacy & data-handling notes
 
-- **`arguments` carries raw tool inputs** (paths, payloads, possibly secrets or
-  PII). It is transmitted to the platform and stored (compressed) for up to 90
-  days. The default `base_url` is **plaintext `http://localhost:8000`**;
-  production deployments must set `FORTIFY_API_URL` to a TLS endpoint. Consider
-  redaction/allowlisting of `arguments` before relying on this in production.
-- **Truncation is lossy and asymmetric.** The SDK may already truncate
-  `arguments`; the platform additionally **rejects** (413) oversize payloads
-  rather than truncating. An over-cap decision is therefore *not stored at all*
-  unless the SDK trims it first.
+- **`arguments` carries tool inputs** (paths, payloads, possibly PII). It is
+  transmitted to the platform and stored (compressed) for up to 90 days. The
+  default `base_url` is **plaintext `http://localhost:8000`**; production
+  deployments must set `FORTIFY_API_URL` to a TLS endpoint.
+- **Default key-name redaction, always on.** `AuditEvent.as_payload()` replaces
+  values whose key matches `password|passwd|secret|token|api[-_]?key|
+  credential|authorization` (case-insensitive, recursive into nested
+  dicts/lists) with `"[REDACTED]"` before transmission. **This is a seatbelt,
+  not a guarantee**: values sensitive by *content* rather than key name — SQL
+  strings, email bodies, free text — are captured verbatim. Operators whose
+  tools carry such data need their own redaction before relying on this in
+  production.
+- **SDK truncation at the platform cap.** `as_payload()` measures `arguments`
+  as the platform does (JSON, `default=str`); over 8 KiB it replaces the dict
+  with `{"_truncated": true, "original_bytes": N, "preview": <JSON prefix>}`
+  sized to fit the cap. Lossy, but the event is stored — the platform
+  **rejects** (413) oversize payloads, so an untrimmed over-cap decision would
+  not be stored at all. `hint` (4 KiB cap) is policy-engine-generated and is
+  *not* SDK-trimmed.
 
 ---
 
@@ -389,8 +405,9 @@ columns make these scans cheap. All time-axis logic keys off `occurred_at`
 1. **Read path auth** — the read endpoints are now project-scoped (§7), but
    still **unauthenticated**: they need the `read_audit` scope gate (a
    `TODO(auth)` marker is in place). `project_id` filtering is done.
-2. **`arguments` redaction** — no field-level redaction before transmit/store;
-   relies on byte caps only.
+2. **`arguments` redaction is key-name-only** — the default redactor strips
+   sensitive-keyed values, but content-sensitive values (SQL, email bodies)
+   pass through; no per-tool allow/deny lists or `redact` callable yet.
 3. **Default transport is plaintext HTTP** — safe only for localhost; require
    TLS via `FORTIFY_API_URL` elsewhere.
 4. **Sync agents emit nothing** — `emit()` requires a running loop; sync entry
@@ -400,5 +417,16 @@ columns make these scans cheap. All time-axis logic keys off `occurred_at`
 6. **At-least-once, not exactly-once end to end** — the SDK can drop on
    saturation/network failure (audit is best-effort); `event_id` dedup prevents
    duplicates but not gaps.
+7. **Write path is unscoped within a project** — `POST /v1/audit/decisions`
+   authorizes via `require_project` (signature + project resolution only); any
+   valid SDK bearer for the project can write audit, fetch policy, and register
+   agents interchangeably. The biscuit attenuation primitive already exists
+   (`platform/api/biscuits.py`); an `emit_audit` scope fact + endpoint check is
+   the natural fix. Note existing minted tokens won't carry the fact — needs a
+   deprecation window or re-mint.
+8. **No rate limit or volume alerting on ingest** — an exfiltrated key can
+   flood the log to bury real activity. Needs a per-project token bucket
+   (`429 + Retry-After`; the SDK already logs-and-drops on ≥400) plus an
+   ingest-volume-per-project alert.
 </content>
 </invoke>

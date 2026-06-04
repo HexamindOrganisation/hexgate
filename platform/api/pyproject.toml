@@ -14,16 +14,34 @@ dependencies = [
     "biscuit-python>=0.4",
     "clickhouse-connect>=0.8",
     "pydantic-settings>=2.5",  # separate package since pydantic v2
+    # Async SQLite driver — required by SQLAlchemy's async engine. SQLite
+    # itself is single-writer; aiosqlite just stops the event loop from
+    # blocking on disk I/O. Future Postgres switch swaps this for asyncpg.
+    "aiosqlite>=0.20",
+    # SQLAlchemy's async engine bridges sync ORM internals to async DB
+    # drivers via greenlet — it's a transitive dep but not auto-installed
+    # on every distribution, so pin it explicitly.
+    "greenlet>=3.0",
     # The control plane compiles + signs policy bundles at save time, so it
     # needs the SDK's compiler (compile_to_rego / compile_to_wasm). Requires
     # the `opa` binary on PATH at runtime. Unpublished local SDK — resolved
     # via [tool.uv.sources] below until it's on an index.
     "fortify",
+    # M3 Phase 3 — user identity. Email/password registration + cookie
+    # sessions + Google OAuth, all wired against our existing async
+    # SQLAlchemy stack via SQLAlchemyUserDatabase. The [sqlalchemy]
+    # extra pulls fastapi-users-db-sqlalchemy in.
+    "fastapi-users[sqlalchemy]>=14.0",
+    # OAuth2 clients (Google for Phase 3c, GitHub etc. later). FastAPI
+    # Users' get_oauth_router consumes any httpx-oauth client uniformly,
+    # so swapping providers is one constructor line.
+    "httpx-oauth>=0.16",
 ]
 
 [dependency-groups]
 dev = [
     "pytest>=8.3",
+    "pytest-asyncio>=0.24",
     "httpx>=0.27",
     "ruff>=0.8",
 ]
@@ -34,6 +52,10 @@ pythonpath = ["."]
 markers = [
     "integration: requires a running ClickHouse (opt-in: `pytest -m integration`)",
 ]
+# Routes are now async; tests await responses through FastAPI's lifespan.
+# `auto` mode means every `async def test_…` runs as an asyncio test
+# without needing a per-test marker.
+asyncio_mode = "auto"
 
 [tool.uv]
 package = false

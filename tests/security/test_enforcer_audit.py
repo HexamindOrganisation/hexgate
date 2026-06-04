@@ -63,6 +63,19 @@ async def test_sender_with_user_populates_envelope_from_user() -> None:
     assert ev.decision is decision      # same Decision instance wrapped
 
 
+def test_caller_mutation_after_decide_does_not_alter_audit_snapshot() -> None:
+    """Audit must snapshot arguments at decision time — nested mutations
+    by the caller after decide() returns must not leak into the event."""
+    sender = _CapturingSender()
+    enforcer = PolicyEnforcer(_StubEngine(), agent_name="r", audit_sender=sender)
+    args = {"config": {"mode": "safe"}, "items": ["a"]}
+    enforcer.decide("read_file", args)
+    args["config"]["mode"] = "mutated"
+    args["items"].append("b")
+    snapshot = sender.events[0].decision.arguments
+    assert snapshot == {"config": {"mode": "safe"}, "items": ["a"]}
+
+
 async def test_user_session_id_none_normalizes_to_empty_string() -> None:
     sender = _CapturingSender()
     enforcer = PolicyEnforcer(_StubEngine(), agent_name="r", audit_sender=sender)

@@ -3,7 +3,11 @@ from __future__ import annotations
 
 from functools import lru_cache
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+_DEV_CLICKHOUSE_PASSWORD = "fortify-dev-password"
+_LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1"}
 
 
 class Settings(BaseSettings):
@@ -13,9 +17,24 @@ class Settings(BaseSettings):
     # 8124 matches platform/docker-compose.yml's host-port offset.
     clickhouse_port:     int  = 8124
     clickhouse_user:     str  = "fortify"
-    clickhouse_password: str  = "fortify-dev-password"
+    clickhouse_password: str  = _DEV_CLICKHOUSE_PASSWORD
     clickhouse_database: str  = "fortify_audit"
     clickhouse_secure:   bool = False
+
+    @model_validator(mode="after")
+    def _refuse_dev_password_on_remote_host(self) -> "Settings":
+        # The dev default keeps `make clickhouse-up` zero-setup, but pointing
+        # it at a remote instance is always a misconfiguration — fail fast.
+        if (
+            self.clickhouse_password == _DEV_CLICKHOUSE_PASSWORD
+            and self.clickhouse_host not in _LOCAL_HOSTS
+        ):
+            raise ValueError(
+                f"clickhouse_host={self.clickhouse_host!r} is non-local but "
+                "clickhouse_password is the committed dev default — set "
+                "FORTIFY_CLICKHOUSE_PASSWORD to the real credential."
+            )
+        return self
 
 
 @lru_cache
