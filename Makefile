@@ -132,7 +132,7 @@ clickhouse-reset: ## Wipe the data volume and re-run init scripts
 
 .PHONY: platform-api-install
 platform-api-install: ## Install platform API deps (first time)
-	cd platform/api && uv sync --extra dev
+	cd platform/api && uv sync --group dev
 
 .PHONY: platform-api
 platform-api: ## Run the platform API dev server (FastAPI on :8000)

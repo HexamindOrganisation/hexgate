@@ -1,8 +1,9 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import StrEnum
-from typing import Optional
+from typing import Annotated, Literal, Optional
+from uuid import UUID
 
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, StringConstraints, field_validator
 
 
 # ---------------------------------------------------------------------------
@@ -334,3 +335,51 @@ class AgentManifestView(BaseModel):
     version: Optional[int] = None
     content_hash: Optional[str] = None
     updated_at: datetime
+
+
+# --- Audit event ingest ------------------------------------------------------
+
+
+class AuditEnvelope(BaseModel):
+    """Wire envelope shared by every audit event type.
+
+    Narrower than the ClickHouse storage envelope: project_id (bearer),
+    received_at (column default), and agent_version_id (platform lookup)
+    are server-resolved and never trusted from the body.
+    """
+
+    event_id:    UUID
+    occurred_at: datetime
+    agent_name:  str = Field(min_length=1, max_length=256)
+    session_id:  str = Field(default="", max_length=128)
+    user_id:     str = Field(default="", max_length=256)
+
+    @field_validator("occurred_at")
+    @classmethod
+    def _assume_utc(cls, v: datetime) -> datetime:
+        # Assume UTC for naive input so downstream tz-aware comparisons can't
+        # raise TypeError; matches the DateTime64(3, 'UTC') storage column.
+        return v if v.tzinfo is not None else v.replace(tzinfo=timezone.utc)
+
+
+class DecisionEvent(AuditEnvelope):
+    """One policy decision; mirrors the policy_decision table."""
+
+    tool_name:  str = Field(min_length=1, max_length=256)
+    outcome:    Literal["allow", "deny", "needs_approval"]
+    role:       str       = Field(default="", max_length=256)
+    error_type: str       = Field(default="", max_length=64)
+    reason:     str       = Field(default="", max_length=4096)
+    # Per-item cap so 64 unbounded strings can't smuggle a multi-MB body.
+    violations: list[Annotated[str, StringConstraints(max_length=1024)]] = Field(
+        default_factory=list, max_length=64
+    )
+    # Byte caps enforced after serialization in audit.insert_decision.
+    hint:       Optional[dict] = None
+    arguments:  Optional[dict] = None
+
+
+class DecisionAccepted(BaseModel):
+    """Response shape for POST /v1/audit/decisions."""
+
+    event_id: UUID

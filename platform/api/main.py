@@ -1,8 +1,10 @@
 import base64
 import hashlib
+import logging
 from contextlib import asynccontextmanager
 from urllib.parse import unquote
 
+from clickhouse_connect.driver.exceptions import ClickHouseError, OperationalError
 from fastapi import (
     APIRouter,
     Depends,
@@ -26,12 +28,19 @@ from models import (
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
+from audit import (
+    AuditEventOutOfWindow,
+    AuditPayloadTooLarge,
+    insert_decision,
+    validate_event_window,
+)
 from biscuits import (
     TokenError,
     TokenSignatureError,
     parse_envelope,
     verify_token,
 )
+from clickhouse import get_clickhouse, ping as clickhouse_ping
 from db import async_session_factory, get_session, init_db
 from keystore import FileKeyStore
 from relay import registry
@@ -40,6 +49,8 @@ from schemas import (
     AgentManifestView,
     AgentRead,
     AgentUpdate,
+    DecisionAccepted,
+    DecisionEvent,
     InvitationCreate,
     InvitationPreview,
     InvitationRead,
@@ -68,6 +79,7 @@ from services import (
     ensure_default_project,
     find_token_by_secret,
     get_agent,
+    get_latest_agent_version_id,
     get_latest_agent_versions_map,
     list_agents,
     list_dev_tokens,
@@ -79,6 +91,7 @@ from services import (
 
 
 keystore = FileKeyStore()
+_log = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -96,6 +109,11 @@ async def lifespan(app_: FastAPI):
         # Backfill signed bundles for seeded agents so they're served via
         # WASM on the first request, not just after their first edit.
         await backfill_bundles(session, keystore.sign)
+    # Don't fail startup on unreachable ClickHouse — /ready surfaces it.
+    if not clickhouse_ping():
+        _log.warning(
+            "ClickHouse unreachable at startup; /v1/audit/decisions will 503 until reachable"
+        )
     yield
 
 
@@ -571,10 +589,31 @@ async def require_project_admin(
     return user, membership
 
 
+def _readiness() -> tuple[dict[str, str], int]:
+    """Build the readiness body and its HTTP status. Returns 503 when ClickHouse
+    is unreachable so probes deroute the pod instead of sending it ingest traffic
+    that would only 503 — k8s keys off the status code, not the body."""
+    reachable = clickhouse_ping()
+    body = {
+        "status":     "ok" if reachable else "unavailable",
+        "service":    "fortify-api",
+        "clickhouse": "ok" if reachable else "unreachable",
+    }
+    return body, 200 if reachable else 503
+
+
 @app.get("/health")
 async def health() -> dict[str, str]:
-    """Unversioned liveness probe."""
+    """Liveness — must not touch downstream deps, or an outage cascades into
+    restarts. Dependency checks live in /ready."""
     return {"status": "ok", "service": "fortify-api"}
+
+
+@app.get("/ready")
+def ready(response: Response) -> dict[str, str]:
+    """Readiness — pings ClickHouse; 503 when unreachable."""
+    body, response.status_code = _readiness()
+    return body
 
 
 v1 = APIRouter(prefix="/v1")
@@ -583,6 +622,12 @@ v1 = APIRouter(prefix="/v1")
 @v1.get("/health")
 async def v1_health() -> dict[str, str]:
     return {"status": "ok", "service": "fortify-api", "version": "v1"}
+
+
+@v1.get("/ready")
+def v1_ready(response: Response) -> dict[str, str]:
+    body, response.status_code = _readiness()
+    return {**body, "version": "v1"}
 
 
 @v1.get("/.well-known/keys")
@@ -955,6 +1000,76 @@ async def api_register_agent(
         content_hash=version.content_hash,
         created=created,
     )
+
+
+def _audit_unavailable() -> HTTPException:
+    return HTTPException(
+        status_code=503,
+        detail="audit log temporarily unavailable",
+        headers={"Retry-After": "5"},
+    )
+
+
+def require_clickhouse():
+    """Resolve the ClickHouse client as a dependency, mapping connect failures
+    to 503 — get_clickhouse() connects eagerly, so without this the raise
+    escapes dependency resolution as an uncaught 500."""
+    try:
+        return get_clickhouse()
+    except ClickHouseError as exc:
+        _log.warning("ClickHouse unreachable resolving audit client: %s", exc)
+        raise _audit_unavailable()
+
+
+@v1.post(
+    "/audit/decisions",
+    response_model=DecisionAccepted,
+    status_code=202,
+)
+async def ingest_decision(
+    body: DecisionEvent,
+    project_id: str = Depends(require_project),
+    session: AsyncSession = Depends(get_session),
+    clickhouse_client=Depends(require_clickhouse),
+) -> DecisionAccepted:
+    """Ingest one policy decision. project_id (bearer), received_at (CH default),
+    and agent_version_id (platform lookup) are server-resolved.
+
+    Idempotency: the SDK SHOULD retry a failed or ambiguous send (503,
+    timeout) with the SAME event_id. The ingest path is idempotent because
+    the storage engine (ReplacingMergeTree, event_id in the sort key)
+    collapses duplicates on background merges — eventual, so counts may
+    briefly include a retry until the next merge. Do NOT mint a fresh
+    event_id per attempt; that turns a retry into a real duplicate.
+    """
+    try:
+        validate_event_window(body.occurred_at)
+    except AuditEventOutOfWindow as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    agent_version_id = await get_latest_agent_version_id(
+        session, project_id, body.agent_name
+    )
+
+    try:
+        insert_decision(
+            clickhouse_client,
+            event=body,
+            project_id=project_id,
+            agent_version_id=agent_version_id,
+        )
+    except AuditPayloadTooLarge as exc:
+        raise HTTPException(status_code=413, detail=str(exc))
+    except OperationalError as exc:  # transient transport failure — retryable
+        _log.warning("audit insert failed (transient): %s", exc)
+        raise _audit_unavailable()
+    except ClickHouseError as exc:  # storage rejected the row — retry won't help
+        _log.error("audit insert rejected by ClickHouse: %s", exc)
+        raise HTTPException(
+            status_code=422, detail="audit event rejected by storage"
+        )
+
+    return DecisionAccepted(event_id=body.event_id)
 
 
 @v1.get("/agents/{name}", response_model=AgentRead)

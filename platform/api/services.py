@@ -884,6 +884,22 @@ async def get_agent(
     return (await session.exec(stmt)).first()
 
 
+async def get_latest_agent_version_id(
+    session: AsyncSession, project_id: str, agent_name: str
+) -> str:
+    """Return the latest AgentVersion.id for (project, agent), or "" if unresolved."""
+    agent = await get_agent(session, project_id, agent_name)
+    if agent is None:
+        return ""
+    stmt = (
+        select(AgentVersion.id)
+        .where(AgentVersion.agent_id == agent.id)
+        .order_by(AgentVersion.version.desc())  # type: ignore[attr-defined]
+        .limit(1)
+    )
+    return (await session.exec(stmt)).first() or ""
+
+
 async def get_latest_agent_versions_map(
     session: AsyncSession, agent_ids: list[str]
 ) -> dict[str, AgentVersion]:
