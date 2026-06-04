@@ -192,8 +192,10 @@ Each adapter wrapper (`wrap_langchain_agent`, `wrap_openai_agent`,
 local runs work without an explicit key.
 
 `async shutdown()` drains in-flight tasks and closes every sender's HTTP client.
-It is safe to call multiple times and is the recommended teardown hook; absent
-it, the httpx client is closed by GC at process exit.
+It is safe to call multiple times and is the recommended teardown hook. Absent
+it, background sends still pending when the event loop tears down are
+**cancelled, not finished** — events emitted shortly before process exit are
+lost. GC closing the httpx client does not flush anything.
 
 | Function | Purpose |
 |----------|---------|

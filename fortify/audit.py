@@ -9,6 +9,7 @@ import asyncio
 import json
 import logging
 import os
+import random
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -198,7 +199,10 @@ class AuditSender:
             try:
                 response = await self._client.post(self._endpoint, json=payload)
                 if response.status_code == 503:
-                    await asyncio.sleep(min(self._http_timeout, 2.0))
+                    # Equal jitter: a fleet of SDKs hitting the same platform
+                    # 503 must not retry in lockstep.
+                    delay = min(self._http_timeout, 2.0)
+                    await asyncio.sleep(random.uniform(delay / 2, delay))
                     response = await self._client.post(self._endpoint, json=payload)
                 if response.status_code >= 400:
                     _log.error(
@@ -234,6 +238,10 @@ _DEFAULT_API_URL = "http://localhost:8000"
 # One sender per resolved api_key. A single process may wrap agents for
 # several tenants/keys, and each must emit with its own bearer token — so
 # senders are keyed by api_key rather than kept as a first-wins singleton.
+# The registry is unbounded and assumes a small, fixed key set per process;
+# a key-per-request pattern would leak one sender + httpx pool per unique
+# key. Such callers must evict explicitly (await sender.close(), then drop
+# the dict entry) or use shutdown().
 _senders: dict[str, AuditSender] = {}
 
 
