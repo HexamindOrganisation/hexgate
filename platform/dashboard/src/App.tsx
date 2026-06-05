@@ -1,11 +1,10 @@
-import { BrowserRouter, Route, Routes } from 'react-router-dom'
+import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
 
 import { AppShell } from '@/components/AppShell'
 import { ProtectedRoute } from '@/components/ProtectedRoute'
 import { AcceptInvitationPage } from '@/routes/AcceptInvitation'
 import { AgentsPage } from '@/routes/Agents'
 import { AuditPage } from '@/routes/Audit'
-import { DashboardPage } from '@/routes/Dashboard'
 import { ForgotPasswordPage } from '@/routes/ForgotPassword'
 import { GraphPage } from '@/routes/Graph'
 import { OrgMembersPage } from '@/routes/OrgMembers'
@@ -55,7 +54,7 @@ export default function App() {
             </ProtectedRoute>
           }
         >
-          <Route index element={<DashboardPage />} />
+          <Route index element={<Navigate to="/agents" replace />} />
           <Route path="agents" element={<AgentsPage />} />
           <Route path="policies" element={<PoliciesPage />} />
           <Route path="graph" element={<GraphPage />} />

@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 from enum import StrEnum
-from typing import Annotated, Literal, Optional
+from typing import Annotated, Any, Literal, Optional
 from uuid import UUID
 
 from pydantic import BaseModel, EmailStr, Field, StringConstraints, field_validator
@@ -383,3 +383,72 @@ class DecisionAccepted(BaseModel):
     """Response shape for POST /v1/audit/decisions."""
 
     event_id: UUID
+
+
+# --- Audit dashboard read models (mirror audit.py return shapes) -------------
+
+AuditWindow = Literal["24h", "7d", "30d", "90d"]
+
+
+class OutcomeCounts(BaseModel):
+    """Decision counts by outcome plus the grand total for a slice."""
+
+    all: int = 0
+    allow: int = 0
+    deny: int = 0
+    needs_approval: int = 0
+
+
+class AuditBreakdownRow(OutcomeCounts):
+    """One agent/role/tool bucket; an empty role keeps its raw ``""`` key
+    (the dashboard renders the "(none)" label — nothing is reserved on
+    the wire)."""
+
+    key: str
+
+
+class AuditSummary(BaseModel):
+    """Totals + breakdowns powering the KPI cards and breakdown panels."""
+
+    totals: OutcomeCounts
+    by_agent: list[AuditBreakdownRow]
+    by_role: list[AuditBreakdownRow]
+    by_tool: list[AuditBreakdownRow]
+
+
+class AuditTimeseriesPoint(BaseModel):
+    """One time bucket of the outcome-over-time chart."""
+
+    bucket: datetime
+    allow: int = 0
+    deny: int = 0
+    needs_approval: int = 0
+
+
+class AuditDecisionRow(BaseModel):
+    """One events-table row; hint/arguments are decoded JSON."""
+
+    event_id: UUID
+    occurred_at: datetime
+    received_at: datetime
+    agent_name: str
+    agent_version_id: str = ""
+    session_id: str = ""
+    user_id: str = ""
+    tool_name: str
+    role: str = ""
+    outcome: str
+    error_type: str = ""
+    reason: str = ""
+    violations: list[str] = Field(default_factory=list)
+    hint: Any = None
+    arguments: Any = None
+
+
+class AuditDecisionPage(BaseModel):
+    """A page of rows; ``total`` is the unpaginated match count."""
+
+    rows: list[AuditDecisionRow]
+    total: int
+    limit: int
+    offset: int

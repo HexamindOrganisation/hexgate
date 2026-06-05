@@ -29,6 +29,9 @@ def get_clickhouse() -> Client:
         compress=True,
         connect_timeout=5,
         send_receive_timeout=30,
+        # No session_id: this client is shared across the request threadpool,
+        # and a session would reject concurrent queries. We use no session state.
+        autogenerate_session_id=False,
     )
 
 

@@ -5,7 +5,6 @@ import {
   FileCode,
   Fingerprint,
   KeyRound,
-  LayoutDashboard,
   LogOut,
   MessageSquareCode,
   Network,
@@ -14,6 +13,7 @@ import {
   Settings2,
   Shield,
   ShieldCheck,
+  type LucideIcon,
 } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
@@ -85,12 +85,11 @@ function useActiveBootstrap(): void {
 }
 
 const workspaceLinks = [
-  { to: '/', label: 'Dashboard', icon: LayoutDashboard, end: true },
   { to: '/agents', label: 'Agents', icon: FileCode },
   { to: '/policies', label: 'Policies', icon: ShieldCheck },
   { to: '/graph', label: 'Graph', icon: Network },
   { to: '/playground', label: 'Playground', icon: MessageSquareCode },
-  { to: '/audit', label: 'Audit', icon: ScrollText, badge: '24h' },
+  { to: '/audit', label: 'Audit', icon: ScrollText },
   { to: '/tokens', label: 'Tokens', icon: KeyRound },
   { to: '/orgs', label: 'Organizations', icon: Building2 },
   { to: '/settings', label: 'Settings', icon: Settings2 },
@@ -111,7 +110,7 @@ function NavItem({
 }: {
   to: string
   label: string
-  icon: typeof LayoutDashboard
+  icon: LucideIcon
   end?: boolean
   badge?: string
   status?: string

@@ -48,9 +48,9 @@ it never changes, blocks, or fails the decision the agent acts on.
 │  fortify_audit.policy_decision   MergeTree, monthly partitions,      │
 │  TTL 90 days, received_at server-stamped                             │
 └──────────────┬───────────────────────────────────────────────────────┘
-               │  GET /v1/audit/decisions?limit=N  (unauth POC read)
+               │  GET /v1/projects/{id}/audit/{summary,timeseries,decisions}
                ▼
-        Dashboard → Audit.tsx (polls, dumps raw rows)
+        Project-scoped aggregation endpoints (read API)
 ```
 
 ### Design principles
@@ -343,19 +343,39 @@ SETTINGS index_granularity = 8192;
 
 ---
 
-## 7. Read path (POC)
+## 7. Read path — aggregation endpoints
 
-- **`GET /v1/audit/decisions?limit=N`** — unauthenticated POC debug read
-  (mirrors the unauth posture of other dashboard endpoints). `limit` is capped
-  to `[1, 500]`. Returns `{"count", "rows"}` with raw `policy_decision` rows
-  ordered by `received_at DESC`; non-JSON-native values (UUID, datetime) are
-  stringified.
-- **Dashboard `Audit.tsx`** fetches `?limit=50` and dumps the rows as formatted
-  JSON. No projection, filtering, or pagination yet.
+The raw `GET /v1/audit/decisions?limit=N` debug dump has been **removed**.
+Reads are now project-scoped aggregation endpoints that group server-side in
+ClickHouse (query-time `GROUP BY`; no rollups/materialized views). The table's
+sort key `(project_id, agent_name, outcome, occurred_at)` and `LowCardinality`
+columns make these scans cheap. All time-axis logic keys off `occurred_at`
+(event time), never `received_at`. See `platform/api/audit.py` (`summarize`,
+`timeseries`, `list_decisions`).
 
-> The read path is explicitly POC-grade: unauthenticated and unscoped by
-> project. It must be gated behind `read_audit`-scoped auth and project scoping
-> before exposure beyond local development.
+| Endpoint | Returns |
+|----------|---------|
+| `GET /v1/projects/{id}/audit/summary?window=` | Totals + denial counts, plus breakdowns by agent / role / tool (one `GROUPING SETS` query). |
+| `GET /v1/projects/{id}/audit/timeseries?window=` | Per-bucket outcome counts (`toStartOfInterval`); bucket size tracks the window. |
+| `GET /v1/projects/{id}/audit/decisions?window=&agent=&role=&outcome=&limit=&offset=` | Filterable detail rows, newest first, with `total` for pagination; `hint`/`arguments` decoded back to objects. |
+
+- **`window`** is `24h` / `7d` / `30d` / `90d`, validated by a `Literal` (bad
+  value → 422) and bounded by the 90-day storage TTL. `role=` (empty value)
+  selects the empty-role bucket; an absent `role` means "no filter". No
+  sentinel string is reserved on the wire — the dashboard's "(none)" is a
+  display label only.
+- **Concurrency.** A client firing several of these reads at once (e.g. a
+  dashboard loading summary + timeseries + decisions together) would otherwise
+  hit "concurrent queries within the same session". The shared, process-global
+  ClickHouse client is created with `autogenerate_session_id=False`
+  (`platform/api/clickhouse.py`) so the thread-safe HTTP pool serves concurrent
+  queries in parallel; this also hardens the ingest path under load.
+
+> Still POC-grade on **auth**: the endpoints are project-scoped (gap #1 partly
+> closed) but not yet gated behind the `read_audit` scope — they carry a
+> `TODO(auth)` marker, matching the unauth posture of the other dashboard reads
+> (`/agents`, `/tokens`). Scope enforcement must land before exposure beyond
+> local development.
 
 ---
 

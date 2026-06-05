@@ -186,6 +186,93 @@ export interface ValidatePolicyResponse {
   errors: PolicyValidationError[]
 }
 
+// --- Audit dashboard (mirrors platform/api/schemas.py) ----------------------
+
+export type AuditWindow = '24h' | '7d' | '30d' | '90d'
+export type AuditOutcome = 'allow' | 'deny' | 'needs_approval'
+
+export interface OutcomeCounts {
+  all: number
+  allow: number
+  deny: number
+  needs_approval: number
+}
+
+/** One agent/role/tool bucket; an empty role keeps its raw `""` key —
+ * the dashboard maps it to the "(none)" display label locally. */
+export interface AuditBreakdownRow extends OutcomeCounts {
+  key: string
+}
+
+export interface AuditSummary {
+  totals: OutcomeCounts
+  by_agent: AuditBreakdownRow[]
+  by_role: AuditBreakdownRow[]
+  by_tool: AuditBreakdownRow[]
+}
+
+/** One time bucket; `bucket` is an ISO string. */
+export interface AuditTimeseriesPoint {
+  bucket: string
+  allow: number
+  deny: number
+  needs_approval: number
+}
+
+/** One events-table row; `hint`/`arguments` are decoded JSON. */
+export interface AuditDecisionRow {
+  event_id: string
+  occurred_at: string
+  received_at: string
+  agent_name: string
+  agent_version_id: string
+  session_id: string
+  user_id: string
+  tool_name: string
+  role: string
+  outcome: AuditOutcome
+  error_type: string
+  reason: string
+  violations: string[]
+  hint: unknown
+  arguments: unknown
+}
+
+export interface AuditDecisionPage {
+  rows: AuditDecisionRow[]
+  total: number
+  limit: number
+  offset: number
+}
+
+/** Scope filters shared by summary/timeseries/list. `undefined` = no
+ * filter; `role: ''` = the no-role bucket (sent as `role=`). */
+export interface AuditScope {
+  window?: AuditWindow
+  agent?: string
+  role?: string
+  tool?: string
+}
+
+/** List filters: scope + table-only outcome/session_id + paging. */
+export interface AuditDecisionFilters extends AuditScope {
+  outcome?: AuditOutcome
+  session_id?: string
+  limit?: number
+  offset?: number
+}
+
+function qs(params: Record<string, string | number | undefined>): string {
+  const search = new URLSearchParams()
+  for (const [key, value] of Object.entries(params)) {
+    // undefined = omit. '' is kept: `role=` (empty value) is meaningful —
+    // it selects the no-role bucket server-side.
+    if (value !== undefined) search.set(key, String(value))
+  }
+  const str = search.toString()
+  return str ? `?${str}` : ''
+}
+
 /**
  * Project-scoped API surface. ``projectId`` is required on every method
  * — there's no fallback constant. Callers read it from
@@ -232,5 +319,20 @@ export const api = {
     request<ValidatePolicyResponse>(
       `/v1/projects/${projectId}/agents/${name}/validate`,
       { method: 'POST', body: JSON.stringify({ policy_yaml }) },
+    ),
+
+  getAuditSummary: (scope: AuditScope, projectId: string) =>
+    request<AuditSummary>(
+      `/v1/projects/${projectId}/audit/summary${qs({ ...scope })}`,
+    ),
+
+  getAuditTimeseries: (scope: AuditScope, projectId: string) =>
+    request<AuditTimeseriesPoint[]>(
+      `/v1/projects/${projectId}/audit/timeseries${qs({ ...scope })}`,
+    ),
+
+  listAuditDecisions: (filters: AuditDecisionFilters, projectId: string) =>
+    request<AuditDecisionPage>(
+      `/v1/projects/${projectId}/audit/decisions${qs({ ...filters })}`,
     ),
 }

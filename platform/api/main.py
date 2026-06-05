@@ -1,7 +1,9 @@
+import asyncio
 import base64
 import hashlib
 import logging
 from contextlib import asynccontextmanager
+from typing import Literal
 from urllib.parse import unquote
 
 from clickhouse_connect.driver.exceptions import ClickHouseError, OperationalError
@@ -29,9 +31,14 @@ from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from audit import (
+    WINDOW_HOURS,
     AuditEventOutOfWindow,
     AuditPayloadTooLarge,
+    bucket_minutes_for,
     insert_decision,
+    list_decisions,
+    summarize,
+    timeseries,
     validate_event_window,
 )
 from biscuits import (
@@ -49,6 +56,10 @@ from schemas import (
     AgentManifestView,
     AgentRead,
     AgentUpdate,
+    AuditDecisionPage,
+    AuditSummary,
+    AuditTimeseriesPoint,
+    AuditWindow,
     DecisionAccepted,
     DecisionEvent,
     InvitationCreate,
@@ -112,7 +123,7 @@ async def lifespan(app_: FastAPI):
     # Don't fail startup on unreachable ClickHouse — /ready surfaces it.
     if not clickhouse_ping():
         _log.warning(
-            "ClickHouse unreachable at startup; /v1/audit/decisions will 503 until reachable"
+            "ClickHouse unreachable at startup; audit endpoints will 503 until reachable"
         )
     yield
 
@@ -1025,6 +1036,7 @@ def require_clickhouse():
     "/audit/decisions",
     response_model=DecisionAccepted,
     status_code=202,
+    tags=["audit"],
 )
 async def ingest_decision(
     body: DecisionEvent,
@@ -1052,7 +1064,10 @@ async def ingest_decision(
     )
 
     try:
-        insert_decision(
+        # Sync client + wait_for_async_insert=1 → a real network round-trip;
+        # run it off the event loop like the read handlers below.
+        await asyncio.to_thread(
+            insert_decision,
             clickhouse_client,
             event=body,
             project_id=project_id,
@@ -1070,6 +1085,111 @@ async def ingest_decision(
         )
 
     return DecisionAccepted(event_id=body.event_id)
+
+
+# Dashboard audit reads — project-scoped aggregation, cookie-authed like the
+# other dashboard reads (org membership via the project path param).
+#
+# ``role`` filter semantics: absent = no filter; ``role=`` (empty value) =
+# the no-role bucket. No sentinel string is reserved on the wire — the
+# dashboard renders "(none)" purely as a display label.
+
+
+@v1.get(
+    "/projects/{project_id}/audit/summary",
+    response_model=AuditSummary,
+    dependencies=[Depends(require_org_member)],
+    tags=["audit"],
+)
+async def api_audit_summary(
+    project_id: str,
+    window: AuditWindow = "24h",
+    agent: str | None = None,
+    role: str | None = None,
+    tool: str | None = None,
+    clickhouse_client=Depends(require_clickhouse),
+) -> AuditSummary:
+    try:
+        # The clickhouse_connect client is sync — run it off the event loop
+        # so a slow aggregation can't stall every other in-flight request.
+        data = await asyncio.to_thread(
+            summarize,
+            clickhouse_client,
+            project_id=project_id,
+            since_hours=WINDOW_HOURS[window],
+            agent=agent,
+            role=role,
+            tool=tool,
+        )
+    except ClickHouseError:
+        raise _audit_unavailable()
+    return AuditSummary.model_validate(data)
+
+
+@v1.get(
+    "/projects/{project_id}/audit/timeseries",
+    response_model=list[AuditTimeseriesPoint],
+    dependencies=[Depends(require_org_member)],
+    tags=["audit"],
+)
+async def api_audit_timeseries(
+    project_id: str,
+    window: AuditWindow = "24h",
+    agent: str | None = None,
+    role: str | None = None,
+    tool: str | None = None,
+    clickhouse_client=Depends(require_clickhouse),
+) -> list[AuditTimeseriesPoint]:
+    try:
+        return await asyncio.to_thread(
+            timeseries,
+            clickhouse_client,
+            project_id=project_id,
+            since_hours=WINDOW_HOURS[window],
+            bucket_minutes=bucket_minutes_for(window),
+            agent=agent,
+            role=role,
+            tool=tool,
+        )
+    except ClickHouseError:
+        raise _audit_unavailable()
+
+
+@v1.get(
+    "/projects/{project_id}/audit/decisions",
+    response_model=AuditDecisionPage,
+    dependencies=[Depends(require_org_member)],
+    tags=["audit"],
+)
+async def api_audit_decisions(
+    project_id: str,
+    window: AuditWindow = "24h",
+    agent: str | None = None,
+    role: str | None = None,
+    tool: str | None = None,
+    outcome: Literal["allow", "deny", "needs_approval"] | None = None,
+    session_id: str | None = None,
+    limit: int = 25,
+    offset: int = 0,
+    clickhouse_client=Depends(require_clickhouse),
+) -> AuditDecisionPage:
+    try:
+        page = await asyncio.to_thread(
+            list_decisions,
+            clickhouse_client,
+            project_id=project_id,
+            since_hours=WINDOW_HOURS[window],
+            agent=agent,
+            role=role,
+            tool=tool,
+            outcome=outcome,
+            session_id=session_id,
+            limit=max(1, min(limit, 200)),
+            offset=max(0, offset),
+        )
+    except ClickHouseError:
+        raise _audit_unavailable()
+    return page
 
 
 @v1.get("/agents/{name}", response_model=AgentRead)

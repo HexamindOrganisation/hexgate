@@ -73,7 +73,18 @@ if (typeof window.matchMedia === 'undefined') {
 }
 
 // ---------------------------------------------------------------------------
-// 3. Per-test housekeeping
+// 3. jsdom doesn't implement pointer capture or scrollIntoView — Radix
+//    Select's open/close interactions call them. No-op stubs keep tests
+//    that open dropdowns (e.g. the Audit filter bar) from crashing.
+// ---------------------------------------------------------------------------
+
+Element.prototype.scrollIntoView ??= () => undefined
+Element.prototype.hasPointerCapture ??= () => false
+Element.prototype.setPointerCapture ??= () => undefined
+Element.prototype.releasePointerCapture ??= () => undefined
+
+// ---------------------------------------------------------------------------
+// 4. Per-test housekeeping
 // ---------------------------------------------------------------------------
 
 beforeEach(() => {
