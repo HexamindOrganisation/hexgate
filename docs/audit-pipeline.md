@@ -360,8 +360,10 @@ columns make these scans cheap. All time-axis logic keys off `occurred_at`
 | `GET /v1/projects/{id}/audit/decisions?window=&agent=&role=&outcome=&limit=&offset=` | Filterable detail rows, newest first, with `total` for pagination; `hint`/`arguments` decoded back to objects. |
 
 - **`window`** is `24h` / `7d` / `30d` / `90d`, validated by a `Literal` (bad
-  value → 422) and bounded by the 90-day storage TTL. `role="(none)"` selects
-  the empty-role bucket.
+  value → 422) and bounded by the 90-day storage TTL. `role=` (empty value)
+  selects the empty-role bucket; an absent `role` means "no filter". No
+  sentinel string is reserved on the wire — the dashboard's "(none)" is a
+  display label only.
 - **Concurrency.** A client firing several of these reads at once (e.g. a
   dashboard loading summary + timeseries + decisions together) would otherwise
   hit "concurrent queries within the same session". The shared, process-global

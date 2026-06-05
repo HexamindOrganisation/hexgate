@@ -1,4 +1,13 @@
-"""Persistence layer for audit events. HTTP-agnostic — exceptions map to status codes in main.py."""
+"""ClickHouse layer for audit events — both halves of the pipeline.
+
+Write path: validation caps + ``insert_decision`` (the SDK ingest).
+Read path: ``summarize`` / ``timeseries`` / ``list_decisions`` (the
+dashboard aggregations). They stay in one module because they share the
+table contract (``_DECISION_COLUMNS``, windows, scope filters) — unlike
+``services.py``, nothing here touches the relational store.
+
+HTTP-agnostic — exceptions map to status codes in main.py.
+"""
 from __future__ import annotations
 
 import json
@@ -117,10 +126,6 @@ _WINDOW_BUCKET_MINUTES: dict[str, int] = {
     "90d": 1440,
 }
 
-# Breakdown label for an empty agent/role; the read endpoints map it back to "".
-NO_VALUE_LABEL = "(none)"
-
-
 def bucket_minutes_for(window: str) -> int:
     """Bucket size (minutes) for a window key (KeyError on unknown window)."""
     return _WINDOW_BUCKET_MINUTES[window]
@@ -177,7 +182,9 @@ def summarize(
 ) -> dict:
     """Totals + breakdowns for the scoped slice. Returns ``{totals, by_agent,
     by_role, by_tool}``; each breakdown is ``{key, all, allow, deny,
-    needs_approval}`` sorted by ``all`` desc (empty agent/role → NO_VALUE_LABEL)."""
+    needs_approval}`` sorted by ``all`` desc. An empty role keeps its raw
+    ``""`` key — labelling it ("(none)") is the dashboard's concern, so no
+    string is reserved on the wire."""
     where, params = _scope(
         project_id, since_hours, agent=agent, role=role, tool=tool
     )
@@ -196,7 +203,7 @@ def summarize(
     by_tool: dict[str, dict[str, int]] = {}
 
     def _add(store: dict[str, dict[str, int]], key: str, outcome: str, n: int) -> None:
-        bucket = store.setdefault(key or NO_VALUE_LABEL, _zero_counts())
+        bucket = store.setdefault(key, _zero_counts())
         bucket["all"] += n
         if outcome in bucket:
             bucket[outcome] += n

@@ -400,7 +400,9 @@ class OutcomeCounts(BaseModel):
 
 
 class AuditBreakdownRow(OutcomeCounts):
-    """One agent/role/tool bucket; ``key`` is "(none)" when empty."""
+    """One agent/role/tool bucket; an empty role keeps its raw ``""`` key
+    (the dashboard renders the "(none)" label — nothing is reserved on
+    the wire)."""
 
     key: str
 

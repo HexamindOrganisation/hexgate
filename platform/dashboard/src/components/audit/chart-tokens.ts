@@ -16,3 +16,9 @@ export const OUT_LABEL: Record<AuditOutcome, string> = {
   deny: 'deny',
   needs_approval: 'approval',
 }
+
+// Display label for the empty-role bucket. Local to the dashboard — the
+// wire carries the raw "" key (and `role=` filters it), so the stored data
+// and API never reserve this string. A role literally named "(none)" would
+// be display-ambiguous here, but its data stays intact and queryable.
+export const NO_VALUE_LABEL = '(none)'

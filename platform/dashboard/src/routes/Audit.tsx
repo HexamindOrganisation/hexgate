@@ -11,7 +11,7 @@ import {
   DecisionBadge,
   Donut,
 } from '@/components/audit/charts'
-import { CHART_COLORS, OUT_LABEL } from '@/components/audit/chart-tokens'
+import { CHART_COLORS, NO_VALUE_LABEL, OUT_LABEL } from '@/components/audit/chart-tokens'
 import {
   ActiveChips,
   BreakdownCard,
@@ -169,7 +169,15 @@ export function AuditPage() {
     setTableLimit(40)
   }
 
-  const scope = { window: f.range, agent: f.agent, role: f.role, tool: f.tool }
+  // UI state → wire: '' = "all" locally, so unset filters are omitted
+  // (undefined). The "(none)" label maps to `role: ''` — the wire's
+  // no-role bucket; no sentinel string leaves the dashboard.
+  const scope = {
+    window: f.range,
+    agent: f.agent || undefined,
+    role: f.role === NO_VALUE_LABEL ? '' : f.role || undefined,
+    tool: f.tool || undefined,
+  }
 
   // Range-only (unscoped) summary: filter dropdown options + the "X of Y" total.
   const optionsQ = useQuery({
@@ -240,6 +248,10 @@ export function AuditPage() {
 
   const options = optionsQ.data
   const rangeTotal = options?.totals.all ?? 0
+  // Wire → display: the empty-role bucket arrives as a raw "" key; label
+  // it locally. Filter state then holds the label, mapped back in `scope`.
+  const displayRole = <T extends { key: string }>(r: T): T =>
+    r.key === '' ? { ...r, key: NO_VALUE_LABEL } : r
   const related = (relatedQ.data?.rows ?? []).filter((r) => r.event_id !== sel?.event_id).slice(0, 6)
 
   const exportJsonl = () => {
@@ -281,7 +293,7 @@ export function AuditPage() {
           shown={listQ.data?.total ?? 0}
           total={rangeTotal}
           agents={options?.by_agent.map((r) => r.key) ?? []}
-          roles={options?.by_role.map((r) => r.key) ?? []}
+          roles={options?.by_role.map((r) => displayRole(r).key) ?? []}
           tools={options?.by_tool.map((r) => r.key) ?? []}
         />
         <ActiveChips f={f} setF={setF} />
@@ -312,7 +324,7 @@ export function AuditPage() {
         </div>
 
         <div style={{ marginBottom: 16 }}>
-          <BreakdownCard byTool={summary?.by_tool ?? []} byAgent={summary?.by_agent ?? []} byRole={summary?.by_role ?? []} f={f} setF={setF} />
+          <BreakdownCard byTool={summary?.by_tool ?? []} byAgent={summary?.by_agent ?? []} byRole={summary?.by_role.map(displayRole) ?? []} f={f} setF={setF} />
         </div>
 
         <EventsTable

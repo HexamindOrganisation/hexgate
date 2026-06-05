@@ -5,7 +5,6 @@ tests under @pytest.mark.integration round-trip against a real local ClickHouse.
 """
 from __future__ import annotations
 
-import json
 import uuid
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock
@@ -21,7 +20,7 @@ from pydantic import ValidationError
 
 import audit
 import main
-from audit import NO_VALUE_LABEL, list_decisions, summarize
+from audit import list_decisions, summarize
 from keystore import FileKeyStore
 from main import (
     app,
@@ -358,7 +357,7 @@ def test_summarize_classifies_grouping_sets() -> None:
         ("researcher", "", "", "allow", 0, 1, 1, 0, 6),
         ("researcher", "", "", "deny", 0, 1, 1, 0, 3),
         ("scraper", "", "", "deny", 0, 1, 1, 0, 1),
-        # (role, outcome) — empty role lands in the "(none)" bucket
+        # (role, outcome) — empty role keeps its raw "" key on the wire
         ("", "analyst", "", "allow", 1, 0, 1, 0, 6),
         ("", "", "", "deny", 1, 0, 1, 0, 4),
         # (tool_name, outcome)
@@ -377,7 +376,7 @@ def test_summarize_classifies_grouping_sets() -> None:
     ]
     assert data["by_role"] == [
         {"key": "analyst", "all": 6, "allow": 6, "deny": 0, "needs_approval": 0},
-        {"key": NO_VALUE_LABEL, "all": 4, "allow": 0, "deny": 4, "needs_approval": 0},
+        {"key": "", "all": 4, "allow": 0, "deny": 4, "needs_approval": 0},
     ]
     assert data["by_tool"] == [
         {"key": "read_file", "all": 4, "allow": 0, "deny": 4, "needs_approval": 0},
@@ -563,6 +562,27 @@ def test_audit_read_non_member_is_403(
     fake_clickhouse.query.assert_not_called()
 
 
+def test_audit_read_empty_role_param_filters_no_role_bucket(
+    client: TestClient, fake_clickhouse: MagicMock
+) -> None:
+    """``role=`` (empty value) must reach ClickHouse as ``role = ''`` —
+    the no-role drill-down — while an absent ``role`` means no filter.
+    No "(none)" sentinel exists on the wire."""
+    app.dependency_overrides[require_org_member] = lambda: MagicMock()
+    fake_clickhouse.query.return_value.result_rows = []
+
+    r = client.get("/v1/projects/proj_test/audit/summary?role=")
+    assert r.status_code == 200, r.text
+    params = fake_clickhouse.query.call_args.kwargs["parameters"]
+    assert params["role"] == ""
+
+    fake_clickhouse.query.reset_mock()
+    r = client.get("/v1/projects/proj_test/audit/summary")
+    assert r.status_code == 200, r.text
+    params = fake_clickhouse.query.call_args.kwargs["parameters"]
+    assert "role" not in params
+
+
 @pytest.mark.parametrize("path", _AUDIT_READ_PATHS)
 def test_audit_read_member_is_200(
     client: TestClient, fake_clickhouse: MagicMock, path: str
@@ -612,35 +632,37 @@ def test_readiness_reports_clickhouse(
 
 @pytest.mark.integration
 def test_real_clickhouse_round_trip() -> None:
-    """Insert a row through the real client; SELECT it back; clean up."""
+    """Insert through the real write path (``insert_decision`` with
+    ``_DECISION_INSERT_SETTINGS``); SELECT it back; clean up."""
+    from audit import insert_decision
     from clickhouse import get_clickhouse as real_get_clickhouse
 
     clickhouse_client = real_get_clickhouse()
-    event_id = uuid.uuid4()
-    project_id = f"test_proj_{uuid.uuid4().hex[:8]}"
+    # The shared client is sessionless (autogenerate_session_id=False in
+    # clickhouse.py) — a session would reject the concurrent queries the
+    # dashboard reads + SDK ingest fire at the same pool.
+    assert "session_id" not in clickhouse_client.params
 
-    clickhouse_client.insert(
-        "policy_decision",
-        [[
-            event_id,
-            _now(),
-            project_id,
-            "researcher",
-            "9f1e3c5a-test",   # agent_version_id
-            "sess_test",
-            "u_test",
-            "read_file",
-            "analyst",
-            "deny",
-            "policy_denied",
-            "integration test row",
-            ["v1"],
-            json.dumps({"glob": "/workspace/**"}),
-            json.dumps({"path": "/etc/passwd"}),
-        ]],
-        column_names=audit._DECISION_COLUMNS,
-        # wait_for_async_insert=1 so the SELECT below sees the row.
-        settings={"async_insert": 1, "wait_for_async_insert": 1},
+    project_id = f"test_proj_{uuid.uuid4().hex[:8]}"
+    event = DecisionEvent(**_event(
+        session_id="sess_test",
+        user_id="u_test",
+        role="analyst",
+        error_type="policy_denied",
+        reason="integration test row",
+        violations=["v1"],
+        hint={"glob": "/workspace/**"},
+        arguments={"path": "/etc/passwd"},
+    ))
+    event_id = event.event_id
+
+    # wait_for_async_insert=1 (in _DECISION_INSERT_SETTINGS) blocks until the
+    # flush — returning without raising IS the ack on the sessionless client.
+    insert_decision(
+        clickhouse_client,
+        event=event,
+        project_id=project_id,
+        agent_version_id="9f1e3c5a-test",
     )
 
     try:

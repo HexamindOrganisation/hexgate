@@ -33,7 +33,11 @@ const SUMMARY = {
     { key: 'researcher', ...counts(9, 6, 3) },
     { key: 'scraper', ...counts(1, 0, 1) },
   ],
-  by_role: [{ key: 'analyst', ...counts(6, 6, 0) }],
+  by_role: [
+    { key: 'analyst', ...counts(6, 6, 0) },
+    // The no-role bucket arrives as a raw "" key over the wire.
+    { key: '', ...counts(4, 0, 4) },
+  ],
   by_tool: [{ key: 'read_file', ...counts(4, 0, 4) }],
 }
 
@@ -160,6 +164,27 @@ describe('AuditPage', () => {
         (u) => u.includes('/audit/summary') && u.includes('agent=researcher'),
       ),
     ).toBe(true)
+  })
+
+  it('maps the empty-role bucket to "(none)" locally and queries role=', async () => {
+    const calls = stubFetch()
+    const user = userEvent.setup()
+    renderWithProviders(<AuditPage />)
+
+    // The "" key from the wire displays as "(none)" in the dropdown…
+    const noneOption = await screen.findByRole('option', { name: '(none)' })
+    await user.selectOptions(noneOption.closest('select')!, '(none)')
+
+    // …and selecting it sends `role=` (empty value) — no "(none)" sentinel
+    // ever leaves the dashboard.
+    await waitFor(() => {
+      expect(
+        calls.some(
+          (u) => u.includes('/audit/decisions') && /[?&]role=(&|$)/.test(u),
+        ),
+      ).toBe(true)
+    })
+    expect(calls.some((u) => u.includes('(none)') || u.includes('%28none%29'))).toBe(false)
   })
 
   it('outcome KPI card toggles the outcome filter', async () => {

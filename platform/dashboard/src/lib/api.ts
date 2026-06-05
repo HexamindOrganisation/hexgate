@@ -198,7 +198,8 @@ export interface OutcomeCounts {
   needs_approval: number
 }
 
-/** One agent/role/tool bucket; `key` is "(none)" when empty. */
+/** One agent/role/tool bucket; an empty role keeps its raw `""` key —
+ * the dashboard maps it to the "(none)" display label locally. */
 export interface AuditBreakdownRow extends OutcomeCounts {
   key: string
 }
@@ -244,7 +245,8 @@ export interface AuditDecisionPage {
   offset: number
 }
 
-/** Scope filters shared by summary/timeseries/list. `role: '(none)'` = no-role. */
+/** Scope filters shared by summary/timeseries/list. `undefined` = no
+ * filter; `role: ''` = the no-role bucket (sent as `role=`). */
 export interface AuditScope {
   window?: AuditWindow
   agent?: string
@@ -263,7 +265,9 @@ export interface AuditDecisionFilters extends AuditScope {
 function qs(params: Record<string, string | number | undefined>): string {
   const search = new URLSearchParams()
   for (const [key, value] of Object.entries(params)) {
-    if (value !== undefined && value !== '') search.set(key, String(value))
+    // undefined = omit. '' is kept: `role=` (empty value) is meaningful —
+    // it selects the no-role bucket server-side.
+    if (value !== undefined) search.set(key, String(value))
   }
   const str = search.toString()
   return str ? `?${str}` : ''
