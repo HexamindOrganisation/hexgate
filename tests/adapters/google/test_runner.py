@@ -10,9 +10,35 @@ from google.adk.agents import LlmAgent
 from google.adk.sessions import InMemorySessionService
 from google.adk.tools.function_tool import FunctionTool
 
+from fortify.adapters.google import wrapper as wrapper_mod
 from fortify.adapters.google.runner import FortifyRunner
 from fortify.runtime import User
 from fortify.runtime.context import get_current_user
+from fortify.security import AgentPolicy, BaseToolPolicy, PolicyBinding, PolicySet
+from fortify.security.enforcer import PolicyEnforcer
+from fortify.security.policy_set import DEFAULT_ROLE_NAME
+
+
+@pytest.fixture(autouse=True)
+def _stub_resolve(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stub the platform resolve seam — runner tests are about lifecycle,
+    not policy resolution (covered by test_wrapper.py / binding tests)."""
+
+    def fake_resolve(agent: Any, name: str, key: str) -> PolicyBinding:
+        tool_names = [
+            getattr(t, "name", getattr(t, "__name__", "tool"))
+            for t in (getattr(agent, "tools", []) or [])
+        ]
+        engine = PolicySet(
+            {
+                DEFAULT_ROLE_NAME: AgentPolicy(
+                    tools={n: BaseToolPolicy(mode="allow") for n in tool_names}
+                )
+            }
+        )
+        return PolicyBinding(PolicyEnforcer(engine, agent_name=name))
+
+    monkeypatch.setattr(wrapper_mod, "_resolve_binding", fake_resolve)
 
 
 def _user() -> User:
@@ -339,3 +365,65 @@ def test_extra_kwargs_reach_underlying_runner(
 
     [fake_runner] = fake.instances
     assert fake_runner.kwargs["custom_kwarg"] == "value"
+
+
+# ---------------------------------------------------------------------------
+# Per-run policy refresh (phase 5)
+# ---------------------------------------------------------------------------
+
+
+class _CountingBinding:
+    def __init__(self) -> None:
+        self.refreshes = 0
+
+    def refresh(self) -> None:
+        self.refreshes += 1
+
+    async def refresh_async(self) -> None:
+        self.refreshes += 1
+
+
+def _runner_with_counting_binding(
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[FortifyRunner, _CountingBinding]:
+    _silence_observability(monkeypatch)
+    _install_fake_runner(monkeypatch)
+    runner = FortifyRunner(
+        agent=_make_agent(),
+        app_name="app",
+        session_service=InMemorySessionService(),
+        api_key="k",
+    )
+    binding = _CountingBinding()
+    runner._binding = binding  # type: ignore[assignment]
+    return runner, binding
+
+
+def test_run_refreshes_binding_per_call(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every run() pulls the policy before any event is yielded."""
+    runner, binding = _runner_with_counting_binding(monkeypatch)
+
+    list(runner.run(new_message="hi", user=_user()))
+    list(runner.run(new_message="hi again", user=_user()))
+
+    assert binding.refreshes == 2
+
+
+@pytest.mark.asyncio
+async def test_run_async_refreshes_binding_per_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner, binding = _runner_with_counting_binding(monkeypatch)
+
+    async for _ in runner.run_async(new_message="hi", user=_user()):
+        pass
+
+    assert binding.refreshes == 1
+
+
+def test_construction_does_not_refresh(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Resolve at construction is the initial pull; refresh only fires at
+    run boundaries (the binding is freshly seeded — first run is a 304)."""
+    runner, binding = _runner_with_counting_binding(monkeypatch)
+
+    assert binding.refreshes == 0

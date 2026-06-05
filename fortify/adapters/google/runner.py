@@ -37,9 +37,16 @@ class FortifyRunner:
             raise ValueError(
                 "FORTIFY_KEY is not set. Pass api_key= explicitly or set FORTIFY_KEY environment variable."
             )
-        # Policy is baked at construction; the Runner is built once and reused
-        # since role resolution happens at call time via the User contextvar.
-        self._wrapped_agent = wrap_google_agent(agent, api_key=self.api_key)
+        # Policy resolves at construction (platform pull + verify — the
+        # loud-failure point for bad keys / signatures / unreachable
+        # platform); the Runner is built once and reused since role
+        # resolution happens at call time via the User contextvar. The
+        # binding refreshes at the top of every run — a policy change
+        # hot-swaps via the shared enforcer without touching this Runner
+        # or the cloned agent.
+        self._wrapped_agent, self._binding = wrap_google_agent(
+            agent, api_key=self.api_key
+        )
         self._runner = Runner(
             agent=self._wrapped_agent,
             app_name=app_name,
@@ -78,6 +85,7 @@ class FortifyRunner:
     ) -> Generator[Any, None, None]:
         """Run the Google ADK agent synchronously, yielding events."""
         self._setup_observability()
+        self._binding.refresh()  # per-run policy pull; 304 when unchanged
         with user.sync_scope(), self._propagate(user):
             yield from self._runner.run(
                 user_id=user.user_id,
@@ -95,6 +103,7 @@ class FortifyRunner:
     ) -> AsyncGenerator[Any, None]:
         """Run the Google ADK agent asynchronously, yielding events."""
         self._setup_observability()
+        await self._binding.refresh_async()  # per-run policy pull; 304 when unchanged
         async with user:
             with self._propagate(user):
                 async for event in self._runner.run_async(
