@@ -2,14 +2,9 @@
 call so the wrapped tools' enforcers can resolve the active role.
 Langfuse propagation mirrors the User identity into trace metadata.
 
-Policy lifecycle (policy-binding spec, phase 6): the OpenAI ``Runner``
-receives the agent per call, so this wrapper caches one
-:class:`~fortify.security.binding.PolicyBinding` per agent name — the
-first run resolves (platform pull + verify, registering an unknown agent
-from its in-code definition), later runs refresh against the cached
-ETag (304 when unchanged). The agent is re-wrapped per call (cheap tool
-copies), but every wrap closes over the cached enforcer, so a refresh
-swap reaches the tools no matter which call produced them.
+One policy binding is cached per agent name (first run resolves, later
+runs are ETag/304 refreshes); the per-call rewrap closes over the cached
+enforcer, so a refresh swap reaches every clone.
 """
 
 import asyncio
@@ -46,19 +41,14 @@ class FortifyRunner:
             raise ValueError(
                 "FORTIFY_KEY is not set. Pass api_key= explicitly or set FORTIFY_KEY environment variable."
             )
-        # One binding per agent name, created on first run. Caching here —
-        # not resolving per call — is what keeps the ETag memory alive, so
-        # an unchanged policy costs one 304 per run instead of a full
-        # payload + signature verify.
+        # Cached per agent name — keeps the ETag memory alive across runs.
         self._bindings: dict[str, PolicyBinding] = {}
 
     def _binding_for(self, agent: Agent) -> PolicyBinding:
         """Get-or-resolve the cached policy binding for ``agent``'s name.
 
-        First call per name resolves against the platform (the loud-
-        failure point) and rebuilds the enforcer with this runner's audit
-        sender — the rebound binding keeps the seeded source, so refresh
-        swaps THIS enforcer's policy in place.
+        First call resolves (loud-failure point) and rebuilds the
+        enforcer with this runner's audit sender.
         """
         name = getattr(agent, "name", "default")
         binding = self._bindings.get(name)
@@ -145,18 +135,12 @@ class FortifyRunner:
         ``Runner.run_streamed`` returns sync; tools only run during
         ``stream_events`` iteration. The User scope is opened inside the
         wrapped iterator. Langfuse propagation runs during setup so the
-        trace span attaches.
-
-        The policy refresh happens HERE in the setup body — before
-        ``Runner.run_streamed`` is called — not inside the iterator: the
-        wrap (and thus the enforcer reference) is fixed at setup, and one
-        refresh per run is the contract. Tools that fire later during
-        ``stream_events`` consult whatever the enforcer holds, which this
-        refresh just made current.
+        trace span attaches. The policy refresh runs in the setup body —
+        the wrap is fixed before tools fire during stream_events.
         """
         self._setup_observability()
         binding = self._binding_for(agent)
-        binding.refresh()  # per-run policy pull; must precede the wrap + setup
+        binding.refresh()  # must precede the wrap + setup
         wrapped_agent = wrap_openai_agent(agent, enforcer=binding.enforcer)
 
         with self._propagate(user, agent.name):

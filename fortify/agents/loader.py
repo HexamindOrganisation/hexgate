@@ -496,10 +496,7 @@ def load_builtin_agent(
         user_id=user_id,
         tags=tags,
         name=spec.name,
-        # The loader applies its own policy below — opting out of
-        # create_agent's auto-bind avoids a redundant platform fetch
-        # (and a surprise register) when FORTIFY_KEY is set.
-        bind_policy=False,
+        bind_policy=False,  # the loader applies its own policy below
     )
     overridden = _apply_local_override(agent, approval_handler)
     if overridden is not None:
@@ -532,10 +529,7 @@ def load_local_agent(
         user_id=user_id,
         tags=tags,
         name=spec.name,
-        # The loader applies its own policy below — opting out of
-        # create_agent's auto-bind avoids a redundant platform fetch
-        # (and a surprise register) when FORTIFY_KEY is set.
-        bind_policy=False,
+        bind_policy=False,  # the loader applies its own policy below
     )
     overridden = _apply_local_override(agent, approval_handler)
     if overridden is not None:
@@ -684,24 +678,15 @@ def load_fortify_agent(
             t for t in ["fortify", "fortify-cloud", config.project_id] if t
         ],
         name=spec.name,
-        # This loader IS the binding path — it already holds the payload
-        # and composes the source below; auto-bind would fetch it twice.
-        bind_policy=False,
+        bind_policy=False,  # this loader composes the binding itself below
     )
-    # Policy precedence:
-    #   1. FORTIFY_LOCAL_POLICY override (dev iteration) — wins outright,
-    #      with its own mtime-driven refresh source.
-    #   2. Platform-served signed bundle — verified, WASM-enforced — or the
-    #      pydantic engine on the served policy_yaml when no bundle compiled
-    #      (REQUIRE_SIGNATURE forbids that fallback).
-    # Both arms come back as (engine, refresh source); the platform-side
-    # decode/verify/fallback rules live in fortify.security.binding so this
-    # loader and PolicyBinding.resolve can never drift.
+    # Precedence: FORTIFY_LOCAL_POLICY override → platform (signed bundle,
+    # or pydantic on policy_yaml). Decode/verify rules are shared with
+    # PolicyBinding.resolve via platform_policy_from_payload.
     from fortify.security.binding import platform_policy_from_payload
 
     override = _local_policy_override()
     if override is not None:
-        # Local override wins; the platform's bundle (if any) is ignored.
         policy, refresh_source = override
     else:
         policy, refresh_source = platform_policy_from_payload(

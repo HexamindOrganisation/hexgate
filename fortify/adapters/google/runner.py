@@ -37,13 +37,9 @@ class FortifyRunner:
             raise ValueError(
                 "FORTIFY_KEY is not set. Pass api_key= explicitly or set FORTIFY_KEY environment variable."
             )
-        # Policy resolves at construction (platform pull + verify — the
-        # loud-failure point for bad keys / signatures / unreachable
-        # platform); the Runner is built once and reused since role
-        # resolution happens at call time via the User contextvar. The
-        # binding refreshes at the top of every run — a policy change
-        # hot-swaps via the shared enforcer without touching this Runner
-        # or the cloned agent.
+        # Policy resolves at construction (the loud-failure point); the
+        # Runner is built once — refresh swaps the enforcer's policy
+        # without touching it.
         self._wrapped_agent, self._binding = wrap_google_agent(
             agent, api_key=self.api_key
         )

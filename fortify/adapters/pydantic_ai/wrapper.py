@@ -3,13 +3,8 @@
 proxy backed by a clone of the caller's ``Agent`` with policy-gated
 tools.
 
-Policy comes from the platform (policy-binding spec, phase 7): wrap-time
-:meth:`~fortify.security.binding.PolicyBinding.resolve` pulls + verifies
-the current policy (``FORTIFY_LOCAL_POLICY`` override → signed bundle →
-pydantic fallback), an unknown agent is registered from its in-code
-definition and resolved again, and the proxy refreshes the binding at
-the top of every run — so dashboard edits land at the next run with a
-cheap ETag/304 round trip.
+Policy is resolved from the platform at wrap time (register-on-404) and
+refreshed by the proxy at the top of every run.
 """
 
 from __future__ import annotations
@@ -55,13 +50,7 @@ def _clone_agent_with_tools(agent: Agent, wrapped_tools: list[Tool]) -> Agent:
 def _resolve_binding(agent: Agent, agent_name: str, api_key: str) -> PolicyBinding:
     """Resolve the platform policy for ``agent_name``, registering on 404.
 
-    An unknown agent exists only in code so far: register it from its own
-    definition (pydantic_ai agents are introspectable — name, model,
-    prompt, toolset all come off the object) and resolve again; the
-    platform answers a first register with a default role-aware policy +
-    signed bundle. Anything else (bad key, bad signature, platform down)
-    stays loud — wrapping asked for governance, so failing to bind is an
-    error, never a silently allow-all agent.
+    Non-404 failures stay loud — never a silent allow-all.
     """
     from fortify.cloud.client import FortifyError
 
@@ -72,11 +61,7 @@ def _resolve_binding(agent: Agent, agent_name: str, api_key: str) -> PolicyBindi
             raise
         from fortify.cli.register import register_agent
 
-        logger.info(
-            "agent %r not registered on the platform — registering it from "
-            "the in-code pydantic_ai definition",
-            agent_name,
-        )
+        logger.info("agent %r not registered — registering it from code", agent_name)
         register_agent(agent)
         return PolicyBinding.resolve(agent_name, api_key=api_key)
 
@@ -93,11 +78,8 @@ def wrap_pydantic_agent(
     ``user`` per call; role resolves at call time from the active
     :class:`User`. ``NEEDS_APPROVAL`` raises :class:`ModelRetry` with
     an ``[approval_required]`` marker. ``api_key`` falls back to
-    ``FORTIFY_KEY``.
-
-    The enforced policy is the platform's (see :func:`_resolve_binding`),
-    and the proxy re-pulls it at the top of every run. Tools not named
-    in that policy are denied-by-absence at call time.
+    ``FORTIFY_KEY``. The enforced policy is the platform's; unlisted
+    tools are denied.
     """
     resolved_key = api_key or os.getenv("FORTIFY_KEY")
     if not resolved_key:
@@ -109,10 +91,8 @@ def wrap_pydantic_agent(
     tools = _extract_tools(agent)
 
     binding = _resolve_binding(agent, agent_name, resolved_key)
-    # Rebuild the enforcer around the resolved engine so the adapter's
-    # audit sender rides along — resolve() is adapter-agnostic and doesn't
-    # know about audit. The rebound binding keeps the seeded source, so
-    # refresh still swaps THIS enforcer's policy in place.
+    # Rebuild the enforcer to inject the audit sender; the rebound binding
+    # keeps the seeded source, so refresh swaps this enforcer in place.
     enforcer = PolicyEnforcer(
         binding.enforcer.policy,
         agent_name=agent_name,

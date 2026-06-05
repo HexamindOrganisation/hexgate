@@ -376,11 +376,7 @@ class YamlPolicySource:
 
 # ---------------------------------------------------------------------------
 # FORTIFY_LOCAL_POLICY — env var → PolicySource factory
-#
-# "Turn the local-override env var into a source" is source-construction
-# logic, so it lives next to the source classes it instantiates. Moved here
-# from fortify.agents.loader (policy-binding spec, phase 1); the loader
-# re-imports these names for back-compat with existing callers and tests.
+# Moved from fortify.agents.loader (which re-imports them for back-compat).
 # ---------------------------------------------------------------------------
 
 _LOCAL_POLICY_ENV_VAR = "FORTIFY_LOCAL_POLICY"

@@ -3,14 +3,8 @@
 are policy-gated. User-agnostic at wrap time — role resolution happens
 inside the enforcer via the :class:`User` contextvar.
 
-Policy comes from the platform (policy-binding spec, phase 5):
-wrap-time :meth:`~fortify.security.binding.PolicyBinding.resolve` pulls
-+ verifies the current policy (``FORTIFY_LOCAL_POLICY`` override →
-signed bundle → pydantic fallback), an unknown agent is registered from
-its in-code definition and resolved again. The returned binding is what
-the :class:`~fortify.adapters.google.runner.FortifyRunner` refreshes at
-the top of every run — the clone and its gated tools never change; only
-``enforcer.policy`` swaps.
+Policy is resolved from the platform at wrap time (register-on-404);
+the returned binding is what the runner refreshes per run.
 """
 
 from __future__ import annotations
@@ -32,13 +26,7 @@ def _resolve_binding(
 ) -> PolicyBinding:
     """Resolve the platform policy for ``agent_name``, registering on 404.
 
-    An unknown agent exists only in code so far: register it from its own
-    definition (ADK agents are introspectable — name, model, instruction,
-    tools all come off the object) and resolve again; the platform
-    answers a first register with a default role-aware policy + signed
-    bundle. Anything else (bad key, bad signature, platform down) stays
-    loud — wrapping asked for governance, so failing to bind is an
-    error, never a silently allow-all agent.
+    Non-404 failures stay loud — never a silent allow-all.
     """
     from fortify.cloud.client import FortifyError
 
@@ -49,11 +37,7 @@ def _resolve_binding(
             raise
         from fortify.cli.register import register_agent
 
-        logger.info(
-            "agent %r not registered on the platform — registering it from "
-            "the in-code ADK definition",
-            agent_name,
-        )
+        logger.info("agent %r not registered — registering it from code", agent_name)
         register_agent(agent)
         return PolicyBinding.resolve(agent_name, api_key=api_key)
 
@@ -65,23 +49,15 @@ def wrap_google_agent(
 
     Caller must open a :class:`User` scope around the run.
     ``NEEDS_APPROVAL`` outcomes surface as ``[approval_required]``-prefixed
-    strings in tool results; ``[policy_denied]`` for denials.
-
-    The enforced policy is the platform's (see :func:`_resolve_binding`);
-    tools not named in that policy are denied-by-absence at call time.
-    Hold on to the returned binding and call
-    :meth:`~fortify.security.binding.PolicyBinding.refresh` at your run
-    boundaries — :class:`~fortify.adapters.google.runner.FortifyRunner`
-    does this for you.
+    strings in tool results; ``[policy_denied]`` for denials. Refresh the
+    returned binding at run boundaries (``FortifyRunner`` does).
     """
     agent_name = getattr(agent, "name", "default")
     tools = list(getattr(agent, "tools", []) or [])
 
     binding = _resolve_binding(agent, agent_name, api_key)
-    # Rebuild the enforcer around the resolved engine so the adapter's
-    # audit sender rides along — resolve() is adapter-agnostic and doesn't
-    # know about audit. The rebound binding keeps the seeded source, so
-    # refresh still swaps THIS enforcer's policy in place.
+    # Rebuild the enforcer to inject the audit sender; the rebound binding
+    # keeps the seeded source, so refresh swaps this enforcer in place.
     enforcer = PolicyEnforcer(
         binding.enforcer.policy,
         agent_name=agent_name,

@@ -44,9 +44,7 @@ TOKEN_PREFIX = "fty_"
 class FortifyError(RuntimeError):
     """Raised for any Fortify API interaction failure.
 
-    ``status`` carries the HTTP status code when the failure was an HTTP
-    error response (``None`` for transport-level failures), so callers
-    can branch on e.g. 404 without string-matching the message.
+    ``status`` is the HTTP status code, or ``None`` for transport errors.
     """
 
     def __init__(self, message: str, *, status: int | None = None) -> None:

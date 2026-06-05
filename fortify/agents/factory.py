@@ -460,34 +460,18 @@ class FortifyAgent:
         # swap its policy in place when the source serves a new bundle,
         # without rebuilding the tool wrappers. ``self`` stays untouched.
         rebuilt._enforcer = enforcer
-        # Applying a policy explicitly detaches any inherited refresh
-        # source: the engine the caller just asked for is what should
-        # enforce, and a stale source would silently swap it back to the
-        # platform's policy at the next run. Callers that want hot reload
-        # re-attach a source afterwards (load_fortify_agent,
-        # _apply_local_override, and _bind_policy all do).
+        # Detach any inherited source so a later refresh can't swap the
+        # explicit policy back out; callers wanting hot reload re-attach.
         rebuilt._policy_source = None
         return rebuilt
 
     def refresh_policy(self) -> None:
         """Pull the current policy from the attached source and swap it in.
 
-        Called at the top of every agent run — see :meth:`ainvoke` /
-        :meth:`astream_events` (their tracing wrappers
-        :func:`invoke_agent` / :func:`stream_agent_raw` route through
-        them) — so policy edits land at the next run no matter how the
-        user invokes the agent. The swap itself — the ETag/304
-        short-circuit, the identity check, and the fail-soft handling
-        of fetch errors — lives in
-        :class:`~fortify.security.binding.PolicyBinding`; this method
-        adopts the agent's ``_enforcer`` / ``_policy_source`` seam into
-        a binding and delegates.
-
-        No-op when no source is attached (programmatic callers that
-        constructed the agent without one) or no enforcer exists (no
-        policy was applied). Fetch failures are logged and swallowed by
-        the binding — the previous policy stays in force; a transient
-        network blip never crashes a chat turn.
+        Runs at the top of every agent run (:meth:`ainvoke` /
+        :meth:`astream_events`). Delegates the swap — ETag/304, identity
+        check, fail-soft — to :class:`~fortify.security.binding.PolicyBinding`.
+        No-op without an enforcer + source.
         """
         if self._policy_source is None or self._enforcer is None:
             return
@@ -535,21 +519,11 @@ def create_agent(
 ) -> tuple[AgentGraph, CallbackHandler]:
     """Create a fortify agent as a thin wrapper over LangChain.
 
-    ``bind_policy`` controls platform/override policy binding at creation
-    (phase 3 of the policy-binding spec):
-
-      * ``None`` (default, auto) — bind when the environment signals
-        governance (``FORTIFY_KEY`` or ``FORTIFY_LOCAL_POLICY`` set) AND
-        ``name`` is provided; otherwise return the bare agent.
-      * ``True`` — always bind; raises without a ``name`` or without any
-        policy source to resolve against.
-      * ``False`` — never bind (bare graph, today's behavior).
-
-    When binding happens the returned agent's tools are policy-gated and
-    a refresh source is attached, so every run re-pulls the policy
-    (ETag/304) exactly like ``load_fortify_agent``. ``approval_handler``
-    is only consulted on the binding path — it resolves NEEDS_APPROVAL
-    outcomes inline.
+    ``bind_policy``: ``None`` (auto) binds when ``FORTIFY_KEY`` or
+    ``FORTIFY_LOCAL_POLICY`` is set and ``name`` is given; ``True``
+    always binds (raises without a name); ``False`` never binds.
+    Binding gates the tools and attaches a refresh source, like
+    ``load_fortify_agent``. ``approval_handler`` applies on that path.
     """
     resolved_system_prompt = (
         system_prompt
@@ -602,14 +576,7 @@ def create_agent(
 
 
 def _should_bind_policy(bind_policy: bool | None, name: str | None) -> bool:
-    """Decide whether :func:`create_agent` binds policy at creation.
-
-    ``True`` demands a ``name`` — it's the policy lookup key — and raises
-    rather than silently skipping. Auto mode (``None``) binds only when a
-    governance signal is present in the environment AND the agent is
-    named; nameless agents skip silently since there is nothing to
-    resolve against.
-    """
+    """Decide whether :func:`create_agent` binds policy at creation."""
     if bind_policy is False:
         return False
     if bind_policy is True:
@@ -629,22 +596,11 @@ def _bind_policy(
     name: str,
     approval_handler: ApprovalHandler | None,
 ) -> "FortifyAgent":
-    """Resolve the current policy for ``name`` and enforce it on ``agent``.
+    """Resolve the policy for ``name`` and enforce it on ``agent``.
 
-    Mirrors ``load_fortify_agent``'s composition:
-    :meth:`~fortify.security.binding.PolicyBinding.resolve` picks the
-    engine (``FORTIFY_LOCAL_POLICY`` override → platform-verified bundle
-    → raise), :meth:`FortifyAgent.enforce_policy` wraps the tools, and
-    the binding's source rides along as ``_policy_source`` so every run
-    re-pulls the policy.
-
-    A platform 404 means the agent exists only in code so far: register
-    it from its own definition — ``fortify.cli.register`` builds the real
-    manifest (actual tool schemas, model, prompt) and the platform
-    answers a first register with a default role-aware policy + signed
-    bundle — then resolve again. Anything else (bad key, bad signature,
-    platform down) stays loud: binding was requested, so failing to bind
-    is an error, never a silent bare agent.
+    Mirrors ``load_fortify_agent``: resolve → enforce → attach the
+    refresh source. A 404 registers the agent from its in-code
+    definition and resolves again; other failures stay loud.
     """
     from fortify.cloud.client import FortifyError
     from fortify.security.binding import PolicyBinding
@@ -662,11 +618,7 @@ def _bind_policy(
             raise
         from fortify.cli.register import register_agent
 
-        _logger.info(
-            "agent %r not registered on the platform — registering it from "
-            "the in-code definition",
-            name,
-        )
+        _logger.info("agent %r not registered — registering it from code", name)
         register_agent(agent)
         binding = PolicyBinding.resolve(name, client=client)
 

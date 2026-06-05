@@ -22,14 +22,8 @@ class FortifyLangchainAgent:
     :func:`wrap_langchain_agent`). This proxy pushes the active
     :class:`User` onto the contextvar and propagates identity into
     Langfuse spans. ``user`` is per-call, so one proxy serves many
-    users concurrently.
-
-    When a :class:`~fortify.security.binding.PolicyBinding` is attached,
-    every run method refreshes it first — the platform's ETag/304 dance
-    makes the unchanged case one cheap round trip, and a changed policy
-    hot-swaps via the shared enforcer without touching the graph or its
-    in-place-wrapped tools. Refresh is fail-soft: a network blip keeps
-    the previous verified policy in force.
+    users concurrently. When a policy binding is attached, every run
+    method refreshes it first (fail-soft; 304 when unchanged).
     """
 
     def __init__(
@@ -48,7 +42,7 @@ class FortifyLangchainAgent:
         self._callback_handler = CallbackHandler()
 
     async def _refresh_async(self) -> None:
-        """Refresh the policy binding off the event loop, if one is attached."""
+        """Refresh the policy binding, if attached (async entry points)."""
         if self._binding is not None:
             await self._binding.refresh_async()
 
