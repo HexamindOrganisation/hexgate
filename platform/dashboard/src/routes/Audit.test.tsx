@@ -144,12 +144,12 @@ describe('AuditPage', () => {
     const user = userEvent.setup()
     renderWithProviders(<AuditPage />)
 
-    // Options arrive from the unscoped summary query.
-    await screen.findByRole('option', { name: 'researcher' })
-    const agentSelect = screen
-      .getByRole('option', { name: 'All agents' })
-      .closest('select')!
-    await user.selectOptions(agentSelect, 'researcher')
+    // Wait for data to land, then open the agent select (Radix trigger)
+    // and pick an option from the popup.
+    await screen.findByText('blocked by policy')
+    // Radix puts pointer-events:none on the value span — click the trigger.
+    await user.click(screen.getByText('All agents').closest('button')!)
+    await user.click(await screen.findByRole('option', { name: 'researcher' }))
 
     await waitFor(() => {
       expect(
@@ -172,8 +172,9 @@ describe('AuditPage', () => {
     renderWithProviders(<AuditPage />)
 
     // The "" key from the wire displays as "(none)" in the dropdown…
-    const noneOption = await screen.findByRole('option', { name: '(none)' })
-    await user.selectOptions(noneOption.closest('select')!, '(none)')
+    await screen.findByText('blocked by policy')
+    await user.click(screen.getByText('All roles').closest('button')!)
+    await user.click(await screen.findByRole('option', { name: '(none)' }))
 
     // …and selecting it sends `role=` (empty value) — no "(none)" sentinel
     // ever leaves the dashboard.

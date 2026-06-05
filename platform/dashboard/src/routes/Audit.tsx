@@ -1,9 +1,19 @@
 import { useEffect, useMemo, useState } from 'react'
 import { keepPreviousData, useQuery } from '@tanstack/react-query'
+import {
+  Activity,
+  Check,
+  CircleDashed,
+  Filter,
+  Lightbulb,
+  X,
+} from 'lucide-react'
 import { api, type AuditDecisionRow, type AuditOutcome } from '@/lib/api'
 import { useProjectScoped } from '@/lib/active'
 import { NoProjectEmptyState } from '@/components/NoProjectEmptyState'
-import { Icon } from '@/components/audit/icon'
+import { Button } from '@/components/ui/button'
+import { Card } from '@/components/ui/card'
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import {
   AreaChart,
   type ChartBucket,
@@ -20,7 +30,6 @@ import {
   FilterBar,
   KpiCard,
 } from '@/components/audit/pieces'
-import '@/styles/audit.css'
 
 const ZERO_COUNTS: Counts = { allow: 0, deny: 0, needs_approval: 0, total: 0 }
 
@@ -35,7 +44,7 @@ function KV({ k, children, mono, muted }: { k: string; children: React.ReactNode
   return (
     <div style={{ display: 'grid', gridTemplateColumns: '116px 1fr', gap: 10, padding: '5px 0', fontSize: 12.5, alignItems: 'baseline' }}>
       <div style={{ color: 'hsl(var(--muted-foreground))' }}>{k}</div>
-      <div className={mono ? 'mono' : ''} style={{ color: muted ? 'hsl(var(--muted-foreground))' : 'hsl(var(--foreground))', wordBreak: 'break-word', fontSize: mono ? 12 : 12.5 }}>{children}</div>
+      <div className={mono ? 'font-mono' : ''} style={{ color: muted ? 'hsl(var(--muted-foreground))' : 'hsl(var(--foreground))', wordBreak: 'break-word', fontSize: mono ? 12 : 12.5 }}>{children}</div>
     </div>
   )
 }
@@ -74,26 +83,26 @@ function DetailDrawer({
       <aside style={{ position: 'relative', width: 472, maxWidth: '92vw', background: 'hsl(var(--card))', borderLeft: '1px solid hsl(var(--border))', height: '100%', display: 'flex', flexDirection: 'column', boxShadow: '-24px 0 60px hsl(222 40% 2% / 0.5)' }}>
         <div style={{ padding: '16px 20px', borderBottom: '1px solid hsl(var(--border))', display: 'flex', alignItems: 'center', gap: 10 }}>
           <DecisionBadge d={e.outcome} />
-          <span className="mono" style={{ fontSize: 12, color: 'hsl(var(--muted-foreground))', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>{e.event_id}</span>
-          <button className="fty-iconbtn" onClick={onClose} title="Close (Esc)"><Icon name="x" size={16} /></button>
+          <span className="font-mono" style={{ fontSize: 12, color: 'hsl(var(--muted-foreground))', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>{e.event_id}</span>
+          <Button variant="ghost" size="icon" onClick={onClose} title="Close (Esc)"><X className="size-4" /></Button>
         </div>
 
         <div style={{ overflow: 'auto', flex: 1, padding: '4px 20px 24px' }}>
           <div style={{ marginTop: 18, display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
-            <span className="mono" style={{ fontSize: 17, fontWeight: 600, color: 'hsl(var(--foreground))' }}>{e.tool_name}</span>
+            <span className="font-mono" style={{ fontSize: 17, fontWeight: 600, color: 'hsl(var(--foreground))' }}>{e.tool_name}</span>
             <span style={{ fontSize: 13, color: 'hsl(var(--muted-foreground))' }}>by</span>
-            <span className="mono" style={{ fontSize: 14, color: 'hsl(var(--foreground))' }}>{e.agent_name}</span>
+            <span className="font-mono" style={{ fontSize: 14, color: 'hsl(var(--foreground))' }}>{e.agent_name}</span>
           </div>
           <div style={{ marginTop: 8, fontSize: 13, color: 'hsl(var(--foreground))', lineHeight: 1.55, padding: '10px 12px', background: `color-mix(in srgb, ${accent} 9%, transparent)`, border: `1px solid color-mix(in srgb, ${accent} 28%, transparent)`, borderRadius: 8 }}>
             {e.reason || (e.outcome === 'allow' ? 'Allowed — no rule violated.' : 'No reason recorded.')}
-            {e.error_type && <span className="mono" style={{ display: 'block', marginTop: 6, fontSize: 11.5, color: accent }}>error_type: {e.error_type}</span>}
+            {e.error_type && <span className="font-mono" style={{ display: 'block', marginTop: 6, fontSize: 11.5, color: accent }}>error_type: {e.error_type}</span>}
           </div>
 
           {e.violations.length > 0 && (
             <DrawerSection label="Violations" accent="hsl(var(--semantic-deny))">
               <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                 {e.violations.map((v) => (
-                  <span key={v} className="mono" style={{ fontSize: 11.5, padding: '3px 8px', borderRadius: 6, background: 'hsl(var(--semantic-deny-soft))', color: 'hsl(var(--semantic-deny))' }}>{v}</span>
+                  <span key={v} className="font-mono" style={{ fontSize: 11.5, padding: '3px 8px', borderRadius: 6, background: 'hsl(var(--semantic-deny-soft))', color: 'hsl(var(--semantic-deny))' }}>{v}</span>
                 ))}
               </div>
             </DrawerSection>
@@ -101,9 +110,9 @@ function DetailDrawer({
 
           {hintStr && (
             <DrawerSection label="Policy hint">
-              <div className="fty-code" style={{ fontSize: 12 }}>
-                <Icon name="lightbulb" size={13} color="hsl(var(--semantic-approval))" />
-                <span style={{ color: 'hsl(var(--foreground))' }}>{hintStr}</span>
+              <div className="flex items-center gap-2 rounded-md border border-border bg-muted px-3 py-2.5 font-mono text-xs">
+                <Lightbulb className="size-3.5 shrink-0 text-approval" />
+                <span className="text-foreground">{hintStr}</span>
               </div>
             </DrawerSection>
           )}
@@ -134,8 +143,8 @@ function DetailDrawer({
                   <div key={r.event_id} onClick={() => onSelect(r)}
                     style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px', cursor: 'pointer', borderBottom: i < related.length - 1 ? '1px solid hsl(var(--border))' : 0, fontSize: 12 }}>
                     <DecisionBadge d={r.outcome} />
-                    <span className="mono" style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.tool_name}</span>
-                    <span className="mono" style={{ color: 'hsl(var(--muted-foreground))', fontSize: 11 }}>{fmtTs(new Date(r.occurred_at))}</span>
+                    <span className="font-mono" style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.tool_name}</span>
+                    <span className="font-mono" style={{ color: 'hsl(var(--muted-foreground))', fontSize: 11 }}>{fmtTs(new Date(r.occurred_at))}</span>
                   </div>
                 ))}
               </div>
@@ -144,8 +153,8 @@ function DetailDrawer({
         </div>
 
         <div style={{ padding: '12px 20px', borderTop: '1px solid hsl(var(--border))', display: 'flex', gap: 8 }}>
-          <button className="fty-btn secondary sm" onClick={() => { setF((p) => ({ ...p, agent: e.agent_name })); onClose() }}><Icon name="filter" size={12} />Filter to agent</button>
-          <button className="fty-btn secondary sm" onClick={() => { setF((p) => ({ ...p, tool: e.tool_name })); onClose() }}><Icon name="filter" size={12} />Filter to tool</button>
+          <Button variant="secondary" size="sm" onClick={() => { setF((p) => ({ ...p, agent: e.agent_name })); onClose() }}><Filter className="size-3" />Filter to agent</Button>
+          <Button variant="secondary" size="sm" onClick={() => { setF((p) => ({ ...p, tool: e.tool_name })); onClose() }}><Filter className="size-3" />Filter to tool</Button>
         </div>
       </aside>
     </div>
@@ -272,20 +281,22 @@ export function AuditPage() {
 
   return (
     <>
-      <div className="fty-page">
-        <div className="fty-page-hd">
+      <div className="mx-auto max-w-[1400px]">
+        <header className="mb-6 flex items-end justify-between gap-4">
           <div>
-            <h1 className="fty-page-title">Audit</h1>
-            <div className="fty-page-sub">Every policy decision for project <span className="mono" style={{ color: 'hsl(var(--foreground))' }}>support-bot</span></div>
+            <h1 className="text-2xl font-semibold tracking-tight">Audit</h1>
+            <p className="mt-1 text-sm text-muted-foreground">Every policy decision for project <span className="font-mono text-foreground">support-bot</span></p>
           </div>
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-            <div className="fty-seg" style={{ width: 'auto' }}>
-              {(['24h', '7d', '30d', '90d'] as const).map((r) => (
-                <button key={r} className={f.range === r ? 'active' : ''} onClick={() => setF((p) => ({ ...p, range: r }))}>{r}</button>
-              ))}
-            </div>
-          </div>
-        </div>
+          <ToggleGroup
+            type="single"
+            value={f.range}
+            onValueChange={(v) => v && setF((p) => ({ ...p, range: v as Filters['range'] }))}
+          >
+            {(['24h', '7d', '30d', '90d'] as const).map((r) => (
+              <ToggleGroupItem key={r} value={r}>{r}</ToggleGroupItem>
+            ))}
+          </ToggleGroup>
+        </header>
 
         <FilterBar
           f={f}
@@ -298,32 +309,32 @@ export function AuditPage() {
         />
         <ActiveChips f={f} setF={setF} />
 
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16, marginBottom: 16 }}>
-          <KpiCard label="Decisions" icon="activity" value={counts.total.toLocaleString()} sub={avgLabel} spark={spark.total} sparkColor="hsl(var(--primary))" showSpark />
-          <KpiCard label="Allowed" icon="check" value={counts.allow.toLocaleString()} color="allow" sub={`${allowPct}% of decisions`} spark={spark.allow} sparkColor="hsl(var(--semantic-allow))" showSpark onClick={() => setOutcome('allow')} active={f.outcome === 'allow'} />
-          <KpiCard label="Denied" icon="x" value={counts.deny.toLocaleString()} color="deny" sub={`${denyRate}% deny rate`} spark={spark.deny} sparkColor="hsl(var(--semantic-deny))" showSpark onClick={() => setOutcome('deny')} active={f.outcome === 'deny'} />
-          <KpiCard label="Needs approval" icon="circle-dashed" value={counts.needs_approval.toLocaleString()} color="approval" sub={`${apprPct}% of decisions`} spark={spark.needs_approval} sparkColor="hsl(var(--semantic-approval))" showSpark onClick={() => setOutcome('needs_approval')} active={f.outcome === 'needs_approval'} />
+        <div className="mb-4 grid grid-cols-4 gap-4">
+          <KpiCard label="Decisions" icon={Activity} value={counts.total.toLocaleString()} sub={avgLabel} spark={spark.total} sparkColor="hsl(var(--primary))" showSpark />
+          <KpiCard label="Allowed" icon={Check} value={counts.allow.toLocaleString()} color="allow" sub={`${allowPct}% of decisions`} spark={spark.allow} sparkColor="hsl(var(--semantic-allow))" showSpark onClick={() => setOutcome('allow')} active={f.outcome === 'allow'} />
+          <KpiCard label="Denied" icon={X} value={counts.deny.toLocaleString()} color="deny" sub={`${denyRate}% deny rate`} spark={spark.deny} sparkColor="hsl(var(--semantic-deny))" showSpark onClick={() => setOutcome('deny')} active={f.outcome === 'deny'} />
+          <KpiCard label="Needs approval" icon={CircleDashed} value={counts.needs_approval.toLocaleString()} color="approval" sub={`${apprPct}% of decisions`} spark={spark.needs_approval} sparkColor="hsl(var(--semantic-approval))" showSpark onClick={() => setOutcome('needs_approval')} active={f.outcome === 'needs_approval'} />
         </div>
 
-        <div style={{ display: 'grid', gridTemplateColumns: '1.55fr 1fr', gap: 16, marginBottom: 16 }}>
-          <div className="fty-card pad-lg">
-            <div className="fty-card-hd">
-              <div className="fty-card-title">Decisions over time</div>
-              <div style={{ display: 'flex', gap: 14, fontSize: 11, color: 'hsl(var(--muted-foreground))' }}>
+        <div className="mb-4 grid grid-cols-[1.55fr_1fr] gap-4">
+          <Card className="p-6">
+            <div className="mb-3.5 flex items-center justify-between">
+              <div className="text-[13px] font-medium text-muted-foreground">Decisions over time</div>
+              <div className="flex gap-3.5 text-[11px] text-muted-foreground">
                 {(['allow', 'needs_approval', 'deny'] as AuditOutcome[]).map((k) => (
-                  <span key={k} style={{ display: 'flex', alignItems: 'center', gap: 5 }}><span style={{ width: 8, height: 8, borderRadius: 2, background: CHART_COLORS[k] }} />{OUT_LABEL[k]}</span>
+                  <span key={k} className="flex items-center gap-1.5"><span className="size-2 rounded-sm" style={{ background: CHART_COLORS[k] }} />{OUT_LABEL[k]}</span>
                 ))}
               </div>
             </div>
-            {days.length ? <AreaChart days={days} /> : <div style={{ height: 240, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13, color: 'hsl(var(--muted-foreground))' }}>No decisions in this range.</div>}
-          </div>
-          <div className="fty-card pad-lg">
-            <div className="fty-card-title" style={{ marginBottom: 18 }}>Outcome breakdown</div>
+            {days.length ? <AreaChart days={days} /> : <div className="flex h-60 items-center justify-center text-[13px] text-muted-foreground">No decisions in this range.</div>}
+          </Card>
+          <Card className="p-6">
+            <div className="mb-4 text-[13px] font-medium text-muted-foreground">Outcome breakdown</div>
             <Donut counts={counts} />
-          </div>
+          </Card>
         </div>
 
-        <div style={{ marginBottom: 16 }}>
+        <div className="mb-4">
           <BreakdownCard byTool={summary?.by_tool ?? []} byAgent={summary?.by_agent ?? []} byRole={summary?.by_role.map(displayRole) ?? []} f={f} setF={setF} />
         </div>
 

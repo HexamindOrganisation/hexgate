@@ -1,6 +1,7 @@
 import { useLayoutEffect, useRef, useState } from 'react'
+import { Check, CircleDashed, X } from 'lucide-react'
 import type { AuditOutcome } from '@/lib/api'
-import { Icon } from './icon'
+import { Badge } from '@/components/ui/badge'
 import { CHART_COLORS, OUT_LABEL } from './chart-tokens'
 
 const C = CHART_COLORS
@@ -36,12 +37,14 @@ function useMeasure() {
   return [ref, w] as const
 }
 
-export function DecisionBadge({ d, size = 11 }: { d: AuditOutcome; size?: number }) {
-  if (d === 'allow')
-    return <span className="fty-badge allow"><Icon name="check" size={size} strokeWidth={2} />allow</span>
-  if (d === 'deny')
-    return <span className="fty-badge deny"><Icon name="x" size={size} strokeWidth={2} />deny</span>
-  return <span className="fty-badge approval"><Icon name="circle-dashed" size={size} strokeWidth={2} />approval</span>
+export function DecisionBadge({ d }: { d: AuditOutcome }) {
+  const OutcomeIcon = d === 'allow' ? Check : d === 'deny' ? X : CircleDashed
+  return (
+    <Badge variant={d === 'needs_approval' ? 'approval' : d}>
+      <OutcomeIcon className="size-3" strokeWidth={2} />
+      {OUT_LABEL[d]}
+    </Badge>
+  )
 }
 
 // ——— Sparkline (single series area) ———
@@ -173,7 +176,7 @@ export function AreaChart({ days, height = 240 }: { days: ChartBucket[]; height?
             <div key={k} style={{ display: 'flex', alignItems: 'center', gap: 6, lineHeight: 1.7 }}>
               <span style={{ width: 8, height: 8, borderRadius: 2, background: C[k] }} />
               <span style={{ color: C.muted, flex: 1 }}>{OUT_LABEL[k]}</span>
-              <span className="mono" style={{ color: 'hsl(var(--foreground))' }}>{days[hover][k]}</span>
+              <span className="font-mono" style={{ color: 'hsl(var(--foreground))' }}>{days[hover][k]}</span>
             </div>
           ))}
         </div>
@@ -212,8 +215,8 @@ export function Donut({ counts, size = 168, stroke = 20 }: { counts: Counts; siz
             <div key={k} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '3px 0', fontSize: 12.5 }}>
               <span style={{ width: 9, height: 9, borderRadius: 2, background: C[k] }} />
               <span style={{ flex: 1, color: 'hsl(var(--foreground))' }}>{OUT_LABEL[k]}</span>
-              <span className="mono" style={{ color: 'hsl(var(--foreground))' }}>{counts[k].toLocaleString()}</span>
-              <span className="mono" style={{ color: C.muted, width: 34, textAlign: 'right' }}>{pct}%</span>
+              <span className="font-mono" style={{ color: 'hsl(var(--foreground))' }}>{counts[k].toLocaleString()}</span>
+              <span className="font-mono" style={{ color: C.muted, width: 34, textAlign: 'right' }}>{pct}%</span>
             </div>
           )
         })}
@@ -244,7 +247,7 @@ export function BreakdownBar({
       style={{ marginBottom: 11, cursor: onClick ? 'pointer' : 'default', opacity: active === false ? 0.45 : 1, transition: 'opacity 120ms' }}
     >
       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 5, fontSize: 12.5, gap: 8 }}>
-        <span className="mono" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</span>
+        <span className="font-mono" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</span>
         <span style={{ color: C.muted, flexShrink: 0 }}>
           {row.deny > 0 && <span style={{ color: C.deny, marginRight: 8 }}>{row.deny} denied</span>}
           <span style={{ color: 'hsl(var(--foreground))' }}>{row.total.toLocaleString()}</span>

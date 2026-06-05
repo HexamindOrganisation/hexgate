@@ -1,10 +1,37 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useState, type ComponentType } from 'react'
+import {
+  Check,
+  ChevronRight,
+  CircleDashed,
+  Download,
+  List,
+  X,
+} from 'lucide-react'
 import type {
   AuditBreakdownRow,
   AuditDecisionRow,
   AuditOutcome,
 } from '@/lib/api'
-import { Icon } from './icon'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Card } from '@/components/ui/card'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { BreakdownBar, type BreakdownDatum, DecisionBadge, Sparkline } from './charts'
 import { CHART_COLORS, OUT_LABEL } from './chart-tokens'
 
@@ -33,13 +60,21 @@ const toDatum = (r: AuditBreakdownRow): BreakdownDatum => ({
   needs_approval: r.needs_approval,
 })
 
+// Radix Select items can't carry value="" — UI-local stand-in for "all".
+const ALL = '__all__'
+
 // Module-level (not re-created per render).
 function FilterSelect({ value, all, opts, onChange }: { value: string; all: string; opts: string[]; onChange: (v: string) => void }) {
   return (
-    <select className="fty-select" value={value} onChange={(e) => onChange(e.target.value)}>
-      <option value="">{all}</option>
-      {opts.map((o) => <option key={o} value={o}>{o}</option>)}
-    </select>
+    <Select value={value || ALL} onValueChange={(v) => onChange(v === ALL ? '' : v)}>
+      <SelectTrigger className="h-8 w-auto min-w-32 gap-1.5 text-[13px]">
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        <SelectItem value={ALL}>{all}</SelectItem>
+        {opts.map((o) => <SelectItem key={o} value={o} className="font-mono text-xs">{o}</SelectItem>)}
+      </SelectContent>
+    </Select>
   )
 }
 
@@ -57,19 +92,29 @@ export function FilterBar({
 }) {
   const set = <K extends keyof Filters>(k: K, v: Filters[K]) => setF((p) => ({ ...p, [k]: v }))
   return (
-    <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 14 }}>
+    <div className="mb-3.5 flex flex-wrap items-center gap-2">
       <FilterSelect value={f.agent} all="All agents" opts={agents} onChange={(v) => set('agent', v)} />
       <FilterSelect value={f.role} all="All roles" opts={roles} onChange={(v) => set('role', v)} />
       <FilterSelect value={f.tool} all="All tools" opts={tools} onChange={(v) => set('tool', v)} />
-      <span style={{ fontSize: 12, color: 'hsl(var(--muted-foreground))', marginLeft: 4 }}>Outcome</span>
-      <div className="fty-seg" style={{ width: 'auto' }}>
-        <button className={f.outcome === '' ? 'active' : ''} onClick={() => set('outcome', '')}><Icon name="list" size={12} />All</button>
-        <button className={f.outcome === 'allow' ? 'active allow' : ''} onClick={() => set('outcome', 'allow')} style={{ color: f.outcome === 'allow' ? undefined : 'hsl(var(--semantic-allow))' }}><Icon name="check" size={12} strokeWidth={2} />allow</button>
-        <button className={f.outcome === 'deny' ? 'active deny' : ''} onClick={() => set('outcome', 'deny')} style={{ color: f.outcome === 'deny' ? undefined : 'hsl(var(--semantic-deny))' }}><Icon name="x" size={12} strokeWidth={2} />deny</button>
-        <button className={f.outcome === 'needs_approval' ? 'active approval' : ''} onClick={() => set('outcome', 'needs_approval')} style={{ color: f.outcome === 'needs_approval' ? undefined : 'hsl(var(--semantic-approval))' }}><Icon name="circle-dashed" size={12} strokeWidth={2} />approval</button>
-      </div>
-      <span style={{ fontSize: 12, color: 'hsl(var(--muted-foreground))', marginLeft: 'auto', whiteSpace: 'nowrap' }}>
-        <span style={{ color: 'hsl(var(--foreground))' }}>{shown.toLocaleString()}</span> of <span className="mono">{total.toLocaleString()}</span> decisions
+      <span className="ml-1 text-xs text-muted-foreground">Outcome</span>
+      <ToggleGroup
+        type="single"
+        value={f.outcome || ALL}
+        onValueChange={(v) => set('outcome', !v || v === ALL ? '' : (v as AuditOutcome))}
+      >
+        <ToggleGroupItem value={ALL}><List className="size-3" />All</ToggleGroupItem>
+        <ToggleGroupItem value="allow" className="text-allow data-[state=on]:bg-allow/15 data-[state=on]:text-allow">
+          <Check className="size-3" strokeWidth={2} />allow
+        </ToggleGroupItem>
+        <ToggleGroupItem value="deny" className="text-deny data-[state=on]:bg-deny/15 data-[state=on]:text-deny">
+          <X className="size-3" strokeWidth={2} />deny
+        </ToggleGroupItem>
+        <ToggleGroupItem value="needs_approval" className="text-approval data-[state=on]:bg-approval/15 data-[state=on]:text-approval">
+          <CircleDashed className="size-3" strokeWidth={2} />approval
+        </ToggleGroupItem>
+      </ToggleGroup>
+      <span className="ml-auto whitespace-nowrap text-xs text-muted-foreground">
+        <span className="text-foreground">{shown.toLocaleString()}</span> of <span className="font-mono">{total.toLocaleString()}</span> decisions
       </span>
     </div>
   )
@@ -81,25 +126,32 @@ export function ActiveChips({ f, setF }: { f: Filters; setF: SetFilters }) {
   const chips = (['agent', 'role', 'tool', 'outcome'] as const).filter((k) => f[k])
   if (!chips.length) return null
   return (
-    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 16, alignItems: 'center' }}>
-      <span style={{ fontSize: 11.5, color: 'hsl(var(--muted-foreground))' }}>Filters</span>
+    <div className="mb-4 flex flex-wrap items-center gap-1.5">
+      <span className="text-[11.5px] text-muted-foreground">Filters</span>
       {chips.map((k) => (
-        <span key={k} className="fty-badge muted" style={{ paddingRight: 4 }}>
-          {lbl[k]}: <span className="mono" style={{ color: 'hsl(var(--foreground))' }}>{f[k]}</span>
-          <button onClick={() => set(k, '')} style={{ border: 0, background: 'transparent', cursor: 'pointer', color: 'hsl(var(--muted-foreground))', display: 'inline-flex', padding: 0, marginLeft: 2 }}><Icon name="x" size={11} /></button>
-        </span>
+        <Badge key={k} className="gap-1 pr-1 text-muted-foreground">
+          {lbl[k]}: <span className="font-mono text-foreground">{f[k]}</span>
+          <button
+            onClick={() => set(k, '')}
+            className="inline-flex cursor-pointer text-muted-foreground hover:text-foreground"
+          >
+            <X className="size-3" />
+          </button>
+        </Badge>
       ))}
-      <button className="fty-btn ghost sm" onClick={() => setF((p) => ({ agent: '', role: '', tool: '', outcome: '', range: p.range }))}>Clear all</button>
+      <Button variant="ghost" size="sm" className="h-6 px-2 text-xs" onClick={() => setF((p) => ({ agent: '', role: '', tool: '', outcome: '', range: p.range }))}>
+        Clear all
+      </Button>
     </div>
   )
 }
 
 // ————————————————————————————————————————————— KPI tile
 export function KpiCard({
-  label, icon, value, sub, color, spark, sparkColor, showSpark, onClick, active,
+  label, icon: KpiIcon, value, sub, color, spark, sparkColor, showSpark, onClick, active,
 }: {
   label: string
-  icon: string
+  icon: ComponentType<{ className?: string }>
   value: string
   sub: string
   color?: 'allow' | 'deny' | 'approval'
@@ -109,16 +161,25 @@ export function KpiCard({
   onClick?: () => void
   active?: boolean
 }) {
+  // Static map — Tailwind's scanner can't see interpolated class names.
+  const valColor = { allow: 'text-allow', deny: 'text-deny', approval: 'text-approval' }
   return (
-    <div className="fty-card" onClick={onClick}
-      style={{ cursor: onClick ? 'pointer' : 'default', borderColor: active ? 'hsl(var(--primary) / 0.5)' : undefined, transition: 'border-color 120ms' }}>
-      <div className="fty-kpi">
-        <div className="fty-kpi-label"><Icon name={icon} size={13} /><span>{label}</span></div>
-        <div className={`fty-kpi-val ${color || ''}`}>{value}</div>
-        <div className="fty-kpi-sub">{sub}</div>
-        {showSpark && spark && <div className="fty-kpi-spark"><Sparkline data={spark} color={sparkColor} width={170} /></div>}
+    <Card
+      onClick={onClick}
+      className={`p-5 transition-colors ${onClick ? 'cursor-pointer' : ''} ${active ? 'border-primary/50' : ''}`}
+    >
+      <div className="flex flex-col gap-1.5">
+        <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+          <KpiIcon className="size-3.5" />
+          <span>{label}</span>
+        </div>
+        <div className={`text-[28px] font-semibold leading-tight tracking-tight ${color ? valColor[color] : ''}`}>
+          {value}
+        </div>
+        <div className="text-[11.5px] text-muted-foreground">{sub}</div>
+        {showSpark && spark && <div className="mt-1.5"><Sparkline data={spark} color={sparkColor} width={170} /></div>}
       </div>
-    </div>
+    </Card>
   )
 }
 
@@ -150,45 +211,51 @@ export function BreakdownCard({
   const fkey = dim
 
   return (
-    <div className="fty-card pad-lg" style={{ display: 'flex', flexDirection: 'column' }}>
-      <div className="fty-card-hd" style={{ marginBottom: 16 }}>
-        <div className="fty-tabs">
-          {DIMS.map((d) => (
-            <button key={d.id} className={dim === d.id ? 'active' : ''} onClick={() => setDim(d.id)}>{d.label}</button>
-          ))}
-        </div>
-        <select className="fty-select" value={sort} onChange={(e) => setSort(e.target.value as 'volume' | 'denials')} style={{ height: 28, fontSize: 12 }}>
-          <option value="volume">by volume</option>
-          <option value="denials">by denials</option>
-        </select>
+    <Card className="flex flex-col p-6">
+      <div className="mb-4 flex items-center justify-between">
+        <Tabs value={dim} onValueChange={(v) => setDim(v as typeof dim)}>
+          <TabsList>
+            {DIMS.map((d) => (
+              <TabsTrigger key={d.id} value={d.id}>{d.label}</TabsTrigger>
+            ))}
+          </TabsList>
+        </Tabs>
+        <Select value={sort} onValueChange={(v) => setSort(v as 'volume' | 'denials')}>
+          <SelectTrigger className="h-7 w-auto gap-1.5 text-xs">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="volume">by volume</SelectItem>
+            <SelectItem value="denials">by denials</SelectItem>
+          </SelectContent>
+        </Select>
       </div>
-      <div style={{ flex: 1, display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', columnGap: 32, rowGap: 0 }}>
+      <div className="grid flex-1 grid-cols-2 gap-x-8">
         {data.map((row) => (
           <BreakdownBar key={row.key} label={row.key} row={row} max={max}
             active={!f[fkey] || f[fkey] === row.key}
             onClick={() => setF((p) => ({ ...p, [fkey]: p[fkey] === row.key ? '' : row.key }))} />
         ))}
-        {!data.length && <div style={{ fontSize: 12.5, color: 'hsl(var(--muted-foreground))', padding: '8px 0' }}>No decisions match.</div>}
+        {!data.length && <div className="py-2 text-[12.5px] text-muted-foreground">No decisions match.</div>}
       </div>
-      <div style={{ display: 'flex', gap: 14, marginTop: 4, paddingTop: 12, borderTop: '1px solid hsl(var(--border))', fontSize: 11, color: 'hsl(var(--muted-foreground))' }}>
+      <div className="mt-1 flex gap-3.5 border-t border-border pt-3 text-[11px] text-muted-foreground">
         {(['allow', 'needs_approval', 'deny'] as AuditOutcome[]).map((k) => (
-          <span key={k} style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-            <span style={{ width: 8, height: 8, borderRadius: 2, background: CHART_COLORS[k] }} />{OUT_LABEL[k]}
+          <span key={k} className="flex items-center gap-1.5">
+            <span className="size-2 rounded-sm" style={{ background: CHART_COLORS[k] }} />{OUT_LABEL[k]}
           </span>
         ))}
-        <span style={{ marginLeft: 'auto' }}>click a bar to filter →</span>
+        <span className="ml-auto">click a bar to filter →</span>
       </div>
-    </div>
+    </Card>
   )
 }
 
 // ————————————————————————————————————————————— Events table
 export function EventsTable({
-  rows, total, density, onSelect, selectedId, onLoadMore, loadingMore, onExport,
+  rows, total, onSelect, selectedId, onLoadMore, loadingMore, onExport,
 }: {
   rows: AuditDecisionRow[]
   total: number
-  density?: 'comfortable' | 'compact'
   onSelect: (e: AuditDecisionRow) => void
   selectedId?: string | null
   onLoadMore: () => void
@@ -196,53 +263,60 @@ export function EventsTable({
   onExport?: () => void
 }) {
   return (
-    <div className="fty-card" style={{ padding: 0, overflow: 'hidden' }}>
-      <div style={{ padding: '16px 20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid hsl(var(--border))' }}>
+    <Card className="overflow-hidden p-0">
+      <div className="flex items-center justify-between border-b border-border px-5 py-4">
         <div>
-          <div style={{ fontSize: 15, fontWeight: 600 }}>Decisions</div>
-          <div style={{ fontSize: 12, color: 'hsl(var(--muted-foreground))', marginTop: 2 }}>Newest first · ordered by <span className="mono">occurred_at</span>. Click a row to inspect.</div>
+          <div className="text-[15px] font-semibold">Decisions</div>
+          <div className="mt-0.5 text-xs text-muted-foreground">Newest first · ordered by <span className="font-mono">occurred_at</span>. Click a row to inspect.</div>
         </div>
-        <button className="fty-btn ghost" onClick={onExport} disabled={!onExport}><Icon name="download" size={13} />Export JSONL</button>
+        <Button variant="ghost" onClick={onExport} disabled={!onExport}>
+          <Download className="size-3.5" />Export JSONL
+        </Button>
       </div>
-      <div style={{ overflowX: 'auto' }}>
-        <table className={`fty-table ${density === 'compact' ? 'compact' : ''}`}>
-          <thead>
-            <tr>
-              <th style={{ width: 168 }}>Time</th>
-              <th>Agent</th>
-              <th>Role</th>
-              <th>Tool</th>
-              <th style={{ width: 110 }}>Outcome</th>
-              <th>Reason</th>
-              <th style={{ width: 30 }}></th>
-            </tr>
-          </thead>
-          <tbody>
+      <div className="overflow-x-auto">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead className="w-[168px]">Time</TableHead>
+              <TableHead>Agent</TableHead>
+              <TableHead>Role</TableHead>
+              <TableHead>Tool</TableHead>
+              <TableHead className="w-[110px]">Outcome</TableHead>
+              <TableHead>Reason</TableHead>
+              <TableHead className="w-[30px]"></TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
             {rows.map((e) => (
-              <tr key={e.event_id} onClick={() => onSelect(e)}
-                style={{ cursor: 'pointer', background: selectedId === e.event_id ? 'hsl(var(--primary) / 0.08)' : undefined }}>
-                <td className="mono" style={{ color: 'hsl(var(--muted-foreground))', fontSize: 12 }}>{fmtTs(new Date(e.occurred_at))}</td>
-                <td className="mono" style={{ fontSize: 12.5 }}>{e.agent_name}</td>
-                <td style={{ color: e.role ? undefined : 'hsl(var(--muted-foreground))' }}>{e.role || '—'}</td>
-                <td className="mono" style={{ fontSize: 12.5 }}>{e.tool_name}</td>
-                <td><DecisionBadge d={e.outcome} /></td>
-                <td style={{ color: 'hsl(var(--muted-foreground))', fontSize: 12.5, maxWidth: 320, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{e.reason || '—'}</td>
-                <td><Icon name="chevron-right" size={14} color="hsl(var(--muted-foreground))" /></td>
-              </tr>
+              <TableRow
+                key={e.event_id}
+                onClick={() => onSelect(e)}
+                className={`cursor-pointer ${selectedId === e.event_id ? 'bg-primary/10 hover:bg-primary/10' : ''}`}
+              >
+                <TableCell className="font-mono text-xs text-muted-foreground">{fmtTs(new Date(e.occurred_at))}</TableCell>
+                <TableCell className="font-mono text-[12.5px]">{e.agent_name}</TableCell>
+                <TableCell className={e.role ? '' : 'text-muted-foreground'}>{e.role || '—'}</TableCell>
+                <TableCell className="font-mono text-[12.5px]">{e.tool_name}</TableCell>
+                <TableCell><DecisionBadge d={e.outcome} /></TableCell>
+                <TableCell className="max-w-80 overflow-hidden text-ellipsis whitespace-nowrap text-[12.5px] text-muted-foreground">{e.reason || '—'}</TableCell>
+                <TableCell><ChevronRight className="size-3.5 text-muted-foreground" /></TableCell>
+              </TableRow>
             ))}
             {!rows.length && (
-              <tr><td colSpan={7} style={{ textAlign: 'center', color: 'hsl(var(--muted-foreground))', padding: '32px 0' }}>No decisions match the current filters.</td></tr>
+              <TableRow>
+                <TableCell colSpan={7} className="py-8 text-center text-muted-foreground">No decisions match the current filters.</TableCell>
+              </TableRow>
             )}
-          </tbody>
-        </table>
+          </TableBody>
+        </Table>
       </div>
       {rows.length < total && (
-        <div style={{ padding: '12px 20px', borderTop: '1px solid hsl(var(--border))', textAlign: 'center' }}>
-          <button className="fty-btn secondary sm" onClick={onLoadMore} disabled={loadingMore}>
+        <div className="border-t border-border px-5 py-3 text-center">
+          <Button variant="secondary" size="sm" onClick={onLoadMore} disabled={loadingMore}>
             {loadingMore ? 'Loading…' : `Load 40 more · ${(total - rows.length).toLocaleString()} remaining`}
-          </button>
+          </Button>
         </div>
       )}
-    </div>
+    </Card>
   )
 }
