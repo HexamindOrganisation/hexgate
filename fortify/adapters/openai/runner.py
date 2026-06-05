@@ -1,6 +1,15 @@
 """``Runner`` wrapper: opens a :class:`User` scope around each ``Runner.run*``
 call so the wrapped tools' enforcers can resolve the active role.
 Langfuse propagation mirrors the User identity into trace metadata.
+
+Policy lifecycle (policy-binding spec, phase 6): the OpenAI ``Runner``
+receives the agent per call, so this wrapper caches one
+:class:`~fortify.security.binding.PolicyBinding` per agent name — the
+first run resolves (platform pull + verify, registering an unknown agent
+from its in-code definition), later runs refresh against the cached
+ETag (304 when unchanged). The agent is re-wrapped per call (cheap tool
+copies), but every wrap closes over the cached enforcer, so a refresh
+swap reaches the tools no matter which call produced them.
 """
 
 import asyncio
@@ -21,8 +30,11 @@ from agents import (
 from langfuse import get_client, propagate_attributes
 from openinference.instrumentation.openai_agents import OpenAIAgentsInstrumentor
 
-from fortify.adapters.openai.wrapper import wrap_openai_agent
+from fortify import audit
+from fortify.adapters.openai.wrapper import _resolve_binding, wrap_openai_agent
 from fortify.runtime import User
+from fortify.security.binding import PolicyBinding
+from fortify.security.enforcer import PolicyEnforcer
 
 
 class FortifyRunner:
@@ -34,6 +46,32 @@ class FortifyRunner:
             raise ValueError(
                 "FORTIFY_KEY is not set. Pass api_key= explicitly or set FORTIFY_KEY environment variable."
             )
+        # One binding per agent name, created on first run. Caching here —
+        # not resolving per call — is what keeps the ETag memory alive, so
+        # an unchanged policy costs one 304 per run instead of a full
+        # payload + signature verify.
+        self._bindings: dict[str, PolicyBinding] = {}
+
+    def _binding_for(self, agent: Agent) -> PolicyBinding:
+        """Get-or-resolve the cached policy binding for ``agent``'s name.
+
+        First call per name resolves against the platform (the loud-
+        failure point) and rebuilds the enforcer with this runner's audit
+        sender — the rebound binding keeps the seeded source, so refresh
+        swaps THIS enforcer's policy in place.
+        """
+        name = getattr(agent, "name", "default")
+        binding = self._bindings.get(name)
+        if binding is None:
+            resolved = _resolve_binding(agent, name, self.api_key)
+            enforcer = PolicyEnforcer(
+                resolved.enforcer.policy,
+                agent_name=name,
+                audit_sender=audit.configure(self.api_key),
+            )
+            binding = PolicyBinding(enforcer, resolved.source)
+            self._bindings[name] = binding
+        return binding
 
     def _setup_observability(self):
         """Install Langfuse + OpenAIAgentsInstrumentor (idempotent)."""
@@ -66,7 +104,9 @@ class FortifyRunner:
     ) -> RunResult:
         """Run the OpenAI agent asynchronously inside a User scope."""
         self._setup_observability()
-        wrapped_agent = wrap_openai_agent(agent, api_key=self.api_key)
+        binding = self._binding_for(agent)
+        await binding.refresh_async()  # per-run policy pull; 304 when unchanged
+        wrapped_agent = wrap_openai_agent(agent, enforcer=binding.enforcer)
         async with user:
             with self._propagate(user, agent.name):
                 return await Runner.run(
@@ -83,7 +123,9 @@ class FortifyRunner:
     ) -> RunResult:
         """Run the OpenAI agent synchronously inside a User scope."""
         self._setup_observability()
-        wrapped_agent = wrap_openai_agent(agent, api_key=self.api_key)
+        binding = self._binding_for(agent)
+        binding.refresh()  # per-run policy pull; 304 when unchanged
+        wrapped_agent = wrap_openai_agent(agent, enforcer=binding.enforcer)
         with user.sync_scope():
             with self._propagate(user, agent.name):
                 return Runner.run_sync(
@@ -104,9 +146,18 @@ class FortifyRunner:
         ``stream_events`` iteration. The User scope is opened inside the
         wrapped iterator. Langfuse propagation runs during setup so the
         trace span attaches.
+
+        The policy refresh happens HERE in the setup body — before
+        ``Runner.run_streamed`` is called — not inside the iterator: the
+        wrap (and thus the enforcer reference) is fixed at setup, and one
+        refresh per run is the contract. Tools that fire later during
+        ``stream_events`` consult whatever the enforcer holds, which this
+        refresh just made current.
         """
         self._setup_observability()
-        wrapped_agent = wrap_openai_agent(agent, api_key=self.api_key)
+        binding = self._binding_for(agent)
+        binding.refresh()  # per-run policy pull; must precede the wrap + setup
+        wrapped_agent = wrap_openai_agent(agent, enforcer=binding.enforcer)
 
         with self._propagate(user, agent.name):
             result = Runner.run_streamed(
