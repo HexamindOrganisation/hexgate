@@ -118,7 +118,13 @@ class PolicyBinding:
 
             client = FortifyClient(FortifyConfig.from_env(api_key=api_key))
         if client is not None:
-            policy, source = _platform_policy(client, agent_name)
+            payload, etag = client.get_agent(agent_name)
+            assert payload is not None, (
+                "get_agent without If-None-Match — 304 impossible"
+            )
+            policy, source = platform_policy_from_payload(
+                client, agent_name, payload, etag
+            )
             return cls(PolicyEnforcer(policy, agent_name=agent_name), source)
 
         raise PolicyBindingError(
@@ -149,7 +155,7 @@ class PolicyBinding:
             logger.warning(
                 "policy refresh for agent %r failed: %s — keeping "
                 "previously loaded policy",
-                self.enforcer.agent_name,
+                getattr(self.enforcer, "agent_name", "?"),
                 exc,
             )
             return
@@ -164,20 +170,25 @@ class PolicyBinding:
         await asyncio.to_thread(self.refresh)
 
 
-def _platform_policy(
-    client: "FortifyClient", agent_name: str
+def platform_policy_from_payload(
+    client: "FortifyClient",
+    agent_name: str,
+    payload: dict,
+    etag: str | None,
 ) -> tuple["PolicyEngine", PolicySource]:
-    """Fetch + verify the platform's policy; return it with a seeded source.
+    """Decode + verify a ``get_agent`` payload into ``(engine, seeded source)``.
 
     The signed WASM bundle is the primary engine; a bundle-less payload
     (e.g. opa missing on the control plane) falls back to the pydantic
     engine on the served ``policy_yaml`` — unless
     ``FORTIFY_BUNDLE_REQUIRE_SIGNATURE`` forbids it. Verification
     failures raise inside ``decode_and_verify`` — never downgraded.
-    """
-    payload, etag = client.get_agent(agent_name)
-    assert payload is not None, "get_agent without If-None-Match — 304 impossible"
 
+    Shared by :meth:`PolicyBinding.resolve` (which fetches the payload
+    itself) and ``load_fortify_agent`` (which already fetched it for the
+    agent's YAMLs) — so the engine-selection rules live in one place and
+    both paths cost a single round trip.
+    """
     bundle = decode_and_verify_platform_bundle(payload, client.public_key_bytes())
     policy: "PolicyEngine"
     if bundle is not None:

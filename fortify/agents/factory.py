@@ -436,28 +436,26 @@ class FortifyAgent:
 
         Called at the top of every agent run (see :func:`stream_agent` /
         :func:`invoke_agent` / serve mode) so policy edits land at the
-        next run no matter how the user invokes the agent. The
-        :class:`~fortify.security.source.PlatformPolicySource` does the
-        ETag/304 dance, and the content-addressed
-        :class:`~fortify.security.wasm_engine._WasmPolicyCache` makes the
-        unchanged case a single small HTTP round-trip — no wasmtime
-        re-instantiation, no signature re-verify.
+        next run no matter how the user invokes the agent. The swap
+        itself — the ETag/304 short-circuit, the identity check, and the
+        fail-soft handling of fetch errors — lives in
+        :class:`~fortify.security.binding.PolicyBinding`; this method
+        adopts the agent's ``_enforcer`` / ``_policy_source`` seam into a
+        binding and delegates.
 
         No-op when no source is attached (programmatic callers that
         constructed the agent without one) or no enforcer exists (no
-        policy was applied). Failures from the source propagate so
-        callers see them at run boundary, not as silent staleness.
+        policy was applied). Fetch failures are logged and swallowed by
+        the binding — the previous policy stays in force; a transient
+        network blip never crashes a chat turn.
         """
         source = getattr(self, "_policy_source", None)
         enforcer = getattr(self, "_enforcer", None)
         if source is None or enforcer is None:
             return
-        new_policy = source.fetch()
-        if new_policy is None or new_policy is enforcer.policy:
-            # Source has nothing to offer, or the same object came back
-            # (e.g. PlatformPolicySource returns the cached bundle on 304).
-            return
-        enforcer.policy = new_policy
+        from fortify.security.binding import PolicyBinding
+
+        PolicyBinding(enforcer, source).refresh()
 
 
 AgentGraph: TypeAlias = FortifyAgent

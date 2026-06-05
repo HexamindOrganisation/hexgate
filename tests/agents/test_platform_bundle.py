@@ -307,3 +307,24 @@ def test_refresh_policy_noop_without_source_or_enforcer() -> None:
     agent = FortifyAgent.__new__(FortifyAgent)
     # Neither _enforcer nor _policy_source is set.
     agent.refresh_policy()  # must not raise
+
+
+def test_refresh_policy_is_fail_soft_on_source_errors() -> None:
+    """Phase 2: the swap logic (and its fail-soft contract) lives in
+    PolicyBinding — a raising source logs and keeps the previous policy
+    instead of crashing the run."""
+    from types import SimpleNamespace
+
+    from fortify.agents.factory import FortifyAgent
+
+    agent = FortifyAgent.__new__(FortifyAgent)
+    enforcer = SimpleNamespace(policy="initial", agent_name="support-bot")
+    agent._enforcer = enforcer  # type: ignore[attr-defined]
+
+    class _Source:
+        def fetch(self):
+            raise RuntimeError("platform down")
+
+    agent._policy_source = _Source()  # type: ignore[attr-defined]
+    agent.refresh_policy()  # must not raise
+    assert enforcer.policy == "initial"

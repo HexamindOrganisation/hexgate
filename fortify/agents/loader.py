@@ -399,8 +399,6 @@ def load_fortify_agent(
     this attribute when an :class:`~fortify.runtime.User` scope is active to
     mint per-request attenuated tokens lazily.
     """
-    from fortify.security.policy_set import load_policy_set_from_dict
-
     if not name:
         raise ValueError(
             "load_fortify_agent(name=...) requires an explicit agent name. "
@@ -416,13 +414,6 @@ def load_fortify_agent(
 
     spec = AgentSpec.model_validate(yaml.safe_load(payload["agent_yaml"]) or {})
     system_prompt = payload.get("system_md") or ""
-
-    # The platform returns one canonical ``policy.yaml`` text per agent. The
-    # role bundle lives inline under a top-level ``roles:`` key when present;
-    # otherwise the document is a flat single-policy doc. load_policy_set_from_dict
-    # dispatches on shape — inheritance + mixin filtering applied either way.
-    policy_payload = yaml.safe_load(payload["policy_yaml"]) or {}
-    policy: object = load_policy_set_from_dict(policy_payload)
 
     tools = resolve_builtin_tools(spec.tools, extra_tools=extra_tools)
 
@@ -442,43 +433,28 @@ def load_fortify_agent(
     # Policy precedence:
     #   1. FORTIFY_LOCAL_POLICY override (dev iteration) — wins outright,
     #      with its own mtime-driven refresh source.
-    #   2. Platform-served signed bundle — verified, WASM-enforced, with
-    #      an ETag-driven PlatformPolicySource for per-run refresh.
-    #   3. policy_yaml + pydantic — fallback when no bundle was served.
-    from fortify.security.source import PlatformPolicySource
+    #   2. Platform-served signed bundle — verified, WASM-enforced — or the
+    #      pydantic engine on the served policy_yaml when no bundle compiled
+    #      (REQUIRE_SIGNATURE forbids that fallback).
+    # Both arms come back as (engine, refresh source); the platform-side
+    # decode/verify/fallback rules live in fortify.security.binding so this
+    # loader and PolicyBinding.resolve can never drift.
+    from fortify.security.binding import platform_policy_from_payload
 
     override = _local_policy_override()
-    refresh_source: PolicySource | None = None
     if override is not None:
-        bundle, refresh_source = override
-        policy = bundle
         # Local override wins; the platform's bundle (if any) is ignored.
+        policy, refresh_source = override
     else:
-        platform_bundle = _platform_bundle(payload, client)
-        if platform_bundle is not None:
-            policy = platform_bundle
-        elif _truthy(os.environ.get(_REQUIRE_SIGNATURE_ENV_VAR)):
-            raise RuntimeError(
-                f"{_REQUIRE_SIGNATURE_ENV_VAR} is set but the platform served "
-                f"no signed bundle for agent {resolved_name!r} — the policy may "
-                "not have compiled (is opa available on the control plane?). "
-                "Refusing to fall back to the pydantic engine."
-            )
-        # Pre-seed PlatformPolicySource with the bundle + etag we just
-        # fetched so the next refresh is a 304 unless the policy changed.
-        refresh_source = PlatformPolicySource(
-            client,
-            resolved_name,
-            initial_bundle=platform_bundle,
-            initial_etag=initial_etag,
+        policy, refresh_source = platform_policy_from_payload(
+            client, resolved_name, payload, initial_etag
         )
 
     enforced = enforce_policy(agent, policy, approval_handler=approval_handler)
     # Attach the client so the runtime can do lazy attenuation inside an
     # active User scope without the caller having to thread it through.
     enforced.fortify_client = client
-    if refresh_source is not None:
-        enforced._policy_source = refresh_source
+    enforced._policy_source = refresh_source
     return enforced, handler
 
 
