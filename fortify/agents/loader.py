@@ -496,6 +496,10 @@ def load_builtin_agent(
         user_id=user_id,
         tags=tags,
         name=spec.name,
+        # The loader applies its own policy below — opting out of
+        # create_agent's auto-bind avoids a redundant platform fetch
+        # (and a surprise register) when FORTIFY_KEY is set.
+        bind_policy=False,
     )
     overridden = _apply_local_override(agent, approval_handler)
     if overridden is not None:
@@ -528,6 +532,10 @@ def load_local_agent(
         user_id=user_id,
         tags=tags,
         name=spec.name,
+        # The loader applies its own policy below — opting out of
+        # create_agent's auto-bind avoids a redundant platform fetch
+        # (and a surprise register) when FORTIFY_KEY is set.
+        bind_policy=False,
     )
     overridden = _apply_local_override(agent, approval_handler)
     if overridden is not None:
@@ -676,6 +684,9 @@ def load_fortify_agent(
             t for t in ["fortify", "fortify-cloud", config.project_id] if t
         ],
         name=spec.name,
+        # This loader IS the binding path — it already holds the payload
+        # and composes the source below; auto-bind would fetch it twice.
+        bind_policy=False,
     )
     # Policy precedence:
     #   1. FORTIFY_LOCAL_POLICY override (dev iteration) — wins outright,
