@@ -1,8 +1,12 @@
+import asyncio
 import base64
 import hashlib
+import logging
 from contextlib import asynccontextmanager
+from typing import Literal
 from urllib.parse import unquote
 
+from clickhouse_connect.driver.exceptions import ClickHouseError, OperationalError
 from fastapi import (
     APIRouter,
     Depends,
@@ -26,12 +30,24 @@ from models import (
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
+from audit import (
+    WINDOW_HOURS,
+    AuditEventOutOfWindow,
+    AuditPayloadTooLarge,
+    bucket_minutes_for,
+    insert_decision,
+    list_decisions,
+    summarize,
+    timeseries,
+    validate_event_window,
+)
 from biscuits import (
     TokenError,
     TokenSignatureError,
     parse_envelope,
     verify_token,
 )
+from clickhouse import get_clickhouse, ping as clickhouse_ping
 from db import async_session_factory, get_session, init_db
 from keystore import FileKeyStore
 from relay import registry
@@ -40,6 +56,12 @@ from schemas import (
     AgentManifestView,
     AgentRead,
     AgentUpdate,
+    AuditDecisionPage,
+    AuditSummary,
+    AuditTimeseriesPoint,
+    AuditWindow,
+    DecisionAccepted,
+    DecisionEvent,
     InvitationCreate,
     InvitationPreview,
     InvitationRead,
@@ -68,6 +90,7 @@ from services import (
     ensure_default_project,
     find_token_by_secret,
     get_agent,
+    get_latest_agent_version_id,
     get_latest_agent_versions_map,
     list_agents,
     list_dev_tokens,
@@ -79,6 +102,7 @@ from services import (
 
 
 keystore = FileKeyStore()
+_log = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -96,6 +120,11 @@ async def lifespan(app_: FastAPI):
         # Backfill signed bundles for seeded agents so they're served via
         # WASM on the first request, not just after their first edit.
         await backfill_bundles(session, keystore.sign)
+    # Don't fail startup on unreachable ClickHouse — /ready surfaces it.
+    if not clickhouse_ping():
+        _log.warning(
+            "ClickHouse unreachable at startup; audit endpoints will 503 until reachable"
+        )
     yield
 
 
@@ -176,15 +205,37 @@ async def require_project(
 
     Used by SDK-facing endpoints (e.g. POST /v1/agents) where the caller
     has only an API key, not a project id in the URL.
+
+    Two gates run in order, matching :func:`ws_require_project` and
+    :func:`optional_dev_token` so all three bearer-auth surfaces agree
+    on what counts as a valid token:
+
+      1. **Signature verification** via :func:`_validate_sdk_token` —
+         parse the envelope, verify the biscuit chains to the platform's
+         root public key. A revocation lookup runs inside the helper.
+      2. **Project resolution** — read ``DevToken.project_id`` for the
+         already-validated secret.
+
+    The signature gate was missing before — a forged biscuit whose
+    secret string happened to match a stored ``DevToken.secret`` would
+    have been accepted. Defense-in-depth + consistency with the WS
+    bearer path.
     """
     if authorization is None or not authorization.startswith("Bearer "):
         raise HTTPException(
             status_code=401, detail="missing or malformed authorization header"
         )
+    # Signature + revocation gate. Raises HTTPException(401) on any
+    # failure (malformed envelope, bad signature, unknown/revoked
+    # secret) so the project lookup below only fires on a verified
+    # token.
+    await _validate_sdk_token(authorization, session)
     secret = authorization.removeprefix("Bearer ").strip()
     token = await find_token_by_secret(session, secret)
-    if token is None:
-        raise HTTPException(status_code=401, detail="invalid fortify key")
+    # ``_validate_sdk_token`` already confirmed find_token_by_secret
+    # returns a row; the second lookup is to read .project_id, not
+    # to re-gate access. assert guards against a logic regression.
+    assert token is not None, "find_token_by_secret returned None after signature gate"
     return token.project_id
 
 
@@ -263,6 +314,87 @@ async def ws_require_project(
     # Sec-WebSocket-Protocol response headers.
     await websocket.accept(subprotocol=_WS_PROTOCOL_MARKER)
     return token.project_id
+
+
+async def ws_require_org_member(
+    websocket: WebSocket,
+    project_id: str,
+    session: AsyncSession,
+) -> User | None:
+    """Authenticate a dashboard-driven WebSocket via the session cookie.
+
+    Counterpart of :func:`ws_require_project` for the cookie-auth side.
+    Browsers can't set custom headers on WS upgrades — fine for
+    ``ws_serve`` (the CLI sends a bearer subprotocol) but the dashboard
+    drives ``ws_chat`` from JavaScript and can't reach for an
+    Authorization header. We extract the ``fortify_session`` cookie
+    directly from the handshake.
+
+    Three gates run in order:
+
+      1. Cookie present → decode the JWT via the same strategy the
+         HTTP cookie path uses.
+      2. Decoded user exists + is active.
+      3. User is a member of the project's org (any role).
+
+    Any failure → ``close(code=4401)`` before ``accept()`` and return
+    ``None``. On success → ``accept()`` and return the ``User``.
+
+    Before this gate landed, ``ws_chat`` was a wide-open eavesdrop /
+    inject surface: anyone who could guess or enumerate a ``project_id``
+    could relay arbitrary JSON to a running serve process and read its
+    replies. The bearer-subprotocol pattern from ``ws_require_project``
+    doesn't work here because JS WebSocket can't set
+    ``Sec-WebSocket-Protocol`` cookies — cookie auth is the only
+    browser-compatible option.
+    """
+    # Cookie extraction. ``websocket.cookies`` is Starlette's parsed
+    # mapping; absent cookies show up as missing keys, not empty
+    # strings.
+    cookie_token = websocket.cookies.get("fortify_session")
+    if not cookie_token:
+        await websocket.close(code=_WS_CLOSE_UNAUTHENTICATED)
+        return None
+
+    # JWT decode via the same strategy + user_manager wiring the HTTP
+    # cookie path uses. Importing locally so this module can be
+    # imported without forcing the auth package to load — keeps
+    # require_user_or_sdk_token (gone) and friends out of the cycle.
+    from fastapi_users.db import SQLAlchemyUserDatabase
+
+    from auth import OAuthAccount, UserManager, get_jwt_strategy
+
+    user_db = SQLAlchemyUserDatabase(session, User, OAuthAccount)
+    user_manager = UserManager(user_db)
+    strategy = get_jwt_strategy()
+    try:
+        user = await strategy.read_token(cookie_token, user_manager)
+    except Exception:  # noqa: BLE001 — any decode failure is auth failure
+        user = None
+    if user is None or not user.is_active:
+        await websocket.close(code=_WS_CLOSE_UNAUTHENTICATED)
+        return None
+
+    # Org-membership check. ``ws_chat`` is project-scoped; the cookie
+    # only proves identity, not access to this particular project.
+    project = await session.get(Project, project_id)
+    if project is None:
+        await websocket.close(code=_WS_CLOSE_UNAUTHENTICATED)
+        return None
+    membership = (
+        await session.exec(
+            select(OrganizationMember).where(
+                OrganizationMember.user_id == user.id,
+                OrganizationMember.org_id == project.org_id,
+            )
+        )
+    ).first()
+    if membership is None:
+        await websocket.close(code=_WS_CLOSE_UNAUTHENTICATED)
+        return None
+
+    await websocket.accept()
+    return user
 
 
 # ---------------------------------------------------------------------------
@@ -468,10 +600,31 @@ async def require_project_admin(
     return user, membership
 
 
+def _readiness() -> tuple[dict[str, str], int]:
+    """Build the readiness body and its HTTP status. Returns 503 when ClickHouse
+    is unreachable so probes deroute the pod instead of sending it ingest traffic
+    that would only 503 — k8s keys off the status code, not the body."""
+    reachable = clickhouse_ping()
+    body = {
+        "status":     "ok" if reachable else "unavailable",
+        "service":    "fortify-api",
+        "clickhouse": "ok" if reachable else "unreachable",
+    }
+    return body, 200 if reachable else 503
+
+
 @app.get("/health")
 async def health() -> dict[str, str]:
-    """Unversioned liveness probe."""
+    """Liveness — must not touch downstream deps, or an outage cascades into
+    restarts. Dependency checks live in /ready."""
     return {"status": "ok", "service": "fortify-api"}
+
+
+@app.get("/ready")
+def ready(response: Response) -> dict[str, str]:
+    """Readiness — pings ClickHouse; 503 when unreachable."""
+    body, response.status_code = _readiness()
+    return body
 
 
 v1 = APIRouter(prefix="/v1")
@@ -480,6 +633,12 @@ v1 = APIRouter(prefix="/v1")
 @v1.get("/health")
 async def v1_health() -> dict[str, str]:
     return {"status": "ok", "service": "fortify-api", "version": "v1"}
+
+
+@v1.get("/ready")
+def v1_ready(response: Response) -> dict[str, str]:
+    body, response.status_code = _readiness()
+    return {**body, "version": "v1"}
 
 
 @v1.get("/.well-known/keys")
@@ -854,6 +1013,185 @@ async def api_register_agent(
     )
 
 
+def _audit_unavailable() -> HTTPException:
+    return HTTPException(
+        status_code=503,
+        detail="audit log temporarily unavailable",
+        headers={"Retry-After": "5"},
+    )
+
+
+def require_clickhouse():
+    """Resolve the ClickHouse client as a dependency, mapping connect failures
+    to 503 — get_clickhouse() connects eagerly, so without this the raise
+    escapes dependency resolution as an uncaught 500."""
+    try:
+        return get_clickhouse()
+    except ClickHouseError as exc:
+        _log.warning("ClickHouse unreachable resolving audit client: %s", exc)
+        raise _audit_unavailable()
+
+
+@v1.post(
+    "/audit/decisions",
+    response_model=DecisionAccepted,
+    status_code=202,
+    tags=["audit"],
+)
+async def ingest_decision(
+    body: DecisionEvent,
+    project_id: str = Depends(require_project),
+    session: AsyncSession = Depends(get_session),
+    clickhouse_client=Depends(require_clickhouse),
+) -> DecisionAccepted:
+    """Ingest one policy decision. project_id (bearer), received_at (CH default),
+    and agent_version_id (platform lookup) are server-resolved.
+
+    Idempotency: the SDK SHOULD retry a failed or ambiguous send (503,
+    timeout) with the SAME event_id. The ingest path is idempotent because
+    the storage engine (ReplacingMergeTree, event_id in the sort key)
+    collapses duplicates on background merges — eventual, so counts may
+    briefly include a retry until the next merge. Do NOT mint a fresh
+    event_id per attempt; that turns a retry into a real duplicate.
+    """
+    try:
+        validate_event_window(body.occurred_at)
+    except AuditEventOutOfWindow as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    agent_version_id = await get_latest_agent_version_id(
+        session, project_id, body.agent_name
+    )
+
+    try:
+        # Sync client + wait_for_async_insert=1 → a real network round-trip;
+        # run it off the event loop like the read handlers below.
+        await asyncio.to_thread(
+            insert_decision,
+            clickhouse_client,
+            event=body,
+            project_id=project_id,
+            agent_version_id=agent_version_id,
+        )
+    except AuditPayloadTooLarge as exc:
+        raise HTTPException(status_code=413, detail=str(exc))
+    except OperationalError as exc:  # transient transport failure — retryable
+        _log.warning("audit insert failed (transient): %s", exc)
+        raise _audit_unavailable()
+    except ClickHouseError as exc:  # storage rejected the row — retry won't help
+        _log.error("audit insert rejected by ClickHouse: %s", exc)
+        raise HTTPException(
+            status_code=422, detail="audit event rejected by storage"
+        )
+
+    return DecisionAccepted(event_id=body.event_id)
+
+
+# Dashboard audit reads — project-scoped aggregation, cookie-authed like the
+# other dashboard reads (org membership via the project path param).
+#
+# ``role`` filter semantics: absent = no filter; ``role=`` (empty value) =
+# the no-role bucket. No sentinel string is reserved on the wire — the
+# dashboard renders "(none)" purely as a display label.
+
+
+@v1.get(
+    "/projects/{project_id}/audit/summary",
+    response_model=AuditSummary,
+    dependencies=[Depends(require_org_member)],
+    tags=["audit"],
+)
+async def api_audit_summary(
+    project_id: str,
+    window: AuditWindow = "24h",
+    agent: str | None = None,
+    role: str | None = None,
+    tool: str | None = None,
+    clickhouse_client=Depends(require_clickhouse),
+) -> AuditSummary:
+    try:
+        # The clickhouse_connect client is sync — run it off the event loop
+        # so a slow aggregation can't stall every other in-flight request.
+        data = await asyncio.to_thread(
+            summarize,
+            clickhouse_client,
+            project_id=project_id,
+            since_hours=WINDOW_HOURS[window],
+            agent=agent,
+            role=role,
+            tool=tool,
+        )
+    except ClickHouseError:
+        raise _audit_unavailable()
+    return AuditSummary.model_validate(data)
+
+
+@v1.get(
+    "/projects/{project_id}/audit/timeseries",
+    response_model=list[AuditTimeseriesPoint],
+    dependencies=[Depends(require_org_member)],
+    tags=["audit"],
+)
+async def api_audit_timeseries(
+    project_id: str,
+    window: AuditWindow = "24h",
+    agent: str | None = None,
+    role: str | None = None,
+    tool: str | None = None,
+    clickhouse_client=Depends(require_clickhouse),
+) -> list[AuditTimeseriesPoint]:
+    try:
+        return await asyncio.to_thread(
+            timeseries,
+            clickhouse_client,
+            project_id=project_id,
+            since_hours=WINDOW_HOURS[window],
+            bucket_minutes=bucket_minutes_for(window),
+            agent=agent,
+            role=role,
+            tool=tool,
+        )
+    except ClickHouseError:
+        raise _audit_unavailable()
+
+
+@v1.get(
+    "/projects/{project_id}/audit/decisions",
+    response_model=AuditDecisionPage,
+    dependencies=[Depends(require_org_member)],
+    tags=["audit"],
+)
+async def api_audit_decisions(
+    project_id: str,
+    window: AuditWindow = "24h",
+    agent: str | None = None,
+    role: str | None = None,
+    tool: str | None = None,
+    outcome: Literal["allow", "deny", "needs_approval"] | None = None,
+    session_id: str | None = None,
+    limit: int = 25,
+    offset: int = 0,
+    clickhouse_client=Depends(require_clickhouse),
+) -> AuditDecisionPage:
+    try:
+        page = await asyncio.to_thread(
+            list_decisions,
+            clickhouse_client,
+            project_id=project_id,
+            since_hours=WINDOW_HOURS[window],
+            agent=agent,
+            role=role,
+            tool=tool,
+            outcome=outcome,
+            session_id=session_id,
+            limit=max(1, min(limit, 200)),
+            offset=max(0, offset),
+        )
+    except ClickHouseError:
+        raise _audit_unavailable()
+    return page
+
+
 @v1.get("/agents/{name}", response_model=AgentRead)
 async def api_get_agent_by_token(
     name: str,
@@ -968,9 +1306,22 @@ async def ws_serve(
 
 
 @v1.websocket("/projects/{project_id}/chat")
-async def ws_chat(websocket: WebSocket, project_id: str) -> None:
-    """Consumer socket for dashboard Playground sessions."""
-    await websocket.accept()
+async def ws_chat(
+    websocket: WebSocket,
+    project_id: str,
+    session: AsyncSession = Depends(get_session),
+) -> None:
+    """Consumer socket for dashboard Playground sessions.
+
+    Cookie-authed: the dashboard's JS WebSocket reaches for the
+    ``fortify_session`` cookie automatically. ``ws_require_org_member``
+    verifies it + checks the caller is a member of the project's org
+    before ``accept()`` runs. Anonymous / cross-org connects close
+    with 4401 before the handshake completes.
+    """
+    user = await ws_require_org_member(websocket, project_id, session)
+    if user is None:
+        return  # close already sent
     await registry.attach_chat(project_id, websocket)
     try:
         while True:
@@ -1054,10 +1405,23 @@ async def api_list_orgs(
     Used by the dashboard's org switcher (Phase 5) — one request, no
     N+1 over memberships, role on the edge so the UI knows what
     actions to enable per row.
+
+    **Repair path:** if the user has zero orgs (e.g., the
+    ``on_after_register`` hook errored after FastAPI-Users committed
+    the User row, or the user predates the personal-default-org
+    bootstrap), call :func:`ensure_personal_default_org` here. The
+    dashboard's first call on each session goes through this endpoint,
+    so the repair is opportunistic and silent. The helper is
+    idempotent on the "user already owns an org" invariant, so a
+    concurrent repair-then-create race can't double-bootstrap.
     """
-    from services import list_orgs_for_user
+    from services import ensure_personal_default_org, list_orgs_for_user
 
     rows = await list_orgs_for_user(session, user.id)
+    if not rows:
+        await ensure_personal_default_org(session, user)
+        await session.commit()
+        rows = await list_orgs_for_user(session, user.id)
     return [
         OrgWithRole(
             id=o.id, slug=o.slug, name=o.name, created_at=o.created_at, role=role
@@ -1208,13 +1572,20 @@ async def api_update_member_role(
 ) -> MemberRead:
     """Promote / demote a member. Admin or owner role required.
 
-    ``LastOwnerError`` from the service layer surfaces as 409 — demoting
-    the only owner would orphan the org. The route doesn't block self-
-    demotion explicitly; the same guard catches it via the owner count.
+    Two service-layer refusals surface here as HTTP errors:
+
+      * ``RoleEscalationError`` → 403 — the caller (admin or owner)
+        tried to assign a role above their own rank. Admins can't
+        mint owners by going through PATCH any more than they can
+        through the invitation path; the rank check is centralised
+        on :func:`_can_invite_role`.
+      * ``LastOwnerError`` → 409 — demoting the only owner would
+        orphan the org. Catches self-demotion too via the owner count.
+
     Returns the updated row so the dashboard can re-render the badge
     without a follow-up GET.
     """
-    from services import LastOwnerError, change_member_role
+    from services import LastOwnerError, RoleEscalationError, change_member_role
 
     _, caller_member = membership
     try:
@@ -1223,7 +1594,10 @@ async def api_update_member_role(
             org_id=caller_member.org_id,
             user_id=user_id,
             new_role=body.role,
+            caller_role=caller_member.role,
         )
+    except RoleEscalationError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
     except LastOwnerError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     if updated is None:

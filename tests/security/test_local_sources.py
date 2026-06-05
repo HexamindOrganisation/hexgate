@@ -33,6 +33,14 @@ _OPA_AVAILABLE = shutil.which("opa") is not None
 needs_opa = pytest.mark.skipif(not _OPA_AVAILABLE, reason="opa not on PATH")
 
 
+def _permissive_sig_policy():
+    """A SignaturePolicy that doesn't refuse anything — for dispatch tests
+    that aren't exercising the signature matrix."""
+    from fortify.agents.loader import SignaturePolicy
+
+    return SignaturePolicy(verify_with=None, require_signature=False)
+
+
 _DEMO_YAML = """\
 version: 1
 roles:
@@ -262,7 +270,7 @@ def test_local_dispatch_routes_dir_to_bundle_dir_source(
     monkeypatch.delenv("FORTIFY_BUNDLE_PUBKEY_PATH", raising=False)
     monkeypatch.delenv("FORTIFY_BUNDLE_SIGN_KEY_PATH", raising=False)
 
-    src = _local_policy_source()
+    src = _local_policy_source(_permissive_sig_policy())
     assert isinstance(src, BundleDirPolicySource)
 
 
@@ -279,7 +287,7 @@ def test_local_dispatch_routes_yaml_to_yaml_source(
     monkeypatch.delenv("FORTIFY_BUNDLE_PUBKEY_PATH", raising=False)
     monkeypatch.delenv("FORTIFY_BUNDLE_SIGN_KEY_PATH", raising=False)
 
-    src = _local_policy_source()
+    src = _local_policy_source(_permissive_sig_policy())
     assert isinstance(src, YamlPolicySource)
 
 
@@ -287,7 +295,7 @@ def test_local_dispatch_unset_returns_none(monkeypatch: pytest.MonkeyPatch) -> N
     from fortify.agents.loader import _local_policy_source
 
     monkeypatch.delenv("FORTIFY_LOCAL_POLICY", raising=False)
-    assert _local_policy_source() is None
+    assert _local_policy_source(_permissive_sig_policy()) is None
 
 
 def test_local_dispatch_rejects_unknown_shape(
@@ -301,7 +309,7 @@ def test_local_dispatch_rejects_unknown_shape(
     target.write_text("not yaml", encoding="utf-8")
     monkeypatch.setenv("FORTIFY_LOCAL_POLICY", str(target))
     with pytest.raises(RuntimeError, match="expected a bundle"):
-        _local_policy_source()
+        _local_policy_source(_permissive_sig_policy())
 
 
 @needs_opa
@@ -348,5 +356,3 @@ def test_local_override_require_signature_rejects_unsigned_yaml(
         pytest.skip("opa not on PATH")
     with pytest.raises(RuntimeError, match="REQUIRE_SIGNATURE"):
         _local_policy_override()
-
-

@@ -117,6 +117,27 @@ def _dashboard_url() -> str:
     return os.environ.get("FORTIFY_DASHBOARD_URL", "http://localhost:5173").rstrip("/")
 
 
+def _cookie_secure() -> bool:
+    """Whether to set the ``Secure`` flag on session + CSRF cookies.
+
+    Default is ``False`` so ``make platform-api`` works over plain HTTP
+    on localhost (a Secure cookie is silently dropped by every browser
+    on http://). Production deployments behind an HTTPS terminator MUST
+    set ``FORTIFY_COOKIE_SECURE=1`` (or ``true``/``yes``/``on``) — without
+    it, a hostile network can sniff or strip the session cookie on the
+    first request that drops back to HTTP.
+
+    Truthy values: ``1``, ``true``, ``yes``, ``on`` (case-insensitive).
+    Everything else, including unset, evaluates to ``False``.
+    """
+    return os.environ.get("FORTIFY_COOKIE_SECURE", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+
+
 class UserManager(BaseUserManager[User, str]):
     """User lifecycle hooks (register / login / password reset).
 
@@ -150,11 +171,20 @@ class UserManager(BaseUserManager[User, str]):
 
           1. Log it. Operators tail stderr for "user registered" lines
              during demos; later this becomes a webhook.
-          2. **Atomically create a personal "default" Org owned by the
-             new user** so the dashboard never lands on an empty
+          2. **Create a personal "default" Org** owned by the new
+             user so the dashboard never lands on an empty
              "no orgs yet" state. The org's slug is derived from the
              email prefix with collision fallback (see
              :func:`services._generate_unique_org_slug`).
+
+        Caveat: FastAPI-Users commits the User row BEFORE calling this
+        hook. The two writes are therefore NOT in one transaction — if
+        the org-create fails here the user row stays committed and the
+        account lands without an org. The repair path in
+        ``GET /v1/orgs`` (``api_list_orgs``) covers that case by
+        invoking :func:`ensure_personal_default_org` lazily for any
+        orgless user, so the hook is best-effort eager bootstrap and
+        the listing endpoint is the recovery net.
 
         Verification stays separate — registering and verifying are
         decoupled so the dashboard can gate destructive actions on
@@ -164,11 +194,11 @@ class UserManager(BaseUserManager[User, str]):
         from services import ensure_personal_default_org
 
         logger.info("user registered: %s (id=%s)", user.email, user.id)
-        # Reuse the active session the user_db is bound to — same
-        # transaction lineage as the User insert so any downstream
-        # failure rolls back together. ``ensure_personal_default_org``
-        # is idempotent so a retried registration after a transient
-        # error doesn't create duplicate default orgs.
+        # ``self.user_db.session`` is the same async session the User
+        # insert used — but FastAPI-Users has already committed it by
+        # the time we get here. Idempotency guarantees of the helper
+        # mean a retried registration after a transient error still
+        # doesn't create duplicate default orgs.
         session = self.user_db.session  # SQLAlchemyUserDatabase exposes this
         await ensure_personal_default_org(session, user)
 
@@ -236,10 +266,11 @@ async def get_user_manager(
 cookie_transport = CookieTransport(
     cookie_name="fortify_session",
     cookie_max_age=_SESSION_TTL_SECONDS,
-    # ``secure=True`` would refuse the cookie over plain HTTP — fine in
-    # prod (HTTPS terminator in front), wrong for ``make platform-api``
-    # which serves on localhost over HTTP. Toggle via env when we deploy.
-    cookie_secure=False,
+    # ``Secure`` would refuse the cookie over plain HTTP — fine in prod
+    # (HTTPS terminator in front), wrong for ``make platform-api`` which
+    # serves on localhost over HTTP. ``FORTIFY_COOKIE_SECURE=1`` flips
+    # the flag on for production; default is off for dev ergonomics.
+    cookie_secure=_cookie_secure(),
     cookie_httponly=True,
     # ``lax`` — strict breaks OAuth redirects when we add Google sign-in
     # (Phase 3c). The OWASP recommendation for general use is lax.
@@ -345,7 +376,7 @@ def build_google_oauth_router() -> APIRouter | None:
         # only). That breaks ``make platform-api`` over localhost HTTP +
         # tests over http://testserver — the browser sets the cookie but
         # never sends it back on /callback, so state verification fails.
-        # Same trade-off as the session cookie: relaxed in dev, prod's
-        # HTTPS terminator flips it back via a future env knob.
-        csrf_token_cookie_secure=False,
+        # Track the session cookie's flag: ``FORTIFY_COOKIE_SECURE=1``
+        # flips both on in production, neither in dev.
+        csrf_token_cookie_secure=_cookie_secure(),
     )

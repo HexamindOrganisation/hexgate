@@ -256,19 +256,45 @@ async def remove_member(
     return True
 
 
+class RoleEscalationError(PermissionError):
+    """Raised when a caller tries to set a member role above their own.
+
+    Mirrors the :func:`_can_invite_role` rank check so the
+    PATCH-member-role surface stays consistent with the invitation
+    surface. Without this guard, an admin could PATCH their own
+    membership row to ``{"role": "owner"}`` and seize the org —
+    bypassing every other gate this layer enforces.
+    """
+
+
 async def change_member_role(
     session: AsyncSession,
     *,
     org_id: str,
     user_id: str,
     new_role: str,
+    caller_role: str,
 ) -> OrganizationMember | None:
     """Update a member's role. Returns the updated row, or None when
-    the membership doesn't exist. Refuses with :class:`LastOwnerError`
-    if demoting the last owner.
+    the membership doesn't exist.
+
+    Two refusal gates:
+      * :class:`RoleEscalationError` — the caller can't assign a role
+        above their own rank. Owner can set anything; admin can set
+        admin + member; member can't reach this code path (the route
+        layer rejects them via ``require_org_admin``).
+      * :class:`LastOwnerError` — demoting the only owner is refused.
+
+    ``caller_role`` is the caller's role on this org (resolved by the
+    route layer via :func:`require_org_admin`).
     """
     if new_role not in ALL_ROLES:
         raise ValueError(f"unknown role: {new_role!r}")
+    if not _can_invite_role(caller_role, new_role):
+        raise RoleEscalationError(
+            f"{caller_role} cannot assign role {new_role!r} — "
+            "callers can only set roles at or below their own rank"
+        )
     member = await find_member(session, org_id=org_id, user_id=user_id)
     if member is None:
         return None
@@ -326,6 +352,12 @@ class InvitationEmailMismatch(InvitationError):
     Refuse strictly rather than allow anyone-with-the-link to join."""
 
 
+# Role hierarchy as integers — higher is more privileged. Shared by
+# :func:`_can_invite_role` and the accept-invite upgrade path so a
+# refactor of one keeps both branches consistent.
+_ROLE_RANK: dict[str, int] = {ROLE_MEMBER: 0, ROLE_ADMIN: 1, ROLE_OWNER: 2}
+
+
 def _can_invite_role(inviter_role: str, target_role: str) -> bool:
     """True if a member with ``inviter_role`` can mint an invite for
     ``target_role``.
@@ -336,8 +368,7 @@ def _can_invite_role(inviter_role: str, target_role: str) -> bool:
     escalation by-design — admins can't mint owner invites and use them
     to promote themselves.
     """
-    rank = {ROLE_MEMBER: 0, ROLE_ADMIN: 1, ROLE_OWNER: 2}
-    return rank.get(inviter_role, -1) >= rank.get(target_role, 99)
+    return _ROLE_RANK.get(inviter_role, -1) >= _ROLE_RANK.get(target_role, 99)
 
 
 async def create_invitation(
@@ -474,7 +505,11 @@ async def accept_invitation(
 
     If the user is already a member of the org (e.g., manual add or
     re-invite), the existing membership row is returned and the
-    invitation is still marked consumed.
+    invitation is still marked consumed. The role is *upgraded* (never
+    downgraded) when the invitation's role outranks the current one —
+    so an owner can promote a teammate from member → admin by sending
+    a new invite, but a member-tier re-invite of an existing admin or
+    owner is a no-op rather than a silent demotion.
     """
     if invitation.accepted_at is not None or invitation.revoked_at is not None:
         raise InvitationAlreadyConsumed(
@@ -483,9 +518,12 @@ async def accept_invitation(
     if _ensure_utc_aware(invitation.expires_at) < utcnow():
         raise InvitationExpired("invitation expired")
     if invitation.email.lower() != accepting_user.email.lower():
+        # Don't echo ``invitation.email`` back: the route forwards
+        # ``str(exc)`` as the HTTP detail, and a logged-in attacker who
+        # got hold of an invite id would otherwise be able to harvest
+        # the invitee's address. Stay generic.
         raise InvitationEmailMismatch(
-            f"this invitation is for {invitation.email}, "
-            f"not {accepting_user.email}"
+            "invitation is for a different account"
         )
 
     # If already a member (re-invite of an existing teammate), reuse
@@ -499,6 +537,13 @@ async def accept_invitation(
             org_id=invitation.org_id,
             role=invitation.role,
         )
+        session.add(member)
+    elif _ROLE_RANK.get(invitation.role, -1) > _ROLE_RANK.get(member.role, -1):
+        # Re-invite is a promotion: an admin invited as owner, or a
+        # member invited as admin. Upgrade in place. We never downgrade
+        # on the reverse — a stray member-level re-invite of an
+        # existing owner mustn't silently strip privileges.
+        member.role = invitation.role
         session.add(member)
     invitation.accepted_at = utcnow()
     session.add(invitation)
@@ -837,6 +882,22 @@ async def get_agent(
 ) -> Agent | None:
     stmt = select(Agent).where(Agent.project_id == project_id, Agent.name == name)
     return (await session.exec(stmt)).first()
+
+
+async def get_latest_agent_version_id(
+    session: AsyncSession, project_id: str, agent_name: str
+) -> str:
+    """Return the latest AgentVersion.id for (project, agent), or "" if unresolved."""
+    agent = await get_agent(session, project_id, agent_name)
+    if agent is None:
+        return ""
+    stmt = (
+        select(AgentVersion.id)
+        .where(AgentVersion.agent_id == agent.id)
+        .order_by(AgentVersion.version.desc())  # type: ignore[attr-defined]
+        .limit(1)
+    )
+    return (await session.exec(stmt)).first() or ""
 
 
 async def get_latest_agent_versions_map(

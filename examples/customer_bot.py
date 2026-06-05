@@ -65,7 +65,6 @@ import asyncio
 from langchain_core.tools import tool
 
 from fortify import create_agent
-from fortify.runtime import User
 
 
 # ---------------------------------------------------------------------------

@@ -1,8 +1,9 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import StrEnum
-from typing import Optional
+from typing import Annotated, Any, Literal, Optional
+from uuid import UUID
 
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, StringConstraints, field_validator
 
 
 # ---------------------------------------------------------------------------
@@ -334,3 +335,120 @@ class AgentManifestView(BaseModel):
     version: Optional[int] = None
     content_hash: Optional[str] = None
     updated_at: datetime
+
+
+# --- Audit event ingest ------------------------------------------------------
+
+
+class AuditEnvelope(BaseModel):
+    """Wire envelope shared by every audit event type.
+
+    Narrower than the ClickHouse storage envelope: project_id (bearer),
+    received_at (column default), and agent_version_id (platform lookup)
+    are server-resolved and never trusted from the body.
+    """
+
+    event_id:    UUID
+    occurred_at: datetime
+    agent_name:  str = Field(min_length=1, max_length=256)
+    session_id:  str = Field(default="", max_length=128)
+    user_id:     str = Field(default="", max_length=256)
+
+    @field_validator("occurred_at")
+    @classmethod
+    def _assume_utc(cls, v: datetime) -> datetime:
+        # Assume UTC for naive input so downstream tz-aware comparisons can't
+        # raise TypeError; matches the DateTime64(3, 'UTC') storage column.
+        return v if v.tzinfo is not None else v.replace(tzinfo=timezone.utc)
+
+
+class DecisionEvent(AuditEnvelope):
+    """One policy decision; mirrors the policy_decision table."""
+
+    tool_name:  str = Field(min_length=1, max_length=256)
+    outcome:    Literal["allow", "deny", "needs_approval"]
+    role:       str       = Field(default="", max_length=256)
+    error_type: str       = Field(default="", max_length=64)
+    reason:     str       = Field(default="", max_length=4096)
+    # Per-item cap so 64 unbounded strings can't smuggle a multi-MB body.
+    violations: list[Annotated[str, StringConstraints(max_length=1024)]] = Field(
+        default_factory=list, max_length=64
+    )
+    # Byte caps enforced after serialization in audit.insert_decision.
+    hint:       Optional[dict] = None
+    arguments:  Optional[dict] = None
+
+
+class DecisionAccepted(BaseModel):
+    """Response shape for POST /v1/audit/decisions."""
+
+    event_id: UUID
+
+
+# --- Audit dashboard read models (mirror audit.py return shapes) -------------
+
+AuditWindow = Literal["24h", "7d", "30d", "90d"]
+
+
+class OutcomeCounts(BaseModel):
+    """Decision counts by outcome plus the grand total for a slice."""
+
+    all: int = 0
+    allow: int = 0
+    deny: int = 0
+    needs_approval: int = 0
+
+
+class AuditBreakdownRow(OutcomeCounts):
+    """One agent/role/tool bucket; an empty role keeps its raw ``""`` key
+    (the dashboard renders the "(none)" label — nothing is reserved on
+    the wire)."""
+
+    key: str
+
+
+class AuditSummary(BaseModel):
+    """Totals + breakdowns powering the KPI cards and breakdown panels."""
+
+    totals: OutcomeCounts
+    by_agent: list[AuditBreakdownRow]
+    by_role: list[AuditBreakdownRow]
+    by_tool: list[AuditBreakdownRow]
+
+
+class AuditTimeseriesPoint(BaseModel):
+    """One time bucket of the outcome-over-time chart."""
+
+    bucket: datetime
+    allow: int = 0
+    deny: int = 0
+    needs_approval: int = 0
+
+
+class AuditDecisionRow(BaseModel):
+    """One events-table row; hint/arguments are decoded JSON."""
+
+    event_id: UUID
+    occurred_at: datetime
+    received_at: datetime
+    agent_name: str
+    agent_version_id: str = ""
+    session_id: str = ""
+    user_id: str = ""
+    tool_name: str
+    role: str = ""
+    outcome: str
+    error_type: str = ""
+    reason: str = ""
+    violations: list[str] = Field(default_factory=list)
+    hint: Any = None
+    arguments: Any = None
+
+
+class AuditDecisionPage(BaseModel):
+    """A page of rows; ``total`` is the unpaginated match count."""
+
+    rows: list[AuditDecisionRow]
+    total: int
+    limit: int
+    offset: int

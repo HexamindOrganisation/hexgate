@@ -310,7 +310,7 @@ async def test_serve_loop_aborts_when_marker_not_echoed(
 # ---------------------------------------------------------------------------
 
 
-from fortify.cli._common import build_runtime_from_local_agent, load_spec
+from fortify.cli._common import build_runtime_from_local_agent, load_spec  # noqa: E402  — section-scoped import keeps phase-7 tests visually grouped
 
 
 def test_load_spec_resolves_module_attr_form() -> None:

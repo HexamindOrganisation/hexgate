@@ -28,7 +28,6 @@ import mailer
 from main import app
 from models import (
     Invitation,
-    Organization,
     OrganizationMember,
     User,
 )
@@ -495,6 +494,45 @@ def test_accept_invitation_403_when_email_mismatches(
     assert "different" in r.json()["detail"].lower() or "not" in r.json()["detail"].lower()
 
 
+def test_accept_email_mismatch_response_does_not_echo_invitee_email(
+    client: TestClient, outbox: list[dict], session_factory
+) -> None:
+    """A logged-in attacker who got hold of an invite id (link leaked,
+    URL pasted in a chat, etc.) must not be able to learn who the
+    invite was addressed to by hitting accept and reading the error.
+
+    The route forwards ``str(InvitationEmailMismatch)`` as the HTTP
+    detail; assert the detail contains neither the invited email nor
+    the accepting user's email."""
+    _signup_and_login(client, "boss-leak@example.com", "correcthorsebattery")
+    org_id = client.get("/v1/orgs").json()[0]["id"]
+    invited = "secret-target@example.com"
+    client.post(
+        f"/v1/orgs/{org_id}/invites",
+        json={"email": invited, "role": ROLE_MEMBER},
+    )
+
+    async def _get_id():
+        async with session_factory() as s:
+            inv = (
+                await s.exec(
+                    select(Invitation).where(Invitation.email == invited)
+                )
+            ).one()
+            return inv.id
+
+    invite_id = asyncio.get_event_loop().run_until_complete(_get_id())
+
+    client.cookies.clear()
+    attacker_email = "snoop@example.com"
+    _signup_and_login(client, attacker_email, "correcthorsebattery")
+    r = client.post(f"/v1/invites/{invite_id}/accept")
+    assert r.status_code == 403
+    detail = r.json()["detail"]
+    assert invited not in detail
+    assert attacker_email not in detail
+
+
 def test_accept_invitation_410_when_expired(
     client: TestClient, outbox: list[dict], session_factory
 ) -> None:
@@ -621,3 +659,123 @@ def test_invitee_declines_invitation(
     _signup_and_login(client, "declineme@example.com", "correcthorsebattery")
     r = client.delete(f"/v1/invites/{invite_id}")
     assert r.status_code == 204
+
+
+def test_accept_upgrades_existing_member_role(
+    client: TestClient, outbox: list[dict], session_factory
+) -> None:
+    """Re-inviting an existing teammate at a higher role promotes them.
+
+    Pre-fix the existing-member branch silently kept the original role,
+    so an owner clicking "make admin" via re-invite would see no
+    change. Now: invite alice as member → alice joins → owner re-invites
+    her as admin → alice accepts → her role is admin."""
+    _signup_and_login(client, "boss-upgrade@example.com", "correcthorsebattery")
+    org_id = client.get("/v1/orgs").json()[0]["id"]
+
+    # First invite — joins as member.
+    client.post(
+        f"/v1/orgs/{org_id}/invites",
+        json={"email": "alice-up@example.com", "role": ROLE_MEMBER},
+    )
+
+    async def _get_id_for(email: str) -> str:
+        async with session_factory() as s:
+            inv = (
+                await s.exec(
+                    select(Invitation)
+                    .where(Invitation.email == email)
+                    .where(Invitation.accepted_at.is_(None))
+                    .where(Invitation.revoked_at.is_(None))
+                )
+            ).one()
+            return inv.id
+
+    first_invite = asyncio.get_event_loop().run_until_complete(
+        _get_id_for("alice-up@example.com")
+    )
+
+    client.cookies.clear()
+    _signup_and_login(client, "alice-up@example.com", "correcthorsebattery")
+    r = client.post(f"/v1/invites/{first_invite}/accept")
+    assert r.status_code == 200, r.text
+    assert r.json()["role"] == ROLE_MEMBER
+
+    # Owner mints a second invite — promotes to admin. (Login-only
+    # call, not re-register; the owner account already exists.)
+    client.cookies.clear()
+    r_login = client.post(
+        "/v1/auth/cookie/login",
+        data={
+            "username": "boss-upgrade@example.com",
+            "password": "correcthorsebattery",
+        },
+    )
+    assert r_login.status_code == 204, r_login.text
+    client.post(
+        f"/v1/orgs/{org_id}/invites",
+        json={"email": "alice-up@example.com", "role": ROLE_ADMIN},
+    )
+    second_invite = asyncio.get_event_loop().run_until_complete(
+        _get_id_for("alice-up@example.com")
+    )
+
+    client.cookies.clear()
+    r_login = client.post(
+        "/v1/auth/cookie/login",
+        data={
+            "username": "alice-up@example.com",
+            "password": "correcthorsebattery",
+        },
+    )
+    assert r_login.status_code == 204, r_login.text
+    r = client.post(f"/v1/invites/{second_invite}/accept")
+    assert r.status_code == 200, r.text
+    assert r.json()["role"] == ROLE_ADMIN
+
+    # Confirm via the org listing too.
+    listed = client.get("/v1/orgs").json()
+    invited_org = next(o for o in listed if o["id"] == org_id)
+    assert invited_org["role"] == ROLE_ADMIN
+
+
+def test_accept_does_not_downgrade_existing_owner(
+    client: TestClient, outbox: list[dict], session_factory
+) -> None:
+    """A re-invite at a lower role must NOT silently demote.
+
+    Edge case: owner re-invites themselves as member (sloppy UI, copy-
+    paste, whatever). The role on their existing OrganizationMember
+    row must stay ``owner`` — anything else would let a fat-fingered
+    invite locked out the only owner of an org.
+    """
+    _signup_and_login(client, "self-invite@example.com", "correcthorsebattery")
+    org_id = client.get("/v1/orgs").json()[0]["id"]
+
+    # Owner mints an invite for themselves at the lowest role.
+    client.post(
+        f"/v1/orgs/{org_id}/invites",
+        json={"email": "self-invite@example.com", "role": ROLE_MEMBER},
+    )
+
+    async def _get_id():
+        async with session_factory() as s:
+            inv = (
+                await s.exec(
+                    select(Invitation).where(
+                        Invitation.email == "self-invite@example.com"
+                    )
+                )
+            ).one()
+            return inv.id
+
+    invite_id = asyncio.get_event_loop().run_until_complete(_get_id())
+
+    r = client.post(f"/v1/invites/{invite_id}/accept")
+    assert r.status_code == 200, r.text
+    # Critical: role stays OWNER, even though the invite said MEMBER.
+    assert r.json()["role"] == ROLE_OWNER
+
+    listed = client.get("/v1/orgs").json()
+    own = next(o for o in listed if o["id"] == org_id)
+    assert own["role"] == ROLE_OWNER

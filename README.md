@@ -104,6 +104,37 @@ make dashboard-install      # pnpm install inside platform/dashboard/
 
 Then open http://localhost:5173/playground — type a message, watch the live stream of tool calls and policy decisions from your local agent.
 
+### Audit log (ClickHouse)
+
+Policy decisions are written to a local ClickHouse instance for the audit dashboard. Requires Docker.
+
+```bash
+make clickhouse-up        # start the server (first run also creates the schema)
+make clickhouse-cli       # interactive SQL shell
+make clickhouse-down      # stop (keeps data)
+make clickhouse-reset     # wipe and recreate (also re-applies the schema)
+```
+
+Schema lives in `platform/clickhouse/init/schema.sql`.
+
+**Not a migration system.** That init directory is a POC scaffold — the Docker image runs it exactly once, on first container start with an empty data volume. Editing the SQL after that point is silently ignored on existing environments. To apply schema changes locally, either `make clickhouse-reset` (wipes data) or `make clickhouse-cli` and run the SQL by hand. A real migration runner should replace this directory the first time a second schema change is needed.
+
+The service binds to **127.0.0.1 only, on host ports 8124 (HTTP) and 9001 (native)** rather than ClickHouse's default 8123/9000, so it coexists with any other local ClickHouse instance (e.g. a Langfuse-bundled one).
+
+Once both `make clickhouse-up` and `make platform-api` are running, `GET /ready` reports `"clickhouse": "ok"` (the `/health` liveness probe stays dependency-free) and the ingest endpoint `POST /v1/audit/decisions` accepts one decision per request:
+
+```bash
+curl -X POST localhost:8000/v1/audit/decisions \
+  -H "Authorization: Bearer fty_test_..." \
+  -H "Content-Type: application/json" \
+  -d '{"event_id":"9f1e3c5a-4d2b-4b8e-9c8a-1f4e2d8a7c3b",
+       "occurred_at":"2026-05-29T14:00:00Z",
+       "agent_name":"researcher","tool_name":"read_file","outcome":"deny"}'
+# → 202 {"event_id":"9f1e3c5a-..."}
+```
+
+Integration tests (`pytest -m integration`) round-trip rows through the live ClickHouse — opt-in so the default `make platform-api-test` stays offline-friendly.
+
 The dashboard's `/policies` page lets you edit each agent's policy. `fortify serve` re-fetches at every turn boundary, so your edits take effect on the next chat message without a restart.
 
 ## ✨ Core Primitives
@@ -202,6 +233,8 @@ Walk through one tool call:
 - `FORTIFY_LOCAL_POLICY` set → `YamlPolicySource` or `BundleDirPolicySource` (mtime-driven refresh)
 - `FORTIFY_KEY` set, no local override → `PlatformPolicySource` (ETag / `304 Not Modified` refresh)
 - Neither → no source attached; enforcement uses whatever was loaded once
+
+**Scope of the per-turn refresh:** only the policy bundle. `system_prompt`, the manifest's tool list, and the model id are read once at agent construction and stay fixed for the lifetime of the process. Edit those on the dashboard and the change lands at the next `fortify serve` restart — not at the next turn. The split is deliberate: policy is the operator's primary lever (and the one that needs to be auditable per-decision), while the manifest is an author-time concept.
 
 ### Two carve-outs worth knowing
 

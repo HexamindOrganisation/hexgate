@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@import url('https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap');
 
 @source "../node_modules/streamdown/dist/*.js";
 
@@ -62,8 +63,11 @@
   --ring: 226 70% 52%;
 
   --semantic-allow: 142 71% 45%;
+  --semantic-allow-soft: 142 50% 20%;
   --semantic-deny: 0 72% 58%;
+  --semantic-deny-soft: 0 50% 22%;
   --semantic-approval: 38 92% 55%;
+  --semantic-approval-soft: 38 60% 22%;
 }
 
 .dark {
@@ -88,8 +92,11 @@
   --ring: 226 78% 65%;
 
   --semantic-allow: 142 71% 45%;
+  --semantic-allow-soft: 142 50% 20%;
   --semantic-deny: 0 72% 58%;
+  --semantic-deny-soft: 0 50% 22%;
   --semantic-approval: 38 92% 55%;
+  --semantic-approval-soft: 38 60% 22%;
 }
 
 @layer base {

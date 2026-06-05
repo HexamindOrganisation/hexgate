@@ -27,11 +27,10 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 import main
 from main import app
-from models import OrganizationMember, Project, User
+from models import OrganizationMember, User
 from services import (
     ROLE_ADMIN,
     ROLE_MEMBER,
-    ROLE_OWNER,
     ensure_default_project,
 )
 

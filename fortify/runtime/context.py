@@ -94,7 +94,6 @@ class User(BaseModel):
     user_id: str
     role: str | None = None
     session_id: str | None = None
-    user_role: str | None = None
     ttl_seconds: int | None = None
 
     # Stack so the same User instance survives nested ``async with`` blocks.

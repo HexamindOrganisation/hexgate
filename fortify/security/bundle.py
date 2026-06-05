@@ -231,8 +231,7 @@ class PolicyBundle:
         actual = hashlib.sha256(self.wasm_bytes).hexdigest()
         if actual != expected_wasm_hash:
             raise BundleIntegrityError(
-                f"wasm hash mismatch: manifest says {expected_wasm_hash}, "
-                f"got {actual}"
+                f"wasm hash mismatch: manifest says {expected_wasm_hash}, got {actual}"
             )
 
     # ---- Authenticity --------------------------------------------------
@@ -270,9 +269,20 @@ class PolicyBundle:
     # ---- Evaluation ----------------------------------------------------
 
     def policy(self) -> WasmPolicy:
-        """Return the cached WasmPolicy (instantiated on first call)."""
+        """Return the cached WasmPolicy (instantiated on first call).
+
+        Routes through :meth:`WasmPolicy.from_bytes_cached` so the
+        content-addressed cache actually fires in production. The hot
+        path the cache was designed for — ``refresh_policy()`` swaps
+        in a new bundle instance whose ``wasm_hash`` matches the
+        previous one (whitespace-only YAML edit, bundle-dir touch,
+        platform 304 fallthrough) — now reuses the existing wasmtime
+        store instead of paying ~50–100ms re-instantiation each turn.
+        """
         if self._wasm_policy is None:
-            self._wasm_policy = WasmPolicy.from_bytes(self.wasm_bytes)
+            self._wasm_policy = WasmPolicy.from_bytes_cached(
+                self.wasm_bytes, self.wasm_hash
+            )
         return self._wasm_policy
 
     def evaluate(
@@ -316,10 +326,10 @@ class SignedBundle:
     """
 
     rego_text: str
-    wasm_bytes: bytes | None        # None when compile_wasm=False (--no-wasm)
+    wasm_bytes: bytes | None  # None when compile_wasm=False (--no-wasm)
     manifest: dict
     manifest_bytes: bytes
-    signature: bytes | None         # None when no `sign` callback was given
+    signature: bytes | None  # None when no `sign` callback was given
 
     @property
     def source_hash(self) -> str | None:
@@ -375,9 +385,9 @@ def build_signed_bundle(
         "wasm_hash": wasm_hash,
     }
     # The one canonical serialization. Sign these exact bytes.
-    manifest_bytes = (
-        json.dumps(manifest, indent=2, sort_keys=True) + "\n"
-    ).encode("utf-8")
+    manifest_bytes = (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode(
+        "utf-8"
+    )
     signature = sign(manifest_bytes) if sign is not None else None
 
     return SignedBundle(

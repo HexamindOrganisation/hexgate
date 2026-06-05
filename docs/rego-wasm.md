@@ -1,5 +1,7 @@
 # Compiling agent policies to signed WebAssembly
 
+> Status: snapshot as of Milestone 2 (2026-05) — a point-in-time narrative, not a maintained reference. Code may have moved on.
+
 *How we turned a YAML policy file into a cryptographically signed, portable enforcement artifact — without changing how anyone writes policies.*
 
 ## The starting point
