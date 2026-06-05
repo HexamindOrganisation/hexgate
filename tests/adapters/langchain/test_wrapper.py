@@ -1,13 +1,29 @@
-"""Tests for the LangChain adapter wrapper entry point."""
+"""Tests for the LangChain adapter wrapper entry point (phase 4).
+
+The allow-all ``build_policy_set`` placeholder is gone: wrap-time policy
+comes from :meth:`PolicyBinding.resolve` (platform / local override),
+with register-on-404 from the in-code graph. These tests stub the
+resolve seam (``wrapper._resolve_binding``) so no platform is needed,
+and cover: key resolution, enforcer installation with the resolved
+policy, 404 → register → retry, loud failures, and the proxy's per-call
+refresh.
+"""
 
 from __future__ import annotations
+
+from typing import Any
 
 import pytest
 from langchain_core.tools import BaseTool, tool
 
+from fortify.adapters.langchain import wrapper as wrapper_mod
 from fortify.adapters.langchain.agent import FortifyLangchainAgent
-from fortify.adapters.langchain.wrapper import build_policy_set, wrap_langchain_agent
-from fortify.security import PolicySet
+from fortify.adapters.langchain.wrapper import wrap_langchain_agent
+from fortify.cloud.client import FortifyError
+from fortify.runtime import User
+from fortify.security import AgentPolicy, BaseToolPolicy, PolicyBinding, PolicySet
+from fortify.security.enforcer import PolicyEnforcer
+from fortify.security.policy_set import DEFAULT_ROLE_NAME
 
 
 class _FakeCompiledGraph:
@@ -27,25 +43,31 @@ def _make_tool(name: str = "echo") -> BaseTool:
     return echo
 
 
-# ---------------------------------------------------------------------------
-# build_policy_set (stub today, allow-all per tool)
-# ---------------------------------------------------------------------------
+def _engine(tool_names: list[str], mode: str = "allow") -> PolicySet:
+    return PolicySet(
+        {
+            DEFAULT_ROLE_NAME: AgentPolicy(
+                tools={name: BaseToolPolicy(mode=mode) for name in tool_names}
+            )
+        }
+    )
 
 
-def test_build_policy_set_allows_each_tool_under_default_role() -> None:
-    """The placeholder policy builder allows every tool name it receives."""
-    policy_set = build_policy_set("k", "agent-name", ["echo", "shout"])
-
-    assert isinstance(policy_set, PolicySet)
-    default_policy = policy_set.policy_for(None)
-    assert default_policy.tools["echo"].mode == "allow"
-    assert default_policy.tools["shout"].mode == "allow"
+def _stub_binding(engine: PolicySet) -> PolicyBinding:
+    return PolicyBinding(PolicyEnforcer(engine, agent_name="fake-graph"))
 
 
-def test_build_policy_set_with_no_tools_returns_empty_tools_map() -> None:
-    policy_set = build_policy_set("k", "agent-name", [])
+@pytest.fixture()
+def resolved(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+    """Stub the resolve seam with an allow-all engine; capture the call."""
+    captured: dict[str, Any] = {}
 
-    assert policy_set.policy_for(None).tools == {}
+    def fake_resolve(agent: Any, tools: list[BaseTool], name: str, key: str):
+        captured.update(agent=agent, tools=tools, name=name, key=key)
+        return _stub_binding(_engine([t.name for t in tools]))
+
+    monkeypatch.setattr(wrapper_mod, "_resolve_binding", fake_resolve)
+    return captured
 
 
 # ---------------------------------------------------------------------------
@@ -53,7 +75,9 @@ def test_build_policy_set_with_no_tools_returns_empty_tools_map() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_wrap_returns_fortify_proxy_with_supplied_tool_names() -> None:
+def test_wrap_returns_fortify_proxy_with_supplied_tool_names(
+    resolved: dict[str, Any],
+) -> None:
     graph = _FakeCompiledGraph()
     tools = [_make_tool("a"), _make_tool("b")]
 
@@ -63,9 +87,13 @@ def test_wrap_returns_fortify_proxy_with_supplied_tool_names() -> None:
     assert wrapped._tool_names == ["a", "b"]
     assert wrapped._agent is graph
     assert wrapped._api_key == "fortify-key"
+    assert resolved["name"] == "fake-graph"
+    assert resolved["key"] == "fortify-key"
 
 
-def test_wrap_falls_back_to_env_var(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_wrap_falls_back_to_env_var(
+    monkeypatch: pytest.MonkeyPatch, resolved: dict[str, Any]
+) -> None:
     monkeypatch.setenv("FORTIFY_KEY", "from-env")
 
     wrapped = wrap_langchain_agent(agent=_FakeCompiledGraph(), tools=[])
@@ -74,7 +102,7 @@ def test_wrap_falls_back_to_env_var(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_wrap_prefers_explicit_api_key_over_env(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, resolved: dict[str, Any]
 ) -> None:
     monkeypatch.setenv("FORTIFY_KEY", "from-env")
 
@@ -104,11 +132,13 @@ def test_wrap_treats_empty_api_key_string_as_missing(
 
 
 # ---------------------------------------------------------------------------
-# wrap_langchain_agent — enforcer installation
+# wrap_langchain_agent — enforcer installation with the RESOLVED policy
 # ---------------------------------------------------------------------------
 
 
-def test_wrap_installs_enforcer_on_each_tool_in_place() -> None:
+def test_wrap_installs_enforcer_on_each_tool_in_place(
+    resolved: dict[str, Any],
+) -> None:
     """Every tool gets the install marker — graph keeps its references."""
     tools = [_make_tool("a"), _make_tool("b")]
 
@@ -119,7 +149,27 @@ def test_wrap_installs_enforcer_on_each_tool_in_place() -> None:
         assert t.handle_tool_error is True
 
 
-def test_wrap_is_idempotent_on_already_wrapped_tools() -> None:
+def test_wrap_enforces_the_resolved_policy_not_allow_all(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A deny rule from the resolved policy actually blocks the tool."""
+    monkeypatch.setattr(
+        wrapper_mod,
+        "_resolve_binding",
+        lambda agent, tools, name, key: _stub_binding(_engine(["a"], mode="deny")),
+    )
+    tools = [_make_tool("a")]
+
+    wrap_langchain_agent(agent=_FakeCompiledGraph(), tools=tools, api_key="k")
+
+    result = tools[0].func(text="hi")
+    assert result["ok"] is False
+    assert result["error"]["type"] == "policy_denied"
+
+
+def test_wrap_is_idempotent_on_already_wrapped_tools(
+    resolved: dict[str, Any],
+) -> None:
     """Re-wrapping rebinds the enforcer; doesn't stack gates."""
     tools = [_make_tool("a")]
     wrap_langchain_agent(agent=_FakeCompiledGraph(), tools=tools, api_key="k")
@@ -127,16 +177,140 @@ def test_wrap_is_idempotent_on_already_wrapped_tools() -> None:
 
     wrap_langchain_agent(agent=_FakeCompiledGraph(), tools=tools, api_key="k")
 
-    # New closure replaced the previous one — but the original is preserved
-    # under _fortify_original_func, so behavior stays consistent.
     assert tools[0].func is not first_func
-    # Calling still works (default stub allows everything).
     assert tools[0].func(text="hi") == "echo:hi"
 
 
-def test_wrap_passes_through_with_empty_tool_list() -> None:
+def test_wrap_attaches_binding_with_audited_enforcer(
+    resolved: dict[str, Any],
+) -> None:
+    """The proxy carries a binding whose enforcer is the one the tools got."""
+    tools = [_make_tool("a")]
+
     wrapped = wrap_langchain_agent(
-        agent=_FakeCompiledGraph(), tools=[], api_key="fortify-key"
+        agent=_FakeCompiledGraph(), tools=tools, api_key="k"
     )
 
-    assert wrapped._tool_names == []
+    assert wrapped._binding is not None
+    # The tools' installed gate and the binding share one enforcer, so a
+    # refresh swap reaches the wrapped tools.
+    assert isinstance(wrapped._binding.enforcer, PolicyEnforcer)
+    assert wrapped._binding.enforcer.agent_name == "fake-graph"
+
+
+# ---------------------------------------------------------------------------
+# _resolve_binding — 404 → register → retry; everything else loud
+# ---------------------------------------------------------------------------
+
+
+def test_404_registers_graph_then_resolves_again(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import fortify.cli.register as register_pkg
+
+    calls: list[str] = []
+    registered: list[tuple[Any, list[BaseTool]]] = []
+    stub = _stub_binding(_engine(["a"]))
+
+    def fake_resolve(name: str, *, api_key: str | None = None, client: Any = None):
+        calls.append(name)
+        if len(calls) == 1:
+            raise FortifyError("Fortify API error 404 calling …", status=404)
+        return stub
+
+    monkeypatch.setattr(
+        wrapper_mod.PolicyBinding, "resolve", staticmethod(fake_resolve)
+    )
+    monkeypatch.setattr(
+        register_pkg,
+        "register_agent",
+        lambda agent, tools=None: registered.append((agent, tools)),
+    )
+
+    graph = _FakeCompiledGraph()
+    tools = [_make_tool("a")]
+    binding = wrapper_mod._resolve_binding(graph, tools, "fake-graph", "k")
+
+    assert binding is stub
+    assert calls == ["fake-graph", "fake-graph"]
+    assert registered == [(graph, tools)]  # real tool schemas shipped
+
+
+def test_non_404_failure_is_loud(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Wrapping asked for governance — a platform error never yields a
+    silently allow-all agent."""
+
+    def fake_resolve(name: str, *, api_key: str | None = None, client: Any = None):
+        raise FortifyError("Fortify API error 500 calling …", status=500)
+
+    monkeypatch.setattr(
+        wrapper_mod.PolicyBinding, "resolve", staticmethod(fake_resolve)
+    )
+
+    with pytest.raises(FortifyError, match="500"):
+        wrap_langchain_agent(
+            agent=_FakeCompiledGraph(), tools=[_make_tool("a")], api_key="k"
+        )
+
+
+# ---------------------------------------------------------------------------
+# FortifyLangchainAgent — per-call refresh
+# ---------------------------------------------------------------------------
+
+
+class _CountingBinding:
+    def __init__(self) -> None:
+        self.refreshes = 0
+
+    def refresh(self) -> None:
+        self.refreshes += 1
+
+    async def refresh_async(self) -> None:
+        self.refreshes += 1
+
+
+class _RunnableGraph:
+    name = "fake-graph"
+
+    def invoke(self, input: dict, config: Any = None, **kwargs: Any) -> dict:
+        return {"ok": True}
+
+    async def ainvoke(self, input: dict, config: Any = None, **kwargs: Any) -> dict:
+        return {"ok": True}
+
+
+def _user() -> User:
+    return User(user_id="u-1", session_id="s-1", role="developer")
+
+
+def test_invoke_refreshes_binding_first() -> None:
+    binding = _CountingBinding()
+    proxy = FortifyLangchainAgent(
+        agent=_RunnableGraph(), api_key="k", tool_names=[], binding=binding  # type: ignore[arg-type]
+    )
+
+    proxy.invoke({"messages": []}, user=_user())
+    proxy.invoke({"messages": []}, user=_user())
+
+    assert binding.refreshes == 2
+
+
+@pytest.mark.asyncio
+async def test_ainvoke_refreshes_binding_first() -> None:
+    binding = _CountingBinding()
+    proxy = FortifyLangchainAgent(
+        agent=_RunnableGraph(), api_key="k", tool_names=[], binding=binding  # type: ignore[arg-type]
+    )
+
+    await proxy.ainvoke({"messages": []}, user=_user())
+
+    assert binding.refreshes == 1
+
+
+def test_proxy_without_binding_runs_fine() -> None:
+    """Back-compat: a binding-less proxy (direct construction) still works."""
+    proxy = FortifyLangchainAgent(
+        agent=_RunnableGraph(), api_key="k", tool_names=[]
+    )
+
+    assert proxy.invoke({"messages": []}, user=_user()) == {"ok": True}

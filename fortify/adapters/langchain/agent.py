@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, AsyncIterator, Iterator
+from typing import TYPE_CHECKING, Any, AsyncIterator, Iterator
 
 from langchain_core.runnables import RunnableConfig
 from langfuse import get_client, propagate_attributes
@@ -10,6 +10,9 @@ from langfuse.langchain import CallbackHandler
 from langgraph.graph.state import CompiledStateGraph
 
 from fortify.runtime import User
+
+if TYPE_CHECKING:
+    from fortify.security.binding import PolicyBinding
 
 
 class FortifyLangchainAgent:
@@ -20,6 +23,13 @@ class FortifyLangchainAgent:
     :class:`User` onto the contextvar and propagates identity into
     Langfuse spans. ``user`` is per-call, so one proxy serves many
     users concurrently.
+
+    When a :class:`~fortify.security.binding.PolicyBinding` is attached,
+    every run method refreshes it first — the platform's ETag/304 dance
+    makes the unchanged case one cheap round trip, and a changed policy
+    hot-swaps via the shared enforcer without touching the graph or its
+    in-place-wrapped tools. Refresh is fail-soft: a network blip keeps
+    the previous verified policy in force.
     """
 
     def __init__(
@@ -28,12 +38,24 @@ class FortifyLangchainAgent:
         agent: CompiledStateGraph,
         api_key: str,
         tool_names: list[str],
+        binding: "PolicyBinding | None" = None,
     ) -> None:
         self._agent = agent
+        self._binding = binding
         self._api_key = api_key
         self._tool_names = tool_names
         self._langfuse = get_client()
         self._callback_handler = CallbackHandler()
+
+    async def _refresh_async(self) -> None:
+        """Refresh the policy binding off the event loop, if one is attached."""
+        if self._binding is not None:
+            await self._binding.refresh_async()
+
+    def _refresh(self) -> None:
+        """Refresh the policy binding, if one is attached (sync entry points)."""
+        if self._binding is not None:
+            self._binding.refresh()
 
     def _propagate_kwargs(self, user: User, method: str) -> dict[str, Any]:
         return {
@@ -61,6 +83,7 @@ class FortifyLangchainAgent:
         **kwargs: Any,
     ) -> dict[str, Any]:
         """Invoke the agent asynchronously inside a User scope."""
+        await self._refresh_async()
         async with user:
             with propagate_attributes(**self._propagate_kwargs(user, "ainvoke")):
                 return await self._agent.ainvoke(
@@ -76,6 +99,7 @@ class FortifyLangchainAgent:
         **kwargs: Any,
     ) -> dict[str, Any]:
         """Invoke the agent synchronously inside a User scope."""
+        self._refresh()
         with user.sync_scope():
             with propagate_attributes(**self._propagate_kwargs(user, "invoke")):
                 return self._agent.invoke(input, self._with_callbacks(config), **kwargs)
@@ -89,6 +113,7 @@ class FortifyLangchainAgent:
         **kwargs: Any,
     ) -> AsyncIterator[dict[str, Any]]:
         """Stream the agent asynchronously inside a User scope."""
+        await self._refresh_async()
         async with user:
             with propagate_attributes(**self._propagate_kwargs(user, "astream")):
                 async for chunk in self._agent.astream(
@@ -105,6 +130,7 @@ class FortifyLangchainAgent:
         **kwargs: Any,
     ) -> Iterator[dict[str, Any]]:
         """Stream the agent synchronously inside a User scope."""
+        self._refresh()
         with user.sync_scope():
             with propagate_attributes(**self._propagate_kwargs(user, "stream")):
                 yield from self._agent.stream(
@@ -121,6 +147,7 @@ class FortifyLangchainAgent:
         **kwargs: Any,
     ) -> AsyncIterator[dict[str, Any]]:
         """Stream the agent events asynchronously inside a User scope."""
+        await self._refresh_async()
         async with user:
             with propagate_attributes(**self._propagate_kwargs(user, "astream_events")):
                 async for event in self._agent.astream_events(
