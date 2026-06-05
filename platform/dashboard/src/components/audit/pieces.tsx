@@ -12,6 +12,10 @@ import type {
   AuditDecisionRow,
   AuditOutcome,
 } from '@/lib/api'
+import type {
+  AuditFilters as Filters,
+  SetAuditFilters as SetFilters,
+} from '@/lib/audit-filters'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
@@ -32,19 +36,9 @@ import {
 } from '@/components/ui/table'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
-import { BreakdownBar, type BreakdownDatum, DecisionBadge, Sparkline } from './charts'
-import { CHART_COLORS, OUT_LABEL } from './chart-tokens'
-
-// Shared filter state. '' = "all"; outcome applies to the table only.
-export interface Filters {
-  agent: string
-  role: string
-  tool: string
-  outcome: '' | AuditOutcome
-  range: '24h' | '7d' | '30d' | '90d'
-}
-
-export type SetFilters = (updater: (prev: Filters) => Filters) => void
+import { Sparkline } from '@/components/ui/charts'
+import { BreakdownBar, type BreakdownDatum, DecisionBadge } from './charts'
+import { OUTCOME_SERIES } from './chart-tokens'
 
 const fmtTs = (d: Date) =>
   d.toLocaleString('en-US', {
@@ -239,9 +233,9 @@ export function BreakdownCard({
         {!data.length && <div className="py-2 text-[12.5px] text-muted-foreground">No decisions match.</div>}
       </div>
       <div className="mt-1 flex gap-3.5 border-t border-border pt-3 text-[11px] text-muted-foreground">
-        {(['allow', 'needs_approval', 'deny'] as AuditOutcome[]).map((k) => (
-          <span key={k} className="flex items-center gap-1.5">
-            <span className="size-2 rounded-sm" style={{ background: CHART_COLORS[k] }} />{OUT_LABEL[k]}
+        {OUTCOME_SERIES.map((s) => (
+          <span key={s.key} className="flex items-center gap-1.5">
+            <span className={`size-2 rounded-sm ${s.swatchClass}`} />{s.label}
           </span>
         ))}
         <span className="ml-auto">click a bar to filter →</span>

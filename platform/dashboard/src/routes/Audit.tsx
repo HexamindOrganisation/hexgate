@@ -9,24 +9,23 @@ import {
   X,
 } from 'lucide-react'
 import { api, type AuditDecisionRow, type AuditOutcome } from '@/lib/api'
-import { useProjectScoped } from '@/lib/active'
+import { useActive, useProjectScoped } from '@/lib/active'
+import { useProjects } from '@/lib/projects'
 import { NoProjectEmptyState } from '@/components/NoProjectEmptyState'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
+import { AreaChart, type ChartBucket, Donut } from '@/components/ui/charts'
+import { type Counts, DecisionBadge } from '@/components/audit/charts'
+import { NO_VALUE_LABEL, OUT_LABEL, OUTCOME_SERIES } from '@/components/audit/chart-tokens'
 import {
-  AreaChart,
-  type ChartBucket,
-  type Counts,
-  DecisionBadge,
-  Donut,
-} from '@/components/audit/charts'
-import { CHART_COLORS, NO_VALUE_LABEL, OUT_LABEL } from '@/components/audit/chart-tokens'
+  type AuditFilters as Filters,
+  useAuditFilters,
+} from '@/lib/audit-filters'
 import {
   ActiveChips,
   BreakdownCard,
   EventsTable,
-  type Filters,
   FilterBar,
   KpiCard,
 } from '@/components/audit/pieces'
@@ -42,19 +41,26 @@ const fmtFull = (d: Date) => d.toISOString().replace('T', ' ').replace('Z', ' UT
 // ————————————————————————————————————————————— Detail drawer
 function KV({ k, children, mono, muted }: { k: string; children: React.ReactNode; mono?: boolean; muted?: boolean }) {
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: '116px 1fr', gap: 10, padding: '5px 0', fontSize: 12.5, alignItems: 'baseline' }}>
-      <div style={{ color: 'hsl(var(--muted-foreground))' }}>{k}</div>
-      <div className={mono ? 'font-mono' : ''} style={{ color: muted ? 'hsl(var(--muted-foreground))' : 'hsl(var(--foreground))', wordBreak: 'break-word', fontSize: mono ? 12 : 12.5 }}>{children}</div>
+    <div className="grid grid-cols-[116px_1fr] items-baseline gap-2.5 py-[5px] text-[12.5px]">
+      <div className="text-muted-foreground">{k}</div>
+      <div className={`break-words ${mono ? 'font-mono text-xs' : ''} ${muted ? 'text-muted-foreground' : 'text-foreground'}`}>{children}</div>
     </div>
   )
 }
 function DrawerSection({ label, children, accent }: { label: string; children: React.ReactNode; accent?: string }) {
   return (
-    <div style={{ marginTop: 22 }}>
-      <div style={{ fontSize: 11, color: accent || 'hsl(var(--muted-foreground))', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 8, fontWeight: 500 }}>{label}</div>
+    <div className="mt-[22px]">
+      <div className={`mb-2 text-[11px] font-medium uppercase tracking-wider ${accent || 'text-muted-foreground'}`}>{label}</div>
       {children}
     </div>
   )
+}
+
+// Per-outcome drawer accents (reason box + error text).
+const TONE: Record<AuditOutcome, { text: string; box: string }> = {
+  allow: { text: 'text-allow', box: 'border-allow/25 bg-allow/10' },
+  deny: { text: 'text-deny', box: 'border-deny/25 bg-deny/10' },
+  needs_approval: { text: 'text-approval', box: 'border-approval/25 bg-approval/10' },
 }
 
 function DetailDrawer({
@@ -75,34 +81,34 @@ function DetailDrawer({
   const e = event
   const argStr = e.arguments == null ? '—' : JSON.stringify(e.arguments, null, 2)
   const hintStr = typeof e.hint === 'string' ? e.hint : e.hint == null ? '' : JSON.stringify(e.hint)
-  const accent = e.outcome === 'deny' ? 'hsl(var(--semantic-deny))' : e.outcome === 'needs_approval' ? 'hsl(var(--semantic-approval))' : 'hsl(var(--semantic-allow))'
+  const tone = TONE[e.outcome]
 
   return (
-    <div style={{ position: 'fixed', inset: 0, zIndex: 50, display: 'flex', justifyContent: 'flex-end' }}>
-      <div onClick={onClose} style={{ position: 'absolute', inset: 0, background: 'hsl(222 40% 2% / 0.55)', backdropFilter: 'blur(1px)' }} />
-      <aside style={{ position: 'relative', width: 472, maxWidth: '92vw', background: 'hsl(var(--card))', borderLeft: '1px solid hsl(var(--border))', height: '100%', display: 'flex', flexDirection: 'column', boxShadow: '-24px 0 60px hsl(222 40% 2% / 0.5)' }}>
-        <div style={{ padding: '16px 20px', borderBottom: '1px solid hsl(var(--border))', display: 'flex', alignItems: 'center', gap: 10 }}>
+    <div className="fixed inset-0 z-50 flex justify-end">
+      <div onClick={onClose} className="absolute inset-0 bg-black/55 backdrop-blur-[1px]" />
+      <aside className="relative flex h-full w-[472px] max-w-[92vw] flex-col border-l border-border bg-card shadow-2xl">
+        <div className="flex items-center gap-2.5 border-b border-border px-5 py-4">
           <DecisionBadge d={e.outcome} />
-          <span className="font-mono" style={{ fontSize: 12, color: 'hsl(var(--muted-foreground))', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>{e.event_id}</span>
+          <span className="flex-1 truncate font-mono text-xs text-muted-foreground">{e.event_id}</span>
           <Button variant="ghost" size="icon" onClick={onClose} title="Close (Esc)"><X className="size-4" /></Button>
         </div>
 
-        <div style={{ overflow: 'auto', flex: 1, padding: '4px 20px 24px' }}>
-          <div style={{ marginTop: 18, display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
-            <span className="font-mono" style={{ fontSize: 17, fontWeight: 600, color: 'hsl(var(--foreground))' }}>{e.tool_name}</span>
-            <span style={{ fontSize: 13, color: 'hsl(var(--muted-foreground))' }}>by</span>
-            <span className="font-mono" style={{ fontSize: 14, color: 'hsl(var(--foreground))' }}>{e.agent_name}</span>
+        <div className="flex-1 overflow-auto px-5 pb-6 pt-1">
+          <div className="mt-[18px] flex flex-wrap items-baseline gap-2">
+            <span className="font-mono text-[17px] font-semibold text-foreground">{e.tool_name}</span>
+            <span className="text-[13px] text-muted-foreground">by</span>
+            <span className="font-mono text-sm text-foreground">{e.agent_name}</span>
           </div>
-          <div style={{ marginTop: 8, fontSize: 13, color: 'hsl(var(--foreground))', lineHeight: 1.55, padding: '10px 12px', background: `color-mix(in srgb, ${accent} 9%, transparent)`, border: `1px solid color-mix(in srgb, ${accent} 28%, transparent)`, borderRadius: 8 }}>
+          <div className={`mt-2 rounded-lg border px-3 py-2.5 text-[13px] leading-relaxed text-foreground ${tone.box}`}>
             {e.reason || (e.outcome === 'allow' ? 'Allowed — no rule violated.' : 'No reason recorded.')}
-            {e.error_type && <span className="font-mono" style={{ display: 'block', marginTop: 6, fontSize: 11.5, color: accent }}>error_type: {e.error_type}</span>}
+            {e.error_type && <span className={`mt-1.5 block font-mono text-[11.5px] ${tone.text}`}>error_type: {e.error_type}</span>}
           </div>
 
           {e.violations.length > 0 && (
-            <DrawerSection label="Violations" accent="hsl(var(--semantic-deny))">
-              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+            <DrawerSection label="Violations" accent="text-deny">
+              <div className="flex flex-wrap gap-1.5">
                 {e.violations.map((v) => (
-                  <span key={v} className="font-mono" style={{ fontSize: 11.5, padding: '3px 8px', borderRadius: 6, background: 'hsl(var(--semantic-deny-soft))', color: 'hsl(var(--semantic-deny))' }}>{v}</span>
+                  <span key={v} className="rounded-md bg-deny/15 px-2 py-[3px] font-mono text-[11.5px] text-deny">{v}</span>
                 ))}
               </div>
             </DrawerSection>
@@ -120,12 +126,12 @@ function DetailDrawer({
           <DrawerSection label="Decision">
             <KV k="outcome">{OUT_LABEL[e.outcome]}</KV>
             <KV k="tool_name" mono>{e.tool_name}</KV>
-            <KV k="role">{e.role || <span style={{ color: 'hsl(var(--muted-foreground))' }}>∅ none</span>}</KV>
+            <KV k="role">{e.role || <span className="text-muted-foreground">∅ none</span>}</KV>
             {e.error_type && <KV k="error_type" mono>{e.error_type}</KV>}
           </DrawerSection>
 
           <DrawerSection label="Arguments">
-            <pre style={{ margin: 0, padding: 12, background: 'hsl(var(--muted))', border: '1px solid hsl(var(--border))', borderRadius: 8, fontSize: 11.5, fontFamily: 'var(--font-mono)', lineHeight: 1.6, whiteSpace: 'pre-wrap', color: 'hsl(var(--foreground))' }}>{argStr}</pre>
+            <pre className="m-0 whitespace-pre-wrap rounded-lg border border-border bg-muted p-3 font-mono text-[11.5px] leading-relaxed text-foreground">{argStr}</pre>
           </DrawerSection>
 
           <DrawerSection label="Envelope">
@@ -138,21 +144,21 @@ function DetailDrawer({
 
           <DrawerSection label={`Same session · ${related.length}`}>
             {related.length ? (
-              <div style={{ border: '1px solid hsl(var(--border))', borderRadius: 8, overflow: 'hidden' }}>
+              <div className="overflow-hidden rounded-lg border border-border">
                 {related.map((r, i) => (
                   <div key={r.event_id} onClick={() => onSelect(r)}
-                    style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px', cursor: 'pointer', borderBottom: i < related.length - 1 ? '1px solid hsl(var(--border))' : 0, fontSize: 12 }}>
+                    className={`flex cursor-pointer items-center gap-2 px-2.5 py-2 text-xs hover:bg-accent ${i < related.length - 1 ? 'border-b border-border' : ''}`}>
                     <DecisionBadge d={r.outcome} />
-                    <span className="font-mono" style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.tool_name}</span>
-                    <span className="font-mono" style={{ color: 'hsl(var(--muted-foreground))', fontSize: 11 }}>{fmtTs(new Date(r.occurred_at))}</span>
+                    <span className="flex-1 truncate font-mono">{r.tool_name}</span>
+                    <span className="font-mono text-[11px] text-muted-foreground">{fmtTs(new Date(r.occurred_at))}</span>
                   </div>
                 ))}
               </div>
-            ) : <div style={{ fontSize: 12, color: 'hsl(var(--muted-foreground))' }}>No other events in this session.</div>}
+            ) : <div className="text-xs text-muted-foreground">No other events in this session.</div>}
           </DrawerSection>
         </div>
 
-        <div style={{ padding: '12px 20px', borderTop: '1px solid hsl(var(--border))', display: 'flex', gap: 8 }}>
+        <div className="flex gap-2 border-t border-border px-5 py-3">
           <Button variant="secondary" size="sm" onClick={() => { setF((p) => ({ ...p, agent: e.agent_name })); onClose() }}><Filter className="size-3" />Filter to agent</Button>
           <Button variant="secondary" size="sm" onClick={() => { setF((p) => ({ ...p, tool: e.tool_name })); onClose() }}><Filter className="size-3" />Filter to tool</Button>
         </div>
@@ -162,21 +168,23 @@ function DetailDrawer({
 }
 
 // ————————————————————————————————————————————— Root
-const EMPTY_FILTERS: Filters = { agent: '', role: '', tool: '', outcome: '', range: '30d' }
-
 export function AuditPage() {
   const projectScope = useProjectScoped()
   const projectId = projectScope.projectId
-  const [f, setFState] = useState<Filters>(EMPTY_FILTERS)
+  const activeOrgId = useActive((s) => s.activeOrgId)
+  // Resolve the active project's display name for the page subtitle
+  // (already cached by the AppShell bootstrap; falls back to the id).
+  const projectsQ = useProjects(activeOrgId)
+  const projectName =
+    projectsQ.data?.find((p) => p.id === projectId)?.name ?? projectId
+  // Filter + paging state lives in a zustand store (see lib/audit-filters)
+  // so the dialled-in slice survives route switches; drawer selection is
+  // ephemeral and stays local.
+  const f = useAuditFilters((s) => s.filters)
+  const setF = useAuditFilters((s) => s.setFilters)
+  const tableLimit = useAuditFilters((s) => s.tableLimit)
+  const loadMore = useAuditFilters((s) => s.loadMore)
   const [sel, setSel] = useState<AuditDecisionRow | null>(null)
-  const [tableLimit, setTableLimit] = useState(40)
-
-  // Any filter change resets the table page (wrapping the setter avoids a
-  // setState-in-effect).
-  const setF: (u: (p: Filters) => Filters) => void = (updater) => {
-    setFState(updater)
-    setTableLimit(40)
-  }
 
   // UI state → wire: '' = "all" locally, so unset filters are omitted
   // (undefined). The "(none)" label maps to `role: ''` — the wire's
@@ -188,9 +196,13 @@ export function AuditPage() {
     tool: f.tool || undefined,
   }
 
-  // Range-only (unscoped) summary: filter dropdown options + the "X of Y" total.
+  // Range-only (unscoped) summary: filter dropdown options + the "X of Y"
+  // total. Shares the summaryQ key shape on purpose: React Query's key hash
+  // drops undefined values, so when no filter is set this key hashes equal
+  // to summaryQ's and both dedupe into ONE fetch + cache entry; with a
+  // filter active the keys diverge and the second request is real.
   const optionsQ = useQuery({
-    queryKey: ['audit', 'options', projectId, f.range],
+    queryKey: ['audit', 'summary', projectId, { window: f.range }],
     enabled: !!projectId,
     queryFn: () => api.getAuditSummary({ window: f.range }, projectId as string),
   })
@@ -236,16 +248,16 @@ export function AuditPage() {
     () => (tsQ.data ?? []).map((p) => ({
       label: new Date(p.bucket),
       mode: f.range === '24h' ? 'hour' : 'day',
-      allow: p.allow, deny: p.deny, needs_approval: p.needs_approval,
+      values: { allow: p.allow, deny: p.deny, needs_approval: p.needs_approval },
       total: p.allow + p.deny + p.needs_approval,
     })),
     [tsQ.data, f.range],
   )
   const spark = useMemo(() => ({
     total: days.map((d) => d.total),
-    allow: days.map((d) => d.allow),
-    deny: days.map((d) => d.deny),
-    needs_approval: days.map((d) => d.needs_approval),
+    allow: days.map((d) => d.values.allow),
+    deny: days.map((d) => d.values.deny),
+    needs_approval: days.map((d) => d.values.needs_approval),
   }), [days])
 
   const denyRate = counts.total ? ((counts.deny / counts.total) * 100).toFixed(1) : '0.0'
@@ -263,6 +275,9 @@ export function AuditPage() {
     r.key === '' ? { ...r, key: NO_VALUE_LABEL } : r
   const related = (relatedQ.data?.rows ?? []).filter((r) => r.event_id !== sel?.event_id).slice(0, 6)
 
+  // Exports the LOADED page only (up to tableLimit ≤ 200 rows), not every
+  // row matching the filters — "export everything" would need a streaming
+  // server-side endpoint, not a client-side blob.
   const exportJsonl = () => {
     const rows = listQ.data?.rows ?? []
     if (!rows.length) return
@@ -285,7 +300,7 @@ export function AuditPage() {
         <header className="mb-6 flex items-end justify-between gap-4">
           <div>
             <h1 className="text-2xl font-semibold tracking-tight">Audit</h1>
-            <p className="mt-1 text-sm text-muted-foreground">Every policy decision for project <span className="font-mono text-foreground">support-bot</span></p>
+            <p className="mt-1 text-sm text-muted-foreground">Every policy decision for project <span className="font-mono text-foreground">{projectName}</span></p>
           </div>
           <ToggleGroup
             type="single"
@@ -321,16 +336,16 @@ export function AuditPage() {
             <div className="mb-3.5 flex items-center justify-between">
               <div className="text-[13px] font-medium text-muted-foreground">Decisions over time</div>
               <div className="flex gap-3.5 text-[11px] text-muted-foreground">
-                {(['allow', 'needs_approval', 'deny'] as AuditOutcome[]).map((k) => (
-                  <span key={k} className="flex items-center gap-1.5"><span className="size-2 rounded-sm" style={{ background: CHART_COLORS[k] }} />{OUT_LABEL[k]}</span>
+                {OUTCOME_SERIES.map((s) => (
+                  <span key={s.key} className="flex items-center gap-1.5"><span className={`size-2 rounded-sm ${s.swatchClass}`} />{s.label}</span>
                 ))}
               </div>
             </div>
-            {days.length ? <AreaChart days={days} /> : <div className="flex h-60 items-center justify-center text-[13px] text-muted-foreground">No decisions in this range.</div>}
+            {days.length ? <AreaChart buckets={days} series={OUTCOME_SERIES} /> : <div className="flex h-60 items-center justify-center text-[13px] text-muted-foreground">No decisions in this range.</div>}
           </Card>
           <Card className="p-6">
             <div className="mb-4 text-[13px] font-medium text-muted-foreground">Outcome breakdown</div>
-            <Donut counts={counts} />
+            <Donut values={{ ...counts }} total={counts.total} series={OUTCOME_SERIES} caption="decisions" />
           </Card>
         </div>
 
@@ -343,7 +358,7 @@ export function AuditPage() {
           total={listQ.data?.total ?? 0}
           onSelect={setSel}
           selectedId={sel?.event_id}
-          onLoadMore={() => setTableLimit((l) => Math.min(l + 40, 200))}
+          onLoadMore={loadMore}
           loadingMore={listQ.isFetching}
           onExport={exportJsonl}
         />

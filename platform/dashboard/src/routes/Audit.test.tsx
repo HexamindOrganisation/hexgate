@@ -18,6 +18,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { AuditDecisionRow } from '@/lib/api'
 import { useActive } from '@/lib/active'
+import { EMPTY_AUDIT_FILTERS, useAuditFilters } from '@/lib/audit-filters'
 import { AuditPage } from '@/routes/Audit'
 import { renderWithProviders } from '@/test/render'
 
@@ -101,7 +102,14 @@ function stubFetch(): string[] {
             },
           ])
         case '/v1/orgs/org-1/projects':
-          return json([])
+          return json([
+            {
+              id: PROJECT,
+              org_id: 'org-1',
+              name: 'demo-project',
+              created_at: '2026-01-01T00:00:00Z',
+            },
+          ])
         case `/v1/projects/${PROJECT}/audit/summary`:
           return json(SUMMARY)
         case `/v1/projects/${PROJECT}/audit/timeseries`:
@@ -132,6 +140,9 @@ describe('AuditPage', () => {
   beforeEach(() => {
     act(() => {
       useActive.setState({ activeOrgId: 'org-1', activeProjectId: PROJECT })
+      // The filter store is module-global — reset so a filter dialled in
+      // by test A doesn't narrow test B's queries.
+      useAuditFilters.setState({ filters: EMPTY_AUDIT_FILTERS, tableLimit: 40 })
     })
   })
 
@@ -147,6 +158,14 @@ describe('AuditPage', () => {
     // Wait for data to land, then open the agent select (Radix trigger)
     // and pick an option from the popup.
     await screen.findByText('blocked by policy')
+    // The subtitle names the ACTIVE project — not a hardcoded constant.
+    expect(await screen.findByText('demo-project')).toBeInTheDocument()
+
+    // With no filters set, optionsQ and summaryQ hash to the same query key
+    // and dedupe into ONE fetch of the unscoped summary.
+    expect(
+      calls.filter((u) => u === `/v1/projects/${PROJECT}/audit/summary?window=30d`),
+    ).toHaveLength(1)
     // Radix puts pointer-events:none on the value span — click the trigger.
     await user.click(screen.getByText('All agents').closest('button')!)
     await user.click(await screen.findByRole('option', { name: 'researcher' }))
