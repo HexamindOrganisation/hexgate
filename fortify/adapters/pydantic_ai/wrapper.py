@@ -3,8 +3,9 @@
 proxy backed by a clone of the caller's ``Agent`` with policy-gated
 tools.
 
-Policy is resolved from the platform at wrap time (register-on-404) and
-refreshed by the proxy at the top of every run.
+Policy is resolved from the platform at wrap time (fail-loud on a 404 —
+register the agent first with ``fortify register``) and refreshed by the
+proxy at the top of every run.
 """
 
 from __future__ import annotations
@@ -17,7 +18,7 @@ from pydantic_ai.tools import Tool
 
 from fortify.adapters.pydantic_ai.agent import FortifyPydanticAgent
 from fortify.adapters.pydantic_ai.tools import wrap_tools
-from fortify.security.binding import PolicyBinding, resolve_policy_or_register
+from fortify.security.binding import PolicyBinding, resolve_policy
 from fortify.security.enforcer import build_enforcer
 
 
@@ -67,14 +68,7 @@ def wrap_pydantic_agent(
     agent_name = getattr(agent, "name", None) or "default"
     tools = _extract_tools(agent)
 
-    def _register() -> None:
-        from fortify.cli.register import register_agent
-
-        register_agent(agent)
-
-    resolved = resolve_policy_or_register(
-        agent_name, api_key=resolved_key, on_missing=_register
-    )
+    resolved = resolve_policy(agent_name, api_key=resolved_key)
     enforcer = build_enforcer(resolved.engine, agent_name=agent_name, api_key=resolved_key)
     cloned_agent = _clone_agent_with_tools(agent, wrap_tools(tools, enforcer))
 

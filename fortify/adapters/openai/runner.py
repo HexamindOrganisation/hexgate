@@ -27,7 +27,7 @@ from openinference.instrumentation.openai_agents import OpenAIAgentsInstrumentor
 
 from fortify.adapters.openai.wrapper import wrap_openai_agent
 from fortify.runtime import User
-from fortify.security.binding import PolicyBinding, resolve_policy_or_register
+from fortify.security.binding import PolicyBinding, resolve_policy
 from fortify.security.enforcer import build_enforcer
 
 
@@ -47,7 +47,9 @@ class FortifyRunner:
         """Get-or-resolve the cached policy binding for ``agent``'s name.
 
         First call resolves (loud-failure point) and rebuilds the
-        enforcer with this runner's audit sender.
+        enforcer with this runner's audit sender. Fail-loud: an
+        unregistered agent (platform 404) raises — register it first with
+        ``fortify register``.
         """
         # `or "default"` collapses a None/empty name to a real string (matches
         # the pydantic_ai adapter) so a null identity never reaches the cache
@@ -55,15 +57,7 @@ class FortifyRunner:
         name = getattr(agent, "name", None) or "default"
         binding = self._bindings.get(name)
         if binding is None:
-
-            def _register() -> None:
-                from fortify.cli.register import register_agent
-
-                register_agent(agent)
-
-            resolved = resolve_policy_or_register(
-                name, api_key=self.api_key, on_missing=_register
-            )
+            resolved = resolve_policy(name, api_key=self.api_key)
             enforcer = build_enforcer(
                 resolved.engine, agent_name=name, api_key=self.api_key
             )

@@ -23,7 +23,7 @@ def _stub_resolve(monkeypatch: pytest.MonkeyPatch) -> None:
     """Stub the platform resolve seam — runner tests are about lifecycle,
     not policy resolution (covered by test_wrapper.py / binding tests)."""
 
-    def fake_resolve(name: str, *, api_key: str, on_missing: Any) -> ResolvedPolicy:
+    def fake_resolve(name: str, *, api_key: str) -> ResolvedPolicy:
         engine = PolicySet(
             {
                 DEFAULT_ROLE_NAME: AgentPolicy(
@@ -33,7 +33,7 @@ def _stub_resolve(monkeypatch: pytest.MonkeyPatch) -> None:
         )
         return ResolvedPolicy(engine, None)
 
-    monkeypatch.setattr(wrapper_mod, "resolve_policy_or_register", fake_resolve)
+    monkeypatch.setattr(wrapper_mod, "resolve_policy", fake_resolve)
 
 
 def _user() -> User:

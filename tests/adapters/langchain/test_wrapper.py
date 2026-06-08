@@ -1,10 +1,10 @@
 """Tests for the LangChain adapter wrapper entry point (phase 4).
 
 The allow-all ``build_policy_set`` placeholder is gone: wrap-time policy
-comes from :func:`resolve_policy_or_register` (platform / local override,
-register-on-404). These tests stub that seam so no platform is needed,
-and cover: key resolution, enforcer installation with the resolved
-policy, the register-on-miss wiring, and the proxy's per-call refresh.
+comes from :func:`resolve_policy` (platform / local override; fail-loud on
+a 404). These tests stub that seam so no platform is needed, and cover:
+key resolution, enforcer installation with the resolved policy, and the
+proxy's per-call refresh.
 """
 
 from __future__ import annotations
@@ -55,11 +55,11 @@ def resolved(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     """Stub the resolve seam with an allow-all engine; capture the call."""
     captured: dict[str, Any] = {}
 
-    def fake_resolve(name: str, *, api_key: str, on_missing: Any) -> ResolvedPolicy:
-        captured.update(name=name, key=api_key, on_missing=on_missing)
+    def fake_resolve(name: str, *, api_key: str) -> ResolvedPolicy:
+        captured.update(name=name, key=api_key)
         return ResolvedPolicy(_engine(["a", "b"]), None)
 
-    monkeypatch.setattr(wrapper_mod, "resolve_policy_or_register", fake_resolve)
+    monkeypatch.setattr(wrapper_mod, "resolve_policy", fake_resolve)
     return captured
 
 
@@ -148,10 +148,8 @@ def test_wrap_enforces_the_resolved_policy_not_allow_all(
     """A deny rule from the resolved policy actually blocks the tool."""
     monkeypatch.setattr(
         wrapper_mod,
-        "resolve_policy_or_register",
-        lambda name, *, api_key, on_missing: ResolvedPolicy(
-            _engine(["a"], mode="deny"), None
-        ),
+        "resolve_policy",
+        lambda name, *, api_key: ResolvedPolicy(_engine(["a"], mode="deny"), None),
     )
     tools = [_make_tool("a")]
 
@@ -191,40 +189,6 @@ def test_wrap_attaches_binding_with_audited_enforcer(
     # refresh swap reaches the wrapped tools.
     assert isinstance(wrapped._binding.enforcer, PolicyEnforcer)
     assert wrapped._binding.enforcer.agent_name == "fake-graph"
-
-
-# ---------------------------------------------------------------------------
-# register-on-miss wiring (the 404/loud logic itself is covered centrally
-# in tests/security/test_policy_binding.py)
-# ---------------------------------------------------------------------------
-
-
-def test_register_on_miss_ships_graph_and_real_tool_schemas(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The adapter's on_missing thunk registers the graph WITH its tools —
-    raw graphs don't expose tool nodes, so the schemas must come from here."""
-    import fortify.cli.register as register_pkg
-
-    registered: list[tuple[Any, Any]] = []
-    monkeypatch.setattr(
-        register_pkg,
-        "register_agent",
-        lambda agent, tools=None: registered.append((agent, tools)),
-    )
-
-    # Simulate the platform 404 path: invoke on_missing, then resolve.
-    def fake_resolve(name: str, *, api_key: str, on_missing: Any) -> ResolvedPolicy:
-        on_missing()
-        return ResolvedPolicy(_engine(["a"]), None)
-
-    monkeypatch.setattr(wrapper_mod, "resolve_policy_or_register", fake_resolve)
-
-    graph = _FakeCompiledGraph()
-    tools = [_make_tool("a")]
-    wrap_langchain_agent(agent=graph, tools=tools, api_key="k")
-
-    assert registered == [(graph, tools)]
 
 
 # ---------------------------------------------------------------------------

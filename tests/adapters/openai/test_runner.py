@@ -24,7 +24,7 @@ def _stub_resolve(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     resolved agent names so tests can assert on the binding cache."""
     resolved_names: list[str] = []
 
-    def fake_resolve(name: str, *, api_key: str, on_missing: Any) -> ResolvedPolicy:
+    def fake_resolve(name: str, *, api_key: str) -> ResolvedPolicy:
         resolved_names.append(name)
         engine = PolicySet(
             {
@@ -35,7 +35,7 @@ def _stub_resolve(monkeypatch: pytest.MonkeyPatch) -> list[str]:
         )
         return ResolvedPolicy(engine, None)
 
-    monkeypatch.setattr(runner_mod, "resolve_policy_or_register", fake_resolve)
+    monkeypatch.setattr(runner_mod, "resolve_policy", fake_resolve)
     return resolved_names
 
 
@@ -444,34 +444,3 @@ def test_run_streamed_refreshes_before_setup(
     runner.run_streamed(_make_agent("my-agent"), "hello", user=_user())
 
     assert order == ["refresh", "run_streamed"]
-
-
-@pytest.mark.asyncio
-async def test_register_on_miss_ships_the_openai_agent(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The runner's on_missing thunk registers the introspectable agent
-    (the 404/loud logic is covered in test_policy_binding.py)."""
-    import fortify.cli.register as register_pkg
-
-    _silence_observability(monkeypatch)
-    _patch_runner_run(monkeypatch)
-
-    registered: list[Any] = []
-    monkeypatch.setattr(
-        register_pkg, "register_agent", lambda agent: registered.append(agent)
-    )
-
-    def fake_resolve(name: str, *, api_key: str, on_missing: Any) -> ResolvedPolicy:
-        on_missing()
-        engine = PolicySet(
-            {DEFAULT_ROLE_NAME: AgentPolicy(tools={"echo": BaseToolPolicy(mode="allow")})}
-        )
-        return ResolvedPolicy(engine, None)
-
-    monkeypatch.setattr(runner_mod, "resolve_policy_or_register", fake_resolve)
-
-    agent = _make_agent("new-agent")
-    await runner_mod.FortifyRunner(api_key="k").run(agent, "hi", user=_user())
-
-    assert registered == [agent]

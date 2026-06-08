@@ -12,7 +12,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -94,31 +93,6 @@ def resolve_policy(
         "credential, point the override at a policy, or construct "
         "PolicyBinding(PolicyEnforcer(engine)) explicitly."
     )
-
-
-def resolve_policy_or_register(
-    agent_name: str,
-    *,
-    api_key: str | None = None,
-    client: "FortifyClient | None" = None,
-    on_missing: Callable[[], object],
-) -> ResolvedPolicy:
-    """Resolve ``agent_name``; on a platform 404, run ``on_missing`` and retry.
-
-    ``on_missing`` registers the agent from its in-code definition (the
-    framework-specific call lives in the caller). Non-404 failures stay
-    loud — never a silent allow-all.
-    """
-    from fortify.cloud.client import FortifyError
-
-    try:
-        return resolve_policy(agent_name, api_key=api_key, client=client)
-    except FortifyError as exc:
-        if exc.status != 404:
-            raise
-        logger.info("agent %r not registered — registering it from code", agent_name)
-        on_missing()
-        return resolve_policy(agent_name, api_key=api_key, client=client)
 
 
 class PolicyBinding:

@@ -34,7 +34,6 @@ from fortify.security import (
     ResolvedPolicy,
     compile_to_rego,
     resolve_policy,
-    resolve_policy_or_register,
     compile_to_wasm,
     generate_keypair,
     sign_bytes,
@@ -369,7 +368,8 @@ def test_refresh_tampered_bundle_keeps_previous_policy(
 
 
 # ---------------------------------------------------------------------------
-# resolve_policy / resolve_policy_or_register (refactor phase 1)
+# resolve_policy — fail-loud resolution (no auto-register; a 404 surfaces so
+# the caller registers via `fortify register` and resolves again)
 # ---------------------------------------------------------------------------
 
 
@@ -399,35 +399,14 @@ def test_resolve_policy_no_credentials_raises() -> None:
         resolve_policy("support-bot")
 
 
-def test_resolve_or_register_calls_on_missing_then_retries_on_404() -> None:
-
+def test_resolve_policy_404_propagates_fail_loud() -> None:
+    """An unregistered agent surfaces the 404 — resolve never auto-creates it."""
     _, pub = generate_keypair()
     fc = _FakeClient(pub)
     fc.serve_error(FortifyError("404", status=404))
-    fc.serve({"policy_yaml": _POLICY_YAML}, etag='"fresh"')
 
-    calls: list[str] = []
-    resolved = resolve_policy_or_register(
-        "new-agent",
-        client=fc,
-        on_missing=lambda: calls.append("registered"),
-    )
+    with pytest.raises(FortifyError) as excinfo:
+        resolve_policy("new-agent", client=fc)
 
-    # on_missing fired once, then the second fetch resolved the policy.
-    assert calls == ["registered"]
-    assert isinstance(resolved.engine, PolicySet)
-    assert fc.calls == [None, None]
-
-
-def test_resolve_or_register_propagates_non_404() -> None:
-
-    _, pub = generate_keypair()
-    fc = _FakeClient(pub)
-    fc.serve_error(FortifyError("500", status=500))
-
-    calls: list[str] = []
-    with pytest.raises(FortifyError, match="500"):
-        resolve_policy_or_register(
-            "support-bot", client=fc, on_missing=lambda: calls.append("x")
-        )
-    assert calls == []  # never registered on a non-404
+    assert excinfo.value.status == 404
+    assert fc.calls == [None]  # one fetch, no register-and-retry

@@ -1,9 +1,9 @@
 """Tests for ``create_agent(bind_policy=...)`` (policy-binding spec, phase 3).
 
 Covers the dispatch matrix (auto / True / False), the full bind path
-(tools guarded, source attached, client attached), the 404 → register →
-retry flow, and the ``enforce_policy`` source-detach guard that keeps an
-explicit policy from being silently swapped back at the next run.
+(tools guarded, source attached, client attached), fail-loud on a platform
+404 (no auto-register), and the ``enforce_policy`` source-detach guard that
+keeps an explicit policy from being silently swapped back at the next run.
 
 The LangChain graph build and the Langfuse handler are stubbed exactly
 like tests/agents/test_factory.py does; the platform is a scripted fake
@@ -12,7 +12,6 @@ client patched over ``fortify.cloud.client.FortifyClient``.
 
 from __future__ import annotations
 
-from typing import Any
 
 import pytest
 from langchain_core.tools import tool
@@ -178,31 +177,22 @@ def test_bind_failure_is_loud_not_a_bare_agent(
         )
 
 
-def test_404_registers_from_code_then_binds(
+def test_404_is_loud_does_not_auto_register(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Unknown agent → register from the in-code definition → resolve again."""
-    import fortify.cli.register as register_pkg
-
+    """An unregistered agent surfaces the 404 — create_agent never silently
+    auto-creates it on the platform (register-on-404 is deferred)."""
     fc = _FakeClient()
     fc.serve_error(FortifyError("Fortify API error 404 calling …", status=404))
-    fc.serve({"policy_yaml": _POLICY_YAML}, etag='"fresh"')
     _patch_platform(monkeypatch, fc)
 
-    registered: list[Any] = []
-    monkeypatch.setattr(
-        register_pkg, "register_agent", lambda agent: registered.append(agent)
-    )
+    with pytest.raises(FortifyError) as excinfo:
+        factory.create_agent(
+            model="openai:gpt-5.4", tools=[echo], name="new-agent"
+        )
 
-    agent, _ = factory.create_agent(
-        model="openai:gpt-5.4", tools=[echo], name="new-agent"
-    )
-
-    assert len(registered) == 1
-    # The registered object is the in-code FortifyAgent (real manifest input).
-    assert registered[0].name == "new-agent"
-    assert isinstance(agent.tools[0], GuardedTool)
-    assert fc.calls == [None, None]  # 404'd fetch + post-register re-fetch
+    assert excinfo.value.status == 404
+    assert fc.calls == [None]  # one fetch, no register-and-retry
 
 
 def test_local_override_binds_without_a_key(

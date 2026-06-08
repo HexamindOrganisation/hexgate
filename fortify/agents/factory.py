@@ -587,10 +587,10 @@ def _bind_policy(
     """Resolve the policy for ``name`` and enforce it on ``agent``.
 
     Mirrors ``load_fortify_agent``: resolve → enforce → attach the
-    refresh source. A 404 registers the agent from its in-code
-    definition and resolves again; other failures stay loud.
+    refresh source. Fail-loud — an unregistered agent (platform 404)
+    raises; register it first with ``fortify register``.
     """
-    from fortify.security.binding import resolve_policy_or_register
+    from fortify.security.binding import resolve_policy
 
     client = None
     if os.environ.get("FORTIFY_KEY"):
@@ -598,12 +598,7 @@ def _bind_policy(
 
         client = FortifyClient(FortifyConfig.from_env())
 
-    def _register() -> None:
-        from fortify.cli.register import register_agent
-
-        register_agent(agent)
-
-    resolved = resolve_policy_or_register(name, client=client, on_missing=_register)
+    resolved = resolve_policy(name, client=client)
     enforced = agent.enforce_policy(
         resolved.engine, approval_handler=approval_handler, source=resolved.source
     )

@@ -4,8 +4,9 @@ references; the returned :class:`FortifyLangchainAgent` opens a User
 scope + Langfuse propagation per call. For the manifest-driven path,
 use :func:`fortify.enforce_policy` instead.
 
-Policy is resolved from the platform at wrap time (register-on-404) and
-refreshed by the proxy at the top of every call.
+Policy is resolved from the platform at wrap time (fail-loud on a 404 —
+register the agent first with ``fortify register``) and refreshed by the
+proxy at the top of every call.
 """
 
 from __future__ import annotations
@@ -17,7 +18,7 @@ from langgraph.graph.state import CompiledStateGraph
 
 from fortify.adapters.langchain.agent import FortifyLangchainAgent
 from fortify.adapters.langchain.tools import install_enforcer_on_tools
-from fortify.security.binding import PolicyBinding, resolve_policy_or_register
+from fortify.security.binding import PolicyBinding, resolve_policy
 from fortify.security.enforcer import build_enforcer
 
 
@@ -45,15 +46,7 @@ def wrap_langchain_agent(
     agent_name = getattr(agent, "name", "default")
     tool_names = [tool.name for tool in tools]
 
-    # tools carries the real schemas — raw graphs don't expose their nodes.
-    def _register() -> None:
-        from fortify.cli.register import register_agent
-
-        register_agent(agent, tools=tools)
-
-    resolved = resolve_policy_or_register(
-        agent_name, api_key=resolved_key, on_missing=_register
-    )
+    resolved = resolve_policy(agent_name, api_key=resolved_key)
     enforcer = build_enforcer(resolved.engine, agent_name=agent_name, api_key=resolved_key)
     install_enforcer_on_tools(tools, enforcer=enforcer)
 

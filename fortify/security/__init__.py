@@ -21,7 +21,6 @@ from fortify.security.binding import (
     PolicyBindingError,
     ResolvedPolicy,
     resolve_policy,
-    resolve_policy_or_register,
 )
 from fortify.security.bundle import (
     BundleIntegrityError,
@@ -92,7 +91,6 @@ __all__ = [
     "PolicyBindingError",
     "ResolvedPolicy",
     "resolve_policy",
-    "resolve_policy_or_register",
     "Constraint",
     "ConstraintParseError",
     "DEFAULT_ENTRYPOINT",

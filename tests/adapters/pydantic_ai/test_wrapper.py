@@ -1,8 +1,8 @@
 """Tests for the pydantic_ai adapter agent wrapper entry point (phase 7).
 
 The allow-all ``build_policy_set`` placeholder is gone: wrap-time policy
-comes from :func:`resolve_policy_or_register` (platform / local override,
-register-on-404). These tests stub that seam so no platform is needed.
+comes from :func:`resolve_policy` (platform / local override; fail-loud on
+a 404). These tests stub that seam so no platform is needed.
 """
 
 from __future__ import annotations
@@ -44,11 +44,11 @@ def _stub_resolve(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     tests cover; resolution itself is covered by the binding tests."""
     captured: dict[str, Any] = {}
 
-    def fake_resolve(name: str, *, api_key: str, on_missing: Any) -> ResolvedPolicy:
-        captured.update(name=name, key=api_key, on_missing=on_missing)
+    def fake_resolve(name: str, *, api_key: str) -> ResolvedPolicy:
+        captured.update(name=name, key=api_key)
         return ResolvedPolicy(_allow_all(["echo", "shout"]), None)
 
-    monkeypatch.setattr(wrapper_mod, "resolve_policy_or_register", fake_resolve)
+    monkeypatch.setattr(wrapper_mod, "resolve_policy", fake_resolve)
     return captured
 
 
@@ -218,7 +218,7 @@ def test_wrap_pydantic_agent_with_no_tools() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Phase 7 — resolved policy, binding attachment, 404 → register, loud failures
+# Phase 7 — resolved policy, binding attachment, loud failures
 # ---------------------------------------------------------------------------
 
 
@@ -241,8 +241,8 @@ async def test_wrap_enforces_the_resolved_policy_not_allow_all(
 
     monkeypatch.setattr(
         wrapper_mod,
-        "resolve_policy_or_register",
-        lambda name, *, api_key, on_missing: ResolvedPolicy(
+        "resolve_policy",
+        lambda name, *, api_key: ResolvedPolicy(
             PolicySet(
                 {
                     DEFAULT_ROLE_NAME: AgentPolicy.model_validate(
@@ -259,29 +259,3 @@ async def test_wrap_enforces_the_resolved_policy_not_allow_all(
     echo_tool = wrapped._agent._function_toolset.tools["echo"]
     with pytest.raises(ModelRetry, match="policy_denied"):
         await echo_tool.function_schema.call({"text": "hi"}, None)
-
-
-def test_register_on_miss_ships_the_pydantic_agent(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The adapter's on_missing thunk registers the introspectable agent
-    (the 404/loud logic is covered in test_policy_binding.py)."""
-    import fortify.cli.register as register_pkg
-
-    registered: list[Any] = []
-    monkeypatch.setattr(
-        register_pkg, "register_agent", lambda agent: registered.append(agent)
-    )
-
-    def fake_resolve(name: str, *, api_key: str, on_missing: Any) -> ResolvedPolicy:
-        on_missing()
-        return ResolvedPolicy(_allow_all(["echo", "shout"]), None)
-
-    monkeypatch.setattr(wrapper_mod, "resolve_policy_or_register", fake_resolve)
-
-    agent = _make_agent()
-    wrap_pydantic_agent(agent=agent, api_key="k")
-
-    # on_missing registers the cloned-from agent; identity is what matters.
-    assert len(registered) == 1
-    assert registered[0] is agent

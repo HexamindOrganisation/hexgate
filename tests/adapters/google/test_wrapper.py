@@ -1,8 +1,8 @@
 """Tests for the Google ADK adapter agent wrapping helpers (phase 5).
 
 The allow-all ``build_policy_set`` placeholder is gone: wrap-time policy
-comes from :func:`resolve_policy_or_register` (platform / local override,
-register-on-404). These tests stub that seam so no platform is needed.
+comes from :func:`resolve_policy` (platform / local override; fail-loud on
+a 404). These tests stub that seam so no platform is needed.
 """
 
 from __future__ import annotations
@@ -28,8 +28,8 @@ from fortify.security.policy_set import DEFAULT_ROLE_NAME
 
 
 def _resolve_stub(engine: PolicySet):
-    """Build a resolve_policy_or_register replacement returning ``engine``."""
-    return lambda name, *, api_key, on_missing: ResolvedPolicy(engine, None)
+    """Build a resolve_policy replacement returning ``engine``."""
+    return lambda name, *, api_key: ResolvedPolicy(engine, None)
 
 
 def _make_callable(name: str = "echo") -> Any:
@@ -72,11 +72,11 @@ def resolved(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     """Stub the resolve seam with an allow-all engine; capture the call."""
     captured: dict[str, Any] = {}
 
-    def fake_resolve(name: str, *, api_key: str, on_missing: Any) -> ResolvedPolicy:
-        captured.update(name=name, key=api_key, on_missing=on_missing)
+    def fake_resolve(name: str, *, api_key: str) -> ResolvedPolicy:
+        captured.update(name=name, key=api_key)
         return ResolvedPolicy(_allow_all(["echo", "shout"]), None)
 
-    monkeypatch.setattr(wrapper_mod, "resolve_policy_or_register", fake_resolve)
+    monkeypatch.setattr(wrapper_mod, "resolve_policy", fake_resolve)
     return captured
 
 
@@ -147,7 +147,7 @@ async def test_wrap_enforces_the_resolved_policy_not_allow_all(
     """A deny-by-default engine from resolve actually blocks the tools."""
     monkeypatch.setattr(
         wrapper_mod,
-        "resolve_policy_or_register",
+        "resolve_policy",
         _resolve_stub(_engine({"default_policy": {"mode": "deny"}})),
     )
 
@@ -182,7 +182,7 @@ async def test_wrap_google_agent_resolves_role_at_call_time(
         }
     )
     monkeypatch.setattr(
-        wrapper_mod, "resolve_policy_or_register", _resolve_stub(role_aware)
+        wrapper_mod, "resolve_policy", _resolve_stub(role_aware)
     )
 
     wrapped, _ = wrap_google_agent(_make_agent(), api_key="k")
@@ -205,7 +205,7 @@ async def test_refresh_swap_reaches_already_wrapped_tools(
     """Rebinding enforcer.policy (what refresh does) flips live decisions."""
     monkeypatch.setattr(
         wrapper_mod,
-        "resolve_policy_or_register",
+        "resolve_policy",
         _resolve_stub(_engine({"default_policy": {"mode": "deny"}})),
     )
     wrapped, binding = wrap_google_agent(_make_agent(), api_key="k")
@@ -218,31 +218,3 @@ async def test_refresh_swap_reaches_already_wrapped_tools(
 
     allowed = await echo_tool.run_async(args={"text": "hi"}, tool_context=None)
     assert allowed == "echo:hi"
-
-
-# ---------------------------------------------------------------------------
-# register-on-miss wiring (404/loud logic covered in test_policy_binding.py)
-# ---------------------------------------------------------------------------
-
-
-def test_register_on_miss_ships_the_adk_agent(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The adapter's on_missing thunk registers the introspectable agent."""
-    import fortify.cli.register as register_pkg
-
-    registered: list[Any] = []
-    monkeypatch.setattr(
-        register_pkg, "register_agent", lambda agent: registered.append(agent)
-    )
-
-    def fake_resolve(name: str, *, api_key: str, on_missing: Any) -> ResolvedPolicy:
-        on_missing()
-        return ResolvedPolicy(_allow_all(["echo", "shout"]), None)
-
-    monkeypatch.setattr(wrapper_mod, "resolve_policy_or_register", fake_resolve)
-
-    agent = _make_agent()
-    wrap_google_agent(agent, api_key="k")
-
-    assert registered == [agent]
