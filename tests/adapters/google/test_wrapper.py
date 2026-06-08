@@ -181,9 +181,7 @@ async def test_wrap_google_agent_resolves_role_at_call_time(
             ),
         }
     )
-    monkeypatch.setattr(
-        wrapper_mod, "resolve_policy", _resolve_stub(role_aware)
-    )
+    monkeypatch.setattr(wrapper_mod, "resolve_policy", _resolve_stub(role_aware))
 
     wrapped, _ = wrap_google_agent(_make_agent(), api_key="k")
     [echo_tool, _shout] = wrapped.tools

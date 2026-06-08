@@ -180,9 +180,7 @@ def test_wrap_attaches_binding_with_audited_enforcer(
     """The proxy carries a binding whose enforcer is the one the tools got."""
     tools = [_make_tool("a")]
 
-    wrapped = wrap_langchain_agent(
-        agent=_FakeCompiledGraph(), tools=tools, api_key="k"
-    )
+    wrapped = wrap_langchain_agent(agent=_FakeCompiledGraph(), tools=tools, api_key="k")
 
     assert wrapped._binding is not None
     # The tools' installed gate and the binding share one enforcer, so a
@@ -224,7 +222,10 @@ def _user() -> User:
 def test_invoke_refreshes_binding_first() -> None:
     binding = _CountingBinding()
     proxy = FortifyLangchainAgent(
-        agent=_RunnableGraph(), api_key="k", tool_names=[], binding=binding  # type: ignore[arg-type]
+        agent=_RunnableGraph(),
+        api_key="k",
+        tool_names=[],
+        binding=binding,  # type: ignore[arg-type]
     )
 
     proxy.invoke({"messages": []}, user=_user())
@@ -237,7 +238,10 @@ def test_invoke_refreshes_binding_first() -> None:
 async def test_ainvoke_refreshes_binding_first() -> None:
     binding = _CountingBinding()
     proxy = FortifyLangchainAgent(
-        agent=_RunnableGraph(), api_key="k", tool_names=[], binding=binding  # type: ignore[arg-type]
+        agent=_RunnableGraph(),
+        api_key="k",
+        tool_names=[],
+        binding=binding,  # type: ignore[arg-type]
     )
 
     await proxy.ainvoke({"messages": []}, user=_user())
@@ -247,8 +251,6 @@ async def test_ainvoke_refreshes_binding_first() -> None:
 
 def test_proxy_without_binding_runs_fine() -> None:
     """Back-compat: a binding-less proxy (direct construction) still works."""
-    proxy = FortifyLangchainAgent(
-        agent=_RunnableGraph(), api_key="k", tool_names=[]
-    )
+    proxy = FortifyLangchainAgent(agent=_RunnableGraph(), api_key="k", tool_names=[])
 
     assert proxy.invoke({"messages": []}, user=_user()) == {"ok": True}

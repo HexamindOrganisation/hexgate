@@ -76,15 +76,19 @@ def _hermetic(monkeypatch: pytest.MonkeyPatch) -> None:
     )
     monkeypatch.delenv("FORTIFY_KEY", raising=False)
     monkeypatch.delenv("FORTIFY_LOCAL_POLICY", raising=False)
+    monkeypatch.delenv("FORTIFY_BIND_AGENTS", raising=False)
 
 
-def _patch_platform(
-    monkeypatch: pytest.MonkeyPatch, client: _FakeClient
-) -> None:
-    """Route _bind_policy's client construction to the scripted fake."""
+def _patch_platform(monkeypatch: pytest.MonkeyPatch, client: _FakeClient) -> None:
+    """Route _bind_policy's client construction to the scripted fake.
+
+    Sets both the key and the FORTIFY_BIND_AGENTS opt-in toggle — the
+    platform bind path is gated on both (a bare key never auto-binds).
+    """
     import fortify.cloud.client as client_mod
 
     monkeypatch.setenv("FORTIFY_KEY", "fty_test_demo_dummybiscuit")
+    monkeypatch.setenv("FORTIFY_BIND_AGENTS", "1")
     monkeypatch.setattr(client_mod, "FortifyClient", lambda config: client)
 
 
@@ -116,6 +120,31 @@ def test_auto_mode_without_name_skips_even_with_key(
     assert agent._binding is None
 
 
+def test_auto_mode_bare_key_does_not_bind_without_opt_in(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A FORTIFY_KEY present for some *other* agent must not auto-bind a
+    named prototype — that would surprise-404 at construction. The platform
+    bind path needs FORTIFY_BIND_AGENTS=1 (or an explicit bind_policy=True)."""
+    import fortify.cloud.client as client_mod
+
+    monkeypatch.setenv("FORTIFY_KEY", "fty_test_demo_dummybiscuit")
+    monkeypatch.delenv("FORTIFY_BIND_AGENTS", raising=False)
+    # The platform must never be contacted — fail hard if a client is built.
+    monkeypatch.setattr(
+        client_mod,
+        "FortifyClient",
+        lambda config: pytest.fail("create_agent contacted the platform"),
+    )
+
+    agent, _ = factory.create_agent(
+        model="openai:gpt-5.4", tools=[echo], name="my_local_prototype"
+    )
+
+    assert agent.tools == [echo]  # unwrapped, no construction-time 404
+    assert agent._binding is None
+
+
 def test_bind_policy_false_skips_even_with_key(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -132,9 +161,7 @@ def test_bind_policy_false_skips_even_with_key(
 
 def test_bind_policy_true_requires_name() -> None:
     with pytest.raises(ValueError, match="requires name="):
-        factory.create_agent(
-            model="openai:gpt-5.4", tools=[echo], bind_policy=True
-        )
+        factory.create_agent(model="openai:gpt-5.4", tools=[echo], bind_policy=True)
 
 
 # ---------------------------------------------------------------------------
@@ -172,9 +199,7 @@ def test_bind_failure_is_loud_not_a_bare_agent(
     _patch_platform(monkeypatch, fc)
 
     with pytest.raises(FortifyError, match="500"):
-        factory.create_agent(
-            model="openai:gpt-5.4", tools=[echo], name="support-bot"
-        )
+        factory.create_agent(model="openai:gpt-5.4", tools=[echo], name="support-bot")
 
 
 def test_404_is_loud_does_not_auto_register(
@@ -187,9 +212,7 @@ def test_404_is_loud_does_not_auto_register(
     _patch_platform(monkeypatch, fc)
 
     with pytest.raises(FortifyError) as excinfo:
-        factory.create_agent(
-            model="openai:gpt-5.4", tools=[echo], name="new-agent"
-        )
+        factory.create_agent(model="openai:gpt-5.4", tools=[echo], name="new-agent")
 
     assert excinfo.value.status == 404
     assert fc.calls == [None]  # one fetch, no register-and-retry

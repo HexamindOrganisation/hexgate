@@ -507,10 +507,12 @@ def create_agent(
 ) -> tuple[AgentGraph, CallbackHandler]:
     """Create a fortify agent as a thin wrapper over LangChain.
 
-    ``bind_policy``: ``None`` (auto) binds when ``FORTIFY_KEY`` or
-    ``FORTIFY_LOCAL_POLICY`` is set and ``name`` is given; ``True``
-    always binds (raises without a name); ``False`` never binds.
-    Binding gates the tools and attaches a refresh source, like
+    ``bind_policy``: ``True`` always binds (raises without a name); ``False``
+    never binds; ``None`` (auto) binds only on an explicit governance signal —
+    ``FORTIFY_LOCAL_POLICY`` set, or ``FORTIFY_KEY`` **plus**
+    ``FORTIFY_BIND_AGENTS=1`` (the platform path is opt-in, so a key present
+    for another agent can't surprise-404 an unregistered prototype at
+    construction). Binding gates the tools and attaches a refresh source, like
     ``load_fortify_agent``. ``approval_handler`` applies on that path.
     """
     resolved_system_prompt = (
@@ -564,7 +566,20 @@ def create_agent(
 
 
 def _should_bind_policy(bind_policy: bool | None, name: str | None) -> bool:
-    """Decide whether :func:`create_agent` binds policy at creation."""
+    """Decide whether :func:`create_agent` binds policy at creation.
+
+    ``True`` always binds (requires a name); ``False`` never binds. ``None``
+    (auto) binds only on an *explicit* governance signal — never on the mere
+    presence of ``FORTIFY_KEY``:
+
+      * ``FORTIFY_LOCAL_POLICY`` set → bind. A deliberate local override with
+        no platform round-trip, so it can't surprise-404 at construction.
+      * ``FORTIFY_KEY`` set **and** ``FORTIFY_BIND_AGENTS`` truthy → bind. The
+        platform path is opt-in: a key present for some *other* agent must not
+        silently turn an unregistered ``create_agent(name=...)`` into a
+        construction-time 404. Set ``FORTIFY_BIND_AGENTS=1`` to opt in, or pass
+        ``bind_policy=True`` explicitly.
+    """
     if bind_policy is False:
         return False
     if bind_policy is True:
@@ -574,8 +589,14 @@ def _should_bind_policy(bind_policy: bool | None, name: str | None) -> bool:
                 "agent name is the policy lookup key on the platform."
             )
         return True
-    return bool(name) and bool(
-        os.environ.get("FORTIFY_KEY") or os.environ.get("FORTIFY_LOCAL_POLICY")
+    if not name:
+        return False
+    if os.environ.get("FORTIFY_LOCAL_POLICY"):
+        return True
+    from fortify.security.source import _truthy
+
+    return bool(os.environ.get("FORTIFY_KEY")) and _truthy(
+        os.environ.get("FORTIFY_BIND_AGENTS")
     )
 
 

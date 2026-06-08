@@ -47,7 +47,9 @@ def wrap_langchain_agent(
     tool_names = [tool.name for tool in tools]
 
     resolved = resolve_policy(agent_name, api_key=resolved_key)
-    enforcer = build_enforcer(resolved.engine, agent_name=agent_name, api_key=resolved_key)
+    enforcer = build_enforcer(
+        resolved.engine, agent_name=agent_name, api_key=resolved_key
+    )
     install_enforcer_on_tools(tools, enforcer=enforcer)
 
     return FortifyLangchainAgent(

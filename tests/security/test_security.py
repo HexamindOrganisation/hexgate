@@ -228,7 +228,8 @@ def test_enforce_policy_detaches_refresh_source(
     from fortify.security.enforcer import PolicyEnforcer
 
     agent._binding = PolicyBinding(
-        PolicyEnforcer(AgentPolicy(), agent_name="x"), source=object()  # type: ignore[arg-type]
+        PolicyEnforcer(AgentPolicy(), agent_name="x"),
+        source=object(),  # type: ignore[arg-type]
     )
 
     secured = enforce_policy(

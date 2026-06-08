@@ -82,9 +82,7 @@ def resolve_policy(
     if client is not None:
         payload, etag = client.get_agent(agent_name)
         assert payload is not None, "get_agent without If-None-Match — 304 impossible"
-        engine, source = platform_policy_from_payload(
-            client, agent_name, payload, etag
-        )
+        engine, source = platform_policy_from_payload(client, agent_name, payload, etag)
         return ResolvedPolicy(engine, source)
 
     raise PolicyBindingError(

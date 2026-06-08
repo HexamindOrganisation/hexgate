@@ -69,7 +69,9 @@ def wrap_pydantic_agent(
     tools = _extract_tools(agent)
 
     resolved = resolve_policy(agent_name, api_key=resolved_key)
-    enforcer = build_enforcer(resolved.engine, agent_name=agent_name, api_key=resolved_key)
+    enforcer = build_enforcer(
+        resolved.engine, agent_name=agent_name, api_key=resolved_key
+    )
     cloned_agent = _clone_agent_with_tools(agent, wrap_tools(tools, enforcer))
 
     return FortifyPydanticAgent(

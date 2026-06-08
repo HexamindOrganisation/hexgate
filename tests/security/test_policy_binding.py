@@ -291,9 +291,7 @@ def test_composed_binding_from_preseeded_source() -> None:
         fc, "support-bot", initial_bundle=None, initial_etag='"etag-x"'
     )
 
-    binding = PolicyBinding(
-        PolicyEnforcer(policy, agent_name="support-bot"), source
-    )
+    binding = PolicyBinding(PolicyEnforcer(policy, agent_name="support-bot"), source)
     assert fc.calls == []  # composition cost: zero round trips
 
     fc.serve_304('"etag-x"')
