@@ -20,13 +20,6 @@ from fortify.agents.models import AgentSpec
 from fortify.cloud.client import FortifyClient, FortifyConfig
 from fortify.security import AgentPolicy, PolicyBundle, load_policy
 from fortify.security.signing import SignatureError, decode_key
-
-# NOTE(merge): fortify.security.source carries its own copy of the
-# FORTIFY_LOCAL_POLICY resolution helpers (policy-binding spec, phase 1 —
-# PolicyBinding.resolve goes through those). This module keeps the
-# SignaturePolicy-based variants below, which the loader paths and
-# tests/security/test_local_sources.py use. Consolidating the two copies
-# onto SignaturePolicy is a follow-up on the policy-binding branch.
 from fortify.security.source import (
     BundleDirPolicySource,
     PolicySource,

@@ -421,6 +421,13 @@ class FortifyAgent:
         path), or ``None`` (no-op). Role resolves at call time from the
         active :class:`User`. ``approval_handler`` (callable or ``bool``)
         resolves NEEDS_APPROVAL inline; ``None`` renders structured errors.
+
+        Side effect: the returned agent has any inherited refresh source
+        **detached** (``_policy_source = None``), so it enforces ``policy``
+        frozen — :meth:`refresh_policy` becomes a no-op. This is deliberate:
+        an explicit policy must not be swapped back out by a later platform
+        refresh. Callers that want hot reload re-attach a source on the
+        returned agent (see :func:`_bind_policy` for the canonical pattern).
         """
         from langchain_core.tools import BaseTool
 
@@ -489,7 +496,12 @@ def enforce_policy(
     *,
     approval_handler: ApprovalHandler | None = None,
 ) -> AgentGraph:
-    """Functional alias for :meth:`FortifyAgent.enforce_policy`."""
+    """Functional alias for :meth:`FortifyAgent.enforce_policy`.
+
+    Carries the same side effect: the returned agent has any inherited
+    refresh source detached, so hot reload is off unless a caller
+    re-attaches a source. See the method docstring for details.
+    """
     return agent.enforce_policy(policy, approval_handler=approval_handler)
 
 
@@ -643,16 +655,25 @@ async def _refresh_policy_safely(agent: "FortifyAgent") -> None:
     those methods too, so they get refresh for free).
 
     No-op when no source is attached (programmatic construction).
-    Failures log a warning at WARNING level and keep the previous policy
-    — a transient network blip never crashes a chat turn. The log line
-    is the only signal today; programmatic observability (counter /
-    hook / last_refreshed_at) isn't exposed.
+
+    Fail-soft for an actual refresh failure (fetch / verification) lives
+    one layer down in :meth:`~fortify.security.binding.PolicyBinding.refresh`,
+    which swallows the error, keeps the previous policy, and warns on the
+    ``fortify.security.binding`` logger — so a transient network blip never
+    crashes a chat turn. That warning is the only refresh-failure signal
+    today; programmatic observability (counter / hook / last_refreshed_at)
+    isn't exposed. The ``except`` below is a defensive backstop for an
+    *unexpected* error in the scheduling path (e.g. ``to_thread``), not the
+    normal refresh-failure handler — keep the two distinct so they don't
+    read as duplicate warnings.
     """
     try:
         await asyncio.to_thread(agent.refresh_policy)
-    except Exception as exc:  # noqa: BLE001 — refresh failures must not crash the run
+    except Exception as exc:  # noqa: BLE001 — refresh must never crash the run
         _logger.warning(
-            "policy refresh failed: %s — keeping previously loaded policy", exc
+            "unexpected error scheduling policy refresh: %s — keeping "
+            "previously loaded policy",
+            exc,
         )
 
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any, AsyncIterator
 
 import pytest
@@ -356,6 +357,27 @@ async def test_distinct_agent_names_get_distinct_bindings(
 
     assert _stub_resolve == ["agent-a", "agent-b"]
     assert set(runner._bindings) == {"agent-a", "agent-b"}
+
+
+def test_binding_for_normalises_none_agent_name_to_default(
+    _stub_resolve: list[str],
+) -> None:
+    """A None agent name must not flow through as the cache key or the
+    agent_name handed to the platform resolve seam — it collapses to the
+    same "default" label the other adapters use, never a null identity.
+
+    Exercises ``_binding_for`` directly: the canonical openai ``Agent``
+    validates ``name`` as a string at construction, so this guards the
+    normalisation for stand-in / subclassed agents that don't."""
+    runner = FortifyRunner(api_key="k")
+    agent = SimpleNamespace(name=None, tools=[_make_tool("echo")])
+
+    binding = runner._binding_for(agent)  # type: ignore[arg-type]
+
+    assert _stub_resolve == ["default"]
+    assert set(runner._bindings) == {"default"}
+    assert None not in runner._bindings
+    assert binding.enforcer.agent_name == "default"
 
 
 @pytest.mark.asyncio

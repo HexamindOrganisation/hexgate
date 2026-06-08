@@ -50,7 +50,13 @@ class FortifyRunner:
         First call resolves (loud-failure point) and rebuilds the
         enforcer with this runner's audit sender.
         """
-        name = getattr(agent, "name", "default")
+        # `or "default"` collapses a present-but-None (or empty) name to a real
+        # string, matching the pydantic_ai adapter. Without it a None name flows
+        # straight through as the cache key *and* as agent_name into
+        # _resolve_binding (→ platform register/resolve), PolicyEnforcer, and the
+        # audit sender below — a null agent identity on the wire instead of a
+        # stable label.
+        name = getattr(agent, "name", None) or "default"
         binding = self._bindings.get(name)
         if binding is None:
             resolved = _resolve_binding(agent, name, self.api_key)
