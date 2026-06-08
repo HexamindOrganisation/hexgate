@@ -69,6 +69,19 @@ jobs:
       - name: Set up Python 3.13
         run: uv python install 3.13
 
+      # platform/api depends on the SDK's compile_to_wasm at runtime
+      # (PUT /v1/projects/.../agents triggers bundle compile + sign),
+      # which shells out to `opa`. Without it on PATH, the bearer-GET
+      # round-trip tests that expect a signed bundle (e.g. the ETag
+      # conditional-GET test) end up with an unsigned response and no
+      # ETag header. Same pin as the SDK job.
+      - name: Install OPA
+        run: |
+          curl -fsSL -o opa https://openpolicyagent.org/downloads/v0.70.0/opa_linux_amd64_static
+          chmod +x opa
+          sudo mv opa /usr/local/bin/opa
+          opa version
+
       - name: Sync platform-api deps
         run: cd platform/api && uv sync --group dev
 

@@ -487,7 +487,9 @@ async def test_run_command_unlinks_settings_file_on_timeout(
 
 
 @pytest.mark.asyncio
-async def test_run_command_default_workspace_runs_anything(tmp_path: Path) -> None:
+async def test_run_command_default_workspace_runs_anything(
+    tmp_path: Path, srt_required: None
+) -> None:
     """Without an allowlist, run_command behavior is unchanged (back-compat)."""
     workspace = LocalWorkspace(tmp_path)
 
@@ -499,7 +501,9 @@ async def test_run_command_default_workspace_runs_anything(tmp_path: Path) -> No
 
 
 @pytest.mark.asyncio
-async def test_run_command_allowed_by_policy_executes(tmp_path: Path) -> None:
+async def test_run_command_allowed_by_policy_executes(
+    tmp_path: Path, srt_required: None
+) -> None:
     """A command on the allowlist executes and reports policy_violation=False."""
     workspace = LocalWorkspace(tmp_path, allowed_commands=["echo"])
 
@@ -554,7 +558,7 @@ async def test_run_command_rejects_eval_even_if_allowlisted(tmp_path: Path) -> N
 
 @pytest.mark.asyncio
 async def test_run_command_allow_command_substitution_opt_in(
-    tmp_path: Path,
+    tmp_path: Path, srt_required: None
 ) -> None:
     """allow_command_substitution=True permits $(...) when its inner command is allowed."""
     workspace = LocalWorkspace(
