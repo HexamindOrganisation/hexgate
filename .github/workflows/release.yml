@@ -158,7 +158,19 @@ jobs:
       - name: Bump version
         id: bump
         run: |
-          if [ -n "${{ inputs.version }}" ]; then
+          if [ "${{ inputs.target }}" = "testpypi" ]; then
+            # TestPyPI runs use an ephemeral dev version tied to the
+            # workflow run number. Each dry-run gets its own slot
+            # (`0.0.0.dev<run>`) so iterating against TestPyPI never
+            # collides on re-upload, and the version is obviously
+            # non-canonical so it can't be mistaken for a real release.
+            # We deliberately ignore inputs.version / inputs.version-type
+            # here — the user's choice is what they intend to ship to
+            # *real* PyPI, and that decision shouldn't be consumed by a
+            # dry run. The pyproject.toml change is never committed back
+            # to main on this path (see step 6).
+            uv version "0.0.0.dev${{ github.run_number }}"
+          elif [ -n "${{ inputs.version }}" ]; then
             # Explicit version (e.g. "1.2.3") overrides version-type.
             uv version "${{ inputs.version }}"
           else
