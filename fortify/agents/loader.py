@@ -6,7 +6,10 @@ import os
 from collections.abc import Callable, Mapping
 from importlib.resources import files
 from pathlib import Path
-from typing import Any, Literal, TypeAlias
+from typing import TYPE_CHECKING, Any, Literal, TypeAlias
+
+if TYPE_CHECKING:
+    from fortify.security.enforcer import DecisionObserver
 
 import yaml
 
@@ -236,6 +239,7 @@ def load_builtin_agent(
     extra_tools: Mapping[str, Any] | None = None,
     model: str | None = None,
     approval_handler: ApprovalHandler | None = None,
+    decision_observer: "DecisionObserver | None" = None,
 ) -> tuple[AgentGraph, CallbackHandler]:
     """Load and instantiate a packaged builtin agent."""
     spec = load_builtin_agent_spec(name)
@@ -256,7 +260,12 @@ def load_builtin_agent(
     overridden = _apply_local_override(agent, approval_handler)
     if overridden is not None:
         return overridden, handler
-    return enforce_policy(agent, policy, approval_handler=approval_handler), handler
+    return enforce_policy(
+        agent,
+        policy,
+        approval_handler=approval_handler,
+        decision_observer=decision_observer,
+    ), handler
 
 
 def load_local_agent(
@@ -269,6 +278,7 @@ def load_local_agent(
     extra_tools: Mapping[str, Any] | None = None,
     model: str | None = None,
     approval_handler: ApprovalHandler | None = None,
+    decision_observer: "DecisionObserver | None" = None,
 ) -> tuple[AgentGraph, CallbackHandler]:
     """Load and instantiate a local project agent."""
     spec = load_local_agent_spec(name, base_dir)
@@ -289,7 +299,12 @@ def load_local_agent(
     overridden = _apply_local_override(agent, approval_handler)
     if overridden is not None:
         return overridden, handler
-    return enforce_policy(agent, policy, approval_handler=approval_handler), handler
+    return enforce_policy(
+        agent,
+        policy,
+        approval_handler=approval_handler,
+        decision_observer=decision_observer,
+    ), handler
 
 
 def load_registered_agent(
@@ -302,6 +317,7 @@ def load_registered_agent(
     extra_tools: Mapping[str, Any] | None = None,
     model: str | None = None,
     approval_handler: ApprovalHandler | None = None,
+    decision_observer: "DecisionObserver | None" = None,
 ) -> tuple[AgentGraph, CallbackHandler]:
     """Load a registered code-defined agent by id."""
     try:
@@ -316,11 +332,38 @@ def load_registered_agent(
         extra_tools=extra_tools,
         model=model,
     )
-    # Registered factories don't know about the CLI's approval flow; layer it
-    # on after the fact by re-stamping each policy-wrapped tool.
+    # Registered factories don't know about the CLI's approval flow / chat
+    # decision panel; layer them on after the fact by reaching into the
+    # tools' shared enforcer.
     if approval_handler is not None:
         agent = _apply_approval_handler(agent, approval_handler)
+    if decision_observer is not None:
+        _apply_decision_observer(agent, decision_observer)
     return agent, handler
+
+
+def _apply_decision_observer(
+    agent: AgentGraph, decision_observer: "DecisionObserver"
+) -> None:
+    """Patch every :class:`GuardedTool`'s shared enforcer to fire ``decision_observer``.
+
+    For code-registered agents whose factories built the enforcer without
+    seeing the CLI's hook. All guarded tools on an agent share one
+    enforcer instance (enforce_policy constructs one and wraps each tool
+    with it), so the first patch wins — no rebuild needed."""
+    import logging
+
+    from fortify.adapters.langchain.tools import GuardedTool
+
+    for tool_spec in agent.tools:
+        if isinstance(tool_spec, GuardedTool):
+            tool_spec.enforcer._decision_observer = decision_observer
+            return
+    logging.getLogger(__name__).warning(
+        "decision_observer was supplied but %r has no GuardedTool tools to "
+        "attach it to; decision events will not surface for this agent",
+        getattr(agent, "name", None) or "agent",
+    )
 
 
 def _apply_approval_handler(
@@ -385,6 +428,7 @@ def load_fortify_agent(
     extra_tools: Mapping[str, Any] | None = None,
     model: str | None = None,
     approval_handler: ApprovalHandler | None = None,
+    decision_observer: "DecisionObserver | None" = None,
 ) -> tuple[AgentGraph, CallbackHandler]:
     """Fetch an agent from Fortify and return it with policy enforcement applied.
 
@@ -447,7 +491,11 @@ def load_fortify_agent(
         )
 
     enforced = enforce_policy(
-        agent, policy, approval_handler=approval_handler, source=refresh_source
+        agent,
+        policy,
+        approval_handler=approval_handler,
+        source=refresh_source,
+        decision_observer=decision_observer,
     )
     # Attach the client so the runtime can do lazy attenuation inside an
     # active User scope without the caller having to thread it through.
@@ -466,6 +514,7 @@ def load_agent(
     model: str | None = None,
     local_only: bool = False,
     approval_handler: ApprovalHandler | None = None,
+    decision_observer: "DecisionObserver | None" = None,
 ) -> tuple[AgentGraph, CallbackHandler]:
     """Load an agent from Fortify (when FORTIFY_KEY is set), local, or builtin.
 
@@ -476,6 +525,11 @@ def load_agent(
     Pass ``local_only=True`` to force resolution from local / registered /
     builtin sources even when ``FORTIFY_KEY`` is set in the environment.
     Useful for terminal-chat workflows that don't need cloud-fetched policy.
+
+    ``decision_observer`` is forwarded to every enforced loader (local,
+    registered, builtin, cloud). Threaded as a kwarg rather than a
+    contextvar so the call sites stay explicit — ``fortify chat`` is
+    the only caller passing it today.
     """
     if not local_only and os.environ.get("FORTIFY_KEY"):
         # load_fortify_agent dropped its reserved ``user_id`` placeholder
@@ -488,6 +542,7 @@ def load_agent(
             extra_tools=extra_tools,
             model=model,
             approval_handler=approval_handler,
+            decision_observer=decision_observer,
         )
     if name is None:
         raise ValueError("load_agent() requires a name when not using Fortify Cloud")
@@ -502,6 +557,7 @@ def load_agent(
             extra_tools=extra_tools,
             model=model,
             approval_handler=approval_handler,
+            decision_observer=decision_observer,
         )
     if source == "registered":
         return load_registered_agent(
@@ -513,6 +569,7 @@ def load_agent(
             extra_tools=extra_tools,
             model=model,
             approval_handler=approval_handler,
+            decision_observer=decision_observer,
         )
     return load_builtin_agent(
         name,
@@ -522,4 +579,5 @@ def load_agent(
         extra_tools=extra_tools,
         model=model,
         approval_handler=approval_handler,
+        decision_observer=decision_observer,
     )

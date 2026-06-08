@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import deque
 from pathlib import Path
 
 from rich.console import Console, Group
@@ -15,7 +16,9 @@ from fortify.cli._common import (
 )
 from fortify.cli.chat import (
     DOG_LOGO,
+    _drain_decisions,
     _render_current_run,
+    _render_decision_panel,
     _render_welcome,
     _tail_text,
 )
@@ -213,3 +216,124 @@ def test_load_bash_file_agent_script_registers_repo_operator() -> None:
     _load_agent_script(str(EXAMPLES_DIR / "bash_file_agents.py"))
 
     assert "repo_operator" in loader.list_registered_agents()
+
+
+# ---------------------------------------------------------------------------
+# Decision panel — surfaces denies / approvals in the REPL
+# ---------------------------------------------------------------------------
+
+
+def _decision(
+    outcome: DecisionOutcome,
+    *,
+    reason: str = "",
+    error_type: str | None = None,
+    role: str | None = None,
+    violations: tuple[str, ...] = (),
+    hint: object | None = None,
+) -> Decision:
+    """Build a Decision directly — bypasses the engine + verdict path
+    for tests that only care about the rendered output."""
+    return Decision(
+        outcome=outcome,
+        agent_name="r",
+        tool_name="read_file",
+        role=role,
+        reason=reason,
+        error_type=error_type,
+        violations=violations,
+        hint=hint,
+    )
+
+
+def test_render_decision_panel_returns_none_for_allow() -> None:
+    """ALLOW is muted: a chatty REPL with one panel per tool call is
+    noise. The whole point of the feed is 'what got blocked.'"""
+    assert _render_decision_panel(_decision(DecisionOutcome.ALLOW)) is None
+
+
+def test_render_decision_panel_for_deny_shows_reason_and_violations() -> None:
+    """A DENY panel must surface the reason, error_type, role, and any
+    violation strings — that's the diagnostic payload a dev needs."""
+    decision = _decision(
+        DecisionOutcome.DENY,
+        reason="path escapes workspace",
+        error_type="policy_denied",
+        role="analyst",
+        violations=("path_outside_glob", "read_denied_for_role"),
+    )
+
+    console = Console(record=True, width=100)
+    console.print(_render_decision_panel(decision))
+    rendered = console.export_text()
+
+    assert "deny" in rendered
+    assert "read_file" in rendered
+    assert "path escapes workspace" in rendered
+    assert "policy_denied" in rendered
+    assert "analyst" in rendered
+    assert "path_outside_glob" in rendered
+    assert "read_denied_for_role" in rendered
+
+
+def test_render_decision_panel_for_needs_approval() -> None:
+    """NEEDS_APPROVAL renders distinctly (different glyph, different
+    border) but carries the same diagnostic payload as DENY."""
+    decision = _decision(
+        DecisionOutcome.NEEDS_APPROVAL,
+        reason="bash_run requires sign-off",
+        error_type="approval_required",
+    )
+
+    console = Console(record=True, width=100)
+    console.print(_render_decision_panel(decision))
+    rendered = console.export_text()
+
+    assert "needs_approval" in rendered
+    assert "bash_run requires sign-off" in rendered
+    assert "approval_required" in rendered
+
+
+def test_render_decision_panel_handles_minimal_decision() -> None:
+    """A DENY with no reason / violations / role still renders without
+    crashing — defensive against engines that omit detail fields."""
+    console = Console(record=True, width=100)
+    console.print(_render_decision_panel(_decision(DecisionOutcome.DENY)))
+    rendered = console.export_text()
+    assert "deny" in rendered
+    assert "read_file" in rendered
+
+
+def test_drain_decisions_prints_only_deny_and_approval() -> None:
+    """The deque drain helper consumes the whole queue but only prints
+    panels for DENY / NEEDS_APPROVAL. ALLOWs are popped silently —
+    leaving them in the deque across turns would mean the next turn
+    suddenly sees old allows."""
+    pending: deque[Decision] = deque(
+        [
+            _decision(DecisionOutcome.ALLOW, reason="silent"),
+            _decision(DecisionOutcome.DENY, reason="visible deny"),
+            _decision(DecisionOutcome.ALLOW, reason="silent again"),
+            _decision(DecisionOutcome.NEEDS_APPROVAL, reason="visible approval"),
+        ]
+    )
+
+    console = Console(record=True, width=100)
+    _drain_decisions(console, pending)
+    rendered = console.export_text()
+
+    assert "visible deny" in rendered
+    assert "visible approval" in rendered
+    assert "silent" not in rendered
+    # The deque must be empty after drain regardless of which entries
+    # produced panels — otherwise the next turn would re-render them.
+    assert len(pending) == 0
+
+
+def test_drain_decisions_noop_on_empty_deque() -> None:
+    """No decisions → no output. Empty turns (the agent answered without
+    any tool call) must not print a stray panel separator."""
+    pending: deque[Decision] = deque()
+    console = Console(record=True, width=100)
+    _drain_decisions(console, pending)
+    assert console.export_text() == ""

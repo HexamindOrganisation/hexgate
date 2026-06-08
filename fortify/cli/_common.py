@@ -8,7 +8,10 @@ import importlib.util
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
+
+if TYPE_CHECKING:
+    from fortify.security.enforcer import DecisionObserver
 
 from rich.console import Console, Group
 from rich.panel import Panel
@@ -43,6 +46,7 @@ def build_runtime(
     model: str | None,
     local_only: bool = False,
     approval_handler: ApprovalHandler | None = None,
+    decision_observer: "DecisionObserver | None" = None,
 ) -> AgentRuntime:
     """Create the runtime shared by ``fortify chat`` and ``fortify serve``.
 
@@ -52,6 +56,8 @@ def build_runtime(
     tunnel. ``fortify serve`` passes ``local_only=False`` so policy edits
     in the dashboard land at the next turn boundary. ``approval_handler``
     threads to :func:`load_agent` for inline ``NEEDS_APPROVAL`` resolution.
+    ``decision_observer`` likewise threads through — ``fortify chat``
+    uses it to render denies / approvals in the REPL.
     """
     import os
 
@@ -66,6 +72,7 @@ def build_runtime(
         extra_tools={tool.name: tool for tool in tools},
         local_only=local_only,
         approval_handler=approval_handler,
+        decision_observer=decision_observer,
     )
     runtime_tools = list(getattr(agent, "tools", [])) + list(tools)
     tools_by_name = {

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from collections import deque
 from pathlib import Path
 
 from rich.columns import Columns
@@ -25,6 +26,7 @@ from fortify.cli._common import (
     load_agent_script,
 )
 from fortify.cli.state import ChatState, LiveRunState, ToolActivity
+from fortify.security.decision import Decision, DecisionOutcome
 from fortify.streaming import ToolCallState
 from fortify.tools.decorators import format_tool_call_label
 from fortify.tracing.langfuse import maybe_get_trace_url
@@ -147,6 +149,59 @@ def _print_completed_turn(
     console.print()
 
 
+def _render_decision_panel(decision: Decision) -> Panel | None:
+    """Render one ``Decision`` as a rich Panel — or ``None`` for ALLOW.
+
+    Allows are muted by design: a chatty REPL with a panel per tool call
+    is noise. The whole point of the decision feed is "what got blocked
+    and why," surfaced right where the dev is iterating. A ``--show-allow``
+    flag can land later if anyone asks.
+    """
+    if decision.outcome is DecisionOutcome.ALLOW:
+        return None
+
+    is_deny = decision.outcome is DecisionOutcome.DENY
+    border_style = "red" if is_deny else "yellow"
+    title_glyph = "⛔" if is_deny else "⏸"
+    title = f"{title_glyph} {decision.outcome.value} · {decision.tool_name}"
+
+    lines: list[RenderableType] = []
+    if decision.reason:
+        lines.append(Text(decision.reason, style="white"))
+    if decision.error_type:
+        lines.append(Text(f"error_type: {decision.error_type}", style="dim"))
+    if decision.role is not None:
+        lines.append(Text(f"role: {decision.role or '(none)'}", style="dim"))
+    if decision.violations:
+        lines.append(Text("violations:", style="dim"))
+        for v in decision.violations:
+            lines.append(Text(f"  • {v}", style="dim red" if is_deny else "dim yellow"))
+    if decision.hint is not None:
+        lines.append(Text(f"hint: {decision.hint}", style="dim"))
+
+    return Panel(
+        Group(*lines) if lines else Text("(no detail)", style="dim"),
+        title=title,
+        title_align="left",
+        border_style=border_style,
+        padding=(0, 1),
+    )
+
+
+def _drain_decisions(
+    console: Console, pending: deque[Decision]
+) -> None:
+    """Print panels for any decisions captured during the just-finished
+    turn, then clear the deque. Called between turns so the panels
+    appear after the agent's response but before the next prompt — the
+    same surface the user just looked at."""
+    while pending:
+        decision = pending.popleft()
+        panel = _render_decision_panel(decision)
+        if panel is not None:
+            console.print(panel)
+
+
 def _default_agent_name(base_dir: Path) -> str:
     """Return the default agent id for the current project context."""
     available = list_available_agents(base_dir)
@@ -182,8 +237,17 @@ def _render_welcome(runtime: AgentRuntime) -> RenderableType:
     )
 
 
-async def _chat_loop(console: Console, runtime: AgentRuntime) -> None:
-    """Run the interactive terminal chat loop."""
+async def _chat_loop(
+    console: Console,
+    runtime: AgentRuntime,
+    pending_decisions: deque[Decision] | None = None,
+) -> None:
+    """Run the interactive terminal chat loop.
+
+    ``pending_decisions`` is the deque the injected ``decision_observer``
+    appends to as the enforcer makes calls during a turn. The loop
+    drains it between turns and renders deny / needs_approval panels.
+    Default ``None`` keeps the loop usable from tests that don't care."""
     state = ChatState()
 
     console.print(_render_welcome(runtime))
@@ -231,6 +295,9 @@ async def _chat_loop(console: Console, runtime: AgentRuntime) -> None:
 
         _print_completed_turn(console, runtime, current_run, trace_url)
 
+        if pending_decisions is not None:
+            _drain_decisions(console, pending_decisions)
+
         console.print()
 
 
@@ -270,6 +337,13 @@ def main(args: argparse.Namespace) -> int:
 
     agent_name = args.agent or _default_agent_name(base_dir)
 
+    # Decision feed: the observer appends to a bounded deque the chat
+    # loop drains between turns. Sync callback, no threading concerns
+    # (PolicyEnforcer.decide runs in the same event loop the chat loop
+    # awaits stream_agent on). maxlen=64 caps memory if an LLM goes
+    # wild calling tools and we somehow miss draining between turns.
+    pending_decisions: deque[Decision] = deque(maxlen=64)
+
     # Terminal chat deliberately ignores FORTIFY_KEY: there's no playground to
     # feed and policy enforcement still works via the agent's own YAML or
     # registered factory. The serve subcommand keeps the cloud path.
@@ -280,6 +354,7 @@ def main(args: argparse.Namespace) -> int:
         model=args.model,
         local_only=True,
         approval_handler=build_approval_handler(console, args.approval_mode),
+        decision_observer=pending_decisions.append,
     )
-    asyncio.run(_chat_loop(console, runtime))
+    asyncio.run(_chat_loop(console, runtime, pending_decisions))
     return 0

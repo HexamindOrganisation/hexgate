@@ -192,7 +192,12 @@ def test_load_builtin_agent_picks_up_override(
         return types.SimpleNamespace(name="agent"), "handler"
 
     def fake_enforce_policy(
-        _agent: Any, policy: Any, *, approval_handler: Any = None, source: Any = None
+        _agent: Any,
+        policy: Any,
+        *,
+        approval_handler: Any = None,
+        source: Any = None,
+        decision_observer: Any = None,
     ) -> Any:
         captured["policy"] = policy
         captured["source"] = source
@@ -228,7 +233,11 @@ def test_load_builtin_agent_uses_original_policy_without_override(
         return "agent", "handler"
 
     def fake_enforce_policy(
-        _agent: Any, policy: Any, *, approval_handler: Any = None
+        _agent: Any,
+        policy: Any,
+        *,
+        approval_handler: Any = None,
+        decision_observer: Any = None,
     ) -> Any:
         captured["policy"] = policy
         return _agent

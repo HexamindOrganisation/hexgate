@@ -80,11 +80,16 @@ def test_load_local_agent_resolves_spec_into_create_agent(
         return "agent-instance", "handler-instance"
 
     def fake_enforce_policy(
-        tools: list[Any], policy: Any, *, approval_handler: Any = None
+        tools: list[Any],
+        policy: Any,
+        *,
+        approval_handler: Any = None,
+        decision_observer: Any = None,
     ) -> list[Any]:
         """Capture policy application while leaving tools unchanged."""
         captured_policy["policy"] = policy
         captured_policy["approval_handler"] = approval_handler
+        captured_policy["decision_observer"] = decision_observer
         return tools
 
     monkeypatch.setattr(loader, "create_agent", fake_create_agent)
