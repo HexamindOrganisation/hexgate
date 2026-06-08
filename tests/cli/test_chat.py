@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import textwrap
 from collections import deque
 from pathlib import Path
 
+import pytest
 from rich.console import Console, Group
 
 from fortify.agents import loader
+from fortify.cli import _common
 from fortify.cli._common import (
     AgentRuntime,
     build_approval_handler as _build_approval_handler,
@@ -23,6 +26,7 @@ from fortify.cli.chat import (
     _tail_text,
 )
 from fortify.cli.state import LiveRunState, ToolActivity
+from fortify.config.settings import Settings
 from fortify.security.decision import Decision, DecisionOutcome
 from fortify.streaming import ToolCallState
 from fortify.tools import edit_file, read_file
@@ -337,3 +341,205 @@ def test_drain_decisions_noop_on_empty_deque() -> None:
     console = Console(record=True, width=100)
     _drain_decisions(console, pending)
     assert console.export_text() == ""
+
+
+# ---------------------------------------------------------------------------
+# build_runtime — uvicorn-style module:attr spec
+# ---------------------------------------------------------------------------
+
+
+def _test_settings() -> Settings:
+    """Minimal Settings instance for runtime tests."""
+    return Settings(
+        openai_api_key="k",
+        linkup_api_key="k",
+        tavily_api_key="k",
+        langfuse_public_key=None,
+        langfuse_secret_key=None,
+        langfuse_host="https://cloud.langfuse.com",
+        model="openai:gpt-5.4",
+        search_engine="linkup",
+    )
+
+
+def _write_fake_agent_module(tmp_path: Path, *, name: str) -> str:
+    """Write a fake module exporting a minimal duck-typed agent, return its spec.
+
+    The agent only needs ``.name``, ``.tools``, and ``.model`` for the
+    AgentRuntime construction path (we don't actually invoke the
+    runtime here)."""
+    module_path = tmp_path / f"{name}.py"
+    module_path.write_text(
+        textwrap.dedent(
+            f'''
+            class _Agent:
+                name = "{name}_inner"
+                tools = []
+                model = "openai:gpt-5.4"
+            agent = _Agent()
+            '''
+        )
+    )
+    return f"{name}:agent"
+
+
+def test_build_runtime_with_colon_routes_through_load_spec(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """An agent name containing ':' must hit the spec path and skip
+    name-based resolution entirely — that's the whole point of the
+    spec form (no YAML, no registry lookup)."""
+    spec = _write_fake_agent_module(tmp_path, name="fake_spec_mod_a")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    # Guard rail: load_agent must NOT fire on the spec path.
+    monkeypatch.setattr(
+        _common, "load_agent", lambda *a, **k: pytest.fail("load_agent was called")
+    )
+    monkeypatch.setattr(
+        "fortify.tracing.langfuse.get_langfuse_handler",
+        lambda **kw: object(),
+    )
+
+    runtime = _common.build_runtime(
+        _test_settings(),
+        agent_name=spec,
+        base_dir=tmp_path,
+        model=None,
+    )
+
+    assert runtime.agent_source == "spec"
+    # The runtime's agent_name comes from the loaded object's .name attr,
+    # not the spec string — preserves whatever the user declared.
+    assert runtime.agent_name == "fake_spec_mod_a_inner"
+
+
+def test_build_runtime_without_colon_uses_name_resolver(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """No colon → existing name-resolution path. Mirror of the above
+    so a future refactor can't accidentally swap the dispatch."""
+    spec_loader_called = False
+
+    def fail_load_spec(*_a, **_k):
+        nonlocal spec_loader_called
+        spec_loader_called = True
+        raise AssertionError("load_spec was called on a plain id")
+
+    monkeypatch.setattr(_common, "load_spec", fail_load_spec)
+    monkeypatch.setattr(
+        _common,
+        "load_agent",
+        lambda *a, **k: (object(), object()),
+    )
+    monkeypatch.setattr(
+        _common, "resolve_agent_source", lambda *a, **k: "local"
+    )
+
+    _common.build_runtime(
+        _test_settings(),
+        agent_name="just_a_name",
+        base_dir=tmp_path,
+        model=None,
+    )
+    assert spec_loader_called is False
+
+
+def test_build_runtime_from_spec_attaches_decision_observer(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The spec path threads decision_observer through the same in-place
+    injector C2 wired up for registered agents. Without this, chat with
+    --agent module:attr would silently drop the observer and the REPL
+    would render no decision panels."""
+    spec = _write_fake_agent_module(tmp_path, name="fake_spec_mod_b")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    monkeypatch.setattr(
+        "fortify.tracing.langfuse.get_langfuse_handler",
+        lambda **kw: object(),
+    )
+
+    # Spy on the injector. Don't care about the return — we only want
+    # to assert it was called with our observer.
+    seen: dict = {}
+
+    def spy_apply(agent, observer):
+        seen["agent"] = agent
+        seen["observer"] = observer
+
+    # Patch on the loader module (where build_runtime_from_spec imports it).
+    from fortify.agents import loader as loader_mod
+
+    monkeypatch.setattr(loader_mod, "_apply_decision_observer", spy_apply)
+
+    sentinel = lambda _d: None  # noqa: E731
+
+    _common.build_runtime(
+        _test_settings(),
+        agent_name=spec,
+        base_dir=tmp_path,
+        model=None,
+        decision_observer=sentinel,
+    )
+    assert seen.get("observer") is sentinel
+    assert getattr(seen.get("agent"), "name", None) == "fake_spec_mod_b_inner"
+
+
+def test_build_runtime_from_spec_omits_observer_call_when_none(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Default ``decision_observer=None`` must NOT call the injector —
+    otherwise the empty-injector path would log a 'no GuardedTool tools
+    to attach to' warning on every spec-based chat startup."""
+    spec = _write_fake_agent_module(tmp_path, name="fake_spec_mod_c")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    monkeypatch.setattr(
+        "fortify.tracing.langfuse.get_langfuse_handler",
+        lambda **kw: object(),
+    )
+
+    from fortify.agents import loader as loader_mod
+
+    monkeypatch.setattr(
+        loader_mod,
+        "_apply_decision_observer",
+        lambda *_a, **_k: pytest.fail("_apply_decision_observer should not fire"),
+    )
+
+    _common.build_runtime(
+        _test_settings(),
+        agent_name=spec,
+        base_dir=tmp_path,
+        model=None,
+    )
+
+
+def test_build_runtime_from_spec_falls_back_to_settings_model(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """If the spec'd agent doesn't carry a ``.model`` attr, the runtime
+    falls back to settings.model so the welcome banner has something
+    sensible to print."""
+    module_path = tmp_path / "fake_modelless.py"
+    module_path.write_text(
+        textwrap.dedent(
+            """
+            class _Agent:
+                name = "modelless_inner"
+                tools = []
+            agent = _Agent()
+            """
+        )
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    monkeypatch.setattr(
+        "fortify.tracing.langfuse.get_langfuse_handler",
+        lambda **kw: object(),
+    )
+
+    runtime = _common.build_runtime(
+        _test_settings(),
+        agent_name="fake_modelless:agent",
+        base_dir=tmp_path,
+        model=None,
+    )
+    assert runtime.model == "openai:gpt-5.4"

@@ -54,7 +54,8 @@ Useful next commands:
 
 ```bash
 fortify chat --list-agents
-fortify chat --agent researcher
+fortify chat --agent researcher                                      # by id
+fortify chat --agent examples.customer_bot:agent                     # by module:attr (same shape as `fortify serve`)
 fortify chat --use examples/file_agents.py --agent workspace_explorer
 fortify chat --use examples/research_agents.py --agent update_researcher
 ```
