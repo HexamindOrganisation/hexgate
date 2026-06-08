@@ -1,10 +1,8 @@
 """Tests for the Google ADK adapter agent wrapping helpers (phase 5).
 
 The allow-all ``build_policy_set`` placeholder is gone: wrap-time policy
-comes from :meth:`PolicyBinding.resolve` (platform / local override),
-with register-on-404 from the in-code ADK definition. These tests stub
-the resolve seam (``wrapper._resolve_binding``) so no platform is
-needed.
+comes from :func:`resolve_policy_or_register` (platform / local override,
+register-on-404). These tests stub that seam so no platform is needed.
 """
 
 from __future__ import annotations
@@ -17,11 +15,21 @@ from google.adk.tools.function_tool import FunctionTool
 
 from fortify.adapters.google import wrapper as wrapper_mod
 from fortify.adapters.google.wrapper import wrap_google_agent
-from fortify.cloud.client import FortifyError
 from fortify.runtime import User
-from fortify.security import AgentPolicy, BaseToolPolicy, PolicyBinding, PolicySet
+from fortify.security import (
+    AgentPolicy,
+    BaseToolPolicy,
+    PolicyBinding,
+    PolicySet,
+    ResolvedPolicy,
+)
 from fortify.security.enforcer import PolicyEnforcer
 from fortify.security.policy_set import DEFAULT_ROLE_NAME
+
+
+def _resolve_stub(engine: PolicySet):
+    """Build a resolve_policy_or_register replacement returning ``engine``."""
+    return lambda name, *, api_key, on_missing: ResolvedPolicy(engine, None)
 
 
 def _make_callable(name: str = "echo") -> Any:
@@ -59,24 +67,16 @@ def _allow_all(tool_names: list[str]) -> PolicySet:
     )
 
 
-def _stub_binding(engine: PolicySet) -> PolicyBinding:
-    return PolicyBinding(PolicyEnforcer(engine, agent_name="my_agent"))
-
-
 @pytest.fixture()
 def resolved(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     """Stub the resolve seam with an allow-all engine; capture the call."""
     captured: dict[str, Any] = {}
 
-    def fake_resolve(agent: Any, name: str, key: str) -> PolicyBinding:
-        captured.update(agent=agent, name=name, key=key)
-        tool_names = [
-            getattr(t, "name", getattr(t, "__name__", "tool"))
-            for t in (getattr(agent, "tools", []) or [])
-        ]
-        return _stub_binding(_allow_all(tool_names))
+    def fake_resolve(name: str, *, api_key: str, on_missing: Any) -> ResolvedPolicy:
+        captured.update(name=name, key=api_key, on_missing=on_missing)
+        return ResolvedPolicy(_allow_all(["echo", "shout"]), None)
 
-    monkeypatch.setattr(wrapper_mod, "_resolve_binding", fake_resolve)
+    monkeypatch.setattr(wrapper_mod, "resolve_policy_or_register", fake_resolve)
     return captured
 
 
@@ -147,10 +147,8 @@ async def test_wrap_enforces_the_resolved_policy_not_allow_all(
     """A deny-by-default engine from resolve actually blocks the tools."""
     monkeypatch.setattr(
         wrapper_mod,
-        "_resolve_binding",
-        lambda agent, name, key: _stub_binding(
-            _engine({"default_policy": {"mode": "deny"}})
-        ),
+        "resolve_policy_or_register",
+        _resolve_stub(_engine({"default_policy": {"mode": "deny"}})),
     )
 
     wrapped, _ = wrap_google_agent(_make_agent(), api_key="api-123")
@@ -184,9 +182,7 @@ async def test_wrap_google_agent_resolves_role_at_call_time(
         }
     )
     monkeypatch.setattr(
-        wrapper_mod,
-        "_resolve_binding",
-        lambda agent, name, key: _stub_binding(role_aware),
+        wrapper_mod, "resolve_policy_or_register", _resolve_stub(role_aware)
     )
 
     wrapped, _ = wrap_google_agent(_make_agent(), api_key="k")
@@ -209,10 +205,8 @@ async def test_refresh_swap_reaches_already_wrapped_tools(
     """Rebinding enforcer.policy (what refresh does) flips live decisions."""
     monkeypatch.setattr(
         wrapper_mod,
-        "_resolve_binding",
-        lambda agent, name, key: _stub_binding(
-            _engine({"default_policy": {"mode": "deny"}})
-        ),
+        "resolve_policy_or_register",
+        _resolve_stub(_engine({"default_policy": {"mode": "deny"}})),
     )
     wrapped, binding = wrap_google_agent(_make_agent(), api_key="k")
     [echo_tool, _] = wrapped.tools
@@ -227,50 +221,28 @@ async def test_refresh_swap_reaches_already_wrapped_tools(
 
 
 # ---------------------------------------------------------------------------
-# _resolve_binding — 404 → register → retry; everything else loud
+# register-on-miss wiring (404/loud logic covered in test_policy_binding.py)
 # ---------------------------------------------------------------------------
 
 
-def test_404_registers_adk_agent_then_resolves_again(
+def test_register_on_miss_ships_the_adk_agent(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """The adapter's on_missing thunk registers the introspectable agent."""
     import fortify.cli.register as register_pkg
 
-    calls: list[str] = []
     registered: list[Any] = []
-    stub = _stub_binding(_allow_all(["echo"]))
-
-    def fake_resolve(name: str, *, api_key: str | None = None, client: Any = None):
-        calls.append(name)
-        if len(calls) == 1:
-            raise FortifyError("Fortify API error 404 calling …", status=404)
-        return stub
-
-    monkeypatch.setattr(
-        wrapper_mod.PolicyBinding, "resolve", staticmethod(fake_resolve)
-    )
     monkeypatch.setattr(
         register_pkg, "register_agent", lambda agent: registered.append(agent)
     )
 
+    def fake_resolve(name: str, *, api_key: str, on_missing: Any) -> ResolvedPolicy:
+        on_missing()
+        return ResolvedPolicy(_allow_all(["echo", "shout"]), None)
+
+    monkeypatch.setattr(wrapper_mod, "resolve_policy_or_register", fake_resolve)
+
     agent = _make_agent()
-    binding = wrapper_mod._resolve_binding(agent, "my_agent", "k")
+    wrap_google_agent(agent, api_key="k")
 
-    assert binding is stub
-    assert calls == ["my_agent", "my_agent"]
-    assert registered == [agent]  # the introspectable ADK object itself
-
-
-def test_non_404_failure_is_loud(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Wrapping asked for governance — a platform error never yields a
-    silently allow-all agent."""
-
-    def fake_resolve(name: str, *, api_key: str | None = None, client: Any = None):
-        raise FortifyError("Fortify API error 500 calling …", status=500)
-
-    monkeypatch.setattr(
-        wrapper_mod.PolicyBinding, "resolve", staticmethod(fake_resolve)
-    )
-
-    with pytest.raises(FortifyError, match="500"):
-        wrap_google_agent(_make_agent(), api_key="k")
+    assert registered == [agent]

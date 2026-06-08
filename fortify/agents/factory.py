@@ -10,11 +10,11 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Self, TypeAlias
 
 if TYPE_CHECKING:
-    # Optional seam-attribute types — referenced only in __init__ signatures
-    # / annotations. Imported under TYPE_CHECKING to avoid the runtime cycle
-    # (security.* and cloud.* both eventually import from this module).
+    # Seam-attribute types referenced only in annotations. Imported under
+    # TYPE_CHECKING to avoid the runtime cycle (security.* and cloud.* both
+    # eventually import from this module).
     from fortify.cloud.client import FortifyClient
-    from fortify.security.enforcer import PolicyEnforcer
+    from fortify.security.binding import PolicyBinding
     from fortify.security.source import PolicySource
 
 from langchain.agents import create_agent as create_langchain_agent
@@ -299,8 +299,7 @@ class FortifyAgent:
         name: str | None = None,
         cache: BaseCache[Any] | None = None,
         workspace: Workspace | None = None,
-        enforcer: "PolicyEnforcer | None" = None,
-        policy_source: "PolicySource | None" = None,
+        binding: "PolicyBinding | None" = None,
         fortify_client: "FortifyClient | None" = None,
     ) -> None:
         self.graph = graph
@@ -319,14 +318,11 @@ class FortifyAgent:
         self.name = name
         self.cache = cache
         self.workspace = workspace
-        # Enforcement seam. Three optional fields populated by the loaders
-        # (load_fortify_agent, _local_policy_override) and the
-        # ``enforce_policy`` builder. Promoted from setattr/getattr-with-
-        # default to first-class fields so the type checker covers the
-        # refresh path and ``with_tools`` rebuilds can't silently drop them
-        # via a misspelled attribute name.
-        self._enforcer: "PolicyEnforcer | None" = enforcer
-        self._policy_source: "PolicySource | None" = policy_source
+        # Enforcement seam: the binding (enforcer + optional refresh source)
+        # that enforce_policy attaches and refresh_policy swaps in place;
+        # threaded through with_tools rebuilds. fortify_client is separate —
+        # load_fortify_agent attaches it for lazy cloud-side attenuation.
+        self._binding: "PolicyBinding | None" = binding
         self.fortify_client: "FortifyClient | None" = fortify_client
 
     async def ainvoke(
@@ -380,11 +376,8 @@ class FortifyAgent:
             name=self.name,
             cache=self.cache,
         )
-        # Thread the enforcement seam through the rebuild so policy
-        # refresh + lazy user attenuation keep working after with_tools.
-        # The enforcer / policy_source pair is what makes refresh_policy()
-        # able to swap engines without re-wrapping every tool; the client
-        # is what load_fortify_agent attached for cloud-side attenuation.
+        # Thread the binding + client through the rebuild so refresh and
+        # lazy user attenuation keep working after with_tools.
         return type(self)(
             graph=graph,
             model=self.model,
@@ -402,8 +395,7 @@ class FortifyAgent:
             name=self.name,
             cache=self.cache,
             workspace=self.workspace,
-            enforcer=self._enforcer,
-            policy_source=self._policy_source,
+            binding=self._binding,
             fortify_client=self.fortify_client,
         )
 
@@ -412,6 +404,7 @@ class FortifyAgent:
         policy: object,
         *,
         approval_handler: ApprovalHandler | None = None,
+        source: "PolicySource | None" = None,
     ) -> Self:
         """Return a new agent with Gate 1 policy enforcement applied.
 
@@ -422,15 +415,15 @@ class FortifyAgent:
         active :class:`User`. ``approval_handler`` (callable or ``bool``)
         resolves NEEDS_APPROVAL inline; ``None`` renders structured errors.
 
-        Side effect: any inherited refresh source is detached, so the
-        returned agent enforces ``policy`` frozen (:meth:`refresh_policy`
-        is a no-op) — an explicit policy must not be swapped back out by a
-        later refresh. Re-attach a source for hot reload (see
-        :func:`_bind_policy`).
+        ``source`` is the refresh source the returned agent's binding
+        carries — pass one for hot reload (see :func:`_bind_policy` /
+        ``load_fortify_agent``); the default ``None`` freezes ``policy``
+        so a later :meth:`refresh_policy` can't swap it back out.
         """
         from langchain_core.tools import BaseTool
 
         from fortify.adapters.langchain.tools import GuardedTool
+        from fortify.security.binding import PolicyBinding
         from fortify.security.bundle import PolicyBundle
         from fortify.security.enforcer import PolicyEnforcer
         from fortify.security.policy_set import PolicySet, load_policy_set
@@ -438,15 +431,12 @@ class FortifyAgent:
         if policy is None:
             return self.with_tools(list(self.tools))
 
-        if isinstance(policy, PolicyBundle):
-            resolved = policy
-        elif isinstance(policy, PolicySet):
-            resolved = policy
+        if isinstance(policy, (PolicyBundle, PolicySet)):
+            engine = policy
         else:
-            resolved = load_policy_set(policy)
-        audit_sender = audit.configure()
+            engine = load_policy_set(policy)
         enforcer = PolicyEnforcer(
-            resolved, agent_name=self.name or "default", audit_sender=audit_sender
+            engine, agent_name=self.name or "default", audit_sender=audit.configure()
         )
 
         wrapped: list[ToolSpec] = []
@@ -462,28 +452,20 @@ class FortifyAgent:
             else:
                 wrapped.append(tool_spec)
         rebuilt = self.with_tools(wrapped)
-        # Stash the enforcer on the rebuilt agent so refresh_policy() can
-        # swap its policy in place when the source serves a new bundle,
-        # without rebuilding the tool wrappers. ``self`` stays untouched.
-        rebuilt._enforcer = enforcer
-        # Detach any inherited source so a later refresh can't swap the
-        # explicit policy back out; callers wanting hot reload re-attach.
-        rebuilt._policy_source = None
+        # The binding pairs the enforcer the tools just closed over with the
+        # refresh source, so refresh_policy() can swap the policy in place.
+        rebuilt._binding = PolicyBinding(enforcer, source)
         return rebuilt
 
     def refresh_policy(self) -> None:
         """Pull the current policy from the attached source and swap it in.
 
         Runs at the top of every agent run (:meth:`ainvoke` /
-        :meth:`astream_events`). Delegates the swap — ETag/304, identity
-        check, fail-soft — to :class:`~fortify.security.binding.PolicyBinding`.
-        No-op without an enforcer + source.
+        :meth:`astream_events`). Delegates to the binding (ETag/304,
+        identity check, fail-soft); no-op without one.
         """
-        if self._policy_source is None or self._enforcer is None:
-            return
-        from fortify.security.binding import PolicyBinding
-
-        PolicyBinding(self._enforcer, self._policy_source).refresh()
+        if self._binding is not None:
+            self._binding.refresh()
 
 
 AgentGraph: TypeAlias = FortifyAgent
@@ -494,13 +476,12 @@ def enforce_policy(
     policy: object,
     *,
     approval_handler: ApprovalHandler | None = None,
+    source: "PolicySource | None" = None,
 ) -> AgentGraph:
-    """Functional alias for :meth:`FortifyAgent.enforce_policy`.
-
-    Same side effect: the returned agent's refresh source is detached
-    (no hot reload unless re-attached).
-    """
-    return agent.enforce_policy(policy, approval_handler=approval_handler)
+    """Functional alias for :meth:`FortifyAgent.enforce_policy`."""
+    return agent.enforce_policy(
+        policy, approval_handler=approval_handler, source=source
+    )
 
 
 @observe(name="create_fortify_agent")
@@ -612,8 +593,7 @@ def _bind_policy(
     refresh source. A 404 registers the agent from its in-code
     definition and resolves again; other failures stay loud.
     """
-    from fortify.cloud.client import FortifyError
-    from fortify.security.binding import PolicyBinding
+    from fortify.security.binding import resolve_policy_or_register
 
     client = None
     if os.environ.get("FORTIFY_KEY"):
@@ -621,21 +601,15 @@ def _bind_policy(
 
         client = FortifyClient(FortifyConfig.from_env())
 
-    try:
-        binding = PolicyBinding.resolve(name, client=client)
-    except FortifyError as exc:
-        if exc.status != 404:
-            raise
+    def _register() -> None:
         from fortify.cli.register import register_agent
 
-        _logger.info("agent %r not registered — registering it from code", name)
         register_agent(agent)
-        binding = PolicyBinding.resolve(name, client=client)
 
+    resolved = resolve_policy_or_register(name, client=client, on_missing=_register)
     enforced = agent.enforce_policy(
-        binding.enforcer.policy, approval_handler=approval_handler
+        resolved.engine, approval_handler=approval_handler, source=resolved.source
     )
-    enforced._policy_source = binding.source
     enforced.fortify_client = client
     return enforced
 

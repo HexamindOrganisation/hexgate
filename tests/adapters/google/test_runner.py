@@ -14,8 +14,7 @@ from fortify.adapters.google import wrapper as wrapper_mod
 from fortify.adapters.google.runner import FortifyRunner
 from fortify.runtime import User
 from fortify.runtime.context import get_current_user
-from fortify.security import AgentPolicy, BaseToolPolicy, PolicyBinding, PolicySet
-from fortify.security.enforcer import PolicyEnforcer
+from fortify.security import AgentPolicy, BaseToolPolicy, PolicySet, ResolvedPolicy
 from fortify.security.policy_set import DEFAULT_ROLE_NAME
 
 
@@ -24,21 +23,17 @@ def _stub_resolve(monkeypatch: pytest.MonkeyPatch) -> None:
     """Stub the platform resolve seam — runner tests are about lifecycle,
     not policy resolution (covered by test_wrapper.py / binding tests)."""
 
-    def fake_resolve(agent: Any, name: str, key: str) -> PolicyBinding:
-        tool_names = [
-            getattr(t, "name", getattr(t, "__name__", "tool"))
-            for t in (getattr(agent, "tools", []) or [])
-        ]
+    def fake_resolve(name: str, *, api_key: str, on_missing: Any) -> ResolvedPolicy:
         engine = PolicySet(
             {
                 DEFAULT_ROLE_NAME: AgentPolicy(
-                    tools={n: BaseToolPolicy(mode="allow") for n in tool_names}
+                    tools={"echo": BaseToolPolicy(mode="allow")}
                 )
             }
         )
-        return PolicyBinding(PolicyEnforcer(engine, agent_name=name))
+        return ResolvedPolicy(engine, None)
 
-    monkeypatch.setattr(wrapper_mod, "_resolve_binding", fake_resolve)
+    monkeypatch.setattr(wrapper_mod, "resolve_policy_or_register", fake_resolve)
 
 
 def _user() -> User:

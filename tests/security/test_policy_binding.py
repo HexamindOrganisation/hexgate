@@ -31,7 +31,10 @@ from fortify.security import (
     PolicyBindingError,
     PolicyBundle,
     PolicySet,
+    ResolvedPolicy,
     compile_to_rego,
+    resolve_policy,
+    resolve_policy_or_register,
     compile_to_wasm,
     generate_keypair,
     sign_bytes,
@@ -139,6 +142,15 @@ def _static_engine(tool_names: list[str]) -> PolicySet:
     )
 
 
+def _resolved_binding(agent_name: str, **kwargs) -> PolicyBinding:
+    """resolve_policy + build the enforcer/binding — what each surface does."""
+
+    resolved = resolve_policy(agent_name, **kwargs)
+    return PolicyBinding(
+        PolicyEnforcer(resolved.engine, agent_name=agent_name), resolved.source
+    )
+
+
 @pytest.fixture(autouse=True)
 def _clean_env(monkeypatch: pytest.MonkeyPatch) -> None:
     """Resolution must be driven by each test, not the developer's shell."""
@@ -152,17 +164,6 @@ def _clean_env(monkeypatch: pytest.MonkeyPatch) -> None:
 # ---------------------------------------------------------------------------
 # resolve() — precedence
 # ---------------------------------------------------------------------------
-
-
-def test_resolve_requires_agent_name() -> None:
-    with pytest.raises(PolicyBindingError, match="agent name"):
-        PolicyBinding.resolve("")
-
-
-def test_no_key_no_override_raises() -> None:
-    """The silent allow-all is gone: ungoverned must be explicit."""
-    with pytest.raises(PolicyBindingError, match="no policy available"):
-        PolicyBinding.resolve("support-bot")
 
 
 def test_static_constructor_is_the_explicit_ungoverned_path() -> None:
@@ -195,7 +196,7 @@ def test_local_override_beats_platform(monkeypatch: pytest.MonkeyPatch) -> None:
 
     _, pub = generate_keypair()
     fc = _FakeClient(pub)  # nothing queued — any get_agent call would crash
-    binding = PolicyBinding.resolve("support-bot", client=fc)
+    binding = _resolved_binding("support-bot", client=fc)
 
     assert binding.enforcer.policy is sentinel_policy
     assert binding.source is stub_source
@@ -214,7 +215,7 @@ def test_platform_bundle_resolved_and_source_seeded() -> None:
     fc = _FakeClient(pub)
     fc.serve(_bundle_response(priv), etag='"hash-a"')
 
-    binding = PolicyBinding.resolve("support-bot", client=fc)
+    binding = _resolved_binding("support-bot", client=fc)
 
     assert isinstance(binding.enforcer.policy, PolicyBundle)
     assert binding.enforcer.policy.is_signed
@@ -236,7 +237,7 @@ def test_platform_bundleless_payload_falls_back_to_pydantic() -> None:
     fc = _FakeClient(pub)
     fc.serve({"policy_yaml": _POLICY_YAML}, etag=None)
 
-    binding = PolicyBinding.resolve("support-bot", client=fc)
+    binding = _resolved_binding("support-bot", client=fc)
 
     assert isinstance(binding.enforcer.policy, PolicySet)
     assert "billing" in binding.enforcer.policy
@@ -254,7 +255,7 @@ def test_bundleless_with_require_signature_raises(
     fc.serve({"policy_yaml": _POLICY_YAML}, etag=None)
 
     with pytest.raises(PolicyBindingError, match="no signed bundle"):
-        PolicyBinding.resolve("support-bot", client=fc)
+        _resolved_binding("support-bot", client=fc)
 
 
 @needs_opa
@@ -266,7 +267,7 @@ def test_bad_signature_raises_never_downgrades() -> None:
     fc.serve(_bundle_response(priv), etag=None)
 
     with pytest.raises(RuntimeError, match="failed verification"):
-        PolicyBinding.resolve("support-bot", client=fc)
+        _resolved_binding("support-bot", client=fc)
 
 
 def test_404_propagates_with_status() -> None:
@@ -277,7 +278,7 @@ def test_404_propagates_with_status() -> None:
     fc.serve_error(FortifyError("Fortify API error 404 calling …", status=404))
 
     with pytest.raises(FortifyError) as excinfo:
-        PolicyBinding.resolve("ghost-agent", client=fc)
+        _resolved_binding("ghost-agent", client=fc)
     assert excinfo.value.status == 404
 
 
@@ -315,7 +316,7 @@ def test_refresh_swaps_policy_on_change() -> None:
     fc.serve(_bundle_response(priv, amount_cap=500), etag='"hash-a"')
     fc.serve(_bundle_response(priv, amount_cap=1000), etag='"hash-b"')
 
-    binding = PolicyBinding.resolve("support-bot", client=fc)
+    binding = _resolved_binding("support-bot", client=fc)
     first = binding.enforcer.policy
     binding.refresh()
     second = binding.enforcer.policy
@@ -338,7 +339,7 @@ def test_refresh_failure_keeps_previous_policy(
     fc.serve({"policy_yaml": _POLICY_YAML}, etag='"hash-a"')
     fc.serve_error(FortifyError("Fortify API unreachable at …"))
 
-    binding = PolicyBinding.resolve("support-bot", client=fc)
+    binding = _resolved_binding("support-bot", client=fc)
     before = binding.enforcer.policy
     with caplog.at_level("WARNING", logger="fortify.security.binding"):
         binding.refresh()  # must not raise
@@ -359,9 +360,74 @@ def test_refresh_tampered_bundle_keeps_previous_policy(
     fc.serve({"policy_yaml": _POLICY_YAML}, etag=None)
     fc.serve(_bundle_response(priv), etag='"evil"')
 
-    binding = PolicyBinding.resolve("support-bot", client=fc)
+    binding = _resolved_binding("support-bot", client=fc)
     before = binding.enforcer.policy
     with caplog.at_level("WARNING", logger="fortify.security.binding"):
         binding.refresh()  # verification fails inside source.fetch()
 
     assert binding.enforcer.policy is before
+
+
+# ---------------------------------------------------------------------------
+# resolve_policy / resolve_policy_or_register (refactor phase 1)
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_policy_returns_engine_and_source_no_enforcer() -> None:
+    """resolve_policy yields a ResolvedPolicy(engine, source) — no enforcer."""
+
+    _, pub = generate_keypair()
+    fc = _FakeClient(pub)
+    fc.serve({"policy_yaml": _POLICY_YAML}, etag='"hash-a"')
+
+    resolved = resolve_policy("support-bot", client=fc)
+
+    assert isinstance(resolved, ResolvedPolicy)
+    assert isinstance(resolved.engine, PolicySet)
+    assert isinstance(resolved.source, PlatformPolicySource)
+
+
+def test_resolve_policy_requires_agent_name() -> None:
+
+    with pytest.raises(PolicyBindingError, match="agent name"):
+        resolve_policy("")
+
+
+def test_resolve_policy_no_credentials_raises() -> None:
+
+    with pytest.raises(PolicyBindingError, match="no policy available"):
+        resolve_policy("support-bot")
+
+
+def test_resolve_or_register_calls_on_missing_then_retries_on_404() -> None:
+
+    _, pub = generate_keypair()
+    fc = _FakeClient(pub)
+    fc.serve_error(FortifyError("404", status=404))
+    fc.serve({"policy_yaml": _POLICY_YAML}, etag='"fresh"')
+
+    calls: list[str] = []
+    resolved = resolve_policy_or_register(
+        "new-agent",
+        client=fc,
+        on_missing=lambda: calls.append("registered"),
+    )
+
+    # on_missing fired once, then the second fetch resolved the policy.
+    assert calls == ["registered"]
+    assert isinstance(resolved.engine, PolicySet)
+    assert fc.calls == [None, None]
+
+
+def test_resolve_or_register_propagates_non_404() -> None:
+
+    _, pub = generate_keypair()
+    fc = _FakeClient(pub)
+    fc.serve_error(FortifyError("500", status=500))
+
+    calls: list[str] = []
+    with pytest.raises(FortifyError, match="500"):
+        resolve_policy_or_register(
+            "support-bot", client=fc, on_missing=lambda: calls.append("x")
+        )
+    assert calls == []  # never registered on a non-404

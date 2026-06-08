@@ -189,25 +189,26 @@ def test_load_builtin_agent_picks_up_override(
     captured: dict[str, Any] = {}
 
     def fake_create_agent(**kwargs: Any) -> tuple[Any, str]:
-        # Return a namespace so the loader can set ._policy_source on it.
         return types.SimpleNamespace(name="agent"), "handler"
 
-    def fake_enforce_policy(_agent: Any, policy: Any, *, approval_handler: Any = None) -> Any:
+    def fake_enforce_policy(
+        _agent: Any, policy: Any, *, approval_handler: Any = None, source: Any = None
+    ) -> Any:
         captured["policy"] = policy
+        captured["source"] = source
         return _agent
 
     monkeypatch.setattr(loader, "create_agent", fake_create_agent)
     monkeypatch.setattr(loader, "enforce_policy", fake_enforce_policy)
 
-    enforced, _handler = loader.load_builtin_agent("researcher")
+    loader.load_builtin_agent("researcher")
     assert isinstance(captured["policy"], PolicyBundle), (
         "load_builtin_agent should have substituted the env-var bundle "
         f"for the on-disk policy.yaml; got {type(captured['policy'])}"
     )
-    # And the source rode along, so refresh_policy() will have something
-    # to call into on the next run.
-    assert hasattr(enforced, "_policy_source")
-    assert hasattr(enforced._policy_source, "fetch")
+    # The override source was threaded into enforce_policy so refresh_policy()
+    # has something to call into on the next run.
+    assert hasattr(captured["source"], "fetch")
 
 
 @needs_opa

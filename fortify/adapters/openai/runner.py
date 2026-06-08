@@ -26,9 +26,9 @@ from langfuse import get_client, propagate_attributes
 from openinference.instrumentation.openai_agents import OpenAIAgentsInstrumentor
 
 from fortify import audit
-from fortify.adapters.openai.wrapper import _resolve_binding, wrap_openai_agent
+from fortify.adapters.openai.wrapper import wrap_openai_agent
 from fortify.runtime import User
-from fortify.security.binding import PolicyBinding
+from fortify.security.binding import PolicyBinding, resolve_policy_or_register
 from fortify.security.enforcer import PolicyEnforcer
 
 
@@ -56,9 +56,17 @@ class FortifyRunner:
         name = getattr(agent, "name", None) or "default"
         binding = self._bindings.get(name)
         if binding is None:
-            resolved = _resolve_binding(agent, name, self.api_key)
+
+            def _register() -> None:
+                from fortify.cli.register import register_agent
+
+                register_agent(agent)
+
+            resolved = resolve_policy_or_register(
+                name, api_key=self.api_key, on_missing=_register
+            )
             enforcer = PolicyEnforcer(
-                resolved.enforcer.policy,
+                resolved.engine,
                 agent_name=name,
                 audit_sender=audit.configure(self.api_key),
             )

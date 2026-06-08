@@ -9,37 +9,12 @@ the returned binding is what the runner refreshes per run.
 
 from __future__ import annotations
 
-import logging
-
 from google.adk.agents import BaseAgent
 
 from fortify import audit
 from fortify.adapters.google.tools import wrap_tools
-from fortify.security.binding import PolicyBinding
+from fortify.security.binding import PolicyBinding, resolve_policy_or_register
 from fortify.security.enforcer import PolicyEnforcer
-
-logger = logging.getLogger("fortify.adapters.google")
-
-
-def _resolve_binding(
-    agent: BaseAgent, agent_name: str, api_key: str
-) -> PolicyBinding:
-    """Resolve the platform policy for ``agent_name``, registering on 404.
-
-    Non-404 failures stay loud — never a silent allow-all.
-    """
-    from fortify.cloud.client import FortifyError
-
-    try:
-        return PolicyBinding.resolve(agent_name, api_key=api_key)
-    except FortifyError as exc:
-        if exc.status != 404:
-            raise
-        from fortify.cli.register import register_agent
-
-        logger.info("agent %r not registered — registering it from code", agent_name)
-        register_agent(agent)
-        return PolicyBinding.resolve(agent_name, api_key=api_key)
 
 
 def wrap_google_agent(
@@ -55,15 +30,21 @@ def wrap_google_agent(
     agent_name = getattr(agent, "name", "default")
     tools = list(getattr(agent, "tools", []) or [])
 
-    binding = _resolve_binding(agent, agent_name, api_key)
-    # Rebuild the enforcer to inject the audit sender; the rebound binding
-    # keeps the seeded source, so refresh swaps this enforcer in place.
+    def _register() -> None:
+        from fortify.cli.register import register_agent
+
+        register_agent(agent)
+
+    resolved = resolve_policy_or_register(
+        agent_name, api_key=api_key, on_missing=_register
+    )
     enforcer = PolicyEnforcer(
-        binding.enforcer.policy,
+        resolved.engine,
         agent_name=agent_name,
         audit_sender=audit.configure(api_key),
     )
-    binding = PolicyBinding(enforcer, binding.source)
-
     guarded_tools = wrap_tools(tools, enforcer)
-    return agent.model_copy(update={"tools": guarded_tools}), binding
+    return (
+        agent.model_copy(update={"tools": guarded_tools}),
+        PolicyBinding(enforcer, resolved.source),
+    )

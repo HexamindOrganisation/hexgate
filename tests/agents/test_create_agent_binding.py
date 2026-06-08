@@ -102,8 +102,7 @@ def test_auto_mode_without_governance_env_returns_bare_agent() -> None:
 
     assert handler == "handler-instance"
     assert agent.tools == [echo]  # unwrapped
-    assert agent._policy_source is None
-    assert agent._enforcer is None
+    assert agent._binding is None
 
 
 def test_auto_mode_without_name_skips_even_with_key(
@@ -115,7 +114,7 @@ def test_auto_mode_without_name_skips_even_with_key(
     agent, _ = factory.create_agent(model="openai:gpt-5.4", tools=[echo])
 
     assert agent.tools == [echo]
-    assert agent._policy_source is None
+    assert agent._binding is None
 
 
 def test_bind_policy_false_skips_even_with_key(
@@ -129,7 +128,7 @@ def test_bind_policy_false_skips_even_with_key(
     )
 
     assert agent.tools == [echo]
-    assert agent._policy_source is None
+    assert agent._binding is None
 
 
 def test_bind_policy_true_requires_name() -> None:
@@ -158,9 +157,8 @@ def test_bind_wraps_tools_and_attaches_source_and_client(
 
     assert len(agent.tools) == 1
     assert isinstance(agent.tools[0], GuardedTool)
-    assert isinstance(agent._policy_source, PlatformPolicySource)
-    assert agent._enforcer is not None
-    assert isinstance(agent._enforcer.policy, PolicySet)
+    assert isinstance(agent._binding.source, PlatformPolicySource)
+    assert isinstance(agent._binding.enforcer.policy, PolicySet)
     assert agent.fortify_client is fc
     assert fc.calls == [None]  # exactly one fetch at creation
 
@@ -231,7 +229,7 @@ def test_local_override_binds_without_a_key(
     )
 
     assert isinstance(agent.tools[0], GuardedTool)
-    assert agent._policy_source is stub
+    assert agent._binding.source is stub
     assert agent.fortify_client is None
 
 
@@ -252,10 +250,9 @@ def test_enforce_policy_detaches_inherited_source(
     agent, _ = factory.create_agent(
         model="openai:gpt-5.4", tools=[echo], name="support-bot"
     )
-    assert agent._policy_source is not None
+    assert agent._binding.source is not None
 
     custom = agent.enforce_policy(AgentPolicy())
 
-    assert custom._policy_source is None  # refresh can't overwrite the custom policy
-    assert custom._enforcer is not None
+    assert custom._binding.source is None  # refresh can't overwrite the custom policy
     custom.refresh_policy()  # no source → quiet no-op

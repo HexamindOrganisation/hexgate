@@ -2,9 +2,8 @@
 
 The allow-all ``build_policy_set`` placeholder is gone. The wrapper is
 now mechanics-only — ``wrap_openai_agent(agent, enforcer=...)`` clones
-with gated tools — while policy resolution lives in
-:func:`_resolve_binding` (platform pull, register-on-404) and the
-lifecycle (binding cache + per-run refresh) lives in the runner.
+with gated tools — while policy resolution + the binding cache + per-run
+refresh all live in the runner (see test_runner.py).
 """
 
 from __future__ import annotations
@@ -14,11 +13,9 @@ from typing import Any
 import pytest
 from agents import Agent, FunctionTool
 
-from fortify.adapters.openai import wrapper as wrapper_mod
 from fortify.adapters.openai.wrapper import wrap_openai_agent
-from fortify.cloud.client import FortifyError
 from fortify.runtime import User
-from fortify.security import AgentPolicy, BaseToolPolicy, PolicyBinding, PolicySet
+from fortify.security import AgentPolicy, BaseToolPolicy, PolicySet
 from fortify.security.enforcer import PolicyEnforcer
 from fortify.security.policy_set import DEFAULT_ROLE_NAME
 
@@ -151,53 +148,3 @@ async def test_refresh_swap_reaches_every_clone() -> None:
         for clone in (first_clone, second_clone):
             allowed = await clone.tools[0].on_invoke_tool(None, '{"text": "x"}')
             assert allowed == 'invoked:{"text": "x"}'
-
-
-# ---------------------------------------------------------------------------
-# _resolve_binding — 404 → register → retry; everything else loud
-# ---------------------------------------------------------------------------
-
-
-def test_404_registers_openai_agent_then_resolves_again(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    import fortify.cli.register as register_pkg
-
-    calls: list[str] = []
-    registered: list[Any] = []
-    stub = PolicyBinding(_allow_all_enforcer(["echo"]))
-
-    def fake_resolve(name: str, *, api_key: str | None = None, client: Any = None):
-        calls.append(name)
-        if len(calls) == 1:
-            raise FortifyError("Fortify API error 404 calling …", status=404)
-        return stub
-
-    monkeypatch.setattr(
-        wrapper_mod.PolicyBinding, "resolve", staticmethod(fake_resolve)
-    )
-    monkeypatch.setattr(
-        register_pkg, "register_agent", lambda agent: registered.append(agent)
-    )
-
-    agent = _make_agent()
-    binding = wrapper_mod._resolve_binding(agent, "my-agent", "k")
-
-    assert binding is stub
-    assert calls == ["my-agent", "my-agent"]
-    assert registered == [agent]  # the introspectable Agent object itself
-
-
-def test_non_404_failure_is_loud(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Running asked for governance — a platform error never yields a
-    silently allow-all agent."""
-
-    def fake_resolve(name: str, *, api_key: str | None = None, client: Any = None):
-        raise FortifyError("Fortify API error 500 calling …", status=500)
-
-    monkeypatch.setattr(
-        wrapper_mod.PolicyBinding, "resolve", staticmethod(fake_resolve)
-    )
-
-    with pytest.raises(FortifyError, match="500"):
-        wrapper_mod._resolve_binding(_make_agent(), "my-agent", "k")

@@ -268,9 +268,9 @@ def _apply_local_override(
     if override is None:
         return None
     bundle, source = override
-    enforced = enforce_policy(agent, bundle, approval_handler=approval_handler)
-    enforced._policy_source = source
-    return enforced
+    return enforce_policy(
+        agent, bundle, approval_handler=approval_handler, source=source
+    )
 
 
 def _local_policy_override() -> tuple[PolicyBundle, PolicySource] | None:
@@ -675,7 +675,7 @@ def load_fortify_agent(
     )
     # Precedence: FORTIFY_LOCAL_POLICY override → platform (signed bundle,
     # or pydantic on policy_yaml). Decode/verify rules are shared with
-    # PolicyBinding.resolve via platform_policy_from_payload.
+    # resolve_policy via platform_policy_from_payload.
     from fortify.security.binding import platform_policy_from_payload
 
     override = _local_policy_override()
@@ -686,11 +686,12 @@ def load_fortify_agent(
             client, resolved_name, payload, initial_etag
         )
 
-    enforced = enforce_policy(agent, policy, approval_handler=approval_handler)
+    enforced = enforce_policy(
+        agent, policy, approval_handler=approval_handler, source=refresh_source
+    )
     # Attach the client so the runtime can do lazy attenuation inside an
     # active User scope without the caller having to thread it through.
     enforced.fortify_client = client
-    enforced._policy_source = refresh_source
     return enforced, handler
 
 

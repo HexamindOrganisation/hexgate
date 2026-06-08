@@ -1,9 +1,8 @@
 """Tests for the pydantic_ai adapter agent wrapper entry point (phase 7).
 
 The allow-all ``build_policy_set`` placeholder is gone: wrap-time policy
-comes from :meth:`PolicyBinding.resolve` (platform / local override),
-with register-on-404 from the in-code definition. These tests stub the
-resolve seam (``wrapper._resolve_binding``) so no platform is needed.
+comes from :func:`resolve_policy_or_register` (platform / local override,
+register-on-404). These tests stub that seam so no platform is needed.
 """
 
 from __future__ import annotations
@@ -22,8 +21,7 @@ from fortify.adapters.pydantic_ai.wrapper import (
     _extract_tools,
     wrap_pydantic_agent,
 )
-from fortify.cloud.client import FortifyError
-from fortify.security import AgentPolicy, BaseToolPolicy, PolicyBinding, PolicySet
+from fortify.security import AgentPolicy, BaseToolPolicy, PolicySet, ResolvedPolicy
 from fortify.security.enforcer import PolicyEnforcer
 from fortify.security.policy_set import DEFAULT_ROLE_NAME
 
@@ -38,29 +36,19 @@ def _allow_all(tool_names: list[str]) -> PolicySet:
     )
 
 
-def _stub_binding(engine: PolicySet) -> PolicyBinding:
-    return PolicyBinding(PolicyEnforcer(engine, agent_name="my-agent"))
-
-
-# Captured at import time, before the autouse fixture swaps the module
-# attribute — the 404/loud-failure tests exercise the REAL seam.
-_ORIGINAL_RESOLVE_BINDING = wrapper_mod._resolve_binding
-
-
 @pytest.fixture(autouse=True)
 def _stub_resolve(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     """Stub the platform resolve seam with an allow-all engine.
 
     Wrapper mechanics (clone, toolset, key resolution) are what these
-    tests cover; resolution itself is covered by the binding tests and
-    the dedicated 404/loud-failure tests below."""
+    tests cover; resolution itself is covered by the binding tests."""
     captured: dict[str, Any] = {}
 
-    def fake_resolve(agent: Any, name: str, key: str) -> PolicyBinding:
-        captured.update(agent=agent, name=name, key=key)
-        return _stub_binding(_allow_all([t.name for t in _extract_tools(agent)]))
+    def fake_resolve(name: str, *, api_key: str, on_missing: Any) -> ResolvedPolicy:
+        captured.update(name=name, key=api_key, on_missing=on_missing)
+        return ResolvedPolicy(_allow_all(["echo", "shout"]), None)
 
-    monkeypatch.setattr(wrapper_mod, "_resolve_binding", fake_resolve)
+    monkeypatch.setattr(wrapper_mod, "resolve_policy_or_register", fake_resolve)
     return captured
 
 
@@ -253,15 +241,16 @@ async def test_wrap_enforces_the_resolved_policy_not_allow_all(
 
     monkeypatch.setattr(
         wrapper_mod,
-        "_resolve_binding",
-        lambda agent, name, key: _stub_binding(
+        "resolve_policy_or_register",
+        lambda name, *, api_key, on_missing: ResolvedPolicy(
             PolicySet(
                 {
                     DEFAULT_ROLE_NAME: AgentPolicy.model_validate(
                         {"default_policy": {"mode": "deny"}}
                     )
                 }
-            )
+            ),
+            None,
         ),
     )
 
@@ -272,46 +261,27 @@ async def test_wrap_enforces_the_resolved_policy_not_allow_all(
         await echo_tool.function_schema.call({"text": "hi"}, None)
 
 
-def test_404_registers_pydantic_agent_then_resolves_again(
+def test_register_on_miss_ships_the_pydantic_agent(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """The adapter's on_missing thunk registers the introspectable agent
+    (the 404/loud logic is covered in test_policy_binding.py)."""
     import fortify.cli.register as register_pkg
 
-    calls: list[str] = []
     registered: list[Any] = []
-    stub = _stub_binding(_allow_all(["echo"]))
-
-    def fake_resolve(name: str, *, api_key: str | None = None, client: Any = None):
-        calls.append(name)
-        if len(calls) == 1:
-            raise FortifyError("Fortify API error 404 calling …", status=404)
-        return stub
-
-    monkeypatch.setattr(
-        wrapper_mod.PolicyBinding, "resolve", staticmethod(fake_resolve)
-    )
     monkeypatch.setattr(
         register_pkg, "register_agent", lambda agent: registered.append(agent)
     )
 
+    def fake_resolve(name: str, *, api_key: str, on_missing: Any) -> ResolvedPolicy:
+        on_missing()
+        return ResolvedPolicy(_allow_all(["echo", "shout"]), None)
+
+    monkeypatch.setattr(wrapper_mod, "resolve_policy_or_register", fake_resolve)
+
     agent = _make_agent()
-    binding = _ORIGINAL_RESOLVE_BINDING(agent, "my-agent", "k")
+    wrap_pydantic_agent(agent=agent, api_key="k")
 
-    assert binding is stub
-    assert calls == ["my-agent", "my-agent"]
-    assert registered == [agent]  # the introspectable Agent object itself
-
-
-def test_non_404_failure_is_loud(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Wrapping asked for governance — a platform error never yields a
-    silently allow-all agent."""
-
-    def fake_resolve(name: str, *, api_key: str | None = None, client: Any = None):
-        raise FortifyError("Fortify API error 500 calling …", status=500)
-
-    monkeypatch.setattr(
-        wrapper_mod.PolicyBinding, "resolve", staticmethod(fake_resolve)
-    )
-
-    with pytest.raises(FortifyError, match="500"):
-        _ORIGINAL_RESOLVE_BINDING(_make_agent(), "my-agent", "k")
+    # on_missing registers the cloned-from agent; identity is what matters.
+    assert len(registered) == 1
+    assert registered[0] is agent

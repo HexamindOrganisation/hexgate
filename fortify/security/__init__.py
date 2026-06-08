@@ -16,7 +16,13 @@ from fortify.security.constraints import (
     evaluate_constraint,
     parse_constraint,
 )
-from fortify.security.binding import PolicyBinding, PolicyBindingError
+from fortify.security.binding import (
+    PolicyBinding,
+    PolicyBindingError,
+    ResolvedPolicy,
+    resolve_policy,
+    resolve_policy_or_register,
+)
 from fortify.security.bundle import (
     BundleIntegrityError,
     BundleLoadError,
@@ -84,6 +90,9 @@ __all__ = [
     "BaseToolPolicy",
     "PolicyBinding",
     "PolicyBindingError",
+    "ResolvedPolicy",
+    "resolve_policy",
+    "resolve_policy_or_register",
     "Constraint",
     "ConstraintParseError",
     "DEFAULT_ENTRYPOINT",

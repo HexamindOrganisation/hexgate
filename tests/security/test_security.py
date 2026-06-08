@@ -223,13 +223,19 @@ def test_enforce_policy_detaches_refresh_source(
         tools=[sample_tool],
         system_prompt="You are a test assistant.",
     )
-    agent._policy_source = object()  # type: ignore[assignment]  # simulate a sourced agent
+    # Simulate an agent that already carries a refresh source.
+    from fortify.security.binding import PolicyBinding
+    from fortify.security.enforcer import PolicyEnforcer
+
+    agent._binding = PolicyBinding(
+        PolicyEnforcer(AgentPolicy(), agent_name="x"), source=object()  # type: ignore[arg-type]
+    )
 
     secured = enforce_policy(
         agent, AgentPolicy.model_validate({"default_policy": {"mode": "deny"}})
     )
 
-    assert secured._policy_source is None
+    assert secured._binding.source is None
     secured.refresh_policy()  # no source → no-op, must not raise
 
 

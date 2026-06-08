@@ -12,6 +12,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+from collections.abc import Callable
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import yaml
@@ -39,6 +41,86 @@ class PolicyBindingError(RuntimeError):
     """A policy binding could not be resolved (construction only)."""
 
 
+@dataclass(frozen=True)
+class ResolvedPolicy:
+    """A resolved policy engine plus the source that refreshes it.
+
+    What resolution produces — no enforcer. Each surface builds its own
+    enforcer (with its own audit sender) from ``engine``.
+    """
+
+    engine: "PolicyEngine"
+    source: PolicySource | None
+
+
+def resolve_policy(
+    agent_name: str,
+    *,
+    api_key: str | None = None,
+    client: "FortifyClient | None" = None,
+) -> ResolvedPolicy:
+    """Resolve the current policy for ``agent_name``.
+
+    Precedence: ``FORTIFY_LOCAL_POLICY`` override → platform (``client``
+    or ``api_key``/``FORTIFY_KEY``) → raise. Eager and fail-loud; a
+    platform 404 propagates as ``FortifyError``.
+    """
+    if not agent_name:
+        raise PolicyBindingError(
+            "resolve_policy() requires a non-empty agent name — "
+            "it is the platform lookup key."
+        )
+
+    override = _local_policy_override()
+    if override is not None:
+        bundle, source = override
+        return ResolvedPolicy(bundle, source)
+
+    if client is None and (api_key or os.environ.get("FORTIFY_KEY")):
+        from fortify.cloud.client import FortifyClient, FortifyConfig
+
+        client = FortifyClient(FortifyConfig.from_env(api_key=api_key))
+    if client is not None:
+        payload, etag = client.get_agent(agent_name)
+        assert payload is not None, "get_agent without If-None-Match — 304 impossible"
+        engine, source = platform_policy_from_payload(
+            client, agent_name, payload, etag
+        )
+        return ResolvedPolicy(engine, source)
+
+    raise PolicyBindingError(
+        f"no policy available for agent {agent_name!r}: FORTIFY_KEY is "
+        f"not set and {_LOCAL_POLICY_ENV_VAR} is not set. Set a "
+        "credential, point the override at a policy, or construct "
+        "PolicyBinding(PolicyEnforcer(engine)) explicitly."
+    )
+
+
+def resolve_policy_or_register(
+    agent_name: str,
+    *,
+    api_key: str | None = None,
+    client: "FortifyClient | None" = None,
+    on_missing: Callable[[], object],
+) -> ResolvedPolicy:
+    """Resolve ``agent_name``; on a platform 404, run ``on_missing`` and retry.
+
+    ``on_missing`` registers the agent from its in-code definition (the
+    framework-specific call lives in the caller). Non-404 failures stay
+    loud — never a silent allow-all.
+    """
+    from fortify.cloud.client import FortifyError
+
+    try:
+        return resolve_policy(agent_name, api_key=api_key, client=client)
+    except FortifyError as exc:
+        if exc.status != 404:
+            raise
+        logger.info("agent %r not registered — registering it from code", agent_name)
+        on_missing()
+        return resolve_policy(agent_name, api_key=api_key, client=client)
+
+
 class PolicyBinding:
     """An enforcer plus the optional source that keeps it current.
 
@@ -51,52 +133,6 @@ class PolicyBinding:
     ) -> None:
         self.enforcer = enforcer
         self.source = source
-
-    @classmethod
-    def resolve(
-        cls,
-        agent_name: str,
-        *,
-        api_key: str | None = None,
-        client: "FortifyClient | None" = None,
-    ) -> "PolicyBinding":
-        """Resolve the current policy for ``agent_name`` and bind it.
-
-        Precedence: ``FORTIFY_LOCAL_POLICY`` override → platform
-        (``client`` or ``api_key``/``FORTIFY_KEY``) → raise. Eager and
-        fail-loud; a platform 404 propagates as ``FortifyError``.
-        """
-        if not agent_name:
-            raise PolicyBindingError(
-                "PolicyBinding.resolve() requires a non-empty agent name — "
-                "it is the platform lookup key."
-            )
-
-        override = _local_policy_override()
-        if override is not None:
-            bundle, source = override
-            return cls(PolicyEnforcer(bundle, agent_name=agent_name), source)
-
-        if client is None and (api_key or os.environ.get("FORTIFY_KEY")):
-            from fortify.cloud.client import FortifyClient, FortifyConfig
-
-            client = FortifyClient(FortifyConfig.from_env(api_key=api_key))
-        if client is not None:
-            payload, etag = client.get_agent(agent_name)
-            assert payload is not None, (
-                "get_agent without If-None-Match — 304 impossible"
-            )
-            policy, source = platform_policy_from_payload(
-                client, agent_name, payload, etag
-            )
-            return cls(PolicyEnforcer(policy, agent_name=agent_name), source)
-
-        raise PolicyBindingError(
-            f"no policy available for agent {agent_name!r}: FORTIFY_KEY is "
-            f"not set and {_LOCAL_POLICY_ENV_VAR} is not set. Set a "
-            "credential, point the override at a policy, or construct "
-            "PolicyBinding(PolicyEnforcer(engine)) explicitly."
-        )
 
     def refresh(self) -> None:
         """Pull the current policy and swap it in; no-op without a source.
@@ -135,7 +171,7 @@ def platform_policy_from_payload(
 
     Signed bundle → WASM engine; bundle-less → pydantic engine on
     ``policy_yaml`` (forbidden under ``FORTIFY_BUNDLE_REQUIRE_SIGNATURE``).
-    Shared by :meth:`PolicyBinding.resolve` and ``load_fortify_agent``.
+    Shared by :func:`resolve_policy` and ``load_fortify_agent``.
     """
     bundle = decode_and_verify_platform_bundle(payload, client.public_key_bytes())
     policy: "PolicyEngine"

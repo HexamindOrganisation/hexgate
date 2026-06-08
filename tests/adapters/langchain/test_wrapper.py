@@ -1,12 +1,10 @@
 """Tests for the LangChain adapter wrapper entry point (phase 4).
 
 The allow-all ``build_policy_set`` placeholder is gone: wrap-time policy
-comes from :meth:`PolicyBinding.resolve` (platform / local override),
-with register-on-404 from the in-code graph. These tests stub the
-resolve seam (``wrapper._resolve_binding``) so no platform is needed,
+comes from :func:`resolve_policy_or_register` (platform / local override,
+register-on-404). These tests stub that seam so no platform is needed,
 and cover: key resolution, enforcer installation with the resolved
-policy, 404 → register → retry, loud failures, and the proxy's per-call
-refresh.
+policy, the register-on-miss wiring, and the proxy's per-call refresh.
 """
 
 from __future__ import annotations
@@ -19,9 +17,8 @@ from langchain_core.tools import BaseTool, tool
 from fortify.adapters.langchain import wrapper as wrapper_mod
 from fortify.adapters.langchain.agent import FortifyLangchainAgent
 from fortify.adapters.langchain.wrapper import wrap_langchain_agent
-from fortify.cloud.client import FortifyError
 from fortify.runtime import User
-from fortify.security import AgentPolicy, BaseToolPolicy, PolicyBinding, PolicySet
+from fortify.security import AgentPolicy, BaseToolPolicy, PolicySet, ResolvedPolicy
 from fortify.security.enforcer import PolicyEnforcer
 from fortify.security.policy_set import DEFAULT_ROLE_NAME
 
@@ -53,20 +50,16 @@ def _engine(tool_names: list[str], mode: str = "allow") -> PolicySet:
     )
 
 
-def _stub_binding(engine: PolicySet) -> PolicyBinding:
-    return PolicyBinding(PolicyEnforcer(engine, agent_name="fake-graph"))
-
-
 @pytest.fixture()
 def resolved(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     """Stub the resolve seam with an allow-all engine; capture the call."""
     captured: dict[str, Any] = {}
 
-    def fake_resolve(agent: Any, tools: list[BaseTool], name: str, key: str):
-        captured.update(agent=agent, tools=tools, name=name, key=key)
-        return _stub_binding(_engine([t.name for t in tools]))
+    def fake_resolve(name: str, *, api_key: str, on_missing: Any) -> ResolvedPolicy:
+        captured.update(name=name, key=api_key, on_missing=on_missing)
+        return ResolvedPolicy(_engine(["a", "b"]), None)
 
-    monkeypatch.setattr(wrapper_mod, "_resolve_binding", fake_resolve)
+    monkeypatch.setattr(wrapper_mod, "resolve_policy_or_register", fake_resolve)
     return captured
 
 
@@ -155,8 +148,10 @@ def test_wrap_enforces_the_resolved_policy_not_allow_all(
     """A deny rule from the resolved policy actually blocks the tool."""
     monkeypatch.setattr(
         wrapper_mod,
-        "_resolve_binding",
-        lambda agent, tools, name, key: _stub_binding(_engine(["a"], mode="deny")),
+        "resolve_policy_or_register",
+        lambda name, *, api_key, on_missing: ResolvedPolicy(
+            _engine(["a"], mode="deny"), None
+        ),
     )
     tools = [_make_tool("a")]
 
@@ -199,58 +194,37 @@ def test_wrap_attaches_binding_with_audited_enforcer(
 
 
 # ---------------------------------------------------------------------------
-# _resolve_binding — 404 → register → retry; everything else loud
+# register-on-miss wiring (the 404/loud logic itself is covered centrally
+# in tests/security/test_policy_binding.py)
 # ---------------------------------------------------------------------------
 
 
-def test_404_registers_graph_then_resolves_again(
+def test_register_on_miss_ships_graph_and_real_tool_schemas(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """The adapter's on_missing thunk registers the graph WITH its tools —
+    raw graphs don't expose tool nodes, so the schemas must come from here."""
     import fortify.cli.register as register_pkg
 
-    calls: list[str] = []
-    registered: list[tuple[Any, list[BaseTool]]] = []
-    stub = _stub_binding(_engine(["a"]))
-
-    def fake_resolve(name: str, *, api_key: str | None = None, client: Any = None):
-        calls.append(name)
-        if len(calls) == 1:
-            raise FortifyError("Fortify API error 404 calling …", status=404)
-        return stub
-
-    monkeypatch.setattr(
-        wrapper_mod.PolicyBinding, "resolve", staticmethod(fake_resolve)
-    )
+    registered: list[tuple[Any, Any]] = []
     monkeypatch.setattr(
         register_pkg,
         "register_agent",
         lambda agent, tools=None: registered.append((agent, tools)),
     )
 
+    # Simulate the platform 404 path: invoke on_missing, then resolve.
+    def fake_resolve(name: str, *, api_key: str, on_missing: Any) -> ResolvedPolicy:
+        on_missing()
+        return ResolvedPolicy(_engine(["a"]), None)
+
+    monkeypatch.setattr(wrapper_mod, "resolve_policy_or_register", fake_resolve)
+
     graph = _FakeCompiledGraph()
     tools = [_make_tool("a")]
-    binding = wrapper_mod._resolve_binding(graph, tools, "fake-graph", "k")
+    wrap_langchain_agent(agent=graph, tools=tools, api_key="k")
 
-    assert binding is stub
-    assert calls == ["fake-graph", "fake-graph"]
-    assert registered == [(graph, tools)]  # real tool schemas shipped
-
-
-def test_non_404_failure_is_loud(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Wrapping asked for governance — a platform error never yields a
-    silently allow-all agent."""
-
-    def fake_resolve(name: str, *, api_key: str | None = None, client: Any = None):
-        raise FortifyError("Fortify API error 500 calling …", status=500)
-
-    monkeypatch.setattr(
-        wrapper_mod.PolicyBinding, "resolve", staticmethod(fake_resolve)
-    )
-
-    with pytest.raises(FortifyError, match="500"):
-        wrap_langchain_agent(
-            agent=_FakeCompiledGraph(), tools=[_make_tool("a")], api_key="k"
-        )
+    assert registered == [(graph, tools)]
 
 
 # ---------------------------------------------------------------------------
