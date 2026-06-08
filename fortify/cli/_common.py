@@ -157,9 +157,7 @@ def build_runtime_from_local_agent(
     policy_payload = yaml.safe_load(payload["policy_yaml"]) or {}
     policy = load_policy_set_from_dict(policy_payload)
 
-    enforced = enforce_policy(
-        agent_obj, policy, approval_handler=approval_handler
-    )
+    enforced = enforce_policy(agent_obj, policy, approval_handler=approval_handler)
 
     # Fresh handler for the streaming layer. The user's create_agent() call
     # built its own handler but discarded it; we make a new one bound to
@@ -242,9 +240,7 @@ def prompt_for_approval(console: Console, decision: Decision) -> bool:
     """
     arguments = decision.arguments or {}
 
-    header = Text(
-        f"Approval required for {decision.tool_name}", style="bold yellow"
-    )
+    header = Text(f"Approval required for {decision.tool_name}", style="bold yellow")
     role_line = (
         [Text(f"role: {decision.role}", style="dim")]
         if decision.role is not None

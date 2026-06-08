@@ -429,9 +429,7 @@ def load_fortify_agent(
         # ``config.project_id`` can be None when the bearer envelope
         # didn't carry the project prefix (Phase 6 made it optional);
         # filter Nones so langchain doesn't get fed a None tag.
-        tags=tags or [
-            t for t in ["fortify", "fortify-cloud", config.project_id] if t
-        ],
+        tags=tags or [t for t in ["fortify", "fortify-cloud", config.project_id] if t],
         name=spec.name,
         bind_policy=False,  # this loader composes the binding itself below
     )

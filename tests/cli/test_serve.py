@@ -227,6 +227,7 @@ class _FakeWsForLoop:
         async def _empty():
             if False:
                 yield None  # pragma: no cover
+
         return _empty()
 
 
@@ -290,6 +291,7 @@ async def test_serve_loop_aborts_when_marker_not_echoed(
     the handshake without honoring the auth contract. Without this
     check the CLI would happily relay chats with no auth at all.
     """
+
     def fake_connect(url: str, **kwargs: Any) -> _FakeWsForLoop:
         return _FakeWsForLoop(subprotocol=None)  # no marker echoed
 
@@ -359,9 +361,7 @@ def _patched_runtime_deps(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     captured: dict[str, Any] = {}
 
     # Pre-built manifest the test rebuilds the spy responses around.
-    fake_manifest_obj = type(
-        "FakeManifest", (), {"name": "customer_bot"}
-    )()
+    fake_manifest_obj = type("FakeManifest", (), {"name": "customer_bot"})()
 
     def fake_create_manifest(agent_obj: Any, *, description: str | None = None):
         captured["create_manifest_called_with"] = agent_obj
@@ -419,9 +419,7 @@ def _patched_runtime_deps(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
         public_key = None
 
     monkeypatch.setattr("fortify.cloud.client.FortifyConfig", _FakeConfig)
-    monkeypatch.setattr(
-        "fortify.agents.factory.enforce_policy", fake_enforce_policy
-    )
+    monkeypatch.setattr("fortify.agents.factory.enforce_policy", fake_enforce_policy)
     monkeypatch.setattr(
         "fortify.tracing.langfuse.get_langfuse_handler", fake_get_handler
     )

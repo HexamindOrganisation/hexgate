@@ -227,7 +227,9 @@ def test_load_builtin_agent_uses_original_policy_without_override(
     def fake_create_agent(**kwargs: Any) -> tuple[str, str]:
         return "agent", "handler"
 
-    def fake_enforce_policy(_agent: Any, policy: Any, *, approval_handler: Any = None) -> Any:
+    def fake_enforce_policy(
+        _agent: Any, policy: Any, *, approval_handler: Any = None
+    ) -> Any:
         captured["policy"] = policy
         return _agent
 

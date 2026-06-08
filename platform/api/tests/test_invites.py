@@ -54,9 +54,7 @@ async def session_factory():
     )
     async with engine.begin() as conn:
         await conn.run_sync(SQLModel.metadata.create_all)
-    factory = async_sessionmaker(
-        engine, class_=AsyncSession, expire_on_commit=False
-    )
+    factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
     async with factory() as bootstrap:
         await ensure_default_project(bootstrap)
     yield factory
@@ -176,6 +174,7 @@ def test_create_invitation_403_for_plain_member(
     member_id = asyncio.get_event_loop().run_until_complete(
         _add_user_only(session_factory, email="plain@example.com")
     )
+
     async def _join():
         async with session_factory() as s:
             s.add(
@@ -187,6 +186,7 @@ def test_create_invitation_403_for_plain_member(
                 )
             )
             await s.commit()
+
     asyncio.get_event_loop().run_until_complete(_join())
 
     client.cookies.clear()
@@ -198,9 +198,7 @@ def test_create_invitation_403_for_plain_member(
     assert r.status_code == 403
 
 
-def test_admin_cannot_invite_owner(
-    client: TestClient, session_factory
-) -> None:
+def test_admin_cannot_invite_owner(client: TestClient, session_factory) -> None:
     """Role escalation guard: admin can invite admin/member but not
     owner. Service-layer InvitationError → HTTP 400."""
     _signup_and_login(client, "head@example.com", "correcthorsebattery")
@@ -210,6 +208,7 @@ def test_admin_cannot_invite_owner(
     admin_id = asyncio.get_event_loop().run_until_complete(
         _add_user_only(session_factory, email="admin@example.com")
     )
+
     async def _join():
         async with session_factory() as s:
             s.add(
@@ -221,6 +220,7 @@ def test_admin_cannot_invite_owner(
                 )
             )
             await s.commit()
+
     asyncio.get_event_loop().run_until_complete(_join())
 
     client.cookies.clear()
@@ -315,6 +315,7 @@ def test_list_invitations_403_for_plain_member(
     member_id = asyncio.get_event_loop().run_until_complete(
         _add_user_only(session_factory, email="member6@example.com")
     )
+
     async def _join():
         async with session_factory() as s:
             s.add(
@@ -326,6 +327,7 @@ def test_list_invitations_403_for_plain_member(
                 )
             )
             await s.commit()
+
     asyncio.get_event_loop().run_until_complete(_join())
 
     client.cookies.clear()
@@ -358,9 +360,7 @@ def test_invitation_preview_works_without_auth(
         async with session_factory() as s:
             inv = (
                 await s.exec(
-                    select(Invitation).where(
-                        Invitation.email == "preview@example.com"
-                    )
+                    select(Invitation).where(Invitation.email == "preview@example.com")
                 )
             ).one()
             return inv.id
@@ -491,7 +491,9 @@ def test_accept_invitation_403_when_email_mismatches(
     _signup_and_login(client, "eve@example.com", "correcthorsebattery")
     r = client.post(f"/v1/invites/{invite_id}/accept")
     assert r.status_code == 403
-    assert "different" in r.json()["detail"].lower() or "not" in r.json()["detail"].lower()
+    assert (
+        "different" in r.json()["detail"].lower() or "not" in r.json()["detail"].lower()
+    )
 
 
 def test_accept_email_mismatch_response_does_not_echo_invitee_email(
@@ -515,9 +517,7 @@ def test_accept_email_mismatch_response_does_not_echo_invitee_email(
     async def _get_id():
         async with session_factory() as s:
             inv = (
-                await s.exec(
-                    select(Invitation).where(Invitation.email == invited)
-                )
+                await s.exec(select(Invitation).where(Invitation.email == invited))
             ).one()
             return inv.id
 
@@ -648,7 +648,9 @@ def test_invitee_declines_invitation(
         async with session_factory() as s:
             inv = (
                 await s.exec(
-                    select(Invitation).where(Invitation.email == "declineme@example.com")
+                    select(Invitation).where(
+                        Invitation.email == "declineme@example.com"
+                    )
                 )
             ).one()
             return inv.id

@@ -49,9 +49,7 @@ async def session_factory():
     )
     async with engine.begin() as conn:
         await conn.run_sync(SQLModel.metadata.create_all)
-    factory = async_sessionmaker(
-        engine, class_=AsyncSession, expire_on_commit=False
-    )
+    factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
     async with factory() as bootstrap:
         await ensure_default_project(bootstrap)
     yield factory
@@ -99,9 +97,7 @@ async def _add_member_to_org(
     Returns the user id. The user lands without a password — sign-in
     via X-Dev-User (gated by the test conftest)."""
     async with session_factory() as s:
-        existing = (
-            await s.exec(select(User).where(User.email == email))
-        ).first()
+        existing = (await s.exec(select(User).where(User.email == email))).first()
         if existing is None:
             existing = User(email=email)
             s.add(existing)
@@ -315,9 +311,9 @@ def test_rename_project_403_for_plain_member(
     member has no password)."""
     _signup_and_login(client, "ownerE@example.com", "correcthorsebattery")
     org_id = client.get("/v1/orgs").json()[0]["id"]
-    pid = client.post(
-        f"/v1/orgs/{org_id}/projects", json={"name": "no-touch"}
-    ).json()["id"]
+    pid = client.post(f"/v1/orgs/{org_id}/projects", json={"name": "no-touch"}).json()[
+        "id"
+    ]
 
     member_id = asyncio.get_event_loop().run_until_complete(
         _add_member_to_org(
@@ -338,15 +334,13 @@ def test_rename_project_403_for_plain_member(
     assert "admin or owner" in r.json()["detail"].lower()
 
 
-def test_rename_project_succeeds_for_admin(
-    client: TestClient, session_factory
-) -> None:
+def test_rename_project_succeeds_for_admin(client: TestClient, session_factory) -> None:
     """Admin (not just owner) can rename — matches the permission matrix."""
     _signup_and_login(client, "ownerF@example.com", "correcthorsebattery")
     org_id = client.get("/v1/orgs").json()[0]["id"]
-    pid = client.post(
-        f"/v1/orgs/{org_id}/projects", json={"name": "for-admin"}
-    ).json()["id"]
+    pid = client.post(f"/v1/orgs/{org_id}/projects", json={"name": "for-admin"}).json()[
+        "id"
+    ]
 
     admin_id = asyncio.get_event_loop().run_until_complete(
         _add_member_to_org(
@@ -372,9 +366,7 @@ def test_rename_project_no_op_returns_200(client: TestClient) -> None:
     a 'save' button that double-fires shouldn't error."""
     _signup_and_login(client, "idem@example.com", "correcthorsebattery")
     org_id = client.get("/v1/orgs").json()[0]["id"]
-    pid = client.post(
-        f"/v1/orgs/{org_id}/projects", json={"name": "same"}
-    ).json()["id"]
+    pid = client.post(f"/v1/orgs/{org_id}/projects", json={"name": "same"}).json()["id"]
 
     r = client.patch(f"/v1/projects/{pid}", json={"name": "same"})
     assert r.status_code == 200

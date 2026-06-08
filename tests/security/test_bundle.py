@@ -323,7 +323,9 @@ def _make_parts(constraints=("args.amount <= 500",)):
         "rego_hash": hashlib.sha256(rego.encode("utf-8")).hexdigest(),
         "wasm_hash": hashlib.sha256(wasm).hexdigest(),
     }
-    manifest_bytes = (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode("utf-8")
+    manifest_bytes = (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode(
+        "utf-8"
+    )
     return wasm, manifest_bytes
 
 
@@ -334,7 +336,9 @@ def test_from_parts_builds_evaluable_bundle() -> None:
     bundle = PolicyBundle.from_parts(wasm_bytes=wasm, manifest_bytes=manifest_bytes)
     assert bundle.source_path is None
     assert bundle.rego_text == ""
-    d = bundle.policy().decide(role="billing", tool="refund_order", args={"amount": 200})
+    d = bundle.policy().decide(
+        role="billing", tool="refund_order", args={"amount": 200}
+    )
     assert d.allow is True
 
 
@@ -393,13 +397,18 @@ def test_build_signed_bundle_round_trips_through_from_parts() -> None:
     assert sb.wasm_hash == hashlib.sha256(sb.wasm_bytes).hexdigest()
 
     loaded = PolicyBundle.from_parts(
-        wasm_bytes=sb.wasm_bytes, manifest_bytes=sb.manifest_bytes, signature=sb.signature
+        wasm_bytes=sb.wasm_bytes,
+        manifest_bytes=sb.manifest_bytes,
+        signature=sb.signature,
     )
     loaded.verify_signature(pub)
     loaded.verify_integrity()
-    assert loaded.policy().decide(
-        role="billing", tool="refund_order", args={"amount": 200}
-    ).allow is True
+    assert (
+        loaded.policy()
+        .decide(role="billing", tool="refund_order", args={"amount": 200})
+        .allow
+        is True
+    )
 
 
 @needs_opa

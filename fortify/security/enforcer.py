@@ -60,9 +60,7 @@ class PolicyEnforcer:
             else dict(arguments)
         )
 
-        verdict = self.policy.evaluate(
-            role=role, tool=tool_name, args=args_snapshot
-        )
+        verdict = self.policy.evaluate(role=role, tool=tool_name, args=args_snapshot)
         decision = Decision.from_verdict(
             verdict,
             agent_name=self.agent_name,
@@ -72,11 +70,15 @@ class PolicyEnforcer:
         )
 
         if self._audit_sender is not None:
-            self._audit_sender.emit(AuditEvent(
-                decision=decision,
-                user_id=user.user_id if user is not None else "",
-                session_id=user.session_id if (user is not None and user.session_id) else "",
-            ))
+            self._audit_sender.emit(
+                AuditEvent(
+                    decision=decision,
+                    user_id=user.user_id if user is not None else "",
+                    session_id=user.session_id
+                    if (user is not None and user.session_id)
+                    else "",
+                )
+            )
 
         return decision
 

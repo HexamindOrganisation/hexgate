@@ -3,6 +3,7 @@
 Endpoint tests stub auth + ClickHouse via dependency_overrides. Integration
 tests under @pytest.mark.integration round-trip against a real local ClickHouse.
 """
+
 from __future__ import annotations
 
 import uuid
@@ -45,11 +46,11 @@ def _now() -> datetime:
 def _event(**overrides) -> dict:
     """Return a minimal-required event payload, with optional overrides."""
     base = {
-        "event_id":    str(uuid.uuid4()),
+        "event_id": str(uuid.uuid4()),
         "occurred_at": _now().isoformat(),
-        "agent_name":  "researcher",
-        "tool_name":   "read_file",
-        "outcome":     "deny",
+        "agent_name": "researcher",
+        "tool_name": "read_file",
+        "outcome": "deny",
     }
     return {**base, **overrides}
 
@@ -124,6 +125,7 @@ def client(
     app.dependency_overrides[require_project] = lambda: "proj_test"
     app.dependency_overrides[require_clickhouse] = lambda: fake_clickhouse
     app.dependency_overrides[get_session] = lambda: MagicMock()
+
     async def _stub_version_lookup(_session, _project_id, _agent_name) -> str:
         return _STUB_AGENT_VERSION_ID
 
@@ -157,7 +159,7 @@ def test_happy_path_returns_202_and_inserts_row(
     assert len(rows) == 1
     assert len(rows[0]) == 15
     # Indices match _DECISION_COLUMNS in audit.py.
-    assert rows[0][2] == "proj_test"             # project_id (bearer)
+    assert rows[0][2] == "proj_test"  # project_id (bearer)
     assert rows[0][4] == _STUB_AGENT_VERSION_ID  # agent_version_id (platform)
     assert kwargs["column_names"] == audit._DECISION_COLUMNS
     assert kwargs["settings"]["async_insert"] == 1
@@ -209,9 +211,7 @@ def test_oversized_hint_rejected(client: TestClient) -> None:
 def test_oversized_violation_item_rejected(client: TestClient) -> None:
     # Item count is capped at 64, but each item must also be bounded —
     # otherwise 64 unbounded strings get a multi-MB body past validation.
-    r = client.post(
-        "/v1/audit/decisions", json=_event(violations=["z" * 2048])
-    )
+    r = client.post("/v1/audit/decisions", json=_event(violations=["z" * 2048]))
     assert r.status_code == 422
 
 
@@ -347,27 +347,32 @@ def _summary_result(rows: list[tuple]) -> MagicMock:
 
 
 def test_summarize_classifies_grouping_sets() -> None:
-    client = _summary_result([
-        # () — grand total (the ONLY row where g_outcome=1)
-        ("", "", "", "", 1, 1, 1, 1, 10),
-        # (outcome) — per-outcome totals
-        ("", "", "", "allow", 1, 1, 1, 0, 6),
-        ("", "", "", "deny", 1, 1, 1, 0, 4),
-        # (agent_name, outcome)
-        ("researcher", "", "", "allow", 0, 1, 1, 0, 6),
-        ("researcher", "", "", "deny", 0, 1, 1, 0, 3),
-        ("scraper", "", "", "deny", 0, 1, 1, 0, 1),
-        # (role, outcome) — empty role keeps its raw "" key on the wire
-        ("", "analyst", "", "allow", 1, 0, 1, 0, 6),
-        ("", "", "", "deny", 1, 0, 1, 0, 4),
-        # (tool_name, outcome)
-        ("", "", "read_file", "deny", 1, 1, 0, 0, 4),
-    ])
+    client = _summary_result(
+        [
+            # () — grand total (the ONLY row where g_outcome=1)
+            ("", "", "", "", 1, 1, 1, 1, 10),
+            # (outcome) — per-outcome totals
+            ("", "", "", "allow", 1, 1, 1, 0, 6),
+            ("", "", "", "deny", 1, 1, 1, 0, 4),
+            # (agent_name, outcome)
+            ("researcher", "", "", "allow", 0, 1, 1, 0, 6),
+            ("researcher", "", "", "deny", 0, 1, 1, 0, 3),
+            ("scraper", "", "", "deny", 0, 1, 1, 0, 1),
+            # (role, outcome) — empty role keeps its raw "" key on the wire
+            ("", "analyst", "", "allow", 1, 0, 1, 0, 6),
+            ("", "", "", "deny", 1, 0, 1, 0, 4),
+            # (tool_name, outcome)
+            ("", "", "read_file", "deny", 1, 1, 0, 0, 4),
+        ]
+    )
 
     data = summarize(client, project_id="p1", since_hours=24)
 
     assert data["totals"] == {
-        "all": 10, "allow": 6, "deny": 4, "needs_approval": 0,
+        "all": 10,
+        "allow": 6,
+        "deny": 4,
+        "needs_approval": 0,
     }
     # Breakdowns sorted by "all" desc; grand total must NOT leak into any.
     assert data["by_agent"] == [
@@ -605,6 +610,7 @@ def test_liveness_does_not_ping_clickhouse(
     monkeypatch: pytest.MonkeyPatch, path: str
 ) -> None:
     """Liveness must not touch ClickHouse, so an outage can't cascade into restarts."""
+
     def _fail() -> bool:
         raise AssertionError("liveness probe must not ping ClickHouse")
 
@@ -644,16 +650,18 @@ def test_real_clickhouse_round_trip() -> None:
     assert "session_id" not in clickhouse_client.params
 
     project_id = f"test_proj_{uuid.uuid4().hex[:8]}"
-    event = DecisionEvent(**_event(
-        session_id="sess_test",
-        user_id="u_test",
-        role="analyst",
-        error_type="policy_denied",
-        reason="integration test row",
-        violations=["v1"],
-        hint={"glob": "/workspace/**"},
-        arguments={"path": "/etc/passwd"},
-    ))
+    event = DecisionEvent(
+        **_event(
+            session_id="sess_test",
+            user_id="u_test",
+            role="analyst",
+            error_type="policy_denied",
+            reason="integration test row",
+            violations=["v1"],
+            hint={"glob": "/workspace/**"},
+            arguments={"path": "/etc/passwd"},
+        )
+    )
     event_id = event.event_id
 
     # wait_for_async_insert=1 (in _DECISION_INSERT_SETTINGS) blocks until the

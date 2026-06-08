@@ -58,9 +58,7 @@ async def session_factory():
     )
     async with engine.begin() as conn:
         await conn.run_sync(SQLModel.metadata.create_all)
-    factory = async_sessionmaker(
-        engine, class_=AsyncSession, expire_on_commit=False
-    )
+    factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
     async with factory() as bootstrap:
         await ensure_default_project(bootstrap)
     yield factory
@@ -81,7 +79,10 @@ async def two_tenants(session_factory) -> dict:
         s.add(User(id=_USER_A_ID, email="alice@a.local"))
         s.add(
             OrganizationMember(
-                id=new_id_str("memA"), user_id=_USER_A_ID, org_id=_ORG_A_ID, role="owner"
+                id=new_id_str("memA"),
+                user_id=_USER_A_ID,
+                org_id=_ORG_A_ID,
+                role="owner",
             )
         )
         s.add(Project(id=_PROJECT_A_ID, org_id=_ORG_A_ID, name="project-a"))
@@ -92,7 +93,10 @@ async def two_tenants(session_factory) -> dict:
         s.add(User(id=_USER_B_ID, email="bob@b.local"))
         s.add(
             OrganizationMember(
-                id=new_id_str("memB"), user_id=_USER_B_ID, org_id=_ORG_B_ID, role="owner"
+                id=new_id_str("memB"),
+                user_id=_USER_B_ID,
+                org_id=_ORG_B_ID,
+                role="owner",
             )
         )
         s.add(Project(id=_PROJECT_B_ID, org_id=_ORG_B_ID, name="project-b"))
@@ -213,9 +217,7 @@ def test_unknown_user_returns_401(client: TestClient, two_tenants: dict) -> None
     assert r.status_code == 401
 
 
-def test_nonexistent_project_returns_404(
-    client: TestClient, two_tenants: dict
-) -> None:
+def test_nonexistent_project_returns_404(client: TestClient, two_tenants: dict) -> None:
     """A real user pointing at a project UUID that doesn't exist → 404,
     not 403. We don't leak project existence by 403'ing only on known IDs."""
     r = client.get(

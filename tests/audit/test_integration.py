@@ -5,6 +5,7 @@ Requires: `make clickhouse-up` and `make platform-api` running, and
 
 Opt in with: `pytest -m integration`.
 """
+
 from __future__ import annotations
 
 import asyncio

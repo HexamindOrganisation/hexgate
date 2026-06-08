@@ -26,7 +26,12 @@ def _policy(spec: dict) -> AgentPolicy:
 
 def test_evaluate_allows_explicit_tool() -> None:
     verdict = evaluate_tool_call(
-        _policy({"default_policy": {"mode": "deny"}, "tools": {"web_search": {"mode": "allow"}}}),
+        _policy(
+            {
+                "default_policy": {"mode": "deny"},
+                "tools": {"web_search": {"mode": "allow"}},
+            }
+        ),
         "web_search",
     )
     assert verdict == Verdict(outcome=DecisionOutcome.ALLOW)
@@ -50,7 +55,13 @@ def test_evaluate_needs_approval() -> None:
 
 def test_evaluate_failed_constraint_denies_with_reason() -> None:
     verdict = evaluate_tool_call(
-        _policy({"tools": {"refund": {"mode": "allow", "constraints": ["args.amount <= 100"]}}}),
+        _policy(
+            {
+                "tools": {
+                    "refund": {"mode": "allow", "constraints": ["args.amount <= 100"]}
+                }
+            }
+        ),
         "refund",
         {"amount": 200},
     )
@@ -64,7 +75,12 @@ def test_evaluate_out_of_scope_path_denies_with_hint() -> None:
         _policy(
             {
                 "default_policy": {"mode": "deny"},
-                "tools": {"read_file": {"mode": "allow", "file_scope": {"allowed_paths": ["docs/**"]}}},
+                "tools": {
+                    "read_file": {
+                        "mode": "allow",
+                        "file_scope": {"allowed_paths": ["docs/**"]},
+                    }
+                },
             }
         ),
         "read_file",
@@ -79,7 +95,13 @@ def test_evaluate_propagates_malformed_constraint() -> None:
     """A bad constraint is a config error, not a denial — it must raise."""
     with pytest.raises(ConstraintParseError):
         evaluate_tool_call(
-            _policy({"tools": {"refund": {"mode": "allow", "constraints": ["args.amount <="]}}}),
+            _policy(
+                {
+                    "tools": {
+                        "refund": {"mode": "allow", "constraints": ["args.amount <="]}
+                    }
+                }
+            ),
             "refund",
             {"amount": 10},
         )

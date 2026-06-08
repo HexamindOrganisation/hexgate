@@ -318,12 +318,17 @@ def _rego_string(value: str) -> str:
     return json.dumps(value)
 
 
-def compile_default_only(policy: AgentPolicy, *, package: str = "fortify.policy") -> str:
+def compile_default_only(
+    policy: AgentPolicy, *, package: str = "fortify.policy"
+) -> str:
     """Compile a flat single-policy ``AgentPolicy`` as a one-role module.
 
     Convenience for callers that already have an ``AgentPolicy`` model in
     hand (e.g. legacy single-policy agents). Wraps it as the ``default``
     role and delegates to :func:`compile_to_rego`.
     """
-    payload = {"version": policy.version, "roles": {DEFAULT_ROLE_NAME: policy.model_dump(exclude_defaults=False)}}
+    payload = {
+        "version": policy.version,
+        "roles": {DEFAULT_ROLE_NAME: policy.model_dump(exclude_defaults=False)},
+    }
     return compile_to_rego(payload, package=package)

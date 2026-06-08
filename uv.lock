@@ -670,78 +670,6 @@ wheels = [
 ]
 
 [[package]]
-name = "fortify"
-version = "0.1.0"
-source = { editable = "." }
-dependencies = [
-    { name = "bashlex" },
-    { name = "biscuit-python" },
-    { name = "cryptography" },
-    { name = "google-adk" },
-    { name = "google-genai" },
-    { name = "httpx" },
-    { name = "langchain" },
-    { name = "langchain-core" },
-    { name = "langchain-openai" },
-    { name = "langfuse" },
-    { name = "langgraph" },
-    { name = "litellm" },
-    { name = "nest-asyncio" },
-    { name = "openai-agents" },
-    { name = "openinference-instrumentation-google-adk" },
-    { name = "openinference-instrumentation-openai-agents" },
-    { name = "pydantic" },
-    { name = "pydantic-ai-slim" },
-    { name = "python-dotenv" },
-    { name = "pyyaml" },
-    { name = "rich" },
-    { name = "wasmtime" },
-    { name = "websockets" },
-]
-
-[package.optional-dependencies]
-dev = [
-    { name = "ipykernel" },
-    { name = "jupyter" },
-    { name = "pytest" },
-    { name = "pytest-asyncio" },
-    { name = "ruff" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "bashlex", specifier = ">=0.18" },
-    { name = "biscuit-python", specifier = ">=0.4" },
-    { name = "cryptography", specifier = ">=42" },
-    { name = "google-adk", specifier = ">=1.0" },
-    { name = "google-genai", specifier = ">=1.0" },
-    { name = "httpx", specifier = ">=0.28.1" },
-    { name = "ipykernel", marker = "extra == 'dev'" },
-    { name = "jupyter", marker = "extra == 'dev'" },
-    { name = "langchain" },
-    { name = "langchain-core" },
-    { name = "langchain-openai" },
-    { name = "langfuse" },
-    { name = "langgraph", specifier = ">=0.2" },
-    { name = "litellm", specifier = ">=1.50" },
-    { name = "nest-asyncio", specifier = ">=1.6" },
-    { name = "openai-agents", specifier = ">=0.0.10" },
-    { name = "openinference-instrumentation-google-adk", specifier = ">=0.1.11" },
-    { name = "openinference-instrumentation-openai-agents", specifier = ">=0.1" },
-    { name = "pydantic", specifier = ">=2.12.4" },
-    { name = "pydantic-ai-slim", specifier = ">=1.88.0" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.4.1" },
-    { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=1.0.0" },
-    { name = "python-dotenv", specifier = ">=1.1.1" },
-    { name = "pyyaml", specifier = ">=6.0.2" },
-    { name = "rich", specifier = ">=13.9.4" },
-    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.12.2" },
-    { name = "wasmtime", specifier = ">=20.0" },
-    { name = "websockets", specifier = ">=13.0" },
-]
-provides-extras = ["dev"]
-
-[[package]]
 name = "fqdn"
 version = "1.5.1"
 source = { registry = "https://pypi.org/simple" }
@@ -1515,6 +1443,78 @@ sdist = { url = "https://files.pythonhosted.org/packages/01/ee/02a2c011bdab74c6f
 wheels = [
     { url = "https://files.pythonhosted.org/packages/04/4b/29cac41a4d98d144bf5f6d33995617b185d14b22401f75ca86f384e87ff1/h11-0.16.0-py3-none-any.whl", hash = "sha256:63cf8bbe7522de3bf65932fda1d9c2772064ffb3dae62d55932da54b31cb6c86", size = 37515, upload-time = "2025-04-24T03:35:24.344Z" },
 ]
+
+[[package]]
+name = "hexgate"
+version = "0.1.0"
+source = { editable = "." }
+dependencies = [
+    { name = "bashlex" },
+    { name = "biscuit-python" },
+    { name = "cryptography" },
+    { name = "google-adk" },
+    { name = "google-genai" },
+    { name = "httpx" },
+    { name = "langchain" },
+    { name = "langchain-core" },
+    { name = "langchain-openai" },
+    { name = "langfuse" },
+    { name = "langgraph" },
+    { name = "litellm" },
+    { name = "nest-asyncio" },
+    { name = "openai-agents" },
+    { name = "openinference-instrumentation-google-adk" },
+    { name = "openinference-instrumentation-openai-agents" },
+    { name = "pydantic" },
+    { name = "pydantic-ai-slim" },
+    { name = "python-dotenv" },
+    { name = "pyyaml" },
+    { name = "rich" },
+    { name = "wasmtime" },
+    { name = "websockets" },
+]
+
+[package.optional-dependencies]
+dev = [
+    { name = "ipykernel" },
+    { name = "jupyter" },
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+    { name = "ruff" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "bashlex", specifier = ">=0.18" },
+    { name = "biscuit-python", specifier = ">=0.4" },
+    { name = "cryptography", specifier = ">=42" },
+    { name = "google-adk", specifier = ">=1.0" },
+    { name = "google-genai", specifier = ">=1.0" },
+    { name = "httpx", specifier = ">=0.28.1" },
+    { name = "ipykernel", marker = "extra == 'dev'" },
+    { name = "jupyter", marker = "extra == 'dev'" },
+    { name = "langchain" },
+    { name = "langchain-core" },
+    { name = "langchain-openai" },
+    { name = "langfuse" },
+    { name = "langgraph", specifier = ">=0.2" },
+    { name = "litellm", specifier = ">=1.50" },
+    { name = "nest-asyncio", specifier = ">=1.6" },
+    { name = "openai-agents", specifier = ">=0.0.10" },
+    { name = "openinference-instrumentation-google-adk", specifier = ">=0.1.11" },
+    { name = "openinference-instrumentation-openai-agents", specifier = ">=0.1" },
+    { name = "pydantic", specifier = ">=2.12.4" },
+    { name = "pydantic-ai-slim", specifier = ">=1.88.0" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.4.1" },
+    { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=1.0.0" },
+    { name = "python-dotenv", specifier = ">=1.1.1" },
+    { name = "pyyaml", specifier = ">=6.0.2" },
+    { name = "rich", specifier = ">=13.9.4" },
+    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.12.2" },
+    { name = "wasmtime", specifier = ">=20.0" },
+    { name = "websockets", specifier = ">=13.0" },
+]
+provides-extras = ["dev"]
 
 [[package]]
 name = "hf-xet"

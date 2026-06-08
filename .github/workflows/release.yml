@@ -1,0 +1,246 @@
+name: release
+
+# Manual trigger only — click "Run workflow" in the Actions tab.
+# Pick a version-type (or explicit version), the workflow runs the full
+# test matrix as a gate, bumps the SDK version, builds sdist + wheel,
+# publishes to PyPI via trusted publishing (OIDC — no token), commits
+# the bump, tags it, and opens a GitHub release with auto-generated notes.
+#
+# ----------------------------------------------------------------------
+# PyPI trusted-publisher registration — REQUIRED before the first run:
+#
+#   https://pypi.org/manage/account/publishing/  →  "Add a new pending publisher"
+#     PyPI Project Name:  hexgate
+#     Owner:              HexamindOrganisation
+#     Repository name:    coolagents
+#     Workflow name:      release.yml
+#     Environment name:   pypi-release
+#
+# Repeat on https://test.pypi.org/manage/account/publishing/ for the
+# TestPyPI dry-run path.
+#
+# Also create a GitHub Environment named `pypi-release`:
+#   Settings → Environments → New environment → "pypi-release"
+#     - Required reviewers: at least one maintainer
+#     - Deployment branches: main only
+# ----------------------------------------------------------------------
+
+on:
+  workflow_dispatch:
+    inputs:
+      version-type:
+        description: "Bump kind (ignored when 'version' is set)."
+        type: choice
+        required: true
+        default: patch
+        options:
+          - patch
+          - minor
+          - major
+      version:
+        description: "Explicit version like 1.2.3. Overrides version-type."
+        type: string
+        required: false
+        default: ""
+      dry-run:
+        description: "Run everything except publish, commit, and tag."
+        type: boolean
+        required: false
+        default: false
+      target:
+        description: "Where to publish. Use 'testpypi' for a dry run on the test index."
+        type: choice
+        required: true
+        default: pypi
+        options:
+          - pypi
+          - testpypi
+
+# `id-token: write` lets the runner mint an OIDC token for trusted
+# publishing — PyPI verifies that token against the registered publisher
+# (this repo + workflow filename + environment) and no PYPI_API_TOKEN is
+# needed.
+# `contents: write` is needed for the version-bump commit + tag push.
+permissions:
+  contents: write
+  id-token: write
+
+# Only one release at a time — protects against the version-bump race
+# where two concurrent runs both bump from N to N+1.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    # Ties this job to the GitHub Environment defined in the repo
+    # settings — that's what enforces the required-reviewer prompt and
+    # the main-only branch restriction. Also what PyPI's trusted-publisher
+    # entry pins against (we registered with Environment = pypi-release).
+    environment: pypi-release
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # Full history so the GitHub release-notes generator can
+          # `git log` since the previous tag.
+          fetch-depth: 0
+          # Default token — used for the version-bump commit + tag push.
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      # --------------------------------------------------------------
+      # 1. Toolchain (matches tests.yml exactly so a green release =
+      #    a green tests run for that same SHA).
+      # --------------------------------------------------------------
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Set up Python 3.13
+        run: uv python install 3.13
+
+      - name: Install OPA
+        run: |
+          curl -fsSL -o opa https://openpolicyagent.org/downloads/v0.70.0/opa_linux_amd64_static
+          chmod +x opa
+          sudo mv opa /usr/local/bin/opa
+          opa version
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: platform/dashboard/pnpm-lock.yaml
+
+      # --------------------------------------------------------------
+      # 2. Gate: re-run the full test matrix inline. We're not just
+      #    publishing what tests.yml said was green at PR time — main
+      #    may have moved since. Self-contained run, ~2-3 minutes, vs
+      #    the alternative ("trust the operator") which has bitten
+      #    every other release pipeline I've seen.
+      # --------------------------------------------------------------
+
+      - name: SDK — lint + format + tests
+        run: |
+          uv sync --extra dev
+          make check
+
+      - name: Platform API — tests
+        run: |
+          cd platform/api && uv sync --group dev
+          cd ../.. && make platform-api-test
+
+      - name: Dashboard — lint + typecheck + tests
+        working-directory: platform/dashboard
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm lint
+          pnpm typecheck
+          pnpm test
+
+      # --------------------------------------------------------------
+      # 3. Bump the SDK version. Only the root `pyproject.toml`
+      #    (the published `hexgate` package) — platform/api/ is not
+      #    published from this workflow.
+      # --------------------------------------------------------------
+
+      - name: Bump version
+        id: bump
+        run: |
+          if [ "${{ inputs.target }}" = "testpypi" ]; then
+            # TestPyPI runs use an ephemeral dev version tied to the
+            # workflow run number. Each dry-run gets its own slot
+            # (`0.0.0.dev<run>`) so iterating against TestPyPI never
+            # collides on re-upload, and the version is obviously
+            # non-canonical so it can't be mistaken for a real release.
+            # We deliberately ignore inputs.version / inputs.version-type
+            # here — the user's choice is what they intend to ship to
+            # *real* PyPI, and that decision shouldn't be consumed by a
+            # dry run. The pyproject.toml change is never committed back
+            # to main on this path (see step 6).
+            uv version "0.0.0.dev${{ github.run_number }}"
+          elif [ -n "${{ inputs.version }}" ]; then
+            # Explicit version (e.g. "1.2.3") overrides version-type.
+            uv version "${{ inputs.version }}"
+          else
+            uv version --bump "${{ inputs.version-type }}"
+          fi
+          # Re-read what uv wrote, so the rest of the workflow has the
+          # canonical value (handles dev / rc / etc. suffixes correctly).
+          NEXT=$(uv version --short)
+          echo "version=$NEXT" >> "$GITHUB_OUTPUT"
+          echo "Resolved next version: $NEXT"
+
+      # --------------------------------------------------------------
+      # 4. Build sdist + wheel. `uv build` writes to `dist/`.
+      # --------------------------------------------------------------
+
+      - name: Build sdist + wheel
+        run: |
+          uv build
+          ls -la dist/
+
+      # --------------------------------------------------------------
+      # 5. Publish via OIDC trusted publishing. No token needed —
+      #    pypa/gh-action-pypi-publish reads the OIDC token from the
+      #    env vars GitHub Actions auto-sets when `id-token: write`
+      #    is granted and exchanges it for a short-lived PyPI upload
+      #    token. PyPI verifies against the registered publisher.
+      # --------------------------------------------------------------
+
+      - name: Publish to PyPI
+        if: ${{ !inputs.dry-run && inputs.target == 'pypi' }}
+        uses: pypa/gh-action-pypi-publish@release/v1
+
+      - name: Publish to TestPyPI
+        if: ${{ !inputs.dry-run && inputs.target == 'testpypi' }}
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+
+      - name: Dry-run summary
+        if: ${{ inputs.dry-run }}
+        run: |
+          echo "Dry run — skipping publish, commit, tag, release."
+          echo "Would have published hexgate@${{ steps.bump.outputs.version }} to ${{ inputs.target }}"
+
+      # --------------------------------------------------------------
+      # 6. Persist the version bump. Only on a real run — dry-runs and
+      #    TestPyPI runs don't dirty `main`.
+      #
+      #    Skipping for testpypi is deliberate: TestPyPI is for
+      #    iteration ("does the workflow even work?") and shouldn't
+      #    leak version-bump commits onto main. Real release-to-prod
+      #    is the only path that touches git state.
+      # --------------------------------------------------------------
+
+      - name: Commit + tag (PyPI only)
+        if: ${{ !inputs.dry-run && inputs.target == 'pypi' }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add pyproject.toml uv.lock
+          git commit -m "release: v${{ steps.bump.outputs.version }}"
+          git tag "v${{ steps.bump.outputs.version }}"
+          git push origin HEAD:main
+          git push origin "v${{ steps.bump.outputs.version }}"
+
+      - name: GitHub release
+        if: ${{ !inputs.dry-run && inputs.target == 'pypi' }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: "v${{ steps.bump.outputs.version }}"
+          name: "v${{ steps.bump.outputs.version }}"
+          # Auto-generate notes from commits since the previous tag.
+          generate_release_notes: true

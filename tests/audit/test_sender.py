@@ -1,4 +1,5 @@
 """AuditSender behavior. Mocks the httpx.AsyncClient on the sender instance."""
+
 from __future__ import annotations
 
 import asyncio
@@ -139,12 +140,14 @@ def test_rebuilds_loop_bound_state_across_event_loops() -> None:
 
     asyncio.run(_emit_and_drain())
     first_loop, first_client, first_sem = (
-        sender._loop, sender._client, sender._semaphore,
+        sender._loop,
+        sender._client,
+        sender._semaphore,
     )
 
     asyncio.run(_emit_and_drain())  # fresh loop — must not raise
 
     assert sender._loop is not first_loop
-    assert sender._client is not first_client       # rebuilt on the new loop
+    assert sender._client is not first_client  # rebuilt on the new loop
     assert sender._semaphore is not first_sem
     sender._client.post.assert_called_once()

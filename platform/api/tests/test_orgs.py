@@ -55,9 +55,7 @@ async def session_factory():
     )
     async with engine.begin() as conn:
         await conn.run_sync(SQLModel.metadata.create_all)
-    factory = async_sessionmaker(
-        engine, class_=AsyncSession, expire_on_commit=False
-    )
+    factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
     async with factory() as bootstrap:
         await ensure_default_project(bootstrap)
     yield factory
@@ -140,17 +138,13 @@ async def test_create_org_inserts_owner_membership_atomically(
         await s.commit()
         await s.refresh(u)
 
-        org = await create_org(
-            s, name="Acme", slug="acme-corp", owner_user_id=u.id
-        )
+        org = await create_org(s, name="Acme", slug="acme-corp", owner_user_id=u.id)
 
         # Both rows committed.
         assert org.id
         members = (
             await s.exec(
-                select(OrganizationMember).where(
-                    OrganizationMember.org_id == org.id
-                )
+                select(OrganizationMember).where(OrganizationMember.org_id == org.id)
             )
         ).all()
         assert len(members) == 1
@@ -222,9 +216,7 @@ def test_register_creates_personal_default_org(
     async def _check() -> None:
         async with session_factory() as s:
             u = (
-                await s.exec(
-                    select(User).where(User.email == "founder@example.com")
-                )
+                await s.exec(select(User).where(User.email == "founder@example.com"))
             ).one()
             orgs = await list_orgs_for_user(s, u.id)
             # The new user belongs to exactly one org — their own — as owner.
@@ -267,11 +259,7 @@ async def test_list_orgs_returns_role_per_org(session_factory) -> None:
         s.add(other)
         await s.commit()
         await s.refresh(other)
-        s.add(
-            OrganizationMember(
-                user_id=other.id, org_id=org_b.id, role=ROLE_OWNER
-            )
-        )
+        s.add(OrganizationMember(user_id=other.id, org_id=org_b.id, role=ROLE_OWNER))
         member_b.role = ROLE_MEMBER
         s.add(member_b)
         await s.commit()
@@ -305,11 +293,7 @@ async def test_remove_member_succeeds_for_existing_membership(
         s.add(u)
         await s.commit()
         await s.refresh(u)
-        s.add(
-            OrganizationMember(
-                user_id=u.id, org_id=DEFAULT_ORG_ID, role=ROLE_MEMBER
-            )
-        )
+        s.add(OrganizationMember(user_id=u.id, org_id=DEFAULT_ORG_ID, role=ROLE_MEMBER))
         await s.commit()
 
         ok = await remove_member(s, org_id=DEFAULT_ORG_ID, user_id=u.id)
@@ -317,9 +301,7 @@ async def test_remove_member_succeeds_for_existing_membership(
         # And the row really is gone.
         rows = (
             await s.exec(
-                select(OrganizationMember).where(
-                    OrganizationMember.user_id == u.id
-                )
+                select(OrganizationMember).where(OrganizationMember.user_id == u.id)
             )
         ).all()
         assert rows == []
@@ -335,9 +317,7 @@ async def test_remove_member_refuses_last_owner(session_factory) -> None:
 
     async with session_factory() as s:
         with pytest.raises(LastOwnerError):
-            await remove_member(
-                s, org_id=DEFAULT_ORG_ID, user_id=DEFAULT_USER_ID
-            )
+            await remove_member(s, org_id=DEFAULT_ORG_ID, user_id=DEFAULT_USER_ID)
 
 
 async def test_remove_member_allows_owner_when_others_exist(
@@ -349,11 +329,7 @@ async def test_remove_member_allows_owner_when_others_exist(
         s.add(u)
         await s.commit()
         await s.refresh(u)
-        s.add(
-            OrganizationMember(
-                user_id=u.id, org_id=DEFAULT_ORG_ID, role=ROLE_OWNER
-            )
-        )
+        s.add(OrganizationMember(user_id=u.id, org_id=DEFAULT_ORG_ID, role=ROLE_OWNER))
         await s.commit()
 
         # Now there are two owners. Removing the co-owner is fine.
@@ -372,11 +348,7 @@ async def test_change_member_role_updates_existing_row(session_factory) -> None:
         s.add(u)
         await s.commit()
         await s.refresh(u)
-        s.add(
-            OrganizationMember(
-                user_id=u.id, org_id=DEFAULT_ORG_ID, role=ROLE_MEMBER
-            )
-        )
+        s.add(OrganizationMember(user_id=u.id, org_id=DEFAULT_ORG_ID, role=ROLE_MEMBER))
         await s.commit()
 
         member = await change_member_role(
@@ -417,11 +389,7 @@ async def test_change_member_role_allows_demoting_when_others_owners(
         s.add(u)
         await s.commit()
         await s.refresh(u)
-        s.add(
-            OrganizationMember(
-                user_id=u.id, org_id=DEFAULT_ORG_ID, role=ROLE_OWNER
-            )
-        )
+        s.add(OrganizationMember(user_id=u.id, org_id=DEFAULT_ORG_ID, role=ROLE_OWNER))
         await s.commit()
 
         # Two owners → either one can be demoted.
@@ -526,23 +494,17 @@ def test_list_orgs_repairs_missing_personal_org(
     async def _strip_org() -> None:
         async with session_factory() as s:
             u = (
-                await s.exec(
-                    select(User).where(User.email == "orphan@example.com")
-                )
+                await s.exec(select(User).where(User.email == "orphan@example.com"))
             ).one()
             membership = (
                 await s.exec(
-                    select(OrganizationMember).where(
-                        OrganizationMember.user_id == u.id
-                    )
+                    select(OrganizationMember).where(OrganizationMember.user_id == u.id)
                 )
             ).one()
             org_id = membership.org_id
             await s.delete(membership)
             org = (
-                await s.exec(
-                    select(Organization).where(Organization.id == org_id)
-                )
+                await s.exec(select(Organization).where(Organization.id == org_id))
             ).one()
             await s.delete(org)
             await s.commit()
@@ -585,9 +547,7 @@ def test_list_orgs_skips_repair_when_org_already_present(
     async def _count_orgs() -> int:
         async with session_factory() as s:
             u = (
-                await s.exec(
-                    select(User).where(User.email == "healthy@example.com")
-                )
+                await s.exec(select(User).where(User.email == "healthy@example.com"))
             ).one()
             return len(await list_orgs_for_user(s, u.id))
 
@@ -646,10 +606,10 @@ def test_create_org_rejects_malformed_slug(client: TestClient) -> None:
     _signup_and_login(client, "eve@example.com", "correcthorsebattery")
 
     for bad in ("Foo", "-bad", "bad-", "foo!bar", ""):
-        r = client.post(
-            "/v1/orgs", json={"name": "X", "slug": bad}
+        r = client.post("/v1/orgs", json={"name": "X", "slug": bad})
+        assert r.status_code == 422, (
+            f"expected 422 for slug={bad!r}, got {r.status_code}"
         )
-        assert r.status_code == 422, f"expected 422 for slug={bad!r}, got {r.status_code}"
 
 
 # ---- GET /v1/orgs/{id} ---------------------------------------------------
@@ -720,9 +680,7 @@ def test_patch_org_409_on_slug_collision(client: TestClient) -> None:
     assert r.status_code == 409
 
 
-def test_patch_org_403_for_plain_member(
-    client: TestClient, session_factory
-) -> None:
+def test_patch_org_403_for_plain_member(client: TestClient, session_factory) -> None:
     """Members (not admin/owner) can't update the org. Pre-create a
     user as plain member of the default org and try."""
     import asyncio
@@ -740,9 +698,7 @@ def test_patch_org_403_for_plain_member(
             from sqlmodel import select
 
             u = (
-                await s.exec(
-                    select(User).where(User.email == "memberonly@example.com")
-                )
+                await s.exec(select(User).where(User.email == "memberonly@example.com"))
             ).one()
             s.add(
                 OrganizationMember(
@@ -772,9 +728,7 @@ def test_patch_org_403_for_plain_member(
 # ---------------------------------------------------------------------------
 
 
-async def _add_member(
-    session_factory, *, email: str, org_id: str, role: str
-) -> str:
+async def _add_member(session_factory, *, email: str, org_id: str, role: str) -> str:
     """Test helper: add (or create) a user as a member of an org.
 
     Returns the user's id. If the email already exists, just adds the
@@ -786,9 +740,7 @@ async def _add_member(
     async with session_factory() as s:
         from sqlmodel import select
 
-        existing = (
-            await s.exec(select(User).where(User.email == email))
-        ).first()
+        existing = (await s.exec(select(User).where(User.email == email))).first()
         if existing is None:
             existing = User(email=email)
             s.add(existing)
@@ -844,9 +796,7 @@ def test_list_members_404_for_unknown_org(client: TestClient) -> None:
 # ---- PATCH /v1/orgs/{id}/members/{uid} -----------------------------------
 
 
-def test_promote_member_to_admin_as_owner(
-    client: TestClient, session_factory
-) -> None:
+def test_promote_member_to_admin_as_owner(client: TestClient, session_factory) -> None:
     """Owner can promote a plain member to admin via PATCH."""
     import asyncio
 
@@ -881,7 +831,10 @@ def test_patch_member_role_403_for_plain_member(
     org_id = client.get("/v1/orgs").json()[0]["id"]
     member_user_id = asyncio.get_event_loop().run_until_complete(
         _add_member(
-            session_factory, email="memberX@example.com", org_id=org_id, role=ROLE_MEMBER
+            session_factory,
+            email="memberX@example.com",
+            org_id=org_id,
+            role=ROLE_MEMBER,
         )
     )
 
@@ -896,9 +849,7 @@ def test_patch_member_role_403_for_plain_member(
     assert "admin or owner" in r.json()["detail"].lower()
 
 
-def test_admin_cannot_promote_to_owner(
-    client: TestClient, session_factory
-) -> None:
+def test_admin_cannot_promote_to_owner(client: TestClient, session_factory) -> None:
     """Privilege escalation guard — an admin PATCHing themselves (or
     anyone else) to owner is refused with 403.
 
@@ -929,9 +880,7 @@ def test_admin_cannot_promote_to_owner(
     assert "owner" in r.json()["detail"].lower()
 
 
-def test_owner_can_promote_admin_to_owner(
-    client: TestClient, session_factory
-) -> None:
+def test_owner_can_promote_admin_to_owner(client: TestClient, session_factory) -> None:
     """Sanity-check the other side of the rank check — owners can still
     set any role. The fix shouldn't restrict the owner path."""
     import asyncio
@@ -960,9 +909,7 @@ def test_demote_last_owner_returns_409(client: TestClient) -> None:
     org_id = client.get("/v1/orgs").json()[0]["id"]
     me_id = client.get("/v1/users/me").json()["id"]
 
-    r = client.patch(
-        f"/v1/orgs/{org_id}/members/{me_id}", json={"role": ROLE_MEMBER}
-    )
+    r = client.patch(f"/v1/orgs/{org_id}/members/{me_id}", json={"role": ROLE_MEMBER})
     assert r.status_code == 409
     assert "last owner" in r.json()["detail"].lower()
 
@@ -981,9 +928,7 @@ def test_demote_owner_succeeds_when_other_owners_exist(
         )
     )
 
-    r = client.patch(
-        f"/v1/orgs/{org_id}/members/{co_id}", json={"role": ROLE_MEMBER}
-    )
+    r = client.patch(f"/v1/orgs/{org_id}/members/{co_id}", json={"role": ROLE_MEMBER})
     assert r.status_code == 200
     assert r.json()["role"] == ROLE_MEMBER
 
@@ -1006,9 +951,7 @@ def test_patch_member_422_for_invalid_role(client: TestClient) -> None:
     org_id = client.get("/v1/orgs").json()[0]["id"]
     me_id = client.get("/v1/users/me").json()["id"]
 
-    r = client.patch(
-        f"/v1/orgs/{org_id}/members/{me_id}", json={"role": "superadmin"}
-    )
+    r = client.patch(f"/v1/orgs/{org_id}/members/{me_id}", json={"role": "superadmin"})
     assert r.status_code == 422
 
 
@@ -1034,9 +977,7 @@ def test_owner_removes_member(client: TestClient, session_factory) -> None:
     assert victim_id not in {m["user_id"] for m in members}
 
 
-def test_member_can_remove_self(
-    client: TestClient, session_factory
-) -> None:
+def test_member_can_remove_self(client: TestClient, session_factory) -> None:
     """A plain member can leave the org by DELETEing their own row.
 
     We exercise self-removal via X-Dev-User since the manually-added
@@ -1061,9 +1002,7 @@ def test_member_can_remove_self(
     assert r.status_code == 204
 
 
-def test_member_cannot_remove_someone_else(
-    client: TestClient, session_factory
-) -> None:
+def test_member_cannot_remove_someone_else(client: TestClient, session_factory) -> None:
     """Plain member tries to remove a third party → 403. The
     require_org_admin_or_self gate fires."""
     import asyncio
@@ -1104,7 +1043,5 @@ def test_delete_member_404_for_unknown_user(client: TestClient) -> None:
     _signup_and_login(client, "explorer@example.com", "correcthorsebattery")
     org_id = client.get("/v1/orgs").json()[0]["id"]
 
-    r = client.delete(
-        f"/v1/orgs/{org_id}/members/00000000-0000-0000-0000-deadbeef0000"
-    )
+    r = client.delete(f"/v1/orgs/{org_id}/members/00000000-0000-0000-0000-deadbeef0000")
     assert r.status_code == 404

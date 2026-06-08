@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from 'react'
-/* eslint-disable react-hooks/exhaustive-deps */
 
 export type ToolCallState = 'started' | 'completed' | 'failed'
 export type BlockType = 'text' | 'reasoning' | 'tool_call'

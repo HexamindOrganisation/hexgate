@@ -1,4 +1,5 @@
 """Settings validation — the dev-default-password-on-remote-host guard."""
+
 from __future__ import annotations
 
 import pytest
