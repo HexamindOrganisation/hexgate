@@ -36,7 +36,7 @@ needs_opa = pytest.mark.skipif(not _OPA_AVAILABLE, reason="opa not on PATH")
 def _permissive_sig_policy():
     """A SignaturePolicy that doesn't refuse anything — for dispatch tests
     that aren't exercising the signature matrix."""
-    from fortify.agents.loader import SignaturePolicy
+    from fortify.security.source import SignaturePolicy
 
     return SignaturePolicy(verify_with=None, require_signature=False)
 
@@ -262,7 +262,7 @@ def test_yaml_source_missing_file_raises(tmp_path: Path) -> None:
 def test_local_dispatch_routes_dir_to_bundle_dir_source(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from fortify.agents.loader import _local_policy_source
+    from fortify.security.source import _local_policy_source
 
     _write_bundle_dir(_DEMO_YAML, tmp_path)
     monkeypatch.setenv("FORTIFY_LOCAL_POLICY", str(tmp_path))
@@ -278,7 +278,7 @@ def test_local_dispatch_routes_dir_to_bundle_dir_source(
 def test_local_dispatch_routes_yaml_to_yaml_source(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from fortify.agents.loader import _local_policy_source
+    from fortify.security.source import _local_policy_source
 
     yaml_path = tmp_path / "policy.yaml"
     yaml_path.write_text(_DEMO_YAML, encoding="utf-8")
@@ -292,7 +292,7 @@ def test_local_dispatch_routes_yaml_to_yaml_source(
 
 
 def test_local_dispatch_unset_returns_none(monkeypatch: pytest.MonkeyPatch) -> None:
-    from fortify.agents.loader import _local_policy_source
+    from fortify.security.source import _local_policy_source
 
     monkeypatch.delenv("FORTIFY_LOCAL_POLICY", raising=False)
     assert _local_policy_source(_permissive_sig_policy()) is None
@@ -303,7 +303,7 @@ def test_local_dispatch_rejects_unknown_shape(
 ) -> None:
     """Pointing the env var at a random file (not yaml, not a bundle dir)
     is a configuration error, not a silent fallback."""
-    from fortify.agents.loader import _local_policy_source
+    from fortify.security.source import _local_policy_source
 
     target = tmp_path / "policy.txt"
     target.write_text("not yaml", encoding="utf-8")
@@ -318,7 +318,7 @@ def test_local_override_returns_bundle_and_source(
 ) -> None:
     """The high-level helper returns BOTH the initial bundle (for
     enforce_policy) and the source (for runtime refresh)."""
-    from fortify.agents.loader import _local_policy_override
+    from fortify.security.source import _local_policy_override
 
     yaml_path = tmp_path / "policy.yaml"
     yaml_path.write_text(_DEMO_YAML, encoding="utf-8")
@@ -341,7 +341,7 @@ def test_local_override_require_signature_rejects_unsigned_yaml(
 ) -> None:
     """REQUIRE_SIGNATURE + yaml source without a sign-key → refuse,
     don't sleepwalk into running unsigned policy."""
-    from fortify.agents.loader import _local_policy_override
+    from fortify.security.source import _local_policy_override
 
     yaml_path = tmp_path / "policy.yaml"
     yaml_path.write_text(_DEMO_YAML, encoding="utf-8")

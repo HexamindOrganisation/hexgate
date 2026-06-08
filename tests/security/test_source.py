@@ -27,7 +27,7 @@ from fortify.security import (
     generate_keypair,
     sign_bytes,
 )
-from fortify.security.source import PlatformPolicySource, _warn_if_unverified
+from fortify.security.source import PlatformPolicySource, SignaturePolicy
 
 
 _OPA_AVAILABLE = shutil.which("opa") is not None
@@ -35,18 +35,18 @@ needs_opa = pytest.mark.skipif(not _OPA_AVAILABLE, reason="opa not on PATH")
 
 
 # ---------------------------------------------------------------------------
-# _warn_if_unverified — binding-path counterpart to the loader's
-# SignaturePolicy.warn_if_unverified (same signal for a signed local bundle).
+# SignaturePolicy.warn_if_unverified — the single signal for a signed local
+# bundle loaded without a pubkey, shared by the loader and binding paths.
 # ---------------------------------------------------------------------------
 
 
 def test_warn_if_unverified_warns_for_signed_bundle_without_pubkey(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     """Signed bundle + no pubkey configured → warn that it wasn't verified."""
-    monkeypatch.delenv("FORTIFY_BUNDLE_PUBKEY_PATH", raising=False)
+    policy = SignaturePolicy(verify_with=None, require_signature=False)
 
-    _warn_if_unverified(SimpleNamespace(is_signed=True))
+    policy.warn_if_unverified(SimpleNamespace(is_signed=True))
 
     err = capsys.readouterr().err
     assert "signature NOT verified" in err
@@ -54,23 +54,23 @@ def test_warn_if_unverified_warns_for_signed_bundle_without_pubkey(
 
 
 def test_warn_if_unverified_silent_when_pubkey_configured(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """A pubkey is configured → BundleDir verified on load; no warning."""
-    monkeypatch.setenv("FORTIFY_BUNDLE_PUBKEY_PATH", "/some/key.public")
+    """A pubkey is configured (verify_with set) → no warning."""
+    policy = SignaturePolicy(verify_with=b"\x00" * 32, require_signature=False)
 
-    _warn_if_unverified(SimpleNamespace(is_signed=True))
+    policy.warn_if_unverified(SimpleNamespace(is_signed=True))
 
     assert capsys.readouterr().err == ""
 
 
 def test_warn_if_unverified_silent_for_unsigned_bundle(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     """Unsigned bundle → nothing to verify, nothing to warn about."""
-    monkeypatch.delenv("FORTIFY_BUNDLE_PUBKEY_PATH", raising=False)
+    policy = SignaturePolicy(verify_with=None, require_signature=False)
 
-    _warn_if_unverified(SimpleNamespace(is_signed=False))
+    policy.warn_if_unverified(SimpleNamespace(is_signed=False))
 
     assert capsys.readouterr().err == ""
 

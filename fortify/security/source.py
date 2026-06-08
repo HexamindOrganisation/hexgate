@@ -375,8 +375,10 @@ class YamlPolicySource:
 
 
 # ---------------------------------------------------------------------------
-# FORTIFY_LOCAL_POLICY — env var → PolicySource factory
-# Moved from fortify.agents.loader (which re-imports them for back-compat).
+# FORTIFY_LOCAL_POLICY — env var → PolicySource factory. Single source of
+# truth for the REQUIRE_SIGNATURE matrix (SignaturePolicy), used by both the
+# binding path (resolve_policy) and the loaders. fortify.agents.loader
+# re-imports _local_policy_override from here for back-compat.
 # ---------------------------------------------------------------------------
 
 _LOCAL_POLICY_ENV_VAR = "FORTIFY_LOCAL_POLICY"
@@ -390,32 +392,99 @@ def _truthy(value: str | None) -> bool:
     return (value or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
-def _resolve_pubkey_for_verification(override_path: str) -> bytes | None:
-    """Resolve ``FORTIFY_BUNDLE_PUBKEY_PATH`` into raw bytes for a local source.
+class SignaturePolicy:
+    """The (pubkey, require_signature) pair resolved once from env.
 
-    Returns ``None`` when no pubkey is configured AND the env doesn't
-    require signatures. Raises when ``FORTIFY_BUNDLE_REQUIRE_SIGNATURE``
-    is set but no key is provided (we'd have nothing to verify against).
+    Concentrates every cell of the ``FORTIFY_BUNDLE_REQUIRE_SIGNATURE``
+    × ``FORTIFY_BUNDLE_PUBKEY_PATH`` × (yaml | bundle-dir) matrix into
+    one place so the safety story is auditable from a single file.
+
+    Matrix:
+      * require=true  + no pubkey               → :meth:`from_env` raises
+        (no key to verify against — refuse to start).
+      * require=true  + yaml + unsigned bundle  → :meth:`check_yaml_bundle`
+        raises at fetch time (yaml produces unsigned by default; refuse to
+        enforce when strict mode demands authenticity).
+      * require=false + signed bundle + pubkey  → BundleDir verifies via
+        ``verify_with`` on every reload.
+      * require=false + signed bundle + no key  → :meth:`warn_if_unverified`
+        emits a heads-up at announce time. Dev sees "signed" + warning;
+        no enforcement happens.
+      * require=false + unsigned                → silent OK.
     """
-    require = _truthy(os.environ.get(_REQUIRE_SIGNATURE_ENV_VAR))
-    pubkey_path = os.environ.get(_BUNDLE_PUBKEY_ENV_VAR)
 
-    if not pubkey_path:
-        if require:
+    def __init__(self, *, verify_with: bytes | None, require_signature: bool) -> None:
+        self.verify_with = verify_with
+        self.require_signature = require_signature
+
+    @classmethod
+    def from_env(cls, override_path: str) -> "SignaturePolicy":
+        """Build the policy from env vars, raising on require-without-key.
+
+        ``override_path`` is the value of ``FORTIFY_LOCAL_POLICY`` — used
+        only for error messages so the operator sees which load is
+        being refused. Called unconditionally (before path-shape
+        dispatch), so ``require=true`` + no pubkey fails fast for both
+        the yaml and bundle-dir paths.
+        """
+        require = _truthy(os.environ.get(_REQUIRE_SIGNATURE_ENV_VAR))
+        pubkey_path = os.environ.get(_BUNDLE_PUBKEY_ENV_VAR)
+
+        if not pubkey_path:
+            if require:
+                raise RuntimeError(
+                    f"{_REQUIRE_SIGNATURE_ENV_VAR} is set but "
+                    f"{_BUNDLE_PUBKEY_ENV_VAR} is unset — no key to verify "
+                    f"the bundle at {override_path!r} against."
+                )
+            return cls(verify_with=None, require_signature=False)
+
+        try:
+            verify_with = decode_key(
+                Path(pubkey_path).read_text(encoding="utf-8").strip()
+            )
+        except (OSError, SignatureError) as exc:
+            raise RuntimeError(
+                f"{_BUNDLE_PUBKEY_ENV_VAR}={pubkey_path!r} could not be read "
+                f"as a base64url public key: {exc}"
+            ) from exc
+        return cls(verify_with=verify_with, require_signature=require)
+
+    def check_yaml_bundle(self, bundle: PolicyBundle, yaml_path: str) -> None:
+        """At fetch time, refuse an unsigned yaml-built bundle under strict mode.
+
+        ``BundleDirPolicySource`` is already covered: its constructor
+        receives :attr:`verify_with` and verifies on every reload. The
+        yaml branch has nothing for BundleDir to verify against (yaml
+        sources build their bundles locally) — so strict mode means
+        either sign locally via ``FORTIFY_BUNDLE_SIGN_KEY_PATH`` or
+        switch to a pre-built signed bundle dir.
+        """
+        if self.require_signature and not bundle.is_signed:
             raise RuntimeError(
                 f"{_REQUIRE_SIGNATURE_ENV_VAR} is set but "
-                f"{_BUNDLE_PUBKEY_ENV_VAR} is unset — no key to verify the "
-                f"bundle at {override_path!r} against."
+                f"{_LOCAL_POLICY_ENV_VAR}={yaml_path!r} points at an "
+                f"unsigned yaml source. Set {_BUNDLE_SIGN_KEY_ENV_VAR} to "
+                "sign locally, or switch to a pre-built signed bundle dir."
             )
-        return None
 
-    try:
-        return decode_key(Path(pubkey_path).read_text(encoding="utf-8").strip())
-    except (OSError, SignatureError) as exc:
-        raise RuntimeError(
-            f"{_BUNDLE_PUBKEY_ENV_VAR}={pubkey_path!r} could not be read as a "
-            f"base64url public key: {exc}"
-        ) from exc
+    def warn_if_unverified(self, bundle: PolicyBundle) -> None:
+        """Emit a heads-up when a signed bundle loads without a pubkey.
+
+        Permissive-mode only — strict mode would already have raised in
+        :meth:`from_env`. Without the warning the dev sees "signed" in
+        the announce line and reasonably assumes authenticity was
+        checked, when it wasn't. Verification behaviour is unchanged
+        (we never verified there); only the heads-up is restored.
+        """
+        if bundle.is_signed and self.verify_with is None:
+            import sys
+
+            print(
+                f"[fortify] warning: override bundle is signed but "
+                f"{_BUNDLE_PUBKEY_ENV_VAR} is unset — signature NOT verified.",
+                file=sys.stderr,
+            )
 
 
 def _local_sign_callable() -> "Callable[[bytes], bytes] | None":
@@ -445,20 +514,20 @@ def _local_sign_callable() -> "Callable[[bytes], bytes] | None":
     return lambda data: sign_bytes(data, private_raw)
 
 
-def _local_policy_source() -> PolicySource | None:
+def _local_policy_source(sig_policy: SignaturePolicy) -> PolicySource | None:
     """Resolve ``$FORTIFY_LOCAL_POLICY`` into a :class:`PolicySource`, if set.
 
     Dispatch by path shape:
 
       * ``<dir>`` → :class:`BundleDirPolicySource` (pre-built bundle from
-        ``fortify policy build``; mtime-refreshed).
+        ``fortify policy build``; mtime-refreshed). Its ``verify_with``
+        comes from ``sig_policy.verify_with``.
       * ``*.yaml`` / ``*.yml`` → :class:`YamlPolicySource` (auto-compile
-        on save).
+        on save). Strict-mode signing is checked at fetch time via
+        ``sig_policy.check_yaml_bundle``.
 
-    Signature handling preserves today's matrix via
-    :func:`_resolve_pubkey_for_verification` + the
-    ``FORTIFY_BUNDLE_REQUIRE_SIGNATURE`` knob — devs stay frictionless
-    on unsigned bundles, CI opts into strictness.
+    The full ``REQUIRE_SIGNATURE`` matrix lives on :class:`SignaturePolicy`
+    — see its docstring for the cell-by-cell table.
     """
     override_path = os.environ.get(_LOCAL_POLICY_ENV_VAR)
     if not override_path:
@@ -466,13 +535,8 @@ def _local_policy_source() -> PolicySource | None:
     target = Path(override_path)
 
     if target.is_dir():
-        verify_with = _resolve_pubkey_for_verification(override_path)
-        return BundleDirPolicySource(target, verify_with=verify_with)
+        return BundleDirPolicySource(target, verify_with=sig_policy.verify_with)
     if target.suffix in {".yaml", ".yml"} and target.is_file():
-        # REQUIRE_SIGNATURE blocks the unsigned-yaml path unless the user
-        # also configures a sign key. The check fires at fetch time via
-        # _verify_local_source_signature_policy — keeps the surface uniform
-        # with the dir path.
         return YamlPolicySource(target, sign=_local_sign_callable())
     raise RuntimeError(
         f"{_LOCAL_POLICY_ENV_VAR}={override_path!r}: expected a bundle "
@@ -480,34 +544,16 @@ def _local_policy_source() -> PolicySource | None:
     )
 
 
-def _verify_local_source_signature_policy(
-    bundle: PolicyBundle, source: PolicySource
-) -> None:
-    """Apply ``FORTIFY_BUNDLE_REQUIRE_SIGNATURE`` to a freshly-fetched bundle.
-
-    BundleDirPolicySource already verifies the signature against the
-    configured pubkey when it loads, so the only thing left for that
-    branch is the ``require=true & no signature & no key`` case (handled
-    by _resolve_pubkey_for_verification at construction). For
-    YamlPolicySource the rule is: REQUIRE_SIGNATURE=true & sign-key
-    unset → refuse, because we know the bundle is unsigned and there's
-    nothing to verify.
-    """
-    if not _truthy(os.environ.get(_REQUIRE_SIGNATURE_ENV_VAR)):
-        return
-    if isinstance(source, YamlPolicySource) and not bundle.is_signed:
-        raise RuntimeError(
-            f"{_REQUIRE_SIGNATURE_ENV_VAR} is set but {_LOCAL_POLICY_ENV_VAR} "
-            "points at an unsigned yaml source. Set "
-            f"{_BUNDLE_SIGN_KEY_ENV_VAR} to a base64url private key, or use a "
-            "pre-built signed bundle directory instead."
-        )
-
-
 def _announce_local_override(
     bundle: PolicyBundle, source: PolicySource, override_path: str
 ) -> None:
-    """Loud stderr line so devs notice when the local override is active."""
+    """Loud stderr line so devs notice when the local override is active.
+
+    Signed-but-unverified warnings live on
+    :meth:`SignaturePolicy.warn_if_unverified` and fire from
+    :func:`_local_policy_override` — this function is purely the
+    "what got loaded" announce line.
+    """
     import sys
 
     short = bundle.wasm_hash[:12] if bundle.wasm_hash else "?"
@@ -520,23 +566,6 @@ def _announce_local_override(
     )
 
 
-def _warn_if_unverified(bundle: PolicyBundle) -> None:
-    """Warn when a signed bundle loads without a pubkey to verify it.
-
-    Mirrors ``SignaturePolicy.warn_if_unverified`` so the loader and
-    PolicyBinding paths give the same signal. Permissive-mode only —
-    strict mode already raised in _resolve_pubkey_for_verification.
-    """
-    if bundle.is_signed and not os.environ.get(_BUNDLE_PUBKEY_ENV_VAR):
-        import sys
-
-        print(
-            f"[fortify] warning: override bundle is signed but "
-            f"{_BUNDLE_PUBKEY_ENV_VAR} is unset — signature NOT verified.",
-            file=sys.stderr,
-        )
-
-
 def _local_policy_override() -> tuple[PolicyBundle, PolicySource] | None:
     """Resolve ``$FORTIFY_LOCAL_POLICY`` into a (bundle, source) pair.
 
@@ -547,10 +576,21 @@ def _local_policy_override() -> tuple[PolicyBundle, PolicySource] | None:
 
     Failures (missing file, bad signature, opa not on PATH for a yaml
     source) raise loudly — silently degrading a security override
-    would defeat the point.
+    would defeat the point. Signature-policy enforcement (the
+    ``REQUIRE_SIGNATURE`` matrix) is centralised on :class:`SignaturePolicy`.
     """
-    source = _local_policy_source()
+    override_path = os.environ.get(_LOCAL_POLICY_ENV_VAR)
+    if not override_path:
+        return None
+    # Build the signature policy once at startup. ``from_env`` raises
+    # immediately if require-signature is set without a pubkey — fail
+    # fast, before any agent code runs, on both the yaml and dir paths.
+    sig_policy = SignaturePolicy.from_env(override_path)
+    source = _local_policy_source(sig_policy)
     if source is None:
+        # Defensive: we already null-checked override_path above; if
+        # _local_policy_source returns None here it'd be an internal
+        # invariant violation.
         return None
     bundle = source.fetch()
     if bundle is None:
@@ -560,7 +600,11 @@ def _local_policy_override() -> tuple[PolicyBundle, PolicySource] | None:
             f"{_LOCAL_POLICY_ENV_VAR}: source produced no bundle (internal "
             "invariant violated)."
         )
-    _verify_local_source_signature_policy(bundle, source)
-    _announce_local_override(bundle, source, os.environ[_LOCAL_POLICY_ENV_VAR])
-    _warn_if_unverified(bundle)
+    # YamlPolicySource builds unsigned bundles unless FORTIFY_BUNDLE_SIGN_KEY_PATH
+    # is set; strict mode refuses those. BundleDir's own constructor already
+    # gated on verify_with, so this is a no-op for the dir path.
+    if isinstance(source, YamlPolicySource):
+        sig_policy.check_yaml_bundle(bundle, override_path)
+    _announce_local_override(bundle, source, override_path)
+    sig_policy.warn_if_unverified(bundle)
     return bundle, source
