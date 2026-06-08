@@ -47,9 +47,7 @@ async def session_factory():
     )
     async with engine.begin() as conn:
         await conn.run_sync(SQLModel.metadata.create_all)
-    factory = async_sessionmaker(
-        engine, class_=AsyncSession, expire_on_commit=False
-    )
+    factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
     async with factory() as bootstrap:
         await ensure_default_project(bootstrap)
     yield factory
@@ -106,9 +104,7 @@ def test_ws_chat_rejects_without_cookie(client: TestClient) -> None:
     decision streaming back.
     """
     with pytest.raises(WebSocketDisconnect) as exc_info:
-        with client.websocket_connect(
-            f"/v1/projects/{DEFAULT_PROJECT_ID}/chat"
-        ):
+        with client.websocket_connect(f"/v1/projects/{DEFAULT_PROJECT_ID}/chat"):
             pass
     assert exc_info.value.code == 4401
 
@@ -121,9 +117,7 @@ def test_ws_chat_rejects_garbage_cookie(client: TestClient) -> None:
     """
     client.cookies.set("fortify_session", "not.a.real.jwt")
     with pytest.raises(WebSocketDisconnect) as exc_info:
-        with client.websocket_connect(
-            f"/v1/projects/{DEFAULT_PROJECT_ID}/chat"
-        ):
+        with client.websocket_connect(f"/v1/projects/{DEFAULT_PROJECT_ID}/chat"):
             pass
     assert exc_info.value.code == 4401
 
@@ -138,9 +132,7 @@ def test_ws_chat_rejects_authenticated_non_member(
     # but the user is NOT a member of the seed default project's org.
     _register_and_login(client, "outsider@example.com")
     with pytest.raises(WebSocketDisconnect) as exc_info:
-        with client.websocket_connect(
-            f"/v1/projects/{DEFAULT_PROJECT_ID}/chat"
-        ):
+        with client.websocket_connect(f"/v1/projects/{DEFAULT_PROJECT_ID}/chat"):
             pass
     assert exc_info.value.code == 4401
 
@@ -163,9 +155,7 @@ def test_ws_chat_rejects_unknown_project(client: TestClient) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_ws_chat_accepts_org_member(
-    client: TestClient, session_factory
-) -> None:
+def test_ws_chat_accepts_org_member(client: TestClient, session_factory) -> None:
     """Cookie session + the user IS a member of the project's org →
     handshake completes, the relay registers the chat socket."""
     import asyncio
@@ -180,9 +170,7 @@ def test_ws_chat_accepts_org_member(
     async def _add_to_default_org():
         async with session_factory() as s:
             user = (
-                await s.exec(
-                    select(User).where(User.email == "insider@example.com")
-                )
+                await s.exec(select(User).where(User.email == "insider@example.com"))
             ).one()
             s.add(
                 OrganizationMember(
@@ -206,9 +194,7 @@ def test_ws_chat_accepts_org_member(
     registry.attach_chat = spy_attach  # type: ignore[assignment]
 
     try:
-        with client.websocket_connect(
-            f"/v1/projects/{DEFAULT_PROJECT_ID}/chat"
-        ) as _ws:
+        with client.websocket_connect(f"/v1/projects/{DEFAULT_PROJECT_ID}/chat") as _ws:
             # Connection completed — that's the contract. Close cleanly.
             pass
     finally:

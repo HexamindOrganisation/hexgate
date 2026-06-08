@@ -171,12 +171,8 @@ async def ensure_personal_default_org(
     if existing is not None:
         return existing
 
-    slug = await _generate_unique_org_slug(
-        session, _email_to_slug_base(user.email)
-    )
-    return await create_org(
-        session, name="default", slug=slug, owner_user_id=user.id
-    )
+    slug = await _generate_unique_org_slug(session, _email_to_slug_base(user.email))
+    return await create_org(session, name="default", slug=slug, owner_user_id=user.id)
 
 
 async def list_orgs_for_user(
@@ -237,9 +233,7 @@ class LastOwnerError(Exception):
     """
 
 
-async def remove_member(
-    session: AsyncSession, *, org_id: str, user_id: str
-) -> bool:
+async def remove_member(session: AsyncSession, *, org_id: str, user_id: str) -> bool:
     """Remove (user, org) membership. Returns True on delete, False if
     the row didn't exist. Refuses with :class:`LastOwnerError` if the
     removal would leave the org with zero owners.
@@ -394,9 +388,7 @@ async def create_invitation(
     if role not in ALL_ROLES:
         raise InvitationError(f"unknown role: {role!r}")
     if not _can_invite_role(invited_by.role, role):
-        raise InvitationError(
-            f"a {invited_by.role} cannot invite at the {role} level"
-        )
+        raise InvitationError(f"a {invited_by.role} cannot invite at the {role} level")
 
     normalized_email = email.strip().lower()
 
@@ -512,9 +504,7 @@ async def accept_invitation(
     owner is a no-op rather than a silent demotion.
     """
     if invitation.accepted_at is not None or invitation.revoked_at is not None:
-        raise InvitationAlreadyConsumed(
-            "invitation already accepted or revoked"
-        )
+        raise InvitationAlreadyConsumed("invitation already accepted or revoked")
     if _ensure_utc_aware(invitation.expires_at) < utcnow():
         raise InvitationExpired("invitation expired")
     if invitation.email.lower() != accepting_user.email.lower():
@@ -522,9 +512,7 @@ async def accept_invitation(
         # ``str(exc)`` as the HTTP detail, and a logged-in attacker who
         # got hold of an invite id would otherwise be able to harvest
         # the invitee's address. Stay generic.
-        raise InvitationEmailMismatch(
-            "invitation is for a different account"
-        )
+        raise InvitationEmailMismatch("invitation is for a different account")
 
     # If already a member (re-invite of an existing teammate), reuse
     # the existing row. Otherwise create a fresh membership.
@@ -552,9 +540,7 @@ async def accept_invitation(
     return member
 
 
-async def revoke_invitation(
-    session: AsyncSession, invitation: Invitation
-) -> None:
+async def revoke_invitation(session: AsyncSession, invitation: Invitation) -> None:
     """Mark an invitation revoked. Idempotent — already-terminal
     invites silently no-op (the caller has already gotten the desired
     outcome)."""
@@ -588,14 +574,13 @@ async def send_invitation_email(
     ttl_hours = max(
         1,
         int(
-            (_ensure_utc_aware(invitation.expires_at) - utcnow()).total_seconds()
-            / 3600
+            (_ensure_utc_aware(invitation.expires_at) - utcnow()).total_seconds() / 3600
         ),
     )
 
     body = (
         f"Hi,\n\n"
-        f"{inviter_email} invited you to join the \"{org_name}\" "
+        f'{inviter_email} invited you to join the "{org_name}" '
         f"organisation on HexaGate as a {invitation.role}.\n\n"
         f"Open this link to accept (you'll be prompted to sign in or sign\n"
         f"up first if you don't have an account):\n\n"
@@ -668,15 +653,11 @@ async def create_project(
     return project
 
 
-async def list_projects(
-    session: AsyncSession, org_id: str
-) -> list[Project]:
+async def list_projects(session: AsyncSession, org_id: str) -> list[Project]:
     """All projects under an org, ordered by creation time so the
     user's seed/oldest project lands first in the dashboard list."""
     stmt = (
-        select(Project)
-        .where(Project.org_id == org_id)
-        .order_by(Project.created_at)  # type: ignore[attr-defined]
+        select(Project).where(Project.org_id == org_id).order_by(Project.created_at)  # type: ignore[attr-defined]
     )
     return list((await session.exec(stmt)).all())
 
@@ -877,9 +858,7 @@ async def list_agents(session: AsyncSession, project_id: str) -> list[Agent]:
     return list((await session.exec(stmt)).all())
 
 
-async def get_agent(
-    session: AsyncSession, project_id: str, name: str
-) -> Agent | None:
+async def get_agent(session: AsyncSession, project_id: str, name: str) -> Agent | None:
     stmt = select(Agent).where(Agent.project_id == project_id, Agent.name == name)
     return (await session.exec(stmt)).first()
 
@@ -924,7 +903,9 @@ async def get_latest_agent_versions_map(
         (AgentVersion.agent_id == max_version_per_agent.c.agent_id)
         & (AgentVersion.version == max_version_per_agent.c.max_version),
     )
-    return {version.agent_id: version for version in (await session.exec(statement)).all()}
+    return {
+        version.agent_id: version for version in (await session.exec(statement)).all()
+    }
 
 
 def compile_bundle(
@@ -1093,9 +1074,7 @@ async def mint_dev_token(
     return token, full_token
 
 
-async def list_dev_tokens(
-    session: AsyncSession, project_id: str
-) -> list[DevToken]:
+async def list_dev_tokens(session: AsyncSession, project_id: str) -> list[DevToken]:
     stmt = (
         select(DevToken)
         .where(DevToken.project_id == project_id)
@@ -1104,9 +1083,7 @@ async def list_dev_tokens(
     return list((await session.exec(stmt)).all())
 
 
-async def find_token_by_secret(
-    session: AsyncSession, secret: str
-) -> DevToken | None:
+async def find_token_by_secret(session: AsyncSession, secret: str) -> DevToken | None:
     """Look up a token by its full secret value. Updates last_used_at on hit."""
     from datetime import datetime, timezone
 
@@ -1273,9 +1250,7 @@ def _default_policy_for_manifest(manifest: AgentManifest) -> str:
     # ``read_only`` body — drop the ``tools:`` key when the manifest has
     # zero read-shape tools to avoid emitting ``tools:`` with no children
     # (rejected by the policy parser).
-    read_only_tools = (
-        f"    tools:\n{_emit_tool_lines(reads, 'allow')}" if reads else ""
-    )
+    read_only_tools = f"    tools:\n{_emit_tool_lines(reads, 'allow')}" if reads else ""
 
     # member + admin override blocks. ``writes + unknowns`` always get the
     # role-appropriate mode; shells are pinned to approval_required across
@@ -1377,7 +1352,9 @@ async def register_manifest(
     snapshot churn.
     """
     content_hash = compute_manifest_hash(manifest)
-    agent, agent_created = await _get_or_create_agent(session, project_id, manifest.name)
+    agent, agent_created = await _get_or_create_agent(
+        session, project_id, manifest.name
+    )
 
     if agent_created:
         # Brand-new agent — seed the policy + bundle so the dashboard's
@@ -1444,11 +1421,13 @@ async def _find_version_by_hash(
 
 async def _next_version_number(session: AsyncSession, agent_id: str) -> int:
     """Return the next sequential version number for an agent."""
-    last = (await session.exec(
-        select(AgentVersion)
-        .where(AgentVersion.agent_id == agent_id)
-        .order_by(AgentVersion.version.desc())  # type: ignore[attr-defined]
-    )).first()
+    last = (
+        await session.exec(
+            select(AgentVersion)
+            .where(AgentVersion.agent_id == agent_id)
+            .order_by(AgentVersion.version.desc())  # type: ignore[attr-defined]
+        )
+    ).first()
     return (last.version + 1) if last is not None else 1
 
 

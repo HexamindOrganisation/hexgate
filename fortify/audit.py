@@ -3,6 +3,7 @@
 Fire-and-forget POST per decision; bounded concurrency; drops on saturation.
 Lifecycle: configure() per api_key, await shutdown() at process exit.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -44,7 +45,8 @@ def _redact(value: Any) -> Any:
     keeps its full arguments; only the wire payload is redacted."""
     if isinstance(value, dict):
         return {
-            k: _REDACTED if isinstance(k, str) and _SENSITIVE_KEY_RE.search(k)
+            k: _REDACTED
+            if isinstance(k, str) and _SENSITIVE_KEY_RE.search(k)
             else _redact(v)
             for k, v in value.items()
         }
@@ -98,24 +100,22 @@ class AuditEvent:
         platform byte cap here — the single choke point onto the wire."""
         d = self.decision
         arguments = (
-            _truncate_args(_redact(d.arguments))
-            if d.arguments is not None
-            else None
+            _truncate_args(_redact(d.arguments)) if d.arguments is not None else None
         )
         return {
-            "event_id":    str(self.event_id),
+            "event_id": str(self.event_id),
             "occurred_at": self.occurred_at.isoformat(),
-            "agent_name":  d.agent_name,
-            "tool_name":   d.tool_name,
-            "outcome":     d.outcome.value,
-            "role":        d.role or "",
-            "error_type":  d.error_type or "",
-            "reason":      d.reason,
-            "violations":  list(d.violations),
-            "hint":        d.hint,
-            "arguments":   arguments,
-            "user_id":     self.user_id,
-            "session_id":  self.session_id,
+            "agent_name": d.agent_name,
+            "tool_name": d.tool_name,
+            "outcome": d.outcome.value,
+            "role": d.role or "",
+            "error_type": d.error_type or "",
+            "reason": d.reason,
+            "violations": list(d.violations),
+            "hint": d.hint,
+            "arguments": arguments,
+            "user_id": self.user_id,
+            "session_id": self.session_id,
         }
 
 
@@ -207,7 +207,8 @@ class AuditSender:
                 if response.status_code >= 400:
                     _log.error(
                         "audit ingest failed: %s %s",
-                        response.status_code, response.text[:200],
+                        response.status_code,
+                        response.text[:200],
                     )
             except httpx.RequestError as exc:
                 _log.warning("audit ingest network error: %s", exc)

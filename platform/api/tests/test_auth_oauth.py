@@ -87,9 +87,7 @@ async def session_factory():
     )
     async with engine.begin() as conn:
         await conn.run_sync(SQLModel.metadata.create_all)
-    factory = async_sessionmaker(
-        engine, class_=AsyncSession, expire_on_commit=False
-    )
+    factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
     async with factory() as s:
         await ensure_default_project(s)
     yield factory
@@ -220,9 +218,7 @@ def test_callback_creates_new_user_and_oauth_link(
     async def _check():
         async with session_factory() as s:
             users = (
-                await s.exec(
-                    select(User).where(User.email == "newgoogle@example.com")
-                )
+                await s.exec(select(User).where(User.email == "newgoogle@example.com"))
             ).all()
             assert len(users) == 1, f"expected 1 user, got {len(users)}"
             user = users[0]
@@ -293,9 +289,7 @@ def test_callback_returning_user_reuses_existing_row(
     async def _check_no_duplicates():
         async with session_factory() as s:
             users = (
-                await s.exec(
-                    select(User).where(User.email == "returning@example.com")
-                )
+                await s.exec(select(User).where(User.email == "returning@example.com"))
             ).all()
             assert len(users) == 1, (
                 f"duplicate Users after returning sign-in: {len(users)}"
@@ -353,9 +347,7 @@ def test_callback_links_to_existing_email_user(
         async with session_factory() as s:
             # Still exactly one User for this email.
             users = (
-                await s.exec(
-                    select(User).where(User.email == "linked@example.com")
-                )
+                await s.exec(select(User).where(User.email == "linked@example.com"))
             ).all()
             assert len(users) == 1, f"duplicate Users: {len(users)}"
             user = users[0]

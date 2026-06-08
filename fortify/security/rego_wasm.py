@@ -161,8 +161,7 @@ def _check_opa_version(opa: str) -> None:
         floor = ".".join(str(p) for p in _OPA_MIN_VERSION)
         current = ".".join(str(p) for p in parsed)
         raise WasmCompileError(
-            f"opa {current} is below the tested floor (>= {floor}); "
-            "please upgrade."
+            f"opa {current} is below the tested floor (>= {floor}); please upgrade."
         )
 
 

@@ -45,9 +45,7 @@ async def session_factory():
     )
     async with engine.begin() as conn:
         await conn.run_sync(SQLModel.metadata.create_all)
-    factory = async_sessionmaker(
-        engine, class_=AsyncSession, expire_on_commit=False
-    )
+    factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
     async with factory() as bootstrap:
         await ensure_default_project(bootstrap)
     yield factory
@@ -146,9 +144,7 @@ def test_put_agent_partial_update_preserves_other_fields(
     client: TestClient,
 ) -> None:
     """An update touching one field leaves the others alone."""
-    before = client.get(
-        f"/v1/projects/{DEFAULT_PROJECT_ID}/agents/support_bot"
-    ).json()
+    before = client.get(f"/v1/projects/{DEFAULT_PROJECT_ID}/agents/support_bot").json()
 
     resp = client.put(
         f"/v1/projects/{DEFAULT_PROJECT_ID}/agents/support_bot",
@@ -587,9 +583,7 @@ def _trivial_policy_yaml() -> str:
     )
 
 
-def test_me_key_introspects_token_metadata(
-    client: TestClient, session_factory
-) -> None:
+def test_me_key_introspects_token_metadata(client: TestClient, session_factory) -> None:
     """``GET /v1/me/key`` describes the bearer without round-tripping it.
 
     Returns project_id + env + name + scopes. Doesn't echo the token
@@ -629,9 +623,7 @@ def test_me_key_rejects_missing_bearer(client: TestClient) -> None:
 
 
 _OPA_AVAILABLE = shutil.which("opa") is not None
-_needs_opa = pytest.mark.skipif(
-    not _OPA_AVAILABLE, reason="opa not on PATH"
-)
+_needs_opa = pytest.mark.skipif(not _OPA_AVAILABLE, reason="opa not on PATH")
 
 
 def _register_payload(name: str, tools: list[str]) -> dict:
@@ -706,7 +698,9 @@ def test_register_first_time_generates_starter_policy_yaml(
     # Each bucket landed in the right role:
     assert policy_set.policy_for("admin").tools["web_search"].mode == "allow"
     assert policy_set.policy_for("admin").tools["write_file"].mode == "allow"
-    assert policy_set.policy_for("member").tools["write_file"].mode == "approval_required"
+    assert (
+        policy_set.policy_for("member").tools["write_file"].mode == "approval_required"
+    )
     assert policy_set.policy_for("admin").tools["bash"].mode == "approval_required"
 
 
@@ -861,7 +855,10 @@ def test_require_project_rejects_token_with_bad_signature(
         headers={"Authorization": f"Bearer {tampered}"},
     )
     assert r.status_code == 401, r.text
-    assert "signature" in r.json()["detail"].lower() or "malformed" in r.json()["detail"].lower()
+    assert (
+        "signature" in r.json()["detail"].lower()
+        or "malformed" in r.json()["detail"].lower()
+    )
 
 
 def test_require_project_accepts_valid_signed_token(

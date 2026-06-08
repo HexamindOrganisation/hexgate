@@ -119,7 +119,10 @@ def test_deny_multiple_constraints_violated(policy: WasmPolicy) -> None:
         role="billing", tool="refund_order", args={"amount": 700, "currency": "GBP"}
     )
     assert d.allow is False
-    assert set(d.violations) == {"args.amount <= 500", 'args.currency in ["USD", "EUR"]'}
+    assert set(d.violations) == {
+        "args.amount <= 500",
+        'args.currency in ["USD", "EUR"]',
+    }
 
 
 @needs_opa

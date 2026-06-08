@@ -60,7 +60,7 @@ def _extract_system_prompt(prompt: str | SystemMessage | None) -> str | None:
     ``create_agent`` resolves file paths to text before constructing the
     agent (see ``load_system_prompt`` in ``agents/factory.py``), so by the
     time we see ``agent.system_prompt`` it's always either a string or a
-    ``SystemMessage`` — never a Path. """
+    ``SystemMessage`` — never a Path."""
     if prompt is None:
         return None
     if isinstance(prompt, str):

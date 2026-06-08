@@ -87,16 +87,12 @@ _CASES: list[tuple[str, str, dict, type | None]] = [
     ("billing", "refund_order", {"amount": 200}, None),
     ("billing", "web_search", {}, None),
     ("default", "web_search", {}, None),
-
     # constraint-fail denies
     ("billing", "refund_order", {"amount": 700}, PolicyDeniedError),
-
     # deny by mode
     ("default", "refund_order", {"amount": 5}, PolicyDeniedError),
-
     # approval_required
     ("billing", "issue_credit", {"amount": 50}, ApprovalRequiredError),
-
     # approval_required with failed constraint → deny (no rule fires)
     ("billing", "issue_credit", {"amount": 500}, PolicyDeniedError),
 ]
@@ -120,7 +116,9 @@ def test_wasm_authorizer_matches_pydantic(
         authorize_tool_call(py_policy, tool, args)
     except (PolicyDeniedError, ApprovalRequiredError) as e:
         py_exc = type(e)
-    assert py_exc is expected_exc, f"pydantic disagrees for {role}/{tool}/{args}: {py_exc}"
+    assert py_exc is expected_exc, (
+        f"pydantic disagrees for {role}/{tool}/{args}: {py_exc}"
+    )
 
     # WASM side
     wasm_exc: type | None = None
@@ -128,16 +126,16 @@ def test_wasm_authorizer_matches_pydantic(
         authorize_tool_call_wasm(bundle, role, tool, args)
     except (PolicyDeniedError, ApprovalRequiredError) as e:
         wasm_exc = type(e)
-    assert wasm_exc is expected_exc, f"wasm disagrees for {role}/{tool}/{args}: {wasm_exc}"
+    assert wasm_exc is expected_exc, (
+        f"wasm disagrees for {role}/{tool}/{args}: {wasm_exc}"
+    )
 
 
 @needs_opa
 def test_wasm_deny_message_surfaces_violations(bundle: PolicyBundle) -> None:
     """On constraint failure, the error string carries the violated constraint."""
     with pytest.raises(PolicyDeniedError) as excinfo:
-        authorize_tool_call_wasm(
-            bundle, "billing", "refund_order", {"amount": 700}
-        )
+        authorize_tool_call_wasm(bundle, "billing", "refund_order", {"amount": 700})
     assert "args.amount <= 500" in str(excinfo.value)
 
 
@@ -145,7 +143,5 @@ def test_wasm_deny_message_surfaces_violations(bundle: PolicyBundle) -> None:
 def test_wasm_deny_by_absence_explains_no_rule(bundle: PolicyBundle) -> None:
     """When deny is by no-matching-rule, the message is helpful, not empty."""
     with pytest.raises(PolicyDeniedError) as excinfo:
-        authorize_tool_call_wasm(
-            bundle, "default", "refund_order", {"amount": 5}
-        )
+        authorize_tool_call_wasm(bundle, "default", "refund_order", {"amount": 5})
     assert "no allow rule matched" in str(excinfo.value)

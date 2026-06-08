@@ -109,9 +109,9 @@ def test_policy_set_evaluate_matches_evaluate_tool_call() -> None:
     )
     policy_set = PolicySet({"default": policy})
 
-    assert policy_set.evaluate(role=None, tool="web_search", args={}) == evaluate_tool_call(
-        policy, "web_search", {}
-    )
-    assert policy_set.evaluate(role="anything", tool="fetch", args={}) == evaluate_tool_call(
-        policy, "fetch", {}
-    )
+    assert policy_set.evaluate(
+        role=None, tool="web_search", args={}
+    ) == evaluate_tool_call(policy, "web_search", {})
+    assert policy_set.evaluate(
+        role="anything", tool="fetch", args={}
+    ) == evaluate_tool_call(policy, "fetch", {})

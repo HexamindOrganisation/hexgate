@@ -173,9 +173,7 @@ def test_build_writes_bundle_files(
 ) -> None:
     """build --no-wasm produces {stem}.yaml + {stem}.rego + {stem}.bundle.json."""
     out_dir = tmp_path / "build"
-    rc = _main_build(
-        _ns(source=str(policy_file), out=str(out_dir), no_wasm=True)
-    )
+    rc = _main_build(_ns(source=str(policy_file), out=str(out_dir), no_wasm=True))
     capsys.readouterr()  # drain
     assert rc == 0
     assert (out_dir / "billing.yaml").exists()
@@ -212,7 +210,9 @@ def test_build_defaults_output_to_source_dir(
 
 
 def test_build_accepts_relative_out_dir(
-    policy_file: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    policy_file: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     """A relative --out resolves cleanly — regression for the relative_to()

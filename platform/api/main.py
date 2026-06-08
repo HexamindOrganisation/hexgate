@@ -139,9 +139,7 @@ app.add_middleware(
 )
 
 
-async def _validate_sdk_token(
-    authorization: str, session: AsyncSession
-) -> None:
+async def _validate_sdk_token(authorization: str, session: AsyncSession) -> None:
     """Validate an ``Authorization: Bearer <fortify_key>`` biscuit envelope.
 
     Used by :func:`optional_dev_token` (allows a missing header) and
@@ -425,10 +423,12 @@ def _dev_user_header_allowed() -> bool:
     """
     import os
 
-    return (
-        os.environ.get("FORTIFY_ALLOW_DEV_USER_HEADER", "").strip().lower()
-        in {"1", "true", "yes", "on"}
-    )
+    return os.environ.get("FORTIFY_ALLOW_DEV_USER_HEADER", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
 
 
 async def require_user(
@@ -453,9 +453,7 @@ async def require_user(
         if user is not None and user.is_active:
             return user
 
-    raise HTTPException(
-        status_code=401, detail="missing or invalid authentication"
-    )
+    raise HTTPException(status_code=401, detail="missing or invalid authentication")
 
 
 async def require_org_member(
@@ -476,12 +474,14 @@ async def require_org_member(
     project = await session.get(Project, project_id)
     if project is None:
         raise HTTPException(status_code=404, detail="project not found")
-    membership = (await session.exec(
-        select(OrganizationMember).where(
-            OrganizationMember.user_id == user.id,
-            OrganizationMember.org_id == project.org_id,
+    membership = (
+        await session.exec(
+            select(OrganizationMember).where(
+                OrganizationMember.user_id == user.id,
+                OrganizationMember.org_id == project.org_id,
+            )
         )
-    )).first()
+    ).first()
     if membership is None:
         raise HTTPException(status_code=403, detail="not a member of this org")
     return user
@@ -510,12 +510,14 @@ async def require_org_membership(
     org = await session.get(Organization, org_id)
     if org is None:
         raise HTTPException(status_code=404, detail="org not found")
-    membership = (await session.exec(
-        select(OrganizationMember).where(
-            OrganizationMember.org_id == org_id,
-            OrganizationMember.user_id == user.id,
+    membership = (
+        await session.exec(
+            select(OrganizationMember).where(
+                OrganizationMember.org_id == org_id,
+                OrganizationMember.user_id == user.id,
+            )
         )
-    )).first()
+    ).first()
     if membership is None:
         raise HTTPException(status_code=403, detail="not a member of this org")
     return user, membership
@@ -584,12 +586,14 @@ async def require_project_admin(
     project = await session.get(Project, project_id)
     if project is None:
         raise HTTPException(status_code=404, detail="project not found")
-    membership = (await session.exec(
-        select(OrganizationMember).where(
-            OrganizationMember.user_id == user.id,
-            OrganizationMember.org_id == project.org_id,
+    membership = (
+        await session.exec(
+            select(OrganizationMember).where(
+                OrganizationMember.user_id == user.id,
+                OrganizationMember.org_id == project.org_id,
+            )
         )
-    )).first()
+    ).first()
     if membership is None:
         raise HTTPException(status_code=403, detail="not a member of this org")
     if membership.role not in {ROLE_OWNER, ROLE_ADMIN}:
@@ -606,8 +610,8 @@ def _readiness() -> tuple[dict[str, str], int]:
     that would only 503 — k8s keys off the status code, not the body."""
     reachable = clickhouse_ping()
     body = {
-        "status":     "ok" if reachable else "unavailable",
-        "service":    "fortify-api",
+        "status": "ok" if reachable else "unavailable",
+        "service": "fortify-api",
         "clickhouse": "ok" if reachable else "unreachable",
     }
     return body, 200 if reachable else 503
@@ -1080,9 +1084,7 @@ async def ingest_decision(
         raise _audit_unavailable()
     except ClickHouseError as exc:  # storage rejected the row — retry won't help
         _log.error("audit insert rejected by ClickHouse: %s", exc)
-        raise HTTPException(
-            status_code=422, detail="audit event rejected by storage"
-        )
+        raise HTTPException(status_code=422, detail="audit event rejected by storage")
 
     return DecisionAccepted(event_id=body.event_id)
 
@@ -1259,9 +1261,7 @@ async def api_introspect_key(
     # ``prefix`` on the row is ``fty_test`` or ``fty_live``; strip the
     # leading ``fty_`` to expose just the env value the CLI cares about.
     env = token.prefix.removeprefix("fty_")
-    scopes = (
-        [s for s in token.scopes_csv.split(",") if s] if token.scopes_csv else []
-    )
+    scopes = [s for s in token.scopes_csv.split(",") if s] if token.scopes_csv else []
     return KeyIntrospection(
         token_id=token.id,
         name=token.name,
@@ -1468,9 +1468,7 @@ async def api_create_org(
         # numbered or hex-suffixed variant.
         slug = await _generate_unique_org_slug(session, _email_to_slug_base(body.name))
 
-    org = await create_org(
-        session, name=body.name, slug=slug, owner_user_id=user.id
-    )
+    org = await create_org(session, name=body.name, slug=slug, owner_user_id=user.id)
     return _org_read(org)
 
 

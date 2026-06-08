@@ -97,7 +97,9 @@ def test_classify_tool_known_unclassifiable(name: str) -> None:
 
 def test_emit_tool_lines_renders_one_line_per_name() -> None:
     out = _emit_tool_lines(["read_file", "web_search"], mode="allow", indent=6)
-    assert out == "      read_file: { mode: allow }\n      web_search: { mode: allow }\n"
+    assert (
+        out == "      read_file: { mode: allow }\n      web_search: { mode: allow }\n"
+    )
 
 
 def test_emit_tool_lines_returns_empty_string_for_empty_input() -> None:
@@ -231,9 +233,7 @@ def test_default_policy_does_not_overlap_member_admin_with_read_only() -> None:
     """A read tool should only appear in the read_only mixin block,
     not duplicated under member/admin. Keeps the YAML compact and
     avoids the dashboard editor showing the same tool three times."""
-    yaml_text = _default_policy_for_manifest(
-        _manifest("web_search", "write_file")
-    )
+    yaml_text = _default_policy_for_manifest(_manifest("web_search", "write_file"))
     payload = yaml.safe_load(yaml_text)
     assert "web_search" in payload["roles"]["read_only"]["tools"]
     # The override blocks for member/admin only carry the write-shape

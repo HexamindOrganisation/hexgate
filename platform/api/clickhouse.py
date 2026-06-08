@@ -2,6 +2,7 @@
 
 Single shared Client — clickhouse-connect manages its own HTTP pool internally.
 """
+
 from __future__ import annotations
 
 import logging

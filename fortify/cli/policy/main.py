@@ -61,9 +61,7 @@ def add_parser(subparsers: argparse._SubParsersAction) -> None:
         help="Author, inspect, and dry-run agent policy documents.",
         description="Author, inspect, and dry-run agent policy documents.",
     )
-    sub = parser.add_subparsers(
-        dest="policy_cmd", required=True, metavar="subcommand"
-    )
+    sub = parser.add_subparsers(dest="policy_cmd", required=True, metavar="subcommand")
 
     # ---- build ----
     p_build = sub.add_parser(
@@ -232,9 +230,7 @@ def _main_keygen(args: argparse.Namespace) -> int:
         "\nSign a bundle:   fortify policy build <policy.yaml> "
         f"--sign-key {private_out}"
     )
-    print(
-        f"Verify at runtime:  export FORTIFY_BUNDLE_PUBKEY_PATH={public_out}"
-    )
+    print(f"Verify at runtime:  export FORTIFY_BUNDLE_PUBKEY_PATH={public_out}")
     return 0
 
 
@@ -401,13 +397,12 @@ def _main_test(args: argparse.Namespace) -> int:
 
     if args.role not in policy_set:
         print(
-            f'role "{args.role}" not in policy '
-            f"(known roles: {policy_set.roles!r})",
+            f'role "{args.role}" not in policy (known roles: {policy_set.roles!r})',
             file=sys.stderr,
         )
         return 1
 
-    label = f'{args.role} → {args.tool}({json.dumps(tool_args, sort_keys=True)})'
+    label = f"{args.role} → {args.tool}({json.dumps(tool_args, sort_keys=True)})"
     engine = getattr(args, "engine", "pydantic")
 
     if engine == "wasm":
@@ -467,7 +462,9 @@ def _test_via_wasm(
         print(f"wasm eval error: {exc}", file=sys.stderr)
         return 1
 
-    return _render_verdict(verdict_from_rego(decision, tool_name=tool, role=role), label)
+    return _render_verdict(
+        verdict_from_rego(decision, tool_name=tool, role=role), label
+    )
 
 
 # ---------------------------------------------------------------------------

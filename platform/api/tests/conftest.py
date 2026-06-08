@@ -34,7 +34,9 @@ def pytest_configure(config) -> None:  # noqa: ARG001 — pytest hook
     os.environ.setdefault("FORTIFY_ALLOW_DEV_USER_HEADER", "1")
 
 
-def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+def pytest_collection_modifyitems(
+    config: pytest.Config, items: list[pytest.Item]
+) -> None:
     # Substring, not equality: the user may select integration tests via a
     # compound expression like `-m "integration and not slow"`. If integration
     # is named at all, let pytest's own marker filtering decide what runs.
