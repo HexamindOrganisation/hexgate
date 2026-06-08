@@ -11,10 +11,9 @@ from __future__ import annotations
 
 from google.adk.agents import BaseAgent
 
-from fortify import audit
 from fortify.adapters.google.tools import wrap_tools
 from fortify.security.binding import PolicyBinding, resolve_policy_or_register
-from fortify.security.enforcer import PolicyEnforcer
+from fortify.security.enforcer import build_enforcer
 
 
 def wrap_google_agent(
@@ -38,11 +37,7 @@ def wrap_google_agent(
     resolved = resolve_policy_or_register(
         agent_name, api_key=api_key, on_missing=_register
     )
-    enforcer = PolicyEnforcer(
-        resolved.engine,
-        agent_name=agent_name,
-        audit_sender=audit.configure(api_key),
-    )
+    enforcer = build_enforcer(resolved.engine, agent_name=agent_name, api_key=api_key)
     guarded_tools = wrap_tools(tools, enforcer)
     return (
         agent.model_copy(update={"tools": guarded_tools}),

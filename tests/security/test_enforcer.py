@@ -11,6 +11,8 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
+import pytest
+
 from fortify.security import (
     AgentPolicy,
     DecisionOutcome,
@@ -115,3 +117,26 @@ def test_policy_set_evaluate_matches_evaluate_tool_call() -> None:
     assert policy_set.evaluate(role="anything", tool="fetch", args={}) == evaluate_tool_call(
         policy, "fetch", {}
     )
+
+
+# ---------------------------------------------------------------------------
+# build_enforcer — the composition root
+# ---------------------------------------------------------------------------
+
+
+def test_build_enforcer_pairs_engine_with_agent_name_and_audit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """build_enforcer wires the engine, agent name, and an audit sender
+    resolved from the api_key into one PolicyEnforcer."""
+    from fortify.security.enforcer import build_enforcer
+    from fortify.security.policy_set import DEFAULT_ROLE_NAME
+
+    monkeypatch.delenv("FORTIFY_KEY", raising=False)
+    engine = PolicySet({DEFAULT_ROLE_NAME: AgentPolicy()})
+    enforcer = build_enforcer(engine, agent_name="support-bot")
+
+    assert enforcer.policy is engine
+    assert enforcer.agent_name == "support-bot"
+    # No api_key + no FORTIFY_KEY → audit inert (configure returns None).
+    assert enforcer._audit_sender is None

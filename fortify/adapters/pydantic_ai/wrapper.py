@@ -15,11 +15,10 @@ import os
 from pydantic_ai import Agent
 from pydantic_ai.tools import Tool
 
-from fortify import audit
 from fortify.adapters.pydantic_ai.agent import FortifyPydanticAgent
 from fortify.adapters.pydantic_ai.tools import wrap_tools
 from fortify.security.binding import PolicyBinding, resolve_policy_or_register
-from fortify.security.enforcer import PolicyEnforcer
+from fortify.security.enforcer import build_enforcer
 
 
 def _extract_tools(agent: Agent) -> list[Tool]:
@@ -76,11 +75,7 @@ def wrap_pydantic_agent(
     resolved = resolve_policy_or_register(
         agent_name, api_key=resolved_key, on_missing=_register
     )
-    enforcer = PolicyEnforcer(
-        resolved.engine,
-        agent_name=agent_name,
-        audit_sender=audit.configure(resolved_key),
-    )
+    enforcer = build_enforcer(resolved.engine, agent_name=agent_name, api_key=resolved_key)
     cloned_agent = _clone_agent_with_tools(agent, wrap_tools(tools, enforcer))
 
     return FortifyPydanticAgent(

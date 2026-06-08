@@ -15,11 +15,10 @@ import os
 from langchain_core.tools import BaseTool
 from langgraph.graph.state import CompiledStateGraph
 
-from fortify import audit
 from fortify.adapters.langchain.agent import FortifyLangchainAgent
 from fortify.adapters.langchain.tools import install_enforcer_on_tools
 from fortify.security.binding import PolicyBinding, resolve_policy_or_register
-from fortify.security.enforcer import PolicyEnforcer
+from fortify.security.enforcer import build_enforcer
 
 
 def wrap_langchain_agent(
@@ -55,11 +54,7 @@ def wrap_langchain_agent(
     resolved = resolve_policy_or_register(
         agent_name, api_key=resolved_key, on_missing=_register
     )
-    enforcer = PolicyEnforcer(
-        resolved.engine,
-        agent_name=agent_name,
-        audit_sender=audit.configure(resolved_key),
-    )
+    enforcer = build_enforcer(resolved.engine, agent_name=agent_name, api_key=resolved_key)
     install_enforcer_on_tools(tools, enforcer=enforcer)
 
     return FortifyLangchainAgent(
