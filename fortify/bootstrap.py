@@ -21,7 +21,11 @@ def bootstrap(env_file: str = ".env") -> Settings:
     explicitly drains with `await audit.shutdown()`.
     """
     env_path = Path(__file__).parent.parent / env_file
-    load_dotenv(env_path, override=True)
+    # ``override=False``: shell wins over .env, matching the convention
+    # uvicorn / vite / cargo / npm follow. A pre-existing test
+    # (test_bootstrap_loads_requested_env_file) pinned this contract;
+    # the code had drifted to ``True``. Flipped back here so CI is green.
+    load_dotenv(env_path, override=False)
     audit.configure()
     settings = Settings.from_env()
     settings.validate_required_keys()
