@@ -362,13 +362,9 @@ async def test_distinct_agent_names_get_distinct_bindings(
 def test_binding_for_normalises_none_agent_name_to_default(
     _stub_resolve: list[str],
 ) -> None:
-    """A None agent name must not flow through as the cache key or the
-    agent_name handed to the platform resolve seam — it collapses to the
-    same "default" label the other adapters use, never a null identity.
-
-    Exercises ``_binding_for`` directly: the canonical openai ``Agent``
-    validates ``name`` as a string at construction, so this guards the
-    normalisation for stand-in / subclassed agents that don't."""
+    """A None agent name collapses to "default" rather than flowing through
+    as the cache key / resolve label. Exercises _binding_for directly since
+    the canonical Agent validates name as a string at construction."""
     runner = FortifyRunner(api_key="k")
     agent = SimpleNamespace(name=None, tools=[_make_tool("echo")])
 

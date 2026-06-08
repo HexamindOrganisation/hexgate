@@ -521,18 +521,11 @@ def _announce_local_override(
 
 
 def _warn_if_unverified(bundle: PolicyBundle) -> None:
-    """Emit a heads-up when a signed bundle loads without a pubkey.
+    """Warn when a signed bundle loads without a pubkey to verify it.
 
-    Permissive-mode only — strict mode (``REQUIRE_SIGNATURE``) would
-    already have raised in :func:`_resolve_pubkey_for_verification`.
-    Without the warning the dev sees "signed" in the announce line and
-    reasonably assumes authenticity was checked, when it wasn't.
-
-    Mirrors :meth:`fortify.agents.loader.SignaturePolicy.warn_if_unverified`
-    so the loader and :class:`PolicyBinding` paths give operators the same
-    signal for the same bundle. (The two ``_local_policy_override`` copies
-    are slated to consolidate onto ``SignaturePolicy`` — see the NOTE in
-    ``loader.py`` — but until then this keeps their behaviour aligned.)
+    Mirrors ``SignaturePolicy.warn_if_unverified`` so the loader and
+    PolicyBinding paths give the same signal. Permissive-mode only —
+    strict mode already raised in _resolve_pubkey_for_verification.
     """
     if bundle.is_signed and not os.environ.get(_BUNDLE_PUBKEY_ENV_VAR):
         import sys

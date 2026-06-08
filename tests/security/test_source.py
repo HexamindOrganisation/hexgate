@@ -35,17 +35,15 @@ needs_opa = pytest.mark.skipif(not _OPA_AVAILABLE, reason="opa not on PATH")
 
 
 # ---------------------------------------------------------------------------
-# _warn_if_unverified — the binding-path counterpart to the loader's
-# SignaturePolicy.warn_if_unverified, so a signed local bundle loaded via
-# PolicyBinding.resolve gets the same "signature NOT verified" heads-up.
+# _warn_if_unverified — binding-path counterpart to the loader's
+# SignaturePolicy.warn_if_unverified (same signal for a signed local bundle).
 # ---------------------------------------------------------------------------
 
 
 def test_warn_if_unverified_warns_for_signed_bundle_without_pubkey(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Signed bundle + no pubkey configured → warn that authenticity was
-    not checked (permissive mode; strict mode would have raised earlier)."""
+    """Signed bundle + no pubkey configured → warn that it wasn't verified."""
     monkeypatch.delenv("FORTIFY_BUNDLE_PUBKEY_PATH", raising=False)
 
     _warn_if_unverified(SimpleNamespace(is_signed=True))

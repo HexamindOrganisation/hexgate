@@ -207,9 +207,8 @@ async def test_enforce_policy_denies_tool_invocation(
 def test_enforce_policy_detaches_refresh_source(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Applying an explicit policy detaches any inherited refresh source so
-    the explicit policy can't be swapped back out — refresh_policy() is then
-    a no-op. Pins the documented side effect against silent regression."""
+    """Applying an explicit policy detaches the refresh source, so
+    refresh_policy() is a no-op. Pins the documented side effect."""
 
     @tool
     async def sample_tool(value: str) -> str:
@@ -224,17 +223,14 @@ def test_enforce_policy_detaches_refresh_source(
         tools=[sample_tool],
         system_prompt="You are a test assistant.",
     )
-    # Simulate an agent that already carries a refresh source (e.g. one
-    # returned by load_fortify_agent before an explicit override).
-    agent._policy_source = object()  # type: ignore[assignment]
+    agent._policy_source = object()  # type: ignore[assignment]  # simulate a sourced agent
 
     secured = enforce_policy(
         agent, AgentPolicy.model_validate({"default_policy": {"mode": "deny"}})
     )
 
     assert secured._policy_source is None
-    # No source attached → refresh is a no-op and must not raise.
-    secured.refresh_policy()
+    secured.refresh_policy()  # no source → no-op, must not raise
 
 
 @pytest.mark.asyncio
