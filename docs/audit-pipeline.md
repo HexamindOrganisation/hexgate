@@ -58,6 +58,8 @@ it never changes, blocks, or fails the decision the agent acts on.
 1. **Enforcement is authoritative; audit is observational.** The `Decision`
    returned to the agent is the source of truth. Audit failures (network down,
    platform 503, saturation) degrade silently and never propagate to the caller.
+   The same `Decision` is also surfaced locally by `fortify chat`'s decision
+   panel — same data, different sink, useful when iterating offline.
 2. **The server owns identity.** `project_id`, `agent_version_id`, and
    `received_at` are resolved/stamped server-side and are **never trusted from
    the request body**, even though the SDK sends some of them as empty strings.
@@ -219,6 +221,11 @@ A separate WARNING fires from `bootstrap()` itself when both `FORTIFY_KEY`
 and `FORTIFY_LOCAL_POLICY` are set — that combination is almost always a
 forgotten env entry from an earlier session, and surfacing it at startup
 saves a later debugging detour.
+
+> For the user-facing description of when each mode applies in practice
+> — chat vs. serve, inner loop vs. team loop — see the
+> ["Which path do I pick?"](../README.md#-which-path-do-i-pick) block in
+> the README.
 
 `async shutdown()` drains in-flight tasks and closes every sender's HTTP client.
 It is safe to call multiple times and is the recommended teardown hook. Absent
