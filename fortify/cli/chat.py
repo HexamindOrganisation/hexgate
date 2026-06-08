@@ -253,7 +253,10 @@ def add_parser(subparsers: argparse._SubParsersAction) -> None:
 def main(args: argparse.Namespace) -> int:
     """Entrypoint for the `fortify chat` subcommand."""
     console = Console()
-    settings = bootstrap()
+    # Terminal chat is a "no platform required" loop: pass local_only=True
+    # so bootstrap sets FORTIFY_LOCAL_MODE before any adapter wrapper can
+    # spin up an audit sender against a key that's lingering in .env.
+    settings = bootstrap(local_only=True)
     base_dir = Path.cwd()
 
     if args.use:

@@ -243,6 +243,19 @@ class AuditSender:
 
 _AUDIT_PATH = "/v1/audit/decisions"
 _DEFAULT_API_URL = "http://localhost:8000"
+
+# Setting this env var to a truthy value (``1``/``true``/``yes``/``on``,
+# case-insensitive) makes ``configure()`` a no-op even when ``FORTIFY_KEY``
+# is present. ``bootstrap(local_only=True)`` sets it; ``fortify chat``
+# passes ``local_only=True``. The check happens on every ``configure()``
+# call (not cached) so an adapter wrapper that re-``configure``s after
+# bootstrap still respects the gate.
+_LOCAL_MODE_ENV = "FORTIFY_LOCAL_MODE"
+
+# One-shot log gate so the "audit suppressed: local mode" message lands
+# the first time it'd matter (a key WAS set but local mode preempted)
+# and stays quiet thereafter.
+_logged_local_mode_suppressed = False
 # One sender per resolved api_key. A single process may wrap agents for
 # several tenants/keys, and each must emit with its own bearer token — so
 # senders are keyed by api_key rather than kept as a first-wins singleton.
@@ -251,6 +264,18 @@ _DEFAULT_API_URL = "http://localhost:8000"
 # key. Such callers must evict explicitly (await sender.close(), then drop
 # the dict entry) or use shutdown().
 _senders: dict[str, AuditSender] = {}
+
+
+def _local_mode_active() -> bool:
+    """True if ``FORTIFY_LOCAL_MODE`` is set to a truthy value.
+
+    Accepts ``1``/``true``/``yes``/``on`` (case-insensitive). Everything
+    else — including unset — evaluates false. Mirrors the truthy-value
+    parser the platform's ``FORTIFY_COOKIE_SECURE`` knob uses, so the
+    behavior is consistent across the codebase's env flags."""
+    return os.environ.get(_LOCAL_MODE_ENV, "").strip().lower() in (
+        "1", "true", "yes", "on",
+    )
 
 
 def configure(
@@ -263,7 +288,25 @@ def configure(
     Reuses the existing sender when the same key was already configured;
     distinct keys get distinct senders. Returns ``None`` when no api_key is
     resolvable — audit stays inert.
+
+    Also returns ``None`` when ``FORTIFY_LOCAL_MODE`` is set in env, even
+    if a key was resolvable — that's the "I have a key in .env but I'm
+    iterating locally and don't want cloud writes" path
+    (``fortify chat`` opts in via ``bootstrap(local_only=True)``).
     """
+    global _logged_local_mode_suppressed
+    if _local_mode_active():
+        # Only log when a key was actually present — otherwise the
+        # message is just noise during a no-key local run.
+        resolved = api_key or os.environ.get("FORTIFY_KEY")
+        if resolved and not _logged_local_mode_suppressed:
+            _log.info(
+                "audit suppressed: %s=1 (a key is configured but local "
+                "mode is on, so events stay on this machine)",
+                _LOCAL_MODE_ENV,
+            )
+            _logged_local_mode_suppressed = True
+        return None
     resolved_key = api_key or os.environ.get("FORTIFY_KEY")
     if not resolved_key:
         return None
