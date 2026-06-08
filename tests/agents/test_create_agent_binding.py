@@ -269,3 +269,31 @@ def test_enforce_policy_detaches_inherited_source(
 
     assert custom._binding.source is None  # refresh can't overwrite the custom policy
     custom.refresh_policy()  # no source → quiet no-op
+
+
+# ---------------------------------------------------------------------------
+# enforce_policy — the (policy, source) matrix
+# ---------------------------------------------------------------------------
+
+
+def test_enforce_policy_none_with_source_is_rejected() -> None:
+    """(policy=None, source=X) is a caller mistake — reject loudly rather than
+    leave the agent silently unguarded with a dangling refresh source."""
+    agent, _ = factory.create_agent(
+        model="openai:gpt-5.4", tools=[echo], name="support-bot"
+    )
+
+    with pytest.raises(ValueError, match="no policy to enforce"):
+        agent.enforce_policy(None, source=object())  # type: ignore[arg-type]
+
+
+def test_enforce_policy_none_without_source_is_noop() -> None:
+    """(policy=None, source=None) is the documented no-op — unguarded rebuild."""
+    agent, _ = factory.create_agent(
+        model="openai:gpt-5.4", tools=[echo], name="support-bot"
+    )
+
+    rebuilt = agent.enforce_policy(None)
+
+    assert rebuilt.tools == [echo]  # unwrapped
+    assert rebuilt._binding is None

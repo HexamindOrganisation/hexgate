@@ -20,9 +20,12 @@ from uuid import UUID, uuid4
 import httpx
 
 if TYPE_CHECKING:
-    # Annotation-only (PEP 563 keeps it lazy). A runtime import here would
-    # close an import cycle: audit → security/__init__ → binding →
-    # enforcer → audit.
+    # Annotation-only: Decision is used solely as a type hint below, so it stays
+    # out of the runtime import graph (PEP 563 keeps it lazy). audit.py is a
+    # low-level module — importing it should not drag in the whole security
+    # package. The audit → security → enforcer → audit cycle is independently
+    # avoided (binding.py keeps its enforcer import under TYPE_CHECKING too), so
+    # this is correctness-by-design, not a workaround — keep it here.
     from fortify.security.decision import Decision
 
 _log = logging.getLogger(__name__)

@@ -17,7 +17,6 @@ from typing import TYPE_CHECKING
 
 import yaml
 
-from fortify.security.enforcer import PolicyEnforcer
 from fortify.security.policy_set import load_policy_set_from_dict
 from fortify.security.source import (
     _LOCAL_POLICY_ENV_VAR,
@@ -32,6 +31,14 @@ from fortify.security.source import (
 if TYPE_CHECKING:
     from fortify.cloud.client import FortifyClient
     from fortify.security.decision import PolicyEngine
+
+    # Annotation-only — PolicyEnforcer is only named in a type hint here, never
+    # constructed. Keeping it out of the runtime import graph is also what
+    # breaks the import cycle that would otherwise form:
+    #   audit → security/__init__ → binding → enforcer → audit
+    # (enforcer.py imports audit at module load). Don't promote this to a
+    # top-level import.
+    from fortify.security.enforcer import PolicyEnforcer
 
 logger = logging.getLogger("fortify.security.binding")
 

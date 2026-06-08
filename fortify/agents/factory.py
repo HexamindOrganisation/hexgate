@@ -418,6 +418,16 @@ class FortifyAgent:
         carries — pass one for hot reload (see :func:`_bind_policy` /
         ``load_fortify_agent``); the default ``None`` freezes ``policy``
         so a later :meth:`refresh_policy` can't swap it back out.
+
+        The ``(policy, source)`` matrix:
+
+          * ``(engine, source)`` → enforce + attach the refresh source.
+          * ``(engine, None)``   → enforce, frozen (no refresh).
+          * ``(None,   None)``   → no-op; returns an unguarded rebuild.
+          * ``(None,   source)`` → **rejected** (``ValueError``): a refresh
+            source with nothing to enforce is a caller mistake (likely a
+            forgotten ``policy``), and would otherwise leave the agent
+            silently unguarded.
         """
         from langchain_core.tools import BaseTool
 
@@ -428,6 +438,12 @@ class FortifyAgent:
         from fortify.security.policy_set import PolicySet, load_policy_set
 
         if policy is None:
+            if source is not None:
+                raise ValueError(
+                    "enforce_policy(None, source=...) passes a refresh source "
+                    "with no policy to enforce — the agent would be left "
+                    "unguarded. Pass a policy, or drop the source."
+                )
             return self.with_tools(list(self.tools))
 
         if isinstance(policy, (PolicyBundle, PolicySet)):
@@ -515,6 +531,13 @@ def create_agent(
     construction). Binding gates the tools and attaches a refresh source, like
     ``load_fortify_agent``. ``approval_handler`` applies on that path.
     """
+    # Validate at the public boundary, before the (relatively expensive) graph
+    # build, so the error lands at the call site rather than deep in dispatch.
+    if bind_policy is True and not name:
+        raise ValueError(
+            "create_agent(bind_policy=True) requires name=... — the agent "
+            "name is the policy lookup key on the platform."
+        )
     resolved_system_prompt = (
         system_prompt
         if isinstance(system_prompt, SystemMessage)
@@ -568,9 +591,9 @@ def create_agent(
 def _should_bind_policy(bind_policy: bool | None, name: str | None) -> bool:
     """Decide whether :func:`create_agent` binds policy at creation.
 
-    ``True`` always binds (requires a name); ``False`` never binds. ``None``
-    (auto) binds only on an *explicit* governance signal — never on the mere
-    presence of ``FORTIFY_KEY``:
+    ``True`` always binds; ``False`` never binds. ``None`` (auto) binds only on
+    an *explicit* governance signal — never on the mere presence of
+    ``FORTIFY_KEY``:
 
       * ``FORTIFY_LOCAL_POLICY`` set → bind. A deliberate local override with
         no platform round-trip, so it can't surprise-404 at construction.
@@ -579,15 +602,13 @@ def _should_bind_policy(bind_policy: bool | None, name: str | None) -> bool:
         silently turn an unregistered ``create_agent(name=...)`` into a
         construction-time 404. Set ``FORTIFY_BIND_AGENTS=1`` to opt in, or pass
         ``bind_policy=True`` explicitly.
+
+    ``bind_policy=True`` requires a ``name``; that argument check is enforced at
+    the :func:`create_agent` boundary, not here (this stays a pure predicate).
     """
     if bind_policy is False:
         return False
     if bind_policy is True:
-        if not name:
-            raise ValueError(
-                "create_agent(bind_policy=True) requires name=... — the "
-                "agent name is the policy lookup key on the platform."
-            )
         return True
     if not name:
         return False
