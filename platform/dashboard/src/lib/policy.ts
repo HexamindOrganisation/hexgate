@@ -52,17 +52,21 @@ export function parseAgent(agentYaml: string, policyYaml: string): ParsedAgent |
 
 export function parsePolicy(policyYaml: string): ParsedPolicy | null {
   try {
-    const raw = yaml.load(policyYaml) as any
+    // `yaml.load` returns `unknown`; the shape checks below narrow it
+    // before we dereference. Using `unknown` over `any` so a missed
+    // check is a compile error rather than a silent dereference.
+    const raw = yaml.load(policyYaml) as Record<string, unknown> | null | undefined
     if (!raw || typeof raw !== 'object') return null
-    const defaultMode = isMode(raw?.default_policy?.mode) ? raw.default_policy.mode : 'deny'
-    const rawTools = raw.tools ?? {}
+    const defaultPolicy = raw.default_policy as { mode?: unknown } | undefined
+    const defaultMode = isMode(defaultPolicy?.mode) ? defaultPolicy.mode : 'deny'
+    const rawTools = (raw.tools ?? {}) as Record<string, unknown>
     const tools: Record<string, ToolPolicy> = {}
     for (const [toolName, entry] of Object.entries(rawTools)) {
-      const e = entry as any
+      const e = entry as { mode?: unknown; file_scope?: unknown }
       if (!isMode(e?.mode)) continue
       tools[toolName] = {
         mode: e.mode,
-        file_scope: e.file_scope,
+        file_scope: e.file_scope as ToolPolicy['file_scope'],
       }
     }
     return {

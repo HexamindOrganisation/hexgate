@@ -19,15 +19,11 @@ import { OrgProjectSwitcher } from '@/components/OrgProjectSwitcher'
 import { useActive } from '@/lib/active'
 import { renderWithProviders } from '@/test/render'
 
-interface FetchInit extends RequestInit {
-  method?: string
-}
-
 /** Stub fetch with canned responses keyed by URL. Returns 404 for
  * unknown paths so a missed wiring shows up as an obvious failure. */
 function stubFetch(routes: Record<string, unknown>): void {
   vi.spyOn(window, 'fetch').mockImplementation(
-    async (input: RequestInfo | URL, _init?: FetchInit) => {
+    async (input: RequestInfo | URL) => {
       const url = typeof input === 'string' ? input : input.toString()
       // Allow `/v1/orgs?foo=bar` style matches.
       const path = url.split('?')[0]

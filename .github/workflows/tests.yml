@@ -1,0 +1,112 @@
+name: tests
+
+# Two triggers, by design:
+#   - push: main   → re-verify after merge so `main` stays green
+#                    even if a PR was merged with bypassed CI.
+#   - pull_request → PR gate: every PR targeting main runs the full
+#                    matrix before merge.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Cancel in-flight runs on the same ref when a new commit arrives.
+# Saves CI minutes on rapid-fire pushes / force-pushes during PR review.
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  sdk:
+    name: SDK (fortify package)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          # Cache the project's deps + uv's own download cache, keyed by
+          # uv.lock so a lockfile change invalidates cleanly.
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Set up Python 3.13
+        run: uv python install 3.13
+
+      # OPA is required for the WASM-engine tests (tests/security/test_wasm_engine.py).
+      # Without it, ~10 tests skip silently via the @needs_opa marker.
+      # Pin a known-good version so an upstream OPA change can't break CI overnight.
+      - name: Install OPA
+        run: |
+          curl -fsSL -o opa https://openpolicyagent.org/downloads/v0.70.0/opa_linux_amd64_static
+          chmod +x opa
+          sudo mv opa /usr/local/bin/opa
+          opa version
+
+      - name: Sync deps
+        run: uv sync --extra dev
+
+      # `make check` = ruff lint + ruff fmt-check + pytest.
+      # Same single entry-point used locally for "CI parity" — keeps
+      # local and CI runs identical.
+      - name: Lint + format + tests
+        run: make check
+
+  platform-api:
+    name: Platform API
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: "platform/api/uv.lock"
+
+      - name: Set up Python 3.13
+        run: uv python install 3.13
+
+      - name: Sync platform-api deps
+        run: cd platform/api && uv sync --group dev
+
+      - name: Tests
+        run: make platform-api-test
+
+  dashboard:
+    name: Dashboard
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: platform/dashboard
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: platform/dashboard/pnpm-lock.yaml
+
+      - name: Install deps
+        run: pnpm install --frozen-lockfile
+
+      # All three steps gate merge — lint and typecheck are cheap and
+      # catch the bulk of mechanical PR mistakes before a reviewer
+      # has to look at them.
+      - name: Lint
+        run: pnpm lint
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Tests
+        run: pnpm test
