@@ -617,6 +617,11 @@ def _should_bind_policy(bind_policy: bool | None, name: str | None) -> bool:
         construction-time 404. Set ``FORTIFY_BIND_AGENTS=1`` to opt in, or pass
         ``bind_policy=True`` explicitly.
 
+    ``FORTIFY_LOCAL_MODE`` (a truthy value) shorts the auto path to ``False``
+    regardless of the other env signals — same one-way kill switch the audit
+    sender respects. The explicit ``bind_policy=True`` form is left alone so a
+    deliberate caller can still override local mode if they really mean it.
+
     ``bind_policy=True`` requires a ``name``; that argument check is enforced at
     the :func:`create_agent` boundary, not here (this stays a pure predicate).
     """
@@ -625,6 +630,14 @@ def _should_bind_policy(bind_policy: bool | None, name: str | None) -> bool:
     if bind_policy is True:
         return True
     if not name:
+        return False
+    # Local-mode kill switch: when the bootstrap (or any other caller) has
+    # opted into local mode, the auto-detect must not surprise-bind to the
+    # platform — that would defeat the whole point of the gate. ``bind_policy=True``
+    # is honored above so a deliberate caller can still opt in.
+    from fortify import audit
+
+    if audit._local_mode_active():
         return False
     if os.environ.get("FORTIFY_LOCAL_POLICY"):
         return True
