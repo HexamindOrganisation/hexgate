@@ -80,7 +80,7 @@ class PlatformPolicySource:
 
     def __init__(
         self,
-        client: "FortifyClient",
+        client: FortifyClient,
         agent_name: str,
         *,
         initial_bundle: PolicyBundle | None = None,
@@ -296,7 +296,7 @@ class YamlPolicySource:
         self,
         yaml_path: Path | str,
         *,
-        sign: "Callable[[bytes], bytes] | None" = None,
+        sign: Callable[[bytes], bytes] | None = None,
         opa_bin: str | None = None,
     ) -> None:
         self._yaml_path = Path(yaml_path)
@@ -418,7 +418,7 @@ class SignaturePolicy:
         self.require_signature = require_signature
 
     @classmethod
-    def from_env(cls, override_path: str) -> "SignaturePolicy":
+    def from_env(cls, override_path: str) -> SignaturePolicy:
         """Build the policy from env vars, raising on require-without-key.
 
         ``override_path`` is the value of ``FORTIFY_LOCAL_POLICY`` — used
@@ -487,7 +487,7 @@ class SignaturePolicy:
             )
 
 
-def _local_sign_callable() -> "Callable[[bytes], bytes] | None":
+def _local_sign_callable() -> Callable[[bytes], bytes] | None:
     """Build a sign callback from ``FORTIFY_BUNDLE_SIGN_KEY_PATH`` if set.
 
     Opt-in: the default :class:`YamlPolicySource` builds unsigned bundles

@@ -32,7 +32,7 @@ class FortifyLangchainAgent:
         agent: CompiledStateGraph,
         api_key: str,
         tool_names: list[str],
-        binding: "PolicyBinding | None" = None,
+        binding: PolicyBinding | None = None,
     ) -> None:
         self._agent = agent
         self._binding = binding

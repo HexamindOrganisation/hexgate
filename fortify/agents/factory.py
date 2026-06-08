@@ -189,7 +189,7 @@ def extract_input_text(input: AgentInput) -> str:
     return _extract_query_from_messages(input)
 
 
-def _resolve_user_facts(agent: "FortifyAgent") -> dict[str, list[str | int]] | None:
+def _resolve_user_facts(agent: FortifyAgent) -> dict[str, list[str | int]] | None:
     """Lazily attenuate when a :class:`User` scope is active.
 
     Returns the extracted facts dict for the active user, or ``None`` if
@@ -243,7 +243,7 @@ def _resolve_user_facts(agent: "FortifyAgent") -> dict[str, list[str | int]] | N
 
 
 def _resolve_tool_use_context(
-    agent: "FortifyAgent",
+    agent: FortifyAgent,
     tool_use_context: ToolUseContext | None,
 ) -> ToolUseContext:
     """Return the runtime tool context for a run.
@@ -298,8 +298,8 @@ class FortifyAgent:
         name: str | None = None,
         cache: BaseCache[Any] | None = None,
         workspace: Workspace | None = None,
-        binding: "PolicyBinding | None" = None,
-        fortify_client: "FortifyClient | None" = None,
+        binding: PolicyBinding | None = None,
+        fortify_client: FortifyClient | None = None,
     ) -> None:
         self.graph = graph
         self.model = model
@@ -321,8 +321,8 @@ class FortifyAgent:
         # that enforce_policy attaches and refresh_policy swaps in place;
         # threaded through with_tools rebuilds. fortify_client is separate —
         # load_fortify_agent attaches it for lazy cloud-side attenuation.
-        self._binding: "PolicyBinding | None" = binding
-        self.fortify_client: "FortifyClient | None" = fortify_client
+        self._binding: PolicyBinding | None = binding
+        self.fortify_client: FortifyClient | None = fortify_client
 
     async def ainvoke(
         self, payload: dict[str, Any], config: dict[str, Any]
@@ -403,7 +403,7 @@ class FortifyAgent:
         policy: object,
         *,
         approval_handler: ApprovalHandler | None = None,
-        source: "PolicySource | None" = None,
+        source: PolicySource | None = None,
     ) -> Self:
         """Return a new agent with Gate 1 policy enforcement applied.
 
@@ -473,7 +473,7 @@ def enforce_policy(
     policy: object,
     *,
     approval_handler: ApprovalHandler | None = None,
-    source: "PolicySource | None" = None,
+    source: PolicySource | None = None,
 ) -> AgentGraph:
     """Functional alias for :meth:`FortifyAgent.enforce_policy`."""
     return agent.enforce_policy(
@@ -580,10 +580,10 @@ def _should_bind_policy(bind_policy: bool | None, name: str | None) -> bool:
 
 
 def _bind_policy(
-    agent: "FortifyAgent",
+    agent: FortifyAgent,
     name: str,
     approval_handler: ApprovalHandler | None,
-) -> "FortifyAgent":
+) -> FortifyAgent:
     """Resolve the policy for ``name`` and enforce it on ``agent``.
 
     Mirrors ``load_fortify_agent``: resolve → enforce → attach the
@@ -609,7 +609,7 @@ def _bind_policy(
 _logger = logging.getLogger("fortify.agents.factory")
 
 
-async def _refresh_policy_safely(agent: "FortifyAgent") -> None:
+async def _refresh_policy_safely(agent: FortifyAgent) -> None:
     """Pull the latest policy from the agent's attached source, off the loop.
 
     Called by :meth:`FortifyAgent.ainvoke` / :meth:`astream_events` at the

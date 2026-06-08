@@ -75,7 +75,7 @@ def _silence_observability(monkeypatch: pytest.MonkeyPatch) -> dict[str, int]:
 class _FakeRunner:
     """Capture the construction args and yield events for run / run_async."""
 
-    instances: list["_FakeRunner"] = []
+    instances: list[_FakeRunner] = []
 
     def __init__(self, **kwargs: Any) -> None:
         self.kwargs = kwargs

@@ -33,7 +33,7 @@ class FortifyPydanticAgent:
         agent: Agent,
         api_key: str,
         agent_name: str,
-        binding: "PolicyBinding | None" = None,
+        binding: PolicyBinding | None = None,
     ) -> None:
         self._agent = agent
         self._binding = binding

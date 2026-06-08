@@ -48,7 +48,7 @@ class ResolvedPolicy:
     enforcer (with its own audit sender) from ``engine``.
     """
 
-    engine: "PolicyEngine"
+    engine: PolicyEngine
     source: PolicySource | None
 
 
@@ -56,7 +56,7 @@ def resolve_policy(
     agent_name: str,
     *,
     api_key: str | None = None,
-    client: "FortifyClient | None" = None,
+    client: FortifyClient | None = None,
 ) -> ResolvedPolicy:
     """Resolve the current policy for ``agent_name``.
 
@@ -136,11 +136,11 @@ class PolicyBinding:
 
 
 def platform_policy_from_payload(
-    client: "FortifyClient",
+    client: FortifyClient,
     agent_name: str,
     payload: dict,
     etag: str | None,
-) -> tuple["PolicyEngine", PolicySource]:
+) -> tuple[PolicyEngine, PolicySource]:
     """Decode + verify a ``get_agent`` payload into ``(engine, seeded source)``.
 
     Signed bundle → WASM engine; bundle-less → pydantic engine on
@@ -148,7 +148,7 @@ def platform_policy_from_payload(
     Shared by :func:`resolve_policy` and ``load_fortify_agent``.
     """
     bundle = decode_and_verify_platform_bundle(payload, client.public_key_bytes())
-    policy: "PolicyEngine"
+    policy: PolicyEngine
     if bundle is not None:
         policy = bundle
     elif _truthy(os.environ.get(_REQUIRE_SIGNATURE_ENV_VAR)):

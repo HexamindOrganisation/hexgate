@@ -76,7 +76,7 @@ class FortifyConfig:
         base_url: str | None = None,
         api_key: str | None = None,
         public_key: bytes | None = None,
-    ) -> "FortifyConfig":
+    ) -> FortifyConfig:
         """Resolve configuration from explicit args → env → key prefix.
 
         ``public_key`` is optional here — when omitted, the client fetches
@@ -166,7 +166,7 @@ class FortifyClient:
         self._facts: dict[str, list[str | int]] | None = None
 
     @classmethod
-    def from_env(cls, **kwargs: Any) -> "FortifyClient":
+    def from_env(cls, **kwargs: Any) -> FortifyClient:
         return cls(FortifyConfig.from_env(**kwargs))
 
     def get_agent(
