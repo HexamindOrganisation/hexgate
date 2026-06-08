@@ -258,3 +258,79 @@ def test_proxy_delegates_unknown_attributes_to_wrapped_agent(
 
     assert proxy.some_attribute() == "delegated"
     assert proxy.name == "recording-agent"
+
+
+# ---------------------------------------------------------------------------
+# Per-run policy refresh (phase 7)
+# ---------------------------------------------------------------------------
+
+
+class _CountingBinding:
+    def __init__(self) -> None:
+        self.refreshes = 0
+
+    def refresh(self) -> None:
+        self.refreshes += 1
+
+    async def refresh_async(self) -> None:
+        self.refreshes += 1
+
+
+def _proxy_with_counting_binding() -> tuple[FortifyPydanticAgent, _CountingBinding]:
+    binding = _CountingBinding()
+    proxy = FortifyPydanticAgent(
+        agent=_RecordingAgent(),  # type: ignore[arg-type]
+        api_key="k",
+        agent_name="recording-agent",
+        binding=binding,  # type: ignore[arg-type]
+    )
+    return proxy, binding
+
+
+@pytest.mark.asyncio
+async def test_run_refreshes_binding_per_call() -> None:
+    proxy, binding = _proxy_with_counting_binding()
+
+    await proxy.run("one", user=_user())
+    await proxy.run("two", user=_user())
+
+    assert binding.refreshes == 2
+
+
+def test_run_sync_refreshes_binding_per_call() -> None:
+    proxy, binding = _proxy_with_counting_binding()
+
+    proxy.run_sync("one", user=_user())
+
+    assert binding.refreshes == 1
+
+
+@pytest.mark.asyncio
+async def test_run_stream_refreshes_binding_per_call() -> None:
+    proxy, binding = _proxy_with_counting_binding()
+
+    async with proxy.run_stream("one", user=_user()) as result:
+        assert result == "stream-result"
+
+    assert binding.refreshes == 1
+
+
+@pytest.mark.asyncio
+async def test_iter_refreshes_binding_per_call() -> None:
+    proxy, binding = _proxy_with_counting_binding()
+
+    async with proxy.iter("one", user=_user()):
+        pass
+
+    assert binding.refreshes == 1
+
+
+def test_proxy_without_binding_runs_fine() -> None:
+    """Back-compat: a binding-less proxy (direct construction) still works."""
+    proxy = FortifyPydanticAgent(
+        agent=_RecordingAgent(),  # type: ignore[arg-type]
+        api_key="k",
+        agent_name="recording-agent",
+    )
+
+    assert proxy.run_sync("one", user=_user()) == "run-sync-ok"

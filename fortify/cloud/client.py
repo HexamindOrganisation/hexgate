@@ -42,7 +42,14 @@ TOKEN_PREFIX = "fty_"
 
 
 class FortifyError(RuntimeError):
-    """Raised for any Fortify API interaction failure."""
+    """Raised for any Fortify API interaction failure.
+
+    ``status`` is the HTTP status code, or ``None`` for transport errors.
+    """
+
+    def __init__(self, message: str, *, status: int | None = None) -> None:
+        super().__init__(message)
+        self.status = status
 
 
 @dataclass
@@ -69,7 +76,7 @@ class FortifyConfig:
         base_url: str | None = None,
         api_key: str | None = None,
         public_key: bytes | None = None,
-    ) -> "FortifyConfig":
+    ) -> FortifyConfig:
         """Resolve configuration from explicit args → env → key prefix.
 
         ``public_key`` is optional here — when omitted, the client fetches
@@ -159,7 +166,7 @@ class FortifyClient:
         self._facts: dict[str, list[str | int]] | None = None
 
     @classmethod
-    def from_env(cls, **kwargs: Any) -> "FortifyClient":
+    def from_env(cls, **kwargs: Any) -> FortifyClient:
         return cls(FortifyConfig.from_env(**kwargs))
 
     def get_agent(
@@ -315,7 +322,8 @@ class FortifyClient:
                 return None, exc.headers.get("ETag") or if_none_match
             detail = exc.read().decode("utf-8", errors="replace")
             raise FortifyError(
-                f"Fortify API error {exc.code} calling {url}: {detail[:200]}"
+                f"Fortify API error {exc.code} calling {url}: {detail[:200]}",
+                status=exc.code,
             ) from exc
         except urllib.error.URLError as exc:
             raise FortifyError(

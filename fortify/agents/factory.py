@@ -4,16 +4,17 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Self, TypeAlias
 
 if TYPE_CHECKING:
-    # Optional seam-attribute types — referenced only in __init__ signatures
-    # / annotations. Imported under TYPE_CHECKING to avoid the runtime cycle
-    # (security.* and cloud.* both eventually import from this module).
+    # Seam-attribute types referenced only in annotations. Imported under
+    # TYPE_CHECKING to avoid the runtime cycle (security.* and cloud.* both
+    # eventually import from this module).
     from fortify.cloud.client import FortifyClient
-    from fortify.security.enforcer import PolicyEnforcer
+    from fortify.security.binding import PolicyBinding
     from fortify.security.source import PolicySource
 
 from langchain.agents import create_agent as create_langchain_agent
@@ -30,7 +31,6 @@ from langgraph.graph.state import CompiledStateGraph
 from langgraph.store.base import BaseStore
 from pydantic import BaseModel
 
-from fortify import audit
 from fortify.runtime import (
     LocalWorkspace,
     ToolUseContext,
@@ -189,7 +189,7 @@ def extract_input_text(input: AgentInput) -> str:
     return _extract_query_from_messages(input)
 
 
-def _resolve_user_facts(agent: "FortifyAgent") -> dict[str, list[str | int]] | None:
+def _resolve_user_facts(agent: FortifyAgent) -> dict[str, list[str | int]] | None:
     """Lazily attenuate when a :class:`User` scope is active.
 
     Returns the extracted facts dict for the active user, or ``None`` if
@@ -243,7 +243,7 @@ def _resolve_user_facts(agent: "FortifyAgent") -> dict[str, list[str | int]] | N
 
 
 def _resolve_tool_use_context(
-    agent: "FortifyAgent",
+    agent: FortifyAgent,
     tool_use_context: ToolUseContext | None,
 ) -> ToolUseContext:
     """Return the runtime tool context for a run.
@@ -298,9 +298,8 @@ class FortifyAgent:
         name: str | None = None,
         cache: BaseCache[Any] | None = None,
         workspace: Workspace | None = None,
-        enforcer: "PolicyEnforcer | None" = None,
-        policy_source: "PolicySource | None" = None,
-        fortify_client: "FortifyClient | None" = None,
+        binding: PolicyBinding | None = None,
+        fortify_client: FortifyClient | None = None,
     ) -> None:
         self.graph = graph
         self.model = model
@@ -318,15 +317,12 @@ class FortifyAgent:
         self.name = name
         self.cache = cache
         self.workspace = workspace
-        # Enforcement seam. Three optional fields populated by the loaders
-        # (load_fortify_agent, _local_policy_override) and the
-        # ``enforce_policy`` builder. Promoted from setattr/getattr-with-
-        # default to first-class fields so the type checker covers the
-        # refresh path and ``with_tools`` rebuilds can't silently drop them
-        # via a misspelled attribute name.
-        self._enforcer: "PolicyEnforcer | None" = enforcer
-        self._policy_source: "PolicySource | None" = policy_source
-        self.fortify_client: "FortifyClient | None" = fortify_client
+        # Enforcement seam: the binding (enforcer + optional refresh source)
+        # that enforce_policy attaches and refresh_policy swaps in place;
+        # threaded through with_tools rebuilds. fortify_client is separate —
+        # load_fortify_agent attaches it for lazy cloud-side attenuation.
+        self._binding: PolicyBinding | None = binding
+        self.fortify_client: FortifyClient | None = fortify_client
 
     async def ainvoke(
         self, payload: dict[str, Any], config: dict[str, Any]
@@ -379,11 +375,8 @@ class FortifyAgent:
             name=self.name,
             cache=self.cache,
         )
-        # Thread the enforcement seam through the rebuild so policy
-        # refresh + lazy user attenuation keep working after with_tools.
-        # The enforcer / policy_source pair is what makes refresh_policy()
-        # able to swap engines without re-wrapping every tool; the client
-        # is what load_fortify_agent attached for cloud-side attenuation.
+        # Thread the binding + client through the rebuild so refresh and
+        # lazy user attenuation keep working after with_tools.
         return type(self)(
             graph=graph,
             model=self.model,
@@ -401,8 +394,7 @@ class FortifyAgent:
             name=self.name,
             cache=self.cache,
             workspace=self.workspace,
-            enforcer=self._enforcer,
-            policy_source=self._policy_source,
+            binding=self._binding,
             fortify_client=self.fortify_client,
         )
 
@@ -411,6 +403,7 @@ class FortifyAgent:
         policy: object,
         *,
         approval_handler: ApprovalHandler | None = None,
+        source: PolicySource | None = None,
     ) -> Self:
         """Return a new agent with Gate 1 policy enforcement applied.
 
@@ -420,27 +413,44 @@ class FortifyAgent:
         path), or ``None`` (no-op). Role resolves at call time from the
         active :class:`User`. ``approval_handler`` (callable or ``bool``)
         resolves NEEDS_APPROVAL inline; ``None`` renders structured errors.
+
+        ``source`` is the refresh source the returned agent's binding
+        carries — pass one for hot reload (see :func:`_bind_policy` /
+        ``load_fortify_agent``); the default ``None`` freezes ``policy``
+        so a later :meth:`refresh_policy` can't swap it back out.
+
+        The ``(policy, source)`` matrix:
+
+          * ``(engine, source)`` → enforce + attach the refresh source.
+          * ``(engine, None)``   → enforce, frozen (no refresh).
+          * ``(None,   None)``   → no-op; returns an unguarded rebuild.
+          * ``(None,   source)`` → **rejected** (``ValueError``): a refresh
+            source with nothing to enforce is a caller mistake (likely a
+            forgotten ``policy``), and would otherwise leave the agent
+            silently unguarded.
         """
         from langchain_core.tools import BaseTool
 
         from fortify.adapters.langchain.tools import GuardedTool
+        from fortify.security.binding import PolicyBinding
         from fortify.security.bundle import PolicyBundle
-        from fortify.security.enforcer import PolicyEnforcer
+        from fortify.security.enforcer import build_enforcer
         from fortify.security.policy_set import PolicySet, load_policy_set
 
         if policy is None:
+            if source is not None:
+                raise ValueError(
+                    "enforce_policy(None, source=...) passes a refresh source "
+                    "with no policy to enforce — the agent would be left "
+                    "unguarded. Pass a policy, or drop the source."
+                )
             return self.with_tools(list(self.tools))
 
-        if isinstance(policy, PolicyBundle):
-            resolved = policy
-        elif isinstance(policy, PolicySet):
-            resolved = policy
+        if isinstance(policy, (PolicyBundle, PolicySet)):
+            engine = policy
         else:
-            resolved = load_policy_set(policy)
-        audit_sender = audit.configure()
-        enforcer = PolicyEnforcer(
-            resolved, agent_name=self.name or "default", audit_sender=audit_sender
-        )
+            engine = load_policy_set(policy)
+        enforcer = build_enforcer(engine, agent_name=self.name or "default")
 
         wrapped: list[ToolSpec] = []
         for tool_spec in self.tools:
@@ -455,47 +465,20 @@ class FortifyAgent:
             else:
                 wrapped.append(tool_spec)
         rebuilt = self.with_tools(wrapped)
-        # Stash the enforcer on the rebuilt agent so refresh_policy() can
-        # swap its policy in place when the source serves a new bundle,
-        # without rebuilding the tool wrappers. ``self`` stays untouched.
-        rebuilt._enforcer = enforcer
+        # The binding pairs the enforcer the tools just closed over with the
+        # refresh source, so refresh_policy() can swap the policy in place.
+        rebuilt._binding = PolicyBinding(enforcer, source)
         return rebuilt
 
     def refresh_policy(self) -> None:
         """Pull the current policy from the attached source and swap it in.
 
-        Called at the top of every agent run — see
-        :meth:`ainvoke` / :meth:`astream_events` (and their tracing
-        wrappers :func:`invoke_agent` / :func:`stream_agent_raw`) — so
-        policy edits land at the next run no matter how the user
-        invokes the agent. The
-        :class:`~fortify.security.source.PlatformPolicySource` does the
-        ETag/304 dance, and the content-addressed
-        :class:`~fortify.security.wasm_engine._WasmPolicyCache` makes the
-        unchanged case a single small HTTP round-trip — no wasmtime
-        re-instantiation, no signature re-verify.
-
-        No-op when no source is attached (programmatic callers that
-        constructed the agent without one) or no enforcer exists (no
-        policy was applied).
-
-        Source-side failures are caught by the calling helper
-        (:func:`_refresh_policy_safely`) and logged at WARNING; the
-        previous policy stays active. This method itself doesn't swallow
-        — it raises so the safe-wrapper can log a single line of
-        useful context. The warning is the only refresh-failure signal
-        today (no counter / hook / last_refreshed_at field); if a
-        consumer needs programmatic visibility, open an issue with the
-        use case.
+        Runs at the top of every agent run (:meth:`ainvoke` /
+        :meth:`astream_events`). Delegates to the binding (ETag/304,
+        identity check, fail-soft); no-op without one.
         """
-        if self._policy_source is None or self._enforcer is None:
-            return
-        new_policy = self._policy_source.fetch()
-        if new_policy is None or new_policy is self._enforcer.policy:
-            # Source has nothing to offer, or the same object came back
-            # (e.g. PlatformPolicySource returns the cached bundle on 304).
-            return
-        self._enforcer.policy = new_policy
+        if self._binding is not None:
+            self._binding.refresh()
 
 
 AgentGraph: TypeAlias = FortifyAgent
@@ -506,9 +489,12 @@ def enforce_policy(
     policy: object,
     *,
     approval_handler: ApprovalHandler | None = None,
+    source: PolicySource | None = None,
 ) -> AgentGraph:
     """Functional alias for :meth:`FortifyAgent.enforce_policy`."""
-    return agent.enforce_policy(policy, approval_handler=approval_handler)
+    return agent.enforce_policy(
+        policy, approval_handler=approval_handler, source=source
+    )
 
 
 @observe(name="create_fortify_agent")
@@ -532,8 +518,26 @@ def create_agent(
     name: str | None = None,
     cache: BaseCache[Any] | None = None,
     workspace: Workspace | None = None,
+    bind_policy: bool | None = None,
+    approval_handler: ApprovalHandler | None = None,
 ) -> tuple[AgentGraph, CallbackHandler]:
-    """Create a fortify agent as a thin wrapper over LangChain."""
+    """Create a fortify agent as a thin wrapper over LangChain.
+
+    ``bind_policy``: ``True`` always binds (raises without a name); ``False``
+    never binds; ``None`` (auto) binds only on an explicit governance signal —
+    ``FORTIFY_LOCAL_POLICY`` set, or ``FORTIFY_KEY`` **plus**
+    ``FORTIFY_BIND_AGENTS=1`` (the platform path is opt-in, so a key present
+    for another agent can't surprise-404 an unregistered prototype at
+    construction). Binding gates the tools and attaches a refresh source, like
+    ``load_fortify_agent``. ``approval_handler`` applies on that path.
+    """
+    # Validate at the public boundary, before the (relatively expensive) graph
+    # build, so the error lands at the call site rather than deep in dispatch.
+    if bind_policy is True and not name:
+        raise ValueError(
+            "create_agent(bind_policy=True) requires name=... — the agent "
+            "name is the policy lookup key on the platform."
+        )
     resolved_system_prompt = (
         system_prompt
         if isinstance(system_prompt, SystemMessage)
@@ -573,6 +577,8 @@ def create_agent(
         cache=cache,
         workspace=workspace,
     )
+    if _should_bind_policy(bind_policy, name):
+        agent = _bind_policy(agent, name, approval_handler)  # type: ignore[arg-type]
 
     handler = get_langfuse_handler(
         session_id=session_id,
@@ -582,10 +588,70 @@ def create_agent(
     return agent, handler
 
 
+def _should_bind_policy(bind_policy: bool | None, name: str | None) -> bool:
+    """Decide whether :func:`create_agent` binds policy at creation.
+
+    ``True`` always binds; ``False`` never binds. ``None`` (auto) binds only on
+    an *explicit* governance signal — never on the mere presence of
+    ``FORTIFY_KEY``:
+
+      * ``FORTIFY_LOCAL_POLICY`` set → bind. A deliberate local override with
+        no platform round-trip, so it can't surprise-404 at construction.
+      * ``FORTIFY_KEY`` set **and** ``FORTIFY_BIND_AGENTS`` truthy → bind. The
+        platform path is opt-in: a key present for some *other* agent must not
+        silently turn an unregistered ``create_agent(name=...)`` into a
+        construction-time 404. Set ``FORTIFY_BIND_AGENTS=1`` to opt in, or pass
+        ``bind_policy=True`` explicitly.
+
+    ``bind_policy=True`` requires a ``name``; that argument check is enforced at
+    the :func:`create_agent` boundary, not here (this stays a pure predicate).
+    """
+    if bind_policy is False:
+        return False
+    if bind_policy is True:
+        return True
+    if not name:
+        return False
+    if os.environ.get("FORTIFY_LOCAL_POLICY"):
+        return True
+    from fortify.security.source import _truthy
+
+    return bool(os.environ.get("FORTIFY_KEY")) and _truthy(
+        os.environ.get("FORTIFY_BIND_AGENTS")
+    )
+
+
+def _bind_policy(
+    agent: FortifyAgent,
+    name: str,
+    approval_handler: ApprovalHandler | None,
+) -> FortifyAgent:
+    """Resolve the policy for ``name`` and enforce it on ``agent``.
+
+    Mirrors ``load_fortify_agent``: resolve → enforce → attach the
+    refresh source. Fail-loud — an unregistered agent (platform 404)
+    raises; register it first with ``fortify register``.
+    """
+    from fortify.security.binding import resolve_policy
+
+    client = None
+    if os.environ.get("FORTIFY_KEY"):
+        from fortify.cloud.client import FortifyClient, FortifyConfig
+
+        client = FortifyClient(FortifyConfig.from_env())
+
+    resolved = resolve_policy(name, client=client)
+    enforced = agent.enforce_policy(
+        resolved.engine, approval_handler=approval_handler, source=resolved.source
+    )
+    enforced.fortify_client = client
+    return enforced
+
+
 _logger = logging.getLogger("fortify.agents.factory")
 
 
-async def _refresh_policy_safely(agent: "FortifyAgent") -> None:
+async def _refresh_policy_safely(agent: FortifyAgent) -> None:
     """Pull the latest policy from the agent's attached source, off the loop.
 
     Called by :meth:`FortifyAgent.ainvoke` / :meth:`astream_events` at the
@@ -595,16 +661,19 @@ async def _refresh_policy_safely(agent: "FortifyAgent") -> None:
     those methods too, so they get refresh for free).
 
     No-op when no source is attached (programmatic construction).
-    Failures log a warning at WARNING level and keep the previous policy
-    — a transient network blip never crashes a chat turn. The log line
-    is the only signal today; programmatic observability (counter /
-    hook / last_refreshed_at) isn't exposed.
+
+    Actual refresh failures (fetch / verification) are handled in
+    :meth:`PolicyBinding.refresh`, which keeps the previous policy and warns
+    on the ``fortify.security.binding`` logger. The ``except`` below is only
+    a backstop for unexpected scheduling errors (e.g. ``to_thread``).
     """
     try:
         await asyncio.to_thread(agent.refresh_policy)
-    except Exception as exc:  # noqa: BLE001 — refresh failures must not crash the run
+    except Exception as exc:  # noqa: BLE001 — refresh must never crash the run
         _logger.warning(
-            "policy refresh failed: %s — keeping previously loaded policy", exc
+            "unexpected error scheduling policy refresh: %s — keeping "
+            "previously loaded policy",
+            exc,
         )
 
 

@@ -16,6 +16,7 @@ import base64
 import hashlib
 import json
 import shutil
+from types import SimpleNamespace
 
 import pytest
 
@@ -26,11 +27,52 @@ from fortify.security import (
     generate_keypair,
     sign_bytes,
 )
-from fortify.security.source import PlatformPolicySource
+from fortify.security.source import PlatformPolicySource, SignaturePolicy
 
 
 _OPA_AVAILABLE = shutil.which("opa") is not None
 needs_opa = pytest.mark.skipif(not _OPA_AVAILABLE, reason="opa not on PATH")
+
+
+# ---------------------------------------------------------------------------
+# SignaturePolicy.warn_if_unverified — the single signal for a signed local
+# bundle loaded without a pubkey, shared by the loader and binding paths.
+# ---------------------------------------------------------------------------
+
+
+def test_warn_if_unverified_warns_for_signed_bundle_without_pubkey(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Signed bundle + no pubkey configured → warn that it wasn't verified."""
+    policy = SignaturePolicy(verify_with=None, require_signature=False)
+
+    policy.warn_if_unverified(SimpleNamespace(is_signed=True))
+
+    err = capsys.readouterr().err
+    assert "signature NOT verified" in err
+    assert "FORTIFY_BUNDLE_PUBKEY_PATH" in err
+
+
+def test_warn_if_unverified_silent_when_pubkey_configured(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A pubkey is configured (verify_with set) → no warning."""
+    policy = SignaturePolicy(verify_with=b"\x00" * 32, require_signature=False)
+
+    policy.warn_if_unverified(SimpleNamespace(is_signed=True))
+
+    assert capsys.readouterr().err == ""
+
+
+def test_warn_if_unverified_silent_for_unsigned_bundle(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Unsigned bundle → nothing to verify, nothing to warn about."""
+    policy = SignaturePolicy(verify_with=None, require_signature=False)
+
+    policy.warn_if_unverified(SimpleNamespace(is_signed=False))
+
+    assert capsys.readouterr().err == ""
 
 
 _POLICY_PAYLOAD = {
@@ -205,3 +247,45 @@ def test_pre_seeded_source_skips_first_round_trip() -> None:
 
     assert result is initial
     assert fc.calls == [f'"{initial.wasm_hash}"']
+
+
+def test_concurrent_fetches_serialize() -> None:
+    """The source owns its cache, so it owns its lock: two threads fetching
+    at once never overlap inside fetch() (cached bundle/etag can't interleave)."""
+    import threading
+    import time
+
+    _, pub = generate_keypair()
+
+    class _SlowOverlapClient(_FakeClient):
+        def __init__(self, public_raw: bytes) -> None:
+            super().__init__(public_raw)
+            self._gauge = threading.Lock()
+            self.active = 0
+            self.max_active = 0
+
+        def get_agent(self, name, *, if_none_match=None):
+            with self._gauge:
+                self.active += 1
+                self.max_active = max(self.max_active, self.active)
+            time.sleep(0.02)  # widen the window an overlap would need
+            try:
+                return super().get_agent(name, if_none_match=if_none_match)
+            finally:
+                with self._gauge:
+                    self.active -= 1
+
+    fc = _SlowOverlapClient(pub)
+    # Bundle-less payloads keep this opa-free; fetch() returns None for both.
+    fc.serve({"policy_yaml": "version: 1\n"}, etag='"a"')
+    fc.serve({"policy_yaml": "version: 1\n"}, etag='"b"')
+    src = PlatformPolicySource(fc, "default")
+
+    threads = [threading.Thread(target=src.fetch) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=5)
+
+    assert all(not t.is_alive() for t in threads)
+    assert fc.max_active == 1  # serialized — never two fetches in flight

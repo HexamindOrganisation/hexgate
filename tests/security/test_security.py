@@ -204,6 +204,42 @@ async def test_enforce_policy_denies_tool_invocation(
     }
 
 
+def test_enforce_policy_detaches_refresh_source(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Applying an explicit policy detaches the refresh source, so
+    refresh_policy() is a no-op. Pins the documented side effect."""
+
+    @tool
+    async def sample_tool(value: str) -> str:
+        """Return a transformed string."""
+        return value.upper()
+
+    monkeypatch.setattr(factory, "create_langchain_agent", lambda **_kwargs: object())
+    monkeypatch.setattr(factory, "get_langfuse_handler", lambda **_kwargs: "handler")
+
+    agent, _handler = factory.create_agent(
+        model="openai:gpt-5.4",
+        tools=[sample_tool],
+        system_prompt="You are a test assistant.",
+    )
+    # Simulate an agent that already carries a refresh source.
+    from fortify.security.binding import PolicyBinding
+    from fortify.security.enforcer import PolicyEnforcer
+
+    agent._binding = PolicyBinding(
+        PolicyEnforcer(AgentPolicy(), agent_name="x"),
+        source=object(),  # type: ignore[arg-type]
+    )
+
+    secured = enforce_policy(
+        agent, AgentPolicy.model_validate({"default_policy": {"mode": "deny"}})
+    )
+
+    assert secured._binding.source is None
+    secured.refresh_policy()  # no source → no-op, must not raise
+
+
 @pytest.mark.asyncio
 async def test_enforce_policy_includes_file_scope_hint_for_out_of_scope_path(
     monkeypatch: pytest.MonkeyPatch,

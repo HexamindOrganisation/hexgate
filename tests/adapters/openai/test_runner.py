@@ -2,14 +2,41 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any, AsyncIterator
 
 import pytest
 from agents import Agent, FunctionTool
 
+from fortify.adapters.openai import runner as runner_mod
 from fortify.adapters.openai.runner import FortifyRunner
 from fortify.runtime import User
 from fortify.runtime.context import get_current_user
+from fortify.security import AgentPolicy, BaseToolPolicy, PolicySet, ResolvedPolicy
+from fortify.security.enforcer import PolicyEnforcer
+from fortify.security.policy_set import DEFAULT_ROLE_NAME
+
+
+@pytest.fixture(autouse=True)
+def _stub_resolve(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """Stub the platform resolve seam — runner tests are about lifecycle,
+    not policy resolution (covered by binding tests). Returns the list of
+    resolved agent names so tests can assert on the binding cache."""
+    resolved_names: list[str] = []
+
+    def fake_resolve(name: str, *, api_key: str) -> ResolvedPolicy:
+        resolved_names.append(name)
+        engine = PolicySet(
+            {
+                DEFAULT_ROLE_NAME: AgentPolicy(
+                    tools={"echo": BaseToolPolicy(mode="allow")}
+                )
+            }
+        )
+        return ResolvedPolicy(engine, None)
+
+    monkeypatch.setattr(runner_mod, "resolve_policy", fake_resolve)
+    return resolved_names
 
 
 def _user() -> User:
@@ -259,3 +286,161 @@ async def test_run_propagates_user_identity_to_langfuse(
     assert call["user_id"] == "u-1"
     assert call["session_id"] == "s-1"
     assert call["metadata"] == {"user_role": "developer"}
+
+
+# ---------------------------------------------------------------------------
+# Binding cache + per-run refresh (phase 6)
+# ---------------------------------------------------------------------------
+
+
+class _CountingBinding:
+    def __init__(self) -> None:
+        self.refreshes = 0
+        self.enforcer = PolicyEnforcer(
+            PolicySet(
+                {
+                    DEFAULT_ROLE_NAME: AgentPolicy(
+                        tools={"echo": BaseToolPolicy(mode="allow")}
+                    )
+                }
+            ),
+            agent_name="my-agent",
+        )
+
+    def refresh(self) -> None:
+        self.refreshes += 1
+
+    async def refresh_async(self) -> None:
+        self.refreshes += 1
+
+
+def _patch_runner_run(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def fake_run(*_args: Any, **_kwargs: Any) -> str:
+        return "ok"
+
+    monkeypatch.setattr(
+        "fortify.adapters.openai.runner.Runner.run", staticmethod(fake_run)
+    )
+
+
+@pytest.mark.asyncio
+async def test_binding_is_cached_per_agent_name(
+    monkeypatch: pytest.MonkeyPatch, _stub_resolve: list[str]
+) -> None:
+    """Same agent name across runs → one resolve; the ETag memory lives in
+    the cached binding's source, not in a per-call construction."""
+    _silence_observability(monkeypatch)
+    _patch_runner_run(monkeypatch)
+
+    runner = FortifyRunner(api_key="k")
+    agent = _make_agent("my-agent")
+
+    await runner.run(agent, "one", user=_user())
+    await runner.run(agent, "two", user=_user())
+
+    assert _stub_resolve == ["my-agent"]
+
+
+@pytest.mark.asyncio
+async def test_distinct_agent_names_get_distinct_bindings(
+    monkeypatch: pytest.MonkeyPatch, _stub_resolve: list[str]
+) -> None:
+    _silence_observability(monkeypatch)
+    _patch_runner_run(monkeypatch)
+
+    runner = FortifyRunner(api_key="k")
+
+    await runner.run(_make_agent("agent-a"), "x", user=_user())
+    await runner.run(_make_agent("agent-b"), "x", user=_user())
+
+    assert _stub_resolve == ["agent-a", "agent-b"]
+    assert set(runner._bindings) == {"agent-a", "agent-b"}
+
+
+def test_binding_for_normalises_none_agent_name_to_default(
+    _stub_resolve: list[str],
+) -> None:
+    """A None agent name collapses to "default" rather than flowing through
+    as the cache key / resolve label. Exercises _binding_for directly since
+    the canonical Agent validates name as a string at construction."""
+    runner = FortifyRunner(api_key="k")
+    agent = SimpleNamespace(name=None, tools=[_make_tool("echo")])
+
+    binding = runner._binding_for(agent)  # type: ignore[arg-type]
+
+    assert _stub_resolve == ["default"]
+    assert set(runner._bindings) == {"default"}
+    assert None not in runner._bindings
+    assert binding.enforcer.agent_name == "default"
+
+
+@pytest.mark.asyncio
+async def test_run_refreshes_cached_binding_per_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _silence_observability(monkeypatch)
+    _patch_runner_run(monkeypatch)
+
+    runner = FortifyRunner(api_key="k")
+    binding = _CountingBinding()
+    runner._bindings["my-agent"] = binding  # type: ignore[assignment]
+
+    await runner.run(_make_agent("my-agent"), "one", user=_user())
+    await runner.run(_make_agent("my-agent"), "two", user=_user())
+
+    assert binding.refreshes == 2
+
+
+def test_run_sync_refreshes_cached_binding_per_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _silence_observability(monkeypatch)
+
+    def fake_run_sync(*_args: Any, **_kwargs: Any) -> str:
+        return "ok"
+
+    monkeypatch.setattr(
+        "fortify.adapters.openai.runner.Runner.run_sync",
+        staticmethod(fake_run_sync),
+    )
+
+    runner = FortifyRunner(api_key="k")
+    binding = _CountingBinding()
+    runner._bindings["my-agent"] = binding  # type: ignore[assignment]
+
+    runner.run_sync(_make_agent("my-agent"), "one", user=_user())
+
+    assert binding.refreshes == 1
+
+
+def test_run_streamed_refreshes_before_setup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The refresh must land before Runner.run_streamed fixes the wrap —
+    tools fire later during stream_events, against whatever the enforcer
+    holds at setup."""
+    _silence_observability(monkeypatch)
+
+    order: list[str] = []
+
+    def fake_run_streamed(*_args: Any, **_kwargs: Any) -> _FakeStreamingResult:
+        order.append("run_streamed")
+        return _FakeStreamingResult()
+
+    monkeypatch.setattr(
+        "fortify.adapters.openai.runner.Runner.run_streamed",
+        staticmethod(fake_run_streamed),
+    )
+
+    class _OrderedBinding(_CountingBinding):
+        def refresh(self) -> None:
+            order.append("refresh")
+            super().refresh()
+
+    runner = FortifyRunner(api_key="k")
+    binding = _OrderedBinding()
+    runner._bindings["my-agent"] = binding  # type: ignore[assignment]
+
+    runner.run_streamed(_make_agent("my-agent"), "hello", user=_user())
+
+    assert order == ["refresh", "run_streamed"]

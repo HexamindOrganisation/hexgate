@@ -1,4 +1,10 @@
-"""Tests for the OpenAI Agents adapter agent wrapping helpers."""
+"""Tests for the OpenAI Agents adapter agent wrapping helpers (phase 6).
+
+The allow-all ``build_policy_set`` placeholder is gone. The wrapper is
+now mechanics-only — ``wrap_openai_agent(agent, enforcer=...)`` clones
+with gated tools — while policy resolution + the binding cache + per-run
+refresh all live in the runner (see test_runner.py).
+"""
 
 from __future__ import annotations
 
@@ -7,9 +13,10 @@ from typing import Any
 import pytest
 from agents import Agent, FunctionTool
 
-from fortify.adapters.openai.wrapper import build_policy_set, wrap_openai_agent
+from fortify.adapters.openai.wrapper import wrap_openai_agent
 from fortify.runtime import User
-from fortify.security import PolicySet
+from fortify.security import AgentPolicy, BaseToolPolicy, PolicySet
+from fortify.security.enforcer import PolicyEnforcer
 from fortify.security.policy_set import DEFAULT_ROLE_NAME
 
 
@@ -37,25 +44,31 @@ def _make_agent(name: str = "my-agent", *, with_tools: bool = True) -> Agent:
     return Agent(name=name, tools=tools)
 
 
-def test_build_policy_set_returns_allow_for_each_tool() -> None:
-    """The placeholder policy builder allows every tool name it receives."""
-    policy_set = build_policy_set(
-        api_key="k",
-        agent_name="my-agent",
-        tool_names=["echo", "shout"],
+def _allow_all_enforcer(tool_names: list[str]) -> PolicyEnforcer:
+    engine = PolicySet(
+        {
+            DEFAULT_ROLE_NAME: AgentPolicy(
+                tools={n: BaseToolPolicy(mode="allow") for n in tool_names}
+            )
+        }
     )
-
-    assert isinstance(policy_set, PolicySet)
-    default_policy = policy_set.policy_for(None)
-    assert default_policy.tools["echo"].mode == "allow"
-    assert default_policy.tools["shout"].mode == "allow"
+    return PolicyEnforcer(engine, agent_name="my-agent")
 
 
-def test_build_policy_set_with_no_tools_returns_empty_tools_dict() -> None:
-    """No tool names → no per-tool entries; default policy still applies."""
-    policy_set = build_policy_set(api_key="k", agent_name="my-agent", tool_names=[])
+def _deny_all_enforcer() -> PolicyEnforcer:
+    engine = PolicySet(
+        {
+            DEFAULT_ROLE_NAME: AgentPolicy.model_validate(
+                {"default_policy": {"mode": "deny"}}
+            )
+        }
+    )
+    return PolicyEnforcer(engine, agent_name="my-agent")
 
-    assert policy_set.policy_for(None).tools == {}
+
+# ---------------------------------------------------------------------------
+# wrap_openai_agent — clone + non-mutation (mechanics only, enforcer passed in)
+# ---------------------------------------------------------------------------
 
 
 def test_wrap_openai_agent_returns_a_new_agent_with_wrapped_tools() -> None:
@@ -63,7 +76,9 @@ def test_wrap_openai_agent_returns_a_new_agent_with_wrapped_tools() -> None:
     original = _make_agent()
     original_tools = list(original.tools)
 
-    wrapped = wrap_openai_agent(original, api_key="k")
+    wrapped = wrap_openai_agent(
+        original, enforcer=_allow_all_enforcer(["echo", "shout"])
+    )
 
     assert wrapped is not original
     assert wrapped.name == original.name
@@ -78,57 +93,28 @@ def test_wrap_openai_agent_does_not_mutate_original_agent() -> None:
     original_tools = list(original.tools)
     original_invokes = [t.on_invoke_tool for t in original_tools]
 
-    wrap_openai_agent(original, api_key="k")
+    wrap_openai_agent(original, enforcer=_allow_all_enforcer(["echo", "shout"]))
 
     assert list(original.tools) == original_tools
     for tool, invoke in zip(original.tools, original_invokes):
         assert tool.on_invoke_tool is invoke
 
 
+def test_wrap_openai_agent_with_no_tools_returns_clone_with_empty_tools() -> None:
+    """An agent with no tools wraps cleanly to a clone with no tools."""
+    original = _make_agent(with_tools=False)
+
+    wrapped = wrap_openai_agent(original, enforcer=_allow_all_enforcer([]))
+
+    assert wrapped is not original
+    assert list(wrapped.tools) == []
+
+
 @pytest.mark.asyncio
-async def test_wrap_openai_agent_installs_policy_gates_on_clone(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The cloned agent's tools call through the enforcer built from build_policy_set."""
-    from fortify.security import AgentPolicy
+async def test_wrap_openai_agent_gates_tools_with_the_given_enforcer() -> None:
+    """The cloned agent's tools call through the supplied enforcer."""
+    wrapped = wrap_openai_agent(_make_agent(), enforcer=_deny_all_enforcer())
 
-    captured: dict[str, Any] = {}
-
-    def fake_build(
-        api_key: str,
-        agent_name: str,
-        tool_names: list[str],
-    ) -> PolicySet:
-        captured.update(
-            {
-                "api_key": api_key,
-                "agent_name": agent_name,
-                "tool_names": list(tool_names),
-            }
-        )
-        return PolicySet(
-            {
-                DEFAULT_ROLE_NAME: AgentPolicy.model_validate(
-                    {
-                        "default_policy": {"mode": "deny"},
-                        "tools": {name: {"mode": "deny"} for name in tool_names},
-                    }
-                )
-            }
-        )
-
-    monkeypatch.setattr("fortify.adapters.openai.wrapper.build_policy_set", fake_build)
-
-    original = _make_agent()
-
-    wrapped = wrap_openai_agent(original, api_key="api-123")
-
-    assert captured["api_key"] == "api-123"
-    assert captured["agent_name"] == "my-agent"
-    assert captured["tool_names"] == ["echo", "shout"]
-
-    # Role resolution happens inside the enforcer at call time, so we need
-    # an active User scope to exercise the gate end-to-end.
     [echo_tool, _] = wrapped.tools
     async with User(user_id="u-1"):
         result = await echo_tool.on_invoke_tool(None, '{"text": "hi"}')
@@ -136,11 +122,29 @@ async def test_wrap_openai_agent_installs_policy_gates_on_clone(
     assert "policy_denied" in result
 
 
-def test_wrap_openai_agent_with_no_tools_returns_clone_with_empty_tools() -> None:
-    """An agent with no tools wraps cleanly to a clone with no tools."""
-    original = _make_agent(with_tools=False)
+@pytest.mark.asyncio
+async def test_refresh_swap_reaches_every_clone() -> None:
+    """Rebinding enforcer.policy (what refresh does) flips decisions in ALL
+    clones produced from the shared enforcer — the per-call rewrap is safe."""
+    enforcer = _deny_all_enforcer()
+    first_clone = wrap_openai_agent(_make_agent(), enforcer=enforcer)
+    second_clone = wrap_openai_agent(_make_agent(), enforcer=enforcer)
 
-    wrapped = wrap_openai_agent(original, api_key="k")
+    async with User(user_id="u-1"):
+        denied = await first_clone.tools[0].on_invoke_tool(None, '{"text": "x"}')
+        assert "policy_denied" in denied
 
-    assert wrapped is not original
-    assert list(wrapped.tools) == []
+        enforcer.policy = PolicySet(
+            {
+                DEFAULT_ROLE_NAME: AgentPolicy(
+                    tools={
+                        "echo": BaseToolPolicy(mode="allow"),
+                        "shout": BaseToolPolicy(mode="allow"),
+                    }
+                )
+            }
+        )  # the refresh swap
+
+        for clone in (first_clone, second_clone):
+            allowed = await clone.tools[0].on_invoke_tool(None, '{"text": "x"}')
+            assert allowed == 'invoked:{"text": "x"}'

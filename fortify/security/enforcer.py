@@ -12,7 +12,7 @@ import copy
 from collections.abc import Mapping
 from typing import Any
 
-from fortify.audit import AuditEvent, AuditSender
+from fortify.audit import AuditEvent, AuditSender, configure
 from fortify.runtime.context import get_current_user
 from fortify.security.decision import Decision, PolicyEngine
 
@@ -81,3 +81,22 @@ class PolicyEnforcer:
             )
 
         return decision
+
+
+def build_enforcer(
+    engine: PolicyEngine,
+    *,
+    agent_name: str = "default",
+    api_key: str | None = None,
+) -> PolicyEnforcer:
+    """Compose a governed enforcer — engine + audit sender from ``api_key``.
+
+    The one place that pairs an engine with its audit sink, so the six
+    surfaces (``FortifyAgent.enforce_policy``, the four adapters, the
+    OpenAI runner) don't each repeat the ``audit.configure`` wiring.
+    ``api_key=None`` falls back to ``FORTIFY_KEY`` (audit stays inert when
+    neither resolves).
+    """
+    return PolicyEnforcer(
+        engine, agent_name=agent_name, audit_sender=configure(api_key)
+    )

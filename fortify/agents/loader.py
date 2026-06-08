@@ -19,12 +19,11 @@ from fortify.agents.factory import (
 from fortify.agents.models import AgentSpec
 from fortify.cloud.client import FortifyClient, FortifyConfig
 from fortify.security import AgentPolicy, PolicyBundle, load_policy
-from fortify.security.signing import SignatureError, decode_key
-from fortify.security.source import (
-    BundleDirPolicySource,
-    PolicySource,
-    YamlPolicySource,
-)
+
+# FORTIFY_LOCAL_POLICY resolution lives in fortify.security.source (single
+# source of truth for the REQUIRE_SIGNATURE matrix); re-imported here for the
+# loaders and back-compat with callers/tests that import it from this module.
+from fortify.security.source import _local_policy_override
 from fortify.tools import (
     bash,
     edit_file,
@@ -54,200 +53,6 @@ AgentFactory: TypeAlias = Callable[..., tuple[AgentGraph, CallbackHandler]]
 REGISTERED_AGENTS: dict[str, AgentFactory] = {}
 
 
-_LOCAL_POLICY_ENV_VAR = "FORTIFY_LOCAL_POLICY"
-_BUNDLE_PUBKEY_ENV_VAR = "FORTIFY_BUNDLE_PUBKEY_PATH"
-_REQUIRE_SIGNATURE_ENV_VAR = "FORTIFY_BUNDLE_REQUIRE_SIGNATURE"
-_BUNDLE_SIGN_KEY_ENV_VAR = "FORTIFY_BUNDLE_SIGN_KEY_PATH"
-
-
-def _truthy(value: str | None) -> bool:
-    """Parse a boolean-ish env var ('1', 'true', 'yes' → True)."""
-    return (value or "").strip().lower() in {"1", "true", "yes", "on"}
-
-
-# ---------------------------------------------------------------------------
-# Signature policy — single source of truth for the REQUIRE_SIGNATURE matrix
-# ---------------------------------------------------------------------------
-
-
-class SignaturePolicy:
-    """The (pubkey, require_signature) pair resolved once from env.
-
-    Concentrates every cell of the ``FORTIFY_BUNDLE_REQUIRE_SIGNATURE``
-    × ``FORTIFY_BUNDLE_PUBKEY_PATH`` × (yaml | bundle-dir) matrix into
-    one place so the safety story is auditable from a single file.
-
-    Matrix:
-      * require=true  + no pubkey               → :meth:`from_env` raises
-        (no key to verify against — refuse to start).
-      * require=true  + yaml + unsigned bundle  → :meth:`check_yaml_bundle`
-        raises at fetch time (yaml produces unsigned by default; refuse to
-        enforce when strict mode demands authenticity).
-      * require=false + signed bundle + pubkey  → BundleDir verifies via
-        ``verify_with`` on every reload.
-      * require=false + signed bundle + no key  → :meth:`warn_if_unverified`
-        emits a heads-up at announce time. Dev sees "signed" + warning;
-        no enforcement happens.
-      * require=false + unsigned                → silent OK.
-
-    Replaces three scattered helpers (one resolve-at-construction, one
-    verify-at-fetch, one warn-at-announce) that the reviewer flagged as
-    hard to audit cell-by-cell.
-    """
-
-    def __init__(self, *, verify_with: bytes | None, require_signature: bool) -> None:
-        self.verify_with = verify_with
-        self.require_signature = require_signature
-
-    @classmethod
-    def from_env(cls, override_path: str) -> "SignaturePolicy":
-        """Build the policy from env vars, raising on require-without-key.
-
-        ``override_path`` is the value of ``FORTIFY_LOCAL_POLICY`` — used
-        only for error messages so the operator sees which load is
-        being refused.
-        """
-        require = _truthy(os.environ.get(_REQUIRE_SIGNATURE_ENV_VAR))
-        pubkey_path = os.environ.get(_BUNDLE_PUBKEY_ENV_VAR)
-
-        if not pubkey_path:
-            if require:
-                raise RuntimeError(
-                    f"{_REQUIRE_SIGNATURE_ENV_VAR} is set but "
-                    f"{_BUNDLE_PUBKEY_ENV_VAR} is unset — no key to verify "
-                    f"the bundle at {override_path!r} against."
-                )
-            return cls(verify_with=None, require_signature=False)
-
-        try:
-            verify_with = decode_key(
-                Path(pubkey_path).read_text(encoding="utf-8").strip()
-            )
-        except (OSError, SignatureError) as exc:
-            raise RuntimeError(
-                f"{_BUNDLE_PUBKEY_ENV_VAR}={pubkey_path!r} could not be read "
-                f"as a base64url public key: {exc}"
-            ) from exc
-        return cls(verify_with=verify_with, require_signature=require)
-
-    def check_yaml_bundle(self, bundle: PolicyBundle, yaml_path: str) -> None:
-        """At fetch time, refuse an unsigned yaml-built bundle under strict mode.
-
-        ``BundleDirPolicySource`` is already covered: its constructor
-        receives :attr:`verify_with` and verifies on every reload. The
-        yaml branch has nothing for BundleDir to verify against (yaml
-        sources build their bundles locally) — so strict mode means
-        either sign locally via ``FORTIFY_BUNDLE_SIGN_KEY_PATH`` or
-        switch to a pre-built signed bundle dir.
-        """
-        if self.require_signature and not bundle.is_signed:
-            raise RuntimeError(
-                f"{_REQUIRE_SIGNATURE_ENV_VAR} is set but "
-                f"{_LOCAL_POLICY_ENV_VAR}={yaml_path!r} points at an "
-                f"unsigned yaml source. Set {_BUNDLE_SIGN_KEY_ENV_VAR} to "
-                "sign locally, or switch to a pre-built signed bundle dir."
-            )
-
-    def warn_if_unverified(self, bundle: PolicyBundle) -> None:
-        """Emit a heads-up when a signed bundle loads without a pubkey.
-
-        Permissive-mode only — strict mode would already have raised in
-        :meth:`from_env`. Without the warning the dev sees "signed" in
-        the announce line and reasonably assumes authenticity was
-        checked, when it wasn't. Verification behaviour is unchanged
-        (we never verified there); only the heads-up is restored.
-        """
-        if bundle.is_signed and self.verify_with is None:
-            import sys
-
-            print(
-                f"[fortify] warning: override bundle is signed but "
-                f"{_BUNDLE_PUBKEY_ENV_VAR} is unset — signature NOT verified.",
-                file=sys.stderr,
-            )
-
-
-def _local_sign_callable() -> "Callable[[bytes], bytes] | None":
-    """Build a sign callback from ``FORTIFY_BUNDLE_SIGN_KEY_PATH`` if set.
-
-    Opt-in: the default :class:`YamlPolicySource` builds unsigned bundles
-    (dev-loop default — signing locally with a key on the dev box adds
-    no real authenticity). When set, the file is read as a base64url raw
-    Ed25519 private key and used to sign every recompile, so the
-    resulting bundle's ``is_signed`` flag matches what the platform
-    would have produced. Useful when a downstream check requires
-    ``is_signed`` to be true.
-    """
-    key_path = os.environ.get(_BUNDLE_SIGN_KEY_ENV_VAR)
-    if not key_path:
-        return None
-    try:
-        private_raw = decode_key(Path(key_path).read_text(encoding="utf-8").strip())
-    except (OSError, SignatureError) as exc:
-        raise RuntimeError(
-            f"{_BUNDLE_SIGN_KEY_ENV_VAR}={key_path!r} could not be read as a "
-            f"base64url private key: {exc}"
-        ) from exc
-
-    from fortify.security.signing import sign_bytes
-
-    return lambda data: sign_bytes(data, private_raw)
-
-
-def _local_policy_source(
-    sig_policy: SignaturePolicy,
-) -> PolicySource | None:
-    """Resolve ``$FORTIFY_LOCAL_POLICY`` into a :class:`PolicySource`, if set.
-
-    Dispatch by path shape:
-
-      * ``<dir>`` → :class:`BundleDirPolicySource` (pre-built bundle from
-        ``fortify policy build``; mtime-refreshed). Its ``verify_with``
-        comes from ``sig_policy.verify_with``.
-      * ``*.yaml`` / ``*.yml`` → :class:`YamlPolicySource` (auto-compile
-        on save). Strict-mode signing is checked at fetch time via
-        ``sig_policy.check_yaml_bundle``.
-
-    The full ``REQUIRE_SIGNATURE`` matrix lives on :class:`SignaturePolicy`
-    — see its docstring for the cell-by-cell table.
-    """
-    override_path = os.environ.get(_LOCAL_POLICY_ENV_VAR)
-    if not override_path:
-        return None
-    target = Path(override_path)
-
-    if target.is_dir():
-        return BundleDirPolicySource(target, verify_with=sig_policy.verify_with)
-    if target.suffix in {".yaml", ".yml"} and target.is_file():
-        return YamlPolicySource(target, sign=_local_sign_callable())
-    raise RuntimeError(
-        f"{_LOCAL_POLICY_ENV_VAR}={override_path!r}: expected a bundle "
-        "directory (output of `fortify policy build`) or a .yaml file."
-    )
-
-
-def _announce_local_override(
-    bundle: PolicyBundle, source: PolicySource, override_path: str
-) -> None:
-    """Loud stderr line so devs notice when the local override is active.
-
-    Signed-but-unverified warnings live on
-    :meth:`SignaturePolicy.warn_if_unverified` and fire from
-    :func:`_local_policy_override` — this function is purely the
-    "what got loaded" announce line.
-    """
-    import sys
-
-    short = bundle.wasm_hash[:12] if bundle.wasm_hash else "?"
-    signed = "signed" if bundle.is_signed else "unsigned"
-    kind = "yaml" if isinstance(source, YamlPolicySource) else "bundle-dir"
-    print(
-        f"[fortify] {_LOCAL_POLICY_ENV_VAR} active ({kind}): "
-        f"{override_path} (wasm_hash={short}, {signed})",
-        file=sys.stderr,
-    )
-
-
 def _apply_local_override(
     agent: AgentGraph,
     approval_handler: ApprovalHandler | None,
@@ -268,52 +73,9 @@ def _apply_local_override(
     if override is None:
         return None
     bundle, source = override
-    enforced = enforce_policy(agent, bundle, approval_handler=approval_handler)
-    enforced._policy_source = source
-    return enforced
-
-
-def _local_policy_override() -> tuple[PolicyBundle, PolicySource] | None:
-    """Resolve ``$FORTIFY_LOCAL_POLICY`` into a (bundle, source) pair.
-
-    Returns ``None`` when the env var is unset. The bundle is the
-    initial enforcement policy (ready to hand off to ``enforce_policy``);
-    the source is attached to the agent so per-run refresh picks up
-    yaml edits / bundle rebuilds without a restart.
-
-    Failures (missing file, bad signature, opa not on PATH for a yaml
-    source) raise loudly — silently degrading a security override
-    would defeat the point. Signature-policy enforcement (the
-    ``REQUIRE_SIGNATURE`` matrix) is centralised on
-    :class:`SignaturePolicy`.
-    """
-    override_path = os.environ.get(_LOCAL_POLICY_ENV_VAR)
-    if not override_path:
-        return None
-    # Build the signature policy once at startup. ``from_env`` raises
-    # immediately if require-signature is set without a pubkey — fail
-    # fast, before any agent code runs.
-    sig_policy = SignaturePolicy.from_env(override_path)
-    source = _local_policy_source(sig_policy)
-    if source is None:
-        # Defensive: we already null-checked override_path above; if
-        # _local_policy_source returns None here it'd be an internal
-        # invariant violation.
-        return None
-    bundle = source.fetch()
-    if bundle is None:
-        raise RuntimeError(
-            f"{_LOCAL_POLICY_ENV_VAR}: source produced no bundle (internal "
-            "invariant violated)."
-        )
-    # YamlPolicySource builds unsigned bundles unless FORTIFY_BUNDLE_SIGN_KEY_PATH
-    # is set; strict mode refuses those. BundleDir's own constructor already
-    # gated on verify_with, so this is a no-op for the dir path.
-    if isinstance(source, YamlPolicySource):
-        sig_policy.check_yaml_bundle(bundle, override_path)
-    _announce_local_override(bundle, source, override_path)
-    sig_policy.warn_if_unverified(bundle)
-    return bundle, source
+    return enforce_policy(
+        agent, bundle, approval_handler=approval_handler, source=source
+    )
 
 
 def _platform_bundle(payload: dict, client: FortifyClient) -> PolicyBundle | None:
@@ -489,6 +251,7 @@ def load_builtin_agent(
         user_id=user_id,
         tags=tags,
         name=spec.name,
+        bind_policy=False,  # the loader applies its own policy below
     )
     overridden = _apply_local_override(agent, approval_handler)
     if overridden is not None:
@@ -521,6 +284,7 @@ def load_local_agent(
         user_id=user_id,
         tags=tags,
         name=spec.name,
+        bind_policy=False,  # the loader applies its own policy below
     )
     overridden = _apply_local_override(agent, approval_handler)
     if overridden is not None:
@@ -639,8 +403,6 @@ def load_fortify_agent(
     this attribute when an :class:`~fortify.runtime.User` scope is active to
     mint per-request attenuated tokens lazily.
     """
-    from fortify.security.policy_set import load_policy_set_from_dict
-
     if not name:
         raise ValueError(
             "load_fortify_agent(name=...) requires an explicit agent name. "
@@ -657,13 +419,6 @@ def load_fortify_agent(
     spec = AgentSpec.model_validate(yaml.safe_load(payload["agent_yaml"]) or {})
     system_prompt = payload.get("system_md") or ""
 
-    # The platform returns one canonical ``policy.yaml`` text per agent. The
-    # role bundle lives inline under a top-level ``roles:`` key when present;
-    # otherwise the document is a flat single-policy doc. load_policy_set_from_dict
-    # dispatches on shape — inheritance + mixin filtering applied either way.
-    policy_payload = yaml.safe_load(payload["policy_yaml"]) or {}
-    policy: object = load_policy_set_from_dict(policy_payload)
-
     tools = resolve_builtin_tools(spec.tools, extra_tools=extra_tools)
 
     agent, handler = create_agent(
@@ -676,47 +431,27 @@ def load_fortify_agent(
         # filter Nones so langchain doesn't get fed a None tag.
         tags=tags or [t for t in ["fortify", "fortify-cloud", config.project_id] if t],
         name=spec.name,
+        bind_policy=False,  # this loader composes the binding itself below
     )
-    # Policy precedence:
-    #   1. FORTIFY_LOCAL_POLICY override (dev iteration) — wins outright,
-    #      with its own mtime-driven refresh source.
-    #   2. Platform-served signed bundle — verified, WASM-enforced, with
-    #      an ETag-driven PlatformPolicySource for per-run refresh.
-    #   3. policy_yaml + pydantic — fallback when no bundle was served.
-    from fortify.security.source import PlatformPolicySource
+    # Precedence: FORTIFY_LOCAL_POLICY override → platform (signed bundle,
+    # or pydantic on policy_yaml). Decode/verify rules are shared with
+    # resolve_policy via platform_policy_from_payload.
+    from fortify.security.binding import platform_policy_from_payload
 
     override = _local_policy_override()
-    refresh_source: PolicySource | None = None
     if override is not None:
-        bundle, refresh_source = override
-        policy = bundle
-        # Local override wins; the platform's bundle (if any) is ignored.
+        policy, refresh_source = override
     else:
-        platform_bundle = _platform_bundle(payload, client)
-        if platform_bundle is not None:
-            policy = platform_bundle
-        elif _truthy(os.environ.get(_REQUIRE_SIGNATURE_ENV_VAR)):
-            raise RuntimeError(
-                f"{_REQUIRE_SIGNATURE_ENV_VAR} is set but the platform served "
-                f"no signed bundle for agent {resolved_name!r} — the policy may "
-                "not have compiled (is opa available on the control plane?). "
-                "Refusing to fall back to the pydantic engine."
-            )
-        # Pre-seed PlatformPolicySource with the bundle + etag we just
-        # fetched so the next refresh is a 304 unless the policy changed.
-        refresh_source = PlatformPolicySource(
-            client,
-            resolved_name,
-            initial_bundle=platform_bundle,
-            initial_etag=initial_etag,
+        policy, refresh_source = platform_policy_from_payload(
+            client, resolved_name, payload, initial_etag
         )
 
-    enforced = enforce_policy(agent, policy, approval_handler=approval_handler)
+    enforced = enforce_policy(
+        agent, policy, approval_handler=approval_handler, source=refresh_source
+    )
     # Attach the client so the runtime can do lazy attenuation inside an
     # active User scope without the caller having to thread it through.
     enforced.fortify_client = client
-    if refresh_source is not None:
-        enforced._policy_source = refresh_source
     return enforced, handler
 
 

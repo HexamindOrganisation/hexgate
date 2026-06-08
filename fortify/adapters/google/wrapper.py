@@ -1,47 +1,41 @@
-"""Google ADK adapter: build a :class:`PolicySet`, construct one
+"""Google ADK adapter: resolve the platform policy, construct one
 :class:`PolicyEnforcer`, and return a clone of the agent whose tools
 are policy-gated. User-agnostic at wrap time — role resolution happens
 inside the enforcer via the :class:`User` contextvar.
+
+Policy is resolved from the platform at wrap time (fail-loud on a 404 —
+register the agent first with ``fortify register``); the returned binding
+is what the runner refreshes per run.
 """
 
 from __future__ import annotations
 
 from google.adk.agents import BaseAgent
 
-from fortify import audit
 from fortify.adapters.google.tools import wrap_tools
-from fortify.security import AgentPolicy, BaseToolPolicy, PolicySet
-from fortify.security.enforcer import PolicyEnforcer
-from fortify.security.policy_set import DEFAULT_ROLE_NAME
+from fortify.security.binding import PolicyBinding, resolve_policy
+from fortify.security.enforcer import build_enforcer
 
 
-def build_policy_set(
-    api_key: str,  # noqa: ARG001 — reserved for the future Fortify-cloud fetch
-    agent_name: str,  # noqa: ARG001 — same
-    tool_names: list[str],
-) -> PolicySet:
-    """Placeholder allow-all one-role bundle. TODO: cloud-fetch via FortifyClient."""
-    default_policy = AgentPolicy(
-        tools={name: BaseToolPolicy(mode="allow") for name in tool_names}
-    )
-    return PolicySet({DEFAULT_ROLE_NAME: default_policy})
-
-
-def wrap_google_agent(agent: BaseAgent, *, api_key: str) -> BaseAgent:
-    """Return a clone of ``agent`` with policy-gated tools.
+def wrap_google_agent(
+    agent: BaseAgent, *, api_key: str
+) -> tuple[BaseAgent, PolicyBinding]:
+    """Return a policy-gated clone of ``agent`` plus its refresh binding.
 
     Caller must open a :class:`User` scope around the run.
     ``NEEDS_APPROVAL`` outcomes surface as ``[approval_required]``-prefixed
-    strings in tool results; ``[policy_denied]`` for denials.
+    strings in tool results; ``[policy_denied]`` for denials. Refresh the
+    returned binding at run boundaries (``FortifyRunner`` does). Fail-loud:
+    an unregistered agent (platform 404) raises — register it first with
+    ``fortify register``.
     """
-    audit_sender = audit.configure(api_key)
-
     agent_name = getattr(agent, "name", "default")
     tools = list(getattr(agent, "tools", []) or [])
-    tool_names = [getattr(t, "name", getattr(t, "__name__", "tool")) for t in tools]
-    policy_set = build_policy_set(api_key, agent_name, tool_names)
-    enforcer = PolicyEnforcer(
-        policy_set, agent_name=agent_name, audit_sender=audit_sender
-    )
+
+    resolved = resolve_policy(agent_name, api_key=api_key)
+    enforcer = build_enforcer(resolved.engine, agent_name=agent_name, api_key=api_key)
     guarded_tools = wrap_tools(tools, enforcer)
-    return agent.model_copy(update={"tools": guarded_tools})
+    return (
+        agent.model_copy(update={"tools": guarded_tools}),
+        PolicyBinding(enforcer, resolved.source),
+    )

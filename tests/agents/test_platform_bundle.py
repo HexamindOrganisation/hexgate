@@ -184,9 +184,10 @@ def _patched_loader(monkeypatch):
         # A namespace (not a str) so the loader can set .fortify_client on it.
         return types.SimpleNamespace(name="agent"), "handler-instance"
 
-    def fake_enforce_policy(_agent, policy, *, approval_handler=None):
+    def fake_enforce_policy(_agent, policy, *, approval_handler=None, source=None):
         captured["policy"] = policy
         captured["approval_handler"] = approval_handler
+        captured["source"] = source
         return _agent
 
     monkeypatch.setattr(loader, "FortifyConfig", _FakeConfig)
@@ -262,22 +263,20 @@ def test_refresh_policy_swaps_enforcer_policy_on_change() -> None:
     from types import SimpleNamespace
 
     from fortify.agents.factory import FortifyAgent
+    from fortify.security.binding import PolicyBinding
 
-    # Build the bare minimum of a FortifyAgent — the refresh_policy method
-    # only touches _enforcer and _policy_source, so we skip the heavy
-    # graph construction.
+    # Bare FortifyAgent — refresh_policy only touches _binding, so skip the
+    # heavy graph construction.
     agent = FortifyAgent.__new__(FortifyAgent)
     enforcer = SimpleNamespace(policy="initial")
-    agent._enforcer = enforcer  # type: ignore[attr-defined]
 
     new_bundle = object()  # any new identity will do
-    fetched: list[object] = []
 
     class _Source:
         def fetch(self):
-            return new_bundle if not fetched else fetched.append("called") or new_bundle
+            return new_bundle
 
-    agent._policy_source = _Source()  # type: ignore[attr-defined]
+    agent._binding = PolicyBinding(enforcer, _Source())  # type: ignore[arg-type]
     agent.refresh_policy()
     assert enforcer.policy is new_bundle
 
@@ -288,17 +287,17 @@ def test_refresh_policy_skips_when_source_returns_same_instance() -> None:
     from types import SimpleNamespace
 
     from fortify.agents.factory import FortifyAgent
+    from fortify.security.binding import PolicyBinding
 
     agent = FortifyAgent.__new__(FortifyAgent)
     cached = object()
     enforcer = SimpleNamespace(policy=cached)
-    agent._enforcer = enforcer  # type: ignore[attr-defined]
 
     class _Source:
         def fetch(self):
             return cached  # same object every time
 
-    agent._policy_source = _Source()  # type: ignore[attr-defined]
+    agent._binding = PolicyBinding(enforcer, _Source())  # type: ignore[arg-type]
     agent.refresh_policy()
     assert enforcer.policy is cached  # no swap happened
 
@@ -306,15 +305,30 @@ def test_refresh_policy_skips_when_source_returns_same_instance() -> None:
 def test_refresh_policy_noop_without_source_or_enforcer() -> None:
     """Agents constructed programmatically without enforcement: refresh
     is a quiet no-op, not a crash.
-
-    Bypasses ``__init__`` and sets the seam fields explicitly so the test
-    isn't dependent on the rest of ``FortifyAgent``'s required args
-    (model, graph, tools, ...). The contract we're pinning is just
-    ``refresh_policy() must not raise when both seam fields are None.``
     """
     from fortify.agents.factory import FortifyAgent
 
     agent = FortifyAgent.__new__(FortifyAgent)
-    agent._enforcer = None
-    agent._policy_source = None
+    agent._binding = None
     agent.refresh_policy()  # must not raise
+
+
+def test_refresh_policy_is_fail_soft_on_source_errors() -> None:
+    """Phase 2: the swap logic (and its fail-soft contract) lives in
+    PolicyBinding — a raising source logs and keeps the previous policy
+    instead of crashing the run."""
+    from types import SimpleNamespace
+
+    from fortify.agents.factory import FortifyAgent
+    from fortify.security.binding import PolicyBinding
+
+    agent = FortifyAgent.__new__(FortifyAgent)
+    enforcer = SimpleNamespace(policy="initial", agent_name="support-bot")
+
+    class _Source:
+        def fetch(self):
+            raise RuntimeError("platform down")
+
+    agent._binding = PolicyBinding(enforcer, _Source())  # type: ignore[arg-type]
+    agent.refresh_policy()  # must not raise
+    assert enforcer.policy == "initial"

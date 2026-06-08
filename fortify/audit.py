@@ -14,12 +14,19 @@ import random
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import UUID, uuid4
 
 import httpx
 
-from fortify.security.decision import Decision
+if TYPE_CHECKING:
+    # Annotation-only: Decision is used solely as a type hint below, so it stays
+    # out of the runtime import graph (PEP 563 keeps it lazy). audit.py is a
+    # low-level module — importing it should not drag in the whole security
+    # package. The audit → security → enforcer → audit cycle is independently
+    # avoided (binding.py keeps its enforcer import under TYPE_CHECKING too), so
+    # this is correctness-by-design, not a workaround — keep it here.
+    from fortify.security.decision import Decision
 
 _log = logging.getLogger(__name__)
 

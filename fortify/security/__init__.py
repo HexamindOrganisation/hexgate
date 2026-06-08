@@ -16,6 +16,12 @@ from fortify.security.constraints import (
     evaluate_constraint,
     parse_constraint,
 )
+from fortify.security.binding import (
+    PolicyBinding,
+    PolicyBindingError,
+    ResolvedPolicy,
+    resolve_policy,
+)
 from fortify.security.bundle import (
     BundleIntegrityError,
     BundleLoadError,
@@ -81,6 +87,10 @@ from fortify.security.wasm_engine import (
 __all__ = [
     "AgentPolicy",
     "BaseToolPolicy",
+    "PolicyBinding",
+    "PolicyBindingError",
+    "ResolvedPolicy",
+    "resolve_policy",
     "Constraint",
     "ConstraintParseError",
     "DEFAULT_ENTRYPOINT",

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager, contextmanager
-from typing import Any, AsyncIterator, Iterator
+from typing import TYPE_CHECKING, Any, AsyncIterator, Iterator
 
 from langfuse import get_client, propagate_attributes
 from pydantic_ai import Agent
@@ -11,6 +11,9 @@ from pydantic_ai.agent import AgentRun, AgentRunResult
 from pydantic_ai.result import StreamedRunResult
 
 from fortify.runtime import User
+
+if TYPE_CHECKING:
+    from fortify.security.binding import PolicyBinding
 
 
 class FortifyPydanticAgent:
@@ -20,7 +23,8 @@ class FortifyPydanticAgent:
     :func:`wrap_pydantic_agent`). This proxy pushes the active
     :class:`User` onto the contextvar and propagates identity into
     Langfuse spans. ``user`` is per-call, so one proxy serves many
-    users concurrently.
+    users concurrently. When a policy binding is attached, every run
+    method refreshes it first (fail-soft; 304 when unchanged).
     """
 
     def __init__(
@@ -29,12 +33,24 @@ class FortifyPydanticAgent:
         agent: Agent,
         api_key: str,
         agent_name: str,
+        binding: PolicyBinding | None = None,
     ) -> None:
         self._agent = agent
+        self._binding = binding
         self._api_key = api_key
         self._agent_name = agent_name
         self._langfuse = get_client()
         self._setup_observability()
+
+    async def _refresh_async(self) -> None:
+        """Refresh the policy binding, if attached (async entry points)."""
+        if self._binding is not None:
+            await self._binding.refresh_async()
+
+    def _refresh(self) -> None:
+        """Refresh the policy binding, if one is attached (sync entry points)."""
+        if self._binding is not None:
+            self._binding.refresh()
 
     def _setup_observability(self) -> None:
         """Globally instrument all pydantic_ai Agents (idempotent)."""
@@ -69,6 +85,7 @@ class FortifyPydanticAgent:
         **kwargs: Any,
     ) -> AgentRunResult[Any]:
         """Run the agent asynchronously inside a User scope."""
+        await self._refresh_async()
         async with self._abind(user, "run"):
             return await self._agent.run(*args, **kwargs)
 
@@ -79,6 +96,7 @@ class FortifyPydanticAgent:
         **kwargs: Any,
     ) -> AgentRunResult[Any]:
         """Run the agent synchronously inside a User scope."""
+        self._refresh()
         with self._bind(user, "run_sync"):
             return self._agent.run_sync(*args, **kwargs)
 
@@ -90,6 +108,7 @@ class FortifyPydanticAgent:
         **kwargs: Any,
     ) -> AsyncIterator[StreamedRunResult[Any, Any]]:
         """Stream the agent response asynchronously inside a User scope."""
+        await self._refresh_async()
         async with self._abind(user, "run_stream"):
             async with self._agent.run_stream(*args, **kwargs) as result:
                 yield result
@@ -102,6 +121,7 @@ class FortifyPydanticAgent:
         **kwargs: Any,
     ) -> AsyncIterator[AgentRun[Any, Any]]:
         """Iterate over the agent execution graph asynchronously."""
+        await self._refresh_async()
         async with self._abind(user, "iter"):
             async with self._agent.iter(*args, **kwargs) as run:
                 yield run
