@@ -48,19 +48,21 @@ def test_openai_manifest_schema():
         framework=AgentFramework.OPENAI,
         model=None,
         system_prompt="A test agent",
-        tools=[ToolDefinition(
-            name="example_tool",
-            description="A test tool.",
-            input_schema=InputSchema(
-                properties={
-                    "example_input": InputProperty(
-                        title="Example Input",
-                        type="string",
-                    ),
-                },
-                required=["example_input"],
-            ),
-        )],
+        tools=[
+            ToolDefinition(
+                name="example_tool",
+                description="A test tool.",
+                input_schema=InputSchema(
+                    properties={
+                        "example_input": InputProperty(
+                            title="Example Input",
+                            type="string",
+                        ),
+                    },
+                    required=["example_input"],
+                ),
+            )
+        ],
     )
     manifest = create_openai_manifest(agent, description="A test agent")
     assert isinstance(manifest, AgentManifest)
@@ -93,19 +95,21 @@ def test_google_manifest_schema():
         framework=AgentFramework.GOOGLE,
         model="gemini-2.0-flash",
         system_prompt="Greet the user.",
-        tools=[ToolDefinition(
-            name="example_tool",
-            description="A test tool.",
-            input_schema=InputSchema(
-                properties={
-                    "example_input": InputProperty(
-                        title="example_input",
-                        type="string",
-                    ),
-                },
-                required=["example_input"],
-            ),
-        )],
+        tools=[
+            ToolDefinition(
+                name="example_tool",
+                description="A test tool.",
+                input_schema=InputSchema(
+                    properties={
+                        "example_input": InputProperty(
+                            title="example_input",
+                            type="string",
+                        ),
+                    },
+                    required=["example_input"],
+                ),
+            )
+        ],
     )
     manifest = create_google_manifest(agent)
     assert isinstance(manifest, AgentManifest)
@@ -134,19 +138,21 @@ def test_pydantic_ai_manifest_schema():
         framework=AgentFramework.PYDANTIC_AI,
         model="test",
         system_prompt=None,
-        tools=[ToolDefinition(
-            name="example_tool",
-            description="A test tool.",
-            input_schema=InputSchema(
-                properties={
-                    "example_input": InputProperty(
-                        title="example_input",
-                        type="string",
-                    ),
-                },
-                required=["example_input"],
-            ),
-        )],
+        tools=[
+            ToolDefinition(
+                name="example_tool",
+                description="A test tool.",
+                input_schema=InputSchema(
+                    properties={
+                        "example_input": InputProperty(
+                            title="example_input",
+                            type="string",
+                        ),
+                    },
+                    required=["example_input"],
+                ),
+            )
+        ],
     )
     manifest = create_pydantic_ai_manifest(agent)
     assert isinstance(manifest, AgentManifest)
@@ -179,19 +185,21 @@ def test_langchain_manifest_schema():
         framework=AgentFramework.LANGCHAIN,
         model=None,
         system_prompt=None,
-        tools=[ToolDefinition(
-            name="example_tool",
-            description="A test tool.",
-            input_schema=InputSchema(
-                properties={
-                    "example_input": InputProperty(
-                        title="Example Input",
-                        type="string",
-                    ),
-                },
-                required=["example_input"],
-            ),
-        )],
+        tools=[
+            ToolDefinition(
+                name="example_tool",
+                description="A test tool.",
+                input_schema=InputSchema(
+                    properties={
+                        "example_input": InputProperty(
+                            title="Example Input",
+                            type="string",
+                        ),
+                    },
+                    required=["example_input"],
+                ),
+            )
+        ],
     )
     manifest = create_langchain_manifest(
         graph,
@@ -238,19 +246,21 @@ def test_fortify_manifest_schema():
         framework=AgentFramework.FORTIFY,
         model="test-model",
         system_prompt=None,
-        tools=[ToolDefinition(
-            name="example_tool",
-            description="A test tool.",
-            input_schema=InputSchema(
-                properties={
-                    "example_input": InputProperty(
-                        title="Example Input",
-                        type="string",
-                    ),
-                },
-                required=["example_input"],
-            ),
-        )],
+        tools=[
+            ToolDefinition(
+                name="example_tool",
+                description="A test tool.",
+                input_schema=InputSchema(
+                    properties={
+                        "example_input": InputProperty(
+                            title="Example Input",
+                            type="string",
+                        ),
+                    },
+                    required=["example_input"],
+                ),
+            )
+        ],
     )
     manifest = create_fortify_manifest(agent, description="A test agent")
     assert isinstance(manifest, AgentManifest)

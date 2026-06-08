@@ -1,4 +1,5 @@
 """audit.configure() — env fallback, explicit args, idempotency."""
+
 from __future__ import annotations
 
 from collections.abc import Iterator

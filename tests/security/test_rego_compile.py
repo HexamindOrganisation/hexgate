@@ -318,9 +318,7 @@ def test_flat_single_policy_compiles_as_default_role() -> None:
 
 def test_compile_default_only_wraps_AgentPolicy() -> None:
     """Convenience wrapper for callers that already hold an AgentPolicy."""
-    policy = AgentPolicy.model_validate(
-        {"tools": {"web_search": {"mode": "allow"}}}
-    )
+    policy = AgentPolicy.model_validate({"tools": {"web_search": {"mode": "allow"}}})
     rego = compile_default_only(policy)
     assert 'input.tool == "web_search"' in rego
 
@@ -375,8 +373,8 @@ def test_violation_rule_uses_raw_constraint_string() -> None:
     rego = compile_to_rego(_SUPPORT_BOT_POLICY)
     assert "violations contains `args.amount <= 500` if" in rego
     assert "violations contains `args.amount <= 50` if" in rego
-    assert "violations contains `args.currency in [\"USD\", \"EUR\"]` if" in rego
-    assert "violations contains `args.currency == \"USD\"` if" in rego
+    assert 'violations contains `args.currency in ["USD", "EUR"]` if' in rego
+    assert 'violations contains `args.currency == "USD"` if' in rego
 
 
 def test_violation_rule_body_negates_constraint() -> None:
@@ -440,9 +438,7 @@ _PARITY_CASES: list[tuple[str, str, dict, bool]] = [
 ]
 
 
-@pytest.mark.parametrize(
-    ("role", "tool", "args", "expect_allow"), _PARITY_CASES
-)
+@pytest.mark.parametrize(("role", "tool", "args", "expect_allow"), _PARITY_CASES)
 def test_parity_predicted_rego_vs_pydantic(
     role: str, tool: str, args: dict, expect_allow: bool
 ) -> None:
@@ -459,7 +455,9 @@ def test_parity_predicted_rego_vs_pydantic(
         py_allow = True
     except PolicyDeniedError:
         py_allow = False
-    assert py_allow is expect_allow, f"pydantic engine disagrees for {role}/{tool}/{args}"
+    assert py_allow is expect_allow, (
+        f"pydantic engine disagrees for {role}/{tool}/{args}"
+    )
 
     rego = compile_to_rego(_SUPPORT_BOT_POLICY)
     rego_allow = _predict_rego_allow(rego, role, tool, args)
@@ -473,16 +471,16 @@ def test_parity_predicted_rego_vs_pydantic(
 @pytest.fixture(scope="module")
 def _support_bot_wasm() -> bytes:
     import shutil
+
     if shutil.which("opa") is None:
         pytest.skip("opa not on PATH")
     from fortify.security import compile_to_wasm
+
     rego = compile_to_rego(_SUPPORT_BOT_POLICY)
     return compile_to_wasm(rego).wasm
 
 
-@pytest.mark.parametrize(
-    ("role", "tool", "args", "expect_allow"), _PARITY_CASES
-)
+@pytest.mark.parametrize(("role", "tool", "args", "expect_allow"), _PARITY_CASES)
 def test_parity_wasm_vs_pydantic(
     role: str, tool: str, args: dict, expect_allow: bool, _support_bot_wasm: bytes
 ) -> None:
@@ -501,7 +499,9 @@ def test_parity_wasm_vs_pydantic(
         py_allow = True
     except PolicyDeniedError:
         py_allow = False
-    assert py_allow is expect_allow, f"pydantic engine disagrees for {role}/{tool}/{args}"
+    assert py_allow is expect_allow, (
+        f"pydantic engine disagrees for {role}/{tool}/{args}"
+    )
 
     wasm_policy = WasmPolicy.from_bytes(_support_bot_wasm)
     decision = wasm_policy.decide(role=role, tool=tool, args=args)

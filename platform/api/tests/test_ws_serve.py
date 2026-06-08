@@ -53,9 +53,7 @@ async def session_factory():
     )
     async with engine.begin() as conn:
         await conn.run_sync(SQLModel.metadata.create_all)
-    factory = async_sessionmaker(
-        engine, class_=AsyncSession, expire_on_commit=False
-    )
+    factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
     async with factory() as bootstrap:
         await ensure_default_project(bootstrap)
     yield factory
@@ -132,9 +130,7 @@ def test_ws_serve_rejects_when_no_bearer_subprotocol(client: TestClient) -> None
     echo, not a substitute for credentials.
     """
     with pytest.raises(WebSocketDisconnect) as exc_info:
-        with client.websocket_connect(
-            "/v1/serve", subprotocols=["fortify.v1"]
-        ):
+        with client.websocket_connect("/v1/serve", subprotocols=["fortify.v1"]):
             pass
     assert exc_info.value.code == 4401
 

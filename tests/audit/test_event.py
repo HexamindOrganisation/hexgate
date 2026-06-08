@@ -1,4 +1,5 @@
 """AuditEvent.as_payload() field mapping for the platform's audit endpoint."""
+
 from __future__ import annotations
 
 import json

@@ -24,6 +24,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+import secrets
 from pathlib import Path
 from typing import Protocol
 
@@ -185,10 +186,26 @@ class FileKeyStore:
     def _generate_and_persist(self) -> None:
         """Generate a fresh keypair and write both halves to disk atomically.
 
-        Race protection: the private key file is opened with
-        ``O_CREAT | O_EXCL`` so two processes starting against the same
-        ``data/`` directory at the same time can't both win. The losing
-        process catches ``FileExistsError`` and falls back to :meth:`_load`.
+        Race protection uses the write-temp-then-link pattern so a
+        concurrent reader never observes the canonical file in a
+        partially-written state:
+
+          1. Write the private bytes to a uniquely-named temp file in the
+             same directory.
+          2. Atomically link the temp into the canonical path via
+             ``os.link``. POSIX link is atomic and refuses to clobber an
+             existing target — ``FileExistsError`` is the signal that
+             another process won the race.
+          3. Always unlink the temp.
+
+        The previous implementation called ``os.open(... O_CREAT|O_EXCL)``
+        directly on the canonical path. That made the file visible to
+        readers immediately, but empty, until ``os.write`` completed —
+        opening a window in which a concurrent ``_load()`` would observe
+        a zero-byte file and raise "corrupted private key". The bug was
+        invisible on macOS dev boxes (scheduling rarely hit the window
+        with only a handful of threads) but reproduced on slower Linux
+        CI runners.
         """
         private_key = Ed25519PrivateKey.generate()
         private_bytes = private_key.private_bytes(
@@ -201,21 +218,29 @@ class FileKeyStore:
             format=serialization.PublicFormat.Raw,
         )
 
-        # Race-safe write: O_CREAT | O_EXCL fails if another process created
-        # the file in the meantime. The losing process will fall back to load().
-        try:
-            fd = os.open(
-                self._private_path,
-                os.O_WRONLY | os.O_CREAT | os.O_EXCL,
-                0o600,
-            )
-        except FileExistsError:
-            self._load()
-            return
+        # Temp file in the same directory so ``os.link`` stays intra-FS
+        # (links across mounts fail with EXDEV). Random suffix so two
+        # concurrent threads pick non-colliding names.
+        tmp_path = self._private_path.with_name(
+            f".{self._private_path.name}.tmp.{secrets.token_hex(8)}"
+        )
+        fd = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         try:
             os.write(fd, private_bytes)
         finally:
             os.close(fd)
+
+        try:
+            os.link(tmp_path, self._private_path)
+        except FileExistsError:
+            # Another thread already linked the canonical path — adopt
+            # their keypair instead of overwriting it.
+            tmp_path.unlink(missing_ok=True)
+            self._load()
+            return
+        finally:
+            # Always clean up the temp, whether link succeeded or raced.
+            tmp_path.unlink(missing_ok=True)
 
         self._public_path.write_bytes(public_bytes)
         try:

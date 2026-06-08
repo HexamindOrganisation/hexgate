@@ -215,9 +215,7 @@ async def run_serve(runtime: AgentRuntime) -> None:
     # No ``project_id`` in the URL — the bearer subprotocol carries it.
     url = f"{ws_base}/v1/serve"
 
-    context = ServeContext(
-        runtime=runtime, state=ChatState(), api_key=config.api_key
-    )
+    context = ServeContext(runtime=runtime, state=ChatState(), api_key=config.api_key)
     backoff = RECONNECT_BASE
 
     # ``project_id`` is best-effort display now (Phase 6); show a

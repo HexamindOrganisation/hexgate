@@ -113,14 +113,12 @@ class OAuthAccount(SQLModel, table=True):
 
     __tablename__ = "oauth_account"
     __table_args__ = (
-        UniqueConstraint(
-            "oauth_name", "account_id", name="uq_oauth_provider_account"
-        ),
+        UniqueConstraint("oauth_name", "account_id", name="uq_oauth_provider_account"),
     )
 
     id: str = Field(default_factory=new_uuid_str, primary_key=True)
     user_id: str = Field(foreign_key="user.id", index=True)
-    oauth_name: str                                # "google" | "github" | ...
+    oauth_name: str  # "google" | "github" | ...
     access_token: str
     # Unix epoch seconds; can be None for providers that don't expire tokens.
     expires_at: Optional[int] = None
@@ -145,14 +143,12 @@ class OrganizationMember(SQLModel, table=True):
     """
 
     __tablename__ = "organization_member"
-    __table_args__ = (
-        UniqueConstraint("user_id", "org_id", name="uq_org_member"),
-    )
+    __table_args__ = (UniqueConstraint("user_id", "org_id", name="uq_org_member"),)
 
     id: str = Field(default_factory=new_uuid_str, primary_key=True)
     user_id: str = Field(foreign_key="user.id", index=True)
     org_id: str = Field(foreign_key="organization.id", index=True)
-    role: str                                      # "owner" | "admin" | "member"
+    role: str  # "owner" | "admin" | "member"
     created_at: datetime = Field(default_factory=utcnow)
 
 
@@ -199,9 +195,7 @@ class Project(SQLModel, table=True):
     # meant to switch into the existing one instead of creating
     # another). Doesn't constrain rename — the user can pick whatever
     # name they want, just not one already taken in this org.
-    __table_args__ = (
-        UniqueConstraint("org_id", "name", name="uq_project_org_name"),
-    )
+    __table_args__ = (UniqueConstraint("org_id", "name", name="uq_project_org_name"),)
 
     # UUID, immutable. Existing seed (``support-bot``) is reseeded with the
     # fixed ``DEFAULT_PROJECT_ID`` UUID in seeds.py so dev environments stay

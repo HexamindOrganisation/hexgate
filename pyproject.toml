@@ -3,9 +3,14 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "fortify"
+# PyPI distribution name (`pip install hexgate`). The import name stays
+# `fortify` (`from fortify import ...`) — same shape as Pillow → PIL or
+# beautifulsoup4 → bs4. The bare `fortify` slot on PyPI was claimed in
+# 2014 by an unrelated abandoned project, so we publish under the brand
+# name and let import-time keep the existing identifier.
+name = "hexgate"
 version = "0.1.0"
-description = "Authorization infrastructure for AI agents — agent runtime + Fortify Cloud client."
+description = "HexaGate Fortify — authorization infrastructure for AI agents (agent runtime + cloud client)."
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [

@@ -348,11 +348,11 @@ class AuditEnvelope(BaseModel):
     are server-resolved and never trusted from the body.
     """
 
-    event_id:    UUID
+    event_id: UUID
     occurred_at: datetime
-    agent_name:  str = Field(min_length=1, max_length=256)
-    session_id:  str = Field(default="", max_length=128)
-    user_id:     str = Field(default="", max_length=256)
+    agent_name: str = Field(min_length=1, max_length=256)
+    session_id: str = Field(default="", max_length=128)
+    user_id: str = Field(default="", max_length=256)
 
     @field_validator("occurred_at")
     @classmethod
@@ -365,18 +365,18 @@ class AuditEnvelope(BaseModel):
 class DecisionEvent(AuditEnvelope):
     """One policy decision; mirrors the policy_decision table."""
 
-    tool_name:  str = Field(min_length=1, max_length=256)
-    outcome:    Literal["allow", "deny", "needs_approval"]
-    role:       str       = Field(default="", max_length=256)
-    error_type: str       = Field(default="", max_length=64)
-    reason:     str       = Field(default="", max_length=4096)
+    tool_name: str = Field(min_length=1, max_length=256)
+    outcome: Literal["allow", "deny", "needs_approval"]
+    role: str = Field(default="", max_length=256)
+    error_type: str = Field(default="", max_length=64)
+    reason: str = Field(default="", max_length=4096)
     # Per-item cap so 64 unbounded strings can't smuggle a multi-MB body.
     violations: list[Annotated[str, StringConstraints(max_length=1024)]] = Field(
         default_factory=list, max_length=64
     )
     # Byte caps enforced after serialization in audit.insert_decision.
-    hint:       Optional[dict] = None
-    arguments:  Optional[dict] = None
+    hint: Optional[dict] = None
+    arguments: Optional[dict] = None
 
 
 class DecisionAccepted(BaseModel):

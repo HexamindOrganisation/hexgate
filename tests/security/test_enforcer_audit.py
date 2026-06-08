@@ -1,4 +1,5 @@
 """PolicyEnforcer emission paths into the audit sender."""
+
 from __future__ import annotations
 
 from collections.abc import Mapping
@@ -14,7 +15,9 @@ from fortify.security.enforcer import PolicyEnforcer
 
 
 class _StubEngine:
-    def evaluate(self, *, role: str | None, tool: str, args: Mapping[str, Any]) -> Verdict:
+    def evaluate(
+        self, *, role: str | None, tool: str, args: Mapping[str, Any]
+    ) -> Verdict:
         return Verdict(outcome=DecisionOutcome.DENY, reason="stub")
 
 
@@ -57,10 +60,10 @@ async def test_sender_with_user_populates_envelope_from_user() -> None:
     async with User(user_id="alice", role="analyst", session_id="sess_42"):
         decision = enforcer.decide("read_file", {})
     ev = sender.events[0]
-    assert decision.role == "analyst"   # role propagates from User to Decision
+    assert decision.role == "analyst"  # role propagates from User to Decision
     assert ev.user_id == "alice"
     assert ev.session_id == "sess_42"
-    assert ev.decision is decision      # same Decision instance wrapped
+    assert ev.decision is decision  # same Decision instance wrapped
 
 
 def test_caller_mutation_after_decide_does_not_alter_audit_snapshot() -> None:

@@ -46,9 +46,7 @@ async def session_factory():
     )
     async with engine.begin() as conn:
         await conn.run_sync(SQLModel.metadata.create_all)
-    factory = async_sessionmaker(
-        engine, class_=AsyncSession, expire_on_commit=False
-    )
+    factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
     async with factory() as bootstrap:
         await ensure_default_project(bootstrap)
     yield factory
@@ -392,6 +390,7 @@ def test_inactive_user_cannot_authenticate_via_cookie(
     async def _deactivate():
         async with session_factory() as session:
             from sqlmodel import select
+
             row = (
                 await session.exec(
                     select(User).where(User.email == "ghost@example.com")

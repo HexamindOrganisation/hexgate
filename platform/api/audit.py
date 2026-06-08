@@ -8,6 +8,7 @@ table contract (``_DECISION_COLUMNS``, windows, scope filters) — unlike
 
 HTTP-agnostic — exceptions map to status codes in main.py.
 """
+
 from __future__ import annotations
 
 import json
@@ -49,13 +50,24 @@ def validate_event_window(occurred_at: datetime) -> None:
     if occurred_at < now - RETENTION_WINDOW:
         raise AuditEventOutOfWindow("occurred_at is older than retention window")
 
+
 # Order matches schema.sql; received_at absent (server-stamped via column default).
 _DECISION_COLUMNS = [
-    "event_id", "occurred_at",
-    "project_id", "agent_name", "agent_version_id",
-    "session_id", "user_id",
-    "tool_name", "role", "outcome", "error_type",
-    "reason", "violations", "hint", "arguments",
+    "event_id",
+    "occurred_at",
+    "project_id",
+    "agent_name",
+    "agent_version_id",
+    "session_id",
+    "user_id",
+    "tool_name",
+    "role",
+    "outcome",
+    "error_type",
+    "reason",
+    "violations",
+    "hint",
+    "arguments",
 ]
 
 # async_insert batches small inserts; wait_for_async_insert=1 blocks until flush
@@ -64,7 +76,7 @@ _DECISION_COLUMNS = [
 # non-replicated tables. The ReplacingMergeTree(received_at) engine collapses
 # duplicate event_ids on background merges instead (see schema.sql).
 _DECISION_INSERT_SETTINGS = {
-    "async_insert":          1,
+    "async_insert": 1,
     "wait_for_async_insert": 1,
 }
 
@@ -81,7 +93,9 @@ def insert_decision(
     Raises AuditPayloadTooLarge on payload overflow and ClickHouseError on
     insert failure; both propagate so the caller maps them to transport errors.
     """
-    args_json = json.dumps(event.arguments, default=str) if event.arguments is not None else ""
+    args_json = (
+        json.dumps(event.arguments, default=str) if event.arguments is not None else ""
+    )
     hint_json = json.dumps(event.hint, default=str) if event.hint is not None else ""
     if len(args_json.encode("utf-8")) > MAX_ARGS_BYTES:
         raise AuditPayloadTooLarge("arguments", MAX_ARGS_BYTES)
@@ -91,9 +105,9 @@ def insert_decision(
     row = [
         event.event_id,
         event.occurred_at,
-        project_id,                # bearer-resolved
+        project_id,  # bearer-resolved
         event.agent_name,
-        agent_version_id,          # platform-resolved
+        agent_version_id,  # platform-resolved
         event.session_id,
         event.user_id,
         event.tool_name,
@@ -125,6 +139,7 @@ _WINDOW_BUCKET_MINUTES: dict[str, int] = {
     "30d": 1440,
     "90d": 1440,
 }
+
 
 def bucket_minutes_for(window: str) -> int:
     """Bucket size (minutes) for a window key (KeyError on unknown window)."""
@@ -185,9 +200,7 @@ def summarize(
     needs_approval}`` sorted by ``all`` desc. An empty role keeps its raw
     ``""`` key — labelling it ("(none)") is the dashboard's concern, so no
     string is reserved on the wire."""
-    where, params = _scope(
-        project_id, since_hours, agent=agent, role=role, tool=tool
-    )
+    where, params = _scope(project_id, since_hours, agent=agent, role=role, tool=tool)
     where_sql = " AND ".join(where)
     summary_sql = (
         "SELECT agent_name, role, tool_name, outcome, "
@@ -208,7 +221,17 @@ def summarize(
         if outcome in bucket:
             bucket[outcome] += n
 
-    for agent, role, tool, outcome, g_agent, g_role, g_tool, g_outcome, n in result.result_rows:
+    for (
+        agent,
+        role,
+        tool,
+        outcome,
+        g_agent,
+        g_role,
+        g_tool,
+        g_outcome,
+        n,
+    ) in result.result_rows:
         n = int(n)
         if g_outcome:  # only the () grand-total set rolls up outcome
             totals["all"] = n
@@ -249,9 +272,7 @@ def timeseries(
 ) -> list[dict]:
     """Per-bucket outcome counts, ordered by bucket. Sparse: empty buckets are
     omitted. Returns ``[{bucket, allow, deny, needs_approval}]``."""
-    where, params = _scope(
-        project_id, since_hours, agent=agent, role=role, tool=tool
-    )
+    where, params = _scope(project_id, since_hours, agent=agent, role=role, tool=tool)
     params["bucket"] = bucket_minutes
     where_sql = " AND ".join(where)
     ts_sql = (
@@ -262,7 +283,9 @@ def timeseries(
     result = client.query(ts_sql, parameters=params)
     points: dict[object, dict] = {}
     for t, outcome, n in result.result_rows:
-        point = points.setdefault(t, {"bucket": t, "allow": 0, "deny": 0, "needs_approval": 0})
+        point = points.setdefault(
+            t, {"bucket": t, "allow": 0, "deny": 0, "needs_approval": 0}
+        )
         if outcome in point:
             point[outcome] = int(n)
     return [points[t] for t in sorted(points)]
@@ -301,9 +324,7 @@ def list_decisions(
     """Detail rows for the events table, newest first. Scope filters plus
     table-only ``outcome``/``session_id``. Returns ``{rows, total, limit,
     offset}`` with ``total`` the unpaginated match count."""
-    where, params = _scope(
-        project_id, since_hours, agent=agent, role=role, tool=tool
-    )
+    where, params = _scope(project_id, since_hours, agent=agent, role=role, tool=tool)
     if outcome:
         where.append("outcome = {outcome:String}")
         params["outcome"] = outcome

@@ -144,17 +144,13 @@ class WasmPolicy:
         store = wasmtime.Store(engine)
         module = wasmtime.Module(engine, wasm)
 
-        memory = wasmtime.Memory(
-            store, wasmtime.MemoryType(wasmtime.Limits(2, None))
-        )
+        memory = wasmtime.Memory(store, wasmtime.MemoryType(wasmtime.Limits(2, None)))
         imports = _build_imports(store, module, memory)
         instance = wasmtime.Instance(store, module, imports)
         exports = instance.exports(store)
 
         cls._assert_abi_compatible(store, exports)
-        entrypoint_id = cls._lookup_entrypoint_id(
-            store, exports, memory, entrypoint
-        )
+        entrypoint_id = cls._lookup_entrypoint_id(store, exports, memory, entrypoint)
         base_heap_ptr = exports["opa_heap_ptr_get"](store)
 
         return cls(
@@ -249,13 +245,13 @@ class WasmPolicy:
 
             result_addr = exports["opa_eval"](
                 store,
-                0,                       # reserved
-                self._entrypoint_id,     # entrypoint id
-                0,                       # data addr (no external data)
+                0,  # reserved
+                self._entrypoint_id,  # entrypoint id
+                0,  # data addr (no external data)
                 input_addr,
                 len(input_bytes),
                 heap_after_input,
-                0,                       # format: 0 = JSON output
+                0,  # format: 0 = JSON output
             )
             raw = _read_c_string(store, mem, result_addr)
         parsed = json.loads(raw)
@@ -291,8 +287,7 @@ class WasmPolicy:
         ep_map = json.loads(_read_c_string(store, memory, ep_json_addr))
         if entrypoint not in ep_map:
             raise WasmEvalError(
-                f'entrypoint "{entrypoint}" not in bundle '
-                f"(available: {sorted(ep_map)})"
+                f'entrypoint "{entrypoint}" not in bundle (available: {sorted(ep_map)})'
             )
         return ep_map[entrypoint]
 
@@ -326,7 +321,7 @@ def _build_imports(
         elif imp.name == "opa_abort":
             imports.append(abort_func)
         elif imp.name.startswith("opa_builtin"):
-            idx = int(imp.name[len("opa_builtin"):])
+            idx = int(imp.name[len("opa_builtin") :])
             imports.append(builtin_funcs[idx])
         else:
             raise WasmEvalError(
@@ -346,7 +341,9 @@ def _make_builtin_stubs(store: wasmtime.Store) -> dict[int, wasmtime.Func]:
     """
     funcs: dict[int, wasmtime.Func] = {}
     for arity_offset in range(5):
-        arity = 2 + arity_offset  # builtin0 takes (id, ctx); builtin4 takes (id, ctx, a, b, c, d)
+        arity = (
+            2 + arity_offset
+        )  # builtin0 takes (id, ctx); builtin4 takes (id, ctx, a, b, c, d)
 
         def _stub(*args: int, _arity: int = arity_offset) -> int:
             builtin_id = args[0] if args else -1
@@ -377,9 +374,7 @@ def _opa_abort_stub(addr: int) -> None:
     raise WasmEvalError(f"opa_abort invoked (message at addr {addr})")
 
 
-def _read_c_string(
-    store: wasmtime.Store, memory: wasmtime.Memory, addr: int
-) -> str:
+def _read_c_string(store: wasmtime.Store, memory: wasmtime.Memory, addr: int) -> str:
     """Read a null-terminated UTF-8 string from wasm memory.
 
     Pulls the memory region as a Python ``bytes`` view, finds the null
@@ -412,9 +407,7 @@ def _parse_decision(raw: Any) -> RegoVerdict:
         )
     payload = first["result"]
     if not isinstance(payload, dict):
-        raise WasmEvalError(
-            f"opa_eval result.result is not an object: {payload!r}"
-        )
+        raise WasmEvalError(f"opa_eval result.result is not an object: {payload!r}")
     return RegoVerdict(
         allow=bool(payload.get("allow", False)),
         requires_approval=bool(payload.get("requires_approval", False)),

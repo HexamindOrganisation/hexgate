@@ -30,19 +30,11 @@ def _update_researcher_policy() -> AgentPolicy:
                 "read_file": {"mode": "allow"},
                 "write_file": {
                     "mode": "approval_required",
-                    "file_scope": {
-                        "allowed_paths": [
-                            "research_notes/*.md"
-                        ]
-                    }
+                    "file_scope": {"allowed_paths": ["research_notes/*.md"]},
                 },
                 "edit_file": {
                     "mode": "approval_required",
-                    "file_scope": {
-                        "allowed_paths": [
-                            "research_notes/*.md"
-                        ]
-                    }
+                    "file_scope": {"allowed_paths": ["research_notes/*.md"]},
                 },
             },
         }

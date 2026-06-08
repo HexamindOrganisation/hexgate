@@ -28,9 +28,7 @@ from services import compile_bundle, ensure_default_project, update_agent
 
 
 _OPA_AVAILABLE = shutil.which("opa") is not None
-needs_opa = pytest.mark.skipif(
-    not _OPA_AVAILABLE, reason="opa not on PATH"
-)
+needs_opa = pytest.mark.skipif(not _OPA_AVAILABLE, reason="opa not on PATH")
 
 
 _DEMO_POLICY = """\
@@ -72,9 +70,7 @@ async def session(tmp_path):
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'test.db'}")
     async with engine.begin() as conn:
         await conn.run_sync(SQLModel.metadata.create_all)
-    factory = async_sessionmaker(
-        engine, class_=AsyncSession, expire_on_commit=False
-    )
+    factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
     async with factory() as s:
         await ensure_default_project(s)
         yield s
@@ -156,12 +152,18 @@ async def test_update_agent_clears_stale_bundle_on_bad_policy(session, signer) -
     """A good save then a broken save drops the now-wrong bundle."""
     sign, _ = signer
     await update_agent(
-        session, services.DEFAULT_PROJECT_ID, "default",
-        policy_yaml=_DEMO_POLICY, sign=sign,
+        session,
+        services.DEFAULT_PROJECT_ID,
+        "default",
+        policy_yaml=_DEMO_POLICY,
+        sign=sign,
     )
     agent = await update_agent(
-        session, services.DEFAULT_PROJECT_ID, "default",
-        policy_yaml=_BAD_POLICY, sign=sign,
+        session,
+        services.DEFAULT_PROJECT_ID,
+        "default",
+        policy_yaml=_BAD_POLICY,
+        sign=sign,
     )
     assert agent.compiled_wasm is None
     assert agent.bundle_manifest is None
@@ -171,7 +173,9 @@ async def test_update_agent_clears_stale_bundle_on_bad_policy(session, signer) -
 async def test_update_agent_without_sign_stores_no_bundle(session) -> None:
     """No signer → no bundle (pure yaml save, e.g. tests / opa-less envs)."""
     agent = await update_agent(
-        session, services.DEFAULT_PROJECT_ID, "default",
+        session,
+        services.DEFAULT_PROJECT_ID,
+        "default",
         policy_yaml=_DEMO_POLICY,
     )
     assert agent.compiled_wasm is None
@@ -224,8 +228,11 @@ async def test_agent_read_serializes_bundle_as_base64(session, signer) -> None:
 
     sign, public_raw = signer
     agent = await update_agent(
-        session, services.DEFAULT_PROJECT_ID, "default",
-        policy_yaml=_DEMO_POLICY, sign=sign,
+        session,
+        services.DEFAULT_PROJECT_ID,
+        "default",
+        policy_yaml=_DEMO_POLICY,
+        sign=sign,
     )
     view = main._agent_read(agent)
     assert view.bundle_wasm_b64 is not None
@@ -237,12 +244,17 @@ async def test_agent_read_serializes_bundle_as_base64(session, signer) -> None:
     assert wasm.startswith(b"\x00asm")
     verify_bytes(view.bundle_manifest.encode("utf-8"), sig, public_raw)
     # And the manifest's wasm_hash still ties to the served wasm.
-    assert json.loads(view.bundle_manifest)["wasm_hash"] == hashlib.sha256(wasm).hexdigest()
+    assert (
+        json.loads(view.bundle_manifest)["wasm_hash"]
+        == hashlib.sha256(wasm).hexdigest()
+    )
 
 
 async def test_agent_read_nulls_when_unsigned(session) -> None:
     agent = await update_agent(
-        session, services.DEFAULT_PROJECT_ID, "default",
+        session,
+        services.DEFAULT_PROJECT_ID,
+        "default",
         policy_yaml=_DEMO_POLICY,
     )
     import main
@@ -331,9 +343,7 @@ def test_get_agent_returns_etag_header_when_bundle_present() -> None:
     # M3 Phase 2: routes require the X-Dev-User header. The default seed user
     # is a member of support-bot's org, so baking it onto the client passes
     # the require_org_member gate.
-    with TestClient(
-        main.app, headers={"X-Dev-User": services.DEFAULT_USER_ID}
-    ) as c:
+    with TestClient(main.app, headers={"X-Dev-User": services.DEFAULT_USER_ID}) as c:
         r = c.get(f"/v1/projects/{services.DEFAULT_PROJECT_ID}/agents/default")
         assert r.status_code == 200
         etag = r.headers.get("etag")
@@ -354,9 +364,7 @@ def test_if_none_match_returns_304_when_unchanged() -> None:
     # M3 Phase 2: routes require the X-Dev-User header. The default seed user
     # is a member of support-bot's org, so baking it onto the client passes
     # the require_org_member gate.
-    with TestClient(
-        main.app, headers={"X-Dev-User": services.DEFAULT_USER_ID}
-    ) as c:
+    with TestClient(main.app, headers={"X-Dev-User": services.DEFAULT_USER_ID}) as c:
         r1 = c.get(f"/v1/projects/{services.DEFAULT_PROJECT_ID}/agents/default")
         etag = r1.headers["etag"]
 
@@ -379,9 +387,7 @@ def test_if_none_match_stale_etag_returns_fresh_200() -> None:
     # M3 Phase 2: routes require the X-Dev-User header. The default seed user
     # is a member of support-bot's org, so baking it onto the client passes
     # the require_org_member gate.
-    with TestClient(
-        main.app, headers={"X-Dev-User": services.DEFAULT_USER_ID}
-    ) as c:
+    with TestClient(main.app, headers={"X-Dev-User": services.DEFAULT_USER_ID}) as c:
         r = c.get(
             f"/v1/projects/{services.DEFAULT_PROJECT_ID}/agents/default",
             headers={"If-None-Match": '"obviously-stale"'},

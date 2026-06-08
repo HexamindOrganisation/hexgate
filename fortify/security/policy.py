@@ -131,9 +131,7 @@ def evaluate_tool_call_wasm(
     (deny-by-absence rather than deny-by-constraint), the reason surfaces
     a "no allow rule matched" hint so the message isn't silently empty.
     """
-    decision = bundle.policy().decide(
-        role=role, tool=tool_name, args=arguments or {}
-    )
+    decision = bundle.policy().decide(role=role, tool=tool_name, args=arguments or {})
     return verdict_from_rego(decision, tool_name=tool_name, role=role)
 
 
