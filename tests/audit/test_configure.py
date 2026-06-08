@@ -134,9 +134,7 @@ def test_local_mode_logs_suppression_once(
         audit_mod.configure()
         audit_mod.configure()
         audit_mod.configure()
-    suppressed = [
-        r for r in caplog.records if "audit suppressed" in r.message
-    ]
+    suppressed = [r for r in caplog.records if "audit suppressed" in r.message]
     assert len(suppressed) == 1
 
 
@@ -148,7 +146,5 @@ def test_local_mode_silent_when_no_key_present(
     monkeypatch.setenv(audit_mod._LOCAL_MODE_ENV, "1")
     with caplog.at_level(logging.INFO, logger="fortify.audit"):
         audit_mod.configure()
-    suppressed = [
-        r for r in caplog.records if "audit suppressed" in r.message
-    ]
+    suppressed = [r for r in caplog.records if "audit suppressed" in r.message]
     assert suppressed == []

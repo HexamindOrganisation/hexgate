@@ -83,9 +83,7 @@ def test_local_only_sets_env_var_before_audit_configure(
     real_configure = audit.configure
 
     def spy_configure(*args, **kwargs):
-        observed_env["FORTIFY_LOCAL_MODE"] = os.environ.get(
-            audit._LOCAL_MODE_ENV
-        )
+        observed_env["FORTIFY_LOCAL_MODE"] = os.environ.get(audit._LOCAL_MODE_ENV)
         return real_configure(*args, **kwargs)
 
     monkeypatch.setattr(audit, "configure", spy_configure)

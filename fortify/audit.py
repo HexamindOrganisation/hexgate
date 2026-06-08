@@ -274,7 +274,10 @@ def _local_mode_active() -> bool:
     parser the platform's ``FORTIFY_COOKIE_SECURE`` knob uses, so the
     behavior is consistent across the codebase's env flags."""
     return os.environ.get(_LOCAL_MODE_ENV, "").strip().lower() in (
-        "1", "true", "yes", "on",
+        "1",
+        "true",
+        "yes",
+        "on",
     )
 
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import textwrap
 from collections import deque
 from pathlib import Path
@@ -10,6 +11,7 @@ import pytest
 from rich.console import Console, Group
 
 from fortify.agents import loader
+from fortify.agents.loader import _apply_decision_observer
 from fortify.cli import _common
 from fortify.cli._common import (
     AgentRuntime,
@@ -308,6 +310,25 @@ def test_render_decision_panel_handles_minimal_decision() -> None:
     assert "read_file" in rendered
 
 
+def test_render_decision_panel_renders_hint_as_json_not_python_repr() -> None:
+    """``hint`` is a dict (e.g. ``{"glob": "/x/**"}``). Render it as JSON
+    so the panel reads naturally and matches the wire format the platform
+    stores. The pre-fix code used Python repr (single quotes) which made
+    the panel look like Python debug output rather than diagnostic data."""
+    decision = _decision(
+        DecisionOutcome.DENY,
+        reason="path outside allowed glob",
+        hint={"glob": "/workspace/**"},
+    )
+    console = Console(record=True, width=100)
+    console.print(_render_decision_panel(decision))
+    rendered = console.export_text()
+
+    # JSON shape — double quotes, no Python-dict syntax.
+    assert '"glob": "/workspace/**"' in rendered
+    assert "{'glob'" not in rendered
+
+
 def test_drain_decisions_prints_only_deny_and_approval() -> None:
     """The deque drain helper consumes the whole queue but only prints
     panels for DENY / NEEDS_APPROVAL. ALLOWs are popped silently —
@@ -431,9 +452,7 @@ def test_build_runtime_without_colon_uses_name_resolver(
         "load_agent",
         lambda *a, **k: (object(), object()),
     )
-    monkeypatch.setattr(
-        _common, "resolve_agent_source", lambda *a, **k: "local"
-    )
+    monkeypatch.setattr(_common, "resolve_agent_source", lambda *a, **k: "local")
 
     _common.build_runtime(
         _test_settings(),
@@ -543,3 +562,100 @@ def test_build_runtime_from_spec_falls_back_to_settings_model(
         model=None,
     )
     assert runtime.model == "openai:gpt-5.4"
+
+
+# ---------------------------------------------------------------------------
+# loader._apply_decision_observer — invariant & warning paths
+# (private helper, exercised here because chat is its main consumer)
+# ---------------------------------------------------------------------------
+
+
+class _FakeEnforcer:
+    """Stand-in for PolicyEnforcer — only needs ``_decision_observer``
+    as a settable attribute, which is what the helper writes to."""
+
+    def __init__(self) -> None:
+        self._decision_observer = None
+
+
+class _FakeGuardedTool:
+    """Duck-typed GuardedTool. We monkeypatch the helper's GuardedTool
+    isinstance check so this stands in for the real thing without us
+    having to construct a real LangChain BaseTool."""
+
+    def __init__(self, enforcer: _FakeEnforcer) -> None:
+        self.enforcer = enforcer
+
+
+class _FakeAgent:
+    def __init__(self, tools: list[object], *, name: str = "fake") -> None:
+        self.tools = tools
+        self.name = name
+
+
+def _stub_guarded_tool(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Replace the helper's GuardedTool import target with our fake
+    so isinstance() lights up on our stand-in."""
+    import fortify.adapters.langchain.tools as tools_mod
+
+    monkeypatch.setattr(tools_mod, "GuardedTool", _FakeGuardedTool)
+
+
+def test_apply_decision_observer_patches_all_tools_sharing_one_enforcer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Today's invariant: every GuardedTool on an agent shares one
+    enforcer. The patch must land on that shared instance — verified
+    via id() identity, not just attribute equality."""
+    _stub_guarded_tool(monkeypatch)
+    shared = _FakeEnforcer()
+    agent = _FakeAgent([_FakeGuardedTool(shared), _FakeGuardedTool(shared)])
+
+    sentinel = lambda _d: None  # noqa: E731
+
+    _apply_decision_observer(agent, sentinel)
+    assert shared._decision_observer is sentinel
+    # Both tools' enforcer attrs point at the same object — the assertion
+    # above is the meaningful one; this just pins the invariant.
+    assert agent.tools[0].enforcer is agent.tools[1].enforcer
+
+
+def test_apply_decision_observer_warns_when_no_guarded_tools(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """If no tool on the agent is a GuardedTool (e.g. a non-LangChain
+    registered factory), the helper warns rather than silently no-op'ing
+    — otherwise the dev never finds out their observer never fires."""
+    _stub_guarded_tool(monkeypatch)
+    agent = _FakeAgent(tools=["just_a_string_not_a_tool"])
+
+    with caplog.at_level(logging.WARNING, logger="fortify.agents.loader"):
+        _apply_decision_observer(agent, lambda _d: None)
+
+    assert any("no GuardedTool tools" in r.message for r in caplog.records)
+
+
+def test_apply_decision_observer_warns_when_multiple_distinct_enforcers(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Defensive: if a future refactor builds per-tool enforcers (instead
+    of the current one-shared-enforcer-per-agent invariant), all are
+    patched AND a warning surfaces the unusual shape. Without this, a
+    silent regression would mean some tool calls bypass the observer."""
+    _stub_guarded_tool(monkeypatch)
+    enforcer_a = _FakeEnforcer()
+    enforcer_b = _FakeEnforcer()
+    agent = _FakeAgent([_FakeGuardedTool(enforcer_a), _FakeGuardedTool(enforcer_b)])
+
+    sentinel = lambda _d: None  # noqa: E731
+
+    with caplog.at_level(logging.WARNING, logger="fortify.agents.loader"):
+        _apply_decision_observer(agent, sentinel)
+
+    # Both enforcers got the patch — that's the load-bearing assertion.
+    assert enforcer_a._decision_observer is sentinel
+    assert enforcer_b._decision_observer is sentinel
+    # And the surprise was logged.
+    assert any("distinct enforcer instances" in r.message for r in caplog.records)

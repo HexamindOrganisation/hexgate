@@ -5,6 +5,7 @@ observer), different slot. The observer is the local-process hook —
 ``fortify chat`` injects one to render denies in the REPL; metrics /
 debuggers would slot in the same way.
 """
+
 from __future__ import annotations
 
 import logging
@@ -39,12 +40,8 @@ def test_observer_called_with_full_decision() -> None:
     """A configured observer receives the same Decision instance the
     enforcer returns to the caller — same object, not a copy."""
     captured: list[Decision] = []
-    engine = _StubEngine(
-        Verdict(outcome=DecisionOutcome.DENY, reason="stubbed deny")
-    )
-    enforcer = PolicyEnforcer(
-        engine, agent_name="r", decision_observer=captured.append
-    )
+    engine = _StubEngine(Verdict(outcome=DecisionOutcome.DENY, reason="stubbed deny"))
+    enforcer = PolicyEnforcer(engine, agent_name="r", decision_observer=captured.append)
 
     returned = enforcer.decide("read_file", {"path": "/x"})
 
@@ -83,9 +80,7 @@ async def test_observer_sees_role_and_args_from_user_scope() -> None:
     scope and the (deep-copied) arguments snapshot from the call site."""
     captured: list[Decision] = []
     engine = _StubEngine(Verdict(outcome=DecisionOutcome.DENY))
-    enforcer = PolicyEnforcer(
-        engine, agent_name="r", decision_observer=captured.append
-    )
+    enforcer = PolicyEnforcer(engine, agent_name="r", decision_observer=captured.append)
     async with User(user_id="alice", role="analyst"):
         enforcer.decide("read_file", {"path": "/etc/passwd"})
 
@@ -104,13 +99,12 @@ def test_observer_exception_does_not_break_decide(
     """Audit is observational; enforcement is authoritative. A buggy
     observer (chat-panel render bug, third-party subscriber raising)
     must not turn a clean DENY into an exception the agent sees."""
+
     def boom(_decision: Decision) -> None:
         raise RuntimeError("intentional")
 
     engine = _StubEngine(Verdict(outcome=DecisionOutcome.DENY, reason="x"))
-    enforcer = PolicyEnforcer(
-        engine, agent_name="r", decision_observer=boom
-    )
+    enforcer = PolicyEnforcer(engine, agent_name="r", decision_observer=boom)
 
     with caplog.at_level(logging.ERROR, logger="fortify.security.enforcer"):
         decision = enforcer.decide("read_file", {})

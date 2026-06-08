@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 from collections import deque
 from pathlib import Path
 
@@ -177,7 +178,13 @@ def _render_decision_panel(decision: Decision) -> Panel | None:
         for v in decision.violations:
             lines.append(Text(f"  • {v}", style="dim red" if is_deny else "dim yellow"))
     if decision.hint is not None:
-        lines.append(Text(f"hint: {decision.hint}", style="dim"))
+        # JSON over Python repr so {"glob": "/x/**"} reads as JSON, not
+        # {'glob': '/x/**'} — matches the wire format the platform stores.
+        # default=str defends against non-JSON-serializable values the
+        # engine might pass through (rare, but cheap insurance).
+        lines.append(
+            Text(f"hint: {json.dumps(decision.hint, default=str)}", style="dim")
+        )
 
     return Panel(
         Group(*lines) if lines else Text("(no detail)", style="dim"),
@@ -188,9 +195,7 @@ def _render_decision_panel(decision: Decision) -> Panel | None:
     )
 
 
-def _drain_decisions(
-    console: Console, pending: deque[Decision]
-) -> None:
+def _drain_decisions(console: Console, pending: deque[Decision]) -> None:
     """Print panels for any decisions captured during the just-finished
     turn, then clear the deque. Called between turns so the panels
     appear after the agent's response but before the next prompt — the

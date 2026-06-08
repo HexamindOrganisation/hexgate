@@ -345,25 +345,42 @@ def load_registered_agent(
 def _apply_decision_observer(
     agent: AgentGraph, decision_observer: "DecisionObserver"
 ) -> None:
-    """Patch every :class:`GuardedTool`'s shared enforcer to fire ``decision_observer``.
+    """Patch every :class:`GuardedTool`'s enforcer to fire ``decision_observer``.
 
-    For code-registered agents whose factories built the enforcer without
-    seeing the CLI's hook. All guarded tools on an agent share one
-    enforcer instance (enforce_policy constructs one and wraps each tool
-    with it), so the first patch wins — no rebuild needed."""
+    For code-registered / spec-loaded agents whose factories built the
+    enforcer without seeing the CLI's hook. The expected case is one
+    shared enforcer per agent — ``enforce_policy`` constructs one and
+    wraps each tool with it — but we patch all distinct enforcers (by
+    ``id()``) rather than just the first, so a future refactor that
+    builds per-tool enforcers doesn't silently drop events on the
+    floor. The shared-instance invariant is then logged (info-level)
+    when it's actually shared, and warned (warning-level) when more
+    than one distinct enforcer was patched, so the surprise lands.
+    """
     import logging
 
     from fortify.adapters.langchain.tools import GuardedTool
 
+    log = logging.getLogger(__name__)
+    patched_enforcer_ids: set[int] = set()
     for tool_spec in agent.tools:
         if isinstance(tool_spec, GuardedTool):
             tool_spec.enforcer._decision_observer = decision_observer
-            return
-    logging.getLogger(__name__).warning(
-        "decision_observer was supplied but %r has no GuardedTool tools to "
-        "attach it to; decision events will not surface for this agent",
-        getattr(agent, "name", None) or "agent",
-    )
+            patched_enforcer_ids.add(id(tool_spec.enforcer))
+
+    if not patched_enforcer_ids:
+        log.warning(
+            "decision_observer was supplied but %r has no GuardedTool tools to "
+            "attach it to; decision events will not surface for this agent",
+            getattr(agent, "name", None) or "agent",
+        )
+    elif len(patched_enforcer_ids) > 1:
+        log.warning(
+            "decision_observer attached to %d distinct enforcer instances on %r "
+            "(expected one shared enforcer per agent — future refactor?)",
+            len(patched_enforcer_ids),
+            getattr(agent, "name", None) or "agent",
+        )
 
 
 def _apply_approval_handler(

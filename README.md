@@ -76,7 +76,7 @@ The two Quick Starts above aren't competing — they answer different questions.
 
 | Path | Needs platform? | Audit destination | Policy edits visible at | Best for |
 |------|-----------------|-------------------|--------------------------|----------|
-| `fortify chat --agent ...` | No | Local terminal panel | YAML/bundle reload from disk | Inner loop, policy authoring |
+| `fortify chat --agent ...` | No | Local terminal panel | Edit + restart (hot-reload only when `FORTIFY_LOCAL_POLICY` is set) | Inner loop, policy authoring |
 | `fortify serve --agent ...` + Playground | Yes | ClickHouse via `/v1/audit/decisions` | Per-turn fetch from dashboard | Team review, demos, integration testing |
 
 Both commands accept either a plain agent id (`--agent researcher`) or a uvicorn-style `module.path:attr` spec (`--agent examples.customer_bot:agent`), so the same entry-point string works in both workflows.
