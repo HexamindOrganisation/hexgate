@@ -199,15 +199,25 @@ jobs:
       #    token. PyPI verifies against the registered publisher.
       # --------------------------------------------------------------
 
+      # ``skip-existing: true`` makes the publish idempotent — if PyPI
+      # already has this version (e.g. a previous run's "publish
+      # succeeded, commit-back failed" partial state), the action
+      # logs a skip and exits cleanly instead of erroring with a 400.
+      # Lets a re-run finish the workflow's later steps (commit + tag
+      # + GitHub release) without manual surgery to bypass the
+      # already-published file.
       - name: Publish to PyPI
         if: ${{ !inputs.dry-run && inputs.target == 'pypi' }}
         uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          skip-existing: true
 
       - name: Publish to TestPyPI
         if: ${{ !inputs.dry-run && inputs.target == 'testpypi' }}
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           repository-url: https://test.pypi.org/legacy/
+          skip-existing: true
 
       - name: Dry-run summary
         if: ${{ inputs.dry-run }}
