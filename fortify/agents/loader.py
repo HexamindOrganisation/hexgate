@@ -268,7 +268,9 @@ def load_builtin_agent(
         name=spec.name,
         bind_policy=False,  # the loader applies its own policy below
     )
-    overridden = _apply_local_override(agent, approval_handler, decision_observer=decision_observer)
+    overridden = _apply_local_override(
+        agent, approval_handler, decision_observer=decision_observer
+    )
     if overridden is not None:
         return overridden, handler
     return enforce_policy(
@@ -307,7 +309,9 @@ def load_local_agent(
         name=spec.name,
         bind_policy=False,  # the loader applies its own policy below
     )
-    overridden = _apply_local_override(agent, approval_handler, decision_observer=decision_observer)
+    overridden = _apply_local_override(
+        agent, approval_handler, decision_observer=decision_observer
+    )
     if overridden is not None:
         return overridden, handler
     return enforce_policy(
