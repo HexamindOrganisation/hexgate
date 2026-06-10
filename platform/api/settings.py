@@ -1,4 +1,4 @@
-"""Process-wide configuration. FORTIFY_ env prefix matches existing convention."""
+"""Process-wide configuration. HEXGATE_ env prefix matches existing convention."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ _LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1"}
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_prefix="FORTIFY_")
+    model_config = SettingsConfigDict(env_file=".env", env_prefix="HEXGATE_")
 
     clickhouse_host: str = "localhost"
     # 8124 matches platform/docker-compose.yml's host-port offset.
