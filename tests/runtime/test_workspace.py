@@ -11,10 +11,10 @@ from typing import Any
 
 import pytest
 
-from fortify.runtime import LocalWorkspace, build_sandbox_runtime_config
-from fortify.runtime import workspace as workspace_module
-from fortify.runtime.srt import SrtUnavailableError
-from fortify.runtime.workspace import _build_sandbox_env
+from hexgate.runtime import LocalWorkspace, build_sandbox_runtime_config
+from hexgate.runtime import workspace as workspace_module
+from hexgate.runtime.srt import SrtUnavailableError
+from hexgate.runtime.workspace import _build_sandbox_env
 
 
 def test_local_workspace_generates_sandbox_runtime_config(tmp_path: Path) -> None:

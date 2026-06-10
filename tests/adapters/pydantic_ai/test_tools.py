@@ -8,11 +8,11 @@ import pytest
 from pydantic_ai.exceptions import ModelRetry
 from pydantic_ai.tools import Tool
 
-from fortify.adapters.pydantic_ai.tools import wrap_tool, wrap_tools
-from fortify.runtime import User
-from fortify.security import AgentPolicy, PolicySet
-from fortify.security.enforcer import PolicyEnforcer
-from fortify.security.policy_set import DEFAULT_ROLE_NAME
+from hexgate.adapters.pydantic_ai.tools import wrap_tool, wrap_tools
+from hexgate.runtime import User
+from hexgate.security import AgentPolicy, PolicySet
+from hexgate.security.enforcer import PolicyEnforcer
+from hexgate.security.policy_set import DEFAULT_ROLE_NAME
 
 
 def _enforcer_for(spec: dict[str, Any]) -> PolicyEnforcer:

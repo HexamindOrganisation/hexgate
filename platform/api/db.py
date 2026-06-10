@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlmodel import SQLModel
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-DB_PATH = Path(__file__).parent / "fortify.db"
+DB_PATH = Path(__file__).parent / "hexgate.db"
 
 # Async engine. ``aiosqlite`` requires the ``sqlite+aiosqlite://`` URL prefix
 # — the plain ``sqlite://`` driver is sync-only. ``check_same_thread`` is
@@ -40,7 +40,7 @@ async def init_db() -> None:
 
     Called once at app startup via the lifespan handler. Idempotent —
     ``create_all`` skips tables that already exist. Prototype-phase
-    migration story is still ``rm fortify.db && restart``; Alembic
+    migration story is still ``rm hexgate.db && restart``; Alembic
     lands when there's production data to preserve.
     """
     async with engine.begin() as conn:

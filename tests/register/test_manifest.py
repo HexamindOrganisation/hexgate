@@ -1,16 +1,16 @@
-from fortify.cli.register.manifest import create_manifest
-from fortify.cli.register.models import (
+from hexgate.cli.register.manifest import create_manifest
+from hexgate.cli.register.models import (
     AgentManifest,
     AgentFramework,
     InputProperty,
     InputSchema,
     ToolDefinition,
 )
-from fortify.cli.register.fortify import create_fortify_manifest
-from fortify.cli.register.openai import create_openai_manifest
-from fortify.cli.register.google import create_google_manifest
-from fortify.cli.register.langchain import create_langchain_manifest
-from fortify.cli.register.pydantic_ai import create_pydantic_ai_manifest
+from hexgate.cli.register.hexgate import create_hexgate_manifest
+from hexgate.cli.register.openai import create_openai_manifest
+from hexgate.cli.register.google import create_google_manifest
+from hexgate.cli.register.langchain import create_langchain_manifest
+from hexgate.cli.register.pydantic_ai import create_pydantic_ai_manifest
 
 
 def test_agent_manifest_schema():
@@ -214,12 +214,12 @@ def test_langchain_manifest_schema():
     assert manifest == expected_manifest
 
 
-def test_fortify_manifest_schema():
-    """Test the schema of the Fortify manifest (FortifyAgent from create_agent)."""
+def test_hexgate_manifest_schema():
+    """Test the schema of the HexaGate manifest (HexgateAgent from create_agent)."""
     from langchain_core.tools import tool
     from langgraph.graph import END, START, StateGraph
 
-    from fortify.agents.factory import FortifyAgent
+    from hexgate.agents.factory import HexgateAgent
 
     @tool
     def example_tool(example_input: str) -> str:
@@ -232,7 +232,7 @@ def test_fortify_manifest_schema():
     builder.add_edge("noop", END)
     graph = builder.compile(name="test-agent")
 
-    agent = FortifyAgent(
+    agent = HexgateAgent(
         graph=graph,
         model="test-model",
         tools=[example_tool],
@@ -262,7 +262,7 @@ def test_fortify_manifest_schema():
             )
         ],
     )
-    manifest = create_fortify_manifest(agent, description="A test agent")
+    manifest = create_hexgate_manifest(agent, description="A test agent")
     assert isinstance(manifest, AgentManifest)
     assert manifest == expected_manifest
 
@@ -271,12 +271,12 @@ def test_fortify_manifest_schema():
     assert manifest == expected_manifest
 
 
-def test_fortify_manifest_system_message_prompt():
+def test_hexgate_manifest_system_message_prompt():
     """SystemMessage system prompts are flattened to their text content."""
     from langchain_core.messages import SystemMessage
     from langgraph.graph import END, START, StateGraph
 
-    from fortify.agents.factory import FortifyAgent
+    from hexgate.agents.factory import HexgateAgent
 
     builder = StateGraph(dict)
     builder.add_node("noop", lambda state: state)
@@ -284,7 +284,7 @@ def test_fortify_manifest_system_message_prompt():
     builder.add_edge("noop", END)
     graph = builder.compile(name="sm-agent")
 
-    agent = FortifyAgent(
+    agent = HexgateAgent(
         graph=graph,
         model="test-model",
         tools=[],
@@ -292,7 +292,7 @@ def test_fortify_manifest_system_message_prompt():
         name="sm-agent",
     )
 
-    manifest = create_fortify_manifest(agent)
+    manifest = create_hexgate_manifest(agent)
     assert manifest.system_prompt == "hi"
     assert manifest.model == "test-model"
 

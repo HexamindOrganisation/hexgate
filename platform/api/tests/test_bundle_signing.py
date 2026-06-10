@@ -22,7 +22,7 @@ from sqlmodel import SQLModel
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 import services
-from fortify.security import generate_keypair, sign_bytes, verify_bytes
+from hexgate.security import generate_keypair, sign_bytes, verify_bytes
 from models import Agent  # noqa: F401 — ensures the table is registered
 from services import compile_bundle, ensure_default_project, update_agent
 
@@ -111,14 +111,14 @@ def test_compile_bundle_returns_none_when_opa_missing(
     signer, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """If opa isn't available, compile_bundle returns None (graceful degrade)."""
-    from fortify.security.rego_wasm import OpaNotFoundError
+    from hexgate.security.rego_wasm import OpaNotFoundError
 
     def boom(*_a, **_k):
         raise OpaNotFoundError("opa not found (simulated)")
 
     # build_signed_bundle imports compile_to_wasm from rego_wasm directly,
-    # so patch it there (not the fortify.security package re-export).
-    monkeypatch.setattr("fortify.security.rego_wasm.compile_to_wasm", boom)
+    # so patch it there (not the hexgate.security package re-export).
+    monkeypatch.setattr("hexgate.security.rego_wasm.compile_to_wasm", boom)
     sign, _ = signer
     assert compile_bundle(_DEMO_POLICY, sign) is None
 
@@ -286,7 +286,7 @@ def test_platform_bundle_matches_pydantic(role, tool, args, expect_allow, signer
     """The platform's signed bundle, loaded via the SDK's from_parts +
     verified, decides exactly what the pydantic engine decides on the same
     policy_yaml."""
-    from fortify.security import (
+    from hexgate.security import (
         ApprovalRequiredError,
         PolicyBundle,
         PolicyDeniedError,

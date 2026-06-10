@@ -2,8 +2,8 @@ import asyncio
 from agents import Agent, function_tool
 from dotenv import load_dotenv
 
-from fortify.runtime import User
-from fortify.adapters.openai import FortifyRunner
+from hexgate.runtime import User
+from hexgate.adapters.openai import HexgateRunner
 
 
 @function_tool
@@ -21,7 +21,7 @@ async def main():
         model="gpt-4o-mini",
     )
 
-    runner = FortifyRunner()
+    runner = HexgateRunner()
     result = await runner.run(
         agent=agent,
         input="What's the weather in Cherbourg?",

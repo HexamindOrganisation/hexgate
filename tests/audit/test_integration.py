@@ -1,7 +1,7 @@
 """End-to-end audit emission against a live platform + ClickHouse.
 
 Requires: `make clickhouse-up` and `make platform-api` running, and
-`FORTIFY_KEY` set to a token minted via the dashboard.
+`HEXGATE_KEY` set to a token minted via the dashboard.
 
 Opt in with: `pytest -m integration`.
 """
@@ -14,19 +14,19 @@ import os
 import httpx
 import pytest
 
-import fortify.audit as audit_mod
-from fortify.audit import AuditEvent
-from fortify.security.decision import Decision, DecisionOutcome
+import hexgate.audit as audit_mod
+from hexgate.audit import AuditEvent
+from hexgate.security.decision import Decision, DecisionOutcome
 
 pytestmark = pytest.mark.integration
 
-PLATFORM_URL = os.environ.get("FORTIFY_API_URL", "http://localhost:8000").rstrip("/")
-TOKEN = os.environ.get("FORTIFY_KEY")
+PLATFORM_URL = os.environ.get("HEXGATE_API_URL", "http://localhost:8000").rstrip("/")
+TOKEN = os.environ.get("HEXGATE_KEY")
 
 
 def _need_token() -> None:
     if not TOKEN:
-        pytest.skip("FORTIFY_KEY not set; mint a token via the dashboard")
+        pytest.skip("HEXGATE_KEY not set; mint a token via the dashboard")
 
 
 def _event() -> AuditEvent:

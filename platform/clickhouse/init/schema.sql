@@ -5,9 +5,9 @@
 -- ignored. Don't add more files here — use a real migration runner
 -- instead.
 
-CREATE DATABASE IF NOT EXISTS fortify_audit;
+CREATE DATABASE IF NOT EXISTS hexgate_audit;
 
-CREATE TABLE IF NOT EXISTS fortify_audit.policy_decision
+CREATE TABLE IF NOT EXISTS hexgate_audit.policy_decision
 (
     -- Envelope (shared across all future event tables)
     event_id            UUID,

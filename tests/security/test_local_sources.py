@@ -4,7 +4,7 @@ The platform path (PlatformPolicySource) is covered in ``test_source.py``.
 These tests cover the two dev-loop sources:
 
   * :class:`BundleDirPolicySource` — refresh a pre-built bundle dir
-    (output of ``fortify policy build``) by mtime.
+    (output of ``hexgate policy build``) by mtime.
   * :class:`YamlPolicySource` — recompile a ``policy.yaml`` on save.
 
 Both need ``opa`` on PATH to actually compile a wasm module. Tests that
@@ -20,7 +20,7 @@ from pathlib import Path
 
 import pytest
 
-from fortify.security import (
+from hexgate.security import (
     BundleDirPolicySource,
     PolicyBundle,
     YamlPolicySource,
@@ -36,7 +36,7 @@ needs_opa = pytest.mark.skipif(not _OPA_AVAILABLE, reason="opa not on PATH")
 def _permissive_sig_policy():
     """A SignaturePolicy that doesn't refuse anything — for dispatch tests
     that aren't exercising the signature matrix."""
-    from fortify.security.source import SignaturePolicy
+    from hexgate.security.source import SignaturePolicy
 
     return SignaturePolicy(verify_with=None, require_signature=False)
 
@@ -71,7 +71,7 @@ roles:
 
 
 def _write_bundle_dir(yaml_text: str, target: Path, *, sign=None) -> Path:
-    """Materialize a ``fortify policy build``-shaped directory under ``target``.
+    """Materialize a ``hexgate policy build``-shaped directory under ``target``.
 
     We reuse the SDK's ``build_signed_bundle`` instead of shelling out so
     these tests don't depend on the CLI; the on-disk layout is what
@@ -120,7 +120,7 @@ def test_bundle_dir_source_reuses_instance_when_unchanged(tmp_path: Path) -> Non
 
 @needs_opa
 def test_bundle_dir_source_reloads_when_manifest_changes(tmp_path: Path) -> None:
-    """Rewriting the bundle (e.g. fortify policy build again) → new instance."""
+    """Rewriting the bundle (e.g. hexgate policy build again) → new instance."""
     manifest = _write_bundle_dir(_DEMO_YAML, tmp_path)
     src = BundleDirPolicySource(tmp_path)
     first = src.fetch()
@@ -254,7 +254,7 @@ def test_yaml_source_missing_file_raises(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# loader dispatch — FORTIFY_LOCAL_POLICY shape-based routing
+# loader dispatch — HEXGATE_LOCAL_POLICY shape-based routing
 # ---------------------------------------------------------------------------
 
 
@@ -262,13 +262,13 @@ def test_yaml_source_missing_file_raises(tmp_path: Path) -> None:
 def test_local_dispatch_routes_dir_to_bundle_dir_source(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from fortify.security.source import _local_policy_source
+    from hexgate.security.source import _local_policy_source
 
     _write_bundle_dir(_DEMO_YAML, tmp_path)
-    monkeypatch.setenv("FORTIFY_LOCAL_POLICY", str(tmp_path))
-    monkeypatch.delenv("FORTIFY_BUNDLE_REQUIRE_SIGNATURE", raising=False)
-    monkeypatch.delenv("FORTIFY_BUNDLE_PUBKEY_PATH", raising=False)
-    monkeypatch.delenv("FORTIFY_BUNDLE_SIGN_KEY_PATH", raising=False)
+    monkeypatch.setenv("HEXGATE_LOCAL_POLICY", str(tmp_path))
+    monkeypatch.delenv("HEXGATE_BUNDLE_REQUIRE_SIGNATURE", raising=False)
+    monkeypatch.delenv("HEXGATE_BUNDLE_PUBKEY_PATH", raising=False)
+    monkeypatch.delenv("HEXGATE_BUNDLE_SIGN_KEY_PATH", raising=False)
 
     src = _local_policy_source(_permissive_sig_policy())
     assert isinstance(src, BundleDirPolicySource)
@@ -278,23 +278,23 @@ def test_local_dispatch_routes_dir_to_bundle_dir_source(
 def test_local_dispatch_routes_yaml_to_yaml_source(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from fortify.security.source import _local_policy_source
+    from hexgate.security.source import _local_policy_source
 
     yaml_path = tmp_path / "policy.yaml"
     yaml_path.write_text(_DEMO_YAML, encoding="utf-8")
-    monkeypatch.setenv("FORTIFY_LOCAL_POLICY", str(yaml_path))
-    monkeypatch.delenv("FORTIFY_BUNDLE_REQUIRE_SIGNATURE", raising=False)
-    monkeypatch.delenv("FORTIFY_BUNDLE_PUBKEY_PATH", raising=False)
-    monkeypatch.delenv("FORTIFY_BUNDLE_SIGN_KEY_PATH", raising=False)
+    monkeypatch.setenv("HEXGATE_LOCAL_POLICY", str(yaml_path))
+    monkeypatch.delenv("HEXGATE_BUNDLE_REQUIRE_SIGNATURE", raising=False)
+    monkeypatch.delenv("HEXGATE_BUNDLE_PUBKEY_PATH", raising=False)
+    monkeypatch.delenv("HEXGATE_BUNDLE_SIGN_KEY_PATH", raising=False)
 
     src = _local_policy_source(_permissive_sig_policy())
     assert isinstance(src, YamlPolicySource)
 
 
 def test_local_dispatch_unset_returns_none(monkeypatch: pytest.MonkeyPatch) -> None:
-    from fortify.security.source import _local_policy_source
+    from hexgate.security.source import _local_policy_source
 
-    monkeypatch.delenv("FORTIFY_LOCAL_POLICY", raising=False)
+    monkeypatch.delenv("HEXGATE_LOCAL_POLICY", raising=False)
     assert _local_policy_source(_permissive_sig_policy()) is None
 
 
@@ -303,11 +303,11 @@ def test_local_dispatch_rejects_unknown_shape(
 ) -> None:
     """Pointing the env var at a random file (not yaml, not a bundle dir)
     is a configuration error, not a silent fallback."""
-    from fortify.security.source import _local_policy_source
+    from hexgate.security.source import _local_policy_source
 
     target = tmp_path / "policy.txt"
     target.write_text("not yaml", encoding="utf-8")
-    monkeypatch.setenv("FORTIFY_LOCAL_POLICY", str(target))
+    monkeypatch.setenv("HEXGATE_LOCAL_POLICY", str(target))
     with pytest.raises(RuntimeError, match="expected a bundle"):
         _local_policy_source(_permissive_sig_policy())
 
@@ -318,12 +318,12 @@ def test_local_override_returns_bundle_and_source(
 ) -> None:
     """The high-level helper returns BOTH the initial bundle (for
     enforce_policy) and the source (for runtime refresh)."""
-    from fortify.security.source import _local_policy_override
+    from hexgate.security.source import _local_policy_override
 
     yaml_path = tmp_path / "policy.yaml"
     yaml_path.write_text(_DEMO_YAML, encoding="utf-8")
-    monkeypatch.setenv("FORTIFY_LOCAL_POLICY", str(yaml_path))
-    monkeypatch.delenv("FORTIFY_BUNDLE_REQUIRE_SIGNATURE", raising=False)
+    monkeypatch.setenv("HEXGATE_LOCAL_POLICY", str(yaml_path))
+    monkeypatch.delenv("HEXGATE_BUNDLE_REQUIRE_SIGNATURE", raising=False)
 
     out = _local_policy_override()
     assert out is not None
@@ -341,13 +341,13 @@ def test_local_override_require_signature_rejects_unsigned_yaml(
 ) -> None:
     """REQUIRE_SIGNATURE + yaml source without a sign-key → refuse,
     don't sleepwalk into running unsigned policy."""
-    from fortify.security.source import _local_policy_override
+    from hexgate.security.source import _local_policy_override
 
     yaml_path = tmp_path / "policy.yaml"
     yaml_path.write_text(_DEMO_YAML, encoding="utf-8")
-    monkeypatch.setenv("FORTIFY_LOCAL_POLICY", str(yaml_path))
-    monkeypatch.setenv("FORTIFY_BUNDLE_REQUIRE_SIGNATURE", "true")
-    monkeypatch.delenv("FORTIFY_BUNDLE_SIGN_KEY_PATH", raising=False)
+    monkeypatch.setenv("HEXGATE_LOCAL_POLICY", str(yaml_path))
+    monkeypatch.setenv("HEXGATE_BUNDLE_REQUIRE_SIGNATURE", "true")
+    monkeypatch.delenv("HEXGATE_BUNDLE_SIGN_KEY_PATH", raising=False)
 
     if not _OPA_AVAILABLE:
         # Without opa we never even reach the signature check — the

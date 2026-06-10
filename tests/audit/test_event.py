@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import json
 
-from fortify.audit import MAX_ARGS_BYTES, AuditEvent
-from fortify.security.decision import Decision, DecisionOutcome
+from hexgate.audit import MAX_ARGS_BYTES, AuditEvent
+from hexgate.security.decision import Decision, DecisionOutcome
 
 
 def _decision(**overrides) -> Decision:

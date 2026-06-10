@@ -20,14 +20,14 @@ from types import SimpleNamespace
 
 import pytest
 
-from fortify.security import (
+from hexgate.security import (
     PolicyBundle,
     compile_to_rego,
     compile_to_wasm,
     generate_keypair,
     sign_bytes,
 )
-from fortify.security.source import PlatformPolicySource, SignaturePolicy
+from hexgate.security.source import PlatformPolicySource, SignaturePolicy
 
 
 _OPA_AVAILABLE = shutil.which("opa") is not None
@@ -50,7 +50,7 @@ def test_warn_if_unverified_warns_for_signed_bundle_without_pubkey(
 
     err = capsys.readouterr().err
     assert "signature NOT verified" in err
-    assert "FORTIFY_BUNDLE_PUBKEY_PATH" in err
+    assert "HEXGATE_BUNDLE_PUBKEY_PATH" in err
 
 
 def test_warn_if_unverified_silent_when_pubkey_configured(
@@ -121,7 +121,7 @@ def _bundle_response(private_raw: bytes, amount_cap: int = 500) -> dict:
 
 
 class _FakeClient:
-    """Stand-in for FortifyClient that scripts a sequence of responses.
+    """Stand-in for HexgateClient that scripts a sequence of responses.
 
     ``serve(...)`` queues the next answer the client should return; each
     ``get_agent`` consumes one. The 304 path is triggered when the
@@ -234,8 +234,8 @@ def test_pre_seeded_source_skips_first_round_trip() -> None:
     fetch sends If-None-Match and trivially hits 304."""
     priv, pub = generate_keypair()
     fc = _FakeClient(pub)
-    # Pre-build a bundle the same way load_fortify_agent would have.
-    from fortify.security.source import decode_and_verify_platform_bundle
+    # Pre-build a bundle the same way load_hexgate_agent would have.
+    from hexgate.security.source import decode_and_verify_platform_bundle
 
     initial = decode_and_verify_platform_bundle(_bundle_response(priv), pub)
     fc.serve_304(f'"{initial.wasm_hash}"')

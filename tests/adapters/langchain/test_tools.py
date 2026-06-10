@@ -1,6 +1,6 @@
 """Tests for the in-place :func:`install_enforcer_on_tool` LangChain mutator.
 
-The new ``GuardedTool`` (used by ``FortifyAgent.enforce_policy``) is
+The new ``GuardedTool`` (used by ``HexgateAgent.enforce_policy``) is
 covered in :mod:`test_guarded_tool`. This file targets the alternate
 path used by :func:`wrap_langchain_agent` to retrofit pre-built
 ``CompiledStateGraph`` instances whose tool references can't be swapped.
@@ -13,14 +13,14 @@ from typing import Any
 import pytest
 from langchain_core.tools import BaseTool, tool
 
-from fortify.adapters.langchain.tools import (
+from hexgate.adapters.langchain.tools import (
     install_enforcer_on_tool,
     install_enforcer_on_tools,
 )
-from fortify.runtime import User
-from fortify.security import AgentPolicy, PolicySet
-from fortify.security.enforcer import PolicyEnforcer
-from fortify.security.policy_set import DEFAULT_ROLE_NAME
+from hexgate.runtime import User
+from hexgate.security import AgentPolicy, PolicySet
+from hexgate.security.enforcer import PolicyEnforcer
+from hexgate.security.policy_set import DEFAULT_ROLE_NAME
 
 
 def _enforcer_for(spec: dict[str, Any]) -> PolicyEnforcer:
@@ -87,7 +87,7 @@ def test_install_returns_same_tool_and_sets_handle_tool_error() -> None:
 
     assert result is t
     assert t.handle_tool_error is True
-    assert getattr(t, "_fortify_enforcer_installed") is True
+    assert getattr(t, "_hexgate_enforcer_installed") is True
 
 
 def test_install_rejects_tool_without_func_or_coroutine() -> None:
@@ -243,7 +243,7 @@ def test_install_on_tools_installs_each_and_returns_same_list() -> None:
 
     assert result is tools
     for t in tools:
-        assert getattr(t, "_fortify_enforcer_installed") is True
+        assert getattr(t, "_hexgate_enforcer_installed") is True
 
 
 def test_install_on_tools_isolates_decisions_per_tool() -> None:

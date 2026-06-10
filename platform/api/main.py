@@ -128,7 +128,7 @@ async def lifespan(app_: FastAPI):
     yield
 
 
-app = FastAPI(title="Fortify API", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="HexaGate API", version="0.1.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -140,7 +140,7 @@ app.add_middleware(
 
 
 async def _validate_sdk_token(authorization: str, session: AsyncSession) -> None:
-    """Validate an ``Authorization: Bearer <fortify_key>`` biscuit envelope.
+    """Validate an ``Authorization: Bearer <hexgate_key>`` biscuit envelope.
 
     Used by :func:`optional_dev_token` (allows a missing header) and
     indirectly by :func:`require_project` / :func:`ws_require_project`
@@ -155,24 +155,24 @@ async def _validate_sdk_token(authorization: str, session: AsyncSession) -> None
     try:
         _, _, biscuit_b64 = parse_envelope(secret)
     except TokenError:
-        raise HTTPException(status_code=401, detail="malformed fortify key") from None
+        raise HTTPException(status_code=401, detail="malformed hexgate key") from None
     try:
         verify_token(biscuit_b64, keystore.public_key_bytes())
     except TokenSignatureError:
         raise HTTPException(
-            status_code=401, detail="invalid fortify key signature"
+            status_code=401, detail="invalid hexgate key signature"
         ) from None
 
     # Revocation gate
     if await find_token_by_secret(session, secret) is None:
-        raise HTTPException(status_code=401, detail="unknown or revoked fortify key")
+        raise HTTPException(status_code=401, detail="unknown or revoked hexgate key")
 
 
 async def optional_dev_token(
     authorization: str | None = Header(default=None),
     session: AsyncSession = Depends(get_session),
 ) -> None:
-    """Validate Authorization: Bearer <fortify_key> when present.
+    """Validate Authorization: Bearer <hexgate_key> when present.
 
     Two gates run when a header is supplied:
 
@@ -199,7 +199,7 @@ async def require_project(
     authorization: str | None = Header(default=None),
     session: AsyncSession = Depends(get_session),
 ) -> str:
-    """Resolve `Authorization: Bearer <fortify_key>` to a project_id.
+    """Resolve `Authorization: Bearer <hexgate_key>` to a project_id.
 
     Used by SDK-facing endpoints (e.g. POST /v1/agents) where the caller
     has only an API key, not a project id in the URL.
@@ -241,7 +241,7 @@ async def require_project(
 # CLI client asserts it back so it knows the platform understands the
 # bearer-in-subprotocol contract (i.e., we're talking to a Phase-6+
 # server, not an older deployment that ignored unknown subprotocols).
-_WS_PROTOCOL_MARKER = "fortify.v1"
+_WS_PROTOCOL_MARKER = "hexgate.v1"
 
 # WS close code for "auth failed at handshake". 4000-4999 is the
 # application-private range per RFC 6455; 4401 is chosen to mirror the
@@ -259,9 +259,9 @@ async def ws_require_project(
     workaround is to overload ``Sec-WebSocket-Protocol``. The CLI client
     offers two subprotocols on ``connect``:
 
-      * ``bearer.<envelope>`` — the actual fortify key, consumed by the
+      * ``bearer.<envelope>`` — the actual hexgate key, consumed by the
         server and never echoed back (kept out of any proxy mirror logs).
-      * ``fortify.v1`` — protocol marker; the server echoes this so the
+      * ``hexgate.v1`` — protocol marker; the server echoes this so the
         client knows the handshake bound a real auth context.
 
     On any reject path we ``close(code=4401)`` before ``accept()`` — the
@@ -325,7 +325,7 @@ async def ws_require_org_member(
     Browsers can't set custom headers on WS upgrades — fine for
     ``ws_serve`` (the CLI sends a bearer subprotocol) but the dashboard
     drives ``ws_chat`` from JavaScript and can't reach for an
-    Authorization header. We extract the ``fortify_session`` cookie
+    Authorization header. We extract the ``hexgate_session`` cookie
     directly from the handshake.
 
     Three gates run in order:
@@ -349,7 +349,7 @@ async def ws_require_org_member(
     # Cookie extraction. ``websocket.cookies`` is Starlette's parsed
     # mapping; absent cookies show up as missing keys, not empty
     # strings.
-    cookie_token = websocket.cookies.get("fortify_session")
+    cookie_token = websocket.cookies.get("hexgate_session")
     if not cookie_token:
         await websocket.close(code=_WS_CLOSE_UNAUTHENTICATED)
         return None
@@ -419,11 +419,11 @@ def _dev_user_header_allowed() -> bool:
     Defaults to off — production servers MUST NOT accept this header,
     since it bypasses the cookie/session check and trusts whatever
     UUID the caller asserts. Tests opt in via ``conftest.py`` setting
-    ``FORTIFY_ALLOW_DEV_USER_HEADER=1`` in the environment.
+    ``HEXGATE_ALLOW_DEV_USER_HEADER=1`` in the environment.
     """
     import os
 
-    return os.environ.get("FORTIFY_ALLOW_DEV_USER_HEADER", "").strip().lower() in {
+    return os.environ.get("HEXGATE_ALLOW_DEV_USER_HEADER", "").strip().lower() in {
         "1",
         "true",
         "yes",
@@ -439,7 +439,7 @@ async def require_user(
     """Resolve the active dashboard user via session cookie.
 
     Cookie-first (production path). ``X-Dev-User`` is a TEST-ONLY
-    seam gated behind ``FORTIFY_ALLOW_DEV_USER_HEADER`` — the dashboard
+    seam gated behind ``HEXGATE_ALLOW_DEV_USER_HEADER`` — the dashboard
     no longer sends this header from Phase 3d onward; only the test
     suite uses it, via the conftest that flips the env on. Production
     deployments must leave the env unset (the default) so the header
@@ -611,7 +611,7 @@ def _readiness() -> tuple[dict[str, str], int]:
     reachable = clickhouse_ping()
     body = {
         "status": "ok" if reachable else "unavailable",
-        "service": "fortify-api",
+        "service": "hexgate-api",
         "clickhouse": "ok" if reachable else "unreachable",
     }
     return body, 200 if reachable else 503
@@ -621,7 +621,7 @@ def _readiness() -> tuple[dict[str, str], int]:
 async def health() -> dict[str, str]:
     """Liveness — must not touch downstream deps, or an outage cascades into
     restarts. Dependency checks live in /ready."""
-    return {"status": "ok", "service": "fortify-api"}
+    return {"status": "ok", "service": "hexgate-api"}
 
 
 @app.get("/ready")
@@ -636,7 +636,7 @@ v1 = APIRouter(prefix="/v1")
 
 @v1.get("/health")
 async def v1_health() -> dict[str, str]:
-    return {"status": "ok", "service": "fortify-api", "version": "v1"}
+    return {"status": "ok", "service": "hexgate-api", "version": "v1"}
 
 
 @v1.get("/ready")
@@ -923,8 +923,8 @@ async def api_validate_policy(
     from yaml.error import MarkedYAMLError
     from pydantic import ValidationError
 
-    from fortify.security import AgentPolicy
-    from fortify.security.constraints import (
+    from hexgate.security import AgentPolicy
+    from hexgate.security.constraints import (
         ConstraintParseError,
         parse_constraint,
     )
@@ -1240,7 +1240,7 @@ async def api_introspect_key(
 ) -> KeyIntrospection:
     """Describe the bearer token (project + env + scopes).
 
-    Useful for the CLI's startup log line — ``fortify serve`` can show
+    Useful for the CLI's startup log line — ``hexgate serve`` can show
     ``project=acme-prod env=live`` without parsing the envelope itself,
     and we keep the parse-envelope contract on one side (the server).
 
@@ -1256,7 +1256,7 @@ async def api_introspect_key(
     secret = authorization.removeprefix("Bearer ").strip()
     token = await find_token_by_secret(session, secret)
     if token is None:
-        raise HTTPException(status_code=401, detail="invalid fortify key")
+        raise HTTPException(status_code=401, detail="invalid hexgate key")
 
     # ``prefix`` on the row is ``fty_test`` or ``fty_live``; strip the
     # leading ``fty_`` to expose just the env value the CLI cares about.
@@ -1276,13 +1276,13 @@ async def ws_serve(
     websocket: WebSocket,
     session: AsyncSession = Depends(get_session),
 ) -> None:
-    """Producer socket for ``fortify serve`` — project derived from token.
+    """Producer socket for ``hexgate serve`` — project derived from token.
 
     The CLI connects with two subprotocols offered: ``bearer.<key>`` and
-    ``fortify.v1``. ``ws_require_project`` validates the bearer and
+    ``hexgate.v1``. ``ws_require_project`` validates the bearer and
     resolves it to the token's project (no project_id in the URL — the
     biscuit *is* the project context). On a successful handshake the
-    server echoes ``fortify.v1`` back; the bearer subprotocol is
+    server echoes ``hexgate.v1`` back; the bearer subprotocol is
     consumed and never mirrored.
     """
     project_id = await ws_require_project(websocket, session)
@@ -1314,7 +1314,7 @@ async def ws_chat(
     """Consumer socket for dashboard Playground sessions.
 
     Cookie-authed: the dashboard's JS WebSocket reaches for the
-    ``fortify_session`` cookie automatically. ``ws_require_org_member``
+    ``hexgate_session`` cookie automatically. ``ws_require_org_member``
     verifies it + checks the caller is a member of the project's org
     before ``accept()`` runs. Anonymous / cross-org connects close
     with 4401 before the handshake completes.
@@ -1984,13 +1984,13 @@ def _maybe_mount_oauth_routers() -> None:
             tags=["auth"],
         )
         print(
-            "[fortify] Google OAuth enabled (FORTIFY_GOOGLE_CLIENT_ID set)",
+            "[hexgate] Google OAuth enabled (HEXGATE_GOOGLE_CLIENT_ID set)",
             file=sys.stderr,
         )
     else:
         print(
-            "[fortify] Google OAuth disabled — set FORTIFY_GOOGLE_CLIENT_ID "
-            "+ FORTIFY_GOOGLE_CLIENT_SECRET to enable",
+            "[hexgate] Google OAuth disabled — set HEXGATE_GOOGLE_CLIENT_ID "
+            "+ HEXGATE_GOOGLE_CLIENT_SECRET to enable",
             file=sys.stderr,
         )
 

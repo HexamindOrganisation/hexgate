@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from fortify.security import (
+from hexgate.security import (
     SignatureError,
     decode_key,
     encode_key,
@@ -105,7 +105,7 @@ def test_verify_rejects_malformed_public_key() -> None:
 
 
 # ---------------------------------------------------------------------------
-# base64url encoding (matches platform JWKS + FORTIFY_PUBLIC_KEY wire format)
+# base64url encoding (matches platform JWKS + HEXGATE_PUBLIC_KEY wire format)
 # ---------------------------------------------------------------------------
 
 

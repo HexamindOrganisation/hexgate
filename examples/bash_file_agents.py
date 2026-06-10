@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fortify import AgentPolicy, create_agent, enforce_policy, register_agent
-from fortify.runtime import LocalWorkspace
-from fortify.tools import bash, edit_file, glob, grep, read_file, write_file
+from hexgate import AgentPolicy, create_agent, enforce_policy, register_agent
+from hexgate.runtime import LocalWorkspace
+from hexgate.tools import bash, edit_file, glob, grep, read_file, write_file
 
 
 def _coding_agent_policy() -> AgentPolicy:
@@ -83,7 +83,7 @@ def build_repo_operator(
             "and use bash sparingly when file tools are enough."
         ),
         session_id=session_id,
-        tags=tags or ["fortify", "repo-operator"],
+        tags=tags or ["hexgate", "repo-operator"],
         workspace=workspace,
     )
     return enforce_policy(agent, _coding_agent_policy()), handler

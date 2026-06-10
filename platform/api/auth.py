@@ -40,7 +40,7 @@ from db import get_session
 from mailer import get_email_sender
 from models import OAuthAccount, User
 
-logger = logging.getLogger("fortify.platform.auth")
+logger = logging.getLogger("hexgate.platform.auth")
 
 
 # ---------------------------------------------------------------------------
@@ -114,7 +114,7 @@ def _dashboard_url() -> str:
     dashboard while dev defaults to the Vite server on localhost:5173.
     Trailing slash is stripped so f"{url}/path" always renders cleanly.
     """
-    return os.environ.get("FORTIFY_DASHBOARD_URL", "http://localhost:5173").rstrip("/")
+    return os.environ.get("HEXGATE_DASHBOARD_URL", "http://localhost:5173").rstrip("/")
 
 
 def _cookie_secure() -> bool:
@@ -123,14 +123,14 @@ def _cookie_secure() -> bool:
     Default is ``False`` so ``make platform-api`` works over plain HTTP
     on localhost (a Secure cookie is silently dropped by every browser
     on http://). Production deployments behind an HTTPS terminator MUST
-    set ``FORTIFY_COOKIE_SECURE=1`` (or ``true``/``yes``/``on``) — without
+    set ``HEXGATE_COOKIE_SECURE=1`` (or ``true``/``yes``/``on``) — without
     it, a hostile network can sniff or strip the session cookie on the
     first request that drops back to HTTP.
 
     Truthy values: ``1``, ``true``, ``yes``, ``on`` (case-insensitive).
     Everything else, including unset, evaluates to ``False``.
     """
-    return os.environ.get("FORTIFY_COOKIE_SECURE", "").strip().lower() in (
+    return os.environ.get("HEXGATE_COOKIE_SECURE", "").strip().lower() in (
         "1",
         "true",
         "yes",
@@ -209,7 +209,7 @@ class UserManager(BaseUserManager[User, str]):
 
         Sends a magic-link email containing ``token`` so the recipient
         can land on the dashboard's reset form pre-loaded with it. The
-        link URL is rendered from ``FORTIFY_DASHBOARD_URL`` (defaults
+        link URL is rendered from ``HEXGATE_DASHBOARD_URL`` (defaults
         to localhost:5173 for dev). Dev mode prints the email to stderr
         via :class:`StderrEmailSender`; production swaps in a real
         provider via :func:`mailer.set_email_sender`.
@@ -234,7 +234,7 @@ class UserManager(BaseUserManager[User, str]):
         """Hook when a verification email is requested.
 
         Same shape as the reset flow: mints a token, mails a dashboard
-        link that consumes it. ``FORTIFY_DASHBOARD_URL`` controls the
+        link that consumes it. ``HEXGATE_DASHBOARD_URL`` controls the
         host.
         """
         link = f"{_dashboard_url()}/verify-email/{token}"
@@ -264,11 +264,11 @@ async def get_user_manager(
 
 
 cookie_transport = CookieTransport(
-    cookie_name="fortify_session",
+    cookie_name="hexgate_session",
     cookie_max_age=_SESSION_TTL_SECONDS,
     # ``Secure`` would refuse the cookie over plain HTTP — fine in prod
     # (HTTPS terminator in front), wrong for ``make platform-api`` which
-    # serves on localhost over HTTP. ``FORTIFY_COOKIE_SECURE=1`` flips
+    # serves on localhost over HTTP. ``HEXGATE_COOKIE_SECURE=1`` flips
     # the flag on for production; default is off for dev ergonomics.
     cookie_secure=_cookie_secure(),
     cookie_httponly=True,
@@ -314,7 +314,7 @@ current_active_user_optional = fastapi_users.current_user(active=True, optional=
 # Phase 3c — Google OAuth
 #
 # The OAuth router is mounted conditionally — only when the operator has
-# set FORTIFY_GOOGLE_CLIENT_ID + FORTIFY_GOOGLE_CLIENT_SECRET. That keeps
+# set HEXGATE_GOOGLE_CLIENT_ID + HEXGATE_GOOGLE_CLIENT_SECRET. That keeps
 # `make platform-api` working out of the box without any Google Cloud
 # Console setup, and turns OAuth on as a single env flip when ready.
 # ---------------------------------------------------------------------------
@@ -345,7 +345,7 @@ def build_google_oauth_router() -> APIRouter | None:
         state token the SDK / dashboard then redirects the user to.
       * ``GET /callback``  → handles Google's redirect back, exchanges
         the code for tokens, upserts the User + OAuthAccount, and
-        issues the same ``fortify_session`` cookie a password login
+        issues the same ``hexgate_session`` cookie a password login
         would have set.
 
     ``associate_by_email=True``: if a Google account's email matches an
@@ -361,8 +361,8 @@ def build_google_oauth_router() -> APIRouter | None:
     Env vars are read at call time (not module import) so tests can
     monkeypatch them before the lifespan triggers this builder.
     """
-    client_id = os.environ.get("FORTIFY_GOOGLE_CLIENT_ID")
-    client_secret = os.environ.get("FORTIFY_GOOGLE_CLIENT_SECRET")
+    client_id = os.environ.get("HEXGATE_GOOGLE_CLIENT_ID")
+    client_secret = os.environ.get("HEXGATE_GOOGLE_CLIENT_SECRET")
     if not (client_id and client_secret):
         return None
     google_client = GoogleOAuth2(client_id, client_secret)
@@ -376,7 +376,7 @@ def build_google_oauth_router() -> APIRouter | None:
         # only). That breaks ``make platform-api`` over localhost HTTP +
         # tests over http://testserver — the browser sets the cookie but
         # never sends it back on /callback, so state verification fails.
-        # Track the session cookie's flag: ``FORTIFY_COOKIE_SECURE=1``
+        # Track the session cookie's flag: ``HEXGATE_COOKIE_SECURE=1``
         # flips both on in production, neither in dev.
         csrf_token_cookie_secure=_cookie_secure(),
     )

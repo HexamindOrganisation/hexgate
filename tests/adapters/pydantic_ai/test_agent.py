@@ -1,4 +1,4 @@
-"""Tests for the FortifyPydanticAgent proxy."""
+"""Tests for the HexgatePydanticAgent proxy."""
 
 from __future__ import annotations
 
@@ -7,9 +7,9 @@ from typing import Any, AsyncIterator
 
 import pytest
 
-from fortify.adapters.pydantic_ai.agent import FortifyPydanticAgent
-from fortify.runtime import User
-from fortify.runtime.context import get_current_user
+from hexgate.adapters.pydantic_ai.agent import HexgatePydanticAgent
+from hexgate.runtime import User
+from hexgate.runtime.context import get_current_user
 
 
 def _user() -> User:
@@ -80,10 +80,10 @@ def test_constructor_calls_setup_observability(
         calls.append(True)
 
     monkeypatch.setattr(
-        "fortify.adapters.pydantic_ai.agent.Agent.instrument_all", fake_instrument_all
+        "hexgate.adapters.pydantic_ai.agent.Agent.instrument_all", fake_instrument_all
     )
 
-    FortifyPydanticAgent(
+    HexgatePydanticAgent(
         agent=_RecordingAgent(),  # type: ignore[arg-type]
         api_key="k",
         agent_name="recording-agent",
@@ -96,7 +96,7 @@ def test_constructor_stores_inputs() -> None:
     """The proxy keeps the agent, api key, agent name, and tool names verbatim."""
     inner = _RecordingAgent()
 
-    proxy = FortifyPydanticAgent(
+    proxy = HexgatePydanticAgent(
         agent=inner,  # type: ignore[arg-type]
         api_key="api-123",
         agent_name="custom-name",
@@ -117,11 +117,11 @@ async def test_run_opens_user_scope_and_delegates(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        "fortify.adapters.pydantic_ai.agent.Agent.instrument_all", lambda: None
+        "hexgate.adapters.pydantic_ai.agent.Agent.instrument_all", lambda: None
     )
 
     inner = _RecordingAgent()
-    proxy = FortifyPydanticAgent(
+    proxy = HexgatePydanticAgent(
         agent=inner,  # type: ignore[arg-type]
         api_key="k",
         agent_name="recording-agent",
@@ -143,11 +143,11 @@ def test_run_sync_opens_user_scope_and_delegates(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        "fortify.adapters.pydantic_ai.agent.Agent.instrument_all", lambda: None
+        "hexgate.adapters.pydantic_ai.agent.Agent.instrument_all", lambda: None
     )
 
     inner = _RecordingAgent()
-    proxy = FortifyPydanticAgent(
+    proxy = HexgatePydanticAgent(
         agent=inner,  # type: ignore[arg-type]
         api_key="k",
         agent_name="recording-agent",
@@ -167,11 +167,11 @@ async def test_run_stream_opens_user_scope_and_yields_result(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        "fortify.adapters.pydantic_ai.agent.Agent.instrument_all", lambda: None
+        "hexgate.adapters.pydantic_ai.agent.Agent.instrument_all", lambda: None
     )
 
     inner = _RecordingAgent()
-    proxy = FortifyPydanticAgent(
+    proxy = HexgatePydanticAgent(
         agent=inner,  # type: ignore[arg-type]
         api_key="k",
         agent_name="recording-agent",
@@ -193,11 +193,11 @@ async def test_iter_opens_user_scope_and_yields_run(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        "fortify.adapters.pydantic_ai.agent.Agent.instrument_all", lambda: None
+        "hexgate.adapters.pydantic_ai.agent.Agent.instrument_all", lambda: None
     )
 
     inner = _RecordingAgent()
-    proxy = FortifyPydanticAgent(
+    proxy = HexgatePydanticAgent(
         agent=inner,  # type: ignore[arg-type]
         api_key="k",
         agent_name="recording-agent",
@@ -218,14 +218,14 @@ def test_user_scope_is_unwound_when_run_sync_raises(
 ) -> None:
     """The contextvar unwinds even when the wrapped agent raises."""
     monkeypatch.setattr(
-        "fortify.adapters.pydantic_ai.agent.Agent.instrument_all", lambda: None
+        "hexgate.adapters.pydantic_ai.agent.Agent.instrument_all", lambda: None
     )
 
     class BoomAgent:
         def run_sync(self, *_args: Any, **_kwargs: Any) -> str:
             raise RuntimeError("boom")
 
-    proxy = FortifyPydanticAgent(
+    proxy = HexgatePydanticAgent(
         agent=BoomAgent(),  # type: ignore[arg-type]
         api_key="k",
         agent_name="boom",
@@ -246,11 +246,11 @@ def test_proxy_delegates_unknown_attributes_to_wrapped_agent(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        "fortify.adapters.pydantic_ai.agent.Agent.instrument_all", lambda: None
+        "hexgate.adapters.pydantic_ai.agent.Agent.instrument_all", lambda: None
     )
 
     inner = _RecordingAgent()
-    proxy = FortifyPydanticAgent(
+    proxy = HexgatePydanticAgent(
         agent=inner,  # type: ignore[arg-type]
         api_key="k",
         agent_name="recording-agent",
@@ -276,9 +276,9 @@ class _CountingBinding:
         self.refreshes += 1
 
 
-def _proxy_with_counting_binding() -> tuple[FortifyPydanticAgent, _CountingBinding]:
+def _proxy_with_counting_binding() -> tuple[HexgatePydanticAgent, _CountingBinding]:
     binding = _CountingBinding()
-    proxy = FortifyPydanticAgent(
+    proxy = HexgatePydanticAgent(
         agent=_RecordingAgent(),  # type: ignore[arg-type]
         api_key="k",
         agent_name="recording-agent",
@@ -327,7 +327,7 @@ async def test_iter_refreshes_binding_per_call() -> None:
 
 def test_proxy_without_binding_runs_fine() -> None:
     """Back-compat: a binding-less proxy (direct construction) still works."""
-    proxy = FortifyPydanticAgent(
+    proxy = HexgatePydanticAgent(
         agent=_RecordingAgent(),  # type: ignore[arg-type]
         api_key="k",
         agent_name="recording-agent",

@@ -1,4 +1,4 @@
-"""Tests for :class:`fortify.security.binding.PolicyBinding` (spec phase 1).
+"""Tests for :class:`hexgate.security.binding.PolicyBinding` (spec phase 1).
 
 The binding is the one resolve/refresh primitive every agent surface
 shares (docs/policy-binding-spec.md). These tests cover:
@@ -23,8 +23,8 @@ import shutil
 
 import pytest
 
-from fortify.cloud.client import FortifyError
-from fortify.security import (
+from hexgate.cloud.client import HexgateError
+from hexgate.security import (
     AgentPolicy,
     BaseToolPolicy,
     PolicyBinding,
@@ -38,9 +38,9 @@ from fortify.security import (
     generate_keypair,
     sign_bytes,
 )
-from fortify.security.enforcer import PolicyEnforcer
-from fortify.security.policy_set import DEFAULT_ROLE_NAME
-from fortify.security.source import PlatformPolicySource
+from hexgate.security.enforcer import PolicyEnforcer
+from hexgate.security.policy_set import DEFAULT_ROLE_NAME
+from hexgate.security.source import PlatformPolicySource
 
 _OPA_AVAILABLE = shutil.which("opa") is not None
 needs_opa = pytest.mark.skipif(not _OPA_AVAILABLE, reason="opa not on PATH")
@@ -97,7 +97,7 @@ def _bundle_response(private_raw: bytes, amount_cap: int = 500) -> dict:
 
 
 class _FakeClient:
-    """Scripted FortifyClient stand-in.
+    """Scripted HexgateClient stand-in.
 
     ``serve(...)`` queues the next get_agent answer; a queued exception is
     raised instead.
@@ -153,11 +153,11 @@ def _resolved_binding(agent_name: str, **kwargs) -> PolicyBinding:
 @pytest.fixture(autouse=True)
 def _clean_env(monkeypatch: pytest.MonkeyPatch) -> None:
     """Resolution must be driven by each test, not the developer's shell."""
-    monkeypatch.delenv("FORTIFY_KEY", raising=False)
-    monkeypatch.delenv("FORTIFY_LOCAL_POLICY", raising=False)
-    monkeypatch.delenv("FORTIFY_BUNDLE_REQUIRE_SIGNATURE", raising=False)
-    monkeypatch.delenv("FORTIFY_BUNDLE_PUBKEY_PATH", raising=False)
-    monkeypatch.delenv("FORTIFY_BUNDLE_SIGN_KEY_PATH", raising=False)
+    monkeypatch.delenv("HEXGATE_KEY", raising=False)
+    monkeypatch.delenv("HEXGATE_LOCAL_POLICY", raising=False)
+    monkeypatch.delenv("HEXGATE_BUNDLE_REQUIRE_SIGNATURE", raising=False)
+    monkeypatch.delenv("HEXGATE_BUNDLE_PUBKEY_PATH", raising=False)
+    monkeypatch.delenv("HEXGATE_BUNDLE_SIGN_KEY_PATH", raising=False)
 
 
 # ---------------------------------------------------------------------------
@@ -177,8 +177,8 @@ def test_static_constructor_is_the_explicit_ungoverned_path() -> None:
 
 
 def test_local_override_beats_platform(monkeypatch: pytest.MonkeyPatch) -> None:
-    """FORTIFY_LOCAL_POLICY wins outright — the platform is never contacted."""
-    from fortify.security import binding as binding_mod
+    """HEXGATE_LOCAL_POLICY wins outright — the platform is never contacted."""
+    from hexgate.security import binding as binding_mod
 
     sentinel_policy = _static_engine(["x"])  # any PolicyEngine works
 
@@ -248,7 +248,7 @@ def test_platform_bundleless_payload_falls_back_to_pydantic() -> None:
 def test_bundleless_with_require_signature_raises(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("FORTIFY_BUNDLE_REQUIRE_SIGNATURE", "1")
+    monkeypatch.setenv("HEXGATE_BUNDLE_REQUIRE_SIGNATURE", "1")
     _, pub = generate_keypair()
     fc = _FakeClient(pub)
     fc.serve({"policy_yaml": _POLICY_YAML}, etag=None)
@@ -271,12 +271,12 @@ def test_bad_signature_raises_never_downgrades() -> None:
 
 def test_404_propagates_with_status() -> None:
     """Registration is not the binding's job — a 404 surfaces as-is so the
-    caller can register (fortify.register_agent) and resolve again."""
+    caller can register (hexgate.register_agent) and resolve again."""
     _, pub = generate_keypair()
     fc = _FakeClient(pub)
-    fc.serve_error(FortifyError("Fortify API error 404 calling …", status=404))
+    fc.serve_error(HexgateError("HexaGate API error 404 calling …", status=404))
 
-    with pytest.raises(FortifyError) as excinfo:
+    with pytest.raises(HexgateError) as excinfo:
         _resolved_binding("ghost-agent", client=fc)
     assert excinfo.value.status == 404
 
@@ -334,11 +334,11 @@ def test_refresh_failure_keeps_previous_policy(
     _, pub = generate_keypair()
     fc = _FakeClient(pub)
     fc.serve({"policy_yaml": _POLICY_YAML}, etag='"hash-a"')
-    fc.serve_error(FortifyError("Fortify API unreachable at …"))
+    fc.serve_error(HexgateError("HexaGate API unreachable at …"))
 
     binding = _resolved_binding("support-bot", client=fc)
     before = binding.enforcer.policy
-    with caplog.at_level("WARNING", logger="fortify.security.binding"):
+    with caplog.at_level("WARNING", logger="hexgate.security.binding"):
         binding.refresh()  # must not raise
 
     assert binding.enforcer.policy is before
@@ -359,7 +359,7 @@ def test_refresh_tampered_bundle_keeps_previous_policy(
 
     binding = _resolved_binding("support-bot", client=fc)
     before = binding.enforcer.policy
-    with caplog.at_level("WARNING", logger="fortify.security.binding"):
+    with caplog.at_level("WARNING", logger="hexgate.security.binding"):
         binding.refresh()  # verification fails inside source.fetch()
 
     assert binding.enforcer.policy is before
@@ -367,7 +367,7 @@ def test_refresh_tampered_bundle_keeps_previous_policy(
 
 # ---------------------------------------------------------------------------
 # resolve_policy — fail-loud resolution (no auto-register; a 404 surfaces so
-# the caller registers via `fortify register` and resolves again)
+# the caller registers via `hexgate register` and resolves again)
 # ---------------------------------------------------------------------------
 
 
@@ -401,9 +401,9 @@ def test_resolve_policy_404_propagates_fail_loud() -> None:
     """An unregistered agent surfaces the 404 — resolve never auto-creates it."""
     _, pub = generate_keypair()
     fc = _FakeClient(pub)
-    fc.serve_error(FortifyError("404", status=404))
+    fc.serve_error(HexgateError("404", status=404))
 
-    with pytest.raises(FortifyError) as excinfo:
+    with pytest.raises(HexgateError) as excinfo:
         resolve_policy("new-agent", client=fc)
 
     assert excinfo.value.status == 404

@@ -659,59 +659,6 @@ wheels = [
 ]
 
 [[package]]
-name = "fortify-api"
-version = "0.1.0"
-source = { virtual = "." }
-dependencies = [
-    { name = "aiosqlite" },
-    { name = "biscuit-python" },
-    { name = "clickhouse-connect" },
-    { name = "cryptography" },
-    { name = "fastapi" },
-    { name = "fastapi-users", extra = ["sqlalchemy"] },
-    { name = "greenlet" },
-    { name = "hexgate" },
-    { name = "httpx-oauth" },
-    { name = "pydantic" },
-    { name = "pydantic-settings" },
-    { name = "sqlmodel" },
-    { name = "uvicorn", extra = ["standard"] },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "httpx" },
-    { name = "pytest" },
-    { name = "pytest-asyncio" },
-    { name = "ruff" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "aiosqlite", specifier = ">=0.20" },
-    { name = "biscuit-python", specifier = ">=0.4" },
-    { name = "clickhouse-connect", specifier = ">=0.8" },
-    { name = "cryptography", specifier = ">=42" },
-    { name = "fastapi", specifier = ">=0.115" },
-    { name = "fastapi-users", extras = ["sqlalchemy"], specifier = ">=14.0" },
-    { name = "greenlet", specifier = ">=3.0" },
-    { name = "hexgate", editable = "../../" },
-    { name = "httpx-oauth", specifier = ">=0.16" },
-    { name = "pydantic", specifier = ">=2.9" },
-    { name = "pydantic-settings", specifier = ">=2.5" },
-    { name = "sqlmodel", specifier = ">=0.0.22" },
-    { name = "uvicorn", extras = ["standard"], specifier = ">=0.32" },
-]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "httpx", specifier = ">=0.27" },
-    { name = "pytest", specifier = ">=8.3" },
-    { name = "pytest-asyncio", specifier = ">=0.24" },
-    { name = "ruff", specifier = ">=0.8" },
-]
-
-[[package]]
 name = "frozenlist"
 version = "1.8.0"
 source = { registry = "https://pypi.org/simple" }
@@ -961,7 +908,7 @@ wheels = [
 
 [[package]]
 name = "hexgate"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "../../" }
 dependencies = [
     { name = "bashlex" },
@@ -1021,6 +968,59 @@ requires-dist = [
     { name = "websockets", specifier = ">=13.0" },
 ]
 provides-extras = ["dev"]
+
+[[package]]
+name = "hexgate-api"
+version = "0.1.0"
+source = { virtual = "." }
+dependencies = [
+    { name = "aiosqlite" },
+    { name = "biscuit-python" },
+    { name = "clickhouse-connect" },
+    { name = "cryptography" },
+    { name = "fastapi" },
+    { name = "fastapi-users", extra = ["sqlalchemy"] },
+    { name = "greenlet" },
+    { name = "hexgate" },
+    { name = "httpx-oauth" },
+    { name = "pydantic" },
+    { name = "pydantic-settings" },
+    { name = "sqlmodel" },
+    { name = "uvicorn", extra = ["standard"] },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "httpx" },
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+    { name = "ruff" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "aiosqlite", specifier = ">=0.20" },
+    { name = "biscuit-python", specifier = ">=0.4" },
+    { name = "clickhouse-connect", specifier = ">=0.8" },
+    { name = "cryptography", specifier = ">=42" },
+    { name = "fastapi", specifier = ">=0.115" },
+    { name = "fastapi-users", extras = ["sqlalchemy"], specifier = ">=14.0" },
+    { name = "greenlet", specifier = ">=3.0" },
+    { name = "hexgate", editable = "../../" },
+    { name = "httpx-oauth", specifier = ">=0.16" },
+    { name = "pydantic", specifier = ">=2.9" },
+    { name = "pydantic-settings", specifier = ">=2.5" },
+    { name = "sqlmodel", specifier = ">=0.0.22" },
+    { name = "uvicorn", extras = ["standard"], specifier = ">=0.32" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "httpx", specifier = ">=0.27" },
+    { name = "pytest", specifier = ">=8.3" },
+    { name = "pytest-asyncio", specifier = ">=0.24" },
+    { name = "ruff", specifier = ">=0.8" },
+]
 
 [[package]]
 name = "hf-xet"

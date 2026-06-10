@@ -179,9 +179,9 @@ def test_resolve_keystore_dir_respects_env_var(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """FORTIFY_KEYSTORE_PATH env var overrides the default directory."""
+    """HEXGATE_KEYSTORE_PATH env var overrides the default directory."""
     custom = tmp_path / "custom_keys"
-    monkeypatch.setenv("FORTIFY_KEYSTORE_PATH", str(custom))
+    monkeypatch.setenv("HEXGATE_KEYSTORE_PATH", str(custom))
     assert resolve_keystore_dir() == custom.resolve()
 
 
@@ -189,7 +189,7 @@ def test_resolve_keystore_dir_default_when_env_unset(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Without the env var, fall back to the default directory."""
-    monkeypatch.delenv("FORTIFY_KEYSTORE_PATH", raising=False)
+    monkeypatch.delenv("HEXGATE_KEYSTORE_PATH", raising=False)
     resolved = resolve_keystore_dir()
     # The default is platform/api/data/, resolved.
     assert resolved.name == "data"

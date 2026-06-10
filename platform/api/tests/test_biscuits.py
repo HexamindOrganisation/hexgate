@@ -271,7 +271,7 @@ def test_envelope_preserves_hyphens_in_project_id() -> None:
 
 
 def test_parse_envelope_rejects_missing_fty_prefix() -> None:
-    """Envelopes without the fty_ prefix are not Fortify tokens."""
+    """Envelopes without the fty_ prefix are not HexaGate tokens."""
     with pytest.raises(TokenError):
         parse_envelope("notfty_live_project_biscuit")
 

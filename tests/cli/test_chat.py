@@ -6,23 +6,23 @@ from pathlib import Path
 
 from rich.console import Console, Group
 
-from fortify.agents import loader
-from fortify.cli._common import (
+from hexgate.agents import loader
+from hexgate.cli._common import (
     AgentRuntime,
     build_approval_handler as _build_approval_handler,
     load_agent_script as _load_agent_script,
     prompt_for_approval as _prompt_for_approval,
 )
-from fortify.cli.chat import (
+from hexgate.cli.chat import (
     DOG_LOGO,
     _render_current_run,
     _render_welcome,
     _tail_text,
 )
-from fortify.cli.state import LiveRunState, ToolActivity
-from fortify.security.decision import Decision, DecisionOutcome
-from fortify.streaming import ToolCallState
-from fortify.tools import edit_file, read_file
+from hexgate.cli.state import LiveRunState, ToolActivity
+from hexgate.security.decision import Decision, DecisionOutcome
+from hexgate.streaming import ToolCallState
+from hexgate.tools import edit_file, read_file
 
 # Repo root, derived from this test file's location — keeps the
 # ``_load_agent_script`` tests below portable across machines / CI.
@@ -75,7 +75,7 @@ def test_render_welcome_includes_agent_and_model() -> None:
 
     assert "example_agent" in rendered
     assert "gpt-5.4" in rendered
-    assert "fortify" in rendered
+    assert "hexgate" in rendered
     assert DOG_LOGO.splitlines()[0].strip() in rendered
 
 

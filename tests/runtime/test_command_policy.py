@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from fortify.runtime.command_policy import (
+from hexgate.runtime.command_policy import (
     Allowed,
     Rejected,
     check_command,

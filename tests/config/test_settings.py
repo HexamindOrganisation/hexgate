@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from fortify.config.settings import Settings
+from hexgate.config.settings import Settings
 
 
 def test_from_env_reads_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -13,8 +13,8 @@ def test_from_env_reads_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("LINKUP_API_KEY", "linkup-key")
     monkeypatch.setenv("TAVILY_API_KEY", "tavily-key")
     monkeypatch.delenv("LANGFUSE_HOST", raising=False)
-    monkeypatch.delenv("FORTIFY_DEFAULT_MODEL", raising=False)
-    monkeypatch.delenv("FORTIFY_DEFAULT_SEARCH_ENGINE", raising=False)
+    monkeypatch.delenv("HEXGATE_DEFAULT_MODEL", raising=False)
+    monkeypatch.delenv("HEXGATE_DEFAULT_SEARCH_ENGINE", raising=False)
 
     settings = Settings.from_env()
 

@@ -39,7 +39,7 @@ export function SignInPage() {
   const [googleAvailable, setGoogleAvailable] = useState(false)
 
   // Probe once on mount — the button stays hidden when Google sign-in
-  // isn't enabled on the backend (FORTIFY_GOOGLE_CLIENT_ID unset).
+  // isn't enabled on the backend (HEXGATE_GOOGLE_CLIENT_ID unset).
   useEffect(() => {
     googleOAuthAvailable().then(setGoogleAvailable)
   }, [])

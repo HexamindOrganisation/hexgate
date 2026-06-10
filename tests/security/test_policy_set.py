@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from fortify.security import (
+from hexgate.security import (
     AgentPolicy,
     BaseToolPolicy,
     PolicySet,

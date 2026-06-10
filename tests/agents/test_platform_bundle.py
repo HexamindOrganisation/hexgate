@@ -5,9 +5,9 @@ response. These tests cover the SDK's consumer side:
 
   * ``_platform_bundle`` rebuilds + verifies the bundle against the
     platform's published key (the same key trusted for biscuits).
-  * ``load_fortify_agent`` picks the bundle (WASM) over policy_yaml
+  * ``load_hexgate_agent`` picks the bundle (WASM) over policy_yaml
     (pydantic) when one is served, refuses a tampered bundle, and honours
-    FORTIFY_BUNDLE_REQUIRE_SIGNATURE.
+    HEXGATE_BUNDLE_REQUIRE_SIGNATURE.
 
 Bundle compilation needs ``opa``; those tests skip without it.
 """
@@ -22,8 +22,8 @@ from typing import Any
 
 import pytest
 
-from fortify.agents import loader
-from fortify.security import (
+from hexgate.agents import loader
+from hexgate.security import (
     PolicyBundle,
     compile_to_rego,
     compile_to_wasm,
@@ -88,7 +88,7 @@ def _signed_payload(private_raw: bytes) -> dict:
 
 
 class _FakeClient:
-    """Minimal stand-in for FortifyClient — just what the loader touches.
+    """Minimal stand-in for HexgateClient — just what the loader touches.
 
     Mirrors the Phase 8 ``get_agent(name, *, if_none_match=None) -> (payload, etag)``
     signature, returning the payload unconditionally (no ETag tracking) —
@@ -158,7 +158,7 @@ def test_platform_bundle_rejects_tampered_wasm() -> None:
 
 
 # ---------------------------------------------------------------------------
-# load_fortify_agent integration (mocked client + agent construction)
+# load_hexgate_agent integration (mocked client + agent construction)
 # ---------------------------------------------------------------------------
 
 
@@ -181,7 +181,7 @@ def _patched_loader(monkeypatch):
             return cls()
 
     def fake_create_agent(**_kw):
-        # A namespace (not a str) so the loader can set .fortify_client on it.
+        # A namespace (not a str) so the loader can set .hexgate_client on it.
         return types.SimpleNamespace(name="agent"), "handler-instance"
 
     def fake_enforce_policy(_agent, policy, *, approval_handler=None, source=None):
@@ -190,45 +190,45 @@ def _patched_loader(monkeypatch):
         captured["source"] = source
         return _agent
 
-    monkeypatch.setattr(loader, "FortifyConfig", _FakeConfig)
+    monkeypatch.setattr(loader, "HexgateConfig", _FakeConfig)
     monkeypatch.setattr(loader, "create_agent", fake_create_agent)
     monkeypatch.setattr(loader, "enforce_policy", fake_enforce_policy)
     monkeypatch.setattr(loader, "resolve_builtin_tools", lambda *a, **k: [])
-    monkeypatch.delenv("FORTIFY_LOCAL_POLICY", raising=False)
-    monkeypatch.delenv("FORTIFY_BUNDLE_REQUIRE_SIGNATURE", raising=False)
+    monkeypatch.delenv("HEXGATE_LOCAL_POLICY", raising=False)
+    monkeypatch.delenv("HEXGATE_BUNDLE_REQUIRE_SIGNATURE", raising=False)
 
     def install(payload: dict, public_raw: bytes):
         client = _FakeClient(payload, public_raw)
-        monkeypatch.setattr(loader, "FortifyClient", lambda _config: client)
+        monkeypatch.setattr(loader, "HexgateClient", lambda _config: client)
         return captured
 
     return install
 
 
 @needs_opa
-def test_load_fortify_agent_uses_signed_bundle(_patched_loader) -> None:
+def test_load_hexgate_agent_uses_signed_bundle(_patched_loader) -> None:
     """A served + verified bundle becomes the enforcement policy (WASM path)."""
     priv, pub = generate_keypair()
     captured = _patched_loader(_signed_payload(priv), pub)
-    loader.load_fortify_agent("default")
+    loader.load_hexgate_agent("default")
     assert isinstance(captured["policy"], PolicyBundle)
 
 
-def test_load_fortify_agent_falls_back_to_pydantic_without_bundle(
+def test_load_hexgate_agent_falls_back_to_pydantic_without_bundle(
     _patched_loader,
 ) -> None:
     """No bundle served → enforce with the pydantic PolicySet, not a bundle."""
-    from fortify.security.policy_set import PolicySet
+    from hexgate.security.policy_set import PolicySet
 
     payload = {"agent_yaml": _AGENT_YAML, "policy_yaml": _POLICY_YAML, "system_md": ""}
     captured = _patched_loader(payload, generate_keypair()[1])
-    loader.load_fortify_agent("default")
+    loader.load_hexgate_agent("default")
     assert isinstance(captured["policy"], PolicySet)
     assert not isinstance(captured["policy"], PolicyBundle)
 
 
 @needs_opa
-def test_load_fortify_agent_refuses_tampered_bundle(_patched_loader) -> None:
+def test_load_hexgate_agent_refuses_tampered_bundle(_patched_loader) -> None:
     priv, pub = generate_keypair()
     payload = _signed_payload(priv)
     raw = bytearray(base64.b64decode(payload["bundle_wasm_b64"]))
@@ -236,18 +236,18 @@ def test_load_fortify_agent_refuses_tampered_bundle(_patched_loader) -> None:
     payload["bundle_wasm_b64"] = base64.b64encode(bytes(raw)).decode("ascii")
     _patched_loader(payload, pub)
     with pytest.raises(RuntimeError, match="failed verification"):
-        loader.load_fortify_agent("default")
+        loader.load_hexgate_agent("default")
 
 
-def test_load_fortify_agent_require_signature_refuses_unsigned(
+def test_load_hexgate_agent_require_signature_refuses_unsigned(
     _patched_loader, monkeypatch
 ) -> None:
     """REQUIRE_SIGNATURE + no served bundle → refuse, don't drop to pydantic."""
     payload = {"agent_yaml": _AGENT_YAML, "policy_yaml": _POLICY_YAML, "system_md": ""}
     _patched_loader(payload, generate_keypair()[1])
-    monkeypatch.setenv("FORTIFY_BUNDLE_REQUIRE_SIGNATURE", "true")
+    monkeypatch.setenv("HEXGATE_BUNDLE_REQUIRE_SIGNATURE", "true")
     with pytest.raises(RuntimeError, match="served\\s+no signed bundle"):
-        loader.load_fortify_agent("default")
+        loader.load_hexgate_agent("default")
 
 
 # ---------------------------------------------------------------------------
@@ -262,12 +262,12 @@ def test_refresh_policy_swaps_enforcer_policy_on_change() -> None:
     next call, without re-wrapping the tools."""
     from types import SimpleNamespace
 
-    from fortify.agents.factory import FortifyAgent
-    from fortify.security.binding import PolicyBinding
+    from hexgate.agents.factory import HexgateAgent
+    from hexgate.security.binding import PolicyBinding
 
-    # Bare FortifyAgent — refresh_policy only touches _binding, so skip the
+    # Bare HexgateAgent — refresh_policy only touches _binding, so skip the
     # heavy graph construction.
-    agent = FortifyAgent.__new__(FortifyAgent)
+    agent = HexgateAgent.__new__(HexgateAgent)
     enforcer = SimpleNamespace(policy="initial")
 
     new_bundle = object()  # any new identity will do
@@ -286,10 +286,10 @@ def test_refresh_policy_skips_when_source_returns_same_instance() -> None:
     → no-op. Verified by checking the policy attribute isn't even rewritten."""
     from types import SimpleNamespace
 
-    from fortify.agents.factory import FortifyAgent
-    from fortify.security.binding import PolicyBinding
+    from hexgate.agents.factory import HexgateAgent
+    from hexgate.security.binding import PolicyBinding
 
-    agent = FortifyAgent.__new__(FortifyAgent)
+    agent = HexgateAgent.__new__(HexgateAgent)
     cached = object()
     enforcer = SimpleNamespace(policy=cached)
 
@@ -306,9 +306,9 @@ def test_refresh_policy_noop_without_source_or_enforcer() -> None:
     """Agents constructed programmatically without enforcement: refresh
     is a quiet no-op, not a crash.
     """
-    from fortify.agents.factory import FortifyAgent
+    from hexgate.agents.factory import HexgateAgent
 
-    agent = FortifyAgent.__new__(FortifyAgent)
+    agent = HexgateAgent.__new__(HexgateAgent)
     agent._binding = None
     agent.refresh_policy()  # must not raise
 
@@ -319,10 +319,10 @@ def test_refresh_policy_is_fail_soft_on_source_errors() -> None:
     instead of crashing the run."""
     from types import SimpleNamespace
 
-    from fortify.agents.factory import FortifyAgent
-    from fortify.security.binding import PolicyBinding
+    from hexgate.agents.factory import HexgateAgent
+    from hexgate.security.binding import PolicyBinding
 
-    agent = FortifyAgent.__new__(FortifyAgent)
+    agent = HexgateAgent.__new__(HexgateAgent)
     enforcer = SimpleNamespace(policy="initial", agent_name="support-bot")
 
     class _Source:

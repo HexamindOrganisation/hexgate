@@ -1,8 +1,8 @@
 """Tests for ``WS /v1/serve`` — the token-implicit serve socket.
 
 The Phase 6 design moves project context from the URL into the bearer
-token. The CLI's ``fortify serve`` connects via the
-``bearer.<envelope>`` subprotocol; the server echoes ``fortify.v1`` on
+token. The CLI's ``hexgate serve`` connects via the
+``bearer.<envelope>`` subprotocol; the server echoes ``hexgate.v1`` on
 a successful handshake and resolves the project from the token row.
 
 Five branches, one per test:
@@ -125,12 +125,12 @@ def test_ws_serve_rejects_when_no_subprotocol_offered(client: TestClient) -> Non
 def test_ws_serve_rejects_when_no_bearer_subprotocol(client: TestClient) -> None:
     """Subprotocols offered but none start with ``bearer.`` → 4401.
 
-    Defensive against a client that offers ``fortify.v1`` alone without
+    Defensive against a client that offers ``hexgate.v1`` alone without
     actually authenticating — the marker subprotocol is a server-side
     echo, not a substitute for credentials.
     """
     with pytest.raises(WebSocketDisconnect) as exc_info:
-        with client.websocket_connect("/v1/serve", subprotocols=["fortify.v1"]):
+        with client.websocket_connect("/v1/serve", subprotocols=["hexgate.v1"]):
             pass
     assert exc_info.value.code == 4401
 
@@ -145,7 +145,7 @@ def test_ws_serve_rejects_when_bearer_is_garbage(client: TestClient) -> None:
     with pytest.raises(WebSocketDisconnect) as exc_info:
         with client.websocket_connect(
             "/v1/serve",
-            subprotocols=["bearer.fty_live_not_a_real_token", "fortify.v1"],
+            subprotocols=["bearer.fty_live_not_a_real_token", "hexgate.v1"],
         ):
             pass
     assert exc_info.value.code == 4401
@@ -180,7 +180,7 @@ def test_ws_serve_rejects_unknown_or_revoked_secret(
     with pytest.raises(WebSocketDisconnect) as exc_info:
         with client.websocket_connect(
             "/v1/serve",
-            subprotocols=[f"bearer.{fresh_token}", "fortify.v1"],
+            subprotocols=[f"bearer.{fresh_token}", "hexgate.v1"],
         ):
             pass
     assert exc_info.value.code == 4401
@@ -212,12 +212,12 @@ def test_ws_serve_happy_path_registers_with_project_from_token(
     try:
         with client.websocket_connect(
             "/v1/serve",
-            subprotocols=[f"bearer.{fresh_token}", "fortify.v1"],
+            subprotocols=[f"bearer.{fresh_token}", "hexgate.v1"],
         ) as ws:
             # Starlette's TestClient exposes the accepted subprotocol on
             # the WebSocket wrapper — confirm the server echoed the
             # marker and consumed the bearer (didn't echo it).
-            assert ws.accepted_subprotocol == "fortify.v1"
+            assert ws.accepted_subprotocol == "hexgate.v1"
     finally:
         registry.attach_serve = original_attach  # type: ignore[assignment]
 

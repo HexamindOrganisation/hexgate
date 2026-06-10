@@ -128,9 +128,9 @@ def _manifest(*tool_names: str) -> AgentManifest:
 
 def test_default_policy_round_trips_through_policy_loader() -> None:
     """Generated YAML must parse cleanly via the SDK's policy loader —
-    that's the same code path ``fortify serve`` runs at every turn, so a
+    that's the same code path ``hexgate serve`` runs at every turn, so a
     parse failure here would brick freshly-registered agents."""
-    from fortify.security import load_policy_set_from_dict
+    from hexgate.security import load_policy_set_from_dict
 
     yaml_text = _default_policy_for_manifest(
         _manifest("web_search", "read_file", "write_file", "bash", "refund_order")
@@ -147,7 +147,7 @@ def test_default_policy_round_trips_through_policy_loader() -> None:
 def test_default_policy_admin_writes_allow_member_writes_approval() -> None:
     """The core differentiation between the two operator personas:
     member needs approval for writes, admin doesn't."""
-    from fortify.security import load_policy_set_from_dict
+    from hexgate.security import load_policy_set_from_dict
 
     payload = yaml.safe_load(
         _default_policy_for_manifest(_manifest("write_file", "edit_file"))
@@ -166,7 +166,7 @@ def test_default_policy_shells_always_approval_required_even_for_admin() -> None
     pins them at approval_required across both roles. If you want
     unattended shell access, you ask for it in the dashboard editor,
     not from the register-time default."""
-    from fortify.security import load_policy_set_from_dict
+    from hexgate.security import load_policy_set_from_dict
 
     payload = yaml.safe_load(
         _default_policy_for_manifest(_manifest("bash", "run_command"))
@@ -182,7 +182,7 @@ def test_default_policy_shells_always_approval_required_even_for_admin() -> None
 def test_default_policy_reads_inherit_through_read_only_mixin() -> None:
     """Read-shape tools land in the read_only mixin and apply to every
     role that inherits it (default, member, admin)."""
-    from fortify.security import load_policy_set_from_dict
+    from hexgate.security import load_policy_set_from_dict
 
     payload = yaml.safe_load(
         _default_policy_for_manifest(_manifest("web_search", "read_file"))
@@ -199,7 +199,7 @@ def test_default_policy_unknown_tools_fail_closed_for_member() -> None:
     is treated as write-shape — member: approval_required, admin: allow.
     Fail closed for the lower-trust role; surface to the operator via
     the heads-up comment so they can reclassify in the dashboard."""
-    from fortify.security import load_policy_set_from_dict
+    from hexgate.security import load_policy_set_from_dict
 
     yaml_text = _default_policy_for_manifest(_manifest("refund_order"))
     # Heads-up comment names the unclassified tool by name so the
@@ -219,7 +219,7 @@ def test_default_policy_empty_manifest_still_parses() -> None:
     """An agent with zero declared tools generates a parseable policy —
     just the four role envelopes, no per-tool entries. Lets a dev
     register an agent skeleton before wiring tools in."""
-    from fortify.security import load_policy_set_from_dict
+    from hexgate.security import load_policy_set_from_dict
 
     payload = yaml.safe_load(_default_policy_for_manifest(_manifest()))
     policy_set = load_policy_set_from_dict(payload)

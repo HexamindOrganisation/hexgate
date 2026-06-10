@@ -115,7 +115,7 @@ def test_ws_chat_rejects_garbage_cookie(client: TestClient) -> None:
     Forging a session cookie shouldn't be enough; the cookie has to
     chain to the platform's session secret.
     """
-    client.cookies.set("fortify_session", "not.a.real.jwt")
+    client.cookies.set("hexgate_session", "not.a.real.jwt")
     with pytest.raises(WebSocketDisconnect) as exc_info:
         with client.websocket_connect(f"/v1/projects/{DEFAULT_PROJECT_ID}/chat"):
             pass

@@ -1,4 +1,4 @@
-"""Tests for the FortifyLangchainAgent proxy."""
+"""Tests for the HexgateLangchainAgent proxy."""
 
 from __future__ import annotations
 
@@ -6,9 +6,9 @@ from typing import Any, AsyncIterator, Iterator
 
 import pytest
 
-from fortify.adapters.langchain.agent import FortifyLangchainAgent
-from fortify.runtime import User
-from fortify.runtime.context import get_current_user
+from hexgate.adapters.langchain.agent import HexgateLangchainAgent
+from hexgate.runtime import User
+from hexgate.runtime.context import get_current_user
 
 
 def _user() -> User:
@@ -92,7 +92,7 @@ class _RecordingGraph:
 
 
 def test_with_callbacks_appends_handler_to_empty_config() -> None:
-    proxy = FortifyLangchainAgent(agent=_RecordingGraph(), api_key="k", tool_names=[])
+    proxy = HexgateLangchainAgent(agent=_RecordingGraph(), api_key="k", tool_names=[])
 
     merged = proxy._with_callbacks(None)
 
@@ -101,7 +101,7 @@ def test_with_callbacks_appends_handler_to_empty_config() -> None:
 
 
 def test_with_callbacks_preserves_existing_callbacks() -> None:
-    proxy = FortifyLangchainAgent(agent=_RecordingGraph(), api_key="k", tool_names=[])
+    proxy = HexgateLangchainAgent(agent=_RecordingGraph(), api_key="k", tool_names=[])
     sentinel = object()
 
     merged = proxy._with_callbacks({"callbacks": [sentinel]})
@@ -111,7 +111,7 @@ def test_with_callbacks_preserves_existing_callbacks() -> None:
 
 
 def test_with_callbacks_does_not_double_register_handler() -> None:
-    proxy = FortifyLangchainAgent(agent=_RecordingGraph(), api_key="k", tool_names=[])
+    proxy = HexgateLangchainAgent(agent=_RecordingGraph(), api_key="k", tool_names=[])
 
     merged_once = proxy._with_callbacks(None)
     merged_twice = proxy._with_callbacks(merged_once)
@@ -127,7 +127,7 @@ def test_with_callbacks_does_not_double_register_handler() -> None:
 def test_invoke_opens_user_scope_and_delegates() -> None:
     """The active User contextvar is live during the wrapped invoke."""
     graph = _RecordingGraph()
-    proxy = FortifyLangchainAgent(agent=graph, api_key="k", tool_names=["echo"])
+    proxy = HexgateLangchainAgent(agent=graph, api_key="k", tool_names=["echo"])
     user = _user()
 
     assert get_current_user() is None
@@ -146,7 +146,7 @@ def test_invoke_opens_user_scope_and_delegates() -> None:
 @pytest.mark.asyncio
 async def test_ainvoke_opens_user_scope_and_delegates() -> None:
     graph = _RecordingGraph()
-    proxy = FortifyLangchainAgent(agent=graph, api_key="k", tool_names=["echo"])
+    proxy = HexgateLangchainAgent(agent=graph, api_key="k", tool_names=["echo"])
     user = _user()
 
     result = await proxy.ainvoke({"input": "hi"}, user=user)
@@ -160,7 +160,7 @@ async def test_ainvoke_opens_user_scope_and_delegates() -> None:
 
 def test_stream_opens_user_scope_and_yields_chunks() -> None:
     graph = _RecordingGraph()
-    proxy = FortifyLangchainAgent(agent=graph, api_key="k", tool_names=["echo"])
+    proxy = HexgateLangchainAgent(agent=graph, api_key="k", tool_names=["echo"])
     user = _user()
 
     chunks = list(proxy.stream({"input": "hi"}, user=user))
@@ -175,7 +175,7 @@ def test_stream_opens_user_scope_and_yields_chunks() -> None:
 @pytest.mark.asyncio
 async def test_astream_opens_user_scope_and_yields_chunks() -> None:
     graph = _RecordingGraph()
-    proxy = FortifyLangchainAgent(agent=graph, api_key="k", tool_names=["echo"])
+    proxy = HexgateLangchainAgent(agent=graph, api_key="k", tool_names=["echo"])
     user = _user()
 
     chunks = [chunk async for chunk in proxy.astream({"input": "hi"}, user=user)]
@@ -189,7 +189,7 @@ async def test_astream_opens_user_scope_and_yields_chunks() -> None:
 @pytest.mark.asyncio
 async def test_astream_events_forwards_version_and_opens_scope() -> None:
     graph = _RecordingGraph()
-    proxy = FortifyLangchainAgent(agent=graph, api_key="k", tool_names=["echo"])
+    proxy = HexgateLangchainAgent(agent=graph, api_key="k", tool_names=["echo"])
     user = _user()
 
     events = [
@@ -212,7 +212,7 @@ def test_user_scope_is_unwound_when_invoke_raises() -> None:
         def invoke(self, *_args: Any, **_kwargs: Any) -> dict[str, Any]:
             raise RuntimeError("boom")
 
-    proxy = FortifyLangchainAgent(agent=BoomGraph(), api_key="k", tool_names=[])
+    proxy = HexgateLangchainAgent(agent=BoomGraph(), api_key="k", tool_names=[])
 
     with pytest.raises(RuntimeError, match="boom"):
         proxy.invoke({"input": "hi"}, user=_user())
@@ -227,7 +227,7 @@ def test_user_scope_is_unwound_when_invoke_raises() -> None:
 
 def test_proxy_delegates_unknown_attributes_to_wrapped_agent() -> None:
     graph = _RecordingGraph()
-    proxy = FortifyLangchainAgent(agent=graph, api_key="k", tool_names=[])
+    proxy = HexgateLangchainAgent(agent=graph, api_key="k", tool_names=[])
 
     assert proxy.some_attribute() == "delegated"
     assert proxy.name == "recording-graph"

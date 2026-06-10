@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from fortify import bootstrap
+from hexgate import bootstrap
 
 
 def test_bootstrap_loads_requested_env_file(monkeypatch: pytest.MonkeyPatch) -> None:

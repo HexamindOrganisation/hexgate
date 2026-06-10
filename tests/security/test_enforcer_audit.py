@@ -7,11 +7,11 @@ from typing import Any
 
 import pytest
 
-import fortify.audit as audit_mod
-from fortify.audit import AuditEvent
-from fortify.runtime.context import User
-from fortify.security.decision import DecisionOutcome, Verdict
-from fortify.security.enforcer import PolicyEnforcer
+import hexgate.audit as audit_mod
+from hexgate.audit import AuditEvent
+from hexgate.runtime.context import User
+from hexgate.security.decision import DecisionOutcome, Verdict
+from hexgate.security.enforcer import PolicyEnforcer
 
 
 class _StubEngine:

@@ -2,8 +2,8 @@ import asyncio
 from dotenv import load_dotenv
 from pydantic_ai import Agent
 
-from fortify.runtime import User
-from fortify.adapters.pydantic_ai import wrap_pydantic_agent
+from hexgate.runtime import User
+from hexgate.adapters.pydantic_ai import wrap_pydantic_agent
 
 
 async def main():

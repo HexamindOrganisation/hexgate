@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from fortify.cli.state import ChatState
-from fortify.streaming import (
+from hexgate.cli.state import ChatState
+from hexgate.streaming import (
     AgentRunResult,
     BlockDeltaEvent,
     BlockType,

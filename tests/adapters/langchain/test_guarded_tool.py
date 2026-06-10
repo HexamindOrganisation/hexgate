@@ -1,7 +1,7 @@
 """Tests for the :class:`GuardedTool` LangChain adapter.
 
 ``GuardedTool`` is the BaseTool-subclass path used by
-:meth:`FortifyAgent.enforce_policy`. The sibling in-place
+:meth:`HexgateAgent.enforce_policy`. The sibling in-place
 :func:`install_enforcer_on_tool` (used by ``wrap_langchain_agent`` to
 retrofit pre-built ``CompiledStateGraph`` instances) is covered in
 ``test_tools.py``.
@@ -14,12 +14,12 @@ from typing import Any
 import pytest
 from langchain_core.tools import BaseTool, tool
 
-from fortify.adapters.langchain.tools import GuardedTool
-from fortify.runtime import User
-from fortify.security import AgentPolicy, PolicySet
-from fortify.security.decision import Decision, DecisionOutcome
-from fortify.security.enforcer import PolicyEnforcer
-from fortify.security.policy_set import DEFAULT_ROLE_NAME
+from hexgate.adapters.langchain.tools import GuardedTool
+from hexgate.runtime import User
+from hexgate.security import AgentPolicy, PolicySet
+from hexgate.security.decision import Decision, DecisionOutcome
+from hexgate.security.enforcer import PolicyEnforcer
+from hexgate.security.policy_set import DEFAULT_ROLE_NAME
 
 
 # ---------------------------------------------------------------------------

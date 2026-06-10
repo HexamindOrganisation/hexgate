@@ -9,22 +9,22 @@ from typing import Any
 import httpx
 import pytest
 
-from fortify.agents.factory import create_agent, invoke_agent
-from fortify.runtime import (
+from hexgate.agents.factory import create_agent, invoke_agent
+from hexgate.runtime import (
     LocalWorkspace,
     ToolUseContext,
     reset_current_tool_use_context,
     set_current_tool_use_context,
 )
-from fortify.tools import bash, edit_file, glob, grep, read_file, write_file
-from fortify.tools.decorators import format_tool_call_label
-from fortify.tools import agent_tool
-from fortify.tools.fetch import _get_env_or_raise as get_fetch_env
-from fortify.tools.fetch import _format_fetch_call
-from fortify.tools.fetch import fetch
-from fortify.tools.websearch import _get_env_or_raise as get_search_env
-from fortify.tools.websearch import _format_web_search_call
-from fortify.tools.websearch import web_search
+from hexgate.tools import bash, edit_file, glob, grep, read_file, write_file
+from hexgate.tools.decorators import format_tool_call_label
+from hexgate.tools import agent_tool
+from hexgate.tools.fetch import _get_env_or_raise as get_fetch_env
+from hexgate.tools.fetch import _format_fetch_call
+from hexgate.tools.fetch import fetch
+from hexgate.tools.websearch import _get_env_or_raise as get_search_env
+from hexgate.tools.websearch import _format_web_search_call
+from hexgate.tools.websearch import web_search
 
 
 class DummyResponse:
@@ -286,15 +286,15 @@ async def test_agent_tool_injects_tool_use_context_during_agent_run(
             return {"messages": [tool_result["content"]]}
 
     monkeypatch.setattr(
-        "fortify.agents.factory.create_langchain_agent",
+        "hexgate.agents.factory.create_langchain_agent",
         lambda **_kwargs: FakeGraph(),
     )
     monkeypatch.setattr(
-        "fortify.agents.factory.get_langfuse_handler",
+        "hexgate.agents.factory.get_langfuse_handler",
         lambda **_kwargs: "handler",
     )
     monkeypatch.setattr(
-        "fortify.agents.factory.get_langfuse_runnable_config",
+        "hexgate.agents.factory.get_langfuse_runnable_config",
         lambda _handler: {"callbacks": ["handler"]},
     )
 
@@ -341,15 +341,15 @@ async def test_agent_tool_defaults_to_local_workspace_during_run(
             return {"messages": [tool_result["workspace_root"]]}
 
     monkeypatch.setattr(
-        "fortify.agents.factory.create_langchain_agent",
+        "hexgate.agents.factory.create_langchain_agent",
         lambda **_kwargs: FakeGraph(),
     )
     monkeypatch.setattr(
-        "fortify.agents.factory.get_langfuse_handler",
+        "hexgate.agents.factory.get_langfuse_handler",
         lambda **_kwargs: "handler",
     )
     monkeypatch.setattr(
-        "fortify.agents.factory.get_langfuse_runnable_config",
+        "hexgate.agents.factory.get_langfuse_runnable_config",
         lambda _handler: {"callbacks": ["handler"]},
     )
     monkeypatch.chdir(tmp_path)

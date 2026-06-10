@@ -1,15 +1,15 @@
-"""Small CLI demo for the fortify runtime."""
+"""Small CLI demo for the hexgate runtime."""
 
 from __future__ import annotations
 
 import asyncio
 from pathlib import Path
 
-from fortify.agents.factory import stream_agent
-from fortify.agents.loader import list_available_agents, load_agent
-from fortify.bootstrap import bootstrap
-from fortify.streaming import BlockDeltaEvent, EventType, ToolEndEvent, ToolStartEvent
-from fortify.tracing.langfuse import maybe_get_trace_url
+from hexgate.agents.factory import stream_agent
+from hexgate.agents.loader import list_available_agents, load_agent
+from hexgate.bootstrap import bootstrap
+from hexgate.streaming import BlockDeltaEvent, EventType, ToolEndEvent, ToolStartEvent
+from hexgate.tracing.langfuse import maybe_get_trace_url
 
 
 def _render_event(event: object) -> str | None:
@@ -47,7 +47,7 @@ async def main() -> None:
         base_dir=base_dir,
         model=settings.model,
         session_id="demo-session",
-        tags=["fortify", settings.search_engine, settings.model],
+        tags=["hexgate", settings.search_engine, settings.model],
     )
 
     query = "Search for the latest major AI breakthroughs this month and summarize the top 5 with sources."

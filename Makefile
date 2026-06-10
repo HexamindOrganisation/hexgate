@@ -82,15 +82,15 @@ policy-test-wasm: ## Smoke a wasm-engine decision on the example policy
 	    --role default --tool web_search --args '{}' --engine wasm
 
 .PHONY: demo-override
-demo-override: ## Build a deny-everything bundle + chat with FORTIFY_LOCAL_POLICY set
+demo-override: ## Build a deny-everything bundle + chat with HEXGATE_LOCAL_POLICY set
 	@echo "→ Writing a deny-everything override policy…"
 	@printf 'version: 1\nroles:\n  default:\n    tools:\n      web_search: { mode: deny }\n      fetch: { mode: deny }\n' > /tmp/m2-deny-policy.yaml
 	$(UV) fortify policy build /tmp/m2-deny-policy.yaml --out /tmp/m2-deny-bundle
 	@echo ""
-	@echo "→ Starting chat with FORTIFY_LOCAL_POLICY=/tmp/m2-deny-bundle"
+	@echo "→ Starting chat with HEXGATE_LOCAL_POLICY=/tmp/m2-deny-bundle"
 	@echo "  Try a prompt that would trigger web_search; expect a wasm-engine deny."
 	@echo ""
-	FORTIFY_LOCAL_POLICY=/tmp/m2-deny-bundle $(UV) fortify chat --agent researcher --approval-mode auto-deny
+	HEXGATE_LOCAL_POLICY=/tmp/m2-deny-bundle $(UV) fortify chat --agent researcher --approval-mode auto-deny
 
 # -------- Platform infra (ClickHouse audit log) --------
 #
@@ -117,7 +117,7 @@ clickhouse-logs: ## Tail ClickHouse server logs
 .PHONY: clickhouse-cli
 clickhouse-cli: ## Open an interactive SQL shell against the local ClickHouse
 	docker exec -it fortify-clickhouse clickhouse-client \
-	    --user fortify --password fortify-dev-password --database fortify_audit
+	    --user hexgate --password hexgate-dev-password --database fortify_audit
 
 .PHONY: clickhouse-reset
 clickhouse-reset: ## Wipe the data volume and re-run init scripts
@@ -172,7 +172,7 @@ AGENT_SPEC ?= examples.customer_bot:agent
 
 .PHONY: serve
 serve: ## Run `fortify serve` on the customer_bot demo (override with AGENT_SPEC=)
-# Reads FORTIFY_KEY from asianf/.env at startup. Uvicorn-style spec —
+# Reads HEXGATE_KEY from asianf/.env at startup. Uvicorn-style spec —
 # the agent name + tools come from the loaded object, no env vars to
 # keep in sync.
 	$(UV) fortify serve $(AGENT_SPEC)
@@ -192,7 +192,7 @@ demo-platform: ## Print 3-terminal instructions for the full platform demo
 	@echo ""
 	@echo "  Terminal 3 — your local agent bridged to the platform:"
 	@echo "      1. Open  http://localhost:5173/tokens  and mint a dev token"
-	@echo "      2. Add to asianf/.env:  FORTIFY_KEY=fty_live_..."
+	@echo "      2. Add to asianf/.env:  HEXGATE_KEY=fty_live_..."
 	@echo "      3. make serve  (or: fortify serve <your.module:agent>)"
 	@echo ""
 	@echo "Then chat with the live agent at  http://localhost:5173/playground"

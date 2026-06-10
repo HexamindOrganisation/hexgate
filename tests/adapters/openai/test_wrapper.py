@@ -13,11 +13,11 @@ from typing import Any
 import pytest
 from agents import Agent, FunctionTool
 
-from fortify.adapters.openai.wrapper import wrap_openai_agent
-from fortify.runtime import User
-from fortify.security import AgentPolicy, BaseToolPolicy, PolicySet
-from fortify.security.enforcer import PolicyEnforcer
-from fortify.security.policy_set import DEFAULT_ROLE_NAME
+from hexgate.adapters.openai.wrapper import wrap_openai_agent
+from hexgate.runtime import User
+from hexgate.security import AgentPolicy, BaseToolPolicy, PolicySet
+from hexgate.security.enforcer import PolicyEnforcer
+from hexgate.security.policy_set import DEFAULT_ROLE_NAME
 
 
 def _make_tool(name: str = "echo") -> FunctionTool:

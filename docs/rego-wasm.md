@@ -91,69 +91,69 @@ A practical worry we talked through: doesn't running OPA in the control plane hu
 
 ## The dev escape hatch
 
-Production always pulls a signed bundle from the platform. But a developer iterating on a policy shouldn't need the platform in the loop. So there's `FORTIFY_LOCAL_POLICY`: point it at a locally-built bundle directory and the runtime enforces *that* instead — no platform round-trip. Edit YAML, rebuild, restart, see the change. This was the direct answer to a concern that platform-only compilation would block local iteration.
+Production always pulls a signed bundle from the platform. But a developer iterating on a policy shouldn't need the platform in the loop. So there's `HEXGATE_LOCAL_POLICY`: point it at a locally-built bundle directory and the runtime enforces *that* instead — no platform round-trip. Edit YAML, rebuild, restart, see the change. This was the direct answer to a concern that platform-only compilation would block local iteration.
 
 ---
 
-# New `fortify` CLI commands
+# New `hexgate` CLI commands
 
-This work adds a `fortify policy` command group for authoring, inspecting, and signing policies locally.
+This work adds a `hexgate policy` command group for authoring, inspecting, and signing policies locally.
 
 > **Prerequisite:** the compile-to-WASM steps shell out to `opa`. Install it once: `brew install opa` (macOS) or see the [OPA downloads page](https://www.openpolicyagent.org/docs/latest/#running-opa). Commands that don't compile to WASM (`validate`, `test --engine pydantic`) don't need it.
 
 The examples below use the demo policy shipped at `examples/demo_policy.yaml` (a support agent with `default` / `support` / `billing` roles), run from the repo root — so they're copy-paste runnable.
 
-### `fortify policy validate` — check a policy without the network
+### `hexgate policy validate` — check a policy without the network
 
 Parses the YAML and checks every constraint against the grammar. Same checks the platform runs at save time, but local and offline.
 
 ```bash
-fortify policy validate examples/demo_policy.yaml
+hexgate policy validate examples/demo_policy.yaml
 ```
 
 Exit 0 on success, 1 with all errors printed otherwise. Good for a pre-commit hook or CI.
 
-### `fortify policy show-rego` — see what your YAML compiles to
+### `hexgate policy show-rego` — see what your YAML compiles to
 
 Prints the generated Rego to stdout. Useful for understanding (or debugging) what rules your policy actually produces — pipe it to a file or to `opa`.
 
 ```bash
-fortify policy show-rego examples/demo_policy.yaml
-fortify policy show-rego examples/demo_policy.yaml > policy.rego
+hexgate policy show-rego examples/demo_policy.yaml
+hexgate policy show-rego examples/demo_policy.yaml > policy.rego
 ```
 
-### `fortify policy build` — compile a bundle
+### `hexgate policy build` — compile a bundle
 
 Compiles `policy.yaml` to a bundle directory (yaml + rego + wasm + manifest).
 
 ```bash
 # Compile next to the source
-fortify policy build examples/demo_policy.yaml
+hexgate policy build examples/demo_policy.yaml
 
 # Compile into a specific directory
-fortify policy build examples/demo_policy.yaml --out ./bundle
+hexgate policy build examples/demo_policy.yaml --out ./bundle
 
 # Skip the WASM step (no opa needed — emits yaml + rego only)
-fortify policy build examples/demo_policy.yaml --no-wasm
+hexgate policy build examples/demo_policy.yaml --no-wasm
 
 # Compile AND sign (see keygen below)
-fortify policy build examples/demo_policy.yaml --out ./bundle --sign-key ./keys/dev.private
+hexgate policy build examples/demo_policy.yaml --out ./bundle --sign-key ./keys/dev.private
 ```
 
 With `--sign-key`, it also writes `policy.bundle.json.sig`. A malformed key fails fast before anything is written.
 
-### `fortify policy test` — dry-run one decision
+### `hexgate policy test` — dry-run one decision
 
 Evaluate a single role/tool/args decision without spinning up an agent. Great for policy unit tests in CI.
 
 ```bash
 # Default pydantic engine (no opa needed)
-fortify policy test examples/demo_policy.yaml \
+hexgate policy test examples/demo_policy.yaml \
     --role billing --tool refund_order \
     --args '{"amount": 200, "currency": "USD"}'
 
 # Evaluate through the real WASM engine (matches production)
-fortify policy test examples/demo_policy.yaml \
+hexgate policy test examples/demo_policy.yaml \
     --role billing --tool refund_order \
     --args '{"amount": 700}' --engine wasm
 ```
@@ -168,17 +168,17 @@ Output is `ALLOW` / `DENY` / `APPROVAL_REQUIRED`, exit code 0 (allow/approval) o
 
 `--engine wasm` is the way to confirm locally that the compiled bundle decides what you expect.
 
-### `fortify policy keygen` — make a signing keypair
+### `hexgate policy keygen` — make a signing keypair
 
 Generates an Ed25519 keypair for signing bundles locally (production keys live in the platform keystore).
 
 ```bash
-fortify policy keygen --out ./keys/dev
+hexgate policy keygen --out ./keys/dev
 # writes ./keys/dev.private (chmod 0600) and ./keys/dev.public
 # --force to overwrite existing files
 ```
 
-The private key signs (`build --sign-key`); the public key verifies (`FORTIFY_BUNDLE_PUBKEY_PATH`). Keys are raw Ed25519, base64url-encoded — the same format the platform's JWKS endpoint publishes.
+The private key signs (`build --sign-key`); the public key verifies (`HEXGATE_BUNDLE_PUBKEY_PATH`). Keys are raw Ed25519, base64url-encoded — the same format the platform's JWKS endpoint publishes.
 
 > `*.private` and `*.pem` are gitignored so a signing key never gets committed. Public keys are safe to commit.
 
@@ -190,10 +190,10 @@ These control how the runtime loads and verifies bundles. All optional.
 
 | Variable | What it does |
 |---|---|
-| `FORTIFY_LOCAL_POLICY` | Path to a bundle directory. Overrides the agent's policy with that bundle (WASM engine). The dev-iteration path. |
-| `FORTIFY_BUNDLE_PUBKEY_PATH` | Path to a base64url public key used to verify a local bundle's signature. |
-| `FORTIFY_BUNDLE_REQUIRE_SIGNATURE` | `true` to refuse unsigned or unverifiable bundles. Default: warn but proceed. Set this in CI/prod. |
-| `FORTIFY_OPA_BIN` | Override the `opa` binary location (default: search `PATH`). |
+| `HEXGATE_LOCAL_POLICY` | Path to a bundle directory. Overrides the agent's policy with that bundle (WASM engine). The dev-iteration path. |
+| `HEXGATE_BUNDLE_PUBKEY_PATH` | Path to a base64url public key used to verify a local bundle's signature. |
+| `HEXGATE_BUNDLE_REQUIRE_SIGNATURE` | `true` to refuse unsigned or unverifiable bundles. Default: warn but proceed. Set this in CI/prod. |
+| `HEXGATE_OPA_BIN` | Override the `opa` binary location (default: search `PATH`). |
 
 The signature-enforcement matrix, in short:
 
@@ -215,25 +215,25 @@ Putting it together — author, sign, and test a policy end to end without the p
 
 ```bash
 # 1. One-time: make a dev signing keypair
-fortify policy keygen --out ./keys/dev
+hexgate policy keygen --out ./keys/dev
 
 # 2. Validate as you edit
-fortify policy validate examples/demo_policy.yaml
+hexgate policy validate examples/demo_policy.yaml
 
 # 3. Build + sign a bundle
-fortify policy build examples/demo_policy.yaml --out ./bundle --sign-key ./keys/dev.private
+hexgate policy build examples/demo_policy.yaml --out ./bundle --sign-key ./keys/dev.private
 
 # 4. Confirm a decision through the real WASM engine
-fortify policy test examples/demo_policy.yaml \
+hexgate policy test examples/demo_policy.yaml \
     --role billing --tool refund_order \
     --args '{"amount": 200, "currency": "USD"}' --engine wasm
 
 # 5. Run an agent against the signed bundle, verifying the signature
-FORTIFY_LOCAL_POLICY=./bundle \
-FORTIFY_BUNDLE_PUBKEY_PATH=./keys/dev.public \
-FORTIFY_BUNDLE_REQUIRE_SIGNATURE=true \
-fortify chat --agent researcher
-# [fortify] FORTIFY_LOCAL_POLICY active: ./bundle (wasm_hash=..., signed)
+HEXGATE_LOCAL_POLICY=./bundle \
+HEXGATE_BUNDLE_PUBKEY_PATH=./keys/dev.public \
+HEXGATE_BUNDLE_REQUIRE_SIGNATURE=true \
+hexgate chat --agent researcher
+# [hexgate] HEXGATE_LOCAL_POLICY active: ./bundle (wasm_hash=..., signed)
 ```
 
 In production you skip steps 1, 3, and 5's env vars entirely — the platform signs the bundle, and the SDK verifies it against the same key it already trusts for your tokens.

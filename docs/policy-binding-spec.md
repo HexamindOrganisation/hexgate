@@ -1,7 +1,7 @@
 # Policy Binding — pull, enforcement, and per-run refresh for every agent surface
 
 **Status:** phase 1 implemented (with the revisions in the addendum below)
-**Scope:** `FortifyAgent` (`create_agent` / loaders) + the four adapters
+**Scope:** `HexgateAgent` (`create_agent` / loaders) + the four adapters
 (`openai`, `google`, `pydantic_ai`, `langchain` BYO-graph)
 **Date:** 2026-06-04
 
@@ -11,9 +11,9 @@
 >
 > 1. **No auto-register in the binding.** `AutoRegisterSpec`,
 >    `manifest_payload`, and the 404→register→retry flow are gone (SRP:
->    registration is not policy resolution — and `fortify.cli.register`
+>    registration is not policy resolution — and `hexgate.cli.register`
 >    already builds *better* manifests from the real agent object). A 404
->    propagates as `FortifyError` with `.status == 404`; callers that want
+>    propagates as `HexgateError` with `.status == 404`; callers that want
 >    register-on-miss catch it, call `register_agent(agent)`, and resolve
 >    again. Adapter phases add this 4-line pattern at the wrap sites.
 > 2. **No `fallback` param.** The plain constructor *is* the explicit
@@ -23,11 +23,11 @@
 >    does), and call the constructor. Same single round trip, no parameter.
 > 4. **No `client` / `agent_name` fields.** The binding holds exactly
 >    `enforcer` + `source`; `agent_name` is read from the enforcer for
->    logs, and the `FortifyClient` stays a caller concern
->    (`agent.fortify_client`, as today).
+>    logs, and the `HexgateClient` stays a caller concern
+>    (`agent.hexgate_client`, as today).
 > 5. **No `_warn_uncovered_tools`.** YAGNI — revisit in the adapter phases
 >    if real usage shows the need.
-> 6. **The `FORTIFY_LOCAL_POLICY` helpers live in `security/source.py`**
+> 6. **The `HEXGATE_LOCAL_POLICY` helpers live in `security/source.py`**
 >    (env var → `PolicySource` is source-construction), not in
 >    `binding.py`. The loader re-imports them from there.
 > 7. **The refresh lock lives in `PlatformPolicySource`**, which owns the
@@ -35,14 +35,14 @@
 >
 > Net: `binding.py` is ~200 lines (resolve → local override → platform →
 > raise; fail-soft `refresh`/`refresh_async`), and the client kept only
-> `FortifyError.status` from its planned changes.
+> `HexgateError.status` from its planned changes.
 
 ---
 
 ## 1. Problem statement
 
-Today only the loader path (`load_fortify_agent` / `load_agent` with
-`FORTIFY_KEY`, `fortify/agents/loader.py:528`) delivers the full governance
+Today only the loader path (`load_hexgate_agent` / `load_agent` with
+`HEXGATE_KEY`, `hexgate/agents/loader.py:528`) delivers the full governance
 loop: pull the signed policy bundle from the platform, verify it, enforce it
 on every tool call, and re-pull (ETag/304) at the top of every run.
 
@@ -50,11 +50,11 @@ Every other construction path falls short:
 
 | Surface | Pull | Enforce | Per-run refresh |
 |---|---|---|---|
-| `load_fortify_agent` / `load_agent` + `FORTIFY_KEY` | ✅ verified bundle | ✅ `GuardedTool` | ✅ ETag/304 |
+| `load_hexgate_agent` / `load_agent` + `HEXGATE_KEY` | ✅ verified bundle | ✅ `GuardedTool` | ✅ ETag/304 |
 | `create_agent(...)` (programmatic) | ❌ | ❌ | no-op |
 | `create_agent(...)` + `enforce_policy(p)` | ❌ (static `p`) | ✅ | no-op (no source) |
-| `wrap_openai_agent` / `FortifyRunner` (openai) | ❌ placeholder **allow-all** | ✅ (allow-all) | ❌ |
-| `wrap_google_agent` / `FortifyRunner` (google) | ❌ placeholder **allow-all** | ✅ (allow-all) | ❌ |
+| `wrap_openai_agent` / `HexgateRunner` (openai) | ❌ placeholder **allow-all** | ✅ (allow-all) | ❌ |
+| `wrap_google_agent` / `HexgateRunner` (google) | ❌ placeholder **allow-all** | ✅ (allow-all) | ❌ |
 | `wrap_langchain_agent` (BYO `CompiledStateGraph`) | ❌ placeholder **allow-all** | ✅ (allow-all) | ❌ |
 | `wrap_pydantic_agent` | ❌ placeholder **allow-all** | ✅ (allow-all) | ❌ |
 
@@ -62,7 +62,7 @@ The four adapters each carry an identical placeholder with the same TODO:
 
 ```python
 def build_policy_set(api_key, agent_name, tool_names) -> PolicySet:
-    """Placeholder allow-all one-role bundle. TODO: cloud-fetch via FortifyClient."""
+    """Placeholder allow-all one-role bundle. TODO: cloud-fetch via HexgateClient."""
 ```
 
 (`adapters/openai/wrapper.py:19`, `adapters/google/wrapper.py:17`,
@@ -80,7 +80,7 @@ Every enforcement mechanism in the codebase — `GuardedTool`
 copy (`adapters/openai/tools.py:30`), the ADK tool wrappers, the pydantic_ai
 toolset clone — closes over the **`PolicyEnforcer`**, never over the policy
 itself. The enforcer is a one-field indirection
-(`fortify/security/enforcer.py:18`):
+(`hexgate/security/enforcer.py:18`):
 
 ```python
 enforcer.policy = new_bundle   # hot-swaps enforcement for every wrapped tool
@@ -104,7 +104,7 @@ surface's run boundary. That is the entire refactor.
    run entry point; the allow-all placeholder is deleted.
 4. Verification semantics are byte-identical to today's loader: a tampered
    or unverifiable bundle is **never** silently downgraded.
-5. `load_fortify_agent` dedupes onto the same primitive (net code deletion).
+5. `load_hexgate_agent` dedupes onto the same primitive (net code deletion).
 
 ### Non-goals
 
@@ -116,7 +116,7 @@ surface's run boundary. That is the entire refactor.
   (matching `stream_agent` today). Mid-turn policy edits land next turn.
 - No change to the enforcement decision pipeline
   (`PolicyEnforcer.decide` → engine `evaluate` → `Decision`), nor to the
-  WASM evaluation path (`fortify/security/wasm_engine.py`).
+  WASM evaluation path (`hexgate/security/wasm_engine.py`).
 - No change to approval-handler semantics per adapter (LangChain resolves
   inline; OpenAI/Google/pydantic_ai render markered errors — unchanged).
 
@@ -124,8 +124,8 @@ surface's run boundary. That is the entire refactor.
 
 ## 3. Core design: `PolicyBinding`
 
-New module: **`fortify/security/binding.py`** — framework-agnostic, imports
-nothing from `fortify.adapters.*` or `fortify.agents.factory` (avoids the
+New module: **`hexgate/security/binding.py`** — framework-agnostic, imports
+nothing from `hexgate.adapters.*` or `hexgate.agents.factory` (avoids the
 factory↔loader↔adapters import cycles).
 
 ```python
@@ -140,7 +140,7 @@ class PolicyBinding:
 
     enforcer: PolicyEnforcer
     source: PolicySource | None          # None → static policy, refresh is a no-op
-    client: FortifyClient | None         # kept for lazy User-scope attenuation
+    client: HexgateClient | None         # kept for lazy User-scope attenuation
     agent_name: str
     _refresh_lock: threading.Lock        # serializes concurrent refreshes
 ```
@@ -153,8 +153,8 @@ def resolve(
     cls,
     agent_name: str,
     *,
-    api_key: str | None = None,          # explicit → FORTIFY_KEY env
-    client: FortifyClient | None = None, # reuse an existing client (loader path)
+    api_key: str | None = None,          # explicit → HEXGATE_KEY env
+    client: HexgateClient | None = None, # reuse an existing client (loader path)
     prefetched: tuple[dict, str | None] | None = None,  # (payload, etag) reuse
     fallback: PolicyEngine | None = None,
     auto_register: AutoRegisterSpec | None = None,
@@ -162,18 +162,18 @@ def resolve(
 ) -> "PolicyBinding":
 ```
 
-Resolution precedence — lifted verbatim from `load_fortify_agent`
+Resolution precedence — lifted verbatim from `load_hexgate_agent`
 (`loader.py:597-636`); the loader's helpers `_local_policy_override`,
 `_verify_local_source_signature_policy`, `_resolve_pubkey_for_verification`,
 `_local_sign_callable` **move** into this module (loader re-imports them, so
 its behavior and its tests stay identical):
 
-1. **`FORTIFY_LOCAL_POLICY` override** (dev loop) — wins outright.
+1. **`HEXGATE_LOCAL_POLICY` override** (dev loop) — wins outright.
    `BundleDirPolicySource` (mtime-refreshed pre-built bundle) or
    `YamlPolicySource` (auto-recompile on save), exactly as today
-   (`fortify/security/source.py:165,256`). The platform is not contacted.
-2. **Platform** — when an `api_key`/`FORTIFY_KEY`/`client` is available:
-   1. Build or reuse the `FortifyClient` (Biscuit signature verified lazily
+   (`hexgate/security/source.py:165,256`). The platform is not contacted.
+2. **Platform** — when an `api_key`/`HEXGATE_KEY`/`client` is available:
+   1. Build or reuse the `HexgateClient` (Biscuit signature verified lazily
       on first use, `cloud/client.py:177`).
    2. `payload, etag = client.get_agent(agent_name)` — or use `prefetched`
       when the caller already fetched (loader path; avoids a double fetch).
@@ -184,7 +184,7 @@ its behavior and its tests stay identical):
    4. Bundle present → it is the policy. Bundle absent (platform couldn't
       compile, e.g. no `opa`) → fall back to
       `load_policy_set_from_dict(payload["policy_yaml"])` (pydantic engine),
-      unless `FORTIFY_BUNDLE_REQUIRE_SIGNATURE` is set → raise
+      unless `HEXGATE_BUNDLE_REQUIRE_SIGNATURE` is set → raise
       (today's rule, `loader.py:615-621`).
    5. Attach `PlatformPolicySource(client, agent_name, initial_bundle=...,
       initial_etag=...)` pre-seeded so the first refresh is a 304
@@ -196,7 +196,7 @@ its behavior and its tests stay identical):
         (`platform/api/main.py:829`, `services.py:1290`); then re-fetch and
         proceed. Registration failure → raise.
       - else → raise `PolicyBindingError` with a message pointing at
-        `fortify agents register` / `auto_register=`.
+        `hexgate agents register` / `auto_register=`.
 3. **`fallback` engine** — used only when neither a local override nor any
    API key is in play. `None` (the default) → raise. This is the explicit
    opt-out that replaces the adapters' silent allow-all; callers who truly
@@ -251,7 +251,7 @@ async def refresh_async(self) -> None:
     await asyncio.to_thread(self.refresh)
 ```
 
-This is the body of `FortifyAgent.refresh_policy` + `_refresh_policy_safely`
+This is the body of `HexgateAgent.refresh_policy` + `_refresh_policy_safely`
 (`factory.py:434-460,550-566`) with two deltas:
 
 - **fail-soft moves into the binding** (one place instead of per-caller), and
@@ -294,7 +294,7 @@ tampered refresh can therefore deny service to *new* policy but can never
 
 ## 4. Surface integration
 
-### 4.1 `FortifyAgent` — `create_agent` (fortify/agents/factory.py)
+### 4.1 `HexgateAgent` — `create_agent` (hexgate/agents/factory.py)
 
 New keyword params on `create_agent`:
 
@@ -313,35 +313,35 @@ Semantics of `bind_policy`:
 
 | value | behavior |
 |---|---|
-| `None` (default, **auto**) | bind iff (`FORTIFY_KEY` set **or** `FORTIFY_LOCAL_POLICY` set) **and** `name` is provided; otherwise return the bare agent exactly as today |
+| `None` (default, **auto**) | bind iff (`HEXGATE_KEY` set **or** `HEXGATE_LOCAL_POLICY` set) **and** `name` is provided; otherwise return the bare agent exactly as today |
 | `True` | bind or **raise** (`name` required; no key and no local override → raise) |
 | `False` | today's behavior, unconditionally (escape hatch for unit tests of bare graphs) |
 
-Binding step (runs after the `FortifyAgent` is constructed):
+Binding step (runs after the `HexgateAgent` is constructed):
 
 ```python
 binding = PolicyBinding.resolve(name, auto_register=AutoRegisterSpec(tool_names))
 enforced = agent.enforce_policy(binding.enforcer.policy, approval_handler=approval_handler)
 enforced._binding = binding
 enforced._policy_source = binding.source     # back-compat alias, see 4.2
-enforced.fortify_client = binding.client
+enforced.hexgate_client = binding.client
 ```
 
 **No streaming changes.** `_refresh_policy_safely` already fires at the top
 of `stream_agent` / `stream_agent_raw` / `invoke_agent`
 (`factory.py:579,600`), and `with_tools` already propagates the seam across
-rebuilds (`factory.py:365-379`). `FortifyAgent.refresh_policy` becomes a
+rebuilds (`factory.py:365-379`). `HexgateAgent.refresh_policy` becomes a
 delegation to `self._binding.refresh()` when a binding is present, keeping
 the legacy `_enforcer`/`_policy_source` attribute path working for code that
 attached them by hand.
 
 Auto-register default: **on** for the `create_agent` binding path (the agent
 was authored in code; registering it is what makes the dashboard useful) —
-mirrors the `fortify serve` UX introduced in `bd925a9`/`71586c2`.
+mirrors the `hexgate serve` UX introduced in `bd925a9`/`71586c2`.
 
-### 4.2 Loader dedupe (fortify/agents/loader.py)
+### 4.2 Loader dedupe (hexgate/agents/loader.py)
 
-`load_fortify_agent` (`loader.py:528`) keeps its public contract but its
+`load_hexgate_agent` (`loader.py:528`) keeps its public contract but its
 policy-precedence block (`loader.py:597-636`) becomes:
 
 ```python
@@ -352,7 +352,7 @@ binding = PolicyBinding.resolve(
 )
 enforced = enforce_policy(agent, binding.enforcer.policy, approval_handler=...)
 enforced._binding = binding
-enforced.fortify_client = binding.client
+enforced.hexgate_client = binding.client
 ```
 
 `prefetched` matters: the loader needs the payload for `agent_yaml` /
@@ -378,10 +378,10 @@ binding = PolicyBinding.resolve(
     auto_register=AutoRegisterSpec(tool_names),
 )
 install_enforcer_on_tools(tools, enforcer=binding.enforcer)   # unchanged mechanics
-return FortifyLangchainAgent(agent=agent, binding=binding, tool_names=tool_names)
+return HexgateLangchainAgent(agent=agent, binding=binding, tool_names=tool_names)
 ```
 
-`build_policy_set` is **deleted**. `FortifyLangchainAgent`
+`build_policy_set` is **deleted**. `HexgateLangchainAgent`
 (`adapters/langchain/agent.py:15`) stores the binding and refreshes at every
 run boundary:
 
@@ -395,11 +395,11 @@ The graph and its in-place-mutated tools are never touched again — only
 
 ### 4.4 OpenAI Agents (adapters/openai/wrapper.py, runner.py)
 
-The OpenAI `FortifyRunner` receives the agent **per call**
+The OpenAI `HexgateRunner` receives the agent **per call**
 (`runner.py:59-125`) and currently re-wraps it (and would re-resolve a fresh
 binding) on every run — which would defeat the ETag cache. Spec:
 
-- `FortifyRunner` gains a binding cache: `self._bindings: dict[str, PolicyBinding]`.
+- `HexgateRunner` gains a binding cache: `self._bindings: dict[str, PolicyBinding]`.
 - New private helper:
 
 ```python
@@ -439,7 +439,7 @@ subsequent calls = 304s against the cached source.
 
 ### 4.5 Google ADK (adapters/google/wrapper.py, runner.py)
 
-The Google `FortifyRunner` wraps **once at construction**
+The Google `HexgateRunner` wraps **once at construction**
 (`runner.py:42` — "Policy is baked at construction") and reuses the built
 ADK `Runner`. Spec:
 
@@ -463,8 +463,8 @@ Same pattern as LangChain:
 - `wrap_pydantic_agent` resolves the binding (auto-register from the
   extracted tool names), wraps the cloned toolset with
   `binding.enforcer`, deletes its `build_policy_set`, and passes the binding
-  into `FortifyPydanticAgent`.
-- `FortifyPydanticAgent` run methods: `await self._binding.refresh_async()`
+  into `HexgatePydanticAgent`.
+- `HexgatePydanticAgent` run methods: `await self._binding.refresh_async()`
   (async) / `self._binding.refresh()` (sync) as their first line.
 
 ---
@@ -476,16 +476,16 @@ The governing rule, inherited from the loader and made universal:
 
 | Event | When | Behavior |
 |---|---|---|
-| `FORTIFY_KEY` malformed / Biscuit signature invalid | resolve | raise (`FortifyError`) |
+| `HEXGATE_KEY` malformed / Biscuit signature invalid | resolve | raise (`HexgateError`) |
 | Platform unreachable | resolve | raise — caller decides; never run on a policy we never had |
 | Platform unreachable | refresh | warn + keep previous verified policy (unbounded staleness — see §8.3) |
 | Bundle signature/integrity fails | resolve | raise; never downgrade to pydantic engine |
 | Bundle signature/integrity fails | refresh | raise inside `source.fetch()` → caught → warn + keep previous policy (tamper cannot install itself) |
-| Platform serves no bundle (no `opa` on control plane) | resolve | pydantic engine on `policy_yaml`; raise if `FORTIFY_BUNDLE_REQUIRE_SIGNATURE` |
+| Platform serves no bundle (no `opa` on control plane) | resolve | pydantic engine on `policy_yaml`; raise if `HEXGATE_BUNDLE_REQUIRE_SIGNATURE` |
 | Agent 404 on platform | resolve | auto-register (when spec provided) → re-fetch; else raise `PolicyBindingError` |
 | Agent 404 | refresh | treated as fetch failure → warn + keep previous (agent deleted mid-session keeps last policy; see §8.3) |
 | No key, no local override, no `fallback` | resolve | raise — **replaces the adapters' silent allow-all** |
-| `FORTIFY_LOCAL_POLICY` set but broken (bad yaml, missing opa, bad sig) | resolve & refresh | raise loudly (today's rule — silently degrading a security override defeats it, `loader.py:206-209`) |
+| `HEXGATE_LOCAL_POLICY` set but broken (bad yaml, missing opa, bad sig) | resolve & refresh | raise loudly (today's rule — silently degrading a security override defeats it, `loader.py:206-209`) |
 | Tool name in wrapped agent absent from fetched policy | resolve | `logger.warning` listing uncovered tools (they will be denied-by-absence at call time) |
 
 ---
@@ -493,14 +493,14 @@ The governing rule, inherited from the loader and made universal:
 ## 6. Security invariants (must hold after the refactor)
 
 1. **Single trust root.** The platform's Ed25519 root key signs both
-   Biscuits (`FORTIFY_KEY`) and bundle manifests; the SDK verifies both
-   against the same key (explicit → `FORTIFY_PUBLIC_KEY` → JWKS TOFU).
+   Biscuits (`HEXGATE_KEY`) and bundle manifests; the SDK verifies both
+   against the same key (explicit → `HEXGATE_PUBLIC_KEY` → JWKS TOFU).
 2. **No silent downgrade.** A served-but-unverifiable bundle is fatal at
    resolve and inert at refresh. The pydantic fallback is only reachable
    when the platform *affirmatively served no bundle*, and
-   `FORTIFY_BUNDLE_REQUIRE_SIGNATURE` closes even that.
+   `HEXGATE_BUNDLE_REQUIRE_SIGNATURE` closes even that.
 3. **No silent allow-all.** Removing `build_policy_set` removes the last
-   construction path that runs ungoverned with a `FORTIFY_KEY` present.
+   construction path that runs ungoverned with a `HEXGATE_KEY` present.
    Ungoverned operation requires an explicit `fallback=` or
    `bind_policy=False` in the caller's code.
 4. **Verification happens before caching.** `PlatformPolicySource` only
@@ -541,13 +541,13 @@ text), `bundle_signature_b64`.
    names; surfaced by the §5 uncovered-tools warning.
 2. **Adapters: missing/unreachable platform now raises at wrap/construct**
    instead of silently running open. Escape hatch: `fallback=`.
-3. **`create_agent` with `FORTIFY_KEY` set + a `name`** now binds by default
+3. **`create_agent` with `HEXGATE_KEY` set + a `name`** now binds by default
    (auto mode). Programmatic callers who want a bare graph in a keyed
    environment pass `bind_policy=False`.
 
 ### 8.2 Non-changes
 
-- `stream_agent` / `invoke_agent` / `fortify serve` behavior is identical.
+- `stream_agent` / `invoke_agent` / `hexgate serve` behavior is identical.
 - Loaders' public signatures are identical.
 - Enforcement outcomes (`ALLOW` / `NEEDS_APPROVAL` / `DENY` rendering per
   adapter) are identical.
@@ -556,7 +556,7 @@ text), `bundle_signature_b64`.
 
 1. **Unbounded staleness on refresh failure.** No max-staleness TTL; a
    platform outage keeps the last verified policy in force indefinitely
-   (one warning per run). A future `FORTIFY_POLICY_MAX_STALENESS` knob can
+   (one warning per run). A future `HEXGATE_POLICY_MAX_STALENESS` knob can
    harden revocation scenarios.
 2. **`_WasmPolicyCache` is unwired.** `WasmPolicy.from_bytes_cached`
    (`wasm_engine.py:169`) has no production call sites;
@@ -593,7 +593,7 @@ text), `bundle_signature_b64`.
   the conditional GET.
 - auto mode: no key → bare agent unchanged, `refresh_policy()` no-ops.
 - `bind_policy=True` without `name` → `ValueError`.
-- `load_fortify_agent` regression suite passes unmodified (dedupe is
+- `load_hexgate_agent` regression suite passes unmodified (dedupe is
   behavior-preserving); single round-trip asserted via mock call count.
 - `with_tools` rebuild keeps `_binding` reachable.
 
@@ -627,14 +627,14 @@ Each phase lands green and independently shippable.
 
 | Phase | Content | Files |
 |---|---|---|
-| **1** | `PolicyBinding` + `AutoRegisterSpec` + move loader env-override helpers; core tests | `fortify/security/binding.py` (new), `fortify/agents/loader.py` (re-import), `tests/security/test_policy_binding.py` |
-| **2** | Loader dedupe onto `PolicyBinding` (with `prefetched`); `FortifyAgent.refresh_policy` delegates to binding; back-compat aliases | `fortify/agents/loader.py`, `fortify/agents/factory.py` |
-| **3** | `create_agent(bind_policy=...)` + auto mode | `fortify/agents/factory.py`, tests |
+| **1** | `PolicyBinding` + `AutoRegisterSpec` + move loader env-override helpers; core tests | `hexgate/security/binding.py` (new), `hexgate/agents/loader.py` (re-import), `tests/security/test_policy_binding.py` |
+| **2** | Loader dedupe onto `PolicyBinding` (with `prefetched`); `HexgateAgent.refresh_policy` delegates to binding; back-compat aliases | `hexgate/agents/loader.py`, `hexgate/agents/factory.py` |
+| **3** | `create_agent(bind_policy=...)` + auto mode | `hexgate/agents/factory.py`, tests |
 | **4** | LangChain BYO adapter (smallest delta; validates the adapter pattern) | `adapters/langchain/wrapper.py`, `adapters/langchain/agent.py` |
 | **5** | Google adapter (construct-once shape) | `adapters/google/wrapper.py`, `adapters/google/runner.py` |
 | **6** | OpenAI adapter (binding cache, `run_streamed` ordering) | `adapters/openai/wrapper.py`, `adapters/openai/runner.py` |
 | **7** | pydantic_ai adapter | `adapters/pydantic_ai/wrapper.py`, `adapters/pydantic_ai/agent.py` |
-| **8** | Rider: wire `from_bytes_cached` into `PolicyBundle.policy()`; delete the four `build_policy_set` placeholders' remaining references; changelog | `fortify/security/bundle.py`, docs |
+| **8** | Rider: wire `from_bytes_cached` into `PolicyBundle.policy()`; delete the four `build_policy_set` placeholders' remaining references; changelog | `hexgate/security/bundle.py`, docs |
 
 ---
 
@@ -643,10 +643,10 @@ Each phase lands green and independently shippable.
 | Decision | Choice | Why |
 |---|---|---|
 | Eager vs lazy first fetch | **Eager** in `resolve()` | loud failures at construction; refresh's fail-soft would otherwise leave the first run unguarded or bricked |
-| 404 at resolve | **auto-register by default at adapter/`create_agent` surfaces**, raise otherwise | platform mints a safe default policy + signed bundle (`71586c2`); matches `fortify serve` UX; idempotent re-registers protect dashboard edits |
-| Adapters' default without platform | **raise** (no more silent allow-all) | a present `FORTIFY_KEY` signals governance intent; ungoverned must be explicit (`fallback=`) |
+| 404 at resolve | **auto-register by default at adapter/`create_agent` surfaces**, raise otherwise | platform mints a safe default policy + signed bundle (`71586c2`); matches `hexgate serve` UX; idempotent re-registers protect dashboard edits |
+| Adapters' default without platform | **raise** (no more silent allow-all) | a present `HEXGATE_KEY` signals governance intent; ungoverned must be explicit (`fallback=`) |
 | Refresh failure | **warn + keep previous verified policy** | availability over freshness; tamper still cannot install itself |
 | Refresh granularity | **per run/turn** | matches `stream_agent` today; per-tool-call adds a network call to the hot path for negligible win |
 | Sync entry points | direct blocking `refresh()` | ~ms HTTP on a thread already doing sync I/O; `to_thread` only for async paths |
 | Concurrency | `threading.Lock` around refresh | proxies are multi-user; collapse duplicate fetches; swap itself already atomic |
-| Where the code lives | `fortify/security/binding.py` | importable by factory, loader, and all adapters without cycles; security logic stays in `security/` |
+| Where the code lives | `hexgate/security/binding.py` | importable by factory, loader, and all adapters without cycles; security logic stays in `security/` |

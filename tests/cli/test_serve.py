@@ -1,7 +1,7 @@
 """Tests for the serve-mode → User scope handoff.
 
 After Phase 3.5, serve.py owns only the WebSocket plumbing: it parses
-``user_attenuation`` metadata into a :class:`fortify.runtime.User`, wraps
+``user_attenuation`` metadata into a :class:`hexgate.runtime.User`, wraps
 the agent invocation in ``async with User(...)``, and lets the runtime
 attenuate lazily. These tests cover the parsing helper and the
 end-to-end handler shape (with stream_agent monkeypatched out).
@@ -14,10 +14,10 @@ from typing import Any
 import pytest
 from rich.console import Console
 
-from fortify.cli import serve
-from fortify.cli.serve import ServeContext, _user_from_payload
-from fortify.cli.state import ChatState
-from fortify.runtime import User, get_current_user
+from hexgate.cli import serve
+from hexgate.cli.serve import ServeContext, _user_from_payload
+from hexgate.cli.state import ChatState
+from hexgate.runtime import User, get_current_user
 
 
 # ---------------------------------------------------------------------------
@@ -210,7 +210,7 @@ async def test_handle_message_malformed_attenuation_runs_without_scope(
 class _FakeWsForLoop:
     """``async with`` stand-in matching what ``connect()`` returns."""
 
-    def __init__(self, subprotocol: str | None = "fortify.v1") -> None:
+    def __init__(self, subprotocol: str | None = "hexgate.v1") -> None:
         self.subprotocol = subprotocol
         self.sent: list[str] = []
 
@@ -235,7 +235,7 @@ class _FakeWsForLoop:
 async def test_serve_loop_offers_bearer_and_marker_subprotocols(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """``_serve_loop`` connects with ``bearer.<key>`` + ``fortify.v1``.
+    """``_serve_loop`` connects with ``bearer.<key>`` + ``hexgate.v1``.
 
     Pins the Phase 6 WS auth contract: the CLI offers the bearer in
     ``Sec-WebSocket-Protocol`` (the only way to authenticate a WS
@@ -254,7 +254,7 @@ async def test_serve_loop_offers_bearer_and_marker_subprotocols(
         captured["url"] = url
         captured["subprotocols"] = kwargs.get("subprotocols")
         captured["ping_interval"] = kwargs.get("ping_interval")
-        return _FakeWsForLoop(subprotocol="fortify.v1")
+        return _FakeWsForLoop(subprotocol="hexgate.v1")
 
     monkeypatch.setattr(serve, "connect", fake_connect)
 
@@ -272,7 +272,7 @@ async def test_serve_loop_offers_bearer_and_marker_subprotocols(
     # ``=`` → ``%3D`` (the only non-token char in URL-safe base64).
     assert captured["subprotocols"] == [
         "bearer.fty_live_acme_AbCdEf123-_%3D%3D",
-        "fortify.v1",
+        "hexgate.v1",
     ]
     # No ``=`` survives into the wire format — sanity check for
     # anyone inspecting the subprotocol grammar.
@@ -284,7 +284,7 @@ async def test_serve_loop_offers_bearer_and_marker_subprotocols(
 async def test_serve_loop_aborts_when_marker_not_echoed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Server didn't negotiate ``fortify.v1`` → FortifyError before any send.
+    """Server didn't negotiate ``hexgate.v1`` → HexgateError before any send.
 
     Defense against accidentally talking to a pre-Phase-6 server that
     silently ignores the unknown ``bearer.`` subprotocol and accepts
@@ -303,7 +303,7 @@ async def test_serve_loop_aborts_when_marker_not_echoed(
         api_key="fty_live_acme_secret",
     )
 
-    with pytest.raises(serve.FortifyError, match="fortify.v1"):
+    with pytest.raises(serve.HexgateError, match="hexgate.v1"):
         await serve._serve_loop(context, "ws://test/v1/serve", Console())
 
 
@@ -312,19 +312,19 @@ async def test_serve_loop_aborts_when_marker_not_echoed(
 # ---------------------------------------------------------------------------
 
 
-from fortify.cli._common import build_runtime_from_local_agent, load_spec  # noqa: E402  — section-scoped import keeps phase-7 tests visually grouped
+from hexgate.cli._common import build_runtime_from_local_agent, load_spec  # noqa: E402  — section-scoped import keeps phase-7 tests visually grouped
 
 
 def test_load_spec_resolves_module_attr_form() -> None:
     """``module:attr`` round-trips through importlib + getattr.
 
     Pins the uvicorn-style contract: the spec is the user-facing shape
-    for ``fortify register --agent ...`` AND ``fortify serve ...``;
+    for ``hexgate register --agent ...`` AND ``hexgate serve ...``;
     both subcommands share this helper.
     """
     # The serve module itself is a convenient real target — it has
     # a ``main`` attribute we can pin to. No setup required.
-    loaded = load_spec("fortify.cli.serve:main")
+    loaded = load_spec("hexgate.cli.serve:main")
     assert loaded is serve.main
 
 
@@ -337,7 +337,7 @@ def test_load_spec_rejects_bad_format() -> None:
 def test_load_spec_rejects_missing_attribute() -> None:
     """Valid module but unknown attr → AttributeError."""
     with pytest.raises(AttributeError, match="no attribute"):
-        load_spec("fortify.cli.serve:does_not_exist")
+        load_spec("hexgate.cli.serve:does_not_exist")
 
 
 def _stub_settings() -> object:
@@ -401,12 +401,12 @@ def _patched_runtime_deps(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
         return object()
 
     monkeypatch.setattr(
-        "fortify.cli.register.manifest.create_manifest", fake_create_manifest
+        "hexgate.cli.register.manifest.create_manifest", fake_create_manifest
     )
     monkeypatch.setattr(
-        "fortify.cli.register.register.post_manifest", fake_post_manifest
+        "hexgate.cli.register.register.post_manifest", fake_post_manifest
     )
-    monkeypatch.setattr("fortify.cloud.client.FortifyClient", _FakeClient)
+    monkeypatch.setattr("hexgate.cloud.client.HexgateClient", _FakeClient)
 
     class _FakeConfig:
         @classmethod
@@ -418,12 +418,12 @@ def _patched_runtime_deps(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
         project_id = "proj-1"
         public_key = None
 
-    monkeypatch.setattr("fortify.cloud.client.FortifyConfig", _FakeConfig)
-    monkeypatch.setattr("fortify.agents.factory.enforce_policy", fake_enforce_policy)
+    monkeypatch.setattr("hexgate.cloud.client.HexgateConfig", _FakeConfig)
+    monkeypatch.setattr("hexgate.agents.factory.enforce_policy", fake_enforce_policy)
     monkeypatch.setattr(
-        "fortify.tracing.langfuse.get_langfuse_handler", fake_get_handler
+        "hexgate.tracing.langfuse.get_langfuse_handler", fake_get_handler
     )
-    monkeypatch.setenv("FORTIFY_KEY", "fty_live_test_secret")
+    monkeypatch.setenv("HEXGATE_KEY", "fty_live_test_secret")
     return captured
 
 
@@ -458,7 +458,7 @@ def test_build_runtime_auto_registers_on_first_run(
     assert captured["get_agent_name"] == "customer_bot"
     # Runtime envelope carries the resolved name + the enforced agent.
     assert runtime.agent_name == "customer_bot"
-    assert runtime.agent_source == "fortify"
+    assert runtime.agent_source == "hexgate"
 
 
 def test_build_runtime_skips_auto_register_when_disabled(

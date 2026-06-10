@@ -1,4 +1,4 @@
-"""End-to-end tests for the ``FORTIFY_LOCAL_POLICY`` env override.
+"""End-to-end tests for the ``HEXGATE_LOCAL_POLICY`` env override.
 
 When the env var points at a valid bundle, loaders must:
 
@@ -22,8 +22,8 @@ from pathlib import Path
 
 import pytest
 
-from fortify.agents import loader
-from fortify.security import (
+from hexgate.agents import loader
+from hexgate.security import (
     compile_to_rego,
     compile_to_wasm,
     encode_key,
@@ -96,14 +96,14 @@ def _sign_bundle_dir(directory: Path, private_key_raw: bytes) -> None:
 
 
 def _write_pubkey(path: Path, public_key_raw: bytes) -> Path:
-    """Write a base64url public key file (FORTIFY_BUNDLE_PUBKEY_PATH format)."""
+    """Write a base64url public key file (HEXGATE_BUNDLE_PUBKEY_PATH format)."""
     path.write_text(encode_key(public_key_raw) + "\n", encoding="utf-8")
     return path
 
 
 def _clear_signature_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("FORTIFY_BUNDLE_PUBKEY_PATH", raising=False)
-    monkeypatch.delenv("FORTIFY_BUNDLE_REQUIRE_SIGNATURE", raising=False)
+    monkeypatch.delenv("HEXGATE_BUNDLE_PUBKEY_PATH", raising=False)
+    monkeypatch.delenv("HEXGATE_BUNDLE_REQUIRE_SIGNATURE", raising=False)
 
 
 # ---------------------------------------------------------------------------
@@ -115,7 +115,7 @@ def test_override_returns_none_when_env_unset(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """No env var → no override. Pure pydantic path keeps running."""
-    monkeypatch.delenv("FORTIFY_LOCAL_POLICY", raising=False)
+    monkeypatch.delenv("HEXGATE_LOCAL_POLICY", raising=False)
     assert loader._local_policy_override() is None
 
 
@@ -129,7 +129,7 @@ def test_override_loads_bundle_when_env_set(
     enforce_policy and the PolicySource for per-run refresh.
     """
     bundle_dir = _build_bundle_dir(tmp_path / "bundle")
-    monkeypatch.setenv("FORTIFY_LOCAL_POLICY", str(bundle_dir))
+    monkeypatch.setenv("HEXGATE_LOCAL_POLICY", str(bundle_dir))
 
     out = loader._local_policy_override()
     assert out is not None
@@ -138,14 +138,14 @@ def test_override_loads_bundle_when_env_set(
     assert hasattr(source, "fetch")  # PolicySource protocol
     # The override prints a loud announcement to stderr.
     err = capsys.readouterr().err
-    assert "FORTIFY_LOCAL_POLICY active" in err
+    assert "HEXGATE_LOCAL_POLICY active" in err
 
 
 def test_override_raises_for_missing_directory(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Pointing at a non-existent path fails loudly, not silently."""
-    monkeypatch.setenv("FORTIFY_LOCAL_POLICY", str(tmp_path / "nope"))
+    monkeypatch.setenv("HEXGATE_LOCAL_POLICY", str(tmp_path / "nope"))
     with pytest.raises(RuntimeError, match="expected a bundle"):
         loader._local_policy_override()
 
@@ -159,9 +159,9 @@ def test_override_raises_for_tampered_bundle(
     # Tamper with the rego file after build — manifest still records the
     # original hash, so verify_integrity should reject this.
     (bundle_dir / "policy.rego").write_text(
-        "package fortify.policy\n# tampered\n", encoding="utf-8"
+        "package hexgate.policy\n# tampered\n", encoding="utf-8"
     )
-    monkeypatch.setenv("FORTIFY_LOCAL_POLICY", str(bundle_dir))
+    monkeypatch.setenv("HEXGATE_LOCAL_POLICY", str(bundle_dir))
     with pytest.raises(RuntimeError, match="hash mismatch"):
         loader._local_policy_override()
 
@@ -181,10 +181,10 @@ def test_load_builtin_agent_picks_up_override(
     import types
     from typing import Any
 
-    from fortify.security import PolicyBundle
+    from hexgate.security import PolicyBundle
 
     bundle_dir = _build_bundle_dir(tmp_path / "bundle")
-    monkeypatch.setenv("FORTIFY_LOCAL_POLICY", str(bundle_dir))
+    monkeypatch.setenv("HEXGATE_LOCAL_POLICY", str(bundle_dir))
 
     captured: dict[str, Any] = {}
 
@@ -219,9 +219,9 @@ def test_load_builtin_agent_uses_original_policy_without_override(
     is used (not a PolicyBundle). Guards against my own dispatcher
     silently always preferring wasm."""
     from typing import Any
-    from fortify.security import AgentPolicy, PolicyBundle
+    from hexgate.security import AgentPolicy, PolicyBundle
 
-    monkeypatch.delenv("FORTIFY_LOCAL_POLICY", raising=False)
+    monkeypatch.delenv("HEXGATE_LOCAL_POLICY", raising=False)
     captured: dict[str, Any] = {}
 
     def fake_create_agent(**kwargs: Any) -> tuple[str, str]:
@@ -242,7 +242,7 @@ def test_load_builtin_agent_uses_original_policy_without_override(
 
 
 # ---------------------------------------------------------------------------
-# Signature enforcement (FORTIFY_BUNDLE_PUBKEY_PATH / REQUIRE_SIGNATURE)
+# Signature enforcement (HEXGATE_BUNDLE_PUBKEY_PATH / REQUIRE_SIGNATURE)
 # ---------------------------------------------------------------------------
 
 
@@ -253,7 +253,7 @@ def test_unsigned_bundle_loads_with_warning_by_default(
     """Default (no REQUIRE): an unsigned bundle loads but warns on stderr."""
     _clear_signature_env(monkeypatch)
     bundle_dir = _build_bundle_dir(tmp_path / "bundle")
-    monkeypatch.setenv("FORTIFY_LOCAL_POLICY", str(bundle_dir))
+    monkeypatch.setenv("HEXGATE_LOCAL_POLICY", str(bundle_dir))
 
     bundle = loader._local_policy_override()
     assert bundle is not None
@@ -274,8 +274,8 @@ def test_unsigned_bundle_refused_when_signature_required(
     """
     _clear_signature_env(monkeypatch)
     bundle_dir = _build_bundle_dir(tmp_path / "bundle")
-    monkeypatch.setenv("FORTIFY_LOCAL_POLICY", str(bundle_dir))
-    monkeypatch.setenv("FORTIFY_BUNDLE_REQUIRE_SIGNATURE", "true")
+    monkeypatch.setenv("HEXGATE_LOCAL_POLICY", str(bundle_dir))
+    monkeypatch.setenv("HEXGATE_BUNDLE_REQUIRE_SIGNATURE", "true")
 
     with pytest.raises(RuntimeError, match="no key to verify"):
         loader._local_policy_override()
@@ -292,9 +292,9 @@ def test_signed_bundle_verifies_against_pubkey(
     _sign_bundle_dir(bundle_dir, private_raw)
     pubkey_path = _write_pubkey(tmp_path / "key.public", public_raw)
 
-    monkeypatch.setenv("FORTIFY_LOCAL_POLICY", str(bundle_dir))
-    monkeypatch.setenv("FORTIFY_BUNDLE_PUBKEY_PATH", str(pubkey_path))
-    monkeypatch.setenv("FORTIFY_BUNDLE_REQUIRE_SIGNATURE", "true")
+    monkeypatch.setenv("HEXGATE_LOCAL_POLICY", str(bundle_dir))
+    monkeypatch.setenv("HEXGATE_BUNDLE_PUBKEY_PATH", str(pubkey_path))
+    monkeypatch.setenv("HEXGATE_BUNDLE_REQUIRE_SIGNATURE", "true")
 
     out = loader._local_policy_override()
     assert out is not None
@@ -316,8 +316,8 @@ def test_signed_bundle_wrong_pubkey_refused(
     _sign_bundle_dir(bundle_dir, signer_priv)
     pubkey_path = _write_pubkey(tmp_path / "key.public", stranger_pub)
 
-    monkeypatch.setenv("FORTIFY_LOCAL_POLICY", str(bundle_dir))
-    monkeypatch.setenv("FORTIFY_BUNDLE_PUBKEY_PATH", str(pubkey_path))
+    monkeypatch.setenv("HEXGATE_LOCAL_POLICY", str(bundle_dir))
+    monkeypatch.setenv("HEXGATE_BUNDLE_PUBKEY_PATH", str(pubkey_path))
 
     with pytest.raises(RuntimeError, match="failed signature verification"):
         loader._local_policy_override()
@@ -333,8 +333,8 @@ def test_signed_bundle_no_pubkey_required_refused(
     bundle_dir = _build_bundle_dir(tmp_path / "bundle")
     _sign_bundle_dir(bundle_dir, private_raw)
 
-    monkeypatch.setenv("FORTIFY_LOCAL_POLICY", str(bundle_dir))
-    monkeypatch.setenv("FORTIFY_BUNDLE_REQUIRE_SIGNATURE", "true")
+    monkeypatch.setenv("HEXGATE_LOCAL_POLICY", str(bundle_dir))
+    monkeypatch.setenv("HEXGATE_BUNDLE_REQUIRE_SIGNATURE", "true")
 
     with pytest.raises(RuntimeError, match="is unset"):
         loader._local_policy_override()

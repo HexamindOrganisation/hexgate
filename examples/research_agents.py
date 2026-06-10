@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fortify import AgentPolicy, create_agent, enforce_policy, register_agent
-from fortify.tools import (
+from hexgate import AgentPolicy, create_agent, enforce_policy, register_agent
+from hexgate.tools import (
     edit_file,
     fetch,
     glob,
@@ -67,7 +67,7 @@ def build_update_researcher(
             "write_file and edit_file only when an update is truly needed."
         ),
         session_id=session_id,
-        tags=tags or ["fortify", "update-researcher"],
+        tags=tags or ["hexgate", "update-researcher"],
     )
     return enforce_policy(agent, _update_researcher_policy()), handler
 

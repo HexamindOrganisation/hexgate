@@ -198,7 +198,7 @@ class TokenMintResponse(BaseModel):
 
 
 class KeyIntrospection(BaseModel):
-    """``GET /v1/me/key`` response — what a fortify key resolves to.
+    """``GET /v1/me/key`` response — what a hexgate key resolves to.
 
     Used by the CLI to look up its own context at startup (project, env,
     scopes) without parsing the envelope. The token never round-trips —
@@ -271,11 +271,11 @@ class ValidatePolicyResponse(BaseModel):
 
 
 # --- Agent manifest registration ---------------------------------------------
-# These mirror fortify/cli/register/models.py so SDK and platform stay in sync.
+# These mirror hexgate/cli/register/models.py so SDK and platform stay in sync.
 
 
 class AgentFramework(StrEnum):
-    FORTIFY = "fortify"
+    FORTIFY = "hexgate"
     PYDANTIC_AI = "pydantic-ai"
     LANGCHAIN = "langchain"
     GOOGLE = "google"

@@ -1,8 +1,8 @@
 """Tests for the SDK-side attenuation primitive.
 
-The primitive lives in :mod:`fortify.cloud.attenuate` and lets a dev's
+The primitive lives in :mod:`hexgate.cloud.attenuate` and lets a dev's
 backend (or the demo serve loop) append a user/scope/limit block to a
-parent Fortify token. The new envelope's signature chain still verifies
+parent HexaGate token. The new envelope's signature chain still verifies
 against the platform's root public key — biscuit handles the signature
 linkage with an ephemeral keypair internally.
 """
@@ -12,8 +12,8 @@ from __future__ import annotations
 import pytest
 from biscuit_auth import BiscuitBuilder, KeyPair
 
-from fortify.cloud.attenuate import attenuate_for_user
-from fortify.cloud.biscuit import (
+from hexgate.cloud.attenuate import attenuate_for_user
+from hexgate.cloud.biscuit import (
     TokenError,
     TokenSignatureError,
     extract_facts,

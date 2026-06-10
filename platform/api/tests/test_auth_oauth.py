@@ -47,8 +47,8 @@ from services import ensure_default_project
 
 def test_build_router_returns_none_without_env(monkeypatch) -> None:
     """No env vars → no router. ``make platform-api`` works out of the box."""
-    monkeypatch.delenv("FORTIFY_GOOGLE_CLIENT_ID", raising=False)
-    monkeypatch.delenv("FORTIFY_GOOGLE_CLIENT_SECRET", raising=False)
+    monkeypatch.delenv("HEXGATE_GOOGLE_CLIENT_ID", raising=False)
+    monkeypatch.delenv("HEXGATE_GOOGLE_CLIENT_SECRET", raising=False)
     # build_google_oauth_router calls into the keystore for the state
     # secret — ensure it's initialised so the call doesn't blow up
     # before it hits the env-var check we actually care about.
@@ -60,8 +60,8 @@ def test_build_router_returns_none_without_env(monkeypatch) -> None:
 
 def test_build_router_returns_router_with_env(monkeypatch) -> None:
     """With both env vars set → APIRouter with /authorize + /callback."""
-    monkeypatch.setenv("FORTIFY_GOOGLE_CLIENT_ID", "test-client-id")
-    monkeypatch.setenv("FORTIFY_GOOGLE_CLIENT_SECRET", "test-secret")
+    monkeypatch.setenv("HEXGATE_GOOGLE_CLIENT_ID", "test-client-id")
+    monkeypatch.setenv("HEXGATE_GOOGLE_CLIENT_SECRET", "test-secret")
     main.keystore.ensure_keypair()
     from auth import build_google_oauth_router
 
@@ -104,7 +104,7 @@ async def oauth_client(monkeypatch, session_factory, tmp_path) -> TestClient:
 
     The OAuth router normally mounts inside ``main._maybe_mount_oauth_routers``
     during lifespan startup. Tests sidestep the lifespan (which would
-    touch the real fortify.db + run backfill) and mount the router
+    touch the real hexgate.db + run backfill) and mount the router
     directly here once the keystore is initialised. The mounted route
     persists on ``app`` across tests in this file — fine because each
     test rebuilds the in-memory DB and the OAuth wiring doesn't carry
@@ -114,8 +114,8 @@ async def oauth_client(monkeypatch, session_factory, tmp_path) -> TestClient:
     from db import get_session
     from keystore import FileKeyStore
 
-    monkeypatch.setenv("FORTIFY_GOOGLE_CLIENT_ID", "test-client-id")
-    monkeypatch.setenv("FORTIFY_GOOGLE_CLIENT_SECRET", "test-secret")
+    monkeypatch.setenv("HEXGATE_GOOGLE_CLIENT_ID", "test-client-id")
+    monkeypatch.setenv("HEXGATE_GOOGLE_CLIENT_SECRET", "test-secret")
 
     # Fake the Google round-trip. Both methods get awaited by httpx-oauth
     # / fastapi-users; we return canned values that tests can mutate
@@ -212,7 +212,7 @@ def test_callback_creates_new_user_and_oauth_link(
         follow_redirects=False,
     )
     assert r_cb.status_code in (200, 204, 302, 307), r_cb.text
-    assert "fortify_session=" in r_cb.headers.get("set-cookie", "")
+    assert "hexgate_session=" in r_cb.headers.get("set-cookie", "")
 
     # Verify the DB state — one User, one OAuthAccount linking them.
     async def _check():
@@ -279,12 +279,12 @@ def test_callback_returning_user_reuses_existing_row(
 
     # First sign-in — creates the rows.
     headers1 = _do_one_signin()
-    assert "fortify_session=" in headers1.get("set-cookie", "")
+    assert "hexgate_session=" in headers1.get("set-cookie", "")
 
     # Second sign-in by the same Google account — must succeed without
     # tripping the unique constraint, and must NOT create duplicates.
     headers2 = _do_one_signin()
-    assert "fortify_session=" in headers2.get("set-cookie", "")
+    assert "hexgate_session=" in headers2.get("set-cookie", "")
 
     async def _check_no_duplicates():
         async with session_factory() as s:

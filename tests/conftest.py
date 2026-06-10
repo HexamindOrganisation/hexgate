@@ -1,10 +1,10 @@
-"""Shared pytest fixtures for the fortify test suite."""
+"""Shared pytest fixtures for the hexgate test suite."""
 
 from __future__ import annotations
 
 import pytest
 
-from fortify.runtime.srt import SrtUnavailableError, ensure_srt_available
+from hexgate.runtime.srt import SrtUnavailableError, ensure_srt_available
 
 
 @pytest.fixture

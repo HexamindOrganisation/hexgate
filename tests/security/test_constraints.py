@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from fortify.security import PolicyDeniedError
-from fortify.security.constraints import (
+from hexgate.security import PolicyDeniedError
+from hexgate.security.constraints import (
     ConstraintParseError,
     check_constraints,
     evaluate_constraint,

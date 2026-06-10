@@ -1,4 +1,4 @@
-"""Tests for the ``fortify policy`` CLI subcommand (M2 phase 2).
+"""Tests for the ``hexgate policy`` CLI subcommand (M2 phase 2).
 
 Each subcommand has its own ``main`` function that takes a parsed
 ``argparse.Namespace`` and returns an exit code. Tests build the
@@ -19,7 +19,7 @@ from pathlib import Path
 
 import pytest
 
-from fortify.cli.policy.main import (
+from hexgate.cli.policy.main import (
     _main_build,
     _main_keygen,
     _main_show_rego,
@@ -147,7 +147,7 @@ def test_show_rego_emits_module_to_stdout(
     rc = _main_show_rego(_ns(source=str(policy_file)))
     out = capsys.readouterr().out
     assert rc == 0
-    assert "package fortify.policy" in out
+    assert "package hexgate.policy" in out
     assert "default allow := false" in out
     # Demo's billing rule should be visible
     assert 'input.role == "billing"' in out
@@ -313,7 +313,7 @@ def test_keygen_keys_roundtrip_for_signing(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """The emitted keys actually work as a sign/verify pair."""
-    from fortify.security import decode_key, sign_bytes, verify_bytes
+    from hexgate.security import decode_key, sign_bytes, verify_bytes
 
     prefix = tmp_path / "devkey"
     _main_keygen(_ns(out=str(prefix), force=False))
@@ -329,7 +329,7 @@ def test_build_sign_key_emits_verifiable_signature(
     policy_file: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """build --sign-key writes a .sig that verifies under the public key."""
-    from fortify.security import PolicyBundle, decode_key
+    from hexgate.security import PolicyBundle, decode_key
 
     key_prefix = tmp_path / "k"
     _main_keygen(_ns(out=str(key_prefix), force=False))
@@ -560,15 +560,15 @@ def test_test_engine_wasm_surfaces_violations(
 
 
 # ---------------------------------------------------------------------------
-# Wiring — confirm fortify policy reaches our subcommand handlers
+# Wiring — confirm hexgate policy reaches our subcommand handlers
 # ---------------------------------------------------------------------------
 
 
 def test_top_level_dispatch_routes_to_policy(
     policy_file: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """The top-level `fortify` parser routes `policy validate <file>` here."""
-    from fortify.cli import _build_parser
+    """The top-level `hexgate` parser routes `policy validate <file>` here."""
+    from hexgate.cli import _build_parser
 
     parser = _build_parser()
     args = parser.parse_args(["policy", "validate", str(policy_file)])
@@ -580,11 +580,11 @@ def test_top_level_dispatch_routes_to_policy(
 def test_top_level_dispatch_routes_to_show_rego(
     policy_file: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """`fortify policy show-rego` routes through and emits Rego on stdout."""
-    from fortify.cli import _build_parser
+    """`hexgate policy show-rego` routes through and emits Rego on stdout."""
+    from hexgate.cli import _build_parser
 
     parser = _build_parser()
     args = parser.parse_args(["policy", "show-rego", str(policy_file)])
     rc = args.func(args)
     assert rc == 0
-    assert "package fortify.policy" in capsys.readouterr().out
+    assert "package hexgate.policy" in capsys.readouterr().out

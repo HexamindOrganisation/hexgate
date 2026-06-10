@@ -1,4 +1,4 @@
-"""Tests for the FortifyRunner that wraps the OpenAI Agents Runner."""
+"""Tests for the HexgateRunner that wraps the OpenAI Agents Runner."""
 
 from __future__ import annotations
 
@@ -8,13 +8,13 @@ from typing import Any, AsyncIterator
 import pytest
 from agents import Agent, FunctionTool
 
-from fortify.adapters.openai import runner as runner_mod
-from fortify.adapters.openai.runner import FortifyRunner
-from fortify.runtime import User
-from fortify.runtime.context import get_current_user
-from fortify.security import AgentPolicy, BaseToolPolicy, PolicySet, ResolvedPolicy
-from fortify.security.enforcer import PolicyEnforcer
-from fortify.security.policy_set import DEFAULT_ROLE_NAME
+from hexgate.adapters.openai import runner as runner_mod
+from hexgate.adapters.openai.runner import HexgateRunner
+from hexgate.runtime import User
+from hexgate.runtime.context import get_current_user
+from hexgate.security import AgentPolicy, BaseToolPolicy, PolicySet, ResolvedPolicy
+from hexgate.security.enforcer import PolicyEnforcer
+from hexgate.security.policy_set import DEFAULT_ROLE_NAME
 
 
 @pytest.fixture(autouse=True)
@@ -70,7 +70,7 @@ def _silence_observability(monkeypatch: pytest.MonkeyPatch) -> dict[str, int]:
     def fake_setup(self: Any) -> None:
         counts["setup"] += 1
 
-    monkeypatch.setattr(FortifyRunner, "_setup_observability", fake_setup)
+    monkeypatch.setattr(HexgateRunner, "_setup_observability", fake_setup)
     return counts
 
 
@@ -89,16 +89,16 @@ class _FakeStreamingResult:
 
 def test_constructor_uses_explicit_api_key() -> None:
     """An explicit api_key argument is stored verbatim."""
-    runner = FortifyRunner(api_key="explicit-key")
+    runner = HexgateRunner(api_key="explicit-key")
 
     assert runner.api_key == "explicit-key"
 
 
 def test_constructor_falls_back_to_env_var(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Resolve the API key from FORTIFY_KEY when no explicit key is given."""
-    monkeypatch.setenv("FORTIFY_KEY", "from-env")
+    """Resolve the API key from HEXGATE_KEY when no explicit key is given."""
+    monkeypatch.setenv("HEXGATE_KEY", "from-env")
 
-    runner = FortifyRunner()
+    runner = HexgateRunner()
 
     assert runner.api_key == "from-env"
 
@@ -107,9 +107,9 @@ def test_constructor_prefers_explicit_api_key_over_env(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The explicit api_key argument wins when both sources are populated."""
-    monkeypatch.setenv("FORTIFY_KEY", "from-env")
+    monkeypatch.setenv("HEXGATE_KEY", "from-env")
 
-    runner = FortifyRunner(api_key="explicit")
+    runner = HexgateRunner(api_key="explicit")
 
     assert runner.api_key == "explicit"
 
@@ -118,10 +118,10 @@ def test_constructor_raises_when_no_api_key_available(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Reject construction when neither argument nor env var supplies a key."""
-    monkeypatch.delenv("FORTIFY_KEY", raising=False)
+    monkeypatch.delenv("HEXGATE_KEY", raising=False)
 
-    with pytest.raises(ValueError, match="FORTIFY_KEY is not set"):
-        FortifyRunner()
+    with pytest.raises(ValueError, match="HEXGATE_KEY is not set"):
+        HexgateRunner()
 
 
 @pytest.mark.asyncio
@@ -140,10 +140,10 @@ async def test_run_wraps_agent_opens_user_scope_and_calls_runner_run(
         return "run-result"
 
     monkeypatch.setattr(
-        "fortify.adapters.openai.runner.Runner.run", staticmethod(fake_run)
+        "hexgate.adapters.openai.runner.Runner.run", staticmethod(fake_run)
     )
 
-    runner = FortifyRunner(api_key="k")
+    runner = HexgateRunner(api_key="k")
     agent = _make_agent()
     user = _user()
 
@@ -176,10 +176,10 @@ def test_run_sync_opens_user_scope_and_calls_runner_run_sync(
         return "run-sync-result"
 
     monkeypatch.setattr(
-        "fortify.adapters.openai.runner.Runner.run_sync", staticmethod(fake_run_sync)
+        "hexgate.adapters.openai.runner.Runner.run_sync", staticmethod(fake_run_sync)
     )
 
-    runner = FortifyRunner(api_key="k")
+    runner = HexgateRunner(api_key="k")
     agent = _make_agent()
     user = _user()
 
@@ -212,7 +212,7 @@ async def test_run_streamed_wraps_stream_events_to_re_enter_scope_and_propagatio
         return fake_result
 
     monkeypatch.setattr(
-        "fortify.adapters.openai.runner.Runner.run_streamed",
+        "hexgate.adapters.openai.runner.Runner.run_streamed",
         staticmethod(fake_run_streamed),
     )
 
@@ -226,11 +226,11 @@ async def test_run_streamed_wraps_stream_events_to_re_enter_scope_and_propagatio
         yield
 
     monkeypatch.setattr(
-        "fortify.adapters.openai.runner.propagate_attributes",
+        "hexgate.adapters.openai.runner.propagate_attributes",
         fake_propagate_attributes,
     )
 
-    runner = FortifyRunner(api_key="k")
+    runner = HexgateRunner(api_key="k")
     agent = _make_agent()
     user = _user()
 
@@ -260,7 +260,7 @@ async def test_run_propagates_user_identity_to_langfuse(
         return "ok"
 
     monkeypatch.setattr(
-        "fortify.adapters.openai.runner.Runner.run", staticmethod(fake_run)
+        "hexgate.adapters.openai.runner.Runner.run", staticmethod(fake_run)
     )
 
     propagate_calls: list[dict[str, Any]] = []
@@ -273,11 +273,11 @@ async def test_run_propagates_user_identity_to_langfuse(
         yield
 
     monkeypatch.setattr(
-        "fortify.adapters.openai.runner.propagate_attributes",
+        "hexgate.adapters.openai.runner.propagate_attributes",
         fake_propagate_attributes,
     )
 
-    runner = FortifyRunner(api_key="k")
+    runner = HexgateRunner(api_key="k")
 
     await runner.run(_make_agent("custom-name"), "hi", user=_user())
 
@@ -319,7 +319,7 @@ def _patch_runner_run(monkeypatch: pytest.MonkeyPatch) -> None:
         return "ok"
 
     monkeypatch.setattr(
-        "fortify.adapters.openai.runner.Runner.run", staticmethod(fake_run)
+        "hexgate.adapters.openai.runner.Runner.run", staticmethod(fake_run)
     )
 
 
@@ -332,7 +332,7 @@ async def test_binding_is_cached_per_agent_name(
     _silence_observability(monkeypatch)
     _patch_runner_run(monkeypatch)
 
-    runner = FortifyRunner(api_key="k")
+    runner = HexgateRunner(api_key="k")
     agent = _make_agent("my-agent")
 
     await runner.run(agent, "one", user=_user())
@@ -348,7 +348,7 @@ async def test_distinct_agent_names_get_distinct_bindings(
     _silence_observability(monkeypatch)
     _patch_runner_run(monkeypatch)
 
-    runner = FortifyRunner(api_key="k")
+    runner = HexgateRunner(api_key="k")
 
     await runner.run(_make_agent("agent-a"), "x", user=_user())
     await runner.run(_make_agent("agent-b"), "x", user=_user())
@@ -363,7 +363,7 @@ def test_binding_for_normalises_none_agent_name_to_default(
     """A None agent name collapses to "default" rather than flowing through
     as the cache key / resolve label. Exercises _binding_for directly since
     the canonical Agent validates name as a string at construction."""
-    runner = FortifyRunner(api_key="k")
+    runner = HexgateRunner(api_key="k")
     agent = SimpleNamespace(name=None, tools=[_make_tool("echo")])
 
     binding = runner._binding_for(agent)  # type: ignore[arg-type]
@@ -381,7 +381,7 @@ async def test_run_refreshes_cached_binding_per_call(
     _silence_observability(monkeypatch)
     _patch_runner_run(monkeypatch)
 
-    runner = FortifyRunner(api_key="k")
+    runner = HexgateRunner(api_key="k")
     binding = _CountingBinding()
     runner._bindings["my-agent"] = binding  # type: ignore[assignment]
 
@@ -400,11 +400,11 @@ def test_run_sync_refreshes_cached_binding_per_call(
         return "ok"
 
     monkeypatch.setattr(
-        "fortify.adapters.openai.runner.Runner.run_sync",
+        "hexgate.adapters.openai.runner.Runner.run_sync",
         staticmethod(fake_run_sync),
     )
 
-    runner = FortifyRunner(api_key="k")
+    runner = HexgateRunner(api_key="k")
     binding = _CountingBinding()
     runner._bindings["my-agent"] = binding  # type: ignore[assignment]
 
@@ -428,7 +428,7 @@ def test_run_streamed_refreshes_before_setup(
         return _FakeStreamingResult()
 
     monkeypatch.setattr(
-        "fortify.adapters.openai.runner.Runner.run_streamed",
+        "hexgate.adapters.openai.runner.Runner.run_streamed",
         staticmethod(fake_run_streamed),
     )
 
@@ -437,7 +437,7 @@ def test_run_streamed_refreshes_before_setup(
             order.append("refresh")
             super().refresh()
 
-    runner = FortifyRunner(api_key="k")
+    runner = HexgateRunner(api_key="k")
     binding = _OrderedBinding()
     runner._bindings["my-agent"] = binding  # type: ignore[assignment]
 

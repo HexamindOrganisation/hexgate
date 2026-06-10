@@ -6,7 +6,7 @@ from datetime import UTC
 
 from pydantic import TypeAdapter
 
-from fortify.streaming import (
+from hexgate.streaming import (
     AgentRunResult,
     BlockDeltaEvent,
     BlockEndEvent,

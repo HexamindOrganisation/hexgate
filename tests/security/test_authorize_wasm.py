@@ -13,7 +13,7 @@ import shutil
 import pytest
 import yaml
 
-from fortify.security import (
+from hexgate.security import (
     ApprovalRequiredError,
     PolicyBundle,
     PolicyDeniedError,
