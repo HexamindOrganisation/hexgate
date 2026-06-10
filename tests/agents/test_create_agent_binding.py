@@ -77,6 +77,7 @@ def _hermetic(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("HEXGATE_KEY", raising=False)
     monkeypatch.delenv("HEXGATE_LOCAL_POLICY", raising=False)
     monkeypatch.delenv("HEXGATE_BIND_AGENTS", raising=False)
+    monkeypatch.delenv("HEXGATE_LOCAL_MODE", raising=False)
 
 
 def _patch_platform(monkeypatch: pytest.MonkeyPatch, client: _FakeClient) -> None:
@@ -143,6 +144,61 @@ def test_auto_mode_bare_key_does_not_bind_without_opt_in(
 
     assert agent.tools == [echo]  # unwrapped, no construction-time 404
     assert agent._binding is None
+
+
+def test_auto_mode_respects_hexgate_local_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`HEXGATE_LOCAL_MODE` is the one-way kill switch the local-mode bootstrap
+    sets; the auto-bind path must respect it just like ``audit.configure``
+    does. Even with both the platform key and the opt-in toggle set, a
+    create_agent under local mode stays bare — the user explicitly asked
+    for no platform IO from this process."""
+    import hexgate.cloud.client as client_mod
+    from hexgate import audit
+
+    monkeypatch.setenv("HEXGATE_KEY", "fty_test_demo_dummybiscuit")
+    monkeypatch.setenv("HEXGATE_BIND_AGENTS", "1")
+    monkeypatch.setenv(audit._LOCAL_MODE_ENV, "1")
+    # The platform must never be contacted — fail hard if a client is built.
+    monkeypatch.setattr(
+        client_mod,
+        "HexgateClient",
+        lambda config: pytest.fail(
+            "create_agent contacted the platform under local mode"
+        ),
+    )
+
+    agent, _ = factory.create_agent(
+        model="openai:gpt-5.4", tools=[echo], name="support-bot"
+    )
+
+    assert agent.tools == [echo]
+    assert agent._binding is None
+
+
+def test_bind_policy_true_overrides_hexgate_local_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``bind_policy=True`` is the explicit-caller form — local mode shouldn't
+    silently veto it. The kill switch only short-circuits the auto-detect path."""
+    from hexgate import audit
+
+    monkeypatch.setenv(audit._LOCAL_MODE_ENV, "1")
+    monkeypatch.setattr(
+        factory,
+        "_bind_policy",
+        lambda agent, name, approval_handler: agent.with_tools(["bound-sentinel"]),
+    )
+
+    agent, _ = factory.create_agent(
+        model="openai:gpt-5.4",
+        tools=[echo],
+        name="support-bot",
+        bind_policy=True,
+    )
+
+    assert agent.tools == ["bound-sentinel"]
 
 
 def test_bind_policy_false_skips_even_with_key(

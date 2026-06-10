@@ -9,12 +9,23 @@ contextvar.
 from __future__ import annotations
 
 import copy
-from collections.abc import Mapping
+import logging
+from collections.abc import Callable, Mapping
 from typing import Any
 
 from hexgate.audit import AuditEvent, AuditSender, configure
 from hexgate.runtime.context import get_current_user
 from hexgate.security.decision import Decision, PolicyEngine
+
+_log = logging.getLogger(__name__)
+
+# A sync, fire-and-forget hook fired after every decision is built.
+# Used today by ``hexgate chat`` to render denies / approvals inline in the
+# REPL; future consumers (metrics, debuggers) would slot in the same way.
+# Distinct from ``AuditSender`` (which posts to the platform) — the observer
+# stays on the caller's machine and gets the full ``Decision`` object, not
+# a wire-shaped payload.
+DecisionObserver = Callable[[Decision], None]
 
 
 class PolicyEnforcer:
@@ -34,12 +45,18 @@ class PolicyEnforcer:
         *,
         agent_name: str = "default",
         audit_sender: AuditSender | None = None,
+        decision_observer: DecisionObserver | None = None,
     ) -> None:
         self.policy = policy
         self.agent_name = agent_name
         # Injected per-agent so each agent emits with its own api_key's sender.
         # ``None`` means audit is inert for this enforcer.
         self._audit_sender = audit_sender
+        # Local-process hook (no IO). ``hexgate chat`` injects one that
+        # appends to a deque the REPL drains between turns; tests inject
+        # a list-append. Distinct slot from audit so a deployment can have
+        # one without the other.
+        self._decision_observer = decision_observer
 
     def decide(self, tool_name: str, arguments: Mapping[str, Any]) -> Decision:
         """Resolve role from the contextvar, ask the engine for a
@@ -47,16 +64,19 @@ class PolicyEnforcer:
         host-facing :class:`Decision` with this agent's context.
 
         Emits an :class:`~hexgate.audit.AuditEvent` to this enforcer's
-        injected sender after the decision is built. No-op when no sender
-        was injected."""
+        injected sender after the decision is built, and calls the
+        injected ``decision_observer`` (if any) with the same Decision.
+        Both are no-ops when not injected; both are isolated so a
+        broken observer never breaks enforcement."""
         user = get_current_user()
         role = user.role if user is not None else None
-        # Deep-copy when auditing: emission is async, so a shallow copy
-        # would let the caller mutate nested args before the payload is
-        # serialized, making the audit record lie about what was decided.
+        # Deep-copy when audit OR observer is wired: emission/observation
+        # may inspect args after ``decide()`` returns, so a shallow copy
+        # would let the caller mutate nested args first and make the
+        # captured record lie about what was decided.
         args_snapshot = (
             copy.deepcopy(dict(arguments))
-            if self._audit_sender is not None
+            if (self._audit_sender is not None or self._decision_observer is not None)
             else dict(arguments)
         )
 
@@ -80,6 +100,15 @@ class PolicyEnforcer:
                 )
             )
 
+        if self._decision_observer is not None:
+            try:
+                self._decision_observer(decision)
+            except Exception:
+                # A broken observer (chat-panel render bug, third-party
+                # subscriber raising) must not break enforcement — the
+                # Decision the agent acts on is the source of truth.
+                _log.exception("decision_observer raised; ignoring")
+
         return decision
 
 
@@ -88,6 +117,7 @@ def build_enforcer(
     *,
     agent_name: str = "default",
     api_key: str | None = None,
+    decision_observer: DecisionObserver | None = None,
 ) -> PolicyEnforcer:
     """Compose a governed enforcer — engine + audit sender from ``api_key``.
 
@@ -95,8 +125,12 @@ def build_enforcer(
     surfaces (``HexgateAgent.enforce_policy``, the four adapters, the
     OpenAI runner) don't each repeat the ``audit.configure`` wiring.
     ``api_key=None`` falls back to ``HEXGATE_KEY`` (audit stays inert when
-    neither resolves).
+    neither resolves). ``decision_observer`` threads the local-process
+    decision hook (see :class:`PolicyEnforcer`); ``None`` is silent.
     """
     return PolicyEnforcer(
-        engine, agent_name=agent_name, audit_sender=configure(api_key)
+        engine,
+        agent_name=agent_name,
+        audit_sender=configure(api_key),
+        decision_observer=decision_observer,
     )

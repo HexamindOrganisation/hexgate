@@ -6,7 +6,10 @@ import os
 from collections.abc import Callable, Mapping
 from importlib.resources import files
 from pathlib import Path
-from typing import Any, Literal, TypeAlias
+from typing import TYPE_CHECKING, Any, Literal, TypeAlias
+
+if TYPE_CHECKING:
+    from hexgate.security.enforcer import DecisionObserver
 
 import yaml
 
@@ -56,6 +59,7 @@ REGISTERED_AGENTS: dict[str, AgentFactory] = {}
 def _apply_local_override(
     agent: AgentGraph,
     approval_handler: ApprovalHandler | None,
+    decision_observer: "DecisionObserver | None" = None,
 ) -> AgentGraph | None:
     """Apply ``HEXGATE_LOCAL_POLICY`` to a freshly-built agent, if set.
 
@@ -63,6 +67,12 @@ def _apply_local_override(
     ``None`` when no override is configured — the caller then falls
     back to the normal :func:`enforce_policy` path with the agent's
     own packaged policy.
+
+    ``decision_observer`` is threaded through to the override's
+    ``enforce_policy`` call so the chat decision panel keeps working
+    when ``HEXGATE_LOCAL_POLICY`` is set — without this, the loader's
+    other path (the no-override branch) forwards the observer but this
+    one silently drops it.
 
     Extracted from :func:`load_builtin_agent` + :func:`load_local_agent`
     which shared this exact block verbatim. :func:`load_hexgate_agent`
@@ -74,7 +84,11 @@ def _apply_local_override(
         return None
     bundle, source = override
     return enforce_policy(
-        agent, bundle, approval_handler=approval_handler, source=source
+        agent,
+        bundle,
+        approval_handler=approval_handler,
+        source=source,
+        decision_observer=decision_observer,
     )
 
 
@@ -236,6 +250,7 @@ def load_builtin_agent(
     extra_tools: Mapping[str, Any] | None = None,
     model: str | None = None,
     approval_handler: ApprovalHandler | None = None,
+    decision_observer: "DecisionObserver | None" = None,
 ) -> tuple[AgentGraph, CallbackHandler]:
     """Load and instantiate a packaged builtin agent."""
     spec = load_builtin_agent_spec(name)
@@ -253,10 +268,17 @@ def load_builtin_agent(
         name=spec.name,
         bind_policy=False,  # the loader applies its own policy below
     )
-    overridden = _apply_local_override(agent, approval_handler)
+    overridden = _apply_local_override(
+        agent, approval_handler, decision_observer=decision_observer
+    )
     if overridden is not None:
         return overridden, handler
-    return enforce_policy(agent, policy, approval_handler=approval_handler), handler
+    return enforce_policy(
+        agent,
+        policy,
+        approval_handler=approval_handler,
+        decision_observer=decision_observer,
+    ), handler
 
 
 def load_local_agent(
@@ -269,6 +291,7 @@ def load_local_agent(
     extra_tools: Mapping[str, Any] | None = None,
     model: str | None = None,
     approval_handler: ApprovalHandler | None = None,
+    decision_observer: "DecisionObserver | None" = None,
 ) -> tuple[AgentGraph, CallbackHandler]:
     """Load and instantiate a local project agent."""
     spec = load_local_agent_spec(name, base_dir)
@@ -286,10 +309,17 @@ def load_local_agent(
         name=spec.name,
         bind_policy=False,  # the loader applies its own policy below
     )
-    overridden = _apply_local_override(agent, approval_handler)
+    overridden = _apply_local_override(
+        agent, approval_handler, decision_observer=decision_observer
+    )
     if overridden is not None:
         return overridden, handler
-    return enforce_policy(agent, policy, approval_handler=approval_handler), handler
+    return enforce_policy(
+        agent,
+        policy,
+        approval_handler=approval_handler,
+        decision_observer=decision_observer,
+    ), handler
 
 
 def load_registered_agent(
@@ -302,6 +332,7 @@ def load_registered_agent(
     extra_tools: Mapping[str, Any] | None = None,
     model: str | None = None,
     approval_handler: ApprovalHandler | None = None,
+    decision_observer: "DecisionObserver | None" = None,
 ) -> tuple[AgentGraph, CallbackHandler]:
     """Load a registered code-defined agent by id."""
     try:
@@ -316,11 +347,55 @@ def load_registered_agent(
         extra_tools=extra_tools,
         model=model,
     )
-    # Registered factories don't know about the CLI's approval flow; layer it
-    # on after the fact by re-stamping each policy-wrapped tool.
+    # Registered factories don't know about the CLI's approval flow / chat
+    # decision panel; layer them on after the fact by reaching into the
+    # tools' shared enforcer.
     if approval_handler is not None:
         agent = _apply_approval_handler(agent, approval_handler)
+    if decision_observer is not None:
+        _apply_decision_observer(agent, decision_observer)
     return agent, handler
+
+
+def _apply_decision_observer(
+    agent: AgentGraph, decision_observer: "DecisionObserver"
+) -> None:
+    """Patch every :class:`GuardedTool`'s enforcer to fire ``decision_observer``.
+
+    For code-registered / spec-loaded agents whose factories built the
+    enforcer without seeing the CLI's hook. The expected case is one
+    shared enforcer per agent — ``enforce_policy`` constructs one and
+    wraps each tool with it — but we patch all distinct enforcers (by
+    ``id()``) rather than just the first, so a future refactor that
+    builds per-tool enforcers doesn't silently drop events on the
+    floor. The shared-instance invariant is then logged (info-level)
+    when it's actually shared, and warned (warning-level) when more
+    than one distinct enforcer was patched, so the surprise lands.
+    """
+    import logging
+
+    from hexgate.adapters.langchain.tools import GuardedTool
+
+    log = logging.getLogger(__name__)
+    patched_enforcer_ids: set[int] = set()
+    for tool_spec in agent.tools:
+        if isinstance(tool_spec, GuardedTool):
+            tool_spec.enforcer._decision_observer = decision_observer
+            patched_enforcer_ids.add(id(tool_spec.enforcer))
+
+    if not patched_enforcer_ids:
+        log.warning(
+            "decision_observer was supplied but %r has no GuardedTool tools to "
+            "attach it to; decision events will not surface for this agent",
+            getattr(agent, "name", None) or "agent",
+        )
+    elif len(patched_enforcer_ids) > 1:
+        log.warning(
+            "decision_observer attached to %d distinct enforcer instances on %r "
+            "(expected one shared enforcer per agent — future refactor?)",
+            len(patched_enforcer_ids),
+            getattr(agent, "name", None) or "agent",
+        )
 
 
 def _apply_approval_handler(
@@ -385,6 +460,7 @@ def load_hexgate_agent(
     extra_tools: Mapping[str, Any] | None = None,
     model: str | None = None,
     approval_handler: ApprovalHandler | None = None,
+    decision_observer: "DecisionObserver | None" = None,
 ) -> tuple[AgentGraph, CallbackHandler]:
     """Fetch an agent from HexaGate and return it with policy enforcement applied.
 
@@ -414,7 +490,14 @@ def load_hexgate_agent(
     )
     client = HexgateClient(config)
     payload, initial_etag = client.get_agent(resolved_name)
-    assert payload is not None, "first get_agent has no If-None-Match — 304 impossible"
+    if payload is None:
+        # Invariant: the first get_agent has no If-None-Match, so a 304
+        # is impossible — but use `raise` not `assert` so `python -O`
+        # can't strip the check.
+        raise RuntimeError(
+            "FortifyClient.get_agent returned no payload on initial fetch "
+            "(no If-None-Match was sent, so 304 should be impossible)"
+        )
 
     spec = AgentSpec.model_validate(yaml.safe_load(payload["agent_yaml"]) or {})
     system_prompt = payload.get("system_md") or ""
@@ -447,7 +530,11 @@ def load_hexgate_agent(
         )
 
     enforced = enforce_policy(
-        agent, policy, approval_handler=approval_handler, source=refresh_source
+        agent,
+        policy,
+        approval_handler=approval_handler,
+        source=refresh_source,
+        decision_observer=decision_observer,
     )
     # Attach the client so the runtime can do lazy attenuation inside an
     # active User scope without the caller having to thread it through.
@@ -466,6 +553,7 @@ def load_agent(
     model: str | None = None,
     local_only: bool = False,
     approval_handler: ApprovalHandler | None = None,
+    decision_observer: "DecisionObserver | None" = None,
 ) -> tuple[AgentGraph, CallbackHandler]:
     """Load an agent from HexaGate (when HEXGATE_KEY is set), local, or builtin.
 
@@ -476,6 +564,11 @@ def load_agent(
     Pass ``local_only=True`` to force resolution from local / registered /
     builtin sources even when ``HEXGATE_KEY`` is set in the environment.
     Useful for terminal-chat workflows that don't need cloud-fetched policy.
+
+    ``decision_observer`` is forwarded to every enforced loader (local,
+    registered, builtin, cloud). Threaded as a kwarg rather than a
+    contextvar so the call sites stay explicit — ``hexgate chat`` is
+    the only caller passing it today.
     """
     if not local_only and os.environ.get("HEXGATE_KEY"):
         # load_hexgate_agent dropped its reserved ``user_id`` placeholder
@@ -488,6 +581,7 @@ def load_agent(
             extra_tools=extra_tools,
             model=model,
             approval_handler=approval_handler,
+            decision_observer=decision_observer,
         )
     if name is None:
         raise ValueError("load_agent() requires a name when not using HexaGate Cloud")
@@ -502,6 +596,7 @@ def load_agent(
             extra_tools=extra_tools,
             model=model,
             approval_handler=approval_handler,
+            decision_observer=decision_observer,
         )
     if source == "registered":
         return load_registered_agent(
@@ -513,6 +608,7 @@ def load_agent(
             extra_tools=extra_tools,
             model=model,
             approval_handler=approval_handler,
+            decision_observer=decision_observer,
         )
     return load_builtin_agent(
         name,
@@ -522,4 +618,5 @@ def load_agent(
         extra_tools=extra_tools,
         model=model,
         approval_handler=approval_handler,
+        decision_observer=decision_observer,
     )

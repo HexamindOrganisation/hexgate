@@ -200,7 +200,10 @@ class AuditSender:
         task.add_done_callback(self._tasks.discard)
 
     async def _send(self, event: AuditEvent) -> None:
-        assert self._client is not None
+        if self._client is None:
+            # Invariant: _send is only reached after start() initialised
+            # the client. Raise so `python -O` can't strip the check.
+            raise RuntimeError("audit sender _send called before start()")
         async with self._semaphore:
             payload = event.as_payload()
             try:
@@ -243,6 +246,19 @@ class AuditSender:
 
 _AUDIT_PATH = "/v1/audit/decisions"
 _DEFAULT_API_URL = "http://localhost:8000"
+
+# Setting this env var to a truthy value (``1``/``true``/``yes``/``on``,
+# case-insensitive) makes ``configure()`` a no-op even when ``HEXGATE_KEY``
+# is present. ``bootstrap(local_only=True)`` sets it; ``hexgate chat``
+# passes ``local_only=True``. The check happens on every ``configure()``
+# call (not cached) so an adapter wrapper that re-``configure``s after
+# bootstrap still respects the gate.
+_LOCAL_MODE_ENV = "HEXGATE_LOCAL_MODE"
+
+# One-shot log gate so the "audit suppressed: local mode" message lands
+# the first time it'd matter (a key WAS set but local mode preempted)
+# and stays quiet thereafter.
+_logged_local_mode_suppressed = False
 # One sender per resolved api_key. A single process may wrap agents for
 # several tenants/keys, and each must emit with its own bearer token — so
 # senders are keyed by api_key rather than kept as a first-wins singleton.
@@ -251,6 +267,21 @@ _DEFAULT_API_URL = "http://localhost:8000"
 # key. Such callers must evict explicitly (await sender.close(), then drop
 # the dict entry) or use shutdown().
 _senders: dict[str, AuditSender] = {}
+
+
+def _local_mode_active() -> bool:
+    """True if ``HEXGATE_LOCAL_MODE`` is set to a truthy value.
+
+    Accepts ``1``/``true``/``yes``/``on`` (case-insensitive). Everything
+    else — including unset — evaluates false. Mirrors the truthy-value
+    parser the platform's ``HEXGATE_COOKIE_SECURE`` knob uses, so the
+    behavior is consistent across the codebase's env flags."""
+    return os.environ.get(_LOCAL_MODE_ENV, "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
 
 
 def configure(
@@ -263,7 +294,25 @@ def configure(
     Reuses the existing sender when the same key was already configured;
     distinct keys get distinct senders. Returns ``None`` when no api_key is
     resolvable — audit stays inert.
+
+    Also returns ``None`` when ``HEXGATE_LOCAL_MODE`` is set in env, even
+    if a key was resolvable — that's the "I have a key in .env but I'm
+    iterating locally and don't want cloud writes" path
+    (``hexgate chat`` opts in via ``bootstrap(local_only=True)``).
     """
+    global _logged_local_mode_suppressed
+    if _local_mode_active():
+        # Only log when a key was actually present — otherwise the
+        # message is just noise during a no-key local run.
+        resolved = api_key or os.environ.get("HEXGATE_KEY")
+        if resolved and not _logged_local_mode_suppressed:
+            _log.info(
+                "audit suppressed: %s=1 (a key is configured but local "
+                "mode is on, so events stay on this machine)",
+                _LOCAL_MODE_ENV,
+            )
+            _logged_local_mode_suppressed = True
+        return None
     resolved_key = api_key or os.environ.get("HEXGATE_KEY")
     if not resolved_key:
         return None

@@ -184,10 +184,13 @@ def _patched_loader(monkeypatch):
         # A namespace (not a str) so the loader can set .hexgate_client on it.
         return types.SimpleNamespace(name="agent"), "handler-instance"
 
-    def fake_enforce_policy(_agent, policy, *, approval_handler=None, source=None):
+    def fake_enforce_policy(
+        _agent, policy, *, approval_handler=None, source=None, decision_observer=None
+    ):
         captured["policy"] = policy
         captured["approval_handler"] = approval_handler
         captured["source"] = source
+        captured["decision_observer"] = decision_observer
         return _agent
 
     monkeypatch.setattr(loader, "HexgateConfig", _FakeConfig)

@@ -58,6 +58,8 @@ it never changes, blocks, or fails the decision the agent acts on.
 1. **Enforcement is authoritative; audit is observational.** The `Decision`
    returned to the agent is the source of truth. Audit failures (network down,
    platform 503, saturation) degrade silently and never propagate to the caller.
+   The same `Decision` is also surfaced locally by `hexgate chat`'s decision
+   panel — same data, different sink, useful when iterating offline.
 2. **The server owns identity.** `project_id`, `agent_version_id`, and
    `received_at` are resolved/stamped server-side and are **never trusted from
    the request body**, even though the SDK sends some of them as empty strings.
@@ -190,6 +192,40 @@ Each adapter wrapper (`wrap_langchain_agent`, `wrap_openai_agent`,
 `configure()` with their resolved key and inject the returned sender into the
 `PolicyEnforcer` they build. `bootstrap()` also calls `configure()` (env key) so
 local runs work without an explicit key.
+
+#### Local mode (`HEXGATE_LOCAL_MODE`)
+
+Setting `HEXGATE_LOCAL_MODE=1` makes `configure()` return `None` even when
+`HEXGATE_KEY` is present in env. `bootstrap(local_only=True)` sets the var
+*before* the first `configure()` call, and `hexgate chat` passes
+`local_only=True` — so the inner-loop REPL never posts audit events even if
+a key has been lingering in `.env` from an earlier platform session.
+
+The gate is re-checked on every `configure()` call (not cached), so an adapter
+wrapper that re-`configure`s post-bootstrap still respects it. The truthy
+value parser accepts `1` / `true` / `yes` / `on` (case-insensitive).
+
+There are now two clean operating modes, not three:
+
+| Mode | `HEXGATE_KEY` | `HEXGATE_LOCAL_MODE` | Policy from | Audit |
+|------|---------------|----------------------|-------------|-------|
+| **Local** | (irrelevant) | `1`, or unset with no key | YAML / disk / builtin | suppressed |
+| **Platform-managed** | set | unset | platform fetch | emitted |
+
+A single INFO line (`audit suppressed: HEXGATE_LOCAL_MODE=1 (...)`) is logged
+the first time `configure()` is called with both a key and local mode active
+— exactly the case where the suppression would be surprising. The "no key
+anywhere" case stays quiet.
+
+A separate WARNING fires from `bootstrap()` itself when both `HEXGATE_KEY`
+and `HEXGATE_LOCAL_POLICY` are set — that combination is almost always a
+forgotten env entry from an earlier session, and surfacing it at startup
+saves a later debugging detour.
+
+> For the user-facing description of when each mode applies in practice
+> — chat vs. serve, inner loop vs. team loop — see the
+> ["Which path do I pick?"](../README.md#-which-path-do-i-pick) block in
+> the README.
 
 `async shutdown()` drains in-flight tasks and closes every sender's HTTP client.
 It is safe to call multiple times and is the recommended teardown hook. Absent

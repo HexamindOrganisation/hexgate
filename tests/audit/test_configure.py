@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterator
 
 import pytest
@@ -11,12 +12,15 @@ import hexgate.audit as audit_mod
 
 @pytest.fixture(autouse=True)
 def _isolate_audit_state(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
-    """Reset the sender registry + clear FORTIFY_* env between tests."""
+    """Reset the sender registry + clear HEXGATE_* env between tests."""
     audit_mod._senders.clear()
+    audit_mod._logged_local_mode_suppressed = False
     monkeypatch.delenv("HEXGATE_KEY", raising=False)
     monkeypatch.delenv("HEXGATE_API_URL", raising=False)
+    monkeypatch.delenv(audit_mod._LOCAL_MODE_ENV, raising=False)
     yield
     audit_mod._senders.clear()
+    audit_mod._logged_local_mode_suppressed = False
 
 
 def test_returns_none_when_no_key_anywhere() -> None:
@@ -75,3 +79,72 @@ def test_get_sender_scoped_by_key() -> None:
     sender = audit_mod.configure("k1")
     assert audit_mod.get_sender("k1") is sender
     assert audit_mod.get_sender("k2") is None
+
+
+# ---------------------------------------------------------------------------
+# HEXGATE_LOCAL_MODE gate
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("truthy", ["1", "true", "TRUE", "yes", "on"])
+def test_local_mode_env_suppresses_configure(
+    monkeypatch: pytest.MonkeyPatch, truthy: str
+) -> None:
+    """Any truthy value of HEXGATE_LOCAL_MODE makes configure() return None
+    even when an api_key is in env. The gate is the whole point of local
+    mode: a key in .env (left over from a platform session) must not cause
+    cloud writes the next time the dev runs `hexgate chat`."""
+    monkeypatch.setenv("HEXGATE_KEY", "real_key")
+    monkeypatch.setenv(audit_mod._LOCAL_MODE_ENV, truthy)
+    assert audit_mod.configure() is None
+    assert audit_mod.get_sender("real_key") is None
+
+
+@pytest.mark.parametrize("falsy", ["0", "false", "no", "off", ""])
+def test_local_mode_falsy_does_not_suppress(
+    monkeypatch: pytest.MonkeyPatch, falsy: str
+) -> None:
+    """Explicit falsy values behave as if unset — symmetry with the
+    truthy parametrize prevents a future refactor from accidentally
+    making `HEXGATE_LOCAL_MODE=0` count as 'on'."""
+    monkeypatch.setenv("HEXGATE_KEY", "real_key")
+    monkeypatch.setenv(audit_mod._LOCAL_MODE_ENV, falsy)
+    sender = audit_mod.configure()
+    assert sender is not None
+
+
+def test_local_mode_explicit_key_arg_still_suppressed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The gate fires even when a caller passes an explicit api_key —
+    adapter wrappers that do `audit.configure(api_key=...)` post-bootstrap
+    must respect local mode too."""
+    monkeypatch.setenv(audit_mod._LOCAL_MODE_ENV, "1")
+    assert audit_mod.configure("explicit_key") is None
+
+
+def test_local_mode_logs_suppression_once(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A single INFO line at the first suppression; further configure()
+    calls stay silent so a busy startup doesn't repeat itself."""
+    monkeypatch.setenv("HEXGATE_KEY", "real_key")
+    monkeypatch.setenv(audit_mod._LOCAL_MODE_ENV, "1")
+    with caplog.at_level(logging.INFO, logger="hexgate.audit"):
+        audit_mod.configure()
+        audit_mod.configure()
+        audit_mod.configure()
+    suppressed = [r for r in caplog.records if "audit suppressed" in r.message]
+    assert len(suppressed) == 1
+
+
+def test_local_mode_silent_when_no_key_present(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """No key + local mode is the OSS "I never set a key" case — no log
+    line, because there's no surprise to disambiguate."""
+    monkeypatch.setenv(audit_mod._LOCAL_MODE_ENV, "1")
+    with caplog.at_level(logging.INFO, logger="hexgate.audit"):
+        audit_mod.configure()
+    suppressed = [r for r in caplog.records if "audit suppressed" in r.message]
+    assert suppressed == []
