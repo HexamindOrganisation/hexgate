@@ -495,7 +495,7 @@ def load_hexgate_agent(
         # is impossible — but use `raise` not `assert` so `python -O`
         # can't strip the check.
         raise RuntimeError(
-            "FortifyClient.get_agent returned no payload on initial fetch "
+            "HexgateClient.get_agent returned no payload on initial fetch "
             "(no If-None-Match was sent, so 304 should be impossible)"
         )
 

@@ -288,7 +288,7 @@ class HexgateClient:
         if payload is None:
             # Invariant: _get is never called with If-None-Match, so a 304
             # is impossible. Raise so `python -O` can't strip the check.
-            raise FortifyError(
+            raise HexgateError(
                 f"_raw_get({url!r}) returned no payload on unconditional GET"
             )
         return payload

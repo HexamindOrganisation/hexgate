@@ -19,7 +19,7 @@ concurrency:
 
 jobs:
   sdk:
-    name: SDK (fortify package)
+    name: SDK (hexgate package)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

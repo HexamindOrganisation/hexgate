@@ -1,4 +1,4 @@
-# Fortify SDK — dev/test/build helpers.
+# HexaGate SDK — dev/test/build helpers.
 #
 # Most targets shell out to `uv`. The default flow assumes a uv-managed
 # virtualenv (created by `make install-dev`). If you're driving uv with
@@ -20,7 +20,7 @@ TESTS ?= tests/
 
 .PHONY: help
 help: ## Show this help
-	@awk 'BEGIN{FS=":.*##"; printf "\nFortify SDK targets:\n\n"} /^[a-zA-Z0-9_.-]+:.*##/ { printf "  \033[36m%-22s\033[0m %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
+	@awk 'BEGIN{FS=":.*##"; printf "\nHexaGate SDK targets:\n\n"} /^[a-zA-Z0-9_.-]+:.*##/ { printf "  \033[36m%-22s\033[0m %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
 
 # -------- Setup --------
 
@@ -53,19 +53,19 @@ test-one: ## Run one test path: make test-one T=tests/security/test_bundle.py
 
 .PHONY: lint
 lint: ## Static check via ruff
-	$(UV) ruff check fortify tests
+	$(UV) ruff check hexgate tests
 
 .PHONY: lint-fix
 lint-fix: ## Apply ruff autofixes
-	$(UV) ruff check --fix fortify tests
+	$(UV) ruff check --fix hexgate tests
 
 .PHONY: fmt
 fmt: ## Format with ruff
-	$(UV) ruff format fortify tests
+	$(UV) ruff format hexgate tests
 
 .PHONY: fmt-check
 fmt-check: ## Check formatting without writing changes
-	$(UV) ruff format --check fortify tests
+	$(UV) ruff format --check hexgate tests
 
 .PHONY: check
 check: lint fmt-check test ## All static + dynamic checks (CI parity)
@@ -74,23 +74,23 @@ check: lint fmt-check test ## All static + dynamic checks (CI parity)
 
 .PHONY: policy-build
 policy-build: ## Compile examples/example_agent/policy.yaml to a bundle under /tmp/m2-bundle
-	$(UV) fortify policy build examples/example_agent/policy.yaml --out /tmp/m2-bundle
+	$(UV) hexgate policy build examples/example_agent/policy.yaml --out /tmp/m2-bundle
 
 .PHONY: policy-test-wasm
 policy-test-wasm: ## Smoke a wasm-engine decision on the example policy
-	$(UV) fortify policy test examples/example_agent/policy.yaml \
+	$(UV) hexgate policy test examples/example_agent/policy.yaml \
 	    --role default --tool web_search --args '{}' --engine wasm
 
 .PHONY: demo-override
 demo-override: ## Build a deny-everything bundle + chat with HEXGATE_LOCAL_POLICY set
 	@echo "→ Writing a deny-everything override policy…"
 	@printf 'version: 1\nroles:\n  default:\n    tools:\n      web_search: { mode: deny }\n      fetch: { mode: deny }\n' > /tmp/m2-deny-policy.yaml
-	$(UV) fortify policy build /tmp/m2-deny-policy.yaml --out /tmp/m2-deny-bundle
+	$(UV) hexgate policy build /tmp/m2-deny-policy.yaml --out /tmp/m2-deny-bundle
 	@echo ""
 	@echo "→ Starting chat with HEXGATE_LOCAL_POLICY=/tmp/m2-deny-bundle"
 	@echo "  Try a prompt that would trigger web_search; expect a wasm-engine deny."
 	@echo ""
-	HEXGATE_LOCAL_POLICY=/tmp/m2-deny-bundle $(UV) fortify chat --agent researcher --approval-mode auto-deny
+	HEXGATE_LOCAL_POLICY=/tmp/m2-deny-bundle $(UV) hexgate chat --agent researcher --approval-mode auto-deny
 
 # -------- Platform infra (ClickHouse audit log) --------
 #
@@ -116,8 +116,8 @@ clickhouse-logs: ## Tail ClickHouse server logs
 
 .PHONY: clickhouse-cli
 clickhouse-cli: ## Open an interactive SQL shell against the local ClickHouse
-	docker exec -it fortify-clickhouse clickhouse-client \
-	    --user hexgate --password hexgate-dev-password --database fortify_audit
+	docker exec -it hexgate-clickhouse clickhouse-client \
+	    --user hexgate --password hexgate-dev-password --database hexgate_audit
 
 .PHONY: clickhouse-reset
 clickhouse-reset: ## Wipe the data volume and re-run init scripts
@@ -164,18 +164,18 @@ dashboard: ## Run the dashboard dev server (Vite on :5173)
 # different agent:
 #
 #   make serve AGENT_SPEC=examples.foo:bar        # variable form
-#   uv run fortify serve examples.foo:bar         # skip make entirely
+#   uv run hexgate serve examples.foo:bar         # skip make entirely
 #
 # Bare `make serve` defaults to the customer_bot demo for the
-# fortify-canonical workflow.
+# hexgate-canonical workflow.
 AGENT_SPEC ?= examples.customer_bot:agent
 
 .PHONY: serve
-serve: ## Run `fortify serve` on the customer_bot demo (override with AGENT_SPEC=)
+serve: ## Run `hexgate serve` on the customer_bot demo (override with AGENT_SPEC=)
 # Reads HEXGATE_KEY from asianf/.env at startup. Uvicorn-style spec —
 # the agent name + tools come from the loaded object, no env vars to
 # keep in sync.
-	$(UV) fortify serve $(AGENT_SPEC)
+	$(UV) hexgate serve $(AGENT_SPEC)
 
 # -------- Full platform demo (multi-terminal) --------
 
@@ -193,7 +193,7 @@ demo-platform: ## Print 3-terminal instructions for the full platform demo
 	@echo "  Terminal 3 — your local agent bridged to the platform:"
 	@echo "      1. Open  http://localhost:5173/tokens  and mint a dev token"
 	@echo "      2. Add to asianf/.env:  HEXGATE_KEY=fty_live_..."
-	@echo "      3. make serve  (or: fortify serve <your.module:agent>)"
+	@echo "      3. make serve  (or: hexgate serve <your.module:agent>)"
 	@echo ""
 	@echo "Then chat with the live agent at  http://localhost:5173/playground"
 	@echo ""

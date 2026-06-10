@@ -244,7 +244,7 @@ def build_runtime_from_local_agent(
         # Invariant: no If-None-Match was sent, so a 304 is impossible.
         # Raise so `python -O` can't strip the check.
         raise RuntimeError(
-            f"FortifyClient.get_agent({agent_name!r}) returned no payload "
+            f"HexgateClient.get_agent({agent_name!r}) returned no payload "
             "on initial fetch (no If-None-Match was sent)"
         )
 

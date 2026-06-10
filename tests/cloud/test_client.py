@@ -56,7 +56,7 @@ def _b64url(b: bytes) -> str:
 
 @pytest.fixture
 def clean_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Clear the FORTIFY_* env keys so resolution tests don't leak state."""
+    """Clear the HEXGATE_* env keys so resolution tests don't leak state."""
     for key in (
         "HEXGATE_KEY",
         "HEXGATE_API_URL",
