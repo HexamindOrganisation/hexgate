@@ -9,7 +9,7 @@ build-backend = "setuptools.build_meta"
 # 2014 by an unrelated abandoned project, so we publish under the brand
 # name and let import-time keep the existing identifier.
 name = "hexgate"
-version = "0.1.0"
+version = "0.1.1"
 description = "HexaGate Fortify — authorization infrastructure for AI agents (agent runtime + cloud client)."
 readme = "README.md"
 requires-python = ">=3.13"
