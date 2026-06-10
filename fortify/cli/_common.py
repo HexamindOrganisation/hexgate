@@ -240,7 +240,13 @@ def build_runtime_from_local_agent(
     config = FortifyConfig.from_env()
     client = FortifyClient(config)
     payload, _etag = client.get_agent(agent_name)
-    assert payload is not None, "first get_agent has no If-None-Match"
+    if payload is None:
+        # Invariant: no If-None-Match was sent, so a 304 is impossible.
+        # Raise so `python -O` can't strip the check.
+        raise RuntimeError(
+            f"FortifyClient.get_agent({agent_name!r}) returned no payload "
+            "on initial fetch (no If-None-Match was sent)"
+        )
 
     policy_payload = yaml.safe_load(payload["policy_yaml"]) or {}
     policy = load_policy_set_from_dict(policy_payload)

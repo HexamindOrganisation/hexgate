@@ -88,7 +88,13 @@ def resolve_policy(
         client = FortifyClient(FortifyConfig.from_env(api_key=api_key))
     if client is not None:
         payload, etag = client.get_agent(agent_name)
-        assert payload is not None, "get_agent without If-None-Match — 304 impossible"
+        if payload is None:
+            # Invariant: no If-None-Match was sent, so a 304 is impossible.
+            # Raise so `python -O` can't strip the check.
+            raise PolicyBindingError(
+                f"FortifyClient.get_agent({agent_name!r}) returned no payload "
+                "on initial fetch (no If-None-Match was sent)"
+            )
         engine, source = platform_policy_from_payload(client, agent_name, payload, etag)
         return ResolvedPolicy(engine, source)
 

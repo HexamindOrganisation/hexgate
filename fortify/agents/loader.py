@@ -59,6 +59,7 @@ REGISTERED_AGENTS: dict[str, AgentFactory] = {}
 def _apply_local_override(
     agent: AgentGraph,
     approval_handler: ApprovalHandler | None,
+    decision_observer: "DecisionObserver | None" = None,
 ) -> AgentGraph | None:
     """Apply ``FORTIFY_LOCAL_POLICY`` to a freshly-built agent, if set.
 
@@ -66,6 +67,12 @@ def _apply_local_override(
     ``None`` when no override is configured — the caller then falls
     back to the normal :func:`enforce_policy` path with the agent's
     own packaged policy.
+
+    ``decision_observer`` is threaded through to the override's
+    ``enforce_policy`` call so the chat decision panel keeps working
+    when ``FORTIFY_LOCAL_POLICY`` is set — without this, the loader's
+    other path (the no-override branch) forwards the observer but this
+    one silently drops it.
 
     Extracted from :func:`load_builtin_agent` + :func:`load_local_agent`
     which shared this exact block verbatim. :func:`load_fortify_agent`
@@ -77,7 +84,11 @@ def _apply_local_override(
         return None
     bundle, source = override
     return enforce_policy(
-        agent, bundle, approval_handler=approval_handler, source=source
+        agent,
+        bundle,
+        approval_handler=approval_handler,
+        source=source,
+        decision_observer=decision_observer,
     )
 
 
@@ -257,7 +268,7 @@ def load_builtin_agent(
         name=spec.name,
         bind_policy=False,  # the loader applies its own policy below
     )
-    overridden = _apply_local_override(agent, approval_handler)
+    overridden = _apply_local_override(agent, approval_handler, decision_observer=decision_observer)
     if overridden is not None:
         return overridden, handler
     return enforce_policy(
@@ -296,7 +307,7 @@ def load_local_agent(
         name=spec.name,
         bind_policy=False,  # the loader applies its own policy below
     )
-    overridden = _apply_local_override(agent, approval_handler)
+    overridden = _apply_local_override(agent, approval_handler, decision_observer=decision_observer)
     if overridden is not None:
         return overridden, handler
     return enforce_policy(
@@ -475,7 +486,14 @@ def load_fortify_agent(
     )
     client = FortifyClient(config)
     payload, initial_etag = client.get_agent(resolved_name)
-    assert payload is not None, "first get_agent has no If-None-Match — 304 impossible"
+    if payload is None:
+        # Invariant: the first get_agent has no If-None-Match, so a 304
+        # is impossible — but use `raise` not `assert` so `python -O`
+        # can't strip the check.
+        raise RuntimeError(
+            "FortifyClient.get_agent returned no payload on initial fetch "
+            "(no If-None-Match was sent, so 304 should be impossible)"
+        )
 
     spec = AgentSpec.model_validate(yaml.safe_load(payload["agent_yaml"]) or {})
     system_prompt = payload.get("system_md") or ""

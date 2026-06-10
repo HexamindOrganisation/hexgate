@@ -200,7 +200,10 @@ class AuditSender:
         task.add_done_callback(self._tasks.discard)
 
     async def _send(self, event: AuditEvent) -> None:
-        assert self._client is not None
+        if self._client is None:
+            # Invariant: _send is only reached after start() initialised
+            # the client. Raise so `python -O` can't strip the check.
+            raise RuntimeError("audit sender _send called before start()")
         async with self._semaphore:
             payload = event.as_payload()
             try:

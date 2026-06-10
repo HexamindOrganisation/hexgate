@@ -217,6 +217,52 @@ def test_load_builtin_agent_picks_up_override(
 
 
 @needs_opa
+def test_load_builtin_agent_threads_decision_observer_under_override(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When ``FORTIFY_LOCAL_POLICY`` is set, the override path must still
+    forward ``decision_observer`` to ``enforce_policy`` — otherwise the
+    chat decision panel renders nothing once the env var is in play.
+
+    Regression for the silent-drop bug in ``_apply_local_override`` where
+    the override branch swallowed the observer kwarg while the
+    no-override branch forwarded it.
+    """
+    import types
+    from typing import Any
+
+    bundle_dir = _build_bundle_dir(tmp_path / "bundle")
+    monkeypatch.setenv("FORTIFY_LOCAL_POLICY", str(bundle_dir))
+
+    captured: dict[str, Any] = {}
+
+    def fake_create_agent(**kwargs: Any) -> tuple[Any, str]:
+        return types.SimpleNamespace(name="agent"), "handler"
+
+    def fake_enforce_policy(
+        _agent: Any,
+        policy: Any,
+        *,
+        approval_handler: Any = None,
+        source: Any = None,
+        decision_observer: Any = None,
+    ) -> Any:
+        captured["decision_observer"] = decision_observer
+        return _agent
+
+    monkeypatch.setattr(loader, "create_agent", fake_create_agent)
+    monkeypatch.setattr(loader, "enforce_policy", fake_enforce_policy)
+
+    sentinel = lambda _event: None  # noqa: E731 — sentinel callable for identity check
+    loader.load_builtin_agent("researcher", decision_observer=sentinel)
+    assert captured["decision_observer"] is sentinel, (
+        "load_builtin_agent should forward decision_observer to enforce_policy "
+        "even when FORTIFY_LOCAL_POLICY is set; got "
+        f"{captured.get('decision_observer')!r}"
+    )
+
+
+@needs_opa
 def test_load_builtin_agent_uses_original_policy_without_override(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
