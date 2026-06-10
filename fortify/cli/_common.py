@@ -8,7 +8,10 @@ import importlib.util
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
+
+if TYPE_CHECKING:
+    from fortify.security.enforcer import DecisionObserver
 
 from rich.console import Console, Group
 from rich.panel import Panel
@@ -43,8 +46,22 @@ def build_runtime(
     model: str | None,
     local_only: bool = False,
     approval_handler: ApprovalHandler | None = None,
+    decision_observer: "DecisionObserver | None" = None,
 ) -> AgentRuntime:
     """Create the runtime shared by ``fortify chat`` and ``fortify serve``.
+
+    ``agent_name`` accepts two forms:
+
+    * Plain id (``"researcher"``) — resolved via local / registered /
+      builtin lookup, then enforced through the standard loader. This
+      is the existing path.
+    * uvicorn-style spec (``"examples.customer_bot:agent"``) — imported
+      directly from the module and used as-is. Skips the name resolver
+      entirely; the agent object is expected to be a fully-configured
+      :class:`FortifyAgent` (typically the user's module already called
+      ``.enforce_policy(...)`` before exporting it). Closes the
+      "this loads in serve but not chat" footgun — same spec form
+      ``fortify serve`` already accepts.
 
     ``local_only=True`` keeps the loader off the Fortify Cloud path even
     when ``FORTIFY_KEY`` is present in the environment — what terminal
@@ -52,8 +69,23 @@ def build_runtime(
     tunnel. ``fortify serve`` passes ``local_only=False`` so policy edits
     in the dashboard land at the next turn boundary. ``approval_handler``
     threads to :func:`load_agent` for inline ``NEEDS_APPROVAL`` resolution.
+    ``decision_observer`` likewise threads through — ``fortify chat``
+    uses it to render denies / approvals in the REPL.
     """
     import os
+
+    # Spec form (``module.path:attr``) — handled out-of-band from the
+    # name resolver. A colon in a plain id is already discouraged
+    # (YAML-loaded agent names with colons invite trouble), so the
+    # branch is unambiguous and a clean ModuleNotFoundError beats a
+    # confusing "agent not found" if the spec is misspelled.
+    if ":" in agent_name:
+        return _build_runtime_from_spec(
+            settings,
+            spec=agent_name,
+            approval_handler=approval_handler,
+            decision_observer=decision_observer,
+        )
 
     tools = [web_search, fetch]
     resolved_model = model or settings.model
@@ -66,6 +98,7 @@ def build_runtime(
         extra_tools={tool.name: tool for tool in tools},
         local_only=local_only,
         approval_handler=approval_handler,
+        decision_observer=decision_observer,
     )
     runtime_tools = list(getattr(agent, "tools", [])) + list(tools)
     tools_by_name = {
@@ -81,6 +114,61 @@ def build_runtime(
         handler=handler,
         agent_name=agent_name,
         agent_source=agent_source,
+        model=resolved_model,
+        tools_by_name=tools_by_name,
+    )
+
+
+def _build_runtime_from_spec(
+    settings: Settings,
+    *,
+    spec: str,
+    approval_handler: ApprovalHandler | None,
+    decision_observer: "DecisionObserver | None",
+) -> AgentRuntime:
+    """Resolve a ``module:attr`` spec to an :class:`AgentRuntime`, local-only.
+
+    The agent object is taken as-is — no platform round-trip, no manifest
+    re-registration, no policy fetch. The user's module is responsible
+    for having called ``.enforce_policy(...)`` if they want enforcement;
+    chat just wires the CLI's approval handler and decision observer
+    into the agent's existing enforcer (reusing the in-place injectors
+    from the loader so registered-agent and spec'd-agent share one path)."""
+    from fortify.agents.loader import (
+        _apply_approval_handler,
+        _apply_decision_observer,
+    )
+    from fortify.tracing.langfuse import get_langfuse_handler
+
+    agent_obj = load_spec(spec)
+    agent_name = getattr(agent_obj, "name", None) or spec
+
+    if approval_handler is not None:
+        agent_obj = _apply_approval_handler(agent_obj, approval_handler)
+    if decision_observer is not None:
+        _apply_decision_observer(agent_obj, decision_observer)
+
+    handler = get_langfuse_handler(
+        session_id="fortify-cli",
+        tags=["fortify", "spec", agent_name],
+    )
+
+    # The agent object carries its own model (str or BaseChatModel);
+    # stringify for the welcome banner. Fall back to settings.model
+    # if the spec'd object doesn't have a .model attr (unusual but
+    # possible for non-FortifyAgent shapes).
+    raw_model = getattr(agent_obj, "model", None)
+    resolved_model = str(raw_model) if raw_model is not None else settings.model
+
+    tools_by_name = {
+        getattr(t, "name", getattr(t, "__name__", "tool")): t
+        for t in getattr(agent_obj, "tools", [])
+    }
+    return AgentRuntime(
+        agent=agent_obj,
+        handler=handler,
+        agent_name=agent_name,
+        agent_source="spec",
         model=resolved_model,
         tools_by_name=tools_by_name,
     )
@@ -152,7 +240,13 @@ def build_runtime_from_local_agent(
     config = FortifyConfig.from_env()
     client = FortifyClient(config)
     payload, _etag = client.get_agent(agent_name)
-    assert payload is not None, "first get_agent has no If-None-Match"
+    if payload is None:
+        # Invariant: no If-None-Match was sent, so a 304 is impossible.
+        # Raise so `python -O` can't strip the check.
+        raise RuntimeError(
+            f"FortifyClient.get_agent({agent_name!r}) returned no payload "
+            "on initial fetch (no If-None-Match was sent)"
+        )
 
     policy_payload = yaml.safe_load(payload["policy_yaml"]) or {}
     policy = load_policy_set_from_dict(policy_payload)
@@ -289,7 +383,11 @@ def build_approval_handler(console: Console, mode: ApprovalMode):
 def add_shared_agent_flags(parser: argparse.ArgumentParser) -> None:
     """Register flags shared between `fortify chat` and `fortify serve`."""
     parser.add_argument(
-        "--agent", help="Agent id to load from local or builtin definitions."
+        "--agent",
+        help=(
+            "Agent id (resolved from local / registered / builtin definitions) "
+            "OR a uvicorn-style 'module.path:attr' spec to import directly."
+        ),
     )
     parser.add_argument(
         "--model", help="Optional model override for the selected agent."

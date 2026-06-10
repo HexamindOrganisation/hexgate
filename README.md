@@ -54,7 +54,8 @@ Useful next commands:
 
 ```bash
 fortify chat --list-agents
-fortify chat --agent researcher
+fortify chat --agent researcher                                      # by id
+fortify chat --agent examples.customer_bot:agent                     # by module:attr (same shape as `fortify serve`)
 fortify chat --use examples/file_agents.py --agent workspace_explorer
 fortify chat --use examples/research_agents.py --agent update_researcher
 ```
@@ -64,6 +65,21 @@ The included local agent lives in `examples/example_agent/`, and the CLI can als
 - builtin packaged agents like `researcher`
 - code-defined agents registered from `examples/file_agents.py`
 - code-defined research agents registered from `examples/research_agents.py`
+
+## 🧭 Which path do I pick?
+
+The two Quick Starts above aren't competing — they answer different questions.
+
+**Inner loop — `fortify chat`.** A single-process REPL against a local or builtin agent. No platform, no Docker, no browser. The chat command sets `FORTIFY_LOCAL_MODE=1` automatically so audit stays on your machine even if `FORTIFY_KEY` lives in your `.env` from an earlier session. Denies and approval-required calls render as inline panels in the terminal — same `Decision` data the platform would log, surfaced where you're iterating. Reach for `chat` when you're authoring a policy YAML, tweaking a tool, or shaping a system prompt.
+
+**Team loop — `fortify serve` + dashboard Playground.** Same agent code, but the policy + decisions round-trip through the platform. You get auditable decisions in ClickHouse, the shared Playground UI, and live policy edits via the dashboard. Reach for `serve` when you're collaborating on an agent's behaviour, debugging a production-like trace, or demoing.
+
+| Path | Needs platform? | Audit destination | Policy edits visible at | Best for |
+|------|-----------------|-------------------|--------------------------|----------|
+| `fortify chat --agent ...` | No | Local terminal panel | Edit + restart (hot-reload only when `FORTIFY_LOCAL_POLICY` is set) | Inner loop, policy authoring |
+| `fortify serve --agent ...` + Playground | Yes | ClickHouse via `/v1/audit/decisions` | Per-turn fetch from dashboard | Team review, demos, integration testing |
+
+Both commands accept either a plain agent id (`--agent researcher`) or a uvicorn-style `module.path:attr` spec (`--agent examples.customer_bot:agent`), so the same entry-point string works in both workflows.
 
 ## 🚀 Quick Start — Platform
 

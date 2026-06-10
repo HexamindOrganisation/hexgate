@@ -15,6 +15,7 @@ if TYPE_CHECKING:
     # eventually import from this module).
     from fortify.cloud.client import FortifyClient
     from fortify.security.binding import PolicyBinding
+    from fortify.security.enforcer import DecisionObserver
     from fortify.security.source import PolicySource
 
 from langchain.agents import create_agent as create_langchain_agent
@@ -404,6 +405,7 @@ class FortifyAgent:
         *,
         approval_handler: ApprovalHandler | None = None,
         source: PolicySource | None = None,
+        decision_observer: "DecisionObserver | None" = None,
     ) -> Self:
         """Return a new agent with Gate 1 policy enforcement applied.
 
@@ -418,6 +420,10 @@ class FortifyAgent:
         carries — pass one for hot reload (see :func:`_bind_policy` /
         ``load_fortify_agent``); the default ``None`` freezes ``policy``
         so a later :meth:`refresh_policy` can't swap it back out.
+
+        ``decision_observer`` (callable) receives every :class:`Decision`
+        after it's built — ``fortify chat`` uses it to render denies /
+        approvals inline; default ``None`` is silent.
 
         The ``(policy, source)`` matrix:
 
@@ -450,7 +456,11 @@ class FortifyAgent:
             engine = policy
         else:
             engine = load_policy_set(policy)
-        enforcer = build_enforcer(engine, agent_name=self.name or "default")
+        enforcer = build_enforcer(
+            engine,
+            agent_name=self.name or "default",
+            decision_observer=decision_observer,
+        )
 
         wrapped: list[ToolSpec] = []
         for tool_spec in self.tools:
@@ -490,10 +500,14 @@ def enforce_policy(
     *,
     approval_handler: ApprovalHandler | None = None,
     source: PolicySource | None = None,
+    decision_observer: "DecisionObserver | None" = None,
 ) -> AgentGraph:
     """Functional alias for :meth:`FortifyAgent.enforce_policy`."""
     return agent.enforce_policy(
-        policy, approval_handler=approval_handler, source=source
+        policy,
+        approval_handler=approval_handler,
+        source=source,
+        decision_observer=decision_observer,
     )
 
 
@@ -603,6 +617,11 @@ def _should_bind_policy(bind_policy: bool | None, name: str | None) -> bool:
         construction-time 404. Set ``FORTIFY_BIND_AGENTS=1`` to opt in, or pass
         ``bind_policy=True`` explicitly.
 
+    ``FORTIFY_LOCAL_MODE`` (a truthy value) shorts the auto path to ``False``
+    regardless of the other env signals — same one-way kill switch the audit
+    sender respects. The explicit ``bind_policy=True`` form is left alone so a
+    deliberate caller can still override local mode if they really mean it.
+
     ``bind_policy=True`` requires a ``name``; that argument check is enforced at
     the :func:`create_agent` boundary, not here (this stays a pure predicate).
     """
@@ -611,6 +630,14 @@ def _should_bind_policy(bind_policy: bool | None, name: str | None) -> bool:
     if bind_policy is True:
         return True
     if not name:
+        return False
+    # Local-mode kill switch: when the bootstrap (or any other caller) has
+    # opted into local mode, the auto-detect must not surprise-bind to the
+    # platform — that would defeat the whole point of the gate. ``bind_policy=True``
+    # is honored above so a deliberate caller can still opt in.
+    from fortify import audit
+
+    if audit._local_mode_active():
         return False
     if os.environ.get("FORTIFY_LOCAL_POLICY"):
         return True

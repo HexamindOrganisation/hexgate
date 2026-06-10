@@ -234,7 +234,12 @@ class FortifyClient:
         copy — mutating it doesn't affect the cached extraction.
         """
         self._ensure_key_verified()
-        assert self._facts is not None  # populated by _ensure_key_verified
+        if self._facts is None:
+            # Invariant: _ensure_key_verified populates self._facts on success.
+            # Raise so `python -O` can't strip the check.
+            raise RuntimeError(
+                "biscuit_facts called but _ensure_key_verified did not populate facts"
+            )
         return {name: list(values) for name, values in self._facts.items()}
 
     def public_key_bytes(self) -> bytes:
@@ -280,7 +285,12 @@ class FortifyClient:
         this drops the ETag tuple for callers that don't care about
         conditional requests."""
         payload, _ = self._raw_get(url, authorize=True)
-        assert payload is not None, "_get is never called with If-None-Match"
+        if payload is None:
+            # Invariant: _get is never called with If-None-Match, so a 304
+            # is impossible. Raise so `python -O` can't strip the check.
+            raise FortifyError(
+                f"_raw_get({url!r}) returned no payload on unconditional GET"
+            )
         return payload
 
     def _raw_get(
