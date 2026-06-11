@@ -282,7 +282,7 @@ export function useRequestVerify() {
  * session cookie and bounces back to the dashboard.
  *
  * Returns ``null`` when OAuth isn't configured on the backend
- * (the /authorize route 404s when FORTIFY_GOOGLE_CLIENT_ID is unset) —
+ * (the /authorize route 404s when HEXGATE_GOOGLE_CLIENT_ID is unset) —
  * callers hide the Google button when this returns null on mount.
  */
 export async function startGoogleSignIn(): Promise<void> {

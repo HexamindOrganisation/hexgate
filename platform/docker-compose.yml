@@ -3,7 +3,7 @@
 services:
   clickhouse:
     image: clickhouse/clickhouse-server:24.10
-    container_name: fortify-clickhouse
+    container_name: hexgate-clickhouse
     ports:
       # Offset from the 8123/9000 defaults to coexist with other local
       # instances; loopback-only since the dev credentials are committed.
@@ -15,9 +15,9 @@ services:
       - ./clickhouse/init:/docker-entrypoint-initdb.d:ro
     environment:
       # LOCAL DEV ONLY — never reuse these credentials anywhere deployed.
-      CLICKHOUSE_DB: fortify_audit
-      CLICKHOUSE_USER: fortify
-      CLICKHOUSE_PASSWORD: ${FORTIFY_CLICKHOUSE_PASSWORD:-fortify-dev-password}
+      CLICKHOUSE_DB: hexgate_audit
+      CLICKHOUSE_USER: hexgate
+      CLICKHOUSE_PASSWORD: ${HEXGATE_CLICKHOUSE_PASSWORD:-hexgate-dev-password}
       CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
     ulimits:
       nofile:

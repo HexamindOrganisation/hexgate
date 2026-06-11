@@ -8,8 +8,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 
-from fortify.audit import AuditEvent, AuditSender
-from fortify.security.decision import Decision, DecisionOutcome
+from hexgate.audit import AuditEvent, AuditSender
+from hexgate.security.decision import Decision, DecisionOutcome
 
 
 def _event() -> AuditEvent:
@@ -57,7 +57,7 @@ async def test_semaphore_saturation_drops_events(
     sender = AuditSender("http://x/y", "k", max_in_flight=1)
     await sender._semaphore.acquire()
     try:
-        with caplog.at_level(logging.WARNING, logger="fortify.audit"):
+        with caplog.at_level(logging.WARNING, logger="hexgate.audit"):
             for _ in range(5):
                 sender.emit(_event())
         assert sender._dropped == 5
@@ -107,7 +107,7 @@ async def test_network_error_logged_not_raised(
     sender._client = MagicMock()
     sender._client.post = AsyncMock(side_effect=httpx.ConnectError("refused"))
     sender._client.aclose = AsyncMock()
-    with caplog.at_level(logging.WARNING, logger="fortify.audit"):
+    with caplog.at_level(logging.WARNING, logger="hexgate.audit"):
         sender.emit(_event())
         await asyncio.gather(*sender._tasks)
     assert any("network error" in r.message for r in caplog.records)
@@ -116,7 +116,7 @@ async def test_network_error_logged_not_raised(
 def test_no_running_loop_skips_silently(caplog: "logging.LogCaptureFixture") -> None:
     """Sync caller with no event loop: emit no-ops with a one-time warning."""
     sender = AuditSender("http://x/y", "k")
-    with caplog.at_level(logging.WARNING, logger="fortify.audit"):
+    with caplog.at_level(logging.WARNING, logger="hexgate.audit"):
         sender.emit(_event())
         sender.emit(_event())  # second call: silent
     assert len(sender._tasks) == 0

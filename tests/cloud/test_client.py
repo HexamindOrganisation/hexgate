@@ -1,4 +1,4 @@
-"""Tests for ``FortifyConfig`` and ``FortifyClient`` (SDK side).
+"""Tests for ``HexgateConfig`` and ``HexgateClient`` (SDK side).
 
 Covers configuration resolution (explicit args / env / key prefix),
 public-key sourcing precedence, and the lazy verify-before-trust flow
@@ -13,10 +13,10 @@ from typing import Any
 import pytest
 from biscuit_auth import Algorithm, BiscuitBuilder, KeyPair, PrivateKey
 
-from fortify.cloud.client import (
-    FortifyClient,
-    FortifyConfig,
-    FortifyError,
+from hexgate.cloud.client import (
+    HexgateClient,
+    HexgateConfig,
+    HexgateError,
 )
 
 
@@ -56,24 +56,24 @@ def _b64url(b: bytes) -> str:
 
 @pytest.fixture
 def clean_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Clear the FORTIFY_* env keys so resolution tests don't leak state."""
+    """Clear the HEXGATE_* env keys so resolution tests don't leak state."""
     for key in (
-        "FORTIFY_KEY",
-        "FORTIFY_API_URL",
-        "FORTIFY_PROJECT_ID",
-        "FORTIFY_PUBLIC_KEY",
+        "HEXGATE_KEY",
+        "HEXGATE_API_URL",
+        "HEXGATE_PROJECT_ID",
+        "HEXGATE_PUBLIC_KEY",
     ):
         monkeypatch.delenv(key, raising=False)
 
 
 # ---------------------------------------------------------------------------
-# FortifyConfig.from_env — resolution rules
+# HexgateConfig.from_env — resolution rules
 # ---------------------------------------------------------------------------
 
 
 def test_config_uses_explicit_args(clean_env: None) -> None:
     """Explicit args win over env, env over key prefix."""
-    config = FortifyConfig.from_env(
+    config = HexgateConfig.from_env(
         api_key="fty_live_explicit-proj_abc",
         base_url="http://test.local",
         project_id="overridden",
@@ -84,8 +84,8 @@ def test_config_uses_explicit_args(clean_env: None) -> None:
 
 
 def test_config_strips_trailing_slash_from_base_url(clean_env: None) -> None:
-    """A trailing ``/`` on FORTIFY_API_URL would double up in path concatenation."""
-    config = FortifyConfig.from_env(
+    """A trailing ``/`` on HEXGATE_API_URL would double up in path concatenation."""
+    config = HexgateConfig.from_env(
         api_key="fty_live_proj_secret",
         base_url="http://test.local/",
     )
@@ -96,10 +96,10 @@ def test_config_resolves_project_from_env(
     monkeypatch: pytest.MonkeyPatch,
     clean_env: None,
 ) -> None:
-    """FORTIFY_PROJECT_ID overrides whatever the key prefix encodes."""
-    monkeypatch.setenv("FORTIFY_KEY", "fty_live_key-proj_secret")
-    monkeypatch.setenv("FORTIFY_PROJECT_ID", "env-proj")
-    config = FortifyConfig.from_env()
+    """HEXGATE_PROJECT_ID overrides whatever the key prefix encodes."""
+    monkeypatch.setenv("HEXGATE_KEY", "fty_live_key-proj_secret")
+    monkeypatch.setenv("HEXGATE_PROJECT_ID", "env-proj")
+    config = HexgateConfig.from_env()
     assert config.project_id == "env-proj"
 
 
@@ -108,15 +108,15 @@ def test_config_resolves_project_from_key_prefix(
     clean_env: None,
 ) -> None:
     """When neither arg nor env give a project, parse it from the key prefix."""
-    monkeypatch.setenv("FORTIFY_KEY", "fty_live_my-cool-project_secret")
-    config = FortifyConfig.from_env()
+    monkeypatch.setenv("HEXGATE_KEY", "fty_live_my-cool-project_secret")
+    config = HexgateConfig.from_env()
     assert config.project_id == "my-cool-project"
 
 
 def test_config_raises_when_key_missing(clean_env: None) -> None:
-    """No FORTIFY_KEY is fail-fast, not silent default."""
-    with pytest.raises(FortifyError, match="FORTIFY_KEY not set"):
-        FortifyConfig.from_env()
+    """No HEXGATE_KEY is fail-fast, not silent default."""
+    with pytest.raises(HexgateError, match="HEXGATE_KEY not set"):
+        HexgateConfig.from_env()
 
 
 def test_config_allows_unresolvable_project(
@@ -130,8 +130,8 @@ def test_config_allows_unresolvable_project(
     it through URLs. A missing project_id surfaces as ``None``,
     not an error.
     """
-    monkeypatch.setenv("FORTIFY_KEY", "completely_unparseable_key")
-    config = FortifyConfig.from_env()
+    monkeypatch.setenv("HEXGATE_KEY", "completely_unparseable_key")
+    config = HexgateConfig.from_env()
     assert config.project_id is None
     # The key still goes through verbatim — the server is the
     # authority on whether it's actually valid.
@@ -139,7 +139,7 @@ def test_config_allows_unresolvable_project(
 
 
 # ---------------------------------------------------------------------------
-# FortifyConfig.from_env — public key sourcing
+# HexgateConfig.from_env — public key sourcing
 # ---------------------------------------------------------------------------
 
 
@@ -149,7 +149,7 @@ def test_config_public_key_from_explicit_arg(
 ) -> None:
     """Explicit ``public_key=`` is preferred over env."""
     _, pub = keys
-    config = FortifyConfig.from_env(
+    config = HexgateConfig.from_env(
         api_key="fty_live_proj_secret",
         public_key=pub,
     )
@@ -161,11 +161,11 @@ def test_config_public_key_from_env(
     monkeypatch: pytest.MonkeyPatch,
     clean_env: None,
 ) -> None:
-    """FORTIFY_PUBLIC_KEY env (urlsafe-b64) decodes into raw bytes."""
+    """HEXGATE_PUBLIC_KEY env (urlsafe-b64) decodes into raw bytes."""
     _, pub = keys
-    monkeypatch.setenv("FORTIFY_KEY", "fty_live_proj_secret")
-    monkeypatch.setenv("FORTIFY_PUBLIC_KEY", _b64url(pub))
-    config = FortifyConfig.from_env()
+    monkeypatch.setenv("HEXGATE_KEY", "fty_live_proj_secret")
+    monkeypatch.setenv("HEXGATE_PUBLIC_KEY", _b64url(pub))
+    config = HexgateConfig.from_env()
     assert config.public_key == pub
 
 
@@ -176,10 +176,10 @@ def test_config_public_key_env_handles_missing_padding(
 ) -> None:
     """urlsafe_b64decode requires padding, but operators may strip it."""
     _, pub = keys
-    monkeypatch.setenv("FORTIFY_KEY", "fty_live_proj_secret")
+    monkeypatch.setenv("HEXGATE_KEY", "fty_live_proj_secret")
     encoded = base64.urlsafe_b64encode(pub).decode("ascii").rstrip("=")
-    monkeypatch.setenv("FORTIFY_PUBLIC_KEY", encoded)
-    config = FortifyConfig.from_env()
+    monkeypatch.setenv("HEXGATE_PUBLIC_KEY", encoded)
+    config = HexgateConfig.from_env()
     assert config.public_key == pub
 
 
@@ -187,21 +187,21 @@ def test_config_invalid_pubkey_env_raises(
     monkeypatch: pytest.MonkeyPatch,
     clean_env: None,
 ) -> None:
-    """Non-base64 FORTIFY_PUBLIC_KEY is a startup-time misconfiguration."""
-    monkeypatch.setenv("FORTIFY_KEY", "fty_live_proj_secret")
-    monkeypatch.setenv("FORTIFY_PUBLIC_KEY", "!!!not-base64!!!")
-    with pytest.raises(FortifyError, match="not valid base64"):
-        FortifyConfig.from_env()
+    """Non-base64 HEXGATE_PUBLIC_KEY is a startup-time misconfiguration."""
+    monkeypatch.setenv("HEXGATE_KEY", "fty_live_proj_secret")
+    monkeypatch.setenv("HEXGATE_PUBLIC_KEY", "!!!not-base64!!!")
+    with pytest.raises(HexgateError, match="not valid base64"):
+        HexgateConfig.from_env()
 
 
 def test_config_no_public_key_when_neither_set(clean_env: None) -> None:
     """Without explicit arg or env var, public_key is None — JWKS fetch later."""
-    config = FortifyConfig.from_env(api_key="fty_live_proj_secret")
+    config = HexgateConfig.from_env(api_key="fty_live_proj_secret")
     assert config.public_key is None
 
 
 # ---------------------------------------------------------------------------
-# FortifyClient — lazy verify on first call
+# HexgateClient — lazy verify on first call
 # ---------------------------------------------------------------------------
 
 
@@ -222,18 +222,18 @@ def test_client_verifies_on_first_call_then_caches(
 ) -> None:
     """First call sets verified=True; second call short-circuits."""
     priv, pub = keys
-    config = FortifyConfig(
+    config = HexgateConfig(
         base_url="http://test",
         api_key=_envelope(priv),
         project_id="support-bot",
         public_key=pub,
     )
-    client = FortifyClient(config)
+    client = HexgateClient(config)
 
     calls: list[tuple[str, bool]] = []
 
     def fake_raw_get(
-        self: FortifyClient,
+        self: HexgateClient,
         url: str,
         *,
         authorize: bool,
@@ -242,7 +242,7 @@ def test_client_verifies_on_first_call_then_caches(
         calls.append((url, authorize))
         return _stub_get_agent_response(), None
 
-    monkeypatch.setattr(FortifyClient, "_raw_get", fake_raw_get)
+    monkeypatch.setattr(HexgateClient, "_raw_get", fake_raw_get)
 
     assert not client._verified
     client.get_agent("default")
@@ -261,20 +261,20 @@ def test_client_rejects_tampered_key_before_any_http(
     """A tampered envelope fails the sig check; no HTTP request is sent."""
     priv, pub = keys
     tampered = _envelope(priv)[:-4] + "AAAA"
-    config = FortifyConfig(
+    config = HexgateConfig(
         base_url="http://test",
         api_key=tampered,
         project_id="support-bot",
         public_key=pub,
     )
-    client = FortifyClient(config)
+    client = HexgateClient(config)
 
     def must_not_be_called(*args: Any, **kwargs: Any) -> dict[str, Any]:
         pytest.fail("HTTP request fired despite signature failure")
 
-    monkeypatch.setattr(FortifyClient, "_raw_get", must_not_be_called)
+    monkeypatch.setattr(HexgateClient, "_raw_get", must_not_be_called)
 
-    with pytest.raises(FortifyError, match="signature does not chain"):
+    with pytest.raises(HexgateError, match="signature does not chain"):
         client.get_agent("default")
 
 
@@ -282,23 +282,23 @@ def test_client_rejects_malformed_envelope(
     keys: tuple[bytes, bytes],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A non-fty envelope surfaces a clear FortifyError."""
+    """A non-fty envelope surfaces a clear HexgateError."""
     _, pub = keys
-    config = FortifyConfig(
+    config = HexgateConfig(
         base_url="http://test",
         api_key="not_an_envelope_at_all",
         project_id="support-bot",
         public_key=pub,
     )
-    client = FortifyClient(config)
+    client = HexgateClient(config)
 
     monkeypatch.setattr(
-        FortifyClient,
+        HexgateClient,
         "_raw_get",
         lambda *a, **kw: pytest.fail("HTTP fired despite malformed key"),
     )
 
-    with pytest.raises(FortifyError, match="malformed"):
+    with pytest.raises(HexgateError, match="malformed"):
         client.get_agent("default")
 
 
@@ -308,18 +308,18 @@ def test_client_fetches_jwks_when_pubkey_unset(
 ) -> None:
     """Without a cached pubkey, the client fetches /v1/.well-known/keys first."""
     priv, pub = keys
-    config = FortifyConfig(
+    config = HexgateConfig(
         base_url="http://test",
         api_key=_envelope(priv),
         project_id="support-bot",
         public_key=None,  # forces JWKS fetch
     )
-    client = FortifyClient(config)
+    client = HexgateClient(config)
 
     calls: list[tuple[str, bool]] = []
 
     def fake_raw_get(
-        self: FortifyClient,
+        self: HexgateClient,
         url: str,
         *,
         authorize: bool,
@@ -337,7 +337,7 @@ def test_client_fetches_jwks_when_pubkey_unset(
             )
         return _stub_get_agent_response(), None
 
-    monkeypatch.setattr(FortifyClient, "_raw_get", fake_raw_get)
+    monkeypatch.setattr(HexgateClient, "_raw_get", fake_raw_get)
 
     client.get_agent("default")
 
@@ -356,16 +356,16 @@ def test_client_jwks_response_with_unexpected_shape_raises(
 ) -> None:
     """A JWKS response missing 'keys' or 'x' surfaces a clear error."""
     priv, _ = keys
-    config = FortifyConfig(
+    config = HexgateConfig(
         base_url="http://test",
         api_key=_envelope(priv),
         project_id="support-bot",
         public_key=None,
     )
-    client = FortifyClient(config)
+    client = HexgateClient(config)
 
     monkeypatch.setattr(
-        FortifyClient,
+        HexgateClient,
         "_raw_get",
         lambda self, url, *, authorize, if_none_match=None: (
             {"unexpected": "shape"},
@@ -373,12 +373,12 @@ def test_client_jwks_response_with_unexpected_shape_raises(
         ),
     )
 
-    with pytest.raises(FortifyError, match="unexpected JWKS shape"):
+    with pytest.raises(HexgateError, match="unexpected JWKS shape"):
         client.get_agent("default")
 
 
 # ---------------------------------------------------------------------------
-# FortifyClient.biscuit_facts() — fact extraction behind the verify gate
+# HexgateClient.biscuit_facts() — fact extraction behind the verify gate
 # ---------------------------------------------------------------------------
 
 
@@ -388,7 +388,7 @@ def test_client_biscuit_facts_returns_token_facts(
 ) -> None:
     """biscuit_facts() runs the verify gate and returns the cached facts."""
     priv, pub = keys
-    config = FortifyConfig(
+    config = HexgateConfig(
         base_url="http://test",
         api_key=_envelope(
             priv, extra_facts='user("alice"); refund_limit(50); scope("refund");'
@@ -396,7 +396,7 @@ def test_client_biscuit_facts_returns_token_facts(
         project_id="support-bot",
         public_key=pub,
     )
-    client = FortifyClient(config)
+    client = HexgateClient(config)
 
     facts = client.biscuit_facts()
     # project + env are stamped by _envelope itself
@@ -409,18 +409,18 @@ def test_client_biscuit_facts_returns_token_facts(
 def test_client_biscuit_facts_runs_verify_gate(
     keys: tuple[bytes, bytes],
 ) -> None:
-    """A tampered token must surface as FortifyError, not return partial facts."""
+    """A tampered token must surface as HexgateError, not return partial facts."""
     priv, pub = keys
     tampered = _envelope(priv)[:-4] + "AAAA"
-    config = FortifyConfig(
+    config = HexgateConfig(
         base_url="http://test",
         api_key=tampered,
         project_id="support-bot",
         public_key=pub,
     )
-    client = FortifyClient(config)
+    client = HexgateClient(config)
 
-    with pytest.raises(FortifyError, match="signature does not chain"):
+    with pytest.raises(HexgateError, match="signature does not chain"):
         client.biscuit_facts()
 
 
@@ -429,13 +429,13 @@ def test_client_biscuit_facts_returns_independent_copy(
 ) -> None:
     """Mutating the returned dict must not poison the cached extraction."""
     priv, pub = keys
-    config = FortifyConfig(
+    config = HexgateConfig(
         base_url="http://test",
         api_key=_envelope(priv, extra_facts='user("alice");'),
         project_id="support-bot",
         public_key=pub,
     )
-    client = FortifyClient(config)
+    client = HexgateClient(config)
 
     first = client.biscuit_facts()
     first["user"].append("bob")

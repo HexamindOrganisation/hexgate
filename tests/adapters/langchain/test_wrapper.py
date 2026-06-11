@@ -14,13 +14,13 @@ from typing import Any
 import pytest
 from langchain_core.tools import BaseTool, tool
 
-from fortify.adapters.langchain import wrapper as wrapper_mod
-from fortify.adapters.langchain.agent import FortifyLangchainAgent
-from fortify.adapters.langchain.wrapper import wrap_langchain_agent
-from fortify.runtime import User
-from fortify.security import AgentPolicy, BaseToolPolicy, PolicySet, ResolvedPolicy
-from fortify.security.enforcer import PolicyEnforcer
-from fortify.security.policy_set import DEFAULT_ROLE_NAME
+from hexgate.adapters.langchain import wrapper as wrapper_mod
+from hexgate.adapters.langchain.agent import HexgateLangchainAgent
+from hexgate.adapters.langchain.wrapper import wrap_langchain_agent
+from hexgate.runtime import User
+from hexgate.security import AgentPolicy, BaseToolPolicy, PolicySet, ResolvedPolicy
+from hexgate.security.enforcer import PolicyEnforcer
+from hexgate.security.policy_set import DEFAULT_ROLE_NAME
 
 
 class _FakeCompiledGraph:
@@ -68,26 +68,26 @@ def resolved(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-def test_wrap_returns_fortify_proxy_with_supplied_tool_names(
+def test_wrap_returns_hexgate_proxy_with_supplied_tool_names(
     resolved: dict[str, Any],
 ) -> None:
     graph = _FakeCompiledGraph()
     tools = [_make_tool("a"), _make_tool("b")]
 
-    wrapped = wrap_langchain_agent(agent=graph, tools=tools, api_key="fortify-key")
+    wrapped = wrap_langchain_agent(agent=graph, tools=tools, api_key="hexgate-key")
 
-    assert isinstance(wrapped, FortifyLangchainAgent)
+    assert isinstance(wrapped, HexgateLangchainAgent)
     assert wrapped._tool_names == ["a", "b"]
     assert wrapped._agent is graph
-    assert wrapped._api_key == "fortify-key"
+    assert wrapped._api_key == "hexgate-key"
     assert resolved["name"] == "fake-graph"
-    assert resolved["key"] == "fortify-key"
+    assert resolved["key"] == "hexgate-key"
 
 
 def test_wrap_falls_back_to_env_var(
     monkeypatch: pytest.MonkeyPatch, resolved: dict[str, Any]
 ) -> None:
-    monkeypatch.setenv("FORTIFY_KEY", "from-env")
+    monkeypatch.setenv("HEXGATE_KEY", "from-env")
 
     wrapped = wrap_langchain_agent(agent=_FakeCompiledGraph(), tools=[])
 
@@ -97,7 +97,7 @@ def test_wrap_falls_back_to_env_var(
 def test_wrap_prefers_explicit_api_key_over_env(
     monkeypatch: pytest.MonkeyPatch, resolved: dict[str, Any]
 ) -> None:
-    monkeypatch.setenv("FORTIFY_KEY", "from-env")
+    monkeypatch.setenv("HEXGATE_KEY", "from-env")
 
     wrapped = wrap_langchain_agent(
         agent=_FakeCompiledGraph(), tools=[], api_key="explicit"
@@ -109,7 +109,7 @@ def test_wrap_prefers_explicit_api_key_over_env(
 def test_wrap_raises_when_no_api_key_available(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.delenv("FORTIFY_KEY", raising=False)
+    monkeypatch.delenv("HEXGATE_KEY", raising=False)
 
     with pytest.raises(ValueError, match="No API key provided"):
         wrap_langchain_agent(agent=_FakeCompiledGraph(), tools=[])
@@ -118,7 +118,7 @@ def test_wrap_raises_when_no_api_key_available(
 def test_wrap_treats_empty_api_key_string_as_missing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("FORTIFY_KEY", "")
+    monkeypatch.setenv("HEXGATE_KEY", "")
 
     with pytest.raises(ValueError, match="No API key provided"):
         wrap_langchain_agent(agent=_FakeCompiledGraph(), tools=[], api_key="")
@@ -138,7 +138,7 @@ def test_wrap_installs_enforcer_on_each_tool_in_place(
     wrap_langchain_agent(agent=_FakeCompiledGraph(), tools=tools, api_key="k")
 
     for t in tools:
-        assert getattr(t, "_fortify_enforcer_installed") is True
+        assert getattr(t, "_hexgate_enforcer_installed") is True
         assert t.handle_tool_error is True
 
 
@@ -190,7 +190,7 @@ def test_wrap_attaches_binding_with_audited_enforcer(
 
 
 # ---------------------------------------------------------------------------
-# FortifyLangchainAgent — per-call refresh
+# HexgateLangchainAgent — per-call refresh
 # ---------------------------------------------------------------------------
 
 
@@ -221,7 +221,7 @@ def _user() -> User:
 
 def test_invoke_refreshes_binding_first() -> None:
     binding = _CountingBinding()
-    proxy = FortifyLangchainAgent(
+    proxy = HexgateLangchainAgent(
         agent=_RunnableGraph(),
         api_key="k",
         tool_names=[],
@@ -237,7 +237,7 @@ def test_invoke_refreshes_binding_first() -> None:
 @pytest.mark.asyncio
 async def test_ainvoke_refreshes_binding_first() -> None:
     binding = _CountingBinding()
-    proxy = FortifyLangchainAgent(
+    proxy = HexgateLangchainAgent(
         agent=_RunnableGraph(),
         api_key="k",
         tool_names=[],
@@ -251,6 +251,6 @@ async def test_ainvoke_refreshes_binding_first() -> None:
 
 def test_proxy_without_binding_runs_fine() -> None:
     """Back-compat: a binding-less proxy (direct construction) still works."""
-    proxy = FortifyLangchainAgent(agent=_RunnableGraph(), api_key="k", tool_names=[])
+    proxy = HexgateLangchainAgent(agent=_RunnableGraph(), api_key="k", tool_names=[])
 
     assert proxy.invoke({"messages": []}, user=_user()) == {"ok": True}

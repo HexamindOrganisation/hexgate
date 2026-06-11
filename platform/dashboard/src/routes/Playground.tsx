@@ -156,7 +156,7 @@ function PlaygroundLive({ projectId }: { projectId: string }) {
             </div>
             <div className="mt-2 text-muted-foreground">
               Run <span className="font-mono text-foreground">fortify serve</span> with
-              your FORTIFY_KEY to expose an agent session here.
+              your HEXGATE_KEY to expose an agent session here.
             </div>
           </div>
         )}

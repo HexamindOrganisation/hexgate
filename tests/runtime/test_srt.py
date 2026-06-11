@@ -7,8 +7,8 @@ from typing import Any
 
 import pytest
 
-from fortify.runtime import srt as srt_module
-from fortify.runtime.srt import (
+from hexgate.runtime import srt as srt_module
+from hexgate.runtime.srt import (
     SrtUnavailableError,
     ensure_srt_available,
     find_srt,

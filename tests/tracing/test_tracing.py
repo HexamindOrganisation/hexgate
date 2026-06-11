@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from fortify.tracing import langfuse as lf
+from hexgate.tracing import langfuse as lf
 
 
 class LegacyCallbackHandler:
@@ -56,12 +56,12 @@ def test_get_langfuse_handler_supports_legacy_signature(
     handler = lf.get_langfuse_handler(
         session_id="session-1",
         user_id="user-1",
-        tags=["fortify", "linkup"],
+        tags=["hexgate", "linkup"],
     )
 
     assert handler.session_id == "session-1"
     assert handler.user_id == "user-1"
-    assert handler.tags == ["fortify", "linkup"]
+    assert handler.tags == ["hexgate", "linkup"]
 
 
 def test_get_langfuse_handler_supports_modern_signature(
@@ -73,13 +73,13 @@ def test_get_langfuse_handler_supports_modern_signature(
     handler = lf.get_langfuse_handler(
         session_id="session-1",
         user_id="user-1",
-        tags=["fortify", "linkup"],
+        tags=["hexgate", "linkup"],
     )
 
     assert handler.langfuse_metadata == {
         "langfuse_session_id": "session-1",
         "langfuse_user_id": "user-1",
-        "langfuse_tags": ["fortify", "linkup"],
+        "langfuse_tags": ["hexgate", "linkup"],
     }
 
 
@@ -92,7 +92,7 @@ def test_get_langfuse_runnable_config_includes_metadata() -> None:
         langfuse_metadata = {
             "langfuse_session_id": "session-1",
             "langfuse_user_id": None,
-            "langfuse_tags": ["fortify"],
+            "langfuse_tags": ["hexgate"],
         }
 
     config = lf.get_langfuse_runnable_config(Handler())
@@ -100,7 +100,7 @@ def test_get_langfuse_runnable_config_includes_metadata() -> None:
     assert len(config["callbacks"]) == 1
     assert config["metadata"] == {
         "langfuse_session_id": "session-1",
-        "langfuse_tags": ["fortify"],
+        "langfuse_tags": ["hexgate"],
     }
 
 

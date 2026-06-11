@@ -14,7 +14,7 @@ from typing import Any
 
 import pytest
 
-from fortify.security import (
+from hexgate.security import (
     RegoVerdict,
     WasmEvalError,
     WasmPolicy,
@@ -244,9 +244,9 @@ def test_from_bundle_path_rejects_ambiguous_directory(
 @needs_opa
 def test_unknown_entrypoint_raises_with_helpful_listing(demo_wasm: bytes) -> None:
     with pytest.raises(WasmEvalError, match="entrypoint .* not in bundle") as exc:
-        WasmPolicy.from_bytes(demo_wasm, entrypoint="fortify/policy/no_such_rule")
+        WasmPolicy.from_bytes(demo_wasm, entrypoint="hexgate/policy/no_such_rule")
     # The error names what *is* available so the caller can self-correct.
-    assert "fortify/policy/decision" in str(exc.value)
+    assert "hexgate/policy/decision" in str(exc.value)
 
 
 # ---------------------------------------------------------------------------
@@ -262,7 +262,7 @@ def test_from_bytes_cached_reuses_instance_on_same_hash(demo_wasm: bytes) -> Non
     when the bundle hadn't actually changed.
     """
     import hashlib
-    from fortify.security.wasm_engine import _wasm_policy_cache
+    from hexgate.security.wasm_engine import _wasm_policy_cache
 
     _wasm_policy_cache.clear()
     h = hashlib.sha256(demo_wasm).hexdigest()
@@ -277,8 +277,8 @@ def test_from_bytes_cached_reuses_instance_on_same_hash(demo_wasm: bytes) -> Non
 def test_from_bytes_cached_distinguishes_hashes(demo_wasm: bytes) -> None:
     """Different hash → different cached instance (no false collisions)."""
     import hashlib
-    from fortify.security import compile_to_rego, compile_to_wasm
-    from fortify.security.wasm_engine import _wasm_policy_cache
+    from hexgate.security import compile_to_rego, compile_to_wasm
+    from hexgate.security.wasm_engine import _wasm_policy_cache
 
     _wasm_policy_cache.clear()
     other_rego = compile_to_rego(

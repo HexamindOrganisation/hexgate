@@ -1,4 +1,4 @@
-# Demo policy for the `fortify policy` CLI.
+# Demo policy for the `hexgate policy` CLI.
 #
 # A customer-support agent with three selectable roles that inherit from a
 # shared read-only base. Rich enough to show every decision outcome:
@@ -6,27 +6,27 @@
 # and APPROVAL_REQUIRED.
 #
 # Try it:
-#   fortify policy validate   examples/demo_policy.yaml
-#   fortify policy show-rego   examples/demo_policy.yaml
-#   fortify policy build       examples/demo_policy.yaml --out /tmp/demo-bundle
+#   hexgate policy validate   examples/demo_policy.yaml
+#   hexgate policy show-rego   examples/demo_policy.yaml
+#   hexgate policy build       examples/demo_policy.yaml --out /tmp/demo-bundle
 #
 #   # ALLOW — within limits
-#   fortify policy test examples/demo_policy.yaml \
+#   hexgate policy test examples/demo_policy.yaml \
 #       --role billing --tool refund_order \
 #       --args '{"amount": 200, "currency": "USD"}' --engine wasm
 #
 #   # DENY — two constraints fail, both surfaced as violations
-#   fortify policy test examples/demo_policy.yaml \
+#   hexgate policy test examples/demo_policy.yaml \
 #       --role billing --tool refund_order \
 #       --args '{"amount": 700, "currency": "GBP"}' --engine wasm
 #
 #   # APPROVAL_REQUIRED
-#   fortify policy test examples/demo_policy.yaml \
+#   hexgate policy test examples/demo_policy.yaml \
 #       --role support --tool issue_credit \
 #       --args '{"amount": 50}' --engine wasm
 #
 #   # DENY by mode — default role can't refund at all
-#   fortify policy test examples/demo_policy.yaml \
+#   hexgate policy test examples/demo_policy.yaml \
 #       --role default --tool refund_order --args '{}' --engine wasm
 
 version: 1

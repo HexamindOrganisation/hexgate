@@ -822,7 +822,7 @@ def test_patch_member_role_403_for_plain_member(
 
     The helper-created member has no password (added via direct DB
     write), so we impersonate them via the X-Dev-User header gated
-    behind ``FORTIFY_ALLOW_DEV_USER_HEADER`` (enabled by the conftest
+    behind ``HEXGATE_ALLOW_DEV_USER_HEADER`` (enabled by the conftest
     for the test session). The dashboard never sends this header.
     """
     import asyncio

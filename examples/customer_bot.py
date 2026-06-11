@@ -1,7 +1,7 @@
 """Canonical end-to-end demo: a customer-support agent driven through
-the Fortify dashboard.
+the HexaGate dashboard.
 
-Built with ``fortify.create_agent()`` so the returned ``FortifyAgent``
+Built with ``hexgate.create_agent()`` so the returned ``HexgateAgent``
 carries its name, tools, model, and system prompt as plain attributes.
 The manifest builder reads everything off the object — no
 ``--tools`` / ``--system-prompt`` / ``--model`` flags needed when
@@ -10,15 +10,15 @@ registering.
 Workflow
 --------
 1. Run platform API + dashboard, sign in, create/select a project, mint a
-   token. Add it to ``asianf/.env`` as ``FORTIFY_KEY=fty_live_...``.
+   token. Add it to ``asianf/.env`` as ``HEXGATE_KEY=fty_live_...``.
 
-2. Serve the agent — one command. ``fortify serve`` auto-registers the
+2. Serve the agent — one command. ``hexgate serve`` auto-registers the
    manifest on first run (the platform generates a starter role-aware
    policy from the tool list), then opens the relay:
 
    .. code-block:: bash
 
-      uv run fortify serve examples.customer_bot:agent
+      uv run hexgate serve examples.customer_bot:agent
 
    ✓ Console prints "Registered agent 'customer_bot' (v1)" on first
      run, "already registered (manifest unchanged)" on subsequent runs.
@@ -44,7 +44,7 @@ Workflow
 
    .. code-block:: bash
 
-      uv run fortify serve examples.customer_bot:agent --no-auto-register
+      uv run hexgate serve examples.customer_bot:agent --no-auto-register
 
 Tool layout — exercises every branch of the classifier
 ------------------------------------------------------
@@ -64,7 +64,7 @@ import asyncio
 
 from langchain_core.tools import tool
 
-from fortify import create_agent
+from hexgate import create_agent
 
 
 # ---------------------------------------------------------------------------
@@ -143,11 +143,11 @@ def lookup_product(sku: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# The FortifyAgent. create_agent() returns (FortifyAgent, CallbackHandler);
-# we expose the agent as ``agent`` for ``fortify register --agent
-# examples.customer_bot:agent``. The FortifyAgent's .name, .tools,
+# The HexgateAgent. create_agent() returns (HexgateAgent, CallbackHandler);
+# we expose the agent as ``agent`` for ``hexgate register --agent
+# examples.customer_bot:agent``. The HexgateAgent's .name, .tools,
 # .model, and .system_prompt fields are read directly by
-# create_fortify_manifest — no need to repeat them on the CLI.
+# create_hexgate_manifest — no need to repeat them on the CLI.
 # ---------------------------------------------------------------------------
 
 

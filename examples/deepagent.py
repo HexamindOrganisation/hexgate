@@ -5,8 +5,8 @@ from deepagents import create_deep_agent
 from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI
 
-from fortify.runtime import User
-from fortify.adapters.langchain import wrap_langchain_agent
+from hexgate.runtime import User
+from hexgate.adapters.langchain import wrap_langchain_agent
 
 
 @tool

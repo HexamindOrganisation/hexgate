@@ -10,16 +10,16 @@ from pathlib import Path
 import pytest
 from rich.console import Console, Group
 
-from fortify.agents import loader
-from fortify.agents.loader import _apply_decision_observer
-from fortify.cli import _common
-from fortify.cli._common import (
+from hexgate.agents import loader
+from hexgate.agents.loader import _apply_decision_observer
+from hexgate.cli import _common
+from hexgate.cli._common import (
     AgentRuntime,
     build_approval_handler as _build_approval_handler,
     load_agent_script as _load_agent_script,
     prompt_for_approval as _prompt_for_approval,
 )
-from fortify.cli.chat import (
+from hexgate.cli.chat import (
     DOG_LOGO,
     _drain_decisions,
     _render_current_run,
@@ -27,11 +27,11 @@ from fortify.cli.chat import (
     _render_welcome,
     _tail_text,
 )
-from fortify.cli.state import LiveRunState, ToolActivity
-from fortify.config.settings import Settings
-from fortify.security.decision import Decision, DecisionOutcome
-from fortify.streaming import ToolCallState
-from fortify.tools import edit_file, read_file
+from hexgate.cli.state import LiveRunState, ToolActivity
+from hexgate.config.settings import Settings
+from hexgate.security.decision import Decision, DecisionOutcome
+from hexgate.streaming import ToolCallState
+from hexgate.tools import edit_file, read_file
 
 # Repo root, derived from this test file's location — keeps the
 # ``_load_agent_script`` tests below portable across machines / CI.
@@ -84,7 +84,7 @@ def test_render_welcome_includes_agent_and_model() -> None:
 
     assert "example_agent" in rendered
     assert "gpt-5.4" in rendered
-    assert "fortify" in rendered
+    assert "hexgate" in rendered
     assert DOG_LOGO.splitlines()[0].strip() in rendered
 
 
@@ -417,7 +417,7 @@ def test_build_runtime_with_colon_routes_through_load_spec(
         _common, "load_agent", lambda *a, **k: pytest.fail("load_agent was called")
     )
     monkeypatch.setattr(
-        "fortify.tracing.langfuse.get_langfuse_handler",
+        "hexgate.tracing.langfuse.get_langfuse_handler",
         lambda **kw: object(),
     )
 
@@ -473,7 +473,7 @@ def test_build_runtime_from_spec_attaches_decision_observer(
     spec = _write_fake_agent_module(tmp_path, name="fake_spec_mod_b")
     monkeypatch.syspath_prepend(str(tmp_path))
     monkeypatch.setattr(
-        "fortify.tracing.langfuse.get_langfuse_handler",
+        "hexgate.tracing.langfuse.get_langfuse_handler",
         lambda **kw: object(),
     )
 
@@ -486,7 +486,7 @@ def test_build_runtime_from_spec_attaches_decision_observer(
         seen["observer"] = observer
 
     # Patch on the loader module (where build_runtime_from_spec imports it).
-    from fortify.agents import loader as loader_mod
+    from hexgate.agents import loader as loader_mod
 
     monkeypatch.setattr(loader_mod, "_apply_decision_observer", spy_apply)
 
@@ -512,11 +512,11 @@ def test_build_runtime_from_spec_omits_observer_call_when_none(
     spec = _write_fake_agent_module(tmp_path, name="fake_spec_mod_c")
     monkeypatch.syspath_prepend(str(tmp_path))
     monkeypatch.setattr(
-        "fortify.tracing.langfuse.get_langfuse_handler",
+        "hexgate.tracing.langfuse.get_langfuse_handler",
         lambda **kw: object(),
     )
 
-    from fortify.agents import loader as loader_mod
+    from hexgate.agents import loader as loader_mod
 
     monkeypatch.setattr(
         loader_mod,
@@ -551,7 +551,7 @@ def test_build_runtime_from_spec_falls_back_to_settings_model(
     )
     monkeypatch.syspath_prepend(str(tmp_path))
     monkeypatch.setattr(
-        "fortify.tracing.langfuse.get_langfuse_handler",
+        "hexgate.tracing.langfuse.get_langfuse_handler",
         lambda **kw: object(),
     )
 
@@ -596,7 +596,7 @@ class _FakeAgent:
 def _stub_guarded_tool(monkeypatch: pytest.MonkeyPatch) -> None:
     """Replace the helper's GuardedTool import target with our fake
     so isinstance() lights up on our stand-in."""
-    import fortify.adapters.langchain.tools as tools_mod
+    import hexgate.adapters.langchain.tools as tools_mod
 
     monkeypatch.setattr(tools_mod, "GuardedTool", _FakeGuardedTool)
 
@@ -630,7 +630,7 @@ def test_apply_decision_observer_warns_when_no_guarded_tools(
     _stub_guarded_tool(monkeypatch)
     agent = _FakeAgent(tools=["just_a_string_not_a_tool"])
 
-    with caplog.at_level(logging.WARNING, logger="fortify.agents.loader"):
+    with caplog.at_level(logging.WARNING, logger="hexgate.agents.loader"):
         _apply_decision_observer(agent, lambda _d: None)
 
     assert any("no GuardedTool tools" in r.message for r in caplog.records)
@@ -651,7 +651,7 @@ def test_apply_decision_observer_warns_when_multiple_distinct_enforcers(
 
     sentinel = lambda _d: None  # noqa: E731
 
-    with caplog.at_level(logging.WARNING, logger="fortify.agents.loader"):
+    with caplog.at_level(logging.WARNING, logger="hexgate.agents.loader"):
         _apply_decision_observer(agent, sentinel)
 
     # Both enforcers got the patch — that's the load-bearing assertion.

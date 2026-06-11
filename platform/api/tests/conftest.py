@@ -3,7 +3,7 @@
 Two session-wide behaviours:
 
 1. Enables the ``X-Dev-User`` test seam by default — production servers
-   leave ``FORTIFY_ALLOW_DEV_USER_HEADER`` unset, but every test in this
+   leave ``HEXGATE_ALLOW_DEV_USER_HEADER`` unset, but every test in this
    package uses the header to assert tenant-isolation and route gating
    without going through a real cookie login. The seam is gated in
    ``main.require_user`` (which all the cookie-side deps —
@@ -31,7 +31,7 @@ def pytest_configure(config) -> None:  # noqa: ARG001 — pytest hook
     to verify the prod-safe disabled behaviour can monkeypatch.delenv
     inside the test body.
     """
-    os.environ.setdefault("FORTIFY_ALLOW_DEV_USER_HEADER", "1")
+    os.environ.setdefault("HEXGATE_ALLOW_DEV_USER_HEADER", "1")
 
 
 def pytest_collection_modifyitems(

@@ -1,4 +1,4 @@
-"""Process-wide configuration. FORTIFY_ env prefix matches existing convention."""
+"""Process-wide configuration. HEXGATE_ env prefix matches existing convention."""
 
 from __future__ import annotations
 
@@ -7,19 +7,19 @@ from functools import lru_cache
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-_DEV_CLICKHOUSE_PASSWORD = "fortify-dev-password"
+_DEV_CLICKHOUSE_PASSWORD = "hexgate-dev-password"
 _LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1"}
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_prefix="FORTIFY_")
+    model_config = SettingsConfigDict(env_file=".env", env_prefix="HEXGATE_")
 
     clickhouse_host: str = "localhost"
     # 8124 matches platform/docker-compose.yml's host-port offset.
     clickhouse_port: int = 8124
-    clickhouse_user: str = "fortify"
+    clickhouse_user: str = "hexgate"
     clickhouse_password: str = _DEV_CLICKHOUSE_PASSWORD
-    clickhouse_database: str = "fortify_audit"
+    clickhouse_database: str = "hexgate_audit"
     clickhouse_secure: bool = False
 
     @model_validator(mode="after")
@@ -33,7 +33,7 @@ class Settings(BaseSettings):
             raise ValueError(
                 f"clickhouse_host={self.clickhouse_host!r} is non-local but "
                 "clickhouse_password is the committed dev default — set "
-                "FORTIFY_CLICKHOUSE_PASSWORD to the real credential."
+                "HEXGATE_CLICKHOUSE_PASSWORD to the real credential."
             )
         return self
 

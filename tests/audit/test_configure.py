@@ -7,16 +7,16 @@ from collections.abc import Iterator
 
 import pytest
 
-import fortify.audit as audit_mod
+import hexgate.audit as audit_mod
 
 
 @pytest.fixture(autouse=True)
 def _isolate_audit_state(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
-    """Reset the sender registry + clear FORTIFY_* env between tests."""
+    """Reset the sender registry + clear HEXGATE_* env between tests."""
     audit_mod._senders.clear()
     audit_mod._logged_local_mode_suppressed = False
-    monkeypatch.delenv("FORTIFY_KEY", raising=False)
-    monkeypatch.delenv("FORTIFY_API_URL", raising=False)
+    monkeypatch.delenv("HEXGATE_KEY", raising=False)
+    monkeypatch.delenv("HEXGATE_API_URL", raising=False)
     monkeypatch.delenv(audit_mod._LOCAL_MODE_ENV, raising=False)
     yield
     audit_mod._senders.clear()
@@ -37,26 +37,26 @@ def test_explicit_api_key_uses_default_url() -> None:
 def test_env_api_key_picked_up_when_not_explicit(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("FORTIFY_KEY", "env_key")
+    monkeypatch.setenv("HEXGATE_KEY", "env_key")
     sender = audit_mod.configure()
     assert sender is not None
     assert sender._endpoint == "http://localhost:8000/v1/audit/decisions"
 
 
 def test_explicit_api_key_wins_over_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("FORTIFY_KEY", "env_key")
+    monkeypatch.setenv("HEXGATE_KEY", "env_key")
     sender = audit_mod.configure("explicit_key")
     assert sender._client.headers["Authorization"] == "Bearer explicit_key"
 
 
 def test_env_base_url_respected(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("FORTIFY_API_URL", "https://prod.example.com/")
+    monkeypatch.setenv("HEXGATE_API_URL", "https://prod.example.com/")
     sender = audit_mod.configure("k")
     assert sender._endpoint == "https://prod.example.com/v1/audit/decisions"
 
 
 def test_explicit_base_url_wins_over_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("FORTIFY_API_URL", "https://env.example.com")
+    monkeypatch.setenv("HEXGATE_API_URL", "https://env.example.com")
     sender = audit_mod.configure("k", "https://explicit.example.com")
     assert sender._endpoint == "https://explicit.example.com/v1/audit/decisions"
 
@@ -82,7 +82,7 @@ def test_get_sender_scoped_by_key() -> None:
 
 
 # ---------------------------------------------------------------------------
-# FORTIFY_LOCAL_MODE gate
+# HEXGATE_LOCAL_MODE gate
 # ---------------------------------------------------------------------------
 
 
@@ -90,11 +90,11 @@ def test_get_sender_scoped_by_key() -> None:
 def test_local_mode_env_suppresses_configure(
     monkeypatch: pytest.MonkeyPatch, truthy: str
 ) -> None:
-    """Any truthy value of FORTIFY_LOCAL_MODE makes configure() return None
+    """Any truthy value of HEXGATE_LOCAL_MODE makes configure() return None
     even when an api_key is in env. The gate is the whole point of local
     mode: a key in .env (left over from a platform session) must not cause
-    cloud writes the next time the dev runs `fortify chat`."""
-    monkeypatch.setenv("FORTIFY_KEY", "real_key")
+    cloud writes the next time the dev runs `hexgate chat`."""
+    monkeypatch.setenv("HEXGATE_KEY", "real_key")
     monkeypatch.setenv(audit_mod._LOCAL_MODE_ENV, truthy)
     assert audit_mod.configure() is None
     assert audit_mod.get_sender("real_key") is None
@@ -106,8 +106,8 @@ def test_local_mode_falsy_does_not_suppress(
 ) -> None:
     """Explicit falsy values behave as if unset — symmetry with the
     truthy parametrize prevents a future refactor from accidentally
-    making `FORTIFY_LOCAL_MODE=0` count as 'on'."""
-    monkeypatch.setenv("FORTIFY_KEY", "real_key")
+    making `HEXGATE_LOCAL_MODE=0` count as 'on'."""
+    monkeypatch.setenv("HEXGATE_KEY", "real_key")
     monkeypatch.setenv(audit_mod._LOCAL_MODE_ENV, falsy)
     sender = audit_mod.configure()
     assert sender is not None
@@ -128,9 +128,9 @@ def test_local_mode_logs_suppression_once(
 ) -> None:
     """A single INFO line at the first suppression; further configure()
     calls stay silent so a busy startup doesn't repeat itself."""
-    monkeypatch.setenv("FORTIFY_KEY", "real_key")
+    monkeypatch.setenv("HEXGATE_KEY", "real_key")
     monkeypatch.setenv(audit_mod._LOCAL_MODE_ENV, "1")
-    with caplog.at_level(logging.INFO, logger="fortify.audit"):
+    with caplog.at_level(logging.INFO, logger="hexgate.audit"):
         audit_mod.configure()
         audit_mod.configure()
         audit_mod.configure()
@@ -144,7 +144,7 @@ def test_local_mode_silent_when_no_key_present(
     """No key + local mode is the OSS "I never set a key" case — no log
     line, because there's no surprise to disambiguate."""
     monkeypatch.setenv(audit_mod._LOCAL_MODE_ENV, "1")
-    with caplog.at_level(logging.INFO, logger="fortify.audit"):
+    with caplog.at_level(logging.INFO, logger="hexgate.audit"):
         audit_mod.configure()
     suppressed = [r for r in caplog.records if "audit suppressed" in r.message]
     assert suppressed == []

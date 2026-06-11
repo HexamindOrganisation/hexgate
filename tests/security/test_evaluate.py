@@ -11,13 +11,13 @@ from __future__ import annotations
 
 import pytest
 
-from fortify.security import (
+from hexgate.security import (
     AgentPolicy,
     DecisionOutcome,
     Verdict,
     evaluate_tool_call,
 )
-from fortify.security.constraints import ConstraintParseError
+from hexgate.security.constraints import ConstraintParseError
 
 
 def _policy(spec: dict) -> AgentPolicy:

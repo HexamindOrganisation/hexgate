@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from examples.demo import _render_event
-from fortify.streaming import (
+from hexgate.streaming import (
     AgentRunResult,
     BlockDeltaEvent,
     BlockType,

@@ -17,7 +17,7 @@ import logging
 import sys
 from typing import Protocol
 
-logger = logging.getLogger("fortify.platform.email")
+logger = logging.getLogger("hexgate.platform.email")
 
 
 class EmailSender(Protocol):

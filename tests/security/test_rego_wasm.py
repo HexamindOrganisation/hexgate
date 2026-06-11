@@ -14,8 +14,8 @@ import shutil
 
 import pytest
 
-from fortify.security import compile_to_rego
-from fortify.security.rego_wasm import (
+from hexgate.security import compile_to_rego
+from hexgate.security.rego_wasm import (
     DEFAULT_ENTRYPOINTS,
     OpaNotFoundError,
     WasmCompileError,
@@ -87,8 +87,8 @@ def test_compile_to_wasm_manifest_lists_decision_entrypoint(demo_rego: str) -> N
     entries = [e["entrypoint"] for e in artifact.manifest.get("wasm", [])]
     assert set(DEFAULT_ENTRYPOINTS) <= set(entries)
     # And no stale legacy entrypoints leaked through from prior phases.
-    assert "fortify/policy/allow" not in entries
-    assert "fortify/policy/requires_approval" not in entries
+    assert "hexgate/policy/allow" not in entries
+    assert "hexgate/policy/requires_approval" not in entries
 
 
 @needs_opa
@@ -116,19 +116,19 @@ def test_compile_to_wasm_complains_when_opa_missing(
 ) -> None:
     """Mask opa from PATH and confirm we raise with an install hint."""
     monkeypatch.setenv("PATH", "/nonexistent")
-    monkeypatch.delenv("FORTIFY_OPA_BIN", raising=False)
+    monkeypatch.delenv("HEXGATE_OPA_BIN", raising=False)
     with pytest.raises(OpaNotFoundError) as excinfo:
         compile_to_wasm(demo_rego)
     msg = str(excinfo.value)
     assert "opa not found" in msg
-    assert "FORTIFY_OPA_BIN" in msg
+    assert "HEXGATE_OPA_BIN" in msg
 
 
-def test_fortify_opa_bin_pointing_at_missing_file_raises(
+def test_hexgate_opa_bin_pointing_at_missing_file_raises(
     demo_rego: str, tmp_path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """FORTIFY_OPA_BIN that doesn't exist gets a clear error (not a silent fall-through)."""
-    monkeypatch.setenv("FORTIFY_OPA_BIN", str(tmp_path / "nope"))
+    """HEXGATE_OPA_BIN that doesn't exist gets a clear error (not a silent fall-through)."""
+    monkeypatch.setenv("HEXGATE_OPA_BIN", str(tmp_path / "nope"))
     monkeypatch.setenv("PATH", "/nonexistent")
     with pytest.raises(OpaNotFoundError, match="does not exist"):
         compile_to_wasm(demo_rego)

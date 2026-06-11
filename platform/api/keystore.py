@@ -1,4 +1,4 @@
-"""Root signing keypair for the Fortify control plane.
+"""Root signing keypair for the HexaGate control plane.
 
 Every Biscuit token and every signed policy bundle is signed by this keypair.
 Once minted, tokens carry a signature chain that verifies all the way back to
@@ -7,16 +7,16 @@ the *public* half of this key — which is embedded in the SDK package.
 Bootstrap behaviour:
 
 - On first launch, generate a fresh Ed25519 keypair and persist it to
-  ``platform/api/data/fortify.priv`` (private, ``0600``) and
-  ``platform/api/data/fortify.pub`` (public, ``0644``).
+  ``platform/api/data/hexgate.priv`` (private, ``0600``) and
+  ``platform/api/data/hexgate.pub`` (public, ``0644``).
   A loud, one-shot warning is logged so operators back it up.
 
 - On subsequent launches, load the existing pair. Cheap, idempotent.
 
-The path is overridable via ``FORTIFY_KEYSTORE_PATH`` so prod can point at
-``/var/lib/fortify/keys`` (or wherever the operator stores secrets). The
-location is a directory; we always look for ``fortify.priv`` and
-``fortify.pub`` inside it.
+The path is overridable via ``HEXGATE_KEYSTORE_PATH`` so prod can point at
+``/var/lib/hexgate/keys`` (or wherever the operator stores secrets). The
+location is a directory; we always look for ``hexgate.priv`` and
+``hexgate.pub`` inside it.
 """
 
 from __future__ import annotations
@@ -36,8 +36,8 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import (
 
 logger = logging.getLogger(__name__)
 
-PRIVATE_KEY_FILENAME = "fortify.priv"
-PUBLIC_KEY_FILENAME = "fortify.pub"
+PRIVATE_KEY_FILENAME = "hexgate.priv"
+PUBLIC_KEY_FILENAME = "hexgate.pub"
 DEFAULT_KEYSTORE_DIR = Path(__file__).parent / "data"
 
 
@@ -56,7 +56,7 @@ class KeyStore(Protocol):
 
 def resolve_keystore_dir() -> Path:
     """Locate the keystore directory from env or fall back to the default."""
-    raw = os.environ.get("FORTIFY_KEYSTORE_PATH")
+    raw = os.environ.get("HEXGATE_KEYSTORE_PATH")
     if raw:
         return Path(raw).expanduser().resolve()
     return DEFAULT_KEYSTORE_DIR.resolve()
@@ -73,7 +73,7 @@ class FileKeyStore:
     def __init__(self, base_dir: Path | None = None) -> None:
         """Initialise paths only — no filesystem access yet.
 
-        Pass an explicit ``base_dir`` to override ``FORTIFY_KEYSTORE_PATH``
+        Pass an explicit ``base_dir`` to override ``HEXGATE_KEYSTORE_PATH``
         (useful for tests). The keypair is not loaded or generated until
         :meth:`ensure_keypair` is called, so constructing the keystore is
         cheap and side-effect-free.
@@ -94,7 +94,7 @@ class FileKeyStore:
         if self._private_path.exists():
             self._load()
             logger.info(
-                "loaded fortify keypair from %s (fingerprint=%s)",
+                "loaded hexgate keypair from %s (fingerprint=%s)",
                 self._private_path,
                 self.fingerprint(),
             )

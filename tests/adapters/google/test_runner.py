@@ -1,4 +1,4 @@
-"""Tests for the FortifyRunner that wraps the Google ADK Runner."""
+"""Tests for the HexgateRunner that wraps the Google ADK Runner."""
 
 from __future__ import annotations
 
@@ -10,12 +10,12 @@ from google.adk.agents import LlmAgent
 from google.adk.sessions import InMemorySessionService
 from google.adk.tools.function_tool import FunctionTool
 
-from fortify.adapters.google import wrapper as wrapper_mod
-from fortify.adapters.google.runner import FortifyRunner
-from fortify.runtime import User
-from fortify.runtime.context import get_current_user
-from fortify.security import AgentPolicy, BaseToolPolicy, PolicySet, ResolvedPolicy
-from fortify.security.policy_set import DEFAULT_ROLE_NAME
+from hexgate.adapters.google import wrapper as wrapper_mod
+from hexgate.adapters.google.runner import HexgateRunner
+from hexgate.runtime import User
+from hexgate.runtime.context import get_current_user
+from hexgate.security import AgentPolicy, BaseToolPolicy, PolicySet, ResolvedPolicy
+from hexgate.security.policy_set import DEFAULT_ROLE_NAME
 
 
 @pytest.fixture(autouse=True)
@@ -68,7 +68,7 @@ def _silence_observability(monkeypatch: pytest.MonkeyPatch) -> dict[str, int]:
     def fake_setup(self: Any) -> None:
         counts["setup"] += 1
 
-    monkeypatch.setattr(FortifyRunner, "_setup_observability", fake_setup)
+    monkeypatch.setattr(HexgateRunner, "_setup_observability", fake_setup)
     return counts
 
 
@@ -103,7 +103,7 @@ class _FakeRunner:
 def _install_fake_runner(monkeypatch: pytest.MonkeyPatch) -> type[_FakeRunner]:
     """Patch the runner module's Runner symbol with the recording fake."""
     _FakeRunner.instances = []
-    monkeypatch.setattr("fortify.adapters.google.runner.Runner", _FakeRunner)
+    monkeypatch.setattr("hexgate.adapters.google.runner.Runner", _FakeRunner)
     return _FakeRunner
 
 
@@ -116,7 +116,7 @@ def test_constructor_uses_explicit_api_key(monkeypatch: pytest.MonkeyPatch) -> N
     """An explicit api_key argument is stored verbatim."""
     _install_fake_runner(monkeypatch)
 
-    runner = FortifyRunner(
+    runner = HexgateRunner(
         agent=_make_agent(),
         app_name="app",
         session_service=InMemorySessionService(),
@@ -127,11 +127,11 @@ def test_constructor_uses_explicit_api_key(monkeypatch: pytest.MonkeyPatch) -> N
 
 
 def test_constructor_falls_back_to_env_var(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Resolve the API key from FORTIFY_KEY when no explicit key is given."""
-    monkeypatch.setenv("FORTIFY_KEY", "from-env")
+    """Resolve the API key from HEXGATE_KEY when no explicit key is given."""
+    monkeypatch.setenv("HEXGATE_KEY", "from-env")
     _install_fake_runner(monkeypatch)
 
-    runner = FortifyRunner(
+    runner = HexgateRunner(
         agent=_make_agent(),
         app_name="app",
         session_service=InMemorySessionService(),
@@ -144,10 +144,10 @@ def test_constructor_prefers_explicit_api_key_over_env(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The explicit api_key argument wins when both sources are populated."""
-    monkeypatch.setenv("FORTIFY_KEY", "from-env")
+    monkeypatch.setenv("HEXGATE_KEY", "from-env")
     _install_fake_runner(monkeypatch)
 
-    runner = FortifyRunner(
+    runner = HexgateRunner(
         agent=_make_agent(),
         app_name="app",
         session_service=InMemorySessionService(),
@@ -161,10 +161,10 @@ def test_constructor_raises_when_no_api_key_available(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Reject construction when neither argument nor env var supplies a key."""
-    monkeypatch.delenv("FORTIFY_KEY", raising=False)
+    monkeypatch.delenv("HEXGATE_KEY", raising=False)
 
-    with pytest.raises(ValueError, match="FORTIFY_KEY is not set"):
-        FortifyRunner(
+    with pytest.raises(ValueError, match="HEXGATE_KEY is not set"):
+        HexgateRunner(
             agent=_make_agent(),
             app_name="app",
             session_service=InMemorySessionService(),
@@ -177,7 +177,7 @@ def test_constructor_builds_underlying_runner_once(
     """Construction wraps the agent + builds the Runner exactly once."""
     fake = _install_fake_runner(monkeypatch)
 
-    FortifyRunner(
+    HexgateRunner(
         agent=_make_agent(),
         app_name="app",
         session_service=InMemorySessionService(),
@@ -204,7 +204,7 @@ def test_run_opens_user_scope_and_yields_events(
     setup_counts = _silence_observability(monkeypatch)
     fake = _install_fake_runner(monkeypatch)
 
-    runner = FortifyRunner(
+    runner = HexgateRunner(
         agent=_make_agent(),
         app_name="my-app",
         session_service=InMemorySessionService(),
@@ -238,7 +238,7 @@ async def test_run_async_opens_user_scope_and_yields_events(
     setup_counts = _silence_observability(monkeypatch)
     fake = _install_fake_runner(monkeypatch)
 
-    runner = FortifyRunner(
+    runner = HexgateRunner(
         agent=_make_agent(),
         app_name="my-app",
         session_service=InMemorySessionService(),
@@ -282,11 +282,11 @@ def test_run_propagates_user_identity_to_langfuse(
         yield
 
     monkeypatch.setattr(
-        "fortify.adapters.google.runner.propagate_attributes",
+        "hexgate.adapters.google.runner.propagate_attributes",
         fake_propagate_attributes,
     )
 
-    runner = FortifyRunner(
+    runner = HexgateRunner(
         agent=_make_agent("custom_agent"),
         app_name="app",
         session_service=InMemorySessionService(),
@@ -318,11 +318,11 @@ async def test_run_async_propagates_user_identity_to_langfuse(
         yield
 
     monkeypatch.setattr(
-        "fortify.adapters.google.runner.propagate_attributes",
+        "hexgate.adapters.google.runner.propagate_attributes",
         fake_propagate_attributes,
     )
 
-    runner = FortifyRunner(
+    runner = HexgateRunner(
         agent=_make_agent("custom_agent"),
         app_name="app",
         session_service=InMemorySessionService(),
@@ -350,7 +350,7 @@ def test_extra_kwargs_reach_underlying_runner(
     _silence_observability(monkeypatch)
     fake = _install_fake_runner(monkeypatch)
 
-    FortifyRunner(
+    HexgateRunner(
         agent=_make_agent(),
         app_name="app",
         session_service=InMemorySessionService(),
@@ -380,10 +380,10 @@ class _CountingBinding:
 
 def _runner_with_counting_binding(
     monkeypatch: pytest.MonkeyPatch,
-) -> tuple[FortifyRunner, _CountingBinding]:
+) -> tuple[HexgateRunner, _CountingBinding]:
     _silence_observability(monkeypatch)
     _install_fake_runner(monkeypatch)
-    runner = FortifyRunner(
+    runner = HexgateRunner(
         agent=_make_agent(),
         app_name="app",
         session_service=InMemorySessionService(),

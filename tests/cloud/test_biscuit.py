@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 from biscuit_auth import Algorithm, BiscuitBuilder, BlockBuilder, KeyPair, PrivateKey
 
-from fortify.cloud.biscuit import (
+from hexgate.cloud.biscuit import (
     TokenError,
     TokenSignatureError,
     extract_facts,
@@ -82,7 +82,7 @@ def test_parse_envelope_supports_test_env() -> None:
 
 
 def test_parse_envelope_rejects_missing_fty_prefix() -> None:
-    """An envelope without `fty_` is not a Fortify token."""
+    """An envelope without `fty_` is not a HexaGate token."""
     with pytest.raises(TokenError):
         parse_envelope("not_live_proj_biscuit")
 

@@ -19,7 +19,7 @@ import re
 import pytest
 import yaml
 
-from fortify.security import (
+from hexgate.security import (
     AgentPolicy,
     PolicyDeniedError,
     PolicySetError,
@@ -117,15 +117,15 @@ def _violation_rules(rego: str) -> list[str]:
 def test_emits_package_header_and_defaults() -> None:
     """Module starts with the package declaration + both default rules."""
     rego = compile_to_rego(_SUPPORT_BOT_POLICY)
-    assert "package fortify.policy" in rego
+    assert "package hexgate.policy" in rego
     assert "default allow := false" in rego
     assert "default requires_approval := false" in rego
 
 
 def test_custom_package_name_carries_through() -> None:
     """Caller can override the package name (M3 will use this per-agent)."""
-    rego = compile_to_rego(_SUPPORT_BOT_POLICY, package="fortify.policy.support_bot")
-    assert "package fortify.policy.support_bot" in rego
+    rego = compile_to_rego(_SUPPORT_BOT_POLICY, package="hexgate.policy.support_bot")
+    assert "package hexgate.policy.support_bot" in rego
 
 
 def test_emits_source_hash_in_header() -> None:
@@ -474,7 +474,7 @@ def _support_bot_wasm() -> bytes:
 
     if shutil.which("opa") is None:
         pytest.skip("opa not on PATH")
-    from fortify.security import compile_to_wasm
+    from hexgate.security import compile_to_wasm
 
     rego = compile_to_rego(_SUPPORT_BOT_POLICY)
     return compile_to_wasm(rego).wasm
@@ -490,7 +490,7 @@ def test_parity_wasm_vs_pydantic(
     6. If this matches pydantic for every input shape we care about, we
     can swap the enforcer with confidence.
     """
-    from fortify.security import WasmPolicy
+    from hexgate.security import WasmPolicy
 
     ps = load_policy_set_from_dict(_SUPPORT_BOT_POLICY)
     policy = ps.policy_for(role)
@@ -520,7 +520,7 @@ def _predict_rego_allow(rego: str, role: str, tool: str, args: dict) -> bool:
     enforces with. When the wasm adapter ships, this stub gets replaced
     by a real ``wasm_module.evaluate(input)`` call.
     """
-    from fortify.security.constraints import evaluate_constraint, parse_constraint
+    from hexgate.security.constraints import evaluate_constraint, parse_constraint
 
     for rule in _allow_rules(rego):
         if f'input.role == "{role}"' not in rule:

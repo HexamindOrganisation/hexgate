@@ -1,7 +1,7 @@
 """PolicyEnforcer + the engine protocol seam.
 
 The enforcer depends only on the
-:class:`~fortify.security.decision.PolicyEngine` protocol, so a hand-rolled
+:class:`~hexgate.security.decision.PolicyEngine` protocol, so a hand-rolled
 fake engine is enough to pin its behavior: forward role/tool/args, lift the
 returned :class:`Verdict` into a :class:`Decision` with host context.
 """
@@ -13,15 +13,15 @@ from typing import Any
 
 import pytest
 
-from fortify.security import (
+from hexgate.security import (
     AgentPolicy,
     DecisionOutcome,
     Verdict,
     evaluate_tool_call,
 )
-from fortify.security.decision import Decision
-from fortify.security.enforcer import PolicyEnforcer
-from fortify.security.policy_set import PolicySet
+from hexgate.security.decision import Decision
+from hexgate.security.enforcer import PolicyEnforcer
+from hexgate.security.policy_set import PolicySet
 
 
 class _RecordingEngine:
@@ -129,14 +129,14 @@ def test_build_enforcer_pairs_engine_with_agent_name_and_audit(
 ) -> None:
     """build_enforcer wires the engine, agent name, and an audit sender
     resolved from the api_key into one PolicyEnforcer."""
-    from fortify.security.enforcer import build_enforcer
-    from fortify.security.policy_set import DEFAULT_ROLE_NAME
+    from hexgate.security.enforcer import build_enforcer
+    from hexgate.security.policy_set import DEFAULT_ROLE_NAME
 
-    monkeypatch.delenv("FORTIFY_KEY", raising=False)
+    monkeypatch.delenv("HEXGATE_KEY", raising=False)
     engine = PolicySet({DEFAULT_ROLE_NAME: AgentPolicy()})
     enforcer = build_enforcer(engine, agent_name="support-bot")
 
     assert enforcer.policy is engine
     assert enforcer.agent_name == "support-bot"
-    # No api_key + no FORTIFY_KEY → audit inert (configure returns None).
+    # No api_key + no HEXGATE_KEY → audit inert (configure returns None).
     assert enforcer._audit_sender is None

@@ -8,11 +8,11 @@ import pytest
 from google.adk.tools.base_tool import BaseTool
 from google.adk.tools.function_tool import FunctionTool
 
-from fortify.adapters.google.tools import _normalize, wrap_tool, wrap_tools
-from fortify.runtime import User
-from fortify.security import AgentPolicy, PolicySet
-from fortify.security.enforcer import PolicyEnforcer
-from fortify.security.policy_set import DEFAULT_ROLE_NAME
+from hexgate.adapters.google.tools import _normalize, wrap_tool, wrap_tools
+from hexgate.runtime import User
+from hexgate.security import AgentPolicy, PolicySet
+from hexgate.security.enforcer import PolicyEnforcer
+from hexgate.security.policy_set import DEFAULT_ROLE_NAME
 
 
 def _enforcer_for(spec: dict[str, Any]) -> PolicyEnforcer:

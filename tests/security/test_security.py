@@ -7,9 +7,9 @@ from pathlib import Path
 import pytest
 from langchain_core.tools import tool
 
-from fortify.agents import factory
-from fortify.agents.factory import enforce_policy
-from fortify.security import (
+from hexgate.agents import factory
+from hexgate.agents.factory import enforce_policy
+from hexgate.security import (
     AgentPolicy,
     ApprovalRequiredError,
     BaseToolPolicy,
@@ -224,8 +224,8 @@ def test_enforce_policy_detaches_refresh_source(
         system_prompt="You are a test assistant.",
     )
     # Simulate an agent that already carries a refresh source.
-    from fortify.security.binding import PolicyBinding
-    from fortify.security.enforcer import PolicyEnforcer
+    from hexgate.security.binding import PolicyBinding
+    from hexgate.security.enforcer import PolicyEnforcer
 
     agent._binding = PolicyBinding(
         PolicyEnforcer(AgentPolicy(), agent_name="x"),
@@ -353,7 +353,7 @@ async def test_enforce_policy_with_approval_handler_allows_approval_required_too
     callables receive the full Decision (including ``arguments``) so the
     host can render any approval UI.
     """
-    from fortify.security.decision import Decision
+    from hexgate.security.decision import Decision
 
     @tool
     async def sample_tool(value: str) -> str:
@@ -536,8 +536,8 @@ async def test_guarded_tool_role_policy_selection(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A PolicySet binds different policies per role; the active User picks."""
-    from fortify.runtime import User
-    from fortify.security import PolicySet
+    from hexgate.runtime import User
+    from hexgate.security import PolicySet
 
     @tool
     def refund(amount: int) -> str:

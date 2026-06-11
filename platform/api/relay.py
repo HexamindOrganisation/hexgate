@@ -2,7 +2,7 @@
 
 The backend bridges two peer roles per project:
 
-- **serve** (the developer's `fortify serve` process) — one per project.
+- **serve** (the developer's `hexgate serve` process) — one per project.
   New connections replace any existing one; the old socket is closed.
 - **chat** (dashboard Playground tabs) — many per project. All chat sockets
   receive the same events from the serve peer.

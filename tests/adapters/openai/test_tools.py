@@ -7,10 +7,10 @@ from typing import Any
 import pytest
 from agents import FunctionTool
 
-from fortify.adapters.openai.tools import _parse_args, wrap_tool, wrap_tools
-from fortify.security import AgentPolicy, PolicySet
-from fortify.security.enforcer import PolicyEnforcer
-from fortify.security.policy_set import DEFAULT_ROLE_NAME
+from hexgate.adapters.openai.tools import _parse_args, wrap_tool, wrap_tools
+from hexgate.security import AgentPolicy, PolicySet
+from hexgate.security.enforcer import PolicyEnforcer
+from hexgate.security.policy_set import DEFAULT_ROLE_NAME
 
 
 def _allow_policy_set(tool_name: str = "echo") -> PolicySet:

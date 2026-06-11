@@ -300,7 +300,7 @@ def _sample_manifest(
     return {
         "name": name,
         "description": description,
-        "framework": "fortify",
+        "framework": "hexgate",
         "model": model,
         "system_prompt": system_prompt,
         "tools": [
@@ -438,7 +438,7 @@ def test_register_endpoint_accepts_legacy_shape_without_new_fields(
     """A manifest from an older SDK (no model / system_prompt keys) still 201s.
 
     Backwards-compat guarantee: when the dashboard ships ahead of every
-    deployed SDK, older `fortify register` calls must keep working against
+    deployed SDK, older `hexgate register` calls must keep working against
     the new platform. The new fields are Optional with `None` defaults, so
     Pydantic validation should accept payloads that omit them entirely.
     """
@@ -446,7 +446,7 @@ def test_register_endpoint_accepts_legacy_shape_without_new_fields(
         "manifest": {
             "name": "legacy_agent",
             "description": "registered by an old SDK",
-            "framework": "fortify",
+            "framework": "hexgate",
             "tools": [],
         }
     }
@@ -691,7 +691,7 @@ def test_register_first_time_generates_starter_policy_yaml(
     assert agent.policy_yaml != ""
     # Round-trips through the SDK's loader — same code path the
     # SDK runs at every chat turn.
-    from fortify.security import load_policy_set_from_dict
+    from hexgate.security import load_policy_set_from_dict
 
     policy_set = load_policy_set_from_dict(yaml.safe_load(agent.policy_yaml))
     assert sorted(policy_set.roles) == ["admin", "default", "member"]
@@ -709,7 +709,7 @@ def test_register_first_time_compiles_signed_bundle(
     client: TestClient, session_factory
 ) -> None:
     """When opa is available, the new agent ships a signed WASM bundle
-    so ``fortify serve`` runs against the real enforcement engine from
+    so ``hexgate serve`` runs against the real enforcement engine from
     the first request (not the pydantic fallback)."""
     token = _mint_token_for_test(session_factory)
     r = client.post(

@@ -2,7 +2,7 @@
 
 > Status: living — kept in sync with the audit code. Last reviewed 2026-06.
 
-Scope: the end-to-end path that records every policy decision a Fortify-wrapped
+Scope: the end-to-end path that records every policy decision a HexaGate-wrapped
 agent makes, from the SDK enforcement point to durable storage in ClickHouse and
 the dashboard read view.
 
@@ -22,7 +22,7 @@ row to a ClickHouse table. Audit emission is a **side effect of enforcement**:
 it never changes, blocks, or fails the decision the agent acts on.
 
 ```
-┌─────────────────────────── SDK (fortify) ───────────────────────────┐
+┌─────────────────────────── SDK (hexgate) ───────────────────────────┐
 │  tool call                                                           │
 │     │                                                                │
 │     ▼                                                                │
@@ -33,7 +33,7 @@ it never changes, blocks, or fails the decision the agent acts on.
 │     └─► AuditSender.emit(AuditEvent)   (async, best-effort)          │
 │              │  bounded concurrency, drop-on-saturation              │
 └──────────────┼───────────────────────────────────────────────────────┘
-               │  HTTP POST /v1/audit/decisions   (Bearer <fortify_key>)
+               │  HTTP POST /v1/audit/decisions   (Bearer <hexgate_key>)
                ▼
 ┌─────────────────────── Platform API (FastAPI) ──────────────────────┐
 │  require_project      bearer → project_id                            │
@@ -45,7 +45,7 @@ it never changes, blocks, or fails the decision the agent acts on.
                │  INSERT (async_insert, wait_for_async_insert=1)
                ▼
 ┌─────────────────────────── ClickHouse ──────────────────────────────┐
-│  fortify_audit.policy_decision   MergeTree, monthly partitions,      │
+│  hexgate_audit.policy_decision   MergeTree, monthly partitions,      │
 │  TTL 90 days, received_at server-stamped                             │
 └──────────────┬───────────────────────────────────────────────────────┘
                │  GET /v1/projects/{id}/audit/{summary,timeseries,decisions}
@@ -58,7 +58,7 @@ it never changes, blocks, or fails the decision the agent acts on.
 1. **Enforcement is authoritative; audit is observational.** The `Decision`
    returned to the agent is the source of truth. Audit failures (network down,
    platform 503, saturation) degrade silently and never propagate to the caller.
-   The same `Decision` is also surfaced locally by `fortify chat`'s decision
+   The same `Decision` is also surfaced locally by `hexgate chat`'s decision
    panel — same data, different sink, useful when iterating offline.
 2. **The server owns identity.** `project_id`, `agent_version_id`, and
    `received_at` are resolved/stamped server-side and are **never trusted from
@@ -76,7 +76,7 @@ it never changes, blocks, or fails the decision the agent acts on.
 
 ### 2.1 Stamped at the emission site
 
-`fortify/audit.py` — `AuditEvent` stamps the two audit identifiers at
+`hexgate/audit.py` — `AuditEvent` stamps the two audit identifiers at
 construction. They live on the event, not on `Decision`: they exist only for
 audit emission, and the no-audit path never constructs an event (so a
 `decide()` call without a sender mints neither).
@@ -103,7 +103,7 @@ NEEDS_APPROVAL    "needs_approval"  "approval_required"
 
 ### 2.3 Wire payload — `AuditEvent.as_payload()`
 
-`fortify/audit.py` — `AuditEvent` wraps a `Decision` plus the caller identity
+`hexgate/audit.py` — `AuditEvent` wraps a `Decision` plus the caller identity
 read from the active `User` scope (`user_id`, `session_id`). `as_payload()`
 produces a flat JSON object whose keys mirror the platform's `DecisionEvent`:
 
@@ -134,7 +134,7 @@ Server-resolved fields (`project_id`, `agent_version_id`, `received_at`) are
 
 ### 3.1 Where emission happens
 
-`PolicyEnforcer.decide()` (`fortify/security/enforcer.py`):
+`PolicyEnforcer.decide()` (`hexgate/security/enforcer.py`):
 
 1. Resolve `role` from the active `User` contextvar.
 2. Ask the policy engine for a `Verdict`; lift it into a `Decision`.
@@ -145,7 +145,7 @@ The sender is **injected per enforcer**, not looked up globally — see §3.4.
 
 ### 3.2 `AuditSender` — fire-and-forget POST
 
-`fortify/audit.py`. `emit()` is synchronous and non-blocking; it schedules a
+`hexgate/audit.py`. `emit()` is synchronous and non-blocking; it schedules a
 background `asyncio.Task` that performs the POST. Key behaviours:
 
 - **Bounded concurrency.** An `asyncio.Semaphore(max_in_flight=32)` caps
@@ -178,9 +178,9 @@ synchronous.
 
 `configure(api_key=None, base_url=None) -> AuditSender | None`:
 
-- Resolves `api_key` from the argument or `FORTIFY_KEY`; returns `None` (audit
+- Resolves `api_key` from the argument or `HEXGATE_KEY`; returns `None` (audit
   inert) when no key is resolvable.
-- Resolves `base_url` from the argument or `FORTIFY_API_URL`, defaulting to
+- Resolves `base_url` from the argument or `HEXGATE_API_URL`, defaulting to
   `http://localhost:8000`. The endpoint is `<base_url>/v1/audit/decisions`.
 - **Keyed by api_key.** Senders live in a registry `dict[str, AuditSender]`.
   Calling `configure()` again with the **same** key returns the existing sender
@@ -193,11 +193,11 @@ Each adapter wrapper (`wrap_langchain_agent`, `wrap_openai_agent`,
 `PolicyEnforcer` they build. `bootstrap()` also calls `configure()` (env key) so
 local runs work without an explicit key.
 
-#### Local mode (`FORTIFY_LOCAL_MODE`)
+#### Local mode (`HEXGATE_LOCAL_MODE`)
 
-Setting `FORTIFY_LOCAL_MODE=1` makes `configure()` return `None` even when
-`FORTIFY_KEY` is present in env. `bootstrap(local_only=True)` sets the var
-*before* the first `configure()` call, and `fortify chat` passes
+Setting `HEXGATE_LOCAL_MODE=1` makes `configure()` return `None` even when
+`HEXGATE_KEY` is present in env. `bootstrap(local_only=True)` sets the var
+*before* the first `configure()` call, and `hexgate chat` passes
 `local_only=True` — so the inner-loop REPL never posts audit events even if
 a key has been lingering in `.env` from an earlier platform session.
 
@@ -207,18 +207,18 @@ value parser accepts `1` / `true` / `yes` / `on` (case-insensitive).
 
 There are now two clean operating modes, not three:
 
-| Mode | `FORTIFY_KEY` | `FORTIFY_LOCAL_MODE` | Policy from | Audit |
+| Mode | `HEXGATE_KEY` | `HEXGATE_LOCAL_MODE` | Policy from | Audit |
 |------|---------------|----------------------|-------------|-------|
 | **Local** | (irrelevant) | `1`, or unset with no key | YAML / disk / builtin | suppressed |
 | **Platform-managed** | set | unset | platform fetch | emitted |
 
-A single INFO line (`audit suppressed: FORTIFY_LOCAL_MODE=1 (...)`) is logged
+A single INFO line (`audit suppressed: HEXGATE_LOCAL_MODE=1 (...)`) is logged
 the first time `configure()` is called with both a key and local mode active
 — exactly the case where the suppression would be surprising. The "no key
 anywhere" case stays quiet.
 
-A separate WARNING fires from `bootstrap()` itself when both `FORTIFY_KEY`
-and `FORTIFY_LOCAL_POLICY` are set — that combination is almost always a
+A separate WARNING fires from `bootstrap()` itself when both `HEXGATE_KEY`
+and `HEXGATE_LOCAL_POLICY` are set — that combination is almost always a
 forgotten env entry from an earlier session, and surfacing it at startup
 saves a later debugging detour.
 
@@ -247,7 +247,7 @@ lost. GC closing the httpx client does not flush anything.
 
 ### 4.1 Request
 
-- **Auth:** `Authorization: Bearer <fortify_key>`. `require_project` verifies
+- **Auth:** `Authorization: Bearer <hexgate_key>`. `require_project` verifies
   the key and resolves it to a `project_id`. Missing/invalid → **401**.
 - **Body:** `DecisionEvent` (`platform/api/schemas.py`), a pydantic model that
   extends `AuditEnvelope`. Field-level validation (max lengths, enum membership)
@@ -289,7 +289,7 @@ carries only `event_id`, `occurred_at`, `agent_name`, `session_id`, `user_id`
 
 ## 5. Storage — ClickHouse
 
-`platform/clickhouse/init/schema.sql`. Database `fortify_audit`, table
+`platform/clickhouse/init/schema.sql`. Database `hexgate_audit`, table
 `policy_decision`.
 
 > ⚠️ The `init/` directory runs **once on an empty volume**. Editing the schema
@@ -298,7 +298,7 @@ carries only `event_id`, `occurred_at`, `agent_name`, `session_id`, `user_id`
 ### 5.1 Schema
 
 ```sql
-CREATE TABLE fortify_audit.policy_decision
+CREATE TABLE hexgate_audit.policy_decision
 (
   -- Envelope (shared with future event tables)
   event_id            UUID,
@@ -360,7 +360,7 @@ SETTINGS index_granularity = 8192;
 - **`arguments` carries tool inputs** (paths, payloads, possibly PII). It is
   transmitted to the platform and stored (compressed) for up to 90 days. The
   default `base_url` is **plaintext `http://localhost:8000`**; production
-  deployments must set `FORTIFY_API_URL` to a TLS endpoint.
+  deployments must set `HEXGATE_API_URL` to a TLS endpoint.
 - **Default key-name redaction, always on.** `AuditEvent.as_payload()` replaces
   values whose key matches `password|passwd|secret|token|api[-_]?key|
   credential|authorization` (case-insensitive, recursive into nested
@@ -446,7 +446,7 @@ columns make these scans cheap. All time-axis logic keys off `occurred_at`
    sensitive-keyed values, but content-sensitive values (SQL, email bodies)
    pass through; no per-tool allow/deny lists or `redact` callable yet.
 3. **Default transport is plaintext HTTP** — safe only for localhost; require
-   TLS via `FORTIFY_API_URL` elsewhere.
+   TLS via `HEXGATE_API_URL` elsewhere.
 4. **Sync agents emit nothing** — `emit()` requires a running loop; sync entry
    points silently produce no audit.
 5. **Schema evolution** — `init/schema.sql` runs once; there is no migration

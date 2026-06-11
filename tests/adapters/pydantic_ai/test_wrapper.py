@@ -14,16 +14,16 @@ from pydantic_ai import Agent
 from pydantic_ai.models.test import TestModel
 from pydantic_ai.tools import Tool
 
-from fortify.adapters.pydantic_ai import wrapper as wrapper_mod
-from fortify.adapters.pydantic_ai.agent import FortifyPydanticAgent
-from fortify.adapters.pydantic_ai.wrapper import (
+from hexgate.adapters.pydantic_ai import wrapper as wrapper_mod
+from hexgate.adapters.pydantic_ai.agent import HexgatePydanticAgent
+from hexgate.adapters.pydantic_ai.wrapper import (
     _clone_agent_with_tools,
     _extract_tools,
     wrap_pydantic_agent,
 )
-from fortify.security import AgentPolicy, BaseToolPolicy, PolicySet, ResolvedPolicy
-from fortify.security.enforcer import PolicyEnforcer
-from fortify.security.policy_set import DEFAULT_ROLE_NAME
+from hexgate.security import AgentPolicy, BaseToolPolicy, PolicySet, ResolvedPolicy
+from hexgate.security.enforcer import PolicyEnforcer
+from hexgate.security.policy_set import DEFAULT_ROLE_NAME
 
 
 def _allow_all(tool_names: list[str]) -> PolicySet:
@@ -118,14 +118,14 @@ def test_clone_agent_with_tools_installs_provided_tools_on_clone() -> None:
     assert list(clone._function_toolset.tools.keys()) == ["echo"]
 
 
-def test_wrap_pydantic_agent_returns_fortify_proxy() -> None:
-    """Return a FortifyPydanticAgent populated with agent name and api key."""
+def test_wrap_pydantic_agent_returns_hexgate_proxy() -> None:
+    """Return a HexgatePydanticAgent populated with agent name and api key."""
     agent = _make_agent()
 
-    wrapped = wrap_pydantic_agent(agent=agent, api_key="fortify-key")
+    wrapped = wrap_pydantic_agent(agent=agent, api_key="hexgate-key")
 
-    assert isinstance(wrapped, FortifyPydanticAgent)
-    assert wrapped._api_key == "fortify-key"
+    assert isinstance(wrapped, HexgatePydanticAgent)
+    assert wrapped._api_key == "hexgate-key"
     assert wrapped._agent_name == "my-agent"
 
 
@@ -146,8 +146,8 @@ def test_wrap_pydantic_agent_does_not_mutate_original_agent() -> None:
 def test_wrap_pydantic_agent_falls_back_to_env_var(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Resolve the API key from FORTIFY_KEY when no explicit key is given."""
-    monkeypatch.setenv("FORTIFY_KEY", "from-env")
+    """Resolve the API key from HEXGATE_KEY when no explicit key is given."""
+    monkeypatch.setenv("HEXGATE_KEY", "from-env")
     agent = _make_agent()
 
     wrapped = wrap_pydantic_agent(agent=agent)
@@ -158,8 +158,8 @@ def test_wrap_pydantic_agent_falls_back_to_env_var(
 def test_wrap_pydantic_agent_prefers_explicit_api_key_over_env(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The explicit api_key argument wins over FORTIFY_KEY when both are set."""
-    monkeypatch.setenv("FORTIFY_KEY", "from-env")
+    """The explicit api_key argument wins over HEXGATE_KEY when both are set."""
+    monkeypatch.setenv("HEXGATE_KEY", "from-env")
 
     wrapped = wrap_pydantic_agent(agent=_make_agent(), api_key="explicit")
 
@@ -170,7 +170,7 @@ def test_wrap_pydantic_agent_raises_when_no_api_key_available(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Reject construction when neither argument nor env var supplies a key."""
-    monkeypatch.delenv("FORTIFY_KEY", raising=False)
+    monkeypatch.delenv("HEXGATE_KEY", raising=False)
 
     with pytest.raises(ValueError, match="No API key provided"):
         wrap_pydantic_agent(agent=_make_agent())
@@ -179,8 +179,8 @@ def test_wrap_pydantic_agent_raises_when_no_api_key_available(
 def test_wrap_pydantic_agent_raises_when_api_key_is_empty_string(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Treat an empty FORTIFY_KEY env var the same as missing."""
-    monkeypatch.setenv("FORTIFY_KEY", "")
+    """Treat an empty HEXGATE_KEY env var the same as missing."""
+    monkeypatch.setenv("HEXGATE_KEY", "")
 
     with pytest.raises(ValueError, match="No API key provided"):
         wrap_pydantic_agent(agent=_make_agent(), api_key="")

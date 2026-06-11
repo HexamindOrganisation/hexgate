@@ -1,8 +1,8 @@
 [project]
-name = "fortify-api"
+name = "hexgate-api"
 version = "0.1.0"
-description = "Fortify control plane API — policy bundles, tokens, audit ingestion"
-# Matches the fortify SDK's floor (>=3.13) — the control plane now depends on
+description = "HexaGate control plane API — policy bundles, tokens, audit ingestion"
+# Matches the hexgate SDK's floor (>=3.13) — the control plane now depends on
 # it for compile_to_rego / compile_to_wasm.
 requires-python = ">=3.13"
 dependencies = [
@@ -25,7 +25,7 @@ dependencies = [
     # The control plane compiles + signs policy bundles at save time, so it
     # needs the SDK's compiler (compile_to_rego / compile_to_wasm). Requires
     # the `opa` binary on PATH at runtime. PyPI distribution name is
-    # ``hexgate``; import path stays ``from fortify import ...`` (Pillow/PIL
+    # ``hexgate``; import path stays ``from hexgate import ...`` (Pillow/PIL
     # pattern). Resolved via [tool.uv.sources] below until it's on the
     # registry.
     "hexgate",
@@ -63,6 +63,6 @@ asyncio_mode = "auto"
 package = false
 
 [tool.uv.sources]
-# Local, editable pointer to the Fortify SDK (asianf/). Delete this block
+# Local, editable pointer to the HexaGate SDK (asianf/). Delete this block
 # once `hexgate` is published to PyPI — the [project] dependency stays.
 hexgate = { path = "../..", editable = true }

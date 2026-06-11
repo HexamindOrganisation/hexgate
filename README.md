@@ -1,6 +1,6 @@
-# fortify
+# hexgate
 
-`fortify` is a lightweight LangChain-based agent runtime built around:
+`hexgate` is a lightweight LangChain-based agent runtime built around:
 
 - `langchain`
 - `gpt-5.4`
@@ -29,7 +29,7 @@ The runtime preflights `ripgrep` at agent build time and refuses to start when i
 
 ## ⚡ Quick Start — Local CLI
 
-If you just want to install `fortify` and try the terminal chat:
+If you just want to install `hexgate` and try the terminal chat:
 
 1. Install the package in editable mode.
 2. Copy the sample environment file.
@@ -39,7 +39,7 @@ If you just want to install `fortify` and try the terminal chat:
 ```bash
 python -m pip install -e .
 cp .env.sample .env
-fortify chat --agent example_agent
+hexgate chat --agent example_agent
 ```
 
 Required keys for the example CLI flow:
@@ -48,16 +48,16 @@ Required keys for the example CLI flow:
 - `LINKUP_API_KEY`
 - `TAVILY_API_KEY`
 
-Run `fortify --help` to see all subcommands (`chat`, `serve`, `register`), and `fortify <subcommand> --help` for the flags each one accepts.
+Run `hexgate --help` to see all subcommands (`chat`, `serve`, `register`), and `hexgate <subcommand> --help` for the flags each one accepts.
 
 Useful next commands:
 
 ```bash
-fortify chat --list-agents
-fortify chat --agent researcher                                      # by id
-fortify chat --agent examples.customer_bot:agent                     # by module:attr (same shape as `fortify serve`)
-fortify chat --use examples/file_agents.py --agent workspace_explorer
-fortify chat --use examples/research_agents.py --agent update_researcher
+hexgate chat --list-agents
+hexgate chat --agent researcher                                      # by id
+hexgate chat --agent examples.customer_bot:agent                     # by module:attr (same shape as `hexgate serve`)
+hexgate chat --use examples/file_agents.py --agent workspace_explorer
+hexgate chat --use examples/research_agents.py --agent update_researcher
 ```
 
 The included local agent lives in `examples/example_agent/`, and the CLI can also load:
@@ -70,20 +70,20 @@ The included local agent lives in `examples/example_agent/`, and the CLI can als
 
 The two Quick Starts above aren't competing — they answer different questions.
 
-**Inner loop — `fortify chat`.** A single-process REPL against a local or builtin agent. No platform, no Docker, no browser. The chat command sets `FORTIFY_LOCAL_MODE=1` automatically so audit stays on your machine even if `FORTIFY_KEY` lives in your `.env` from an earlier session. Denies and approval-required calls render as inline panels in the terminal — same `Decision` data the platform would log, surfaced where you're iterating. Reach for `chat` when you're authoring a policy YAML, tweaking a tool, or shaping a system prompt.
+**Inner loop — `hexgate chat`.** A single-process REPL against a local or builtin agent. No platform, no Docker, no browser. The chat command sets `HEXGATE_LOCAL_MODE=1` automatically so audit stays on your machine even if `HEXGATE_KEY` lives in your `.env` from an earlier session. Denies and approval-required calls render as inline panels in the terminal — same `Decision` data the platform would log, surfaced where you're iterating. Reach for `chat` when you're authoring a policy YAML, tweaking a tool, or shaping a system prompt.
 
-**Team loop — `fortify serve` + dashboard Playground.** Same agent code, but the policy + decisions round-trip through the platform. You get auditable decisions in ClickHouse, the shared Playground UI, and live policy edits via the dashboard. Reach for `serve` when you're collaborating on an agent's behaviour, debugging a production-like trace, or demoing.
+**Team loop — `hexgate serve` + dashboard Playground.** Same agent code, but the policy + decisions round-trip through the platform. You get auditable decisions in ClickHouse, the shared Playground UI, and live policy edits via the dashboard. Reach for `serve` when you're collaborating on an agent's behaviour, debugging a production-like trace, or demoing.
 
 | Path | Needs platform? | Audit destination | Policy edits visible at | Best for |
 |------|-----------------|-------------------|--------------------------|----------|
-| `fortify chat --agent ...` | No | Local terminal panel | Edit + restart (hot-reload only when `FORTIFY_LOCAL_POLICY` is set) | Inner loop, policy authoring |
-| `fortify serve --agent ...` + Playground | Yes | ClickHouse via `/v1/audit/decisions` | Per-turn fetch from dashboard | Team review, demos, integration testing |
+| `hexgate chat --agent ...` | No | Local terminal panel | Edit + restart (hot-reload only when `HEXGATE_LOCAL_POLICY` is set) | Inner loop, policy authoring |
+| `hexgate serve --agent ...` + Playground | Yes | ClickHouse via `/v1/audit/decisions` | Per-turn fetch from dashboard | Team review, demos, integration testing |
 
 Both commands accept either a plain agent id (`--agent researcher`) or a uvicorn-style `module.path:attr` spec (`--agent examples.customer_bot:agent`), so the same entry-point string works in both workflows.
 
 ## 🚀 Quick Start — Platform
 
-To run the full Fortify control plane locally (FastAPI backend + dashboard + your local agent serving over WebSocket), you need **three terminals**. The Makefile has a target that prints the recipe:
+To run the full HexaGate control plane locally (FastAPI backend + dashboard + your local agent serving over WebSocket), you need **three terminals**. The Makefile has a target that prints the recipe:
 
 ```bash
 make demo-platform     # prints the 3-terminal recipe below
@@ -98,15 +98,15 @@ make dashboard
 
 # Terminal 3 — mint a token, then serve your local agent
 #   1. Open http://localhost:5173/tokens, click "Mint new token", copy the value.
-#   2. Add to asianf/.env:  FORTIFY_KEY=fty_live_...
+#   2. Add to asianf/.env:  HEXGATE_KEY=fty_live_...
 #   3. Pick the agent's Python entrypoint (module:attr — uvicorn-style)
-#      and let `fortify serve` take over:
+#      and let `hexgate serve` take over:
 make serve                                          # default — examples.customer_bot:agent
 # or, for a different agent:
-uv run fortify serve my_app.agents:my_agent
+uv run hexgate serve my_app.agents:my_agent
 ```
 
-On first serve, `fortify serve` auto-registers the agent's manifest on
+On first serve, `hexgate serve` auto-registers the agent's manifest on
 the platform (the server generates a starter role-aware policy from the
 tool list). Subsequent serves short-circuit if the manifest hasn't
 changed. Pass `--no-auto-register` for CI / deliberate-deployment flows.
@@ -151,7 +151,7 @@ curl -X POST localhost:8000/v1/audit/decisions \
 
 Integration tests (`pytest -m integration`) round-trip rows through the live ClickHouse — opt-in so the default `make platform-api-test` stays offline-friendly.
 
-The dashboard's `/policies` page lets you edit each agent's policy. `fortify serve` re-fetches at every turn boundary, so your edits take effect on the next chat message without a restart.
+The dashboard's `/policies` page lets you edit each agent's policy. `hexgate serve` re-fetches at every turn boundary, so your edits take effect on the next chat message without a restart.
 
 ## ✨ Core Primitives
 
@@ -163,7 +163,7 @@ The two main primitives are:
 Use them when you want to define everything directly in Python.
 
 ```python
-from fortify import agent_tool, create_agent
+from hexgate import agent_tool, create_agent
 
 
 @agent_tool(name="my_lookup")
@@ -187,10 +187,10 @@ Devs pick one of two shapes. Both end up at the same enforcement seam — they d
 Dev wrote an OpenAI Agents / LangChain / Google ADK / Pydantic AI agent. They wrap it once and they're done:
 
 ```python
-from fortify.adapters.openai import FortifyRunner   # or .langchain.wrap_langchain_agent, .google.FortifyRunner, .pydantic_ai.wrap_pydantic_agent
-from fortify.runtime import User
+from hexgate.adapters.openai import HexgateRunner   # or .langchain.wrap_langchain_agent, .google.HexgateRunner, .pydantic_ai.wrap_pydantic_agent
+from hexgate.runtime import User
 
-runner = FortifyRunner()                            # picks up FORTIFY_KEY from env
+runner = HexgateRunner()                            # picks up HEXGATE_KEY from env
 await runner.run(
     my_agent,
     "refund 30",
@@ -210,9 +210,9 @@ That's it. They get:
 Dev authored the agent's `agent.yaml` / `policy.yaml` / `system.md` in the dashboard. SDK fetches them:
 
 ```python
-from fortify import load_fortify_agent, stream_agent, User
+from hexgate import load_hexgate_agent, stream_agent, User
 
-agent, handler = load_fortify_agent("default")      # explicit name — the SDK's loader requires it
+agent, handler = load_hexgate_agent("default")      # explicit name — the SDK's loader requires it
 
 async with User(user_id="alice", role="billing"):
     async for ev in stream_agent(agent, handler, "refund 30"):
@@ -225,12 +225,12 @@ Same enforcement seam, same `User` scope. The difference is whose system of reco
 
 | What dev sets | What changes |
 |---|---|
-| `FORTIFY_KEY=fty_live_<project>_…` | Wakes up the platform path. Without it, adapters / `load_agent` fall back to local / builtin. |
-| `FORTIFY_API_URL=http://localhost:8000` *(optional)* | Platform endpoint. Defaults to localhost. |
-| `FORTIFY_LOCAL_POLICY=./policy.yaml` *or* `./bundle/` | Dev escape hatch: enforce a policy from disk, hot-reload on save. Wins over the platform's bundle. |
-| `FORTIFY_BUNDLE_SIGN_KEY_PATH=./keys/dev.private` *(optional)* | Sign locally-recompiled yaml so `bundle.is_signed` reads True. |
-| `FORTIFY_BUNDLE_PUBKEY_PATH=./keys/prod.public` *(optional)* | Verify a pre-built bundle dir against this pubkey on every reload. |
-| `FORTIFY_BUNDLE_REQUIRE_SIGNATURE=true` *(optional)* | Strict mode — refuse any unsigned or unverifiable bundle at startup. |
+| `HEXGATE_KEY=fty_live_<project>_…` | Wakes up the platform path. Without it, adapters / `load_agent` fall back to local / builtin. |
+| `HEXGATE_API_URL=http://localhost:8000` *(optional)* | Platform endpoint. Defaults to localhost. |
+| `HEXGATE_LOCAL_POLICY=./policy.yaml` *or* `./bundle/` | Dev escape hatch: enforce a policy from disk, hot-reload on save. Wins over the platform's bundle. |
+| `HEXGATE_BUNDLE_SIGN_KEY_PATH=./keys/dev.private` *(optional)* | Sign locally-recompiled yaml so `bundle.is_signed` reads True. |
+| `HEXGATE_BUNDLE_PUBKEY_PATH=./keys/prod.public` *(optional)* | Verify a pre-built bundle dir against this pubkey on every reload. |
+| `HEXGATE_BUNDLE_REQUIRE_SIGNATURE=true` *(optional)* | Strict mode — refuse any unsigned or unverifiable bundle at startup. |
 
 No config object to instantiate, no `enforce_policy(...)` call to remember on the platform path. The adapter / loader threads it all through.
 
@@ -246,18 +246,18 @@ Walk through one tool call:
 
 `_policy_source` is set automatically by the loader based on env:
 
-- `FORTIFY_LOCAL_POLICY` set → `YamlPolicySource` or `BundleDirPolicySource` (mtime-driven refresh)
-- `FORTIFY_KEY` set, no local override → `PlatformPolicySource` (ETag / `304 Not Modified` refresh)
+- `HEXGATE_LOCAL_POLICY` set → `YamlPolicySource` or `BundleDirPolicySource` (mtime-driven refresh)
+- `HEXGATE_KEY` set, no local override → `PlatformPolicySource` (ETag / `304 Not Modified` refresh)
 - Neither → no source attached; enforcement uses whatever was loaded once
 
-**Scope of the per-turn refresh:** only the policy bundle. `system_prompt`, the manifest's tool list, and the model id are read once at agent construction and stay fixed for the lifetime of the process. Edit those on the dashboard and the change lands at the next `fortify serve` restart — not at the next turn. The split is deliberate: policy is the operator's primary lever (and the one that needs to be auditable per-decision), while the manifest is an author-time concept.
+**Scope of the per-turn refresh:** only the policy bundle. `system_prompt`, the manifest's tool list, and the model id are read once at agent construction and stay fixed for the lifetime of the process. Edit those on the dashboard and the change lands at the next `hexgate serve` restart — not at the next turn. The split is deliberate: policy is the operator's primary lever (and the one that needs to be auditable per-decision), while the manifest is an author-time concept.
 
 ### Two carve-outs worth knowing
 
 1. **Per-call identity stays explicit.** `User` is the one piece the adapter can't infer from env, because it's per-request, not per-process. One line wrapping each call (`user=User(...)` kwarg on adapters, `async with User(...)` for native).
-2. **`approval_required` tools.** If the policy uses that mode, dev decides what happens — pass `approval_handler=` (True / False / callable) when wrapping. Default for `fortify serve` is auto-approve; for `fortify chat` it prompts the TTY. Native code gets whatever the dev wires.
+2. **`approval_required` tools.** If the policy uses that mode, dev decides what happens — pass `approval_handler=` (True / False / callable) when wrapping. Default for `hexgate serve` is auto-approve; for `hexgate chat` it prompts the TTY. Native code gets whatever the dev wires.
 
-Everything else — fetch, verify, hot-reload, role selection, signature check, decision rendering, tracing — the runtime handles. Set `FORTIFY_KEY` and wrap, or set `FORTIFY_LOCAL_POLICY` and wrap. That's the surface.
+Everything else — fetch, verify, hot-reload, role selection, signature check, decision rendering, tracing — the runtime handles. Set `HEXGATE_KEY` and wrap, or set `HEXGATE_LOCAL_POLICY` and wrap. That's the surface.
 
 ## 📦 What You Can Import
 
@@ -272,7 +272,7 @@ The current curated surface includes:
 - `stream_agent_raw`
 - `load_builtin_agent`
 - `list_builtin_agents`
-- `load_fortify_agent`
+- `load_hexgate_agent`
 - `User` — async context manager for per-request user attenuation (see [User Scope](#-user-scope))
 - `agent_tool`
 - `web_search`
@@ -281,7 +281,7 @@ The current curated surface includes:
 Example:
 
 ```python
-from fortify import (
+from hexgate import (
     create_agent,
     edit_file,
     enforce_policy,
@@ -292,7 +292,7 @@ from fortify import (
     agent_tool,
     load_agent,
     load_builtin_agent,
-    load_fortify_agent,
+    load_hexgate_agent,
     register_agent,
     fetch,
     web_search,
@@ -302,7 +302,7 @@ from fortify import (
 
 ## 🤝 Framework Agent Wrapping
 
-In addition to its native `create_agent(...)` runtime, `fortify` ships adapters that wrap agents built with **OpenAI Agents SDK**, **LangChain / LangGraph**, **Google ADK**, or **Pydantic AI** to add two things without touching the agent's logic:
+In addition to its native `create_agent(...)` runtime, `hexgate` ships adapters that wrap agents built with **OpenAI Agents SDK**, **LangChain / LangGraph**, **Google ADK**, or **Pydantic AI** to add two things without touching the agent's logic:
 
 1. **Tool-call policy enforcement.** Each tool the agent can invoke is gated by a `PolicyEnforcer` that returns a typed `Decision` (allow / deny / needs-approval) per call. Non-allow outcomes render as a `[policy_denied]` / `[approval_required]` marker the model sees as tool output (or, for pydantic_ai, a `ModelRetry`) rather than aborting the run, so the agent can recover.
 2. **User-aware observability.** Every run is traced through Langfuse with the active `User`'s identity (user id, session id, role) propagated onto the spans.
@@ -311,7 +311,7 @@ The four integrations differ in shape because the underlying SDKs do:
 
 | | OpenAI Agents SDK | LangChain / LangGraph | Google ADK | Pydantic AI |
 | --- | --- | --- | --- | --- |
-| Entry point | `FortifyRunner` (replaces `Runner`) | `wrap_langchain_agent` (returns a proxy) | `FortifyRunner` (replaces `Runner`) | `wrap_pydantic_agent` (returns a proxy) |
+| Entry point | `HexgateRunner` (replaces `Runner`) | `wrap_langchain_agent` (returns a proxy) | `HexgateRunner` (replaces `Runner`) | `wrap_pydantic_agent` (returns a proxy) |
 | Tool wrapping | Copies each `FunctionTool`, replaces `on_invoke_tool` with a `PolicyEnforcer`-gated version | Mutates each `BaseTool` in place (`install_enforcer_on_tool`), replaces `func`/`coroutine` with enforcer-gated versions, sets `handle_tool_error=True` | Copies each `BaseTool` (normalizing bare callables to `FunctionTool`), replaces `run_async` with a gated version | Copies each `Tool` and overrides `function_schema.call` with a gated version |
 | Denial behavior | Returns `decision.as_error_message()` as the tool output (`[policy_denied]` / `[approval_required]` markered string) | Returns `{"ok": False, "error": decision.as_error_payload()}` so LangChain emits the structured dict as the tool result | Returns `decision.as_error_message()` as the tool output | Raises `ModelRetry(decision.as_error_message())`; pydantic_ai surfaces it back to the model as a tool-result message |
 | Tracing | `OpenAIAgentsInstrumentor` + `propagate_attributes` | Langfuse `CallbackHandler` injected into each call's `RunnableConfig` + `propagate_attributes` | `GoogleADKInstrumentor` + `propagate_attributes` | `Agent.instrument_all()` + `propagate_attributes` |
@@ -319,19 +319,19 @@ The four integrations differ in shape because the underlying SDKs do:
 
 Role resolution happens **at call time** from the active `User` contextvar — one wrapped agent serves many users concurrently because the scope is per-call. The original agent object is left intact (or, for LangChain BYO-graph tools, mutated by design so the same `tools` list flows through `create_react_agent`); the wrapper holds the policy.
 
-All adapters resolve the API key the same way: from the explicit `api_key=` argument, falling back to the `FORTIFY_KEY` environment variable.
+All adapters resolve the API key the same way: from the explicit `api_key=` argument, falling back to the `HEXGATE_KEY` environment variable.
 
-### OpenAI Agents SDK — `FortifyRunner`
+### OpenAI Agents SDK — `HexgateRunner`
 
-`FortifyRunner` is a drop-in replacement for `agents.Runner`. It wraps the agent's tools with a `PolicyEnforcer` at construction time and opens a `User` scope around each `Runner.run` / `run_sync` / `run_streamed` call so role resolution happens at call time.
+`HexgateRunner` is a drop-in replacement for `agents.Runner`. It wraps the agent's tools with a `PolicyEnforcer` at construction time and opens a `User` scope around each `Runner.run` / `run_sync` / `run_streamed` call so role resolution happens at call time.
 
 ```python
 import asyncio
 from agents import Agent, function_tool
 from dotenv import load_dotenv
 
-from fortify.runtime import User
-from fortify.adapters.openai import FortifyRunner
+from hexgate.runtime import User
+from hexgate.adapters.openai import HexgateRunner
 
 
 @function_tool
@@ -349,7 +349,7 @@ async def main():
         model="gpt-4o-mini",
     )
 
-    runner = FortifyRunner()  # picks up FORTIFY_KEY from env
+    runner = HexgateRunner()  # picks up HEXGATE_KEY from env
     result = await runner.run(
         agent,
         "What's the weather in Cherbourg?",
@@ -364,7 +364,7 @@ if __name__ == "__main__":
 
 What happens under the hood:
 
-- `FortifyRunner.run` calls `wrap_openai_agent`, which builds a `PolicySet` for `(api_key, agent.name, tool_names)`, constructs one `PolicyEnforcer`, and returns a `dataclasses.replace`'d copy of the agent with policy-gated tool copies — your original `agent` is untouched.
+- `HexgateRunner.run` calls `wrap_openai_agent`, which builds a `PolicySet` for `(api_key, agent.name, tool_names)`, constructs one `PolicyEnforcer`, and returns a `dataclasses.replace`'d copy of the agent with policy-gated tool copies — your original `agent` is untouched.
 - The runner opens an `async with user:` scope around the underlying `Runner.run*` call. When the model calls a tool, the guard asks `enforcer.decide(...)` for a `Decision`. On non-allow, it returns `decision.as_error_message()` — a `[policy_denied]` or `[approval_required]` markered string the model can interpret and recover from.
 - The run executes inside `propagate_attributes(user_id=..., session_id=..., metadata={"user_role": ...})`, so Langfuse spans carry the caller identity.
 
@@ -372,7 +372,7 @@ What happens under the hood:
 
 ### LangChain / LangGraph — `wrap_langchain_agent`
 
-`wrap_langchain_agent` builds a `PolicyEnforcer` once and installs it on each tool in place (`install_enforcer_on_tool`) so the same instances inside the compiled graph become policy-gated. It returns a `FortifyLangchainAgent` proxy that opens a `User` scope and injects a Langfuse callback into every `invoke` / `ainvoke` / `stream` / `astream` / `astream_events` call. The `user` is supplied **per call**, so a single wrapped agent can serve many users concurrently — role resolution happens at call time from the contextvar.
+`wrap_langchain_agent` builds a `PolicyEnforcer` once and installs it on each tool in place (`install_enforcer_on_tool`) so the same instances inside the compiled graph become policy-gated. It returns a `HexgateLangchainAgent` proxy that opens a `User` scope and injects a Langfuse callback into every `invoke` / `ainvoke` / `stream` / `astream` / `astream_events` call. The `user` is supplied **per call**, so a single wrapped agent can serve many users concurrently — role resolution happens at call time from the contextvar.
 
 ```python
 import asyncio
@@ -381,8 +381,8 @@ from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI
 from langgraph.prebuilt import create_react_agent
 
-from fortify.runtime import User
-from fortify.adapters.langchain import wrap_langchain_agent
+from hexgate.runtime import User
+from hexgate.adapters.langchain import wrap_langchain_agent
 
 
 @tool
@@ -409,7 +409,7 @@ async def main():
     agent = wrap_langchain_agent(
         agent=graph,
         tools=TOOLS,          # same list passed to create_react_agent — wrapped in place
-        api_key="sk-...",     # or rely on FORTIFY_KEY
+        api_key="sk-...",     # or rely on HEXGATE_KEY
     )
 
     result = await agent.ainvoke(
@@ -426,13 +426,13 @@ if __name__ == "__main__":
 What happens under the hood:
 
 - `wrap_langchain_agent` builds a `PolicySet` for the agent, constructs one `PolicyEnforcer(policy_set, agent_name=…)`, and calls `install_enforcer_on_tools(tools, enforcer=…)` to mutate each tool's `func` and `coroutine` with enforcer-gated closures. `handle_tool_error` is forced to `True`. Installation is idempotent — re-installing rebinds the captured originals to the new enforcer without stacking gates.
-- Each invocation method on `FortifyLangchainAgent` takes `user=` and opens an `async with user:` (or `user.sync_scope()` for sync) around the delegated `CompiledStateGraph` call. The active `User` is pushed onto a contextvar; the guards read it at tool-call time to resolve the matching role's policy.
+- Each invocation method on `HexgateLangchainAgent` takes `user=` and opens an `async with user:` (or `user.sync_scope()` for sync) around the delegated `CompiledStateGraph` call. The active `User` is pushed onto a contextvar; the guards read it at tool-call time to resolve the matching role's policy.
 - A non-allow `Decision` is rendered as `{"ok": False, "error": decision.as_error_payload()}` so the LangChain runtime surfaces the structured dict as the tool result instead of raising.
 - The wrapper also enters `propagate_attributes(user_id=..., session_id=..., metadata={"user_role": ...})` and merges a Langfuse `CallbackHandler` into the `RunnableConfig.callbacks` for the duration of the call. Anything not explicitly proxied falls through via `__getattr__`.
 
-### Google ADK — `FortifyRunner`
+### Google ADK — `HexgateRunner`
 
-The Google ADK wrapper exposes its own `FortifyRunner`. It's constructed up front with the agent, app name, and session service (mirroring the ADK `Runner` constructor) — the underlying ADK `Runner` is built once and reused since role resolution happens at call time. `run` / `run_async` then yield ADK events.
+The Google ADK wrapper exposes its own `HexgateRunner`. It's constructed up front with the agent, app name, and session service (mirroring the ADK `Runner` constructor) — the underlying ADK `Runner` is built once and reused since role resolution happens at call time. `run` / `run_async` then yield ADK events.
 
 ```python
 import asyncio
@@ -444,8 +444,8 @@ from google.adk.models.lite_llm import LiteLlm
 from google.adk.sessions import InMemorySessionService
 from google.genai import types
 
-from fortify.runtime import User
-from fortify.adapters.google import FortifyRunner
+from hexgate.runtime import User
+from hexgate.adapters.google import HexgateRunner
 
 
 def get_weather(city: str) -> str:
@@ -481,11 +481,11 @@ async def main():
         session_id=user.session_id,
     )
 
-    runner = FortifyRunner(
+    runner = HexgateRunner(
         agent=agent,
         app_name="google_runner_example",
         session_service=session_service,
-    )  # picks up FORTIFY_KEY from env
+    )  # picks up HEXGATE_KEY from env
 
     user_msg = types.Content(
         role="user", parts=[types.Part(text="What is the weather in New Delhi?")]
@@ -502,22 +502,22 @@ if __name__ == "__main__":
 
 What happens under the hood:
 
-- At construction, `FortifyRunner` calls `wrap_google_agent`, which builds a `PolicySet`, constructs one `PolicyEnforcer`, and returns `agent.model_copy(update={"tools": guarded_tools})` — your original `agent` is untouched.
+- At construction, `HexgateRunner` calls `wrap_google_agent`, which builds a `PolicySet`, constructs one `PolicyEnforcer`, and returns `agent.model_copy(update={"tools": guarded_tools})` — your original `agent` is untouched.
 - Each tool is normalized first: bare callables in `agent.tools` are wrapped into `FunctionTool` (matching what ADK does internally) so the guard has a stable `BaseTool` surface. Each tool is then `copy.copy`'d and its `run_async` replaced with an enforcer-gated version.
 - Each `run` / `run_async` call opens a `User` scope (`user.sync_scope()` / `async with user:`) and dispatches to the cached underlying `Runner`. On non-allow, the guard returns `decision.as_error_message()` — a `[policy_denied]` or `[approval_required]` markered string — so the ADK runtime forwards it to the model as the tool output instead of aborting the run.
 - Observability is set up lazily on each call: `GoogleADKInstrumentor().instrument()` plus `nest_asyncio.apply()` (ADK's runner spins its own loop), and the run executes inside `propagate_attributes(user_id=..., session_id=..., metadata={"user_role": ...}, tags=["google.runner.run.<agent_name>"])` so Langfuse spans carry the caller identity.
 
 ### Pydantic AI — `wrap_pydantic_agent`
 
-`wrap_pydantic_agent` returns a `FortifyPydanticAgent` proxy backed by a clone of the original agent whose tools are gated by a freshly built `PolicyEnforcer`. Tools registered via the `Agent(...)` constructor or via `@agent.tool` / `@agent.tool_plain` are all picked up. The `user` is supplied **per call**, so a single wrapped agent can serve many users concurrently — role resolution happens at call time from the contextvar.
+`wrap_pydantic_agent` returns a `HexgatePydanticAgent` proxy backed by a clone of the original agent whose tools are gated by a freshly built `PolicyEnforcer`. Tools registered via the `Agent(...)` constructor or via `@agent.tool` / `@agent.tool_plain` are all picked up. The `user` is supplied **per call**, so a single wrapped agent can serve many users concurrently — role resolution happens at call time from the contextvar.
 
 ```python
 import asyncio
 from dotenv import load_dotenv
 from pydantic_ai import Agent
 
-from fortify.runtime import User
-from fortify.adapters.pydantic_ai import wrap_pydantic_agent
+from hexgate.runtime import User
+from hexgate.adapters.pydantic_ai import wrap_pydantic_agent
 
 
 async def main():
@@ -537,7 +537,7 @@ async def main():
 
     agent = wrap_pydantic_agent(
         agent=agent,
-        api_key="sk-...",  # or rely on FORTIFY_KEY
+        api_key="sk-...",  # or rely on HEXGATE_KEY
     )
 
     result = await agent.run(
@@ -558,7 +558,7 @@ if __name__ == "__main__":
 What happens under the hood:
 
 - `wrap_pydantic_agent` builds a `PolicySet`, constructs one `PolicyEnforcer`, reads tools off the agent's internal `_function_toolset`, copies each tool with an enforcer-gated `function_schema.call`, and returns a shallow-copied agent whose toolset holds those gated copies — your original `agent` is untouched, so it can be reused or wrapped again independently.
-- Each invocation method on `FortifyPydanticAgent` (`run` / `run_sync` / `run_stream` / `iter`) takes `user=` and opens a `User` scope around the delegated `Agent` call. The contextvar is per-task, so concurrent `run` calls for different users do not see each other's policies.
+- Each invocation method on `HexgatePydanticAgent` (`run` / `run_sync` / `run_stream` / `iter`) takes `user=` and opens a `User` scope around the delegated `Agent` call. The contextvar is per-task, so concurrent `run` calls for different users do not see each other's policies.
 - A non-allow `Decision` raises `ModelRetry(decision.as_error_message())`; pydantic_ai surfaces it back to the model as a tool-result message — `[policy_denied]` / `[approval_required]` markers in the same shape as the OpenAI/Google adapters — instead of aborting the run.
 - Identity propagation uses `propagate_attributes(...)` so Langfuse spans carry the caller identity. Global tracing is enabled via `Agent.instrument_all()` on construction.
 
@@ -566,9 +566,9 @@ What happens under the hood:
 
 Working scripts in `examples/`:
 
-- `examples/customer_bot.py` — canonical Fortify path: `create_agent(...)` + the dashboard register/serve loop end-to-end.
-- `examples/openai_demo.py` — `FortifyRunner` (OpenAI Agents SDK) end-to-end.
-- `examples/google_demo.py` — `FortifyRunner` (Google ADK) end-to-end with `InMemorySessionService`.
+- `examples/customer_bot.py` — canonical HexaGate path: `create_agent(...)` + the dashboard register/serve loop end-to-end.
+- `examples/openai_demo.py` — `HexgateRunner` (OpenAI Agents SDK) end-to-end.
+- `examples/google_demo.py` — `HexgateRunner` (Google ADK) end-to-end with `InMemorySessionService`.
 - `examples/pydantic_ai_demo.py` — `wrap_pydantic_agent` (Pydantic AI) end-to-end.
 
 > **Note on naming.** These demo files end in `_demo.py` so their filenames don't shadow the installed packages they import (`agents`, `google`, `langchain`, `openai`, `pydantic_ai`). Without the suffix, running any script inside `examples/` would put the directory on `sys.path[0]` and Python would import the demo files instead of the real packages.
@@ -595,14 +595,14 @@ It demonstrates:
 For the CLI, you can import that script and then pick one of its registered agents:
 
 ```bash
-fortify chat --use examples/file_agents.py --agent workspace_explorer
-fortify chat --use examples/file_agents.py --agent repo_editor
-fortify chat --use examples/research_agents.py --agent update_researcher
+hexgate chat --use examples/file_agents.py --agent workspace_explorer
+hexgate chat --use examples/file_agents.py --agent repo_editor
+hexgate chat --use examples/research_agents.py --agent update_researcher
 ```
 
 ## 🗂️ Builtin And Local Agents
 
-The package now ships with a small `fortify.builtin_agents` directory for official starter agents.
+The package now ships with a small `hexgate.builtin_agents` directory for official starter agents.
 
 Current builtin agents:
 
@@ -611,7 +611,7 @@ Current builtin agents:
 Example:
 
 ```python
-from fortify import load_builtin_agent
+from hexgate import load_builtin_agent
 
 agent, handler = load_builtin_agent("researcher")
 ```
@@ -625,7 +625,7 @@ The CLI also discovers local agents from:
 This repo ships a demo agent at `examples/example_agent/`, so from the project root you can simply run:
 
 ```bash
-fortify chat --agent example_agent
+hexgate chat --agent example_agent
 ```
 
 ## 🔐 Policy Shape
@@ -665,7 +665,7 @@ Every tool call routes through a `PolicyEnforcer` that returns `allow` / `deny` 
 `create_agent(...)` stays close to LangChain. Policy enforcement is applied after agent creation:
 
 ```python
-from fortify import AgentPolicy, create_agent, enforce_policy, fetch, web_search
+from hexgate import AgentPolicy, create_agent, enforce_policy, fetch, web_search
 
 policy = AgentPolicy.model_validate(
     {
@@ -701,7 +701,7 @@ That means the same agent code can stay simple in development, while deployment 
 
 ## 🧩 Policy Bundles — Compile, Sign, Enforce (WASM)
 
-Fortify has **two policy enforcement engines** that return identical decisions (there's a parity test suite that proves it):
+HexaGate has **two policy enforcement engines** that return identical decisions (there's a parity test suite that proves it):
 
 - **pydantic** (default) — evaluates constraints in-process. Zero setup; this is what every example above uses.
 - **WASM** — compiles `policy.yaml` → Rego → a WebAssembly module evaluated via `wasmtime`. This is the path production ships: one compiled artifact, byte-for-byte reproducible, cryptographically signed by the platform.
@@ -717,24 +717,24 @@ brew install opa            # macOS
 # or see https://www.openpolicyagent.org/docs/latest/#running-opa
 ```
 
-Without `opa` on `PATH`, `fortify policy build --no-wasm` still emits the yaml + rego (no `.wasm`), and the pydantic engine keeps working.
+Without `opa` on `PATH`, `hexgate policy build --no-wasm` still emits the yaml + rego (no `.wasm`), and the pydantic engine keeps working.
 
-### The `fortify policy` CLI
+### The `hexgate policy` CLI
 
 ```bash
 # Validate a policy.yaml without the network — parse + check every constraint
-fortify policy validate policy.yaml
+hexgate policy validate policy.yaml
 
 # See the Rego your YAML compiles to (stdout)
-fortify policy show-rego policy.yaml
+hexgate policy show-rego policy.yaml
 
 # Dry-run a single decision. --engine wasm compiles + evaluates in wasmtime
 # (matching production); the default pydantic engine needs no opa.
-fortify policy test policy.yaml --role billing --tool refund_order \
+hexgate policy test policy.yaml --role billing --tool refund_order \
     --args '{"amount": 200, "currency": "USD"}' --engine wasm
 
 # Compile a bundle: writes {stem}.yaml + .rego + .wasm + .bundle.json
-fortify policy build policy.yaml --out ./bundle
+hexgate policy build policy.yaml --out ./bundle
 ```
 
 On a denied decision, `test` prints the reason; the wasm engine additionally lists each violated constraint string verbatim:
@@ -748,7 +748,7 @@ On a denied decision, `test` prints the reason; the wasm engine additionally lis
 
 ### What's in a bundle
 
-`fortify policy build` produces a directory:
+`hexgate policy build` produces a directory:
 
 | File | Contents |
 |---|---|
@@ -760,29 +760,29 @@ On a denied decision, `test` prints the reason; the wasm engine additionally lis
 
 The manifest's hashes authenticate the files; the signature authenticates the manifest. Verifying both proves the whole bundle came from the trusted signer, untampered.
 
-### Local enforcement — `FORTIFY_LOCAL_POLICY`
+### Local enforcement — `HEXGATE_LOCAL_POLICY`
 
 Point an agent at a local source and every tool call routes through the WASM engine instead of pydantic — no platform needed. Two shapes are accepted, and both **hot-reload on save** (no restart, no manual rebuild between turns):
 
-| `FORTIFY_LOCAL_POLICY=…` | What happens | When to use |
+| `HEXGATE_LOCAL_POLICY=…` | What happens | When to use |
 |---|---|---|
-| **`./bundle/`** (output of `fortify policy build`) | Stat the bundle manifest each turn; reload if its mtime changed. | Production-shaped local testing — exercises the exact signed-bundle path. |
+| **`./bundle/`** (output of `hexgate policy build`) | Stat the bundle manifest each turn; reload if its mtime changed. | Production-shaped local testing — exercises the exact signed-bundle path. |
 | **`./policy.yaml`** | Stat the yaml each turn; recompile via `opa` when its mtime changed. | The tight dev loop — edit yaml, save, ask again. No build step. |
 
 ```bash
 # Pre-built bundle dir — rebuild it mid-session, next chat picks it up
-fortify policy build policy.yaml --out ./bundle
-FORTIFY_LOCAL_POLICY=./bundle fortify chat --agent researcher
-# [fortify] FORTIFY_LOCAL_POLICY active (bundle-dir): ./bundle (wasm_hash=7e6d1f8b..., unsigned)
+hexgate policy build policy.yaml --out ./bundle
+HEXGATE_LOCAL_POLICY=./bundle hexgate chat --agent researcher
+# [hexgate] HEXGATE_LOCAL_POLICY active (bundle-dir): ./bundle (wasm_hash=7e6d1f8b..., unsigned)
 
 # Raw yaml — edit policy.yaml in your editor, save, next chat sees the new policy
-FORTIFY_LOCAL_POLICY=./policy.yaml fortify chat --agent researcher
-# [fortify] FORTIFY_LOCAL_POLICY active (yaml): ./policy.yaml (wasm_hash=ab12..., unsigned)
+HEXGATE_LOCAL_POLICY=./policy.yaml hexgate chat --agent researcher
+# [hexgate] HEXGATE_LOCAL_POLICY active (yaml): ./policy.yaml (wasm_hash=ab12..., unsigned)
 ```
 
-The bundle's integrity (files match the manifest) is verified on every reload — a stale or corrupt bundle fails immediately, not at the first tool call. Yaml sources default to **unsigned**: set `FORTIFY_BUNDLE_SIGN_KEY_PATH=./keys/dev.private` to sign each recompile with your `fortify policy keygen` key, so downstream gates that check `bundle.is_signed` see what they expect.
+The bundle's integrity (files match the manifest) is verified on every reload — a stale or corrupt bundle fails immediately, not at the first tool call. Yaml sources default to **unsigned**: set `HEXGATE_BUNDLE_SIGN_KEY_PATH=./keys/dev.private` to sign each recompile with your `hexgate policy keygen` key, so downstream gates that check `bundle.is_signed` see what they expect.
 
-> **Same refresh seam as the platform.** Under the hood both sources implement `PolicySource.fetch()`; the agent runtime calls it at the top of every turn and only swaps the active policy when the returned bundle is a new instance. Unchanged → identity match → no work. That's the same hot-reload path `fortify serve` uses for platform-edited YAML.
+> **Same refresh seam as the platform.** Under the hood both sources implement `PolicySource.fetch()`; the agent runtime calls it at the top of every turn and only swaps the active policy when the returned bundle is a new instance. Unchanged → identity match → no work. That's the same hot-reload path `hexgate serve` uses for platform-edited YAML.
 
 ### Signing & verification
 
@@ -791,22 +791,22 @@ Production bundles are signed so the runtime can prove a bundle is genuine befor
 Generate a keypair and sign a bundle locally:
 
 ```bash
-fortify policy keygen --out ./keys/dev          # → dev.private (0600) + dev.public
-fortify policy build policy.yaml --out ./bundle --sign-key ./keys/dev.private
+hexgate policy keygen --out ./keys/dev          # → dev.private (0600) + dev.public
+hexgate policy build policy.yaml --out ./bundle --sign-key ./keys/dev.private
 # → ./bundle/policy.bundle.json.sig
 ```
 
 At runtime, point the verifier at the public key:
 
 ```bash
-FORTIFY_LOCAL_POLICY=./bundle \
-FORTIFY_BUNDLE_PUBKEY_PATH=./keys/dev.public \
-FORTIFY_BUNDLE_REQUIRE_SIGNATURE=true \
-fortify chat --agent researcher
-# [fortify] FORTIFY_LOCAL_POLICY active (bundle-dir): ./bundle (wasm_hash=..., signed)
+HEXGATE_LOCAL_POLICY=./bundle \
+HEXGATE_BUNDLE_PUBKEY_PATH=./keys/dev.public \
+HEXGATE_BUNDLE_REQUIRE_SIGNATURE=true \
+hexgate chat --agent researcher
+# [hexgate] HEXGATE_LOCAL_POLICY active (bundle-dir): ./bundle (wasm_hash=..., signed)
 ```
 
-`FORTIFY_BUNDLE_REQUIRE_SIGNATURE` controls strictness — warn-by-default keeps local dev frictionless; opt into refusal for CI/prod:
+`HEXGATE_BUNDLE_REQUIRE_SIGNATURE` controls strictness — warn-by-default keeps local dev frictionless; opt into refusal for CI/prod:
 
 | Bundle | `PUBKEY_PATH` set | `REQUIRE_SIGNATURE` | Outcome |
 |---|---|---|---|
@@ -838,7 +838,7 @@ The `action` dict carries `{"tool_name", "arguments", "agent_name"}`; `context` 
 Example:
 
 ```python
-from fortify import (
+from hexgate import (
     AgentPolicy,
     create_agent,
     edit_file,
@@ -893,7 +893,7 @@ Supported on **macOS and Linux only** (Windows is unsupported). If `srt` is not 
 Tune the boundary through `LocalWorkspace`:
 
 ```python
-from fortify.runtime import LocalWorkspace
+from hexgate.runtime import LocalWorkspace
 
 workspace = LocalWorkspace(
     root_dir="./project",
@@ -968,11 +968,11 @@ Policy-bundle enforcement (see [Policy Bundles](#-policy-bundles--compile-sign-e
 
 | Env var | Purpose |
 |---|---|
-| `FORTIFY_LOCAL_POLICY` | Path to a bundle directory **or** a `policy.yaml`; routes enforcement through the WASM engine and hot-reloads on save |
-| `FORTIFY_BUNDLE_PUBKEY_PATH` | base64url Ed25519 public key used to verify a bundle's signature |
-| `FORTIFY_BUNDLE_SIGN_KEY_PATH` | base64url Ed25519 private key used to sign locally-compiled yaml sources (so `bundle.is_signed` is True) |
-| `FORTIFY_BUNDLE_REQUIRE_SIGNATURE` | `true` to refuse unsigned or unverifiable bundles (default: warn only) |
-| `FORTIFY_OPA_BIN` | Override the `opa` binary location (default: search `PATH`) |
+| `HEXGATE_LOCAL_POLICY` | Path to a bundle directory **or** a `policy.yaml`; routes enforcement through the WASM engine and hot-reloads on save |
+| `HEXGATE_BUNDLE_PUBKEY_PATH` | base64url Ed25519 public key used to verify a bundle's signature |
+| `HEXGATE_BUNDLE_SIGN_KEY_PATH` | base64url Ed25519 private key used to sign locally-compiled yaml sources (so `bundle.is_signed` is True) |
+| `HEXGATE_BUNDLE_REQUIRE_SIGNATURE` | `true` to refuse unsigned or unverifiable bundles (default: warn only) |
+| `HEXGATE_OPA_BIN` | Override the `opa` binary location (default: search `PATH`) |
 
 ## 🧪 Tests & Dev Tooling
 
@@ -998,11 +998,11 @@ Targets at a glance:
 | **M2 policy demo** | |
 | `policy-build` | Compile the example policy.yaml to a bundle |
 | `policy-test-wasm` | Smoke a WASM-engine decision |
-| `demo-override` | Build a deny bundle + chat with `FORTIFY_LOCAL_POLICY` |
+| `demo-override` | Build a deny bundle + chat with `HEXGATE_LOCAL_POLICY` |
 | **Platform demo** (multi-terminal — see `make demo-platform`) | |
 | `platform-api` / `platform-api-install` / `platform-api-test` | FastAPI control plane in `platform/api/` |
 | `dashboard` / `dashboard-install` | Vite + React app in `platform/dashboard/` |
-| `serve` | `fortify serve` — bridge this SDK to the platform |
+| `serve` | `hexgate serve` — bridge this SDK to the platform |
 | `demo-platform` | Print the 3-terminal recipe |
 | **Misc** | |
 | `build` / `clean` | Package + tidy |
@@ -1040,40 +1040,40 @@ python examples/demo.py
 Run the inline chat CLI with a local or builtin YAML agent:
 
 ```bash
-fortify chat --agent example_agent
+hexgate chat --agent example_agent
 ```
 
 Run the CLI with code-defined agents from a Python script:
 
 ```bash
-fortify chat --use examples/file_agents.py --agent workspace_explorer
-fortify chat --use examples/file_agents.py --agent repo_editor
-fortify chat --use examples/research_agents.py --agent update_researcher
-fortify chat --use examples/research_agents.py --agent update_researcher --approval-mode ask
+hexgate chat --use examples/file_agents.py --agent workspace_explorer
+hexgate chat --use examples/file_agents.py --agent repo_editor
+hexgate chat --use examples/research_agents.py --agent update_researcher
+hexgate chat --use examples/research_agents.py --agent update_researcher --approval-mode ask
 ```
 
 List what the CLI can currently resolve:
 
 ```bash
-fortify chat --list-agents
+hexgate chat --list-agents
 ```
 
-### `fortify register` — push a manifest to the platform
+### `hexgate register` — push a manifest to the platform
 
-Register a code-defined agent's manifest with the Fortify platform. `--agent`
+Register a code-defined agent's manifest with the HexaGate platform. `--agent`
 takes a Python import path of the form `module.path:attribute`, the same shape
 as ASGI/WSGI entrypoints. The CLI imports the module, grabs the agent object,
-and POSTs its manifest to `${FORTIFY_API_URL}/v1/agents` using
-`${FORTIFY_KEY}` as the bearer token:
+and POSTs its manifest to `${HEXGATE_API_URL}/v1/agents` using
+`${HEXGATE_KEY}` as the bearer token:
 
 ```bash
-fortify register --agent examples.customer_bot:agent
-fortify register --agent my_app.agents:my_agent --description "Customer support bot"
+hexgate register --agent examples.customer_bot:agent
+hexgate register --agent my_app.agents:my_agent --description "Customer support bot"
 ```
 
 On first register, the platform auto-generates a starter role-aware
 policy from the manifest's tool list (`read_only` mixin + `default` +
-`member` + `admin`) and signs a WASM bundle so `fortify serve` runs
+`member` + `admin`) and signs a WASM bundle so `hexgate serve` runs
 against real enforcement from the first request. Edit the policy in
 the dashboard's `/policies` page; subsequent re-registers preserve
 those edits — only the manifest snapshot grows.
@@ -1085,25 +1085,25 @@ you can pass each of those pieces explicitly. Only `--tools` is required;
 fields on the manifest so the dashboard can show them:
 
 ```bash
-fortify register \
+hexgate register \
     --agent my_app.agents:graph \
     --tools my_app.tools:my_tools \
     --model gpt-4o-mini \
     --system-prompt prompts/support.md
 ```
 
-For everyone else — agents built with `fortify.create_agent(...)`, OpenAI
+For everyone else — agents built with `hexgate.create_agent(...)`, OpenAI
 Agents, Pydantic AI, Google ADK — the manifest reads tools, model, and
 system prompt directly off the object. No flags needed.
 
 `--system-prompt` accepts either a literal string or a path to a `.md` /
 `.txt` / `.jinja` file (read as text at register time).
 
-Supported frameworks: OpenAI Agents SDK, Google ADK, Pydantic AI, LangChain/LangGraph, Fortify agents.
+Supported frameworks: OpenAI Agents SDK, Google ADK, Pydantic AI, LangChain/LangGraph, HexaGate agents.
 
-### `fortify serve` — bridge a local agent to the platform's relay
+### `hexgate serve` — bridge a local agent to the platform's relay
 
-`fortify serve` takes the **same** `module:attr` spec as `fortify register`.
+`hexgate serve` takes the **same** `module:attr` spec as `hexgate register`.
 The CLI imports the agent, derives the manifest in one call, auto-registers
 on the platform (idempotent — content-hash short-circuits no-ops), fetches
 the operator's policy from the cloud, and opens the WebSocket relay so the
@@ -1111,13 +1111,13 @@ dashboard's Playground can drive it. Policy edits in `/policies` take
 effect at the next chat-turn boundary.
 
 ```bash
-fortify serve examples.customer_bot:agent
+hexgate serve examples.customer_bot:agent
 
 # CI / deliberate-deploy: error if not pre-registered
-fortify serve examples.customer_bot:agent --no-auto-register
+hexgate serve examples.customer_bot:agent --no-auto-register
 ```
 
-There is **no** `FORTIFY_AGENT_NAME` env var anymore — the name lives in
+There is **no** `HEXGATE_AGENT_NAME` env var anymore — the name lives in
 the agent's `.name` attribute (or the `name=` kwarg you passed to
 `create_react_agent` / `create_agent`). The platform is the source of
 truth for policy; your Python file is the source of truth for code.
@@ -1129,24 +1129,24 @@ inspect it, persist it elsewhere, diff it across versions, or wire it
 into a custom registration flow — call `create_manifest` directly:
 
 ```python
-from fortify import create_manifest
+from hexgate import create_manifest
 
 manifest = create_manifest(agent, description="Customer support bot")
 print(manifest.model_dump())
 ```
 
 `create_manifest` dispatches on the framework of `agent`. The supported
-types are the same set `fortify register` accepts: Fortify, OpenAI Agents
+types are the same set `hexgate register` accepts: HexaGate, OpenAI Agents
 SDK, Google ADK, Pydantic AI, and LangChain/LangGraph compiled graphs.
 For LangGraph you must pass `tools=` explicitly, and may pass `model=` /
 `system_prompt=`, since compiled graphs don't expose those fields after
 compilation.
 
 The return value is an `AgentManifest` (a Pydantic model, also re-exported
-from `fortify` for type annotations) — the same schema the platform
+from `hexgate` for type annotations) — the same schema the platform
 stores and the dashboard renders.
 
-## 🌐 Fortify Platform
+## 🌐 HexaGate Platform
 
 The `platform/` directory contains an optional control plane that hosts agent definitions, dev tokens, and a live debug surface. The SDK works fully without it (`load_local_agent`, `load_builtin_agent` keep their existing semantics) — but with it you get:
 
@@ -1174,10 +1174,10 @@ Endpoints:
 - `GET /v1/projects/:id/agents` — list agents with their YAMLs
 - `GET /v1/projects/:id/agents/:name` — read one agent
 - `PUT /v1/projects/:id/agents/:name` — save agent / policy / system YAMLs
-- `WS /v1/projects/:id/serve` — producer socket (the `fortify serve` CLI dials here)
+- `WS /v1/projects/:id/serve` — producer socket (the `hexgate serve` CLI dials here)
 - `WS /v1/projects/:id/chat` — consumer socket (the dashboard Playground dials here)
 
-DB lives at `platform/api/fortify.db`. Delete it and restart to wipe state.
+DB lives at `platform/api/hexgate.db`. Delete it and restart to wipe state.
 
 ### Dashboard (`platform/dashboard/`)
 
@@ -1200,23 +1200,23 @@ Routes:
 
 The dev server proxies `/v1/*` (HTTP and WebSocket) to `localhost:8000`, so HMR works through the same origin as the API.
 
-### Serve Mode (`fortify serve`)
+### Serve Mode (`hexgate serve`)
 
 Bridges your local agent runtime to the dashboard via the platform's WebSocket relay — same pattern as Cloudflare Tunnel or ngrok.
 
 ```bash
 # in asianf/.env
-FORTIFY_KEY=fty_live_<project>_<biscuit>
-FORTIFY_API_URL=http://localhost:8000       # optional, defaults to localhost:8000
+HEXGATE_KEY=fty_live_<project>_<biscuit>
+HEXGATE_API_URL=http://localhost:8000       # optional, defaults to localhost:8000
 
 # pick an agent module:attr — uvicorn-style spec
-uv run fortify serve examples.customer_bot:agent
+uv run hexgate serve examples.customer_bot:agent
 ```
 
 Behaviour:
 
 - Loads the agent object from the `module:attr` spec — same form as
-  `fortify register`. The agent's name, tools, model, and system
+  `hexgate register`. The agent's name, tools, model, and system
   prompt come from the object directly (no flags duplicating
   what's already in code).
 - Auto-registers the manifest on first run via `POST /v1/agents`
@@ -1225,10 +1225,10 @@ Behaviour:
 - Fetches the operator's policy from `GET /v1/agents/{name}`. Local
   code is authoritative for code; the platform is authoritative for
   policy.
-- Connects `wss://${FORTIFY_API_URL}/v1/serve` with the bearer
+- Connects `wss://${HEXGATE_API_URL}/v1/serve` with the bearer
   percent-encoded into the WebSocket subprotocol (Phase 6 — the WS
   handshake grammar doesn't allow `=` padding in plain headers).
-  Server echoes `fortify.v1` to confirm the contract.
+  Server echoes `hexgate.v1` to confirm the contract.
 - Sends a `hello` frame announcing the agent name (the dashboard's
   "Serving" indicator reads this).
 - On each inbound `chat` message, **refreshes the active policy**
@@ -1242,30 +1242,30 @@ Behaviour:
   serve mode for prompts (planned: dashboard-side approval UI).
 - Reconnects with exponential backoff on socket drop.
 
-There's no longer a `FORTIFY_AGENT_NAME` env var, `--agent` flag, or
+There's no longer a `HEXGATE_AGENT_NAME` env var, `--agent` flag, or
 `--use` flag — the spec carries everything. If you've been setting
-`FORTIFY_AGENT_NAME` in `.env`, drop it.
+`HEXGATE_AGENT_NAME` in `.env`, drop it.
 
-### How `load_agent()` resolves with `FORTIFY_KEY`
+### How `load_agent()` resolves with `HEXGATE_KEY`
 
 ```python
-from fortify import load_agent
+from hexgate import load_agent
 
 agent, handler = load_agent("read_only")     # explicit name required
 ```
 
-When `FORTIFY_KEY` is set, `load_agent(name)` fetches the named agent from
-the platform (via `load_fortify_agent`). When `FORTIFY_KEY` is not set, it
+When `HEXGATE_KEY` is set, `load_agent(name)` fetches the named agent from
+the platform (via `load_hexgate_agent`). When `HEXGATE_KEY` is not set, it
 falls back to local / registered / builtin resolution — no platform call.
 
-The legacy `FORTIFY_AGENT_NAME` env-var fallback was removed in Phase 7;
-direct callers of `load_fortify_agent` / `load_agent` must pass an
-explicit name. For the CLI workflow, `fortify serve <module:attr>` derives
+The legacy `HEXGATE_AGENT_NAME` env-var fallback was removed in Phase 7;
+direct callers of `load_hexgate_agent` / `load_agent` must pass an
+explicit name. For the CLI workflow, `hexgate serve <module:attr>` derives
 the name from the loaded agent's `.name` attribute — no env var needed.
 
 ## 👤 User Scope + Roles
 
-Real backends serve many users, and different users get different capabilities. Fortify splits that into two pieces:
+Real backends serve many users, and different users get different capabilities. HexaGate splits that into two pieces:
 
 - **`User`** — the per-request scope. Marks "this invocation acts on behalf of alice, in role X." Async context manager; pushes a fact-bearing Biscuit through the agent runtime.
 - **Role policies** — one `policy.yaml` per role, optionally inheriting from a base mixin. The runtime picks the right one at call time based on the active `User.role`.
@@ -1275,9 +1275,9 @@ The two are deliberately decoupled: tokens carry **identity** (who is calling), 
 ### Minimal example
 
 ```python
-from fortify import User, load_fortify_agent, stream_agent
+from hexgate import User, load_hexgate_agent, stream_agent
 
-agent, handler = load_fortify_agent("support-bot")          # client + roles attached at load
+agent, handler = load_hexgate_agent("support-bot")          # client + roles attached at load
 
 async with User(user_id="alice", role="billing", ttl_seconds=300):
     async for event in stream_agent(agent, handler, "refund customer 30"):
@@ -1292,10 +1292,10 @@ The cleanest production shape — set the scope once in middleware, every endpoi
 
 ```python
 from fastapi import FastAPI
-from fortify import User, load_fortify_agent, stream_agent
+from hexgate import User, load_hexgate_agent, stream_agent
 
 app = FastAPI()
-agent, handler = load_fortify_agent("support-bot")          # at startup
+agent, handler = load_hexgate_agent("support-bot")          # at startup
 
 @app.middleware("http")
 async def attach_user(request, call_next):
@@ -1395,7 +1395,7 @@ Switch to `User(user_id="alice", role="default")` and `refund_order` itself is m
 
 - **Single-file policies still work.** A legacy `policy.yaml` is treated as the `default` role — no migration needed for agents that don't yet differentiate by role.
 - **Lazy attenuation.** `User.__aenter__` only pushes a contextvar — the cryptographic work happens inside `stream_agent` / `invoke_agent` the first time the agent runs. Errors surface at first agent call, not at scope entry.
-- **Local agents skip attenuation.** A `User` scope around a `load_local_agent` / `load_builtin_agent` agent logs a warning and runs with no facts. The `default` policy still applies — use `load_fortify_agent` for the full signed chain.
+- **Local agents skip attenuation.** A `User` scope around a `load_local_agent` / `load_builtin_agent` agent logs a warning and runs with no facts. The `default` policy still applies — use `load_hexgate_agent` for the full signed chain.
 - **Explicit override.** Passing `tool_use_context=` explicitly to `stream_agent` / `invoke_agent` wins over an active `User` scope. Useful for tests or one-off bypass.
 - **Sync callers.** `User` exposes both `async with user:` and `user.sync_scope()`. The async form is the primary API (room for KMS / audit / JWKS I/O in `__aenter__` / `__aexit__` later); the sync mirror exists for CLI loops and `Runner.run_sync`-style callers where the async ctxmgr protocol is unavailable.
 
@@ -1404,7 +1404,7 @@ Switch to `User(user_id="alice", role="default")` and `refund_order` itself is m
 For direct Python usage, the simplest runtime path is:
 
 ```python
-from fortify import stream_agent
+from hexgate import stream_agent
 
 async for event in stream_agent(agent, handler, "latest AI breakthroughs"):
     ...

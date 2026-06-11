@@ -7,7 +7,7 @@ keeps an explicit policy from being silently swapped back at the next run.
 
 The LangChain graph build and the Langfuse handler are stubbed exactly
 like tests/agents/test_factory.py does; the platform is a scripted fake
-client patched over ``fortify.cloud.client.FortifyClient``.
+client patched over ``hexgate.cloud.client.HexgateClient``.
 """
 
 from __future__ import annotations
@@ -16,12 +16,12 @@ from __future__ import annotations
 import pytest
 from langchain_core.tools import tool
 
-from fortify.agents import factory
-from fortify.adapters.langchain.tools import GuardedTool
-from fortify.cloud.client import FortifyError
-from fortify.security import AgentPolicy, PolicySet
-from fortify.security.policy_set import DEFAULT_ROLE_NAME
-from fortify.security.source import PlatformPolicySource
+from hexgate.agents import factory
+from hexgate.adapters.langchain.tools import GuardedTool
+from hexgate.cloud.client import HexgateError
+from hexgate.security import AgentPolicy, PolicySet
+from hexgate.security.policy_set import DEFAULT_ROLE_NAME
+from hexgate.security.source import PlatformPolicySource
 
 _POLICY_YAML = """\
 version: 1
@@ -40,7 +40,7 @@ def echo(text: str) -> str:
 
 
 class _FakeClient:
-    """Scripted FortifyClient stand-in (same shape as the binding tests)."""
+    """Scripted HexgateClient stand-in (same shape as the binding tests)."""
 
     def __init__(self) -> None:
         self._queued: list[tuple[dict | None, str | None] | Exception] = []
@@ -74,23 +74,23 @@ def _hermetic(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         factory, "get_langfuse_handler", lambda **kwargs: "handler-instance"
     )
-    monkeypatch.delenv("FORTIFY_KEY", raising=False)
-    monkeypatch.delenv("FORTIFY_LOCAL_POLICY", raising=False)
-    monkeypatch.delenv("FORTIFY_BIND_AGENTS", raising=False)
-    monkeypatch.delenv("FORTIFY_LOCAL_MODE", raising=False)
+    monkeypatch.delenv("HEXGATE_KEY", raising=False)
+    monkeypatch.delenv("HEXGATE_LOCAL_POLICY", raising=False)
+    monkeypatch.delenv("HEXGATE_BIND_AGENTS", raising=False)
+    monkeypatch.delenv("HEXGATE_LOCAL_MODE", raising=False)
 
 
 def _patch_platform(monkeypatch: pytest.MonkeyPatch, client: _FakeClient) -> None:
     """Route _bind_policy's client construction to the scripted fake.
 
-    Sets both the key and the FORTIFY_BIND_AGENTS opt-in toggle — the
+    Sets both the key and the HEXGATE_BIND_AGENTS opt-in toggle — the
     platform bind path is gated on both (a bare key never auto-binds).
     """
-    import fortify.cloud.client as client_mod
+    import hexgate.cloud.client as client_mod
 
-    monkeypatch.setenv("FORTIFY_KEY", "fty_test_demo_dummybiscuit")
-    monkeypatch.setenv("FORTIFY_BIND_AGENTS", "1")
-    monkeypatch.setattr(client_mod, "FortifyClient", lambda config: client)
+    monkeypatch.setenv("HEXGATE_KEY", "fty_test_demo_dummybiscuit")
+    monkeypatch.setenv("HEXGATE_BIND_AGENTS", "1")
+    monkeypatch.setattr(client_mod, "HexgateClient", lambda config: client)
 
 
 # ---------------------------------------------------------------------------
@@ -99,7 +99,7 @@ def _patch_platform(monkeypatch: pytest.MonkeyPatch, client: _FakeClient) -> Non
 
 
 def test_auto_mode_without_governance_env_returns_bare_agent() -> None:
-    """No FORTIFY_KEY / FORTIFY_LOCAL_POLICY → today's bare graph."""
+    """No HEXGATE_KEY / HEXGATE_LOCAL_POLICY → today's bare graph."""
     agent, handler = factory.create_agent(
         model="openai:gpt-5.4", tools=[echo], name="support-bot"
     )
@@ -113,7 +113,7 @@ def test_auto_mode_without_name_skips_even_with_key(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Nameless agents have nothing to resolve against — silent skip."""
-    monkeypatch.setenv("FORTIFY_KEY", "fty_test_demo_dummybiscuit")
+    monkeypatch.setenv("HEXGATE_KEY", "fty_test_demo_dummybiscuit")
 
     agent, _ = factory.create_agent(model="openai:gpt-5.4", tools=[echo])
 
@@ -124,17 +124,17 @@ def test_auto_mode_without_name_skips_even_with_key(
 def test_auto_mode_bare_key_does_not_bind_without_opt_in(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A FORTIFY_KEY present for some *other* agent must not auto-bind a
+    """A HEXGATE_KEY present for some *other* agent must not auto-bind a
     named prototype — that would surprise-404 at construction. The platform
-    bind path needs FORTIFY_BIND_AGENTS=1 (or an explicit bind_policy=True)."""
-    import fortify.cloud.client as client_mod
+    bind path needs HEXGATE_BIND_AGENTS=1 (or an explicit bind_policy=True)."""
+    import hexgate.cloud.client as client_mod
 
-    monkeypatch.setenv("FORTIFY_KEY", "fty_test_demo_dummybiscuit")
-    monkeypatch.delenv("FORTIFY_BIND_AGENTS", raising=False)
+    monkeypatch.setenv("HEXGATE_KEY", "fty_test_demo_dummybiscuit")
+    monkeypatch.delenv("HEXGATE_BIND_AGENTS", raising=False)
     # The platform must never be contacted — fail hard if a client is built.
     monkeypatch.setattr(
         client_mod,
-        "FortifyClient",
+        "HexgateClient",
         lambda config: pytest.fail("create_agent contacted the platform"),
     )
 
@@ -146,24 +146,24 @@ def test_auto_mode_bare_key_does_not_bind_without_opt_in(
     assert agent._binding is None
 
 
-def test_auto_mode_respects_fortify_local_mode(
+def test_auto_mode_respects_hexgate_local_mode(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """`FORTIFY_LOCAL_MODE` is the one-way kill switch the local-mode bootstrap
+    """`HEXGATE_LOCAL_MODE` is the one-way kill switch the local-mode bootstrap
     sets; the auto-bind path must respect it just like ``audit.configure``
     does. Even with both the platform key and the opt-in toggle set, a
     create_agent under local mode stays bare — the user explicitly asked
     for no platform IO from this process."""
-    import fortify.cloud.client as client_mod
-    from fortify import audit
+    import hexgate.cloud.client as client_mod
+    from hexgate import audit
 
-    monkeypatch.setenv("FORTIFY_KEY", "fty_test_demo_dummybiscuit")
-    monkeypatch.setenv("FORTIFY_BIND_AGENTS", "1")
+    monkeypatch.setenv("HEXGATE_KEY", "fty_test_demo_dummybiscuit")
+    monkeypatch.setenv("HEXGATE_BIND_AGENTS", "1")
     monkeypatch.setenv(audit._LOCAL_MODE_ENV, "1")
     # The platform must never be contacted — fail hard if a client is built.
     monkeypatch.setattr(
         client_mod,
-        "FortifyClient",
+        "HexgateClient",
         lambda config: pytest.fail(
             "create_agent contacted the platform under local mode"
         ),
@@ -177,12 +177,12 @@ def test_auto_mode_respects_fortify_local_mode(
     assert agent._binding is None
 
 
-def test_bind_policy_true_overrides_fortify_local_mode(
+def test_bind_policy_true_overrides_hexgate_local_mode(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """``bind_policy=True`` is the explicit-caller form — local mode shouldn't
     silently veto it. The kill switch only short-circuits the auto-detect path."""
-    from fortify import audit
+    from hexgate import audit
 
     monkeypatch.setenv(audit._LOCAL_MODE_ENV, "1")
     monkeypatch.setattr(
@@ -205,7 +205,7 @@ def test_bind_policy_false_skips_even_with_key(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The explicit escape hatch for bare graphs in keyed environments."""
-    monkeypatch.setenv("FORTIFY_KEY", "fty_test_demo_dummybiscuit")
+    monkeypatch.setenv("HEXGATE_KEY", "fty_test_demo_dummybiscuit")
 
     agent, _ = factory.create_agent(
         model="openai:gpt-5.4", tools=[echo], name="support-bot", bind_policy=False
@@ -228,7 +228,7 @@ def test_bind_policy_true_requires_name() -> None:
 def test_bind_wraps_tools_and_attaches_source_and_client(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Auto mode + FORTIFY_KEY + name → guarded tools, seeded source, client."""
+    """Auto mode + HEXGATE_KEY + name → guarded tools, seeded source, client."""
     fc = _FakeClient()
     fc.serve({"policy_yaml": _POLICY_YAML}, etag='"hash-a"')
     _patch_platform(monkeypatch, fc)
@@ -241,7 +241,7 @@ def test_bind_wraps_tools_and_attaches_source_and_client(
     assert isinstance(agent.tools[0], GuardedTool)
     assert isinstance(agent._binding.source, PlatformPolicySource)
     assert isinstance(agent._binding.enforcer.policy, PolicySet)
-    assert agent.fortify_client is fc
+    assert agent.hexgate_client is fc
     assert fc.calls == [None]  # exactly one fetch at creation
 
 
@@ -251,10 +251,10 @@ def test_bind_failure_is_loud_not_a_bare_agent(
     """Binding was requested (key present) — a platform error must raise,
     never silently degrade to an unguarded agent."""
     fc = _FakeClient()
-    fc.serve_error(FortifyError("Fortify API error 500 calling …", status=500))
+    fc.serve_error(HexgateError("HexaGate API error 500 calling …", status=500))
     _patch_platform(monkeypatch, fc)
 
-    with pytest.raises(FortifyError, match="500"):
+    with pytest.raises(HexgateError, match="500"):
         factory.create_agent(model="openai:gpt-5.4", tools=[echo], name="support-bot")
 
 
@@ -264,10 +264,10 @@ def test_404_is_loud_does_not_auto_register(
     """An unregistered agent surfaces the 404 — create_agent never silently
     auto-creates it on the platform (register-on-404 is deferred)."""
     fc = _FakeClient()
-    fc.serve_error(FortifyError("Fortify API error 404 calling …", status=404))
+    fc.serve_error(HexgateError("HexaGate API error 404 calling …", status=404))
     _patch_platform(monkeypatch, fc)
 
-    with pytest.raises(FortifyError) as excinfo:
+    with pytest.raises(HexgateError) as excinfo:
         factory.create_agent(model="openai:gpt-5.4", tools=[echo], name="new-agent")
 
     assert excinfo.value.status == 404
@@ -277,9 +277,9 @@ def test_404_is_loud_does_not_auto_register(
 def test_local_override_binds_without_a_key(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """FORTIFY_LOCAL_POLICY alone triggers auto mode; resolve takes the
+    """HEXGATE_LOCAL_POLICY alone triggers auto mode; resolve takes the
     override branch and the platform is never contacted."""
-    import fortify.security.binding as binding_mod
+    import hexgate.security.binding as binding_mod
 
     override_policy = PolicySet({DEFAULT_ROLE_NAME: AgentPolicy()})
 
@@ -288,7 +288,7 @@ def test_local_override_binds_without_a_key(
             return override_policy
 
     stub = _StubSource()
-    monkeypatch.setenv("FORTIFY_LOCAL_POLICY", "/tmp/override-bundle")
+    monkeypatch.setenv("HEXGATE_LOCAL_POLICY", "/tmp/override-bundle")
     monkeypatch.setattr(
         binding_mod, "_local_policy_override", lambda: (override_policy, stub)
     )
@@ -299,7 +299,7 @@ def test_local_override_binds_without_a_key(
 
     assert isinstance(agent.tools[0], GuardedTool)
     assert agent._binding.source is stub
-    assert agent.fortify_client is None
+    assert agent.hexgate_client is None
 
 
 # ---------------------------------------------------------------------------

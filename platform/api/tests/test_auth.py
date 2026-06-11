@@ -120,7 +120,7 @@ def test_register_rejects_duplicate_email(client: TestClient) -> None:
 
 
 def test_login_sets_session_cookie(client: TestClient) -> None:
-    """A correct password → 204 with a Set-Cookie: fortify_session=... header."""
+    """A correct password → 204 with a Set-Cookie: hexgate_session=... header."""
     client.post(
         "/v1/auth/register",
         json={"email": "bob@example.com", "password": "correcthorsebattery"},
@@ -133,7 +133,7 @@ def test_login_sets_session_cookie(client: TestClient) -> None:
     )
     assert r.status_code == 204, r.text
     set_cookie = r.headers.get("set-cookie", "")
-    assert "fortify_session=" in set_cookie
+    assert "hexgate_session=" in set_cookie
     assert "HttpOnly" in set_cookie
     assert "samesite=lax" in set_cookie.lower()
 
@@ -179,7 +179,7 @@ def test_logout_clears_cookie(client: TestClient) -> None:
     assert r.status_code == 204
     # Server-issued clear: cookie is set to empty with Max-Age=0.
     cookie = r.headers.get("set-cookie", "")
-    assert "fortify_session=" in cookie
+    assert "hexgate_session=" in cookie
     assert ("max-age=0" in cookie.lower()) or ("expires=" in cookie.lower())
 
 
@@ -246,7 +246,7 @@ def test_project_route_accepts_cookie_auth(client: TestClient) -> None:
 def test_project_route_accepts_x_dev_user_header_in_test_mode(
     client: TestClient,
 ) -> None:
-    """The conftest sets FORTIFY_ALLOW_DEV_USER_HEADER=1 for the whole
+    """The conftest sets HEXGATE_ALLOW_DEV_USER_HEADER=1 for the whole
     test session so existing tests can use X-Dev-User as a cheap
     impersonation seam. Mirrors the production behaviour when an
     operator explicitly opts in (e.g. for a staging environment)."""
@@ -358,10 +358,10 @@ def test_default_admin_email_passes_pydantic_validation() -> None:
 def test_project_route_rejects_x_dev_user_in_production_mode(
     client: TestClient, monkeypatch
 ) -> None:
-    """X-Dev-User MUST be ignored when ``FORTIFY_ALLOW_DEV_USER_HEADER``
+    """X-Dev-User MUST be ignored when ``HEXGATE_ALLOW_DEV_USER_HEADER``
     is unset (the production default). Anyone with a guessed User UUID
     would otherwise impersonate that user, which would be a CVE."""
-    monkeypatch.delenv("FORTIFY_ALLOW_DEV_USER_HEADER", raising=False)
+    monkeypatch.delenv("HEXGATE_ALLOW_DEV_USER_HEADER", raising=False)
     r = client.get(
         f"/v1/projects/{DEFAULT_PROJECT_ID}/agents",
         headers={"X-Dev-User": DEFAULT_USER_ID},
@@ -612,19 +612,19 @@ def test_reset_password_with_invalid_token_rejects(client: TestClient) -> None:
 
 
 def test_cookie_secure_defaults_to_false_for_localhost_dev(monkeypatch) -> None:
-    """Default of ``FORTIFY_COOKIE_SECURE`` (unset) → ``Secure`` off.
+    """Default of ``HEXGATE_COOKIE_SECURE`` (unset) → ``Secure`` off.
 
     A Secure cookie is silently dropped by every browser on http://, so
     if this regressed to ``True`` ``make platform-api`` would 401 on
     every request after login. The ergonomic default is off."""
     from auth import _cookie_secure
 
-    monkeypatch.delenv("FORTIFY_COOKIE_SECURE", raising=False)
+    monkeypatch.delenv("HEXGATE_COOKIE_SECURE", raising=False)
     assert _cookie_secure() is False
 
 
 def test_cookie_secure_respects_env_var(monkeypatch) -> None:
-    """``FORTIFY_COOKIE_SECURE=1`` (or true/yes/on) → Secure on.
+    """``HEXGATE_COOKIE_SECURE=1`` (or true/yes/on) → Secure on.
 
     The whole point of this knob is that prod deployments behind an
     HTTPS terminator can flip the Secure flag on with one env var. If
@@ -633,9 +633,9 @@ def test_cookie_secure_respects_env_var(monkeypatch) -> None:
     from auth import _cookie_secure
 
     for truthy in ("1", "true", "TRUE", "yes", "on"):
-        monkeypatch.setenv("FORTIFY_COOKIE_SECURE", truthy)
+        monkeypatch.setenv("HEXGATE_COOKIE_SECURE", truthy)
         assert _cookie_secure() is True, f"{truthy!r} should be truthy"
 
     for falsy in ("0", "false", "no", "off", ""):
-        monkeypatch.setenv("FORTIFY_COOKIE_SECURE", falsy)
+        monkeypatch.setenv("HEXGATE_COOKIE_SECURE", falsy)
         assert _cookie_secure() is False, f"{falsy!r} should be falsy"

@@ -3,7 +3,7 @@
 `User(user_id=..., limits=..., scope=..., ttl_seconds=...)` is the canonical
 way for a dev's backend to bind an agent invocation to one user. Inside the
 ``async with User(...)`` block the runtime lazily attenuates the agent's
-bound FortifyClient token and folds the resulting facts into ToolUseContext.
+bound HexgateClient token and folds the resulting facts into ToolUseContext.
 
 These tests cover the contextvar bookkeeping and the lazy attenuation
 hand-off without spinning up a real platform — they monkeypatch the factory's
@@ -17,9 +17,9 @@ import asyncio
 import pytest
 from biscuit_auth import BiscuitBuilder, KeyPair
 
-from fortify.agents import factory
-from fortify.cloud.client import FortifyClient, FortifyConfig
-from fortify.runtime import User, get_current_user
+from hexgate.agents import factory
+from hexgate.cloud.client import HexgateClient, HexgateConfig
+from hexgate.runtime import User, get_current_user
 
 
 # ---------------------------------------------------------------------------
@@ -42,9 +42,9 @@ def _parent_envelope(priv: bytes, project: str = "acme") -> str:
     return f"fty_live_{project}_{biscuit.to_base64()}"
 
 
-def _client(priv: bytes, pub: bytes) -> FortifyClient:
-    return FortifyClient(
-        FortifyConfig(
+def _client(priv: bytes, pub: bytes) -> HexgateClient:
+    return HexgateClient(
+        HexgateConfig(
             base_url="http://test",
             api_key=_parent_envelope(priv),
             project_id="acme",
@@ -56,16 +56,16 @@ def _client(priv: bytes, pub: bytes) -> FortifyClient:
 class _FakeAgent:
     """A bare object the factory helpers can read attributes off.
 
-    Mirrors the real ``FortifyAgent``'s seam fields as first-class
+    Mirrors the real ``HexgateAgent``'s seam fields as first-class
     attributes (set to ``None`` when not provided) so production code
     can read them via direct attribute access without falling back to
     ``getattr(agent, ..., None)``.
     """
 
-    def __init__(self, *, name: str | None = None, client: FortifyClient | None = None):
+    def __init__(self, *, name: str | None = None, client: HexgateClient | None = None):
         self.name = name
         self.workspace = None
-        self.fortify_client: FortifyClient | None = client
+        self.hexgate_client: HexgateClient | None = client
 
 
 # ---------------------------------------------------------------------------
@@ -145,7 +145,7 @@ async def test_user_scope_isolated_across_tasks() -> None:
 async def test_resolve_tool_use_context_attenuates_when_user_active(
     keys: tuple[bytes, bytes],
 ) -> None:
-    """A live User + agent.fortify_client → biscuit_facts populated."""
+    """A live User + agent.hexgate_client → biscuit_facts populated."""
     priv, pub = keys
     agent = _FakeAgent(name="support-bot", client=_client(priv, pub))
 
@@ -173,15 +173,15 @@ async def test_resolve_tool_use_context_skips_when_no_user() -> None:
 async def test_resolve_tool_use_context_warns_for_local_agent(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """A User scope with no agent.fortify_client logs a warning and returns no facts."""
-    agent = _FakeAgent(name="local-agent")  # no fortify_client attr
+    """A User scope with no agent.hexgate_client logs a warning and returns no facts."""
+    agent = _FakeAgent(name="local-agent")  # no hexgate_client attr
     import logging
 
     caplog.set_level(logging.WARNING)
     async with User(user_id="alice"):
         ctx = factory._resolve_tool_use_context(agent, None)
     assert ctx.biscuit_facts is None
-    assert any("no fortify_client" in record.message for record in caplog.records)
+    assert any("no hexgate_client" in record.message for record in caplog.records)
 
 
 @pytest.mark.asyncio
@@ -191,7 +191,7 @@ async def test_resolve_tool_use_context_explicit_arg_wins(
     """Explicit tool_use_context kwarg bypasses User scope entirely."""
     priv, pub = keys
     agent = _FakeAgent(client=_client(priv, pub))
-    from fortify.runtime import ToolUseContext
+    from hexgate.runtime import ToolUseContext
 
     override = ToolUseContext(biscuit_facts={"user": ["override"]})
     async with User(user_id="alice"):
@@ -209,8 +209,8 @@ async def test_resolve_tool_use_context_handles_attenuation_failure(
 ) -> None:
     """A broken parent token → warning logged, facts left empty (fail-closed)."""
     priv, pub = keys
-    bad_client = FortifyClient(
-        FortifyConfig(
+    bad_client = HexgateClient(
+        HexgateConfig(
             base_url="http://test",
             api_key="fty_live_acme_NOT_A_REAL_TOKEN",  # signature won't chain
             project_id="acme",

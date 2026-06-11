@@ -10,8 +10,8 @@ from google.adk.models.lite_llm import LiteLlm
 from google.adk.sessions import InMemorySessionService
 from google.genai import types
 
-from fortify.runtime import User
-from fortify.adapters.google import FortifyRunner
+from hexgate.runtime import User
+from hexgate.adapters.google import HexgateRunner
 
 
 def get_weather(city: str) -> str:
@@ -49,7 +49,7 @@ async def main():
         session_id=user.session_id,
     )
 
-    runner = FortifyRunner(
+    runner = HexgateRunner(
         agent=agent,
         app_name="google_runner_example",
         session_service=session_service,

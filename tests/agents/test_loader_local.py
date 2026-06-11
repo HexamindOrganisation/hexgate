@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 
-from fortify.agents import loader
+from hexgate.agents import loader
 
 
 def _write_agent_dir(agent_dir: Path, *, name: str) -> None:

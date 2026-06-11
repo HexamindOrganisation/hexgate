@@ -6,7 +6,7 @@ __pycache__/
 *.db-journal
 .env
 
-# Root signing keypair — never commit. Loss of fortify.priv invalidates
+# Root signing keypair — never commit. Loss of hexgate.priv invalidates
 # every Biscuit token this platform has ever minted.
 data/
 *.priv

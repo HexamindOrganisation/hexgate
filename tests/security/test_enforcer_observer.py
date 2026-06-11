@@ -2,7 +2,7 @@
 
 Sibling to ``test_enforcer_audit.py``: same shape (stub engine, capturing
 observer), different slot. The observer is the local-process hook —
-``fortify chat`` injects one to render denies in the REPL; metrics /
+``hexgate chat`` injects one to render denies in the REPL; metrics /
 debuggers would slot in the same way.
 """
 
@@ -14,9 +14,9 @@ from typing import Any
 
 import pytest
 
-from fortify.runtime.context import User
-from fortify.security.decision import Decision, DecisionOutcome, Verdict
-from fortify.security.enforcer import PolicyEnforcer
+from hexgate.runtime.context import User
+from hexgate.security.decision import Decision, DecisionOutcome, Verdict
+from hexgate.security.enforcer import PolicyEnforcer
 
 
 class _StubEngine:
@@ -106,7 +106,7 @@ def test_observer_exception_does_not_break_decide(
     engine = _StubEngine(Verdict(outcome=DecisionOutcome.DENY, reason="x"))
     enforcer = PolicyEnforcer(engine, agent_name="r", decision_observer=boom)
 
-    with caplog.at_level(logging.ERROR, logger="fortify.security.enforcer"):
+    with caplog.at_level(logging.ERROR, logger="hexgate.security.enforcer"):
         decision = enforcer.decide("read_file", {})
 
     assert decision.outcome is DecisionOutcome.DENY

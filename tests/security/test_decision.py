@@ -7,7 +7,7 @@ itself, so this single test file covers all adapters at once.
 
 from __future__ import annotations
 
-from fortify.security.decision import Decision, DecisionOutcome
+from hexgate.security.decision import Decision, DecisionOutcome
 
 
 def _deny_decision() -> Decision:
