@@ -12,7 +12,7 @@ name: release
 #   https://pypi.org/manage/account/publishing/  →  "Add a new pending publisher"
 #     PyPI Project Name:  hexgate
 #     Owner:              HexamindOrganisation
-#     Repository name:    coolagents
+#     Repository name:    hexgate
 #     Workflow name:      release.yml
 #     Environment name:   pypi-release
 #
