@@ -7,7 +7,7 @@ Policy enforcement, signed policy bundles, per-request user scope, audit trail â
 
 [![PyPI](https://img.shields.io/pypi/v/hexgate?color=blue&logo=pypi&logoColor=white)](https://pypi.org/project/hexgate/)
 [![Python](https://img.shields.io/pypi/pyversions/hexgate?logo=python&logoColor=white)](https://pypi.org/project/hexgate/)
-[![CI](https://github.com/HexamindOrganisation/coolagents/actions/workflows/tests.yml/badge.svg?branch=main)](https://github.com/HexamindOrganisation/coolagents/actions/workflows/tests.yml)
+[![CI](https://github.com/HexamindOrganisation/hexgate/actions/workflows/tests.yml/badge.svg?branch=main)](https://github.com/HexamindOrganisation/hexgate/actions/workflows/tests.yml)
 [![Downloads](https://img.shields.io/pypi/dm/hexgate?color=blueviolet)](https://pypi.org/project/hexgate/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
