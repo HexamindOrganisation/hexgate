@@ -250,6 +250,34 @@ async def test_run_streamed_wraps_stream_events_to_re_enter_scope_and_propagatio
 
 
 @pytest.mark.asyncio
+async def test_run_streamed_opens_user_scope_around_run_streamed_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The User must be active when Runner.run_streamed spawns its loop task —
+    that task snapshots contextvars at creation, where tools later resolve it."""
+    _silence_observability(monkeypatch)
+
+    captured: dict[str, Any] = {}
+
+    def fake_run_streamed(*_args: Any, **_kwargs: Any) -> _FakeStreamingResult:
+        captured["active_user"] = get_current_user()
+        return _FakeStreamingResult()
+
+    monkeypatch.setattr(
+        "hexgate.adapters.openai.runner.Runner.run_streamed",
+        staticmethod(fake_run_streamed),
+    )
+
+    runner = HexgateRunner(api_key="k")
+    user = _user()
+
+    runner.run_streamed(_make_agent(), "hello", user=user)
+
+    assert captured["active_user"] is user
+    assert get_current_user() is None
+
+
+@pytest.mark.asyncio
 async def test_run_propagates_user_identity_to_langfuse(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

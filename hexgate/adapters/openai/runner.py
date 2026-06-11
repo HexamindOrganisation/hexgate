@@ -134,21 +134,22 @@ class HexgateRunner:
     ) -> RunResultStreaming:
         """Stream the OpenAI agent inside a User scope.
 
-        ``Runner.run_streamed`` returns sync; tools only run during
-        ``stream_events`` iteration. The User scope is opened inside the
-        wrapped iterator. Langfuse propagation runs during setup so the
-        trace span attaches. The policy refresh runs in the setup body —
-        the wrap is fixed before tools fire during stream_events.
+        ``Runner.run_streamed`` returns sync but spawns the agent loop as a
+        background task that snapshots the current contextvars at creation;
+        tools fire there, not in ``stream_events``. So the User scope must be
+        active around the ``run_streamed`` call for the task to inherit it —
+        the wrapped iterator re-opens it for exit/audit semantics.
         """
         self._setup_observability()
         binding = self._binding_for(agent)
         binding.refresh()  # must precede the wrap + setup
         wrapped_agent = wrap_openai_agent(agent, enforcer=binding.enforcer)
 
-        with self._propagate(user, agent.name):
-            result = Runner.run_streamed(
-                wrapped_agent, input, run_config=run_config, **kwargs
-            )
+        with user.sync_scope():
+            with self._propagate(user, agent.name):
+                result = Runner.run_streamed(
+                    wrapped_agent, input, run_config=run_config, **kwargs
+                )
 
         original_stream_events = result.stream_events
 
