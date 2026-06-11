@@ -1,17 +1,72 @@
-# hexgate
+<div align="center">
 
-`hexgate` is a lightweight LangChain-based agent runtime built around:
+# HexaGate
 
-- `langchain`
-- `gpt-5.4`
-- `Linkup` web search
-- Tavily-based page fetch
-- `Langfuse` tracing
+**Authorization infrastructure for AI agents.**
+Policy enforcement, signed policy bundles, per-request user scope, audit trail — for OpenAI Agents, LangChain, Google ADK, Pydantic AI, or a native runtime.
 
-This package is intentionally small. The first milestone is a single assistant with:
+[![PyPI](https://img.shields.io/pypi/v/hexgate?color=blue&logo=pypi&logoColor=white)](https://pypi.org/project/hexgate/)
+[![Python](https://img.shields.io/pypi/pyversions/hexgate?logo=python&logoColor=white)](https://pypi.org/project/hexgate/)
+[![CI](https://github.com/HexamindOrganisation/hexgate/actions/workflows/tests.yml/badge.svg?branch=main)](https://github.com/HexamindOrganisation/hexgate/actions/workflows/tests.yml)
+[![Downloads](https://img.shields.io/pypi/dm/hexgate?color=blueviolet)](https://pypi.org/project/hexgate/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-- `web_search`
-- `fetch`
+[Quick Start](#-quick-start--local-cli) · [Two paths](#-which-path-do-i-pick) · [Framework adapters](#-framework-agent-wrapping) · [Policy bundles](#-policy-bundles--compile-sign-enforce-wasm) · [User scope](#-user-scope--roles) · [Platform](#-hexagate-platform)
+
+</div>
+
+---
+
+## What is HexaGate?
+
+HexaGate is two things that move together:
+
+- **`hexgate` — the SDK.** A Python runtime that gates every tool call through a typed `Decision` (allow / deny / approval-required), wraps your existing OpenAI / LangChain / Google ADK / Pydantic AI agent without rewriting it, and threads per-request user identity through tracing + audit.
+- **The HexaGate platform** *(optional)* — a FastAPI control plane + React dashboard for editing policy in a browser, minting per-project tokens, watching live decisions stream from a serving agent, and shipping signed WASM policy bundles to production.
+
+You can use the SDK with nothing else (single-process REPL, YAML on disk). Or plug in the platform when you want auditable decisions in ClickHouse, a shared Playground UI, and live policy edits.
+
+```text
+                      ┌─────────────────────────────────────────┐
+   your code  ───►    │   create_agent / wrap_*_agent / Runner  │
+                      │            ↓                            │
+                      │     PolicyEnforcer.decide(role, tool)   │
+                      │            ↓                            │
+                      │   allow · deny · approval_required      │
+                      └────────────────────┬────────────────────┘
+                                           │
+                  ┌────────────────────────┼─────────────────────────┐
+                  ▼                        ▼                         ▼
+        ┌────────────────┐       ┌──────────────────┐       ┌────────────────┐
+        │  Local policy  │       │ Signed WASM      │       │   Audit log    │
+        │  (YAML / dir,  │       │ bundle from      │       │   (ClickHouse  │
+        │  hot reload)   │       │ HexaGate cloud   │       │   via REST)    │
+        └────────────────┘       └──────────────────┘       └────────────────┘
+```
+
+## Table of contents
+
+- [Prerequisites](#-prerequisites)
+- [Quick Start — Local CLI](#-quick-start--local-cli)
+- [Which path do I pick?](#-which-path-do-i-pick) — chat vs serve
+- [Quick Start — Platform](#-quick-start--platform)
+- [Core primitives](#-core-primitives)
+- [Build an agent — end to end](#-build-an-agent--end-to-end)
+- [What you can import](#-what-you-can-import)
+- [Framework agent wrapping](#-framework-agent-wrapping) — OpenAI, LangChain, Google ADK, Pydantic AI
+- [Define agents in code](#-define-agents-in-code)
+- [Builtin and local agents](#-builtin-and-local-agents)
+- [Policy shape](#-policy-shape)
+- [Tool-call policy enforcement](#-tool-call-policy-enforcement)
+- [Policy bundles — compile, sign, enforce (WASM)](#-policy-bundles--compile-sign-enforce-wasm)
+- [Approval-required tool calls](#-approval-required-tool-calls)
+- [Workspace sandbox](#-workspace-sandbox)
+- [Environment](#-environment)
+- [Tests & dev tooling](#-tests--dev-tooling)
+- [CLI reference](#-cli-reference)
+- [HexaGate platform](#-hexagate-platform)
+- [User scope + roles](#-user-scope--roles)
+- [Stream results](#-stream-results)
 
 ## 🛠️ Prerequisites
 
@@ -1023,39 +1078,16 @@ The platform-side test suite is separate and lives at `platform/api/tests/`:
 cd platform/api && uv run pytest tests/
 ```
 
-## ▶️ Run It
+## 🖥️ CLI reference
 
-Install the package into your current environment:
-
-```bash
-python -m pip install -e .
-```
-
-Run the config-driven demo:
+The `hexgate` binary exposes `chat`, `serve`, `register`, and `policy` subcommands. The [Quick Start](#-quick-start--local-cli) covers `chat`; this section drills into `register` and `serve` for the platform path.
 
 ```bash
-python examples/demo.py
-```
-
-Run the inline chat CLI with a local or builtin YAML agent:
-
-```bash
-hexgate chat --agent example_agent
-```
-
-Run the CLI with code-defined agents from a Python script:
-
-```bash
+hexgate --help                                     # list subcommands
+hexgate <subcommand> --help                        # flags for a subcommand
+hexgate chat --list-agents                         # show resolvable agents
 hexgate chat --use examples/file_agents.py --agent workspace_explorer
-hexgate chat --use examples/file_agents.py --agent repo_editor
-hexgate chat --use examples/research_agents.py --agent update_researcher
 hexgate chat --use examples/research_agents.py --agent update_researcher --approval-mode ask
-```
-
-List what the CLI can currently resolve:
-
-```bash
-hexgate chat --list-agents
 ```
 
 ### `hexgate register` — push a manifest to the platform

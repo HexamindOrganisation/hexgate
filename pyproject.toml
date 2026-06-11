@@ -12,6 +12,8 @@ name = "hexgate"
 version = "0.2.1"
 description = "HexaGate — authorization infrastructure for AI agents (agent runtime + cloud client)."
 readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.13"
 dependencies = [
     "bashlex>=0.18",
