@@ -79,16 +79,32 @@ class HexgateRunner:
         user: User,
         **kwargs: Any,
     ) -> Generator[Any, None, None]:
-        """Run the Google ADK agent synchronously, yielding events."""
+        """Run the Google ADK agent synchronously, yielding events.
+
+        ADK's ``Runner.run`` drives the agent loop in a worker thread whose
+        context cannot see our :class:`User` scope, so the tools' enforcers
+        lose the active role. We drive ``run_async`` inline on a per-call loop
+        instead, keeping execution in this scoped thread.
+        """
         self._setup_observability()
         self._binding.refresh()  # per-run policy pull; 304 when unchanged
         with user.sync_scope(), self._propagate(user):
-            yield from self._runner.run(
+            agen = self._runner.run_async(
                 user_id=user.user_id,
                 session_id=user.session_id,
                 new_message=new_message,
                 **kwargs,
             )
+            loop = asyncio.new_event_loop()
+            try:
+                while True:
+                    try:
+                        yield loop.run_until_complete(agen.__anext__())
+                    except StopAsyncIteration:
+                        break
+            finally:
+                loop.run_until_complete(agen.aclose())
+                loop.close()
 
     async def run_async(
         self,

@@ -197,10 +197,11 @@ def test_constructor_builds_underlying_runner_once(
 # ---------------------------------------------------------------------------
 
 
-def test_run_opens_user_scope_and_yields_events(
+def test_run_drives_run_async_inline_under_user_scope(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """run() opens a User scope around the underlying Runner.run."""
+    """run() drives the underlying Runner.run_async inline (not ADK's threaded
+    Runner.run, whose worker thread cannot see our scope) under a live User."""
     setup_counts = _silence_observability(monkeypatch)
     fake = _install_fake_runner(monkeypatch)
 
@@ -217,7 +218,9 @@ def test_run_opens_user_scope_and_yields_events(
     assert events == [{"event": "first"}, {"event": "second"}]
     assert setup_counts["setup"] == 1
     [fake_runner] = fake.instances
-    [run_call] = fake_runner.run_calls
+    # The threaded sync path is bypassed; the async path carries the scope.
+    assert fake_runner.run_calls == []
+    [run_call] = fake_runner.run_async_calls
     assert run_call == {
         "user_id": "u-1",
         "session_id": "s-1",
@@ -227,6 +230,39 @@ def test_run_opens_user_scope_and_yields_events(
     [active] = fake_runner.active_users
     assert active is user
     # Scope unwound after the call.
+    assert get_current_user() is None
+
+
+def test_run_keeps_scope_visible_across_awaits(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The inline drive must keep the User visible across the agent loop's
+    await points — where tools actually fire — not just at entry."""
+    import asyncio
+
+    _silence_observability(monkeypatch)
+    _install_fake_runner(monkeypatch)
+
+    runner = HexgateRunner(
+        agent=_make_agent(),
+        app_name="my-app",
+        session_service=InMemorySessionService(),
+        api_key="k",
+    )
+    user = _user()
+    seen: list[Any] = []
+
+    async def run_async(**_kwargs: Any) -> Any:
+        await asyncio.sleep(0)
+        seen.append(get_current_user())  # post-await: a tool-call point
+        yield {"event": "only"}
+
+    runner._runner.run_async = run_async  # type: ignore[attr-defined]
+
+    events = list(runner.run(new_message="hi", user=user))
+
+    assert events == [{"event": "only"}]
+    assert seen == [user]
     assert get_current_user() is None
 
 
