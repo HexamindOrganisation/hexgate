@@ -11,7 +11,6 @@ import {
   ScrollText,
   Server,
   Settings2,
-  Shield,
   ShieldCheck,
   type LucideIcon,
 } from 'lucide-react'
@@ -152,10 +151,8 @@ export function AppShell() {
     <div className="flex h-screen bg-background text-foreground">
       <aside className="flex w-[220px] flex-col border-r border-border bg-card">
         <div className="flex h-14 items-center gap-2 px-4 border-b border-border">
-          <div className="flex size-7 items-center justify-center rounded-md bg-primary text-primary-foreground">
-            <Shield className="size-4" />
-          </div>
-          <span className="text-sm font-semibold">Fortify</span>
+          <img src="/icon.svg" alt="" className="size-7" />
+          <span className="text-sm font-semibold">Hexgate</span>
         </div>
 
         <nav className="flex-1 overflow-y-auto p-3">

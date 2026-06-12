@@ -178,7 +178,7 @@ function MintDialog({
         <DialogHeader>
           <DialogTitle>Mint dev token</DialogTitle>
           <DialogDescription>
-            Tokens authenticate backend services to Fortify. Use a clear name so you know
+            Tokens authenticate backend services to Hexgate. Use a clear name so you know
             where it's deployed.
           </DialogDescription>
         </DialogHeader>
@@ -322,7 +322,7 @@ export function TokensPage() {
             <KeyRound className="size-12 text-muted-foreground/50" />
             <div className="text-sm font-medium">No tokens yet</div>
             <div className="max-w-xs text-xs text-muted-foreground">
-              Mint your first dev token to let a backend service authenticate to Fortify.
+              Mint your first dev token to let a backend service authenticate to Hexgate.
             </div>
           </div>
         ) : (
