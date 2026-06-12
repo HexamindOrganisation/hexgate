@@ -155,7 +155,7 @@ export function AppShell() {
           <div className="flex size-7 items-center justify-center rounded-md bg-primary text-primary-foreground">
             <Shield className="size-4" />
           </div>
-          <span className="text-sm font-semibold">Fortify</span>
+          <span className="text-sm font-semibold">Hexgate</span>
         </div>
 
         <nav className="flex-1 overflow-y-auto p-3">

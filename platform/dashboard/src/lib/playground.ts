@@ -189,8 +189,8 @@ export function usePlayground({ projectId }: Options) {
    * Send a chat message, optionally scoped to a role.
    *
    * When `role` is set, the platform forwards a `user_attenuation` block to
-   * the dev's local `fortify --serve` process, which attenuates its parent
-   * Fortify token to carry `user("playground"), role("<role>")` for this
+   * the dev's local `hexgate serve` process, which attenuates its parent
+   * Hexgate token to carry `user("playground"), role("<role>")` for this
    * turn. The role's policy bundle then drives tool authorization.
    */
   function sendChat(message: string, opts?: { role?: string | null }) {
