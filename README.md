@@ -10,11 +10,9 @@ Policy enforcement, signed policy bundles, per-request user scope, audit trail �
 [**Website**](https://hexgate.ai) · [Docs](https://docs.hexgate.ai) · [PyPI](https://pypi.org/project/hexgate/) · [Discussions](https://github.com/HexamindOrganisation/hexgate/discussions)
 
 [![PyPI](https://img.shields.io/pypi/v/hexgate?color=blue&logo=pypi&logoColor=white)](https://pypi.org/project/hexgate/)
-[![Python](https://img.shields.io/pypi/pyversions/hexgate?logo=python&logoColor=white)](https://pypi.org/project/hexgate/)
 [![CI](https://github.com/HexamindOrganisation/hexgate/actions/workflows/tests.yml/badge.svg?branch=main)](https://github.com/HexamindOrganisation/hexgate/actions/workflows/tests.yml)
 [![Downloads](https://img.shields.io/pypi/dm/hexgate?color=blueviolet)](https://pypi.org/project/hexgate/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![GitHub stars](https://img.shields.io/github/stars/HexamindOrganisation/hexgate?style=social)](https://github.com/HexamindOrganisation/hexgate/stargazers)
 
 <br />
 
@@ -1461,15 +1459,4 @@ async for event in stream_agent(agent, handler, "latest AI breakthroughs"):
 
 ---
 
-<div align="center">
-
-## ⭐ Like Hexgate?
-
-If this project helps you ship safer agents, **[star the repo](https://github.com/HexamindOrganisation/hexgate/stargazers)** — it makes a real difference for early-stage OSS visibility and helps us prioritise what to build next.
-
-[![Star History Chart](https://api.star-history.com/svg?repos=HexamindOrganisation/hexgate&type=Date)](https://www.star-history.com/#HexamindOrganisation/hexgate&Date)
-
-Made with care by [Hexamind](https://hexgate.ai).
-Have feedback? [Open a discussion](https://github.com/HexamindOrganisation/hexgate/discussions) or [file an issue](https://github.com/HexamindOrganisation/hexgate/issues/new).
-
-</div>
+If Hexgate looks useful, [give it a ⭐ on GitHub](https://github.com/HexamindOrganisation/hexgate) — it helps more than you'd think. Built by [Hexamind](https://hexgate.ai).
