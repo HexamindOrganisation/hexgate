@@ -1,4 +1,4 @@
-"""Transport layer for the HexaGate control plane — HTTP client + Biscuit verify.
+"""Transport layer for the Hexgate control plane — HTTP client + Biscuit verify.
 
 The agent-loader equivalent (`load_hexgate_agent`) lives in `hexgate.agents.loader`
 alongside `load_local_agent` / `load_builtin_agent`; this package only carries the

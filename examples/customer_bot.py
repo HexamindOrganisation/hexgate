@@ -1,5 +1,5 @@
 """Canonical end-to-end demo: a customer-support agent driven through
-the HexaGate dashboard.
+the Hexgate dashboard.
 
 Built with ``hexgate.create_agent()`` so the returned ``HexgateAgent``
 carries its name, tools, model, and system prompt as plain attributes.

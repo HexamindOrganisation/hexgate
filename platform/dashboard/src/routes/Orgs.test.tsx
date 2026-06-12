@@ -94,7 +94,7 @@ describe('OrgsPage', () => {
 
     // CreateOrgDialog renders its description, which is unique to the dialog.
     expect(
-      await screen.findByText(/Teams in HexaGate live inside/i),
+      await screen.findByText(/Teams in Hexgate live inside/i),
     ).toBeInTheDocument()
   })
 

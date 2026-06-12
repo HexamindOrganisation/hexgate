@@ -416,7 +416,7 @@ async def test_list_org_members_returns_membership_and_user(
         # At minimum the default admin is present.
         assert len(rows) >= 1
         emails = {u.email for _m, u in rows}
-        assert "admin@hexagate.dev" in emails
+        assert "admin@hexgate.dev" in emails
 
 
 # ---------------------------------------------------------------------------

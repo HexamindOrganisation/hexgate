@@ -2,7 +2,7 @@
 
 The primitive lives in :mod:`hexgate.cloud.attenuate` and lets a dev's
 backend (or the demo serve loop) append a user/scope/limit block to a
-parent HexaGate token. The new envelope's signature chain still verifies
+parent Hexgate token. The new envelope's signature chain still verifies
 against the platform's root public key — biscuit handles the signature
 linkage with an ephemeral keypair internally.
 """

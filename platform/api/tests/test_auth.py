@@ -220,7 +220,7 @@ def test_me_returns_logged_in_user(client: TestClient) -> None:
 def test_project_route_accepts_cookie_auth(client: TestClient) -> None:
     """A logged-in user (via cookie) can read their org's project.
 
-    The default seed user (admin@hexagate.dev) is a member of
+    The default seed user (admin@hexgate.dev) is a member of
     support-bot's org and gets verified=True / superuser=True on seed,
     so we can log in as them with the default-boot password.
     Generating that password fresh per test would require capturing

@@ -21,7 +21,7 @@ from hexgate.runtime import User
 
 
 class HexgateRunner:
-    """Runner for Google ADK agents with HexaGate tool policy and observability."""
+    """Runner for Google ADK agents with Hexgate tool policy and observability."""
 
     def __init__(
         self,

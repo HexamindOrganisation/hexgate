@@ -2,7 +2,7 @@
 
 > Status: living — kept in sync with the audit code. Last reviewed 2026-06.
 
-Scope: the end-to-end path that records every policy decision a HexaGate-wrapped
+Scope: the end-to-end path that records every policy decision a Hexgate-wrapped
 agent makes, from the SDK enforcement point to durable storage in ClickHouse and
 the dashboard read view.
 

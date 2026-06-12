@@ -32,7 +32,7 @@ from hexgate.security.enforcer import build_enforcer
 
 
 class HexgateRunner:
-    """Runner for OpenAI agents with HexaGate tool policy and observability."""
+    """Runner for OpenAI agents with Hexgate tool policy and observability."""
 
     def __init__(self, api_key: str | None = None):
         self.api_key = api_key or os.getenv("HEXGATE_KEY")

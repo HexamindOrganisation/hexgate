@@ -73,7 +73,7 @@ export function SignInPage() {
           <div className="mb-2 flex justify-center">
             <ShieldCheck className="h-8 w-8 text-primary" />
           </div>
-          <CardTitle className="text-center">Sign in to HexaGate</CardTitle>
+          <CardTitle className="text-center">Sign in to Hexgate</CardTitle>
           <CardDescription className="text-center">
             Authorization infrastructure for AI agents.
           </CardDescription>

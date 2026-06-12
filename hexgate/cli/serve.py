@@ -1,4 +1,4 @@
-"""Serve subcommand: bridge a local agent to the HexaGate control plane.
+"""Serve subcommand: bridge a local agent to the Hexgate control plane.
 
 Connects to ``ws://{API_URL}/v1/serve`` and authenticates via the
 ``bearer.<envelope>`` WebSocket subprotocol — the server derives the
@@ -251,9 +251,9 @@ def add_parser(subparsers: argparse._SubParsersAction) -> None:
     """Register the `serve` subcommand on the top-level hexgate CLI."""
     parser = subparsers.add_parser(
         "serve",
-        help="Relay a local agent to the HexaGate dashboard over WebSocket.",
+        help="Relay a local agent to the Hexgate dashboard over WebSocket.",
         description=(
-            "Serve a local agent to the HexaGate dashboard Playground over "
+            "Serve a local agent to the Hexgate dashboard Playground over "
             "WebSocket. Takes a module:attr spec — the same form as "
             "`hexgate register --agent ...` — and brings the agent up "
             "end-to-end: auto-registers the manifest (idempotent), fetches "

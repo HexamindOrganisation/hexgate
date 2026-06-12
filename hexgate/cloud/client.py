@@ -1,4 +1,4 @@
-"""HTTP client for the HexaGate control plane.
+"""HTTP client for the Hexgate control plane.
 
 The client trusts ``HEXGATE_KEY`` only after verifying its Biscuit signature
 against the platform's public key. The public key is resolved in this order:
@@ -6,7 +6,7 @@ against the platform's public key. The public key is resolved in this order:
 1. Explicit ``public_key`` arg passed to ``HexgateConfig``.
 2. ``HEXGATE_PUBLIC_KEY`` env var (base64 url-safe, 32 raw bytes).
 3. Fetched from ``GET /v1/.well-known/keys`` on first use (TOFU for POC;
-   embed a build-time constant for hosted HexaGate Cloud later).
+   embed a build-time constant for hosted Hexgate Cloud later).
 
 If none of the above produces a verifying key, the client raises with a
 clear error rather than blindly forwarding the bearer token.
@@ -42,7 +42,7 @@ TOKEN_PREFIX = "fty_"
 
 
 class HexgateError(RuntimeError):
-    """Raised for any HexaGate API interaction failure.
+    """Raised for any Hexgate API interaction failure.
 
     ``status`` is the HTTP status code, or ``None`` for transport errors.
     """
@@ -54,7 +54,7 @@ class HexgateError(RuntimeError):
 
 @dataclass
 class HexgateConfig:
-    """Resolved configuration for a HexaGate client.
+    """Resolved configuration for a Hexgate client.
 
     ``project_id`` is best-effort only — used by display surfaces
     (log lines, langchain tags) but never threaded through API URLs.
@@ -332,14 +332,14 @@ class HexgateClient:
                 return None, exc.headers.get("ETag") or if_none_match
             detail = exc.read().decode("utf-8", errors="replace")
             raise HexgateError(
-                f"HexaGate API error {exc.code} calling {url}: {detail[:200]}",
+                f"Hexgate API error {exc.code} calling {url}: {detail[:200]}",
                 status=exc.code,
             ) from exc
         except urllib.error.URLError as exc:
             raise HexgateError(
-                f"HexaGate API unreachable at {url}: {exc.reason}"
+                f"Hexgate API unreachable at {url}: {exc.reason}"
             ) from exc
         try:
             return json.loads(payload), etag
         except json.JSONDecodeError as exc:
-            raise HexgateError(f"HexaGate API returned non-JSON from {url}") from exc
+            raise HexgateError(f"Hexgate API returned non-JSON from {url}") from exc

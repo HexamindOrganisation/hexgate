@@ -1,5 +1,5 @@
 """BYO-graph entry point: retrofit a pre-built ``CompiledStateGraph`` with
-HexaGate policy. Tools are mutated in place so the graph keeps its
+Hexgate policy. Tools are mutated in place so the graph keeps its
 references; the returned :class:`HexgateLangchainAgent` opens a User
 scope + Langfuse propagation per call. For the manifest-driven path,
 use :func:`hexgate.enforce_policy` instead.
@@ -28,7 +28,7 @@ def wrap_langchain_agent(
     tools: list[BaseTool],
     api_key: str | None = None,
 ) -> HexgateLangchainAgent:
-    """Wrap a pre-built LangGraph agent with HexaGate policy enforcement.
+    """Wrap a pre-built LangGraph agent with Hexgate policy enforcement.
 
     Mutates ``tools`` in place so the graph keeps its references.
     The returned proxy takes ``user`` per invocation; role resolves at

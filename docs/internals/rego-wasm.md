@@ -6,7 +6,7 @@
 
 ## The starting point
 
-HexaGate governs what an AI agent's tools are allowed to do. You write a `policy.yaml` — "billing can refund up to $500, support needs approval for credits, everyone else is denied" — and the runtime checks every tool call against it before the tool runs.
+Hexgate governs what an AI agent's tools are allowed to do. You write a `policy.yaml` — "billing can refund up to $500, support needs approval for credits, everyone else is denied" — and the runtime checks every tool call against it before the tool runs.
 
 Until recently, that check ran in-process through a pydantic-based constraint evaluator. It worked, but it had two limits we wanted to outgrow:
 

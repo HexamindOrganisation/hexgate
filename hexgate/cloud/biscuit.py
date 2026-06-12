@@ -71,7 +71,7 @@ def parse_envelope(envelope: str) -> tuple[str, str, str]:
     parts = envelope.split("_", 3)
     if len(parts) != 4 or parts[0] != ENVELOPE_PREFIX:
         raise TokenError(
-            f"malformed HexaGate token envelope (expected '{ENVELOPE_PREFIX}_<env>_<project>_<biscuit>')"
+            f"malformed Hexgate token envelope (expected '{ENVELOPE_PREFIX}_<env>_<project>_<biscuit>')"
         )
     env, project_id, biscuit_b64 = parts[1], parts[2], parts[3]
     return env, project_id, biscuit_b64

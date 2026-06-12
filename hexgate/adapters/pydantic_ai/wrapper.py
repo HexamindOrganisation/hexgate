@@ -49,7 +49,7 @@ def wrap_pydantic_agent(
     agent: Agent,
     api_key: str | None = None,
 ) -> HexgatePydanticAgent:
-    """Wrap a pydantic_ai agent with HexaGate policy + observability.
+    """Wrap a pydantic_ai agent with Hexgate policy + observability.
 
     Returns a :class:`HexgatePydanticAgent` backed by a clone of the
     caller's ``agent``; the original is not mutated. The proxy takes

@@ -1,4 +1,4 @@
-"""Streaming events and the LangChain → HexaGate event normalizer."""
+"""Streaming events and the LangChain → Hexgate event normalizer."""
 
 from hexgate.streaming.events import (
     AgentRunResult,

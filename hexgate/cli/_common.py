@@ -63,7 +63,7 @@ def build_runtime(
       "this loads in serve but not chat" footgun — same spec form
       ``hexgate serve`` already accepts.
 
-    ``local_only=True`` keeps the loader off the HexaGate Cloud path even
+    ``local_only=True`` keeps the loader off the Hexgate Cloud path even
     when ``HEXGATE_KEY`` is present in the environment — what terminal
     chat uses, since it doesn't need cloud-fetched policy or a serve
     tunnel. ``hexgate serve`` passes ``local_only=False`` so policy edits
