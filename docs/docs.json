@@ -3,9 +3,9 @@
   "theme": "mint",
   "name": "hexgate",
   "colors": {
-    "primary": "#5B5BD6",
-    "light": "#8B8BF0",
-    "dark": "#3B3BB5"
+    "primary": "#2E56DA",
+    "light": "#6080EB",
+    "dark": "#16359C"
   },
   "favicon": "/favicon.svg",
   "navigation": {
