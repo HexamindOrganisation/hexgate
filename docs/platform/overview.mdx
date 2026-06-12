@@ -1,0 +1,19 @@
+---
+title: "Platform overview"
+description: "FastAPI control plane + React dashboard + ClickHouse audit."
+---
+
+<Note>
+**Page stub.** Full content lives in the
+[README — HexaGate Platform](https://github.com/HexamindOrganisation/hexgate#-hexagate-platform).
+</Note>
+
+The platform is an optional control plane that hosts agent definitions, dev
+tokens, and a live debug surface. The SDK works fully without it
+(`load_local_agent`, `load_builtin_agent` keep their semantics) — but with it
+you get:
+
+- A web dashboard for editing agent YAMLs and viewing the project graph
+- Mintable dev tokens (`fty_test_*`, `fty_live_*`) that authenticate the SDK
+- A live Playground that streams tool calls and decisions from your running agent
+- Turn-level policy refresh — edit YAML in the UI, the next chat picks it up

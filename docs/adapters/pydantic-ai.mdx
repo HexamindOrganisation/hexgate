@@ -1,0 +1,27 @@
+---
+title: "Pydantic AI"
+description: "wrap_pydantic_agent — gates every tool through PolicyEnforcer."
+---
+
+<Note>
+**Page stub.** Full content lives in the
+[README — Pydantic AI](https://github.com/HexamindOrganisation/hexgate#pydantic-ai--wrap_pydantic_agent).
+</Note>
+
+## TL;DR
+
+```python
+from hexgate.adapters.pydantic_ai import wrap_pydantic_agent
+from hexgate.runtime import User
+
+agent = wrap_pydantic_agent(agent=pydantic_agent, api_key="sk-...")
+result = await agent.run(
+    "What is the weather in Tokyo?",
+    user=User(user_id="alice", role="member"),
+)
+```
+
+Returns a `HexgatePydanticAgent` proxy backed by a clone whose tools are gated
+by a freshly built `PolicyEnforcer`. Non-allow decisions raise `ModelRetry` so
+pydantic-ai surfaces the policy outcome back to the model as a tool-result
+message.

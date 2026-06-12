@@ -1,0 +1,66 @@
+---
+title: "Introduction"
+description: "Authorization infrastructure for AI agents — policy enforcement, signed bundles, per-request user scope, audit trail."
+---
+
+**HexaGate** gates every tool call your AI agent makes through a typed `Decision`
+(allow / deny / approval-required) and threads per-request user identity through
+tracing and audit. Drop it in front of an OpenAI Agents / LangChain / Google ADK /
+Pydantic AI agent without rewriting the agent.
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Install the SDK, run a chat REPL against the example agent in 60 seconds.
+  </Card>
+  <Card title="Two paths" icon="route" href="/two-paths">
+    Chat (single-process REPL) vs. serve (platform-backed) — pick the right one.
+  </Card>
+  <Card title="Framework adapters" icon="puzzle-piece" href="/adapters/openai">
+    OpenAI Agents, LangChain/LangGraph, Google ADK, Pydantic AI — same enforcement seam.
+  </Card>
+  <Card title="Policy bundles" icon="shield" href="/policy/wasm-bundles">
+    Compile YAML to signed WASM, hot-reload on save, verify on every load.
+  </Card>
+</CardGroup>
+
+## What HexaGate is
+
+HexaGate is two things that move together:
+
+- **`hexgate` — the SDK.** A Python runtime that gates every tool call through
+  a typed `Decision`, wraps your existing agent without rewriting it, and threads
+  per-request user identity through tracing + audit.
+- **The HexaGate platform** *(optional)* — a FastAPI control plane + React
+  dashboard for editing policy in a browser, minting per-project tokens, watching
+  live decisions stream from a serving agent, and shipping signed WASM policy
+  bundles to production.
+
+You can use the SDK with nothing else (single-process REPL, YAML on disk). Or
+plug in the platform when you want auditable decisions in ClickHouse, a shared
+Playground UI, and live policy edits.
+
+## The decision path
+
+```text
+                      ┌─────────────────────────────────────────┐
+   your code  ───►    │   create_agent / wrap_*_agent / Runner  │
+                      │            ↓                            │
+                      │     PolicyEnforcer.decide(role, tool)   │
+                      │            ↓                            │
+                      │   allow · deny · approval_required      │
+                      └────────────────────┬────────────────────┘
+                                           │
+                  ┌────────────────────────┼─────────────────────────┐
+                  ▼                        ▼                         ▼
+        ┌────────────────┐       ┌──────────────────┐       ┌────────────────┐
+        │  Local policy  │       │ Signed WASM      │       │   Audit log    │
+        │  (YAML / dir,  │       │ bundle from      │       │   (ClickHouse  │
+        │  hot reload)   │       │ HexaGate cloud   │       │   via REST)    │
+        └────────────────┘       └──────────────────┘       └────────────────┘
+```
+
+<Note>
+This documentation site is freshly scaffolded. Most page bodies are placeholders
+pointing back to the [README](https://github.com/HexamindOrganisation/hexgate#readme)
+until the migration completes.
+</Note>

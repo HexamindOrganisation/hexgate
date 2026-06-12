@@ -1,0 +1,38 @@
+---
+title: "Which path do I pick?"
+description: "Local-only chat REPL vs. platform-backed serve — choose the right shape."
+---
+
+The two quickstarts aren't competing — they answer different questions.
+
+## Inner loop — `hexgate chat`
+
+A single-process REPL against a local or builtin agent. No platform, no Docker,
+no browser. The chat command sets `HEXGATE_LOCAL_MODE=1` automatically so audit
+stays on your machine even if `HEXGATE_KEY` lives in your `.env` from an earlier
+session. Denies and approval-required calls render as inline panels in the
+terminal — same `Decision` data the platform would log, surfaced where you're
+iterating.
+
+**Reach for `chat` when** you're authoring a policy YAML, tweaking a tool, or
+shaping a system prompt.
+
+## Team loop — `hexgate serve` + dashboard Playground
+
+Same agent code, but the policy + decisions round-trip through the platform.
+You get auditable decisions in ClickHouse, the shared Playground UI, and live
+policy edits via the dashboard.
+
+**Reach for `serve` when** you're collaborating on an agent's behaviour,
+debugging a production-like trace, or demoing.
+
+## At a glance
+
+| Path | Needs platform? | Audit destination | Policy edits visible at | Best for |
+|------|-----------------|-------------------|--------------------------|----------|
+| `hexgate chat --agent ...` | No | Local terminal panel | Edit + restart (hot-reload only when `HEXGATE_LOCAL_POLICY` is set) | Inner loop, policy authoring |
+| `hexgate serve --agent ...` + Playground | Yes | ClickHouse via `/v1/audit/decisions` | Per-turn fetch from dashboard | Team review, demos, integration testing |
+
+Both commands accept either a plain agent id (`--agent researcher`) or a
+uvicorn-style `module.path:attr` spec (`--agent examples.customer_bot:agent`),
+so the same entry-point string works in both workflows.

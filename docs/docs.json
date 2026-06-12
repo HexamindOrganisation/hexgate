@@ -1,0 +1,127 @@
+{
+  "$schema": "https://mintlify.com/docs.json",
+  "theme": "mint",
+  "name": "hexgate",
+  "colors": {
+    "primary": "#2E56DA",
+    "light": "#6080EB",
+    "dark": "#16359C"
+  },
+  "favicon": "/favicon.svg",
+  "navigation": {
+    "anchors": [
+      {
+        "anchor": "Documentation",
+        "icon": "book-open",
+        "groups": [
+          {
+            "group": "Get started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "two-paths"
+            ]
+          },
+          {
+            "group": "Concepts",
+            "pages": [
+              "concepts/policy-decision",
+              "concepts/user-scope",
+              "concepts/signed-bundles",
+              "concepts/audit-trail"
+            ]
+          },
+          {
+            "group": "Framework adapters",
+            "pages": [
+              "adapters/openai",
+              "adapters/langchain",
+              "adapters/google-adk",
+              "adapters/pydantic-ai"
+            ]
+          },
+          {
+            "group": "Policy",
+            "pages": [
+              "policy/yaml-shape",
+              "policy/constraints",
+              "policy/wasm-bundles",
+              "policy/signing",
+              "policy/local-override"
+            ]
+          },
+          {
+            "group": "CLI",
+            "pages": [
+              "cli/chat",
+              "cli/serve",
+              "cli/register",
+              "cli/policy"
+            ]
+          },
+          {
+            "group": "Platform",
+            "pages": [
+              "platform/overview",
+              "platform/control-plane",
+              "platform/dashboard",
+              "platform/audit-clickhouse"
+            ]
+          },
+          {
+            "group": "SDK reference",
+            "pages": [
+              "sdk/index"
+            ]
+          },
+          {
+            "group": "Internals (engineering)",
+            "pages": [
+              "internals/architecture",
+              "internals/audit-pipeline",
+              "internals/policy-binding-spec",
+              "internals/rego-wasm"
+            ]
+          }
+        ]
+      }
+    ],
+    "global": {
+      "anchors": [
+        {
+          "anchor": "PyPI",
+          "href": "https://pypi.org/project/hexgate/",
+          "icon": "cube"
+        },
+        {
+          "anchor": "Discussions",
+          "href": "https://github.com/HexamindOrganisation/hexgate/discussions",
+          "icon": "github"
+        }
+      ]
+    }
+  },
+  "logo": {
+    "light": "/logo/light.svg",
+    "dark": "/logo/dark.svg",
+    "href": "https://hexgate.ai"
+  },
+  "navbar": {
+    "links": [
+      {
+        "label": "GitHub",
+        "href": "https://github.com/HexamindOrganisation/hexgate"
+      }
+    ],
+    "primary": {
+      "type": "button",
+      "label": "Get started",
+      "href": "/quickstart"
+    }
+  },
+  "footer": {
+    "socials": {
+      "github": "https://github.com/HexamindOrganisation/hexgate"
+    }
+  }
+}

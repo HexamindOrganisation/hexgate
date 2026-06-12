@@ -1,0 +1,20 @@
+---
+title: "Policy decision"
+description: "The Decision object — allow, deny, approval-required — at the heart of every tool call."
+---
+
+<Note>
+**Page stub.** Full content lives in the
+[README — Where enforcement actually happens](https://github.com/HexamindOrganisation/hexgate#where-enforcement-actually-happens).
+This page will be migrated and expanded.
+</Note>
+
+## TL;DR
+
+Every tool call routes through a `PolicyEnforcer` that returns a typed `Decision`:
+
+- **`allow`** — the original tool runs unchanged.
+- **`deny`** — the framework sees a `[policy_denied]` marker as the tool result; the model can recover.
+- **`approval_required`** — calls a dev-supplied handler, or returns an `[approval_required]` marker.
+
+The decision is built from `(role, tool_name, arguments)` against the active policy bundle.

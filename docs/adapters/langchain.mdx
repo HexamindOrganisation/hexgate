@@ -1,0 +1,26 @@
+---
+title: "LangChain / LangGraph"
+description: "wrap_langchain_agent — policy-gated tools, in-place installation."
+---
+
+<Note>
+**Page stub.** Full content lives in the
+[README — LangChain / LangGraph](https://github.com/HexamindOrganisation/hexgate#langchain--langgraph--wrap_langchain_agent).
+</Note>
+
+## TL;DR
+
+```python
+from hexgate.adapters.langchain import wrap_langchain_agent
+from hexgate.runtime import User
+
+agent = wrap_langchain_agent(agent=graph, tools=TOOLS, api_key="sk-...")
+result = await agent.ainvoke(
+    {"messages": [{"role": "user", "content": "What is the weather in Tokyo?"}]},
+    user=User(user_id="alice", role="member"),
+)
+```
+
+Builds a `PolicyEnforcer` once and installs it on each tool in place so the same
+instances inside the compiled graph become policy-gated. Returns a
+`HexgateLangchainAgent` proxy that opens a `User` scope per call.

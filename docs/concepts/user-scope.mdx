@@ -1,0 +1,28 @@
+---
+title: "User scope"
+description: "Per-request user identity, role resolution, biscuit attenuation."
+---
+
+<Note>
+**Page stub.** Full content lives in the
+[README — User Scope + Roles](https://github.com/HexamindOrganisation/hexgate#-user-scope--roles).
+</Note>
+
+## TL;DR
+
+`User` is the per-request scope. Marks "this invocation acts on behalf of alice,
+in role X." Async context manager; pushes a fact-bearing Biscuit through the
+agent runtime.
+
+```python
+from hexgate import User, load_hexgate_agent, stream_agent
+
+agent, handler = load_hexgate_agent("support-bot")
+
+async with User(user_id="alice", role="billing", ttl_seconds=300):
+    async for event in stream_agent(agent, handler, "refund 30"):
+        ...
+```
+
+The runtime mints the per-request token, picks the `billing` role's policy, and
+evaluates its constraints against each tool call.

@@ -1,0 +1,27 @@
+---
+title: "OpenAI Agents SDK"
+description: "Wrap an Agent with HexgateRunner — drop-in replacement for agents.Runner."
+---
+
+<Note>
+**Page stub.** Full content lives in the
+[README — OpenAI Agents SDK](https://github.com/HexamindOrganisation/hexgate#openai-agents-sdk--hexgaterunner).
+</Note>
+
+## TL;DR
+
+```python
+from hexgate.adapters.openai import HexgateRunner
+from hexgate.runtime import User
+
+runner = HexgateRunner()                            # picks up HEXGATE_KEY
+result = await runner.run(
+    agent,
+    "What's the weather in Cherbourg?",
+    user=User(user_id="alice", role="member"),
+)
+```
+
+`HexgateRunner` is a drop-in replacement for `agents.Runner`. It wraps the
+agent's tools with a `PolicyEnforcer` at construction time and opens a `User`
+scope around each `run` / `run_sync` / `run_streamed` call.

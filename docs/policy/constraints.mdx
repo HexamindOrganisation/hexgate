@@ -1,0 +1,20 @@
+---
+title: "Constraints"
+description: "Rego-compatible expressions evaluated against the call's arguments."
+---
+
+<Note>
+**Page stub.** Full content lives in the
+[README — Constraints](https://github.com/HexamindOrganisation/hexgate#constraints--rego-compatible-expressions).
+</Note>
+
+| Operator | Example | Notes |
+|---|---|---|
+| `==` `!=` | `args.currency == "USD"` | Strings use JSON double quotes |
+| `<` `<=` `>` `>=` | `args.amount <= 500` | Type-mismatched comparisons fail-closed |
+| `in` | `args.template in ["a", "b"]` | RHS must be a JSON list |
+| `not in` | `args.priority not in ["urgent"]` | Two-word operator, treated as one |
+
+Constraints are Rego-compatible by design: the WASM engine compiles them to OPA
+Rego unchanged, and the pydantic engine evaluates the same strings in-process —
+both produce identical decisions.

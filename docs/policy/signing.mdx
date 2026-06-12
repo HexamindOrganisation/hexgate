@@ -1,0 +1,27 @@
+---
+title: "Signing & verification"
+description: "Ed25519 keypair, detached signatures, REQUIRE_SIGNATURE matrix."
+---
+
+<Note>
+**Page stub.** Full content lives in the
+[README — Signing & verification](https://github.com/HexamindOrganisation/hexgate#signing--verification).
+</Note>
+
+```bash
+hexgate policy keygen --out ./keys/dev
+hexgate policy build policy.yaml --out ./bundle --sign-key ./keys/dev.private
+```
+
+At runtime:
+
+```bash
+HEXGATE_LOCAL_POLICY=./bundle \
+HEXGATE_BUNDLE_PUBKEY_PATH=./keys/dev.public \
+HEXGATE_BUNDLE_REQUIRE_SIGNATURE=true \
+hexgate chat --agent researcher
+```
+
+Keys are raw Ed25519, base64url-encoded — the same format the platform's JWKS
+endpoint publishes, so production verification reuses the public key your SDK
+already trusts for biscuit tokens.

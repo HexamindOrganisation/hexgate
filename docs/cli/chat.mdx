@@ -1,0 +1,21 @@
+---
+title: "hexgate chat"
+description: "Single-process REPL against a local or builtin agent."
+---
+
+<Note>
+**Page stub.** Full content lives in the
+[README — Quick Start — Local CLI](https://github.com/HexamindOrganisation/hexgate#-quick-start--local-cli).
+</Note>
+
+```bash
+hexgate chat --agent example_agent
+hexgate chat --list-agents
+hexgate chat --agent researcher
+hexgate chat --agent examples.customer_bot:agent     # module:attr spec
+hexgate chat --use examples/file_agents.py --agent workspace_explorer
+```
+
+The chat command sets `HEXGATE_LOCAL_MODE=1` automatically so audit stays on
+your machine. Denies and approval-required calls render as inline panels in the
+terminal.
