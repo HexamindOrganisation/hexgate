@@ -128,7 +128,7 @@ async def lifespan(app_: FastAPI):
     yield
 
 
-app = FastAPI(title="HexaGate API", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="Hexgate API", version="0.1.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,

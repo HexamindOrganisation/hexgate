@@ -1,4 +1,4 @@
-"""Proxy around a pre-built ``CompiledStateGraph`` for HexaGate-aware calls."""
+"""Proxy around a pre-built ``CompiledStateGraph`` for Hexgate-aware calls."""
 
 from __future__ import annotations
 
@@ -60,7 +60,7 @@ class HexgateLangchainAgent:
         }
 
     def _with_callbacks(self, config: RunnableConfig | None) -> RunnableConfig:
-        """Append the HexaGate callback handler to ``config['callbacks']``."""
+        """Append the Hexgate callback handler to ``config['callbacks']``."""
         merged: RunnableConfig = dict(config) if config else {}
         callbacks = list(merged.get("callbacks") or [])
         if self._callback_handler not in callbacks:

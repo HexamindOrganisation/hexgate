@@ -1,4 +1,4 @@
-"""Root signing keypair for the HexaGate control plane.
+"""Root signing keypair for the Hexgate control plane.
 
 Every Biscuit token and every signed policy bundle is signed by this keypair.
 Once minted, tokens carry a signature chain that verifies all the way back to

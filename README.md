@@ -1,28 +1,37 @@
 <div align="center">
 
-# HexaGate
+<img src="./icon.svg" alt="Hexgate" width="96" height="96" />
+
+# Hexgate
 
 **Authorization infrastructure for AI agents.**
 Policy enforcement, signed policy bundles, per-request user scope, audit trail — for OpenAI Agents, LangChain, Google ADK, Pydantic AI, or a native runtime.
 
+[**Website**](https://hexgate.ai) · [Docs](https://docs.hexgate.ai) · [PyPI](https://pypi.org/project/hexgate/) · [Discussions](https://github.com/HexamindOrganisation/hexgate/discussions)
+
 [![PyPI](https://img.shields.io/pypi/v/hexgate?color=blue&logo=pypi&logoColor=white)](https://pypi.org/project/hexgate/)
-[![Python](https://img.shields.io/pypi/pyversions/hexgate?logo=python&logoColor=white)](https://pypi.org/project/hexgate/)
 [![CI](https://github.com/HexamindOrganisation/hexgate/actions/workflows/tests.yml/badge.svg?branch=main)](https://github.com/HexamindOrganisation/hexgate/actions/workflows/tests.yml)
 [![Downloads](https://img.shields.io/pypi/dm/hexgate?color=blueviolet)](https://pypi.org/project/hexgate/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-[Quick Start](#-quick-start--local-cli) · [Two paths](#-which-path-do-i-pick) · [Framework adapters](#-framework-agent-wrapping) · [Policy bundles](#-policy-bundles--compile-sign-enforce-wasm) · [User scope](#-user-scope--roles) · [Platform](#-hexagate-platform)
+<br />
+
+<img src="./assets/hero.png" alt="Control what your agents do — not just what they say. Policy decisions streaming live from the PolicyEnforcer." />
+
+<br />
+
+[Quick Start](#-quick-start--local-cli) · [Two paths](#-which-path-do-i-pick) · [Framework adapters](#-framework-agent-wrapping) · [Policy bundles](#-policy-bundles--compile-sign-enforce-wasm) · [User scope](#-user-scope--roles) · [Platform](#-hexgate-platform)
 
 </div>
 
 ---
 
-## What is HexaGate?
+## What is Hexgate?
 
-HexaGate is two things that move together:
+Hexgate is two things that move together:
 
 - **`hexgate` — the SDK.** A Python runtime that gates every tool call through a typed `Decision` (allow / deny / approval-required), wraps your existing OpenAI / LangChain / Google ADK / Pydantic AI agent without rewriting it, and threads per-request user identity through tracing + audit.
-- **The HexaGate platform** *(optional)* — a FastAPI control plane + React dashboard for editing policy in a browser, minting per-project tokens, watching live decisions stream from a serving agent, and shipping signed WASM policy bundles to production.
+- **The Hexgate platform** *(optional)* — a FastAPI control plane + React dashboard for editing policy in a browser, minting per-project tokens, watching live decisions stream from a serving agent, and shipping signed WASM policy bundles to production.
 
 You can use the SDK with nothing else (single-process REPL, YAML on disk). Or plug in the platform when you want auditable decisions in ClickHouse, a shared Playground UI, and live policy edits.
 
@@ -40,7 +49,7 @@ You can use the SDK with nothing else (single-process REPL, YAML on disk). Or pl
         ┌────────────────┐       ┌──────────────────┐       ┌────────────────┐
         │  Local policy  │       │ Signed WASM      │       │   Audit log    │
         │  (YAML / dir,  │       │ bundle from      │       │   (ClickHouse  │
-        │  hot reload)   │       │ HexaGate cloud   │       │   via REST)    │
+        │  hot reload)   │       │ Hexgate cloud   │       │   via REST)    │
         └────────────────┘       └──────────────────┘       └────────────────┘
 ```
 
@@ -64,7 +73,7 @@ You can use the SDK with nothing else (single-process REPL, YAML on disk). Or pl
 - [Environment](#-environment)
 - [Tests & dev tooling](#-tests--dev-tooling)
 - [CLI reference](#-cli-reference)
-- [HexaGate platform](#-hexagate-platform)
+- [Hexgate platform](#-hexgate-platform)
 - [User scope + roles](#-user-scope--roles)
 - [Stream results](#-stream-results)
 
@@ -138,7 +147,7 @@ Both commands accept either a plain agent id (`--agent researcher`) or a uvicorn
 
 ## 🚀 Quick Start — Platform
 
-To run the full HexaGate control plane locally (FastAPI backend + dashboard + your local agent serving over WebSocket), you need **three terminals**. The Makefile has a target that prints the recipe:
+To run the full Hexgate control plane locally (FastAPI backend + dashboard + your local agent serving over WebSocket), you need **three terminals**. The Makefile has a target that prints the recipe:
 
 ```bash
 make demo-platform     # prints the 3-terminal recipe below
@@ -621,7 +630,7 @@ What happens under the hood:
 
 Working scripts in `examples/`:
 
-- `examples/customer_bot.py` — canonical HexaGate path: `create_agent(...)` + the dashboard register/serve loop end-to-end.
+- `examples/customer_bot.py` — canonical Hexgate path: `create_agent(...)` + the dashboard register/serve loop end-to-end.
 - `examples/openai_demo.py` — `HexgateRunner` (OpenAI Agents SDK) end-to-end.
 - `examples/google_demo.py` — `HexgateRunner` (Google ADK) end-to-end with `InMemorySessionService`.
 - `examples/pydantic_ai_demo.py` — `wrap_pydantic_agent` (Pydantic AI) end-to-end.
@@ -756,7 +765,7 @@ That means the same agent code can stay simple in development, while deployment 
 
 ## 🧩 Policy Bundles — Compile, Sign, Enforce (WASM)
 
-HexaGate has **two policy enforcement engines** that return identical decisions (there's a parity test suite that proves it):
+Hexgate has **two policy enforcement engines** that return identical decisions (there's a parity test suite that proves it):
 
 - **pydantic** (default) — evaluates constraints in-process. Zero setup; this is what every example above uses.
 - **WASM** — compiles `policy.yaml` → Rego → a WebAssembly module evaluated via `wasmtime`. This is the path production ships: one compiled artifact, byte-for-byte reproducible, cryptographically signed by the platform.
@@ -1092,7 +1101,7 @@ hexgate chat --use examples/research_agents.py --agent update_researcher --appro
 
 ### `hexgate register` — push a manifest to the platform
 
-Register a code-defined agent's manifest with the HexaGate platform. `--agent`
+Register a code-defined agent's manifest with the Hexgate platform. `--agent`
 takes a Python import path of the form `module.path:attribute`, the same shape
 as ASGI/WSGI entrypoints. The CLI imports the module, grabs the agent object,
 and POSTs its manifest to `${HEXGATE_API_URL}/v1/agents` using
@@ -1131,7 +1140,7 @@ system prompt directly off the object. No flags needed.
 `--system-prompt` accepts either a literal string or a path to a `.md` /
 `.txt` / `.jinja` file (read as text at register time).
 
-Supported frameworks: OpenAI Agents SDK, Google ADK, Pydantic AI, LangChain/LangGraph, HexaGate agents.
+Supported frameworks: OpenAI Agents SDK, Google ADK, Pydantic AI, LangChain/LangGraph, Hexgate agents.
 
 ### `hexgate serve` — bridge a local agent to the platform's relay
 
@@ -1168,7 +1177,7 @@ print(manifest.model_dump())
 ```
 
 `create_manifest` dispatches on the framework of `agent`. The supported
-types are the same set `hexgate register` accepts: HexaGate, OpenAI Agents
+types are the same set `hexgate register` accepts: Hexgate, OpenAI Agents
 SDK, Google ADK, Pydantic AI, and LangChain/LangGraph compiled graphs.
 For LangGraph you must pass `tools=` explicitly, and may pass `model=` /
 `system_prompt=`, since compiled graphs don't expose those fields after
@@ -1178,7 +1187,7 @@ The return value is an `AgentManifest` (a Pydantic model, also re-exported
 from `hexgate` for type annotations) — the same schema the platform
 stores and the dashboard renders.
 
-## 🌐 HexaGate Platform
+## 🌐 Hexgate Platform
 
 The `platform/` directory contains an optional control plane that hosts agent definitions, dev tokens, and a live debug surface. The SDK works fully without it (`load_local_agent`, `load_builtin_agent` keep their existing semantics) — but with it you get:
 
@@ -1297,7 +1306,7 @@ the name from the loaded agent's `.name` attribute — no env var needed.
 
 ## 👤 User Scope + Roles
 
-Real backends serve many users, and different users get different capabilities. HexaGate splits that into two pieces:
+Real backends serve many users, and different users get different capabilities. Hexgate splits that into two pieces:
 
 - **`User`** — the per-request scope. Marks "this invocation acts on behalf of alice, in role X." Async context manager; pushes a fact-bearing Biscuit through the agent runtime.
 - **Role policies** — one `policy.yaml` per role, optionally inheriting from a base mixin. The runtime picks the right one at call time based on the active `User.role`.
@@ -1447,3 +1456,7 @@ async for event in stream_agent(agent, handler, "latest AI breakthroughs"):
 - assistant text deltas
 - tool lifecycle
 - final run completion
+
+---
+
+If Hexgate looks useful, [give it a ⭐ on GitHub](https://github.com/HexamindOrganisation/hexgate) — it helps more than you'd think. Built by [Hexamind](https://hexgate.ai).

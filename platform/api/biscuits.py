@@ -1,6 +1,6 @@
-"""Mint, verify, attenuate, and authorize HexaGate dev/user tokens.
+"""Mint, verify, attenuate, and authorize Hexgate dev/user tokens.
 
-Every HexaGate token is a Biscuit (https://www.biscuitsec.org/) — a Datalog-
+Every Hexgate token is a Biscuit (https://www.biscuitsec.org/) — a Datalog-
 based capability token signed by the platform's root keypair. The shape of
 the claims we put in is intentionally flat:
 
@@ -14,7 +14,7 @@ the claims we put in is intentionally flat:
     check if time($t), $t < 2027-05-06T...Z;     // optional TTL
 
 Verification uses the platform's public key — anyone holding it can prove
-the token was signed by HexaGate. Attenuation lets the dev's backend add
+the token was signed by Hexgate. Attenuation lets the dev's backend add
 narrowing checks (``user("alice")``, ``refund_limit(50)``, …) without ever
 seeing the platform's private key.
 
@@ -224,7 +224,7 @@ ENVELOPE_PREFIX = "fty"
 
 
 def make_envelope(env: str, project_id: str, biscuit_b64: str) -> str:
-    """Wrap a base64 Biscuit in the human-readable HexaGate envelope.
+    """Wrap a base64 Biscuit in the human-readable Hexgate envelope.
 
     Format: ``fty_<env>_<project>_<biscuit_b64>``. The ``fty`` prefix and
     project id are duplicated outside the Biscuit (for grep / GitHub
@@ -243,7 +243,7 @@ def parse_envelope(envelope: str) -> tuple[str, str, str]:
     parts = envelope.split("_", 3)
     if len(parts) != 4 or parts[0] != ENVELOPE_PREFIX:
         raise TokenError(
-            f"malformed HexaGate token envelope (expected '{ENVELOPE_PREFIX}_<env>_<project>_<biscuit>')"
+            f"malformed Hexgate token envelope (expected '{ENVELOPE_PREFIX}_<env>_<project>_<biscuit>')"
         )
     env, project_id, biscuit_b64 = parts[1], parts[2], parts[3]
     return env, project_id, biscuit_b64

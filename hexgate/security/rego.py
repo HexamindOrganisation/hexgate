@@ -1,4 +1,4 @@
-"""Compile a HexaGate ``policy.yaml`` document into a Rego policy module.
+"""Compile a Hexgate ``policy.yaml`` document into a Rego policy module.
 
 The compiler is a pure-Python transformation: parsed YAML payload →
 ``PolicySet`` (which flattens ``inherits:`` and drops ``is_mixin:`` entries)

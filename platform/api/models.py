@@ -26,7 +26,7 @@ def new_uuid_str() -> str:
 # ---------------------------------------------------------------------------
 # Identity + tenancy (M3 — multi-tenant platform)
 #
-# Three tables make HexaGate multi-tenant: ``User`` (a person), ``Organization``
+# Three tables make Hexgate multi-tenant: ``User`` (a person), ``Organization``
 # (a tenant — what customers see as their "workspace" or "team"), and
 # ``OrganizationMember`` (the many-to-many that grants a user access to an
 # org, with a role on the edge).

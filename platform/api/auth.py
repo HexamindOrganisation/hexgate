@@ -217,14 +217,14 @@ class UserManager(BaseUserManager[User, str]):
         link = f"{_dashboard_url()}/reset-password/{token}"
         body = (
             f"Hi {user.email},\n\n"
-            f"Someone requested a password reset for your HexaGate account.\n"
+            f"Someone requested a password reset for your Hexgate account.\n"
             f"If that was you, use this link within the next hour:\n\n"
             f"    {link}\n\n"
             f"If it wasn't you, ignore this email — your password stays put.\n"
         )
         await get_email_sender().send(
             to=user.email,
-            subject="Reset your HexaGate password",
+            subject="Reset your Hexgate password",
             body=body,
         )
 
@@ -240,14 +240,14 @@ class UserManager(BaseUserManager[User, str]):
         link = f"{_dashboard_url()}/verify-email/{token}"
         body = (
             f"Hi {user.email},\n\n"
-            f"Welcome to HexaGate. Click this link to verify your email:\n\n"
+            f"Welcome to Hexgate. Click this link to verify your email:\n\n"
             f"    {link}\n\n"
             f"Unverified accounts can sign in but won't be able to invite\n"
             f"teammates or mint API tokens until verification completes.\n"
         )
         await get_email_sender().send(
             to=user.email,
-            subject="Verify your HexaGate account",
+            subject="Verify your Hexgate account",
             body=body,
         )
 

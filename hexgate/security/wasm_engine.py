@@ -1,4 +1,4 @@
-"""Evaluate a HexaGate policy bundle's ``policy.wasm`` via wasmtime-py.
+"""Evaluate a Hexgate policy bundle's ``policy.wasm`` via wasmtime-py.
 
 This module is the runtime counterpart to :mod:`hexgate.security.rego_wasm`:
 that one *compiles* YAML → Rego → WASM, this one *evaluates* WASM →
@@ -107,7 +107,7 @@ DEFAULT_ENTRYPOINT = "hexgate/policy/decision"
 
 
 class WasmPolicy:
-    """A loaded, evaluable HexaGate policy WASM bundle.
+    """A loaded, evaluable Hexgate policy WASM bundle.
 
     Construct with ``WasmPolicy.from_bytes(wasm)`` or
     ``WasmPolicy.from_bundle_path(dir)``. Each instance owns its own
@@ -349,7 +349,7 @@ def _make_builtin_stubs(store: wasmtime.Store) -> dict[int, wasmtime.Func]:
             builtin_id = args[0] if args else -1
             raise WasmEvalError(
                 f"policy invoked unsupported Rego builtin "
-                f"(builtin{_arity}, id={builtin_id}); the HexaGate "
+                f"(builtin{_arity}, id={builtin_id}); the Hexgate "
                 "constraint grammar does not expose builtins."
             )
 

@@ -82,7 +82,7 @@ def test_parse_envelope_supports_test_env() -> None:
 
 
 def test_parse_envelope_rejects_missing_fty_prefix() -> None:
-    """An envelope without `fty_` is not a HexaGate token."""
+    """An envelope without `fty_` is not a Hexgate token."""
     with pytest.raises(TokenError):
         parse_envelope("not_live_proj_biscuit")
 

@@ -31,7 +31,7 @@ logger = logging.getLogger("hexgate.platform.services")
 # produces identical rows — tests and integration scripts can reference
 # these constants directly instead of looking up by name.
 #
-# Production (hosted HexaGate) sets HEXGATE_SEED=skip to start with a
+# Production (hosted Hexgate) sets HEXGATE_SEED=skip to start with a
 # truly empty DB. Self-hosters and `make platform-api` get a working
 # install on first boot without any setup.
 DEFAULT_ORG_ID = "00000000-0000-0000-0000-000000000001"
@@ -44,7 +44,7 @@ DEFAULT_USER_ID = "00000000-0000-0000-0000-000000000002"
 # admin's email goes through serialization. Use ``.dev`` (a real TLD Google
 # owns) so the email is syntactically valid while still clearly identifying
 # this as the default-seed admin, not a real mailbox.
-DEFAULT_USER_EMAIL = "admin@hexagate.dev"
+DEFAULT_USER_EMAIL = "admin@hexgate.dev"
 
 DEFAULT_PROJECT_ID = "00000000-0000-0000-0000-000000000003"
 DEFAULT_PROJECT_NAME = "support-bot"
@@ -581,7 +581,7 @@ async def send_invitation_email(
     body = (
         f"Hi,\n\n"
         f'{inviter_email} invited you to join the "{org_name}" '
-        f"organisation on HexaGate as a {invitation.role}.\n\n"
+        f"organisation on Hexgate as a {invitation.role}.\n\n"
         f"Open this link to accept (you'll be prompted to sign in or sign\n"
         f"up first if you don't have an account):\n\n"
         f"    {link}\n\n"
@@ -591,7 +591,7 @@ async def send_invitation_email(
     )
     await get_email_sender().send(
         to=invitation.email,
-        subject=f"{inviter_email} invited you to {org_name} on HexaGate",
+        subject=f"{inviter_email} invited you to {org_name} on Hexgate",
         body=body,
     )
 

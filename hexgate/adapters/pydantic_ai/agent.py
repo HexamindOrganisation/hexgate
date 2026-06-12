@@ -1,4 +1,4 @@
-"""Proxy around a pydantic_ai ``Agent`` for HexaGate-aware calls."""
+"""Proxy around a pydantic_ai ``Agent`` for Hexgate-aware calls."""
 
 from __future__ import annotations
 

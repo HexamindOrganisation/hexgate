@@ -96,7 +96,7 @@ export function CreateOrgDialog({
         <DialogHeader>
           <DialogTitle>Create organization</DialogTitle>
           <DialogDescription>
-            Teams in HexaGate live inside an organization. You'll be its
+            Teams in Hexgate live inside an organization. You'll be its
             first owner.
           </DialogDescription>
         </DialogHeader>

@@ -1,4 +1,4 @@
-"""Attenuate a verified HexaGate token with user-scoped facts and checks.
+"""Attenuate a verified Hexgate token with user-scoped facts and checks.
 
 In production the dev's backend calls :func:`attenuate_for_user` on each
 inbound request, taking the project-wide token from ``HEXGATE_KEY`` and

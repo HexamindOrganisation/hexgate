@@ -120,7 +120,7 @@ describe('OrgProjectSwitcher', () => {
     // the text "Create organization" — assert on something unique to
     // the dialog body to avoid the multi-match getByText error.
     expect(
-      await screen.findByText(/Teams in HexaGate live inside/i),
+      await screen.findByText(/Teams in Hexgate live inside/i),
     ).toBeInTheDocument()
   })
 })

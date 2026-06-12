@@ -462,10 +462,10 @@ def load_hexgate_agent(
     approval_handler: ApprovalHandler | None = None,
     decision_observer: "DecisionObserver | None" = None,
 ) -> tuple[AgentGraph, CallbackHandler]:
-    """Fetch an agent from HexaGate and return it with policy enforcement applied.
+    """Fetch an agent from Hexgate and return it with policy enforcement applied.
 
     Mirrors `load_local_agent` but sources the three YAMLs (agent, policy, system)
-    from the HexaGate API instead of disk. Tool resolution and enforcement are
+    from the Hexgate API instead of disk. Tool resolution and enforcement are
     identical — only the bytes' origin differs.
 
     ``name`` is required. The Phase-7 env-var fallback chain
@@ -555,7 +555,7 @@ def load_agent(
     approval_handler: ApprovalHandler | None = None,
     decision_observer: "DecisionObserver | None" = None,
 ) -> tuple[AgentGraph, CallbackHandler]:
-    """Load an agent from HexaGate (when HEXGATE_KEY is set), local, or builtin.
+    """Load an agent from Hexgate (when HEXGATE_KEY is set), local, or builtin.
 
     ``name`` is required for every path post-Phase 7 — the
     HEXGATE_AGENT_NAME env-var fallback was removed when ``hexgate
@@ -584,7 +584,7 @@ def load_agent(
             decision_observer=decision_observer,
         )
     if name is None:
-        raise ValueError("load_agent() requires a name when not using HexaGate Cloud")
+        raise ValueError("load_agent() requires a name when not using Hexgate Cloud")
     source = resolve_agent_source(name, base_dir)
     if source == "local":
         return load_local_agent(

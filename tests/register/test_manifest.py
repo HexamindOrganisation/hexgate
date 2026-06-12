@@ -215,7 +215,7 @@ def test_langchain_manifest_schema():
 
 
 def test_hexgate_manifest_schema():
-    """Test the schema of the HexaGate manifest (HexgateAgent from create_agent)."""
+    """Test the schema of the Hexgate manifest (HexgateAgent from create_agent)."""
     from langchain_core.tools import tool
     from langgraph.graph import END, START, StateGraph
 

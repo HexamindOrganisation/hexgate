@@ -274,7 +274,7 @@ def test_404_propagates_with_status() -> None:
     caller can register (hexgate.register_agent) and resolve again."""
     _, pub = generate_keypair()
     fc = _FakeClient(pub)
-    fc.serve_error(HexgateError("HexaGate API error 404 calling …", status=404))
+    fc.serve_error(HexgateError("Hexgate API error 404 calling …", status=404))
 
     with pytest.raises(HexgateError) as excinfo:
         _resolved_binding("ghost-agent", client=fc)
@@ -334,7 +334,7 @@ def test_refresh_failure_keeps_previous_policy(
     _, pub = generate_keypair()
     fc = _FakeClient(pub)
     fc.serve({"policy_yaml": _POLICY_YAML}, etag='"hash-a"')
-    fc.serve_error(HexgateError("HexaGate API unreachable at …"))
+    fc.serve_error(HexgateError("Hexgate API unreachable at …"))
 
     binding = _resolved_binding("support-bot", client=fc)
     before = binding.enforcer.policy

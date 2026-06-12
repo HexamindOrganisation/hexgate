@@ -3,7 +3,7 @@ title: "Introduction"
 description: "Authorization infrastructure for AI agents — policy enforcement, signed bundles, per-request user scope, audit trail."
 ---
 
-**HexaGate** gates every tool call your AI agent makes through a typed `Decision`
+**Hexgate** gates every tool call your AI agent makes through a typed `Decision`
 (allow / deny / approval-required) and threads per-request user identity through
 tracing and audit. Drop it in front of an OpenAI Agents / LangChain / Google ADK /
 Pydantic AI agent without rewriting the agent.
@@ -23,14 +23,14 @@ Pydantic AI agent without rewriting the agent.
   </Card>
 </CardGroup>
 
-## What HexaGate is
+## What Hexgate is
 
-HexaGate is two things that move together:
+Hexgate is two things that move together:
 
 - **`hexgate` — the SDK.** A Python runtime that gates every tool call through
   a typed `Decision`, wraps your existing agent without rewriting it, and threads
   per-request user identity through tracing + audit.
-- **The HexaGate platform** *(optional)* — a FastAPI control plane + React
+- **The Hexgate platform** *(optional)* — a FastAPI control plane + React
   dashboard for editing policy in a browser, minting per-project tokens, watching
   live decisions stream from a serving agent, and shipping signed WASM policy
   bundles to production.
@@ -55,7 +55,7 @@ Playground UI, and live policy edits.
         ┌────────────────┐       ┌──────────────────┐       ┌────────────────┐
         │  Local policy  │       │ Signed WASM      │       │   Audit log    │
         │  (YAML / dir,  │       │ bundle from      │       │   (ClickHouse  │
-        │  hot reload)   │       │ HexaGate cloud   │       │   via REST)    │
+        │  hot reload)   │       │ Hexgate cloud   │       │   via REST)    │
         └────────────────┘       └──────────────────┘       └────────────────┘
 ```
 

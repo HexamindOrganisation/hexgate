@@ -1,7 +1,7 @@
 [project]
 name = "hexgate-api"
 version = "0.1.0"
-description = "HexaGate control plane API — policy bundles, tokens, audit ingestion"
+description = "Hexgate control plane API — policy bundles, tokens, audit ingestion"
 # Matches the hexgate SDK's floor (>=3.13) — the control plane now depends on
 # it for compile_to_rego / compile_to_wasm.
 requires-python = ">=3.13"
@@ -63,6 +63,6 @@ asyncio_mode = "auto"
 package = false
 
 [tool.uv.sources]
-# Local, editable pointer to the HexaGate SDK (asianf/). Delete this block
+# Local, editable pointer to the Hexgate SDK (asianf/). Delete this block
 # once `hexgate` is published to PyPI — the [project] dependency stays.
 hexgate = { path = "../..", editable = true }

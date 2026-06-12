@@ -251,7 +251,7 @@ def test_bind_failure_is_loud_not_a_bare_agent(
     """Binding was requested (key present) — a platform error must raise,
     never silently degrade to an unguarded agent."""
     fc = _FakeClient()
-    fc.serve_error(HexgateError("HexaGate API error 500 calling …", status=500))
+    fc.serve_error(HexgateError("Hexgate API error 500 calling …", status=500))
     _patch_platform(monkeypatch, fc)
 
     with pytest.raises(HexgateError, match="500"):
@@ -264,7 +264,7 @@ def test_404_is_loud_does_not_auto_register(
     """An unregistered agent surfaces the 404 — create_agent never silently
     auto-creates it on the platform (register-on-404 is deferred)."""
     fc = _FakeClient()
-    fc.serve_error(HexgateError("HexaGate API error 404 calling …", status=404))
+    fc.serve_error(HexgateError("Hexgate API error 404 calling …", status=404))
     _patch_platform(monkeypatch, fc)
 
     with pytest.raises(HexgateError) as excinfo:

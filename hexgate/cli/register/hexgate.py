@@ -19,10 +19,10 @@ from hexgate.cli.register.models import (
 def create_hexgate_manifest(
     agent: HexgateAgent, *, description: str | None = None
 ) -> AgentManifest:
-    """Build an AgentManifest from a HexaGate agent created by `create_agent`."""
+    """Build an AgentManifest from a Hexgate agent created by `create_agent`."""
     if not agent.name:
         raise ValueError(
-            "HexaGate agent has no name — set a name on the HexgateAgent so the "
+            "Hexgate agent has no name — set a name on the HexgateAgent so the "
             "manifest can identify it on the platform."
         )
     return AgentManifest(

@@ -40,8 +40,8 @@ def add_parser(subparsers: argparse._SubParsersAction) -> None:
     """
     parser = subparsers.add_parser(
         "register",
-        help="Register an agent to the HexaGate platform.",
-        description="Register an agent to the HexaGate platform.",
+        help="Register an agent to the Hexgate platform.",
+        description="Register an agent to the Hexgate platform.",
     )
     parser.add_argument(
         "--agent",
