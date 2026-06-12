@@ -1,0 +1,61 @@
+---
+title: "Quickstart"
+description: "Install hexgate and run the example agent in 60 seconds."
+---
+
+<Steps>
+  <Step title="Install the package">
+    ```bash
+    pip install hexgate
+    ```
+
+    Or, for a local checkout:
+
+    ```bash
+    git clone https://github.com/HexamindOrganisation/hexgate.git
+    cd hexgate
+    pip install -e .
+    ```
+  </Step>
+
+  <Step title="Set up environment variables">
+    ```bash
+    cp .env.sample .env
+    ```
+
+    Fill in the three keys for the example flow:
+
+    ```bash
+    OPENAI_API_KEY=sk-...
+    LINKUP_API_KEY=...
+    TAVILY_API_KEY=...
+    ```
+  </Step>
+
+  <Step title="Run the chat REPL">
+    ```bash
+    hexgate chat --agent example_agent
+    ```
+
+    The chat command sets `HEXGATE_LOCAL_MODE=1` automatically, so audit stays on
+    your machine. Denies and approval-required calls render as inline panels in
+    the terminal.
+  </Step>
+</Steps>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Pick a path" icon="route" href="/two-paths">
+    Should you use `hexgate chat` or `hexgate serve`? Decide here.
+  </Card>
+  <Card title="Wrap an existing agent" icon="puzzle-piece" href="/adapters/openai">
+    Got an OpenAI Agents / LangChain / Google ADK / Pydantic AI agent? Wrap it once.
+  </Card>
+  <Card title="Author a policy" icon="shield" href="/policy/yaml-shape">
+    YAML policy shape, constraints, role inheritance — the full spec.
+  </Card>
+  <Card title="User scope" icon="user" href="/concepts/user-scope">
+    Per-request user identity, role resolution, biscuit attenuation.
+  </Card>
+</CardGroup>

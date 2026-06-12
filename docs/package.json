@@ -1,0 +1,17 @@
+{
+  "name": "hexgate-docs",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Documentation site for hexgate (Mintlify).",
+  "scripts": {
+    "dev": "mintlify dev",
+    "broken-links": "mintlify broken-links",
+    "rename": "mintlify rename"
+  },
+  "devDependencies": {
+    "mintlify": "^4.0.0"
+  },
+  "engines": {
+    "node": ">=20 <25"
+  }
+}

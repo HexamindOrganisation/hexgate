@@ -1,0 +1,29 @@
+---
+title: "Google ADK"
+description: "HexgateRunner — wraps google.adk.runners.Runner with policy + observability."
+---
+
+<Note>
+**Page stub.** Full content lives in the
+[README — Google ADK](https://github.com/HexamindOrganisation/hexgate#google-adk--hexgaterunner).
+</Note>
+
+## TL;DR
+
+```python
+from hexgate.adapters.google import HexgateRunner
+from hexgate.runtime import User
+
+runner = HexgateRunner(
+    agent=agent,
+    app_name="my-app",
+    session_service=InMemorySessionService(),
+)
+
+async for event in runner.run_async(new_message=msg, user=User(user_id="alice", role="user")):
+    ...
+```
+
+Wraps `google.adk.runners.Runner` once at construction. Tool execution stays in
+the calling thread's contextvar scope (PR #30 fixed a worker-thread leak that
+dropped the User role at tool-call sites).

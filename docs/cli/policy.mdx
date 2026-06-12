@@ -1,0 +1,18 @@
+---
+title: "hexgate policy"
+description: "validate, show-rego, test, build, keygen — policy authoring CLI."
+---
+
+<Note>
+**Page stub.** Full content lives in the
+[README — The hexgate policy CLI](https://github.com/HexamindOrganisation/hexgate#the-hexgate-policy-cli).
+</Note>
+
+```bash
+hexgate policy validate policy.yaml
+hexgate policy show-rego policy.yaml
+hexgate policy test policy.yaml --role billing --tool refund_order \
+    --args '{"amount": 200, "currency": "USD"}' --engine wasm
+hexgate policy build policy.yaml --out ./bundle
+hexgate policy keygen --out ./keys/dev
+```

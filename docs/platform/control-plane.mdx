@@ -1,0 +1,22 @@
+---
+title: "Control plane (FastAPI)"
+description: "REST + WebSocket endpoints, SQLite by default."
+---
+
+<Note>
+**Page stub.** Full content lives in the
+[README — Backend (platform/api/)](https://github.com/HexamindOrganisation/hexgate#backend-platformapi).
+</Note>
+
+```bash
+cd platform/api
+uv run uvicorn main:app --reload --port 8000
+```
+
+Endpoints:
+
+- `POST /v1/projects/:id/tokens` — mint a dev token
+- `GET /v1/projects/:id/agents` — list agents
+- `PUT /v1/projects/:id/agents/:name` — save agent / policy / system YAMLs
+- `WS /v1/projects/:id/serve` — producer socket (the `hexgate serve` CLI dials here)
+- `WS /v1/projects/:id/chat` — consumer socket (dashboard Playground dials here)

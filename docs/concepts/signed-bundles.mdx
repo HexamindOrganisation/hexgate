@@ -1,0 +1,21 @@
+---
+title: "Signed policy bundles"
+description: "Compile YAML to WASM, sign with Ed25519, verify on every load."
+---
+
+<Note>
+**Page stub.** Full content lives in the
+[README — Policy Bundles](https://github.com/HexamindOrganisation/hexgate#-policy-bundles--compile-sign-enforce-wasm).
+</Note>
+
+## TL;DR
+
+HexaGate has two policy engines that return identical decisions:
+
+- **pydantic** — evaluates constraints in-process. Zero setup; what every example uses.
+- **WASM** — compiles `policy.yaml` → Rego → WebAssembly. Production-ready, signed,
+  byte-for-byte reproducible.
+
+A "bundle" is a directory containing `policy.yaml` + `policy.rego` + `policy.wasm` +
+a manifest with SHA-256 of each artifact + an optional Ed25519 detached signature
+over the manifest.

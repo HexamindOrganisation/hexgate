@@ -1,0 +1,14 @@
+---
+title: "Local override (HEXGATE_LOCAL_POLICY)"
+description: "Point an agent at a YAML file or bundle dir; hot-reload on save."
+---
+
+<Note>
+**Page stub.** Full content lives in the
+[README — Local enforcement](https://github.com/HexamindOrganisation/hexgate#local-enforcement--hexgate_local_policy).
+</Note>
+
+| `HEXGATE_LOCAL_POLICY=…` | What happens | When to use |
+|---|---|---|
+| **`./bundle/`** | Stat the bundle manifest each turn; reload if its mtime changed. | Production-shaped local testing. |
+| **`./policy.yaml`** | Stat the yaml each turn; recompile via `opa` when its mtime changed. | The tight dev loop. |

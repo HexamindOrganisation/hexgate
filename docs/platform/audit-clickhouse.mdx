@@ -1,0 +1,20 @@
+---
+title: "Audit log (ClickHouse)"
+description: "Policy decisions persisted for the audit dashboard."
+---
+
+<Note>
+**Page stub.** Full content lives in the
+[README — Audit log](https://github.com/HexamindOrganisation/hexgate#audit-log-clickhouse).
+Engineering spec at [internals/audit-pipeline](/internals/audit-pipeline).
+</Note>
+
+```bash
+make clickhouse-up        # start the server (first run also creates the schema)
+make clickhouse-cli       # interactive SQL shell
+make clickhouse-down      # stop (keeps data)
+make clickhouse-reset     # wipe and recreate
+```
+
+The service binds to **127.0.0.1 only, on host ports 8124 (HTTP) and 9001
+(native)** so it coexists with any other local ClickHouse instance.

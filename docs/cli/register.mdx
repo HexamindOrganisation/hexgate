@@ -1,0 +1,18 @@
+---
+title: "hexgate register"
+description: "Push a manifest to the platform."
+---
+
+<Note>
+**Page stub.** Full content lives in the
+[README — hexgate register](https://github.com/HexamindOrganisation/hexgate#hexgate-register--push-a-manifest-to-the-platform).
+</Note>
+
+```bash
+hexgate register --agent examples.customer_bot:agent
+hexgate register --agent my_app.agents:my_agent --description "Customer support bot"
+```
+
+`--agent` takes a Python import path `module.path:attribute`. The CLI imports
+the module, grabs the agent object, and POSTs its manifest to
+`${HEXGATE_API_URL}/v1/agents` using `${HEXGATE_KEY}` as the bearer token.

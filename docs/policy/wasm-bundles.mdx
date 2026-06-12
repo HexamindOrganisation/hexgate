@@ -1,0 +1,19 @@
+---
+title: "WASM bundles"
+description: "Compile policy.yaml to a portable signed artifact."
+---
+
+<Note>
+**Page stub.** Full content lives in the
+[README — Policy Bundles](https://github.com/HexamindOrganisation/hexgate#-policy-bundles--compile-sign-enforce-wasm).
+Engineering snapshot at [internals/rego-wasm](/internals/rego-wasm).
+</Note>
+
+```bash
+hexgate policy build policy.yaml --out ./bundle
+# → ./bundle/policy.yaml, .rego, .wasm, .bundle.json
+```
+
+The manifest's hashes authenticate the files; the signature authenticates the
+manifest. Verifying both proves the whole bundle came from the trusted signer,
+untampered.

@@ -1,0 +1,16 @@
+---
+title: "Audit trail"
+description: "Every Decision posted to ClickHouse via /v1/audit/decisions."
+---
+
+<Note>
+**Page stub.** Engineering spec lives at [internals/audit-pipeline](/internals/audit-pipeline).
+</Note>
+
+## TL;DR
+
+When `HEXGATE_KEY` is set and local mode is off, every `Decision` the enforcer
+returns is fired-and-forgotten to `/v1/audit/decisions`. The platform's
+ClickHouse table stores one row per decision; the dashboard's audit page
+visualises them. Local mode (set by `hexgate chat`) keeps events on your
+machine.
