@@ -209,13 +209,11 @@ def build_runtime_from_local_agent(
     """
     import os
 
-    import yaml
-
     from hexgate.agents.factory import enforce_policy
     from hexgate.cli.register.manifest import create_manifest
     from hexgate.cli.register.register import post_manifest
     from hexgate.cloud.client import HexgateClient, HexgateConfig
-    from hexgate.security.policy_set import load_policy_set_from_dict
+    from hexgate.security.binding import platform_policy_from_payload
     from hexgate.tracing.langfuse import get_langfuse_handler
 
     manifest = create_manifest(agent_obj, description=description)
@@ -239,7 +237,7 @@ def build_runtime_from_local_agent(
 
     config = HexgateConfig.from_env()
     client = HexgateClient(config)
-    payload, _etag = client.get_agent(agent_name)
+    payload, initial_etag = client.get_agent(agent_name)
     if payload is None:
         # Invariant: no If-None-Match was sent, so a 304 is impossible.
         # Raise so `python -O` can't strip the check.
@@ -248,10 +246,22 @@ def build_runtime_from_local_agent(
             "on initial fetch (no If-None-Match was sent)"
         )
 
-    policy_payload = yaml.safe_load(payload["policy_yaml"]) or {}
-    policy = load_policy_set_from_dict(policy_payload)
+    # platform_policy_from_payload returns the canonical (engine, source)
+    # pair: handles signed-bundle vs pydantic fallback, and seeds the
+    # PlatformPolicySource with the bundle + ETag so the next refresh is
+    # a 304 unless policy changed. Without the source kwarg, refresh_policy()
+    # at the top of every stream_agent() is a no-op and dashboard edits
+    # only land at the next `hexgate serve` restart.
+    policy, refresh_source = platform_policy_from_payload(
+        client, agent_name, payload, initial_etag
+    )
 
-    enforced = enforce_policy(agent_obj, policy, approval_handler=approval_handler)
+    enforced = enforce_policy(
+        agent_obj,
+        policy,
+        approval_handler=approval_handler,
+        source=refresh_source,
+    )
 
     # Fresh handler for the streaming layer. The user's create_agent() call
     # built its own handler but discarded it; we make a new one bound to
