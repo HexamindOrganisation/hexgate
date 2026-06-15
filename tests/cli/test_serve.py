@@ -382,14 +382,23 @@ def _patched_runtime_deps(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
                 # Minimal payload with a parseable policy_yaml. The
                 # roles map gives load_policy_set_from_dict something
                 # to chew on without needing real role inheritance.
+                # No bundle_* fields → decode_and_verify_platform_bundle
+                # returns None, so the pydantic engine path applies.
                 {
                     "policy_yaml": (
                         "version: 1\nroles:\n  default:\n    "
                         "default_policy:\n      mode: allow\n"
                     )
                 },
-                None,
+                "etag-abc",
             )
+
+        def public_key_bytes(self) -> bytes:
+            # Never consulted on the bundle-less path (the payload above
+            # omits the bundle fields, so decode_and_verify_platform_bundle
+            # returns before touching this key). 32 zero bytes are enough
+            # to satisfy the type contract.
+            return b"\x00" * 32
 
     def fake_enforce_policy(agent_obj: Any, policy: Any, **kw: Any):
         captured["enforced_agent"] = agent_obj
@@ -512,3 +521,40 @@ def test_build_runtime_applies_fetched_policy_to_local_agent(
     assert captured["enforced_agent"] is user_agent
     # The fetched policy_yaml had the ``default`` role declared.
     assert "default" in captured["enforced_policy"].roles
+
+
+def test_build_runtime_attaches_platform_policy_source_for_per_turn_refresh(
+    _patched_runtime_deps: dict[str, Any],
+) -> None:
+    """Regression: serve must attach a PolicySource so dashboard edits land
+    at the next chat turn, not only at the next ``hexgate serve`` restart.
+
+    The previous implementation parsed ``policy_yaml`` straight into a
+    PolicySet and called ``enforce_policy(agent, policy, approval_handler=...)``
+    with no ``source=`` kwarg, leaving the binding's source as ``None``
+    and the per-turn ``refresh_policy()`` a no-op. The canonical helper
+    ``platform_policy_from_payload`` returns both the engine AND a
+    pre-seeded :class:`PlatformPolicySource` — wiring the source through
+    is the difference between "policy reloads on next turn" and "policy
+    only reloads on serve restart".
+    """
+    from hexgate.security.source import PlatformPolicySource
+
+    captured = _patched_runtime_deps
+
+    build_runtime_from_local_agent(
+        _stub_settings(),
+        agent_obj=object(),
+        description=None,
+        approval_handler=None,
+        auto_register=True,
+        console=Console(),
+    )
+
+    kwargs = captured["enforce_kwargs"]
+    assert "source" in kwargs, (
+        "enforce_policy must be called with source= so per-turn refresh works"
+    )
+    assert isinstance(kwargs["source"], PlatformPolicySource), (
+        f"expected PlatformPolicySource, got {type(kwargs['source']).__name__}"
+    )
