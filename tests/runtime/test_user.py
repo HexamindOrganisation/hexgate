@@ -13,6 +13,7 @@ context-resolution helper to confirm the right facts arrive at the runtime.
 from __future__ import annotations
 
 import asyncio
+import contextvars
 
 import pytest
 from biscuit_auth import BiscuitBuilder, KeyPair
@@ -117,6 +118,41 @@ async def test_user_defaults_keep_optional_fields_unset() -> None:
         assert u.role is None
         assert u.session_id is None
         assert u.ttl_seconds is None
+
+
+def test_sync_scope_exit_survives_foreign_context() -> None:
+    """Exiting in a different Context than entry must not raise.
+
+    A sync generator holding ``sync_scope()`` across a yield can be GC-finalized
+    in a foreign Context; with the old token-based reset that raised "Token was
+    created in a different Context". Save/restore via set() works in any Context.
+
+    Enter and exit each run in their own copied Context so neither touches the
+    test's real context (and the distinct contexts are what reproduce the bug).
+    """
+    user = User(user_id="alice")
+    cm = user.sync_scope()
+    contextvars.copy_context().run(cm.__enter__)  # set in context A
+    contextvars.copy_context().run(cm.__exit__, None, None, None)  # exit in B: no raise
+    assert get_current_user() is None  # test's own context never polluted
+
+
+@pytest.mark.asyncio
+async def test_async_scope_exit_survives_foreign_context() -> None:
+    """async __aexit__ in a foreign Context must not raise (astream_events
+    aclose() runs in the event loop's finalizer task). __aexit__ does no real
+    awaiting, so a single send() drives it to completion."""
+    user = User(user_id="alice")
+
+    def _drive(coro: object) -> None:
+        try:
+            coro.send(None)  # type: ignore[attr-defined]
+        except StopIteration:
+            pass
+
+    contextvars.copy_context().run(_drive, user.__aenter__())  # enter in context A
+    contextvars.copy_context().run(_drive, user.__aexit__(None, None, None))  # B: no raise
+    assert get_current_user() is None
 
 
 @pytest.mark.asyncio
