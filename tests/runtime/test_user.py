@@ -151,7 +151,9 @@ async def test_async_scope_exit_survives_foreign_context() -> None:
             pass
 
     contextvars.copy_context().run(_drive, user.__aenter__())  # enter in context A
-    contextvars.copy_context().run(_drive, user.__aexit__(None, None, None))  # B: no raise
+    contextvars.copy_context().run(
+        _drive, user.__aexit__(None, None, None)
+    )  # B: no raise
     assert get_current_user() is None
 
 
