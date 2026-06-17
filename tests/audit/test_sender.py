@@ -123,9 +123,7 @@ def test_no_running_loop_skips_silently(caplog: "logging.LogCaptureFixture") -> 
         sender.emit(_event())  # second call: silent
     assert len(sender._tasks) == 0
     assert sender._warned_no_loop is True
-    no_loop_warnings = [
-        r for r in caplog.records if "no live bound loop" in r.message
-    ]
+    no_loop_warnings = [r for r in caplog.records if "no live bound loop" in r.message]
     assert len(no_loop_warnings) == 1
 
 
