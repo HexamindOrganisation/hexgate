@@ -9,7 +9,6 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar, Token
 from dataclasses import dataclass
-from typing import Any
 
 from pydantic import BaseModel, ConfigDict, PrivateAttr
 
@@ -96,26 +95,30 @@ class User(BaseModel):
     session_id: str | None = None
     ttl_seconds: int | None = None
 
-    # Stack so the same User instance survives nested ``async with`` blocks.
-    _tokens: list[Any] = PrivateAttr(default_factory=list)
+    # Stack of shadowed values (supports nested scopes). We save/restore via
+    # set() rather than reset(token): async-generator finalizers run __aexit__
+    # in a different Context, where a token reset would raise — set() doesn't.
+    _saved: list["User | None"] = PrivateAttr(default_factory=list)
 
     async def __aenter__(self) -> "User":
-        self._tokens.append(_CURRENT_USER.set(self))
+        self._saved.append(_CURRENT_USER.get())
+        _CURRENT_USER.set(self)
         return self
 
     async def __aexit__(self, *_: object) -> None:
-        if self._tokens:
-            _CURRENT_USER.reset(self._tokens.pop())
+        if self._saved:
+            _CURRENT_USER.set(self._saved.pop())
 
     @contextmanager
     def sync_scope(self) -> Iterator["User"]:
         """Sync mirror of ``async with self`` for sync entry points."""
-        self._tokens.append(_CURRENT_USER.set(self))
+        self._saved.append(_CURRENT_USER.get())
+        _CURRENT_USER.set(self)
         try:
             yield self
         finally:
-            if self._tokens:
-                _CURRENT_USER.reset(self._tokens.pop())
+            if self._saved:
+                _CURRENT_USER.set(self._saved.pop())
 
 
 _CURRENT_USER: ContextVar[User | None] = ContextVar(

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, AsyncIterator, Iterator
+from typing import TYPE_CHECKING, Any, AsyncIterator, Iterator, Literal
 
 from langchain_core.runnables import RunnableConfig
 from langfuse import get_client, propagate_attributes
@@ -134,10 +134,10 @@ class HexgateLangchainAgent:
     async def astream_events(
         self,
         input: dict[str, Any],
-        version: str,
         *,
         user: User,
         config: RunnableConfig | None = None,
+        version: Literal["v1", "v2"] = "v2",
         **kwargs: Any,
     ) -> AsyncIterator[dict[str, Any]]:
         """Stream the agent events asynchronously inside a User scope."""
@@ -145,7 +145,10 @@ class HexgateLangchainAgent:
         async with user:
             with propagate_attributes(**self._propagate_kwargs(user, "astream_events")):
                 async for event in self._agent.astream_events(
-                    input, version, config=self._with_callbacks(config), **kwargs
+                    input,
+                    config=self._with_callbacks(config),
+                    version=version,
+                    **kwargs,
                 ):
                     yield event
 

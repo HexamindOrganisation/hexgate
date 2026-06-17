@@ -69,12 +69,16 @@ class _RecordingGraph:
     async def astream_events(
         self,
         payload: dict[str, Any],
-        version: str,
+        config: Any = None,
         *,
-        config: Any,
+        version: str = "v2",
         **_kwargs: Any,
     ) -> AsyncIterator[dict[str, Any]]:
-        """Async-yield two events, also recording the requested version."""
+        """Async-yield two events, also recording the requested version.
+
+        Mirrors langgraph's real signature — ``config`` positional, ``version``
+        keyword-only — so forwarding ``version`` positionally (the original
+        bug) would bind it to ``config`` and fail this test."""
         snapshot = self._snapshot(payload, config)
         snapshot["version"] = version
         self.astream_events_calls.append(snapshot)
@@ -193,14 +197,28 @@ async def test_astream_events_forwards_version_and_opens_scope() -> None:
     user = _user()
 
     events = [
-        evt async for evt in proxy.astream_events({"input": "hi"}, "v2", user=user)
+        evt
+        async for evt in proxy.astream_events({"input": "hi"}, version="v2", user=user)
     ]
 
     assert events == [{"event": "start"}, {"event": "end"}]
     [call] = graph.astream_events_calls
     assert call["version"] == "v2"
+    assert call["config"] is not None  # version did not leak into the config slot
     assert call["user"] is user
     assert get_current_user() is None
+
+
+@pytest.mark.asyncio
+async def test_astream_events_defaults_version_to_v2() -> None:
+    """version is keyword-only with a 'v2' default, mirroring base langchain."""
+    graph = _RecordingGraph()
+    proxy = HexgateLangchainAgent(agent=graph, api_key="k", tool_names=["echo"])
+
+    _ = [evt async for evt in proxy.astream_events({"input": "hi"}, user=_user())]
+
+    [call] = graph.astream_events_calls
+    assert call["version"] == "v2"
 
 
 def test_user_scope_is_unwound_when_invoke_raises() -> None:
