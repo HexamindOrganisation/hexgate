@@ -149,7 +149,13 @@ class AuditSender:
         # latch onto the first loop that drives them and reject any other
         # (e.g. a second asyncio.run()). Build them eagerly so configure()
         # stays sync, but track the loop and rebuild if it rotates.
-        self._loop: asyncio.AbstractEventLoop | None = None
+        #
+        # Capture the build-time loop so emit() can reach it from an executor
+        # thread (a sync tool under run_in_executor has no loop of its own).
+        try:
+            self._loop: asyncio.AbstractEventLoop | None = asyncio.get_running_loop()
+        except RuntimeError:
+            self._loop = None
         self._semaphore = asyncio.Semaphore(max_in_flight)
         self._client: httpx.AsyncClient | None = self._new_client()
         self._tasks: set[asyncio.Task[None]] = set()
@@ -182,11 +188,31 @@ class AuditSender:
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
-            if not self._warned_no_loop:
-                _log.warning("audit emit called without a running event loop; skipping")
-                self._warned_no_loop = True
+            # Called off-loop (sync tool on a run_in_executor thread): route
+            # to the build-time loop instead of dropping the event.
+            loop = self._loop
+            if loop is None or loop.is_closed():
+                if not self._warned_no_loop:
+                    _log.warning(
+                        "audit emit called with no running loop and no live "
+                        "bound loop; skipping"
+                    )
+                    self._warned_no_loop = True
+                return
+            try:
+                loop.call_soon_threadsafe(self._spawn_send, event)
+            except RuntimeError:
+                pass  # loop torn down between the is_closed() check and the call
             return
         self._ensure_loop_state(loop)
+        self._spawn_send(event)
+
+    def _spawn_send(self, event: AuditEvent) -> None:
+        """Create the send task. MUST run on the bound loop's thread —
+        ``create_task`` and the loop-bound semaphore require the running loop.
+        Reached on-loop from :meth:`emit`, or via ``call_soon_threadsafe``."""
+        if self._closing or self._client is None:
+            return
         if self._semaphore.locked():
             self._dropped += 1
             if self._dropped % 100 == 1:

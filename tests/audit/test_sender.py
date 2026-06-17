@@ -114,17 +114,41 @@ async def test_network_error_logged_not_raised(
 
 
 def test_no_running_loop_skips_silently(caplog: "logging.LogCaptureFixture") -> None:
-    """Sync caller with no event loop: emit no-ops with a one-time warning."""
+    """No running loop and no bound loop (built outside any loop): emit
+    no-ops with a one-time warning."""
     sender = AuditSender("http://x/y", "k")
+    assert sender._loop is None
     with caplog.at_level(logging.WARNING, logger="hexgate.audit"):
         sender.emit(_event())
         sender.emit(_event())  # second call: silent
     assert len(sender._tasks) == 0
     assert sender._warned_no_loop is True
     no_loop_warnings = [
-        r for r in caplog.records if "without a running event loop" in r.message
+        r for r in caplog.records if "no live bound loop" in r.message
     ]
     assert len(no_loop_warnings) == 1
+
+
+async def test_emit_from_executor_thread_routes_to_bound_loop() -> None:
+    """Off-loop emit (sync tool on a run_in_executor thread) routes to the
+    build-time loop instead of being dropped."""
+    sender = AuditSender("http://x/y", "k")
+    sender._client = _stub_client()
+    assert sender._loop is asyncio.get_running_loop()  # captured at construction
+
+    loop = asyncio.get_running_loop()
+    # Emit from a worker thread, exactly as BaseTool.ainvoke runs a sync tool.
+    await loop.run_in_executor(None, sender.emit, _event())
+    # Pump the loop until the send runs. The task self-discards on completion,
+    # so the durable signal is the POST, not a transient _tasks count.
+    for _ in range(100):
+        if sender._client.post.await_count:
+            break
+        await asyncio.sleep(0)
+
+    assert sender._warned_no_loop is False  # routed, not dropped
+    await asyncio.gather(*sender._tasks)
+    sender._client.post.assert_called_once()
 
 
 def test_rebuilds_loop_bound_state_across_event_loops() -> None:
