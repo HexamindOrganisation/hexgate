@@ -142,6 +142,14 @@ platform-api: ## Run the platform API dev server (FastAPI on :8000)
 platform-api-test: ## Run the platform API test suite
 	cd platform/api && uv run pytest tests/
 
+.PHONY: seed-audit
+seed-audit: ## Seed ClickHouse with audit test data (anomaly detection)
+	cd platform/api && uv run python ../scripts/seed_audit.py
+
+.PHONY: seed-audit-clear
+seed-audit-clear: ## Clear seeded audit test data
+	cd platform/api && uv run python ../scripts/seed_audit.py --clear
+
 # -------- Dashboard (Vite + React) --------
 #
 # Uses pnpm. `pnpm dev` runs Vite on :5173 and proxies /v1/* to :8000,

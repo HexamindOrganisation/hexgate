@@ -18,3 +18,12 @@ make clickhouse-reset     # wipe and recreate
 
 The service binds to **127.0.0.1 only, on host ports 8124 (HTTP) and 9001
 (native)** so it coexists with any other local ClickHouse instance.
+
+## Seed data
+
+```bash
+make seed-audit         # insert 820 rows of mock audit data
+make seed-audit-clear   # delete seed rows
+```
+
+Inserts 800 normal rows spread over 30 days (Alice, Bob, Charlie across all tools) plus 20 anomaly rows where Bob probes restricted tools (`refund_customer`, `create_ticket`) with a default role in a 5-minute window 10 days ago.
