@@ -1,5 +1,6 @@
 import asyncio
 import base64
+from datetime import datetime
 import hashlib
 import logging
 from contextlib import asynccontextmanager
@@ -34,7 +35,7 @@ from audit import (
     WINDOW_HOURS,
     AuditEventOutOfWindow,
     AuditPayloadTooLarge,
-    bucket_minutes_for,
+    prepare_date_range,
     insert_decision,
     list_decisions,
     summarize,
@@ -1109,8 +1110,11 @@ async def api_audit_summary(
     agent: str | None = None,
     role: str | None = None,
     tool: str | None = None,
+    start_date: datetime | None = None,
+    end_date: datetime | None = None,
     clickhouse_client=Depends(require_clickhouse),
 ) -> AuditSummary:
+    start_date, end_date = prepare_date_range(start_date, end_date)
     try:
         # The clickhouse_connect client is sync — run it off the event loop
         # so a slow aggregation can't stall every other in-flight request.
@@ -1122,6 +1126,8 @@ async def api_audit_summary(
             agent=agent,
             role=role,
             tool=tool,
+            start_date=start_date,
+            end_date=end_date,
         )
     except ClickHouseError:
         raise _audit_unavailable()
@@ -1140,18 +1146,22 @@ async def api_audit_timeseries(
     agent: str | None = None,
     role: str | None = None,
     tool: str | None = None,
+    start_date: datetime | None = None,
+    end_date: datetime | None = None,
     clickhouse_client=Depends(require_clickhouse),
 ) -> list[AuditTimeseriesPoint]:
+    start_date, end_date = prepare_date_range(start_date, end_date)
     try:
         return await asyncio.to_thread(
             timeseries,
             clickhouse_client,
             project_id=project_id,
             since_hours=WINDOW_HOURS[window],
-            bucket_minutes=bucket_minutes_for(window),
             agent=agent,
             role=role,
             tool=tool,
+            start_date=start_date,
+            end_date=end_date,
         )
     except ClickHouseError:
         raise _audit_unavailable()
@@ -1173,8 +1183,11 @@ async def api_audit_decisions(
     session_id: str | None = None,
     limit: int = 25,
     offset: int = 0,
+    start_date: datetime | None = None,
+    end_date: datetime | None = None,
     clickhouse_client=Depends(require_clickhouse),
 ) -> AuditDecisionPage:
+    start_date, end_date = prepare_date_range(start_date, end_date)
     try:
         page = await asyncio.to_thread(
             list_decisions,
@@ -1188,6 +1201,8 @@ async def api_audit_decisions(
             session_id=session_id,
             limit=max(1, min(limit, 200)),
             offset=max(0, offset),
+            start_date=start_date,
+            end_date=end_date,
         )
     except ClickHouseError:
         raise _audit_unavailable()
