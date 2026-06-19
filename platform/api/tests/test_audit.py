@@ -21,7 +21,7 @@ from pydantic import ValidationError
 
 import audit
 import main
-from audit import list_decisions, summarize
+from audit import CLOCK_SKEW_FUTURE, list_decisions, summarize
 from keystore import FileKeyStore
 from main import (
     app,
@@ -33,6 +33,7 @@ from main import (
 )
 from schemas import DecisionEvent
 
+from audit import prepare_date_range
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -330,6 +331,82 @@ def test_scope_all_filters() -> None:
     # Every dynamic value travels as a bound parameter, never spliced into
     # the SQL string — the injection-shape invariant for this module.
     assert all("{" in clause and ":" in clause for clause in where)
+
+
+_START = datetime(2025, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
+_END = datetime(2025, 1, 7, 23, 59, 59, tzinfo=timezone.utc)
+
+
+def test_scope_appends_date_range_clause_when_both_dates_provided() -> None:
+    where, params = audit._scope("p1", 24, start_date=_START, end_date=_END)
+
+    expected_clauses = [
+        "project_id = {pid:String}",
+        "occurred_at >= {start_date:DateTime} AND occurred_at <= {end_date:DateTime}",
+    ]
+
+    assert where == expected_clauses
+    assert params == {"pid": "p1", "start_date": _START, "end_date": _END}
+
+
+def test_scope_falls_back_to_since_hours_when_one_date_missing() -> None:
+    where_only_start, params = audit._scope("p1", 24, start_date=_START)
+    assert where_only_start == _BASE_WHERE
+    assert "start_date" not in params and "end_date" not in params
+
+    where_only_end, params = audit._scope("p1", 24, end_date=_END)
+    assert where_only_end == _BASE_WHERE
+    assert "start_date" not in params and "end_date" not in params
+
+
+def test_scope_falls_back_to_since_hours_when_start_date_is_after_end_date() -> None:
+    where, params = audit._scope("p1", 24, start_date=_END, end_date=_START)
+    assert where == _BASE_WHERE
+    assert "start_date" not in params and "end_date" not in params
+
+
+# ---------------------------------------------------------------------------
+# bucket_minutes_for_timedelta() — granularity thresholds
+# ---------------------------------------------------------------------------
+
+
+def test_bucket_minutes_for_timedelta_thresholds() -> None:
+    f = audit.bucket_minutes_for_timedelta
+    assert f(timedelta(minutes=30)) == 1
+    assert f(timedelta(hours=1)) == 5
+    assert f(timedelta(hours=6)) == 15
+    assert f(timedelta(hours=12)) == 30
+    assert f(timedelta(hours=24)) == 60
+    assert f(timedelta(days=7)) == 360
+    assert f(timedelta(days=30)) == 1440
+    assert f(timedelta(days=90)) == 1440
+
+
+# ---------------------------------------------------------------------------
+# timeseries() — bucket param derived from date range vs since_hours
+# ---------------------------------------------------------------------------
+
+
+def _timeseries_client() -> MagicMock:
+    client = MagicMock()
+    client.query.return_value.result_rows = []
+    return client
+
+
+def test_timeseries_bucket_uses_date_range_when_dates_provided() -> None:
+    # _END - _START ≈ 7 days → 360-minute buckets
+    client = _timeseries_client()
+    audit.timeseries(
+        client, project_id="p1", since_hours=24, start_date=_START, end_date=_END
+    )
+    assert client.query.call_args.kwargs["parameters"]["bucket"] == 360
+
+
+def test_timeseries_bucket_uses_since_hours_when_no_dates() -> None:
+    # since_hours=24 → 60-minute buckets
+    client = _timeseries_client()
+    audit.timeseries(client, project_id="p1", since_hours=24)
+    assert client.query.call_args.kwargs["parameters"]["bucket"] == 60
 
 
 # ---------------------------------------------------------------------------
@@ -691,3 +768,56 @@ def test_real_clickhouse_round_trip() -> None:
             "ALTER TABLE policy_decision DELETE WHERE project_id = {pid:String}",
             parameters={"pid": project_id},
         )
+
+
+# ---------------------------------------------------------------------------
+# _prepare_date_range() — UTC normalization + 90-day retention clamping
+# ---------------------------------------------------------------------------
+
+
+def test_when_both_inputs_are_none_then_returns_none_none() -> None:
+    start, end = prepare_date_range(None, None)
+    assert start is None
+    assert end is None
+
+
+def test_when_naive_datetimes_provided_then_utc_is_attached() -> None:
+    naive_start = datetime(2025, 1, 1, 0, 0, 0)
+    naive_end = datetime(2025, 1, 7, 0, 0, 0)
+    start, end = prepare_date_range(naive_start, naive_end)
+    assert start.tzinfo == timezone.utc
+    assert end.tzinfo == timezone.utc
+
+
+def test_when_window_is_within_90d_then_start_date_is_unchanged() -> None:
+    start, end = prepare_date_range(_START, _END)  # 7-day window
+    assert start == _START
+    assert end == _END
+
+
+def test_when_window_exceeds_90d_then_start_date_is_clamped_to_end_minus_retention() -> (
+    None
+):
+    far_start = datetime(2024, 9, 1, tzinfo=timezone.utc)  # >90d before _END
+    start, _ = prepare_date_range(far_start, _END)
+    assert start == _END - audit.RETENTION_WINDOW
+
+
+def test_when_only_start_date_provided_then_no_clamping_occurs() -> None:
+    start, end = prepare_date_range(_START, None)
+    assert start == _START
+    assert end is None
+
+
+def test_when_start_date_is_after_end_date_then_no_clamping_occurs() -> None:
+    # start > end: max(start, end - 90d) always returns start unchanged.
+    # _date_range_valid handles the invalid pair downstream.
+    start, end = prepare_date_range(_END, _START)
+    assert start == _END
+    assert end == _START
+
+
+def test_when_end_date_is_in_the_future_then_end_date_is_clamped_to_now() -> None:
+    future_end = datetime(2099, 12, 31, tzinfo=timezone.utc)
+    _, end = prepare_date_range(None, future_end)
+    assert end <= datetime.now(timezone.utc) + CLOCK_SKEW_FUTURE

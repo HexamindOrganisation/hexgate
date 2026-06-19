@@ -12,11 +12,14 @@ HTTP-agnostic — exceptions map to status codes in main.py.
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime, timedelta, timezone
 
 from clickhouse_connect.driver.client import Client
 
 from schemas import DecisionEvent
+
+_log = logging.getLogger(__name__)
 
 
 class AuditPayloadTooLarge(Exception):
@@ -132,22 +135,40 @@ def insert_decision(
 # Dashboard windows → hours; 90d is the 90-day TTL ceiling.
 WINDOW_HOURS: dict[str, int] = {"24h": 24, "7d": 24 * 7, "30d": 24 * 30, "90d": 24 * 90}
 
-# Bucket size per window (~24-90 points): 24h→hourly, 7d→6h, 30d/90d→daily.
-_WINDOW_BUCKET_MINUTES: dict[str, int] = {
-    "24h": 60,
-    "7d": 360,
-    "30d": 1440,
-    "90d": 1440,
-}
 
+def bucket_minutes_for_timedelta(delta: timedelta) -> int:
+    """Bucket size (minutes) for a free-form date range.
 
-def bucket_minutes_for(window: str) -> int:
-    """Bucket size (minutes) for a window key (KeyError on unknown window)."""
-    return _WINDOW_BUCKET_MINUTES[window]
+    ≤30min→1min, ≤1h→5min, ≤6h→15min, ≤12h→30min, ≤24h→60min, ≤7d→360min, else→1440min.
+    """
+    if delta <= timedelta(minutes=30):
+        return 1
+    elif delta <= timedelta(hours=1):
+        return 5
+    elif delta <= timedelta(hours=6):
+        return 15
+    elif delta <= timedelta(hours=12):
+        return 30
+    elif delta <= timedelta(hours=24):
+        return 60
+    elif delta <= timedelta(days=7):
+        return 360
+    else:
+        return 1440
 
 
 def _zero_counts() -> dict[str, int]:
     return {"all": 0, "allow": 0, "deny": 0, "needs_approval": 0}
+
+
+def _date_range_valid(start: datetime | None, end: datetime | None) -> bool:
+    """True if both dates are present and start <= end."""
+    if not (start and end):
+        return False
+    if start > end:
+        _log.warning(f"Date range invalid, start > end: {start} > {end}")
+        return False
+    return True
 
 
 def _scope(
@@ -157,14 +178,24 @@ def _scope(
     agent: str | None = None,
     role: str | None = None,
     tool: str | None = None,
+    start_date: datetime | None = None,
+    end_date: datetime | None = None,
 ) -> tuple[list[str], dict[str, object]]:
     """Shared WHERE + params for the scope filters (project/window/agent/role/
     tool) that all reads narrow by. Pass role="" for the no-role bucket."""
     where = [
         "project_id = {pid:String}",
-        "occurred_at >= now() - INTERVAL {hrs:UInt32} HOUR",
     ]
-    params: dict[str, object] = {"pid": project_id, "hrs": since_hours}
+    params: dict[str, object] = {"pid": project_id}
+    if _date_range_valid(start_date, end_date):
+        where.append(
+            "occurred_at >= {start_date:DateTime} AND occurred_at <= {end_date:DateTime}"
+        )
+        params["start_date"] = start_date
+        params["end_date"] = end_date
+    else:
+        params["hrs"] = since_hours
+        where.append("occurred_at >= now() - INTERVAL {hrs:UInt32} HOUR")
     if agent:
         where.append("agent_name = {agent:String}")
         params["agent"] = agent
@@ -194,13 +225,23 @@ def summarize(
     agent: str | None = None,
     role: str | None = None,
     tool: str | None = None,
+    start_date: datetime | None = None,
+    end_date: datetime | None = None,
 ) -> dict:
     """Totals + breakdowns for the scoped slice. Returns ``{totals, by_agent,
     by_role, by_tool}``; each breakdown is ``{key, all, allow, deny,
     needs_approval}`` sorted by ``all`` desc. An empty role keeps its raw
     ``""`` key — labelling it ("(none)") is the dashboard's concern, so no
     string is reserved on the wire."""
-    where, params = _scope(project_id, since_hours, agent=agent, role=role, tool=tool)
+    where, params = _scope(
+        project_id,
+        since_hours,
+        agent=agent,
+        role=role,
+        tool=tool,
+        start_date=start_date,
+        end_date=end_date,
+    )
     where_sql = " AND ".join(where)
     summary_sql = (
         "SELECT agent_name, role, tool_name, outcome, "
@@ -265,14 +306,27 @@ def timeseries(
     *,
     project_id: str,
     since_hours: int,
-    bucket_minutes: int,
     agent: str | None = None,
     role: str | None = None,
     tool: str | None = None,
+    start_date: datetime | None = None,
+    end_date: datetime | None = None,
 ) -> list[dict]:
     """Per-bucket outcome counts, ordered by bucket. Sparse: empty buckets are
     omitted. Returns ``[{bucket, allow, deny, needs_approval}]``."""
-    where, params = _scope(project_id, since_hours, agent=agent, role=role, tool=tool)
+    where, params = _scope(
+        project_id,
+        since_hours,
+        agent=agent,
+        role=role,
+        tool=tool,
+        start_date=start_date,
+        end_date=end_date,
+    )
+    if "start_date" in params:
+        bucket_minutes = bucket_minutes_for_timedelta(end_date - start_date)
+    else:
+        bucket_minutes = bucket_minutes_for_timedelta(timedelta(hours=since_hours))
     params["bucket"] = bucket_minutes
     where_sql = " AND ".join(where)
     ts_sql = (
@@ -320,11 +374,21 @@ def list_decisions(
     session_id: str | None = None,
     limit: int = 25,
     offset: int = 0,
+    start_date: datetime | None = None,
+    end_date: datetime | None = None,
 ) -> dict:
     """Detail rows for the events table, newest first. Scope filters plus
     table-only ``outcome``/``session_id``. Returns ``{rows, total, limit,
     offset}`` with ``total`` the unpaginated match count."""
-    where, params = _scope(project_id, since_hours, agent=agent, role=role, tool=tool)
+    where, params = _scope(
+        project_id,
+        since_hours,
+        agent=agent,
+        role=role,
+        tool=tool,
+        start_date=start_date,
+        end_date=end_date,
+    )
     if outcome:
         where.append("outcome = {outcome:String}")
         params["outcome"] = outcome
@@ -365,3 +429,26 @@ def list_decisions(
         )
 
     return {"rows": rows, "total": total, "limit": limit, "offset": offset}
+
+
+def _ensure_utc(dt: datetime | None) -> datetime | None:
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def prepare_date_range(
+    start_date: datetime | None, end_date: datetime | None
+) -> tuple[datetime | None, datetime | None]:
+    start_date = _ensure_utc(start_date)
+    end_date = _ensure_utc(end_date)
+
+    if end_date:
+        end_date = min(end_date, datetime.now(timezone.utc) + CLOCK_SKEW_FUTURE)
+
+    if start_date and end_date:
+        start_date = max(start_date, end_date - RETENTION_WINDOW)
+
+    return start_date, end_date
