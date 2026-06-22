@@ -14,6 +14,11 @@ dependencies = [
     "biscuit-python>=0.4",
     "clickhouse-connect>=0.8",
     "pydantic-settings>=2.5",  # separate package since pydantic v2
+    # main.py calls load_dotenv() at startup so the os.environ.get readers
+    # (CORS, cookie, dashboard, Google OAuth) pick up platform/api/.env, not
+    # just the pydantic Settings block. Transitive via pydantic-settings, but
+    # imported directly so pin it.
+    "python-dotenv>=1.1.1",
     # Async SQLite driver — required by SQLAlchemy's async engine. SQLite
     # itself is single-writer; aiosqlite just stops the event loop from
     # blocking on disk I/O. Future Postgres switch swaps this for asyncpg.

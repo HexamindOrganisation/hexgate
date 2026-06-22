@@ -9,6 +9,7 @@ from typing import Literal
 from urllib.parse import unquote
 
 from clickhouse_connect.driver.exceptions import ClickHouseError, OperationalError
+from dotenv import load_dotenv
 from fastapi import (
     APIRouter,
     Depends,
@@ -102,6 +103,12 @@ from services import (
     update_agent,
 )
 
+
+# Load platform/api/.env into os.environ before anything reads HEXGATE_* —
+# the CORS middleware and keystore resolve their config at import time, and
+# the os.environ.get readers (auth cookie/dashboard, Google OAuth) won't see
+# a .env file otherwise. Real environment variables still take precedence.
+load_dotenv()
 
 keystore = FileKeyStore()
 _log = logging.getLogger(__name__)
