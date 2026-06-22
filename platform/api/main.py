@@ -104,10 +104,8 @@ from services import (
 )
 
 
-# Load platform/api/.env into os.environ before anything reads HEXGATE_* —
-# the CORS middleware and keystore resolve their config at import time, and
-# the os.environ.get readers (auth cookie/dashboard, Google OAuth) won't see
-# a .env file otherwise. Real environment variables still take precedence.
+# Load .env into os.environ before any HEXGATE_* read (CORS + keystore
+# resolve at import time). Real env vars still take precedence.
 load_dotenv()
 
 keystore = FileKeyStore()
@@ -162,9 +160,9 @@ def _cors_origins() -> list[str]:
     """
     raw = os.environ.get("HEXGATE_CORS_ORIGINS", "").strip()
     if not raw:
-        return list(_DEFAULT_CORS_ORIGINS)
-    parsed = [o.strip().rstrip("/") for o in raw.split(",") if o.strip()]
-    return parsed or list(_DEFAULT_CORS_ORIGINS)
+        return _DEFAULT_CORS_ORIGINS
+    parsed = [origin.strip().rstrip("/") for origin in raw.split(",") if origin.strip()]
+    return parsed or _DEFAULT_CORS_ORIGINS
 
 
 app.add_middleware(
