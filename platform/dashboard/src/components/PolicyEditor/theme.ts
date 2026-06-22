@@ -30,6 +30,12 @@ const tokyoNight = tokyoNightStormInit({
     fontFamily: 'var(--font-mono)',
     // Match the dashboard's text-sm (14px).
     fontSize: '14px',
+    // Blend the editor into the dashboard surface — Tokyo Night Storm's
+    // default `#24283b` was slightly bluer than `--background`; using
+    // the dashboard var instead means no seam between the editor and the
+    // surrounding chrome.
+    background: 'hsl(var(--background))',
+    gutterBackground: 'hsl(var(--background))',
   },
 })
 
