@@ -9,9 +9,15 @@ so dev and tests stay zero-setup.
 import os
 from pathlib import Path
 
+from dotenv import load_dotenv
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlmodel import SQLModel
 from sqlmodel.ext.asyncio.session import AsyncSession
+
+# Load .env here, not just in main: the engine is built at import time (below),
+# which runs before main's own load_dotenv(), so DATABASE_URL must be in the
+# environment now. Idempotent and non-overriding, so real env vars still win.
+load_dotenv()
 
 DB_PATH = Path(__file__).parent / "hexgate.db"
 _DEFAULT_URL = f"sqlite+aiosqlite:///{DB_PATH}"
