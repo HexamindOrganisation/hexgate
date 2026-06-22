@@ -3,6 +3,7 @@ import base64
 from datetime import datetime
 import hashlib
 import logging
+import os
 from contextlib import asynccontextmanager
 from typing import Literal
 from urllib.parse import unquote
@@ -126,14 +127,42 @@ async def lifespan(app_: FastAPI):
         _log.warning(
             "ClickHouse unreachable at startup; audit endpoints will 503 until reachable"
         )
+    # Surface deployment config at startup so a misconfig shows in logs
+    # rather than as a silent browser CORS/cookie failure.
+    from auth import _cookie_secure, _dashboard_url
+
+    _log.info(
+        "hexgate-api startup config: cors_origins=%s cookie_secure=%s dashboard_url=%s",
+        _cors_origins(),
+        _cookie_secure(),
+        _dashboard_url(),
+    )
     yield
 
 
 app = FastAPI(title="Hexgate API", version="0.1.0", lifespan=lifespan)
 
+
+_DEFAULT_CORS_ORIGINS = ["http://localhost:5173"]
+
+
+def _cors_origins() -> list[str]:
+    """Allowed browser origins from comma-separated ``HEXGATE_CORS_ORIGINS``.
+
+    Entries are trailing-slash/whitespace-stripped to match the ``Origin``
+    header. Unset or unparseable falls back to the dev default. No wildcard:
+    credentialed CORS forbids it, so production must list explicit origins.
+    """
+    raw = os.environ.get("HEXGATE_CORS_ORIGINS", "").strip()
+    if not raw:
+        return list(_DEFAULT_CORS_ORIGINS)
+    parsed = [o.strip().rstrip("/") for o in raw.split(",") if o.strip()]
+    return parsed or list(_DEFAULT_CORS_ORIGINS)
+
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
+    allow_origins=_cors_origins(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
