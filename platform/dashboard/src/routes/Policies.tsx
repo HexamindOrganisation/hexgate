@@ -14,6 +14,7 @@ import { useProjectScoped } from '@/lib/active'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { NoProjectEmptyState } from '@/components/NoProjectEmptyState'
+import { PolicyEditor } from '@/components/PolicyEditor'
 import { nodeTypes } from '@/components/graph/nodes'
 import { buildPolicyGraph } from '@/lib/policy_graph'
 import { cn } from '@/lib/utils'
@@ -278,15 +279,15 @@ function YamlEditor({
           )}
         </div>
       )}
-      <textarea
+      <PolicyEditor
         value={draft}
-        onChange={(e) => {
-          setDraft(e.target.value)
-          setDirty(e.target.value !== originalSource)
+        onChange={(next) => {
+          setDraft(next)
+          setDirty(next !== originalSource)
           if (errors) setErrors(null)
         }}
-        spellCheck={false}
-        className="flex-1 resize-none bg-background p-6 font-mono text-sm leading-relaxed text-foreground focus:outline-none"
+        diagnostics={errors}
+        className="flex-1 overflow-hidden"
       />
     </div>
   )
