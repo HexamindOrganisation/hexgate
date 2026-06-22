@@ -18,12 +18,12 @@ def test_agent_manifest_schema():
     manifest = AgentManifest(
         name="test-agent",
         description="A test agent",
-        framework=AgentFramework.FORTIFY,
+        framework=AgentFramework.HEXGATE,
         tools=[],
     )
     assert manifest.name == "test-agent"
     assert manifest.description == "A test agent"
-    assert manifest.framework == AgentFramework.FORTIFY
+    assert manifest.framework == AgentFramework.HEXGATE
     assert manifest.tools == []
 
 
@@ -243,7 +243,7 @@ def test_hexgate_manifest_schema():
     expected_manifest = AgentManifest(
         name="test-agent",
         description="A test agent",
-        framework=AgentFramework.FORTIFY,
+        framework=AgentFramework.HEXGATE,
         model="test-model",
         system_prompt=None,
         tools=[

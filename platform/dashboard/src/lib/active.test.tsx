@@ -79,7 +79,7 @@ describe('useActive store', () => {
       useActive.getState().setActiveOrg('persisted-org')
     })
     // Hits the same key the store registered.
-    const raw = window.localStorage.getItem('fortify-active')
+    const raw = window.localStorage.getItem('hexgate-active')
     expect(raw).toBeTruthy()
     const parsed = JSON.parse(raw as string)
     expect(parsed.state.activeOrgId).toBe('persisted-org')

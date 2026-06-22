@@ -8,7 +8,7 @@
  * cache on success so the next ``useUser()`` read reflects the
  * change.
  *
- * The dashboard authenticates by carrying the ``fortify_session``
+ * The dashboard authenticates by carrying the ``hexgate_session``
  * cookie set by /v1/auth/cookie/login or /v1/auth/google/callback.
  * There's no explicit token to thread through — ``credentials:
  * 'include'`` in lib/api.ts handles it.

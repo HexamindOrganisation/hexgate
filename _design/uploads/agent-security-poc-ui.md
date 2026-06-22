@@ -1,6 +1,6 @@
 # Agent Security Platform — UI Design Spec
 
-Design direction for the Fortify dashboard. Scoped for a single designer/AI pass; opinionated where it needs to be.
+Design direction for the Hexgate dashboard. Scoped for a single designer/AI pass; opinionated where it needs to be.
 
 ## 1. Vibe
 
@@ -198,7 +198,7 @@ Icons always pair with text in primary nav and buttons. Icon-only allowed in den
 
 ```
 ┌──────────────────────────────────────────────────────────┐
-│ [Logo] Fortify    Project: support-bot ▼      [user] [?] │  ← 56px top bar
+│ [Logo] Hexgate    Project: support-bot ▼      [user] [?] │  ← 56px top bar
 ├──────────┬───────────────────────────────────────────────┤
 │          │                                                │
 │ Sidebar  │                                                │
@@ -415,7 +415,7 @@ Examples:
 
 Crafted onboarding. When a user signs up and sees the empty dashboard, they should think *"this feels different."*
 
-- Initial empty state of the main dashboard: a single centered card, `Shield` icon at 64px in `--primary`, "Welcome to Fortify", one-line tagline, single CTA "Create your first project."
+- Initial empty state of the main dashboard: a single centered card, `Shield` icon at 64px in `--primary`, "Welcome to Hexgate", one-line tagline, single CTA "Create your first project."
 - The key-mint modal after project creation shows the key in large mono, an `Fingerprint` icon, a one-liner: *"This is the only time we'll show it. Store it safely."*
 - After the first policy is published, a small toast (top-right): `CheckCheck` + "Policy published — bundle v1 now serving."
 

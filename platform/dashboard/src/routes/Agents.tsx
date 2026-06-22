@@ -22,7 +22,7 @@ import { NoProjectEmptyState } from '@/components/NoProjectEmptyState'
  * degrades to an empty-state telling the user to register first.
  *
  * Editing happens elsewhere: policy authoring lives in /policies,
- * manifest registration goes through the SDK's ``fortify register``.
+ * manifest registration goes through the SDK's ``hexgate register``.
  */
 export function AgentsPage() {
   const scope = useProjectScoped()
@@ -183,7 +183,7 @@ function ToolsSection({
       {tools.length === 0 ? (
         <p className="px-5 py-4 text-xs text-muted-foreground">
           {unregistered
-            ? 'Agent not registered yet — run `fortify register` to populate.'
+            ? 'Agent not registered yet — run `hexgate register` to populate.'
             : 'No tools declared.'}
         </p>
       ) : (
@@ -227,7 +227,7 @@ function SystemPromptSection({
       ) : (
         <p className="px-5 py-4 text-xs text-muted-foreground">
           {unregistered
-            ? 'Agent not registered yet — run `fortify register` to populate.'
+            ? 'Agent not registered yet — run `hexgate register` to populate.'
             : 'No system prompt declared.'}
         </p>
       )}

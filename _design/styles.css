@@ -1,4 +1,4 @@
-/* Fortify — design tokens */
+/* Hexgate — design tokens */
 @import url('https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap');
 
 :root {
@@ -30,7 +30,7 @@
   --semantic-approval-soft: 38 60% 22%;
 }
 
-.fortify {
+.hexgate {
   font-family: 'Geist', system-ui, -apple-system, sans-serif;
   background: hsl(var(--background));
   color: hsl(var(--foreground));
@@ -43,8 +43,8 @@
   height: 100%;
   overflow: hidden;
 }
-.fortify * { box-sizing: border-box; }
-.fortify .mono { font-family: 'Geist Mono', ui-monospace, 'SF Mono', monospace; }
+.hexgate * { box-sizing: border-box; }
+.hexgate .mono { font-family: 'Geist Mono', ui-monospace, 'SF Mono', monospace; }
 
 /* ——— App shell ——— */
 .fty-shell { display: grid; grid-template-rows: 56px 1fr; height: 100%; }
@@ -336,13 +336,13 @@
 .fty-seg button.active.approval { background: hsl(var(--semantic-approval-soft)); color: hsl(var(--semantic-approval)); }
 
 /* ——— Scrollbars ——— */
-.fortify *::-webkit-scrollbar { width: 10px; height: 10px; }
-.fortify *::-webkit-scrollbar-track { background: transparent; }
-.fortify *::-webkit-scrollbar-thumb {
+.hexgate *::-webkit-scrollbar { width: 10px; height: 10px; }
+.hexgate *::-webkit-scrollbar-track { background: transparent; }
+.hexgate *::-webkit-scrollbar-thumb {
   background: hsl(var(--border)); border-radius: 5px;
   border: 2px solid hsl(var(--background));
 }
-.fortify *::-webkit-scrollbar-thumb:hover { background: hsl(var(--muted-foreground) / 0.5); }
+.hexgate *::-webkit-scrollbar-thumb:hover { background: hsl(var(--muted-foreground) / 0.5); }
 
 /* ——— Graph canvas ——— */
 .fty-graph {

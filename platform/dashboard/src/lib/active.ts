@@ -50,7 +50,7 @@ export const useActive = create<ActiveState>()(
       setActiveProject: (projectId) => set({ activeProjectId: projectId }),
     }),
     {
-      name: 'fortify-active',
+      name: 'hexgate-active',
       // ``createJSONStorage`` lazy-resolves localStorage at call time
       // rather than at module-import time. Without it, importing this
       // module from a unit test (before jsdom finishes wiring its

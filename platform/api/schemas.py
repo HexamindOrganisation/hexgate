@@ -275,7 +275,7 @@ class ValidatePolicyResponse(BaseModel):
 
 
 class AgentFramework(StrEnum):
-    FORTIFY = "hexgate"
+    HEXGATE = "hexgate"
     PYDANTIC_AI = "pydantic-ai"
     LANGCHAIN = "langchain"
     GOOGLE = "google"
