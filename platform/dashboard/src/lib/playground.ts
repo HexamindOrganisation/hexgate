@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useSyncExternalStore } from 'react'
 
 export type ToolCallState = 'started' | 'completed' | 'failed'
 export type BlockType = 'text' | 'reasoning' | 'tool_call'
@@ -115,74 +115,139 @@ interface Options {
   projectId: string
 }
 
-export function usePlayground({ projectId }: Options) {
-  const [state, setState] = useState<PlaygroundState>({
-    connected: false,
-    agentOnline: false,
-    agentName: null,
-    messages: [],
-    decisions: [],
-    currentTurnId: null,
+// ---------------------------------------------------------------------
+// Module-level store
+// ---------------------------------------------------------------------
+//
+// State + WebSocket live above React's component lifecycle so navigating
+// away from /playground (e.g. to /policies) and back doesn't reset the
+// chat. The hook subscribes via useSyncExternalStore; the socket
+// connection survives unmount and is reused on remount.
+//
+// Lifecycle:
+//   * First mount in a project: open the socket, populate state.
+//   * Subsequent mounts (same project): no-op — the socket is already
+//     up and `cachedState` is whatever the prior session left it at.
+//   * Project switch: close the old socket, wipe state, open a new one
+//     under the new project's chat endpoint.
+//   * Tab close: browser destroys everything. We never explicitly close
+//     in cleanup because the React component unmount is not the right
+//     trigger for socket teardown here.
+
+const INITIAL_STATE: PlaygroundState = {
+  connected: false,
+  agentOnline: false,
+  agentName: null,
+  messages: [],
+  decisions: [],
+  currentTurnId: null,
+}
+
+let cachedState: PlaygroundState = INITIAL_STATE
+const listeners = new Set<() => void>()
+
+let activeSocket: WebSocket | null = null
+let activeProjectId: string | null = null
+let reconnectTimer: ReturnType<typeof setTimeout> | null = null
+let reconnectAttempts = 0
+
+function setStore(updater: (s: PlaygroundState) => PlaygroundState): void {
+  cachedState = updater(cachedState)
+  listeners.forEach((l) => l())
+}
+
+function subscribe(listener: () => void): () => void {
+  listeners.add(listener)
+  return () => {
+    listeners.delete(listener)
+  }
+}
+
+function getSnapshot(): PlaygroundState {
+  return cachedState
+}
+
+function handleFrame(frame: unknown): void {
+  if (!frame || typeof frame !== 'object') return
+  const f = frame as { type?: string; event_type?: string }
+  if (f.type === 'agent_online') {
+    const ev = f as AgentOnlineEvent
+    setStore((s) => ({
+      ...s,
+      agentOnline: Boolean(ev.online),
+      agentName: ev.agent ?? (ev.online ? s.agentName : null),
+    }))
+    return
+  }
+  if (f.type === 'session_reset') return
+  if (f.event_type) setStore((s) => applyEvent(s, f as StreamEvent))
+}
+
+function connectSocket(projectId: string): void {
+  // Project changed under us while a reconnect was pending — abandon.
+  if (activeProjectId !== projectId) return
+  const url = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/v1/projects/${projectId}/chat`
+  const ws = new WebSocket(url)
+  activeSocket = ws
+
+  ws.addEventListener('open', () => {
+    reconnectAttempts = 0
+    setStore((s) => ({ ...s, connected: true }))
   })
-  const socketRef = useRef<WebSocket | null>(null)
+
+  ws.addEventListener('close', () => {
+    setStore((s) => ({ ...s, connected: false, agentOnline: false }))
+    if (activeProjectId === projectId) {
+      const delay = Math.min(1000 * 2 ** reconnectAttempts, 15000)
+      reconnectAttempts += 1
+      reconnectTimer = setTimeout(() => connectSocket(projectId), delay)
+    }
+  })
+
+  ws.addEventListener('message', (evt) => {
+    let payload: unknown
+    try {
+      payload = JSON.parse(evt.data)
+    } catch {
+      return
+    }
+    handleFrame(payload)
+  })
+}
+
+function ensureSocketFor(projectId: string): void {
+  // Same project + live socket → nothing to do. This is the common
+  // remount path (route navigated away and back).
+  if (activeProjectId === projectId && activeSocket) return
+
+  // Project switched — the prior session belongs to a different project,
+  // wipe it and open a fresh connection.
+  if (activeProjectId !== null && activeProjectId !== projectId) {
+    activeSocket?.close()
+    cachedState = INITIAL_STATE
+    listeners.forEach((l) => l())
+  }
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer)
+    reconnectTimer = null
+  }
+  activeProjectId = projectId
+  reconnectAttempts = 0
+  connectSocket(projectId)
+}
+
+// ---------------------------------------------------------------------
+// React hook
+// ---------------------------------------------------------------------
+
+export function usePlayground({ projectId }: Options) {
+  const state = useSyncExternalStore(subscribe, getSnapshot)
 
   useEffect(() => {
-    const url = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/v1/projects/${projectId}/chat`
-    let alive = true
-    let retries = 0
-
-    function connect() {
-      if (!alive) return
-      const ws = new WebSocket(url)
-      socketRef.current = ws
-
-      ws.addEventListener('open', () => {
-        retries = 0
-        setState((s) => ({ ...s, connected: true }))
-      })
-
-      ws.addEventListener('close', () => {
-        setState((s) => ({ ...s, connected: false, agentOnline: false }))
-        if (alive) {
-          const delay = Math.min(1000 * 2 ** retries, 15000)
-          retries += 1
-          setTimeout(connect, delay)
-        }
-      })
-
-      ws.addEventListener('message', (evt) => {
-        let payload: unknown
-        try {
-          payload = JSON.parse(evt.data)
-        } catch {
-          return
-        }
-        handleFrame(payload)
-      })
-    }
-
-    function handleFrame(frame: unknown) {
-      if (!frame || typeof frame !== 'object') return
-      const f = frame as { type?: string; event_type?: string }
-      if (f.type === 'agent_online') {
-        const ev = f as AgentOnlineEvent
-        setState((s) => ({
-          ...s,
-          agentOnline: Boolean(ev.online),
-          agentName: ev.agent ?? (ev.online ? s.agentName : null),
-        }))
-        return
-      }
-      if (f.type === 'session_reset') return
-      if (f.event_type) setState((s) => applyEvent(s, f as StreamEvent))
-    }
-
-    connect()
-
-    return () => {
-      alive = false
-      socketRef.current?.close()
-    }
+    ensureSocketFor(projectId)
+    // No cleanup — the socket is intentionally module-scoped so
+    // chat history survives route changes. Project-switch teardown
+    // happens inside ensureSocketFor on the next mount.
   }, [projectId])
 
   /**
@@ -194,7 +259,7 @@ export function usePlayground({ projectId }: Options) {
    * turn. The role's policy bundle then drives tool authorization.
    */
   function sendChat(message: string, opts?: { role?: string | null }) {
-    const ws = socketRef.current
+    const ws = activeSocket
     if (!ws || ws.readyState !== WebSocket.OPEN) return
     const turnId = randomId()
     const userMsg: ChatMessage = {
@@ -209,7 +274,7 @@ export function usePlayground({ projectId }: Options) {
       reasoning: '',
       tools: [],
     }
-    setState((s) => ({
+    setStore((s) => ({
       ...s,
       currentTurnId: turnId,
       messages: [
@@ -230,11 +295,11 @@ export function usePlayground({ projectId }: Options) {
   }
 
   function reset() {
-    const ws = socketRef.current
+    const ws = activeSocket
     if (ws && ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({ type: 'reset' }))
     }
-    setState((s) => ({ ...s, currentTurnId: null, messages: [], decisions: [] }))
+    setStore((s) => ({ ...s, currentTurnId: null, messages: [], decisions: [] }))
   }
 
   return { state, sendChat, reset }

@@ -190,6 +190,13 @@ def extract_input_text(input: AgentInput) -> str:
     return _extract_query_from_messages(input)
 
 
+# One-shot dedupe for the "local agent with active User scope" warning
+# inside `_resolve_user_facts`. The dashboard playground hits this once
+# per turn (and the platform-served sessions never hit it at all), so
+# without a flag the warning floods the log on every chat message.
+_warned_local_agent_user_scope: bool = False
+
+
 def _resolve_user_facts(agent: HexgateAgent) -> dict[str, list[str | int]] | None:
     """Lazily attenuate when a :class:`User` scope is active.
 
@@ -206,14 +213,22 @@ def _resolve_user_facts(agent: HexgateAgent) -> dict[str, list[str | int]] | Non
     client = agent.hexgate_client
     if client is None:
         # Local agent or test stub — User scope is set but there's nothing to
-        # attenuate against. Surface a single warning so devs see why their
-        # `requires_user` predicate isn't firing on a local-loaded agent.
-        import logging
+        # attenuate against. Surface a *single* warning so devs see why their
+        # `requires_user` predicate isn't firing on a local-loaded agent, then
+        # stay quiet: every subsequent turn would re-fire the same message
+        # otherwise (3-5x per chat session in the dashboard playground was
+        # the symptom).
+        global _warned_local_agent_user_scope
+        if not _warned_local_agent_user_scope:
+            import logging
 
-        logging.getLogger(__name__).warning(
-            "User scope active but agent has no hexgate_client; "
-            "biscuit_facts will be empty (use load_hexgate_agent for attenuation)"
-        )
+            logging.getLogger(__name__).warning(
+                "User scope active but agent has no hexgate_client; "
+                "biscuit_facts will be empty (use load_hexgate_agent for "
+                "attenuation). Subsequent occurrences in this process are "
+                "suppressed."
+            )
+            _warned_local_agent_user_scope = True
         return None
     from hexgate.cloud.attenuate import attenuate_for_user
     from hexgate.cloud.biscuit import (
