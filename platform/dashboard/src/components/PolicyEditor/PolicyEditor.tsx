@@ -14,14 +14,40 @@
  * rendering surface for diagnostics — the source of truth is the
  * platform's `/policies/validate` endpoint.
  */
-import { useEffect, useMemo, useRef } from 'react'
+import { useEffect, useRef } from 'react'
 import CodeMirror, { type ReactCodeMirrorRef } from '@uiw/react-codemirror'
 import { yaml } from '@codemirror/lang-yaml'
-import { lintGutter, linter, setDiagnostics } from '@codemirror/lint'
+import { lintGutter, setDiagnostics } from '@codemirror/lint'
 
 import type { PolicyValidationError } from '@/lib/api'
 import { toCodemirrorDiagnostics } from './diagnostics'
 import { policyEditorTheme } from './theme'
+
+// @uiw/react-codemirror dispatches `StateEffect.reconfigure` whenever
+// `extensions`, `basicSetup`, `onChange`, etc. change reference. Defining
+// these once at module scope (where stability is free) prevents the
+// editor from reconfiguring on every parent re-render — important because
+// the parent of <PolicyEditor> re-renders on every keystroke as `value`
+// updates.
+//
+// `setDiagnostics` (used in the effect below) writes into the lint state
+// field that `lintGutter()` installs, so we don't need a `linter()` source
+// callback — the imperative push is the only signal the gutter needs.
+const EXTENSIONS = [yaml(), lintGutter()]
+
+const BASIC_SETUP = {
+  lineNumbers: true,
+  // Folding is more annoying than useful at ~50-100 line policies.
+  foldGutter: false,
+  highlightActiveLine: true,
+  highlightActiveLineGutter: true,
+  // Defer until we wire JSON-schema-driven completions.
+  autocompletion: false,
+  // No meaningful bracket pairs in YAML.
+  bracketMatching: false,
+  closeBrackets: false,
+  searchKeymap: true,
+} as const
 
 export interface PolicyEditorProps {
   value: string
@@ -45,13 +71,11 @@ export function PolicyEditor({
 }: PolicyEditorProps) {
   const ref = useRef<ReactCodeMirrorRef>(null)
 
-  // Extensions are memoized so CodeMirror doesn't rebuild the editor on
-  // every parent re-render. The linter source is a no-op — we push
-  // diagnostics imperatively below.
-  const extensions = useMemo(() => [yaml(), lintGutter(), linter(() => [])], [])
-
   // Push the latest validation results into the lint state. Empty list
-  // when `diagnostics` is null/empty clears the gutter markers.
+  // when `diagnostics` is null/empty clears the gutter markers. The view
+  // is created in a child effect that runs before ours (child-before-parent
+  // effect ordering), so `ref.current.view` is populated by this point on
+  // initial mount; the `if (!view) return` is a defensive backstop.
   useEffect(() => {
     const view = ref.current?.view
     if (!view) return
@@ -66,25 +90,12 @@ export function PolicyEditor({
       ref={ref}
       value={value}
       onChange={onChange}
-      extensions={extensions}
+      extensions={EXTENSIONS}
       readOnly={readOnly}
       theme={policyEditorTheme}
-      basicSetup={{
-        lineNumbers: true,
-        // Folding is more annoying than useful at ~50-100 line policies.
-        foldGutter: false,
-        highlightActiveLine: true,
-        highlightActiveLineGutter: true,
-        // Defer until we wire JSON-schema-driven completions.
-        autocompletion: false,
-        // No meaningful bracket pairs in YAML.
-        bracketMatching: false,
-        closeBrackets: false,
-        searchKeymap: true,
-      }}
+      basicSetup={BASIC_SETUP}
       className={className}
       height="100%"
-      style={{ height: '100%', fontSize: '13px' }}
     />
   )
 }

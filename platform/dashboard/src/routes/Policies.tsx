@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   AlertTriangle,
@@ -223,6 +223,18 @@ function YamlEditor({
 
   const originalSource = agent.data?.policy_yaml ?? ''
 
+  // Stable identity so PolicyEditor doesn't trigger a CodeMirror
+  // reconfigure on every keystroke — @uiw/react-codemirror puts
+  // `onChange` in its reconfigure effect's dep array.
+  const handleEditorChange = useCallback(
+    (next: string) => {
+      setDraft(next)
+      setDirty(next !== originalSource)
+      setErrors((prev) => (prev ? null : prev))
+    },
+    [originalSource],
+  )
+
   return (
     <div className="h-full flex flex-col">
       <header className="flex items-center justify-between gap-2 px-6 py-2 border-b border-border">
@@ -281,11 +293,7 @@ function YamlEditor({
       )}
       <PolicyEditor
         value={draft}
-        onChange={(next) => {
-          setDraft(next)
-          setDirty(next !== originalSource)
-          if (errors) setErrors(null)
-        }}
+        onChange={handleEditorChange}
         diagnostics={errors}
         className="flex-1 overflow-hidden"
       />

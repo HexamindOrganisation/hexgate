@@ -16,6 +16,7 @@
  *   comment  → muted-foreground     — recede
  *   default  → foreground           — punctuation, separators
  */
+import { EditorView } from '@codemirror/view'
 import { tags as t } from '@lezer/highlight'
 import { createTheme } from '@uiw/codemirror-themes'
 
@@ -31,9 +32,11 @@ const settings = {
   gutterActiveForeground: 'hsl(var(--foreground))',
   gutterBorder: 'hsl(var(--border))',
   fontFamily: 'var(--font-mono)',
+  // Matches Tailwind's text-sm (14px) — what the original textarea used.
+  fontSize: '14px',
 }
 
-export const policyEditorTheme = createTheme({
+const colorTheme = createTheme({
   theme: 'dark',
   settings,
   styles: [
@@ -64,3 +67,16 @@ export const policyEditorTheme = createTheme({
     },
   ],
 })
+
+/**
+ * Padding inside the editor content area. The gutter stays flush against
+ * the left edge; only the YAML text gets breathing room. The old textarea
+ * used `p-6` (24px) — 16px feels right next to the gutter, which already
+ * adds visual margin via its own border + numbers.
+ */
+const contentPaddingTheme = EditorView.theme({
+  '.cm-content': { padding: '12px 16px' },
+  '.cm-scroller': { fontFamily: 'var(--font-mono)' },
+})
+
+export const policyEditorTheme = [colorTheme, contentPaddingTheme]
