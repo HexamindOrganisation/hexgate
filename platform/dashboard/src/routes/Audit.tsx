@@ -8,6 +8,7 @@ import {
   Lightbulb,
   X,
 } from "lucide-react";
+import { endOfDay, format } from "date-fns";
 import { api, type AuditDecisionRow, type AuditOutcome } from "@/lib/api";
 import { useActive, useProjectScoped } from "@/lib/active";
 import { useProjects } from "@/lib/projects";
@@ -15,6 +16,12 @@ import { NoProjectEmptyState } from "@/components/NoProjectEmptyState";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { Calendar } from "@/components/ui/calendar";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import { AreaChart, type ChartBucket, Donut } from "@/components/ui/charts";
 import { type Counts, DecisionBadge } from "@/components/audit/charts";
 import {
@@ -23,9 +30,11 @@ import {
   OUTCOME_SERIES,
 } from "@/components/audit/chart-tokens";
 import {
+  RANGE_DAYS,
   type AuditFilters as Filters,
   useAuditFilters,
 } from "@/lib/audit-filters";
+import { fmtTs } from "@/components/audit/fmt";
 import {
   ActiveChips,
   BreakdownCard,
@@ -34,19 +43,16 @@ import {
   KpiCard,
 } from "@/components/audit/pieces";
 
+const DATE_FMT = "MMM d, yyyy";
+
+function impliedRangeLabel(range: Filters["range"]): string {
+  const now = new Date();
+  const start = new Date(now.getTime() - RANGE_DAYS[range] * 86_400_000);
+  return `${format(start, DATE_FMT)} → ${format(now, DATE_FMT)}`;
+}
+
 const ZERO_COUNTS: Counts = { allow: 0, deny: 0, needs_approval: 0, total: 0 };
 
-const fmtTs = (d: Date) =>
-  d.toLocaleString("en-US", {
-    month: "short",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hour12: false,
-  }) +
-  "." +
-  String(d.getMilliseconds()).padStart(3, "0");
 const fmtFull = (d: Date) =>
   d.toISOString().replace("T", " ").replace("Z", " UTC");
 
@@ -319,6 +325,7 @@ export function AuditPage() {
   const tableLimit = useAuditFilters((s) => s.tableLimit);
   const loadMore = useAuditFilters((s) => s.loadMore);
   const [sel, setSel] = useState<AuditDecisionRow | null>(null);
+  const showDateRow = f.customMode;
 
   // UI state → wire: '' = "all" locally, so unset filters are omitted
   // (undefined). The "(none)" label maps to `role: ''` — the wire's
@@ -337,11 +344,15 @@ export function AuditPage() {
   // drops undefined values, so when no filter is set this key hashes equal
   // to summaryQ's and both dedupe into ONE fetch + cache entry; with a
   // filter active the keys diverge and the second request is real.
+  const optionsScope = {
+    window: f.range,
+    start_date: scope.start_date,
+    end_date: scope.end_date,
+  };
   const optionsQ = useQuery({
-    queryKey: ["audit", "summary", projectId, { window: f.range }],
+    queryKey: ["audit", "summary", projectId, optionsScope],
     enabled: !!projectId,
-    queryFn: () =>
-      api.getAuditSummary({ window: f.range }, projectId as string),
+    queryFn: () => api.getAuditSummary(optionsScope, projectId as string),
   });
   // Scoped summary/timeseries: KPIs, donut, area, breakdown.
   const summaryQ = useQuery({
@@ -423,9 +434,17 @@ export function AuditPage() {
   const apprPct = counts.total
     ? Math.round((counts.needs_approval / counts.total) * 100)
     : 0;
-  const nDays = f.range === "7d" ? 7 : f.range === "90d" ? 90 : 30;
+  const nDays =
+    f.start_date && f.end_date
+      ? Math.max(
+          1,
+          Math.round(
+            (f.end_date.getTime() - f.start_date.getTime()) / 86_400_000,
+          ),
+        )
+      : RANGE_DAYS[f.range];
   const avgLabel =
-    f.range === "24h"
+    !f.start_date && f.range === "24h"
       ? `${(counts.total / 24).toFixed(1)}/hr avg`
       : `${(counts.total / nDays).toFixed(0)}/day avg`;
   const setOutcome = (o: AuditOutcome) =>
@@ -473,19 +492,65 @@ export function AuditPage() {
               <span className="font-mono text-foreground">{projectName}</span>
             </p>
           </div>
-          <ToggleGroup
-            type="single"
-            value={f.range}
-            onValueChange={(v) =>
-              v && setF((p) => ({ ...p, range: v as Filters["range"] }))
-            }
-          >
-            {(["24h", "7d", "30d", "90d"] as const).map((r) => (
-              <ToggleGroupItem key={r} value={r}>
-                {r}
-              </ToggleGroupItem>
-            ))}
-          </ToggleGroup>
+          <div className="flex items-center gap-2">
+            <ToggleGroup
+              type="single"
+              value={f.customMode ? "custom" : f.range}
+              onValueChange={(v) => {
+                if (!v) return;
+                if (v === "custom") {
+                  setF((p) => ({ ...p, customMode: true }));
+                } else {
+                  setF((p) => ({
+                    ...p,
+                    range: v as Filters["range"],
+                    customMode: false,
+                    start_date: null,
+                    end_date: null,
+                  }));
+                }
+              }}
+            >
+              {(["24h", "7d", "30d", "90d"] as const).map((r) => (
+                <ToggleGroupItem key={r} value={r}>
+                  {r}
+                </ToggleGroupItem>
+              ))}
+              <ToggleGroupItem value="custom">Custom</ToggleGroupItem>
+            </ToggleGroup>
+            {showDateRow && (
+              <Popover>
+                <PopoverTrigger asChild>
+                  <Button
+                    variant="outline"
+                    className="h-8 text-[13px] font-normal"
+                  >
+                    {f.start_date && f.end_date
+                      ? `${format(f.start_date, DATE_FMT)} → ${format(f.end_date, DATE_FMT)}`
+                      : f.start_date
+                        ? `${format(f.start_date, DATE_FMT)} → …`
+                        : impliedRangeLabel(f.range)}
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent className="w-auto p-0" align="end">
+                  <Calendar
+                    mode="range"
+                    selected={{
+                      from: f.start_date ?? undefined,
+                      to: f.end_date ?? undefined,
+                    }}
+                    onSelect={(range) =>
+                      setF((p) => ({
+                        ...p,
+                        start_date: range?.from ?? null,
+                        end_date: range?.to ? endOfDay(range.to) : null,
+                      }))
+                    }
+                  />
+                </PopoverContent>
+              </Popover>
+            )}
+          </div>
         </header>
 
         <FilterBar
