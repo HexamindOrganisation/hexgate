@@ -60,15 +60,19 @@ lint-fix: ## Apply ruff autofixes
 	$(UV) ruff check --fix hexgate tests
 
 .PHONY: fmt
-fmt: ## Format with ruff
-	$(UV) ruff format hexgate tests
+fmt: ## Format with ruff (SDK + platform/api)
+	$(UV) ruff format hexgate tests platform/api
 
 .PHONY: fmt-check
 fmt-check: ## Check formatting without writing changes
-	$(UV) ruff format --check hexgate tests
+	$(UV) ruff format --check hexgate tests platform/api
 
 .PHONY: check
-check: lint fmt-check test ## All static + dynamic checks (CI parity)
+check: lint fmt-check test ## Python CI parity: lint + fmt-check + test
+
+.PHONY: check-all
+check-all: check dashboard-lint dashboard-typecheck dashboard-fmt-check ## Full stack check: Python + dashboard lint, typecheck, fmt, tests
+	cd platform/dashboard && pnpm test --run
 
 # -------- Policy / M2 demo helpers --------
 
@@ -163,6 +167,22 @@ dashboard-install: ## Install dashboard JS deps (first time)
 .PHONY: dashboard
 dashboard: ## Run the dashboard dev server (Vite on :5173)
 	cd platform/dashboard && pnpm dev
+
+.PHONY: dashboard-fmt
+dashboard-fmt: ## Format dashboard TypeScript with prettier
+	cd platform/dashboard && pnpm format
+
+.PHONY: dashboard-fmt-check
+dashboard-fmt-check: ## Check dashboard TypeScript formatting (prettier)
+	cd platform/dashboard && pnpm format:check
+
+.PHONY: dashboard-lint
+dashboard-lint: ## Lint dashboard TypeScript with eslint
+	cd platform/dashboard && pnpm lint
+
+.PHONY: dashboard-typecheck
+dashboard-typecheck: ## Typecheck dashboard TypeScript
+	cd platform/dashboard && pnpm typecheck
 
 # -------- SDK → platform bridge --------
 

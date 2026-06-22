@@ -16,81 +16,79 @@
  * be pinned.
  */
 
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { act, renderHook, waitFor } from '@testing-library/react'
-import type { JSX, ReactNode } from 'react'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { act, renderHook, waitFor } from "@testing-library/react";
+import type { JSX, ReactNode } from "react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { useActive, useProjectScoped } from './active'
+import { useActive, useProjectScoped } from "./active";
 
-describe('useActive store', () => {
+describe("useActive store", () => {
   beforeEach(() => {
     // Fresh store between tests — reset both ids to null.
     act(() => {
-      useActive.setState({ activeOrgId: null, activeProjectId: null })
-    })
-  })
+      useActive.setState({ activeOrgId: null, activeProjectId: null });
+    });
+  });
 
-  it('starts with both ids null', () => {
-    const { activeOrgId, activeProjectId } = useActive.getState()
-    expect(activeOrgId).toBeNull()
-    expect(activeProjectId).toBeNull()
-  })
+  it("starts with both ids null", () => {
+    const { activeOrgId, activeProjectId } = useActive.getState();
+    expect(activeOrgId).toBeNull();
+    expect(activeProjectId).toBeNull();
+  });
 
-  it('setActiveOrg clears activeProjectId', () => {
+  it("setActiveOrg clears activeProjectId", () => {
     // Seed both ids — simulating a user who was deep in a project
     act(() => {
       useActive.setState({
-        activeOrgId: 'old-org',
-        activeProjectId: 'old-project',
-      })
-    })
+        activeOrgId: "old-org",
+        activeProjectId: "old-project",
+      });
+    });
 
     // Switching org must clear the stale project — the old project
     // belonged to the old org and would 403 in the new one
     act(() => {
-      useActive.getState().setActiveOrg('new-org')
-    })
+      useActive.getState().setActiveOrg("new-org");
+    });
 
-    const { activeOrgId, activeProjectId } = useActive.getState()
-    expect(activeOrgId).toBe('new-org')
-    expect(activeProjectId).toBeNull()
-  })
+    const { activeOrgId, activeProjectId } = useActive.getState();
+    expect(activeOrgId).toBe("new-org");
+    expect(activeProjectId).toBeNull();
+  });
 
-  it('setActiveProject leaves activeOrgId alone', () => {
+  it("setActiveProject leaves activeOrgId alone", () => {
     act(() => {
       useActive.setState({
-        activeOrgId: 'org-1',
-        activeProjectId: 'project-a',
-      })
-    })
+        activeOrgId: "org-1",
+        activeProjectId: "project-a",
+      });
+    });
 
     act(() => {
-      useActive.getState().setActiveProject('project-b')
-    })
+      useActive.getState().setActiveProject("project-b");
+    });
 
-    const { activeOrgId, activeProjectId } = useActive.getState()
-    expect(activeOrgId).toBe('org-1')
-    expect(activeProjectId).toBe('project-b')
-  })
+    const { activeOrgId, activeProjectId } = useActive.getState();
+    expect(activeOrgId).toBe("org-1");
+    expect(activeProjectId).toBe("project-b");
+  });
 
-  it('persists to localStorage via zustand persist middleware', () => {
+  it("persists to localStorage via zustand persist middleware", () => {
     act(() => {
-      useActive.getState().setActiveOrg('persisted-org')
-    })
+      useActive.getState().setActiveOrg("persisted-org");
+    });
     // Hits the same key the store registered.
-    const raw = window.localStorage.getItem('hexgate-active')
-    expect(raw).toBeTruthy()
-    const parsed = JSON.parse(raw as string)
-    expect(parsed.state.activeOrgId).toBe('persisted-org')
-  })
-})
-
+    const raw = window.localStorage.getItem("hexgate-active");
+    expect(raw).toBeTruthy();
+    const parsed = JSON.parse(raw as string);
+    expect(parsed.state.activeOrgId).toBe("persisted-org");
+  });
+});
 
 // ---------------------------------------------------------------------------
 // useProjectScoped
 // ---------------------------------------------------------------------------
-
 
 /** Wrap renderHook in a fresh QueryClient — useOrgs / useProjects need
  * one to mount. Same shape as test/render.tsx; duplicated here to keep
@@ -98,120 +96,120 @@ describe('useActive store', () => {
 function makeWrapper(): ({ children }: { children: ReactNode }) => JSX.Element {
   const qc = new QueryClient({
     defaultOptions: { queries: { retry: false, staleTime: 0 } },
-  })
+  });
   return ({ children }) => (
     <QueryClientProvider client={qc}>{children}</QueryClientProvider>
-  )
+  );
 }
 
 /** Stub /v1/orgs + /v1/orgs/{id}/projects for the helper to consume. */
 function stubFetch(routes: Record<string, unknown>): void {
-  vi.spyOn(window, 'fetch').mockImplementation(
+  vi.spyOn(window, "fetch").mockImplementation(
     async (input: RequestInfo | URL) => {
-      const url = typeof input === 'string' ? input : input.toString()
-      const path = url.split('?')[0]
+      const url = typeof input === "string" ? input : input.toString();
+      const path = url.split("?")[0];
       if (path in routes) {
         return new Response(JSON.stringify(routes[path]), {
           status: 200,
-          headers: { 'Content-Type': 'application/json' },
-        })
+          headers: { "Content-Type": "application/json" },
+        });
       }
-      return new Response('{}', { status: 404 })
+      return new Response("{}", { status: 404 });
     },
-  )
+  );
 }
 
-describe('useProjectScoped', () => {
+describe("useProjectScoped", () => {
   beforeEach(() => {
     act(() => {
-      useActive.setState({ activeOrgId: null, activeProjectId: null })
-    })
-  })
+      useActive.setState({ activeOrgId: null, activeProjectId: null });
+    });
+  });
 
   afterEach(() => {
-    vi.restoreAllMocks()
-  })
+    vi.restoreAllMocks();
+  });
 
   it("returns 'loading' while /v1/orgs is in flight", () => {
     // No stubs set up — fetch is unmocked, default jsdom behaviour is
     // a hanging promise, so the query stays in isLoading. We only
     // assert the synchronous return value once.
-    vi.spyOn(window, 'fetch').mockImplementation(
+    vi.spyOn(window, "fetch").mockImplementation(
       () => new Promise(() => undefined),
-    )
+    );
 
     const { result } = renderHook(() => useProjectScoped(), {
       wrapper: makeWrapper(),
-    })
+    });
 
-    expect(result.current.status).toBe('loading')
-    expect(result.current.projectId).toBeNull()
-  })
+    expect(result.current.status).toBe("loading");
+    expect(result.current.projectId).toBeNull();
+  });
 
   it("returns 'no-project' once orgs load but no project is active", async () => {
     stubFetch({
-      '/v1/orgs': [
+      "/v1/orgs": [
         {
-          id: 'org-1',
-          slug: 'acme',
-          name: 'Acme',
-          created_at: '2026-01-01T00:00:00Z',
-          role: 'owner',
+          id: "org-1",
+          slug: "acme",
+          name: "Acme",
+          created_at: "2026-01-01T00:00:00Z",
+          role: "owner",
         },
       ],
-      '/v1/orgs/org-1/projects': [], // org has no projects yet
-    })
+      "/v1/orgs/org-1/projects": [], // org has no projects yet
+    });
     act(() => {
       useActive.setState({
-        activeOrgId: 'org-1',
+        activeOrgId: "org-1",
         activeProjectId: null,
-      })
-    })
+      });
+    });
 
     const { result } = renderHook(() => useProjectScoped(), {
       wrapper: makeWrapper(),
-    })
+    });
 
     await waitFor(() => {
-      expect(result.current.status).toBe('no-project')
-    })
-    expect(result.current.projectId).toBeNull()
-  })
+      expect(result.current.status).toBe("no-project");
+    });
+    expect(result.current.projectId).toBeNull();
+  });
 
   it("returns 'ready' with the projectId when everything's resolved", async () => {
     stubFetch({
-      '/v1/orgs': [
+      "/v1/orgs": [
         {
-          id: 'org-1',
-          slug: 'acme',
-          name: 'Acme',
-          created_at: '2026-01-01T00:00:00Z',
-          role: 'owner',
+          id: "org-1",
+          slug: "acme",
+          name: "Acme",
+          created_at: "2026-01-01T00:00:00Z",
+          role: "owner",
         },
       ],
-      '/v1/orgs/org-1/projects': [
+      "/v1/orgs/org-1/projects": [
         {
-          id: 'proj-1',
-          org_id: 'org-1',
-          name: 'production',
-          created_at: '2026-01-01T00:00:00Z',
+          id: "proj-1",
+          org_id: "org-1",
+          name: "production",
+          created_at: "2026-01-01T00:00:00Z",
         },
       ],
-    })
+    });
     act(() => {
       useActive.setState({
-        activeOrgId: 'org-1',
-        activeProjectId: 'proj-1',
-      })
-    })
+        activeOrgId: "org-1",
+        activeProjectId: "proj-1",
+      });
+    });
 
     const { result } = renderHook(() => useProjectScoped(), {
       wrapper: makeWrapper(),
-    })
+    });
 
     await waitFor(() => {
-      expect(result.current.status).toBe('ready')
-    })
-    expect(result.current.projectId).toBe('proj-1')
-  })
-})
+      expect(result.current.status).toBe("ready");
+    });
+    expect(result.current.projectId).toBe("proj-1");
+  });
+});

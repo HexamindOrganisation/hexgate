@@ -85,6 +85,9 @@ jobs:
       - name: Sync platform-api deps
         run: cd platform/api && uv sync --group dev
 
+      - name: Lint
+        run: cd platform/api && uv run ruff check .
+
       - name: Tests
         run: make platform-api-test
 
@@ -120,6 +123,9 @@ jobs:
 
       - name: Typecheck
         run: pnpm typecheck
+
+      - name: Format check
+        run: pnpm format:check
 
       - name: Tests
         run: pnpm test

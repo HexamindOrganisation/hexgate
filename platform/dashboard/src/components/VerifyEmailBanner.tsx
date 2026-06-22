@@ -1,8 +1,8 @@
-import { useState } from 'react'
-import { MailWarning } from 'lucide-react'
+import { useState } from "react";
+import { MailWarning } from "lucide-react";
 
-import { Button } from '@/components/ui/button'
-import { useRequestVerify, useUser } from '@/lib/auth'
+import { Button } from "@/components/ui/button";
+import { useRequestVerify, useUser } from "@/lib/auth";
 
 /**
  * Soft banner shown to logged-in but unverified users. Non-blocking —
@@ -14,11 +14,11 @@ import { useRequestVerify, useUser } from '@/lib/auth'
  * actually tries to mint a token. For now, a header strip is enough.
  */
 export function VerifyEmailBanner() {
-  const { user } = useUser()
-  const requestVerify = useRequestVerify()
-  const [resent, setResent] = useState(false)
+  const { user } = useUser();
+  const requestVerify = useRequestVerify();
+  const [resent, setResent] = useState(false);
 
-  if (!user || user.is_verified) return null
+  if (!user || user.is_verified) return null;
 
   return (
     <div className="flex items-center gap-3 border-b border-amber-500/30 bg-amber-500/10 px-4 py-2 text-sm">
@@ -36,17 +36,17 @@ export function VerifyEmailBanner() {
           disabled={requestVerify.isPending}
           onClick={async () => {
             try {
-              await requestVerify.mutateAsync(user.email)
-              setResent(true)
+              await requestVerify.mutateAsync(user.email);
+              setResent(true);
             } catch {
               // 202 is the success path; anything else we just leave
               // the button armed — the banner already conveys the state.
             }
           }}
         >
-          {requestVerify.isPending ? 'Sending…' : 'Resend email'}
+          {requestVerify.isPending ? "Sending…" : "Resend email"}
         </Button>
       )}
     </div>
-  )
+  );
 }

@@ -1,10 +1,10 @@
-import { useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
-import { Building2, Plus, ArrowRight } from 'lucide-react'
+import { useState } from "react";
+import { Link, useNavigate } from "react-router-dom";
+import { Building2, Plus, ArrowRight } from "lucide-react";
 
-import { CreateOrgDialog } from '@/components/CreateOrgDialog'
-import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
+import { CreateOrgDialog } from "@/components/CreateOrgDialog";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import {
   Table,
   TableBody,
@@ -12,9 +12,9 @@ import {
   TableHead,
   TableHeader,
   TableRow,
-} from '@/components/ui/table'
-import { useActive } from '@/lib/active'
-import { useOrgs, type OrgWithRole, type Role } from '@/lib/orgs'
+} from "@/components/ui/table";
+import { useActive } from "@/lib/active";
+import { useOrgs, type OrgWithRole, type Role } from "@/lib/orgs";
 
 /**
  * `/orgs` — list every organization the caller belongs to with their
@@ -26,17 +26,17 @@ import { useOrgs, type OrgWithRole, type Role } from '@/lib/orgs'
  * footer action does — single source of truth for the create form.
  */
 export function OrgsPage() {
-  const [createOpen, setCreateOpen] = useState(false)
-  const orgsQuery = useOrgs()
-  const setActiveOrg = useActive((s) => s.setActiveOrg)
-  const navigate = useNavigate()
+  const [createOpen, setCreateOpen] = useState(false);
+  const orgsQuery = useOrgs();
+  const setActiveOrg = useActive((s) => s.setActiveOrg);
+  const navigate = useNavigate();
 
   function openOrg(org: OrgWithRole): void {
     // Setting active + navigating is one mental action; do both so
     // the user lands on the settings page WITH the active-org chrome
     // (switcher, sidebar) already in the right state.
-    setActiveOrg(org.id)
-    navigate(`/orgs/${org.id}/settings`)
+    setActiveOrg(org.id);
+    navigate(`/orgs/${org.id}/settings`);
   }
 
   return (
@@ -106,8 +106,8 @@ export function OrgsPage() {
                         to={`/orgs/${org.id}/settings`}
                         onClick={(e) => {
                           // Stop the row's onClick from also firing.
-                          e.stopPropagation()
-                          setActiveOrg(org.id)
+                          e.stopPropagation();
+                          setActiveOrg(org.id);
                         }}
                       >
                         Open
@@ -127,11 +127,11 @@ export function OrgsPage() {
         onOpenChange={setCreateOpen}
         onCreated={(orgId) => {
           // The dialog already sets activeOrg; we just navigate.
-          navigate(`/orgs/${orgId}/settings`)
+          navigate(`/orgs/${orgId}/settings`);
         }}
       />
     </div>
-  )
+  );
 }
 
 function EmptyState({ onCreate }: { onCreate: () => void }) {
@@ -144,29 +144,29 @@ function EmptyState({ onCreate }: { onCreate: () => void }) {
       <Building2 className="h-10 w-10 text-muted-foreground" />
       <h2 className="text-lg font-medium">No organizations yet</h2>
       <p className="max-w-md text-sm text-muted-foreground">
-        Create one to start a workspace. You'll be the owner — you can
-        invite teammates afterwards.
+        Create one to start a workspace. You'll be the owner — you can invite
+        teammates afterwards.
       </p>
       <Button onClick={onCreate} className="mt-2">
         <Plus className="h-4 w-4" />
         Create organization
       </Button>
     </div>
-  )
+  );
 }
 
 function RoleBadge({ role }: { role: Role }) {
   // Reuse the existing dashboard Badge palette. Owners get the
   // primary tint (load-bearing role); admins the neutral default
   // (the secondary in shadcn parlance), members the outline-only.
-  const variant: Record<Role, 'primary' | 'default' | 'outline'> = {
-    owner: 'primary',
-    admin: 'default',
-    member: 'outline',
-  }
+  const variant: Record<Role, "primary" | "default" | "outline"> = {
+    owner: "primary",
+    admin: "default",
+    member: "outline",
+  };
   return (
     <Badge variant={variant[role]} className="font-normal capitalize">
       {role}
     </Badge>
-  )
+  );
 }

@@ -13,25 +13,25 @@
  * destination.
  */
 
-import { create } from 'zustand'
-import { createJSONStorage, persist } from 'zustand/middleware'
+import { create } from "zustand";
+import { createJSONStorage, persist } from "zustand/middleware";
 
-import { useOrgs } from './orgs'
-import { useProjects } from './projects'
+import { useOrgs } from "./orgs";
+import { useProjects } from "./projects";
 
 interface ActiveState {
   /** Currently-active organization id (UUID), or null when the user
    * is signed out / has no orgs (impossible after Phase 4 step 1's
    * auto-default-org-on-signup, but defensive). */
-  activeOrgId: string | null
+  activeOrgId: string | null;
 
   /** Currently-active project within the active org. Null when the
    * active org has no projects yet — the dashboard's project-scoped
    * pages render an empty state until the user creates one. */
-  activeProjectId: string | null
+  activeProjectId: string | null;
 
-  setActiveOrg: (orgId: string | null) => void
-  setActiveProject: (projectId: string | null) => void
+  setActiveOrg: (orgId: string | null) => void;
+  setActiveProject: (projectId: string | null) => void;
 }
 
 export const useActive = create<ActiveState>()(
@@ -45,12 +45,12 @@ export const useActive = create<ActiveState>()(
         // a security trap if it survived the swap (the route 403s
         // anyway, but better to surface as "select a project" than
         // "you don't have access").
-        set({ activeOrgId: orgId, activeProjectId: null })
+        set({ activeOrgId: orgId, activeProjectId: null });
       },
       setActiveProject: (projectId) => set({ activeProjectId: projectId }),
     }),
     {
-      name: 'hexgate-active',
+      name: "hexgate-active",
       // ``createJSONStorage`` lazy-resolves localStorage at call time
       // rather than at module-import time. Without it, importing this
       // module from a unit test (before jsdom finishes wiring its
@@ -60,8 +60,7 @@ export const useActive = create<ActiveState>()(
       storage: createJSONStorage(() => localStorage),
     },
   ),
-)
-
+);
 
 /**
  * Resolved view of "what project is the dashboard currently scoped to?"
@@ -83,28 +82,28 @@ export const useActive = create<ActiveState>()(
  */
 export interface ProjectScope {
   /** Resolved active project id, or null when not ready. */
-  projectId: string | null
-  status: 'loading' | 'no-project' | 'ready'
+  projectId: string | null;
+  status: "loading" | "no-project" | "ready";
 }
 
 export function useProjectScoped(): ProjectScope {
-  const activeOrgId = useActive((s) => s.activeOrgId)
-  const activeProjectId = useActive((s) => s.activeProjectId)
+  const activeOrgId = useActive((s) => s.activeOrgId);
+  const activeProjectId = useActive((s) => s.activeProjectId);
   // useOrgs() is the load-bearing query — once it resolves, the
   // AppShell bootstrap kicks in and picks a default project. We touch
   // it here mostly to surface its ``isLoading`` state; the cache is
   // already populated by the time any project-scoped page mounts.
-  const orgsQuery = useOrgs()
-  const projectsQuery = useProjects(activeOrgId)
+  const orgsQuery = useOrgs();
+  const projectsQuery = useProjects(activeOrgId);
 
   if (
     orgsQuery.isLoading ||
     (activeOrgId !== null && projectsQuery.isLoading)
   ) {
-    return { projectId: null, status: 'loading' }
+    return { projectId: null, status: "loading" };
   }
   if (!activeProjectId) {
-    return { projectId: null, status: 'no-project' }
+    return { projectId: null, status: "no-project" };
   }
-  return { projectId: activeProjectId, status: 'ready' }
+  return { projectId: activeProjectId, status: "ready" };
 }

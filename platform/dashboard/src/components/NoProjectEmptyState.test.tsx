@@ -9,42 +9,38 @@
  *      switcher dropdown).
  */
 
-import { screen } from '@testing-library/react'
-import userEvent from '@testing-library/user-event'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { NoProjectEmptyState } from '@/components/NoProjectEmptyState'
-import { renderWithProviders } from '@/test/render'
+import { NoProjectEmptyState } from "@/components/NoProjectEmptyState";
+import { renderWithProviders } from "@/test/render";
 
-describe('NoProjectEmptyState', () => {
+describe("NoProjectEmptyState", () => {
   afterEach(() => {
-    vi.restoreAllMocks()
-  })
+    vi.restoreAllMocks();
+  });
 
-  it('interpolates the resource name into the help copy', () => {
-    renderWithProviders(<NoProjectEmptyState resource="tokens" />)
-    expect(screen.getByText(/No project selected/i)).toBeInTheDocument()
+  it("interpolates the resource name into the help copy", () => {
+    renderWithProviders(<NoProjectEmptyState resource="tokens" />);
+    expect(screen.getByText(/No project selected/i)).toBeInTheDocument();
     // Mentions the resource so the user knows which page they're on.
-    expect(
-      screen.getByText(/organization's tokens/i),
-    ).toBeInTheDocument()
-  })
+    expect(screen.getByText(/organization's tokens/i)).toBeInTheDocument();
+  });
 
   it("'Create project' button opens the CreateProjectDialog", async () => {
-    const user = userEvent.setup()
-    renderWithProviders(<NoProjectEmptyState resource="agents" />)
+    const user = userEvent.setup();
+    renderWithProviders(<NoProjectEmptyState resource="agents" />);
 
     // Dialog isn't mounted until the button is clicked. The dialog
     // title duplicates the button label, so we check the dialog's
     // unique description copy instead.
-    expect(
-      screen.queryByText(/Projects hold agents/i),
-    ).not.toBeInTheDocument()
+    expect(screen.queryByText(/Projects hold agents/i)).not.toBeInTheDocument();
 
-    await user.click(screen.getByText('Create project'))
+    await user.click(screen.getByText("Create project"));
 
     expect(
       await screen.findByText(/Projects hold agents/i),
-    ).toBeInTheDocument()
-  })
-})
+    ).toBeInTheDocument();
+  });
+});

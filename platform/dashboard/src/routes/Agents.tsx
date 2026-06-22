@@ -1,16 +1,16 @@
-import { useEffect, useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
-import { Bot, FileText, ShieldCheck, Wrench } from 'lucide-react'
-import { Link } from 'react-router-dom'
+import { useEffect, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { Bot, FileText, ShieldCheck, Wrench } from "lucide-react";
+import { Link } from "react-router-dom";
 import {
   api,
   type AgentManifestView,
   type InputSchema,
   type ToolDefinition,
-} from '@/lib/api'
-import { useProjectScoped } from '@/lib/active'
-import { Badge } from '@/components/ui/badge'
-import { NoProjectEmptyState } from '@/components/NoProjectEmptyState'
+} from "@/lib/api";
+import { useProjectScoped } from "@/lib/active";
+import { Badge } from "@/components/ui/badge";
+import { NoProjectEmptyState } from "@/components/NoProjectEmptyState";
 
 /**
  * /agents — read-only manifest view.
@@ -25,30 +25,30 @@ import { NoProjectEmptyState } from '@/components/NoProjectEmptyState'
  * manifest registration goes through the SDK's ``hexgate register``.
  */
 export function AgentsPage() {
-  const scope = useProjectScoped()
+  const scope = useProjectScoped();
   const manifests = useQuery({
-    queryKey: ['agent-manifests', scope.projectId],
+    queryKey: ["agent-manifests", scope.projectId],
     queryFn: () => api.listAgentManifests(scope.projectId as string),
     enabled: !!scope.projectId,
-  })
-  const [selectedName, setSelectedName] = useState<string | null>(null)
+  });
+  const [selectedName, setSelectedName] = useState<string | null>(null);
 
   // Switching projects clears the selected agent — the previous
   // project's agent names mean nothing in the new project.
   useEffect(() => {
-    setSelectedName(null)
-  }, [scope.projectId])
+    setSelectedName(null);
+  }, [scope.projectId]);
 
   useEffect(() => {
     if (!selectedName && manifests.data && manifests.data.length > 0) {
-      setSelectedName(manifests.data[0].name)
+      setSelectedName(manifests.data[0].name);
     }
-  }, [manifests.data, selectedName])
+  }, [manifests.data, selectedName]);
 
-  const active = manifests.data?.find((m) => m.name === selectedName)
+  const active = manifests.data?.find((m) => m.name === selectedName);
 
-  if (scope.status === 'no-project') {
-    return <NoProjectEmptyState resource="agents" />
+  if (scope.status === "no-project") {
+    return <NoProjectEmptyState resource="agents" />;
   }
 
   return (
@@ -79,12 +79,12 @@ export function AgentsPage() {
           <ManifestView agent={active} />
         ) : (
           <div className="h-full grid place-items-center text-sm text-muted-foreground">
-            {manifests.isLoading ? 'Loading agents…' : 'No agents to inspect.'}
+            {manifests.isLoading ? "Loading agents…" : "No agents to inspect."}
           </div>
         )}
       </div>
     </div>
-  )
+  );
 }
 
 function AgentPicker({
@@ -93,15 +93,16 @@ function AgentPicker({
   onChange,
   loading,
 }: {
-  agents: { name: string }[]
-  value: string | null
-  onChange: (name: string) => void
-  loading: boolean
+  agents: { name: string }[];
+  value: string | null;
+  onChange: (name: string) => void;
+  loading: boolean;
 }) {
-  if (loading) return <span className="text-xs text-muted-foreground">loading…</span>
+  if (loading)
+    return <span className="text-xs text-muted-foreground">loading…</span>;
   return (
     <select
-      value={value ?? ''}
+      value={value ?? ""}
       onChange={(e) => onChange(e.target.value)}
       className="h-8 rounded-md border border-border bg-background px-3 text-sm font-mono focus:outline-none focus-visible:ring-1 focus-visible:ring-ring"
     >
@@ -111,7 +112,7 @@ function AgentPicker({
         </option>
       ))}
     </select>
-  )
+  );
 }
 
 function ManifestView({ agent }: { agent: AgentManifestView }) {
@@ -127,12 +128,12 @@ function ManifestView({ agent }: { agent: AgentManifestView }) {
         unregistered={agent.manifest === null}
       />
     </div>
-  )
+  );
 }
 
 function ManifestSummary({ agent }: { agent: AgentManifestView }) {
   const versionLabel =
-    agent.version !== null ? `v${agent.version}` : 'not registered'
+    agent.version !== null ? `v${agent.version}` : "not registered";
   return (
     <section className="rounded-lg border border-border bg-card">
       <div className="px-5 py-4 border-b border-border flex items-center gap-2">
@@ -146,30 +147,33 @@ function ManifestSummary({ agent }: { agent: AgentManifestView }) {
         <ManifestRow label="Name" value={agent.name} mono />
         <ManifestRow
           label="Model"
-          value={agent.manifest?.model?.trim() || '—'}
+          value={agent.manifest?.model?.trim() || "—"}
           mono
         />
         <ManifestRow
           label="Description"
-          value={agent.manifest?.description?.trim() || '—'}
+          value={agent.manifest?.description?.trim() || "—"}
         />
         <ManifestRow
           label="Framework"
-          value={agent.manifest?.framework?.trim() || '—'}
+          value={agent.manifest?.framework?.trim() || "—"}
           mono
         />
-        <ManifestRow label="Last updated" value={formatDate(agent.updated_at)} />
+        <ManifestRow
+          label="Last updated"
+          value={formatDate(agent.updated_at)}
+        />
       </dl>
     </section>
-  )
+  );
 }
 
 function ToolsSection({
   tools,
   unregistered,
 }: {
-  tools: ToolDefinition[]
-  unregistered: boolean
+  tools: ToolDefinition[];
+  unregistered: boolean;
 }) {
   return (
     <section className="rounded-lg border border-border bg-card">
@@ -183,8 +187,8 @@ function ToolsSection({
       {tools.length === 0 ? (
         <p className="px-5 py-4 text-xs text-muted-foreground">
           {unregistered
-            ? 'Agent not registered yet — run `hexgate register` to populate.'
-            : 'No tools declared.'}
+            ? "Agent not registered yet — run `hexgate register` to populate."
+            : "No tools declared."}
         </p>
       ) : (
         <ul className="divide-y divide-border">
@@ -194,15 +198,15 @@ function ToolsSection({
         </ul>
       )}
     </section>
-  )
+  );
 }
 
 function SystemPromptSection({
   prompt,
   unregistered,
 }: {
-  prompt: string | null
-  unregistered: boolean
+  prompt: string | null;
+  unregistered: boolean;
 }) {
   return (
     <section className="rounded-lg border border-border bg-card">
@@ -227,12 +231,12 @@ function SystemPromptSection({
       ) : (
         <p className="px-5 py-4 text-xs text-muted-foreground">
           {unregistered
-            ? 'Agent not registered yet — run `hexgate register` to populate.'
-            : 'No system prompt declared.'}
+            ? "Agent not registered yet — run `hexgate register` to populate."
+            : "No system prompt declared."}
         </p>
       )}
     </section>
-  )
+  );
 }
 
 function ToolRow({ tool }: { tool: ToolDefinition }) {
@@ -246,12 +250,12 @@ function ToolRow({ tool }: { tool: ToolDefinition }) {
       ) : null}
       <InputSchemaDetails schema={tool.input_schema} />
     </li>
-  )
+  );
 }
 
 function InputSchemaDetails({ schema }: { schema: InputSchema }) {
-  const entries = Object.entries(schema.properties)
-  const required = new Set(schema.required)
+  const entries = Object.entries(schema.properties);
+  const required = new Set(schema.required);
   return (
     <details className="rounded-md border border-border bg-background/40 group">
       <summary className="px-3 py-2 cursor-pointer flex items-center gap-2 text-[11px] text-muted-foreground select-none">
@@ -280,7 +284,7 @@ function InputSchemaDetails({ schema }: { schema: InputSchema }) {
         </ul>
       )}
     </details>
-  )
+  );
 }
 
 function ManifestRow({
@@ -288,24 +292,24 @@ function ManifestRow({
   value,
   mono,
 }: {
-  label: string
-  value: string
-  mono?: boolean
+  label: string;
+  value: string;
+  mono?: boolean;
 }) {
   return (
     <div className="grid grid-cols-[120px_1fr] gap-4 px-5 py-2.5">
       <dt className="text-xs text-muted-foreground">{label}</dt>
-      <dd className={mono ? 'font-mono text-foreground' : 'text-foreground'}>
+      <dd className={mono ? "font-mono text-foreground" : "text-foreground"}>
         {value}
       </dd>
     </div>
-  )
+  );
 }
 
 function formatDate(iso: string): string {
   try {
-    return new Date(iso).toLocaleString()
+    return new Date(iso).toLocaleString();
   } catch {
-    return iso
+    return iso;
   }
 }

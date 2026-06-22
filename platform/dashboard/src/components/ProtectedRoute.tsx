@@ -1,9 +1,9 @@
-import { Navigate, useLocation } from 'react-router-dom'
+import { Navigate, useLocation } from "react-router-dom";
 
-import { useUser } from '@/lib/auth'
+import { useUser } from "@/lib/auth";
 
 interface ProtectedRouteProps {
-  children: React.ReactNode
+  children: React.ReactNode;
 }
 
 /**
@@ -19,15 +19,15 @@ interface ProtectedRouteProps {
  *     /sign-in entries when the user clicks back.
  */
 export function ProtectedRoute({ children }: ProtectedRouteProps) {
-  const { user, loading } = useUser()
-  const location = useLocation()
+  const { user, loading } = useUser();
+  const location = useLocation();
 
   if (loading) {
     return (
       <div className="flex h-screen items-center justify-center">
         <div className="text-sm text-muted-foreground">Loading…</div>
       </div>
-    )
+    );
   }
 
   if (!user) {
@@ -37,8 +37,8 @@ export function ProtectedRoute({ children }: ProtectedRouteProps) {
         replace
         state={{ from: location.pathname + location.search }}
       />
-    )
+    );
   }
 
-  return <>{children}</>
+  return <>{children}</>;
 }

@@ -1,23 +1,23 @@
-import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
+import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 
-import { AppShell } from '@/components/AppShell'
-import { ProtectedRoute } from '@/components/ProtectedRoute'
-import { AcceptInvitationPage } from '@/routes/AcceptInvitation'
-import { AgentsPage } from '@/routes/Agents'
-import { AuditPage } from '@/routes/Audit'
-import { ForgotPasswordPage } from '@/routes/ForgotPassword'
-import { GraphPage } from '@/routes/Graph'
-import { OrgMembersPage } from '@/routes/OrgMembers'
-import { OrgSettingsPage } from '@/routes/OrgSettings'
-import { OrgsPage } from '@/routes/Orgs'
-import { PlaygroundPage } from '@/routes/Playground'
-import { PoliciesPage } from '@/routes/Policies'
-import { ResetPasswordPage } from '@/routes/ResetPassword'
-import { SettingsPage } from '@/routes/Settings'
-import { SignInPage } from '@/routes/SignIn'
-import { SignUpPage } from '@/routes/SignUp'
-import { TokensPage } from '@/routes/Tokens'
-import { VerifyEmailPage } from '@/routes/VerifyEmail'
+import { AppShell } from "@/components/AppShell";
+import { ProtectedRoute } from "@/components/ProtectedRoute";
+import { AcceptInvitationPage } from "@/routes/AcceptInvitation";
+import { AgentsPage } from "@/routes/Agents";
+import { AuditPage } from "@/routes/Audit";
+import { ForgotPasswordPage } from "@/routes/ForgotPassword";
+import { GraphPage } from "@/routes/Graph";
+import { OrgMembersPage } from "@/routes/OrgMembers";
+import { OrgSettingsPage } from "@/routes/OrgSettings";
+import { OrgsPage } from "@/routes/Orgs";
+import { PlaygroundPage } from "@/routes/Playground";
+import { PoliciesPage } from "@/routes/Policies";
+import { ResetPasswordPage } from "@/routes/ResetPassword";
+import { SettingsPage } from "@/routes/Settings";
+import { SignInPage } from "@/routes/SignIn";
+import { SignUpPage } from "@/routes/SignUp";
+import { TokensPage } from "@/routes/Tokens";
+import { VerifyEmailPage } from "@/routes/VerifyEmail";
 
 export default function App() {
   return (
@@ -68,5 +68,5 @@ export default function App() {
         </Route>
       </Routes>
     </BrowserRouter>
-  )
+  );
 }
