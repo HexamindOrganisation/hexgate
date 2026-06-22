@@ -32,7 +32,7 @@ else:
 class AgentFramework(StrEnum):
     """Enum for the framework of an agent."""
 
-    FORTIFY = "hexgate"
+    HEXGATE = "hexgate"
     PYDANTIC_AI = "pydantic-ai"
     LANGCHAIN = "langchain"
     GOOGLE = "google"

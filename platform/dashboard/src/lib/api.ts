@@ -40,7 +40,7 @@ export class ApiError extends Error {
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, {
     ...init,
-    // ``include`` so the fortify_session cookie rides on cross-origin
+    // ``include`` so the hexgate_session cookie rides on cross-origin
     // dev (vite on 5173 → api on 8000) and on prod where the dashboard
     // and API may live on different subdomains.
     credentials: 'include',

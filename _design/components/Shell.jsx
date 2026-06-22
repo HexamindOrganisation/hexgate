@@ -1,4 +1,4 @@
-// Fortify shell: topbar + sidebar scaffold
+// Hexgate shell: topbar + sidebar scaffold
 const { useState } = React;
 
 function Icon({ name, size = 16, strokeWidth = 1.5, color = 'currentColor', style = {} }) {
@@ -14,7 +14,7 @@ function TopBar({ project = 'support-bot', env = 'production' }) {
             <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
           </svg>
         </div>
-        <span>Fortify</span>
+        <span>Hexgate</span>
       </div>
       <div style={{ width: 1, height: 20, background: 'hsl(var(--border))' }} />
       <div className="fty-proj">
@@ -78,7 +78,7 @@ function Sidebar({ active = 'home' }) {
 
 function Shell({ active, project = 'support-bot', children, noSidebar = false }) {
   return (
-    <div className="fortify">
+    <div className="hexgate">
       <div className="fty-shell">
         <TopBar project={project} />
         <div className="fty-body" style={noSidebar ? { gridTemplateColumns: '1fr' } : undefined}>

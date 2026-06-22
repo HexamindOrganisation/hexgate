@@ -13,6 +13,6 @@ build/
 # Vendored numpy etc. show up here when shell PYTHONPATH points at ~/Library
 Library/
 
-# Ed25519 signing keys from `fortify policy keygen` — never commit the private key.
+# Ed25519 signing keys from `hexgate policy keygen` — never commit the private key.
 *.private
 *.pem

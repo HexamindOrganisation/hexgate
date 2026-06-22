@@ -28,7 +28,7 @@ def create_hexgate_manifest(
     return AgentManifest(
         name=agent.name,
         description=description,
-        framework=AgentFramework.FORTIFY,
+        framework=AgentFramework.HEXGATE,
         model=_extract_model(agent.model),
         system_prompt=_extract_system_prompt(agent.system_prompt),
         tools=[_to_tool_definition(t) for t in agent.tools],

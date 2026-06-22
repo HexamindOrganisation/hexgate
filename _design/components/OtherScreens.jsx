@@ -276,7 +276,7 @@ function OnboardingScreen() {
             </svg>
           </div>
 
-          <h1 style={{ fontSize: 36, fontWeight: 600, letterSpacing: '-0.03em', lineHeight: 1.1, margin: 0 }}>Welcome to Fortify</h1>
+          <h1 style={{ fontSize: 36, fontWeight: 600, letterSpacing: '-0.03em', lineHeight: 1.1, margin: 0 }}>Welcome to Hexgate</h1>
           <p style={{ fontSize: 15, color: 'hsl(var(--muted-foreground))', lineHeight: 1.55, margin: '14px auto 32px', maxWidth: 440 }}>
             Policy, identity, and audit for AI agents. Define what your agents can do, and prove what they did — signed, timestamped, append-only.
           </p>

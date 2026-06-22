@@ -155,7 +155,7 @@ function PlaygroundLive({ projectId }: { projectId: string }) {
               No agent serving
             </div>
             <div className="mt-2 text-muted-foreground">
-              Run <span className="font-mono text-foreground">fortify serve</span> with
+              Run <span className="font-mono text-foreground">hexgate serve</span> with
               your HEXGATE_KEY to expose an agent session here.
             </div>
           </div>

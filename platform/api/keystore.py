@@ -261,7 +261,7 @@ class FileKeyStore:
         bar = "=" * 72
         logger.warning(
             "\n%s\n"
-            "GENERATED FORTIFY ROOT KEYPAIR\n"
+            "GENERATED HEXGATE ROOT KEYPAIR\n"
             "   path:        %s\n"
             "   fingerprint: %s\n\n"
             "This key signs every Biscuit token and policy bundle this platform\n"
