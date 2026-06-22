@@ -68,6 +68,11 @@
   --semantic-deny-soft: 0 50% 22%;
   --semantic-approval: 38 92% 55%;
   --semantic-approval-soft: 38 60% 22%;
+
+  /* Syntax-highlighting accent (numbers, atoms) — matches the editor mock
+     on the landing page. Independent of --primary so we can tune the code
+     palette without disturbing the brand color. */
+  --syntax-purple: 265 88% 78%;
 }
 
 .dark {
@@ -97,6 +102,8 @@
   --semantic-deny-soft: 0 50% 22%;
   --semantic-approval: 38 92% 55%;
   --semantic-approval-soft: 38 60% 22%;
+
+  --syntax-purple: 265 88% 78%;
 }
 
 @layer base {

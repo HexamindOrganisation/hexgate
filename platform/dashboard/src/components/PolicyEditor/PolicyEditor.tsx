@@ -20,6 +20,7 @@ import { yaml } from '@codemirror/lang-yaml'
 import { lintGutter, setDiagnostics } from '@codemirror/lint'
 
 import type { PolicyValidationError } from '@/lib/api'
+import { policyModeDecorations } from './decorations'
 import { toCodemirrorDiagnostics } from './diagnostics'
 import { policyEditorTheme } from './theme'
 
@@ -33,7 +34,7 @@ import { policyEditorTheme } from './theme'
 // `setDiagnostics` (used in the effect below) writes into the lint state
 // field that `lintGutter()` installs, so we don't need a `linter()` source
 // callback — the imperative push is the only signal the gutter needs.
-const EXTENSIONS = [yaml(), lintGutter()]
+const EXTENSIONS = [yaml(), lintGutter(), policyModeDecorations]
 
 const BASIC_SETUP = {
   lineNumbers: true,
