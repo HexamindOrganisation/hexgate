@@ -74,6 +74,12 @@ function JustMintedBanner({
   token: TokenMintResponse
   onDismiss: () => void
 }) {
+  // Brief "Copied!" feedback on successful copy — same pattern as the
+  // inline `CopyButton` above, just with a label since this is the
+  // prominent action on the dialog. 1200ms is long enough to register,
+  // short enough that the operator who clicks twice doesn't see a stale
+  // checkmark.
+  const [copied, setCopied] = useState(false)
   // Copy-only \u2014 no reveal UI. Matches the show-once + copy-only pattern
   // GitHub / AWS / Stripe / Vercel / Discord use for API tokens. The
   // mask still shows the env-tagged prefix and the last 4 chars so the
@@ -114,11 +120,17 @@ function JustMintedBanner({
           size="sm"
           onClick={async () => {
             await navigator.clipboard.writeText(token.full)
+            setCopied(true)
+            setTimeout(() => setCopied(false), 1200)
           }}
           className="gap-1.5"
         >
-          <Copy className="size-3.5" />
-          Copy
+          {copied ? (
+            <Check className="size-3.5" />
+          ) : (
+            <Copy className="size-3.5" />
+          )}
+          {copied ? 'Copied!' : 'Copy'}
         </Button>
       </div>
 
