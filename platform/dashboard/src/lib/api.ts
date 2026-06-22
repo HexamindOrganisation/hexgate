@@ -252,6 +252,8 @@ export interface AuditScope {
   agent?: string
   role?: string
   tool?: string
+  start_date?: string
+  end_date?: string
 }
 
 /** List filters: scope + table-only outcome/session_id + paging. */

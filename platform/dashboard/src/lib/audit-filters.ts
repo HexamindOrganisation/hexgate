@@ -22,6 +22,8 @@ export interface AuditFilters {
   tool: string
   outcome: '' | AuditOutcome
   range: '24h' | '7d' | '30d' | '90d'
+  start_date: Date | null
+  end_date: Date | null
 }
 
 export type SetAuditFilters = (
@@ -34,6 +36,8 @@ export const EMPTY_AUDIT_FILTERS: AuditFilters = {
   tool: '',
   outcome: '',
   range: '30d',
+  start_date: null,
+  end_date: null,
 }
 
 const PAGE_SIZE = 40

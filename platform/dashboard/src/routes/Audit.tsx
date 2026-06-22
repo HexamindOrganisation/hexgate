@@ -194,6 +194,8 @@ export function AuditPage() {
     agent: f.agent || undefined,
     role: f.role === NO_VALUE_LABEL ? '' : f.role || undefined,
     tool: f.tool || undefined,
+    start_date: f.start_date ? f.start_date.toISOString() : undefined,
+    end_date: f.end_date ? f.end_date.toISOString() : undefined,
   }
 
   // Range-only (unscoped) summary: filter dropdown options + the "X of Y"
