@@ -88,6 +88,47 @@ jobs:
       - name: Tests
         run: make platform-api-test
 
+  platform-api-postgres:
+    # Isolated from the platform-api job on purpose: that job runs the whole
+    # suite on SQLite (its fixtures build their own engines), so it never
+    # exercises asyncpg. This job sets DATABASE_URL and runs ONLY the opt-in
+    # smoke test, which points the real engine at Postgres and round-trips a
+    # row — the only coverage that the schema actually builds on PG. No OPA
+    # needed (the smoke test doesn't compile bundles).
+    name: Platform API (Postgres smoke)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: hexgate
+          POSTGRES_USER: hexgate
+          POSTGRES_PASSWORD: ci
+        ports:
+          - "5432:5432"
+        options: >-
+          --health-cmd "pg_isready -U hexgate -d hexgate"
+          --health-interval 5s --health-timeout 3s --health-retries 10
+    env:
+      DATABASE_URL: postgresql+asyncpg://hexgate:ci@localhost:5432/hexgate
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: "platform/api/uv.lock"
+
+      - name: Set up Python 3.13
+        run: uv python install 3.13
+
+      - name: Sync platform-api deps
+        run: cd platform/api && uv sync --group dev
+
+      - name: Postgres smoke test
+        run: cd platform/api && uv run pytest tests/test_postgres_smoke.py -v
+
   dashboard:
     name: Dashboard
     runs-on: ubuntu-latest

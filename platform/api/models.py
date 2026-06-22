@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
-from sqlalchemy import JSON, Column, LargeBinary
+from sqlalchemy import JSON, Column, DateTime, LargeBinary
 from sqlmodel import Field, Relationship, SQLModel, UniqueConstraint
 
 
@@ -54,7 +54,9 @@ class Organization(SQLModel, table=True):
     # call), but the immutable ``id`` is what every FK points at.
     slug: str = Field(index=True, unique=True)
     name: str
-    created_at: datetime = Field(default_factory=utcnow)
+    created_at: datetime = Field(
+        default_factory=utcnow, sa_type=DateTime(timezone=True)
+    )
 
 
 class User(SQLModel, table=True):
@@ -83,7 +85,9 @@ class User(SQLModel, table=True):
     # Email verified via the magic-link flow (Phase 3b). Created users start
     # unverified; production gates destructive actions until verified.
     is_verified: bool = Field(default=False)
-    created_at: datetime = Field(default_factory=utcnow)
+    created_at: datetime = Field(
+        default_factory=utcnow, sa_type=DateTime(timezone=True)
+    )
 
     # Link to the provider rows (Google, GitHub, …) FastAPI Users uses to
     # find a returning OAuth user. ``lazy="selectin"`` so every User
@@ -149,7 +153,9 @@ class OrganizationMember(SQLModel, table=True):
     user_id: str = Field(foreign_key="user.id", index=True)
     org_id: str = Field(foreign_key="organization.id", index=True)
     role: str  # "owner" | "admin" | "member"
-    created_at: datetime = Field(default_factory=utcnow)
+    created_at: datetime = Field(
+        default_factory=utcnow, sa_type=DateTime(timezone=True)
+    )
 
 
 class Invitation(SQLModel, table=True):
@@ -178,10 +184,16 @@ class Invitation(SQLModel, table=True):
     # their own role.
     role: str
     invited_by_user_id: str = Field(foreign_key="user.id")
-    expires_at: datetime
-    accepted_at: Optional[datetime] = None
-    revoked_at: Optional[datetime] = None
-    created_at: datetime = Field(default_factory=utcnow)
+    expires_at: datetime = Field(sa_type=DateTime(timezone=True))
+    accepted_at: Optional[datetime] = Field(
+        default=None, sa_type=DateTime(timezone=True)
+    )
+    revoked_at: Optional[datetime] = Field(
+        default=None, sa_type=DateTime(timezone=True)
+    )
+    created_at: datetime = Field(
+        default_factory=utcnow, sa_type=DateTime(timezone=True)
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -206,7 +218,9 @@ class Project(SQLModel, table=True):
     # before any access to project-scoped data.
     org_id: str = Field(foreign_key="organization.id", index=True)
     name: str
-    created_at: datetime = Field(default_factory=utcnow)
+    created_at: datetime = Field(
+        default_factory=utcnow, sa_type=DateTime(timezone=True)
+    )
 
 
 class DevToken(SQLModel, table=True):
@@ -216,8 +230,12 @@ class DevToken(SQLModel, table=True):
     prefix: str  # "fty_test" or "fty_live"
     secret: str  # full token value; opaque random string for Phase A
     scopes_csv: str = ""  # comma-separated for now
-    created_at: datetime = Field(default_factory=utcnow)
-    last_used_at: Optional[datetime] = None
+    created_at: datetime = Field(
+        default_factory=utcnow, sa_type=DateTime(timezone=True)
+    )
+    last_used_at: Optional[datetime] = Field(
+        default=None, sa_type=DateTime(timezone=True)
+    )
 
 
 class Agent(SQLModel, table=True):
@@ -235,7 +253,9 @@ class Agent(SQLModel, table=True):
     # which shape is present.
     policy_yaml: str
     system_md: str = ""
-    updated_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(
+        default_factory=utcnow, sa_type=DateTime(timezone=True)
+    )
 
     # Compiled + signed WASM bundle, produced from policy_yaml at save time
     # (see services.compile_bundle). Null when opa is unavailable or the
@@ -265,7 +285,9 @@ class AgentVersion(SQLModel, table=True):
     description: Optional[str] = None
     content_hash: str
     manifest: Optional[dict] = Field(default=None, sa_column=Column(JSON))
-    created_at: datetime = Field(default_factory=utcnow)
+    created_at: datetime = Field(
+        default_factory=utcnow, sa_type=DateTime(timezone=True)
+    )
 
 
 class Tool(SQLModel, table=True):
