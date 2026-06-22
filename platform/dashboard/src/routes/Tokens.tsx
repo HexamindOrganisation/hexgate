@@ -4,8 +4,6 @@ import {
   BookOpen,
   Check,
   Copy,
-  Eye,
-  EyeOff,
   Fingerprint,
   Filter,
   KeyRound,
@@ -76,17 +74,15 @@ function JustMintedBanner({
   token: TokenMintResponse
   onDismiss: () => void
 }) {
-  // Masked by default \u2014 operators copy-paste regardless of what's
-  // rendered, so there's no UX cost, and a shoulder-surfing screenshot
-  // (or auto-screenshare during a demo) doesn't leak the secret. The
-  // mask keeps just the env-tagged prefix and the last 4 chars so the
-  // operator can still visually distinguish multiple tokens; `Reveal`
-  // brings the rest back.
-  const [revealed, setRevealed] = useState(false)
+  // Copy-only \u2014 no reveal UI. Matches the show-once + copy-only pattern
+  // GitHub / AWS / Stripe / Vercel / Discord use for API tokens. The
+  // mask still shows the env-tagged prefix and the last 4 chars so the
+  // operator can visually distinguish multiple tokens later in the
+  // table; the full value reaches the clipboard via the Copy button.
+  //
   // Tokens are `fty_(test|live)_<uuid>_<biscuit>` \u2014 keep the 9-char
-  // env-tagged prefix and the last 4 of the biscuit; everything in
-  // between is the project UUID + opaque biscuit bytes (nothing useful
-  // to expose at rest).
+  // env-tagged prefix and the last 4 of the biscuit; everything between
+  // (the project UUID + opaque biscuit bytes) is masked.
   const prefixEnd = token.full.indexOf('_', 4) + 1
   const masked =
     token.full.slice(0, prefixEnd > 0 ? prefixEnd : 9) +
@@ -110,20 +106,9 @@ function JustMintedBanner({
       <div className="mt-4 flex items-center gap-2 rounded-md border border-border bg-background px-4 py-3 font-mono text-sm">
         {/* `min-w-0` is required for flex-1 + truncate to actually
            clip — without it the span's intrinsic min-width keeps it
-           from shrinking, and the long token pushes the Hide/Copy
-           buttons past the parent. */}
-        <span className="min-w-0 flex-1 truncate">
-          {revealed ? token.full : masked}
-        </span>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => setRevealed((r) => !r)}
-          className="gap-1.5"
-        >
-          {revealed ? <EyeOff className="size-3.5" /> : <Eye className="size-3.5" />}
-          {revealed ? 'Hide' : 'Reveal'}
-        </Button>
+           from shrinking, and the masked token pushes Copy past the
+           parent. */}
+        <span className="min-w-0 flex-1 truncate">{masked}</span>
         <Button
           variant="default"
           size="sm"

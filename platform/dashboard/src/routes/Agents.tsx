@@ -74,7 +74,7 @@ export function AgentsPage() {
         )}
       </header>
 
-      <div className="flex-1 overflow-y-auto px-8 py-6">
+      <div className="flex-1 overflow-y-auto px-8 py-6 scrollbar-thin">
         {active ? (
           <ManifestView agent={active} />
         ) : (
