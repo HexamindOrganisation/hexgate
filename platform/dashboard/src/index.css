@@ -117,10 +117,20 @@
   }
 }
 
+/* Lighter Lucide stroke. Lucide-react inlines `stroke-width="2"` on every
+   icon SVG; SVG presentation attributes are overridable by CSS, so this
+   single rule downshifts every <Icon /> in the app to a more elegant 1.5
+   without per-component `strokeWidth={1.5}` plumbing. Per-icon explicit
+   props would still win if we ever need a heavier weight somewhere. */
+.lucide {
+  stroke-width: 1.5;
+}
+
 /* Thin, accent-foreground scrollbar — opt-in via `className="scrollbar-thin"`.
-   The default browser scrollbar reads as heavy chrome inside our dark surfaces;
-   used today by the playground chat transcript, available for any other
-   scroll container that gets long enough to need one. */
+   The default browser scrollbar reads as heavy chrome inside our dark
+   surfaces. Applied today on the playground chat transcript, sidebar nav,
+   main content area, audit log, agents content, table overflow, and both
+   playground side panels. */
 .scrollbar-thin {
   scrollbar-width: thin;
   scrollbar-color: hsl(var(--accent-foreground)) transparent;

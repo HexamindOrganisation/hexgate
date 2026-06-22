@@ -105,7 +105,7 @@ function JustMintedBanner({
         </div>
         <div className="flex items-center gap-1.5 text-xs text-approval">
           <AlertTriangle className="size-3.5" />
-          This is the only time we'll show it in full.
+          Copy it now — we won't be able to show it again.
         </div>
       </div>
 

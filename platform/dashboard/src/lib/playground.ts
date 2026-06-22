@@ -215,6 +215,30 @@ function connectSocket(projectId: string): void {
   })
 }
 
+/**
+ * Drop all playground state + tear down the socket. Called from
+ * `useLogout` so that a sign-out + sign-in cycle on the same browser
+ * tab doesn't leak the prior user's chat history (module-level state
+ * survives the React tree teardown, which is the whole point of the
+ * refactor — but not across user identities).
+ *
+ * Idempotent: safe to call when no socket is open.
+ */
+export function resetPlayground(): void {
+  if (activeSocket) {
+    activeSocket.close()
+    activeSocket = null
+  }
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer)
+    reconnectTimer = null
+  }
+  activeProjectId = null
+  reconnectAttempts = 0
+  cachedState = INITIAL_STATE
+  listeners.forEach((l) => l())
+}
+
 function ensureSocketFor(projectId: string): void {
   // Same project + live socket → nothing to do. This is the common
   // remount path (route navigated away and back).
