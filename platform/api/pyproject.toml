@@ -17,10 +17,11 @@ dependencies = [
     # main.py imports load_dotenv directly; transitive via pydantic-settings
     # but pinned since we use it.
     "python-dotenv>=1.1.1",
-    # Async SQLite driver — required by SQLAlchemy's async engine. SQLite
-    # itself is single-writer; aiosqlite just stops the event loop from
-    # blocking on disk I/O. Future Postgres switch swaps this for asyncpg.
+    # Async DB drivers for SQLAlchemy's async engine. aiosqlite backs the
+    # local SQLite fallback; asyncpg backs Postgres when DATABASE_URL is set
+    # (see db._database_url). Both are pinned so either path works out of box.
     "aiosqlite>=0.20",
+    "asyncpg>=0.29",
     # SQLAlchemy's async engine bridges sync ORM internals to async DB
     # drivers via greenlet — it's a transitive dep but not auto-installed
     # on every distribution, so pin it explicitly.
