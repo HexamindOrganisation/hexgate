@@ -133,7 +133,7 @@ export function ActiveChips({ f, setF }: { f: Filters; setF: SetFilters }) {
           </button>
         </Badge>
       ))}
-      <Button variant="ghost" size="sm" className="h-6 px-2 text-xs" onClick={() => setF((p) => ({ agent: '', role: '', tool: '', outcome: '', range: p.range }))}>
+      <Button variant="ghost" size="sm" className="h-6 px-2 text-xs" onClick={() => setF((p) => ({ agent: '', role: '', tool: '', outcome: '', range: p.range, start_date: null, end_date: null }))}>
         Clear all
       </Button>
     </div>
