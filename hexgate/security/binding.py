@@ -170,6 +170,22 @@ def platform_policy_from_payload(
             "Refusing to fall back to the pydantic engine."
         )
     else:
+        # Loud one-shot signal (fires at load time, not per turn) so an
+        # operator running `hexgate serve` doesn't silently get the
+        # pydantic engine when they expected the production-shaped
+        # WASM path. Common cause: `opa` not installed on the platform
+        # host — see compile_bundle() in platform/api/services.py, which
+        # logs "opa not on PATH" on the server side too.
+        logger.warning(
+            "policy for %r served without a WASM bundle — falling back to "
+            "the pydantic engine. Decisions are equivalent (parity-tested), "
+            "but signature verification and signed-artifact distribution "
+            "are off. Install `opa` on the platform host and re-save the "
+            "policy to get the WASM path; set %s=true to refuse the "
+            "fallback entirely.",
+            agent_name,
+            _REQUIRE_SIGNATURE_ENV_VAR,
+        )
         policy = load_policy_set_from_dict(
             yaml.safe_load(payload.get("policy_yaml") or "") or {}
         )
