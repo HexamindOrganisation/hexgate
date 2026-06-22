@@ -155,7 +155,7 @@ export function AppShell() {
           <span className="text-sm font-semibold">Hexgate</span>
         </div>
 
-        <nav className="flex-1 overflow-y-auto p-3">
+        <nav className="flex-1 overflow-y-auto p-3 scrollbar-thin">
           <div className="mb-4">
             <div className="px-3 pb-2 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
               Workspace
@@ -202,7 +202,7 @@ export function AppShell() {
 
         <VerifyEmailBanner />
 
-        <main className="flex-1 overflow-y-auto px-8 py-6">
+        <main className="flex-1 overflow-y-auto px-8 py-6 scrollbar-thin">
           <Outlet />
         </main>
       </div>

@@ -4,8 +4,6 @@ import {
   BookOpen,
   Check,
   Copy,
-  Eye,
-  EyeOff,
   Fingerprint,
   Filter,
   KeyRound,
@@ -76,8 +74,26 @@ function JustMintedBanner({
   token: TokenMintResponse
   onDismiss: () => void
 }) {
-  const [revealed, setRevealed] = useState(true)
-  const masked = token.full.slice(0, 12) + '\u2022'.repeat(20) + token.full.slice(-4)
+  // Brief "Copied!" feedback on successful copy — same pattern as the
+  // inline `CopyButton` above, just with a label since this is the
+  // prominent action on the dialog. 1200ms is long enough to register,
+  // short enough that the operator who clicks twice doesn't see a stale
+  // checkmark.
+  const [copied, setCopied] = useState(false)
+  // Copy-only \u2014 no reveal UI. Matches the show-once + copy-only pattern
+  // GitHub / AWS / Stripe / Vercel / Discord use for API tokens. The
+  // mask still shows the env-tagged prefix and the last 4 chars so the
+  // operator can visually distinguish multiple tokens later in the
+  // table; the full value reaches the clipboard via the Copy button.
+  //
+  // Tokens are `fty_(test|live)_<uuid>_<biscuit>` \u2014 keep the 9-char
+  // env-tagged prefix and the last 4 of the biscuit; everything between
+  // (the project UUID + opaque biscuit bytes) is masked.
+  const prefixEnd = token.full.indexOf('_', 4) + 1
+  const masked =
+    token.full.slice(0, prefixEnd > 0 ? prefixEnd : 9) +
+    '\u2022'.repeat(20) +
+    token.full.slice(-4)
   return (
     <div className="rounded-lg border border-primary/40 bg-primary/5 p-5">
       <div className="flex items-start justify-between">
@@ -89,31 +105,32 @@ function JustMintedBanner({
         </div>
         <div className="flex items-center gap-1.5 text-xs text-approval">
           <AlertTriangle className="size-3.5" />
-          This is the only time we'll show it in full.
+          Copy it now — we won't be able to show it again.
         </div>
       </div>
 
       <div className="mt-4 flex items-center gap-2 rounded-md border border-border bg-background px-4 py-3 font-mono text-sm">
-        <span className="flex-1 truncate">{revealed ? token.full : masked}</span>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => setRevealed((r) => !r)}
-          className="gap-1.5"
-        >
-          {revealed ? <EyeOff className="size-3.5" /> : <Eye className="size-3.5" />}
-          {revealed ? 'Hide' : 'Reveal'}
-        </Button>
+        {/* `min-w-0` is required for flex-1 + truncate to actually
+           clip — without it the span's intrinsic min-width keeps it
+           from shrinking, and the masked token pushes Copy past the
+           parent. */}
+        <span className="min-w-0 flex-1 truncate">{masked}</span>
         <Button
           variant="default"
           size="sm"
           onClick={async () => {
             await navigator.clipboard.writeText(token.full)
+            setCopied(true)
+            setTimeout(() => setCopied(false), 1200)
           }}
           className="gap-1.5"
         >
-          <Copy className="size-3.5" />
-          Copy
+          {copied ? (
+            <Check className="size-3.5" />
+          ) : (
+            <Copy className="size-3.5" />
+          )}
+          {copied ? 'Copied!' : 'Copy'}
         </Button>
       </div>
 

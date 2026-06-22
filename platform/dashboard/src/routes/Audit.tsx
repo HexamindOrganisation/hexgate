@@ -93,7 +93,7 @@ function DetailDrawer({
           <Button variant="ghost" size="icon" onClick={onClose} title="Close (Esc)"><X className="size-4" /></Button>
         </div>
 
-        <div className="flex-1 overflow-auto px-5 pb-6 pt-1">
+        <div className="flex-1 overflow-auto px-5 pb-6 pt-1 scrollbar-thin">
           <div className="mt-[18px] flex flex-wrap items-baseline gap-2">
             <span className="font-mono text-[17px] font-semibold text-foreground">{e.tool_name}</span>
             <span className="text-[13px] text-muted-foreground">by</span>

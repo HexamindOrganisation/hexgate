@@ -107,7 +107,7 @@ function PlaygroundLive({ projectId }: { projectId: string }) {
   return (
     <div className="-mx-8 -my-6 h-[calc(100vh-56px)] grid grid-cols-[280px_1fr_400px] overflow-hidden">
       {/* Session config */}
-      <aside className="flex flex-col gap-4 border-r border-border bg-card p-5 overflow-y-auto">
+      <aside className="flex flex-col gap-4 border-r border-border bg-card p-5 overflow-y-auto scrollbar-thin">
         <div className="flex items-center gap-2 text-sm">
           {state.agentOnline ? (
             <>
@@ -233,7 +233,10 @@ function PlaygroundLive({ projectId }: { projectId: string }) {
           )}
         </header>
 
-        <div ref={transcriptRef} className="flex-1 overflow-y-auto px-6 py-6 space-y-5">
+        <div
+          ref={transcriptRef}
+          className="flex-1 overflow-y-auto px-6 py-6 space-y-5 scrollbar-thin"
+        >
           {state.messages.length === 0 ? (
             <div className="h-full grid place-items-center text-center">
               <div className="text-sm text-muted-foreground max-w-sm">
@@ -284,7 +287,7 @@ function PlaygroundLive({ projectId }: { projectId: string }) {
             <span className="text-xs text-muted-foreground">{state.decisions.length}</span>
           )}
         </header>
-        <div className="flex-1 overflow-y-auto px-3 py-2">
+        <div className="flex-1 overflow-y-auto px-3 py-2 scrollbar-thin">
           {state.decisions.length === 0 ? (
             <div className="h-full grid place-items-center text-xs text-muted-foreground text-center px-6">
               Tool-call decisions will stream here as the agent acts.

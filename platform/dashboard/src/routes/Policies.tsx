@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   AlertTriangle,
@@ -14,6 +14,7 @@ import { useProjectScoped } from '@/lib/active'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { NoProjectEmptyState } from '@/components/NoProjectEmptyState'
+import { PolicyEditor } from '@/components/PolicyEditor'
 import { nodeTypes } from '@/components/graph/nodes'
 import { buildPolicyGraph } from '@/lib/policy_graph'
 import { cn } from '@/lib/utils'
@@ -222,6 +223,18 @@ function YamlEditor({
 
   const originalSource = agent.data?.policy_yaml ?? ''
 
+  // Stable identity so PolicyEditor doesn't trigger a CodeMirror
+  // reconfigure on every keystroke — @uiw/react-codemirror puts
+  // `onChange` in its reconfigure effect's dep array.
+  const handleEditorChange = useCallback(
+    (next: string) => {
+      setDraft(next)
+      setDirty(next !== originalSource)
+      setErrors((prev) => (prev ? null : prev))
+    },
+    [originalSource],
+  )
+
   return (
     <div className="h-full flex flex-col">
       <header className="flex items-center justify-between gap-2 px-6 py-2 border-b border-border">
@@ -278,15 +291,11 @@ function YamlEditor({
           )}
         </div>
       )}
-      <textarea
+      <PolicyEditor
         value={draft}
-        onChange={(e) => {
-          setDraft(e.target.value)
-          setDirty(e.target.value !== originalSource)
-          if (errors) setErrors(null)
-        }}
-        spellCheck={false}
-        className="flex-1 resize-none bg-background p-6 font-mono text-sm leading-relaxed text-foreground focus:outline-none"
+        onChange={handleEditorChange}
+        diagnostics={errors}
+        className="flex-1 overflow-hidden"
       />
     </div>
   )

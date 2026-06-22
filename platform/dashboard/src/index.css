@@ -1,5 +1,5 @@
 @import "tailwindcss";
-@import url('https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap');
 
 @source "../node_modules/streamdown/dist/*.js";
 
@@ -35,8 +35,8 @@
   --radius-lg: var(--radius);
   --radius-xl: calc(var(--radius) + 4px);
 
-  --font-sans: "Geist", "Inter", ui-sans-serif, system-ui, sans-serif;
-  --font-mono: "Geist Mono", "JetBrains Mono", ui-monospace, monospace;
+  --font-sans: "Hanken Grotesk", "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", "JetBrains Mono", ui-monospace, monospace;
 }
 
 :root {
@@ -115,4 +115,37 @@
   #root {
     min-height: 100svh;
   }
+}
+
+/* Lighter Lucide stroke. Lucide-react inlines `stroke-width="2"` on every
+   icon SVG; SVG presentation attributes are overridable by CSS, so this
+   single rule downshifts every <Icon /> in the app to a more elegant 1.5
+   without per-component `strokeWidth={1.5}` plumbing. Per-icon explicit
+   props would still win if we ever need a heavier weight somewhere. */
+.lucide {
+  stroke-width: 1.5;
+}
+
+/* Thin, accent-foreground scrollbar — opt-in via `className="scrollbar-thin"`.
+   The default browser scrollbar reads as heavy chrome inside our dark
+   surfaces. Applied today on the playground chat transcript, sidebar nav,
+   main content area, audit log, agents content, table overflow, and both
+   playground side panels. */
+.scrollbar-thin {
+  scrollbar-width: thin;
+  scrollbar-color: hsl(var(--accent-foreground)) transparent;
+}
+.scrollbar-thin::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+.scrollbar-thin::-webkit-scrollbar-track {
+  background: transparent;
+}
+.scrollbar-thin::-webkit-scrollbar-thumb {
+  background-color: hsl(var(--accent-foreground));
+  border-radius: 3px;
+}
+.scrollbar-thin::-webkit-scrollbar-thumb:hover {
+  background-color: hsl(var(--foreground));
 }
