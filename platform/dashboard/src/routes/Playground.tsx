@@ -233,7 +233,10 @@ function PlaygroundLive({ projectId }: { projectId: string }) {
           )}
         </header>
 
-        <div ref={transcriptRef} className="flex-1 overflow-y-auto px-6 py-6 space-y-5">
+        <div
+          ref={transcriptRef}
+          className="flex-1 overflow-y-auto px-6 py-6 space-y-5 scrollbar-thin"
+        >
           {state.messages.length === 0 ? (
             <div className="h-full grid place-items-center text-center">
               <div className="text-sm text-muted-foreground max-w-sm">

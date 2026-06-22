@@ -116,3 +116,26 @@
     min-height: 100svh;
   }
 }
+
+/* Thin, accent-foreground scrollbar — opt-in via `className="scrollbar-thin"`.
+   The default browser scrollbar reads as heavy chrome inside our dark surfaces;
+   used today by the playground chat transcript, available for any other
+   scroll container that gets long enough to need one. */
+.scrollbar-thin {
+  scrollbar-width: thin;
+  scrollbar-color: hsl(var(--accent-foreground)) transparent;
+}
+.scrollbar-thin::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+.scrollbar-thin::-webkit-scrollbar-track {
+  background: transparent;
+}
+.scrollbar-thin::-webkit-scrollbar-thumb {
+  background-color: hsl(var(--accent-foreground));
+  border-radius: 3px;
+}
+.scrollbar-thin::-webkit-scrollbar-thumb:hover {
+  background-color: hsl(var(--foreground));
+}

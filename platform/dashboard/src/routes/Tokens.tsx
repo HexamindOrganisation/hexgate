@@ -76,8 +76,22 @@ function JustMintedBanner({
   token: TokenMintResponse
   onDismiss: () => void
 }) {
-  const [revealed, setRevealed] = useState(true)
-  const masked = token.full.slice(0, 12) + '\u2022'.repeat(20) + token.full.slice(-4)
+  // Masked by default \u2014 operators copy-paste regardless of what's
+  // rendered, so there's no UX cost, and a shoulder-surfing screenshot
+  // (or auto-screenshare during a demo) doesn't leak the secret. The
+  // mask keeps just the env-tagged prefix and the last 4 chars so the
+  // operator can still visually distinguish multiple tokens; `Reveal`
+  // brings the rest back.
+  const [revealed, setRevealed] = useState(false)
+  // Tokens are `fty_(test|live)_<uuid>_<biscuit>` \u2014 keep the 9-char
+  // env-tagged prefix and the last 4 of the biscuit; everything in
+  // between is the project UUID + opaque biscuit bytes (nothing useful
+  // to expose at rest).
+  const prefixEnd = token.full.indexOf('_', 4) + 1
+  const masked =
+    token.full.slice(0, prefixEnd > 0 ? prefixEnd : 9) +
+    '\u2022'.repeat(20) +
+    token.full.slice(-4)
   return (
     <div className="rounded-lg border border-primary/40 bg-primary/5 p-5">
       <div className="flex items-start justify-between">
@@ -94,7 +108,13 @@ function JustMintedBanner({
       </div>
 
       <div className="mt-4 flex items-center gap-2 rounded-md border border-border bg-background px-4 py-3 font-mono text-sm">
-        <span className="flex-1 truncate">{revealed ? token.full : masked}</span>
+        {/* `min-w-0` is required for flex-1 + truncate to actually
+           clip — without it the span's intrinsic min-width keeps it
+           from shrinking, and the long token pushes the Hide/Copy
+           buttons past the parent. */}
+        <span className="min-w-0 flex-1 truncate">
+          {revealed ? token.full : masked}
+        </span>
         <Button
           variant="outline"
           size="sm"
