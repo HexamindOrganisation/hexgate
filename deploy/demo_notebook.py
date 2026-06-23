@@ -37,9 +37,10 @@ def _(mo):
 
     A **throwaway sandbox** — everything vanishes when it scales down.
 
-    1. Paste your **OpenAI API key** below and **submit** (press Enter or click
-       the button) — that starts the agent.
-    2. Edit the **tools** and **agent** cells (real Python) — changes live-reload.
+    1. Type your **OpenAI API key** in the box below, then click
+       **▶ Apply & start agent**.
+    2. Edit the **tools** and **agent** cells (real Python) — click Apply again
+       to live-reload.
     3. Open the playground to chat and watch **policy decisions**
        (allow / deny / approval) stream live.
     """)
@@ -48,24 +49,13 @@ def _(mo):
 
 @app.cell
 def _(mo):
-    import os
-
-    # 🔑 Paste your key, then press Enter (or click "Apply & start") to submit.
-    # Wrapping the text box in .form() is what gives an explicit submit — a plain
-    # mo.ui.text has none, which is why "Enter" felt like it did nothing.
-    #
-    # The value lives ONLY in the running kernel — marimo saves code, not widget
-    # state — so it never touches this file and is gone after a restart. Prefills
-    # from the OPENAI_API_KEY env var if you set one before launching.
-    key_form = mo.ui.text(
-        kind="password",
-        label="OpenAI API key",
-        placeholder="sk-...",
-        value=os.environ.get("OPENAI_API_KEY", ""),
-        full_width=True,
-    ).form(submit_button_label="▶ Apply & start agent")
-    key_form
-    return (key_form,)
+    # 🔑 Type your key in the box, then click the button. The box value is live
+    # as you type (no Enter needed); the button is what applies it. The value
+    # lives only in the running kernel — never written to this file.
+    api_key = mo.ui.text(kind="password", placeholder="sk-...", full_width=True)
+    start = mo.ui.run_button(label="▶ Apply & start agent")
+    mo.vstack([mo.md("**OpenAI API key**"), api_key, start])
+    return api_key, start
 
 
 @app.cell
@@ -128,17 +118,27 @@ def _(TOOLS):
 
 
 @app.cell
-def _(agent, key_form, mo, serve_manager):
-    # Runs when you submit the key form (Enter or the button). `key_form.value`
-    # is None until submitted. Uses the live `agent` object from the cell above —
-    # edit/re-run that cell and it live-reloads with the same key.
-    if key_form.value:
-        serve_manager.apply(agent, key_form.value)
-        out = mo.md("✅ **Running.** Open the playground below to chat with your agent.")
+def _(agent, api_key, mo, serve_manager, start):
+    # Fires on button click. Reads the live `api_key.value`, sets it in the
+    # process env (so the agent's OpenAI client picks it up) AND hands it to
+    # serve_manager. Uses the live `agent` object — edit/re-run that cell and
+    # click again to live-reload.
+    import os
+
+    if start.value:
+        if not api_key.value:
+            out = mo.md("⚠️ **Type your OpenAI key in the box above**, then click Apply.")
+        else:
+            os.environ["OPENAI_API_KEY"] = api_key.value
+            serve_manager.apply(agent, api_key.value)
+            out = mo.md(
+                f"✅ **Running** with key `…{api_key.value[-4:]}`. "
+                "Open the playground below to chat."
+            )
     else:
         out = mo.md(
             f"Agent serve status: **{serve_manager.status()}** — "
-            "paste your key above and submit to start."
+            "type your key above and click **Apply & start**."
         )
     out
     return
