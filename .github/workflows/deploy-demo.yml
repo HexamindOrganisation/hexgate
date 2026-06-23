@@ -1,0 +1,74 @@
+name: deploy-demo
+
+# Auto-deploy the live demo to Modal when a GitHub Release is published.
+#
+# release.yml creates a GitHub Release only on a real run (!dry-run &&
+# target == pypi), so dry-runs and TestPyPI never reach here — the demo
+# updates *only* on a genuine new version. The demo is pinned to the released
+# tag, smoke-tested with a mock LLM (no real key), then deployed. The Modal
+# URL is deterministic + stable across deploys, so the docs link never changes.
+#
+# Required repo secrets (Settings → Secrets and variables → Actions):
+#   MODAL_TOKEN_ID, MODAL_TOKEN_SECRET   — a Modal API token pair
+#   (modal.com → Settings → API Tokens). NOT the `modal token new` browser
+#   login, and NOT an OpenAI key — the demo is BYOK.
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+# Never let two demo deploys race; if a newer release lands mid-deploy, finish
+# the current one first rather than cancelling into a half-deployed state.
+concurrency:
+  group: deploy-demo
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout the released tag
+        uses: actions/checkout@v4
+        with:
+          # Pin the demo to the exact released version, not whatever main is at
+          # now — so the demo's SDK == the SDK on PyPI for this release.
+          ref: ${{ github.event.release.tag_name }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Set up Python 3.13
+        run: uv python install 3.13
+
+      # Mirrors release.yml so the smoke run matches a green release for this
+      # SHA. The runtime demo degrades to pydantic enforcement without opa, but
+      # we install it here so CI exercises the same path as local.
+      - name: Install OPA
+        run: |
+          curl -fsSL -o opa https://openpolicyagent.org/downloads/v0.70.0/opa_linux_amd64_static
+          chmod +x opa
+          sudo mv opa /usr/local/bin/opa
+
+      # Gate: full demo path with a mock LLM (no real key) — boot the API, run
+      # the in-kernel serve loop bound to a live agent, sign in, chat, assert
+      # the reply streams back. If this fails the job stops here: the release
+      # already shipped, the public demo simply holds at the prior version.
+      - name: Smoke test
+        run: |
+          (cd platform/api && uv sync)
+          make demo-smoke
+
+      # `modal deploy` builds the image on Modal's builders (not this runner)
+      # and waits for the app to go live. The runner only needs the modal
+      # client, which uvx fetches ephemerally.
+      - name: Deploy to Modal
+        env:
+          MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+          MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+        run: uvx modal deploy deploy/modal_app.py

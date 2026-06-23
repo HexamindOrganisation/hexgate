@@ -249,6 +249,10 @@ demo-notebook: ## Run the bundled BYOK demo locally (one process). Open http://l
 	  HEXGATE_DEMO=1 HEXGATE_COOKIE_SECURE=0 \
 	  python deploy/boot.py
 
+.PHONY: demo-smoke
+demo-smoke: ## Smoke-test the bundled demo with a mock LLM (no real key) — CI gate before deploy
+	cd platform/api && uv run python "$(CURDIR)/deploy/smoke_test.py"
+
 .PHONY: demo-modal
 demo-modal: ## Deploy the bundled demo to Modal (one isolated container per visitor)
 	@command -v modal >/dev/null || { echo "modal not installed — run: uv pip install modal && modal token new"; exit 1; }
