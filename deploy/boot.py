@@ -63,8 +63,14 @@ def _wait_healthy(url: str, timeout: float = 90.0) -> None:
     raise TimeoutError(f"API did not become healthy at {url} within {timeout}s")
 
 
-def run(dash_url: str | None = None) -> None:
-    # --- env shared by all children -------------------------------------
+def start_services(dash_url: str | None = None) -> dict[str, str]:
+    """Bring up the API (background) + mint the serve token, and RETURN the env.
+
+    Everything except marimo. Modal's web_server entry runs marimo in the
+    *foreground* (so its port is the served port) and only needs the API + key
+    ready first — hence this split from :func:`run`, which is the local
+    "start everything and block" path.
+    """
     env = dict(os.environ)
     env.setdefault("HEXGATE_DEMO", "1")           # API serves dashboard + demo-login
     env.setdefault("HEXGATE_COOKIE_SECURE", "1")  # cookie rides the https tunnel
@@ -80,7 +86,7 @@ def run(dash_url: str | None = None) -> None:
     # local API origin when not running behind a tunnel (local testing).
     DASH_URL_FILE.write_text((dash_url or api_base).strip())
 
-    # --- 1. Platform API -------------------------------------------------
+    # --- Platform API (background) --------------------------------------
     _spawn(
         ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", str(API_PORT)],
         cwd=API_DIR,
@@ -88,39 +94,34 @@ def run(dash_url: str | None = None) -> None:
     )
     _wait_healthy(f"{api_base}/v1/.well-known/keys")
 
-    # --- 2. Mint the serve token (shares the now-seeded SQLite + keystore) ---
-    # provision.py lives beside this file; its internal imports (db/main/services)
-    # need the API dir on sys.path.
+    # --- Mint the serve token (shares the now-seeded SQLite + keystore) ---
     sys.path.insert(0, str(DEPLOY_DIR))
     sys.path.insert(0, str(API_DIR))
     from provision import provision_serve_token  # noqa: E402  (path set above)
 
-    hexgate_key = provision_serve_token()
-    SERVE_KEY_FILE.write_text(hexgate_key)
+    SERVE_KEY_FILE.write_text(provision_serve_token())
     print("[boot] minted HEXGATE_KEY for seeded project", flush=True)
-    # The agent's LLM key is BYOK — entered in the notebook and set into the
-    # process env by serve_manager. boot doesn't touch it.
+    # serve itself runs in the notebook kernel (serve_manager), bound to the
+    # live agent object. boot only hands it the key (file) + HEXGATE_API_URL (env).
+    return env
 
-    # --- 3. (serve runs in the notebook kernel) --------------------------
-    # The notebook's serve_manager runs the `hexgate serve` loop in-kernel,
-    # bound to the live `agent` object, and restarts it on each "Apply" — so
-    # visitor edits flow into the dashboard. boot only hands it the platform
-    # key (via SERVE_KEY_FILE) + HEXGATE_API_URL (via env).
 
-    # --- 4. marimo notebook (the landing UI) -----------------------------
-    # `edit` = interactive (read the agent def, run cells, install). In an
-    # isolated throwaway container there's nothing to protect, so disable the
-    # access token. Swap to `marimo run` for a locked-down app-mode demo.
-    _spawn(
-        [
-            "marimo", "edit", str(NOTEBOOK),
-            "--headless", "--host", "0.0.0.0", "-p", str(MARIMO_PORT),
-            "--no-token",
-        ],
-        cwd=ASIANF,
-        env=env,
-    )
+def marimo_argv() -> list[str]:
+    """The marimo command — the demo's landing UI. `edit` = interactive (read
+    the def, run cells); `--no-token` since the throwaway container has nothing
+    to protect."""
+    return [
+        "marimo", "edit", str(NOTEBOOK),
+        "--headless", "--host", "0.0.0.0", "-p", str(MARIMO_PORT),
+        "--no-token",
+    ]
 
+
+def run(dash_url: str | None = None) -> None:
+    """Local path: start the API, then marimo as a child, and block. (Modal
+    runs marimo in the foreground itself — see modal_app.py.)"""
+    env = start_services(dash_url)
+    _spawn(marimo_argv(), cwd=ASIANF, env=env)
     _block_until_exit()
 
 
@@ -143,4 +144,6 @@ def _block_until_exit() -> None:
 
 
 if __name__ == "__main__":
-    run()
+    # HEXGATE_DASH_URL lets the launcher (e.g. Codespaces start.sh) pass the
+    # public dashboard URL so the notebook's "Open playground" link is reachable.
+    run(dash_url=os.environ.get("HEXGATE_DASH_URL"))

@@ -58,44 +58,33 @@ Nothing here is demo-only plumbing inside the platform: it's the same
 [`hexgate serve`](/cli/serve) logic you'd run locally — just bundled into one
 container with auto-seeding and auto-login.
 
-## Deploy your own
+## Run it in your browser (GitHub Codespaces)
 
-The demo bundle lives in [`deploy/`](https://github.com/HexamindOrganisation/hexgate/tree/main/deploy)
-(orchestrator, notebook, and a Modal wrapper). It runs on
-[Modal](https://modal.com) — one isolated container per visitor, scaled to zero
-between sessions.
+The repo ships a devcontainer, so anyone can launch the full demo — notebook +
+dashboard, their own isolated container — in one click:
 
-<Steps>
-  <Step title="Try it locally">
-    Run from `asianf/`:
+[![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/HexamindOrganisation/hexgate)
 
-    ```bash
-    make demo-notebook-build   # one-time: deps + marimo + dashboard build
-    make demo-notebook         # launch the whole world (one process)
-    ```
+It builds once (~a couple of minutes; instant with [Prebuilds](https://docs.github.com/codespaces/prebuilding-your-codespaces)),
+then the notebook opens on port **2718** automatically. Paste your OpenAI key,
+**Apply & start**, and open the dashboard playground. Each visitor gets their own
+container on their own free Codespaces quota — no cost to us, full per-visitor
+isolation, and marimo's live editing works (ports are forwarded directly).
 
-    Open `http://localhost:2718`, paste your key, **Apply & reload**, then open
-    the Playground.
+## Run it locally
 
-    <Note>
-    `make demo-notebook` sets `HEXGATE_COOKIE_SECURE=0` for local HTTP — the
-    browser drops a `Secure` cookie over plain HTTP. In the container it's `1`
-    (the tunnel is HTTPS).
-    </Note>
-  </Step>
-  <Step title="Deploy on Modal">
-    First time: `uv pip install modal && modal token new`. Then:
+```bash
+make demo-notebook-build   # one-time: deps + marimo + dashboard build
+make demo-notebook         # launch the whole world (one process)
+```
 
-    ```bash
-    make demo-modal            # → modal deploy deploy/modal_app.py
-    ```
+Open `http://localhost:2718`, paste your key, **Apply & start**, then open the
+Playground.
 
-    Each session is one container: marimo is the entry URL; the dashboard is
-    exposed via a runtime tunnel; the container is destroyed ~10 min after the
-    last request. See [`deploy/README.md`](https://github.com/HexamindOrganisation/hexgate/tree/main/deploy)
-    for the knobs (ports, idle window, concurrency cap).
-  </Step>
-</Steps>
+<Note>
+`make demo-notebook` sets `HEXGATE_COOKIE_SECURE=0` for local HTTP — the browser
+drops a `Secure` cookie over plain HTTP (it's `1` over HTTPS, e.g. Codespaces).
+</Note>
 
 <Note>
 **No-BYOK public demo (optional).** If you'd rather visitors run the demo

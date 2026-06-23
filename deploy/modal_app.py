@@ -24,8 +24,15 @@ API_VENV = f"{REMOTE_ROOT}/platform/api/.venv"
 
 image = (
     modal.Image.debian_slim(python_version="3.13")
-    .apt_install("nodejs", "npm", "git")
-    .run_commands("npm install -g pnpm")
+    .apt_install("git", "curl", "ca-certificates")
+    # debian's apt ships Node 18, but current pnpm needs Node >=22 and the repo
+    # builds on Node 20 + pnpm 9 (see .github/workflows/release.yml). Install
+    # Node 20 from NodeSource and pin pnpm 9 to match the committed lockfile.
+    .run_commands(
+        "curl -fsSL https://deb.nodesource.com/setup_20.x | bash -",
+        "apt-get install -y nodejs",
+        "npm install -g pnpm@9",
+    )
     .pip_install("uv")
     .add_local_dir(ASIANF_LOCAL, REMOTE_ROOT, copy=True, ignore=[
         "**/node_modules", "**/.venv", "**/__pycache__", "**/*.db", "**/dist",
@@ -50,19 +57,31 @@ app = modal.App("hexgate-demo")
 MARIMO_PORT = 2718
 API_PORT = 8000
 
+# Holds the dashboard forward tunnel so it survives the function returning
+# (entered, never exited — lives for the container's life).
+_dash_tunnel = None
+
 
 @app.function(
     image=image,
+    # Two heavy Python processes run per container — the API (imports the
+    # platform + hexgate) and the marimo kernel (imports hexgate for the agent
+    # + in-kernel serve loop). The langgraph/litellm/google-adk import alone is
+    # ~1-2 GiB each, so an under-provisioned container OOM-kills on startup and
+    # never goes ready ("cold-starting forever"). Give it real headroom; dial
+    # down later from the dashboard memory metric once we know true usage.
+    cpu=2,
+    memory=8192,                # 8 GiB
     timeout=60 * 60,            # max session length
     scaledown_window=600,       # die 10 min after the last request → world evaporates
     max_containers=50,          # cap concurrent live sessions (cost guardrail)
     # No LLM secret needed: the visitor brings their own OpenAI key (entered in
     # the notebook), so no provider key ever lives in the image or the platform.
 )
-@modal.concurrent(max_inputs=1)  # one visitor per container — isolation
-@modal.web_server(MARIMO_PORT, startup_timeout=180)
+@modal.web_server(MARIMO_PORT, startup_timeout=300)
 def demo():
     import os
+    import subprocess
     import sys
 
     os.chdir(REMOTE_ROOT)
@@ -72,9 +91,18 @@ def demo():
 
     import boot
 
-    # Open a public tunnel to the dashboard port, hand its URL to boot (which
-    # forwards it to the notebook), then start everything. The tunnel stays
-    # open for the life of the container because we never leave the `with`.
-    with modal.forward(API_PORT) as dash_tunnel:
-        print(f"[modal] dashboard tunnel: {dash_tunnel.url}", flush=True)
-        boot.run(dash_url=dash_tunnel.url)
+    # @modal.web_server contract: the function should LAUNCH the server and
+    # RETURN — Modal then polls the port and flips the container to "live". A
+    # blocking function (foreground server OR a block-loop) leaves it stuck
+    # "cold-starting" even though the port answers (confirmed: curl :2718 → 200).
+    #
+    # So: open the dashboard tunnel and keep it alive past return by stashing it
+    # in a module global (never call __exit__); bring up the API + mint the key;
+    # spawn marimo in the BACKGROUND; then return so Modal can mark us ready.
+    global _dash_tunnel
+    _dash_tunnel = modal.forward(API_PORT)
+    dash = _dash_tunnel.__enter__()
+    print(f"[modal] dashboard tunnel: {dash.url}", flush=True)
+    env = boot.start_services(dash_url=dash.url)
+    subprocess.Popen(boot.marimo_argv(), cwd=str(boot.ASIANF), env=env)
+    print("[modal] marimo spawned; returning so web_server can go ready", flush=True)
