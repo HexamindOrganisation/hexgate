@@ -6,9 +6,9 @@
  * zustand active-org store) initialise.
  */
 
-import { afterEach, beforeEach } from 'vitest'
-import { cleanup } from '@testing-library/react'
-import '@testing-library/jest-dom/vitest'
+import { afterEach, beforeEach } from "vitest";
+import { cleanup } from "@testing-library/react";
+import "@testing-library/jest-dom/vitest";
 
 // ---------------------------------------------------------------------------
 // 1. localStorage shim
@@ -22,42 +22,42 @@ import '@testing-library/jest-dom/vitest'
 // ---------------------------------------------------------------------------
 
 function makeMemoryStorage(): Storage {
-  const store = new Map<string, string>()
+  const store = new Map<string, string>();
   return {
     get length() {
-      return store.size
+      return store.size;
     },
     clear() {
-      store.clear()
+      store.clear();
     },
     getItem(key) {
-      return store.get(key) ?? null
+      return store.get(key) ?? null;
     },
     setItem(key, value) {
-      store.set(key, String(value))
+      store.set(key, String(value));
     },
     removeItem(key) {
-      store.delete(key)
+      store.delete(key);
     },
     key(index) {
-      return Array.from(store.keys())[index] ?? null
+      return Array.from(store.keys())[index] ?? null;
     },
-  }
+  };
 }
 
-Object.defineProperty(window, 'localStorage', {
+Object.defineProperty(window, "localStorage", {
   configurable: true,
   writable: true,
   value: makeMemoryStorage(),
-})
+});
 
 // ---------------------------------------------------------------------------
 // 2. jsdom doesn't implement matchMedia — Radix UI's hooks call it.
 //    Stub the shape Radix expects so dropdown/dialog mounts don't crash.
 // ---------------------------------------------------------------------------
 
-if (typeof window.matchMedia === 'undefined') {
-  Object.defineProperty(window, 'matchMedia', {
+if (typeof window.matchMedia === "undefined") {
+  Object.defineProperty(window, "matchMedia", {
     writable: true,
     value: (query: string) => ({
       matches: false,
@@ -69,7 +69,7 @@ if (typeof window.matchMedia === 'undefined') {
       removeEventListener: () => undefined,
       dispatchEvent: () => false,
     }),
-  })
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -78,10 +78,10 @@ if (typeof window.matchMedia === 'undefined') {
 //    that open dropdowns (e.g. the Audit filter bar) from crashing.
 // ---------------------------------------------------------------------------
 
-Element.prototype.scrollIntoView ??= () => undefined
-Element.prototype.hasPointerCapture ??= () => false
-Element.prototype.setPointerCapture ??= () => undefined
-Element.prototype.releasePointerCapture ??= () => undefined
+Element.prototype.scrollIntoView ??= () => undefined;
+Element.prototype.hasPointerCapture ??= () => false;
+Element.prototype.setPointerCapture ??= () => undefined;
+Element.prototype.releasePointerCapture ??= () => undefined;
 
 // ---------------------------------------------------------------------------
 // 4. Per-test housekeeping
@@ -91,11 +91,11 @@ beforeEach(() => {
   // Reset the storage backing between tests so persisted state from
   // test A (e.g., an activeOrgId set during an assertion) doesn't
   // leak into test B's fresh component tree.
-  window.localStorage.clear()
-})
+  window.localStorage.clear();
+});
 
 afterEach(() => {
   // @testing-library/react needs explicit cleanup with vitest — Jest
   // auto-cleans, vitest doesn't.
-  cleanup()
-})
+  cleanup();
+});

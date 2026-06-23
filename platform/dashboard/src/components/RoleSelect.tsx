@@ -4,19 +4,19 @@ import {
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from '@/components/ui/select'
-import { ROLES, type Role } from '@/lib/orgs'
+} from "@/components/ui/select";
+import { ROLES, type Role } from "@/lib/orgs";
 
 interface RoleSelectProps {
-  value: Role
+  value: Role;
   /** Called with the new role string. The consumer is responsible
    * for the mutation + toast / error handling — this component
    * stays display-only. */
-  onChange: (role: Role) => void
+  onChange: (role: Role) => void;
   /** Greys out the trigger + makes it un-clickable. Used while the
    * underlying mutation is in flight, or to render in static mode
    * for plain members who can see roles but not change them. */
-  disabled?: boolean
+  disabled?: boolean;
 }
 
 /**
@@ -49,5 +49,5 @@ export function RoleSelect({ value, onChange, disabled }: RoleSelectProps) {
         ))}
       </SelectContent>
     </Select>
-  )
+  );
 }

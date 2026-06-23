@@ -12,38 +12,38 @@
  * definitions (Role, InvitationRead/Preview) in one place.
  */
 
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { ApiError } from './api'
-import { USER_QUERY_KEY } from './auth'
-import type { MemberRead } from './members'
-import type { Role } from './orgs'
+import { ApiError } from "./api";
+import { USER_QUERY_KEY } from "./auth";
+import type { MemberRead } from "./members";
+import type { Role } from "./orgs";
 
 /** Mirror of platform/api/schemas.py:InvitationRead. ``id`` is exposed
  * so the dashboard's Cancel button has a row to address — the strict
  * email-match guard on accept is what stops the id from being an
  * impersonation vector. */
 export interface InvitationRead {
-  id: string
-  email: string
-  role: Role
-  invited_by_email: string
-  expires_at: string
-  created_at: string
+  id: string;
+  email: string;
+  role: Role;
+  invited_by_email: string;
+  expires_at: string;
+  created_at: string;
 }
 
 function invitesKey(orgId: string | null) {
-  return ['org-invitations', orgId] as const
+  return ["org-invitations", orgId] as const;
 }
 
 async function fetchInvitations(orgId: string): Promise<InvitationRead[]> {
   const res = await fetch(`/v1/orgs/${orgId}/invites`, {
-    credentials: 'include',
-  })
+    credentials: "include",
+  });
   if (!res.ok) {
-    throw new ApiError(res.status, null, `${res.status} ${res.statusText}`)
+    throw new ApiError(res.status, null, `${res.status} ${res.statusText}`);
   }
-  return (await res.json()) as InvitationRead[]
+  return (await res.json()) as InvitationRead[];
 }
 
 /** Pending invitations for an org — admin/owner only on the backend.
@@ -57,86 +57,84 @@ export function useInvitations(orgId: string | null) {
     // Slightly fresher than members — admin churn happens on a faster
     // cadence than membership changes during demos.
     staleTime: 15_000,
-  })
+  });
 }
 
 interface CreateInvitationInput {
-  orgId: string
-  email: string
-  role: Role
+  orgId: string;
+  email: string;
+  role: Role;
 }
 
 async function createInvitationRequest(
   input: CreateInvitationInput,
 ): Promise<InvitationRead> {
   const res = await fetch(`/v1/orgs/${input.orgId}/invites`, {
-    method: 'POST',
-    credentials: 'include',
-    headers: { 'Content-Type': 'application/json' },
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ email: input.email, role: input.role }),
-  })
+  });
   if (!res.ok) {
-    let detail: unknown
+    let detail: unknown;
     try {
-      detail = await res.json()
+      detail = await res.json();
     } catch {
-      detail = null
+      detail = null;
     }
-    throw new ApiError(res.status, detail, `${res.status} ${res.statusText}`)
+    throw new ApiError(res.status, detail, `${res.status} ${res.statusText}`);
   }
-  return (await res.json()) as InvitationRead
+  return (await res.json()) as InvitationRead;
 }
 
 export function useCreateInvitation() {
-  const qc = useQueryClient()
+  const qc = useQueryClient();
   return useMutation({
     mutationFn: createInvitationRequest,
     onSuccess: (_invite, vars) => {
       // Refresh the pending list for the org we just invited into.
-      qc.invalidateQueries({ queryKey: invitesKey(vars.orgId) })
+      qc.invalidateQueries({ queryKey: invitesKey(vars.orgId) });
     },
-  })
+  });
 }
 
 interface RevokeInvitationInput {
-  invitationId: string
+  invitationId: string;
   /** The org id is only used to invalidate the right cache entry — the
    * backend's DELETE /v1/invites/{id} doesn't need it in the URL. */
-  orgId: string
+  orgId: string;
 }
 
 async function revokeInvitationRequest(
   input: RevokeInvitationInput,
 ): Promise<void> {
   const res = await fetch(`/v1/invites/${input.invitationId}`, {
-    method: 'DELETE',
-    credentials: 'include',
-  })
-  if (res.status === 204) return
-  let detail: unknown
+    method: "DELETE",
+    credentials: "include",
+  });
+  if (res.status === 204) return;
+  let detail: unknown;
   try {
-    detail = await res.json()
+    detail = await res.json();
   } catch {
-    detail = null
+    detail = null;
   }
-  throw new ApiError(res.status, detail, `${res.status} ${res.statusText}`)
+  throw new ApiError(res.status, detail, `${res.status} ${res.statusText}`);
 }
 
 export function useRevokeInvitation() {
-  const qc = useQueryClient()
+  const qc = useQueryClient();
   return useMutation({
     mutationFn: revokeInvitationRequest,
     onSuccess: (_, vars) => {
-      qc.invalidateQueries({ queryKey: invitesKey(vars.orgId) })
+      qc.invalidateQueries({ queryKey: invitesKey(vars.orgId) });
     },
-  })
+  });
 }
-
 
 // ---------------------------------------------------------------------------
 // Invitee-facing: preview + accept
 // ---------------------------------------------------------------------------
-
 
 /** Mirror of platform/api/schemas.py:InvitationPreview. Returned by the
  * PUBLIC ``GET /v1/invites/{id}`` route so the accept landing page can
@@ -145,13 +143,13 @@ export function useRevokeInvitation() {
  * the accept POST is what keeps a leaked id from being an
  * impersonation vector. */
 export interface InvitationPreview {
-  email: string
-  role: Role
-  invited_by_email: string
-  org_id: string
-  org_name: string
-  org_slug: string
-  expires_at: string
+  email: string;
+  role: Role;
+  invited_by_email: string;
+  org_id: string;
+  org_name: string;
+  org_slug: string;
+  expires_at: string;
 }
 
 async function fetchInvitationPreview(
@@ -162,18 +160,18 @@ async function fetchInvitationPreview(
   // any browser "third-party cookie" path differently across this page
   // vs. the rest of the dashboard.
   const res = await fetch(`/v1/invites/${invitationId}`, {
-    credentials: 'include',
-  })
+    credentials: "include",
+  });
   if (!res.ok) {
-    let detail: unknown
+    let detail: unknown;
     try {
-      detail = await res.json()
+      detail = await res.json();
     } catch {
-      detail = null
+      detail = null;
     }
-    throw new ApiError(res.status, detail, `${res.status} ${res.statusText}`)
+    throw new ApiError(res.status, detail, `${res.status} ${res.statusText}`);
   }
-  return (await res.json()) as InvitationPreview
+  return (await res.json()) as InvitationPreview;
 }
 
 /** Fetch the public preview for an invitation id. Doesn't retry —
@@ -182,7 +180,7 @@ async function fetchInvitationPreview(
  * cards off ``query.error`` (an ApiError with the status code). */
 export function useInvitationPreview(invitationId: string) {
   return useQuery<InvitationPreview, ApiError>({
-    queryKey: ['invitation-preview', invitationId],
+    queryKey: ["invitation-preview", invitationId],
     queryFn: () => fetchInvitationPreview(invitationId),
     retry: false,
     // The preview is effectively immutable for the duration of an
@@ -190,26 +188,26 @@ export function useInvitationPreview(invitationId: string) {
     refetchOnWindowFocus: false,
     staleTime: 60_000,
     enabled: !!invitationId,
-  })
+  });
 }
 
 async function acceptInvitationRequest(
   invitationId: string,
 ): Promise<MemberRead> {
   const res = await fetch(`/v1/invites/${invitationId}/accept`, {
-    method: 'POST',
-    credentials: 'include',
-  })
+    method: "POST",
+    credentials: "include",
+  });
   if (!res.ok) {
-    let detail: unknown
+    let detail: unknown;
     try {
-      detail = await res.json()
+      detail = await res.json();
     } catch {
-      detail = null
+      detail = null;
     }
-    throw new ApiError(res.status, detail, `${res.status} ${res.statusText}`)
+    throw new ApiError(res.status, detail, `${res.status} ${res.statusText}`);
   }
-  return (await res.json()) as MemberRead
+  return (await res.json()) as MemberRead;
 }
 
 /** Consume an invitation. Cookie-authed; the backend will 403 if the
@@ -218,15 +216,15 @@ async function acceptInvitationRequest(
  * landing page can navigate straight to the joined org without
  * waiting on a ``/v1/orgs`` round-trip. */
 export function useAcceptInvitation() {
-  const qc = useQueryClient()
+  const qc = useQueryClient();
   return useMutation<MemberRead, ApiError, string>({
     mutationFn: acceptInvitationRequest,
     onSuccess: () => {
       // The user is now a member of a new org — the switcher's list
       // needs to refresh, and re-reading /users/me is cheap insurance
       // in case any verified-email side-effects fired.
-      qc.invalidateQueries({ queryKey: ['orgs'] })
-      qc.invalidateQueries({ queryKey: USER_QUERY_KEY })
+      qc.invalidateQueries({ queryKey: ["orgs"] });
+      qc.invalidateQueries({ queryKey: USER_QUERY_KEY });
     },
-  })
+  });
 }
