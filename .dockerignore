@@ -1,0 +1,43 @@
+# Build context for platform/api/Dockerfile is the repo root. Keep it lean
+# and free of secrets/state. Anything the Dockerfile COPYs (root
+# pyproject.toml / README.md / LICENSE, hexgate/, platform/api/ source) is
+# preserved; everything below is excluded.
+
+# Virtualenvs — never copy a host venv over the container's (wrong arch).
+**/.venv
+
+# Python caches + build artifacts
+**/__pycache__
+**/*.py[cod]
+**/*.egg-info
+**/.pytest_cache
+**/.ruff_cache
+build/
+dist/
+
+# Local databases + keystore — state/secrets, must not be baked into the image
+**/*.db*
+platform/api/data/
+
+# Env files — config is provided at runtime, not via the image
+**/.env
+
+# VCS / CI / tooling
+.git
+.github
+.gitignore
+.DS_Store
+.vscode
+.idea
+
+# Not part of the API image
+**/node_modules
+platform/dashboard/
+platform/clickhouse/
+docs/
+notebooks/
+_design/
+examples/
+assets/
+tests/
+platform/api/tests/
