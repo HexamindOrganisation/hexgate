@@ -2045,3 +2045,13 @@ def _maybe_mount_oauth_routers() -> None:
 
 
 app.include_router(v1)
+
+
+# Demo bundle (single-tenant throwaway container): serve the built dashboard
+# same-origin + auto-login. Registered LAST so the SPA catch-all never shadows
+# /v1. Off by default — only wired when HEXGATE_DEMO is truthy, so normal and
+# production runs are untouched.
+if os.environ.get("HEXGATE_DEMO", "").strip().lower() in ("1", "true", "yes", "on"):
+    from demo import enable_demo
+
+    enable_demo(app)

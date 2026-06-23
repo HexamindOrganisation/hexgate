@@ -1,0 +1,106 @@
+---
+title: "Live demo"
+description: "A disposable, browser-based hexgate sandbox — edit an agent, chat with it, watch policy decisions stream live."
+---
+
+The live demo runs the **whole platform in one disposable container per
+visitor**: a notebook to define an agent, plus the dashboard Playground to chat
+with it and watch policy decisions stream. Everything runs on a fresh database
+that vanishes when the session ends — no shared state, no cleanup.
+
+<Note>
+**Bring your own key (BYOK).** The visitor pastes their own OpenAI key into the
+notebook. It's their key, in their own throwaway container (one visitor per
+container, destroyed after idle) — so no provider key is ever exposed, and
+there's no LLM gateway to operate.
+</Note>
+
+## What a visitor does
+
+<Steps>
+  <Step title="Open the notebook">
+    The landing page is a [marimo](https://marimo.io) notebook. Paste your
+    OpenAI API key (stays in the container, never logged).
+  </Step>
+  <Step title="Edit the agent, Apply & reload">
+    Define your tools (`@tool`) and the agent (`create_agent(...)`) as real
+    Python in the cells, then click **Apply & reload**. The notebook runs the
+    serve loop in-kernel bound to that live `agent` object; the change flows
+    into the Playground automatically.
+  </Step>
+  <Step title="Open the Playground and chat">
+    Click **Open the live playground** — it opens the dashboard in a new tab,
+    already signed in. Send a message and watch reasoning, tool calls, and
+    **policy decisions** (allow / deny / approval) stream live. Edit the policy
+    in the **Policies** tab and the next message picks it up — no restart.
+  </Step>
+</Steps>
+
+## How it fits together
+
+The demo rides hexgate's normal relay design — the serve loop dials *out* to
+the platform, so a hosted container just replaces "the developer's laptop":
+
+```
+ONE CONTAINER (per visitor — destroyed after idle)
+  fresh SQLite
+   ├─ Platform API  — serves the dashboard same-origin + auto-login
+   └─ marimo notebook — the landing UI; runs the serve loop in-kernel
+        ├─ paste your OpenAI key (BYOK)
+        ├─ define tools + agent in cells + Apply → (re)starts in-kernel serve
+        │     serve loop (bound to your live agent) → dials the platform's /v1/serve
+        │     └─ LLM calls use your key → OpenAI
+        └─ Open playground → signed-in dashboard /playground
+```
+
+Nothing here is demo-only plumbing inside the platform: it's the same
+[control plane](/platform/control-plane), [dashboard](/platform/dashboard), and
+[`hexgate serve`](/cli/serve) logic you'd run locally — just bundled into one
+container with auto-seeding and auto-login.
+
+## Deploy your own
+
+The demo bundle lives in [`deploy/`](https://github.com/HexamindOrganisation/hexgate/tree/main/deploy)
+(orchestrator, notebook, and a Modal wrapper). It runs on
+[Modal](https://modal.com) — one isolated container per visitor, scaled to zero
+between sessions.
+
+<Steps>
+  <Step title="Try it locally">
+    Run from `asianf/`:
+
+    ```bash
+    make demo-notebook-build   # one-time: deps + marimo + dashboard build
+    make demo-notebook         # launch the whole world (one process)
+    ```
+
+    Open `http://localhost:2718`, paste your key, **Apply & reload**, then open
+    the Playground.
+
+    <Note>
+    `make demo-notebook` sets `HEXGATE_COOKIE_SECURE=0` for local HTTP — the
+    browser drops a `Secure` cookie over plain HTTP. In the container it's `1`
+    (the tunnel is HTTPS).
+    </Note>
+  </Step>
+  <Step title="Deploy on Modal">
+    First time: `uv pip install modal && modal token new`. Then:
+
+    ```bash
+    make demo-modal            # → modal deploy deploy/modal_app.py
+    ```
+
+    Each session is one container: marimo is the entry URL; the dashboard is
+    exposed via a runtime tunnel; the container is destroyed ~10 min after the
+    last request. See [`deploy/README.md`](https://github.com/HexamindOrganisation/hexgate/tree/main/deploy)
+    for the knobs (ports, idle window, concurrency cap).
+  </Step>
+</Steps>
+
+<Note>
+**No-BYOK public demo (optional).** If you'd rather visitors run the demo
+without pasting a key, `deploy/gateway/` is a small LLM gateway that holds your
+real key *outside* the container and issues each session a powerless,
+short-TTL, request-capped token. Only worth the operational cost if
+friction-free public access matters more than simplicity.
+</Note>

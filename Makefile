@@ -230,6 +230,30 @@ demo-platform: ## Print 3-terminal instructions for the full platform demo
 	@echo "      make dashboard-install"
 	@echo ""
 
+# -------- Bundled notebook demo (one process locally / per-container on Modal) --------
+#
+# Unlike `demo-platform` (3 terminals, manual login + token), this bundles the
+# whole thing into one process: the API serves the built dashboard same-origin,
+# auto-seeds + auto-logs-in, and a marimo notebook owns `hexgate serve`. The
+# visitor brings their own OpenAI key (BYOK). This is exactly what runs in each
+# Modal container. See deploy/README.md.
+
+.PHONY: demo-notebook-build
+demo-notebook-build: platform-api-install dashboard-install ## One-time setup for `make demo-notebook` (deps + marimo + dashboard build)
+	uv pip install --python platform/api/.venv marimo
+	cd platform/dashboard && pnpm build
+
+.PHONY: demo-notebook
+demo-notebook: ## Run the bundled BYOK demo locally (one process). Open http://localhost:2718
+	PATH="$(CURDIR)/platform/api/.venv/bin:$$PATH" \
+	  HEXGATE_DEMO=1 HEXGATE_COOKIE_SECURE=0 \
+	  python deploy/boot.py
+
+.PHONY: demo-modal
+demo-modal: ## Deploy the bundled demo to Modal (one isolated container per visitor)
+	@command -v modal >/dev/null || { echo "modal not installed — run: uv pip install modal && modal token new"; exit 1; }
+	modal deploy deploy/modal_app.py
+
 # -------- Package --------
 
 .PHONY: build
