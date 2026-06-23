@@ -17,6 +17,7 @@ import {
 
 import { Button } from '@/components/ui/button'
 import { OrgProjectSwitcher } from '@/components/OrgProjectSwitcher'
+import { PreviewBanner } from '@/components/PreviewBanner'
 import { VerifyEmailBanner } from '@/components/VerifyEmailBanner'
 import { useActive } from '@/lib/active'
 import { useLogout, useUser } from '@/lib/auth'
@@ -200,6 +201,7 @@ export function AppShell() {
           <UserMenu />
         </header>
 
+        <PreviewBanner />
         <VerifyEmailBanner />
 
         <main className="flex-1 overflow-y-auto px-8 py-6 scrollbar-thin">
