@@ -129,17 +129,27 @@ def _(TOOLS):
 @app.cell
 def _(agent, api_key, mo, serve_manager, start):
     # Fires on button click. The key is already in the env (cell above), so this
-    # just (re)starts the serve loop bound to the live `agent` object — edit/
-    # re-run the agent cell and click again to live-reload.
+    # just (re)starts the serve loop bound to the live `agent` object, then waits
+    # a moment and reports the REAL status — so you see whether it actually
+    # connected (vs an error), instead of an optimistic "running".
+    import time
+
     if start.value:
         if not api_key.value:
             out = mo.md("⚠️ **Type your OpenAI key in the box above**, then click Apply.")
         else:
             serve_manager.apply(agent)
-            out = mo.md(
-                f"✅ **Running** with key `…{api_key.value[-4:]}`. "
-                "Open the playground below to chat."
-            )
+            time.sleep(3)  # let it build the runtime, auto-register + dial /v1/serve
+            st = serve_manager.status()
+            if st == "running":
+                out = mo.md(
+                    f"✅ **Agent connected** (key `…{api_key.value[-4:]}`). "
+                    "Open the playground below — it should show the agent online."
+                )
+            elif st.startswith("error"):
+                out = mo.md(f"❌ **Agent failed to start:** `{st}`")
+            else:
+                out = mo.md(f"⏳ Status: **{st}** — give it a few seconds and re-run this cell.")
     else:
         out = mo.md(
             f"Agent serve status: **{serve_manager.status()}** — "
