@@ -92,7 +92,8 @@ async def main() -> bool:
     agent, _ = create_agent(
         model="gpt-4o-mini", tools=[], system_prompt="be brief", name="demo_agent"
     )
-    serve_manager.apply(agent, "sk-mock-byok")  # in-kernel serve, live object
+    os.environ["OPENAI_API_KEY"] = "sk-mock-byok"  # set in env, as the notebook does
+    serve_manager.apply(agent)  # in-kernel serve, live object
     await asyncio.sleep(2)
     print(f"✅ serve started in-kernel: {serve_manager.status()}")
 

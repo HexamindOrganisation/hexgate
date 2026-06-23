@@ -49,13 +49,22 @@ def _(mo):
 
 @app.cell
 def _(mo):
-    # 🔑 Type your key in the box, then click the button. The box value is live
-    # as you type (no Enter needed); the button is what applies it. The value
-    # lives only in the running kernel — never written to this file.
+    # 🔑 Type your key here (value is live as you type — no Enter needed). It
+    # lives only in the running kernel, never written to this file.
     api_key = mo.ui.text(kind="password", placeholder="sk-...", full_width=True)
     start = mo.ui.run_button(label="▶ Apply & start agent")
     mo.vstack([mo.md("**OpenAI API key**"), api_key, start])
     return api_key, start
+
+
+@app.cell
+def _(api_key):
+    # Set the key straight into the env, right here — the agent's OpenAI client
+    # reads OPENAI_API_KEY from the process env at call time.
+    import os
+
+    os.environ["OPENAI_API_KEY"] = api_key.value or ""
+    return
 
 
 @app.cell
@@ -119,18 +128,14 @@ def _(TOOLS):
 
 @app.cell
 def _(agent, api_key, mo, serve_manager, start):
-    # Fires on button click. Reads the live `api_key.value`, sets it in the
-    # process env (so the agent's OpenAI client picks it up) AND hands it to
-    # serve_manager. Uses the live `agent` object — edit/re-run that cell and
-    # click again to live-reload.
-    import os
-
+    # Fires on button click. The key is already in the env (cell above), so this
+    # just (re)starts the serve loop bound to the live `agent` object — edit/
+    # re-run the agent cell and click again to live-reload.
     if start.value:
         if not api_key.value:
             out = mo.md("⚠️ **Type your OpenAI key in the box above**, then click Apply.")
         else:
-            os.environ["OPENAI_API_KEY"] = api_key.value
-            serve_manager.apply(agent, api_key.value)
+            serve_manager.apply(agent)
             out = mo.md(
                 f"✅ **Running** with key `…{api_key.value[-4:]}`. "
                 "Open the playground below to chat."

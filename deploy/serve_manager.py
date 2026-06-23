@@ -99,16 +99,16 @@ def stop() -> None:
     _thread = _loop = _task = None
 
 
-def apply(agent_obj, openai_key: str) -> None:
+def apply(agent_obj) -> None:
     """(Re)start the in-kernel serve loop bound to ``agent_obj``.
 
-    The dashboard picks up the new agent on its next ``hello`` frame — no
-    dashboard reload. Requires a non-empty key; the notebook gates on it.
+    Reads ``OPENAI_API_KEY`` straight from the process env — the notebook sets
+    it from the key cell (BYOK), and the agent's OpenAI client reads it at call
+    time. The dashboard picks up the new agent on its next ``hello`` frame.
     """
     global _thread, _status
-    if not openai_key:
-        raise ValueError("an OpenAI API key is required to start the agent")
-    os.environ["OPENAI_API_KEY"] = openai_key  # the visitor's own key (BYOK)
+    if not os.environ.get("OPENAI_API_KEY"):
+        raise ValueError("set OPENAI_API_KEY first (enter your key in the notebook)")
     _ensure_platform_env()
     stop()
     _status = "starting"
