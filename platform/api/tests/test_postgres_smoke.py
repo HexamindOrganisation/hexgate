@@ -63,9 +63,7 @@ async def _delete_smoke_org(session) -> None:
 
     existing = (
         await session.exec(
-            select(models.Organization).where(
-                models.Organization.slug == "pg-smoke"
-            )
+            select(models.Organization).where(models.Organization.slug == "pg-smoke")
         )
     ).first()
     if existing is not None:
