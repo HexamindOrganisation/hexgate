@@ -1,9 +1,7 @@
 """Async SQLAlchemy engine + session factory.
 
-The platform runs on async I/O end-to-end — every route handler is
-``async def`` and every session call is awaited. ``DATABASE_URL`` selects
-Postgres (asyncpg) in deployment; unset falls back to a local SQLite file
-so dev and tests stay zero-setup.
+``DATABASE_URL`` selects Postgres (asyncpg) in deployment; unset falls back
+to a local SQLite file so dev and tests stay zero-setup.
 """
 
 import os
@@ -14,9 +12,8 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlmodel import SQLModel
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-# Load .env here, not just in main: the engine is built at import time (below),
-# which runs before main's own load_dotenv(), so DATABASE_URL must be in the
-# environment now. Idempotent and non-overriding, so real env vars still win.
+# The engine is built at import, before main's load_dotenv(), so load .env
+# here too. Non-overriding, so real env vars still win.
 load_dotenv()
 
 DB_PATH = Path(__file__).parent / "hexgate.db"
@@ -24,12 +21,10 @@ _DEFAULT_URL = f"sqlite+aiosqlite:///{DB_PATH}"
 
 
 def _database_url() -> str:
-    """Resolve the async DB URL.
+    """Resolve the async DB URL: ``DATABASE_URL`` or the SQLite fallback.
 
-    ``DATABASE_URL`` (read as a real env var, not via ``.env``) drives it in
-    deployment; unset falls back to the local SQLite file. Bare
-    ``postgres(ql)://`` URLs that managed providers hand out are rewritten to
-    the ``asyncpg`` driver the async engine requires.
+    Bare ``postgres(ql)://`` URLs are rewritten to the ``asyncpg`` driver
+    the async engine requires.
     """
     url = os.environ.get("DATABASE_URL", "").strip() or _DEFAULT_URL
     for prefix in ("postgresql://", "postgres://"):
@@ -39,8 +34,7 @@ def _database_url() -> str:
 
 
 # pool_pre_ping tolerates connections dropped by a managed Postgres; harmless
-# on SQLite. The async engine gives each task its own pooled connection, so
-# SQLite's check_same_thread isn't a concern.
+# on SQLite.
 engine = create_async_engine(_database_url(), echo=False, pool_pre_ping=True)
 
 # Session factory — used by ``get_session()`` and one-off scripts (seeds,

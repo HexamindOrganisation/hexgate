@@ -1,16 +1,9 @@
 """Opt-in Postgres smoke test — the only coverage of the asyncpg path.
 
-The rest of the suite builds its own in-memory SQLite engines and overrides
-``get_session``, so it never exercises Postgres. This test points the real
-engine at a live PG (via ``DATABASE_URL``), runs ``init_db`` against it, and
-round-trips a row — proving the schema (FastAPI-Users tables, JSON +
-LargeBinary columns, string-UUID PKs) builds and works on Postgres.
-
-Skipped unless ``DATABASE_URL`` names a Postgres DSN — set by the
-``platform-api-postgres`` CI job, or locally via ``make postgres-up``:
-
-    DATABASE_URL=postgresql+asyncpg://hexgate:hexgate-dev-password@localhost:5433/hexgate \\
-        uv run pytest tests/test_postgres_smoke.py -v
+The rest of the suite runs on SQLite, so this is the only test that points
+the real engine at a live PG and round-trips a row. Skipped unless
+``DATABASE_URL`` names a Postgres DSN (set by the ``platform-api-postgres``
+CI job, or locally via ``make postgres-up``).
 """
 
 from __future__ import annotations
@@ -27,36 +20,54 @@ pytestmark = pytest.mark.skipif(
 
 
 async def test_schema_builds_and_round_trips_on_postgres() -> None:
-    # Imported lazily so the module collects (and skips) even if importing the
-    # app eagerly built a Postgres engine that couldn't connect.
+    # Lazy import so the module still collects (and skips) if a bad
+    # DATABASE_URL made the app's engine fail to build.
     import models
     from db import async_session_factory, engine, init_db
 
-    # The engine must actually be talking asyncpg, not the SQLite fallback —
-    # guards against a misconfigured DATABASE_URL silently passing the test.
+    # Guard against a misconfigured DATABASE_URL silently using SQLite.
     assert engine.url.drivername == "postgresql+asyncpg"
 
-    await init_db()  # create_all against Postgres — the real schema port
+    await init_db()  # create_all against Postgres
 
     async with async_session_factory() as session:
+        # Self-heal a row leaked by a prior run that failed before cleanup.
+        await _delete_smoke_org(session)
+
         org = models.Organization(slug="pg-smoke", name="PG Smoke")
         session.add(org)
         await session.commit()
 
-        fetched = await session.get(models.Organization, org.id)
-        assert fetched is not None and fetched.slug == "pg-smoke"
+        try:
+            fetched = await session.get(models.Organization, org.id)
+            assert fetched is not None and fetched.slug == "pg-smoke"
 
-        # exec() path too — the dialect-sensitive query layer, not just get().
-        by_slug = (
-            await session.exec(
-                select(models.Organization).where(
-                    models.Organization.slug == "pg-smoke"
+            # exec() path too — the dialect-sensitive query layer.
+            by_slug = (
+                await session.exec(
+                    select(models.Organization).where(
+                        models.Organization.slug == "pg-smoke"
+                    )
                 )
-            )
-        ).first()
-        assert by_slug is not None and by_slug.id == org.id
+            ).first()
+            assert by_slug is not None and by_slug.id == org.id
+        finally:
+            # Clean up even on assertion failure, so reruns against a
+            # persistent volume don't collide on the unique slug.
+            await _delete_smoke_org(session)
 
-        # Clean up so reruns against a persistent volume don't collide on the
-        # unique slug.
-        await session.delete(fetched)
+
+async def _delete_smoke_org(session) -> None:
+    """Delete the pg-smoke org if present."""
+    import models
+
+    existing = (
+        await session.exec(
+            select(models.Organization).where(
+                models.Organization.slug == "pg-smoke"
+            )
+        )
+    ).first()
+    if existing is not None:
+        await session.delete(existing)
         await session.commit()

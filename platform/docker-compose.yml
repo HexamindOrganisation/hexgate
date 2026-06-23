@@ -6,8 +6,8 @@ services:
     image: postgres:16
     container_name: hexgate-postgres
     ports:
-      # Offset from 5432 to coexist with a local Postgres; loopback-only
-      # since the dev credentials are committed.
+      # Loopback-only, offset from 5432 (committed creds; coexists with a
+      # local Postgres).
       - "127.0.0.1:5433:5432"
     environment:
       # LOCAL DEV ONLY — never reuse these credentials anywhere deployed.

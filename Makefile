@@ -126,11 +126,9 @@ clickhouse-reset: ## Wipe the data volume and re-run init scripts
 
 # -------- Platform infra (Postgres control-plane DB) --------
 #
-# The control-plane DB. Unset DATABASE_URL → the API uses a local SQLite
-# file; point it at this service to run on Postgres (`make platform-api-pg`).
-# Service lives in platform/docker-compose.yml. NOTE: `clickhouse-down` /
-# `clickhouse-reset` run `down` on the whole compose, so they also stop
-# Postgres — use the granular `postgres-*` targets below to avoid that.
+# Control-plane DB (service in platform/docker-compose.yml). NOTE:
+# `clickhouse-down`/`clickhouse-reset` run `down` on the whole compose and so
+# also stop Postgres — use the `postgres-*` targets below to avoid that.
 
 # DSN matching the postgres service (host port 5433, committed dev creds).
 POSTGRES_DSN ?= postgresql+asyncpg://hexgate:hexgate-dev-password@localhost:5433/hexgate
