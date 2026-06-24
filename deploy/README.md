@@ -1,35 +1,34 @@
 # Hexgate live-demo container
 
 One **disposable, self-contained** Hexgate world per visitor: a marimo notebook
-that shows the agent definition, and a one-click link into the live dashboard
-playground. Everything runs in a single container on a **fresh SQLite** — when
-the container scales down, the org/project/agents evaporate. **No shared
-database, nothing to garbage-collect.**
+where you define an agent and chat with it through the live dashboard playground.
+Everything runs in a single container on a **fresh SQLite** — when the container
+goes away, the org/project/agents evaporate. **No shared database, nothing to
+garbage-collect.** Runs locally (`make demo-notebook`) and per-visitor in
+**GitHub Codespaces** (see `.devcontainer/`).
 
 ```
-ONE CONTAINER (dies after idle → takes the whole world with it)
-  fresh SQLite
+ONE CONTAINER (per visitor — fresh SQLite, dies with the session)
    ├─ Platform API (:8000)  ─ serves the built dashboard same-origin + /v1/demo-login
    └─ marimo notebook (:2718) ─ the landing UI; runs the serve loop IN-KERNEL
         ├─ visitor pastes their OWN OpenAI key (BYOK) ─┐
-        ├─ define tools + agent in cells + "Apply" ────┤→ (re)starts in-kernel serve
+        ├─ define tools + agent in cells + "Start" ────┤→ (re)starts in-kernel serve
         │     serve loop (bound to the live `agent` object) → dials :8000/v1/serve
         │     └─ LLM calls use the visitor's key → OpenAI
         └─ "Open playground" → <dashboard-url>/v1/demo-login → signed-in /playground
 ```
 
-**Keys: bring-your-own (BYOK).** The visitor pastes their own OpenAI key into a
-notebook cell; it's set into the process env and used for LLM calls. It's their
-key, their spend, in their own throwaway container (one visitor per container,
-dies after idle) — so no provider key of yours is ever exposed, and there's no
-gateway to operate. The key is never logged.
+**Keys: bring-your-own (BYOK).** The visitor enters their own OpenAI key in a
+notebook cell; it's set into the process env and used for LLM calls. Their key,
+their spend, in their own throwaway container — so no provider key of yours is
+ever exposed, and there's nothing to operate. The key is never written to disk.
 
 **Live edit:** the visitor defines tools and the agent as real Python in cells —
-the kernel holds an actual `agent` object — then clicks **Apply & reload**.
-`serve_manager` runs the `hexgate serve` loop **in-kernel** bound to that exact
-object (a background thread), so what the dashboard talks to *is* the object you
-defined — no subprocess, no source-string round-trip. Edit the cells, Apply, and
-the loop restarts with the new object; the dashboard picks it up on its next
+the kernel holds an actual `agent` object — then clicks **Start**. `serve_manager`
+runs the `hexgate serve` loop **in-kernel** bound to that exact object (a
+background thread), so what the dashboard talks to *is* the object you defined —
+no subprocess, no source-string round-trip. Edit the cells, click Start again,
+and the loop restarts with the new object; the dashboard picks it up on its next
 `hello`.
 
 ## What's in here
@@ -38,16 +37,25 @@ the loop restarts with the new object; the dashboard picks it up on its next
 |------|------|
 | `boot.py` | Process orchestrator: start API → mint token (→ key file) → start marimo → block |
 | `provision.py` | Mints a `HEXGATE_KEY` for the seeded project (shares the container's SQLite + keystore) |
-| `serve_manager.py` | Runs the `hexgate serve` loop in-kernel, bound to the live `agent` object; `apply()` on Apply |
-| `demo_notebook.py` | The marimo notebook: define tools + agent in real cells, Apply&reload, playground link |
-| `modal_app.py` | Modal wrapper: image build, per-session container, tunnels marimo + dashboard |
-| `gateway/app.py` | *Optional* LLM gateway (powerless session tokens) — only if you ever want a no-BYOK public demo |
+| `serve_manager.py` | Runs the `hexgate serve` loop in-kernel, bound to the live `agent` object; `apply()` on Start |
+| `demo_notebook.py` | The marimo notebook: define tools + agent in real cells, Start, playground link |
+| `smoke_test.py` + `_mock_llm.py` | Full-path smoke test with a mock LLM (`make demo-smoke`) — no real key |
 
 Plus the API-side glue (committed in `platform/api/`):
-- `platform/api/demo.py` — serves the dashboard `dist/` same-origin + `GET /v1/demo-login`
-- `platform/api/main.py` — wires `enable_demo(app)` when `HEXGATE_DEMO=1`
+- `platform/api/demo.py` — serves the dashboard `dist/` same-origin + `GET /v1/demo-login` (auto-login)
+- `platform/api/main.py` — wires `enable_demo(app)` when `HEXGATE_DEMO=1` (off by default)
 
-## Run locally (no Modal)
+The `.devcontainer/` at the repo root makes this run per-visitor in Codespaces
+(`setup.sh` builds it, `start.sh` launches it, ports 2718/8000 are forwarded).
+
+## Run it in your browser (Codespaces)
+
+The repo ships a devcontainer, so anyone can launch the full demo in one click:
+`https://codespaces.new/HexamindOrganisation/hexgate`. Each visitor gets their
+own isolated container on their own free quota — ports are forwarded directly
+(marimo's live-edit WebSocket works), notebook on 2718, dashboard on 8000.
+
+## Run locally
 
 From `asianf/`:
 
@@ -56,65 +64,38 @@ make demo-notebook-build    # one-time: deps + marimo + dashboard build
 make demo-notebook          # launch the whole world (one process)
 ```
 
-Then open <http://localhost:2718> (notebook), paste your OpenAI key, **Apply &
-reload**, and click **Open the live playground**.
+Then open <http://localhost:2718>, define your tools/agent, enter your OpenAI
+key, click **Start**, and open the playground.
 
 `make demo-notebook` runs `deploy/boot.py` with `HEXGATE_DEMO=1` +
 `HEXGATE_COOKIE_SECURE=0` (the latter is required over local HTTP — the browser
-drops a `Secure` cookie over plain HTTP; in the container it's `1` because the
-tunnel is HTTPS). The raw form, if you're not using make:
+drops a `Secure` cookie over plain HTTP; it's `1` over HTTPS, e.g. Codespaces).
 
 ```bash
-PATH="$PWD/platform/api/.venv/bin:$PATH" \
-  HEXGATE_DEMO=1 HEXGATE_COOKIE_SECURE=0 python deploy/boot.py
+make demo-smoke             # verify the whole path with a mock LLM (no real key)
 ```
 
-## Deploy on Modal
+## ⚠️ Security
 
-First time: `uv pip install modal && modal token new`. Then, from `asianf/`:
-
-```bash
-make demo-modal            # → modal deploy deploy/modal_app.py
-# iterating? raw form for hot-reload:  modal serve deploy/modal_app.py
-```
-
-- **marimo** is the stable entry URL (`@modal.web_server(2718)`).
-- the **dashboard** is exposed at runtime via `modal.forward(8000)`; its public
-  URL is written to `/tmp/hexgate_dash_url` and rendered in the notebook.
-- `scaledown_window=600` → the container dies 10 min after the last request.
-- `@modal.concurrent(max_inputs=1)` → one visitor per container (isolation).
-- `max_containers=50` → cost guardrail on concurrent live sessions.
+`HEXGATE_DEMO=1` makes `/v1/demo-login` grant a **passwordless** session for the
+seeded admin (and serves an SPA catch-all). That's intentional for a throwaway,
+single-user container — but it would be an account-takeover hole on any
+persistent/real deployment that ran the default seed. **Only ever set
+`HEXGATE_DEMO` on an ephemeral demo container.** The API logs a loud warning at
+startup when it's on.
 
 ## Knobs (env vars)
 
 | Var | Default | Purpose |
 |-----|---------|---------|
 | `HEXGATE_DEMO` | off | Must be `1` to serve the dashboard + demo-login |
-| `HEXGATE_COOKIE_SECURE` | off (`1` in container) | `Secure` flag on the session cookie (required over HTTPS) |
+| `HEXGATE_COOKIE_SECURE` | off (`1` over HTTPS) | `Secure` flag on the session cookie |
 | `HEXGATE_API_PORT` / `HEXGATE_MARIMO_PORT` | 8000 / 2718 | Ports |
 | `HEXGATE_DASHBOARD_DIST` | `../dashboard/dist` | Override the built-SPA location |
-
-## The LLM key — BYOK (default)
-
-The visitor enters their own OpenAI key in the notebook. `serve_manager.apply()`
-sets it as `OPENAI_API_KEY` in the process env, and the agent's model client
-uses it when the in-kernel serve loop runs. Their key, their spend, isolated in
-their own container — nothing of yours is exposed and there's nothing to run or
-maintain. The notebook gates "Apply & reload" on a key being present.
-
-### Optional: a no-BYOK public demo (`gateway/app.py`)
-
-If you ever want visitors to run the demo *without* pasting a key, the included
-gateway holds your real key **outside** the container and hands each session a
-**powerless token** (short TTL, request cap, model allowlist). You'd re-add the
-boot→gateway minting + env injection (kept in git history). Only worth the
-operational cost if friction-free public access matters more than simplicity —
-for true $-budgets, point it at **LiteLLM proxy** (already a hexgate dep)
-instead. **Default demo doesn't need this.**
+| `HEXGATE_DASH_URL` | local API origin | Public dashboard URL for the notebook's "Open playground" link (Codespaces sets it) |
 
 ## Verified
 
 - `/v1/demo-login` → 303 → `/playground` + sets `hexgate_session`; SPA serves; `/v1` wins over the catch-all.
 - `provision.py` mints a signature-valid token against the API's keystore.
-- **Live edit (in-kernel serve):** `serve_manager.apply(agent, key)` runs the serve loop bound to the live `agent` object — it connects to the API, auto-registers, goes `agent_online`, and a chat message round-trips back as streamed events (full dry run against a mock LLM passes; only the real provider call is unexercised).
-- **Gateway (optional path):** mint requires the master key; session tokens are model-allowlisted + TTL'd + request-capped; unknown/expired/disallowed rejected (unit-tested, but not used by the default BYOK demo).
+- **Live edit (in-kernel serve):** `serve_manager.apply(agent)` runs the serve loop bound to the live `agent` object — it connects to the API, auto-registers, goes `agent_online`, and a chat message round-trips back as streamed events. `make demo-smoke` exercises this end-to-end against a mock LLM (passes with `LINKUP`/`TAVILY` unset).

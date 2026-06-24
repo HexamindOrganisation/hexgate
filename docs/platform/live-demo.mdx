@@ -85,11 +85,3 @@ Playground.
 `make demo-notebook` sets `HEXGATE_COOKIE_SECURE=0` for local HTTP — the browser
 drops a `Secure` cookie over plain HTTP (it's `1` over HTTPS, e.g. Codespaces).
 </Note>
-
-<Note>
-**No-BYOK public demo (optional).** If you'd rather visitors run the demo
-without pasting a key, `deploy/gateway/` is a small LLM gateway that holds your
-real key *outside* the container and issues each session a powerless,
-short-TTL, request-capped token. Only worth the operational cost if
-friction-free public access matters more than simplicity.
-</Note>

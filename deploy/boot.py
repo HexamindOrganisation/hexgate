@@ -118,8 +118,8 @@ def marimo_argv() -> list[str]:
 
 
 def run(dash_url: str | None = None) -> None:
-    """Local path: start the API, then marimo as a child, and block. (Modal
-    runs marimo in the foreground itself — see modal_app.py.)"""
+    """Start the API, then marimo as a child, and block — used by
+    `make demo-notebook` and the Codespaces launcher (.devcontainer/start.sh)."""
     env = start_services(dash_url)
     _spawn(marimo_argv(), cwd=ASIANF, env=env)
     _block_until_exit()

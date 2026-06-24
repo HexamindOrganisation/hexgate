@@ -1,12 +1,11 @@
-"""Smoke test for the bundled demo — the CI gate before `modal deploy`.
+"""Smoke test for the bundled demo (`make demo-smoke`).
 
 Exercises the full path with a MOCK LLM (no real key): start the platform API +
 a mock OpenAI endpoint, provision a serve token, run the in-kernel serve loop
 bound to a live agent, sign in via /v1/demo-login, then send a chat over the
 playground WebSocket and assert the agent's reply streams back.
 
-Exits 0 on PASS, non-zero on FAIL — used by `make demo-smoke` and
-`.github/workflows/deploy-demo.yml`. Run it with the platform/api venv active
+Exits 0 on PASS, non-zero on FAIL. Run it with the platform/api venv active
 (uv run) so hexgate + fastapi + websockets resolve.
 """
 
