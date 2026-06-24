@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   BookOpen,
   Check,
@@ -12,11 +12,11 @@ import {
   Trash2,
   Clock,
   AlertTriangle,
-} from 'lucide-react'
-import { Button } from '@/components/ui/button'
-import { Badge } from '@/components/ui/badge'
-import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
+} from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import {
   Dialog,
   DialogContent,
@@ -25,61 +25,67 @@ import {
   DialogHeader,
   DialogTitle,
   DialogTrigger,
-} from '@/components/ui/dialog'
-import { NoProjectEmptyState } from '@/components/NoProjectEmptyState'
-import { api, type TokenMintResponse } from '@/lib/api'
-import { useProjectScoped } from '@/lib/active'
-import { cn } from '@/lib/utils'
+} from "@/components/ui/dialog";
+import { NoProjectEmptyState } from "@/components/NoProjectEmptyState";
+import { api, type TokenMintResponse } from "@/lib/api";
+import { useProjectScoped } from "@/lib/active";
+import { cn } from "@/lib/utils";
 
 function formatRelative(iso: string | null): string {
-  if (!iso) return 'Never'
-  const then = new Date(iso).getTime()
-  const diff = Date.now() - then
-  if (diff < 60_000) return 'just now'
-  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`
-  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h ago`
-  return `${Math.floor(diff / 86_400_000)}d ago`
+  if (!iso) return "Never";
+  const then = new Date(iso).getTime();
+  const diff = Date.now() - then;
+  if (diff < 60_000) return "just now";
+  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`;
+  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h ago`;
+  return `${Math.floor(diff / 86_400_000)}d ago`;
 }
 
 function formatCreated(iso: string): string {
   return new Date(iso).toLocaleDateString(undefined, {
-    year: 'numeric',
-    month: 'short',
-    day: '2-digit',
-  })
+    year: "numeric",
+    month: "short",
+    day: "2-digit",
+  });
 }
 
-function CopyButton({ value, size = 'sm' }: { value: string; size?: 'sm' | 'default' }) {
-  const [copied, setCopied] = useState(false)
+function CopyButton({
+  value,
+  size = "sm",
+}: {
+  value: string;
+  size?: "sm" | "default";
+}) {
+  const [copied, setCopied] = useState(false);
   return (
     <Button
       variant="ghost"
-      size={size === 'sm' ? 'icon' : 'default'}
+      size={size === "sm" ? "icon" : "default"}
       onClick={async () => {
-        await navigator.clipboard.writeText(value)
-        setCopied(true)
-        setTimeout(() => setCopied(false), 1200)
+        await navigator.clipboard.writeText(value);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1200);
       }}
-      className={size === 'sm' ? 'size-7' : undefined}
+      className={size === "sm" ? "size-7" : undefined}
     >
       {copied ? <Check className="text-allow" /> : <Copy />}
     </Button>
-  )
+  );
 }
 
 function JustMintedBanner({
   token,
   onDismiss,
 }: {
-  token: TokenMintResponse
-  onDismiss: () => void
+  token: TokenMintResponse;
+  onDismiss: () => void;
 }) {
   // Brief "Copied!" feedback on successful copy — same pattern as the
   // inline `CopyButton` above, just with a label since this is the
   // prominent action on the dialog. 1200ms is long enough to register,
   // short enough that the operator who clicks twice doesn't see a stale
   // checkmark.
-  const [copied, setCopied] = useState(false)
+  const [copied, setCopied] = useState(false);
   // Copy-only \u2014 no reveal UI. Matches the show-once + copy-only pattern
   // GitHub / AWS / Stripe / Vercel / Discord use for API tokens. The
   // mask still shows the env-tagged prefix and the last 4 chars so the
@@ -89,11 +95,11 @@ function JustMintedBanner({
   // Tokens are `fty_(test|live)_<uuid>_<biscuit>` \u2014 keep the 9-char
   // env-tagged prefix and the last 4 of the biscuit; everything between
   // (the project UUID + opaque biscuit bytes) is masked.
-  const prefixEnd = token.full.indexOf('_', 4) + 1
+  const prefixEnd = token.full.indexOf("_", 4) + 1;
   const masked =
     token.full.slice(0, prefixEnd > 0 ? prefixEnd : 9) +
-    '\u2022'.repeat(20) +
-    token.full.slice(-4)
+    "\u2022".repeat(20) +
+    token.full.slice(-4);
   return (
     <div className="rounded-lg border border-primary/40 bg-primary/5 p-5">
       <div className="flex items-start justify-between">
@@ -119,9 +125,9 @@ function JustMintedBanner({
           variant="default"
           size="sm"
           onClick={async () => {
-            await navigator.clipboard.writeText(token.full)
-            setCopied(true)
-            setTimeout(() => setCopied(false), 1200)
+            await navigator.clipboard.writeText(token.full);
+            setCopied(true);
+            setTimeout(() => setCopied(false), 1200);
           }}
           className="gap-1.5"
         >
@@ -130,7 +136,7 @@ function JustMintedBanner({
           ) : (
             <Copy className="size-3.5" />
           )}
-          {copied ? 'Copied!' : 'Copy'}
+          {copied ? "Copied!" : "Copy"}
         </Button>
       </div>
 
@@ -141,7 +147,7 @@ function JustMintedBanner({
         </span>
         <span className="flex items-center gap-1.5">
           <KeyRound className="size-3.5" />
-          {token.scopes.length} scope{token.scopes.length === 1 ? '' : 's'}
+          {token.scopes.length} scope{token.scopes.length === 1 ? "" : "s"}
         </span>
         <button
           onClick={onDismiss}
@@ -151,38 +157,38 @@ function JustMintedBanner({
         </button>
       </div>
     </div>
-  )
+  );
 }
 
 function MintDialog({
   projectId,
   onSuccess,
 }: {
-  projectId: string
-  onSuccess: (token: TokenMintResponse) => void
+  projectId: string;
+  onSuccess: (token: TokenMintResponse) => void;
 }) {
-  const [open, setOpen] = useState(false)
-  const [name, setName] = useState('')
-  const [env, setEnv] = useState<'test' | 'live'>('live')
-  const qc = useQueryClient()
+  const [open, setOpen] = useState(false);
+  const [name, setName] = useState("");
+  const [env, setEnv] = useState<"test" | "live">("live");
+  const qc = useQueryClient();
 
   const mutation = useMutation({
     mutationFn: (body: Parameters<typeof api.mintToken>[0]) =>
       api.mintToken(body, projectId),
     onSuccess: (token) => {
-      qc.invalidateQueries({ queryKey: ['tokens', projectId] })
-      onSuccess(token)
-      setOpen(false)
-      setName('')
+      qc.invalidateQueries({ queryKey: ["tokens", projectId] });
+      onSuccess(token);
+      setOpen(false);
+      setName("");
     },
-  })
+  });
 
   return (
     <Dialog
       open={open}
       onOpenChange={(o) => {
-        setOpen(o)
-        if (!o) mutation.reset()
+        setOpen(o);
+        if (!o) mutation.reset();
       }}
     >
       <DialogTrigger asChild>
@@ -195,8 +201,8 @@ function MintDialog({
         <DialogHeader>
           <DialogTitle>Mint dev token</DialogTitle>
           <DialogDescription>
-            Tokens authenticate backend services to Hexgate. Use a clear name so you know
-            where it's deployed.
+            Tokens authenticate backend services to Hexgate. Use a clear name so
+            you know where it's deployed.
           </DialogDescription>
         </DialogHeader>
 
@@ -215,16 +221,16 @@ function MintDialog({
           <div className="space-y-1.5">
             <Label>Environment</Label>
             <div className="flex gap-2">
-              {(['test', 'live'] as const).map((value) => (
+              {(["test", "live"] as const).map((value) => (
                 <button
                   key={value}
                   type="button"
                   onClick={() => setEnv(value)}
                   className={cn(
-                    'flex-1 h-9 rounded-md border text-sm capitalize transition-colors',
+                    "flex-1 h-9 rounded-md border text-sm capitalize transition-colors",
                     env === value
-                      ? 'border-primary bg-primary/10 text-primary'
-                      : 'border-border text-muted-foreground hover:text-foreground',
+                      ? "border-primary bg-primary/10 text-primary"
+                      : "border-border text-muted-foreground hover:text-foreground",
                   )}
                 >
                   {value}
@@ -232,9 +238,10 @@ function MintDialog({
               ))}
             </div>
             <p className="text-[11px] text-muted-foreground">
-              <span className="font-mono">fty_test_</span> keys read from a local policy file.
-              <span className="font-mono">fty_live_</span> keys fetch signed bundles from the
-              control plane.
+              <span className="font-mono">fty_test_</span> keys read from a
+              local policy file.
+              <span className="font-mono">fty_live_</span> keys fetch signed
+              bundles from the control plane.
             </p>
           </div>
 
@@ -253,40 +260,40 @@ function MintDialog({
             onClick={() => mutation.mutate({ name, env })}
             disabled={name.trim().length === 0 || mutation.isPending}
           >
-            {mutation.isPending ? 'Minting…' : 'Mint token'}
+            {mutation.isPending ? "Minting…" : "Mint token"}
           </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
-  )
+  );
 }
 
 export function TokensPage() {
-  const [justMinted, setJustMinted] = useState<TokenMintResponse | null>(null)
-  const scope = useProjectScoped()
+  const [justMinted, setJustMinted] = useState<TokenMintResponse | null>(null);
+  const scope = useProjectScoped();
   // ``enabled: !!scope.projectId`` keeps React Query quiet while we
   // wait for the active-project bootstrap; the cache key includes the
   // id so switching projects doesn't show stale rows.
   const tokens = useQuery({
-    queryKey: ['tokens', scope.projectId],
+    queryKey: ["tokens", scope.projectId],
     queryFn: () => api.listTokens(scope.projectId as string),
     enabled: !!scope.projectId,
-  })
-  const qc = useQueryClient()
+  });
+  const qc = useQueryClient();
   const revoke = useMutation({
     mutationFn: (tokenId: string) =>
       api.revokeToken(tokenId, scope.projectId as string),
     onSuccess: () =>
-      qc.invalidateQueries({ queryKey: ['tokens', scope.projectId] }),
-  })
+      qc.invalidateQueries({ queryKey: ["tokens", scope.projectId] }),
+  });
 
-  if (scope.status === 'no-project') {
+  if (scope.status === "no-project") {
     return (
       <div className="max-w-[1400px] mx-auto">
         <h1 className="text-2xl font-semibold tracking-tight">Tokens</h1>
         <NoProjectEmptyState resource="tokens" />
       </div>
-    )
+    );
   }
 
   return (
@@ -295,7 +302,8 @@ export function TokensPage() {
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Tokens</h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Long-lived dev tokens for backend services. Never commit to source control.
+            Long-lived dev tokens for backend services. Never commit to source
+            control.
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -311,14 +319,20 @@ export function TokensPage() {
 
       {justMinted && (
         <div className="mt-6">
-          <JustMintedBanner token={justMinted} onDismiss={() => setJustMinted(null)} />
+          <JustMintedBanner
+            token={justMinted}
+            onDismiss={() => setJustMinted(null)}
+          />
         </div>
       )}
 
       <div className="mt-6 rounded-lg border border-border bg-card">
         <div className="flex items-center justify-between border-b border-border px-5 py-3">
           <div className="text-sm">
-            Dev tokens <span className="text-muted-foreground">· {tokens.data?.length ?? 0}</span>
+            Dev tokens{" "}
+            <span className="text-muted-foreground">
+              · {tokens.data?.length ?? 0}
+            </span>
           </div>
           <div className="flex items-center gap-1 text-xs text-muted-foreground">
             <Button variant="ghost" size="sm" className="gap-1.5 text-xs">
@@ -333,13 +347,16 @@ export function TokensPage() {
         </div>
 
         {tokens.isLoading ? (
-          <div className="p-12 text-center text-sm text-muted-foreground">Loading…</div>
+          <div className="p-12 text-center text-sm text-muted-foreground">
+            Loading…
+          </div>
         ) : !tokens.data || tokens.data.length === 0 ? (
           <div className="flex flex-col items-center justify-center gap-3 py-16 text-center">
             <KeyRound className="size-12 text-muted-foreground/50" />
             <div className="text-sm font-medium">No tokens yet</div>
             <div className="max-w-xs text-xs text-muted-foreground">
-              Mint your first dev token to let a backend service authenticate to Hexgate.
+              Mint your first dev token to let a backend service authenticate to
+              Hexgate.
             </div>
           </div>
         ) : (
@@ -356,7 +373,7 @@ export function TokensPage() {
             </thead>
             <tbody>
               {tokens.data.map((t) => {
-                const isTest = t.masked.startsWith('fty_test_')
+                const isTest = t.masked.startsWith("fty_test_");
                 return (
                   <tr
                     key={t.id}
@@ -373,7 +390,9 @@ export function TokensPage() {
                       </span>
                     </td>
                     <td className="px-5 py-3">
-                      <span className="font-mono text-xs text-muted-foreground">{t.masked}</span>
+                      <span className="font-mono text-xs text-muted-foreground">
+                        {t.masked}
+                      </span>
                     </td>
                     <td className="px-5 py-3">
                       <span className="inline-flex flex-wrap gap-1">
@@ -383,7 +402,9 @@ export function TokensPage() {
                           </Badge>
                         ))}
                         {t.scopes.length > 2 && (
-                          <Badge variant="outline">+{t.scopes.length - 2}</Badge>
+                          <Badge variant="outline">
+                            +{t.scopes.length - 2}
+                          </Badge>
                         )}
                       </span>
                     </td>
@@ -392,8 +413,10 @@ export function TokensPage() {
                     </td>
                     <td
                       className={cn(
-                        'px-5 py-3',
-                        t.last_used_at ? 'text-muted-foreground' : 'text-approval',
+                        "px-5 py-3",
+                        t.last_used_at
+                          ? "text-muted-foreground"
+                          : "text-approval",
                       )}
                     >
                       {formatRelative(t.last_used_at)}
@@ -422,12 +445,12 @@ export function TokensPage() {
                       </div>
                     </td>
                   </tr>
-                )
+                );
               })}
             </tbody>
           </table>
         )}
       </div>
     </div>
-  )
+  );
 }

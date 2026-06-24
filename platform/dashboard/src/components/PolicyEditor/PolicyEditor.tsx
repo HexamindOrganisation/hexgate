@@ -14,15 +14,15 @@
  * rendering surface for diagnostics — the source of truth is the
  * platform's `/policies/validate` endpoint.
  */
-import { useEffect, useRef } from 'react'
-import CodeMirror, { type ReactCodeMirrorRef } from '@uiw/react-codemirror'
-import { yaml } from '@codemirror/lang-yaml'
-import { lintGutter, setDiagnostics } from '@codemirror/lint'
+import { useEffect, useRef } from "react";
+import CodeMirror, { type ReactCodeMirrorRef } from "@uiw/react-codemirror";
+import { yaml } from "@codemirror/lang-yaml";
+import { lintGutter, setDiagnostics } from "@codemirror/lint";
 
-import type { PolicyValidationError } from '@/lib/api'
-import { policyModeDecorations } from './decorations'
-import { toCodemirrorDiagnostics } from './diagnostics'
-import { policyEditorTheme } from './theme'
+import type { PolicyValidationError } from "@/lib/api";
+import { policyModeDecorations } from "./decorations";
+import { toCodemirrorDiagnostics } from "./diagnostics";
+import { policyEditorTheme } from "./theme";
 
 // @uiw/react-codemirror dispatches `StateEffect.reconfigure` whenever
 // `extensions`, `basicSetup`, `onChange`, etc. change reference. Defining
@@ -34,7 +34,7 @@ import { policyEditorTheme } from './theme'
 // `setDiagnostics` (used in the effect below) writes into the lint state
 // field that `lintGutter()` installs, so we don't need a `linter()` source
 // callback — the imperative push is the only signal the gutter needs.
-const EXTENSIONS = [yaml(), lintGutter(), policyModeDecorations]
+const EXTENSIONS = [yaml(), lintGutter(), policyModeDecorations];
 
 const BASIC_SETUP = {
   lineNumbers: true,
@@ -48,19 +48,19 @@ const BASIC_SETUP = {
   bracketMatching: false,
   closeBrackets: false,
   searchKeymap: true,
-} as const
+} as const;
 
 export interface PolicyEditorProps {
-  value: string
-  onChange: (next: string) => void
+  value: string;
+  onChange: (next: string) => void;
   /**
    * Server-side validation errors. Line-anchored ones render as gutter
    * markers; role-only errors (no line) are dropped here — the parent's
    * error list surfaces them above the editor instead.
    */
-  diagnostics?: PolicyValidationError[] | null
-  readOnly?: boolean
-  className?: string
+  diagnostics?: PolicyValidationError[] | null;
+  readOnly?: boolean;
+  className?: string;
 }
 
 export function PolicyEditor({
@@ -70,7 +70,7 @@ export function PolicyEditor({
   readOnly = false,
   className,
 }: PolicyEditorProps) {
-  const ref = useRef<ReactCodeMirrorRef>(null)
+  const ref = useRef<ReactCodeMirrorRef>(null);
 
   // Push the latest validation results into the lint state. Empty list
   // when `diagnostics` is null/empty clears the gutter markers. The view
@@ -78,13 +78,13 @@ export function PolicyEditor({
   // effect ordering), so `ref.current.view` is populated by this point on
   // initial mount; the `if (!view) return` is a defensive backstop.
   useEffect(() => {
-    const view = ref.current?.view
-    if (!view) return
+    const view = ref.current?.view;
+    if (!view) return;
     const next = diagnostics
       ? toCodemirrorDiagnostics(view.state, diagnostics)
-      : []
-    view.dispatch(setDiagnostics(view.state, next))
-  }, [diagnostics])
+      : [];
+    view.dispatch(setDiagnostics(view.state, next));
+  }, [diagnostics]);
 
   return (
     <CodeMirror
@@ -98,5 +98,5 @@ export function PolicyEditor({
       className={className}
       height="100%"
     />
-  )
+  );
 }

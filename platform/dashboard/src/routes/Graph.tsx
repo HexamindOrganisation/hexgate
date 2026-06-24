@@ -1,37 +1,45 @@
-import { useMemo } from 'react'
-import { useQuery } from '@tanstack/react-query'
-import { ReactFlow, Background, Controls, MiniMap, BackgroundVariant } from '@xyflow/react'
-import { api } from '@/lib/api'
-import { useProjectScoped } from '@/lib/active'
-import { buildOverviewGraph } from '@/lib/graph'
-import { nodeTypes } from '@/components/graph/nodes'
-import { NoProjectEmptyState } from '@/components/NoProjectEmptyState'
-import { Badge } from '@/components/ui/badge'
+import { useMemo } from "react";
+import { useQuery } from "@tanstack/react-query";
+import {
+  ReactFlow,
+  Background,
+  Controls,
+  MiniMap,
+  BackgroundVariant,
+} from "@xyflow/react";
+import { api } from "@/lib/api";
+import { useProjectScoped } from "@/lib/active";
+import { buildOverviewGraph } from "@/lib/graph";
+import { nodeTypes } from "@/components/graph/nodes";
+import { NoProjectEmptyState } from "@/components/NoProjectEmptyState";
+import { Badge } from "@/components/ui/badge";
 
 export function GraphPage() {
-  const scope = useProjectScoped()
+  const scope = useProjectScoped();
   const agents = useQuery({
-    queryKey: ['agents', scope.projectId],
+    queryKey: ["agents", scope.projectId],
     queryFn: () => api.listAgents(scope.projectId as string),
     enabled: !!scope.projectId,
-  })
+  });
 
   const { nodes, edges, agentViews } = useMemo(() => {
-    if (!agents.data) return { nodes: [], edges: [], agentViews: [] }
-    return buildOverviewGraph(agents.data)
-  }, [agents.data])
+    if (!agents.data) return { nodes: [], edges: [], agentViews: [] };
+    return buildOverviewGraph(agents.data);
+  }, [agents.data]);
 
-  if (scope.status === 'no-project') {
-    return <NoProjectEmptyState resource="graph" />
+  if (scope.status === "no-project") {
+    return <NoProjectEmptyState resource="graph" />;
   }
 
   return (
     <div className="-mx-8 -my-6 h-[calc(100vh-56px)] flex flex-col">
       <div className="flex items-start justify-between px-8 py-5 border-b border-border">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Graph overview</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">
+            Graph overview
+          </h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Roles, agents, and tools for this project. Read-only — edit in{' '}
+            Roles, agents, and tools for this project. Read-only — edit in{" "}
             <span className="font-mono text-foreground">/agents</span>.
           </p>
         </div>
@@ -75,5 +83,5 @@ export function GraphPage() {
         )}
       </div>
     </div>
-  )
+  );
 }

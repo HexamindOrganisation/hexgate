@@ -1,11 +1,11 @@
-import { useEffect } from 'react'
-import { useForm, Controller } from 'react-hook-form'
-import { zodResolver } from '@hookform/resolvers/zod'
-import { z } from 'zod'
-import { toast } from 'sonner'
+import { useEffect } from "react";
+import { useForm, Controller } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { z } from "zod";
+import { toast } from "sonner";
 
-import { Alert, AlertDescription } from '@/components/ui/alert'
-import { Button } from '@/components/ui/button'
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
 import {
   Dialog,
   DialogContent,
@@ -13,35 +13,35 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from '@/components/ui/dialog'
-import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from '@/components/ui/select'
-import { ApiError } from '@/lib/api'
-import { useCreateInvitation } from '@/lib/invites'
-import { ROLES } from '@/lib/orgs'
+} from "@/components/ui/select";
+import { ApiError } from "@/lib/api";
+import { useCreateInvitation } from "@/lib/invites";
+import { ROLES } from "@/lib/orgs";
 
 const InviteSchema = z.object({
-  email: z.string().email('Enter a valid email'),
+  email: z.string().email("Enter a valid email"),
   role: z.enum(ROLES),
-})
+});
 
-type InviteValues = z.infer<typeof InviteSchema>
+type InviteValues = z.infer<typeof InviteSchema>;
 
 interface InviteMemberDialogProps {
-  open: boolean
-  onOpenChange: (open: boolean) => void
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
   /** Org the invite is for. The dialog ALWAYS targets the explicitly-
    * passed org — never reads from the active store. Lets the caller
    * surface "Invite to Acme Inc" copy even when the user is sitting
    * on a different org's page. */
-  orgId: string
+  orgId: string;
 }
 
 /**
@@ -55,20 +55,20 @@ export function InviteMemberDialog({
   onOpenChange,
   orgId,
 }: InviteMemberDialogProps) {
-  const invite = useCreateInvitation()
+  const invite = useCreateInvitation();
 
   const form = useForm<InviteValues>({
     resolver: zodResolver(InviteSchema),
-    defaultValues: { email: '', role: 'member' },
-  })
+    defaultValues: { email: "", role: "member" },
+  });
 
   useEffect(() => {
     if (open) {
-      form.reset({ email: '', role: 'member' })
-      invite.reset()
+      form.reset({ email: "", role: "member" });
+      invite.reset();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open])
+  }, [open]);
 
   async function onSubmit(values: InviteValues): Promise<void> {
     try {
@@ -76,17 +76,17 @@ export function InviteMemberDialog({
         orgId,
         email: values.email,
         role: values.role,
-      })
-      toast.success(`Invitation sent to ${values.email}`)
-      onOpenChange(false)
+      });
+      toast.success(`Invitation sent to ${values.email}`);
+      onOpenChange(false);
     } catch (err) {
-      const detail = err instanceof ApiError ? String(err.message) : ''
-      const roleEscalation = detail.toLowerCase().includes('cannot invite')
+      const detail = err instanceof ApiError ? String(err.message) : "";
+      const roleEscalation = detail.toLowerCase().includes("cannot invite");
       toast.error(
         roleEscalation
           ? `You can't invite at the ${values.role} level (your role is below that).`
-          : 'Could not send the invitation. Check the email and try again.',
-      )
+          : "Could not send the invitation. Check the email and try again.",
+      );
     }
   }
 
@@ -108,8 +108,8 @@ export function InviteMemberDialog({
           {invite.isError && !invite.isPending && (
             <Alert variant="destructive">
               <AlertDescription>
-                Could not send the invitation. The address might already
-                belong to this organization.
+                Could not send the invitation. The address might already belong
+                to this organization.
               </AlertDescription>
             </Alert>
           )}
@@ -121,7 +121,7 @@ export function InviteMemberDialog({
               type="email"
               placeholder="alice@example.com"
               autoComplete="off"
-              {...form.register('email')}
+              {...form.register("email")}
             />
             {form.formState.errors.email && (
               <p className="text-xs text-destructive">
@@ -155,8 +155,8 @@ export function InviteMemberDialog({
               )}
             />
             <p className="text-xs text-muted-foreground">
-              Only owners can invite other owners. Admins can invite
-              admins and members.
+              Only owners can invite other owners. Admins can invite admins and
+              members.
             </p>
           </div>
         </form>
@@ -175,10 +175,10 @@ export function InviteMemberDialog({
             form="invite-member-form"
             disabled={invite.isPending}
           >
-            {invite.isPending ? 'Sending…' : 'Send invitation'}
+            {invite.isPending ? "Sending…" : "Send invitation"}
           </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
-  )
+  );
 }

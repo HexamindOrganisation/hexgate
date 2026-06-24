@@ -14,24 +14,24 @@
  * 'include'`` in lib/api.ts handles it.
  */
 
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { ApiError, UnauthenticatedError } from './api'
-import { resetPlayground } from './playground'
+import { ApiError, UnauthenticatedError } from "./api";
+import { resetPlayground } from "./playground";
 
 /** Public shape of a User. Mirrors UserRead on the backend
  * (fastapi_users.schemas.BaseUser[str] — id, email, is_active,
  * is_superuser, is_verified). hashed_password never crosses the wire. */
 export interface UserRead {
-  id: string
-  email: string
-  is_active: boolean
-  is_superuser: boolean
-  is_verified: boolean
+  id: string;
+  email: string;
+  is_active: boolean;
+  is_superuser: boolean;
+  is_verified: boolean;
 }
 
 /** Reusable cache key so mutations can invalidate without typos. */
-export const USER_QUERY_KEY = ['user', 'me'] as const
+export const USER_QUERY_KEY = ["user", "me"] as const;
 
 // ---------------------------------------------------------------------------
 // Reads
@@ -39,15 +39,15 @@ export const USER_QUERY_KEY = ['user', 'me'] as const
 
 async function fetchMe(): Promise<UserRead | null> {
   try {
-    const res = await fetch('/v1/users/me', { credentials: 'include' })
-    if (res.status === 401) return null
-    if (!res.ok) throw new Error(`/users/me ${res.status}`)
-    return (await res.json()) as UserRead
+    const res = await fetch("/v1/users/me", { credentials: "include" });
+    if (res.status === 401) return null;
+    if (!res.ok) throw new Error(`/users/me ${res.status}`);
+    return (await res.json()) as UserRead;
   } catch (err) {
     // Network-level errors surface as null so the UI can render the
     // "loading … then signed-out" path without a noisy console.
-    if (err instanceof TypeError) return null
-    throw err
+    if (err instanceof TypeError) return null;
+    throw err;
   }
 }
 
@@ -66,12 +66,12 @@ export function useUser() {
     // staleness is the longest a stale "logged in" view should linger
     // after a logout from another tab.
     staleTime: 30_000,
-  })
+  });
   return {
     user: query.data ?? null,
     loading: query.isLoading,
     error: query.error,
-  }
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -83,46 +83,46 @@ export function useUser() {
  * (OAuth2 password-flow shape) with ``username`` = email.
  */
 async function loginRequest(creds: {
-  email: string
-  password: string
+  email: string;
+  password: string;
 }): Promise<void> {
   const body = new URLSearchParams({
     username: creds.email,
     password: creds.password,
-  })
-  const res = await fetch('/v1/auth/cookie/login', {
-    method: 'POST',
-    credentials: 'include',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+  });
+  const res = await fetch("/v1/auth/cookie/login", {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body,
-  })
+  });
   if (!res.ok) {
-    const detail = await res.text().catch(() => '')
-    throw new ApiError(res.status, detail, `${res.status} ${res.statusText}`)
+    const detail = await res.text().catch(() => "");
+    throw new ApiError(res.status, detail, `${res.status} ${res.statusText}`);
   }
 }
 
 export function useLogin() {
-  const qc = useQueryClient()
+  const qc = useQueryClient();
   return useMutation({
     mutationFn: loginRequest,
     onSuccess: () => qc.invalidateQueries({ queryKey: USER_QUERY_KEY }),
-  })
+  });
 }
 
 async function logoutRequest(): Promise<void> {
-  const res = await fetch('/v1/auth/cookie/logout', {
-    method: 'POST',
-    credentials: 'include',
-  })
+  const res = await fetch("/v1/auth/cookie/logout", {
+    method: "POST",
+    credentials: "include",
+  });
   // 401 here means "you weren't logged in anyway" — same end state.
   if (!res.ok && res.status !== 401) {
-    throw new ApiError(res.status, null, `${res.status} ${res.statusText}`)
+    throw new ApiError(res.status, null, `${res.status} ${res.statusText}`);
   }
 }
 
 export function useLogout() {
-  const qc = useQueryClient()
+  const qc = useQueryClient();
   return useMutation({
     mutationFn: logoutRequest,
     onSuccess: () => {
@@ -131,98 +131,98 @@ export function useLogout() {
       // user's chat history. There's no full page reload on logout
       // (just a cookie invalidation), so without this the module
       // globals survive.
-      resetPlayground()
-      qc.invalidateQueries({ queryKey: USER_QUERY_KEY })
+      resetPlayground();
+      qc.invalidateQueries({ queryKey: USER_QUERY_KEY });
     },
-  })
+  });
 }
 
 async function registerRequest(payload: {
-  email: string
-  password: string
+  email: string;
+  password: string;
 }): Promise<UserRead> {
-  const res = await fetch('/v1/auth/register', {
-    method: 'POST',
-    credentials: 'include',
-    headers: { 'Content-Type': 'application/json' },
+  const res = await fetch("/v1/auth/register", {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
-  })
+  });
   if (!res.ok) {
-    let detail: unknown
+    let detail: unknown;
     try {
-      detail = await res.json()
+      detail = await res.json();
     } catch {
-      detail = null
+      detail = null;
     }
-    throw new ApiError(res.status, detail, `${res.status} ${res.statusText}`)
+    throw new ApiError(res.status, detail, `${res.status} ${res.statusText}`);
   }
-  return (await res.json()) as UserRead
+  return (await res.json()) as UserRead;
 }
 
 export function useRegister() {
-  return useMutation({ mutationFn: registerRequest })
+  return useMutation({ mutationFn: registerRequest });
 }
 
 async function forgotPasswordRequest(email: string): Promise<void> {
-  const res = await fetch('/v1/auth/forgot-password', {
-    method: 'POST',
-    credentials: 'include',
-    headers: { 'Content-Type': 'application/json' },
+  const res = await fetch("/v1/auth/forgot-password", {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ email }),
-  })
+  });
   // 202 Accepted is the success status — same response whether the
   // email exists or not (no enumeration leak).
   if (!res.ok) {
-    throw new ApiError(res.status, null, `${res.status} ${res.statusText}`)
+    throw new ApiError(res.status, null, `${res.status} ${res.statusText}`);
   }
 }
 
 export function useForgotPassword() {
-  return useMutation({ mutationFn: forgotPasswordRequest })
+  return useMutation({ mutationFn: forgotPasswordRequest });
 }
 
 async function resetPasswordRequest(payload: {
-  token: string
-  password: string
+  token: string;
+  password: string;
 }): Promise<void> {
-  const res = await fetch('/v1/auth/reset-password', {
-    method: 'POST',
-    credentials: 'include',
-    headers: { 'Content-Type': 'application/json' },
+  const res = await fetch("/v1/auth/reset-password", {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
-  })
+  });
   if (!res.ok) {
-    let detail: unknown
+    let detail: unknown;
     try {
-      detail = await res.json()
+      detail = await res.json();
     } catch {
-      detail = null
+      detail = null;
     }
-    throw new ApiError(res.status, detail, `${res.status} ${res.statusText}`)
+    throw new ApiError(res.status, detail, `${res.status} ${res.statusText}`);
   }
 }
 
 export function useResetPassword() {
-  return useMutation({ mutationFn: resetPasswordRequest })
+  return useMutation({ mutationFn: resetPasswordRequest });
 }
 
 async function verifyEmailRequest(token: string): Promise<UserRead> {
-  const res = await fetch('/v1/auth/verify', {
-    method: 'POST',
-    credentials: 'include',
-    headers: { 'Content-Type': 'application/json' },
+  const res = await fetch("/v1/auth/verify", {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ token }),
-  })
+  });
   if (!res.ok) {
-    let detail: unknown
+    let detail: unknown;
     try {
-      detail = await res.json()
+      detail = await res.json();
     } catch {
-      detail = null
+      detail = null;
     }
-    throw new ApiError(res.status, detail, `${res.status} ${res.statusText}`)
+    throw new ApiError(res.status, detail, `${res.status} ${res.statusText}`);
   }
-  return (await res.json()) as UserRead
+  return (await res.json()) as UserRead;
 }
 
 /**
@@ -246,15 +246,15 @@ async function verifyEmailRequest(token: string): Promise<UserRead> {
  * other open tab sees ``is_verified: true`` on its next read.
  */
 export function useVerifyEmail(token: string | undefined) {
-  const qc = useQueryClient()
+  const qc = useQueryClient();
   return useQuery({
-    queryKey: ['verify-email', token],
+    queryKey: ["verify-email", token],
     queryFn: async () => {
-      const user = await verifyEmailRequest(token as string)
+      const user = await verifyEmailRequest(token as string);
       // Same cache-bust the old useMutation onSuccess did — runs once
       // when the query resolves, never on cache reads.
-      qc.invalidateQueries({ queryKey: USER_QUERY_KEY })
-      return user
+      qc.invalidateQueries({ queryKey: USER_QUERY_KEY });
+      return user;
     },
     enabled: !!token,
     retry: false,
@@ -262,23 +262,23 @@ export function useVerifyEmail(token: string | undefined) {
     refetchOnMount: false,
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
-  })
+  });
 }
 
 async function requestVerifyRequest(email: string): Promise<void> {
-  const res = await fetch('/v1/auth/request-verify-token', {
-    method: 'POST',
-    credentials: 'include',
-    headers: { 'Content-Type': 'application/json' },
+  const res = await fetch("/v1/auth/request-verify-token", {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ email }),
-  })
+  });
   if (!res.ok && res.status !== 202) {
-    throw new ApiError(res.status, null, `${res.status} ${res.statusText}`)
+    throw new ApiError(res.status, null, `${res.status} ${res.statusText}`);
   }
 }
 
 export function useRequestVerify() {
-  return useMutation({ mutationFn: requestVerifyRequest })
+  return useMutation({ mutationFn: requestVerifyRequest });
 }
 
 // ---------------------------------------------------------------------------
@@ -295,31 +295,40 @@ export function useRequestVerify() {
  * callers hide the Google button when this returns null on mount.
  */
 export async function startGoogleSignIn(): Promise<void> {
-  const res = await fetch('/v1/auth/google/authorize?scopes=openid&scopes=email', {
-    credentials: 'include',
-  })
+  const res = await fetch(
+    "/v1/auth/google/authorize?scopes=openid&scopes=email",
+    {
+      credentials: "include",
+    },
+  );
   if (res.status === 404) {
-    throw new ApiError(404, null, 'Google sign-in is not enabled on this server')
+    throw new ApiError(
+      404,
+      null,
+      "Google sign-in is not enabled on this server",
+    );
   }
   if (!res.ok) {
-    throw new ApiError(res.status, null, `${res.status} ${res.statusText}`)
+    throw new ApiError(res.status, null, `${res.status} ${res.statusText}`);
   }
-  const { authorization_url } = (await res.json()) as { authorization_url: string }
-  window.location.href = authorization_url
+  const { authorization_url } = (await res.json()) as {
+    authorization_url: string;
+  };
+  window.location.href = authorization_url;
 }
 
 /** Returns true if /v1/auth/google/authorize exists on this server. */
 export async function googleOAuthAvailable(): Promise<boolean> {
   try {
     const res = await fetch(
-      '/v1/auth/google/authorize?scopes=openid&scopes=email',
-      { credentials: 'include', method: 'HEAD' },
-    )
-    return res.status !== 404
+      "/v1/auth/google/authorize?scopes=openid&scopes=email",
+      { credentials: "include", method: "HEAD" },
+    );
+    return res.status !== 404;
   } catch {
-    return false
+    return false;
   }
 }
 
 // Re-export so callers don't need a second import.
-export { UnauthenticatedError }
+export { UnauthenticatedError };

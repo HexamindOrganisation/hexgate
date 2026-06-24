@@ -21,23 +21,23 @@
  * via `tokyoNightStormInit({ settings: { background: 'hsl(...)' } })`
  * later if we want them to match exactly.
  */
-import { EditorView } from '@codemirror/view'
-import { tokyoNightStormInit } from '@uiw/codemirror-theme-tokyo-night-storm'
+import { EditorView } from "@codemirror/view";
+import { tokyoNightStormInit } from "@uiw/codemirror-theme-tokyo-night-storm";
 
 const tokyoNight = tokyoNightStormInit({
   settings: {
     // Mono face — Tokyo Night Storm's default is a stack we don't use.
-    fontFamily: 'var(--font-mono)',
+    fontFamily: "var(--font-mono)",
     // Match the dashboard's text-sm (14px).
-    fontSize: '14px',
+    fontSize: "14px",
     // Blend the editor into the dashboard surface — Tokyo Night Storm's
     // default `#24283b` was slightly bluer than `--background`; using
     // the dashboard var instead means no seam between the editor and the
     // surrounding chrome.
-    background: 'hsl(var(--background))',
-    gutterBackground: 'hsl(var(--background))',
+    background: "hsl(var(--background))",
+    gutterBackground: "hsl(var(--background))",
   },
-})
+});
 
 /**
  * Editor chrome + semantic decoration colors. Kept here (in
@@ -45,23 +45,23 @@ const tokyoNight = tokyoNightStormInit({
  * styling is self-contained.
  */
 const chromeAndDecorationsTheme = EditorView.theme({
-  '.cm-content': { padding: '12px 16px' },
-  '.cm-scroller': { fontFamily: 'var(--font-mono)' },
+  ".cm-content": { padding: "12px 16px" },
+  ".cm-scroller": { fontFamily: "var(--font-mono)" },
   // Semantic mode-value coloring — applied by the ViewPlugin in
   // `./decorations.ts`. Colors come from `--semantic-*` CSS vars so the
   // editor matches the dashboard badges and audit-decision colors.
-  '.cm-policy-allow': {
-    color: 'hsl(var(--semantic-allow))',
-    fontWeight: '600',
+  ".cm-policy-allow": {
+    color: "hsl(var(--semantic-allow))",
+    fontWeight: "600",
   },
-  '.cm-policy-deny': {
-    color: 'hsl(var(--semantic-deny))',
-    fontWeight: '600',
+  ".cm-policy-deny": {
+    color: "hsl(var(--semantic-deny))",
+    fontWeight: "600",
   },
-  '.cm-policy-approval': {
-    color: 'hsl(var(--semantic-approval))',
-    fontWeight: '600',
+  ".cm-policy-approval": {
+    color: "hsl(var(--semantic-approval))",
+    fontWeight: "600",
   },
-})
+});
 
-export const policyEditorTheme = [tokyoNight, chromeAndDecorationsTheme]
+export const policyEditorTheme = [tokyoNight, chromeAndDecorationsTheme];
