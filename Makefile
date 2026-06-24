@@ -128,6 +128,33 @@ clickhouse-reset: ## Wipe the data volume and re-run init scripts
 	$(COMPOSE) down -v
 	$(COMPOSE) up -d clickhouse
 
+# -------- Platform infra (Postgres control-plane DB) --------
+#
+# Control-plane DB (service in platform/docker-compose.yml). NOTE:
+# `clickhouse-down`/`clickhouse-reset` run `down` on the whole compose and so
+# also stop Postgres — use the `postgres-*` targets below to avoid that.
+
+# DSN matching the postgres service (host port 5433, committed dev creds).
+POSTGRES_DSN ?= postgresql+asyncpg://hexgate:hexgate-dev-password@localhost:5433/hexgate
+
+.PHONY: postgres-up
+postgres-up: ## Start local Postgres and wait until healthy
+	$(COMPOSE) up -d --wait postgres
+
+.PHONY: postgres-stop
+postgres-stop: ## Stop Postgres (keeps the data volume)
+	$(COMPOSE) stop postgres
+
+.PHONY: postgres-psql
+postgres-psql: ## Open a psql shell against local Postgres
+	docker exec -it hexgate-postgres psql -U hexgate -d hexgate
+
+.PHONY: postgres-reset
+postgres-reset: ## Wipe ONLY the Postgres data volume and restart
+	$(COMPOSE) rm -sf postgres
+	-docker volume rm platform_postgres-data
+	$(COMPOSE) up -d --wait postgres
+
 # -------- Platform API (FastAPI control plane) --------
 #
 # The platform API is a separate uv project under platform/api/ with its
@@ -139,8 +166,12 @@ platform-api-install: ## Install platform API deps (first time)
 	cd platform/api && uv sync --group dev
 
 .PHONY: platform-api
-platform-api: ## Run the platform API dev server (FastAPI on :8000)
+platform-api: ## Run the platform API dev server (FastAPI on :8000, SQLite)
 	cd platform/api && uv run uvicorn main:app --reload --port 8000
+
+.PHONY: platform-api-pg
+platform-api-pg: postgres-up ## Run the platform API against local Postgres (starts PG first)
+	cd platform/api && DATABASE_URL=$(POSTGRES_DSN) uv run uvicorn main:app --reload --port 8000
 
 .PHONY: platform-api-test
 platform-api-test: ## Run the platform API test suite

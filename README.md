@@ -184,6 +184,31 @@ make dashboard-install      # pnpm install inside platform/dashboard/
 
 Then open http://localhost:5173/playground — type a message, watch the live stream of tool calls and policy decisions from your local agent.
 
+### Control-plane database (SQLite / Postgres)
+
+`make platform-api` uses a local **SQLite** file — zero setup, fine for
+dev and the test suite. Set `DATABASE_URL` to run on **Postgres** instead
+(what deployments use); bare `postgres://` URLs are normalized to the
+`asyncpg` driver. A local Postgres is in the dev compose:
+
+```bash
+make platform-api-pg      # starts Postgres (Docker) + runs the API against it
+# equivalent to:
+make postgres-up          # start Postgres, wait until healthy
+DATABASE_URL=postgresql+asyncpg://hexgate:hexgate-dev-password@localhost:5433/hexgate make platform-api
+make postgres-reset       # wipe ONLY the Postgres data volume
+```
+
+No migration system: the schema is created with `create_all`, so a model
+change means resetting the volume (`make postgres-reset`), not migrating —
+data is treated as disposable. A managed Postgres (e.g. Scaleway) needs SSL
+in the DSN, e.g. `…/hexgate?ssl=require`.
+
+`DATABASE_URL` is read from the real environment or `platform/api/.env`
+(see `.env.sample`). The opt-in `tests/test_postgres_smoke.py` is the only
+test that exercises the Postgres path (the rest run on SQLite); it runs
+when `DATABASE_URL` points at Postgres.
+
 ### Audit log (ClickHouse)
 
 Policy decisions are written to a local ClickHouse instance for the audit dashboard. Requires Docker.

@@ -1,6 +1,27 @@
-# Local dev infrastructure for the platform. Driven via `make clickhouse-*` targets.
+# Local dev infrastructure for the platform. Driven via `make clickhouse-*`
+# and `make postgres-*` targets.
 
 services:
+  postgres:
+    image: postgres:16
+    container_name: hexgate-postgres
+    ports:
+      # Loopback-only, offset from 5432 (committed creds; coexists with a
+      # local Postgres).
+      - "127.0.0.1:5433:5432"
+    environment:
+      # LOCAL DEV ONLY — never reuse these credentials anywhere deployed.
+      POSTGRES_DB: hexgate
+      POSTGRES_USER: hexgate
+      POSTGRES_PASSWORD: ${HEXGATE_POSTGRES_PASSWORD:-hexgate-dev-password}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hexgate -d hexgate"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
   clickhouse:
     image: clickhouse/clickhouse-server:24.10
     container_name: hexgate-clickhouse
@@ -31,3 +52,4 @@ services:
 
 volumes:
   clickhouse-data:
+  postgres-data:

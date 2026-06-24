@@ -1,30 +1,45 @@
 """Async SQLAlchemy engine + session factory.
 
-The platform runs on async I/O end-to-end (M3 Phase 3 prerequisite) —
-every route handler is ``async def``, every dependency yields an
-``AsyncSession``, every ``session.exec`` / ``session.get`` /
-``session.commit`` / ``session.refresh`` is awaited.
-
-SQLite is single-writer regardless of driver; ``aiosqlite`` just stops
-disk I/O from blocking the event loop. Postgres will swap this for
-``asyncpg`` later via env-switched ``DATABASE_URL``.
+``DATABASE_URL`` selects Postgres (asyncpg) in deployment; unset falls back
+to a local SQLite file so dev and tests stay zero-setup.
 """
 
+import os
 from pathlib import Path
 
+from dotenv import load_dotenv
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlmodel import SQLModel
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-DB_PATH = Path(__file__).parent / "hexgate.db"
+# The engine is built at import, before main's load_dotenv(), so load .env
+# here too. Non-overriding, so real env vars still win.
+load_dotenv()
 
-# Async engine. ``aiosqlite`` requires the ``sqlite+aiosqlite://`` URL prefix
-# — the plain ``sqlite://`` driver is sync-only. ``check_same_thread`` is
-# unnecessary on async: each task gets its own connection from the pool.
-engine = create_async_engine(
-    f"sqlite+aiosqlite:///{DB_PATH}",
-    echo=False,
-)
+DB_PATH = Path(__file__).parent / "hexgate.db"
+_DEFAULT_URL = f"sqlite+aiosqlite:///{DB_PATH}"
+
+
+def _database_url() -> str:
+    """Resolve the async DB URL: ``DATABASE_URL`` or the SQLite fallback.
+
+    Bare ``postgres(ql)://`` URLs are rewritten to the ``asyncpg`` driver
+    the async engine requires.
+    """
+    url = os.environ.get("DATABASE_URL", "").strip() or _DEFAULT_URL
+    for prefix in ("postgresql://", "postgres://"):
+        if url.startswith(prefix):
+            return "postgresql+asyncpg://" + url[len(prefix) :]
+    return url
+
+
+_url = _database_url()
+_engine_kwargs: dict = {"echo": False}
+# pre_ping catches connections dropped by a managed Postgres; on SQLite
+# (in-process, no server-side reaping) it's pure overhead, so PG-only.
+if "postgresql" in _url:
+    _engine_kwargs["pool_pre_ping"] = True
+engine = create_async_engine(_url, **_engine_kwargs)
 
 # Session factory — used by ``get_session()`` and one-off scripts (seeds,
 # tests). ``expire_on_commit=False`` keeps ORM objects usable after a
