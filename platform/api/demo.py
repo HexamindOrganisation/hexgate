@@ -110,6 +110,10 @@ def enable_demo(app: FastAPI) -> None:
     async def spa(full_path: str) -> Response:
         candidate = (dist / full_path).resolve()
         # Resolve first, then containment-check, so `../` traversal can't escape dist.
-        if full_path and candidate.is_file() and candidate.is_relative_to(dist_resolved):
+        if (
+            full_path
+            and candidate.is_file()
+            and candidate.is_relative_to(dist_resolved)
+        ):
             return FileResponse(candidate)
         return FileResponse(dist / "index.html")
