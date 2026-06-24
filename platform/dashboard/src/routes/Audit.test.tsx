@@ -1,7 +1,7 @@
 /**
  * Smoke tests for the /audit page.
  *
- * Four load-bearing invariants:
+ * Five load-bearing invariants:
  *
  *   1. Picking an agent in the filter bar re-queries with `agent=` in
  *      the URL — the filter state actually reaches the API.
@@ -10,6 +10,8 @@
  *   3. Clicking a table row opens the detail drawer; Esc closes it.
  *   4. Selecting a row fetches its session siblings (`session_id=`)
  *      and the "Same session" list cross-links to the sibling event.
+ *   5. The date filter row opens via the Custom toggle, reflects custom
+ *      date selections, and collapses when a preset range is selected.
  */
 
 import { act, screen, waitFor } from "@testing-library/react";
@@ -288,5 +290,142 @@ describe("AuditPage", () => {
     // The drawer now shows the sibling event.
     await screen.findByText("evt-2");
     expect(screen.queryByText("evt-1")).not.toBeInTheDocument();
+  });
+
+  describe("date filter", () => {
+    it("clicking Custom opens a row showing the implied range label", async () => {
+      stubFetch();
+      const user = userEvent.setup();
+      renderWithProviders(<AuditPage />);
+
+      await screen.findByText("blocked by policy");
+
+      await user.click(screen.getByText("Custom"));
+
+      // The date picker button appears with a range label (implied 30d window)
+      expect(screen.getByRole("button", { name: /→/ })).toBeInTheDocument();
+    });
+
+    it("range toggle button clears an active date filter and hides the row", async () => {
+      stubFetch();
+      const user = userEvent.setup();
+
+      act(() => {
+        useAuditFilters.setState({
+          filters: {
+            ...EMPTY_AUDIT_FILTERS,
+            customMode: true,
+            start_date: new Date(2026, 5, 1),
+            end_date: new Date(2026, 5, 15),
+          },
+          tableLimit: 40,
+        });
+      });
+
+      renderWithProviders(<AuditPage />);
+      await screen.findByText("blocked by policy");
+
+      // Dates are pre-set so the date row renders immediately
+      expect(
+        screen.getByRole("button", { name: /Jun 1, 2026 → Jun 15, 2026/ }),
+      ).toBeInTheDocument();
+
+      // Click any range preset — it clears dates and dismisses the row
+      await user.click(screen.getByText("7d"));
+
+      await waitFor(() => {
+        expect(useAuditFilters.getState().filters.start_date).toBeNull();
+        expect(useAuditFilters.getState().filters.end_date).toBeNull();
+      });
+      expect(
+        screen.queryByRole("button", { name: /→/ }),
+      ).not.toBeInTheDocument();
+    });
+
+    it("dates set in the store render as the formatted range in the picker button", async () => {
+      stubFetch();
+      const user = userEvent.setup();
+      renderWithProviders(<AuditPage />);
+
+      await screen.findByText("blocked by policy");
+      await user.click(screen.getByText("Custom"));
+
+      act(() => {
+        useAuditFilters.setState((s) => ({
+          ...s,
+          filters: {
+            ...s.filters,
+            start_date: new Date(2026, 5, 1),
+            end_date: new Date(2026, 5, 15),
+          },
+        }));
+      });
+
+      await screen.findByRole("button", { name: /Jun 1, 2026 → Jun 15, 2026/ });
+    });
+
+    it("Clear all collapses the date row and resets range when Custom is active", async () => {
+      stubFetch();
+      const user = userEvent.setup();
+
+      // Seed: custom range + an agent filter so ActiveChips renders
+      act(() => {
+        useAuditFilters.setState({
+          filters: {
+            ...EMPTY_AUDIT_FILTERS,
+            customMode: true,
+            agent: "researcher",
+            start_date: new Date(2026, 5, 1),
+            end_date: new Date(2026, 5, 15),
+          },
+          tableLimit: 40,
+        });
+      });
+
+      renderWithProviders(<AuditPage />);
+      await screen.findByText("blocked by policy");
+
+      // Date row is visible and agent chip is showing (Clear all button confirms ActiveChips rendered)
+      expect(
+        screen.getByRole("button", { name: /Jun 1, 2026 → Jun 15, 2026/ }),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByRole("button", { name: /clear all/i }),
+      ).toBeInTheDocument();
+
+      // Click "Clear all"
+      await user.click(screen.getByRole("button", { name: /clear all/i }));
+
+      // Date row collapses and range reverts to a preset
+      await waitFor(() => {
+        expect(
+          screen.queryByRole("button", { name: /→/ }),
+        ).not.toBeInTheDocument();
+      });
+      expect(useAuditFilters.getState().filters.customMode).toBe(false);
+      expect(useAuditFilters.getState().filters.start_date).toBeNull();
+      expect(useAuditFilters.getState().filters.end_date).toBeNull();
+    });
+
+    it("selecting a preset dismisses the date picker and clears the dates", async () => {
+      stubFetch();
+      const user = userEvent.setup();
+      renderWithProviders(<AuditPage />);
+
+      await screen.findByText("blocked by policy");
+
+      await user.click(screen.getByText("Custom"));
+      expect(screen.getByRole("button", { name: /→/ })).toBeInTheDocument();
+
+      await user.click(screen.getByText("30d"));
+
+      await waitFor(() => {
+        expect(
+          screen.queryByRole("button", { name: /→/ }),
+        ).not.toBeInTheDocument();
+      });
+      expect(useAuditFilters.getState().filters.start_date).toBeNull();
+      expect(useAuditFilters.getState().filters.end_date).toBeNull();
+    });
   });
 });

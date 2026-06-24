@@ -22,6 +22,7 @@ export interface AuditFilters {
   tool: string;
   outcome: "" | AuditOutcome;
   range: "24h" | "7d" | "30d" | "90d";
+  customMode: boolean;
   start_date: Date | null;
   end_date: Date | null;
 }
@@ -30,12 +31,20 @@ export type SetAuditFilters = (
   updater: (prev: AuditFilters) => AuditFilters,
 ) => void;
 
+export const RANGE_DAYS: Record<AuditFilters["range"], number> = {
+  "24h": 1,
+  "7d": 7,
+  "30d": 30,
+  "90d": 90,
+};
+
 export const EMPTY_AUDIT_FILTERS: AuditFilters = {
   agent: "",
   role: "",
   tool: "",
   outcome: "",
   range: "30d",
+  customMode: false,
   start_date: null,
   end_date: null,
 };
