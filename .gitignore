@@ -16,3 +16,7 @@ Library/
 # Ed25519 signing keys from `hexgate policy keygen` — never commit the private key.
 *.private
 *.pem
+
+# hexgate live-demo scratch
+platform/api/hexgate.db
+__marimo__/

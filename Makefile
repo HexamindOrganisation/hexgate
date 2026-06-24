@@ -230,6 +230,29 @@ demo-platform: ## Print 3-terminal instructions for the full platform demo
 	@echo "      make dashboard-install"
 	@echo ""
 
+# -------- Bundled notebook demo (one process locally / per-container on Modal) --------
+#
+# Unlike `demo-platform` (3 terminals, manual login + token), this bundles the
+# whole thing into one process: the API serves the built dashboard same-origin,
+# auto-seeds + auto-logs-in, and a marimo notebook owns `hexgate serve`. The
+# visitor brings their own OpenAI key (BYOK). This is also what runs per visitor
+# in GitHub Codespaces (see .devcontainer/). See deploy/README.md.
+
+.PHONY: demo-notebook-build
+demo-notebook-build: platform-api-install dashboard-install ## One-time setup for `make demo-notebook` (deps + marimo + dashboard build)
+	uv pip install --python platform/api/.venv marimo
+	cd platform/dashboard && pnpm build
+
+.PHONY: demo-notebook
+demo-notebook: ## Run the bundled BYOK demo locally (one process). Open http://localhost:2718
+	PATH="$(CURDIR)/platform/api/.venv/bin:$$PATH" \
+	  HEXGATE_DEMO=1 HEXGATE_COOKIE_SECURE=0 \
+	  python deploy/boot.py
+
+.PHONY: demo-smoke
+demo-smoke: ## Smoke-test the bundled demo with a mock LLM (no real key)
+	cd platform/api && uv run python "$(CURDIR)/deploy/smoke_test.py"
+
 # -------- Package --------
 
 .PHONY: build
