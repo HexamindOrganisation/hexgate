@@ -1,4 +1,4 @@
-import { Button } from '@/components/ui/button'
+import { Button } from "@/components/ui/button";
 import {
   Dialog,
   DialogContent,
@@ -6,40 +6,40 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from '@/components/ui/dialog'
+} from "@/components/ui/dialog";
 
 interface ConfirmDialogProps {
-  open: boolean
-  onOpenChange: (open: boolean) => void
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
 
   /** Title displayed in the header — should be a clear question, e.g.
    * "Leave Acme Inc?" or "Remove alice@example.com?" */
-  title: string
+  title: string;
 
   /** One-line description of what happens. Surfaces real consequences
    * (loss of access, mailed cancellation, etc.) so the user isn't
    * confirming blind. */
-  description: string
+  description: string;
 
   /** Label for the confirming button — defaults to "Confirm". Set to
    * a verb that matches the action ("Leave organization", "Remove",
    * "Delete") so the user reads the same word they're committing to. */
-  confirmLabel?: string
+  confirmLabel?: string;
 
   /** Variant of the confirming button. ``destructive`` is the right
    * default for the actions this dialog covers (leave / remove /
    * cancel) — the red colour reinforces irreversibility. */
-  confirmVariant?: 'default' | 'destructive'
+  confirmVariant?: "default" | "destructive";
 
   /** Async handler. Awaited before the dialog closes so the button
    * can show its pending state. The handler is responsible for
    * surfacing errors (typically a toast) — this dialog stays focused
    * on the user choosing. */
-  onConfirm: () => Promise<void> | void
+  onConfirm: () => Promise<void> | void;
 
   /** Pending-state flag from the underlying mutation. When true, the
    * confirm button shows a spinner / "Working…" label and disables. */
-  pending?: boolean
+  pending?: boolean;
 }
 
 /**
@@ -56,8 +56,8 @@ export function ConfirmDialog({
   onOpenChange,
   title,
   description,
-  confirmLabel = 'Confirm',
-  confirmVariant = 'destructive',
+  confirmLabel = "Confirm",
+  confirmVariant = "destructive",
   onConfirm,
   pending = false,
 }: ConfirmDialogProps) {
@@ -84,10 +84,10 @@ export function ConfirmDialog({
             disabled={pending}
             onClick={() => void onConfirm()}
           >
-            {pending ? 'Working…' : confirmLabel}
+            {pending ? "Working…" : confirmLabel}
           </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
-  )
+  );
 }

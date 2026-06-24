@@ -1,8 +1,8 @@
-import { useState } from 'react'
-import { FolderOpen, FolderPlus } from 'lucide-react'
+import { useState } from "react";
+import { FolderOpen, FolderPlus } from "lucide-react";
 
-import { CreateProjectDialog } from '@/components/CreateProjectDialog'
-import { Button } from '@/components/ui/button'
+import { CreateProjectDialog } from "@/components/CreateProjectDialog";
+import { Button } from "@/components/ui/button";
 
 /**
  * Rendered by project-scoped pages when ``useProjectScoped`` returns
@@ -18,11 +18,11 @@ import { Button } from '@/components/ui/button'
 interface NoProjectEmptyStateProps {
   /** Short noun naming the page's content — used in the help copy
    * ("…to view tokens", "…to view agents"). */
-  resource: string
+  resource: string;
 }
 
 export function NoProjectEmptyState({ resource }: NoProjectEmptyStateProps) {
-  const [createOpen, setCreateOpen] = useState(false)
+  const [createOpen, setCreateOpen] = useState(false);
 
   return (
     <div className="mx-auto flex max-w-md flex-col items-center gap-4 py-16 text-center">
@@ -32,8 +32,8 @@ export function NoProjectEmptyState({ resource }: NoProjectEmptyStateProps) {
       <div className="space-y-1.5">
         <h2 className="text-base font-medium">No project selected</h2>
         <p className="text-sm text-muted-foreground">
-          Pick a project from the switcher above, or create one to view
-          this organization's {resource}.
+          Pick a project from the switcher above, or create one to view this
+          organization's {resource}.
         </p>
       </div>
       <Button onClick={() => setCreateOpen(true)} className="gap-2">
@@ -41,10 +41,7 @@ export function NoProjectEmptyState({ resource }: NoProjectEmptyStateProps) {
         Create project
       </Button>
 
-      <CreateProjectDialog
-        open={createOpen}
-        onOpenChange={setCreateOpen}
-      />
+      <CreateProjectDialog open={createOpen} onOpenChange={setCreateOpen} />
     </div>
-  )
+  );
 }

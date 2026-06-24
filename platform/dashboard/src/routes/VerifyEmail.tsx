@@ -1,16 +1,16 @@
-import { Link, useParams } from 'react-router-dom'
-import { CheckCircle2, MailX } from 'lucide-react'
+import { Link, useParams } from "react-router-dom";
+import { CheckCircle2, MailX } from "lucide-react";
 
-import { Button } from '@/components/ui/button'
+import { Button } from "@/components/ui/button";
 import {
   Card,
   CardDescription,
   CardFooter,
   CardHeader,
   CardTitle,
-} from '@/components/ui/card'
-import { useUser, useVerifyEmail } from '@/lib/auth'
-import { AuthCardLayout } from './SignIn'
+} from "@/components/ui/card";
+import { useUser, useVerifyEmail } from "@/lib/auth";
+import { AuthCardLayout } from "./SignIn";
 
 /**
  * Landing page for the verify-email link. Auto-consumes the token on
@@ -31,16 +31,18 @@ import { AuthCardLayout } from './SignIn'
  * never reconnected to the in-flight request.
  */
 export function VerifyEmailPage() {
-  const { token } = useParams<{ token: string }>()
-  const verify = useVerifyEmail(token)
-  const { user } = useUser()
+  const { token } = useParams<{ token: string }>();
+  const verify = useVerifyEmail(token);
+  const { user } = useUser();
 
   if (!token) {
     return (
       <AuthCardLayout>
         <Card className="w-full max-w-md">
           <CardHeader>
-            <CardTitle className="text-center">Invalid verification link</CardTitle>
+            <CardTitle className="text-center">
+              Invalid verification link
+            </CardTitle>
             <CardDescription className="text-center">
               This link is missing its token. Sign in and request a fresh
               verification email from your account.
@@ -53,7 +55,7 @@ export function VerifyEmailPage() {
           </CardFooter>
         </Card>
       </AuthCardLayout>
-    )
+    );
   }
 
   // Query is in flight on first mount + while the request runs.
@@ -70,7 +72,7 @@ export function VerifyEmailPage() {
           </CardHeader>
         </Card>
       </AuthCardLayout>
-    )
+    );
   }
 
   if (verify.isSuccess) {
@@ -88,14 +90,14 @@ export function VerifyEmailPage() {
           </CardHeader>
           <CardFooter>
             <Button asChild className="w-full">
-              <Link to={user ? '/' : '/sign-in'}>
-                {user ? 'Continue to dashboard' : 'Sign in'}
+              <Link to={user ? "/" : "/sign-in"}>
+                {user ? "Continue to dashboard" : "Sign in"}
               </Link>
             </Button>
           </CardFooter>
         </Card>
       </AuthCardLayout>
-    )
+    );
   }
 
   return (
@@ -107,8 +109,8 @@ export function VerifyEmailPage() {
           </div>
           <CardTitle className="text-center">Verification failed</CardTitle>
           <CardDescription className="text-center">
-            This verification link is expired or invalid. Sign in and request
-            a fresh one from the banner at the top of the dashboard.
+            This verification link is expired or invalid. Sign in and request a
+            fresh one from the banner at the top of the dashboard.
           </CardDescription>
         </CardHeader>
         <CardFooter>
@@ -118,5 +120,5 @@ export function VerifyEmailPage() {
         </CardFooter>
       </Card>
     </AuthCardLayout>
-  )
+  );
 }

@@ -1,10 +1,10 @@
-import { useLocation, useNavigate, useParams } from 'react-router-dom'
-import { toast } from 'sonner'
-import { Loader2, ShieldCheck, XCircle } from 'lucide-react'
+import { useLocation, useNavigate, useParams } from "react-router-dom";
+import { toast } from "sonner";
+import { Loader2, ShieldCheck, XCircle } from "lucide-react";
 
-import { AuthCardLayout } from '@/routes/SignIn'
-import { Alert, AlertDescription } from '@/components/ui/alert'
-import { Button } from '@/components/ui/button'
+import { AuthCardLayout } from "@/routes/SignIn";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
 import {
   Card,
   CardContent,
@@ -12,15 +12,15 @@ import {
   CardFooter,
   CardHeader,
   CardTitle,
-} from '@/components/ui/card'
-import { ApiError } from '@/lib/api'
-import { useActive } from '@/lib/active'
-import { useLogout, useUser } from '@/lib/auth'
+} from "@/components/ui/card";
+import { ApiError } from "@/lib/api";
+import { useActive } from "@/lib/active";
+import { useLogout, useUser } from "@/lib/auth";
 import {
   type InvitationPreview,
   useAcceptInvitation,
   useInvitationPreview,
-} from '@/lib/invites'
+} from "@/lib/invites";
 
 /**
  * Public landing page for emailed invitation links.
@@ -36,9 +36,9 @@ import {
  * never show two cards or a half-rendered Accept button.
  */
 export function AcceptInvitationPage() {
-  const { inviteId } = useParams<{ inviteId: string }>()
-  const preview = useInvitationPreview(inviteId ?? '')
-  const { user, loading: userLoading } = useUser()
+  const { inviteId } = useParams<{ inviteId: string }>();
+  const preview = useInvitationPreview(inviteId ?? "");
+  const { user, loading: userLoading } = useUser();
 
   // Loading both queries before deciding which card to show — otherwise
   // we'd flash "sign in to accept" for a moment while /users/me is
@@ -48,7 +48,7 @@ export function AcceptInvitationPage() {
       <AuthCardLayout>
         <LoadingCard />
       </AuthCardLayout>
-    )
+    );
   }
 
   if (preview.error) {
@@ -56,49 +56,46 @@ export function AcceptInvitationPage() {
       <AuthCardLayout>
         <PreviewErrorCard error={preview.error} />
       </AuthCardLayout>
-    )
+    );
   }
 
   // ``preview.data`` is defined here — error and loading are both ruled
   // out above, and react-query's discriminated union narrows once both
   // are false.
-  const inv = preview.data!
+  const inv = preview.data!;
 
   if (!user) {
     return (
       <AuthCardLayout>
         <SignedOutCard invitation={inv} inviteId={inviteId} />
       </AuthCardLayout>
-    )
+    );
   }
 
   // Case-insensitive — the backend matches lowercased emails on
   // accept, so the frontend's "mismatch" card must use the same rule
   // or we'd flash a scary warning at users whose email casing the
   // mailer normalised (e.g. Alice@... vs alice@...).
-  const emailMatches =
-    user.email.toLowerCase() === inv.email.toLowerCase()
+  const emailMatches = user.email.toLowerCase() === inv.email.toLowerCase();
 
   if (!emailMatches) {
     return (
       <AuthCardLayout>
         <EmailMismatchCard invitation={inv} signedInAs={user.email} />
       </AuthCardLayout>
-    )
+    );
   }
 
   return (
     <AuthCardLayout>
       <AcceptCard invitation={inv} inviteId={inviteId} />
     </AuthCardLayout>
-  )
+  );
 }
-
 
 // ---------------------------------------------------------------------------
 // Card variants — one per state-machine branch
 // ---------------------------------------------------------------------------
-
 
 function LoadingCard() {
   return (
@@ -108,9 +105,8 @@ function LoadingCard() {
         Loading invitation…
       </CardContent>
     </Card>
-  )
+  );
 }
-
 
 function PreviewErrorCard({ error }: { error: ApiError }) {
   // 404 → "this link is broken or the invite was withdrawn"
@@ -118,16 +114,17 @@ function PreviewErrorCard({ error }: { error: ApiError }) {
   // Other → generic "couldn't load" — covers transient network blips
   // and the unlikely 5xx case. Backend doesn't return 401/403 here
   // because preview is public.
-  let title = 'Invitation unavailable'
-  let body = 'We couldn\'t load this invitation. Please try the link again later.'
+  let title = "Invitation unavailable";
+  let body =
+    "We couldn't load this invitation. Please try the link again later.";
   if (error.status === 404) {
-    title = 'Invitation not found'
+    title = "Invitation not found";
     body =
-      'This link is broken, or the invitation was cancelled. Ask the person who invited you to send a fresh one.'
+      "This link is broken, or the invitation was cancelled. Ask the person who invited you to send a fresh one.";
   } else if (error.status === 410) {
-    title = 'Invitation expired'
+    title = "Invitation expired";
     body =
-      'This invitation has expired or has already been used. Ask an admin for a new one if you still need access.'
+      "This invitation has expired or has already been used. Ask an admin for a new one if you still need access.";
   }
 
   return (
@@ -145,31 +142,30 @@ function PreviewErrorCard({ error }: { error: ApiError }) {
         </Button>
       </CardFooter>
     </Card>
-  )
+  );
 }
-
 
 function SignedOutCard({
   invitation,
   inviteId,
 }: {
-  invitation: InvitationPreview
-  inviteId: string
+  invitation: InvitationPreview;
+  inviteId: string;
 }) {
-  const navigate = useNavigate()
-  const location = useLocation()
+  const navigate = useNavigate();
+  const location = useLocation();
 
   // Preserve the invite URL as ``state.from`` so SignIn bounces the
   // user straight back here after a successful login. Mirrors the
   // ProtectedRoute pattern used by every other authed page.
   function goSignIn() {
-    const from = location.pathname + location.search
-    navigate('/sign-in', { state: { from } })
+    const from = location.pathname + location.search;
+    navigate("/sign-in", { state: { from } });
   }
 
   function goSignUp() {
-    const from = location.pathname + location.search
-    navigate('/sign-up', { state: { from } })
+    const from = location.pathname + location.search;
+    navigate("/sign-up", { state: { from } });
   }
 
   return (
@@ -184,17 +180,19 @@ function SignedOutCard({
         <CardDescription className="text-center">
           <span className="font-medium text-foreground">
             {invitation.invited_by_email}
-          </span>{' '}
-          invited <span className="font-medium text-foreground">{invitation.email}</span>{' '}
+          </span>{" "}
+          invited{" "}
+          <span className="font-medium text-foreground">
+            {invitation.email}
+          </span>{" "}
           to join as <span className="capitalize">{invitation.role}</span>.
         </CardDescription>
       </CardHeader>
       <CardContent>
         <Alert>
           <AlertDescription>
-            Sign in as{' '}
-            <span className="font-medium">{invitation.email}</span> to
-            accept this invitation.
+            Sign in as <span className="font-medium">{invitation.email}</span>{" "}
+            to accept this invitation.
           </AlertDescription>
         </Alert>
       </CardContent>
@@ -210,30 +208,29 @@ function SignedOutCard({
         <span className="sr-only">Invitation {inviteId}</span>
       </CardFooter>
     </Card>
-  )
+  );
 }
-
 
 function EmailMismatchCard({
   invitation,
   signedInAs,
 }: {
-  invitation: InvitationPreview
-  signedInAs: string
+  invitation: InvitationPreview;
+  signedInAs: string;
 }) {
-  const navigate = useNavigate()
-  const location = useLocation()
-  const logout = useLogout()
+  const navigate = useNavigate();
+  const location = useLocation();
+  const logout = useLogout();
 
   async function switchAccount() {
     try {
-      await logout.mutateAsync()
+      await logout.mutateAsync();
     } catch {
       // Logging out while already-logged-out is fine — we'll send them
       // to sign-in regardless. ``useLogout`` already swallows 401.
     }
-    const from = location.pathname + location.search
-    navigate('/sign-in', { state: { from }, replace: true })
+    const from = location.pathname + location.search;
+    navigate("/sign-in", { state: { from }, replace: true });
   }
 
   return (
@@ -242,23 +239,24 @@ function EmailMismatchCard({
         <div className="mb-2 flex justify-center">
           <XCircle className="h-8 w-8 text-destructive" />
         </div>
-        <CardTitle className="text-center">This invite isn't for this account</CardTitle>
+        <CardTitle className="text-center">
+          This invite isn't for this account
+        </CardTitle>
         <CardDescription className="text-center">
-          The invitation is for{' '}
+          The invitation is for{" "}
           <span className="font-medium text-foreground">
             {invitation.email}
           </span>
-          , but you're signed in as{' '}
+          , but you're signed in as{" "}
           <span className="font-medium text-foreground">{signedInAs}</span>.
         </CardDescription>
       </CardHeader>
       <CardContent>
         <Alert variant="destructive">
           <AlertDescription>
-            Sign out and sign back in with{' '}
-            <span className="font-medium">{invitation.email}</span> to
-            accept, or ask the inviter to re-send to your current
-            address.
+            Sign out and sign back in with{" "}
+            <span className="font-medium">{invitation.email}</span> to accept,
+            or ask the inviter to re-send to your current address.
           </AlertDescription>
         </Alert>
       </CardContent>
@@ -268,24 +266,23 @@ function EmailMismatchCard({
           onClick={switchAccount}
           disabled={logout.isPending}
         >
-          {logout.isPending ? 'Signing out…' : 'Sign out & switch account'}
+          {logout.isPending ? "Signing out…" : "Sign out & switch account"}
         </Button>
       </CardFooter>
     </Card>
-  )
+  );
 }
-
 
 function AcceptCard({
   invitation,
   inviteId,
 }: {
-  invitation: InvitationPreview
-  inviteId: string
+  invitation: InvitationPreview;
+  inviteId: string;
 }) {
-  const navigate = useNavigate()
-  const accept = useAcceptInvitation()
-  const setActiveOrg = useActive((s) => s.setActiveOrg)
+  const navigate = useNavigate();
+  const accept = useAcceptInvitation();
+  const setActiveOrg = useActive((s) => s.setActiveOrg);
 
   // Translate the backend's tagged error responses into friendly
   // copy. The race-case 410/409 happens if the invite expired or got
@@ -294,31 +291,30 @@ function AcceptCard({
   // surfaced defensively in case the user's email changed under us.
   function translateError(err: unknown): string {
     if (err instanceof ApiError) {
-      if (err.status === 410) return 'This invitation has expired.'
-      if (err.status === 409) return 'This invitation has already been used.'
-      if (err.status === 403)
-        return "This invitation isn't for this account."
+      if (err.status === 410) return "This invitation has expired.";
+      if (err.status === 409) return "This invitation has already been used.";
+      if (err.status === 403) return "This invitation isn't for this account.";
     }
-    return "Couldn't accept the invitation. Please try again."
+    return "Couldn't accept the invitation. Please try again.";
   }
 
   async function onAccept() {
     try {
-      await accept.mutateAsync(inviteId)
-      toast.success(`Joined ${invitation.org_name}`)
+      await accept.mutateAsync(inviteId);
+      toast.success(`Joined ${invitation.org_name}`);
       // Drop the user into the new org. ``setActiveOrg`` clears the
       // active project as a side-effect — the project picker will
       // populate from the org's project list on the next page.
-      setActiveOrg(invitation.org_id)
+      setActiveOrg(invitation.org_id);
       // Members page is the most useful landing — the user can
       // immediately see who else is in the org they just joined.
-      navigate(`/orgs/${invitation.org_id}/members`, { replace: true })
+      navigate(`/orgs/${invitation.org_id}/members`, { replace: true });
     } catch (err) {
-      toast.error(translateError(err))
+      toast.error(translateError(err));
     }
   }
 
-  const errorText = accept.error ? translateError(accept.error) : null
+  const errorText = accept.error ? translateError(accept.error) : null;
 
   return (
     <Card className="w-full max-w-md">
@@ -332,10 +328,9 @@ function AcceptCard({
         <CardDescription className="text-center">
           <span className="font-medium text-foreground">
             {invitation.invited_by_email}
-          </span>{' '}
-          invited you to join as{' '}
-          <span className="capitalize text-foreground">{invitation.role}</span>
-          .
+          </span>{" "}
+          invited you to join as{" "}
+          <span className="capitalize text-foreground">{invitation.role}</span>.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">
@@ -347,7 +342,7 @@ function AcceptCard({
         <dl className="grid grid-cols-3 gap-2 text-sm">
           <dt className="text-muted-foreground">Organization</dt>
           <dd className="col-span-2 font-medium">
-            {invitation.org_name}{' '}
+            {invitation.org_name}{" "}
             <span className="font-mono text-xs text-muted-foreground">
               ({invitation.org_slug})
             </span>
@@ -364,17 +359,17 @@ function AcceptCard({
           onClick={onAccept}
           disabled={accept.isPending}
         >
-          {accept.isPending ? 'Joining…' : 'Accept invitation'}
+          {accept.isPending ? "Joining…" : "Accept invitation"}
         </Button>
         <Button
           variant="ghost"
           className="w-full"
-          onClick={() => navigate('/', { replace: true })}
+          onClick={() => navigate("/", { replace: true })}
           disabled={accept.isPending}
         >
           Not now
         </Button>
       </CardFooter>
     </Card>
-  )
+  );
 }

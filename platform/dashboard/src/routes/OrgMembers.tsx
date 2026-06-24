@@ -1,14 +1,14 @@
-import { useState } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
-import { toast } from 'sonner'
-import { ArrowLeft, Mail, Plus, X } from 'lucide-react'
+import { useState } from "react";
+import { useNavigate, useParams } from "react-router-dom";
+import { toast } from "sonner";
+import { ArrowLeft, Mail, Plus, X } from "lucide-react";
 
-import { ConfirmDialog } from '@/components/ConfirmDialog'
-import { InviteMemberDialog } from '@/components/InviteMemberDialog'
-import { RoleSelect } from '@/components/RoleSelect'
-import { Alert, AlertDescription } from '@/components/ui/alert'
-import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
+import { ConfirmDialog } from "@/components/ConfirmDialog";
+import { InviteMemberDialog } from "@/components/InviteMemberDialog";
+import { RoleSelect } from "@/components/RoleSelect";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import {
   Table,
   TableBody,
@@ -16,21 +16,21 @@ import {
   TableHead,
   TableHeader,
   TableRow,
-} from '@/components/ui/table'
-import { ApiError } from '@/lib/api'
-import { useUser } from '@/lib/auth'
+} from "@/components/ui/table";
+import { ApiError } from "@/lib/api";
+import { useUser } from "@/lib/auth";
 import {
   useInvitations,
   useRevokeInvitation,
   type InvitationRead,
-} from '@/lib/invites'
+} from "@/lib/invites";
 import {
   useMembers,
   useRemoveMember,
   useUpdateMemberRole,
   type MemberRead,
-} from '@/lib/members'
-import { useOrgs, type Role } from '@/lib/orgs'
+} from "@/lib/members";
+import { useOrgs, type Role } from "@/lib/orgs";
 
 /**
  * `/orgs/:orgId/members` — two adjacent tables in one page.
@@ -46,37 +46,37 @@ import { useOrgs, type Role } from '@/lib/orgs'
  * trip on every render.
  */
 export function OrgMembersPage() {
-  const { orgId } = useParams<{ orgId: string }>()
-  const navigate = useNavigate()
-  const { user: me } = useUser()
-  const orgsQuery = useOrgs()
-  const membersQuery = useMembers(orgId ?? null)
-  const invitationsQuery = useInvitations(orgId ?? null)
-  const updateRole = useUpdateMemberRole()
-  const removeMember = useRemoveMember()
-  const revokeInvite = useRevokeInvitation()
+  const { orgId } = useParams<{ orgId: string }>();
+  const navigate = useNavigate();
+  const { user: me } = useUser();
+  const orgsQuery = useOrgs();
+  const membersQuery = useMembers(orgId ?? null);
+  const invitationsQuery = useInvitations(orgId ?? null);
+  const updateRole = useUpdateMemberRole();
+  const removeMember = useRemoveMember();
+  const revokeInvite = useRevokeInvitation();
 
-  const [inviteOpen, setInviteOpen] = useState(false)
-  const [confirmRemove, setConfirmRemove] = useState<MemberRead | null>(null)
+  const [inviteOpen, setInviteOpen] = useState(false);
+  const [confirmRemove, setConfirmRemove] = useState<MemberRead | null>(null);
   const [confirmRevoke, setConfirmRevoke] = useState<InvitationRead | null>(
     null,
-  )
+  );
 
-  const org = orgsQuery.data?.find((o) => o.id === orgId) ?? null
-  const canManage = org?.role === 'owner' || org?.role === 'admin'
+  const org = orgsQuery.data?.find((o) => o.id === orgId) ?? null;
+  const canManage = org?.role === "owner" || org?.role === "admin";
 
   if (orgsQuery.isLoading) {
     return (
       <div className="mx-auto max-w-4xl p-6 text-sm text-muted-foreground">
         Loading…
       </div>
-    )
+    );
   }
 
   if (!org) {
     return (
       <div className="mx-auto max-w-4xl space-y-4 p-6">
-        <Button variant="ghost" size="sm" onClick={() => navigate('/orgs')}>
+        <Button variant="ghost" size="sm" onClick={() => navigate("/orgs")}>
           <ArrowLeft className="h-3.5 w-3.5" />
           Back to organizations
         </Button>
@@ -86,62 +86,62 @@ export function OrgMembersPage() {
           </AlertDescription>
         </Alert>
       </div>
-    )
+    );
   }
 
   async function onRoleChange(member: MemberRead, role: Role): Promise<void> {
-    if (member.role === role || !org) return
+    if (member.role === role || !org) return;
     try {
       await updateRole.mutateAsync({
         orgId: org.id,
         userId: member.user_id,
         role,
-      })
-      toast.success(`${member.email} is now ${role}`)
+      });
+      toast.success(`${member.email} is now ${role}`);
     } catch (err) {
-      const detail = err instanceof ApiError ? String(err.message) : ''
-      const lastOwner = detail.toLowerCase().includes('last owner')
+      const detail = err instanceof ApiError ? String(err.message) : "";
+      const lastOwner = detail.toLowerCase().includes("last owner");
       toast.error(
         lastOwner
           ? "Can't demote the only owner — promote someone else first."
           : `Could not update ${member.email}'s role.`,
-      )
+      );
     }
   }
 
   async function onRemove(member: MemberRead): Promise<void> {
-    if (!org) return
+    if (!org) return;
     try {
       await removeMember.mutateAsync({
         orgId: org.id,
         userId: member.user_id,
-      })
-      toast.success(`Removed ${member.email}`)
+      });
+      toast.success(`Removed ${member.email}`);
     } catch (err) {
-      const detail = err instanceof ApiError ? String(err.message) : ''
-      const lastOwner = detail.toLowerCase().includes('last owner')
+      const detail = err instanceof ApiError ? String(err.message) : "";
+      const lastOwner = detail.toLowerCase().includes("last owner");
       toast.error(
         lastOwner
           ? "Can't remove the only owner — promote someone else first."
           : `Could not remove ${member.email}.`,
-      )
+      );
     } finally {
-      setConfirmRemove(null)
+      setConfirmRemove(null);
     }
   }
 
   async function onRevokeInvite(invitation: InvitationRead): Promise<void> {
-    if (!org) return
+    if (!org) return;
     try {
       await revokeInvite.mutateAsync({
         invitationId: invitation.id,
         orgId: org.id,
-      })
-      toast.success(`Cancelled invite to ${invitation.email}`)
+      });
+      toast.success(`Cancelled invite to ${invitation.email}`);
     } catch {
-      toast.error(`Could not cancel invite to ${invitation.email}.`)
+      toast.error(`Could not cancel invite to ${invitation.email}.`);
     } finally {
-      setConfirmRevoke(null)
+      setConfirmRevoke(null);
     }
   }
 
@@ -191,21 +191,17 @@ export function OrgMembersPage() {
                 <TableHead>Email</TableHead>
                 <TableHead className="w-[140px]">Role</TableHead>
                 {canManage && (
-                  <TableHead className="w-[80px] text-right">
-                    Actions
-                  </TableHead>
+                  <TableHead className="w-[80px] text-right">Actions</TableHead>
                 )}
               </TableRow>
             </TableHeader>
             <TableBody>
               {membersQuery.data.map((member) => {
-                const isSelf = member.user_id === me?.id
+                const isSelf = member.user_id === me?.id;
                 return (
                   <TableRow key={member.user_id}>
                     <TableCell>
-                      <span className="font-mono text-xs">
-                        {member.email}
-                      </span>
+                      <span className="font-mono text-xs">{member.email}</span>
                       {isSelf && (
                         <span className="ml-2 text-[10px] uppercase tracking-wider text-muted-foreground">
                           you
@@ -222,7 +218,7 @@ export function OrgMembersPage() {
                       ) : (
                         <Badge
                           variant={
-                            member.role === 'owner' ? 'primary' : 'outline'
+                            member.role === "owner" ? "primary" : "outline"
                           }
                           className="font-normal capitalize"
                         >
@@ -246,7 +242,7 @@ export function OrgMembersPage() {
                       </TableCell>
                     )}
                   </TableRow>
-                )
+                );
               })}
             </TableBody>
           </Table>
@@ -279,9 +275,7 @@ export function OrgMembersPage() {
                   <TableHead>Email</TableHead>
                   <TableHead className="w-[120px]">Role</TableHead>
                   <TableHead className="w-[160px]">Invited by</TableHead>
-                  <TableHead className="w-[80px] text-right">
-                    Actions
-                  </TableHead>
+                  <TableHead className="w-[80px] text-right">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -333,17 +327,19 @@ export function OrgMembersPage() {
       <ConfirmDialog
         open={confirmRemove !== null}
         onOpenChange={(open) => !open && setConfirmRemove(null)}
-        title={confirmRemove ? `Remove ${confirmRemove.email}?` : ''}
+        title={confirmRemove ? `Remove ${confirmRemove.email}?` : ""}
         description="They'll lose access to this organization's projects, tokens, and audit logs. An admin can re-invite them later."
         confirmLabel="Remove member"
         pending={removeMember.isPending}
-        onConfirm={() => (confirmRemove ? onRemove(confirmRemove) : Promise.resolve())}
+        onConfirm={() =>
+          confirmRemove ? onRemove(confirmRemove) : Promise.resolve()
+        }
       />
 
       <ConfirmDialog
         open={confirmRevoke !== null}
         onOpenChange={(open) => !open && setConfirmRevoke(null)}
-        title={confirmRevoke ? `Cancel invite to ${confirmRevoke.email}?` : ''}
+        title={confirmRevoke ? `Cancel invite to ${confirmRevoke.email}?` : ""}
         description="The magic link in their email will stop working. You can always send a fresh invite later."
         confirmLabel="Cancel invitation"
         pending={revokeInvite.isPending}
@@ -352,5 +348,5 @@ export function OrgMembersPage() {
         }
       />
     </div>
-  )
+  );
 }

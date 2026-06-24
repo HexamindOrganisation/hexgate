@@ -2,21 +2,21 @@
  * away from these on a 401, otherwise we'd bounce the sign-in form itself
  * back to /sign-in in a loop when the user has bad credentials. */
 const PUBLIC_AUTH_PATHS = [
-  '/sign-in',
-  '/sign-up',
-  '/forgot-password',
-  '/reset-password',
-  '/verify-email',
-]
+  "/sign-in",
+  "/sign-up",
+  "/forgot-password",
+  "/reset-password",
+  "/verify-email",
+];
 
 /** Thrown by ``request`` when the backend returns 401, after the global
  * "redirect to /sign-in" side-effect has fired. Tests assert against the
  * error type; production code rarely catches it (the redirect already
  * happened). */
 export class UnauthenticatedError extends Error {
-  constructor(message = 'not authenticated') {
-    super(message)
-    this.name = 'UnauthenticatedError'
+  constructor(message = "not authenticated") {
+    super(message);
+    this.name = "UnauthenticatedError";
   }
 }
 
@@ -26,14 +26,14 @@ export class UnauthenticatedError extends Error {
  * constructor parameter properties) because the project's tsconfig
  * enables ``erasableSyntaxOnly``. */
 export class ApiError extends Error {
-  readonly status: number
-  readonly detail: unknown
+  readonly status: number;
+  readonly detail: unknown;
 
   constructor(status: number, detail: unknown, message: string) {
-    super(message)
-    this.name = 'ApiError'
-    this.status = status
-    this.detail = detail
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+    this.detail = detail;
   }
 }
 
@@ -43,66 +43,66 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     // ``include`` so the hexgate_session cookie rides on cross-origin
     // dev (vite on 5173 → api on 8000) and on prod where the dashboard
     // and API may live on different subdomains.
-    credentials: 'include',
+    credentials: "include",
     headers: {
-      'Content-Type': 'application/json',
+      "Content-Type": "application/json",
       ...(init?.headers ?? {}),
     },
-  })
+  });
   if (res.status === 401) {
     // Single global redirect — every component that does a request gets
     // sent to sign-in if their session expired. Public auth routes are
     // exempt: a 401 there is just "wrong password", surface it normally.
     const onAuthPage = PUBLIC_AUTH_PATHS.some((p) =>
       window.location.pathname.startsWith(p),
-    )
+    );
     if (!onAuthPage) {
-      window.location.href = '/sign-in'
+      window.location.href = "/sign-in";
     }
-    throw new UnauthenticatedError()
+    throw new UnauthenticatedError();
   }
   if (!res.ok) {
-    let detail: unknown
-    let bodyText = ''
+    let detail: unknown;
+    let bodyText = "";
     try {
-      bodyText = await res.text()
-      detail = bodyText ? JSON.parse(bodyText) : null
+      bodyText = await res.text();
+      detail = bodyText ? JSON.parse(bodyText) : null;
     } catch {
-      detail = bodyText
+      detail = bodyText;
     }
     const message =
-      typeof detail === 'object' && detail !== null && 'detail' in detail
+      typeof detail === "object" && detail !== null && "detail" in detail
         ? String((detail as { detail: unknown }).detail)
-        : `${res.status} ${res.statusText}`
-    throw new ApiError(res.status, detail, message)
+        : `${res.status} ${res.statusText}`;
+    throw new ApiError(res.status, detail, message);
   }
-  if (res.status === 204) return undefined as T
-  return (await res.json()) as T
+  if (res.status === 204) return undefined as T;
+  return (await res.json()) as T;
 }
 
 export interface TokenListItem {
-  id: string
-  name: string
-  masked: string
-  scopes: string[]
-  created_at: string
-  last_used_at: string | null
+  id: string;
+  name: string;
+  masked: string;
+  scopes: string[];
+  created_at: string;
+  last_used_at: string | null;
 }
 
 export interface TokenMintResponse extends TokenListItem {
-  full: string
+  full: string;
 }
 
 export interface TokenMintRequest {
-  name: string
-  scopes?: string[]
-  env?: 'test' | 'live'
+  name: string;
+  scopes?: string[];
+  env?: "test" | "live";
 }
 
 export interface AgentRead {
-  id: string
-  name: string
-  agent_yaml: string
+  id: string;
+  name: string;
+  agent_yaml: string;
   /**
    * Canonical policy document. Flat single-policy YAML or — when the agent
    * declares per-role behaviour — an inline-roles YAML with a top-level
@@ -110,31 +110,31 @@ export interface AgentRead {
    * client-side helper that extracts the role list (for the Playground
    * picker, etc).
    */
-  policy_yaml: string
-  system_md: string
-  updated_at: string
+  policy_yaml: string;
+  system_md: string;
+  updated_at: string;
 }
 
 export interface AgentUpdate {
-  agent_yaml?: string
-  policy_yaml?: string
-  system_md?: string
+  agent_yaml?: string;
+  policy_yaml?: string;
+  system_md?: string;
 }
 
 /**
  * Tool input parameter, mirroring InputProperty in platform/api/schemas.py.
  */
 export interface InputProperty {
-  title: string
-  type: string
+  title: string;
+  type: string;
 }
 
 /**
  * Tool input schema, mirroring InputSchema in platform/api/schemas.py.
  */
 export interface InputSchema {
-  properties: Record<string, InputProperty>
-  required: string[]
+  properties: Record<string, InputProperty>;
+  required: string[];
 }
 
 /**
@@ -142,21 +142,21 @@ export interface InputSchema {
  * nullable on read-back to match the platform-side schema.
  */
 export interface ToolDefinition {
-  name: string
-  description: string | null
-  input_schema: InputSchema
+  name: string;
+  description: string | null;
+  input_schema: InputSchema;
 }
 
 /**
  * Registered manifest body, mirroring AgentManifest in platform/api/schemas.py.
  */
 export interface AgentManifest {
-  name: string
-  description: string | null
-  framework: string
-  model: string | null
-  system_prompt: string | null
-  tools: ToolDefinition[]
+  name: string;
+  description: string | null;
+  framework: string;
+  model: string | null;
+  system_prompt: string | null;
+  tools: ToolDefinition[];
 }
 
 /**
@@ -167,112 +167,112 @@ export interface AgentManifest {
  * always reflects the Agent row's name (the picker uses it directly).
  */
 export interface AgentManifestView {
-  name: string
-  manifest: AgentManifest | null
-  version: number | null
-  content_hash: string | null
-  updated_at: string
+  name: string;
+  manifest: AgentManifest | null;
+  version: number | null;
+  content_hash: string | null;
+  updated_at: string;
 }
 
 export interface PolicyValidationError {
   /** Role name when the failure was inside an inline-roles entry; null otherwise. */
-  role: string | null
-  line: number | null
-  message: string
+  role: string | null;
+  line: number | null;
+  message: string;
 }
 
 export interface ValidatePolicyResponse {
-  ok: boolean
-  errors: PolicyValidationError[]
+  ok: boolean;
+  errors: PolicyValidationError[];
 }
 
 // --- Audit dashboard (mirrors platform/api/schemas.py) ----------------------
 
-export type AuditWindow = '24h' | '7d' | '30d' | '90d'
-export type AuditOutcome = 'allow' | 'deny' | 'needs_approval'
+export type AuditWindow = "24h" | "7d" | "30d" | "90d";
+export type AuditOutcome = "allow" | "deny" | "needs_approval";
 
 export interface OutcomeCounts {
-  all: number
-  allow: number
-  deny: number
-  needs_approval: number
+  all: number;
+  allow: number;
+  deny: number;
+  needs_approval: number;
 }
 
 /** One agent/role/tool bucket; an empty role keeps its raw `""` key —
  * the dashboard maps it to the "(none)" display label locally. */
 export interface AuditBreakdownRow extends OutcomeCounts {
-  key: string
+  key: string;
 }
 
 export interface AuditSummary {
-  totals: OutcomeCounts
-  by_agent: AuditBreakdownRow[]
-  by_role: AuditBreakdownRow[]
-  by_tool: AuditBreakdownRow[]
+  totals: OutcomeCounts;
+  by_agent: AuditBreakdownRow[];
+  by_role: AuditBreakdownRow[];
+  by_tool: AuditBreakdownRow[];
 }
 
 /** One time bucket; `bucket` is an ISO string. */
 export interface AuditTimeseriesPoint {
-  bucket: string
-  allow: number
-  deny: number
-  needs_approval: number
+  bucket: string;
+  allow: number;
+  deny: number;
+  needs_approval: number;
 }
 
 /** One events-table row; `hint`/`arguments` are decoded JSON. */
 export interface AuditDecisionRow {
-  event_id: string
-  occurred_at: string
-  received_at: string
-  agent_name: string
-  agent_version_id: string
-  session_id: string
-  user_id: string
-  tool_name: string
-  role: string
-  outcome: AuditOutcome
-  error_type: string
-  reason: string
-  violations: string[]
-  hint: unknown
-  arguments: unknown
+  event_id: string;
+  occurred_at: string;
+  received_at: string;
+  agent_name: string;
+  agent_version_id: string;
+  session_id: string;
+  user_id: string;
+  tool_name: string;
+  role: string;
+  outcome: AuditOutcome;
+  error_type: string;
+  reason: string;
+  violations: string[];
+  hint: unknown;
+  arguments: unknown;
 }
 
 export interface AuditDecisionPage {
-  rows: AuditDecisionRow[]
-  total: number
-  limit: number
-  offset: number
+  rows: AuditDecisionRow[];
+  total: number;
+  limit: number;
+  offset: number;
 }
 
 /** Scope filters shared by summary/timeseries/list. `undefined` = no
  * filter; `role: ''` = the no-role bucket (sent as `role=`). */
 export interface AuditScope {
-  window?: AuditWindow
-  agent?: string
-  role?: string
-  tool?: string
-  start_date?: string
-  end_date?: string
+  window?: AuditWindow;
+  agent?: string;
+  role?: string;
+  tool?: string;
+  start_date?: string;
+  end_date?: string;
 }
 
 /** List filters: scope + table-only outcome/session_id + paging. */
 export interface AuditDecisionFilters extends AuditScope {
-  outcome?: AuditOutcome
-  session_id?: string
-  limit?: number
-  offset?: number
+  outcome?: AuditOutcome;
+  session_id?: string;
+  limit?: number;
+  offset?: number;
 }
 
 function qs(params: Record<string, string | number | undefined>): string {
-  const search = new URLSearchParams()
+  const search = new URLSearchParams();
   for (const [key, value] of Object.entries(params)) {
     // undefined = omit. '' is kept: `role=` (empty value) is meaningful —
     // it selects the no-role bucket server-side.
-    if (value !== undefined) search.set(key, String(value))
+    if (value !== undefined) search.set(key, String(value));
   }
-  const str = search.toString()
-  return str ? `?${str}` : ''
+  const str = search.toString();
+  return str ? `?${str}` : "";
 }
 
 /**
@@ -287,40 +287,34 @@ export const api = {
 
   mintToken: (body: TokenMintRequest, projectId: string) =>
     request<TokenMintResponse>(`/v1/projects/${projectId}/tokens`, {
-      method: 'POST',
+      method: "POST",
       body: JSON.stringify(body),
     }),
 
   revokeToken: (tokenId: string, projectId: string) =>
     request<void>(`/v1/projects/${projectId}/tokens/${tokenId}`, {
-      method: 'DELETE',
+      method: "DELETE",
     }),
 
   listAgents: (projectId: string) =>
     request<AgentRead[]>(`/v1/projects/${projectId}/agents`),
 
   listAgentManifests: (projectId: string) =>
-    request<AgentManifestView[]>(
-      `/v1/projects/${projectId}/agents/manifest`,
-    ),
+    request<AgentManifestView[]>(`/v1/projects/${projectId}/agents/manifest`),
 
   getAgent: (name: string, projectId: string) =>
     request<AgentRead>(`/v1/projects/${projectId}/agents/${name}`),
 
   updateAgent: (name: string, body: AgentUpdate, projectId: string) =>
     request<AgentRead>(`/v1/projects/${projectId}/agents/${name}`, {
-      method: 'PUT',
+      method: "PUT",
       body: JSON.stringify(body),
     }),
 
-  validatePolicy: (
-    name: string,
-    policy_yaml: string,
-    projectId: string,
-  ) =>
+  validatePolicy: (name: string, policy_yaml: string, projectId: string) =>
     request<ValidatePolicyResponse>(
       `/v1/projects/${projectId}/agents/${name}/validate`,
-      { method: 'POST', body: JSON.stringify({ policy_yaml }) },
+      { method: "POST", body: JSON.stringify({ policy_yaml }) },
     ),
 
   getAuditSummary: (scope: AuditScope, projectId: string) =>
@@ -337,4 +331,4 @@ export const api = {
     request<AuditDecisionPage>(
       `/v1/projects/${projectId}/audit/decisions${qs({ ...filters })}`,
     ),
-}
+};

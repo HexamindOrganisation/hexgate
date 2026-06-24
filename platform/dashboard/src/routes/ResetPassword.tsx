@@ -1,10 +1,10 @@
-import { Link, useNavigate, useParams } from 'react-router-dom'
-import { useForm } from 'react-hook-form'
-import { zodResolver } from '@hookform/resolvers/zod'
-import { z } from 'zod'
+import { Link, useNavigate, useParams } from "react-router-dom";
+import { useForm } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { z } from "zod";
 
-import { Alert, AlertDescription } from '@/components/ui/alert'
-import { Button } from '@/components/ui/button'
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
 import {
   Card,
   CardContent,
@@ -12,43 +12,43 @@ import {
   CardFooter,
   CardHeader,
   CardTitle,
-} from '@/components/ui/card'
-import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
-import { useResetPassword } from '@/lib/auth'
-import { AuthCardLayout } from './SignIn'
+} from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { useResetPassword } from "@/lib/auth";
+import { AuthCardLayout } from "./SignIn";
 
 const Schema = z
   .object({
-    password: z.string().min(8, 'At least 8 characters'),
+    password: z.string().min(8, "At least 8 characters"),
     confirm: z.string(),
   })
   .refine((v) => v.password === v.confirm, {
     message: "Passwords don't match",
-    path: ['confirm'],
-  })
+    path: ["confirm"],
+  });
 
-type Values = z.infer<typeof Schema>
+type Values = z.infer<typeof Schema>;
 
 export function ResetPasswordPage() {
-  const { token } = useParams<{ token: string }>()
-  const navigate = useNavigate()
-  const reset = useResetPassword()
+  const { token } = useParams<{ token: string }>();
+  const navigate = useNavigate();
+  const reset = useResetPassword();
   const form = useForm<Values>({
     resolver: zodResolver(Schema),
-    defaultValues: { password: '', confirm: '' },
-  })
+    defaultValues: { password: "", confirm: "" },
+  });
 
   // Token comes from the URL — emailed links land here directly. The
   // backend validates the JWT signature + expiry on /reset-password,
   // so we don't pre-check here; a tampered or expired token surfaces
   // as the .isError branch below.
   async function onSubmit(values: Values) {
-    if (!token) return
+    if (!token) return;
     try {
-      await reset.mutateAsync({ token, password: values.password })
+      await reset.mutateAsync({ token, password: values.password });
       // After 2 seconds on the success card, bounce to sign-in.
-      setTimeout(() => navigate('/sign-in', { replace: true }), 2000)
+      setTimeout(() => navigate("/sign-in", { replace: true }), 2000);
     } catch {
       // surfaces via reset.isError
     }
@@ -72,7 +72,7 @@ export function ResetPasswordPage() {
           </CardFooter>
         </Card>
       </AuthCardLayout>
-    )
+    );
   }
 
   if (reset.isSuccess) {
@@ -87,7 +87,7 @@ export function ResetPasswordPage() {
           </CardHeader>
         </Card>
       </AuthCardLayout>
-    )
+    );
   }
 
   return (
@@ -104,8 +104,8 @@ export function ResetPasswordPage() {
             {reset.isError && (
               <Alert variant="destructive">
                 <AlertDescription>
-                  This reset link has expired or is invalid. Request a fresh
-                  one from the{' '}
+                  This reset link has expired or is invalid. Request a fresh one
+                  from the{" "}
                   <Link
                     to="/forgot-password"
                     className="underline underline-offset-2"
@@ -123,7 +123,7 @@ export function ResetPasswordPage() {
                 id="password"
                 type="password"
                 autoComplete="new-password"
-                {...form.register('password')}
+                {...form.register("password")}
               />
               {form.formState.errors.password && (
                 <p className="text-xs text-destructive">
@@ -138,7 +138,7 @@ export function ResetPasswordPage() {
                 id="confirm"
                 type="password"
                 autoComplete="new-password"
-                {...form.register('confirm')}
+                {...form.register("confirm")}
               />
               {form.formState.errors.confirm && (
                 <p className="text-xs text-destructive">
@@ -149,11 +149,11 @@ export function ResetPasswordPage() {
           </CardContent>
           <CardFooter>
             <Button type="submit" className="w-full" disabled={reset.isPending}>
-              {reset.isPending ? 'Updating…' : 'Update password'}
+              {reset.isPending ? "Updating…" : "Update password"}
             </Button>
           </CardFooter>
         </form>
       </Card>
     </AuthCardLayout>
-  )
+  );
 }

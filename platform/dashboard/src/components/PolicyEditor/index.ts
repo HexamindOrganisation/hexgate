@@ -1,1 +1,1 @@
-export { PolicyEditor, type PolicyEditorProps } from './PolicyEditor'
+export { PolicyEditor, type PolicyEditorProps } from "./PolicyEditor";

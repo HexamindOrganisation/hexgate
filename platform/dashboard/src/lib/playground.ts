@@ -1,56 +1,56 @@
-import { useEffect, useSyncExternalStore } from 'react'
+import { useEffect, useSyncExternalStore } from "react";
 
-export type ToolCallState = 'started' | 'completed' | 'failed'
-export type BlockType = 'text' | 'reasoning' | 'tool_call'
+export type ToolCallState = "started" | "completed" | "failed";
+export type BlockType = "text" | "reasoning" | "tool_call";
 
 export interface RunStartEvent {
-  event_type: 'run_start'
-  query: string
-  run_id: string
+  event_type: "run_start";
+  query: string;
+  run_id: string;
 }
 
 export interface BlockStartEvent {
-  event_type: 'block_start'
-  block_id: string
-  block_type: BlockType
+  event_type: "block_start";
+  block_id: string;
+  block_type: BlockType;
 }
 
 export interface BlockDeltaEvent {
-  event_type: 'block_delta'
-  block_id: string
-  block_type: BlockType
-  text: string
+  event_type: "block_delta";
+  block_id: string;
+  block_type: BlockType;
+  text: string;
 }
 
 export interface BlockEndEvent {
-  event_type: 'block_end'
-  block_id: string
-  block_type: BlockType
+  event_type: "block_end";
+  block_id: string;
+  block_type: BlockType;
 }
 
 export interface ToolStartEvent {
-  event_type: 'tool_start'
-  tool_id: string
-  tool_name: string
-  arguments: Record<string, unknown>
+  event_type: "tool_start";
+  tool_id: string;
+  tool_name: string;
+  arguments: Record<string, unknown>;
 }
 
 export interface ToolEndEvent {
-  event_type: 'tool_end'
-  tool_id: string
-  tool_name: string
-  state: ToolCallState
-  output_summary?: string | null
+  event_type: "tool_end";
+  tool_id: string;
+  tool_name: string;
+  state: ToolCallState;
+  output_summary?: string | null;
 }
 
 export interface RunEndEvent {
-  event_type: 'run_end'
-  result: { message: string }
+  event_type: "run_end";
+  result: { message: string };
 }
 
 export interface ErrorEvent {
-  event_type: 'error'
-  message: string
+  event_type: "error";
+  message: string;
 }
 
 export type StreamEvent =
@@ -61,58 +61,58 @@ export type StreamEvent =
   | ToolStartEvent
   | ToolEndEvent
   | RunEndEvent
-  | ErrorEvent
+  | ErrorEvent;
 
 export interface AgentOnlineEvent {
-  type: 'agent_online'
-  online: boolean
-  agent?: string | null
+  type: "agent_online";
+  online: boolean;
+  agent?: string | null;
 }
 export interface SessionResetEvent {
-  type: 'session_reset'
+  type: "session_reset";
 }
-export type ControlEvent = AgentOnlineEvent | SessionResetEvent
+export type ControlEvent = AgentOnlineEvent | SessionResetEvent;
 
 // ——— UI model ———
 
 export interface ToolCall {
-  id: string
-  name: string
-  args: Record<string, unknown>
-  state: ToolCallState
-  outputSummary?: string | null
-  startedAt: number
-  endedAt?: number
+  id: string;
+  name: string;
+  args: Record<string, unknown>;
+  state: ToolCallState;
+  outputSummary?: string | null;
+  startedAt: number;
+  endedAt?: number;
 }
 
 export interface AssistantTurn {
-  id: string
-  streaming: boolean
-  text: string
-  reasoning: string
-  tools: ToolCall[]
-  error?: string
+  id: string;
+  streaming: boolean;
+  text: string;
+  reasoning: string;
+  tools: ToolCall[];
+  error?: string;
 }
 
 export interface ChatMessage {
-  id: string
-  role: 'user' | 'assistant'
-  content: string
-  turn?: AssistantTurn
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  turn?: AssistantTurn;
 }
 
 export interface PlaygroundState {
-  connected: boolean
-  agentOnline: boolean
-  agentName: string | null
-  messages: ChatMessage[]
-  decisions: ToolCall[]
+  connected: boolean;
+  agentOnline: boolean;
+  agentName: string | null;
+  messages: ChatMessage[];
+  decisions: ToolCall[];
   /** id of the assistant turn currently being streamed into. */
-  currentTurnId: string | null
+  currentTurnId: string | null;
 }
 
 interface Options {
-  projectId: string
+  projectId: string;
 }
 
 // ---------------------------------------------------------------------
@@ -141,78 +141,78 @@ const INITIAL_STATE: PlaygroundState = {
   messages: [],
   decisions: [],
   currentTurnId: null,
-}
+};
 
-let cachedState: PlaygroundState = INITIAL_STATE
-const listeners = new Set<() => void>()
+let cachedState: PlaygroundState = INITIAL_STATE;
+const listeners = new Set<() => void>();
 
-let activeSocket: WebSocket | null = null
-let activeProjectId: string | null = null
-let reconnectTimer: ReturnType<typeof setTimeout> | null = null
-let reconnectAttempts = 0
+let activeSocket: WebSocket | null = null;
+let activeProjectId: string | null = null;
+let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+let reconnectAttempts = 0;
 
 function setStore(updater: (s: PlaygroundState) => PlaygroundState): void {
-  cachedState = updater(cachedState)
-  listeners.forEach((l) => l())
+  cachedState = updater(cachedState);
+  listeners.forEach((l) => l());
 }
 
 function subscribe(listener: () => void): () => void {
-  listeners.add(listener)
+  listeners.add(listener);
   return () => {
-    listeners.delete(listener)
-  }
+    listeners.delete(listener);
+  };
 }
 
 function getSnapshot(): PlaygroundState {
-  return cachedState
+  return cachedState;
 }
 
 function handleFrame(frame: unknown): void {
-  if (!frame || typeof frame !== 'object') return
-  const f = frame as { type?: string; event_type?: string }
-  if (f.type === 'agent_online') {
-    const ev = f as AgentOnlineEvent
+  if (!frame || typeof frame !== "object") return;
+  const f = frame as { type?: string; event_type?: string };
+  if (f.type === "agent_online") {
+    const ev = f as AgentOnlineEvent;
     setStore((s) => ({
       ...s,
       agentOnline: Boolean(ev.online),
       agentName: ev.agent ?? (ev.online ? s.agentName : null),
-    }))
-    return
+    }));
+    return;
   }
-  if (f.type === 'session_reset') return
-  if (f.event_type) setStore((s) => applyEvent(s, f as StreamEvent))
+  if (f.type === "session_reset") return;
+  if (f.event_type) setStore((s) => applyEvent(s, f as StreamEvent));
 }
 
 function connectSocket(projectId: string): void {
   // Project changed under us while a reconnect was pending — abandon.
-  if (activeProjectId !== projectId) return
-  const url = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/v1/projects/${projectId}/chat`
-  const ws = new WebSocket(url)
-  activeSocket = ws
+  if (activeProjectId !== projectId) return;
+  const url = `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/v1/projects/${projectId}/chat`;
+  const ws = new WebSocket(url);
+  activeSocket = ws;
 
-  ws.addEventListener('open', () => {
-    reconnectAttempts = 0
-    setStore((s) => ({ ...s, connected: true }))
-  })
+  ws.addEventListener("open", () => {
+    reconnectAttempts = 0;
+    setStore((s) => ({ ...s, connected: true }));
+  });
 
-  ws.addEventListener('close', () => {
-    setStore((s) => ({ ...s, connected: false, agentOnline: false }))
+  ws.addEventListener("close", () => {
+    setStore((s) => ({ ...s, connected: false, agentOnline: false }));
     if (activeProjectId === projectId) {
-      const delay = Math.min(1000 * 2 ** reconnectAttempts, 15000)
-      reconnectAttempts += 1
-      reconnectTimer = setTimeout(() => connectSocket(projectId), delay)
+      const delay = Math.min(1000 * 2 ** reconnectAttempts, 15000);
+      reconnectAttempts += 1;
+      reconnectTimer = setTimeout(() => connectSocket(projectId), delay);
     }
-  })
+  });
 
-  ws.addEventListener('message', (evt) => {
-    let payload: unknown
+  ws.addEventListener("message", (evt) => {
+    let payload: unknown;
     try {
-      payload = JSON.parse(evt.data)
+      payload = JSON.parse(evt.data);
     } catch {
-      return
+      return;
     }
-    handleFrame(payload)
-  })
+    handleFrame(payload);
+  });
 }
 
 /**
@@ -226,38 +226,38 @@ function connectSocket(projectId: string): void {
  */
 export function resetPlayground(): void {
   if (activeSocket) {
-    activeSocket.close()
-    activeSocket = null
+    activeSocket.close();
+    activeSocket = null;
   }
   if (reconnectTimer) {
-    clearTimeout(reconnectTimer)
-    reconnectTimer = null
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
   }
-  activeProjectId = null
-  reconnectAttempts = 0
-  cachedState = INITIAL_STATE
-  listeners.forEach((l) => l())
+  activeProjectId = null;
+  reconnectAttempts = 0;
+  cachedState = INITIAL_STATE;
+  listeners.forEach((l) => l());
 }
 
 function ensureSocketFor(projectId: string): void {
   // Same project + live socket → nothing to do. This is the common
   // remount path (route navigated away and back).
-  if (activeProjectId === projectId && activeSocket) return
+  if (activeProjectId === projectId && activeSocket) return;
 
   // Project switched — the prior session belongs to a different project,
   // wipe it and open a fresh connection.
   if (activeProjectId !== null && activeProjectId !== projectId) {
-    activeSocket?.close()
-    cachedState = INITIAL_STATE
-    listeners.forEach((l) => l())
+    activeSocket?.close();
+    cachedState = INITIAL_STATE;
+    listeners.forEach((l) => l());
   }
   if (reconnectTimer) {
-    clearTimeout(reconnectTimer)
-    reconnectTimer = null
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
   }
-  activeProjectId = projectId
-  reconnectAttempts = 0
-  connectSocket(projectId)
+  activeProjectId = projectId;
+  reconnectAttempts = 0;
+  connectSocket(projectId);
 }
 
 // ---------------------------------------------------------------------
@@ -265,14 +265,14 @@ function ensureSocketFor(projectId: string): void {
 // ---------------------------------------------------------------------
 
 export function usePlayground({ projectId }: Options) {
-  const state = useSyncExternalStore(subscribe, getSnapshot)
+  const state = useSyncExternalStore(subscribe, getSnapshot);
 
   useEffect(() => {
-    ensureSocketFor(projectId)
+    ensureSocketFor(projectId);
     // No cleanup — the socket is intentionally module-scoped so
     // chat history survives route changes. Project-switch teardown
     // happens inside ensureSocketFor on the next mount.
-  }, [projectId])
+  }, [projectId]);
 
   /**
    * Send a chat message, optionally scoped to a role.
@@ -283,50 +283,55 @@ export function usePlayground({ projectId }: Options) {
    * turn. The role's policy bundle then drives tool authorization.
    */
   function sendChat(message: string, opts?: { role?: string | null }) {
-    const ws = activeSocket
-    if (!ws || ws.readyState !== WebSocket.OPEN) return
-    const turnId = randomId()
+    const ws = activeSocket;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    const turnId = randomId();
     const userMsg: ChatMessage = {
       id: randomId(),
-      role: 'user',
+      role: "user",
       content: message,
-    }
+    };
     const turn: AssistantTurn = {
       id: turnId,
       streaming: true,
-      text: '',
-      reasoning: '',
+      text: "",
+      reasoning: "",
       tools: [],
-    }
+    };
     setStore((s) => ({
       ...s,
       currentTurnId: turnId,
       messages: [
         ...s.messages,
         userMsg,
-        { id: turn.id, role: 'assistant', content: '', turn },
+        { id: turn.id, role: "assistant", content: "", turn },
       ],
-    }))
-    const frame: Record<string, unknown> = { type: 'chat', message }
+    }));
+    const frame: Record<string, unknown> = { type: "chat", message };
     if (opts?.role) {
       frame.user_attenuation = {
-        user: 'playground',
+        user: "playground",
         role: opts.role,
         ttl_seconds: 300,
-      }
+      };
     }
-    ws.send(JSON.stringify(frame))
+    ws.send(JSON.stringify(frame));
   }
 
   function reset() {
-    const ws = activeSocket
+    const ws = activeSocket;
     if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ type: 'reset' }))
+      ws.send(JSON.stringify({ type: "reset" }));
     }
-    setStore((s) => ({ ...s, currentTurnId: null, messages: [], decisions: [] }))
+    setStore((s) => ({
+      ...s,
+      currentTurnId: null,
+      messages: [],
+      decisions: [],
+    }));
   }
 
-  return { state, sendChat, reset }
+  return { state, sendChat, reset };
 }
 
 /**
@@ -336,82 +341,85 @@ export function usePlayground({ projectId }: Options) {
  * double-invokes state updaters to verify they're deterministic. Called
  * N times with the same input, always returns the same output.
  */
-function applyEvent(state: PlaygroundState, event: StreamEvent): PlaygroundState {
-  const turnId = state.currentTurnId
-  if (!turnId) return state
+function applyEvent(
+  state: PlaygroundState,
+  event: StreamEvent,
+): PlaygroundState {
+  const turnId = state.currentTurnId;
+  if (!turnId) return state;
 
-  const msgIdx = state.messages.findIndex((m) => m.turn?.id === turnId)
-  if (msgIdx < 0) return state
+  const msgIdx = state.messages.findIndex((m) => m.turn?.id === turnId);
+  if (msgIdx < 0) return state;
 
-  const msg = state.messages[msgIdx]
-  const turn = msg.turn
-  if (!turn) return state
+  const msg = state.messages[msgIdx];
+  const turn = msg.turn;
+  if (!turn) return state;
 
   const withTurn = (nextTurn: AssistantTurn): PlaygroundState => {
-    const nextMessages = state.messages.slice()
-    nextMessages[msgIdx] = { ...msg, content: nextTurn.text, turn: nextTurn }
-    return { ...state, messages: nextMessages }
-  }
+    const nextMessages = state.messages.slice();
+    nextMessages[msgIdx] = { ...msg, content: nextTurn.text, turn: nextTurn };
+    return { ...state, messages: nextMessages };
+  };
 
   switch (event.event_type) {
-    case 'run_start':
-      return withTurn({ ...turn, streaming: true })
+    case "run_start":
+      return withTurn({ ...turn, streaming: true });
 
-    case 'block_delta': {
-      if (event.block_type === 'text') {
-        return withTurn({ ...turn, text: turn.text + event.text })
+    case "block_delta": {
+      if (event.block_type === "text") {
+        return withTurn({ ...turn, text: turn.text + event.text });
       }
-      if (event.block_type === 'reasoning') {
-        return withTurn({ ...turn, reasoning: turn.reasoning + event.text })
+      if (event.block_type === "reasoning") {
+        return withTurn({ ...turn, reasoning: turn.reasoning + event.text });
       }
-      return state
+      return state;
     }
 
-    case 'tool_start': {
+    case "tool_start": {
       if (turn.tools.some((t) => t.id === event.tool_id)) {
-        return state
+        return state;
       }
       const call: ToolCall = {
         id: event.tool_id,
         name: event.tool_name,
         args: event.arguments,
-        state: 'started',
+        state: "started",
         startedAt: Date.now(),
-      }
-      const nextTurn: AssistantTurn = { ...turn, tools: [...turn.tools, call] }
+      };
+      const nextTurn: AssistantTurn = { ...turn, tools: [...turn.tools, call] };
       const decisions = state.decisions.some((d) => d.id === call.id)
         ? state.decisions
-        : [...state.decisions, call]
-      return { ...withTurn(nextTurn), decisions }
+        : [...state.decisions, call];
+      return { ...withTurn(nextTurn), decisions };
     }
 
-    case 'tool_end': {
-      const idx = turn.tools.findIndex((t) => t.id === event.tool_id)
-      if (idx < 0) return state
-      const existing = turn.tools[idx]
+    case "tool_end": {
+      const idx = turn.tools.findIndex((t) => t.id === event.tool_id);
+      if (idx < 0) return state;
+      const existing = turn.tools[idx];
       // No-op if already in the terminal state from a prior pass.
       if (
         existing.state === event.state &&
         existing.outputSummary === (event.output_summary ?? undefined)
       ) {
-        return state
+        return state;
       }
       const updated: ToolCall = {
         ...existing,
         state: event.state,
         outputSummary: event.output_summary ?? undefined,
         endedAt: existing.endedAt ?? Date.now(),
-      }
-      const tools = turn.tools.slice()
-      tools[idx] = updated
-      const nextTurn: AssistantTurn = { ...turn, tools }
+      };
+      const tools = turn.tools.slice();
+      tools[idx] = updated;
+      const nextTurn: AssistantTurn = { ...turn, tools };
       const decisions = state.decisions.map((d) =>
         d.id === event.tool_id ? updated : d,
-      )
-      return { ...withTurn(nextTurn), decisions }
+      );
+      return { ...withTurn(nextTurn), decisions };
     }
 
-    case 'run_end':
+    case "run_end":
       return {
         ...withTurn({
           ...turn,
@@ -419,19 +427,19 @@ function applyEvent(state: PlaygroundState, event: StreamEvent): PlaygroundState
           text: event.result.message || turn.text,
         }),
         currentTurnId: null,
-      }
+      };
 
-    case 'error':
+    case "error":
       return {
         ...withTurn({ ...turn, streaming: false, error: event.message }),
         currentTurnId: null,
-      }
+      };
 
     default:
-      return state
+      return state;
   }
 }
 
 function randomId(): string {
-  return Math.random().toString(36).slice(2, 10)
+  return Math.random().toString(36).slice(2, 10);
 }

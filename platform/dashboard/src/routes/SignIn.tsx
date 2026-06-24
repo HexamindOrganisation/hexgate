@@ -1,12 +1,12 @@
-import { useEffect, useState } from 'react'
-import { Link, Navigate, useLocation, useNavigate } from 'react-router-dom'
-import { useForm } from 'react-hook-form'
-import { zodResolver } from '@hookform/resolvers/zod'
-import { z } from 'zod'
-import { ShieldCheck } from 'lucide-react'
+import { useEffect, useState } from "react";
+import { Link, Navigate, useLocation, useNavigate } from "react-router-dom";
+import { useForm } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { z } from "zod";
+import { ShieldCheck } from "lucide-react";
 
-import { Alert, AlertDescription } from '@/components/ui/alert'
-import { Button } from '@/components/ui/button'
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
 import {
   Card,
   CardContent,
@@ -14,53 +14,53 @@ import {
   CardFooter,
   CardHeader,
   CardTitle,
-} from '@/components/ui/card'
-import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
+} from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import {
   googleOAuthAvailable,
   startGoogleSignIn,
   useLogin,
   useUser,
-} from '@/lib/auth'
+} from "@/lib/auth";
 
 const SignInSchema = z.object({
-  email: z.string().email('Enter a valid email'),
-  password: z.string().min(1, 'Required'),
-})
+  email: z.string().email("Enter a valid email"),
+  password: z.string().min(1, "Required"),
+});
 
-type SignInValues = z.infer<typeof SignInSchema>
+type SignInValues = z.infer<typeof SignInSchema>;
 
 export function SignInPage() {
-  const { user, loading } = useUser()
-  const navigate = useNavigate()
-  const location = useLocation()
-  const login = useLogin()
-  const [googleAvailable, setGoogleAvailable] = useState(false)
+  const { user, loading } = useUser();
+  const navigate = useNavigate();
+  const location = useLocation();
+  const login = useLogin();
+  const [googleAvailable, setGoogleAvailable] = useState(false);
 
   // Probe once on mount — the button stays hidden when Google sign-in
   // isn't enabled on the backend (HEXGATE_GOOGLE_CLIENT_ID unset).
   useEffect(() => {
-    googleOAuthAvailable().then(setGoogleAvailable)
-  }, [])
+    googleOAuthAvailable().then(setGoogleAvailable);
+  }, []);
 
   const form = useForm<SignInValues>({
     resolver: zodResolver(SignInSchema),
-    defaultValues: { email: '', password: '' },
-  })
+    defaultValues: { email: "", password: "" },
+  });
 
   // If a session already exists, bounce to wherever the user was trying
   // to reach (preserved by ProtectedRoute) — or the dashboard root.
   if (!loading && user) {
-    const target = (location.state as { from?: string } | null)?.from ?? '/'
-    return <Navigate to={target} replace />
+    const target = (location.state as { from?: string } | null)?.from ?? "/";
+    return <Navigate to={target} replace />;
   }
 
   async function onSubmit(values: SignInValues) {
     try {
-      await login.mutateAsync(values)
-      const target = (location.state as { from?: string } | null)?.from ?? '/'
-      navigate(target, { replace: true })
+      await login.mutateAsync(values);
+      const target = (location.state as { from?: string } | null)?.from ?? "/";
+      navigate(target, { replace: true });
     } catch {
       // Error surfaces via login.error below — no toast needed.
     }
@@ -84,7 +84,7 @@ export function SignInPage() {
             {login.isError && (
               <Alert variant="destructive">
                 <AlertDescription>
-                  Incorrect email or password. Try again, or{' '}
+                  Incorrect email or password. Try again, or{" "}
                   <Link
                     to="/forgot-password"
                     className="underline underline-offset-2"
@@ -103,7 +103,7 @@ export function SignInPage() {
                 type="email"
                 autoComplete="email"
                 placeholder="you@example.com"
-                {...form.register('email')}
+                {...form.register("email")}
               />
               {form.formState.errors.email && (
                 <p className="text-xs text-destructive">
@@ -126,7 +126,7 @@ export function SignInPage() {
                 id="password"
                 type="password"
                 autoComplete="current-password"
-                {...form.register('password')}
+                {...form.register("password")}
               />
               {form.formState.errors.password && (
                 <p className="text-xs text-destructive">
@@ -142,7 +142,7 @@ export function SignInPage() {
               className="w-full"
               disabled={login.isPending || !form.formState.isValid}
             >
-              {login.isPending ? 'Signing in…' : 'Sign in'}
+              {login.isPending ? "Signing in…" : "Sign in"}
             </Button>
 
             {googleAvailable && (
@@ -170,7 +170,7 @@ export function SignInPage() {
             )}
 
             <p className="text-center text-sm text-muted-foreground">
-              No account?{' '}
+              No account?{" "}
               <Link
                 to="/sign-up"
                 className="text-primary underline-offset-2 hover:underline"
@@ -182,7 +182,7 @@ export function SignInPage() {
         </form>
       </Card>
     </AuthCardLayout>
-  )
+  );
 }
 
 /** Shared centred-card layout the auth pages all share. Extracted here
@@ -193,5 +193,5 @@ export function AuthCardLayout({ children }: { children: React.ReactNode }) {
     <div className="flex min-h-screen items-center justify-center bg-background px-4 py-12">
       {children}
     </div>
-  )
+  );
 }

@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   AlertTriangle,
   Bot,
@@ -7,55 +7,60 @@ import {
   Network,
   Save,
   ShieldCheck,
-} from 'lucide-react'
-import { ReactFlow, Background, BackgroundVariant, Controls } from '@xyflow/react'
-import { api, type PolicyValidationError } from '@/lib/api'
-import { useProjectScoped } from '@/lib/active'
-import { Button } from '@/components/ui/button'
-import { Badge } from '@/components/ui/badge'
-import { NoProjectEmptyState } from '@/components/NoProjectEmptyState'
-import { PolicyEditor } from '@/components/PolicyEditor'
-import { nodeTypes } from '@/components/graph/nodes'
-import { buildPolicyGraph } from '@/lib/policy_graph'
-import { cn } from '@/lib/utils'
+} from "lucide-react";
+import {
+  ReactFlow,
+  Background,
+  BackgroundVariant,
+  Controls,
+} from "@xyflow/react";
+import { api, type PolicyValidationError } from "@/lib/api";
+import { useProjectScoped } from "@/lib/active";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { NoProjectEmptyState } from "@/components/NoProjectEmptyState";
+import { PolicyEditor } from "@/components/PolicyEditor";
+import { nodeTypes } from "@/components/graph/nodes";
+import { buildPolicyGraph } from "@/lib/policy_graph";
+import { cn } from "@/lib/utils";
 
-type Tab = 'yaml' | 'graph'
+type Tab = "yaml" | "graph";
 
 const TAB_LABEL: Record<Tab, string> = {
-  yaml: 'YAML',
-  graph: 'Graph',
-}
+  yaml: "YAML",
+  graph: "Graph",
+};
 
 const TAB_ICON: Record<Tab, typeof FileCode> = {
   yaml: FileCode,
   graph: Network,
-}
+};
 
 export function PoliciesPage() {
-  const scope = useProjectScoped()
+  const scope = useProjectScoped();
   const agents = useQuery({
-    queryKey: ['agents', scope.projectId],
+    queryKey: ["agents", scope.projectId],
     queryFn: () => api.listAgents(scope.projectId as string),
     enabled: !!scope.projectId,
-  })
-  const [selectedAgent, setSelectedAgent] = useState<string | null>(null)
-  const [tab, setTab] = useState<Tab>('yaml')
+  });
+  const [selectedAgent, setSelectedAgent] = useState<string | null>(null);
+  const [tab, setTab] = useState<Tab>("yaml");
 
   // Wipe the selection on project switch — the previous project's
   // agents don't exist over here.
   useEffect(() => {
-    setSelectedAgent(null)
-  }, [scope.projectId])
+    setSelectedAgent(null);
+  }, [scope.projectId]);
 
   // Auto-select the first agent once the list loads.
   useEffect(() => {
     if (!selectedAgent && agents.data && agents.data.length > 0) {
-      setSelectedAgent(agents.data[0].name)
+      setSelectedAgent(agents.data[0].name);
     }
-  }, [agents.data, selectedAgent])
+  }, [agents.data, selectedAgent]);
 
-  if (scope.status === 'no-project') {
-    return <NoProjectEmptyState resource="policies" />
+  if (scope.status === "no-project") {
+    return <NoProjectEmptyState resource="policies" />;
   }
 
   return (
@@ -78,11 +83,8 @@ export function PoliciesPage() {
       {/* Content */}
       <div className="flex-1 overflow-hidden">
         {selectedAgent && scope.projectId ? (
-          tab === 'yaml' ? (
-            <YamlEditor
-              agentName={selectedAgent}
-              projectId={scope.projectId}
-            />
+          tab === "yaml" ? (
+            <YamlEditor agentName={selectedAgent} projectId={scope.projectId} />
           ) : (
             <PolicyGraphTab
               agentName={selectedAgent}
@@ -91,48 +93,42 @@ export function PoliciesPage() {
           )
         ) : (
           <div className="h-full grid place-items-center text-sm text-muted-foreground">
-            {agents.isLoading ? 'Loading agents…' : 'No agents to select.'}
+            {agents.isLoading ? "Loading agents…" : "No agents to select."}
           </div>
         )}
       </div>
     </div>
-  )
+  );
 }
 
 /**
  * Lightweight tab strip used in /policies. Two tabs today (YAML, Graph);
  * the M2 Rego adapter will land a third here without restructuring.
  */
-function Tabs({
-  value,
-  onChange,
-}: {
-  value: Tab
-  onChange: (t: Tab) => void
-}) {
+function Tabs({ value, onChange }: { value: Tab; onChange: (t: Tab) => void }) {
   return (
     <div className="flex items-center gap-1 rounded-md border border-border bg-background p-0.5">
-      {(['yaml', 'graph'] as const).map((t) => {
-        const Icon = TAB_ICON[t]
-        const active = value === t
+      {(["yaml", "graph"] as const).map((t) => {
+        const Icon = TAB_ICON[t];
+        const active = value === t;
         return (
           <button
             key={t}
             onClick={() => onChange(t)}
             className={cn(
-              'flex items-center gap-1.5 rounded px-3 py-1 text-xs font-medium transition-colors',
+              "flex items-center gap-1.5 rounded px-3 py-1 text-xs font-medium transition-colors",
               active
-                ? 'bg-primary text-primary-foreground'
-                : 'text-muted-foreground hover:text-foreground',
+                ? "bg-primary text-primary-foreground"
+                : "text-muted-foreground hover:text-foreground",
             )}
           >
             <Icon className="size-3" />
             {TAB_LABEL[t]}
           </button>
-        )
+        );
       })}
     </div>
-  )
+  );
 }
 
 /**
@@ -146,13 +142,13 @@ function AgentPicker({
   onChange,
   loading,
 }: {
-  agents: { name: string }[]
-  value: string | null
-  onChange: (name: string) => void
-  loading: boolean
+  agents: { name: string }[];
+  value: string | null;
+  onChange: (name: string) => void;
+  loading: boolean;
 }) {
   if (loading) {
-    return <span className="text-xs text-muted-foreground">loading…</span>
+    return <span className="text-xs text-muted-foreground">loading…</span>;
   }
   return (
     <div className="flex items-center gap-2 text-sm">
@@ -160,7 +156,7 @@ function AgentPicker({
       <div className="relative">
         <Bot className="absolute left-2 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground pointer-events-none" />
         <select
-          value={value ?? ''}
+          value={value ?? ""}
           onChange={(e) => onChange(e.target.value)}
           className="h-8 rounded-md border border-border bg-background pl-7 pr-3 text-sm font-mono focus:outline-none focus-visible:ring-1 focus-visible:ring-ring"
         >
@@ -172,7 +168,7 @@ function AgentPicker({
         </select>
       </div>
     </div>
-  )
+  );
 }
 
 /**
@@ -185,55 +181,55 @@ function YamlEditor({
   agentName,
   projectId,
 }: {
-  agentName: string
-  projectId: string
+  agentName: string;
+  projectId: string;
 }) {
-  const qc = useQueryClient()
+  const qc = useQueryClient();
   const agent = useQuery({
-    queryKey: ['agent', projectId, agentName],
+    queryKey: ["agent", projectId, agentName],
     queryFn: () => api.getAgent(agentName, projectId),
-  })
+  });
 
-  const [draft, setDraft] = useState<string>('')
-  const [dirty, setDirty] = useState(false)
-  const [errors, setErrors] = useState<PolicyValidationError[] | null>(null)
+  const [draft, setDraft] = useState<string>("");
+  const [dirty, setDirty] = useState(false);
+  const [errors, setErrors] = useState<PolicyValidationError[] | null>(null);
 
   // Re-sync the draft when we switch agents or the server copy refreshes.
   useEffect(() => {
-    if (!agent.data) return
-    setDraft(agent.data.policy_yaml)
-    setDirty(false)
-    setErrors(null)
-  }, [agent.data])
+    if (!agent.data) return;
+    setDraft(agent.data.policy_yaml);
+    setDirty(false);
+    setErrors(null);
+  }, [agent.data]);
 
   const saveMutation = useMutation({
     mutationFn: () =>
       api.updateAgent(agentName, { policy_yaml: draft }, projectId),
     onSuccess: () => {
-      setDirty(false)
-      qc.invalidateQueries({ queryKey: ['agent', projectId, agentName] })
-      qc.invalidateQueries({ queryKey: ['agents', projectId] })
+      setDirty(false);
+      qc.invalidateQueries({ queryKey: ["agent", projectId, agentName] });
+      qc.invalidateQueries({ queryKey: ["agents", projectId] });
     },
-  })
+  });
 
   const validateMutation = useMutation({
     mutationFn: () => api.validatePolicy(agentName, draft, projectId),
     onSuccess: (resp) => setErrors(resp.errors),
-  })
+  });
 
-  const originalSource = agent.data?.policy_yaml ?? ''
+  const originalSource = agent.data?.policy_yaml ?? "";
 
   // Stable identity so PolicyEditor doesn't trigger a CodeMirror
   // reconfigure on every keystroke — @uiw/react-codemirror puts
   // `onChange` in its reconfigure effect's dep array.
   const handleEditorChange = useCallback(
     (next: string) => {
-      setDraft(next)
-      setDirty(next !== originalSource)
-      setErrors((prev) => (prev ? null : prev))
+      setDraft(next);
+      setDirty(next !== originalSource);
+      setErrors((prev) => (prev ? null : prev));
     },
     [originalSource],
-  )
+  );
 
   return (
     <div className="h-full flex flex-col">
@@ -252,7 +248,7 @@ function YamlEditor({
             className="gap-1.5 h-8"
           >
             <ShieldCheck className="size-3.5" />
-            {validateMutation.isPending ? 'Checking…' : 'Validate'}
+            {validateMutation.isPending ? "Checking…" : "Validate"}
           </Button>
           <Button
             size="sm"
@@ -261,17 +257,17 @@ function YamlEditor({
             className="gap-2 h-8"
           >
             <Save className="size-3.5" />
-            {saveMutation.isPending ? 'Saving…' : 'Save'}
+            {saveMutation.isPending ? "Saving…" : "Save"}
           </Button>
         </div>
       </header>
       {errors && (
         <div
           className={cn(
-            'px-6 py-2 text-xs border-b',
+            "px-6 py-2 text-xs border-b",
             errors.length === 0
-              ? 'bg-allow/5 border-allow/30 text-allow'
-              : 'bg-deny/5 border-deny/30 text-deny',
+              ? "bg-allow/5 border-allow/30 text-allow"
+              : "bg-deny/5 border-deny/30 text-deny",
           )}
         >
           {errors.length === 0 ? (
@@ -280,10 +276,12 @@ function YamlEditor({
             <ul className="space-y-0.5 font-mono">
               {errors.map((err, i) => (
                 <li key={i}>
-                  {err.role && <span className="text-foreground">{err.role}</span>}
-                  {err.role && err.line ? ':' : ''}
-                  {err.line ? err.line : ''}
-                  {err.role || err.line ? ' — ' : ''}
+                  {err.role && (
+                    <span className="text-foreground">{err.role}</span>
+                  )}
+                  {err.role && err.line ? ":" : ""}
+                  {err.line ? err.line : ""}
+                  {err.role || err.line ? " — " : ""}
                   {err.message}
                 </li>
               ))}
@@ -298,7 +296,7 @@ function YamlEditor({
         className="flex-1 overflow-hidden"
       />
     </div>
-  )
+  );
 }
 
 /**
@@ -318,25 +316,25 @@ function PolicyGraphTab({
   agentName,
   projectId,
 }: {
-  agentName: string
-  projectId: string
+  agentName: string;
+  projectId: string;
 }) {
   const agent = useQuery({
-    queryKey: ['agent', projectId, agentName],
+    queryKey: ["agent", projectId, agentName],
     queryFn: () => api.getAgent(agentName, projectId),
-  })
+  });
 
   const graph = useMemo(() => {
-    if (!agent.data) return null
-    return buildPolicyGraph(agent.data.policy_yaml)
-  }, [agent.data])
+    if (!agent.data) return null;
+    return buildPolicyGraph(agent.data.policy_yaml);
+  }, [agent.data]);
 
   if (!graph) {
     return (
       <div className="h-full grid place-items-center text-sm text-muted-foreground">
         Loading policy…
       </div>
-    )
+    );
   }
 
   if (!graph.ok) {
@@ -344,11 +342,11 @@ function PolicyGraphTab({
       <div className="h-full grid place-items-center gap-2 text-center px-8">
         <AlertTriangle className="size-6 text-approval mx-auto" />
         <p className="text-sm text-muted-foreground max-w-md">
-          Fix the YAML to render the graph. The document must parse cleanly
-          and declare a top-level <span className="font-mono">roles:</span> map.
+          Fix the YAML to render the graph. The document must parse cleanly and
+          declare a top-level <span className="font-mono">roles:</span> map.
         </p>
       </div>
-    )
+    );
   }
 
   return (
@@ -377,5 +375,5 @@ function PolicyGraphTab({
         />
       </ReactFlow>
     </div>
-  )
+  );
 }
