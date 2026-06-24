@@ -224,8 +224,7 @@ saves a later debugging detour.
 
 > For the user-facing description of when each mode applies in practice
 > — chat vs. serve, inner loop vs. team loop — see the
-> ["Which path do I pick?"](../README.md#-which-path-do-i-pick) block in
-> the README.
+> ["Which path do I pick?"](/two-paths) page.
 
 `async shutdown()` drains in-flight tasks and closes every sender's HTTP client.
 It is safe to call multiple times and is the recommended teardown hook. Absent
@@ -465,5 +464,3 @@ columns make these scans cheap. All time-axis logic keys off `occurred_at`
    flood the log to bury real activity. Needs a per-project token bucket
    (`429 + Retry-After`; the SDK already logs-and-drops on ≥400) plus an
    ingest-volume-per-project alert.
-</content>
-</invoke>

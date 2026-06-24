@@ -112,6 +112,21 @@ keystore = FileKeyStore()
 _log = logging.getLogger(__name__)
 
 
+def _demo_enabled() -> bool:
+    """Whether single-tenant demo mode is on (see platform/api/demo.py).
+
+    Off by default. When on, the API serves the built dashboard same-origin and
+    exposes a *passwordless* ``/v1/demo-login`` for the seeded admin — safe only
+    in an ephemeral throwaway container.
+    """
+    return os.environ.get("HEXGATE_DEMO", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+
+
 @asynccontextmanager
 async def lifespan(app_: FastAPI):
     await init_db()
@@ -142,6 +157,12 @@ async def lifespan(app_: FastAPI):
         _cookie_secure(),
         _dashboard_url(),
     )
+    if _demo_enabled():
+        _log.warning(
+            "⚠ HEXGATE_DEMO is ON — /v1/demo-login grants a PASSWORDLESS session "
+            "for the seeded admin and the SPA catch-all is active. Use ONLY in an "
+            "ephemeral throwaway container, NEVER on a persistent/real deployment."
+        )
     yield
 
 
@@ -2045,3 +2066,13 @@ def _maybe_mount_oauth_routers() -> None:
 
 
 app.include_router(v1)
+
+
+# Demo bundle (single-tenant throwaway container): serve the built dashboard
+# same-origin + auto-login. Registered LAST so the SPA catch-all never shadows
+# /v1. Off by default — only wired when HEXGATE_DEMO is truthy, so normal and
+# production runs are untouched.
+if _demo_enabled():
+    from demo import enable_demo
+
+    enable_demo(app)

@@ -60,15 +60,19 @@ lint-fix: ## Apply ruff autofixes
 	$(UV) ruff check --fix hexgate tests
 
 .PHONY: fmt
-fmt: ## Format with ruff
-	$(UV) ruff format hexgate tests
+fmt: ## Format with ruff (SDK + platform/api)
+	$(UV) ruff format hexgate tests platform/api
 
 .PHONY: fmt-check
 fmt-check: ## Check formatting without writing changes
-	$(UV) ruff format --check hexgate tests
+	$(UV) ruff format --check hexgate tests platform/api
 
 .PHONY: check
-check: lint fmt-check test ## All static + dynamic checks (CI parity)
+check: lint fmt-check test ## Python CI parity: lint + fmt-check + test
+
+.PHONY: check-all
+check-all: check dashboard-lint dashboard-typecheck dashboard-fmt-check ## Full stack check: Python + dashboard lint, typecheck, fmt, tests
+	cd platform/dashboard && pnpm test --run
 
 # -------- Policy / M2 demo helpers --------
 
@@ -195,6 +199,22 @@ dashboard-install: ## Install dashboard JS deps (first time)
 dashboard: ## Run the dashboard dev server (Vite on :5173)
 	cd platform/dashboard && pnpm dev
 
+.PHONY: dashboard-fmt
+dashboard-fmt: ## Format dashboard TypeScript with prettier
+	cd platform/dashboard && pnpm format
+
+.PHONY: dashboard-fmt-check
+dashboard-fmt-check: ## Check dashboard TypeScript formatting (prettier)
+	cd platform/dashboard && pnpm format:check
+
+.PHONY: dashboard-lint
+dashboard-lint: ## Lint dashboard TypeScript with eslint
+	cd platform/dashboard && pnpm lint
+
+.PHONY: dashboard-typecheck
+dashboard-typecheck: ## Typecheck dashboard TypeScript
+	cd platform/dashboard && pnpm typecheck
+
 # -------- SDK → platform bridge --------
 
 # Make's rule parser treats colons specially, so a positional
@@ -240,6 +260,29 @@ demo-platform: ## Print 3-terminal instructions for the full platform demo
 	@echo "      make platform-api-install"
 	@echo "      make dashboard-install"
 	@echo ""
+
+# -------- Bundled notebook demo (one process locally / per-container on Modal) --------
+#
+# Unlike `demo-platform` (3 terminals, manual login + token), this bundles the
+# whole thing into one process: the API serves the built dashboard same-origin,
+# auto-seeds + auto-logs-in, and a marimo notebook owns `hexgate serve`. The
+# visitor brings their own OpenAI key (BYOK). This is also what runs per visitor
+# in GitHub Codespaces (see .devcontainer/). See deploy/README.md.
+
+.PHONY: demo-notebook-build
+demo-notebook-build: platform-api-install dashboard-install ## One-time setup for `make demo-notebook` (deps + marimo + dashboard build)
+	uv pip install --python platform/api/.venv marimo
+	cd platform/dashboard && pnpm build
+
+.PHONY: demo-notebook
+demo-notebook: ## Run the bundled BYOK demo locally (one process). Open http://localhost:2718
+	PATH="$(CURDIR)/platform/api/.venv/bin:$$PATH" \
+	  HEXGATE_DEMO=1 HEXGATE_COOKIE_SECURE=0 \
+	  python deploy/boot.py
+
+.PHONY: demo-smoke
+demo-smoke: ## Smoke-test the bundled demo with a mock LLM (no real key)
+	cd platform/api && uv run python "$(CURDIR)/deploy/smoke_test.py"
 
 # -------- Package --------
 

@@ -65,6 +65,7 @@
               "platform/overview",
               "platform/control-plane",
               "platform/dashboard",
+              "platform/live-demo",
               "platform/audit-clickhouse"
             ]
           },

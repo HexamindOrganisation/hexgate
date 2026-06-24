@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
-import { Link } from 'react-router-dom'
-import { Streamdown } from 'streamdown'
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Link } from "react-router-dom";
+import { Streamdown } from "streamdown";
 import {
   Bot,
   MessageSquareCode,
@@ -15,22 +15,26 @@ import {
   CircleDashed,
   ShieldAlert,
   UserCog,
-} from 'lucide-react'
-import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
-import { usePlayground, type ChatMessage, type ToolCall } from '@/lib/playground'
-import { api, type AgentRead } from '@/lib/api'
-import { useProjectScoped } from '@/lib/active'
-import { NoProjectEmptyState } from '@/components/NoProjectEmptyState'
-import { parseRolesFromPolicy } from '@/lib/policy'
-import { cn } from '@/lib/utils'
+} from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  usePlayground,
+  type ChatMessage,
+  type ToolCall,
+} from "@/lib/playground";
+import { api, type AgentRead } from "@/lib/api";
+import { useProjectScoped } from "@/lib/active";
+import { NoProjectEmptyState } from "@/components/NoProjectEmptyState";
+import { parseRolesFromPolicy } from "@/lib/policy";
+import { cn } from "@/lib/utils";
 
 export function PlaygroundPage() {
-  const scope = useProjectScoped()
-  if (scope.status === 'no-project') {
-    return <NoProjectEmptyState resource="playground" />
+  const scope = useProjectScoped();
+  if (scope.status === "no-project") {
+    return <NoProjectEmptyState resource="playground" />;
   }
-  if (scope.status === 'loading' || !scope.projectId) {
+  if (scope.status === "loading" || !scope.projectId) {
     // Brief while the bootstrap effect picks a default project. The
     // live UI opens a WS keyed on projectId — don't mount it until we
     // have a real one, otherwise the reconnect loop would spam ``ws://
@@ -39,69 +43,69 @@ export function PlaygroundPage() {
       <div className="grid place-items-center h-full text-sm text-muted-foreground">
         Loading…
       </div>
-    )
+    );
   }
-  return <PlaygroundLive projectId={scope.projectId} />
+  return <PlaygroundLive projectId={scope.projectId} />;
 }
 
 function PlaygroundLive({ projectId }: { projectId: string }) {
-  const { state, sendChat, reset } = usePlayground({ projectId })
-  const [composer, setComposer] = useState('')
-  const [agent, setAgent] = useState<AgentRead | null>(null)
-  const [activeRole, setActiveRole] = useState<string | null>(null)
-  const transcriptRef = useRef<HTMLDivElement>(null)
+  const { state, sendChat, reset } = usePlayground({ projectId });
+  const [composer, setComposer] = useState("");
+  const [agent, setAgent] = useState<AgentRead | null>(null);
+  const [activeRole, setActiveRole] = useState<string | null>(null);
+  const transcriptRef = useRef<HTMLDivElement>(null);
 
   // Fetch the serving agent so we know which roles are available. Roles
   // are a per-agent concept today (M1); when the dashboard later owns
   // a global role registry this useEffect moves into a shared hook.
   useEffect(() => {
     if (!state.agentName) {
-      setAgent(null)
-      return
+      setAgent(null);
+      return;
     }
-    let cancelled = false
+    let cancelled = false;
     api
       .getAgent(state.agentName, projectId)
       .then((a) => {
-        if (!cancelled) setAgent(a)
+        if (!cancelled) setAgent(a);
       })
       .catch(() => {
-        if (!cancelled) setAgent(null)
-      })
+        if (!cancelled) setAgent(null);
+      });
     return () => {
-      cancelled = true
-    }
-  }, [state.agentName, projectId])
+      cancelled = true;
+    };
+  }, [state.agentName, projectId]);
 
   const roleOptions = useMemo(
     () => (agent ? parseRolesFromPolicy(agent.policy_yaml) : []),
     [agent],
-  )
+  );
 
   // Auto-select a sensible default when the role list changes:
   // prefer 'default', else first option, else null (single-policy agents).
   useEffect(() => {
     if (roleOptions.length === 0) {
-      setActiveRole(null)
-      return
+      setActiveRole(null);
+      return;
     }
     setActiveRole((prev) =>
       prev && roleOptions.includes(prev) ? prev : roleOptions[0],
-    )
-  }, [roleOptions])
+    );
+  }, [roleOptions]);
 
   useEffect(() => {
     transcriptRef.current?.scrollTo({
       top: transcriptRef.current.scrollHeight,
-      behavior: 'smooth',
-    })
-  }, [state.messages])
+      behavior: "smooth",
+    });
+  }, [state.messages]);
 
   function submit() {
-    const text = composer.trim()
-    if (!text) return
-    sendChat(text, activeRole ? { role: activeRole } : undefined)
-    setComposer('')
+    const text = composer.trim();
+    if (!text) return;
+    sendChat(text, activeRole ? { role: activeRole } : undefined);
+    setComposer("");
   }
 
   return (
@@ -155,8 +159,9 @@ function PlaygroundLive({ projectId }: { projectId: string }) {
               No agent serving
             </div>
             <div className="mt-2 text-muted-foreground">
-              Run <span className="font-mono text-foreground">hexgate serve</span> with
-              your HEXGATE_KEY to expose an agent session here.
+              Run{" "}
+              <span className="font-mono text-foreground">hexgate serve</span>{" "}
+              with your HEXGATE_KEY to expose an agent session here.
             </div>
           </div>
         )}
@@ -168,7 +173,7 @@ function PlaygroundLive({ projectId }: { projectId: string }) {
               Acting as
             </div>
             <select
-              value={activeRole ?? ''}
+              value={activeRole ?? ""}
               onChange={(e) => setActiveRole(e.target.value || null)}
               className="h-9 rounded-md border border-border bg-background px-2.5 text-sm font-mono focus:outline-none focus-visible:ring-1 focus-visible:ring-ring"
             >
@@ -179,9 +184,9 @@ function PlaygroundLive({ projectId }: { projectId: string }) {
               ))}
             </select>
             <p className="text-[11px] text-muted-foreground leading-snug">
-              Each chat turn attenuates the agent's token with{' '}
-              <span className="font-mono">role(&quot;{activeRole}&quot;)</span>. The
-              role's policy bundle decides which tools fire and with what
+              Each chat turn attenuates the agent's token with{" "}
+              <span className="font-mono">role(&quot;{activeRole}&quot;)</span>.
+              The role's policy bundle decides which tools fire and with what
               constraints.
             </p>
           </div>
@@ -208,8 +213,13 @@ function PlaygroundLive({ projectId }: { projectId: string }) {
             Relay status
           </div>
           <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-            <Radio className={cn('size-3.5', state.connected ? 'text-allow' : 'text-muted-foreground')} />
-            {state.connected ? 'relay connected' : 'reconnecting…'}
+            <Radio
+              className={cn(
+                "size-3.5",
+                state.connected ? "text-allow" : "text-muted-foreground",
+              )}
+            />
+            {state.connected ? "relay connected" : "reconnecting…"}
           </div>
         </div>
       </aside>
@@ -220,7 +230,9 @@ function PlaygroundLive({ projectId }: { projectId: string }) {
           <div className="flex items-center gap-2 text-sm">
             <MessageSquareCode className="size-4 text-muted-foreground" />
             <span className="font-medium">Session</span>
-            <span className="text-muted-foreground text-xs">live relay via control plane</span>
+            <span className="text-muted-foreground text-xs">
+              live relay via control plane
+            </span>
           </div>
           {activeRole && (
             <Badge
@@ -244,7 +256,9 @@ function PlaygroundLive({ projectId }: { projectId: string }) {
                 {!state.agentOnline && (
                   <>
                     <br />
-                    <span className="text-xs">(No agent connected — responses will wait.)</span>
+                    <span className="text-xs">
+                      (No agent connected — responses will wait.)
+                    </span>
                   </>
                 )}
               </div>
@@ -260,15 +274,19 @@ function PlaygroundLive({ projectId }: { projectId: string }) {
               value={composer}
               onChange={(e) => setComposer(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault()
-                  submit()
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  submit();
                 }
               }}
               placeholder="Ask the agent to do something…"
               className="flex-1 h-10 rounded-md border border-border bg-background px-3 text-sm focus:outline-none focus-visible:ring-1 focus-visible:ring-ring"
             />
-            <Button onClick={submit} disabled={!composer.trim()} className="gap-2 h-10">
+            <Button
+              onClick={submit}
+              disabled={!composer.trim()}
+              className="gap-2 h-10"
+            >
               <Send className="size-4" />
               Send
             </Button>
@@ -284,7 +302,9 @@ function PlaygroundLive({ projectId }: { projectId: string }) {
             <span className="font-medium">Decisions</span>
           </div>
           {state.decisions.length > 0 && (
-            <span className="text-xs text-muted-foreground">{state.decisions.length}</span>
+            <span className="text-xs text-muted-foreground">
+              {state.decisions.length}
+            </span>
           )}
         </header>
         <div className="flex-1 overflow-y-auto px-3 py-2 scrollbar-thin">
@@ -302,11 +322,11 @@ function PlaygroundLive({ projectId }: { projectId: string }) {
         </div>
       </aside>
     </div>
-  )
+  );
 }
 
 function MessageView({ message }: { message: ChatMessage }) {
-  if (message.role === 'user') {
+  if (message.role === "user") {
     return (
       <div className="flex items-start gap-3">
         <span className="size-7 rounded-full bg-primary/20 text-primary grid place-items-center text-[11px] font-medium">
@@ -317,10 +337,10 @@ function MessageView({ message }: { message: ChatMessage }) {
           <div className="text-sm whitespace-pre-wrap">{message.content}</div>
         </div>
       </div>
-    )
+    );
   }
 
-  const turn = message.turn
+  const turn = message.turn;
   return (
     <div className="flex items-start gap-3">
       <span className="size-7 rounded-full bg-secondary grid place-items-center">
@@ -333,7 +353,9 @@ function MessageView({ message }: { message: ChatMessage }) {
             {turn.reasoning}
           </div>
         )}
-        {turn?.tools.map((t) => <ToolCallBlock key={t.id} call={t} />)}
+        {turn?.tools.map((t) => (
+          <ToolCallBlock key={t.id} call={t} />
+        ))}
         {message.content && (
           <div className="text-sm prose prose-sm prose-invert max-w-none">
             <Streamdown parseIncompleteMarkdown>{message.content}</Streamdown>
@@ -350,14 +372,22 @@ function MessageView({ message }: { message: ChatMessage }) {
         )}
       </div>
     </div>
-  )
+  );
 }
 
 function ToolCallBlock({ call }: { call: ToolCall }) {
   const StateIcon =
-    call.state === 'completed' ? Check : call.state === 'failed' ? X : CircleDashed
-  const stateVariant: 'allow' | 'deny' | 'approval' =
-    call.state === 'completed' ? 'allow' : call.state === 'failed' ? 'deny' : 'approval'
+    call.state === "completed"
+      ? Check
+      : call.state === "failed"
+        ? X
+        : CircleDashed;
+  const stateVariant: "allow" | "deny" | "approval" =
+    call.state === "completed"
+      ? "allow"
+      : call.state === "failed"
+        ? "deny"
+        : "approval";
   return (
     <div className="rounded-md border border-border bg-card/50">
       <div className="flex items-center gap-2 px-3 py-2 border-b border-border">
@@ -379,27 +409,31 @@ function ToolCallBlock({ call }: { call: ToolCall }) {
         </div>
       )}
     </div>
-  )
+  );
 }
 
 function DecisionRow({ call }: { call: ToolCall }) {
   const StateIcon =
-    call.state === 'completed' ? Check : call.state === 'failed' ? X : CircleDashed
+    call.state === "completed"
+      ? Check
+      : call.state === "failed"
+        ? X
+        : CircleDashed;
   const stateColor =
-    call.state === 'completed'
-      ? 'text-allow'
-      : call.state === 'failed'
-        ? 'text-deny'
-        : 'text-approval'
+    call.state === "completed"
+      ? "text-allow"
+      : call.state === "failed"
+        ? "text-deny"
+        : "text-approval";
   return (
     <div className="rounded-md px-2.5 py-1.5 hover:bg-accent/50 text-xs">
       <div className="flex items-center gap-2">
-        <StateIcon className={cn('size-3.5', stateColor)} />
+        <StateIcon className={cn("size-3.5", stateColor)} />
         <span className="font-mono flex-1 truncate">{call.name}</span>
         <span className="text-muted-foreground text-[10px]">
-          {call.endedAt ? `${call.endedAt - call.startedAt}ms` : '…'}
+          {call.endedAt ? `${call.endedAt - call.startedAt}ms` : "…"}
         </span>
       </div>
     </div>
-  )
+  );
 }

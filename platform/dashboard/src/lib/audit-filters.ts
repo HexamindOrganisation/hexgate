@@ -11,43 +11,43 @@
  * without the page component wiring that invariant by hand.
  */
 
-import { create } from 'zustand'
+import { create } from "zustand";
 
-import type { AuditOutcome } from './api'
+import type { AuditOutcome } from "./api";
 
 // '' = "all"; outcome applies to the events table only.
 export interface AuditFilters {
-  agent: string
-  role: string
-  tool: string
-  outcome: '' | AuditOutcome
-  range: '24h' | '7d' | '30d' | '90d'
-  start_date: Date | null
-  end_date: Date | null
+  agent: string;
+  role: string;
+  tool: string;
+  outcome: "" | AuditOutcome;
+  range: "24h" | "7d" | "30d" | "90d";
+  start_date: Date | null;
+  end_date: Date | null;
 }
 
 export type SetAuditFilters = (
   updater: (prev: AuditFilters) => AuditFilters,
-) => void
+) => void;
 
 export const EMPTY_AUDIT_FILTERS: AuditFilters = {
-  agent: '',
-  role: '',
-  tool: '',
-  outcome: '',
-  range: '30d',
+  agent: "",
+  role: "",
+  tool: "",
+  outcome: "",
+  range: "30d",
   start_date: null,
   end_date: null,
-}
+};
 
-const PAGE_SIZE = 40
-const MAX_LIMIT = 200
+const PAGE_SIZE = 40;
+const MAX_LIMIT = 200;
 
 interface AuditFilterState {
-  filters: AuditFilters
-  tableLimit: number
-  setFilters: SetAuditFilters
-  loadMore: () => void
+  filters: AuditFilters;
+  tableLimit: number;
+  setFilters: SetAuditFilters;
+  loadMore: () => void;
 }
 
 export const useAuditFilters = create<AuditFilterState>()((set) => ({
@@ -57,4 +57,4 @@ export const useAuditFilters = create<AuditFilterState>()((set) => ({
     set((s) => ({ filters: updater(s.filters), tableLimit: PAGE_SIZE })),
   loadMore: () =>
     set((s) => ({ tableLimit: Math.min(s.tableLimit + PAGE_SIZE, MAX_LIMIT) })),
-}))
+}));

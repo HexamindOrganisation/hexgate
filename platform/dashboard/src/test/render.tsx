@@ -5,11 +5,11 @@
  * boilerplate context setup.
  */
 
-import type { ReactNode } from 'react'
+import type { ReactNode } from "react";
 
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, type RenderOptions } from '@testing-library/react'
-import { MemoryRouter } from 'react-router-dom'
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { render, type RenderOptions } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 
 /** Build a fresh QueryClient per test so cached requests don't leak
  * between cases (React Query caches by reference, not by request URL). */
@@ -24,24 +24,24 @@ function makeQueryClient(): QueryClient {
       },
       mutations: { retry: false },
     },
-  })
+  });
 }
 
-interface Options extends Omit<RenderOptions, 'wrapper'> {
-  initialRoute?: string
+interface Options extends Omit<RenderOptions, "wrapper"> {
+  initialRoute?: string;
 }
 
 /** Drop-in for ``render`` from @testing-library/react with the
  * project's standard providers wrapped around the tree. */
 export function renderWithProviders(
   ui: ReactNode,
-  { initialRoute = '/', ...rest }: Options = {},
+  { initialRoute = "/", ...rest }: Options = {},
 ) {
-  const qc = makeQueryClient()
+  const qc = makeQueryClient();
   return render(
     <QueryClientProvider client={qc}>
       <MemoryRouter initialEntries={[initialRoute]}>{ui}</MemoryRouter>
     </QueryClientProvider>,
     rest,
-  )
+  );
 }

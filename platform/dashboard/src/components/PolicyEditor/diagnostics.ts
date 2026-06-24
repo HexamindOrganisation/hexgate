@@ -8,31 +8,31 @@
  * can't be anchored to a position in the editor; we drop them here and
  * leave the existing error list above the editor to surface them.
  */
-import type { Diagnostic } from '@codemirror/lint'
-import type { EditorState } from '@codemirror/state'
+import type { Diagnostic } from "@codemirror/lint";
+import type { EditorState } from "@codemirror/state";
 
-import type { PolicyValidationError } from '@/lib/api'
+import type { PolicyValidationError } from "@/lib/api";
 
 export function toCodemirrorDiagnostics(
   state: EditorState,
   errors: PolicyValidationError[],
 ): Diagnostic[] {
-  const total = state.doc.lines
+  const total = state.doc.lines;
   return errors
     .filter(
       (e): e is PolicyValidationError & { line: number } =>
-        typeof e.line === 'number' && e.line >= 1,
+        typeof e.line === "number" && e.line >= 1,
     )
     .map((err) => {
       // Clamp out-of-range lines (validator may return a line that no
       // longer exists if the user typed since) to the last line.
-      const lineNo = Math.min(err.line, total)
-      const line = state.doc.line(lineNo)
+      const lineNo = Math.min(err.line, total);
+      const line = state.doc.line(lineNo);
       return {
         from: line.from,
         to: line.to,
-        severity: 'error',
+        severity: "error",
         message: err.role ? `${err.role}: ${err.message}` : err.message,
-      } satisfies Diagnostic
-    })
+      } satisfies Diagnostic;
+    });
 }

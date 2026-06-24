@@ -33,9 +33,13 @@ def _database_url() -> str:
     return url
 
 
-# pool_pre_ping tolerates connections dropped by a managed Postgres; harmless
-# on SQLite.
-engine = create_async_engine(_database_url(), echo=False, pool_pre_ping=True)
+_url = _database_url()
+_engine_kwargs: dict = {"echo": False}
+# pre_ping catches connections dropped by a managed Postgres; on SQLite
+# (in-process, no server-side reaping) it's pure overhead, so PG-only.
+if "postgresql" in _url:
+    _engine_kwargs["pool_pre_ping"] = True
+engine = create_async_engine(_url, **_engine_kwargs)
 
 # Session factory — used by ``get_session()`` and one-off scripts (seeds,
 # tests). ``expire_on_commit=False`` keeps ORM objects usable after a
