@@ -34,26 +34,26 @@ def _():
 
 @app.cell
 def _(mo):
-    mo.md(
-        """
-        # 🛡️ Hexgate — define & run a live agent
+    mo.md("""
+    # 🛡️ Hexgate — define & run a live agent
 
-        A **throwaway sandbox** — everything vanishes when it scales down.
+    A **throwaway sandbox** — everything vanishes when it scales down.
 
-        1. **Define your tools** (real Python).
-        2. **Define your agent.**
-        3. **Enter your OpenAI key and start it.**
-        4. **Open the playground** to chat and watch policy decisions stream.
+    1. **Define your tools** (real Python).
+    2. **Define your agent** (a factory — built on Start, after your key).
+    3. **Enter your OpenAI key and start it.**
+    4. **Open the playground** to chat and watch policy decisions stream.
 
-        Edit the tools/agent cells anytime, then click **Start** again to reload.
-        """
-    )
+    Edit the tools/agent cells anytime, then click **Start** again to reload.
+    """)
     return
 
 
 @app.cell
 def _(mo):
-    mo.md("## 1 · Define your tools")
+    mo.md("""
+    ## 1 · Define your tools
+    """)
     return
 
 
@@ -80,31 +80,40 @@ def _():
 
 @app.cell
 def _(mo):
-    mo.md("## 2 · Define your agent")
+    mo.md("""
+    ## 2 · Define your agent
+    """)
     return
 
 
 @app.cell
 def _(TOOLS):
-    # A real agent object in the kernel — edit model / prompt / tools and re-run,
-    # then click Start (step 3) to reload it into the playground.
+    # A factory — the actual agent is built on Start (step 3), AFTER your OpenAI
+    # key is in env. create_agent() eagerly instantiates the chat model when
+    # passed a string, and ChatOpenAI validates the key at construction, so the
+    # build must happen post-key. Edit model / prompt / tools here, then click
+    # Start to (re)build and reload it into the playground.
     from hexgate import create_agent
 
-    agent, _handler = create_agent(
-        model="gpt-4o-mini",
-        tools=TOOLS,
-        system_prompt=(
-            "You are a customer support agent. Help with orders and refunds. "
-            "Confirm details before issuing a refund."
-        ),
-        name="demo_agent",
-    )
-    return (agent,)
+    def build_agent():
+        return create_agent(
+            model="gpt-4o-mini",
+            tools=TOOLS,
+            system_prompt=(
+                "You are a customer support agent. Help with orders and refunds. "
+                "Confirm details before issuing a refund."
+            ),
+            name="demo_agent",
+        )
+
+    return (build_agent,)
 
 
 @app.cell
 def _(mo):
-    mo.md("## 3 · Add your OpenAI key & start")
+    mo.md("""
+    ## 3 · Add your OpenAI key & start
+    """)
     return
 
 
@@ -119,10 +128,11 @@ def _(mo):
 
 
 @app.cell
-def _(agent, api_key, mo, serve_manager, start):
-    # Fires on button click: set the key in the env (the agent's OpenAI client
-    # reads it at call time), (re)start the in-kernel serve loop bound to the
-    # live `agent`, then report the REAL status so you see it actually connected.
+def _(api_key, build_agent, mo, serve_manager, start):
+    # Fires on button click: set the key in the env, build the agent (must happen
+    # after the key is set — see the step-2 cell), (re)start the in-kernel serve
+    # loop bound to that live agent, then report the REAL status so you see it
+    # actually connected.
     import os
     import time
 
@@ -131,6 +141,7 @@ def _(agent, api_key, mo, serve_manager, start):
             out = mo.md("⚠️ **Enter your OpenAI key above**, then click Start.")
         else:
             os.environ["OPENAI_API_KEY"] = api_key.value  # BYOK
+            agent, _handler = build_agent()
             serve_manager.apply(agent)
             time.sleep(3)  # let it build the runtime, auto-register + dial /v1/serve
             st = serve_manager.status()
@@ -142,7 +153,9 @@ def _(agent, api_key, mo, serve_manager, start):
             elif st.startswith("error"):
                 out = mo.md(f"❌ **Failed to start:** `{st}`")
             else:
-                out = mo.md(f"⏳ **{st}** — give it a few seconds and click Start again.")
+                out = mo.md(
+                    f"⏳ **{st}** — give it a few seconds and click Start again."
+                )
     else:
         out = mo.md(
             f"Agent status: **{serve_manager.status()}** — "
@@ -154,7 +167,9 @@ def _(agent, api_key, mo, serve_manager, start):
 
 @app.cell
 def _(mo):
-    mo.md("## 4 · Open the playground")
+    mo.md("""
+    ## 4 · Open the playground
+    """)
     return
 
 
@@ -175,6 +190,11 @@ def _(Path, mo):
         picks it up.
         """
     )
+    return
+
+
+@app.cell
+def _():
     return
 
 

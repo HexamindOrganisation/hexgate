@@ -88,7 +88,7 @@ def _run(agent_obj) -> None:
             agent_obj=agent_obj,
             description=None,
             approval_handler=build_approval_handler(Console(), "auto-approve"),
-            auto_register=True,        # idempotent register of the agent manifest
+            auto_register=True,  # idempotent register of the agent manifest
             console=Console(),
         )
         _task = _loop.create_task(run_serve(runtime))
@@ -120,9 +120,11 @@ def stop() -> None:
 def apply(agent_obj) -> None:
     """(Re)start the in-kernel serve loop bound to ``agent_obj``.
 
-    Reads ``OPENAI_API_KEY`` straight from the process env — the notebook sets
-    it from the key cell (BYOK), and the agent's OpenAI client reads it at call
-    time. The dashboard picks up the new agent on its next ``hello`` frame.
+    Requires ``OPENAI_API_KEY`` already in the process env — the notebook sets
+    it from the key cell (BYOK) and builds the agent *afterwards*, since
+    ``create_agent(model=str)`` instantiates ``ChatOpenAI`` eagerly and the
+    key must be present at that point. The dashboard picks up the new agent on
+    its next ``hello`` frame.
     """
     global _thread, _status
     if not os.environ.get("OPENAI_API_KEY"):
