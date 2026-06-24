@@ -327,6 +327,58 @@ def test_refresh_swaps_policy_on_change() -> None:
     assert new.allowed
 
 
+def test_refresh_swaps_policy_on_pydantic_fallback_path() -> None:
+    """Regression for the demo-notebook bug: when the platform has no
+    opa (Modal container, fresh deploy without the opa binary), bundles
+    never compile and every GET /v1/agents/:name returns 200 with the
+    raw policy_yaml and null bundle fields. Before the fix,
+    PlatformPolicySource.fetch() returned None on this path, the
+    binding's None-check short-circuited, and edits in /policies were
+    silently ignored at runtime. After the fix, fetch() builds a fresh
+    PolicySet whenever policy_yaml changes, the binding swaps, and the
+    next tool-call decision reflects the edit.
+
+    The opa-on path is already covered by
+    `test_refresh_swaps_policy_on_change` above.
+    """
+    _, pub = generate_keypair()
+    fc = _FakeClient(pub)
+    # First load + first refresh both see the deny policy.
+    deny_payload = {
+        "agent_yaml": "name: support-bot\n",
+        "policy_yaml": (
+            "version: 1\nroles:\n  default:\n    default_policy:\n      mode: deny\n"
+        ),
+        "system_md": "",
+    }
+    # Then a /policies edit flips the tool to allow.
+    allow_payload = {
+        "agent_yaml": "name: support-bot\n",
+        "policy_yaml": (
+            "version: 1\nroles:\n  default:\n    default_policy:\n      mode: allow\n"
+        ),
+        "system_md": "",
+    }
+    fc.serve(deny_payload, etag=None)
+    fc.serve(allow_payload, etag=None)
+
+    binding = _resolved_binding("support-bot", client=fc)
+    first = binding.enforcer.policy
+    # Initial engine should be a PolicySet (pydantic fallback path).
+    assert isinstance(first, PolicySet)
+    pre = first.evaluate(role="default", tool="anything", args={})
+    assert not pre.allowed  # deny
+
+    binding.refresh()
+    second = binding.enforcer.policy
+    assert second is not first, (
+        "refresh must swap the pydantic engine when policy_yaml changes; "
+        "the binding's None-check used to swallow this case"
+    )
+    post = second.evaluate(role="default", tool="anything", args={})
+    assert post.allowed  # the edit took effect
+
+
 def test_refresh_failure_keeps_previous_policy(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
