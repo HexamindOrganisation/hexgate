@@ -2,9 +2,9 @@
 
 interface ImportMetaEnv {
   // Opt-in beta "data may be reset" banner; set in the deploy build only.
-  readonly VITE_PREVIEW_BANNER?: string
+  readonly VITE_PREVIEW_BANNER?: string;
 }
 
 interface ImportMeta {
-  readonly env: ImportMetaEnv
+  readonly env: ImportMetaEnv;
 }

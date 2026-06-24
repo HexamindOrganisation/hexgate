@@ -15,15 +15,15 @@ import {
   type LucideIcon,
 } from "lucide-react";
 
-import { Button } from '@/components/ui/button'
-import { OrgProjectSwitcher } from '@/components/OrgProjectSwitcher'
-import { PreviewBanner } from '@/components/PreviewBanner'
-import { VerifyEmailBanner } from '@/components/VerifyEmailBanner'
-import { useActive } from '@/lib/active'
-import { useLogout, useUser } from '@/lib/auth'
-import { useOrgs } from '@/lib/orgs'
-import { useProjects } from '@/lib/projects'
-import { cn } from '@/lib/utils'
+import { Button } from "@/components/ui/button";
+import { OrgProjectSwitcher } from "@/components/OrgProjectSwitcher";
+import { PreviewBanner } from "@/components/PreviewBanner";
+import { VerifyEmailBanner } from "@/components/VerifyEmailBanner";
+import { useActive } from "@/lib/active";
+import { useLogout, useUser } from "@/lib/auth";
+import { useOrgs } from "@/lib/orgs";
+import { useProjects } from "@/lib/projects";
+import { cn } from "@/lib/utils";
 
 /**
  * Bootstrap effect — runs on every AppShell mount.
