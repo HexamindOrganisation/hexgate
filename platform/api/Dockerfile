@@ -1,44 +1,38 @@
-# Hexgate control-plane API image.
-#
-# Build from the REPO ROOT — the hexgate SDK is an in-repo path dependency
-# (platform/api depends on `hexgate = { path = "../.." }`), so it must be in
-# the build context:
-#
-#   docker build -f platform/api/Dockerfile -t hexgate-api .
-#
-# Requires the repo-root .dockerignore to keep venvs/caches/secrets out of the
-# context. Target amd64 (the deploy arch); on an arm host build with
-# `--platform linux/amd64`.
+# Hexgate control-plane API image. Build from the REPO ROOT (platform/api has
+# an in-repo path dep on the hexgate SDK), amd64-only (deploy arch):
+#   docker build --platform linux/amd64 -f platform/api/Dockerfile -t hexgate-api .
 FROM ghcr.io/astral-sh/uv:python3.13-bookworm-slim
 
-# OPA — a runtime dependency: the control plane shells out to `opa` to compile
-# and sign policy bundles. Without it, policy saves silently yield unsigned
-# bundles. Pinned to match CI (.github/workflows/tests.yml).
+# OPA: the control plane shells out to it to sign policy bundles. Match CI.
 ADD https://openpolicyagent.org/downloads/v0.70.0/opa_linux_amd64_static /usr/local/bin/opa
 RUN chmod +x /usr/local/bin/opa && opa version
 
 WORKDIR /app
 
-# SDK source — what setuptools needs to build the hexgate wheel.
+# SDK source (needed to build the hexgate wheel).
 COPY pyproject.toml README.md LICENSE ./
 COPY hexgate ./hexgate
 
-# Dependencies in their own layer, so they cache until a manifest/lock changes.
-# platform/api sets `package = false`, so only deps (incl. the SDK, installed
-# non-editable) land in the venv — not the API project itself, which runs from
-# source below. The lock references the SDK at ../.., resolved from /app.
+# Deps in their own layer so they cache until the lock changes. package=false +
+# --no-editable: only deps (incl. the SDK) land in the venv; the API runs from
+# source (copied below).
 COPY platform/api/pyproject.toml platform/api/uv.lock ./platform/api/
 WORKDIR /app/platform/api
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev --no-editable
 
-# API source last — edits here don't invalidate the dependency layer above.
+# API source last so edits don't bust the deps layer.
 COPY platform/api ./
 
 EXPOSE 8000
 
-# Single worker: the WebSocket relay holds connections in process memory and
-# cannot span workers (or instances). --no-sync: use the venv built above, no
-# runtime re-resolution.
+# Liveness only: /health has no dependency checks (unlike /ready, which 503s on
+# unreachable ClickHouse) so a degraded-but-running container isn't killed.
+# urllib over curl/wget — neither is in the slim base, but python is.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+    CMD ["python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health', timeout=4).status==200 else 1)"]
+
+# Single worker: the WS relay holds connections in-process, can't span workers.
+# --no-sync: use the venv built above, no runtime re-resolution.
 CMD ["uv", "run", "--no-sync", "uvicorn", "main:app", \
      "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]

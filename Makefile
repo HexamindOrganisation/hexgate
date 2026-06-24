@@ -126,11 +126,10 @@ clickhouse-reset: ## Wipe the data volume and re-run init scripts
 
 # -------- Platform infra (Postgres control-plane DB) --------
 #
-# Control-plane DB (service in platform/docker-compose.yml). NOTE:
-# `clickhouse-down`/`clickhouse-reset` run `down` on the whole compose and so
-# also stop Postgres — use the `postgres-*` targets below to avoid that.
+# Service lives in platform/docker-compose.yml. NOTE: clickhouse-reset runs
+# `down` on the whole compose (stops Postgres too) — use postgres-* targets.
 
-# DSN matching the postgres service (host port 5433, committed dev creds).
+# DSN for the local postgres service (host port 5433, dev creds).
 POSTGRES_DSN ?= postgresql+asyncpg://hexgate:hexgate-dev-password@localhost:5433/hexgate
 
 .PHONY: postgres-up
@@ -175,9 +174,8 @@ platform-api-test: ## Run the platform API test suite
 
 # -------- Platform API image (Docker) --------
 #
-# Build context is the repo root so the in-repo hexgate SDK (a path
-# dependency) is available. Pinned to amd64 (the deploy arch + the bundled
-# OPA binary's arch); on an arm host the build/run are emulated.
+# Build from repo root (in-repo SDK path dep). amd64-only (deploy arch + OPA
+# binary); emulated on arm.
 
 API_IMAGE ?= hexgate-api
 
@@ -187,10 +185,9 @@ platform-api-image: ## Build the control-plane API image (amd64, from repo root)
 
 .PHONY: platform-api-docker
 platform-api-docker: postgres-up ## Run the API image against local Postgres (:8000)
-# Joins the compose network to reach `postgres`; keystore on a named volume so
-# tokens/sessions survive restarts. ClickHouse is left at its localhost default
-# (unreachable from inside the container → /ready 503); audit wiring is
-# validated in the prod compose, not here.
+# Joins the compose network to reach `postgres`; keystore on a named volume to
+# persist across restarts. ClickHouse unreachable here (→ /ready 503); audit is
+# validated in the prod compose.
 	docker run --rm -it --name $(API_IMAGE) \
 	    --network platform_default \
 	    -p 8000:8000 \
