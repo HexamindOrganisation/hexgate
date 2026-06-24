@@ -20,3 +20,11 @@ Library/
 # hexgate live-demo scratch
 platform/api/hexgate.db
 __marimo__/
+
+# Coverage artifacts — pytest-cov + vitest @vitest/coverage-v8 emit these,
+# uploaded to Codecov from CI, never committed.
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+platform/dashboard/coverage/

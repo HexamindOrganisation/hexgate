@@ -47,6 +47,7 @@ dependencies = [
 dev = [
     "pytest>=8.3",
     "pytest-asyncio>=0.24",
+    "pytest-cov>=6.0.0",
     "httpx>=0.27",
     "ruff>=0.8",
 ]
@@ -61,6 +62,29 @@ markers = [
 # `auto` mode means every `async def test_…` runs as an asyncio test
 # without needing a per-test marker.
 asyncio_mode = "auto"
+
+[tool.coverage.run]
+# Branch coverage catches missed else branches that line-coverage rolls
+# over. Source is the api/ surface only — exclude tests/, scripts/, and
+# the seeded ClickHouse init files (not Python).
+branch = true
+source = ["."]
+omit = [
+    "tests/*",
+    "*/__init__.py",
+    "scripts/*",
+]
+
+[tool.coverage.report]
+exclude_also = [
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "@overload",
+]
+skip_covered = false
+show_missing = true
+precision = 1
 
 [tool.uv]
 package = false

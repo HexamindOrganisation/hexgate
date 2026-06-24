@@ -50,8 +50,34 @@ dev = [
     "jupyter",
     "pytest>=8.4.1",
     "pytest-asyncio>=1.0.0",
+    "pytest-cov>=6.0.0",
     "ruff>=0.12.2",
 ]
+
+[tool.coverage.run]
+# Branch coverage is more meaningful than line coverage — catches missed
+# else branches that line-coverage rolls over. Source listed explicitly so
+# tests/, examples/, notebooks/, and the platform/ tree don't pollute the
+# SDK's coverage number.
+branch = true
+source = ["hexgate"]
+omit = [
+    "*/__init__.py",
+    "*/builtin/*",  # packaged YAML/MD assets, not executable code
+]
+
+[tool.coverage.report]
+# Don't fail just because one printer-friendly representation is missing —
+# only meaningful when running the SDK module locally as a script.
+exclude_also = [
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "@overload",
+]
+skip_covered = false
+show_missing = true
+precision = 1
 
 [tool.setuptools.packages.find]
 include = ["hexgate*"]
