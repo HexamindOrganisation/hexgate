@@ -81,11 +81,19 @@ fmt-check: ## Check formatting without writing changes
 	$(UV) ruff format --check hexgate tests platform/api
 
 .PHONY: check
-check: lint fmt-check test ## Python CI parity: lint + fmt-check + test
+check: lint fmt-check test ## Python CI parity: lint + fmt-check + test (no coverage overhead)
 
 .PHONY: check-all
-check-all: check dashboard-lint dashboard-typecheck dashboard-fmt-check ## Full stack check: Python + dashboard lint, typecheck, fmt, tests
-	cd platform/dashboard && pnpm test --run
+check-all: lint fmt-check coverage platform-api-check dashboard-lint dashboard-typecheck dashboard-fmt-check ## Full stack: lint + fmt + tests with coverage on all three surfaces
+	# Dashboard tests via the coverage script (vitest --coverage); same
+	# entry point CI uses so a green `check-all` proves the surfaces
+	# Codecov sees are the same surfaces a contributor saw locally.
+	cd platform/dashboard && pnpm test:coverage
+
+.PHONY: platform-api-check
+platform-api-check: ## Lint + test (with coverage) on the platform API
+	cd platform/api && uv run ruff check .
+	cd platform/api && uv run pytest --cov --cov-report=xml --cov-report=term tests/
 
 # -------- Policy / M2 demo helpers --------
 
