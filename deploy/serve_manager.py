@@ -51,9 +51,27 @@ def status() -> str:
     return "stopped" if _status in ("running", "stopped") else _status
 
 
+def _demo_settings():
+    """Settings for the demo WITHOUT bootstrap()'s all-three-keys validation.
+
+    ``hexgate.bootstrap.bootstrap()`` calls ``Settings.validate_required_keys()``,
+    which hard-requires OPENAI_API_KEY **and** LINKUP_API_KEY **and**
+    TAVILY_API_KEY — even for an agent that never web-searches. That made the
+    notebook refuse to start in a fresh container (no dev ``.env`` to supply the
+    search keys). BYOK only needs the OpenAI key; the web_search/fetch tools
+    still raise a clear error at *call* time if their Linkup/Tavily key is
+    missing. So do bootstrap's real work (configure audit + load settings) and
+    skip the eager search-key check.
+    """
+    from hexgate import audit
+    from hexgate.config.settings import Settings
+
+    audit.configure()
+    return Settings.from_env()
+
+
 def _run(agent_obj) -> None:
     global _loop, _task, _status
-    from hexgate.bootstrap import bootstrap
     from hexgate.cli._common import (
         build_approval_handler,
         build_runtime_from_local_agent,
@@ -64,7 +82,7 @@ def _run(agent_obj) -> None:
     _loop = asyncio.new_event_loop()
     asyncio.set_event_loop(_loop)
     try:
-        settings = bootstrap()
+        settings = _demo_settings()
         runtime = build_runtime_from_local_agent(
             settings,
             agent_obj=agent_obj,
