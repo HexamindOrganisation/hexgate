@@ -51,6 +51,19 @@ test-one: ## Run one test path: make test-one T=tests/security/test_bundle.py
 	@test -n "$(T)" || (echo "Set T=<path>, e.g. make test-one T=tests/security/test_bundle.py" && exit 1)
 	$(UV) pytest $(T) -v
 
+.PHONY: coverage
+coverage: ## Run the SDK suite with branch coverage (terminal + xml for CI)
+	# `uv run` without --active so pytest-cov resolves from the project's
+	# .venv. If you drive uv with UV_PROJECT_ENVIRONMENT (micromamba etc.)
+	# you'll need pytest-cov installed there too — `uv sync --extra dev`
+	# against the same env.
+	uv run pytest --cov --cov-report=xml --cov-report=term $(TESTS)
+
+.PHONY: coverage-html
+coverage-html: ## Coverage with a browsable HTML report under htmlcov/
+	uv run pytest --cov --cov-report=html --cov-report=term $(TESTS)
+	@echo "Open htmlcov/index.html in a browser."
+
 .PHONY: lint
 lint: ## Static check via ruff
 	$(UV) ruff check hexgate tests

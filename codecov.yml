@@ -1,0 +1,92 @@
+# Codecov configuration — three flags, three independent thresholds.
+#
+# Coverage is treated as a regression guard, not a target: each flag has
+# a "don't drop below this" floor, with a small `threshold` so a normal
+# refactor that nudges the number by a percentage point doesn't fail CI.
+# The floor moves up by hand as the codebase matures — not auto-bumped,
+# so we stay deliberate about where the bar is.
+#
+# Three flags, uploaded separately by the three CI jobs:
+#   - sdk           coverage of hexgate/ (Python)
+#   - platform-api  coverage of platform/api/ (Python)
+#   - dashboard     coverage of platform/dashboard/src/ (TypeScript)
+#
+# Per-flag status checks (not just an overall) keep the SDK's high
+# coverage from masking the dashboard's low coverage in the merge
+# decision — and let us ratchet each independently.
+
+coverage:
+  # Floor stops the PR from regressing the worst-case threshold; the
+  # overall number rolls all three flags together.
+  status:
+    project:
+      # Aggregate (all three flags combined). Loose default so a PR that
+      # adds dashboard tests doesn't get blocked by a 0.5% wobble in
+      # the SDK. The per-flag checks below are stricter.
+      default:
+        target: auto
+        threshold: 1%
+        informational: false
+      sdk:
+        target: 75%
+        threshold: 1%
+        flags:
+          - sdk
+      platform-api:
+        target: 70%
+        threshold: 1%
+        flags:
+          - platform-api
+      # Dashboard floor starts intentionally low — only the lib/ surface
+      # has meaningful test coverage today, components are mostly
+      # untested. Ratchet up as we add component tests; flag is
+      # `informational` for now so a regression notifies but doesn't
+      # block merge while we build the safety net.
+      dashboard:
+        target: 25%
+        threshold: 2%
+        informational: true
+        flags:
+          - dashboard
+    patch:
+      # New code in PRs should hit 70% — applies to the lines the PR
+      # actually changes, not the whole repo, so it's a more meaningful
+      # bar than the project target.
+      default:
+        target: 70%
+        threshold: 5%
+
+# Flag definitions: which paths each flag covers, so Codecov knows where
+# to attribute uncovered lines from a given upload.
+flags:
+  sdk:
+    paths:
+      - hexgate/
+    carryforward: true
+  platform-api:
+    paths:
+      - platform/api/
+    carryforward: true
+  dashboard:
+    paths:
+      - platform/dashboard/src/
+    carryforward: true
+
+# Comments — keep them concise so the bot doesn't drown PR discussion.
+comment:
+  layout: "header, diff, flags, components, footer"
+  behavior: default
+  require_changes: false  # comment even on PRs that don't change coverage
+  require_base: false
+  require_head: true
+
+# Don't bother running coverage on docs/ or examples/ or scratch markdown.
+ignore:
+  - "docs/"
+  - "examples/"
+  - "notebooks/"
+  - "**/*.md"
+  - "**/__init__.py"
+  - "**/tests/**"
+  - "platform/dashboard/dist/**"
+  - "fortify/"  # stale pre-rename leftover
