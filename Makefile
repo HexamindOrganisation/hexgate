@@ -173,6 +173,32 @@ platform-api-pg: postgres-up ## Run the platform API against local Postgres (sta
 platform-api-test: ## Run the platform API test suite
 	cd platform/api && uv run pytest tests/
 
+# -------- Platform API image (Docker) --------
+#
+# Build context is the repo root so the in-repo hexgate SDK (a path
+# dependency) is available. Pinned to amd64 (the deploy arch + the bundled
+# OPA binary's arch); on an arm host the build/run are emulated.
+
+API_IMAGE ?= hexgate-api
+
+.PHONY: platform-api-image
+platform-api-image: ## Build the control-plane API image (amd64, from repo root)
+	docker build --platform linux/amd64 -f platform/api/Dockerfile -t $(API_IMAGE) .
+
+.PHONY: platform-api-docker
+platform-api-docker: postgres-up ## Run the API image against local Postgres (:8000)
+# Joins the compose network to reach `postgres`; keystore on a named volume so
+# tokens/sessions survive restarts. ClickHouse is left at its localhost default
+# (unreachable from inside the container → /ready 503); audit wiring is
+# validated in the prod compose, not here.
+	docker run --rm -it --name $(API_IMAGE) \
+	    --network platform_default \
+	    -p 8000:8000 \
+	    -e DATABASE_URL=postgresql+asyncpg://hexgate:hexgate-dev-password@postgres:5432/hexgate \
+	    -e HEXGATE_KEYSTORE_PATH=/keys \
+	    -v hexgate-api-keys:/keys \
+	    $(API_IMAGE)
+
 .PHONY: seed-audit
 seed-audit: ## Seed ClickHouse with audit test data (anomaly detection)
 	cd platform/api && uv run python ../scripts/seed_audit.py
