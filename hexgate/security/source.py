@@ -55,13 +55,12 @@ logger = logging.getLogger("hexgate.security.source")
 
 
 class PolicyContentError(RuntimeError):
-    """The platform served a payload but its policy content is invalid.
+    """Platform served a payload, but the policy content is invalid.
 
-    Distinguished from transient :class:`RuntimeError` (network blips,
-    timeouts, signature checks) so :meth:`PolicyBinding.refresh` can
-    log it at ``error`` level — a malformed-but-saved policy is a
-    correctness issue (dashboard says one thing, runtime enforces
-    another), not a "retry later" condition.
+    Distinct from transient errors (network, signature) so
+    :meth:`PolicyBinding.refresh` can log at ``error`` level —
+    dashboard-saved-but-runtime-rejected is a correctness drift, not
+    "retry later".
     """
 
 
@@ -172,85 +171,48 @@ class PlatformPolicySource:
                 self._cached_yaml_hash = None
                 return bundle
 
-            # No bundle in the response — the platform couldn't compile
-            # (opa missing, malformed policy, etc.) but still served the
-            # raw `policy_yaml`.
-            #
-            # (#1) Strict signature mode forbids this branch entirely:
-            # the load-time path (platform_policy_from_payload) already
-            # refuses a no-bundle payload under REQUIRE_SIGNATURE, so the
-            # only way we get here under strict mode is if opa later went
-            # down mid-session. Re-establish the refusal here so we don't
-            # silently swap the verified bundle out for an unsigned,
-            # unverified pydantic engine built from raw yaml — that would
-            # be exactly the downgrade decode_and_verify_platform_bundle
-            # was written to refuse. Refresh-time errors are caught by
-            # PolicyBinding.refresh (logged + previous policy kept), so
-            # the agent keeps enforcing the last verified bundle.
+            # No bundle — platform couldn't compile (no opa, etc.) but
+            # served the raw policy_yaml. Build a PolicySet from it.
+
+            # (#1) Refuse the downgrade under strict mode. Load-time
+            # already refuses; this catches opa-went-down mid-session.
+            # Caught by binding.refresh → keeps last verified bundle.
             if _truthy(os.environ.get(_REQUIRE_SIGNATURE_ENV_VAR)):
                 raise RuntimeError(
-                    f"{_REQUIRE_SIGNATURE_ENV_VAR} is set but the platform "
-                    f"served no signed bundle for agent {self._agent_name!r} "
-                    "on refresh — the policy may have failed to recompile "
-                    "(is opa still available on the control plane?). "
-                    "Refusing to downgrade to the pydantic engine; keeping "
-                    "the last verified policy."
+                    f"{_REQUIRE_SIGNATURE_ENV_VAR} is set but no signed "
+                    f"bundle served for {self._agent_name!r} on refresh — "
+                    "keeping last verified policy."
                 )
 
-            # (#3) Server-provided ETag is meaningless on the no-bundle path
-            # — it would only be safe if it's a hash of the policy_yaml,
-            # and we have no contract that says it is. Today main.py sets
-            # etag=None when compiled_wasm is None, but a future server
-            # build (or a third-party platform impl) could serve a non-null
-            # ETag derived from the agent record; the next request would
-            # then 304 without ever reaching the yaml-hash comparison and
-            # we'd silently miss a policy edit. Defensively clear our
-            # cached ETag so subsequent no-bundle responses never send
-            # If-None-Match — yaml-hash comparison below is the canonical
-            # change detector for this branch.
+            # (#3) Ignore server ETag on this branch — its semantics
+            # aren't defined here, and a 304 would skip the hash check
+            # below and swallow an edit. Yaml-hash is the change detector.
             yaml_text = payload.get("policy_yaml") or ""
             new_hash = hashlib.sha256(yaml_text.encode("utf-8")).hexdigest()
             if new_hash == self._cached_yaml_hash and self._cached_engine is not None:
-                # Same yaml as the cached engine → reuse for identity
-                # preservation (binding's `is` check skips the swap).
+                # Identity preserved → binding's `is` check skips the swap.
                 self._cached_etag = None
                 return self._cached_engine
 
-            # (#2) Surface yaml/policy-validation failures loudly. The
-            # platform may have accepted a structurally-invalid edit
-            # (e.g. validator drift, missing default role); without this
-            # the dashboard would show the policy as saved while the
-            # agent silently kept the old one. Raise a PolicyContentError
-            # (not RuntimeError) so PolicyBinding.refresh can log it at
-            # error level — distinguishable from transient network blips.
+            # (#2) Surface parse/validate failures as PolicyContentError
+            # so binding logs at ERROR — silent swallow would recreate
+            # the original bug for invalid edits.
             try:
                 parsed = yaml.safe_load(yaml_text) or {}
             except yaml.YAMLError as exc:
                 raise PolicyContentError(
-                    f"platform served unparseable policy_yaml for agent "
-                    f"{self._agent_name!r}: {exc}. Keeping previously "
-                    "loaded policy."
+                    f"unparseable policy_yaml for {self._agent_name!r}: {exc}"
                 ) from exc
             try:
                 new_engine = load_policy_set_from_dict(parsed)
             except (PolicySetError, ValueError, TypeError) as exc:
-                # PolicySetError covers our own structural complaints; the
-                # other two cover pydantic's ValidationError (subclass of
-                # ValueError) for unknown fields / bad enum values, plus
-                # the rare TypeError from a wholly-wrong shape.
+                # ValueError covers pydantic ValidationError too.
                 raise PolicyContentError(
-                    f"platform served structurally-invalid policy_yaml for "
-                    f"agent {self._agent_name!r}: {exc}. Keeping previously "
-                    "loaded policy."
+                    f"invalid policy_yaml for {self._agent_name!r}: {exc}"
                 ) from exc
 
-            # (#4) Per-turn cost on this branch is a full GET + sha256 (the
-            # yaml.safe_load + load_policy_set_from_dict above runs only on
-            # hash mismatch, i.e. when the policy actually changed). The
-            # full GET is unavoidable today: the server's ETag is bound to
-            # wasm_hash, which is null on this path, so it can never 304
-            # the no-bundle response. A future server change could ETag on
-            # sha256(policy_yaml) — that would let us 304 the cheap path.
+            # (#4) Per-turn cost = full GET + sha256; parse only on change.
+            # Can't 304 without server ETag-on-policy_yaml (future fix).
             # Until then the per-turn cost is one round trip + a sha256,
             # acceptable for the demo-shaped deployments this branch
             # targets.

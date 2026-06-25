@@ -473,7 +473,7 @@ def test_structurally_invalid_yaml_raises_policy_content_error() -> None:
     )
 
     src = PlatformPolicySource(fc, "default")
-    with pytest.raises(PolicyContentError, match="structurally-invalid"):
+    with pytest.raises(PolicyContentError, match="invalid policy_yaml"):
         src.fetch()
 
 

@@ -131,11 +131,8 @@ class PolicyBinding:
         try:
             new_policy = self.source.fetch()
         except PolicyContentError as exc:
-            # Content errors are correctness issues — the dashboard
-            # accepted an edit the runtime can't enforce. Log at error
-            # level so an operator monitoring logs notices the runtime
-            # drift from what the UI shows. Still fail-soft: refresh
-            # must not crash an in-flight agent turn.
+            # Dashboard-saved edit the runtime rejects → ERROR so the
+            # UI/runtime drift is grep-able. Still fail-soft.
             logger.error(
                 "policy refresh for agent %r rejected platform content: %s",
                 getattr(self.enforcer, "agent_name", "?"),
@@ -143,9 +140,7 @@ class PolicyBinding:
             )
             return
         except Exception as exc:  # noqa: BLE001 — refresh must not crash a run
-            # Transient failures (network blip, 5xx, timeout, strict-mode
-            # signature refusal on the fallback path). Warning is right
-            # here — a retry on the next turn will likely succeed.
+            # Transient (network, 5xx, strict-mode signature refusal) — WARN.
             logger.warning(
                 "policy refresh for agent %r failed: %s — keeping "
                 "previously loaded policy",
@@ -214,13 +209,8 @@ def platform_policy_from_payload(
     import hashlib
 
     yaml_hash: str | None = None
-    # Same #3 guard as fetch(): on the no-bundle path, the server's ETag
-    # has no defined semantics (today's main.py sends None, but any
-    # non-null value from a future server build or third-party impl
-    # would cause the next refresh to 304 and never reach the yaml-hash
-    # comparison — silently swallowing a policy edit). Yaml-hash is the
-    # canonical change detector on this branch, so seed the source with
-    # initial_etag=None when there's no bundle.
+    # (#3) Mirror fetch()'s guard: don't seed an ETag on the no-bundle
+    # path or the first refresh could 304 and swallow an edit.
     seed_etag: str | None = etag
     if bundle is None:
         yaml_text = payload.get("policy_yaml") or ""
