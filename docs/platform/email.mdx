@@ -1,0 +1,64 @@
+---
+title: "Outbound email (Resend)"
+description: "Verification + password-reset emails — Resend in production, stderr in dev."
+---
+
+<Note>
+**Page stub.** Full content lives in the
+[README — Outbound email](https://github.com/HexamindOrganisation/hexgate#outbound-email-resend).
+</Note>
+
+The platform mails verification and password-reset links through
+[Resend](https://resend.com). Two senders, picked at boot:
+
+- **Dev** — `StderrEmailSender` prints mail bodies (including the magic
+  link) to stderr. No keys needed.
+- **Production** — `ResendEmailSender`, used automatically when both
+  `RESEND_API_KEY` and `HEXGATE_EMAIL_FROM` are set.
+
+## Production config
+
+```bash
+# platform/api/.env
+RESEND_API_KEY=re_…
+HEXGATE_EMAIL_FROM="Hexgate <noreply@yourdomain.com>"
+HEXGATE_DASHBOARD_URL=https://app.yourdomain.com
+```
+
+The from-address must live on a verified domain in your Resend account —
+see [Resend → Domains](https://resend.com/domains). `HEXGATE_DASHBOARD_URL`
+controls the host inside the link the user clicks; misconfiguring it
+sends users to localhost.
+
+## What gets sent
+
+| Endpoint | Email | Body link |
+|---|---|---|
+| `POST /v1/auth/register` | (none — verification is decoupled) | — |
+| `POST /v1/auth/request-verify-token` | "Verify your Hexgate account" | `{dash}/verify-email/{token}` |
+| `POST /v1/auth/forgot-password` | "Reset your Hexgate password" | `{dash}/reset-password/{token}` |
+
+Both link routes are pre-mounted on the dashboard and consume the token
+via the FastAPI-Users `/v1/auth/verify` and `/v1/auth/reset-password`
+endpoints, respectively.
+
+## Failure handling
+
+Provider failures (network, 5xx, invalid from-address) are logged at
+ERROR level but **never** 5xx the calling endpoint — the user gets a
+successful submit, the operator sees the log line, and the user can
+click "Resend email" on the verification banner. Same shape for
+password reset.
+
+Partial config (only `RESEND_API_KEY` set, no `HEXGATE_EMAIL_FROM` or
+vice versa) is treated as dev mode and keeps `StderrEmailSender` —
+better to surface "stderr sender active" at startup than to silently
+have every send rejected by Resend at delivery time.
+
+## Testing
+
+`platform/api/tests/test_mailer.py` covers the Resend sender in
+isolation by patching `resend.Emails.send`. The auth-flow tests in
+`test_auth.py` use a list-capturing sender via the `outbox` fixture so
+they read the would-have-been-mailed token directly — no Resend in the
+test loop.

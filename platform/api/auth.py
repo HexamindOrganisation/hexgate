@@ -222,11 +222,17 @@ class UserManager(BaseUserManager[User, str]):
             f"    {link}\n\n"
             f"If it wasn't you, ignore this email — your password stays put.\n"
         )
-        await get_email_sender().send(
-            to=user.email,
-            subject="Reset your Hexgate password",
-            body=body,
-        )
+        try:
+            await get_email_sender().send(
+                to=user.email,
+                subject="Reset your Hexgate password",
+                body=body,
+            )
+        except Exception:
+            # Mailer logs with the recipient redacted; we just need to
+            # stop the exception from 5xx-ing /v1/auth/forgot-password.
+            # User can request a new link; operator sees the mailer log.
+            logger.exception("password-reset email could not be sent")
 
     async def on_after_request_verify(
         self, user: User, token: str, request: Request | None = None
@@ -245,11 +251,16 @@ class UserManager(BaseUserManager[User, str]):
             f"Unverified accounts can sign in but won't be able to invite\n"
             f"teammates or mint API tokens until verification completes.\n"
         )
-        await get_email_sender().send(
-            to=user.email,
-            subject="Verify your Hexgate account",
-            body=body,
-        )
+        try:
+            await get_email_sender().send(
+                to=user.email,
+                subject="Verify your Hexgate account",
+                body=body,
+            )
+        except Exception:
+            # Don't 5xx /v1/auth/request-verify-token over a Resend
+            # outage — the user can retry from the dashboard banner.
+            logger.exception("verification email could not be sent")
 
 
 async def get_user_manager(
