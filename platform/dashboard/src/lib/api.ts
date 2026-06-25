@@ -209,6 +209,7 @@ export interface AuditSummary {
   by_agent: AuditBreakdownRow[];
   by_role: AuditBreakdownRow[];
   by_tool: AuditBreakdownRow[];
+  by_user: AuditBreakdownRow[];
 }
 
 /** One time bucket; `bucket` is an ISO string. */

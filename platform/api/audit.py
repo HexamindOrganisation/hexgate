@@ -185,6 +185,7 @@ def _scope(
     agent: str | None = None,
     role: str | None = None,
     tool: str | None = None,
+    user: str | None = None,
     start_date: datetime | None = None,
     end_date: datetime | None = None,
 ) -> tuple[list[str], dict[str, object]]:
@@ -212,6 +213,9 @@ def _scope(
     if tool:
         where.append("tool_name = {tool:String}")
         params["tool"] = tool
+    if user is not None:
+        where.append("user_id = {user:String}")
+        params["user"] = user
     return where, params
 
 
@@ -220,8 +224,21 @@ def _scope(
 # () set rolls up outcome, so g_outcome=1 marks the grand-total row.
 _GROUPING_SETS = (
     "GROUPING SETS ((), (outcome), (agent_name, outcome), "
-    "(role, outcome), (tool_name, outcome))"
+    "(role, outcome), (tool_name, outcome), (user_id, outcome))"
 )
+_SELECT_COLS = [
+    "agent_name",
+    "role",
+    "tool_name",
+    "user_id",
+    "outcome",
+    "GROUPING(agent_name) AS g_agent",
+    "GROUPING(role) AS g_role",
+    "GROUPING(tool_name) AS g_tool",
+    "GROUPING(user_id) AS g_user",
+    "GROUPING(outcome) AS g_outcome",
+    "count() AS n",
+]
 
 
 def summarize(
@@ -232,6 +249,7 @@ def summarize(
     agent: str | None = None,
     role: str | None = None,
     tool: str | None = None,
+    user: str | None = None,
     start_date: datetime | None = None,
     end_date: datetime | None = None,
 ) -> dict:
@@ -246,14 +264,13 @@ def summarize(
         agent=agent,
         role=role,
         tool=tool,
+        user=user,
         start_date=start_date,
         end_date=end_date,
     )
     where_sql = " AND ".join(where)
     summary_sql = (
-        "SELECT agent_name, role, tool_name, outcome, "
-        "GROUPING(agent_name) AS g_agent, GROUPING(role) AS g_role, "
-        "GROUPING(tool_name) AS g_tool, GROUPING(outcome) AS g_outcome, count() AS n "
+        f"SELECT {', '.join(_SELECT_COLS)} "
         f"FROM policy_decision WHERE {where_sql} GROUP BY {_GROUPING_SETS}"
     )
     result = client.query(summary_sql, parameters=params)
@@ -262,6 +279,7 @@ def summarize(
     by_agent: dict[str, dict[str, int]] = {}
     by_role: dict[str, dict[str, int]] = {}
     by_tool: dict[str, dict[str, int]] = {}
+    by_user: dict[str, dict[str, int]] = {}
 
     def _add(store: dict[str, dict[str, int]], key: str, outcome: str, n: int) -> None:
         bucket = store.setdefault(key, _zero_counts())
@@ -273,17 +291,19 @@ def summarize(
         agent,
         role,
         tool,
+        user,
         outcome,
         g_agent,
         g_role,
         g_tool,
+        g_user,
         g_outcome,
         n,
     ) in result.result_rows:
         n = int(n)
         if g_outcome:  # only the () grand-total set rolls up outcome
             totals["all"] = n
-        elif g_agent and g_role and g_tool:  # (outcome) set
+        elif g_agent and g_role and g_tool and g_user:  # (outcome) set
             if outcome in totals:
                 totals[outcome] = n
         elif not g_agent:  # (agent_name, outcome)
@@ -292,6 +312,8 @@ def summarize(
             _add(by_role, role, outcome, n)
         elif not g_tool:  # (tool_name, outcome)
             _add(by_tool, tool, outcome, n)
+        else:  # (user_id, outcome)
+            _add(by_user, user, outcome, n)
 
     def _ranked(store: dict[str, dict[str, int]]) -> list[dict]:
         return sorted(
@@ -305,6 +327,7 @@ def summarize(
         "by_agent": _ranked(by_agent),
         "by_role": _ranked(by_role),
         "by_tool": _ranked(by_tool),
+        "by_user": _ranked(by_user),
     }
 
 
@@ -316,6 +339,7 @@ def timeseries(
     agent: str | None = None,
     role: str | None = None,
     tool: str | None = None,
+    user: str | None = None,
     start_date: datetime | None = None,
     end_date: datetime | None = None,
 ) -> list[dict]:
@@ -327,6 +351,7 @@ def timeseries(
         agent=agent,
         role=role,
         tool=tool,
+        user=user,
         start_date=start_date,
         end_date=end_date,
     )
@@ -377,6 +402,7 @@ def list_decisions(
     agent: str | None = None,
     role: str | None = None,
     tool: str | None = None,
+    user: str | None = None,
     outcome: str | None = None,
     session_id: str | None = None,
     limit: int = 25,
@@ -393,6 +419,7 @@ def list_decisions(
         agent=agent,
         role=role,
         tool=tool,
+        user=user,
         start_date=start_date,
         end_date=end_date,
     )

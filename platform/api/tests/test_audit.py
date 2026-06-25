@@ -319,12 +319,13 @@ def test_scope_empty_role_filters_no_role_bucket() -> None:
 
 def test_scope_all_filters() -> None:
     where, params = audit._scope(
-        "p1", 720, agent="researcher", role="analyst", tool="read_file"
+        "p1", 720, agent="researcher", role="analyst", tool="read_file", user="Bob"
     )
     assert where == _BASE_WHERE + [
         "agent_name = {agent:String}",
         "role = {role:String}",
         "tool_name = {tool:String}",
+        "user_id = {user:String}",
     ]
     assert params == {
         "pid": "p1",
@@ -332,6 +333,7 @@ def test_scope_all_filters() -> None:
         "agent": "researcher",
         "role": "analyst",
         "tool": "read_file",
+        "user": "Bob",
     }
     # Every dynamic value travels as a bound parameter, never spliced into
     # the SQL string — the injection-shape invariant for this module.
@@ -428,23 +430,34 @@ def _summary_result(rows: list[tuple]) -> MagicMock:
     return client
 
 
+def test_summarize_user_filter_reaches_query() -> None:
+    client = _summary_result([])
+    summarize(client, project_id="p1", since_hours=24, user="Bob")
+    params = client.query.call_args.kwargs["parameters"]
+    assert params.get("user") == "Bob"
+
+
 def test_summarize_classifies_grouping_sets() -> None:
     client = _summary_result(
         [
+            # agent_name, role, tool_name, user_id, outcome, g_agent, g_role, g_tool, g_user, g_outcome, n
             # () — grand total (the ONLY row where g_outcome=1)
-            ("", "", "", "", 1, 1, 1, 1, 10),
+            ("", "", "", "", "", 1, 1, 1, 1, 1, 10),
             # (outcome) — per-outcome totals
-            ("", "", "", "allow", 1, 1, 1, 0, 6),
-            ("", "", "", "deny", 1, 1, 1, 0, 4),
+            ("", "", "", "", "allow", 1, 1, 1, 1, 0, 6),
+            ("", "", "", "", "deny", 1, 1, 1, 1, 0, 4),
             # (agent_name, outcome)
-            ("researcher", "", "", "allow", 0, 1, 1, 0, 6),
-            ("researcher", "", "", "deny", 0, 1, 1, 0, 3),
-            ("scraper", "", "", "deny", 0, 1, 1, 0, 1),
+            ("researcher", "", "", "", "allow", 0, 1, 1, 1, 0, 6),
+            ("researcher", "", "", "", "deny", 0, 1, 1, 1, 0, 3),
+            ("scraper", "", "", "", "deny", 0, 1, 1, 1, 0, 1),
             # (role, outcome) — empty role keeps its raw "" key on the wire
-            ("", "analyst", "", "allow", 1, 0, 1, 0, 6),
-            ("", "", "", "deny", 1, 0, 1, 0, 4),
+            ("", "analyst", "", "", "allow", 1, 0, 1, 1, 0, 6),
+            ("", "", "", "", "deny", 1, 0, 1, 1, 0, 4),
             # (tool_name, outcome)
-            ("", "", "read_file", "deny", 1, 1, 0, 0, 4),
+            ("", "", "read_file", "", "deny", 1, 1, 0, 1, 0, 4),
+            # (user_id, outcome)
+            ("", "", "", "Alice", "allow", 1, 1, 1, 0, 0, 6),
+            ("", "", "", "Bob", "deny", 1, 1, 1, 0, 0, 4),
         ]
     )
 
@@ -468,6 +481,10 @@ def test_summarize_classifies_grouping_sets() -> None:
     assert data["by_tool"] == [
         {"key": "read_file", "all": 4, "allow": 0, "deny": 4, "needs_approval": 0},
     ]
+    assert data["by_user"] == [
+        {"key": "Alice", "all": 6, "allow": 6, "deny": 0, "needs_approval": 0},
+        {"key": "Bob", "all": 4, "allow": 0, "deny": 4, "needs_approval": 0},
+    ]
 
 
 def test_summarize_empty_result() -> None:
@@ -477,6 +494,7 @@ def test_summarize_empty_result() -> None:
         "by_agent": [],
         "by_role": [],
         "by_tool": [],
+        "by_user": [],
     }
 
 
