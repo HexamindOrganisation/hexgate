@@ -44,7 +44,11 @@ _procs: list[subprocess.Popen] = []
 
 def _spawn(cmd: list[str], *, cwd: Path, env: dict[str, str]) -> subprocess.Popen:
     print(f"[boot] starting: {' '.join(cmd)}  (cwd={cwd})", flush=True)
-    p = subprocess.Popen(cmd, cwd=str(cwd), env=env)
+    # start_new_session=True isolates the child in its own process group, so the
+    # terminal's Ctrl-C goes only to boot.py — boot owns shutdown and signals
+    # each child once, avoiding the SIGINT+SIGTERM race that left uvicorn
+    # half-shutdown (port 8000 still bound) when boot exited too fast.
+    p = subprocess.Popen(cmd, cwd=str(cwd), env=env, start_new_session=True)
     _procs.append(p)
     return p
 
@@ -125,10 +129,37 @@ def run(dash_url: str | None = None) -> None:
     _block_until_exit()
 
 
+_TERM_GRACE = 5.0  # seconds; long enough for uvicorn graceful shutdown
+
+
+def _signal_group(p: subprocess.Popen, sig: int) -> None:
+    """Signal the child's whole process group — covers uvicorn workers, etc."""
+    try:
+        os.killpg(os.getpgid(p.pid), sig)
+    except ProcessLookupError:
+        pass  # already gone
+
+
 def _block_until_exit() -> None:
-    def _shutdown(*_a):
+    shutting_down = False
+
+    def _shutdown(*_):
+        nonlocal shutting_down
+        if shutting_down:
+            return  # already in progress — ignore re-entrant signal
+        shutting_down = True
         for p in _procs:
-            p.terminate()
+            if p.poll() is None:
+                _signal_group(p, signal.SIGTERM)
+        # Wait for graceful exit, then SIGKILL stragglers. Without this
+        # the parent died first and uvicorn was orphaned with port still bound.
+        for p in _procs:
+            try:
+                p.wait(timeout=_TERM_GRACE)
+            except subprocess.TimeoutExpired:
+                print(f"[boot] pid={p.pid} did not exit in {_TERM_GRACE}s; killing", flush=True)
+                _signal_group(p, signal.SIGKILL)
+                p.wait()
         sys.exit(0)
 
     signal.signal(signal.SIGTERM, _shutdown)
