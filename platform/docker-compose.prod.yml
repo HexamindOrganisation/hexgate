@@ -1,0 +1,114 @@
+# Production stack: postgres + clickhouse + api + edge, on one private compose
+# network. Unlike docker-compose.yml (loopback-only, committed dev creds, no
+# app), this is the deploy target — only the edge publishes ports; everything
+# else is reachable only by compose service name on the internal network.
+#
+#   make platform-prod-up      # docker compose -f this --env-file .env.prod up -d
+#   make platform-prod-down
+#
+# Secrets + per-deploy values come from platform/.env.prod (see .env.prod.sample).
+# That file feeds BOTH ${...} interpolation here (via --env-file) and the api
+# container's environment (via env_file below).
+
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: hexgate
+      POSTGRES_USER: hexgate
+      # No dev default — a missing password must fail the deploy, not silently
+      # boot an insecure DB.
+      POSTGRES_PASSWORD: ${HEXGATE_POSTGRES_PASSWORD:?set HEXGATE_POSTGRES_PASSWORD in .env.prod}
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hexgate -d hexgate"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.10
+    restart: unless-stopped
+    environment:
+      CLICKHOUSE_DB: hexgate_audit
+      CLICKHOUSE_USER: hexgate
+      CLICKHOUSE_PASSWORD: ${HEXGATE_CLICKHOUSE_PASSWORD:?set HEXGATE_CLICKHOUSE_PASSWORD in .env.prod}
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+    volumes:
+      - ch-data:/var/lib/clickhouse
+      # Applied once on an empty data volume (not a migration system) — same
+      # schema.sql the dev stack uses.
+      - ./clickhouse/init:/docker-entrypoint-initdb.d:ro
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8123/ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    # Pull a pushed image in prod; `docker compose build` builds it locally.
+    image: ${REGISTRY:-hexgate}/hexgate-api:${TAG:-latest}
+    build:
+      context: ..
+      dockerfile: platform/api/Dockerfile
+    # amd64 everywhere: the API image bundles the amd64-only OPA binary.
+    platform: linux/amd64
+    restart: unless-stopped
+    # Secrets + per-deploy app config (DATABASE_URL, ClickHouse password,
+    # cookie/dashboard/CORS, seed, optional Google OAuth).
+    env_file:
+      - .env.prod
+    environment:
+      # Service topology — fixed by this compose, not a per-deploy choice, so
+      # kept here rather than in .env.prod. ClickHouse port is the HTTP
+      # interface (8123): clickhouse_connect is an HTTP client, NOT the native
+      # 9000 protocol.
+      HEXGATE_CLICKHOUSE_HOST: clickhouse
+      HEXGATE_CLICKHOUSE_PORT: "8123"
+      # Persistent keystore — losing this volume invalidates every token,
+      # session, and signed bundle.
+      HEXGATE_KEYSTORE_PATH: /keys
+    volumes:
+      - hexgate-keys:/keys
+    depends_on:
+      postgres:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+    # Liveness comes from the image's own HEALTHCHECK (/health).
+
+  edge:
+    image: ${REGISTRY:-hexgate}/hexgate-edge:${TAG:-latest}
+    build:
+      context: ..
+      dockerfile: platform/edge/Dockerfile
+    platform: linux/amd64
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      # Drives Caddy's site address + automatic Let's Encrypt issuance.
+      HEXGATE_DOMAIN: ${HEXGATE_DOMAIN:?set HEXGATE_DOMAIN in .env.prod}
+    volumes:
+      # Cert + ACME-account persistence. Losing caddy-data forces re-issuance
+      # and risks Let's Encrypt rate limits.
+      - caddy-data:/data
+      - caddy-config:/config
+    # Start once the API container exists; Caddy serves the SPA and obtains its
+    # cert immediately, and returns 502 on /v1/* only until the API is healthy.
+    depends_on:
+      - api
+
+volumes:
+  pg-data:
+  ch-data:
+  hexgate-keys:
+  caddy-data:
+  caddy-config:
