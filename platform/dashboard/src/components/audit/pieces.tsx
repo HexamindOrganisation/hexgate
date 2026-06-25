@@ -39,18 +39,7 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Sparkline } from "@/components/ui/charts";
 import { BreakdownBar, type BreakdownDatum, DecisionBadge } from "./charts";
 import { OUTCOME_SERIES } from "./chart-tokens";
-
-const fmtTs = (d: Date) =>
-  d.toLocaleString("en-US", {
-    month: "short",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hour12: false,
-  }) +
-  "." +
-  String(d.getMilliseconds()).padStart(3, "0");
+import { fmtTs } from "./fmt";
 
 // Map a server breakdown row ({key, all, ...}) to the chart datum ({total, ...}).
 const toDatum = (r: AuditBreakdownRow): BreakdownDatum => ({
@@ -211,11 +200,12 @@ export function ActiveChips({ f, setF }: { f: Filters; setF: SetFilters }) {
         className="h-6 px-2 text-xs"
         onClick={() =>
           setF((p) => ({
+            ...p,
             agent: "",
             role: "",
             tool: "",
             outcome: "",
-            range: p.range,
+            customMode: false,
             start_date: null,
             end_date: null,
           }))

@@ -48,11 +48,28 @@ jobs:
       - name: Sync deps
         run: uv sync --extra dev
 
-      # `make check` = ruff lint + ruff fmt-check + pytest.
-      # Same single entry-point used locally for "CI parity" — keeps
-      # local and CI runs identical.
-      - name: Lint + format + tests
-        run: make check
+      # Split out from `make check` (lint + fmt-check + test) so we can
+      # run pytest with coverage without re-running it. Same gating, one
+      # extra step for the xml emit.
+      - name: Lint
+        run: make lint
+
+      - name: Format check
+        run: make fmt-check
+
+      - name: Tests with coverage
+        run: uv run pytest --cov --cov-report=xml --cov-report=term tests/
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          files: ./coverage.xml
+          flags: sdk
+          token: ${{ secrets.CODECOV_TOKEN }}
+          # Don't fail the build on a Codecov outage — the suite is
+          # already green, we don't want a third-party uploader to
+          # block merges.
+          fail_ci_if_error: false
 
   platform-api:
     name: Platform API
@@ -88,8 +105,16 @@ jobs:
       - name: Lint
         run: cd platform/api && uv run ruff check .
 
-      - name: Tests
-        run: make platform-api-test
+      - name: Tests with coverage
+        run: cd platform/api && uv run pytest --cov --cov-report=xml --cov-report=term tests/
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          files: ./platform/api/coverage.xml
+          flags: platform-api
+          token: ${{ secrets.CODECOV_TOKEN }}
+          fail_ci_if_error: false
 
   platform-api-postgres:
     # The platform-api job runs the whole suite on SQLite, never exercising
@@ -165,5 +190,13 @@ jobs:
       - name: Format check
         run: pnpm format:check
 
-      - name: Tests
-        run: pnpm test
+      - name: Tests with coverage
+        run: pnpm test:coverage
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          files: ./platform/dashboard/coverage/lcov.info
+          flags: dashboard
+          token: ${{ secrets.CODECOV_TOKEN }}
+          fail_ci_if_error: false
