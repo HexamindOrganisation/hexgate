@@ -1,12 +1,16 @@
 """Policy sources — abstractions over "where the current policy lives."
 
-The runtime fetches a :class:`PolicyBundle` (or ``None``) from a source at
-every agent run; the source decides whether that's cheap or not. Three
-implementations cover the production + local-dev workflows:
+The runtime fetches a :class:`~hexgate.security.decision.PolicyEngine`
+(or ``None``) from a source at every agent run; the source decides
+whether that's cheap or not. Three implementations cover the production
++ local-dev workflows:
 
   * :class:`PlatformPolicySource` — HTTP fetch with ``If-None-Match`` /
     ``304 Not Modified``, so unchanged bundles cost one tiny round trip
     instead of a full payload + signature verify + wasm re-instantiation.
+    Falls back to the pydantic engine (a :class:`PolicySet` derived from
+    the response's ``policy_yaml``) when the platform served no compiled
+    bundle — the typical Modal / no-opa demo deployment shape.
   * :class:`BundleDirPolicySource` — refresh a pre-built bundle directory
     on disk (today's ``HEXGATE_LOCAL_POLICY=<dir>`` path, made mtime-aware
     so a rebuild via ``hexgate policy build`` takes effect on the next run).
@@ -21,11 +25,14 @@ on the protocol, not on any concrete type.
 from __future__ import annotations
 
 import base64
+import hashlib
 import logging
 import os
 import threading
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
+
+import yaml
 
 from hexgate.security.bundle import (
     BundleIntegrityError,
@@ -34,6 +41,8 @@ from hexgate.security.bundle import (
     PolicyBundle,
     build_signed_bundle,
 )
+from hexgate.security.decision import PolicyEngine
+from hexgate.security.policy_set import PolicySetError, load_policy_set_from_dict
 from hexgate.security.signing import SignatureError, decode_key
 
 if TYPE_CHECKING:
@@ -45,37 +54,58 @@ if TYPE_CHECKING:
 logger = logging.getLogger("hexgate.security.source")
 
 
+class PolicyContentError(RuntimeError):
+    """Platform served a payload, but the policy content is invalid.
+
+    Distinct from transient errors (network, signature) so
+    :meth:`PolicyBinding.refresh` can log at ``error`` level —
+    dashboard-saved-but-runtime-rejected is a correctness drift, not
+    "retry later".
+    """
+
+
 class PolicySource(Protocol):
-    """Produces a current :class:`PolicyBundle` (or ``None``) on demand.
+    """Produces a current :class:`PolicyEngine` (or ``None``) on demand.
 
     Implementations are expected to be **cheap when nothing has changed**
     — caching, ETags, or mtime checks — so the agent runtime can call
     :meth:`fetch` at the top of every run without measurable cost.
 
-    A returned ``None`` means "no bundle is configured for this source"
-    (e.g. the platform served no compiled bundle). Callers fall back to
-    whatever they had before (pydantic engine on raw YAML).
+    A returned ``None`` means "no engine is configured for this source"
+    (e.g. the platform served no policy at all). Callers keep whatever
+    engine they had before. The runtime's :class:`PolicyBinding.refresh`
+    relies on this: it only swaps when ``fetch()`` returns something
+    distinct from the current engine.
     """
 
-    def fetch(self) -> PolicyBundle | None: ...
+    def fetch(self) -> PolicyEngine | None: ...
 
 
 class PlatformPolicySource:
-    """Pull + verify a signed bundle from the platform, with ETag/304.
+    """Pull a current policy engine from the platform, with ETag/304.
 
-    Holds the last seen bundle and its ``wasm_hash`` (the ETag the
-    platform serves). Each :meth:`fetch` sends ``If-None-Match`` and:
+    Two engines flow out, depending on what the platform has compiled:
 
-      * ``304`` → returns the cached bundle without touching wasmtime or
-        the signature path.
-      * ``200`` → decodes + verifies the new payload, caches it, returns.
-      * payload with no bundle → returns ``None`` (the platform couldn't
-        compile, e.g. opa missing on the control plane — the SDK then
-        falls back to its pydantic engine).
+      * **WASM bundle** (production shape) — when the platform's
+        ``compiled_wasm`` is populated, we get a signed bundle back and
+        return a verified :class:`PolicyBundle`. ETag = ``wasm_hash``;
+        unchanged bundles hit ``304`` and re-use the cached object.
+      * **Pydantic fallback** (no-opa / demo shape) — when the platform
+        couldn't compile (no ``opa`` on the control plane), the response
+        carries ``policy_yaml`` but null bundle fields. We hash the yaml,
+        compare against the last seen hash, and re-construct a fresh
+        :class:`PolicySet` only when the yaml content actually changed.
 
-    Verification fails are fatal (a tampered platform bundle is never
-    silently downgraded). The signature is checked against the same
-    public key the SDK already trusts for biscuit verification.
+    Without the pydantic-fallback branch a policy edit would silently
+    no-op for any deployment without opa — :meth:`fetch` would always
+    return ``None`` (no bundle), :class:`PolicyBinding.refresh` would
+    treat that as "nothing served" and skip the swap, and the initial
+    engine built by :func:`platform_policy_from_payload` would stay
+    frozen forever.
+
+    Verification fails on the bundle path are fatal (a tampered bundle
+    is never silently downgraded). Verification uses the same public
+    key the SDK already trusts for biscuit verification.
     """
 
     def __init__(
@@ -85,46 +115,111 @@ class PlatformPolicySource:
         *,
         initial_bundle: PolicyBundle | None = None,
         initial_etag: str | None = None,
+        initial_engine: PolicyEngine | None = None,
+        initial_yaml_hash: str | None = None,
     ) -> None:
         self._client = client
         self._agent_name = agent_name
-        # Pre-seed when the caller already fetched + verified the bundle
-        # (typical at agent load time). Avoids a redundant 200 round-trip
-        # on the first refresh — that call will send If-None-Match and
-        # get a cheap 304.
-        self._cached_bundle: PolicyBundle | None = initial_bundle
+        # Pre-seed when the caller already fetched + verified at load time.
+        # `initial_engine` covers both shapes (a PolicyBundle on the WASM
+        # path, a PolicySet on the pydantic-fallback path); `initial_bundle`
+        # stays as a back-compat alias that callers used before we
+        # broadened the engine type.
+        self._cached_engine: PolicyEngine | None = (
+            initial_engine if initial_engine is not None else initial_bundle
+        )
         self._cached_etag: str | None = initial_etag
+        # Hash of the `policy_yaml` text that produced the cached *pydantic*
+        # engine. Used solely on the no-bundle branch to decide whether
+        # the platform's response represents a real change: a same-hash
+        # response returns the cached PolicySet (preserves identity → the
+        # binding's `is policy` check skips the swap); a new hash builds
+        # and caches a fresh one. ``None`` on the bundle path (we use
+        # ``_cached_etag`` for that).
+        self._cached_yaml_hash: str | None = initial_yaml_hash
         # Serialize the (read cached_etag → HTTP → write cached_*) cycle.
         # Refresh runs on a to_thread worker, so two concurrent agent runs
         # sharing one source could otherwise interleave a write to
-        # _cached_bundle with another's read of _cached_etag and pair the
+        # _cached_engine with another's read of _cached_etag and pair the
         # bundle from one response with the etag from another → a later
         # spurious 200/304. The cost is serializing refreshes for shared
         # sources, which is fine: refresh is best-effort and rare-ish per
         # turn (most calls hit a cheap 304).
         self._lock = threading.Lock()
 
-    def fetch(self) -> PolicyBundle | None:
+    def fetch(self) -> PolicyEngine | None:
         with self._lock:
             payload, etag = self._client.get_agent(
                 self._agent_name, if_none_match=self._cached_etag
             )
             # 304 — nothing changed since last fetch. Cheap path.
             if payload is None:
-                return self._cached_bundle
+                return self._cached_engine
 
             bundle = decode_and_verify_platform_bundle(
                 payload, self._client.public_key_bytes()
             )
-            self._cached_bundle = bundle
-            # Server-supplied ETag wins; fall back to wasm_hash for when the
-            # response lacked an ETag header (older platform versions).
-            self._cached_etag = etag or (
-                f'"{bundle.wasm_hash}"'
-                if bundle is not None and bundle.wasm_hash
-                else None
-            )
-            return bundle
+            if bundle is not None:
+                # WASM path. ETag tracking is on the wasm_hash; the yaml
+                # hash is irrelevant here, clear it so a later transition
+                # to the pydantic branch (platform loses opa) doesn't
+                # mistakenly reuse a stale hash from the old wasm world.
+                self._cached_engine = bundle
+                self._cached_etag = etag or (
+                    f'"{bundle.wasm_hash}"' if bundle.wasm_hash else None
+                )
+                self._cached_yaml_hash = None
+                return bundle
+
+            # No bundle — platform couldn't compile (no opa, etc.) but
+            # served the raw policy_yaml. Build a PolicySet from it.
+
+            # (#1) Refuse the downgrade under strict mode. Load-time
+            # already refuses; this catches opa-went-down mid-session.
+            # Caught by binding.refresh → keeps last verified bundle.
+            if _truthy(os.environ.get(_REQUIRE_SIGNATURE_ENV_VAR)):
+                raise RuntimeError(
+                    f"{_REQUIRE_SIGNATURE_ENV_VAR} is set but no signed "
+                    f"bundle served for {self._agent_name!r} on refresh — "
+                    "keeping last verified policy."
+                )
+
+            # (#3) Ignore server ETag on this branch — its semantics
+            # aren't defined here, and a 304 would skip the hash check
+            # below and swallow an edit. Yaml-hash is the change detector.
+            yaml_text = payload.get("policy_yaml") or ""
+            new_hash = hashlib.sha256(yaml_text.encode("utf-8")).hexdigest()
+            if new_hash == self._cached_yaml_hash and self._cached_engine is not None:
+                # Identity preserved → binding's `is` check skips the swap.
+                self._cached_etag = None
+                return self._cached_engine
+
+            # (#2) Surface parse/validate failures as PolicyContentError
+            # so binding logs at ERROR — silent swallow would recreate
+            # the original bug for invalid edits.
+            try:
+                parsed = yaml.safe_load(yaml_text) or {}
+            except yaml.YAMLError as exc:
+                raise PolicyContentError(
+                    f"unparseable policy_yaml for {self._agent_name!r}: {exc}"
+                ) from exc
+            try:
+                new_engine = load_policy_set_from_dict(parsed)
+            except (PolicySetError, ValueError, TypeError) as exc:
+                # ValueError covers pydantic ValidationError too.
+                raise PolicyContentError(
+                    f"invalid policy_yaml for {self._agent_name!r}: {exc}"
+                ) from exc
+
+            # (#4) Per-turn cost = full GET + sha256; parse only on change.
+            # Can't 304 without server ETag-on-policy_yaml (future fix).
+            # Until then the per-turn cost is one round trip + a sha256,
+            # acceptable for the demo-shaped deployments this branch
+            # targets.
+            self._cached_engine = new_engine
+            self._cached_yaml_hash = new_hash
+            self._cached_etag = None
+            return self._cached_engine
 
 
 def decode_and_verify_platform_bundle(

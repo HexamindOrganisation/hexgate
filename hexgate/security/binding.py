@@ -22,6 +22,7 @@ from hexgate.security.source import (
     _LOCAL_POLICY_ENV_VAR,
     _REQUIRE_SIGNATURE_ENV_VAR,
     PlatformPolicySource,
+    PolicyContentError,
     PolicySource,
     _local_policy_override,
     _truthy,
@@ -129,7 +130,17 @@ class PolicyBinding:
             return
         try:
             new_policy = self.source.fetch()
+        except PolicyContentError as exc:
+            # Dashboard-saved edit the runtime rejects → ERROR so the
+            # UI/runtime drift is grep-able. Still fail-soft.
+            logger.error(
+                "policy refresh for agent %r rejected platform content: %s",
+                getattr(self.enforcer, "agent_name", "?"),
+                exc,
+            )
+            return
         except Exception as exc:  # noqa: BLE001 — refresh must not crash a run
+            # Transient (network, 5xx, strict-mode signature refusal) — WARN.
             logger.warning(
                 "policy refresh for agent %r failed: %s — keeping "
                 "previously loaded policy",
@@ -190,8 +201,26 @@ def platform_policy_from_payload(
             yaml.safe_load(payload.get("policy_yaml") or "") or {}
         )
 
-    # Pre-seeded so the next refresh is a 304 unless the policy changed.
+    # Pre-seeded so the next refresh is a 304 (bundle path) or a cache
+    # hit (pydantic-fallback path) unless the policy actually changed.
+    # The yaml hash is only relevant on the pydantic-fallback path —
+    # compute it from the same `policy_yaml` we just parsed above so the
+    # source's first refresh comparison matches load-time exactly.
+    import hashlib
+
+    yaml_hash: str | None = None
+    # (#3) Mirror fetch()'s guard: don't seed an ETag on the no-bundle
+    # path or the first refresh could 304 and swallow an edit.
+    seed_etag: str | None = etag
+    if bundle is None:
+        yaml_text = payload.get("policy_yaml") or ""
+        yaml_hash = hashlib.sha256(yaml_text.encode("utf-8")).hexdigest()
+        seed_etag = None
     source = PlatformPolicySource(
-        client, agent_name, initial_bundle=bundle, initial_etag=etag
+        client,
+        agent_name,
+        initial_engine=policy,
+        initial_etag=seed_etag,
+        initial_yaml_hash=yaml_hash,
     )
     return policy, source

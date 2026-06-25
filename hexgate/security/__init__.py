@@ -74,6 +74,7 @@ from hexgate.security.rego_wasm import (
 from hexgate.security.source import (
     BundleDirPolicySource,
     PlatformPolicySource,
+    PolicyContentError,
     PolicySource,
     YamlPolicySource,
 )
@@ -107,6 +108,7 @@ __all__ = [
     "OpaNotFoundError",
     "PlatformPolicySource",
     "PolicyBundle",
+    "PolicyContentError",
     "PolicySource",
     "YamlPolicySource",
     "SignatureError",
