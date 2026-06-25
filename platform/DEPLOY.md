@@ -53,10 +53,10 @@ git clone <repo-url> hexgate && cd hexgate
 ```bash
 cp platform/.env.prod.sample platform/.env.prod
 # edit platform/.env.prod — see the inline comments. At minimum:
-#   HEXGATE_DOMAIN                             (your domain)
-#   HEXGATE_POSTGRES_PASSWORD + DATABASE_URL   (same password in both)
+#   HEXGATE_DOMAIN               (your domain)
+#   HEXGATE_POSTGRES_PASSWORD    (DATABASE_URL is derived from it in compose)
 #   HEXGATE_CLICKHOUSE_PASSWORD
-# Generate secrets with: openssl rand -base64 32
+# Generate secrets with: openssl rand -base64 32 | tr -d '/+='   (URL-safe)
 # REGISTRY/TAG are not needed for build-on-target — leave them unset.
 ```
 

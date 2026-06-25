@@ -60,8 +60,9 @@ services:
     # amd64 everywhere: the API image bundles the amd64-only OPA binary.
     platform: linux/amd64
     restart: unless-stopped
-    # Secrets + per-deploy app config (DATABASE_URL, ClickHouse password,
-    # cookie/dashboard/CORS, seed, optional Google OAuth).
+    # Secrets + per-deploy app config (Postgres + ClickHouse passwords,
+    # cookie/dashboard/CORS, seed, optional Google OAuth). DATABASE_URL is NOT
+    # here — it's derived from HEXGATE_POSTGRES_PASSWORD in `environment:` below.
     env_file:
       - .env.prod
     environment:
@@ -71,6 +72,12 @@ services:
       # 9000 protocol.
       HEXGATE_CLICKHOUSE_HOST: clickhouse
       HEXGATE_CLICKHOUSE_PORT: "8123"
+      # DB connection string. Host/port/user/db are fixed by this compose, so
+      # the only per-deploy value is the password — derive the URL from the
+      # single HEXGATE_POSTGRES_PASSWORD (the same var postgres is initialised
+      # with) instead of maintaining a second copy in .env.prod. Keep the
+      # password URL-safe (no @ : / # ? — see .env.prod.sample).
+      DATABASE_URL: postgresql+asyncpg://hexgate:${HEXGATE_POSTGRES_PASSWORD}@postgres:5432/hexgate
       # Persistent keystore — losing this volume invalidates every token,
       # session, and signed bundle.
       HEXGATE_KEYSTORE_PATH: /keys

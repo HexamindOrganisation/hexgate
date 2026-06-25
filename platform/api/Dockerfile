@@ -4,7 +4,10 @@
 FROM ghcr.io/astral-sh/uv:python3.13-bookworm-slim
 
 # OPA: the control plane shells out to it to sign policy bundles. Match CI.
-ADD https://openpolicyagent.org/downloads/v0.70.0/opa_linux_amd64_static /usr/local/bin/opa
+# Pin by SHA256 so a corrupted/tampered/MITM'd download fails the build (this
+# binary signs production policy bundles). Update the checksum with the version.
+ADD --checksum=sha256:00d114b94fdb1606a48cccdfc73c9ccdc62c38721150131ae578d5ff3df5c084 \
+    https://openpolicyagent.org/downloads/v0.70.0/opa_linux_amd64_static /usr/local/bin/opa
 RUN chmod +x /usr/local/bin/opa && opa version
 
 WORKDIR /app
@@ -23,6 +26,17 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 
 # API source last so edits don't bust the deps layer.
 COPY platform/api ./
+
+# Drop root: a compromised API process must not run as uid 0 with write access
+# to the /keys signing-key volume. The named hexgate-keys volume inherits the
+# ownership of /keys from the image on first mount, so create it pre-owned by
+# the unprivileged user. HOME=/app (owned below) keeps uv's cache writable.
+ENV HOME=/app
+RUN groupadd --gid 10001 hexgate \
+    && useradd --uid 10001 --gid 10001 --no-create-home --home-dir /app hexgate \
+    && mkdir -p /keys \
+    && chown -R hexgate:hexgate /app /keys
+USER hexgate
 
 EXPOSE 8000
 
