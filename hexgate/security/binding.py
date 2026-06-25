@@ -22,6 +22,7 @@ from hexgate.security.source import (
     _LOCAL_POLICY_ENV_VAR,
     _REQUIRE_SIGNATURE_ENV_VAR,
     PlatformPolicySource,
+    PolicyContentError,
     PolicySource,
     _local_policy_override,
     _truthy,
@@ -129,7 +130,22 @@ class PolicyBinding:
             return
         try:
             new_policy = self.source.fetch()
+        except PolicyContentError as exc:
+            # Content errors are correctness issues — the dashboard
+            # accepted an edit the runtime can't enforce. Log at error
+            # level so an operator monitoring logs notices the runtime
+            # drift from what the UI shows. Still fail-soft: refresh
+            # must not crash an in-flight agent turn.
+            logger.error(
+                "policy refresh for agent %r rejected platform content: %s",
+                getattr(self.enforcer, "agent_name", "?"),
+                exc,
+            )
+            return
         except Exception as exc:  # noqa: BLE001 — refresh must not crash a run
+            # Transient failures (network blip, 5xx, timeout, strict-mode
+            # signature refusal on the fallback path). Warning is right
+            # here — a retry on the next turn will likely succeed.
             logger.warning(
                 "policy refresh for agent %r failed: %s — keeping "
                 "previously loaded policy",
