@@ -515,6 +515,47 @@ def test_no_bundle_response_with_etag_does_not_send_if_none_match() -> None:
     assert first is not second
 
 
+def test_load_time_no_bundle_does_not_pass_etag_to_source() -> None:
+    """#3 sibling at load time — platform_policy_from_payload must not
+    seed the source with the server's ETag on the no-bundle branch. Same
+    rationale as the runtime fix: a non-null ETag here would cause the
+    first refresh to send If-None-Match, get a 304, and never reach the
+    yaml-hash comparison.
+    """
+    from hexgate.security.binding import platform_policy_from_payload
+
+    _, pub = generate_keypair()
+
+    class _StubClient:
+        def public_key_bytes(self) -> bytes:
+            return pub
+
+        def get_agent(self, _name, *, if_none_match=None):
+            return (
+                {
+                    "policy_yaml": "version: 1\nroles:\n  default:\n    default_policy:\n      mode: allow\n"
+                },
+                None,
+            )
+
+    client = _StubClient()
+    payload, _ = client.get_agent("default")
+    # Simulate the server sending a non-null ETag on the no-bundle response.
+    _, source = platform_policy_from_payload(
+        client,  # type: ignore[arg-type]
+        "default",
+        payload,
+        etag='"server-sent-no-bundle-etag"',
+    )
+
+    # The source's cached_etag must be None so the next refresh doesn't
+    # send If-None-Match and risk a 304 swallowing an edit.
+    assert source._cached_etag is None  # noqa: SLF001 — invariant under test
+    # The yaml-hash *is* seeded — that's what makes the first refresh
+    # cheap when nothing actually changed.
+    assert source._cached_yaml_hash is not None  # noqa: SLF001
+
+
 def test_binding_logs_content_error_at_error_level(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:

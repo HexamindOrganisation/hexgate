@@ -214,14 +214,23 @@ def platform_policy_from_payload(
     import hashlib
 
     yaml_hash: str | None = None
+    # Same #3 guard as fetch(): on the no-bundle path, the server's ETag
+    # has no defined semantics (today's main.py sends None, but any
+    # non-null value from a future server build or third-party impl
+    # would cause the next refresh to 304 and never reach the yaml-hash
+    # comparison — silently swallowing a policy edit). Yaml-hash is the
+    # canonical change detector on this branch, so seed the source with
+    # initial_etag=None when there's no bundle.
+    seed_etag: str | None = etag
     if bundle is None:
         yaml_text = payload.get("policy_yaml") or ""
         yaml_hash = hashlib.sha256(yaml_text.encode("utf-8")).hexdigest()
+        seed_etag = None
     source = PlatformPolicySource(
         client,
         agent_name,
         initial_engine=policy,
-        initial_etag=etag,
+        initial_etag=seed_etag,
         initial_yaml_hash=yaml_hash,
     )
     return policy, source
