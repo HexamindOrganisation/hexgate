@@ -190,22 +190,8 @@ def platform_policy_from_payload(
             yaml.safe_load(payload.get("policy_yaml") or "") or {}
         )
 
-    # Pre-seeded so the next refresh is a 304 (bundle path) or a cache
-    # hit (pydantic-fallback path) unless the policy actually changed.
-    # The yaml hash is only relevant on the pydantic-fallback path —
-    # compute it from the same `policy_yaml` we just parsed above so the
-    # source's first refresh comparison matches load-time exactly.
-    import hashlib
-
-    yaml_hash: str | None = None
-    if bundle is None:
-        yaml_text = payload.get("policy_yaml") or ""
-        yaml_hash = hashlib.sha256(yaml_text.encode("utf-8")).hexdigest()
+    # Pre-seeded so the next refresh is a 304 unless the policy changed.
     source = PlatformPolicySource(
-        client,
-        agent_name,
-        initial_engine=policy,
-        initial_etag=etag,
-        initial_yaml_hash=yaml_hash,
+        client, agent_name, initial_bundle=bundle, initial_etag=etag
     )
     return policy, source

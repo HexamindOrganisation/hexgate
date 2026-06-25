@@ -204,100 +204,14 @@ def test_bundle_change_returns_new_instance() -> None:
     assert fc.calls == [None, '"hash-a"']  # second call sent first's etag
 
 
-def test_no_bundle_in_payload_falls_back_to_pydantic_engine() -> None:
-    """When the platform served no compiled bundle (no opa on the control
-    plane, common in demo containers), fetch() builds a PolicySet from
-    the response's policy_yaml so per-turn refresh can still react to
-    policy edits. Without this, the binding's None-check would short-
-    circuit and the initial engine would stay frozen forever — see
-    fix/policy-refresh-pydantic-fallback for the regression scenario.
-    """
-    from hexgate.security.policy_set import PolicySet
-
+def test_no_bundle_in_payload_returns_none() -> None:
+    """When the platform served no compiled bundle, fetch() → None."""
     _, pub = generate_keypair()
     fc = _FakeClient(pub)
-    fc.serve(
-        {
-            "agent_yaml": "name: x\n",
-            "policy_yaml": "version: 1\nroles:\n  default:\n    default_policy:\n      mode: allow\n",
-        },
-        etag=None,
-    )
+    fc.serve({"agent_yaml": "name: x\n", "policy_yaml": "version: 1\n"}, etag=None)
 
     src = PlatformPolicySource(fc, "default")
-    result = src.fetch()
-    assert isinstance(result, PolicySet)
-
-
-def test_no_bundle_unchanged_yaml_returns_same_engine_instance() -> None:
-    """Identity preservation on the pydantic-fallback path: two fetches
-    against the same policy_yaml must return the same PolicySet object,
-    so PolicyBinding.refresh()'s `is` check skips the rebind.
-    """
-    _, pub = generate_keypair()
-    fc = _FakeClient(pub)
-    payload = {
-        "policy_yaml": "version: 1\nroles:\n  default:\n    default_policy:\n      mode: deny\n",
-    }
-    fc.serve(payload, etag=None)
-    fc.serve(payload, etag=None)
-
-    src = PlatformPolicySource(fc, "default")
-    first = src.fetch()
-    second = src.fetch()
-    assert first is second
-
-
-def test_no_bundle_changed_yaml_returns_new_engine() -> None:
-    """The regression scenario: dashboard edits a policy, platform has
-    no opa so the bundle stays null, but the new policy_yaml flows
-    through. fetch() must detect the change and return a fresh PolicySet
-    (different identity) so the binding swaps.
-    """
-    _, pub = generate_keypair()
-    fc = _FakeClient(pub)
-    fc.serve(
-        {
-            "policy_yaml": "version: 1\nroles:\n  default:\n    default_policy:\n      mode: deny\n",
-        },
-        etag=None,
-    )
-    fc.serve(
-        {
-            "policy_yaml": "version: 1\nroles:\n  default:\n    default_policy:\n      mode: allow\n",
-        },
-        etag=None,
-    )
-
-    src = PlatformPolicySource(fc, "default")
-    first = src.fetch()
-    second = src.fetch()
-    assert first is not None and second is not None
-    assert first is not second
-
-
-def test_no_bundle_then_bundle_clears_yaml_hash_state() -> None:
-    """Transition test: a source that fell back to pydantic (no opa) must
-    cleanly accept a later bundled response (opa came back online) and
-    return the bundle, not stay stuck on the prior PolicySet.
-    """
-    if not _OPA_AVAILABLE:
-        pytest.skip("opa not on PATH")
-    priv, pub = generate_keypair()
-    fc = _FakeClient(pub)
-    fc.serve(
-        {
-            "policy_yaml": "version: 1\nroles:\n  default:\n    default_policy:\n      mode: deny\n"
-        },
-        etag=None,
-    )
-    fc.serve(_bundle_response(priv, amount_cap=500), etag='"hash-a"')
-
-    src = PlatformPolicySource(fc, "default")
-    first = src.fetch()
-    second = src.fetch()
-    assert isinstance(second, PolicyBundle)
-    assert first is not second
+    assert src.fetch() is None
 
 
 @needs_opa
