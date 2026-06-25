@@ -130,10 +130,11 @@ clickhouse-reset: ## Wipe the data volume and re-run init scripts
 
 # -------- Platform infra (Postgres control-plane DB) --------
 #
-# Service lives in platform/docker-compose.yml. NOTE: clickhouse-reset runs
-# `down` on the whole compose (stops Postgres too) — use postgres-* targets.
+# Control-plane DB (service in platform/docker-compose.yml). NOTE:
+# `clickhouse-down`/`clickhouse-reset` run `down` on the whole compose and so
+# also stop Postgres — use the `postgres-*` targets below to avoid that.
 
-# DSN for the local postgres service (host port 5433, dev creds).
+# DSN matching the postgres service (host port 5433, committed dev creds).
 POSTGRES_DSN ?= postgresql+asyncpg://hexgate:hexgate-dev-password@localhost:5433/hexgate
 
 .PHONY: postgres-up
@@ -175,30 +176,6 @@ platform-api-pg: postgres-up ## Run the platform API against local Postgres (sta
 .PHONY: platform-api-test
 platform-api-test: ## Run the platform API test suite
 	cd platform/api && uv run pytest tests/
-
-# -------- Platform API image (Docker) --------
-#
-# Build from repo root (in-repo SDK path dep). amd64-only (deploy arch + OPA
-# binary); emulated on arm.
-
-API_IMAGE ?= hexgate-api
-
-.PHONY: platform-api-image
-platform-api-image: ## Build the control-plane API image (amd64, from repo root)
-	docker build --platform linux/amd64 -f platform/api/Dockerfile -t $(API_IMAGE) .
-
-.PHONY: platform-api-docker
-platform-api-docker: postgres-up ## Run the API image against local Postgres (:8000)
-# Joins the compose network to reach `postgres`; keystore on a named volume to
-# persist across restarts. ClickHouse unreachable here (→ /ready 503); audit is
-# validated in the prod compose.
-	docker run --rm -it --name $(API_IMAGE) \
-	    --network platform_default \
-	    -p 8000:8000 \
-	    -e DATABASE_URL=postgresql+asyncpg://hexgate:hexgate-dev-password@postgres:5432/hexgate \
-	    -e HEXGATE_KEYSTORE_PATH=/keys \
-	    -v hexgate-api-keys:/keys \
-	    $(API_IMAGE)
 
 .PHONY: seed-audit
 seed-audit: ## Seed ClickHouse with audit test data (anomaly detection)
