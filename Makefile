@@ -236,6 +236,30 @@ dashboard-lint: ## Lint dashboard TypeScript with eslint
 dashboard-typecheck: ## Typecheck dashboard TypeScript
 	cd platform/dashboard && pnpm typecheck
 
+# -------- Production deploy (build on target) --------
+#
+# Run the production stack (platform/docker-compose.prod.yml) on the deploy
+# machine, building the api + edge images locally from this repo — no container
+# registry needed. See platform/DEPLOY.md for the full Scaleway runbook.
+#
+# Requires platform/.env.prod (copy from .env.prod.sample). The images build
+# amd64 (pinned in the compose file): the API bundles the amd64-only OPA binary,
+# and the Scaleway instance is amd64.
+
+PROD_COMPOSE := docker compose -f platform/docker-compose.prod.yml --env-file platform/.env.prod
+
+.PHONY: platform-prod-up
+platform-prod-up: ## Build images on this machine and (re)start the production stack
+	$(PROD_COMPOSE) up -d --build
+
+.PHONY: platform-prod-down
+platform-prod-down: ## Stop the production stack (keeps data volumes)
+	$(PROD_COMPOSE) down
+
+.PHONY: platform-prod-logs
+platform-prod-logs: ## Tail logs from all production services
+	$(PROD_COMPOSE) logs -f
+
 # -------- SDK → platform bridge --------
 
 # Make's rule parser treats colons specially, so a positional
