@@ -1,21 +1,14 @@
-# Hexgate edge: TLS-terminating reverse proxy + dashboard SPA host.
-#
-# {$HEXGATE_DOMAIN} is read from the environment at startup, so one image
-# serves any host:
-#   • production:  HEXGATE_DOMAIN=app.example.com  → automatic Let's Encrypt
-#   • local smoke: HEXGATE_DOMAIN=:80              → plain HTTP, no cert
+# Edge: TLS-terminating reverse proxy + SPA host. {$HEXGATE_DOMAIN} from env:
+# a real host → Let's Encrypt; ":80" → plain HTTP (local smoke test).
 {$HEXGATE_DOMAIN} {
 	encode gzip zstd
 
-	# API + WebSocket. Caddy upgrades WebSocket connections transparently
-	# (the dashboard opens wss://{host}/v1/projects/.../chat), so the single
-	# reverse_proxy covers both HTTP and WS. `api` is the compose service name.
+	# API + WebSocket (Caddy upgrades WS transparently). `api` = compose service.
 	handle /v1/* {
 		reverse_proxy api:8000
 	}
 
-	# Dashboard SPA. try_files falls back to index.html so client-side routes
-	# (/playground, /verify-email/..., deep links) resolve on a hard refresh.
+	# SPA: fall back to index.html so client-side routes survive a hard refresh.
 	handle {
 		root * /srv
 		try_files {path} /index.html

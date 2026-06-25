@@ -1,18 +1,13 @@
-# Build context for platform/edge/Dockerfile is the repo ROOT. Under BuildKit
-# this per-Dockerfile ignore file is used INSTEAD of the repo-root .dockerignore
-# — which is what we want, because that one excludes platform/dashboard/ (it's
-# not part of the API image) and the edge build needs exactly that source.
-#
-# Allowlist: drop everything, then re-include only what the edge Dockerfile
-# COPYs (the dashboard source + the Caddyfile), keeping the context tiny.
+# Context is the repo ROOT. BuildKit uses this file INSTEAD of the repo-root
+# .dockerignore (which excludes platform/dashboard/ — the source the edge needs).
+# Allowlist: drop everything, re-include only what the build COPYs.
 *
 !platform
 platform/*
 !platform/dashboard
 !platform/edge
 
-# Within the kept dirs, drop deps/build artifacts/caches — pnpm reinstalls from
-# the lockfile and re-runs the build inside the image.
+# Deps/artifacts are rebuilt in the image.
 platform/dashboard/node_modules
 platform/dashboard/dist
 platform/dashboard/.vite

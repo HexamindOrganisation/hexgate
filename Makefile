@@ -238,13 +238,9 @@ dashboard-typecheck: ## Typecheck dashboard TypeScript
 
 # -------- Production deploy (build on target) --------
 #
-# Run the production stack (platform/docker-compose.prod.yml) on the deploy
-# machine, building the api + edge images locally from this repo — no container
-# registry needed. See platform/DEPLOY.md for the full Scaleway runbook.
-#
-# Requires platform/.env.prod (copy from .env.prod.sample). The images build
-# amd64 (pinned in the compose file): the API bundles the amd64-only OPA binary,
-# and the Scaleway instance is amd64.
+# Run the prod stack (platform/docker-compose.prod.yml), building images locally
+# — no registry. Requires platform/.env.prod (copy from .env.prod.sample).
+# Full runbook: platform/DEPLOY.md.
 
 PROD_COMPOSE := docker compose -f platform/docker-compose.prod.yml --env-file platform/.env.prod
 
