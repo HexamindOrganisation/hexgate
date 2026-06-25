@@ -21,7 +21,12 @@ from pydantic import ValidationError
 
 import audit
 import main
-from audit import CLOCK_SKEW_FUTURE, list_decisions, summarize
+from audit import (
+    CLOCK_SKEW_FUTURE,
+    list_decisions,
+    summarize,
+    _sliding_window_anomalies,
+)
 from keystore import FileKeyStore
 from main import (
     app,
@@ -31,7 +36,7 @@ from main import (
     require_project,
     require_user,
 )
-from schemas import DecisionEvent
+from schemas import AnomalySeverity, AuditOutcome, DecisionEvent
 
 from audit import prepare_date_range
 
@@ -562,13 +567,14 @@ def test_list_decisions_empty_first_page_skips_count() -> None:
 # Dashboard read endpoints — require_org_member gating
 # ---------------------------------------------------------------------------
 
-# All three project-scoped reads share one trust envelope (require_org_member,
+# All four project-scoped reads share one trust envelope (require_org_member,
 # same as the other dashboard reads); membership semantics (403 non-member,
 # 404 unknown project) are covered against a real DB in test_auth.py.
 _AUDIT_READ_PATHS = [
     "/v1/projects/proj_test/audit/summary",
     "/v1/projects/proj_test/audit/timeseries",
     "/v1/projects/proj_test/audit/decisions",
+    "/v1/projects/proj_test/audit/anomalies",
 ]
 
 
@@ -821,3 +827,300 @@ def test_when_end_date_is_in_the_future_then_end_date_is_clamped_to_now() -> Non
     future_end = datetime(2099, 12, 31, tzinfo=timezone.utc)
     _, end = prepare_date_range(None, future_end)
     assert end <= datetime.now(timezone.utc) + CLOCK_SKEW_FUTURE
+
+
+# ---------------------------------------------------------------------------
+# _sliding_window_anomalies() — pure sliding-window burst detector
+# ---------------------------------------------------------------------------
+
+
+class TestSlidingWindowAnomalies:
+    BASE = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+    D = AuditOutcome.DENY
+    A = AuditOutcome.ALLOW
+
+    @staticmethod
+    def rows(
+        user: str,
+        outcomes: list,
+        *,
+        gap_minutes: int = 5,
+        base: datetime = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc),
+    ) -> list[tuple]:
+        return [
+            (user, base + timedelta(minutes=i * gap_minutes), outcome)
+            for i, outcome in enumerate(outcomes)
+        ]
+
+    def test_when_rows_are_empty_then_returns_empty_list(self):
+        assert _sliding_window_anomalies([]) == []
+
+    def test_when_window_size_is_below_min_requests_then_no_anomaly(self):
+        rows = self.rows("alice", [self.D, self.D, self.D, self.D])
+        assert _sliding_window_anomalies(rows) == []
+
+    def test_when_deny_rate_is_below_30_percent_then_no_anomaly(self):
+        rows = self.rows("alice", [self.D, self.A, self.A, self.A, self.A])
+        assert _sliding_window_anomalies(rows) == []
+
+    def test_when_user_has_no_burst_then_no_emission_on_user_change(self):
+        rows = self.rows("alice", [self.A] * 5) + self.rows("bob", [self.A] * 3)
+        assert _sliding_window_anomalies(rows) == []
+
+    def test_when_deny_rate_is_above_50_percent_then_severity_is_high(self):
+        rows = self.rows("alice", [self.D] * 5)
+        result = _sliding_window_anomalies(rows)
+        assert len(result) == 1
+        assert result[0].user_id == "alice"
+        assert result[0].severity == AnomalySeverity.HIGH
+        assert result[0].deny == 5
+        assert result[0].all == 5
+        assert result[0].deny_rate == pytest.approx(1.0)
+        assert result[0].first_seen == self.BASE
+        assert result[0].last_seen == self.BASE + timedelta(minutes=20)
+
+    def test_when_deny_rate_is_between_30_and_50_percent_then_severity_is_medium(self):
+        rows = self.rows("alice", [self.D, self.D, self.A, self.A, self.A])
+        result = _sliding_window_anomalies(rows)
+        assert len(result) == 1
+        assert result[0].severity == AnomalySeverity.MEDIUM
+        assert result[0].deny == 2
+        assert result[0].all == 5
+
+    def test_when_deny_rate_drops_below_threshold_then_anomaly_is_emitted(self):
+        burst = self.rows("alice", [self.D] * 5, gap_minutes=2, base=self.BASE)
+        cooldown = self.rows(
+            "alice",
+            [self.A] * 12,
+            gap_minutes=2,
+            base=self.BASE + timedelta(minutes=10),
+        )
+        result = _sliding_window_anomalies(burst + cooldown)
+        assert len(result) == 1
+        assert result[0].severity == AnomalySeverity.HIGH
+
+    def test_when_deny_rate_increases_within_burst_then_peak_is_captured(self):
+        # At event 5: 3/5 = 60%; at event 6: 4/6 ≈ 66.7% → best_burst updated
+        burst = self.rows(
+            "alice",
+            [self.D, self.D, self.D, self.A, self.A, self.D],
+            gap_minutes=5,
+            base=self.BASE,
+        )
+        cooldown = self.rows(
+            "alice",
+            [self.A] * 12,
+            gap_minutes=2,
+            base=self.BASE + timedelta(minutes=30),
+        )
+        result = _sliding_window_anomalies(burst + cooldown)
+        assert len(result) == 1
+        assert result[0].deny_rate == pytest.approx(4 / 6)
+        assert result[0].deny == 4
+        assert result[0].all == 6
+
+    def test_when_deny_rate_decreases_within_burst_then_peak_is_not_overwritten(self):
+        # Peak at 5/5 = 100%; rate drops with allows but stays above threshold
+        burst = self.rows("alice", [self.D] * 5, gap_minutes=5, base=self.BASE)
+        dip = self.rows(
+            "alice", [self.A] * 5, gap_minutes=5, base=self.BASE + timedelta(minutes=25)
+        )
+        cooldown = self.rows(
+            "alice",
+            [self.A] * 12,
+            gap_minutes=2,
+            base=self.BASE + timedelta(minutes=55),
+        )
+        result = _sliding_window_anomalies(burst + dip + cooldown)
+        assert len(result) == 1
+        assert result[0].deny_rate == pytest.approx(1.0)
+
+    def test_when_deny_events_expire_from_window_then_burst_is_flushed(self):
+        burst = self.rows("alice", [self.D] * 5, gap_minutes=5, base=self.BASE)
+        late = [("alice", self.BASE + timedelta(hours=2), self.A)]
+        result = _sliding_window_anomalies(burst + late)
+        assert len(result) == 1
+        assert result[0].deny == 5
+
+    def test_when_allow_events_expire_from_window_then_deny_count_is_unchanged(self):
+        early = self.rows(
+            "alice",
+            [self.A, self.A, self.A, self.A, self.D, self.D, self.D, self.D, self.D],
+            gap_minutes=5,
+            base=self.BASE,
+        )
+        late = [("alice", self.BASE + timedelta(hours=2), self.D)]
+        result = _sliding_window_anomalies(early + late)
+        assert len(result) == 1
+        assert result[0].severity == AnomalySeverity.HIGH
+
+    def test_when_two_bursts_are_separated_by_gap_then_two_anomalies_are_emitted(self):
+        burst1 = self.rows("alice", [self.D] * 5, gap_minutes=5, base=self.BASE)
+        bridge = [("alice", self.BASE + timedelta(hours=2), self.A)]
+        burst2 = self.rows(
+            "alice",
+            [self.D] * 5,
+            gap_minutes=5,
+            base=self.BASE + timedelta(hours=2, minutes=10),
+        )
+        result = _sliding_window_anomalies(burst1 + bridge + burst2)
+        assert len(result) == 2
+        assert all(r.user_id == "alice" for r in result)
+        assert all(r.severity == AnomalySeverity.HIGH for r in result)
+        assert result[1].first_seen > result[0].last_seen
+
+    def test_when_burst_ends_by_eviction_and_boundary_event_is_deny_then_it_seeds_next_burst(
+        self,
+    ):
+        # Burst 1: 5 denies. 2 hours pass — eviction clears the entire window.
+        # The next event is a DENY: window_length=1, below threshold, so the burst
+        # is flushed. That DENY must be re-seeded into the cleared window so it
+        # contributes curr_deny=1 toward a second burst. Without re-seeding, the
+        # following 4 DENYs reach only window_length=4 and no second anomaly fires.
+        burst1 = self.rows("alice", [self.D] * 5, gap_minutes=5, base=self.BASE)
+        seed_deny = [("alice", self.BASE + timedelta(hours=2), self.D)]
+        burst2 = self.rows(
+            "alice",
+            [self.D] * 4,
+            gap_minutes=5,
+            base=self.BASE + timedelta(hours=2, minutes=5),
+        )
+        result = _sliding_window_anomalies(burst1 + seed_deny + burst2)
+        assert len(result) == 2
+        assert result[1].deny == 5
+        assert result[1].all == 5
+
+    def test_when_burst_ends_by_rate_drop_then_live_window_events_are_discarded(self):
+        # Burst 1: 5 denies then 12 allows drop the rate below threshold at
+        # T+32min. All 17 events are still inside the 1-hour window when the
+        # flush fires, but they belong to neither burst and must be discarded.
+        # Without discarding them, those allows inflate the denominator of the
+        # next burst and suppress its deny rate, masking the second anomaly.
+        burst1 = self.rows("alice", [self.D] * 5, gap_minutes=2, base=self.BASE)
+        cooldown = self.rows(
+            "alice",
+            [self.A] * 12,
+            gap_minutes=2,
+            base=self.BASE + timedelta(minutes=10),
+        )
+        burst2 = self.rows(
+            "alice",
+            [self.D] * 5,
+            gap_minutes=2,
+            base=self.BASE + timedelta(minutes=34),
+        )
+        result = _sliding_window_anomalies(burst1 + cooldown + burst2)
+        assert len(result) == 2
+        assert result[1].deny == 5
+        assert result[1].all == 5
+
+    def test_when_window_slides_at_constant_rate_then_last_seen_advances(self):
+        # 5 DENYs at T+0..T+20 hit threshold (rate=1.0, all=5). Then 4 more
+        # DENYs at T+65..T+80 — each evicts one old DENY, keeping rate=1.0
+        # and all=5. With strict >, best_burst would never update and last_seen
+        # would freeze at T+20. With >=, each new candidate replaces the old
+        # one and last_seen advances to T+80.
+        burst = self.rows("alice", [self.D] * 5, gap_minutes=5, base=self.BASE)
+        slide = self.rows(
+            "alice",
+            [self.D] * 4,
+            gap_minutes=5,
+            base=self.BASE + timedelta(minutes=65),
+        )
+        result = _sliding_window_anomalies(burst + slide)
+        assert len(result) == 1
+        assert result[0].last_seen == self.BASE + timedelta(minutes=80)
+
+    def test_when_multiple_users_each_have_bursts_then_one_anomaly_per_user(self):
+        rows = self.rows("alice", [self.D] * 5, base=self.BASE) + self.rows(
+            "bob", [self.D, self.D, self.A, self.A, self.A], base=self.BASE
+        )
+        result = _sliding_window_anomalies(rows)
+        assert len(result) == 2
+        by_user = {r.user_id: r for r in result}
+        assert by_user["alice"].severity == AnomalySeverity.HIGH
+        assert by_user["bob"].severity == AnomalySeverity.MEDIUM
+
+    def test_when_user_changes_with_active_burst_then_burst_is_flushed(self):
+        rows = self.rows("alice", [self.D] * 5, base=self.BASE) + self.rows(
+            "bob", [self.A] * 3, base=self.BASE
+        )
+        result = _sliding_window_anomalies(rows)
+        assert len(result) == 1
+        assert result[0].user_id == "alice"
+
+
+# ---------------------------------------------------------------------------
+# anomalies() — two-pass ClickHouse wiring
+# ---------------------------------------------------------------------------
+
+
+class TestAnomalies:
+    BASE = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+
+    @staticmethod
+    def _client(
+        qualifying_rows: list[tuple],
+        decision_rows: list[tuple],
+    ) -> MagicMock:
+        pass1, pass2 = MagicMock(), MagicMock()
+        pass1.result_rows = qualifying_rows
+        pass2.result_rows = decision_rows
+        client = MagicMock()
+        client.query.side_effect = [pass1, pass2]
+        return client
+
+    @staticmethod
+    def _burst(
+        user: str,
+        n: int = 5,
+        base: datetime = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc),
+    ) -> list[tuple]:
+        return [
+            (user, base + timedelta(minutes=i * 5), AuditOutcome.DENY) for i in range(n)
+        ]
+
+    def test_when_no_qualifying_users_then_returns_empty_list_and_skips_second_query(
+        self,
+    ):
+        client = MagicMock()
+        client.query.return_value.result_rows = []
+        result = audit.anomalies(client, project_id="p1", since_hours=24)
+        assert result == []
+        client.query.assert_called_once()
+
+    def test_when_qualifying_users_exist_then_anomalies_are_returned(self):
+        client = self._client(
+            qualifying_rows=[("bob",)],
+            decision_rows=self._burst("bob"),
+        )
+        result = audit.anomalies(client, project_id="p1", since_hours=24)
+        assert len(result) == 1
+        assert result[0].user_id == "bob"
+        assert result[0].severity == AnomalySeverity.HIGH
+        assert client.query.call_count == 2
+
+    def test_pure_deny_burst_reports_full_window_size(self):
+        # 20 denies all within 1 minute — all at 100% deny rate.  The best_burst
+        # must grow with each event (tie-break by window size), not freeze at
+        # the first qualifying window of 5.
+        base = self.BASE
+        rows = [
+            ("bob", base + timedelta(seconds=i * 3), AuditOutcome.DENY)
+            for i in range(20)
+        ]
+        client = self._client(qualifying_rows=[("bob",)], decision_rows=rows)
+        result = audit.anomalies(client, project_id="p1", since_hours=24)
+        assert len(result) == 1
+        assert result[0].deny == 20
+        assert result[0].all == 20
+
+
+def test_audit_anomalies_clickhouse_error_returns_503(
+    client: TestClient, fake_clickhouse: MagicMock
+) -> None:
+    app.dependency_overrides[require_org_member] = lambda: MagicMock()
+    fake_clickhouse.query.side_effect = ClickHouseError("unavailable")
+    r = client.get("/v1/projects/proj_test/audit/anomalies")
+    assert r.status_code == 503
+    assert "unavailable" in r.json()["detail"]

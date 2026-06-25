@@ -5,7 +5,6 @@ import hashlib
 import logging
 import os
 from contextlib import asynccontextmanager
-from typing import Literal
 from urllib.parse import unquote
 
 from clickhouse_connect.driver.exceptions import ClickHouseError, OperationalError
@@ -37,6 +36,7 @@ from audit import (
     WINDOW_HOURS,
     AuditEventOutOfWindow,
     AuditPayloadTooLarge,
+    anomalies,
     prepare_date_range,
     insert_decision,
     list_decisions,
@@ -59,7 +59,9 @@ from schemas import (
     AgentManifestView,
     AgentRead,
     AgentUpdate,
+    AuditAnomaly,
     AuditDecisionPage,
+    AuditOutcome,
     AuditSummary,
     AuditTimeseriesPoint,
     AuditWindow,
@@ -1234,7 +1236,7 @@ async def api_audit_decisions(
     agent: str | None = None,
     role: str | None = None,
     tool: str | None = None,
-    outcome: Literal["allow", "deny", "needs_approval"] | None = None,
+    outcome: AuditOutcome | None = None,
     session_id: str | None = None,
     limit: int = 25,
     offset: int = 0,
@@ -1262,6 +1264,33 @@ async def api_audit_decisions(
     except ClickHouseError:
         raise _audit_unavailable()
     return page
+
+
+@v1.get(
+    "/projects/{project_id}/audit/anomalies",
+    response_model=list[AuditAnomaly],
+    dependencies=[Depends(require_org_member)],
+    tags=["audit"],
+)
+async def api_audit_anomalies(
+    project_id: str,
+    window: AuditWindow = "24h",
+    start_date: datetime | None = None,
+    end_date: datetime | None = None,
+    clickhouse_client=Depends(require_clickhouse),
+) -> list[AuditAnomaly]:
+    start_date, end_date = prepare_date_range(start_date, end_date)
+    try:
+        return await asyncio.to_thread(
+            anomalies,
+            clickhouse_client,
+            project_id=project_id,
+            since_hours=WINDOW_HOURS[window],
+            start_date=start_date,
+            end_date=end_date,
+        )
+    except ClickHouseError:
+        raise _audit_unavailable()
 
 
 @v1.get("/agents/{name}", response_model=AgentRead)
