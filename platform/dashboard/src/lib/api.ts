@@ -255,7 +255,14 @@ export interface AuditScope {
   tool?: string;
   start_date?: string;
   end_date?: string;
+  user?: string;
 }
+
+/** Narrow scope accepted by the anomalies endpoint (cross-user by design). */
+export type AnomalyScope = Pick<
+  AuditScope,
+  "window" | "start_date" | "end_date"
+>;
 
 /** List filters: scope + table-only outcome/session_id + paging. */
 export interface AuditDecisionFilters extends AuditScope {
@@ -263,6 +270,19 @@ export interface AuditDecisionFilters extends AuditScope {
   session_id?: string;
   limit?: number;
   offset?: number;
+}
+
+export type AnomalySeverity = "high" | "medium";
+
+/** One per-user anomaly burst from GET /audit/anomalies. */
+export interface AuditAnomaly {
+  user_id: string;
+  severity: AnomalySeverity;
+  deny: number;
+  all: number;
+  deny_rate: number;
+  first_seen: string;
+  last_seen: string;
 }
 
 function qs(params: Record<string, string | number | undefined>): string {
@@ -331,5 +351,10 @@ export const api = {
   listAuditDecisions: (filters: AuditDecisionFilters, projectId: string) =>
     request<AuditDecisionPage>(
       `/v1/projects/${projectId}/audit/decisions${qs({ ...filters })}`,
+    ),
+
+  getAuditAnomalies: (scope: AnomalyScope, projectId: string) =>
+    request<AuditAnomaly[]>(
+      `/v1/projects/${projectId}/audit/anomalies${qs({ ...scope })}`,
     ),
 };

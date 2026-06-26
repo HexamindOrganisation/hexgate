@@ -18,7 +18,7 @@ import { act, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { AuditDecisionRow } from "@/lib/api";
+import type { AuditAnomaly, AuditDecisionRow } from "@/lib/api";
 import { useActive } from "@/lib/active";
 import { EMPTY_AUDIT_FILTERS, useAuditFilters } from "@/lib/audit-filters";
 import { AuditPage } from "@/routes/Audit";
@@ -65,6 +65,16 @@ const ROW: AuditDecisionRow = {
   arguments: { path: "/etc/passwd" },
 };
 
+const ANOMALY: AuditAnomaly = {
+  user_id: "bob",
+  severity: "high",
+  deny: 8,
+  all: 10,
+  deny_rate: 0.8,
+  first_seen: "2026-06-01T09:00:00Z",
+  last_seen: "2026-06-01T10:00:00Z",
+};
+
 /** Sibling event in the same session — only reachable via the drawer's
  * "Same session" list (the main table stub returns ROW alone). */
 const SIBLING: AuditDecisionRow = {
@@ -81,7 +91,7 @@ const SIBLING: AuditDecisionRow = {
  * every requested URL (path + query) so tests can assert what filter
  * state actually reached the API.
  */
-function stubFetch(): string[] {
+function stubFetch(anomalies: AuditAnomaly[] = []): string[] {
   const calls: string[] = [];
   const json = (body: unknown) =>
     new Response(JSON.stringify(body), {
@@ -131,6 +141,8 @@ function stubFetch(): string[] {
           }
           return json({ rows: [ROW], total: 1, limit: 40, offset: 0 });
         }
+        case `/v1/projects/${PROJECT}/audit/anomalies`:
+          return json(anomalies);
         default:
           return new Response("not found", { status: 404 });
       }
@@ -426,6 +438,76 @@ describe("AuditPage", () => {
       });
       expect(useAuditFilters.getState().filters.start_date).toBeNull();
       expect(useAuditFilters.getState().filters.end_date).toBeNull();
+    });
+  });
+
+  describe("AnomaliesCard", () => {
+    it("renders when the API returns anomalies", async () => {
+      stubFetch([ANOMALY]);
+      renderWithProviders(<AuditPage />);
+
+      expect(await screen.findByText(/1 detected/)).toBeInTheDocument();
+      expect(screen.getByText("bob")).toBeInTheDocument();
+      expect(screen.getByText("High")).toBeInTheDocument();
+      expect(screen.getByText("80%")).toBeInTheDocument();
+    });
+
+    it("row click sets date range and user filter; user= appears in decisions query", async () => {
+      const calls = stubFetch([ANOMALY]);
+      const user = userEvent.setup();
+      renderWithProviders(<AuditPage />);
+
+      await user.click(await screen.findByText("bob"));
+
+      await waitFor(() => {
+        expect(useAuditFilters.getState().filters.user).toBe("bob");
+        expect(useAuditFilters.getState().filters.customMode).toBe(true);
+        expect(useAuditFilters.getState().filters.start_date).not.toBeNull();
+      });
+      await waitFor(() => {
+        expect(
+          calls.some(
+            (u) => u.includes("/audit/decisions") && u.includes("user=bob"),
+          ),
+        ).toBe(true);
+      });
+      expect(screen.getByText("Clear all")).toBeInTheDocument();
+    });
+
+    it("renders a Medium badge for medium-severity anomalies", async () => {
+      stubFetch([{ ...ANOMALY, severity: "medium" }]);
+      renderWithProviders(<AuditPage />);
+
+      expect(await screen.findByText("Medium")).toBeInTheDocument();
+      expect(screen.queryByText("High")).not.toBeInTheDocument();
+    });
+
+    it("renders a multi-day range when the burst spans two calendar days", async () => {
+      // Noon-to-noon (48 h apart) guarantees different calendar days in any timezone.
+      stubFetch([
+        {
+          ...ANOMALY,
+          first_seen: "2026-06-01T12:00:00Z",
+          last_seen: "2026-06-03T12:00:00Z",
+        },
+      ]);
+      renderWithProviders(<AuditPage />);
+
+      await screen.findByText("bob");
+      // Multi-day format shows the year twice (once per date); same-day shows it once.
+      expect(
+        screen.getByText(
+          (t) => (t.match(/\d{4}/g) ?? []).length >= 2 && t.includes("→"),
+        ),
+      ).toBeInTheDocument();
+    });
+
+    it("does not render when the API returns no anomalies", async () => {
+      stubFetch();
+      renderWithProviders(<AuditPage />);
+
+      await screen.findByText("blocked by policy");
+      expect(screen.queryByText(/detected/)).not.toBeInTheDocument();
     });
   });
 });

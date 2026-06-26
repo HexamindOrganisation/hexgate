@@ -8,7 +8,7 @@ import {
   Lightbulb,
   X,
 } from "lucide-react";
-import { endOfDay, format } from "date-fns";
+import { endOfDay, format, startOfDay } from "date-fns";
 import { api, type AuditDecisionRow, type AuditOutcome } from "@/lib/api";
 import { useActive, useProjectScoped } from "@/lib/active";
 import { useProjects } from "@/lib/projects";
@@ -37,6 +37,7 @@ import {
 import { fmtTs } from "@/components/audit/fmt";
 import {
   ActiveChips,
+  AnomaliesCard,
   BreakdownCard,
   EventsTable,
   FilterBar,
@@ -337,6 +338,7 @@ export function AuditPage() {
     tool: f.tool || undefined,
     start_date: f.start_date ? f.start_date.toISOString() : undefined,
     end_date: f.end_date ? f.end_date.toISOString() : undefined,
+    user: f.user || undefined,
   };
 
   // Range-only (unscoped) summary: filter dropdown options + the "X of Y"
@@ -389,6 +391,20 @@ export function AuditPage() {
         { window: f.range, session_id: sel!.session_id, limit: 12 },
         projectId as string,
       ),
+  });
+  // Intentionally excludes user/agent/role/tool: the anomaly endpoint ranks
+  // all users and must not be pre-filtered to a single one.
+  const anomalyScope = {
+    window: scope.window,
+    start_date: scope.start_date,
+    end_date: scope.end_date,
+  };
+  const anomaliesQ = useQuery({
+    queryKey: ["audit", "anomalies", projectId, anomalyScope],
+    enabled: !!projectId,
+    queryFn: () => api.getAuditAnomalies(anomalyScope, projectId as string),
+    placeholderData: keepPreviousData,
+    refetchInterval: 30_000,
   });
 
   const summary = summaryQ.data;
@@ -647,6 +663,23 @@ export function AuditPage() {
             />
           </Card>
         </div>
+
+        {!!anomaliesQ.data?.length && (
+          <div className="mb-4">
+            <AnomaliesCard
+              rows={anomaliesQ.data}
+              onRowClick={(from, to, userId) =>
+                setF((p) => ({
+                  ...p,
+                  customMode: true,
+                  start_date: startOfDay(from),
+                  end_date: endOfDay(to),
+                  user: userId,
+                }))
+              }
+            />
+          </div>
+        )}
 
         <div className="mb-4">
           <BreakdownCard
