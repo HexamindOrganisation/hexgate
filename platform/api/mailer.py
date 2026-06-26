@@ -82,10 +82,20 @@ def _indent(text: str, prefix: str) -> str:
 
 
 # Held while we set resend.api_key and call resend.Emails.send. The SDK
-# reads the key from a module global at request-build time, so the only
-# safe way to use a per-instance key is to serialize "set then send".
-# Throughput cost is irrelevant at our scale (single-digit emails/sec at
-# peak: registration + reset + invite).
+# reads the key from a module global at request-build time, so a per-
+# instance key requires serializing "set then send". Today only one
+# ResendEmailSender ever exists (configured once in main.py's lifespan),
+# so the lock is "belt and suspenders": the key never actually changes,
+# so we never actually race. If we ever instantiate a second sender
+# (multi-tenant), the lock is what keeps the global from being torn
+# between two concurrent sends.
+#
+# Cost: serializes every Resend HTTP call process-wide. Acceptable at
+# our scale (single-digit emails/sec at peak: registration + reset +
+# invite). If volume grows, the right fix is to capture the api_key
+# into the Authorization header under the lock and release before the
+# network call — but that reaches into resend.request.Request private
+# API, so we punt until volume actually motivates it.
 _resend_send_lock = threading.Lock()
 
 

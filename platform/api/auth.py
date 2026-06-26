@@ -37,7 +37,7 @@ from httpx_oauth.clients.google import GoogleOAuth2
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from db import get_session
-from mailer import get_email_sender
+from mailer import _redact_email, get_email_sender
 from models import OAuthAccount, User
 
 logger = logging.getLogger("hexgate.platform.auth")
@@ -193,7 +193,9 @@ class UserManager(BaseUserManager[User, str]):
         """
         from services import ensure_personal_default_org
 
-        logger.info("user registered: %s (id=%s)", user.email, user.id)
+        # Redact the email — same PII rule the mailer error path uses
+        # (al***@domain). User id is the durable handle for support.
+        logger.info("user registered: %s (id=%s)", _redact_email(user.email), user.id)
         # ``self.user_db.session`` is the same async session the User
         # insert used — but FastAPI-Users has already committed it by
         # the time we get here. Idempotency guarantees of the helper
