@@ -1,7 +1,14 @@
-# Production stack: postgres + clickhouse + api + edge on one private network.
-# Only the edge publishes ports; the rest are reachable by service name.
-# Secrets/per-deploy values live in platform/.env.prod (see .env.prod.sample).
-#   make platform-prod-up / platform-prod-down
+# Per-environment stack: postgres + clickhouse + api on one private network.
+# The api serves both /v1 and the dashboard SPA same-origin (no separate edge).
+# Run once per env as a distinct Compose PROJECT, which isolates its network +
+# volumes:
+#   make platform-prod-up      # -p hexgate-prod    --env-file platform/.env.prod
+#   make platform-staging-up   # -p hexgate-staging --env-file platform/.env.staging
+#
+# The api listens plain HTTP on a loopback port (HEXGATE_HTTP_PORT: 7000 prod /
+# 7200 staging); the box's existing reverse proxy owns 80/443 + TLS and routes
+# to it by hostname (see platform/DEPLOY.md). Secrets/per-deploy values live in
+# .env.<env>.
 
 services:
   postgres:
@@ -43,7 +50,8 @@ services:
       retries: 10
 
   api:
-    # Built locally by compose; pulled if REGISTRY/TAG are set.
+    # Built locally by compose; pulled if REGISTRY/TAG are set. Serves both the
+    # JSON API (/v1) and the dashboard SPA same-origin — no separate edge.
     image: ${REGISTRY:-hexgate}/hexgate-api:${TAG:-latest}
     build:
       context: ..
@@ -51,9 +59,17 @@ services:
     # amd64: the API image bundles the amd64-only OPA binary.
     platform: linux/amd64
     restart: unless-stopped
-    # Secrets + app config; DATABASE_URL is derived below, not here.
+    ports:
+      # Loopback only: the box's reverse proxy reaches this and terminates TLS,
+      # but it's never directly internet-facing. (If that proxy runs as a
+      # bridged container it can't reach 127.0.0.1 — publish on a shared network
+      # or a non-loopback port instead.)
+      - "127.0.0.1:${HEXGATE_HTTP_PORT:?set HEXGATE_HTTP_PORT in .env.<env>}:8000"
+    # Secrets + app config; DATABASE_URL is derived below, not here. The path is
+    # parameterized so each project loads its OWN env (HEXGATE_ENV is set inside
+    # each .env.<env>) — `--env-file` only drives ${...} interpolation, not this.
     env_file:
-      - .env.prod
+      - .env.${HEXGATE_ENV:-prod}
     environment:
       # Fixed topology, not per-deploy. Port 8123 = ClickHouse HTTP interface
       # (clickhouse_connect is an HTTP client, not native 9000).
@@ -73,30 +89,7 @@ services:
         condition: service_healthy
     # Liveness from the image's HEALTHCHECK (/health).
 
-  edge:
-    image: ${REGISTRY:-hexgate}/hexgate-edge:${TAG:-latest}
-    build:
-      context: ..
-      dockerfile: platform/edge/Dockerfile
-    platform: linux/amd64
-    restart: unless-stopped
-    ports:
-      - "80:80"
-      - "443:443"
-    environment:
-      # Caddy site address + Let's Encrypt issuance.
-      HEXGATE_DOMAIN: ${HEXGATE_DOMAIN:?set HEXGATE_DOMAIN in .env.prod}
-    volumes:
-      # Cert persistence — losing it re-issues certs (LE rate limits).
-      - caddy-data:/data
-      - caddy-config:/config
-    # SPA + cert come up immediately; /v1/* 502s until the API is healthy.
-    depends_on:
-      - api
-
 volumes:
   pg-data:
   ch-data:
   hexgate-keys:
-  caddy-data:
-  caddy-config:

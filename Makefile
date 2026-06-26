@@ -238,23 +238,38 @@ dashboard-typecheck: ## Typecheck dashboard TypeScript
 
 # -------- Production deploy (build on target) --------
 #
-# Run the prod stack (platform/docker-compose.prod.yml), building images locally
-# — no registry. Requires platform/.env.prod (copy from .env.prod.sample).
-# Full runbook: platform/DEPLOY.md.
+# Each env is a distinct Compose PROJECT (isolated network + volumes) built from
+# the same file. prod → loopback port 7000, staging → 7200. The box's existing
+# reverse proxy owns 80/443 + TLS and routes by hostname to those ports (see
+# platform/DEPLOY.md). Requires platform/.env.<env> (copy from the matching
+# .sample). Full runbook: platform/DEPLOY.md.
 
-PROD_COMPOSE := docker compose -f platform/docker-compose.prod.yml --env-file platform/.env.prod
+PROD_COMPOSE    := docker compose -p hexgate-prod    --env-file platform/.env.prod    -f platform/docker-compose.prod.yml
+STAGING_COMPOSE := docker compose -p hexgate-staging --env-file platform/.env.staging -f platform/docker-compose.prod.yml
 
 .PHONY: platform-prod-up
-platform-prod-up: ## Build images on this machine and (re)start the production stack
+platform-prod-up: ## Build + (re)start the PROD stack (project hexgate-prod, :7000)
 	$(PROD_COMPOSE) up -d --build
 
 .PHONY: platform-prod-down
-platform-prod-down: ## Stop the production stack (keeps data volumes)
+platform-prod-down: ## Stop the prod stack (keeps data volumes)
 	$(PROD_COMPOSE) down
 
 .PHONY: platform-prod-logs
-platform-prod-logs: ## Tail logs from all production services
+platform-prod-logs: ## Tail prod service logs
 	$(PROD_COMPOSE) logs -f
+
+.PHONY: platform-staging-up
+platform-staging-up: ## Build + (re)start the STAGING stack (project hexgate-staging, :7200)
+	$(STAGING_COMPOSE) up -d --build
+
+.PHONY: platform-staging-down
+platform-staging-down: ## Stop the staging stack (keeps data volumes)
+	$(STAGING_COMPOSE) down
+
+.PHONY: platform-staging-logs
+platform-staging-logs: ## Tail staging service logs
+	$(STAGING_COMPOSE) logs -f
 
 # -------- SDK → platform bridge --------
 

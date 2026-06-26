@@ -115,9 +115,10 @@ _log = logging.getLogger(__name__)
 def _demo_enabled() -> bool:
     """Whether single-tenant demo mode is on (see platform/api/demo.py).
 
-    Off by default. When on, the API serves the built dashboard same-origin and
-    exposes a *passwordless* ``/v1/demo-login`` for the seeded admin — safe only
-    in an ephemeral throwaway container.
+    Off by default. When on, the API exposes a *passwordless* ``/v1/demo-login``
+    for the seeded admin — safe only in an ephemeral throwaway container. (The
+    same-origin dashboard serving is no longer demo-specific; see
+    :func:`spa.mount_spa`, wired in both modes.)
     """
     return os.environ.get("HEXGATE_DEMO", "").strip().lower() in (
         "1",
@@ -160,8 +161,8 @@ async def lifespan(app_: FastAPI):
     if _demo_enabled():
         _log.warning(
             "⚠ HEXGATE_DEMO is ON — /v1/demo-login grants a PASSWORDLESS session "
-            "for the seeded admin and the SPA catch-all is active. Use ONLY in an "
-            "ephemeral throwaway container, NEVER on a persistent/real deployment."
+            "for the seeded admin. Use ONLY in an ephemeral throwaway container, "
+            "NEVER on a persistent/real deployment."
         )
     yield
 
@@ -2068,11 +2069,16 @@ def _maybe_mount_oauth_routers() -> None:
 app.include_router(v1)
 
 
-# Demo bundle (single-tenant throwaway container): serve the built dashboard
-# same-origin + auto-login. Registered LAST so the SPA catch-all never shadows
-# /v1. Off by default — only wired when HEXGATE_DEMO is truthy, so normal and
-# production runs are untouched.
+# Serve the built dashboard same-origin, registered LAST so the SPA catch-all
+# never shadows /v1. The production image bakes the build in and points
+# HEXGATE_DASHBOARD_DIST at it; without a build the catch-all 404s with a hint
+# and /v1 still works. Demo mode layers a passwordless /v1/demo-login on top
+# (single-tenant throwaway container only) and mounts the same SPA itself.
 if _demo_enabled():
     from demo import enable_demo
 
     enable_demo(app)
+else:
+    from spa import mount_spa
+
+    mount_spa(app)

@@ -28,25 +28,10 @@ warning when it's on.
 
 from __future__ import annotations
 
-import os
-from pathlib import Path
-
 from fastapi import FastAPI, Response
-from fastapi.responses import FileResponse, RedirectResponse
-from fastapi.staticfiles import StaticFiles
+from fastapi.responses import RedirectResponse
 
-
-def _dashboard_dist() -> Path:
-    """Resolve the built dashboard directory.
-
-    Defaults to ``platform/dashboard/dist`` relative to this file; override
-    with ``HEXGATE_DASHBOARD_DIST`` for non-standard layouts (e.g. the build
-    copied elsewhere in a container image).
-    """
-    override = os.environ.get("HEXGATE_DASHBOARD_DIST", "").strip()
-    if override:
-        return Path(override)
-    return Path(__file__).parent.parent / "dashboard" / "dist"
+from spa import mount_spa
 
 
 def enable_demo(app: FastAPI) -> None:
@@ -56,6 +41,10 @@ def enable_demo(app: FastAPI) -> None:
     WebSocket routes are matched before the catch-all SPA fallback. Starlette
     matches routes in registration order, so registering this last is what
     keeps ``/v1/*`` from being shadowed by ``index.html``.
+
+    The same-origin SPA serving is shared with production via
+    :func:`spa.mount_spa`; the only demo-specific addition is the passwordless
+    ``/v1/demo-login`` below.
     """
 
     # ----- auto-login -----------------------------------------------------
@@ -96,36 +85,5 @@ def enable_demo(app: FastAPI) -> None:
         return resp
 
     # ----- static SPA -----------------------------------------------------
-    dist = _dashboard_dist()
-    if not (dist / "index.html").is_file():
-        # Build missing — don't crash the API; /v1 still works, the SPA 404s
-        # with a clear hint instead of an opaque mount error at import time.
-        @app.get("/{_full_path:path}", include_in_schema=False)
-        async def _no_build(_full_path: str) -> Response:
-            raise RuntimeError(
-                f"dashboard build not found at {dist} — run `pnpm build` in "
-                "platform/dashboard or set HEXGATE_DASHBOARD_DIST"
-            )
-
-        return
-
-    # Hashed assets get a real static mount (correct content-type + caching);
-    # everything else falls through to the SPA catch-all → index.html, so
-    # client-side routes like /playground resolve on a hard refresh.
-    assets = dist / "assets"
-    if assets.is_dir():
-        app.mount("/assets", StaticFiles(directory=str(assets)), name="assets")
-
-    dist_resolved = dist.resolve()
-
-    @app.get("/{full_path:path}", include_in_schema=False)
-    async def spa(full_path: str) -> Response:
-        candidate = (dist / full_path).resolve()
-        # Resolve first, then containment-check, so `../` traversal can't escape dist.
-        if (
-            full_path
-            and candidate.is_file()
-            and candidate.is_relative_to(dist_resolved)
-        ):
-            return FileResponse(candidate)
-        return FileResponse(dist / "index.html")
+    # Same-origin dashboard serving, shared with the production path.
+    mount_spa(app)
