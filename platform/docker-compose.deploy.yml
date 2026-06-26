@@ -56,6 +56,12 @@ services:
     build:
       context: ..
       dockerfile: platform/api/Dockerfile
+      args:
+        # Build-time only: Vite bakes VITE_* into the SPA bundle at `pnpm build`,
+        # so the preview banner can't be a runtime env. Interpolated from the
+        # --env-file the Makefile passes (.env.<env>), NOT the service env_file
+        # below. Unset → empty → banner off.
+        VITE_PREVIEW_BANNER: ${VITE_PREVIEW_BANNER:-}
     # amd64: the API image bundles the amd64-only OPA binary.
     platform: linux/amd64
     restart: unless-stopped

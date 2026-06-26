@@ -19,6 +19,11 @@ COPY platform/dashboard/package.json platform/dashboard/pnpm-lock.yaml ./
 RUN --mount=type=cache,target=/pnpm/store \
     pnpm install --frozen-lockfile
 COPY platform/dashboard/ ./
+# Vite inlines VITE_* into the bundle at build time, so the preview banner is a
+# BUILD ARG, not a runtime env. Off unless the build passes it (compose sources
+# it from .env.<env>). Empty default keeps local/dev builds clean.
+ARG VITE_PREVIEW_BANNER=
+ENV VITE_PREVIEW_BANNER=$VITE_PREVIEW_BANNER
 RUN pnpm build
 
 # ---- control-plane API ---------------------------------------------------
