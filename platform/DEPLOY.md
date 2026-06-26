@@ -2,7 +2,7 @@
 
 Two environments share one box. Each is an isolated Compose **project**
 (`hexgate-prod`, `hexgate-staging`) built from the same
-[`docker-compose.prod.yml`](docker-compose.prod.yml) — its own Postgres,
+[`docker-compose.deploy.yml`](docker-compose.deploy.yml) — its own Postgres,
 ClickHouse, keystore, and network. Each env's **api** serves both the JSON API
 (`/v1/*`) and that env's dashboard SPA same-origin, listening plain HTTP on a
 **loopback port** (prod `7000`, staging `7200`). There is no separate edge

@@ -1,5 +1,6 @@
-# Local dev infrastructure for the platform. Driven via `make clickhouse-*`
-# and `make postgres-*` targets.
+# DEV-INFRA ONLY: just the databases, ports published to localhost so you run
+# the API natively (hot-reload). The full containerized stack (api included) is
+# platform/docker-compose.deploy.yml. Driven via `make clickhouse-*`/`postgres-*`.
 
 services:
   postgres:

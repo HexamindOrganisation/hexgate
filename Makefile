@@ -244,8 +244,8 @@ dashboard-typecheck: ## Typecheck dashboard TypeScript
 # platform/DEPLOY.md). Requires platform/.env.<env> (copy from the matching
 # .sample). Full runbook: platform/DEPLOY.md.
 
-PROD_COMPOSE    := docker compose -p hexgate-prod    --env-file platform/.env.prod    -f platform/docker-compose.prod.yml
-STAGING_COMPOSE := docker compose -p hexgate-staging --env-file platform/.env.staging -f platform/docker-compose.prod.yml
+PROD_COMPOSE    := docker compose -p hexgate-prod    --env-file platform/.env.prod    -f platform/docker-compose.deploy.yml
+STAGING_COMPOSE := docker compose -p hexgate-staging --env-file platform/.env.staging -f platform/docker-compose.deploy.yml
 
 .PHONY: platform-prod-up
 platform-prod-up: ## Build + (re)start the PROD stack (project hexgate-prod, :7000)
