@@ -265,6 +265,19 @@ export interface AuditDecisionFilters extends AuditScope {
   offset?: number;
 }
 
+export type AnomalySeverity = "high" | "medium";
+
+/** One per-user anomaly burst from GET /audit/anomalies. */
+export interface AuditAnomaly {
+  user_id: string;
+  severity: AnomalySeverity;
+  deny: number;
+  all: number;
+  deny_rate: number;
+  first_seen: string;
+  last_seen: string;
+}
+
 function qs(params: Record<string, string | number | undefined>): string {
   const search = new URLSearchParams();
   for (const [key, value] of Object.entries(params)) {
@@ -331,5 +344,10 @@ export const api = {
   listAuditDecisions: (filters: AuditDecisionFilters, projectId: string) =>
     request<AuditDecisionPage>(
       `/v1/projects/${projectId}/audit/decisions${qs({ ...filters })}`,
+    ),
+
+  getAuditAnomalies: (scope: AuditScope, projectId: string) =>
+    request<AuditAnomaly[]>(
+      `/v1/projects/${projectId}/audit/anomalies${qs({ ...scope })}`,
     ),
 };

@@ -8,7 +8,7 @@ import {
   Lightbulb,
   X,
 } from "lucide-react";
-import { endOfDay, format } from "date-fns";
+import { endOfDay, format, startOfDay } from "date-fns";
 import { api, type AuditDecisionRow, type AuditOutcome } from "@/lib/api";
 import { useActive, useProjectScoped } from "@/lib/active";
 import { useProjects } from "@/lib/projects";
@@ -37,6 +37,7 @@ import {
 import { fmtTs } from "@/components/audit/fmt";
 import {
   ActiveChips,
+  AnomaliesCard,
   BreakdownCard,
   EventsTable,
   FilterBar,
@@ -390,6 +391,13 @@ export function AuditPage() {
         projectId as string,
       ),
   });
+  const anomaliesQ = useQuery({
+    queryKey: ["audit", "anomalies", projectId, scope],
+    enabled: !!projectId,
+    queryFn: () => api.getAuditAnomalies(scope, projectId as string),
+    placeholderData: keepPreviousData,
+    refetchInterval: 30_000,
+  });
 
   const summary = summaryQ.data;
   const counts: Counts = summary
@@ -647,6 +655,22 @@ export function AuditPage() {
             />
           </Card>
         </div>
+
+        {!!anomaliesQ.data?.length && (
+          <div className="mb-4">
+            <AnomaliesCard
+              rows={anomaliesQ.data}
+              onRowClick={(from, to) =>
+                setF((p) => ({
+                  ...p,
+                  customMode: true,
+                  start_date: startOfDay(from),
+                  end_date: endOfDay(to),
+                }))
+              }
+            />
+          </div>
+        )}
 
         <div className="mb-4">
           <BreakdownCard

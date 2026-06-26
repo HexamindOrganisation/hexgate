@@ -20,6 +20,7 @@ export interface AuditFilters {
   agent: string;
   role: string;
   tool: string;
+  user: string;
   outcome: "" | AuditOutcome;
   range: "24h" | "7d" | "30d" | "90d";
   customMode: boolean;
@@ -42,6 +43,7 @@ export const EMPTY_AUDIT_FILTERS: AuditFilters = {
   agent: "",
   role: "",
   tool: "",
+  user: "",
   outcome: "",
   range: "30d",
   customMode: false,
