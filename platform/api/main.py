@@ -138,6 +138,18 @@ async def lifespan(app_: FastAPI):
     # the lifespan; the include here runs once at startup, before any
     # request reaches the app.
     _maybe_mount_oauth_routers()
+    # SPA catch-all goes on LAST — after the OAuth router just mounted — so
+    # /{path} never shadows /v1/auth/google/*. (Static /v1 routes are already
+    # registered at import; only the OAuth router mounts here at startup, so the
+    # SPA must follow it.) Demo mode mounts the same SPA + a passwordless login.
+    if _demo_enabled():
+        from demo import enable_demo
+
+        enable_demo(app)
+    else:
+        from spa import mount_spa
+
+        mount_spa(app)
     async with async_session_factory() as session:
         await ensure_default_project(session)
         # Backfill signed bundles for seeded agents so they're served via
@@ -2068,17 +2080,6 @@ def _maybe_mount_oauth_routers() -> None:
 
 app.include_router(v1)
 
-
-# Serve the built dashboard same-origin, registered LAST so the SPA catch-all
-# never shadows /v1. The production image bakes the build in and points
-# HEXGATE_DASHBOARD_DIST at it; without a build the catch-all 404s with a hint
-# and /v1 still works. Demo mode layers a passwordless /v1/demo-login on top
-# (single-tenant throwaway container only) and mounts the same SPA itself.
-if _demo_enabled():
-    from demo import enable_demo
-
-    enable_demo(app)
-else:
-    from spa import mount_spa
-
-    mount_spa(app)
+# The SPA catch-all is mounted in the lifespan (after the OAuth router), NOT
+# here — registering it at import would shadow the lifespan-mounted
+# /v1/auth/google/* routes, since Starlette matches in registration order.

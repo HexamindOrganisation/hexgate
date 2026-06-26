@@ -46,9 +46,11 @@ def mount_spa(app: FastAPI) -> None:
         # with a clear hint instead of an opaque mount error at import time.
         @app.get("/{_full_path:path}", include_in_schema=False)
         async def _no_build(_full_path: str) -> Response:
-            raise RuntimeError(
+            return Response(
                 f"dashboard build not found at {dist} — run `pnpm build` in "
-                "platform/dashboard or set HEXGATE_DASHBOARD_DIST"
+                "platform/dashboard or set HEXGATE_DASHBOARD_DIST",
+                status_code=404,
+                media_type="text/plain",
             )
 
         return
@@ -66,6 +68,10 @@ def mount_spa(app: FastAPI) -> None:
     async def spa(full_path: str) -> Response:
         candidate = (dist / full_path).resolve()
         # Resolve first, then containment-check, so `../` traversal can't escape dist.
-        if full_path and candidate.is_file() and candidate.is_relative_to(dist_resolved):
+        if (
+            full_path
+            and candidate.is_file()
+            and candidate.is_relative_to(dist_resolved)
+        ):
             return FileResponse(candidate)
         return FileResponse(dist / "index.html")
