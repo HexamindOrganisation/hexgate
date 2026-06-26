@@ -6,6 +6,7 @@ to a local SQLite file so dev and tests stay zero-setup.
 
 import os
 from pathlib import Path
+from urllib.parse import quote
 
 from dotenv import load_dotenv
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -20,17 +21,44 @@ DB_PATH = Path(__file__).parent / "hexgate.db"
 _DEFAULT_URL = f"sqlite+aiosqlite:///{DB_PATH}"
 
 
-def _database_url() -> str:
-    """Resolve the async DB URL: ``DATABASE_URL`` or the SQLite fallback.
+def _url_from_components() -> str | None:
+    """Assemble the Postgres URL from ``HEXGATE_POSTGRES_*`` parts, or None.
 
-    Bare ``postgres(ql)://`` URLs are rewritten to the ``asyncpg`` driver
-    the async engine requires.
+    This is the deployment path: the operator supplies only the password
+    (the rest match the fixed compose topology), and we percent-encode the
+    user + password here so a secret containing ``@ : / # ?`` can't corrupt
+    the URL. That removes the old footgun where the password had to be
+    URL-safe because compose embedded it verbatim into ``DATABASE_URL``.
     """
-    url = os.environ.get("DATABASE_URL", "").strip() or _DEFAULT_URL
-    for prefix in ("postgresql://", "postgres://"):
-        if url.startswith(prefix):
-            return "postgresql+asyncpg://" + url[len(prefix) :]
-    return url
+    password = os.environ.get("HEXGATE_POSTGRES_PASSWORD", "")
+    if not password:
+        return None
+    user = os.environ.get("HEXGATE_POSTGRES_USER", "hexgate")
+    host = os.environ.get("HEXGATE_POSTGRES_HOST", "postgres")
+    port = os.environ.get("HEXGATE_POSTGRES_PORT", "5432")
+    name = os.environ.get("HEXGATE_POSTGRES_DB", "hexgate")
+    # safe="" so every reserved char in user/password is escaped.
+    return (
+        f"postgresql+asyncpg://{quote(user, safe='')}:{quote(password, safe='')}"
+        f"@{host}:{port}/{name}"
+    )
+
+
+def _database_url() -> str:
+    """Resolve the async DB URL.
+
+    Precedence: an explicit ``DATABASE_URL`` (bare ``postgres(ql)://`` is
+    rewritten to the ``asyncpg`` driver the async engine requires) → the
+    component-assembled Postgres URL (deploy path) → the local SQLite
+    fallback that keeps dev and tests zero-setup.
+    """
+    url = os.environ.get("DATABASE_URL", "").strip()
+    if url:
+        for prefix in ("postgresql://", "postgres://"):
+            if url.startswith(prefix):
+                return "postgresql+asyncpg://" + url[len(prefix) :]
+        return url
+    return _url_from_components() or _DEFAULT_URL
 
 
 _url = _database_url()

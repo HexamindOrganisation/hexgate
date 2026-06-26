@@ -65,7 +65,7 @@ services:
       # bridged container it can't reach 127.0.0.1 — publish on a shared network
       # or a non-loopback port instead.)
       - "127.0.0.1:${HEXGATE_HTTP_PORT:?set HEXGATE_HTTP_PORT in .env.<env>}:8000"
-    # Secrets + app config; DATABASE_URL is derived below, not here. The path is
+    # Secrets + app config; DATABASE_URL is assembled by the app, not here. The path is
     # parameterized so each project loads its OWN env (HEXGATE_ENV is set inside
     # each .env.<env>) — `--env-file` only drives ${...} interpolation, not this.
     env_file:
@@ -75,9 +75,12 @@ services:
       # (clickhouse_connect is an HTTP client, not native 9000).
       HEXGATE_CLICKHOUSE_HOST: clickhouse
       HEXGATE_CLICKHOUSE_PORT: "8123"
-      # Derived from the single HEXGATE_POSTGRES_PASSWORD, which must be URL-safe
-      # (no @ : / # ?) since it's embedded here.
-      DATABASE_URL: postgresql+asyncpg://hexgate:${HEXGATE_POSTGRES_PASSWORD}@postgres:5432/hexgate
+      # Postgres topology. The app assembles + percent-encodes DATABASE_URL from
+      # these plus HEXGATE_POSTGRES_PASSWORD (loaded via env_file above), so the
+      # password may contain ANY characters — no URL-safe restriction. Host/db/
+      # user match the postgres service; only the port is fixed here.
+      HEXGATE_POSTGRES_HOST: postgres
+      HEXGATE_POSTGRES_PORT: "5432"
       # Persistent keystore — losing it invalidates every token/session/bundle.
       HEXGATE_KEYSTORE_PATH: /keys
     volumes:
