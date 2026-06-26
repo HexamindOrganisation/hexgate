@@ -14,10 +14,11 @@ from __future__ import annotations
 import json
 import logging
 from datetime import datetime, timedelta, timezone
+from collections import deque
 
 from clickhouse_connect.driver.client import Client
 
-from schemas import DecisionEvent
+from schemas import AnomalySeverity, AuditAnomaly, AuditOutcome, DecisionEvent
 
 _log = logging.getLogger(__name__)
 
@@ -42,6 +43,12 @@ MAX_HINT_BYTES = 4 * 1024
 # older than retention — rows past TTL would be merged away on arrival.
 CLOCK_SKEW_FUTURE = timedelta(minutes=5)
 RETENTION_WINDOW = timedelta(days=90)
+
+_ANOMALY_MIN_REQUESTS = 5
+_TIMEDELTA_ANOMALY_HOURS = 1
+_WINDOW_TD = timedelta(hours=_TIMEDELTA_ANOMALY_HOURS)
+_DENY_RATE_MEDIUM = 0.3
+_DENY_RATE_HIGH = 0.5
 
 
 def validate_event_window(occurred_at: datetime) -> None:
@@ -158,7 +165,7 @@ def bucket_minutes_for_timedelta(delta: timedelta) -> int:
 
 
 def _zero_counts() -> dict[str, int]:
-    return {"all": 0, "allow": 0, "deny": 0, "needs_approval": 0}
+    return {"all": 0, **{e.value: 0 for e in AuditOutcome}}
 
 
 def _date_range_valid(start: datetime | None, end: datetime | None) -> bool:
@@ -338,7 +345,7 @@ def timeseries(
     points: dict[object, dict] = {}
     for t, outcome, n in result.result_rows:
         point = points.setdefault(
-            t, {"bucket": t, "allow": 0, "deny": 0, "needs_approval": 0}
+            t, {"bucket": t, **{e.value: 0 for e in AuditOutcome}}
         )
         if outcome in point:
             point[outcome] = int(n)
@@ -429,6 +436,127 @@ def list_decisions(
         )
 
     return {"rows": rows, "total": total, "limit": limit, "offset": offset}
+
+
+def _sliding_window_anomalies(
+    rows: list[tuple],
+) -> list[AuditAnomaly]:
+    """Emits one anomaly per above-threshold burst (not per qualifying window) so the full
+    peak window is captured rather than the first qualifying moment."""
+    list_anomalies: list[AuditAnomaly] = []
+    curr_user, curr_deny, window, best_burst = "", 0, deque(), None
+
+    def _flush(burst: dict | None) -> None:
+        if burst:
+            list_anomalies.append(AuditAnomaly(**burst))
+
+    for user, timestamp, decision in rows:
+        if user != curr_user:
+            _flush(best_burst)
+            curr_user = user
+            curr_deny = 0
+            window.clear()
+            best_burst = None
+
+        while window and timestamp - window[0][0] > _WINDOW_TD:
+            _, old_decision = window.popleft()
+            curr_deny -= int(old_decision == AuditOutcome.DENY)
+
+        window.append((timestamp, decision))
+        curr_deny += int(decision == AuditOutcome.DENY)
+        window_length = len(window)
+        deny_rate = curr_deny / window_length
+
+        if window_length >= _ANOMALY_MIN_REQUESTS and deny_rate >= _DENY_RATE_HIGH:
+            severity = AnomalySeverity.HIGH
+        elif window_length >= _ANOMALY_MIN_REQUESTS and deny_rate >= _DENY_RATE_MEDIUM:
+            severity = AnomalySeverity.MEDIUM
+        else:
+            severity = None
+
+        if severity:
+            candidate = dict(
+                user_id=curr_user,
+                severity=severity,
+                deny=curr_deny,
+                all=window_length,
+                deny_rate=deny_rate,
+                first_seen=window[0][0],
+                last_seen=window[-1][0],
+            )
+            if best_burst is None or (deny_rate, window_length) >= (
+                best_burst["deny_rate"],
+                best_burst["all"],
+            ):
+                best_burst = candidate
+        elif best_burst:
+            # After eviction the window already shrank to just the current
+            # event, so reseed it. After a rate-drop the window still holds
+            # many live events that belong to neither burst; discard them all.
+            last = window[-1] if len(window) == 1 else None
+            _flush(best_burst)
+            window.clear()
+            curr_deny = 0
+            if last:
+                window.append(last)
+                curr_deny = int(last[1] == AuditOutcome.DENY)
+            best_burst = None
+
+    _flush(best_burst)
+    return list_anomalies
+
+
+def anomalies(
+    client: Client,
+    *,
+    project_id: str,
+    since_hours: int,
+    start_date: datetime | None = None,
+    end_date: datetime | None = None,
+) -> list[AuditAnomaly]:
+    """
+    Return a list of per-user anomaly summaries for the given time window.
+
+    An anomaly is defined as an abnormal rate of denied requests for a user in a 1-hour window with more than
+    ANOMALY_MIN_REQUESTS requests. The severity of the anomaly is determined by the deny rate:
+    - High: deny rate >= 0.5
+    - Medium: 0.3 <= deny rate < 0.5
+
+    The current implementation loads all the data into memory and processes it in Python.
+    Time complexity and space complexity are both O(n), with n the number of requests in the given time window.
+    For large datasets, chunks of data can be processed in batches to avoid memory issues.
+    An other approach is to pre-compute the anomalies in ClickHouse with a periodical job, and only compute the new anomalies in the API call.
+
+    These optimizations should be implemented once the data volume grows and performance issues arise.
+    """
+
+    # Find qualifying users with more than ANOMALY_MIN_REQUESTS requests in the given time window
+    where, params = _scope(
+        project_id,
+        since_hours,
+        start_date=start_date,
+        end_date=end_date,
+    )
+    where_sql = " AND ".join(where)
+    params["min_requests"] = _ANOMALY_MIN_REQUESTS
+    qualifying_users_sql = (
+        f"SELECT user_id FROM policy_decision WHERE {where_sql} "
+        "GROUP BY user_id HAVING count() >= {min_requests:UInt32}"
+    )
+
+    result_qualifying_users = client.query(qualifying_users_sql, parameters=params)
+    qualifying_user_ids = [row[0] for row in result_qualifying_users.result_rows]
+    if not qualifying_user_ids:
+        return []
+
+    params["uids"] = qualifying_user_ids
+    anomalies_sql = (
+        "SELECT user_id, occurred_at, outcome FROM policy_decision "
+        f"WHERE {where_sql} AND user_id IN ({{uids:Array(String)}}) "
+        "ORDER BY user_id, occurred_at"
+    )
+    result = client.query(anomalies_sql, parameters=params)
+    return _sliding_window_anomalies(result.result_rows)
 
 
 def _ensure_utc(dt: datetime | None) -> datetime | None:

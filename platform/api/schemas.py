@@ -362,11 +362,17 @@ class AuditEnvelope(BaseModel):
         return v if v.tzinfo is not None else v.replace(tzinfo=timezone.utc)
 
 
+class AuditOutcome(StrEnum):
+    ALLOW = "allow"
+    DENY = "deny"
+    NEEDS_APPROVAL = "needs_approval"
+
+
 class DecisionEvent(AuditEnvelope):
     """One policy decision; mirrors the policy_decision table."""
 
     tool_name: str = Field(min_length=1, max_length=256)
-    outcome: Literal["allow", "deny", "needs_approval"]
+    outcome: AuditOutcome
     role: str = Field(default="", max_length=256)
     error_type: str = Field(default="", max_length=64)
     reason: str = Field(default="", max_length=4096)
@@ -437,7 +443,7 @@ class AuditDecisionRow(BaseModel):
     user_id: str = ""
     tool_name: str
     role: str = ""
-    outcome: str
+    outcome: AuditOutcome
     error_type: str = ""
     reason: str = ""
     violations: list[str] = Field(default_factory=list)
@@ -452,3 +458,18 @@ class AuditDecisionPage(BaseModel):
     total: int
     limit: int
     offset: int
+
+
+class AnomalySeverity(StrEnum):
+    HIGH = "high"
+    MEDIUM = "medium"
+
+
+class AuditAnomaly(BaseModel):
+    user_id: str
+    severity: AnomalySeverity
+    deny: int
+    all: int
+    deny_rate: float
+    first_seen: datetime
+    last_seen: datetime
