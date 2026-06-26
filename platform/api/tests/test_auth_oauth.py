@@ -113,9 +113,7 @@ def test_spa_catchall_does_not_shadow_oauth_routes(monkeypatch, tmp_path) -> Non
     client = TestClient(app)
 
     # OAuth authorize resolves — not shadowed by the catch-all.
-    r = client.get(
-        "/v1/auth/google/authorize", params={"scopes": ["openid", "email"]}
-    )
+    r = client.get("/v1/auth/google/authorize", params={"scopes": ["openid", "email"]})
     assert r.status_code == 200, r.text
     assert r.json()["authorization_url"].startswith("https://accounts.google.com")
 

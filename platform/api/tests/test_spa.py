@@ -109,4 +109,6 @@ def test_dashboard_dist_empty_override_warns_and_falls_back(
     monkeypatch.setenv("HEXGATE_DASHBOARD_DIST", "   ")
     with caplog.at_level("WARNING"):
         assert spa.dashboard_dist() == spa._DEV_DASHBOARD_DIST
-    assert any("HEXGATE_DASHBOARD_DIST is set but empty" in r.message for r in caplog.records)
+    assert any(
+        "HEXGATE_DASHBOARD_DIST is set but empty" in r.message for r in caplog.records
+    )
