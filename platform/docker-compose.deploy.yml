@@ -2,8 +2,8 @@
 # The api serves both /v1 and the dashboard SPA same-origin (no separate edge).
 # Run once per env as a distinct Compose PROJECT, which isolates its network +
 # volumes:
-#   make platform-prod-up      # -p hexgate-prod    --env-file platform/.env.prod
-#   make platform-staging-up   # -p hexgate-staging --env-file platform/.env.staging
+#   make platform-up STAGE=prod      # -p hexgate-prod    --env-file platform/.env.prod
+#   make platform-up STAGE=staging   # -p hexgate-staging --env-file platform/.env.staging
 #
 # The api listens plain HTTP on a loopback port (HEXGATE_HTTP_PORT: 7000 prod /
 # 7200 staging); the box's existing reverse proxy owns 80/443 + TLS and routes

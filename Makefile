@@ -238,38 +238,28 @@ dashboard-typecheck: ## Typecheck dashboard TypeScript
 
 # -------- Production deploy (build on target) --------
 #
-# Each env is a distinct Compose PROJECT (isolated network + volumes) built from
-# the same file. prod → loopback port 7000, staging → 7200. The box's existing
-# reverse proxy owns 80/443 + TLS and routes by hostname to those ports (see
-# platform/DEPLOY.md). Requires platform/.env.<env> (copy from the matching
-# .sample). Full runbook: platform/DEPLOY.md.
+# STAGE selects the env: project hexgate-<stage> + platform/.env.<stage>, each an
+# isolated stack. Defaults to staging so prod must be named explicitly. Ports come
+# from HEXGATE_HTTP_PORT in the env file. Full runbook: platform/DEPLOY.md.
+STAGE ?= staging
+DEPLOY_COMPOSE = docker compose -p hexgate-$(STAGE) --env-file platform/.env.$(STAGE) -f platform/docker-compose.deploy.yml
 
-PROD_COMPOSE    := docker compose -p hexgate-prod    --env-file platform/.env.prod    -f platform/docker-compose.deploy.yml
-STAGING_COMPOSE := docker compose -p hexgate-staging --env-file platform/.env.staging -f platform/docker-compose.deploy.yml
+# Fail loudly on a missing/typo'd stage instead of running against an empty env.
+.PHONY: _require-stage-env
+_require-stage-env:
+	@test -f platform/.env.$(STAGE) || (echo "Missing platform/.env.$(STAGE) — copy platform/.env.$(STAGE).sample first (STAGE=$(STAGE))" && exit 1)
 
-.PHONY: platform-prod-up
-platform-prod-up: ## Build + (re)start the PROD stack (project hexgate-prod, :7000)
-	$(PROD_COMPOSE) up -d --build
+.PHONY: platform-up
+platform-up: _require-stage-env ## Build + (re)start a deploy stack: make platform-up STAGE=prod (default staging)
+	$(DEPLOY_COMPOSE) up -d --build
 
-.PHONY: platform-prod-down
-platform-prod-down: ## Stop the prod stack (keeps data volumes)
-	$(PROD_COMPOSE) down
+.PHONY: platform-down
+platform-down: _require-stage-env ## Stop a deploy stack, keeps volumes: make platform-down STAGE=prod
+	$(DEPLOY_COMPOSE) down
 
-.PHONY: platform-prod-logs
-platform-prod-logs: ## Tail prod service logs
-	$(PROD_COMPOSE) logs -f
-
-.PHONY: platform-staging-up
-platform-staging-up: ## Build + (re)start the STAGING stack (project hexgate-staging, :7200)
-	$(STAGING_COMPOSE) up -d --build
-
-.PHONY: platform-staging-down
-platform-staging-down: ## Stop the staging stack (keeps data volumes)
-	$(STAGING_COMPOSE) down
-
-.PHONY: platform-staging-logs
-platform-staging-logs: ## Tail staging service logs
-	$(STAGING_COMPOSE) logs -f
+.PHONY: platform-logs
+platform-logs: _require-stage-env ## Tail a deploy stack's logs: make platform-logs STAGE=prod
+	$(DEPLOY_COMPOSE) logs -f
 
 # -------- SDK → platform bridge --------
 

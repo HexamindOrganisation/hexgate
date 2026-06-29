@@ -90,9 +90,9 @@ automatically; nginx needs the `Upgrade`/`Connection` headers set.)
 
 ```bash
 # /srv/hexgate-prod
-make platform-prod-up
+make platform-up STAGE=prod
 # /srv/hexgate-staging
-make platform-staging-up
+make platform-up STAGE=staging
 # then reload the box's reverse proxy so it routes to 7000/7200
 ```
 
@@ -123,12 +123,12 @@ curl -X POST https://app.hexgate.ai/v1/auth/register \
 ## 6. Upgrades
 
 ```bash
-cd /srv/hexgate-<env> && git pull   # or checkout a new tag for prod
-make platform-<env>-up              # rebuilds changed images, recreates containers
+cd /srv/hexgate-<stage> && git pull   # or checkout a new tag for prod
+make platform-up STAGE=<stage>        # rebuilds changed images, recreates containers
 ```
 
 Promote a release: tag it, `git checkout` it in the prod checkout, re-run
-`make platform-prod-up`.
+`make platform-up STAGE=prod`.
 
 ## Operations
 
