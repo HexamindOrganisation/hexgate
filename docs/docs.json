@@ -28,7 +28,8 @@
               "concepts/policy-decision",
               "concepts/user-scope",
               "concepts/signed-bundles",
-              "concepts/audit-trail"
+              "concepts/audit-trail",
+              "concepts/mcp"
             ]
           },
           {
