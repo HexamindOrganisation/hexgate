@@ -236,6 +236,31 @@ dashboard-lint: ## Lint dashboard TypeScript with eslint
 dashboard-typecheck: ## Typecheck dashboard TypeScript
 	cd platform/dashboard && pnpm typecheck
 
+# -------- Production deploy (build on target) --------
+#
+# STAGE selects the env: project hexgate-<stage> + platform/.env.<stage>, each an
+# isolated stack. Defaults to staging so prod must be named explicitly. Ports come
+# from HEXGATE_HTTP_PORT in the env file. Full runbook: platform/DEPLOY.md.
+STAGE ?= staging
+DEPLOY_COMPOSE = docker compose -p hexgate-$(STAGE) --env-file platform/.env.$(STAGE) -f platform/docker-compose.deploy.yml
+
+# Fail loudly on a missing/typo'd stage instead of running against an empty env.
+.PHONY: _require-stage-env
+_require-stage-env:
+	@test -f platform/.env.$(STAGE) || (echo "Missing platform/.env.$(STAGE) — copy platform/.env.$(STAGE).sample first (STAGE=$(STAGE))" && exit 1)
+
+.PHONY: platform-up
+platform-up: _require-stage-env ## Build + (re)start a deploy stack: make platform-up STAGE=prod (default staging)
+	$(DEPLOY_COMPOSE) up -d --build
+
+.PHONY: platform-down
+platform-down: _require-stage-env ## Stop a deploy stack, keeps volumes: make platform-down STAGE=prod
+	$(DEPLOY_COMPOSE) down
+
+.PHONY: platform-logs
+platform-logs: _require-stage-env ## Tail a deploy stack's logs: make platform-logs STAGE=prod
+	$(DEPLOY_COMPOSE) logs -f
+
 # -------- SDK → platform bridge --------
 
 # Make's rule parser treats colons specially, so a positional

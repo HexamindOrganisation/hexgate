@@ -26,6 +26,7 @@ from urllib.parse import parse_qs, urlparse
 
 import httpx
 import pytest_asyncio
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from httpx_oauth.clients.google import GoogleOAuth2
 from httpx_oauth.oauth2 import OAuth2Token
@@ -70,6 +71,58 @@ def test_build_router_returns_router_with_env(monkeypatch) -> None:
     paths = {route.path for route in router.routes}
     assert "/authorize" in paths
     assert "/callback" in paths
+
+
+# ---------------------------------------------------------------------------
+# Registration-order guard — the SPA catch-all must not shadow OAuth routes
+# ---------------------------------------------------------------------------
+
+
+def test_spa_catchall_does_not_shadow_oauth_routes(monkeypatch, tmp_path) -> None:
+    """Pin the lifespan's registration order: OAuth router first, SPA last.
+
+    The ``oauth_client`` fixture below sidesteps the lifespan (it touches the
+    real DB), so without this the moved ``mount_spa`` catch-all is registered
+    in no test — a future reorder that mounts the SPA before the OAuth router
+    would silently shadow ``/v1/auth/google/*`` and break Google sign-in while
+    the suite stayed green. Here we rebuild the exact production wiring on a
+    throwaway app (v1 router → OAuth router → ``mount_spa``) and assert the
+    OAuth route still wins over the ``/{full_path:path}`` catch-all.
+    """
+    from auth import build_google_oauth_router
+    from spa import mount_spa
+
+    monkeypatch.setenv("HEXGATE_GOOGLE_CLIENT_ID", "test-client-id")
+    monkeypatch.setenv("HEXGATE_GOOGLE_CLIENT_SECRET", "test-secret")
+    main.keystore.ensure_keypair()
+
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "index.html").write_text("<!doctype html><title>app</title>")
+    monkeypatch.setenv("HEXGATE_DASHBOARD_DIST", str(dist))
+
+    # Same order as main.lifespan: v1 routes, then the OAuth router, then the
+    # SPA catch-all LAST.
+    app = FastAPI()
+    app.include_router(main.v1)
+    google_router = build_google_oauth_router()
+    assert google_router is not None
+    app.include_router(google_router, prefix="/v1/auth/google", tags=["auth"])
+    mount_spa(app)
+
+    client = TestClient(app)
+
+    # OAuth authorize resolves — not shadowed by the catch-all.
+    r = client.get("/v1/auth/google/authorize", params={"scopes": ["openid", "email"]})
+    assert r.status_code == 200, r.text
+    assert r.json()["authorization_url"].startswith("https://accounts.google.com")
+
+    # The catch-all IS present (a real SPA route returns index.html)...
+    assert "text/html" in client.get("/some/client/route").headers["content-type"]
+    # ...but never swallows an unknown API path as the SPA.
+    nf = client.get("/v1/does-not-exist")
+    assert nf.status_code == 404
+    assert nf.json() == {"detail": "Not Found"}
 
 
 # ---------------------------------------------------------------------------

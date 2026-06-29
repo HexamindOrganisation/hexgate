@@ -1,0 +1,104 @@
+# Per-environment stack: postgres + clickhouse + api on one private network.
+# The api serves both /v1 and the dashboard SPA same-origin (no separate edge).
+# Run once per env as a distinct Compose PROJECT, which isolates its network +
+# volumes:
+#   make platform-up STAGE=prod      # -p hexgate-prod    --env-file platform/.env.prod
+#   make platform-up STAGE=staging   # -p hexgate-staging --env-file platform/.env.staging
+#
+# The api listens plain HTTP on a loopback port (HEXGATE_HTTP_PORT: 7000 prod /
+# 7200 staging); the box's existing reverse proxy owns 80/443 + TLS and routes
+# to it by hostname (see platform/DEPLOY.md). Secrets/per-deploy values live in
+# .env.<env>.
+
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: hexgate
+      POSTGRES_USER: hexgate
+      # No dev default: a missing password fails the deploy.
+      POSTGRES_PASSWORD: ${HEXGATE_POSTGRES_PASSWORD:?set HEXGATE_POSTGRES_PASSWORD in .env.prod}
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hexgate -d hexgate"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.10
+    restart: unless-stopped
+    environment:
+      CLICKHOUSE_DB: hexgate_audit
+      CLICKHOUSE_USER: hexgate
+      CLICKHOUSE_PASSWORD: ${HEXGATE_CLICKHOUSE_PASSWORD:?set HEXGATE_CLICKHOUSE_PASSWORD in .env.prod}
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+    volumes:
+      - ch-data:/var/lib/clickhouse
+      # Runs once on an empty volume (not migrations) — same schema.sql as dev.
+      - ./clickhouse/init:/docker-entrypoint-initdb.d:ro
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8123/ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    # Built locally by compose; pulled if REGISTRY/TAG are set. Serves both the
+    # JSON API (/v1) and the dashboard SPA same-origin — no separate edge.
+    image: ${REGISTRY:-hexgate}/hexgate-api:${TAG:-latest}
+    build:
+      context: ..
+      dockerfile: platform/api/Dockerfile
+      args:
+        # Build-time only: Vite bakes VITE_* into the SPA bundle at `pnpm build`,
+        # so the preview banner can't be a runtime env. Interpolated from the
+        # --env-file the Makefile passes (.env.<env>), NOT the service env_file
+        # below. Unset → empty → banner off.
+        VITE_PREVIEW_BANNER: ${VITE_PREVIEW_BANNER:-}
+    # amd64: the API image bundles the amd64-only OPA binary.
+    platform: linux/amd64
+    restart: unless-stopped
+    ports:
+      # Loopback only: the box's reverse proxy reaches this and terminates TLS,
+      # but it's never directly internet-facing. (If that proxy runs as a
+      # bridged container it can't reach 127.0.0.1 — publish on a shared network
+      # or a non-loopback port instead.)
+      - "127.0.0.1:${HEXGATE_HTTP_PORT:?set HEXGATE_HTTP_PORT in .env.<env>}:8000"
+    # Secrets + app config; DATABASE_URL is assembled by the app, not here. The path is
+    # parameterized so each project loads its OWN env (HEXGATE_ENV is set inside
+    # each .env.<env>) — `--env-file` only drives ${...} interpolation, not this.
+    env_file:
+      - .env.${HEXGATE_ENV:-prod}
+    environment:
+      # Fixed topology, not per-deploy. Port 8123 = ClickHouse HTTP interface
+      # (clickhouse_connect is an HTTP client, not native 9000).
+      HEXGATE_CLICKHOUSE_HOST: clickhouse
+      HEXGATE_CLICKHOUSE_PORT: "8123"
+      # Postgres topology. The app assembles + percent-encodes DATABASE_URL from
+      # these plus HEXGATE_POSTGRES_PASSWORD (loaded via env_file above), so the
+      # password may contain ANY characters — no URL-safe restriction. Host/db/
+      # user match the postgres service; only the port is fixed here.
+      HEXGATE_POSTGRES_HOST: postgres
+      HEXGATE_POSTGRES_PORT: "5432"
+      # Persistent keystore — losing it invalidates every token/session/bundle.
+      HEXGATE_KEYSTORE_PATH: /keys
+    volumes:
+      - hexgate-keys:/keys
+    depends_on:
+      postgres:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+    # Liveness from the image's HEALTHCHECK (/health).
+
+volumes:
+  pg-data:
+  ch-data:
+  hexgate-keys:

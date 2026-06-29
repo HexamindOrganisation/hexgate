@@ -117,9 +117,10 @@ _log = logging.getLogger(__name__)
 def _demo_enabled() -> bool:
     """Whether single-tenant demo mode is on (see platform/api/demo.py).
 
-    Off by default. When on, the API serves the built dashboard same-origin and
-    exposes a *passwordless* ``/v1/demo-login`` for the seeded admin — safe only
-    in an ephemeral throwaway container.
+    Off by default. When on, the API exposes a *passwordless* ``/v1/demo-login``
+    for the seeded admin — safe only in an ephemeral throwaway container. (The
+    same-origin dashboard serving is no longer demo-specific; see
+    :func:`spa.mount_spa`, wired in both modes.)
     """
     return os.environ.get("HEXGATE_DEMO", "").strip().lower() in (
         "1",
@@ -175,6 +176,18 @@ async def lifespan(app_: FastAPI):
     # the lifespan; the include here runs once at startup, before any
     # request reaches the app.
     _maybe_mount_oauth_routers()
+    # SPA catch-all goes on LAST — after the OAuth router just mounted — so
+    # /{path} never shadows /v1/auth/google/*. (Static /v1 routes are already
+    # registered at import; only the OAuth router mounts here at startup, so the
+    # SPA must follow it.) Demo mode mounts the same SPA + a passwordless login.
+    if _demo_enabled():
+        from demo import enable_demo
+
+        enable_demo(app)
+    else:
+        from spa import mount_spa
+
+        mount_spa(app)
     async with async_session_factory() as session:
         await ensure_default_project(session)
         # Backfill signed bundles for seeded agents so they're served via
@@ -199,8 +212,8 @@ async def lifespan(app_: FastAPI):
     if _demo_enabled():
         _log.warning(
             "⚠ HEXGATE_DEMO is ON — /v1/demo-login grants a PASSWORDLESS session "
-            "for the seeded admin and the SPA catch-all is active. Use ONLY in an "
-            "ephemeral throwaway container, NEVER on a persistent/real deployment."
+            "for the seeded admin. Use ONLY in an ephemeral throwaway container, "
+            "NEVER on a persistent/real deployment."
         )
     yield
 
@@ -2136,12 +2149,6 @@ def _maybe_mount_oauth_routers() -> None:
 
 app.include_router(v1)
 
-
-# Demo bundle (single-tenant throwaway container): serve the built dashboard
-# same-origin + auto-login. Registered LAST so the SPA catch-all never shadows
-# /v1. Off by default — only wired when HEXGATE_DEMO is truthy, so normal and
-# production runs are untouched.
-if _demo_enabled():
-    from demo import enable_demo
-
-    enable_demo(app)
+# The SPA catch-all is mounted in the lifespan (after the OAuth router), NOT
+# here — registering it at import would shadow the lifespan-mounted
+# /v1/auth/google/* routes, since Starlette matches in registration order.

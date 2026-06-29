@@ -1,4 +1,8 @@
 .env
+# Real env files carry secrets; keep the *.sample templates tracked.
+.env.*
+!.env.sample
+!.env.*.sample
 .ruff_cache/
 __pycache__/
 *.db

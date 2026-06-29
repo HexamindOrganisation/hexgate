@@ -1,0 +1,47 @@
+# Build context is the repo ROOT. BuildKit uses this file INSTEAD of the
+# repo-root .dockerignore. It mirrors that file, with ONE difference: it does
+# NOT exclude platform/dashboard/ — the API image now builds the dashboard SPA
+# into itself (see the `dashboard` build stage). Only the dashboard's build
+# artifacts are dropped (rebuilt in-image).
+
+# Virtualenvs — never copy a host venv over the container's (wrong arch).
+**/.venv
+
+# Python caches + build artifacts
+**/__pycache__
+**/*.py[cod]
+**/*.egg-info
+**/.pytest_cache
+**/.ruff_cache
+build/
+dist/
+
+# Local databases + keystore — state/secrets, must not be baked into the image
+**/*.db*
+platform/api/data/
+
+# Env files — config is provided at runtime, not via the image
+**/.env
+
+# VCS / CI / tooling
+.git
+.github
+.gitignore
+.DS_Store
+.vscode
+.idea
+
+# Not part of the API image
+**/node_modules
+platform/clickhouse/
+docs/
+notebooks/
+_design/
+examples/
+assets/
+tests/
+platform/api/tests/
+
+# Dashboard SOURCE is kept (the API image builds it); only its artifacts go.
+platform/dashboard/dist
+platform/dashboard/.vite
