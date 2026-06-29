@@ -413,6 +413,88 @@ async def test_toolset_cleans_up_on_partial_open_failure(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
+async def test_proxy_returns_transport_error_envelope_on_httpx_error() -> None:
+    """HTTP transport errors (network blip, 5xx) must surface as a
+    retryable=True envelope so the agent can decide to back off — not
+    abort the run."""
+    import httpx
+
+    client = _FakeMCPClient(_slack_config())
+    client.raises(httpx.ConnectError("connection refused"))
+    proxy = _build_proxy_tool(_state(client), _slack_config(), _tool("send_message"))
+
+    result = await proxy.ainvoke({"channel": "#dev", "text": "hi"})
+
+    assert result["ok"] is False
+    assert result["error"]["type"] == "transport_error"
+    assert result["error"]["retryable"] is True
+
+
+@pytest.mark.asyncio
+async def test_proxy_skips_validation_for_tool_with_no_input_schema() -> None:
+    """An MCP tool that advertises no inputSchema (or one we can't build
+    a validator for) must still accept calls — fall back to LangChain's
+    loose dict contract rather than refusing to invoke."""
+    client = _FakeMCPClient(_slack_config())
+    client.returns(_text_result("ok"))
+    # Tool() with empty schema → validator covers {"type": "object"}.
+    # Tools with schemas we can't validate fall back silently (see
+    # _validator_for's exception path); use a malformed schema to exercise it.
+    cfg = _slack_config()
+    bad_schema = {"type": "object", "properties": {"x": {"type": "not-a-real-type"}}}
+    proxy = _build_proxy_tool(_state(client), cfg, _tool("ping", schema=bad_schema))
+
+    # Must not raise — validator fallback returns None on schema error.
+    result = await proxy.ainvoke({"x": 1})
+    assert result == {"ok": True, "content": "ok"}
+
+
+def test_render_structured_falls_back_to_repr_on_unserializable() -> None:
+    """A structuredContent payload with non-JSON-serializable values (e.g.
+    a class instance the server returned by mistake) must still produce
+    a string the LLM can read, not crash the proxy."""
+    from hexgate.mcp.proxy import _render_structured
+
+    class _Unserializable:
+        pass
+
+    obj = _Unserializable()
+    out = _render_structured(obj)
+    # repr() is the fallback — must be a non-empty string.
+    assert isinstance(out, str)
+    assert "_Unserializable" in out
+
+
+def test_iter_text_blocks_skips_non_text_content() -> None:
+    """Content blocks without `.text` (images, binary resources) must be
+    silently skipped, not produce ``None`` strings or crash."""
+    from types import SimpleNamespace
+
+    from hexgate.mcp.proxy import _iter_text_blocks
+
+    blocks = [
+        SimpleNamespace(text="hello"),
+        SimpleNamespace(),  # no text attr
+        SimpleNamespace(text=None),  # text set but not a string (image data)
+        SimpleNamespace(text="world"),
+    ]
+    assert list(_iter_text_blocks(blocks)) == ["hello", "world"]
+
+
+def test_error_envelope_marks_tool_error_retryable() -> None:
+    """tool_error (isError=true from the server) is retryable — the agent
+    might get a different answer next turn. use_after_close is not."""
+    from hexgate.mcp.proxy import _error_envelope
+
+    e1 = _error_envelope("tool_error", "rate limited", "mcp-x-y")
+    e2 = _error_envelope("use_after_close", "closed", "mcp-x-y")
+    e3 = _error_envelope("schema_validation_error", "bad args", "mcp-x-y")
+    assert e1["error"]["retryable"] is True
+    assert e2["error"]["retryable"] is False
+    assert e3["error"]["retryable"] is False
+
+
+@pytest.mark.asyncio
 async def test_toolset_flips_state_to_closed_on_exit(monkeypatch) -> None:
     """After exiting the with block, proxies built from this toolset must
     see ``state.open == False`` so they return a clear error envelope
