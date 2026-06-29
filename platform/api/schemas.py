@@ -420,6 +420,7 @@ class AuditSummary(BaseModel):
     by_agent: list[AuditBreakdownRow]
     by_role: list[AuditBreakdownRow]
     by_tool: list[AuditBreakdownRow]
+    by_user: list[AuditBreakdownRow]
 
 
 class AuditTimeseriesPoint(BaseModel):
