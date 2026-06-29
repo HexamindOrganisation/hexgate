@@ -37,7 +37,7 @@ from httpx_oauth.clients.google import GoogleOAuth2
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from db import get_session
-from mailer import get_email_sender
+from mailer import _redact_email, get_email_sender
 from models import OAuthAccount, User
 
 logger = logging.getLogger("hexgate.platform.auth")
@@ -193,7 +193,9 @@ class UserManager(BaseUserManager[User, str]):
         """
         from services import ensure_personal_default_org
 
-        logger.info("user registered: %s (id=%s)", user.email, user.id)
+        # Redact the email — same PII rule the mailer error path uses
+        # (al***@domain). User id is the durable handle for support.
+        logger.info("user registered: %s (id=%s)", _redact_email(user.email), user.id)
         # ``self.user_db.session`` is the same async session the User
         # insert used — but FastAPI-Users has already committed it by
         # the time we get here. Idempotency guarantees of the helper
@@ -222,11 +224,17 @@ class UserManager(BaseUserManager[User, str]):
             f"    {link}\n\n"
             f"If it wasn't you, ignore this email — your password stays put.\n"
         )
-        await get_email_sender().send(
-            to=user.email,
-            subject="Reset your Hexgate password",
-            body=body,
-        )
+        try:
+            await get_email_sender().send(
+                to=user.email,
+                subject="Reset your Hexgate password",
+                body=body,
+            )
+        except Exception:
+            # Mailer logs with the recipient redacted; we just need to
+            # stop the exception from 5xx-ing /v1/auth/forgot-password.
+            # User can request a new link; operator sees the mailer log.
+            logger.exception("password-reset email could not be sent")
 
     async def on_after_request_verify(
         self, user: User, token: str, request: Request | None = None
@@ -245,11 +253,16 @@ class UserManager(BaseUserManager[User, str]):
             f"Unverified accounts can sign in but won't be able to invite\n"
             f"teammates or mint API tokens until verification completes.\n"
         )
-        await get_email_sender().send(
-            to=user.email,
-            subject="Verify your Hexgate account",
-            body=body,
-        )
+        try:
+            await get_email_sender().send(
+                to=user.email,
+                subject="Verify your Hexgate account",
+                body=body,
+            )
+        except Exception:
+            # Don't 5xx /v1/auth/request-verify-token over a Resend
+            # outage — the user can retry from the dashboard banner.
+            logger.exception("verification email could not be sent")
 
 
 async def get_user_manager(

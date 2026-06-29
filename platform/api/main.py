@@ -129,6 +129,42 @@ def _demo_enabled() -> bool:
     )
 
 
+def _configure_email_sender() -> None:
+    """Swap the dev stderr sender for Resend if both env vars are set.
+
+    Three cases, three log levels:
+      * both set → INFO "Resend wired" — production happy path.
+      * neither set → INFO "dev stderr sender" — clean dev mode.
+      * exactly one set → WARNING naming the missing var — operator
+        misconfig; falls back to stderr rather than half-broken Resend.
+    """
+    from mailer import ResendEmailSender, StderrEmailSender, set_email_sender
+
+    api_key = os.environ.get("RESEND_API_KEY", "").strip()
+    from_addr = os.environ.get("HEXGATE_EMAIL_FROM", "").strip()
+    if api_key and from_addr:
+        set_email_sender(ResendEmailSender(api_key=api_key, from_addr=from_addr))
+        _log.info("email: Resend sender wired (from=%s)", from_addr)
+        return
+    # Reset to stderr explicitly so a re-config (test, lifespan-restart)
+    # that clears env vars doesn't leave a stale Resend sender wired.
+    set_email_sender(StderrEmailSender())
+    if api_key or from_addr:
+        missing = "HEXGATE_EMAIL_FROM" if api_key else "RESEND_API_KEY"
+        present = "RESEND_API_KEY" if api_key else "HEXGATE_EMAIL_FROM"
+        _log.warning(
+            "email: partial Resend config — %s is set but %s is not. "
+            "Falling back to dev stderr sender; real mail will NOT be sent.",
+            present,
+            missing,
+        )
+    else:
+        _log.info(
+            "email: dev stderr sender — set RESEND_API_KEY and HEXGATE_EMAIL_FROM "
+            "to deliver real mail (verification + password reset)."
+        )
+
+
 @asynccontextmanager
 async def lifespan(app_: FastAPI):
     await init_db()
@@ -159,6 +195,7 @@ async def lifespan(app_: FastAPI):
         _cookie_secure(),
         _dashboard_url(),
     )
+    _configure_email_sender()
     if _demo_enabled():
         _log.warning(
             "⚠ HEXGATE_DEMO is ON — /v1/demo-login grants a PASSWORDLESS session "
@@ -1802,12 +1839,15 @@ async def api_create_invitation(
         )
     except Exception:
         # Mailer failure — log via the auth logger so it shows up in
-        # the same stderr block operators are already watching.
+        # the same stderr block operators are already watching. Invitee
+        # address is PII-redacted (same rule as mailer.py); the org slug
+        # stays so support can grep by tenant.
         from auth import logger as auth_logger
+        from mailer import _redact_email
 
         auth_logger.exception(
             "failed to send invitation email to %s for org %s",
-            invitation.email,
+            _redact_email(invitation.email),
             org.slug,
         )
 

@@ -243,6 +243,22 @@ Integration tests (`pytest -m integration`) round-trip rows through the live Cli
 
 The dashboard's `/policies` page lets you edit each agent's policy. `hexgate serve` re-fetches at every turn boundary, so your edits take effect on the next chat message without a restart.
 
+### Outbound email (Resend)
+
+Verification emails and password-reset links go through [Resend](https://resend.com). The platform API has two senders:
+
+- **Dev (default)** — `StderrEmailSender` prints the mail body (including the magic link) to stderr. No keys needed; click the link out of the terminal to exercise the flow end-to-end.
+- **Production** — `ResendEmailSender`, picked up automatically when both `RESEND_API_KEY` and `HEXGATE_EMAIL_FROM` are set. The from-address must be on a verified Resend domain.
+
+```bash
+# platform/api/.env
+RESEND_API_KEY=re_…
+HEXGATE_EMAIL_FROM="Hexgate <noreply@yourdomain.com>"
+HEXGATE_DASHBOARD_URL=https://app.yourdomain.com   # ← link host inside the email
+```
+
+Partial config (only one var set) keeps the dev stderr sender so an operator notices the misconfig in the startup log line instead of silently failing every send at delivery. Resend API failures are logged at error level but never 5xx the calling endpoint — the user can request a new link.
+
 ## ✨ Core Primitives
 
 The two main primitives are:

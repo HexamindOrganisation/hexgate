@@ -41,6 +41,10 @@ dependencies = [
     # Users' get_oauth_router consumes any httpx-oauth client uniformly,
     # so swapping providers is one constructor line.
     "httpx-oauth>=0.16",
+    # Transactional email — verify-email + password-reset go through Resend
+    # in production. Dev mode stays on StderrEmailSender (no key needed).
+    # Sync SDK; wrapped via asyncio.to_thread in mailer.py.
+    "resend>=2.4",
 ]
 
 [dependency-groups]
