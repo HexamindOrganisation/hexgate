@@ -244,16 +244,13 @@ dashboard-typecheck: ## Typecheck dashboard TypeScript
 STAGE ?= staging
 DEPLOY_COMPOSE = docker compose -p hexgate-$(STAGE) --env-file platform/.env.$(STAGE) -f platform/docker-compose.deploy.yml
 
-# The env file is the source of secrets. It's not copied by hand — it's pulled
-# (latest version) from Scaleway Secret Manager (secret /hexgate/<stage>),
-# which the admin maintains. See platform/DEPLOY.md.
+# The env file is pulled from Scaleway (secret /hexgate/<stage>), not hand-copied.
 .PHONY: platform-env-pull
 platform-env-pull: ## Pull platform/.env.<stage> from Scaleway: make platform-env-pull STAGE=prod
 	@bash platform/scripts/env-secret.sh $(STAGE)
 
-# Auto-pull a missing env file so first boot/upgrade needs no manual step. An
-# existing file is left alone (an operator may have edited it for a hotfix) —
-# run `make platform-env-pull STAGE=<stage>` to force a refresh from Scaleway.
+# Auto-pull only a missing env file; an existing one is left untouched
+# (`make platform-env-pull` to force a refresh).
 .PHONY: _require-stage-env
 _require-stage-env:
 	@test -f platform/.env.$(STAGE) || $(MAKE) platform-env-pull STAGE=$(STAGE)
