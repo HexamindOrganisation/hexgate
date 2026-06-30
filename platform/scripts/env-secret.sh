@@ -24,9 +24,11 @@ command -v jq >/dev/null || die "jq not found"
 tmp="${ENV_FILE}.tmp.$$"
 trap 'rm -f "$tmp"' EXIT
 # .data is base64; decode to the raw file. Fails before touching $ENV_FILE.
+# jq -e fails the pipeline if .data is missing/null, so a malformed response
+# can't slip through as decoded garbage (pipefail surfaces it as the die below).
 scw secret version access-by-path \
     secret-path="$SECRET_PATH" secret-name="$SECRET_NAME" revision=latest region="$REGION" -o json 2>/dev/null \
-  | jq -r '.data' | base64 -d > "$tmp" \
+  | jq -e -r '.data' | base64 -d > "$tmp" \
   || die "cannot access $SECRET_PATH/$SECRET_NAME in $REGION — check it exists, creds, SCW_DEFAULT_REGION / HEXGATE_SECRET_PATH"
 [[ -s "$tmp" ]] || die "$SECRET_PATH/$SECRET_NAME is empty — refusing to overwrite $ENV_FILE"
 chmod 600 "$tmp"
