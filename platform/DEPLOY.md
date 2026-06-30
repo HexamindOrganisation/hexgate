@@ -67,8 +67,9 @@ name `<stage>`).
 **The admin maintains the secret** (Scaleway console or `scw`): create
 `/hexgate/<stage>` as an *opaque* secret in region `fr-par`, with the full env
 file as its payload. (The folder defaults to `/hexgate`; override per box with
-`HEXGATE_SECRET_PATH`.) Use the matching `platform/.env.<stage>.sample` as the
-template for which keys to set — `HEXGATE_POSTGRES_PASSWORD`,
+`HEXGATE_SECRET_PATH`.) Use `platform/.env.sample` as the template for which
+keys to set (it covers both stages — stage-varying lines are annotated) —
+`HEXGATE_POSTGRES_PASSWORD`,
 `HEXGATE_CLICKHOUSE_PASSWORD` (`openssl rand -hex 32`), any `RESEND_API_KEY` /
 Google OAuth values; `TAG`, `HEXGATE_HTTP_PORT`, and the hostnames are pre-set.
 Each edit is a new secret version; pull always takes the latest. This deploy
@@ -87,7 +88,7 @@ read-only API key is enough.
 make platform-env-pull STAGE=prod      # writes platform/.env.prod from Scaleway
 ```
 
-The `.sample` files stay the canonical reference for which keys exist; the live
+`platform/.env.sample` stays the canonical reference for which keys exist; the live
 `.env.<stage>` files are gitignored.
 
 Then add two routes to the box's reverse proxy (one-time), so each hostname
