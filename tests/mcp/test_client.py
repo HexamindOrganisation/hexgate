@@ -171,6 +171,29 @@ async def test_aenter_runs_initialize_and_caches_session(
 
 
 @pytest.mark.asyncio
+async def test_aexit_forwards_suppression_return(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If a transport's __aexit__ returns truthy (claims to suppress the
+    exception), MCPClient must forward that truth so the with-block sees
+    suppression. Dropping the return value would silently override the
+    transport's decision."""
+
+    class _SuppressingSession(_FakeSession):
+        async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> bool:
+            await super().__aexit__(exc_type, exc, tb)
+            return True  # claim suppression
+
+    session = _SuppressingSession()
+    _patch_transports(monkeypatch, session=session)
+    cfg = MCPServerConfig(name="x", transport="stdio", command="srv")
+
+    # The session claims suppression — the RuntimeError must NOT escape.
+    async with MCPClient(cfg):
+        raise RuntimeError("should be suppressed by the inner CM")
+
+
+@pytest.mark.asyncio
 async def test_aexit_forwards_exc_info_to_inner_stack(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -129,14 +129,23 @@ class MCPToolset:
         exc_type: type[BaseException] | None,
         exc: BaseException | None,
         tb: Any,
-    ) -> None:
+    ) -> bool | None:
         stack = self._stack
         self._stack = None
-        if stack is not None:
-            # Forward exc_info so the inner transports take the right
-            # cancellation path (stdio's graceful-vs-kill decision).
-            await stack.__aexit__(exc_type, exc, tb)
+        # Clear BOTH _tools and _states so a re-entered toolset doesn't
+        # accumulate phantom state objects from earlier sessions. (The
+        # AsyncExitStack itself is single-use, so re-enter mostly means
+        # "tests that reuse the instance"; the clears keep that path
+        # honest rather than relying on no-one ever doing it.)
         self._tools.clear()
+        self._states.clear()
+        if stack is None:
+            return None
+        # Forward exc_info so the inner transports take the right
+        # cancellation path (stdio's graceful-vs-kill decision), AND
+        # return whatever the stack returns so an inner CM's suppression
+        # decision is preserved.
+        return await stack.__aexit__(exc_type, exc, tb)
 
     @property
     def tools(self) -> list[BaseTool]:
@@ -164,7 +173,16 @@ def _build_proxy_tool(
     # the LLM-facing contract. We validate the args ourselves against this
     # same schema BEFORE forwarding so a missing-required-arg call returns
     # a structured error envelope instead of a wasted server round-trip.
-    schema = mcp_tool.inputSchema or {"type": "object", "properties": {}}
+    #
+    # `is None` (not `or`) — an empty dict `{}` is a VALID JSON Schema
+    # meaning "accept anything". Falsy-or would replace it with the
+    # type=object fallback below, narrowing what the server actually
+    # advertised and changing the LLM-visible spec.
+    schema = (
+        mcp_tool.inputSchema
+        if mcp_tool.inputSchema is not None
+        else {"type": "object", "properties": {}}
+    )
     description = mcp_tool.description or f"{qualified} (no description provided)"
     validator = _validator_for(schema, qualified)
 
@@ -308,13 +326,22 @@ def _render_structured(payload: Any) -> str:
 
 
 def _error_envelope(kind: str, message: str, qualified: str) -> dict[str, Any]:
-    """Match the {"ok": False, "error": {...}} shape native tools produce."""
+    """Match the {"ok": False, "error": {...}} shape native tools produce.
+
+    Only ``transport_error`` is retryable. MCP's ``isError=true`` covers
+    deterministic application failures (permissions denied, not found,
+    bad input that passed schema validation) — those reproduce on
+    retry and shouldn't carry a retryable=True hint that might mislead a
+    future consumer into busy-looping. Aligns with native
+    :meth:`Decision.as_error_payload`, which always emits
+    ``retryable: False``.
+    """
     return {
         "ok": False,
         "error": {
             "type": kind,
             "message": message,
             "tool_name": qualified,
-            "retryable": kind in {"transport_error", "tool_error"},
+            "retryable": kind == "transport_error",
         },
     }

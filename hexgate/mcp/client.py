@@ -85,16 +85,21 @@ class MCPClient:
         exc_type: type[BaseException] | None,
         exc: BaseException | None,
         tb: Any,
-    ) -> None:
+    ) -> bool | None:
         # Forward the active exception (if any) into the inner exit stack so
         # the transport's own __aexit__ takes the right cancellation path —
         # stdio in particular branches between "graceful close" and "kill"
         # based on whether it sees an exception.
+        #
+        # Return whatever the stack returns so a transport that wants to
+        # suppress the exception (truthy return) is actually honored —
+        # dropping the return value would silently override that decision.
         self._session = None
         stack = self._exit_stack
         self._exit_stack = None
-        if stack is not None:
-            await stack.__aexit__(exc_type, exc, tb)
+        if stack is None:
+            return None
+        return await stack.__aexit__(exc_type, exc, tb)
 
     async def list_tools(self) -> list[Tool]:
         """Catalog of tools the server exposes.

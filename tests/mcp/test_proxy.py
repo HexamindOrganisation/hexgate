@@ -201,6 +201,21 @@ def test_proxy_tool_falls_back_to_default_description() -> None:
     assert "mcp-slack-list_channels" in proxy.description
 
 
+def test_proxy_preserves_empty_input_schema() -> None:
+    """A server that advertises inputSchema={} (valid JSON Schema meaning
+    "accept anything") must NOT be silently replaced with the
+    type=object fallback — that narrows the spec the LLM sees and
+    changes args_schema. Falsy-or bug; only `is None` should trigger
+    the fallback."""
+    cfg = _slack_config()
+    # MCP's `Tool.inputSchema` default-factories to {}, so we get that
+    # naturally by omitting it — same shape as the live failure path.
+    tool = Tool(name="freeform", description="anything goes", inputSchema={})
+    proxy = _build_proxy_tool(_state(_FakeMCPClient(cfg)), cfg, tool)
+    # The exact dict the server sent should reach LangChain unchanged.
+    assert proxy.args_schema == {}
+
+
 # ---- proxy call forwarding -------------------------------------------------
 
 
@@ -481,17 +496,21 @@ def test_iter_text_blocks_skips_non_text_content() -> None:
     assert list(_iter_text_blocks(blocks)) == ["hello", "world"]
 
 
-def test_error_envelope_marks_tool_error_retryable() -> None:
-    """tool_error (isError=true from the server) is retryable — the agent
-    might get a different answer next turn. use_after_close is not."""
+def test_error_envelope_only_transport_error_is_retryable() -> None:
+    """Only transport-level failures (network blip, 5xx) are retryable.
+    MCP's isError=true is a deterministic application error (permissions,
+    not-found, bad-input-past-schema) — retrying will reproduce it.
+    Aligns with native Decision.as_error_payload (always retryable=False)."""
     from hexgate.mcp.proxy import _error_envelope
 
-    e1 = _error_envelope("tool_error", "rate limited", "mcp-x-y")
-    e2 = _error_envelope("use_after_close", "closed", "mcp-x-y")
-    e3 = _error_envelope("schema_validation_error", "bad args", "mcp-x-y")
-    assert e1["error"]["retryable"] is True
-    assert e2["error"]["retryable"] is False
-    assert e3["error"]["retryable"] is False
+    transport = _error_envelope("transport_error", "connection reset", "mcp-x-y")
+    tool_err = _error_envelope("tool_error", "permission denied", "mcp-x-y")
+    closed = _error_envelope("use_after_close", "closed", "mcp-x-y")
+    schema_err = _error_envelope("schema_validation_error", "bad args", "mcp-x-y")
+    assert transport["error"]["retryable"] is True
+    assert tool_err["error"]["retryable"] is False  # was True before — wrong
+    assert closed["error"]["retryable"] is False
+    assert schema_err["error"]["retryable"] is False
 
 
 @pytest.mark.asyncio
@@ -523,3 +542,65 @@ async def test_toolset_flips_state_to_closed_on_exit(monkeypatch) -> None:
         assert all(s.open for s in captured_states)
 
     assert all(not s.open for s in captured_states)
+
+
+@pytest.mark.asyncio
+async def test_toolset_clears_states_and_tools_on_exit(monkeypatch) -> None:
+    """Both ``_tools`` and ``_states`` must be cleared on exit — leaving
+    ``_states`` populated would let a re-entered toolset accumulate
+    phantom state objects from earlier sessions, and any code that
+    iterates ``mcp._states`` would see stale closed entries."""
+
+    class _NoopClient:
+        def __init__(self, config: MCPServerConfig) -> None:
+            self.config = config
+
+        async def __aenter__(self) -> "_NoopClient":
+            return self
+
+        async def __aexit__(self, *exc_info: Any) -> None:
+            pass
+
+        async def list_tools(self) -> list[Tool]:
+            return [_tool("ping"), _tool("pong")]
+
+    monkeypatch.setattr("hexgate.mcp.proxy.MCPClient", _NoopClient)
+
+    cfg = MCPServerConfig(name="a", transport="stdio", command="x")
+    toolset = MCPToolset(cfg)
+    async with toolset as mcp:
+        assert len(mcp._states) == 1  # noqa: SLF001
+        assert len(mcp._tools) == 2  # noqa: SLF001
+
+    # Both internal lists are flushed — no phantom entries left behind.
+    assert toolset._states == []  # noqa: SLF001
+    assert toolset._tools == []  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+async def test_toolset_aexit_forwards_suppression_return(monkeypatch) -> None:
+    """If an inner CM in the exit stack returns truthy from __aexit__
+    (i.e. suppresses the exception), the toolset's __aexit__ must forward
+    that — discarding the return would silently override the suppression
+    decision and let the exception propagate when it shouldn't."""
+
+    class _SuppressingClient:
+        def __init__(self, config: MCPServerConfig) -> None:
+            self.config = config
+
+        async def __aenter__(self) -> "_SuppressingClient":
+            return self
+
+        async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> bool:
+            # Claim suppression of any exception that propagates through us.
+            return True
+
+        async def list_tools(self) -> list[Tool]:
+            return []
+
+    monkeypatch.setattr("hexgate.mcp.proxy.MCPClient", _SuppressingClient)
+
+    cfg = MCPServerConfig(name="a", transport="stdio", command="x")
+    # Inner CM says "I handled it" — the with block must NOT re-raise.
+    async with MCPToolset(cfg):
+        raise RuntimeError("inner CM should suppress this")
