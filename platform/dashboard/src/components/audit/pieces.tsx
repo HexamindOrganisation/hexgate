@@ -5,9 +5,12 @@ import {
   CircleDashed,
   Download,
   List,
+  TriangleAlert,
   X,
 } from "lucide-react";
 import type {
+  AnomalySeverity,
+  AuditAnomaly,
   AuditBreakdownRow,
   AuditDecisionRow,
   AuditOutcome,
@@ -174,9 +177,10 @@ export function ActiveChips({ f, setF }: { f: Filters; setF: SetFilters }) {
     agent: "agent",
     role: "role",
     tool: "tool",
+    user: "user",
     outcome: "outcome",
   };
-  const chips = (["agent", "role", "tool", "outcome"] as const).filter(
+  const chips = (["agent", "role", "tool", "user", "outcome"] as const).filter(
     (k) => f[k],
   );
   if (!chips.length) return null;
@@ -208,6 +212,7 @@ export function ActiveChips({ f, setF }: { f: Filters; setF: SetFilters }) {
             customMode: false,
             start_date: null,
             end_date: null,
+            user: "",
           }))
         }
       >
@@ -469,6 +474,102 @@ export function EventsTable({
           </Button>
         </div>
       )}
+    </Card>
+  );
+}
+
+// ————————————————————————————————————————————— Anomalies card
+
+function fmtBurst(first: string, last: string): string {
+  const f = new Date(first);
+  const l = new Date(last);
+  const date = (d: Date) =>
+    d.toLocaleDateString("en-US", {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+    });
+  const time = (d: Date) =>
+    d.toLocaleTimeString("en-US", {
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    });
+  return date(f) === date(l)
+    ? `${date(f)}, ${time(f)} → ${time(l)}`
+    : `${date(f)}, ${time(f)} → ${date(l)}, ${time(l)}`;
+}
+
+function SeverityBadge({ severity }: { severity: AnomalySeverity }) {
+  return severity === "high" ? (
+    <Badge className="bg-deny/15 text-deny hover:bg-deny/15">High</Badge>
+  ) : (
+    <Badge className="bg-approval/15 text-approval hover:bg-approval/15">
+      Medium
+    </Badge>
+  );
+}
+
+export function AnomaliesCard({
+  rows,
+  onRowClick,
+}: {
+  rows: AuditAnomaly[];
+  onRowClick: (from: Date, to: Date, userId: string) => void;
+}) {
+  return (
+    <Card className="overflow-hidden p-0">
+      <div className="flex items-center gap-2 border-b border-border px-5 py-4">
+        <TriangleAlert className="size-4 text-approval" />
+        <div className="text-[15px] font-semibold">
+          Anomalies · {rows.length} detected
+        </div>
+      </div>
+      <div className="overflow-x-auto">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead className="w-[90px]">Severity</TableHead>
+              <TableHead>User</TableHead>
+              <TableHead className="w-[80px]">Denies</TableHead>
+              <TableHead className="w-[90px]">Deny rate</TableHead>
+              <TableHead>When</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {rows.map((row) => (
+              <TableRow
+                key={`${row.user_id}-${row.first_seen}`}
+                className="cursor-pointer"
+                onClick={() =>
+                  onRowClick(
+                    new Date(row.first_seen),
+                    new Date(row.last_seen),
+                    row.user_id,
+                  )
+                }
+              >
+                <TableCell>
+                  <SeverityBadge severity={row.severity} />
+                </TableCell>
+                <TableCell className="font-mono text-[12.5px]">
+                  {row.user_id}
+                </TableCell>
+                <TableCell>
+                  {row.deny}
+                  <span className="ml-1 text-xs text-muted-foreground">
+                    / {row.all}
+                  </span>
+                </TableCell>
+                <TableCell>{(row.deny_rate * 100).toFixed(0)}%</TableCell>
+                <TableCell className="font-mono text-xs text-muted-foreground">
+                  {fmtBurst(row.first_seen, row.last_seen)}
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </div>
     </Card>
   );
 }
