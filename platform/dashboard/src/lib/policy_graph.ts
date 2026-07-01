@@ -31,19 +31,17 @@
 
 import yaml from "js-yaml";
 import type { Edge, Node } from "@xyflow/react";
+import { isMixinSpec, MODE_COLOR, readToolMap } from "./policy";
 
-export type Mode = "allow" | "deny" | "approval_required";
-
-interface ToolPolicySpec {
-  mode?: Mode;
-  constraints?: string[];
-}
+// Re-export Mode so existing consumers of this file (if any) don't break.
+export type { Mode } from "./policy";
 
 interface RoleSpec {
-  is_mixin?: boolean;
+  is_mixin?: unknown; // coerced by isMixinSpec()
   inherits?: string[];
-  tools?: Record<string, ToolPolicySpec>;
-  default_policy?: { mode?: Mode };
+  tools?: Record<string, unknown>; // shaped by readToolMap()
+  default_policy?: { mode?: unknown };
+  constraints?: string[];
 }
 
 interface InlinePolicy {
@@ -51,11 +49,16 @@ interface InlinePolicy {
   roles?: Record<string, RoleSpec>;
 }
 
-const MODE_COLOR: Record<Mode, string> = {
-  allow: "hsl(var(--semantic-allow))",
-  approval_required: "hsl(var(--semantic-approval))",
-  deny: "hsl(var(--semantic-deny))",
-};
+/**
+ * Extract constraint counts per role×tool. readToolMap() drops the
+ * `constraints` field (it only reads mode + file_scope), so we walk
+ * the raw spec ourselves to pull constraint counts for the edge
+ * label — everything else routes through readToolMap for consistency.
+ */
+function constraintCount(spec: unknown): number {
+  const c = (spec as { constraints?: unknown } | undefined)?.constraints;
+  return Array.isArray(c) ? c.length : 0;
+}
 
 export interface PolicyGraph {
   nodes: Node[];
@@ -86,11 +89,17 @@ export function buildPolicyGraph(policyYaml: string): PolicyGraph {
   }
 
   const roleNames = Object.keys(rolesMap);
-  // Tools = union across all roles, source order (first occurrence wins).
+  // Tools = union across all roles, source order (first occurrence
+  // wins). Route through readToolMap so an entry with an invalid mode
+  // (e.g. capital "Allow") is dropped consistently with parsePolicy —
+  // otherwise this view would render a phantom tool the overview graph
+  // silently omits.
+  const toolMapsByRole: Record<string, ReturnType<typeof readToolMap>> = {};
   const toolSet = new Set<string>();
   for (const role of roleNames) {
-    const tools = rolesMap[role]?.tools ?? {};
-    for (const t of Object.keys(tools)) toolSet.add(t);
+    const map = readToolMap(rolesMap[role]?.tools);
+    toolMapsByRole[role] = map;
+    for (const t of Object.keys(map)) toolSet.add(t);
   }
   const toolNames = Array.from(toolSet);
 
@@ -120,7 +129,9 @@ export function buildPolicyGraph(policyYaml: string): PolicyGraph {
       position: { x: COL_ROLES_X, y: ROLE_Y_START + idx * ROLE_GAP_Y },
       data: {
         label: role,
-        muted: spec?.is_mixin === true,
+        // Coerced check — accepts is_mixin: true / "true" / 1 uniformly
+        // with parsePolicy so both views agree on which roles are mixins.
+        muted: isMixinSpec(spec),
       },
     });
   });
@@ -169,11 +180,17 @@ export function buildPolicyGraph(policyYaml: string): PolicyGraph {
   // without opening the YAML.
   for (const role of roleNames) {
     const spec = rolesMap[role];
-    if (spec?.is_mixin) continue; // mixins don't terminate; their tools surface via children
-    const tools = spec?.tools ?? {};
-    for (const [tool, toolSpec] of Object.entries(tools)) {
-      const mode = (toolSpec?.mode ?? "deny") as Mode;
-      const constraintCount = toolSpec?.constraints?.length ?? 0;
+    // Mixins compose into children via `inherits` — no direct terminal
+    // edges here (isMixinSpec accepts coerced truthy values, matching
+    // parsePolicy's contract).
+    if (isMixinSpec(spec)) continue;
+    // Iterate the readToolMap-filtered view so invalid-mode entries are
+    // skipped consistently with parsePolicy.
+    const validatedTools = toolMapsByRole[role] ?? {};
+    const rawTools = (spec?.tools ?? {}) as Record<string, unknown>;
+    for (const [tool, toolPolicy] of Object.entries(validatedTools)) {
+      const mode = toolPolicy.mode;
+      const cnCount = constraintCount(rawTools[tool]);
       edges.push({
         id: `mode:${role}->${tool}`,
         source: `role:${role}`,
@@ -185,8 +202,8 @@ export function buildPolicyGraph(policyYaml: string): PolicyGraph {
           strokeWidth: 2,
         },
         label:
-          constraintCount > 0
-            ? `${mode} · ${constraintCount} check${constraintCount === 1 ? "" : "s"}`
+          cnCount > 0
+            ? `${mode} · ${cnCount} check${cnCount === 1 ? "" : "s"}`
             : mode,
         labelStyle: {
           fontSize: 10,

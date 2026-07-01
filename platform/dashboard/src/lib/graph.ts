@@ -4,6 +4,7 @@ import {
   buildAgentView,
   effectiveMode,
   MODE_COLOR,
+  worstMode,
   type AgentView,
   type Mode,
 } from "./policy";
@@ -90,11 +91,14 @@ export function buildOverviewGraph(agents: AgentRead[]): OverviewGraph {
   const toolCenterY = ((toolList.length - 1) * ROW_H) / 2;
   const shift = agentCenterY - toolCenterY;
   toolList.forEach((toolName, i) => {
-    // Determine the "worst" mode for the left strip on the tool node
+    // Determine the "worst" mode for the left strip on the tool node.
+    // Shares MODE_STRENGTH ordering with parsePolicy's cross-role merge
+    // via the exported worstMode helper — one source of truth for
+    // "which mode wins when they disagree."
     const modesForTool: Mode[] = agentViews
       .filter((v) => v.tools.includes(toolName))
       .map((v) => effectiveMode(v, toolName));
-    const mode = pickStripMode(modesForTool);
+    const mode = worstMode(modesForTool) ?? "default";
     nodes.push({
       id: `tool:${toolName}`,
       type: "tool",
@@ -116,11 +120,4 @@ function edgeStyle(mode: Mode): React.CSSProperties {
     return { ...base, strokeWidth: 1.5, opacity: 0.85 };
   }
   return base;
-}
-
-function pickStripMode(modes: Mode[]): Mode | "default" {
-  if (modes.includes("deny")) return "deny";
-  if (modes.includes("approval_required")) return "approval_required";
-  if (modes.includes("allow")) return "allow";
-  return "default";
 }
