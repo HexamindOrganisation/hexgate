@@ -58,7 +58,8 @@ def _b64url(b: bytes) -> str:
 def clean_env(monkeypatch: pytest.MonkeyPatch) -> None:
     """Clear the HEXGATE_* env keys so resolution tests don't leak state."""
     for key in (
-        "HEXGATE_KEY",
+        "HEXGATE_API_KEY",
+        "HEXGATE_KEY",  # legacy alias — clear so it can't leak into resolution
         "HEXGATE_API_URL",
         "HEXGATE_PROJECT_ID",
         "HEXGATE_PUBLIC_KEY",
@@ -97,7 +98,7 @@ def test_config_resolves_project_from_env(
     clean_env: None,
 ) -> None:
     """HEXGATE_PROJECT_ID overrides whatever the key prefix encodes."""
-    monkeypatch.setenv("HEXGATE_KEY", "fty_live_key-proj_secret")
+    monkeypatch.setenv("HEXGATE_API_KEY", "fty_live_key-proj_secret")
     monkeypatch.setenv("HEXGATE_PROJECT_ID", "env-proj")
     config = HexgateConfig.from_env()
     assert config.project_id == "env-proj"
@@ -108,14 +109,14 @@ def test_config_resolves_project_from_key_prefix(
     clean_env: None,
 ) -> None:
     """When neither arg nor env give a project, parse it from the key prefix."""
-    monkeypatch.setenv("HEXGATE_KEY", "fty_live_my-cool-project_secret")
+    monkeypatch.setenv("HEXGATE_API_KEY", "fty_live_my-cool-project_secret")
     config = HexgateConfig.from_env()
     assert config.project_id == "my-cool-project"
 
 
 def test_config_raises_when_key_missing(clean_env: None) -> None:
-    """No HEXGATE_KEY is fail-fast, not silent default."""
-    with pytest.raises(HexgateError, match="HEXGATE_KEY not set"):
+    """No HEXGATE_API_KEY is fail-fast, not silent default."""
+    with pytest.raises(HexgateError, match="HEXGATE_API_KEY not set"):
         HexgateConfig.from_env()
 
 
@@ -130,7 +131,7 @@ def test_config_allows_unresolvable_project(
     it through URLs. A missing project_id surfaces as ``None``,
     not an error.
     """
-    monkeypatch.setenv("HEXGATE_KEY", "completely_unparseable_key")
+    monkeypatch.setenv("HEXGATE_API_KEY", "completely_unparseable_key")
     config = HexgateConfig.from_env()
     assert config.project_id is None
     # The key still goes through verbatim — the server is the
@@ -163,7 +164,7 @@ def test_config_public_key_from_env(
 ) -> None:
     """HEXGATE_PUBLIC_KEY env (urlsafe-b64) decodes into raw bytes."""
     _, pub = keys
-    monkeypatch.setenv("HEXGATE_KEY", "fty_live_proj_secret")
+    monkeypatch.setenv("HEXGATE_API_KEY", "fty_live_proj_secret")
     monkeypatch.setenv("HEXGATE_PUBLIC_KEY", _b64url(pub))
     config = HexgateConfig.from_env()
     assert config.public_key == pub
@@ -176,7 +177,7 @@ def test_config_public_key_env_handles_missing_padding(
 ) -> None:
     """urlsafe_b64decode requires padding, but operators may strip it."""
     _, pub = keys
-    monkeypatch.setenv("HEXGATE_KEY", "fty_live_proj_secret")
+    monkeypatch.setenv("HEXGATE_API_KEY", "fty_live_proj_secret")
     encoded = base64.urlsafe_b64encode(pub).decode("ascii").rstrip("=")
     monkeypatch.setenv("HEXGATE_PUBLIC_KEY", encoded)
     config = HexgateConfig.from_env()
@@ -188,7 +189,7 @@ def test_config_invalid_pubkey_env_raises(
     clean_env: None,
 ) -> None:
     """Non-base64 HEXGATE_PUBLIC_KEY is a startup-time misconfiguration."""
-    monkeypatch.setenv("HEXGATE_KEY", "fty_live_proj_secret")
+    monkeypatch.setenv("HEXGATE_API_KEY", "fty_live_proj_secret")
     monkeypatch.setenv("HEXGATE_PUBLIC_KEY", "!!!not-base64!!!")
     with pytest.raises(HexgateError, match="not valid base64"):
         HexgateConfig.from_env()

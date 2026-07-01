@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING
 
 import yaml
 
+from hexgate.config.env import resolve_api_key
 from hexgate.security.policy_set import load_policy_set_from_dict
 from hexgate.security.source import (
     _LOCAL_POLICY_ENV_VAR,
@@ -69,7 +70,7 @@ def resolve_policy(
     """Resolve the current policy for ``agent_name``.
 
     Precedence: ``HEXGATE_LOCAL_POLICY`` override → platform (``client``
-    or ``api_key``/``HEXGATE_KEY``) → raise. Eager and fail-loud; a
+    or ``api_key``/``HEXGATE_API_KEY``) → raise. Eager and fail-loud; a
     platform 404 propagates as ``HexgateError``.
     """
     if not agent_name:
@@ -83,7 +84,7 @@ def resolve_policy(
         bundle, source = override
         return ResolvedPolicy(bundle, source)
 
-    if client is None and (api_key or os.environ.get("HEXGATE_KEY")):
+    if client is None and resolve_api_key(api_key):
         from hexgate.cloud.client import HexgateClient, HexgateConfig
 
         client = HexgateClient(HexgateConfig.from_env(api_key=api_key))
@@ -100,7 +101,7 @@ def resolve_policy(
         return ResolvedPolicy(engine, source)
 
     raise PolicyBindingError(
-        f"no policy available for agent {agent_name!r}: HEXGATE_KEY is "
+        f"no policy available for agent {agent_name!r}: HEXGATE_API_KEY is "
         f"not set and {_LOCAL_POLICY_ENV_VAR} is not set. Set a "
         "credential, point the override at a policy, or construct "
         "PolicyBinding(PolicyEnforcer(engine)) explicitly."

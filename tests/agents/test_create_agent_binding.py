@@ -74,7 +74,8 @@ def _hermetic(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         factory, "get_langfuse_handler", lambda **kwargs: "handler-instance"
     )
-    monkeypatch.delenv("HEXGATE_KEY", raising=False)
+    monkeypatch.delenv("HEXGATE_API_KEY", raising=False)
+    monkeypatch.delenv("HEXGATE_KEY", raising=False)  # legacy alias
     monkeypatch.delenv("HEXGATE_LOCAL_POLICY", raising=False)
     monkeypatch.delenv("HEXGATE_BIND_AGENTS", raising=False)
     monkeypatch.delenv("HEXGATE_LOCAL_MODE", raising=False)
@@ -88,7 +89,7 @@ def _patch_platform(monkeypatch: pytest.MonkeyPatch, client: _FakeClient) -> Non
     """
     import hexgate.cloud.client as client_mod
 
-    monkeypatch.setenv("HEXGATE_KEY", "fty_test_demo_dummybiscuit")
+    monkeypatch.setenv("HEXGATE_API_KEY", "fty_test_demo_dummybiscuit")
     monkeypatch.setenv("HEXGATE_BIND_AGENTS", "1")
     monkeypatch.setattr(client_mod, "HexgateClient", lambda config: client)
 
@@ -99,7 +100,7 @@ def _patch_platform(monkeypatch: pytest.MonkeyPatch, client: _FakeClient) -> Non
 
 
 def test_auto_mode_without_governance_env_returns_bare_agent() -> None:
-    """No HEXGATE_KEY / HEXGATE_LOCAL_POLICY → today's bare graph."""
+    """No HEXGATE_API_KEY / HEXGATE_LOCAL_POLICY → today's bare graph."""
     agent, handler = factory.create_agent(
         model="openai:gpt-5.4", tools=[echo], name="support-bot"
     )
@@ -113,7 +114,7 @@ def test_auto_mode_without_name_skips_even_with_key(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Nameless agents have nothing to resolve against — silent skip."""
-    monkeypatch.setenv("HEXGATE_KEY", "fty_test_demo_dummybiscuit")
+    monkeypatch.setenv("HEXGATE_API_KEY", "fty_test_demo_dummybiscuit")
 
     agent, _ = factory.create_agent(model="openai:gpt-5.4", tools=[echo])
 
@@ -124,12 +125,12 @@ def test_auto_mode_without_name_skips_even_with_key(
 def test_auto_mode_bare_key_does_not_bind_without_opt_in(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A HEXGATE_KEY present for some *other* agent must not auto-bind a
+    """A HEXGATE_API_KEY present for some *other* agent must not auto-bind a
     named prototype — that would surprise-404 at construction. The platform
     bind path needs HEXGATE_BIND_AGENTS=1 (or an explicit bind_policy=True)."""
     import hexgate.cloud.client as client_mod
 
-    monkeypatch.setenv("HEXGATE_KEY", "fty_test_demo_dummybiscuit")
+    monkeypatch.setenv("HEXGATE_API_KEY", "fty_test_demo_dummybiscuit")
     monkeypatch.delenv("HEXGATE_BIND_AGENTS", raising=False)
     # The platform must never be contacted — fail hard if a client is built.
     monkeypatch.setattr(
@@ -157,7 +158,7 @@ def test_auto_mode_respects_hexgate_local_mode(
     import hexgate.cloud.client as client_mod
     from hexgate import audit
 
-    monkeypatch.setenv("HEXGATE_KEY", "fty_test_demo_dummybiscuit")
+    monkeypatch.setenv("HEXGATE_API_KEY", "fty_test_demo_dummybiscuit")
     monkeypatch.setenv("HEXGATE_BIND_AGENTS", "1")
     monkeypatch.setenv(audit._LOCAL_MODE_ENV, "1")
     # The platform must never be contacted — fail hard if a client is built.
@@ -205,7 +206,7 @@ def test_bind_policy_false_skips_even_with_key(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The explicit escape hatch for bare graphs in keyed environments."""
-    monkeypatch.setenv("HEXGATE_KEY", "fty_test_demo_dummybiscuit")
+    monkeypatch.setenv("HEXGATE_API_KEY", "fty_test_demo_dummybiscuit")
 
     agent, _ = factory.create_agent(
         model="openai:gpt-5.4", tools=[echo], name="support-bot", bind_policy=False
@@ -228,7 +229,7 @@ def test_bind_policy_true_requires_name() -> None:
 def test_bind_wraps_tools_and_attaches_source_and_client(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Auto mode + HEXGATE_KEY + name → guarded tools, seeded source, client."""
+    """Auto mode + HEXGATE_API_KEY + name → guarded tools, seeded source, client."""
     fc = _FakeClient()
     fc.serve({"policy_yaml": _POLICY_YAML}, etag='"hash-a"')
     _patch_platform(monkeypatch, fc)

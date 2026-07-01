@@ -32,6 +32,7 @@ from langgraph.graph.state import CompiledStateGraph
 from langgraph.store.base import BaseStore
 from pydantic import BaseModel
 
+from hexgate.config.env import resolve_api_key
 from hexgate.runtime import (
     LocalWorkspace,
     ToolUseContext,
@@ -554,7 +555,7 @@ def create_agent(
 
     ``bind_policy``: ``True`` always binds (raises without a name); ``False``
     never binds; ``None`` (auto) binds only on an explicit governance signal —
-    ``HEXGATE_LOCAL_POLICY`` set, or ``HEXGATE_KEY`` **plus**
+    ``HEXGATE_LOCAL_POLICY`` set, or ``HEXGATE_API_KEY`` **plus**
     ``HEXGATE_BIND_AGENTS=1`` (the platform path is opt-in, so a key present
     for another agent can't surprise-404 an unregistered prototype at
     construction). Binding gates the tools and attaches a refresh source, like
@@ -622,11 +623,11 @@ def _should_bind_policy(bind_policy: bool | None, name: str | None) -> bool:
 
     ``True`` always binds; ``False`` never binds. ``None`` (auto) binds only on
     an *explicit* governance signal — never on the mere presence of
-    ``HEXGATE_KEY``:
+    ``HEXGATE_API_KEY``:
 
       * ``HEXGATE_LOCAL_POLICY`` set → bind. A deliberate local override with
         no platform round-trip, so it can't surprise-404 at construction.
-      * ``HEXGATE_KEY`` set **and** ``HEXGATE_BIND_AGENTS`` truthy → bind. The
+      * ``HEXGATE_API_KEY`` set **and** ``HEXGATE_BIND_AGENTS`` truthy → bind. The
         platform path is opt-in: a key present for some *other* agent must not
         silently turn an unregistered ``create_agent(name=...)`` into a
         construction-time 404. Set ``HEXGATE_BIND_AGENTS=1`` to opt in, or pass
@@ -658,9 +659,7 @@ def _should_bind_policy(bind_policy: bool | None, name: str | None) -> bool:
         return True
     from hexgate.security.source import _truthy
 
-    return bool(os.environ.get("HEXGATE_KEY")) and _truthy(
-        os.environ.get("HEXGATE_BIND_AGENTS")
-    )
+    return bool(resolve_api_key()) and _truthy(os.environ.get("HEXGATE_BIND_AGENTS"))
 
 
 def _bind_policy(
@@ -677,7 +676,7 @@ def _bind_policy(
     from hexgate.security.binding import resolve_policy
 
     client = None
-    if os.environ.get("HEXGATE_KEY"):
+    if resolve_api_key():
         from hexgate.cloud.client import HexgateClient, HexgateConfig
 
         client = HexgateClient(HexgateConfig.from_env())

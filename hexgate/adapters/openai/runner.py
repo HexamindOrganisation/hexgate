@@ -8,7 +8,6 @@ enforcer, so a refresh swap reaches every clone.
 """
 
 import asyncio
-import os
 from contextlib import contextmanager
 
 import nest_asyncio
@@ -26,6 +25,7 @@ from langfuse import get_client, propagate_attributes
 from openinference.instrumentation.openai_agents import OpenAIAgentsInstrumentor
 
 from hexgate.adapters.openai.wrapper import wrap_openai_agent
+from hexgate.config.env import resolve_api_key
 from hexgate.runtime import User
 from hexgate.security.binding import PolicyBinding, resolve_policy
 from hexgate.security.enforcer import build_enforcer
@@ -35,10 +35,10 @@ class HexgateRunner:
     """Runner for OpenAI agents with Hexgate tool policy and observability."""
 
     def __init__(self, api_key: str | None = None):
-        self.api_key = api_key or os.getenv("HEXGATE_KEY")
+        self.api_key = resolve_api_key(api_key)
         if self.api_key is None:
             raise ValueError(
-                "HEXGATE_KEY is not set. Pass api_key= explicitly or set HEXGATE_KEY environment variable."
+                "HEXGATE_API_KEY is not set. Pass api_key= explicitly or set the HEXGATE_API_KEY environment variable."
             )
         # Cached per agent name — keeps the ETag memory alive across runs.
         self._bindings: dict[str, PolicyBinding] = {}

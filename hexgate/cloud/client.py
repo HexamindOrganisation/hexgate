@@ -1,6 +1,6 @@
 """HTTP client for the Hexgate control plane.
 
-The client trusts ``HEXGATE_KEY`` only after verifying its Biscuit signature
+The client trusts ``HEXGATE_API_KEY`` only after verifying its Biscuit signature
 against the platform's public key. The public key is resolved in this order:
 
 1. Explicit ``public_key`` arg passed to ``HexgateConfig``.
@@ -29,6 +29,7 @@ from hexgate.cloud.biscuit import (
     parse_envelope,
     verify_biscuit,
 )
+from hexgate.config.env import resolve_api_key
 
 DEFAULT_BASE_URL = "http://localhost:8000"
 DEFAULT_TIMEOUT = 10.0
@@ -90,10 +91,10 @@ class HexgateConfig:
         callers either ask the platform (``GET /v1/me/key``) or display
         a placeholder. URLs never use it any more.
         """
-        key = api_key or os.environ.get("HEXGATE_KEY")
+        key = resolve_api_key(api_key)
         if not key:
             raise HexgateError(
-                "HEXGATE_KEY not set — export it or pass api_key= explicitly"
+                "HEXGATE_API_KEY not set — export it or pass api_key= explicitly"
             )
 
         url = (
@@ -213,7 +214,7 @@ class HexgateClient:
         try:
             _, _, biscuit_b64 = parse_envelope(self.config.api_key)
         except TokenError as exc:
-            raise HexgateError(f"HEXGATE_KEY is malformed: {exc}") from exc
+            raise HexgateError(f"HEXGATE_API_KEY is malformed: {exc}") from exc
 
         pub = self._resolve_public_key()
         try:
@@ -221,7 +222,7 @@ class HexgateClient:
             self._facts = extract_facts(biscuit_b64, pub)
         except TokenSignatureError as exc:
             raise HexgateError(
-                "HEXGATE_KEY signature does not chain to the platform's public key. "
+                "HEXGATE_API_KEY signature does not chain to the platform's public key. "
                 "Either the key is from a different platform, or it has been tampered with."
             ) from exc
         self._verified = True

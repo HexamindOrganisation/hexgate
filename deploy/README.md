@@ -36,7 +36,7 @@ and the loop restarts with the new object; the dashboard picks it up on its next
 | File | Role |
 |------|------|
 | `boot.py` | Process orchestrator: start API → mint token (→ key file) → start marimo → block |
-| `provision.py` | Mints a `HEXGATE_KEY` for the seeded project (shares the container's SQLite + keystore) |
+| `provision.py` | Mints a `HEXGATE_API_KEY` for the seeded project (shares the container's SQLite + keystore) |
 | `serve_manager.py` | Runs the `hexgate serve` loop in-kernel, bound to the live `agent` object; `apply()` on Start |
 | `demo_notebook.py` | The marimo notebook: define tools + agent in real cells, Start, playground link |
 | `smoke_test.py` + `_mock_llm.py` | Full-path smoke test with a mock LLM (`make demo-smoke`) — no real key |

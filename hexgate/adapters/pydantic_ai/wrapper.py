@@ -11,13 +11,13 @@ proxy at the top of every run.
 from __future__ import annotations
 
 import copy
-import os
 
 from pydantic_ai import Agent
 from pydantic_ai.tools import Tool
 
 from hexgate.adapters.pydantic_ai.agent import HexgatePydanticAgent
 from hexgate.adapters.pydantic_ai.tools import wrap_tools
+from hexgate.config.env import resolve_api_key
 from hexgate.security.binding import PolicyBinding, resolve_policy
 from hexgate.security.enforcer import build_enforcer
 
@@ -56,13 +56,13 @@ def wrap_pydantic_agent(
     ``user`` per call; role resolves at call time from the active
     :class:`User`. ``NEEDS_APPROVAL`` raises :class:`ModelRetry` with
     an ``[approval_required]`` marker. ``api_key`` falls back to
-    ``HEXGATE_KEY``. The enforced policy is the platform's; unlisted
+    ``HEXGATE_API_KEY``. The enforced policy is the platform's; unlisted
     tools are denied.
     """
-    resolved_key = api_key or os.getenv("HEXGATE_KEY")
+    resolved_key = resolve_api_key(api_key)
     if not resolved_key:
         raise ValueError(
-            "No API key provided. Pass api_key= explicitly or set HEXGATE_KEY environment variable."
+            "No API key provided. Pass api_key= explicitly or set the HEXGATE_API_KEY environment variable."
         )
 
     agent_name = getattr(agent, "name", None) or "default"

@@ -2,7 +2,7 @@
 
 Run once per container before (or alongside) the API process. Shares the
 container's SQLite file and on-disk keystore with the API, so the minted
-``HEXGATE_KEY`` verifies against the same signing key the API serves with.
+``HEXGATE_API_KEY`` verifies against the same signing key the API serves with.
 
 Everything here is idempotent — ``init_db`` + ``ensure_default_seed`` +
 ``ensure_keypair`` are no-ops on a warm DB, so it's safe to run before
@@ -41,10 +41,10 @@ async def _mint() -> str:
 
 
 def provision_serve_token() -> str:
-    """Return a fresh ``fty_live_...`` HEXGATE_KEY scoped to the seeded project."""
+    """Return a fresh ``fty_live_...`` HEXGATE_API_KEY scoped to the seeded project."""
     return asyncio.run(_mint())
 
 
 if __name__ == "__main__":
-    # Print the token so a shell caller can capture it: HEXGATE_KEY=$(python provision.py)
+    # Print the token so a shell caller can capture it: HEXGATE_API_KEY=$(python provision.py)
     sys.stdout.write(provision_serve_token())

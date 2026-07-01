@@ -132,11 +132,12 @@ def test_build_enforcer_pairs_engine_with_agent_name_and_audit(
     from hexgate.security.enforcer import build_enforcer
     from hexgate.security.policy_set import DEFAULT_ROLE_NAME
 
-    monkeypatch.delenv("HEXGATE_KEY", raising=False)
+    monkeypatch.delenv("HEXGATE_API_KEY", raising=False)
+    monkeypatch.delenv("HEXGATE_KEY", raising=False)  # legacy alias
     engine = PolicySet({DEFAULT_ROLE_NAME: AgentPolicy()})
     enforcer = build_enforcer(engine, agent_name="support-bot")
 
     assert enforcer.policy is engine
     assert enforcer.agent_name == "support-bot"
-    # No api_key + no HEXGATE_KEY → audit inert (configure returns None).
+    # No api_key + no HEXGATE_API_KEY → audit inert (configure returns None).
     assert enforcer._audit_sender is None

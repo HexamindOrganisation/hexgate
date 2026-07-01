@@ -163,5 +163,5 @@ both):
 
 ```bash
 export HEXGATE_API_URL=https://app.hexgate.ai     # or app.staging.hexgate.ai
-export HEXGATE_KEY=fty_live_...                    # token minted in that env's dashboard
+export HEXGATE_API_KEY=fty_live_...                    # token minted in that env's dashboard
 ```

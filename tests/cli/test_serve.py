@@ -432,7 +432,7 @@ def _patched_runtime_deps(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     monkeypatch.setattr(
         "hexgate.tracing.langfuse.get_langfuse_handler", fake_get_handler
     )
-    monkeypatch.setenv("HEXGATE_KEY", "fty_live_test_secret")
+    monkeypatch.setenv("HEXGATE_API_KEY", "fty_live_test_secret")
     return captured
 
 

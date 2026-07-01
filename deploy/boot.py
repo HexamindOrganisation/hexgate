@@ -5,7 +5,7 @@ Starts, in order, in one process tree:
   1. Platform API (uvicorn ``main:app``) on :8000 — its lifespan creates a
      fresh SQLite, seeds one org/user/project/agents, and (with HEXGATE_DEMO=1)
      serves the built dashboard same-origin + exposes /v1/demo-login.
-  2. A minted HEXGATE_KEY for the seeded project (see provision.py).
+  2. A minted HEXGATE_API_KEY for the seeded project (see provision.py).
   3. ``hexgate serve <AGENT_SPEC>`` — dials out to the local API's /v1/serve
      and runs the agent, streaming events back through the relay.
   4. marimo (the notebook UI the visitor lands on) on :2718.
@@ -104,7 +104,7 @@ def start_services(dash_url: str | None = None) -> dict[str, str]:
     from provision import provision_serve_token  # noqa: E402  (path set above)
 
     SERVE_KEY_FILE.write_text(provision_serve_token())
-    print("[boot] minted HEXGATE_KEY for seeded project", flush=True)
+    print("[boot] minted HEXGATE_API_KEY for seeded project", flush=True)
     # serve itself runs in the notebook kernel (serve_manager), bound to the
     # live agent object. boot only hands it the key (file) + HEXGATE_API_URL (env).
     return env

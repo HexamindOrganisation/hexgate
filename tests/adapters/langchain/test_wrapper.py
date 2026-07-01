@@ -87,7 +87,7 @@ def test_wrap_returns_hexgate_proxy_with_supplied_tool_names(
 def test_wrap_falls_back_to_env_var(
     monkeypatch: pytest.MonkeyPatch, resolved: dict[str, Any]
 ) -> None:
-    monkeypatch.setenv("HEXGATE_KEY", "from-env")
+    monkeypatch.setenv("HEXGATE_API_KEY", "from-env")
 
     wrapped = wrap_langchain_agent(agent=_FakeCompiledGraph(), tools=[])
 
@@ -97,7 +97,7 @@ def test_wrap_falls_back_to_env_var(
 def test_wrap_prefers_explicit_api_key_over_env(
     monkeypatch: pytest.MonkeyPatch, resolved: dict[str, Any]
 ) -> None:
-    monkeypatch.setenv("HEXGATE_KEY", "from-env")
+    monkeypatch.setenv("HEXGATE_API_KEY", "from-env")
 
     wrapped = wrap_langchain_agent(
         agent=_FakeCompiledGraph(), tools=[], api_key="explicit"
@@ -109,7 +109,8 @@ def test_wrap_prefers_explicit_api_key_over_env(
 def test_wrap_raises_when_no_api_key_available(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.delenv("HEXGATE_KEY", raising=False)
+    monkeypatch.delenv("HEXGATE_API_KEY", raising=False)
+    monkeypatch.delenv("HEXGATE_KEY", raising=False)  # legacy alias
 
     with pytest.raises(ValueError, match="No API key provided"):
         wrap_langchain_agent(agent=_FakeCompiledGraph(), tools=[])
@@ -118,7 +119,7 @@ def test_wrap_raises_when_no_api_key_available(
 def test_wrap_treats_empty_api_key_string_as_missing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("HEXGATE_KEY", "")
+    monkeypatch.setenv("HEXGATE_API_KEY", "")
 
     with pytest.raises(ValueError, match="No API key provided"):
         wrap_langchain_agent(agent=_FakeCompiledGraph(), tools=[], api_key="")

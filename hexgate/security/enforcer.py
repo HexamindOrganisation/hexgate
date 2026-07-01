@@ -124,7 +124,7 @@ def build_enforcer(
     The one place that pairs an engine with its audit sink, so the six
     surfaces (``HexgateAgent.enforce_policy``, the four adapters, the
     OpenAI runner) don't each repeat the ``audit.configure`` wiring.
-    ``api_key=None`` falls back to ``HEXGATE_KEY`` (audit stays inert when
+    ``api_key=None`` falls back to ``HEXGATE_API_KEY`` (audit stays inert when
     neither resolves). ``decision_observer`` threads the local-process
     decision hook (see :class:`PolicyEnforcer`); ``None`` is silent.
     """
