@@ -39,6 +39,11 @@ dependencies = [
     "openinference-instrumentation-google-adk>=0.1.11",
     "pydantic-ai-slim>=1.88.0",
     "wasmtime>=20.0",
+    # MCP (Model Context Protocol) — hexgate.mcp wraps third-party MCP
+    # servers as guarded BaseTools so they go through the same policy
+    # enforcement as @agent_tool functions. Was a transitive dep
+    # already; pinned explicitly now since we import from it directly.
+    "mcp>=1.0",
 ]
 
 [project.scripts]

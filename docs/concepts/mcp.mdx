@@ -1,0 +1,73 @@
+---
+title: "MCP servers (proxy)"
+description: "Auto-wrap third-party Model Context Protocol servers as policy-enforced tools."
+---
+
+<Note>
+**Page stub.** Full content lives in the
+[README — MCP servers](https://github.com/HexamindOrganisation/hexgate#-mcp-servers-proxy).
+</Note>
+
+Hexgate's `hexgate.mcp` module wraps any [MCP](https://modelcontextprotocol.io) server as a set of LangChain `BaseTool` objects so they go through the same policy enforcement, audit, and approval flow as native `@agent_tool` functions. Zero glue code: connect the server, every tool it exposes auto-registers under a `mcp-<server>-<tool>` namespace.
+
+## Usage
+
+```python
+from hexgate import create_agent, enforce_policy
+from hexgate.mcp import MCPServerConfig, MCPToolset
+
+slack = MCPServerConfig(
+    name="slack", transport="stdio",
+    command="slack-mcp-server",
+    env={"SLACK_TOKEN": "..."},
+)
+
+async with MCPToolset(slack) as mcp:
+    agent, handler = create_agent(model="gpt-5.4", tools=mcp.tools)
+    agent = enforce_policy(agent, "policy.yaml")
+    await agent.ainvoke({"messages": [...]}, config={"configurable": {}})
+```
+
+## Tool naming
+
+Qualified name format: `mcp-<server>-<tool>`. Hyphens (not colons or
+dots) so the name passes OpenAI Function Calling's regex
+`^[a-zA-Z0-9_-]{1,64}$`. The server name is caller-supplied and
+validated against `^[a-z0-9-]{1,32}$` so qualified names stay under the
+64-char OpenAI limit even for medium-long MCP tool names.
+
+Reference MCP tools in `policy.yaml` by their qualified names:
+
+```yaml
+roles:
+  default:
+    tools:
+      "mcp-slack-list_channels": { mode: allow }
+      "mcp-slack-send_message":
+        mode: approval_required
+      "mcp-github-create_issue":
+        mode: allow
+        constraints: ["args.repo == 'hexgate'"]
+```
+
+## Try it
+
+```bash
+make demo-mcp
+```
+
+Runs [`examples/mcp_demo.py`](https://github.com/HexamindOrganisation/hexgate/blob/main/examples/mcp_demo.py) — one self-contained Python file that spawns a tiny FastMCP server, attaches it via `MCPToolset`, and walks through one call per policy outcome (allow / deny / approval-required). No external services, no LLM key required.
+
+## What hexgate does NOT do (yet)
+
+- **Catalog threat scanning** — typosquatting and prompt-injection
+  pattern detection on tool descriptions at registration time. Tracked
+  as a follow-up (mirrors Microsoft AGT's `McpSecurityScanner`).
+- **Response-side gating** — gating based on the return value of an
+  MCP call. Today only the invocation is gated; returned content is
+  passed through to the model.
+- **Reconnection** — a dropped transport surfaces as a tool-call
+  error; the toolset doesn't auto-reconnect.
+- **Declarative `mcp_servers:` block in `agent.yaml`** — programmatic
+  attachment via `MCPToolset(...)` only for v1. Yaml wiring is the
+  next PR.

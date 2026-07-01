@@ -106,6 +106,10 @@ policy-test-wasm: ## Smoke a wasm-engine decision on the example policy
 	$(UV) hexgate policy test examples/example_agent/policy.yaml \
 	    --role default --tool web_search --args '{}' --engine wasm
 
+.PHONY: demo-mcp
+demo-mcp: ## Run the MCP-proxy demo (self-contained, no external services or LLM key)
+	$(UV) python examples/mcp_demo.py
+
 .PHONY: demo-override
 demo-override: ## Build a deny-everything bundle + chat with HEXGATE_LOCAL_POLICY set
 	@echo "→ Writing a deny-everything override policy…"

@@ -406,6 +406,46 @@ from hexgate import (
 )
 ```
 
+## 🔌 MCP servers (proxy)
+
+`hexgate.mcp` wraps any [Model Context Protocol](https://modelcontextprotocol.io) server as a set of LangChain tools that flow through the same policy enforcement, audit, and approval pipeline as native `@agent_tool` functions. Zero glue code — `tools/list` runs at connect time and each exposed tool auto-registers under a `mcp-<server>-<tool>` namespace.
+
+```python
+from hexgate import create_agent, enforce_policy
+from hexgate.mcp import MCPServerConfig, MCPToolset
+
+slack = MCPServerConfig(
+    name="slack", transport="stdio",
+    command="slack-mcp-server",
+    env={"SLACK_TOKEN": "..."},
+)
+
+async with MCPToolset(slack) as mcp:
+    agent, handler = create_agent(model="gpt-5.4", tools=mcp.tools)
+    agent = enforce_policy(agent, "policy.yaml")
+    await agent.ainvoke({"messages": [...]}, config={"configurable": {}})
+```
+
+Then in `policy.yaml` reference the MCP tools by qualified name:
+
+```yaml
+roles:
+  default:
+    tools:
+      "mcp-slack-list_channels": { mode: allow }
+      "mcp-slack-send_message":
+        mode: approval_required
+      "mcp-github-create_issue":
+        mode: allow
+        constraints: ["args.repo == 'hexgate'"]
+```
+
+Hyphens (not colons or dots) because OpenAI Function Calling rejects other separators. Server names must match `^[a-z0-9-]{1,32}$` so qualified names stay under OpenAI's 64-char tool-name limit.
+
+Both transports are supported: **stdio** (`command` + `args` + `env` for subprocess MCP servers) and **streamable HTTP** (`url` + `headers` for remote endpoints). The toolset is an async context manager — opening connects + lists every server's catalog; closing tears down transports symmetrically (with cleanup on partial-open failures).
+
+**Try it:** `make demo-mcp` runs `examples/mcp_demo.py` — one self-contained file that spawns a tiny FastMCP server, attaches it, and walks through one tool call per policy outcome (allow / deny / approval-required). No external services, no LLM key.
+
 ## 🤝 Framework Agent Wrapping
 
 In addition to its native `create_agent(...)` runtime, `hexgate` ships adapters that wrap agents built with **OpenAI Agents SDK**, **LangChain / LangGraph**, **Google ADK**, or **Pydantic AI** to add two things without touching the agent's logic:
