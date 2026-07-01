@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useAgentParam, useAutoSelectFirstAgent } from "@/lib/agent_param";
+import { useAgentSelection } from "@/lib/agent_param";
 import {
   AlertTriangle,
   Bot,
@@ -46,23 +46,14 @@ export function PoliciesPage() {
   });
   // ?agent= drives selection so navigating /agents?agent=X → click
   // "edit policy →" → land on /policies with the SAME X preselected.
-  // The stale-value + auto-select-first fallback lives in the hook.
-  const agentNames = useMemo(
-    () => (agents.data ?? []).map((a) => a.name),
-    [agents.data],
+  // resetOn=projectId clears the URL on a real project switch, but
+  // NOT on the initial mount — so incoming ?agent= from a link is
+  // preserved.
+  const { selected: selectedAgent, set: setSelectedAgent } = useAgentSelection(
+    agents.data,
+    { resetOn: scope.projectId },
   );
-  const agentParam = useAgentParam(agentNames);
-  const selectedAgent = agentParam.selected;
-  useAutoSelectFirstAgent(agentParam, agentNames);
   const [tab, setTab] = useState<Tab>("yaml");
-
-  // Wipe the selection on project switch — the previous project's
-  // agents don't exist over here, and useAgentParam's stale-check
-  // would leave the picker "empty selected" until a new pick.
-  useEffect(() => {
-    agentParam.clear();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [scope.projectId]);
 
   if (scope.status === "no-project") {
     return <NoProjectEmptyState resource="policies" />;
@@ -78,7 +69,7 @@ export function PoliciesPage() {
           <AgentPicker
             agents={agents.data ?? []}
             value={selectedAgent}
-            onChange={(name) => agentParam.set(name)}
+            onChange={setSelectedAgent}
             loading={agents.isLoading}
           />
         </div>

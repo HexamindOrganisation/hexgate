@@ -16,7 +16,6 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { NoProjectEmptyState } from "@/components/NoProjectEmptyState";
 import { useProjectScoped } from "@/lib/active";
 import { cn } from "@/lib/utils";
 
@@ -31,13 +30,16 @@ import { cn } from "@/lib/utils";
  * When each section ships, replace its ``Coming soon`` badge with
  * the real form. Keep the card + description as-is — they double as
  * inline documentation next to the controls.
+ *
+ * The roadmap cards render regardless of project scope — an org-owner
+ * with no projects yet still needs to see what's coming. A subtle
+ * "select a project to configure" banner appears when scope isn't
+ * resolved, so the empty state doesn't lie about interactivity.
  */
 export function SettingsPage() {
   const scope = useProjectScoped();
-
-  if (scope.status === "no-project") {
-    return <NoProjectEmptyState resource="settings" />;
-  }
+  const projectResolved =
+    scope.status === "ready" || scope.status === "loading";
 
   return (
     <div className="max-w-3xl mx-auto space-y-6">
@@ -48,6 +50,13 @@ export function SettingsPage() {
           this project.
         </p>
       </header>
+
+      {!projectResolved && (
+        <div className="rounded-md border border-border bg-muted/40 px-4 py-3 text-sm text-muted-foreground">
+          Select or create a project from the switcher above to configure it.
+          The roadmap below applies to every project.
+        </div>
+      )}
 
       {SECTIONS.map((section) => (
         <SectionCard key={section.title} {...section} />

@@ -1,16 +1,20 @@
 /**
- * Tests for the ``useAgentParam`` + ``useAutoSelectFirstAgent`` pair
- * that back ``?agent=`` selection sync across /agents and /policies.
+ * Tests for ``useAgentSelection`` — the single hook that backs
+ * ?agent= sync across /agents and /policies.
  *
- * The invariants:
- *   1. On mount, ``selected`` reflects the ?agent= param IF it matches
- *      a known agent (otherwise null — stale URL stays inert).
- *   2. ``set(name)`` writes ?agent= via ``replace`` (no back-button
- *      trail for picker changes).
- *   3. ``clear()`` removes ?agent= entirely (project-switch reset).
- *   4. When ``selected`` is null and knownNames is non-empty,
- *      ``useAutoSelectFirstAgent`` runs ``set(names[0])`` exactly once
- *      per (names identity) change — no loops.
+ * The invariants this file pins (many learned in review after the
+ * first draft broke every one of them):
+ *
+ *   1. ?agent= from the URL is preserved on first render, even while
+ *      the agents query is still loading (knownNames=undefined).
+ *   2. When the URL points at a stale/renamed agent, ``selected``
+ *      falls back to the first known name — but the URL is NEVER
+ *      auto-rewritten (bookmarks stay shareable, ``fromUrl`` flags
+ *      the divergence so callers can surface a banner).
+ *   3. ``set()`` writes ?agent= with replace, no back-button pollution.
+ *   4. ``resetOn`` only clears on real transitions — a stable value
+ *      across renders does NOT wipe an incoming URL param at mount.
+ *   5. ``resetOn`` = undefined opts out of reset entirely.
  */
 
 import { act, renderHook } from "@testing-library/react";
@@ -18,7 +22,7 @@ import type { JSX, ReactNode } from "react";
 import { MemoryRouter, useLocation } from "react-router-dom";
 import { describe, expect, it } from "vitest";
 
-import { useAgentParam, useAutoSelectFirstAgent } from "./agent_param";
+import { useAgentSelection } from "./agent_param";
 
 function wrapperAt(initialUrl: string) {
   return ({ children }: { children: ReactNode }): JSX.Element => (
@@ -26,127 +30,186 @@ function wrapperAt(initialUrl: string) {
   );
 }
 
-describe("useAgentParam", () => {
+const AGENTS = (...names: string[]) => names.map((name) => ({ name }));
+
+describe("useAgentSelection — URL is source of truth", () => {
   it("returns the ?agent= value when it matches a known name", () => {
-    const { result } = renderHook(() => useAgentParam(["alpha", "beta"]), {
+    const { result } = renderHook(
+      () => useAgentSelection(AGENTS("alpha", "beta")),
+      { wrapper: wrapperAt("/policies?agent=beta") },
+    );
+    expect(result.current.selected).toBe("beta");
+    expect(result.current.fromUrl).toBe(true);
+  });
+
+  it("preserves ?agent= on first render while agents are still loading", () => {
+    // Regression for the loading-race bug: previously, knownNames=[]
+    // during the query's first tick made ``[].includes("beta")`` false,
+    // dropping the URL value on the floor. Passing undefined here
+    // simulates the pre-fetch state; the URL value must ride through.
+    const { result } = renderHook(() => useAgentSelection(undefined), {
       wrapper: wrapperAt("/policies?agent=beta"),
     });
     expect(result.current.selected).toBe("beta");
+    expect(result.current.fromUrl).toBe(true);
+  });
+});
+
+describe("useAgentSelection — stale/missing URL falls back without rewriting", () => {
+  it("falls back to the first known name when ?agent= doesn't match", () => {
+    // Bookmark to a renamed / deleted agent. ``selected`` must produce
+    // SOMETHING so the picker isn't blank, but ``fromUrl=false`` tells
+    // the caller "this isn't what the URL asked for."
+    const { result } = renderHook(
+      () => useAgentSelection(AGENTS("alpha", "beta")),
+      { wrapper: wrapperAt("/policies?agent=gone") },
+    );
+    expect(result.current.selected).toBe("alpha");
+    expect(result.current.fromUrl).toBe(false);
   });
 
-  it("returns null when ?agent= doesn't match any known name", () => {
-    // Stale URL from a deleted / renamed agent must NOT leave the
-    // picker in a "selected but not in the dropdown" broken state.
-    const { result } = renderHook(() => useAgentParam(["alpha", "beta"]), {
-      wrapper: wrapperAt("/policies?agent=gone"),
+  it("does NOT auto-rewrite the URL on stale-fallback", () => {
+    // Regression for the "silent-misroute-on-share" bug: previously,
+    // useAutoSelectFirstAgent called set() on any mismatch, replacing
+    // ?agent=support_bot (renamed) with ?agent=alpha_agent — so
+    // sharing the URL from the address bar sent colleagues to the
+    // wrong agent. The stale URL must remain visible.
+    const { result } = renderHook(
+      () => {
+        const sel = useAgentSelection(AGENTS("alpha", "beta"));
+        const location = useLocation();
+        return { sel, location };
+      },
+      { wrapper: wrapperAt("/policies?agent=gone") },
+    );
+    expect(result.current.location.search).toBe("?agent=gone");
+  });
+
+  it("falls back to first agent when no ?agent= param is set", () => {
+    const { result } = renderHook(
+      () => useAgentSelection(AGENTS("alpha", "beta")),
+      { wrapper: wrapperAt("/policies") },
+    );
+    expect(result.current.selected).toBe("alpha");
+    expect(result.current.fromUrl).toBe(false);
+  });
+
+  it("returns null when no agents are known and URL is unset", () => {
+    const { result } = renderHook(() => useAgentSelection(AGENTS()), {
+      wrapper: wrapperAt("/policies"),
     });
     expect(result.current.selected).toBeNull();
+    expect(result.current.fromUrl).toBe(false);
   });
 
-  it("returns null when ?agent= is absent", () => {
-    const { result } = renderHook(() => useAgentParam(["alpha"]), {
+  it("returns null when the agents query hasn't returned yet AND URL is unset", () => {
+    // Nothing to select from + nothing on the URL → null is honest,
+    // don't invent a value.
+    const { result } = renderHook(() => useAgentSelection(undefined), {
       wrapper: wrapperAt("/policies"),
     });
     expect(result.current.selected).toBeNull();
   });
+});
 
-  it("returns null when knownNames is undefined (still loading)", () => {
-    const { result } = renderHook(() => useAgentParam(undefined), {
-      wrapper: wrapperAt("/policies?agent=beta"),
-    });
-    // Guard against exposing an agent name we can't validate yet —
-    // the picker will render "loading" instead of a broken selection.
-    expect(result.current.selected).toBeNull();
-  });
-
-  it("set() writes the param without pushing history", () => {
-    // Wrap our hook + a location observer so we can assert both the
-    // param update AND that the entry count didn't grow (replace, not
-    // push — picker clicks shouldn't pollute the back-button trail).
+describe("useAgentSelection — set() writes to URL", () => {
+  it("set() writes ?agent= without pushing a history entry", () => {
     const { result } = renderHook(
       () => {
-        const agent = useAgentParam(["alpha", "beta"]);
+        const sel = useAgentSelection(AGENTS("alpha", "beta"));
         const location = useLocation();
-        return { agent, location };
+        return { sel, location };
       },
       { wrapper: wrapperAt("/policies") },
     );
-
-    expect(result.current.location.pathname).toBe("/policies");
     act(() => {
-      result.current.agent.set("beta");
+      result.current.sel.set("beta");
     });
     expect(result.current.location.search).toBe("?agent=beta");
-    expect(result.current.agent.selected).toBe("beta");
-  });
-
-  it("clear() removes the param", () => {
-    const { result } = renderHook(() => useAgentParam(["alpha", "beta"]), {
-      wrapper: wrapperAt("/policies?agent=beta&keep=1"),
-    });
-    expect(result.current.selected).toBe("beta");
-    act(() => {
-      result.current.clear();
-    });
-    expect(result.current.selected).toBeNull();
+    expect(result.current.sel.selected).toBe("beta");
+    expect(result.current.sel.fromUrl).toBe(true);
   });
 
   it("set() preserves other query params", () => {
-    // A future route may add e.g. ?tab=graph — set/clear on agent
-    // must not stomp unrelated keys.
+    // A future route may add e.g. ?tab=graph — set/reset on agent must
+    // not stomp unrelated keys.
     const { result } = renderHook(
       () => {
-        const agent = useAgentParam(["alpha", "beta"]);
+        const sel = useAgentSelection(AGENTS("alpha", "beta"));
         const location = useLocation();
-        return { agent, location };
+        return { sel, location };
       },
       { wrapper: wrapperAt("/policies?tab=graph") },
     );
     act(() => {
-      result.current.agent.set("alpha");
+      result.current.sel.set("alpha");
     });
     expect(result.current.location.search).toContain("tab=graph");
     expect(result.current.location.search).toContain("agent=alpha");
   });
 });
 
-describe("useAutoSelectFirstAgent", () => {
-  it("selects the first name when nothing is selected", () => {
+describe("useAgentSelection — resetOn", () => {
+  it("does NOT clear the URL on the initial mount, even when resetOn is set", () => {
+    // Regression for the mount-clear bug that stomped every incoming
+    // ?agent= on load — the ref must snapshot the initial resetOn
+    // value and only clear on a real transition later.
     const { result } = renderHook(
-      () => {
-        const agent = useAgentParam(["alpha", "beta"]);
-        useAutoSelectFirstAgent(agent, ["alpha", "beta"]);
-        return agent;
+      ({ project }: { project: string }) => {
+        const sel = useAgentSelection(AGENTS("alpha", "beta"), {
+          resetOn: project,
+        });
+        const location = useLocation();
+        return { sel, location };
       },
-      { wrapper: wrapperAt("/policies") },
+      {
+        initialProps: { project: "proj-1" },
+        wrapper: wrapperAt("/policies?agent=beta"),
+      },
     );
-    // Effect runs after mount → selection settles on the first name.
-    expect(result.current.selected).toBe("alpha");
+    expect(result.current.location.search).toBe("?agent=beta");
+    expect(result.current.sel.selected).toBe("beta");
   });
 
-  it("does NOT override an existing selection", () => {
-    // Landing on /policies?agent=beta must keep beta, not replace it
-    // with alpha (the auto-select was for the "empty state" case only).
-    const { result } = renderHook(
+  it("clears the URL when resetOn transitions to a different value", () => {
+    const { result, rerender } = renderHook(
+      ({ project }: { project: string }) => {
+        const sel = useAgentSelection(AGENTS("alpha", "beta"), {
+          resetOn: project,
+        });
+        const location = useLocation();
+        return { sel, location };
+      },
+      {
+        initialProps: { project: "proj-1" },
+        wrapper: wrapperAt("/policies?agent=beta"),
+      },
+    );
+
+    // Sanity: URL preserved on mount.
+    expect(result.current.location.search).toBe("?agent=beta");
+
+    // Project switch → agent param cleared (the previous project's
+    // agent name means nothing here).
+    rerender({ project: "proj-2" });
+    expect(result.current.location.search).not.toContain("agent=beta");
+    // First-agent fallback kicked in — no user-visible "empty" state.
+    expect(result.current.sel.selected).toBe("alpha");
+    expect(result.current.sel.fromUrl).toBe(false);
+  });
+
+  it("resetOn=undefined opts out of clearing entirely", () => {
+    // Routes with no project scope don't want the URL wiped ever.
+    const { result, rerender } = renderHook(
       () => {
-        const agent = useAgentParam(["alpha", "beta"]);
-        useAutoSelectFirstAgent(agent, ["alpha", "beta"]);
-        return agent;
+        const sel = useAgentSelection(AGENTS("alpha", "beta"));
+        const location = useLocation();
+        return { sel, location };
       },
       { wrapper: wrapperAt("/policies?agent=beta") },
     );
-    expect(result.current.selected).toBe("beta");
-  });
-
-  it("no-ops when knownNames is empty", () => {
-    const { result } = renderHook(
-      () => {
-        const agent = useAgentParam([]);
-        useAutoSelectFirstAgent(agent, []);
-        return agent;
-      },
-      { wrapper: wrapperAt("/policies") },
-    );
-    expect(result.current.selected).toBeNull();
+    rerender();
+    rerender();
+    expect(result.current.location.search).toBe("?agent=beta");
   });
 });

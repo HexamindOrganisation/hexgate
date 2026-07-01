@@ -1,6 +1,5 @@
-import { useEffect, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { useAgentParam, useAutoSelectFirstAgent } from "@/lib/agent_param";
+import { useAgentSelection } from "@/lib/agent_param";
 import { Bot, FileText, ShieldCheck, Wrench } from "lucide-react";
 import { Link } from "react-router-dom";
 import {
@@ -33,22 +32,15 @@ export function AgentsPage() {
     enabled: !!scope.projectId,
   });
   // ?agent= drives selection so a link from /policies (or a shared URL
-  // /agents?agent=support_bot) lands on the right agent. Auto-select-
-  // first fallback lives in the shared hook.
-  const manifestNames = useMemo(
-    () => (manifests.data ?? []).map((m) => m.name),
-    [manifests.data],
+  // /agents?agent=support_bot) lands on the right agent. Falls back to
+  // the first agent when the URL is unset or references a stale name.
+  // resetOn=projectId means the URL clears on a real project change,
+  // but NOT on the initial mount — so /agents?agent=beta from an
+  // incoming link isn't stomped before the user sees it.
+  const { selected: selectedName, set: setSelected } = useAgentSelection(
+    manifests.data,
+    { resetOn: scope.projectId },
   );
-  const agentParam = useAgentParam(manifestNames);
-  const selectedName = agentParam.selected;
-  useAutoSelectFirstAgent(agentParam, manifestNames);
-
-  // Switching projects clears the selected agent — the previous
-  // project's agent names mean nothing in the new project.
-  useEffect(() => {
-    agentParam.clear();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [scope.projectId]);
 
   const active = manifests.data?.find((m) => m.name === selectedName);
 
@@ -64,7 +56,7 @@ export function AgentsPage() {
         <AgentPicker
           agents={manifests.data ?? []}
           value={selectedName}
-          onChange={(name) => agentParam.set(name)}
+          onChange={setSelected}
           loading={manifests.isLoading}
         />
         <div className="flex-1" />
