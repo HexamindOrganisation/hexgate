@@ -19,7 +19,7 @@ from uuid import UUID, uuid4
 
 import httpx
 
-from hexgate.config.env import API_URL_ENV, DEFAULT_API_URL, resolve_api_key
+from hexgate.config.env import resolve_api_key, resolve_api_url
 
 if TYPE_CHECKING:
     # Annotation-only: Decision is used solely as a type hint below, so it stays
@@ -346,9 +346,9 @@ def configure(
     existing = _senders.get(resolved_key)
     if existing is not None:
         return existing
-    resolved_url = base_url or os.environ.get(API_URL_ENV, DEFAULT_API_URL)
+    resolved_url = resolve_api_url(base_url)
     sender = AuditSender(
-        endpoint=f"{resolved_url.rstrip('/')}{_AUDIT_PATH}",
+        endpoint=f"{resolved_url}{_AUDIT_PATH}",
         api_key=resolved_key,
     )
     _senders[resolved_key] = sender

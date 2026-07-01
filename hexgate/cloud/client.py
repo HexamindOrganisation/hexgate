@@ -29,7 +29,7 @@ from hexgate.cloud.biscuit import (
     parse_envelope,
     verify_biscuit,
 )
-from hexgate.config.env import API_URL_ENV, DEFAULT_API_URL, resolve_api_key
+from hexgate.config.env import resolve_api_key, resolve_api_url
 
 DEFAULT_TIMEOUT = 10.0
 # Tight timeout for the conditional-GET hot path (refresh_policy runs at
@@ -96,7 +96,7 @@ class HexgateConfig:
                 "HEXGATE_API_KEY not set — export it or pass api_key= explicitly"
             )
 
-        url = (base_url or os.environ.get(API_URL_ENV) or DEFAULT_API_URL).rstrip("/")
+        url = resolve_api_url(base_url)
 
         # Display-only — never raises. A key whose envelope doesn't carry
         # the project prefix is still usable; we just won't be able to

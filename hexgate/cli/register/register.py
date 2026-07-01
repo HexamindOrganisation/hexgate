@@ -1,13 +1,12 @@
 from __future__ import annotations
 
 import json
-import os
 from typing import TYPE_CHECKING
 from urllib import error, request
 
 from hexgate.cli.register.manifest import create_manifest
 from hexgate.cli.register.models import AgentManifest, AgentType
-from hexgate.config.env import API_URL_ENV, DEFAULT_API_URL, resolve_api_key
+from hexgate.config.env import resolve_api_key, resolve_api_url
 
 if TYPE_CHECKING:
     from langchain_core.tools import BaseTool
@@ -27,7 +26,7 @@ def post_manifest(
     api_key = resolve_api_key()
     if api_key is None:
         raise ValueError("HEXGATE_API_KEY must be set")
-    api_url = os.environ.get(API_URL_ENV, DEFAULT_API_URL)
+    api_url = resolve_api_url()
 
     payload = json.dumps({"manifest": manifest.model_dump()}).encode("utf-8")
     req = request.Request(
