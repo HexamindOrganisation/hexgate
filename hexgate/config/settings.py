@@ -9,11 +9,13 @@ from dataclasses import dataclass
 
 @dataclass(slots=True)
 class Settings:
-    """Runtime settings loaded from environment."""
+    """Runtime settings loaded from environment.
 
-    openai_api_key: str | None
-    linkup_api_key: str | None
-    tavily_api_key: str | None
+    Provider credentials (OpenAI / Linkup / Tavily) are intentionally absent:
+    each is consumed lazily by the tool or model provider that reads it
+    straight from the environment, and is only required if that piece runs.
+    """
+
     langfuse_public_key: str | None
     langfuse_secret_key: str | None
     langfuse_host: str
@@ -24,9 +26,6 @@ class Settings:
     def from_env(cls) -> "Settings":
         """Create settings from process environment."""
         return cls(
-            openai_api_key=os.getenv("OPENAI_API_KEY"),
-            linkup_api_key=os.getenv("LINKUP_API_KEY"),
-            tavily_api_key=os.getenv("TAVILY_API_KEY"),
             langfuse_public_key=os.getenv("LANGFUSE_PUBLIC_KEY"),
             langfuse_secret_key=os.getenv("LANGFUSE_SECRET_KEY"),
             langfuse_host=os.getenv("LANGFUSE_HOST", "https://cloud.langfuse.com"),

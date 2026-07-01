@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import importlib
 import importlib.util
+import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -37,6 +38,36 @@ class AgentRuntime:
     agent_source: str
     model: str
     tools_by_name: dict[str, object]
+
+
+# Built-in tools that build_runtime wires into every agent, and the env var
+# each reads at call time. Keys are optional (the tools raise a clear error
+# when actually invoked), so a missing one is a startup *warning*, not a fail.
+_TOOL_ENV_KEYS = {"web_search": "LINKUP_API_KEY", "fetch": "TAVILY_API_KEY"}
+
+
+def _warn_missing_tool_keys(tools: list[Any]) -> None:
+    """Warn at startup when a wired-in tool's API key is unset.
+
+    ``build_runtime`` adds web_search/fetch to every agent, but their keys are
+    read only when the model calls the tool — so a missing key would otherwise
+    surface mid-conversation (and get paraphrased by the LLM). Surfacing it up
+    front restores discoverability without hard-failing a session that never
+    invokes the tool."""
+    missing = [
+        (t.name, _TOOL_ENV_KEYS[t.name])
+        for t in tools
+        if getattr(t, "name", None) in _TOOL_ENV_KEYS
+        and not os.environ.get(_TOOL_ENV_KEYS[t.name])
+    ]
+    if not missing:
+        return
+    console = Console(stderr=True)
+    for tool_name, env_key in missing:
+        console.print(
+            f"[yellow]⚠ {env_key} is unset — the built-in '{tool_name}' tool "
+            f"will error if the agent calls it.[/]"
+        )
 
 
 def build_runtime(
@@ -87,6 +118,7 @@ def build_runtime(
         )
 
     tools = [web_search, fetch]
+    _warn_missing_tool_keys(tools)
     resolved_model = model or settings.model
     agent, handler = load_agent(
         agent_name,

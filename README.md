@@ -107,11 +107,11 @@ cp .env.sample .env
 hexgate chat --agent example_agent
 ```
 
-Keys the built-in example agent uses (bootstrap no longer hard-requires them — each is only needed if you actually invoke the piece that reads it, which raises a clear error at that point):
+Keys the built-in example agent uses (bootstrap no longer hard-requires them — each is only needed if you invoke the piece that reads it):
 
-- `OPENAI_API_KEY` — the default `openai:gpt-5.4` model (skip it if you pass your own model)
-- `LINKUP_API_KEY` — the built-in `web_search` tool
-- `TAVILY_API_KEY` — the built-in `fetch` tool
+- `OPENAI_API_KEY` — the default `openai:gpt-5.4` model. Skip it if you pass your own model; if it's missing, the model provider raises a key-named error when the agent is built.
+- `LINKUP_API_KEY` — the built-in `web_search` tool, which raises a clear error the first time it runs without a key.
+- `TAVILY_API_KEY` — the built-in `fetch` tool, same as above.
 
 Run `hexgate --help` to see all subcommands (`chat`, `serve`, `register`), and `hexgate <subcommand> --help` for the flags each one accepts.
 
@@ -1066,7 +1066,7 @@ Worth being explicit about the gaps so operators know where to layer their own c
 
 ## 🔧 Environment
 
-Copy `.env.sample` to `.env`. None of these are required to boot — set the ones whose feature you use (each raises a clear error at use-time if missing):
+Copy `.env.sample` to `.env`. None of these are required to boot — set the ones whose feature you use. A missing key surfaces when that feature runs: the built-in tools raise their own clear error at call time, and the model provider raises a key-named error when the agent is built.
 
 - `OPENAI_API_KEY` — default model
 - `LINKUP_API_KEY` — built-in `web_search` tool

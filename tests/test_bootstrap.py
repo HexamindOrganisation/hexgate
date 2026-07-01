@@ -58,9 +58,6 @@ def test_bootstrap_loads_requested_env_file(monkeypatch: pytest.MonkeyPatch) -> 
     settings = bootstrap.bootstrap("test.env")
 
     assert seen["path"] == Path(bootstrap.__file__).parent.parent / "test.env"
-    assert settings.openai_api_key == "openai-key"
-    assert settings.linkup_api_key == "linkup-key"
-    assert settings.tavily_api_key == "tavily-key"
     assert settings.langfuse_public_key == "public-key"
     assert settings.langfuse_secret_key == "secret-key"
 
