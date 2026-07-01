@@ -26,36 +26,14 @@ def test_from_env_reads_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     assert settings.search_engine == "linkup"
 
 
-def test_validate_required_keys_raises_for_missing_keys() -> None:
-    """Raise a helpful error when required keys are missing."""
-    settings = Settings(
-        openai_api_key=None,
-        linkup_api_key=None,
-        tavily_api_key=None,
-        langfuse_public_key=None,
-        langfuse_secret_key=None,
-        langfuse_host="https://cloud.langfuse.com",
-        model="openai:gpt-5.4",
-        search_engine="linkup",
-    )
+def test_from_env_leaves_unset_keys_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Missing provider keys resolve to None — bootstrap never hard-fails on
+    them; the tool or model provider raises at use-time instead."""
+    for key in ("OPENAI_API_KEY", "LINKUP_API_KEY", "TAVILY_API_KEY"):
+        monkeypatch.delenv(key, raising=False)
 
-    with pytest.raises(
-        RuntimeError, match="OPENAI_API_KEY, LINKUP_API_KEY, TAVILY_API_KEY"
-    ):
-        settings.validate_required_keys()
+    settings = Settings.from_env()
 
-
-def test_validate_required_keys_accepts_present_keys() -> None:
-    """Allow valid settings through without raising."""
-    settings = Settings(
-        openai_api_key="openai-key",
-        linkup_api_key="linkup-key",
-        tavily_api_key="tavily-key",
-        langfuse_public_key=None,
-        langfuse_secret_key=None,
-        langfuse_host="https://cloud.langfuse.com",
-        model="openai:gpt-5.4",
-        search_engine="linkup",
-    )
-
-    settings.validate_required_keys()
+    assert settings.openai_api_key is None
+    assert settings.linkup_api_key is None
+    assert settings.tavily_api_key is None

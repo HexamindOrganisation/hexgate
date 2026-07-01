@@ -58,6 +58,4 @@ def bootstrap(env_file: str = ".env", *, local_only: bool = False) -> Settings:
             "policy override wins. Unset one to remove the ambiguity."
         )
     audit.configure()
-    settings = Settings.from_env()
-    settings.validate_required_keys()
-    return settings
+    return Settings.from_env()

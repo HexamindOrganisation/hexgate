@@ -107,20 +107,22 @@ This is the bootstrap layer. It loads environment variables and returns a valida
 Key snippet:
 
 ```python
-def bootstrap(env_file: str = ".env") -> Settings:
+def bootstrap(env_file: str = ".env", *, local_only: bool = False) -> Settings:
     env_path = Path(__file__).parent.parent / env_file
-    load_dotenv(env_path, override=True)
-    settings = Settings.from_env()
-    settings.validate_required_keys()
-    return settings
+    load_dotenv(env_path, override=False)
+    audit.configure()
+    return Settings.from_env()
 ```
 
 Role:
 
 - resolve the `.env` path relative to the repo
-- load env vars into the process
+- load env vars into the process (shell wins over `.env`)
 - create typed settings
-- fail early if required keys are missing
+
+Provider keys (OpenAI / Linkup / Tavily) are **not** validated here — each is
+optional and only raises at use-time by the tool or model provider that reads
+it, so an agent that uses none of them boots without any of those keys set.
 
 ### `hexgate/demo.py`
 
@@ -214,20 +216,12 @@ model=os.getenv("HEXGATE_DEFAULT_MODEL", "openai:gpt-5.4"),
 search_engine=os.getenv("HEXGATE_DEFAULT_SEARCH_ENGINE", "linkup"),
 ```
 
-```python
-if not self.openai_api_key:
-    missing.append("OPENAI_API_KEY")
-if not self.linkup_api_key:
-    missing.append("LINKUP_API_KEY")
-if not self.tavily_api_key:
-    missing.append("TAVILY_API_KEY")
-```
-
 Responsibilities:
 
 - gather all env-based configuration in one place
 - provide defaults for model and Langfuse host
-- validate the minimum keys needed by the runtime
+- leave every provider key optional — missing keys resolve to `None` and are
+  enforced lazily by whatever reads them, not eagerly at bootstrap
 
 ### `hexgate/prompts/agent_system.md`
 

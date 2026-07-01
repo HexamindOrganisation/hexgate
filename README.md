@@ -107,11 +107,11 @@ cp .env.sample .env
 hexgate chat --agent example_agent
 ```
 
-Required keys for the example CLI flow:
+Keys the built-in example agent uses (bootstrap no longer hard-requires them — each is only needed if you actually invoke the piece that reads it, which raises a clear error at that point):
 
-- `OPENAI_API_KEY`
-- `LINKUP_API_KEY`
-- `TAVILY_API_KEY`
+- `OPENAI_API_KEY` — the default `openai:gpt-5.4` model (skip it if you pass your own model)
+- `LINKUP_API_KEY` — the built-in `web_search` tool
+- `TAVILY_API_KEY` — the built-in `fetch` tool
 
 Run `hexgate --help` to see all subcommands (`chat`, `serve`, `register`), and `hexgate <subcommand> --help` for the flags each one accepts.
 
@@ -1066,13 +1066,12 @@ Worth being explicit about the gaps so operators know where to layer their own c
 
 ## 🔧 Environment
 
-Copy `.env.sample` to `.env` and set:
+Copy `.env.sample` to `.env`. None of these are required to boot — set the ones whose feature you use (each raises a clear error at use-time if missing):
 
-- `OPENAI_API_KEY`
-- `LINKUP_API_KEY`
-- `TAVILY_API_KEY`
-- `LANGFUSE_SECRET_KEY`
-- `LANGFUSE_PUBLIC_KEY`
+- `OPENAI_API_KEY` — default model
+- `LINKUP_API_KEY` — built-in `web_search` tool
+- `TAVILY_API_KEY` — built-in `fetch` tool
+- `LANGFUSE_SECRET_KEY` / `LANGFUSE_PUBLIC_KEY` — tracing (optional)
 - optional `LANGFUSE_HOST`
 
 Policy-bundle enforcement (see [Policy Bundles](#-policy-bundles--compile-sign-enforce-wasm)) reads a few more, all optional:

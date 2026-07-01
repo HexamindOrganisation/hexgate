@@ -15,9 +15,9 @@ from hexgate import audit, bootstrap
 def _stub_dotenv_with_required_keys(
     monkeypatch: pytest.MonkeyPatch, **extra: str
 ) -> dict[str, Path]:
-    """Replace ``load_dotenv`` with a stub that populates the keys
-    ``Settings.validate_required_keys()`` checks. Returns a dict the
-    caller can inspect for the captured env path."""
+    """Replace ``load_dotenv`` with a stub that populates the provider keys
+    a typical CLI run reads into ``Settings``. Returns a dict the caller can
+    inspect for the captured env path."""
     seen: dict[str, Path] = {}
 
     def fake_load_dotenv(path: Path, override: bool) -> None:

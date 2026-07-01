@@ -33,18 +33,3 @@ class Settings:
             model=os.getenv("HEXGATE_DEFAULT_MODEL", "openai:gpt-5.4"),
             search_engine=os.getenv("HEXGATE_DEFAULT_SEARCH_ENGINE", "linkup"),
         )
-
-    def validate_required_keys(self) -> None:
-        """Validate the minimal keys required for the runtime."""
-        missing = []
-        if not self.openai_api_key:
-            missing.append("OPENAI_API_KEY")
-        if not self.linkup_api_key:
-            missing.append("LINKUP_API_KEY")
-        if not self.tavily_api_key:
-            missing.append("TAVILY_API_KEY")
-
-        if missing:
-            raise RuntimeError(
-                "Missing required environment variables: " + ", ".join(missing)
-            )
