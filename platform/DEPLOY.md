@@ -59,18 +59,22 @@ directory.
 
 ## 3. Configure
 
-In each checkout, create its env file:
+`platform/.env.<stage>` is **pulled from the Scaleway secret `/hexgate/<stage>`**
+(opaque, full env file as payload), never hand-copied.
+
+**Admin, one-time:** create `/hexgate/<stage>` as an opaque secret in `fr-par`
+from the `platform/.env.sample` template — `HEXGATE_POSTGRES_PASSWORD`,
+`HEXGATE_CLICKHOUSE_PASSWORD` (`openssl rand -hex 32`), any `RESEND_API_KEY` /
+Google OAuth values. Editing it adds a version; pull takes the latest.
+
+**Box prerequisites:** `scw` + `jq`, with read-only Secret Manager creds
+(`scw init`, or `SCW_ACCESS_KEY` / `SCW_SECRET_KEY` / `SCW_DEFAULT_PROJECT_ID`).
+Region defaults to `fr-par` (`SCW_DEFAULT_REGION`), folder to `/hexgate`
+(`HEXGATE_SECRET_PATH`).
 
 ```bash
-# /srv/hexgate-prod
-cp platform/.env.prod.sample    platform/.env.prod
-# /srv/hexgate-staging
-cp platform/.env.staging.sample platform/.env.staging
+make platform-env-pull STAGE=prod      # writes platform/.env.prod (also auto-run by platform-up if absent)
 ```
-
-Fill in per env: `HEXGATE_POSTGRES_PASSWORD`, `HEXGATE_CLICKHOUSE_PASSWORD`
-(secrets — `openssl rand -base64 32 | tr -d '/+='`). `TAG`, `HEXGATE_HTTP_PORT`,
-and the hostnames are pre-set. These files are gitignored.
 
 Then add two routes to the box's reverse proxy (one-time), so each hostname
 terminates TLS and proxies to its loopback port:
@@ -129,6 +133,9 @@ make platform-up STAGE=<stage>        # rebuilds changed images, recreates conta
 
 Promote a release: tag it, `git checkout` it in the prod checkout, re-run
 `make platform-up STAGE=prod`.
+
+Upgrades reuse the env already on the box. If the secret changed, refresh it
+first: `make platform-env-pull STAGE=<stage>`.
 
 ## Operations
 
