@@ -13,7 +13,16 @@ export interface ToolPolicy {
 export interface ParsedPolicy {
   version: number;
   default_policy: { mode: Mode };
+  /** Merged view of every concrete role's tools + top-level tools —
+   * used by the graph/overview. When a tool appears in multiple roles
+   * with different modes, we keep the strongest (deny > approval > allow)
+   * so the graph shows the worst-case decision a caller could hit. */
   tools: Record<string, ToolPolicy>;
+  /** Per-role tool maps, present when the YAML is inline-roles shape.
+   * Empty on flat policy YAML. Callers that need per-role detail (e.g.
+   * a future Graph filter "show me policy for role X") read this
+   * instead of the merged `tools` above. */
+  roles: Record<string, Record<string, ToolPolicy>>;
 }
 
 export interface ParsedAgent {
@@ -53,6 +62,31 @@ export function parseAgent(
   void policyYaml;
 }
 
+/** Priority order for merging per-role decisions on the same tool — the
+ * graph shows the worst-case outcome any caller could hit, so `deny`
+ * wins over `approval_required` wins over `allow`. */
+const MODE_STRENGTH: Record<Mode, number> = {
+  deny: 3,
+  approval_required: 2,
+  allow: 1,
+};
+
+function readToolMap(raw: unknown): Record<string, ToolPolicy> {
+  if (!raw || typeof raw !== "object") return {};
+  const out: Record<string, ToolPolicy> = {};
+  for (const [toolName, entry] of Object.entries(
+    raw as Record<string, unknown>,
+  )) {
+    const e = entry as { mode?: unknown; file_scope?: unknown };
+    if (!isMode(e?.mode)) continue;
+    out[toolName] = {
+      mode: e.mode,
+      file_scope: e.file_scope as ToolPolicy["file_scope"],
+    };
+  }
+  return out;
+}
+
 export function parsePolicy(policyYaml: string): ParsedPolicy | null {
   try {
     // `yaml.load` returns `unknown`; the shape checks below narrow it
@@ -67,20 +101,50 @@ export function parsePolicy(policyYaml: string): ParsedPolicy | null {
     const defaultMode = isMode(defaultPolicy?.mode)
       ? defaultPolicy.mode
       : "deny";
-    const rawTools = (raw.tools ?? {}) as Record<string, unknown>;
-    const tools: Record<string, ToolPolicy> = {};
-    for (const [toolName, entry] of Object.entries(rawTools)) {
-      const e = entry as { mode?: unknown; file_scope?: unknown };
-      if (!isMode(e?.mode)) continue;
-      tools[toolName] = {
-        mode: e.mode,
-        file_scope: e.file_scope as ToolPolicy["file_scope"],
-      };
+
+    // Two shapes coexist in the platform: (a) flat, with tools at top
+    // level (older seed + hand-written examples), and (b) inline-roles,
+    // with concrete roles under `roles.<name>.tools` (every seeded
+    // multi-role agent). The graph reads a MERGED tool map so it
+    // renders both shapes the same way.
+    const flatTools = readToolMap(raw.tools);
+    const rolesRaw = raw.roles;
+    const roles: Record<string, Record<string, ToolPolicy>> = {};
+    if (rolesRaw && typeof rolesRaw === "object" && !Array.isArray(rolesRaw)) {
+      for (const [roleName, spec] of Object.entries(
+        rolesRaw as Record<string, unknown>,
+      )) {
+        if (!spec || typeof spec !== "object") continue;
+        // Skip mixins — they compose INTO concrete roles via `inherits`;
+        // treating them as first-class would double-count decisions.
+        if ((spec as { is_mixin?: unknown }).is_mixin === true) continue;
+        const rt = readToolMap((spec as { tools?: unknown }).tools);
+        if (Object.keys(rt).length > 0) roles[roleName] = rt;
+      }
+    }
+
+    // Merge: start with flat tools, then union in each role's tools.
+    // For a tool appearing in >1 role with different modes, keep the
+    // strongest (deny > approval > allow) — the graph is a "what's the
+    // worst that could happen?" summary, not a role-scoped view. A
+    // future filter can render one role by reading `roles[<name>]`.
+    const tools: Record<string, ToolPolicy> = { ...flatTools };
+    for (const roleTools of Object.values(roles)) {
+      for (const [toolName, policy] of Object.entries(roleTools)) {
+        const current = tools[toolName];
+        if (
+          current === undefined ||
+          MODE_STRENGTH[policy.mode] > MODE_STRENGTH[current.mode]
+        ) {
+          tools[toolName] = policy;
+        }
+      }
     }
     return {
       version: Number(raw.version ?? 1),
       default_policy: { mode: defaultMode },
       tools,
+      roles,
     };
   } catch {
     return null;
@@ -91,13 +155,18 @@ export function buildAgentView(agent: AgentRead): AgentView | null {
   const parsedAgent = parseAgent(agent.agent_yaml, agent.policy_yaml);
   const parsedPolicy = parsePolicy(agent.policy_yaml);
   if (!parsedAgent || !parsedPolicy) return null;
-  const missingInPolicy = parsedAgent.tools.filter(
-    (t) => !(t in parsedPolicy.tools),
-  );
+  // Displayable tool list = union of what agent.yaml declares AND every
+  // tool that appears in any role's policy. Otherwise a role-only rule
+  // (`billing.refund_order`) would never render on the graph, even
+  // though it clearly maps to a callable tool at runtime.
+  const toolSet = new Set<string>(parsedAgent.tools);
+  for (const name of Object.keys(parsedPolicy.tools)) toolSet.add(name);
+  const tools = Array.from(toolSet).sort();
+  const missingInPolicy = tools.filter((t) => !(t in parsedPolicy.tools));
   return {
     name: parsedAgent.name || agent.name,
     model: parsedAgent.model,
-    tools: parsedAgent.tools,
+    tools,
     policy: parsedPolicy,
     missingInPolicy,
   };

@@ -107,49 +107,6 @@ export function buildOverviewGraph(agents: AgentRead[]): OverviewGraph {
   return { nodes, edges, agentViews };
 }
 
-/** Build a per-agent local graph: the agent + its tools only. */
-export function buildAgentGraph(agent: AgentRead): {
-  nodes: Node[];
-  edges: Edge[];
-  view: AgentView | null;
-} {
-  const view = buildAgentView(agent);
-  if (!view) return { nodes: [], edges: [], view: null };
-
-  const nodes: Node[] = [];
-  const edges: Edge[] = [];
-
-  const centerY = ((view.tools.length - 1) * ROW_H) / 2;
-
-  nodes.push({
-    id: "agent:self",
-    type: "agent",
-    position: { x: 40, y: centerY },
-    data: { name: view.name, model: view.model, toolCount: view.tools.length },
-    draggable: false,
-  });
-
-  view.tools.forEach((toolName, i) => {
-    const mode = effectiveMode(view, toolName);
-    nodes.push({
-      id: `tool:${toolName}`,
-      type: "tool",
-      position: { x: 380, y: i * ROW_H },
-      data: { name: toolName, mode },
-      draggable: false,
-    });
-    edges.push({
-      id: `e:agent->${toolName}`,
-      source: "agent:self",
-      target: `tool:${toolName}`,
-      style: edgeStyle(mode),
-      animated: mode === "approval_required",
-    });
-  });
-
-  return { nodes, edges, view };
-}
-
 function edgeStyle(mode: Mode): React.CSSProperties {
   const base = { stroke: MODE_COLOR[mode], strokeWidth: 1.75 };
   if (mode === "approval_required") {
