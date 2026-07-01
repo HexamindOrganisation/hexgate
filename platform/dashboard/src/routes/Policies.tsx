@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useAgentParam, useAutoSelectFirstAgent } from "@/lib/agent_param";
 import {
   AlertTriangle,
   Bot,
@@ -43,21 +44,25 @@ export function PoliciesPage() {
     queryFn: () => api.listAgents(scope.projectId as string),
     enabled: !!scope.projectId,
   });
-  const [selectedAgent, setSelectedAgent] = useState<string | null>(null);
+  // ?agent= drives selection so navigating /agents?agent=X → click
+  // "edit policy →" → land on /policies with the SAME X preselected.
+  // The stale-value + auto-select-first fallback lives in the hook.
+  const agentNames = useMemo(
+    () => (agents.data ?? []).map((a) => a.name),
+    [agents.data],
+  );
+  const agentParam = useAgentParam(agentNames);
+  const selectedAgent = agentParam.selected;
+  useAutoSelectFirstAgent(agentParam, agentNames);
   const [tab, setTab] = useState<Tab>("yaml");
 
   // Wipe the selection on project switch — the previous project's
-  // agents don't exist over here.
+  // agents don't exist over here, and useAgentParam's stale-check
+  // would leave the picker "empty selected" until a new pick.
   useEffect(() => {
-    setSelectedAgent(null);
+    agentParam.clear();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scope.projectId]);
-
-  // Auto-select the first agent once the list loads.
-  useEffect(() => {
-    if (!selectedAgent && agents.data && agents.data.length > 0) {
-      setSelectedAgent(agents.data[0].name);
-    }
-  }, [agents.data, selectedAgent]);
 
   if (scope.status === "no-project") {
     return <NoProjectEmptyState resource="policies" />;
@@ -73,7 +78,7 @@ export function PoliciesPage() {
           <AgentPicker
             agents={agents.data ?? []}
             value={selectedAgent}
-            onChange={(name) => setSelectedAgent(name)}
+            onChange={(name) => agentParam.set(name)}
             loading={agents.isLoading}
           />
         </div>

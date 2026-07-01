@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { useAgentParam, useAutoSelectFirstAgent } from "@/lib/agent_param";
 import { Bot, FileText, ShieldCheck, Wrench } from "lucide-react";
 import { Link } from "react-router-dom";
 import {
@@ -31,19 +32,23 @@ export function AgentsPage() {
     queryFn: () => api.listAgentManifests(scope.projectId as string),
     enabled: !!scope.projectId,
   });
-  const [selectedName, setSelectedName] = useState<string | null>(null);
+  // ?agent= drives selection so a link from /policies (or a shared URL
+  // /agents?agent=support_bot) lands on the right agent. Auto-select-
+  // first fallback lives in the shared hook.
+  const manifestNames = useMemo(
+    () => (manifests.data ?? []).map((m) => m.name),
+    [manifests.data],
+  );
+  const agentParam = useAgentParam(manifestNames);
+  const selectedName = agentParam.selected;
+  useAutoSelectFirstAgent(agentParam, manifestNames);
 
   // Switching projects clears the selected agent — the previous
   // project's agent names mean nothing in the new project.
   useEffect(() => {
-    setSelectedName(null);
+    agentParam.clear();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scope.projectId]);
-
-  useEffect(() => {
-    if (!selectedName && manifests.data && manifests.data.length > 0) {
-      setSelectedName(manifests.data[0].name);
-    }
-  }, [manifests.data, selectedName]);
 
   const active = manifests.data?.find((m) => m.name === selectedName);
 
@@ -59,13 +64,13 @@ export function AgentsPage() {
         <AgentPicker
           agents={manifests.data ?? []}
           value={selectedName}
-          onChange={setSelectedName}
+          onChange={(name) => agentParam.set(name)}
           loading={manifests.isLoading}
         />
         <div className="flex-1" />
         {active && (
           <Link
-            to="/policies"
+            to={`/policies?agent=${encodeURIComponent(active.name)}`}
             className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1.5"
           >
             <ShieldCheck className="size-3" />
