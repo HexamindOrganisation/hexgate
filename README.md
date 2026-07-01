@@ -331,7 +331,7 @@ Same enforcement seam, same `User` scope. The difference is whose system of reco
 
 | What dev sets | What changes |
 |---|---|
-| `HEXGATE_API_KEY=fty_live_<project>_…` | Wakes up the platform path. Without it, adapters / `load_agent` fall back to local / builtin. (Formerly `HEXGATE_KEY`, still honored with a deprecation warning.) |
+| `HEXGATE_API_KEY=fty_live_<project>_…` | Wakes up the platform path. Without it, adapters / `load_agent` fall back to local / builtin. (Renamed from `HEXGATE_KEY`, which is no longer read.) |
 | `HEXGATE_API_URL=http://localhost:8000` *(optional)* | Platform endpoint. Defaults to localhost. |
 | `HEXGATE_LOCAL_POLICY=./policy.yaml` *or* `./bundle/` | Dev escape hatch: enforce a policy from disk, hot-reload on save. Wins over the platform's bundle. |
 | `HEXGATE_BUNDLE_SIGN_KEY_PATH=./keys/dev.private` *(optional)* | Sign locally-recompiled yaml so `bundle.is_signed` reads True. |

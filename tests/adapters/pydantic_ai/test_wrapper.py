@@ -171,7 +171,6 @@ def test_wrap_pydantic_agent_raises_when_no_api_key_available(
 ) -> None:
     """Reject construction when neither argument nor env var supplies a key."""
     monkeypatch.delenv("HEXGATE_API_KEY", raising=False)
-    monkeypatch.delenv("HEXGATE_KEY", raising=False)  # legacy alias
 
     with pytest.raises(ValueError, match="No API key provided"):
         wrap_pydantic_agent(agent=_make_agent())

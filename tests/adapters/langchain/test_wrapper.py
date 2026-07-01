@@ -110,7 +110,6 @@ def test_wrap_raises_when_no_api_key_available(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.delenv("HEXGATE_API_KEY", raising=False)
-    monkeypatch.delenv("HEXGATE_KEY", raising=False)  # legacy alias
 
     with pytest.raises(ValueError, match="No API key provided"):
         wrap_langchain_agent(agent=_FakeCompiledGraph(), tools=[])

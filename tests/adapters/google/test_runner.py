@@ -162,7 +162,6 @@ def test_constructor_raises_when_no_api_key_available(
 ) -> None:
     """Reject construction when neither argument nor env var supplies a key."""
     monkeypatch.delenv("HEXGATE_API_KEY", raising=False)
-    monkeypatch.delenv("HEXGATE_KEY", raising=False)  # legacy alias
 
     with pytest.raises(ValueError, match="HEXGATE_API_KEY is not set"):
         HexgateRunner(

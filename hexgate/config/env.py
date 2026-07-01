@@ -3,9 +3,9 @@
 ``HEXGATE_KEY`` was renamed to ``HEXGATE_API_KEY`` — for symmetry with
 ``HEXGATE_API_URL`` and with the ``api_key`` parameter it feeds, and to
 disambiguate it from the signing-key family (``HEXGATE_KEYSTORE_PATH``,
-``HEXGATE_PUBLIC_KEY``). The legacy name is still honored, with a one-time
-warning, so existing ``.env`` files keep working; drop the fallback once
-downstream configs have migrated.
+``HEXGATE_PUBLIC_KEY``). The old name is no longer read; a one-time warning
+fires when it is set alone so the rename is obvious rather than silently
+treated as "no key".
 """
 
 from __future__ import annotations
@@ -22,25 +22,22 @@ _warned_legacy = False
 
 
 def resolve_api_key(explicit: str | None = None) -> str | None:
-    """Resolve the platform API key.
+    """Resolve the platform API key: ``explicit`` arg → ``HEXGATE_API_KEY``.
 
-    Precedence: ``explicit`` arg → ``HEXGATE_API_KEY`` → deprecated
-    ``HEXGATE_KEY``. Returns ``None`` when none is set. Emits a one-time
-    warning when the resolved value came from the deprecated env var.
+    Returns ``None`` when neither is set. If the retired ``HEXGATE_KEY`` is
+    set while ``HEXGATE_API_KEY`` is not, emit a one-time warning pointing at
+    the rename — the legacy value is not used.
     """
     if explicit:
         return explicit
     key = os.environ.get(API_KEY_ENV)
     if key:
         return key
-    legacy = os.environ.get(LEGACY_API_KEY_ENV)
-    if legacy:
+    if os.environ.get(LEGACY_API_KEY_ENV):
         global _warned_legacy
         if not _warned_legacy:
             _log.warning(
-                "HEXGATE_KEY is deprecated and will be removed in a future "
-                "release; rename it to HEXGATE_API_KEY."
+                "HEXGATE_KEY is set but no longer read; rename it to HEXGATE_API_KEY."
             )
             _warned_legacy = True
-        return legacy
     return None

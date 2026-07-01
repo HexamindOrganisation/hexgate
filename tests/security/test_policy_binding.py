@@ -154,7 +154,6 @@ def _resolved_binding(agent_name: str, **kwargs) -> PolicyBinding:
 def _clean_env(monkeypatch: pytest.MonkeyPatch) -> None:
     """Resolution must be driven by each test, not the developer's shell."""
     monkeypatch.delenv("HEXGATE_API_KEY", raising=False)
-    monkeypatch.delenv("HEXGATE_KEY", raising=False)  # legacy alias
     monkeypatch.delenv("HEXGATE_LOCAL_POLICY", raising=False)
     monkeypatch.delenv("HEXGATE_BUNDLE_REQUIRE_SIGNATURE", raising=False)
     monkeypatch.delenv("HEXGATE_BUNDLE_PUBKEY_PATH", raising=False)

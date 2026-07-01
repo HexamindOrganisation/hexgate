@@ -75,7 +75,6 @@ def _hermetic(monkeypatch: pytest.MonkeyPatch) -> None:
         factory, "get_langfuse_handler", lambda **kwargs: "handler-instance"
     )
     monkeypatch.delenv("HEXGATE_API_KEY", raising=False)
-    monkeypatch.delenv("HEXGATE_KEY", raising=False)  # legacy alias
     monkeypatch.delenv("HEXGATE_LOCAL_POLICY", raising=False)
     monkeypatch.delenv("HEXGATE_BIND_AGENTS", raising=False)
     monkeypatch.delenv("HEXGATE_LOCAL_MODE", raising=False)

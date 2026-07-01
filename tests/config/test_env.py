@@ -10,7 +10,7 @@ from hexgate.config.env import resolve_api_key
 def _clean_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("HEXGATE_API_KEY", raising=False)
     monkeypatch.delenv("HEXGATE_KEY", raising=False)
-    # Reset the one-time deprecation-warning gate so each test observes it fresh.
+    # Reset the one-time warning gate so each test observes it fresh.
     monkeypatch.setattr(env, "_warned_legacy", False)
 
 
@@ -24,19 +24,31 @@ def test_reads_primary_env(monkeypatch: pytest.MonkeyPatch) -> None:
     assert resolve_api_key() == "primary"
 
 
-def test_primary_wins_over_legacy(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("HEXGATE_API_KEY", "primary")
+def test_legacy_key_is_not_used(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A lone HEXGATE_KEY resolves to None — the legacy value is ignored."""
     monkeypatch.setenv("HEXGATE_KEY", "legacy")
-    assert resolve_api_key() == "primary"
+    assert resolve_api_key() is None
 
 
-def test_falls_back_to_legacy_with_warning(
+def test_legacy_key_warns_once(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     monkeypatch.setenv("HEXGATE_KEY", "legacy")
     with caplog.at_level(logging.WARNING, logger="hexgate.config.env"):
-        assert resolve_api_key() == "legacy"
-    assert any("HEXGATE_KEY is deprecated" in r.message for r in caplog.records)
+        resolve_api_key()
+        resolve_api_key()
+    warnings = [r for r in caplog.records if "HEXGATE_KEY is set" in r.message]
+    assert len(warnings) == 1
+
+
+def test_no_legacy_warning_when_primary_set(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setenv("HEXGATE_API_KEY", "primary")
+    monkeypatch.setenv("HEXGATE_KEY", "legacy")
+    with caplog.at_level(logging.WARNING, logger="hexgate.config.env"):
+        assert resolve_api_key() == "primary"
+    assert not any("HEXGATE_KEY is set" in r.message for r in caplog.records)
 
 
 def test_returns_none_when_unset() -> None:

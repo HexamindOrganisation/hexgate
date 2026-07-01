@@ -16,7 +16,6 @@ def _isolate_audit_state(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     audit_mod._senders.clear()
     audit_mod._logged_local_mode_suppressed = False
     monkeypatch.delenv("HEXGATE_API_KEY", raising=False)
-    monkeypatch.delenv("HEXGATE_KEY", raising=False)  # legacy alias
     monkeypatch.delenv("HEXGATE_API_URL", raising=False)
     monkeypatch.delenv(audit_mod._LOCAL_MODE_ENV, raising=False)
     yield

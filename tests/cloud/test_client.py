@@ -59,7 +59,6 @@ def clean_env(monkeypatch: pytest.MonkeyPatch) -> None:
     """Clear the HEXGATE_* env keys so resolution tests don't leak state."""
     for key in (
         "HEXGATE_API_KEY",
-        "HEXGATE_KEY",  # legacy alias — clear so it can't leak into resolution
         "HEXGATE_API_URL",
         "HEXGATE_PROJECT_ID",
         "HEXGATE_PUBLIC_KEY",
