@@ -19,7 +19,7 @@ from uuid import UUID, uuid4
 
 import httpx
 
-from hexgate.config.env import resolve_api_key
+from hexgate.config.env import API_URL_ENV, DEFAULT_API_URL, resolve_api_key
 
 if TYPE_CHECKING:
     # Annotation-only: Decision is used solely as a type hint below, so it stays
@@ -273,7 +273,6 @@ class AuditSender:
 
 
 _AUDIT_PATH = "/v1/audit/decisions"
-_DEFAULT_API_URL = "http://localhost:8000"
 
 # Setting this env var to a truthy value (``1``/``true``/``yes``/``on``,
 # case-insensitive) makes ``configure()`` a no-op even when ``HEXGATE_API_KEY``
@@ -347,7 +346,7 @@ def configure(
     existing = _senders.get(resolved_key)
     if existing is not None:
         return existing
-    resolved_url = base_url or os.environ.get("HEXGATE_API_URL", _DEFAULT_API_URL)
+    resolved_url = base_url or os.environ.get(API_URL_ENV, DEFAULT_API_URL)
     sender = AuditSender(
         endpoint=f"{resolved_url.rstrip('/')}{_AUDIT_PATH}",
         api_key=resolved_key,

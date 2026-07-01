@@ -17,6 +17,12 @@ API_KEY_ENV = "HEXGATE_API_KEY"
 LEGACY_API_KEY_ENV = "HEXGATE_KEY"
 API_URL_ENV = "HEXGATE_API_URL"
 
+# Defaults to Hexgate Cloud: the common case is a hosted key, so an unset
+# URL should "just work" for it. Self-hosters / local platform runs set
+# HEXGATE_API_URL=http://localhost:8000 explicitly. The key and URL are
+# coupled — a key only verifies against the platform instance that minted it.
+DEFAULT_API_URL = "https://app.hexgate.ai"
+
 _log = logging.getLogger(__name__)
 _warned_legacy = False
 

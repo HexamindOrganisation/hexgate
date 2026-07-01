@@ -332,13 +332,18 @@ Same enforcement seam, same `User` scope. The difference is whose system of reco
 | What dev sets | What changes |
 |---|---|
 | `HEXGATE_API_KEY=fty_live_<project>_…` | Wakes up the platform path. Without it, adapters / `load_agent` fall back to local / builtin. (Renamed from `HEXGATE_KEY`, which is no longer read.) |
-| `HEXGATE_API_URL=http://localhost:8000` *(optional)* | Platform endpoint. Defaults to localhost. |
+| `HEXGATE_API_URL=https://app.hexgate.ai` *(optional)* | Platform endpoint. Defaults to Hexgate Cloud (`https://app.hexgate.ai`). Set to `http://localhost:8000` only when self-hosting the platform locally — your key must be minted by whichever platform this points at. |
 | `HEXGATE_LOCAL_POLICY=./policy.yaml` *or* `./bundle/` | Dev escape hatch: enforce a policy from disk, hot-reload on save. Wins over the platform's bundle. |
 | `HEXGATE_BUNDLE_SIGN_KEY_PATH=./keys/dev.private` *(optional)* | Sign locally-recompiled yaml so `bundle.is_signed` reads True. |
 | `HEXGATE_BUNDLE_PUBKEY_PATH=./keys/prod.public` *(optional)* | Verify a pre-built bundle dir against this pubkey on every reload. |
 | `HEXGATE_BUNDLE_REQUIRE_SIGNATURE=true` *(optional)* | Strict mode — refuse any unsigned or unverifiable bundle at startup. |
 
 No config object to instantiate, no `enforce_policy(...)` call to remember on the platform path. The adapter / loader threads it all through.
+
+**Connecting to Hexgate.** The key and the URL are coupled: a `fty_live_…` key only verifies against the platform instance that minted it.
+
+- **Hosted (default):** set `HEXGATE_API_KEY` to the key from [app.hexgate.ai](https://app.hexgate.ai). Leave `HEXGATE_API_URL` unset — it defaults to `https://app.hexgate.ai`.
+- **Self-hosted / local platform:** additionally set `HEXGATE_API_URL=http://localhost:8000` (or your host), and use a key minted by *that* platform.
 
 ### Where enforcement actually happens
 
@@ -1290,7 +1295,7 @@ Bridges your local agent runtime to the dashboard via the platform's WebSocket r
 ```bash
 # in asianf/.env
 HEXGATE_API_KEY=fty_live_<project>_<biscuit>
-HEXGATE_API_URL=http://localhost:8000       # optional, defaults to localhost:8000
+HEXGATE_API_URL=http://localhost:8000       # optional; only when self-hosting the platform locally
 
 # pick an agent module:attr — uvicorn-style spec
 uv run hexgate serve examples.customer_bot:agent

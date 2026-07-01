@@ -9,7 +9,7 @@ description: "Every Decision posted to ClickHouse via /v1/audit/decisions."
 
 ## TL;DR
 
-When `HEXGATE_KEY` is set and local mode is off, every `Decision` the enforcer
+When `HEXGATE_API_KEY` is set and local mode is off, every `Decision` the enforcer
 returns is fired-and-forgotten to `/v1/audit/decisions`. The platform's
 ClickHouse table stores one row per decision; the dashboard's audit page
 visualises them. Local mode (set by `hexgate chat`) keeps events on your

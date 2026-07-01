@@ -83,6 +83,16 @@ def test_config_uses_explicit_args(clean_env: None) -> None:
     assert config.project_id == "overridden"
 
 
+def test_config_defaults_to_hexgate_cloud(
+    monkeypatch: pytest.MonkeyPatch,
+    clean_env: None,
+) -> None:
+    """Unset HEXGATE_API_URL resolves to Hexgate Cloud, not localhost."""
+    monkeypatch.setenv("HEXGATE_API_KEY", "fty_live_proj_secret")
+    config = HexgateConfig.from_env()
+    assert config.base_url == "https://app.hexgate.ai"
+
+
 def test_config_strips_trailing_slash_from_base_url(clean_env: None) -> None:
     """A trailing ``/`` on HEXGATE_API_URL would double up in path concatenation."""
     config = HexgateConfig.from_env(

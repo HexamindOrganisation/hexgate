@@ -181,7 +181,8 @@ synchronous.
 - Resolves `api_key` from the argument or `HEXGATE_API_KEY`; returns `None` (audit
   inert) when no key is resolvable.
 - Resolves `base_url` from the argument or `HEXGATE_API_URL`, defaulting to
-  `http://localhost:8000`. The endpoint is `<base_url>/v1/audit/decisions`.
+  Hexgate Cloud (`https://app.hexgate.ai`); set `http://localhost:8000` when
+  self-hosting. The endpoint is `<base_url>/v1/audit/decisions`.
 - **Keyed by api_key.** Senders live in a registry `dict[str, AuditSender]`.
   Calling `configure()` again with the **same** key returns the existing sender
   (idempotent); a **different** key gets its own sender with its own bearer

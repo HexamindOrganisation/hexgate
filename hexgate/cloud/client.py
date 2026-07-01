@@ -29,9 +29,8 @@ from hexgate.cloud.biscuit import (
     parse_envelope,
     verify_biscuit,
 )
-from hexgate.config.env import resolve_api_key
+from hexgate.config.env import API_URL_ENV, DEFAULT_API_URL, resolve_api_key
 
-DEFAULT_BASE_URL = "http://localhost:8000"
 DEFAULT_TIMEOUT = 10.0
 # Tight timeout for the conditional-GET hot path (refresh_policy runs at
 # the top of every chat turn). The default 10s would stall every turn up
@@ -97,9 +96,7 @@ class HexgateConfig:
                 "HEXGATE_API_KEY not set — export it or pass api_key= explicitly"
             )
 
-        url = (
-            base_url or os.environ.get("HEXGATE_API_URL") or DEFAULT_BASE_URL
-        ).rstrip("/")
+        url = (base_url or os.environ.get(API_URL_ENV) or DEFAULT_API_URL).rstrip("/")
 
         # Display-only — never raises. A key whose envelope doesn't carry
         # the project prefix is still usable; we just won't be able to

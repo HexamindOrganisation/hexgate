@@ -31,7 +31,7 @@ def test_returns_none_when_no_key_anywhere() -> None:
 def test_explicit_api_key_uses_default_url() -> None:
     sender = audit_mod.configure("explicit_key")
     assert sender is not None
-    assert sender._endpoint == "http://localhost:8000/v1/audit/decisions"
+    assert sender._endpoint == "https://app.hexgate.ai/v1/audit/decisions"
 
 
 def test_env_api_key_picked_up_when_not_explicit(
@@ -40,7 +40,7 @@ def test_env_api_key_picked_up_when_not_explicit(
     monkeypatch.setenv("HEXGATE_API_KEY", "env_key")
     sender = audit_mod.configure()
     assert sender is not None
-    assert sender._endpoint == "http://localhost:8000/v1/audit/decisions"
+    assert sender._endpoint == "https://app.hexgate.ai/v1/audit/decisions"
 
 
 def test_explicit_api_key_wins_over_env(monkeypatch: pytest.MonkeyPatch) -> None:
