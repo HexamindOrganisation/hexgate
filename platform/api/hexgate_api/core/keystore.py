@@ -34,11 +34,13 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import (
     Ed25519PublicKey,
 )
 
+from hexgate_api import API_ROOT
+
 logger = logging.getLogger(__name__)
 
 PRIVATE_KEY_FILENAME = "hexgate.priv"
 PUBLIC_KEY_FILENAME = "hexgate.pub"
-DEFAULT_KEYSTORE_DIR = Path(__file__).parent / "data"
+DEFAULT_KEYSTORE_DIR = API_ROOT / "data"
 
 
 class KeyStore(Protocol):

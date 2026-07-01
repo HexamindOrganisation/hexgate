@@ -17,8 +17,17 @@ from __future__ import annotations
 import yaml
 import pytest
 
-from schemas import AgentFramework, AgentManifest, InputSchema, ToolDefinition
-from services import _classify_tool, _default_policy_for_manifest, _emit_tool_lines
+from hexgate_api.schemas import (
+    AgentFramework,
+    AgentManifest,
+    InputSchema,
+    ToolDefinition,
+)
+from hexgate_api.services import (
+    _classify_tool,
+    _default_policy_for_manifest,
+    _emit_tool_lines,
+)
 
 
 # ---------------------------------------------------------------------------

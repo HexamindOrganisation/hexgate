@@ -33,9 +33,13 @@ from sqlmodel import SQLModel
 from sqlmodel.ext.asyncio.session import AsyncSession
 from starlette.websockets import WebSocketDisconnect
 
-import main
-from main import app
-from services import DEFAULT_PROJECT_ID, ensure_default_project, mint_dev_token
+from hexgate_api import main
+from hexgate_api.main import app
+from hexgate_api.services import (
+    DEFAULT_PROJECT_ID,
+    ensure_default_project,
+    mint_dev_token,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -63,8 +67,8 @@ async def session_factory():
 @pytest_asyncio.fixture
 async def client(session_factory, tmp_path) -> TestClient:
     """TestClient with the test factory + fresh keystore."""
-    from db import get_session
-    from keystore import FileKeyStore
+    from hexgate_api.core.db import get_session
+    from hexgate_api.core.keystore import FileKeyStore
 
     async def override_session():
         async with session_factory() as session:
@@ -161,7 +165,7 @@ def test_ws_serve_rejects_unknown_or_revoked_secret(
     """
     import asyncio
 
-    from models import DevToken
+    from hexgate_api.models import DevToken
     from sqlmodel import select
 
     async def _delete_token():
@@ -196,7 +200,7 @@ def test_ws_serve_happy_path_registers_with_project_from_token(
 ) -> None:
     """A valid bearer in the subprotocol → handshake completes, the
     serve socket gets registered against the token's project."""
-    from relay import registry
+    from hexgate_api.core.relay import registry
 
     # Track the project the relay sees so we can assert post-hoc that
     # ws_require_project resolved to the right value.

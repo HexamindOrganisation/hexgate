@@ -21,10 +21,10 @@ from sqlalchemy.pool import StaticPool
 from sqlmodel import SQLModel
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-import main
-from main import app
-from models import Agent, Organization, OrganizationMember, Project, User
-from services import (
+from hexgate_api import main
+from hexgate_api.main import app
+from hexgate_api.models import Agent, Organization, OrganizationMember, Project, User
+from hexgate_api.services import (
     DEFAULT_PROJECT_ID,
     DEFAULT_USER_ID,
     ensure_default_project,

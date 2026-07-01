@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from urllib.parse import unquote, urlsplit
 
-import db
+from hexgate_api.core import db
 
 _PG_VARS = (
     "DATABASE_URL",

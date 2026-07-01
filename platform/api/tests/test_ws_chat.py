@@ -28,9 +28,9 @@ from sqlmodel import SQLModel
 from sqlmodel.ext.asyncio.session import AsyncSession
 from starlette.websockets import WebSocketDisconnect
 
-import main
-from main import app
-from services import DEFAULT_PROJECT_ID, ensure_default_project
+from hexgate_api import main
+from hexgate_api.main import app
+from hexgate_api.services import DEFAULT_PROJECT_ID, ensure_default_project
 
 
 # ---------------------------------------------------------------------------
@@ -56,8 +56,8 @@ async def session_factory():
 
 @pytest_asyncio.fixture
 async def client(session_factory, tmp_path) -> TestClient:
-    from db import get_session
-    from keystore import FileKeyStore
+    from hexgate_api.core.db import get_session
+    from hexgate_api.core.keystore import FileKeyStore
 
     async def override_session():
         async with session_factory() as session:
@@ -160,8 +160,8 @@ def test_ws_chat_accepts_org_member(client: TestClient, session_factory) -> None
     handshake completes, the relay registers the chat socket."""
     import asyncio
 
-    from models import OrganizationMember, User
-    from services import DEFAULT_ORG_ID, ROLE_MEMBER
+    from hexgate_api.models import OrganizationMember, User
+    from hexgate_api.services import DEFAULT_ORG_ID, ROLE_MEMBER
     from sqlmodel import select
 
     _register_and_login(client, "insider@example.com")
@@ -182,7 +182,7 @@ def test_ws_chat_accepts_org_member(client: TestClient, session_factory) -> None
     asyncio.get_event_loop().run_until_complete(_add_to_default_org())
 
     # Spy on the relay so we can assert the registration fired.
-    from relay import registry
+    from hexgate_api.core.relay import registry
 
     seen: dict[str, str] = {}
     original_attach = registry.attach_chat

@@ -35,10 +35,10 @@ from sqlalchemy.pool import StaticPool
 from sqlmodel import SQLModel, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-import main
-from main import app
-from models import OAuthAccount, User
-from services import ensure_default_project
+from hexgate_api import main
+from hexgate_api.main import app
+from hexgate_api.models import OAuthAccount, User
+from hexgate_api.services import ensure_default_project
 
 
 # ---------------------------------------------------------------------------
@@ -54,7 +54,7 @@ def test_build_router_returns_none_without_env(monkeypatch) -> None:
     # secret — ensure it's initialised so the call doesn't blow up
     # before it hits the env-var check we actually care about.
     main.keystore.ensure_keypair()
-    from auth import build_google_oauth_router
+    from hexgate_api.auth import build_google_oauth_router
 
     assert build_google_oauth_router() is None
 
@@ -64,7 +64,7 @@ def test_build_router_returns_router_with_env(monkeypatch) -> None:
     monkeypatch.setenv("HEXGATE_GOOGLE_CLIENT_ID", "test-client-id")
     monkeypatch.setenv("HEXGATE_GOOGLE_CLIENT_SECRET", "test-secret")
     main.keystore.ensure_keypair()
-    from auth import build_google_oauth_router
+    from hexgate_api.auth import build_google_oauth_router
 
     router = build_google_oauth_router()
     assert router is not None
@@ -89,8 +89,8 @@ def test_spa_catchall_does_not_shadow_oauth_routes(monkeypatch, tmp_path) -> Non
     throwaway app (v1 router → OAuth router → ``mount_spa``) and assert the
     OAuth route still wins over the ``/{full_path:path}`` catch-all.
     """
-    from auth import build_google_oauth_router
-    from spa import mount_spa
+    from hexgate_api.auth import build_google_oauth_router
+    from hexgate_api.core.spa import mount_spa
 
     monkeypatch.setenv("HEXGATE_GOOGLE_CLIENT_ID", "test-client-id")
     monkeypatch.setenv("HEXGATE_GOOGLE_CLIENT_SECRET", "test-secret")
@@ -163,9 +163,9 @@ async def oauth_client(monkeypatch, session_factory, tmp_path) -> TestClient:
     test rebuilds the in-memory DB and the OAuth wiring doesn't carry
     cross-test state.
     """
-    from auth import build_google_oauth_router
-    from db import get_session
-    from keystore import FileKeyStore
+    from hexgate_api.auth import build_google_oauth_router
+    from hexgate_api.core.db import get_session
+    from hexgate_api.core.keystore import FileKeyStore
 
     monkeypatch.setenv("HEXGATE_GOOGLE_CLIENT_ID", "test-client-id")
     monkeypatch.setenv("HEXGATE_GOOGLE_CLIENT_SECRET", "test-secret")

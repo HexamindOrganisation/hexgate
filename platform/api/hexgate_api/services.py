@@ -9,7 +9,7 @@ from sqlalchemy import func
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from models import (
+from hexgate_api.models import (
     Agent,
     AgentVersion,
     DevToken,
@@ -21,9 +21,10 @@ from models import (
     User,
     utcnow,
 )
-from schemas import AgentManifest, ToolDefinition
-from biscuits import MintRequest, make_envelope, mint_token
-from seeds import DEFAULT_AGENT_NAME, SEED_AGENTS
+from hexgate_api.schemas import AgentManifest, ToolDefinition
+from hexgate_api.core.biscuits import MintRequest, make_envelope, mint_token
+from hexgate_api.core.ids import new_id
+from hexgate_api.seeds import DEFAULT_AGENT_NAME, SEED_AGENTS
 
 logger = logging.getLogger("hexgate.platform.services")
 
@@ -565,7 +566,7 @@ async def send_invitation_email(
     """
     import os
 
-    from mailer import get_email_sender
+    from hexgate_api.core.mailer import get_email_sender
 
     dashboard_url = os.environ.get(
         "HEXGATE_DASHBOARD_URL", "http://localhost:5173"
@@ -728,22 +729,6 @@ def _announce_default_admin_credentials(email: str, password: str) -> None:
         file=sys.stderr,
         flush=True,
     )
-
-
-# Prefix map for human-readable row IDs (e.g. agt_a1b2c3…). Centralized here so
-# entropy / format changes happen in one place; class-keyed so a typo is a
-# NameError at import, not a runtime bug.
-_ID_PREFIXES: dict[type, str] = {
-    Agent: "agt",
-    AgentVersion: "agv",
-    Tool: "tol",
-    DevToken: "tok",
-}
-
-
-def new_id(kind: type) -> str:
-    """Generate a prefixed row id for a SQLModel class, e.g. ``agt_a1b2…``."""
-    return f"{_ID_PREFIXES[kind]}_{secrets.token_hex(6)}"
 
 
 async def ensure_default_seed(session: AsyncSession) -> Project | None:

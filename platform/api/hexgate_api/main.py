@@ -5,7 +5,6 @@ import hashlib
 import logging
 import os
 from contextlib import asynccontextmanager
-from urllib.parse import unquote
 
 from clickhouse_connect.driver.exceptions import ClickHouseError, OperationalError
 from dotenv import load_dotenv
@@ -20,7 +19,7 @@ from fastapi import (
     WebSocketDisconnect,
 )
 from fastapi.middleware.cors import CORSMiddleware
-from models import (
+from hexgate_api.models import (
     Agent,
     AgentVersion,
     Invitation,
@@ -32,7 +31,7 @@ from models import (
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from audit import (
+from hexgate_api.audit import (
     WINDOW_HOURS,
     AuditEventOutOfWindow,
     AuditPayloadTooLarge,
@@ -44,17 +43,14 @@ from audit import (
     timeseries,
     validate_event_window,
 )
-from biscuits import (
-    TokenError,
-    TokenSignatureError,
-    parse_envelope,
-    verify_token,
-)
-from clickhouse import get_clickhouse, ping as clickhouse_ping
-from db import async_session_factory, get_session, init_db
-from keystore import FileKeyStore
-from relay import registry
-from schemas import (
+from hexgate_api.core.clickhouse import ping as clickhouse_ping
+from hexgate_api.core.db import async_session_factory, get_session, init_db
+from hexgate_api.core.keystore import FileKeyStore
+from hexgate_api.core.relay import registry
+from hexgate_api.deps.clickhouse import _audit_unavailable, require_clickhouse
+from hexgate_api.deps.tokens import require_project
+from hexgate_api.deps.ws import ws_require_org_member, ws_require_project
+from hexgate_api.schemas import (
     AgentManifest,
     AgentManifestView,
     AgentRead,
@@ -89,7 +85,7 @@ from schemas import (
     ValidatePolicyRequest,
     ValidatePolicyResponse,
 )
-from services import (
+from hexgate_api.services import (
     backfill_bundles,
     delete_dev_token,
     ensure_default_project,
@@ -139,7 +135,11 @@ def _configure_email_sender() -> None:
       * exactly one set → WARNING naming the missing var — operator
         misconfig; falls back to stderr rather than half-broken Resend.
     """
-    from mailer import ResendEmailSender, StderrEmailSender, set_email_sender
+    from hexgate_api.core.mailer import (
+        ResendEmailSender,
+        StderrEmailSender,
+        set_email_sender,
+    )
 
     api_key = os.environ.get("RESEND_API_KEY", "").strip()
     from_addr = os.environ.get("HEXGATE_EMAIL_FROM", "").strip()
@@ -181,11 +181,11 @@ async def lifespan(app_: FastAPI):
     # registered at import; only the OAuth router mounts here at startup, so the
     # SPA must follow it.) Demo mode mounts the same SPA + a passwordless login.
     if _demo_enabled():
-        from demo import enable_demo
+        from hexgate_api.demo import enable_demo
 
         enable_demo(app)
     else:
-        from spa import mount_spa
+        from hexgate_api.core.spa import mount_spa
 
         mount_spa(app)
     async with async_session_factory() as session:
@@ -200,7 +200,7 @@ async def lifespan(app_: FastAPI):
         )
     # Surface deployment config at startup so a misconfig shows in logs
     # rather than as a silent browser CORS/cookie failure.
-    from auth import _cookie_secure, _dashboard_url
+    from hexgate_api.auth import _cookie_secure, _dashboard_url
 
     _log.info(
         "hexgate-api startup config: cors_origins=%s cookie_secure=%s dashboard_url=%s",
@@ -247,469 +247,20 @@ app.add_middleware(
 )
 
 
-async def _validate_sdk_token(authorization: str, session: AsyncSession) -> None:
-    """Validate an ``Authorization: Bearer <hexgate_key>`` biscuit envelope.
-
-    Used by :func:`optional_dev_token` (allows a missing header) and
-    indirectly by :func:`require_project` / :func:`ws_require_project`
-    (the bearer-implicit SDK routes). Raises 401 on signature or
-    revocation failure; returns None on success.
-    """
-    if not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="malformed authorization header")
-    secret = authorization.removeprefix("Bearer ").strip()
-
-    # Signature gate
-    try:
-        _, _, biscuit_b64 = parse_envelope(secret)
-    except TokenError:
-        raise HTTPException(status_code=401, detail="malformed hexgate key") from None
-    try:
-        verify_token(biscuit_b64, keystore.public_key_bytes())
-    except TokenSignatureError:
-        raise HTTPException(
-            status_code=401, detail="invalid hexgate key signature"
-        ) from None
-
-    # Revocation gate
-    if await find_token_by_secret(session, secret) is None:
-        raise HTTPException(status_code=401, detail="unknown or revoked hexgate key")
-
-
-async def optional_dev_token(
-    authorization: str | None = Header(default=None),
-    session: AsyncSession = Depends(get_session),
-) -> None:
-    """Validate Authorization: Bearer <hexgate_key> when present.
-
-    Two gates run when a header is supplied:
-
-    1. **Signature verification** — parse the envelope, decode the Biscuit,
-       check it chains to the platform's root public key.
-    2. **Revocation lookup** — confirm the exact secret is still in the
-       ``DevToken`` table and update ``last_used_at``.
-
-    POC behaviour: the header itself remains optional so the dashboard
-    (no user-session concept yet) can keep calling these endpoints
-    unauthenticated. Routes that DO require some auth pick the
-    appropriate dep:
-
-      * cookie/dashboard humans → :func:`require_org_member`
-      * bearer/SDK machines → :func:`require_project` (HTTP) or
-        :func:`ws_require_project` (WebSocket)
-    """
-    if authorization is None:
-        return
-    await _validate_sdk_token(authorization, session)
-
-
-async def require_project(
-    authorization: str | None = Header(default=None),
-    session: AsyncSession = Depends(get_session),
-) -> str:
-    """Resolve `Authorization: Bearer <hexgate_key>` to a project_id.
-
-    Used by SDK-facing endpoints (e.g. POST /v1/agents) where the caller
-    has only an API key, not a project id in the URL.
-
-    Two gates run in order, matching :func:`ws_require_project` and
-    :func:`optional_dev_token` so all three bearer-auth surfaces agree
-    on what counts as a valid token:
-
-      1. **Signature verification** via :func:`_validate_sdk_token` —
-         parse the envelope, verify the biscuit chains to the platform's
-         root public key. A revocation lookup runs inside the helper.
-      2. **Project resolution** — read ``DevToken.project_id`` for the
-         already-validated secret.
-
-    The signature gate was missing before — a forged biscuit whose
-    secret string happened to match a stored ``DevToken.secret`` would
-    have been accepted. Defense-in-depth + consistency with the WS
-    bearer path.
-    """
-    if authorization is None or not authorization.startswith("Bearer "):
-        raise HTTPException(
-            status_code=401, detail="missing or malformed authorization header"
-        )
-    # Signature + revocation gate. Raises HTTPException(401) on any
-    # failure (malformed envelope, bad signature, unknown/revoked
-    # secret) so the project lookup below only fires on a verified
-    # token.
-    await _validate_sdk_token(authorization, session)
-    secret = authorization.removeprefix("Bearer ").strip()
-    token = await find_token_by_secret(session, secret)
-    # ``_validate_sdk_token`` already confirmed find_token_by_secret
-    # returns a row; the second lookup is to read .project_id, not
-    # to re-gate access. assert guards against a logic regression.
-    assert token is not None, "find_token_by_secret returned None after signature gate"
-    return token.project_id
-
-
-# Marker subprotocol the server echoes on a successful WS handshake. The
-# CLI client asserts it back so it knows the platform understands the
-# bearer-in-subprotocol contract (i.e., we're talking to a Phase-6+
-# server, not an older deployment that ignored unknown subprotocols).
-_WS_PROTOCOL_MARKER = "hexgate.v1"
-
-# WS close code for "auth failed at handshake". 4000-4999 is the
-# application-private range per RFC 6455; 4401 is chosen to mirror the
-# HTTP 401 mnemonic so logs read consistently across the two layers.
-_WS_CLOSE_UNAUTHENTICATED = 4401
-
-
-async def ws_require_project(
-    websocket: WebSocket,
-    session: AsyncSession,
-) -> str | None:
-    """Authenticate a WebSocket via a bearer token in the subprotocol header.
-
-    Browsers can't set custom headers on WS handshakes; the standard
-    workaround is to overload ``Sec-WebSocket-Protocol``. The CLI client
-    offers two subprotocols on ``connect``:
-
-      * ``bearer.<envelope>`` — the actual hexgate key, consumed by the
-        server and never echoed back (kept out of any proxy mirror logs).
-      * ``hexgate.v1`` — protocol marker; the server echoes this so the
-        client knows the handshake bound a real auth context.
-
-    On any reject path we ``close(code=4401)`` before ``accept()`` — the
-    handshake never completes, the client sees a clean rejection
-    instead of an immediate disconnect after an accepted upgrade. The
-    handler that consumes this dependency must ``return`` when the
-    result is ``None``.
-
-    Reuses :func:`require_project`'s signature + revocation gates so
-    HTTP and WS paths can't drift on what counts as a valid token.
-    """
-    subprotocols = websocket.scope.get("subprotocols") or []
-    bearer: str | None = None
-    for sp in subprotocols:
-        if sp.startswith("bearer."):
-            # The CLI percent-encodes the envelope before placing it
-            # in the subprotocol — biscuit base64 has '=' padding,
-            # which RFC 7230 token grammar forbids. ``unquote`` is a
-            # no-op on un-encoded input, so tests that pass raw
-            # envelopes (TestClient doesn't enforce the grammar) keep
-            # working unchanged.
-            bearer = unquote(sp.removeprefix("bearer."))
-            break
-
-    if not bearer:
-        await websocket.close(code=_WS_CLOSE_UNAUTHENTICATED)
-        return None
-
-    # Signature gate — same parse_envelope + verify_token the HTTP path
-    # runs. Any failure here is a 4401, no detail leaked.
-    try:
-        _, _, biscuit_b64 = parse_envelope(bearer)
-        verify_token(biscuit_b64, keystore.public_key_bytes())
-    except (TokenError, TokenSignatureError):
-        await websocket.close(code=_WS_CLOSE_UNAUTHENTICATED)
-        return None
-
-    # Revocation gate. ``find_token_by_secret`` also bumps last_used_at,
-    # which is what makes the dashboard's "last used" column work for
-    # serve sessions.
-    token = await find_token_by_secret(session, bearer)
-    if token is None:
-        await websocket.close(code=_WS_CLOSE_UNAUTHENTICATED)
-        return None
-
-    # Echo only the marker — the bearer subprotocol is consumed
-    # internally so it doesn't end up in any access log that captures
-    # Sec-WebSocket-Protocol response headers.
-    await websocket.accept(subprotocol=_WS_PROTOCOL_MARKER)
-    return token.project_id
-
-
-async def ws_require_org_member(
-    websocket: WebSocket,
-    project_id: str,
-    session: AsyncSession,
-) -> User | None:
-    """Authenticate a dashboard-driven WebSocket via the session cookie.
-
-    Counterpart of :func:`ws_require_project` for the cookie-auth side.
-    Browsers can't set custom headers on WS upgrades — fine for
-    ``ws_serve`` (the CLI sends a bearer subprotocol) but the dashboard
-    drives ``ws_chat`` from JavaScript and can't reach for an
-    Authorization header. We extract the ``hexgate_session`` cookie
-    directly from the handshake.
-
-    Three gates run in order:
-
-      1. Cookie present → decode the JWT via the same strategy the
-         HTTP cookie path uses.
-      2. Decoded user exists + is active.
-      3. User is a member of the project's org (any role).
-
-    Any failure → ``close(code=4401)`` before ``accept()`` and return
-    ``None``. On success → ``accept()`` and return the ``User``.
-
-    Before this gate landed, ``ws_chat`` was a wide-open eavesdrop /
-    inject surface: anyone who could guess or enumerate a ``project_id``
-    could relay arbitrary JSON to a running serve process and read its
-    replies. The bearer-subprotocol pattern from ``ws_require_project``
-    doesn't work here because JS WebSocket can't set
-    ``Sec-WebSocket-Protocol`` cookies — cookie auth is the only
-    browser-compatible option.
-    """
-    # Cookie extraction. ``websocket.cookies`` is Starlette's parsed
-    # mapping; absent cookies show up as missing keys, not empty
-    # strings.
-    cookie_token = websocket.cookies.get("hexgate_session")
-    if not cookie_token:
-        await websocket.close(code=_WS_CLOSE_UNAUTHENTICATED)
-        return None
-
-    # JWT decode via the same strategy + user_manager wiring the HTTP
-    # cookie path uses. Importing locally so this module can be
-    # imported without forcing the auth package to load — keeps
-    # require_user_or_sdk_token (gone) and friends out of the cycle.
-    from fastapi_users.db import SQLAlchemyUserDatabase
-
-    from auth import OAuthAccount, UserManager, get_jwt_strategy
-
-    user_db = SQLAlchemyUserDatabase(session, User, OAuthAccount)
-    user_manager = UserManager(user_db)
-    strategy = get_jwt_strategy()
-    try:
-        user = await strategy.read_token(cookie_token, user_manager)
-    except Exception:  # noqa: BLE001 — any decode failure is auth failure
-        user = None
-    if user is None or not user.is_active:
-        await websocket.close(code=_WS_CLOSE_UNAUTHENTICATED)
-        return None
-
-    # Org-membership check. ``ws_chat`` is project-scoped; the cookie
-    # only proves identity, not access to this particular project.
-    project = await session.get(Project, project_id)
-    if project is None:
-        await websocket.close(code=_WS_CLOSE_UNAUTHENTICATED)
-        return None
-    membership = (
-        await session.exec(
-            select(OrganizationMember).where(
-                OrganizationMember.user_id == user.id,
-                OrganizationMember.org_id == project.org_id,
-            )
-        )
-    ).first()
-    if membership is None:
-        await websocket.close(code=_WS_CLOSE_UNAUTHENTICATED)
-        return None
-
-    await websocket.accept()
-    return user
-
-
-# ---------------------------------------------------------------------------
-# M3 Phase 2 — dashboard-user dependencies (auth-as-dev-header scaffolding)
-#
-# These are the human-facing equivalents of ``require_project``: they gate
-# routes by which org the active user belongs to. The "active user" today
-# comes from an ``X-Dev-User: <user_id>`` request header — a placeholder
-# that Phase 3 replaces with a real session cookie from FastAPI Users
-# without touching any caller of these dependencies.
-#
-# The two auth surfaces (dashboard humans vs SDK machines) stay separate
-# by design — see m3-platform-auth.md, "The dual-auth-surface insight".
-# ---------------------------------------------------------------------------
-
-
-from auth import current_active_user_optional  # noqa: E402 — placed after  # type: ignore[import]
-# the keystore is defined so auth.py's _session_secret() lazy-import works.
-
-
-def _dev_user_header_allowed() -> bool:
-    """Whether the ``X-Dev-User`` test-only auth seam is enabled.
-
-    Defaults to off — production servers MUST NOT accept this header,
-    since it bypasses the cookie/session check and trusts whatever
-    UUID the caller asserts. Tests opt in via ``conftest.py`` setting
-    ``HEXGATE_ALLOW_DEV_USER_HEADER=1`` in the environment.
-    """
-    import os
-
-    return os.environ.get("HEXGATE_ALLOW_DEV_USER_HEADER", "").strip().lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
-
-
-async def require_user(
-    cookie_user: User | None = Depends(current_active_user_optional),
-    x_dev_user: str | None = Header(default=None, alias="X-Dev-User"),
-    session: AsyncSession = Depends(get_session),
-) -> User:
-    """Resolve the active dashboard user via session cookie.
-
-    Cookie-first (production path). ``X-Dev-User`` is a TEST-ONLY
-    seam gated behind ``HEXGATE_ALLOW_DEV_USER_HEADER`` — the dashboard
-    no longer sends this header from Phase 3d onward; only the test
-    suite uses it, via the conftest that flips the env on. Production
-    deployments must leave the env unset (the default) so the header
-    is silently ignored.
-    """
-    if cookie_user is not None:
-        return cookie_user
-
-    if x_dev_user and _dev_user_header_allowed():
-        user = await session.get(User, x_dev_user)
-        if user is not None and user.is_active:
-            return user
-
-    raise HTTPException(status_code=401, detail="missing or invalid authentication")
-
-
-async def require_org_member(
-    project_id: str,
-    user: User = Depends(require_user),
-    session: AsyncSession = Depends(get_session),
-) -> User:
-    """Gate a project-scoped route on the active user's org membership.
-
-    Resolves the project's ``org_id``, then confirms the active user has
-    an ``OrganizationMember`` row for that org. Returns the ``User`` so
-    handlers can use it directly without a second lookup.
-
-    Status codes: ``404`` if the project doesn't exist (don't leak that
-    fact by 403'ing); ``403`` if the project exists but the user isn't
-    a member of its org.
-    """
-    project = await session.get(Project, project_id)
-    if project is None:
-        raise HTTPException(status_code=404, detail="project not found")
-    membership = (
-        await session.exec(
-            select(OrganizationMember).where(
-                OrganizationMember.user_id == user.id,
-                OrganizationMember.org_id == project.org_id,
-            )
-        )
-    ).first()
-    if membership is None:
-        raise HTTPException(status_code=403, detail="not a member of this org")
-    return user
-
-
-# ---------------------------------------------------------------------------
-# M3 Phase 4 — org-scoped dependencies
-#
-# Mirror of ``require_org_member`` but for routes whose path carries
-# ``{org_id}`` directly (no Project resolution needed). They return a
-# ``(User, OrganizationMember)`` tuple so handlers can use both the
-# caller and the role on the edge without a second DB hit.
-# ---------------------------------------------------------------------------
-
-
-async def require_org_membership(
-    org_id: str,
-    user: User = Depends(require_user),
-    session: AsyncSession = Depends(get_session),
-) -> tuple[User, OrganizationMember]:
-    """Gate an org-scoped route on the active user's membership.
-
-    ``404`` if the org doesn't exist (don't leak which IDs are taken);
-    ``403`` if the org exists but the user isn't a member.
-    """
-    org = await session.get(Organization, org_id)
-    if org is None:
-        raise HTTPException(status_code=404, detail="org not found")
-    membership = (
-        await session.exec(
-            select(OrganizationMember).where(
-                OrganizationMember.org_id == org_id,
-                OrganizationMember.user_id == user.id,
-            )
-        )
-    ).first()
-    if membership is None:
-        raise HTTPException(status_code=403, detail="not a member of this org")
-    return user, membership
-
-
-async def require_org_admin(
-    membership: tuple[User, OrganizationMember] = Depends(require_org_membership),
-) -> tuple[User, OrganizationMember]:
-    """Stricter variant of :func:`require_org_membership` — caller must
-    be ``admin`` or ``owner``. Used by management endpoints (PATCH org,
-    invite member, remove member, change role)."""
-    from services import ROLE_ADMIN, ROLE_OWNER
-
-    _, member = membership
-    if member.role not in {ROLE_OWNER, ROLE_ADMIN}:
-        raise HTTPException(
-            status_code=403, detail="admin or owner role required for this action"
-        )
-    return membership
-
-
-async def require_org_admin_or_self(
-    user_id: str,
-    membership: tuple[User, OrganizationMember] = Depends(require_org_membership),
-) -> tuple[User, OrganizationMember]:
-    """Variant for ``DELETE /v1/orgs/{org_id}/members/{user_id}``.
-
-    Admin/owner can remove anyone in the org; plain members can only
-    remove themselves (the "leave organization" flow). The path
-    parameter ``user_id`` is the *target* of the removal — compared
-    against the caller's ``user.id`` to decide whether self-only
-    permission is sufficient.
-
-    The last-owner guard fires inside :func:`services.remove_member`
-    so either path is rejected when removal would orphan the org.
-    """
-    from services import ROLE_ADMIN, ROLE_OWNER
-
-    caller, member = membership
-    if member.role in {ROLE_OWNER, ROLE_ADMIN}:
-        return membership
-    if caller.id == user_id:
-        return membership
-    raise HTTPException(
-        status_code=403,
-        detail="only admins / owners can manage other members",
-    )
-
-
-async def require_project_admin(
-    project_id: str,
-    user: User = Depends(require_user),
-    session: AsyncSession = Depends(get_session),
-) -> tuple[User, OrganizationMember]:
-    """Like :func:`require_org_member` (path-param ``project_id``,
-    resolves project's org_id, requires membership) but additionally
-    requires ``admin`` or ``owner`` role.
-
-    Used by management endpoints on a project — PATCH name today;
-    later DELETE and any "settings"-tab operations. The returned
-    tuple gives handlers both the caller and their membership row so
-    they can reference ``member.org_id`` without a second lookup.
-    """
-    from services import ROLE_ADMIN, ROLE_OWNER
-
-    project = await session.get(Project, project_id)
-    if project is None:
-        raise HTTPException(status_code=404, detail="project not found")
-    membership = (
-        await session.exec(
-            select(OrganizationMember).where(
-                OrganizationMember.user_id == user.id,
-                OrganizationMember.org_id == project.org_id,
-            )
-        )
-    ).first()
-    if membership is None:
-        raise HTTPException(status_code=403, detail="not a member of this org")
-    if membership.role not in {ROLE_OWNER, ROLE_ADMIN}:
-        raise HTTPException(
-            status_code=403,
-            detail="admin or owner role required for this action",
-        )
-    return user, membership
+# Cookie/dashboard-user auth gates (see hexgate_api/deps/). Imported here, not
+# in the top import block, so they land after the keystore is defined: these
+# pull in auth.py, whose _session_secret() lazy-imports the keystore singleton
+# from this module. The two auth surfaces (dashboard humans vs SDK machines)
+# stay separate by design — see m3-platform-auth.md, "the dual-auth-surface
+# insight".
+from hexgate_api.deps.identity import require_user  # noqa: E402
+from hexgate_api.deps.org import (  # noqa: E402
+    require_org_admin,
+    require_org_admin_or_self,
+    require_org_member,
+    require_org_membership,
+)
+from hexgate_api.deps.project import require_project_admin  # noqa: E402
 
 
 def _readiness() -> tuple[dict[str, str], int]:
@@ -1125,25 +676,6 @@ async def api_register_agent(
     )
 
 
-def _audit_unavailable() -> HTTPException:
-    return HTTPException(
-        status_code=503,
-        detail="audit log temporarily unavailable",
-        headers={"Retry-After": "5"},
-    )
-
-
-def require_clickhouse():
-    """Resolve the ClickHouse client as a dependency, mapping connect failures
-    to 503 — get_clickhouse() connects eagerly, so without this the raise
-    escapes dependency resolution as an uncaught 500."""
-    try:
-        return get_clickhouse()
-    except ClickHouseError as exc:
-        _log.warning("ClickHouse unreachable resolving audit client: %s", exc)
-        raise _audit_unavailable()
-
-
 @v1.post(
     "/audit/decisions",
     response_model=DecisionAccepted,
@@ -1497,7 +1029,7 @@ async def ws_chat(
 # verify / reset-password / oauth routers in 3b / 3c.
 # ---------------------------------------------------------------------------
 
-from auth import (  # noqa: E402 — placed late so keystore is initialised
+from hexgate_api.auth import (  # noqa: E402 — placed late so keystore is initialised
     UserCreate,
     UserRead,
     UserUpdate,
@@ -1570,7 +1102,7 @@ async def api_list_orgs(
     idempotent on the "user already owns an org" invariant, so a
     concurrent repair-then-create race can't double-bootstrap.
     """
-    from services import ensure_personal_default_org, list_orgs_for_user
+    from hexgate_api.services import ensure_personal_default_org, list_orgs_for_user
 
     rows = await list_orgs_for_user(session, user.id)
     if not rows:
@@ -1600,7 +1132,7 @@ async def api_create_org(
     409 rather than silently picking a different one — explicit failure
     so the UI can prompt for a tweak.
     """
-    from services import (
+    from hexgate_api.services import (
         _email_to_slug_base,
         _generate_unique_org_slug,
         create_org,
@@ -1709,7 +1241,7 @@ async def api_list_members(
     "admin/owner" — every member has a legitimate need to know who
     else is in the org (e.g., to know who to ask for promotion).
     """
-    from services import list_org_members
+    from hexgate_api.services import list_org_members
 
     _, member = membership
     rows = await list_org_members(session, member.org_id)
@@ -1738,7 +1270,11 @@ async def api_update_member_role(
     Returns the updated row so the dashboard can re-render the badge
     without a follow-up GET.
     """
-    from services import LastOwnerError, RoleEscalationError, change_member_role
+    from hexgate_api.services import (
+        LastOwnerError,
+        RoleEscalationError,
+        change_member_role,
+    )
 
     _, caller_member = membership
     try:
@@ -1776,7 +1312,7 @@ async def api_remove_member(
 
     Returns 204 No Content on success (REST norm for DELETE).
     """
-    from services import LastOwnerError, remove_member
+    from hexgate_api.services import LastOwnerError, remove_member
 
     _, caller_member = membership
     try:
@@ -1832,7 +1368,11 @@ async def api_create_invitation(
     The route also looks up the org name + inviter email for the email
     body (one extra query each; cheap).
     """
-    from services import InvitationError, create_invitation, send_invitation_email
+    from hexgate_api.services import (
+        InvitationError,
+        create_invitation,
+        send_invitation_email,
+    )
 
     caller, caller_member = membership
     try:
@@ -1861,8 +1401,8 @@ async def api_create_invitation(
         # the same stderr block operators are already watching. Invitee
         # address is PII-redacted (same rule as mailer.py); the org slug
         # stays so support can grep by tenant.
-        from auth import logger as auth_logger
-        from mailer import _redact_email
+        from hexgate_api.auth import logger as auth_logger
+        from hexgate_api.core.mailer import _redact_email
 
         auth_logger.exception(
             "failed to send invitation email to %s for org %s",
@@ -1884,7 +1424,7 @@ async def api_list_invitations(
     show up. Already-accepted invites surface implicitly as new
     OrganizationMember rows via ``GET /members``.
     """
-    from services import list_pending_invitations
+    from hexgate_api.services import list_pending_invitations
 
     _, caller_member = membership
     rows = await list_pending_invitations(session, caller_member.org_id)
@@ -1904,7 +1444,7 @@ async def api_get_invitation_preview(
     authenticating. The invite id is UUID v4 (unguessable enough);
     the accept POST is what requires auth + strict email match.
     """
-    from services import _is_invitation_terminal, find_invitation
+    from hexgate_api.services import _is_invitation_terminal, find_invitation
 
     invitation = await find_invitation(session, invitation_id)
     if invitation is None:
@@ -1946,7 +1486,7 @@ async def api_accept_invitation(
       * 409 — already accepted or revoked
       * 403 — email mismatch ("this invite isn't for you")
     """
-    from services import (
+    from hexgate_api.services import (
         InvitationAlreadyConsumed,
         InvitationEmailMismatch,
         InvitationExpired,
@@ -1989,7 +1529,7 @@ async def api_revoke_invitation(
     success — calling DELETE on an already-revoked invite is a no-op
     that still returns 204.
     """
-    from services import (
+    from hexgate_api.services import (
         ROLE_ADMIN,
         ROLE_OWNER,
         find_invitation,
@@ -2056,7 +1596,7 @@ async def api_create_project(
     409 if a project with the same name already exists in this org
     (the user probably meant to switch to the existing one).
     """
-    from services import ProjectNameTakenError, create_project
+    from hexgate_api.services import ProjectNameTakenError, create_project
 
     _, caller_member = membership
     try:
@@ -2075,7 +1615,7 @@ async def api_list_projects(
 ) -> list[ProjectRead]:
     """List every project inside an org. Any member can list — the
     dashboard's project picker consumes this."""
-    from services import list_projects
+    from hexgate_api.services import list_projects
 
     _, caller_member = membership
     rows = await list_projects(session, caller_member.org_id)
@@ -2106,7 +1646,7 @@ async def api_update_project(
 ) -> ProjectRead:
     """Rename a project. Admin or owner required. 409 on name collision
     with another project in the same org."""
-    from services import ProjectNameTakenError, update_project_name
+    from hexgate_api.services import ProjectNameTakenError, update_project_name
 
     try:
         project = await update_project_name(

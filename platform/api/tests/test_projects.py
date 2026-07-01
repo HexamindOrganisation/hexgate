@@ -25,10 +25,10 @@ from sqlalchemy.pool import StaticPool
 from sqlmodel import SQLModel, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-import main
-from main import app
-from models import OrganizationMember, User
-from services import (
+from hexgate_api import main
+from hexgate_api.main import app
+from hexgate_api.models import OrganizationMember, User
+from hexgate_api.services import (
     ROLE_ADMIN,
     ROLE_MEMBER,
     ensure_default_project,
@@ -58,8 +58,8 @@ async def session_factory():
 
 @pytest_asyncio.fixture
 async def client(session_factory, tmp_path) -> TestClient:
-    from db import get_session
-    from keystore import FileKeyStore
+    from hexgate_api.core.db import get_session
+    from hexgate_api.core.keystore import FileKeyStore
 
     async def override_session():
         async with session_factory() as session:

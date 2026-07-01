@@ -24,9 +24,13 @@ from sqlalchemy.pool import StaticPool
 from sqlmodel import SQLModel
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-import main
-from main import app
-from services import DEFAULT_PROJECT_ID, DEFAULT_USER_ID, ensure_default_project
+from hexgate_api import main
+from hexgate_api.main import app
+from hexgate_api.services import (
+    DEFAULT_PROJECT_ID,
+    DEFAULT_USER_ID,
+    ensure_default_project,
+)
 
 
 @pytest_asyncio.fixture
@@ -55,7 +59,7 @@ async def session_factory():
 @pytest_asyncio.fixture
 async def client(session_factory, tmp_path) -> TestClient:
     """TestClient that routes ``get_session`` through the shared test factory."""
-    from keystore import FileKeyStore
+    from hexgate_api.core.keystore import FileKeyStore
 
     async def override_session():
         async with session_factory() as session:
@@ -335,8 +339,8 @@ async def test_manifest_endpoint_returns_registered_manifest_with_tools(
     client: TestClient, session_factory
 ) -> None:
     """After register_manifest, the endpoint surfaces the full manifest."""
-    from schemas import AgentManifest
-    from services import register_manifest
+    from hexgate_api.schemas import AgentManifest
+    from hexgate_api.services import register_manifest
 
     async with session_factory() as session:
         manifest = AgentManifest.model_validate(
@@ -362,8 +366,8 @@ async def test_manifest_endpoint_returns_latest_version(
     client: TestClient, session_factory
 ) -> None:
     """When multiple versions exist, only the highest one is returned."""
-    from schemas import AgentManifest
-    from services import register_manifest
+    from hexgate_api.schemas import AgentManifest
+    from hexgate_api.services import register_manifest
 
     async with session_factory() as session:
         v1 = AgentManifest.model_validate(_sample_manifest("support_bot"))
@@ -388,8 +392,8 @@ async def test_manifest_endpoint_round_trips_model_and_system_prompt(
     client: TestClient, session_factory
 ) -> None:
     """The new manifest fields survive register → read."""
-    from schemas import AgentManifest
-    from services import register_manifest
+    from hexgate_api.schemas import AgentManifest
+    from hexgate_api.services import register_manifest
 
     async with session_factory() as session:
         manifest = AgentManifest.model_validate(
@@ -478,7 +482,7 @@ def _mint_token_for_test(session_factory) -> str:
     """
     import asyncio
 
-    from services import mint_dev_token
+    from hexgate_api.services import mint_dev_token
 
     async def _mint():
         async with session_factory() as session:
@@ -651,7 +655,7 @@ def _load_agent_row(session_factory, project_id: str, name: str):
     — we want to see what actually got written, not what got returned."""
     import asyncio
 
-    from models import Agent
+    from hexgate_api.models import Agent
     from sqlmodel import select
 
     async def _fetch():

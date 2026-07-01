@@ -31,7 +31,7 @@ from __future__ import annotations
 from fastapi import FastAPI, Response
 from fastapi.responses import RedirectResponse
 
-from spa import mount_spa
+from hexgate_api.core.spa import mount_spa
 
 
 def enable_demo(app: FastAPI) -> None:
@@ -57,10 +57,10 @@ def enable_demo(app: FastAPI) -> None:
         is indistinguishable from a normal password login — the dashboard's
         ``ws_require_org_member`` accepts it unchanged.
         """
-        from auth import cookie_transport, get_jwt_strategy
-        from db import async_session_factory
-        from models import User
-        from services import DEFAULT_USER_ID
+        from hexgate_api.auth import cookie_transport, get_jwt_strategy
+        from hexgate_api.core.db import async_session_factory
+        from hexgate_api.models import User
+        from hexgate_api.services import DEFAULT_USER_ID
 
         async with async_session_factory() as session:
             user = await session.get(User, DEFAULT_USER_ID)

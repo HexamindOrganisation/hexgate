@@ -19,16 +19,16 @@ from clickhouse_connect.driver.exceptions import (
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
-import audit
-import main
-from audit import (
+from hexgate_api import audit
+from hexgate_api import main
+from hexgate_api.audit import (
     CLOCK_SKEW_FUTURE,
     list_decisions,
     summarize,
     _sliding_window_anomalies,
 )
-from keystore import FileKeyStore
-from main import (
+from hexgate_api.core.keystore import FileKeyStore
+from hexgate_api.main import (
     app,
     get_session,
     require_clickhouse,
@@ -36,9 +36,9 @@ from main import (
     require_project,
     require_user,
 )
-from schemas import AnomalySeverity, AuditOutcome, DecisionEvent
+from hexgate_api.schemas import AnomalySeverity, AuditOutcome, DecisionEvent
 
-from audit import prepare_date_range
+from hexgate_api.audit import prepare_date_range
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -135,7 +135,9 @@ def client(
     async def _stub_version_lookup(_session, _project_id, _agent_name) -> str:
         return _STUB_AGENT_VERSION_ID
 
-    monkeypatch.setattr("main.get_latest_agent_version_id", _stub_version_lookup)
+    monkeypatch.setattr(
+        "hexgate_api.main.get_latest_agent_version_id", _stub_version_lookup
+    )
     # The dashboard-read gating tests run the real require_org_member chain,
     # whose cookie transport needs an initialised keystore (same swap as the
     # client fixture in test_auth.py).
@@ -268,12 +270,12 @@ def test_clickhouse_unreachable_at_connect_returns_503(
     """get_clickhouse() raising during dependency resolution maps to 503, not 500."""
     from fastapi import HTTPException
 
-    from main import require_clickhouse
+    from hexgate_api.deps.clickhouse import require_clickhouse
 
     def _boom() -> None:
         raise ClickHouseError("connection refused")
 
-    monkeypatch.setattr("main.get_clickhouse", _boom)
+    monkeypatch.setattr("hexgate_api.deps.clickhouse.get_clickhouse", _boom)
     with pytest.raises(HTTPException) as exc:
         require_clickhouse()
     assert exc.value.status_code == 503
@@ -715,7 +717,7 @@ def test_liveness_does_not_ping_clickhouse(
     def _fail() -> bool:
         raise AssertionError("liveness probe must not ping ClickHouse")
 
-    monkeypatch.setattr("main.clickhouse_ping", _fail)
+    monkeypatch.setattr("hexgate_api.main.clickhouse_ping", _fail)
     r = TestClient(app).get(path)
     assert r.status_code == 200
     assert r.json()["status"] == "ok"
@@ -726,7 +728,7 @@ def test_liveness_does_not_ping_clickhouse(
 def test_readiness_reports_clickhouse(
     monkeypatch: pytest.MonkeyPatch, path: str
 ) -> None:
-    monkeypatch.setattr("main.clickhouse_ping", lambda: False)
+    monkeypatch.setattr("hexgate_api.main.clickhouse_ping", lambda: False)
     r = TestClient(app).get(path)
     assert r.status_code == 503
     assert r.json()["clickhouse"] == "unreachable"
@@ -741,8 +743,8 @@ def test_readiness_reports_clickhouse(
 def test_real_clickhouse_round_trip() -> None:
     """Insert through the real write path (``insert_decision`` with
     ``_DECISION_INSERT_SETTINGS``); SELECT it back; clean up."""
-    from audit import insert_decision
-    from clickhouse import get_clickhouse as real_get_clickhouse
+    from hexgate_api.audit import insert_decision
+    from hexgate_api.core.clickhouse import get_clickhouse as real_get_clickhouse
 
     clickhouse_client = real_get_clickhouse()
     # The shared client is sessionless (autogenerate_session_id=False in

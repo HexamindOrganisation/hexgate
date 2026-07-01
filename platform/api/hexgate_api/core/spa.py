@@ -22,6 +22,8 @@ from fastapi import FastAPI, Response
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+from hexgate_api import API_ROOT
+
 _log = logging.getLogger(__name__)
 
 # Request paths under the API namespace must never fall through to the SPA.
@@ -46,7 +48,8 @@ def _not_found() -> JSONResponse:
 
 # The dev-checkout layout after ``pnpm build``. A deployment image sets
 # HEXGATE_DASHBOARD_DIST=/app/static instead — this path does NOT exist there.
-_DEV_DASHBOARD_DIST = Path(__file__).parent.parent / "dashboard" / "dist"
+# API_ROOT.parent is platform/; the dashboard build lands in platform/dashboard/dist.
+_DEV_DASHBOARD_DIST = API_ROOT.parent / "dashboard" / "dist"
 
 
 def dashboard_dist() -> Path:

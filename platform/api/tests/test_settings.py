@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from settings import _DEV_CLICKHOUSE_PASSWORD, Settings
+from hexgate_api.settings import _DEV_CLICKHOUSE_PASSWORD, Settings
 
 
 def _settings(**kwargs) -> Settings:

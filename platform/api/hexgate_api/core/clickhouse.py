@@ -11,7 +11,7 @@ from functools import lru_cache
 import clickhouse_connect
 from clickhouse_connect.driver.client import Client
 
-from settings import get_settings
+from hexgate_api.settings import get_settings
 
 _log = logging.getLogger(__name__)
 

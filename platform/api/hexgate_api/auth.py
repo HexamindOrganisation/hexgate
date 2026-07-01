@@ -36,9 +36,9 @@ from fastapi_users.db import SQLAlchemyUserDatabase
 from httpx_oauth.clients.google import GoogleOAuth2
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from db import get_session
-from mailer import _redact_email, get_email_sender
-from models import OAuthAccount, User
+from hexgate_api.core.db import get_session
+from hexgate_api.core.mailer import _redact_email, get_email_sender
+from hexgate_api.models import OAuthAccount, User
 
 logger = logging.getLogger("hexgate.platform.auth")
 
@@ -97,7 +97,7 @@ def _session_secret() -> str:
     Rotating the keystore invalidates every session — that's the right
     blast radius.
     """
-    from main import keystore
+    from hexgate_api.main import keystore
 
     return hashlib.sha256(
         b"hexagate-session-v1:" + keystore._private_key_bytes()
@@ -191,7 +191,7 @@ class UserManager(BaseUserManager[User, str]):
         ``is_verified`` at its own moment and call
         ``POST /auth/request-verify-token`` independently.
         """
-        from services import ensure_personal_default_org
+        from hexgate_api.services import ensure_personal_default_org
 
         # Redact the email — same PII rule the mailer error path uses
         # (al***@domain). User id is the durable handle for support.
@@ -343,7 +343,7 @@ def _oauth_state_secret() -> str:
     zero — a key rotation invalidates any pending OAuth flows, which is
     exactly what you'd want.
     """
-    from main import keystore
+    from hexgate_api.main import keystore
 
     return hashlib.sha256(
         b"hexagate-oauth-state-v1:" + keystore._private_key_bytes()

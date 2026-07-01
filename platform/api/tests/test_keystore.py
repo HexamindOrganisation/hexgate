@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from keystore import (
+from hexgate_api.core.keystore import (
     PRIVATE_KEY_FILENAME,
     PUBLIC_KEY_FILENAME,
     FileKeyStore,

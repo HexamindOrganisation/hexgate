@@ -19,10 +19,10 @@ from sqlalchemy.pool import StaticPool
 from sqlmodel import SQLModel
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-import main
-import mailer
-from main import app
-from services import (
+from hexgate_api import main
+from hexgate_api.core import mailer
+from hexgate_api.main import app
+from hexgate_api.services import (
     DEFAULT_PROJECT_ID,
     DEFAULT_USER_EMAIL,
     DEFAULT_USER_ID,
@@ -56,8 +56,8 @@ async def session_factory():
 @pytest_asyncio.fixture
 async def client(session_factory, tmp_path) -> TestClient:
     """TestClient with the test factory injected, fresh keystore per run."""
-    from db import get_session
-    from keystore import FileKeyStore
+    from hexgate_api.core.db import get_session
+    from hexgate_api.core.keystore import FileKeyStore
 
     async def override_session():
         async with session_factory() as session:
@@ -278,8 +278,8 @@ def test_cookie_route_accepts_cookie_session(
     import asyncio
     import uuid
 
-    from models import OrganizationMember, User
-    from services import DEFAULT_ORG_ID
+    from hexgate_api.models import OrganizationMember, User
+    from hexgate_api.services import DEFAULT_ORG_ID
 
     # Register + log in so the client carries the session cookie.
     client.post(
@@ -341,7 +341,7 @@ def test_default_admin_email_passes_pydantic_validation() -> None:
     fails after a refactor, change DEFAULT_USER_EMAIL to a real TLD
     (``.dev``, ``.io``, ``.com`` …).
     """
-    from auth import UserRead
+    from hexgate_api.auth import UserRead
 
     # Should not raise. The dummy values for the other fields don't
     # matter — only the email goes through validation that depends on
@@ -380,7 +380,7 @@ def test_inactive_user_cannot_authenticate_via_cookie(
     """
     import asyncio
 
-    from models import User
+    from hexgate_api.models import User
 
     client.post(
         "/v1/auth/register",
@@ -617,7 +617,7 @@ def test_cookie_secure_defaults_to_false_for_localhost_dev(monkeypatch) -> None:
     A Secure cookie is silently dropped by every browser on http://, so
     if this regressed to ``True`` ``make platform-api`` would 401 on
     every request after login. The ergonomic default is off."""
-    from auth import _cookie_secure
+    from hexgate_api.auth import _cookie_secure
 
     monkeypatch.delenv("HEXGATE_COOKIE_SECURE", raising=False)
     assert _cookie_secure() is False
@@ -630,7 +630,7 @@ def test_cookie_secure_respects_env_var(monkeypatch) -> None:
     HTTPS terminator can flip the Secure flag on with one env var. If
     any of the documented truthy values stopped working, prod would
     silently ship insecure cookies."""
-    from auth import _cookie_secure
+    from hexgate_api.auth import _cookie_secure
 
     for truthy in ("1", "true", "TRUE", "yes", "on"):
         monkeypatch.setenv("HEXGATE_COOKIE_SECURE", truthy)

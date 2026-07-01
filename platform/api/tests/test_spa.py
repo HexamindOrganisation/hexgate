@@ -22,7 +22,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-import spa
+from hexgate_api.core import spa
 
 
 def _app_with_v1() -> FastAPI:

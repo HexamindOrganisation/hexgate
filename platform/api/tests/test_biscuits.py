@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from biscuit_auth import KeyPair
 
-from biscuits import (
+from hexgate_api.core.biscuits import (
     MintRequest,
     TokenAuthorizationError,
     TokenError,

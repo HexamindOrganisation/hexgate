@@ -15,7 +15,7 @@ import threading
 
 import pytest
 
-from mailer import ResendEmailSender, _redact_email
+from hexgate_api.core.mailer import ResendEmailSender, _redact_email
 
 
 # ---- _redact_email -------------------------------------------------------
@@ -204,7 +204,7 @@ def reset_sender():
     test starts clean. ResendEmailSender mutates the resend module global
     inside _send_sync; without restoring it here a later test would see
     a stray "re_test_key" left by an earlier one."""
-    import mailer
+    from hexgate_api.core import mailer
     import resend
 
     original_sender = mailer.get_email_sender()
@@ -219,8 +219,8 @@ def test_configure_email_sender_wires_resend_when_both_env_vars_set(
 ) -> None:
     """Both env vars present → real ResendEmailSender, configured with
     the exact values from the env (not a half-broken fallback)."""
-    from main import _configure_email_sender
-    from mailer import ResendEmailSender, get_email_sender
+    from hexgate_api.main import _configure_email_sender
+    from hexgate_api.core.mailer import ResendEmailSender, get_email_sender
 
     monkeypatch.setenv("RESEND_API_KEY", "re_test_key_42")
     monkeypatch.setenv("HEXGATE_EMAIL_FROM", "noreply@hexgate.ai")
@@ -241,9 +241,9 @@ def test_configure_email_sender_warns_on_partial_config(
     """Exactly one env var set = operator misconfig. Must log WARNING
     (distinguishable from clean dev mode) naming the missing var so the
     fix is obvious without grepping the .env."""
-    import main as main_module
-    from main import _configure_email_sender
-    from mailer import ResendEmailSender, get_email_sender
+    from hexgate_api import main as main_module
+    from hexgate_api.main import _configure_email_sender
+    from hexgate_api.core.mailer import ResendEmailSender, get_email_sender
 
     monkeypatch.setenv("RESEND_API_KEY", "re_test_key")
     monkeypatch.delenv("HEXGATE_EMAIL_FROM", raising=False)
@@ -264,9 +264,9 @@ def test_configure_email_sender_clean_dev_mode_logs_info(
 ) -> None:
     """Both unset = clean dev mode. INFO log only — no false alarm
     that would teach operators to ignore the partial-config warning."""
-    import main as main_module
-    from main import _configure_email_sender
-    from mailer import ResendEmailSender, get_email_sender
+    from hexgate_api import main as main_module
+    from hexgate_api.main import _configure_email_sender
+    from hexgate_api.core.mailer import ResendEmailSender, get_email_sender
 
     monkeypatch.delenv("RESEND_API_KEY", raising=False)
     monkeypatch.delenv("HEXGATE_EMAIL_FROM", raising=False)
@@ -284,8 +284,8 @@ def test_configure_email_sender_resets_to_stderr_when_env_cleared(
     """A re-config (lifespan-restart, test) with env vars cleared must
     actively reset to StderrEmailSender — otherwise a stale Resend
     sender keeps shipping mail while the log says 'dev stderr sender'."""
-    from main import _configure_email_sender
-    from mailer import ResendEmailSender, get_email_sender
+    from hexgate_api.main import _configure_email_sender
+    from hexgate_api.core.mailer import ResendEmailSender, get_email_sender
 
     monkeypatch.setenv("RESEND_API_KEY", "re_test_key")
     monkeypatch.setenv("HEXGATE_EMAIL_FROM", "noreply@hexgate.ai")

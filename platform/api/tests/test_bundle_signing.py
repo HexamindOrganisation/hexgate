@@ -21,10 +21,10 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlmodel import SQLModel
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-import services
+from hexgate_api import services
 from hexgate.security import generate_keypair, sign_bytes, verify_bytes
-from models import Agent  # noqa: F401 — ensures the table is registered
-from services import compile_bundle, ensure_default_project, update_agent
+from hexgate_api.models import Agent  # noqa: F401 — ensures the table is registered
+from hexgate_api.services import compile_bundle, ensure_default_project, update_agent
 
 
 _OPA_AVAILABLE = shutil.which("opa") is not None
@@ -224,7 +224,7 @@ async def test_backfill_is_idempotent(session, signer) -> None:
 
 @needs_opa
 async def test_agent_read_serializes_bundle_as_base64(session, signer) -> None:
-    import main
+    from hexgate_api import main
 
     sign, public_raw = signer
     agent = await update_agent(
@@ -257,7 +257,7 @@ async def test_agent_read_nulls_when_unsigned(session) -> None:
         "default",
         policy_yaml=_DEMO_POLICY,
     )
-    import main
+    from hexgate_api import main
 
     view = main._agent_read(agent)
     assert view.bundle_wasm_b64 is None
@@ -338,7 +338,7 @@ def test_get_agent_returns_etag_header_when_bundle_present() -> None:
     """The endpoint exposes the bundle's wasm_hash as a quoted ETag so
     the SDK can use it on subsequent conditional GETs."""
     from fastapi.testclient import TestClient
-    import main
+    from hexgate_api import main
 
     # M3 Phase 2: routes require the X-Dev-User header. The default seed user
     # is a member of support-bot's org, so baking it onto the client passes
@@ -359,7 +359,7 @@ def test_if_none_match_returns_304_when_unchanged() -> None:
     """A conditional GET with the prior ETag returns 304 + empty body —
     the cheap path the per-run refresh leans on."""
     from fastapi.testclient import TestClient
-    import main
+    from hexgate_api import main
 
     # M3 Phase 2: routes require the X-Dev-User header. The default seed user
     # is a member of support-bot's org, so baking it onto the client passes
@@ -382,7 +382,7 @@ def test_if_none_match_returns_304_when_unchanged() -> None:
 def test_if_none_match_stale_etag_returns_fresh_200() -> None:
     """A stale or wrong ETag → server resends the full body (200)."""
     from fastapi.testclient import TestClient
-    import main
+    from hexgate_api import main
 
     # M3 Phase 2: routes require the X-Dev-User header. The default seed user
     # is a member of support-bot's org, so baking it onto the client passes

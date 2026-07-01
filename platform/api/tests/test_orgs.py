@@ -20,10 +20,10 @@ from sqlalchemy.pool import StaticPool
 from sqlmodel import SQLModel, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-import main
-from main import app
-from models import Organization, OrganizationMember, User
-from services import (
+from hexgate_api import main
+from hexgate_api.main import app
+from hexgate_api.models import Organization, OrganizationMember, User
+from hexgate_api.services import (
     DEFAULT_ORG_ID,
     LastOwnerError,
     ROLE_ADMIN,
@@ -64,8 +64,8 @@ async def session_factory():
 
 @pytest_asyncio.fixture
 async def client(session_factory, tmp_path) -> TestClient:
-    from db import get_session
-    from keystore import FileKeyStore
+    from hexgate_api.core.db import get_session
+    from hexgate_api.core.keystore import FileKeyStore
 
     async def override_session():
         async with session_factory() as session:
@@ -313,7 +313,7 @@ async def test_remove_member_refuses_last_owner(session_factory) -> None:
     here; the route layer translates it to HTTP 409."""
     import pytest
 
-    from services import DEFAULT_USER_ID
+    from hexgate_api.services import DEFAULT_USER_ID
 
     async with session_factory() as s:
         with pytest.raises(LastOwnerError):
@@ -368,7 +368,7 @@ async def test_change_member_role_refuses_demoting_last_owner(
     """Demoting the only owner to member would orphan the org."""
     import pytest
 
-    from services import DEFAULT_USER_ID
+    from hexgate_api.services import DEFAULT_USER_ID
 
     async with session_factory() as s:
         with pytest.raises(LastOwnerError):

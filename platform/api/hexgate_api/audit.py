@@ -18,7 +18,12 @@ from collections import deque
 
 from clickhouse_connect.driver.client import Client
 
-from schemas import AnomalySeverity, AuditAnomaly, AuditOutcome, DecisionEvent
+from hexgate_api.schemas import (
+    AnomalySeverity,
+    AuditAnomaly,
+    AuditOutcome,
+    DecisionEvent,
+)
 
 _log = logging.getLogger(__name__)
 

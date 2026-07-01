@@ -5,7 +5,6 @@ to a local SQLite file so dev and tests stay zero-setup.
 """
 
 import os
-from pathlib import Path
 from urllib.parse import quote
 
 from dotenv import load_dotenv
@@ -13,11 +12,13 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlmodel import SQLModel
 from sqlmodel.ext.asyncio.session import AsyncSession
 
+from hexgate_api import API_ROOT
+
 # The engine is built at import, before main's load_dotenv(), so load .env
 # here too. Non-overriding, so real env vars still win.
 load_dotenv()
 
-DB_PATH = Path(__file__).parent / "hexgate.db"
+DB_PATH = API_ROOT / "hexgate.db"
 _DEFAULT_URL = f"sqlite+aiosqlite:///{DB_PATH}"
 
 

@@ -22,8 +22,8 @@ pytestmark = pytest.mark.skipif(
 async def test_schema_builds_and_round_trips_on_postgres() -> None:
     # Lazy import so the module still collects (and skips) if a bad
     # DATABASE_URL made the app's engine fail to build.
-    import models
-    from db import async_session_factory, engine, init_db
+    from hexgate_api import models
+    from hexgate_api.core.db import async_session_factory, engine, init_db
 
     # Guard against a misconfigured DATABASE_URL silently using SQLite.
     assert engine.url.drivername == "postgresql+asyncpg"
@@ -59,7 +59,7 @@ async def test_schema_builds_and_round_trips_on_postgres() -> None:
 
 async def _delete_smoke_org(session) -> None:
     """Delete the pg-smoke org if present."""
-    import models
+    from hexgate_api import models
 
     existing = (
         await session.exec(
