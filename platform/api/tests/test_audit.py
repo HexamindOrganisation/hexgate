@@ -28,14 +28,12 @@ from hexgate_api.audit import (
     _sliding_window_anomalies,
 )
 from hexgate_api.core.keystore import FileKeyStore
-from hexgate_api.main import (
-    app,
-    get_session,
-    require_clickhouse,
-    require_org_member,
-    require_project,
-    require_user,
-)
+from hexgate_api.core.db import get_session
+from hexgate_api.deps.clickhouse import require_clickhouse
+from hexgate_api.deps.identity import require_user
+from hexgate_api.deps.org import require_org_member
+from hexgate_api.deps.tokens import require_project
+from hexgate_api.main import app
 from hexgate_api.schemas import AnomalySeverity, AuditOutcome, DecisionEvent
 
 from hexgate_api.audit import prepare_date_range
@@ -136,7 +134,8 @@ def client(
         return _STUB_AGENT_VERSION_ID
 
     monkeypatch.setattr(
-        "hexgate_api.main.get_latest_agent_version_id", _stub_version_lookup
+        "hexgate_api.domains.audit.router.get_latest_agent_version_id",
+        _stub_version_lookup,
     )
     # The dashboard-read gating tests run the real require_org_member chain,
     # whose cookie transport needs an initialised keystore (same swap as the

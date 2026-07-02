@@ -224,7 +224,7 @@ async def test_backfill_is_idempotent(session, signer) -> None:
 
 @needs_opa
 async def test_agent_read_serializes_bundle_as_base64(session, signer) -> None:
-    from hexgate_api import main
+    from hexgate_api.domains.agents.router import _agent_read
 
     sign, public_raw = signer
     agent = await update_agent(
@@ -234,7 +234,7 @@ async def test_agent_read_serializes_bundle_as_base64(session, signer) -> None:
         policy_yaml=_DEMO_POLICY,
         sign=sign,
     )
-    view = main._agent_read(agent)
+    view = _agent_read(agent)
     assert view.bundle_wasm_b64 is not None
     assert view.bundle_signature_b64 is not None
     assert view.bundle_manifest is not None
@@ -257,9 +257,9 @@ async def test_agent_read_nulls_when_unsigned(session) -> None:
         "default",
         policy_yaml=_DEMO_POLICY,
     )
-    from hexgate_api import main
+    from hexgate_api.domains.agents.router import _agent_read
 
-    view = main._agent_read(agent)
+    view = _agent_read(agent)
     assert view.bundle_wasm_b64 is None
     assert view.bundle_manifest is None
     assert view.bundle_signature_b64 is None

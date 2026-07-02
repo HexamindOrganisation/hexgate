@@ -65,8 +65,10 @@ async def client(session_factory, tmp_path) -> TestClient:
         async with session_factory() as session:
             yield session
 
-    # Endpoints use the local main.get_session, so we override that one.
-    app.dependency_overrides[main.get_session] = override_session
+    # Endpoints depend on core.db.get_session; override that shared object.
+    from hexgate_api.core.db import get_session
+
+    app.dependency_overrides[get_session] = override_session
     # PUT /agents now compiles + signs the policy bundle, so the endpoint
     # needs an initialised keystore. The fixture doesn't run the app
     # lifespan, so wire up a throwaway temp-dir keystore here and restore
