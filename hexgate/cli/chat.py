@@ -349,7 +349,7 @@ def main(args: argparse.Namespace) -> int:
     # wild calling tools and we somehow miss draining between turns.
     pending_decisions: deque[Decision] = deque(maxlen=64)
 
-    # Terminal chat deliberately ignores HEXGATE_KEY: there's no playground to
+    # Terminal chat deliberately ignores HEXGATE_API_KEY: there's no playground to
     # feed and policy enforcement still works via the agent's own YAML or
     # registered factory. The serve subcommand keeps the cloud path.
     runtime = build_runtime(

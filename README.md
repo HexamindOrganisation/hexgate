@@ -107,11 +107,11 @@ cp .env.sample .env
 hexgate chat --agent example_agent
 ```
 
-Required keys for the example CLI flow:
+Keys the built-in example agent uses (bootstrap no longer hard-requires them — each is only needed if you invoke the piece that reads it):
 
-- `OPENAI_API_KEY`
-- `LINKUP_API_KEY`
-- `TAVILY_API_KEY`
+- `OPENAI_API_KEY` — the default `openai:gpt-5.4` model. Skip it if you pass your own model; if it's missing, the model provider raises a key-named error when the agent is built.
+- `LINKUP_API_KEY` — the built-in `web_search` tool, which raises a clear error the first time it runs without a key.
+- `TAVILY_API_KEY` — the built-in `fetch` tool, same as above.
 
 Run `hexgate --help` to see all subcommands (`chat`, `serve`, `register`), and `hexgate <subcommand> --help` for the flags each one accepts.
 
@@ -135,7 +135,7 @@ The included local agent lives in `examples/example_agent/`, and the CLI can als
 
 The two Quick Starts above aren't competing — they answer different questions.
 
-**Inner loop — `hexgate chat`.** A single-process REPL against a local or builtin agent. No platform, no Docker, no browser. The chat command sets `HEXGATE_LOCAL_MODE=1` automatically so audit stays on your machine even if `HEXGATE_KEY` lives in your `.env` from an earlier session. Denies and approval-required calls render as inline panels in the terminal — same `Decision` data the platform would log, surfaced where you're iterating. Reach for `chat` when you're authoring a policy YAML, tweaking a tool, or shaping a system prompt.
+**Inner loop — `hexgate chat`.** A single-process REPL against a local or builtin agent. No platform, no Docker, no browser. The chat command sets `HEXGATE_LOCAL_MODE=1` automatically so audit stays on your machine even if `HEXGATE_API_KEY` lives in your `.env` from an earlier session. Denies and approval-required calls render as inline panels in the terminal — same `Decision` data the platform would log, surfaced where you're iterating. Reach for `chat` when you're authoring a policy YAML, tweaking a tool, or shaping a system prompt.
 
 **Team loop — `hexgate serve` + dashboard Playground.** Same agent code, but the policy + decisions round-trip through the platform. You get auditable decisions in ClickHouse, the shared Playground UI, and live policy edits via the dashboard. Reach for `serve` when you're collaborating on an agent's behaviour, debugging a production-like trace, or demoing.
 
@@ -163,7 +163,7 @@ make dashboard
 
 # Terminal 3 — mint a token, then serve your local agent
 #   1. Open http://localhost:5173/tokens, click "Mint new token", copy the value.
-#   2. Add to asianf/.env:  HEXGATE_KEY=fty_live_...
+#   2. Add to asianf/.env:  HEXGATE_API_KEY=fty_live_...
 #   3. Pick the agent's Python entrypoint (module:attr — uvicorn-style)
 #      and let `hexgate serve` take over:
 make serve                                          # default — examples.customer_bot:agent
@@ -296,7 +296,7 @@ Dev wrote an OpenAI Agents / LangChain / Google ADK / Pydantic AI agent. They wr
 from hexgate.adapters.openai import HexgateRunner   # or .langchain.wrap_langchain_agent, .google.HexgateRunner, .pydantic_ai.wrap_pydantic_agent
 from hexgate.runtime import User
 
-runner = HexgateRunner()                            # picks up HEXGATE_KEY from env
+runner = HexgateRunner()                            # picks up HEXGATE_API_KEY from env
 await runner.run(
     my_agent,
     "refund 30",
@@ -331,14 +331,19 @@ Same enforcement seam, same `User` scope. The difference is whose system of reco
 
 | What dev sets | What changes |
 |---|---|
-| `HEXGATE_KEY=fty_live_<project>_…` | Wakes up the platform path. Without it, adapters / `load_agent` fall back to local / builtin. |
-| `HEXGATE_API_URL=http://localhost:8000` *(optional)* | Platform endpoint. Defaults to localhost. |
+| `HEXGATE_API_KEY=fty_live_<project>_…` | Wakes up the platform path. Without it, adapters / `load_agent` fall back to local / builtin. (Renamed from `HEXGATE_KEY`, which is no longer read.) |
+| `HEXGATE_API_URL=https://app.hexgate.ai` *(optional)* | Platform endpoint. Defaults to Hexgate Cloud (`https://app.hexgate.ai`). Set to `http://localhost:8000` only when self-hosting the platform locally — your key must be minted by whichever platform this points at. |
 | `HEXGATE_LOCAL_POLICY=./policy.yaml` *or* `./bundle/` | Dev escape hatch: enforce a policy from disk, hot-reload on save. Wins over the platform's bundle. |
 | `HEXGATE_BUNDLE_SIGN_KEY_PATH=./keys/dev.private` *(optional)* | Sign locally-recompiled yaml so `bundle.is_signed` reads True. |
 | `HEXGATE_BUNDLE_PUBKEY_PATH=./keys/prod.public` *(optional)* | Verify a pre-built bundle dir against this pubkey on every reload. |
 | `HEXGATE_BUNDLE_REQUIRE_SIGNATURE=true` *(optional)* | Strict mode — refuse any unsigned or unverifiable bundle at startup. |
 
 No config object to instantiate, no `enforce_policy(...)` call to remember on the platform path. The adapter / loader threads it all through.
+
+**Connecting to Hexgate.** The key and the URL are coupled: a `fty_live_…` key only verifies against the platform instance that minted it.
+
+- **Hosted (default):** set `HEXGATE_API_KEY` to the key from [app.hexgate.ai](https://app.hexgate.ai). Leave `HEXGATE_API_URL` unset — it defaults to `https://app.hexgate.ai`.
+- **Self-hosted / local platform:** additionally set `HEXGATE_API_URL=http://localhost:8000` (or your host), and use a key minted by *that* platform.
 
 ### Where enforcement actually happens
 
@@ -353,7 +358,7 @@ Walk through one tool call:
 `_policy_source` is set automatically by the loader based on env:
 
 - `HEXGATE_LOCAL_POLICY` set → `YamlPolicySource` or `BundleDirPolicySource` (mtime-driven refresh)
-- `HEXGATE_KEY` set, no local override → `PlatformPolicySource` (ETag / `304 Not Modified` refresh)
+- `HEXGATE_API_KEY` set, no local override → `PlatformPolicySource` (ETag / `304 Not Modified` refresh)
 - Neither → no source attached; enforcement uses whatever was loaded once
 
 **Scope of the per-turn refresh:** only the policy bundle. `system_prompt`, the manifest's tool list, and the model id are read once at agent construction and stay fixed for the lifetime of the process. Edit those on the dashboard and the change lands at the next `hexgate serve` restart — not at the next turn. The split is deliberate: policy is the operator's primary lever (and the one that needs to be auditable per-decision), while the manifest is an author-time concept.
@@ -363,7 +368,7 @@ Walk through one tool call:
 1. **Per-call identity stays explicit.** `User` is the one piece the adapter can't infer from env, because it's per-request, not per-process. One line wrapping each call (`user=User(...)` kwarg on adapters, `async with User(...)` for native).
 2. **`approval_required` tools.** If the policy uses that mode, dev decides what happens — pass `approval_handler=` (True / False / callable) when wrapping. Default for `hexgate serve` is auto-approve; for `hexgate chat` it prompts the TTY. Native code gets whatever the dev wires.
 
-Everything else — fetch, verify, hot-reload, role selection, signature check, decision rendering, tracing — the runtime handles. Set `HEXGATE_KEY` and wrap, or set `HEXGATE_LOCAL_POLICY` and wrap. That's the surface.
+Everything else — fetch, verify, hot-reload, role selection, signature check, decision rendering, tracing — the runtime handles. Set `HEXGATE_API_KEY` and wrap, or set `HEXGATE_LOCAL_POLICY` and wrap. That's the surface.
 
 ## 📦 What You Can Import
 
@@ -465,7 +470,7 @@ The four integrations differ in shape because the underlying SDKs do:
 
 Role resolution happens **at call time** from the active `User` contextvar — one wrapped agent serves many users concurrently because the scope is per-call. The original agent object is left intact (or, for LangChain BYO-graph tools, mutated by design so the same `tools` list flows through `create_react_agent`); the wrapper holds the policy.
 
-All adapters resolve the API key the same way: from the explicit `api_key=` argument, falling back to the `HEXGATE_KEY` environment variable.
+All adapters resolve the API key the same way: from the explicit `api_key=` argument, falling back to the `HEXGATE_API_KEY` environment variable.
 
 ### OpenAI Agents SDK — `HexgateRunner`
 
@@ -495,7 +500,7 @@ async def main():
         model="gpt-4o-mini",
     )
 
-    runner = HexgateRunner()  # picks up HEXGATE_KEY from env
+    runner = HexgateRunner()  # picks up HEXGATE_API_KEY from env
     result = await runner.run(
         agent,
         "What's the weather in Cherbourg?",
@@ -555,7 +560,7 @@ async def main():
     agent = wrap_langchain_agent(
         agent=graph,
         tools=TOOLS,          # same list passed to create_react_agent — wrapped in place
-        api_key="sk-...",     # or rely on HEXGATE_KEY
+        api_key="sk-...",     # or rely on HEXGATE_API_KEY
     )
 
     result = await agent.ainvoke(
@@ -631,7 +636,7 @@ async def main():
         agent=agent,
         app_name="google_runner_example",
         session_service=session_service,
-    )  # picks up HEXGATE_KEY from env
+    )  # picks up HEXGATE_API_KEY from env
 
     user_msg = types.Content(
         role="user", parts=[types.Part(text="What is the weather in New Delhi?")]
@@ -683,7 +688,7 @@ async def main():
 
     agent = wrap_pydantic_agent(
         agent=agent,
-        api_key="sk-...",  # or rely on HEXGATE_KEY
+        api_key="sk-...",  # or rely on HEXGATE_API_KEY
     )
 
     result = await agent.run(
@@ -1101,13 +1106,12 @@ Worth being explicit about the gaps so operators know where to layer their own c
 
 ## 🔧 Environment
 
-Copy `.env.sample` to `.env` and set:
+Copy `.env.sample` to `.env`. None of these are required to boot — set the ones whose feature you use. A missing key surfaces when that feature runs: the built-in tools raise their own clear error at call time, and the model provider raises a key-named error when the agent is built.
 
-- `OPENAI_API_KEY`
-- `LINKUP_API_KEY`
-- `TAVILY_API_KEY`
-- `LANGFUSE_SECRET_KEY`
-- `LANGFUSE_PUBLIC_KEY`
+- `OPENAI_API_KEY` — default model
+- `LINKUP_API_KEY` — built-in `web_search` tool
+- `TAVILY_API_KEY` — built-in `fetch` tool
+- `LANGFUSE_SECRET_KEY` / `LANGFUSE_PUBLIC_KEY` — tracing (optional)
 - optional `LANGFUSE_HOST`
 
 Policy-bundle enforcement (see [Policy Bundles](#-policy-bundles--compile-sign-enforce-wasm)) reads a few more, all optional:
@@ -1187,7 +1191,7 @@ Register a code-defined agent's manifest with the Hexgate platform. `--agent`
 takes a Python import path of the form `module.path:attribute`, the same shape
 as ASGI/WSGI entrypoints. The CLI imports the module, grabs the agent object,
 and POSTs its manifest to `${HEXGATE_API_URL}/v1/agents` using
-`${HEXGATE_KEY}` as the bearer token:
+`${HEXGATE_API_KEY}` as the bearer token:
 
 ```bash
 hexgate register --agent examples.customer_bot:agent
@@ -1329,8 +1333,8 @@ Bridges your local agent runtime to the dashboard via the platform's WebSocket r
 
 ```bash
 # in asianf/.env
-HEXGATE_KEY=fty_live_<project>_<biscuit>
-HEXGATE_API_URL=http://localhost:8000       # optional, defaults to localhost:8000
+HEXGATE_API_KEY=fty_live_<project>_<biscuit>
+HEXGATE_API_URL=http://localhost:8000       # optional; only when self-hosting the platform locally
 
 # pick an agent module:attr — uvicorn-style spec
 uv run hexgate serve examples.customer_bot:agent
@@ -1369,7 +1373,7 @@ There's no longer a `HEXGATE_AGENT_NAME` env var, `--agent` flag, or
 `--use` flag — the spec carries everything. If you've been setting
 `HEXGATE_AGENT_NAME` in `.env`, drop it.
 
-### How `load_agent()` resolves with `HEXGATE_KEY`
+### How `load_agent()` resolves with `HEXGATE_API_KEY`
 
 ```python
 from hexgate import load_agent
@@ -1377,8 +1381,8 @@ from hexgate import load_agent
 agent, handler = load_agent("read_only")     # explicit name required
 ```
 
-When `HEXGATE_KEY` is set, `load_agent(name)` fetches the named agent from
-the platform (via `load_hexgate_agent`). When `HEXGATE_KEY` is not set, it
+When `HEXGATE_API_KEY` is set, `load_agent(name)` fetches the named agent from
+the platform (via `load_hexgate_agent`). When `HEXGATE_API_KEY` is not set, it
 falls back to local / registered / builtin resolution — no platform call.
 
 The legacy `HEXGATE_AGENT_NAME` env-var fallback was removed in Phase 7;

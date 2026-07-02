@@ -1,7 +1,7 @@
 """Attenuate a verified Hexgate token with user-scoped facts and checks.
 
 In production the dev's backend calls :func:`attenuate_for_user` on each
-inbound request, taking the project-wide token from ``HEXGATE_KEY`` and
+inbound request, taking the project-wide token from ``HEXGATE_API_KEY`` and
 appending a per-user block before forwarding to the agent runner. The
 new envelope still chains to the platform's root public key — biscuit's
 ``append`` protocol handles the signature linkage with an ephemeral

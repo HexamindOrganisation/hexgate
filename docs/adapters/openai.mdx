@@ -14,7 +14,7 @@ description: "Wrap an Agent with HexgateRunner — drop-in replacement for agent
 from hexgate.adapters.openai import HexgateRunner
 from hexgate.runtime import User
 
-runner = HexgateRunner()                            # picks up HEXGATE_KEY
+runner = HexgateRunner()                            # picks up HEXGATE_API_KEY
 result = await runner.run(
     agent,
     "What's the weather in Cherbourg?",

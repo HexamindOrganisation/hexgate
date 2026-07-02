@@ -1,7 +1,7 @@
 """End-to-end audit emission against a live platform + ClickHouse.
 
 Requires: `make clickhouse-up` and `make platform-api` running, and
-`HEXGATE_KEY` set to a token minted via the dashboard.
+`HEXGATE_API_KEY` set to a token minted via the dashboard.
 
 Opt in with: `pytest -m integration`.
 """
@@ -21,12 +21,12 @@ from hexgate.security.decision import Decision, DecisionOutcome
 pytestmark = pytest.mark.integration
 
 PLATFORM_URL = os.environ.get("HEXGATE_API_URL", "http://localhost:8000").rstrip("/")
-TOKEN = os.environ.get("HEXGATE_KEY")
+TOKEN = os.environ.get("HEXGATE_API_KEY")
 
 
 def _need_token() -> None:
     if not TOKEN:
-        pytest.skip("HEXGATE_KEY not set; mint a token via the dashboard")
+        pytest.skip("HEXGATE_API_KEY not set; mint a token via the dashboard")
 
 
 def _event() -> AuditEvent:

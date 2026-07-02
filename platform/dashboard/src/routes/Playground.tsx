@@ -161,7 +161,7 @@ function PlaygroundLive({ projectId }: { projectId: string }) {
             <div className="mt-2 text-muted-foreground">
               Run{" "}
               <span className="font-mono text-foreground">hexgate serve</span>{" "}
-              with your HEXGATE_KEY to expose an agent session here.
+              with your HEXGATE_API_KEY to expose an agent session here.
             </div>
           </div>
         )}

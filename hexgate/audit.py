@@ -19,6 +19,8 @@ from uuid import UUID, uuid4
 
 import httpx
 
+from hexgate.config.env import resolve_api_key, resolve_api_url
+
 if TYPE_CHECKING:
     # Annotation-only: Decision is used solely as a type hint below, so it stays
     # out of the runtime import graph (PEP 563 keeps it lazy). audit.py is a
@@ -271,10 +273,9 @@ class AuditSender:
 
 
 _AUDIT_PATH = "/v1/audit/decisions"
-_DEFAULT_API_URL = "http://localhost:8000"
 
 # Setting this env var to a truthy value (``1``/``true``/``yes``/``on``,
-# case-insensitive) makes ``configure()`` a no-op even when ``HEXGATE_KEY``
+# case-insensitive) makes ``configure()`` a no-op even when ``HEXGATE_API_KEY``
 # is present. ``bootstrap(local_only=True)`` sets it; ``hexgate chat``
 # passes ``local_only=True``. The check happens on every ``configure()``
 # call (not cached) so an adapter wrapper that re-``configure``s after
@@ -316,7 +317,7 @@ def configure(
 ) -> AuditSender | None:
     """Get-or-create the audit sender for ``api_key``. Idempotent per key.
 
-    Both args fall back to ``HEXGATE_KEY`` / ``HEXGATE_API_URL`` env vars.
+    Both args fall back to ``HEXGATE_API_KEY`` / ``HEXGATE_API_URL`` env vars.
     Reuses the existing sender when the same key was already configured;
     distinct keys get distinct senders. Returns ``None`` when no api_key is
     resolvable — audit stays inert.
@@ -330,7 +331,7 @@ def configure(
     if _local_mode_active():
         # Only log when a key was actually present — otherwise the
         # message is just noise during a no-key local run.
-        resolved = api_key or os.environ.get("HEXGATE_KEY")
+        resolved = resolve_api_key(api_key)
         if resolved and not _logged_local_mode_suppressed:
             _log.info(
                 "audit suppressed: %s=1 (a key is configured but local "
@@ -339,15 +340,15 @@ def configure(
             )
             _logged_local_mode_suppressed = True
         return None
-    resolved_key = api_key or os.environ.get("HEXGATE_KEY")
+    resolved_key = resolve_api_key(api_key)
     if not resolved_key:
         return None
     existing = _senders.get(resolved_key)
     if existing is not None:
         return existing
-    resolved_url = base_url or os.environ.get("HEXGATE_API_URL", _DEFAULT_API_URL)
+    resolved_url = resolve_api_url(base_url)
     sender = AuditSender(
-        endpoint=f"{resolved_url.rstrip('/')}{_AUDIT_PATH}",
+        endpoint=f"{resolved_url}{_AUDIT_PATH}",
         api_key=resolved_key,
     )
     _senders[resolved_key] = sender
@@ -355,13 +356,13 @@ def configure(
 
 
 def get_sender(api_key: str | None = None) -> AuditSender | None:
-    """Return the audit sender for ``api_key`` (or ``HEXGATE_KEY``), if configured.
+    """Return the audit sender for ``api_key`` (or ``HEXGATE_API_KEY``), if configured.
 
     Production code should use the sender injected into
     :class:`~hexgate.security.enforcer.PolicyEnforcer`; this lookup exists for
     diagnostics and is unambiguous only when scoped to a key.
     """
-    resolved_key = api_key or os.environ.get("HEXGATE_KEY")
+    resolved_key = resolve_api_key(api_key)
     if not resolved_key:
         return None
     return _senders.get(resolved_key)

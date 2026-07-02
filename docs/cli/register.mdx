@@ -15,4 +15,4 @@ hexgate register --agent my_app.agents:my_agent --description "Customer support 
 
 `--agent` takes a Python import path `module.path:attribute`. The CLI imports
 the module, grabs the agent object, and POSTs its manifest to
-`${HEXGATE_API_URL}/v1/agents` using `${HEXGATE_KEY}` as the bearer token.
+`${HEXGATE_API_URL}/v1/agents` using `${HEXGATE_API_KEY}` as the bearer token.

@@ -4,7 +4,6 @@ active role. Langfuse propagation mirrors User identity into spans.
 """
 
 import asyncio
-import os
 from contextlib import contextmanager
 from typing import Any, AsyncGenerator, Generator
 
@@ -17,6 +16,7 @@ from langfuse import get_client, propagate_attributes
 from openinference.instrumentation.google_adk import GoogleADKInstrumentor
 
 from hexgate.adapters.google.wrapper import wrap_google_agent
+from hexgate.config.env import resolve_api_key
 from hexgate.runtime import User
 
 
@@ -32,10 +32,10 @@ class HexgateRunner:
         api_key: str | None = None,
         **runner_kwargs: Any,
     ):
-        self.api_key = api_key or os.getenv("HEXGATE_KEY")
+        self.api_key = resolve_api_key(api_key)
         if self.api_key is None:
             raise ValueError(
-                "HEXGATE_KEY is not set. Pass api_key= explicitly or set HEXGATE_KEY environment variable."
+                "HEXGATE_API_KEY is not set. Pass api_key= explicitly or set the HEXGATE_API_KEY environment variable."
             )
         # Policy resolves at construction (the loud-failure point); the
         # Runner is built once — refresh swaps the enforcer's policy

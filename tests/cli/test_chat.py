@@ -372,9 +372,6 @@ def test_drain_decisions_noop_on_empty_deque() -> None:
 def _test_settings() -> Settings:
     """Minimal Settings instance for runtime tests."""
     return Settings(
-        openai_api_key="k",
-        linkup_api_key="k",
-        tavily_api_key="k",
         langfuse_public_key=None,
         langfuse_secret_key=None,
         langfuse_host="https://cloud.langfuse.com",

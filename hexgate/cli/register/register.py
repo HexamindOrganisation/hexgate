@@ -1,17 +1,16 @@
 from __future__ import annotations
 
 import json
-import os
 from typing import TYPE_CHECKING
 from urllib import error, request
 
 from hexgate.cli.register.manifest import create_manifest
 from hexgate.cli.register.models import AgentManifest, AgentType
+from hexgate.config.env import resolve_api_key, resolve_api_url
 
 if TYPE_CHECKING:
     from langchain_core.tools import BaseTool
 
-DEFAULT_API_URL = "http://localhost:8000"
 DEFAULT_REGISTER_TIMEOUT = 5.0
 
 
@@ -24,10 +23,10 @@ def post_manifest(
     serve``'s auto-register flow) can build the manifest themselves —
     inspect it, log its name, then ship it.
     """
-    api_key = os.environ.get("HEXGATE_KEY")
+    api_key = resolve_api_key()
     if api_key is None:
-        raise ValueError("HEXGATE_KEY must be set")
-    api_url = os.environ.get("HEXGATE_API_URL", DEFAULT_API_URL)
+        raise ValueError("HEXGATE_API_KEY must be set")
+    api_url = resolve_api_url()
 
     payload = json.dumps({"manifest": manifest.model_dump()}).encode("utf-8")
     req = request.Request(

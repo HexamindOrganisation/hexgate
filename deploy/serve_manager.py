@@ -12,7 +12,7 @@ This is the same flow as `hexgate serve <spec>`:
 only with a live object instead of a `module:attr` spec, run off-thread.
 
 BYOK: the visitor's OpenAI key is set into this process's env (their own key,
-their own throwaway container). HEXGATE_KEY (platform/relay auth) is read from
+their own throwaway container). HEXGATE_API_KEY (platform/relay auth) is read from
 the file boot.py wrote.
 """
 
@@ -32,16 +32,16 @@ _status: str = "stopped"
 
 
 def _ensure_platform_env() -> None:
-    """HexgateConfig.from_env() reads HEXGATE_KEY / HEXGATE_API_URL — make sure
+    """HexgateConfig.from_env() reads HEXGATE_API_KEY / HEXGATE_API_URL — make sure
     they're present in this process (boot.py writes the key to a file).
 
     The minted key in KEY_FILE is the source of truth for *this* container's
-    freshly-seeded project, so it **overrides** any stale HEXGATE_KEY inherited
+    freshly-seeded project, so it **overrides** any stale HEXGATE_API_KEY inherited
     from the shell / `.env` (otherwise auto-register 401s against the wrong
     project). `bootstrap()`'s later dotenv load won't clobber it — python-dotenv
     doesn't override existing env vars by default."""
     if KEY_FILE.is_file():
-        os.environ["HEXGATE_KEY"] = KEY_FILE.read_text().strip()
+        os.environ["HEXGATE_API_KEY"] = KEY_FILE.read_text().strip()
     os.environ.setdefault("HEXGATE_API_URL", "http://127.0.0.1:8000")
 
 
@@ -52,16 +52,14 @@ def status() -> str:
 
 
 def _demo_settings():
-    """Settings for the demo WITHOUT bootstrap()'s all-three-keys validation.
+    """Settings for the demo without bootstrap()'s repo-relative ``.env`` load.
 
-    ``hexgate.bootstrap.bootstrap()`` calls ``Settings.validate_required_keys()``,
-    which hard-requires OPENAI_API_KEY **and** LINKUP_API_KEY **and**
-    TAVILY_API_KEY — even for an agent that never web-searches. That made the
-    notebook refuse to start in a fresh container (no dev ``.env`` to supply the
-    search keys). BYOK only needs the OpenAI key; the web_search/fetch tools
-    still raise a clear error at *call* time if their Linkup/Tavily key is
-    missing. So do bootstrap's real work (configure audit + load settings) and
-    skip the eager search-key check.
+    ``bootstrap()`` reads a ``.env`` next to the hexgate package, which doesn't
+    exist in a fresh BYOK container — the notebook injects keys straight into
+    the process env instead. So do bootstrap's other real work (configure audit
+    + load settings) and skip the file load. Missing provider keys are fine:
+    the web_search/fetch tools raise a clear error at *call* time if their key
+    is absent.
     """
     from hexgate import audit
     from hexgate.config.settings import Settings

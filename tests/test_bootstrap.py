@@ -15,9 +15,9 @@ from hexgate import audit, bootstrap
 def _stub_dotenv_with_required_keys(
     monkeypatch: pytest.MonkeyPatch, **extra: str
 ) -> dict[str, Path]:
-    """Replace ``load_dotenv`` with a stub that populates the keys
-    ``Settings.validate_required_keys()`` checks. Returns a dict the
-    caller can inspect for the captured env path."""
+    """Replace ``load_dotenv`` with a stub that populates the provider keys
+    a typical CLI run reads into ``Settings``. Returns a dict the caller can
+    inspect for the captured env path."""
     seen: dict[str, Path] = {}
 
     def fake_load_dotenv(path: Path, override: bool) -> None:
@@ -42,7 +42,7 @@ def _isolate_audit_and_env(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     """Reset audit + the env vars bootstrap touches between tests."""
     audit._senders.clear()
     audit._logged_local_mode_suppressed = False
-    monkeypatch.delenv("HEXGATE_KEY", raising=False)
+    monkeypatch.delenv("HEXGATE_API_KEY", raising=False)
     monkeypatch.delenv("HEXGATE_API_URL", raising=False)
     monkeypatch.delenv("HEXGATE_LOCAL_POLICY", raising=False)
     monkeypatch.delenv(audit._LOCAL_MODE_ENV, raising=False)
@@ -58,9 +58,6 @@ def test_bootstrap_loads_requested_env_file(monkeypatch: pytest.MonkeyPatch) -> 
     settings = bootstrap.bootstrap("test.env")
 
     assert seen["path"] == Path(bootstrap.__file__).parent.parent / "test.env"
-    assert settings.openai_api_key == "openai-key"
-    assert settings.linkup_api_key == "linkup-key"
-    assert settings.tavily_api_key == "tavily-key"
     assert settings.langfuse_public_key == "public-key"
     assert settings.langfuse_secret_key == "secret-key"
 
@@ -76,7 +73,7 @@ def test_local_only_sets_env_var_before_audit_configure(
     """``local_only=True`` must set HEXGATE_LOCAL_MODE BEFORE audit.configure
     runs — otherwise an adapter wrapper re-configuring right after would
     spin up a real sender against a key still in env."""
-    _stub_dotenv_with_required_keys(monkeypatch, HEXGATE_KEY="key_in_dotenv")
+    _stub_dotenv_with_required_keys(monkeypatch, HEXGATE_API_KEY="key_in_dotenv")
 
     # Spy: when audit.configure runs, the env var must already be set.
     observed_env: dict[str, str | None] = {}
@@ -108,18 +105,18 @@ def test_local_only_false_leaves_env_var_unset(
 def test_bootstrap_warns_when_key_and_local_policy_both_set(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """Both HEXGATE_KEY and HEXGATE_LOCAL_POLICY almost always means a
+    """Both HEXGATE_API_KEY and HEXGATE_LOCAL_POLICY almost always means a
     dev forgot to clean their env. Log a single WARNING at startup so
     the surprise lands now, not three debug sessions later."""
     _stub_dotenv_with_required_keys(
         monkeypatch,
-        HEXGATE_KEY="lingering_key",
+        HEXGATE_API_KEY="lingering_key",
         HEXGATE_LOCAL_POLICY="/tmp/some-bundle",
     )
     with caplog.at_level(logging.WARNING, logger="hexgate.bootstrap"):
         bootstrap.bootstrap("test.env", local_only=True)
     msgs = [r.message for r in caplog.records if r.levelno == logging.WARNING]
-    assert any("HEXGATE_KEY and HEXGATE_LOCAL_POLICY" in m for m in msgs)
+    assert any("HEXGATE_API_KEY and HEXGATE_LOCAL_POLICY" in m for m in msgs)
 
 
 def test_bootstrap_no_warning_when_only_one_set(
@@ -133,4 +130,4 @@ def test_bootstrap_no_warning_when_only_one_set(
     with caplog.at_level(logging.WARNING, logger="hexgate.bootstrap"):
         bootstrap.bootstrap("test.env", local_only=True)
     msgs = [r.message for r in caplog.records]
-    assert not any("HEXGATE_KEY and HEXGATE_LOCAL_POLICY" in m for m in msgs)
+    assert not any("HEXGATE_API_KEY and HEXGATE_LOCAL_POLICY" in m for m in msgs)

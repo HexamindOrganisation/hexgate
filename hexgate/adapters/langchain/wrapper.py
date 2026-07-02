@@ -11,13 +11,12 @@ proxy at the top of every call.
 
 from __future__ import annotations
 
-import os
-
 from langchain_core.tools import BaseTool
 from langgraph.graph.state import CompiledStateGraph
 
 from hexgate.adapters.langchain.agent import HexgateLangchainAgent
 from hexgate.adapters.langchain.tools import install_enforcer_on_tools
+from hexgate.config.env import resolve_api_key
 from hexgate.security.binding import PolicyBinding, resolve_policy
 from hexgate.security.enforcer import build_enforcer
 
@@ -33,14 +32,14 @@ def wrap_langchain_agent(
     Mutates ``tools`` in place so the graph keeps its references.
     The returned proxy takes ``user`` per invocation; role resolves at
     call time from the active :class:`User`. ``api_key`` falls back to
-    ``HEXGATE_KEY``. ``NEEDS_APPROVAL`` outcomes render as structured
+    ``HEXGATE_API_KEY``. ``NEEDS_APPROVAL`` outcomes render as structured
     errors — wire any host-side approval flow outside the SDK. The
     enforced policy is the platform's; unlisted tools are denied.
     """
-    resolved_key = api_key if api_key else os.getenv("HEXGATE_KEY")
+    resolved_key = resolve_api_key(api_key)
     if not resolved_key:
         raise ValueError(
-            "No API key provided. Pass api_key= explicitly or set HEXGATE_KEY environment variable."
+            "No API key provided. Pass api_key= explicitly or set the HEXGATE_API_KEY environment variable."
         )
 
     agent_name = getattr(agent, "name", "default")

@@ -87,7 +87,7 @@ def verify_biscuit(token_b64: str, public_key_bytes: bytes) -> None:
 
     ``biscuit-python`` is imported lazily so importing this module doesn't
     pay the native-library load cost when the SDK is used purely offline
-    (e.g., loading local agents without ``HEXGATE_KEY``).
+    (e.g., loading local agents without ``HEXGATE_API_KEY``).
     """
     from biscuit_auth import (
         Algorithm,

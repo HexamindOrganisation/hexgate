@@ -42,7 +42,7 @@
 ## 1. Problem statement
 
 Today only the loader path (`load_hexgate_agent` / `load_agent` with
-`HEXGATE_KEY`, `hexgate/agents/loader.py:528`) delivers the full governance
+`HEXGATE_API_KEY`, `hexgate/agents/loader.py:528`) delivers the full governance
 loop: pull the signed policy bundle from the platform, verify it, enforce it
 on every tool call, and re-pull (ETag/304) at the top of every run.
 
@@ -50,7 +50,7 @@ Every other construction path falls short:
 
 | Surface | Pull | Enforce | Per-run refresh |
 |---|---|---|---|
-| `load_hexgate_agent` / `load_agent` + `HEXGATE_KEY` | ✅ verified bundle | ✅ `GuardedTool` | ✅ ETag/304 |
+| `load_hexgate_agent` / `load_agent` + `HEXGATE_API_KEY` | ✅ verified bundle | ✅ `GuardedTool` | ✅ ETag/304 |
 | `create_agent(...)` (programmatic) | ❌ | ❌ | no-op |
 | `create_agent(...)` + `enforce_policy(p)` | ❌ (static `p`) | ✅ | no-op (no source) |
 | `wrap_openai_agent` / `HexgateRunner` (openai) | ❌ placeholder **allow-all** | ✅ (allow-all) | ❌ |
@@ -153,7 +153,7 @@ def resolve(
     cls,
     agent_name: str,
     *,
-    api_key: str | None = None,          # explicit → HEXGATE_KEY env
+    api_key: str | None = None,          # explicit → HEXGATE_API_KEY env
     client: HexgateClient | None = None, # reuse an existing client (loader path)
     prefetched: tuple[dict, str | None] | None = None,  # (payload, etag) reuse
     fallback: PolicyEngine | None = None,
@@ -172,7 +172,7 @@ its behavior and its tests stay identical):
    `BundleDirPolicySource` (mtime-refreshed pre-built bundle) or
    `YamlPolicySource` (auto-recompile on save), exactly as today
    (`hexgate/security/source.py:165,256`). The platform is not contacted.
-2. **Platform** — when an `api_key`/`HEXGATE_KEY`/`client` is available:
+2. **Platform** — when an `api_key`/`HEXGATE_API_KEY`/`client` is available:
    1. Build or reuse the `HexgateClient` (Biscuit signature verified lazily
       on first use, `cloud/client.py:177`).
    2. `payload, etag = client.get_agent(agent_name)` — or use `prefetched`
@@ -313,7 +313,7 @@ Semantics of `bind_policy`:
 
 | value | behavior |
 |---|---|
-| `None` (default, **auto**) | bind iff (`HEXGATE_KEY` set **or** `HEXGATE_LOCAL_POLICY` set) **and** `name` is provided; otherwise return the bare agent exactly as today |
+| `None` (default, **auto**) | bind iff (`HEXGATE_API_KEY` set **or** `HEXGATE_LOCAL_POLICY` set) **and** `name` is provided; otherwise return the bare agent exactly as today |
 | `True` | bind or **raise** (`name` required; no key and no local override → raise) |
 | `False` | today's behavior, unconditionally (escape hatch for unit tests of bare graphs) |
 
@@ -476,7 +476,7 @@ The governing rule, inherited from the loader and made universal:
 
 | Event | When | Behavior |
 |---|---|---|
-| `HEXGATE_KEY` malformed / Biscuit signature invalid | resolve | raise (`HexgateError`) |
+| `HEXGATE_API_KEY` malformed / Biscuit signature invalid | resolve | raise (`HexgateError`) |
 | Platform unreachable | resolve | raise — caller decides; never run on a policy we never had |
 | Platform unreachable | refresh | warn + keep previous verified policy (unbounded staleness — see §8.3) |
 | Bundle signature/integrity fails | resolve | raise; never downgrade to pydantic engine |
@@ -493,14 +493,14 @@ The governing rule, inherited from the loader and made universal:
 ## 6. Security invariants (must hold after the refactor)
 
 1. **Single trust root.** The platform's Ed25519 root key signs both
-   Biscuits (`HEXGATE_KEY`) and bundle manifests; the SDK verifies both
+   Biscuits (`HEXGATE_API_KEY`) and bundle manifests; the SDK verifies both
    against the same key (explicit → `HEXGATE_PUBLIC_KEY` → JWKS TOFU).
 2. **No silent downgrade.** A served-but-unverifiable bundle is fatal at
    resolve and inert at refresh. The pydantic fallback is only reachable
    when the platform *affirmatively served no bundle*, and
    `HEXGATE_BUNDLE_REQUIRE_SIGNATURE` closes even that.
 3. **No silent allow-all.** Removing `build_policy_set` removes the last
-   construction path that runs ungoverned with a `HEXGATE_KEY` present.
+   construction path that runs ungoverned with a `HEXGATE_API_KEY` present.
    Ungoverned operation requires an explicit `fallback=` or
    `bind_policy=False` in the caller's code.
 4. **Verification happens before caching.** `PlatformPolicySource` only
@@ -541,7 +541,7 @@ text), `bundle_signature_b64`.
    names; surfaced by the §5 uncovered-tools warning.
 2. **Adapters: missing/unreachable platform now raises at wrap/construct**
    instead of silently running open. Escape hatch: `fallback=`.
-3. **`create_agent` with `HEXGATE_KEY` set + a `name`** now binds by default
+3. **`create_agent` with `HEXGATE_API_KEY` set + a `name`** now binds by default
    (auto mode). Programmatic callers who want a bare graph in a keyed
    environment pass `bind_policy=False`.
 
@@ -644,7 +644,7 @@ Each phase lands green and independently shippable.
 |---|---|---|
 | Eager vs lazy first fetch | **Eager** in `resolve()` | loud failures at construction; refresh's fail-soft would otherwise leave the first run unguarded or bricked |
 | 404 at resolve | **auto-register by default at adapter/`create_agent` surfaces**, raise otherwise | platform mints a safe default policy + signed bundle (`71586c2`); matches `hexgate serve` UX; idempotent re-registers protect dashboard edits |
-| Adapters' default without platform | **raise** (no more silent allow-all) | a present `HEXGATE_KEY` signals governance intent; ungoverned must be explicit (`fallback=`) |
+| Adapters' default without platform | **raise** (no more silent allow-all) | a present `HEXGATE_API_KEY` signals governance intent; ungoverned must be explicit (`fallback=`) |
 | Refresh failure | **warn + keep previous verified policy** | availability over freshness; tamper still cannot install itself |
 | Refresh granularity | **per run/turn** | matches `stream_agent` today; per-tool-call adds a network call to the hot path for negligible win |
 | Sync entry points | direct blocking `refresh()` | ~ms HTTP on a thread already doing sync I/O; `to_thread` only for async paths |

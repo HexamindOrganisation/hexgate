@@ -95,8 +95,8 @@ def test_constructor_uses_explicit_api_key() -> None:
 
 
 def test_constructor_falls_back_to_env_var(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Resolve the API key from HEXGATE_KEY when no explicit key is given."""
-    monkeypatch.setenv("HEXGATE_KEY", "from-env")
+    """Resolve the API key from HEXGATE_API_KEY when no explicit key is given."""
+    monkeypatch.setenv("HEXGATE_API_KEY", "from-env")
 
     runner = HexgateRunner()
 
@@ -107,7 +107,7 @@ def test_constructor_prefers_explicit_api_key_over_env(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The explicit api_key argument wins when both sources are populated."""
-    monkeypatch.setenv("HEXGATE_KEY", "from-env")
+    monkeypatch.setenv("HEXGATE_API_KEY", "from-env")
 
     runner = HexgateRunner(api_key="explicit")
 
@@ -118,9 +118,9 @@ def test_constructor_raises_when_no_api_key_available(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Reject construction when neither argument nor env var supplies a key."""
-    monkeypatch.delenv("HEXGATE_KEY", raising=False)
+    monkeypatch.delenv("HEXGATE_API_KEY", raising=False)
 
-    with pytest.raises(ValueError, match="HEXGATE_KEY is not set"):
+    with pytest.raises(ValueError, match="HEXGATE_API_KEY is not set"):
         HexgateRunner()
 
 

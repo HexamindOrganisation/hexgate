@@ -9,6 +9,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from hexgate import audit
+from hexgate.config.env import resolve_api_key
 from hexgate.config.settings import Settings
 
 _log = logging.getLogger(__name__)
@@ -35,7 +36,7 @@ def bootstrap(env_file: str = ".env", *, local_only: bool = False) -> Settings:
     emitted shortly before exit are lost unless the teardown path
     explicitly drains with ``await audit.shutdown()``.
 
-    The ``HEXGATE_KEY + HEXGATE_LOCAL_POLICY`` combination almost always
+    The ``HEXGATE_API_KEY + HEXGATE_LOCAL_POLICY`` combination almost always
     means a dev forgot to clean up their env between an "I'm trying the
     platform" session and an "I'm iterating on a YAML policy" session.
     Log a single WARNING line so the surprise lands at startup, not three
@@ -51,12 +52,10 @@ def bootstrap(env_file: str = ".env", *, local_only: bool = False) -> Settings:
     if local_only:
         # Set BEFORE audit.configure() so the first call sees the gate.
         os.environ[audit._LOCAL_MODE_ENV] = "1"
-    if os.environ.get("HEXGATE_KEY") and os.environ.get("HEXGATE_LOCAL_POLICY"):
+    if resolve_api_key() and os.environ.get("HEXGATE_LOCAL_POLICY"):
         _log.warning(
-            "HEXGATE_KEY and HEXGATE_LOCAL_POLICY are both set; the local "
+            "HEXGATE_API_KEY and HEXGATE_LOCAL_POLICY are both set; the local "
             "policy override wins. Unset one to remove the ambiguity."
         )
     audit.configure()
-    settings = Settings.from_env()
-    settings.validate_required_keys()
-    return settings
+    return Settings.from_env()

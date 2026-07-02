@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 from collections.abc import Callable, Mapping
 from importlib.resources import files
 from pathlib import Path
@@ -21,6 +20,7 @@ from hexgate.agents.factory import (
 )
 from hexgate.agents.models import AgentSpec
 from hexgate.cloud.client import HexgateClient, HexgateConfig
+from hexgate.config.env import resolve_api_key
 from hexgate.security import AgentPolicy, PolicyBundle, load_policy
 
 # HEXGATE_LOCAL_POLICY resolution lives in hexgate.security.source (single
@@ -555,14 +555,14 @@ def load_agent(
     approval_handler: ApprovalHandler | None = None,
     decision_observer: "DecisionObserver | None" = None,
 ) -> tuple[AgentGraph, CallbackHandler]:
-    """Load an agent from Hexgate (when HEXGATE_KEY is set), local, or builtin.
+    """Load an agent from Hexgate (when HEXGATE_API_KEY is set), local, or builtin.
 
     ``name`` is required for every path post-Phase 7 — the
     HEXGATE_AGENT_NAME env-var fallback was removed when ``hexgate
     serve`` moved to the uvicorn-style ``module:attr`` spec.
 
     Pass ``local_only=True`` to force resolution from local / registered /
-    builtin sources even when ``HEXGATE_KEY`` is set in the environment.
+    builtin sources even when ``HEXGATE_API_KEY`` is set in the environment.
     Useful for terminal-chat workflows that don't need cloud-fetched policy.
 
     ``decision_observer`` is forwarded to every enforced loader (local,
@@ -570,7 +570,7 @@ def load_agent(
     contextvar so the call sites stay explicit — ``hexgate chat`` is
     the only caller passing it today.
     """
-    if not local_only and os.environ.get("HEXGATE_KEY"):
+    if not local_only and resolve_api_key():
         # load_hexgate_agent dropped its reserved ``user_id`` placeholder
         # in phase 3.5 — per-request user identity comes from a User scope
         # at invocation time, not from the loader.

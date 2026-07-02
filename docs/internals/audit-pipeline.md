@@ -178,10 +178,11 @@ synchronous.
 
 `configure(api_key=None, base_url=None) -> AuditSender | None`:
 
-- Resolves `api_key` from the argument or `HEXGATE_KEY`; returns `None` (audit
+- Resolves `api_key` from the argument or `HEXGATE_API_KEY`; returns `None` (audit
   inert) when no key is resolvable.
 - Resolves `base_url` from the argument or `HEXGATE_API_URL`, defaulting to
-  `http://localhost:8000`. The endpoint is `<base_url>/v1/audit/decisions`.
+  Hexgate Cloud (`https://app.hexgate.ai`); set `http://localhost:8000` when
+  self-hosting. The endpoint is `<base_url>/v1/audit/decisions`.
 - **Keyed by api_key.** Senders live in a registry `dict[str, AuditSender]`.
   Calling `configure()` again with the **same** key returns the existing sender
   (idempotent); a **different** key gets its own sender with its own bearer
@@ -196,7 +197,7 @@ local runs work without an explicit key.
 #### Local mode (`HEXGATE_LOCAL_MODE`)
 
 Setting `HEXGATE_LOCAL_MODE=1` makes `configure()` return `None` even when
-`HEXGATE_KEY` is present in env. `bootstrap(local_only=True)` sets the var
+`HEXGATE_API_KEY` is present in env. `bootstrap(local_only=True)` sets the var
 *before* the first `configure()` call, and `hexgate chat` passes
 `local_only=True` — so the inner-loop REPL never posts audit events even if
 a key has been lingering in `.env` from an earlier platform session.
@@ -207,7 +208,7 @@ value parser accepts `1` / `true` / `yes` / `on` (case-insensitive).
 
 There are now two clean operating modes, not three:
 
-| Mode | `HEXGATE_KEY` | `HEXGATE_LOCAL_MODE` | Policy from | Audit |
+| Mode | `HEXGATE_API_KEY` | `HEXGATE_LOCAL_MODE` | Policy from | Audit |
 |------|---------------|----------------------|-------------|-------|
 | **Local** | (irrelevant) | `1`, or unset with no key | YAML / disk / builtin | suppressed |
 | **Platform-managed** | set | unset | platform fetch | emitted |
@@ -217,7 +218,7 @@ the first time `configure()` is called with both a key and local mode active
 — exactly the case where the suppression would be surprising. The "no key
 anywhere" case stays quiet.
 
-A separate WARNING fires from `bootstrap()` itself when both `HEXGATE_KEY`
+A separate WARNING fires from `bootstrap()` itself when both `HEXGATE_API_KEY`
 and `HEXGATE_LOCAL_POLICY` are set — that combination is almost always a
 forgotten env entry from an earlier session, and surfacing it at startup
 saves a later debugging detour.

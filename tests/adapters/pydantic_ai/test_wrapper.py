@@ -146,8 +146,8 @@ def test_wrap_pydantic_agent_does_not_mutate_original_agent() -> None:
 def test_wrap_pydantic_agent_falls_back_to_env_var(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Resolve the API key from HEXGATE_KEY when no explicit key is given."""
-    monkeypatch.setenv("HEXGATE_KEY", "from-env")
+    """Resolve the API key from HEXGATE_API_KEY when no explicit key is given."""
+    monkeypatch.setenv("HEXGATE_API_KEY", "from-env")
     agent = _make_agent()
 
     wrapped = wrap_pydantic_agent(agent=agent)
@@ -158,8 +158,8 @@ def test_wrap_pydantic_agent_falls_back_to_env_var(
 def test_wrap_pydantic_agent_prefers_explicit_api_key_over_env(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The explicit api_key argument wins over HEXGATE_KEY when both are set."""
-    monkeypatch.setenv("HEXGATE_KEY", "from-env")
+    """The explicit api_key argument wins over HEXGATE_API_KEY when both are set."""
+    monkeypatch.setenv("HEXGATE_API_KEY", "from-env")
 
     wrapped = wrap_pydantic_agent(agent=_make_agent(), api_key="explicit")
 
@@ -170,7 +170,7 @@ def test_wrap_pydantic_agent_raises_when_no_api_key_available(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Reject construction when neither argument nor env var supplies a key."""
-    monkeypatch.delenv("HEXGATE_KEY", raising=False)
+    monkeypatch.delenv("HEXGATE_API_KEY", raising=False)
 
     with pytest.raises(ValueError, match="No API key provided"):
         wrap_pydantic_agent(agent=_make_agent())
@@ -179,8 +179,8 @@ def test_wrap_pydantic_agent_raises_when_no_api_key_available(
 def test_wrap_pydantic_agent_raises_when_api_key_is_empty_string(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Treat an empty HEXGATE_KEY env var the same as missing."""
-    monkeypatch.setenv("HEXGATE_KEY", "")
+    """Treat an empty HEXGATE_API_KEY env var the same as missing."""
+    monkeypatch.setenv("HEXGATE_API_KEY", "")
 
     with pytest.raises(ValueError, match="No API key provided"):
         wrap_pydantic_agent(agent=_make_agent(), api_key="")
