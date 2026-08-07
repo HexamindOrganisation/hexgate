@@ -94,6 +94,16 @@ class PolicySet:
         """List of role names, including ``default``, excluding mixins."""
         return sorted(self._policies)
 
+    @property
+    def trusted_attributes(self) -> frozenset[str]:
+        """Union of every role's trusted ``ctx.*`` keys — the safe superset, so
+        trust is role-independent and can only add fail-closed, never remove it."""
+        return frozenset(
+            key
+            for policy in self._policies.values()
+            for key in policy.trusted_attributes
+        )
+
     def __contains__(self, role: str) -> bool:
         return role in self._policies
 
@@ -273,6 +283,7 @@ def _resolve_inheritance(
         return own
     merged_tools: dict[str, ToolPolicy] = {}
     merged_consts: dict[str, object] = {}
+    merged_trusted: set[str] = set()
     merged_default: BaseToolPolicy = own.default_policy
 
     # Merge parents left-to-right (later parents override earlier).
@@ -280,6 +291,7 @@ def _resolve_inheritance(
         parent = _resolve_inheritance(parent_name, raw, chain + [name])
         merged_tools.update(parent.tools)
         merged_consts.update(parent.consts)
+        merged_trusted.update(parent.trusted_attributes)
         merged_default = parent.default_policy
 
     # Self overrides everything from parents. Check ``model_fields_set`` rather
@@ -289,6 +301,7 @@ def _resolve_inheritance(
     # parent would be fail-open.
     merged_tools.update(own.tools)
     merged_consts.update(own.consts)
+    merged_trusted.update(own.trusted_attributes)  # union — trust never relaxes
     if "default_policy" in own.model_fields_set:
         merged_default = own.default_policy
 
@@ -299,4 +312,5 @@ def _resolve_inheritance(
         default_policy=merged_default,
         tools=merged_tools,
         consts=merged_consts,
+        trusted_attributes=sorted(merged_trusted),
     )

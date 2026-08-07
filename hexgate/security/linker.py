@@ -76,6 +76,7 @@ def link(
     _reject_file_scope(boundaries, capabilities)
     _reject_default_policy_constraints(boundaries, capabilities)
     consts = _merge_consts(boundaries, capabilities)
+    trusted_attributes = _merge_trusted_attributes(boundaries, capabilities)
 
     trace = RuleTrace()
     tools: dict[str, ToolPolicy] = {}
@@ -86,9 +87,33 @@ def link(
 
     # Effective default is fail-closed: a tool no layer grants is denied.
     effective = AgentPolicy(
-        default_policy=BaseToolPolicy(mode="deny"), tools=tools, consts=consts
+        default_policy=BaseToolPolicy(mode="deny"),
+        tools=tools,
+        consts=consts,
+        trusted_attributes=trusted_attributes,
     )
     return effective, trace
+
+
+def _merge_trusted_attributes(
+    boundaries: list[ModuleContent], capabilities: list[ModuleContent]
+) -> list[str]:
+    """Union the trusted ``ctx.*`` keys declared by every layer.
+
+    Unlike ``consts``, a collision can't loosen anything: declaring a key
+    trusted only moves it from the spoofable contextvar bag to token-verified
+    (fail-closed when the token omits it), so the union is the safe superset —
+    the same rule :attr:`PolicySet.trusted_attributes` applies across roles.
+    Dropping it here would silently demote every module-declared trusted key
+    back to advisory in the resolved policy.
+    """
+    return sorted(
+        {
+            key
+            for module in (*boundaries, *capabilities)
+            for key in module.policy.trusted_attributes
+        }
+    )
 
 
 def _merge_consts(

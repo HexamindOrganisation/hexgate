@@ -315,6 +315,14 @@ class PolicyBundle:
     def wasm_hash(self) -> str | None:
         return self.manifest.get("wasm_hash")
 
+    @property
+    def trusted_attributes(self) -> frozenset[str]:
+        """Trusted ``ctx.*`` keys from the manifest (empty if absent).
+
+        Pure metadata (the compiled module just reads ``input.ctx``); the
+        enforcer uses it to pick which keys come from the verified token."""
+        return frozenset(self.manifest.get("trusted_attributes") or [])
+
 
 # ---------------------------------------------------------------------------
 # Producer side — compile (+ optionally sign) a bundle from policy YAML
@@ -383,12 +391,19 @@ def build_signed_bundle(
         wasm_bytes = compile_to_wasm(rego_text, opa_bin=opa_bin).wasm
         wasm_hash = hashlib.sha256(wasm_bytes).hexdigest()
 
+    # Trusted-attribute declaration as manifest metadata for the enforcer's
+    # WASM path — doesn't affect the compiled module (host-layer trust).
+    from hexgate.security.policy_set import load_policy_set_from_dict
+
+    trusted_attributes = sorted(load_policy_set_from_dict(payload).trusted_attributes)
+
     manifest = {
         "version": 1,
         "source": source_name,
         "source_hash": source_hash,
         "rego_hash": hashlib.sha256(rego_text.encode("utf-8")).hexdigest(),
         "wasm_hash": wasm_hash,
+        "trusted_attributes": trusted_attributes,
     }
     # The one canonical serialization. Sign these exact bytes.
     manifest_bytes = (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode(

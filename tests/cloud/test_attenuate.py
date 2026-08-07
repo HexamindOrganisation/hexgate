@@ -227,3 +227,94 @@ def test_attenuate_user_only_is_minimum_required(
     facts = extract_facts(_biscuit_b64(child), pub)
     assert facts["user"] == ["alice"]
     assert "role" not in facts
+
+
+# ---------------------------------------------------------------------------
+# Signed trusted attributes (ABAC tier)
+# ---------------------------------------------------------------------------
+
+
+def test_attenuate_signs_typed_attributes(keys: tuple[bytes, bytes]) -> None:
+    """The optional attributes bag becomes typed ``attr(key, value)`` facts."""
+    from hexgate.cloud.biscuit import extract_attr_facts
+
+    priv, pub = keys
+    parent = _parent_envelope(priv)
+    child = attenuate_for_user(
+        parent,
+        pub,
+        user="alice",
+        attributes={"region": "EU", "clearance_level": 3, "eu_resident": True},
+    )
+    assert extract_attr_facts(_biscuit_b64(child), pub) == {
+        "region": "EU",
+        "clearance_level": 3,
+        "eu_resident": True,
+    }
+
+
+def test_attenuate_without_attributes_signs_no_attr_facts(
+    keys: tuple[bytes, bytes],
+) -> None:
+    """No attributes → no ``attr`` facts in the block (advisory-only flow)."""
+    from hexgate.cloud.biscuit import extract_attr_facts
+
+    priv, pub = keys
+    parent = _parent_envelope(priv)
+    child = attenuate_for_user(parent, pub, user="alice", role="billing")
+    assert extract_attr_facts(_biscuit_b64(child), pub) == {}
+
+
+def test_attenuate_rejects_list_valued_attribute(keys: tuple[bytes, bytes]) -> None:
+    """List-valued trusted attributes are unsupported in v1 — must stay advisory."""
+    priv, pub = keys
+    parent = _parent_envelope(priv)
+    with pytest.raises(TokenError, match="list-valued trusted attribute"):
+        attenuate_for_user(parent, pub, user="alice", attributes={"groups": ["a", "b"]})
+
+
+def test_attenuate_rejects_quote_in_attribute_value(
+    keys: tuple[bytes, bytes],
+) -> None:
+    """A quote can't be read back from ``block_source``, so signing rejects it
+    loudly instead of silently dropping it — also blocks the injection attempt."""
+    priv, pub = keys
+    parent = _parent_envelope(priv)
+    with pytest.raises(TokenError, match="quote or newline"):
+        attenuate_for_user(
+            parent,
+            pub,
+            user="alice",
+            attributes={"region": 'EU"); attr("clearance_level", "9'},
+        )
+
+
+def test_attenuate_rejects_newline_in_attribute_value(
+    keys: tuple[bytes, bytes],
+) -> None:
+    """A newline breaks line-based extraction — rejected at sign time."""
+    priv, pub = keys
+    parent = _parent_envelope(priv)
+    with pytest.raises(TokenError, match="quote or newline"):
+        attenuate_for_user(
+            parent, pub, user="alice", attributes={"note": "hello\nworld"}
+        )
+
+
+def test_attenuate_rejects_out_of_range_int_attribute(
+    keys: tuple[bytes, bytes],
+) -> None:
+    """An int outside signed-64-bit range fails closed as TokenError, not an
+    uncaught biscuit DataLogError that would abort the run."""
+    priv, pub = keys
+    parent = _parent_envelope(priv)
+    with pytest.raises(TokenError, match="out of signed-64-bit range"):
+        attenuate_for_user(parent, pub, user="alice", attributes={"lvl": 2**63})
+
+
+def test_attenuate_rejects_non_scalar_attribute(keys: tuple[bytes, bytes]) -> None:
+    """A dict/float attribute value is rejected (only str/int/bool sign)."""
+    priv, pub = keys
+    parent = _parent_envelope(priv)
+    with pytest.raises(TokenError, match="must be str/int/bool"):
+        attenuate_for_user(parent, pub, user="alice", attributes={"x": 1.5})

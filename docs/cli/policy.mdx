@@ -51,3 +51,55 @@ lists each violated constraint string verbatim:
   violations:
     • args.amount <= 500
 ```
+
+## Attributes (`ctx.*`) and the trusted tier
+
+Constraints can filter on the caller's ABAC attributes through the `ctx.*`
+namespace, alongside `role`, `tool`, and `args.*`:
+
+```yaml
+tools:
+  refund_order:
+    mode: allow
+    constraints:
+      - "ctx.department == \"finance\""
+      - "ctx.clearance_level >= 3"
+```
+
+Attributes come from the request scope (`HexgateContext(attributes={...})`). By
+default they are **advisory** — read from the process contextvar, so they are
+spoofable and are meant for dev/local filtering, never a production `deny` gate.
+
+To let an attribute gate a real decision, declare it **trusted**:
+
+```yaml
+trusted_attributes:
+  - clearance_level
+```
+
+A trusted key is signed into the per-request Biscuit and read back from it. The
+enforcer ignores any contextvar value for that key and uses only the token
+value; a trusted key absent from the token **fails closed** (any constraint on
+it denies). Trust is deployment-wide — a key trusted in one role is trusted
+everywhere. Values must be scalar (`str` / `int` / `bool`); list-valued trusted
+attributes are not supported yet (a list value is dropped and fails closed).
+
+**What "trusted" guarantees.** It means the value was *asserted by the holder of
+your project API key (your backend) and is verifiable downstream by the
+platform* — **not** that it's unforgeable inside your own process. Populate
+attribute values from trusted server-side data (an IdP/session), never raw
+client input, exactly as you would `user_roles`. When the SDK signs the token
+in-process from the contextvar, the audit trail records those values as
+`self_asserted` rather than `verified`; a value is `verified` only when it
+arrived on a token the process received from an external signer.
+
+Trusted attributes resolve only on the **agent-invoke** path today. The egress
+gate and the framework adapters bind the request scope but not the verified
+token, so a trusted `ctx.*` key is absent there and fails closed — advisory
+`ctx.*` keys still work on every path. Declare a key trusted only when the tools
+it gates run on the agent-invoke path.
+
+`hexgate policy test --attributes '{...}'` evaluates the raw engine below the
+enforcement trust boundary, so it treats every `ctx.*` key as present — it shows
+the **advisory** semantics. The trusted/verified distinction only applies at
+enforcement time, with a real signed token.

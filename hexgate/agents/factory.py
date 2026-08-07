@@ -209,19 +209,31 @@ def extract_input_text(input: AgentInput) -> str:
 _warned_local_agent_user_scope: bool = False
 
 
-def _resolve_user_facts(agent: HexgateAgent) -> dict[str, list[str | int]] | None:
-    """Lazily attenuate when a :class:`HexgateContext` scope is active.
+def _trusted_attribute_keys(agent: HexgateAgent) -> frozenset[str]:
+    """Trusted ``ctx.*`` keys off the agent's bound engine, read defensively —
+    an unbound agent yields empty, so nothing is signed as trusted."""
+    binding = getattr(agent, "_binding", None)
+    engine = getattr(getattr(binding, "enforcer", None), "policy", None)
+    keys = getattr(engine, "trusted_attributes", frozenset())
+    return frozenset(keys)
 
-    Returns the extracted facts dict for the active context, or ``None`` if
-    no context scope is in play, the agent isn't cloud-bound, or attenuation
-    fails (logged as a warning — the agent runs without facts and any
-    predicate requiring them will fail-closed).
+
+def _resolve_user_facts(
+    agent: HexgateAgent,
+) -> tuple[dict[str, list[str | int]] | None, dict[str, str | int | bool] | None]:
+    """Lazily attenuate the active :class:`HexgateContext` into
+    ``(biscuit_facts, verified_attributes)`` — identity/limit facts and signed
+    trusted ABAC attributes.
+
+    Both ``None`` when no context is active, the agent isn't cloud-bound, or
+    attenuation fails (warned; fail closed). Only the policy-declared *trusted*
+    subset of ``context.attributes`` is signed; advisory keys never reach it.
     """
     from hexgate.runtime.context import get_current_context
 
     context = get_current_context()
     if context is None:
-        return None
+        return None, None
     client = agent.hexgate_client
     if client is None:
         # Local agent or test stub — a context scope is set but there's nothing
@@ -241,15 +253,37 @@ def _resolve_user_facts(agent: HexgateAgent) -> dict[str, list[str | int]] | Non
                 "suppressed."
             )
             _warned_local_agent_user_scope = True
-        return None
+        return None, None
     from hexgate.cloud.attenuate import attenuate_for_user
     from hexgate.cloud.biscuit import (
         TokenError,
         TokenSignatureError,
+        extract_attr_facts,
         extract_facts,
         parse_envelope,
     )
 
+    trusted_keys = _trusted_attribute_keys(agent)
+    signed_attrs = {
+        key: value
+        for key, value in context.attributes.items()
+        if key in trusted_keys and not isinstance(value, list)
+    }
+    # A list-valued trusted key can't be signed (v1) or fall back to advisory,
+    # so it's dropped and fails closed — warn rather than drop silently.
+    dropped_lists = [
+        key
+        for key, value in context.attributes.items()
+        if key in trusted_keys and isinstance(value, list)
+    ]
+    if dropped_lists:
+        import logging
+
+        logging.getLogger(__name__).warning(
+            "trusted attribute(s) %s have list values, which are unsupported; "
+            "they are dropped and any ctx.* constraint on them will fail closed",
+            dropped_lists,
+        )
     try:
         pub = client.public_key_bytes()
         child_envelope = attenuate_for_user(
@@ -258,16 +292,28 @@ def _resolve_user_facts(agent: HexgateAgent) -> dict[str, list[str | int]] | Non
             user=context.user_id,
             role=context.primary_role,
             ttl_seconds=context.ttl_seconds,
+            attributes=signed_attrs or None,
         )
         _, _, biscuit_b64 = parse_envelope(child_envelope)
-        return extract_facts(biscuit_b64, pub)
+        return extract_facts(biscuit_b64, pub), extract_attr_facts(biscuit_b64, pub)
     except (TokenError, TokenSignatureError) as exc:
         import logging
 
         logging.getLogger(__name__).warning(
             "user-scope attenuation failed: %s; agent runs without facts", exc
         )
-        return None
+        return None, None
+    except Exception as exc:  # noqa: BLE001 — attenuation must fail closed, never crash the run
+        # Backstop for non-TokenError encoding failures (e.g. a biscuit Datalog
+        # build error) so they degrade to "run without facts", never abort the run.
+        import logging
+
+        logging.getLogger(__name__).warning(
+            "unexpected error during user-scope attenuation: %s; agent runs "
+            "without facts",
+            exc,
+        )
+        return None, None
 
 
 def _resolve_tool_use_context(
@@ -298,10 +344,15 @@ def _resolve_tool_use_context(
         if tool_use_context.workspace is None:
             tool_use_context.workspace = fallback_workspace
         return tool_use_context
+    biscuit_facts, verified_attributes = _resolve_user_facts(agent)
     return ToolUseContext(
         workspace=fallback_workspace,
         agent_name=agent_name,
-        biscuit_facts=_resolve_user_facts(agent),
+        biscuit_facts=biscuit_facts,
+        verified_attributes=verified_attributes,
+        # Self-minted from the contextvar in-process — pinned, not independently
+        # verified (an externally-supplied ToolUseContext leaves this False).
+        attributes_self_asserted=True,
     )
 
 

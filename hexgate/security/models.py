@@ -67,6 +67,16 @@ class AgentPolicy(BaseModel):
     ``consts`` names reusable values referenced from constraints as
     ``consts.<name>`` (e.g. ``args.amount <= consts.max_refund``). Merged
     through ``inherits`` like ``tools`` — put shared constants in a mixin.
+
+    ``trusted_attributes`` names the ``ctx.<key>`` attributes taken only from
+    the signed Biscuit, not the spoofable contextvar bag: a trusted key absent
+    from the token fails closed. Unlisted keys stay advisory. Merged through
+    ``inherits`` like ``consts``.
+
+    "Trusted" means *asserted by the holder of the project API key (your
+    backend) and verifiable downstream by the platform* — not unforgeable within
+    your own process. Populate the values from trusted server-side data (an
+    IdP/session), never raw client input, exactly as you would ``user_roles``.
     """
 
     version: int = 1
@@ -75,3 +85,4 @@ class AgentPolicy(BaseModel):
     default_policy: BaseToolPolicy = Field(default_factory=BaseToolPolicy)
     tools: dict[str, ToolPolicy] = Field(default_factory=dict)
     consts: dict[str, Any] = Field(default_factory=dict)
+    trusted_attributes: list[str] = Field(default_factory=list)

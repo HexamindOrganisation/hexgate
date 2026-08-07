@@ -109,3 +109,50 @@ def test_event_id_and_occurred_at_unique_per_event() -> None:
     w2 = AuditEvent(decision=_decision()).as_payload()
     assert w1["event_id"] != w2["event_id"]
     assert "+00:00" in w1["occurred_at"]
+
+
+# ---------------------------------------------------------------------------
+# Attribute snapshot (signed trusted-attribute tier)
+# ---------------------------------------------------------------------------
+
+
+def test_as_payload_omits_attributes_when_none() -> None:
+    ev = AuditEvent(decision=_decision())
+    assert ev.as_payload()["attributes"] is None
+
+
+def test_as_payload_marks_verified_trusted_attribute() -> None:
+    """A trusted key from an externally-verified token → provenance verified;
+    a non-trusted key → advisory."""
+    d = _decision(attributes={"clearance_level": 5, "department": "finance"})
+    ev = AuditEvent(
+        decision=d,
+        trusted_attributes=frozenset({"clearance_level"}),
+        attributes_self_asserted=False,
+    )
+    assert ev.as_payload()["attributes"] == {
+        "clearance_level": {"value": 5, "provenance": "verified"},
+        "department": {"value": "finance", "provenance": "advisory"},
+    }
+
+
+def test_as_payload_marks_self_minted_trusted_attribute_as_self_asserted() -> None:
+    """A trusted key whose value was signed in-process from the contextvar is
+    NOT audited as verified — it's self_asserted (the reviewer's overclaim fix)."""
+    d = _decision(attributes={"clearance_level": 5})
+    ev = AuditEvent(
+        decision=d,
+        trusted_attributes=frozenset({"clearance_level"}),
+        attributes_self_asserted=True,
+    )
+    assert ev.as_payload()["attributes"] == {
+        "clearance_level": {"value": 5, "provenance": "self_asserted"}
+    }
+
+
+def test_as_payload_redacts_sensitive_attribute_keys() -> None:
+    d = _decision(attributes={"api_key": "sk-secret", "region": "EU"})
+    ev = AuditEvent(decision=d)
+    snapshot = ev.as_payload()["attributes"]
+    assert snapshot["api_key"]["value"] == "[REDACTED]"
+    assert snapshot["region"]["value"] == "EU"

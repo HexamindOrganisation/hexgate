@@ -93,6 +93,11 @@ class AuditEvent:
     decision: Decision
     user_id: str = ""
     session_id: str = ""
+    # Trusted ``ctx.*`` keys, and whether the verified values were self-minted
+    # in-process (vs verified from an external token) — set each attribute's
+    # provenance in the snapshot.
+    trusted_attributes: frozenset[str] = field(default_factory=frozenset)
+    attributes_self_asserted: bool = False
     event_id: UUID = field(default_factory=uuid4)
     occurred_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
@@ -117,9 +122,40 @@ class AuditEvent:
             "violations": list(d.violations),
             "hint": d.hint,
             "arguments": arguments,
+            "attributes": self._attribute_snapshot(),
             "user_id": self.user_id,
             "session_id": self.session_id,
         }
+
+    def _attribute_snapshot(self) -> dict[str, Any] | None:
+        """The decision's ABAC bag as ``{key: {value, provenance}}``, redacted
+        like ``arguments``; ``None`` when empty.
+
+        ``provenance`` is honest about trust: ``advisory`` (contextvar, not a
+        trusted key), ``verified`` (trusted key resolved from an externally
+        verified token), or ``self_asserted`` (trusted key whose value the SDK
+        signed in-process from the spoofable contextvar — pinned, not
+        independently verified).
+
+        Forward-compatible: the current platform schema has no ``attributes``
+        field and drops this on ingest — emitted so persistence lights up once
+        the platform grows the column."""
+        attrs = self.decision.attributes
+        if not attrs:
+            return None
+        redacted = _redact(attrs)
+        return {
+            key: {"value": redacted[key], "provenance": self._provenance(key)}
+            for key in attrs
+        }
+
+    def _provenance(self, key: str) -> str:
+        """Trust provenance of one attribute in the snapshot (see
+        :meth:`_attribute_snapshot`). A trusted key present here was resolved
+        from a token, so it's ``verified`` unless that token was self-minted."""
+        if key not in self.trusted_attributes:
+            return "advisory"
+        return "self_asserted" if self.attributes_self_asserted else "verified"
 
 
 # --- Per-key sender registry --------------------------------------------------

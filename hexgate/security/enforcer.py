@@ -14,7 +14,10 @@ from collections.abc import Callable, Mapping
 from typing import Any
 
 from hexgate.audit import AuditEvent, configure
-from hexgate.runtime.context import get_current_context
+from hexgate.runtime.context import (
+    get_current_context,
+    get_current_tool_use_context,
+)
 from hexgate.security.decision import Decision, PolicyEngine
 from hexgate.tracing._senders import AuditSender
 
@@ -81,17 +84,11 @@ class PolicyEnforcer:
         broken observer never breaks enforcement."""
         context = get_current_context()
         role = context.primary_role if context is not None else None
-        # ABAC bag read off the contextvar, feeding the ``ctx.*`` constraint
-        # namespace. Untrusted/spoofable at the same trust tier as ``role``
-        # above (both contextvar-sourced, not token-verified) — so a ``ctx.*``
-        # rule is exactly as trustworthy as a ``role`` rule today. The signed
-        # tier will let declared keys be verified from ``biscuit_facts``; until
-        # then, don't rely on ``ctx.*`` for security-critical decisions.
-        attributes = context.attributes if context is not None else None
-        # Both snapshots deep-copy on the same condition: ``attributes`` can
-        # hold a ``list[str]`` and lives on a contextvar that outlives the
-        # call, so a shallow copy would alias a mutable value into a retained
-        # Decision exactly like a shallow ``args`` copy would.
+        # Advisory + token-verified trusted attrs merged under the trust model
+        # (see _resolve_attributes).
+        attributes = self._resolve_attributes(context)
+        # Deep-copy when a snapshot is retained (audit/observer): both args and
+        # attributes can hold mutable values on a contextvar outliving the call.
         retained = self._audit_sender is not None or self._decision_observer is not None
         args_snapshot = _snapshot(arguments, deep=retained)
         attrs_snapshot = (
@@ -120,6 +117,8 @@ class PolicyEnforcer:
                     session_id=context.session_id
                     if (context is not None and context.session_id)
                     else "",
+                    trusted_attributes=self._trusted_attributes(),
+                    attributes_self_asserted=self._attributes_self_asserted(),
                 )
             )
 
@@ -133,6 +132,45 @@ class PolicyEnforcer:
                 _log.exception("decision_observer raised; ignoring")
 
         return decision
+
+    def _trusted_attributes(self) -> frozenset[str]:
+        """Policy-declared trusted ``ctx.*`` keys, read defensively — an engine
+        without the attribute (pre-signed-tier, or a test double) is all-advisory."""
+        return frozenset(getattr(self.policy, "trusted_attributes", frozenset()))
+
+    def _attributes_self_asserted(self) -> bool:
+        """True when the verified attrs were self-minted from the contextvar (so
+        audit records them as self-asserted, not independently verified)."""
+        tool_ctx = get_current_tool_use_context()
+        return bool(tool_ctx and tool_ctx.attributes_self_asserted)
+
+    def _resolve_attributes(self, context: object) -> dict[str, Any] | None:
+        """Merge advisory contextvar attrs with token-verified trusted ones into
+        the single ``ctx.*`` bag both engines evaluate (host-layer, so no engine
+        change and zero-drift holds). ``None`` when no context scope is active.
+
+        Advisory keys pass through; a trusted key is dropped from the advisory
+        bag and taken only from the verified token — so a spoofed value is
+        ignored and a trusted key absent from the token fails closed.
+
+        Caveat: verified attrs come from ``ToolUseContext``, populated only on
+        the agent-invoke path. Egress and the framework adapters install none,
+        so trusted keys are absent (fail closed) there while advisory keys still
+        work — declare a key trusted only for tools on the agent-invoke path.
+        """
+        if context is None:
+            return None
+        advisory = dict(getattr(context, "attributes", {}) or {})
+        trusted = self._trusted_attributes()
+        if not trusted:
+            return advisory
+        tool_ctx = get_current_tool_use_context()
+        verified = (
+            tool_ctx.verified_attributes if tool_ctx is not None else None
+        ) or {}
+        resolved = {key: val for key, val in advisory.items() if key not in trusted}
+        resolved.update({key: verified[key] for key in trusted if key in verified})
+        return resolved
 
 
 def build_enforcer(
