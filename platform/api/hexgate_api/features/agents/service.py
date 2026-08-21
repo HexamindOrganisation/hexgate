@@ -59,6 +59,88 @@ async def get_agent(session: AsyncSession, project_id: str, name: str) -> Agent 
     return (await session.exec(stmt)).first()
 
 
+async def _modular_bundle(
+    session: AsyncSession, project_id: str, sign: Callable[[bytes], bytes]
+) -> tuple[bytes, str, bytes] | None:
+    """Resolve a modular project once and compile its single shared bundle.
+
+    Returns ``None`` (never raises) when the project doesn't resolve or the
+    resolved policy can't compile (e.g. ``opa`` absent), so callers can leave
+    live bundles untouched — the fail-safe in docs/adr/R-POL-002. The SDK
+    resolve exceptions are imported here, on the modular path only, so a classic
+    save never touches the SDK.
+    """
+    from hexgate.security import LinkError, PolicySetError
+    from hexgate.security.constraints import ConstraintParseError
+    from hexgate_api.features.policy_modules import service as modules
+
+    try:
+        policy_yaml = await modules.resolved_policy_yaml(session, project_id)
+    except (LinkError, PolicySetError, ConstraintParseError) as exc:
+        logger.warning(
+            "modular project %s does not resolve; no bundle: %s", project_id, exc
+        )
+        return None
+    return compile_bundle(policy_yaml, sign)
+
+
+async def bundle_for_agent(
+    session: AsyncSession, agent: Agent, sign: Callable[[bytes], bytes]
+) -> tuple[bytes, str, bytes] | None:
+    """Compile the signed bundle for one agent, from the right source.
+
+    Modular project (has a role binding): the project's resolved role-keyed
+    policy. Classic project: the agent's own ``policy_yaml`` (unchanged
+    behavior). See docs/adr/R-POL-002.
+    """
+    from hexgate_api.features.policy_modules import service as modules
+
+    if await modules.is_modular(session, agent.project_id):
+        return await _modular_bundle(session, agent.project_id, sign)
+    return compile_bundle(agent.policy_yaml, sign)
+
+
+async def recompile_project(
+    session: AsyncSession, project_id: str, sign: Callable[[bytes], bytes]
+) -> int:
+    """Recompile every agent in a project after its modules or roles change.
+
+    Modular: resolve + compile once, reusing the single bundle for all agents.
+    Classic — including a project that just dropped its last role binding, so
+    enforcement returns to each agent's ``policy_yaml`` — recompile each agent
+    from its own policy. Either way a bundle is only *replaced* on a successful
+    compile, never blanked: a broken or work-in-progress edit leaves the
+    last-good bundle enforced (docs/adr/R-POL-002). Returns the count recompiled.
+    """
+    from hexgate_api.features.policy_modules import service as modules
+
+    agents = await list_agents(session, project_id)
+    if not agents:
+        return 0
+
+    count = 0
+    if await modules.is_modular(session, project_id):
+        bundle = await _modular_bundle(session, project_id, sign)
+        if bundle is None:
+            return 0
+        for agent in agents:
+            agent.compiled_wasm, agent.bundle_manifest, agent.bundle_signature = bundle
+            session.add(agent)
+            count += 1
+    else:
+        for agent in agents:
+            bundle = compile_bundle(agent.policy_yaml, sign)
+            if bundle is None:
+                continue  # keep the last-good bundle; never blank on a bad compile
+            agent.compiled_wasm, agent.bundle_manifest, agent.bundle_signature = bundle
+            session.add(agent)
+            count += 1
+
+    if count:
+        await session.commit()
+    return count
+
+
 async def get_latest_agent_version_id(
     session: AsyncSession, project_id: str, agent_name: str
 ) -> str:
@@ -126,17 +208,24 @@ async def update_agent(
     if system_md is not None:
         agent.system_md = system_md
 
-    # Recompile + re-sign the bundle from the (possibly updated) policy. We
-    # always rebuild rather than diff so a fixed policy re-acquires a bundle
-    # and a newly-broken one drops its stale (now-wrong) bundle.
+    # Recompile from the agent's own policy — classic projects only. We rebuild
+    # rather than diff so a fixed policy re-acquires a bundle and a newly-broken
+    # one drops its stale (now-wrong) bundle. A modular agent's bundle is owned
+    # by recompile_project; leave it untouched here so editing agent_yaml while
+    # the project's modules are mid-change never blanks a live bundle (R-POL-002).
     if sign is not None:
-        bundle = compile_bundle(agent.policy_yaml, sign)
-        if bundle is not None:
-            agent.compiled_wasm, agent.bundle_manifest, agent.bundle_signature = bundle
-        else:
-            agent.compiled_wasm = None
-            agent.bundle_manifest = None
-            agent.bundle_signature = None
+        from hexgate_api.features.policy_modules import service as modules
+
+        if not await modules.is_modular(session, project_id):
+            bundle = compile_bundle(agent.policy_yaml, sign)
+            if bundle is not None:
+                agent.compiled_wasm, agent.bundle_manifest, agent.bundle_signature = (
+                    bundle
+                )
+            else:
+                agent.compiled_wasm = None
+                agent.bundle_manifest = None
+                agent.bundle_signature = None
 
     agent.updated_at = datetime.now(timezone.utc)
     session.add(agent)
@@ -160,17 +249,39 @@ async def backfill_bundles(
     policy that won't compile (or a platform without opa) is simply left
     bundle-less. Returns the number of agents backfilled.
     """
-    count = 0
+    from collections import defaultdict
+
+    from hexgate_api.features.policy_modules import service as modules
+
     agents = (await session.exec(select(Agent))).all()
+    pending: dict[str, list[Agent]] = defaultdict(list)
     for agent in agents:
-        if agent.compiled_wasm is not None:
-            continue
-        bundle = compile_bundle(agent.policy_yaml, sign)
-        if bundle is None:
-            continue
-        agent.compiled_wasm, agent.bundle_manifest, agent.bundle_signature = bundle
-        session.add(agent)
-        count += 1
+        if agent.compiled_wasm is None:
+            pending[agent.project_id].append(agent)
+
+    count = 0
+    for project_id, project_agents in pending.items():
+        if await modules.is_modular(session, project_id):
+            # Resolve + compile once for the whole project, not once per agent.
+            bundle = await _modular_bundle(session, project_id, sign)
+            if bundle is None:
+                continue
+            for agent in project_agents:
+                agent.compiled_wasm, agent.bundle_manifest, agent.bundle_signature = (
+                    bundle
+                )
+                session.add(agent)
+                count += 1
+        else:
+            for agent in project_agents:
+                bundle = compile_bundle(agent.policy_yaml, sign)
+                if bundle is None:
+                    continue
+                agent.compiled_wasm, agent.bundle_manifest, agent.bundle_signature = (
+                    bundle
+                )
+                session.add(agent)
+                count += 1
     if count:
         await session.commit()
     return count
@@ -233,7 +344,7 @@ async def register_manifest(
         # Policies editor has something to render and ``hexgate serve``
         # has a signed bundle to ship.
         agent.policy_yaml = _default_policy_for_manifest(manifest)
-        bundle = compile_bundle(agent.policy_yaml, sign)
+        bundle = await bundle_for_agent(session, agent, sign)
         if bundle is not None:
             agent.compiled_wasm, agent.bundle_manifest, agent.bundle_signature = bundle
         # Already in session via _get_or_create_agent; the mutation flushes
