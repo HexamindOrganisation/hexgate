@@ -391,14 +391,11 @@ def test_span_attributes_carry_run_attribution() -> None:
 
 
 def test_span_attributes_omit_run_id_never_send_an_empty_string() -> None:
-    """The regression guard for the whole feature's worst failure mode.
+    """The regression guard for this feature's worst failure mode.
 
-    ``DecisionEvent.run_id`` is ``UUID | None`` on the platform. Pydantic does
-    not coerce "" to a UUID, and a span the enricher cannot validate goes to
-    the DLQ — so an empty string would lose the entire audit record for every
-    decision made outside a run scope, which is precisely the population an
-    auditor most wants to see. OTLP attributes cannot carry null either, so the
-    absent attribute is the only way to say "no run".
+    "" is not a UUID, so the enricher DLQs the span — losing the entire record
+    for every decision made outside a run scope. OTLP cannot carry null, so
+    absence is the only way to say "no run".
     """
     wire = AuditEvent(decision=_decision()).span_attributes()
 
@@ -408,8 +405,7 @@ def test_span_attributes_omit_run_id_never_send_an_empty_string() -> None:
 
 
 def test_span_attributes_do_not_redact_or_truncate_run_fields() -> None:
-    """Bounded integers and a UUID from the SDK's own accumulator — not caller
-    data, so they pass through like the role fields do."""
+    """SDK counters, not caller data — they pass through like the role fields."""
     wire = AuditEvent(
         decision=_decision(run=_run(tool_calls=10**6, total_tokens=10**7))
     ).span_attributes()
@@ -419,13 +415,11 @@ def test_span_attributes_do_not_redact_or_truncate_run_fields() -> None:
 
 
 def test_span_attribute_key_set_is_the_wire_contract() -> None:
-    """Mirrors what the enricher decodes into DecisionEvent
-    (platform/api/hexgate_api/jobs/enricher/mapping.py).
+    """Mirrors what the enricher decodes, asserted as a set rather than field
+    by field.
 
-    Asserted as a set, not field by field: an attribute the enricher does not
-    know is silently dropped rather than rejected. A field added to Decision
-    without a mapping, or renamed on either side, has to fail here or it fails
-    nowhere.
+    An attribute the enricher does not read is dropped silently. A field added
+    without a mapping has to fail here or fail nowhere.
     """
     wire = AuditEvent(
         decision=_decision(run=_run(), arguments={"path": "x"}, attributes={"a": 1})
@@ -455,8 +449,7 @@ def test_span_attribute_key_set_is_the_wire_contract() -> None:
 
 
 def test_run_fields_are_otlp_attribute_values() -> None:
-    """The span emitter passes these straight to the OTel SDK, which drops any
-    attribute whose value is not a primitive — silently, inside the export."""
+    """The OTel SDK silently drops any attribute that is not a primitive."""
     wire = AuditEvent(decision=_decision(run=_run())).span_attributes()
 
     run_keys = {

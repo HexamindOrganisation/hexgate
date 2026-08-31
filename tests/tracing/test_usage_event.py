@@ -90,10 +90,8 @@ def test_occurred_at_defaults_to_an_aware_utc_datetime() -> None:
 
 
 def test_span_attributes_omit_run_id_never_send_an_empty_string() -> None:
-    """``LlmInvocationEvent.run_id`` is ``UUID | None`` on the platform: an
-    empty string fails validation and sends the span to the DLQ — losing the
-    usage record for every model call made outside a run scope. OTLP cannot
-    carry null, so the absent attribute is how "no run" travels."""
+    """An empty string is not a UUID: the enricher DLQs the span, losing the
+    record for every model call made outside a run scope."""
     assert semconv.RUN_ID not in _event().span_attributes()
 
 

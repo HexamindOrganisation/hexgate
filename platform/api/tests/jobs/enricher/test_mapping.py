@@ -185,15 +185,11 @@ def test_when_run_attributes_are_absent_then_counters_default_to_zero() -> None:
 
 
 def test_sdk_decision_span_validates_in_and_out_of_a_run_scope() -> None:
-    """The cross-package contract, asserted against the real SDK emitter.
+    """The cross-package contract, asserted against the real SDK emitter — the
+    only place both halves of the wire shape meet.
 
-    The SDK's own suite can only check its idea of the wire shape; this is the
-    only place both halves meet. An attribute name the enricher does not read
-    is silently dropped, so a rename on either side has to fail here.
-
-    Out of a run scope the SDK omits ``RUN_ID`` entirely — OTLP cannot carry
-    null and ``DecisionEvent.run_id`` is ``UUID | None``, so an empty string
-    would fail validation and DLQ the whole record rather than its attribution.
+    Out of a run scope the SDK omits ``RUN_ID``: OTLP cannot carry null, and an
+    empty string would DLQ the whole record rather than its attribution.
     """
     from hexgate.audit import AuditEvent
     from hexgate.security.decision import Decision, DecisionOutcome, RunAttribution

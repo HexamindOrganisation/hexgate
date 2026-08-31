@@ -201,12 +201,8 @@ class AuditEvent:
             semconv.VIOLATIONS: _bounded_violations(d.violations),
             semconv.USER_ID: self.user_id,
             semconv.SESSION_ID: self.session_id,
-            # Neither redacted nor capped: five bounded counters and a UUID
-            # produced by the SDK's own accumulator, not by caller data — the
-            # same reasoning as the role fields above. Spread from one method
-            # so the wire names live in a single place
-            # (RunAttribution.as_span_attributes), reviewable against
-            # DecisionEvent as a unit. Note RUN_ID is absent, never "", there.
+            # Neither redacted nor capped — SDK counters, not caller data.
+            # Spread so the wire names live in one place.
             **d.run.as_span_attributes(),
         }
         if d.arguments is not None:

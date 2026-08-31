@@ -462,9 +462,8 @@ def test_combine_rejects_an_empty_role_list() -> None:
 
 # --- RunAttribution ---------------------------------------------------------
 #
-# The projection from the ``run.*`` namespace onto the six audit columns. It is
-# the only place that knows the wire field names, the seconds→milliseconds
-# conversion, and the ``""`` → ``None`` rule for run_id.
+# The one place that knows the wire field names, the seconds→ms conversion, and
+# the ``""`` → ``None`` rule for run_id.
 
 
 def _facts_with(tool_calls: int = 0, denials: int = 0, tokens: int = 0) -> RunFacts:
@@ -491,7 +490,7 @@ def test_run_attribution_projects_the_namespace() -> None:
 
 
 def test_run_attribution_converts_elapsed_seconds_to_truncated_milliseconds() -> None:
-    """The platform column is UInt32 milliseconds; the namespace is a float."""
+    """The column is UInt32 ms; the namespace is a float."""
     run = RunAttribution.from_namespace({"id": "r", "elapsed_seconds": 1.2345})
 
     assert run.elapsed_ms == 1234
@@ -503,7 +502,7 @@ def test_run_attribution_of_no_namespace_is_the_detached_singleton() -> None:
 
 
 def test_run_attribution_of_detached_facts_reads_zeros_and_no_id() -> None:
-    """A detached run is a value, not an absence — zeros and an empty id."""
+    """A detached run is a value, not an absence."""
     from hexgate.runtime.run_facts import DETACHED
 
     run = RunAttribution.from_namespace(DETACHED.as_namespace("read_file"))
@@ -518,17 +517,14 @@ def test_run_attribution_of_detached_facts_reads_zeros_and_no_id() -> None:
 
 
 def test_run_attribution_omits_run_id_never_sends_an_empty_string() -> None:
-    """The platform types run_id as ``UUID | None`` and rejects "". A rejected
-    span is DLQ'd, so an empty string would lose the whole audit record — not
-    just the attribution — for every decision made outside a run scope. OTLP
-    attributes cannot carry null, so absence is how "no run" travels."""
+    """The platform rejects "", so an empty string loses the whole record for
+    every decision made outside a run scope."""
     assert semconv.RUN_ID not in DETACHED_RUN.as_span_attributes()
 
 
 def test_run_attribution_attribute_names_match_the_wire_contract() -> None:
-    """Mirrors what the enricher decodes into DecisionEvent
-    (platform/api/hexgate_api/jobs/enricher/mapping.py). A rename on either
-    side is a silently ignored attribute rather than a rejection."""
+    """Mirrors what the enricher decodes. A rename on either side is a silently
+    ignored attribute rather than a rejection."""
     assert set(RunAttribution(run_id="run-9").as_span_attributes()) == {
         semconv.RUN_ID,
         semconv.RUN_TOOL_CALLS,
@@ -559,11 +555,8 @@ def test_from_verdict_carries_the_run_through() -> None:
 def test_error_payload_withholds_the_run_from_the_model() -> None:
     """A deliberate information-flow boundary, not an oversight.
 
-    The model may learn *that* a constraint tripped (the reason names it, so
-    ``run.tool_calls < 20`` reaches it verbatim), but never the counter's
-    current value — how close it is to its budget. Surfacing budget pressure to
-    an agent is its own design decision; shipping it accidentally here would
-    foreclose making it deliberately.
+    The model may learn *that* a constraint tripped — the reason names it —
+    but never the counter's value, i.e. how close it is to its budget.
     """
     decision = Decision(
         outcome=DecisionOutcome.DENY,
