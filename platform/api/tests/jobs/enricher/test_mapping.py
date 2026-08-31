@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import time
+import uuid
 from datetime import datetime, timezone
 
 import pytest
@@ -146,3 +147,115 @@ def test_when_agent_name_is_absent_then_resource_service_name_is_used() -> None:
         semconv.SCOPE_AUDIT, make_span(attrs), {"service.name": "svc-agent"}
     )
     assert event.agent_name == "svc-agent"
+
+
+# --- run attribution: the SDK↔platform contract -----------------------------
+
+
+def test_map_span_carries_run_attribution() -> None:
+    run_id = str(uuid.uuid4())
+    attrs = decision_attrs(
+        **{
+            semconv.RUN_ID: run_id,
+            semconv.RUN_TOOL_CALLS: 3,
+            semconv.RUN_LLM_CALLS: 2,
+            semconv.RUN_DENIALS: 1,
+            semconv.RUN_TOTAL_TOKENS: 1200,
+            semconv.RUN_ELAPSED_MS: 4500,
+        }
+    )
+
+    event = map_span(semconv.SCOPE_AUDIT, make_span(attrs), {})
+
+    assert str(event.run_id) == run_id
+    assert event.run_tool_calls == 3
+    assert event.run_llm_calls == 2
+    assert event.run_denials == 1
+    assert event.run_total_tokens == 1200
+    assert event.run_elapsed_ms == 4500
+
+
+def test_when_run_attributes_are_absent_then_counters_default_to_zero() -> None:
+    """A span from an emitter that predates the run namespace still maps."""
+    event = map_span(semconv.SCOPE_AUDIT, make_span(decision_attrs()), {})
+
+    assert event.run_id is None
+    assert event.run_tool_calls == 0
+    assert event.run_elapsed_ms == 0
+
+
+def test_sdk_decision_span_validates_in_and_out_of_a_run_scope() -> None:
+    """The cross-package contract, asserted against the real SDK emitter.
+
+    The SDK's own suite can only check its idea of the wire shape; this is the
+    only place both halves meet. An attribute name the enricher does not read
+    is silently dropped, so a rename on either side has to fail here.
+
+    Out of a run scope the SDK omits ``RUN_ID`` entirely — OTLP cannot carry
+    null and ``DecisionEvent.run_id`` is ``UUID | None``, so an empty string
+    would fail validation and DLQ the whole record rather than its attribution.
+    """
+    from hexgate.audit import AuditEvent
+    from hexgate.security.decision import Decision, DecisionOutcome, RunAttribution
+
+    run_id = str(uuid.uuid4())
+    attributed = AuditEvent(
+        decision=Decision(
+            outcome=DecisionOutcome.DENY,
+            agent_name="example_agent",
+            tool_name="read_file",
+            run=RunAttribution(
+                run_id=run_id,
+                tool_calls=3,
+                llm_calls=2,
+                denials=1,
+                total_tokens=1200,
+                elapsed_ms=4500,
+            ),
+        )
+    ).span_attributes()
+    detached = AuditEvent(
+        decision=Decision(
+            outcome=DecisionOutcome.ALLOW,
+            agent_name="example_agent",
+            tool_name="read_file",
+        )
+    ).span_attributes()
+
+    in_run = map_span(semconv.SCOPE_AUDIT, make_span(attributed), {})
+    out_of_run = map_span(semconv.SCOPE_AUDIT, make_span(detached), {})
+
+    assert str(in_run.run_id) == run_id
+    assert in_run.run_tool_calls == 3
+    assert in_run.run_llm_calls == 2
+    assert in_run.run_denials == 1
+    assert in_run.run_total_tokens == 1200
+    assert in_run.run_elapsed_ms == 4500
+    assert out_of_run.run_id is None
+    assert out_of_run.run_tool_calls == 0
+
+
+def test_sdk_usage_span_validates_in_and_out_of_a_run_scope() -> None:
+    """Same contract for llm_invocation.run_id, which joins usage rows to the
+    policy_decision rows of the same invocation."""
+    from hexgate.tracing.usage import LlmUsageEvent
+
+    def _event(**overrides: object) -> LlmUsageEvent:
+        base = dict(
+            agent_name="a",
+            model="gpt-4o",
+            input_tokens=1,
+            output_tokens=1,
+            latency_ms=1,
+            status="success",
+        )
+        return LlmUsageEvent(**{**base, **overrides})
+
+    run_id = str(uuid.uuid4())
+    attributed = map_span(
+        semconv.SCOPE_USAGE, make_span(_event(run_id=run_id).span_attributes()), {}
+    )
+    detached = map_span(semconv.SCOPE_USAGE, make_span(_event().span_attributes()), {})
+
+    assert str(attributed.run_id) == run_id
+    assert detached.run_id is None

@@ -10,7 +10,9 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Final, Protocol, runtime_checkable
+
+from hexgate.tracing import semconv
 
 
 class DecisionOutcome(str, Enum):
@@ -195,6 +197,84 @@ _ERROR_TYPE_BY_OUTCOME: dict[DecisionOutcome, str] = {
 }
 
 
+# ``run.elapsed_seconds`` is a float; the platform column is UInt32
+# milliseconds (platform/clickhouse/init/schema.sql, policy_decision), typed so
+# a distribution query buckets predictably. Convert once, here.
+_MILLISECONDS_PER_SECOND = 1000
+
+
+@dataclass(frozen=True, slots=True)
+class RunAttribution:
+    """The run a decision belongs to, in the shape the audit wire wants.
+
+    Built from :meth:`~hexgate.runtime.run_facts.RunFacts.as_namespace`, which
+    :meth:`~hexgate.security.enforcer.PolicyEnforcer.decide` reads once per
+    decision so the record and the verdict cannot disagree about the same run.
+    Bounded integers and a UUID string — not caller data, so it is neither
+    redacted nor capped on its way out (see ``audit.AuditEvent.span_attributes``).
+
+    ``run_id`` is ``""`` for a decision made outside a run scope, matching
+    ``run_facts.DETACHED.id``. That is an in-process signal only: the wire
+    field is ``UUID | None``, so :meth:`as_span_attributes` omits it.
+    """
+
+    run_id: str = ""
+    tool_calls: int = 0
+    llm_calls: int = 0
+    denials: int = 0
+    total_tokens: int = 0
+    elapsed_ms: int = 0
+
+    @classmethod
+    def from_namespace(cls, run: Mapping[str, Any] | None) -> "RunAttribution":
+        """Project the ``run.*`` namespace onto the five persisted counters.
+
+        A subset by design: the namespace also carries ``agent``,
+        ``approvals``, ``errors``, ``calls_of_this_tool``, ``tools_used`` and
+        the token split, none of which has a column yet. Adding one later is a
+        DEFAULT-ed column plus a line here.
+        """
+        if not run:
+            return DETACHED_RUN
+        return cls(
+            run_id=str(run.get("id", "")),
+            tool_calls=int(run.get("tool_calls", 0)),
+            llm_calls=int(run.get("llm_calls", 0)),
+            denials=int(run.get("denials", 0)),
+            total_tokens=int(run.get("total_tokens", 0)),
+            elapsed_ms=int(
+                float(run.get("elapsed_seconds", 0.0)) * _MILLISECONDS_PER_SECOND
+            ),
+        )
+
+    def as_span_attributes(self) -> dict[str, Any]:
+        """Span attributes for the platform's ``DecisionEvent``.
+
+        ``RUN_ID`` is omitted, never sent as ``""``: OTLP attributes cannot
+        carry null, and the platform types ``run_id`` as ``UUID | None`` and
+        rejects an empty string with a 422 — so a decision made outside a run
+        scope would lose its whole audit record, not just its attribution. An
+        absent attribute is what the enricher decodes back to ``None``.
+        """
+        attrs: dict[str, Any] = {
+            semconv.RUN_TOOL_CALLS: self.tool_calls,
+            semconv.RUN_LLM_CALLS: self.llm_calls,
+            semconv.RUN_DENIALS: self.denials,
+            semconv.RUN_TOTAL_TOKENS: self.total_tokens,
+            semconv.RUN_ELAPSED_MS: self.elapsed_ms,
+        }
+        if self.run_id:
+            attrs[semconv.RUN_ID] = self.run_id
+        return attrs
+
+
+# Shared zero value: a decision with no run scope behind it. Safe as a
+# module-level singleton because the class is frozen — unlike
+# ``run_facts.DETACHED``, which needs a write-dropping flag to play the same
+# role for a mutable accumulator.
+DETACHED_RUN: Final[RunAttribution] = RunAttribution()
+
+
 @dataclass(frozen=True, slots=True)
 class Decision:
     """One policy decision for a proposed tool invocation."""
@@ -220,6 +300,13 @@ class Decision:
     # deliberately still absent from ``as_error_payload`` — the model must
     # never see it.
     attributes: dict[str, Any] | None = None
+    # The run this decision belongs to. Persisted by the audit sender
+    # untouched — bounded integers and a UUID, not caller data — and
+    # deliberately absent from ``as_error_payload`` for the same reason
+    # ``attributes`` is: the model must not learn how close it is to its
+    # budget. Surfacing budget pressure to the agent is its own design
+    # decision, not something to ship by accident here.
+    run: RunAttribution = DETACHED_RUN
 
     @classmethod
     def from_verdict(
@@ -232,9 +319,15 @@ class Decision:
         deciding_role: str | None = None,
         arguments: dict[str, Any] | None = None,
         attributes: dict[str, Any] | None = None,
+        run: RunAttribution = DETACHED_RUN,
     ) -> "Decision":
         """Lift an engine :class:`Verdict` into a host-facing decision, stamping
-        on the context the engine doesn't know."""
+        on the context the engine doesn't know.
+
+        ``run`` defaults to :data:`DETACHED_RUN` rather than being required: a
+        decision built with no run context is a legitimate state (a direct
+        ``decide()``, a bypassed entry point), and defaulting keeps every
+        existing caller valid."""
         return cls(
             outcome=verdict.outcome,
             agent_name=agent_name,
@@ -247,6 +340,7 @@ class Decision:
             violations=verdict.violations,
             arguments=arguments,
             attributes=attributes,
+            run=run,
         )
 
     @property

@@ -71,6 +71,7 @@ from hexgate.security.decision import (
     Decision,
     DecisionOutcome,
     PolicyEngine,
+    RunAttribution,
     Verdict,
     combine_role_verdicts,
 )
@@ -233,6 +234,7 @@ __all__ = [
     "PolicyMode",
     "PolicySet",
     "RegoVerdict",
+    "RunAttribution",
     "PolicySetError",
     "SignedBundle",
     "ToolPolicy",
