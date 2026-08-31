@@ -149,6 +149,7 @@ from hexgate.security.testing import (
     assert_allows,
     assert_denies,
     assert_needs_approval,
+    run_namespace,
 )
 
 __all__ = [
@@ -201,6 +202,7 @@ __all__ = [
     "assert_allows",
     "assert_denies",
     "assert_needs_approval",
+    "run_namespace",
     "BaseToolPolicy",
     "PolicyBinding",
     "PolicyBindingError",

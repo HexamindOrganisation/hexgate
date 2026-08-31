@@ -74,6 +74,7 @@ def evaluate_tool_call(
     *,
     role: str | None = None,
     attributes: Mapping[str, Any] | None = None,
+    run: Mapping[str, Any] | None = None,
 ) -> Verdict:
     """Return a :class:`Verdict` for a proposed tool call (pydantic engine).
 
@@ -104,6 +105,7 @@ def evaluate_tool_call(
             role=role,
             consts=policy.consts,
             attributes=attributes,
+            run=run,
         )
     except PolicyDeniedError as exc:
         return Verdict(outcome=DecisionOutcome.DENY, reason=str(exc))
@@ -145,6 +147,7 @@ def authorize_tool_call(
     *,
     role: str | None = None,
     attributes: Mapping[str, Any] | None = None,
+    run: Mapping[str, Any] | None = None,
 ) -> None:
     """Raise when a tool call is denied or requires approval.
 
@@ -152,12 +155,13 @@ def authorize_tool_call(
     callers (the CLI, direct API users) that prefer the exception contract.
     ``role`` is forwarded so ``role``-scoped constraints see the caller's
     role — omitting it here would diverge from the WASM engine, which always
-    receives ``input.role``. ``attributes`` are forwarded for the same reason:
-    ``ctx.*`` constraints must see the caller's ABAC bag.
+    receives ``input.role``. ``attributes`` and ``run`` are forwarded for the
+    same reason: ``ctx.*`` constraints must see the caller's ABAC bag, and
+    ``run.*`` constraints the current invocation's facts.
     """
     _raise_for_verdict(
         evaluate_tool_call(
-            policy, tool_name, arguments, role=role, attributes=attributes
+            policy, tool_name, arguments, role=role, attributes=attributes, run=run
         )
     )
 
@@ -169,6 +173,7 @@ def evaluate_tool_call_wasm(
     arguments: dict[str, Any] | None = None,
     *,
     attributes: Mapping[str, Any] | None = None,
+    run: Mapping[str, Any] | None = None,
 ) -> Verdict:
     """WASM-backed counterpart of :func:`evaluate_tool_call`.
 
@@ -183,7 +188,11 @@ def evaluate_tool_call_wasm(
     a "no allow rule matched" hint so the message isn't silently empty.
     """
     decision = bundle.policy().decide(
-        role=role, tool=tool_name, args=arguments or {}, ctx=dict(attributes or {})
+        role=role,
+        tool=tool_name,
+        args=arguments or {},
+        ctx=dict(attributes or {}),
+        run=dict(run or {}),
     )
     return verdict_from_rego(decision, tool_name=tool_name, role=role)
 
@@ -228,6 +237,7 @@ def authorize_tool_call_wasm(
     arguments: dict[str, Any] | None = None,
     *,
     attributes: Mapping[str, Any] | None = None,
+    run: Mapping[str, Any] | None = None,
 ) -> None:
     """Raise-on-deny wrapper over :func:`evaluate_tool_call_wasm`.
 
@@ -236,6 +246,6 @@ def authorize_tool_call_wasm(
     """
     _raise_for_verdict(
         evaluate_tool_call_wasm(
-            bundle, role, tool_name, arguments, attributes=attributes
+            bundle, role, tool_name, arguments, attributes=attributes, run=run
         )
     )
