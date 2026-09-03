@@ -359,8 +359,15 @@ async def run_guarded_async(
     approval_handler: "ApprovalHandler | None",
     invoke: Callable[[dict[str, Any]], Awaitable[Any]],
     render_error: RenderError,
+    policy_key: str | None = None,
 ) -> Any:
-    """Run one guarded tool call, async. See module docstring for the order."""
+    """Run one guarded tool call, async. See module docstring for the order.
+
+    ``policy_key`` overrides the key the *policy* decision uses while ``tool_name``
+    still identifies the call for guards and audit-notify. The OpenAI adapter uses
+    this to gate an agent-as-tool under its reach key ``agent.tool:<target>``
+    without renaming the tool for guards; every other caller leaves it ``None`` so
+    the tool name governs both."""
     context = get_current_context() if _has_guards(pipeline) else None
     call = _new_call(tool_name, args, enforcer, context)
     mods: list[Modification] = []
@@ -399,7 +406,7 @@ async def run_guarded_async(
         # policy's are independent gates: if both fire on one call, the handler
         # is prompted for each. We do not merge them, because a guard's approval
         # must not silently satisfy the policy's separate requirement.
-        decision = enforcer.decide(call.tool_name, call.args)
+        decision = enforcer.decide(policy_key or call.tool_name, call.args)
         if not decision.allowed:
             # Counts the gate firing; whether it's granted is a separate count.
             _record_run_decision(decision.outcome)
@@ -538,8 +545,10 @@ def run_guarded_sync(
     approval_handler: "ApprovalHandler | None",
     invoke: Callable[[dict[str, Any]], Any],
     render_error: RenderError,
+    policy_key: str | None = None,
 ) -> Any:
-    """Run one guarded tool call, sync. Mirrors :func:`run_guarded_async`."""
+    """Run one guarded tool call, sync. Mirrors :func:`run_guarded_async`
+    (including ``policy_key``)."""
     context = get_current_context() if _has_guards(pipeline) else None
     call = _new_call(tool_name, args, enforcer, context)
     mods: list[Modification] = []
@@ -572,7 +581,7 @@ def run_guarded_sync(
                 call = _apply_pre(call, guard, outcome, mods)
 
     if enforcer is not None:
-        decision = enforcer.decide(call.tool_name, call.args)
+        decision = enforcer.decide(policy_key or call.tool_name, call.args)
         if not decision.allowed:
             # See the async path: the gate firing is counted, the grant is not.
             _record_run_decision(decision.outcome)
