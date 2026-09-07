@@ -74,7 +74,7 @@ verify attribute values.
 <Warning>
 **The bag is persisted and human-readable — keep raw PII out of it.** When audit
 is configured, the attributes a decision was evaluated against are sent to the
-platform, stored on `policy_decision` for **90 days**, and shown verbatim in the
+platform, stored on `policy_decision` for **180 days**, and shown verbatim in the
 dashboard's audit detail drawer to anyone with read access to the project. That
 is deliberate — it is what makes a `ctx.*`-driven deny explainable after the
 fact — but it means the bag is a data-retention surface, not scratch space.

@@ -79,7 +79,7 @@ Key properties:
                                                         ▼
         ┌──────────────────────────────────────────────────┐
         │  ClickHouse  hexgate_audit.ban_enforcement         │
-        │  (blocked attempts; 90-day TTL)                    │
+        │  (blocked attempts; 180-day TTL)                   │
         └──────────────────────────────────────────────────┘
                                         ▲
         GET /v1/projects/{pid}/audit/ban-enforcements (cookie, project-admin)
@@ -165,7 +165,7 @@ CREATE TABLE IF NOT EXISTS hexgate_audit.ban_enforcement
 ENGINE = ReplacingMergeTree(received_at)
 PARTITION BY toYYYYMM(received_at)
 ORDER BY (project_id, occurred_at, event_id)
-TTL toDateTime(received_at) + INTERVAL 90 DAY
+TTL toDateTime(received_at) + INTERVAL 180 DAY
 SETTINGS index_granularity = 8192;
 ```
 
@@ -174,7 +174,7 @@ SETTINGS index_granularity = 8192;
 - `ReplacingMergeTree(received_at)` dedups by the sort key `(project_id, occurred_at, event_id)` —
   an SDK retry carrying the same `event_id` collapses on a background merge (reads are eventually
   consistent; no `FINAL`).
-- Monthly partitions on `received_at`; **90-day TTL**.
+- Monthly partitions on `received_at`; **180-day TTL**.
 - Carries **no** `tool_name`/`role`/`arguments`/`outcome` — a ban is refused *before* any tool
   call, so those dimensions don't exist for a blocked attempt.
 
@@ -428,7 +428,7 @@ setting `revoked_at = utcnow()` and `revoked_by_user_id`. It is:
 
 After revoke the ban disappears from the active feed (so the target's **next run** is allowed) and
 from the default list view (visible only with `include_revoked=true`). Existing `ban_enforcement`
-rows are **not** affected — those historical blocked attempts persist until the 90-day TTL.
+rows are **not** affected — those historical blocked attempts persist until the 180-day TTL.
 
 > **Propagation latency.** Because the SDK re-checks the feed at the start of each run, a create or
 > revoke takes effect on the target's **next run**; an in-progress run is not interrupted. There is
