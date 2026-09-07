@@ -387,9 +387,16 @@ in order:
 6. **Send DLQ envelopes**, then **commit offsets**.
 
 Committing only after the ack means a crash anywhere in the cycle replays the
-poll. That is safe for the tables — `event_id` is the idempotency key and the
-tables are `ReplacingMergeTree` — and merely duplicates DLQ envelopes, which
-carry no dedup key (consumers of the DLQ must tolerate that).
+poll. The tables absorb that — `event_id` is the idempotency key and the tables
+are `ReplacingMergeTree` — but the dedup is *eventual*, not immediate: merges
+are opportunistic and the read paths query without `FINAL`, so both copies are
+counted until a merge lands. Two edges make it more than a delay: dedup never
+crosses the monthly `received_at` partition, so a replay straddling a month
+boundary double-counts permanently, and duplicates within a single batch only
+collapse when they share an insert block. The `insert_decisions_batch`
+docstring (`features/audit/service.py`) is the reference for all three. A
+replay also duplicates DLQ envelopes, which carry no dedup key at all
+(consumers of the DLQ must tolerate that).
 
 DLQ envelopes are JSON, keyed by project like the source record, and carry the
 decoded attributes with the dict-typed fields redacted (same sensitive-key
@@ -454,19 +461,25 @@ CREATE TABLE hexgate_audit.policy_decision
   user_roles          Array(LowCardinality(String)),
   deciding_role       LowCardinality(String) DEFAULT ''       -- '' when every role denied
 )
-ENGINE = MergeTree
-PARTITION BY toYYYYMM(occurred_at)
-ORDER BY (project_id, agent_name, outcome, occurred_at)
-TTL toDateTime(occurred_at) + INTERVAL 90 DAY
+-- ReplacingMergeTree: replays carrying the same event_id collapse on a
+-- background merge — eventual dedup, not immediate (§4.3).
+ENGINE = ReplacingMergeTree(received_at)
+-- Partition + TTL anchor on server-stamped received_at, not the
+-- client-supplied occurred_at (clock skew would break retention).
+PARTITION BY toYYYYMM(received_at)
+ORDER BY (project_id, agent_name, outcome, occurred_at, event_id)
+TTL toDateTime(received_at) + INTERVAL 90 DAY
 SETTINGS index_granularity = 8192;
 ```
 
 - **`occurred_at`** is event time (SDK), **`received_at`** is ingest time
-  (server default). Reads order by `received_at`; retention/partitioning key off
-  `occurred_at`.
-- **Sort key** `(project_id, agent_name, outcome, occurred_at)` optimizes the
-  expected query shape: "decisions for a project/agent, filtered by outcome,
-  newest within a window."
+  (server default). Reads order by `received_at`, and so do partitioning and
+  TTL — anchoring retention on the client-supplied `occurred_at` would let a
+  skewed clock land a row in the wrong partition or expire it early.
+- **Sort key** `(project_id, agent_name, outcome, occurred_at, event_id)`
+  optimizes the expected query shape: "decisions for a project/agent, filtered
+  by outcome, newest within a window." The trailing `event_id` is what gives
+  `ReplacingMergeTree` something to dedup on.
 - **`hint` / `arguments`** are stored as ZSTD-compressed JSON strings, not native
   JSON, and are documented as potentially lossy (`arguments` is SDK-truncated;
   see §6).
@@ -540,8 +553,8 @@ HTTP ingest uses the single-row `insert_decision`, whose settings are:
 The raw `GET /v1/audit/decisions?limit=N` debug dump has been **removed**.
 Reads are now project-scoped aggregation endpoints that group server-side in
 ClickHouse (query-time `GROUP BY`; no rollups/materialized views). The table's
-sort key `(project_id, agent_name, outcome, occurred_at)` and `LowCardinality`
-columns make these scans cheap. All time-axis logic keys off `occurred_at`
+sort key `(project_id, agent_name, outcome, occurred_at, event_id)` and
+`LowCardinality` columns make these scans cheap. All time-axis logic keys off `occurred_at`
 (event time), never `received_at`. See `platform/api/audit.py` (`summarize`,
 `timeseries`, `list_decisions`).
 
