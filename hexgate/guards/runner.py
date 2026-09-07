@@ -239,6 +239,14 @@ def _record_run_execution(tool_name: str) -> None:
     instead let every concurrent call read the same pre-increment counter, and
     a cap of 5 admitted all 50 of a 50-way ``asyncio.gather``.
 
+    One documented gap: an ``approval_required`` decision awaits the approval
+    handler between that read and this call, so a handler that genuinely
+    suspends reopens the window and the cap can overshoot. Recording before the
+    await is not the fix — it would count executions for approvals that are
+    refused, which the ``run.approvals`` contract rules out. Async path and the
+    policy's own gate only; see "Parallel calls waiting on an approval" in
+    docs/policy/constraints.mdx.
+
     Counting before dispatch also keeps the post-guard contract: a post-guard
     halt must not un-count a call whose side effect already happened.
     """

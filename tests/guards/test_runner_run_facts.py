@@ -4,7 +4,7 @@ Run against both sync and async runners, which are line-for-line mirrors —
 drift between them is the failure mode this file guards. A tool counts on
 execution, never on deny; a denied call accrues to ``run.denials`` instead; an
 approval gate counts on the decision, execution separately; a pre-guard halt
-is not a tool call, a post-guard halt still is.
+is not a tool call, a post-guard halt is both a tool call and a denial.
 """
 
 from __future__ import annotations
@@ -182,7 +182,9 @@ async def test_granted_pre_guard_approval_halt_proceeds_and_counts_both(
 @_BOTH
 @pytest.mark.asyncio
 async def test_post_guard_halt_still_counts_the_execution(path: str) -> None:
-    """The tool ran; only the result is withheld."""
+    """Both counters move: the tool ran (only the result is withheld), and a
+    post-guard halt is a refusal like any other. The one case where a call is
+    an execution and a denial at once."""
     with run_scope("a") as facts:
         await _drive(
             path,
@@ -322,6 +324,104 @@ async def test_a_cap_holds_exactly_under_parallel_tool_calls() -> None:
         )
 
     assert executed == _CAP
+
+
+async def _drive_capped_fanout(
+    under_cap: DecisionOutcome, approval_handler: Any
+) -> int:
+    """Fan ``_CONCURRENCY`` calls at a ``_CAP`` cap; return how many executed."""
+    import asyncio
+
+    executed = 0
+
+    class _CappingEnforcer:
+        agent_name = "a"
+
+        def decide(self, tool_name: str, arguments: Any) -> Any:
+            from hexgate.runtime.run_facts import get_run_facts
+            from hexgate.security.decision import Decision, Verdict
+
+            over = get_run_facts().as_namespace(tool_name)["tool_calls"] >= _CAP
+            return Decision.from_verdict(
+                Verdict(
+                    outcome=DecisionOutcome.DENY if over else under_cap, reason="cap"
+                ),
+                agent_name=self.agent_name,
+                tool_name=tool_name,
+            )
+
+        def record(self, decision: Any, **kwargs: Any) -> None:
+            pass
+
+    async def invoke(final: dict[str, Any]) -> Any:
+        nonlocal executed
+        await asyncio.sleep(0)
+        executed += 1
+        return "ok"
+
+    enforcer = _CappingEnforcer()
+    with run_scope("a"):
+        await asyncio.gather(
+            *(
+                run_guarded_async(
+                    _TOOL,
+                    {},
+                    enforcer=enforcer,
+                    pipeline=None,
+                    approval_handler=approval_handler,
+                    invoke=invoke,
+                    render_error=langchain_error,
+                )
+                for _ in range(_CONCURRENCY)
+            )
+        )
+    return executed
+
+
+async def _approves_without_suspending(decision: Any) -> bool:
+    return True
+
+
+async def _approves_after_suspending(decision: Any) -> bool:
+    import asyncio
+
+    await asyncio.sleep(0)
+    return True
+
+
+@pytest.mark.parametrize(
+    "handler",
+    [_APPROVE, lambda decision: True, _approves_without_suspending],
+    ids=["bool", "sync-callable", "async-no-suspend"],
+)
+@pytest.mark.asyncio
+async def test_an_approval_gate_keeps_the_cap_exact_when_nothing_suspends(
+    handler: Any,
+) -> None:
+    """None of these hands the event loop back, so the decide -> record window
+    stays closed and the cap holds as it does on the plain allow path."""
+    executed = await _drive_capped_fanout(DecisionOutcome.NEEDS_APPROVAL, handler)
+
+    assert executed == _CAP
+
+
+@pytest.mark.asyncio
+async def test_a_suspending_approval_handler_overshoots_the_cap() -> None:
+    """Pins a known, documented gap rather than a desired behaviour.
+
+    An approval handler that genuinely waits — the realistic kind — suspends
+    between ``decide``'s counter read and ``_record_run_execution``, so every
+    concurrent call decides against the same pre-approval count. Recording
+    before the await is not the fix: it would count executions for approvals
+    that are refused. Documented under "Parallel calls waiting on an approval"
+    in docs/policy/constraints.mdx; if this ever starts passing at ``_CAP``,
+    the gap was closed and both notes should go.
+    """
+    executed = await _drive_capped_fanout(
+        DecisionOutcome.NEEDS_APPROVAL, _approves_after_suspending
+    )
+
+    assert executed == _CONCURRENCY
 
 
 @pytest.mark.asyncio

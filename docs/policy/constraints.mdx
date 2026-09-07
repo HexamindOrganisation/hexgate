@@ -159,13 +159,14 @@ These distinctions change what a cap does, so they are worth reading once:
 - **An approval gate counts when it fires**, not when it is granted. An
   approval that is refused adds to `run.approvals` and nothing else.
 - **A guard halt before the tool** is a denial; the tool never ran. A guard halt
-  **after** the tool still counts the call — the side effect already happened
-  and only the result is withheld.
+  **after** the tool counts *both*: the call, because the side effect already
+  happened and only the result is withheld, and a denial, because a post-guard
+  halt is a refusal like any other.
 - **A tool that raises** counts as both a call and an error.
 
 <Warning>
 **`run.*` caps are circuit breakers, not quotas.** They stop a run that has gone
-wrong; they do not meter it precisely. Four places the count can lag reality:
+wrong; they do not meter it precisely. Five places the count can lag reality:
 
 - **Tokens trail by one turn.** Tokens are only known once the model has
   answered, so the turn that blows the budget still gets its tool calls; the cap
@@ -184,6 +185,14 @@ wrong; they do not meter it precisely. Four places the count can lag reality:
   (`asyncio.gather`, LangChain's executor) respect a cap exactly. Guarded calls
   dispatched to a hand-rolled `threading.Thread` can still overshoot, since two
   OS threads can be decided concurrently.
+- **Parallel calls waiting on an approval.** The guarantee above holds because
+  nothing suspends between the decision and the count. An `approval_required`
+  call breaks that: an async approval handler that actually waits — on a human,
+  or on a network round-trip — hands the event loop back while the call is still
+  uncounted, so other calls decide against the pre-approval count. A cap of 5 can
+  admit every call in a concurrent fan-out of 50 approval-gated tools. Only the
+  async path and only the policy's own gate; a `bool` handler, a sync handler,
+  and a before-guard's approval all keep the count exact.
 </Warning>
 
 ### Where facts aren't collected
