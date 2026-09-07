@@ -24,9 +24,10 @@ class EventOutOfWindow(Exception):
 # Accepted occurred_at window: small future skew for client clocks, and no
 # older than retention — rows past TTL would be merged away on arrival.
 CLOCK_SKEW_FUTURE = timedelta(minutes=5)
-RETENTION_WINDOW = timedelta(days=90)
+RETENTION_WINDOW = timedelta(days=180)
 
-# Dashboard windows → hours; 90d is the 90-day TTL ceiling.
+# Dashboard windows → hours. The presets stop at 90d; the TTL floor is 180
+# days, so spans longer than a preset go through the custom date range.
 WINDOW_HOURS: dict[str, int] = {"24h": 24, "7d": 24 * 7, "30d": 24 * 30, "90d": 24 * 90}
 
 

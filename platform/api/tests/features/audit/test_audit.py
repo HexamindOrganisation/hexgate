@@ -205,7 +205,7 @@ def test_future_occurred_at_rejected(client: TestClient) -> None:
 
 
 def test_too_old_occurred_at_rejected(client: TestClient) -> None:
-    too_old = (_now() - timedelta(days=91)).isoformat()
+    too_old = (_now() - RETENTION_WINDOW - timedelta(days=1)).isoformat()
     r = client.post("/v1/audit/decisions", json=_event(occurred_at=too_old))
     assert r.status_code == 400
     assert "retention" in r.json()["detail"]
@@ -1671,7 +1671,7 @@ def test_real_clickhouse_multi_role_read_path() -> None:
 
 
 # ---------------------------------------------------------------------------
-# _prepare_date_range() — UTC normalization + 90-day retention clamping
+# _prepare_date_range() — UTC normalization + retention-window clamping
 # ---------------------------------------------------------------------------
 
 
@@ -1689,16 +1689,16 @@ def test_when_naive_datetimes_provided_then_utc_is_attached() -> None:
     assert end.tzinfo == timezone.utc
 
 
-def test_when_window_is_within_90d_then_start_date_is_unchanged() -> None:
+def test_when_window_is_within_retention_then_start_date_is_unchanged() -> None:
     start, end = prepare_date_range(_START, _END)  # 7-day window
     assert start == _START
     assert end == _END
 
 
-def test_when_window_exceeds_90d_then_start_date_is_clamped_to_end_minus_retention() -> (
+def test_when_window_exceeds_retention_then_start_date_is_clamped_to_end_minus_retention() -> (
     None
 ):
-    far_start = datetime(2024, 9, 1, tzinfo=timezone.utc)  # >90d before _END
+    far_start = _END - RETENTION_WINDOW - timedelta(days=30)  # past retention
     start, _ = prepare_date_range(far_start, _END)
     assert start == _END - RETENTION_WINDOW
 
@@ -1710,7 +1710,7 @@ def test_when_only_start_date_provided_then_no_clamping_occurs() -> None:
 
 
 def test_when_start_date_is_after_end_date_then_no_clamping_occurs() -> None:
-    # start > end: max(start, end - 90d) always returns start unchanged.
+    # start > end: max(start, end - retention) always returns start unchanged.
     # _date_range_valid handles the invalid pair downstream.
     start, end = prepare_date_range(_END, _START)
     assert start == _END

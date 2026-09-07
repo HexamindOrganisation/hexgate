@@ -46,7 +46,7 @@ ENGINE = ReplacingMergeTree(received_at)
 -- client-supplied occurred_at (clock skew would break retention).
 PARTITION BY toYYYYMM(received_at)
 ORDER BY (project_id, agent_name, outcome, occurred_at, event_id)
-TTL toDateTime(received_at) + INTERVAL 90 DAY
+TTL toDateTime(received_at) + INTERVAL 180 DAY
 SETTINGS index_granularity = 8192;
 
 
@@ -73,7 +73,7 @@ CREATE TABLE IF NOT EXISTS hexgate_audit.ban_enforcement
 ENGINE = ReplacingMergeTree(received_at)
 PARTITION BY toYYYYMM(received_at)
 ORDER BY (project_id, occurred_at, event_id)
-TTL toDateTime(received_at) + INTERVAL 90 DAY
+TTL toDateTime(received_at) + INTERVAL 180 DAY
 SETTINGS index_granularity = 8192;
 
 
@@ -100,5 +100,5 @@ CREATE TABLE IF NOT EXISTS hexgate_audit.llm_invocation
 ENGINE = ReplacingMergeTree(received_at)
 PARTITION BY toYYYYMM(received_at)
 ORDER BY (project_id, user_id, agent_name, model, occurred_at, event_id)
-TTL toDateTime(received_at) + INTERVAL 90 DAY
+TTL toDateTime(received_at) + INTERVAL 180 DAY
 SETTINGS index_granularity = 8192;

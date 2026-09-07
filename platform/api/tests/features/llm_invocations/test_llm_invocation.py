@@ -22,6 +22,7 @@ from hexgate_api.features.llm_invocations import service as llm_invocations
 from hexgate_api.features.llm_invocations.service import summarize_llm_invocations
 from hexgate_api.core.clickhouse import BatchItem
 from hexgate_api.main import app
+from hexgate_api.query_scope import RETENTION_WINDOW
 from hexgate_api.schemas import LlmInvocationEvent
 
 # ---------------------------------------------------------------------------
@@ -243,7 +244,7 @@ def test_when_occurred_at_is_in_the_future_then_400_is_returned(
 
 
 def test_when_occurred_at_is_too_old_then_400_is_returned(client: TestClient) -> None:
-    too_old = (_now() - timedelta(days=91)).isoformat()
+    too_old = (_now() - RETENTION_WINDOW - timedelta(days=1)).isoformat()
     r = client.post("/v1/audit/llm-invocations", json=_llm_event(occurred_at=too_old))
     assert r.status_code == 400
     assert "retention" in r.json()["detail"]

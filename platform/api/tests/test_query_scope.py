@@ -111,7 +111,7 @@ def test_scope_filters_falls_back_to_since_hours_when_start_date_is_after_end_da
 
 
 # ---------------------------------------------------------------------------
-# prepare_date_range() — UTC normalization + 90-day retention clamping
+# prepare_date_range() — UTC normalization + retention-window clamping
 # ---------------------------------------------------------------------------
 
 
@@ -126,10 +126,10 @@ def test_when_naive_datetimes_provided_then_utc_is_attached() -> None:
     assert start.tzinfo is not None and end.tzinfo is not None
 
 
-def test_when_window_exceeds_90d_then_start_date_is_clamped_to_end_minus_retention() -> (
+def test_when_window_exceeds_retention_then_start_date_is_clamped_to_end_minus_retention() -> (
     None
 ):
-    far_start = _END - timedelta(days=200)
+    far_start = _END - RETENTION_WINDOW - timedelta(days=30)
     start, _ = prepare_date_range(far_start, _END)
     assert start == _END - RETENTION_WINDOW
 
