@@ -413,6 +413,38 @@ class PolicyCheckResponse(BaseModel):
     lints: list[PolicyLintOut] = Field(default_factory=list)
 
 
+# --- Compose file store (entry-file + import graph) --------------------------
+
+
+class PolicyFileRead(BaseModel):
+    name: str  # e.g. "policy.yaml", "caps/refunds.yaml"
+    content: str
+    content_hash: str
+    updated_at: datetime
+
+
+class PolicyFileWrite(BaseModel):
+    """Body for upserting a policy file. The name comes from the URL."""
+
+    content: str
+
+
+class PolicyPreviewRequest(BaseModel):
+    """A draft file to resolve without saving — the editor's live preview. The
+    draft is overlaid on the project's stored files for ``name``."""
+
+    name: str
+    content: str
+    agent: str = "*"
+
+
+class PolicyPreviewResponse(BaseModel):
+    """The effective policy per role for the draft, plus any resolution lints."""
+
+    resolved: dict[str, dict] | None = None
+    lints: list[PolicyLintOut] = Field(default_factory=list)
+
+
 # --- Agent manifest registration ---------------------------------------------
 # These mirror hexgate/manifest/models.py so SDK and platform stay in sync.
 
