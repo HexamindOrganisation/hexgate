@@ -25,6 +25,7 @@ from hexgate.security.analyzer import PolicyLint
 from hexgate.cli.policy.main import (
     _main_build,
     _main_keygen,
+    _main_resolve,
     _main_show_rego,
     _main_test,
     _main_validate,
@@ -75,6 +76,58 @@ def policy_file(tmp_path: Path) -> Path:
 def _ns(**kwargs) -> argparse.Namespace:
     """Convenience for building an argparse.Namespace with sane defaults."""
     return argparse.Namespace(**kwargs)
+
+
+def test_resolve_file_uses_the_compose_grammar(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # `policy resolve --file` resolves a single-file compose policy.yaml through
+    # the compose front-end and prints the effective policy (refund capped by the
+    # boundary ceiling; a tool the ceiling omits is shadowed away).
+    p = tmp_path / "policy.yaml"
+    p.write_text(
+        'boundary:\n  tools: { refund: { constraint: "args.amount <= 100" } }\n'
+        "tools: { refund: { mode: allow }, ghost: { mode: allow } }\n",
+        encoding="utf-8",
+    )
+    rc = _main_resolve(_ns(dir=".", file=str(p), agent="*", role=None, output=None))
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "refund" in out
+    assert "args.amount <= 100" in out  # boundary ceiling folded in
+    assert "ghost" not in out  # not in the ceiling → shadowed away
+
+
+def test_resolve_file_generic_agent_hints_at_named_agents(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Resolving the generic "*" for a policy that names agents should nudge the
+    # user toward --agent, since roles live under a named agent.
+    p = tmp_path / "policy.yaml"
+    p.write_text(
+        "agents:\n  bot:\n    roles:\n      support: { tools: { a: { mode: allow } } }\n",
+        encoding="utf-8",
+    )
+    rc = _main_resolve(_ns(dir=".", file=str(p), agent="*", role=None, output=None))
+    assert rc == 0
+    err = capsys.readouterr().err
+    assert "--agent" in err and "bot" in err
+
+
+def test_resolve_file_unknown_agent_warns(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # A typo'd --agent resolves to the generic baseline (matching the SDK), but the
+    # CLI warns loudly so the user notices the agent isn't defined.
+    p = tmp_path / "policy.yaml"
+    p.write_text(
+        "agents:\n  bot:\n    roles:\n      support: { tools: { a: { mode: allow } } }\n",
+        encoding="utf-8",
+    )
+    rc = _main_resolve(_ns(dir=".", file=str(p), agent="bott", role=None, output=None))
+    assert rc == 0
+    err = capsys.readouterr().err
+    assert "bott" in err and "not defined" in err
 
 
 # ---------------------------------------------------------------------------

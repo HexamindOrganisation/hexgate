@@ -98,6 +98,30 @@ def test_dead_grant_when_a_boundary_hard_denies_the_tool():
     assert "denies" in dead[0].message
 
 
+def test_dead_reach_grant_flagged_like_a_tool_grant():
+    # Agent-level blocks compose through the linker (#124), so a reach grant a
+    # ceiling never permits is a dead grant — the lint passes read effective_tools,
+    # so the lowered agent.tool: key is covered like any tool.
+    ceiling = ModuleContent(
+        name="org",
+        kind="boundary",
+        policy=AgentPolicy(
+            default_policy=BaseToolPolicy(mode="deny")
+        ),  # lists no reach
+        source="org.yaml",
+        content_hash="hash-org",
+    )
+    cap = ModuleContent(
+        name="c",
+        kind="capability",
+        policy=AgentPolicy(agents={"evil_bot": {"via": ["tool"], "mode": "allow"}}),
+        source="c.yaml",
+        content_hash="hash-c",
+    )
+    dead = [lint for lint in check([ceiling], [cap]) if lint.code == "dead-grant"]
+    assert [lint.tool for lint in dead] == ["agent.tool:evil_bot"]
+
+
 # --- redundant-grant ---
 
 

@@ -33,6 +33,7 @@ from hexgate.security.testing import run_namespace
 from hexgate.security import (
     AgentPolicy,
     DecisionOutcome,
+    DEFAULT_AGENT,
     DEFAULT_ROLE_NAME,
     OpaNotFoundError,
     PolicySetError,
@@ -261,10 +262,28 @@ def add_parser(subparsers: argparse._SubParsersAction) -> None:
             "exactly what the engines will enforce."
         ),
     )
-    p_resolve.add_argument(
+    resolve_src = p_resolve.add_mutually_exclusive_group()
+    resolve_src.add_argument(
         "--dir",
         default=".",
         help="Repo root containing a policies/ tree (default: current dir).",
+    )
+    resolve_src.add_argument(
+        "--file",
+        default=None,
+        metavar="PATH",
+        help=(
+            "Resolve a single-file policy.yaml (the compose grammar) instead of a "
+            "policies/ tree. Mutually exclusive with --dir."
+        ),
+    )
+    p_resolve.add_argument(
+        "--agent",
+        default=DEFAULT_AGENT,
+        help=(
+            f'The executing agent to resolve for (default: the generic "{DEFAULT_AGENT}" '
+            "agent). Selects an agent's column in either layout."
+        ),
     )
     p_resolve.add_argument(
         "--role",
@@ -584,25 +603,67 @@ def _main_resolve(args: argparse.Namespace) -> int:
         resolve_for_project,
     )
 
-    try:
-        boundaries, capabilities = load_local_modules(args.dir)
-        roles = load_roles(args.dir)
-    except (ValueError, OSError) as exc:
-        print(f"load error: {exc}", file=sys.stderr)
-        return 1
-    if not boundaries and not capabilities:
-        print(
-            f"no modules found under {args.dir}/policies/"
-            " (expected policies/boundaries/ and/or policies/capabilities/)",
-            file=sys.stderr,
-        )
-        return 1
+    # --file (compose grammar) and --dir (policies/ tree) are the two front-ends;
+    # both produce the same ProjectLinkResult, so the print path below is shared.
+    if args.file is not None:
+        from hexgate.security.compose import parse_entry, resolve_entry
 
-    try:
-        result = resolve_for_project(boundaries, capabilities, roles)
-    except (LinkError, PolicySetError, ConstraintParseError, ValidationError) as exc:
-        print(f"link error: {exc}", file=sys.stderr)
-        return 1
+        try:
+            text = Path(args.file).read_text(encoding="utf-8")
+        except OSError as exc:
+            print(f"load error: {exc}", file=sys.stderr)
+            return 1
+        # Parse once: resolve_entry reuses the Entry, and the agent hint below reads
+        # its declared agents. resolve_entry surfaces every failure as LinkError.
+        try:
+            entry = parse_entry(text, source=args.file)
+            result = resolve_entry(entry, agent=args.agent, source=args.file)
+        except LinkError as exc:
+            print(f"link error: {exc}", file=sys.stderr)
+            return 1
+        # Roles live under a named agent. Nudge if the generic "*" view hides named
+        # agents; warn if a named --agent isn't defined (a typo resolves to the
+        # generic baseline rather than erroring — matching resolve_for_project).
+        declared = sorted(entry.agents)
+        if args.agent == DEFAULT_AGENT and declared:
+            print(
+                f"note: resolved the generic '*' agent; this policy also defines "
+                f"agents {declared} — pass --agent NAME to resolve one.",
+                file=sys.stderr,
+            )
+        elif args.agent != DEFAULT_AGENT and args.agent not in declared:
+            print(
+                f"warning: agent {args.agent!r} is not defined in this policy "
+                f"(defined: {declared or 'none'}); resolved the generic baseline.",
+                file=sys.stderr,
+            )
+    else:
+        try:
+            boundaries, capabilities = load_local_modules(args.dir)
+            roles = load_roles(args.dir)
+        except (ValueError, OSError) as exc:
+            print(f"load error: {exc}", file=sys.stderr)
+            return 1
+        if not boundaries and not capabilities:
+            print(
+                f"no modules found under {args.dir}/policies/"
+                " (expected policies/boundaries/ and/or policies/capabilities/)",
+                file=sys.stderr,
+            )
+            return 1
+
+        try:
+            result = resolve_for_project(
+                boundaries, capabilities, roles, agent=args.agent
+            )
+        except (
+            LinkError,
+            PolicySetError,
+            ConstraintParseError,
+            ValidationError,
+        ) as exc:
+            print(f"link error: {exc}", file=sys.stderr)
+            return 1
 
     if args.role is not None and args.role not in result.by_role:
         print(

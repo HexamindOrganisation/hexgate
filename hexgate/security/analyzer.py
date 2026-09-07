@@ -269,7 +269,11 @@ def _dead_grants(
     effective = result.effective[DEFAULT_ROLE_NAME]
     out: list[PolicyLint] = []
     for cap in capabilities:
-        for tool, tp in cap.policy.tools.items():
+        # effective_tools: composed agent-level grants (admission/reach lowered to
+        # agent.* keys) are linted like ordinary tools. A shadowed agent key stays
+        # in the resolved policy as an explicit deny (not GRANT_MODES), so it is
+        # correctly reported dead here.
+        for tool, tp in cap.policy.effective_tools.items():
             if tp.mode not in GRANT_MODES:
                 continue
             eff = effective.tools.get(tool)
@@ -304,7 +308,7 @@ def _redundant_grants(capabilities: list[ModuleContent]) -> list[PolicyLint]:
     out: list[PolicyLint] = []
     seen: dict[tuple[str, str, tuple[str, ...]], ModuleContent] = {}
     for cap in capabilities:
-        for tool, tp in cap.policy.tools.items():
+        for tool, tp in cap.policy.effective_tools.items():
             if tp.mode not in GRANT_MODES:
                 continue
             key = (tool, tp.mode, tuple(sorted(tp.constraints)))
@@ -338,7 +342,7 @@ def _constraint_erased(capabilities: list[ModuleContent]) -> list[PolicyLint]:
     """
     grants: dict[str, list[tuple[ModuleContent, Any]]] = {}
     for cap in capabilities:
-        for tool, tp in cap.policy.tools.items():
+        for tool, tp in cap.policy.effective_tools.items():
             if tp.mode in GRANT_MODES:
                 grants.setdefault(tool, []).append((cap, tp))
 
