@@ -8,6 +8,7 @@ equivalent tier-folder project resolve to byte-identical effective policy.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -18,7 +19,7 @@ from hexgate.security import (
     ModuleContent,
     resolve_for_project,
 )
-from hexgate.security.compose import parse_entry, resolve_text
+from hexgate.security.compose import parse_entry, resolve_file, resolve_text
 from hexgate.security.linker import effective_policy_by_role
 
 
@@ -52,6 +53,23 @@ def test_parse_worked_example():
 def test_reserved_agent_name_rejected():
     with pytest.raises(LinkError, match="reserved"):
         parse_entry("agents: { tools: {} }")
+
+
+def test_reserved_role_name_rejected():
+    with pytest.raises(LinkError, match="reserved"):
+        parse_entry("agents: { bot: { roles: { boundary: {} } } }")
+
+
+def test_invalid_yaml_is_a_linkerror():
+    with pytest.raises(LinkError, match="invalid YAML"):
+        parse_entry("tools: { x: { : }")  # malformed mapping
+
+
+def test_empty_via_rejected():
+    # `as: []` is an empty transfer-mode list; AgentTargetPolicy rejects it, and
+    # resolve surfaces that as a source-named LinkError.
+    with pytest.raises(LinkError):
+        resolve_text("reach: { billing_bot: { as: [] } }")
 
 
 def test_unknown_top_level_key_rejected():
@@ -138,6 +156,52 @@ def test_reach_allowed_when_boundary_permits_it():
     # ceiling AND grant, both present
     assert any("2000" in c for c in reach["constraints"])
     assert any("1000" in c for c in reach["constraints"])
+
+
+def test_reach_multi_via_lowers_to_both_keys():
+    # `as: [tool, handoff]` lowers to both agent.tool: and agent.handoff: keys,
+    # each permitted by a boundary that lists the same two vias.
+    doc = """
+    boundary:
+      reach: { billing_bot: { as: [tool, handoff] } }
+    agents:
+      bot:
+        roles:
+          support:
+            reach: { billing_bot: { as: [tool, handoff] } }
+    """
+    tools = _eff(resolve_text(doc, agent="bot"))["support"]["tools"]
+    assert tools["agent.tool:billing_bot"]["mode"] == "allow"
+    assert tools["agent.handoff:billing_bot"]["mode"] == "allow"
+
+
+def test_mcp_block_lowers_to_a_tool():
+    # mcp is sugar for tools — a mcp grant resolves to an ordinary tool key.
+    doc = "mcp: { knowledge: { mode: approval_required } }"
+    tools = _eff(resolve_text(doc))["default"]["tools"]
+    assert tools["knowledge"]["mode"] == "approval_required"
+
+
+def test_per_agent_boundary_caps_a_role_grant():
+    # A boundary declared in an agent body is a ceiling for that agent only; it
+    # intersects the grant (AND) like any ceiling.
+    doc = """
+    agents:
+      bot:
+        boundary: { tools: { refund: { constraint: "args.amount <= 100" } } }
+        roles:
+          support: { tools: { refund: { mode: allow } } }
+    """
+    refund = _eff(resolve_text(doc, agent="bot"))["support"]["tools"]["refund"]
+    assert refund["mode"] == "allow"
+    assert any("args.amount <= 100" in c for c in refund["constraints"])
+
+
+def test_resolve_file_from_path(tmp_path: Path):
+    p = tmp_path / "policy.yaml"
+    p.write_text("tools: { a: { mode: allow } }\n", encoding="utf-8")
+    res = resolve_file(p)
+    assert _eff(res)["default"]["tools"]["a"]["mode"] == "allow"
 
 
 def test_reach_denied_when_boundary_omits_it_even_if_granted():
