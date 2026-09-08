@@ -1,10 +1,11 @@
-# /// script
-# requires-python = ">=3.13"
-# dependencies = ["marimo", "hexgate"]
-# ///
 """Hexgate guards, live — write a guard, then watch it fire across every framework.
 
-Run it:  `marimo edit examples/marimo_guards_demo.py`
+Run it from a hexgate checkout (there is no inline-script header because
+``hexgate.plugins`` is not on PyPI yet, so ``--sandbox`` / ``uv run <script>``
+can't resolve it):
+
+    uv sync && uv run marimo edit examples/marimo_guards_demo.py
+
 Everything runs offline: no API keys, no LLM calls — guards are exercised directly
 against the tool layer, which is exactly what runs on a real agent call.
 """
@@ -189,6 +190,7 @@ def _(
     SECRET,
     ToolCall,
     ToolOutcome,
+    audit,
     block_leaky_result,
     block_secrets,
     cap_amount,
@@ -218,6 +220,10 @@ def _(
             block_leaky_result(
                 ToolCall("read", {}), ToolOutcome(ok=True, value={"k": SECRET})
             ),
+        ),
+        (
+            "observe · never blocks (prints to the console)",
+            audit(ToolCall("read", {}), ToolOutcome(ok=True)),
         ),
     ]
     mo.md(
@@ -270,19 +276,21 @@ def _(mo):
         r"""
         ## 3 · The same guards, across every framework
 
-        A guard is framework-agnostic. Below, one pipeline — `[secret_redactor,
-        block_secrets]` — is attached at each framework's tool layer, then the tool is
-        invoked with a secret in its arguments. In every case the redactor strips the
-        secret **before** the tool runs, so the tool sees `[REDACTED:…]`. This is
-        exactly the pipeline that executes on a real agent call.
+        A guard is framework-agnostic. Below, one before-guard —
+        `build_pipeline([secret_redactor])` — is attached at each framework's tool
+        layer, then the tool is invoked with a secret in its arguments. In every case
+        the redactor strips the secret **before** the tool runs, so the tool sees
+        `[REDACTED:…]`. This is exactly the pipeline that executes on a real agent call.
         """
     )
     return
 
 
 @app.cell
-def _(block_secrets, build_pipeline, secret_redactor):
-    pipe = build_pipeline([secret_redactor, block_secrets])
+def _(build_pipeline, secret_redactor):
+    # One before-guard — strip the credential from the args before the tool runs.
+    # (One guard per tier; a halt and an after-guard follow in their own pipelines.)
+    pipe = build_pipeline([secret_redactor])
     return (pipe,)
 
 
@@ -375,6 +383,74 @@ async def _(HexgateContext, SECRET, allow_all, mo, pipe):
             {"text": f"my key is {SECRET}"}, None
         )
     mo.md(f"**Pydantic AI** (`wrap_pydantic_agent(guards=…)`):\n\n> {_out}")
+    return
+
+
+@app.cell
+def _(mo):
+    mo.md(
+        r"""
+        ## 3b · The other two tiers — halt, and observe
+
+        Redaction above is a before-guard *rewrite*. The remaining two behaviors, shown
+        through the LangChain layer (they work identically on every adapter):
+        """
+    )
+    return
+
+
+@app.cell
+async def _(HexgateContext, SECRET, build_pipeline, mo, secret_guard):
+    # A before-guard that HALTS — the tool never runs.
+    from langchain_core.tools import tool as _lc_tool
+
+    from hexgate.adapters.langchain.tools import GuardedTool as _GuardedTool
+
+    @_lc_tool("send")
+    def _send(text: str) -> str:
+        """Send a message."""
+        return "sent!"
+
+    _guarded = _GuardedTool.wrap(_send, pipeline=build_pipeline([secret_guard]))
+    async with HexgateContext(user_id="demo"):
+        _blocked = _guarded._run(text=f"my key is {SECRET}")
+    mo.md(
+        "**`secret_guard` halts** (`build_pipeline([secret_guard])`) — the tool never "
+        f"runs; the model gets a safe, value-free error:\n\n```python\n{_blocked}\n```"
+    )
+    return
+
+
+@app.cell
+async def _(HexgateContext, SECRET, build_pipeline, mo, secret_watch):
+    # An after-guard that OBSERVES — the result passes through; the leak is logged.
+    import logging as _logging
+
+    from langchain_core.tools import tool as _lc_tool
+
+    from hexgate.adapters.langchain.tools import GuardedTool as _GuardedTool
+
+    @_lc_tool("fetch_record")
+    def _fetch(user_id: str) -> str:
+        """Fetch a record that happens to embed a credential."""
+        return f"record[{user_id}] legacy_key={SECRET}"
+
+    _logs: list[str] = []
+    _handler = _logging.Handler()
+    _handler.emit = lambda record: _logs.append(record.getMessage())
+    _logger = _logging.getLogger("hexgate.plugins.secrets")
+    _logger.addHandler(_handler)
+    _guarded = _GuardedTool.wrap(_fetch, pipeline=build_pipeline([secret_watch]))
+    async with HexgateContext(user_id="demo"):
+        _result = _guarded._run(user_id="u-42")
+    _logger.removeHandler(_handler)
+
+    mo.md(
+        "**`secret_watch` observes** (`build_pipeline([secret_watch])`) — the result "
+        "passes through unchanged (observe never rewrites in v1); the leak is flagged "
+        f"on the operator channel:\n\n- result → `{_result}`\n- "
+        f"logged → `{_logs[0] if _logs else '(nothing logged)'}`"
+    )
     return
 
 
