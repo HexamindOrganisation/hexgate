@@ -404,9 +404,8 @@ The SDK side of this is `MAX_EXPORT_BATCH_SIZE = 64` in
 unchanged 2048-span queue, which all traffic pays today. Note `_SPAN_LIMITS`
 pins `max_span_attribute_length` to UNSET, so OTel will **not** clip an
 oversized attribute on our behalf — the SDK's own caps (`hexgate/audit.py`) are
-the only thing bounding a span, and the enricher will re-apply them once
-`hexgate.messages` is in `KNOWN_SCOPES` (until then a message span is rejected
-to the DLQ as an unknown scope). The gRPC receiver is deliberately left at
+the only thing bounding a span, and the enricher re-applies them on the way
+into `llm_message`. The gRPC receiver is deliberately left at
 grpc-go's 4 MiB: the SDK is HTTP-only and 4317 is unpublished.
 
 Changing any of these is an **operational** change: merged is not enough, the
@@ -449,7 +448,7 @@ PLAINTEXT with no auth and must never be exposed outside the Compose network.
 ### 4.3 span-enricher (`hexgate_api.jobs.enricher`)
 
 One consumer-group member (`hexgate-enricher`), run from the API image with
-`python -m hexgate_api.jobs.enricher`. On startup it verifies the three
+`python -m hexgate_api.jobs.enricher`. On startup it verifies the four
 ClickHouse tables against the expected schema and that both topics exist
 (`TopicsMissing` otherwise). Both Kafka clients are sized for the topic limit:
 `max_partition_fetch_bytes` on the consumer and `max_request_size` on the DLQ
@@ -472,7 +471,7 @@ fetch, and an oversized DLQ envelope would be dropped client-side. Per poll
 4. **Resolve `agent_version_id`** for every distinct `(project_id, agent_name)`
    in the batch — two Postgres queries regardless of batch size. Unregistered
    agents resolve to `""` and are inserted anyway.
-5. **Insert**, three batch inserts (one per table), retried as a whole with
+5. **Insert**, four batch inserts (one per table), retried as a whole with
    exponential backoff (cap 30 s) until ClickHouse acks. The consumer's
    `max_poll_interval` is raised to 30 min so a ClickHouse outage does not get
    the partition reassigned to a replica that would hit the same outage.
@@ -486,7 +485,7 @@ counted until a merge lands. Two edges make it more than a delay: dedup never
 crosses the monthly `received_at` partition, so a replay straddling a month
 boundary double-counts permanently, and duplicates within a single batch only
 collapse when they share an insert block. The `insert_decisions_batch`
-docstring (`features/audit/service.py`) is the reference for all three. A
+docstring (`features/audit/service.py`) is the reference for all four. A
 replay also duplicates DLQ envelopes, which carry no dedup key at all
 (consumers of the DLQ must tolerate that).
 
@@ -630,8 +629,9 @@ TTL toDateTime(received_at) + INTERVAL 180 DAY
 ### 5.2 Insert semantics
 
 The enricher writes through `insert_decisions_batch` /
-`insert_llm_invocations_batch` / `insert_ban_enforcements_batch`
-(`features/audit/service.py`, `features/llm_invocations/service.py`): one
+`insert_llm_invocations_batch` / `insert_ban_enforcements_batch` /
+`insert_llm_messages_batch` (`features/audit/service.py`,
+`features/llm_invocations/service.py`, `features/llm_messages/service.py`): one
 multi-row insert per table per poll, retried until acked (§4.3). The legacy
 HTTP ingest uses the single-row `insert_decision`, whose settings are:
 
