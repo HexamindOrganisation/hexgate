@@ -7,6 +7,7 @@ Lifecycle: configure() per api_key, await shutdown() at process exit.
 
 from __future__ import annotations
 
+import copy
 import json
 import re
 from collections.abc import Sequence
@@ -51,6 +52,18 @@ MAX_HINT_BYTES = 4 * 1024
 # lose the audit record for a *denied* call — the outcome most worth keeping.
 MAX_VIOLATIONS = 64
 MAX_VIOLATION_CHARS = 1024
+
+# Caps for LLM message content (scope ``hexgate.messages``), measured on the
+# serialized JSON like the decision caps above and enforced twice: here before
+# export, and again by the platform's span-enricher. Larger than the decision
+# caps because a prompt is not a tool argument — 32 KiB is roughly a
+# 7,000-token message. Truncation is head+tail (``cap_json_head_tail``) rather
+# than the preview wrapper ``truncate_json`` uses: on a RAG call the retrieved
+# context sits in the middle of one message, and an auditor needs the question
+# at the start and the instruction at the end more than the chunks between.
+MAX_INPUT_MESSAGES_BYTES = 32 * 1024
+MAX_OUTPUT_MESSAGES_BYTES = 8 * 1024
+MAX_SYSTEM_INSTRUCTIONS_BYTES = 8 * 1024
 
 # Keys whose values are stripped from the audit copy of ``arguments`` before
 # transmission. Substring match: tool inputs are arbitrary caller data, so a
@@ -143,10 +156,124 @@ def _truncate_json(payload: dict[str, Any], *, cap: int) -> dict[str, Any]:
         preview_bytes //= 2
 
 
+# ASCII on purpose: ``json.dumps`` escapes non-ASCII to ``\\uXXXX`` (6 bytes a
+# character), so a marker with an ellipsis would cost more than it says.
+_HEAD_TAIL_MARKER = " ...[truncated {omitted} bytes]... "
+# Below this a string leaf is not worth cutting further: what is over the cap
+# is the JSON structure around it, not the text inside it.
+_HEAD_TAIL_FLOOR_BYTES = 64
+
+
+def _utf8_len(text: str) -> int:
+    return len(text.encode("utf-8"))
+
+
+def _truncate_head_tail(text: str, *, max_bytes: int) -> str:
+    """Shrink ``text`` to at most ``max_bytes`` of UTF-8, keeping its head and
+    its tail joined by a marker naming the omitted byte count.
+
+    Returned unchanged when it already fits. Cuts land on code-point
+    boundaries (``errors="ignore"`` drops a split character rather than
+    emitting a broken one). The marker's room is reserved for the widest count
+    it could carry, so the result never exceeds ``max_bytes``."""
+    raw = text.encode("utf-8")
+    if len(raw) <= max_bytes:
+        return text
+    reserve = _utf8_len(_HEAD_TAIL_MARKER.format(omitted=len(raw)))
+    budget = max_bytes - reserve
+    if budget < 2:
+        # No room for a marker and content both: keep whatever head fits.
+        return raw[:max_bytes].decode("utf-8", errors="ignore")
+    head_n = budget // 2
+    tail_n = budget - head_n
+    head = raw[:head_n].decode("utf-8", errors="ignore")
+    tail = raw[len(raw) - tail_n :].decode("utf-8", errors="ignore")
+    omitted = len(raw) - _utf8_len(head) - _utf8_len(tail)
+    return head + _HEAD_TAIL_MARKER.format(omitted=omitted) + tail
+
+
+def _largest_string_leaf(
+    node: Any, path: tuple[Any, ...] = ()
+) -> tuple[tuple[Any, ...] | None, int]:
+    """``(path, utf8_size)`` of the biggest string value under ``node`` — dict
+    values and list items, never dict keys — or ``(None, 0)`` if there is none."""
+    if isinstance(node, str):
+        return path, _utf8_len(node)
+    best: tuple[tuple[Any, ...] | None, int] = (None, 0)
+    if isinstance(node, dict):
+        children = node.items()
+    elif isinstance(node, (list, tuple)):
+        children = enumerate(node)
+    else:
+        return best
+    for key, child in children:
+        found = _largest_string_leaf(child, (*path, key))
+        if found[1] > best[1]:
+            best = found
+    return best
+
+
+def _get_at(node: Any, path: tuple[Any, ...]) -> Any:
+    for key in path:
+        node = node[key]
+    return node
+
+
+def _set_at(node: Any, path: tuple[Any, ...], value: Any) -> Any:
+    if not path:
+        return value
+    for key in path[:-1]:
+        node = node[key]
+    node[path[-1]] = value
+    return None
+
+
+def _cap_json_head_tail(value: Any, *, cap: int) -> tuple[Any, bool]:
+    """Shrink the string leaves of ``value`` head+tail, largest first, until
+    ``json.dumps(value)`` fits ``cap`` bytes. Returns ``(capped, truncated)``.
+
+    Unlike ``_truncate_json`` — which swaps the whole dict for a preview
+    wrapper — the result keeps the input's shape (roles, message boundaries,
+    part types all survive), so a reader still sees *which* message lost its
+    middle. Pure: ``value`` is deep-copied, never mutated. Measurement mirrors
+    the platform (``json.dumps(default=str)``), so what is capped here is
+    what the enricher measures.
+
+    Last resort: when the JSON structure alone exceeds ``cap`` (hundreds of
+    tiny messages), no string cut can help, so the ``_truncate_json`` preview
+    wrapper ships instead — inside a one-item list when the input was a list,
+    so the attribute keeps its container type."""
+    work = copy.deepcopy(value)
+    over = _utf8_len(json.dumps(work, default=str)) - cap
+    if over <= 0:
+        return work, False
+    while over > 0:
+        path, size = _largest_string_leaf(work)
+        if path is None or size <= _HEAD_TAIL_FLOOR_BYTES:
+            if isinstance(work, list):
+                return [_truncate_json({"messages": work}, cap=cap - 2)], True
+            payload = work if isinstance(work, dict) else {"value": work}
+            return _truncate_json(payload, cap=cap), True
+        leaf = work if not path else _get_at(work, path)
+        # Cutting ``over`` raw bytes removes at least ``over`` JSON bytes (an
+        # escaped character encodes to no fewer bytes than its UTF-8), so one
+        # pass usually lands under the cap; the loop re-measures regardless.
+        target = max(size - over, _HEAD_TAIL_FLOOR_BYTES)
+        cut = _truncate_head_tail(leaf, max_bytes=target)
+        if not path:
+            work = cut
+        else:
+            _set_at(work, path, cut)
+        over = _utf8_len(json.dumps(work, default=str)) - cap
+    return work, True
+
+
 # Public aliases so server-side ingestion can import this pipeline instead of
 # keeping its own copy.
 redact = _redact
 truncate_json = _truncate_json
+truncate_head_tail = _truncate_head_tail
+cap_json_head_tail = _cap_json_head_tail
 bounded_violations = _bounded_violations
 SENSITIVE_ARG_KEY_RE = _SENSITIVE_ARG_KEY_RE
 SENSITIVE_ATTR_KEY_RE = _SENSITIVE_ATTR_KEY_RE

@@ -10,7 +10,8 @@ must produce by them):
 
 - One event = one span. The instrumentation scope name selects the event
   type: ``SCOPE_AUDIT`` → DecisionEvent, ``SCOPE_USAGE`` → LlmInvocationEvent,
-  ``SCOPE_BANS`` → BanEnforcementEvent (platform schemas).
+  ``SCOPE_BANS`` → BanEnforcementEvent, ``SCOPE_MESSAGES`` → LlmMessageEvent
+  (platform schemas).
 - ``occurred_at`` travels as the span's ``start_time_unix_nano`` — the one
   field OTLP already types as a timestamp. No separate attribute: a duplicate
   would invite the two values disagreeing with no rule for which wins. These
@@ -33,6 +34,18 @@ must produce by them):
 - LLM usage reuses the official ``gen_ai.*`` names where they exist (model,
   token counts) and never invents new ``gen_ai.*`` names; everything
   Hexgate-specific lives under ``sec_ai.*``.
+- LLM message content (``SCOPE_MESSAGES``) is the official GenAI trio —
+  ``gen_ai.input.messages`` / ``gen_ai.output.messages`` /
+  ``gen_ai.system_instructions`` — each a JSON-string attribute (same rule as
+  the dict fields above: the platform caps are measured in serialized-JSON
+  bytes, and the SDK applies the same caps before export). One event per LLM
+  call carrying only the input messages *new to that call* plus its
+  completion, never a snapshot of the whole conversation. ``MESSAGE_SEQ``
+  counts events within one ``TURN_KEY`` (one framework message list — a
+  sub-agent or handoff has its own) so a reader can detect a missing row;
+  ``RESYNCED`` marks an event that restates the whole list because the
+  framework rewrote it rather than extending it. ``TRUNCATED`` is set by
+  the SDK when a cap cut any content field.
 """
 
 from __future__ import annotations
@@ -41,8 +54,9 @@ from __future__ import annotations
 SCOPE_AUDIT = "hexgate.audit"
 SCOPE_USAGE = "hexgate.usage"
 SCOPE_BANS = "hexgate.bans"
+SCOPE_MESSAGES = "hexgate.messages"
 
-# --- Envelope attributes (all three scopes) -----------------------------------
+# --- Envelope attributes (all four scopes) ------------------------------------
 EVENT_ID = "sec_ai.event_id"
 AGENT_NAME = "sec_ai.agent_name"
 SESSION_ID = "sec_ai.session_id"
@@ -73,3 +87,14 @@ ERROR_CODE = "sec_ai.error_code"
 # --- Ban enforcement spans (SCOPE_BANS) ------------------------------------------
 BAN_TYPE = "sec_ai.ban_type"
 BAN_ID = "sec_ai.ban_id"
+
+# --- LLM message spans (SCOPE_MESSAGES) -------------------------------------------
+# Official OTel GenAI semconv names for prompt/completion content — verbatim.
+GEN_AI_INPUT_MESSAGES = "gen_ai.input.messages"
+GEN_AI_OUTPUT_MESSAGES = "gen_ai.output.messages"
+GEN_AI_SYSTEM_INSTRUCTIONS = "gen_ai.system_instructions"
+# Hexgate-specific message fields (see the wire contract above).
+MESSAGE_SEQ = "sec_ai.message_seq"
+TURN_KEY = "sec_ai.turn_key"
+RESYNCED = "sec_ai.resynced"
+TRUNCATED = "sec_ai.truncated"
