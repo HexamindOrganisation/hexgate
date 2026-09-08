@@ -10,6 +10,7 @@ docs/adr/R-POL-002).
 
 from __future__ import annotations
 
+import json
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Response
@@ -25,15 +26,21 @@ from hexgate_api.schemas import (
     PolicyCheckResponse,
     PolicyFileRead,
     PolicyFileWrite,
+    PolicyGraphResponse,
     PolicyLintOut,
     PolicyModuleRead,
     PolicyModuleWrite,
     PolicyPreviewRequest,
     PolicyPreviewResponse,
+    PolicyTestRequest,
+    PolicyTestResponse,
     ResolvedPolicyResponse,
     RoleBindingsRead,
     RoleBindingsWrite,
 )
+
+# SDK Verdict.outcome enum name → the wire string the editor expects.
+_OUTCOME_WIRE = {"ALLOW": "allow", "DENY": "deny", "NEEDS_APPROVAL": "approval_required"}
 
 router = APIRouter()
 
@@ -474,3 +481,64 @@ async def api_check_policy(
     out = [PolicyLintOut(**d) for d in await service.check_auto(session, project_id)]
     ok = not any(lint.severity == "error" for lint in out)
     return PolicyCheckResponse(ok=ok, lints=out)
+
+
+@router.get("/projects/{project_id}/policy/graph", tags=["policy"])
+async def api_policy_graph(
+    project_id: str,
+    role: str | None = None,
+    _user: User = Depends(require_org_member),
+    session: AsyncSession = Depends(get_session),
+) -> PolicyGraphResponse:
+    """The resolved policy as a node/edge graph — agents, their tools (incl. MCP),
+    and the reach/admission edges between agents — for one ``role`` or the union
+    across roles. Resolves via the compose front-end (an entry file) or the tier
+    store. 422 if the project can't be composed (use /policy/check to see that as a
+    lint instead)."""
+    try:
+        graph = await service.policy_graph(session, project_id, role=role)
+    except service.compose_error_types() as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return PolicyGraphResponse(**graph)
+
+
+@router.post("/projects/{project_id}/policy/test", tags=["policy"])
+async def api_test_policy(
+    project_id: str,
+    body: PolicyTestRequest,
+    _user: User = Depends(require_org_member),
+    session: AsyncSession = Depends(get_session),
+) -> PolicyTestResponse:
+    """Evaluate one tool call against the whole resolved policy for a role — the
+    'would this be allowed?' probe. Resolves via compose (an entry file) or the
+    tier store, optionally overlaying an unsaved ``draft`` file. 422 if the project
+    doesn't compose; 404 for an unknown role."""
+    draft = (body.draft.name, body.draft.content) if body.draft else None
+    try:
+        verdict = await service.test_policy(
+            session,
+            project_id,
+            role=body.role,
+            agent=body.agent,
+            tool=body.tool,
+            args=body.args,
+            attributes=body.attributes,
+            draft=draft,
+        )
+    except service.compose_error_types() as exc:
+        raise HTTPException(
+            status_code=422, detail=f"policy does not compose: {exc}"
+        ) from exc
+    except service.UnknownRoleError as exc:
+        raise HTTPException(
+            status_code=404, detail=f"role {exc.args[0]!r} not defined"
+        ) from exc
+
+    return PolicyTestResponse(
+        outcome=_OUTCOME_WIRE.get(verdict.outcome.name, verdict.outcome.name.lower()),
+        reason=verdict.reason,
+        violations=[str(v) for v in (verdict.violations or [])],
+        # Verdict.hint is a machine-readable dict (file-scope path hint); the wire
+        # field is a string, so serialize rather than 500 on a dict.
+        hint=json.dumps(verdict.hint) if verdict.hint is not None else None,
+    )

@@ -1137,3 +1137,167 @@ def test_preview_reports_error_in_a_non_requested_agent(client):
     body = r.json()
     assert body["resolved"] is None
     assert body["lints"][0]["severity"] == "error"
+
+
+# --- /policy/graph + /policy/test (compose) ----------------------------------
+
+
+def test_policy_graph_from_compose(client):
+    # A resolving compose project graphs into agent + tool nodes with call edges;
+    # an mcp-prefixed tool becomes an "mcp" node (prefix dropped in the label).
+    pid = _project(client)
+    _put_file(
+        client, pid, "policy.yaml",
+        "agents:\n"
+        "  bot:\n"
+        "    roles:\n"
+        "      support:\n"
+        "        tools:\n"
+        "          read_ticket: { mode: allow }\n"
+        "          mcp-knowledge: { mode: approval_required }\n",
+    )
+    r = client.get(f"/v1/projects/{pid}/policy/graph")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    nodes = {n["id"]: n for n in body["nodes"]}
+    assert "agent:bot" in nodes
+    assert nodes["tool:mcp-knowledge"]["kind"] == "mcp"
+    assert nodes["tool:mcp-knowledge"]["label"] == "knowledge"  # "mcp-" dropped
+    assert nodes["tool:read_ticket"]["kind"] == "tool"
+
+    calls = {(e["source"], e["target"]) for e in body["edges"] if e["kind"] == "call"}
+    assert ("agent:bot", "tool:read_ticket") in calls
+    assert ("agent:bot", "tool:mcp-knowledge") in calls
+
+
+def test_policy_graph_reach_edge(client):
+    # A reach the boundary permits lowers to an agent→agent edge tagged by `via`,
+    # materializing the target agent node.
+    pid = _project(client)
+    _put_file(
+        client, pid, "policy.yaml",
+        "boundary:\n"
+        "  reach: { billing_bot: { as: handoff } }\n"
+        "agents:\n"
+        "  bot:\n"
+        "    roles:\n"
+        "      support:\n"
+        "        reach: { billing_bot: { as: handoff } }\n",
+    )
+    body = client.get(f"/v1/projects/{pid}/policy/graph").json()
+    assert "agent:billing_bot" in {n["id"] for n in body["nodes"]}
+    reach = {
+        (e["source"], e["target"]): e for e in body["edges"] if e["kind"] == "reach"
+    }
+    edge = reach[("agent:bot", "agent:billing_bot")]  # the granted reach
+    assert edge["via"] == "handoff"
+    assert "support" in edge["roles"]
+
+
+def test_policy_graph_role_filter(client):
+    # ?role= restricts the graph to one role's edges.
+    pid = _project(client)
+    _put_file(
+        client, pid, "policy.yaml",
+        "agents:\n"
+        "  bot:\n"
+        "    roles:\n"
+        "      support: { tools: { a: { mode: allow } } }\n"
+        "      admin: { tools: { b: { mode: allow } } }\n",
+    )
+    edges = client.get(
+        f"/v1/projects/{pid}/policy/graph", params={"role": "support"}
+    ).json()["edges"]
+    targets = {e["target"] for e in edges if e["kind"] == "call"}
+    assert "tool:a" in targets
+    assert "tool:b" not in targets  # admin role filtered out
+
+
+def test_policy_test_allow_approval_deny(client):
+    pid = _project(client)
+    _put_file(
+        client, pid, "policy.yaml",
+        "tools:\n"
+        "  send_email: { mode: allow }\n"
+        "  risky: { mode: approval_required }\n",
+    )
+
+    def probe(tool):
+        return client.post(
+            f"/v1/projects/{pid}/policy/test",
+            json={"role": "default", "tool": tool, "args": {}},
+        )
+
+    r = probe("send_email")
+    assert r.status_code == 200, r.text
+    assert r.json()["outcome"] == "allow"
+    assert probe("risky").json()["outcome"] == "approval_required"
+    assert probe("wipe_db").json()["outcome"] == "deny"  # closed-world default-deny
+
+
+def test_policy_test_unknown_role_is_404(client):
+    pid = _project(client)
+    _put_file(client, pid, "policy.yaml", "tools: { a: { mode: allow } }\n")
+    r = client.post(
+        f"/v1/projects/{pid}/policy/test",
+        json={"role": "ghost", "tool": "a", "args": {}},
+    )
+    assert r.status_code == 404, r.text
+
+
+def test_policy_test_reflects_a_draft_overlay(client):
+    # A tool granted only in an unsaved draft evaluates allow via the overlay,
+    # while the saved project still denies it.
+    pid = _project(client)
+    _put_file(client, pid, "policy.yaml", "tools: { a: { mode: allow } }\n")
+    saved = client.post(
+        f"/v1/projects/{pid}/policy/test",
+        json={"role": "default", "tool": "b", "args": {}},
+    )
+    assert saved.json()["outcome"] == "deny"
+    drafted = client.post(
+        f"/v1/projects/{pid}/policy/test",
+        json={
+            "role": "default", "tool": "b", "args": {},
+            "draft": {"name": "policy.yaml", "content": "tools: { b: { mode: allow } }\n"},
+        },
+    )
+    assert drafted.status_code == 200, drafted.text
+    assert drafted.json()["outcome"] == "allow"
+
+
+def test_policy_test_422_when_draft_does_not_compose(client):
+    pid = _project(client)
+    _put_file(client, pid, "policy.yaml", "tools: { a: { mode: allow } }\n")
+    r = client.post(
+        f"/v1/projects/{pid}/policy/test",
+        json={
+            "role": "default", "tool": "a", "args": {},
+            "draft": {"name": "policy.yaml", "content": "import: [ missing.yaml ]\n"},
+        },
+    )
+    assert r.status_code == 422, r.text
+
+
+def test_policy_graph_drops_isolated_generic_agent(client):
+    # With named agents and no top-level grant, the generic "*" column has no
+    # edges — its sentinel node is pruned, not shown as a literal "*" agent.
+    pid = _project(client)
+    _put_file(
+        client, pid, "policy.yaml",
+        "agents:\n  bot:\n    roles:\n      support: { tools: { a: { mode: allow } } }\n",
+    )
+    ids = {n["id"] for n in client.get(f"/v1/projects/{pid}/policy/graph").json()["nodes"]}
+    assert "agent:bot" in ids
+    assert "agent:*" not in ids
+
+
+def test_policy_graph_keeps_generic_agent_with_top_level_grant(client):
+    # A top-level grant belongs to the generic "*" column, so its node stays.
+    pid = _project(client)
+    _put_file(client, pid, "policy.yaml", "tools: { a: { mode: allow } }\n")
+    body = client.get(f"/v1/projects/{pid}/policy/graph").json()
+    assert "agent:*" in {n["id"] for n in body["nodes"]}
+    assert ("agent:*", "tool:a") in {
+        (e["source"], e["target"]) for e in body["edges"]
+    }

@@ -40,6 +40,15 @@ class InvalidModuleError(Exception):
     """
 
 
+class UnknownRoleError(Exception):
+    """The role a decision-test targets isn't in the resolved policy set.
+
+    Its own type (not a bare ``KeyError``) so the router maps *this* to HTTP 404
+    without also catching a ``KeyError`` the SDK decision engine might raise for an
+    unrelated missing key — which should surface as a 500, not a phantom 404.
+    """
+
+
 def _content_hash(content: str) -> str:
     """sha256 of the module's canonical JSON — the SAME scheme the SDK loader
     uses (``hexgate.security.module_loader``), so a module authored on the
@@ -370,16 +379,21 @@ def compose_error_types() -> tuple[type[BaseException], ...]:
     )
 
 
+def _all_agent_names(roles) -> set[str]:
+    """Every agent column named in the role matrix, plus the generic ``"*"``."""
+    agents = {DEFAULT_AGENT}
+    if roles:
+        agents |= {agent for cells in roles.values() for agent in cells}
+    return agents
+
+
 def _resolve_all_agents(boundaries, capabilities, roles) -> None:
     """Resolve EVERY agent column of ``roles`` (not just ``"*"``, so a named-agent
     cell importing an unknown capability is caught). Raises the SDK compose errors
     on failure; resolves only (no YAML serialization)."""
     from hexgate.security import resolve_for_project
 
-    agents = {DEFAULT_AGENT}
-    if roles:
-        agents |= {agent for cells in roles.values() for agent in cells}
-    for agent in agents:
+    for agent in _all_agent_names(roles):
         resolve_for_project(boundaries, capabilities, roles, agent=agent)
 
 
@@ -801,6 +815,169 @@ async def compose_preview(
             "lints": [{"code": "link-error", "severity": "error", "message": str(exc)}],
         }
     return {"resolved": roles_json(requested), "lints": []}
+
+
+def _graph_from(agent_names, resolve_for_agent, role: str | None = None) -> dict:
+    """Build the node/edge graph from a per-agent resolver — model-agnostic, fed
+    either the compose or the tier resolver. An agent's effective tools split into
+    tool *calls*, lowered *reach* keys (``agent.tool:``/``agent.handoff:`` → an
+    agent→agent edge tagged by ``via``), and the *admission* key (``agent.run`` → a
+    role→agent ingress edge); a ``mcp-`` tool is an ``mcp`` node. ``role`` filters
+    to one role, else unions across every role each agent resolves. Nodes/edges
+    de-dup: an edge keeps the strictest verdict (deny > approval_required > allow),
+    unions its constraints, and records the roles it appears under."""
+    from hexgate.security import DEFAULT_ROLE_NAME
+    from hexgate.security.models import (
+        AGENT_REACH_PREFIXES,
+        AGENT_RUN_TOOL,
+        is_agent_reach_key,
+    )
+
+    _RANK = {"deny": 3, "approval_required": 2, "allow": 1}
+    nodes: dict[str, dict] = {}
+    edges: dict[tuple, dict] = {}
+
+    def add_node(node_id: str, kind: str, label: str) -> None:
+        nodes.setdefault(node_id, {"id": node_id, "kind": kind, "label": label})
+
+    def add_edge(source, target, kind, verdict, constraints, via=None, at_role=None):
+        prev = edges.get((source, target, kind, via))
+        if prev is None:
+            edges[(source, target, kind, via)] = {
+                "source": source,
+                "target": target,
+                "kind": kind,
+                "via": via,
+                "verdict": verdict,
+                "constraints": list(constraints),
+                "roles": [at_role] if at_role else [],
+            }
+            return
+        if _RANK.get(verdict, 0) > _RANK.get(prev["verdict"], 0):
+            prev["verdict"] = verdict
+        for c in constraints:
+            if c not in prev["constraints"]:
+                prev["constraints"].append(c)
+        if at_role and at_role not in prev["roles"]:
+            prev["roles"].append(at_role)
+
+    for agent in sorted(agent_names):
+        add_node(f"agent:{agent}", "agent", agent)
+        result = resolve_for_agent(agent)
+        # In the union view (role=None) the same edge can appear under several
+        # roles; we keep the strictest verdict and union the constraints, so a
+        # merged edge can be more restrictive than any single role. The per-edge
+        # ``roles`` list (and the ?role= filter) give the exact per-role picture.
+        roles_here = [role] if role is not None else list(result.by_role)
+        for r in roles_here:
+            link_result = result.by_role.get(r)
+            if link_result is None:
+                continue
+            policy = link_result.effective[DEFAULT_ROLE_NAME]
+            for tool, tp in policy.effective_tools.items():
+                cons = list(tp.constraints)
+                if tool == AGENT_RUN_TOOL:
+                    add_node(f"role:{r}", "role", r)
+                    add_edge(
+                        f"role:{r}", f"agent:{agent}", "admission", tp.mode, cons,
+                        at_role=r,
+                    )
+                elif is_agent_reach_key(tool):
+                    prefix = next(
+                        p for p in AGENT_REACH_PREFIXES if tool.startswith(p)
+                    )
+                    via = prefix[len("agent.") : -1]  # "tool" | "handoff"
+                    target = tool[len(prefix) :]
+                    add_node(f"agent:{target}", "agent", target)
+                    add_edge(
+                        f"agent:{agent}", f"agent:{target}", "reach", tp.mode, cons,
+                        via=via, at_role=r,
+                    )
+                else:
+                    is_mcp = tool.startswith("mcp-")
+                    kind = "mcp" if is_mcp else "tool"
+                    # Drop the "mcp-" prefix in the label so "mcp-demo-read" reads
+                    # as "demo-read".
+                    node_label = tool[len("mcp-") :] if is_mcp else tool
+                    add_node(f"tool:{tool}", kind, node_label)
+                    add_edge(
+                        f"agent:{agent}", f"tool:{tool}", "call", tp.mode, cons,
+                        at_role=r,
+                    )
+
+    # "*" is the generic-column sentinel, not a real agent — drop its node when it
+    # carries nothing (named agents present, no top-level grants) so the UI doesn't
+    # render a literal "*" agent; keep it when a top-level grant gives it an edge.
+    star = f"agent:{DEFAULT_AGENT}"
+    if star in nodes and not any(
+        e["source"] == star or e["target"] == star for e in edges.values()
+    ):
+        del nodes[star]
+
+    return {"nodes": list(nodes.values()), "edges": list(edges.values())}
+
+
+async def policy_graph(
+    session: AsyncSession, project_id: str, role: str | None = None
+) -> dict:
+    """A node/edge graph of the project's agents, tools, and reach/admission edges,
+    for one ``role`` (or the union across roles). Auto-dispatches compose (an entry
+    file) vs the tier store — a single files read — and feeds the same builder.
+    Raises the SDK's compose errors if the project doesn't resolve."""
+    files = await _files_map(session, project_id)
+    if ENTRY_FILE in files:
+        agent_names = _compose_agent_names(files)
+
+        def resolve_for_agent(a: str):
+            return _resolve_files(files, a)
+    else:
+        from hexgate.security import resolve_for_project
+
+        boundaries, capabilities, roles_matrix = await _sdk_inputs(session, project_id)
+        agent_names = sorted(_all_agent_names(roles_matrix))
+
+        def resolve_for_agent(a: str):
+            return resolve_for_project(boundaries, capabilities, roles_matrix, agent=a)
+
+    return _graph_from(agent_names, resolve_for_agent, role=role)
+
+
+async def test_policy(
+    session: AsyncSession,
+    project_id: str,
+    *,
+    role: str,
+    tool: str,
+    agent: str = DEFAULT_AGENT,
+    args: dict,
+    attributes: dict | None = None,
+    draft: tuple[str, str] | None = None,
+):
+    """Evaluate one tool call against the resolved policy for ``role`` + ``agent``,
+    then run the SDK decision engine.
+
+    ``draft`` is an optional ``(name, content)`` compose overlay — the editor's
+    unsaved edit. It's applied to the file set, so it takes effect whenever the
+    project resolves via compose (has, or the draft introduces, an entry file); a
+    project with no entry file resolves from the tier store and a draft naming a
+    non-entry file has no tier meaning. Raises the SDK's compose errors if the
+    project doesn't resolve, and :class:`UnknownRoleError` (→ 404) for an unknown
+    role."""
+    files = await _files_map(session, project_id)
+    if draft is not None:
+        files = {**files, draft[0]: draft[1]}
+    if ENTRY_FILE in files:
+        result = _resolve_files(files, agent)
+    else:
+        from hexgate.security import resolve_for_project
+
+        boundaries, capabilities, roles = await _sdk_inputs(session, project_id)
+        result = resolve_for_project(boundaries, capabilities, roles, agent=agent)
+    if role not in result.policy_set.roles:
+        raise UnknownRoleError(role)
+    return result.policy_set.evaluate(
+        role=role, tool=tool, args=dict(args), attributes=attributes
+    )
 
 
 async def resolved_yaml_by_agent_compose(
