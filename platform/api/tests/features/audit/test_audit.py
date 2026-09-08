@@ -45,7 +45,12 @@ from hexgate_api.deps.identity import require_user
 from hexgate_api.deps.org import require_org_member
 from hexgate_api.deps.tokens import require_project
 from hexgate_api.main import app
-from hexgate_api.schemas import AnomalySeverity, AuditOutcome, DecisionEvent
+from hexgate_api.schemas import (
+    UINT32_MAX,
+    AnomalySeverity,
+    AuditOutcome,
+    DecisionEvent,
+)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -138,6 +143,25 @@ def test_negative_run_counter_rejected() -> None:
     with pytest.raises(ValidationError) as exc:
         DecisionEvent(**_event(run_tool_calls=-1))
     assert "run_tool_calls" in str(exc.value)
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "run_tool_calls",
+        "run_llm_calls",
+        "run_denials",
+        "run_total_tokens",
+        "run_elapsed_ms",
+    ],
+)
+def test_over_range_run_counter_rejected(field: str) -> None:
+    """The columns are UInt32: an over-range counter (e.g. elapsed emitted in
+    ns) must fail validation here, not at insert time — a permanent ClickHouse
+    error the batch caller would retry forever."""
+    with pytest.raises(ValidationError) as exc:
+        DecisionEvent(**_event(**{field: UINT32_MAX + 1}))
+    assert field in str(exc.value)
 
 
 # ---------------------------------------------------------------------------

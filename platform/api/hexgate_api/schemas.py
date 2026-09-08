@@ -549,11 +549,14 @@ class DecisionEvent(AuditEnvelope):
     # scope, omit run_id here and the platform substitutes the zero UUID at
     # insert time (core.clickhouse.ZERO_RUN_ID) — never NULL.
     run_id: Optional[UUID] = None
-    run_tool_calls: int = Field(default=0, ge=0)
-    run_llm_calls: int = Field(default=0, ge=0)
-    run_denials: int = Field(default=0, ge=0)
-    run_total_tokens: int = Field(default=0, ge=0)
-    run_elapsed_ms: int = Field(default=0, ge=0)
+    # Upper bound for the same reason as the usage counters below: the columns
+    # are UInt32, and an over-range value that passes validation is a permanent
+    # insert error the enricher retries forever instead of DLQ-ing the span.
+    run_tool_calls: int = Field(default=0, ge=0, le=UINT32_MAX)
+    run_llm_calls: int = Field(default=0, ge=0, le=UINT32_MAX)
+    run_denials: int = Field(default=0, ge=0, le=UINT32_MAX)
+    run_total_tokens: int = Field(default=0, ge=0, le=UINT32_MAX)
+    run_elapsed_ms: int = Field(default=0, ge=0, le=UINT32_MAX)
 
 
 class LlmInvocationEvent(AuditEnvelope):
