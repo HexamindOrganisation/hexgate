@@ -53,7 +53,7 @@ The SDK side in more detail: `PolicyEnforcer.decide()` returns the `Decision`
 to the agent synchronously and authoritatively, then hands a copy to
 `AuditSender.emit()` as one OTel span, best-effort, through a bounded
 `BatchSpanProcessor` queue that drops on saturation (§3). ClickHouse holds
-`hexgate_audit.policy_decision`, `llm_invocation` and `ban_enforcement`
+`hexgate_audit.policy_decision`, `llm_invocation`, `ban_enforcement` and `llm_message`
 (§5); the dashboard reads them through the project-scoped aggregation
 endpoints (§7).
 
@@ -486,6 +486,51 @@ SETTINGS index_granularity = 8192;
   JSON, and are documented as potentially lossy (`arguments` is SDK-truncated;
   see §6).
 - **TTL 180 days** — rows self-expire, consistent with the ingest retention guard.
+
+`llm_invocation` and `ban_enforcement` share the eight envelope columns and the
+same engine / partition / TTL, and differ only in their event-specific columns
+and sort key (see `schema.sql`).
+
+#### `llm_message` — prompt/completion content
+
+The fourth table, for the `hexgate.messages` scope: one row per model call,
+holding the input messages **new to that call**, its completion, and (on the
+first row of a list) the system instructions, as JSON in the official
+`gen_ai.*` shapes.
+
+```sql
+CREATE TABLE hexgate_audit.llm_message
+(
+  -- Envelope: identical to the other tables
+  ...
+  model               LowCardinality(String),
+  turn_key            String,          -- which framework message list this row extends
+  message_seq         UInt32,          -- counter within turn_key; a gap = a missing row
+  resynced            UInt8 DEFAULT 0, -- 1: restates the whole list, not a delta
+  truncated           UInt8 DEFAULT 0, -- 1: a content column was cut to its cap
+  input_messages      String CODEC(ZSTD(3)),  -- gen_ai.input.messages, ≤ 256 KiB
+  output_messages     String CODEC(ZSTD(3)),  -- gen_ai.output.messages, ≤ 8 KiB
+  system_instructions String DEFAULT '' CODEC(ZSTD(3))  -- gen_ai.system_instructions, ≤ 8 KiB
+)
+ENGINE = ReplacingMergeTree(received_at)
+PARTITION BY toYYYYMM(received_at)
+ORDER BY (project_id, session_id, turn_key, message_seq, event_id)
+TTL toDateTime(received_at) + INTERVAL 180 DAY
+```
+
+- **Separate table, not columns on `llm_invocation`** — content is large,
+  optional (`HEXGATE_LOG_MESSAGES=0` turns capture off), and read by session
+  rather than aggregated by user/model.
+- **Sort key** `(project_id, session_id, turn_key, message_seq, event_id)`:
+  the read is "reconstruct this session's transcript", so a list's rows sit
+  adjacent and in order. A session with a sub-agent or handoff has several
+  `turn_key`s; readers order across them by `occurred_at`. `event_id` last
+  keeps `ReplacingMergeTree` dedup to SDK retries.
+- **Caps are head+tail**, not the preview wrapper used for `arguments`: the
+  start and the end of an oversized message both survive (see
+  `hexgate.audit.cap_json_head_tail`), and `truncated` says it happened.
+- **Migration:** `migrations/0002_add_llm_message.sql`, applied by hand before
+  the enricher that writes to it is deployed.
 
 ### 5.2 Insert semantics
 
