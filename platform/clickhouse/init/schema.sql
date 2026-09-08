@@ -102,3 +102,46 @@ PARTITION BY toYYYYMM(received_at)
 ORDER BY (project_id, user_id, agent_name, model, occurred_at, event_id)
 TTL toDateTime(received_at) + INTERVAL 180 DAY
 SETTINGS index_granularity = 8192;
+
+
+-- LLM prompt/completion content — one row per model call, scope hexgate.messages.
+-- Sibling of llm_invocation sharing the envelope; a separate table because the
+-- content is large, optional (HEXGATE_LOG_MESSAGES=0 turns it off) and read
+-- by session, not aggregated by user/model like token usage.
+CREATE TABLE IF NOT EXISTS hexgate_audit.llm_message
+(
+    -- Envelope (shared with the other event tables — same names, types, order)
+    event_id            UUID,
+    occurred_at         DateTime64(3, 'UTC'),
+    received_at         DateTime64(3, 'UTC') DEFAULT now64(3),
+    project_id          LowCardinality(String),
+    agent_name          LowCardinality(String),
+    agent_version_id    LowCardinality(String) DEFAULT '',
+    session_id          String DEFAULT '',
+    user_id             LowCardinality(String) DEFAULT '',
+
+    -- Message-specific
+    model               LowCardinality(String),
+    -- Which framework message list this row extends: one per run / sub-agent /
+    -- handoff. message_seq counts rows within it, so a reader seeing 0, 1, 3
+    -- knows a row is missing instead of trusting a shorter transcript.
+    turn_key            String,
+    message_seq         UInt32,
+    -- 1 when this row restates the whole list (the framework trimmed or
+    -- summarised it) rather than extending it — read it as history, not delta.
+    resynced            UInt8 DEFAULT 0,
+    -- 1 when any content column below was cut to its byte cap (head+tail).
+    truncated           UInt8 DEFAULT 0,
+    -- Official gen_ai.* shapes as JSON; SDK-redacted and capped, may be lossy.
+    input_messages      String COMMENT 'gen_ai.input.messages — only the messages new to this call, tool results included; capped 32 KiB' CODEC(ZSTD(3)),
+    output_messages     String COMMENT 'gen_ai.output.messages — this call''s completion; capped 8 KiB' CODEC(ZSTD(3)),
+    system_instructions String DEFAULT '' COMMENT 'gen_ai.system_instructions — first row of each turn_key only; capped 8 KiB' CODEC(ZSTD(3))
+)
+ENGINE = ReplacingMergeTree(received_at)
+PARTITION BY toYYYYMM(received_at)
+-- Session-first: the read is "reconstruct this session's transcript in order",
+-- so (turn_key, message_seq) puts a list's rows adjacent and ordered. event_id
+-- last keeps dedup to SDK retries of the same event.
+ORDER BY (project_id, session_id, turn_key, message_seq, event_id)
+TTL toDateTime(received_at) + INTERVAL 180 DAY
+SETTINGS index_granularity = 8192;
