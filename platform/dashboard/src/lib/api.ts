@@ -212,6 +212,102 @@ export interface ValidatePolicyResponse {
   warnings: PolicyValidationError[];
 }
 
+// --- Compose policy files (multi-file editor; mirrors platform/api/schemas.py)
+//
+// A project's compose policy is a set of named files (a small in-DB
+// filesystem). The entry file is `policy.yaml`; others are pulled in via
+// `import:`. Files carry no tier — roles/imports live inside the content.
+
+/** One stored compose file. `name` may contain slashes (e.g. `caps/refunds.yaml`). */
+export interface PolicyFileRead {
+  name: string;
+  content: string;
+  content_hash: string;
+  updated_at: string;
+}
+
+/** One analyzer lint over the composed project. `source`/`tier`/`tool`/`role`
+ * locate it; a null `role` is a project-wide concern. */
+export interface PolicyLint {
+  code: string;
+  severity: "error" | "warning" | "info";
+  message: string;
+  source: string | null;
+  tier: string | null;
+  tool: string | null;
+  role: string | null;
+}
+
+/** The effective policy for one role: a tool map plus the catch-all default.
+ * Loosely typed — it's an AgentPolicy dump the editor only renders. */
+export interface ResolvedRolePolicy {
+  default_policy?: { mode?: string } | null;
+  tools?: Record<
+    string,
+    { mode?: string; constraints?: string[] | null } | null
+  >;
+  [key: string]: unknown;
+}
+
+export type ResolvedPolicy = Record<string, ResolvedRolePolicy>;
+
+/** A node in the resolved-policy graph: an agent, a tool, an MCP tool, or a
+ * role (admission source). */
+export interface PolicyGraphNode {
+  id: string;
+  kind: "agent" | "tool" | "mcp" | "role";
+  label: string;
+}
+
+/** A directed edge: a tool `call`, an agent→agent `reach` (`via` tool/handoff),
+ * or a role→agent `admission`. `verdict` is the composed mode; `constraints`
+ * and `roles` feed the per-edge card. */
+export interface PolicyGraphEdge {
+  source: string;
+  target: string;
+  kind: "call" | "reach" | "admission";
+  via?: "tool" | "handoff" | null;
+  verdict: PolicyTestOutcome;
+  constraints: string[];
+  roles: string[];
+}
+
+export interface PolicyGraph {
+  nodes: PolicyGraphNode[];
+  edges: PolicyGraphEdge[];
+}
+
+/** The editor's unsaved edit of one file, overlaid before preview/test. */
+export interface PolicyFileDraft {
+  name: string;
+  content: string;
+}
+
+export interface PolicyPreviewResponse {
+  /** The effective policy per role, or null when the draft doesn't compose. */
+  resolved: ResolvedPolicy | null;
+  lints: PolicyLint[];
+}
+
+export type PolicyTestOutcome = "allow" | "deny" | "approval_required";
+
+export interface PolicyTestRequest {
+  role: string;
+  /** The executing agent whose column to test against; defaults to "*". */
+  agent?: string;
+  tool: string;
+  args?: Record<string, unknown>;
+  attributes?: Record<string, unknown> | null;
+  draft?: PolicyFileDraft | null;
+}
+
+export interface PolicyTestResponse {
+  outcome: PolicyTestOutcome;
+  reason: string | null;
+  violations: string[];
+  hint: string | null;
+}
+
 // --- Audit dashboard (mirrors platform/api/schemas.py) ----------------------
 
 export type AuditWindow = "24h" | "7d" | "30d" | "90d";
@@ -413,6 +509,12 @@ export interface LlmUsageScope {
   end_date?: string;
 }
 
+/** Percent-encode each path segment but keep the slashes, so a name like
+ * `caps/refunds.yaml` reaches the server's `{name:path}` converter intact. */
+function encodePath(path: string): string {
+  return path.split("/").map(encodeURIComponent).join("/");
+}
+
 function qs(params: Record<string, string | number | undefined>): string {
   const search = new URLSearchParams();
   for (const [key, value] of Object.entries(params)) {
@@ -513,4 +615,48 @@ export const api = {
     request<LlmInvocationSummary>(
       `/v1/projects/${projectId}/llm/summary${qs({ ...scope })}`,
     ),
+
+  // --- Compose policy files ---
+
+  listPolicyFiles: (projectId: string) =>
+    request<PolicyFileRead[]>(`/v1/projects/${projectId}/policy-files`),
+
+  upsertPolicyFile: (projectId: string, name: string, content: string) =>
+    request<PolicyFileRead>(
+      `/v1/projects/${projectId}/policy-files/${encodePath(name)}`,
+      { method: "PUT", body: JSON.stringify({ content }) },
+    ),
+
+  deletePolicyFile: (projectId: string, name: string) =>
+    request<void>(
+      `/v1/projects/${projectId}/policy-files/${encodePath(name)}`,
+      { method: "DELETE" },
+    ),
+
+  resolvePolicy: (projectId: string, role?: string, agent?: string) =>
+    request<{ roles: ResolvedPolicy }>(
+      `/v1/projects/${projectId}/policy/resolve${qs({ role, agent })}`,
+    ).then((r) => r.roles),
+
+  checkPolicy: (projectId: string) =>
+    request<{ ok: boolean; lints: PolicyLint[] }>(
+      `/v1/projects/${projectId}/policy/check`,
+    ),
+
+  policyGraph: (projectId: string, role?: string) =>
+    request<PolicyGraph>(
+      `/v1/projects/${projectId}/policy/graph${qs({ role })}`,
+    ),
+
+  previewPolicy: (projectId: string, draft: PolicyFileDraft, agent?: string) =>
+    request<PolicyPreviewResponse>(`/v1/projects/${projectId}/policy/preview`, {
+      method: "POST",
+      body: JSON.stringify({ ...draft, agent: agent ?? "*" }),
+    }),
+
+  testPolicy: (projectId: string, body: PolicyTestRequest) =>
+    request<PolicyTestResponse>(`/v1/projects/${projectId}/policy/test`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
 };

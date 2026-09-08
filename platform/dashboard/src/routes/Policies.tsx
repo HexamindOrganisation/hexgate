@@ -1,437 +1,299 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useAgentSelection } from "@/lib/agent_param";
-import {
-  AlertTriangle,
-  Bot,
-  FileCode,
-  Network,
-  Save,
-  ShieldCheck,
-} from "lucide-react";
-import {
-  ReactFlow,
-  Background,
-  BackgroundVariant,
-  Controls,
-} from "@xyflow/react";
-import {
-  api,
-  type PolicyValidationError,
-  type ValidatePolicyResponse,
-} from "@/lib/api";
+import { useCallback, useMemo, useState } from "react";
+import { FileText, X } from "lucide-react";
+
+import type { PolicyFileDraft } from "@/lib/api";
 import { useProjectScoped } from "@/lib/active";
-import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
+import {
+  useCanManagePolicy,
+  useDebouncedValue,
+  usePolicyCheck,
+  usePolicyFiles,
+  usePolicyPreview,
+  useResolvedPolicy,
+} from "@/lib/policy_files";
+import { baseName, ENTRY_FILE } from "@/lib/file_tree";
+import { cn } from "@/lib/utils";
 import { NoProjectEmptyState } from "@/components/NoProjectEmptyState";
 import { DocsLink } from "@/components/DocsLink";
 import { DOC_PATHS } from "@/lib/docs";
-import { PolicyEditor } from "@/components/PolicyEditor";
-import { nodeTypes } from "@/components/graph/nodes";
-import { buildPolicyGraph } from "@/lib/policy_graph";
-import { cn } from "@/lib/utils";
+import { ModularBanner } from "@/components/policy_files/ModularBanner";
+import { FileTree } from "@/components/policy_files/FileTree";
+import { EditorPane } from "@/components/policy_files/EditorPane";
+import { InspectorTabs } from "@/components/policy_files/InspectorTabs";
 
-type Tab = "yaml" | "graph";
+const MAX_TABS = 6;
 
-const TAB_LABEL: Record<Tab, string> = {
-  yaml: "YAML",
-  graph: "Graph",
-};
-
-const TAB_ICON: Record<Tab, typeof FileCode> = {
-  yaml: FileCode,
-  graph: Network,
-};
-
+/**
+ * Compose policy editor. Three panes: the file tree (the project's
+ * `policy_file` rows as a filesystem), a CodeMirror editor for the open file,
+ * and an inspector showing the composed policy per role, lints, a decision
+ * tester, and the policy graph. The resolved + lints panes reflect the unsaved
+ * edit live (debounced `POST /policy/preview`); Save is explicit.
+ */
 export function PoliciesPage() {
   const scope = useProjectScoped();
-  const agents = useQuery({
-    queryKey: ["agents", scope.projectId],
-    queryFn: () => api.listAgents(scope.projectId as string),
-    enabled: !!scope.projectId,
-  });
-  // ?agent= drives selection so navigating /agents?agent=X → click
-  // "edit policy →" → land on /policies with the SAME X preselected.
-  // resetOn=projectId clears the URL on a real project switch, but
-  // NOT on the initial mount — so incoming ?agent= from a link is
-  // preserved.
-  const {
-    selected: selectedAgent,
-    set: setSelectedAgent,
-    requested,
-    notFound,
-  } = useAgentSelection(agents.data, { resetOn: scope.projectId });
-  const [tab, setTab] = useState<Tab>("yaml");
+  const projectId = scope.projectId;
+  const canManage = useCanManagePolicy();
+
+  const filesQuery = usePolicyFiles(projectId);
+  const files = useMemo(() => filesQuery.data ?? [], [filesQuery.data]);
+  const modular = files.some((f) => f.name === ENTRY_FILE);
+
+  // The open file (its name), the open tabs, and the per-file unsaved buffers.
+  // A tab may name a not-yet-saved file (an "untitled" buffer) — it lives only
+  // in `openTabs`/`drafts` until the first Save persists it into `files`.
+  const [selection, setSelection] = useState<string | null>(null);
+  const [openTabs, setOpenTabs] = useState<string[]>([]);
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const dirtyKeys = useMemo(() => new Set(Object.keys(drafts)), [drafts]);
+
+  // Default the open file once files load: the entry file, else the first one.
+  const active =
+    selection ??
+    (files.some((f) => f.name === ENTRY_FILE)
+      ? ENTRY_FILE
+      : (files[0]?.name ?? null));
+  const activeTabs =
+    openTabs.length || active === null ? openTabs : [active as string];
+
+  const openFile = useCallback((name: string) => {
+    setSelection(name);
+    setOpenTabs((prev) =>
+      [...prev.filter((t) => t !== name), name].slice(-MAX_TABS),
+    );
+  }, []);
+
+  const closeTab = useCallback(
+    (name: string) => {
+      // Compute the next tabs and the neighbor to select in the handler — never
+      // call setSelection from inside the setOpenTabs updater (impure; React
+      // StrictMode double-invokes updaters).
+      const idx = openTabs.indexOf(name);
+      const next = openTabs.filter((t) => t !== name);
+      setOpenTabs(next);
+      setSelection((sel) =>
+        sel === name ? (next[Math.min(idx, next.length - 1)] ?? null) : sel,
+      );
+    },
+    [openTabs],
+  );
+
+  // A deleted file must leave no phantom tab/selection/draft — otherwise its
+  // stale buffer could be Saved and re-create the file.
+  const onFileDeleted = useCallback((name: string) => {
+    setOpenTabs((prev) => prev.filter((t) => t !== name));
+    setSelection((sel) => (sel === name ? null : sel));
+    setDrafts((prev) => {
+      if (!(name in prev)) return prev;
+      const next = { ...prev };
+      delete next[name];
+      return next;
+    });
+  }, []);
+
+  const onNewFile = useCallback(
+    (name: string) => {
+      setDrafts((prev) => ({ ...prev, [name]: prev[name] ?? "" }));
+      openFile(name);
+    },
+    [openFile],
+  );
+
+  const onPersist = useCallback((key: string, text: string, dirty: boolean) => {
+    setDrafts((prev) => {
+      if (dirty) return { ...prev, [key]: text };
+      if (!(key in prev)) return prev;
+      const next = { ...prev };
+      delete next[key];
+      return next;
+    });
+  }, []);
+
+  // The editor's unsaved overlay (null = clean or unparseable) + whether the
+  // buffer parses client-side (gates the server preview round-trip).
+  const [draft, setDraft] = useState<PolicyFileDraft | null>(null);
+  const [draftParses, setDraftParses] = useState(true);
+  const onDraftChange = useCallback(
+    (next: PolicyFileDraft | null, parses: boolean) => {
+      setDraft(next);
+      setDraftParses(parses);
+    },
+    [],
+  );
+
+  // Which executing agent's column the Resolved tab + preview inspect. "*" is
+  // the generic view; a named agent shows its own composed policy.
+  const [inspectAgent, setInspectAgent] = useState<string>("*");
+
+  // A project switch must not carry another project's tabs/edits over — else a
+  // Save could write project A's buffer into B. Reset all local editor state via
+  // the render-phase "adjust state when a prop changes" pattern (no effect, so
+  // the reset lands in the same render as the switch — no stale-tab flash).
+  const [scopedProject, setScopedProject] = useState(projectId);
+  if (projectId !== scopedProject) {
+    setScopedProject(projectId);
+    setSelection(null);
+    setOpenTabs([]);
+    setDrafts({});
+    setInspectAgent("*");
+    setDraft(null);
+    setDraftParses(true);
+  }
+
+  const debouncedDraft = useDebouncedValue(draft, 600);
+  const draftActive = draft !== null;
+  const previewEnabled = draftParses && debouncedDraft !== null;
+  const preview = usePolicyPreview(
+    projectId,
+    debouncedDraft,
+    inspectAgent,
+    previewEnabled,
+  );
+  // Only a compose project has a composed policy to resolve/lint — skip the
+  // round-trips (and resolve's 422) on classic projects.
+  const storedResolve = useResolvedPolicy(
+    projectId,
+    undefined,
+    inspectAgent,
+    modular,
+  );
+  const check = usePolicyCheck(projectId, modular);
+
+  const usePreviewData = draftActive && !!preview.data;
+  const resolved = usePreviewData ? preview.data?.resolved : storedResolve.data;
+  const lints = useMemo(
+    () =>
+      usePreviewData ? (preview.data?.lints ?? []) : (check.data?.lints ?? []),
+    [usePreviewData, preview.data, check.data],
+  );
+  const resolves = lints.every((l) => l.severity !== "error");
 
   if (scope.status === "no-project") {
     return <NoProjectEmptyState resource="policies" />;
   }
 
+  const loading = filesQuery.isLoading;
+
   return (
-    <div className="-mx-8 -my-6 h-[calc(100vh-56px)] flex flex-col overflow-hidden">
-      {/* Top bar: agent picker + tabs */}
-      <header className="flex items-center justify-between gap-4 px-6 py-3 border-b border-border bg-card">
-        <div className="flex items-center gap-3">
-          <ShieldCheck className="size-4 text-muted-foreground" />
-          <span className="text-sm font-medium">Policy</span>
-          <AgentPicker
-            agents={agents.data ?? []}
-            value={selectedAgent}
-            onChange={setSelectedAgent}
-            loading={agents.isLoading}
+    // Recessed page ground with a floating, softly-rounded editor card. Panes
+    // are separated by background shade, not hard border lines (the VSCode
+    // "shades, not rules" feel).
+    <div className="-mx-8 -my-6 h-screen overflow-hidden bg-muted/20 p-3">
+      <div className="flex h-full flex-col overflow-hidden rounded-xl border border-border/60 bg-card shadow-sm">
+        {!loading && (
+          <ModularBanner
+            modular={modular}
+            trailing={
+              <DocsLink path={DOC_PATHS.policies} label="Policy docs" />
+            }
           />
-        </div>
-        <div className="flex items-center gap-2">
-          <Tabs value={tab} onChange={setTab} />
-          <DocsLink path={DOC_PATHS.policies} label="Policy docs" />
-        </div>
-      </header>
+        )}
 
-      {/* URL asked for an agent this project doesn't have — show a banner
-          instead of silently editing the wrong agent's policy. */}
-      {notFound && requested && (
-        <div className="flex items-center gap-2 px-6 py-2 text-xs bg-approval/5 border-b border-approval/30 text-approval">
-          <AlertTriangle className="size-3.5 shrink-0" />
-          <span>
-            No agent named{" "}
-            <span className="font-mono font-medium">{requested}</span> in this
-            project.
-            {selectedAgent && (
-              <>
-                {" Showing "}
-                <span className="font-mono font-medium">{selectedAgent}</span>
-                {" instead."}
-              </>
-            )}
-          </span>
-        </div>
-      )}
-
-      {/* Content */}
-      <div className="flex-1 overflow-hidden">
-        {selectedAgent && scope.projectId ? (
-          tab === "yaml" ? (
-            <YamlEditor agentName={selectedAgent} projectId={scope.projectId} />
-          ) : (
-            <PolicyGraphTab
-              agentName={selectedAgent}
-              projectId={scope.projectId}
-            />
-          )
+        {loading || !projectId ? (
+          <div className="flex-1 grid place-items-center text-sm text-muted-foreground">
+            {scope.status === "loading" || loading
+              ? "Loading policy…"
+              : "No project selected."}
+          </div>
         ) : (
-          <div className="h-full grid place-items-center text-sm text-muted-foreground">
-            {agents.isLoading ? "Loading agents…" : "No agents to select."}
+          <div className="flex-1 grid grid-cols-[240px_minmax(0,1fr)_minmax(320px,380px)] overflow-hidden">
+            <div className="overflow-hidden bg-background/40">
+              <FileTree
+                files={files}
+                selected={active}
+                onSelect={openFile}
+                onNewFile={onNewFile}
+                onDeleted={onFileDeleted}
+                projectId={projectId}
+                canManage={canManage}
+                dirtyKeys={dirtyKeys}
+              />
+            </div>
+            <div className="flex flex-col overflow-hidden">
+              <div className="flex shrink-0 items-stretch overflow-x-auto border-b border-border bg-background/40 scrollbar-thin">
+                {activeTabs.map((tab) => {
+                  const isActive = active === tab;
+                  const isDirty = dirtyKeys.has(tab);
+                  return (
+                    <div
+                      key={tab}
+                      onClick={() => setSelection(tab)}
+                      title={tab}
+                      className={cn(
+                        "group flex max-w-[170px] min-w-0 cursor-pointer items-center gap-1.5 border-r border-border px-3 py-1.5 text-xs",
+                        isActive
+                          ? "bg-card text-foreground"
+                          : "text-muted-foreground hover:text-foreground",
+                      )}
+                    >
+                      <FileText className="size-3 shrink-0 text-muted-foreground" />
+                      <span className="truncate font-mono">
+                        {baseName(tab)}
+                      </span>
+                      {isDirty && (
+                        <span
+                          className="size-1.5 shrink-0 rounded-full bg-primary group-hover:hidden"
+                          title="Unsaved changes"
+                        />
+                      )}
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          closeTab(tab);
+                        }}
+                        title="Close tab"
+                        className={cn(
+                          "shrink-0 rounded p-0.5 hover:bg-accent",
+                          isDirty
+                            ? "hidden group-hover:block"
+                            : "opacity-0 group-hover:opacity-100",
+                        )}
+                      >
+                        <X className="size-3" />
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+              <div className="flex-1 overflow-hidden">
+                {active === null ? (
+                  <div className="h-full grid place-items-center px-6 text-center">
+                    <p className="text-xs text-muted-foreground">
+                      No file open. Add a{" "}
+                      <span className="font-mono">{ENTRY_FILE}</span> to start
+                      the compose policy.
+                    </p>
+                  </div>
+                ) : (
+                  <EditorPane
+                    projectId={projectId}
+                    name={active}
+                    files={files}
+                    lints={lints}
+                    canManage={canManage}
+                    onDraftChange={onDraftChange}
+                    drafts={drafts}
+                    onPersist={onPersist}
+                  />
+                )}
+              </div>
+            </div>
+            <div className="overflow-hidden bg-background/40">
+              <InspectorTabs
+                projectId={projectId}
+                resolved={resolved}
+                lints={lints}
+                draft={draftActive ? draft : null}
+                resolves={resolves}
+                modular={modular}
+                previewing={draftActive && preview.isFetching}
+                inspectAgent={inspectAgent}
+                onInspectAgentChange={setInspectAgent}
+              />
+            </div>
           </div>
         )}
       </div>
-    </div>
-  );
-}
-
-/** Shared renderer for the validate banner's error and warning lists — same
- * `{role, line, message}` shape either way, so the two can't drift apart. */
-function DiagnosticList({ items }: { items: PolicyValidationError[] }) {
-  return (
-    <ul className="space-y-0.5 font-mono">
-      {items.map((d, i) => {
-        // A bare name in this slot reads as a role, so a tool locus is
-        // prefixed rather than left to look like one.
-        const locus = d.role ?? (d.tool ? `tool ${d.tool}` : null);
-        return (
-          <li key={i}>
-            {locus && <span className="text-foreground">{locus}</span>}
-            {locus && d.line ? ":" : ""}
-            {d.line ? d.line : ""}
-            {locus || d.line ? " — " : ""}
-            {d.message}
-          </li>
-        );
-      })}
-    </ul>
-  );
-}
-
-/**
- * Lightweight tab strip used in /policies. Two tabs today (YAML, Graph);
- * the M2 Rego adapter will land a third here without restructuring.
- */
-function Tabs({ value, onChange }: { value: Tab; onChange: (t: Tab) => void }) {
-  return (
-    <div className="flex items-center gap-1 rounded-md border border-border bg-background p-0.5">
-      {(["yaml", "graph"] as const).map((t) => {
-        const Icon = TAB_ICON[t];
-        const active = value === t;
-        return (
-          <button
-            key={t}
-            onClick={() => onChange(t)}
-            className={cn(
-              "flex items-center gap-1.5 rounded px-3 py-1 text-xs font-medium transition-colors",
-              active
-                ? "bg-primary text-primary-foreground"
-                : "text-muted-foreground hover:text-foreground",
-            )}
-          >
-            <Icon className="size-3" />
-            {TAB_LABEL[t]}
-          </button>
-        );
-      })}
-    </div>
-  );
-}
-
-/**
- * Agent picker — plain native <select>, styled to match the rest of the
- * dashboard's controls. A dropdown is enough today (≤5 agents per project);
- * if a project grows past ~20 agents this becomes a combobox/typeahead.
- */
-function AgentPicker({
-  agents,
-  value,
-  onChange,
-  loading,
-}: {
-  agents: { name: string }[];
-  value: string | null;
-  onChange: (name: string) => void;
-  loading: boolean;
-}) {
-  if (loading) {
-    return <span className="text-xs text-muted-foreground">loading…</span>;
-  }
-  return (
-    <div className="flex items-center gap-2 text-sm">
-      <span className="text-muted-foreground text-xs">Agent:</span>
-      <div className="relative">
-        <Bot className="absolute left-2 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground pointer-events-none" />
-        <select
-          value={value ?? ""}
-          onChange={(e) => onChange(e.target.value)}
-          className="h-8 rounded-md border border-border bg-background pl-7 pr-3 text-sm font-mono focus:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-        >
-          {agents.map((a) => (
-            <option key={a.name} value={a.name}>
-              {a.name}
-            </option>
-          ))}
-        </select>
-      </div>
-    </div>
-  );
-}
-
-/**
- * YAML editor pane — wraps the canonical ``policy.yaml`` of the selected
- * agent. Same primitive the /agents page used to host inline; relocated
- * here as the write-path for policies. The /agents page now only shows
- * manifest data, no policy editing.
- */
-function YamlEditor({
-  agentName,
-  projectId,
-}: {
-  agentName: string;
-  projectId: string;
-}) {
-  const qc = useQueryClient();
-  const agent = useQuery({
-    queryKey: ["agent", projectId, agentName],
-    queryFn: () => api.getAgent(agentName, projectId),
-  });
-
-  const [draft, setDraft] = useState<string>("");
-  const [dirty, setDirty] = useState(false);
-  // The whole response, not just the errors: warnings render alongside them
-  // but never block a save.
-  const [result, setResult] = useState<ValidatePolicyResponse | null>(null);
-  const errors = result?.errors ?? null;
-  const warnings = result?.warnings ?? [];
-
-  // Re-sync the draft when we switch agents or the server copy refreshes.
-  useEffect(() => {
-    if (!agent.data) return;
-    setDraft(agent.data.policy_yaml);
-    setDirty(false);
-    setResult(null);
-  }, [agent.data]);
-
-  const saveMutation = useMutation({
-    mutationFn: () =>
-      api.updateAgent(agentName, { policy_yaml: draft }, projectId),
-    onSuccess: () => {
-      setDirty(false);
-      qc.invalidateQueries({ queryKey: ["agent", projectId, agentName] });
-      qc.invalidateQueries({ queryKey: ["agents", projectId] });
-    },
-  });
-
-  const validateMutation = useMutation({
-    mutationFn: () => api.validatePolicy(agentName, draft, projectId),
-    onSuccess: setResult,
-  });
-
-  const originalSource = agent.data?.policy_yaml ?? "";
-
-  // Stable identity so PolicyEditor doesn't trigger a CodeMirror
-  // reconfigure on every keystroke — @uiw/react-codemirror puts
-  // `onChange` in its reconfigure effect's dep array.
-  const handleEditorChange = useCallback(
-    (next: string) => {
-      setDraft(next);
-      setDirty(next !== originalSource);
-      setResult((prev) => (prev ? null : prev));
-    },
-    [originalSource],
-  );
-
-  return (
-    <div className="h-full flex flex-col">
-      <header className="flex items-center justify-between gap-2 px-6 py-2 border-b border-border">
-        <div className="flex items-center gap-2 text-sm">
-          <FileCode className="size-3.5 text-muted-foreground" />
-          <span className="font-mono">{agentName}/policy.yaml</span>
-          {dirty && <Badge variant="approval">unsaved</Badge>}
-        </div>
-        <div className="flex items-center gap-1.5">
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() => validateMutation.mutate()}
-            disabled={validateMutation.isPending}
-            className="gap-1.5 h-8"
-          >
-            <ShieldCheck className="size-3.5" />
-            {validateMutation.isPending ? "Checking…" : "Validate"}
-          </Button>
-          <Button
-            size="sm"
-            onClick={() => saveMutation.mutate()}
-            disabled={!dirty || saveMutation.isPending}
-            className="gap-2 h-8"
-          >
-            <Save className="size-3.5" />
-            {saveMutation.isPending ? "Saving…" : "Save"}
-          </Button>
-        </div>
-      </header>
-      {errors && (
-        <div
-          className={cn(
-            "px-6 py-2 text-xs border-b",
-            errors.length > 0
-              ? "bg-deny/5 border-deny/30 text-deny"
-              : warnings.length > 0
-                ? "bg-approval/5 border-approval/30 text-approval"
-                : "bg-allow/5 border-allow/30 text-allow",
-          )}
-        >
-          {errors.length > 0 ? (
-            <DiagnosticList items={errors} />
-          ) : warnings.length > 0 ? (
-            <>
-              {/* "parses", not "parses cleanly" — the lints are about
-                  exposure, not syntax. */}
-              <div className="mb-1 flex items-center gap-1.5">
-                <AlertTriangle className="size-3.5 shrink-0" />
-                <span>
-                  Policy parses. {warnings.length} lint{" "}
-                  {warnings.length === 1 ? "warning" : "warnings"} — saving is
-                  not blocked.
-                </span>
-              </div>
-              <DiagnosticList items={warnings} />
-            </>
-          ) : (
-            <span>Policy parses cleanly.</span>
-          )}
-        </div>
-      )}
-      <PolicyEditor
-        value={draft}
-        onChange={handleEditorChange}
-        diagnostics={errors}
-        className="flex-1 overflow-hidden"
-      />
-    </div>
-  );
-}
-
-/**
- * Graph tab — react-flow visualization of the agent's inline-roles policy.
- *
- * Two columns: roles on the left, tools on the right. Each role → tool
- * edge is colored by mode (green allow / amber approval_required / red
- * deny) and labeled with the constraint count when present. Inheritance
- * edges between roles are dashed and labeled "inherits". Mixin roles get
- * the muted RoleNode styling so they read as helpers, not personas.
- *
- * The view is read-only. Edit happens in the YAML tab; the graph updates
- * on the next tab-flip (no live re-layout during typing — keeps the
- * mental model "one source of truth, two views").
- */
-function PolicyGraphTab({
-  agentName,
-  projectId,
-}: {
-  agentName: string;
-  projectId: string;
-}) {
-  const agent = useQuery({
-    queryKey: ["agent", projectId, agentName],
-    queryFn: () => api.getAgent(agentName, projectId),
-  });
-
-  const graph = useMemo(() => {
-    if (!agent.data) return null;
-    return buildPolicyGraph(agent.data.policy_yaml);
-  }, [agent.data]);
-
-  if (!graph) {
-    return (
-      <div className="h-full grid place-items-center text-sm text-muted-foreground">
-        Loading policy…
-      </div>
-    );
-  }
-
-  if (!graph.ok) {
-    return (
-      <div className="h-full grid place-items-center gap-2 text-center px-8">
-        <AlertTriangle className="size-6 text-approval mx-auto" />
-        <p className="text-sm text-muted-foreground max-w-md">
-          Fix the YAML to render the graph. The document must parse cleanly and
-          declare a top-level <span className="font-mono">roles:</span> map.
-        </p>
-      </div>
-    );
-  }
-
-  return (
-    <div className="h-full">
-      <ReactFlow
-        nodes={graph.nodes}
-        edges={graph.edges}
-        nodeTypes={nodeTypes}
-        nodesDraggable={true}
-        nodesConnectable={false}
-        edgesFocusable={false}
-        fitView
-        fitViewOptions={{ padding: 0.2 }}
-        proOptions={{ hideAttribution: true }}
-      >
-        <Background
-          variant={BackgroundVariant.Dots}
-          gap={20}
-          size={1}
-          color="hsl(var(--border))"
-        />
-        <Controls
-          position="bottom-right"
-          showInteractive={false}
-          className="!bg-card !border-border [&>button]:!bg-card [&>button]:!border-border"
-        />
-      </ReactFlow>
     </div>
   );
 }
