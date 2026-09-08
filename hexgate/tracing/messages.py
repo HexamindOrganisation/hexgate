@@ -13,16 +13,20 @@ default — a log a customer has to discover and switch on is a log that is not
 there when an incident needs it — and ``HEXGATE_LOG_MESSAGES=0`` turns it off
 without touching the other streams.
 
-Which messages count as "new" is the adapter's job; this module only lays an
-already-derived event out on the wire — redacted, capped and serialised.
+Which messages are "new" is decided here too, by :class:`MessageCursor`: every
+adapter hook is handed the *whole* input list and has to work out what changed
+since its last call. One implementation shared by the four adapters rather than
+four subtly different ones.
 """
 
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 import json
 import logging
 import os
+import threading
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -283,3 +287,206 @@ async def shutdown() -> None:
     times; equivalent to :func:`hexgate.audit.shutdown` — either name flushes
     the whole shared registry."""
     await _shutdown_all()
+
+
+# --- The delta cursor ---------------------------------------------------------
+
+# Fingerprint of the empty prefix — the state a turn_key starts in, so a first
+# call takes the ordinary slice path with count=0 rather than a special case.
+_EMPTY_FINGERPRINT = "0:"
+
+# A fingerprint no list can produce — every real one carries a count and a
+# digest. Stored when fingerprinting failed, so the next call resyncs instead
+# of slicing against a mark we never established.
+_UNMATCHABLE_FINGERPRINT = "?"
+
+
+def _canonical(message: Any) -> bytes:
+    """One message as stable bytes.
+
+    ``sort_keys`` so a dict rebuilt in another key order is still recognised as
+    the same message. ``default=str`` covers a framework object an adapter did
+    not flatten — which makes the fingerprint only as stable as that object's
+    ``__str__``: a type falling back to ``object.__repr__`` stringifies to its
+    memory address and never matches itself, so every call resyncs. Adapters
+    hand over dicts (or pydantic models, whose repr is by value) for that
+    reason.
+
+    ``json.dumps`` raises on a few shapes ``default=`` does not reach — a dict
+    key that is not a scalar, mixed key types under ``sort_keys``, a reference
+    cycle — so callers must treat this as fallible. :meth:`MessageCursor.advance`
+    does.
+    """
+    return json.dumps(message, sort_keys=True, default=str).encode("utf-8")
+
+
+def _digest(first: bytes, last: bytes) -> str:
+    digest = hashlib.blake2b(digest_size=16)
+    digest.update(first)
+    digest.update(b"\x00")
+    digest.update(last)
+    return digest.hexdigest()
+
+
+def _fingerprint(count: int, first: bytes, last: bytes) -> str:
+    """Identify a prefix by its length and its first and last message.
+
+    Not a hash of the whole list: this runs on every LLM call, and the input
+    list is the entire conversation so far — hashing all of it would make each
+    call cost O(conversation). First+last catches what actually happens to
+    these lists. A trim drops the front, so the first message changes; a
+    summary replaces the front with one summary message, same; an append
+    changes the length. What it cannot see is a rewrite strictly in the middle
+    that preserves length, first and last — no framework does that today, and
+    the cost of being wrong is one stale message in the transcript, not a
+    corrupt slice.
+
+    The length leads the string, so a list that shrank below the mark fails the
+    comparison on the count alone and there is no separate length check to
+    forget.
+    """
+    return _EMPTY_FINGERPRINT if count == 0 else f"{count}:{_digest(first, last)}"
+
+
+@dataclass(frozen=True, slots=True)
+class _TurnState:
+    """What the cursor remembers about one message list: how far it has
+    emitted, which messages those were, and the seq the next event gets."""
+
+    count: int
+    fingerprint: str
+    next_seq: int
+
+
+_FRESH_TURN = _TurnState(count=0, fingerprint=_EMPTY_FINGERPRINT, next_seq=0)
+
+
+@dataclass(frozen=True, slots=True)
+class MessageDelta:
+    """What one LLM call adds to a transcript: the messages to emit, the
+    ``message_seq`` to emit them under, and whether they restate the whole list
+    instead of extending it.
+
+    ``seq == 0`` is exactly "first event of this ``turn_key``", which is the
+    adapter's cue to attach ``system_instructions`` — a resync keeps counting,
+    so it never looks like a fresh turn.
+
+    The caller must emit an event for every delta it asks for, empty
+    ``messages`` included. The seq is spent by the call that produced it, so
+    skipping an emit leaves a hole that a reader is specified to read as a lost
+    row. An empty delta is not an anomaly anyway: the input list is unchanged
+    but the completion is still new."""
+
+    messages: list[Any]
+    seq: int
+    resynced: bool
+
+
+class MessageCursor:
+    """Per-``turn_key`` high-water marks, turning each hook's whole input list
+    into just what is new.
+
+    One cursor is shared by every run an adapter serves, so state is keyed by
+    ``turn_key`` — the framework's own identity for *one message list*, not one
+    session. Handoffs and sub-agents share a ``session_id`` while each keeps
+    its own list; keyed by session, a sub-agent's first call would look like a
+    twenty-message jump and resync forever.
+
+    Pure bookkeeping over plain dicts: it never inspects a role, never filters,
+    and never decides to emit. Tool results ride through with everything else —
+    decision events record that a tool was called but never what it returned,
+    so the transcript is the only place that value is stored.
+
+    State is kept until :meth:`reset` drops it, which every adapter owes this
+    class on run end — a few hundred bytes per live message list, and nothing
+    of the conversation itself. That contract is the whole memory bound on
+    purpose: an LRU here would evict a list whose run is still going, and the
+    cursor cannot tell that key apart from one it has never seen, so the
+    comeback would go out as a *fresh turn* — the full history again, at seq 0,
+    not flagged ``resynced``, and with the turn's seq counter rewound past the
+    gap detection the reader relies on. An adapter that forgets ``reset`` leaks
+    slowly and visibly; silently corrupting a transcript is the worse trade.
+    """
+
+    def __init__(self) -> None:
+        self._turns: dict[str, _TurnState] = {}
+        # Adapter hooks are not all async: LangChain runs sync handlers on
+        # whatever thread the chain is on, and one cursor serves concurrent
+        # runs. The critical section is two message hashes, a list slice and
+        # two dict operations.
+        self._lock = threading.Lock()
+
+    def advance(self, turn_key: str, messages: list[Any]) -> MessageDelta:
+        """Record ``messages`` as the current state of ``turn_key`` and return
+        what is new since the last call.
+
+        Extension is the normal case: the prefix we last emitted is still
+        there, so everything past the mark is new. Otherwise the framework
+        rewrote the list to fit a context window — trimmed old turns, or
+        replaced them with a summary — and slicing at a mark that no longer
+        means anything would emit the wrong tail, or nothing at all. Then the
+        whole list goes out under ``resynced``, and the reader is told the
+        history was restated rather than continued.
+
+        Never raises. It runs from a framework hook that re-raises into the
+        agent run, and fingerprinting is the one step here that touches raw,
+        un-flattened framework data — the same rule ``emit_llm_messages`` and
+        ``AuditSender.emit`` already keep, so no adapter has to remember it.
+        A failure degrades to a resync: restating the list is what "I lost my
+        place" already means on the wire, and it costs a bigger event, not a
+        wrong one.
+        """
+        with self._lock:
+            state = self._turns.get(turn_key, _FRESH_TURN)
+            try:
+                new, resynced, mark = self._diff(messages, state)
+            except Exception:
+                _log.exception("fingerprinting messages failed; resyncing %s", turn_key)
+                new, resynced = list(messages), True
+                mark = _TurnState(0, _UNMATCHABLE_FINGERPRINT, 0)
+            self._turns[turn_key] = _TurnState(
+                count=mark.count,
+                fingerprint=mark.fingerprint,
+                next_seq=state.next_seq + 1,
+            )
+            return MessageDelta(messages=new, seq=state.next_seq, resynced=resynced)
+
+    @staticmethod
+    def _diff(
+        messages: list[Any], state: _TurnState
+    ) -> tuple[list[Any], bool, _TurnState]:
+        """Split ``messages`` against ``state`` and fingerprint it for next
+        time. ``messages[0]`` is canonicalised once and used for both
+        fingerprints: in steady state it is the same message every call, and
+        one of these lists can carry an inlined image."""
+        if not messages:
+            return [], state.count > 0, _FRESH_TURN
+        first = _canonical(messages[0])
+        current = _fingerprint(len(messages), first, _canonical(messages[-1]))
+        mark = _TurnState(count=len(messages), fingerprint=current, next_seq=0)
+        if state.count == 0:
+            prefix = _EMPTY_FINGERPRINT
+        elif state.count > len(messages):
+            # The list shrank below the mark, so it cannot carry the prefix we
+            # emitted. The count inside the fingerprint would say so anyway,
+            # but indexing for it would raise first.
+            prefix = _UNMATCHABLE_FINGERPRINT
+        else:
+            prefix = _fingerprint(
+                state.count, first, _canonical(messages[state.count - 1])
+            )
+        if prefix == state.fingerprint:
+            return messages[state.count :], False, mark
+        return list(messages), True, mark
+
+    def reset(self, turn_key: str) -> None:
+        """Forget one message list, on run end. Unknown keys are fine: a run
+        that never emitted still ends, and an adapter should not have to
+        remember whether it did."""
+        with self._lock:
+            self._turns.pop(turn_key, None)
+
+    def clear(self) -> None:
+        """Forget every message list. For process teardown and tests."""
+        with self._lock:
+            self._turns.clear()
