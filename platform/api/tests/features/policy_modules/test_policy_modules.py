@@ -1620,3 +1620,28 @@ async def test_recompile_does_not_touch_the_agents_authored_trail(
 
     assert after.updated_at == authored_at
     assert after.updated_by_user_id == authored_by
+
+
+async def test_seeded_compose_demo_resolves(session_factory) -> None:
+    # The first-boot seed writes the compose showcase into the demo project; it
+    # must be a real, resolvable multi-module policy (the dashboard opens on it).
+    from hexgate_api.constants import DEMO_PROJECT_ID
+    from hexgate_api.features.policy_modules import service as svc
+
+    async with session_factory() as s:
+        names = {f.name for f in await svc.list_files(s, DEMO_PROJECT_ID)}
+        assert {"policy.yaml", "caps/payments.yaml", "caps/billing_reach.yaml"} <= names
+
+        # support_bot: billing refunds up to the $1000 boundary ceiling, and may
+        # hand off to billing_bot; support can't refund.
+        ps = (await svc.compose_resolve(s, DEMO_PROJECT_ID, agent="support_bot")).policy_set
+        allow = ps.evaluate(
+            role="billing", tool="refund_order", args={"amount": 800, "currency": "USD"}
+        ).outcome.value
+        over = ps.evaluate(
+            role="billing", tool="refund_order", args={"amount": 2000, "currency": "USD"}
+        ).outcome.value
+        support_refund = ps.evaluate(
+            role="support", tool="refund_order", args={"amount": 10, "currency": "USD"}
+        ).outcome.value
+        assert (allow, over, support_refund) == ("allow", "deny", "deny")
