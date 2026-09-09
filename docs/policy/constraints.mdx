@@ -230,7 +230,7 @@ Three places, widening in reach:
 |---|---|
 | `tools.<name>.constraints` | that one tool |
 | `default_policy.constraints` | tools **not** listed under `tools:` |
-| `constraints:` (top level) | **every** tool the role can reach |
+| `constraints:` (top level) | **every** tool the role can reach, `agent.run` included |
 
 `default_policy.constraints` is the common trap. It is the *catch-all* policy,
 not a floor: once a tool is listed under `tools:`, the default no longer applies
@@ -254,6 +254,42 @@ tools:
 
 Policy-level constraints can only **narrow**. A tool with `mode: deny` is denied
 before constraints are consulted, so nothing here can grant access.
+
+### `args.*` at policy level reaches admission
+
+"Every tool the role can reach" includes `agent.run`, the synthetic key an
+`admission:` block lowers to. The admission check passes one argument —
+`args.agent`, the agent's name — so an `args.*` constraint written with tools in
+mind reads a missing field there, and **a missing ref fails closed**: the agent
+is refused before it starts.
+
+<Warning>
+**This policy denies its own agent at ingress.**
+
+```yaml
+constraints:
+  - args.amount <= 500     # no `amount` on agent.run → admission denied
+
+admission:
+  mode: allow
+
+tools:
+  refund_order: { mode: allow }
+```
+
+Not an admission quirk — the same constraint denies *any* tool that doesn't take
+an `amount`. Policy level is the place for predicates every reachable key can
+answer: `run.*`, `ctx.*`, `role`. Keep `args.*` on the tool that defines the
+argument.
+</Warning>
+
+When you do want one argument fenced role-wide, exempt the admission key by name
+— `tool` is a fact like any other, and the grammar has `or`:
+
+```yaml
+constraints:
+  - tool == "agent.run" or args.amount <= 500
+```
 
 ### Inheritance unions them
 
