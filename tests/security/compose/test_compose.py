@@ -223,17 +223,278 @@ def test_reach_denied_when_boundary_omits_it_even_if_granted():
     assert tools["agent.tool:evil_bot"]["mode"] == "deny"
 
 
-# --- import deferred -----------------------------------------------------
+# --- imports -------------------------------------------------------------
 
 
-def test_import_not_supported_yet():
-    with pytest.raises(LinkError, match="import"):
-        resolve_text("import: [ other.yaml ]\ntools: { a: { mode: allow } }")
+def _loader(files: dict[str, str]):
+    """An in-memory loader: project-relative path -> file text (missing → OSError)."""
+
+    def load(path: str) -> str:
+        if path not in files:
+            raise FileNotFoundError(path)
+        return files[path]
+
+    return load
 
 
-def test_export_not_supported_yet():
-    with pytest.raises(LinkError, match="export"):
-        resolve_text("export: { frag: { tools: { a: {} } } }")
+def test_import_without_loader_errors():
+    with pytest.raises(LinkError, match="base path"):
+        resolve_text("import: [ other.yaml ]")
+
+
+def test_export_block_is_accepted_and_inert_for_own_resolution():
+    # A file may declare exports (for other importers); resolving it directly is
+    # fine and its exports don't affect its own effective policy.
+    res = resolve_text(
+        "tools: { a: { mode: allow } }\nexport: { frag: { tools: { b: {} } } }"
+    )
+    assert set(_eff(res)["default"]["tools"]) == {"a"}
+
+
+def test_import_whole_file_at_top_applies_to_all():
+    loader = _loader({"base.yaml": "tools: { read_ticket: { mode: allow } }\n"})
+    res = resolve_text("import: [ base.yaml ]", loader=loader)
+    assert "read_ticket" in _eff(res)["default"]["tools"]
+
+
+def test_import_named_export_is_scoped_by_position():
+    # A fragment imported in a role body applies only to that cell (position=scope).
+    loader = _loader(
+        {"caps.yaml": "export:\n  refunds:\n    tools: { refund: { mode: allow } }\n"}
+    )
+    doc = """
+    agents:
+      bot:
+        roles:
+          support:
+            import: [ caps.yaml#refunds ]
+          billing: {}
+    """
+    eff = _eff(resolve_text(doc, agent="bot", loader=loader))
+    assert "refund" in eff["support"]["tools"]
+    assert "refund" not in eff["billing"]["tools"]  # not imported here
+    assert "refund" not in eff["default"]["tools"]
+
+
+def test_import_is_transitive():
+    loader = _loader(
+        {
+            "a.yaml": "import: [ b.yaml ]\ntools: { from_a: { mode: allow } }\n",
+            "b.yaml": "tools: { from_b: { mode: allow } }\n",
+        }
+    )
+    tools = _eff(resolve_text("import: [ a.yaml ]", loader=loader))["default"]["tools"]
+    assert {"from_a", "from_b"} <= set(tools)
+
+
+def test_import_cycle_is_a_linkerror():
+    loader = _loader(
+        {"a.yaml": "import: [ b.yaml ]\n", "b.yaml": "import: [ a.yaml ]\n"}
+    )
+    with pytest.raises(LinkError, match="cycle"):
+        resolve_text("import: [ a.yaml ]", loader=loader)
+
+
+def test_import_missing_export_is_a_linkerror():
+    loader = _loader({"caps.yaml": "export: { other: { tools: {} } }\n"})
+    with pytest.raises(LinkError, match="no export named"):
+        resolve_text("import: [ caps.yaml#refunds ]", loader=loader)
+
+
+def test_import_of_structural_file_rejected():
+    # An imported file must be leaf-only; importing one that declares agents:/roles:
+    # is a later increment.
+    loader = _loader(
+        {"full.yaml": "agents: { bot: { tools: { a: { mode: allow } } } }\n"}
+    )
+    with pytest.raises(LinkError, match="leaf-only"):
+        resolve_text("import: [ full.yaml ]", loader=loader)
+
+
+def test_import_matches_inlining_golden():
+    # Importing a fragment resolves identically to inlining the same grants.
+    loader = _loader(
+        {"caps.yaml": "export:\n  c:\n    tools: { refund: { mode: allow } }\n"}
+    )
+    imported = resolve_text("import: [ caps.yaml#c ]", loader=loader)
+    inlined = resolve_text("tools: { refund: { mode: allow } }")
+    assert json.dumps(_eff(imported), sort_keys=True) == json.dumps(
+        _eff(inlined), sort_keys=True
+    )
+
+
+def test_resolve_file_imports_relative_to_entry_dir(tmp_path: Path):
+    (tmp_path / "caps.yaml").write_text(
+        "export:\n  refunds:\n    tools: { refund: { mode: allow } }\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "policy.yaml").write_text(
+        "import: [ caps.yaml#refunds ]\n", encoding="utf-8"
+    )
+    res = resolve_file(tmp_path / "policy.yaml")
+    assert "refund" in _eff(res)["default"]["tools"]
+
+
+def test_transitive_import_resolves_relative_to_importing_file(tmp_path: Path):
+    # A nested file's own import resolves against ITS dir, not the entry's:
+    # shared/caps.yaml imports "helper.yaml" meaning shared/helper.yaml.
+    (tmp_path / "shared").mkdir()
+    (tmp_path / "shared" / "helper.yaml").write_text(
+        "tools: { helped: { mode: allow } }\n", encoding="utf-8"
+    )
+    (tmp_path / "shared" / "caps.yaml").write_text(
+        "import: [ helper.yaml ]\ntools: { capped: { mode: allow } }\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "policy.yaml").write_text(
+        "import: [ shared/caps.yaml ]\n", encoding="utf-8"
+    )
+    tools = _eff(resolve_file(tmp_path / "policy.yaml"))["default"]["tools"]
+    assert {"helped", "capped"} <= set(tools)
+
+
+def test_absolute_import_path_rejected():
+    with pytest.raises(LinkError, match="absolute import"):
+        resolve_text("import: [ /etc/passwd ]", loader=_loader({}))
+
+
+def test_escaping_import_path_rejected():
+    with pytest.raises(LinkError, match="escapes the project"):
+        resolve_text("import: [ ../secret.yaml ]", loader=_loader({}))
+
+
+def test_missing_import_file_is_a_linkerror():
+    with pytest.raises(LinkError, match="cannot import"):
+        resolve_text("import: [ nope.yaml ]", loader=_loader({}))
+
+
+def test_per_agent_import_isolation():
+    # 'other' has a broken import, but resolving the valid 'bot' must succeed —
+    # only the target agent's scopes are walked.
+    loader = _loader({"caps.yaml": "tools: { a: { mode: allow } }\n"})
+    doc = """
+    agents:
+      bot:
+        roles:
+          support: { import: [ caps.yaml ] }
+      other:
+        roles:
+          x: { import: [ missing.yaml ] }
+    """
+    eff = _eff(resolve_text(doc, agent="bot", loader=loader))
+    assert "a" in eff["support"]["tools"]
+
+
+def test_plural_import_key_rejected():
+    # `imports:` (the field name) is not the `import:` alias — reject it.
+    with pytest.raises(LinkError):
+        parse_entry("imports: [ caps.yaml ]")
+
+
+def test_via_field_name_rejected():
+    # `via:` is the field name; the alias is `as:` — reject the field-name spelling.
+    with pytest.raises(LinkError):
+        parse_entry("reach: { bot: { via: [tool] } }")
+
+
+def test_imported_file_parsed_once_across_scopes():
+    calls = {"n": 0}
+
+    def counting_loader(path: str) -> str:
+        calls["n"] += 1
+        return "tools: { a: { mode: allow } }\n"
+
+    doc = """
+    import: [ caps.yaml ]
+    agents:
+      bot:
+        import: [ caps.yaml ]
+        roles:
+          support: { import: [ caps.yaml ] }
+    """
+    resolve_text(doc, agent="bot", loader=counting_loader)
+    assert calls["n"] == 1  # cached — one read despite three import sites
+
+
+def test_imported_grant_provenance_names_the_source_file():
+    # An imported grant's ModuleContent source names the file it came from, not
+    # the entry — so signing/audit/debug attribute it correctly.
+    loader = _loader(
+        {"caps.yaml": "export:\n  c:\n    tools: { refund: { mode: allow } }\n"}
+    )
+    res = resolve_text("import: [ caps.yaml#c ]", loader=loader)
+    provs = res.by_role["default"].trace.contributors["refund"]
+    assert any("caps.yaml" in p.source for p in provs)
+
+
+def test_imported_fragment_with_boundary_rejected():
+    # Imports grant only; an imported ceiling would intersect and can silently
+    # deny every grant, so a boundary in an import is rejected.
+    loader = _loader({"ceil.yaml": "boundary: { tools: { x: {} } }\n"})
+    with pytest.raises(LinkError, match="may only grant"):
+        resolve_text("import: [ ceil.yaml ]", loader=loader)
+
+
+def test_duplicate_import_refs_are_deduped():
+    loader = _loader({"caps.yaml": "tools: { a: { mode: allow } }\n"})
+    res = resolve_text("import: [ caps.yaml, caps.yaml ]", loader=loader)
+    provs = res.by_role["default"].trace.contributors["a"]
+    assert len(provs) == 1  # one contribution despite the repeated ref
+
+
+def test_symlink_escaping_project_is_rejected(tmp_path: Path):
+    import os
+
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    (tmp_path / "secret.yaml").write_text(
+        "tools: { leaked: { mode: allow } }\n", encoding="utf-8"
+    )
+    try:
+        os.symlink(tmp_path / "secret.yaml", proj / "link.yaml")
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks not supported here")
+    (proj / "policy.yaml").write_text("import: [ link.yaml ]\n", encoding="utf-8")
+    with pytest.raises(LinkError, match="escapes the project"):
+        resolve_file(proj / "policy.yaml")
+
+
+def test_import_of_the_entry_file_is_a_cycle(tmp_path: Path):
+    (tmp_path / "a.yaml").write_text("import: [ policy.yaml ]\n", encoding="utf-8")
+    (tmp_path / "policy.yaml").write_text("import: [ a.yaml ]\n", encoding="utf-8")
+    with pytest.raises(LinkError, match="cycle"):
+        resolve_file(tmp_path / "policy.yaml")
+
+
+def test_diamond_import_contributes_shared_fragment_once():
+    # x → a, b; a → c, b → c. c is reached via two paths but contributes once.
+    loader = _loader(
+        {
+            "x.yaml": "import: [ a.yaml, b.yaml ]\n",
+            "a.yaml": "import: [ c.yaml ]\n",
+            "b.yaml": "import: [ c.yaml ]\n",
+            "c.yaml": "tools: { shared: { mode: allow } }\n",
+        }
+    )
+    res = resolve_text("import: [ x.yaml ]", loader=loader)
+    provs = res.by_role["default"].trace.contributors["shared"]
+    assert len(provs) == 1
+
+
+def test_same_target_via_different_ref_strings_deduped():
+    # `caps.yaml` and `./caps.yaml` resolve to the same file → one contribution.
+    loader = _loader({"caps.yaml": "tools: { a: { mode: allow } }\n"})
+    res = resolve_text("import: [ caps.yaml, ./caps.yaml ]", loader=loader)
+    assert len(res.by_role["default"].trace.contributors["a"]) == 1
+
+
+def test_local_grant_provenance_names_the_entry_file(tmp_path: Path):
+    # A file's own (non-imported) grants carry the entry file as source, not a
+    # hardcoded "policy.yaml".
+    p = tmp_path / "main.yaml"
+    p.write_text("tools: { a: { mode: allow } }\n", encoding="utf-8")
+    provs = resolve_file(p).by_role["default"].trace.contributors["a"]
+    assert all(str(p) in pr.source for pr in provs)
 
 
 # --- validation errors surface as source-named LinkError --------------------
