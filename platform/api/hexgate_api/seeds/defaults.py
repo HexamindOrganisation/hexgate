@@ -18,8 +18,13 @@ from hexgate_api.constants import (
     DEFAULT_PROJECT_NAME,
     DEFAULT_USER_EMAIL,
     DEFAULT_USER_ID,
+    DEMO_PROJECT_ID,
+    DEMO_PROJECT_NAME,
 )
 from hexgate_api.features.agents.service import ensure_seeded_agents
+from hexgate_api.features.policy_modules.seed_data import (
+    ensure_seeded_compose_policy,
+)
 
 
 def _seed_disabled() -> bool:
@@ -137,6 +142,19 @@ async def ensure_default_seed(session: AsyncSession) -> Project | None:
     # Always ensure seeded agents exist — idempotent, so existing projects
     # pick up the `default` guarantee on any subsequent boot.
     await ensure_seeded_agents(session, project.id)
+
+    # A second project holding the compose policy showcase (policy.yaml + caps),
+    # so the dashboard's Policies editor opens on a real multi-module policy —
+    # kept separate so the classic default project stays classic. Idempotent.
+    demo = await session.get(Project, DEMO_PROJECT_ID)
+    if demo is None:
+        demo = Project(
+            id=DEMO_PROJECT_ID, org_id=DEFAULT_ORG_ID, name=DEMO_PROJECT_NAME
+        )
+        session.add(demo)
+        await session.commit()
+        await session.refresh(demo)
+    await ensure_seeded_compose_policy(session, demo.id)
     return project
 
 

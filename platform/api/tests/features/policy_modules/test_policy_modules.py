@@ -1346,3 +1346,28 @@ def test_policy_graph_keeps_generic_agent_with_top_level_grant(client):
     body = client.get(f"/v1/projects/{pid}/policy/graph").json()
     assert "agent:*" in {n["id"] for n in body["nodes"]}
     assert ("agent:*", "tool:a") in {(e["source"], e["target"]) for e in body["edges"]}
+
+
+async def test_seeded_compose_demo_resolves(session_factory) -> None:
+    # The first-boot seed writes the compose showcase into the demo project; it
+    # must be a real, resolvable multi-module policy (the dashboard opens on it).
+    from hexgate_api.constants import DEMO_PROJECT_ID
+    from hexgate_api.features.policy_modules import service as svc
+
+    async with session_factory() as s:
+        names = {f.name for f in await svc.list_files(s, DEMO_PROJECT_ID)}
+        assert {"policy.yaml", "caps/payments.yaml", "caps/billing_reach.yaml"} <= names
+
+        # support_bot: billing refunds up to the $1000 boundary ceiling, and may
+        # hand off to billing_bot; support can't refund.
+        ps = (await svc.compose_resolve(s, DEMO_PROJECT_ID, agent="support_bot")).policy_set
+        allow = ps.evaluate(
+            role="billing", tool="refund_order", args={"amount": 800, "currency": "USD"}
+        ).outcome.value
+        over = ps.evaluate(
+            role="billing", tool="refund_order", args={"amount": 2000, "currency": "USD"}
+        ).outcome.value
+        support_refund = ps.evaluate(
+            role="support", tool="refund_order", args={"amount": 10, "currency": "USD"}
+        ).outcome.value
+        assert (allow, over, support_refund) == ("allow", "deny", "deny")

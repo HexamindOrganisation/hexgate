@@ -28,6 +28,12 @@ DEFAULT_PROJECT_NAME = "support-bot"
 
 DEFAULT_MEMBERSHIP_ID = "00000000-0000-0000-0000-000000000004"
 
+# A second seeded project holding the compose policy showcase (policy.yaml +
+# caps), so the dashboard's Policies editor opens on a real multi-module policy
+# without disturbing the classic default project.
+DEMO_PROJECT_ID = "00000000-0000-0000-0000-000000000010"
+DEMO_PROJECT_NAME = "policy-showcase"
+
 DEFAULT_AGENT_NAME = "default"
 PROTECTED_AGENT_NAMES = {DEFAULT_AGENT_NAME}
 
