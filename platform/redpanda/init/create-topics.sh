@@ -63,13 +63,32 @@ retry rpk cluster config set auto_create_topics_enabled false --no-confirm \
 # recreated by hand — this script can't fix that drift. Disabling
 # auto-creation above removes the main way that drift would happen
 # unnoticed.
+#
+# max.message.bytes is reconciled the same way and for the same reason. 8 MiB
+# is sized for LLM message events, whose input-message attribute is capped at
+# 256 KiB SDK-side: the Collector batches at most 24 spans per record
+# (send_batch_max_size in collector/config.yaml), so a worst-case record is
+# 24 x 272 KiB = 6.375 MiB. The Collector's own producer limit and the
+# enricher's fetch/produce limits are raised to match — see
+# docs/internals/audit-pipeline.md §4.1/§4.2. Note this is a *broker-side*
+# limit on the compressed batch; every client in the path has its own.
+#
+# The DLQ gets the same value only to keep the two topics from drifting apart.
+# It does not need it: enricher/dlq.py caps an envelope's raw-record preview at
+# 64 KiB and its attributes at 32 KiB, so no envelope it can build comes near
+# even the 1 MiB broker default.
+MAX_MESSAGE_BYTES=8388608 # 8 MiB
+
 create_topic() {
   local topic="$1" retention_ms="$2"
   retry rpk topic create "$topic" --if-not-exists \
     --partitions 3 --replicas 1 \
     -c "retention.ms=$retention_ms" \
+    -c "max.message.bytes=$MAX_MESSAGE_BYTES" \
     --brokers "$BOOTSTRAP"
-  retry rpk topic alter-config "$topic" --set "retention.ms=$retention_ms" --no-confirm \
+  retry rpk topic alter-config "$topic" --no-confirm \
+    --set "retention.ms=$retention_ms" \
+    --set "max.message.bytes=$MAX_MESSAGE_BYTES" \
     --brokers "$BOOTSTRAP"
 }
 
