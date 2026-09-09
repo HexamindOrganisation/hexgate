@@ -77,11 +77,19 @@ async def _seed_gdocs_agent() -> None:
 
 
 async def _mint() -> str:
+    import os
+
     from hexgate_api.constants import DEFAULT_PROJECT_ID
     from hexgate_api.core.db import async_session_factory, init_db
     from hexgate_api.core.keystore import keystore  # same singleton the API uses
     from hexgate_api.features.tokens.service import mint_api_key
     from hexgate_api.seeds.defaults import ensure_default_seed
+
+    # Which project the serve token (and so any agent served against it) is
+    # scoped to. Defaults to the classic default project; the compose showcase
+    # demo sets HEXGATE_SERVE_PROJECT to the seeded policy-showcase project so a
+    # served agent is gated by its compose policy.
+    project_id = os.environ.get("HEXGATE_SERVE_PROJECT", DEFAULT_PROJECT_ID)
 
     await init_db()
     keystore.ensure_keypair()
@@ -89,7 +97,7 @@ async def _mint() -> str:
         await ensure_default_seed(session)
         _, full_token = await mint_api_key(
             session,
-            DEFAULT_PROJECT_ID,
+            project_id,
             name="demo-serve",
             # Same scopes the dashboard's mint UI issues by default — these are
             # what the per-user attenuation flow (`user_attenuation`) needs.

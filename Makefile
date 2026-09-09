@@ -499,9 +499,10 @@ demo-notebook: ## Run the bundled BYOK demo locally (one process). Open http://l
 	  python deploy/boot.py
 
 .PHONY: demo-support
-demo-support: ## Run the compose support-bot showcase — platform + dashboard + notebook in one process. Open http://localhost:2718
+demo-support: ## Run the compose support-bot showcase — platform + dashboard + live agent in one process. Open http://localhost:2718
 	PATH="$(CURDIR)/platform/api/.venv/bin:$$PATH" \
 	  HEXGATE_DEMO=1 HEXGATE_COOKIE_SECURE=0 \
+	  HEXGATE_SERVE_PROJECT=00000000-0000-0000-0000-000000000010 \
 	  HEXGATE_NOTEBOOK=deploy/compose_support_demo.py \
 	  python deploy/boot.py
 

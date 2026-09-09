@@ -29,6 +29,7 @@ boundary:
     send_email: { mode: allow }
     escalate: { mode: allow }
     refund_order: { mode: allow, constraint: "args.amount <= 1000" }  # hard cap
+    delegate_to_billing: { mode: allow }   # ceiling; needs a capability grant
   reach:
     billing_bot: { as: handoff }   # reach ceiling: hand-off only, never as-tool
 agents:
@@ -38,7 +39,8 @@ agents:
       support: { import: [ caps/read_only.yaml, caps/support_leaf.yaml ] }
       billing:
         import:
-          [ caps/read_only.yaml, caps/payments.yaml, caps/billing_reach.yaml ]
+          [ caps/read_only.yaml, caps/payments.yaml, caps/billing_desk.yaml,
+            caps/billing_reach.yaml ]
   billing_bot:
     roles:
       billing: { import: [ caps/payments.yaml ] }
@@ -57,6 +59,9 @@ _CAPS = {
         "  refund_order: { mode: allow, constraint: "
         '\'args.currency in ["USD", "EUR"]\' }\n'
     ),
+    # Grants the delegate-to-billing TOOL (a served sub-agent surfaces delegation
+    # as a plain tool, so it's gated as one) — only the billing role imports it.
+    "caps/billing_desk.yaml": "tools:\n  delegate_to_billing: { mode: allow }\n",
     "caps/billing_reach.yaml": "reach:\n  billing_bot: { as: handoff }\n",
 }
 

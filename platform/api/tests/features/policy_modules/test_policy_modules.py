@@ -1356,18 +1356,21 @@ async def test_seeded_compose_demo_resolves(session_factory) -> None:
 
     async with session_factory() as s:
         names = {f.name for f in await svc.list_files(s, DEMO_PROJECT_ID)}
-        assert {"policy.yaml", "caps/payments.yaml", "caps/billing_reach.yaml"} <= names
+        assert {
+            "policy.yaml",
+            "caps/payments.yaml",
+            "caps/billing_desk.yaml",
+        } <= names
 
-        # support_bot: billing refunds up to the $1000 boundary ceiling, and may
-        # hand off to billing_bot; support can't refund.
+        # support_bot: billing refunds up to the $1000 boundary ceiling and may
+        # delegate to billing; support can do neither.
         ps = (await svc.compose_resolve(s, DEMO_PROJECT_ID, agent="support_bot")).policy_set
-        allow = ps.evaluate(
-            role="billing", tool="refund_order", args={"amount": 800, "currency": "USD"}
-        ).outcome.value
-        over = ps.evaluate(
-            role="billing", tool="refund_order", args={"amount": 2000, "currency": "USD"}
-        ).outcome.value
-        support_refund = ps.evaluate(
-            role="support", tool="refund_order", args={"amount": 10, "currency": "USD"}
-        ).outcome.value
-        assert (allow, over, support_refund) == ("allow", "deny", "deny")
+
+        def mode(role, tool, **args):
+            return ps.evaluate(role=role, tool=tool, args=args).outcome.value
+
+        assert mode("billing", "refund_order", amount=800, currency="USD") == "allow"
+        assert mode("billing", "refund_order", amount=2000, currency="USD") == "deny"
+        assert mode("billing", "delegate_to_billing") == "allow"
+        assert mode("support", "refund_order", amount=10, currency="USD") == "deny"
+        assert mode("support", "delegate_to_billing") == "deny"

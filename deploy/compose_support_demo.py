@@ -1,22 +1,22 @@
-"""Hexgate compose support-bot demo (marimo) — one modular policy, tools *and* agents.
+"""Hexgate compose support-bot demo (marimo) — a live agent, gated per role, in the dashboard.
 
-A read-top-to-bottom tour of a small customer-support system whose WHOLE policy —
-tool permissions *and* agent-to-agent reach — is authored in the **compose**
-front-end (`policy.yaml` + imported capability files) and enforced. Fully local
-(no platform, no API key, no model call):
+The interactive half of the compose showcase. You define a real front-line
+**support_bot** with a **billing_bot sub-agent** (exposed as the
+`delegate_to_billing` tool), serve it to the dashboard from this notebook, and
+drive it in the Playground:
 
-  policy.yaml + caps/*.yaml  →  compose.resolve_file(agent=…)  →  a PolicySet per role
+  * as `support` / `default` — a refund is refused: `refund_order` and
+    `delegate_to_billing` are denied by policy, so the billing sub-agent never runs.
+  * as `billing` — refunds up to the boundary's $1000 ceiling are allowed, and the
+    delegation runs billing_bot.
 
-Two agents: a front-line `support_bot` and a refunds specialist `billing_bot`. A
-role's policy governs what tools it may call (support caps out before refunds;
-billing refunds up to the boundary's $1000 ceiling) *and* whether `support_bot`
-may hand the conversation off to `billing_bot`. Reach is closed-world: no role may
-reach `billing_bot` until a capability grants it — the same import pipeline as
-tools.
+support_bot's role-aware policy is the **compose** policy authored as
+`policy.yaml` + capability files and seeded into the `policy-showcase` project
+(see `platform/api/.../policy_modules/seed_data.py`). The dashboard's Policies
+editor shows and edits it; here you watch it gate a live agent.
 
-Run standalone with `uv run --with marimo marimo edit deploy/compose_support_demo.py`,
-or `make demo-support` to launch it beside the live platform + dashboard (the
-notebook then links straight to the seeded showcase).
+Run with `make demo-support` — boot.py brings up the platform + dashboard scoped
+to the showcase project; paste your OpenAI key here and click Start.
 """
 
 import marimo
@@ -27,54 +27,39 @@ app = marimo.App(width="medium")
 
 @app.cell
 def _():
-    import os
-    import shutil
-    import tempfile
+    import sys
+    import time
     from pathlib import Path
-
-    # Force offline: the gate's enforcer wires an audit sender that otherwise
-    # falls back to HEXGATE_API_KEY. This is a policy tour — keep it local.
-    os.environ["HEXGATE_LOCAL_MODE"] = "1"
 
     import marimo as mo
 
-    from hexgate import HexgateContext
-    from hexgate.security import ReachNotAllowedError, resolve_reach_gate
-    from hexgate.security.compose import resolve_file
-    from hexgate.security.enforcer import build_enforcer
+    # serve_manager lives next to this file; make it importable when marimo runs
+    # the notebook from an arbitrary CWD. NOTE: no HEXGATE_LOCAL_MODE here — the
+    # served agent talks to the live platform (the resolved-policy table below is
+    # pure resolution, which needs no platform).
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import serve_manager
 
-    return (
-        HexgateContext,
-        Path,
-        ReachNotAllowedError,
-        build_enforcer,
-        mo,
-        resolve_file,
-        resolve_reach_gate,
-        shutil,
-        tempfile,
-    )
+    from hexgate.security.compose import resolve_file
+
+    return Path, mo, resolve_file, serve_manager, time
 
 
 @app.cell
 def _(mo):
     mo.md("""
-    # 🎧 Hexgate — one *compose* policy, tools *and* agents
+    # 🎧 Hexgate — a live support agent, gated by a *compose* policy
 
-    A customer-support system with two agents: front-line `support_bot` and
-    refunds specialist `billing_bot`. Everything a role may do is composed from
-    one **`policy.yaml`** that imports small **capability files**:
+    **support_bot** is your front-line agent. It looks up orders, and — for a
+    **billing** seat — refunds and hands a refund off to a **billing_bot**
+    sub-agent via `delegate_to_billing`. Refund + delegation are **policy-gated
+    by role**: `support`/`default` are refused before the sub-agent ever runs;
+    only `billing` may refund (up to a $1000 ceiling) and delegate.
 
-    - **Tool permissions** — may this role call this tool with these args?
-    - **Agent reach** — may `support_bot` hand the conversation off to
-      `billing_bot`?
-
-    A top-level **boundary** sets the closed-world ceiling (allowed tools, the
-    $1000 refund cap, and that reach to `billing_bot` is `handoff`-only). Each
-    agent's roles `import:` the capability files they're granted. One
-    `resolve_file` per agent folds it into a `PolicySet` per role — tools and
-    reach on the same pipeline. All local: no platform, no API key, no model
-    call.
+    That policy is the compose `policy.yaml` (+ capability files) seeded into the
+    `policy-showcase` project — the same one the dashboard's **Policies** editor
+    shows. Here you serve support_bot and test it in the **Playground**. Paste
+    your OpenAI key below (used only in this kernel).
     """)
     return
 
@@ -93,19 +78,17 @@ def _(Path, mo):
             f"""
             ### [▶ Open the live dashboard →]({_dash}/v1/demo-login)
 
-            Signs you in and opens the **plum** dashboard on the seeded
-            `policy-showcase` project — the very policy below, live in the
-            **Policies** editor with the resolved view, decision tester, and
-            reach/admission graph.
+            Signs you in on the **plum** dashboard, scoped to the seeded
+            `policy-showcase` project. Start the agent below, then chat with it in
+            the **Playground** — the Policies editor shows the very policy gating it.
             """
         )
     else:
         _banner = mo.callout(
             mo.md(
-                "Launch the **dashboard + this notebook together** with "
-                "`make demo-support` (→ http://localhost:2718) to open the live "
-                "**Policies** editor on the seeded showcase. This notebook also "
-                "runs fully standalone."
+                "Launch the **platform + dashboard + this agent together** with "
+                "`make demo-support` (→ http://localhost:2718) to chat in the live "
+                "**Playground**. The policy table below also runs standalone."
             ),
             kind="info",
         )
@@ -114,301 +97,276 @@ def _(Path, mo):
 
 
 @app.cell
-def _(mo):
-    mo.md("""
-    ## 1 · The policy — a `policy.yaml` that imports capabilities
-
-    Edit any of these and the whole notebook re-resolves. The boundary is a
-    ceiling (default deny): a tool — or a reach target — it doesn't list is
-    ineligible no matter what a capability grants.
-    """)
-    return
-
-
-@app.cell
 def _():
-    # The entry file: the closed-world boundary + two agents whose roles import
-    # capability files. `import:` at a role splices that leaf file into the role.
-    ENTRY = """\
-    boundary:
-      tools:
-        view_orders: { mode: allow }
-        send_email: { mode: allow }
-        escalate: { mode: allow }
-        refund_order: { mode: allow, constraint: "args.amount <= 1000" }  # hard cap
-      reach:
-        billing_bot: { as: handoff }   # reach ceiling: hand-off only, never as-tool
-    agents:
-      support_bot:
-        roles:
-          default: { import: [ caps/read_only.yaml ] }
-          support: { import: [ caps/read_only.yaml, caps/support_leaf.yaml ] }
-          billing:
-            import:
-              [ caps/read_only.yaml, caps/payments.yaml, caps/billing_reach.yaml ]
-      billing_bot:
-        roles:
-          billing: { import: [ caps/payments.yaml ] }
-    """
-    # Leaf capability files — grant-only, imported by the roles above.
-    CAPS = {
-        "read_only.yaml": "tools:\n  view_orders: { mode: allow }\n",
-        "support_leaf.yaml": (
-            "tools:\n"
-            "  send_email: { mode: allow }\n"
-            "  escalate: { mode: approval_required }\n"
-        ),
-        "payments.yaml": (
-            "tools:\n"
-            '  refund_order: { mode: allow, constraint: '
-            '\'args.currency in ["USD", "EUR"]\' }\n'
-        ),
-        # Grants the agent-level reach: this role's support_bot may hand off to
-        # billing_bot. No grant -> closed-world deny.
-        "billing_reach.yaml": "reach:\n  billing_bot: { as: handoff }\n",
-    }
-    return CAPS, ENTRY
+    # -- Tools + agents --------------------------------------------------------
+    # view_orders is a safe read (allowed for every role). refund_order and
+    # delegate_to_billing are gated: policy decides whether the caller's role may
+    # invoke them at all — support/default are refused before the tool runs.
+    from langchain_core.tools import tool
 
+    from hexgate import create_agent
 
-@app.cell
-def _(CAPS, ENTRY, Path, mo, shutil, tempfile):
-    # Write the entry + caps to a policy tree and resolve through the real compose
-    # loader — the same path as `hexgate policy resolve --file policy.yaml`. A
-    # stable dir (recreated each run) so re-running on an edit doesn't leak.
-    def _write_policy():
-        root = Path(tempfile.gettempdir()) / "hexgate-compose-support-demo"
-        shutil.rmtree(root, ignore_errors=True)
-        (root / "caps").mkdir(parents=True, exist_ok=True)
-        (root / "policy.yaml").write_text(ENTRY, encoding="utf-8")
-        for name, body in CAPS.items():
-            (root / "caps" / name).write_text(body, encoding="utf-8")
-        return root
+    # -- billing_bot: a SECOND agent, reached by support_bot AS A TOOL ---------
+    # (agent-as-tool). The delegation surfaces as the delegate_to_billing tool
+    # call, which the policy gates by role. Native create_agent has no
+    # first-class handoff primitive that can be served to the dashboard, so the
+    # sub-agent is wired as the tool that runs it.
+    def build_billing():
+        """Build the billing specialist sub-agent (its own tool + prompt)."""
 
-    POLICY_ROOT = _write_policy()
-    mo.md(f"Policy written to `{POLICY_ROOT}` — entry `policy.yaml` + `caps/`.")
-    return (POLICY_ROOT,)
+        @tool
+        def issue_refund(order_id: str, amount: float) -> str:
+            """Issue a refund against an order."""
+            return f"(demo) refunded ${amount:.2f} on order {order_id}."
 
-
-@app.cell
-def _(POLICY_ROOT, resolve_file):
-    # One resolve per agent. Each agent's role-keyed PolicySet carries tools AND
-    # agent reach — the fold lowers the imported `reach` blocks to
-    # `agent.handoff:<target>` keys and composes them exactly like tool keys.
-    def _resolve(agent):
-        return resolve_file(str(POLICY_ROOT / "policy.yaml"), agent=agent).policy_set
-
-    support_policy = _resolve("support_bot")
-    billing_policy = _resolve("billing_bot")
-    return billing_policy, support_policy
-
-
-@app.cell
-def _(mo, support_policy):
-    _LABEL = {"allow": "✅", "deny": "❌", "needs_approval": "🔶 approval"}
-    _CALLS = [
-        ("view_orders", {}),
-        ("send_email", {}),
-        ("escalate", {}),
-        ("refund_order", {"amount": 800, "currency": "USD"}),
-        ("refund_order", {"amount": 2000, "currency": "USD"}),
-    ]
-    _ROLES = ["default", "support", "billing"]
-
-    def _cell(role, tool, args):
-        o = support_policy.evaluate(role=role, tool=tool, args=args).outcome.value
-        return _LABEL.get(o, o)
-
-    _cols = [f"`{t}`" + (f"<br>`{a}`" if a else "") for t, a in _CALLS]
-    _header = "| role | " + " | ".join(_cols) + " |"
-    _sep = "|" + "---|" * (len(_CALLS) + 1)
-    _rows = [
-        "| `" + r + "` | " + " | ".join(_cell(r, t, a) for t, a in _CALLS) + " |"
-        for r in _ROLES
-    ]
-    mo.md(
-        "**`support_bot` resolved tool policy, per role**\n\n"
-        + "\n".join([_header, _sep, *_rows])
-        + "\n\n> `support` sends email and escalates (with approval) but can't "
-        "refund; `billing` refunds up to the boundary's **$1000** ceiling "
-        "(`$2000 → deny`) and only in USD/EUR."
-    )
-    return
-
-
-@app.cell
-def _(mo):
-    mo.md("""
-    ## 2 · Agent reach — composed from the same imports
-
-    Reach is **closed-world**: no role may reach `billing_bot` until a
-    capability grants it. Only `billing` imports `caps/billing_reach.yaml`, so
-    only `billing` may hand `support_bot`'s conversation off — `support` and
-    `default` are denied, and nobody may reach it *as a tool* (the boundary
-    ceilinged `handoff` only). This runs the real `ReachGate` — the seam the
-    framework calls at a hand-off — over the composed policy.
-    """)
-    return
-
-
-@app.cell
-def _(
-    HexgateContext,
-    ReachNotAllowedError,
-    build_enforcer,
-    resolve_reach_gate,
-    support_policy,
-):
-    def reach(role, via="handoff", target="billing_bot"):
-        """Run the real ReachGate for `role`: may support_bot reach `target`?
-
-        Returns (outcome, reason). The source agent's policy governs reach, so the
-        gate is built from support_bot's enforcer and decides the target's lowered
-        key. Closed-world denies an ungranted role."""
-        gate = resolve_reach_gate(
-            build_enforcer(support_policy, agent_name="support_bot")
+        billing, _handler = create_agent(
+            model="gpt-4o-mini",
+            tools=[issue_refund],
+            system_prompt=(
+                "You are the billing specialist. Issue the requested refund with "
+                "issue_refund, confirming the order id and amount."
+            ),
+            name="billing_bot",
         )
-        roles = [role] if role is not None else []
-        with HexgateContext(user_id="demo", user_roles=roles).sync_scope():
-            try:
-                gate.check_reach(target, via=via)
-                return "allow", ""
-            except ReachNotAllowedError as exc:
-                return exc.decision.outcome.value, exc.decision.reason
+        return billing
 
-    return (reach,)
+    @tool
+    def view_orders(order_id: str) -> str:
+        """Look up the current status of a customer's order."""
+        return (
+            f"(demo) Order {order_id}: shipped 2 days ago, total $128.40, "
+            f"card ending 4242."
+        )
 
+    @tool
+    def refund_order(order_id: str, amount: float, currency: str = "USD") -> str:
+        """Refund a customer's order (billing seats only; capped by policy)."""
+        return f"(demo) refunded {amount:.2f} {currency} on order {order_id}."
 
-@app.cell
-def _(mo, reach):
-    _LABEL = {"allow": "✅ allowed", "deny": "❌ refused", "needs_approval": "🔶 approval"}
-    _rows = [
-        "| caller role | `support_bot` → `billing_bot` (handoff) | (as tool) |",
-        "|---|---|---|",
-    ]
-    for _role in ["default", "support", "billing"]:
-        _h, _ = reach(_role, via="handoff")
-        _t, _ = reach(_role, via="tool")
-        _rows.append(f"| `{_role}` | {_LABEL.get(_h, _h)} | {_LABEL.get(_t, _t)} |")
-    mo.md(
-        "**Reach, live from the gate**\n\n"
-        + "\n".join(_rows)
-        + "\n\n> `billing` was granted `handoff` by `caps/billing_reach.yaml`; "
-        "`support`/`default` hit the closed-world deny; and *as-tool* reach is "
-        "refused for everyone (the boundary ceilinged `handoff` only)."
-    )
-    return
+    # billing_bot is built on first delegation (after the key is set, since
+    # create_agent instantiates ChatOpenAI eagerly) and cached here.
+    _billing = {}
+
+    @tool
+    async def delegate_to_billing(order_id: str, amount: float, reason: str) -> str:
+        """Delegate a refund to the billing_bot sub-agent.
+
+        Billing seats only — support/default are denied by policy before this
+        tool runs, so billing_bot never sees the request.
+        """
+        if "agent" not in _billing:
+            _billing["agent"] = build_billing()
+        result = await _billing["agent"].ainvoke(
+            {
+                "messages": [
+                    (
+                        "user",
+                        f"Refund order {order_id} for ${amount:.2f}. Reason: {reason}",
+                    )
+                ]
+            },
+            {},
+        )
+        return result["messages"][-1].content
+
+    TOOLS = [view_orders, refund_order, delegate_to_billing]
+
+    def build_support():
+        # name MUST be support_bot: the platform gates the served agent with the
+        # seeded compose bundle for that agent in the policy-showcase project.
+        return create_agent(
+            model="gpt-4o-mini",
+            tools=TOOLS,
+            system_prompt=(
+                "You are a front-line customer support agent for an online store. "
+                "Help customers check order status with view_orders. For a refund, "
+                "either refund it directly with refund_order or delegate it to "
+                "billing with delegate_to_billing (order id, amount, reason)."
+            ),
+            name="support_bot",
+        )
+
+    return (build_support,)
 
 
 @app.cell
 def _(mo):
     mo.md("""
-    ## 3 · Test the agent
+    ## 1 · Start the agent
 
-    Pick a caller **role**, a **tool** + args, and a **reach** target — the same
-    composed policy decides both the tool call and the hand-off, live.
+    Paste your OpenAI key and click **Start**. This builds support_bot and serves
+    it to the dashboard in the background (hot-swaps if you re-run).
     """)
     return
 
 
 @app.cell
 def _(mo):
-    probe = (
-        mo.md(
-            """
-            **role** {role} &nbsp; **tool** {tool} &nbsp; **amount** {amount}
-            &nbsp; **currency** {currency} &nbsp; **reach via** {via}
-            """
-        )
-        .batch(
-            role=mo.ui.dropdown(
-                options=["default", "support", "billing"], value="support"
-            ),
-            tool=mo.ui.dropdown(
-                options=["view_orders", "send_email", "escalate", "refund_order"],
-                value="refund_order",
-            ),
-            amount=mo.ui.number(start=0, stop=5000, value=800),
-            currency=mo.ui.dropdown(options=["USD", "EUR", "GBP"], value="USD"),
-            via=mo.ui.dropdown(options=["handoff", "tool"], value="handoff"),
-        )
-        .form(submit_button_label="▶ Test the agent")
-    )
-    probe
-    return (probe,)
+    api_key = mo.ui.text(kind="password", placeholder="sk-...", full_width=True)
+    start = mo.ui.run_button(label="▶ Start support_bot")
+    mo.vstack([mo.md("**OpenAI API key**"), api_key, start])
+    return api_key, start
 
 
 @app.cell
-def _(mo, probe, reach, support_policy):
-    _LBL = {"allow": ("✅", "success"), "deny": ("❌", "danger"),
-            "needs_approval": ("🔶", "warn")}
-    if probe.value is None:
-        _out = mo.callout(
-            mo.md("Pick a role + tool, then **▶ Test the agent**."), kind="info"
-        )
+def _(api_key, build_support, mo, serve_manager, start, time):
+    import os
+
+    if start.value and api_key.value:
+        os.environ["OPENAI_API_KEY"] = api_key.value
+        _agent, _handler = build_support()
+        serve_manager.apply(_agent)
+        time.sleep(3)
+        _status = serve_manager.status()
+        if _status == "running":
+            _out = mo.callout(
+                mo.md(
+                    "✅ **support_bot is serving.** Open the dashboard above and "
+                    "chat with it in the Playground."
+                ),
+                kind="success",
+            )
+        else:
+            _out = mo.callout(
+                mo.md(f"serve status: `{_status}` — check the console."),
+                kind="warn",
+            )
     else:
-        _role = probe.value["role"]
-        _tool = probe.value["tool"]
-        _args = {"amount": probe.value["amount"], "currency": probe.value["currency"]}
-        _outcome = support_policy.evaluate(
-            role=_role, tool=_tool, args=_args
-        ).outcome.value
-        _icon, _kind = _LBL.get(_outcome, ("•", "info"))
-        _tool_md = mo.callout(
-            mo.md(
-                f"{_icon} **`{_tool}`** as `{_role}` "
-                f"(amount={_args['amount']}, {_args['currency']}) → **{_outcome}**"
-            ),
-            kind=_kind,
+        _out = mo.callout(
+            mo.md("Enter your OpenAI key and click **▶ Start support_bot**."),
+            kind="info",
         )
-        _via = probe.value["via"]
-        _r_out, _r_reason = reach(_role, via=_via)
-        _r_icon, _r_kind = _LBL.get(_r_out, ("•", "info"))
-        _detail = f" — {_r_reason}" if _r_reason else ""
-        _reach_md = mo.callout(
-            mo.md(
-                f"{_r_icon} reach `{_via}` → `billing_bot` as `{_role}` → "
-                f"**{_r_out}**{_detail}"
-            ),
-            kind=_r_kind,
-        )
-        _out = mo.vstack([_tool_md, _reach_md])
     _out
     return
 
 
 @app.cell
-def _(billing_policy, mo):
-    # billing_bot has its own, narrower policy: it only imports payments, so it
-    # refunds (up to the ceiling) and nothing else.
-    _r = billing_policy.evaluate(
-        role="billing", tool="refund_order", args={"amount": 800, "currency": "USD"}
-    ).outcome.value
-    _v = billing_policy.evaluate(role="billing", tool="view_orders", args={}).outcome.value
+def _(mo):
+    mo.md("""
+    ## 2 · The policy it enforces (compose)
+
+    support_bot's role-aware policy is composed from `policy.yaml` + capability
+    files by the compose front-end (the same pipeline as
+    `hexgate policy resolve --file policy.yaml`), then served by the platform. A
+    `billing_desk` capability grants `delegate_to_billing` and `payments` grants
+    `refund_order`; only the `billing` role imports them. The table below resolves
+    that exact policy — it matches what the served agent enforces.
+    """)
+    return
+
+
+@app.cell
+def _(Path, mo, resolve_file):
+    import shutil
+    import tempfile
+
+    # The seeded showcase policy, inlined so this cell runs standalone. Kept in
+    # sync with platform/api/.../policy_modules/seed_data.py (SEED_POLICY_FILES).
+    _FILES = {
+        "policy.yaml": (
+            "boundary:\n"
+            "  tools:\n"
+            "    view_orders: { mode: allow }\n"
+            "    send_email: { mode: allow }\n"
+            "    escalate: { mode: allow }\n"
+            '    refund_order: { mode: allow, constraint: "args.amount <= 1000" }  # hard cap\n'
+            "    delegate_to_billing: { mode: allow }   # ceiling; needs a capability grant\n"
+            "  reach:\n"
+            "    billing_bot: { as: handoff }   # reach ceiling: hand-off only, never as-tool\n"
+            "agents:\n"
+            "  support_bot:\n"
+            "    roles:\n"
+            "      default: { import: [ caps/read_only.yaml ] }\n"
+            "      support: { import: [ caps/read_only.yaml, caps/support_leaf.yaml ] }\n"
+            "      billing:\n"
+            "        import:\n"
+            "          [ caps/read_only.yaml, caps/payments.yaml, caps/billing_desk.yaml,\n"
+            "            caps/billing_reach.yaml ]\n"
+            "  billing_bot:\n"
+            "    roles:\n"
+            "      billing: { import: [ caps/payments.yaml ] }\n"
+        ),
+        "caps/read_only.yaml": "tools:\n  view_orders: { mode: allow }\n",
+        "caps/support_leaf.yaml": (
+            "tools:\n"
+            "  send_email: { mode: allow }\n"
+            "  escalate: { mode: approval_required }\n"
+        ),
+        "caps/payments.yaml": (
+            "tools:\n"
+            '  refund_order: { mode: allow, constraint: '
+            '\'args.currency in ["USD", "EUR"]\' }\n'
+        ),
+        "caps/billing_desk.yaml": "tools:\n  delegate_to_billing: { mode: allow }\n",
+        "caps/billing_reach.yaml": "reach:\n  billing_bot: { as: handoff }\n",
+    }
+    _root = Path(tempfile.gettempdir()) / "hexgate-compose-support-demo"
+    shutil.rmtree(_root, ignore_errors=True)
+    for _name, _body in _FILES.items():
+        _p = _root / _name
+        _p.parent.mkdir(parents=True, exist_ok=True)
+        _p.write_text(_body, encoding="utf-8")
+
+    _ps = resolve_file(str(_root / "policy.yaml"), agent="support_bot").policy_set
+    _L = {"allow": "✅ allow", "deny": "❌ deny", "needs_approval": "🔶 approval"}
+
+    def _cell(role, tool, args):
+        return _L.get(
+            _ps.evaluate(role=role, tool=tool, args=args).outcome.value,
+            "?",
+        )
+
+    _rows = [
+        "| role | `view_orders` | `refund_order`<br>`$800 USD` | `delegate_to_billing` |",
+        "|---|---|---|---|",
+    ]
+    for _role in ["default", "support", "billing"]:
+        _v = _cell(_role, "view_orders", {})
+        _r = _cell(_role, "refund_order", {"amount": 800, "currency": "USD"})
+        _d = _cell(_role, "delegate_to_billing", {})
+        _rows.append(f"| `{_role}` | {_v} | {_r} | {_d} |")
     mo.md(
-        "**`billing_bot`'s own policy** (it imports only `caps/payments.yaml`):\n\n"
-        f"- `refund_order($800, USD)` → **{_r}**\n"
-        f"- `view_orders` → **{_v}** (never granted to billing_bot)"
+        "**Resolved policy (what the served support_bot enforces)**\n\n"
+        + "\n".join(_rows)
+        + "\n\n> `billing` refunds up to the **$1000** ceiling and delegates; "
+        "`support`/`default` get read-only."
     )
     return
 
 
 @app.cell
 def _(mo):
-    mo.md("""
-    ---
-    The same compose front-end powers the CLI and the dashboard — point the CLI
-    at your own entry file:
+    mo.md("""## 3 · Test it in the dashboard""")
+    return
 
-    ```
-    hexgate policy resolve --file policy.yaml --agent support_bot
-    ```
 
-    In the platform, these exact files are the project's `policy_file` rows: the
-    **Policies** editor renders this scenario with a live resolved view, the
-    decision tester, and the reach/admission graph. Reach and admission are
-    enforced at run entry / hand-off by the `ReachGate` / `AgentGate` seams a
-    live agent runs, over the policy the compose front-end composed.
-    """)
+@app.cell
+def _(Path, mo):
+    _p = Path("/tmp/hexgate_dash_url")
+    if _p.is_file():
+        _dash = _p.read_text().strip().rstrip("/")
+        _out = mo.md(
+            f"### [▶ Open the dashboard →]({_dash}/v1/demo-login)\n\n"
+            "In the Playground:\n\n"
+            "1. Under **Acting as**, pick a role.\n"
+            '2. Ask: *"Please refund order A-1001 for $40, it arrived damaged."*\n'
+            "3. As `support` / `default` → `refund_order` and `delegate_to_billing` "
+            "are **denied** in the Decisions sidebar; the billing sub-agent never runs.\n"
+            "4. Switch to `billing` → the refund is **allowed** (under $1000) and the "
+            "delegation runs billing_bot.\n"
+            "5. Edit `policy.yaml` in the **Policies** tab — the next message picks "
+            "it up."
+        )
+    else:
+        _out = mo.callout(
+            mo.md(
+                "Dashboard URL not found. Launch this demo with `make demo-support` "
+                "— `boot.py` starts the platform + dashboard and writes "
+                "`/tmp/hexgate_dash_url`."
+            ),
+            kind="info",
+        )
+    _out
     return
 
 
