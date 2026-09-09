@@ -115,12 +115,28 @@ extensions:
       # pgx wants a plain postgres:// URL, not the postgresql+asyncpg:// form
       # the Python side's DATABASE_URL uses.
       dsn: ${env:HEXGATE_COLLECTOR_POSTGRES_DSN:-postgres://hexgate:hexgate-dev-password@localhost:5433/hexgate}
-      # Also the worst-case window in which an already-revoked key still works.
-      poll_interval: 20s
+      # Steady-state revocation latency: the worst-case window in which an
+      # already-revoked key still works while refreshes are SUCCEEDING.
+      poll_interval: ${env:HEXGATE_COLLECTOR_REVOCATION_POLL_INTERVAL:-20s}
       # How long a snapshot may go un-refreshed before this stops trusting it
       # and rejects everything. Without it, a Postgres outage would freeze the
       # revocation list and revoked keys would keep working for its duration.
-      max_staleness: 2m
+      #
+      # An hour, not the 2m first shipped: 2m sits below the length of routine
+      # control-plane maintenance (minor-version upgrade, volume resize, slow
+      # restart), so a blip became total ingest rejection — and the deploy
+      # healthcheck stays green through exactly that failure (see the collector
+      # service in docker-compose.deploy.yml), making it silent and lossy. The
+      # trade is bounded: this widens the revoked-key window only while
+      # refreshes are FAILING; poll_interval above governs steady state.
+      #
+      # Both are per-stage overridable. The env default applies only when the
+      # variable is UNSET — a variable set to an empty string resolves to 0s and
+      # the collector refuses to boot, which is why the deploy stack passes
+      # these with non-empty fallbacks. Keep the literals in lockstep with
+      # defaultPollInterval / defaultMaxStaleness in
+      # extension/hexgatebiscuitauth/config.go.
+      max_staleness: ${env:HEXGATE_COLLECTOR_REVOCATION_MAX_STALENESS:-1h}
 
 service:
   extensions: [hexgatebiscuitauth]

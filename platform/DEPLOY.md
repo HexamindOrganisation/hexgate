@@ -230,6 +230,19 @@ alone boots the api fine but leaves the collector crash-looping on the missing
 public key — restore both files (or regenerate the public half by hand from
 the private one) until the keystore learns to rewrite it on load.
 
+**Revocation cache tuning** — the collector authenticates every OTLP request
+against an in-process snapshot of the `devtoken` table. `poll_interval`
+(default 20s) is the steady-state window in which an already-revoked key still
+works. `max_staleness` (default 1h) is how long the collector keeps serving its
+last snapshot while refreshes are *failing*, after which it rejects every
+request. Tune per stage with `HEXGATE_COLLECTOR_REVOCATION_POLL_INTERVAL` /
+`HEXGATE_COLLECTOR_REVOCATION_MAX_STALENESS` in `.env.<stage>`; omit them to
+take the defaults, and never set either blank (the collector refuses to boot).
+Lowering `max_staleness` tightens the revoked-key window during a Postgres
+outage at the cost of ingest availability — below a few minutes, routine
+database maintenance becomes total span loss, and the collector's healthcheck
+stays green through it.
+
 **Schema changes** apply only on an empty volume; changing one after first boot
 needs a manual migration.
 

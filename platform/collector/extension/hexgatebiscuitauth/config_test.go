@@ -33,6 +33,17 @@ func TestCreateDefaultConfig_happy_path(t *testing.T) {
 	assert.Empty(t, cfg.PublicKeyFile)
 }
 
+// The literal values, not just the wiring. TestCreateDefaultConfig_happy_path
+// above asserts the default config carries the package constants, which stays
+// green whatever those constants are — so nothing there pins the two numbers an
+// operator actually gets. The max_staleness assertion is the one that would
+// catch a revert to a window too short to survive routine control-plane
+// maintenance; see the const block's comment for why an hour.
+func TestRevocationDefaults_happy_path(t *testing.T) {
+	assert.Equal(t, 20*time.Second, defaultPollInterval)
+	assert.Equal(t, time.Hour, defaultMaxStaleness)
+}
+
 func TestConfigValidate_when_no_public_key_is_set_then_an_error_is_returned(t *testing.T) {
 	cfg := validConfig()
 	cfg.PublicKeyFile = ""

@@ -45,9 +45,18 @@ import (
 
 // Defaults for the revocation cache. The 15-30s poll window comes from the
 // design doc; 20s sits in the middle of it.
+//
+// max_staleness is an hour, not the 2m first shipped: it bounds only how long a
+// snapshot may go UN-REFRESHED, so a value below the length of routine
+// control-plane maintenance (minor-version upgrade, volume resize, slow
+// restart) turns a database blip into total ingest rejection — silently, since
+// the deploy healthcheck stays green through it. Steady-state revocation
+// latency is defaultPollInterval, which is unchanged. Both are overridable per
+// stage; the literals in platform/collector/config.yaml must stay in lockstep
+// with these.
 const (
 	defaultPollInterval = 20 * time.Second
-	defaultMaxStaleness = 2 * time.Minute
+	defaultMaxStaleness = time.Hour
 )
 
 // devPostgresPassword is the committed local-dev credential from

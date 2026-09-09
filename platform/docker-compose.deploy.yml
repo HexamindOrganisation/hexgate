@@ -253,6 +253,14 @@ services:
       # are fine, matching the api's DATABASE_URL assembly.
       HEXGATE_COLLECTOR_POSTGRES_DSN: host=postgres port=5432 dbname=hexgate user=hexgate
       PGPASSWORD: ${HEXGATE_POSTGRES_PASSWORD:?set HEXGATE_POSTGRES_PASSWORD in .env.<env>}
+      # Revocation cache tuning, both optional. Non-empty fallbacks on purpose:
+      # the collector's ${env:X:-default} applies only when X is UNSET, so a
+      # passthrough resolving to an empty string would arrive as 0s and the
+      # collector would refuse to boot. Compose's `:-` covers unset AND empty,
+      # so an omitted (or blank) key in .env.<env> lands the literal below.
+      # Keep in lockstep with platform/collector/config.yaml.
+      HEXGATE_COLLECTOR_REVOCATION_POLL_INTERVAL: ${HEXGATE_COLLECTOR_REVOCATION_POLL_INTERVAL:-20s}
+      HEXGATE_COLLECTOR_REVOCATION_MAX_STALENESS: ${HEXGATE_COLLECTOR_REVOCATION_MAX_STALENESS:-1h}
     volumes:
       - hexgate-keys:/keys:ro
     depends_on:

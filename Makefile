@@ -296,6 +296,12 @@ collector-check: ## Vet + test + build the collector, validate config.yaml (no o
 	cd platform/collector && go vet ./...
 	cd platform/collector && go build -o hexgate-collector ./...
 	cd platform/collector && ./hexgate-collector validate --config=config.yaml
+	# The two revocation knobs are env-overridable (see config.yaml). A valid
+	# pair must be accepted; an INVALID pair must be REFUSED — the refusal is
+	# what proves the env values reached the config struct, so a typo in either
+	# variable name fails here instead of shipping a dead override.
+	cd platform/collector && HEXGATE_COLLECTOR_REVOCATION_POLL_INTERVAL=5s HEXGATE_COLLECTOR_REVOCATION_MAX_STALENESS=30m ./hexgate-collector validate --config=config.yaml
+	cd platform/collector && (! HEXGATE_COLLECTOR_REVOCATION_POLL_INTERVAL=1m HEXGATE_COLLECTOR_REVOCATION_MAX_STALENESS=1s ./hexgate-collector validate --config=config.yaml >/dev/null 2>&1)
 
 # -------- Platform API (FastAPI control plane) --------
 #
