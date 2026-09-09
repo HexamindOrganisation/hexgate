@@ -11,6 +11,18 @@ from __future__ import annotations
 
 from hexgate.security.compose.grammar import Entry
 from hexgate.security.compose.parse import parse_entry
-from hexgate.security.compose.resolve import resolve_entry, resolve_file, resolve_text
+from hexgate.security.compose.resolve import (
+    file_loader,
+    resolve_entry,
+    resolve_file,
+    resolve_text,
+)
 
-__all__ = ["Entry", "parse_entry", "resolve_entry", "resolve_file", "resolve_text"]
+__all__ = [
+    "Entry",
+    "file_loader",
+    "parse_entry",
+    "resolve_entry",
+    "resolve_file",
+    "resolve_text",
+]

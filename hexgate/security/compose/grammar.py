@@ -22,7 +22,14 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    PrivateAttr,
+    field_validator,
+    model_validator,
+)
 
 from hexgate.security.models import AgentVia
 
@@ -55,7 +62,9 @@ def _as_list(v: object) -> object:
 class _ConstraintsMixin(BaseModel):
     """Shared ``constraint``/``constraints`` ergonomics for every spec."""
 
-    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+    # No populate_by_name: only the YAML aliases are accepted (e.g. `as:`, not the
+    # `via` field name), so a field-name spelling is rejected by extra="forbid".
+    model_config = ConfigDict(extra="forbid")
 
     constraints: list[str] = Field(default_factory=list)
 
@@ -117,14 +126,29 @@ class BoundaryBlock(BaseModel):
 
 
 class _GrantScope(BaseModel):
-    """The grant blocks legal at any scope (role body, agent body, top level)."""
+    """The grant blocks legal at any scope (role body, agent body, top level),
+    plus an ``import:`` list — position is scope, so a fragment imported here
+    applies at exactly this depth."""
 
+    # No populate_by_name: only the `import` alias is accepted, so the `imports`
+    # field-name spelling is rejected by extra="forbid" (no silent second spelling).
     model_config = ConfigDict(extra="forbid")
 
     boundary: BoundaryBlock | None = None
     tools: dict[str, GrantSpec] = Field(default_factory=dict)
     reach: dict[str, ReachSpec] = Field(default_factory=dict)
     mcp: dict[str, GrantSpec] = Field(default_factory=dict)
+    imports: list[str] = Field(default_factory=list, alias="import")
+
+    # Resolved leaf fragments spliced at this scope — populated by the import
+    # resolver, never authored. PrivateAttr so it is not YAML-settable, not
+    # validated, and not serialized. Elements are leaf ``_GrantScope``s (a
+    # ``RoleBlock`` export, or a whole-file ``Entry`` with no agents).
+    _imported: list["_GrantScope"] = PrivateAttr(default_factory=list)
+    # Source file this scope came from, for provenance on lowered ModuleContents.
+    # Local scopes keep the entry file; the resolver stamps each imported fragment
+    # with the file it was loaded from.
+    _source: str = PrivateAttr(default="policy.yaml")
 
     @model_validator(mode="after")
     def _no_tools_mcp_collision(self) -> "_GrantScope":
@@ -165,11 +189,11 @@ class Entry(_GrantScope):
     """
 
     version: int = 1
-    imports: list[str] = Field(default_factory=list, alias="import")
     exports: dict[str, RoleBlock] = Field(default_factory=dict, alias="export")
     agents: dict[str, AgentBlock] = Field(default_factory=dict)
 
-    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+    # Only the `export` alias is accepted (not the `exports` field name).
+    model_config = ConfigDict(extra="forbid")
 
     @field_validator("agents")
     @classmethod

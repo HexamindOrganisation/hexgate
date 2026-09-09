@@ -130,6 +130,30 @@ def test_resolve_file_unknown_agent_warns(
     assert "bott" in err and "not defined" in err
 
 
+def test_resolve_file_resolves_imports_relative_to_the_file(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # `resolve --file` must resolve import: refs against the entry file's dir.
+    (tmp_path / "caps.yaml").write_text(
+        "export:\n  refunds:\n    tools: { refund_order: { mode: allow } }\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "policy.yaml").write_text(
+        "import: [ caps.yaml#refunds ]\n", encoding="utf-8"
+    )
+    rc = _main_resolve(
+        _ns(
+            dir=".",
+            file=str(tmp_path / "policy.yaml"),
+            agent="*",
+            role=None,
+            output=None,
+        )
+    )
+    assert rc == 0
+    assert "refund_order" in capsys.readouterr().out
+
+
 # ---------------------------------------------------------------------------
 # validate
 # ---------------------------------------------------------------------------

@@ -609,18 +609,26 @@ def _main_resolve(args: argparse.Namespace) -> int:
     # --file (compose grammar) and --dir (policies/ tree) are the two front-ends;
     # both produce the same ProjectLinkResult, so the print path below is shared.
     if args.file is not None:
-        from hexgate.security.compose import parse_entry, resolve_entry
+        from hexgate.security.compose import file_loader, parse_entry, resolve_entry
 
+        file_path = Path(args.file)
         try:
-            text = Path(args.file).read_text(encoding="utf-8")
+            text = file_path.read_text(encoding="utf-8")
         except OSError as exc:
             print(f"load error: {exc}", file=sys.stderr)
             return 1
         # Parse once: resolve_entry reuses the Entry, and the agent hint below reads
         # its declared agents. resolve_entry surfaces every failure as LinkError.
+        # `import:` refs resolve relative to the entry file's directory (sandboxed).
         try:
             entry = parse_entry(text, source=args.file)
-            result = resolve_entry(entry, agent=args.agent, source=args.file)
+            result = resolve_entry(
+                entry,
+                agent=args.agent,
+                source=args.file,
+                loader=file_loader(file_path.parent),
+                entry_path=file_path.name,
+            )
         except LinkError as exc:
             print(f"link error: {exc}", file=sys.stderr)
             return 1
