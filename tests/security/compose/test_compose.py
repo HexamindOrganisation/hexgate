@@ -223,6 +223,82 @@ def test_reach_denied_when_boundary_omits_it_even_if_granted():
     assert tools["agent.tool:evil_bot"]["mode"] == "deny"
 
 
+# --- admission (agent-level ingress, composes via #124) ------------------
+
+
+def test_admission_gates_agent_run_per_role():
+    # `admission` grants the right to START this agent; it lowers to `agent.run`.
+    doc = """
+    boundary:
+      admission: { mode: allow }
+    agents:
+      bot:
+        roles:
+          support: { admission: { mode: allow } }
+          default: {}
+    """
+    ps = resolve_text(doc, agent="bot").policy_set
+
+    def run(r):
+        return ps.evaluate(role=r, tool="agent.run", args={}).outcome.value
+
+    assert run("support") == "allow"
+    # default never granted admission → closed-world deny (the boundary lists it).
+    assert run("default") == "deny"
+
+
+def test_admission_from_an_imported_capability():
+    files = {"admit.yaml": "admission: { mode: allow }\n"}
+    doc = """
+    boundary:
+      admission: { mode: allow }
+    agents:
+      bot:
+        roles:
+          support: { import: [ admit.yaml ] }
+    """
+    ps = resolve_text(doc, agent="bot", loader=lambda n: files[n]).policy_set
+    assert ps.evaluate(role="support", tool="agent.run", args={}).outcome.value == "allow"
+
+
+def test_admission_boundary_ceiling_caps_the_grant():
+    # a boundary admission constraint AND-s onto the grant (ceiling ∩ grant).
+    doc = """
+    boundary:
+      admission: { mode: allow, constraint: "args.amount <= 100" }
+    agents:
+      bot:
+        roles:
+          support: { admission: { mode: allow } }
+    """
+    run = _eff(resolve_text(doc, agent="bot"))["support"]["tools"]["agent.run"]
+    assert run["mode"] == "allow"
+    assert any("100" in c for c in run["constraints"])
+
+
+def test_admission_denied_when_boundary_omits_it_even_if_granted():
+    # closed-world: a boundary that lists no admission ceiling denies the run
+    # even though the role grants it (the agent key isn't permitted).
+    doc = """
+    boundary:
+      tools: { view_orders: { mode: allow } }
+    agents:
+      bot:
+        roles:
+          support:
+            admission: { mode: allow }
+            tools: { view_orders: { mode: allow } }
+    """
+    ps = resolve_text(doc, agent="bot").policy_set
+    assert ps.evaluate(role="support", tool="agent.run", args={}).outcome.value == "deny"
+
+
+def test_agent_named_admission_is_rejected():
+    # `admission` is a reserved block keyword, so an agent can't be named it.
+    with pytest.raises(LinkError, match="reserved"):
+        parse_entry("agents: { admission: { tools: {} } }")
+
+
 # --- imports -------------------------------------------------------------
 
 

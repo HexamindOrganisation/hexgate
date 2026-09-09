@@ -10,7 +10,7 @@ Shape (scope by depth — a block keyword is a sibling of the ``agents``/``roles
 name-map, never a key inside it):
 
     version, import, export          # top-level only
-    boundary / tools / reach / mcp   # at any scope → applies to that scope
+    boundary / tools / reach / mcp / admission   # at any scope → that scope
     agents: { <name>: agent-body }   # top level only; body may add roles:
     roles:  { <name>: role-body }    # agent-body only
 
@@ -45,6 +45,7 @@ RESERVED_NAMES = frozenset(
         "tools",
         "reach",
         "mcp",
+        "admission",
         "agents",
         "roles",
     }
@@ -123,6 +124,10 @@ class BoundaryBlock(BaseModel):
 
     tools: dict[str, CeilingSpec] = Field(default_factory=dict)
     reach: dict[str, ReachSpec] = Field(default_factory=dict)
+    # The ceiling on ingress: may any role *start* this agent at all? Closed-world
+    # like reach — with no admission ceiling, an authored admission grant is
+    # intersected to deny, so a boundary must permit admission to allow it.
+    admission: CeilingSpec | None = None
 
 
 class _GrantScope(BaseModel):
@@ -138,6 +143,10 @@ class _GrantScope(BaseModel):
     tools: dict[str, GrantSpec] = Field(default_factory=dict)
     reach: dict[str, ReachSpec] = Field(default_factory=dict)
     mcp: dict[str, GrantSpec] = Field(default_factory=dict)
+    # Ingress grant: may this scope's role start/enter this agent? Lowers to the
+    # ``agent.run`` key the runtime AgentGate enforces. A single grant (it is about
+    # *this* agent), boundary-ceilinged like reach.
+    admission: GrantSpec | None = None
     imports: list[str] = Field(default_factory=list, alias="import")
 
     # Resolved leaf fragments spliced at this scope — populated by the import
