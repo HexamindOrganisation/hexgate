@@ -258,7 +258,9 @@ def test_admission_from_an_imported_capability():
           support: { import: [ admit.yaml ] }
     """
     ps = resolve_text(doc, agent="bot", loader=lambda n: files[n]).policy_set
-    assert ps.evaluate(role="support", tool="agent.run", args={}).outcome.value == "allow"
+    assert (
+        ps.evaluate(role="support", tool="agent.run", args={}).outcome.value == "allow"
+    )
 
 
 def test_admission_boundary_ceiling_caps_the_grant():
@@ -290,7 +292,9 @@ def test_admission_denied_when_boundary_omits_it_even_if_granted():
             tools: { view_orders: { mode: allow } }
     """
     ps = resolve_text(doc, agent="bot").policy_set
-    assert ps.evaluate(role="support", tool="agent.run", args={}).outcome.value == "deny"
+    assert (
+        ps.evaluate(role="support", tool="agent.run", args={}).outcome.value == "deny"
+    )
 
 
 def test_agent_named_admission_is_rejected():
