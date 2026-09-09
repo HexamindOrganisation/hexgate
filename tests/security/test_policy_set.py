@@ -96,13 +96,8 @@ def test_resolved_marker_admits_lowered_agent_keys_flat_form() -> None:
 
 
 def test_top_level_constraints_reach_every_role() -> None:
-    """A ``constraints:`` sibling of ``roles:`` fences every role.
-
-    The same block in a flat (no ``roles:``) document validates straight onto the
-    single policy, so the roles shape has to mean the same thing — otherwise one
-    key means two different things depending on whether the file happens to
-    declare roles, and the fence an author wrote silently does nothing.
-    """
+    """A ``constraints:`` sibling of ``roles:`` fences every role — the same block
+    in a flat document validates straight onto the single policy."""
     ps = load_policy_set_from_dict(
         {
             "constraints": ["run.tool_calls < 20"],
@@ -117,9 +112,8 @@ def test_top_level_constraints_reach_every_role() -> None:
 
 
 def test_top_level_constraints_union_with_a_role_own_fence() -> None:
-    """Hoisting unions, never replaces — constraints are the one field that
-    unions across ``inherits`` precisely because dropping an inherited fence
-    would be fail-open, and the file-level block is the same kind of fence."""
+    """Hoisting unions, never replaces: a role dropping the file's fence would be
+    fail-open."""
     ps = load_policy_set_from_dict(
         {
             "constraints": ["run.tool_calls < 20"],
@@ -138,13 +132,8 @@ def test_top_level_constraints_union_with_a_role_own_fence() -> None:
 
 
 def test_unknown_key_beside_roles_is_rejected() -> None:
-    """An unrecognised sibling of ``roles:`` fails closed instead of vanishing.
-
-    This is the defect class the top-level ``constraints:`` drop belonged to: the
-    roles shape validated only what sat under ``roles:``, so any other key parsed
-    and was discarded. Composed module policies are ``extra="forbid"`` at every
-    scope; this brings the roles shape into line.
-    """
+    """An unrecognised sibling of ``roles:`` fails closed instead of vanishing —
+    the defect class the dropped ``constraints:`` block belonged to."""
     with pytest.raises(PolicySetError, match="tools"):
         load_policy_set_from_dict(
             {
@@ -155,12 +144,8 @@ def test_unknown_key_beside_roles_is_rejected() -> None:
 
 
 def test_file_level_keys_beside_roles_are_accepted() -> None:
-    """``version`` and the resolved marker are legitimate file-level siblings.
-
-    Pins the resolve→build round-trip: ``hexgate policy resolve`` emits
-    ``{"roles": …, "_resolved": True}`` for a multi-role result, and that document
-    must keep loading.
-    """
+    """``version`` and the resolved marker stay legal siblings — pins the
+    resolve→build round-trip, which emits both for a multi-role result."""
     ps = load_policy_set_from_dict(
         {
             "version": 1,

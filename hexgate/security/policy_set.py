@@ -72,11 +72,8 @@ _ROLES_KEY = "roles"
 _CONSTRAINTS_KEY = "constraints"
 _VERSION_KEY = "version"
 
-# What a roles-shape document may carry beside ``roles:``. Everything else is
-# rejected rather than ignored: that shape validates only what sits under
-# ``roles:``, so an unrecognised sibling parses and then vanishes — the failure
-# mode an enforcement layer can least afford, and how a top-level
-# ``constraints:`` fence came to be silently dropped.
+# Legal siblings of ``roles:``. Anything else is rejected, not ignored: that
+# shape validates only what sits under ``roles:``, so a stray key would vanish.
 _FILE_LEVEL_KEYS = frozenset(
     {_ROLES_KEY, _CONSTRAINTS_KEY, _VERSION_KEY, RESOLVED_POLICY_MARKER}
 )
@@ -396,11 +393,7 @@ def _load_legacy_file(path: Path) -> PolicySet:
 
 
 def _reject_unknown_file_level_keys(payload: dict[str, Any]) -> None:
-    """Fail closed on an unrecognised sibling of ``roles:``.
-
-    Composed module policies are ``extra="forbid"`` at every scope, so the inline
-    shape was the one place a dropped key stayed silent.
-    """
+    """Fail closed on an unrecognised sibling of ``roles:``."""
     unknown = sorted(set(payload) - _FILE_LEVEL_KEYS)
     if unknown:
         allowed = sorted(_FILE_LEVEL_KEYS - {_ROLES_KEY})
@@ -412,12 +405,8 @@ def _reject_unknown_file_level_keys(payload: dict[str, Any]) -> None:
 
 
 def _file_level_constraints(payload: dict[str, Any]) -> list[str]:
-    """The file-level fence list, or empty.
-
-    Shape is checked here rather than at the hoist: a bare string would otherwise
-    splat into single characters, each a valid ``str``, and pydantic would accept
-    the wreckage.
-    """
+    """The file-level fence list, or empty. Shape is checked before the hoist:
+    a bare string would splat into characters, each a valid ``str``."""
     raw = payload.get(_CONSTRAINTS_KEY)
     if raw is None:
         return []
@@ -430,13 +419,8 @@ def _file_level_constraints(payload: dict[str, Any]) -> list[str]:
 
 
 def _with_file_level_constraints(spec: Any, fences: list[str]) -> Any:
-    """Union the file-level fences ahead of a role's own.
-
-    Union, not replace: constraints are the one policy field that unions across
-    ``inherits``, because a child dropping an inherited fence would be fail-open.
-    A file-level fence is the same kind of promise. A non-mapping spec passes
-    through untouched so pydantic reports the shape error.
-    """
+    """Union the file-level fences ahead of a role's own — replacing would let a
+    role drop the file's fence, which is fail-open. Non-mappings pass through."""
     if not fences or not isinstance(spec, dict):
         return spec
     own = spec.get(_CONSTRAINTS_KEY, [])
@@ -456,11 +440,8 @@ def load_policy_set_from_dict(payload: dict[str, Any]) -> PolicySet:
       :func:`load_policy_map` so inheritance and mixin filtering apply.
 
       A file-level ``constraints:`` block unions into every role, so the key
-      means the same thing whether or not the document declares roles (in the
-      flat shape it validates straight onto the single policy). ``version`` is
-      file metadata; any other sibling of ``roles:`` is rejected, because this
-      shape reads policy fields from inside each role and would otherwise
-      discard it silently.
+      means the same thing in both shapes. ``version`` is file metadata; any
+      other sibling of ``roles:`` is rejected rather than silently dropped.
 
     * **Flat single-policy shape** (legacy) — anything else is treated as a
       single :class:`AgentPolicy` and wrapped as the ``default`` role.
