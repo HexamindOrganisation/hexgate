@@ -135,6 +135,36 @@ describe("AppShell", () => {
     expect(useUi.getState().sidebarCollapsed).toBe(false);
   });
 
+  it("ignores Cmd/Ctrl-B while typing in an editable target", async () => {
+    renderWithProviders(<AppShell />);
+    await waitFor(() => expect(screen.getByText("Agents")).toBeInTheDocument());
+
+    // A press originating in an input (or the CodeMirror editor, which binds
+    // Ctrl-B to move-left) must not toggle the sidebar.
+    const input = document.createElement("input");
+    document.body.appendChild(input);
+    const before = useUi.getState().sidebarCollapsed;
+    act(() => {
+      fireEvent.keyDown(input, { key: "b", metaKey: true });
+    });
+    expect(useUi.getState().sidebarCollapsed).toBe(before);
+    input.remove();
+  });
+
+  it("ignores a repeated or over-modified Cmd/Ctrl-B", async () => {
+    renderWithProviders(<AppShell />);
+    await waitFor(() => expect(screen.getByText("Agents")).toBeInTheDocument());
+    const before = useUi.getState().sidebarCollapsed;
+
+    act(() => {
+      fireEvent.keyDown(window, { key: "b", metaKey: true, repeat: true });
+    });
+    act(() => {
+      fireEvent.keyDown(window, { key: "b", ctrlKey: true, altKey: true });
+    });
+    expect(useUi.getState().sidebarCollapsed).toBe(before); // neither toggled
+  });
+
   it("shows the signed-in user and signs out", async () => {
     const user = userEvent.setup();
     renderWithProviders(<AppShell />);

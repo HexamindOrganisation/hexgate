@@ -1,8 +1,5 @@
-import { useState } from "react";
 import { Check, ChevronsUpDown, FolderPlus, Plus } from "lucide-react";
 
-import { CreateOrgDialog } from "@/components/CreateOrgDialog";
-import { CreateProjectDialog } from "@/components/CreateProjectDialog";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -31,129 +28,133 @@ import { cn } from "@/lib/utils";
  *   - which is active (from the zustand store)
  *
  * Bootstrap (auto-pick first org + project when nothing's active) is
- * handled by the parent AppShell so this component stays pure.
+ * handled by the parent AppShell so this component stays pure. The create
+ * dialogs are owned by AppShell too (so collapsing the sidebar can't unmount
+ * an open one); this only signals intent via `onNewOrg` / `onNewProject`.
  */
-export function OrgProjectSwitcher() {
+export function OrgProjectSwitcher({
+  onNewOrg,
+  onNewProject,
+}: {
+  onNewOrg: () => void;
+  onNewProject: () => void;
+}) {
   const { activeOrgId, activeProjectId, setActiveOrg, setActiveProject } =
     useActive();
   const orgsQuery = useOrgs();
   const projectsQuery = useProjects(activeOrgId);
 
-  const [createOrgOpen, setCreateOrgOpen] = useState(false);
-  const [createProjectOpen, setCreateProjectOpen] = useState(false);
-
   const orgs: OrgWithRole[] = orgsQuery.data ?? [];
   const projects: ProjectRead[] = projectsQuery.data ?? [];
   const activeOrg = orgs.find((o) => o.id === activeOrgId) ?? null;
   const activeProject = projects.find((p) => p.id === activeProjectId) ?? null;
-  const label = switcherLabel(activeOrg, activeProject, orgsQuery.isLoading);
+  // Show "Loading…" (not "No project") while EITHER query is in flight — projects
+  // is a separate query, so after an org switch (which clears the active project)
+  // orgs is cached but projects is still loading.
+  const label = switcherLabel(
+    activeOrg,
+    activeProject,
+    orgsQuery.isLoading || (activeOrgId !== null && projectsQuery.isLoading),
+  );
 
   return (
-    <>
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <button
-            type="button"
-            className={cn(
-              "flex w-full flex-col gap-0.5 rounded-md px-2 py-1 text-left",
-              "transition-colors hover:bg-accent",
-              "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-            )}
-          >
-            <span className="flex w-full items-center gap-1">
-              <span className="truncate text-sm font-medium text-foreground">
-                {label.project}
-              </span>
-              <ChevronsUpDown className="ml-auto size-3 shrink-0 text-muted-foreground" />
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          className={cn(
+            "flex w-full flex-col gap-0.5 rounded-md px-2 py-1 text-left",
+            "transition-colors hover:bg-accent",
+            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+          )}
+        >
+          <span className="flex w-full items-center gap-1">
+            <span className="truncate text-sm font-medium text-foreground">
+              {label.project}
             </span>
-            {label.org && (
-              <span className="truncate text-xs text-muted-foreground">
-                {label.org}
+            <ChevronsUpDown className="ml-auto size-3 shrink-0 text-muted-foreground" />
+          </span>
+          {label.org && (
+            <span className="truncate text-xs text-muted-foreground">
+              {label.org}
+            </span>
+          )}
+        </button>
+      </DropdownMenuTrigger>
+
+      <DropdownMenuContent align="start" className="min-w-[260px]">
+        <DropdownMenuLabel>Organizations</DropdownMenuLabel>
+        {orgs.length === 0 ? (
+          <div className="px-2 py-3 text-xs text-muted-foreground">
+            Loading…
+          </div>
+        ) : (
+          orgs.map((org) => (
+            <DropdownMenuItem
+              key={org.id}
+              onSelect={() => setActiveOrg(org.id)}
+              className="flex items-center gap-2"
+            >
+              <span className="flex-1 truncate font-medium">{org.name}</span>
+              <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                {org.role}
               </span>
-            )}
-          </button>
-        </DropdownMenuTrigger>
+              {org.id === activeOrgId && (
+                <Check className="h-3.5 w-3.5 text-primary" />
+              )}
+            </DropdownMenuItem>
+          ))
+        )}
 
-        <DropdownMenuContent align="start" className="min-w-[260px]">
-          <DropdownMenuLabel>Organizations</DropdownMenuLabel>
-          {orgs.length === 0 ? (
-            <div className="px-2 py-3 text-xs text-muted-foreground">
-              Loading…
-            </div>
-          ) : (
-            orgs.map((org) => (
-              <DropdownMenuItem
-                key={org.id}
-                onSelect={() => setActiveOrg(org.id)}
-                className="flex items-center gap-2"
-              >
-                <span className="flex-1 truncate font-medium">{org.name}</span>
-                <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                  {org.role}
-                </span>
-                {org.id === activeOrgId && (
-                  <Check className="h-3.5 w-3.5 text-primary" />
-                )}
-              </DropdownMenuItem>
-            ))
-          )}
+        <DropdownMenuSeparator />
 
-          <DropdownMenuSeparator />
+        <DropdownMenuLabel>
+          Projects{activeOrg ? ` in ${activeOrg.name}` : ""}
+        </DropdownMenuLabel>
+        {activeOrgId === null ? (
+          <div className="px-2 py-3 text-xs text-muted-foreground">
+            Pick an organization first.
+          </div>
+        ) : projectsQuery.isLoading ? (
+          <div className="px-2 py-3 text-xs text-muted-foreground">
+            Loading…
+          </div>
+        ) : projects.length === 0 ? (
+          <div className="px-2 py-3 text-xs text-muted-foreground">
+            No projects yet.
+          </div>
+        ) : (
+          projects.map((project) => (
+            <DropdownMenuItem
+              key={project.id}
+              onSelect={() => setActiveProject(project.id)}
+              className="flex items-center gap-2"
+            >
+              <span className="flex-1 truncate font-mono text-xs">
+                {project.name}
+              </span>
+              {project.id === activeProjectId && (
+                <Check className="h-3.5 w-3.5 text-primary" />
+              )}
+            </DropdownMenuItem>
+          ))
+        )}
 
-          <DropdownMenuLabel>
-            Projects{activeOrg ? ` in ${activeOrg.name}` : ""}
-          </DropdownMenuLabel>
-          {activeOrgId === null ? (
-            <div className="px-2 py-3 text-xs text-muted-foreground">
-              Pick an organization first.
-            </div>
-          ) : projectsQuery.isLoading ? (
-            <div className="px-2 py-3 text-xs text-muted-foreground">
-              Loading…
-            </div>
-          ) : projects.length === 0 ? (
-            <div className="px-2 py-3 text-xs text-muted-foreground">
-              No projects yet.
-            </div>
-          ) : (
-            projects.map((project) => (
-              <DropdownMenuItem
-                key={project.id}
-                onSelect={() => setActiveProject(project.id)}
-                className="flex items-center gap-2"
-              >
-                <span className="flex-1 truncate font-mono text-xs">
-                  {project.name}
-                </span>
-                {project.id === activeProjectId && (
-                  <Check className="h-3.5 w-3.5 text-primary" />
-                )}
-              </DropdownMenuItem>
-            ))
-          )}
+        <DropdownMenuSeparator />
 
-          <DropdownMenuSeparator />
-
-          <DropdownMenuItem
-            onSelect={() => setCreateProjectOpen(true)}
-            disabled={!activeOrgId}
-          >
-            <FolderPlus className="h-3.5 w-3.5" />
-            <span>New project</span>
-          </DropdownMenuItem>
-          <DropdownMenuItem onSelect={() => setCreateOrgOpen(true)}>
-            <Plus className="h-3.5 w-3.5" />
-            <span>New organization</span>
-          </DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
-
-      <CreateOrgDialog open={createOrgOpen} onOpenChange={setCreateOrgOpen} />
-      <CreateProjectDialog
-        open={createProjectOpen}
-        onOpenChange={setCreateProjectOpen}
-      />
-    </>
+        <DropdownMenuItem
+          onSelect={() => onNewProject()}
+          disabled={!activeOrgId}
+        >
+          <FolderPlus className="h-3.5 w-3.5" />
+          <span>New project</span>
+        </DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => onNewOrg()}>
+          <Plus className="h-3.5 w-3.5" />
+          <span>New organization</span>
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 
@@ -163,7 +164,9 @@ function switcherLabel(
   activeProject: ProjectRead | null,
   loading: boolean,
 ): { project: string; org: string } {
-  if (loading) return { project: "Loading…", org: "" };
+  // Keep the org name visible while projects load, so an org switch doesn't
+  // blank the context — only the project line reads "Loading…".
+  if (loading) return { project: "Loading…", org: activeOrg?.name ?? "" };
   if (!activeOrg) return { project: "Pick an organization", org: "" };
   return {
     project: activeProject?.name ?? "No project",

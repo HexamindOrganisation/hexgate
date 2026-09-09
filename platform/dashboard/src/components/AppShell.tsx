@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate, NavLink, Outlet } from "react-router-dom";
 import {
   Ban,
@@ -26,6 +26,8 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { OrgProjectSwitcher } from "@/components/OrgProjectSwitcher";
+import { CreateOrgDialog } from "@/components/CreateOrgDialog";
+import { CreateProjectDialog } from "@/components/CreateProjectDialog";
 import { PreviewBanner } from "@/components/PreviewBanner";
 import { VerifyEmailBanner } from "@/components/VerifyEmailBanner";
 import { useActive } from "@/lib/active";
@@ -162,14 +164,29 @@ export function AppShell() {
   useActiveBootstrap();
   const { sidebarCollapsed, toggleSidebar } = useUi();
 
+  // The workspace create-dialogs live here, not in OrgProjectSwitcher, so
+  // collapsing the sidebar (which unmounts the switcher trigger) can't unmount
+  // an open dialog and drop the user's half-typed form.
+  const [createOrgOpen, setCreateOrgOpen] = useState(false);
+  const [createProjectOpen, setCreateProjectOpen] = useState(false);
+
   // Cmd/Ctrl-B toggles the sidebar (standard editor shortcut). toggleSidebar is
-  // a stable zustand action, so this binds once.
+  // a stable zustand action, so this binds once. Guard the match: ignore key
+  // repeat and extra modifiers, and — crucially — presses inside an editable
+  // target (an input, or the CodeMirror policy editor, which binds Ctrl-B to
+  // move-cursor-left) so the shortcut never hijacks typing.
   useEffect(() => {
+    const isEditable = (t: EventTarget | null): boolean =>
+      t instanceof HTMLElement &&
+      (t.isContentEditable ||
+        ["INPUT", "TEXTAREA", "SELECT"].includes(t.tagName) ||
+        t.closest(".cm-editor") !== null);
     const onKey = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "b") {
-        e.preventDefault();
-        toggleSidebar();
-      }
+      if (e.repeat || e.altKey || e.shiftKey) return;
+      if (!(e.metaKey || e.ctrlKey) || e.key.toLowerCase() !== "b") return;
+      if (isEditable(e.target)) return;
+      e.preventDefault();
+      toggleSidebar();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -197,7 +214,10 @@ export function AppShell() {
         >
           {!sidebarCollapsed && (
             <div className="min-w-0 flex-1">
-              <OrgProjectSwitcher />
+              <OrgProjectSwitcher
+                onNewOrg={() => setCreateOrgOpen(true)}
+                onNewProject={() => setCreateProjectOpen(true)}
+              />
             </div>
           )}
           <Button
@@ -233,6 +253,14 @@ export function AppShell() {
           <Outlet />
         </main>
       </div>
+
+      {/* Workspace dialogs live at the shell level so their lifecycle is
+          independent of the sidebar's collapse state. */}
+      <CreateOrgDialog open={createOrgOpen} onOpenChange={setCreateOrgOpen} />
+      <CreateProjectDialog
+        open={createProjectOpen}
+        onOpenChange={setCreateProjectOpen}
+      />
     </div>
   );
 }
