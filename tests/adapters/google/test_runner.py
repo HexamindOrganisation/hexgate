@@ -707,6 +707,63 @@ def test_reach_plugin_depth_map_is_bounded() -> None:
     assert "inv-0" not in plugin._depth  # stalest evicted
 
 
+def test_reach_plugin_registered_before_caller_plugins(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ADK's PluginManager early-exits on the first before_tool_callback that
+    returns non-None, so the reach plugin must be registered first — otherwise a
+    caller plugin could preempt the gate (a silent fail-open)."""
+    fake = _install_fake_runner(monkeypatch)
+
+    HexgateRunner(
+        agent=_make_agent(),
+        app_name="app",
+        session_service=InMemorySessionService(),
+        api_key="k",
+        plugins=[BasePlugin(name="caller")],
+    )
+
+    app = fake.instances[0].kwargs["app"]
+    assert isinstance(app.plugins[0], _HexgateReachPlugin)
+
+
+@pytest.mark.asyncio
+async def test_reach_survives_adk_plugin_wrapping_and_preceding_plugin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Driven through the real ADK PluginManager: a denied reach still surfaces as
+    the typed error after the runner unwraps ADK's RuntimeError re-wrap (#5), and —
+    registered first — our gate runs before a short-circuiting caller plugin can
+    preempt it (#1). One test for both, since both slipped past the direct-callback
+    unit tests."""
+    from google.adk.plugins.plugin_manager import PluginManager
+
+    from hexgate.adapters.google.runner import _unwrap_plugin_error
+    from hexgate.security.agent_gate import ReachNotAllowedError
+
+    runner = _runner_with_policy(
+        monkeypatch, agents={"evil": {"via": ["handoff"], "mode": "deny"}}
+    )
+    plugin = _HexgateReachPlugin(runner)
+
+    class _ShortCircuit(BasePlugin):
+        async def before_tool_callback(self, **_kw: Any) -> dict:
+            return {"result": "preempted"}  # would skip the gate if it ran first
+
+    # Reach plugin first, exactly as the runner registers it (insert(0)).
+    manager = PluginManager(plugins=[plugin, _ShortCircuit(name="sc")])
+    tool = SimpleNamespace(name="transfer_to_agent")
+    ctx = SimpleNamespace(agent_name="orchestrator", invocation_id="i")
+    async with _user():
+        with pytest.raises(RuntimeError) as exc_info:
+            await manager.run_before_tool_callback(
+                tool=tool, tool_args={"agent_name": "evil"}, tool_context=ctx
+            )
+    recovered = _unwrap_plugin_error(exc_info.value)
+    assert isinstance(recovered, ReachNotAllowedError)
+    assert recovered.decision is not None  # typed payload intact, not erased
+
+
 # ---------------------------------------------------------------------------
 # Usage plugin: merge behavior + HexgateContext contextvar survives into
 # after_model_callback

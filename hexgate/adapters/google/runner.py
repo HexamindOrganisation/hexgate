@@ -15,7 +15,6 @@ from google.adk.apps import App
 from google.adk.plugins.base_plugin import BasePlugin
 from google.adk.runners import Runner
 from google.adk.sessions import BaseSessionService
-from google.adk.tools.agent_tool import AgentTool
 from google.genai import types
 from langfuse import get_client, propagate_attributes
 from openinference.instrumentation.google_adk import GoogleADKInstrumentor
@@ -29,6 +28,7 @@ from hexgate.config.env import resolve_api_key
 from hexgate.runtime import HexgateContext, run_scope
 from hexgate.security.agent_gate import (
     HandoffDepthExceededError,
+    ReachNotAllowedError,
     resolve_agent_gate,
     resolve_reach_gate,
 )
@@ -38,19 +38,35 @@ from hexgate.security.naming import canonical_agent_name, canonical_name
 if TYPE_CHECKING:
     from hexgate.guards.types import Guard, GuardObserver
 
+# ADK's PluginManager re-raises every plugin exception as a fresh RuntimeError
+# (``Error in plugin '<name>' during '<cb>' callback: ...``), keeping the original
+# only as ``__cause__``. That would erase our typed seam errors and their
+# ``.decision`` / ``.depth`` payload (and leak the internal plugin name), so the
+# runner unwraps them back at the ADK boundary. ``except RuntimeError`` still
+# catches either form — all three seam errors subclass it by design.
+_TYPED_SEAM_ERRORS = (ReachNotAllowedError, HandoffDepthExceededError)
+
+
+def _unwrap_plugin_error(exc: RuntimeError) -> BaseException:
+    """Recover a typed seam error ADK wrapped into a bare ``RuntimeError``; return
+    ``exc`` unchanged when its cause is not one of ours."""
+    cause = exc.__cause__
+    return cause if isinstance(cause, _TYPED_SEAM_ERRORS) else exc
+
 
 class _HexgateReachPlugin(BasePlugin):
-    """Enforce agent-to-agent reach at the ADK tool seam.
+    """Enforce *handoff* reach and the handoff-depth cap at the ADK transfer seam.
 
-    ADK expresses delegation as tool calls: ``transfer_to_agent(agent_name=...)``
-    (handoff, control transfers) and :class:`AgentTool` (agent-as-tool, the caller
-    keeps control). ``before_tool_callback`` fires before either runs, so deciding
-    the target's reach key here and raising :class:`ReachNotAllowedError` on a deny
-    stops the transfer/delegation before it happens. Reach is governed by the
-    source agent's policy; only the governed root's reach is gated (a transfer
-    originating from an un-governed sub-agent is left alone, matching the OpenAI
-    adapter). Ordinary tools fall through — they are already gated by the wrapped
-    enforcer.
+    ADK expresses a handoff as the ``transfer_to_agent(agent_name=...)`` tool call;
+    ``before_tool_callback`` fires before it runs, so deciding ``agent.handoff:<target>``
+    here and raising :class:`ReachNotAllowedError` on a deny stops the transfer
+    before it happens. Reach is governed by the source agent's policy; only the
+    governed root's transfers are gated (a transfer from an un-governed sub-agent is
+    left alone, matching the OpenAI adapter). Agent-as-tool reach is *not* handled
+    here — an :class:`AgentTool` is an ordinary tool on ``agent.tools``, so
+    :func:`~hexgate.adapters.google.tools.wrap_tool` gates it under its reach key,
+    the same substitution the OpenAI adapter uses (gating it here as well would
+    decide one delegation twice and emit two audit events).
     """
 
     # Cap on tracked invocations. after_run_callback clears an invocation's depth
@@ -90,23 +106,23 @@ class _HexgateReachPlugin(BasePlugin):
             raise
 
     async def _gate_tool(self, tool, tool_args, tool_context) -> None:
-        is_transfer = tool.name == "transfer_to_agent"
-        # Depth cap first, as a runaway guard independent of reach policy and of
-        # which agent transfers: a transfer moves control forward, so the count of
-        # transfers in one invocation is the chain depth.
+        # Handoff reach + the depth cap only. Agent-as-tool reach is gated in
+        # wrap_tool (an AgentTool is a real tool on agent.tools) under the same
+        # reach-key substitution the OpenAI adapter uses, so gating it here too
+        # would double-decide it and emit two audit events for one delegation.
+        if tool.name != "transfer_to_agent":
+            return None  # ordinary tool / AgentTool — gated by the wrapped enforcer
+        # Depth cap first, as a runaway guard independent of reach policy: a
+        # transfer moves control forward, so the count of transfers in one
+        # invocation is the chain depth. Counts every transfer, governed or not.
         cap = self._runner._max_handoff_depth
-        if is_transfer and cap is not None:
+        if cap is not None:
             depth = self._bump_depth(tool_context.invocation_id)
             if depth > cap:
                 raise HandoffDepthExceededError(depth, cap)
         if canonical_name(tool_context.agent_name) != self._runner._agent_name:
             return None  # source is not the governed root; reach from it isn't gated
-        if is_transfer:
-            target, via = tool_args.get("agent_name"), "handoff"
-        elif isinstance(tool, AgentTool):
-            target, via = getattr(tool.agent, "name", None), "tool"
-        else:
-            return None  # ordinary tool; the wrapped enforcer already gates it
+        target = tool_args.get("agent_name")
         if not target:
             return None
         if not self._runner._binding.enforcer.policy.declares_reach():
@@ -115,7 +131,7 @@ class _HexgateReachPlugin(BasePlugin):
             self._runner._binding.enforcer,
             approval_handler=self._runner._approval_handler,
         )
-        await gate.check_reach_async(canonical_name(target), via=via)
+        await gate.check_reach_async(canonical_name(target), via="handoff")
         return None
 
     async def after_run_callback(self, *, invocation_context) -> None:
@@ -166,9 +182,13 @@ class HexgateRunner:
         )
         plugins = list(runner_kwargs.pop("plugins", None) or [])
         plugins.append(HexgateUsagePlugin(api_key=self.api_key))
-        # Reach enforcement at the ADK transfer/AgentTool seam. Appended after the
-        # caller's plugins so it always runs; it never rewrites tool input.
-        plugins.append(_HexgateReachPlugin(self))
+        # Reach + depth enforcement at the ADK transfer seam. Inserted *first*:
+        # ADK's PluginManager runs before_tool_callback in registration order and
+        # early-exits on the first plugin that returns non-None, so a caller plugin
+        # that overrides a tool result (replay, environment simulation, a cache)
+        # would otherwise short-circuit this gate — a silent fail-open. Ours only
+        # ever returns None or raises, so it can never short-circuit anything itself.
+        plugins.insert(0, _HexgateReachPlugin(self))
         app = App(name=app_name, root_agent=self._wrapped_agent, plugins=plugins)
         self._runner = Runner(
             app=app,
@@ -251,9 +271,16 @@ class HexgateRunner:
             try:
                 while True:
                     try:
-                        yield loop.run_until_complete(agen.__anext__())
+                        event = loop.run_until_complete(agen.__anext__())
                     except StopAsyncIteration:
                         break
+                    except RuntimeError as exc:
+                        # Recover a typed seam error ADK wrapped (see module top).
+                        unwrapped = _unwrap_plugin_error(exc)
+                        if unwrapped is exc:
+                            raise
+                        raise unwrapped from exc
+                    yield event
             finally:
                 loop.run_until_complete(agen.aclose())
                 loop.close()
@@ -284,10 +311,17 @@ class HexgateRunner:
         async with hexgate_context:
             await self._check_admission_async()  # in-scope: reads the caller's role
             with run_scope(self._agent_name), self._propagate(hexgate_context):
-                async for event in self._runner.run_async(
-                    user_id=hexgate_context.user_id,
-                    session_id=adk_session_id,
-                    new_message=new_message,
-                    **kwargs,
-                ):
-                    yield event
+                try:
+                    async for event in self._runner.run_async(
+                        user_id=hexgate_context.user_id,
+                        session_id=adk_session_id,
+                        new_message=new_message,
+                        **kwargs,
+                    ):
+                        yield event
+                except RuntimeError as exc:
+                    # Recover a typed seam error ADK wrapped (see module top).
+                    unwrapped = _unwrap_plugin_error(exc)
+                    if unwrapped is exc:
+                        raise
+                    raise unwrapped from exc

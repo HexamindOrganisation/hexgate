@@ -106,15 +106,16 @@ a warning at setup, so you always know whether a rule is actually enforced.
 | [LangChain](/adapters/langchain) | warns | warns | gated as an ordinary tool, by name |
 
 <Note>
-**Agent-as-tool is still gated even where the reach key is not.** A sub-agent
-exposed as a tool is also an ordinary tool: it is gated by its tool name through
-the normal enforcer, on every adapter, today. The `agent.tool:<name>` *reach* key
-is a separate, higher-level statement ("gate this as a delegation to agent B")
-that fires where the framework lets Hexgate recover the target agent. On Google
-(via `AgentTool`) and OpenAI (via the SDK's tool-origin metadata) an `agent.tool:`
-reach rule is enforced for the top-level agent; on the native agent, or when the
-policy declares no `agents` block, you gate agent-as-tool by writing a `tools:`
-rule on the tool's name.
+**Agent-as-tool falls back to name-gating where the reach key isn't engaged.** A
+sub-agent exposed as a tool is also an ordinary tool. When the policy declares a
+`via: tool` target — an `agent.tool:` key — the delegation is decided under that
+reach key (Google via `AgentTool`, OpenAI via the SDK's tool-origin metadata),
+closed-world with its `via`/constraints, and *not* also by the tool name. When the
+policy declares **no `via: tool` target** — or on the native agent, pydantic_ai,
+and LangChain, which expose no target handle — you gate agent-as-tool by writing a
+`tools:` rule on the tool's name instead. Both adapters engage on the same signal
+(a declared `via: tool` target), so a handoff-only policy leaves as-tools
+name-gated on both.
 </Note>
 
 ## Limits

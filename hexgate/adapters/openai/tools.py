@@ -19,7 +19,7 @@ from agents import FunctionTool
 from agents.tool import ToolContext
 
 from hexgate.approvals import ApprovalHandler
-from hexgate.guards.runner import run_guarded_async
+from hexgate.guards.runner import RenderError, run_guarded_async
 from hexgate.guards.types import ToolPipeline
 from hexgate.security.decision import DecisionOutcome
 from hexgate.security.enforcer import PolicyEnforcer
@@ -143,11 +143,15 @@ def wrap_tool(
                 "target": reach_target,
                 "via": "tool",
             }
-            render_error = _render_reach_error(reach_target)
+            # Reach wording renders *only* the policy denial (render_policy_error);
+            # a guard's Halt on the same call still renders through _render_error, so
+            # an after-guard rejecting the sub-agent's output isn't mislabeled as a
+            # reach denial ("the sub-agent was not invoked" when it in fact ran).
+            render_policy_error: RenderError | None = _render_reach_error(reach_target)
         else:
             policy_key = None
             policy_args = None
-            render_error = _render_error
+            render_policy_error = None
 
         def invoke(final: dict[str, Any]) -> Any:
             if not has_guards:
@@ -184,9 +188,10 @@ def wrap_tool(
             pipeline=pipeline,
             approval_handler=approval_handler,
             invoke=invoke,
-            render_error=render_error,
+            render_error=_render_error,
             policy_key=policy_key,
             policy_args=policy_args,
+            render_policy_error=render_policy_error,
         )
 
     wrapped = copy.copy(tool)

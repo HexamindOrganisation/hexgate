@@ -361,6 +361,7 @@ async def run_guarded_async(
     render_error: RenderError,
     policy_key: str | None = None,
     policy_args: Mapping[str, Any] | None = None,
+    render_policy_error: RenderError | None = None,
 ) -> Any:
     """Run one guarded tool call, async. See module docstring for the order.
 
@@ -370,7 +371,12 @@ async def run_guarded_async(
     agent-as-tool under its reach key ``agent.tool:<target>`` with the same
     ``{agent, target, via}`` reach args the handoff seam decides on — so a reach
     constraint behaves identically at both seams — without renaming the tool or
-    rewriting the sub-agent's input. Every other caller leaves them ``None``."""
+    rewriting the sub-agent's input. Every other caller leaves them ``None``.
+
+    ``render_policy_error`` renders *only* a policy denial; ``render_error`` still
+    renders guard halts. The reach adapters pass reach-specific wording here so a
+    guard's ``Halt`` on the same call is not mislabeled as a reach denial; when it
+    is ``None`` the policy denial falls back to ``render_error``."""
     context = get_current_context() if _has_guards(pipeline) else None
     call = _new_call(tool_name, args, enforcer, context)
     mods: list[Modification] = []
@@ -427,7 +433,7 @@ async def run_guarded_async(
                 # consumer never reads it as a rewrite that took effect.
                 if mods:
                     _notify(pipeline, call, mods, blocked=True)
-                return render_error(decision)
+                return (render_policy_error or render_error)(decision)
 
     # Before dispatch, not after: see _record_run_execution.
     _record_run_execution(call.tool_name)
@@ -553,9 +559,10 @@ def run_guarded_sync(
     render_error: RenderError,
     policy_key: str | None = None,
     policy_args: Mapping[str, Any] | None = None,
+    render_policy_error: RenderError | None = None,
 ) -> Any:
     """Run one guarded tool call, sync. Mirrors :func:`run_guarded_async`
-    (including ``policy_key`` / ``policy_args``)."""
+    (including ``policy_key`` / ``policy_args`` / ``render_policy_error``)."""
     context = get_current_context() if _has_guards(pipeline) else None
     call = _new_call(tool_name, args, enforcer, context)
     mods: list[Modification] = []
@@ -605,7 +612,7 @@ def run_guarded_sync(
                 # blocked, never as one that took effect.
                 if mods:
                     _notify(pipeline, call, mods, blocked=True)
-                return render_error(decision)
+                return (render_policy_error or render_error)(decision)
 
     # See the async path: counted after the decision, before dispatch.
     _record_run_execution(call.tool_name)

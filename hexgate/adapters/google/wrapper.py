@@ -53,8 +53,9 @@ def wrap_google_agent(
 
     resolved = resolve_policy(agent_name, api_key=api_key, client=client)
     enforcer = build_enforcer(resolved.engine, agent_name=agent_name, api_key=api_key)
-    # No admission/reach warning here: the Google HexgateRunner enforces both
-    # (admission at run entry, reach at the transfer/AgentTool seam).
+    # No admission/reach warning here: the Google adapter enforces both — admission
+    # at run entry, handoff reach + the depth cap at the runner's transfer plugin,
+    # and agent-as-tool reach in wrap_tools below (an AgentTool is a real tool).
     pipeline = build_pipeline(guards, observer=guard_observer)
     guarded_tools = wrap_tools(
         tools, enforcer, approval_handler=approval_handler, pipeline=pipeline

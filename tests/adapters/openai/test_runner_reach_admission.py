@@ -8,6 +8,7 @@ full SDK handoff, which needs a live model.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -182,3 +183,61 @@ def test_run_sync_refuses_non_admitted_caller(monkeypatch: pytest.MonkeyPatch) -
     runner = HexgateRunner(api_key="k")
     with pytest.raises(AgentNotAdmittedError):
         runner.run_sync(_agent("my-agent"), "hi", hexgate_context=_user())
+
+
+def _fake_streaming() -> SimpleNamespace:
+    """Stand in for a RunResultStreaming — _launch_streamed only reads/rewrites
+    ``stream_events`` (never iterated here)."""
+    return SimpleNamespace(stream_events=lambda: None)
+
+
+@pytest.mark.asyncio
+async def test_arun_streamed_admission_awaits_async_handler(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """arun_streamed resolves admission via the ASYNC path, so an async
+    approval_handler is awaited (not fail-closed like the sync check). This is what
+    `hexgate serve` relies on — an async RelayApprovalHandler over arun_streamed."""
+    _silence_observability(monkeypatch)
+    _patch_admission_resolve(monkeypatch, "approval_required")
+    seen = {"handler": False, "launched": False}
+
+    async def handler(_decision: Any) -> bool:
+        seen["handler"] = True
+        return True  # approve
+
+    def fake_run_streamed(*_a: Any, **_k: Any) -> SimpleNamespace:
+        seen["launched"] = True
+        return _fake_streaming()
+
+    monkeypatch.setattr(
+        runner_mod.Runner, "run_streamed", staticmethod(fake_run_streamed)
+    )
+    runner = HexgateRunner(api_key="k", approval_handler=handler)
+
+    await runner.arun_streamed(_agent("my-agent"), "hi", hexgate_context=_user())
+
+    assert seen["handler"] is True  # awaited, not fail-closed
+    assert seen["launched"] is True  # approved → the run launched
+
+
+def test_run_streamed_async_handler_is_fail_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The *sync* run_streamed keeps its documented limitation: an async handler on
+    the sync admission check fails closed. (arun_streamed is the async entrypoint.)"""
+    _silence_observability(monkeypatch)
+    _patch_admission_resolve(monkeypatch, "approval_required")
+
+    async def handler(_decision: Any) -> bool:
+        return True
+
+    monkeypatch.setattr(
+        runner_mod.Runner,
+        "run_streamed",
+        staticmethod(lambda *a, **k: _fake_streaming()),
+    )
+    runner = HexgateRunner(api_key="k", approval_handler=handler)
+
+    with pytest.raises(AgentNotAdmittedError):
+        runner.run_streamed(_agent("my-agent"), "hi", hexgate_context=_user())

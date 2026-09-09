@@ -201,6 +201,29 @@ async def test_name_scoped_guard_fires_on_as_tool_under_reach() -> None:
 
 
 @pytest.mark.asyncio
+async def test_guard_halt_on_as_tool_uses_guard_wording_not_reach() -> None:
+    """A guard Halt renders through ``render_error`` (guard wording), not the
+    reach ``render_policy_error`` — so a guard rejecting an as-tool call is not
+    mislabeled 'reach not permitted / sub-agent was not invoked'."""
+    from hexgate.guards import before_tool, build_pipeline
+    from hexgate.guards.types import Halt
+
+    pipe = build_pipeline([before_tool(lambda call: Halt(reason="blocked by guard"))])
+    enforcer = _enforcer(
+        {
+            "default_policy": {"mode": "deny"},
+            "agents": {"billing_bot": {"via": ["tool"], "mode": "allow"}},  # reach ok
+        }
+    )
+    wrapped = wrap_tool(_agent_tool(), enforcer, pipeline=pipe)
+
+    result = await wrapped.on_invoke_tool("ctx", '{"query": "balance"}')
+
+    assert "blocked by guard" in result  # the guard's reason
+    assert "reach to agent" not in result  # not the reach denial wording
+
+
+@pytest.mark.asyncio
 async def test_reach_constraint_reads_reach_args_not_tool_input() -> None:
     """A constraint on the reach rule sees ``{agent, target, via}`` (as at the
     handoff seam), not the sub-agent's tool-call payload — so the same rule shape

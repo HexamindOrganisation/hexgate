@@ -402,6 +402,13 @@ class HexgateRunner:
         ban_gate = self._ban_gate_for(agent)
         if ban_gate is not None:
             await ban_gate.check_async(hexgate_context)
+        # Admission here, async — not the sync check in _launch_streamed — so an
+        # async approval_handler is awaited rather than fail-closed (hexgate serve
+        # drives arun_streamed with an async RelayApprovalHandler). This scope is
+        # opened only for the admission check and closes before _launch_streamed
+        # opens its own for the run; admitted=True below then skips its sync check.
+        with hexgate_context.sync_scope():
+            await self._check_admission_async(binding)  # in-scope: reads the role
         return self._launch_streamed(
             agent,
             input,
@@ -410,6 +417,7 @@ class HexgateRunner:
             run_config=run_config,
             hooks=hooks,
             kwargs=kwargs,
+            admitted=True,
         )
 
     def _launch_streamed(
@@ -422,6 +430,7 @@ class HexgateRunner:
         run_config: RunConfig | None,
         hooks: RunHooks | None,
         kwargs: dict[str, Any],
+        admitted: bool = False,
     ) -> RunResultStreaming:
         """Wrap the agent, launch ``Runner.run_streamed`` inside the context
         scope, and re-wrap ``stream_events`` to re-enter it. Shared by the sync
@@ -443,8 +452,11 @@ class HexgateRunner:
         )
 
         with hexgate_context.sync_scope():
-            # Before run_streamed spawns its task, so a non-admitted run yields nothing.
-            self._check_admission_sync(binding)
+            # Before run_streamed spawns its task, so a non-admitted run yields
+            # nothing. Skipped when the async entrypoint already admitted (with an
+            # async-aware check), so an async approval_handler isn't fail-closed.
+            if not admitted:
+                self._check_admission_sync(binding)
             # Scope must be open around run_streamed(): it snapshots the
             # contextvars into the background task where tools fire, and that
             # snapshot keeps the facts alive after this block exits.
