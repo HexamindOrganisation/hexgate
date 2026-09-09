@@ -48,7 +48,7 @@
   --card-foreground: 222 47% 11%;
   --popover: 0 0% 100%;
   --popover-foreground: 222 47% 11%;
-  --primary: 226 70% 52%;
+  --primary: 313 40% 50%; /* demo: plum */
   --primary-foreground: 210 40% 98%;
   --secondary: 210 40% 94%;
   --secondary-foreground: 222 47% 11%;
@@ -77,7 +77,7 @@
   --card-foreground: 210 40% 96%;
   --popover: 222 28% 8%;
   --popover-foreground: 210 40% 96%;
-  --primary: 226 78% 65%;
+  --primary: 313 55% 72%; /* demo: plum */
   --primary-foreground: 222 33% 5%;
   --secondary: 222 20% 14%;
   --secondary-foreground: 210 40% 96%;
