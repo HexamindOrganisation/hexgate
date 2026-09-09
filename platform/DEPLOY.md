@@ -241,6 +241,35 @@ far that did this:
 |---|---|---|
 | OTLP pipeline (collector/redpanda/enricher) | `HEXGATE_OTLP_PORT` | `7001` prod, `7201` staging |
 
+**When a release changes the topic config, re-run `redpanda-init` by hand** —
+`platform-up` will not. `create-topics.sh` reconciles `retention.ms` and
+`max.message.bytes` on every run, but `redpanda-init` is the only thing that
+invokes it, and `restart: "no"` + `service_completed_successfully` means an
+existing stack never starts it again. The collector and enricher take their new
+limits from rebuilt images, so skipping this leaves the broker as the one hop
+still on the old, narrower limit — and it rejects the records everything else
+is now sized to send:
+
+```bash
+cd /srv/hexgate-<stage>
+docker compose -p hexgate-<stage> --env-file platform/.env.<stage> \
+  -f platform/docker-compose.deploy.yml run --rm redpanda-init
+# verify, then restart the two clients of that limit
+docker compose -p hexgate-<stage> --env-file platform/.env.<stage> \
+  -f platform/docker-compose.deploy.yml exec redpanda \
+  rpk topic describe hexgate.otlp.raw --brokers localhost:9092
+docker compose -p hexgate-<stage> --env-file platform/.env.<stage> \
+  -f platform/docker-compose.deploy.yml restart collector enricher
+```
+
+`run --rm` starts a sibling container rather than reusing the completed one, so
+it works on a running stack and leaves nothing behind. Releases so far that
+needed this:
+
+| Release | Change |
+|---|---|
+| LLM message logging | `max.message.bytes` → 8 MiB on `hexgate.otlp.raw` **and** `hexgate.otlp.dlq` |
+
 ## Operations
 
 **Back up these volumes** (per env, prefixed `hexgate-prod_` / `hexgate-staging_`):
