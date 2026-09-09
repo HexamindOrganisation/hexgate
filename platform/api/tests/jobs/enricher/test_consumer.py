@@ -330,6 +330,50 @@ async def test_run_happy_path_processes_a_poll_then_stops_cleanly(
     assert calls == ["insert", "commit"]
 
 
+async def test_run_sizes_both_kafka_clients_for_the_topic_limit(
+    monkeypatch, make_job
+) -> None:
+    """aiokafka defaults the consumer's per-partition fetch and the producer's
+    request size to 1 MiB each, under the topics' 8 MiB max.message.bytes. A
+    record the broker accepted but the consumer cannot fetch stalls that
+    partition permanently, so these kwargs are load-bearing, not tuning — and
+    the fakes the other lifecycle tests inject would hide their absence."""
+    from hexgate_api.jobs.enricher.consumer import _MAX_RECORD_BYTES
+
+    job, _clickhouse, consumer, calls = _lifecycle_job(
+        monkeypatch,
+        make_job,
+        records=[],
+        topics={"hexgate.otlp.raw", "hexgate.otlp.dlq"},
+    )
+    producer = job._producer
+    # Drop the injected clients so run() builds real ones through the patched
+    # constructors below, which record the kwargs and hand back the fakes.
+    job._consumer = job._producer = None
+    seen: dict[str, dict] = {}
+
+    def _fake_consumer(*_args, **kwargs):
+        seen["consumer"] = kwargs
+        return consumer
+
+    def _fake_producer(*_args, **kwargs):
+        seen["producer"] = kwargs
+        return producer
+
+    monkeypatch.setattr(
+        "hexgate_api.jobs.enricher.consumer.AIOKafkaConsumer", _fake_consumer
+    )
+    monkeypatch.setattr(
+        "hexgate_api.jobs.enricher.consumer.AIOKafkaProducer", _fake_producer
+    )
+
+    await job.run()
+
+    assert seen["consumer"]["max_partition_fetch_bytes"] == _MAX_RECORD_BYTES
+    assert seen["producer"]["max_request_size"] == _MAX_RECORD_BYTES
+    assert _MAX_RECORD_BYTES >= 8 * 1024 * 1024  # the topics' max.message.bytes
+
+
 async def test_when_a_topic_is_missing_then_run_fails_fast(
     monkeypatch, make_job
 ) -> None:
