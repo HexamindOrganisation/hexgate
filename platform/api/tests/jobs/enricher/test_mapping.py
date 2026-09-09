@@ -231,6 +231,39 @@ def test_sdk_decision_span_validates_in_and_out_of_a_run_scope() -> None:
     assert out_of_run.run_tool_calls == 0
 
 
+def test_sdk_clamps_an_overflowing_run_counter_into_a_span_this_side_accepts() -> None:
+    """The other half of the counter contract.
+
+    Counters are monotone within a run, so an unclamped overflow would not cost
+    one row: every later decision for that run would fail the same validator and
+    DLQ, taking the tail of the trail with it. The SDK clamps at projection so
+    the run stays observable; ``le=UINT32_MAX`` here stays the backstop for a
+    foreign emitter.
+    """
+    from hexgate.audit import AuditEvent
+    from hexgate.security.decision import Decision, DecisionOutcome, RunAttribution
+
+    attrs = AuditEvent(
+        decision=Decision(
+            outcome=DecisionOutcome.ALLOW,
+            agent_name="example_agent",
+            tool_name="read_file",
+            run=RunAttribution.from_namespace(
+                {
+                    "id": str(uuid.uuid4()),
+                    "total_tokens": UINT32_MAX + 1,
+                    "elapsed_seconds": 1e9,
+                }
+            ),
+        )
+    ).span_attributes()
+
+    event = map_span(semconv.SCOPE_AUDIT, make_span(attrs), {})
+
+    assert event.run_total_tokens == UINT32_MAX
+    assert event.run_elapsed_ms == UINT32_MAX
+
+
 def test_sdk_usage_span_validates_in_and_out_of_a_run_scope() -> None:
     """Same contract for llm_invocation.run_id, which joins usage rows to the
     policy_decision rows of the same invocation."""

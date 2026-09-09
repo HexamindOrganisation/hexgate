@@ -200,6 +200,23 @@ _ERROR_TYPE_BY_OUTCOME: dict[DecisionOutcome, str] = {
 # ``run.elapsed_seconds`` is a float; the platform column is UInt32 ms.
 _MILLISECONDS_PER_SECOND = 1000
 
+# The range the platform's ``DecisionEvent`` validates every run counter against
+# (``ge=0, le=UINT32_MAX``, backing a UInt32 ClickHouse column). Duplicated
+# rather than imported: the SDK does not depend on the platform package.
+_COUNTER_MIN = 0
+_COUNTER_MAX = 2**32 - 1
+
+
+def _as_counter(value: Any) -> int:
+    """Coerce one ``run.*`` value into the platform's UInt32 counter range.
+
+    Clamped, not passed through: counters are monotone within a run, so an
+    out-of-range value does not cost one row — the validator rejects every
+    later decision for that run too, and the DLQ takes the rest of the trail
+    with it. A clamped counter misreports; a rejected span loses the record.
+    """
+    return min(max(int(value), _COUNTER_MIN), _COUNTER_MAX)
+
 
 @dataclass(frozen=True, slots=True)
 class RunAttribution:
@@ -220,17 +237,18 @@ class RunAttribution:
     def from_namespace(cls, run: Mapping[str, Any] | None) -> "RunAttribution":
         """Project the ``run.*`` namespace onto the five persisted counters.
 
-        A subset: the other paths have no column yet.
+        A subset: the other paths have no column yet. Every counter is clamped
+        to the wire's range (see :func:`_as_counter`).
         """
         if not run:
             return DETACHED_RUN
         return cls(
             run_id=str(run.get("id", "")),
-            tool_calls=int(run.get("tool_calls", 0)),
-            llm_calls=int(run.get("llm_calls", 0)),
-            denials=int(run.get("denials", 0)),
-            total_tokens=int(run.get("total_tokens", 0)),
-            elapsed_ms=int(
+            tool_calls=_as_counter(run.get("tool_calls", 0)),
+            llm_calls=_as_counter(run.get("llm_calls", 0)),
+            denials=_as_counter(run.get("denials", 0)),
+            total_tokens=_as_counter(run.get("total_tokens", 0)),
+            elapsed_ms=_as_counter(
                 float(run.get("elapsed_seconds", 0.0)) * _MILLISECONDS_PER_SECOND
             ),
         )

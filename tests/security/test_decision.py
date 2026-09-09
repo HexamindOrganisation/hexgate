@@ -462,8 +462,13 @@ def test_combine_rejects_an_empty_role_list() -> None:
 
 # --- RunAttribution ---------------------------------------------------------
 #
-# The one place that knows the wire field names, the seconds→ms conversion, and
-# the ``""`` → ``None`` rule for run_id.
+# The one place that knows the wire field names, the seconds→ms conversion, the
+# ``""`` → ``None`` rule for run_id, and the counter clamp.
+
+# Spelled out rather than imported from either side: this is the contract the
+# SDK and the platform's ``DecisionEvent`` must agree on, so a drift on either
+# fails here.
+_WIRE_COUNTER_MAX = 2**32 - 1
 
 
 def _facts_with(tool_calls: int = 0, denials: int = 0, tokens: int = 0) -> RunFacts:
@@ -514,6 +519,42 @@ def test_run_attribution_of_detached_facts_reads_zeros_and_no_id() -> None:
         0,
         0,
     )
+
+
+def test_run_attribution_clamps_a_counter_over_the_wire_maximum() -> None:
+    """The platform validates each counter ``le=UINT32_MAX``. Counters are
+    monotone, so sending one over the top would not lose a single row — every
+    later decision for that run would be rejected too, DLQ-ing the tail of the
+    trail. A clamped counter keeps the run observable."""
+    run = RunAttribution.from_namespace(
+        {"id": "r", "total_tokens": _WIRE_COUNTER_MAX + 1}
+    )
+
+    assert run.total_tokens == _WIRE_COUNTER_MAX
+
+
+def test_run_attribution_clamps_elapsed_ms_over_the_wire_maximum() -> None:
+    """The arm a real run can reach: ~49.7 days of wall clock, not 4.29e9 tokens."""
+    run = RunAttribution.from_namespace({"id": "r", "elapsed_seconds": 1e9})
+
+    assert run.elapsed_ms == _WIRE_COUNTER_MAX
+
+
+def test_run_attribution_floors_a_negative_counter_at_zero() -> None:
+    """``ge=0`` is the other half of the platform's validation. Real facts are
+    monotonic-clock derived, but a caller-supplied namespace is not."""
+    run = RunAttribution.from_namespace({"id": "r", "elapsed_seconds": -5.0})
+
+    assert run.elapsed_ms == 0
+
+
+def test_run_attribution_leaves_an_in_range_counter_exact() -> None:
+    """Clamping is a ceiling, not a rounding — ordinary counters pass through."""
+    run = RunAttribution.from_namespace(
+        {"id": "r", "tool_calls": 12, "total_tokens": _WIRE_COUNTER_MAX}
+    )
+
+    assert (run.tool_calls, run.total_tokens) == (12, _WIRE_COUNTER_MAX)
 
 
 def test_run_attribution_omits_run_id_never_sends_an_empty_string() -> None:
