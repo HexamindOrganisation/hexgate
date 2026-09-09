@@ -68,6 +68,19 @@ DEFAULT_ROLE_NAME = "default"
 # so the reserved-name guard still fires on authored source.
 RESOLVED_POLICY_MARKER = "_resolved"
 
+_ROLES_KEY = "roles"
+_CONSTRAINTS_KEY = "constraints"
+_VERSION_KEY = "version"
+
+# What a roles-shape document may carry beside ``roles:``. Everything else is
+# rejected rather than ignored: that shape validates only what sits under
+# ``roles:``, so an unrecognised sibling parses and then vanishes — the failure
+# mode an enforcement layer can least afford, and how a top-level
+# ``constraints:`` fence came to be silently dropped.
+_FILE_LEVEL_KEYS = frozenset(
+    {_ROLES_KEY, _CONSTRAINTS_KEY, _VERSION_KEY, RESOLVED_POLICY_MARKER}
+)
+
 _RUN_ROOT = "run"
 _RUN_PATH_SEGMENTS = 2  # the namespace is flat: run.<name>
 _ORDERED_OPS = frozenset({"<", "<=", ">", ">="})
@@ -382,6 +395,56 @@ def _load_legacy_file(path: Path) -> PolicySet:
     return load_policy_set_from_dict(payload)
 
 
+def _reject_unknown_file_level_keys(payload: dict[str, Any]) -> None:
+    """Fail closed on an unrecognised sibling of ``roles:``.
+
+    Composed module policies are ``extra="forbid"`` at every scope, so the inline
+    shape was the one place a dropped key stayed silent.
+    """
+    unknown = sorted(set(payload) - _FILE_LEVEL_KEYS)
+    if unknown:
+        allowed = sorted(_FILE_LEVEL_KEYS - {_ROLES_KEY})
+        raise PolicySetError(
+            f"unrecognised top-level key(s) {unknown} beside {_ROLES_KEY!r}; "
+            f"a role-keyed document reads policy fields inside each role, so "
+            f"move them under a role. Only {allowed} are file-level keys."
+        )
+
+
+def _file_level_constraints(payload: dict[str, Any]) -> list[str]:
+    """The file-level fence list, or empty.
+
+    Shape is checked here rather than at the hoist: a bare string would otherwise
+    splat into single characters, each a valid ``str``, and pydantic would accept
+    the wreckage.
+    """
+    raw = payload.get(_CONSTRAINTS_KEY)
+    if raw is None:
+        return []
+    if not isinstance(raw, list) or not all(isinstance(item, str) for item in raw):
+        raise PolicySetError(
+            f"top-level {_CONSTRAINTS_KEY!r} must be a list of constraint "
+            f"expressions (got {type(raw).__name__})"
+        )
+    return raw
+
+
+def _with_file_level_constraints(spec: Any, fences: list[str]) -> Any:
+    """Union the file-level fences ahead of a role's own.
+
+    Union, not replace: constraints are the one policy field that unions across
+    ``inherits``, because a child dropping an inherited fence would be fail-open.
+    A file-level fence is the same kind of promise. A non-mapping spec passes
+    through untouched so pydantic reports the shape error.
+    """
+    if not fences or not isinstance(spec, dict):
+        return spec
+    own = spec.get(_CONSTRAINTS_KEY, [])
+    if not isinstance(own, list):
+        return spec
+    return {**spec, _CONSTRAINTS_KEY: [*fences, *own]}
+
+
 def load_policy_set_from_dict(payload: dict[str, Any]) -> PolicySet:
     """Build a :class:`PolicySet` from an already-parsed YAML document.
 
@@ -391,6 +454,13 @@ def load_policy_set_from_dict(payload: dict[str, Any]) -> PolicySet:
       a mapping of ``{role_name: agent_policy_spec}``. Each value is validated
       as an :class:`AgentPolicy`; the resulting map is wrapped via
       :func:`load_policy_map` so inheritance and mixin filtering apply.
+
+      A file-level ``constraints:`` block unions into every role, so the key
+      means the same thing whether or not the document declares roles (in the
+      flat shape it validates straight onto the single policy). ``version`` is
+      file metadata; any other sibling of ``roles:`` is rejected, because this
+      shape reads policy fields from inside each role and would otherwise
+      discard it silently.
 
     * **Flat single-policy shape** (legacy) — anything else is treated as a
       single :class:`AgentPolicy` and wrapped as the ``default`` role.
@@ -407,10 +477,14 @@ def load_policy_set_from_dict(payload: dict[str, Any]) -> PolicySet:
     for SDK-local agents.
     """
     context = {"resolved": True} if payload.get(RESOLVED_POLICY_MARKER) else None
-    if isinstance(payload.get("roles"), dict):
+    if isinstance(payload.get(_ROLES_KEY), dict):
+        _reject_unknown_file_level_keys(payload)
+        fences = _file_level_constraints(payload)
         role_policies = {
-            role_name: AgentPolicy.model_validate(spec or {}, context=context)
-            for role_name, spec in payload["roles"].items()
+            role_name: AgentPolicy.model_validate(
+                _with_file_level_constraints(spec or {}, fences), context=context
+            )
+            for role_name, spec in payload[_ROLES_KEY].items()
         }
         return load_policy_map(role_policies)
     flat = {k: v for k, v in payload.items() if k != RESOLVED_POLICY_MARKER}

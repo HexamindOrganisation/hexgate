@@ -95,6 +95,82 @@ def test_resolved_marker_admits_lowered_agent_keys_flat_form() -> None:
     assert ps.policy_for(None).tools["agent.tool:billing-bot"].mode == "allow"
 
 
+def test_top_level_constraints_reach_every_role() -> None:
+    """A ``constraints:`` sibling of ``roles:`` fences every role.
+
+    The same block in a flat (no ``roles:``) document validates straight onto the
+    single policy, so the roles shape has to mean the same thing — otherwise one
+    key means two different things depending on whether the file happens to
+    declare roles, and the fence an author wrote silently does nothing.
+    """
+    ps = load_policy_set_from_dict(
+        {
+            "constraints": ["run.tool_calls < 20"],
+            "roles": {
+                "support": {"default_policy": {"mode": "allow"}},
+                "admin": {"default_policy": {"mode": "allow"}},
+            },
+        }
+    )
+    for role in ("support", "admin"):
+        assert ps.policy_for(role).constraints == ["run.tool_calls < 20"]
+
+
+def test_top_level_constraints_union_with_a_role_own_fence() -> None:
+    """Hoisting unions, never replaces — constraints are the one field that
+    unions across ``inherits`` precisely because dropping an inherited fence
+    would be fail-open, and the file-level block is the same kind of fence."""
+    ps = load_policy_set_from_dict(
+        {
+            "constraints": ["run.tool_calls < 20"],
+            "roles": {
+                "support": {
+                    "default_policy": {"mode": "allow"},
+                    "constraints": ["args.amount <= 500"],
+                }
+            },
+        }
+    )
+    assert ps.policy_for("support").constraints == [
+        "run.tool_calls < 20",
+        "args.amount <= 500",
+    ]
+
+
+def test_unknown_key_beside_roles_is_rejected() -> None:
+    """An unrecognised sibling of ``roles:`` fails closed instead of vanishing.
+
+    This is the defect class the top-level ``constraints:`` drop belonged to: the
+    roles shape validated only what sat under ``roles:``, so any other key parsed
+    and was discarded. Composed module policies are ``extra="forbid"`` at every
+    scope; this brings the roles shape into line.
+    """
+    with pytest.raises(PolicySetError, match="tools"):
+        load_policy_set_from_dict(
+            {
+                "tools": {"refund": {"mode": "allow"}},
+                "roles": {"default": {"default_policy": {"mode": "allow"}}},
+            }
+        )
+
+
+def test_file_level_keys_beside_roles_are_accepted() -> None:
+    """``version`` and the resolved marker are legitimate file-level siblings.
+
+    Pins the resolve→build round-trip: ``hexgate policy resolve`` emits
+    ``{"roles": …, "_resolved": True}`` for a multi-role result, and that document
+    must keep loading.
+    """
+    ps = load_policy_set_from_dict(
+        {
+            "version": 1,
+            RESOLVED_POLICY_MARKER: True,
+            "roles": {"default": {"tools": {"agent.run": {"mode": "allow"}}}},
+        }
+    )
+    assert ps.policy_for("default").tools["agent.run"].mode == "allow"
+
+
 def test_load_policy_set_none_returns_deny_default() -> None:
     """``None`` yields a deny-by-default fallback role."""
     ps = load_policy_set(None)
