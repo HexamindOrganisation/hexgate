@@ -303,6 +303,22 @@ def test_agent_named_admission_is_rejected():
         parse_entry("agents: { admission: { tools: {} } }")
 
 
+def test_run_ref_on_a_lowered_agent_key_is_validated():
+    # run.* validation reaches the lowered agent keys (admission's agent.run,
+    # reach's agent.tool:/agent.handoff:), not just plain tools — an unknown run
+    # path there is rejected at load, not silently fail-open.
+    doc = """
+    boundary:
+      admission: { mode: allow }
+    agents:
+      bot:
+        roles:
+          support: { admission: { mode: allow, constraint: "run.bogus < 1" } }
+    """
+    with pytest.raises(LinkError, match="unknown run"):
+        resolve_text(doc, agent="bot")
+
+
 # --- imports -------------------------------------------------------------
 
 
