@@ -70,7 +70,9 @@ describe("OrgProjectSwitcher", () => {
   });
 
   it("shows the active org name in the trigger", async () => {
-    renderWithProviders(<OrgProjectSwitcher />);
+    renderWithProviders(
+      <OrgProjectSwitcher onNewOrg={vi.fn()} onNewProject={vi.fn()} />,
+    );
     await waitFor(() => {
       expect(screen.getByText("Org Alpha")).toBeInTheDocument();
     });
@@ -86,7 +88,9 @@ describe("OrgProjectSwitcher", () => {
     });
 
     const user = userEvent.setup();
-    renderWithProviders(<OrgProjectSwitcher />);
+    renderWithProviders(
+      <OrgProjectSwitcher onNewOrg={vi.fn()} onNewProject={vi.fn()} />,
+    );
 
     // Open the dropdown.
     await waitFor(() => {
@@ -104,23 +108,56 @@ describe("OrgProjectSwitcher", () => {
     expect(useActive.getState().activeProjectId).toBeNull();
   });
 
-  it('"New organization" opens the create dialog', async () => {
+  it('"New organization" signals the parent to open the dialog', async () => {
+    // The dialog now lives in AppShell (so a sidebar collapse can't unmount it);
+    // the switcher only fires the intent callback.
+    const onNewOrg = vi.fn();
     const user = userEvent.setup();
-    renderWithProviders(<OrgProjectSwitcher />);
+    renderWithProviders(
+      <OrgProjectSwitcher onNewOrg={onNewOrg} onNewProject={vi.fn()} />,
+    );
 
     await waitFor(() => {
       expect(screen.getByText("Org Alpha")).toBeInTheDocument();
     });
     await user.click(screen.getAllByText("Org Alpha")[0]!);
+    await user.click(await screen.findByText("New organization"));
 
-    const newOrgItem = await screen.findByText("New organization");
-    await user.click(newOrgItem);
+    expect(onNewOrg).toHaveBeenCalled();
+  });
 
-    // CreateOrgDialog renders both a title and a submit button with
-    // the text "Create organization" — assert on something unique to
-    // the dialog body to avoid the multi-match getByText error.
-    expect(
-      await screen.findByText(/Teams in Hexgate live inside/i),
-    ).toBeInTheDocument();
+  it("reads Loading… (not No project) while projects are still loading", async () => {
+    // An org switch clears the active project and refetches projects; orgs are
+    // cached, so only the projects query is in flight. The primary line must not
+    // flash "No project" during that window — and the org context stays.
+    act(() => {
+      useActive.setState({ activeOrgId: ORG_A.id, activeProjectId: "p-x" });
+    });
+    vi.spyOn(window, "fetch").mockImplementation(
+      async (input: RequestInfo | URL) => {
+        const path = (
+          typeof input === "string" ? input : input.toString()
+        ).split("?")[0];
+        if (path === "/v1/orgs") {
+          return new Response(JSON.stringify([ORG_A, ORG_B]), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+        // Projects never resolve → the query stays in its loading state.
+        return new Promise<Response>(() => {});
+      },
+    );
+    renderWithProviders(
+      <OrgProjectSwitcher onNewOrg={vi.fn()} onNewProject={vi.fn()} />,
+    );
+
+    // Wait for the window under test: orgs resolved (org name shows) while the
+    // projects query is still loading.
+    await waitFor(() =>
+      expect(screen.getByText("Org Alpha")).toBeInTheDocument(),
+    );
+    expect(screen.getByText("Loading…")).toBeInTheDocument(); // primary line
+    expect(screen.queryByText("No project")).not.toBeInTheDocument();
   });
 });

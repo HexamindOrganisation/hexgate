@@ -1,14 +1,5 @@
-import { useState } from "react";
-import {
-  Building2,
-  Check,
-  ChevronsUpDown,
-  FolderPlus,
-  Plus,
-} from "lucide-react";
+import { Check, ChevronsUpDown, FolderPlus, Plus } from "lucide-react";
 
-import { CreateOrgDialog } from "@/components/CreateOrgDialog";
-import { CreateProjectDialog } from "@/components/CreateProjectDialog";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -23,168 +14,162 @@ import { useProjects, type ProjectRead } from "@/lib/projects";
 import { cn } from "@/lib/utils";
 
 /**
- * The pill that lives in the AppShell header. Reads the active org +
+ * The workspace switcher at the top of the sidebar. Reads the active org +
  * project from the store, lists all the user's orgs (with their
  * projects nested) in a single dropdown. "+ New project" /
  * "+ New organization" footer actions open the corresponding dialogs.
+ *
+ * Renders as a two-line block — project name on top, org name beneath — so
+ * the project reads as the primary context (OpenAI-style) even though one
+ * dropdown still switches both.
  *
  * Two state pieces:
  *   - which orgs/projects exist (from React Query)
  *   - which is active (from the zustand store)
  *
  * Bootstrap (auto-pick first org + project when nothing's active) is
- * handled by the parent AppShell so this component stays pure.
+ * handled by the parent AppShell so this component stays pure. The create
+ * dialogs are owned by AppShell too (so collapsing the sidebar can't unmount
+ * an open one); this only signals intent via `onNewOrg` / `onNewProject`.
  */
-export function OrgProjectSwitcher() {
+export function OrgProjectSwitcher({
+  onNewOrg,
+  onNewProject,
+}: {
+  onNewOrg: () => void;
+  onNewProject: () => void;
+}) {
   const { activeOrgId, activeProjectId, setActiveOrg, setActiveProject } =
     useActive();
   const orgsQuery = useOrgs();
   const projectsQuery = useProjects(activeOrgId);
 
-  const [createOrgOpen, setCreateOrgOpen] = useState(false);
-  const [createProjectOpen, setCreateProjectOpen] = useState(false);
-
   const orgs: OrgWithRole[] = orgsQuery.data ?? [];
   const projects: ProjectRead[] = projectsQuery.data ?? [];
   const activeOrg = orgs.find((o) => o.id === activeOrgId) ?? null;
   const activeProject = projects.find((p) => p.id === activeProjectId) ?? null;
-
-  return (
-    <>
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <button
-            type="button"
-            className={cn(
-              "inline-flex items-center gap-2 rounded-md border border-border bg-card px-2.5 py-1 text-xs",
-              "transition-colors hover:border-primary hover:bg-primary/5",
-              "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-            )}
-          >
-            <Building2 className="h-3.5 w-3.5 text-primary" />
-            <SwitcherLabel
-              activeOrg={activeOrg}
-              activeProject={activeProject}
-              loading={orgsQuery.isLoading}
-            />
-            <ChevronsUpDown className="h-3 w-3 text-muted-foreground" />
-          </button>
-        </DropdownMenuTrigger>
-
-        <DropdownMenuContent align="start" className="min-w-[260px]">
-          <DropdownMenuLabel>Organizations</DropdownMenuLabel>
-          {orgs.length === 0 ? (
-            <div className="px-2 py-3 text-xs text-muted-foreground">
-              Loading…
-            </div>
-          ) : (
-            orgs.map((org) => (
-              <DropdownMenuItem
-                key={org.id}
-                onSelect={() => setActiveOrg(org.id)}
-                className="flex items-center gap-2"
-              >
-                <span className="flex-1 truncate font-medium">{org.name}</span>
-                <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                  {org.role}
-                </span>
-                {org.id === activeOrgId && (
-                  <Check className="h-3.5 w-3.5 text-primary" />
-                )}
-              </DropdownMenuItem>
-            ))
-          )}
-
-          <DropdownMenuSeparator />
-
-          <DropdownMenuLabel>
-            Projects{activeOrg ? ` in ${activeOrg.name}` : ""}
-          </DropdownMenuLabel>
-          {activeOrgId === null ? (
-            <div className="px-2 py-3 text-xs text-muted-foreground">
-              Pick an organization first.
-            </div>
-          ) : projectsQuery.isLoading ? (
-            <div className="px-2 py-3 text-xs text-muted-foreground">
-              Loading…
-            </div>
-          ) : projects.length === 0 ? (
-            <div className="px-2 py-3 text-xs text-muted-foreground">
-              No projects yet.
-            </div>
-          ) : (
-            projects.map((project) => (
-              <DropdownMenuItem
-                key={project.id}
-                onSelect={() => setActiveProject(project.id)}
-                className="flex items-center gap-2"
-              >
-                <span className="flex-1 truncate font-mono text-xs">
-                  {project.name}
-                </span>
-                {project.id === activeProjectId && (
-                  <Check className="h-3.5 w-3.5 text-primary" />
-                )}
-              </DropdownMenuItem>
-            ))
-          )}
-
-          <DropdownMenuSeparator />
-
-          <DropdownMenuItem
-            onSelect={() => setCreateProjectOpen(true)}
-            disabled={!activeOrgId}
-          >
-            <FolderPlus className="h-3.5 w-3.5" />
-            <span>New project</span>
-          </DropdownMenuItem>
-          <DropdownMenuItem onSelect={() => setCreateOrgOpen(true)}>
-            <Plus className="h-3.5 w-3.5" />
-            <span>New organization</span>
-          </DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
-
-      <CreateOrgDialog open={createOrgOpen} onOpenChange={setCreateOrgOpen} />
-      <CreateProjectDialog
-        open={createProjectOpen}
-        onOpenChange={setCreateProjectOpen}
-      />
-    </>
+  // Show "Loading…" (not "No project") while EITHER query is in flight — projects
+  // is a separate query, so after an org switch (which clears the active project)
+  // orgs is cached but projects is still loading.
+  const label = switcherLabel(
+    activeOrg,
+    activeProject,
+    orgsQuery.isLoading || (activeOrgId !== null && projectsQuery.isLoading),
   );
-}
 
-interface SwitcherLabelProps {
-  activeOrg: OrgWithRole | null;
-  activeProject: ProjectRead | null;
-  loading: boolean;
-}
-
-function SwitcherLabel({
-  activeOrg,
-  activeProject,
-  loading,
-}: SwitcherLabelProps) {
-  if (loading) {
-    return <span className="text-muted-foreground">Loading…</span>;
-  }
-  if (!activeOrg) {
-    return <span className="text-muted-foreground">Pick an organization</span>;
-  }
   return (
-    <span className="flex items-center gap-1.5">
-      <span className="text-foreground">{activeOrg.name}</span>
-      {activeProject && (
-        <>
-          <span className="text-muted-foreground">/</span>
-          <span className="font-mono text-foreground">
-            {activeProject.name}
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          className={cn(
+            "flex w-full flex-col gap-0.5 rounded-md px-2 py-1 text-left",
+            "transition-colors hover:bg-accent",
+            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+          )}
+        >
+          <span className="flex w-full items-center gap-1">
+            <span className="truncate text-sm font-medium text-foreground">
+              {label.project}
+            </span>
+            <ChevronsUpDown className="ml-auto size-3 shrink-0 text-muted-foreground" />
           </span>
-        </>
-      )}
-      {!activeProject && (
-        <span className="text-muted-foreground">· no project</span>
-      )}
-    </span>
+          {label.org && (
+            <span className="truncate text-xs text-muted-foreground">
+              {label.org}
+            </span>
+          )}
+        </button>
+      </DropdownMenuTrigger>
+
+      <DropdownMenuContent align="start" className="min-w-[260px]">
+        <DropdownMenuLabel>Organizations</DropdownMenuLabel>
+        {orgs.length === 0 ? (
+          <div className="px-2 py-3 text-xs text-muted-foreground">
+            Loading…
+          </div>
+        ) : (
+          orgs.map((org) => (
+            <DropdownMenuItem
+              key={org.id}
+              onSelect={() => setActiveOrg(org.id)}
+              className="flex items-center gap-2"
+            >
+              <span className="flex-1 truncate font-medium">{org.name}</span>
+              <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                {org.role}
+              </span>
+              {org.id === activeOrgId && (
+                <Check className="h-3.5 w-3.5 text-primary" />
+              )}
+            </DropdownMenuItem>
+          ))
+        )}
+
+        <DropdownMenuSeparator />
+
+        <DropdownMenuLabel>
+          Projects{activeOrg ? ` in ${activeOrg.name}` : ""}
+        </DropdownMenuLabel>
+        {activeOrgId === null ? (
+          <div className="px-2 py-3 text-xs text-muted-foreground">
+            Pick an organization first.
+          </div>
+        ) : projectsQuery.isLoading ? (
+          <div className="px-2 py-3 text-xs text-muted-foreground">
+            Loading…
+          </div>
+        ) : projects.length === 0 ? (
+          <div className="px-2 py-3 text-xs text-muted-foreground">
+            No projects yet.
+          </div>
+        ) : (
+          projects.map((project) => (
+            <DropdownMenuItem
+              key={project.id}
+              onSelect={() => setActiveProject(project.id)}
+              className="flex items-center gap-2"
+            >
+              <span className="flex-1 truncate font-mono text-xs">
+                {project.name}
+              </span>
+              {project.id === activeProjectId && (
+                <Check className="h-3.5 w-3.5 text-primary" />
+              )}
+            </DropdownMenuItem>
+          ))
+        )}
+
+        <DropdownMenuSeparator />
+
+        <DropdownMenuItem
+          onSelect={() => onNewProject()}
+          disabled={!activeOrgId}
+        >
+          <FolderPlus className="h-3.5 w-3.5" />
+          <span>New project</span>
+        </DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => onNewOrg()}>
+          <Plus className="h-3.5 w-3.5" />
+          <span>New organization</span>
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
+}
+
+/** Project (primary line) + org (secondary line) for the two-line trigger. */
+function switcherLabel(
+  activeOrg: OrgWithRole | null,
+  activeProject: ProjectRead | null,
+  loading: boolean,
+): { project: string; org: string } {
+  // Keep the org name visible while projects load, so an org switch doesn't
+  // blank the context — only the project line reads "Loading…".
+  if (loading) return { project: "Loading…", org: activeOrg?.name ?? "" };
+  if (!activeOrg) return { project: "Pick an organization", org: "" };
+  return {
+    project: activeProject?.name ?? "No project",
+    org: activeOrg.name,
+  };
 }
