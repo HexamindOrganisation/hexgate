@@ -45,7 +45,12 @@ from hexgate_api.deps.identity import require_user
 from hexgate_api.deps.org import require_org_member
 from hexgate_api.deps.tokens import require_project
 from hexgate_api.main import app
-from hexgate_api.schemas import AnomalySeverity, AuditOutcome, DecisionEvent
+from hexgate_api.schemas import (
+    UINT32_MAX,
+    AnomalySeverity,
+    AuditOutcome,
+    DecisionEvent,
+)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -113,6 +118,50 @@ def test_oversized_agent_name_rejected() -> None:
     with pytest.raises(ValidationError) as exc:
         DecisionEvent(**_event(agent_name="x" * 300))
     assert "agent_name" in str(exc.value)
+
+
+def test_run_fields_default_to_unattributed() -> None:
+    """No run_id / run_* keys in the payload — an SDK that doesn't yet send
+    them, or a decision made outside a run scope — constructs with None /
+    zero, not a required field."""
+    e = DecisionEvent(**_event())
+    assert e.run_id is None
+    assert e.run_tool_calls == 0
+    assert e.run_llm_calls == 0
+    assert e.run_denials == 0
+    assert e.run_total_tokens == 0
+    assert e.run_elapsed_ms == 0
+
+
+def test_malformed_run_id_rejected() -> None:
+    with pytest.raises(ValidationError) as exc:
+        DecisionEvent(**_event(run_id="not-a-uuid"))
+    assert "run_id" in str(exc.value)
+
+
+def test_negative_run_counter_rejected() -> None:
+    with pytest.raises(ValidationError) as exc:
+        DecisionEvent(**_event(run_tool_calls=-1))
+    assert "run_tool_calls" in str(exc.value)
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "run_tool_calls",
+        "run_llm_calls",
+        "run_denials",
+        "run_total_tokens",
+        "run_elapsed_ms",
+    ],
+)
+def test_over_range_run_counter_rejected(field: str) -> None:
+    """The columns are UInt32: an over-range counter (e.g. elapsed emitted in
+    ns) must fail validation here, not at insert time — a permanent ClickHouse
+    error the batch caller would retry forever."""
+    with pytest.raises(ValidationError) as exc:
+        DecisionEvent(**_event(**{field: UINT32_MAX + 1}))
+    assert field in str(exc.value)
 
 
 # ---------------------------------------------------------------------------
@@ -304,6 +353,45 @@ def test_explicit_user_roles_win_over_the_legacy_scalar(
     )
     assert r.status_code == 202
     assert _inserted(fake_clickhouse, "user_roles") == ["support"]
+
+
+def test_run_id_defaults_to_the_zero_uuid_when_omitted(
+    client: TestClient, fake_clickhouse: MagicMock
+) -> None:
+    """The columns are UUID, not Nullable(UUID) — an absent run_id must not
+    reach ClickHouse as None."""
+    r = client.post("/v1/audit/decisions", json=_event())
+    assert r.status_code == 202
+    assert _inserted(fake_clickhouse, "run_id") == audit.ZERO_RUN_ID
+    assert _inserted(fake_clickhouse, "run_tool_calls") == 0
+    assert _inserted(fake_clickhouse, "run_llm_calls") == 0
+    assert _inserted(fake_clickhouse, "run_denials") == 0
+    assert _inserted(fake_clickhouse, "run_total_tokens") == 0
+    assert _inserted(fake_clickhouse, "run_elapsed_ms") == 0
+
+
+def test_run_fields_round_trip_when_present(
+    client: TestClient, fake_clickhouse: MagicMock
+) -> None:
+    run_id = str(uuid.uuid4())
+    r = client.post(
+        "/v1/audit/decisions",
+        json=_event(
+            run_id=run_id,
+            run_tool_calls=7,
+            run_llm_calls=3,
+            run_denials=1,
+            run_total_tokens=4200,
+            run_elapsed_ms=15000,
+        ),
+    )
+    assert r.status_code == 202
+    assert str(_inserted(fake_clickhouse, "run_id")) == run_id
+    assert _inserted(fake_clickhouse, "run_tool_calls") == 7
+    assert _inserted(fake_clickhouse, "run_llm_calls") == 3
+    assert _inserted(fake_clickhouse, "run_denials") == 1
+    assert _inserted(fake_clickhouse, "run_total_tokens") == 4200
+    assert _inserted(fake_clickhouse, "run_elapsed_ms") == 15000
 
 
 def test_too_many_roles_rejected(client: TestClient) -> None:
@@ -1565,17 +1653,21 @@ def test_real_clickhouse_round_trip() -> None:
 
     try:
         rows = clickhouse_client.query(
-            "SELECT event_id, project_id, outcome, received_at, agent_version_id "
+            "SELECT event_id, project_id, outcome, received_at, agent_version_id, "
+            "run_id, run_tool_calls "
             "FROM policy_decision WHERE project_id = {pid:String}",
             parameters={"pid": project_id},
         ).result_rows
         assert len(rows) == 1
-        ev_id, pid, outcome, received_at, av_id = rows[0]
+        ev_id, pid, outcome, received_at, av_id, run_id, run_tool_calls = rows[0]
         assert str(ev_id) == str(event_id)
         assert pid == project_id
         assert outcome == "deny"
         assert received_at is not None  # server-stamped via column default
         assert av_id == "9f1e3c5a-test"
+        # No run_id sent — the migrated column reads back the zero UUID, not NULL.
+        assert str(run_id) == "00000000-0000-0000-0000-000000000000"
+        assert run_tool_calls == 0
     finally:
         clickhouse_client.command(
             "ALTER TABLE policy_decision DELETE WHERE project_id = {pid:String}",
