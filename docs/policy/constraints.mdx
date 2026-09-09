@@ -317,6 +317,17 @@ constraints:
   role-wide fence would be fail-open.
 </Note>
 
+### Upgrading
+
+Top-level `constraints:` is new. Single-file policies ignore keys they don't
+recognise, so before this release the block parsed and was silently dropped —
+after it, the same YAML is enforced against every tool the role can reach. If
+you wrote one speculatively, it starts denying on upgrade, and the policy's
+compiled `source_hash` changes with it. Grep your policies for a top-level
+`constraints:` before you roll forward — `hexgate policy show-rego` prints the
+compiled rules if you want to diff exactly what moved. (Composed module policies
+are unaffected: they rejected the key outright, then and now.)
+
 ## Named constants
 
 Define reusable values once in a `consts:` block and reference them as
