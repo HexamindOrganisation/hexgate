@@ -529,7 +529,7 @@ TTL toDateTime(received_at) + INTERVAL 180 DAY
 - **Caps are head+tail**, not the preview wrapper used for `arguments`: the
   start and the end of an oversized message both survive (see
   `hexgate.audit.cap_json_head_tail`), and `truncated` says it happened.
-- **Migration:** `migrations/0002_add_llm_message.sql`, applied by hand before
+- **Migration:** `migrations/0003_add_llm_message.sql`, applied by hand before
   the enricher that writes to it is deployed.
 
 ### 5.2 Insert semantics
