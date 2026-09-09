@@ -103,6 +103,17 @@ with a JSON 404 and every SDK on that stage silently loses its audit trail —
 stack (Postgres, ClickHouse, Redpanda) binds no host ports; Redpanda in
 particular is PLAINTEXT with no auth — never publish it.
 
+**The `/v1/traces` route needs a raised request-body limit.** The collector's
+OTLP receiver accepts 32 MiB (`max_request_body_size`), and an SDK export of
+LLM message spans can reach ~17 MiB, but **nginx caps a request body at 1 MiB
+by default** and answers `413` before the collector ever sees it — so the
+proxy, not the collector, becomes the narrowest hop and every message export
+dies at the edge. In nginx set `client_max_body_size 32m;` inside the
+`location = /v1/traces` block. Caddy imposes no default body limit and needs
+nothing. This is the one hop in the record-size budget
+(`docs/internals/audit-pipeline.md` §4.1) that lives outside this repo, so
+nothing in `make check-all` can catch it being wrong.
+
 (In Caddy this is two `reverse_proxy` site blocks; in nginx, two `server`
 blocks with `proxy_pass`. Forward `X-Forwarded-Proto: https` — the API trusts
 it, via uvicorn `--proxy-headers`, for correct https OAuth callbacks. `/v1`
