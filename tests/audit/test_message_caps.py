@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import copy
 import json
+import threading
 from typing import Any
 
 from hexgate.audit import (
@@ -141,6 +142,20 @@ def test_cap_json_head_tail_does_not_mutate_the_input() -> None:
     before = copy.deepcopy(messages)
     cap_json_head_tail(messages, cap=1_024)
     assert messages == before
+
+
+def test_when_a_message_holds_an_uncopyable_object_then_both_paths_survive() -> None:
+    """Framework message objects can carry a lock or a socket. The truncation
+    path rebuilds containers and tolerates them, so the under-cap path must
+    too — a deep copy here would raise on exactly the small inputs that need
+    no truncation at all."""
+    lock = threading.Lock()
+    for content in ("short", "x" * 400_000):
+        messages = [{"role": "user", "lock": lock, "content": content}]
+        out, _ = cap_json_head_tail(messages, cap=8 * 1024)
+        assert _json_size(out) <= 8 * 1024
+        # A copy, not the caller's own object.
+        assert out[0] is not messages[0]
 
 
 def test_when_structure_alone_exceeds_the_cap_then_a_preview_wrapper_ships() -> None:

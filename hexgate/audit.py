@@ -7,7 +7,6 @@ Lifecycle: configure() per api_key, await shutdown() at process exit.
 
 from __future__ import annotations
 
-import copy
 import json
 import re
 from collections.abc import Sequence
@@ -65,9 +64,20 @@ MAX_VIOLATION_CHARS = 1024
 # The input cap is 256 KiB, not the 32 KiB first proposed: 32 KiB is ~7,000
 # tokens of ASCII, which 20 retrieved chunks already exceed, so the cap would
 # have fired on exactly the calls the log exists to explain. What bounds it is
-# the OTLP record size, not storage — and the message path's topic carries
-# ``max.message.bytes=8 MiB``, so a quarter-megabyte field costs nothing
-# operationally. Typical events stay a few KB; this is a ceiling, not a target.
+# the pipeline's record and request limits, not storage — and those limits are
+# NOT yet in place. As the deployed config stands, the Collector's kafka
+# exporter caps a record at the configkafka default (1 MB, no compression) and
+# batches 512 spans into one, ``hexgate.otlp.raw`` sets no
+# ``max.message.bytes``, and the OTLP receiver takes a 20 MiB request body —
+# so a batch of large message spans fails as a whole and takes the decision
+# spans batched alongside it down too, which is the blast radius these caps
+# exist to bound. Raising the topic, the exporter's producer limit, a
+# ``send_batch_max_size``, and the receiver body size is a prerequisite for
+# emitting this scope at all (its own PR, deployed not merely merged) — no
+# message cap, 32 KiB or 256 KiB, is safe before it. Nothing emits
+# ``hexgate.messages`` yet, so declaring the constant here is safe; wiring an
+# emitter before that config is deployed is not. Typical events stay a few KB;
+# this is a ceiling, not a target.
 MAX_INPUT_MESSAGES_BYTES = 256 * 1024
 MAX_OUTPUT_MESSAGES_BYTES = 8 * 1024
 MAX_SYSTEM_INSTRUCTIONS_BYTES = 8 * 1024
@@ -241,9 +251,10 @@ def _cap_json_head_tail(value: Any, *, cap: int) -> tuple[Any, bool]:
     Unlike ``_truncate_json`` — which swaps the whole dict for a preview
     wrapper — the result keeps the input's shape (roles, message boundaries,
     part types all survive), so a reader still sees *which* message lost its
-    middle. Pure: ``value`` is deep-copied, never mutated. Measurement mirrors
-    the platform (``json.dumps(default=str)``), so what is capped here is
-    what the enricher measures.
+    middle. Pure: every path rebuilds the containers rather than writing into
+    them, so ``value`` is never mutated. Measurement mirrors the platform
+    (``json.dumps(default=str)``), so what is capped here is what the enricher
+    measures.
 
     Every leaf gets the *same* byte allowance, found by binary search on the
     serialized size: the largest allowance that fits. A per-leaf budget derived
@@ -260,7 +271,13 @@ def _cap_json_head_tail(value: Any, *, cap: int) -> tuple[Any, bool]:
     wrapper ships instead — inside a one-item list when the input was a list,
     so the attribute keeps its container type."""
     if _utf8_len(json.dumps(value, default=str)) <= cap:
-        return copy.deepcopy(value), False
+        # ``limit=cap`` cuts nothing — a leaf cannot exceed a document that
+        # fits — so this is the copy, not a truncation. Rebuilding via
+        # ``_cap_leaves`` rather than ``copy.deepcopy`` keeps the fast path as
+        # tolerant as the slow one: a framework message object holding a lock
+        # or a socket is uncopyable, and deep-copying it raised where the
+        # truncation path went through.
+        return _cap_leaves(value, limit=cap), False
     # Cheapest allowance first: if the floor does not fit, nothing does, and
     # the search below would spend a serialization per step to prove it.
     floored = _cap_leaves(value, limit=_HEAD_TAIL_FLOOR_BYTES)
