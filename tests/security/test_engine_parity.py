@@ -1043,3 +1043,82 @@ def test_policy_level_constraint_reaches_admission_parity(
     policy: dict, tool: str, args: dict, expect: str
 ) -> None:
     _assert_parity(policy, None, tool, args, expect)
+
+
+# ---------------------------------------------------------------------------
+# Policy-level constraints meet declared reach
+#
+# The same fail-closed interaction as admission above, on the reach keys
+# ``agents:`` lowers to (``agent.handoff:<target>`` / ``agent.tool:<target>``,
+# added by the reach/admission runtime seams). The reach gate passes only
+# ``{agent, target, via}``, so a tool-shaped ``args.*`` predicate reads a
+# missing ref there too. Pinned separately because exempting ``agent.run`` by
+# name — the escape hatch the admission case documents — does *not* cover
+# these; a prefix test over the whole reserved namespace does.
+# ---------------------------------------------------------------------------
+
+_REACH_POLICY = {
+    "version": 1,
+    "roles": {
+        "default": {
+            "constraints": ["args.amount <= 500"],
+            "admission": {"mode": "allow"},
+            "agents": {"billing": {"via": ["handoff", "tool"], "mode": "allow"}},
+            "tools": {"refund": {"mode": "allow"}},
+        },
+    },
+}
+
+_REACH_NAMED_POLICY = {
+    "version": 1,
+    "roles": {
+        "default": {
+            "constraints": ['tool == "agent.run" or args.amount <= 500'],
+            "admission": {"mode": "allow"},
+            "agents": {"billing": {"via": ["handoff", "tool"], "mode": "allow"}},
+            "tools": {"refund": {"mode": "allow"}},
+        },
+    },
+}
+
+_REACH_SCOPED_POLICY = {
+    "version": 1,
+    "roles": {
+        "default": {
+            "constraints": ['startswith(tool, "agent.") or args.amount <= 500'],
+            "admission": {"mode": "allow"},
+            "agents": {"billing": {"via": ["handoff", "tool"], "mode": "allow"}},
+            "tools": {"refund": {"mode": "allow"}},
+        },
+    },
+}
+
+_HANDOFF_ARGS = {"agent": "svc", "target": "billing", "via": "handoff"}
+_TOOL_REACH_ARGS = {"agent": "svc", "target": "billing", "via": "tool"}
+
+
+@pytest.mark.parametrize(
+    ("policy", "tool", "args", "expect"),
+    [
+        # The trap, on both reach modes: neither gate carries an `amount`.
+        (_REACH_POLICY, "agent.handoff:billing", _HANDOFF_ARGS, "deny"),
+        (_REACH_POLICY, "agent.tool:billing", _TOOL_REACH_ARGS, "deny"),
+        (_REACH_POLICY, "refund", {"amount": 10}, "allow"),
+        # Exempting agent.run by name frees admission but leaves both reach
+        # keys denied — the reason the prefix form is the documented fix.
+        (_REACH_NAMED_POLICY, "agent.run", {"agent": "svc"}, "allow"),
+        (_REACH_NAMED_POLICY, "agent.handoff:billing", _HANDOFF_ARGS, "deny"),
+        (_REACH_NAMED_POLICY, "agent.tool:billing", _TOOL_REACH_ARGS, "deny"),
+        # The prefix form covers the whole reserved namespace at once.
+        (_REACH_SCOPED_POLICY, "agent.run", {"agent": "svc"}, "allow"),
+        (_REACH_SCOPED_POLICY, "agent.handoff:billing", _HANDOFF_ARGS, "allow"),
+        (_REACH_SCOPED_POLICY, "agent.tool:billing", _TOOL_REACH_ARGS, "allow"),
+        # ...and still fences the tools it was written for.
+        (_REACH_SCOPED_POLICY, "refund", {"amount": 10}, "allow"),
+        (_REACH_SCOPED_POLICY, "refund", {"amount": 999}, "deny"),
+    ],
+)
+def test_policy_level_constraint_reaches_reach_keys_parity(
+    policy: dict, tool: str, args: dict, expect: str
+) -> None:
+    _assert_parity(policy, None, tool, args, expect)
