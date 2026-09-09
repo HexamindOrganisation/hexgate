@@ -17,12 +17,21 @@ from google.genai import types
 
 from hexgate.adapters.google import runner as runner_mod
 from hexgate.adapters.google import wrapper as wrapper_mod
-from hexgate.adapters.google.runner import HexgateRunner
+from hexgate.adapters.google.runner import HexgateRunner, _HexgateReachPlugin
 from hexgate.adapters.google.usage import HexgateUsagePlugin
 from hexgate.runtime import HexgateContext
 from hexgate.runtime.context import get_current_context
-from hexgate.security import AgentPolicy, BaseToolPolicy, PolicySet, ResolvedPolicy
+from hexgate.security import (
+    AgentNotAdmittedError,
+    AgentPolicy,
+    BaseToolPolicy,
+    HandoffDepthExceededError,
+    PolicySet,
+    ReachNotAllowedError,
+    ResolvedPolicy,
+)
 from hexgate.security.bans import BanEntry, BanGate, BanSet
+from hexgate.security.enforcer import PolicyEnforcer
 from hexgate.security.errors import AgentBannedError
 from hexgate.security.policy_set import DEFAULT_ROLE_NAME
 from hexgate.tracing import usage as tracing_usage_mod
@@ -512,6 +521,10 @@ def test_not_banned_passes_through(monkeypatch: pytest.MonkeyPatch) -> None:
 class _CountingBinding:
     def __init__(self) -> None:
         self.refreshes = 0
+        # A real enforcer with a plain policy, so the run-entry admission check is
+        # a no-op (declares_admission() is False) rather than an AttributeError.
+        engine = PolicySet({DEFAULT_ROLE_NAME: AgentPolicy()})
+        self.enforcer = PolicyEnforcer(engine, agent_name="my-agent")
 
     def refresh(self) -> None:
         self.refreshes += 1
@@ -564,6 +577,191 @@ def test_construction_does_not_refresh(monkeypatch: pytest.MonkeyPatch) -> None:
     runner, binding = _runner_with_counting_binding(monkeypatch)
 
     assert binding.refreshes == 0
+
+
+# ---------------------------------------------------------------------------
+# Agent-level reach + admission (A3)
+# ---------------------------------------------------------------------------
+
+
+def _runner_with_policy(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    agents: dict | None = None,
+    admission: str | None = None,
+) -> HexgateRunner:
+    """A runner whose binding carries a chosen agent-level policy, for driving the
+    reach plugin and admission helpers directly."""
+    runner, binding = _runner_with_counting_binding(monkeypatch)
+    runner._agent_name = "orchestrator"
+    engine = PolicySet(
+        {
+            DEFAULT_ROLE_NAME: AgentPolicy(
+                default_policy=BaseToolPolicy(mode="allow"),
+                agents=agents or {},
+                admission=BaseToolPolicy(mode=admission) if admission else None,
+            )
+        }
+    )
+    binding.enforcer = PolicyEnforcer(engine, agent_name="orchestrator")
+    return runner
+
+
+@pytest.mark.asyncio
+async def test_reach_plugin_gates_transfer_to_agent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner = _runner_with_policy(
+        monkeypatch, agents={"billing-bot": {"mode": "allow", "via": ["handoff"]}}
+    )
+    plugin = _HexgateReachPlugin(runner)
+    tool = SimpleNamespace(name="transfer_to_agent")
+    ctx = SimpleNamespace(agent_name="orchestrator", invocation_id="i")  # governed root
+    async with _user():
+        await plugin.before_tool_callback(
+            tool=tool, tool_args={"agent_name": "billing-bot"}, tool_context=ctx
+        )
+        with pytest.raises(ReachNotAllowedError):
+            await plugin.before_tool_callback(
+                tool=tool, tool_args={"agent_name": "evil-bot"}, tool_context=ctx
+            )
+
+
+@pytest.mark.asyncio
+async def test_reach_plugin_skips_non_root_source(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner = _runner_with_policy(
+        monkeypatch, agents={"billing-bot": {"mode": "allow", "via": ["handoff"]}}
+    )
+    plugin = _HexgateReachPlugin(runner)
+    tool = SimpleNamespace(name="transfer_to_agent")
+    ctx = SimpleNamespace(agent_name="a-sub-agent", invocation_id="i")  # not root
+    async with _user():
+        await plugin.before_tool_callback(
+            tool=tool, tool_args={"agent_name": "evil-bot"}, tool_context=ctx
+        )  # not gated → no raise
+
+
+@pytest.mark.asyncio
+async def test_reach_plugin_ignores_ordinary_tool(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner = _runner_with_policy(
+        monkeypatch, agents={"billing-bot": {"mode": "allow", "via": ["handoff"]}}
+    )
+    plugin = _HexgateReachPlugin(runner)
+    tool = SimpleNamespace(name="search")  # a normal tool, not a transfer/AgentTool
+    ctx = SimpleNamespace(agent_name="orchestrator", invocation_id="i")
+    async with _user():
+        await plugin.before_tool_callback(
+            tool=tool, tool_args={"q": "x"}, tool_context=ctx
+        )  # falls through → no raise
+
+
+def test_admission_sync_denies_non_admitted(monkeypatch: pytest.MonkeyPatch) -> None:
+    runner = _runner_with_policy(monkeypatch, admission="deny")
+    with _user().sync_scope(), pytest.raises(AgentNotAdmittedError):
+        runner._check_admission_sync()
+
+
+def test_admission_sync_noop_without_admission(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner = _runner_with_policy(monkeypatch)  # no admission declared
+    with _user().sync_scope():
+        runner._check_admission_sync()  # no raise
+
+
+@pytest.mark.asyncio
+async def test_reach_plugin_enforces_depth_cap_per_invocation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner = _runner_with_policy(monkeypatch, agents={"b": {"mode": "allow"}})
+    runner._max_handoff_depth = 1
+    plugin = _HexgateReachPlugin(runner)
+    tool = SimpleNamespace(name="transfer_to_agent")
+    ctx = SimpleNamespace(agent_name="orchestrator", invocation_id="inv-1")
+    async with _user():
+        await plugin.before_tool_callback(
+            tool=tool, tool_args={"agent_name": "b"}, tool_context=ctx
+        )  # depth 1 == cap → ok
+        with pytest.raises(HandoffDepthExceededError):
+            await plugin.before_tool_callback(
+                tool=tool, tool_args={"agent_name": "b"}, tool_context=ctx
+            )  # depth 2 > cap
+    # The raise aborts the run (after_run_callback never fires), so the callback
+    # must have already dropped this invocation's counter — no leak.
+    assert "inv-1" not in plugin._depth
+
+
+def test_reach_plugin_depth_map_is_bounded() -> None:
+    """ADK skips after_run_callback on an abnormally-terminated run, so the shared
+    depth map must be bounded rather than leaking one entry per aborted run."""
+    plugin = _HexgateReachPlugin(SimpleNamespace())
+    cap = _HexgateReachPlugin._MAX_TRACKED_INVOCATIONS
+    for i in range(cap + 500):
+        plugin._bump_depth(f"inv-{i}")
+    assert len(plugin._depth) == cap
+    assert f"inv-{cap + 499}" in plugin._depth  # most recent retained
+    assert "inv-0" not in plugin._depth  # stalest evicted
+
+
+def test_reach_plugin_registered_before_caller_plugins(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ADK's PluginManager early-exits on the first before_tool_callback that
+    returns non-None, so the reach plugin must be registered first — otherwise a
+    caller plugin could preempt the gate (a silent fail-open)."""
+    fake = _install_fake_runner(monkeypatch)
+
+    HexgateRunner(
+        agent=_make_agent(),
+        app_name="app",
+        session_service=InMemorySessionService(),
+        api_key="k",
+        plugins=[BasePlugin(name="caller")],
+    )
+
+    app = fake.instances[0].kwargs["app"]
+    assert isinstance(app.plugins[0], _HexgateReachPlugin)
+
+
+@pytest.mark.asyncio
+async def test_reach_survives_adk_plugin_wrapping_and_preceding_plugin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Driven through the real ADK PluginManager: a denied reach still surfaces as
+    the typed error after the runner unwraps ADK's RuntimeError re-wrap (#5), and —
+    registered first — our gate runs before a short-circuiting caller plugin can
+    preempt it (#1). One test for both, since both slipped past the direct-callback
+    unit tests."""
+    from google.adk.plugins.plugin_manager import PluginManager
+
+    from hexgate.adapters.google.runner import _unwrap_plugin_error
+    from hexgate.security.agent_gate import ReachNotAllowedError
+
+    runner = _runner_with_policy(
+        monkeypatch, agents={"evil": {"via": ["handoff"], "mode": "deny"}}
+    )
+    plugin = _HexgateReachPlugin(runner)
+
+    class _ShortCircuit(BasePlugin):
+        async def before_tool_callback(self, **_kw: Any) -> dict:
+            return {"result": "preempted"}  # would skip the gate if it ran first
+
+    # Reach plugin first, exactly as the runner registers it (insert(0)).
+    manager = PluginManager(plugins=[plugin, _ShortCircuit(name="sc")])
+    tool = SimpleNamespace(name="transfer_to_agent")
+    ctx = SimpleNamespace(agent_name="orchestrator", invocation_id="i")
+    async with _user():
+        with pytest.raises(RuntimeError) as exc_info:
+            await manager.run_before_tool_callback(
+                tool=tool, tool_args={"agent_name": "evil"}, tool_context=ctx
+            )
+    recovered = _unwrap_plugin_error(exc_info.value)
+    assert isinstance(recovered, ReachNotAllowedError)
+    assert recovered.decision is not None  # typed payload intact, not erased
 
 
 # ---------------------------------------------------------------------------
@@ -630,8 +828,10 @@ def test_constructor_passes_a_usage_plugin_when_no_plugins_supplied(
 
     [fake_runner] = fake.instances
     plugins = fake_runner.kwargs["app"].plugins
-    assert len(plugins) == 1
-    assert isinstance(plugins[0], HexgateUsagePlugin)
+    # usage plugin + the reach-enforcement plugin
+    assert len(plugins) == 2
+    assert any(isinstance(p, HexgateUsagePlugin) for p in plugins)
+    assert any(isinstance(p, _HexgateReachPlugin) for p in plugins)
 
 
 def test_constructor_preserves_caller_supplied_plugins(
@@ -654,7 +854,8 @@ def test_constructor_preserves_caller_supplied_plugins(
     plugins = fake_runner.kwargs["app"].plugins
     assert custom_plugin in plugins
     assert any(isinstance(p, HexgateUsagePlugin) for p in plugins)
-    assert len(plugins) == 2
+    assert any(isinstance(p, _HexgateReachPlugin) for p in plugins)
+    assert len(plugins) == 3  # custom + usage + reach
 
 
 @pytest.mark.asyncio
