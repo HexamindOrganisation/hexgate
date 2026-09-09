@@ -187,7 +187,7 @@ def _truncate_head_tail(text: str, *, max_bytes: int) -> str:
     head_n = budget // 2
     tail_n = budget - head_n
     head = raw[:head_n].decode("utf-8", errors="ignore")
-    tail = raw[len(raw) - tail_n :].decode("utf-8", errors="ignore")
+    tail = raw[-tail_n:].decode("utf-8", errors="ignore")
     omitted = len(raw) - _utf8_len(head) - _utf8_len(tail)
     return head + _HEAD_TAIL_MARKER.format(omitted=omitted) + tail
 
