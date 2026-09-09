@@ -337,7 +337,11 @@ async def test_run_sizes_both_kafka_clients_for_the_topic_limit(
     request size to 1 MiB each, under the topics' 8 MiB max.message.bytes. A
     record the broker accepted but the consumer cannot fetch stalls that
     partition permanently, so these kwargs are load-bearing, not tuning — and
-    the fakes the other lifecycle tests inject would hide their absence."""
+    the fakes the other lifecycle tests inject would hide their absence.
+
+    This pins the kwargs to the constant, not the constant to the broker: the
+    8 MiB itself lives in platform/redpanda/init/create-topics.sh, and no test
+    reads that script, so the two staying equal is a comment-level invariant."""
     from hexgate_api.jobs.enricher.consumer import _MAX_RECORD_BYTES
 
     job, _clickhouse, consumer, calls = _lifecycle_job(
@@ -371,7 +375,6 @@ async def test_run_sizes_both_kafka_clients_for_the_topic_limit(
 
     assert seen["consumer"]["max_partition_fetch_bytes"] == _MAX_RECORD_BYTES
     assert seen["producer"]["max_request_size"] == _MAX_RECORD_BYTES
-    assert _MAX_RECORD_BYTES >= 8 * 1024 * 1024  # the topics' max.message.bytes
 
 
 async def test_when_a_topic_is_missing_then_run_fails_fast(
