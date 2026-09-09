@@ -395,6 +395,22 @@ def test_capability_agents_deny_is_a_link_error() -> None:
         link([], [cap])
 
 
+def test_link_rejects_policy_level_constraints_in_module() -> None:
+    """The fold composes ``.tools`` only, so a role-wide fence in a module would
+    be silently dropped. ``_MODULE_COMPOSABLE_FIELDS`` rejects it for free;
+    pinned so nobody adds it to that set without teaching ``link()`` to fold
+    it."""
+    mod = ModuleContent(
+        name="d",
+        kind="boundary",
+        policy=AgentPolicy(constraints=["run.tool_calls < 5"]),
+        source="d.yaml",
+        content_hash="hash-d",
+    )
+    with pytest.raises(LinkError, match=r"\['constraints'\]"):
+        link([mod], [])
+
+
 # --- provenance + policy-set wiring ---
 
 

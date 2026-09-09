@@ -927,3 +927,198 @@ def test_run_fact_parity(tool: str, run: dict, expect: str) -> None:
 
 def test_run_none_namespace_fails_closed_both_engines() -> None:
     _assert_parity(_RUN_POLICY, "default", "identity", {}, "deny", run=None)
+
+
+# ---------------------------------------------------------------------------
+# Policy-level constraints — applied to every tool, on both engines
+#
+# The drift risk is structural: pydantic has one code path for every tool key,
+# while the Rego compiler emits a rule per key from three call sites. The
+# easiest to forget is agent.run, whose policy comes from a fallback constant.
+# ---------------------------------------------------------------------------
+
+_POLICY_LEVEL_POLICY = {
+    "roles": {
+        "read_only": {
+            "is_mixin": True,
+            "constraints": ["run.tool_calls < 3"],
+        },
+        "default": {
+            "inherits": ["read_only"],
+            "default_policy": {"mode": "allow"},
+            "tools": {
+                "listed": {"mode": "allow"},
+                "capped": {"mode": "allow", "constraints": ["args.amount <= 50"]},
+                "forbidden": {"mode": "deny"},
+            },
+        },
+    },
+}
+
+
+@pytest.mark.parametrize(
+    ("tool", "args", "run", "expect"),
+    [
+        # A listed tool, under and over the policy-level cap.
+        ("listed", {}, {"tool_calls": 1}, "allow"),
+        ("listed", {}, {"tool_calls": 5}, "deny"),
+        # A tool falling through to default_policy.
+        ("unlisted", {}, {"tool_calls": 1}, "allow"),
+        ("unlisted", {}, {"tool_calls": 5}, "deny"),
+        # Admission is closed-world on both engines: unlisted denies whether or
+        # not the policy-level cap is satisfied.
+        ("agent.run", {}, {"tool_calls": 1}, "deny"),
+        ("agent.run", {}, {"tool_calls": 5}, "deny"),
+        # Both lists apply, in either failing direction.
+        ("capped", {"amount": 10}, {"tool_calls": 1}, "allow"),
+        ("capped", {"amount": 999}, {"tool_calls": 1}, "deny"),
+        ("capped", {"amount": 10}, {"tool_calls": 5}, "deny"),
+        # Can only narrow: a satisfied policy-level constraint never
+        # resurrects a denied tool or an unlisted reach key.
+        ("forbidden", {}, {"tool_calls": 0}, "deny"),
+        ("agent.handoff:other", {}, {"tool_calls": 0}, "deny"),
+        # Missing namespace fails closed on both.
+        ("listed", {}, {}, "deny"),
+    ],
+)
+def test_policy_level_constraint_parity(
+    tool: str, args: dict, run: dict, expect: str
+) -> None:
+    """Inherited from a mixin, so this also covers the union merge reaching the
+    Rego compiler through the resolved PolicySet."""
+    _assert_parity(_POLICY_LEVEL_POLICY, None, tool, args, expect, run=run)
+
+
+# ---------------------------------------------------------------------------
+# Policy-level constraints meet declared admission
+#
+# ``agent.run`` is an effective tool like any other once ``admission:`` is
+# declared, so a policy-level constraint gates the agent at ingress. The gate
+# passes only ``{"agent": <name>}``, so an ``args.*`` predicate written for
+# tools reads a missing ref and fails closed — the agent is refused before it
+# starts. Documented in constraints.mdx ("Policy-level `args.*` reaches
+# admission"), pinned here on both engines because the fix for it is an
+# authoring escape hatch, not a code path.
+# ---------------------------------------------------------------------------
+
+_ADMITTED_POLICY = {
+    "version": 1,
+    "roles": {
+        "default": {
+            "constraints": ["args.amount <= 500"],
+            "admission": {"mode": "allow"},
+            "tools": {"refund": {"mode": "allow"}},
+        },
+    },
+}
+
+_ADMITTED_SCOPED_POLICY = {
+    "version": 1,
+    "roles": {
+        "default": {
+            "constraints": ['tool == "agent.run" or args.amount <= 500'],
+            "admission": {"mode": "allow"},
+            "tools": {"refund": {"mode": "allow"}},
+        },
+    },
+}
+
+
+@pytest.mark.parametrize(
+    ("policy", "tool", "args", "expect"),
+    [
+        # The trap: admission carries no `amount`, so the tool-shaped cap
+        # locks the agent out at ingress on both engines.
+        (_ADMITTED_POLICY, "agent.run", {"agent": "billing"}, "deny"),
+        # Not admission-specific — any tool missing the argument is denied.
+        (_ADMITTED_POLICY, "refund", {}, "deny"),
+        (_ADMITTED_POLICY, "refund", {"amount": 10}, "allow"),
+        # The documented escape hatch: exempt the admission key by name.
+        (_ADMITTED_SCOPED_POLICY, "agent.run", {"agent": "billing"}, "allow"),
+        (_ADMITTED_SCOPED_POLICY, "refund", {"amount": 10}, "allow"),
+        (_ADMITTED_SCOPED_POLICY, "refund", {"amount": 999}, "deny"),
+    ],
+)
+def test_policy_level_constraint_reaches_admission_parity(
+    policy: dict, tool: str, args: dict, expect: str
+) -> None:
+    _assert_parity(policy, None, tool, args, expect)
+
+
+# ---------------------------------------------------------------------------
+# Policy-level constraints meet declared reach
+#
+# The same fail-closed interaction as admission above, on the reach keys
+# ``agents:`` lowers to (``agent.handoff:<target>`` / ``agent.tool:<target>``,
+# added by the reach/admission runtime seams). The reach gate passes only
+# ``{agent, target, via}``, so a tool-shaped ``args.*`` predicate reads a
+# missing ref there too. Pinned separately because exempting ``agent.run`` by
+# name — the escape hatch the admission case documents — does *not* cover
+# these; a prefix test over the whole reserved namespace does.
+# ---------------------------------------------------------------------------
+
+_REACH_POLICY = {
+    "version": 1,
+    "roles": {
+        "default": {
+            "constraints": ["args.amount <= 500"],
+            "admission": {"mode": "allow"},
+            "agents": {"billing": {"via": ["handoff", "tool"], "mode": "allow"}},
+            "tools": {"refund": {"mode": "allow"}},
+        },
+    },
+}
+
+_REACH_NAMED_POLICY = {
+    "version": 1,
+    "roles": {
+        "default": {
+            "constraints": ['tool == "agent.run" or args.amount <= 500'],
+            "admission": {"mode": "allow"},
+            "agents": {"billing": {"via": ["handoff", "tool"], "mode": "allow"}},
+            "tools": {"refund": {"mode": "allow"}},
+        },
+    },
+}
+
+_REACH_SCOPED_POLICY = {
+    "version": 1,
+    "roles": {
+        "default": {
+            "constraints": ['startswith(tool, "agent.") or args.amount <= 500'],
+            "admission": {"mode": "allow"},
+            "agents": {"billing": {"via": ["handoff", "tool"], "mode": "allow"}},
+            "tools": {"refund": {"mode": "allow"}},
+        },
+    },
+}
+
+_HANDOFF_ARGS = {"agent": "svc", "target": "billing", "via": "handoff"}
+_TOOL_REACH_ARGS = {"agent": "svc", "target": "billing", "via": "tool"}
+
+
+@pytest.mark.parametrize(
+    ("policy", "tool", "args", "expect"),
+    [
+        # The trap, on both reach modes: neither gate carries an `amount`.
+        (_REACH_POLICY, "agent.handoff:billing", _HANDOFF_ARGS, "deny"),
+        (_REACH_POLICY, "agent.tool:billing", _TOOL_REACH_ARGS, "deny"),
+        (_REACH_POLICY, "refund", {"amount": 10}, "allow"),
+        # Exempting agent.run by name frees admission but leaves both reach
+        # keys denied — the reason the prefix form is the documented fix.
+        (_REACH_NAMED_POLICY, "agent.run", {"agent": "svc"}, "allow"),
+        (_REACH_NAMED_POLICY, "agent.handoff:billing", _HANDOFF_ARGS, "deny"),
+        (_REACH_NAMED_POLICY, "agent.tool:billing", _TOOL_REACH_ARGS, "deny"),
+        # The prefix form covers the whole reserved namespace at once.
+        (_REACH_SCOPED_POLICY, "agent.run", {"agent": "svc"}, "allow"),
+        (_REACH_SCOPED_POLICY, "agent.handoff:billing", _HANDOFF_ARGS, "allow"),
+        (_REACH_SCOPED_POLICY, "agent.tool:billing", _TOOL_REACH_ARGS, "allow"),
+        # ...and still fences the tools it was written for.
+        (_REACH_SCOPED_POLICY, "refund", {"amount": 10}, "allow"),
+        (_REACH_SCOPED_POLICY, "refund", {"amount": 999}, "deny"),
+    ],
+)
+def test_policy_level_constraint_reaches_reach_keys_parity(
+    policy: dict, tool: str, args: dict, expect: str
+) -> None:
+    _assert_parity(policy, None, tool, args, expect)

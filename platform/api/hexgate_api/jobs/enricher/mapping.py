@@ -107,7 +107,36 @@ def _decision_fields(attrs: dict[str, Any], scope: str) -> dict[str, Any]:
                 attrs.get(semconv.ATTRIBUTES), key=semconv.ATTRIBUTES, scope=scope
             )
         ),
+        **_run_fields(attrs, scope),
     }
+
+
+# Counter attribute → DecisionEvent field. run_id is handled apart: it is the
+# one nullable field of the group, and the only one a foreign emitter is likely
+# to omit wholesale.
+_RUN_COUNTERS = {
+    semconv.RUN_TOOL_CALLS: "run_tool_calls",
+    semconv.RUN_LLM_CALLS: "run_llm_calls",
+    semconv.RUN_DENIALS: "run_denials",
+    semconv.RUN_TOTAL_TOKENS: "run_total_tokens",
+    semconv.RUN_ELAPSED_MS: "run_elapsed_ms",
+}
+
+
+def _run_fields(attrs: dict[str, Any], scope: str) -> dict[str, Any]:
+    """Run attribution, absent-tolerant: a span from an emitter that predates
+    the run namespace maps to the model's zero defaults rather than a rejection.
+
+    ``run_id`` stays ``None`` when the attribute is missing — the SDK omits it
+    outside a run scope, and the platform substitutes the zero UUID at insert.
+    """
+    fields: dict[str, Any] = {
+        field: as_int(attrs[key], key=key, scope=scope)
+        for key, field in _RUN_COUNTERS.items()
+        if key in attrs
+    }
+    fields["run_id"] = as_str(attrs.get(semconv.RUN_ID)) or None
+    return fields
 
 
 def _usage_fields(attrs: dict[str, Any], span: Span, scope: str) -> dict[str, Any]:
@@ -131,6 +160,8 @@ def _usage_fields(attrs: dict[str, Any], span: Span, scope: str) -> dict[str, An
         ),
         "latency_ms": as_int(latency, key=semconv.LATENCY_MS, scope=scope),
         "error_code": as_str(attrs.get(semconv.ERROR_CODE)),
+        # Same nullable contract as the decision scope: absent, never "".
+        "run_id": as_str(attrs.get(semconv.RUN_ID)) or None,
     }
     status = attrs.get(semconv.STATUS)
     if status is not None:  # absent → the model's "success" default

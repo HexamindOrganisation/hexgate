@@ -1011,3 +1011,68 @@ def test_run_ordered_constraint_emits_type_guard() -> None:
     rego = _run_rego("run.elapsed_seconds < 300")
     assert "is_number(input.run.elapsed_seconds)" in rego
     assert "input.run.elapsed_seconds < 300" in rego
+
+
+# ---------------------------------------------------------------------------
+# Policy-level constraints — one conjunct in every rule the role emits
+# ---------------------------------------------------------------------------
+
+_POLICY_LEVEL_PAYLOAD = {
+    "roles": {
+        "default": {
+            "constraints": ["run.tool_calls < 3"],
+            "default_policy": {"mode": "allow"},
+            "tools": {"read_file": {"mode": "allow"}},
+        }
+    },
+}
+
+
+def test_policy_level_constraint_lands_in_every_rule() -> None:
+    """Both _gated_rules call sites: the per-tool loop and the default_policy
+    catch-all. Missing either is silent engine drift."""
+    rego = compile_to_rego(_POLICY_LEVEL_PAYLOAD)
+
+    listed, catch_all = (block for block in rego.split("allow if {")[1:])
+    assert 'input.tool == "read_file"' in listed
+    assert "not input.tool in" in catch_all
+    for block in (listed, catch_all):
+        assert "input.run.tool_calls < 3" in block
+
+
+def test_policy_level_constraint_emits_a_violation_rule_per_tool() -> None:
+    """Each violation rule carries its own tool guard, so one constraint on N
+    rule heads emits N membership rules."""
+    rego = compile_to_rego(_POLICY_LEVEL_PAYLOAD)
+
+    assert rego.count("violations contains `run.tool_calls < 3`") == 2
+
+
+def test_policy_level_constraints_precede_the_tools_own() -> None:
+    payload = {
+        "roles": {
+            "default": {
+                "constraints": ["run.tool_calls < 3"],
+                "tools": {
+                    "refund": {"mode": "allow", "constraints": ["args.amount <= 50"]}
+                },
+            }
+        }
+    }
+
+    body = compile_to_rego(payload).split("allow if {")[1]
+
+    assert body.index("input.run.tool_calls") < body.index("input.args.amount")
+
+
+def test_an_empty_policy_level_list_renders_byte_identically() -> None:
+    """The bundle-hash guard: otherwise every project's source_hash moves on
+    upgrade."""
+    without = {"roles": {"default": {"tools": {"t": {"mode": "allow"}}}}}
+    with_empty = {
+        "roles": {"default": {"constraints": [], "tools": {"t": {"mode": "allow"}}}}
+    }
+
+    assert compile_to_rego(without, source_hash="H") == compile_to_rego(
+        with_empty, source_hash="H"
+    )

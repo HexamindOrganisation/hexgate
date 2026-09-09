@@ -23,6 +23,7 @@ Inheritance semantics: left-to-right merge — ``inherits: [A, B]`` resolves
 to ``merge(A, merge(B, self))``, where ``merge`` deep-merges the ``tools``
 maps (child entries override parent entries by tool name) and replaces
 scalar fields (``default_policy``) with the child's value when set.
+Policy-level ``constraints`` are the exception: they union across the chain.
 
 Mixin policies (``is_mixin: true``) can only be referenced via ``inherits``
 — they're never picked as the effective policy for any context scope.
@@ -30,7 +31,7 @@ Mixin policies (``is_mixin: true``) can only be referenced via ``inherits``
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any
@@ -186,6 +187,19 @@ class PolicySet:
         return f"PolicySet(roles={self.roles!r})"
 
 
+def _raw_constraints(
+    policy: AgentPolicy, *, tools: Iterable[BaseToolPolicy]
+) -> Iterator[str]:
+    """Every constraint string a role evaluates, policy-level first.
+
+    ``tools`` is a parameter because the two validators walk different views:
+    const refs cover the lowered ``agent.*`` keys, run refs only authored ones.
+    """
+    yield from policy.constraints
+    for tool_policy in (*tools, policy.default_policy):
+        yield from tool_policy.constraints
+
+
 def _validate_const_refs(policies: Mapping[str, AgentPolicy]) -> None:
     """Reject a ``consts.<name>`` reference to a constant not defined for its role.
 
@@ -197,14 +211,13 @@ def _validate_const_refs(policies: Mapping[str, AgentPolicy]) -> None:
     """
     for role, policy in policies.items():
         available = set(policy.consts)
-        for tool_policy in (*policy.effective_tools.values(), policy.default_policy):
-            for raw in tool_policy.constraints:
-                for name in iter_const_refs(parse_constraint(raw)):
-                    if name not in available:
-                        raise PolicySetError(
-                            f"role {role!r}: constraint {raw!r} references "
-                            f"undefined constant consts.{name}"
-                        )
+        for raw in _raw_constraints(policy, tools=policy.effective_tools.values()):
+            for name in iter_const_refs(parse_constraint(raw)):
+                if name not in available:
+                    raise PolicySetError(
+                        f"role {role!r}: constraint {raw!r} references "
+                        f"undefined constant consts.{name}"
+                    )
 
 
 def _sdk_version() -> str:
@@ -241,11 +254,10 @@ def _validate_run_refs(
     before any list-valued path is registered.
     """
     for role, policy in policies.items():
-        for tool_policy in (*policy.tools.values(), policy.default_policy):
-            for raw in tool_policy.constraints:
-                node = parse_constraint(raw)
-                _reject_unknown_run_paths(node, role, raw, scalar_paths | list_paths)
-                _reject_list_paths_in_scalar_position(node, role, raw, list_paths)
+        for raw in _raw_constraints(policy, tools=policy.tools.values()):
+            node = parse_constraint(raw)
+            _reject_unknown_run_paths(node, role, raw, scalar_paths | list_paths)
+            _reject_list_paths_in_scalar_position(node, role, raw, list_paths)
 
 
 def _reject_unknown_run_paths(
@@ -449,6 +461,11 @@ def _resolve_inheritance(
     then this role's own fields overlay last. Equivalent to Python's MRO
     with explicit precedence: ``self`` wins, then later parents, then
     earlier parents.
+
+    ``constraints`` is the one exception: it **unions** across the chain, since
+    letting a child replace a mixin's cap would silently remove it. Union can
+    only narrow. Deduplicated in first-seen order, so a diamond does not
+    evaluate the same predicate twice.
     """
     if name in chain:
         raise PolicySetError(f"cyclic inheritance: {' -> '.join(chain + [name])}")
@@ -462,6 +479,7 @@ def _resolve_inheritance(
     merged_tools: dict[str, ToolPolicy] = {}
     merged_agents: dict[str, AgentTargetPolicy] = {}
     merged_consts: dict[str, object] = {}
+    merged_constraints: list[str] = []
     merged_default: BaseToolPolicy = own.default_policy
     merged_admission: BaseToolPolicy | None = own.admission
 
@@ -474,6 +492,7 @@ def _resolve_inheritance(
         merged_tools.update(parent.tools)
         merged_agents.update(parent.agents)
         merged_consts.update(parent.consts)
+        _extend_unique(merged_constraints, parent.constraints)
         merged_default = parent.default_policy
         if parent.admission is not None:
             merged_admission = parent.admission
@@ -486,6 +505,8 @@ def _resolve_inheritance(
     merged_tools.update(own.tools)
     merged_agents.update(own.agents)
     merged_consts.update(own.consts)
+    # Union, not override — the one field here that accumulates (see docstring).
+    _extend_unique(merged_constraints, own.constraints)
     if "default_policy" in own.model_fields_set:
         merged_default = own.default_policy
     if "admission" in own.model_fields_set:
@@ -496,8 +517,16 @@ def _resolve_inheritance(
         inherits=own.inherits,
         is_mixin=own.is_mixin,
         default_policy=merged_default,
+        constraints=merged_constraints,
         tools=merged_tools,
         consts=merged_consts,
         admission=merged_admission,
         agents=merged_agents,
     )
+
+
+def _extend_unique(target: list[str], values: Iterable[str]) -> None:
+    """Append values not already present, preserving first-seen order."""
+    for value in values:
+        if value not in target:
+            target.append(value)

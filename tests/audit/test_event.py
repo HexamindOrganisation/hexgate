@@ -15,7 +15,7 @@ from hexgate.audit import (
     AuditEvent,
 )
 from hexgate.runtime import MAX_EVALUATED_ROLES
-from hexgate.security.decision import Decision, DecisionOutcome
+from hexgate.security.decision import Decision, DecisionOutcome, RunAttribution
 from hexgate.tracing import semconv
 
 
@@ -362,3 +362,102 @@ def test_a_full_role_set_goes_out_whole() -> None:
 
     assert wire[semconv.USER_ROLES] == list(roles)
     assert wire[semconv.DECIDING_ROLE] == roles[-1]
+
+
+# --- run attribution --------------------------------------------------------
+
+
+def _run(**overrides) -> RunAttribution:
+    base = dict(
+        run_id="9c2f1d3e-0000-4000-8000-000000000001",
+        tool_calls=3,
+        llm_calls=2,
+        denials=1,
+        total_tokens=1200,
+        elapsed_ms=4500,
+    )
+    return RunAttribution(**{**base, **overrides})
+
+
+def test_span_attributes_carry_run_attribution() -> None:
+    wire = AuditEvent(decision=_decision(run=_run())).span_attributes()
+
+    assert wire[semconv.RUN_ID] == "9c2f1d3e-0000-4000-8000-000000000001"
+    assert wire[semconv.RUN_TOOL_CALLS] == 3
+    assert wire[semconv.RUN_LLM_CALLS] == 2
+    assert wire[semconv.RUN_DENIALS] == 1
+    assert wire[semconv.RUN_TOTAL_TOKENS] == 1200
+    assert wire[semconv.RUN_ELAPSED_MS] == 4500
+
+
+def test_span_attributes_omit_run_id_never_send_an_empty_string() -> None:
+    """The regression guard for this feature's worst failure mode.
+
+    "" is not a UUID, so the enricher DLQs the span — losing the entire record
+    for every decision made outside a run scope. OTLP cannot carry null, so
+    absence is the only way to say "no run".
+    """
+    wire = AuditEvent(decision=_decision()).span_attributes()
+
+    assert semconv.RUN_ID not in wire
+    assert wire[semconv.RUN_TOOL_CALLS] == 0
+    assert wire[semconv.RUN_ELAPSED_MS] == 0
+
+
+def test_span_attributes_do_not_redact_or_truncate_run_fields() -> None:
+    """SDK counters, not caller data — they pass through like the role fields."""
+    wire = AuditEvent(
+        decision=_decision(run=_run(tool_calls=10**6, total_tokens=10**7))
+    ).span_attributes()
+
+    assert wire[semconv.RUN_TOOL_CALLS] == 10**6
+    assert wire[semconv.RUN_TOTAL_TOKENS] == 10**7
+
+
+def test_span_attribute_key_set_is_the_wire_contract() -> None:
+    """Mirrors what the enricher decodes, asserted as a set rather than field
+    by field.
+
+    An attribute the enricher does not read is dropped silently. A field added
+    without a mapping has to fail here or fail nowhere.
+    """
+    wire = AuditEvent(
+        decision=_decision(run=_run(), arguments={"path": "x"}, attributes={"a": 1})
+    ).span_attributes()
+
+    assert set(wire) == {
+        semconv.EVENT_ID,
+        semconv.AGENT_NAME,
+        semconv.TOOL_NAME,
+        semconv.OUTCOME,
+        semconv.USER_ROLES,
+        semconv.DECIDING_ROLE,
+        semconv.ERROR_TYPE,
+        semconv.REASON,
+        semconv.VIOLATIONS,
+        semconv.ARGUMENTS,
+        semconv.ATTRIBUTES,
+        semconv.USER_ID,
+        semconv.SESSION_ID,
+        semconv.RUN_ID,
+        semconv.RUN_TOOL_CALLS,
+        semconv.RUN_LLM_CALLS,
+        semconv.RUN_DENIALS,
+        semconv.RUN_TOTAL_TOKENS,
+        semconv.RUN_ELAPSED_MS,
+    }
+
+
+def test_run_fields_are_otlp_attribute_values() -> None:
+    """The OTel SDK silently drops any attribute that is not a primitive."""
+    wire = AuditEvent(decision=_decision(run=_run())).span_attributes()
+
+    run_keys = {
+        semconv.RUN_ID,
+        semconv.RUN_TOOL_CALLS,
+        semconv.RUN_LLM_CALLS,
+        semconv.RUN_DENIALS,
+        semconv.RUN_TOTAL_TOKENS,
+        semconv.RUN_ELAPSED_MS,
+    }
+    assert all(isinstance(wire[key], (str, int)) for key in run_keys)

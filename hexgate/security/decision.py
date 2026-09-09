@@ -10,7 +10,9 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Final, Protocol, runtime_checkable
+
+from hexgate.tracing import semconv
 
 
 class DecisionOutcome(str, Enum):
@@ -203,6 +205,84 @@ _ERROR_TYPE_BY_OUTCOME: dict[DecisionOutcome, str] = {
 }
 
 
+# ``run.elapsed_seconds`` is a float; the platform column is UInt32 ms.
+_MILLISECONDS_PER_SECOND = 1000
+
+# The range the platform's ``DecisionEvent`` validates every run counter against
+# (``ge=0, le=UINT32_MAX``, backing a UInt32 ClickHouse column). Duplicated
+# rather than imported: the SDK does not depend on the platform package.
+_COUNTER_MIN = 0
+_COUNTER_MAX = 2**32 - 1
+
+
+def _as_counter(value: Any) -> int:
+    """Coerce one ``run.*`` value into the platform's UInt32 counter range.
+
+    Clamped, not passed through: counters are monotone within a run, so an
+    out-of-range value does not cost one row — the validator rejects every
+    later decision for that run too, and the DLQ takes the rest of the trail
+    with it. A clamped counter misreports; a rejected span loses the record.
+    """
+    return min(max(int(value), _COUNTER_MIN), _COUNTER_MAX)
+
+
+@dataclass(frozen=True, slots=True)
+class RunAttribution:
+    """The run a decision belongs to, in the shape the audit wire wants.
+
+    ``run_id`` is ``""`` outside a run scope, matching ``run_facts.DETACHED``.
+    An in-process signal only — the wire field is ``UUID | None``.
+    """
+
+    run_id: str = ""
+    tool_calls: int = 0
+    llm_calls: int = 0
+    denials: int = 0
+    total_tokens: int = 0
+    elapsed_ms: int = 0
+
+    @classmethod
+    def from_namespace(cls, run: Mapping[str, Any] | None) -> "RunAttribution":
+        """Project the ``run.*`` namespace onto the five persisted counters.
+
+        A subset: the other paths have no column yet. Every counter is clamped
+        to the wire's range (see :func:`_as_counter`).
+        """
+        if not run:
+            return DETACHED_RUN
+        return cls(
+            run_id=str(run.get("id", "")),
+            tool_calls=_as_counter(run.get("tool_calls", 0)),
+            llm_calls=_as_counter(run.get("llm_calls", 0)),
+            denials=_as_counter(run.get("denials", 0)),
+            total_tokens=_as_counter(run.get("total_tokens", 0)),
+            elapsed_ms=_as_counter(
+                float(run.get("elapsed_seconds", 0.0)) * _MILLISECONDS_PER_SECOND
+            ),
+        )
+
+    def as_span_attributes(self) -> dict[str, Any]:
+        """Span attributes for the platform's ``DecisionEvent``.
+
+        ``RUN_ID`` is omitted, never ``""``: OTLP cannot carry null and the
+        platform rejects an empty string, losing the whole record.
+        """
+        attrs: dict[str, Any] = {
+            semconv.RUN_TOOL_CALLS: self.tool_calls,
+            semconv.RUN_LLM_CALLS: self.llm_calls,
+            semconv.RUN_DENIALS: self.denials,
+            semconv.RUN_TOTAL_TOKENS: self.total_tokens,
+            semconv.RUN_ELAPSED_MS: self.elapsed_ms,
+        }
+        if self.run_id:
+            attrs[semconv.RUN_ID] = self.run_id
+        return attrs
+
+
+# A decision with no run scope behind it. Safe to share: the class is frozen.
+DETACHED_RUN: Final[RunAttribution] = RunAttribution()
+
+
 @dataclass(frozen=True, slots=True)
 class Decision:
     """One policy decision for a proposed tool invocation."""
@@ -228,6 +308,10 @@ class Decision:
     # deliberately still absent from ``as_error_payload`` — the model must
     # never see it.
     attributes: dict[str, Any] | None = None
+    # The run this decision belongs to. Persisted untouched (bounded ints and a
+    # UUID, not caller data); absent from ``as_error_payload`` like
+    # ``attributes`` — the model must not learn how close it is to its budget.
+    run: RunAttribution = DETACHED_RUN
 
     @classmethod
     def from_verdict(
@@ -240,6 +324,7 @@ class Decision:
         deciding_role: str | None = None,
         arguments: dict[str, Any] | None = None,
         attributes: dict[str, Any] | None = None,
+        run: RunAttribution = DETACHED_RUN,
     ) -> "Decision":
         """Lift an engine :class:`Verdict` into a host-facing decision, stamping
         on the context the engine doesn't know."""
@@ -255,6 +340,7 @@ class Decision:
             violations=verdict.violations,
             arguments=arguments,
             attributes=attributes,
+            run=run,
         )
 
     @property
