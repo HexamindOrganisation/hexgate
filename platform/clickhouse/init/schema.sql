@@ -147,7 +147,7 @@ CREATE TABLE IF NOT EXISTS hexgate_audit.llm_message
     -- 1 when any content column below was cut to its byte cap (head+tail).
     truncated           UInt8 DEFAULT 0,
     -- Official gen_ai.* shapes as JSON; SDK-redacted and capped, may be lossy.
-    input_messages      String COMMENT 'gen_ai.input.messages — only the messages new to this call, tool results included; capped 32 KiB' CODEC(ZSTD(3)),
+    input_messages      String COMMENT 'gen_ai.input.messages — only the messages new to this call, tool results included; capped 256 KiB' CODEC(ZSTD(3)),
     output_messages     String COMMENT 'gen_ai.output.messages — this call''s completion; capped 8 KiB' CODEC(ZSTD(3)),
     system_instructions String DEFAULT '' COMMENT 'gen_ai.system_instructions — first row of each turn_key only; capped 8 KiB' CODEC(ZSTD(3))
 )
