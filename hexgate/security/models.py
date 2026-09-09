@@ -166,7 +166,11 @@ class AgentPolicy(BaseModel):
     # instances, nothing reassigns a field), which is what makes memoizing
     # effective_tools safe. cached_property is a plain descriptor, not a field,
     # so pydantic must leave it alone.
-    model_config = ConfigDict(frozen=True, ignored_types=(cached_property,))
+    # extra="forbid": a mistyped field (``contraints:``) would otherwise be
+    # dropped in silence, and a dropped fence is fail-open.
+    model_config = ConfigDict(
+        frozen=True, ignored_types=(cached_property,), extra="forbid"
+    )
 
     version: int = 1
     inherits: list[str] = Field(default_factory=list)

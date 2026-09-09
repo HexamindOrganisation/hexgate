@@ -156,6 +156,54 @@ def test_file_level_keys_beside_roles_are_accepted() -> None:
     assert ps.policy_for("default").tools["agent.run"].mode == "allow"
 
 
+def test_mistyped_key_inside_a_role_is_rejected() -> None:
+    """A role spec fails closed on an unrecognised field too.
+
+    Rejecting only siblings of ``roles:`` left the same silent drop one level
+    down — the likelier place to write the fence, since that is where every
+    other policy field lives.
+    """
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        load_policy_set_from_dict(
+            {
+                "roles": {
+                    "default": {
+                        "contraints": ["run.tool_calls < 20"],
+                        "default_policy": {"mode": "allow"},
+                    }
+                }
+            }
+        )
+
+
+def test_mistyped_key_in_a_flat_document_is_rejected() -> None:
+    """Same guard on the flat shape, which validates as one policy."""
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        load_policy_set_from_dict(
+            {
+                "contraints": ["run.tool_calls < 20"],
+                "default_policy": {"mode": "allow"},
+            }
+        )
+
+
+def test_file_level_key_error_hides_the_resolved_marker() -> None:
+    """The advertised key list stays authorable.
+
+    ``_resolved`` is legal but internal: setting it by hand loads the document
+    as already-resolved, which switches off the reserved-tool-name guard. An
+    author reading this error must not be pointed at it.
+    """
+    with pytest.raises(PolicySetError) as exc_info:
+        load_policy_set_from_dict(
+            {
+                "contraints": ["run.tool_calls < 20"],
+                "roles": {"default": {"default_policy": {"mode": "allow"}}},
+            }
+        )
+    assert RESOLVED_POLICY_MARKER not in str(exc_info.value)
+
+
 def test_load_policy_set_none_returns_deny_default() -> None:
     """``None`` yields a deny-by-default fallback role."""
     ps = load_policy_set(None)

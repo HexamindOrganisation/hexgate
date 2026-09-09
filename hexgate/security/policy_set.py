@@ -396,7 +396,7 @@ def _reject_unknown_file_level_keys(payload: dict[str, Any]) -> None:
     """Fail closed on an unrecognised sibling of ``roles:``."""
     unknown = sorted(set(payload) - _FILE_LEVEL_KEYS)
     if unknown:
-        allowed = sorted(_FILE_LEVEL_KEYS - {_ROLES_KEY})
+        allowed = sorted(_FILE_LEVEL_KEYS - {_ROLES_KEY, RESOLVED_POLICY_MARKER})
         raise PolicySetError(
             f"unrecognised top-level key(s) {unknown} beside {_ROLES_KEY!r}; "
             f"a role-keyed document reads policy fields inside each role, so "

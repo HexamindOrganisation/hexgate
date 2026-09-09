@@ -6,6 +6,7 @@ two routes that compile+sign a bundle (update, register).
 
 import base64
 import hashlib
+from typing import TYPE_CHECKING
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Response
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -33,6 +34,9 @@ from hexgate_api.features.agents.service import (
     update_agent,
 )
 from hexgate_api.seeds.defaults import ensure_default_project
+
+if TYPE_CHECKING:
+    from hexgate.security.policy_set import PolicySet
 
 router = APIRouter()
 
@@ -222,6 +226,10 @@ async def api_validate_policy(
       validated as an :class:`AgentPolicy`, then every constraint inside
       every tool is parsed against the M1 grammar.
 
+    Either way the document then goes through :func:`_load_document`, the same
+    loader the compiler and the SDK use, so ``ok`` can't report a document
+    those two reject — see that function for what the per-role pass misses.
+
     Returns a flat list of ``{role, line, message}`` diagnostics. ``role``
     is ``None`` for top-level YAML / schema errors; populated when the
     failure lives inside a specific role's section.
@@ -297,38 +305,62 @@ async def api_validate_policy(
             )
         _check_policy(policy, None)
 
+    policy_set, document_error = _load_document(parsed)
+    # Only when the per-role pass found nothing: the loader fails on the same
+    # cause, so reporting it too would just duplicate a diagnostic that already
+    # names the offending role.
+    if document_error is not None and not errors:
+        errors.append(document_error)
+
     return ValidatePolicyResponse(
-        ok=not errors, errors=errors, warnings=_default_role_warnings(parsed, errors)
+        ok=not errors,
+        errors=errors,
+        warnings=[] if errors else _default_role_warnings(policy_set),
     )
 
 
-def _default_role_warnings(
-    parsed: dict, errors: list[PolicyValidationError]
-) -> list[PolicyValidationError]:
-    """Authoring lints over the document as a whole (no-op if it didn't parse).
+def _load_document(
+    parsed: dict,
+) -> "tuple[PolicySet | None, PolicyValidationError | None]":
+    """Load the document the way the SDK does at run time — the final gate.
 
-    Needs a fully loaded :class:`PolicySet` — inheritance and mixins resolved —
-    which the per-role checks above don't build, validating roles in isolation.
+    Returns the loaded set for the lints below, or the failure to report. The
+    per-role pass validates each role in isolation, so it never sees file-level
+    grammar (an unknown sibling of ``roles:``, a malformed top-level
+    ``constraints:`` block) or a failure needing the resolved set (inheritance,
+    mixins, ``consts`` references). Reporting these keeps ``ok`` from
+    disagreeing with the loader the compiler and the SDK both go through — a
+    document that validates here has to be one they accept.
     """
-    if errors:
-        return []
-
     from pydantic import ValidationError
 
-    from hexgate.security.analyzer import check_default_role_exposure
     from hexgate.security.policy_set import (
         PolicySetError,
         load_policy_set_from_dict,
     )
 
     try:
-        policy_set = load_policy_set_from_dict(parsed)
-    except (PolicySetError, ValidationError):
-        # Inheritance/mixin failures the per-role checks don't cover. Surfacing
-        # them here would widen this endpoint's error contract, and dropping the
-        # lint can't make a broken document look clean — `ok` comes from
-        # `errors`, and the CLI and platform build both still reject these.
+        return load_policy_set_from_dict(parsed), None
+    except PolicySetError as exc:
+        return None, PolicyValidationError(message=str(exc))
+    except ValidationError as exc:
+        return None, PolicyValidationError(
+            message=f"policy schema: {exc.errors()[0]['msg']}"
+        )
+
+
+def _default_role_warnings(
+    policy_set: "PolicySet | None",
+) -> list[PolicyValidationError]:
+    """Authoring lints over the document as a whole.
+
+    Needs a fully loaded :class:`PolicySet` — inheritance and mixins resolved —
+    which the per-role checks don't build, validating roles in isolation.
+    """
+    if policy_set is None:
         return []
+
+    from hexgate.security.analyzer import check_default_role_exposure
 
     return [
         PolicyValidationError(

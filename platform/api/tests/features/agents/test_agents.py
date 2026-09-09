@@ -395,9 +395,80 @@ def test_validate_reports_no_warnings_when_the_document_has_errors(
     assert body["warnings"] == []
 
 
+def test_validate_rejects_an_unknown_sibling_of_roles(client: TestClient) -> None:
+    """A mistyped file-level key is a load error, so validate must not pass it.
+
+    The per-role pass only walks what sits under ``roles:``. Answering ``ok``
+    here sent the operator on to save a document the compiler drops the bundle
+    for, leaving the agent unable to load its policy at all.
+    """
+    resp = client.post(
+        f"/v1/projects/{DEFAULT_PROJECT_ID}/agents/support_bot/validate",
+        json={
+            "policy_yaml": (
+                "contraints:\n"
+                "  - run.tool_calls < 5\n"
+                "roles:\n"
+                "  default:\n"
+                "    default_policy: { mode: allow }\n"
+            )
+        },
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is False
+    assert "contraints" in body["errors"][0]["message"]
+
+
+def test_validate_rejects_a_malformed_file_level_constraints_block(
+    client: TestClient,
+) -> None:
+    """The file-level fence is grammar-checked, not just the per-role ones."""
+    resp = client.post(
+        f"/v1/projects/{DEFAULT_PROJECT_ID}/agents/support_bot/validate",
+        json={
+            "policy_yaml": (
+                "constraints: run.tool_calls < 5\n"
+                "roles:\n"
+                "  default:\n"
+                "    default_policy: { mode: allow }\n"
+            )
+        },
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is False
+    assert "constraints" in body["errors"][0]["message"]
+
+
+def test_validate_accepts_a_file_level_constraints_block(client: TestClient) -> None:
+    """The hoisted fence is legal — the guards above must not reject the shape
+    the SDK now supports."""
+    resp = client.post(
+        f"/v1/projects/{DEFAULT_PROJECT_ID}/agents/support_bot/validate",
+        json={
+            "policy_yaml": (
+                "version: 1\n"
+                "constraints:\n"
+                "  - run.tool_calls < 20\n"
+                "roles:\n"
+                "  default:\n"
+                "    tools:\n"
+                "      read_ticket: { mode: allow }\n"
+            )
+        },
+    )
+    body = resp.json()
+    assert body["ok"] is True, body
+    assert body["errors"] == []
+
+
 def test_validate_unresolvable_inheritance_does_not_500(client: TestClient) -> None:
     """Roles that each parse but whose inheritance can't resolve reach the
-    PolicySet build and must degrade to "no lint", never a crash."""
+    PolicySet build and must be reported there, never crash.
+
+    The per-role pass can't see a link failure, so this used to answer ``ok``
+    for a document the compiler and the SDK both reject."""
     resp = client.post(
         f"/v1/projects/{DEFAULT_PROJECT_ID}/agents/support_bot/validate",
         json={
@@ -417,8 +488,8 @@ def test_validate_unresolvable_inheritance_does_not_500(client: TestClient) -> N
     )
     assert resp.status_code == 200
     body = resp.json()
-    # Unchanged error contract: the per-role checks passed, so ok stays True.
-    assert body["ok"] is True
+    assert body["ok"] is False
+    assert "does_not_exist" in body["errors"][0]["message"]
     assert body["warnings"] == []
 
 
@@ -714,11 +785,11 @@ def _trivial_policy_yaml() -> str:
     """A policy that compiles cleanly — enough to trigger bundle signing."""
     return (
         "version: 1\n"
-        "name: default\n"
-        "rules:\n"
-        "  - effect: allow\n"
-        "    when:\n"
-        "      tool: any\n"
+        "default_policy:\n"
+        "  mode: deny\n"
+        "tools:\n"
+        "  read_ticket:\n"
+        "    mode: allow\n"
     )
 
 
