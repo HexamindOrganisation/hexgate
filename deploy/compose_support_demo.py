@@ -14,12 +14,14 @@ may hand the conversation off to `billing_bot`. Reach is closed-world: no role m
 reach `billing_bot` until a capability grants it — the same import pipeline as
 tools.
 
-Run with `uv run --with marimo marimo edit deploy/compose_support_demo.py`.
+Run standalone with `uv run --with marimo marimo edit deploy/compose_support_demo.py`,
+or `make demo-support` to launch it beside the live platform + dashboard (the
+notebook then links straight to the seeded showcase).
 """
 
 import marimo
 
-__generated_with = "0.23.10"
+__generated_with = "0.24.0"
 app = marimo.App(width="medium")
 
 
@@ -56,40 +58,70 @@ def _():
 
 @app.cell
 def _(mo):
-    mo.md(
-        """
-        # 🎧 Hexgate — one *compose* policy, tools *and* agents
+    mo.md("""
+    # 🎧 Hexgate — one *compose* policy, tools *and* agents
 
-        A customer-support system with two agents: front-line `support_bot` and
-        refunds specialist `billing_bot`. Everything a role may do is composed from
-        one **`policy.yaml`** that imports small **capability files**:
+    A customer-support system with two agents: front-line `support_bot` and
+    refunds specialist `billing_bot`. Everything a role may do is composed from
+    one **`policy.yaml`** that imports small **capability files**:
 
-        - **Tool permissions** — may this role call this tool with these args?
-        - **Agent reach** — may `support_bot` hand the conversation off to
-          `billing_bot`?
+    - **Tool permissions** — may this role call this tool with these args?
+    - **Agent reach** — may `support_bot` hand the conversation off to
+      `billing_bot`?
 
-        A top-level **boundary** sets the closed-world ceiling (allowed tools, the
-        $1000 refund cap, and that reach to `billing_bot` is `handoff`-only). Each
-        agent's roles `import:` the capability files they're granted. One
-        `resolve_file` per agent folds it into a `PolicySet` per role — tools and
-        reach on the same pipeline. All local: no platform, no API key, no model
-        call.
-        """
-    )
+    A top-level **boundary** sets the closed-world ceiling (allowed tools, the
+    $1000 refund cap, and that reach to `billing_bot` is `handoff`-only). Each
+    agent's roles `import:` the capability files they're granted. One
+    `resolve_file` per agent folds it into a `PolicySet` per role — tools and
+    reach on the same pipeline. All local: no platform, no API key, no model
+    call.
+    """)
+    return
+
+
+@app.cell
+def _(Path, mo):
+    # Under `make demo-support`, boot.py writes the running dashboard URL here and
+    # /v1/demo-login signs you in. Standalone (`marimo edit`) there's no dashboard
+    # — guard the read and show how to launch one.
+    try:
+        _dash = Path("/tmp/hexgate_dash_url").read_text().strip().rstrip("/")
+    except OSError:
+        _dash = None
+    if _dash:
+        _banner = mo.md(
+            f"""
+            ### [▶ Open the live dashboard →]({_dash}/v1/demo-login)
+
+            Signs you in and opens the **plum** dashboard on the seeded
+            `policy-showcase` project — the very policy below, live in the
+            **Policies** editor with the resolved view, decision tester, and
+            reach/admission graph.
+            """
+        )
+    else:
+        _banner = mo.callout(
+            mo.md(
+                "Launch the **dashboard + this notebook together** with "
+                "`make demo-support` (→ http://localhost:2718) to open the live "
+                "**Policies** editor on the seeded showcase. This notebook also "
+                "runs fully standalone."
+            ),
+            kind="info",
+        )
+    _banner
     return
 
 
 @app.cell
 def _(mo):
-    mo.md(
-        """
-        ## 1 · The policy — a `policy.yaml` that imports capabilities
+    mo.md("""
+    ## 1 · The policy — a `policy.yaml` that imports capabilities
 
-        Edit any of these and the whole notebook re-resolves. The boundary is a
-        ceiling (default deny): a tool — or a reach target — it doesn't list is
-        ineligible no matter what a capability grants.
-        """
-    )
+    Edit any of these and the whole notebook re-resolves. The boundary is a
+    ceiling (default deny): a tool — or a reach target — it doesn't list is
+    ineligible no matter what a capability grants.
+    """)
     return
 
 
@@ -98,26 +130,26 @@ def _():
     # The entry file: the closed-world boundary + two agents whose roles import
     # capability files. `import:` at a role splices that leaf file into the role.
     ENTRY = """\
-boundary:
-  tools:
-    view_orders: { mode: allow }
-    send_email: { mode: allow }
-    escalate: { mode: allow }
-    refund_order: { mode: allow, constraint: "args.amount <= 1000" }  # hard cap
-  reach:
-    billing_bot: { as: handoff }   # reach ceiling: hand-off only, never as-tool
-agents:
-  support_bot:
-    roles:
-      default: { import: [ caps/read_only.yaml ] }
-      support: { import: [ caps/read_only.yaml, caps/support_leaf.yaml ] }
-      billing:
-        import:
-          [ caps/read_only.yaml, caps/payments.yaml, caps/billing_reach.yaml ]
-  billing_bot:
-    roles:
-      billing: { import: [ caps/payments.yaml ] }
-"""
+    boundary:
+      tools:
+        view_orders: { mode: allow }
+        send_email: { mode: allow }
+        escalate: { mode: allow }
+        refund_order: { mode: allow, constraint: "args.amount <= 1000" }  # hard cap
+      reach:
+        billing_bot: { as: handoff }   # reach ceiling: hand-off only, never as-tool
+    agents:
+      support_bot:
+        roles:
+          default: { import: [ caps/read_only.yaml ] }
+          support: { import: [ caps/read_only.yaml, caps/support_leaf.yaml ] }
+          billing:
+            import:
+              [ caps/read_only.yaml, caps/payments.yaml, caps/billing_reach.yaml ]
+      billing_bot:
+        roles:
+          billing: { import: [ caps/payments.yaml ] }
+    """
     # Leaf capability files — grant-only, imported by the roles above.
     CAPS = {
         "read_only.yaml": "tools:\n  view_orders: { mode: allow }\n",
@@ -205,18 +237,16 @@ def _(mo, support_policy):
 
 @app.cell
 def _(mo):
-    mo.md(
-        """
-        ## 2 · Agent reach — composed from the same imports
+    mo.md("""
+    ## 2 · Agent reach — composed from the same imports
 
-        Reach is **closed-world**: no role may reach `billing_bot` until a
-        capability grants it. Only `billing` imports `caps/billing_reach.yaml`, so
-        only `billing` may hand `support_bot`'s conversation off — `support` and
-        `default` are denied, and nobody may reach it *as a tool* (the boundary
-        ceilinged `handoff` only). This runs the real `ReachGate` — the seam the
-        framework calls at a hand-off — over the composed policy.
-        """
-    )
+    Reach is **closed-world**: no role may reach `billing_bot` until a
+    capability grants it. Only `billing` imports `caps/billing_reach.yaml`, so
+    only `billing` may hand `support_bot`'s conversation off — `support` and
+    `default` are denied, and nobody may reach it *as a tool* (the boundary
+    ceilinged `handoff` only). This runs the real `ReachGate` — the seam the
+    framework calls at a hand-off — over the composed policy.
+    """)
     return
 
 
@@ -271,14 +301,12 @@ def _(mo, reach):
 
 @app.cell
 def _(mo):
-    mo.md(
-        """
-        ## 3 · Test the agent
+    mo.md("""
+    ## 3 · Test the agent
 
-        Pick a caller **role**, a **tool** + args, and a **reach** target — the same
-        composed policy decides both the tool call and the hand-off, live.
-        """
-    )
+    Pick a caller **role**, a **tool** + args, and a **reach** target — the same
+    composed policy decides both the tool call and the hand-off, live.
+    """)
     return
 
 
@@ -366,23 +394,26 @@ def _(billing_policy, mo):
 
 @app.cell
 def _(mo):
-    mo.md(
-        """
-        ---
-        The same compose front-end powers the CLI and the dashboard — point the CLI
-        at your own entry file:
+    mo.md("""
+    ---
+    The same compose front-end powers the CLI and the dashboard — point the CLI
+    at your own entry file:
 
-        ```
-        hexgate policy resolve --file policy.yaml --agent support_bot
-        ```
+    ```
+    hexgate policy resolve --file policy.yaml --agent support_bot
+    ```
 
-        In the platform, these exact files are the project's `policy_file` rows: the
-        **Policies** editor renders this scenario with a live resolved view, the
-        decision tester, and the reach/admission graph. Reach and admission are
-        enforced at run entry / hand-off by the `ReachGate` / `AgentGate` seams a
-        live agent runs, over the policy the compose front-end composed.
-        """
-    )
+    In the platform, these exact files are the project's `policy_file` rows: the
+    **Policies** editor renders this scenario with a live resolved view, the
+    decision tester, and the reach/admission graph. Reach and admission are
+    enforced at run entry / hand-off by the `ReachGate` / `AgentGate` seams a
+    live agent runs, over the policy the compose front-end composed.
+    """)
+    return
+
+
+@app.cell
+def _():
     return
 
 
