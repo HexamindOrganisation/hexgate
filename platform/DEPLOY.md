@@ -103,16 +103,39 @@ with a JSON 404 and every SDK on that stage silently loses its audit trail —
 stack (Postgres, ClickHouse, Redpanda) binds no host ports; Redpanda in
 particular is PLAINTEXT with no auth — never publish it.
 
-**The `/v1/traces` route needs a raised request-body limit.** The collector's
-OTLP receiver accepts 32 MiB (`max_request_body_size`), and an SDK export of
-LLM message spans can reach ~17 MiB, but **nginx caps a request body at 1 MiB
-by default** and answers `413` before the collector ever sees it — so the
-proxy, not the collector, becomes the narrowest hop and every message export
-dies at the edge. In nginx set `client_max_body_size 32m;` inside the
-`location = /v1/traces` block. Caddy imposes no default body limit and needs
-nothing. This is the one hop in the record-size budget
-(`docs/internals/audit-pipeline.md` §4.1) that lives outside this repo, so
-nothing in `make check-all` can catch it being wrong.
+**The `/v1/traces` route carries its own request-body limit.** The collector's
+OTLP receiver accepts 32 MiB (`max_request_body_size`) and an SDK export of LLM
+message spans can reach ~17 MiB, but the proxy enforces its own cap *first* and
+answers `413` before the collector ever sees the POST — so the proxy, not the
+collector, is what decides whether a large export gets through. This is the one
+hop in the record-size budget (`docs/internals/audit-pipeline.md` §4.1) that
+lives outside this repo, so nothing in `make check-all` can catch it.
+
+In nginx the setting is `client_max_body_size`, and it belongs **inside the
+`location = /v1/traces` block** rather than at `http` or `server` level:
+
+```nginx
+location = /v1/traces {
+    proxy_pass http://127.0.0.1:7001;   # 7201 on staging
+    client_max_body_size 32m;
+}
+```
+
+Note the value here is deliberately *tighter* than the surrounding default —
+on the prod box the `http` block allows `100M`, and this route is held to a
+much smaller number on purpose. `/v1/traces` is the only endpoint taking bulk
+binary uploads, and nginx enforces the limit **before** the collector verifies
+the Biscuit token, so whatever it allows is what an unauthenticated caller can
+make the proxy buffer. Keep it as small as the largest legitimate export: 32
+MiB covers a 64-span batch of maximally-sized message spans, and nothing more.
+The value was 8 MiB before message logging, which is why it had to be raised.
+
+Both stages need it — they are separate files
+(`sites-available/app.hexgate.ai` and `…/app.staging.hexgate.ai`), each with
+its own `/v1/traces` block pointing at that stage's collector port. Apply with
+`nginx -t && systemctl reload nginx`; a graceful reload keeps existing
+connections and a failed test changes nothing. Caddy imposes no default body
+limit and needs nothing.
 
 (In Caddy this is two `reverse_proxy` site blocks; in nginx, two `server`
 blocks with `proxy_pass`. Forward `X-Forwarded-Proto: https` — the API trusts

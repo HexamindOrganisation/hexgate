@@ -36,7 +36,7 @@ flowchart LR
     A["Agent code"]:::customerBox --> B["Hexgate SDK<br/>PolicyEnforcer → AuditSender → BatchSpanProcessor queue"]:::sdkBox
   end
 
-  B -->|"OTLP/HTTP protobuf<br/>POST /v1/traces · Bearer api_key"| P["Reverse proxy<br/>app.hexgate.ai"]:::hexBox
+  B -->|"OTLP/HTTP protobuf<br/>POST /v1/traces · Bearer api_key"| P["Reverse proxy<br/>app.hexgate.ai<br/>client_max_body_size 32m on /v1/traces"]:::hexBox
   P -->|"path /v1/traces → HEXGATE_OTLP_PORT<br/>(host 7001/7201 → container :4318)"| C["Go Collector<br/>biscuit auth · batch 5s / 24 spans"]:::hexBox
   P -->|"all other paths"| F["FastAPI platform API"]:::hexBox
   C --> K["Redpanda topic<br/>hexgate.otlp.raw"]:::redpandaBox
@@ -360,7 +360,7 @@ flowchart LR
 
   SP["one message span<br/>≤ 272 KiB<br/>256 input + 8 output + 8 sysinstr"]:::sdkBox
   S["SDK export<br/>MAX_EXPORT_BATCH_SIZE 64"]:::sdkBox
-  P["Reverse proxy<br/>client_max_body_size 32 MiB<br/>⚠ outside this repo · nginx defaults to 1 MiB"]:::extBox
+  P["nginx (host)<br/>client_max_body_size 32 MiB<br/>per-stage, outside this repo"]:::extBox
   R["OTLP/HTTP receiver<br/>max_request_body_size 32 MiB<br/>confighttp default 20 MiB"]:::hexBox
   B["batch processor<br/>send_batch_size 24<br/>send_batch_max_size 24"]:::hexBox
   X["kafka exporter<br/>producer.max_message_bytes 8 MiB (pre-compression)<br/>sending_queue bytes / 128 MiB · zstd"]:::hexBox
@@ -381,7 +381,10 @@ flowchart LR
 Every hop rejects **whole** — the proxy and receiver drop the entire POST, the
 exporter and broker the entire record — so the narrowest one decides what gets
 through, and it takes unrelated decision spans down with it. The proxy is the
-hop most easily missed: it is the only one not configured in this repo.
+hop most easily missed: it is the only one not configured in this repo, it is
+set per stage, and it is deliberately tighter than the box's `100M` default
+because it is enforced before the collector authenticates the token
+(`platform/DEPLOY.md` §3).
 
 | Limit | Value | Why |
 |---|---|---|
@@ -391,7 +394,7 @@ hop most easily missed: it is the only one not configured in this repo.
 | exporter `producer.compression` | `zstd` | network and disk only — `max_message_bytes` maps to franz-go's `ProducerBatchMaxBytes`, measured *before* compression, so the hard client ceiling is 8 MiB uncompressed (30 spans). Only the broker's limit sees the compressed batch |
 | exporter `sending_queue` | `bytes` / 128 MiB | the default is 1000 *requests*, which was ~500 MiB of decision spans but ~6.2 GiB of message batches |
 | `memory_limiter` | 1024 / 256 MiB | 384 MiB soft would refuse intake against 32 MiB bodies and a 128 MiB queue |
-| reverse-proxy body limit | 32 MiB | **outside this repo** — nginx defaults to 1 MiB and 413s at the edge. See `platform/DEPLOY.md` §3 |
+| nginx `client_max_body_size` on `/v1/traces` | 32 MiB | **outside this repo, set per stage.** Enforced before the collector authenticates, so it is held below the box's `100M` default; was 8 MiB before message logging. See `platform/DEPLOY.md` §3 |
 | topic `max.message.bytes` (raw + dlq) | 8 MiB | §4.2 |
 | enricher `max_partition_fetch_bytes` / DLQ `max_request_size` | 8 MiB | §4.3 |
 
