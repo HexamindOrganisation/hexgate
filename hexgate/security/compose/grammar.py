@@ -145,7 +145,10 @@ class _GrantScope(BaseModel):
     mcp: dict[str, GrantSpec] = Field(default_factory=dict)
     # Ingress grant: may this scope's role start/enter this agent? Lowers to the
     # ``agent.run`` key the runtime AgentGate enforces. A single grant (it is about
-    # *this* agent), boundary-ceilinged like reach.
+    # *this* agent), boundary-ceilinged like reach. Constraints here gate on
+    # identity/attributes, not ``run.*`` facts: admission fires at run entry,
+    # before a run accrues, so run counters read zero — a run budget belongs on a
+    # tool or reach, not admission.
     admission: GrantSpec | None = None
     imports: list[str] = Field(default_factory=list, alias="import")
 
