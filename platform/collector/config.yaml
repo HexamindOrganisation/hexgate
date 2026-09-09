@@ -115,8 +115,8 @@ exporters:
       # This one is measured BEFORE compression: it maps to franz-go's
       # ProducerBatchMaxBytes, which is explicit that a batch is sized
       # uncompressed. So the hard ceiling here is 8 MiB of raw spans — 30 at
-      # 272 KiB — and send_batch_max_size: 24 is a ~25% margin under it, not
-      # 24 plus whatever zstd happens to buy. Only the broker's own
+      # 272 KiB — and send_batch_max_size: 24 leaves ~20% of the 8 MiB unused
+      # (6.375 of 8 MiB), not 24 plus whatever zstd happens to buy. Only the broker's own
       # max.message.bytes is checked on the compressed batch.
       max_message_bytes: 8388608 # 8 MiB
       # Default is "none". Bought for network and disk, not for headroom
