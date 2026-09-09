@@ -140,19 +140,24 @@ def _truncate_json(payload: dict[str, Any], *, cap: int) -> dict[str, Any]:
     same object ``as_error_payload`` hands the host. The copy is shallow —
     enough to stop a rebind, not a nested in-place mutation."""
     payload_json = json.dumps(payload, default=str)
-    if len(payload_json.encode("utf-8")) <= cap:
+    raw = payload_json.encode("utf-8")
+    if len(raw) <= cap:
         return dict(payload)
-    preview_bytes = cap - _TRUNCATION_WRAPPER_HEADROOM_BYTES
+    # Floored at 1: a cap at or below the wrapper headroom would otherwise make
+    # this negative, which slices from the *end* of the payload and never
+    # shrinks (``-1 // 2 == -1``), so the loop would not terminate.
+    preview_bytes = max(cap - _TRUNCATION_WRAPPER_HEADROOM_BYTES, 1)
     while True:
         wrapper = {
             "_truncated": True,
-            "original_bytes": len(payload_json.encode("utf-8")),
-            "preview": payload_json.encode("utf-8")[:preview_bytes].decode(
-                "utf-8", errors="ignore"
-            ),
+            "original_bytes": len(raw),
+            "preview": raw[:preview_bytes].decode("utf-8", errors="ignore"),
         }
         if len(json.dumps(wrapper).encode("utf-8")) <= cap:
             return wrapper
+        if preview_bytes == 1:
+            # Not even one byte of preview fits: ship the marker alone.
+            return {"_truncated": True, "original_bytes": len(raw)}
         preview_bytes //= 2
 
 
@@ -192,40 +197,34 @@ def _truncate_head_tail(text: str, *, max_bytes: int) -> str:
     return head + _HEAD_TAIL_MARKER.format(omitted=omitted) + tail
 
 
-def _largest_string_leaf(
-    node: Any, path: tuple[Any, ...] = ()
-) -> tuple[tuple[Any, ...] | None, int]:
-    """``(path, utf8_size)`` of the biggest string value under ``node`` — dict
-    values and list items, never dict keys — or ``(None, 0)`` if there is none."""
+def _largest_string_leaf_bytes(node: Any) -> int:
+    """UTF-8 size of the biggest string value under ``node`` — dict values and
+    list items, never dict keys — or ``0`` if there is none."""
     if isinstance(node, str):
-        return path, _utf8_len(node)
-    best: tuple[tuple[Any, ...] | None, int] = (None, 0)
+        return _utf8_len(node)
     if isinstance(node, dict):
-        children = node.items()
+        children: Any = node.values()
     elif isinstance(node, (list, tuple)):
-        children = enumerate(node)
+        children = node
     else:
-        return best
-    for key, child in children:
-        found = _largest_string_leaf(child, (*path, key))
-        if found[1] > best[1]:
-            best = found
-    return best
+        return 0
+    return max((_largest_string_leaf_bytes(child) for child in children), default=0)
 
 
-def _get_at(node: Any, path: tuple[Any, ...]) -> Any:
-    for key in path:
-        node = node[key]
+def _cap_leaves(node: Any, *, limit: int) -> Any:
+    """Rebuild ``node`` with every string leaf shrunk head+tail to ``limit``
+    UTF-8 bytes. Leaves already under ``limit`` are kept whole.
+
+    A fresh structure, so the input is never mutated; tuples come back as
+    lists, which is what ``json.dumps`` would have written for them anyway and
+    what makes the result assignable at all."""
+    if isinstance(node, str):
+        return _truncate_head_tail(node, max_bytes=limit)
+    if isinstance(node, dict):
+        return {key: _cap_leaves(child, limit=limit) for key, child in node.items()}
+    if isinstance(node, (list, tuple)):
+        return [_cap_leaves(child, limit=limit) for child in node]
     return node
-
-
-def _set_at(node: Any, path: tuple[Any, ...], value: Any) -> Any:
-    if not path:
-        return value
-    for key in path[:-1]:
-        node = node[key]
-    node[path[-1]] = value
-    return None
 
 
 def _cap_json_head_tail(value: Any, *, cap: int) -> tuple[Any, bool]:
@@ -239,33 +238,39 @@ def _cap_json_head_tail(value: Any, *, cap: int) -> tuple[Any, bool]:
     the platform (``json.dumps(default=str)``), so what is capped here is
     what the enricher measures.
 
+    Every leaf gets the *same* byte allowance, found by binary search on the
+    serialized size: the largest allowance that fits. A per-leaf budget derived
+    from the overage instead would be wrong twice over — the overage is measured
+    on the escaped JSON while a leaf is measured in UTF-8, so escape-heavy
+    content (CJK at 6 JSON bytes a character, or anything with many quotes and
+    newlines) would over-cut to nothing; and charging one leaf for the whole
+    document's overage makes the outcome depend on which message happens to be
+    biggest. One allowance for all of them is order-independent and leaves no
+    cap unspent.
+
     Last resort: when the JSON structure alone exceeds ``cap`` (hundreds of
     tiny messages), no string cut can help, so the ``_truncate_json`` preview
     wrapper ships instead — inside a one-item list when the input was a list,
     so the attribute keeps its container type."""
-    work = copy.deepcopy(value)
-    over = _utf8_len(json.dumps(work, default=str)) - cap
-    if over <= 0:
-        return work, False
-    while over > 0:
-        path, size = _largest_string_leaf(work)
-        if path is None or size <= _HEAD_TAIL_FLOOR_BYTES:
-            if isinstance(work, list):
-                return [_truncate_json({"messages": work}, cap=cap - 2)], True
-            payload = work if isinstance(work, dict) else {"value": work}
-            return _truncate_json(payload, cap=cap), True
-        leaf = work if not path else _get_at(work, path)
-        # Cutting ``over`` raw bytes removes at least ``over`` JSON bytes (an
-        # escaped character encodes to no fewer bytes than its UTF-8), so one
-        # pass usually lands under the cap; the loop re-measures regardless.
-        target = max(size - over, _HEAD_TAIL_FLOOR_BYTES)
-        cut = _truncate_head_tail(leaf, max_bytes=target)
-        if not path:
-            work = cut
+    if _utf8_len(json.dumps(value, default=str)) <= cap:
+        return copy.deepcopy(value), False
+    # Cheapest allowance first: if the floor does not fit, nothing does, and
+    # the search below would spend a serialization per step to prove it.
+    floored = _cap_leaves(value, limit=_HEAD_TAIL_FLOOR_BYTES)
+    if _utf8_len(json.dumps(floored, default=str)) > cap:
+        if isinstance(value, list):
+            return [_truncate_json({"messages": list(value)}, cap=cap - 2)], True
+        payload = value if isinstance(value, dict) else {"value": value}
+        return _truncate_json(payload, cap=cap), True
+    best, low, high = floored, _HEAD_TAIL_FLOOR_BYTES, _largest_string_leaf_bytes(value)
+    while low < high:
+        allowance = (low + high + 1) // 2
+        candidate = _cap_leaves(value, limit=allowance)
+        if _utf8_len(json.dumps(candidate, default=str)) <= cap:
+            best, low = candidate, allowance
         else:
-            _set_at(work, path, cut)
-        over = _utf8_len(json.dumps(work, default=str)) - cap
-    return work, True
+            high = allowance - 1
+    return best, True
 
 
 # Public aliases so server-side ingestion can import this pipeline instead of

@@ -127,6 +127,13 @@ def test_when_two_leaves_are_both_large_then_both_are_cut_until_it_fits() -> Non
     assert truncated is True
     assert _json_size(out) <= 8 * 1024
     assert all("...[truncated " in m["parts"][0]["content"] for m in out)
+    # Equal leaves keep equal shares: the overage is not billed to whichever
+    # one the walk reached first, so neither collapses to the floor.
+    kept = [len(m["parts"][0]["content"]) for m in out]
+    assert min(kept) > 1_000
+    assert max(kept) - min(kept) <= 1
+    # And the allowance is spent, not abandoned.
+    assert _json_size(out) > (8 * 1024) // 2
 
 
 def test_cap_json_head_tail_does_not_mutate_the_input() -> None:
@@ -165,3 +172,41 @@ def test_when_content_is_non_ascii_then_the_json_measure_still_fits() -> None:
     assert _json_size(out) <= 4_096
     content = out[0]["parts"][0]["content"]
     assert content.startswith("日") and content.endswith("日")
+    # The escape cost is charged once, not twice: at 6 JSON bytes a character
+    # a 4 KiB cap buys ~680 of them, so anything near the 64-byte floor means
+    # a UTF-8 length was cut by a JSON-measured overage.
+    assert len(content) > 500
+    assert _json_size(out) > 4_096 // 2
+
+
+def test_when_content_is_escape_heavy_then_the_allowance_is_still_spent() -> None:
+    """A tool result that is itself JSON: every quote costs two JSON bytes."""
+    payload = json.dumps({f"key_{i}": f"value_{i}" for i in range(2_000)})
+    out, truncated = cap_json_head_tail([_message(payload)], cap=8 * 1024)
+    assert truncated is True
+    assert _json_size(out) <= 8 * 1024
+    assert _json_size(out) > (8 * 1024) // 2
+
+
+def test_when_a_message_list_holds_tuples_then_they_are_capped_as_lists() -> None:
+    """LangChain's ``[("system", ...), ("human", ...)]`` form: tuples are not
+    assignable, so a path-based cut would raise on the export path."""
+    out, truncated = cap_json_head_tail(
+        [("system", "s" * 100), ("human", "h" * 50_000)], cap=4_096
+    )
+    assert truncated is True
+    assert _json_size(out) <= 4_096
+    assert out[0] == ["system", "s" * 100]
+    assert out[1][0] == "human"
+    assert "...[truncated " in out[1][1]
+
+
+def test_when_the_cap_is_below_the_wrapper_headroom_then_it_still_returns() -> None:
+    """``cap_json_head_tail`` is public and the enricher imports it, so a small
+    cap must terminate rather than halve a negative preview budget forever."""
+    messages = [_message("ok", role="tool") for _ in range(200)]
+    for cap in (513, 512, 400, 64):
+        out, truncated = cap_json_head_tail(messages, cap=cap)
+        assert truncated is True
+        assert isinstance(out, list) and len(out) == 1
+        assert out[0]["_truncated"] is True
