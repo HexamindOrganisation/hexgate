@@ -519,8 +519,8 @@ TTL toDateTime(received_at) + INTERVAL 180 DAY
 ```
 
 - **Separate table, not columns on `llm_invocation`** — content is large,
-  optional (`HEXGATE_LOG_MESSAGES=0` turns capture off), and read by session
-  rather than aggregated by user/model.
+  opt-in (nothing emits `hexgate.messages` yet, and capture stays off until an
+  emitter ships), and read by session rather than aggregated by user/model.
 - **Sort key** `(project_id, session_id, turn_key, message_seq, event_id)`:
   the read is "reconstruct this session's transcript", so a list's rows sit
   adjacent and in order. A session with a sub-agent or handoff has several

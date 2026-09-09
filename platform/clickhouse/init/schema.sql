@@ -120,8 +120,9 @@ SETTINGS index_granularity = 8192;
 
 -- LLM prompt/completion content — one row per model call, scope hexgate.messages.
 -- Sibling of llm_invocation sharing the envelope; a separate table because the
--- content is large, optional (HEXGATE_LOG_MESSAGES=0 turns it off) and read
--- by session, not aggregated by user/model like token usage.
+-- content is large, opt-in (nothing emits hexgate.messages yet, and capture
+-- stays off until an emitter ships) and read by session, not aggregated by
+-- user/model like token usage.
 CREATE TABLE IF NOT EXISTS hexgate_audit.llm_message
 (
     -- Envelope (shared with the other event tables — same names, types, order)

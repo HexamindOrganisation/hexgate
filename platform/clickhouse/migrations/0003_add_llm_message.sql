@@ -3,14 +3,19 @@
 -- against it via `make clickhouse-cli` (paste the statement below).
 --
 -- ORDERING: apply this BEFORE deploying the API / enricher that write to the
--- table (the platform PR that adds the hexgate.messages scope to KNOWN_SCOPES
--- and its insert). Skipping it takes the message path down, loudly:
---   * ingest — insert_llm_messages_batch names the table, ClickHouse rejects
---     the batch, the enricher retries the whole poll until acked and halts its
+-- table (the platform PR that adds the hexgate.messages scope to KNOWN_SCOPES,
+-- its insert, and its startup schema check). Nothing references the table
+-- today, so skipping it right now is inert — no rejected insert, no refused
+-- boot. Once that PR is deployed, skipping it takes the message path down,
+-- loudly:
+--   * ingest — the messages insert names the table, ClickHouse rejects the
+--     batch, the enricher retries the whole poll until acked and halts its
 --     partition (design: an audit log must not silently lose acknowledged
 --     rows). Decisions, usage and bans in the same poll are held up with it.
---   * startup — verify_all checks the table's columns at API boot and refuses
---     to start on a missing table.
+--   * startup — that same PR is what adds llm_message to the verify_all tuple
+--     in main.py, which then refuses to boot on a missing table. Today
+--     verify_all is passed (verify_audit_schema, verify_llm_schema) only and
+--     never looks at this table.
 -- The CREATE is additive — nothing running today references the table — so it
 -- can be applied arbitrarily early. Idempotent (IF NOT EXISTS).
 --
