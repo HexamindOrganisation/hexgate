@@ -52,6 +52,36 @@ MAX_HINT_BYTES = 4 * 1024
 MAX_VIOLATIONS = 64
 MAX_VIOLATION_CHARS = 1024
 
+# Caps for LLM message content (scope ``hexgate.messages``), measured on the
+# serialized JSON like the decision caps above and enforced twice: here before
+# export, and again by the platform's span-enricher. Larger than the decision
+# caps because a prompt is not a tool argument. Truncation is head+tail
+# (``cap_json_head_tail``) rather than the preview wrapper ``truncate_json``
+# uses: on a RAG call the retrieved context sits in the middle of one message,
+# and an auditor needs the question at the start and the instruction at the end
+# more than the chunks between.
+#
+# The input cap is 256 KiB, not the 32 KiB first proposed: 32 KiB is ~7,000
+# tokens of ASCII, which 20 retrieved chunks already exceed, so the cap would
+# have fired on exactly the calls the log exists to explain. What bounds it is
+# the pipeline's record and request limits, not storage — and those limits are
+# NOT yet in place. As the deployed config stands, the Collector's kafka
+# exporter caps a record at the configkafka default (1 MB, no compression) and
+# batches 512 spans into one, ``hexgate.otlp.raw`` sets no
+# ``max.message.bytes``, and the OTLP receiver takes a 20 MiB request body —
+# so a batch of large message spans fails as a whole and takes the decision
+# spans batched alongside it down too, which is the blast radius these caps
+# exist to bound. Raising the topic, the exporter's producer limit, a
+# ``send_batch_max_size``, and the receiver body size is a prerequisite for
+# emitting this scope at all (its own PR, deployed not merely merged) — no
+# message cap, 32 KiB or 256 KiB, is safe before it. Nothing emits
+# ``hexgate.messages`` yet, so declaring the constant here is safe; wiring an
+# emitter before that config is deployed is not. Typical events stay a few KB;
+# this is a ceiling, not a target.
+MAX_INPUT_MESSAGES_BYTES = 256 * 1024
+MAX_OUTPUT_MESSAGES_BYTES = 8 * 1024
+MAX_SYSTEM_INSTRUCTIONS_BYTES = 8 * 1024
+
 # Keys whose values are stripped from the audit copy of ``arguments`` before
 # transmission. Substring match: tool inputs are arbitrary caller data, so a
 # key merely *containing* a secret-ish word is worth blanking. A seatbelt, not
@@ -127,26 +157,152 @@ def _truncate_json(payload: dict[str, Any], *, cap: int) -> dict[str, Any]:
     same object ``as_error_payload`` hands the host. The copy is shallow —
     enough to stop a rebind, not a nested in-place mutation."""
     payload_json = json.dumps(payload, default=str)
-    if len(payload_json.encode("utf-8")) <= cap:
+    raw = payload_json.encode("utf-8")
+    if len(raw) <= cap:
         return dict(payload)
-    preview_bytes = cap - _TRUNCATION_WRAPPER_HEADROOM_BYTES
+    # Floored at 1: a cap at or below the wrapper headroom would otherwise make
+    # this negative, which slices from the *end* of the payload and never
+    # shrinks (``-1 // 2 == -1``), so the loop would not terminate.
+    preview_bytes = max(cap - _TRUNCATION_WRAPPER_HEADROOM_BYTES, 1)
     while True:
         wrapper = {
             "_truncated": True,
-            "original_bytes": len(payload_json.encode("utf-8")),
-            "preview": payload_json.encode("utf-8")[:preview_bytes].decode(
-                "utf-8", errors="ignore"
-            ),
+            "original_bytes": len(raw),
+            "preview": raw[:preview_bytes].decode("utf-8", errors="ignore"),
         }
         if len(json.dumps(wrapper).encode("utf-8")) <= cap:
             return wrapper
+        if preview_bytes == 1:
+            # Not even one byte of preview fits: ship the marker alone.
+            return {"_truncated": True, "original_bytes": len(raw)}
         preview_bytes //= 2
+
+
+# ASCII on purpose: ``json.dumps`` escapes non-ASCII to ``\\uXXXX`` (6 bytes a
+# character), so a marker with an ellipsis would cost more than it says.
+_HEAD_TAIL_MARKER = " ...[truncated {omitted} bytes]... "
+# Below this a string leaf is not worth cutting further: what is over the cap
+# is the JSON structure around it, not the text inside it.
+_HEAD_TAIL_FLOOR_BYTES = 64
+
+
+def _utf8_len(text: str) -> int:
+    return len(text.encode("utf-8"))
+
+
+def _truncate_head_tail(text: str, *, max_bytes: int) -> str:
+    """Shrink ``text`` to at most ``max_bytes`` of UTF-8, keeping its head and
+    its tail joined by a marker naming the omitted byte count.
+
+    Returned unchanged when it already fits. Cuts land on code-point
+    boundaries (``errors="ignore"`` drops a split character rather than
+    emitting a broken one). The marker's room is reserved for the widest count
+    it could carry, so the result never exceeds ``max_bytes``."""
+    raw = text.encode("utf-8")
+    if len(raw) <= max_bytes:
+        return text
+    reserve = _utf8_len(_HEAD_TAIL_MARKER.format(omitted=len(raw)))
+    budget = max_bytes - reserve
+    if budget < 2:
+        # No room for a marker and content both: keep whatever head fits.
+        return raw[:max_bytes].decode("utf-8", errors="ignore")
+    head_n = budget // 2
+    tail_n = budget - head_n
+    head = raw[:head_n].decode("utf-8", errors="ignore")
+    tail = raw[-tail_n:].decode("utf-8", errors="ignore")
+    omitted = len(raw) - _utf8_len(head) - _utf8_len(tail)
+    return head + _HEAD_TAIL_MARKER.format(omitted=omitted) + tail
+
+
+def _largest_string_leaf_bytes(node: Any) -> int:
+    """UTF-8 size of the biggest string value under ``node`` — dict values and
+    list items, never dict keys — or ``0`` if there is none."""
+    if isinstance(node, str):
+        return _utf8_len(node)
+    if isinstance(node, dict):
+        children: Any = node.values()
+    elif isinstance(node, (list, tuple)):
+        children = node
+    else:
+        return 0
+    return max((_largest_string_leaf_bytes(child) for child in children), default=0)
+
+
+def _cap_leaves(node: Any, *, limit: int) -> Any:
+    """Rebuild ``node`` with every string leaf shrunk head+tail to ``limit``
+    UTF-8 bytes. Leaves already under ``limit`` are kept whole.
+
+    A fresh structure, so the input is never mutated; tuples come back as
+    lists, which is what ``json.dumps`` would have written for them anyway and
+    what makes the result assignable at all."""
+    if isinstance(node, str):
+        return _truncate_head_tail(node, max_bytes=limit)
+    if isinstance(node, dict):
+        return {key: _cap_leaves(child, limit=limit) for key, child in node.items()}
+    if isinstance(node, (list, tuple)):
+        return [_cap_leaves(child, limit=limit) for child in node]
+    return node
+
+
+def _cap_json_head_tail(value: Any, *, cap: int) -> tuple[Any, bool]:
+    """Shrink the string leaves of ``value`` head+tail, largest first, until
+    ``json.dumps(value)`` fits ``cap`` bytes. Returns ``(capped, truncated)``.
+
+    Unlike ``_truncate_json`` — which swaps the whole dict for a preview
+    wrapper — the result keeps the input's shape (roles, message boundaries,
+    part types all survive), so a reader still sees *which* message lost its
+    middle. Pure: every path rebuilds the containers rather than writing into
+    them, so ``value`` is never mutated. Measurement mirrors the platform
+    (``json.dumps(default=str)``), so what is capped here is what the enricher
+    measures.
+
+    Every leaf gets the *same* byte allowance, found by binary search on the
+    serialized size: the largest allowance that fits. A per-leaf budget derived
+    from the overage instead would be wrong twice over — the overage is measured
+    on the escaped JSON while a leaf is measured in UTF-8, so escape-heavy
+    content (CJK at 6 JSON bytes a character, or anything with many quotes and
+    newlines) would over-cut to nothing; and charging one leaf for the whole
+    document's overage makes the outcome depend on which message happens to be
+    biggest. One allowance for all of them is order-independent and leaves no
+    cap unspent.
+
+    Last resort: when the JSON structure alone exceeds ``cap`` (hundreds of
+    tiny messages), no string cut can help, so the ``_truncate_json`` preview
+    wrapper ships instead — inside a one-item list when the input was a list,
+    so the attribute keeps its container type."""
+    if _utf8_len(json.dumps(value, default=str)) <= cap:
+        # ``limit=cap`` cuts nothing — a leaf cannot exceed a document that
+        # fits — so this is the copy, not a truncation. Rebuilding via
+        # ``_cap_leaves`` rather than ``copy.deepcopy`` keeps the fast path as
+        # tolerant as the slow one: a framework message object holding a lock
+        # or a socket is uncopyable, and deep-copying it raised where the
+        # truncation path went through.
+        return _cap_leaves(value, limit=cap), False
+    # Cheapest allowance first: if the floor does not fit, nothing does, and
+    # the search below would spend a serialization per step to prove it.
+    floored = _cap_leaves(value, limit=_HEAD_TAIL_FLOOR_BYTES)
+    if _utf8_len(json.dumps(floored, default=str)) > cap:
+        if isinstance(value, list):
+            return [_truncate_json({"messages": list(value)}, cap=cap - 2)], True
+        payload = value if isinstance(value, dict) else {"value": value}
+        return _truncate_json(payload, cap=cap), True
+    best, low, high = floored, _HEAD_TAIL_FLOOR_BYTES, _largest_string_leaf_bytes(value)
+    while low < high:
+        allowance = (low + high + 1) // 2
+        candidate = _cap_leaves(value, limit=allowance)
+        if _utf8_len(json.dumps(candidate, default=str)) <= cap:
+            best, low = candidate, allowance
+        else:
+            high = allowance - 1
+    return best, True
 
 
 # Public aliases so server-side ingestion can import this pipeline instead of
 # keeping its own copy.
 redact = _redact
 truncate_json = _truncate_json
+truncate_head_tail = _truncate_head_tail
+cap_json_head_tail = _cap_json_head_tail
 bounded_violations = _bounded_violations
 SENSITIVE_ARG_KEY_RE = _SENSITIVE_ARG_KEY_RE
 SENSITIVE_ATTR_KEY_RE = _SENSITIVE_ATTR_KEY_RE
