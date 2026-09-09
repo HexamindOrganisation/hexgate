@@ -56,12 +56,19 @@ MAX_VIOLATION_CHARS = 1024
 # Caps for LLM message content (scope ``hexgate.messages``), measured on the
 # serialized JSON like the decision caps above and enforced twice: here before
 # export, and again by the platform's span-enricher. Larger than the decision
-# caps because a prompt is not a tool argument — 32 KiB is roughly a
-# 7,000-token message. Truncation is head+tail (``cap_json_head_tail``) rather
-# than the preview wrapper ``truncate_json`` uses: on a RAG call the retrieved
-# context sits in the middle of one message, and an auditor needs the question
-# at the start and the instruction at the end more than the chunks between.
-MAX_INPUT_MESSAGES_BYTES = 32 * 1024
+# caps because a prompt is not a tool argument. Truncation is head+tail
+# (``cap_json_head_tail``) rather than the preview wrapper ``truncate_json``
+# uses: on a RAG call the retrieved context sits in the middle of one message,
+# and an auditor needs the question at the start and the instruction at the end
+# more than the chunks between.
+#
+# The input cap is 256 KiB, not the 32 KiB first proposed: 32 KiB is ~7,000
+# tokens of ASCII, which 20 retrieved chunks already exceed, so the cap would
+# have fired on exactly the calls the log exists to explain. What bounds it is
+# the OTLP record size, not storage — and the message path's topic carries
+# ``max.message.bytes=8 MiB``, so a quarter-megabyte field costs nothing
+# operationally. Typical events stay a few KB; this is a ceiling, not a target.
+MAX_INPUT_MESSAGES_BYTES = 256 * 1024
 MAX_OUTPUT_MESSAGES_BYTES = 8 * 1024
 MAX_SYSTEM_INSTRUCTIONS_BYTES = 8 * 1024
 

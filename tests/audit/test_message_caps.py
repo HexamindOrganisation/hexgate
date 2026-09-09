@@ -32,7 +32,7 @@ def _message(content: str, role: str = "user") -> dict[str, Any]:
 
 
 def test_caps_are_the_design_values() -> None:
-    assert MAX_INPUT_MESSAGES_BYTES == 32 * 1024
+    assert MAX_INPUT_MESSAGES_BYTES == 256 * 1024
     assert MAX_OUTPUT_MESSAGES_BYTES == 8 * 1024
     assert MAX_SYSTEM_INSTRUCTIONS_BYTES == 8 * 1024
 
@@ -86,7 +86,7 @@ def test_when_the_cap_is_smaller_than_the_marker_then_only_a_head_survives() -> 
 
 
 def test_cap_json_head_tail_happy_path() -> None:
-    messages = [_message("Q" * 1_000 + "C" * 100_000 + "A" * 1_000)]
+    messages = [_message("Q" * 1_000 + "C" * 400_000 + "A" * 1_000)]
     out, truncated = cap_json_head_tail(messages, cap=MAX_INPUT_MESSAGES_BYTES)
     assert truncated is True
     assert _json_size(out) <= MAX_INPUT_MESSAGES_BYTES
