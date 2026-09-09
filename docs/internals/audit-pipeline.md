@@ -351,6 +351,38 @@ there is no separate "message path", and batching is count-based, so a single
 set of limits has to be safe for the largest span type. A rejected batch drops
 all of its spans, decision spans included, which is why these move together:
 
+```mermaid
+flowchart LR
+  classDef sdkBox fill:#EAF2FF,stroke:#2F6FED,stroke-width:2px,color:#153E90
+  classDef hexBox fill:#F3EAFB,stroke:#8E3FC7,stroke-width:2px,color:#4A148C
+  classDef redpandaBox fill:#FCE8EC,stroke:#D6336C,stroke-width:2px,color:#8A1538
+  classDef extBox fill:#FFF6E0,stroke:#E0A800,stroke-width:2px,color:#7A5900
+
+  SP["one message span<br/>≤ 272 KiB<br/>256 input + 8 output + 8 sysinstr"]:::sdkBox
+  S["SDK export<br/>MAX_EXPORT_BATCH_SIZE 64"]:::sdkBox
+  P["Reverse proxy<br/>client_max_body_size 32 MiB<br/>⚠ outside this repo · nginx defaults to 1 MiB"]:::extBox
+  R["OTLP/HTTP receiver<br/>max_request_body_size 32 MiB<br/>confighttp default 20 MiB"]:::hexBox
+  B["batch processor<br/>send_batch_size 24<br/>send_batch_max_size 24"]:::hexBox
+  X["kafka exporter<br/>producer.max_message_bytes 8 MiB (pre-compression)<br/>sending_queue bytes / 128 MiB · zstd"]:::hexBox
+  T["topic hexgate.otlp.raw<br/>max.message.bytes 8 MiB (compressed)"]:::redpandaBox
+  E["span-enricher<br/>max_partition_fetch_bytes 8 MiB"]:::hexBox
+  Q["topic hexgate.otlp.dlq<br/>max.message.bytes 8 MiB"]:::redpandaBox
+
+  SP --> S
+  S -->|"64 × 272 KiB ≈ 17 MiB per POST"| P
+  P --> R
+  R --> B
+  B -->|"24 × 272 KiB = 6.375 MiB per record"| X
+  X --> T
+  T --> E
+  E -->|"rejected spans<br/>DLQ max_request_size 8 MiB<br/>(envelopes capped ~100 KiB by dlq.py)"| Q
+```
+
+Every hop rejects **whole** — the proxy and receiver drop the entire POST, the
+exporter and broker the entire record — so the narrowest one decides what gets
+through, and it takes unrelated decision spans down with it. The proxy is the
+hop most easily missed: it is the only one not configured in this repo.
+
 | Limit | Value | Why |
 |---|---|---|
 | receiver `http.max_request_body_size` | 32 MiB | confighttp defaults to 20 MiB and rejects the whole POST; the SDK exports ≤ 64 spans (~17 MiB worst case) |
