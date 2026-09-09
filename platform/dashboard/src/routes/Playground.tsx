@@ -30,6 +30,7 @@ import { api, type AgentRead } from "@/lib/api";
 import { useProjectScoped } from "@/lib/active";
 import { NoProjectEmptyState } from "@/components/NoProjectEmptyState";
 import { parseRolesFromPolicy } from "@/lib/policy";
+import { useResolvedPolicy } from "@/lib/policy_files";
 import { cn } from "@/lib/utils";
 
 export function PlaygroundPage() {
@@ -84,10 +85,21 @@ function PlaygroundLive({ projectId }: { projectId: string }) {
     };
   }, [state.agentName, projectId]);
 
-  const roleOptions = useMemo(
-    () => (agent ? parseRolesFromPolicy(agent.policy_yaml) : []),
-    [agent],
+  // Roles for the "Acting as" picker. A compose (modular) project has no
+  // per-agent role registry in the classic policy_yaml — its roles come from
+  // resolving the agent's compose policy — so prefer those, and fall back to the
+  // classic policy_yaml for a non-modular agent. (A classic project 422s on
+  // resolve → empty data → the fallback.)
+  const resolved = useResolvedPolicy(
+    projectId,
+    undefined,
+    state.agentName ?? undefined,
   );
+  const roleOptions = useMemo(() => {
+    const composeRoles = Object.keys(resolved.data ?? {});
+    if (composeRoles.length > 0) return composeRoles;
+    return agent ? parseRolesFromPolicy(agent.policy_yaml) : [];
+  }, [resolved.data, agent]);
 
   // On an agent switch, keep whichever picks the new one still defines, else
   // fall back to its first role.

@@ -149,3 +149,34 @@
 .scrollbar-thin::-webkit-scrollbar-thumb:hover {
   background-color: hsl(var(--foreground));
 }
+
+/* React Flow zoom/fit controls — the default buttons are white, which reads as
+   ugly boxes on the policy graph's near-black canvas. Dark them to match. The
+   graph is the only React Flow surface in the app. */
+.react-flow__controls {
+  box-shadow: none;
+  gap: 0;
+  overflow: hidden;
+  border-radius: 8px;
+}
+.react-flow__controls-button {
+  background: #11151f;
+  border: none;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  width: 26px;
+  height: 26px;
+}
+.react-flow__controls-button:last-child {
+  border-bottom: none;
+}
+.react-flow__controls-button:hover {
+  background: #1b2130;
+}
+.react-flow__controls-button svg {
+  fill: #b6bdca;
+  max-width: 12px;
+  max-height: 12px;
+}
+.react-flow__controls-button:hover svg {
+  fill: #eef1f6;
+}
