@@ -32,6 +32,22 @@ from hexgate.tracing import semconv
 
 _log = logging.getLogger(__name__)
 
+MAX_EXPORT_BATCH_SIZE = 64
+"""Spans per OTLP export request. OTel's default is 512, which the Collector's
+OTLP/HTTP receiver rejects as one oversized POST once message logging is on: a
+message span carries up to ~272 KiB of prompt/completion JSON, so 512 of them
+would be ~136 MiB against a receiver capped at 32 MiB (`max_request_body_size`
+in platform/collector/config.yaml). 64 keeps a worst-case export at ~17 MiB,
+and a batch of ordinary decision spans is still a single small request.
+
+It is not free: the batch processor exports serially on one worker thread, so
+this is 8x more round-trips for the same span count, and ``max_queue_size``
+stays at OTel's 2048 — a slow collector saturates the queue 8x sooner, and
+``shutdown()`` has to drain it in 8x more exports inside the same
+``DEFAULT_EXPORT_TIMEOUT``. Ordinary decision traffic pays that today, before
+anything emits ``hexgate.messages``; revisit the queue size if drops show up
+in the saturation warning below."""
+
 DEFAULT_EXPORT_TIMEOUT = 5.0
 """Bound, in seconds, on a single OTLP export request and on the final
 flush at :meth:`AuditSender.close`. Replaces OTel's 30s defaults: a slow or
@@ -99,7 +115,7 @@ class _BoundedShutdownProcessor(BatchSpanProcessor):
     def __init__(
         self, exporter: SpanExporter, *, shutdown_timeout_millis: float
     ) -> None:
-        super().__init__(exporter)
+        super().__init__(exporter, max_export_batch_size=MAX_EXPORT_BATCH_SIZE)
         self._shutdown_timeout_millis = shutdown_timeout_millis
 
     def shutdown(self) -> None:
