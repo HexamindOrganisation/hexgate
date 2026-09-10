@@ -99,4 +99,30 @@ describe("InspectorTabs", () => {
     await userEvent.keyboard("{Enter}");
     expect(onChange).toHaveBeenCalledWith("bot");
   });
+
+  it("relabels agent.* / mcp keys as admission / reach / mcp", () => {
+    const resolved: ResolvedPolicy = {
+      support: {
+        default_policy: { mode: "deny" },
+        tools: {
+          "agent.run": { mode: "allow", constraints: [] },
+          "agent.handoff:billing_bot": { mode: "allow", constraints: [] },
+          "mcp-kb-search": { mode: "allow", constraints: [] },
+          read_ticket: { mode: "allow", constraints: [] },
+        },
+      },
+    };
+    renderInspector({ resolved });
+    // agent.run → admission; agent.handoff:X → reach target + "handoff";
+    // mcp-X → the name without the prefix. Raw agent.* keys never render.
+    expect(screen.getByText("start this agent")).toBeInTheDocument();
+    expect(screen.getByText("admission")).toBeInTheDocument();
+    expect(screen.getByText("billing_bot")).toBeInTheDocument();
+    expect(screen.getByText("handoff")).toBeInTheDocument();
+    expect(screen.getByText("kb-search")).toBeInTheDocument();
+    expect(screen.queryByText("agent.run")).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("agent.handoff:billing_bot"),
+    ).not.toBeInTheDocument();
+  });
 });
