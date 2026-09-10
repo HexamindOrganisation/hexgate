@@ -879,19 +879,26 @@ def _graph_from(agent_names, resolve_for_agent, role: str | None = None) -> dict
                 if tool == AGENT_RUN_TOOL:
                     add_node(f"role:{r}", "role", r)
                     add_edge(
-                        f"role:{r}", f"agent:{agent}", "admission", tp.mode, cons,
+                        f"role:{r}",
+                        f"agent:{agent}",
+                        "admission",
+                        tp.mode,
+                        cons,
                         at_role=r,
                     )
                 elif is_agent_reach_key(tool):
-                    prefix = next(
-                        p for p in AGENT_REACH_PREFIXES if tool.startswith(p)
-                    )
+                    prefix = next(p for p in AGENT_REACH_PREFIXES if tool.startswith(p))
                     via = prefix[len("agent.") : -1]  # "tool" | "handoff"
                     target = tool[len(prefix) :]
                     add_node(f"agent:{target}", "agent", target)
                     add_edge(
-                        f"agent:{agent}", f"agent:{target}", "reach", tp.mode, cons,
-                        via=via, at_role=r,
+                        f"agent:{agent}",
+                        f"agent:{target}",
+                        "reach",
+                        tp.mode,
+                        cons,
+                        via=via,
+                        at_role=r,
                     )
                 else:
                     is_mcp = tool.startswith("mcp-")
@@ -901,7 +908,11 @@ def _graph_from(agent_names, resolve_for_agent, role: str | None = None) -> dict
                     node_label = tool[len("mcp-") :] if is_mcp else tool
                     add_node(f"tool:{tool}", kind, node_label)
                     add_edge(
-                        f"agent:{agent}", f"tool:{tool}", "call", tp.mode, cons,
+                        f"agent:{agent}",
+                        f"tool:{tool}",
+                        "call",
+                        tp.mode,
+                        cons,
                         at_role=r,
                     )
 
