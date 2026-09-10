@@ -96,7 +96,7 @@ function PlaygroundLive({ projectId }: { projectId: string }) {
     state.agentName ?? undefined,
   );
   const roleOptions = useMemo(() => {
-    const composeRoles = Object.keys(resolved.data ?? {});
+    const composeRoles = Object.keys(resolved.data ?? {}).sort();
     if (composeRoles.length > 0) return composeRoles;
     return agent ? parseRolesFromPolicy(agent.policy_yaml) : [];
   }, [resolved.data, agent]);

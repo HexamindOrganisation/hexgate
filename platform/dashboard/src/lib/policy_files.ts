@@ -63,6 +63,10 @@ export function useResolvedPolicy(
     // 422 when the files don't compose — surfaced via `usePolicyCheck`; don't
     // hammer the endpoint retrying an unresolvable set.
     retry: false,
+    // Keep the previous result on screen while the key changes (e.g. an agent
+    // switch), so callers that derive roles from it don't transiently empty and
+    // fall back to stale/wrong data mid-refetch.
+    placeholderData: (prev) => prev,
     staleTime: 15_000,
   });
 }
