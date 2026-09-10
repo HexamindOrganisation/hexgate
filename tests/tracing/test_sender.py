@@ -27,6 +27,7 @@ from hexgate.tracing._senders import (
     AuditSender,
     _unix_nanos,
 )
+from hexgate.tracing.messages import LlmMessageEvent
 from hexgate.tracing.usage import LlmUsageEvent
 
 
@@ -96,10 +97,25 @@ def test_emit_selects_the_tracer_by_event_scope() -> None:
         )
     )
     sender.emit(BanEnforcementEvent(ban_type="agent", ban_id="b", agent_name="a"))
+    sender.emit(
+        LlmMessageEvent(
+            agent_name="a",
+            model="m",
+            input_messages=[],
+            output_messages=[],
+            turn_key="t",
+            message_seq=0,
+        )
+    )
     _flush(sender)
 
     scopes = [s.instrumentation_scope.name for s in exporter.get_finished_spans()]
-    assert scopes == [semconv.SCOPE_AUDIT, semconv.SCOPE_USAGE, semconv.SCOPE_BANS]
+    assert scopes == [
+        semconv.SCOPE_AUDIT,
+        semconv.SCOPE_USAGE,
+        semconv.SCOPE_BANS,
+        semconv.SCOPE_MESSAGES,
+    ]
 
 
 def test_emit_span_is_a_root_span_even_inside_a_callers_active_span() -> None:

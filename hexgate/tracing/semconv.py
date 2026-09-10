@@ -45,7 +45,9 @@ must produce by them):
   sub-agent or handoff has its own) so a reader can detect a missing row;
   ``RESYNCED`` marks an event that restates the whole list because the
   framework rewrote it rather than extending it. ``TRUNCATED`` is set by
-  the SDK when a cap cut any content field.
+  the SDK when a cap cut any content field. ``RUN_ID`` rides along exactly as
+  on usage spans — present inside a run scope, absent outside it — so a
+  transcript joins to the decisions and token usage of the same run.
 """
 
 from __future__ import annotations

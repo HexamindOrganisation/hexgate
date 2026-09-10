@@ -45,8 +45,16 @@ this is 8x more round-trips for the same span count, and ``MAX_QUEUE_SIZE``
 stays at OTel's 2048 — a slow collector saturates the queue 8x sooner, and
 ``shutdown()`` has to drain it in 8x more exports inside the same
 ``DEFAULT_EXPORT_TIMEOUT``. Ordinary decision traffic pays that today, before
-anything emits ``hexgate.messages``; revisit the queue size if drops show up
-in the saturation warning below."""
+any adapter emits ``hexgate.messages``; revisit the queue size if drops show up
+in the saturation warning below.
+
+Once message spans flow, the queue is a memory bound as well as a drop bound:
+it counts spans, not bytes, and a queued message span holds its capped JSON
+(up to ~272 KiB). A collector that is slow rather than down — connections
+accepted, exports timing out — lets 2048 such spans accumulate in the customer
+process: tens of MiB for the typical few-KiB event, ~540 MiB if every span
+sits at the cap. Raising ``MAX_QUEUE_SIZE`` to cure drops therefore raises
+that ceiling too; a byte-aware bound is the real fix if it ever bites."""
 
 MAX_QUEUE_SIZE = 2048
 """Spans buffered before the processor evicts the oldest. OTel's own default,
@@ -91,8 +99,11 @@ class SpanEvent(Protocol):
     """Structural type for anything ``AuditSender`` can emit — a frozen event
     dataclass that knows which instrumentation scope it belongs to and how
     to lay itself out as flat span attributes. ``AuditEvent``,
-    ``LlmUsageEvent`` and ``BanEnforcementEvent`` all satisfy this without
-    being imported here."""
+    ``LlmUsageEvent``, ``BanEnforcementEvent`` and ``LlmMessageEvent`` all
+    satisfy this without being imported here. A scope must also be in the
+    tracer table built in ``AuditSender.__init__`` — an event whose scope is
+    missing there is logged and dropped at emit (``emit`` catches the
+    ``KeyError`` like any other failure), so nothing tells the caller."""
 
     SCOPE: ClassVar[str]
     occurred_at: datetime
@@ -204,7 +215,12 @@ class AuditSender:
         self._provider.add_span_processor(self._processor)
         self._tracers = {
             scope: self._provider.get_tracer(scope)
-            for scope in (semconv.SCOPE_AUDIT, semconv.SCOPE_USAGE, semconv.SCOPE_BANS)
+            for scope in (
+                semconv.SCOPE_AUDIT,
+                semconv.SCOPE_USAGE,
+                semconv.SCOPE_BANS,
+                semconv.SCOPE_MESSAGES,
+            )
         }
 
     def _new_exporter(self) -> SpanExporter:
@@ -290,7 +306,7 @@ _logged_local_mode_suppressed = False
 
 # One sender per api_key. A single process may wrap agents for several
 # tenants/keys, and each must export with its own bearer token — so senders
-# are keyed by key rather than kept as a first-wins singleton. All three
+# are keyed by key rather than kept as a first-wins singleton. All four
 # event types share one sender per key; the span's instrumentation scope,
 # not a separate endpoint, tells them apart.
 # The registry is unbounded and assumes a small, fixed key set per process;

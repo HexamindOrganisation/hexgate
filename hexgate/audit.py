@@ -76,8 +76,9 @@ MAX_VIOLATION_CHARS = 1024
 # Being in the repo is not the same as being in force: that change is
 # operational, so no message cap — 32 KiB or 256 KiB — is safe on a stage until
 # its topics have been altered and its collector and enricher restarted.
-# Nothing emits ``hexgate.messages`` yet, so declaring the constant here is
-# safe; wiring an emitter against a stage that has not been redeployed is not.
+# The emitter exists (``hexgate.tracing.messages``) but no adapter calls it
+# yet, so both stay inert; wiring an adapter hook against a stage that has not
+# been redeployed is what is unsafe.
 # Typical events stay a few KB; this is a ceiling, not a target.
 MAX_INPUT_MESSAGES_BYTES = 256 * 1024
 MAX_OUTPUT_MESSAGES_BYTES = 8 * 1024
@@ -434,7 +435,7 @@ def configure(
     Both args fall back to ``HEXGATE_API_KEY`` / ``HEXGATE_API_URL`` env vars
     (``HEXGATE_OTLP_ENDPOINT`` overrides where spans are exported). Reuses the
     existing sender when the same key was already configured — one sender per
-    key carries decisions, LLM usage and ban enforcements alike; distinct keys
+    key carries decisions, LLM usage, bans and LLM messages alike; distinct keys
     get distinct senders. Returns ``None`` when no api_key is resolvable —
     audit stays inert.
 
@@ -458,6 +459,6 @@ def get_sender(api_key: str | None = None) -> AuditSender | None:
 
 async def shutdown() -> None:
     """Flush queued events and stop every sender in the shared registry —
-    decisions, LLM usage and ban enforcements alike. Safe to call multiple
+    decisions, LLM usage, bans and LLM messages alike. Safe to call multiple
     times."""
     await _shutdown_all()
