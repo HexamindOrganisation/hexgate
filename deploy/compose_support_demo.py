@@ -169,7 +169,32 @@ def _():
         )
         return result["messages"][-1].content
 
-    TOOLS = [view_orders, refund_order, delegate_to_billing]
+    # MCP tools from the demo server (named mcp-<server>-<tool>). The gate keys on
+    # the tool name, so these match the policy's mcp: grants: compute_tip is open,
+    # send_invoice needs approval for billing, read_secret is denied outright.
+    @tool("mcp-demo-compute_tip")
+    def compute_tip(amount: float, percent: float = 18.0) -> str:
+        """Compute the tip on a bill (MCP demo tool)."""
+        return f"(demo) tip on ${amount:.2f} at {percent}% = ${amount * percent / 100:.2f}"
+
+    @tool("mcp-demo-send_invoice")
+    def send_invoice(order_id: str, amount: float) -> str:
+        """Queue an invoice for an order (MCP demo tool; approval-gated)."""
+        return f"(demo) invoice queued for order {order_id}: ${amount:.2f}"
+
+    @tool("mcp-demo-read_secret")
+    def read_secret(key: str) -> str:
+        """Read a stored secret (MCP demo tool; policy-denied)."""
+        return f"(demo) secret[{key}] = ****"
+
+    TOOLS = [
+        view_orders,
+        refund_order,
+        delegate_to_billing,
+        compute_tip,
+        send_invoice,
+        read_secret,
+    ]
 
     def build_support():
         # name MUST be support_bot: the platform gates the served agent with the
@@ -271,6 +296,9 @@ def _(Path, mo, resolve_file):
             "    escalate: { mode: allow }\n"
             '    refund_order: { mode: allow, constraint: "args.amount <= 1000" }  # hard cap\n'
             "    delegate_to_billing: { mode: allow }   # ceiling; needs a capability grant\n"
+            "    mcp-demo-compute_tip: { mode: allow }     # safe MCP tool\n"
+            "    mcp-demo-send_invoice: { mode: allow }    # ceiling; billing grants w/ approval\n"
+            "    mcp-demo-read_secret: { mode: deny }      # dangerous MCP tool — always denied\n"
             "  reach:\n"
             "    billing_bot: { as: handoff }   # reach ceiling: hand-off only, never as-tool\n"
             "agents:\n"
@@ -286,7 +314,10 @@ def _(Path, mo, resolve_file):
             "    roles:\n"
             "      billing: { import: [ caps/payments.yaml ] }\n"
         ),
-        "caps/read_only.yaml": "tools:\n  view_orders: { mode: allow }\n",
+        "caps/read_only.yaml": (
+            "tools:\n  view_orders: { mode: allow }\n"
+            "mcp:\n  mcp-demo-compute_tip: { mode: allow }\n"
+        ),
         "caps/support_leaf.yaml": (
             "tools:\n"
             "  send_email: { mode: allow }\n"
@@ -297,7 +328,10 @@ def _(Path, mo, resolve_file):
             '  refund_order: { mode: allow, constraint: '
             '\'args.currency in ["USD", "EUR"]\' }\n'
         ),
-        "caps/billing_desk.yaml": "tools:\n  delegate_to_billing: { mode: allow }\n",
+        "caps/billing_desk.yaml": (
+            "tools:\n  delegate_to_billing: { mode: allow }\n"
+            "mcp:\n  mcp-demo-send_invoice: { mode: approval_required }\n"
+        ),
         "caps/billing_reach.yaml": "reach:\n  billing_bot: { as: handoff }\n",
     }
     _root = Path(tempfile.gettempdir()) / "hexgate-compose-support-demo"
@@ -336,7 +370,9 @@ def _(Path, mo, resolve_file):
 
 @app.cell
 def _(mo):
-    mo.md("""## 3 · Test it in the dashboard""")
+    mo.md("""
+    ## 3 · Test it in the dashboard
+    """)
     return
 
 
@@ -367,6 +403,11 @@ def _(Path, mo):
             kind="info",
         )
     _out
+    return
+
+
+@app.cell
+def _():
     return
 
 

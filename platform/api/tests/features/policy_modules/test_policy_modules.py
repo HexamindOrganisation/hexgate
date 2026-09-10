@@ -1374,3 +1374,10 @@ async def test_seeded_compose_demo_resolves(session_factory) -> None:
         assert mode("billing", "delegate_to_billing") == "allow"
         assert mode("support", "refund_order", amount=10, currency="USD") == "deny"
         assert mode("support", "delegate_to_billing") == "deny"
+
+        # MCP tools (mcp-demo-*): a safe one is open to all, an invoice needs
+        # approval for billing, and the secret-reader is denied outright.
+        assert mode("support", "mcp-demo-compute_tip") == "allow"
+        assert mode("billing", "mcp-demo-send_invoice") == "needs_approval"
+        assert mode("support", "mcp-demo-send_invoice") == "deny"
+        assert mode("billing", "mcp-demo-read_secret") == "deny"
