@@ -26,7 +26,7 @@ import {
 import { NoProjectEmptyState } from "@/components/NoProjectEmptyState";
 import { DocsLink } from "@/components/DocsLink";
 import { DOC_PATHS } from "@/lib/docs";
-import { api, type TokenMintResponse } from "@/lib/api";
+import { api, type TokenListItem, type TokenMintResponse } from "@/lib/api";
 import { useProjectScoped } from "@/lib/active";
 import { cn } from "@/lib/utils";
 
@@ -38,6 +38,23 @@ function formatRelative(iso: string | null): string {
   if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`;
   if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h ago`;
   return `${Math.floor(diff / 86_400_000)}d ago`;
+}
+
+/** Tooltip for the Owner cell: the raw owner id, plus who minted the key when
+ * that is someone else. Keys minted before the actor columns existed have
+ * neither, so the tooltip stays empty rather than showing "null". */
+function describeTokenActors(token: TokenListItem): string | undefined {
+  const parts: string[] = [];
+  if (token.owner_user_id) parts.push(`Owner: ${token.owner_user_id}`);
+  if (
+    token.created_by_user_id &&
+    token.created_by_user_id !== token.owner_user_id
+  ) {
+    parts.push(
+      `Minted by: ${token.created_by_email ?? token.created_by_user_id}`,
+    );
+  }
+  return parts.length > 0 ? parts.join("\n") : undefined;
 }
 
 function formatCreated(iso: string): string {
@@ -327,6 +344,7 @@ export function TokensPage() {
                 <th className="px-5 py-2.5 text-left font-medium">Name</th>
                 <th className="px-5 py-2.5 text-left font-medium">API key</th>
                 <th className="px-5 py-2.5 text-left font-medium">Scopes</th>
+                <th className="px-5 py-2.5 text-left font-medium">Owner</th>
                 <th className="px-5 py-2.5 text-left font-medium">Created</th>
                 <th className="px-5 py-2.5 text-left font-medium">Last used</th>
                 <th className="px-5 py-2.5 w-24" />
@@ -368,6 +386,16 @@ export function TokensPage() {
                           </Badge>
                         )}
                       </span>
+                    </td>
+                    {/* Email as the label, raw id on hover — same shape as
+                       ActiveBansPanel's created-by cell. The tooltip also
+                       carries the minter, so a key an admin created for
+                       someone else is discoverable without a second column. */}
+                    <td
+                      className="px-5 py-3 text-[13px] text-muted-foreground"
+                      title={describeTokenActors(t)}
+                    >
+                      {t.owner_email ?? t.owner_user_id ?? "—"}
                     </td>
                     <td className="px-5 py-3 text-muted-foreground">
                       {formatCreated(t.created_at)}

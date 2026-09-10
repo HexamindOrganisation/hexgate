@@ -328,7 +328,7 @@ export function OrgMembersPage() {
         open={confirmRemove !== null}
         onOpenChange={(open) => !open && setConfirmRemove(null)}
         title={confirmRemove ? `Remove ${confirmRemove.email}?` : ""}
-        description="They'll lose access to this organization's projects, tokens, and audit logs. An admin can re-invite them later."
+        description="Any API keys they own are revoked immediately — services still using them will start failing. They'll also lose access to this organization's projects and audit logs. An admin can re-invite them later, but revoked keys can't be restored."
         confirmLabel="Remove member"
         pending={removeMember.isPending}
         onConfirm={() =>
