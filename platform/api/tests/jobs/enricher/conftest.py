@@ -5,6 +5,7 @@ can assert ordering, and a job factory wired with those fakes."""
 
 from __future__ import annotations
 
+import json
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -125,6 +126,29 @@ def usage_attrs(**overrides: Any) -> dict[str, Any]:
         semconv.GEN_AI_USAGE_INPUT_TOKENS: 100,
         semconv.GEN_AI_USAGE_OUTPUT_TOKENS: 50,
         semconv.LATENCY_MS: 250,
+    }
+    return {**base, **overrides}
+
+
+def message_attrs(**overrides: Any) -> dict[str, Any]:
+    base = {
+        semconv.EVENT_ID: str(uuid.uuid4()),
+        semconv.AGENT_NAME: "researcher",
+        semconv.GEN_AI_REQUEST_MODEL: "gpt-4o",
+        semconv.TURN_KEY: "run_1:researcher",
+        semconv.MESSAGE_SEQ: 0,
+        semconv.GEN_AI_INPUT_MESSAGES: json.dumps(
+            [{"role": "user", "parts": [{"type": "text", "content": "hello"}]}]
+        ),
+        semconv.GEN_AI_OUTPUT_MESSAGES: json.dumps(
+            [
+                {
+                    "role": "assistant",
+                    "parts": [{"type": "text", "content": "hi"}],
+                    "finish_reason": "stop",
+                }
+            ]
+        ),
     }
     return {**base, **overrides}
 

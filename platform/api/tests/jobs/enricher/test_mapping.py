@@ -11,17 +11,24 @@ import pytest
 
 from hexgate.tracing import semconv
 from hexgate_api.jobs.enricher.coerce import SpanRejected
-from hexgate_api.jobs.enricher.mapping import map_span
+from hexgate_api.jobs.enricher.mapping import (
+    KNOWN_SCOPES,
+    _envelope,
+    _message_fields,
+    map_span,
+)
 from hexgate_api.schemas import (
     UINT32_MAX,
     BanEnforcementEvent,
     DecisionEvent,
     LlmInvocationEvent,
+    LlmMessageEvent,
 )
 from tests.jobs.enricher.conftest import (
     ban_attrs,
     decision_attrs,
     make_span,
+    message_attrs,
     usage_attrs,
 )
 
@@ -288,3 +295,129 @@ def test_sdk_usage_span_validates_in_and_out_of_a_run_scope() -> None:
 
     assert str(attributed.run_id) == run_id
     assert detached.run_id is None
+
+
+# --- LLM messages: mapped, not yet accepted -------------------------------------
+#
+# ``SCOPE_MESSAGES`` stays out of KNOWN_SCOPES until the consumer has a bucket
+# and an insert for it, so ``map_span`` still rejects it and these tests call
+# ``_message_fields()`` directly.
+
+
+def _message_event(attrs: dict[str, object]) -> LlmMessageEvent:
+    scope = semconv.SCOPE_MESSAGES
+    span = make_span(attrs)
+    payload = _envelope(span, attrs, {}, scope) | _message_fields(attrs, scope)
+    return LlmMessageEvent(**payload)
+
+
+def test_when_scope_is_messages_then_still_an_unknown_scope_reject() -> None:
+    assert semconv.SCOPE_MESSAGES not in KNOWN_SCOPES
+    with pytest.raises(SpanRejected) as exc:
+        map_span(semconv.SCOPE_MESSAGES, make_span(message_attrs()), {})
+    assert exc.value.error_class == "unknown_scope"
+
+
+def test_message_fields_happy_path() -> None:
+    attrs = message_attrs(
+        **{
+            semconv.SESSION_ID: "sess_1",
+            semconv.MESSAGE_SEQ: 3,
+            semconv.GEN_AI_SYSTEM_INSTRUCTIONS: json.dumps(
+                [{"type": "text", "content": "Be terse."}]
+            ),
+            semconv.RESYNCED: True,
+        }
+    )
+    event = _message_event(attrs)
+
+    assert event.model == "gpt-4o"
+    assert event.session_id == "sess_1"
+    assert event.turn_key == "run_1:researcher"
+    assert event.message_seq == 3
+    assert event.resynced is True
+    assert event.truncated is False
+    assert json.loads(event.input_messages) == json.loads(
+        attrs[semconv.GEN_AI_INPUT_MESSAGES]
+    )
+    assert json.loads(event.output_messages) == json.loads(
+        attrs[semconv.GEN_AI_OUTPUT_MESSAGES]
+    )
+    assert json.loads(event.system_instructions) == [
+        {"type": "text", "content": "Be terse."}
+    ]
+
+
+def test_when_optional_message_attributes_are_absent_then_defaults() -> None:
+    # The SDK omits system_instructions after a turn_key's first event and
+    # omits the flags when false; the row must still validate.
+    event = _message_event(message_attrs())
+    assert event.system_instructions == ""
+    assert event.resynced is False
+    assert event.truncated is False
+    assert event.session_id == ""
+
+
+def test_when_message_span_carries_run_id_then_kept_else_none() -> None:
+    # Same contract as llm_invocation.run_id: joins a transcript to its run
+    # when session_id is empty; absent on the wire, never "".
+    run_id = str(uuid.uuid4())
+    attributed = _message_event(message_attrs(**{semconv.RUN_ID: run_id}))
+    detached = _message_event(message_attrs())
+    assert str(attributed.run_id) == run_id
+    assert detached.run_id is None
+
+
+def test_when_a_flag_is_not_a_bool_then_validation_fails() -> None:
+    # No coercer of our own: the raw attribute reaches the model, and Pydantic
+    # rejects what it cannot read as a bool — a DLQ reject via map_span.
+    with pytest.raises(ValueError):
+        _message_event(message_attrs(**{semconv.RESYNCED: "maybe"}))
+
+
+def test_when_sdk_marked_the_event_truncated_then_the_flag_is_kept() -> None:
+    # This side cut nothing, but the SDK did before export: the stored row
+    # must not claim to be the whole message.
+    event = _message_event(message_attrs(**{semconv.TRUNCATED: True}))
+    assert event.truncated is True
+
+
+def test_when_input_messages_exceed_cap_then_stored_short_and_flagged() -> None:
+    big = [{"role": "user", "parts": [{"type": "text", "content": "x" * 300_000}]}]
+    attrs = message_attrs(**{semconv.GEN_AI_INPUT_MESSAGES: json.dumps(big)})
+    event = _message_event(attrs)
+    assert event.truncated is True
+    assert len(event.input_messages.encode("utf-8")) <= 256 * 1024
+    assert "...[truncated " in event.input_messages
+
+
+@pytest.mark.parametrize(
+    "missing",
+    [
+        semconv.GEN_AI_REQUEST_MODEL,
+        semconv.TURN_KEY,
+        semconv.MESSAGE_SEQ,
+        semconv.GEN_AI_INPUT_MESSAGES,
+        semconv.GEN_AI_OUTPUT_MESSAGES,
+    ],
+)
+def test_when_a_required_message_attribute_is_absent_then_span_rejected(
+    missing: str,
+) -> None:
+    attrs = message_attrs()
+    del attrs[missing]
+    with pytest.raises(SpanRejected) as exc:
+        _message_fields(attrs, semconv.SCOPE_MESSAGES)
+    assert exc.value.error_class == "validation"
+
+
+def test_when_input_messages_json_is_invalid_then_span_rejected() -> None:
+    attrs = message_attrs(**{semconv.GEN_AI_INPUT_MESSAGES: "[broken"})
+    with pytest.raises(SpanRejected):
+        _message_fields(attrs, semconv.SCOPE_MESSAGES)
+
+
+def test_when_message_seq_exceeds_uint32_then_validation_fails() -> None:
+    attrs = message_attrs(**{semconv.MESSAGE_SEQ: UINT32_MAX + 1})
+    with pytest.raises(ValueError):
+        _message_event(attrs)

@@ -667,6 +667,42 @@ class LlmInvocationEvent(AuditEnvelope):
     run_id: Optional[UUID] = None
 
 
+class LlmMessageEvent(AuditEnvelope):
+    """One LLM call's prompt delta and completion; mirrors the llm_message table.
+
+    The three content fields are the official ``gen_ai.*`` shapes as JSON
+    text, redacted and byte-capped by the enricher before validation. No
+    ``max_length`` here on purpose: the caps truncate, and a bound on this
+    model would turn an over-cap payload into a rejection — the column is an
+    unbounded ``String``, so nothing downstream needs the guard either.
+    """
+
+    model: str = Field(min_length=1, max_length=256)
+    # Identifies the message list this event appends to. One session can hold
+    # several: the main run, each sub-agent and each handoff keeps its own, and
+    # message_seq restarts at 0 in each. The design has the SDK derive it from
+    # the framework's own run identity plus the agent name (see the LLM message
+    # logging spec), which keeps it under agent_name's cap plus an id prefix;
+    # the bound is sized for that, not for a session-wide path.
+    turn_key: str = Field(min_length=1, max_length=512)
+    # Counter within ``turn_key``; UInt32 column, same reasoning as the token
+    # bounds on LlmInvocationEvent.
+    message_seq: int = Field(ge=0, le=UINT32_MAX)
+    # This event restates the whole list (the framework rewrote it) rather
+    # than extending it.
+    resynced: bool = False
+    # Any content field below was cut to its cap — by the SDK before export,
+    # by the enricher, or both.
+    truncated: bool = False
+    input_messages: str
+    output_messages: str
+    system_instructions: str = ""
+    # Run attribution — same tier and same zero-UUID-at-insert-time
+    # substitution as LlmInvocationEvent.run_id, so a transcript stays
+    # attributable to its run when session_id is empty.
+    run_id: Optional[UUID] = None
+
+
 class DecisionAccepted(BaseModel):
     """Response shape for POST /v1/audit/decisions."""
 

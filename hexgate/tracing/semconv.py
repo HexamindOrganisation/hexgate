@@ -74,7 +74,7 @@ HINT = "sec_ai.hint"
 ARGUMENTS = "sec_ai.arguments"
 ATTRIBUTES = "sec_ai.attributes"
 
-# --- Run attribution (SCOPE_AUDIT, plus RUN_ID on SCOPE_USAGE) -----------------
+# --- Run attribution (SCOPE_AUDIT; RUN_ID also on SCOPE_USAGE, SCOPE_MESSAGES) --
 # Omitted entirely when the emitter has no run to attribute: OTLP attributes
 # cannot carry null, and the platform's run_id is ``UUID | None`` — an empty
 # string is a 422. An absent attribute decodes to None; "" would not.

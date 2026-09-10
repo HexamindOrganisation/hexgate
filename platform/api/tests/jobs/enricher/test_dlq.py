@@ -12,7 +12,7 @@ from hexgate_api.jobs.enricher.dlq import (
     record_envelope,
     span_envelope,
 )
-from tests.jobs.enricher.conftest import decision_attrs, make_span
+from tests.jobs.enricher.conftest import decision_attrs, make_span, message_attrs
 
 
 def test_span_envelope_happy_path() -> None:
@@ -97,6 +97,35 @@ def test_when_a_dict_field_is_valid_json_but_not_a_dict_then_dlq_drops_it() -> N
     attributes = _envelope_attributes(attrs)
     assert attributes[semconv.ARGUMENTS] == "[UNPARSEABLE]"
     assert attributes[semconv.HINT] == "[UNPARSEABLE]"
+
+
+def test_when_a_message_span_is_rejected_then_dlq_redacts_inside_the_messages() -> None:
+    # hexgate.messages spans are DLQ'd until the consumer stores them, and a
+    # tool-call message carries caller arguments like a decision does — so
+    # the same parse-then-redact has to reach inside the message array.
+    messages = [
+        {
+            "role": "assistant",
+            "parts": [
+                {
+                    "type": "tool_call",
+                    "name": "login",
+                    "arguments": {"user": "bob", "password": "hunter2"},
+                }
+            ],
+        }
+    ]
+    attrs = message_attrs(**{semconv.GEN_AI_INPUT_MESSAGES: json.dumps(messages)})
+    attributes = _envelope_attributes(attrs)
+    arguments = attributes[semconv.GEN_AI_INPUT_MESSAGES][0]["parts"][0]["arguments"]
+    assert arguments == {"user": "bob", "password": "[REDACTED]"}
+    assert "hunter2" not in json.dumps(attributes)
+
+
+def test_when_a_message_field_is_a_bare_json_string_then_dlq_drops_it() -> None:
+    attrs = message_attrs(**{semconv.GEN_AI_SYSTEM_INSTRUCTIONS: json.dumps("hunter2")})
+    attributes = _envelope_attributes(attrs)
+    assert attributes[semconv.GEN_AI_SYSTEM_INSTRUCTIONS] == "[UNPARSEABLE]"
 
 
 def test_when_a_record_is_undecodable_then_envelope_carries_base64() -> None:

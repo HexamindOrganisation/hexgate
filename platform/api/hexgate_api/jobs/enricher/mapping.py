@@ -22,6 +22,7 @@ from hexgate_api.jobs.enricher.coerce import (
     SpanRejected,
     as_int,
     as_json_dict,
+    as_json_value,
     as_str,
     as_str_list,
     required,
@@ -31,24 +32,37 @@ from hexgate_api.jobs.enricher.enforcement import (
     capped_arguments,
     capped_attributes,
     capped_hint,
+    capped_input_messages,
+    capped_output_messages,
+    capped_system_instructions,
     capped_violations,
 )
 from hexgate_api.query_scope import EventOutOfWindow, validate_event_window
-from hexgate_api.schemas import BanEnforcementEvent, DecisionEvent, LlmInvocationEvent
+from hexgate_api.schemas import (
+    BanEnforcementEvent,
+    DecisionEvent,
+    LlmInvocationEvent,
+    LlmMessageEvent,
+)
 
 _log = logging.getLogger(__name__)
 
 _EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 
+# SCOPE_MESSAGES is mapped below but deliberately not accepted yet: the
+# consumer buckets events by exact type and commits the offset after the
+# inserts, so a scope accepted before it has a bucket and an insert would be
+# validated and then dropped with no DLQ record. It joins this tuple in the
+# same change as its consumer bucket; until then it is a loud unknown_scope.
 KNOWN_SCOPES = (semconv.SCOPE_AUDIT, semconv.SCOPE_USAGE, semconv.SCOPE_BANS)
 
-Event = DecisionEvent | LlmInvocationEvent | BanEnforcementEvent
+Event = DecisionEvent | LlmInvocationEvent | BanEnforcementEvent | LlmMessageEvent
 
 
 def _envelope(
     span: Span, attrs: dict[str, Any], resource_attrs: dict[str, Any], scope: str
 ) -> dict[str, Any]:
-    """The AuditEnvelope fields shared by all three event types."""
+    """The AuditEnvelope fields shared by every event type."""
     if span.start_time_unix_nano <= 0:
         raise SpanRejected(
             "span start_time_unix_nano is unset", error_class="validation", scope=scope
@@ -169,6 +183,56 @@ def _usage_fields(attrs: dict[str, Any], span: Span, scope: str) -> dict[str, An
     return fields
 
 
+def _message_fields(attrs: dict[str, Any], scope: str) -> dict[str, Any]:
+    """LLM message content: the ``gen_ai.*`` trio as JSON, capped here before
+    validation so an over-cap prompt is stored short rather than rejected.
+
+    ``truncated`` is the SDK's flag OR'd with this side's own cuts — a row
+    marked untouched must really be the whole message. The two bool flags are
+    handed to the model raw: Pydantic already coerces a bool attribute, and an
+    absent one takes the model's False default.
+    """
+    input_messages, input_cut = capped_input_messages(
+        as_json_value(
+            required(attrs, semconv.GEN_AI_INPUT_MESSAGES, scope=scope),
+            key=semconv.GEN_AI_INPUT_MESSAGES,
+            scope=scope,
+        )
+    )
+    output_messages, output_cut = capped_output_messages(
+        as_json_value(
+            required(attrs, semconv.GEN_AI_OUTPUT_MESSAGES, scope=scope),
+            key=semconv.GEN_AI_OUTPUT_MESSAGES,
+            scope=scope,
+        )
+    )
+    system_instructions, system_cut = capped_system_instructions(
+        as_json_value(
+            attrs.get(semconv.GEN_AI_SYSTEM_INSTRUCTIONS),
+            key=semconv.GEN_AI_SYSTEM_INSTRUCTIONS,
+            scope=scope,
+        )
+    )
+    return {
+        "model": as_str(required(attrs, semconv.GEN_AI_REQUEST_MODEL, scope=scope)),
+        "turn_key": as_str(required(attrs, semconv.TURN_KEY, scope=scope)),
+        "message_seq": as_int(
+            required(attrs, semconv.MESSAGE_SEQ, scope=scope),
+            key=semconv.MESSAGE_SEQ,
+            scope=scope,
+        ),
+        "resynced": attrs.get(semconv.RESYNCED, False),
+        "truncated": True
+        if input_cut or output_cut or system_cut
+        else attrs.get(semconv.TRUNCATED, False),
+        "input_messages": input_messages,
+        "output_messages": output_messages,
+        "system_instructions": system_instructions,
+        # Same nullable contract as the other scopes: absent, never "".
+        "run_id": as_str(attrs.get(semconv.RUN_ID)) or None,
+    }
+
+
 def _ban_fields(attrs: dict[str, Any], scope: str) -> dict[str, Any]:
     return {
         "ban_type": as_str(required(attrs, semconv.BAN_TYPE, scope=scope)),
@@ -193,6 +257,9 @@ def map_span(scope_name: str, span: Span, resource_attrs: dict[str, Any]) -> Eve
     elif scope_name == semconv.SCOPE_USAGE:
         model = LlmInvocationEvent
         payload |= _usage_fields(attrs, span, scope_name)
+    elif scope_name == semconv.SCOPE_MESSAGES:
+        model = LlmMessageEvent
+        payload |= _message_fields(attrs, scope_name)
     else:
         model = BanEnforcementEvent
         payload |= _ban_fields(attrs, scope_name)
