@@ -33,6 +33,12 @@ class BaseToolPolicy(BaseModel):
     milestone, these strings carry through verbatim.
     """
 
+    # extra="forbid" for the same reason AgentPolicy sets it: a mistyped field
+    # (``contraints:``) would otherwise be dropped in silence, leaving
+    # ``mode: allow`` with no fence at all. Inherited by FileToolPolicy and
+    # AgentTargetPolicy, so it covers every nested policy scope.
+    model_config = ConfigDict(extra="forbid")
+
     mode: PolicyMode = "deny"
     constraints: list[str] = Field(default_factory=list)
 
@@ -44,6 +50,8 @@ class BaseToolPolicy(BaseModel):
 
 class FileScope(BaseModel):
     """Restrict a file-oriented tool to explicit path patterns."""
+
+    model_config = ConfigDict(extra="forbid")
 
     allowed_paths: list[str] = Field(default_factory=list)
     denied_paths: list[str] = Field(default_factory=list)
@@ -166,7 +174,11 @@ class AgentPolicy(BaseModel):
     # instances, nothing reassigns a field), which is what makes memoizing
     # effective_tools safe. cached_property is a plain descriptor, not a field,
     # so pydantic must leave it alone.
-    model_config = ConfigDict(frozen=True, ignored_types=(cached_property,))
+    # extra="forbid": a mistyped field (``contraints:``) would otherwise be
+    # dropped in silence, and a dropped fence is fail-open.
+    model_config = ConfigDict(
+        frozen=True, ignored_types=(cached_property,), extra="forbid"
+    )
 
     version: int = 1
     inherits: list[str] = Field(default_factory=list)

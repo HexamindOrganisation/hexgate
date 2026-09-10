@@ -33,6 +33,13 @@ func TestCreateDefaultConfig_happy_path(t *testing.T) {
 	assert.Empty(t, cfg.PublicKeyFile)
 }
 
+// The literal values: the default-config test above compares the constants with
+// themselves, so it stays green whatever they become.
+func TestRevocationDefaults_happy_path(t *testing.T) {
+	assert.Equal(t, 20*time.Second, defaultPollInterval)
+	assert.Equal(t, time.Hour, defaultMaxStaleness)
+}
+
 func TestConfigValidate_when_no_public_key_is_set_then_an_error_is_returned(t *testing.T) {
 	cfg := validConfig()
 	cfg.PublicKeyFile = ""

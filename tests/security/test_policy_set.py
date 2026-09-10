@@ -12,6 +12,7 @@ from hexgate.security import (
     RESOLVED_POLICY_MARKER,
     AgentPolicy,
     BaseToolPolicy,
+    FileToolPolicy,
     PolicySet,
     PolicySetError,
     load_policy_map,
@@ -93,6 +94,196 @@ def test_resolved_marker_admits_lowered_agent_keys_flat_form() -> None:
 
     ps = load_policy_set_from_dict({**payload, RESOLVED_POLICY_MARKER: True})
     assert ps.policy_for(None).tools["agent.tool:billing-bot"].mode == "allow"
+
+
+def test_top_level_constraints_reach_every_role() -> None:
+    """A ``constraints:`` sibling of ``roles:`` fences every role — the same block
+    in a flat document validates straight onto the single policy."""
+    ps = load_policy_set_from_dict(
+        {
+            "constraints": ["run.tool_calls < 20"],
+            "roles": {
+                "support": {"default_policy": {"mode": "allow"}},
+                "admin": {"default_policy": {"mode": "allow"}},
+            },
+        }
+    )
+    for role in ("support", "admin"):
+        assert ps.policy_for(role).constraints == ["run.tool_calls < 20"]
+
+
+def test_top_level_constraints_union_with_a_role_own_fence() -> None:
+    """Hoisting unions, never replaces: a role dropping the file's fence would be
+    fail-open."""
+    ps = load_policy_set_from_dict(
+        {
+            "constraints": ["run.tool_calls < 20"],
+            "roles": {
+                "support": {
+                    "default_policy": {"mode": "allow"},
+                    "constraints": ["args.amount <= 500"],
+                }
+            },
+        }
+    )
+    assert ps.policy_for("support").constraints == [
+        "run.tool_calls < 20",
+        "args.amount <= 500",
+    ]
+
+
+def test_unknown_key_beside_roles_is_rejected() -> None:
+    """An unrecognised sibling of ``roles:`` fails closed instead of vanishing —
+    the defect class the dropped ``constraints:`` block belonged to."""
+    with pytest.raises(PolicySetError, match="tools"):
+        load_policy_set_from_dict(
+            {
+                "tools": {"refund": {"mode": "allow"}},
+                "roles": {"default": {"default_policy": {"mode": "allow"}}},
+            }
+        )
+
+
+def test_file_level_keys_beside_roles_are_accepted() -> None:
+    """``version`` and the resolved marker stay legal siblings — pins the
+    resolve→build round-trip, which emits both for a multi-role result."""
+    ps = load_policy_set_from_dict(
+        {
+            "version": 1,
+            RESOLVED_POLICY_MARKER: True,
+            "roles": {"default": {"tools": {"agent.run": {"mode": "allow"}}}},
+        }
+    )
+    assert ps.policy_for("default").tools["agent.run"].mode == "allow"
+
+
+def test_mistyped_key_inside_a_role_is_rejected() -> None:
+    """A role spec fails closed on an unrecognised field too.
+
+    Rejecting only siblings of ``roles:`` left the same silent drop one level
+    down — the likelier place to write the fence, since that is where every
+    other policy field lives.
+    """
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        load_policy_set_from_dict(
+            {
+                "roles": {
+                    "default": {
+                        "contraints": ["run.tool_calls < 20"],
+                        "default_policy": {"mode": "allow"},
+                    }
+                }
+            }
+        )
+
+
+def test_mistyped_key_in_a_flat_document_is_rejected() -> None:
+    """Same guard on the flat shape, which validates as one policy."""
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        load_policy_set_from_dict(
+            {
+                "contraints": ["run.tool_calls < 20"],
+                "default_policy": {"mode": "allow"},
+            }
+        )
+
+
+def test_mistyped_key_on_a_tool_is_rejected() -> None:
+    """The likeliest place to fat-finger a fence is the tool that needs it.
+
+    Rejecting only the document and role scopes left ``mode: allow`` with an
+    empty ``constraints`` list — an unlimited call where a cap was authored.
+    """
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        AgentPolicy.model_validate(
+            {
+                "tools": {
+                    "refund_order": {
+                        "mode": "allow",
+                        "contraints": ["args.amount <= 500"],
+                    }
+                }
+            }
+        )
+
+
+def test_mistyped_key_in_a_file_scope_is_rejected() -> None:
+    """A dropped ``allowed_paths`` leaves an empty FileScope, which the file
+    gate reads as 'no path restriction' rather than 'nothing allowed'."""
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        AgentPolicy.model_validate(
+            {
+                "tools": {
+                    "read_file": {
+                        "mode": "allow",
+                        "file_scope": {"alowed_paths": ["/srv/**"]},
+                    }
+                }
+            }
+        )
+
+
+def test_mistyped_key_on_an_agent_target_is_rejected() -> None:
+    """``via`` defaults to both transfer modes, so dropping a mistyped ``vai``
+    widens reach to the handoff path the author meant to withhold."""
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        AgentPolicy.model_validate(
+            {"agents": {"billing": {"mode": "allow", "vai": ["tool"]}}}
+        )
+
+
+def test_mistyped_key_on_admission_is_rejected() -> None:
+    """Admission carries the run-wide fence; a silent drop admits the run."""
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        AgentPolicy.model_validate(
+            {"admission": {"mode": "allow", "contraints": ["run.tool_calls < 20"]}}
+        )
+
+
+def test_mistyped_key_on_default_policy_is_rejected() -> None:
+    """The default policy governs every unlisted tool, so its fence is the
+    broadest one a silent drop can remove."""
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        AgentPolicy.model_validate(
+            {"default_policy": {"mode": "allow", "contraints": ["args.amount <= 500"]}}
+        )
+
+
+def test_file_scope_still_selects_the_file_tool_policy_arm() -> None:
+    """``ToolPolicy`` is a union, and forbidding extras makes the base arm
+    reject ``file_scope`` — so this pins that the union still falls through to
+    :class:`FileToolPolicy` instead of failing the whole document."""
+    policy = AgentPolicy.model_validate(
+        {
+            "tools": {
+                "read_file": {
+                    "mode": "allow",
+                    "file_scope": {"allowed_paths": ["/srv/**"]},
+                }
+            }
+        }
+    )
+    tool = policy.tools["read_file"]
+    assert isinstance(tool, FileToolPolicy)
+    assert tool.file_scope is not None
+    assert tool.file_scope.allowed_paths == ["/srv/**"]
+
+
+def test_file_level_key_error_hides_the_resolved_marker() -> None:
+    """The advertised key list stays authorable.
+
+    ``_resolved`` is legal but internal: setting it by hand loads the document
+    as already-resolved, which switches off the reserved-tool-name guard. An
+    author reading this error must not be pointed at it.
+    """
+    with pytest.raises(PolicySetError) as exc_info:
+        load_policy_set_from_dict(
+            {
+                "contraints": ["run.tool_calls < 20"],
+                "roles": {"default": {"default_policy": {"mode": "allow"}}},
+            }
+        )
+    assert RESOLVED_POLICY_MARKER not in str(exc_info.value)
 
 
 def test_load_policy_set_none_returns_deny_default() -> None:

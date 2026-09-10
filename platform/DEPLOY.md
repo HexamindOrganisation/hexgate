@@ -230,6 +230,15 @@ alone boots the api fine but leaves the collector crash-looping on the missing
 public key — restore both files (or regenerate the public half by hand from
 the private one) until the keystore learns to rewrite it on load.
 
+**Revocation cache tuning** — `poll_interval` (20s) is how long a revoked key
+still works; `max_staleness` (1h) is how long the collector serves its last
+snapshot while refreshes *fail*, after which it rejects every request. Tune per
+stage with `HEXGATE_COLLECTOR_REVOCATION_POLL_INTERVAL` /
+`HEXGATE_COLLECTOR_REVOCATION_MAX_STALENESS` in `.env.<stage>`; never set either
+blank (the collector refuses to boot). Lowering `max_staleness` below a few
+minutes makes routine database maintenance total span loss, reported as a green
+healthcheck.
+
 **Schema changes** apply only on an empty volume; changing one after first boot
 needs a manual migration.
 

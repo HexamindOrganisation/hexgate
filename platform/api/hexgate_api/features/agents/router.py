@@ -6,6 +6,7 @@ two routes that compile+sign a bundle (update, register).
 
 import base64
 import hashlib
+from typing import TYPE_CHECKING
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Response
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -33,6 +34,9 @@ from hexgate_api.features.agents.service import (
     update_agent,
 )
 from hexgate_api.seeds.defaults import ensure_default_project
+
+if TYPE_CHECKING:
+    from hexgate.security.policy_set import PolicySet
 
 router = APIRouter()
 
@@ -182,6 +186,8 @@ async def api_update_agent(
     from hexgate_api.core.locks import project_lock
 
     await ensure_default_project(session)
+    if body.policy_yaml is not None:
+        _reject_unloadable_policy(body.policy_yaml)
     # Hold the project lock: this compiles + writes a bundle, so it must not
     # interleave with recompile_project (a concurrent policy write) and commit
     # out of order. See core.locks.
@@ -215,12 +221,54 @@ async def api_validate_policy(
     """Parse ``policy.yaml`` end-to-end + check every ``constraints`` string.
 
     Server-side validation keeps one source of truth on grammar — the same
-    parsers the SDK enforces with at run time. Handles both shapes:
+    parsers the SDK enforces with at run time. See
+    :func:`_validate_policy_document` for what the pass covers; the save route
+    runs the identical check, so a policy that validates here is one that saves
+    and a policy that saves is one that validated.
+    """
+    return _validate_policy_document(body.policy_yaml)
+
+
+# A policy the loader rejects is the author's mistake, not a server fault, and
+# it is not a request-shape error FastAPI could have caught — 422 is the code
+# the /validate route's own contract already implies for a document it fails.
+POLICY_REJECTED_STATUS = 422
+
+
+def _reject_unloadable_policy(policy_yaml: str) -> None:
+    """Refuse a save whose policy would compile to nothing.
+
+    ``compile_bundle`` degrades *every* compile failure to "store no bundle",
+    which is right when ``opa`` is absent but wrong for a broken document: the
+    save returned 200, the agent's three bundle columns were nulled, and
+    enforcement silently dropped to the SDK's pydantic fallback with no
+    diagnostic on the wire. Gate on the same check ``/validate`` runs so the two
+    routes cannot disagree about which documents are loadable, and so a typo in
+    a fence is a failed request instead of a quietly unenforced policy.
+    """
+    result = _validate_policy_document(policy_yaml)
+    if result.ok:
+        return
+    raise HTTPException(
+        status_code=POLICY_REJECTED_STATUS,
+        detail={
+            "message": "policy_yaml did not validate; nothing was saved",
+            "errors": [error.model_dump() for error in result.errors],
+        },
+    )
+
+
+def _validate_policy_document(policy_yaml: str) -> ValidatePolicyResponse:
+    """Validate a policy document the whole way down. Handles both shapes:
 
     * flat single-policy document → validated as one :class:`AgentPolicy`
     * inline-roles document (top-level ``roles:`` map) → each entry
       validated as an :class:`AgentPolicy`, then every constraint inside
       every tool is parsed against the M1 grammar.
+
+    Either way the document then goes through :func:`_load_document`, the same
+    loader the compiler and the SDK use, so ``ok`` can't report a document
+    those two reject — see that function for what the per-role pass misses.
 
     Returns a flat list of ``{role, line, message}`` diagnostics. ``role``
     is ``None`` for top-level YAML / schema errors; populated when the
@@ -242,7 +290,7 @@ async def api_validate_policy(
 
     errors: list[PolicyValidationError] = []
     try:
-        parsed = yaml.safe_load(body.policy_yaml) or {}
+        parsed = yaml.safe_load(policy_yaml) or {}
     except MarkedYAMLError as exc:
         line = exc.problem_mark.line + 1 if exc.problem_mark else None
         return ValidatePolicyResponse(
@@ -251,6 +299,21 @@ async def api_validate_policy(
                 PolicyValidationError(
                     line=line,
                     message=f"YAML parse: {exc.problem or exc}",
+                )
+            ],
+        )
+
+    # Valid YAML that isn't a mapping (a bare list, a scalar) parses fine and
+    # then has no keys to walk — report it rather than letting every `.get`
+    # below raise.
+    if not isinstance(parsed, dict):
+        return ValidatePolicyResponse(
+            ok=False,
+            errors=[
+                PolicyValidationError(
+                    message=(
+                        f"policy must be a YAML mapping, got {type(parsed).__name__}"
+                    )
                 )
             ],
         )
@@ -297,38 +360,62 @@ async def api_validate_policy(
             )
         _check_policy(policy, None)
 
+    policy_set, document_error = _load_document(parsed)
+    # Only when the per-role pass found nothing: the loader fails on the same
+    # cause, so reporting it too would just duplicate a diagnostic that already
+    # names the offending role.
+    if document_error is not None and not errors:
+        errors.append(document_error)
+
     return ValidatePolicyResponse(
-        ok=not errors, errors=errors, warnings=_default_role_warnings(parsed, errors)
+        ok=not errors,
+        errors=errors,
+        warnings=[] if errors else _default_role_warnings(policy_set),
     )
 
 
-def _default_role_warnings(
-    parsed: dict, errors: list[PolicyValidationError]
-) -> list[PolicyValidationError]:
-    """Authoring lints over the document as a whole (no-op if it didn't parse).
+def _load_document(
+    parsed: dict,
+) -> "tuple[PolicySet | None, PolicyValidationError | None]":
+    """Load the document the way the SDK does at run time — the final gate.
 
-    Needs a fully loaded :class:`PolicySet` — inheritance and mixins resolved —
-    which the per-role checks above don't build, validating roles in isolation.
+    Returns the loaded set for the lints below, or the failure to report. The
+    per-role pass validates each role in isolation, so it never sees file-level
+    grammar (an unknown sibling of ``roles:``, a malformed top-level
+    ``constraints:`` block) or a failure needing the resolved set (inheritance,
+    mixins, ``consts`` references). Reporting these keeps ``ok`` from
+    disagreeing with the loader the compiler and the SDK both go through — a
+    document that validates here has to be one they accept.
     """
-    if errors:
-        return []
-
     from pydantic import ValidationError
 
-    from hexgate.security.analyzer import check_default_role_exposure
     from hexgate.security.policy_set import (
         PolicySetError,
         load_policy_set_from_dict,
     )
 
     try:
-        policy_set = load_policy_set_from_dict(parsed)
-    except (PolicySetError, ValidationError):
-        # Inheritance/mixin failures the per-role checks don't cover. Surfacing
-        # them here would widen this endpoint's error contract, and dropping the
-        # lint can't make a broken document look clean — `ok` comes from
-        # `errors`, and the CLI and platform build both still reject these.
+        return load_policy_set_from_dict(parsed), None
+    except PolicySetError as exc:
+        return None, PolicyValidationError(message=str(exc))
+    except ValidationError as exc:
+        return None, PolicyValidationError(
+            message=f"policy schema: {exc.errors()[0]['msg']}"
+        )
+
+
+def _default_role_warnings(
+    policy_set: "PolicySet | None",
+) -> list[PolicyValidationError]:
+    """Authoring lints over the document as a whole.
+
+    Needs a fully loaded :class:`PolicySet` — inheritance and mixins resolved —
+    which the per-role checks don't build, validating roles in isolation.
+    """
+    if policy_set is None:
         return []
+
+    from hexgate.security.analyzer import check_default_role_exposure
 
     return [
         PolicyValidationError(

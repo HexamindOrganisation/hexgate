@@ -160,6 +160,74 @@ def test_put_agent_partial_update_preserves_other_fields(
     assert after["agent_yaml"] == before["agent_yaml"]
 
 
+def test_put_agent_rejects_a_policy_that_does_not_load(client: TestClient) -> None:
+    """A broken policy fails the save instead of nulling the bundle behind a 200.
+
+    ``compile_bundle`` degrades any compile failure to "no bundle", so this used
+    to save, drop the agent's bundle, and fall back to the pydantic engine with
+    nothing on the wire to say so.
+    """
+    before = client.get(f"/v1/projects/{DEFAULT_PROJECT_ID}/agents/support_bot").json()
+
+    resp = client.put(
+        f"/v1/projects/{DEFAULT_PROJECT_ID}/agents/support_bot",
+        json={
+            "policy_yaml": (
+                "version: 1\n"
+                "roles:\n"
+                "  default:\n"
+                "    tools:\n"
+                "      refund_order:\n"
+                "        mode: allow\n"
+                "        constraints:\n"
+                "          - args.amount ~~ 50\n"
+            )
+        },
+    )
+    assert resp.status_code == 422
+    detail = resp.json()["detail"]
+    assert "nothing was saved" in detail["message"]
+    assert detail["errors"][0]["role"] == "default"
+
+    after = client.get(f"/v1/projects/{DEFAULT_PROJECT_ID}/agents/support_bot").json()
+    assert after["policy_yaml"] == before["policy_yaml"]
+
+
+def test_put_agent_rejects_a_mistyped_tool_level_fence(client: TestClient) -> None:
+    """``contraints:`` on a tool is a dropped cap, so the save must fail.
+
+    The document- and role-level guards never saw this one — it parsed as an
+    ``allow`` with no constraints at all.
+    """
+    resp = client.put(
+        f"/v1/projects/{DEFAULT_PROJECT_ID}/agents/support_bot",
+        json={
+            "policy_yaml": (
+                "version: 1\n"
+                "roles:\n"
+                "  default:\n"
+                "    tools:\n"
+                "      refund_order:\n"
+                "        mode: allow\n"
+                "        contraints:\n"
+                "          - args.amount <= 500\n"
+            )
+        },
+    )
+    assert resp.status_code == 422
+
+
+def test_put_agent_without_policy_yaml_skips_the_policy_gate(
+    client: TestClient,
+) -> None:
+    """The gate reads ``policy_yaml``; an update that omits it still saves."""
+    resp = client.put(
+        f"/v1/projects/{DEFAULT_PROJECT_ID}/agents/support_bot",
+        json={"system_md": "Only the prompt changed."},
+    )
+    assert resp.status_code == 200
+
+
 def test_list_agents_returns_three_string_fields(client: TestClient) -> None:
     """The /agents collection endpoint returns the same three-field shape."""
     resp = client.get(f"/v1/projects/{DEFAULT_PROJECT_ID}/agents")
@@ -226,6 +294,20 @@ def test_validate_reports_yaml_parse_error_with_line(client: TestClient) -> None
     assert err["role"] is None
     assert err["line"] is not None and err["line"] >= 1
     assert "YAML parse" in err["message"]
+
+
+def test_validate_reports_a_non_mapping_document(client: TestClient) -> None:
+    """Valid YAML that isn't a mapping has no keys to walk — report it rather
+    than raising on the first lookup."""
+    resp = client.post(
+        f"/v1/projects/{DEFAULT_PROJECT_ID}/agents/support_bot/validate",
+        json={"policy_yaml": "- refund_order\n- web_search\n"},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is False
+    [err] = body["errors"]
+    assert "must be a YAML mapping" in err["message"]
 
 
 def test_validate_reports_constraint_grammar_error_inside_role(
@@ -395,9 +477,80 @@ def test_validate_reports_no_warnings_when_the_document_has_errors(
     assert body["warnings"] == []
 
 
+def test_validate_rejects_an_unknown_sibling_of_roles(client: TestClient) -> None:
+    """A mistyped file-level key is a load error, so validate must not pass it.
+
+    The per-role pass only walks what sits under ``roles:``. Answering ``ok``
+    here sent the operator on to save a document the compiler drops the bundle
+    for, leaving the agent unable to load its policy at all.
+    """
+    resp = client.post(
+        f"/v1/projects/{DEFAULT_PROJECT_ID}/agents/support_bot/validate",
+        json={
+            "policy_yaml": (
+                "contraints:\n"
+                "  - run.tool_calls < 5\n"
+                "roles:\n"
+                "  default:\n"
+                "    default_policy: { mode: allow }\n"
+            )
+        },
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is False
+    assert "contraints" in body["errors"][0]["message"]
+
+
+def test_validate_rejects_a_malformed_file_level_constraints_block(
+    client: TestClient,
+) -> None:
+    """The file-level fence is grammar-checked, not just the per-role ones."""
+    resp = client.post(
+        f"/v1/projects/{DEFAULT_PROJECT_ID}/agents/support_bot/validate",
+        json={
+            "policy_yaml": (
+                "constraints: run.tool_calls < 5\n"
+                "roles:\n"
+                "  default:\n"
+                "    default_policy: { mode: allow }\n"
+            )
+        },
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is False
+    assert "constraints" in body["errors"][0]["message"]
+
+
+def test_validate_accepts_a_file_level_constraints_block(client: TestClient) -> None:
+    """The hoisted fence is legal — the guards above must not reject the shape
+    the SDK now supports."""
+    resp = client.post(
+        f"/v1/projects/{DEFAULT_PROJECT_ID}/agents/support_bot/validate",
+        json={
+            "policy_yaml": (
+                "version: 1\n"
+                "constraints:\n"
+                "  - run.tool_calls < 20\n"
+                "roles:\n"
+                "  default:\n"
+                "    tools:\n"
+                "      read_ticket: { mode: allow }\n"
+            )
+        },
+    )
+    body = resp.json()
+    assert body["ok"] is True, body
+    assert body["errors"] == []
+
+
 def test_validate_unresolvable_inheritance_does_not_500(client: TestClient) -> None:
     """Roles that each parse but whose inheritance can't resolve reach the
-    PolicySet build and must degrade to "no lint", never a crash."""
+    PolicySet build and must be reported there, never crash.
+
+    The per-role pass can't see a link failure, so this used to answer ``ok``
+    for a document the compiler and the SDK both reject."""
     resp = client.post(
         f"/v1/projects/{DEFAULT_PROJECT_ID}/agents/support_bot/validate",
         json={
@@ -417,8 +570,8 @@ def test_validate_unresolvable_inheritance_does_not_500(client: TestClient) -> N
     )
     assert resp.status_code == 200
     body = resp.json()
-    # Unchanged error contract: the per-role checks passed, so ok stays True.
-    assert body["ok"] is True
+    assert body["ok"] is False
+    assert "does_not_exist" in body["errors"][0]["message"]
     assert body["warnings"] == []
 
 
@@ -714,11 +867,11 @@ def _trivial_policy_yaml() -> str:
     """A policy that compiles cleanly — enough to trigger bundle signing."""
     return (
         "version: 1\n"
-        "name: default\n"
-        "rules:\n"
-        "  - effect: allow\n"
-        "    when:\n"
-        "      tool: any\n"
+        "default_policy:\n"
+        "  mode: deny\n"
+        "tools:\n"
+        "  read_ticket:\n"
+        "    mode: allow\n"
     )
 
 

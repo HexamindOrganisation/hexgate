@@ -322,8 +322,10 @@ Per request, the extension:
    own id, platform-api #126) and looks it up in a **revocation snapshot** of
    the key table, polled from Postgres every 20 s. Revoking a key deletes its
    row, so absence = revoked → **401**. A snapshot older than `max_staleness`
-   (2 min, i.e. Postgres unreachable) makes the extension reject *everything*
-   rather than let revoked keys keep working.
+   (1 h, i.e. Postgres unreachable for that long) makes the extension reject
+   *everything* rather than let revoked keys keep working. Both knobs are
+   env-tunable per stage —
+   `HEXGATE_COLLECTOR_REVOCATION_POLL_INTERVAL` / `_MAX_STALENESS`.
 3. **Resolves `project_id` from the key's row**, not from the token's own
    `project` fact (a mint-time snapshot) and never from a span attribute, and
    attaches it as client metadata. `include_metadata` on the receiver and
@@ -604,7 +606,7 @@ sort key `(project_id, agent_name, outcome, occurred_at, event_id)` and
 | Failure | Platform behaviour |
 |---------|--------------------|
 | Bad/missing/revoked bearer | Collector 401; the SDK logs and drops the batch |
-| Postgres unreachable > 2 min | Collector's revocation snapshot goes stale → **every** request 401s until Postgres is back (fail closed) |
+| Postgres unreachable > `max_staleness` (1 h) | Collector's revocation snapshot goes stale → **every** request 401s until Postgres is back (fail closed) |
 | Redpanda unreachable | Collector has already acked 200; exporter retries then drops. Invisible to the SDK and to the current healthcheck (§9) |
 | Enricher down / redeploying | Spans buffer in `hexgate.otlp.raw`; nothing lost within the 3-day retention; dashboard lags |
 | ClickHouse unreachable | Enricher retries the batch with backoff (cap 30 s), commits nothing; consumer lag grows; `restart: unless-stopped` |

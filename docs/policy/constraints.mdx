@@ -320,7 +320,8 @@ constraints:
 ```
 
 <Note>
-  Policy-level constraints belong in a single-file policy. Composed module
+  Policy-level constraints belong in a single-file policy — flat, or role-keyed
+  under `roles:`, where a top-level block unions into every role. Composed module
   policies (`policies/boundaries/`, `policies/capabilities/`) reject them at
   load: the fold composes per-tool rules only, and silently dropping a
   role-wide fence would be fail-open.
@@ -331,11 +332,23 @@ constraints:
 Top-level `constraints:` is new. Single-file policies ignore keys they don't
 recognise, so before this release the block parsed and was silently dropped —
 after it, the same YAML is enforced against every tool the role can reach. If
-you wrote one speculatively, it starts denying on upgrade, and the policy's
-compiled `source_hash` changes with it. Grep your policies for a top-level
-`constraints:` before you roll forward — `hexgate policy show-rego` prints the
-compiled rules if you want to diff exactly what moved. (Composed module policies
-are unaffected: they rejected the key outright, then and now.)
+you wrote one speculatively, it starts denying on upgrade, and the bundle's
+`rego_hash` and `wasm_hash` change with it. Note that `source_hash` does **not**
+move — it is the sha256 of your policy's raw YAML bytes, which the upgrade
+leaves untouched, so diffing it will tell you nothing changed. Grep your
+policies for a top-level `constraints:` before you roll forward — `hexgate
+policy show-rego` prints the compiled rules if you want to diff exactly what
+moved. (Composed module policies are unaffected: they rejected the key outright,
+then and now.)
+
+**Role-keyed documents activate one release later.** A document with a top-level
+`roles:` key validated only what sat *inside* each role, so a `constraints:`
+sibling was dropped there even after the release above — including a malformed
+expression, which `hexgate policy validate` could not see either, since there was
+nothing left to validate. It now unions into every role, so the same upgrade note
+applies: grep role-keyed policies too. Any
+*other* unrecognised sibling of `roles:` is now a load error rather than a silent
+drop, naming the key and telling you to move it inside a role.
 
 ## Named constants
 
