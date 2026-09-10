@@ -54,6 +54,11 @@ function classifyTool(key: string): {
   if (key.startsWith("mcp-")) {
     return { kind: "mcp", label: key.slice(4), tag: "mcp" };
   }
+  // Any other lowered agent-level key (a future agent.* form) still reads as an
+  // agent edge, never a raw `agent.foo` tool row.
+  if (key.startsWith("agent.")) {
+    return { kind: "reach", label: key.slice("agent.".length), tag: "agent" };
+  }
   return { kind: "tool", label: key };
 }
 
@@ -254,16 +259,15 @@ function ResolvedTab({
 
   const policy = resolved[active];
   const tools = policy?.tools ?? {};
-  // Group plain tools, then MCP, reach, and admission — the agent.* keys sort
-  // last so the ordinary tools read first.
-  const toolNames = Object.keys(tools).sort((a, b) => {
-    const ka = classifyTool(a);
-    const kb = classifyTool(b);
-    return (
-      _KIND_ORDER[ka.kind] - _KIND_ORDER[kb.kind] ||
-      ka.label.localeCompare(kb.label)
+  // Classify each key once (not per comparison + again per render), then group
+  // plain tools, then MCP, reach, and admission — the agent.* keys read last.
+  const rows = Object.keys(tools)
+    .map((name) => ({ name, ...classifyTool(name), tp: tools[name] }))
+    .sort(
+      (a, b) =>
+        _KIND_ORDER[a.kind] - _KIND_ORDER[b.kind] ||
+        a.label.localeCompare(b.label),
     );
-  });
   const defaultMode = policy?.default_policy?.mode;
 
   return (
@@ -339,18 +343,16 @@ function ResolvedTab({
               <Badge variant={modeBadge(defaultMode)}>{defaultMode}</Badge>
             </div>
           )}
-          {toolNames.length === 0 ? (
+          {rows.length === 0 ? (
             <p className="text-xs text-muted-foreground pt-2">
               No tools granted for this role.
             </p>
           ) : (
-            toolNames.map((t) => {
-              const tp = tools[t];
+            rows.map(({ name, kind, label, tag, tp }) => {
               const constraints = tp?.constraints ?? [];
-              const { kind, label, tag } = classifyTool(t);
               return (
                 <div
-                  key={t}
+                  key={name}
                   className="flex items-start justify-between gap-2 py-1 text-xs border-b border-border/50"
                 >
                   <div className="min-w-0">
