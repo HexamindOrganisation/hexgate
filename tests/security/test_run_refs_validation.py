@@ -238,7 +238,7 @@ def test_run_refs_are_validated_on_an_authored_reach_grant() -> None:
         {
             "agents": {
                 "other": {
-                    "as": ["handoff"],
+                    "via": ["handoff"],
                     "mode": "allow",
                     "constraints": ["run.definitely_not_a_path < 5"],
                 }
