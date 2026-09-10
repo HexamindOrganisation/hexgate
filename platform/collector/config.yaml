@@ -116,13 +116,17 @@ exporters:
       # ProducerBatchMaxBytes, which is explicit that a batch is sized
       # uncompressed. So the hard ceiling here is 8 MiB of raw spans — 30 at
       # 272 KiB — and send_batch_max_size: 24 leaves ~20% of the 8 MiB unused
-      # (6.375 of 8 MiB), not 24 plus whatever zstd happens to buy. Only the broker's own
-      # max.message.bytes is checked on the compressed batch.
+      # (6.375 of 8 MiB).
       max_message_bytes: 8388608 # 8 MiB
-      # Default is "none". Bought for network and disk, not for headroom
-      # against the limit above (see the note there): span batches are highly
-      # repetitive JSON and compress well.
-      compression: zstd
+      # compression stays at configkafka's "none". zstd would buy network and
+      # disk — span batches are repetitive JSON — but nothing here needs it:
+      # the limit above is measured uncompressed, so it buys no headroom. And
+      # the enricher could not read the result: aiokafka gates every codec on
+      # a cramjam import (has_zstd() is False without it), cramjam is not in
+      # platform/api's lock, and an undecodable batch raises out of the poll
+      # loop, which __main__ does not catch — a restart loop on a container
+      # whose healthcheck is disabled. Enabling it means shipping the codec
+      # and both images together.
     sending_queue:
       # Bound the export queue in BYTES, not requests. The default is 1000
       # *requests* with no size notion, which was ~500 MiB of ~1 KiB decision

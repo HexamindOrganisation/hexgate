@@ -66,7 +66,7 @@ MAX_VIOLATION_CHARS = 1024
 # have fired on exactly the calls the log exists to explain. What bounds it is
 # the pipeline's record and request limits, not storage. Those limits are now
 # in the repo — the topic's ``max.message.bytes``, the kafka exporter's
-# producer limit and compression, ``send_batch_max_size``, the OTLP receiver's
+# producer limit, ``send_batch_max_size``, the OTLP receiver's
 # body size, the enricher's fetch/produce sizes and this SDK's
 # ``MAX_EXPORT_BATCH_SIZE``, all sized together in
 # docs/internals/audit-pipeline.md §4.1. Without them a batch of large message

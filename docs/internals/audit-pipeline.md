@@ -363,8 +363,8 @@ flowchart LR
   P["nginx (host)<br/>client_max_body_size 32 MiB<br/>per-stage, outside this repo"]:::extBox
   R["OTLP/HTTP receiver<br/>max_request_body_size 32 MiB<br/>confighttp default 20 MiB"]:::hexBox
   B["batch processor<br/>send_batch_size 24<br/>send_batch_max_size 24"]:::hexBox
-  X["kafka exporter<br/>producer.max_message_bytes 8 MiB (pre-compression)<br/>sending_queue bytes / 128 MiB · zstd"]:::hexBox
-  T["topic hexgate.otlp.raw<br/>max.message.bytes 8 MiB (compressed)"]:::redpandaBox
+  X["kafka exporter<br/>producer.max_message_bytes 8 MiB<br/>sending_queue bytes / 128 MiB · no compression"]:::hexBox
+  T["topic hexgate.otlp.raw<br/>max.message.bytes 8 MiB"]:::redpandaBox
   E["span-enricher<br/>max_partition_fetch_bytes 8 MiB"]:::hexBox
   Q["topic hexgate.otlp.dlq<br/>max.message.bytes 8 MiB"]:::redpandaBox
 
@@ -391,7 +391,7 @@ because it is enforced before the collector authenticates the token
 | receiver `http.max_request_body_size` | 32 MiB | confighttp defaults to 20 MiB and rejects the whole POST; the SDK exports ≤ 64 spans (~17 MiB worst case) |
 | `batch.send_batch_size` / `send_batch_max_size` | 24 spans | 24 × 272 KiB = 6.375 MiB, inside the 8 MiB record (down from 512). Decision traffic ships ~20× more records, all small. Both knobs: the processor refuses to start unless `send_batch_max_size >= send_batch_size`, and the max is what splits one oversized incoming request |
 | exporter `producer.max_message_bytes` | 8 MiB | client-side check *before* Redpanda sees the record — raising only the topic changes nothing |
-| exporter `producer.compression` | `zstd` | network and disk only — `max_message_bytes` maps to franz-go's `ProducerBatchMaxBytes`, measured *before* compression, so the hard client ceiling is 8 MiB uncompressed (30 spans). Only the broker's limit sees the compressed batch |
+| exporter `producer.compression` | `none` (configkafka's default) | `max_message_bytes` maps to franz-go's `ProducerBatchMaxBytes`, measured *before* compression, so zstd would buy no headroom — and the enricher's aiokafka has no zstd codec (`cramjam` is absent from `platform/api`'s lock), so a compressed batch would raise out of its poll loop. Enabling compression means shipping the codec and both images together |
 | exporter `sending_queue` | `bytes` / 128 MiB | the default is 1000 *requests*, which was ~500 MiB of decision spans but ~6.2 GiB of message batches |
 | `memory_limiter` | 1024 / 256 MiB | 384 MiB soft would refuse intake against 32 MiB bodies and a 128 MiB queue |
 | nginx `client_max_body_size` on `/v1/traces` | 32 MiB | **outside this repo, set per stage.** Enforced before the collector authenticates, so it is held below the box's `100M` default; was 8 MiB before message logging. See `platform/DEPLOY.md` §3 |
@@ -438,7 +438,8 @@ raw topic only so the two cannot drift apart; it does not need it. `dlq.py`
 quotes an oversized record as a 64 KiB preview (~85 KiB once base64'd), or
 its attributes at 32 KiB — never both in one envelope — so nothing it builds
 approaches even the 1 MiB default. See the record-size budget in §4.1 — this
-is the broker-side half of it, and it is enforced on the *compressed* batch.
+is the broker-side half of it, and it is enforced on the batch as sent —
+which, with the exporter's compression off, is the uncompressed size.
 
 Redpanda is a buffer, not a store: ClickHouse is the system of record, and the
 raw topic only needs to outlive an enricher restart or redeploy. It is

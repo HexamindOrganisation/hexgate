@@ -71,7 +71,7 @@ retry rpk cluster config set auto_create_topics_enabled false --no-confirm \
 # 24 x 272 KiB = 6.375 MiB. The Collector's own producer limit and the
 # enricher's fetch/produce limits are raised to match — see
 # docs/internals/audit-pipeline.md §4.1/§4.2. Note this is a *broker-side*
-# limit on the compressed batch; every client in the path has its own.
+# limit on the batch as sent; every client in the path has its own.
 #
 # The DLQ gets the same value only to keep the two topics from drifting apart.
 # It does not need it: enricher/dlq.py caps an envelope's raw-record preview at
