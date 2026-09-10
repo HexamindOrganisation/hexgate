@@ -13,6 +13,8 @@ next step can wrap it confidently in HTTP 409.
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest_asyncio
 from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -25,6 +27,7 @@ from hexgate_api.main import app
 from hexgate_api.models import Organization, OrganizationMember, User
 from hexgate_api.constants import (
     DEFAULT_ORG_ID,
+    DEFAULT_USER_ID,
     ROLE_ADMIN,
     ROLE_MEMBER,
     ROLE_OWNER,
@@ -32,6 +35,7 @@ from hexgate_api.constants import (
 from hexgate_api.features.members.service import (
     LastOwnerError,
     change_member_role,
+    find_member,
     list_org_members,
     remove_member,
 )
@@ -142,7 +146,13 @@ async def test_create_org_inserts_owner_membership_atomically(
         await s.commit()
         await s.refresh(u)
 
-        org = await create_org(s, name="Acme", slug="acme-corp", owner_user_id=u.id)
+        org = await create_org(
+            s,
+            name="Acme",
+            slug="acme-corp",
+            owner_user_id=u.id,
+            created_by_user_id=u.id,
+        )
 
         # Both rows committed.
         assert org.id
@@ -247,8 +257,12 @@ async def test_list_orgs_returns_role_per_org(session_factory) -> None:
         await s.refresh(u)
 
         # Owner of orgA, member of orgB.
-        org_a = await create_org(s, name="A", slug="org-a", owner_user_id=u.id)
-        org_b = await create_org(s, name="B", slug="org-b", owner_user_id=u.id)
+        org_a = await create_org(
+            s, name="A", slug="org-a", owner_user_id=u.id, created_by_user_id=u.id
+        )
+        org_b = await create_org(
+            s, name="B", slug="org-b", owner_user_id=u.id, created_by_user_id=u.id
+        )
         # Demote u in org_b to member.
         member_b = (
             await s.exec(
@@ -283,8 +297,16 @@ async def test_remove_member_returns_false_when_not_a_member(
     session_factory,
 ) -> None:
     async with session_factory() as s:
-        ok = await remove_member(s, org_id=DEFAULT_ORG_ID, user_id="ghost-uuid")
-        assert ok is False
+        result = await remove_member(
+            s,
+            org_id=DEFAULT_ORG_ID,
+            user_id="ghost-uuid",
+            removed_by_user_id=DEFAULT_USER_ID,
+        )
+        # ``.removed``, not ``result`` -- MemberRemoval is an object, so a bare
+        # truthiness check would pass even on a failed removal.
+        assert result.removed is False
+        assert result.revoked_key_count == 0
 
 
 async def test_remove_member_succeeds_for_existing_membership(
@@ -300,8 +322,13 @@ async def test_remove_member_succeeds_for_existing_membership(
         s.add(OrganizationMember(user_id=u.id, org_id=DEFAULT_ORG_ID, role=ROLE_MEMBER))
         await s.commit()
 
-        ok = await remove_member(s, org_id=DEFAULT_ORG_ID, user_id=u.id)
-        assert ok is True
+        result = await remove_member(
+            s,
+            org_id=DEFAULT_ORG_ID,
+            user_id=u.id,
+            removed_by_user_id=DEFAULT_USER_ID,
+        )
+        assert result.removed is True
         # And the row really is gone.
         rows = (
             await s.exec(
@@ -321,7 +348,12 @@ async def test_remove_member_refuses_last_owner(session_factory) -> None:
 
     async with session_factory() as s:
         with pytest.raises(LastOwnerError):
-            await remove_member(s, org_id=DEFAULT_ORG_ID, user_id=DEFAULT_USER_ID)
+            await remove_member(
+                s,
+                org_id=DEFAULT_ORG_ID,
+                user_id=DEFAULT_USER_ID,
+                removed_by_user_id=DEFAULT_USER_ID,
+            )
 
 
 async def test_remove_member_allows_owner_when_others_exist(
@@ -337,8 +369,13 @@ async def test_remove_member_allows_owner_when_others_exist(
         await s.commit()
 
         # Now there are two owners. Removing the co-owner is fine.
-        ok = await remove_member(s, org_id=DEFAULT_ORG_ID, user_id=u.id)
-        assert ok is True
+        result = await remove_member(
+            s,
+            org_id=DEFAULT_ORG_ID,
+            user_id=u.id,
+            removed_by_user_id=DEFAULT_USER_ID,
+        )
+        assert result.removed is True
 
 
 # ---------------------------------------------------------------------------
@@ -361,6 +398,7 @@ async def test_change_member_role_updates_existing_row(session_factory) -> None:
             user_id=u.id,
             new_role=ROLE_ADMIN,
             caller_role=ROLE_OWNER,
+            updated_by_user_id=DEFAULT_USER_ID,
         )
         assert member is not None
         assert member.role == ROLE_ADMIN
@@ -382,6 +420,7 @@ async def test_change_member_role_refuses_demoting_last_owner(
                 user_id=DEFAULT_USER_ID,
                 new_role=ROLE_MEMBER,
                 caller_role=ROLE_OWNER,
+                updated_by_user_id=DEFAULT_USER_ID,
             )
 
 
@@ -403,6 +442,7 @@ async def test_change_member_role_allows_demoting_when_others_owners(
             user_id=u.id,
             new_role=ROLE_MEMBER,
             caller_role=ROLE_OWNER,
+            updated_by_user_id=DEFAULT_USER_ID,
         )
         assert member is not None and member.role == ROLE_MEMBER
 
@@ -1049,3 +1089,88 @@ def test_delete_member_404_for_unknown_user(client: TestClient) -> None:
 
     r = client.delete(f"/v1/orgs/{org_id}/members/00000000-0000-0000-0000-deadbeef0000")
     assert r.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Actor trail (issue #160) — who created an org / membership, who last touched it
+# ---------------------------------------------------------------------------
+
+
+def _read_org(session_factory, org_id: str) -> Organization:
+    async def _get() -> Organization:
+        async with session_factory() as s:
+            row = await s.get(Organization, org_id)
+            assert row is not None
+            return row
+
+    return asyncio.get_event_loop().run_until_complete(_get())
+
+
+def _read_membership(session_factory, *, org_id: str, user_id: str):
+    async def _get():
+        async with session_factory() as s:
+            return await find_member(s, org_id=org_id, user_id=user_id)
+
+    return asyncio.get_event_loop().run_until_complete(_get())
+
+
+def test_create_org_stamps_the_caller_on_the_org_and_the_membership(
+    client: TestClient, session_factory
+) -> None:
+    _signup_and_login(client, "actor-create@example.com", "correcthorsebattery")
+    me_id = client.get("/v1/users/me").json()["id"]
+
+    org_id = client.post("/v1/orgs", json={"name": "Stamped"}).json()["id"]
+
+    assert _read_org(session_factory, org_id).created_by_user_id == me_id
+    # The owner membership goes in the same commit, so it carries the actor too.
+    assert (
+        _read_membership(
+            session_factory, org_id=org_id, user_id=me_id
+        ).created_by_user_id
+        == me_id
+    )
+
+
+def test_signup_default_org_is_attributed_to_the_registering_user(
+    client: TestClient, session_factory
+) -> None:
+    """Unlike the first-boot seed (which writes NULL), a personal default org
+    genuinely has a human behind it — the person who just registered."""
+    _signup_and_login(client, "actor-signup@example.com", "correcthorsebattery")
+    me_id = client.get("/v1/users/me").json()["id"]
+
+    org_id = client.get("/v1/orgs").json()[0]["id"]
+
+    assert _read_org(session_factory, org_id).created_by_user_id == me_id
+
+
+def test_update_org_stamps_the_updater_and_moves_updated_at(
+    client: TestClient, session_factory
+) -> None:
+    _signup_and_login(client, "actor-patch@example.com", "correcthorsebattery")
+    me_id = client.get("/v1/users/me").json()["id"]
+    org_id = client.get("/v1/orgs").json()[0]["id"]
+    before = _read_org(session_factory, org_id)
+    assert before.updated_by_user_id is None
+
+    assert (
+        client.patch(f"/v1/orgs/{org_id}", json={"name": "Renamed"}).status_code == 200
+    )
+
+    after = _read_org(session_factory, org_id)
+    assert after.updated_by_user_id == me_id
+    assert after.updated_at > before.updated_at
+
+
+def test_seed_rows_carry_no_actor(session_factory) -> None:
+    """The first-boot seed has no human actor, and the Organization is inserted
+    before the User in the same commit — so attributing seed rows would rest on
+    the unit of work ordering inserts by FK dependency. NULL is the answer."""
+    org = _read_org(session_factory, DEFAULT_ORG_ID)
+    assert org.created_by_user_id is None
+    assert org.updated_by_user_id is None
+    membership = _read_membership(
+        session_factory, org_id=DEFAULT_ORG_ID, user_id=DEFAULT_USER_ID
+    )
+    assert membership.created_by_user_id is None

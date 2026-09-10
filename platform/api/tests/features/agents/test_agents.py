@@ -21,11 +21,12 @@ import yaml
 from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
-from sqlmodel import SQLModel
+from sqlmodel import SQLModel, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from hexgate_api.core import keystore as keystore_mod
 from hexgate_api.main import app
+from hexgate_api.models import Agent, AgentVersion
 from hexgate_api.seeds.defaults import ensure_default_project
 from hexgate_api.constants import DEFAULT_PROJECT_ID, DEFAULT_USER_ID
 
@@ -1173,3 +1174,179 @@ def test_require_project_accepts_valid_signed_token(
         headers={"Authorization": f"Bearer {token}"},
     )
     assert r.status_code == 201, r.text
+
+
+# ---------------------------------------------------------------------------
+# Actor trail (issue #160)
+#
+# Two writers land here: the cookie-authed PUT (a human) and the SDK's
+# bearer-authed register (a token, bridged back to a person through
+# ``ApiKey.owner_user_id``).
+# ---------------------------------------------------------------------------
+
+
+def _mint_owned_token(session_factory, *, owner_user_id: str | None) -> str:
+    """Mint a key for the seed project with a given owner (or none)."""
+    import asyncio
+
+    from hexgate_api.features.tokens.service import mint_api_key
+
+    async def _mint() -> str:
+        async with session_factory() as session:
+            _row, full = await mint_api_key(
+                session,
+                DEFAULT_PROJECT_ID,
+                name=f"actor-{owner_user_id or 'system'}",
+                scopes=["read"],
+                env="live",
+                signing_key_bytes=keystore_mod.keystore._private_key_bytes(),
+                created_by_user_id=owner_user_id,
+                owner_user_id=owner_user_id,
+            )
+            await session.commit()
+            return full
+
+    return asyncio.get_event_loop().run_until_complete(_mint())
+
+
+def _read_agent(session_factory, *, project_id: str, name: str) -> Agent:
+    import asyncio
+
+    from hexgate_api.features.agents.service import get_agent
+
+    async def _get() -> Agent:
+        async with session_factory() as session:
+            row = await get_agent(session, project_id, name)
+            assert row is not None
+            return row
+
+    return asyncio.get_event_loop().run_until_complete(_get())
+
+
+def _read_latest_version(session_factory, agent_id: str) -> AgentVersion:
+    import asyncio
+
+    async def _get() -> AgentVersion:
+        async with session_factory() as session:
+            rows = (
+                await session.exec(
+                    select(AgentVersion)
+                    .where(AgentVersion.agent_id == agent_id)
+                    .order_by(AgentVersion.version.desc())
+                )
+            ).all()
+            assert rows
+            return rows[0]
+
+    return asyncio.get_event_loop().run_until_complete(_get())
+
+
+def _manifest(name: str) -> dict:
+    return {
+        "manifest": {
+            "name": name,
+            "framework": "hexgate",
+            "tools": [
+                {
+                    "name": "ping",
+                    "input_schema": {
+                        "properties": {"q": {"title": "Q", "type": "string"}},
+                        "required": ["q"],
+                    },
+                }
+            ],
+        }
+    }
+
+
+def test_put_agent_stamps_the_editing_user(client: TestClient, session_factory) -> None:
+    before = _read_agent(session_factory, project_id=DEFAULT_PROJECT_ID, name="default")
+    assert before.updated_by_user_id is None
+
+    r = client.put(
+        f"/v1/projects/{DEFAULT_PROJECT_ID}/agents/default",
+        json={"system_md": "edited by a human"},
+        headers={"X-Dev-User": DEFAULT_USER_ID},
+    )
+    assert r.status_code == 200, r.text
+
+    after = _read_agent(session_factory, project_id=DEFAULT_PROJECT_ID, name="default")
+    assert after.updated_by_user_id == DEFAULT_USER_ID
+    assert after.updated_at > before.updated_at
+
+
+def test_seeded_agents_carry_no_actor(session_factory) -> None:
+    """``ensure_seeded_agents`` is a system write — NULL, not a sentinel."""
+    row = _read_agent(session_factory, project_id=DEFAULT_PROJECT_ID, name="default")
+    assert row.created_by_user_id is None
+
+
+def test_register_agent_stamps_the_keys_owner(
+    client: TestClient, session_factory
+) -> None:
+    """The bearer path. ``require_project_actor`` bridges the token back to a
+    person via ``ApiKey.owner_user_id``, which is the only way an SDK write can
+    be attributed at all."""
+    token = _mint_owned_token(session_factory, owner_user_id=DEFAULT_USER_ID)
+
+    r = client.post(
+        "/v1/agents",
+        json=_manifest("owned_agent"),
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert r.status_code == 201, r.text
+
+    agent = _read_agent(
+        session_factory, project_id=DEFAULT_PROJECT_ID, name="owned_agent"
+    )
+    assert agent.created_by_user_id == DEFAULT_USER_ID
+    version = _read_latest_version(session_factory, agent.id)
+    assert version.created_by_user_id == DEFAULT_USER_ID
+
+
+def test_register_agent_with_an_ownerless_key_stamps_null(
+    client: TestClient, session_factory
+) -> None:
+    """A key minted before #160, or by ``deploy/provision.py``, has no owner.
+    That must record NULL and must not 500 — NULL is the intended value, not a
+    gap to fill with a guess."""
+    token = _mint_owned_token(session_factory, owner_user_id=None)
+
+    r = client.post(
+        "/v1/agents",
+        json=_manifest("unowned_agent"),
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert r.status_code == 201, r.text
+
+    agent = _read_agent(
+        session_factory, project_id=DEFAULT_PROJECT_ID, name="unowned_agent"
+    )
+    assert agent.created_by_user_id is None
+    assert _read_latest_version(session_factory, agent.id).created_by_user_id is None
+
+
+def test_re_register_does_not_rewrite_the_original_creator(
+    client: TestClient, session_factory
+) -> None:
+    """An agent's creator is whoever first registered it."""
+    first = _mint_owned_token(session_factory, owner_user_id=DEFAULT_USER_ID)
+    client.post(
+        "/v1/agents",
+        json=_manifest("stable_creator"),
+        headers={"Authorization": f"Bearer {first}"},
+    )
+    second = _mint_owned_token(session_factory, owner_user_id=None)
+
+    # Same name, different manifest → a new version under the same Agent.
+    payload = _manifest("stable_creator")
+    payload["manifest"]["description"] = "changed"
+    r = client.post(
+        "/v1/agents", json=payload, headers={"Authorization": f"Bearer {second}"}
+    )
+    assert r.status_code in (200, 201), r.text
+
+    agent = _read_agent(
+        session_factory, project_id=DEFAULT_PROJECT_ID, name="stable_creator"
+    )
+    assert agent.created_by_user_id == DEFAULT_USER_ID

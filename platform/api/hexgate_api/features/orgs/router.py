@@ -7,7 +7,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from hexgate_api.core.db import get_session
 from hexgate_api.deps.identity import require_user
 from hexgate_api.deps.org import require_org_admin, require_org_membership
-from hexgate_api.models import Organization, OrganizationMember, User
+from hexgate_api.models import Organization, OrganizationMember, User, utcnow
 from hexgate_api.schemas import OrgCreate, OrgRead, OrgUpdate, OrgWithRole
 
 router = APIRouter()
@@ -93,7 +93,13 @@ async def api_create_org(
         # numbered or hex-suffixed variant.
         slug = await _generate_unique_org_slug(session, _email_to_slug_base(body.name))
 
-    org = await create_org(session, name=body.name, slug=slug, owner_user_id=user.id)
+    org = await create_org(
+        session,
+        name=body.name,
+        slug=slug,
+        owner_user_id=user.id,
+        created_by_user_id=user.id,
+    )
     return _org_read(org)
 
 
@@ -124,7 +130,7 @@ async def api_update_org(
     FK points at (the slug is a URL helper, mutable on purpose).
     Returns 409 if the new slug collides with another org's.
     """
-    _, member = membership
+    caller, member = membership
     org = await session.get(Organization, member.org_id)
     assert org is not None
 
@@ -142,6 +148,12 @@ async def api_update_org(
 
     if body.name is not None:
         org.name = body.name
+
+    # Stamped inline because this handler owns the mutation (there is no
+    # orgs.service.update_org); extracting it would put a refactor of the
+    # slug-collision logic inside an audit change.
+    org.updated_at = utcnow()
+    org.updated_by_user_id = caller.id
 
     session.add(org)
     await session.commit()

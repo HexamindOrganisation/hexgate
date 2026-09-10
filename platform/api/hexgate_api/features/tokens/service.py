@@ -4,14 +4,75 @@ Revocation is a soft delete: :func:`revoke_api_key` stamps ``revoked_at``, masks
 the secret, and the row stays as the audit record. Every read below therefore
 filters on ``revoked_at IS NULL`` -- without that, revocation would silently stop
 working on every bearer surface (see :func:`find_token_by_secret`).
+
+A key carries two actors (issue #160): ``created_by_user_id``, who minted it,
+and ``owner_user_id``, whose key it is. They differ when an admin mints on a
+teammate's behalf, and the owner is what :func:`revoke_owned_keys` sweeps when
+that teammate leaves the org.
 """
 
 from sqlmodel import select, update
 from sqlmodel.ext.asyncio.session import AsyncSession
 
+from hexgate_api.constants import ROLE_ADMIN, ROLE_OWNER
 from hexgate_api.core.biscuits import MintRequest, make_envelope, mint_token
 from hexgate_api.core.ids import new_id
-from hexgate_api.models import ApiKey, utcnow
+from hexgate_api.models import ApiKey, Project, User, utcnow
+
+
+class MintDelegationError(Exception):
+    """The caller may not mint a key owned by this user. Routes -> 403."""
+
+
+async def resolve_mint_owner(
+    session: AsyncSession,
+    *,
+    project_id: str,
+    caller: User,
+    requested_owner_user_id: str | None,
+) -> str:
+    """Decide whose key a mint creates, refusing a delegation the caller may not make.
+
+    Returns the caller's own id when no owner is requested, or when the request
+    names the caller — passing your own id explicitly is not delegation, so a
+    plain member can still mint their own keys.
+
+    Minting *for someone else* is a management action, gated on two conditions:
+
+      * the caller is ``owner`` or ``admin`` of the project's org. The mint
+        route gates only on org membership (any role), so this check lives here
+        rather than in the dep — swapping the route to ``require_project_admin``
+        would stop plain members minting for themselves.
+      * the requested owner is a member of that same org. Otherwise a key could
+        be parked on someone with no access to the project, and the offboarding
+        sweep would never reach it.
+
+    Both failures raise :class:`MintDelegationError`.
+    """
+    if requested_owner_user_id is None or requested_owner_user_id == caller.id:
+        return caller.id
+
+    from hexgate_api.features.members.service import find_member
+
+    project = await session.get(Project, project_id)
+    # require_org_member has already 404'd an unknown project before this runs.
+    assert project is not None, "resolve_mint_owner called for an unknown project"
+
+    caller_member = await find_member(session, org_id=project.org_id, user_id=caller.id)
+    if caller_member is None or caller_member.role not in {ROLE_OWNER, ROLE_ADMIN}:
+        raise MintDelegationError(
+            "only admins / owners can mint an API key for another member"
+        )
+    if (
+        await find_member(
+            session, org_id=project.org_id, user_id=requested_owner_user_id
+        )
+        is None
+    ):
+        raise MintDelegationError(
+            "the requested owner is not a member of this project's organization"
+        )
+    return requested_owner_user_id
 
 
 async def mint_api_key(
@@ -22,6 +83,8 @@ async def mint_api_key(
     env: str,
     *,
     signing_key_bytes: bytes,
+    created_by_user_id: str | None = None,
+    owner_user_id: str | None = None,
 ) -> tuple[ApiKey, str]:
     """Create a new API key, signed as a Biscuit by the platform's root key.
 
@@ -36,6 +99,12 @@ async def mint_api_key(
     Returns the persisted row + the full token string (the b64 form is what
     the operator copies out of the dashboard — shown once, never stored
     in the row outside of the ``secret`` column for revocation lookup).
+
+    Both actors default to ``None`` for system mints with no human caller
+    (``deploy/provision.py``) and for test helpers that only need a usable key.
+    A NULL owner is deliberately invisible to :func:`revoke_owned_keys` — a
+    provisioning key belongs to no person, so nobody's departure should kill it.
+    The mint *route* always passes both.
     """
     # Same id for the row's primary key and for the token_id fact signed into
     # the biscuit below. The OTLP Collector looks a token up in its cache by
@@ -62,6 +131,8 @@ async def mint_api_key(
         prefix=prefix,
         secret=full_token,
         scopes_csv=",".join(scopes),
+        created_by_user_id=created_by_user_id,
+        owner_user_id=owner_user_id,
     )
     session.add(token)
     await session.commit()
@@ -104,6 +175,38 @@ async def find_token_by_secret(session: AsyncSession, secret: str) -> ApiKey | N
     return token
 
 
+def _revoke_stmt(token: ApiKey, revoked_by_user_id: str):
+    """The conditional UPDATE that soft-revokes one key.
+
+    ``revoked_at IS NULL`` lives in the WHERE clause rather than in a check on
+    a prior read: two concurrent revokes would both clear a read-then-check,
+    and the second would overwrite the first's actor and timestamp -- losing
+    the audit fact the soft delete exists to record. ``rowcount`` is therefore
+    what decides whether *this* call was the one that revoked.
+
+    ``token`` is read first only to mask its secret. The audit row keeps
+    who/when, not a usable credential: retaining the full envelope forever
+    would turn any DB dump -- or a rollback to code without the revocation
+    filter -- into live keys.
+
+    Shared by :func:`revoke_api_key` (one key, commits) and
+    :func:`revoke_owned_keys` (offboarding, does not commit) so both inherit
+    the same guard and the same masking.
+    """
+    return (
+        update(ApiKey)
+        .where(
+            ApiKey.id == token.id,
+            ApiKey.revoked_at.is_(None),  # type: ignore[union-attr]
+        )
+        .values(
+            revoked_at=utcnow(),
+            revoked_by_user_id=revoked_by_user_id,
+            secret=mask_secret(token.secret),
+        )
+    )
+
+
 async def revoke_api_key(
     session: AsyncSession,
     project_id: str,
@@ -118,36 +221,50 @@ async def revoke_api_key(
     timestamp. The three cases share one guard because they share one response:
     distinguishing them here invites distinguishing them in the reply, which
     would leak whether a token id exists.
-
-    ``revoked_at IS NULL`` is part of the UPDATE's WHERE clause rather than a
-    check on a prior read: two concurrent revokes would both clear a
-    read-then-check, and the second would overwrite the first's actor and
-    timestamp -- losing the audit fact the soft delete exists to record. The
-    row is read first only to mask its secret; the update is the guard, and
-    ``rowcount`` is what decides whether this call was the one that revoked.
     """
     token = await session.get(ApiKey, token_id)
     if token is None or token.project_id != project_id:
         return False
-    stmt = (
-        update(ApiKey)
-        .where(
-            ApiKey.id == token_id,
-            ApiKey.project_id == project_id,
-            ApiKey.revoked_at.is_(None),  # type: ignore[union-attr]
-        )
-        .values(
-            revoked_at=utcnow(),
-            revoked_by_user_id=revoked_by_user_id,
-            # The audit row keeps who/when, not a usable credential: retaining
-            # the full envelope forever would turn any DB dump -- or a rollback
-            # to code without the revocation filter -- into live keys.
-            secret=mask_secret(token.secret),
-        )
-    )
-    result = await session.exec(stmt)
+    result = await session.exec(_revoke_stmt(token, revoked_by_user_id))
     await session.commit()
     return result.rowcount == 1
+
+
+async def revoke_owned_keys(
+    session: AsyncSession,
+    *,
+    org_id: str,
+    owner_user_id: str,
+    revoked_by_user_id: str,
+) -> int:
+    """Soft-revoke every live key owned by ``owner_user_id`` across ``org_id``'s
+    projects. Returns how many this call actually revoked.
+
+    Stamps in the CALLER'S transaction and never commits, so offboarding is
+    atomic with the membership delete: a revoke that landed while the removal
+    was later refused (``LastOwnerError``) would kill the keys of someone who
+    stays. Each row still goes through :func:`_revoke_stmt`, so a concurrent
+    single-key revoke keeps its own actor and timestamp.
+
+    Keys with no recorded owner are untouched -- a NULL owner is a system mint
+    (``deploy/provision.py``) or a key minted before issue #160, and revoking
+    those because someone unrelated left the org would be an outage, not an
+    audit fix.
+    """
+    stmt = (
+        select(ApiKey)
+        .join(Project, Project.id == ApiKey.project_id)  # type: ignore[arg-type]
+        .where(
+            Project.org_id == org_id,
+            ApiKey.owner_user_id == owner_user_id,
+            ApiKey.revoked_at.is_(None),  # type: ignore[union-attr]
+        )
+    )
+    revoked = 0
+    for token in (await session.exec(stmt)).all():
+        result = await session.exec(_revoke_stmt(token, revoked_by_user_id))
+        revoked += result.rowcount
+    return revoked
 
 
 def mask_secret(full: str) -> str:

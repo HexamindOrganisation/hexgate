@@ -250,9 +250,28 @@ class TokenMintRequest(BaseModel):
     name: str = Field(min_length=1, max_length=64)
     scopes: list[str] = Field(default_factory=lambda: ["mint_user_token", "read_audit"])
     env: str = Field(default="test", pattern="^(test|live)$")
+    # Whose key this is. Defaults to the caller; admins / owners may mint on a
+    # teammate's behalf, which is what makes the offboarding sweep meaningful
+    # (removing a member revokes the keys they own). 403 if the caller isn't an
+    # admin/owner or the target isn't a member of the project's org.
+    owner_user_id: Optional[str] = Field(default=None, max_length=64)
 
 
-class TokenListItem(BaseModel):
+class TokenActorFields(BaseModel):
+    """The two actors on an API key, with emails resolved server-side.
+
+    Same shape as :class:`BanRead`'s ``created_by_user_id`` / ``created_by_email``
+    pair, and for the same reason — the dashboard never looks users up itself.
+    All four are ``None`` for a key minted before issue #160 or by a system path.
+    """
+
+    created_by_user_id: Optional[str] = None
+    created_by_email: Optional[str] = None
+    owner_user_id: Optional[str] = None
+    owner_email: Optional[str] = None
+
+
+class TokenListItem(TokenActorFields):
     id: str
     name: str
     masked: str  # e.g., "fty_live_8F3d…k29P"
@@ -261,7 +280,7 @@ class TokenListItem(BaseModel):
     last_used_at: Optional[datetime]
 
 
-class TokenMintResponse(BaseModel):
+class TokenMintResponse(TokenActorFields):
     id: str
     name: str
     full: str  # only returned on mint

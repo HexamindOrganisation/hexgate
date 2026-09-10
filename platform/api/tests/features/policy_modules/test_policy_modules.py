@@ -9,6 +9,7 @@ test_projects.py.
 
 from __future__ import annotations
 
+import asyncio
 import shutil
 
 import pytest
@@ -16,12 +17,19 @@ import pytest_asyncio
 from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
-from sqlmodel import SQLModel
+from sqlmodel import SQLModel, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
+from hexgate_api.constants import DEFAULT_USER_ID
 from hexgate_api.core import keystore as keystore_mod
 from hexgate_api.main import app
+from hexgate_api.models import PolicyModule, RoleBinding
 from hexgate_api.seeds.defaults import ensure_default_project
+
+# Actor for the service-level store writes below. The store requires one (issue
+# #160) so a route can't forget to pass it; these tests seed via
+# ``ensure_default_project``, so the default admin is the natural stand-in.
+ACTOR = DEFAULT_USER_ID
 
 BOUNDARY = (
     "default_policy: { mode: allow }\n"
@@ -294,7 +302,9 @@ async def test_is_modular_flips_on_first_role_binding(session_factory):
     async with session_factory() as s:
         proj, _ = await _fresh_project_with_agent(s)
         assert await pm.is_modular(s, proj.id) is False
-        await pm.set_roles(s, project_id=proj.id, roles={"default": []})
+        await pm.set_roles(
+            s, project_id=proj.id, roles={"default": []}, created_by_user_id=ACTOR
+        )
         assert await pm.is_modular(s, proj.id) is True
 
 
@@ -311,11 +321,13 @@ async def test_resolved_policy_yaml_is_inline_roles_shape(session_factory):
             tier="capability",
             path="read_only",
             content=READ_ONLY,
+            actor_user_id=ACTOR,
         )
         await pm.set_roles(
             s,
             project_id=proj.id,
             roles={"default": ["read_only"], "billing": ["read_only"]},
+            created_by_user_id=ACTOR,
         )
         text = await pm.resolved_policy_yaml(s, proj.id)
 
@@ -349,8 +361,14 @@ async def test_bundle_for_agent_routes_by_mode(session_factory, monkeypatch):
             tier="capability",
             path="read_only",
             content=READ_ONLY,
+            actor_user_id=ACTOR,
         )
-        await pm.set_roles(s, project_id=proj.id, roles={"default": ["read_only"]})
+        await pm.set_roles(
+            s,
+            project_id=proj.id,
+            roles={"default": ["read_only"]},
+            created_by_user_id=ACTOR,
+        )
         await asvc.bundle_for_agent(s, agent, _dummy_sign)
         assert "roles:" in captured[-1]
         assert "view_orders" in captured[-1]
@@ -384,8 +402,14 @@ async def test_recompile_project_fans_out_to_every_agent(session_factory, monkey
             tier="capability",
             path="read_only",
             content=READ_ONLY,
+            actor_user_id=ACTOR,
         )
-        await pm.set_roles(s, project_id=proj.id, roles={"default": ["read_only"]})
+        await pm.set_roles(
+            s,
+            project_id=proj.id,
+            roles={"default": ["read_only"]},
+            created_by_user_id=ACTOR,
+        )
 
         n = await asvc.recompile_project(s, proj.id, _dummy_sign)
         assert n == 2
@@ -403,7 +427,12 @@ async def test_recompile_project_noop_leaves_bundles_when_unresolvable(session_f
             s, bundle=(b"OLD", "OLDMANI", b"OLDSIG")
         )
         # role imports a capability that doesn't exist -> project won't resolve
-        await pm.set_roles(s, project_id=proj.id, roles={"default": ["nonexistent"]})
+        await pm.set_roles(
+            s,
+            project_id=proj.id,
+            roles={"default": ["nonexistent"]},
+            created_by_user_id=ACTOR,
+        )
 
         n = await asvc.recompile_project(s, proj.id, _dummy_sign)
         assert n is None  # modular but couldn't build -> signal "not built"
@@ -451,7 +480,12 @@ async def test_update_agent_does_not_blank_a_modular_bundle_when_unresolvable(
         proj, agent = await _fresh_project_with_agent(
             s, bundle=(b"LIVE", "MANI", b"SIG")
         )
-        await pm.set_roles(s, project_id=proj.id, roles={"default": ["nonexistent"]})
+        await pm.set_roles(
+            s,
+            project_id=proj.id,
+            roles={"default": ["nonexistent"]},
+            created_by_user_id=ACTOR,
+        )
 
         updated = await asvc.update_agent(
             s, proj.id, agent.name, system_md="edited", sign=_dummy_sign
@@ -479,12 +513,20 @@ async def test_modular_to_classic_transition_recompiles_from_policy_yaml(
             tier="capability",
             path="read_only",
             content=READ_ONLY,
+            actor_user_id=ACTOR,
         )
-        await pm.set_roles(s, project_id=proj.id, roles={"default": ["read_only"]})
+        await pm.set_roles(
+            s,
+            project_id=proj.id,
+            roles={"default": ["read_only"]},
+            created_by_user_id=ACTOR,
+        )
         assert await asvc.recompile_project(s, proj.id, _dummy_sign) == 1
         assert "roles:" in captured[-1]  # modular: compiled from resolved YAML
 
-        await pm.set_roles(s, project_id=proj.id, roles={})  # unbind -> classic
+        await pm.set_roles(
+            s, project_id=proj.id, roles={}, created_by_user_id=ACTOR
+        )  # unbind -> classic
         assert await pm.is_modular(s, proj.id) is False
         assert await asvc.recompile_project(s, proj.id, _dummy_sign) == 1
         assert captured[-1] == "version: 1\n# classic\n"  # back to policy_yaml
@@ -505,8 +547,14 @@ async def test_modular_bundle_matches_compile_of_resolved_yaml(session_factory, 
             tier="capability",
             path="read_only",
             content=READ_ONLY,
+            actor_user_id=ACTOR,
         )
-        await pm.set_roles(s, project_id=proj.id, roles={"default": ["read_only"]})
+        await pm.set_roles(
+            s,
+            project_id=proj.id,
+            roles={"default": ["read_only"]},
+            created_by_user_id=ACTOR,
+        )
 
         got = await asvc.bundle_for_agent(s, agent, sign)
         expected = compile_bundle(await pm.resolved_policy_yaml(s, proj.id), sign)
@@ -696,8 +744,14 @@ async def test_register_into_modular_project_seeds_deny_all_fallback(
             tier="capability",
             path="read_only",
             content=READ_ONLY,
+            actor_user_id=ACTOR,
         )
-        await pm.set_roles(s, project_id=proj.id, roles={"default": ["read_only"]})
+        await pm.set_roles(
+            s,
+            project_id=proj.id,
+            roles={"default": ["read_only"]},
+            created_by_user_id=ACTOR,
+        )
 
         manifest = AgentManifest(
             name="newbot",
@@ -900,9 +954,15 @@ async def test_recompile_builds_distinct_bundles_per_agent(
             tier="capability",
             path="read_only",
             content=READ_ONLY,
+            actor_user_id=ACTOR,
         )
         await pm.upsert_module(
-            s, project_id=proj.id, tier="capability", path="payments", content=PAYMENTS
+            s,
+            project_id=proj.id,
+            tier="capability",
+            path="payments",
+            content=PAYMENTS,
+            actor_user_id=ACTOR,
         )
         await pm.set_roles(
             s,
@@ -913,6 +973,7 @@ async def test_recompile_builds_distinct_bundles_per_agent(
                     "triage_bot": ["read_only"],
                 }
             },
+            created_by_user_id=ACTOR,
         )
 
         n = await asvc.recompile_project(s, proj.id, _dummy_sign)
@@ -971,6 +1032,161 @@ async def test_resolves_false_on_unparseable_stored_module(session_factory) -> N
                 content_hash="x",
             )
         )
-        await pm.set_roles(s, project_id=proj.id, roles={"default": ["broken"]})
+        await pm.set_roles(
+            s,
+            project_id=proj.id,
+            roles={"default": ["broken"]},
+            created_by_user_id=ACTOR,
+        )
         await s.commit()
         assert await pm.resolves(s, proj.id) is False  # must not raise
+
+
+# ---------------------------------------------------------------------------
+# Actor trail (issue #160)
+#
+# ``policy_module`` is edited in place, so it carries both halves.
+# ``role_binding`` is replaced wholesale by every ``set_roles``, so its
+# ``created_by_user_id`` IS the last writer and it has no update pair.
+# ---------------------------------------------------------------------------
+
+
+def _module_row(session_factory, project_id: str, tier: str, path: str) -> PolicyModule:
+    async def _get() -> PolicyModule:
+        async with session_factory() as s:
+            row = (
+                await s.exec(
+                    select(PolicyModule).where(
+                        PolicyModule.project_id == project_id,
+                        PolicyModule.tier == tier,
+                        PolicyModule.path == path,
+                    )
+                )
+            ).first()
+            assert row is not None
+            return row
+
+    return asyncio.get_event_loop().run_until_complete(_get())
+
+
+def _role_rows(session_factory, project_id: str) -> list[RoleBinding]:
+    async def _get() -> list[RoleBinding]:
+        async with session_factory() as s:
+            return list(
+                (
+                    await s.exec(
+                        select(RoleBinding).where(RoleBinding.project_id == project_id)
+                    )
+                ).all()
+            )
+
+    return asyncio.get_event_loop().run_until_complete(_get())
+
+
+def test_put_module_stamps_creator_then_updater(
+    client: TestClient, session_factory
+) -> None:
+    pid = _project(client)
+    me_id = client.get("/v1/users/me").json()["id"]
+
+    _put_module(client, pid, "capability", "read_only", READ_ONLY)
+    created = _module_row(session_factory, pid, "capability", "read_only")
+    assert created.created_by_user_id == me_id
+    assert created.updated_by_user_id is None
+
+    # A second PUT is a replace, not a create.
+    _put_module(client, pid, "capability", "read_only", PAYMENTS)
+    updated = _module_row(session_factory, pid, "capability", "read_only")
+    assert updated.created_by_user_id == me_id  # creator preserved
+    assert updated.updated_by_user_id == me_id
+    assert updated.updated_at > created.updated_at
+
+
+def test_set_policy_roles_stamps_the_caller_on_the_fresh_rows(
+    client: TestClient, session_factory
+) -> None:
+    pid = _project(client)
+    me_id = client.get("/v1/users/me").json()["id"]
+    _put_module(client, pid, "capability", "read_only", READ_ONLY)
+
+    r = client.put(
+        f"/v1/projects/{pid}/policy-roles",
+        json={"roles": {"default": ["read_only"]}},
+    )
+    assert r.status_code == 200, r.text
+
+    rows = _role_rows(session_factory, pid)
+    assert [row.role for row in rows] == ["default"]
+    assert rows[0].created_by_user_id == me_id
+    assert rows[0].created_at is not None
+
+
+def test_idempotent_role_resave_leaves_the_rows_untouched(
+    client: TestClient, session_factory
+) -> None:
+    """An order-insensitive no-op PUT short-circuits before ``set_roles``, so it
+    must not replace the rows (which would reset ``created_at`` and hide who
+    really last changed the bindings)."""
+    pid = _project(client)
+    _put_module(client, pid, "capability", "read_only", READ_ONLY)
+    body = {"roles": {"default": ["read_only"]}}
+    assert client.put(f"/v1/projects/{pid}/policy-roles", json=body).status_code == 200
+    before = _role_rows(session_factory, pid)[0]
+
+    assert client.put(f"/v1/projects/{pid}/policy-roles", json=body).status_code == 200
+
+    after = _role_rows(session_factory, pid)[0]
+    assert after.id == before.id
+    assert after.created_at == before.created_at
+
+
+async def test_recompile_does_not_touch_the_agents_authored_trail(
+    session_factory,
+) -> None:
+    """A bundle rebuild is a derived artifact, not an authored edit.
+
+    ``recompile_project`` fans out over a project's agents whenever a policy
+    module or role binding changes. If it stamped ``updated_by_user_id``, every
+    agent's real author would be replaced by whoever last edited a shared
+    module — and ``updated_at`` would move on a recompile nobody performed,
+    which the dashboard shows as an edit.
+    """
+    from hexgate_api.features.agents import service as asvc
+    from hexgate_api.features.agents.service import update_agent
+    from hexgate_api.features.policy_modules import service as pm
+
+    async with session_factory() as s:
+        proj, agent = await _fresh_project_with_agent(s, policy_yaml="version: 1\n")
+        # A human edits the agent, so there is a real trail to preserve.
+        await update_agent(
+            s,
+            proj.id,
+            agent.name,
+            system_md="authored",
+            updated_by_user_id=ACTOR,
+        )
+        authored = await asvc.get_agent(s, proj.id, agent.name)
+        authored_at, authored_by = authored.updated_at, authored.updated_by_user_id
+        assert authored_by == ACTOR
+
+        # Now make the project modular and recompile every agent in it.
+        await pm.upsert_module(
+            s,
+            project_id=proj.id,
+            tier="capability",
+            path="read_only",
+            content=READ_ONLY,
+            actor_user_id=ACTOR,
+        )
+        await pm.set_roles(
+            s,
+            project_id=proj.id,
+            roles={"default": ["read_only"]},
+            created_by_user_id=ACTOR,
+        )
+        await asvc.recompile_project(s, proj.id, _dummy_sign)
+
+        after = await asvc.get_agent(s, proj.id, agent.name)
+
+    assert after.updated_at == authored_at
+    assert after.updated_by_user_id == authored_by

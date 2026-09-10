@@ -96,11 +96,12 @@ async def api_put_policy_module(
     tier: str,
     path: str,
     body: PolicyModuleWrite,
-    _membership: tuple[User, OrganizationMember] = Depends(require_project_admin),
+    membership: tuple[User, OrganizationMember] = Depends(require_project_admin),
     session: AsyncSession = Depends(get_session),
 ) -> PolicyModuleRead:
     """Create or replace one module. 422 if the tier is unknown or the content
     is not a valid policy."""
+    caller, _member = membership
     # Serialize the write + recompile per project so overlapping edits can't
     # commit bundles out of order (see core.locks).
     async with project_lock(project_id):
@@ -139,6 +140,7 @@ async def api_put_policy_module(
                 tier=tier,
                 path=path,
                 content=body.content,
+                actor_user_id=caller.id,
             )
         except service.InvalidModuleError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -205,9 +207,10 @@ async def api_get_policy_roles(
 async def api_set_policy_roles(
     project_id: str,
     body: RoleBindingsWrite,
-    _membership: tuple[User, OrganizationMember] = Depends(require_project_admin),
+    membership: tuple[User, OrganizationMember] = Depends(require_project_admin),
     session: AsyncSession = Depends(get_session),
 ) -> RoleBindingsRead:
+    caller, _member = membership
     # Hold the project lock across read-before → write → recompile so `before`
     # can't go stale under a concurrent PUT (comparing a pre-write snapshot
     # outside the lock could wrongly skip a needed recompile). See core.locks.
@@ -238,7 +241,12 @@ async def api_set_policy_roles(
                 ),
             )
 
-        roles = await service.set_roles(session, project_id=project_id, roles=proposed)
+        roles = await service.set_roles(
+            session,
+            project_id=project_id,
+            roles=proposed,
+            created_by_user_id=caller.id,
+        )
 
         if now_modular and not was_modular:
             # classic→modular flip: agents currently hold policy_yaml-compiled
@@ -256,7 +264,15 @@ async def api_set_policy_roles(
                 )
                 built = None
             if built is None:
-                await service.set_roles(session, project_id=project_id, roles=before)
+                # Restoring the previous bindings is still a write this caller
+                # caused, so it carries their id rather than resurrecting
+                # whoever wrote `before`.
+                await service.set_roles(
+                    session,
+                    project_id=project_id,
+                    roles=before,
+                    created_by_user_id=caller.id,
+                )
                 raise HTTPException(
                     status_code=409,
                     detail=(

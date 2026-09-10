@@ -205,6 +205,10 @@ async def accept_invitation(
             user_id=accepting_user.id,
             org_id=invitation.org_id,
             role=invitation.role,
+            # The INVITER, not the accepting user: "who let this person into
+            # the org" is the audit question, and the invitee is already
+            # ``user_id`` on this same row.
+            created_by_user_id=invitation.invited_by_user_id,
         )
         session.add(member)
     elif _ROLE_RANK.get(invitation.role, -1) > _ROLE_RANK.get(member.role, -1):
@@ -213,6 +217,8 @@ async def accept_invitation(
         # on the reverse — a stray member-level re-invite of an
         # existing owner mustn't silently strip privileges.
         member.role = invitation.role
+        member.updated_at = utcnow()
+        member.updated_by_user_id = invitation.invited_by_user_id
         session.add(member)
     invitation.accepted_at = utcnow()
     session.add(invitation)
@@ -221,13 +227,20 @@ async def accept_invitation(
     return member
 
 
-async def revoke_invitation(session: AsyncSession, invitation: Invitation) -> None:
-    """Mark an invitation revoked. Idempotent — already-terminal
-    invites silently no-op (the caller has already gotten the desired
-    outcome)."""
+async def revoke_invitation(
+    session: AsyncSession, invitation: Invitation, *, revoked_by_user_id: str
+) -> None:
+    """Mark an invitation revoked, recording who did it. Idempotent —
+    already-terminal invites silently no-op (the caller has already gotten the
+    desired outcome), and a second revoke never moves the first stamp.
+
+    Both authorised callers are genuinely the actor: an admin cancelling, or
+    the invitee declining.
+    """
     if invitation.accepted_at is not None or invitation.revoked_at is not None:
         return
     invitation.revoked_at = utcnow()
+    invitation.revoked_by_user_id = revoked_by_user_id
     session.add(invitation)
     await session.commit()
 

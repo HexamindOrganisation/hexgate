@@ -18,13 +18,13 @@ from sqlalchemy.pool import StaticPool
 from sqlmodel import SQLModel
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from hexgate_api.constants import DEFAULT_PROJECT_ID
+from hexgate_api.constants import DEFAULT_PROJECT_ID, ROLE_ADMIN, ROLE_MEMBER
 from hexgate_api.core import keystore as keystore_mod
 from hexgate_api.core.biscuits import parse_envelope, verify_token
 from hexgate_api.core.keystore import FileKeyStore
 from hexgate_api.features.tokens.service import mask_secret, mint_api_key
 from hexgate_api.main import app
-from hexgate_api.models import ApiKey
+from hexgate_api.models import ApiKey, OrganizationMember, User
 from hexgate_api.seeds.defaults import ensure_default_project
 
 
@@ -76,6 +76,17 @@ def _signup_and_login(client: TestClient, email: str, password: str) -> None:
         json={"email": email, "password": password},
     )
     assert r.status_code == 201, r.text
+    _login(client, email, password)
+
+
+def _login(
+    client: TestClient, email: str, password: str = "correcthorsebattery"
+) -> None:
+    """Log an already-registered user back in.
+
+    The delegated-mint tests switch identities mid-test, and re-running
+    ``_signup_and_login`` for a known email 400s on REGISTER_USER_ALREADY_EXISTS.
+    """
     r = client.post(
         "/v1/auth/cookie/login",
         data={"username": email, "password": password},
@@ -108,6 +119,53 @@ def _read_token(session_factory, token_id: str) -> ApiKey | None:
             return await session.get(ApiKey, token_id)
 
     return asyncio.get_event_loop().run_until_complete(_get())
+
+
+def _org_id(client: TestClient) -> str:
+    """The signed-in user's first org."""
+    return client.get("/v1/orgs").json()[0]["id"]
+
+
+def _add_member(session_factory, *, org_id: str, user_id: str, role: str) -> None:
+    """Wire an existing user into another org directly.
+
+    The invite → accept flow would work too, but it is three requests of
+    unrelated surface for a fixture; these tests are about who a key is
+    attributed to, not about how membership is granted.
+    """
+
+    async def _insert() -> None:
+        async with session_factory() as session:
+            session.add(OrganizationMember(user_id=user_id, org_id=org_id, role=role))
+            await session.commit()
+
+    asyncio.get_event_loop().run_until_complete(_insert())
+
+
+def _delete_user(session_factory, user_id: str) -> None:
+    """Drop a User row, leaving keys that reference it behind."""
+
+    async def _remove() -> None:
+        async with session_factory() as session:
+            user = await session.get(User, user_id)
+            await session.delete(user)
+            await session.commit()
+
+    asyncio.get_event_loop().run_until_complete(_remove())
+
+
+def _signup_second_member(
+    client: TestClient, *, session_factory, org_id: str, email: str, role: str
+) -> str:
+    """Register a second user, add them to ``org_id``, and leave them logged in.
+
+    Returns their user id. Registering through the API (rather than inserting a
+    User row) is what gives them a password to log in with.
+    """
+    _signup_and_login(client, email, "correcthorsebattery")
+    user_id = client.get("/v1/users/me").json()["id"]
+    _add_member(session_factory, org_id=org_id, user_id=user_id, role=role)
+    return user_id
 
 
 # ---------------------------------------------------------------------------
@@ -349,8 +407,216 @@ async def test_find_token_by_secret_when_revoked_then_last_used_at_is_not_bumped
 
 
 # ---------------------------------------------------------------------------
+# Actor trail (issue #160) — who minted a key, and whose key it is.
+#
+# The two columns exist separately because one column cannot be both: if an
+# admin mints on Bob's behalf and only the creator is recorded, removing Bob
+# from the org revokes nothing.
+# ---------------------------------------------------------------------------
+
+
+def test_mint_token_then_created_by_and_owner_are_the_caller(
+    client: TestClient, session_factory
+) -> None:
+    pid = _signup_with_project(client, "selfminter@example.com")
+    me_id = client.get("/v1/users/me").json()["id"]
+
+    body = client.post(f"/v1/projects/{pid}/tokens", json={"name": "mine"}).json()
+
+    row = _read_token(session_factory, body["id"])
+    assert row.created_by_user_id == me_id
+    assert row.owner_user_id == me_id
+    # ...and the mint response carries the same, so the dashboard needn't refetch.
+    assert body["created_by_user_id"] == body["owner_user_id"] == me_id
+    assert body["created_by_email"] == body["owner_email"] == "selfminter@example.com"
+
+
+def test_mint_token_for_another_member_then_owner_is_that_member(
+    client: TestClient, session_factory
+) -> None:
+    """The delegated mint: creator and owner diverge, which is the whole point."""
+    pid = _signup_with_project(client, "adminminter@example.com")
+    admin_id = client.get("/v1/users/me").json()["id"]
+    org_id = _org_id(client)
+    teammate_id = _signup_second_member(
+        client,
+        session_factory=session_factory,
+        org_id=org_id,
+        email="teammate@example.com",
+        role=ROLE_MEMBER,
+    )
+    # Back to the admin (signing up the teammate replaced the cookie).
+    _login(client, "adminminter@example.com")
+
+    r = client.post(
+        f"/v1/projects/{pid}/tokens",
+        json={"name": "for-teammate", "owner_user_id": teammate_id},
+    )
+    assert r.status_code == 201, r.text
+
+    row = _read_token(session_factory, r.json()["id"])
+    assert row.created_by_user_id == admin_id
+    assert row.owner_user_id == teammate_id
+    assert r.json()["owner_email"] == "teammate@example.com"
+
+
+def test_mint_token_for_another_member_when_caller_is_a_plain_member_then_403(
+    client: TestClient, session_factory
+) -> None:
+    """Minting a credential on someone else's behalf is a management action.
+
+    The route gates on org membership (any role), so the rank check lives in
+    ``resolve_mint_owner`` — switching the route to ``require_project_admin``
+    would stop plain members minting for themselves.
+    """
+    pid = _signup_with_project(client, "ownerP@example.com")
+    owner_id = client.get("/v1/users/me").json()["id"]
+    org_id = _org_id(client)
+    _signup_second_member(
+        client,
+        session_factory=session_factory,
+        org_id=org_id,
+        email="plainP@example.com",
+        role=ROLE_MEMBER,
+    )
+
+    # The plain member is the one logged in now.
+    r = client.post(
+        f"/v1/projects/{pid}/tokens",
+        json={"name": "escalation", "owner_user_id": owner_id},
+    )
+    assert r.status_code == 403, r.text
+    assert "admins" in r.json()["detail"]
+
+
+def test_mint_token_for_self_by_id_is_allowed_for_a_plain_member(
+    client: TestClient, session_factory
+) -> None:
+    """Naming your own id explicitly is not delegation."""
+    pid = _signup_with_project(client, "ownerQ@example.com")
+    org_id = _org_id(client)
+    member_id = _signup_second_member(
+        client,
+        session_factory=session_factory,
+        org_id=org_id,
+        email="plainQ@example.com",
+        role=ROLE_MEMBER,
+    )
+
+    r = client.post(
+        f"/v1/projects/{pid}/tokens",
+        json={"name": "my-own", "owner_user_id": member_id},
+    )
+    assert r.status_code == 201, r.text
+    assert _read_token(session_factory, r.json()["id"]).owner_user_id == member_id
+
+
+def test_mint_token_for_a_non_member_then_403(
+    client: TestClient, session_factory
+) -> None:
+    """A key parked on someone outside the org would never be swept.
+
+    ``remove_member`` only sweeps keys owned by a member of that org, so
+    allowing this would create a key no offboarding path can reach.
+    """
+    pid = _signup_with_project(client, "ownerR@example.com")
+    _signup_and_login(client, "outsiderR@example.com", "correcthorsebattery")
+    outsider_id = client.get("/v1/users/me").json()["id"]
+    _login(client, "ownerR@example.com")
+
+    r = client.post(
+        f"/v1/projects/{pid}/tokens",
+        json={"name": "parked", "owner_user_id": outsider_id},
+    )
+    assert r.status_code == 403, r.text
+    assert "not a member" in r.json()["detail"]
+
+
+def test_list_tokens_then_owner_and_creator_emails_are_resolved(
+    client: TestClient, session_factory
+) -> None:
+    """One batch lookup, same shape as the bans list."""
+    pid = _signup_with_project(client, "adminS@example.com")
+    org_id = _org_id(client)
+    teammate_id = _signup_second_member(
+        client,
+        session_factory=session_factory,
+        org_id=org_id,
+        email="teammateS@example.com",
+        role=ROLE_MEMBER,
+    )
+    _login(client, "adminS@example.com")
+    client.post(f"/v1/projects/{pid}/tokens", json={"name": "own"})
+    client.post(
+        f"/v1/projects/{pid}/tokens",
+        json={"name": "delegated", "owner_user_id": teammate_id},
+    )
+
+    rows = {
+        item["name"]: item for item in client.get(f"/v1/projects/{pid}/tokens").json()
+    }
+    assert rows["own"]["owner_email"] == "adminS@example.com"
+    assert rows["own"]["created_by_email"] == "adminS@example.com"
+    assert rows["delegated"]["owner_email"] == "teammateS@example.com"
+    assert rows["delegated"]["created_by_email"] == "adminS@example.com"
+
+
+def test_list_tokens_when_the_owner_account_is_gone_then_the_id_survives(
+    client: TestClient, session_factory
+) -> None:
+    """``emails_for_user_ids`` omits ids with no live User row, so the wire
+    keeps the id and the dashboard falls back to it. A deleted account must not
+    erase the audit trail of the keys it owned."""
+    pid = _signup_with_project(client, "adminT@example.com")
+    org_id = _org_id(client)
+    teammate_id = _signup_second_member(
+        client,
+        session_factory=session_factory,
+        org_id=org_id,
+        email="teammateT@example.com",
+        role=ROLE_ADMIN,
+    )
+    _login(client, "adminT@example.com")
+    client.post(
+        f"/v1/projects/{pid}/tokens",
+        json={"name": "orphaned", "owner_user_id": teammate_id},
+    )
+
+    _delete_user(session_factory, teammate_id)
+
+    row = client.get(f"/v1/projects/{pid}/tokens").json()[0]
+    assert row["owner_user_id"] == teammate_id
+    assert row["owner_email"] is None
+
+
+# ---------------------------------------------------------------------------
 # mint_api_key() — service-level invariants
 # ---------------------------------------------------------------------------
+
+
+async def test_mint_api_key_without_an_actor_then_both_columns_are_null(
+    session_factory, tmp_path
+) -> None:
+    """The ``deploy/provision.py`` shape: a system mint with no human caller.
+
+    NULL is the intended value, not a gap — and it is what keeps a provisioning
+    key invisible to the offboarding sweep, since it belongs to no person.
+    """
+    ks = FileKeyStore(base_dir=tmp_path / "keystore")
+    ks.ensure_keypair()
+
+    async with session_factory() as session:
+        row, _full = await mint_api_key(
+            session,
+            project_id=DEFAULT_PROJECT_ID,
+            name="provisioned",
+            scopes=["read_audit"],
+            env="live",
+            signing_key_bytes=ks._private_key_bytes(),
+        )
+
+    assert row.created_by_user_id is None
+    assert row.owner_user_id is None
 
 
 async def test_mint_api_key_happy_path(session_factory, tmp_path) -> None:

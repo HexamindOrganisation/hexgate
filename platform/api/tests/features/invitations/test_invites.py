@@ -777,3 +777,114 @@ def test_accept_does_not_downgrade_existing_owner(
     listed = client.get("/v1/orgs").json()
     own = next(o for o in listed if o["id"] == org_id)
     assert own["role"] == ROLE_OWNER
+
+
+# ---------------------------------------------------------------------------
+# Actor trail (issue #160)
+# ---------------------------------------------------------------------------
+
+
+def _read_invitation(session_factory, invitation_id: str) -> Invitation:
+    async def _get() -> Invitation:
+        async with session_factory() as s:
+            row = await s.get(Invitation, invitation_id)
+            assert row is not None
+            return row
+
+    return asyncio.get_event_loop().run_until_complete(_get())
+
+
+def _read_membership(session_factory, *, org_id: str, user_id: str):
+    async def _get():
+        async with session_factory() as s:
+            return (
+                await s.exec(
+                    select(OrganizationMember).where(
+                        OrganizationMember.org_id == org_id,
+                        OrganizationMember.user_id == user_id,
+                    )
+                )
+            ).first()
+
+    return asyncio.get_event_loop().run_until_complete(_get())
+
+
+def test_accept_stamps_the_inviter_on_the_new_membership(
+    client: TestClient, session_factory
+) -> None:
+    """ "Who let this person into the org" is the audit question, and the
+    inviter is the answer — the invitee is already ``user_id`` on the row."""
+    inviter_email, invitee_email = "inviter-a@example.com", "invitee-a@example.com"
+    inviter_id = _signup_and_login(client, inviter_email, "correcthorsebattery")
+    org_id = client.get("/v1/orgs").json()[0]["id"]
+    invite_id = client.post(
+        f"/v1/orgs/{org_id}/invites",
+        json={"email": invitee_email, "role": ROLE_MEMBER},
+    ).json()["id"]
+
+    invitee_id = _signup_and_login(client, invitee_email, "correcthorsebattery")
+    assert client.post(f"/v1/invites/{invite_id}/accept").status_code == 200
+
+    membership = _read_membership(session_factory, org_id=org_id, user_id=invitee_id)
+    assert membership.created_by_user_id == inviter_id
+    assert membership.created_by_user_id != invitee_id
+
+
+def test_revoke_invitation_by_an_admin_stamps_the_admin(
+    client: TestClient, session_factory
+) -> None:
+    admin_id = _signup_and_login(client, "canceller@example.com", "correcthorsebattery")
+    org_id = client.get("/v1/orgs").json()[0]["id"]
+    invite_id = client.post(
+        f"/v1/orgs/{org_id}/invites",
+        json={"email": "unwanted@example.com", "role": ROLE_MEMBER},
+    ).json()["id"]
+
+    assert client.delete(f"/v1/invites/{invite_id}").status_code == 204
+
+    row = _read_invitation(session_factory, invite_id)
+    assert row.revoked_at is not None
+    assert row.revoked_by_user_id == admin_id
+
+
+def test_decline_invitation_stamps_the_invitee(
+    client: TestClient, session_factory
+) -> None:
+    """The other authorised caller — the invitee declining. Also genuinely
+    the actor, so the same column carries it."""
+    decliner_email = "decliner@example.com"
+    _signup_and_login(client, "inviter-b@example.com", "correcthorsebattery")
+    org_id = client.get("/v1/orgs").json()[0]["id"]
+    invite_id = client.post(
+        f"/v1/orgs/{org_id}/invites",
+        json={"email": decliner_email, "role": ROLE_MEMBER},
+    ).json()["id"]
+
+    decliner_id = _signup_and_login(client, decliner_email, "correcthorsebattery")
+    assert client.delete(f"/v1/invites/{invite_id}").status_code == 204
+
+    assert (
+        _read_invitation(session_factory, invite_id).revoked_by_user_id == decliner_id
+    )
+
+
+def test_second_revoke_keeps_the_first_actor(
+    client: TestClient, session_factory
+) -> None:
+    """``revoke_invitation`` is idempotent, and a repeat call must not move the
+    stamp — same guarantee ``revoke_api_key`` gives."""
+    admin_email = "double-cancel@example.com"
+    admin_id = _signup_and_login(client, admin_email, "correcthorsebattery")
+    org_id = client.get("/v1/orgs").json()[0]["id"]
+    invite_id = client.post(
+        f"/v1/orgs/{org_id}/invites",
+        json={"email": "twice-cancelled@example.com", "role": ROLE_MEMBER},
+    ).json()["id"]
+    client.delete(f"/v1/invites/{invite_id}")
+    first = _read_invitation(session_factory, invite_id)
+
+    assert client.delete(f"/v1/invites/{invite_id}").status_code == 204
+
+    after = _read_invitation(session_factory, invite_id)
+    assert after.revoked_at == first.revoked_at
+    assert after.revoked_by_user_id == admin_id

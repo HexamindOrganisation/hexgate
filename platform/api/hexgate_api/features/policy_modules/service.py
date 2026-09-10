@@ -112,12 +112,17 @@ async def upsert_module(
     tier: str,
     path: str,
     content: str,
+    actor_user_id: str,
 ) -> PolicyModule:
     """Create or replace one module. Validates the tier and the policy content.
 
     Insert falls back to update on the unique constraint, so two concurrent
     creates of the same module don't 500: the loser rolls back and updates the
     row the winner just wrote.
+
+    ``actor_user_id`` lands on ``created_by_user_id`` for an insert and
+    ``updated_by_user_id`` for a replace — including the create-race
+    fallthrough, where the loser really is updating the winner's row.
     """
     if tier not in VALID_TIERS:
         raise InvalidModuleError(
@@ -134,6 +139,7 @@ async def upsert_module(
             path=path,
             content=content,
             content_hash=_content_hash(content),
+            created_by_user_id=actor_user_id,
         )
         session.add(row)
         try:
@@ -153,6 +159,7 @@ async def upsert_module(
     existing.content = content
     existing.content_hash = _content_hash(content)
     existing.updated_at = utcnow()
+    existing.updated_by_user_id = actor_user_id
     session.add(existing)
     await session.commit()
     await session.refresh(existing)
@@ -162,7 +169,12 @@ async def upsert_module(
 async def delete_module(
     session: AsyncSession, *, project_id: str, tier: str, path: str
 ) -> bool:
-    """Remove one module. Returns False if it didn't exist."""
+    """Remove one module. Returns False if it didn't exist.
+
+    A hard delete, so unlike every other write in this slice it records no
+    actor — there is no row left to stamp. That gap is what the append-only
+    control-plane ``audit_event`` log is for; actor columns cannot close it.
+    """
     row = await _get_module(session, project_id, tier, path)
     if row is None:
         return False
@@ -236,6 +248,7 @@ async def set_roles(
     *,
     project_id: str,
     roles: RoleMatrixJson | dict[str, list[str]],
+    created_by_user_id: str,
 ) -> RoleMatrixJson:
     """Replace the project's role bindings wholesale (a small, edited-together set).
 
@@ -249,6 +262,10 @@ async def set_roles(
     colliding on the unique constraint. The retry re-reads the winner's rows and
     replaces them cleanly instead of surfacing a 500 (same posture as
     ``upsert_module``'s create-race handling).
+
+    Because this is a delete-and-reinsert, each fresh row's
+    ``created_by_user_id`` IS the last writer — which is why the table carries
+    no ``updated_*`` pair. Both retry attempts stamp the same actor.
     """
     normalized = {role: _normalize_cell(cells) for role, cells in roles.items()}
     for attempt in range(2):
@@ -270,6 +287,7 @@ async def set_roles(
                     project_id=project_id,
                     role=role,
                     capabilities=dict(cells),
+                    created_by_user_id=created_by_user_id,
                 )
             )
         try:
