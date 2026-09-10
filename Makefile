@@ -183,8 +183,12 @@ postgres-up: ## Start local Postgres and wait until healthy
 # fresh volume never surfaces as "no such table" on the first request.
 .PHONY: postgres-init
 postgres-init: postgres-up ## Create the platform-api tables on local Postgres (idempotent)
+	@# `import hexgate_api.models` is load-bearing: it registers every table on
+	@# SQLModel.metadata before create_all runs. Without it the metadata is
+	@# empty and this silently creates NOTHING — the same reason the deploy
+	@# stack's api-init one-shot imports it (docker-compose.deploy.yml).
 	cd platform/api && DATABASE_URL=$(POSTGRES_DSN) uv run python -c \
-		"import asyncio; from hexgate_api.core.db import init_db; asyncio.run(init_db())"
+		"import asyncio; import hexgate_api.models; from hexgate_api.core.db import init_db; asyncio.run(init_db())"
 
 .PHONY: postgres-stop
 postgres-stop: ## Stop Postgres (keeps the data volume)
