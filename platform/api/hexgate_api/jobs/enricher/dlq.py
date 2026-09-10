@@ -39,6 +39,11 @@ _UNPARSEABLE = "[UNPARSEABLE]"
 # limit rather than scaled to it — the caps are diagnostic previews, not the
 # record of truth, and raw span bytes sit on a 30-day topic with no ACLs.
 # ``_source`` locates the original bytes while the raw topic's retention lasts.
+#
+# The two caps never add up: ``span_envelope`` carries the attributes and no
+# raw value, ``record_envelope`` the raw value and no attributes. The larger
+# shape is the record one, and base64 expands it by a third — 64 KiB of bytes
+# ship as ~85 KiB of JSON, which is the real per-envelope worst case.
 _ATTRIBUTES_CAP_BYTES = 32 * 1024
 _RAW_VALUE_CAP_BYTES = 64 * 1024
 

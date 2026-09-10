@@ -75,8 +75,9 @@ retry rpk cluster config set auto_create_topics_enabled false --no-confirm \
 #
 # The DLQ gets the same value only to keep the two topics from drifting apart.
 # It does not need it: enricher/dlq.py caps an envelope's raw-record preview at
-# 64 KiB and its attributes at 32 KiB, so no envelope it can build comes near
-# even the 1 MiB broker default.
+# 64 KiB (~85 KiB once base64'd) or its attributes at 32 KiB — never both in
+# one envelope — so no envelope it can build comes near even the 1 MiB broker
+# default.
 MAX_MESSAGE_BYTES=8388608 # 8 MiB
 
 create_topic() {

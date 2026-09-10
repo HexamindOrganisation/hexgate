@@ -375,7 +375,7 @@ flowchart LR
   B -->|"24 × 272 KiB = 6.375 MiB per record"| X
   X --> T
   T --> E
-  E -->|"rejected spans<br/>DLQ max_request_size 8 MiB<br/>(envelopes capped ~100 KiB by dlq.py)"| Q
+  E -->|"rejected spans<br/>DLQ max_request_size 8 MiB<br/>(envelopes capped ~85 KiB by dlq.py)"| Q
 ```
 
 Every hop rejects **whole** — the proxy and receiver drop the entire POST, the
@@ -434,10 +434,11 @@ switched off so a wrong topic name fails loudly instead of fabricating a
 Both `retention.ms` and `max.message.bytes` are reconciled on every run via
 `rpk topic alter-config`, because `create --if-not-exists` applies `-c` only on
 the branch that actually creates the topic. The DLQ gets the same limit as the
-raw topic: a DLQ envelope quoting an oversized record is barely smaller than
-the record, so a lower limit there would lose the diagnostic for exactly the
-records most worth diagnosing. See the record-size budget in §4.1 — this is the
-broker-side half of it, and it is enforced on the *compressed* batch.
+raw topic only so the two cannot drift apart; it does not need it. `dlq.py`
+quotes an oversized record as a 64 KiB preview (~85 KiB once base64'd), or
+its attributes at 32 KiB — never both in one envelope — so nothing it builds
+approaches even the 1 MiB default. See the record-size budget in §4.1 — this
+is the broker-side half of it, and it is enforced on the *compressed* batch.
 
 Redpanda is a buffer, not a store: ClickHouse is the system of record, and the
 raw topic only needs to outlive an enricher restart or redeploy. It is
