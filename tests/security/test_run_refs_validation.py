@@ -211,3 +211,39 @@ def test_inherited_policy_level_constraint_is_validated() -> None:
                 "default": AgentPolicy.model_validate({"inherits": ["base"]}),
             }
         )
+
+
+def test_run_refs_are_validated_on_an_authored_admission_grant() -> None:
+    # admission/agents blocks stay as AgentPolicy model fields (they land in
+    # effective_tools, not tools), so run.* validation must walk effective_tools
+    # to reach them — else a bad run.* ref on an authored admission grant
+    # fail-opens. This is the authored single-file path the compose front-end's
+    # own test can't exercise (compose folds agent.run straight into tools).
+    policy = AgentPolicy.model_validate(
+        {
+            "admission": {
+                "mode": "allow",
+                "constraints": ["run.definitely_not_a_path < 5"],
+            }
+        }
+    )
+    with pytest.raises(PolicySetError, match="unknown run"):
+        PolicySet({DEFAULT_ROLE_NAME: policy})
+
+
+def test_run_refs_are_validated_on_an_authored_reach_grant() -> None:
+    # Same gap on the reach half: an agents:/reach block's run.* ref must be
+    # validated too.
+    policy = AgentPolicy.model_validate(
+        {
+            "agents": {
+                "other": {
+                    "as": ["handoff"],
+                    "mode": "allow",
+                    "constraints": ["run.definitely_not_a_path < 5"],
+                }
+            }
+        }
+    )
+    with pytest.raises(PolicySetError, match="unknown run"):
+        PolicySet({DEFAULT_ROLE_NAME: policy})
