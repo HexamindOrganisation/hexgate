@@ -94,8 +94,9 @@ func TestRevocationCacheLookup_happy_path(t *testing.T) {
 	assert.Equal(t, "support-bot", projectID)
 }
 
-// Revoking deletes the row (tokens/service.py:delete_api_key), so a revoked key
-// is simply one that is no longer in the snapshot.
+// The snapshot holds only live keys (apiKeyQuery filters on revoked_at IS
+// NULL, matching tokens/service.py:revoke_api_key), so a revoked key is simply
+// one that is no longer in it.
 func TestRevocationCacheLookup_when_token_is_absent_then_the_key_is_unknown(t *testing.T) {
 	now := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
 	cache := newLoadedCache(map[string]string{"tok_abc": "support-bot"}, now, now)

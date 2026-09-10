@@ -24,20 +24,27 @@ the test suite.
 
 from __future__ import annotations
 
+import asyncio
+from collections.abc import Awaitable, Callable
+
 import pytest
 import pytest_asyncio
 from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
-from sqlmodel import SQLModel
+from sqlmodel import SQLModel, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 from starlette.websockets import WebSocketDisconnect
 
 from hexgate_api.core import keystore as keystore_mod
 from hexgate_api.main import app
 from hexgate_api.features.tokens.service import mint_api_key
+from hexgate_api.models import ApiKey, utcnow
 from hexgate_api.seeds.defaults import ensure_default_project
 from hexgate_api.constants import DEFAULT_PROJECT_ID
+
+SessionFactory = async_sessionmaker[AsyncSession]
+TokenRowMutation = Callable[[AsyncSession, ApiKey], Awaitable[None]]
 
 
 # ---------------------------------------------------------------------------
@@ -107,6 +114,53 @@ async def fresh_token(session_factory) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _apply_to_key_row(
+    session_factory: SessionFactory, secret: str, mutate: TokenRowMutation
+) -> None:
+    """Run ``mutate`` against the key row holding ``secret``, then commit.
+
+    Sync because the tests around it drive ``TestClient`` from a sync body: the
+    mutation has to be committed before the handshake starts.
+    """
+
+    async def _run() -> None:
+        async with session_factory() as session:
+            row = (
+                await session.exec(select(ApiKey).where(ApiKey.secret == secret))
+            ).first()
+            assert row is not None
+            await mutate(session, row)
+            await session.commit()
+
+    asyncio.get_event_loop().run_until_complete(_run())
+
+
+async def _delete_row(session: AsyncSession, row: ApiKey) -> None:
+    await session.delete(row)
+
+
+async def _stamp_revoked_at(session: AsyncSession, row: ApiKey) -> None:
+    """Stamp by hand rather than through ``revoke_api_key``, so the test
+    exercises the read filter alone and not the revoke path as well."""
+    row.revoked_at = utcnow()
+    session.add(row)
+
+
+def _assert_bearer_rejected(client: TestClient, envelope: str) -> None:
+    with pytest.raises(WebSocketDisconnect) as exc_info:
+        with client.websocket_connect(
+            "/v1/serve",
+            subprotocols=[f"bearer.{envelope}", "hexgate.v1"],
+        ):
+            pass
+    assert exc_info.value.code == 4401
+
+
+# ---------------------------------------------------------------------------
 # Reject paths
 # ---------------------------------------------------------------------------
 
@@ -144,50 +198,25 @@ def test_ws_serve_rejects_when_bearer_is_garbage(client: TestClient) -> None:
     raise TokenError or TokenSignatureError, the handshake closes,
     no info leaked back to the client beyond the close code.
     """
-    with pytest.raises(WebSocketDisconnect) as exc_info:
-        with client.websocket_connect(
-            "/v1/serve",
-            subprotocols=["bearer.fty_live_not_a_real_token", "hexgate.v1"],
-        ):
-            pass
-    assert exc_info.value.code == 4401
+    _assert_bearer_rejected(client, "fty_live_not_a_real_token")
 
 
 def test_ws_serve_rejects_unknown_or_revoked_secret(
-    client: TestClient, fresh_token: str, session_factory
+    client: TestClient, fresh_token: str, session_factory: SessionFactory
 ) -> None:
-    """Bearer parses cleanly but isn't in the ApiKey table → 4401.
+    """Bearer parses cleanly but its row is gone from the ApiKey table → 4401.
 
-    Synthesises this by minting a token, then deleting the row before
-    the connection attempt — same shape as a revoke + reuse race.
+    A hard delete is no longer what revocation does, but "row genuinely gone"
+    stays a real state — a row removed by hand, or a project teardown racing a
+    reconnect.
     """
-    import asyncio
+    _apply_to_key_row(session_factory, fresh_token, _delete_row)
 
-    from hexgate_api.models import ApiKey
-    from sqlmodel import select
-
-    async def _delete_token():
-        async with session_factory() as session:
-            row = (
-                await session.exec(select(ApiKey).where(ApiKey.secret == fresh_token))
-            ).first()
-            assert row is not None
-            await session.delete(row)
-            await session.commit()
-
-    asyncio.get_event_loop().run_until_complete(_delete_token())
-
-    with pytest.raises(WebSocketDisconnect) as exc_info:
-        with client.websocket_connect(
-            "/v1/serve",
-            subprotocols=[f"bearer.{fresh_token}", "hexgate.v1"],
-        ):
-            pass
-    assert exc_info.value.code == 4401
+    _assert_bearer_rejected(client, fresh_token)
 
 
 def test_ws_serve_rejects_a_soft_deleted_secret(
-    client: TestClient, fresh_token: str, session_factory
+    client: TestClient, fresh_token: str, session_factory: SessionFactory
 ) -> None:
     """The row is still there, ``revoked_at`` is stamped → 4401.
 
@@ -196,30 +225,9 @@ def test_ws_serve_rejects_a_soft_deleted_secret(
     ``find_token_by_secret``, so without that filter a revoked key would keep
     opening chat sockets.
     """
-    import asyncio
+    _apply_to_key_row(session_factory, fresh_token, _stamp_revoked_at)
 
-    from hexgate_api.models import ApiKey, utcnow
-    from sqlmodel import select
-
-    async def _revoke_token():
-        async with session_factory() as session:
-            row = (
-                await session.exec(select(ApiKey).where(ApiKey.secret == fresh_token))
-            ).first()
-            assert row is not None
-            row.revoked_at = utcnow()
-            session.add(row)
-            await session.commit()
-
-    asyncio.get_event_loop().run_until_complete(_revoke_token())
-
-    with pytest.raises(WebSocketDisconnect) as exc_info:
-        with client.websocket_connect(
-            "/v1/serve",
-            subprotocols=[f"bearer.{fresh_token}", "hexgate.v1"],
-        ):
-            pass
-    assert exc_info.value.code == 4401
+    _assert_bearer_rejected(client, fresh_token)
 
 
 # ---------------------------------------------------------------------------

@@ -320,11 +320,12 @@ Per request, the extension:
    keep a stolen key from probing.
 2. **Reads the `token_id` fact** from the authority block (the API key row's
    own id, platform-api #126) and looks it up in a **revocation snapshot** of
-   the key table, polled from Postgres every 20 s. Revoking a key deletes its
-   row, so absence = revoked → **401**. A snapshot older than `max_staleness`
-   (1 h, i.e. Postgres unreachable for that long) makes the extension reject
-   *everything* rather than let revoked keys keep working. Both knobs are
-   env-tunable per stage —
+   the key table, polled from Postgres every 20 s. The snapshot query filters
+   on `revoked_at IS NULL` (platform-api #206), so absence from it = revoked
+   → **401**; the row itself survives as the audit record. A snapshot older
+   than `max_staleness` (1 h, i.e. Postgres unreachable for that long) makes
+   the extension reject *everything* rather than let revoked keys keep
+   working. Both knobs are env-tunable per stage —
    `HEXGATE_COLLECTOR_REVOCATION_POLL_INTERVAL` / `_MAX_STALENESS`.
 3. **Resolves `project_id` from the key's row**, not from the token's own
    `project` fact (a mint-time snapshot) and never from a span attribute, and

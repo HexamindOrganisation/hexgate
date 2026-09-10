@@ -250,9 +250,16 @@ docker compose -p hexgate-<stage> --env-file platform/.env.<stage> \
   -c "DELETE FROM devtoken WHERE revoked_at IS NOT NULL"
 ```
 
-Skipping it un-revokes every key revoked while the new code was live, on HTTP,
-WebSocket and OTLP ingest alike. It discards the audit rows, which is the point:
-the old schema has nowhere to keep them.
+Skipping it does not expose every surface equally. Revoke also masks the
+secret, and the pre-soft-delete code resolves a key by matching that secret
+exactly, so it can never match a revoked row: bearer HTTP and the WebSocket
+handshake stay refused either way. Two surfaces do regress, both of them ones
+that never look at the secret — **OTLP ingest**, which matches the token's
+`token_id` fact against a snapshot of the whole key table and finds the row
+present again, and the **dashboard's key list**, which reads the rows back
+unfiltered. Run it anyway: those are the surfaces the compensating step exists
+for. It discards the audit rows, which is the point — the old schema has
+nowhere to keep them.
 
 ## Operations
 

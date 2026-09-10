@@ -103,10 +103,12 @@ extensions:
     public_key_file: ${env:HEXGATE_COLLECTOR_PUBLIC_KEY_FILE:-../api/data/hexgate.pub}
 
     revocation:
-      # Revoking an API key deletes its row, so the check is a lookup against
-      # a snapshot of the whole key table rather than a flag. The signed
-      # token_id fact is that row's own id (platform-api PR #126), which is
-      # what lets this be keyed on a short id instead of the full secret.
+      # Revoking an API key soft-deletes its row — it survives with
+      # revoked_at stamped (platform-api PR #206) — so the check is a lookup
+      # against a snapshot of the live keys, which is what the query filters
+      # down to. The signed token_id fact is that row's own id (platform-api
+      # PR #126), which is what lets this be keyed on a short id instead of
+      # the full secret.
       #
       # LOCAL DEV ONLY credentials, matching the postgres service in
       # platform/docker-compose.yml — never reuse these anywhere deployed.
