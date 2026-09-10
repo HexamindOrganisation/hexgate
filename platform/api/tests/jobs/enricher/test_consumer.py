@@ -330,7 +330,7 @@ async def test_run_happy_path_processes_a_poll_then_stops_cleanly(
     assert calls == ["insert", "commit"]
 
 
-async def test_run_sizes_both_kafka_clients_for_the_topic_limit(
+async def test_when_run_builds_the_kafka_clients_then_both_are_sized_for_the_topic_limit(
     monkeypatch, make_job
 ) -> None:
     """aiokafka defaults the consumer's per-partition fetch and the producer's
