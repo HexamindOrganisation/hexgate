@@ -55,6 +55,15 @@ assume behaviour from the name of a setting.
    an error. Read upstream defaults the diff activates.
 6. **Internal consistency** — every number, cross-reference and claim in changed
    comments and docs, checked against the file it points at.
+7. **Wire compatibility** — when the diff changes an encoding, compression,
+   serialization, protocol version or schema, name every other party that reads
+   or writes those bytes and verify *that* side supports the new form in its
+   pinned version. For an optional codec, grep the reader's lockfile for the
+   library implementing it: many are gated behind an extra (`aiokafka[zstd]` →
+   `cramjam`) and absent by default. A setting being a valid field proves the
+   writer accepts it, never that anything can decode it. Then ask what the
+   reader does with the new bytes during the window where only one side is
+   deployed.
 
 ## 4. The example gate
 
@@ -90,6 +99,11 @@ call, a retry that lands twice.
 Pre-existing issues, linter/typechecker/CI catches, missing test coverage and
 style preferences not written in a `CLAUDE.md` are out of scope regardless of how
 good their example is.
+
+One thing that is always in scope: a setting the diff adds that the diff's own
+comments say buys nothing for its goal. An unrelated optimization riding along
+carries risk nobody signed up for. Read such a comment as a reason to question
+the line, not as documentation of it.
 
 ## 5. Verify what survives
 
