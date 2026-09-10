@@ -40,7 +40,11 @@ from hexgate_api.schemas import (
 )
 
 # SDK Verdict.outcome enum name → the wire string the editor expects.
-_OUTCOME_WIRE = {"ALLOW": "allow", "DENY": "deny", "NEEDS_APPROVAL": "approval_required"}
+_OUTCOME_WIRE = {
+    "ALLOW": "allow",
+    "DENY": "deny",
+    "NEEDS_APPROVAL": "approval_required",
+}
 
 router = APIRouter()
 
@@ -369,9 +373,7 @@ async def api_put_policy_file(
             now_modular = name == service.ENTRY_FILE and not was_modular
             if now_modular:
                 if not await _rebuild_or_none(session, project_id):
-                    await service.delete_file(
-                        session, project_id=project_id, name=name
-                    )
+                    await service.delete_file(session, project_id=project_id, name=name)
                     raise HTTPException(
                         status_code=409,
                         detail=(
