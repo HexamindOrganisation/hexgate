@@ -129,7 +129,7 @@ function PlaygroundLive({ projectId }: { projectId: string }) {
   }
 
   return (
-    <div className="-mx-8 -my-6 h-[calc(100vh-56px)] grid grid-cols-[280px_1fr_400px] overflow-hidden">
+    <div className="-mx-8 -my-6 h-screen grid grid-cols-[280px_1fr_400px] overflow-hidden">
       {/* Session config */}
       <aside className="flex flex-col gap-4 border-r border-border bg-card p-5 overflow-y-auto scrollbar-thin">
         <div className="flex items-center gap-2 text-sm">
