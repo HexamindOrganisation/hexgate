@@ -186,6 +186,42 @@ def test_ws_serve_rejects_unknown_or_revoked_secret(
     assert exc_info.value.code == 4401
 
 
+def test_ws_serve_rejects_a_soft_deleted_secret(
+    client: TestClient, fresh_token: str, session_factory
+) -> None:
+    """The row is still there, ``revoked_at`` is stamped → 4401.
+
+    The test above deletes the row outright, which is what revocation used to
+    be. This is what it is now: the WS gate reaches revocation through
+    ``find_token_by_secret``, so without that filter a revoked key would keep
+    opening chat sockets.
+    """
+    import asyncio
+
+    from hexgate_api.models import ApiKey, utcnow
+    from sqlmodel import select
+
+    async def _revoke_token():
+        async with session_factory() as session:
+            row = (
+                await session.exec(select(ApiKey).where(ApiKey.secret == fresh_token))
+            ).first()
+            assert row is not None
+            row.revoked_at = utcnow()
+            session.add(row)
+            await session.commit()
+
+    asyncio.get_event_loop().run_until_complete(_revoke_token())
+
+    with pytest.raises(WebSocketDisconnect) as exc_info:
+        with client.websocket_connect(
+            "/v1/serve",
+            subprotocols=[f"bearer.{fresh_token}", "hexgate.v1"],
+        ):
+            pass
+    assert exc_info.value.code == 4401
+
+
 # ---------------------------------------------------------------------------
 # Happy path
 # ---------------------------------------------------------------------------

@@ -18,12 +18,13 @@ from hexgate_api.schemas import (
     TokenMintResponse,
 )
 from hexgate_api.features.tokens.service import (
-    delete_api_key,
     find_token_by_secret,
     list_api_keys,
     mask_secret,
     mint_api_key,
+    revoke_api_key,
 )
+from hexgate_api.models import User
 from hexgate_api.seeds.defaults import ensure_default_project
 
 router = APIRouter()
@@ -113,14 +114,16 @@ async def mint_token(
 @router.delete(
     "/projects/{project_id}/tokens/{token_id}",
     status_code=204,
-    dependencies=[Depends(require_org_member)],
 )
 async def revoke_token(
     project_id: str,
     token_id: str,
+    user: User = Depends(require_org_member),
     session: AsyncSession = Depends(get_session),
 ) -> None:
-    ok = await delete_api_key(session, project_id, token_id)
+    """Soft-delete the key. ``require_org_member`` moves out of the decorator's
+    ``dependencies`` so its ``User`` can be stamped as the revoker."""
+    ok = await revoke_api_key(session, project_id, token_id, revoked_by_user_id=user.id)
     if not ok:
         raise HTTPException(status_code=404, detail="token not found")
 

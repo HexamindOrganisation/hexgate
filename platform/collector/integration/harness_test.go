@@ -123,6 +123,22 @@ func connectPostgres(t *testing.T) *pgxpool.Pool {
 		t.Fatal("the devtoken table does not exist in this database.\n" +
 			"Create the schema once with: make collector-test-integration (or make platform-api-pg)")
 	}
+
+	// A volume that predates the soft-delete migration passes the check above
+	// and then fails deep inside pgx when the snapshot query runs. create_all
+	// adds missing TABLES, never missing columns, so this is the common state
+	// of any dev database older than that migration.
+	var hasRevokedAt bool
+	err = pool.QueryRow(ctx,
+		`SELECT EXISTS (SELECT 1 FROM information_schema.columns
+		                WHERE table_name = 'devtoken' AND column_name = 'revoked_at')`,
+	).Scan(&hasRevokedAt)
+	require.NoError(t, err)
+	if !hasRevokedAt {
+		t.Fatal("devtoken has no revoked_at column: this database predates the soft-delete\n" +
+			"migration, and create_all does not add columns to existing tables.\n" +
+			"Apply it with: make postgres-init (replays platform/postgres/migrations/)")
+	}
 	return pool
 }
 
@@ -177,13 +193,20 @@ func seedAPIKey(t *testing.T, pool *pgxpool.Pool, secret string) apiKeyFixture {
 	return fixture
 }
 
-// revokeAPIKey deletes the key's row, which is what tokens/service.py's
-// delete_api_key does — revocation is a missing row, not a flag.
+// revokeAPIKey stamps revoked_at, which is what tokens/service.py's
+// revoke_api_key does — revocation is a soft delete, and the Collector's
+// snapshot query filters the row out. A DELETE here would still make the
+// pipeline test pass, but against a mechanism the control plane no longer
+// uses.
+//
+// now() is stamped DB-side so the test process and the Collector need not
+// share a clock.
 func revokeAPIKey(t *testing.T, pool *pgxpool.Pool, tokenID string) {
 	t.Helper()
-	tag, err := pool.Exec(context.Background(), `DELETE FROM devtoken WHERE id = $1`, tokenID)
+	tag, err := pool.Exec(context.Background(),
+		`UPDATE devtoken SET revoked_at = now() WHERE id = $1 AND revoked_at IS NULL`, tokenID)
 	require.NoError(t, err)
-	require.EqualValues(t, 1, tag.RowsAffected(), "the key under test should have existed")
+	require.EqualValues(t, 1, tag.RowsAffected(), "the key under test should have existed and been live")
 }
 
 // ---------------------------------------------------------------------------

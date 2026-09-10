@@ -8,6 +8,8 @@ had no coverage of its own. Fixtures mirror `test_projects.py`.
 
 from __future__ import annotations
 
+import asyncio
+
 from biscuit_auth import AuthorizerBuilder, Rule
 from fastapi.testclient import TestClient
 import pytest_asyncio
@@ -22,6 +24,7 @@ from hexgate_api.core.biscuits import parse_envelope, verify_token
 from hexgate_api.core.keystore import FileKeyStore
 from hexgate_api.features.tokens.service import mint_api_key
 from hexgate_api.main import app
+from hexgate_api.models import ApiKey
 from hexgate_api.seeds.defaults import ensure_default_project
 
 
@@ -90,6 +93,21 @@ def _signup_with_project(client: TestClient, email: str) -> str:
     r = client.post(f"/v1/orgs/{org_id}/projects", json={"name": "tokens-project"})
     assert r.status_code == 201, r.text
     return r.json()["id"]
+
+
+def _read_token(session_factory, token_id: str) -> ApiKey | None:
+    """Read the raw row from a sync test, bypassing the service filters.
+
+    ``run_until_complete`` on the ambient loop rather than ``asyncio.run``:
+    the in-memory engine belongs to the fixture's loop, and a fresh one would
+    not see it. Same shape as ``test_ws_serve.py``.
+    """
+
+    async def _get() -> ApiKey | None:
+        async with session_factory() as session:
+            return await session.get(ApiKey, token_id)
+
+    return asyncio.get_event_loop().run_until_complete(_get())
 
 
 # ---------------------------------------------------------------------------
@@ -181,6 +199,122 @@ def test_revoke_token_when_token_already_deleted_then_status_is_404(
 
     r = client.delete(f"/v1/projects/{pid}/tokens/{token_id}")
     assert r.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Soft delete — the row is retained as the audit record, and every read path
+# must stop resolving it. Without the filters, flipping the delete to a stamp
+# is a revocation bypass on HTTP, WebSocket and OTLP ingest alike.
+# ---------------------------------------------------------------------------
+
+
+def test_revoke_token_when_revoked_then_the_row_is_retained_with_the_actor(
+    client: TestClient, session_factory
+) -> None:
+    pid = _signup_with_project(client, "audittrail@example.com")
+    me_id = client.get("/v1/users/me").json()["id"]
+    token_id = client.post(
+        f"/v1/projects/{pid}/tokens", json={"name": "traced"}
+    ).json()["id"]
+
+    assert client.delete(f"/v1/projects/{pid}/tokens/{token_id}").status_code == 204
+
+    row = _read_token(session_factory, token_id)
+    assert row is not None, "the row is the audit record; a revoke must not delete it"
+    assert row.revoked_at is not None
+    assert row.revoked_by_user_id == me_id
+
+
+def test_revoke_token_when_revoked_twice_then_the_first_stamp_is_kept(
+    client: TestClient, session_factory
+) -> None:
+    """A repeat revoke 404s (see above) and must not move the timestamp."""
+    pid = _signup_with_project(client, "twicerevoked@example.com")
+    token_id = client.post(f"/v1/projects/{pid}/tokens", json={"name": "twice"}).json()[
+        "id"
+    ]
+
+    client.delete(f"/v1/projects/{pid}/tokens/{token_id}")
+    first_stamp = _read_token(session_factory, token_id).revoked_at
+    client.delete(f"/v1/projects/{pid}/tokens/{token_id}")
+
+    assert _read_token(session_factory, token_id).revoked_at == first_stamp
+
+
+def test_me_key_when_the_token_is_revoked_then_status_is_401(
+    client: TestClient,
+) -> None:
+    """``GET /v1/me/key`` — the introspection surface (router.py)."""
+    pid = _signup_with_project(client, "introspect@example.com")
+    minted = client.post(f"/v1/projects/{pid}/tokens", json={"name": "introspect"})
+    full, token_id = minted.json()["full"], minted.json()["id"]
+    headers = {"Authorization": f"Bearer {full}"}
+    assert client.get("/v1/me/key", headers=headers).status_code == 200
+
+    client.delete(f"/v1/projects/{pid}/tokens/{token_id}")
+
+    assert client.get("/v1/me/key", headers=headers).status_code == 401
+
+
+def test_require_project_when_the_token_is_revoked_then_status_is_401(
+    client: TestClient,
+) -> None:
+    """A bearer-only SDK route — ``require_project`` (deps/tokens.py)."""
+    pid = _signup_with_project(client, "sdkroute@example.com")
+    minted = client.post(f"/v1/projects/{pid}/tokens", json={"name": "sdk"})
+    full, token_id = minted.json()["full"], minted.json()["id"]
+    headers = {"Authorization": f"Bearer {full}"}
+    assert client.get("/v1/agents/nonexistent", headers=headers).status_code == 404
+
+    client.delete(f"/v1/projects/{pid}/tokens/{token_id}")
+
+    assert client.get("/v1/agents/nonexistent", headers=headers).status_code == 401
+
+
+async def test_optional_api_key_when_the_token_is_revoked_then_it_raises_401(
+    client: TestClient, session_factory
+) -> None:
+    """``optional_api_key`` has no route wired to it yet, so it is gated here
+    directly — it is the third caller of ``_validate_sdk_token`` and would
+    otherwise be the one surface with no revocation coverage."""
+    from fastapi import HTTPException
+    import pytest
+
+    from hexgate_api.deps.tokens import optional_api_key
+
+    pid = _signup_with_project(client, "optionaldep@example.com")
+    minted = client.post(f"/v1/projects/{pid}/tokens", json={"name": "optional"})
+    full, token_id = minted.json()["full"], minted.json()["id"]
+    client.delete(f"/v1/projects/{pid}/tokens/{token_id}")
+
+    async with session_factory() as session:
+        with pytest.raises(HTTPException) as exc_info:
+            await optional_api_key(f"Bearer {full}", session)
+
+    assert exc_info.value.status_code == 401
+
+
+async def test_find_token_by_secret_when_revoked_then_last_used_at_is_not_bumped(
+    client: TestClient, session_factory
+) -> None:
+    """A revoked key must not keep updating its own activity timestamp — the
+    dashboard's "last used" column would otherwise show a revoked key as live."""
+    from hexgate_api.features.tokens.service import find_token_by_secret
+
+    pid = _signup_with_project(client, "notbumped@example.com")
+    minted = client.post(f"/v1/projects/{pid}/tokens", json={"name": "quiet"})
+    full, token_id = minted.json()["full"], minted.json()["id"]
+    client.get("/v1/me/key", headers={"Authorization": f"Bearer {full}"})
+    client.delete(f"/v1/projects/{pid}/tokens/{token_id}")
+
+    async with session_factory() as session:
+        before = (await session.get(ApiKey, token_id)).last_used_at
+        assert before is not None, "the pre-revoke introspection should have bumped it"
+
+        assert await find_token_by_secret(session, full) is None
+
+    async with session_factory() as session:
+        assert (await session.get(ApiKey, token_id)).last_used_at == before
 
 
 # ---------------------------------------------------------------------------

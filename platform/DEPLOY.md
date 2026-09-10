@@ -207,6 +207,29 @@ far that did this:
 |---|---|---|
 | OTLP pipeline (collector/redpanda/enricher) | `HEXGATE_OTLP_PORT` | `7001` prod, `7201` staging |
 
+**When a release adds a Postgres column** — `init_db()` is `create_all`, which
+creates missing tables but never adds columns to an existing one, so the schema
+change has to be applied by hand *before* the new images go up. Files live in
+`platform/postgres/migrations/`, are idempotent, and are safe to apply early:
+
+```bash
+cd /srv/hexgate-<stage>
+docker compose -p hexgate-<stage> --env-file platform/.env.<stage> \
+  -f platform/docker-compose.deploy.yml exec -T postgres \
+  psql -v ON_ERROR_STOP=1 -U hexgate -d hexgate \
+  < platform/postgres/migrations/0001_devtoken_soft_delete.sql
+make platform-up STAGE=<stage>
+```
+
+Applying it *after* the deploy is not a slower path, it is an outage: the
+collector's snapshot query selects the new column, so its first load fails, the
+container refuses to boot, and OTLP ingest is down until the migration lands.
+Every bearer-authenticated API route 500s for the same reason.
+
+| Release | Migration |
+|---|---|
+| devtoken soft delete | `0001_devtoken_soft_delete.sql` |
+
 ## Operations
 
 **Back up these volumes** (per env, prefixed `hexgate-prod_` / `hexgate-staging_`):

@@ -189,6 +189,14 @@ postgres-init: postgres-up ## Create the platform-api tables on local Postgres (
 	@# stack's api-init one-shot imports it (docker-compose.deploy.yml).
 	cd platform/api && DATABASE_URL=$(POSTGRES_DSN) uv run python -c \
 		"import asyncio; import hexgate_api.models; from hexgate_api.core.db import init_db; asyncio.run(init_db())"
+	@# create_all adds missing TABLES, never missing columns, so a volume that
+	@# predates a column keeps 500ing at request time with no startup error.
+	@# Every file here is idempotent (IF NOT EXISTS), so replaying the whole
+	@# directory on each init is the cheapest honest local-dev migration story.
+	@# Deployed stacks apply these by hand — see platform/DEPLOY.md section 6.
+	for f in platform/postgres/migrations/*.sql; do \
+		docker exec -i hexgate-postgres psql -v ON_ERROR_STOP=1 -U hexgate -d hexgate < "$$f" >/dev/null; \
+	done
 
 .PHONY: postgres-stop
 postgres-stop: ## Stop Postgres (keeps the data volume)

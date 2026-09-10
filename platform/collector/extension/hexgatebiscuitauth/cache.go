@@ -18,6 +18,14 @@ import (
 // join is needed — project_id is denormalised straight onto the row — and no
 // tenancy filter either, since the Collector serves every project.
 //
+// `revoked_at IS NULL` is the revocation gate. Revoking a key soft-deletes it
+// (tokens/service.py:revoke_api_key) so the row survives as the audit record,
+// which means an unfiltered read here would serve revoked keys forever — this
+// query is the ONLY revocation check on the OTLP ingest path. The column is
+// nullable and was added by platform/postgres/migrations/0001; against a
+// database that predates it this query fails and the Collector refuses to
+// boot (see start()), which is the intended loud failure.
+//
 // The secret column is deliberately not selected. The signed token_id fact
 // *is* the row's primary key (platform-api PR #126), so a verified token can
 // be looked up by that id and the Collector never has to hold full
@@ -25,7 +33,7 @@ import (
 //
 // A full-table read is viable because the row count is small: one row per API
 // key, thousands across the whole platform rather than millions.
-const apiKeyQuery = `SELECT id, project_id FROM devtoken`
+const apiKeyQuery = `SELECT id, project_id FROM devtoken WHERE revoked_at IS NULL`
 
 // loadTimeout bounds a single read of the key table. Without it, a connection
 // that black-holes packets (network partition, an LB holding the socket open)
@@ -37,8 +45,8 @@ const apiKeyQuery = `SELECT id, project_id FROM devtoken`
 const loadTimeout = 10 * time.Second
 
 var (
-	// errUnknownAPIKey means a validly-signed token's id matches no row,
-	// which is what revoking a key leaves behind.
+	// errUnknownAPIKey means a validly-signed token's id matches no
+	// unrevoked row, which is what revoking a key leaves behind.
 	errUnknownAPIKey = errors.New("api key is revoked or unknown")
 
 	// errCacheStale means we can no longer vouch for the revocation list.
