@@ -182,11 +182,12 @@ func (a *biscuitAuth) resolveProject(id *identity) (string, error) {
 	switch {
 	case errors.Is(err, errUnknownAPIKey):
 		// Worth a Warn even at volume: the signature held, so this key was
-		// minted by us and its row is gone. Revocation is the expected
-		// cause; the other way to get here is a Collector pointed at a
-		// different control-plane database than the one that minted the key,
-		// which is a deployment mistake worth seeing.
-		a.logger.Warn("rejected an API key whose token_id matches no row in devtoken: it was "+
+		// minted by us and it is absent from the snapshot. Revocation is the
+		// expected cause (revoked rows are filtered out of apiKeyQuery); the
+		// other way to get here is a Collector pointed at a different
+		// control-plane database than the one that minted the key, which is a
+		// deployment mistake worth seeing.
+		a.logger.Warn("rejected an API key that resolves to no live row in devtoken: it was "+
 			"revoked, or this Collector is reading a different control-plane database than the "+
 			"one that minted it",
 			zap.String("token_id", id.TokenID),
