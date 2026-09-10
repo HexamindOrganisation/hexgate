@@ -23,6 +23,40 @@ function modeBadge(mode: string | undefined) {
   return "default" as const;
 }
 
+type ToolKind = "tool" | "mcp" | "reach" | "admission";
+const _KIND_ORDER: Record<ToolKind, number> = {
+  tool: 0,
+  mcp: 1,
+  reach: 2,
+  admission: 3,
+};
+
+/** The resolved policy folds agent-level policy into the same tool map: reach
+ * lowers to ``agent.tool:``/``agent.handoff:`` and admission to ``agent.run``.
+ * Classify a raw key so those show as reach/admission with a readable label
+ * instead of a raw ``agent.*`` tool row. */
+function classifyTool(key: string): {
+  kind: ToolKind;
+  label: string;
+  tag?: string;
+} {
+  if (key === "agent.run") {
+    return { kind: "admission", label: "start this agent", tag: "admission" };
+  }
+  const reach = /^agent\.(tool|handoff):(.+)$/.exec(key);
+  if (reach) {
+    return {
+      kind: "reach",
+      label: reach[2],
+      tag: reach[1] === "tool" ? "as tool" : "handoff",
+    };
+  }
+  if (key.startsWith("mcp-")) {
+    return { kind: "mcp", label: key.slice(4), tag: "mcp" };
+  }
+  return { kind: "tool", label: key };
+}
+
 /**
  * Right pane: the composed policy (Resolved), analyzer lints (Lints), and the
  * decision tester (Test), plus a policy-graph launcher. Resolved + Lints
@@ -220,7 +254,16 @@ function ResolvedTab({
 
   const policy = resolved[active];
   const tools = policy?.tools ?? {};
-  const toolNames = Object.keys(tools).sort();
+  // Group plain tools, then MCP, reach, and admission — the agent.* keys sort
+  // last so the ordinary tools read first.
+  const toolNames = Object.keys(tools).sort((a, b) => {
+    const ka = classifyTool(a);
+    const kb = classifyTool(b);
+    return (
+      _KIND_ORDER[ka.kind] - _KIND_ORDER[kb.kind] ||
+      ka.label.localeCompare(kb.label)
+    );
+  });
   const defaultMode = policy?.default_policy?.mode;
 
   return (
@@ -304,13 +347,26 @@ function ResolvedTab({
             toolNames.map((t) => {
               const tp = tools[t];
               const constraints = tp?.constraints ?? [];
+              const { kind, label, tag } = classifyTool(t);
               return (
                 <div
                   key={t}
                   className="flex items-start justify-between gap-2 py-1 text-xs border-b border-border/50"
                 >
                   <div className="min-w-0">
-                    <span className="font-mono">{t}</span>
+                    <span className="font-mono">{label}</span>
+                    {tag && (
+                      <span
+                        className={cn(
+                          "ml-1.5 rounded px-1 py-0.5 text-[9px] uppercase tracking-wider",
+                          kind === "admission"
+                            ? "bg-primary/15 text-primary"
+                            : "bg-muted text-muted-foreground",
+                        )}
+                      >
+                        {tag}
+                      </span>
+                    )}
                     {constraints.length > 0 && (
                       <ul className="mt-0.5 text-[11px] text-muted-foreground font-mono space-y-0.5">
                         {constraints.map((c, i) => (
