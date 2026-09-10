@@ -1,12 +1,12 @@
 """API-key persistence: mint (Biscuit-signed), list, revoke, lookup, mask.
 
-Revocation is a soft delete: :func:`revoke_api_key` stamps ``revoked_at`` and
-the row stays as the audit record. Every read below therefore filters on
-``revoked_at IS NULL`` -- without that, revocation would silently stop working
-on every bearer surface (see :func:`find_token_by_secret`).
+Revocation is a soft delete: :func:`revoke_api_key` stamps ``revoked_at``, masks
+the secret, and the row stays as the audit record. Every read below therefore
+filters on ``revoked_at IS NULL`` -- without that, revocation would silently stop
+working on every bearer surface (see :func:`find_token_by_secret`).
 """
 
-from sqlmodel import select
+from sqlmodel import select, update
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from hexgate_api.core.biscuits import MintRequest, make_envelope, mint_token
@@ -118,15 +118,36 @@ async def revoke_api_key(
     timestamp. The three cases share one guard because they share one response:
     distinguishing them here invites distinguishing them in the reply, which
     would leak whether a token id exists.
+
+    ``revoked_at IS NULL`` is part of the UPDATE's WHERE clause rather than a
+    check on a prior read: two concurrent revokes would both clear a
+    read-then-check, and the second would overwrite the first's actor and
+    timestamp -- losing the audit fact the soft delete exists to record. The
+    row is read first only to mask its secret; the update is the guard, and
+    ``rowcount`` is what decides whether this call was the one that revoked.
     """
     token = await session.get(ApiKey, token_id)
-    if token is None or token.project_id != project_id or token.revoked_at is not None:
+    if token is None or token.project_id != project_id:
         return False
-    token.revoked_at = utcnow()
-    token.revoked_by_user_id = revoked_by_user_id
-    session.add(token)
+    stmt = (
+        update(ApiKey)
+        .where(
+            ApiKey.id == token_id,
+            ApiKey.project_id == project_id,
+            ApiKey.revoked_at.is_(None),  # type: ignore[union-attr]
+        )
+        .values(
+            revoked_at=utcnow(),
+            revoked_by_user_id=revoked_by_user_id,
+            # The audit row keeps who/when, not a usable credential: retaining
+            # the full envelope forever would turn any DB dump -- or a rollback
+            # to code without the revocation filter -- into live keys.
+            secret=mask_secret(token.secret),
+        )
+    )
+    result = await session.exec(stmt)
     await session.commit()
-    return True
+    return result.rowcount == 1
 
 
 def mask_secret(full: str) -> str:

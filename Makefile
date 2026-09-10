@@ -328,7 +328,7 @@ platform-api: ## Run the platform API dev server (FastAPI on :8000, SQLite)
 	cd platform/api && uv run uvicorn hexgate_api.main:app --reload --port 8000
 
 .PHONY: platform-api-pg
-platform-api-pg: postgres-up ## Run the platform API against local Postgres (starts PG first)
+platform-api-pg: postgres-init ## Run the platform API against local Postgres (starts PG first)
 	cd platform/api && DATABASE_URL=$(POSTGRES_DSN) uv run uvicorn hexgate_api.main:app --reload --port 8000
 
 .PHONY: platform-api-test
@@ -395,6 +395,24 @@ platform-env-pull: ## Pull platform/.env.<stage> from Scaleway: make platform-en
 .PHONY: _require-stage-env
 _require-stage-env:
 	@test -f platform/.env.$(STAGE) || $(MAKE) platform-env-pull STAGE=$(STAGE)
+
+# Runs BEFORE platform-up on any release that adds a column: init_db() is
+# create_all, which never alters an existing table, and the collector's snapshot
+# query selects the new column — so new images against an unmigrated database
+# take OTLP ingest down. Every file is idempotent, so replaying the whole
+# directory is a no-op when there is nothing new. See platform/DEPLOY.md § 6.
+#
+# Upgrades only: the files ALTER tables the control plane has already created,
+# so on a first-ever deploy there is nothing to migrate (create_all builds the
+# current schema) and this fails on the missing table. Skip it there.
+.PHONY: platform-migrate
+platform-migrate: _require-stage-env ## Apply platform/postgres/migrations/*.sql to a deploy stack: make platform-migrate STAGE=prod
+	$(DEPLOY_COMPOSE) up -d --wait postgres
+	@for f in platform/postgres/migrations/*.sql; do \
+		echo "applying $$f"; \
+		$(DEPLOY_COMPOSE) exec -T postgres \
+			psql -v ON_ERROR_STOP=1 -U hexgate -d hexgate < "$$f" >/dev/null || exit 1; \
+	done
 
 .PHONY: platform-up
 platform-up: _require-stage-env ## Build + (re)start a deploy stack: make platform-up STAGE=prod (default staging)

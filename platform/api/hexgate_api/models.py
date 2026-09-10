@@ -231,6 +231,9 @@ class ApiKey(SQLModel, table=True):
     Every read path filters on ``revoked_at IS NULL`` -- including the Go
     Collector's snapshot query (``extension/hexgatebiscuitauth/cache.go``),
     which is the OTLP ingest path's only revocation check.
+
+    Revoking also masks ``secret``: the retained row is an audit record, not a
+    store of credentials that outlive their own revocation.
     """
 
     __tablename__ = "devtoken"  # historical name; renaming needs a migration
@@ -239,7 +242,7 @@ class ApiKey(SQLModel, table=True):
     project_id: str = Field(foreign_key="project.id", index=True)
     name: str
     prefix: str  # "fty_test" or "fty_live"
-    secret: str  # full token value; opaque random string for Phase A
+    secret: str  # full token value while live; replaced by its mask on revoke
     scopes_csv: str = ""  # comma-separated for now
     created_at: datetime = Field(
         default_factory=utcnow, sa_type=DateTime(timezone=True)

@@ -184,11 +184,18 @@ curl -X POST https://app.hexgate.ai/v1/auth/register \
 
 ```bash
 cd /srv/hexgate-<stage> && git pull   # or checkout a new tag for prod
+make platform-migrate STAGE=<stage>   # schema BEFORE images — see below; no-op when nothing is new
 make platform-up STAGE=<stage>        # rebuilds changed images, recreates containers
 ```
 
-Promote a release: tag it, `git checkout` it in the prod checkout, re-run
-`make platform-up STAGE=prod`.
+`platform-migrate` runs first on purpose and is safe to run on every upgrade:
+the files are idempotent, so a release that adds no column replays them to no
+effect. Reversing the two is an outage, not a slower path (see below). Skip it
+only on a first-ever deploy, where there is no existing schema to alter.
+
+Promote a release: tag it, `git checkout` it in the prod checkout, then the
+same `platform-migrate` → `platform-up` pair. Rolling *back* past a release
+that added columns has its own step — see below.
 
 Upgrades reuse the env already on the box: `platform-up` only pulls a
 MISSING `.env.<stage>`, never refreshes an existing one. If the secret changed,
@@ -209,26 +216,43 @@ far that did this:
 
 **When a release adds a Postgres column** — `init_db()` is `create_all`, which
 creates missing tables but never adds columns to an existing one, so the schema
-change has to be applied by hand *before* the new images go up. Files live in
-`platform/postgres/migrations/`, are idempotent, and are safe to apply early:
+change has to be applied *before* the new images go up. Files live in
+`platform/postgres/migrations/`, are idempotent, and are applied by
+`make platform-migrate STAGE=<stage>` (the step in the recipe above; it replays
+the whole directory against the stack's Postgres).
+
+Applying them *after* the deploy is not a slower path, it is an outage: the
+collector's snapshot query selects the new column, so its first load fails, the
+container refuses to boot, and OTLP ingest is down until the migration lands.
+Every bearer-authenticated API route 500s for the same reason. Note the
+migration itself is safe to run early — the *old* code never selects the new
+columns — which is why it is unconditional in the recipe.
+
+| Release | Migration |
+|---|---|
+| devtoken soft delete | `0001_devtoken_soft_delete.sql` |
+
+**Rolling back past a migration.** The columns stay behind when the code goes
+away, and old code does not know to filter on them. Nothing here is automatic,
+so a rollback that skips the compensating step below is silent — the stack comes
+up healthy and behaves wrongly.
+
+*Past `0001_devtoken_soft_delete`* — revocation became a soft delete: the row
+survives with `revoked_at` stamped, and every read filters it out. The
+pre-soft-delete code has no such filter, so it resolves those rows as live keys.
+Before checking out a tag older than that release:
 
 ```bash
 cd /srv/hexgate-<stage>
 docker compose -p hexgate-<stage> --env-file platform/.env.<stage> \
   -f platform/docker-compose.deploy.yml exec -T postgres \
   psql -v ON_ERROR_STOP=1 -U hexgate -d hexgate \
-  < platform/postgres/migrations/0001_devtoken_soft_delete.sql
-make platform-up STAGE=<stage>
+  -c "DELETE FROM devtoken WHERE revoked_at IS NOT NULL"
 ```
 
-Applying it *after* the deploy is not a slower path, it is an outage: the
-collector's snapshot query selects the new column, so its first load fails, the
-container refuses to boot, and OTLP ingest is down until the migration lands.
-Every bearer-authenticated API route 500s for the same reason.
-
-| Release | Migration |
-|---|---|
-| devtoken soft delete | `0001_devtoken_soft_delete.sql` |
+Skipping it un-revokes every key revoked while the new code was live, on HTTP,
+WebSocket and OTLP ingest alike. It discards the audit rows, which is the point:
+the old schema has nowhere to keep them.
 
 ## Operations
 

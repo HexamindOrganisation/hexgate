@@ -22,7 +22,7 @@ from hexgate_api.constants import DEFAULT_PROJECT_ID
 from hexgate_api.core import keystore as keystore_mod
 from hexgate_api.core.biscuits import parse_envelope, verify_token
 from hexgate_api.core.keystore import FileKeyStore
-from hexgate_api.features.tokens.service import mint_api_key
+from hexgate_api.features.tokens.service import mask_secret, mint_api_key
 from hexgate_api.main import app
 from hexgate_api.models import ApiKey
 from hexgate_api.seeds.defaults import ensure_default_project
@@ -228,17 +228,48 @@ def test_revoke_token_when_revoked_then_the_row_is_retained_with_the_actor(
 def test_revoke_token_when_revoked_twice_then_the_first_stamp_is_kept(
     client: TestClient, session_factory
 ) -> None:
-    """A repeat revoke 404s (see above) and must not move the timestamp."""
+    """A repeat revoke 404s and must not move the timestamp or the actor.
+
+    The second call losing the race is the whole point of the conditional
+    UPDATE in ``revoke_api_key``: overwriting the stamp would destroy the audit
+    fact the retained row exists to carry.
+    """
     pid = _signup_with_project(client, "twicerevoked@example.com")
+    me_id = client.get("/v1/users/me").json()["id"]
     token_id = client.post(f"/v1/projects/{pid}/tokens", json={"name": "twice"}).json()[
         "id"
     ]
 
-    client.delete(f"/v1/projects/{pid}/tokens/{token_id}")
+    assert client.delete(f"/v1/projects/{pid}/tokens/{token_id}").status_code == 204
     first_stamp = _read_token(session_factory, token_id).revoked_at
-    client.delete(f"/v1/projects/{pid}/tokens/{token_id}")
 
-    assert _read_token(session_factory, token_id).revoked_at == first_stamp
+    assert client.delete(f"/v1/projects/{pid}/tokens/{token_id}").status_code == 404
+
+    row = _read_token(session_factory, token_id)
+    assert row.revoked_at == first_stamp
+    assert row.revoked_by_user_id == me_id
+
+
+def test_revoke_token_when_revoked_then_the_secret_is_masked(
+    client: TestClient, session_factory
+) -> None:
+    """The audit row keeps who/when, not a usable credential.
+
+    A DB dump -- or a rollback to code that does not filter on ``revoked_at``
+    -- would otherwise hand back working keys for every revocation ever made.
+    """
+    pid = _signup_with_project(client, "maskedonrevoke@example.com")
+    minted = client.post(f"/v1/projects/{pid}/tokens", json={"name": "masked"}).json()
+    token_id = minted["id"]
+    full_token = minted["full"]
+
+    assert client.delete(f"/v1/projects/{pid}/tokens/{token_id}").status_code == 204
+
+    stored = _read_token(session_factory, token_id).secret
+    assert stored != full_token
+    assert stored == minted["masked"] == mask_secret(full_token)
+    # The biscuit payload is what authenticates; the envelope prefix is public.
+    assert parse_envelope(full_token)[2] not in stored
 
 
 def test_me_key_when_the_token_is_revoked_then_status_is_401(
