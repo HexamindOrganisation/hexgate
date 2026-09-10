@@ -38,6 +38,27 @@ def new_uuid_str() -> str:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Control-plane actor trail (issue #160).
+#
+# ``created_by_user_id`` / ``updated_by_user_id`` are nullable FKs to ``user``.
+# NULL means "no human actor": a first-boot seed row (seeds/defaults.py), an SDK
+# write from a key with no recorded owner, or a row that predates
+# platform/postgres/migrations/0002. There is no sentinel actor -- the FK means
+# the only storable values are a real user id or NULL.
+#
+# These columns record the LAST writer, not the history. "What did this policy
+# say before Tuesday" is not answerable from them by construction; that is the
+# append-only control-plane audit_event log, tracked separately. Do not grow
+# these columns into a change log.
+#
+# Declared per table rather than via a shared mixin on purpose: no mixin here
+# carries a ``Field(foreign_key=...)``, and sharing a declaration that produces
+# a ForeignKey across mapped classes needs ``declared_attr`` to be safe. Prove
+# that in isolation before collapsing these.
+# ---------------------------------------------------------------------------
+
+
 class Organization(SQLModel, table=True):
     """A tenant. Customers see this as their workspace / team.
 
@@ -57,6 +78,11 @@ class Organization(SQLModel, table=True):
     created_at: datetime = Field(
         default_factory=utcnow, sa_type=DateTime(timezone=True)
     )
+    created_by_user_id: Optional[str] = Field(default=None, foreign_key="user.id")
+    updated_at: datetime = Field(
+        default_factory=utcnow, sa_type=DateTime(timezone=True)
+    )
+    updated_by_user_id: Optional[str] = Field(default=None, foreign_key="user.id")
 
 
 class User(SQLModel, table=True):
@@ -156,6 +182,14 @@ class OrganizationMember(SQLModel, table=True):
     created_at: datetime = Field(
         default_factory=utcnow, sa_type=DateTime(timezone=True)
     )
+    # Who granted this access. On the invite-accept path this is the *inviter*,
+    # not the invitee -- "who let this person in" is the audit question, and the
+    # invitee is already ``user_id`` on the same row.
+    created_by_user_id: Optional[str] = Field(default=None, foreign_key="user.id")
+    updated_at: datetime = Field(
+        default_factory=utcnow, sa_type=DateTime(timezone=True)
+    )
+    updated_by_user_id: Optional[str] = Field(default=None, foreign_key="user.id")
 
 
 class Invitation(SQLModel, table=True):
@@ -191,6 +225,7 @@ class Invitation(SQLModel, table=True):
     revoked_at: Optional[datetime] = Field(
         default=None, sa_type=DateTime(timezone=True)
     )
+    revoked_by_user_id: Optional[str] = Field(default=None, foreign_key="user.id")
     created_at: datetime = Field(
         default_factory=utcnow, sa_type=DateTime(timezone=True)
     )
@@ -221,6 +256,11 @@ class Project(SQLModel, table=True):
     created_at: datetime = Field(
         default_factory=utcnow, sa_type=DateTime(timezone=True)
     )
+    created_by_user_id: Optional[str] = Field(default=None, foreign_key="user.id")
+    updated_at: datetime = Field(
+        default_factory=utcnow, sa_type=DateTime(timezone=True)
+    )
+    updated_by_user_id: Optional[str] = Field(default=None, foreign_key="user.id")
 
 
 class ApiKey(SQLModel, table=True):
@@ -234,6 +274,10 @@ class ApiKey(SQLModel, table=True):
 
     Revoking also masks ``secret``: the retained row is an audit record, not a
     store of credentials that outlive their own revocation.
+
+    ``owner_user_id`` is what makes offboarding possible: keys never expire
+    (``mint_api_key`` passes ``ttl_seconds=None``), so removing an org member
+    sweeps the keys they own (``features/members/service.py:remove_member``).
     """
 
     __tablename__ = "devtoken"  # historical name; renaming needs a migration
@@ -254,6 +298,13 @@ class ApiKey(SQLModel, table=True):
         default=None, sa_type=DateTime(timezone=True)
     )
     revoked_by_user_id: Optional[str] = Field(default=None, foreign_key="user.id")
+    created_by_user_id: Optional[str] = Field(default=None, foreign_key="user.id")
+    # Whose key this is, as distinct from who minted it: an admin can mint on a
+    # teammate's behalf. This is the column remove_member sweeps when someone
+    # leaves the org, which is the reason it exists -- indexed for that query.
+    owner_user_id: Optional[str] = Field(
+        default=None, foreign_key="user.id", index=True
+    )
 
 
 class Agent(SQLModel, table=True):
@@ -274,6 +325,13 @@ class Agent(SQLModel, table=True):
     updated_at: datetime = Field(
         default_factory=utcnow, sa_type=DateTime(timezone=True)
     )
+    created_by_user_id: Optional[str] = Field(default=None, foreign_key="user.id")
+    # The last human to author an edit. Deliberately NOT touched by
+    # ``recompile_project`` / ``backfill_bundles``: those rewrite only the three
+    # bundle columns below, and stamping them would replace this agent's real
+    # author with whoever last edited a policy module (and move ``updated_at``
+    # on a recompile nobody authored). See agents/service.py:_apply_bundle.
+    updated_by_user_id: Optional[str] = Field(default=None, foreign_key="user.id")
 
     # Compiled + signed WASM bundle, produced from policy_yaml at save time
     # (see hexgate_api.features.agents.compiler.compile_bundle). Null when opa is unavailable or the
@@ -306,9 +364,21 @@ class AgentVersion(SQLModel, table=True):
     created_at: datetime = Field(
         default_factory=utcnow, sa_type=DateTime(timezone=True)
     )
+    # Immutable snapshot: creator only, no update trail. Set from the registering
+    # key's owner on the SDK path (deps/tokens.py:require_project_actor), so it
+    # is NULL for a key minted before #160 or by a system path.
+    created_by_user_id: Optional[str] = Field(default=None, foreign_key="user.id")
 
 
 class Tool(SQLModel, table=True):
+    """One tool on one :class:`AgentVersion`.
+
+    No actor trail on purpose: a Tool row is only ever written by
+    ``agents/service.py:_create_tools`` as part of a version snapshot and is
+    never mutated independently, so it inherits its version's trail. Listed as
+    an explicit exemption in ``tests/test_actor_columns.py``.
+    """
+
     __tablename__ = "tool"
     __table_args__ = (
         UniqueConstraint("agent_version_id", "name", name="uq_tool_agent_version_name"),
@@ -383,6 +453,8 @@ class PolicyModule(SQLModel, table=True):
     updated_at: datetime = Field(
         default_factory=utcnow, sa_type=DateTime(timezone=True)
     )
+    created_by_user_id: Optional[str] = Field(default=None, foreign_key="user.id")
+    updated_by_user_id: Optional[str] = Field(default=None, foreign_key="user.id")
 
 
 class RoleBinding(SQLModel, table=True):
@@ -411,3 +483,10 @@ class RoleBinding(SQLModel, table=True):
     capabilities: list[str] | dict[str, list[str]] = Field(
         default_factory=dict, sa_column=Column(JSON, nullable=False)
     )
+    created_at: datetime = Field(
+        default_factory=utcnow, sa_type=DateTime(timezone=True)
+    )
+    # No updated_* pair: ``set_roles`` replaces every row for the project on
+    # each write, so a row's creation IS its last write and an update trail
+    # would always duplicate this one.
+    created_by_user_id: Optional[str] = Field(default=None, foreign_key="user.id")

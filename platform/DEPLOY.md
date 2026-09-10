@@ -221,16 +221,21 @@ change has to be applied *before* the new images go up. Files live in
 `make platform-migrate STAGE=<stage>` (the step in the recipe above; it replays
 the whole directory against the stack's Postgres).
 
-Applying them *after* the deploy is not a slower path, it is an outage: the
-collector's snapshot query selects the new column, so its first load fails, the
-container refuses to boot, and OTLP ingest is down until the migration lands.
-Every bearer-authenticated API route 500s for the same reason. Note the
-migration itself is safe to run early — the *old* code never selects the new
-columns — which is why it is unconditional in the recipe.
+Applying them *after* the deploy is not a slower path, it is an outage — though
+the signature differs per migration, so don't debug one expecting the other.
+`0001` takes down OTLP ingest: the collector's snapshot query selects
+`revoked_at`, so its first load fails and the container refuses to boot, and
+every bearer-authenticated API route 500s alongside it. `0002` leaves the
+collector alone (it selects no actor column) and instead 500s every API route
+that touches one of its nine tables — reads included, so the dashboard is blank
+rather than degraded. Note the migration itself is safe to run early — the *old*
+code never selects the new columns — which is why it is unconditional in the
+recipe.
 
 | Release | Migration |
 |---|---|
 | devtoken soft delete | `0001_devtoken_soft_delete.sql` |
+| control-plane actor columns | `0002_actor_columns.sql` |
 
 **Rolling back past a migration.** The columns stay behind when the code goes
 away, and old code does not know to filter on them. Nothing here is automatic,
@@ -253,6 +258,15 @@ docker compose -p hexgate-<stage> --env-file platform/.env.<stage> \
 Skipping it un-revokes every key revoked while the new code was live, on HTTP,
 WebSocket and OTLP ingest alike. It discards the audit rows, which is the point:
 the old schema has nowhere to keep them.
+
+*Past `0002_actor_columns`* — **no compensating step.** Every column it adds is
+nullable and unreferenced by the older code, so a reverted stack reads all nine
+tables exactly as it did before; leave them in place. The one thing the rollback
+does not undo is keys that the member-removal cascade revoked while the new code
+was live. That is correct — they were revoked because someone left the org — and
+un-revoking them is not possible anyway: the secret was masked on revoke
+(`0001`'s behaviour), so the credential is gone even if `revoked_at` were
+cleared. If a revocation was made in error, mint a fresh key.
 
 ## Operations
 
