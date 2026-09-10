@@ -50,6 +50,19 @@ _log = logging.getLogger(__name__)
 # beats the 5-minute default; an eviction would only add rebalance churn.
 _MAX_POLL_INTERVAL_MS = 30 * 60 * 1000
 
+_MAX_RECORD_BYTES = 8 * 1024 * 1024
+"""Must be >= the raw and DLQ topics' ``max.message.bytes``
+(platform/redpanda/init/create-topics.sh). aiokafka defaults both the consumer's
+per-partition fetch and the producer's request size to 1 MiB.
+
+The consumer side is load-bearing: a record the broker accepted but the fetch
+limit rejects raises ``RecordTooLargeError`` and stalls that partition for good.
+The producer side is headroom only — ``dlq.py`` caps an envelope well under even
+the old 1 MiB default, so nothing it builds was ever at risk of being refused;
+the two are set together so the DLQ path can never become the narrower one.
+Raised with the topic and the Collector's producer limit — see
+docs/internals/audit-pipeline.md §4.1/§4.2."""
+
 
 def _project_id(key: bytes | None) -> str | None:
     """The auth-derived project attribution, or None when it is unusable.
@@ -119,10 +132,13 @@ class EnricherJob:
                 enable_auto_commit=False,
                 auto_offset_reset="earliest",
                 max_poll_interval_ms=_MAX_POLL_INTERVAL_MS,
+                max_partition_fetch_bytes=_MAX_RECORD_BYTES,
             )
         if self._producer is None:
             self._producer = AIOKafkaProducer(
-                bootstrap_servers=settings.redpanda_bootstrap_server, acks="all"
+                bootstrap_servers=settings.redpanda_bootstrap_server,
+                acks="all",
+                max_request_size=_MAX_RECORD_BYTES,
             )
         # Both starts live inside the try: the consumer joins the group on
         # start(), so a producer that then fails to connect must still leave

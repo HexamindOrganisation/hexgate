@@ -31,12 +31,19 @@ from hexgate_api.jobs.enricher.decode import attrs_dict
 _JSON_DICT_KEYS = (semconv.ARGUMENTS, semconv.HINT, semconv.ATTRIBUTES)
 _UNPARSEABLE = "[UNPARSEABLE]"
 
-# Both variable-size fields are capped well below the producer's 1 MiB
-# default max_request_size: an envelope the producer itself cannot send
-# fails client-side on every attempt and would wedge the very partition
-# the DLQ exists to protect. The caps are diagnostic previews, not the
-# record of truth — ``_source`` locates the original bytes while the raw
-# topic's retention lasts.
+# Both variable-size fields are capped well below the DLQ producer's
+# max_request_size (``_MAX_RECORD_BYTES``, 8 MiB — and previously aiokafka's
+# 1 MiB default, which these caps also cleared): an envelope the producer
+# itself cannot send fails client-side on every attempt and would wedge the
+# very partition the DLQ exists to protect. Keep them independent of that
+# limit rather than scaled to it — the caps are diagnostic previews, not the
+# record of truth, and raw span bytes sit on a 30-day topic with no ACLs.
+# ``_source`` locates the original bytes while the raw topic's retention lasts.
+#
+# The two caps never add up: ``span_envelope`` carries the attributes and no
+# raw value, ``record_envelope`` the raw value and no attributes. The larger
+# shape is the record one, and base64 expands it by a third — 64 KiB of bytes
+# ship as ~85 KiB of JSON, which is the real per-envelope worst case.
 _ATTRIBUTES_CAP_BYTES = 32 * 1024
 _RAW_VALUE_CAP_BYTES = 64 * 1024
 
