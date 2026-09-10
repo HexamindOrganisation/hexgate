@@ -10,6 +10,7 @@ docs/adr/R-POL-002).
 
 from __future__ import annotations
 
+import json
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Response
@@ -20,16 +21,26 @@ from hexgate_api.core.locks import project_lock
 from hexgate_api.deps.org import require_org_member
 from hexgate_api.deps.project import require_project_admin
 from hexgate_api.features.policy_modules import service
-from hexgate_api.models import OrganizationMember, PolicyModule, User
+from hexgate_api.models import OrganizationMember, PolicyFile, PolicyModule, User
 from hexgate_api.schemas import (
     PolicyCheckResponse,
+    PolicyFileRead,
+    PolicyFileWrite,
+    PolicyGraphResponse,
     PolicyLintOut,
     PolicyModuleRead,
     PolicyModuleWrite,
+    PolicyPreviewRequest,
+    PolicyPreviewResponse,
+    PolicyTestRequest,
+    PolicyTestResponse,
     ResolvedPolicyResponse,
     RoleBindingsRead,
     RoleBindingsWrite,
 )
+
+# SDK Verdict.outcome enum name → the wire string the editor expects.
+_OUTCOME_WIRE = {"ALLOW": "allow", "DENY": "deny", "NEEDS_APPROVAL": "approval_required"}
 
 router = APIRouter()
 
@@ -56,6 +67,15 @@ def _module_read(row: PolicyModule) -> PolicyModuleRead:
     )
 
 
+def _file_read(row: PolicyFile) -> PolicyFileRead:
+    return PolicyFileRead(
+        name=row.name,
+        content=row.content,
+        content_hash=row.content_hash,
+        updated_at=row.updated_at,
+    )
+
+
 async def _recompile_project_agents(session: AsyncSession, project_id: str) -> None:
     """Recompile the project's agent bundles after a policy change.
 
@@ -74,6 +94,22 @@ async def _recompile_project_agents(session: AsyncSession, project_id: str) -> N
         logger.exception(
             "recompile after policy change failed for project %s", project_id
         )
+
+
+async def _rebuild_or_none(session: AsyncSession, project_id: str) -> bool:
+    """Recompile and report whether a bundle was built (or there was nothing to
+    build) vs. no bundle could be built. Used by the classic→modular flip, which
+    rolls back on a False; ``None`` from ``recompile_project`` means "couldn't
+    build", ``0``/``>0`` means "nothing to do / built" — both are fine."""
+    from hexgate_api.core.keystore import keystore
+    from hexgate_api.features.agents.service import recompile_project
+
+    try:
+        built = await recompile_project(session, project_id, keystore.sign)
+    except Exception:  # noqa: BLE001 — any compile failure is "can't build"
+        logger.exception("modular flip recompile failed for project %s", project_id)
+        return False
+    return built is not None
 
 
 # --- module CRUD -------------------------------------------------------------
@@ -276,6 +312,137 @@ async def api_set_policy_roles(
 # --- resolve / check ---------------------------------------------------------
 
 
+# --- file CRUD (compose entry-file store) ------------------------------------
+
+
+@router.get("/projects/{project_id}/policy-files", tags=["policy"])
+async def api_list_policy_files(
+    project_id: str,
+    _user: User = Depends(require_org_member),
+    session: AsyncSession = Depends(get_session),
+) -> list[PolicyFileRead]:
+    """Every file in the project's compose policy (entry ``policy.yaml`` + imports)."""
+    return [_file_read(r) for r in await service.list_files(session, project_id)]
+
+
+@router.put("/projects/{project_id}/policy-files/{name:path}", tags=["policy"])
+async def api_put_policy_file(
+    project_id: str,
+    name: str,
+    body: PolicyFileWrite,
+    _membership: tuple[User, OrganizationMember] = Depends(require_project_admin),
+    session: AsyncSession = Depends(get_session),
+) -> PolicyFileRead:
+    """Create or replace one file. 422 if the content isn't a valid compose
+    document; 409 if, with this file, the project no longer resolves."""
+    async with project_lock(project_id):
+        # Validate BEFORE writing (like the module PUT). Structural validity first
+        # (422 — malformed compose document), then whether the project still
+        # resolves with this file (409), so agents never hold a broken bundle.
+        try:
+            service.validate_compose_file(body.content)
+        except service.InvalidModuleError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        prev = await service.get_file(session, project_id, name)
+        prev_hash = prev.content_hash if prev else None
+        was_modular = await service.is_modular(session, project_id)
+        ok, detail = await service.project_resolves_with_file(
+            session, project_id, name, body.content
+        )
+        if not ok:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"file {name!r} would break the project's policy resolution; "
+                    f"not saved ({detail})"
+                ),
+            )
+        row = await service.upsert_file(
+            session, project_id=project_id, name=name, content=body.content
+        )
+        if row.content_hash != prev_hash:
+            # Writing the first policy.yaml flips a classic project to modular.
+            # Then agents' policy_yaml bundles are now wrong, so — exactly like the
+            # roles PUT — require a freshly-built modular bundle; if none can be
+            # built (e.g. opa unavailable), roll back the file rather than leave
+            # is_modular True with stale classic WASM in force.
+            now_modular = name == service.ENTRY_FILE and not was_modular
+            if now_modular:
+                if not await _rebuild_or_none(session, project_id):
+                    await service.delete_file(
+                        session, project_id=project_id, name=name
+                    )
+                    raise HTTPException(
+                        status_code=409,
+                        detail=(
+                            "could not compile the modular policy bundle (is opa "
+                            f"available?); file {name!r} not saved"
+                        ),
+                    )
+            else:
+                await _recompile_project_agents(session, project_id)
+    return _file_read(row)
+
+
+@router.delete(
+    "/projects/{project_id}/policy-files/{name:path}",
+    status_code=204,
+    tags=["policy"],
+)
+async def api_delete_policy_file(
+    project_id: str,
+    name: str,
+    _membership: tuple[User, OrganizationMember] = Depends(require_project_admin),
+    session: AsyncSession = Depends(get_session),
+) -> Response:
+    """Delete one file. 404 if absent; 409 if removing it leaves the entry
+    unresolvable (a still-imported fragment)."""
+    async with project_lock(project_id):
+        existing = await service.get_file(session, project_id, name)
+        if existing is None:
+            raise HTTPException(status_code=404, detail=f"file {name!r} not found")
+        # If an entry remains, deleting a still-imported fragment breaks it — guard.
+        if name != service.ENTRY_FILE and await service.has_entry_file(
+            session, project_id
+        ):
+            files = {
+                r.name: r.content
+                for r in await service.list_files(session, project_id)
+                if r.name != name
+            }
+            try:
+                for a in service._compose_agent_names(files):
+                    service._resolve_files(files, a)
+            except service.compose_error_types() as exc:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"file {name!r} is still imported; not deleted ({exc})",
+                ) from exc
+        await service.delete_file(session, project_id=project_id, name=name)
+        await _recompile_project_agents(session, project_id)
+    return Response(status_code=204)
+
+
+@router.post("/projects/{project_id}/policy/preview", tags=["policy"])
+async def api_preview_policy(
+    project_id: str,
+    body: PolicyPreviewRequest,
+    _user: User = Depends(require_org_member),
+    session: AsyncSession = Depends(get_session),
+) -> PolicyPreviewResponse:
+    """Resolve the project with a draft file overlaid, without saving — the
+    editor's live preview. Always 200: a resolution failure returns an error lint,
+    not an HTTP error, so the editor can render it inline."""
+    out = await service.compose_preview(
+        session, project_id, name=body.name, content=body.content, agent=body.agent
+    )
+    lints = [
+        PolicyLintOut(code=x["code"], severity=x["severity"], message=x["message"])
+        for x in out["lints"]
+    ]
+    return PolicyPreviewResponse(resolved=out["resolved"], lints=lints)
+
+
 @router.get("/projects/{project_id}/policy/resolve", tags=["policy"])
 async def api_resolve_policy(
     project_id: str,
@@ -285,15 +452,12 @@ async def api_resolve_policy(
     session: AsyncSession = Depends(get_session),
 ) -> ResolvedPolicyResponse:
     """The composed effective policy per role, for one executing agent (``agent``,
-    default the generic ``"*"``). 422 if the module set can't be composed (e.g. a
-    capability that denies, or a role importing an unknown capability) — use
-    /policy/check to see that as a lint instead."""
-    from hexgate.security import LinkError, PolicySetError
-    from hexgate.security.constraints import ConstraintParseError
-
+    default the generic ``"*"``). Resolves via the compose front-end when the
+    project has an entry ``policy.yaml``, else via the tier store. 422 if the
+    policy can't be composed — use /policy/check to see that as a lint instead."""
     try:
-        result = await service.resolve(session, project_id, agent=agent)
-    except (LinkError, PolicySetError, ConstraintParseError) as exc:
+        result = await service.resolve_auto(session, project_id, agent=agent)
+    except service.compose_error_types() as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     if role is not None and role not in result.by_role:
@@ -314,18 +478,67 @@ async def api_check_policy(
     """Lints over the composed project (dead grants, unused capabilities, link
     errors...). Diagnostics-as-data: always 200. ``ok`` is False if any lint is
     an error."""
-    lints = await service.check(session, project_id)
-    out = [
-        PolicyLintOut(
-            code=lint.code,
-            severity=lint.severity,
-            message=lint.message,
-            source=lint.source,
-            tier=lint.tier,
-            tool=lint.tool,
-            role=lint.role,
-        )
-        for lint in lints
-    ]
-    ok = not any(lint.severity == "error" for lint in lints)
+    out = [PolicyLintOut(**d) for d in await service.check_auto(session, project_id)]
+    ok = not any(lint.severity == "error" for lint in out)
     return PolicyCheckResponse(ok=ok, lints=out)
+
+
+@router.get("/projects/{project_id}/policy/graph", tags=["policy"])
+async def api_policy_graph(
+    project_id: str,
+    role: str | None = None,
+    _user: User = Depends(require_org_member),
+    session: AsyncSession = Depends(get_session),
+) -> PolicyGraphResponse:
+    """The resolved policy as a node/edge graph — agents, their tools (incl. MCP),
+    and the reach/admission edges between agents — for one ``role`` or the union
+    across roles. Resolves via the compose front-end (an entry file) or the tier
+    store. 422 if the project can't be composed (use /policy/check to see that as a
+    lint instead)."""
+    try:
+        graph = await service.policy_graph(session, project_id, role=role)
+    except service.compose_error_types() as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return PolicyGraphResponse(**graph)
+
+
+@router.post("/projects/{project_id}/policy/test", tags=["policy"])
+async def api_test_policy(
+    project_id: str,
+    body: PolicyTestRequest,
+    _user: User = Depends(require_org_member),
+    session: AsyncSession = Depends(get_session),
+) -> PolicyTestResponse:
+    """Evaluate one tool call against the whole resolved policy for a role — the
+    'would this be allowed?' probe. Resolves via compose (an entry file) or the
+    tier store, optionally overlaying an unsaved ``draft`` file. 422 if the project
+    doesn't compose; 404 for an unknown role."""
+    draft = (body.draft.name, body.draft.content) if body.draft else None
+    try:
+        verdict = await service.test_policy(
+            session,
+            project_id,
+            role=body.role,
+            agent=body.agent,
+            tool=body.tool,
+            args=body.args,
+            attributes=body.attributes,
+            draft=draft,
+        )
+    except service.compose_error_types() as exc:
+        raise HTTPException(
+            status_code=422, detail=f"policy does not compose: {exc}"
+        ) from exc
+    except service.UnknownRoleError as exc:
+        raise HTTPException(
+            status_code=404, detail=f"role {exc.args[0]!r} not defined"
+        ) from exc
+
+    return PolicyTestResponse(
+        outcome=_OUTCOME_WIRE.get(verdict.outcome.name, verdict.outcome.name.lower()),
+        reason=verdict.reason,
+        violations=[str(v) for v in (verdict.violations or [])],
+        # Verdict.hint is a machine-readable dict (file-scope path hint); the wire
+        # field is a string, so serialize rather than 500 on a dict.
+        hint=json.dumps(verdict.hint) if verdict.hint is not None else None,
+    )
