@@ -264,7 +264,11 @@ def _validate_run_refs(
     before any list-valued path is registered.
     """
     for role, policy in policies.items():
-        for raw in _raw_constraints(policy, tools=policy.tools.values()):
+        # effective_tools, not tools — so a run.* ref on a lowered agent key
+        # (admission ``agent.run`` / reach ``agent.tool:``/``agent.handoff:``) is
+        # validated too, matching :func:`_validate_const_refs`. Walking only
+        # ``tools`` fail-opened run.* constraints on those keys.
+        for raw in _raw_constraints(policy, tools=policy.effective_tools.values()):
             node = parse_constraint(raw)
             _reject_unknown_run_paths(node, role, raw, scalar_paths | list_paths)
             _reject_list_paths_in_scalar_position(node, role, raw, list_paths)

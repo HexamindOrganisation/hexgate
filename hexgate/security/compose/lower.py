@@ -39,8 +39,8 @@ def _content_hash(name: str, policy: AgentPolicy) -> str:
 
 
 def _grants_policy(scope: _GrantScope) -> AgentPolicy | None:
-    """An :class:`AgentPolicy` carrying a scope's ``tools``/``mcp``/``reach`` grants
-    (never a boundary). ``None`` when the scope grants nothing."""
+    """An :class:`AgentPolicy` carrying a scope's ``tools``/``mcp``/``reach``/
+    ``admission`` grants (never a boundary). ``None`` when the scope grants nothing."""
     # mcp is readability sugar — an MCP tool is a tool; it composes identically
     # (same key namespace). A name in both blocks is rejected at parse (the
     # grammar's _no_tools_mcp_collision), so here they simply merge.
@@ -54,9 +54,18 @@ def _grants_policy(scope: _GrantScope) -> AgentPolicy | None:
         agents[target] = AgentTargetPolicy(
             via=spec.via, mode=spec.mode, constraints=spec.constraints
         )
-    if not tools and not agents:
+    # admission is the ingress grant (may this role start this agent?); the model
+    # lowers it to the ``agent.run`` key. It's about *this* agent, so a single grant.
+    admission = (
+        BaseToolPolicy(
+            mode=scope.admission.mode, constraints=scope.admission.constraints
+        )
+        if scope.admission is not None
+        else None
+    )
+    if not tools and not agents and admission is None:
         return None
-    return AgentPolicy(tools=tools, agents=agents)
+    return AgentPolicy(tools=tools, agents=agents, admission=admission)
 
 
 def _boundary_policy(block: BoundaryBlock | None) -> AgentPolicy | None:
@@ -74,8 +83,18 @@ def _boundary_policy(block: BoundaryBlock | None) -> AgentPolicy | None:
         )
         for target, spec in block.reach.items()
     }
+    admission = (
+        BaseToolPolicy(
+            mode=block.admission.mode, constraints=block.admission.constraints
+        )
+        if block.admission is not None
+        else None
+    )
     return AgentPolicy(
-        default_policy=BaseToolPolicy(mode="deny"), tools=tools, agents=agents
+        default_policy=BaseToolPolicy(mode="deny"),
+        tools=tools,
+        agents=agents,
+        admission=admission,
     )
 
 
