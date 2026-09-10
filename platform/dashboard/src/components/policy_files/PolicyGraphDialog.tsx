@@ -15,14 +15,10 @@ import {
   ReactFlow,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { AlertTriangle, Network, Play, X } from "lucide-react";
+import { useNavigate } from "react-router-dom";
+import { AlertTriangle, Maximize2, Network, Play, X } from "lucide-react";
 
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { usePolicyGraph } from "@/lib/policy_files";
 import type { PolicyGraph, PolicyGraphEdge } from "@/lib/api";
 import { cn } from "@/lib/utils";
@@ -794,32 +790,35 @@ function PolicyFlow({ graph }: { graph: PolicyGraph }) {
   );
 }
 
-export function PolicyGraphDialog({
-  open,
-  onOpenChange,
+const GRAPH_ACTION_BTN =
+  "inline-flex items-center gap-1.5 rounded-md border border-white/15 px-2 py-1 text-[11px] font-medium text-[#cfd6e4] transition-colors hover:bg-white/5";
+
+/** The graph itself — a header (title, role filter, and an optional
+ * `headerRight` action) over the ReactFlow canvas. Reused by the inline dialog
+ * and the full-page `/graph` route. */
+export function PolicyGraphView({
   projectId,
   roleNames,
+  enabled = true,
+  headerRight,
 }: {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
   projectId: string;
   roleNames: string[];
+  enabled?: boolean;
+  headerRight?: React.ReactNode;
 }) {
   const [role, setRole] = useState<string>("");
-  const graph = usePolicyGraph(projectId, role || undefined, open);
+  const graph = usePolicyGraph(projectId, role || undefined, enabled);
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent
-        className="flex h-[82vh] max-w-[min(96vw,1120px)] flex-col gap-0 overflow-hidden p-0"
-        style={{ background: "#0a0d14" }}
-      >
-        <DialogHeader className="flex-row items-center justify-between gap-3 border-b border-white/10 px-4 py-3 space-y-0">
-          <DialogTitle className="flex items-center gap-2 text-sm text-[#e6e9ef]">
-            <Network size={16} className="text-[#b57aa8]" />
-            Policy graph
-          </DialogTitle>
-          <label className="flex items-center gap-2 pr-6 font-mono text-[11px] text-[#8a93a3]">
+    <div className="flex h-full flex-col" style={{ background: "#0a0d14" }}>
+      <div className="flex flex-row items-center justify-between gap-3 border-b border-white/10 px-4 py-3">
+        <div className="flex items-center gap-2 text-sm text-[#e6e9ef]">
+          <Network size={16} className="text-[#b57aa8]" />
+          Policy graph
+        </div>
+        <div className="flex items-center gap-3">
+          <label className="flex items-center gap-2 font-mono text-[11px] text-[#8a93a3]">
             role
             <select
               value={role}
@@ -834,27 +833,71 @@ export function PolicyGraphDialog({
               ))}
             </select>
           </label>
-        </DialogHeader>
-        <div className={cn("relative flex-1")}>
-          {graph.isLoading && (
-            <div className="grid h-full place-items-center font-mono text-xs text-[#6b7382]">
-              resolving graph…
-            </div>
-          )}
-          {graph.isError && (
-            <div className="grid h-full place-items-center px-8 text-center font-mono text-xs text-[#f5959f]">
-              the modules don't compose — fix the lints, then reopen the graph.
-            </div>
-          )}
-          {graph.data && graph.data.nodes.length > 0 && (
-            <PolicyFlow graph={graph.data} />
-          )}
-          {graph.data && graph.data.nodes.length === 0 && (
-            <div className="grid h-full place-items-center font-mono text-xs text-[#6b7382]">
-              no agents bound yet — add a role binding to see the graph.
-            </div>
-          )}
+          {headerRight}
         </div>
+      </div>
+      <div className="relative flex-1">
+        {graph.isLoading && (
+          <div className="grid h-full place-items-center font-mono text-xs text-[#6b7382]">
+            resolving graph…
+          </div>
+        )}
+        {graph.isError && (
+          <div className="grid h-full place-items-center px-8 text-center font-mono text-xs text-[#f5959f]">
+            the modules don't compose — fix the lints, then reopen the graph.
+          </div>
+        )}
+        {graph.data && graph.data.nodes.length > 0 && (
+          <PolicyFlow graph={graph.data} />
+        )}
+        {graph.data && graph.data.nodes.length === 0 && (
+          <div className="grid h-full place-items-center font-mono text-xs text-[#6b7382]">
+            no agents bound yet — add a role binding to see the graph.
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+export function PolicyGraphDialog({
+  open,
+  onOpenChange,
+  projectId,
+  roleNames,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  projectId: string;
+  roleNames: string[];
+}) {
+  const navigate = useNavigate();
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent
+        className="flex h-[82vh] max-w-[min(96vw,1120px)] flex-col gap-0 overflow-hidden p-0"
+        style={{ background: "#0a0d14" }}
+      >
+        <DialogTitle className="sr-only">Policy graph</DialogTitle>
+        <PolicyGraphView
+          projectId={projectId}
+          roleNames={roleNames}
+          enabled={open}
+          headerRight={
+            <button
+              type="button"
+              onClick={() => {
+                onOpenChange(false);
+                navigate("/graph");
+              }}
+              title="Open the full graph view"
+              className={cn(GRAPH_ACTION_BTN, "mr-6")}
+            >
+              <Maximize2 size={12} />
+              Full view
+            </button>
+          }
+        />
       </DialogContent>
     </Dialog>
   );
