@@ -75,6 +75,19 @@ Break:    what the code then does wrong
 Notice:   who sees it, and how
 ```
 
+The gate applies to every lens, including CLAUDE.md compliance, internal
+consistency and prior review comments. A category being "in scope" makes an item
+a candidate, never a finding; a past review comment that applied to an earlier
+PR is a candidate here, not a standing ruling. Write the examples as each
+subagent's list arrives — if a list is longer than three, write the example for
+each item before reading the next list. Aggregating first and gating later is
+how twelve findings get reported.
+
+A finding whose Notice is "a reader" — a stale comment, a wrong line number, a
+misnamed function in a docstring, a commit-message format — has no Break in the
+code and is housekeeping, not a finding. Collect these in one line after the
+numbered findings, never as numbered entries.
+
 Then drop the finding if the example needs any of these to be true:
 
 - **Input no real caller produces.** Hexgate's agents act on content a real
@@ -94,7 +107,8 @@ Then drop the finding if the example needs any of these to be true:
 
 Keep the finding, and say so plainly, when the example is mundane: a deploy, a
 restart, a broker that takes twenty minutes to come back, a customer's first RAG
-call, a retry that lands twice.
+call, a retry that lands twice. Mundane means an operational event that happens
+to the running product; "someone reads the docstring" is not a trigger.
 
 Pre-existing issues, linter/typechecker/CI catches, missing test coverage and
 style preferences not written in a `CLAUDE.md` are out of scope regardless of how
@@ -125,6 +139,8 @@ N findings:
 
 1. **<what breaks>** — <the example, one or two sentences>
    <repo-relative path:line — e.g. platform/collector/config.yaml:126>
+
+Housekeeping (optional): <stale comments, wrong pointers, format nits — one line>
 ```
 
 Cite `path:line`, which is clickable in the terminal and points at the checkout
