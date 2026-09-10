@@ -160,6 +160,74 @@ def test_put_agent_partial_update_preserves_other_fields(
     assert after["agent_yaml"] == before["agent_yaml"]
 
 
+def test_put_agent_rejects_a_policy_that_does_not_load(client: TestClient) -> None:
+    """A broken policy fails the save instead of nulling the bundle behind a 200.
+
+    ``compile_bundle`` degrades any compile failure to "no bundle", so this used
+    to save, drop the agent's bundle, and fall back to the pydantic engine with
+    nothing on the wire to say so.
+    """
+    before = client.get(f"/v1/projects/{DEFAULT_PROJECT_ID}/agents/support_bot").json()
+
+    resp = client.put(
+        f"/v1/projects/{DEFAULT_PROJECT_ID}/agents/support_bot",
+        json={
+            "policy_yaml": (
+                "version: 1\n"
+                "roles:\n"
+                "  default:\n"
+                "    tools:\n"
+                "      refund_order:\n"
+                "        mode: allow\n"
+                "        constraints:\n"
+                "          - args.amount ~~ 50\n"
+            )
+        },
+    )
+    assert resp.status_code == 422
+    detail = resp.json()["detail"]
+    assert "nothing was saved" in detail["message"]
+    assert detail["errors"][0]["role"] == "default"
+
+    after = client.get(f"/v1/projects/{DEFAULT_PROJECT_ID}/agents/support_bot").json()
+    assert after["policy_yaml"] == before["policy_yaml"]
+
+
+def test_put_agent_rejects_a_mistyped_tool_level_fence(client: TestClient) -> None:
+    """``contraints:`` on a tool is a dropped cap, so the save must fail.
+
+    The document- and role-level guards never saw this one — it parsed as an
+    ``allow`` with no constraints at all.
+    """
+    resp = client.put(
+        f"/v1/projects/{DEFAULT_PROJECT_ID}/agents/support_bot",
+        json={
+            "policy_yaml": (
+                "version: 1\n"
+                "roles:\n"
+                "  default:\n"
+                "    tools:\n"
+                "      refund_order:\n"
+                "        mode: allow\n"
+                "        contraints:\n"
+                "          - args.amount <= 500\n"
+            )
+        },
+    )
+    assert resp.status_code == 422
+
+
+def test_put_agent_without_policy_yaml_skips_the_policy_gate(
+    client: TestClient,
+) -> None:
+    """The gate reads ``policy_yaml``; an update that omits it still saves."""
+    resp = client.put(
+        f"/v1/projects/{DEFAULT_PROJECT_ID}/agents/support_bot",
+        json={"system_md": "Only the prompt changed."},
+    )
+    assert resp.status_code == 200
+
+
 def test_list_agents_returns_three_string_fields(client: TestClient) -> None:
     """The /agents collection endpoint returns the same three-field shape."""
     resp = client.get(f"/v1/projects/{DEFAULT_PROJECT_ID}/agents")
@@ -226,6 +294,20 @@ def test_validate_reports_yaml_parse_error_with_line(client: TestClient) -> None
     assert err["role"] is None
     assert err["line"] is not None and err["line"] >= 1
     assert "YAML parse" in err["message"]
+
+
+def test_validate_reports_a_non_mapping_document(client: TestClient) -> None:
+    """Valid YAML that isn't a mapping has no keys to walk — report it rather
+    than raising on the first lookup."""
+    resp = client.post(
+        f"/v1/projects/{DEFAULT_PROJECT_ID}/agents/support_bot/validate",
+        json={"policy_yaml": "- refund_order\n- web_search\n"},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is False
+    [err] = body["errors"]
+    assert "must be a YAML mapping" in err["message"]
 
 
 def test_validate_reports_constraint_grammar_error_inside_role(

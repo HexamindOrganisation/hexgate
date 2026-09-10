@@ -12,6 +12,7 @@ from hexgate.security import (
     RESOLVED_POLICY_MARKER,
     AgentPolicy,
     BaseToolPolicy,
+    FileToolPolicy,
     PolicySet,
     PolicySetError,
     load_policy_map,
@@ -185,6 +186,87 @@ def test_mistyped_key_in_a_flat_document_is_rejected() -> None:
                 "default_policy": {"mode": "allow"},
             }
         )
+
+
+def test_mistyped_key_on_a_tool_is_rejected() -> None:
+    """The likeliest place to fat-finger a fence is the tool that needs it.
+
+    Rejecting only the document and role scopes left ``mode: allow`` with an
+    empty ``constraints`` list — an unlimited call where a cap was authored.
+    """
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        AgentPolicy.model_validate(
+            {
+                "tools": {
+                    "refund_order": {
+                        "mode": "allow",
+                        "contraints": ["args.amount <= 500"],
+                    }
+                }
+            }
+        )
+
+
+def test_mistyped_key_in_a_file_scope_is_rejected() -> None:
+    """A dropped ``allowed_paths`` leaves an empty FileScope, which the file
+    gate reads as 'no path restriction' rather than 'nothing allowed'."""
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        AgentPolicy.model_validate(
+            {
+                "tools": {
+                    "read_file": {
+                        "mode": "allow",
+                        "file_scope": {"alowed_paths": ["/srv/**"]},
+                    }
+                }
+            }
+        )
+
+
+def test_mistyped_key_on_an_agent_target_is_rejected() -> None:
+    """``via`` defaults to both transfer modes, so dropping a mistyped ``vai``
+    widens reach to the handoff path the author meant to withhold."""
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        AgentPolicy.model_validate(
+            {"agents": {"billing": {"mode": "allow", "vai": ["tool"]}}}
+        )
+
+
+def test_mistyped_key_on_admission_is_rejected() -> None:
+    """Admission carries the run-wide fence; a silent drop admits the run."""
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        AgentPolicy.model_validate(
+            {"admission": {"mode": "allow", "contraints": ["run.tool_calls < 20"]}}
+        )
+
+
+def test_mistyped_key_on_default_policy_is_rejected() -> None:
+    """The default policy governs every unlisted tool, so its fence is the
+    broadest one a silent drop can remove."""
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        AgentPolicy.model_validate(
+            {"default_policy": {"mode": "allow", "contraints": ["args.amount <= 500"]}}
+        )
+
+
+def test_file_scope_still_selects_the_file_tool_policy_arm() -> None:
+    """``ToolPolicy`` is a union, and forbidding extras makes the base arm
+    reject ``file_scope`` — so this pins that the union still falls through to
+    :class:`FileToolPolicy` instead of failing the whole document."""
+    policy = AgentPolicy.model_validate(
+        {
+            "tools": {
+                "read_file": {
+                    "mode": "allow",
+                    "file_scope": {"allowed_paths": ["/srv/**"]},
+                }
+            }
+        }
+    )
+    tool = policy.tools["read_file"]
+    assert isinstance(tool, FileToolPolicy)
+    assert tool.file_scope is not None
+    assert tool.file_scope.allowed_paths == ["/srv/**"]
 
 
 def test_file_level_key_error_hides_the_resolved_marker() -> None:

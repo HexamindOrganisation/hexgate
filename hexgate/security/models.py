@@ -33,6 +33,12 @@ class BaseToolPolicy(BaseModel):
     milestone, these strings carry through verbatim.
     """
 
+    # extra="forbid" for the same reason AgentPolicy sets it: a mistyped field
+    # (``contraints:``) would otherwise be dropped in silence, leaving
+    # ``mode: allow`` with no fence at all. Inherited by FileToolPolicy and
+    # AgentTargetPolicy, so it covers every nested policy scope.
+    model_config = ConfigDict(extra="forbid")
+
     mode: PolicyMode = "deny"
     constraints: list[str] = Field(default_factory=list)
 
@@ -44,6 +50,8 @@ class BaseToolPolicy(BaseModel):
 
 class FileScope(BaseModel):
     """Restrict a file-oriented tool to explicit path patterns."""
+
+    model_config = ConfigDict(extra="forbid")
 
     allowed_paths: list[str] = Field(default_factory=list)
     denied_paths: list[str] = Field(default_factory=list)

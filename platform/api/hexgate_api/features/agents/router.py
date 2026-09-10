@@ -186,6 +186,8 @@ async def api_update_agent(
     from hexgate_api.core.locks import project_lock
 
     await ensure_default_project(session)
+    if body.policy_yaml is not None:
+        _reject_unloadable_policy(body.policy_yaml)
     # Hold the project lock: this compiles + writes a bundle, so it must not
     # interleave with recompile_project (a concurrent policy write) and commit
     # out of order. See core.locks.
@@ -219,7 +221,45 @@ async def api_validate_policy(
     """Parse ``policy.yaml`` end-to-end + check every ``constraints`` string.
 
     Server-side validation keeps one source of truth on grammar — the same
-    parsers the SDK enforces with at run time. Handles both shapes:
+    parsers the SDK enforces with at run time. See
+    :func:`_validate_policy_document` for what the pass covers; the save route
+    runs the identical check, so a policy that validates here is one that saves
+    and a policy that saves is one that validated.
+    """
+    return _validate_policy_document(body.policy_yaml)
+
+
+# A policy the loader rejects is the author's mistake, not a server fault, and
+# it is not a request-shape error FastAPI could have caught — 422 is the code
+# the /validate route's own contract already implies for a document it fails.
+POLICY_REJECTED_STATUS = 422
+
+
+def _reject_unloadable_policy(policy_yaml: str) -> None:
+    """Refuse a save whose policy would compile to nothing.
+
+    ``compile_bundle`` degrades *every* compile failure to "store no bundle",
+    which is right when ``opa`` is absent but wrong for a broken document: the
+    save returned 200, the agent's three bundle columns were nulled, and
+    enforcement silently dropped to the SDK's pydantic fallback with no
+    diagnostic on the wire. Gate on the same check ``/validate`` runs so the two
+    routes cannot disagree about which documents are loadable, and so a typo in
+    a fence is a failed request instead of a quietly unenforced policy.
+    """
+    result = _validate_policy_document(policy_yaml)
+    if result.ok:
+        return
+    raise HTTPException(
+        status_code=POLICY_REJECTED_STATUS,
+        detail={
+            "message": "policy_yaml did not validate; nothing was saved",
+            "errors": [error.model_dump() for error in result.errors],
+        },
+    )
+
+
+def _validate_policy_document(policy_yaml: str) -> ValidatePolicyResponse:
+    """Validate a policy document the whole way down. Handles both shapes:
 
     * flat single-policy document → validated as one :class:`AgentPolicy`
     * inline-roles document (top-level ``roles:`` map) → each entry
@@ -250,7 +290,7 @@ async def api_validate_policy(
 
     errors: list[PolicyValidationError] = []
     try:
-        parsed = yaml.safe_load(body.policy_yaml) or {}
+        parsed = yaml.safe_load(policy_yaml) or {}
     except MarkedYAMLError as exc:
         line = exc.problem_mark.line + 1 if exc.problem_mark else None
         return ValidatePolicyResponse(
@@ -259,6 +299,21 @@ async def api_validate_policy(
                 PolicyValidationError(
                     line=line,
                     message=f"YAML parse: {exc.problem or exc}",
+                )
+            ],
+        )
+
+    # Valid YAML that isn't a mapping (a bare list, a scalar) parses fine and
+    # then has no keys to walk — report it rather than letting every `.get`
+    # below raise.
+    if not isinstance(parsed, dict):
+        return ValidatePolicyResponse(
+            ok=False,
+            errors=[
+                PolicyValidationError(
+                    message=(
+                        f"policy must be a YAML mapping, got {type(parsed).__name__}"
+                    )
                 )
             ],
         )
