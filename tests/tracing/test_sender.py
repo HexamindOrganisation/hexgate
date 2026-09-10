@@ -23,6 +23,7 @@ from hexgate.security.decision import Decision, DecisionOutcome
 from hexgate.tracing import semconv
 from hexgate.tracing._senders import (
     MAX_EXPORT_BATCH_SIZE,
+    MAX_QUEUE_SIZE,
     AuditSender,
     _unix_nanos,
 )
@@ -340,6 +341,23 @@ def test_sender_caps_the_export_batch_size() -> None:
     batch = sender._processor._batch_processor
     assert batch._max_export_batch_size == MAX_EXPORT_BATCH_SIZE
     assert MAX_EXPORT_BATCH_SIZE < 512
+
+
+def test_when_the_host_shrinks_the_otel_queue_then_the_sender_still_builds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Both sizes are pinned, so the host's OTEL_BSP_* vars never reach the
+    audit channel. Left unset, max_queue_size comes from the environment, and
+    OTel rejects a queue below the export batch — a ValueError out of
+    configure(), killing the host process over an audit setting."""
+    monkeypatch.setenv("OTEL_BSP_MAX_QUEUE_SIZE", "32")
+    monkeypatch.setenv("OTEL_BSP_MAX_EXPORT_BATCH_SIZE", "16")
+
+    sender, _ = _sender()
+
+    batch = sender._processor._batch_processor
+    assert batch._max_queue_size == MAX_QUEUE_SIZE
+    assert batch._max_export_batch_size == MAX_EXPORT_BATCH_SIZE
 
 
 def test_when_queue_saturated_then_drops_are_counted_and_first_logs(
