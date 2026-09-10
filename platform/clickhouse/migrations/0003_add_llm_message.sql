@@ -42,10 +42,12 @@ CREATE TABLE IF NOT EXISTS hexgate_audit.llm_message
     truncated           UInt8 DEFAULT 0,
     input_messages      String COMMENT 'gen_ai.input.messages — only the messages new to this call, tool results included; capped 256 KiB' CODEC(ZSTD(3)),
     output_messages     String COMMENT 'gen_ai.output.messages — this call''s completion; capped 8 KiB' CODEC(ZSTD(3)),
-    system_instructions String DEFAULT '' COMMENT 'gen_ai.system_instructions — first row of each turn_key only; capped 8 KiB' CODEC(ZSTD(3))
+    system_instructions String DEFAULT '' COMMENT 'gen_ai.system_instructions — first row of each turn_key only; capped 8 KiB' CODEC(ZSTD(3)),
+
+    run_id              UUID DEFAULT toUUID('00000000-0000-0000-0000-000000000000') COMMENT 'RunFacts.id of the run this exchange belongs to; zero when outside a run scope or from an SDK that does not yet send it'
 )
 ENGINE = ReplacingMergeTree(received_at)
 PARTITION BY toYYYYMM(received_at)
-ORDER BY (project_id, session_id, turn_key, message_seq, event_id)
+ORDER BY (project_id, session_id, occurred_at, message_seq, event_id)
 TTL toDateTime(received_at) + INTERVAL 180 DAY
 SETTINGS index_granularity = 8192;

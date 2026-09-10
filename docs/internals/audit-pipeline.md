@@ -510,22 +510,27 @@ CREATE TABLE hexgate_audit.llm_message
   truncated           UInt8 DEFAULT 0, -- 1: a content column was cut to its cap
   input_messages      String CODEC(ZSTD(3)),  -- gen_ai.input.messages, ≤ 256 KiB
   output_messages     String CODEC(ZSTD(3)),  -- gen_ai.output.messages, ≤ 8 KiB
-  system_instructions String DEFAULT '' CODEC(ZSTD(3))  -- gen_ai.system_instructions, ≤ 8 KiB
+  system_instructions String DEFAULT '' CODEC(ZSTD(3)),  -- gen_ai.system_instructions, ≤ 8 KiB
+  run_id              UUID DEFAULT toUUID('000…')  -- RunFacts.id; zero when unattributed
 )
 ENGINE = ReplacingMergeTree(received_at)
 PARTITION BY toYYYYMM(received_at)
-ORDER BY (project_id, session_id, turn_key, message_seq, event_id)
+ORDER BY (project_id, session_id, occurred_at, message_seq, event_id)
 TTL toDateTime(received_at) + INTERVAL 180 DAY
 ```
 
 - **Separate table, not columns on `llm_invocation`** — content is large,
   opt-in (nothing emits `hexgate.messages` yet, and capture stays off until an
   emitter ships), and read by session rather than aggregated by user/model.
-- **Sort key** `(project_id, session_id, turn_key, message_seq, event_id)`:
-  the read is "reconstruct this session's transcript", so a list's rows sit
-  adjacent and in order. A session with a sub-agent or handoff has several
-  `turn_key`s; readers order across them by `occurred_at`. `event_id` last
-  keeps `ReplacingMergeTree` dedup to SDK retries.
+- **Sort key** `(project_id, session_id, occurred_at, message_seq, event_id)`:
+  the read is "reconstruct this session's transcript", and the endpoint returns
+  rows ordered by `(occurred_at, message_seq)`, so this key delivers them
+  read-in-order. `occurred_at` sits third because `message_seq` only counts
+  within one `turn_key` and restarts at 0 for a sub-agent's or handoff's list —
+  wall-clock time is the only thing that orders rows across the several lists of
+  one session. `turn_key` stays a plain column, used to group and to detect gaps,
+  not to sort. `event_id` last keeps `ReplacingMergeTree` dedup to SDK retries;
+  the sort key is the dedup key, `received_at` only picks the survivor.
 - **Caps are head+tail**, not the preview wrapper used for `arguments`: the
   start and the end of an oversized message both survive (see
   `hexgate.audit.cap_json_head_tail`), and `truncated` says it happened.

@@ -150,13 +150,21 @@ CREATE TABLE IF NOT EXISTS hexgate_audit.llm_message
     -- Official gen_ai.* shapes as JSON; SDK-redacted and capped, may be lossy.
     input_messages      String COMMENT 'gen_ai.input.messages — only the messages new to this call, tool results included; capped 256 KiB' CODEC(ZSTD(3)),
     output_messages     String COMMENT 'gen_ai.output.messages — this call''s completion; capped 8 KiB' CODEC(ZSTD(3)),
-    system_instructions String DEFAULT '' COMMENT 'gen_ai.system_instructions — first row of each turn_key only; capped 8 KiB' CODEC(ZSTD(3))
+    system_instructions String DEFAULT '' COMMENT 'gen_ai.system_instructions — first row of each turn_key only; capped 8 KiB' CODEC(ZSTD(3)),
+
+    run_id              UUID DEFAULT toUUID('00000000-0000-0000-0000-000000000000') COMMENT 'RunFacts.id of the run this exchange belongs to; zero when outside a run scope or from an SDK that does not yet send it'
 )
 ENGINE = ReplacingMergeTree(received_at)
 PARTITION BY toYYYYMM(received_at)
--- Session-first: the read is "reconstruct this session's transcript in order",
--- so (turn_key, message_seq) puts a list's rows adjacent and ordered. event_id
--- last keeps dedup to SDK retries of the same event.
-ORDER BY (project_id, session_id, turn_key, message_seq, event_id)
+-- Session-first, then time. message_seq only counts within one turn_key and
+-- restarts at 0 for a sub-agent's or handoff's list, so wall-clock occurred_at
+-- is the only thing that orders rows across the several lists of one session —
+-- hence third, ahead of message_seq, which completes the (occurred_at,
+-- message_seq) order the read endpoint returns rows in. turn_key stays a plain
+-- column: once occurred_at precedes it a list's rows are no longer adjacent
+-- anyway, so in the key it would only break ties event_id already resolves.
+-- event_id last keeps dedup (the sort key IS the dedup key here) to SDK
+-- retries of the same event.
+ORDER BY (project_id, session_id, occurred_at, message_seq, event_id)
 TTL toDateTime(received_at) + INTERVAL 180 DAY
 SETTINGS index_granularity = 8192;
