@@ -11,7 +11,7 @@ drive it in the Playground:
     delegation runs billing_bot.
 
 support_bot's role-aware policy is the **compose** policy authored as
-`policy.yaml` + capability files and seeded into the `policy-showcase` project
+`policy.yaml` + capability files and seeded into the default (support-bot) project
 (see `platform/api/.../policy_modules/seed_data.py`). The dashboard's Policies
 editor shows and edits it; here you watch it gate a live agent.
 
@@ -57,7 +57,7 @@ def _(mo):
     only `billing` may refund (up to a $1000 ceiling) and delegate.
 
     That policy is the compose `policy.yaml` (+ capability files) seeded into the
-    `policy-showcase` project — the same one the dashboard's **Policies** editor
+    default project — the same one the dashboard's **Policies** editor
     shows. Here you serve support_bot and test it in the **Playground**. Paste
     your OpenAI key below (used only in this kernel).
     """)
@@ -79,7 +79,7 @@ def _(Path, mo):
             ### [▶ Open the live dashboard →]({_dash}/v1/demo-login)
 
             Signs you in on the **plum** dashboard, scoped to the seeded
-            `policy-showcase` project. Start the agent below, then chat with it in
+            default project. Start the agent below, then chat with it in
             the **Playground** — the Policies editor shows the very policy gating it.
             """
         )
@@ -198,7 +198,7 @@ def _():
 
     def build_support():
         # name MUST be support_bot: the platform gates the served agent with the
-        # seeded compose bundle for that agent in the policy-showcase project.
+        # seeded compose bundle for that agent in the default project.
         return create_agent(
             model="gpt-4o-mini",
             tools=TOOLS,
