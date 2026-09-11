@@ -68,9 +68,8 @@ async def list_tokens(
 ) -> list[TokenListItem]:
     """Live keys, with both actors' emails resolved in one extra query.
 
-    Same shape as ``api_list_bans`` — the dashboard gets the email and keeps the
-    raw id for the hover, so it never has to look users up itself. Ids with no
-    live ``User`` row fall back to the id (``emails_for_user_ids``).
+    Same shape as ``api_list_bans``: the wire carries email and id, so the
+    dashboard never looks users up itself and can fall back to the id.
     """
     tokens = await list_api_keys(session, project_id)
     emails = await emails_for_user_ids(
@@ -108,9 +107,9 @@ async def mint_token(
 ) -> TokenMintResponse:
     """Mint a key, attributed to the caller and owned by ``body.owner_user_id``.
 
-    ``require_org_member`` moves out of the decorator's ``dependencies`` so its
-    ``User`` can be stamped as the minter. Delegating ownership to a teammate is
-    a management action refused for plain members — see ``resolve_mint_owner``.
+    ``require_org_member`` moves out of the decorator so its ``User`` can be
+    stamped as the minter. Delegating ownership is gated in
+    ``resolve_mint_owner``.
     """
     from hexgate_api.core.keystore import keystore
 

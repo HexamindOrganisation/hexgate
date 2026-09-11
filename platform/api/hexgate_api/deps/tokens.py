@@ -25,10 +25,8 @@ from hexgate_api.models import ApiKey
 class TokenActor:
     """The (project, human) pair behind a bearer-authenticated write.
 
-    ``user_id`` is the key's recorded owner (``ApiKey.owner_user_id``) and is
-    ``None`` when the key has none — minted before issue #160, or by a system
-    path such as ``deploy/provision.py``. The actor columns are nullable for
-    exactly this case: a bearer write with no owner records NULL, not a guess.
+    ``user_id`` is ``ApiKey.owner_user_id``, ``None`` for a system or
+    pre-#160 key. NULL is the intended value, not a gap to fill.
     """
 
     project_id: str
@@ -38,11 +36,8 @@ class TokenActor:
 async def _validate_sdk_token(authorization: str, session: AsyncSession) -> ApiKey:
     """Validate an ``Authorization: Bearer <hexgate_key>`` biscuit envelope.
 
-    Used by :func:`optional_api_key` (allows a missing header) and
-    indirectly by :func:`require_project` / :func:`require_project_actor` /
-    :func:`ws_require_project` (the bearer-implicit SDK routes). Raises 401 on
-    signature or revocation failure; returns the live row on success, so
-    callers needing the project or the key's owner don't look it up twice.
+    Raises 401 on signature or revocation failure; returns the live row, so
+    callers needing its project or owner don't look it up twice.
     """
     from hexgate_api.core.keystore import keystore
 
@@ -72,9 +67,8 @@ async def _validate_sdk_token(authorization: str, session: AsyncSession) -> ApiK
 async def _resolve_bearer(authorization: str | None, session: AsyncSession) -> ApiKey:
     """``Authorization`` header → the live :class:`ApiKey` row behind it.
 
-    The shared body of :func:`require_project` and :func:`require_project_actor`
-    so the two bearer deps can never disagree about what counts as a valid
-    token.
+    Shared by :func:`require_project` and :func:`require_project_actor` so the
+    two can never disagree on what counts as a valid token.
     """
     if authorization is None or not authorization.startswith("Bearer "):
         raise HTTPException(
@@ -117,7 +111,7 @@ async def require_project(
     """Resolve `Authorization: Bearer <hexgate_key>` to a project_id.
 
     Used by SDK-facing endpoints where the caller has only an API key, not a
-    project id in the URL. Routes that also need to attribute a *write* take
+    project id in the URL. Writes that need attribution take
     :func:`require_project_actor` instead.
 
     Two gates run in order, matching :func:`ws_require_project` and
@@ -127,8 +121,7 @@ async def require_project(
       1. **Signature verification** via :func:`_validate_sdk_token` —
          parse the envelope, verify the biscuit chains to the platform's
          root public key. A revocation lookup runs inside the helper.
-      2. **Project resolution** — read ``ApiKey.project_id`` off the row that
-         helper returns.
+      2. **Project resolution** — read ``ApiKey.project_id`` off that row.
 
     The signature gate was missing before — a forged biscuit whose
     secret string happened to match a stored ``ApiKey.secret`` would
@@ -144,16 +137,9 @@ async def require_project_actor(
 ) -> TokenActor:
     """Like :func:`require_project`, plus the human behind the key.
 
-    The bearer half of the control-plane actor trail (issue #160): a
-    token-authenticated write (``POST /v1/agents``) has no cookie session, so
-    ``ApiKey.owner_user_id`` is the only bridge from a credential back to a
-    person. Same two gates, same 401s — this dep adds no authority, only
-    attribution.
-
-    ``TokenActor.user_id`` is ``None`` for a key with no recorded owner. That is
-    the intended value, not a gap to paper over with a sentinel: the actor
-    columns are nullable FKs to ``user`` precisely so an unattributable write
-    records nothing rather than something false.
+    A token-authenticated write has no cookie session, so
+    ``ApiKey.owner_user_id`` is the only bridge back to a person. Same gates,
+    same 401s: this adds attribution, not authority.
     """
     token = await _resolve_bearer(authorization, session)
     return TokenActor(project_id=token.project_id, user_id=token.owner_user_id)

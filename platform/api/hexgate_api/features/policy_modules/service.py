@@ -130,8 +130,7 @@ async def upsert_module(
     row the winner just wrote.
 
     ``actor_user_id`` lands on ``created_by_user_id`` for an insert and
-    ``updated_by_user_id`` for a replace — including the create-race
-    fallthrough, where the loser really is updating the winner's row.
+    ``updated_by_user_id`` for a replace, the create-race fallthrough included.
     """
     if tier not in VALID_TIERS:
         raise InvalidModuleError(
@@ -180,9 +179,8 @@ async def delete_module(
 ) -> bool:
     """Remove one module. Returns False if it didn't exist.
 
-    A hard delete, so unlike every other write in this slice it records no
-    actor — there is no row left to stamp. That gap is what the append-only
-    control-plane ``audit_event`` log is for; actor columns cannot close it.
+    A hard delete records no actor — no row is left to stamp. Closing that gap
+    is the ``audit_event`` log's job, not these columns'.
     """
     row = await _get_module(session, project_id, tier, path)
     if row is None:
@@ -272,9 +270,8 @@ async def set_roles(
     replaces them cleanly instead of surfacing a 500 (same posture as
     ``upsert_module``'s create-race handling).
 
-    Because this is a delete-and-reinsert, each fresh row's
-    ``created_by_user_id`` IS the last writer — which is why the table carries
-    no ``updated_*`` pair. Both retry attempts stamp the same actor.
+    Being a delete-and-reinsert, each fresh row's ``created_by_user_id`` IS the
+    last writer, which is why the table has no ``updated_*`` pair.
     """
     normalized = {role: _normalize_cell(cells) for role, cells in roles.items()}
     for attempt in range(2):
@@ -696,10 +693,7 @@ async def upsert_file(
     :func:`validate_compose_file` (→ 422) and :func:`project_resolves_with_file`
     (→ 409) run before this, so it doesn't re-parse the content.
 
-    ``actor_user_id`` lands on ``created_by_user_id`` for an insert and
-    ``updated_by_user_id`` for a replace, same as :func:`upsert_module` —
-    including the create-race fallthrough, where the loser is updating the
-    winner's row.
+    ``actor_user_id`` is stamped as in :func:`upsert_module`.
     """
     chash = _content_hash(content)
     row = await get_file(session, project_id, name)

@@ -3,9 +3,8 @@
 The "at least one owner" invariant and the at-or-below role-escalation rule
 live here so every caller (PATCH member role, accept invite) respects them.
 
-Removing a member also revokes the API keys they own — see
-:func:`remove_member`. Keys never expire, so without that sweep a departing
-developer's credentials outlive their access indefinitely (issue #160).
+Removing a member also revokes the API keys they own (:func:`remove_member`):
+keys never expire, so otherwise a leaver's credentials outlive their access.
 """
 
 from dataclasses import dataclass
@@ -24,9 +23,7 @@ async def emails_for_user_ids(
     """Map user id -> email for the given ids in one query. Ids with no live
     User row are omitted so callers fall back to the id.
 
-    Lives in this slice because it is a plain ``User`` read with nothing
-    domain-specific about it, and three features now resolve actor ids for
-    display (bans, tokens, members).
+    Lives here rather than in bans: three slices now resolve actor ids.
     """
     ids = {uid for uid in user_ids if uid}
     if not ids:
@@ -77,12 +74,9 @@ class LastOwnerError(Exception):
 
 @dataclass(frozen=True)
 class MemberRemoval:
-    """Outcome of removing a member: whether the row went, and how many of
-    their API keys were revoked with it.
+    """Whether the membership went, and how many of their keys went with it.
 
-    The count is what the route logs and what a future "this will revoke N
-    keys" preview would read. Note it is an object, so ``if result:`` is always
-    truthy — callers must test ``result.removed``.
+    An object, so ``if result:`` is always truthy — test ``result.removed``.
     """
 
     removed: bool
@@ -97,17 +91,10 @@ async def remove_member(
     Refuses with :class:`LastOwnerError` if the removal would leave the org
     with zero owners; ``removed=False`` when the membership didn't exist.
 
-    Order and transaction scope are both load-bearing:
-
-      1. the last-owner guard runs FIRST, so a refused removal revokes nothing;
-      2. the key sweep stamps without committing (see
-         ``tokens.service.revoke_owned_keys``) and the membership delete rides
-         the same commit.
-
-    One commit for both halves means offboarding is atomic. Revoking keys and
-    then failing to remove the membership — or the reverse — is worse than
-    either outcome alone: the first kills a colleague's credentials while
-    leaving their access, the second is the hole this function exists to close.
+    Order and transaction scope are load-bearing: the last-owner guard runs
+    first, so a refused removal revokes nothing, and the sweep stamps without
+    committing so both halves land in one commit. Half an offboarding is worse
+    than either outcome alone.
     """
     member = await find_member(session, org_id=org_id, user_id=user_id)
     if member is None:
@@ -178,7 +165,7 @@ async def change_member_role(
 
     ``caller_role`` is the caller's role on this org (resolved by the
     route layer via :func:`require_org_admin`); ``updated_by_user_id`` is that
-    same caller's id, stamped on the row as the last writer.
+    same caller.
     """
     if new_role not in ALL_ROLES:
         raise ValueError(f"unknown role: {new_role!r}")

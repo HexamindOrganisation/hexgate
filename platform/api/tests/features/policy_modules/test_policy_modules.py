@@ -1496,9 +1496,8 @@ def test_set_policy_roles_stamps_the_caller_on_the_fresh_rows(
 def test_idempotent_role_resave_leaves_the_rows_untouched(
     client: TestClient, session_factory
 ) -> None:
-    """An order-insensitive no-op PUT short-circuits before ``set_roles``, so it
-    must not replace the rows (which would reset ``created_at`` and hide who
-    really last changed the bindings)."""
+    """A no-op PUT short-circuits before ``set_roles``, so it must not replace
+    the rows — that would reset ``created_at`` and hide the real last writer."""
     pid = _project(client)
     _put_module(client, pid, "capability", "read_only", READ_ONLY)
     body = {"roles": {"default": ["read_only"]}}
@@ -1517,11 +1516,8 @@ async def test_recompile_does_not_touch_the_agents_authored_trail(
 ) -> None:
     """A bundle rebuild is a derived artifact, not an authored edit.
 
-    ``recompile_project`` fans out over a project's agents whenever a policy
-    module or role binding changes. If it stamped ``updated_by_user_id``, every
-    agent's real author would be replaced by whoever last edited a shared
-    module — and ``updated_at`` would move on a recompile nobody performed,
-    which the dashboard shows as an edit.
+    ``recompile_project`` fans out over every agent when a shared module
+    changes; stamping would credit that editor with authoring them all.
     """
     from hexgate_api.features.agents import service as asvc
     from hexgate_api.features.agents.service import update_agent

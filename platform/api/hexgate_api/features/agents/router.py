@@ -183,8 +183,7 @@ async def api_update_agent(
     session: AsyncSession = Depends(get_session),
 ) -> AgentRead:
     """Save an agent's YAMLs. ``require_org_member`` moves out of the
-    decorator's ``dependencies`` so its ``User`` can be stamped as the author
-    of the edit."""
+    decorator so its ``User`` can be stamped as the author."""
     from hexgate_api.core.keystore import keystore
     from hexgate_api.core.locks import project_lock
 
@@ -443,11 +442,8 @@ async def api_register_agent(
     don't touch the agent's policy_yaml, so the operator's dashboard
     edits are preserved.
 
-    ``require_project_actor`` rather than ``require_project``: this is the one
-    bearer route that WRITES, so it also needs the human behind the key
-    (``ApiKey.owner_user_id``) to attribute the new rows. ``actor.user_id`` is
-    ``None`` for a key with no recorded owner — that records NULL, which is the
-    intended value and must not be swapped for a sentinel.
+    The one bearer route that writes, hence ``require_project_actor``: the new
+    rows are attributed to the key's owner, or to NULL if it has none.
     """
     from hexgate_api.core.keystore import keystore
     from hexgate_api.core.locks import project_lock

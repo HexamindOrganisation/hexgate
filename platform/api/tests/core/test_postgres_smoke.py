@@ -74,18 +74,10 @@ async def _delete_smoke_org(session) -> None:
 async def test_hand_applied_migrations_match_the_live_schema() -> None:
     """Every column the migrations add really exists on this Postgres.
 
-    The rest of the suite builds its schema with ``create_all`` on SQLite, so
-    nothing else can catch the two failure modes that only bite a deployed
-    database:
-
-      * the migration was never applied (``create_all`` adds missing *tables*,
-        never missing columns, so startup is silent and requests 500);
-      * the SQL has a typo — ``ADD COLUMN IF NOT EXISTS created_by_user_i`` is
-        valid, adds a column nothing reads, and leaves the real one missing.
-
-    Read-only by design: it inspects ``information_schema`` rather than
-    dropping and re-adding columns, so it is safe to run against a dev volume
-    that holds real rows.
+    The rest of the suite runs ``create_all`` on SQLite, so nothing else
+    catches a migration that was never applied, or one whose typo added a
+    column nothing reads. Read-only: it inspects ``information_schema``, so it
+    is safe against a dev volume with real rows.
     """
     import re
     from pathlib import Path

@@ -1135,8 +1135,8 @@ def test_create_org_stamps_the_caller_on_the_org_and_the_membership(
 def test_signup_default_org_is_attributed_to_the_registering_user(
     client: TestClient, session_factory
 ) -> None:
-    """Unlike the first-boot seed (which writes NULL), a personal default org
-    genuinely has a human behind it — the person who just registered."""
+    """Unlike the first-boot seed, a personal default org has a human behind
+    it: the person who just registered."""
     _signup_and_login(client, "actor-signup@example.com", "correcthorsebattery")
     me_id = client.get("/v1/users/me").json()["id"]
 
@@ -1165,8 +1165,7 @@ def test_update_org_stamps_the_updater_and_moves_updated_at(
 
 def test_no_op_update_org_stamps_nothing(client: TestClient, session_factory) -> None:
     """A double-fired save is not an edit: resubmitting the current name and
-    slug must leave both ``updated_at`` and ``updated_by_user_id`` alone, so
-    the stamp keeps pointing at the last real edit."""
+    slug must leave the stamp on the last real edit."""
     _signup_and_login(client, "actor-patch-noop@example.com", "correcthorsebattery")
     me_id = client.get("/v1/users/me").json()["id"]
     org_id = client.get("/v1/orgs").json()[0]["id"]
@@ -1189,9 +1188,8 @@ def test_no_op_update_org_stamps_nothing(client: TestClient, session_factory) ->
 
 
 def test_seed_rows_carry_no_actor(session_factory) -> None:
-    """The first-boot seed has no human actor, and the Organization is inserted
-    before the User in the same commit — so attributing seed rows would rest on
-    the unit of work ordering inserts by FK dependency. NULL is the answer."""
+    """The seed has no human actor, and its Organization is inserted before the
+    User in the same commit — attributing it would rest on insert ordering."""
     org = _read_org(session_factory, DEFAULT_ORG_ID)
     assert org.created_by_user_id is None
     assert org.updated_by_user_id is None

@@ -1,17 +1,9 @@
 """Tripwires for the control-plane actor trail (issue #160).
 
-Neither test asserts behaviour. Both exist because the mistake they catch is
-*silent*:
-
-* a new table landing with no actor columns is invisible until an auditor asks
-  who created a row — which is how eleven of thirteen tables ended up without
-  one;
-* a model column added without its ``ALTER TABLE`` works on SQLite (the test
-  suite builds its schema with ``create_all``) and 500s on every deployed
-  request, with no startup error on either side.
-
-Same argument as the ``apiKeyQuery`` string assertion in the Collector's
-cache tests: cheap guards on invariants nothing else can observe.
+These assert no behaviour. They exist because both mistakes are silent: a new
+table with no actor columns goes unnoticed until an auditor asks who wrote a
+row, and a model column with no ``ALTER TABLE`` passes on SQLite while 500ing
+every deployed request.
 """
 
 from __future__ import annotations
@@ -28,15 +20,14 @@ MIGRATIONS_DIR = (
 
 CREATION_ACTOR_COLUMN = "created_by_user_id"
 
-# Tables with no creation actor, and why. Adding a fourth entry should require
-# an argument in code review, not a silent omission.
+# Tables with no creation actor, and why. A fourth entry needs an argument in
+# review, not a silent omission.
 EXEMPT_TABLES: dict[str, str] = {
     "user": "self-created at register; the table is owned by FastAPI Users",
     "oauth_account": "created by FastAPI Users when an OAuth login lands",
     "tool": (
-        "child of agent_version, only ever written by _create_tools as part of a "
-        "version snapshot and never mutated independently, so it inherits that "
-        "row's trail"
+        "child of agent_version, only written as part of a version snapshot and "
+        "never mutated alone, so it inherits that row's trail"
     ),
 }
 
@@ -45,10 +36,9 @@ CREATION_ACTOR_ALIASES: dict[str, str] = {
     "invitation": "invited_by_user_id",
 }
 
-# (table, column) pairs added to a table that ALREADY EXISTED, so ``create_all``
-# could not pick them up and a hand-written migration is the only way a deployed
-# database gets them. A brand-new table needs no entry: ``create_all`` creates
-# whole tables, columns and all.
+# (table, column) pairs added to a table that ALREADY EXISTED, so only a
+# hand-written migration reaches a deployed database. A brand-new table needs
+# no entry -- ``create_all`` creates it whole.
 COLUMNS_NEEDING_A_MIGRATION: set[tuple[str, str]] = {
     ("devtoken", "revoked_at"),
     ("devtoken", "revoked_by_user_id"),
@@ -71,8 +61,8 @@ COLUMNS_NEEDING_A_MIGRATION: set[tuple[str, str]] = {
     ("policy_module", "updated_by_user_id"),
     ("role_binding", "created_at"),
     ("role_binding", "created_by_user_id"),
-    # policy_file shipped in #179 without an actor trail, so by the time #160
-    # reached it the table already existed on deployed stacks -- migration 0003.
+    # policy_file shipped in #179 without an actor trail, so the table already
+    # existed on deployed stacks by the time #160 reached it -- migration 0003.
     ("policy_file", "created_by_user_id"),
     ("policy_file", "updated_by_user_id"),
 }
@@ -95,8 +85,7 @@ def _migration_sql() -> str:
 def test_every_table_carries_a_creation_actor_or_is_explicitly_exempt() -> None:
     """A new table without an actor trail must argue for it in EXEMPT_TABLES.
 
-    The whole point of #160 is that eleven of thirteen tables were missing this
-    and nobody noticed for eleven tables' worth of time.
+    Eleven of thirteen tables were missing one, unnoticed, before #160.
     """
     missing = []
     for name, table in sorted(SQLModel.metadata.tables.items()):
@@ -115,12 +104,10 @@ def test_every_table_carries_a_creation_actor_or_is_explicitly_exempt() -> None:
 def test_update_actor_lands_only_on_tables_mutated_in_place() -> None:
     """``updated_by_user_id`` is deliberately NOT on every table (decision D3).
 
-    It records the last writer, which is only meaningful where a row is edited
-    in place. ``role_binding`` is replaced wholesale, ``agent_version`` / ``tool``
-    are immutable snapshots, and a ``devtoken``'s one meaningful mutation is
-    revocation, which carries its own actor in ``revoked_by_user_id`` — on those,
-    an update trail would either duplicate an existing trail or never be written.
-    Growing this set is a design decision, so make it an explicit one.
+    It only means something where a row is edited in place. ``role_binding`` is
+    replaced wholesale, ``agent_version`` / ``tool`` are immutable, and a
+    ``devtoken``'s one real mutation already carries ``revoked_by_user_id``.
+    Growing this set is a design decision — make it an explicit one.
     """
     expected = {
         "organization",
@@ -139,11 +126,7 @@ def test_update_actor_lands_only_on_tables_mutated_in_place() -> None:
 
 
 def test_every_actor_column_on_a_pre_existing_table_has_a_migration() -> None:
-    """``create_all`` covers fresh databases; deployed ones need the SQL file.
-
-    A model column added without its ``ALTER TABLE`` is invisible on SQLite and
-    a 500 on every deployed request that selects it.
-    """
+    """``create_all`` covers fresh databases; deployed ones need the SQL file."""
     sql = _migration_sql()
     altered = {(t.lower(), c.lower()) for t, c in _ADD_COLUMN.findall(sql)}
     missing = sorted(COLUMNS_NEEDING_A_MIGRATION - altered)
@@ -156,11 +139,9 @@ def test_every_actor_column_on_a_pre_existing_table_has_a_migration() -> None:
 def test_every_migrated_column_and_index_exists_on_the_model() -> None:
     """The other direction, and the one a typo actually trips.
 
-    ``ADD COLUMN IF NOT EXISTS created_by_user_i`` is valid SQL: psql accepts
-    it, adds a column nothing reads, and leaves the real one missing. Same for
-    an index name that doesn't match SQLAlchemy's ``ix_<table>_<column>``
-    default — the deployed database would carry two indexes, or none where one
-    was intended.
+    ``ADD COLUMN IF NOT EXISTS created_by_user_i`` is valid SQL: psql adds a
+    column nothing reads and leaves the real one missing. Same for an index
+    name that misses SQLAlchemy's ``ix_<table>_<column>`` default.
     """
     sql = _migration_sql()
     tables = SQLModel.metadata.tables

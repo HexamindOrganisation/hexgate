@@ -82,11 +82,8 @@ def _signup_and_login(client: TestClient, email: str, password: str) -> None:
 def _login(
     client: TestClient, email: str, password: str = "correcthorsebattery"
 ) -> None:
-    """Log an already-registered user back in.
-
-    The delegated-mint tests switch identities mid-test, and re-running
-    ``_signup_and_login`` for a known email 400s on REGISTER_USER_ALREADY_EXISTS.
-    """
+    """Log an already-registered user back in — the delegated-mint tests switch
+    identities, and re-signing-up a known email 400s."""
     r = client.post(
         "/v1/auth/cookie/login",
         data={"username": email, "password": password},
@@ -127,12 +124,8 @@ def _org_id(client: TestClient) -> str:
 
 
 def _add_member(session_factory, *, org_id: str, user_id: str, role: str) -> None:
-    """Wire an existing user into another org directly.
-
-    The invite → accept flow would work too, but it is three requests of
-    unrelated surface for a fixture; these tests are about who a key is
-    attributed to, not about how membership is granted.
-    """
+    """Wire an existing user into another org directly — invite → accept would
+    work, but it is three requests of surface these tests don't care about."""
 
     async def _insert() -> None:
         async with session_factory() as session:
@@ -157,10 +150,9 @@ def _delete_user(session_factory, user_id: str) -> None:
 def _signup_second_member(
     client: TestClient, *, session_factory, org_id: str, email: str, role: str
 ) -> str:
-    """Register a second user, add them to ``org_id``, and leave them logged in.
+    """Register a second user, add them to ``org_id``, leave them logged in.
 
-    Returns their user id. Registering through the API (rather than inserting a
-    User row) is what gives them a password to log in with.
+    Through the API rather than an insert, so they have a password.
     """
     _signup_and_login(client, email, "correcthorsebattery")
     user_id = client.get("/v1/users/me").json()["id"]
@@ -463,12 +455,8 @@ def test_mint_token_for_another_member_then_owner_is_that_member(
 def test_mint_token_for_another_member_when_caller_is_a_plain_member_then_403(
     client: TestClient, session_factory
 ) -> None:
-    """Minting a credential on someone else's behalf is a management action.
-
-    The route gates on org membership (any role), so the rank check lives in
-    ``resolve_mint_owner`` — switching the route to ``require_project_admin``
-    would stop plain members minting for themselves.
-    """
+    """Minting for someone else is a management action. The rank check lives in
+    ``resolve_mint_owner`` so the route stays open to self-mints."""
     pid = _signup_with_project(client, "ownerP@example.com")
     owner_id = client.get("/v1/users/me").json()["id"]
     org_id = _org_id(client)
@@ -514,11 +502,8 @@ def test_mint_token_for_self_by_id_is_allowed_for_a_plain_member(
 def test_mint_token_for_a_non_member_then_403(
     client: TestClient, session_factory
 ) -> None:
-    """A key parked on someone outside the org would never be swept.
-
-    ``remove_member`` only sweeps keys owned by a member of that org, so
-    allowing this would create a key no offboarding path can reach.
-    """
+    """``remove_member`` only sweeps keys owned by a member of the org, so a key
+    parked on an outsider would be unreachable by any offboarding path."""
     pid = _signup_with_project(client, "ownerR@example.com")
     _signup_and_login(client, "outsiderR@example.com", "correcthorsebattery")
     outsider_id = client.get("/v1/users/me").json()["id"]
@@ -564,9 +549,8 @@ def test_list_tokens_then_owner_and_creator_emails_are_resolved(
 def test_list_tokens_when_the_owner_account_is_gone_then_the_id_survives(
     client: TestClient, session_factory
 ) -> None:
-    """``emails_for_user_ids`` omits ids with no live User row, so the wire
-    keeps the id and the dashboard falls back to it. A deleted account must not
-    erase the audit trail of the keys it owned."""
+    """A deleted account must not erase the trail of the keys it owned: the id
+    stays on the wire and the dashboard falls back to it."""
     pid = _signup_with_project(client, "adminT@example.com")
     org_id = _org_id(client)
     teammate_id = _signup_second_member(
@@ -599,8 +583,7 @@ async def test_mint_api_key_without_an_actor_then_both_columns_are_null(
 ) -> None:
     """The ``deploy/provision.py`` shape: a system mint with no human caller.
 
-    NULL is the intended value, not a gap — and it is what keeps a provisioning
-    key invisible to the offboarding sweep, since it belongs to no person.
+    NULL is intended, and is what keeps the key out of the offboarding sweep.
     """
     ks = FileKeyStore(base_dir=tmp_path / "keystore")
     ks.ensure_keypair()

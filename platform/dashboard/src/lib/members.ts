@@ -51,8 +51,7 @@ export function useLeaveOrg() {
       // bootstrap effect in AppShell handles "stale activeOrgId after
       // leaving" by picking the next remaining org.
       qc.invalidateQueries({ queryKey: ["orgs"] });
-      // Leaving revokes the caller's keys server-side; a Tokens tab open
-      // in another pane would otherwise keep listing dead keys.
+      // Leaving revokes the caller's keys, so a cached token list is stale.
       qc.invalidateQueries({ queryKey: ["tokens"] });
     },
   });
@@ -165,8 +164,7 @@ export function useRemoveMember() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["org-members"] });
       qc.invalidateQueries({ queryKey: ["orgs"] });
-      // Removal revokes every key the member owned across the org's
-      // projects, so any cached token list is stale.
+      // Removal revokes the member's keys, so a cached token list is stale.
       qc.invalidateQueries({ queryKey: ["tokens"] });
     },
   });

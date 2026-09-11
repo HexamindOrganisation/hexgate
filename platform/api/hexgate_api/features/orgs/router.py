@@ -130,9 +130,8 @@ async def api_update_org(
     FK points at (the slug is a URL helper, mutable on purpose).
     Returns 409 if the new slug collides with another org's.
 
-    A submit that changes nothing is a 200 with no write — same rule as
-    :func:`projects.service.update_project_name`: a double-fired save is
-    not an edit, and must not overwrite the actor of the last real one.
+    A submit that changes nothing is a 200 with no write: a double-fired save
+    is not an edit (same rule as :func:`projects.service.update_project_name`).
     """
     caller, member = membership
     org = await session.get(Organization, member.org_id)
@@ -160,9 +159,8 @@ async def api_update_org(
     if not changed:
         return _org_read(org)
 
-    # Stamped inline because this handler owns the mutation (there is no
-    # orgs.service.update_org); extracting it would put a refactor of the
-    # slug-collision logic inside an audit change.
+    # Stamped inline: this handler owns the mutation, there is no
+    # orgs.service.update_org to put it in.
     org.updated_at = utcnow()
     org.updated_by_user_id = caller.id
 

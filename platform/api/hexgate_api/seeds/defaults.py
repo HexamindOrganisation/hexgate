@@ -75,12 +75,9 @@ async def ensure_default_seed(session: AsyncSession) -> Project | None:
     if _seed_disabled():
         return None
 
-    # Every row below leaves its actor columns NULL (issue #160). Two reasons,
-    # and the second is a trap: a first-boot seed genuinely has no human actor,
-    # AND the Organization is inserted before the User in this same commit, so
-    # attributing seed rows to DEFAULT_USER_ID would rest on the unit of work
-    # ordering the inserts by FK dependency — one assumption away from an FK
-    # violation on every fresh boot, for no audit value.
+    # Every row below leaves its actor columns NULL: a first-boot seed has no
+    # human actor, and the Organization is inserted before the User in this
+    # same commit, so attributing one would rest on insert ordering.
 
     # Org first — Project FKs to it, so it has to exist before the project.
     org = await session.get(Organization, DEFAULT_ORG_ID)

@@ -1,16 +1,12 @@
 """Offboarding: removing an org member revokes the API keys they own.
 
-This is the security half of issue #160. Keys are minted with
-``ttl_seconds=None`` and there was no column linking one to a person, so a
-departing developer's credentials kept working indefinitely and no query could
-even enumerate them.
+The security half of issue #160 — keys never expire, so before this a leaver's
+credentials worked indefinitely and nothing could even enumerate them.
 
-The tests below pin four boundaries the sweep must respect — it keys on
-``owner_user_id`` and joins through ``Project.org_id``, so it must not reach
-another member's keys, another org's keys, or ownerless (system) keys — plus the
-atomicity guarantee: a removal refused by the last-owner guard revokes nothing.
-
-Fixtures mirror ``tests/features/tokens/test_tokens.py``.
+These pin the sweep's boundaries (it must not reach another member's keys,
+another org's, or ownerless system keys) and its atomicity: a removal the
+last-owner guard refuses revokes nothing. Fixtures mirror
+``tests/features/tokens/test_tokens.py``.
 """
 
 from __future__ import annotations
@@ -371,15 +367,8 @@ async def test_remove_member_when_refused_for_last_owner_then_no_key_is_revoked(
 ) -> None:
     """A refused removal must leave the keys live.
 
-    Otherwise this org's only owner keeps their access and loses their
-    credentials — the worst of both outcomes.
-
-    Note what actually holds this: ``revoke_owned_keys`` never commits, so an
-    exception anywhere in ``remove_member`` discards the stamps with the
-    transaction. Running the guard first is belt-and-braces on top. The
-    load-bearing half is pinned separately by
-    ``test_revoke_owned_keys_does_not_commit`` — reordering the guard alone does
-    not break this test.
+    What holds this is the missing commit, not the guard ordering — see
+    ``test_revoke_owned_keys_does_not_commit``, which pins that half.
     """
     async with session_factory() as s:
         sole = await _user(s, "sole-owner@example.com")
@@ -412,10 +401,8 @@ async def test_remove_member_when_refused_for_last_owner_then_no_key_is_revoked(
 async def test_revoke_owned_keys_does_not_commit(session_factory, signing_key) -> None:
     """The load-bearing half of the atomicity guarantee (decision D8).
 
-    ``revoke_api_key`` commits; the sweep must not, so that a rollback anywhere
-    in ``remove_member`` — a refused removal, a failing delete — takes the
-    revocations with it. If someone "tidies up" by adding a commit here, a
-    removal that 409s would still kill the member's keys.
+    ``revoke_api_key`` commits; the sweep must not, or a removal that 409s
+    would still kill the member's keys.
     """
     from hexgate_api.features.tokens.service import revoke_owned_keys
 

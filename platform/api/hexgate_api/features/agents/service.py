@@ -89,11 +89,8 @@ def _apply_bundle(agent: Agent, bundle: tuple[bytes, str, bytes] | None) -> None
     to the pydantic engine). One place so the triple can't drift when a bundle
     column is added or its ordering changes.
 
-    Deliberately touches neither ``updated_at`` nor ``updated_by_user_id``. The
-    two fan-out callers (``recompile_project``, ``backfill_bundles``) rebuild a
-    derived artifact, not an authored edit: stamping here would replace an
-    agent's real author with whoever last edited a policy module, and move the
-    dashboard's "updated" column on a recompile nobody performed.
+    Touches no ``updated_*`` column: the fan-out callers rebuild a derived
+    artifact, so stamping would credit a recompile nobody authored.
     """
     if bundle is None:
         agent.compiled_wasm = None
@@ -469,12 +466,8 @@ async def register_manifest(
     left alone — policy belongs to the operator, manifest updates are just
     snapshot churn.
 
-    ``actor_user_id`` is the registering key's owner
-    (``deps.tokens.require_project_actor``), stamped as the creator of the new
-    ``Agent`` and of every ``AgentVersion``. It is ``None`` for a key with no
-    recorded owner, and an existing agent's creator is never rewritten by a
-    re-register. The first-registration branch below also seeds policy_yaml and
-    a bundle, which is part of the create — so it stamps no ``updated_by``.
+    ``actor_user_id`` (the key's owner) creates the ``Agent`` and every
+    ``AgentVersion``; a re-register never rewrites an existing creator.
     """
     content_hash = compute_manifest_hash(manifest)
     agent, agent_created = await _get_or_create_agent(
@@ -536,8 +529,7 @@ async def _get_or_create_agent(
     YAML-edited dashboard flow; code-defined agents leave them empty since the
     actual content lives on each AgentVersion.
 
-    ``created_by_user_id`` is only applied on create — an existing agent keeps
-    whoever first registered it.
+    ``created_by_user_id`` applies on create only.
     """
     agent = await get_agent(session, project_id, name)
     if agent is not None:

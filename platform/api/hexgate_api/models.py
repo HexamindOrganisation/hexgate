@@ -41,38 +41,24 @@ def new_uuid_str() -> str:
 # ---------------------------------------------------------------------------
 # Control-plane actor trail (issue #160).
 #
-# ``created_by_user_id`` / ``updated_by_user_id`` are nullable FKs to ``user``.
-# NULL means "no human actor": a first-boot seed row (seeds/defaults.py), an SDK
-# write from a key with no recorded owner, or a row that predates
-# platform/postgres/migrations/0002. There is no sentinel actor -- the FK means
-# the only storable values are a real user id or NULL.
+# NULL means "no human actor": a seed row, an SDK write from a key with no
+# owner, or a row predating migrations/0002. There is no sentinel.
 #
-# These columns record the LAST writer, not the history. "What did this policy
-# say before Tuesday" is not answerable from them by construction; that is the
-# append-only control-plane audit_event log, tracked separately. Do not grow
-# these columns into a change log.
-#
-# Declared per table rather than via a shared mixin on purpose: no mixin here
-# carries a ``Field(foreign_key=...)``, and sharing a declaration that produces
-# a ForeignKey across mapped classes needs ``declared_attr`` to be safe. Prove
-# that in isolation before collapsing these. ``actor_fk_column`` is a factory,
-# not a mixin: every call returns a distinct Column, so nothing is shared.
+# These record the LAST writer, not history -- that is the audit_event log.
+# Do not grow them into a change log.
 # ---------------------------------------------------------------------------
 
 
 def actor_fk_column(*, index: bool = False) -> Column:
     """A nullable ``user.id`` FK for the actor trail.
 
-    ``ON DELETE SET NULL`` because NULL is already the defined state for
-    "no human actor": deleting an account degrades these display-only
-    references to it instead of blocking the delete on them. Columns that
-    carry real semantics (``organization_member.user_id``,
-    ``invitation.invited_by_user_id``, ``ban.created_by_user_id``) are NOT
-    declared here -- those need a deletion flow that decides what happens
-    to the rows, not a silent NULL.
+    ``ON DELETE SET NULL``: these are display-only, so a deleted account
+    degrades them to "no actor" rather than blocking the delete. Columns with
+    real semantics (``organization_member.user_id``, ``ban.created_by_user_id``)
+    are not declared here -- those need a deletion flow, not a silent NULL.
 
-    Only fresh ``create_all`` databases get the constraint; migration 0002
-    adds these columns to existing volumes with no REFERENCES clause at all.
+    A factory, not a mixin: a ForeignKey shared across mapped classes would
+    need ``declared_attr``, and each call returns a distinct Column.
     """
     return Column(String, ForeignKey("user.id", ondelete="SET NULL"), index=index)
 
@@ -200,9 +186,8 @@ class OrganizationMember(SQLModel, table=True):
     created_at: datetime = Field(
         default_factory=utcnow, sa_type=DateTime(timezone=True)
     )
-    # Who granted this access. On the invite-accept path this is the *inviter*,
-    # not the invitee -- "who let this person in" is the audit question, and the
-    # invitee is already ``user_id`` on the same row.
+    # Who granted the access: on invite-accept the inviter, not the invitee
+    # (already ``user_id`` on this row).
     created_by_user_id: Optional[str] = Field(default=None, sa_column=actor_fk_column())
     updated_at: datetime = Field(
         default_factory=utcnow, sa_type=DateTime(timezone=True)
@@ -293,9 +278,8 @@ class ApiKey(SQLModel, table=True):
     Revoking also masks ``secret``: the retained row is an audit record, not a
     store of credentials that outlive their own revocation.
 
-    ``owner_user_id`` is what makes offboarding possible: keys never expire
-    (``mint_api_key`` passes ``ttl_seconds=None``), so removing an org member
-    sweeps the keys they own (``features/members/service.py:remove_member``).
+    ``owner_user_id`` is what makes offboarding possible: keys never expire, so
+    removing a member sweeps the keys they own (``members.service``).
     """
 
     __tablename__ = "devtoken"  # historical name; renaming needs a migration
@@ -317,9 +301,8 @@ class ApiKey(SQLModel, table=True):
     )
     revoked_by_user_id: Optional[str] = Field(default=None, sa_column=actor_fk_column())
     created_by_user_id: Optional[str] = Field(default=None, sa_column=actor_fk_column())
-    # Whose key this is, as distinct from who minted it: an admin can mint on a
-    # teammate's behalf. This is the column remove_member sweeps when someone
-    # leaves the org, which is the reason it exists -- indexed for that query.
+    # Whose key this is, as distinct from who minted it. Indexed because
+    # remove_member sweeps by it on every removal.
     owner_user_id: Optional[str] = Field(
         default=None, sa_column=actor_fk_column(index=True)
     )
@@ -344,11 +327,9 @@ class Agent(SQLModel, table=True):
         default_factory=utcnow, sa_type=DateTime(timezone=True)
     )
     created_by_user_id: Optional[str] = Field(default=None, sa_column=actor_fk_column())
-    # The last human to author an edit. Deliberately NOT touched by
-    # ``recompile_project`` / ``backfill_bundles``: those rewrite only the three
-    # bundle columns below, and stamping them would replace this agent's real
-    # author with whoever last edited a policy module (and move ``updated_at``
-    # on a recompile nobody authored). See agents/service.py:_apply_bundle.
+    # The last human to author an edit. Not touched by ``recompile_project`` /
+    # ``backfill_bundles``, which rebuild a derived artifact -- see
+    # agents/service.py:_apply_bundle.
     updated_by_user_id: Optional[str] = Field(default=None, sa_column=actor_fk_column())
 
     # Compiled + signed WASM bundle, produced from policy_yaml at save time
@@ -382,19 +363,17 @@ class AgentVersion(SQLModel, table=True):
     created_at: datetime = Field(
         default_factory=utcnow, sa_type=DateTime(timezone=True)
     )
-    # Immutable snapshot: creator only, no update trail. Set from the registering
-    # key's owner on the SDK path (deps/tokens.py:require_project_actor), so it
-    # is NULL for a key minted before #160 or by a system path.
+    # Immutable snapshot: creator only. From the registering key's owner, so
+    # NULL for a system or pre-#160 key.
     created_by_user_id: Optional[str] = Field(default=None, sa_column=actor_fk_column())
 
 
 class Tool(SQLModel, table=True):
     """One tool on one :class:`AgentVersion`.
 
-    No actor trail on purpose: a Tool row is only ever written by
-    ``agents/service.py:_create_tools`` as part of a version snapshot and is
-    never mutated independently, so it inherits its version's trail. Listed as
-    an explicit exemption in ``tests/test_actor_columns.py``.
+    No actor trail: only ever written as part of a version snapshot, never
+    mutated alone, so it inherits that version's. Exempted in
+    ``tests/test_actor_columns.py``.
     """
 
     __tablename__ = "tool"
@@ -504,9 +483,8 @@ class RoleBinding(SQLModel, table=True):
     created_at: datetime = Field(
         default_factory=utcnow, sa_type=DateTime(timezone=True)
     )
-    # No updated_* pair: ``set_roles`` replaces every row for the project on
-    # each write, so a row's creation IS its last write and an update trail
-    # would always duplicate this one.
+    # No updated_* pair: ``set_roles`` replaces every row on each write, so a
+    # row's creation IS its last write.
     created_by_user_id: Optional[str] = Field(default=None, sa_column=actor_fk_column())
 
 

@@ -101,11 +101,9 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return (await res.json()) as T;
 }
 
-/** Mirror of platform/api/schemas.py:TokenListItem. The two actor emails are
- * resolved server-side (same as ``BanRead.created_by_email``) so this never has
- * to look users up. ``created_by_*`` is the minter, ``owner_*`` is whose key it
- * is — they differ when an admin mints on a teammate's behalf. All four are
- * null for a key minted before the actor columns existed. */
+/** Mirror of platform/api/schemas.py:TokenListItem. Actor emails are resolved
+ * server-side, so this never looks users up. ``created_by_*`` minted the key,
+ * ``owner_*`` owns it; all four are null for a pre-actor-columns key. */
 export interface TokenListItem {
   id: string;
   name: string;
@@ -127,8 +125,8 @@ export interface TokenMintRequest {
   name: string;
   scopes?: string[];
   env?: "test" | "live";
-  /** Whose key this is. Omit for the caller's own. Admins / owners only, and
-   * the target must be a member of the project's org — 403 otherwise. */
+  /** Whose key this is; omit for your own. Admins/owners only, and the target
+   * must be in the project's org — 403 otherwise. */
   owner_user_id?: string;
 }
 

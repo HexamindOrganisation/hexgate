@@ -255,16 +255,14 @@ change has to be applied *before* the new images go up. Files live in
 `make platform-migrate STAGE=<stage>` (the step in the recipe above; it replays
 the whole directory against the stack's Postgres).
 
-Applying them *after* the deploy is not a slower path, it is an outage — though
+Applying them *after* the deploy is not a slower path, it is an outage — and
 the signature differs per migration, so don't debug one expecting the other.
-`0001` takes down OTLP ingest: the collector's snapshot query selects
-`revoked_at`, so its first load fails and the container refuses to boot, and
-every bearer-authenticated API route 500s alongside it. `0002` leaves the
-collector alone (it selects no actor column) and instead 500s every API route
-that touches one of its nine tables — reads included, so the dashboard is blank
-rather than degraded. Note the migration itself is safe to run early — the *old*
-code never selects the new columns — which is why it is unconditional in the
-recipe.
+`0001` takes OTLP ingest down: the collector's snapshot query selects
+`revoked_at`, so it refuses to boot, and every bearer-authenticated API route
+500s alongside it. `0002` leaves the collector alone and instead 500s every API
+route touching its nine tables, reads included — a blank dashboard, not a
+degraded one. The migration itself is always safe to run early, which is why it
+is unconditional in the recipe.
 
 | Release | Migration |
 |---|---|
@@ -302,14 +300,11 @@ for. It discards the audit rows, which is the point — the old schema has
 nowhere to keep them.
 
 *Past `0002_actor_columns`* and *past `0003_policy_file_actor_columns`* —
-**no compensating step.** Every column they add is nullable and unreferenced by
-the older code, so a reverted stack reads all ten tables exactly as it did
-before; leave them in place. The one thing the rollback
-does not undo is keys that the member-removal cascade revoked while the new code
-was live. That is correct — they were revoked because someone left the org — and
-un-revoking them is not possible anyway: the secret was masked on revoke
-(`0001`'s behaviour), so the credential is gone even if `revoked_at` were
-cleared. If a revocation was made in error, mint a fresh key.
+**no compensating step.** Every column they add is nullable and unread by the
+older code, so leave them in place. What the rollback cannot undo is the keys
+that member removal revoked while the new code was live — correctly so, and
+irreversibly: `0001` masked the secret on revoke, so clearing `revoked_at`
+would not bring the credential back. Mint a fresh key instead.
 
 **When a release changes the topic config, re-run `redpanda-init` by hand** —
 `platform-up` will not. `create-topics.sh` reconciles `retention.ms` and

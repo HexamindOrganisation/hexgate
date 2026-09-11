@@ -40,9 +40,8 @@ function formatRelative(iso: string | null): string {
   return `${Math.floor(diff / 86_400_000)}d ago`;
 }
 
-/** Tooltip for the Owner cell: the raw owner id, plus who minted the key when
- * that is someone else. Keys minted before the actor columns existed have
- * neither, so the tooltip stays empty rather than showing "null". */
+/** Tooltip for the Owner cell: the raw owner id, plus the minter when that is
+ * someone else. Empty rather than "null" for a pre-actor-columns key. */
 function describeTokenActors(token: TokenListItem): string | undefined {
   const parts: string[] = [];
   if (token.owner_user_id) parts.push(`Owner: ${token.owner_user_id}`);
@@ -388,9 +387,8 @@ export function TokensPage() {
                       </span>
                     </td>
                     {/* Email as the label, raw id on hover — same shape as
-                       ActiveBansPanel's created-by cell. The tooltip also
-                       carries the minter, so a key an admin created for
-                       someone else is discoverable without a second column. */}
+                       ActiveBansPanel's created-by cell. The minter rides the
+                       tooltip rather than earning a second column. */}
                     <td
                       className="px-5 py-3 text-[13px] text-muted-foreground"
                       title={describeTokenActors(t)}

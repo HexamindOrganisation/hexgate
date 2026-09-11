@@ -430,8 +430,8 @@ def test_rename_project_stamps_the_updater(client: TestClient, session_factory) 
 def test_noop_rename_does_not_move_the_update_trail(
     client: TestClient, session_factory
 ) -> None:
-    """A double-fired save button is not an edit. ``update_project_name``
-    returns early on an identical name, and that early return must not stamp."""
+    """A double-fired save is not an edit: the early return on an identical
+    name must not stamp."""
     _signup_and_login(client, "actor-proj-noop@example.com", "correcthorsebattery")
     org_id = client.get("/v1/orgs").json()[0]["id"]
     pid = client.post(f"/v1/orgs/{org_id}/projects", json={"name": "same"}).json()["id"]

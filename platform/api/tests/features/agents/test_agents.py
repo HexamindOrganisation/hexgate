@@ -1284,9 +1284,8 @@ def test_seeded_agents_carry_no_actor(session_factory) -> None:
 def test_register_agent_stamps_the_keys_owner(
     client: TestClient, session_factory
 ) -> None:
-    """The bearer path. ``require_project_actor`` bridges the token back to a
-    person via ``ApiKey.owner_user_id``, which is the only way an SDK write can
-    be attributed at all."""
+    """The bearer path: ``ApiKey.owner_user_id`` is the only bridge from a
+    token back to a person."""
     token = _mint_owned_token(session_factory, owner_user_id=DEFAULT_USER_ID)
 
     r = client.post(
@@ -1307,9 +1306,7 @@ def test_register_agent_stamps_the_keys_owner(
 def test_register_agent_with_an_ownerless_key_stamps_null(
     client: TestClient, session_factory
 ) -> None:
-    """A key minted before #160, or by ``deploy/provision.py``, has no owner.
-    That must record NULL and must not 500 — NULL is the intended value, not a
-    gap to fill with a guess."""
+    """A key with no owner still writes; it records NULL rather than a guess."""
     token = _mint_owned_token(session_factory, owner_user_id=None)
 
     r = client.post(

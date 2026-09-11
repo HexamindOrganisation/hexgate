@@ -812,8 +812,8 @@ def _read_membership(session_factory, *, org_id: str, user_id: str):
 def test_accept_stamps_the_inviter_on_the_new_membership(
     client: TestClient, session_factory
 ) -> None:
-    """ "Who let this person into the org" is the audit question, and the
-    inviter is the answer — the invitee is already ``user_id`` on the row."""
+    """The audit question is who let this person in, so the answer is the
+    inviter — the invitee is already ``user_id`` on the row."""
     inviter_email, invitee_email = "inviter-a@example.com", "invitee-a@example.com"
     inviter_id = _signup_and_login(client, inviter_email, "correcthorsebattery")
     org_id = client.get("/v1/orgs").json()[0]["id"]
@@ -850,8 +850,8 @@ def test_revoke_invitation_by_an_admin_stamps_the_admin(
 def test_decline_invitation_stamps_the_invitee(
     client: TestClient, session_factory
 ) -> None:
-    """The other authorised caller — the invitee declining. Also genuinely
-    the actor, so the same column carries it."""
+    """The other authorised caller: the invitee declining is equally the
+    actor, so the same column carries it."""
     decliner_email = "decliner@example.com"
     _signup_and_login(client, "inviter-b@example.com", "correcthorsebattery")
     org_id = client.get("/v1/orgs").json()[0]["id"]
@@ -871,8 +871,8 @@ def test_decline_invitation_stamps_the_invitee(
 def test_second_revoke_keeps_the_first_actor(
     client: TestClient, session_factory
 ) -> None:
-    """``revoke_invitation`` is idempotent, and a repeat call must not move the
-    stamp — same guarantee ``revoke_api_key`` gives."""
+    """``revoke_invitation`` is idempotent: a repeat must not move the stamp,
+    the same guarantee ``revoke_api_key`` gives."""
     admin_email = "double-cancel@example.com"
     admin_id = _signup_and_login(client, admin_email, "correcthorsebattery")
     org_id = client.get("/v1/orgs").json()[0]["id"]

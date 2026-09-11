@@ -63,11 +63,9 @@ async def create_org(
     org exists with zero members. Caller is responsible for ensuring
     ``slug`` is globally unique (use :func:`_generate_unique_org_slug`).
 
-    ``created_by_user_id`` is stamped on both rows. On every path today it
-    equals ``owner_user_id`` (you create the org you own, or you sign up and
-    get your personal default) — the parameter is separate because the columns
-    answer different questions, and a future "create an org on someone's
-    behalf" path would make them diverge.
+    ``created_by_user_id`` is stamped on both rows. It equals ``owner_user_id``
+    on every path today, but stays a separate parameter because "who made this"
+    and "whose is it" are different questions.
     """
     org = Organization(name=name, slug=slug, created_by_user_id=created_by_user_id)
     session.add(org)
@@ -114,8 +112,8 @@ async def ensure_personal_default_org(
         return existing
 
     slug = await _generate_unique_org_slug(session, _email_to_slug_base(user.email))
-    # A signup default org IS attributable to the user who registered, unlike
-    # the first-boot seed (which writes NULL actors — see seeds/defaults.py).
+    # Attributable to the registering user, unlike the first-boot seed
+    # (seeds/defaults.py writes NULL actors).
     return await create_org(
         session,
         name="default",

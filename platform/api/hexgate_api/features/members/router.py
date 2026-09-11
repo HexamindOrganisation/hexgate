@@ -107,20 +107,13 @@ async def api_remove_member(
     """Remove a member. Admin/owner can remove anyone; plain members
     can only remove themselves (the "leave organization" flow).
 
-    **Also revokes every API key the member owns**, across every project in the
-    org, in the same transaction as the removal (see ``remove_member``). Keys
-    never expire, so leaving them live is the offboarding hole in issue #160 —
-    but it does mean services still using those keys start failing immediately,
-    which is why the count goes to the log and the dashboard's confirm dialog
-    warns about it.
+    **Also revokes every API key the member owns**, in the same transaction
+    (see ``remove_member``), so services still using them start failing at
+    once — hence the log line and the dashboard's warning.
 
-    Refuses with 409 when the removal would leave the org with zero
-    owners — promote another member to owner first, then leave. A refused
-    removal revokes nothing.
-
-    Returns 204 No Content on success (REST norm for DELETE). The revoked count
-    stays off the wire deliberately: the dashboard is written against 204, and
-    the audit trail lives on the retained rows.
+    Refuses with 409 when the removal would leave the org with zero owners; a
+    refused removal revokes nothing. Returns 204 on success — the revoked
+    count stays off the wire, since the audit trail lives on the rows.
     """
     from hexgate_api.features.members.service import LastOwnerError, remove_member
 

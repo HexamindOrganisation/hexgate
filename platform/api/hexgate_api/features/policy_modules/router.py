@@ -304,9 +304,8 @@ async def api_set_policy_roles(
                 )
                 built = None
             if built is None:
-                # Restoring the previous bindings is still a write this caller
-                # caused, so it carries their id rather than resurrecting
-                # whoever wrote `before`.
+                # The restore is still this caller's write, not a
+                # resurrection of whoever wrote `before`.
                 await service.set_roles(
                     session,
                     project_id=project_id,
