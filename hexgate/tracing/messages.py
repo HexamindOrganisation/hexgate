@@ -460,7 +460,8 @@ class MessageCursor:
         fingerprints: in steady state it is the same message every call, and
         one of these lists can carry an inlined image."""
         if not messages:
-            return [], state.count > 0, _FRESH_TURN
+        if not messages:
+            return [], state.count > 0, _TurnState(0, _UNMATCHABLE_FINGERPRINT, 0)
         first = _canonical(messages[0])
         current = _fingerprint(len(messages), first, _canonical(messages[-1]))
         mark = _TurnState(count=len(messages), fingerprint=current, next_seq=0)
