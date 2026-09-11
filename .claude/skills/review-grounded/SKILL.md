@@ -11,6 +11,27 @@ gate exists because the expensive failure mode of a review is not a missed bug,
 it is a list of twelve findings where three matter — the author then either
 fixes noise or stops reading reviews.
 
+Zero findings is the ordinary outcome, not a failed review. One or two is a
+normal PR. If you are about to report five, you have almost certainly gated
+leniently — go back and write the Notice line for each one again.
+
+## 0. What this product actually is
+
+The gate is only as good as the facts it tests against, so they are written
+down here rather than re-derived each run:
+
+- **No customers yet.** A break that needs a real end user, a paying tenant, or
+  a customer-facing event to have already happened has not happened.
+- **One engineer.** No second developer to confuse, no separate operator, no
+  handover. Drop any finding whose only victim is a hypothetical colleague.
+- **Prod and staging are live and deploy from git** — prod from a release tag,
+  staging from `main`. Deploys, restarts and migrations are real events.
+- **Data at risk is the team's own.** Keys, agents and policies can be re-minted
+  or re-saved. Losing them is an inconvenience, not an incident.
+
+When one of these is what kills a finding, say so in the drop line — it is the
+most reusable thing a review produces.
+
 ## 1. Eligibility
 
 Skip the review entirely if the PR is closed, is an automated/dependency bump,
@@ -72,8 +93,14 @@ For each candidate finding, write the example before deciding whether to keep it
 ```
 Trigger:  what happens in the world (an operation, a request, a deploy, a volume)
 Break:    what the code then does wrong
-Notice:   who sees it, and how
+Notice:   who sees it, how, and whether they would act anyway
 ```
+
+`Notice` is the line that decides most findings, so write it last and write it
+honestly. "The engineer sees the error and fixes it" is a reason to drop, not a
+reason to report. The answer that keeps a finding is "nobody" — the operation
+returns success, the log line is skipped, the screen says the opposite of what
+is true.
 
 The gate applies to every lens, including CLAUDE.md compliance, internal
 consistency and prior review comments. A category being "in scope" makes an item
@@ -95,7 +122,20 @@ Then drop the finding if the example needs any of these to be true:
   from nowhere.
 - **Traffic this product does not have.** Hexgate is an early-stage SaaS with a
   handful of stages. A break that needs 50k spans/sec is not a break yet; one
-  that needs 200/sec is.
+  that needs 200/sec is. The same applies to events, not just volume: with no
+  customers, a break that needs a customer — or a departing teammate, or data
+  that accumulated before this deploy — needs something that has not occurred.
+- **A failure that announces itself.** If the Break stops the thing at the
+  moment of action — a make target that exits non-zero, a container that
+  crash-loops, a request that 500s on the first try — the engineer sees it and
+  reacts, and nothing is silently wrong. Loud-and-recoverable is not a finding;
+  say what it costs (a retry, a re-run, five minutes) and drop it. What survives
+  this filter is the silent break: the one where the operation reports success
+  and the wrong thing is true afterwards.
+- **A value nothing reads.** Before reporting a wrong or missing write, find
+  the read: a wire schema, a screen, a query, a branch. If no code path
+  consumes the value, a regression in it is invisible and harmless. This kills
+  most "the actor/timestamp/flag is not stamped here" findings.
 - **Config nobody sets.** Grep before claiming an env var, flag or setting
   matters — if nothing in the repo, compose files or DEPLOY.md sets it, the
   finding rests on a hypothetical deployment.
@@ -105,10 +145,19 @@ Then drop the finding if the example needs any of these to be true:
 - **Nothing at all.** If no example can be written, the finding is a theory.
   Drop it.
 
-Keep the finding, and say so plainly, when the example is mundane: a deploy, a
-restart, a broker that takes twenty minutes to come back, a customer's first RAG
-call, a retry that lands twice. Mundane means an operational event that happens
-to the running product; "someone reads the docstring" is not a trigger.
+Keep the finding, and say so plainly, when the example is mundane *and* the
+Break is silent: a deploy, a restart, a broker that takes twenty minutes to come
+back, a retry that lands twice — and afterwards the system reports success while
+something is quietly wrong. Mundane means an operational event that happens to
+the running product; "someone reads the docstring" is not a trigger, and "the
+deploy stops with a clear error" is not a break.
+
+Before reporting, make one adversarial pass over the surviving list whose only
+job is to kill findings — not to justify them. Take each one and try to name the
+fact that makes it not matter: no customers, loud failure, nothing reads it,
+path doesn't exist. Never assign a subagent to find a use case *for* a finding;
+handed a conclusion, it will manufacture a scenario, which is how a list of five
+gets built. The asymmetry is the point.
 
 Pre-existing issues, linter/typechecker/CI catches, missing test coverage and
 style preferences not written in a `CLAUDE.md` are out of scope regardless of how
