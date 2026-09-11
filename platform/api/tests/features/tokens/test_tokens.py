@@ -13,6 +13,7 @@ import asyncio
 from biscuit_auth import AuthorizerBuilder, Rule
 from fastapi.testclient import TestClient
 import pytest_asyncio
+from sqlalchemy import event
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 from sqlmodel import SQLModel
@@ -33,19 +34,56 @@ from hexgate_api.seeds.defaults import ensure_default_project
 # ---------------------------------------------------------------------------
 
 
-@pytest_asyncio.fixture
-async def session_factory():
+def _sqlite_engine(*, enforce_foreign_keys: bool = False):
+    """In-memory engine on one connection, so every session sees the same data.
+
+    SQLite ignores FK constraints — and therefore ``ON DELETE SET NULL`` — unless
+    the pragma is set per connection, which is why the default suite exercises
+    neither. Registered before the first connect: the engine is lazy, so no
+    connection exists yet.
+    """
     engine = create_async_engine(
         "sqlite+aiosqlite:///:memory:",
         connect_args={"check_same_thread": False},
         poolclass=StaticPool,
     )
+    if enforce_foreign_keys:
+
+        @event.listens_for(engine.sync_engine, "connect")
+        def _pragma(dbapi_connection, _record) -> None:
+            cursor = dbapi_connection.cursor()
+            cursor.execute("PRAGMA foreign_keys=ON")
+            cursor.close()
+
+    return engine
+
+
+async def _bootstrapped_factory(engine):
     async with engine.begin() as conn:
         await conn.run_sync(SQLModel.metadata.create_all)
     factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
     async with factory() as bootstrap:
         await ensure_default_project(bootstrap)
-    yield factory
+    return factory
+
+
+@pytest_asyncio.fixture
+async def session_factory():
+    engine = _sqlite_engine()
+    yield await _bootstrapped_factory(engine)
+    await engine.dispose()
+
+
+@pytest_asyncio.fixture
+async def fk_session_factory():
+    """``session_factory`` with the FK constraints actually enforced.
+
+    Separate from the shared fixture on purpose: enforcing FKs suite-wide would
+    change the failure mode of every test that deletes a referenced row, and
+    only the ``ON DELETE SET NULL`` behaviour of the actor columns needs it.
+    """
+    engine = _sqlite_engine(enforce_foreign_keys=True)
+    yield await _bootstrapped_factory(engine)
     await engine.dispose()
 
 
@@ -546,11 +584,18 @@ def test_list_tokens_then_owner_and_creator_emails_are_resolved(
     assert rows["delegated"]["created_by_email"] == "adminS@example.com"
 
 
-def test_list_tokens_when_the_owner_account_is_gone_then_the_id_survives(
+def test_list_tokens_when_the_owner_account_is_gone_then_the_id_survives_on_migrated_stacks(
     client: TestClient, session_factory
 ) -> None:
-    """A deleted account must not erase the trail of the keys it owned: the id
-    stays on the wire and the dashboard falls back to it."""
+    """The trail outlives the account: the id stays on the wire, email falls back.
+
+    Pins the *migrated* schema only. ``0002_actor_columns.sql`` adds these
+    columns as bare ``varchar`` with no REFERENCES clause, so a deleted user
+    leaves the id behind; a fresh ``create_all`` database instead carries
+    ``ON DELETE SET NULL`` and nulls it (next test). The divergence is
+    deliberate and permanent — see 0002's header. This fixture does not enforce
+    FKs, which is what makes it stand in for the migrated side.
+    """
     pid = _signup_with_project(client, "adminT@example.com")
     org_id = _org_id(client)
     teammate_id = _signup_second_member(
@@ -571,6 +616,48 @@ def test_list_tokens_when_the_owner_account_is_gone_then_the_id_survives(
     row = client.get(f"/v1/projects/{pid}/tokens").json()[0]
     assert row["owner_user_id"] == teammate_id
     assert row["owner_email"] is None
+
+
+async def test_delete_owner_on_a_fresh_schema_then_the_actor_columns_go_null(
+    fk_session_factory, tmp_path
+) -> None:
+    """The other side of the divergence above, and what ``actor_fk_column``
+    promises: on a ``create_all`` database the FKs are ``ON DELETE SET NULL``,
+    so the delete succeeds and the trail degrades to "no human actor" rather
+    than blocking. The key row itself survives — it is the audit record.
+
+    The owner holds no membership: ``organization_member.user_id`` is a
+    non-null FK with no ``ON DELETE`` action, so deleting a user who is still
+    in an org is refused, not nulled. Offboarding removes the membership first.
+    """
+    ks = FileKeyStore(base_dir=tmp_path / "keystore")
+    ks.ensure_keypair()
+
+    async with fk_session_factory() as session:
+        owner = User(email="leaverU@example.com")
+        session.add(owner)
+        await session.commit()
+        row, _full = await mint_api_key(
+            session,
+            project_id=DEFAULT_PROJECT_ID,
+            name="owned",
+            scopes=["read_audit"],
+            env="live",
+            signing_key_bytes=ks._private_key_bytes(),
+            created_by_user_id=owner.id,
+            owner_user_id=owner.id,
+        )
+        token_id = row.id
+
+        await session.delete(owner)
+        await session.commit()
+
+    async with fk_session_factory() as session:
+        after = await session.get(ApiKey, token_id)
+
+    assert after is not None
+    assert after.owner_user_id is None
+    assert after.created_by_user_id is None
 
 
 # ---------------------------------------------------------------------------
