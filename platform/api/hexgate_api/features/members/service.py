@@ -22,7 +22,7 @@ async def emails_for_user_ids(
     session: AsyncSession, user_ids: set[str]
 ) -> dict[str, str]:
     """Map user id -> email for the given ids in one query. Ids with no live
-    User row are omitted (account deleted) so callers fall back to the id.
+    User row are omitted so callers fall back to the id.
 
     Lives in this slice because it is a plain ``User`` read with nothing
     domain-specific about it, and three features now resolve actor ids for

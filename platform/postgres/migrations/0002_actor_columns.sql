@@ -21,6 +21,12 @@
 -- nullable and only ever read for display, so adding constraints to live tables
 -- is not worth the lock. The divergence is confined to pre-existing volumes.
 --
+-- That divergence is permanent and one-directional: on a fresh database these
+-- FKs carry ON DELETE SET NULL (models.actor_fk_column), so deleting a user
+-- degrades the row to "no human actor"; here there is no constraint to act on
+-- and the stale id simply stays, resolving to no email. Both end up at the same
+-- display, by different routes.
+--
 -- NULL means "no human actor" -- a first-boot seed row, an SDK write from a key
 -- with no recorded owner, or a row that predates this migration. There is no
 -- sentinel actor: these columns are FKs to "user" on a fresh database, so a
