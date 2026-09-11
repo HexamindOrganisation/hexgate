@@ -1,22 +1,20 @@
--- Applied BY HAND, not by a runner. init/ only executes on an empty volume, so
--- every environment that already has the hexgate_audit database needs this run
--- against it via `make clickhouse-cli` (paste the statement below).
+-- init/ only executes on an empty volume, so every environment that already
+-- has the hexgate_audit database gets this from `make platform-migrate
+-- STAGE=<stage>` (deploy stacks — replays this directory) or by pasting the
+-- statement into `make clickhouse-cli` (the local dev compose).
 --
--- ORDERING: apply this BEFORE deploying the API / enricher that write to the
--- table (the platform PR that adds the hexgate.messages scope to KNOWN_SCOPES,
--- its insert, and its startup schema check). Nothing references the table
--- today, so skipping it right now is inert — no rejected insert, no refused
--- boot. Once that PR is deployed, skipping it takes the message path down,
--- loudly:
---   * ingest — the messages insert names the table, ClickHouse rejects the
---     batch, the enricher retries the whole poll until acked and halts its
---     partition (design: an audit log must not silently lose acknowledged
---     rows). Decisions, usage and bans in the same poll are held up with it.
---   * startup — that same PR is what adds llm_message to the verify_all tuple
---     in main.py, which then refuses to boot on a missing table. Today
---     verify_all is passed (verify_audit_schema, verify_llm_schema) only and
---     never looks at this table.
--- The CREATE is additive — nothing running today references the table — so it
+-- ORDERING: apply this BEFORE deploying the build that stores hexgate.messages
+-- (the one whose KNOWN_SCOPES holds the scope and whose verify_all tuple names
+-- this table, in both main.py and the enricher). Skipping it on that build is
+-- not a degraded message path, it is a refused boot:
+--   * startup — verify_all sees the table as every column missing and both
+--     the api and the enricher exit; platform-up has already recreated their
+--     containers, so they crash-loop until this lands.
+--   * ingest, had startup not caught it — the messages insert names the
+--     table, ClickHouse rejects the batch, and the enricher retries the whole
+--     poll until acked, holding the partition's decisions, usage and bans with
+--     it (design: an audit log must not silently lose acknowledged rows).
+-- The CREATE is additive — an older build never references the table — so it
 -- can be applied arbitrarily early. Idempotent (IF NOT EXISTS).
 --
 -- Keep this statement byte-identical to the one in init/schema.sql so a

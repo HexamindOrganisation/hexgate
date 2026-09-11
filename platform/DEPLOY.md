@@ -255,6 +255,16 @@ change has to be applied *before* the new images go up. Files live in
 `make platform-migrate STAGE=<stage>` (the step in the recipe above; it replays
 the whole directory against the stack's Postgres).
 
+**When a release adds a ClickHouse table or column** — `init/schema.sql` runs
+only on an empty volume, so an existing stage gets the change from
+`platform/clickhouse/migrations/`, replayed by the same `platform-migrate`
+step (every file is `IF NOT EXISTS`, so replay is a no-op once applied). The
+ordering matters more here than for Postgres: the api and enricher check the
+tables they write and read at boot (`verify_all`) and refuse to start on a
+missing one, and `platform-up` has already recreated their containers by then
+— the old ones are gone, so a skipped migration is a crash loop of the whole
+API, not a degraded message path.
+
 Applying them *after* the deploy is not a slower path, it is an outage: the
 collector's snapshot query selects the new column, so its first load fails, the
 container refuses to boot, and OTLP ingest is down until the migration lands.
@@ -264,7 +274,10 @@ columns — which is why it is unconditional in the recipe.
 
 | Release | Migration |
 |---|---|
-| devtoken soft delete | `0001_devtoken_soft_delete.sql` |
+| devtoken soft delete | `postgres/0001_devtoken_soft_delete.sql` |
+| policy_decision `attributes` | `clickhouse/0001_add_policy_decision_attributes.sql` |
+| run attribution on decisions/usage | `clickhouse/0002_add_run_columns.sql` |
+| LLM message logging (`llm_message` table) | `clickhouse/0003_add_llm_message.sql` — required before the build that stores `hexgate.messages` |
 
 **Rolling back past a migration.** The columns stay behind when the code goes
 away, and old code does not know to filter on them. Nothing here is automatic,
@@ -357,7 +370,8 @@ minutes makes routine database maintenance total span loss, reported as a green
 healthcheck.
 
 **Schema changes** apply only on an empty volume; changing one after first boot
-needs a manual migration.
+goes through `platform/clickhouse/migrations/`, applied by `make platform-migrate`
+(§6).
 
 ## Consumer SDK
 
