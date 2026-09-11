@@ -186,11 +186,21 @@ In the chat, never on GitHub. Most severe first:
 
 N findings:
 
-1. **<what breaks>** — <the example, one or two sentences>
+1. **<what breaks>** — <one sentence on the defect>
    <repo-relative path:line — e.g. platform/collector/config.yaml:126>
+
+   > **Trigger** <the mundane operational event>
+   > **Break** <what the code then does wrong>
+   > **Notice** <who sees it — and why that is nobody>
 
 Housekeeping (optional): <stale comments, wrong pointers, format nits — one line>
 ```
+
+The example is the whole point of this review, so it gets its own block rather
+than a trailing clause: a blockquote under the finding, one labelled line each
+for Trigger, Break and Notice — the same three lines you wrote at the gate in
+section 4, not a re-summary. Keep each to one line; if Trigger needs two, the
+example is not mundane enough to have survived.
 
 Cite `path:line`, which is clickable in the terminal and points at the checkout
 the reader already has. Fall back to a GitHub permalink
