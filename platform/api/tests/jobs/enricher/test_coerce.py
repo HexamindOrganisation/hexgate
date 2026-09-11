@@ -8,6 +8,7 @@ from hexgate_api.jobs.enricher.coerce import (
     SpanRejected,
     as_int,
     as_json_dict,
+    as_json_value,
     as_str,
     as_str_list,
     required,
@@ -77,3 +78,24 @@ def test_as_str_stringifies_with_default() -> None:
     assert as_str(None) == ""
     assert as_str(None, default="x") == "x"
     assert as_str(7) == "7"
+
+
+def test_as_json_value_happy_path() -> None:
+    assert as_json_value('[{"role": "user"}]', key="k", scope="s") == [{"role": "user"}]
+    assert as_json_value(None, key="k", scope="s") is None
+
+
+def test_when_json_value_is_already_decoded_then_accepted() -> None:
+    assert as_json_value(["a"], key="k", scope="s") == ["a"]
+    assert as_json_value({"a": 1}, key="k", scope="s") == {"a": 1}
+
+
+def test_when_json_value_is_invalid_json_then_span_rejected() -> None:
+    with pytest.raises(SpanRejected) as exc:
+        as_json_value("[broken", key="k", scope="s")
+    assert exc.value.error_class == "validation"
+
+
+def test_when_json_value_is_a_non_string_scalar_then_span_rejected() -> None:
+    with pytest.raises(SpanRejected):
+        as_json_value(42, key="k", scope="s")

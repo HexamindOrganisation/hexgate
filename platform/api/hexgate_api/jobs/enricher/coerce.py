@@ -115,3 +115,28 @@ def as_json_dict(value: Any, *, key: str, scope: str) -> dict[str, Any] | None:
         error_class="validation",
         scope=scope,
     )
+
+
+def as_json_value(value: Any, *, key: str, scope: str) -> Any:
+    """Like :func:`as_json_dict` for attributes whose JSON is not an object —
+    the ``gen_ai.*`` message fields are arrays. Any valid JSON is accepted;
+    an already-decoded array or kvlist is accepted with a log line."""
+    if value is None:
+        return None
+    if isinstance(value, (dict, list)):
+        _log.warning("accepted decoded %s (expected a JSON string)", key)
+        return value
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except ValueError as exc:
+            raise SpanRejected(
+                f"{key} is not valid JSON: {exc}",
+                error_class="validation",
+                scope=scope,
+            ) from None
+    raise SpanRejected(
+        f"{key}={value!r} is not a JSON-string value",
+        error_class="validation",
+        scope=scope,
+    )

@@ -21,7 +21,12 @@ from typing import Any
 
 from opentelemetry.proto.trace.v1.trace_pb2 import Span
 
-from hexgate.audit import SENSITIVE_ARG_KEY_RE, redact, truncate_json
+from hexgate.audit import (
+    SENSITIVE_ARG_KEY_RE,
+    TOOL_CALL_JSON_KEYS,
+    redact,
+    truncate_json,
+)
 from hexgate.tracing import semconv
 from hexgate_api.jobs.enricher.decode import attrs_dict
 
@@ -29,6 +34,20 @@ from hexgate_api.jobs.enricher.decode import attrs_dict
 # matches dict keys, so a still-serialized payload would pass through whole
 # with its secret-bearing keys unread.
 _JSON_DICT_KEYS = (semconv.ARGUMENTS, semconv.HINT, semconv.ATTRIBUTES)
+# The gen_ai.* message fields are JSON arrays of messages; a tool-call message
+# inside one carries the same caller arguments ``ARGUMENTS`` does, so they are
+# parsed and redacted the same way. ``redact`` recurses lists, so an array is
+# as redactable as an object — only a bare scalar has nothing to match.
+_JSON_LIST_KEYS = (
+    semconv.GEN_AI_INPUT_MESSAGES,
+    semconv.GEN_AI_OUTPUT_MESSAGES,
+    semconv.GEN_AI_SYSTEM_INSTRUCTIONS,
+)
+# Key → the container types its JSON may parse to and still be redactable.
+_JSON_KEYS: dict[str, tuple[type, ...]] = {
+    **{key: (dict,) for key in _JSON_DICT_KEYS},
+    **{key: (dict, list) for key in _JSON_LIST_KEYS},
+}
 _UNPARSEABLE = "[UNPARSEABLE]"
 
 # Both variable-size fields are capped well below the DLQ producer's
@@ -54,25 +73,31 @@ def _source(topic: str, partition: int, offset: int) -> dict[str, Any]:
 
 
 def _redacted_attributes(span: Span) -> dict[str, Any]:
-    """Span attributes safe for the DLQ: JSON-string dicts parsed, then redacted.
+    """Span attributes safe for the DLQ: JSON-string fields parsed, then redacted.
 
-    A dict field that doesn't parse *to a dict* can't be redacted (``redact``
-    matches keys, so a bare string or list has nothing to match), so it is
-    dropped rather than forwarded raw — the DLQ is for diagnosing the
-    rejection, and the source record (see ``_source``) still holds the
-    original bytes.
+    A field that doesn't parse to the container its contract names can't be
+    trusted to redact (``redact`` matches keys, so a bare string has nothing
+    to match, and a list where a dict was promised is not the shape the
+    emitter meant), so it is dropped rather than forwarded raw — the DLQ is
+    for diagnosing the rejection, and the source record (see ``_source``)
+    still holds the original bytes.
     """
     attributes = attrs_dict(span.attributes)
-    for key in _JSON_DICT_KEYS:
+    for key, containers in _JSON_KEYS.items():
         raw = attributes.get(key)
         if isinstance(raw, str):
             try:
                 parsed = json.loads(raw)
             except ValueError:
                 parsed = None
-            attributes[key] = parsed if isinstance(parsed, dict) else _UNPARSEABLE
+            attributes[key] = parsed if isinstance(parsed, containers) else _UNPARSEABLE
     return truncate_json(
-        redact(attributes, pattern=SENSITIVE_ARG_KEY_RE), cap=_ATTRIBUTES_CAP_BYTES
+        redact(
+            attributes,
+            pattern=SENSITIVE_ARG_KEY_RE,
+            json_string_keys=TOOL_CALL_JSON_KEYS,
+        ),
+        cap=_ATTRIBUTES_CAP_BYTES,
     )
 
 
@@ -92,8 +117,9 @@ def span_envelope(
     Attributes are redacted (substring key match, the stricter of the two
     SDK patterns) before they land here: this topic has 30-day retention and
     no ACLs, so unredacted arguments must never reach it. The JSON-string
-    dict fields are parsed first so the key match reaches inside them, and
-    they stay dicts in the envelope.
+    fields — decision dicts and gen_ai.* message arrays alike — are parsed
+    first so the key match reaches inside them, and they stay parsed in the
+    envelope.
     """
     attributes = _redacted_attributes(span)
     payload = {

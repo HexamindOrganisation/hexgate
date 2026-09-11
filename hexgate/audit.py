@@ -105,22 +105,62 @@ _SENSITIVE_ATTR_KEY_RE = re.compile(
 )
 _REDACTED = "[REDACTED]"
 
+# Keys whose string value may itself be serialized JSON that ``_redact`` must
+# look inside. In a ``gen_ai.*`` message a tool-call part carries the caller's
+# ``arguments``, and the raw OpenAI wire shape serializes them as a JSON
+# string, not an object — a string leaf, whose keys the substring match never
+# sees. Exact key names on purpose: parsing every string that happens to be
+# JSON would rewrite a user message whose content is JSON.
+TOOL_CALL_JSON_KEYS = frozenset({"arguments"})
 
-def _redact(value: Any, *, pattern: re.Pattern[str]) -> Any:
+
+def _redact(
+    value: Any,
+    *,
+    pattern: re.Pattern[str],
+    json_string_keys: frozenset[str] = frozenset(),
+) -> Any:
     """Return a copy of ``value`` with values under ``pattern``-matching keys replaced.
 
     Pure — never mutates the input, so the ``Decision`` the caller holds
-    keeps its full arguments; only the wire payload is redacted."""
+    keeps its full arguments; only the wire payload is redacted.
+
+    A string value under a key in ``json_string_keys`` that parses to a JSON
+    container is redacted inside and serialized back, so the field keeps the
+    shape the emitter chose while its nested keys still match."""
     if isinstance(value, dict):
         return {
             k: _REDACTED
             if isinstance(k, str) and pattern.search(k)
-            else _redact(v, pattern=pattern)
+            else _redact_json_string(
+                v, pattern=pattern, json_string_keys=json_string_keys
+            )
+            if k in json_string_keys and isinstance(v, str)
+            else _redact(v, pattern=pattern, json_string_keys=json_string_keys)
             for k, v in value.items()
         }
     if isinstance(value, (list, tuple)):
-        return [_redact(v, pattern=pattern) for v in value]
+        return [
+            _redact(v, pattern=pattern, json_string_keys=json_string_keys)
+            for v in value
+        ]
     return value
+
+
+def _redact_json_string(
+    text: str, *, pattern: re.Pattern[str], json_string_keys: frozenset[str]
+) -> str:
+    """``_redact`` applied inside a JSON-string leaf; non-JSON or scalar JSON
+    comes back untouched (nothing in it has a key to match)."""
+    try:
+        parsed = json.loads(text)
+    except ValueError:
+        return text
+    if not isinstance(parsed, (dict, list)):
+        return text
+    return json.dumps(
+        _redact(parsed, pattern=pattern, json_string_keys=json_string_keys)
+    )
 
 
 def _bounded_violations(violations: Sequence[str]) -> list[str]:
