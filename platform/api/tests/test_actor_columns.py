@@ -71,6 +71,10 @@ COLUMNS_NEEDING_A_MIGRATION: set[tuple[str, str]] = {
     ("policy_module", "updated_by_user_id"),
     ("role_binding", "created_at"),
     ("role_binding", "created_by_user_id"),
+    # policy_file shipped in #179 without an actor trail, so by the time #160
+    # reached it the table already existed on deployed stacks -- migration 0003.
+    ("policy_file", "created_by_user_id"),
+    ("policy_file", "updated_by_user_id"),
 }
 
 _ADD_COLUMN = re.compile(
@@ -113,8 +117,9 @@ def test_update_actor_lands_only_on_tables_mutated_in_place() -> None:
 
     It records the last writer, which is only meaningful where a row is edited
     in place. ``role_binding`` is replaced wholesale, ``agent_version`` / ``tool``
-    are immutable snapshots, and a ``devtoken`` is never updated — on those, an
-    update trail would either duplicate the creation trail or never be written.
+    are immutable snapshots, and a ``devtoken``'s one meaningful mutation is
+    revocation, which carries its own actor in ``revoked_by_user_id`` — on those,
+    an update trail would either duplicate an existing trail or never be written.
     Growing this set is a design decision, so make it an explicit one.
     """
     expected = {
@@ -123,6 +128,7 @@ def test_update_actor_lands_only_on_tables_mutated_in_place() -> None:
         "project",
         "agent",
         "policy_module",
+        "policy_file",
     }
     actual = {
         name

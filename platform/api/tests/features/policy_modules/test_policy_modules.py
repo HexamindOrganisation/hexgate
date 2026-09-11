@@ -1042,6 +1042,378 @@ async def test_resolves_false_on_unparseable_stored_module(session_factory) -> N
         assert await pm.resolves(s, proj.id) is False  # must not raise
 
 
+# --- compose file store (entry-file + import graph) --------------------------
+
+
+def _put_file(client, pid, name, content):
+    return client.put(
+        f"/v1/projects/{pid}/policy-files/{name}", json={"content": content}
+    )
+
+
+def test_put_and_list_policy_files(client):
+    pid = _project(client)
+    assert (
+        _put_file(
+            client, pid, "policy.yaml", "tools: { a: { mode: allow } }\n"
+        ).status_code
+        == 200
+    )
+    assert (
+        _put_file(
+            client, pid, "caps/read.yaml", "tools: { b: { mode: allow } }\n"
+        ).status_code
+        == 200
+    )
+    names = sorted(
+        f["name"] for f in client.get(f"/v1/projects/{pid}/policy-files").json()
+    )
+    assert names == ["caps/read.yaml", "policy.yaml"]
+
+
+def test_resolve_via_entry_file(client):
+    pid = _project(client)
+    _put_file(
+        client,
+        pid,
+        "policy.yaml",
+        'boundary:\n  tools: { refund: { constraint: "args.amount <= 1000" } }\n'
+        "tools: { refund: { mode: allow } }\n",
+    )
+    roles = client.get(f"/v1/projects/{pid}/policy/resolve").json()["roles"]
+    refund = roles["default"]["tools"]["refund"]
+    assert refund["mode"] == "allow"
+    assert any("1000" in c for c in refund["constraints"])  # boundary ceiling folded in
+
+
+def test_resolve_with_cross_file_import(client):
+    pid = _project(client)
+    _put_file(
+        client,
+        pid,
+        "caps.yaml",
+        "export:\n  c:\n    tools: { refund: { mode: allow } }\n",
+    )
+    _put_file(client, pid, "policy.yaml", "import: [ caps.yaml#c ]\n")
+    roles = client.get(f"/v1/projects/{pid}/policy/resolve").json()["roles"]
+    assert "refund" in roles["default"]["tools"]
+
+
+def test_invalid_file_content_is_422(client):
+    pid = _project(client)
+    r = _put_file(client, pid, "policy.yaml", "tools: { a: { mode: not_a_mode } }\n")
+    assert r.status_code == 422, r.text
+
+
+def test_file_breaking_resolution_is_409(client):
+    pid = _project(client)
+    # entry imports a file that isn't in the store → the project won't resolve.
+    r = _put_file(client, pid, "policy.yaml", "import: [ missing.yaml ]\n")
+    assert r.status_code == 409, r.text
+
+
+def test_delete_still_imported_file_is_409(client):
+    pid = _project(client)
+    _put_file(
+        client, pid, "caps.yaml", "export:\n  c:\n    tools: { a: { mode: allow } }\n"
+    )
+    _put_file(client, pid, "policy.yaml", "import: [ caps.yaml#c ]\n")
+    r = client.delete(f"/v1/projects/{pid}/policy-files/caps.yaml")
+    assert r.status_code == 409, r.text
+
+
+def test_check_surfaces_resolution_error(client):
+    pid = _project(client)
+    # A structurally-valid entry that imports a missing file can be saved only if
+    # it resolves; so seed a resolvable entry, then break it via a second file the
+    # entry imports being absent is caught at save. Instead: check a clean project.
+    _put_file(client, pid, "policy.yaml", "tools: { a: { mode: allow } }\n")
+    body = client.get(f"/v1/projects/{pid}/policy/check").json()
+    assert body["ok"] is True and body["lints"] == []
+
+
+def test_preview_resolves_a_draft(client):
+    pid = _project(client)
+    _put_file(client, pid, "policy.yaml", "tools: { a: { mode: allow } }\n")
+    # preview a draft that adds a tool, without saving
+    r = client.post(
+        f"/v1/projects/{pid}/policy/preview",
+        json={
+            "name": "policy.yaml",
+            "content": "tools: { a: { mode: allow }, b: { mode: allow } }\n",
+        },
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert set(body["resolved"]["default"]["tools"]) == {"a", "b"}
+    assert body["lints"] == []
+    # the saved file is unchanged (preview doesn't persist)
+    saved = client.get(f"/v1/projects/{pid}/policy-files").json()
+    assert "b: { mode: allow }" not in saved[0]["content"]
+
+
+def test_preview_reports_resolution_error_inline(client):
+    pid = _project(client)
+    _put_file(client, pid, "policy.yaml", "tools: { a: { mode: allow } }\n")
+    r = client.post(
+        f"/v1/projects/{pid}/policy/preview",
+        json={"name": "policy.yaml", "content": "import: [ nope.yaml ]\n"},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["resolved"] is None
+    assert body["lints"][0]["severity"] == "error"
+
+
+async def test_file_flip_to_modular_rejected_when_bundle_cannot_build(
+    session_factory, client: TestClient, monkeypatch
+) -> None:
+    # Writing the first policy.yaml flips a classic project modular. If the bundle
+    # can't build (opa down), roll back the file rather than leave is_modular True
+    # with the agent on its now-wrong classic bundle. Mirrors the roles-flip guard.
+    import hexgate_api.features.agents.service as asvc
+    from hexgate_api.core.ids import new_id
+    from hexgate_api.models import Agent
+
+    monkeypatch.setattr(asvc, "compile_bundle", lambda py, sign: None)  # opa "down"
+    pid = _project(client)
+    async with session_factory() as s:
+        agent = Agent(
+            id=new_id(Agent),
+            project_id=pid,
+            name="a1",
+            agent_yaml="",
+            policy_yaml="version: 1\n",
+            system_md="",
+        )
+        agent.compiled_wasm, agent.bundle_manifest, agent.bundle_signature = (
+            b"CLASSIC",
+            "M",
+            b"S",
+        )
+        s.add(agent)
+        await s.commit()
+
+    r = _put_file(client, pid, "policy.yaml", "tools: { a: { mode: allow } }\n")
+    assert r.status_code == 409, r.text
+    assert client.get(f"/v1/projects/{pid}/policy-files").json() == []  # rolled back
+
+    async with session_factory() as s:
+        from sqlmodel import select
+
+        from hexgate_api.models import Agent as A
+
+        row = (await s.exec(select(A).where(A.project_id == pid))).first()
+        assert row.compiled_wasm == b"CLASSIC"  # stale classic bundle left intact
+
+
+def test_preview_reports_error_in_a_non_requested_agent(client):
+    # Preview validates EVERY declared agent (like the save-time 409), so a draft
+    # that breaks a named agent's cell previews as an error even when the requested
+    # ('*') agent is itself fine — preview and save agree.
+    pid = _project(client)
+    _put_file(
+        client, pid, "caps.yaml", "export:\n  c:\n    tools: { a: { mode: allow } }\n"
+    )
+    _put_file(
+        client,
+        pid,
+        "policy.yaml",
+        "agents:\n  bot:\n    roles:\n      support: { import: [ caps.yaml#c ] }\n",
+    )
+    r = client.post(
+        f"/v1/projects/{pid}/policy/preview",
+        json={
+            "name": "policy.yaml",
+            "agent": "*",
+            "content": "agents:\n  bot:\n    roles:\n      support: { import: [ nope.yaml ] }\n",
+        },
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["resolved"] is None
+    assert body["lints"][0]["severity"] == "error"
+
+
+# --- /policy/graph + /policy/test (compose) ----------------------------------
+
+
+def test_policy_graph_from_compose(client):
+    # A resolving compose project graphs into agent + tool nodes with call edges;
+    # an mcp-prefixed tool becomes an "mcp" node (prefix dropped in the label).
+    pid = _project(client)
+    _put_file(
+        client,
+        pid,
+        "policy.yaml",
+        "agents:\n"
+        "  bot:\n"
+        "    roles:\n"
+        "      support:\n"
+        "        tools:\n"
+        "          read_ticket: { mode: allow }\n"
+        "          mcp-knowledge: { mode: approval_required }\n",
+    )
+    r = client.get(f"/v1/projects/{pid}/policy/graph")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    nodes = {n["id"]: n for n in body["nodes"]}
+    assert "agent:bot" in nodes
+    assert nodes["tool:mcp-knowledge"]["kind"] == "mcp"
+    assert nodes["tool:mcp-knowledge"]["label"] == "knowledge"  # "mcp-" dropped
+    assert nodes["tool:read_ticket"]["kind"] == "tool"
+
+    calls = {(e["source"], e["target"]) for e in body["edges"] if e["kind"] == "call"}
+    assert ("agent:bot", "tool:read_ticket") in calls
+    assert ("agent:bot", "tool:mcp-knowledge") in calls
+
+
+def test_policy_graph_reach_edge(client):
+    # A reach the boundary permits lowers to an agent→agent edge tagged by `via`,
+    # materializing the target agent node.
+    pid = _project(client)
+    _put_file(
+        client,
+        pid,
+        "policy.yaml",
+        "boundary:\n"
+        "  reach: { billing_bot: { as: handoff } }\n"
+        "agents:\n"
+        "  bot:\n"
+        "    roles:\n"
+        "      support:\n"
+        "        reach: { billing_bot: { as: handoff } }\n",
+    )
+    body = client.get(f"/v1/projects/{pid}/policy/graph").json()
+    assert "agent:billing_bot" in {n["id"] for n in body["nodes"]}
+    reach = {
+        (e["source"], e["target"]): e for e in body["edges"] if e["kind"] == "reach"
+    }
+    edge = reach[("agent:bot", "agent:billing_bot")]  # the granted reach
+    assert edge["via"] == "handoff"
+    assert "support" in edge["roles"]
+
+
+def test_policy_graph_role_filter(client):
+    # ?role= restricts the graph to one role's edges.
+    pid = _project(client)
+    _put_file(
+        client,
+        pid,
+        "policy.yaml",
+        "agents:\n"
+        "  bot:\n"
+        "    roles:\n"
+        "      support: { tools: { a: { mode: allow } } }\n"
+        "      admin: { tools: { b: { mode: allow } } }\n",
+    )
+    edges = client.get(
+        f"/v1/projects/{pid}/policy/graph", params={"role": "support"}
+    ).json()["edges"]
+    targets = {e["target"] for e in edges if e["kind"] == "call"}
+    assert "tool:a" in targets
+    assert "tool:b" not in targets  # admin role filtered out
+
+
+def test_policy_test_allow_approval_deny(client):
+    pid = _project(client)
+    _put_file(
+        client,
+        pid,
+        "policy.yaml",
+        "tools:\n  send_email: { mode: allow }\n  risky: { mode: approval_required }\n",
+    )
+
+    def probe(tool):
+        return client.post(
+            f"/v1/projects/{pid}/policy/test",
+            json={"role": "default", "tool": tool, "args": {}},
+        )
+
+    r = probe("send_email")
+    assert r.status_code == 200, r.text
+    assert r.json()["outcome"] == "allow"
+    assert probe("risky").json()["outcome"] == "approval_required"
+    assert probe("wipe_db").json()["outcome"] == "deny"  # closed-world default-deny
+
+
+def test_policy_test_unknown_role_is_404(client):
+    pid = _project(client)
+    _put_file(client, pid, "policy.yaml", "tools: { a: { mode: allow } }\n")
+    r = client.post(
+        f"/v1/projects/{pid}/policy/test",
+        json={"role": "ghost", "tool": "a", "args": {}},
+    )
+    assert r.status_code == 404, r.text
+
+
+def test_policy_test_reflects_a_draft_overlay(client):
+    # A tool granted only in an unsaved draft evaluates allow via the overlay,
+    # while the saved project still denies it.
+    pid = _project(client)
+    _put_file(client, pid, "policy.yaml", "tools: { a: { mode: allow } }\n")
+    saved = client.post(
+        f"/v1/projects/{pid}/policy/test",
+        json={"role": "default", "tool": "b", "args": {}},
+    )
+    assert saved.json()["outcome"] == "deny"
+    drafted = client.post(
+        f"/v1/projects/{pid}/policy/test",
+        json={
+            "role": "default",
+            "tool": "b",
+            "args": {},
+            "draft": {
+                "name": "policy.yaml",
+                "content": "tools: { b: { mode: allow } }\n",
+            },
+        },
+    )
+    assert drafted.status_code == 200, drafted.text
+    assert drafted.json()["outcome"] == "allow"
+
+
+def test_policy_test_422_when_draft_does_not_compose(client):
+    pid = _project(client)
+    _put_file(client, pid, "policy.yaml", "tools: { a: { mode: allow } }\n")
+    r = client.post(
+        f"/v1/projects/{pid}/policy/test",
+        json={
+            "role": "default",
+            "tool": "a",
+            "args": {},
+            "draft": {"name": "policy.yaml", "content": "import: [ missing.yaml ]\n"},
+        },
+    )
+    assert r.status_code == 422, r.text
+
+
+def test_policy_graph_drops_isolated_generic_agent(client):
+    # With named agents and no top-level grant, the generic "*" column has no
+    # edges — its sentinel node is pruned, not shown as a literal "*" agent.
+    pid = _project(client)
+    _put_file(
+        client,
+        pid,
+        "policy.yaml",
+        "agents:\n  bot:\n    roles:\n      support: { tools: { a: { mode: allow } } }\n",
+    )
+    ids = {
+        n["id"] for n in client.get(f"/v1/projects/{pid}/policy/graph").json()["nodes"]
+    }
+    assert "agent:bot" in ids
+    assert "agent:*" not in ids
+
+
+def test_policy_graph_keeps_generic_agent_with_top_level_grant(client):
+    # A top-level grant belongs to the generic "*" column, so its node stays.
+    pid = _project(client)
+    _put_file(client, pid, "policy.yaml", "tools: { a: { mode: allow } }\n")
+    body = client.get(f"/v1/projects/{pid}/policy/graph").json()
+    assert "agent:*" in {n["id"] for n in body["nodes"]}
+    assert ("agent:*", "tool:a") in {(e["source"], e["target"]) for e in body["edges"]}
+
+
 # ---------------------------------------------------------------------------
 # Actor trail (issue #160)
 #

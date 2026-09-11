@@ -508,3 +508,30 @@ class RoleBinding(SQLModel, table=True):
     # each write, so a row's creation IS its last write and an update trail
     # would always duplicate this one.
     created_by_user_id: Optional[str] = Field(default=None, sa_column=actor_fk_column())
+
+
+class PolicyFile(SQLModel, table=True):
+    """One file in a project's compose policy, addressed by ``name``.
+
+    The entry file is ``policy.yaml``; other files are pulled in via ``import:``
+    from it. Unlike :class:`PolicyModule` (the tier layout), a file has no tier —
+    roles and imports live inside the file content, per the compose grammar. One
+    row per ``(project_id, name)``; the SDK's compose loader reads ``content`` by
+    ``name``, so a project is a small in-DB filesystem.
+    """
+
+    __tablename__ = "policy_file"
+    __table_args__ = (
+        UniqueConstraint("project_id", "name", name="uq_policy_file_project_name"),
+    )
+
+    id: str = Field(primary_key=True)  # new_id(PolicyFile) -> "pfl_…"
+    project_id: str = Field(foreign_key="project.id", index=True)
+    name: str = Field(index=True)  # e.g. "policy.yaml", "caps/refunds.yaml"
+    content: str  # the file's YAML text
+    content_hash: str  # sha256 of content, the file's stable identity
+    created_by_user_id: Optional[str] = Field(default=None, sa_column=actor_fk_column())
+    updated_at: datetime = Field(
+        default_factory=utcnow, sa_type=DateTime(timezone=True)
+    )
+    updated_by_user_id: Optional[str] = Field(default=None, sa_column=actor_fk_column())

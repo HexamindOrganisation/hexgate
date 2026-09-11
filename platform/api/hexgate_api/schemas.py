@@ -432,6 +432,96 @@ class PolicyCheckResponse(BaseModel):
     lints: list[PolicyLintOut] = Field(default_factory=list)
 
 
+# --- Compose file store (entry-file + import graph) --------------------------
+
+
+class PolicyFileRead(BaseModel):
+    name: str  # e.g. "policy.yaml", "caps/refunds.yaml"
+    content: str
+    content_hash: str
+    updated_at: datetime
+
+
+class PolicyFileWrite(BaseModel):
+    """Body for upserting a policy file. The name comes from the URL."""
+
+    content: str
+
+
+class PolicyPreviewRequest(BaseModel):
+    """A draft file to resolve without saving — the editor's live preview. The
+    draft is overlaid on the project's stored files for ``name``."""
+
+    name: str
+    content: str
+    agent: str = "*"
+
+
+class PolicyPreviewResponse(BaseModel):
+    """The effective policy per role for the draft, plus any resolution lints."""
+
+    resolved: dict[str, dict] | None = None
+    lints: list[PolicyLintOut] = Field(default_factory=list)
+
+
+class PolicyGraphNode(BaseModel):
+    """One node in the policy graph: an agent, a tool, an MCP tool, or a role."""
+
+    id: str
+    kind: str  # "agent" | "tool" | "mcp" | "role"
+    label: str
+
+
+class PolicyGraphEdge(BaseModel):
+    """One directed edge: a tool call, an agent→agent reach (``via`` tool/handoff),
+    or a role→agent admission. ``verdict`` is the composed mode; ``constraints`` the
+    per-edge conditions; ``roles`` the roles it appears under."""
+
+    source: str
+    target: str
+    kind: str  # "call" | "reach" | "admission"
+    via: str | None = None  # "tool" | "handoff" (reach only)
+    verdict: str  # "allow" | "approval_required" | "deny"
+    constraints: list[str] = Field(default_factory=list)
+    roles: list[str] = Field(default_factory=list)
+
+
+class PolicyGraphResponse(BaseModel):
+    """Nodes + edges for the resolved-policy graph view."""
+
+    nodes: list[PolicyGraphNode] = Field(default_factory=list)
+    edges: list[PolicyGraphEdge] = Field(default_factory=list)
+
+
+class PolicyFileDraft(BaseModel):
+    """An unsaved compose file edit, overlaid before test (like the preview draft)."""
+
+    name: str
+    content: str
+
+
+class PolicyTestRequest(BaseModel):
+    """A tool call to evaluate against the resolved policy for ``role`` + ``agent``."""
+
+    role: str
+    # The executing agent, "*" (the generic column) by default — matches
+    # /policy/resolve and /policy/preview so the editor's panels agree.
+    agent: str = "*"
+    tool: str
+    args: dict = Field(default_factory=dict)
+    attributes: dict | None = None
+    draft: PolicyFileDraft | None = None  # reflect an unsaved edit, like preview
+
+
+class PolicyTestResponse(BaseModel):
+    """The gate's verdict for a single evaluated tool call."""
+
+    outcome: str  # "allow" | "deny" | "approval_required"
+    reason: str | None = None
+    violations: list[str] = Field(default_factory=list)
+    hint: str | None = None
+
+
 # --- Agent manifest registration ---------------------------------------------
 # These mirror hexgate/manifest/models.py so SDK and platform stay in sync.
 

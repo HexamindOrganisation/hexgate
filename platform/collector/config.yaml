@@ -10,6 +10,10 @@ receivers:
         endpoint: ${env:HEXGATE_COLLECTOR_GRPC_ENDPOINT:-127.0.0.1:4317}
         auth:
           authenticator: hexgatebiscuitauth
+        # No max_recv_msg_size_mib override, so this stays at grpc-go's 4 MiB
+        # — deliberately NOT raised alongside the HTTP receiver below. The SDK
+        # is HTTP-only (_senders.py imports the proto.http exporter), and 4317
+        # is unpublished; anything that starts using it needs this raised too.
         # Required for message_key_from_metadata_key (see the kafka
         # exporter below) to see project_id at all — client metadata
         # isn't propagated to downstream consumers by default.
@@ -19,13 +23,23 @@ receivers:
         auth:
           authenticator: hexgatebiscuitauth
         include_metadata: true
+        # confighttp defaults this to 20 MiB, and the rejection is on the whole
+        # POST before any batching or per-span handling — one oversized export
+        # loses every span in it. The SDK exports up to 64 spans at a time
+        # (max_export_batch_size in hexgate/tracing/_senders.py) and an LLM
+        # message span can reach ~272 KiB uncompressed, so a full export is
+        # ~17 MiB, uncomfortably close to that default. 32 MiB is the headroom.
+        max_request_body_size: 33554432 # 32 MiB
 
 processors:
   # Values are reasonable dev defaults, not load-tested.
+  # Raised with the record-size budget: the receiver now admits 32 MiB bodies
+  # and the exporter queue is bounded at 128 MiB (see sending_queue below), so
+  # a 384 MiB soft limit would refuse intake under ordinary message traffic.
   memory_limiter:
     check_interval: 1s
-    limit_mib: 512
-    spike_limit_mib: 128
+    limit_mib: 1024
+    spike_limit_mib: 256
 
   # Resource-level (whole batch) provenance tag — a real, common use of
   # this processor, not just a placeholder. Where a real deployment would
@@ -47,8 +61,24 @@ processors:
         action: upsert
 
   batch:
+    # Spans per exported batch, i.e. per Kafka record — down from 512. LLM
+    # message spans (scope hexgate.messages) carry up to ~272 KiB of prompt and
+    # completion JSON against a decision span's ~1 KiB, and one record over the
+    # topic's max.message.bytes is rejected whole, taking the decision spans
+    # batched alongside it. There is only ONE batch processor and ONE topic for
+    # every scope, and batching is count-based, so this single number has to be
+    # safe for the largest span type: 24 x 272 KiB = 6.375 MiB, inside the 8 MiB
+    # topic/producer limit. Decision-only traffic then ships ~20x more records,
+    # all small, which Redpanda handles at our volume.
+    #
+    # Both knobs, because they cover different paths and the processor refuses
+    # to start unless send_batch_max_size >= send_batch_size: the flush
+    # threshold caps a batch accumulated over the 5 s timer, the max splits a
+    # single oversized incoming request that would otherwise pass straight
+    # through.
     timeout: 5s
-    send_batch_size: 512
+    send_batch_size: 24
+    send_batch_max_size: 24
     # Without this, the batch processor rebuilds its export context from
     # scratch and drops all incoming client metadata — the kafka
     # exporter's message_key_from_metadata_key: project_id below would
@@ -77,6 +107,36 @@ exporters:
       # the API key's database row (not from the token's own self-declared
       # project fact, which is only a mint-time snapshot).
       message_key_from_metadata_key: project_id
+    producer:
+      # Client-side limit, checked before the record ever reaches Redpanda, so
+      # it must match the topic's max.message.bytes (create-topics.sh) — raising
+      # only the topic changes nothing. configkafka defaults it to 1 000 000.
+      #
+      # This one is measured BEFORE compression: it maps to franz-go's
+      # ProducerBatchMaxBytes, which is explicit that a batch is sized
+      # uncompressed. So the hard ceiling here is 8 MiB of raw spans — 30 at
+      # 272 KiB — and send_batch_max_size: 24 leaves ~20% of the 8 MiB unused
+      # (6.375 of 8 MiB).
+      max_message_bytes: 8388608 # 8 MiB
+      # compression stays at configkafka's "none". zstd would buy network and
+      # disk — span batches are repetitive JSON — but nothing here needs it:
+      # the limit above is measured uncompressed, so it buys no headroom. And
+      # the enricher could not read the result: aiokafka gates every codec on
+      # a cramjam import (has_zstd() is False without it), cramjam is not in
+      # platform/api's lock, and an undecodable batch raises out of the poll
+      # loop, which __main__ does not catch — a restart loop on a container
+      # whose healthcheck is disabled. Enabling it means shipping the codec
+      # and both images together.
+    sending_queue:
+      # Bound the export queue in BYTES, not requests. The default is 1000
+      # *requests* with no size notion, which was ~500 MiB of ~1 KiB decision
+      # spans but becomes ~6.2 GiB once a queued request can be a 6.375 MiB
+      # batch of message spans — an OOM on a box that also hosts ClickHouse,
+      # Postgres and Redpanda for two stages. Overflow is non-blocking, so a
+      # Redpanda outage now sheds spans at a fixed memory cost instead of
+      # growing until the process dies.
+      sizer: bytes
+      queue_size: 134217728 # 128 MiB
     record_partitioner:
       # Hashes whatever message_key_from_metadata_key resolves to, so
       # the same project_id always lands on the same partition.
@@ -103,10 +163,12 @@ extensions:
     public_key_file: ${env:HEXGATE_COLLECTOR_PUBLIC_KEY_FILE:-../api/data/hexgate.pub}
 
     revocation:
-      # Revoking an API key deletes its row, so the check is a lookup against
-      # a snapshot of the whole key table rather than a flag. The signed
-      # token_id fact is that row's own id (platform-api PR #126), which is
-      # what lets this be keyed on a short id instead of the full secret.
+      # Revoking an API key soft-deletes its row — it survives with
+      # revoked_at stamped (platform-api PR #206) — so the check is a lookup
+      # against a snapshot of the live keys, which is what the query filters
+      # down to. The signed token_id fact is that row's own id (platform-api
+      # PR #126), which is what lets this be keyed on a short id instead of
+      # the full secret.
       #
       # LOCAL DEV ONLY credentials, matching the postgres service in
       # platform/docker-compose.yml — never reuse these anywhere deployed.

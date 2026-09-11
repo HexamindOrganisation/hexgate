@@ -134,7 +134,7 @@ async def _modular_bundle(
     from hexgate_api.features.policy_modules import service as modules
 
     try:
-        policy_yaml = await modules.resolved_policy_yaml(
+        policy_yaml = await modules.resolved_policy_yaml_auto(
             session, project_id, agent=agent
         )
     except modules.compose_error_types() as exc:
@@ -164,7 +164,9 @@ async def _resolved_yaml_or_none(
     from hexgate_api.features.policy_modules import service as modules
 
     try:
-        return await modules.resolved_yaml_by_agent(session, project_id, agent_names)
+        return await modules.resolved_yaml_by_agent_auto(
+            session, project_id, agent_names
+        )
     except modules.compose_error_types() as exc:
         logger.warning(
             "modular project %s does not resolve; no bundles: %s", project_id, exc

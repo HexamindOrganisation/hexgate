@@ -153,8 +153,8 @@ def _load(
     if imported.agents:
         raise LinkError(
             f"{target_str}: an imported file must be leaf-only "
-            f"(tools/reach/mcp/boundary); it declares agents:/roles:, which "
-            f"imports do not support yet"
+            f"(tools/reach/mcp/admission/boundary); it declares agents:/roles:, "
+            f"which imports do not support yet"
         )
 
     if name is not None:
@@ -171,7 +171,8 @@ def _load(
 
     if fragment.boundary is not None:
         raise LinkError(
-            f"{target_str}: an imported fragment may only grant (tools/reach/mcp); "
+            f"{target_str}: an imported fragment may only grant "
+            f"(tools/reach/mcp/admission); "
             f"a boundary/ceiling must be authored in the importing file — an "
             f"imported ceiling would intersect and can silently deny every grant"
         )

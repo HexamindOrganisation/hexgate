@@ -103,6 +103,40 @@ with a JSON 404 and every SDK on that stage silently loses its audit trail —
 stack (Postgres, ClickHouse, Redpanda) binds no host ports; Redpanda in
 particular is PLAINTEXT with no auth — never publish it.
 
+**The `/v1/traces` route carries its own request-body limit.** The collector's
+OTLP receiver accepts 32 MiB (`max_request_body_size`) and an SDK export of LLM
+message spans can reach ~17 MiB, but the proxy enforces its own cap *first* and
+answers `413` before the collector ever sees the POST — so the proxy, not the
+collector, is what decides whether a large export gets through. This is the one
+hop in the record-size budget (`docs/internals/audit-pipeline.md` §4.1) that
+lives outside this repo, so nothing in `make check-all` can catch it.
+
+In nginx the setting is `client_max_body_size`, and it belongs **inside the
+`location = /v1/traces` block** rather than at `http` or `server` level:
+
+```nginx
+location = /v1/traces {
+    proxy_pass http://127.0.0.1:7001;   # 7201 on staging
+    client_max_body_size 32m;
+}
+```
+
+Note the value here is deliberately *tighter* than the surrounding default —
+on the prod box the `http` block allows `100M`, and this route is held to a
+much smaller number on purpose. `/v1/traces` is the only endpoint taking bulk
+binary uploads, and nginx enforces the limit **before** the collector verifies
+the Biscuit token, so whatever it allows is what an unauthenticated caller can
+make the proxy buffer. Keep it as small as the largest legitimate export: 32
+MiB covers a 64-span batch of maximally-sized message spans, and nothing more.
+The value was 8 MiB before message logging, which is why it had to be raised.
+
+Both stages need it — they are separate files
+(`sites-available/app.hexgate.ai` and `…/app.staging.hexgate.ai`), each with
+its own `/v1/traces` block pointing at that stage's collector port. Apply with
+`nginx -t && systemctl reload nginx`; a graceful reload keeps existing
+connections and a failed test changes nothing. Caddy imposes no default body
+limit and needs nothing.
+
 (In Caddy this is two `reverse_proxy` site blocks; in nginx, two `server`
 blocks with `proxy_pass`. Forward `X-Forwarded-Proto: https` — the API trusts
 it, via uvicorn `--proxy-headers`, for correct https OAuth callbacks. `/v1`
@@ -236,6 +270,7 @@ recipe.
 |---|---|
 | devtoken soft delete | `0001_devtoken_soft_delete.sql` |
 | control-plane actor columns | `0002_actor_columns.sql` |
+| actor trail on the compose file store | `0003_policy_file_actor_columns.sql` |
 
 **Rolling back past a migration.** The columns stay behind when the code goes
 away, and old code does not know to filter on them. Nothing here is automatic,
@@ -255,18 +290,55 @@ docker compose -p hexgate-<stage> --env-file platform/.env.<stage> \
   -c "DELETE FROM devtoken WHERE revoked_at IS NOT NULL"
 ```
 
-Skipping it un-revokes every key revoked while the new code was live, on HTTP,
-WebSocket and OTLP ingest alike. It discards the audit rows, which is the point:
-the old schema has nowhere to keep them.
+Skipping it does not expose every surface equally. Revoke also masks the
+secret, and the pre-soft-delete code resolves a key by matching that secret
+exactly, so it can never match a revoked row: bearer HTTP and the WebSocket
+handshake stay refused either way. Two surfaces do regress, both of them ones
+that never look at the secret — **OTLP ingest**, which matches the token's
+`token_id` fact against a snapshot of the whole key table and finds the row
+present again, and the **dashboard's key list**, which reads the rows back
+unfiltered. Run it anyway: those are the surfaces the compensating step exists
+for. It discards the audit rows, which is the point — the old schema has
+nowhere to keep them.
 
-*Past `0002_actor_columns`* — **no compensating step.** Every column it adds is
-nullable and unreferenced by the older code, so a reverted stack reads all nine
-tables exactly as it did before; leave them in place. The one thing the rollback
+*Past `0002_actor_columns`* and *past `0003_policy_file_actor_columns`* —
+**no compensating step.** Every column they add is nullable and unreferenced by
+the older code, so a reverted stack reads all ten tables exactly as it did
+before; leave them in place. The one thing the rollback
 does not undo is keys that the member-removal cascade revoked while the new code
 was live. That is correct — they were revoked because someone left the org — and
 un-revoking them is not possible anyway: the secret was masked on revoke
 (`0001`'s behaviour), so the credential is gone even if `revoked_at` were
 cleared. If a revocation was made in error, mint a fresh key.
+
+**When a release changes the topic config, re-run `redpanda-init` by hand** —
+`platform-up` will not. `create-topics.sh` reconciles `retention.ms` and
+`max.message.bytes` on every run, but `redpanda-init` is the only thing that
+invokes it, and `restart: "no"` + `service_completed_successfully` means an
+existing stack never starts it again. The collector and enricher take their new
+limits from rebuilt images, so skipping this leaves the broker as the one hop
+still on the old, narrower limit — and it rejects the records everything else
+is now sized to send:
+
+```bash
+cd /srv/hexgate-<stage>
+docker compose -p hexgate-<stage> --env-file platform/.env.<stage> \
+  -f platform/docker-compose.deploy.yml run --rm redpanda-init
+# verify, then restart the two clients of that limit
+docker compose -p hexgate-<stage> --env-file platform/.env.<stage> \
+  -f platform/docker-compose.deploy.yml exec redpanda \
+  rpk topic describe hexgate.otlp.raw --brokers localhost:9092
+docker compose -p hexgate-<stage> --env-file platform/.env.<stage> \
+  -f platform/docker-compose.deploy.yml restart collector enricher
+```
+
+`run --rm` starts a sibling container rather than reusing the completed one, so
+it works on a running stack and leaves nothing behind. Releases so far that
+needed this:
+
+| Release | Change |
+|---|---|
+| LLM message logging | `max.message.bytes` → 8 MiB on `hexgate.otlp.raw` **and** `hexgate.otlp.dlq` |
 
 ## Operations
 

@@ -64,20 +64,21 @@ MAX_VIOLATION_CHARS = 1024
 # The input cap is 256 KiB, not the 32 KiB first proposed: 32 KiB is ~7,000
 # tokens of ASCII, which 20 retrieved chunks already exceed, so the cap would
 # have fired on exactly the calls the log exists to explain. What bounds it is
-# the pipeline's record and request limits, not storage — and those limits are
-# NOT yet in place. As the deployed config stands, the Collector's kafka
-# exporter caps a record at the configkafka default (1 MB, no compression) and
-# batches 512 spans into one, ``hexgate.otlp.raw`` sets no
-# ``max.message.bytes``, and the OTLP receiver takes a 20 MiB request body —
-# so a batch of large message spans fails as a whole and takes the decision
-# spans batched alongside it down too, which is the blast radius these caps
-# exist to bound. Raising the topic, the exporter's producer limit, a
-# ``send_batch_max_size``, and the receiver body size is a prerequisite for
-# emitting this scope at all (its own PR, deployed not merely merged) — no
-# message cap, 32 KiB or 256 KiB, is safe before it. Nothing emits
-# ``hexgate.messages`` yet, so declaring the constant here is safe; wiring an
-# emitter before that config is deployed is not. Typical events stay a few KB;
-# this is a ceiling, not a target.
+# the pipeline's record and request limits, not storage. Those limits are now
+# in the repo — the topic's ``max.message.bytes``, the kafka exporter's
+# producer limit, ``send_batch_max_size``, the OTLP receiver's
+# body size, the enricher's fetch/produce sizes and this SDK's
+# ``MAX_EXPORT_BATCH_SIZE``, all sized together in
+# docs/internals/audit-pipeline.md §4.1. Without them a batch of large message
+# spans fails as a whole and takes the decision spans batched alongside it down
+# too, which is the blast radius these caps exist to bound.
+#
+# Being in the repo is not the same as being in force: that change is
+# operational, so no message cap — 32 KiB or 256 KiB — is safe on a stage until
+# its topics have been altered and its collector and enricher restarted.
+# Nothing emits ``hexgate.messages`` yet, so declaring the constant here is
+# safe; wiring an emitter against a stage that has not been redeployed is not.
+# Typical events stay a few KB; this is a ceiling, not a target.
 MAX_INPUT_MESSAGES_BYTES = 256 * 1024
 MAX_OUTPUT_MESSAGES_BYTES = 8 * 1024
 MAX_SYSTEM_INSTRUCTIONS_BYTES = 8 * 1024

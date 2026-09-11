@@ -36,8 +36,8 @@ flowchart LR
     A["Agent code"]:::customerBox --> B["Hexgate SDK<br/>PolicyEnforcer → AuditSender → BatchSpanProcessor queue"]:::sdkBox
   end
 
-  B -->|"OTLP/HTTP protobuf<br/>POST /v1/traces · Bearer api_key"| P["Reverse proxy<br/>app.hexgate.ai"]:::hexBox
-  P -->|"path /v1/traces → HEXGATE_OTLP_PORT<br/>(host 7001/7201 → container :4318)"| C["Go Collector<br/>biscuit auth · batch 5s / 512 spans"]:::hexBox
+  B -->|"OTLP/HTTP protobuf<br/>POST /v1/traces · Bearer api_key"| P["Reverse proxy<br/>app.hexgate.ai<br/>client_max_body_size 32m on /v1/traces"]:::hexBox
+  P -->|"path /v1/traces → HEXGATE_OTLP_PORT<br/>(host 7001/7201 → container :4318)"| C["Go Collector<br/>biscuit auth · batch 5s / 24 spans"]:::hexBox
   P -->|"all other paths"| F["FastAPI platform API"]:::hexBox
   C --> K["Redpanda topic<br/>hexgate.otlp.raw"]:::redpandaBox
   K --> E["span-enricher job<br/>decode semconv · redact · batch insert"]:::hexBox
@@ -53,7 +53,7 @@ The SDK side in more detail: `PolicyEnforcer.decide()` returns the `Decision`
 to the agent synchronously and authoritatively, then hands a copy to
 `AuditSender.emit()` as one OTel span, best-effort, through a bounded
 `BatchSpanProcessor` queue that drops on saturation (§3). ClickHouse holds
-`hexgate_audit.policy_decision`, `llm_invocation` and `ban_enforcement`
+`hexgate_audit.policy_decision`, `llm_invocation`, `ban_enforcement` and `llm_message`
 (§5); the dashboard reads them through the project-scoped aggregation
 endpoints (§7).
 
@@ -177,7 +177,9 @@ same instant. Key behaviours:
 
 - **Never blocks, never raises for transport.** `emit()` only enqueues the
   finished span onto the processor's in-memory queue; a worker thread batches
-  and POSTs on a timer (5s) or size trigger (512). Export failures surface as
+  and POSTs on a timer (5s) or size trigger (64 — see `MAX_EXPORT_BATCH_SIZE`,
+  sized against the Collector's request-body limit in §4.1). Export failures
+  surface as
   the exporter's own log lines, never to the agent.
 - **Drop on saturation.** The queue is bounded (2048 spans); when full, each
   new span silently evicts the oldest queued one (a bounded deque — OTel
@@ -320,11 +322,12 @@ Per request, the extension:
    keep a stolen key from probing.
 2. **Reads the `token_id` fact** from the authority block (the API key row's
    own id, platform-api #126) and looks it up in a **revocation snapshot** of
-   the key table, polled from Postgres every 20 s. Revoking a key deletes its
-   row, so absence = revoked → **401**. A snapshot older than `max_staleness`
-   (1 h, i.e. Postgres unreachable for that long) makes the extension reject
-   *everything* rather than let revoked keys keep working. Both knobs are
-   env-tunable per stage —
+   the key table, polled from Postgres every 20 s. The snapshot query filters
+   on `revoked_at IS NULL` (platform-api #206), so absence from it = revoked
+   → **401**; the row itself survives as the audit record. A snapshot older
+   than `max_staleness` (1 h, i.e. Postgres unreachable for that long) makes
+   the extension reject *everything* rather than let revoked keys keep
+   working. Both knobs are env-tunable per stage —
    `HEXGATE_COLLECTOR_REVOCATION_POLL_INTERVAL` / `_MAX_STALENESS`.
 3. **Resolves `project_id` from the key's row**, not from the token's own
    `project` fact (a mint-time snapshot) and never from a span attribute, and
@@ -334,11 +337,84 @@ Per request, the extension:
    record key**. The record key is the only project attribution downstream.
 
 Processors: `memory_limiter`, a `resource` tag (`collector.name`), a
-placeholder `attributes` tag, and `batch` (5 s / 512 spans, one batcher per
+placeholder `attributes` tag, and `batch` (5 s / 24 spans, one batcher per
 project; `metadata_cardinality_limit: 10000` is a hard ceiling on distinct
 projects per process lifetime). Exporter: `kafka`, `otlp_proto` encoding,
 `murmur2` sticky-key partitioning so one project always lands on one
 partition.
+
+#### Record-size budget
+
+LLM message spans (scope `hexgate.messages`) carry prompt and completion JSON —
+up to 256 KiB of input messages, ~272 KiB per span all in — against decision
+spans of ~1 KiB. Every scope shares **one** batch processor and **one** topic:
+there is no separate "message path", and batching is count-based, so a single
+set of limits has to be safe for the largest span type. A rejected batch drops
+all of its spans, decision spans included, which is why these move together:
+
+```mermaid
+flowchart LR
+  classDef sdkBox fill:#EAF2FF,stroke:#2F6FED,stroke-width:2px,color:#153E90
+  classDef hexBox fill:#F3EAFB,stroke:#8E3FC7,stroke-width:2px,color:#4A148C
+  classDef redpandaBox fill:#FCE8EC,stroke:#D6336C,stroke-width:2px,color:#8A1538
+  classDef extBox fill:#FFF6E0,stroke:#E0A800,stroke-width:2px,color:#7A5900
+
+  SP["one message span<br/>≤ 272 KiB<br/>256 input + 8 output + 8 sysinstr"]:::sdkBox
+  S["SDK export<br/>MAX_EXPORT_BATCH_SIZE 64"]:::sdkBox
+  P["nginx (host)<br/>client_max_body_size 32 MiB<br/>per-stage, outside this repo"]:::extBox
+  R["OTLP/HTTP receiver<br/>max_request_body_size 32 MiB<br/>confighttp default 20 MiB"]:::hexBox
+  B["batch processor<br/>send_batch_size 24<br/>send_batch_max_size 24"]:::hexBox
+  X["kafka exporter<br/>producer.max_message_bytes 8 MiB<br/>sending_queue bytes / 128 MiB · no compression"]:::hexBox
+  T["topic hexgate.otlp.raw<br/>max.message.bytes 8 MiB"]:::redpandaBox
+  E["span-enricher<br/>max_partition_fetch_bytes 8 MiB"]:::hexBox
+  Q["topic hexgate.otlp.dlq<br/>max.message.bytes 8 MiB"]:::redpandaBox
+
+  SP --> S
+  S -->|"64 × 272 KiB ≈ 17 MiB per POST"| P
+  P --> R
+  R --> B
+  B -->|"24 × 272 KiB = 6.375 MiB per record"| X
+  X --> T
+  T --> E
+  E -->|"rejected spans<br/>DLQ max_request_size 8 MiB<br/>(envelopes capped ~85 KiB by dlq.py)"| Q
+```
+
+Every hop rejects **whole** — the proxy and receiver drop the entire POST, the
+exporter and broker the entire record — so the narrowest one decides what gets
+through, and it takes unrelated decision spans down with it. The proxy is the
+hop most easily missed: it is the only one not configured in this repo, it is
+set per stage, and it is deliberately tighter than the box's `100M` default
+because it is enforced before the collector authenticates the token
+(`platform/DEPLOY.md` §3).
+
+| Limit | Value | Why |
+|---|---|---|
+| receiver `http.max_request_body_size` | 32 MiB | confighttp defaults to 20 MiB and rejects the whole POST; the SDK exports ≤ 64 spans (~17 MiB worst case) |
+| `batch.send_batch_size` / `send_batch_max_size` | 24 spans | 24 × 272 KiB = 6.375 MiB, inside the 8 MiB record (down from 512). Decision traffic ships ~20× more records, all small. Both knobs: the processor refuses to start unless `send_batch_max_size >= send_batch_size`, and the max is what splits one oversized incoming request |
+| exporter `producer.max_message_bytes` | 8 MiB | client-side check *before* Redpanda sees the record — raising only the topic changes nothing |
+| exporter `producer.compression` | `none` (configkafka's default) | `max_message_bytes` maps to franz-go's `ProducerBatchMaxBytes`, measured *before* compression, so zstd would buy no headroom — and the enricher's aiokafka has no zstd codec (`cramjam` is absent from `platform/api`'s lock), so a compressed batch would raise out of its poll loop. Enabling compression means shipping the codec and both images together |
+| exporter `sending_queue` | `bytes` / 128 MiB | the default is 1000 *requests*, which was ~500 MiB of decision spans but ~6.2 GiB of message batches |
+| `memory_limiter` | 1024 / 256 MiB | 384 MiB soft would refuse intake against 32 MiB bodies and a 128 MiB queue |
+| nginx `client_max_body_size` on `/v1/traces` | 32 MiB | **outside this repo, set per stage.** Enforced before the collector authenticates, so it is held below the box's `100M` default; was 8 MiB before message logging. See `platform/DEPLOY.md` §3 |
+| topic `max.message.bytes` (raw + dlq) | 8 MiB | §4.2 |
+| enricher `max_partition_fetch_bytes` / DLQ `max_request_size` | 8 MiB | §4.3 |
+
+The SDK side of this is `MAX_EXPORT_BATCH_SIZE = 64` in
+`hexgate/tracing/_senders.py`; it costs 8× the export round-trips against an
+unchanged 2048-span queue, which all traffic pays today. Note `_SPAN_LIMITS`
+pins `max_span_attribute_length` to UNSET, so OTel will **not** clip an
+oversized attribute on our behalf — the SDK's own caps (`hexgate/audit.py`) are
+the only thing bounding a span, and the enricher will re-apply them once
+`hexgate.messages` is in `KNOWN_SCOPES` (until then a message span is rejected
+to the DLQ as an unknown scope). The gRPC receiver is deliberately left at
+grpc-go's 4 MiB: the SDK is HTTP-only and 4317 is unpublished.
+
+Changing any of these is an **operational** change: merged is not enough, the
+topics have to be altered and the collector and enricher restarted before
+message spans reach the stage. Today's `platform/scripts/otlp_smoke.py` sends
+five small events in one sub-1-MiB export, so it would pass on a stage where
+none of that happened — the oversized smoke event that actually exercises the
+budget is a later PR, and until it lands this has to be checked by hand.
 
 The Collector **acks the HTTP request before the Kafka publish**. A Redpanda
 outage therefore looks like success to the SDK; the exporter retries and then
@@ -351,10 +427,20 @@ Two topics, created by `create-topics.sh` (`make redpanda-topics` locally, the
 switched off so a wrong topic name fails loudly instead of fabricating a
 1-partition topic.
 
-| Topic | Purpose | Partitions | Retention |
-|---|---|---|---|
-| `hexgate.otlp.raw` | span buffer between collector and enricher | 3 | 3 days |
-| `hexgate.otlp.dlq` | permanently rejected records/spans (JSON envelopes) | 3 | 30 days |
+| Topic | Purpose | Partitions | Retention | `max.message.bytes` |
+|---|---|---|---|---|
+| `hexgate.otlp.raw` | span buffer between collector and enricher | 3 | 3 days | 8 MiB |
+| `hexgate.otlp.dlq` | permanently rejected records/spans (JSON envelopes) | 3 | 30 days | 8 MiB |
+
+Both `retention.ms` and `max.message.bytes` are reconciled on every run via
+`rpk topic alter-config`, because `create --if-not-exists` applies `-c` only on
+the branch that actually creates the topic. The DLQ gets the same limit as the
+raw topic only so the two cannot drift apart; it does not need it. `dlq.py`
+quotes an oversized record as a 64 KiB preview (~85 KiB once base64'd), or
+its attributes at 32 KiB — never both in one envelope — so nothing it builds
+approaches even the 1 MiB default. See the record-size budget in §4.1 — this
+is the broker-side half of it, and it is enforced on the batch as sent —
+which, with the exporter's compression off, is the uncompressed size.
 
 Redpanda is a buffer, not a store: ClickHouse is the system of record, and the
 raw topic only needs to outlive an enricher restart or redeploy. It is
@@ -365,8 +451,12 @@ PLAINTEXT with no auth and must never be exposed outside the Compose network.
 One consumer-group member (`hexgate-enricher`), run from the API image with
 `python -m hexgate_api.jobs.enricher`. On startup it verifies the three
 ClickHouse tables against the expected schema and that both topics exist
-(`TopicsMissing` otherwise). Per poll (`max_poll_records` 500, 1 s timeout),
-in order:
+(`TopicsMissing` otherwise). Both Kafka clients are sized for the topic limit:
+`max_partition_fetch_bytes` on the consumer and `max_request_size` on the DLQ
+producer are both 8 MiB (`_MAX_RECORD_BYTES`), against aiokafka's 1 MiB default
+for each — otherwise a record the broker accepted would stall the partition on
+fetch, and an oversized DLQ envelope would be dropped client-side. Per poll
+(`max_poll_records` 500, 1 s timeout), in order:
 
 1. **Decode** each record's bytes as `ExportTraceServiceRequest`. Undecodable
    bytes → one DLQ envelope for the whole record.
@@ -486,6 +576,56 @@ SETTINGS index_granularity = 8192;
   JSON, and are documented as potentially lossy (`arguments` is SDK-truncated;
   see §6).
 - **TTL 180 days** — rows self-expire, consistent with the ingest retention guard.
+
+`llm_invocation` and `ban_enforcement` share the eight envelope columns and the
+same engine / partition / TTL, and differ only in their event-specific columns
+and sort key (see `schema.sql`).
+
+#### `llm_message` — prompt/completion content
+
+The fourth table, for the `hexgate.messages` scope: one row per model call,
+holding the input messages **new to that call**, its completion, and (on the
+first row of a list) the system instructions, as JSON in the official
+`gen_ai.*` shapes.
+
+```sql
+CREATE TABLE hexgate_audit.llm_message
+(
+  -- Envelope: identical to the other tables
+  ...
+  model               LowCardinality(String),
+  turn_key            String,          -- which framework message list this row extends
+  message_seq         UInt32,          -- counter within turn_key; a gap = a missing row
+  resynced            UInt8 DEFAULT 0, -- 1: restates the whole list, not a delta
+  truncated           UInt8 DEFAULT 0, -- 1: a content column was cut to its cap
+  input_messages      String CODEC(ZSTD(3)),  -- gen_ai.input.messages, ≤ 256 KiB
+  output_messages     String CODEC(ZSTD(3)),  -- gen_ai.output.messages, ≤ 8 KiB
+  system_instructions String DEFAULT '' CODEC(ZSTD(3)),  -- gen_ai.system_instructions, ≤ 8 KiB
+  run_id              UUID DEFAULT toUUID('000…')  -- RunFacts.id; zero when unattributed
+)
+ENGINE = ReplacingMergeTree(received_at)
+PARTITION BY toYYYYMM(received_at)
+ORDER BY (project_id, session_id, occurred_at, message_seq, event_id)
+TTL toDateTime(received_at) + INTERVAL 180 DAY
+```
+
+- **Separate table, not columns on `llm_invocation`** — content is large,
+  opt-in (nothing emits `hexgate.messages` yet, and capture stays off until an
+  emitter ships), and read by session rather than aggregated by user/model.
+- **Sort key** `(project_id, session_id, occurred_at, message_seq, event_id)`:
+  the read is "reconstruct this session's transcript", and the endpoint returns
+  rows ordered by `(occurred_at, message_seq)`, so this key delivers them
+  read-in-order. `occurred_at` sits third because `message_seq` only counts
+  within one `turn_key` and restarts at 0 for a sub-agent's or handoff's list —
+  wall-clock time is the only thing that orders rows across the several lists of
+  one session. `turn_key` stays a plain column, used to group and to detect gaps,
+  not to sort. `event_id` last keeps `ReplacingMergeTree` dedup to SDK retries;
+  the sort key is the dedup key, `received_at` only picks the survivor.
+- **Caps are head+tail**, not the preview wrapper used for `arguments`: the
+  start and the end of an oversized message both survive (see
+  `hexgate.audit.cap_json_head_tail`), and `truncated` says it happened.
+- **Migration:** `migrations/0003_add_llm_message.sql`, applied by hand before
+  the enricher that writes to it is deployed.
 
 ### 5.2 Insert semantics
 
