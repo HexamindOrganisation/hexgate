@@ -136,6 +136,27 @@ def test_when_a_tool_call_carries_a_secret_argument_then_redacted() -> None:
     assert arguments == {"user": "bob", "password": "[REDACTED]"}
 
 
+def test_when_tool_call_arguments_are_a_json_string_then_still_redacted() -> None:
+    # Raw OpenAI wire shape: arguments arrive serialized, one JSON level deeper
+    # than as_json_value parsed. The secret must not survive inside the string.
+    messages = [
+        {
+            "role": "assistant",
+            "parts": [
+                {
+                    "type": "tool_call",
+                    "name": "login",
+                    "arguments": json.dumps({"user": "bob", "password": "hunter2"}),
+                }
+            ],
+        }
+    ]
+    text, _ = capped_input_messages(messages)
+    assert "hunter2" not in text
+    arguments = json.loads(text)[0]["parts"][0]["arguments"]
+    assert json.loads(arguments) == {"user": "bob", "password": "[REDACTED]"}
+
+
 def test_when_output_messages_exceed_cap_then_truncated_to_8_kib() -> None:
     text, truncated = capped_output_messages([_message("o" * 50_000, "assistant")])
     assert truncated is True

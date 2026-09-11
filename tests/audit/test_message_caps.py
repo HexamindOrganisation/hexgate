@@ -15,7 +15,10 @@ from hexgate.audit import (
     MAX_INPUT_MESSAGES_BYTES,
     MAX_OUTPUT_MESSAGES_BYTES,
     MAX_SYSTEM_INSTRUCTIONS_BYTES,
+    SENSITIVE_ARG_KEY_RE,
+    TOOL_CALL_JSON_KEYS,
     cap_json_head_tail,
+    redact,
     truncate_head_tail,
 )
 
@@ -225,3 +228,49 @@ def test_when_the_cap_is_below_the_wrapper_headroom_then_it_still_returns() -> N
         assert truncated is True
         assert isinstance(out, list) and len(out) == 1
         assert out[0]["_truncated"] is True
+
+
+# --- redact: JSON-string tool-call arguments -----------------------------------------
+
+
+def _tool_call(arguments: Any) -> list[dict[str, Any]]:
+    part = {"type": "tool_call", "name": "login", "arguments": arguments}
+    return [{"role": "assistant", "parts": [part]}]
+
+
+def test_redact_json_string_keys_happy_path() -> None:
+    # The raw OpenAI wire shape: arguments serialized as a JSON string, so the
+    # secret key sits inside a string leaf the key match alone never reaches.
+    messages = _tool_call(json.dumps({"user": "bob", "password": "hunter2"}))
+    out = redact(
+        messages, pattern=SENSITIVE_ARG_KEY_RE, json_string_keys=TOOL_CALL_JSON_KEYS
+    )
+    arguments = out[0]["parts"][0]["arguments"]
+    assert isinstance(arguments, str)  # shape kept
+    assert json.loads(arguments) == {"user": "bob", "password": "[REDACTED]"}
+
+
+def test_when_arguments_string_is_not_json_then_left_untouched() -> None:
+    messages = _tool_call("not json at all")
+    out = redact(
+        messages, pattern=SENSITIVE_ARG_KEY_RE, json_string_keys=TOOL_CALL_JSON_KEYS
+    )
+    assert out[0]["parts"][0]["arguments"] == "not json at all"
+
+
+def test_when_json_string_keys_are_not_given_then_strings_stay_opaque() -> None:
+    # Default behaviour is unchanged for the decision path.
+    text = json.dumps({"password": "hunter2"})
+    out = redact(_tool_call(text), pattern=SENSITIVE_ARG_KEY_RE)
+    assert out[0]["parts"][0]["arguments"] == text
+
+
+def test_when_content_happens_to_be_json_then_it_is_not_rewritten() -> None:
+    # Only the named keys are parsed: a user message whose content is JSON is
+    # data, not a payload to normalise.
+    content = json.dumps({"password": "the word, quoted by the user"})
+    messages = [_message(content)]
+    out = redact(
+        messages, pattern=SENSITIVE_ARG_KEY_RE, json_string_keys=TOOL_CALL_JSON_KEYS
+    )
+    assert out[0]["parts"][0]["content"] == content

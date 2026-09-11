@@ -11,7 +11,9 @@ match) then capped at 4 KiB, with a falsy bag normalised to None.
 
 LLM message content (scope ``hexgate.messages``) follows the arguments rule
 — substring key redaction, since a tool-call message carries the same caller
-arguments a decision does — then a head+tail cap per field. The SDK applied
+arguments a decision does, reaching inside ``arguments`` serialized as a JSON
+string the way the raw OpenAI wire shape has it — then a head+tail cap per
+field. The SDK applied
 the same caps before export; re-applying them here is what makes the stored
 row's size a platform guarantee rather than a client courtesy. Content is
 truncated, never rejected: an over-cap prompt is the one an auditor most
@@ -32,6 +34,7 @@ from hexgate.audit import (
     MAX_SYSTEM_INSTRUCTIONS_BYTES,
     SENSITIVE_ARG_KEY_RE,
     SENSITIVE_ATTR_KEY_RE,
+    TOOL_CALL_JSON_KEYS,
     bounded_violations,
     cap_json_head_tail,
     redact,
@@ -75,7 +78,10 @@ def _capped_content(value: Any, *, cap: int) -> tuple[str, bool]:
     never longer than what was found to fit.
     """
     capped, truncated = cap_json_head_tail(
-        redact(value, pattern=SENSITIVE_ARG_KEY_RE), cap=cap
+        redact(
+            value, pattern=SENSITIVE_ARG_KEY_RE, json_string_keys=TOOL_CALL_JSON_KEYS
+        ),
+        cap=cap,
     )
     return json.dumps(capped, default=str), truncated
 

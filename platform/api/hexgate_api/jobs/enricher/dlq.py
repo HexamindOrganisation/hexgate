@@ -21,7 +21,12 @@ from typing import Any
 
 from opentelemetry.proto.trace.v1.trace_pb2 import Span
 
-from hexgate.audit import SENSITIVE_ARG_KEY_RE, redact, truncate_json
+from hexgate.audit import (
+    SENSITIVE_ARG_KEY_RE,
+    TOOL_CALL_JSON_KEYS,
+    redact,
+    truncate_json,
+)
 from hexgate.tracing import semconv
 from hexgate_api.jobs.enricher.decode import attrs_dict
 
@@ -87,7 +92,12 @@ def _redacted_attributes(span: Span) -> dict[str, Any]:
                 parsed = None
             attributes[key] = parsed if isinstance(parsed, containers) else _UNPARSEABLE
     return truncate_json(
-        redact(attributes, pattern=SENSITIVE_ARG_KEY_RE), cap=_ATTRIBUTES_CAP_BYTES
+        redact(
+            attributes,
+            pattern=SENSITIVE_ARG_KEY_RE,
+            json_string_keys=TOOL_CALL_JSON_KEYS,
+        ),
+        cap=_ATTRIBUTES_CAP_BYTES,
     )
 
 

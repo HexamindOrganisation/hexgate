@@ -122,6 +122,26 @@ def test_when_a_message_span_is_rejected_then_dlq_redacts_inside_the_messages() 
     assert "hunter2" not in json.dumps(attributes)
 
 
+def test_when_tool_call_arguments_are_a_json_string_then_dlq_still_redacts() -> None:
+    messages = [
+        {
+            "role": "assistant",
+            "parts": [
+                {
+                    "type": "tool_call",
+                    "name": "login",
+                    "arguments": json.dumps({"user": "bob", "password": "hunter2"}),
+                }
+            ],
+        }
+    ]
+    attrs = message_attrs(**{semconv.GEN_AI_INPUT_MESSAGES: json.dumps(messages)})
+    attributes = _envelope_attributes(attrs)
+    assert "hunter2" not in json.dumps(attributes)
+    arguments = attributes[semconv.GEN_AI_INPUT_MESSAGES][0]["parts"][0]["arguments"]
+    assert json.loads(arguments)["password"] == "[REDACTED]"
+
+
 def test_when_a_message_field_is_a_bare_json_string_then_dlq_drops_it() -> None:
     attrs = message_attrs(**{semconv.GEN_AI_SYSTEM_INSTRUCTIONS: json.dumps("hunter2")})
     attributes = _envelope_attributes(attrs)
