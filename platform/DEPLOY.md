@@ -259,10 +259,21 @@ Applying them *after* the deploy is not a slower path, it is an outage — and
 the signature differs per migration, so don't debug one expecting the other.
 `0001` takes OTLP ingest down: the collector's snapshot query selects
 `revoked_at`, so it refuses to boot, and every bearer-authenticated API route
-500s alongside it. `0002` leaves the collector alone and instead 500s every API
-route touching its nine tables, reads included — a blank dashboard, not a
-degraded one. The migration itself is always safe to run early, which is why it
-is unconditional in the recipe.
+500s alongside it.
+
+`0002` leaves the collector running — its query names its columns and none of
+them are new — but it is otherwise *wider* than `0001`, not narrower. `devtoken`
+is one of its nine tables, so `find_token_by_secret` 500s and every
+bearer-authenticated route goes down exactly as under `0001`; SDK traffic
+through the API stops, and only OTLP ingest is spared. The other eight tables
+take the cookie-authenticated routes with them, reads included, so the dashboard
+goes blank rather than degrading.
+
+`0003` is the same failure, scoped to one table: routes touching `policy_file`
+(the compose entry-file store) 500 while the rest of the control plane is fine.
+
+The migrations themselves are always safe to run early, which is why the step is
+unconditional in the recipe.
 
 | Release | Migration |
 |---|---|
