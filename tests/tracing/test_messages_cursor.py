@@ -134,6 +134,44 @@ def test_when_two_turn_keys_interleave_then_state_is_per_list() -> None:
     assert main_delta.resynced is sub_delta.resynced is False
 
 
+def test_when_the_list_is_empty_then_the_comeback_is_flagged() -> None:
+    """An empty input list leaves no prefix to mark, so the call that brings
+    the messages back restates them under ``resynced`` rather than passing them
+    off as an extension.
+
+    The mark could not simply be dropped here: a cleared turn_key would be
+    byte-identical to one never seen, and the comeback would then slice from
+    zero and emit the whole history a second time with ``resynced=False`` — a
+    duplicate with nothing in ``message_seq`` for a reader to key on. Same mark
+    the fingerprinting-failure path uses, for the same reason."""
+    cursor = MessageCursor()
+    history = [_msg("a"), _msg("b")]
+    cursor.advance("run-1", history)
+
+    assert cursor.advance("run-1", []) == MessageDelta(
+        messages=[], seq=1, resynced=True
+    )
+
+    comeback = cursor.advance("run-1", history)
+    assert comeback == MessageDelta(messages=history, seq=2, resynced=True)
+    # And the mark is usable again, so the next call extends rather than
+    # restates.
+    assert cursor.advance("run-1", [*history, _msg("c")]) == MessageDelta(
+        messages=[_msg("c")], seq=3, resynced=False
+    )
+
+
+def test_when_the_first_call_is_empty_then_it_is_not_a_resync() -> None:
+    """Nothing has been emitted yet, so an empty list is not a restatement of
+    anything — adapters split system messages into ``system_instructions``, so
+    a call whose list holds only those hands over ``[]``."""
+    cursor = MessageCursor()
+
+    assert cursor.advance("run-1", []) == MessageDelta(
+        messages=[], seq=0, resynced=False
+    )
+
+
 def test_when_nothing_changed_then_delta_is_empty() -> None:
     """An unchanged input list is a real, empty delta — the completion is still
     new — and it does not count as a resync."""
