@@ -1163,6 +1163,31 @@ def test_update_org_stamps_the_updater_and_moves_updated_at(
     assert after.updated_at > before.updated_at
 
 
+def test_no_op_update_org_stamps_nothing(client: TestClient, session_factory) -> None:
+    """A double-fired save is not an edit: resubmitting the current name and
+    slug must leave both ``updated_at`` and ``updated_by_user_id`` alone, so
+    the stamp keeps pointing at the last real edit."""
+    _signup_and_login(client, "actor-patch-noop@example.com", "correcthorsebattery")
+    me_id = client.get("/v1/users/me").json()["id"]
+    org_id = client.get("/v1/orgs").json()[0]["id"]
+
+    assert (
+        client.patch(f"/v1/orgs/{org_id}", json={"name": "Renamed"}).status_code == 200
+    )
+    after_edit = _read_org(session_factory, org_id)
+    assert after_edit.updated_by_user_id == me_id
+
+    resp = client.patch(
+        f"/v1/orgs/{org_id}",
+        json={"name": after_edit.name, "slug": after_edit.slug},
+    )
+    assert resp.status_code == 200
+
+    after_noop = _read_org(session_factory, org_id)
+    assert after_noop.updated_at == after_edit.updated_at
+    assert after_noop.updated_by_user_id == me_id
+
+
 def test_seed_rows_carry_no_actor(session_factory) -> None:
     """The first-boot seed has no human actor, and the Organization is inserted
     before the User in the same commit — so attributing seed rows would rest on

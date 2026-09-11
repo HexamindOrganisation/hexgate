@@ -129,10 +129,16 @@ async def api_update_org(
     callers do it because the row's ``id`` is the stable handle every
     FK points at (the slug is a URL helper, mutable on purpose).
     Returns 409 if the new slug collides with another org's.
+
+    A submit that changes nothing is a 200 with no write — same rule as
+    :func:`projects.service.update_project_name`: a double-fired save is
+    not an edit, and must not overwrite the actor of the last real one.
     """
     caller, member = membership
     org = await session.get(Organization, member.org_id)
     assert org is not None
+
+    changed = False
 
     if body.slug is not None and body.slug != org.slug:
         existing = (
@@ -145,9 +151,14 @@ async def api_update_org(
                 status_code=409, detail=f"slug {body.slug!r} is already taken"
             )
         org.slug = body.slug
+        changed = True
 
-    if body.name is not None:
+    if body.name is not None and body.name != org.name:
         org.name = body.name
+        changed = True
+
+    if not changed:
+        return _org_read(org)
 
     # Stamped inline because this handler owns the mutation (there is no
     # orgs.service.update_org); extracting it would put a refactor of the
