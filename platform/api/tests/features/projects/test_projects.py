@@ -27,7 +27,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from hexgate_api.core import keystore as keystore_mod
 from hexgate_api.main import app
-from hexgate_api.models import OrganizationMember, User
+from hexgate_api.models import OrganizationMember, Project, User
 from hexgate_api.constants import ROLE_ADMIN, ROLE_MEMBER
 from hexgate_api.seeds.defaults import ensure_default_project
 
@@ -376,3 +376,69 @@ def test_rename_project_404_for_unknown(client: TestClient) -> None:
         json={"name": "void"},
     )
     assert r.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Actor trail (issue #160)
+# ---------------------------------------------------------------------------
+
+
+def _read_project(session_factory, project_id: str) -> Project:
+    async def _get() -> Project:
+        async with session_factory() as s:
+            row = await s.get(Project, project_id)
+            assert row is not None
+            return row
+
+    return asyncio.get_event_loop().run_until_complete(_get())
+
+
+def test_create_project_stamps_the_creator(client: TestClient, session_factory) -> None:
+    _signup_and_login(client, "actor-proj-new@example.com", "correcthorsebattery")
+    me_id = client.get("/v1/users/me").json()["id"]
+    org_id = client.get("/v1/orgs").json()[0]["id"]
+
+    pid = client.post(f"/v1/orgs/{org_id}/projects", json={"name": "stamped"}).json()[
+        "id"
+    ]
+
+    row = _read_project(session_factory, pid)
+    assert row.created_by_user_id == me_id
+    assert row.updated_by_user_id is None  # never edited
+
+
+def test_rename_project_stamps_the_updater(client: TestClient, session_factory) -> None:
+    _signup_and_login(client, "actor-proj-edit@example.com", "correcthorsebattery")
+    me_id = client.get("/v1/users/me").json()["id"]
+    org_id = client.get("/v1/orgs").json()[0]["id"]
+    pid = client.post(f"/v1/orgs/{org_id}/projects", json={"name": "before"}).json()[
+        "id"
+    ]
+    before = _read_project(session_factory, pid)
+
+    assert (
+        client.patch(f"/v1/projects/{pid}", json={"name": "after"}).status_code == 200
+    )
+
+    row = _read_project(session_factory, pid)
+    assert row.updated_by_user_id == me_id
+    assert row.updated_at > before.updated_at
+    # The creator is not overwritten by an edit.
+    assert row.created_by_user_id == me_id
+
+
+def test_noop_rename_does_not_move_the_update_trail(
+    client: TestClient, session_factory
+) -> None:
+    """A double-fired save is not an edit: the early return on an identical
+    name must not stamp."""
+    _signup_and_login(client, "actor-proj-noop@example.com", "correcthorsebattery")
+    org_id = client.get("/v1/orgs").json()[0]["id"]
+    pid = client.post(f"/v1/orgs/{org_id}/projects", json={"name": "same"}).json()["id"]
+    before = _read_project(session_factory, pid)
+
+    assert client.patch(f"/v1/projects/{pid}", json={"name": "same"}).status_code == 200
+
+    row = _read_project(session_factory, pid)
+    assert row.updated_at == before.updated_at
+    assert row.updated_by_user_id is None

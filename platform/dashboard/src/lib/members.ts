@@ -51,6 +51,8 @@ export function useLeaveOrg() {
       // bootstrap effect in AppShell handles "stale activeOrgId after
       // leaving" by picking the next remaining org.
       qc.invalidateQueries({ queryKey: ["orgs"] });
+      // Leaving revokes the caller's keys, so a cached token list is stale.
+      qc.invalidateQueries({ queryKey: ["tokens"] });
     },
   });
 }
@@ -126,12 +128,9 @@ export function useUpdateMemberRole() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: updateMemberRoleRequest,
-    onSuccess: (member) => {
+    onSuccess: () => {
       // Refresh both the members list and the user's orgs list — the
       // latter carries role badges in the OrgProjectSwitcher.
-      qc.invalidateQueries({
-        queryKey: membersKey(member.user_id ? null : null),
-      });
       qc.invalidateQueries({ queryKey: ["org-members"] });
       qc.invalidateQueries({ queryKey: ["orgs"] });
     },
@@ -165,6 +164,8 @@ export function useRemoveMember() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["org-members"] });
       qc.invalidateQueries({ queryKey: ["orgs"] });
+      // Removal revokes the member's keys, so a cached token list is stale.
+      qc.invalidateQueries({ queryKey: ["tokens"] });
     },
   });
 }

@@ -7,7 +7,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from hexgate_api.core.db import get_session
 from hexgate_api.deps.identity import require_user
 from hexgate_api.deps.org import require_org_admin, require_org_membership
-from hexgate_api.models import Organization, OrganizationMember, User
+from hexgate_api.models import Organization, OrganizationMember, User, utcnow
 from hexgate_api.schemas import OrgCreate, OrgRead, OrgUpdate, OrgWithRole
 
 router = APIRouter()
@@ -93,7 +93,13 @@ async def api_create_org(
         # numbered or hex-suffixed variant.
         slug = await _generate_unique_org_slug(session, _email_to_slug_base(body.name))
 
-    org = await create_org(session, name=body.name, slug=slug, owner_user_id=user.id)
+    org = await create_org(
+        session,
+        name=body.name,
+        slug=slug,
+        owner_user_id=user.id,
+        created_by_user_id=user.id,
+    )
     return _org_read(org)
 
 
@@ -123,10 +129,15 @@ async def api_update_org(
     callers do it because the row's ``id`` is the stable handle every
     FK points at (the slug is a URL helper, mutable on purpose).
     Returns 409 if the new slug collides with another org's.
+
+    A submit that changes nothing is a 200 with no write: a double-fired save
+    is not an edit (same rule as :func:`projects.service.update_project_name`).
     """
-    _, member = membership
+    caller, member = membership
     org = await session.get(Organization, member.org_id)
     assert org is not None
+
+    changed = False
 
     if body.slug is not None and body.slug != org.slug:
         existing = (
@@ -139,9 +150,19 @@ async def api_update_org(
                 status_code=409, detail=f"slug {body.slug!r} is already taken"
             )
         org.slug = body.slug
+        changed = True
 
-    if body.name is not None:
+    if body.name is not None and body.name != org.name:
         org.name = body.name
+        changed = True
+
+    if not changed:
+        return _org_read(org)
+
+    # Stamped inline: this handler owns the mutation, there is no
+    # orgs.service.update_org to put it in.
+    org.updated_at = utcnow()
+    org.updated_by_user_id = caller.id
 
     session.add(org)
     await session.commit()

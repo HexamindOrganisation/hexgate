@@ -13,18 +13,19 @@ import asyncio
 from biscuit_auth import AuthorizerBuilder, Rule
 from fastapi.testclient import TestClient
 import pytest_asyncio
+from sqlalchemy import event
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 from sqlmodel import SQLModel
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from hexgate_api.constants import DEFAULT_PROJECT_ID
+from hexgate_api.constants import DEFAULT_PROJECT_ID, ROLE_ADMIN, ROLE_MEMBER
 from hexgate_api.core import keystore as keystore_mod
 from hexgate_api.core.biscuits import parse_envelope, verify_token
 from hexgate_api.core.keystore import FileKeyStore
 from hexgate_api.features.tokens.service import mask_secret, mint_api_key
 from hexgate_api.main import app
-from hexgate_api.models import ApiKey
+from hexgate_api.models import ApiKey, OrganizationMember, User
 from hexgate_api.seeds.defaults import ensure_default_project
 
 
@@ -33,19 +34,56 @@ from hexgate_api.seeds.defaults import ensure_default_project
 # ---------------------------------------------------------------------------
 
 
-@pytest_asyncio.fixture
-async def session_factory():
+def _sqlite_engine(*, enforce_foreign_keys: bool = False):
+    """In-memory engine on one connection, so every session sees the same data.
+
+    SQLite ignores FK constraints — and therefore ``ON DELETE SET NULL`` — unless
+    the pragma is set per connection, which is why the default suite exercises
+    neither. Registered before the first connect: the engine is lazy, so no
+    connection exists yet.
+    """
     engine = create_async_engine(
         "sqlite+aiosqlite:///:memory:",
         connect_args={"check_same_thread": False},
         poolclass=StaticPool,
     )
+    if enforce_foreign_keys:
+
+        @event.listens_for(engine.sync_engine, "connect")
+        def _pragma(dbapi_connection, _record) -> None:
+            cursor = dbapi_connection.cursor()
+            cursor.execute("PRAGMA foreign_keys=ON")
+            cursor.close()
+
+    return engine
+
+
+async def _bootstrapped_factory(engine):
     async with engine.begin() as conn:
         await conn.run_sync(SQLModel.metadata.create_all)
     factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
     async with factory() as bootstrap:
         await ensure_default_project(bootstrap)
-    yield factory
+    return factory
+
+
+@pytest_asyncio.fixture
+async def session_factory():
+    engine = _sqlite_engine()
+    yield await _bootstrapped_factory(engine)
+    await engine.dispose()
+
+
+@pytest_asyncio.fixture
+async def fk_session_factory():
+    """``session_factory`` with the FK constraints actually enforced.
+
+    Separate from the shared fixture on purpose: enforcing FKs suite-wide would
+    change the failure mode of every test that deletes a referenced row, and
+    only the ``ON DELETE SET NULL`` behaviour of the actor columns needs it.
+    """
+    engine = _sqlite_engine(enforce_foreign_keys=True)
+    yield await _bootstrapped_factory(engine)
     await engine.dispose()
 
 
@@ -76,6 +114,14 @@ def _signup_and_login(client: TestClient, email: str, password: str) -> None:
         json={"email": email, "password": password},
     )
     assert r.status_code == 201, r.text
+    _login(client, email, password)
+
+
+def _login(
+    client: TestClient, email: str, password: str = "correcthorsebattery"
+) -> None:
+    """Log an already-registered user back in — the delegated-mint tests switch
+    identities, and re-signing-up a known email 400s."""
     r = client.post(
         "/v1/auth/cookie/login",
         data={"username": email, "password": password},
@@ -108,6 +154,48 @@ def _read_token(session_factory, token_id: str) -> ApiKey | None:
             return await session.get(ApiKey, token_id)
 
     return asyncio.get_event_loop().run_until_complete(_get())
+
+
+def _org_id(client: TestClient) -> str:
+    """The signed-in user's first org."""
+    return client.get("/v1/orgs").json()[0]["id"]
+
+
+def _add_member(session_factory, *, org_id: str, user_id: str, role: str) -> None:
+    """Wire an existing user into another org directly — invite → accept would
+    work, but it is three requests of surface these tests don't care about."""
+
+    async def _insert() -> None:
+        async with session_factory() as session:
+            session.add(OrganizationMember(user_id=user_id, org_id=org_id, role=role))
+            await session.commit()
+
+    asyncio.get_event_loop().run_until_complete(_insert())
+
+
+def _delete_user(session_factory, user_id: str) -> None:
+    """Drop a User row, leaving keys that reference it behind."""
+
+    async def _remove() -> None:
+        async with session_factory() as session:
+            user = await session.get(User, user_id)
+            await session.delete(user)
+            await session.commit()
+
+    asyncio.get_event_loop().run_until_complete(_remove())
+
+
+def _signup_second_member(
+    client: TestClient, *, session_factory, org_id: str, email: str, role: str
+) -> str:
+    """Register a second user, add them to ``org_id``, leave them logged in.
+
+    Through the API rather than an insert, so they have a password.
+    """
+    _signup_and_login(client, email, "correcthorsebattery")
+    user_id = client.get("/v1/users/me").json()["id"]
+    _add_member(session_factory, org_id=org_id, user_id=user_id, role=role)
+    return user_id
 
 
 # ---------------------------------------------------------------------------
@@ -349,8 +437,256 @@ async def test_find_token_by_secret_when_revoked_then_last_used_at_is_not_bumped
 
 
 # ---------------------------------------------------------------------------
+# Actor trail (issue #160) — who minted a key, and whose key it is.
+#
+# The two columns exist separately because one column cannot be both: if an
+# admin mints on Bob's behalf and only the creator is recorded, removing Bob
+# from the org revokes nothing.
+# ---------------------------------------------------------------------------
+
+
+def test_mint_token_then_created_by_and_owner_are_the_caller(
+    client: TestClient, session_factory
+) -> None:
+    pid = _signup_with_project(client, "selfminter@example.com")
+    me_id = client.get("/v1/users/me").json()["id"]
+
+    body = client.post(f"/v1/projects/{pid}/tokens", json={"name": "mine"}).json()
+
+    row = _read_token(session_factory, body["id"])
+    assert row.created_by_user_id == me_id
+    assert row.owner_user_id == me_id
+    # ...and the mint response carries the same, so the dashboard needn't refetch.
+    assert body["created_by_user_id"] == body["owner_user_id"] == me_id
+    assert body["created_by_email"] == body["owner_email"] == "selfminter@example.com"
+
+
+def test_mint_token_for_another_member_then_owner_is_that_member(
+    client: TestClient, session_factory
+) -> None:
+    """The delegated mint: creator and owner diverge, which is the whole point."""
+    pid = _signup_with_project(client, "adminminter@example.com")
+    admin_id = client.get("/v1/users/me").json()["id"]
+    org_id = _org_id(client)
+    teammate_id = _signup_second_member(
+        client,
+        session_factory=session_factory,
+        org_id=org_id,
+        email="teammate@example.com",
+        role=ROLE_MEMBER,
+    )
+    # Back to the admin (signing up the teammate replaced the cookie).
+    _login(client, "adminminter@example.com")
+
+    r = client.post(
+        f"/v1/projects/{pid}/tokens",
+        json={"name": "for-teammate", "owner_user_id": teammate_id},
+    )
+    assert r.status_code == 201, r.text
+
+    row = _read_token(session_factory, r.json()["id"])
+    assert row.created_by_user_id == admin_id
+    assert row.owner_user_id == teammate_id
+    assert r.json()["owner_email"] == "teammate@example.com"
+
+
+def test_mint_token_for_another_member_when_caller_is_a_plain_member_then_403(
+    client: TestClient, session_factory
+) -> None:
+    """Minting for someone else is a management action. The rank check lives in
+    ``resolve_mint_owner`` so the route stays open to self-mints."""
+    pid = _signup_with_project(client, "ownerP@example.com")
+    owner_id = client.get("/v1/users/me").json()["id"]
+    org_id = _org_id(client)
+    _signup_second_member(
+        client,
+        session_factory=session_factory,
+        org_id=org_id,
+        email="plainP@example.com",
+        role=ROLE_MEMBER,
+    )
+
+    # The plain member is the one logged in now.
+    r = client.post(
+        f"/v1/projects/{pid}/tokens",
+        json={"name": "escalation", "owner_user_id": owner_id},
+    )
+    assert r.status_code == 403, r.text
+    assert "admins" in r.json()["detail"]
+
+
+def test_mint_token_for_self_by_id_is_allowed_for_a_plain_member(
+    client: TestClient, session_factory
+) -> None:
+    """Naming your own id explicitly is not delegation."""
+    pid = _signup_with_project(client, "ownerQ@example.com")
+    org_id = _org_id(client)
+    member_id = _signup_second_member(
+        client,
+        session_factory=session_factory,
+        org_id=org_id,
+        email="plainQ@example.com",
+        role=ROLE_MEMBER,
+    )
+
+    r = client.post(
+        f"/v1/projects/{pid}/tokens",
+        json={"name": "my-own", "owner_user_id": member_id},
+    )
+    assert r.status_code == 201, r.text
+    assert _read_token(session_factory, r.json()["id"]).owner_user_id == member_id
+
+
+def test_mint_token_for_a_non_member_then_403(
+    client: TestClient, session_factory
+) -> None:
+    """``remove_member`` only sweeps keys owned by a member of the org, so a key
+    parked on an outsider would be unreachable by any offboarding path."""
+    pid = _signup_with_project(client, "ownerR@example.com")
+    _signup_and_login(client, "outsiderR@example.com", "correcthorsebattery")
+    outsider_id = client.get("/v1/users/me").json()["id"]
+    _login(client, "ownerR@example.com")
+
+    r = client.post(
+        f"/v1/projects/{pid}/tokens",
+        json={"name": "parked", "owner_user_id": outsider_id},
+    )
+    assert r.status_code == 403, r.text
+    assert "not a member" in r.json()["detail"]
+
+
+def test_list_tokens_then_owner_and_creator_emails_are_resolved(
+    client: TestClient, session_factory
+) -> None:
+    """One batch lookup, same shape as the bans list."""
+    pid = _signup_with_project(client, "adminS@example.com")
+    org_id = _org_id(client)
+    teammate_id = _signup_second_member(
+        client,
+        session_factory=session_factory,
+        org_id=org_id,
+        email="teammateS@example.com",
+        role=ROLE_MEMBER,
+    )
+    _login(client, "adminS@example.com")
+    client.post(f"/v1/projects/{pid}/tokens", json={"name": "own"})
+    client.post(
+        f"/v1/projects/{pid}/tokens",
+        json={"name": "delegated", "owner_user_id": teammate_id},
+    )
+
+    rows = {
+        item["name"]: item for item in client.get(f"/v1/projects/{pid}/tokens").json()
+    }
+    assert rows["own"]["owner_email"] == "adminS@example.com"
+    assert rows["own"]["created_by_email"] == "adminS@example.com"
+    assert rows["delegated"]["owner_email"] == "teammateS@example.com"
+    assert rows["delegated"]["created_by_email"] == "adminS@example.com"
+
+
+def test_list_tokens_when_the_owner_account_is_gone_then_the_id_survives_on_migrated_stacks(
+    client: TestClient, session_factory
+) -> None:
+    """The trail outlives the account: the id stays on the wire, email falls back.
+
+    Pins the *migrated* schema only. ``0002_actor_columns.sql`` adds these
+    columns as bare ``varchar`` with no REFERENCES clause, so a deleted user
+    leaves the id behind; a fresh ``create_all`` database instead carries
+    ``ON DELETE SET NULL`` and nulls it (next test). The divergence is
+    deliberate and permanent — see 0002's header. This fixture does not enforce
+    FKs, which is what makes it stand in for the migrated side.
+    """
+    pid = _signup_with_project(client, "adminT@example.com")
+    org_id = _org_id(client)
+    teammate_id = _signup_second_member(
+        client,
+        session_factory=session_factory,
+        org_id=org_id,
+        email="teammateT@example.com",
+        role=ROLE_ADMIN,
+    )
+    _login(client, "adminT@example.com")
+    client.post(
+        f"/v1/projects/{pid}/tokens",
+        json={"name": "orphaned", "owner_user_id": teammate_id},
+    )
+
+    _delete_user(session_factory, teammate_id)
+
+    row = client.get(f"/v1/projects/{pid}/tokens").json()[0]
+    assert row["owner_user_id"] == teammate_id
+    assert row["owner_email"] is None
+
+
+async def test_delete_owner_on_a_fresh_schema_then_the_actor_columns_go_null(
+    fk_session_factory, tmp_path
+) -> None:
+    """The other side of the divergence above, and what ``actor_fk_column``
+    promises: on a ``create_all`` database the FKs are ``ON DELETE SET NULL``,
+    so the delete succeeds and the trail degrades to "no human actor" rather
+    than blocking. The key row itself survives — it is the audit record.
+
+    The owner holds no membership: ``organization_member.user_id`` is a
+    non-null FK with no ``ON DELETE`` action, so deleting a user who is still
+    in an org is refused, not nulled. Offboarding removes the membership first.
+    """
+    ks = FileKeyStore(base_dir=tmp_path / "keystore")
+    ks.ensure_keypair()
+
+    async with fk_session_factory() as session:
+        owner = User(email="leaverU@example.com")
+        session.add(owner)
+        await session.commit()
+        row, _full = await mint_api_key(
+            session,
+            project_id=DEFAULT_PROJECT_ID,
+            name="owned",
+            scopes=["read_audit"],
+            env="live",
+            signing_key_bytes=ks._private_key_bytes(),
+            created_by_user_id=owner.id,
+            owner_user_id=owner.id,
+        )
+        token_id = row.id
+
+        await session.delete(owner)
+        await session.commit()
+
+    async with fk_session_factory() as session:
+        after = await session.get(ApiKey, token_id)
+
+    assert after is not None
+    assert after.owner_user_id is None
+    assert after.created_by_user_id is None
+
+
+# ---------------------------------------------------------------------------
 # mint_api_key() — service-level invariants
 # ---------------------------------------------------------------------------
+
+
+async def test_mint_api_key_without_an_actor_then_both_columns_are_null(
+    session_factory, tmp_path
+) -> None:
+    """The ``deploy/provision.py`` shape: a system mint with no human caller.
+
+    NULL is intended, and is what keeps the key out of the offboarding sweep.
+    """
+    ks = FileKeyStore(base_dir=tmp_path / "keystore")
+    ks.ensure_keypair()
+
+    async with session_factory() as session:
+        row, _full = await mint_api_key(
+            session,
+            project_id=DEFAULT_PROJECT_ID,
+            name="provisioned",
+            scopes=["read_audit"],
+            env="live",
+            signing_key_bytes=ks._private_key_bytes(),
+        )
+
+    assert row.created_by_user_id is None
+    assert row.owner_user_id is None
 
 
 async def test_mint_api_key_happy_path(session_factory, tmp_path) -> None:

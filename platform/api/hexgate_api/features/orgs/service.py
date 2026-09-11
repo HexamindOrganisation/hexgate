@@ -55,14 +55,19 @@ async def create_org(
     name: str,
     slug: str,
     owner_user_id: str,
+    created_by_user_id: str,
 ) -> Organization:
     """Atomically create an Organization + owner membership.
 
     Both rows go into the same commit — no transient state where an
     org exists with zero members. Caller is responsible for ensuring
     ``slug`` is globally unique (use :func:`_generate_unique_org_slug`).
+
+    ``created_by_user_id`` is stamped on both rows. It equals ``owner_user_id``
+    on every path today, but stays a separate parameter because "who made this"
+    and "whose is it" are different questions.
     """
-    org = Organization(name=name, slug=slug)
+    org = Organization(name=name, slug=slug, created_by_user_id=created_by_user_id)
     session.add(org)
     await session.flush()  # populate org.id before referencing it
 
@@ -70,6 +75,7 @@ async def create_org(
         user_id=owner_user_id,
         org_id=org.id,
         role=ROLE_OWNER,
+        created_by_user_id=created_by_user_id,
     )
     session.add(member)
     await session.commit()
@@ -106,7 +112,15 @@ async def ensure_personal_default_org(
         return existing
 
     slug = await _generate_unique_org_slug(session, _email_to_slug_base(user.email))
-    return await create_org(session, name="default", slug=slug, owner_user_id=user.id)
+    # Attributable to the registering user, unlike the first-boot seed
+    # (seeds/defaults.py writes NULL actors).
+    return await create_org(
+        session,
+        name="default",
+        slug=slug,
+        owner_user_id=user.id,
+        created_by_user_id=user.id,
+    )
 
 
 async def list_orgs_for_user(
