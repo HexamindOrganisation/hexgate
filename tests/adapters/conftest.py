@@ -22,6 +22,8 @@ from dataclasses import dataclass
 import httpx
 import pytest
 
+from hexgate.cloud.client import _parse_project_from_key
+
 
 @dataclass(frozen=True)
 class HexgatePlatformEnv:
@@ -30,6 +32,15 @@ class HexgatePlatformEnv:
     clickhouse_url: str
     clickhouse_user: str
     clickhouse_password: str
+    # Dashboard login for the cookie-authed read endpoints. Empty when the
+    # HEXGATE_SMOKE_* pair is unset; only the endpoint-reading tests need it,
+    # and they skip rather than fail (see ``dashboard_login``).
+    email: str = ""
+    password: str = ""
+    # The project the api_key was minted for — the path segment every
+    # project-scoped read endpoint takes. Carried on the envelope of the key
+    # itself, so the tests need no second source of truth for it.
+    project_id: str = ""
 
     def clickhouse_query(self, query: str, **params: str) -> str:
         """Parameterized query via ClickHouse's HTTP interface — never
@@ -91,6 +102,34 @@ class HexgatePlatformEnv:
         )
         return [json.loads(line) for line in text.splitlines() if line]
 
+    def llm_messages_via_api(
+        self, *, session_id: str | None = None, run_id: str | None = None
+    ) -> list[dict]:
+        """One transcript read back through the product's own endpoint.
+
+        Cookie-authed, not key-authed: this is a dashboard read
+        (``require_org_member``), so it needs a login rather than the
+        ``fty_live_…`` the SDK exports with. Same credentials the OTLP smoke
+        script takes, so one pair serves both — and :func:`dashboard_login`
+        skips the test when they are absent.
+        """
+        with httpx.Client(base_url=self.platform_url, timeout=15) as client:
+            login = client.post(
+                "/v1/auth/cookie/login",
+                data={"username": self.email, "password": self.password},
+            )
+            login.raise_for_status()
+            params: dict[str, str] = {}
+            if session_id is not None:
+                params["session_id"] = session_id
+            if run_id is not None:
+                params["run_id"] = run_id
+            response = client.get(
+                f"/v1/projects/{self.project_id}/audit/llm-messages", params=params
+            )
+            response.raise_for_status()
+            return response.json()["rows"]
+
 
 @pytest.fixture
 def hexgate_platform_env(monkeypatch: pytest.MonkeyPatch) -> HexgatePlatformEnv:
@@ -132,4 +171,9 @@ def hexgate_platform_env(monkeypatch: pytest.MonkeyPatch) -> HexgatePlatformEnv:
         clickhouse_password=os.environ.get(
             "HEXGATE_CLICKHOUSE_PASSWORD", "hexgate-dev-password"
         ),
+        # Same names platform/scripts/otlp_smoke.py reads, so one dashboard
+        # login serves the smoke run and the endpoint-reading tests here.
+        email=os.environ.get("HEXGATE_SMOKE_EMAIL", ""),
+        password=os.environ.get("HEXGATE_SMOKE_PASSWORD", ""),
+        project_id=_parse_project_from_key(api_key) or "",
     )
