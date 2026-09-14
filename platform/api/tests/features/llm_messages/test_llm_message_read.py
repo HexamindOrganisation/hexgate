@@ -405,6 +405,23 @@ def test_when_no_usable_scope_is_given_then_422(
     fake_clickhouse.query.assert_not_called()
 
 
+def test_when_the_session_is_blank_but_a_run_id_is_given_then_it_serves(
+    client: TestClient, fake_clickhouse: MagicMock
+) -> None:
+    """A drawer forwarding both fields off a decision row whose session_id is
+    "" sends ?session_id=&run_id=<uuid> — the very case the run scope exists
+    for. "" is the real "no session" value, not a malformed input, so it must
+    fall through to the run scope rather than 422 before the check runs."""
+    app.dependency_overrides[require_org_member] = lambda: MagicMock()
+    run_id = uuid.uuid4()
+
+    r = client.get(f"{_READ_PATH}?session_id=&run_id={run_id}")
+
+    assert r.status_code == 200, r.text
+    params = fake_clickhouse.query.call_args.kwargs["parameters"]
+    assert params["run_id"] == run_id and "session_id" not in params
+
+
 def test_when_only_a_run_id_is_given_then_the_endpoint_serves_it(
     client: TestClient, fake_clickhouse: MagicMock
 ) -> None:
