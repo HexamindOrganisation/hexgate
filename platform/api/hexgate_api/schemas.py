@@ -847,6 +847,47 @@ class AuditDecisionPage(BaseModel):
     offset: int
 
 
+class LlmMessageRow(BaseModel):
+    """One row of a session transcript, as the Audit drawer reads it.
+
+    The three content fields are decoded from their stored JSON text, so a
+    caller gets the ``gen_ai.*`` structures rather than strings to parse
+    again; a value that no longer parses comes back as the raw text (see
+    ``decode_json_column``). ``resynced`` / ``truncated`` are the UInt8 flags
+    the reader needs to mark a row as restated history or as lossy.
+    """
+
+    event_id: UUID
+    occurred_at: datetime
+    received_at: datetime
+    agent_name: str
+    agent_version_id: str = ""
+    session_id: str = ""
+    user_id: str = ""
+    model: str
+    turn_key: str
+    message_seq: int
+    resynced: bool = False
+    truncated: bool = False
+    input_messages: Any = None
+    output_messages: Any = None
+    system_instructions: Any = None
+    # None rather than the zero UUID the column stores for "outside a run":
+    # the read surface says absent, it does not hand out a run id that joins
+    # to nothing.
+    run_id: Optional[UUID] = None
+
+
+class LlmMessagePage(BaseModel):
+    """A page of transcript rows, oldest first; ``total`` is the unpaginated
+    match count for the session."""
+
+    rows: list[LlmMessageRow]
+    total: int
+    limit: int
+    offset: int
+
+
 class BanEnforcementRow(BaseModel):
     """One blocked-attempt row for the Bans page. No tool/role/outcome
     or arguments/hint — a ban is refused before any tool call runs."""
