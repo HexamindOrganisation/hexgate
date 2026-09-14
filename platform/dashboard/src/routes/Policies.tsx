@@ -20,7 +20,10 @@ import { cn } from "@/lib/utils";
 import { NoProjectEmptyState } from "@/components/NoProjectEmptyState";
 import { DocsLink } from "@/components/DocsLink";
 import { DOC_PATHS } from "@/lib/docs";
-import { ModularBanner } from "@/components/policy_files/ModularBanner";
+import {
+  ClassicProjectBanner,
+  ComposeStatusBar,
+} from "@/components/policy_files/ComposeStatus";
 import { FileTree } from "@/components/policy_files/FileTree";
 import { EditorPane } from "@/components/policy_files/EditorPane";
 import { InspectorTabs } from "@/components/policy_files/InspectorTabs";
@@ -240,9 +243,10 @@ export function PoliciesPage() {
     // "shades, not rules" feel).
     <div className="-mx-8 -my-6 h-screen overflow-hidden bg-muted/20 p-3">
       <div className="flex h-full flex-col overflow-hidden rounded-xl border border-border/60 bg-card shadow-sm">
-        {!loading && (
-          <ModularBanner
-            modular={modular}
+        {/* Classic projects need the CTA up top; compose-active ones get a
+            quiet status strip at the bottom instead (see below). */}
+        {!loading && !modular && (
+          <ClassicProjectBanner
             trailing={
               <DocsLink path={DOC_PATHS.policies} label="Policy docs" />
             }
@@ -256,111 +260,120 @@ export function PoliciesPage() {
               : "No project selected."}
           </div>
         ) : (
-          <div className="flex-1 grid grid-cols-[240px_minmax(0,1fr)_minmax(320px,380px)] overflow-hidden">
-            <div className="overflow-hidden bg-background/40">
-              <FileTree
-                files={files}
-                emptyFolders={emptyFolders}
-                selected={active}
-                onSelect={openFile}
-                onNewFile={onNewFile}
-                onDeleted={onFileDeleted}
-                onAddFolder={addFolder}
-                onRemoveFolder={removeFolder}
-                onRename={onRename}
-                projectId={projectId}
-                canManage={canManage}
-                dirtyKeys={dirtyKeys}
-              />
-            </div>
-            <div className="flex flex-col overflow-hidden">
-              <div className="flex shrink-0 items-stretch overflow-x-auto border-b border-border bg-background/40 scrollbar-thin">
-                {activeTabs.map((tab) => {
-                  const isActive = active === tab;
-                  const isDirty = dirtyKeys.has(tab);
-                  return (
-                    <div
-                      key={tab}
-                      onClick={() => setSelection(tab)}
-                      title={tab}
-                      className={cn(
-                        "group flex max-w-[170px] min-w-0 cursor-pointer items-center gap-1.5 border-r border-border px-3 py-1.5 text-xs",
-                        isActive
-                          ? "bg-card text-foreground"
-                          : "text-muted-foreground hover:text-foreground",
-                      )}
-                    >
-                      <FileText className="size-3 shrink-0 text-muted-foreground" />
-                      <span className="truncate font-mono">
-                        {baseName(tab)}
-                      </span>
-                      {isDirty && (
-                        <span
-                          className="size-1.5 shrink-0 rounded-full bg-primary group-hover:hidden"
-                          title="Unsaved changes"
-                        />
-                      )}
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          closeTab(tab);
-                        }}
-                        title="Close tab"
+          <>
+            <div className="flex-1 grid grid-cols-[240px_minmax(0,1fr)_minmax(320px,380px)] overflow-hidden">
+              <div className="overflow-hidden bg-background/40">
+                <FileTree
+                  files={files}
+                  emptyFolders={emptyFolders}
+                  selected={active}
+                  onSelect={openFile}
+                  onNewFile={onNewFile}
+                  onDeleted={onFileDeleted}
+                  onAddFolder={addFolder}
+                  onRemoveFolder={removeFolder}
+                  onRename={onRename}
+                  projectId={projectId}
+                  canManage={canManage}
+                  dirtyKeys={dirtyKeys}
+                />
+              </div>
+              <div className="flex flex-col overflow-hidden">
+                <div className="flex shrink-0 items-stretch overflow-x-auto border-b border-border bg-background/40 scrollbar-thin">
+                  {activeTabs.map((tab) => {
+                    const isActive = active === tab;
+                    const isDirty = dirtyKeys.has(tab);
+                    return (
+                      <div
+                        key={tab}
+                        onClick={() => setSelection(tab)}
+                        title={tab}
                         className={cn(
-                          "shrink-0 rounded p-0.5 hover:bg-accent",
-                          isDirty
-                            ? "hidden group-hover:block"
-                            : "opacity-0 group-hover:opacity-100",
+                          "group flex max-w-[170px] min-w-0 cursor-pointer items-center gap-1.5 border-r border-border px-3 py-1.5 text-xs",
+                          isActive
+                            ? "bg-card text-foreground"
+                            : "text-muted-foreground hover:text-foreground",
                         )}
                       >
-                        <X className="size-3" />
-                      </button>
+                        <FileText className="size-3 shrink-0 text-muted-foreground" />
+                        <span className="truncate font-mono">
+                          {baseName(tab)}
+                        </span>
+                        {isDirty && (
+                          <span
+                            className="size-1.5 shrink-0 rounded-full bg-primary group-hover:hidden"
+                            title="Unsaved changes"
+                          />
+                        )}
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            closeTab(tab);
+                          }}
+                          title="Close tab"
+                          className={cn(
+                            "shrink-0 rounded p-0.5 hover:bg-accent",
+                            isDirty
+                              ? "hidden group-hover:block"
+                              : "opacity-0 group-hover:opacity-100",
+                          )}
+                        >
+                          <X className="size-3" />
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+                <div className="flex-1 overflow-hidden">
+                  {active === null ? (
+                    <div className="h-full grid place-items-center px-6 text-center">
+                      <p className="text-xs text-muted-foreground">
+                        No file open. Add a{" "}
+                        <span className="font-mono">{ENTRY_FILE}</span> to start
+                        the compose policy.
+                      </p>
                     </div>
-                  );
-                })}
+                  ) : (
+                    <EditorPane
+                      // Remount on a project switch so no dirty buffer from the
+                      // previous project survives into this one (a same-name entry
+                      // file wouldn't otherwise reset the pane, and Save would then
+                      // write project A's text into project B).
+                      key={projectId}
+                      projectId={projectId}
+                      name={active}
+                      files={files}
+                      lints={lints}
+                      canManage={canManage}
+                      onDraftChange={onDraftChange}
+                      drafts={drafts}
+                      onPersist={onPersist}
+                    />
+                  )}
+                </div>
               </div>
-              <div className="flex-1 overflow-hidden">
-                {active === null ? (
-                  <div className="h-full grid place-items-center px-6 text-center">
-                    <p className="text-xs text-muted-foreground">
-                      No file open. Add a{" "}
-                      <span className="font-mono">{ENTRY_FILE}</span> to start
-                      the compose policy.
-                    </p>
-                  </div>
-                ) : (
-                  <EditorPane
-                    // Remount on a project switch so no dirty buffer from the
-                    // previous project survives into this one (a same-name entry
-                    // file wouldn't otherwise reset the pane, and Save would then
-                    // write project A's text into project B).
-                    key={projectId}
-                    projectId={projectId}
-                    name={active}
-                    files={files}
-                    lints={lints}
-                    canManage={canManage}
-                    onDraftChange={onDraftChange}
-                    drafts={drafts}
-                    onPersist={onPersist}
-                  />
-                )}
+              <div className="overflow-hidden bg-background/40">
+                <InspectorTabs
+                  projectId={projectId}
+                  resolved={resolved}
+                  lints={lints}
+                  draft={draftActive ? draft : null}
+                  resolves={resolves}
+                  modular={modular}
+                  previewing={draftActive && preview.isFetching}
+                  inspectAgent={inspectAgent}
+                  onInspectAgentChange={setInspectAgent}
+                />
               </div>
             </div>
-            <div className="overflow-hidden bg-background/40">
-              <InspectorTabs
-                projectId={projectId}
-                resolved={resolved}
-                lints={lints}
-                draft={draftActive ? draft : null}
-                resolves={resolves}
-                modular={modular}
-                previewing={draftActive && preview.isFetching}
-                inspectAgent={inspectAgent}
-                onInspectAgentChange={setInspectAgent}
+            {modular && (
+              <ComposeStatusBar
+                trailing={
+                  <DocsLink path={DOC_PATHS.policies} label="Policy docs" />
+                }
               />
-            </div>
-          </div>
+            )}
+          </>
         )}
       </div>
     </div>
