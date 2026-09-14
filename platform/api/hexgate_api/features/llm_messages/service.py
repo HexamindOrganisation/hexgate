@@ -174,7 +174,17 @@ def list_llm_messages(
         raise NoMessageScope()
 
     where, params = scope_filters(project_id, RETENTION_HOURS)
-    if session_id:
+    # ``is not None``, not truthiness: an explicit empty session_id is a fact
+    # the caller knows ("this run had no session"), not a missing argument, and
+    # binding it is what keeps the read fast. session_id is the second key
+    # column, so pinning it — even to "" — puts the scan inside one contiguous
+    # time-ordered block and lets ORDER BY read in order and stop at
+    # limit + offset. Leave it out and the scan spans every session in the
+    # project and sorts the whole match: measured on 4000 session-less rows,
+    # 4036 rows / 941 MiB against 195 rows / 68 MiB for the same page.
+    # It filters without scoping, though — "" matches every unnamed session in
+    # the project — so the check above still refuses it on its own.
+    if session_id is not None:
         where.append("session_id = {session_id:String}")
         params["session_id"] = session_id
     if run_id is not None and run_id != ZERO_RUN_ID:

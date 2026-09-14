@@ -23,6 +23,17 @@ from hexgate_api.schemas import LlmMessagePage
 router = APIRouter()
 
 
+def _parsed_run_id(raw: str | None) -> UUID | None:
+    """``None`` for absent or blank, a UUID otherwise; ValueError if malformed.
+
+    A blank reads as absent rather than as an error so that a caller echoing a
+    decision row whose run_id was null still gets its session scope.
+    """
+    if not raw:
+        return None
+    return UUID(raw)
+
+
 # No window / date-range parameters, unlike the other project-scoped reads:
 # the transcript is the scope, and a time filter on top of it could only cut
 # the head off a conversation (see ``list_llm_messages``). Long transcripts
@@ -36,12 +47,22 @@ router = APIRouter()
 async def api_llm_messages(
     project_id: str,
     # Either scope, or both; neither is a 422 — see ``list_llm_messages``.
+    # Both arrive as the caller sent them, blanks included: a drawer forwarding
+    # a decision row sends whatever that row held, and an empty field there is
+    # data, not a malformed request. ``run_id`` is parsed by hand for that
+    # reason — annotating it ``UUID`` would 422 a blank before the scope check,
+    # the mirror of the constraint removed from session_id in fe323177.
     session_id: str | None = None,
-    run_id: UUID | None = None,
+    run_id: str | None = None,
     limit: int = 50,
     offset: int = 0,
     clickhouse_client=Depends(require_clickhouse),
 ) -> LlmMessagePage:
+    try:
+        parsed_run_id = _parsed_run_id(run_id)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="run_id is not a valid UUID")
+
     try:
         # The clickhouse_connect client is sync — run it off the event loop so
         # a slow scan can't stall every other in-flight request.
@@ -50,7 +71,7 @@ async def api_llm_messages(
             clickhouse_client,
             project_id=project_id,
             session_id=session_id,
-            run_id=run_id,
+            run_id=parsed_run_id,
             limit=max(1, min(limit, MAX_PAGE_SIZE)),
             offset=max(0, offset),
         )
