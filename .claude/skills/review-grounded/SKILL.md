@@ -145,6 +145,20 @@ Then drop the finding if the example needs any of these to be true:
 - **Nothing at all.** If no example can be written, the finding is a theory.
   Drop it.
 
+One exception overrides every drop rule above: **a cost claim is settled by
+measuring, not by judgement.** If the Break is about resource use — memory,
+rows scanned, latency, payload size, a query plan — none of the drop rules
+apply until you have a number. Start the dependency and measure it: bring up
+the container, seed a table at the size the caps actually permit, read
+`system.query_log`. It is usually minutes, and the number either kills the
+finding outright or makes it undeniable. "No ClickHouse was running, so the
+lens could not confirm it" is a reason to go and run one, never a verdict.
+Judge urgency afterwards — *this product has no traffic yet* is a fair reason
+to defer a measured cost, and never a reason to drop an unmeasured one. Beware
+too of scoring such a finding as loud: a query that burns the server-wide
+memory budget is quiet on the request that causes it and degrades every
+concurrent one.
+
 Keep the finding, and say so plainly, when the example is mundane *and* the
 Break is silent: a deploy, a restart, a broker that takes twenty minutes to come
 back, a retry that lands twice — and afterwards the system reports success while
@@ -168,10 +182,19 @@ comments say buys nothing for its goal. An unrelated optimization riding along
 carries risk nobody signed up for. Read such a comment as a reason to question
 the line, not as documentation of it.
 
+The same suspicion belongs on a comment claiming a sibling's precedent —
+"same trick as `list_decisions`", "mirrors the usage path". The author copied
+a pattern and asserted the analogy in the same breath, so nothing has checked
+that the precondition carried over. Go read the sibling and name what makes it
+work there; when the new site differs on that one axis — rows three orders of
+magnitude larger, a different sort key, a different call frequency — the
+borrowed reasoning is the bug, and the comment is what hid it.
+
 ## 5. Verify what survives
 
 Re-check each surviving finding against the actual code — read the endpoint, the
-library source, the config file. State the evidence you read. A finding that
+library source, the config file. State the evidence you read; for a cost claim
+that evidence is a measurement, not a reading. A finding that
 cannot be verified either becomes uncertain-and-labelled or gets dropped; it
 never gets reported as fact.
 
