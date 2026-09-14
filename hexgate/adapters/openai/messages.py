@@ -4,7 +4,8 @@ The shape translation for the OpenAI Agents adapter, kept apart from the
 ``RunHooks`` in ``usage.py``: these are pure functions over plain dicts that
 decide nothing about when or whether to emit. Each of the other three
 adapters needs the same layer against its own message types, so each gets
-its own ``messages.py`` beside its hooks.
+its own ``messages.py`` — beside its hooks where it has them, and beside the
+per-run emit for pydantic-ai, which has no per-call hook at all.
 
 The target shape is the official GenAI one — a message is ``{"role": …,
 "parts": [...]}`` and a part names itself under ``type`` — which is what

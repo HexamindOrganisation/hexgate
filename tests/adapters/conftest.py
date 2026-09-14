@@ -84,11 +84,12 @@ class HexgatePlatformEnv:
     def llm_message_rows(self, agent_name: str, session_id: str) -> list[dict]:
         """Every llm_message row of this run, in transcript order.
 
-        ``(occurred_at, message_seq)`` is the table's own ORDER BY tail and
-        what the read endpoint will use: ``message_seq`` only counts inside one
-        ``turn_key`` and restarts for an agent reached by a handoff, so time is
-        what orders across lists. JSONEachRow because a row carries embedded
-        JSON in three columns — TSV would need un-escaping by hand.
+        Ordered as the endpoint orders it, minus the ``event_id`` tiebreak
+        that only matters for rows sharing a timestamp and a seq:
+        ``message_seq`` counts inside one ``turn_key`` and restarts for an
+        agent reached by a handoff, so time is what orders across lists.
+        JSONEachRow because a row carries embedded JSON in three columns —
+        TSV would need un-escaping by hand.
         """
         text = self.clickhouse_query(
             "SELECT turn_key, message_seq, resynced, truncated, model, "
@@ -103,15 +104,21 @@ class HexgatePlatformEnv:
         return [json.loads(line) for line in text.splitlines() if line]
 
     def llm_messages_via_api(
-        self, *, session_id: str | None = None, run_id: str | None = None
+        self, *, session_id: str = "", run_id: str | None = None
     ) -> list[dict]:
         """One transcript read back through the product's own endpoint.
 
         Cookie-authed, not key-authed: this is a dashboard read
         (``require_org_member``), so it needs a login rather than the
-        ``fty_live_…`` the SDK exports with. Same credentials the OTLP smoke
-        script takes, so one pair serves both — and :func:`dashboard_login`
-        skips the test when they are absent.
+        ``fty_live_…`` the SDK exports with. Same credentials
+        ``platform/scripts/otlp_smoke.py`` reads, so one pair serves both —
+        and :func:`require_dashboard_login` skips the test when they are
+        absent.
+
+        ``session_id`` is always sent, blank included: it is the second
+        column of the storage sort key, so pinning it lets the scan stop at
+        ``limit + offset`` rows instead of reading every session in the
+        project. The endpoint documents that convention on the parameter.
         """
         with httpx.Client(base_url=self.platform_url, timeout=15) as client:
             login = client.post(
@@ -119,9 +126,7 @@ class HexgatePlatformEnv:
                 data={"username": self.email, "password": self.password},
             )
             login.raise_for_status()
-            params: dict[str, str] = {}
-            if session_id is not None:
-                params["session_id"] = session_id
+            params: dict[str, str] = {"session_id": session_id}
             if run_id is not None:
                 params["run_id"] = run_id
             response = client.get(

@@ -287,9 +287,11 @@ def test_llm_messages_are_readable_through_the_audit_endpoint(
     because a wrong column name or a broken ORDER BY in that query is
     invisible to a direct ClickHouse read.
 
-    Scoped by `run_id`, not `session_id`: the run is the stronger key here
-    (one run per assertion, whatever else shares the session), and it is the
-    scope that exists for the common SDK caller who never sets a session.
+    Both scopes are sent, which narrows to their intersection: `run_id` is
+    the stronger key (one run per assertion, whatever else shares the
+    session), while `session_id` is what lets the scan stop early rather than
+    read every session in the project — the endpoint asks callers to send it
+    even blank, for that reason.
     """
     require_dashboard_login(hexgate_platform_env)
 
@@ -336,7 +338,9 @@ def test_llm_messages_are_readable_through_the_audit_endpoint(
     )
     assert run_id and run_id != "00000000-0000-0000-0000-000000000000"
 
-    rows = hexgate_platform_env.llm_messages_via_api(run_id=run_id)
+    rows = hexgate_platform_env.llm_messages_via_api(
+        session_id=session_id, run_id=run_id
+    )
 
     assert [row["message_seq"] for row in rows] == [0, 1]
     assert len({row["turn_key"] for row in rows}) == 1
