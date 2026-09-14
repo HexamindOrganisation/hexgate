@@ -15,22 +15,26 @@ What reaches the wire is the *delta* — only the items added since this turn's
 last call — because the input list is the whole conversation so far and
 re-sending it every call would store the transcript once per turn. Working out
 that delta is :class:`~hexgate.tracing.messages.MessageCursor`'s job, written
-to be shared by all four adapters (this is the first to use it); this module's
-own work is the shape translation from the Responses API's items to the OTel
-GenAI ``role``/``parts`` message form.
+to be shared by all four adapters (this is the first to use it); turning the
+Responses API's items into GenAI messages is ``messages.py``'s, beside this
+one. What is left here is the hook pair itself.
 """
 
 from __future__ import annotations
 
 import logging
 import uuid
-from collections.abc import Mapping
 from typing import Any
 
 from agents import Agent, RunContextWrapper
 from agents.items import ModelResponse
 from agents.lifecycle import RunHooks
 
+from hexgate.adapters.openai.messages import (
+    input_message,
+    output_messages,
+    text_part,
+)
 from hexgate.runtime.run_facts import get_run_facts
 from hexgate.tracing.messages import (
     MessageCursor,
@@ -40,147 +44,6 @@ from hexgate.tracing.messages import (
 from hexgate.tracing.usage import emit_llm_usage
 
 _log = logging.getLogger(__name__)
-
-# Content-part types whose payload is plain text under a ``text`` key. The
-# Responses API names the same thing differently by direction (``input_text``
-# on the way in, ``output_text`` on the way back), reasoning summaries add
-# ``summary_text``, and a bare ``text`` turns up in hand-built items and in
-# a message replayed from a stored transcript. GenAI has one ``text`` part,
-# so they all collapse into it.
-_TEXT_PART_TYPES = frozenset({"input_text", "output_text", "text", "summary_text"})
-
-
-def _as_dict(item: Any) -> dict[str, Any] | None:
-    """One Responses-API item as a plain dict, or ``None`` if it is neither a
-    mapping nor a pydantic model.
-
-    Input items arrive as TypedDicts (so: dicts) and output items as pydantic
-    models, and both shapes appear inside ``content`` lists too. Everything
-    below reads ``type`` and ``role`` to decide a message's shape, which needs
-    a dict in hand; ``None`` is the caller's cue to fall back rather than guess
-    at an object it cannot open.
-    """
-    if isinstance(item, Mapping):
-        return dict(item)
-    dump = getattr(item, "model_dump", None)
-    if callable(dump):
-        return dump(mode="json")
-    return None
-
-
-def _text_part(content: Any) -> dict[str, Any]:
-    return {"type": "text", "content": content}
-
-
-def _tool_call_part(item: dict[str, Any]) -> dict[str, Any]:
-    """A ``function_call`` item as a GenAI ``tool_call`` part.
-
-    ``arguments`` stays the raw JSON *string* the API uses rather than being
-    parsed here: ``TOOL_CALL_JSON_KEYS`` makes redaction open that string and
-    blank the sensitive keys inside it, so an api_key in a tool's arguments is
-    masked in the transcript exactly as it is on the decision event.
-    """
-    return {
-        "type": "tool_call",
-        "id": item.get("call_id") or item.get("id") or "",
-        "name": item.get("name", ""),
-        "arguments": item.get("arguments"),
-    }
-
-
-def _content_parts(content: Any) -> list[dict[str, Any]]:
-    """A message's ``content`` as GenAI parts.
-
-    ``content`` is either a bare string or a list of content parts. A part
-    whose payload is text becomes a ``text`` part — a refusal included, whose
-    text is the interesting half. Anything else (an image, a file) is carried
-    through whole: it already names itself under ``type``, and dropping it
-    would lose exactly the attachment an investigator is looking for.
-    """
-    if content is None:
-        return []
-    if isinstance(content, str):
-        return [_text_part(content)]
-    if not isinstance(content, (list, tuple)):
-        return [_text_part(content)]
-    parts: list[dict[str, Any]] = []
-    for raw in content:
-        part = _as_dict(raw)
-        if part is None:
-            parts.append(_text_part(raw))
-        elif part.get("type") in _TEXT_PART_TYPES and "text" in part:
-            parts.append(_text_part(part["text"]))
-        elif "refusal" in part:
-            parts.append(_text_part(part["refusal"]))
-        else:
-            parts.append(part)
-    return parts
-
-
-def _input_message(item: Any) -> dict[str, Any]:
-    """One entry of ``input_items`` as a GenAI message.
-
-    The list mixes three kinds of entry: ordinary role messages, the model's
-    own ``function_call`` items, and the ``function_call_output`` items the
-    runner appends once a tool returns. All three are converted — the tool
-    results especially, since a decision event records that a tool was called
-    but never what it returned, making this the only place that value lands.
-    """
-    entry = _as_dict(item)
-    if entry is None:
-        return {"role": "user", "parts": [_text_part(item)]}
-    entry_type = entry.get("type")
-    if entry_type == "function_call":
-        return {"role": "assistant", "parts": [_tool_call_part(entry)]}
-    if entry_type == "function_call_output":
-        return {
-            "role": "tool",
-            "parts": [
-                {
-                    "type": "tool_call_response",
-                    "id": entry.get("call_id") or "",
-                    "response": entry.get("output"),
-                }
-            ],
-        }
-    if "role" in entry:
-        return {"role": entry["role"], "parts": _content_parts(entry.get("content"))}
-    # Reasoning items, built-in tool calls (web search, computer use), MCP
-    # approval requests: no role of their own, and no GenAI part type to map
-    # onto. Carried through under the role that produced them so the turn is
-    # still complete, rather than dropped for want of a mapping. The assistant
-    # role is a floor, not a reading of the item: none of these is a user
-    # message, and GenAI has no role for "the framework did this".
-    return {"role": "assistant", "parts": [entry]}
-
-
-def _output_messages(output: list[Any]) -> list[dict[str, Any]]:
-    """``ModelResponse.output`` as the single assistant message it represents.
-
-    One model call returns one completion; the Responses API just splits it
-    across several items — a text message, one item per tool call, maybe a
-    reasoning item. Folding them back into one message with its parts in the
-    order the model produced them is what a reader expects to see, and it
-    matches the ``gen_ai.output.messages`` contract of "this call's
-    completion".
-    """
-    parts: list[dict[str, Any]] = []
-    for raw in output:
-        item = _as_dict(raw)
-        if item is None:
-            parts.append(_text_part(raw))
-        elif item.get("type") == "function_call":
-            parts.append(_tool_call_part(item))
-        elif item.get("content"):
-            parts.extend(_content_parts(item["content"]))
-        else:
-            # Truthiness, not ``"content" in item``: a reasoning item declares
-            # a ``content`` field that is almost always None and keeps its text
-            # under ``summary``, so a key check would route it here and emit an
-            # empty message — losing the last turn's reasoning entirely, since
-            # only earlier turns reappear in the next call's input delta.
-            parts.append(item)
-    return [{"role": "assistant", "parts": parts}] if parts else []
 
 
 def _resolve_model(agent: Agent) -> str:
@@ -310,8 +173,8 @@ class HexgateUsageHooks(RunHooks):
         key = self._turn_key(agent)
         system_prompt, input_items = self._pending.pop(key, (None, []))
         try:
-            new_input = [_input_message(item) for item in input_items]
-            output = _output_messages(response.output)
+            new_input = [input_message(item) for item in input_items]
+            output = output_messages(response.output)
         except Exception:
             # Before ``advance``, so a failed conversion costs this event and
             # nothing else. Asking the cursor first would spend the turn's seq
@@ -332,9 +195,7 @@ class HexgateUsageHooks(RunHooks):
             # first event rather than the session's, and repeating it every
             # call would spend the 8 KiB budget on the same text over and over.
             system_instructions=(
-                [_text_part(system_prompt)]
-                if delta.seq == 0 and system_prompt
-                else None
+                [text_part(system_prompt)] if delta.seq == 0 and system_prompt else None
             ),
             resynced=delta.resynced,
             api_key=self._api_key,
