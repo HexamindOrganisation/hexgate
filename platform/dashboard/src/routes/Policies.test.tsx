@@ -155,9 +155,10 @@ describe("PoliciesPage", () => {
     const input = screen.getByPlaceholderText(/e\.g\./i);
     await userEvent.type(input, "extra.yaml{Enter}");
 
-    // The new buffer opens: it names both the editor header and its own tab.
+    // The new buffer opens in its own tab (the file name lives there now, not
+    // in a separate editor header).
     await waitFor(() =>
-      expect(screen.getAllByTitle("extra.yaml").length).toBeGreaterThan(1),
+      expect(screen.getByTitle("extra.yaml")).toBeInTheDocument(),
     );
   });
 

@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useState } from "react";
-import { FileText, X } from "lucide-react";
+import { X } from "lucide-react";
 import { toast } from "sonner";
 
 import { ApiError, type PolicyFileDraft } from "@/lib/api";
@@ -278,8 +278,8 @@ export function PoliciesPage() {
                   dirtyKeys={dirtyKeys}
                 />
               </div>
-              <div className="flex flex-col overflow-hidden">
-                <div className="flex shrink-0 items-stretch overflow-x-auto border-b border-border bg-background/40 scrollbar-thin">
+              <div className="flex flex-col overflow-hidden bg-editor">
+                <div className="scrollbar-thin flex shrink-0 items-center gap-1 overflow-x-auto px-2 py-1">
                   {activeTabs.map((tab) => {
                     const isActive = active === tab;
                     const isDirty = dirtyKeys.has(tab);
@@ -289,19 +289,20 @@ export function PoliciesPage() {
                         onClick={() => setSelection(tab)}
                         title={tab}
                         className={cn(
-                          "group flex max-w-[170px] min-w-0 cursor-pointer items-center gap-1.5 border-r border-border px-3 py-1.5 text-xs",
+                          // Only the active tab carries a (green) rounded border;
+                          // inactive tabs are borderless and muted.
+                          "group flex max-w-[180px] min-w-0 cursor-pointer items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs transition-colors",
                           isActive
-                            ? "bg-card text-foreground"
-                            : "text-muted-foreground hover:text-foreground",
+                            ? "border-allow/50 text-foreground"
+                            : "border-transparent text-muted-foreground hover:text-foreground",
                         )}
                       >
-                        <FileText className="size-3 shrink-0 text-muted-foreground" />
                         <span className="truncate font-mono">
                           {baseName(tab)}
                         </span>
                         {isDirty && (
                           <span
-                            className="size-1.5 shrink-0 rounded-full bg-primary group-hover:hidden"
+                            className="size-1.5 shrink-0 rounded-full bg-approval group-hover:hidden"
                             title="Unsaved changes"
                           />
                         )}

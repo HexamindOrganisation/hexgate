@@ -53,15 +53,18 @@ function renderPane(drafts: Record<string, string> = {}) {
 }
 
 describe("EditorPane", () => {
-  it("shows the file name and no unsaved badge when clean", () => {
+  it("shows no unsaved indicator and a disabled Save when clean", () => {
+    // The file name lives in the tab now, not this pane — so the toolbar is
+    // just the save affordance, quiet until there's an edit.
     renderPane();
-    expect(screen.getByText("policy.yaml")).toBeInTheDocument();
-    expect(screen.queryByText("unsaved")).not.toBeInTheDocument();
+    expect(screen.queryByText(/unsaved/i)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /save/i })).toBeDisabled();
   });
 
   it("marks the buffer unsaved when a draft differs from stored", () => {
     renderPane({ "policy.yaml": "tools: { a: { mode: allow } }\n" });
-    expect(screen.getByText("unsaved")).toBeInTheDocument();
+    expect(screen.getByText(/unsaved changes/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /save/i })).toBeEnabled();
   });
 
   it("surfaces a 422 save error inline in the diagnostics bar", async () => {

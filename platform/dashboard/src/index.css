@@ -30,6 +30,11 @@
   --color-deny: hsl(var(--semantic-deny));
   --color-approval: hsl(var(--semantic-approval));
 
+  /* The code-pane surface — matches the always-dark CodeMirror ground
+     (#0a0d14, see PolicyEditor/theme.ts) so the tabs/toolbar read as one
+     editor surface. */
+  --color-editor: hsl(var(--editor));
+
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
@@ -68,6 +73,9 @@
   --semantic-deny-soft: 0 50% 22%;
   --semantic-approval: 38 92% 55%;
   --semantic-approval-soft: 38 60% 22%;
+
+  /* Code-pane ground — always dark (the editor is dark in both themes). */
+  --editor: 222 33% 6%;
 }
 
 .dark {

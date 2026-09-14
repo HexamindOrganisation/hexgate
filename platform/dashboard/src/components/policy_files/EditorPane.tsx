@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { load, YAMLException } from "js-yaml";
-import { FileText, RotateCcw, Save } from "lucide-react";
+import { RotateCcw, Save } from "lucide-react";
 
 import {
   ApiError,
@@ -11,9 +11,8 @@ import {
   type PolicyValidationError,
 } from "@/lib/api";
 import { useUpsertFile } from "@/lib/policy_files";
-import { baseName, lintToLine } from "@/lib/file_tree";
+import { lintToLine } from "@/lib/file_tree";
 import { PolicyEditor } from "@/components/PolicyEditor";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
@@ -186,16 +185,18 @@ export function EditorPane({
   const saving = upsert.isPending;
 
   return (
-    <div className="h-full flex flex-col">
-      <header className="flex items-center justify-between gap-2 px-4 py-2 border-b border-border">
-        <div className="flex items-center gap-2 text-sm min-w-0">
-          <FileText className="size-3.5 shrink-0 text-muted-foreground" />
-          <span className="font-mono truncate" title={name}>
-            {baseName(name)}
-          </span>
-          {dirty && <Badge variant="approval">unsaved</Badge>}
-        </div>
-        <div className="flex items-center gap-1.5 shrink-0">
+    <div className="flex h-full flex-col bg-editor">
+      {/* Thin toolbar — the file name already lives in the tab, so this is just
+          the save affordance. Only editors get it; viewers see the editor at
+          full height. */}
+      {canManage && (
+        <div className="flex items-center justify-end gap-1.5 px-2 py-1">
+          {dirty && (
+            <span className="mr-auto inline-flex items-center gap-1.5 text-[11px] text-approval">
+              <span className="size-1.5 rounded-full bg-approval" />
+              Unsaved changes
+            </span>
+          )}
           <Button
             size="sm"
             variant="ghost"
@@ -205,25 +206,23 @@ export function EditorPane({
               onPersist(name, saved, false);
             }}
             disabled={!dirty || saving}
-            className="gap-1.5 h-8"
+            className="h-7 gap-1.5"
             title="Discard unsaved changes"
           >
             <RotateCcw className="size-3.5" />
             Discard
           </Button>
-          {canManage && (
-            <Button
-              size="sm"
-              onClick={handleSave}
-              disabled={!dirty || saving}
-              className="gap-1.5 h-8"
-            >
-              <Save className="size-3.5" />
-              {saving ? "Saving…" : "Save"}
-            </Button>
-          )}
+          <Button
+            size="sm"
+            onClick={handleSave}
+            disabled={!dirty || saving}
+            className="h-7 gap-1.5"
+          >
+            <Save className="size-3.5" />
+            {saving ? "Saving…" : "Save"}
+          </Button>
         </div>
-      </header>
+      )}
       <PolicyEditor
         value={draft}
         onChange={handleChange}
