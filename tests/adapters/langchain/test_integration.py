@@ -1,6 +1,7 @@
 """End-to-end verification that a real (wrapped) LangGraph agent's policy
-comes from the live platform API and that both its tool-call decision and
-its LLM-usage event land in ClickHouse.
+comes from the live platform API and that its tool-call decision, its
+LLM-usage event and the llm_message rows of its conversation all land in
+ClickHouse.
 
 Not a test of answer quality — the model is a scripted fake, never a real
 LLM provider — this only proves Hexgate's own plumbing: policy fetch at
@@ -18,6 +19,7 @@ Opt in with: `pytest -m integration`.
 
 from __future__ import annotations
 
+import json
 import uuid
 
 import pytest
@@ -34,6 +36,7 @@ from tests.adapters.helpers import (
     AGENT_NAME_PREFIX,
     USER_ID_PREFIX,
     assert_policy_and_usage_events_landed,
+    poll_until,
 )
 
 pytestmark = pytest.mark.integration
@@ -146,3 +149,186 @@ async def test_agent_run_lands_policy_decision_and_llm_usage_events(
     assert_policy_and_usage_events_landed(
         hexgate_platform_env, agent_name, session_id, "get_weather"
     )
+
+
+def _transcript(
+    env: HexgatePlatformEnv, agent_name: str, session_id: str
+) -> list[dict]:
+    """The run's llm_message rows, with the three JSON columns decoded.
+
+    Polled rather than read once: the rows leave as OTLP spans on the
+    exporter's worker thread and cross the Collector, Redpanda and the
+    enricher before any row exists.
+    """
+    rows = poll_until(
+        lambda: (
+            r if len(r := env.llm_message_rows(agent_name, session_id)) >= 2 else None
+        ),
+        message="llm_message rows never landed in ClickHouse",
+    )
+    return [
+        {
+            **row,
+            "input": json.loads(row["input_messages"]),
+            "output": json.loads(row["output_messages"]),
+            "system": json.loads(row["system_instructions"] or "null"),
+        }
+        for row in rows
+    ]
+
+
+@pytest.mark.asyncio
+async def test_tool_calling_run_records_the_conversation_as_llm_messages(
+    hexgate_platform_env: HexgatePlatformEnv,
+) -> None:
+    """The same two-turn run, read back through `llm_message`: the rows must
+    concatenate into the conversation the agent actually saw.
+
+    LangGraph hands the whole message list to every chat-model call, so turn
+    2's input must be just what the graph appended — the assistant's tool-call
+    message and the ToolMessage carrying its result — not a second copy of the
+    user's question. That delta is the whole point of the stream, and the tool
+    result is stored nowhere else: a policy_decision row records the call,
+    never its return value.
+    """
+    agent_name = f"{AGENT_NAME_PREFIX}langchain_msg_{uuid.uuid4().hex[:8]}"
+    session_id = f"s-{uuid.uuid4().hex[:8]}"
+
+    tools = [_make_get_weather_tool()]
+    model = _ScriptedToolCallingModel(responses=_scripted_responses())
+    raw_agent = create_agent(
+        model=model,
+        tools=tools,
+        name=agent_name,
+        system_prompt="You are a weather assistant.",
+    )
+    register_agent(
+        raw_agent,
+        tools=tools,
+        model=FAKE_MODEL_NAME,
+        system_prompt="You are a weather assistant.",
+    )
+    wrapped = wrap_langchain_agent(
+        agent=raw_agent, tools=tools, api_key=hexgate_platform_env.api_key
+    )
+
+    context = HexgateContext(
+        user_id=f"{USER_ID_PREFIX}langchain",
+        session_id=session_id,
+        user_roles=["tester"],
+    )
+    result = await wrapped.ainvoke(
+        {"messages": [{"role": "user", "content": "What's the weather in Paris?"}]},
+        hexgate_context=context,
+    )
+    assert result["messages"][-1].content
+
+    rows = _transcript(hexgate_platform_env, agent_name, session_id)
+
+    assert len({row["turn_key"] for row in rows}) == 1, (
+        "one graph run, one message list"
+    )
+    assert [row["message_seq"] for row in rows] == [0, 1], "no gap in the transcript"
+    assert not any(row["resynced"] or row["truncated"] for row in rows)
+
+    first, second = rows
+
+    # Turn 1: the user's question in, the tool call out. The system prompt is
+    # lifted out of the head of the list into its own field, first row only.
+    assert first["system"] == [
+        {"type": "text", "content": "You are a weather assistant."}
+    ]
+    assert first["input"] == [
+        {
+            "role": "user",
+            "parts": [{"type": "text", "content": "What's the weather in Paris?"}],
+        }
+    ]
+    [tool_call] = first["output"][0]["parts"]
+    assert tool_call["type"] == "tool_call"
+    assert tool_call["name"] == "get_weather"
+    assert tool_call["arguments"] == {"city": "Paris"}
+
+    # Turn 2: only what the graph appended since — the tool call and its
+    # result — then the model's answer.
+    assert second["system"] is None
+    assert [m["role"] for m in second["input"]] == ["assistant", "tool"]
+    assert second["input"][1]["parts"][0]["response"] == "Paris: sunny, 21C"
+    assert second["output"] == [
+        {
+            "role": "assistant",
+            "parts": [{"type": "text", "content": "It's sunny and 21C in Paris."}],
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_two_runs_on_one_proxy_keep_separate_message_lists(
+    hexgate_platform_env: HexgatePlatformEnv,
+) -> None:
+    """Two invocations of the same wrapped agent must not share a turn_key.
+
+    The LangChain adapter's callback handler is built once per proxy and
+    serves every call it makes — unlike the OpenAI adapter's per-run hooks —
+    so this is where the per-list keying can go wrong: a key that outlived the
+    run would file run 2's opening question as a continuation of run 1,
+    counting on from its seq and never restarting at 0. Sub-agents are the
+    same failure in the other direction, which is why the key names one
+    message list rather than one session.
+    """
+    agent_name = f"{AGENT_NAME_PREFIX}langchain_runs_{uuid.uuid4().hex[:8]}"
+    session_id = f"s-{uuid.uuid4().hex[:8]}"
+
+    tools = [_make_get_weather_tool()]
+    # Two answers, one per run: neither invocation calls a tool, so each is a
+    # single-turn conversation and any seq past 0 means state leaked.
+    model = _ScriptedToolCallingModel(
+        responses=[
+            AIMessage(
+                content="It's sunny in Paris.",
+                response_metadata={"model_name": FAKE_MODEL_NAME},
+                usage_metadata={
+                    "input_tokens": 5,
+                    "output_tokens": 5,
+                    "total_tokens": 10,
+                },
+            ),
+            AIMessage(
+                content="It's raining in Lyon.",
+                response_metadata={"model_name": FAKE_MODEL_NAME},
+                usage_metadata={
+                    "input_tokens": 5,
+                    "output_tokens": 5,
+                    "total_tokens": 10,
+                },
+            ),
+        ]
+    )
+    raw_agent = create_agent(model=model, tools=tools, name=agent_name)
+    register_agent(
+        raw_agent,
+        tools=tools,
+        model=FAKE_MODEL_NAME,
+        system_prompt="You are a test agent that exercises Hexgate's plumbing.",
+    )
+    wrapped = wrap_langchain_agent(
+        agent=raw_agent, tools=tools, api_key=hexgate_platform_env.api_key
+    )
+
+    context = HexgateContext(
+        user_id=f"{USER_ID_PREFIX}langchain",
+        session_id=session_id,
+        user_roles=["tester"],
+    )
+    for question in ("Weather in Paris?", "Weather in Lyon?"):
+        await wrapped.ainvoke(
+            {"messages": [{"role": "user", "content": question}]},
+            hexgate_context=context,
+        )
+
+    rows = _transcript(hexgate_platform_env, agent_name, session_id)
+
+    assert len(rows) == 2
+    assert len({row["turn_key"] for row in rows}) == 2, "one run, one message list"
+    assert [row["message_seq"] for row in rows] == [0, 0]
+    assert not any(row["resynced"] for row in rows)
