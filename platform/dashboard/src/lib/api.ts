@@ -378,6 +378,10 @@ export interface AuditDecisionRow {
   hint: unknown;
   arguments: unknown;
   attributes: unknown;
+  /** Run this decision belongs to; `null` outside any run scope. Pass it, and
+   * `session_id`, to the llm-messages read to scope this decision's
+   * transcript — see `listLlmMessages`. */
+  run_id: string | null;
 }
 
 export interface AuditDecisionPage {

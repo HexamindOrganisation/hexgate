@@ -646,7 +646,7 @@ def test_list_llm_messages_round_trip() -> None:
         assert page["total"] == 3
         assert page["rows"][0]["event_id"] == by_run["rows"][2]["event_id"]
 
-        # Past the end: no rows to carry count() OVER (), so the fallback runs.
+        # Past the end: an empty page must still report the match count.
         past_end = list_llm_messages(
             clickhouse_client, project_id=project_id, run_id=run_id, limit=1, offset=99
         )

@@ -3,8 +3,9 @@
 Batch insert only on the write side: unlike decisions and usage there is no
 HTTP ingest for messages — the OTLP pipeline is the only way in, so the
 enricher's ``insert_llm_messages_batch`` is the one writer. The read side is
-``list_llm_messages``, the session transcript behind ``router.py``'s
-endpoint. Column order, row shape and the startup schema guard live here.
+``list_llm_messages``, the transcript behind ``router.py``'s endpoint, scoped
+by session or by run. Column order, row shape and the startup schema guard
+live here.
 """
 
 from __future__ import annotations

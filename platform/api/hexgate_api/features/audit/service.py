@@ -584,9 +584,11 @@ def timeseries(
     return [points[t] for t in sorted(points)]
 
 
-# run_id rides along so the detail drawer can ask for this decision's
-# transcript: session_id is caller-supplied and usually empty, and run_id is
-# then the only scope the llm-messages read has left (features/llm_messages).
+# run_id rides along so the detail drawer can scope the transcript read for
+# this decision: session_id is caller-supplied and usually empty, and run_id
+# is then the only scope the llm-messages read has left (features/llm_messages).
+# It scopes to the run, not to the one decision — the drawer picks the turn
+# around the decision's timestamp out of what comes back.
 _LIST_COLUMNS = (
     "event_id, occurred_at, received_at, agent_name, agent_version_id, "
     "session_id, user_id, tool_name, user_roles, deciding_role, "
