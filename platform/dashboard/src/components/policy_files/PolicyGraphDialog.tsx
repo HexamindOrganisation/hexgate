@@ -147,26 +147,30 @@ function HexNode({ id, data }: NodeProps<Node<NodeData>>) {
         viewBox="0 0 136 118"
         className="absolute inset-0"
         style={{
+          // color-mix (not a hex-alpha suffix) so the glow alpha works with the
+          // `var(--gr-*)` stroke value.
           filter: glow
-            ? `drop-shadow(0 0 ${glow}px ${k.stroke}${hovered ? "cc" : "44"})`
+            ? `drop-shadow(0 0 ${glow}px color-mix(in srgb, ${k.stroke} ${
+                hovered ? 80 : 27
+              }%, transparent))`
             : undefined,
           transition: "filter 140ms",
         }}
       >
+        {/* fill/stroke go through `style`, not presentation attributes — CSS
+            var() resolves in inline style but not in SVG attributes. */}
         <polygon
           points="34,6 102,6 136,59 102,112 34,112 0,59"
-          fill={fill}
-          stroke={stroke}
           strokeWidth={hovered ? 2.6 : 1.5}
-          style={{ transition: "fill 140ms, stroke 140ms" }}
+          style={{ fill, stroke, transition: "fill 140ms, stroke 140ms" }}
         />
         {hovered && (
           <polygon
             points="41.5,17.7 94.5,17.7 121,59 94.5,100.3 41.5,100.3 15,59"
             fill="none"
-            stroke={k.stroke}
             strokeWidth="1"
             opacity="0.7"
+            style={{ stroke: k.stroke }}
           />
         )}
       </svg>
@@ -658,7 +662,7 @@ function PolicyFlow({ graph }: { graph: PolicyGraph }) {
           showInteractive={false}
           style={{
             background: "hsl(var(--card))",
-            border: "1px solid rgba(255,255,255,0.08)",
+            border: "1px solid hsl(var(--border))",
             borderRadius: 8,
           }}
         />
