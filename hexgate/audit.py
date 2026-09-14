@@ -110,9 +110,13 @@ _REDACTED = "[REDACTED]"
 # look inside. In a ``gen_ai.*`` message a tool-call part carries the caller's
 # ``arguments``, and the raw OpenAI wire shape serializes them as a JSON
 # string, not an object — a string leaf, whose keys the substring match never
-# sees. Exact key names on purpose: parsing every string that happens to be
-# JSON would rewrite a user message whose content is JSON.
-TOOL_CALL_JSON_KEYS = frozenset({"arguments"})
+# sees. ``response`` is the same leaf on the way back: frameworks stringify a
+# tool's return value before appending it to the message list, so a tool that
+# serializes its own result lands a JSON string here, and a secret in it would
+# otherwise reach storage unblanked. Exact key names on purpose: parsing every
+# string that happens to be JSON would rewrite a user message whose content is
+# JSON.
+TOOL_CALL_JSON_KEYS = frozenset({"arguments", "response"})
 
 
 def _redact(

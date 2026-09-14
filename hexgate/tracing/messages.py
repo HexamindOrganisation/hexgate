@@ -63,8 +63,13 @@ LOG_MESSAGES_ENV = "HEXGATE_LOG_MESSAGES"
 _OFF_VALUES = frozenset({"0", "false", "no", "off"})
 
 
-def _log_messages_enabled() -> bool:
-    """True unless ``HEXGATE_LOG_MESSAGES`` is set to a falsy value."""
+def log_messages_enabled() -> bool:
+    """True unless ``HEXGATE_LOG_MESSAGES`` is set to a falsy value.
+
+    Public because an adapter hook has to know *before* it stashes an input
+    list and converts it, not only at the :func:`emit_llm_messages` call below
+    — otherwise an opted-out process still pays for a log it does not keep.
+    """
     return os.environ.get(LOG_MESSAGES_ENV, "").strip().lower() not in _OFF_VALUES
 
 
@@ -232,7 +237,7 @@ def emit_llm_messages(
     for decisions and usage, since the registry is shared.
     """
     try:
-        if not _log_messages_enabled():
+        if not log_messages_enabled():
             return
         sender = configure_messages_sender(api_key)
         if sender is None:
