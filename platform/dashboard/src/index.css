@@ -158,6 +158,31 @@
   background-color: hsl(var(--foreground));
 }
 
+/* Like `scrollbar-thin`, but the thumb is invisible until the element is
+   hovered — for dense strips (e.g. the editor tab bar) where a persistent
+   scrollbar would be visual noise. Still scrolls by wheel/trackpad when idle. */
+.scrollbar-hover {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+.scrollbar-hover:hover {
+  scrollbar-color: hsl(var(--accent-foreground)) transparent;
+}
+.scrollbar-hover::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+.scrollbar-hover::-webkit-scrollbar-track {
+  background: transparent;
+}
+.scrollbar-hover::-webkit-scrollbar-thumb {
+  background-color: transparent;
+  border-radius: 3px;
+}
+.scrollbar-hover:hover::-webkit-scrollbar-thumb {
+  background-color: hsl(var(--accent-foreground));
+}
+
 /* React Flow zoom/fit controls — the default buttons are white, which reads as
    ugly boxes on the policy graph's near-black canvas. Dark them to match. The
    graph is the only React Flow surface in the app. */

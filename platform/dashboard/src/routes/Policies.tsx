@@ -279,7 +279,7 @@ export function PoliciesPage() {
                 />
               </div>
               <div className="flex flex-col overflow-hidden bg-editor">
-                <div className="scrollbar-thin flex shrink-0 items-center gap-1 overflow-x-auto px-2 py-1">
+                <div className="scrollbar-hover flex shrink-0 items-center gap-1 overflow-x-auto px-2 py-1">
                   {activeTabs.map((tab) => {
                     const isActive = active === tab;
                     const isDirty = dirtyKeys.has(tab);
@@ -291,7 +291,9 @@ export function PoliciesPage() {
                         className={cn(
                           // Only the active tab carries a rounded border;
                           // inactive tabs are borderless and muted.
-                          "group flex max-w-[180px] min-w-0 cursor-pointer items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs transition-colors",
+                          // shrink-0 keeps tabs at their natural width so the
+                          // row overflows (and scrolls) instead of squishing.
+                          "group flex max-w-[180px] min-w-0 shrink-0 cursor-pointer items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs transition-colors",
                           isActive
                             ? "border-border text-foreground"
                             : "border-transparent text-muted-foreground hover:text-foreground",
