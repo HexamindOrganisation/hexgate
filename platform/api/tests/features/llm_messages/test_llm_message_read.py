@@ -50,7 +50,6 @@ _LIST_COLUMN_NAMES = [
     "output_messages",
     "system_instructions",
     "run_id",
-    "total_matches",
 ]
 
 _INPUT = json.dumps([{"role": "user", "parts": [{"type": "text", "content": "hi"}]}])
@@ -76,17 +75,23 @@ def _stored_row(**overrides) -> list:
         "output_messages": _OUTPUT,
         "system_instructions": "",
         "run_id": ZERO_RUN_ID,
-        "total_matches": 1,
     }
     base.update(overrides)
     return [base[name] for name in _LIST_COLUMN_NAMES]
 
 
-def _client_returning(*rows: list) -> MagicMock:
+def _client_returning(*rows: list, total: int | None = None) -> MagicMock:
+    """A client whose two queries answer in order: the page, then the count."""
     client = MagicMock()
-    client.query.return_value.result_rows = list(rows)
-    client.query.return_value.column_names = _LIST_COLUMN_NAMES
+    page = MagicMock(result_rows=list(rows), column_names=_LIST_COLUMN_NAMES)
+    count = MagicMock(result_rows=[[len(rows) if total is None else total]])
+    client.query.side_effect = [page, count]
     return client
+
+
+def _page_call(client: MagicMock):
+    """The first of the two queries — the one carrying the rows."""
+    return client.query.call_args_list[0]
 
 
 # ---------------------------------------------------------------------------
@@ -95,9 +100,9 @@ def _client_returning(*rows: list) -> MagicMock:
 
 
 def test_list_llm_messages_happy_path() -> None:
-    """One scan returns the page and its unpaginated total, with the JSON
-    content columns decoded back to objects."""
-    client = _client_returning(_stored_row(total_matches=3))
+    """The page query returns the rows with their JSON content decoded, and a
+    second count() query supplies the unpaginated total."""
+    client = _client_returning(_stored_row(), total=3)
 
     page = list_llm_messages(client, project_id="p1", session_id="sess_1")
 
@@ -108,7 +113,7 @@ def test_list_llm_messages_happy_path() -> None:
     assert row["output_messages"] == json.loads(_OUTPUT)
     assert row["system_instructions"] is None
     assert row["turn_key"] == "run_1:researcher"
-    client.query.assert_called_once()
+    assert client.query.call_count == 2
 
 
 def test_list_llm_messages_scopes_to_project_and_session() -> None:
@@ -118,8 +123,8 @@ def test_list_llm_messages_scopes_to_project_and_session() -> None:
 
     list_llm_messages(client, project_id="p1", session_id="sess_1")
 
-    sql = client.query.call_args.args[0]
-    params = client.query.call_args.kwargs["parameters"]
+    sql = _page_call(client).args[0]
+    params = _page_call(client).kwargs["parameters"]
     assert "project_id = {pid:String}" in sql
     assert "session_id = {session_id:String}" in sql
     assert params["pid"] == "p1" and params["session_id"] == "sess_1"
@@ -134,8 +139,8 @@ def test_when_only_a_run_id_is_given_then_it_scopes_the_read() -> None:
 
     list_llm_messages(client, project_id="p1", run_id=run_id)
 
-    sql = client.query.call_args.args[0]
-    params = client.query.call_args.kwargs["parameters"]
+    sql = _page_call(client).args[0]
+    params = _page_call(client).kwargs["parameters"]
     assert "run_id = {run_id:UUID}" in sql
     assert params["run_id"] == run_id
     assert "session_id" not in params
@@ -149,7 +154,7 @@ def test_when_both_scopes_are_given_then_both_are_applied() -> None:
 
     list_llm_messages(client, project_id="p1", session_id="sess_1", run_id=run_id)
 
-    sql = client.query.call_args.args[0]
+    sql = _page_call(client).args[0]
     assert "session_id = {session_id:String}" in sql
     assert "run_id = {run_id:UUID}" in sql
 
@@ -183,7 +188,7 @@ def test_list_llm_messages_orders_oldest_first() -> None:
 
     list_llm_messages(client, project_id="p1", session_id="sess_1")
 
-    sql = client.query.call_args.args[0]
+    sql = _page_call(client).args[0]
     assert "ORDER BY occurred_at, message_seq, event_id" in sql
     assert "DESC" not in sql
 
@@ -227,29 +232,28 @@ def test_when_content_is_not_json_then_it_is_returned_as_text() -> None:
     assert row["input_messages"] == "{not json"
 
 
-def test_when_page_past_the_end_then_total_falls_back_to_count() -> None:
-    """An empty page at offset > 0 carries no count() OVER () value, so the
-    total comes from a second plain count."""
-    client = MagicMock()
-    client.query.side_effect = [
-        MagicMock(result_rows=[], column_names=_LIST_COLUMN_NAMES),
-        MagicMock(result_rows=[[7]]),
-    ]
+def test_when_page_is_past_the_end_then_total_still_counts_the_match() -> None:
+    """An empty page at offset > 0 must still report how many rows exist, or
+    the caller cannot tell "past the end" from "nothing here"."""
+    client = _client_returning(total=7)
 
     page = list_llm_messages(client, project_id="p1", session_id="sess_1", offset=50)
 
     assert page["total"] == 7 and page["rows"] == []
-    assert client.query.call_count == 2
 
 
-def test_when_first_page_is_empty_then_the_fallback_count_is_skipped() -> None:
-    """offset=0 with no rows is a genuinely empty session — total is 0."""
+def test_when_the_count_query_runs_then_it_reads_no_content_column() -> None:
+    """The whole point of the second query: count() over the key columns is
+    cheap, while the window function it replaced forced every matching row's
+    256 KiB input_messages into memory before LIMIT applied."""
     client = _client_returning()
 
-    page = list_llm_messages(client, project_id="p1", session_id="sess_1")
+    list_llm_messages(client, project_id="p1", session_id="sess_1")
 
-    assert page["total"] == 0 and page["rows"] == []
-    client.query.assert_called_once()
+    page_sql, count_sql = (call.args[0] for call in client.query.call_args_list)
+    assert "count() OVER ()" not in page_sql
+    assert count_sql.lstrip().startswith("SELECT count() FROM")
+    assert "input_messages" not in count_sql
 
 
 def test_list_llm_messages_scopes_to_the_full_retention_window() -> None:
@@ -262,7 +266,7 @@ def test_list_llm_messages_scopes_to_the_full_retention_window() -> None:
 
     list_llm_messages(client, project_id="p1", session_id="sess_1")
 
-    since = client.query.call_args.kwargs["parameters"]["since"]
+    since = _page_call(client).kwargs["parameters"]["since"]
     assert before - RETENTION_WINDOW - timedelta(minutes=1) <= since
     assert since <= datetime.now(timezone.utc) - RETENTION_WINDOW + timedelta(minutes=1)
 
@@ -277,9 +281,16 @@ _READ_URL = f"{_READ_PATH}?session_id=sess_1"
 
 @pytest.fixture
 def fake_clickhouse() -> MagicMock:
+    """Answers the page query then the count query, like the real client."""
     client = MagicMock()
-    client.query.return_value.result_rows = []
-    client.query.return_value.column_names = _LIST_COLUMN_NAMES
+    client.rows: list[list] = []
+
+    def _answer(sql, *_a, **_kw):
+        if sql.lstrip().startswith("SELECT count()"):
+            return MagicMock(result_rows=[[len(client.rows)]])
+        return MagicMock(result_rows=client.rows, column_names=_LIST_COLUMN_NAMES)
+
+    client.query.side_effect = _answer
     return client
 
 
@@ -363,7 +374,10 @@ def test_llm_messages_read_member_is_200(
     r = client.get(_READ_URL)
     assert r.status_code == 200, r.text
     assert r.json() == {"rows": [], "total": 0, "limit": 50, "offset": 0}
-    assert fake_clickhouse.query.call_args.kwargs["parameters"]["pid"] == "proj_test"
+    assert (
+        fake_clickhouse.query.call_args_list[0].kwargs["parameters"]["pid"]
+        == "proj_test"
+    )
 
 
 def test_llm_messages_read_returns_the_page(
@@ -372,9 +386,7 @@ def test_llm_messages_read_returns_the_page(
     """A stored row round-trips through LlmMessageRow: content decoded, flags
     as booleans, an absent run_id as null."""
     app.dependency_overrides[require_org_member] = lambda: MagicMock()
-    fake_clickhouse.query.return_value.result_rows = [
-        _stored_row(truncated=1, total_matches=1)
-    ]
+    fake_clickhouse.rows = [_stored_row(truncated=1)]
 
     r = client.get(_READ_URL)
 
@@ -418,7 +430,7 @@ def test_when_the_session_is_blank_but_a_run_id_is_given_then_it_serves(
     r = client.get(f"{_READ_PATH}?session_id=&run_id={run_id}")
 
     assert r.status_code == 200, r.text
-    params = fake_clickhouse.query.call_args.kwargs["parameters"]
+    params = fake_clickhouse.query.call_args_list[0].kwargs["parameters"]
     assert params["run_id"] == run_id and "session_id" not in params
 
 
@@ -433,7 +445,9 @@ def test_when_only_a_run_id_is_given_then_the_endpoint_serves_it(
     r = client.get(f"{_READ_PATH}?run_id={run_id}")
 
     assert r.status_code == 200, r.text
-    assert fake_clickhouse.query.call_args.kwargs["parameters"]["run_id"] == run_id
+    assert (
+        fake_clickhouse.query.call_args_list[0].kwargs["parameters"]["run_id"] == run_id
+    )
 
 
 def test_when_the_run_id_is_malformed_then_422(
@@ -455,7 +469,10 @@ def test_when_limit_is_over_the_cap_then_it_is_clamped(
     r = client.get(f"{_READ_URL}&limit=100000")
 
     assert r.status_code == 200, r.text
-    assert fake_clickhouse.query.call_args.kwargs["parameters"]["lim"] == MAX_PAGE_SIZE
+    assert (
+        fake_clickhouse.query.call_args_list[0].kwargs["parameters"]["lim"]
+        == MAX_PAGE_SIZE
+    )
 
 
 def test_when_limit_and_offset_are_negative_then_they_are_floored(
@@ -466,7 +483,7 @@ def test_when_limit_and_offset_are_negative_then_they_are_floored(
     r = client.get(f"{_READ_URL}&limit=-5&offset=-5")
 
     assert r.status_code == 200, r.text
-    params = fake_clickhouse.query.call_args.kwargs["parameters"]
+    params = fake_clickhouse.query.call_args_list[0].kwargs["parameters"]
     assert params["lim"] == 1 and params["off"] == 0
 
 
