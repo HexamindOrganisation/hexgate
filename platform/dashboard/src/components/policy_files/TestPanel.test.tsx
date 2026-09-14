@@ -101,6 +101,23 @@ describe("TestPanel", () => {
     expect(sent.role).toBe("billing");
   });
 
+  it("degrades (no crash) on an unknown outcome from the server", async () => {
+    // Schema drift: an outcome the client's OUTCOME map doesn't know.
+    stubTest({
+      outcome: "quarantine",
+      reason: "held for review",
+      violations: [],
+      hint: null,
+    } as unknown as PolicyTestResponse);
+    renderPanel();
+    await userEvent.click(screen.getByRole("button", { name: /check/i }));
+    // Renders the raw outcome (uppercased) instead of throwing.
+    await waitFor(() =>
+      expect(screen.getByText("QUARANTINE")).toBeInTheDocument(),
+    );
+    expect(screen.getByText("held for review")).toBeInTheDocument();
+  });
+
   it("is disabled and prompts to declare a role when none exist", () => {
     renderPanel({ roleNames: [] });
     expect(screen.getByText(/Declare a role/i)).toBeInTheDocument();

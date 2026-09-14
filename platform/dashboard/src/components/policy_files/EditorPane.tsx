@@ -114,7 +114,9 @@ export function EditorPane({
   const handleChange = (next: string) => {
     setDraft(next);
     setSaveError(null);
-    onPersist(name, next, next !== saved);
+    // A new file is dirty until its first Save even when its buffer is empty —
+    // mirror the `dirty` rule above so the tree's unsaved dot stays in sync.
+    onPersist(name, next, isNew || next !== saved);
   };
 
   // Semantic lints for THIS file, anchored to the tool's line. Whole-file and

@@ -206,7 +206,13 @@ export function TestPanel({
 }
 
 function Verdict({ verdict }: { verdict: PolicyTestResponse }) {
-  const spec = OUTCOME[verdict.outcome];
+  // Fall back to the deny styling for any outcome the client doesn't know (a
+  // newer server verdict / schema drift) rather than crashing the panel.
+  const spec = OUTCOME[verdict.outcome] ?? {
+    label: verdict.outcome.toUpperCase().replace(/_/g, " "),
+    className: OUTCOME.deny.className,
+    Icon: OUTCOME.deny.Icon,
+  };
   const { Icon } = spec;
   return (
     <div className={cn("rounded-md border p-3 space-y-2", spec.className)}>
