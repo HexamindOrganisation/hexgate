@@ -9,7 +9,7 @@ import asyncio
 from uuid import UUID
 
 from clickhouse_connect.driver.exceptions import ClickHouseError
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException
 
 from hexgate_api.deps.clickhouse import _audit_unavailable, require_clickhouse
 from hexgate_api.deps.org import require_org_member
@@ -35,12 +35,19 @@ router = APIRouter()
 )
 async def api_llm_messages(
     project_id: str,
-    # Either scope, or both; neither is a 422. Two because ``session_id`` is
-    # caller-supplied and most SDK users never set it, so a session-only read
-    # would leave their transcripts unreachable — see ``list_llm_messages``.
-    # Both present narrows to the intersection, which is what a caller holding
-    # both means; there is no reading under which it should widen.
-    session_id: str | None = Query(default=None, min_length=1),
+    # Either scope, or both; neither is a 422 (``NoMessageScope``). Two
+    # because ``session_id`` is caller-supplied and most SDK users never set
+    # it, so a session-only read would leave their transcripts unreachable —
+    # see ``list_llm_messages``. Both present narrows to the intersection,
+    # which is what a caller holding both means; there is no reading under
+    # which it should widen.
+    #
+    # No ``min_length`` on session_id: "" is its real "no session" value all
+    # the way down, not a malformed input, exactly as the zero UUID is for
+    # run_id. A drawer forwarding both fields off a decision row sends
+    # ?session_id=&run_id=<uuid> — the very case the run scope exists for —
+    # and a length constraint would 422 it before the scope check runs.
+    session_id: str | None = None,
     run_id: UUID | None = None,
     limit: int = 50,
     offset: int = 0,
