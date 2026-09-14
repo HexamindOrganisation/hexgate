@@ -75,6 +75,14 @@ export function FileTree({
     setAdding(true);
   }
 
+  // Open the new-folder input, pre-filled with `prefix/` so the folder is
+  // created under `prefix` (empty prefix → a top-level folder).
+  function startAddFolder(prefix = "") {
+    setAdding(false);
+    setFolderName(prefix ? `${prefix}/` : "");
+    setAddingFolder(true);
+  }
+
   function submitNew() {
     const name = newName.trim();
     setAdding(false);
@@ -122,6 +130,7 @@ export function FileTree({
     onSelect,
     onDelete: canManage ? remove : undefined,
     onNewInFolder: canManage ? startAdd : undefined,
+    onNewFolderInFolder: canManage ? startAddFolder : undefined,
     onRemoveFolder: canManage ? onRemoveFolder : undefined,
     onRename: canManage ? onRename : undefined,
     onMove: canManage ? move : undefined,
@@ -139,11 +148,7 @@ export function FileTree({
               variant="ghost"
               className="size-6"
               title="New folder"
-              onClick={() => {
-                setAdding(false);
-                setFolderName("");
-                setAddingFolder(true);
-              }}
+              onClick={() => startAddFolder()}
             >
               <FolderPlus className="size-3.5" />
             </Button>
@@ -236,6 +241,7 @@ interface TreeActions {
   onSelect: (name: string) => void;
   onDelete?: (name: string) => void;
   onNewInFolder?: (prefix: string) => void;
+  onNewFolderInFolder?: (prefix: string) => void;
   onRemoveFolder?: (prefix: string) => void;
   onRename?: (oldName: string, newName: string) => void;
   onMove?: (oldName: string, destPrefix: string) => void;
@@ -290,6 +296,18 @@ function TreeRow({
             )}
             <span className="truncate font-medium">{node.name}</span>
           </button>
+          {actions.onNewFolderInFolder && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                actions.onNewFolderInFolder?.(node.prefix);
+              }}
+              title={`New folder in ${node.prefix}`}
+              className="shrink-0 rounded p-0.5 opacity-0 hover:bg-accent group-hover:opacity-100"
+            >
+              <FolderPlus className="size-3" />
+            </button>
+          )}
           {actions.onNewInFolder && (
             <button
               onClick={(e) => {

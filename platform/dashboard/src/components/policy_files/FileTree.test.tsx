@@ -145,12 +145,21 @@ describe("FileTree", () => {
 
   it("creates a folder via the new-folder input", async () => {
     const { onAddFolder } = renderTree();
-    await userEvent.click(screen.getByRole("button", { name: /new folder/i }));
+    await userEvent.click(screen.getByRole("button", { name: "New folder" }));
     await userEvent.type(
       screen.getByLabelText("New folder name"),
       "team_a{Enter}",
     );
     expect(onAddFolder).toHaveBeenCalledWith("team_a");
+  });
+
+  it("creates a subfolder via a folder's new-folder button", async () => {
+    const { onAddFolder } = renderTree(); // caps/ exists (holds refunds.yaml)
+    await userEvent.click(screen.getByTitle("New folder in caps"));
+    const input = screen.getByLabelText("New folder name");
+    expect(input).toHaveValue("caps/"); // pre-filled with the parent prefix
+    await userEvent.type(input, "archived{Enter}");
+    expect(onAddFolder).toHaveBeenCalledWith("caps/archived");
   });
 
   it("renders a remembered empty folder and lets it be removed", async () => {
