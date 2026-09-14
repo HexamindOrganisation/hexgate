@@ -74,13 +74,10 @@
   --semantic-approval: 38 92% 55%;
   --semantic-approval-soft: 38 60% 22%;
 
-  /* Code-pane ground — intentionally always dark (matches the CodeMirror
-     editor, which is dark in every theme). NOTE: `bg-editor` surfaces carry
-     theme-aware text (text-foreground / -muted), so they only read correctly
-     because the app is force-dark (main.tsx always adds `.dark`). Same coupling
-     for the `.scrollbar-hover` thumb (--accent-foreground). If a light theme is
-     ever enabled, give these surfaces fixed light-on-dark colors here. */
-  --editor: 222 33% 6%;
+  /* Code-pane ground — mode-aware so `bg-editor` surfaces (tabs/tree/inspector)
+     track the CodeMirror editor and read correctly under theme-aware text in
+     either mode. Light here; the dark value is in `.dark`. */
+  --editor: 240 20% 98%;
 }
 
 .dark {
@@ -110,6 +107,22 @@
   --semantic-deny-soft: 0 50% 22%;
   --semantic-approval: 38 92% 55%;
   --semantic-approval-soft: 38 60% 22%;
+
+  /* Code-pane ground — dark variant (matches the dark CodeMirror editor). */
+  --editor: 222 33% 6%;
+}
+
+/* ── Accent scheme (blue default / plum) ──────────────────────────────────
+   The scheme axis only swaps the accent hue (226 blue → 313 plum); the mode
+   axis above owns every neutral. Applied via `data-scheme="plum"` on <html>.
+   Per-mode so plum has its own light and dark accent, mirroring blue. */
+[data-scheme="plum"] {
+  --primary: 313 62% 48%;
+  --ring: 313 62% 48%;
+}
+.dark[data-scheme="plum"] {
+  --primary: 313 75% 68%;
+  --ring: 313 75% 68%;
 }
 
 @layer base {

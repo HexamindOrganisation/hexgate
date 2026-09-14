@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import CodeMirror from "@uiw/react-codemirror";
 import { yaml } from "@codemirror/lang-yaml";
 import { CheckCircle2, MinusCircle, Play, ShieldAlert } from "lucide-react";
@@ -10,7 +10,8 @@ import {
   type PolicyTestResponse,
 } from "@/lib/api";
 import { useTestPolicy } from "@/lib/policy_files";
-import { policyEditorThemeTransparent } from "@/components/PolicyEditor/theme";
+import { codeThemeTransparent } from "@/components/PolicyEditor/theme";
+import { useIsDark } from "@/lib/theme";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
@@ -72,6 +73,8 @@ export function TestPanel({
   const [call, setCall] = useState<string>(SAMPLE);
   const [parseError, setParseError] = useState<string | null>(null);
   const test = useTestPolicy(projectId);
+  const dark = useIsDark();
+  const jsonTheme = useMemo(() => codeThemeTransparent(dark), [dark]);
 
   // Keep a valid role selected as the resolved roles load / change.
   const effectiveRole = roleNames.includes(role) ? role : (roleNames[0] ?? "");
@@ -171,7 +174,7 @@ export function TestPanel({
             onChange={setCall}
             editable={!disabled}
             extensions={JSON_EXTENSIONS}
-            theme={policyEditorThemeTransparent}
+            theme={jsonTheme}
             basicSetup={JSON_BASIC_SETUP}
             height="100%"
             className="text-xs"
