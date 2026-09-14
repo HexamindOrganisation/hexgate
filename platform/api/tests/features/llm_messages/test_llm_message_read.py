@@ -13,7 +13,7 @@ from clickhouse_connect.driver.exceptions import OperationalError
 from fastapi.testclient import TestClient
 
 from hexgate_api.core import keystore as keystore_mod
-from hexgate_api.core.clickhouse import ZERO_RUN_ID
+from hexgate_api.core.clickhouse import ZERO_RUN_ID, BatchItem
 from hexgate_api.core.db import get_session
 from hexgate_api.core.keystore import FileKeyStore
 from hexgate_api.deps.clickhouse import require_clickhouse
@@ -22,9 +22,11 @@ from hexgate_api.deps.org import require_org_member
 from hexgate_api.features.llm_messages.service import (
     MAX_PAGE_SIZE,
     NoMessageScope,
+    insert_llm_messages_batch,
     list_llm_messages,
 )
 from hexgate_api.main import app
+from hexgate_api.schemas import LlmMessageEvent
 from hexgate_api.query_scope import RETENTION_WINDOW
 
 # ---------------------------------------------------------------------------
@@ -462,3 +464,117 @@ def test_when_clickhouse_is_down_then_503(
     r = client.get(_READ_URL)
 
     assert r.status_code == 503
+
+
+# ---------------------------------------------------------------------------
+# Integration — requires `make clickhouse-up` first; opt-in via marker
+# ---------------------------------------------------------------------------
+
+
+def _event(**overrides) -> LlmMessageEvent:
+    base = {
+        "event_id": str(uuid.uuid4()),
+        "occurred_at": datetime.now(timezone.utc),
+        "agent_name": "researcher",
+        "model": "gpt-4o",
+        "turn_key": "run_1:researcher",
+        "message_seq": 0,
+        "input_messages": _INPUT,
+        "output_messages": _OUTPUT,
+    }
+    return LlmMessageEvent(**{**base, **overrides})
+
+
+@pytest.mark.integration
+def test_list_llm_messages_round_trip() -> None:
+    """Write through the real batch insert, read back through the real SELECT.
+
+    The mocked tests above assert on the SQL *text* — they never ask
+    ClickHouse to run it, so a wrong column name or a parameter type the
+    driver binds differently (``{run_id:UUID}``) passes every one of them and
+    500s in production. This is the test that executes the statement.
+    """
+    from hexgate_api.core.clickhouse import get_clickhouse as real_get_clickhouse
+
+    clickhouse_client = real_get_clickhouse()
+    project_id = f"test_proj_{uuid.uuid4().hex[:8]}"
+    run_id = uuid.uuid4()
+    start = datetime.now(timezone.utc).replace(microsecond=0)
+
+    # Two rows in one named session, plus one from a run whose caller never set
+    # a session id — the common case, reachable only by run_id.
+    events = [
+        _event(session_id="sess_1", message_seq=0, occurred_at=start, run_id=run_id),
+        _event(
+            session_id="sess_1",
+            message_seq=1,
+            occurred_at=start + timedelta(seconds=1),
+            run_id=run_id,
+            resynced=True,
+            truncated=True,
+            system_instructions=json.dumps({"content": "be terse"}),
+        ),
+        _event(
+            message_seq=0, occurred_at=start + timedelta(seconds=2), run_id=run_id
+        ),  # session_id defaults to ""
+    ]
+    insert_llm_messages_batch(
+        clickhouse_client,
+        [
+            BatchItem(event, project_id=project_id, agent_version_id="ver_int")
+            for event in events
+        ],
+    )
+
+    try:
+        by_session = list_llm_messages(
+            clickhouse_client, project_id=project_id, session_id="sess_1"
+        )
+        assert by_session["total"] == 2
+        first, second = by_session["rows"]
+        # Ascending, so the transcript reads forwards.
+        assert [first["message_seq"], second["message_seq"]] == [0, 1]
+        assert first["input_messages"] == json.loads(_INPUT)
+        assert first["output_messages"] == json.loads(_OUTPUT)
+        assert first["system_instructions"] is None  # "" -> None
+        assert second["system_instructions"] == {"content": "be terse"}
+        assert (first["resynced"], first["truncated"]) == (0, 0)
+        assert (second["resynced"], second["truncated"]) == (1, 1)
+        assert first["run_id"] == run_id
+        assert first["agent_version_id"] == "ver_int"
+        assert first["received_at"] is not None  # server-stamped column default
+
+        # The run scope reaches all three, including the session-less row that
+        # a session-only endpoint would have stranded for its whole TTL.
+        by_run = list_llm_messages(
+            clickhouse_client, project_id=project_id, run_id=run_id
+        )
+        assert by_run["total"] == 3
+        assert [row["session_id"] for row in by_run["rows"]] == ["sess_1", "sess_1", ""]
+
+        # Both scopes narrow to the intersection.
+        both = list_llm_messages(
+            clickhouse_client,
+            project_id=project_id,
+            session_id="sess_1",
+            run_id=run_id,
+        )
+        assert both["total"] == 2
+
+        # Paging: limit/offset walk the same order the full read returned.
+        page = list_llm_messages(
+            clickhouse_client, project_id=project_id, run_id=run_id, limit=1, offset=2
+        )
+        assert page["total"] == 3
+        assert page["rows"][0]["event_id"] == by_run["rows"][2]["event_id"]
+
+        # Past the end: no rows to carry count() OVER (), so the fallback runs.
+        past_end = list_llm_messages(
+            clickhouse_client, project_id=project_id, run_id=run_id, limit=1, offset=99
+        )
+        assert past_end["rows"] == [] and past_end["total"] == 3
+    finally:
+        clickhouse_client.command(
+            "ALTER TABLE llm_message DELETE WHERE project_id = {pid:String}",
+            parameters={"pid": project_id},
+        )
