@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from contextlib import AbstractAsyncContextManager, AbstractContextManager
+from contextlib import asynccontextmanager, contextmanager
 from typing import TYPE_CHECKING, Any, AsyncIterator, Iterator, Literal
 
 from langchain_core.runnables import RunnableConfig
@@ -71,18 +71,30 @@ class HexgateLangchainAgent:
         if self._ban_gate is not None:
             self._ban_gate.check(context)
 
-    def _abind(
-        self, context: HexgateContext, method: str
-    ) -> AbstractAsyncContextManager[None]:
+    @asynccontextmanager
+    async def _abind(self, context: HexgateContext, method: str) -> AsyncIterator[None]:
         """Async run boundary — identity scope, run facts, Langfuse propagation.
-        See :func:`hexgate.adapters._common.abind`."""
-        return abind(context, self._agent_name, self._tag(method))
+        See :func:`hexgate.adapters._common.abind`.
 
-    def _bind(
-        self, context: HexgateContext, method: str
-    ) -> AbstractContextManager[None]:
+        The usage handler outlives the run (one instance per proxy, unlike the
+        OpenAI adapter's per-run hooks), so the run's transcript cursor is
+        dropped here on the way out — inside the scope, while the run facts
+        that name it are still bound.
+        """
+        async with abind(context, self._agent_name, self._tag(method)):
+            try:
+                yield
+            finally:
+                self._usage_handler.end_run()
+
+    @contextmanager
+    def _bind(self, context: HexgateContext, method: str) -> Iterator[None]:
         """Sync mirror of :meth:`_abind`."""
-        return bind(context, self._agent_name, self._tag(method))
+        with bind(context, self._agent_name, self._tag(method)):
+            try:
+                yield
+            finally:
+                self._usage_handler.end_run()
 
     @staticmethod
     def _tag(method: str) -> str:
