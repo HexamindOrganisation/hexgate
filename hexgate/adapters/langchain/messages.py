@@ -34,7 +34,24 @@ _ROLES = {
 }
 
 # Content-block types whose payload is plain text under a ``text`` key.
+# Just ``text``: the provider spellings the OpenAI adapter has to handle
+# (``output_text`` and friends) are normalised to this one by LangChain's own
+# block translators before a callback ever sees them.
 _TEXT_BLOCK_TYPES = frozenset({"text"})
+
+# Content-block types that restate a tool call the message already carries in
+# its standardized ``tool_calls`` — ``function_call`` is the OpenAI Responses
+# shape, ``tool_use`` Anthropic's, and ``tool_call``/``invalid_tool_call`` are
+# LangChain's own. Emitting the block *and* the standardized part would record
+# one call twice, under two different ids: the block carries the output-item id
+# (``fc_1``), the part the call id a later ``ToolMessage`` correlates on
+# (``call_1``), so a reader matching parts by id would see twice the calls that
+# happened, half of them never answered. ``server_tool_use``/``mcp_tool_use``
+# are deliberately absent — those the provider ran itself, so they never reach
+# ``tool_calls`` and carrying them through whole is the only record of them.
+_TOOL_CALL_BLOCK_TYPES = frozenset(
+    {"function_call", "tool_use", "tool_call", "invalid_tool_call"}
+)
 
 
 def _role(entry: dict[str, Any]) -> str:
@@ -65,6 +82,10 @@ def _content_parts(content: Any) -> list[dict[str, Any]]:
     Empty content yields no parts at all rather than one empty ``text`` part:
     an ``AIMessage`` that only calls a tool has ``content == ""``, and that is
     the common case, not an anomaly.
+
+    A block naming a tool call is dropped here because
+    :func:`_tool_call_parts` re-emits it from the standardized field — see
+    :data:`_TOOL_CALL_BLOCK_TYPES`.
     """
     if not content:
         return []
@@ -77,6 +98,8 @@ def _content_parts(content: Any) -> list[dict[str, Any]]:
             parts.append(text_part(raw))
         elif block.get("type") in _TEXT_BLOCK_TYPES and "text" in block:
             parts.append(text_part(block["text"]))
+        elif block.get("type") in _TOOL_CALL_BLOCK_TYPES:
+            continue
         else:
             parts.append(block)
     return parts
@@ -125,7 +148,9 @@ def input_message(message: Any) -> dict[str, Any]:
     A ``ToolMessage`` becomes a ``tool_call_response`` part rather than a text
     one: a decision event records that a tool was called but never what it
     returned, so this is the only place that value is stored, and it needs the
-    ``tool_call_id`` beside it to be matched back to the call.
+    ``tool_call_id`` beside it to be matched back to the call. ``name`` rides
+    along because the legacy ``FunctionMessage`` has no ``tool_call_id`` field
+    at all, which would otherwise leave its result unattributable.
     """
     entry = as_dict(message)
     if entry is None:
@@ -140,6 +165,7 @@ def input_message(message: Any) -> dict[str, Any]:
                 {
                     "type": "tool_call_response",
                     "id": entry.get("tool_call_id") or "",
+                    "name": entry.get("name") or "",
                     "response": entry.get("content"),
                 }
             ],
