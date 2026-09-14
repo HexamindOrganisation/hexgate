@@ -48,7 +48,7 @@ export function GraphPage() {
             type="button"
             onClick={() => navigate("/policies")}
             title="Edit the policy files"
-            className="inline-flex items-center gap-1.5 rounded-md border border-white/15 px-2 py-1 text-[11px] font-medium text-[#cfd6e4] transition-colors hover:bg-white/5"
+            className="inline-flex items-center gap-1.5 rounded-md border border-border px-2 py-1 text-[11px] font-medium text-foreground transition-colors hover:bg-accent"
           >
             <FileCode size={12} />
             Edit policies

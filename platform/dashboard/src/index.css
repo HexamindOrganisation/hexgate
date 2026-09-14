@@ -78,6 +78,32 @@
      track the CodeMirror editor and read correctly under theme-aware text in
      either mode. Light here; the dark value is in `.dark`. */
   --editor: 240 20% 98%;
+
+  /* Policy-graph palette (light). Per node kind: fill / stroke / text / tag,
+     plus a dimmed (receded) variant and the background dot color. The dark
+     values are in `.dark`; the graph reads these as CSS vars so it re-themes
+     with no re-render. Canvas + edge-label grounds use `--editor` directly. */
+  --gr-dots: #d7dce6;
+  --gr-agent-fill: #f4eaf5;
+  --gr-agent-stroke: #a855c7;
+  --gr-agent-text: #4a2545;
+  --gr-agent-tag: #8b4d80;
+  --gr-tool-fill: #eef1f5;
+  --gr-tool-stroke: rgba(0, 0, 0, 0.22);
+  --gr-tool-text: #2a2a3c;
+  --gr-tool-tag: #6b7280;
+  --gr-mcp-fill: #e3f2f5;
+  --gr-mcp-stroke: #0e7490;
+  --gr-mcp-text: #124453;
+  --gr-mcp-tag: #0e7490;
+  --gr-role-fill: #e8effb;
+  --gr-role-stroke: rgba(59, 91, 158, 0.55);
+  --gr-role-text: #1e3a6e;
+  --gr-role-tag: #3b5b9e;
+  --gr-dim-fill: #eff0f4;
+  --gr-dim-stroke: rgba(0, 0, 0, 0.06);
+  --gr-dim-text: #a8a8b4;
+  --gr-dim-tag: #c4c4d0;
 }
 
 .dark {
@@ -110,6 +136,29 @@
 
   /* Code-pane ground — dark variant (matches the dark CodeMirror editor). */
   --editor: 222 33% 6%;
+
+  /* Policy-graph palette (dark) — the original near-black node aesthetic. */
+  --gr-dots: #1b2233;
+  --gr-agent-fill: #271826;
+  --gr-agent-stroke: #b57aa8;
+  --gr-agent-text: #f0e0ec;
+  --gr-agent-tag: #c79bbb;
+  --gr-tool-fill: #15181f;
+  --gr-tool-stroke: rgba(255, 255, 255, 0.28);
+  --gr-tool-text: #d3dae6;
+  --gr-tool-tag: #8a93a3;
+  --gr-mcp-fill: #0d2226;
+  --gr-mcp-stroke: #3fb6c8;
+  --gr-mcp-text: #c7f1f6;
+  --gr-mcp-tag: #79cfda;
+  --gr-role-fill: #121a2e;
+  --gr-role-stroke: rgba(109, 159, 240, 0.55);
+  --gr-role-text: #cfe0fb;
+  --gr-role-tag: #9fb6e6;
+  --gr-dim-fill: #0c0f16;
+  --gr-dim-stroke: rgba(255, 255, 255, 0.07);
+  --gr-dim-text: #3f4550;
+  --gr-dim-tag: #2f343d;
 }
 
 /* ── Accent scheme (blue default / plum) ──────────────────────────────────
