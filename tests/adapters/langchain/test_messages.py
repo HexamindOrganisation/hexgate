@@ -176,6 +176,63 @@ def test_when_a_content_block_restates_a_tool_call_then_it_is_not_emitted_twice(
     ]
 
 
+def test_when_a_tool_call_block_was_not_promoted_then_it_is_kept() -> None:
+    """Dropping by block *type* would lose the call entirely whenever nothing
+    promoted it into the standardized field — an un-translated provider shape,
+    a hand-built message, a transcript replayed from a checkpointer. The block
+    is then the only record there is."""
+    block = {
+        "type": "function_call",
+        "call_id": "call_1",
+        "id": "fc_1",
+        "name": "get_weather",
+        "arguments": '{"city": "Paris"}',
+    }
+
+    assert input_message(AIMessage(content=[block]))["parts"] == [block]
+
+
+def test_when_only_one_of_two_tool_call_blocks_was_promoted_then_both_survive() -> None:
+    """The drop is per call id, not per message: a partially-translated
+    message must not lose the half that has no standardized counterpart."""
+    promoted = {
+        "type": "function_call",
+        "call_id": "call_1",
+        "id": "fc_1",
+        "name": "get_weather",
+        "arguments": "{}",
+    }
+    orphan = {**promoted, "call_id": "call_2", "id": "fc_2"}
+    message = AIMessage(
+        content=[promoted, orphan],
+        tool_calls=[
+            {"name": "get_weather", "args": {}, "id": "call_1", "type": "tool_call"}
+        ],
+    )
+
+    assert [part["type"] for part in input_message(message)["parts"]] == [
+        "function_call",
+        "tool_call",
+    ]
+
+
+def test_when_neither_the_call_nor_the_block_has_an_id_then_it_is_still_one_part() -> (
+    None
+):
+    """``ToolCall.id`` is ``str | None``. Matching on a truthy id would leave
+    an id-less block matching nothing and going out beside the part built from
+    the very same call — two ``tool_call`` parts, same name, no id to tell them
+    apart, which is the double-record this rule exists to prevent."""
+    message = AIMessage(
+        content=[{"type": "tool_use", "name": "get_weather", "input": {}}],
+        tool_calls=[
+            {"name": "get_weather", "args": {}, "id": None, "type": "tool_call"}
+        ],
+    )
+
+    assert [part["type"] for part in input_message(message)["parts"]] == ["tool_call"]
+
+
 def test_when_a_content_block_is_a_provider_run_tool_then_it_is_carried_through() -> (
     None
 ):

@@ -39,16 +39,22 @@ _ROLES = {
 # block translators before a callback ever sees them.
 _TEXT_BLOCK_TYPES = frozenset({"text"})
 
-# Content-block types that restate a tool call the message already carries in
+# Content-block types that may restate a tool call the message also carries in
 # its standardized ``tool_calls`` — ``function_call`` is the OpenAI Responses
 # shape, ``tool_use`` Anthropic's, and ``tool_call``/``invalid_tool_call`` are
-# LangChain's own. Emitting the block *and* the standardized part would record
-# one call twice, under two different ids: the block carries the output-item id
+# LangChain's own. Emitting the block *and* the standardized part records one
+# call twice under two different ids: the block carries the output-item id
 # (``fc_1``), the part the call id a later ``ToolMessage`` correlates on
-# (``call_1``), so a reader matching parts by id would see twice the calls that
-# happened, half of them never answered. ``server_tool_use``/``mcp_tool_use``
-# are deliberately absent — those the provider ran itself, so they never reach
-# ``tool_calls`` and carrying them through whole is the only record of them.
+# (``call_1``), so a reader matching parts by id sees twice the calls that
+# happened, half of them never answered.
+#
+# "May" is the whole point — being one of these types is not enough to drop a
+# block, only being one *whose call id the standardized field also carries*
+# (see :func:`_promoted_call_ids`). A block whose id is absent from it is the
+# only record of that call: an un-translated provider shape, a hand-built
+# message, a transcript replayed from a checkpointer. ``server_tool_use`` and
+# ``mcp_tool_use`` are not listed at all — the provider ran those itself, so
+# they never reach ``tool_calls`` and never look promoted.
 _TOOL_CALL_BLOCK_TYPES = frozenset(
     {"function_call", "tool_use", "tool_call", "invalid_tool_call"}
 )
@@ -70,7 +76,29 @@ def _role(entry: dict[str, Any]) -> str:
     return _ROLES.get(kind, "user")
 
 
-def _content_parts(content: Any) -> list[dict[str, Any]]:
+def _promoted_call_ids(entry: dict[str, Any]) -> frozenset[str]:
+    """The call ids :func:`_tool_call_parts` will emit for this message.
+
+    Read off the standardized fields rather than assumed from a block's type,
+    so dropping a block is conditional on something else actually recording
+    that call. A block's id lives under ``call_id`` on the OpenAI Responses
+    shape and under ``id`` on Anthropic's and LangChain's own.
+
+    A missing id is normalised to ``""`` on both sides rather than filtered
+    out: ``ToolCall.id`` is ``str | None`` in langchain_core, and dropping
+    those from the set would leave an id-less block matching nothing and going
+    out beside the part built from the very same call — two ``tool_call``
+    parts with the same name and no id to tell them apart, which is the exact
+    double-record this rule exists to prevent.
+    """
+    return frozenset(
+        call.get("id") or ""
+        for calls in (entry.get("tool_calls"), entry.get("invalid_tool_calls"))
+        for call in calls or []
+    )
+
+
+def _content_parts(content: Any, promoted: frozenset[str]) -> list[dict[str, Any]]:
     """A message's ``content`` as GenAI parts.
 
     ``content`` is either a bare string or a list of blocks, each a string or a
@@ -83,9 +111,10 @@ def _content_parts(content: Any) -> list[dict[str, Any]]:
     an ``AIMessage`` that only calls a tool has ``content == ""``, and that is
     the common case, not an anomaly.
 
-    A block naming a tool call is dropped here because
-    :func:`_tool_call_parts` re-emits it from the standardized field — see
-    :data:`_TOOL_CALL_BLOCK_TYPES`.
+    A block naming a tool call whose id is in ``promoted`` is dropped here,
+    because :func:`_tool_call_parts` re-emits that call from the standardized
+    field — see :data:`_TOOL_CALL_BLOCK_TYPES`. One that is not promoted stays:
+    nothing else would record it.
     """
     if not content:
         return []
@@ -98,7 +127,10 @@ def _content_parts(content: Any) -> list[dict[str, Any]]:
             parts.append(text_part(raw))
         elif block.get("type") in _TEXT_BLOCK_TYPES and "text" in block:
             parts.append(text_part(block["text"]))
-        elif block.get("type") in _TOOL_CALL_BLOCK_TYPES:
+        elif (
+            block.get("type") in _TOOL_CALL_BLOCK_TYPES
+            and (block.get("call_id") or block.get("id") or "") in promoted
+        ):
             continue
         else:
             parts.append(block)
@@ -172,7 +204,8 @@ def input_message(message: Any) -> dict[str, Any]:
         }
     return {
         "role": role,
-        "parts": _content_parts(entry.get("content")) + _tool_call_parts(entry),
+        "parts": _content_parts(entry.get("content"), _promoted_call_ids(entry))
+        + _tool_call_parts(entry),
     }
 
 
