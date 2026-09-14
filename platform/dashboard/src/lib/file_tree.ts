@@ -36,27 +36,38 @@ export interface FolderNode {
 
 export type TreeNode = FolderNode | FileLeaf;
 
-/** Insert one file into the child list, creating folders as needed. */
-function insert(children: TreeNode[], full: string): void {
-  const segments = full.split("/").filter(Boolean);
-  let level = children;
-  let prefix = "";
-  for (let i = 0; i < segments.length; i++) {
-    const seg = segments[i];
-    if (i === segments.length - 1) {
-      level.push({ type: "file", name: seg, full });
-      return;
-    }
-    prefix = prefix ? `${prefix}/${seg}` : seg;
+/** Walk/create the folder chain for `prefix`, returning the deepest folder's
+ * child list. `""` (or a bare name) resolves to the passed-in root list. */
+function folderChildren(roots: TreeNode[], prefix: string): TreeNode[] {
+  const segments = prefix.split("/").filter(Boolean);
+  let level = roots;
+  let acc = "";
+  for (const seg of segments) {
+    acc = acc ? `${acc}/${seg}` : seg;
     let folder = level.find(
       (n): n is FolderNode => n.type === "folder" && n.name === seg,
     );
     if (!folder) {
-      folder = { type: "folder", name: seg, prefix, children: [] };
+      folder = { type: "folder", name: seg, prefix: acc, children: [] };
       level.push(folder);
     }
     level = folder.children;
   }
+  return level;
+}
+
+/** Insert one file into the child list, creating folders as needed. */
+function insert(children: TreeNode[], full: string): void {
+  const slash = full.lastIndexOf("/");
+  const parent = slash === -1 ? "" : full.slice(0, slash);
+  const name = slash === -1 ? full : full.slice(slash + 1);
+  folderChildren(children, parent).push({ type: "file", name, full });
+}
+
+/** Whether a folder subtree contains any file (vs. only empty subfolders). An
+ * empty folder — one with no file descendants — is the only one safe to drop. */
+export function folderHasFiles(node: FolderNode): boolean {
+  return node.children.some((c) => c.type === "file" || folderHasFiles(c));
 }
 
 /** Folders before files, each group alphabetically, recursively — but the
@@ -75,10 +86,16 @@ function sortTree(nodes: TreeNode[], root: boolean): void {
   for (const n of nodes) if (n.type === "folder") sortTree(n.children, false);
 }
 
-/** Build the nested tree from the flat file list. */
-export function buildFileTree(files: PolicyFileRead[]): TreeNode[] {
+/** Build the nested tree from the flat file list. `emptyFolders` are prefixes
+ * with no file yet (see lib/empty_folders) — injected so a just-created folder
+ * still renders; a prefix that a file already lives under is a no-op. */
+export function buildFileTree(
+  files: PolicyFileRead[],
+  emptyFolders: string[] = [],
+): TreeNode[] {
   const roots: TreeNode[] = [];
   for (const f of files) insert(roots, f.name);
+  for (const prefix of emptyFolders) folderChildren(roots, prefix);
   sortTree(roots, true);
   return roots;
 }

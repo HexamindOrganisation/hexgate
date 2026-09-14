@@ -6,7 +6,7 @@
  */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { toast } from "sonner";
 
@@ -23,19 +23,26 @@ const FILES = [file("policy.yaml"), file("caps/refunds.yaml")];
 function renderTree(props: Partial<Parameters<typeof FileTree>[0]> = {}) {
   const onSelect = vi.fn();
   const onNewFile = vi.fn();
+  const onAddFolder = vi.fn();
+  const onRemoveFolder = vi.fn();
+  const onRename = vi.fn();
   renderWithProviders(
     <FileTree
       files={FILES}
+      emptyFolders={[]}
       selected="policy.yaml"
       onSelect={onSelect}
       onNewFile={onNewFile}
+      onAddFolder={onAddFolder}
+      onRemoveFolder={onRemoveFolder}
+      onRename={onRename}
       projectId="p1"
       canManage
       dirtyKeys={new Set(["caps/refunds.yaml"])}
       {...props}
     />,
   );
-  return { onSelect, onNewFile };
+  return { onSelect, onNewFile, onAddFolder, onRemoveFolder, onRename };
 }
 
 afterEach(() => vi.restoreAllMocks());
@@ -65,7 +72,7 @@ describe("FileTree", () => {
 
   it("adds a new file via the input + Enter", async () => {
     const { onNewFile } = renderTree();
-    await userEvent.click(screen.getByRole("button", { name: /new file/i }));
+    await userEvent.click(screen.getByRole("button", { name: "New file" }));
     const input = screen.getByPlaceholderText(/e\.g\./i);
     await userEvent.type(input, "caps/new.yaml{Enter}");
     expect(onNewFile).toHaveBeenCalledWith("caps/new.yaml");
@@ -73,7 +80,7 @@ describe("FileTree", () => {
 
   it("opens an existing file instead of re-creating it", async () => {
     const { onNewFile, onSelect } = renderTree();
-    await userEvent.click(screen.getByRole("button", { name: /new file/i }));
+    await userEvent.click(screen.getByRole("button", { name: "New file" }));
     const input = screen.getByPlaceholderText(/e\.g\./i);
     await userEvent.type(input, "policy.yaml{Enter}");
     expect(onNewFile).not.toHaveBeenCalled();
@@ -126,5 +133,85 @@ describe("FileTree", () => {
     await waitFor(() =>
       expect(errorToast).toHaveBeenCalledWith("still imported"),
     );
+  });
+
+  it("badges the entry file", () => {
+    renderTree();
+    expect(screen.getByText("entry")).toBeInTheDocument();
+    expect(
+      screen.getByTitle("The file the resolver starts from"),
+    ).toBeInTheDocument();
+  });
+
+  it("creates a folder via the new-folder input", async () => {
+    const { onAddFolder } = renderTree();
+    await userEvent.click(screen.getByRole("button", { name: /new folder/i }));
+    await userEvent.type(
+      screen.getByLabelText("New folder name"),
+      "team_a{Enter}",
+    );
+    expect(onAddFolder).toHaveBeenCalledWith("team_a");
+  });
+
+  it("renders a remembered empty folder and lets it be removed", async () => {
+    const { onRemoveFolder } = renderTree({ emptyFolders: ["scratch"] });
+    expect(screen.getByText("scratch")).toBeInTheDocument();
+    await userEvent.click(screen.getByTitle("Remove empty folder scratch"));
+    expect(onRemoveFolder).toHaveBeenCalledWith("scratch");
+  });
+
+  it("has no remove button on a folder that holds files", () => {
+    renderTree(); // caps/ holds refunds.yaml
+    expect(
+      screen.queryByTitle("Remove empty folder caps"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("renames a clean file via the pencil + Enter", async () => {
+    // refunds.yaml is clean here (only policy.yaml dirty), so rename is allowed.
+    const { onRename } = renderTree({ dirtyKeys: new Set(["policy.yaml"]) });
+    await userEvent.click(screen.getByTitle("Rename caps/refunds.yaml"));
+    const input = screen.getByLabelText("Rename caps/refunds.yaml");
+    await userEvent.clear(input);
+    await userEvent.type(input, "caps/refund.yaml{Enter}");
+    expect(onRename).toHaveBeenCalledWith(
+      "caps/refunds.yaml",
+      "caps/refund.yaml",
+    );
+  });
+
+  it("dispatches rename exactly once on Enter (no blur double-fire)", async () => {
+    const { onRename } = renderTree({ dirtyKeys: new Set(["policy.yaml"]) });
+    await userEvent.click(screen.getByTitle("Rename caps/refunds.yaml"));
+    const input = screen.getByLabelText("Rename caps/refunds.yaml");
+    await userEvent.clear(input);
+    // Enter commits + unmounts the input; its blur must not fire a 2nd rename.
+    await userEvent.type(input, "caps/refund.yaml{Enter}");
+    expect(onRename).toHaveBeenCalledTimes(1);
+  });
+
+  it("bars rename on the entry file and on dirty files", () => {
+    // policy.yaml is entry; caps/refunds.yaml is dirty (default set).
+    renderTree();
+    expect(screen.queryByTitle("Rename policy.yaml")).not.toBeInTheDocument();
+    expect(
+      screen.queryByTitle("Rename caps/refunds.yaml"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("moves a file to the root when dropped on the empty area", async () => {
+    const { onRename } = renderTree({ dirtyKeys: new Set(["policy.yaml"]) });
+    const data = new Map<string, string>();
+    const dataTransfer = {
+      setData: (k: string, v: string) => data.set(k, v),
+      getData: (k: string) => data.get(k) ?? "",
+    };
+    const leaf = screen.getByText("refunds.yaml");
+    fireEvent.dragStart(leaf, { dataTransfer });
+    // The scrollable list area is the root drop zone.
+    const zone = leaf.closest(".scrollbar-thin")!;
+    fireEvent.dragOver(zone, { dataTransfer });
+    fireEvent.drop(zone, { dataTransfer });
+    expect(onRename).toHaveBeenCalledWith("caps/refunds.yaml", "refunds.yaml");
   });
 });

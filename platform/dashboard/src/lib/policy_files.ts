@@ -14,7 +14,8 @@ import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { useActive } from "./active";
-import { api, type PolicyFileDraft } from "./api";
+import { api, type PolicyFileDraft, type PolicyFileRead } from "./api";
+import { referencesImport, rewriteImportPath } from "./imports";
 import { useOrgs } from "./orgs";
 
 // Re-export the wire types so component imports (`@/lib/policy_files`) resolve
@@ -65,8 +66,12 @@ export function useResolvedPolicy(
     retry: false,
     // Keep the previous result on screen while the key changes (e.g. an agent
     // switch), so callers that derive roles from it don't transiently empty and
-    // fall back to stale/wrong data mid-refetch.
-    placeholderData: (prev) => prev,
+    // fall back to stale/wrong data mid-refetch — but only within the same
+    // project. A project switch must not carry the old project's roles over
+    // (callers like Graph/Playground derive their role pickers straight from
+    // this and have no scope reset of their own).
+    placeholderData: (prev, prevQuery) =>
+      prevQuery?.queryKey?.[1] === projectId ? prev : undefined,
     staleTime: 15_000,
   });
 }
@@ -128,6 +133,61 @@ export function useDeleteFile(projectId: string) {
         (prev: { name: string }[] | undefined) =>
           (prev ?? []).filter((f) => f.name !== name),
       );
+      invalidateDerived(qc, projectId);
+    },
+  });
+}
+
+/**
+ * Rename (or move — a move is a rename with a new path prefix) one compose
+ * file, rewriting the `import:` refs of any file that pointed at the old path
+ * so the project keeps composing. Done client-side over upsert/delete since the
+ * store has no rename endpoint:
+ *
+ *   1. write the file under the new name,
+ *   2. rewrite each importer to the new path,
+ *   3. delete the old file last,
+ *
+ * so a mid-flight failure leaves the old file intact rather than a dangling
+ * import. Not atomic — but resolve/check surface any broken interim state as
+ * data. Refuses to clobber an existing name.
+ */
+export function useRenameFile(projectId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({
+      oldName,
+      newName,
+    }: {
+      oldName: string;
+      newName: string;
+    }) => {
+      // No-op rename: writing then deleting the same name would destroy the
+      // file, so bail before any write.
+      if (oldName === newName) return { oldName, newName, importers: 0 };
+      const files =
+        qc.getQueryData<PolicyFileRead[]>(filesKey(projectId)) ?? [];
+      const target = files.find((f) => f.name === oldName);
+      if (!target) throw new Error(`${oldName} not found`);
+      if (files.some((f) => f.name === newName)) {
+        throw new Error(`${newName} already exists`);
+      }
+      const importers = files.filter(
+        (f) => f.name !== oldName && referencesImport(f.content, oldName),
+      );
+      await api.upsertPolicyFile(projectId, newName, target.content);
+      for (const imp of importers) {
+        await api.upsertPolicyFile(
+          projectId,
+          imp.name,
+          rewriteImportPath(imp.content, oldName, newName),
+        );
+      }
+      await api.deletePolicyFile(projectId, oldName);
+      return { oldName, newName, importers: importers.length };
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: filesKey(projectId) });
       invalidateDerived(qc, projectId);
     },
   });

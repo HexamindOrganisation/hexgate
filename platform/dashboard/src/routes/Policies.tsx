@@ -1,7 +1,8 @@
 import { useCallback, useMemo, useState } from "react";
 import { FileText, X } from "lucide-react";
+import { toast } from "sonner";
 
-import type { PolicyFileDraft } from "@/lib/api";
+import { ApiError, type PolicyFileDraft } from "@/lib/api";
 import { useProjectScoped } from "@/lib/active";
 import {
   useCanManagePolicy,
@@ -9,8 +10,11 @@ import {
   usePolicyCheck,
   usePolicyFiles,
   usePolicyPreview,
+  useRenameFile,
   useResolvedPolicy,
 } from "@/lib/policy_files";
+import { useEmptyFolders } from "@/lib/empty_folders";
+import { referencesImport } from "@/lib/imports";
 import { baseName, ENTRY_FILE } from "@/lib/file_tree";
 import { cn } from "@/lib/utils";
 import { NoProjectEmptyState } from "@/components/NoProjectEmptyState";
@@ -97,6 +101,62 @@ export function PoliciesPage() {
       openFile(name);
     },
     [openFile],
+  );
+
+  // Empty folders live per-device (localStorage); creating a file under a
+  // prefix reconciles it out of the cache automatically (see useEmptyFolders).
+  const {
+    folders: emptyFolders,
+    addFolder,
+    removeFolder,
+  } = useEmptyFolders(projectId, files);
+
+  // Rename/move a stored file, then remap any open tab/draft/selection from the
+  // old name to the new one so the editor follows the file.
+  const rename = useRenameFile(projectId as string);
+  const onRename = useCallback(
+    (oldName: string, newName: string) => {
+      // The rename rewrites the `import:` refs of every importer on the server.
+      // If an importer has unsaved edits open, that server rewrite would be
+      // clobbered on the user's next Save (which still names the old path) —
+      // leaving a dangling import. Make them save those first.
+      const dirtyImporter = files.find(
+        (f) => dirtyKeys.has(f.name) && referencesImport(f.content, oldName),
+      );
+      if (dirtyImporter) {
+        toast.error(
+          `Save your changes to ${dirtyImporter.name} before renaming ${oldName}`,
+        );
+        return;
+      }
+      rename.mutate(
+        { oldName, newName },
+        {
+          onSuccess: () => {
+            setOpenTabs((prev) =>
+              prev.map((t) => (t === oldName ? newName : t)),
+            );
+            setSelection((sel) => (sel === oldName ? newName : sel));
+            setDrafts((prev) => {
+              if (!(oldName in prev)) return prev;
+              const next = { ...prev };
+              next[newName] = next[oldName];
+              delete next[oldName];
+              return next;
+            });
+          },
+          onError: (e) =>
+            toast.error(
+              e instanceof ApiError
+                ? e.message
+                : e instanceof Error
+                  ? e.message
+                  : `Could not rename ${oldName}`,
+            ),
+        },
+      );
+    },
+    [rename, files, dirtyKeys],
   );
 
   const onPersist = useCallback((key: string, text: string, dirty: boolean) => {
@@ -200,10 +260,14 @@ export function PoliciesPage() {
             <div className="overflow-hidden bg-background/40">
               <FileTree
                 files={files}
+                emptyFolders={emptyFolders}
                 selected={active}
                 onSelect={openFile}
                 onNewFile={onNewFile}
                 onDeleted={onFileDeleted}
+                onAddFolder={addFolder}
+                onRemoveFolder={removeFolder}
+                onRename={onRename}
                 projectId={projectId}
                 canManage={canManage}
                 dirtyKeys={dirtyKeys}

@@ -17,6 +17,8 @@ import {
   useDeleteFile,
   usePolicyGraph,
   usePolicyPreview,
+  useRenameFile,
+  useResolvedPolicy,
   useTestPolicy,
   useUpsertFile,
 } from "./policy_files";
@@ -175,6 +177,134 @@ describe("useDeleteFile", () => {
       name: string;
     }[];
     expect(cached.map((f) => f.name)).toEqual(["policy.yaml"]);
+  });
+});
+
+describe("useResolvedPolicy placeholderData", () => {
+  it("carries roles across an agent switch but not a project switch", async () => {
+    const qc = makeClient();
+    stubFetch({
+      "/v1/projects/pA/policy/resolve": { roles: { support: {}, billing: {} } },
+      // pB is a classic project — resolve 422s, so no fresh data arrives.
+      "/v1/projects/pB/policy/resolve": undefined,
+    });
+
+    const view = renderHook(
+      ({ pid, agent }) => useResolvedPolicy(pid, undefined, agent),
+      { wrapper: wrapper(qc), initialProps: { pid: "pA", agent: "bot1" } },
+    );
+    await waitFor(() => expect(view.result.current.isSuccess).toBe(true));
+    expect(Object.keys(view.result.current.data ?? {})).toEqual([
+      "support",
+      "billing",
+    ]);
+
+    // Agent switch, same project: the previous roles stay on screen.
+    view.rerender({ pid: "pA", agent: "bot2" });
+    expect(view.result.current.data).toBeDefined();
+
+    // Project switch to a project that yields no data: old roles must NOT leak.
+    view.rerender({ pid: "pB", agent: "bot2" });
+    await waitFor(() => expect(view.result.current.data).toBeUndefined());
+  });
+});
+
+describe("useRenameFile", () => {
+  it("writes the new name, rewrites importers, and deletes the old", async () => {
+    const qc = makeClient();
+    qc.setQueryData(
+      ["policy-files", "p1"],
+      [
+        {
+          name: "policy.yaml",
+          content: "roles:\n  default: { import: [ caps/refunds.yaml ] }\n",
+          content_hash: "h",
+          updated_at: "t",
+        },
+        {
+          name: "caps/refunds.yaml",
+          content: "tools: {}\n",
+          content_hash: "h",
+          updated_at: "t",
+        },
+      ],
+    );
+    const calls: { method: string; path: string; body?: string }[] = [];
+    vi.spyOn(window, "fetch").mockImplementation(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        calls.push({
+          method: init?.method ?? "GET",
+          path: (typeof input === "string" ? input : input.toString()).split(
+            "?",
+          )[0],
+          body: init?.body as string | undefined,
+        });
+        return new Response(JSON.stringify({}), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      },
+    );
+
+    const { result } = renderHook(() => useRenameFile("p1"), {
+      wrapper: wrapper(qc),
+    });
+    act(() => {
+      result.current.mutate({
+        oldName: "caps/refunds.yaml",
+        newName: "shared/refunds.yaml",
+      });
+    });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    // 1. write new name, 2. rewrite the importer, 3. delete old — in order.
+    expect(calls.map((c) => `${c.method} ${c.path}`)).toEqual([
+      "PUT /v1/projects/p1/policy-files/shared/refunds.yaml",
+      "PUT /v1/projects/p1/policy-files/policy.yaml",
+      "DELETE /v1/projects/p1/policy-files/caps/refunds.yaml",
+    ]);
+    // The importer's rewritten body points at the new path.
+    expect(calls[1].body).toContain("shared/refunds.yaml");
+    expect(calls[1].body).not.toContain("caps/refunds.yaml");
+    expect(result.current.data?.importers).toBe(1);
+  });
+
+  it("is a no-op when the name is unchanged (no destructive delete)", async () => {
+    const qc = makeClient();
+    qc.setQueryData(
+      ["policy-files", "p1"],
+      [{ name: "a.yaml", content: "x", content_hash: "h", updated_at: "t" }],
+    );
+    const spy = vi.spyOn(window, "fetch");
+    const { result } = renderHook(() => useRenameFile("p1"), {
+      wrapper: wrapper(qc),
+    });
+    act(() => {
+      result.current.mutate({ oldName: "a.yaml", newName: "a.yaml" });
+    });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(spy).not.toHaveBeenCalled(); // no PUT, no DELETE
+  });
+
+  it("refuses to clobber an existing name", async () => {
+    const qc = makeClient();
+    qc.setQueryData(
+      ["policy-files", "p1"],
+      [
+        { name: "a.yaml", content: "x", content_hash: "h", updated_at: "t" },
+        { name: "b.yaml", content: "y", content_hash: "h", updated_at: "t" },
+      ],
+    );
+    const spy = vi.spyOn(window, "fetch");
+    const { result } = renderHook(() => useRenameFile("p1"), {
+      wrapper: wrapper(qc),
+    });
+    act(() => {
+      result.current.mutate({ oldName: "a.yaml", newName: "b.yaml" });
+    });
+    await waitFor(() => expect(result.current.isError).toBe(true));
+    expect(result.current.error?.message).toMatch(/already exists/);
+    expect(spy).not.toHaveBeenCalled();
   });
 });
 
