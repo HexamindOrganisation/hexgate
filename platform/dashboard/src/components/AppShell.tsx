@@ -122,13 +122,16 @@ function isSettingsPath(pathname: string): boolean {
   );
 }
 
-/** The org the settings sidebar should scope its links to: the one in the URL
- * (`/orgs/:id/...`) when present, else the active org — so a deep-link or
- * refresh keeps the sidebar pointed at the org being viewed. */
+/** The org the settings sidebar should scope its org links to: the one in the
+ * URL (`/orgs/:id/...`) when present, else the active org — so a deep-link or
+ * refresh keeps the sidebar pointed at the org being viewed. On the pure
+ * account page (`/settings`) there's no org in play, so we return null and the
+ * org-scoped links drop out. */
 function settingsOrgId(
   pathname: string,
   activeOrgId: string | null,
 ): string | null {
+  if (pathname === "/settings") return null;
   return pathname.match(/^\/orgs\/([^/]+)(?:\/|$)/)?.[1] ?? activeOrgId;
 }
 

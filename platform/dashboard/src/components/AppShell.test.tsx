@@ -149,6 +149,17 @@ describe("AppShell", () => {
     ).toHaveAttribute("href", "/orgs/org-b/settings");
   });
 
+  it("hides org-scoped links on the pure account page", async () => {
+    renderWithProviders(<AppShell />, { initialRoute: "/settings" });
+    await waitFor(() =>
+      expect(screen.getByText("Account")).toBeInTheDocument(),
+    );
+    // Organizations + Account stay; the org-scoped admin links don't apply here.
+    expect(screen.getByText("Organizations")).toBeInTheDocument();
+    expect(screen.queryByText("Members")).not.toBeInTheDocument();
+    expect(screen.queryByText("Organization settings")).not.toBeInTheDocument();
+  });
+
   it("collapsing the sidebar hides the nav labels", async () => {
     renderWithProviders(<AppShell />);
     await waitFor(() => expect(screen.getByText("Agents")).toBeInTheDocument());
