@@ -30,12 +30,12 @@ export function ClassicProjectBanner({ trailing }: { trailing?: ReactNode }) {
  */
 export function ComposeStatusBar({ trailing }: { trailing?: ReactNode }) {
   return (
-    <div className="flex items-center justify-between border-t border-border bg-muted/30 px-6 py-1.5 text-xs text-muted-foreground">
+    <div className="flex items-center justify-between border-t border-border px-4 py-1 text-[11px] text-muted-foreground">
       <span className="inline-flex items-center gap-1.5">
-        <Layers className="size-3.5 text-primary" />
-        <span className="font-medium text-foreground/80">Compose</span>
+        <Layers className="size-3 text-muted-foreground" />
+        <span className="text-foreground/70">Compose</span>
         <span aria-hidden>·</span>
-        <span>active</span>
+        <span className="font-medium text-allow">active</span>
       </span>
       {trailing}
     </div>

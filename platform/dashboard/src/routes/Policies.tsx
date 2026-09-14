@@ -289,11 +289,11 @@ export function PoliciesPage() {
                         onClick={() => setSelection(tab)}
                         title={tab}
                         className={cn(
-                          // Only the active tab carries a (green) rounded border;
+                          // Only the active tab carries a rounded border;
                           // inactive tabs are borderless and muted.
                           "group flex max-w-[180px] min-w-0 cursor-pointer items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs transition-colors",
                           isActive
-                            ? "border-allow/50 text-foreground"
+                            ? "border-border text-foreground"
                             : "border-transparent text-muted-foreground hover:text-foreground",
                         )}
                       >
@@ -370,7 +370,11 @@ export function PoliciesPage() {
             {modular && (
               <ComposeStatusBar
                 trailing={
-                  <DocsLink path={DOC_PATHS.policies} label="Policy docs" />
+                  <DocsLink
+                    path={DOC_PATHS.policies}
+                    label="Policy docs"
+                    compact
+                  />
                 }
               />
             )}
