@@ -185,11 +185,24 @@ export HEXGATE_SMOKE_PASSWORD=...
 make platform-smoke STAGE=prod               # or STAGE=staging
 ```
 
-It sends five events (allow / deny / needs_approval decisions, one LLM usage,
-one ban enforcement) through the SDK's OTLP sender and polls the dashboard
-API until each shows up, then prints `PASS` or a per-event `MISSING` list.
-Rows are tagged `agent_name = otlp_smoke` and a per-run `session_id`, so they
-are easy to spot and harmless to leave. Run it after every `platform-up`.
+It sends eleven events (allow / deny / needs_approval decisions, one LLM
+usage, one ban enforcement, and six LLM message events) through the SDK's OTLP
+sender and polls the dashboard API until each shows up, then prints `PASS` or a
+per-event `MISSING` list. Rows are tagged `agent_name = otlp_smoke` and a
+per-run `session_id`, so they are easy to spot and harmless to leave. Run it
+after every `platform-up`.
+
+Five of the message events carry an input message past the SDK's 256 KiB cap,
+and the check asserts each came back marked `truncated` rather than missing.
+Together they are ~1.25 MiB, which is deliberate: that is over the 1 MB record
+the collector's exporter and the broker default to, so this run only passes on
+a stage that actually got the record-size limits of
+`docs/internals/audit-pipeline.md` §4.1 — altered topics, restarted collector
+and enricher — rather than merely a deploy of the code. A stage that did not
+fails with **everything** `MISSING`, because an oversized record is rejected
+whole and takes the decision spans with it; that all-missing result is the
+signature to read as "the limits were never applied here", as against a
+healthy `/v1/health` and a working proxy.
 
 Exit 0 is the only green: 1 means an event did not land, and 2 means the
 credentials above were missing so nothing was read back at all — the send step

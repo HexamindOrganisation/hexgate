@@ -410,10 +410,17 @@ grpc-go's 4 MiB: the SDK is HTTP-only and 4317 is unpublished.
 
 Changing any of these is an **operational** change: merged is not enough, the
 topics have to be altered and the collector and enricher restarted before
-message spans reach the stage. Today's `platform/scripts/otlp_smoke.py` sends
-five small events in one sub-1-MiB export, so it would pass on a stage where
-none of that happened — the oversized smoke event that actually exercises the
-budget is a later PR, and until it lands this has to be checked by hand.
+message spans reach the stage. `platform/scripts/otlp_smoke.py` is the check
+that it happened. Six of its eleven events are small enough to ride any
+export; the other five each carry an input message past the SDK's 256 KiB cap,
+so each leaves at roughly the cap and together they come to ~1.25 MiB. That
+number is the point: **one** oversized span would not test anything, since
+256 KiB fits the 1 MB record the exporter and the broker default to, but five
+do not, so a stage still at those defaults rejects the record and the script
+reports every event missing. Every hop rejects whole (see above), so that is
+the expected shape of the failure — not one row absent out of eleven. The
+rows that do land are verified as `truncated` rather than missing, which
+separates "the caps worked" from "the record was dropped".
 
 The Collector **acks the HTTP request before the Kafka publish**. A Redpanda
 outage therefore looks like success to the SDK; the exporter retries and then
