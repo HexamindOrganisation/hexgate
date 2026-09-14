@@ -15,7 +15,9 @@ from openai.types.responses import (
     ResponseFunctionToolCall,
     ResponseOutputMessage,
     ResponseOutputText,
+    ResponseReasoningItem,
 )
+from openai.types.responses.response_reasoning_item import Summary
 
 from hexgate.adapters.openai import usage as usage_mod
 from hexgate.adapters.openai.usage import (
@@ -23,6 +25,7 @@ from hexgate.adapters.openai.usage import (
     _input_message,
     _output_messages,
 )
+from hexgate.runtime import run_scope
 from hexgate.tracing.messages import LOG_MESSAGES_ENV
 
 
@@ -109,9 +112,9 @@ def emitted(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
 
 @pytest.fixture(autouse=True)
 def messages(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
-    """Capture emit_llm_messages() calls. Autouse: every test in this module
-    drives the real hook, and an unpatched emit would build an OTLP sender for
-    the fake api_key."""
+    """Capture emit_llm_messages() calls. Autouse so no test that drives the
+    hook can reach the real emit, which would build an OTLP sender for the
+    fake api_key."""
     calls: list[dict[str, Any]] = []
 
     def fake_emit(
@@ -495,8 +498,14 @@ async def test_when_conversion_raises_then_the_run_is_not_broken(
     """The hook runs inside the SDK's run loop, which re-raises. Losing a
     transcript row must not fail the run it was logging."""
 
-    def boom(_output: list[Any]) -> list[Any]:
-        raise RuntimeError("conversion exploded")
+    real = usage_mod._output_messages
+    calls = {"n": 0}
+
+    def boom(output: list[Any]) -> list[Any]:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("conversion exploded")
+        return real(output)
 
     monkeypatch.setattr(usage_mod, "_output_messages", boom)
     hooks = HexgateUsageHooks(api_key="k")
@@ -510,6 +519,17 @@ async def test_when_conversion_raises_then_the_run_is_not_broken(
 
     assert messages == []
     assert len(emitted) == 1
+
+    # The failed call must not have spent the turn's seq: the cursor is asked
+    # only once the conversion succeeded, so the next event is still seq 0 and
+    # a reader sees no hole.
+    await hooks.on_llm_start(
+        context=context, agent=agent, system_prompt=None, input_items=[_user("x")]
+    )
+    await hooks.on_llm_end(context=context, agent=agent, response=_response())
+
+    [call] = messages
+    assert call["message_seq"] == 0
 
 
 @pytest.mark.asyncio
@@ -530,3 +550,64 @@ async def test_when_the_prompt_was_not_stashed_then_the_completion_still_lands(
     assert call["output_messages"] == [
         {"role": "assistant", "parts": [{"type": "text", "content": "Sunny, 24C."}]}
     ]
+
+
+def test_when_output_is_a_reasoning_item_then_its_summary_is_kept() -> None:
+    """A reasoning item declares a ``content`` field that is None and keeps
+    its text under ``summary``. Routing on the key's presence would emit an
+    empty message and lose the last turn's reasoning for good — earlier turns
+    come back in the next call's input delta, the final one never does."""
+    reasoning = ResponseReasoningItem(
+        id="rs_1",
+        type="reasoning",
+        summary=[Summary(type="summary_text", text="Check the weather first.")],
+    )
+
+    [message] = _output_messages([reasoning])
+
+    assert message["role"] == "assistant"
+    [part] = message["parts"]
+    assert part["summary"] == [
+        {"type": "summary_text", "text": "Check the weather first."}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_when_two_runs_share_a_process_then_turn_keys_differ(
+    emitted: list[dict[str, Any]], messages: list[dict[str, Any]]
+) -> None:
+    """The turn key is the run id, not the address of the run context: that
+    object is freed at run end and CPython hands the next run the same
+    address, which would file two unrelated conversations under one key, each
+    restarting message_seq at 0 — silently, since the rows still insert."""
+    agent = Agent(name="my-agent", model="gpt-4o")
+
+    for _ in range(2):
+        hooks = HexgateUsageHooks(api_key="k")
+        with run_scope(agent.name):
+            await hooks.on_llm_start(
+                context=object(),
+                agent=agent,
+                system_prompt=None,
+                input_items=[_user("x")],
+            )
+            await hooks.on_llm_end(context=object(), agent=agent, response=_response())
+
+    assert [c["message_seq"] for c in messages] == [0, 0]
+    assert messages[0]["turn_key"] != messages[1]["turn_key"]
+
+
+@pytest.mark.asyncio
+async def test_when_there_is_no_run_scope_then_the_turn_key_is_still_unique(
+    emitted: list[dict[str, Any]], messages: list[dict[str, Any]]
+) -> None:
+    """``HexgateRunner`` always opens a run scope; a bare ``Runner.run`` handed
+    these hooks does not, and the per-instance fallback keeps the key unique to
+    one hooks object rather than collapsing every such run onto ``":agent"``."""
+    agent = Agent(name="my-agent", model="gpt-4o")
+
+    for _ in range(2):
+        hooks = HexgateUsageHooks(api_key="k")
+        await hooks.on_llm_end(context=object(), agent=agent, response=_response())
+
+    assert messages[0]["turn_key"] != messages[1]["turn_key"]

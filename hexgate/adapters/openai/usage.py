@@ -14,14 +14,16 @@ usage and messages leave from one call site.
 What reaches the wire is the *delta* — only the items added since this turn's
 last call — because the input list is the whole conversation so far and
 re-sending it every call would store the transcript once per turn. Working out
-that delta is :class:`~hexgate.tracing.messages.MessageCursor`'s job, shared
-with the other adapters; this module's own work is the shape translation from
-the Responses API's items to the OTel GenAI ``role``/``parts`` message form.
+that delta is :class:`~hexgate.tracing.messages.MessageCursor`'s job, written
+to be shared by all four adapters (this is the first to use it); this module's
+own work is the shape translation from the Responses API's items to the OTel
+GenAI ``role``/``parts`` message form.
 """
 
 from __future__ import annotations
 
 import logging
+import uuid
 from collections.abc import Mapping
 from typing import Any
 
@@ -29,6 +31,7 @@ from agents import Agent, RunContextWrapper
 from agents.items import ModelResponse
 from agents.lifecycle import RunHooks
 
+from hexgate.runtime.run_facts import get_run_facts
 from hexgate.tracing.messages import (
     MessageCursor,
     emit_llm_messages,
@@ -40,8 +43,10 @@ _log = logging.getLogger(__name__)
 
 # Content-part types whose payload is plain text under a ``text`` key. The
 # Responses API names the same thing differently by direction (``input_text``
-# on the way in, ``output_text`` on the way back) and reasoning summaries add a
-# third spelling; GenAI has one ``text`` part, so they all collapse into it.
+# on the way in, ``output_text`` on the way back), reasoning summaries add
+# ``summary_text``, and a bare ``text`` turns up in hand-built items and in
+# a message replayed from a stored transcript. GenAI has one ``text`` part,
+# so they all collapse into it.
 _TEXT_PART_TYPES = frozenset({"input_text", "output_text", "text", "summary_text"})
 
 
@@ -87,10 +92,10 @@ def _content_parts(content: Any) -> list[dict[str, Any]]:
     """A message's ``content`` as GenAI parts.
 
     ``content`` is either a bare string or a list of content parts. A part
-    whose payload is text becomes a ``text`` part; anything else (an image, a
-    file, a refusal's sibling fields) is carried through whole — it already
-    names itself under ``type``, and dropping it would lose exactly the
-    attachment an investigator is looking for.
+    whose payload is text becomes a ``text`` part — a refusal included, whose
+    text is the interesting half. Anything else (an image, a file) is carried
+    through whole: it already names itself under ``type``, and dropping it
+    would lose exactly the attachment an investigator is looking for.
     """
     if content is None:
         return []
@@ -143,7 +148,9 @@ def _input_message(item: Any) -> dict[str, Any]:
     # Reasoning items, built-in tool calls (web search, computer use), MCP
     # approval requests: no role of their own, and no GenAI part type to map
     # onto. Carried through under the role that produced them so the turn is
-    # still complete, rather than dropped for want of a mapping.
+    # still complete, rather than dropped for want of a mapping. The assistant
+    # role is a floor, not a reading of the item: none of these is a user
+    # message, and GenAI has no role for "the framework did this".
     return {"role": "assistant", "parts": [entry]}
 
 
@@ -164,9 +171,14 @@ def _output_messages(output: list[Any]) -> list[dict[str, Any]]:
             parts.append(_text_part(raw))
         elif item.get("type") == "function_call":
             parts.append(_tool_call_part(item))
-        elif "content" in item:
+        elif item.get("content"):
             parts.extend(_content_parts(item["content"]))
         else:
+            # Truthiness, not ``"content" in item``: a reasoning item declares
+            # a ``content`` field that is almost always None and keeps its text
+            # under ``summary``, so a key check would route it here and emit an
+            # empty message — losing the last turn's reasoning entirely, since
+            # only earlier turns reappear in the next call's input delta.
             parts.append(item)
     return [{"role": "assistant", "parts": parts}] if parts else []
 
@@ -197,10 +209,10 @@ class HexgateUsageHooks(RunHooks):
     ``HexgateRunner`` constructs this class, and it builds a fresh instance
     inside every ``run*`` call, so the cursor and the stash below are born and
     die with one run — a stronger guarantee than resetting keys one by one,
-    and it holds when the run raises. It is *not* done from ``on_agent_end``:
-    the SDK hands that hook a freshly built ``AgentHookContext``, not the
-    ``RunContextWrapper`` the LLM hooks see, so the turn keys would not match
-    and the eviction would silently do nothing.
+    and unlike an explicit reset it still holds when the run raises. Nothing
+    is evicted from ``on_agent_end`` for that reason, and because that hook
+    fires only for the agent that produced the final output, leaving a
+    handoff source's list behind.
     """
 
     def __init__(self, *, api_key: str) -> None:
@@ -209,18 +221,32 @@ class HexgateUsageHooks(RunHooks):
         # Request side of each in-flight LLM call, keyed by turn: the response
         # hook carries no prompt, so it has to be handed one.
         self._pending: dict[str, tuple[str | None, list[Any]]] = {}
+        # Stands in for the run id when there is no run scope (see _turn_key).
+        self._fallback_run_id = uuid.uuid4().hex
 
-    @staticmethod
-    def _turn_key(context: RunContextWrapper, agent: Agent) -> str:
+    def _turn_key(self, agent: Agent) -> str:
         """Identity of the *message list* this call extends.
 
-        The run context is one object for the whole run and is what separates
-        concurrent runs; the agent name separates the lists inside one run.
-        A handoff keeps the same context but switches agent, and the target
-        starts its own list — keyed on the context alone, its first call would
-        look like a twenty-message jump and resync forever.
+        Hexgate's own run id, not ``id(context)``: the run context object is
+        freed when the run ends and CPython hands the next run the same
+        address, so in a process that serves many runs — ``hexgate serve``, a
+        chat session — two unrelated conversations would land under one
+        ``turn_key``, each restarting ``message_seq`` at 0. That is the one
+        thing the key exists to prevent, and nothing downstream would notice:
+        the rows insert cleanly and only the gap detection quietly stops
+        meaning anything. The run id is minted per ``run*`` call and is on the
+        row anyway as ``run_id``.
+
+        Falls back to the instance id when there is no run scope, which
+        ``HexgateRunner`` always opens — the fallback is for a bare
+        ``Runner.run`` given these hooks directly, where a per-instance
+        constant is still unique to one hooks object.
+
+        The agent name is the second half because one run can drive several
+        agents. See the note in :meth:`on_llm_start` on what that costs after
+        a handoff.
         """
-        return f"{id(context):x}:{agent.name}"
+        return f"{get_run_facts().id or self._fallback_run_id}:{agent.name}"
 
     async def on_llm_start(
         self,
@@ -229,11 +255,22 @@ class HexgateUsageHooks(RunHooks):
         system_prompt: str | None,
         input_items: list[Any],
     ) -> None:
+        """Stash the prompt for the matching ``on_llm_end``.
+
+        ``input_items`` is the whole conversation the model is about to see,
+        not a delta. After a handoff that is also true of the *target* agent's
+        first call — this SDK passes the accumulated list straight through
+        unless the handoff sets an ``input_filter`` — so the target's list
+        restates what the source already logged, under its own ``turn_key`` at
+        seq 0. That duplication is the cost of keying per agent, and keying
+        per run instead would lose a sub-agent's separate list; the spec
+        picks per agent, and no content is dropped either way.
+        """
         if not log_messages_enabled():
             return
         # Copied: the runner appends to this list as the turn proceeds, and
         # the delta must be measured against the prompt actually sent.
-        self._pending[self._turn_key(context, agent)] = (
+        self._pending[self._turn_key(agent)] = (
             system_prompt,
             list(input_items),
         )
@@ -252,46 +289,53 @@ class HexgateUsageHooks(RunHooks):
             response.usage.output_tokens,
             api_key=self._api_key,
         )
-        self._emit_messages(context, agent, model, response)
+        self._emit_messages(agent, model, response)
 
     def _emit_messages(
         self,
-        context: RunContextWrapper,
         agent: Agent,
         model: str,
         response: ModelResponse,
     ) -> None:
         """Convert this call's prompt delta and completion and emit them.
 
-        Guarded end to end: ``emit_llm_messages`` never raises, but the
-        conversion in front of it walks framework data and runs from a hook
-        the SDK re-raises out of. Losing a transcript row must not fail the
-        run it was logging — and the usage event above has already left.
+        Guarded: ``emit_llm_messages`` and ``MessageCursor.advance`` never
+        raise, but the conversion in front of them walks framework data and
+        runs from a hook the SDK re-raises out of. Losing a transcript row
+        must not fail the run it was logging — and the usage event above has
+        already left.
         """
         if not log_messages_enabled():
             return
-        key = self._turn_key(context, agent)
+        key = self._turn_key(agent)
         system_prompt, input_items = self._pending.pop(key, (None, []))
         try:
-            delta = self._cursor.advance(key, [_input_message(i) for i in input_items])
-            emit_llm_messages(
-                agent.name,
-                model,
-                delta.messages,
-                _output_messages(response.output),
-                turn_key=key,
-                message_seq=delta.seq,
-                # Only on the first event of the turn: a sub-agent has its own
-                # instructions, so this rides on each list's first event rather
-                # than the session's, and repeating it every call would spend
-                # the 8 KiB budget on the same text over and over.
-                system_instructions=(
-                    [_text_part(system_prompt)]
-                    if delta.seq == 0 and system_prompt
-                    else None
-                ),
-                resynced=delta.resynced,
-                api_key=self._api_key,
-            )
+            new_input = [_input_message(item) for item in input_items]
+            output = _output_messages(response.output)
         except Exception:
-            _log.exception("capturing LLM messages raised; ignoring")
+            # Before ``advance``, so a failed conversion costs this event and
+            # nothing else. Asking the cursor first would spend the turn's seq
+            # on an event that never goes out, and a reader is specified to
+            # read that hole as a lost row.
+            _log.exception("converting LLM messages raised; dropping this event")
+            return
+        delta = self._cursor.advance(key, new_input)
+        emit_llm_messages(
+            agent.name,
+            model,
+            delta.messages,
+            output,
+            turn_key=key,
+            message_seq=delta.seq,
+            # Only on the first event of the turn: an agent reached by a
+            # handoff has its own instructions, so this rides on each list's
+            # first event rather than the session's, and repeating it every
+            # call would spend the 8 KiB budget on the same text over and over.
+            system_instructions=(
+                [_text_part(system_prompt)]
+                if delta.seq == 0 and system_prompt
+                else None
+            ),
+            resynced=delta.resynced,
+            api_key=self._api_key,
+        )

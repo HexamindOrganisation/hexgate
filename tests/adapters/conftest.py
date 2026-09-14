@@ -73,11 +73,11 @@ class HexgatePlatformEnv:
     def llm_message_rows(self, agent_name: str, session_id: str) -> list[dict]:
         """Every llm_message row of this run, in transcript order.
 
-        ``(occurred_at, message_seq)`` is the order the read endpoint and the
-        drawer use: ``message_seq`` only counts inside one ``turn_key`` and
-        restarts for a sub-agent's list, so time is what orders across lists.
-        JSONEachRow because a row carries embedded JSON in three columns —
-        TSV would need un-escaping by hand.
+        ``(occurred_at, message_seq)`` is the table's own ORDER BY tail and
+        what the read endpoint will use: ``message_seq`` only counts inside one
+        ``turn_key`` and restarts for an agent reached by a handoff, so time is
+        what orders across lists. JSONEachRow because a row carries embedded
+        JSON in three columns — TSV would need un-escaping by hand.
         """
         text = self.clickhouse_query(
             "SELECT turn_key, message_seq, resynced, truncated, model, "
