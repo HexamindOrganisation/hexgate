@@ -143,7 +143,22 @@ def test_when_only_a_run_id_is_given_then_it_scopes_the_read() -> None:
     params = _page_call(client).kwargs["parameters"]
     assert "run_id = {run_id:UUID}" in sql
     assert params["run_id"] == run_id
+    # Omitted entirely (None), so nothing is known about the session and there
+    # is nothing to pin — unlike an explicit "".
     assert "session_id" not in params
+
+
+def test_when_the_session_is_explicitly_empty_then_it_is_still_pinned() -> None:
+    """ "" is a fact the caller knows, not a missing argument. Binding it keeps
+    the scan inside one contiguous block of the sort key; dropping it makes the
+    read span every session in the project and sort the whole match."""
+    client = _client_returning()
+    run_id = uuid.uuid4()
+
+    list_llm_messages(client, project_id="p1", session_id="", run_id=run_id)
+
+    params = _page_call(client).kwargs["parameters"]
+    assert params["session_id"] == "" and params["run_id"] == run_id
 
 
 def test_when_both_scopes_are_given_then_both_are_applied() -> None:
@@ -431,7 +446,36 @@ def test_when_the_session_is_blank_but_a_run_id_is_given_then_it_serves(
 
     assert r.status_code == 200, r.text
     params = fake_clickhouse.query.call_args_list[0].kwargs["parameters"]
-    assert params["run_id"] == run_id and "session_id" not in params
+    # The blank is bound, not dropped: session_id is the second key column, so
+    # pinning it to "" keeps the scan inside one contiguous block.
+    assert params["run_id"] == run_id and params["session_id"] == ""
+
+
+def test_when_the_run_id_is_blank_but_a_session_is_given_then_it_serves(
+    client: TestClient, fake_clickhouse: MagicMock
+) -> None:
+    """The mirror of the case above: a decision row whose run_id is null,
+    echoed into the query, must not 422 away a perfectly good session scope."""
+    app.dependency_overrides[require_org_member] = lambda: MagicMock()
+
+    r = client.get(f"{_READ_PATH}?session_id=sess_1&run_id=")
+
+    assert r.status_code == 200, r.text
+    params = fake_clickhouse.query.call_args_list[0].kwargs["parameters"]
+    assert params["session_id"] == "sess_1" and "run_id" not in params
+
+
+def test_when_only_a_blank_session_is_given_then_422(
+    client: TestClient, fake_clickhouse: MagicMock
+) -> None:
+    """ "" filters but does not scope — it matches every unnamed session in the
+    project — so on its own it is still no scope at all."""
+    app.dependency_overrides[require_org_member] = lambda: MagicMock()
+
+    r = client.get(f"{_READ_PATH}?session_id=&run_id=")
+
+    assert r.status_code == 422
+    fake_clickhouse.query.assert_not_called()
 
 
 def test_when_only_a_run_id_is_given_then_the_endpoint_serves_it(
