@@ -283,8 +283,9 @@ export interface AuditDecisionRow {
   arguments: unknown;
   attributes: unknown;
   /** Run this decision belongs to; `null` outside any run scope. Pass it, and
-   * `session_id`, to the llm-messages read to scope this decision's
-   * transcript — see `listLlmMessages`. */
+   * `session_id`, to `GET /projects/{id}/audit/llm-messages` to scope this
+   * decision's transcript — forward both verbatim, blanks included. No client
+   * for that endpoint exists yet; it lands with the drawer. */
   run_id: string | null;
 }
 

@@ -59,10 +59,11 @@ async def api_llm_messages(
             "rather than omitting it when the decision you are reading from has "
             "no session id — an empty value is the fast path, because session_id "
             "is the second column of the storage sort key and pinning it, even "
-            'to "", keeps the scan inside one contiguous block. Omitting it '
+            'to "", lets the scan read in order and stop at `limit + offset` '
+            "rows (the saving therefore shrinks as `offset` grows). Omitting it "
             'entirely means "I do not know the session" and makes a run-scoped '
-            "read scan every session in the project. Empty on its own is not a "
-            "scope; pair it with run_id."
+            "read scan every session in the project and sort the whole match. "
+            "Empty on its own is not a scope; pair it with run_id."
         ),
     ),
     run_id: str | None = Query(

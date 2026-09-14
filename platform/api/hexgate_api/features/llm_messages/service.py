@@ -162,14 +162,21 @@ def list_llm_messages(
     ``message_seq`` gap, which schema.sql defines as a row the pipeline lost.
     Long transcripts page instead.
 
-    Ordered to match the storage sort key after project/session, so the scan
-    reads in order and stops at ``limit + offset`` rows instead of sorting the
-    whole match; see schema.sql for why that key is shaped this way.
-    Ascending, unlike the newest-first decision list: a transcript is read
-    forwards. A run-scoped read gets no pruning past ``project_id``
-    and scans the retention window — the cost of the session column being
-    optional. Reads without ``FINAL``, so a retried batch shows both copies
-    of an ``event_id`` until they merge (see ``insert_llm_messages_batch``).
+    Ordered to match the storage sort key after project/session. Ascending,
+    unlike the newest-first decision list: a transcript is read forwards. See
+    schema.sql for why that key is shaped this way.
+
+    Whether that ordering is free depends on ``session_id`` being bound — to
+    ``""`` as much as to a name, which is why an explicit blank is pinned
+    above. Bound, the scan reads in order and stops at ``limit + offset``
+    rows; unbound (``session_id`` omitted on a run-scoped read) it spans every
+    session in the project and sorts the whole match. Measured on 4000
+    session-less rows of one run, same page: 150 rows / 67 MiB against 4000
+    rows / 883 MiB. ``limit + offset`` is the bound either way, and ``offset``
+    is uncapped, so a deep page costs the same as no short-circuit at all.
+
+    Reads without ``FINAL``, so a retried batch shows both copies of an
+    ``event_id`` until they merge (see ``insert_llm_messages_batch``).
     """
     if not session_id and (run_id is None or run_id == ZERO_RUN_ID):
         raise NoMessageScope()
