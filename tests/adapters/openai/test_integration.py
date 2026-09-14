@@ -1,8 +1,9 @@
 """End-to-end verification that a real (wrapped) openai-agents-SDK agent's
 run (1) pulls its policy from the live platform API, (2) lands a
-policy_decision row for its tool call, and (3) lands an llm_invocation row
-for its model call. Not a test of answer quality — a test of Hexgate's own
-plumbing (policy fetch + audit ingestion), mirroring
+policy_decision row for its tool call, (3) lands an llm_invocation row for
+its model call, and (4) lands llm_message rows that concatenate back to the
+conversation it actually saw. Not a test of answer quality — a test of
+Hexgate's own plumbing (policy fetch + audit ingestion), mirroring
 tests/adapters/pydantic_ai/test_integration.py.
 
 Requires the full OTLP ingest pipeline — Postgres, ClickHouse, Redpanda,
