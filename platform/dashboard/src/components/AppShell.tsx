@@ -1,10 +1,12 @@
 import { useEffect, useState } from "react";
-import { useNavigate, NavLink, Outlet } from "react-router-dom";
+import { useLocation, useNavigate, NavLink, Outlet } from "react-router-dom";
 import {
+  ArrowLeft,
   Ban,
   BarChart3,
   Building2,
   Bot,
+  CircleUser,
   KeyRound,
   LogOut,
   MessageSquareCode,
@@ -13,6 +15,7 @@ import {
   ScrollText,
   Settings2,
   Files,
+  Users,
   type LucideIcon,
 } from "lucide-react";
 
@@ -96,6 +99,8 @@ function useActiveBootstrap(): void {
   ]);
 }
 
+// The core product features. Org/account admin lives in the settings space
+// (see `settingsLinks`), reached from the account menu — not this sidebar.
 const workspaceLinks = [
   { to: "/agents", label: "Agents", icon: Bot },
   { to: "/policies", label: "Policies", icon: Files },
@@ -105,9 +110,35 @@ const workspaceLinks = [
   { to: "/usage", label: "Usage", icon: BarChart3 },
   { to: "/bans", label: "Bans", icon: Ban },
   { to: "/tokens", label: "API keys", icon: KeyRound },
-  { to: "/orgs", label: "Organizations", icon: Building2 },
-  { to: "/settings", label: "Settings", icon: Settings2 },
 ];
+
+/** Whether a path belongs to the settings space (its own sidebar). */
+function isSettingsPath(pathname: string): boolean {
+  return pathname === "/settings" || pathname.startsWith("/orgs");
+}
+
+/** The settings-space sidebar. Member/settings links need the active org, so
+ * they're built per-render; omitted when no org is selected. */
+function settingsLinks(activeOrgId: string | null) {
+  return [
+    { to: "/orgs", label: "Organizations", icon: Building2, end: true },
+    ...(activeOrgId
+      ? [
+          {
+            to: `/orgs/${activeOrgId}/members`,
+            label: "Members",
+            icon: Users,
+          },
+          {
+            to: `/orgs/${activeOrgId}/settings`,
+            label: "Organization settings",
+            icon: Settings2,
+          },
+        ]
+      : []),
+    { to: "/settings", label: "Account", icon: CircleUser },
+  ];
+}
 
 function NavItem({
   to,
@@ -163,6 +194,14 @@ export function AppShell() {
   // state. Idempotent — won't overwrite an existing valid selection.
   useActiveBootstrap();
   const { sidebarCollapsed, toggleSidebar } = useUi();
+  const navigate = useNavigate();
+
+  // Two sidebar "spaces" share this one shell frame: the product features, and
+  // an org/account settings space (its own nav), entered from the account menu.
+  const { pathname } = useLocation();
+  const inSettings = isSettingsPath(pathname);
+  const activeOrgId = useActive((s) => s.activeOrgId);
+  const links = inSettings ? settingsLinks(activeOrgId) : workspaceLinks;
 
   // The workspace create-dialogs live here, not in OrgProjectSwitcher, so
   // collapsing the sidebar (which unmounts the switcher trigger) can't unmount
@@ -214,10 +253,21 @@ export function AppShell() {
         >
           {!sidebarCollapsed && (
             <div className="min-w-0 flex-1">
-              <OrgProjectSwitcher
-                onNewOrg={() => setCreateOrgOpen(true)}
-                onNewProject={() => setCreateProjectOpen(true)}
-              />
+              {inSettings ? (
+                <button
+                  type="button"
+                  onClick={() => navigate("/agents")}
+                  className="flex items-center gap-2 rounded-md px-2 py-1.5 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                >
+                  <ArrowLeft className="size-4" />
+                  Back to workspace
+                </button>
+              ) : (
+                <OrgProjectSwitcher
+                  onNewOrg={() => setCreateOrgOpen(true)}
+                  onNewProject={() => setCreateProjectOpen(true)}
+                />
+              )}
             </div>
           )}
           <Button
@@ -235,8 +285,20 @@ export function AppShell() {
         </div>
 
         <nav className="flex-1 overflow-y-auto px-2 py-2 scrollbar-thin">
+          {/* Collapsed settings space has no switcher line, so surface the exit
+              as a nav row too. */}
+          {inSettings && sidebarCollapsed && (
+            <div className="mb-0.5 flex flex-col gap-0.5">
+              <NavItem
+                to="/agents"
+                label="Back to workspace"
+                icon={ArrowLeft}
+                collapsed
+              />
+            </div>
+          )}
           <div className="flex flex-col gap-0.5">
-            {workspaceLinks.map((l) => (
+            {links.map((l) => (
               <NavItem key={l.to} {...l} collapsed={sidebarCollapsed} />
             ))}
           </div>

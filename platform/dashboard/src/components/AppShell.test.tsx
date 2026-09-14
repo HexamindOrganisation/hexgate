@@ -104,6 +104,33 @@ describe("AppShell", () => {
     }
   });
 
+  it("keeps org/account admin out of the product sidebar", async () => {
+    renderWithProviders(<AppShell />);
+    await waitFor(() => expect(screen.getByText("Agents")).toBeInTheDocument());
+    // Organizations moved to the settings space; it's no longer a product nav
+    // item, and the settings-space affordances aren't rendered here.
+    expect(screen.queryByText("Organizations")).not.toBeInTheDocument();
+    expect(screen.queryByText("Back to workspace")).not.toBeInTheDocument();
+  });
+
+  it("renders the settings-space nav (not product links) on a settings path", async () => {
+    renderWithProviders(<AppShell />, { initialRoute: "/orgs" });
+    await waitFor(() =>
+      expect(screen.getByText("Organizations")).toBeInTheDocument(),
+    );
+    for (const label of [
+      "Members",
+      "Organization settings",
+      "Account",
+      "Back to workspace",
+    ]) {
+      expect(screen.getByText(label)).toBeInTheDocument();
+    }
+    // Product features do not appear in the settings sidebar.
+    expect(screen.queryByText("Policies")).not.toBeInTheDocument();
+    expect(screen.queryByText("Playground")).not.toBeInTheDocument();
+  });
+
   it("collapsing the sidebar hides the nav labels", async () => {
     renderWithProviders(<AppShell />);
     await waitFor(() => expect(screen.getByText("Agents")).toBeInTheDocument());
