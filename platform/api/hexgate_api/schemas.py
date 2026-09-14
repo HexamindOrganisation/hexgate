@@ -836,6 +836,9 @@ class AuditDecisionRow(BaseModel):
     hint: Any = None
     arguments: Any = None
     attributes: Any = None
+    # None rather than the zero UUID the column stores for "outside a run".
+    # The drawer passes this to the llm-messages read when session_id is empty.
+    run_id: Optional[UUID] = None
 
 
 class AuditDecisionPage(BaseModel):

@@ -21,6 +21,7 @@ from hexgate_api.deps.identity import require_user
 from hexgate_api.deps.org import require_org_member
 from hexgate_api.features.llm_messages.service import (
     MAX_PAGE_SIZE,
+    NoMessageScope,
     list_llm_messages,
 )
 from hexgate_api.main import app
@@ -120,6 +121,57 @@ def test_list_llm_messages_scopes_to_project_and_session() -> None:
     assert "project_id = {pid:String}" in sql
     assert "session_id = {session_id:String}" in sql
     assert params["pid"] == "p1" and params["session_id"] == "sess_1"
+    assert "run_id" not in params
+
+
+def test_when_only_a_run_id_is_given_then_it_scopes_the_read() -> None:
+    """The common case: the SDK user never set a session id, so the rows
+    carry session_id='' and run_id is the only scope left."""
+    client = _client_returning()
+    run_id = uuid.uuid4()
+
+    list_llm_messages(client, project_id="p1", run_id=run_id)
+
+    sql = client.query.call_args.args[0]
+    params = client.query.call_args.kwargs["parameters"]
+    assert "run_id = {run_id:UUID}" in sql
+    assert params["run_id"] == run_id
+    assert "session_id" not in params
+
+
+def test_when_both_scopes_are_given_then_both_are_applied() -> None:
+    """A caller holding both means the intersection; there is no reading
+    under which naming a second scope should widen the result."""
+    client = _client_returning()
+    run_id = uuid.uuid4()
+
+    list_llm_messages(client, project_id="p1", session_id="sess_1", run_id=run_id)
+
+    sql = client.query.call_args.args[0]
+    assert "session_id = {session_id:String}" in sql
+    assert "run_id = {run_id:UUID}" in sql
+
+
+def test_when_no_scope_is_given_then_it_raises() -> None:
+    """An unscoped read would stream the project's entire message history,
+    so it must never reach ClickHouse."""
+    client = _client_returning()
+
+    with pytest.raises(NoMessageScope):
+        list_llm_messages(client, project_id="p1")
+
+    client.query.assert_not_called()
+
+
+def test_when_the_run_id_is_the_zero_uuid_then_it_is_not_a_scope() -> None:
+    """The zero UUID is the column's "outside any run" value, shared by every
+    unattributed row in the project — it names no transcript."""
+    client = _client_returning()
+
+    with pytest.raises(NoMessageScope):
+        list_llm_messages(client, project_id="p1", run_id=ZERO_RUN_ID)
+
+    client.query.assert_not_called()
 
 
 def test_list_llm_messages_orders_oldest_first() -> None:
@@ -332,14 +384,44 @@ def test_llm_messages_read_returns_the_page(
     assert row["message_seq"] == 0
 
 
-@pytest.mark.parametrize("query", ["", "?session_id="])
-def test_when_session_id_is_missing_or_blank_then_422(
+@pytest.mark.parametrize(
+    "query",
+    [
+        "",  # neither scope
+        "?session_id=",  # blank session
+        f"?run_id={ZERO_RUN_ID}",  # the "outside any run" value
+    ],
+)
+def test_when_no_usable_scope_is_given_then_422(
     client: TestClient, fake_clickhouse: MagicMock, query: str
 ) -> None:
-    """The session scope is not optional: without it the read would be a
+    """Some scope is not optional: without one the read would be a
     project-wide dump of every stored prompt."""
     app.dependency_overrides[require_org_member] = lambda: MagicMock()
     r = client.get(f"{_READ_PATH}{query}")
+    assert r.status_code == 422
+    fake_clickhouse.query.assert_not_called()
+
+
+def test_when_only_a_run_id_is_given_then_the_endpoint_serves_it(
+    client: TestClient, fake_clickhouse: MagicMock
+) -> None:
+    """The path for SDK users who never set a session id — without it their
+    transcripts would be stored and unreadable for the whole 180-day TTL."""
+    app.dependency_overrides[require_org_member] = lambda: MagicMock()
+    run_id = uuid.uuid4()
+
+    r = client.get(f"{_READ_PATH}?run_id={run_id}")
+
+    assert r.status_code == 200, r.text
+    assert fake_clickhouse.query.call_args.kwargs["parameters"]["run_id"] == run_id
+
+
+def test_when_the_run_id_is_malformed_then_422(
+    client: TestClient, fake_clickhouse: MagicMock
+) -> None:
+    app.dependency_overrides[require_org_member] = lambda: MagicMock()
+    r = client.get(f"{_READ_PATH}?run_id=not-a-uuid")
     assert r.status_code == 422
     fake_clickhouse.query.assert_not_called()
 

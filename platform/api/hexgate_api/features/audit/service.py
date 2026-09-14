@@ -584,10 +584,14 @@ def timeseries(
     return [points[t] for t in sorted(points)]
 
 
+# run_id rides along so the detail drawer can ask for this decision's
+# transcript: session_id is caller-supplied and usually empty, and run_id is
+# then the only scope the llm-messages read has left (features/llm_messages).
 _LIST_COLUMNS = (
     "event_id, occurred_at, received_at, agent_name, agent_version_id, "
     "session_id, user_id, tool_name, user_roles, deciding_role, "
-    "outcome, error_type, reason, violations, hint, arguments, attributes"
+    "outcome, error_type, reason, violations, hint, arguments, attributes, "
+    "run_id"
 )
 
 
@@ -647,6 +651,10 @@ def list_decisions(
         row["hint"] = decode_json_column(row.get("hint") or "")
         row["arguments"] = decode_json_column(row.get("arguments") or "")
         row["attributes"] = decode_json_column(row.get("attributes") or "")
+        # The zero UUID is the column's "outside any run" value, not a run to
+        # scope a transcript read by.
+        if row.get("run_id") == ZERO_RUN_ID:
+            row["run_id"] = None
         rows.append(row)
 
     # An empty page past the end (offset > 0) carries no window value, so the
