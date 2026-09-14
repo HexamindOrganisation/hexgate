@@ -68,6 +68,12 @@ def _log_messages_enabled() -> bool:
     return os.environ.get(LOG_MESSAGES_ENV, "").strip().lower() not in _OFF_VALUES
 
 
+# Public alias: an adapter hook has to know *before* it stashes an input list
+# and converts it, not only at the emit call below, or an opted-out process
+# still pays for a log it does not keep.
+log_messages_enabled = _log_messages_enabled
+
+
 def _json_default(obj: Any) -> Any:
     """``json.dumps`` hook for what the framework hands an adapter: pydantic
     models (every supported framework's message type), dataclasses and mappings
