@@ -369,6 +369,54 @@ async def test_when_message_logging_is_off_then_only_usage_is_emitted(
 
 
 @pytest.mark.asyncio
+async def test_when_message_logging_is_off_then_usage_still_names_the_model(
+    monkeypatch: pytest.MonkeyPatch,
+    emitted: list[dict[str, Any]],
+    messages: list[dict[str, Any]],
+) -> None:
+    """The two streams are independent, so the opt-out must not reach into
+    usage. The model rides on the same stash as the prompt, and only the
+    prompt is gated — otherwise a provider that echoes no model_name would put
+    every opted-out project's tokens into one "default" bucket."""
+    monkeypatch.setenv(LOG_MESSAGES_ENV, "0")
+    handler = HexgateUsageCallbackHandler(agent_name="my-agent", api_key="k")
+    run_id = uuid4()
+
+    with run_scope("my-agent"):
+        await handler.on_chat_model_start(
+            {},
+            [[HumanMessage(content="Weather?")]],
+            run_id=run_id,
+            metadata={"ls_model_name": "claude-sonnet-5"},
+        )
+        await handler.on_llm_end(
+            LLMResult(
+                generations=[
+                    [
+                        ChatGeneration(
+                            message=AIMessage(
+                                content="Sunny.",
+                                usage_metadata={
+                                    "input_tokens": 1,
+                                    "output_tokens": 2,
+                                    "total_tokens": 3,
+                                },
+                            )
+                        )
+                    ]
+                ],
+                llm_output=None,
+            ),
+            run_id=run_id,
+        )
+
+    assert messages == []
+    assert emitted[0]["model"] == "claude-sonnet-5"
+    # The prompt itself was never copied, and the stash did not leak.
+    assert handler._pending == {}
+
+
+@pytest.mark.asyncio
 async def test_when_the_prompt_was_not_stashed_then_the_completion_still_lands(
     messages: list[dict[str, Any]],
 ) -> None:

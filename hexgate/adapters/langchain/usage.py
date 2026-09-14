@@ -152,6 +152,15 @@ class HexgateUsageCallbackHandler(BaseCallbackHandler):
         The stash sweep is by ``turn_key`` rather than a wholesale clear: one
         handler serves concurrent runs, and a cancelled call leaves an entry
         that neither ``on_llm_end`` nor ``on_llm_error`` will ever collect.
+
+        One key, so one message list. An agent invoked from inside another
+        one's graph opens its own run scope, and LangChain hands this handler
+        that nested agent's calls too — under the nested run's key, which this
+        sweep does not name and the nested agent's own handler does not hold.
+        That entry outlives the run: ~200 bytes per nested run, measured.
+        Closing it needs the cursor's eviction contract to change rather than
+        this method, so it is left as a known cost — see the same shape on
+        ``HexgateLangchainAgent`` and ``HexgateAgent``.
         """
         self._cursor.reset(turn_key)
         for run_id, prompt in list(self._pending.items()):
@@ -174,15 +183,19 @@ class HexgateUsageCallbackHandler(BaseCallbackHandler):
         ``messages`` is one list per prompt and a chat-model call has exactly
         one, so ``messages[0]`` is the conversation. It is the whole list, not
         a delta.
+
+        Stashed whether or not message logging is on, because the *usage*
+        event reads the model off this too and that stream has nothing to do
+        with ``HEXGATE_LOG_MESSAGES``. Only the conversation itself is gated:
+        an opted-out process must not pay to copy and convert a prompt it will
+        not keep, but a model id it already has in hand costs nothing.
         """
-        if not log_messages_enabled():
-            return
         self._pending[run_id] = _Prompt(
             self.turn_key(run_id),
             # Copied: LangChain hands over the live list, which the chain goes
             # on to append to, and the delta must be measured against the
             # prompt actually sent.
-            list(messages[0]) if messages else [],
+            list(messages[0]) if (messages and log_messages_enabled()) else [],
             _started_model(metadata, kwargs),
         )
 
@@ -199,12 +212,12 @@ class HexgateUsageCallbackHandler(BaseCallbackHandler):
 
         Chat models never reach here — LangChain routes them to
         ``on_chat_model_start`` above and only falls back to this one when that
-        override is missing.
+        override is missing. Gated the same way, for the same reason.
         """
-        if not log_messages_enabled():
-            return
         self._pending[run_id] = _Prompt(
-            self.turn_key(run_id), list(prompts), _started_model(metadata, kwargs)
+            self.turn_key(run_id),
+            list(prompts) if log_messages_enabled() else [],
+            _started_model(metadata, kwargs),
         )
 
     async def on_llm_error(

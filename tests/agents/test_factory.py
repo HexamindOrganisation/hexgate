@@ -624,3 +624,42 @@ async def test_usage_handler_context_propagates_when_caller_opens_user_scope(
     assert event.user_id == "u-1"
     assert event.session_id == "s-1"
     assert get_current_context() is None
+
+
+@pytest.mark.asyncio
+async def test_hexgate_agent_ainvoke_drops_the_runs_transcript_state() -> None:
+    """The usage/message callback handler lives as long as the runtime, so
+    every run method owes ``MessageCursor`` a reset — otherwise the per-run
+    state of every run the process ever made accumulates for its lifetime.
+    ``HexgateLangchainAgent`` pays it at its own run boundary; this path opens
+    its own ``run_scope`` and has to pay it too."""
+    from hexgate.runtime import HexgateContext
+
+    graph = FakeAgent()
+    agent = factory.HexgateAgent(
+        graph=graph, model="m", tools=[], system_prompt=None, name="bot"
+    )
+
+    async with HexgateContext(user_id="u1"):
+        for _ in range(3):
+            await agent.ainvoke({}, {})
+
+    assert agent._usage_handler._cursor._turns == {}
+
+
+@pytest.mark.asyncio
+async def test_hexgate_agent_astream_events_drops_the_runs_transcript_state() -> None:
+    """Same on the streaming path, where the reset sits in an async generator."""
+    from hexgate.runtime import HexgateContext
+
+    graph = FakeAgent()
+    agent = factory.HexgateAgent(
+        graph=graph, model="m", tools=[], system_prompt=None, name="bot"
+    )
+
+    async with HexgateContext(user_id="u1"):
+        for _ in range(3):
+            async for _event in agent.astream_events({}, {}, version="v2"):
+                pass
+
+    assert agent._usage_handler._cursor._turns == {}
