@@ -147,45 +147,27 @@ def list_llm_messages(
     """One transcript's rows, oldest first. Returns ``{rows, total, limit,
     offset}`` with ``total`` the unpaginated match count.
 
-    Scoped by ``session_id``, by ``run_id``, or by both — at least one, or
-    :class:`NoMessageScope`. This table's rows are whole prompts, so a read
-    with no scope at all would stream a project's entire message history;
-    the check lives here rather than only in the router because this function
-    builds the WHERE clause, and an unscoped one is the failure that matters.
+    Scoped by ``session_id``, ``run_id`` or both — at least one, else
+    :class:`NoMessageScope`, since a row here is a whole prompt and an
+    unscoped read would stream the project's entire message history. Two
+    scopes because ``session_id`` is caller-supplied and usually unset (it
+    defaults to ``""`` all the way down; see ``AuditEnvelope``), which would
+    otherwise leave those transcripts stored and unreadable for their whole
+    TTL. A zero ``run_id`` is no more a scope than a blank session: it is the
+    column's "outside any run" value, shared across the project.
 
-    Two scopes rather than one because ``session_id`` is caller-supplied and
-    most SDK users never set it: it defaults to ``""`` all the way down (see
-    ``AuditEnvelope``), so requiring it would leave every transcript from an
-    unnamed session stored and unreadable for its whole 180-day TTL.
-    ``run_id`` is the platform's own identifier and is why the column exists.
-    A zero ``run_id`` is rejected for the same reason the empty session is:
-    it is the column's "outside any run" value, shared by every unattributed
-    row in the project, so it names no transcript.
+    No window parameter, unlike every other read here — a time filter on a
+    conversation can only cut its head off, and the cut reads as a
+    ``message_seq`` gap, which schema.sql defines as a row the pipeline lost.
+    Long transcripts page instead.
 
-    The scope IS the scope — there is no window parameter, unlike every
-    other read here. ``scope_filters`` always emits a time predicate, so this
-    passes the retention horizon, past which nothing is stored anyway. A
-    dashboard window would silently cut the head off a conversation that
-    started before it, and the cut is unreadable: the surviving rows begin at
-    a nonzero ``message_seq``, which schema.sql tells a reader means the
-    pipeline lost a row. Paging, not a narrower window, is how a long
-    transcript is taken in pieces.
-
-    Ordered ``(occurred_at, message_seq, event_id)`` — exactly the storage
-    sort key after project/session, so the scan is already in output order.
-    Ascending, unlike the newest-first decision list: a transcript is read
-    forwards. ``message_seq`` cannot order on its own (it restarts at 0 for
-    each ``turn_key``), and ``occurred_at`` cannot either (DateTime64(3) ties
-    within a millisecond), so both run ahead of ``event_id``, which breaks the
-    remaining ties into the total order paging needs. A run-scoped read gets
-    no help from the sort key beyond ``project_id`` and scans the retention
-    window; that is the cost of the session column being optional.
-
-    Reads without ``FINAL``, like every other read path here: after a
-    whole-batch retry both copies of an ``event_id`` are returned — adjacent,
-    since the sort key ends in ``event_id`` — and counted in ``total``, until
-    ReplacingMergeTree merges the parts. A repeated message in a transcript is
-    that window, not the agent saying the same thing twice.
+    Ordered to match the storage sort key after project/session, so the scan
+    is already in output order; see schema.sql for why that key is shaped
+    this way. Ascending, unlike the newest-first decision list: a transcript
+    is read forwards. A run-scoped read gets no pruning past ``project_id``
+    and scans the retention window — the cost of the session column being
+    optional. Reads without ``FINAL``, so a retried batch shows both copies
+    of an ``event_id`` until they merge (see ``insert_llm_messages_batch``).
     """
     if not session_id and (run_id is None or run_id == ZERO_RUN_ID):
         raise NoMessageScope()
