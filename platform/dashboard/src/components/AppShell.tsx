@@ -12,7 +12,7 @@ import {
   PanelLeft,
   ScrollText,
   Settings2,
-  ShieldCheck,
+  Files,
   type LucideIcon,
 } from "lucide-react";
 
@@ -98,7 +98,7 @@ function useActiveBootstrap(): void {
 
 const workspaceLinks = [
   { to: "/agents", label: "Agents", icon: FileCode },
-  { to: "/policies", label: "Policies", icon: ShieldCheck },
+  { to: "/policies", label: "Policies", icon: Files },
   { to: "/graph", label: "Graph", icon: Network },
   { to: "/playground", label: "Playground", icon: MessageSquareCode },
   { to: "/audit", label: "Audit", icon: ScrollText },

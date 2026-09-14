@@ -262,7 +262,7 @@ export function PoliciesPage() {
         ) : (
           <>
             <div className="flex-1 grid grid-cols-[240px_minmax(0,1fr)_minmax(320px,380px)] overflow-hidden">
-              <div className="overflow-hidden bg-background/40">
+              <div className="overflow-hidden border-r border-border bg-editor">
                 <FileTree
                   files={files}
                   emptyFolders={emptyFolders}
@@ -353,7 +353,7 @@ export function PoliciesPage() {
                   )}
                 </div>
               </div>
-              <div className="overflow-hidden bg-background/40">
+              <div className="overflow-hidden border-l border-border bg-editor">
                 <InspectorTabs
                   projectId={projectId}
                   resolved={resolved}
