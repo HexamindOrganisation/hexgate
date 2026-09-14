@@ -102,7 +102,9 @@ async def _turn(
     ``completion``. A fresh ``run_id`` each time, as LangChain mints one per
     model call."""
     call_id = run_id or uuid4()
-    await handler.on_chat_model_start({}, [prompt], run_id=call_id)
+    await handler.on_chat_model_start(
+        {}, [prompt], run_id=call_id, metadata={"ls_model_name": "gpt-4o"}
+    )
     await handler.on_llm_end(
         LLMResult(
             generations=[[ChatGeneration(message=completion)]],
@@ -314,7 +316,7 @@ async def test_when_two_runs_share_a_handler_then_turn_keys_differ(
             await _turn(
                 handler, [HumanMessage(content="Weather?")], AIMessage(content="Sunny.")
             )
-            handler.end_run()
+            handler.end_run(handler.turn_key())
 
     first, second = messages
     assert first["turn_key"] != second["turn_key"]
@@ -333,7 +335,7 @@ async def test_end_run_happy_path(
         await handler.on_chat_model_start(
             {}, [[HumanMessage(content="Weather?")]], run_id=uuid4()
         )
-        handler.end_run()
+        handler.end_run(handler.turn_key())
 
         assert handler._cursor._turns == {}
         assert handler._pending == {}
@@ -471,7 +473,53 @@ async def test_when_the_model_is_not_a_chat_model_then_prompts_are_still_logged(
 
 
 @pytest.mark.asyncio
-async def test_when_the_provider_names_no_model_then_a_placeholder_is_used(
+async def test_when_the_response_names_no_model_then_the_request_side_one_is_used(
+    emitted: list[dict[str, Any]],
+    messages: list[dict[str, Any]],
+) -> None:
+    """The request half always knows which model it is about to call; the
+    response only carries one if the provider echoed it. Falling straight to
+    the placeholder would collapse several known models into one bucket on the
+    usage breakdown."""
+    handler = HexgateUsageCallbackHandler(agent_name="my-agent", api_key="k")
+    run_id = uuid4()
+
+    with run_scope("my-agent"):
+        await handler.on_chat_model_start(
+            {},
+            [[HumanMessage(content="Weather?")]],
+            run_id=run_id,
+            metadata={"ls_model_name": "claude-sonnet-5"},
+        )
+        await handler.on_llm_end(
+            LLMResult(
+                generations=[
+                    [
+                        ChatGeneration(
+                            message=AIMessage(
+                                content="Sunny.",
+                                usage_metadata={
+                                    "input_tokens": 1,
+                                    "output_tokens": 2,
+                                    "total_tokens": 3,
+                                },
+                            )
+                        )
+                    ]
+                ],
+                llm_output=None,
+            ),
+            run_id=run_id,
+        )
+
+    [event] = messages
+    assert event["model"] == "claude-sonnet-5"
+    # Both streams report the same model for one call.
+    assert emitted[0]["model"] == "claude-sonnet-5"
+
+
+@pytest.mark.asyncio
+async def test_when_nothing_names_a_model_then_a_placeholder_is_used(
     messages: list[dict[str, Any]],
 ) -> None:
     """The platform rejects an empty ``model`` outright (min_length=1), which
@@ -489,3 +537,38 @@ async def test_when_the_provider_names_no_model_then_a_placeholder_is_used(
 
     [event] = messages
     assert event["model"] == "default"
+
+
+@pytest.mark.asyncio
+async def test_when_a_run_ends_in_a_foreign_context_then_a_live_run_is_untouched(
+    messages: list[dict[str, Any]],
+) -> None:
+    """``astream`` puts ``end_run`` inside an async generator, and a consumer
+    that breaks out early leaves it to be finalized in a different Context —
+    where re-reading the run scope would name whichever run is bound then. The
+    key is captured on the way in, so an abandoned run cannot reset a live
+    run's cursor out from under it.
+    """
+    handler = HexgateUsageCallbackHandler(agent_name="my-agent", api_key="k")
+
+    with run_scope("my-agent"):
+        abandoned_key = handler.turn_key()
+
+    with run_scope("my-agent"):
+        live_key = handler.turn_key()
+        await _turn(
+            handler, [HumanMessage(content="Weather?")], AIMessage(content="Sunny.")
+        )
+        # The abandoned run's finally, running while the live run is bound.
+        handler.end_run(abandoned_key)
+        await _turn(
+            handler,
+            [HumanMessage(content="Weather?"), AIMessage(content="Sunny.")],
+            AIMessage(content="Still sunny."),
+        )
+
+    assert abandoned_key != live_key
+    assert [event["message_seq"] for event in messages] == [0, 1], (
+        "the live run kept counting; a swept cursor would restart at 0"
+    )
+    assert not messages[1]["resynced"]

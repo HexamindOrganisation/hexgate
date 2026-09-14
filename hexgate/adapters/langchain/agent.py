@@ -78,23 +78,28 @@ class HexgateLangchainAgent:
 
         The usage handler outlives the run (one instance per proxy, unlike the
         OpenAI adapter's per-run hooks), so the run's transcript cursor is
-        dropped here on the way out — inside the scope, while the run facts
-        that name it are still bound.
+        dropped here on the way out. The key is read on the way *in*: the
+        streaming entry points put this ``finally`` inside an async generator,
+        which a consumer that breaks out early leaves to be finalized in a
+        different ``Context`` — where re-reading it would name whichever run
+        was bound at that moment rather than this one (see :meth:`end_run`).
         """
         async with abind(context, self._agent_name, self._tag(method)):
+            turn_key = self._usage_handler.turn_key()
             try:
                 yield
             finally:
-                self._usage_handler.end_run()
+                self._usage_handler.end_run(turn_key)
 
     @contextmanager
     def _bind(self, context: HexgateContext, method: str) -> Iterator[None]:
         """Sync mirror of :meth:`_abind`."""
         with bind(context, self._agent_name, self._tag(method)):
+            turn_key = self._usage_handler.turn_key()
             try:
                 yield
             finally:
-                self._usage_handler.end_run()
+                self._usage_handler.end_run(turn_key)
 
     @staticmethod
     def _tag(method: str) -> str:
