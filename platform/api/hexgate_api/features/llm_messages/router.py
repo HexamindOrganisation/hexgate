@@ -9,7 +9,7 @@ import asyncio
 from uuid import UUID
 
 from clickhouse_connect.driver.exceptions import ClickHouseError
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from hexgate_api.deps.clickhouse import _audit_unavailable, require_clickhouse
 from hexgate_api.deps.org import require_org_member
@@ -52,8 +52,27 @@ async def api_llm_messages(
     # data, not a malformed request. ``run_id`` is parsed by hand for that
     # reason — annotating it ``UUID`` would 422 a blank before the scope check,
     # the mirror of the constraint removed from session_id in fe323177.
-    session_id: str | None = None,
-    run_id: str | None = None,
+    session_id: str | None = Query(
+        default=None,
+        description=(
+            "Session to read the transcript of. Send it EMPTY (`?session_id=`) "
+            "rather than omitting it when the decision you are reading from has "
+            "no session id — an empty value is the fast path, because session_id "
+            "is the second column of the storage sort key and pinning it, even "
+            'to "", keeps the scan inside one contiguous block. Omitting it '
+            'entirely means "I do not know the session" and makes a run-scoped '
+            "read scan every session in the project. Empty on its own is not a "
+            "scope; pair it with run_id."
+        ),
+    ),
+    run_id: str | None = Query(
+        default=None,
+        description=(
+            "Run to read the transcript of, for the common case of an SDK user "
+            "who never set a session id. A blank value reads as absent, so a "
+            "caller may forward a decision row's null run_id unchanged."
+        ),
+    ),
     limit: int = 50,
     offset: int = 0,
     clickhouse_client=Depends(require_clickhouse),
