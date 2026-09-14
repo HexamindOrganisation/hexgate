@@ -415,12 +415,16 @@ that it happened. Six of its eleven events are small enough to ride any
 export; the other five each carry an input message past the SDK's 256 KiB cap,
 so each leaves at roughly the cap and together they come to ~1.25 MiB. That
 number is the point: **one** oversized span would not test anything, since
-256 KiB fits the 1 MB record the exporter and the broker default to, but five
-do not, so a stage still at those defaults rejects the record and the script
-reports every event missing. Every hop rejects whole (see above), so that is
-the expected shape of the failure — not one row absent out of eleven. The
-rows that do land are verified as `truncated` rather than missing, which
-separates "the caps worked" from "the record was dropped".
+256 KiB fits inside both defaults the record has to clear — the exporter's
+1,000,000 bytes and the broker's 1 MiB. Four spans is where the input
+attributes alone reach 1,048,576, exactly on the broker's line; five clears
+both outright, so a stage still at those defaults rejects the record and the
+script reports every event missing. Every hop rejects whole (see above), so
+that is the expected shape of the failure — not one row absent out of eleven,
+and it is shared with a slow uplink losing the 5 s export deadline
+(`platform/DEPLOY.md` §4 says how to tell them apart). The rows that do land
+are verified as `truncated` *and still full size*, which separates "the caps
+worked" from "the record was dropped" and from "something clipped it".
 
 The Collector **acks the HTTP request before the Kafka publish**. A Redpanda
 outage therefore looks like success to the SDK; the exporter retries and then
