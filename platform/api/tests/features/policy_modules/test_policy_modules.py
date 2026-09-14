@@ -1575,12 +1575,13 @@ async def test_seeded_compose_demo_resolves(session_factory) -> None:
         names = {f.name for f in await svc.list_files(s, DEFAULT_PROJECT_ID)}
         assert {
             "policy.yaml",
-            "caps/payments.yaml",
-            "caps/billing_desk.yaml",
+            "caps/base/read_only.yaml",
+            "caps/support/delegate.yaml",
+            "caps/billing/payments.yaml",
         } <= names
 
-        # support_bot: billing refunds up to the $1000 boundary ceiling and may
-        # delegate to billing; support can do neither.
+        # support_bot: the billing seat refunds directly up to the $1000 ceiling;
+        # the support seat can't refund itself but MUST delegate to billing_bot.
         ps = (
             await svc.compose_resolve(s, DEFAULT_PROJECT_ID, agent="support_bot")
         ).policy_set
@@ -1592,7 +1593,12 @@ async def test_seeded_compose_demo_resolves(session_factory) -> None:
         assert mode("billing", "refund_order", amount=2000, currency="USD") == "deny"
         assert mode("billing", "delegate_to_billing") == "allow"
         assert mode("support", "refund_order", amount=10, currency="USD") == "deny"
-        assert mode("support", "delegate_to_billing") == "deny"
+        assert mode("support", "delegate_to_billing") == "allow"  # its only path
+        assert mode("default", "delegate_to_billing") == "deny"
+
+        # The sub-agent reach edge is active: support may reach billing_bot as a
+        # tool (lowered to agent.tool:billing_bot in the resolved policy).
+        assert "agent.tool:billing_bot" in ps.policy_for("support").effective_tools
 
         # MCP tools (mcp-demo-*): a safe one is open to all, an invoice needs
         # approval for billing, and the secret-reader is denied outright.

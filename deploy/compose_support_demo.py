@@ -1,14 +1,17 @@
 """Hexgate compose support-bot demo (marimo) — a live agent, gated per role, in the dashboard.
 
 The interactive half of the compose showcase. You define a real front-line
-**support_bot** with a **billing_bot sub-agent** (exposed as the
+**support_bot** with a **billing_bot sub-agent** (reached as the
 `delegate_to_billing` tool), serve it to the dashboard from this notebook, and
 drive it in the Playground:
 
-  * as `support` / `default` — a refund is refused: `refund_order` and
-    `delegate_to_billing` are denied by policy, so the billing sub-agent never runs.
-  * as `billing` — refunds up to the boundary's $1000 ceiling are allowed, and the
-    delegation runs billing_bot.
+  * as `default` — read-only: `refund_order` and `delegate_to_billing` are both
+    denied, so nothing bills.
+  * as `support` — the front-line seat *can't refund itself*, but it MAY delegate:
+    `refund_order` is denied while `delegate_to_billing` runs billing_bot. Delegation
+    to the sub-agent is the only path to a refund.
+  * as `billing` — the elevated seat refunds directly, up to the boundary's $1000
+    ceiling (and may still delegate).
 
 support_bot's role-aware policy is the **compose** policy authored as
 `policy.yaml` + capability files and seeded into the default (support-bot) project
@@ -50,11 +53,11 @@ def _(mo):
     mo.md("""
     # 🎧 Hexgate — a live support agent, gated by a *compose* policy
 
-    **support_bot** is your front-line agent. It looks up orders, and — for a
-    **billing** seat — refunds and hands a refund off to a **billing_bot**
-    sub-agent via `delegate_to_billing`. Refund + delegation are **policy-gated
-    by role**: `support`/`default` are refused before the sub-agent ever runs;
-    only `billing` may refund (up to a $1000 ceiling) and delegate.
+    **support_bot** is your front-line agent. It looks up orders and, when a
+    refund is needed, **delegates to a `billing_bot` sub-agent** via
+    `delegate_to_billing`. Both are **policy-gated by role**: `default` is
+    read-only; the `support` seat *can't refund itself* and **must delegate** to
+    billing_bot; only the `billing` seat refunds directly (up to a $1000 ceiling).
 
     That policy is the compose `policy.yaml` (+ capability files) seeded into the
     default project — the same one the dashboard's **Policies** editor
@@ -294,45 +297,54 @@ def _(Path, mo, resolve_file):
             "    view_orders: { mode: allow }\n"
             "    send_email: { mode: allow }\n"
             "    escalate: { mode: allow }\n"
-            '    refund_order: { mode: allow, constraint: "args.amount <= 1000" }  # hard cap\n'
-            "    delegate_to_billing: { mode: allow }   # ceiling; needs a capability grant\n"
+            '    refund_order: { mode: allow, constraint: "args.amount <= 1000" }  # org hard cap\n'
+            "    delegate_to_billing: { mode: allow }   # ceiling; a capability grant activates it\n"
             "    mcp-demo-compute_tip: { mode: allow }     # safe MCP tool\n"
             "    mcp-demo-send_invoice: { mode: allow }    # ceiling; billing grants w/ approval\n"
             "    mcp-demo-read_secret: { mode: deny }      # dangerous MCP tool — always denied\n"
             "  reach:\n"
-            "    billing_bot: { as: handoff }   # reach ceiling: hand-off only, never as-tool\n"
+            "    billing_bot: { as: tool }   # reach ceiling: callable as a sub-agent tool\n"
             "agents:\n"
             "  support_bot:\n"
             "    roles:\n"
-            "      default: { import: [ caps/read_only.yaml ] }\n"
-            "      support: { import: [ caps/read_only.yaml, caps/support_leaf.yaml ] }\n"
+            "      default: { import: [ caps/base/read_only.yaml ] }\n"
+            "      # The front-line seat can't refund itself — it MUST delegate to billing_bot.\n"
+            "      support:\n"
+            "        import:\n"
+            "          [ caps/base/read_only.yaml, caps/support/desk.yaml,\n"
+            "            caps/support/delegate.yaml ]\n"
+            "      # The elevated seat refunds directly, and may still delegate.\n"
             "      billing:\n"
             "        import:\n"
-            "          [ caps/read_only.yaml, caps/payments.yaml, caps/billing_desk.yaml,\n"
-            "            caps/billing_reach.yaml ]\n"
+            "          [ caps/base/read_only.yaml, caps/support/desk.yaml,\n"
+            "            caps/billing/payments.yaml, caps/billing/invoicing.yaml,\n"
+            "            caps/support/delegate.yaml ]\n"
             "  billing_bot:\n"
             "    roles:\n"
-            "      billing: { import: [ caps/payments.yaml ] }\n"
+            "      billing:\n"
+            "        import: [ caps/billing/payments.yaml, caps/billing/invoicing.yaml ]\n"
         ),
-        "caps/read_only.yaml": (
+        "caps/base/read_only.yaml": (
             "tools:\n  view_orders: { mode: allow }\n"
             "mcp:\n  mcp-demo-compute_tip: { mode: allow }\n"
         ),
-        "caps/support_leaf.yaml": (
+        "caps/support/desk.yaml": (
             "tools:\n"
             "  send_email: { mode: allow }\n"
             "  escalate: { mode: approval_required }\n"
         ),
-        "caps/payments.yaml": (
+        "caps/support/delegate.yaml": (
+            "tools:\n  delegate_to_billing: { mode: allow }\n"
+            "reach:\n  billing_bot: { as: tool }\n"
+        ),
+        "caps/billing/payments.yaml": (
             "tools:\n"
-            '  refund_order: { mode: allow, constraint: '
+            "  refund_order: { mode: allow, constraint: "
             '\'args.currency in ["USD", "EUR"]\' }\n'
         ),
-        "caps/billing_desk.yaml": (
-            "tools:\n  delegate_to_billing: { mode: allow }\n"
+        "caps/billing/invoicing.yaml": (
             "mcp:\n  mcp-demo-send_invoice: { mode: approval_required }\n"
         ),
-        "caps/billing_reach.yaml": "reach:\n  billing_bot: { as: handoff }\n",
     }
     _root = Path(tempfile.gettempdir()) / "hexgate-compose-support-demo"
     shutil.rmtree(_root, ignore_errors=True)
@@ -362,8 +374,9 @@ def _(Path, mo, resolve_file):
     mo.md(
         "**Resolved policy (what the served support_bot enforces)**\n\n"
         + "\n".join(_rows)
-        + "\n\n> `billing` refunds up to the **$1000** ceiling and delegates; "
-        "`support`/`default` get read-only."
+        + "\n\n> `support` can't refund directly — it **must `delegate_to_billing`** "
+        "(the sub-agent); `billing` refunds directly up to the **$1000** ceiling; "
+        "`default` is read-only."
     )
     return
 
@@ -386,12 +399,15 @@ def _(Path, mo):
             "In the Playground:\n\n"
             "1. Under **Acting as**, pick a role.\n"
             '2. Ask: *"Please refund order A-1001 for $40, it arrived damaged."*\n'
-            "3. As `support` / `default` → `refund_order` and `delegate_to_billing` "
-            "are **denied** in the Decisions sidebar; the billing sub-agent never runs.\n"
-            "4. Switch to `billing` → the refund is **allowed** (under $1000) and the "
-            "delegation runs billing_bot.\n"
-            "5. Edit `policy.yaml` in the **Policies** tab — the next message picks "
-            "it up."
+            "3. As `default` → `refund_order` and `delegate_to_billing` are both "
+            "**denied** in the Decisions sidebar; nothing bills.\n"
+            "4. As `support` → the direct `refund_order` is **denied**, but "
+            "`delegate_to_billing` is **allowed** and runs the billing_bot sub-agent — "
+            "delegation is the only way to refund from this seat.\n"
+            "5. As `billing` → the refund is **allowed** directly (under $1000).\n"
+            "6. Edit `policy.yaml` (or a `caps/…` file) in the **Policies** tab — the "
+            "next message picks it up. The **Graph** tab shows the support_bot → "
+            "billing_bot sub-agent edge."
         )
     else:
         _out = mo.callout(

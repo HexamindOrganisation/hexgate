@@ -21,57 +21,69 @@ from hexgate_api.features.policy_modules.service import _content_hash
 from hexgate_api.models import PolicyFile
 
 # The entry file: a closed-world boundary + two agents whose roles import the
-# capability files below. Kept textually in sync with the marimo demo.
+# capability files below (organized into caps/base, caps/support, caps/billing).
+# Kept textually in sync with the marimo demo.
 _ENTRY = """\
 boundary:
   tools:
     view_orders: { mode: allow }
     send_email: { mode: allow }
     escalate: { mode: allow }
-    refund_order: { mode: allow, constraint: "args.amount <= 1000" }  # hard cap
-    delegate_to_billing: { mode: allow }   # ceiling; needs a capability grant
+    refund_order: { mode: allow, constraint: "args.amount <= 1000" }  # org hard cap
+    delegate_to_billing: { mode: allow }   # ceiling; a capability grant activates it
     mcp-demo-compute_tip: { mode: allow }     # safe MCP tool
     mcp-demo-send_invoice: { mode: allow }    # ceiling; billing grants w/ approval
     mcp-demo-read_secret: { mode: deny }      # dangerous MCP tool — always denied
   reach:
-    billing_bot: { as: handoff }   # reach ceiling: hand-off only, never as-tool
+    billing_bot: { as: tool }   # reach ceiling: callable as a sub-agent tool
 agents:
   support_bot:
     roles:
-      default: { import: [ caps/read_only.yaml ] }
-      support: { import: [ caps/read_only.yaml, caps/support_leaf.yaml ] }
+      default: { import: [ caps/base/read_only.yaml ] }
+      # The front-line seat can't refund itself — it MUST delegate to billing_bot.
+      support:
+        import:
+          [ caps/base/read_only.yaml, caps/support/desk.yaml,
+            caps/support/delegate.yaml ]
+      # The elevated seat refunds directly, and may still delegate.
       billing:
         import:
-          [ caps/read_only.yaml, caps/payments.yaml, caps/billing_desk.yaml,
-            caps/billing_reach.yaml ]
+          [ caps/base/read_only.yaml, caps/support/desk.yaml,
+            caps/billing/payments.yaml, caps/billing/invoicing.yaml,
+            caps/support/delegate.yaml ]
   billing_bot:
     roles:
-      billing: { import: [ caps/payments.yaml ] }
+      billing:
+        import: [ caps/billing/payments.yaml, caps/billing/invoicing.yaml ]
 """
 
 # Leaf capability files (grant-only), imported by the roles above.
 _CAPS = {
-    "caps/read_only.yaml": (
+    "caps/base/read_only.yaml": (
         "tools:\n  view_orders: { mode: allow }\n"
         "mcp:\n  mcp-demo-compute_tip: { mode: allow }\n"
     ),
-    "caps/support_leaf.yaml": (
+    "caps/support/desk.yaml": (
         "tools:\n"
         "  send_email: { mode: allow }\n"
         "  escalate: { mode: approval_required }\n"
     ),
-    "caps/payments.yaml": (
+    # Activates the sub-agent reach + the delegate-to-billing TOOL (a served
+    # sub-agent surfaces delegation as a tool call, so it's gated as one). The
+    # support seat imports this but NOT payments, so delegation is its only path
+    # to a refund.
+    "caps/support/delegate.yaml": (
+        "tools:\n  delegate_to_billing: { mode: allow }\n"
+        "reach:\n  billing_bot: { as: tool }\n"
+    ),
+    "caps/billing/payments.yaml": (
         "tools:\n"
         "  refund_order: { mode: allow, constraint: "
         '\'args.currency in ["USD", "EUR"]\' }\n'
     ),
-    # Grants the delegate-to-billing TOOL (a served sub-agent surfaces delegation
-    # as a plain tool, so it's gated as one) — only the billing role imports it.
-    "caps/billing_desk.yaml": (
-        "tools:\n  delegate_to_billing: { mode: allow }\n"
+    "caps/billing/invoicing.yaml": (
         "mcp:\n  mcp-demo-send_invoice: { mode: approval_required }\n"
     ),
-    "caps/billing_reach.yaml": "reach:\n  billing_bot: { as: handoff }\n",
 }
 
 SEED_POLICY_FILES: dict[str, str] = {"policy.yaml": _ENTRY, **_CAPS}
