@@ -15,6 +15,7 @@ audit tables.
 
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import dataclass
 
@@ -68,6 +69,27 @@ class HexgatePlatformEnv:
             session_id=session_id,
         )
         return int(text)
+
+    def llm_message_rows(self, agent_name: str, session_id: str) -> list[dict]:
+        """Every llm_message row of this run, in transcript order.
+
+        ``(occurred_at, message_seq)`` is the order the read endpoint and the
+        drawer use: ``message_seq`` only counts inside one ``turn_key`` and
+        restarts for a sub-agent's list, so time is what orders across lists.
+        JSONEachRow because a row carries embedded JSON in three columns —
+        TSV would need un-escaping by hand.
+        """
+        text = self.clickhouse_query(
+            "SELECT turn_key, message_seq, resynced, truncated, model, "
+            "input_messages, output_messages, system_instructions "
+            "FROM hexgate_audit.llm_message "
+            "WHERE agent_name = {agent_name:String} "
+            "AND session_id = {session_id:String} "
+            "ORDER BY occurred_at, message_seq FORMAT JSONEachRow",
+            agent_name=agent_name,
+            session_id=session_id,
+        )
+        return [json.loads(line) for line in text.splitlines() if line]
 
 
 @pytest.fixture
