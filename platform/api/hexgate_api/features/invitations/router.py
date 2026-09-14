@@ -230,7 +230,7 @@ async def api_revoke_invitation(
 
     if invitation.email.lower() == user.email.lower():
         # Invitee declining their own invite.
-        await revoke_invitation(session, invitation)
+        await revoke_invitation(session, invitation, revoked_by_user_id=user.id)
         return Response(status_code=204)
 
     # Otherwise check whether the caller is an admin or owner of the org.
@@ -246,5 +246,5 @@ async def api_revoke_invitation(
             detail="only admins/owners or the invitee can cancel an invitation",
         )
 
-    await revoke_invitation(session, invitation)
+    await revoke_invitation(session, invitation, revoked_by_user_id=user.id)
     return Response(status_code=204)

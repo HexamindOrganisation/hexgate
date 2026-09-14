@@ -5,7 +5,7 @@ import uuid
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from hexgate_api.models import Project
+from hexgate_api.models import Project, utcnow
 
 
 class ProjectNameTakenError(Exception):
@@ -23,6 +23,7 @@ async def create_project(
     *,
     org_id: str,
     name: str,
+    created_by_user_id: str,
 ) -> Project:
     """Insert a Project under ``org_id`` with a fresh UUID id.
 
@@ -44,7 +45,12 @@ async def create_project(
             f"a project named {name!r} already exists in this org"
         )
 
-    project = Project(id=str(uuid.uuid4()), org_id=org_id, name=name)
+    project = Project(
+        id=str(uuid.uuid4()),
+        org_id=org_id,
+        name=name,
+        created_by_user_id=created_by_user_id,
+    )
     session.add(project)
     await session.commit()
     await session.refresh(project)
@@ -65,13 +71,15 @@ async def update_project_name(
     *,
     project_id: str,
     name: str,
+    updated_by_user_id: str,
 ) -> Project | None:
     """Rename a project. Returns the updated row, or None when the
     project doesn't exist. Raises :class:`ProjectNameTakenError` if
     the new name collides with another project in the same org.
 
     A no-op rename (same name) is a 200 not a 409 — idempotent for
-    "save" buttons that double-fire.
+    "save" buttons that double-fire — and it moves neither ``updated_at`` nor
+    ``updated_by_user_id``: a double-fired save is not an edit.
     """
     project = await session.get(Project, project_id)
     if project is None:
@@ -94,6 +102,8 @@ async def update_project_name(
         )
 
     project.name = name
+    project.updated_at = utcnow()
+    project.updated_by_user_id = updated_by_user_id
     session.add(project)
     await session.commit()
     await session.refresh(project)

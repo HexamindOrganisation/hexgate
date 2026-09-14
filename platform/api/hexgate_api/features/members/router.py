@@ -1,5 +1,7 @@
 """Org member management — list, promote/demote, remove. Cookie-authed."""
 
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -13,6 +15,8 @@ from hexgate_api.models import OrganizationMember, User
 from hexgate_api.schemas import MemberRead, MemberUpdate
 
 router = APIRouter()
+
+logger = logging.getLogger("hexgate.platform.members")
 
 
 def _member_read(member: OrganizationMember, user: User) -> MemberRead:
@@ -71,7 +75,7 @@ async def api_update_member_role(
         change_member_role,
     )
 
-    _, caller_member = membership
+    caller, caller_member = membership
     try:
         updated = await change_member_role(
             session,
@@ -79,6 +83,7 @@ async def api_update_member_role(
             user_id=user_id,
             new_role=body.role,
             caller_role=caller_member.role,
+            updated_by_user_id=caller.id,
         )
     except RoleEscalationError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
@@ -102,20 +107,34 @@ async def api_remove_member(
     """Remove a member. Admin/owner can remove anyone; plain members
     can only remove themselves (the "leave organization" flow).
 
-    Refuses with 409 when the removal would leave the org with zero
-    owners — promote another member to owner first, then leave.
+    **Also revokes every API key the member owns**, in the same transaction
+    (see ``remove_member``), so services still using them start failing at
+    once — hence the log line and the dashboard's warning.
 
-    Returns 204 No Content on success (REST norm for DELETE).
+    Refuses with 409 when the removal would leave the org with zero owners; a
+    refused removal revokes nothing. Returns 204 on success — the revoked
+    count stays off the wire, since the audit trail lives on the rows.
     """
     from hexgate_api.features.members.service import LastOwnerError, remove_member
 
-    _, caller_member = membership
+    caller, caller_member = membership
     try:
-        removed = await remove_member(
-            session, org_id=caller_member.org_id, user_id=user_id
+        result = await remove_member(
+            session,
+            org_id=caller_member.org_id,
+            user_id=user_id,
+            removed_by_user_id=caller.id,
         )
     except LastOwnerError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    if not removed:
+    if not result.removed:
         raise HTTPException(status_code=404, detail="member not found")
+    if result.revoked_key_count:
+        # The operator's only signal that credentials just died.
+        logger.info(
+            "removed member %s from org %s; revoked %d API key(s) they owned",
+            user_id,
+            caller_member.org_id,
+            result.revoked_key_count,
+        )
     return Response(status_code=204)

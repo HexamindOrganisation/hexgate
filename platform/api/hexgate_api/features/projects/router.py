@@ -39,10 +39,13 @@ async def api_create_project(
         create_project,
     )
 
-    _, caller_member = membership
+    caller, caller_member = membership
     try:
         project = await create_project(
-            session, org_id=caller_member.org_id, name=body.name
+            session,
+            org_id=caller_member.org_id,
+            name=body.name,
+            created_by_user_id=caller.id,
         )
     except ProjectNameTakenError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -82,7 +85,7 @@ async def api_get_project(
 async def api_update_project(
     project_id: str,
     body: ProjectUpdate,
-    _membership: tuple[User, OrganizationMember] = Depends(require_project_admin),
+    membership: tuple[User, OrganizationMember] = Depends(require_project_admin),
     session: AsyncSession = Depends(get_session),
 ) -> ProjectRead:
     """Rename a project. Admin or owner required. 409 on name collision
@@ -92,9 +95,13 @@ async def api_update_project(
         update_project_name,
     )
 
+    caller, _member = membership
     try:
         project = await update_project_name(
-            session, project_id=project_id, name=body.name
+            session,
+            project_id=project_id,
+            name=body.name,
+            updated_by_user_id=caller.id,
         )
     except ProjectNameTakenError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc

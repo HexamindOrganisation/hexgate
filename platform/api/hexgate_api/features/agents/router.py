@@ -13,8 +13,8 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from hexgate_api.core.db import get_session
 from hexgate_api.deps.org import require_org_member
-from hexgate_api.deps.tokens import require_project
-from hexgate_api.models import Agent, AgentVersion
+from hexgate_api.deps.tokens import TokenActor, require_project, require_project_actor
+from hexgate_api.models import Agent, AgentVersion, User
 from hexgate_api.schemas import (
     AgentManifest,
     AgentManifestView,
@@ -174,14 +174,16 @@ async def api_get_agent(
 @router.put(
     "/projects/{project_id}/agents/{name}",
     response_model=AgentRead,
-    dependencies=[Depends(require_org_member)],
 )
 async def api_update_agent(
     project_id: str,
     name: str,
     body: AgentUpdate,
+    user: User = Depends(require_org_member),
     session: AsyncSession = Depends(get_session),
 ) -> AgentRead:
+    """Save an agent's YAMLs. ``require_org_member`` moves out of the
+    decorator so its ``User`` can be stamped as the author."""
     from hexgate_api.core.keystore import keystore
     from hexgate_api.core.locks import project_lock
 
@@ -202,6 +204,7 @@ async def api_update_agent(
             # Compile + sign the policy into a WASM bundle at save time, using
             # the platform's root key (same key that signs biscuits).
             sign=keystore.sign,
+            updated_by_user_id=user.id,
         )
     if agent is None:
         raise HTTPException(status_code=404, detail="agent not found")
@@ -429,7 +432,7 @@ def _default_role_warnings(
 async def api_register_agent(
     body: RegisterAgentRequest,
     response: Response,
-    project_id: str = Depends(require_project),
+    actor: TokenActor = Depends(require_project_actor),
     session: AsyncSession = Depends(get_session),
 ) -> RegisterAgentResponse:
     """SDK-facing: register/upsert an agent manifest under the bearer's project.
@@ -438,11 +441,15 @@ async def api_register_agent(
     signed WASM bundle (and a starter role-aware policy) — re-registers
     don't touch the agent's policy_yaml, so the operator's dashboard
     edits are preserved.
+
+    The one bearer route that writes, hence ``require_project_actor``: the new
+    rows are attributed to the key's owner, or to NULL if it has none.
     """
     from hexgate_api.core.keystore import keystore
     from hexgate_api.core.locks import project_lock
     from hexgate_api.features.agents.service import get_agent
 
+    project_id = actor.project_id
     # Only a FIRST registration compiles + writes a bundle; re-registering an
     # existing agent just snapshots the manifest (no compile). Take the project
     # lock only in that case — otherwise a fleet redeploy's no-op re-registers
@@ -451,11 +458,19 @@ async def api_register_agent(
     if await get_agent(session, project_id, body.manifest.name) is None:
         async with project_lock(project_id):
             version, created = await register_manifest(
-                session, project_id, body.manifest, sign=keystore.sign
+                session,
+                project_id,
+                body.manifest,
+                sign=keystore.sign,
+                actor_user_id=actor.user_id,
             )
     else:
         version, created = await register_manifest(
-            session, project_id, body.manifest, sign=keystore.sign
+            session,
+            project_id,
+            body.manifest,
+            sign=keystore.sign,
+            actor_user_id=actor.user_id,
         )
     response.status_code = 201 if created else 200
     return RegisterAgentResponse(

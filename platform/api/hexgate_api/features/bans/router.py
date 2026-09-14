@@ -14,10 +14,10 @@ from hexgate_api.features.bans.service import (
     BanNotFoundError,
     active_bans_for_project,
     create_ban,
-    emails_for_user_ids,
     list_bans,
     revoke_ban,
 )
+from hexgate_api.features.members.service import emails_for_user_ids
 from hexgate_api.models import Ban, OrganizationMember, User
 from hexgate_api.schemas import BanCreate, BanFeedEntry, BanRead
 

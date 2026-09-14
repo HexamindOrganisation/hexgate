@@ -87,7 +87,11 @@ def _apply_bundle(agent: Agent, bundle: tuple[bytes, str, bytes] | None) -> None
     """Set an agent's three bundle columns from a compile result, or null all
     three when ``bundle`` is ``None`` (drop a stale bundle → the SDK falls back
     to the pydantic engine). One place so the triple can't drift when a bundle
-    column is added or its ordering changes."""
+    column is added or its ordering changes.
+
+    Touches no ``updated_*`` column: the fan-out callers rebuild a derived
+    artifact, so stamping would credit a recompile nobody authored.
+    """
     if bundle is None:
         agent.compiled_wasm = None
         agent.bundle_manifest = None
@@ -318,6 +322,7 @@ async def update_agent(
     policy_yaml: str | None = None,
     system_md: str | None = None,
     sign: Callable[[bytes], bytes] | None = None,
+    updated_by_user_id: str | None = None,
 ) -> Agent | None:
     from datetime import datetime, timezone
 
@@ -344,6 +349,7 @@ async def update_agent(
             _apply_bundle(agent, bundle)
 
     agent.updated_at = datetime.now(timezone.utc)
+    agent.updated_by_user_id = updated_by_user_id
     session.add(agent)
     await session.commit()
     await session.refresh(agent)
@@ -437,6 +443,7 @@ async def register_manifest(
     manifest: AgentManifest,
     *,
     sign: Callable[[bytes], bytes],
+    actor_user_id: str | None = None,
 ) -> tuple[AgentVersion, bool]:
     """Upsert an agent + version from an AgentManifest.
 
@@ -458,10 +465,13 @@ async def register_manifest(
     On subsequent registers of an existing agent, ``agent.policy_yaml`` is
     left alone — policy belongs to the operator, manifest updates are just
     snapshot churn.
+
+    ``actor_user_id`` (the key's owner) creates the ``Agent`` and every
+    ``AgentVersion``; a re-register never rewrites an existing creator.
     """
     content_hash = compute_manifest_hash(manifest)
     agent, agent_created = await _get_or_create_agent(
-        session, project_id, manifest.name
+        session, project_id, manifest.name, created_by_user_id=actor_user_id
     )
 
     if agent_created:
@@ -492,7 +502,12 @@ async def register_manifest(
 
     next_version = 1 if agent_created else await _next_version_number(session, agent.id)
     version = await _create_agent_version(
-        session, agent.id, manifest, content_hash, next_version
+        session,
+        agent.id,
+        manifest,
+        content_hash,
+        next_version,
+        created_by_user_id=actor_user_id,
     )
     await _create_tools(session, version.id, manifest.tools)
 
@@ -502,13 +517,19 @@ async def register_manifest(
 
 
 async def _get_or_create_agent(
-    session: AsyncSession, project_id: str, name: str
+    session: AsyncSession,
+    project_id: str,
+    name: str,
+    *,
+    created_by_user_id: str | None = None,
 ) -> tuple[Agent, bool]:
     """Return the Agent for (project_id, name), creating it if missing.
 
     The agent_yaml / policy_yaml columns are legacy NOT-NULL fields from the
     YAML-edited dashboard flow; code-defined agents leave them empty since the
     actual content lives on each AgentVersion.
+
+    ``created_by_user_id`` applies on create only.
     """
     agent = await get_agent(session, project_id, name)
     if agent is not None:
@@ -520,6 +541,7 @@ async def _get_or_create_agent(
         agent_yaml="",
         policy_yaml="",
         system_md="",
+        created_by_user_id=created_by_user_id,
     )
     session.add(agent)
     await session.flush()
@@ -555,6 +577,8 @@ async def _create_agent_version(
     manifest: AgentManifest,
     content_hash: str,
     version: int,
+    *,
+    created_by_user_id: str | None = None,
 ) -> AgentVersion:
     """Create and persist a new AgentVersion row for `manifest`."""
     row = AgentVersion(
@@ -564,6 +588,7 @@ async def _create_agent_version(
         description=manifest.description,
         content_hash=content_hash,
         manifest=manifest.model_dump(mode="json"),
+        created_by_user_id=created_by_user_id,
     )
     session.add(row)
     await session.flush()

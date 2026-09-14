@@ -268,8 +268,9 @@ export function OrgSettingsPage() {
             Danger zone
           </CardTitle>
           <CardDescription>
-            Leaving removes your access to this organization's projects. You
-            can't undo this — re-joining requires an invite.
+            Leaving revokes every API key you own in this organization and
+            removes your access to its projects. You can't undo this —
+            re-joining requires an invite, and revoked keys can't be restored.
           </CardDescription>
         </CardHeader>
         <CardFooter className="justify-end">
@@ -287,7 +288,7 @@ export function OrgSettingsPage() {
         open={confirmLeaveOpen}
         onOpenChange={setConfirmLeaveOpen}
         title={`Leave ${org.name}?`}
-        description={`You'll lose access to ${org.name}'s projects, tokens, and audit logs. An admin can re-invite you later.`}
+        description={`Any API keys you own in ${org.name} are revoked immediately — services still using them will start failing. You'll also lose access to its projects and audit logs. An admin can re-invite you later, but revoked keys can't be restored.`}
         confirmLabel="Leave organization"
         confirmVariant="destructive"
         pending={leaveOrg.isPending}

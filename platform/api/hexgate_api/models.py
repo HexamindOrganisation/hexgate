@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
-from sqlalchemy import JSON, Column, DateTime, LargeBinary
+from sqlalchemy import JSON, Column, DateTime, ForeignKey, LargeBinary, String
 from sqlmodel import Field, Relationship, SQLModel, UniqueConstraint
 
 
@@ -38,6 +38,31 @@ def new_uuid_str() -> str:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Control-plane actor trail (issue #160).
+#
+# NULL means "no human actor": a seed row, an SDK write from a key with no
+# owner, or a row predating migrations/0002. There is no sentinel.
+#
+# These record the LAST writer, not history -- that is the audit_event log.
+# Do not grow them into a change log.
+# ---------------------------------------------------------------------------
+
+
+def actor_fk_column(*, index: bool = False) -> Column:
+    """A nullable ``user.id`` FK for the actor trail.
+
+    ``ON DELETE SET NULL``: these are display-only, so a deleted account
+    degrades them to "no actor" rather than blocking the delete. Columns with
+    real semantics (``organization_member.user_id``, ``ban.created_by_user_id``)
+    are not declared here -- those need a deletion flow, not a silent NULL.
+
+    A factory, not a mixin: a ForeignKey shared across mapped classes would
+    need ``declared_attr``, and each call returns a distinct Column.
+    """
+    return Column(String, ForeignKey("user.id", ondelete="SET NULL"), index=index)
+
+
 class Organization(SQLModel, table=True):
     """A tenant. Customers see this as their workspace / team.
 
@@ -57,6 +82,11 @@ class Organization(SQLModel, table=True):
     created_at: datetime = Field(
         default_factory=utcnow, sa_type=DateTime(timezone=True)
     )
+    created_by_user_id: Optional[str] = Field(default=None, sa_column=actor_fk_column())
+    updated_at: datetime = Field(
+        default_factory=utcnow, sa_type=DateTime(timezone=True)
+    )
+    updated_by_user_id: Optional[str] = Field(default=None, sa_column=actor_fk_column())
 
 
 class User(SQLModel, table=True):
@@ -156,6 +186,13 @@ class OrganizationMember(SQLModel, table=True):
     created_at: datetime = Field(
         default_factory=utcnow, sa_type=DateTime(timezone=True)
     )
+    # Who granted the access: on invite-accept the inviter, not the invitee
+    # (already ``user_id`` on this row).
+    created_by_user_id: Optional[str] = Field(default=None, sa_column=actor_fk_column())
+    updated_at: datetime = Field(
+        default_factory=utcnow, sa_type=DateTime(timezone=True)
+    )
+    updated_by_user_id: Optional[str] = Field(default=None, sa_column=actor_fk_column())
 
 
 class Invitation(SQLModel, table=True):
@@ -191,6 +228,7 @@ class Invitation(SQLModel, table=True):
     revoked_at: Optional[datetime] = Field(
         default=None, sa_type=DateTime(timezone=True)
     )
+    revoked_by_user_id: Optional[str] = Field(default=None, sa_column=actor_fk_column())
     created_at: datetime = Field(
         default_factory=utcnow, sa_type=DateTime(timezone=True)
     )
@@ -221,6 +259,11 @@ class Project(SQLModel, table=True):
     created_at: datetime = Field(
         default_factory=utcnow, sa_type=DateTime(timezone=True)
     )
+    created_by_user_id: Optional[str] = Field(default=None, sa_column=actor_fk_column())
+    updated_at: datetime = Field(
+        default_factory=utcnow, sa_type=DateTime(timezone=True)
+    )
+    updated_by_user_id: Optional[str] = Field(default=None, sa_column=actor_fk_column())
 
 
 class ApiKey(SQLModel, table=True):
@@ -234,6 +277,9 @@ class ApiKey(SQLModel, table=True):
 
     Revoking also masks ``secret``: the retained row is an audit record, not a
     store of credentials that outlive their own revocation.
+
+    ``owner_user_id`` is what makes offboarding possible: keys never expire, so
+    removing a member sweeps the keys they own (``members.service``).
     """
 
     __tablename__ = "devtoken"  # historical name; renaming needs a migration
@@ -253,7 +299,13 @@ class ApiKey(SQLModel, table=True):
     revoked_at: Optional[datetime] = Field(
         default=None, sa_type=DateTime(timezone=True)
     )
-    revoked_by_user_id: Optional[str] = Field(default=None, foreign_key="user.id")
+    revoked_by_user_id: Optional[str] = Field(default=None, sa_column=actor_fk_column())
+    created_by_user_id: Optional[str] = Field(default=None, sa_column=actor_fk_column())
+    # Whose key this is, as distinct from who minted it. Indexed because
+    # remove_member sweeps by it on every removal.
+    owner_user_id: Optional[str] = Field(
+        default=None, sa_column=actor_fk_column(index=True)
+    )
 
 
 class Agent(SQLModel, table=True):
@@ -274,6 +326,11 @@ class Agent(SQLModel, table=True):
     updated_at: datetime = Field(
         default_factory=utcnow, sa_type=DateTime(timezone=True)
     )
+    created_by_user_id: Optional[str] = Field(default=None, sa_column=actor_fk_column())
+    # The last human to author an edit. Not touched by ``recompile_project`` /
+    # ``backfill_bundles``, which rebuild a derived artifact -- see
+    # agents/service.py:_apply_bundle.
+    updated_by_user_id: Optional[str] = Field(default=None, sa_column=actor_fk_column())
 
     # Compiled + signed WASM bundle, produced from policy_yaml at save time
     # (see hexgate_api.features.agents.compiler.compile_bundle). Null when opa is unavailable or the
@@ -306,9 +363,19 @@ class AgentVersion(SQLModel, table=True):
     created_at: datetime = Field(
         default_factory=utcnow, sa_type=DateTime(timezone=True)
     )
+    # Immutable snapshot: creator only. From the registering key's owner, so
+    # NULL for a system or pre-#160 key.
+    created_by_user_id: Optional[str] = Field(default=None, sa_column=actor_fk_column())
 
 
 class Tool(SQLModel, table=True):
+    """One tool on one :class:`AgentVersion`.
+
+    No actor trail: only ever written as part of a version snapshot, never
+    mutated alone, so it inherits that version's. Exempted in
+    ``tests/test_actor_columns.py``.
+    """
+
     __tablename__ = "tool"
     __table_args__ = (
         UniqueConstraint("agent_version_id", "name", name="uq_tool_agent_version_name"),
@@ -349,7 +416,7 @@ class Ban(SQLModel, table=True):
     revoked_at: Optional[datetime] = Field(
         default=None, sa_type=DateTime(timezone=True)
     )
-    revoked_by_user_id: Optional[str] = Field(default=None, foreign_key="user.id")
+    revoked_by_user_id: Optional[str] = Field(default=None, sa_column=actor_fk_column())
 
 
 # ---------------------------------------------------------------------------
@@ -383,6 +450,8 @@ class PolicyModule(SQLModel, table=True):
     updated_at: datetime = Field(
         default_factory=utcnow, sa_type=DateTime(timezone=True)
     )
+    created_by_user_id: Optional[str] = Field(default=None, sa_column=actor_fk_column())
+    updated_by_user_id: Optional[str] = Field(default=None, sa_column=actor_fk_column())
 
 
 class RoleBinding(SQLModel, table=True):
@@ -411,6 +480,12 @@ class RoleBinding(SQLModel, table=True):
     capabilities: list[str] | dict[str, list[str]] = Field(
         default_factory=dict, sa_column=Column(JSON, nullable=False)
     )
+    created_at: datetime = Field(
+        default_factory=utcnow, sa_type=DateTime(timezone=True)
+    )
+    # No updated_* pair: ``set_roles`` replaces every row on each write, so a
+    # row's creation IS its last write.
+    created_by_user_id: Optional[str] = Field(default=None, sa_column=actor_fk_column())
 
 
 class PolicyFile(SQLModel, table=True):
@@ -433,6 +508,8 @@ class PolicyFile(SQLModel, table=True):
     name: str = Field(index=True)  # e.g. "policy.yaml", "caps/refunds.yaml"
     content: str  # the file's YAML text
     content_hash: str  # sha256 of content, the file's stable identity
+    created_by_user_id: Optional[str] = Field(default=None, sa_column=actor_fk_column())
     updated_at: datetime = Field(
         default_factory=utcnow, sa_type=DateTime(timezone=True)
     )
+    updated_by_user_id: Optional[str] = Field(default=None, sa_column=actor_fk_column())

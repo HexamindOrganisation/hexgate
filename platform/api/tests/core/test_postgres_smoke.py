@@ -69,3 +69,77 @@ async def _delete_smoke_org(session) -> None:
     if existing is not None:
         await session.delete(existing)
         await session.commit()
+
+
+async def test_hand_applied_migrations_match_the_live_schema() -> None:
+    """Every column the migrations add really exists on this Postgres.
+
+    The rest of the suite runs ``create_all`` on SQLite, so nothing else
+    catches a migration that was never applied, or one whose typo added a
+    column nothing reads. Read-only: it inspects ``information_schema``, so it
+    is safe against a dev volume with real rows.
+    """
+    import re
+    from pathlib import Path
+
+    from sqlalchemy import text
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    from hexgate_api.core.db import _database_url
+
+    # parents: [0] core, [1] tests, [2] api, [3] platform
+    migrations = sorted(
+        (Path(__file__).resolve().parents[3] / "postgres" / "migrations").glob("*.sql")
+    )
+    assert migrations, "no migration files found"
+    sql = "\n".join(f.read_text() for f in migrations)
+
+    expected = {
+        (table.lower(), column.lower())
+        for table, column in re.findall(
+            r"ALTER\s+TABLE\s+(\w+)\s+ADD\s+COLUMN\s+IF\s+NOT\s+EXISTS\s+(\w+)",
+            sql,
+            re.IGNORECASE,
+        )
+    }
+    expected_indexes = {
+        name.lower()
+        for name, _table in re.findall(
+            r"CREATE\s+INDEX\s+IF\s+NOT\s+EXISTS\s+(\w+)\s+ON\s+(\w+)",
+            sql,
+            re.IGNORECASE,
+        )
+    }
+    assert expected, "the migration regex matched nothing — did the SQL style change?"
+
+    # A dedicated engine, disposed here: the module-level one pools connections
+    # bound to whichever event loop first used it, and pytest-asyncio gives each
+    # test its own loop.
+    probe = create_async_engine(_database_url())
+    try:
+        async with probe.connect() as conn:
+            rows = await conn.execute(
+                text(
+                    "SELECT table_name, column_name FROM information_schema.columns "
+                    "WHERE table_schema = 'public'"
+                )
+            )
+            live = {(t.lower(), c.lower()) for t, c in rows.all()}
+            index_rows = await conn.execute(
+                text("SELECT indexname FROM pg_indexes WHERE schemaname = 'public'")
+            )
+            live_indexes = {name.lower() for (name,) in index_rows.all()}
+    finally:
+        await probe.dispose()
+
+    missing = sorted(expected - live)
+    assert not missing, (
+        "columns the migrations add are absent from this database: "
+        + ", ".join(f"{t}.{c}" for t, c in missing)
+        + " — run `make postgres-init` (or `make platform-migrate STAGE=…`)"
+    )
+
+    missing_indexes = sorted(expected_indexes - live_indexes)
+    assert not missing_indexes, (
+        f"indexes the migrations create are absent: {missing_indexes}"
+    )
