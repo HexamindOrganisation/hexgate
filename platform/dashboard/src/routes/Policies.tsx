@@ -299,9 +299,7 @@ export function PoliciesPage() {
                             : "border-transparent text-muted-foreground hover:text-foreground",
                         )}
                       >
-                        <span className="truncate font-mono">
-                          {baseName(tab)}
-                        </span>
+                        <span className="truncate">{baseName(tab)}</span>
                         {isDirty && (
                           <span
                             className="size-1.5 shrink-0 rounded-full bg-approval group-hover:hidden"

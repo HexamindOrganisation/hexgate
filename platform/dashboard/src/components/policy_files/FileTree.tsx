@@ -189,7 +189,7 @@ export function FileTree({
               }}
               placeholder="e.g. caps"
               aria-label="New folder name"
-              className="w-full rounded border border-border bg-background px-1.5 py-1 font-mono text-xs focus:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              className="w-full rounded border border-border bg-background px-1.5 py-1 text-xs focus:outline-none focus-visible:ring-1 focus-visible:ring-ring"
             />
           </div>
         )}
@@ -209,7 +209,7 @@ export function FileTree({
               }}
               placeholder={`e.g. ${ENTRY_FILE}`}
               aria-label="New file name"
-              className="w-full rounded border border-border bg-background px-1.5 py-1 font-mono text-xs focus:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              className="w-full rounded border border-border bg-background px-1.5 py-1 text-xs focus:outline-none focus-visible:ring-1 focus-visible:ring-ring"
             />
           </div>
         )}
@@ -406,7 +406,7 @@ function FileRow({
             }
           }}
           aria-label={`Rename ${node.full}`}
-          className="w-full rounded border border-border bg-background px-1.5 py-0.5 font-mono text-xs focus:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+          className="w-full rounded border border-border bg-background px-1.5 py-0.5 text-xs focus:outline-none focus-visible:ring-1 focus-visible:ring-ring"
         />
       </div>
     );
@@ -426,7 +426,7 @@ function FileRow({
       )}
     >
       <FileText className="size-3 shrink-0" />
-      <span className={cn("truncate font-mono", isEntry && "font-medium")}>
+      <span className={cn("truncate", isEntry && "font-medium")}>
         {node.name}
       </span>
       {isEntry && (
