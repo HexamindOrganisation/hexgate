@@ -439,7 +439,7 @@ function FileRow({
       )}
       {isDirty && (
         <span
-          className="size-1.5 shrink-0 rounded-full bg-primary"
+          className="size-1.5 shrink-0 rounded-full bg-approval"
           title="Unsaved changes"
         />
       )}
