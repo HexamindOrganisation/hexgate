@@ -24,10 +24,10 @@ from __future__ import annotations
 
 import logging
 import uuid
-from typing import Any
+from typing import NamedTuple
 
 from agents import Agent, RunContextWrapper
-from agents.items import ModelResponse
+from agents.items import ModelResponse, TResponseInputItem
 from agents.lifecycle import RunHooks
 
 from hexgate.adapters.openai.messages import (
@@ -44,6 +44,17 @@ from hexgate.tracing.messages import (
 from hexgate.tracing.usage import emit_llm_usage
 
 _log = logging.getLogger(__name__)
+
+
+class _Prompt(NamedTuple):
+    """What ``on_llm_start`` saw, held until the matching ``on_llm_end``.
+
+    ``input_items`` is the whole conversation the model is about to see, not
+    a delta; working out what is new is the cursor's job.
+    """
+
+    system_prompt: str | None
+    input_items: list[TResponseInputItem]
 
 
 def _resolve_model(agent: Agent) -> str:
@@ -68,14 +79,9 @@ class HexgateUsageHooks(RunHooks):
     :class:`~hexgate.tracing.messages.LlmMessageEvent` per ``on_llm_end``
     callback, from the prompt stashed by the matching ``on_llm_start``.
 
-    This is where the cursor's "reset on run end" contract is met: only
-    ``HexgateRunner`` constructs this class, and it builds a fresh instance
-    inside every ``run*`` call, so the cursor and the stash below are born and
-    die with one run — a stronger guarantee than resetting keys one by one,
-    and unlike an explicit reset it still holds when the run raises. Nothing
-    is evicted from ``on_agent_end`` for that reason, and because that hook
-    fires only for the agent that produced the final output, leaving a
-    handoff source's list behind.
+    ``HexgateRunner`` builds a fresh instance per ``run*`` call, so the
+    cursor and the stash below live exactly one run — which is how the
+    cursor's "reset on run end" contract is met, raises included.
     """
 
     def __init__(self, *, api_key: str) -> None:
@@ -83,31 +89,17 @@ class HexgateUsageHooks(RunHooks):
         self._cursor = MessageCursor()
         # Request side of each in-flight LLM call, keyed by turn: the response
         # hook carries no prompt, so it has to be handed one.
-        self._pending: dict[str, tuple[str | None, list[Any]]] = {}
+        self._pending: dict[str, _Prompt] = {}
         # Stands in for the run id when there is no run scope (see _turn_key).
         self._fallback_run_id = uuid.uuid4().hex
 
     def _turn_key(self, agent: Agent) -> str:
         """Identity of the *message list* this call extends.
 
-        Hexgate's own run id, not ``id(context)``: the run context object is
-        freed when the run ends and CPython hands the next run the same
-        address, so in a process that serves many runs — ``hexgate serve``, a
-        chat session — two unrelated conversations would land under one
-        ``turn_key``, each restarting ``message_seq`` at 0. That is the one
-        thing the key exists to prevent, and nothing downstream would notice:
-        the rows insert cleanly and only the gap detection quietly stops
-        meaning anything. The run id is minted per ``run*`` call and is on the
-        row anyway as ``run_id``.
-
-        Falls back to the instance id when there is no run scope, which
-        ``HexgateRunner`` always opens — the fallback is for a bare
-        ``Runner.run`` given these hooks directly, where a per-instance
-        constant is still unique to one hooks object.
-
-        The agent name is the second half because one run can drive several
-        agents. See the note in :meth:`on_llm_start` on what that costs after
-        a handoff.
+        The run id, not ``id(context)``: that address is reused once the run
+        context is freed, so two unrelated runs would share a ``turn_key``
+        and both restart ``message_seq`` at 0. The per-instance fallback
+        covers a bare ``Runner.run``, which opens no run scope.
         """
         return f"{get_run_facts().id or self._fallback_run_id}:{agent.name}"
 
@@ -116,25 +108,20 @@ class HexgateUsageHooks(RunHooks):
         context: RunContextWrapper,
         agent: Agent,
         system_prompt: str | None,
-        input_items: list[Any],
+        input_items: list[TResponseInputItem],
     ) -> None:
         """Stash the prompt for the matching ``on_llm_end``.
 
-        ``input_items`` is the whole conversation the model is about to see,
-        not a delta. After a handoff that is also true of the *target* agent's
-        first call — this SDK passes the accumulated list straight through
-        unless the handoff sets an ``input_filter`` — so the target's list
-        restates what the source already logged, under its own ``turn_key`` at
-        seq 0. That duplication is the cost of keying per agent, and keying
-        per run instead would lose a sub-agent's separate list; the spec
-        picks per agent, and no content is dropped either way.
+        ``input_items`` is the whole conversation, not a delta — and a
+        handoff target gets it too, so its first event restates what the
+        source already logged under a new ``turn_key`` (issue #215).
         """
         if not log_messages_enabled():
             return
-        # Copied: the runner appends to this list as the turn proceeds, and
-        # the delta must be measured against the prompt actually sent.
-        self._pending[self._turn_key(agent)] = (
+        self._pending[self._turn_key(agent)] = _Prompt(
             system_prompt,
+            # Copied: the runner appends to this list as the turn proceeds,
+            # and the delta must be measured against the prompt actually sent.
             list(input_items),
         )
 
@@ -162,24 +149,19 @@ class HexgateUsageHooks(RunHooks):
     ) -> None:
         """Convert this call's prompt delta and completion and emit them.
 
-        Guarded: ``emit_llm_messages`` and ``MessageCursor.advance`` never
-        raise, but the conversion in front of them walks framework data and
-        runs from a hook the SDK re-raises out of. Losing a transcript row
-        must not fail the run it was logging — and the usage event above has
-        already left.
+        Guarded because the SDK re-raises out of this hook: losing a
+        transcript row must not fail the run it was logging.
         """
         if not log_messages_enabled():
             return
         key = self._turn_key(agent)
-        system_prompt, input_items = self._pending.pop(key, (None, []))
+        system_prompt, input_items = self._pending.pop(key, _Prompt(None, []))
+        # Convert before advancing: a failed conversion must not spend the
+        # turn's seq on an event that never goes out.
         try:
             new_input = [input_message(item) for item in input_items]
             output = output_messages(response.output)
         except Exception:
-            # Before ``advance``, so a failed conversion costs this event and
-            # nothing else. Asking the cursor first would spend the turn's seq
-            # on an event that never goes out, and a reader is specified to
-            # read that hole as a lost row.
             _log.exception("converting LLM messages raised; dropping this event")
             return
         delta = self._cursor.advance(key, new_input)
@@ -190,10 +172,8 @@ class HexgateUsageHooks(RunHooks):
             output,
             turn_key=key,
             message_seq=delta.seq,
-            # Only on the first event of the turn: an agent reached by a
-            # handoff has its own instructions, so this rides on each list's
-            # first event rather than the session's, and repeating it every
-            # call would spend the 8 KiB budget on the same text over and over.
+            # First event of each turn only — a handoff target has its own
+            # instructions, and repeating them would spend the 8 KiB budget.
             system_instructions=(
                 [text_part(system_prompt)] if delta.seq == 0 and system_prompt else None
             ),

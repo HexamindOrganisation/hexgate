@@ -53,10 +53,9 @@ def text_part(content: Any) -> dict[str, Any]:
 def _tool_call_part(item: dict[str, Any]) -> dict[str, Any]:
     """A ``function_call`` item as a GenAI ``tool_call`` part.
 
-    ``arguments`` stays the raw JSON *string* the API uses rather than being
-    parsed here: ``TOOL_CALL_JSON_KEYS`` makes redaction open that string and
-    blank the sensitive keys inside it, so an api_key in a tool's arguments is
-    masked in the transcript exactly as it is on the decision event.
+    ``arguments`` is left as the string the model emitted. Parsing it would
+    change the record, and models do emit malformed JSON, which would raise.
+    Redaction still reaches inside it — see ``TOOL_CALL_JSON_KEYS``.
     """
     return {
         "type": "tool_call",
@@ -123,12 +122,9 @@ def input_message(item: Any) -> dict[str, Any]:
         }
     if "role" in entry:
         return {"role": entry["role"], "parts": _content_parts(entry.get("content"))}
-    # Reasoning items, built-in tool calls (web search, computer use), MCP
-    # approval requests: no role of their own, and no GenAI part type to map
-    # onto. Carried through under the role that produced them so the turn is
-    # still complete, rather than dropped for want of a mapping. The assistant
-    # role is a floor, not a reading of the item: none of these is a user
-    # message, and GenAI has no role for "the framework did this".
+    # Reasoning items, built-in tool calls, MCP approvals: no role and no
+    # GenAI part to map onto, so carry them through whole rather than drop
+    # them. "assistant" is a floor — none of these is a user message.
     return {"role": "assistant", "parts": [entry]}
 
 
@@ -152,10 +148,8 @@ def output_messages(output: list[Any]) -> list[dict[str, Any]]:
         elif item.get("content"):
             parts.extend(_content_parts(item["content"]))
         else:
-            # Truthiness, not ``"content" in item``: a reasoning item declares
-            # a ``content`` field that is almost always None and keeps its text
-            # under ``summary``, so a key check would route it here and emit an
-            # empty message — losing the last turn's reasoning entirely, since
-            # only earlier turns reappear in the next call's input delta.
+            # Truthiness above, not ``"content" in item``: a reasoning item
+            # declares ``content`` as None and keeps its text under
+            # ``summary``, so a key check would emit an empty message.
             parts.append(item)
     return [{"role": "assistant", "parts": parts}] if parts else []
