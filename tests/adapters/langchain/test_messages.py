@@ -7,6 +7,7 @@ from langchain_core.messages import (
     AIMessage,
     AIMessageChunk,
     ChatMessage,
+    FunctionMessage,
     HumanMessage,
     SystemMessage,
     ToolMessage,
@@ -114,9 +115,75 @@ def test_when_message_is_a_tool_result_then_it_becomes_a_tool_call_response() ->
     assert input_message(message) == {
         "role": "tool",
         "parts": [
-            {"type": "tool_call_response", "id": "call_1", "response": "sunny, 21C"}
+            {
+                "type": "tool_call_response",
+                "id": "call_1",
+                "name": "get_weather",
+                "response": "sunny, 21C",
+            }
         ],
     }
+
+
+def test_when_the_tool_result_is_a_legacy_function_message_then_name_attributes_it() -> (
+    None
+):
+    """``FunctionMessage`` has no ``tool_call_id`` field at all, so ``name`` is
+    the only thing that says which call this is the result of."""
+    [part] = input_message(FunctionMessage(content="sunny", name="get_weather"))[
+        "parts"
+    ]
+
+    assert part["id"] == ""
+    assert part["name"] == "get_weather"
+
+
+def test_when_a_content_block_restates_a_tool_call_then_it_is_not_emitted_twice() -> (
+    None
+):
+    """Providers that put the call in ``content`` as well as in the
+    standardized field — OpenAI's Responses API (``function_call``), Anthropic
+    (``tool_use``) — would otherwise land one call as two parts under two
+    different ids: the output-item id in the block, the call id a later
+    ``ToolMessage`` correlates on in the part."""
+    message = AIMessage(
+        content=[
+            {
+                "type": "function_call",
+                "call_id": "call_1",
+                "id": "fc_1",
+                "name": "get_weather",
+                "arguments": '{"city": "Paris"}',
+            }
+        ],
+        tool_calls=[
+            {
+                "name": "get_weather",
+                "args": {"city": "Paris"},
+                "id": "call_1",
+                "type": "tool_call",
+            }
+        ],
+    )
+
+    assert input_message(message)["parts"] == [
+        {
+            "type": "tool_call",
+            "id": "call_1",
+            "name": "get_weather",
+            "arguments": {"city": "Paris"},
+        }
+    ]
+
+
+def test_when_a_content_block_is_a_provider_run_tool_then_it_is_carried_through() -> (
+    None
+):
+    """``server_tool_use`` never reaches ``tool_calls`` — the provider ran it
+    itself — so the block is the only record of it."""
+    block = {"type": "server_tool_use", "id": "srv_1", "name": "web_search"}
+
+    assert input_message(AIMessage(content=[block]))["parts"] == [block]
 
 
 def test_when_content_is_a_block_list_then_text_blocks_are_flattened() -> None:
@@ -155,7 +222,14 @@ def test_when_the_message_is_a_streamed_chunk_then_the_role_still_resolves() -> 
     assert input_message(AIMessageChunk(content="Sunny."))["role"] == "assistant"
     assert input_message(ToolMessageChunk(content="21C", tool_call_id="call_1")) == {
         "role": "tool",
-        "parts": [{"type": "tool_call_response", "id": "call_1", "response": "21C"}],
+        "parts": [
+            {
+                "type": "tool_call_response",
+                "id": "call_1",
+                "name": "",
+                "response": "21C",
+            }
+        ],
     }
 
 
