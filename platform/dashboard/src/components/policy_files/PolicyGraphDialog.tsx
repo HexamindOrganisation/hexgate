@@ -663,8 +663,8 @@ function PolicyFlow({ graph }: { graph: PolicyGraph }) {
             className={cn(
               "inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 font-mono text-[11px] backdrop-blur transition-colors",
               animate
-                ? "border-primary/60 bg-primary/20 text-foreground"
-                : "border-white/10 bg-[#11151f]/90 text-[#8a93a3] hover:text-foreground",
+                ? "border-primary/60 bg-primary/20 text-[#e6e9ef]"
+                : "border-white/10 bg-[#11151f]/90 text-[#8a93a3] hover:text-[#e6e9ef]",
             )}
             title={
               pinned
