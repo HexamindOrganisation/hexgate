@@ -34,8 +34,18 @@ most reusable thing a review produces.
 
 ## 1. Eligibility
 
-Skip the review entirely if the PR is closed, is an automated/dependency bump,
-or already carries your review. A draft PR is reviewable.
+Skip the review entirely if the PR is closed or is an automated/dependency
+bump. A draft PR is reviewable.
+
+A PR that already carries your review is reviewable **again** whenever the diff
+has moved since: a review certifies the diff as it stood, never the branch
+forever. Re-run it over the commits added since, and spend that pass where the
+new work meets what the earlier one passed — a constraint that was right for the
+old code is exactly what a later commit invalidates without touching the line.
+(On PR #190 a `min_length=1` on a required query parameter was correct when
+reviewed; one commit later a second scope made that parameter optional, turning
+it into a 422 on the most common request. Nothing re-read it, because the review
+had already "happened".) When nothing has landed since your review, skip.
 
 ## 2. Context
 
@@ -67,7 +77,12 @@ instruction: read the real files and the real installed dependency source, never
 assume behaviour from the name of a setting.
 
 1. **CLAUDE.md compliance** — only what the file actually says, quoted.
-2. **Correctness** — bugs in the changed lines.
+2. **Correctness** — bugs in the changed lines. The diff's own tests are not
+   evidence: they were written by the reasoning that produced the code, so they
+   assert the intent rather than probe it, and they almost always vary one
+   input at a time. Where a parameter has a legitimate "absent" value (empty
+   string, zero UUID, `None`), try the combinations — absent here *plus* valid
+   there — which is where that habit leaves a hole.
 3. **History** — `git blame` / `git log -p` on the touched code: is this undoing
    an earlier deliberate decision whose reason still holds?
 4. **Prior review comments** — comments on earlier PRs touching these files that
