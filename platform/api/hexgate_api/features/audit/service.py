@@ -23,6 +23,7 @@ from clickhouse_connect.driver.client import Client
 from hexgate_api.core.clickhouse import (
     ZERO_RUN_ID,
     BatchItem,
+    decode_json_column,
     insert_batch,
     verify_written_columns,
 )
@@ -583,16 +584,6 @@ def timeseries(
     return [points[t] for t in sorted(points)]
 
 
-def _decode_json_column(raw: str) -> object:
-    """Decode a stored JSON string ("" → None); leave malformed values as-is."""
-    if not raw:
-        return None
-    try:
-        return json.loads(raw)
-    except (ValueError, TypeError):
-        return raw
-
-
 _LIST_COLUMNS = (
     "event_id, occurred_at, received_at, agent_name, agent_version_id, "
     "session_id, user_id, tool_name, user_roles, deciding_role, "
@@ -653,9 +644,9 @@ def list_decisions(
         total = int(row.pop("total_matches"))
         row["violations"] = list(row.get("violations") or [])
         row["user_roles"] = list(row.get("user_roles") or [])
-        row["hint"] = _decode_json_column(row.get("hint") or "")
-        row["arguments"] = _decode_json_column(row.get("arguments") or "")
-        row["attributes"] = _decode_json_column(row.get("attributes") or "")
+        row["hint"] = decode_json_column(row.get("hint") or "")
+        row["arguments"] = decode_json_column(row.get("arguments") or "")
+        row["attributes"] = decode_json_column(row.get("attributes") or "")
         rows.append(row)
 
     # An empty page past the end (offset > 0) carries no window value, so the
