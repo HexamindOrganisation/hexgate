@@ -162,9 +162,10 @@ def list_llm_messages(
     Long transcripts page instead.
 
     Ordered to match the storage sort key after project/session, so the scan
-    is already in output order; see schema.sql for why that key is shaped
-    this way. Ascending, unlike the newest-first decision list: a transcript
-    is read forwards. A run-scoped read gets no pruning past ``project_id``
+    reads in order and stops at ``limit + offset`` rows instead of sorting the
+    whole match; see schema.sql for why that key is shaped this way.
+    Ascending, unlike the newest-first decision list: a transcript is read
+    forwards. A run-scoped read gets no pruning past ``project_id``
     and scans the retention window — the cost of the session column being
     optional. Reads without ``FINAL``, so a retried batch shows both copies
     of an ``event_id`` until they merge (see ``insert_llm_messages_batch``).
@@ -181,21 +182,24 @@ def list_llm_messages(
         params["run_id"] = run_id
     where_sql = " AND ".join(where)
 
-    # Same one-scan page+total trick as list_decisions: count() OVER () is
-    # computed before LIMIT, so each row carries the full match count.
+    # Two queries, NOT list_decisions' single scan with ``count() OVER ()``.
+    # A window function has no frame to prune, so ClickHouse buffers every
+    # matching row — content columns included — before emitting the first,
+    # which throws away the read-in-order short-circuit this ORDER BY was
+    # chosen for. Measured on a 2000-row session of 200 KB rows: 1.07 GiB and
+    # 2000 rows read, against 44 MiB and 52 rows for the same page without
+    # it. The separate count() touches no content column, and there is no
+    # per-query memory cap here to turn the blow-up into a clean 503.
     page_params = {**params, "lim": limit, "off": offset}
     result = client.query(
-        f"SELECT {_LIST_COLUMNS}, count() OVER () AS total_matches "
-        f"FROM {LLM_MESSAGE_TABLE} WHERE {where_sql} "
+        f"SELECT {_LIST_COLUMNS} FROM {LLM_MESSAGE_TABLE} WHERE {where_sql} "
         "ORDER BY occurred_at, message_seq, event_id "
         "LIMIT {lim:UInt32} OFFSET {off:UInt32}",
         parameters=page_params,
     )
     rows = []
-    total = 0
     for raw in result.result_rows:
         row = dict(zip(result.column_names, raw))
-        total = int(row.pop("total_matches"))
         for column in ("input_messages", "output_messages", "system_instructions"):
             row[column] = decode_json_column(row.get(column) or "")
         # The zero UUID is the column's "no run" value, not a run to join on.
@@ -203,14 +207,11 @@ def list_llm_messages(
             row["run_id"] = None
         rows.append(row)
 
-    # An empty page past the end (offset > 0) carries no window value, so the
-    # match count is unavailable; fall back to a plain count for that rare case.
-    if not rows and offset:
-        total = int(
-            client.query(
-                f"SELECT count() FROM {LLM_MESSAGE_TABLE} WHERE {where_sql}",
-                parameters=params,
-            ).result_rows[0][0]
-        )
+    total = int(
+        client.query(
+            f"SELECT count() FROM {LLM_MESSAGE_TABLE} WHERE {where_sql}",
+            parameters=params,
+        ).result_rows[0][0]
+    )
 
     return {"rows": rows, "total": total, "limit": limit, "offset": offset}
