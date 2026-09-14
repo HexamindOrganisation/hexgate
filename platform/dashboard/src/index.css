@@ -30,6 +30,11 @@
   --color-deny: hsl(var(--semantic-deny));
   --color-approval: hsl(var(--semantic-approval));
 
+  /* The code-pane surface — matches the always-dark CodeMirror ground
+     (#0a0d14, see PolicyEditor/theme.ts) so the tabs/toolbar read as one
+     editor surface. */
+  --color-editor: hsl(var(--editor));
+
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
@@ -68,6 +73,14 @@
   --semantic-deny-soft: 0 50% 22%;
   --semantic-approval: 38 92% 55%;
   --semantic-approval-soft: 38 60% 22%;
+
+  /* Code-pane ground — intentionally always dark (matches the CodeMirror
+     editor, which is dark in every theme). NOTE: `bg-editor` surfaces carry
+     theme-aware text (text-foreground / -muted), so they only read correctly
+     because the app is force-dark (main.tsx always adds `.dark`). Same coupling
+     for the `.scrollbar-hover` thumb (--accent-foreground). If a light theme is
+     ever enabled, give these surfaces fixed light-on-dark colors here. */
+  --editor: 222 33% 6%;
 }
 
 .dark {
@@ -148,4 +161,60 @@
 }
 .scrollbar-thin::-webkit-scrollbar-thumb:hover {
   background-color: hsl(var(--foreground));
+}
+
+/* Like `scrollbar-thin`, but the thumb is invisible until the element is
+   hovered — for dense strips (e.g. the editor tab bar) where a persistent
+   scrollbar would be visual noise. Still scrolls by wheel/trackpad when idle. */
+.scrollbar-hover {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+.scrollbar-hover:hover {
+  scrollbar-color: hsl(var(--accent-foreground)) transparent;
+}
+.scrollbar-hover::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+.scrollbar-hover::-webkit-scrollbar-track {
+  background: transparent;
+}
+.scrollbar-hover::-webkit-scrollbar-thumb {
+  background-color: transparent;
+  border-radius: 3px;
+}
+.scrollbar-hover:hover::-webkit-scrollbar-thumb {
+  background-color: hsl(var(--accent-foreground));
+}
+
+/* React Flow zoom/fit controls — the default buttons are white, which reads as
+   ugly boxes on the policy graph's near-black canvas. Dark them to match. The
+   graph is the only React Flow surface in the app. */
+.react-flow__controls {
+  box-shadow: none;
+  gap: 0;
+  overflow: hidden;
+  border-radius: 8px;
+}
+.react-flow__controls-button {
+  background: #11151f;
+  border: none;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  width: 26px;
+  height: 26px;
+}
+.react-flow__controls-button:last-child {
+  border-bottom: none;
+}
+.react-flow__controls-button:hover {
+  background: #1b2130;
+}
+.react-flow__controls-button svg {
+  fill: #b6bdca;
+  max-width: 12px;
+  max-height: 12px;
+}
+.react-flow__controls-button:hover svg {
+  fill: #eef1f6;
 }
