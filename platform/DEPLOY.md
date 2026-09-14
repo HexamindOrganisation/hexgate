@@ -255,31 +255,50 @@ change has to be applied *before* the new images go up. Files live in
 `make platform-migrate STAGE=<stage>` (the step in the recipe above; it replays
 the whole directory against the stack's Postgres).
 
-Applying them *after* the deploy is not a slower path, it is an outage — and
-the signature differs per migration, so don't debug one expecting the other.
-`0001` takes OTLP ingest down: the collector's snapshot query selects
+**When a release adds a ClickHouse table or column** — `init/schema.sql` runs
+only on an empty volume, so an existing stage gets the change from
+`platform/clickhouse/migrations/`, replayed by the same `platform-migrate`
+step (every file is `IF NOT EXISTS`, so replay is a no-op once applied). The
+ordering matters more here than for Postgres: the api and enricher check the
+tables they write and read at boot (`verify_all`) and refuse to start on a
+missing one, and `platform-up` has already recreated their containers by then
+— the old ones are gone, so a skipped migration is a crash loop of the whole
+API, not a degraded message path.
+
+Applying any of them *after* the deploy is not a slower path, it is an outage —
+and the signature differs per migration, so don't debug one expecting the other.
+Both directories number from `0001`, so the prefixes below are load-bearing.
+
+`postgres/0001` takes OTLP ingest down: the collector's snapshot query selects
 `revoked_at`, so it refuses to boot, and every bearer-authenticated API route
 500s alongside it.
 
-`0002` leaves the collector running — its query names its columns and none of
-them are new — but it is otherwise *wider* than `0001`, not narrower. `devtoken`
-is one of its nine tables, so `find_token_by_secret` 500s and every
-bearer-authenticated route goes down exactly as under `0001`; SDK traffic
-through the API stops, and only OTLP ingest is spared. The other eight tables
-take the cookie-authenticated routes with them, reads included, so the dashboard
-goes blank rather than degrading.
+`postgres/0002` leaves the collector running — its query names its columns and
+none of them are new — but it is otherwise *wider* than `postgres/0001`, not
+narrower. `devtoken` is one of its nine tables, so `find_token_by_secret` 500s
+and every bearer-authenticated route goes down exactly as under `postgres/0001`;
+SDK traffic through the API stops, and only OTLP ingest is spared. The other
+eight tables take the cookie-authenticated routes with them, reads included, so
+the dashboard goes blank rather than degrading.
 
-`0003` is the same failure, scoped to one table: routes touching `policy_file`
-(the compose entry-file store) 500 while the rest of the control plane is fine.
+`postgres/0003` is the same failure, scoped to one table: routes touching
+`policy_file` (the compose entry-file store) 500 while the rest of the control
+plane is fine.
 
-The migrations themselves are always safe to run early, which is why the step is
-unconditional in the recipe.
+The ClickHouse migrations fail differently again — not a 500 on the routes that
+touch the table, but the boot-time `verify_all` crash loop described above.
+
+Every migration here is safe to run early — the *old* code never selects the new
+columns — which is why the step is unconditional in the recipe.
 
 | Release | Migration |
 |---|---|
-| devtoken soft delete | `0001_devtoken_soft_delete.sql` |
-| control-plane actor columns | `0002_actor_columns.sql` |
-| actor trail on the compose file store | `0003_policy_file_actor_columns.sql` |
+| devtoken soft delete | `postgres/0001_devtoken_soft_delete.sql` |
+| control-plane actor columns | `postgres/0002_actor_columns.sql` |
+| actor trail on the compose file store | `postgres/0003_policy_file_actor_columns.sql` |
+| policy_decision `attributes` | `clickhouse/0001_add_policy_decision_attributes.sql` |
+| run attribution on decisions/usage | `clickhouse/0002_add_run_columns.sql` |
+| LLM message logging (`llm_message` table) | `clickhouse/0003_add_llm_message.sql` — required before the build that stores `hexgate.messages` |
 
 **Rolling back past a migration.** The columns stay behind when the code goes
 away, and old code does not know to filter on them. Nothing here is automatic,
@@ -314,7 +333,7 @@ nowhere to keep them.
 **no compensating step.** Every column they add is nullable and unread by the
 older code, so leave them in place. What the rollback cannot undo is the keys
 that member removal revoked while the new code was live — correctly so, and
-irreversibly: `0001` masked the secret on revoke, so clearing `revoked_at`
+irreversibly: `postgres/0001` masked the secret on revoke, so clearing `revoked_at`
 would not bring the credential back. Mint a fresh key instead.
 
 **When a release changes the topic config, re-run `redpanda-init` by hand** —
@@ -379,7 +398,8 @@ minutes makes routine database maintenance total span loss, reported as a green
 healthcheck.
 
 **Schema changes** apply only on an empty volume; changing one after first boot
-needs a manual migration.
+goes through `platform/clickhouse/migrations/`, applied by `make platform-migrate`
+(§6).
 
 ## Consumer SDK
 

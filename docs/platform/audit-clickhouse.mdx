@@ -49,7 +49,7 @@ flowchart LR
   C["Collector<br/>verifies the API key, keys spans by project"]:::hexBox
   K["Redpanda<br/>buffer, 3-day retention"]:::redpandaBox
   E["span-enricher<br/>decode · validate · resolve agent version"]:::hexBox
-  CH[("ClickHouse<br/>policy_decision · llm_invocation · ban_enforcement")]:::hexBox
+  CH[("ClickHouse<br/>policy_decision · llm_invocation · ban_enforcement · llm_message")]:::hexBox
 
   B -->|"OTLP/HTTP POST /v1/traces<br/>Bearer api_key"| P --> C --> K --> E -->|"batch insert"| CH
 ```

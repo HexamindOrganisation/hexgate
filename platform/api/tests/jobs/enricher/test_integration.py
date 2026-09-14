@@ -22,10 +22,11 @@ from tests.jobs.enricher.conftest import (
     decision_attrs,
     make_request_bytes,
     make_span,
+    message_attrs,
     usage_attrs,
 )
 
-_TABLES = ("policy_decision", "llm_invocation", "ban_enforcement")
+_TABLES = ("policy_decision", "llm_invocation", "ban_enforcement", "llm_message")
 
 
 def _count(client, table: str, project_id: str) -> int:
@@ -65,19 +66,20 @@ async def test_process_poll_round_trip_and_reprocess_dedup(
                     (semconv.SCOPE_AUDIT, [make_span(decision_attrs())]),
                     (semconv.SCOPE_USAGE, [make_span(usage_attrs())]),
                     (semconv.SCOPE_BANS, [make_span(ban_attrs())]),
+                    (semconv.SCOPE_MESSAGES, [make_span(message_attrs())]),
                 ]
             ),
         )
     ]
     try:
         await job._process_poll(records)
-        assert [_count(client, t, project_id) for t in _TABLES] == [1, 1, 1]
+        assert [_count(client, t, project_id) for t in _TABLES] == [1, 1, 1, 1]
 
         # Reprocessing the same records (crash-before-commit replay) must not
         # double-count: event_id dedup via ReplacingMergeTree, FINAL applies
         # merge semantics at read time.
         await job._process_poll(records)
-        assert [_count(client, t, project_id) for t in _TABLES] == [1, 1, 1]
+        assert [_count(client, t, project_id) for t in _TABLES] == [1, 1, 1, 1]
     finally:
         for table in _TABLES:
             client.command(

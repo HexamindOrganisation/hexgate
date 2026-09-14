@@ -297,11 +297,10 @@ def test_sdk_usage_span_validates_in_and_out_of_a_run_scope() -> None:
     assert detached.run_id is None
 
 
-# --- LLM messages: mapped, not yet accepted -------------------------------------
+# --- LLM messages ---------------------------------------------------------------
 #
-# ``SCOPE_MESSAGES`` stays out of KNOWN_SCOPES until the consumer has a bucket
-# and an insert for it, so ``map_span`` still rejects it and these tests call
-# ``_message_fields()`` directly.
+# The field tests below call ``_message_fields()`` directly (they predate the
+# scope's acceptance); ``map_span`` dispatch has its own test.
 
 
 def _message_event(attrs: dict[str, object]) -> LlmMessageEvent:
@@ -311,11 +310,27 @@ def _message_event(attrs: dict[str, object]) -> LlmMessageEvent:
     return LlmMessageEvent(**payload)
 
 
-def test_when_scope_is_messages_then_still_an_unknown_scope_reject() -> None:
-    assert semconv.SCOPE_MESSAGES not in KNOWN_SCOPES
+def test_when_scope_is_messages_then_map_span_builds_an_llm_message_event() -> None:
+    """Accepted in the same change as its consumer bucket: a scope in
+    KNOWN_SCOPES without a bucket would be validated and dropped silently."""
+    assert semconv.SCOPE_MESSAGES in KNOWN_SCOPES
+    attrs = message_attrs()
+
+    event = map_span(semconv.SCOPE_MESSAGES, make_span(attrs), {})
+
+    assert isinstance(event, LlmMessageEvent)
+    assert str(event.event_id) == attrs[semconv.EVENT_ID]
+    assert event.turn_key == "run_1:researcher"
+    assert event.message_seq == 0
+
+
+def test_when_a_message_span_is_invalid_then_map_span_rejects_it() -> None:
+    attrs = message_attrs()
+    del attrs[semconv.TURN_KEY]
     with pytest.raises(SpanRejected) as exc:
-        map_span(semconv.SCOPE_MESSAGES, make_span(message_attrs()), {})
-    assert exc.value.error_class == "unknown_scope"
+        map_span(semconv.SCOPE_MESSAGES, make_span(attrs), {})
+    assert exc.value.error_class == "validation"
+    assert exc.value.scope == semconv.SCOPE_MESSAGES
 
 
 def test_message_fields_happy_path() -> None:

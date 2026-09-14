@@ -402,16 +402,26 @@ _require-stage-env:
 # take OTLP ingest down. Every file is idempotent, so replaying the whole
 # directory is a no-op when there is nothing new. See platform/DEPLOY.md § 6.
 #
-# Upgrades only: the files ALTER tables the control plane has already created,
-# so on a first-ever deploy there is nothing to migrate (create_all builds the
-# current schema) and this fails on the missing table. Skip it there.
+# Upgrades only: the Postgres files ALTER tables the control plane has already
+# created, so on a first-ever deploy there is nothing to migrate (create_all
+# builds the current schema) and this fails on the missing table. Skip it there.
+# The ClickHouse files are IF NOT EXISTS throughout, so replaying the whole
+# directory on every upgrade is a no-op once applied; a table the API or
+# enricher checks at boot (core.clickhouse.verify_all) must exist BEFORE
+# platform-up recreates their containers, or both crash-loop.
 .PHONY: platform-migrate
-platform-migrate: _require-stage-env ## Apply platform/postgres/migrations/*.sql to a deploy stack: make platform-migrate STAGE=prod
-	$(DEPLOY_COMPOSE) up -d --wait postgres
+platform-migrate: _require-stage-env ## Apply platform/{postgres,clickhouse}/migrations/*.sql to a deploy stack: make platform-migrate STAGE=prod
+	$(DEPLOY_COMPOSE) up -d --wait postgres clickhouse
 	@for f in platform/postgres/migrations/*.sql; do \
 		echo "applying $$f"; \
 		$(DEPLOY_COMPOSE) exec -T postgres \
 			psql -v ON_ERROR_STOP=1 -U hexgate -d hexgate < "$$f" >/dev/null || exit 1; \
+	done
+	@for f in platform/clickhouse/migrations/*.sql; do \
+		echo "applying $$f"; \
+		$(DEPLOY_COMPOSE) exec -T clickhouse sh -c \
+			'clickhouse-client --user "$$CLICKHOUSE_USER" --password "$$CLICKHOUSE_PASSWORD" --multiquery' \
+			< "$$f" || exit 1; \
 	done
 
 .PHONY: platform-up

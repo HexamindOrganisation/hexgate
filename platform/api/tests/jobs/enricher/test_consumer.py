@@ -20,6 +20,7 @@ from tests.jobs.enricher.conftest import (
     decision_attrs,
     make_request_bytes,
     make_span,
+    message_attrs,
     usage_attrs,
 )
 
@@ -29,7 +30,7 @@ def _record(groups, key: bytes | None = b"proj_1", offset: int = 0) -> FakeRecor
 
 
 async def test_process_poll_happy_path_inserts_then_commits(make_job) -> None:
-    """All three event types in one poll → three batch inserts, no DLQ,
+    """All four event types in one poll → four batch inserts, no DLQ,
     one commit, strictly after the inserts."""
     job, clickhouse, consumer, producer, calls = make_job()
     records = [
@@ -38,20 +39,85 @@ async def test_process_poll_happy_path_inserts_then_commits(make_job) -> None:
                 (semconv.SCOPE_AUDIT, [make_span(decision_attrs())]),
                 (semconv.SCOPE_USAGE, [make_span(usage_attrs())]),
                 (semconv.SCOPE_BANS, [make_span(ban_attrs())]),
+                (semconv.SCOPE_MESSAGES, [make_span(message_attrs())]),
             ]
         )
     ]
 
     await job._process_poll(records)
 
-    assert calls == ["insert", "insert", "insert", "commit"]
+    assert calls == ["insert", "insert", "insert", "insert", "commit"]
     tables = [c.args[0] for c in clickhouse.insert.call_args_list]
-    assert tables == ["policy_decision", "llm_invocation", "ban_enforcement"]
+    assert tables == [
+        "policy_decision",
+        "llm_invocation",
+        "ban_enforcement",
+        "llm_message",
+    ]
     assert producer.sent == []
     # project_id from the record key, agent_version_id from the resolver.
     decision_rows = clickhouse.insert.call_args_list[0].args[1]
     assert decision_rows[0][2] == "proj_1"
     assert decision_rows[0][4] == "ver_researcher"
+    # The message bucket resolves the same ids the same way.
+    message_rows = clickhouse.insert.call_args_list[3].args[1]
+    assert message_rows[0][2] == "proj_1"
+    assert message_rows[0][4] == "ver_researcher"
+
+
+async def test_when_a_poll_holds_only_message_spans_then_one_insert_and_a_commit(
+    make_job,
+) -> None:
+    """The empty decision/usage/ban batches never touch the client, so a
+    message-only poll is exactly one insert into llm_message."""
+    job, clickhouse, consumer, producer, calls = make_job()
+    records = [
+        _record(
+            [
+                (
+                    semconv.SCOPE_MESSAGES,
+                    [
+                        make_span(message_attrs(**{semconv.MESSAGE_SEQ: 0})),
+                        make_span(message_attrs(**{semconv.MESSAGE_SEQ: 1})),
+                    ],
+                )
+            ]
+        )
+    ]
+
+    await job._process_poll(records)
+
+    assert calls == ["insert", "commit"]
+    args = clickhouse.insert.call_args
+    assert args.args[0] == "llm_message"
+    assert len(args.args[1]) == 2
+    assert consumer.commits == 1
+
+
+async def test_when_the_message_insert_fails_then_whole_poll_retried_and_committed_once(
+    make_job,
+) -> None:
+    """A ClickHouse failure on the fourth insert re-runs all four: decisions
+    land twice (dedup by event_id on merge) and the offset commits once."""
+    job, clickhouse, consumer, producer, calls = make_job(
+        # The first three inserts succeed; the fourth (llm_message) fails once.
+        insert_side_effect=[None, None, None, OperationalError("clickhouse blip")]
+    )
+    records = [
+        _record(
+            [
+                (semconv.SCOPE_AUDIT, [make_span(decision_attrs())]),
+                (semconv.SCOPE_USAGE, [make_span(usage_attrs())]),
+                (semconv.SCOPE_BANS, [make_span(ban_attrs())]),
+                (semconv.SCOPE_MESSAGES, [make_span(message_attrs())]),
+            ]
+        )
+    ]
+
+    await job._process_poll(records)
+
+    assert calls == ["insert"] * 4 + ["insert"] * 4 + ["commit"]
+    assert consumer.commits == 1
 
 
 async def test_when_the_same_event_id_arrives_twice_in_one_poll_then_inserted_once(
@@ -308,6 +374,9 @@ def _lifecycle_job(monkeypatch, make_job, *, records, topics):
         "hexgate_api.jobs.enricher.consumer.verify_llm_schema", lambda c: None
     )
     monkeypatch.setattr(
+        "hexgate_api.jobs.enricher.consumer.verify_messages_schema", lambda c: None
+    )
+    monkeypatch.setattr(
         "hexgate_api.jobs.enricher.consumer.engine", SimpleNamespace(dispose=_noop)
     )
     return job, clickhouse, consumer, calls
@@ -397,7 +466,7 @@ async def test_when_a_topic_is_missing_then_run_fails_fast(
 async def test_when_two_tables_are_stale_then_run_reports_both_gaps_at_once(
     monkeypatch, make_job
 ) -> None:
-    # The two per-feature checks are aggregated: a volume behind on both
+    # The per-feature checks are aggregated: a volume behind on both
     # policy_decision and llm_invocation must name both in one boot, not one
     # per restart.
     from hexgate_api.core.clickhouse import SchemaOutOfDate
@@ -430,6 +499,34 @@ async def test_when_two_tables_are_stale_then_run_reports_both_gaps_at_once(
         "llm_invocation": ["latency_ms"],
     }
     assert not consumer.started  # the check runs before any broker connect
+
+
+async def test_when_the_llm_message_table_is_missing_then_run_refuses_to_start(
+    monkeypatch, make_job
+) -> None:
+    """The table ships as a hand-applied migration; a stage that skipped it
+    must fail at boot, not halt its partition on the first message span."""
+    from hexgate_api.core.clickhouse import SchemaOutOfDate
+
+    job, clickhouse, consumer, calls = _lifecycle_job(
+        monkeypatch,
+        make_job,
+        records=[],
+        topics={"hexgate.otlp.raw", "hexgate.otlp.dlq"},
+    )
+
+    def _table_absent(_client):
+        raise SchemaOutOfDate({"llm_message": ["event_id", "input_messages"]})
+
+    monkeypatch.setattr(
+        "hexgate_api.jobs.enricher.consumer.verify_messages_schema", _table_absent
+    )
+
+    with pytest.raises(SchemaOutOfDate) as exc:
+        await job.run()
+
+    assert exc.value.missing == {"llm_message": ["event_id", "input_messages"]}
+    assert not consumer.started
 
 
 async def test_when_the_producer_fails_to_start_then_the_consumer_still_stops(

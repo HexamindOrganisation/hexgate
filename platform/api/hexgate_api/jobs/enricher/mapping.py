@@ -2,8 +2,9 @@
 
 The wire contract lives in hexgate.tracing.semconv (shared with the future
 SDK emitter). Dispatch is by instrumentation scope name; the platform's
-Pydantic models (schemas.py) are the validation layer, so the enricher
-accepts exactly what the HTTP ingest accepts. Type coercion lives in
+Pydantic models (schemas.py) are the validation layer, so for the scopes that
+also have an HTTP ingest the enricher accepts exactly what that ingest accepts
+(messages have no HTTP path — OTLP is their only way in). Type coercion lives in
 coerce.py; redaction/byte caps in enforcement.py — this module is only the
 attribute→field contract for each scope.
 """
@@ -49,12 +50,16 @@ _log = logging.getLogger(__name__)
 
 _EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 
-# SCOPE_MESSAGES is mapped below but deliberately not accepted yet: the
-# consumer buckets events by exact type and commits the offset after the
-# inserts, so a scope accepted before it has a bucket and an insert would be
-# validated and then dropped with no DLQ record. It joins this tuple in the
-# same change as its consumer bucket; until then it is a loud unknown_scope.
-KNOWN_SCOPES = (semconv.SCOPE_AUDIT, semconv.SCOPE_USAGE, semconv.SCOPE_BANS)
+# A scope belongs here only once the consumer has a bucket and an insert for
+# its event type: consumer.py buckets by exact type and commits the offset
+# after the inserts, so a scope accepted before that would be validated and
+# then dropped with no DLQ record. Anything not listed is a loud unknown_scope.
+KNOWN_SCOPES = (
+    semconv.SCOPE_AUDIT,
+    semconv.SCOPE_USAGE,
+    semconv.SCOPE_BANS,
+    semconv.SCOPE_MESSAGES,
+)
 
 Event = DecisionEvent | LlmInvocationEvent | BanEnforcementEvent | LlmMessageEvent
 
