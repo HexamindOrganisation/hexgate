@@ -131,6 +131,24 @@ describe("AppShell", () => {
     expect(screen.queryByText("Playground")).not.toBeInTheDocument();
   });
 
+  it("scopes settings links to the URL's org, not the active org", async () => {
+    // Active org is A (beforeEach), but the URL is org B — the sidebar's
+    // org-scoped links must target B so a deep-link/refresh stays consistent.
+    renderWithProviders(<AppShell />, {
+      initialRoute: "/orgs/org-b/settings",
+    });
+    await waitFor(() =>
+      expect(screen.getByText("Members")).toBeInTheDocument(),
+    );
+    expect(screen.getByRole("link", { name: "Members" })).toHaveAttribute(
+      "href",
+      "/orgs/org-b/members",
+    );
+    expect(
+      screen.getByRole("link", { name: "Organization settings" }),
+    ).toHaveAttribute("href", "/orgs/org-b/settings");
+  });
+
   it("collapsing the sidebar hides the nav labels", async () => {
     renderWithProviders(<AppShell />);
     await waitFor(() => expect(screen.getByText("Agents")).toBeInTheDocument());

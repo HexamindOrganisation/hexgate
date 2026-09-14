@@ -112,9 +112,24 @@ const workspaceLinks = [
   { to: "/tokens", label: "API keys", icon: KeyRound },
 ];
 
-/** Whether a path belongs to the settings space (its own sidebar). */
+/** Whether a path belongs to the settings space (its own sidebar). Uses a
+ * segment boundary so a future sibling like `/orgstats` isn't misread. */
 function isSettingsPath(pathname: string): boolean {
-  return pathname === "/settings" || pathname.startsWith("/orgs");
+  return (
+    pathname === "/settings" ||
+    pathname === "/orgs" ||
+    pathname.startsWith("/orgs/")
+  );
+}
+
+/** The org the settings sidebar should scope its links to: the one in the URL
+ * (`/orgs/:id/...`) when present, else the active org — so a deep-link or
+ * refresh keeps the sidebar pointed at the org being viewed. */
+function settingsOrgId(
+  pathname: string,
+  activeOrgId: string | null,
+): string | null {
+  return pathname.match(/^\/orgs\/([^/]+)(?:\/|$)/)?.[1] ?? activeOrgId;
 }
 
 /** The settings-space sidebar. Member/settings links need the active org, so
@@ -201,7 +216,11 @@ export function AppShell() {
   const { pathname } = useLocation();
   const inSettings = isSettingsPath(pathname);
   const activeOrgId = useActive((s) => s.activeOrgId);
-  const links = inSettings ? settingsLinks(activeOrgId) : workspaceLinks;
+  // Scope the settings links to the URL's org (falling back to the active one)
+  // so a refresh/deep-link to /orgs/:id/... keeps the sidebar on that org.
+  const links = inSettings
+    ? settingsLinks(settingsOrgId(pathname, activeOrgId))
+    : workspaceLinks;
 
   // The workspace create-dialogs live here, not in OrgProjectSwitcher, so
   // collapsing the sidebar (which unmounts the switcher trigger) can't unmount
