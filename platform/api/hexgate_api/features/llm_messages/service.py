@@ -10,6 +10,7 @@ endpoint. Column order, row shape and the startup schema guard live here.
 from __future__ import annotations
 
 from collections.abc import Sequence
+from uuid import UUID
 
 from clickhouse_connect.driver.client import Client
 
@@ -127,22 +128,41 @@ _LIST_COLUMNS = (
 MAX_PAGE_SIZE = 100
 
 
+class NoMessageScope(ValueError):
+    """A transcript read named neither a session nor a run."""
+
+    def __init__(self) -> None:
+        super().__init__("session_id or run_id is required")
+
+
 def list_llm_messages(
     client: Client,
     *,
     project_id: str,
-    session_id: str,
+    session_id: str | None = None,
+    run_id: UUID | None = None,
     limit: int = 50,
     offset: int = 0,
 ) -> dict:
-    """One session's transcript rows, oldest first. Returns ``{rows, total,
-    limit, offset}`` with ``total`` the unpaginated match count.
+    """One transcript's rows, oldest first. Returns ``{rows, total, limit,
+    offset}`` with ``total`` the unpaginated match count.
 
-    ``session_id`` is required, not another optional filter: this table's rows
-    are whole prompts, so an unscoped read would stream a project's entire
-    message history.
+    Scoped by ``session_id``, by ``run_id``, or by both — at least one, or
+    :class:`NoMessageScope`. This table's rows are whole prompts, so a read
+    with no scope at all would stream a project's entire message history;
+    the check lives here rather than only in the router because this function
+    builds the WHERE clause, and an unscoped one is the failure that matters.
 
-    The session IS the scope — there is no window parameter, unlike every
+    Two scopes rather than one because ``session_id`` is caller-supplied and
+    most SDK users never set it: it defaults to ``""`` all the way down (see
+    ``AuditEnvelope``), so requiring it would leave every transcript from an
+    unnamed session stored and unreadable for its whole 180-day TTL.
+    ``run_id`` is the platform's own identifier and is why the column exists.
+    A zero ``run_id`` is rejected for the same reason the empty session is:
+    it is the column's "outside any run" value, shared by every unattributed
+    row in the project, so it names no transcript.
+
+    The scope IS the scope — there is no window parameter, unlike every
     other read here. ``scope_filters`` always emits a time predicate, so this
     passes the retention horizon, past which nothing is stored anyway. A
     dashboard window would silently cut the head off a conversation that
@@ -157,7 +177,9 @@ def list_llm_messages(
     forwards. ``message_seq`` cannot order on its own (it restarts at 0 for
     each ``turn_key``), and ``occurred_at`` cannot either (DateTime64(3) ties
     within a millisecond), so both run ahead of ``event_id``, which breaks the
-    remaining ties into the total order paging needs.
+    remaining ties into the total order paging needs. A run-scoped read gets
+    no help from the sort key beyond ``project_id`` and scans the retention
+    window; that is the cost of the session column being optional.
 
     Reads without ``FINAL``, like every other read path here: after a
     whole-batch retry both copies of an ``event_id`` are returned — adjacent,
@@ -165,9 +187,16 @@ def list_llm_messages(
     ReplacingMergeTree merges the parts. A repeated message in a transcript is
     that window, not the agent saying the same thing twice.
     """
+    if not session_id and (run_id is None or run_id == ZERO_RUN_ID):
+        raise NoMessageScope()
+
     where, params = scope_filters(project_id, RETENTION_HOURS)
-    where.append("session_id = {session_id:String}")
-    params["session_id"] = session_id
+    if session_id:
+        where.append("session_id = {session_id:String}")
+        params["session_id"] = session_id
+    if run_id is not None and run_id != ZERO_RUN_ID:
+        where.append("run_id = {run_id:UUID}")
+        params["run_id"] = run_id
     where_sql = " AND ".join(where)
 
     # Same one-scan page+total trick as list_decisions: count() OVER () is
