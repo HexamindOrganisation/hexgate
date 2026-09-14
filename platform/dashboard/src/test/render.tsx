@@ -29,15 +29,18 @@ function makeQueryClient(): QueryClient {
 
 interface Options extends Omit<RenderOptions, "wrapper"> {
   initialRoute?: string;
+  /** Supply a pre-seeded QueryClient (e.g. to prime a project's cache before
+   * render). Omit for the default fresh, isolated client. */
+  client?: QueryClient;
 }
 
 /** Drop-in for ``render`` from @testing-library/react with the
  * project's standard providers wrapped around the tree. */
 export function renderWithProviders(
   ui: ReactNode,
-  { initialRoute = "/", ...rest }: Options = {},
+  { initialRoute = "/", client, ...rest }: Options = {},
 ) {
-  const qc = makeQueryClient();
+  const qc = client ?? makeQueryClient();
   return render(
     <QueryClientProvider client={qc}>
       <MemoryRouter initialEntries={[initialRoute]}>{ui}</MemoryRouter>

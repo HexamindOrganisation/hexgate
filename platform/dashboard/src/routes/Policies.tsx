@@ -330,6 +330,11 @@ export function PoliciesPage() {
                   </div>
                 ) : (
                   <EditorPane
+                    // Remount on a project switch so no dirty buffer from the
+                    // previous project survives into this one (a same-name entry
+                    // file wouldn't otherwise reset the pane, and Save would then
+                    // write project A's text into project B).
+                    key={projectId}
                     projectId={projectId}
                     name={active}
                     files={files}

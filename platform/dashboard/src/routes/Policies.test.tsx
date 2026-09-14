@@ -7,12 +7,41 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, screen, waitFor, within } from "@testing-library/react";
+import { QueryClient } from "@tanstack/react-query";
+import {
+  act,
+  fireEvent,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import { PoliciesPage } from "./Policies";
 import { useActive } from "@/lib/active";
 import { renderWithProviders } from "@/test/render";
+
+// The real editor is CodeMirror, which jsdom can't drive by keystroke. Swap it
+// for a plain controlled textarea so a test can dirty the buffer. No Policies
+// page-wiring test asserts editor internals, so this is safe file-wide.
+vi.mock("@/components/PolicyEditor", () => ({
+  PolicyEditor: ({
+    value,
+    onChange,
+    readOnly,
+  }: {
+    value: string;
+    onChange: (next: string) => void;
+    readOnly?: boolean;
+  }) => (
+    <textarea
+      aria-label="policy editor"
+      value={value}
+      readOnly={readOnly}
+      onChange={(e) => onChange(e.target.value)}
+    />
+  ),
+}));
 
 const ORG = {
   id: "org-a",
@@ -216,6 +245,52 @@ describe("PoliciesPage", () => {
     });
     await waitFor(() =>
       expect(screen.queryByTitle("caps.yaml")).not.toBeInTheDocument(),
+    );
+  });
+
+  it("drops a dirty buffer when switching to a cached project (no cross-project write)", async () => {
+    const PID2 = "proj-2";
+    const P2_POLICY = "tools: { other: { mode: allow } }\n";
+    stubFetch({
+      ...baseRoutes(),
+      "/v1/orgs/org-a/projects": [
+        { id: PID, name: "proj-1", org_id: ORG.id },
+        { id: PID2, name: "proj-2", org_id: ORG.id },
+      ],
+      [`/v1/projects/${PID2}/policy-files`]: [file("policy.yaml", P2_POLICY)],
+      [`/v1/projects/${PID2}/policy/resolve`]: { roles: {} },
+      [`/v1/projects/${PID2}/policy/check`]: { ok: true, lints: [] },
+    });
+
+    // Pre-seed project 2's file cache so the later switch to it never hits the
+    // loading state that would unmount the pane (the bug's precondition) — no
+    // warm-up round-trips, so the test stays deterministic.
+    const qc = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false, staleTime: 30_000 },
+        mutations: { retry: false },
+      },
+    });
+    qc.setQueryData(["policy-files", PID2], [file("policy.yaml", P2_POLICY)]);
+    renderWithProviders(<PoliciesPage />, { client: qc });
+    await waitFor(() => expect(screen.getByText("active")).toBeInTheDocument());
+
+    // Dirty project 1's policy.yaml without saving (one-shot change).
+    const editor = screen.getByLabelText("policy editor");
+    fireEvent.change(editor, {
+      target: { value: "import: [ caps.yaml ]\n# zzAAA_PROJECT_A" },
+    });
+    expect(editor).toHaveValue("import: [ caps.yaml ]\n# zzAAA_PROJECT_A");
+
+    // Switch to the pre-cached project 2 — the pane stays mounted (no loading),
+    // so only the key={projectId} remount stops project 1's buffer from
+    // surviving. The editor must show project 2's stored content, not the dirty
+    // project-1 text.
+    act(() => useActive.setState({ activeProjectId: PID2 }));
+    await waitFor(
+      () =>
+        expect(screen.getByLabelText("policy editor")).toHaveValue(P2_POLICY),
+      { timeout: 3000 },
     );
   });
 });
