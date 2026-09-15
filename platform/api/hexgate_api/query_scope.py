@@ -30,6 +30,12 @@ RETENTION_WINDOW = timedelta(days=180)
 # days, so spans longer than a preset go through the custom date range.
 WINDOW_HOURS: dict[str, int] = {"24h": 24, "7d": 24 * 7, "30d": 24 * 30, "90d": 24 * 90}
 
+# The whole retention horizon, for reads whose scope is an entity rather than a
+# time range: ``scope_filters`` always emits a time predicate, so a read that
+# wants everything still has to name a window, and that window must be the one
+# past which nothing is stored anyway.
+RETENTION_HOURS: int = int(RETENTION_WINDOW.total_seconds() // 3600)
+
 
 def validate_event_window(occurred_at: datetime) -> None:
     """Raise :class:`EventOutOfWindow` when occurred_at is outside

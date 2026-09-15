@@ -1058,10 +1058,36 @@ def _decision_row(total: int, **overrides) -> tuple:
         "hint": '{"globs": "/workspace/**"}',
         "arguments": "",
         "attributes": "",
+        "run_id": audit.ZERO_RUN_ID,
         "total_matches": total,
     }
     base.update(overrides)
     return tuple(base[c] for c in _LIST_COLUMN_NAMES)
+
+
+def test_when_a_decision_has_no_run_then_run_id_reads_as_none() -> None:
+    """The zero UUID is the column's "outside any run" value; the drawer uses
+    run_id to scope the transcript read, so it must not get a run that joins
+    to nothing."""
+    client = MagicMock()
+    client.query.return_value.result_rows = [_decision_row(1)]
+    client.query.return_value.column_names = _LIST_COLUMN_NAMES
+
+    (row,) = list_decisions(client, project_id="p1", since_hours=24)["rows"]
+
+    assert row["run_id"] is None
+
+
+def test_when_a_decision_has_a_run_then_run_id_is_returned() -> None:
+    """The transcript scope for an SDK user who never set a session id."""
+    run_id = uuid.uuid4()
+    client = MagicMock()
+    client.query.return_value.result_rows = [_decision_row(1, run_id=run_id)]
+    client.query.return_value.column_names = _LIST_COLUMN_NAMES
+
+    (row,) = list_decisions(client, project_id="p1", since_hours=24)["rows"]
+
+    assert row["run_id"] == run_id
 
 
 def test_list_decisions_total_from_window_function() -> None:

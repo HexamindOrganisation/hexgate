@@ -23,6 +23,7 @@ from clickhouse_connect.driver.client import Client
 from hexgate_api.core.clickhouse import (
     ZERO_RUN_ID,
     BatchItem,
+    decode_json_column,
     insert_batch,
     verify_written_columns,
 )
@@ -583,20 +584,16 @@ def timeseries(
     return [points[t] for t in sorted(points)]
 
 
-def _decode_json_column(raw: str) -> object:
-    """Decode a stored JSON string ("" → None); leave malformed values as-is."""
-    if not raw:
-        return None
-    try:
-        return json.loads(raw)
-    except (ValueError, TypeError):
-        return raw
-
-
+# run_id rides along so the detail drawer can scope the transcript read for
+# this decision: session_id is caller-supplied and usually empty, and run_id
+# is then the only scope the llm-messages read has left (features/llm_messages).
+# It scopes to the run, not to the one decision — the drawer picks the turn
+# around the decision's timestamp out of what comes back.
 _LIST_COLUMNS = (
     "event_id, occurred_at, received_at, agent_name, agent_version_id, "
     "session_id, user_id, tool_name, user_roles, deciding_role, "
-    "outcome, error_type, reason, violations, hint, arguments, attributes"
+    "outcome, error_type, reason, violations, hint, arguments, attributes, "
+    "run_id"
 )
 
 
@@ -653,9 +650,13 @@ def list_decisions(
         total = int(row.pop("total_matches"))
         row["violations"] = list(row.get("violations") or [])
         row["user_roles"] = list(row.get("user_roles") or [])
-        row["hint"] = _decode_json_column(row.get("hint") or "")
-        row["arguments"] = _decode_json_column(row.get("arguments") or "")
-        row["attributes"] = _decode_json_column(row.get("attributes") or "")
+        row["hint"] = decode_json_column(row.get("hint") or "")
+        row["arguments"] = decode_json_column(row.get("arguments") or "")
+        row["attributes"] = decode_json_column(row.get("attributes") or "")
+        # The zero UUID is the column's "outside any run" value, not a run to
+        # scope a transcript read by.
+        if row.get("run_id") == ZERO_RUN_ID:
+            row["run_id"] = None
         rows.append(row)
 
     # An empty page past the end (offset > 0) carries no window value, so the

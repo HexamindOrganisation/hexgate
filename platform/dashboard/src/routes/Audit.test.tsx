@@ -68,6 +68,7 @@ const ROW: AuditDecisionRow = {
   hint: null,
   arguments: { path: "/etc/passwd" },
   attributes: { department: "finance" },
+  run_id: null,
 };
 
 const ANOMALY: AuditAnomaly = {
