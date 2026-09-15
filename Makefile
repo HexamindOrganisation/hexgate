@@ -138,9 +138,10 @@ demo-override: ## Build a deny-everything bundle + chat with HEXGATE_LOCAL_POLIC
 # Docker Compose service definition lives in platform/docker-compose.yml.
 # First `make clickhouse-up` on an empty volume runs the init scripts in
 # platform/clickhouse/init/ and creates the policy_decision table.
-# Subsequent schema changes don't auto-apply — use `make clickhouse-reset`
-# (wipes data) or apply platform/clickhouse/migrations/*.sql by hand via
-# `make clickhouse-cli`, in filename order.
+# Subsequent schema changes don't auto-apply — run `make clickhouse-migrate`,
+# which replays platform/clickhouse/migrations/*.sql in filename order and keeps
+# your data. `make clickhouse-reset` wipes the volume and re-runs the init
+# scripts; reach for it only when the migrations cannot get you there.
 
 COMPOSE := docker compose -f platform/docker-compose.yml
 
@@ -160,6 +161,18 @@ clickhouse-logs: ## Tail ClickHouse server logs
 clickhouse-cli: ## Open an interactive SQL shell against the local ClickHouse
 	docker exec -it hexgate-clickhouse clickhouse-client \
 	    --user hexgate --password hexgate-dev-password --database hexgate_audit
+
+# The local twin of `platform-migrate`'s ClickHouse half. Without it the only
+# documented way to pick up a new table was clickhouse-reset, which wipes — so a
+# developer whose volume predates a migration was nudged into destroying data.
+.PHONY: clickhouse-migrate
+clickhouse-migrate: clickhouse-up ## Replay platform/clickhouse/migrations/*.sql against local ClickHouse (idempotent)
+	@for f in platform/clickhouse/migrations/*.sql; do \
+		echo "applying $$f"; \
+		docker exec -i hexgate-clickhouse clickhouse-client \
+			--user hexgate --password hexgate-dev-password --database hexgate_audit \
+			--multiquery < "$$f" || exit 1; \
+	done
 
 .PHONY: clickhouse-reset
 clickhouse-reset: ## Wipe ONLY the ClickHouse data volume and re-run init scripts
@@ -194,8 +207,13 @@ postgres-init: postgres-up ## Create the platform-api tables on local Postgres (
 	@# Every file here is idempotent (IF NOT EXISTS), so replaying the whole
 	@# directory on each init is the cheapest honest local-dev migration story.
 	@# Deployed stacks apply these by hand — see platform/DEPLOY.md section 6.
+	@# `|| exit 1` is load-bearing: the whole loop is one shell invocation with no
+	@# `set -e`, so without it a failing file is swallowed and make exits on the
+	@# LAST iteration's status. Output stays quiet here — this runs on nearly every
+	@# local workflow and is usually a no-op; the deploy path is the one that needs
+	@# to show its work.
 	for f in platform/postgres/migrations/*.sql; do \
-		docker exec -i hexgate-postgres psql -v ON_ERROR_STOP=1 -U hexgate -d hexgate < "$$f" >/dev/null; \
+		docker exec -i hexgate-postgres psql -v ON_ERROR_STOP=1 -U hexgate -d hexgate < "$$f" >/dev/null || exit 1; \
 	done
 
 .PHONY: postgres-stop
@@ -409,20 +427,16 @@ _require-stage-env:
 # directory on every upgrade is a no-op once applied; a table the API or
 # enricher checks at boot (core.clickhouse.verify_all) must exist BEFORE
 # platform-up recreates their containers, or both crash-loop.
+#
+# The two stores are applied independently: a Postgres failure is reported but
+# does NOT skip ClickHouse, and the run ends with a per-store summary plus a
+# nonzero exit if either did not complete. Postgres DDL runs under a 10s
+# lock_timeout, so stop `api` and `enricher` first (keep `collector` and
+# `redpanda` up, so OTLP keeps buffering) or expect the run to give up.
 .PHONY: platform-migrate
 platform-migrate: _require-stage-env ## Apply platform/{postgres,clickhouse}/migrations/*.sql to a deploy stack: make platform-migrate STAGE=prod
 	$(DEPLOY_COMPOSE) up -d --wait postgres clickhouse
-	@for f in platform/postgres/migrations/*.sql; do \
-		echo "applying $$f"; \
-		$(DEPLOY_COMPOSE) exec -T postgres \
-			psql -v ON_ERROR_STOP=1 -U hexgate -d hexgate < "$$f" >/dev/null || exit 1; \
-	done
-	@for f in platform/clickhouse/migrations/*.sql; do \
-		echo "applying $$f"; \
-		$(DEPLOY_COMPOSE) exec -T clickhouse sh -c \
-			'clickhouse-client --user "$$CLICKHOUSE_USER" --password "$$CLICKHOUSE_PASSWORD" --multiquery' \
-			< "$$f" || exit 1; \
-	done
+	@bash platform/scripts/migrate.sh $(STAGE)
 
 .PHONY: platform-up
 platform-up: _require-stage-env ## Build + (re)start a deploy stack: make platform-up STAGE=prod (default staging)
