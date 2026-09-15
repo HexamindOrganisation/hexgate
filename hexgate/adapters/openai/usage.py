@@ -12,19 +12,32 @@ side is stashed under the turn key and picked up when the response lands, so
 usage and messages leave from one call site.
 
 What reaches the wire is the *delta* — only the items added since this turn's
-last call — because the input list is the whole conversation so far and
-re-sending it every call would store the transcript once per turn. Working out
-that delta is :class:`~hexgate.tracing.messages.MessageCursor`'s job, written
-to be shared by all four adapters (this is the first to use it); turning the
-Responses API's items into GenAI messages is ``messages.py``'s, beside this
-one. What is left here is the hook pair itself.
+last call — because re-sending the whole list every call would store the
+transcript once per turn.
+
+Which half does that thinning depends on how the run was started, and the hook
+cannot tell from the input list alone:
+
+* By default the SDK re-sends the whole conversation on every call, so the
+  hook is handed the full history and
+  :class:`~hexgate.tracing.messages.MessageCursor` works out what is new.
+* Under a server-managed conversation (``conversation_id``,
+  ``previous_response_id`` or ``auto_previous_response_id`` passed to
+  ``run*``), OpenAI holds the history and the SDK sends only the un-sent
+  items, so the hook is handed a delta already. Diffing it against a prefix
+  that was never re-sent matches nothing and would flag every event
+  ``resynced``, so ``framework_sends_deltas`` turns the diff off and the items
+  go out as they arrive.
+
+Turning the Responses API's items into GenAI messages is ``messages.py``'s
+job, beside this one. What is left here is the hook pair itself.
 """
 
 from __future__ import annotations
 
 import logging
 import uuid
-from typing import NamedTuple
+from typing import Any, NamedTuple
 
 from agents import Agent, RunContextWrapper
 from agents.items import ModelResponse, TResponseInputItem
@@ -49,8 +62,10 @@ _log = logging.getLogger(__name__)
 class _Prompt(NamedTuple):
     """What ``on_llm_start`` saw, held until the matching ``on_llm_end``.
 
-    ``input_items`` is the whole conversation the model is about to see, not
-    a delta; working out what is new is the cursor's job.
+    ``input_items`` is exactly what the model is about to see: the whole
+    conversation by default, or only the un-sent items under a server-managed
+    conversation. Which one it is decides whether the cursor diffs it — see
+    the module docstring.
     """
 
     system_prompt: str | None
@@ -84,12 +99,24 @@ class HexgateUsageHooks(RunHooks):
     cursor's "reset on run end" contract is met, raises included.
     """
 
-    def __init__(self, *, api_key: str) -> None:
+    def __init__(self, *, api_key: str, framework_sends_deltas: bool = False) -> None:
         self._api_key = api_key
+        # True when the run was started under a server-managed conversation, so
+        # the SDK hands this hook un-sent items rather than the whole history
+        # and the cursor's diff must be skipped. The hook cannot see the
+        # tracker that decides this; ``HexgateRunner`` sees the kwargs that
+        # build it and passes the answer down. Defaults false: a bare
+        # ``RunHooks`` user gets the full-history behaviour the SDK's own
+        # default produces.
+        self._framework_sends_deltas = framework_sends_deltas
         self._cursor = MessageCursor()
         # Request side of each in-flight LLM call, keyed by turn: the response
         # hook carries no prompt, so it has to be handed one.
         self._pending: dict[str, _Prompt] = {}
+        # ``message_seq`` per turn when the cursor is bypassed. The cursor owns
+        # this counter in the normal path; in delta mode nothing else does, and
+        # a seq that restarted at 0 each call would read as a lost row.
+        self._delta_seq: dict[str, int] = {}
         # Stands in for the run id when there is no run scope (see _turn_key).
         self._fallback_run_id = uuid.uuid4().hex
 
@@ -112,9 +139,11 @@ class HexgateUsageHooks(RunHooks):
     ) -> None:
         """Stash the prompt for the matching ``on_llm_end``.
 
-        ``input_items`` is the whole conversation, not a delta — and a
-        handoff target gets it too, so its first event restates what the
-        source already logged under a new ``turn_key`` (issue #215).
+        ``input_items`` is the whole conversation unless the run is under a
+        server-managed conversation, in which case it is already the delta
+        (see the module docstring) — and a handoff target gets the same list,
+        so its first event restates what the source already logged under a new
+        ``turn_key`` (issue #215).
         """
         if not log_messages_enabled():
             return
@@ -164,19 +193,40 @@ class HexgateUsageHooks(RunHooks):
         except Exception:
             _log.exception("converting LLM messages raised; dropping this event")
             return
-        delta = self._cursor.advance(key, new_input)
+        messages, seq, resynced = self._delta(key, new_input)
         emit_llm_messages(
             agent.name,
             model,
-            delta.messages,
+            messages,
             output,
             turn_key=key,
-            message_seq=delta.seq,
+            message_seq=seq,
             # First event of each turn only — a handoff target has its own
             # instructions, and repeating them would spend the 8 KiB budget.
             system_instructions=(
-                [text_part(system_prompt)] if delta.seq == 0 and system_prompt else None
+                [text_part(system_prompt)] if seq == 0 and system_prompt else None
             ),
-            resynced=delta.resynced,
+            resynced=resynced,
             api_key=self._api_key,
         )
+
+    def _delta(self, key: str, new_input: list[Any]) -> tuple[list[Any], int, bool]:
+        """What to emit for this call: the messages, their ``message_seq`` and
+        whether they restate the turn's history.
+
+        Two sources, one shape. Normally the cursor diffs the full list it was
+        handed. Under a server-managed conversation the SDK already sent only
+        the un-sent items, so there is nothing to diff — the list *is* the
+        delta, and it goes out whole under a seq counted here.
+
+        ``resynced`` stays false in that mode, and deliberately: the flag says
+        "the rows before this one are superseded", which is exactly as untrue
+        here as it is for an ordinary extension. A reader concatenating rows
+        gets the transcript either way.
+        """
+        if not self._framework_sends_deltas:
+            delta = self._cursor.advance(key, new_input)
+            return delta.messages, delta.seq, delta.resynced
+        seq = self._delta_seq.get(key, 0)
+        self._delta_seq[key] = seq + 1
+        return new_input, seq, False

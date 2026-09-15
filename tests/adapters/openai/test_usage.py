@@ -349,6 +349,102 @@ async def test_when_a_handoff_switches_agent_then_each_keeps_its_own_turn(
 
 
 @pytest.mark.asyncio
+async def test_when_the_framework_sends_deltas_then_no_event_is_resynced(
+    emitted: list[dict[str, Any]], messages: list[dict[str, Any]]
+) -> None:
+    """Under a server-managed conversation the SDK hands the hook only the
+    un-sent items, so turn two starts with a tool result rather than repeating
+    the user message. Diffing that against the stored prefix matches nothing
+    and would flag every event from turn two on; with the diff off the items
+    go out as they arrive, seq still counting."""
+    hooks = HexgateUsageHooks(api_key="k", framework_sends_deltas=True)
+    agent = Agent(name="my-agent", model="gpt-4o")
+    context = object()
+
+    await hooks.on_llm_start(
+        context=context,
+        agent=agent,
+        system_prompt="Be brief.",
+        input_items=[_user("Weather in Paris?")],
+    )
+    await hooks.on_llm_end(
+        context=context, agent=agent, response=_response(output=[_tool_call_output()])
+    )
+    # No user message this time: the server already has it.
+    await hooks.on_llm_start(
+        context=context,
+        agent=agent,
+        system_prompt="Be brief.",
+        input_items=[
+            {
+                "type": "function_call_output",
+                "call_id": "call_1",
+                "output": "sunny, 22C",
+            }
+        ],
+    )
+    await hooks.on_llm_end(context=context, agent=agent, response=_response())
+
+    assert [c["resynced"] for c in messages] == [False, False]
+    assert [c["message_seq"] for c in messages] == [0, 1]
+    assert messages[0]["turn_key"] == messages[1]["turn_key"]
+    assert [m["role"] for m in messages[1]["input_messages"]] == ["tool"]
+    # First event of the turn only, exactly as in the full-history path.
+    assert messages[0]["system_instructions"] == [
+        {"type": "text", "content": "Be brief."}
+    ]
+    assert messages[1]["system_instructions"] is None
+
+
+@pytest.mark.asyncio
+async def test_when_the_framework_sends_deltas_then_each_agent_counts_its_own_seq(
+    emitted: list[dict[str, Any]], messages: list[dict[str, Any]]
+) -> None:
+    """The bypassed seq counter is per turn_key, like the cursor's own: a
+    handoff target starts at 0 rather than inheriting the source's count."""
+    hooks = HexgateUsageHooks(api_key="k", framework_sends_deltas=True)
+    context = object()
+    triage = Agent(name="triage", model="gpt-4o")
+    specialist = Agent(name="specialist", model="gpt-4o")
+
+    for agent in (triage, triage, specialist):
+        await hooks.on_llm_start(
+            context=context, agent=agent, system_prompt=None, input_items=[_user("a")]
+        )
+        await hooks.on_llm_end(context=context, agent=agent, response=_response())
+
+    assert [c["message_seq"] for c in messages] == [0, 1, 0]
+    assert messages[2]["turn_key"] != messages[1]["turn_key"]
+
+
+@pytest.mark.asyncio
+async def test_when_the_framework_sends_full_history_then_the_cursor_still_diffs(
+    emitted: list[dict[str, Any]], messages: list[dict[str, Any]]
+) -> None:
+    """The default is unchanged: no server-managed conversation means the hook
+    is handed the whole list and the cursor thins it."""
+    hooks = HexgateUsageHooks(api_key="k")
+    agent = Agent(name="my-agent", model="gpt-4o")
+    context = object()
+    first = [_user("one")]
+
+    await hooks.on_llm_start(
+        context=context, agent=agent, system_prompt=None, input_items=first
+    )
+    await hooks.on_llm_end(context=context, agent=agent, response=_response())
+    await hooks.on_llm_start(
+        context=context,
+        agent=agent,
+        system_prompt=None,
+        input_items=first + [_user("two")],
+    )
+    await hooks.on_llm_end(context=context, agent=agent, response=_response())
+
+    assert [c["resynced"] for c in messages] == [False, False]
+    assert len(messages[1]["input_messages"]) == 1
+
+
+@pytest.mark.asyncio
 async def test_when_log_messages_is_off_then_usage_still_emits(
     emitted: list[dict[str, Any]],
     messages: list[dict[str, Any]],

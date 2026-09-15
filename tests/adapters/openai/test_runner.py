@@ -2,17 +2,19 @@
 
 from __future__ import annotations
 
+import inspect
 from contextlib import contextmanager
 from types import SimpleNamespace
 from typing import Any, AsyncIterator
 
 import pytest
-from agents import Agent, FunctionTool, RunHooks
+from agents import Agent, FunctionTool, Runner, RunHooks
 from agents.items import ModelResponse
 from agents.usage import Usage
 
 from hexgate.adapters.openai import runner as runner_mod
 from hexgate.adapters.openai.runner import (
+    _SERVER_CONVERSATION_KWARGS,
     HexgateRunner,
     _CompositeRunHooks,
     _HexgateReachHooks,
@@ -141,7 +143,130 @@ def test_run_hooks_rejects_a_guard_list_with_a_clear_error() -> None:
     runner = HexgateRunner(api_key="k")
 
     with pytest.raises(TypeError, match="guards go on the constructor"):
-        runner._merge_hooks([lambda call: None])
+        runner._merge_hooks([lambda call: None], kwargs={})
+
+
+def _usage_hook(hooks: RunHooks) -> HexgateUsageHooks:
+    """The HexgateUsageHooks inside the composite _merge_hooks returns."""
+    return next(h for h in hooks._hooks if isinstance(h, HexgateUsageHooks))
+
+
+@pytest.mark.parametrize(
+    "kwarg",
+    ["conversation_id", "previous_response_id", "auto_previous_response_id"],
+)
+def test_server_conversation_kwargs_put_the_usage_hook_in_delta_mode(
+    kwarg: str,
+) -> None:
+    """Each of these makes the SDK send only un-sent items to the model — and
+    to the hook. The hook cannot see the tracker that decides it, so the runner
+    reads the kwargs and tells it."""
+    runner = HexgateRunner(api_key="k")
+
+    hooks = runner._merge_hooks(None, kwargs={kwarg: "x"})
+
+    assert _usage_hook(hooks)._framework_sends_deltas is True
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {},
+        {"max_turns": 3},
+        # Passed but falsy: no tracker is built, so the hook still gets the
+        # whole conversation.
+        {"conversation_id": None},
+        {"auto_previous_response_id": False},
+    ],
+)
+def test_without_a_server_conversation_the_usage_hook_diffs_as_before(
+    kwargs: dict[str, Any],
+) -> None:
+    """The default path is untouched: the SDK re-sends the whole history, so
+    the cursor must keep working out what is new."""
+    runner = HexgateRunner(api_key="k")
+
+    hooks = runner._merge_hooks(None, kwargs=kwargs)
+
+    assert _usage_hook(hooks)._framework_sends_deltas is False
+
+
+def _server_conversation_kwargs_in(func: Any) -> set[str]:
+    """The names from ``_SERVER_CONVERSATION_KWARGS`` that ``func`` declares."""
+    return set(inspect.signature(func).parameters) & _SERVER_CONVERSATION_KWARGS
+
+
+def test_server_conversation_kwargs_are_still_the_sdk_parameter_names() -> None:
+    """Delta detection matches these names against the caller's kwargs, so it
+    is only as correct as the SDK's own parameter names.
+
+    A rename upstream breaks the match silently: nothing raises, the cursor
+    diffs a list that is already a delta, and every message event under a
+    server-managed conversation goes out ``resynced`` — the bug this detection
+    exists to prevent. Fail on the SDK bump instead, where the names are
+    visible next to the change that moved them.
+
+    **If this test fails, read the SDK before touching the constant.** The
+    failure says a name is gone, not what replaced it, and the two cases need
+    different fixes:
+
+    * *Renamed.* Put the new name in ``_SERVER_CONVERSATION_KWARGS`` and the
+      detection works again.
+    * *Removed, or the whole mechanism reworked.* The constant is the wrong
+      shape and ``framework_sends_deltas`` needs rederiving from whatever now
+      decides it. Start at ``OpenAIServerConversationTracker`` in
+      ``agents/run_internal/oai_conversation.py`` and the branch that builds it
+      in ``agents/run_internal/run_loop.py``; what matters is which condition
+      makes the SDK pass ``on_llm_start`` un-sent items instead of the whole
+      conversation.
+
+    Note what this test cannot see: it checks that the names still *exist*,
+    never that passing them still produces deltas. Upstream keeping the names
+    and changing the behaviour leaves this green and the detection wrong —
+    only a real run against a server-managed conversation catches that.
+    """
+    missing = _SERVER_CONVERSATION_KWARGS - set(
+        inspect.signature(Runner.run).parameters
+    )
+
+    assert not missing, (
+        f"Runner.run no longer declares {sorted(missing)}. Check what the SDK "
+        "did with them before editing: a rename just needs the new name in "
+        "_SERVER_CONVERSATION_KWARGS (hexgate/adapters/openai/runner.py); a "
+        "reworked mechanism needs framework_sends_deltas rederived from "
+        "whatever now builds OpenAIServerConversationTracker. Until then, "
+        "delta detection is silently off and every message event under a "
+        "server-managed conversation goes out resynced."
+    )
+
+
+def test_the_kwarg_guard_fails_when_the_sdk_renames_a_parameter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The guard above only helps if it actually notices a rename — a check
+    that passes against anything is worse than none. Stand in a Runner.run
+    whose ``conversation_id`` has been renamed and confirm the lookup misses
+    it."""
+
+    async def renamed_run(
+        starting_agent: Agent,
+        input: Any,
+        *,
+        server_conversation_id: str | None = None,  # was conversation_id
+        previous_response_id: str | None = None,
+        auto_previous_response_id: bool = False,
+        **kwargs: Any,
+    ) -> str:
+        return "unused"
+
+    monkeypatch.setattr(
+        "hexgate.adapters.openai.runner.Runner.run", staticmethod(renamed_run)
+    )
+
+    found = _server_conversation_kwargs_in(runner_mod.Runner.run)
+
+    assert "conversation_id" not in found
+    assert _SERVER_CONVERSATION_KWARGS - found == {"conversation_id"}
 
 
 def test_constructor_falls_back_to_env_var(monkeypatch: pytest.MonkeyPatch) -> None:
