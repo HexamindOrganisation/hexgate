@@ -8,7 +8,7 @@ from types import SimpleNamespace
 from typing import Any, AsyncIterator
 
 import pytest
-from agents import Agent, FunctionTool, Runner, RunHooks
+from agents import Agent, FunctionTool, RunConfig, Runner, RunHooks
 from agents.items import ModelResponse
 from agents.usage import Usage
 
@@ -189,6 +189,18 @@ def test_without_a_server_conversation_the_usage_hook_diffs_as_before(
     hooks = runner._merge_hooks(None, kwargs=kwargs)
 
     assert _usage_hook(hooks)._framework_sends_deltas is False
+
+
+def test_merge_hooks_hands_the_run_config_to_the_usage_hook() -> None:
+    """``run_config.model`` overrides the agent's, and RunContextWrapper does
+    not carry the config — so the runner has to pass it or the hook reports a
+    model that never served the call."""
+    runner = HexgateRunner(api_key="k")
+    run_config = RunConfig(model="gpt-4o-mini")
+
+    hooks = runner._merge_hooks(None, kwargs={}, run_config=run_config)
+
+    assert _usage_hook(hooks)._run_config is run_config
 
 
 def _server_conversation_kwargs_in(func: Any) -> set[str]:

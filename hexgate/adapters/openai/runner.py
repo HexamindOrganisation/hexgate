@@ -252,7 +252,11 @@ class HexgateRunner:
             yield
 
     def _merge_hooks(
-        self, hooks: RunHooks | None, *, kwargs: dict[str, Any]
+        self,
+        hooks: RunHooks | None,
+        *,
+        kwargs: dict[str, Any],
+        run_config: RunConfig | None = None,
     ) -> RunHooks:
         """Compose the caller's ``hooks`` with Hexgate's own — never clobber a
         hooks object the caller already passed.
@@ -267,6 +271,10 @@ class HexgateRunner:
         only un-sent items — and hands the same list to the usage hook. The
         hook has no view of that tracker, so the decision is taken here, where
         the kwargs that create it are visible.
+
+        ``run_config`` travels for the same reason: it can override the agent's
+        model, and ``RunContextWrapper`` does not carry it, so the hook would
+        otherwise report a model that never served the call.
         """
         installed: list[RunHooksBase] = [
             HexgateUsageHooks(
@@ -274,6 +282,7 @@ class HexgateRunner:
                 framework_sends_deltas=any(
                     kwargs.get(name) for name in _SERVER_CONVERSATION_KWARGS
                 ),
+                run_config=run_config,
             ),
             _HexgateReachHooks(self),
         ]
@@ -321,7 +330,9 @@ class HexgateRunner:
                     wrapped_agent,
                     input,
                     run_config=run_config,
-                    hooks=self._merge_hooks(hooks, kwargs=kwargs),
+                    hooks=self._merge_hooks(
+                        hooks, kwargs=kwargs, run_config=run_config
+                    ),
                     **kwargs,
                 )
 
@@ -356,7 +367,9 @@ class HexgateRunner:
                     wrapped_agent,
                     input,
                     run_config=run_config,
-                    hooks=self._merge_hooks(hooks, kwargs=kwargs),
+                    hooks=self._merge_hooks(
+                        hooks, kwargs=kwargs, run_config=run_config
+                    ),
                     **kwargs,
                 )
 
@@ -491,7 +504,9 @@ class HexgateRunner:
                         wrapped_agent,
                         input,
                         run_config=run_config,
-                        hooks=self._merge_hooks(hooks, kwargs=kwargs),
+                        hooks=self._merge_hooks(
+                            hooks, kwargs=kwargs, run_config=run_config
+                        ),
                         **kwargs,
                     )
 

@@ -7,7 +7,7 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
-from agents import Agent
+from agents import Agent, RunConfig
 from agents.items import ModelResponse
 from agents.models.interface import Model
 from agents.usage import Usage
@@ -210,6 +210,57 @@ async def test_on_llm_end_when_model_is_an_exotic_model_then_model_is_class_name
 
     [call] = emitted
     assert call["model"] == "_StubModel"
+
+
+@pytest.mark.asyncio
+async def test_run_config_model_overrides_the_agents_model(
+    emitted: list[dict[str, Any]], messages: list[dict[str, Any]]
+) -> None:
+    """``turn_preparation.get_model`` gives ``run_config.model`` precedence
+    over ``agent.model``, so that is the model which actually served the call.
+    Reporting ``agent.model`` would name one that never ran — on the usage row
+    and the message row alike."""
+    hooks = HexgateUsageHooks(api_key="k", run_config=RunConfig(model="gpt-4o-mini"))
+    agent = Agent(name="my-agent", model="gpt-4o")
+    context = object()
+
+    await hooks.on_llm_start(
+        context=context, agent=agent, system_prompt=None, input_items=[_user("hi")]
+    )
+    await hooks.on_llm_end(context=context, agent=agent, response=_response())
+
+    assert emitted[0]["model"] == "gpt-4o-mini"
+    assert messages[0]["model"] == "gpt-4o-mini"
+
+
+@pytest.mark.asyncio
+async def test_run_config_model_as_a_model_instance_overrides_too(
+    emitted: list[dict[str, Any]],
+) -> None:
+    """``get_model`` takes ``run_config.model`` in its ``Model`` form before it
+    ever looks at the agent, so the id comes off that instance."""
+    hooks = HexgateUsageHooks(
+        api_key="k", run_config=RunConfig(model=_ModelWithId("gpt-4o-mini"))
+    )
+    agent = Agent(name="my-agent", model="gpt-4o")
+
+    await hooks.on_llm_end(context=object(), agent=agent, response=_response())
+
+    assert emitted[0]["model"] == "gpt-4o-mini"
+
+
+@pytest.mark.asyncio
+async def test_run_config_without_a_model_leaves_the_agents_model_alone(
+    emitted: list[dict[str, Any]],
+) -> None:
+    """A RunConfig is usually passed for other reasons; only its ``model``
+    field overrides, and ``None`` there means the agent's choice stands."""
+    hooks = HexgateUsageHooks(api_key="k", run_config=RunConfig())
+    agent = Agent(name="my-agent", model="gpt-4o")
+
+    await hooks.on_llm_end(context=object(), agent=agent, response=_response())
+
+    assert emitted[0]["model"] == "gpt-4o"
 
 
 # --- The hook pair ------------------------------------------------------------

@@ -39,7 +39,7 @@ import logging
 import uuid
 from typing import Any, NamedTuple
 
-from agents import Agent, RunContextWrapper
+from agents import Agent, RunConfig, RunContextWrapper
 from agents.items import ModelResponse, TResponseInputItem
 from agents.lifecycle import RunHooks
 
@@ -72,21 +72,29 @@ class _Prompt(NamedTuple):
     input_items: list[TResponseInputItem]
 
 
-def _resolve_model(agent: Agent) -> str:
-    """The model id to report for ``agent``.
+def _resolve_model(agent: Agent, run_config: RunConfig | None = None) -> str:
+    """The model id to report for this call.
 
-    ``agent.model`` is ``str | Model | None``. None means the agent didn't set
-    one and the runner/SDK default applies -- that default is resolved deep in
-    the SDK's run loop and never reaches this hook, so "default" is an honest
-    placeholder rather than a guess.
+    Mirrors the precedence in ``agents.run_internal.turn_preparation.get_model``:
+    ``run_config.model`` overrides ``agent.model`` in both its ``str`` and
+    ``Model`` forms, so a run started with ``RunConfig(model=...)`` is served
+    by that model whatever the agent declares. Reading ``agent.model`` alone
+    would name the model that did *not* answer.
+
+    Either may be ``str | Model | None``. None on both means the agent didn't
+    set one and the runner/SDK default applies -- that default is resolved
+    deep in the SDK's run loop and never reaches this hook, so "default" is an
+    honest placeholder rather than a guess.
     """
-    if isinstance(agent.model, str):
-        return agent.model
-    if agent.model is None:
+    configured = run_config.model if run_config is not None else None
+    model = configured if configured is not None else agent.model
+    if isinstance(model, str):
+        return model
+    if model is None:
         return "default"
     # Standard Model impls expose the real id in .model; class name is a
     # last resort for an exotic Model that doesn't.
-    return getattr(agent.model, "model", None) or type(agent.model).__name__
+    return getattr(model, "model", None) or type(model).__name__
 
 
 class HexgateUsageHooks(RunHooks):
@@ -99,8 +107,19 @@ class HexgateUsageHooks(RunHooks):
     cursor's "reset on run end" contract is met, raises included.
     """
 
-    def __init__(self, *, api_key: str, framework_sends_deltas: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        api_key: str,
+        framework_sends_deltas: bool = False,
+        run_config: RunConfig | None = None,
+    ) -> None:
         self._api_key = api_key
+        # The run's own config, for the model override it may carry.
+        # ``RunContextWrapper`` does not expose it (it holds context, usage,
+        # turn_input and the approval/tool state), so the hook cannot recover
+        # it from the callback arguments — the runner hands it over instead.
+        self._run_config = run_config
         # True when the run was started under a server-managed conversation, so
         # the SDK hands this hook un-sent items rather than the whole history
         # and the cursor's diff must be skipped. The hook cannot see the
@@ -160,7 +179,7 @@ class HexgateUsageHooks(RunHooks):
         agent: Agent,
         response: ModelResponse,
     ) -> None:
-        model = _resolve_model(agent)
+        model = _resolve_model(agent, self._run_config)
         emit_llm_usage(
             agent.name,
             model,
