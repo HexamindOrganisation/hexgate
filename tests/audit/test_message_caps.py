@@ -250,6 +250,32 @@ def test_redact_json_string_keys_happy_path() -> None:
     assert json.loads(arguments) == {"user": "bob", "password": "[REDACTED]"}
 
 
+def test_when_a_tool_result_is_a_json_string_then_it_is_redacted_too() -> None:
+    """The return half of the same leaf: frameworks stringify a tool's result
+    before appending it to the message list, so a tool that serializes its own
+    output lands a JSON string under ``response``. The transcript is the only
+    place a tool result is stored, so a secret in it would otherwise reach
+    ClickHouse — and the DLQ — unblanked."""
+    messages = [
+        {
+            "role": "tool",
+            "parts": [
+                {
+                    "type": "tool_call_response",
+                    "id": "call_1",
+                    "response": json.dumps({"page": 2, "next_page_token": "s3cr3t"}),
+                }
+            ],
+        }
+    ]
+    out = redact(
+        messages, pattern=SENSITIVE_ARG_KEY_RE, json_string_keys=TOOL_CALL_JSON_KEYS
+    )
+    response = out[0]["parts"][0]["response"]
+    assert isinstance(response, str)  # shape kept
+    assert json.loads(response) == {"page": 2, "next_page_token": "[REDACTED]"}
+
+
 def test_when_arguments_string_is_not_json_then_left_untouched() -> None:
     messages = _tool_call("not json at all")
     out = redact(

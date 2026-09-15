@@ -51,6 +51,17 @@ if TYPE_CHECKING:
     from hexgate.guards.types import Guard, GuardObserver
 
 
+# Passing any of these to ``Runner.run*`` puts the conversation on OpenAI's
+# side: the SDK builds an ``OpenAIServerConversationTracker`` and from then on
+# sends only the items the server has not seen. The names are the SDK's own
+# ``run`` parameters; a rename upstream turns the delta handling off rather
+# than misreporting, which is the safe way round — the cursor's diff is
+# correct for a full list and only wrong for a delta.
+_SERVER_CONVERSATION_KWARGS = frozenset(
+    {"conversation_id", "previous_response_id", "auto_previous_response_id"}
+)
+
+
 class _CompositeRunHooks(RunHooks):
     """Fan a run's lifecycle callbacks out to multiple ``RunHooks``.
 
@@ -240,16 +251,39 @@ class HexgateRunner:
         ):
             yield
 
-    def _merge_hooks(self, hooks: RunHooks | None) -> RunHooks:
+    def _merge_hooks(
+        self,
+        hooks: RunHooks | None,
+        *,
+        kwargs: dict[str, Any],
+        run_config: RunConfig | None = None,
+    ) -> RunHooks:
         """Compose the caller's ``hooks`` with Hexgate's own — never clobber a
         hooks object the caller already passed.
 
         Always installs the usage hook and the reach hook (which enforces
         ``agent.handoff:*`` at the SDK handoff seam), so the result is always a
         composite fanning out to every hook in turn.
+
+        ``kwargs`` is what the caller passed through to ``Runner.run*``. Any of
+        ``_SERVER_CONVERSATION_KWARGS`` makes the SDK build an
+        ``OpenAIServerConversationTracker``, after which it sends the model
+        only un-sent items — and hands the same list to the usage hook. The
+        hook has no view of that tracker, so the decision is taken here, where
+        the kwargs that create it are visible.
+
+        ``run_config`` travels for the same reason: it can override the agent's
+        model, and ``RunContextWrapper`` does not carry it, so the hook would
+        otherwise report a model that never served the call.
         """
         installed: list[RunHooksBase] = [
-            HexgateUsageHooks(api_key=self.api_key),
+            HexgateUsageHooks(
+                api_key=self.api_key,
+                framework_sends_deltas=any(
+                    kwargs.get(name) for name in _SERVER_CONVERSATION_KWARGS
+                ),
+                run_config=run_config,
+            ),
             _HexgateReachHooks(self),
         ]
         if hooks is not None:
@@ -296,7 +330,9 @@ class HexgateRunner:
                     wrapped_agent,
                     input,
                     run_config=run_config,
-                    hooks=self._merge_hooks(hooks),
+                    hooks=self._merge_hooks(
+                        hooks, kwargs=kwargs, run_config=run_config
+                    ),
                     **kwargs,
                 )
 
@@ -331,7 +367,9 @@ class HexgateRunner:
                     wrapped_agent,
                     input,
                     run_config=run_config,
-                    hooks=self._merge_hooks(hooks),
+                    hooks=self._merge_hooks(
+                        hooks, kwargs=kwargs, run_config=run_config
+                    ),
                     **kwargs,
                 )
 
@@ -466,7 +504,9 @@ class HexgateRunner:
                         wrapped_agent,
                         input,
                         run_config=run_config,
-                        hooks=self._merge_hooks(hooks),
+                        hooks=self._merge_hooks(
+                            hooks, kwargs=kwargs, run_config=run_config
+                        ),
                         **kwargs,
                     )
 

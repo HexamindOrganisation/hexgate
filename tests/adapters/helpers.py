@@ -55,6 +55,23 @@ def poll_until(
     pytest.fail(message)
 
 
+def require_dashboard_login(env: "HexgatePlatformEnv") -> None:
+    """Skip unless a dashboard login is configured.
+
+    The audit read endpoints are cookie-authed project-scoped dashboard
+    reads, so the ``fty_live_…`` key the SDK exports with does not open them.
+    Skipping rather than failing keeps the default integration run — infra
+    plus one API key, as the integration-tests skill documents — working
+    unchanged; set HEXGATE_SMOKE_EMAIL / HEXGATE_SMOKE_PASSWORD to include
+    the read path.
+    """
+    if not (env.email and env.password):
+        pytest.skip(
+            "HEXGATE_SMOKE_EMAIL / HEXGATE_SMOKE_PASSWORD not set; "
+            "the audit read endpoints need a dashboard login"
+        )
+
+
 def assert_policy_and_usage_events_landed(
     env: "HexgatePlatformEnv",
     agent_name: str,
