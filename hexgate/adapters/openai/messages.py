@@ -10,9 +10,10 @@ per-run emit for pydantic-ai, which has no per-call hook at all.
 The target shape is the official GenAI one — a message is ``{"role": …,
 "parts": [...]}`` and a part names itself under ``type`` — which is what
 ``hexgate.tracing.messages.LlmMessageEvent`` puts on the wire and what the
-``llm_message`` content columns store. Nothing here is lossy on purpose: an
-item with no GenAI equivalent is carried through whole rather than dropped,
-since the transcript exists to explain a run after the fact.
+``llm_message`` content columns store. An item with no GenAI equivalent is
+carried through whole rather than dropped, since the transcript exists to
+explain a run after the fact. The one deliberate omission is reasoning on the
+output side — see ``output_messages`` and issue #221.
 """
 
 from __future__ import annotations
@@ -126,6 +127,12 @@ def input_message(item: Any) -> dict[str, Any]:
     # Reasoning items, built-in tool calls, MCP approvals: no role and no
     # GenAI part to map onto, so carry them through whole rather than drop
     # them. "assistant" is a floor — none of these is a user message.
+    #
+    # Reasoning is kept here and dropped from the output (see
+    # ``output_messages``, issue #221). Not an oversight: the input budget is
+    # 256 KiB against the output's 8 KiB, so on this side reasoning cannot
+    # crowd out the messages beside it. Whichever way #221 lands should make
+    # the two sides agree.
     return {"role": "assistant", "parts": [entry]}
 
 
@@ -138,19 +145,30 @@ def output_messages(output: list[Any]) -> list[dict[str, Any]]:
     order the model produced them is what a reader expects to see, and it
     matches the ``gen_ai.output.messages`` contract of "this call's
     completion".
+
+    Reasoning items are dropped (issue #221). They are genuinely part of the
+    completion, so the natural place for them is here — but every part of this
+    message shares one ``MAX_OUTPUT_MESSAGES_BYTES`` budget, and that 8 KiB was
+    sized for a text answer before anything captured reasoning. Reasoning leads
+    the Responses API's output and head+tail truncation favours the head, so a
+    long chain of thought is cut out of the *answer*, not out of itself: the
+    field the auditor needs loses room to the field nobody asked for. Dropping
+    is the reversible half of that trade — the completion keeps its budget, and
+    capturing reasoning under a cap of its own stays open.
     """
     parts: list[dict[str, Any]] = []
     for raw in output:
         item = _as_dict(raw)
         if item is None:
             parts.append(text_part(raw))
+        elif item.get("type") == "reasoning":
+            continue
         elif item.get("type") == "function_call":
             parts.append(_tool_call_part(item))
         elif item.get("content"):
             parts.extend(_content_parts(item["content"]))
         else:
-            # Truthiness above, not ``"content" in item``: a reasoning item
-            # declares ``content`` as None and keeps its text under
-            # ``summary``, so a key check would emit an empty message.
+            # Truthiness, not ``"content" in item``: an item that declares the
+            # key as None would otherwise emit an empty message.
             parts.append(item)
     return [{"role": "assistant", "parts": parts}] if parts else []

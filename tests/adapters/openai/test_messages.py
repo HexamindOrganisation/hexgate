@@ -150,21 +150,57 @@ def test_when_response_output_is_empty_then_there_are_nooutput_messages() -> Non
     assert output_messages([]) == []
 
 
-def test_when_output_is_a_reasoning_item_then_its_summary_is_kept() -> None:
-    """A reasoning item declares a ``content`` field that is None and keeps
-    its text under ``summary``. Routing on the key's presence would emit an
-    empty message and lose the last turn's reasoning for good — earlier turns
-    come back in the next call's input delta, the final one never does."""
+def test_when_output_is_only_a_reasoning_item_then_no_message_is_emitted() -> None:
+    """Reasoning is dropped (issue #221): every part of the output message
+    shares one 8 KiB budget sized for a text answer, and reasoning leads the
+    output, so head+tail truncation would cut the answer rather than the
+    reasoning. Nothing else in this item is kept — dropping it leaves no
+    parts, and no message."""
     reasoning = ResponseReasoningItem(
         id="rs_1",
         type="reasoning",
         summary=[Summary(type="summary_text", text="Check the weather first.")],
     )
 
-    [message] = output_messages([reasoning])
+    assert output_messages([reasoning]) == []
 
-    assert message["role"] == "assistant"
-    [part] = message["parts"]
-    assert part["summary"] == [
-        {"type": "summary_text", "text": "Check the weather first."}
-    ]
+
+def test_when_a_reasoning_item_carries_content_then_it_is_dropped_too() -> None:
+    """On the Chat Completions path (LiteLLM, Anthropic thinking blocks) the
+    SDK populates ``content`` on a reasoning item, so a branch that routed on
+    that key would have emitted the reasoning text and silently dropped the
+    ``summary`` beside it. Typing the item is what makes both paths agree."""
+    reasoning = {
+        "id": "rs_1",
+        "type": "reasoning",
+        "summary": [{"type": "summary_text", "text": "provider reasoning"}],
+        "content": [{"type": "reasoning_text", "text": "thinking block"}],
+        "encrypted_content": "sig123",
+    }
+
+    assert output_messages([reasoning]) == []
+
+
+def test_when_output_mixes_reasoning_and_an_answer_then_only_the_answer_is_kept() -> (
+    None
+):
+    """The realistic shape: a reasoning item leads, the answer follows. The
+    answer keeps the whole budget, which is the point of dropping."""
+    reasoning = ResponseReasoningItem(
+        id="rs_1",
+        type="reasoning",
+        summary=[Summary(type="summary_text", text="Check the weather first.")],
+    )
+    answer = ResponseOutputMessage(
+        id="msg_1",
+        role="assistant",
+        status="completed",
+        type="message",
+        content=[
+            ResponseOutputText(type="output_text", text="Sunny, 24C.", annotations=[])
+        ],
+    )
+
+    [message] = output_messages([reasoning, answer])
+
+    assert message["parts"] == [{"type": "text", "content": "Sunny, 24C."}]
