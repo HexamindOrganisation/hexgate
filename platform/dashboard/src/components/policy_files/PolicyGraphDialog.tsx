@@ -23,15 +23,16 @@ import { usePolicyGraph } from "@/lib/policy_files";
 import type { PolicyGraph, PolicyGraphEdge } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
-// Verdict → color (matches the editor/badges: green allow, amber approval,
-// red deny). Kept local hexes so the graph reads on the near-black canvas.
+// Verdict → edge color (green allow, amber approval, red deny) — mid-tone
+// hexes that read on both the light and dark graph ground.
 const VERDICT: Record<string, string> = {
   allow: "#3f9166",
   approval_required: "#b9802a",
   deny: "#c84d62",
 };
 
-// Hexagon palette per node kind, on the near-black graph ground.
+// Hexagon palette per node kind, as CSS vars (see --gr-* in index.css) so the
+// graph re-themes light/dark with no re-render.
 const KIND: Record<
   string,
   { fill: string; stroke: string; text: string; tag: string; label: string }
@@ -40,31 +41,31 @@ const KIND: Record<
   // are hidden where they pass under a hexagon, and an edge's endpoint (at the
   // node center) is covered by the node.
   agent: {
-    fill: "#271826",
-    stroke: "#b57aa8",
-    text: "#f0e0ec",
-    tag: "#c79bbb",
+    fill: "var(--gr-agent-fill)",
+    stroke: "var(--gr-agent-stroke)",
+    text: "var(--gr-agent-text)",
+    tag: "var(--gr-agent-tag)",
     label: "agent",
   },
   tool: {
-    fill: "#15181f",
-    stroke: "rgba(255,255,255,0.28)",
-    text: "#d3dae6",
-    tag: "#8a93a3",
+    fill: "var(--gr-tool-fill)",
+    stroke: "var(--gr-tool-stroke)",
+    text: "var(--gr-tool-text)",
+    tag: "var(--gr-tool-tag)",
     label: "tool",
   },
   mcp: {
-    fill: "#0d2226",
-    stroke: "#3fb6c8",
-    text: "#c7f1f6",
-    tag: "#79cfda",
+    fill: "var(--gr-mcp-fill)",
+    stroke: "var(--gr-mcp-stroke)",
+    text: "var(--gr-mcp-text)",
+    tag: "var(--gr-mcp-tag)",
     label: "mcp",
   },
   role: {
-    fill: "#121a2e",
-    stroke: "rgba(109,159,240,0.55)",
-    text: "#cfe0fb",
-    tag: "#9fb6e6",
+    fill: "var(--gr-role-fill)",
+    stroke: "var(--gr-role-stroke)",
+    text: "var(--gr-role-text)",
+    tag: "var(--gr-role-tag)",
     label: "role",
   },
 };
@@ -73,10 +74,10 @@ const KIND: Record<
 // background, NOT by lowering opacity — the node stays OPAQUE so edges still
 // pass hidden under it and never show through a faded hexagon.
 const DIM = {
-  fill: "#0c0f16",
-  stroke: "rgba(255,255,255,0.07)",
-  text: "#3f4550",
-  tag: "#2f343d",
+  fill: "var(--gr-dim-fill)",
+  stroke: "var(--gr-dim-stroke)",
+  text: "var(--gr-dim-text)",
+  tag: "var(--gr-dim-tag)",
 };
 
 type NodeData = { label: string; kind: string };
@@ -146,26 +147,30 @@ function HexNode({ id, data }: NodeProps<Node<NodeData>>) {
         viewBox="0 0 136 118"
         className="absolute inset-0"
         style={{
+          // color-mix (not a hex-alpha suffix) so the glow alpha works with the
+          // `var(--gr-*)` stroke value.
           filter: glow
-            ? `drop-shadow(0 0 ${glow}px ${k.stroke}${hovered ? "cc" : "44"})`
+            ? `drop-shadow(0 0 ${glow}px color-mix(in srgb, ${k.stroke} ${
+                hovered ? 80 : 27
+              }%, transparent))`
             : undefined,
           transition: "filter 140ms",
         }}
       >
+        {/* fill/stroke go through `style`, not presentation attributes — CSS
+            var() resolves in inline style but not in SVG attributes. */}
         <polygon
           points="34,6 102,6 136,59 102,112 34,112 0,59"
-          fill={fill}
-          stroke={stroke}
           strokeWidth={hovered ? 2.6 : 1.5}
-          style={{ transition: "fill 140ms, stroke 140ms" }}
+          style={{ fill, stroke, transition: "fill 140ms, stroke 140ms" }}
         />
         {hovered && (
           <polygon
             points="41.5,17.7 94.5,17.7 121,59 94.5,100.3 41.5,100.3 15,59"
             fill="none"
-            stroke={k.stroke}
             strokeWidth="1"
             opacity="0.7"
+            style={{ stroke: k.stroke }}
           />
         )}
       </svg>
@@ -292,7 +297,7 @@ function PolicyEdge({
             style={{
               position: "absolute",
               transform: `translate(-50%,-50%) translate(${labelX}px,${labelY}px)`,
-              background: "#0a0d14",
+              background: "hsl(var(--editor))",
               color,
               border: `1px solid ${color}66`,
               opacity: dimmed ? 0.15 : 1,
@@ -646,14 +651,18 @@ function PolicyFlow({ graph }: { graph: PolicyGraph }) {
         panOnScroll
         zoomOnScroll={false}
         zoomOnPinch
-        style={{ background: "#0a0d14", width: "100%", height: "100%" }}
+        style={{
+          background: "hsl(var(--editor))",
+          width: "100%",
+          height: "100%",
+        }}
       >
-        <Background color="#1b2233" gap={22} />
+        <Background color="var(--gr-dots)" gap={22} />
         <Controls
           showInteractive={false}
           style={{
-            background: "#11151f",
-            border: "1px solid rgba(255,255,255,0.08)",
+            background: "hsl(var(--card))",
+            border: "1px solid hsl(var(--border))",
             borderRadius: 8,
           }}
         />
@@ -664,7 +673,7 @@ function PolicyFlow({ graph }: { graph: PolicyGraph }) {
               "inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 font-mono text-[11px] backdrop-blur transition-colors",
               animate
                 ? "border-primary/60 bg-primary/20 text-foreground"
-                : "border-white/10 bg-[#11151f]/90 text-[#8a93a3] hover:text-foreground",
+                : "border-border bg-card/90 text-muted-foreground hover:text-foreground",
             )}
             title={
               pinned
@@ -677,7 +686,7 @@ function PolicyFlow({ graph }: { graph: PolicyGraph }) {
           </button>
         </Panel>
         <Panel position="top-left">
-          <div className="flex flex-wrap gap-3 rounded-lg border border-white/10 bg-[#11151f]/90 px-3 py-2 font-mono text-[10px] text-[#8a93a3] backdrop-blur">
+          <div className="flex flex-wrap gap-3 rounded-lg border border-border bg-card/90 px-3 py-2 font-mono text-[10px] text-muted-foreground backdrop-blur">
             {(["allow", "approval_required", "deny"] as const).map((v) => (
               <span key={v} className="inline-flex items-center gap-1.5">
                 <i
@@ -687,7 +696,7 @@ function PolicyFlow({ graph }: { graph: PolicyGraph }) {
                 {v === "approval_required" ? "approval" : v}
               </span>
             ))}
-            <span className="text-white/25">·</span>
+            <span className="text-muted-foreground/40">·</span>
             <span>
               {pinned
                 ? "focused — click empty space to reset"
@@ -697,8 +706,8 @@ function PolicyFlow({ graph }: { graph: PolicyGraph }) {
         </Panel>
         {warnings.length > 0 && (
           <Panel position="bottom-center">
-            <div className="max-w-[560px] rounded-lg border border-[#c84d62]/50 bg-[#180f12]/95 px-3 py-2 font-mono text-[10.5px] text-[#f0a5ad] shadow-xl backdrop-blur">
-              <div className="mb-1.5 flex items-center gap-1.5 font-semibold text-[#f5959f]">
+            <div className="max-w-[560px] rounded-lg border border-deny/50 bg-deny/10 px-3 py-2 font-mono text-[10.5px] text-deny shadow-xl backdrop-blur">
+              <div className="mb-1.5 flex items-center gap-1.5 font-semibold text-deny">
                 <AlertTriangle size={12} />
                 review carefully · {warnings.length} constraint-bypass path
                 {warnings.length > 1 ? "s" : ""}
@@ -708,13 +717,12 @@ function PolicyFlow({ graph }: { graph: PolicyGraph }) {
                   <button
                     key={i}
                     onClick={() => setPinned(w.toolId)}
-                    className="block w-full text-left leading-relaxed hover:text-[#ffd0d5]"
+                    className="block w-full text-left leading-relaxed hover:text-deny"
                   >
-                    <b className="text-[#ffc4ca]">{w.strict}</b> can delegate to{" "}
-                    <b className="text-[#ffc4ca]">{w.loose}</b> to call{" "}
-                    <b className="text-[#ffc4ca]">{w.tool}</b> beyond its own
-                    limit
-                    <span className="text-[#9c6a72]">
+                    <b className="text-deny">{w.strict}</b> can delegate to{" "}
+                    <b className="text-deny">{w.loose}</b> to call{" "}
+                    <b className="text-deny">{w.tool}</b> beyond its own limit
+                    <span className="text-muted-foreground">
                       {" "}
                       — {w.strict}: {w.strictC.join(" ∧ ") || "no limit"} ·{" "}
                       {w.loose}: {w.looseC.join(" ∧ ") || "no limit"}
@@ -727,7 +735,7 @@ function PolicyFlow({ graph }: { graph: PolicyGraph }) {
         )}
         {selected && (
           <Panel position="bottom-right">
-            <div className="w-64 rounded-lg border border-white/10 bg-[#11151f]/95 p-3 font-mono text-[11px] text-[#c7cdd8] shadow-xl backdrop-blur">
+            <div className="w-64 rounded-lg border border-border bg-card/95 p-3 font-mono text-[11px] text-foreground shadow-xl backdrop-blur">
               <div className="mb-2 flex items-center justify-between">
                 <span
                   className="rounded px-1.5 py-0.5 text-[9px] uppercase tracking-wider"
@@ -742,14 +750,14 @@ function PolicyFlow({ graph }: { graph: PolicyGraph }) {
                 </span>
                 <button
                   onClick={() => setSelected(null)}
-                  className="text-white/40 hover:text-white/80"
+                  className="text-muted-foreground hover:text-foreground"
                 >
                   <X size={13} />
                 </button>
               </div>
-              <div className="mb-1 text-[#e6e9ef]">
+              <div className="mb-1 text-foreground">
                 {nodeLabel(selected.source)}
-                <span className="text-white/30">
+                <span className="text-muted-foreground/50">
                   {" "}
                   {selected.kind === "reach"
                     ? `→ ${selected.via} →`
@@ -760,27 +768,29 @@ function PolicyFlow({ graph }: { graph: PolicyGraph }) {
                 {nodeLabel(selected.target)}
               </div>
               {selected.roles.length > 0 && (
-                <div className="mb-2 text-[10px] text-[#6b7382]">
+                <div className="mb-2 text-[10px] text-muted-foreground">
                   role{selected.roles.length > 1 ? "s" : ""}:{" "}
                   {selected.roles.join(", ")}
                 </div>
               )}
               {selected.constraints.length > 0 ? (
                 <div className="space-y-1">
-                  <div className="text-[10px] uppercase tracking-wider text-[#6b7382]">
+                  <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
                     constraints
                   </div>
                   {selected.constraints.map((c, i) => (
                     <div
                       key={i}
-                      className="rounded bg-black/40 px-2 py-1 text-[10.5px] text-[#b6bdca]"
+                      className="rounded bg-muted px-2 py-1 text-[10.5px] text-foreground"
                     >
                       {c}
                     </div>
                   ))}
                 </div>
               ) : (
-                <div className="text-[10px] text-[#6b7382]">no constraints</div>
+                <div className="text-[10px] text-muted-foreground">
+                  no constraints
+                </div>
               )}
             </div>
           </Panel>
@@ -791,7 +801,7 @@ function PolicyFlow({ graph }: { graph: PolicyGraph }) {
 }
 
 const GRAPH_ACTION_BTN =
-  "inline-flex items-center gap-1.5 rounded-md border border-white/15 px-2 py-1 text-[11px] font-medium text-[#cfd6e4] transition-colors hover:bg-white/5";
+  "inline-flex items-center gap-1.5 rounded-md border border-border px-2 py-1 text-[11px] font-medium text-foreground transition-colors hover:bg-accent";
 
 /** The graph itself — a header (title, role filter, and an optional
  * `headerRight` action) over the ReactFlow canvas. Reused by the inline dialog
@@ -811,19 +821,22 @@ export function PolicyGraphView({
   const graph = usePolicyGraph(projectId, role || undefined, enabled);
 
   return (
-    <div className="flex h-full flex-col" style={{ background: "#0a0d14" }}>
-      <div className="flex flex-row items-center justify-between gap-3 border-b border-white/10 px-4 py-3">
-        <div className="flex items-center gap-2 text-sm text-[#e6e9ef]">
-          <Network size={16} className="text-[#b57aa8]" />
+    <div
+      className="flex h-full flex-col"
+      style={{ background: "hsl(var(--editor))" }}
+    >
+      <div className="flex flex-row items-center justify-between gap-3 border-b border-border px-4 py-3">
+        <div className="flex items-center gap-2 text-sm text-foreground">
+          <Network size={16} className="text-primary" />
           Policy graph
         </div>
         <div className="flex items-center gap-3">
-          <label className="flex items-center gap-2 font-mono text-[11px] text-[#8a93a3]">
+          <label className="flex items-center gap-2 font-mono text-[11px] text-muted-foreground">
             role
             <select
               value={role}
               onChange={(e) => setRole(e.target.value)}
-              className="rounded border border-white/15 bg-[#11151f] px-1.5 py-0.5 text-[11px] text-[#cfd6e4]"
+              className="rounded border border-border bg-card px-1.5 py-0.5 text-[11px] text-foreground"
             >
               <option value="">all roles</option>
               {roleNames.map((r) => (
@@ -838,12 +851,12 @@ export function PolicyGraphView({
       </div>
       <div className="relative flex-1">
         {graph.isLoading && (
-          <div className="grid h-full place-items-center font-mono text-xs text-[#6b7382]">
+          <div className="grid h-full place-items-center font-mono text-xs text-muted-foreground">
             resolving graph…
           </div>
         )}
         {graph.isError && (
-          <div className="grid h-full place-items-center px-8 text-center font-mono text-xs text-[#f5959f]">
+          <div className="grid h-full place-items-center px-8 text-center font-mono text-xs text-deny">
             the modules don't compose — fix the lints, then reopen the graph.
           </div>
         )}
@@ -851,7 +864,7 @@ export function PolicyGraphView({
           <PolicyFlow graph={graph.data} />
         )}
         {graph.data && graph.data.nodes.length === 0 && (
-          <div className="grid h-full place-items-center font-mono text-xs text-[#6b7382]">
+          <div className="grid h-full place-items-center font-mono text-xs text-muted-foreground">
             no agents bound yet — add a role binding to see the graph.
           </div>
         )}
@@ -876,7 +889,7 @@ export function PolicyGraphDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         className="flex h-[82vh] max-w-[min(96vw,1120px)] flex-col gap-0 overflow-hidden p-0"
-        style={{ background: "#0a0d14" }}
+        style={{ background: "hsl(var(--editor))" }}
       >
         <DialogTitle className="sr-only">Policy graph</DialogTitle>
         <PolicyGraphView

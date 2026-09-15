@@ -10,11 +10,14 @@ import {
   KeyRound,
   LogOut,
   MessageSquareCode,
+  Monitor,
+  Moon,
   Network,
   PanelLeft,
   ScrollText,
   Settings2,
   Files,
+  Sun,
   Users,
   type LucideIcon,
 } from "lucide-react";
@@ -38,6 +41,7 @@ import { useLogout, useUser } from "@/lib/auth";
 import { useOrgs } from "@/lib/orgs";
 import { useProjects } from "@/lib/projects";
 import { useUi } from "@/lib/ui";
+import { useTheme } from "@/lib/theme";
 import { cn } from "@/lib/utils";
 
 /**
@@ -408,6 +412,8 @@ function AccountChip({ collapsed }: { collapsed: boolean }) {
             <span>Organizations</span>
           </DropdownMenuItem>
           <DropdownMenuSeparator />
+          <AppearanceControl />
+          <DropdownMenuSeparator />
           <DropdownMenuItem
             disabled={logout.isPending}
             onSelect={async () => {
@@ -420,6 +426,70 @@ function AccountChip({ collapsed }: { collapsed: boolean }) {
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
+    </div>
+  );
+}
+
+const MODES = [
+  ["light", Sun, "Light"],
+  ["dark", Moon, "Dark"],
+  ["system", Monitor, "System"],
+] as const;
+
+const SCHEMES = [
+  ["blue", "226 78% 65%", "Blue"],
+  ["plum", "313 75% 68%", "Plum"],
+] as const;
+
+/** Appearance picker inside the account menu: mode (light/dark/system) + accent
+ * scheme (blue/plum). Plain buttons so a pick doesn't close the menu. */
+function AppearanceControl() {
+  const mode = useTheme((s) => s.mode);
+  const scheme = useTheme((s) => s.scheme);
+  const setMode = useTheme((s) => s.setMode);
+  const setScheme = useTheme((s) => s.setScheme);
+
+  const seg =
+    "flex h-7 flex-1 items-center justify-center gap-1.5 rounded-md text-xs text-muted-foreground transition-colors hover:text-foreground";
+  const on = "bg-accent text-foreground";
+
+  return (
+    <div className="px-2 py-1.5">
+      <div className="mb-1.5 text-[11px] font-medium text-muted-foreground">
+        Appearance
+      </div>
+      <div className="flex gap-1">
+        {MODES.map(([m, Icon, label]) => (
+          <button
+            key={m}
+            type="button"
+            title={label}
+            aria-label={label}
+            onClick={() => setMode(m)}
+            className={cn(seg, mode === m && on)}
+          >
+            <Icon className="size-4" />
+          </button>
+        ))}
+      </div>
+      <div className="mt-1 flex gap-1">
+        {SCHEMES.map(([s, hsl, label]) => (
+          <button
+            key={s}
+            type="button"
+            title={`${label} accent`}
+            aria-label={`${label} accent`}
+            onClick={() => setScheme(s)}
+            className={cn(seg, scheme === s && on)}
+          >
+            <span
+              className="size-3 rounded-full"
+              style={{ backgroundColor: `hsl(${hsl})` }}
+            />
+            {label}
+          </button>
+        ))}
+      </div>
     </div>
   );
 }
