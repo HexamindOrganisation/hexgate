@@ -48,12 +48,14 @@ CLAUDE.md). This skill is about the PR **body**.
 
 Use these in this order. Drop the ones a given PR does not need.
 
-1. **Objective (required).** One short paragraph; make the first sentence stand
-   on its own — a single imperative statement ("Add role-aware policy
-   resolution") that reads well alone in the merge history. Then the problem it
-   solves. If it is part of a series, reference the prior PRs and say where this
-   one sits. Note the blast radius up front ("pure SDK, no platform change", or
-   "adds a migration") so the reviewer knows what class of change they are reading.
+1. **Objective (required).** One short paragraph. The PR *title* already states
+   the change; this section adds what the title cannot, so do not just restate it.
+   Make the first sentence stand on its own — a single imperative statement ("Add
+   role-aware policy resolution") that reads well alone in the merge history —
+   then give the problem it solves and *why*. If it is part of a series,
+   reference the prior PRs and say where this one sits. Note the blast radius up
+   front ("pure SDK, no platform change", or "adds a migration") so the reviewer
+   knows what class of change they are reading.
 2. **Design / approach (required for anything non-trivial).** A few lines on the
    technical shape: the key idea, the main type or function, what it reuses vs.
    what is new, and the one or two decisions worth knowing. A small table works
@@ -64,14 +66,20 @@ Use these in this order. Drop the ones a given PR does not need.
    `| File | What to look at |` table naming the files that carry the design and
    what to check in each. Highest-leverage section: it turns a flat file list
    into a review order. Leave out the mechanical files.
-4. **Test plan (required for anything that changes behaviour).** What you
-   actually did to convince yourself the change is correct: the suite you ran and
-   its result, the specific cases you checked by hand, and how a reviewer would
-   catch a regression. **Write this one yourself** — it is a claim about what you
-   observed, not a summary of the diff, and it is the section a reviewer leans on
-   to trust the rest. Plainly: "full suite green (142 passed); manually checked
-   the deny path returns 403 for the billing role; added a regression test for
-   the empty-scope case."
+4. **Tests (required for anything that changes behaviour).** Not just what you
+   ran, but what you *added* so someone fresh to this code can catch a future
+   regression. Break it out by layer, dropping the ones that do not apply:
+   - **Unit** — the suite you ran and its result.
+   - **Integration** — what you ran and *where*: local (against a local stack /
+     ClickHouse, see the `integration-tests` skill) or against staging. Say which.
+   - **End-to-end / by hand** — the specific cases you checked, UI steps included.
+   - **Added** — the tests you added to pin the new behaviour against regression.
+
+   **Write this section yourself** — it is a claim about what you observed, not a
+   summary of the diff, and it is the section a reviewer leans on to trust the
+   rest. Plainly: "unit: full suite green (142 passed); integration: `pytest -m
+   integration` green locally; by hand: deny path returns 403 for the billing
+   role; added: a regression test for the empty-scope case."
 5. **Try it (when there is something runnable).** A fenced block of commands the
    reviewer can paste to see the change work, ideally against a fixture already
    in the repo (for us, `deploy/demo_policies`). For UI changes, put a screenshot
@@ -99,10 +107,14 @@ vs new, the decisions worth knowing. A table if it adds several related things.>
 | `path/to/wiring.py` | how it plugs into the existing path |
 | `tests/...` | the cases that pin the behaviour |
 
-## Test plan
+## Tests
 
-<What you ran and saw: suite result, the cases checked by hand, how a reviewer
-catches a regression. Write this one yourself.>
+- **Unit:** <suite run + result>
+- **Integration:** <what you ran + local or staging>
+- **End-to-end / by hand:** <cases checked>
+- **Added:** <tests added to pin the new behaviour>
+
+<Write this section yourself: it is what you observed, not a summary of the diff.>
 
 ## Try it
 
@@ -122,8 +134,8 @@ catches a regression. Write this one yourself.>
 - Do state the primary change in sentence one.
 - Do name the two or three files that carry the design.
 - Do give a paste-able way to see it work.
-- Do write the test plan yourself, not with a tool: it is the one section a
-  reviewer trusts, because a model cannot fake what you ran.
+- Do write the Tests section yourself, not with a tool: it is the one section a
+  reviewer trusts, because a model cannot fake what you ran or added.
 - Do split an oversized PR rather than compensate with a longer description.
 - Do not restate the diff line by line.
 - Do not open with implementation detail before the objective.
