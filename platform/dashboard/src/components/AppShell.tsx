@@ -1,18 +1,24 @@
 import { useEffect, useState } from "react";
-import { useNavigate, NavLink, Outlet } from "react-router-dom";
+import { useLocation, useNavigate, NavLink, Outlet } from "react-router-dom";
 import {
+  ArrowLeft,
   Ban,
   BarChart3,
   Building2,
-  FileCode,
+  Bot,
+  CircleUser,
   KeyRound,
   LogOut,
   MessageSquareCode,
+  Monitor,
+  Moon,
   Network,
   PanelLeft,
   ScrollText,
   Settings2,
-  ShieldCheck,
+  Files,
+  Sun,
+  Users,
   type LucideIcon,
 } from "lucide-react";
 
@@ -35,6 +41,7 @@ import { useLogout, useUser } from "@/lib/auth";
 import { useOrgs } from "@/lib/orgs";
 import { useProjects } from "@/lib/projects";
 import { useUi } from "@/lib/ui";
+import { useTheme } from "@/lib/theme";
 import { cn } from "@/lib/utils";
 
 /**
@@ -96,18 +103,64 @@ function useActiveBootstrap(): void {
   ]);
 }
 
+// The core product features. Org/account admin lives in the settings space
+// (see `settingsLinks`), reached from the account menu — not this sidebar.
 const workspaceLinks = [
-  { to: "/agents", label: "Agents", icon: FileCode },
-  { to: "/policies", label: "Policies", icon: ShieldCheck },
+  { to: "/agents", label: "Agents", icon: Bot },
+  { to: "/policies", label: "Policies", icon: Files },
   { to: "/graph", label: "Graph", icon: Network },
   { to: "/playground", label: "Playground", icon: MessageSquareCode },
   { to: "/audit", label: "Audit", icon: ScrollText },
   { to: "/usage", label: "Usage", icon: BarChart3 },
   { to: "/bans", label: "Bans", icon: Ban },
   { to: "/tokens", label: "API keys", icon: KeyRound },
-  { to: "/orgs", label: "Organizations", icon: Building2 },
-  { to: "/settings", label: "Settings", icon: Settings2 },
 ];
+
+/** Whether a path belongs to the settings space (its own sidebar). Uses a
+ * segment boundary so a future sibling like `/orgstats` isn't misread. */
+function isSettingsPath(pathname: string): boolean {
+  return (
+    pathname === "/settings" ||
+    pathname === "/orgs" ||
+    pathname.startsWith("/orgs/")
+  );
+}
+
+/** The org the settings sidebar should scope its org links to: the one in the
+ * URL (`/orgs/:id/...`) when present, else the active org — so a deep-link or
+ * refresh keeps the sidebar pointed at the org being viewed. On the pure
+ * account page (`/settings`) there's no org in play, so we return null and the
+ * org-scoped links drop out. */
+function settingsOrgId(
+  pathname: string,
+  activeOrgId: string | null,
+): string | null {
+  if (pathname === "/settings") return null;
+  return pathname.match(/^\/orgs\/([^/]+)(?:\/|$)/)?.[1] ?? activeOrgId;
+}
+
+/** The settings-space sidebar. Member/settings links need the active org, so
+ * they're built per-render; omitted when no org is selected. */
+function settingsLinks(activeOrgId: string | null) {
+  return [
+    { to: "/orgs", label: "Organizations", icon: Building2, end: true },
+    ...(activeOrgId
+      ? [
+          {
+            to: `/orgs/${activeOrgId}/members`,
+            label: "Members",
+            icon: Users,
+          },
+          {
+            to: `/orgs/${activeOrgId}/settings`,
+            label: "Organization settings",
+            icon: Settings2,
+          },
+        ]
+      : []),
+    { to: "/settings", label: "Account", icon: CircleUser },
+  ];
+}
 
 function NavItem({
   to,
@@ -163,6 +216,18 @@ export function AppShell() {
   // state. Idempotent — won't overwrite an existing valid selection.
   useActiveBootstrap();
   const { sidebarCollapsed, toggleSidebar } = useUi();
+  const navigate = useNavigate();
+
+  // Two sidebar "spaces" share this one shell frame: the product features, and
+  // an org/account settings space (its own nav), entered from the account menu.
+  const { pathname } = useLocation();
+  const inSettings = isSettingsPath(pathname);
+  const activeOrgId = useActive((s) => s.activeOrgId);
+  // Scope the settings links to the URL's org (falling back to the active one)
+  // so a refresh/deep-link to /orgs/:id/... keeps the sidebar on that org.
+  const links = inSettings
+    ? settingsLinks(settingsOrgId(pathname, activeOrgId))
+    : workspaceLinks;
 
   // The workspace create-dialogs live here, not in OrgProjectSwitcher, so
   // collapsing the sidebar (which unmounts the switcher trigger) can't unmount
@@ -214,10 +279,21 @@ export function AppShell() {
         >
           {!sidebarCollapsed && (
             <div className="min-w-0 flex-1">
-              <OrgProjectSwitcher
-                onNewOrg={() => setCreateOrgOpen(true)}
-                onNewProject={() => setCreateProjectOpen(true)}
-              />
+              {inSettings ? (
+                <button
+                  type="button"
+                  onClick={() => navigate("/agents")}
+                  className="flex items-center gap-2 rounded-md px-2 py-1.5 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                >
+                  <ArrowLeft className="size-4" />
+                  Back to workspace
+                </button>
+              ) : (
+                <OrgProjectSwitcher
+                  onNewOrg={() => setCreateOrgOpen(true)}
+                  onNewProject={() => setCreateProjectOpen(true)}
+                />
+              )}
             </div>
           )}
           <Button
@@ -235,8 +311,20 @@ export function AppShell() {
         </div>
 
         <nav className="flex-1 overflow-y-auto px-2 py-2 scrollbar-thin">
+          {/* Collapsed settings space has no switcher line, so surface the exit
+              as a nav row too. */}
+          {inSettings && sidebarCollapsed && (
+            <div className="mb-0.5 flex flex-col gap-0.5">
+              <NavItem
+                to="/agents"
+                label="Back to workspace"
+                icon={ArrowLeft}
+                collapsed
+              />
+            </div>
+          )}
           <div className="flex flex-col gap-0.5">
-            {workspaceLinks.map((l) => (
+            {links.map((l) => (
               <NavItem key={l.to} {...l} collapsed={sidebarCollapsed} />
             ))}
           </div>
@@ -324,6 +412,8 @@ function AccountChip({ collapsed }: { collapsed: boolean }) {
             <span>Organizations</span>
           </DropdownMenuItem>
           <DropdownMenuSeparator />
+          <AppearanceControl />
+          <DropdownMenuSeparator />
           <DropdownMenuItem
             disabled={logout.isPending}
             onSelect={async () => {
@@ -336,6 +426,70 @@ function AccountChip({ collapsed }: { collapsed: boolean }) {
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
+    </div>
+  );
+}
+
+const MODES = [
+  ["light", Sun, "Light"],
+  ["dark", Moon, "Dark"],
+  ["system", Monitor, "System"],
+] as const;
+
+const SCHEMES = [
+  ["blue", "226 78% 65%", "Blue"],
+  ["plum", "313 75% 68%", "Plum"],
+] as const;
+
+/** Appearance picker inside the account menu: mode (light/dark/system) + accent
+ * scheme (blue/plum). Plain buttons so a pick doesn't close the menu. */
+function AppearanceControl() {
+  const mode = useTheme((s) => s.mode);
+  const scheme = useTheme((s) => s.scheme);
+  const setMode = useTheme((s) => s.setMode);
+  const setScheme = useTheme((s) => s.setScheme);
+
+  const seg =
+    "flex h-7 flex-1 items-center justify-center gap-1.5 rounded-md text-xs text-muted-foreground transition-colors hover:text-foreground";
+  const on = "bg-accent text-foreground";
+
+  return (
+    <div className="px-2 py-1.5">
+      <div className="mb-1.5 text-[11px] font-medium text-muted-foreground">
+        Appearance
+      </div>
+      <div className="flex gap-1">
+        {MODES.map(([m, Icon, label]) => (
+          <button
+            key={m}
+            type="button"
+            title={label}
+            aria-label={label}
+            onClick={() => setMode(m)}
+            className={cn(seg, mode === m && on)}
+          >
+            <Icon className="size-4" />
+          </button>
+        ))}
+      </div>
+      <div className="mt-1 flex gap-1">
+        {SCHEMES.map(([s, hsl, label]) => (
+          <button
+            key={s}
+            type="button"
+            title={`${label} accent`}
+            aria-label={`${label} accent`}
+            onClick={() => setScheme(s)}
+            className={cn(seg, scheme === s && on)}
+          >
+            <span
+              className="size-3 rounded-full"
+              style={{ backgroundColor: `hsl(${hsl})` }}
+            />
+            {label}
+          </button>
+        ))}
+      </div>
     </div>
   );
 }

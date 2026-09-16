@@ -14,7 +14,7 @@
  * rendering surface for diagnostics — the source of truth is the
  * platform's `/policies/validate` endpoint.
  */
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import CodeMirror, { type ReactCodeMirrorRef } from "@uiw/react-codemirror";
 import { yaml } from "@codemirror/lang-yaml";
 import { lintGutter, setDiagnostics } from "@codemirror/lint";
@@ -22,7 +22,8 @@ import { lintGutter, setDiagnostics } from "@codemirror/lint";
 import type { PolicyValidationError } from "@/lib/api";
 import { policyModeDecorations } from "./decorations";
 import { toCodemirrorDiagnostics } from "./diagnostics";
-import { policyEditorTheme } from "./theme";
+import { codeTheme } from "./theme";
+import { useIsDark } from "@/lib/theme";
 
 // @uiw/react-codemirror dispatches `StateEffect.reconfigure` whenever
 // `extensions`, `basicSetup`, `onChange`, etc. change reference. Defining
@@ -71,6 +72,8 @@ export function PolicyEditor({
   className,
 }: PolicyEditorProps) {
   const ref = useRef<ReactCodeMirrorRef>(null);
+  const dark = useIsDark();
+  const theme = useMemo(() => codeTheme(dark), [dark]);
 
   // Push the latest validation results into the lint state. Empty list
   // when `diagnostics` is null/empty clears the gutter markers. The view
@@ -93,7 +96,7 @@ export function PolicyEditor({
       onChange={onChange}
       extensions={EXTENSIONS}
       readOnly={readOnly}
-      theme={policyEditorTheme}
+      theme={theme}
       basicSetup={BASIC_SETUP}
       className={className}
       height="100%"

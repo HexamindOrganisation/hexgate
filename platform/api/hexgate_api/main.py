@@ -24,6 +24,7 @@ from hexgate_api.features.llm_invocations.router import router as llm_invocation
 from hexgate_api.features.llm_invocations.service import (
     verify_schema as verify_llm_schema,
 )
+from hexgate_api.features.llm_messages.router import router as llm_messages_router
 from hexgate_api.features.llm_messages.service import (
     verify_schema as verify_messages_schema,
 )
@@ -119,6 +120,7 @@ def _build_v1_router() -> APIRouter:
     v1.include_router(tokens_router)
     v1.include_router(audit_router)
     v1.include_router(llm_invocations_router)
+    v1.include_router(llm_messages_router)
     v1.include_router(agents_router)
     v1.include_router(chat_router)
     v1.include_router(orgs_router)
@@ -166,10 +168,10 @@ async def lifespan(app_: FastAPI):
         # Behind this build, every insert is rejected and dropped by the SDK —
         # silently, from this side. Refuse to boot rather than serve against a
         # schema this build cannot write. Each feature checks the tables it
-        # writes or reads (llm_message is enricher-written but read here once
-        # its endpoint lands, and its migration is hand-shipped — see
-        # platform/DEPLOY.md §6); combined so one boot names every gap rather
-        # than one per restart.
+        # writes or reads (llm_message is enricher-written and read back by
+        # the transcript endpoint here, and its migration is hand-shipped —
+        # see platform/DEPLOY.md §6); combined so one boot names every gap
+        # rather than one per restart.
         verify_all(
             get_clickhouse(),
             (verify_audit_schema, verify_llm_schema, verify_messages_schema),

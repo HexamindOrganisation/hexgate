@@ -5,6 +5,7 @@ Single shared Client — clickhouse-connect manages its own HTTP pool internally
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 from collections.abc import Callable, Sequence
@@ -56,6 +57,22 @@ def ping() -> bool:
     except Exception as exc:
         _log.warning("ClickHouse ping failed: %s", exc)
         return False
+
+
+def decode_json_column(raw: str) -> object:
+    """Decode a stored JSON string ("" -> None); leave malformed values as-is.
+
+    Every event table stores its structured payloads as JSON text (arguments,
+    hint, attributes, the gen_ai.* message content), so the read paths share
+    one decoder. Malformed text is returned unchanged rather than raising: a
+    row that predates a serialization change must still be readable.
+    """
+    if not raw:
+        return None
+    try:
+        return json.loads(raw)
+    except (ValueError, TypeError):
+        return raw
 
 
 def table_columns(client: Client, table: str) -> set[str]:

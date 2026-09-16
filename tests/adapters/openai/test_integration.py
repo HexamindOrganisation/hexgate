@@ -1,8 +1,9 @@
 """End-to-end verification that a real (wrapped) openai-agents-SDK agent's
 run (1) pulls its policy from the live platform API, (2) lands a
-policy_decision row for its tool call, and (3) lands an llm_invocation row
-for its model call. Not a test of answer quality — a test of Hexgate's own
-plumbing (policy fetch + audit ingestion), mirroring
+policy_decision row for its tool call, (3) lands an llm_invocation row for
+its model call, and (4) lands llm_message rows that concatenate back to the
+conversation it actually saw. Not a test of answer quality — a test of
+Hexgate's own plumbing (policy fetch + audit ingestion), mirroring
 tests/adapters/pydantic_ai/test_integration.py.
 
 Requires the full OTLP ingest pipeline — Postgres, ClickHouse, Redpanda,
@@ -39,6 +40,8 @@ from tests.adapters.helpers import (
     AGENT_NAME_PREFIX,
     USER_ID_PREFIX,
     assert_policy_and_usage_events_landed,
+    poll_until,
+    require_dashboard_login,
 )
 
 pytestmark = pytest.mark.integration
@@ -177,3 +180,191 @@ def test_tool_call_records_policy_decision_and_llm_usage(
     assert_policy_and_usage_events_landed(
         hexgate_platform_env, agent_name, session_id, tool_name
     )
+
+
+def test_tool_calling_run_records_the_conversation_as_llm_messages(
+    hexgate_platform_env: HexgatePlatformEnv,
+) -> None:
+    """Same two-turn run, read back through `llm_message`: the rows must
+    concatenate into the conversation the agent actually saw.
+
+    The scripted model forces turn 1 to call `get_weather` and turn 2 to
+    answer, so the pipeline has to produce exactly two rows on one
+    `turn_key`, seq 0 then 1, and turn 2's input must be the delta the
+    runner appended — the assistant's tool-call message and the tool
+    result — not a second copy of the user's question. That delta is the
+    whole point of the stream: re-sending the full list every call would
+    store the transcript once per turn, and the tool result is stored
+    nowhere else (a policy_decision row records the call, never its
+    return value).
+    """
+    agent_name = f"{AGENT_NAME_PREFIX}openai_msg_{uuid.uuid4().hex[:8]}"
+    session_id = f"s-{uuid.uuid4().hex[:8]}"
+
+    model = _ScriptedModel(
+        tool_name="get_weather",
+        tool_args={"city": "Paris"},
+        final_text="It's sunny in Paris.",
+    )
+    raw_agent = Agent(
+        name=agent_name,
+        model=model,
+        instructions="You are a weather assistant.",
+        tools=[_weather_tool()],
+    )
+    register_agent(raw_agent)
+
+    runner = HexgateRunner(api_key=hexgate_platform_env.api_key)
+    context = HexgateContext(
+        user_id=f"{USER_ID_PREFIX}openai", session_id=session_id, user_roles=["tester"]
+    )
+    result = runner.run_sync(
+        raw_agent, "What's the weather in Paris?", hexgate_context=context
+    )
+    assert result.final_output
+
+    rows = poll_until(
+        lambda: (
+            r
+            if len(r := hexgate_platform_env.llm_message_rows(agent_name, session_id))
+            >= 2
+            else None
+        ),
+        message="llm_message rows never landed in ClickHouse",
+    )
+
+    assert len({row["turn_key"] for row in rows}) == 1, "one agent, one message list"
+    assert [row["message_seq"] for row in rows] == [0, 1], "no gap in the transcript"
+    assert not any(row["resynced"] or row["truncated"] for row in rows)
+
+    first, second = (
+        {
+            "input": json.loads(row["input_messages"]),
+            "output": json.loads(row["output_messages"]),
+            "system": json.loads(row["system_instructions"] or "null"),
+        }
+        for row in rows
+    )
+
+    # Turn 1: the user's question in, the tool call out. Instructions ride on
+    # the first row of the turn only.
+    assert first["system"] == [
+        {"type": "text", "content": "You are a weather assistant."}
+    ]
+    assert first["input"] == [
+        {
+            "role": "user",
+            "parts": [{"type": "text", "content": "What's the weather in Paris?"}],
+        }
+    ]
+    [tool_call] = first["output"][0]["parts"]
+    assert tool_call["type"] == "tool_call"
+    assert tool_call["name"] == "get_weather"
+    assert json.loads(tool_call["arguments"]) == {"city": "Paris"}
+
+    # Turn 2: only what the runner appended since — the tool call and its
+    # result — then the model's answer.
+    assert second["system"] is None
+    assert [m["role"] for m in second["input"]] == ["assistant", "tool"]
+    assert second["input"][1]["parts"][0]["response"] == "sunny, 22C"
+    assert second["output"] == [
+        {
+            "role": "assistant",
+            "parts": [{"type": "text", "content": "It's sunny in Paris."}],
+        }
+    ]
+
+
+def test_llm_messages_are_readable_through_the_audit_endpoint(
+    hexgate_platform_env: HexgatePlatformEnv,
+) -> None:
+    """The same transcript, read back the way the Audit drawer will read it.
+
+    The test above proves the rows reach ClickHouse; this one proves they
+    come back out of `GET /v1/projects/{id}/audit/llm-messages` — the
+    endpoint decodes the three JSON columns, orders by (occurred_at,
+    message_seq), and scopes by run as well as session. Worth its own test
+    because a wrong column name or a broken ORDER BY in that query is
+    invisible to a direct ClickHouse read.
+
+    Both scopes are sent, which narrows to their intersection: `run_id` is
+    the stronger key (one run per assertion, whatever else shares the
+    session), while `session_id` is what lets the scan stop early rather than
+    read every session in the project — the endpoint asks callers to send it
+    even blank, for that reason.
+    """
+    require_dashboard_login(hexgate_platform_env)
+
+    agent_name = f"{AGENT_NAME_PREFIX}openai_api_{uuid.uuid4().hex[:8]}"
+    session_id = f"s-{uuid.uuid4().hex[:8]}"
+
+    model = _ScriptedModel(
+        tool_name="get_weather",
+        tool_args={"city": "Paris"},
+        final_text="It's sunny in Paris.",
+    )
+    raw_agent = Agent(
+        name=agent_name,
+        model=model,
+        instructions="You are a weather assistant.",
+        tools=[_weather_tool()],
+    )
+    register_agent(raw_agent)
+
+    runner = HexgateRunner(api_key=hexgate_platform_env.api_key)
+    context = HexgateContext(
+        user_id=f"{USER_ID_PREFIX}openai", session_id=session_id, user_roles=["tester"]
+    )
+    assert runner.run_sync(
+        raw_agent, "What's the weather in Paris?", hexgate_context=context
+    ).final_output
+
+    # The run id is on the rows themselves, so read it back from the first
+    # one that lands rather than reaching into the SDK's run scope, which has
+    # closed by now.
+    stored = poll_until(
+        lambda: (
+            r
+            if len(r := hexgate_platform_env.llm_message_rows(agent_name, session_id))
+            >= 2
+            else None
+        ),
+        message="llm_message rows never landed in ClickHouse",
+    )
+    run_id = hexgate_platform_env.clickhouse_query(
+        "SELECT DISTINCT toString(run_id) FROM hexgate_audit.llm_message "
+        "WHERE agent_name = {agent_name:String}",
+        agent_name=agent_name,
+    )
+    assert run_id and run_id != "00000000-0000-0000-0000-000000000000"
+
+    rows = hexgate_platform_env.llm_messages_via_api(
+        session_id=session_id, run_id=run_id
+    )
+
+    assert [row["message_seq"] for row in rows] == [0, 1]
+    assert len({row["turn_key"] for row in rows}) == 1
+    assert all(row["agent_name"] == agent_name for row in rows)
+    assert len(rows) == len(stored)
+
+    # Decoded by the endpoint, not handed back as JSON text: the drawer
+    # renders these directly.
+    first, second = rows
+    assert first["system_instructions"] == [
+        {"type": "text", "content": "You are a weather assistant."}
+    ]
+    assert first["input_messages"] == [
+        {
+            "role": "user",
+            "parts": [{"type": "text", "content": "What's the weather in Paris?"}],
+        }
+    ]
+    [tool_call] = first["output_messages"][0]["parts"]
+    assert tool_call["name"] == "get_weather"
+    assert [m["role"] for m in second["input_messages"]] == ["assistant", "tool"]
+    assert second["output_messages"] == [
+        {
+            "role": "assistant",
+            "parts": [{"type": "text", "content": "It's sunny in Paris."}],
+        }
+    ]

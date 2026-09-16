@@ -104,6 +104,62 @@ describe("AppShell", () => {
     }
   });
 
+  it("keeps org/account admin out of the product sidebar", async () => {
+    renderWithProviders(<AppShell />);
+    await waitFor(() => expect(screen.getByText("Agents")).toBeInTheDocument());
+    // Organizations moved to the settings space; it's no longer a product nav
+    // item, and the settings-space affordances aren't rendered here.
+    expect(screen.queryByText("Organizations")).not.toBeInTheDocument();
+    expect(screen.queryByText("Back to workspace")).not.toBeInTheDocument();
+  });
+
+  it("renders the settings-space nav (not product links) on a settings path", async () => {
+    renderWithProviders(<AppShell />, { initialRoute: "/orgs" });
+    await waitFor(() =>
+      expect(screen.getByText("Organizations")).toBeInTheDocument(),
+    );
+    for (const label of [
+      "Members",
+      "Organization settings",
+      "Account",
+      "Back to workspace",
+    ]) {
+      expect(screen.getByText(label)).toBeInTheDocument();
+    }
+    // Product features do not appear in the settings sidebar.
+    expect(screen.queryByText("Policies")).not.toBeInTheDocument();
+    expect(screen.queryByText("Playground")).not.toBeInTheDocument();
+  });
+
+  it("scopes settings links to the URL's org, not the active org", async () => {
+    // Active org is A (beforeEach), but the URL is org B — the sidebar's
+    // org-scoped links must target B so a deep-link/refresh stays consistent.
+    renderWithProviders(<AppShell />, {
+      initialRoute: "/orgs/org-b/settings",
+    });
+    await waitFor(() =>
+      expect(screen.getByText("Members")).toBeInTheDocument(),
+    );
+    expect(screen.getByRole("link", { name: "Members" })).toHaveAttribute(
+      "href",
+      "/orgs/org-b/members",
+    );
+    expect(
+      screen.getByRole("link", { name: "Organization settings" }),
+    ).toHaveAttribute("href", "/orgs/org-b/settings");
+  });
+
+  it("hides org-scoped links on the pure account page", async () => {
+    renderWithProviders(<AppShell />, { initialRoute: "/settings" });
+    await waitFor(() =>
+      expect(screen.getByText("Account")).toBeInTheDocument(),
+    );
+    // Organizations + Account stay; the org-scoped admin links don't apply here.
+    expect(screen.getByText("Organizations")).toBeInTheDocument();
+    expect(screen.queryByText("Members")).not.toBeInTheDocument();
+    expect(screen.queryByText("Organization settings")).not.toBeInTheDocument();
+  });
+
   it("collapsing the sidebar hides the nav labels", async () => {
     renderWithProviders(<AppShell />);
     await waitFor(() => expect(screen.getByText("Agents")).toBeInTheDocument());

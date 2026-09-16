@@ -30,6 +30,11 @@
   --color-deny: hsl(var(--semantic-deny));
   --color-approval: hsl(var(--semantic-approval));
 
+  /* The code-pane surface — matches the always-dark CodeMirror ground
+     (#0a0d14, see PolicyEditor/theme.ts) so the tabs/toolbar read as one
+     editor surface. */
+  --color-editor: hsl(var(--editor));
+
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
@@ -68,6 +73,37 @@
   --semantic-deny-soft: 0 50% 22%;
   --semantic-approval: 38 92% 55%;
   --semantic-approval-soft: 38 60% 22%;
+
+  /* Code-pane ground — mode-aware so `bg-editor` surfaces (tabs/tree/inspector)
+     track the CodeMirror editor and read correctly under theme-aware text in
+     either mode. Light here; the dark value is in `.dark`. */
+  --editor: 240 20% 98%;
+
+  /* Policy-graph palette (light). Per node kind: fill / stroke / text / tag,
+     plus a dimmed (receded) variant and the background dot color. The dark
+     values are in `.dark`; the graph reads these as CSS vars so it re-themes
+     with no re-render. Canvas + edge-label grounds use `--editor` directly. */
+  --gr-dots: #d7dce6;
+  --gr-agent-fill: #f4eaf5;
+  --gr-agent-stroke: #a855c7;
+  --gr-agent-text: #4a2545;
+  --gr-agent-tag: #8b4d80;
+  --gr-tool-fill: #eef1f5;
+  --gr-tool-stroke: rgba(0, 0, 0, 0.22);
+  --gr-tool-text: #2a2a3c;
+  --gr-tool-tag: #6b7280;
+  --gr-mcp-fill: #e3f2f5;
+  --gr-mcp-stroke: #0e7490;
+  --gr-mcp-text: #124453;
+  --gr-mcp-tag: #0e7490;
+  --gr-role-fill: #e8effb;
+  --gr-role-stroke: rgba(59, 91, 158, 0.55);
+  --gr-role-text: #1e3a6e;
+  --gr-role-tag: #3b5b9e;
+  --gr-dim-fill: #eff0f4;
+  --gr-dim-stroke: rgba(0, 0, 0, 0.06);
+  --gr-dim-text: #a8a8b4;
+  --gr-dim-tag: #c4c4d0;
 }
 
 .dark {
@@ -97,6 +133,45 @@
   --semantic-deny-soft: 0 50% 22%;
   --semantic-approval: 38 92% 55%;
   --semantic-approval-soft: 38 60% 22%;
+
+  /* Code-pane ground — dark variant (matches the dark CodeMirror editor). */
+  --editor: 222 33% 6%;
+
+  /* Policy-graph palette (dark) — the original near-black node aesthetic. */
+  --gr-dots: #1b2233;
+  --gr-agent-fill: #271826;
+  --gr-agent-stroke: #b57aa8;
+  --gr-agent-text: #f0e0ec;
+  --gr-agent-tag: #c79bbb;
+  --gr-tool-fill: #15181f;
+  --gr-tool-stroke: rgba(255, 255, 255, 0.28);
+  --gr-tool-text: #d3dae6;
+  --gr-tool-tag: #8a93a3;
+  --gr-mcp-fill: #0d2226;
+  --gr-mcp-stroke: #3fb6c8;
+  --gr-mcp-text: #c7f1f6;
+  --gr-mcp-tag: #79cfda;
+  --gr-role-fill: #121a2e;
+  --gr-role-stroke: rgba(109, 159, 240, 0.55);
+  --gr-role-text: #cfe0fb;
+  --gr-role-tag: #9fb6e6;
+  --gr-dim-fill: #0c0f16;
+  --gr-dim-stroke: rgba(255, 255, 255, 0.07);
+  --gr-dim-text: #3f4550;
+  --gr-dim-tag: #2f343d;
+}
+
+/* ── Accent scheme (blue default / plum) ──────────────────────────────────
+   The scheme axis only swaps the accent hue (226 blue → 313 plum); the mode
+   axis above owns every neutral. Applied via `data-scheme="plum"` on <html>.
+   Per-mode so plum has its own light and dark accent, mirroring blue. */
+[data-scheme="plum"] {
+  --primary: 313 62% 48%;
+  --ring: 313 62% 48%;
+}
+.dark[data-scheme="plum"] {
+  --primary: 313 75% 68%;
+  --ring: 313 75% 68%;
 }
 
 @layer base {
@@ -148,4 +223,60 @@
 }
 .scrollbar-thin::-webkit-scrollbar-thumb:hover {
   background-color: hsl(var(--foreground));
+}
+
+/* Like `scrollbar-thin`, but the thumb is invisible until the element is
+   hovered — for dense strips (e.g. the editor tab bar) where a persistent
+   scrollbar would be visual noise. Still scrolls by wheel/trackpad when idle. */
+.scrollbar-hover {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+.scrollbar-hover:hover {
+  scrollbar-color: hsl(var(--accent-foreground)) transparent;
+}
+.scrollbar-hover::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+.scrollbar-hover::-webkit-scrollbar-track {
+  background: transparent;
+}
+.scrollbar-hover::-webkit-scrollbar-thumb {
+  background-color: transparent;
+  border-radius: 3px;
+}
+.scrollbar-hover:hover::-webkit-scrollbar-thumb {
+  background-color: hsl(var(--accent-foreground));
+}
+
+/* React Flow zoom/fit controls — the default buttons are white, which reads as
+   ugly boxes on the policy graph. Themed with tokens so they follow the graph
+   ground (light/dark). The graph is the only React Flow surface in the app. */
+.react-flow__controls {
+  box-shadow: none;
+  gap: 0;
+  overflow: hidden;
+  border-radius: 8px;
+}
+.react-flow__controls-button {
+  background: hsl(var(--card));
+  border: none;
+  border-bottom: 1px solid hsl(var(--border));
+  width: 26px;
+  height: 26px;
+}
+.react-flow__controls-button:last-child {
+  border-bottom: none;
+}
+.react-flow__controls-button:hover {
+  background: hsl(var(--accent));
+}
+.react-flow__controls-button svg {
+  fill: hsl(var(--muted-foreground));
+  max-width: 12px;
+  max-height: 12px;
+}
+.react-flow__controls-button:hover svg {
+  fill: hsl(var(--foreground));
 }
