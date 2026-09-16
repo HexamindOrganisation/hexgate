@@ -22,15 +22,17 @@
 -- table is not worth the lock.
 --
 -- Idempotent (IF NOT EXISTS on both), so re-running is a no-op. Guarded per the
--- convention in plans/migration/: every migration guards each table it touches,
--- because ADD COLUMN IF NOT EXISTS guards the COLUMN and still errors on a
--- missing table. A stage old enough to lack devtoken is hypothetical today, but
--- a rule with remembered exceptions is not a rule.
+-- convention every file in this directory follows: a migration guards each
+-- table it touches, because ADD COLUMN IF NOT EXISTS guards the COLUMN and
+-- still errors on a missing table. A stage old enough to lack devtoken is
+-- hypothetical today, but a rule with remembered exceptions is not a rule.
+-- 0002_actor_columns.sql carries the full rationale, unqualified guard names
+-- included.
 
 -- devtoken -----------------------------------------------------------------
 DO $$
 BEGIN
-  IF to_regclass('public.devtoken') IS NULL THEN
+  IF to_regclass('devtoken') IS NULL THEN
     RAISE NOTICE 'devtoken absent -- create_all builds it complete; skipping';
     RETURN;
   END IF;

@@ -31,12 +31,18 @@
 -- so skipping is the correct outcome, not a deferred one.
 --
 -- Each table's index and backfill live INSIDE its own guard: they fail on a
--- missing table exactly like an ALTER does. See plans/migration/.
+-- missing table exactly like an ALTER does.
+--
+-- The guard names its table UNQUALIFIED, so to_regclass resolves it through the
+-- same search_path as the statements it guards. A hardcoded `public.` lets the
+-- two disagree wherever search_path leads elsewhere: the guard reports "absent"
+-- for a table the ALTER would have found, and the columns are skipped forever
+-- while create_all never adds them to a table that already exists.
 
 -- organization -------------------------------------------------------------
 DO $$
 BEGIN
-  IF to_regclass('public.organization') IS NULL THEN
+  IF to_regclass('organization') IS NULL THEN
     RAISE NOTICE 'organization absent -- create_all builds it complete; skipping';
     RETURN;
   END IF;
@@ -51,7 +57,7 @@ END $$;
 -- organization_member ------------------------------------------------------
 DO $$
 BEGIN
-  IF to_regclass('public.organization_member') IS NULL THEN
+  IF to_regclass('organization_member') IS NULL THEN
     RAISE NOTICE 'organization_member absent -- create_all builds it complete; skipping';
     RETURN;
   END IF;
@@ -66,7 +72,7 @@ END $$;
 -- revoke trail now matches Ban and devtoken.
 DO $$
 BEGIN
-  IF to_regclass('public.invitation') IS NULL THEN
+  IF to_regclass('invitation') IS NULL THEN
     RAISE NOTICE 'invitation absent -- create_all builds it complete; skipping';
     RETURN;
   END IF;
@@ -76,7 +82,7 @@ END $$;
 -- project ------------------------------------------------------------------
 DO $$
 BEGIN
-  IF to_regclass('public.project') IS NULL THEN
+  IF to_regclass('project') IS NULL THEN
     RAISE NOTICE 'project absent -- create_all builds it complete; skipping';
     RETURN;
   END IF;
@@ -91,7 +97,7 @@ END $$;
 -- an admin mints for a teammate -- the case the offboarding sweep exists for.
 DO $$
 BEGIN
-  IF to_regclass('public.devtoken') IS NULL THEN
+  IF to_regclass('devtoken') IS NULL THEN
     RAISE NOTICE 'devtoken absent -- create_all builds it complete; skipping';
     RETURN;
   END IF;
@@ -107,7 +113,7 @@ END $$;
 -- updated_at already exists (models.py:274).
 DO $$
 BEGIN
-  IF to_regclass('public.agent') IS NULL THEN
+  IF to_regclass('agent') IS NULL THEN
     RAISE NOTICE 'agent absent -- create_all builds it complete; skipping';
     RETURN;
   END IF;
@@ -119,7 +125,7 @@ END $$;
 -- Immutable snapshot: creator only, no update trail.
 DO $$
 BEGIN
-  IF to_regclass('public.agent_version') IS NULL THEN
+  IF to_regclass('agent_version') IS NULL THEN
     RAISE NOTICE 'agent_version absent -- create_all builds it complete; skipping';
     RETURN;
   END IF;
@@ -130,7 +136,7 @@ END $$;
 -- updated_at already exists (models.py:383).
 DO $$
 BEGIN
-  IF to_regclass('public.policy_module') IS NULL THEN
+  IF to_regclass('policy_module') IS NULL THEN
     RAISE NOTICE 'policy_module absent -- create_all builds it complete; skipping';
     RETURN;
   END IF;
@@ -143,7 +149,7 @@ END $$;
 -- creation IS its last write and an updated_* pair would duplicate it.
 DO $$
 BEGIN
-  IF to_regclass('public.role_binding') IS NULL THEN
+  IF to_regclass('role_binding') IS NULL THEN
     RAISE NOTICE 'role_binding absent -- create_all builds it complete; skipping';
     RETURN;
   END IF;

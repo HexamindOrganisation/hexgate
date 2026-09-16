@@ -12,15 +12,15 @@
 -- #179 -- the bare ALTER below failed with `relation "policy_file" does not
 -- exist`, and because platform-migrate stopped there, every ClickHouse
 -- migration was skipped with it. `ADD COLUMN IF NOT EXISTS` guards the COLUMN,
--- not the table. See plans/migration/ for the convention: every migration
--- guards each table it touches.
+-- not the table. Every migration guards each table it touches; see
+-- 0002_actor_columns.sql for the convention in full.
 
 -- policy_file --------------------------------------------------------------
 -- updated_at already exists, and NULL is the correct actor for every row
 -- written before this, so no backfill.
 DO $$
 BEGIN
-  IF to_regclass('public.policy_file') IS NULL THEN
+  IF to_regclass('policy_file') IS NULL THEN
     RAISE NOTICE 'policy_file absent -- create_all builds it complete; skipping';
     RETURN;
   END IF;
