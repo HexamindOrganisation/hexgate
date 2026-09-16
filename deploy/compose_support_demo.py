@@ -308,8 +308,6 @@ def _(Path, mo, resolve_file):
             "    mcp-demo-compute_tip: { mode: allow }     # safe MCP tool\n"
             "    mcp-demo-send_invoice: { mode: allow }    # ceiling; billing grants w/ approval\n"
             "    mcp-demo-read_secret: { mode: deny }      # dangerous MCP tool — always denied\n"
-            "  reach:\n"
-            "    billing_bot: { as: tool }   # reach ceiling: callable as a sub-agent tool\n"
             "  admission: { mode: allow }    # ingress ceiling: a seat may be admitted to start a bot\n"
             "agents:\n"
             "  support_bot:\n"
@@ -348,7 +346,6 @@ def _(Path, mo, resolve_file):
         ),
         "caps/support/delegate.yaml": (
             "tools:\n  delegate_to_billing: { mode: allow }\n"
-            "reach:\n  billing_bot: { as: tool }\n"
         ),
         "caps/billing/payments.yaml": (
             "tools:\n"
@@ -393,8 +390,8 @@ def _(Path, mo, resolve_file):
         "`support` starts it but can't refund directly — it **must "
         "`delegate_to_billing`** (the sub-agent); `billing` starts it and refunds "
         "directly up to the **$1000** ceiling. `billing_bot` is stricter still — "
-        "only the `billing` seat may start it directly (the `support` seat reaches "
-        "it as a sub-agent, but can't start it head-on)."
+        "only the `billing` seat may start it directly (the `support` seat "
+        "delegates to it via the tool, but can't start it head-on)."
     )
     return
 
@@ -424,8 +421,8 @@ def _(Path, mo):
             "delegation is the only way to refund from this seat.\n"
             "5. As `billing` → the refund is **allowed** directly (under $1000).\n"
             "6. Edit `policy.yaml` (or a `caps/…` file) in the **Policies** tab — the "
-            "next message picks it up. The **Graph** tab shows the support_bot → "
-            "billing_bot sub-agent edge."
+            "next message picks it up. The **Graph** tab shows support_bot's "
+            "`delegate_to_billing` tool and each seat's admission edges to the bots."
         )
     else:
         _out = mo.callout(
