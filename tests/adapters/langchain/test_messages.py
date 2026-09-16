@@ -270,6 +270,44 @@ def test_output_messages_happy_path(
     assert output_messages(result) == expected
 
 
+@pytest.mark.parametrize(
+    "block",
+    [
+        # LangChain normalises to "reasoning"; the raw provider block left in
+        # ``content`` is Anthropic's "thinking".
+        pytest.param({"type": "reasoning", "reasoning": "hmm"}, id="normalised"),
+        pytest.param({"type": "thinking", "thinking": "hmm"}, id="anthropic-raw"),
+    ],
+)
+def test_when_the_completion_carries_reasoning_then_it_is_dropped(
+    block: dict[str, Any],
+) -> None:
+    """Issue #221, matching the OpenAI adapter: every part of the output
+    message shares one 8 KiB budget, so enough reasoning blocks starve the
+    answer beside them."""
+    message = AIMessage(content=[block, {"type": "text", "text": "21C."}])
+    result = LLMResult(generations=[[ChatGeneration(message=message)]])
+
+    assert output_messages(result) == [
+        {"role": "assistant", "parts": [text_part("21C.")]}
+    ]
+    # Kept on the input side, which rides the far larger 256 KiB budget.
+    assert [p.get("type") for p in input_message(message)["parts"]] == [
+        block["type"],
+        "text",
+    ]
+
+
+def test_when_the_completion_is_only_reasoning_then_no_message_is_emitted() -> None:
+    """Nothing left to record once the reasoning is gone."""
+    message = AIMessage(content=[{"type": "thinking", "thinking": "hmm"}])
+
+    assert (
+        output_messages(LLMResult(generations=[[ChatGeneration(message=message)]]))
+        == []
+    )
+
+
 def test_when_the_completion_is_a_tool_call_then_it_is_a_tool_call_part() -> None:
     result = LLMResult(
         generations=[

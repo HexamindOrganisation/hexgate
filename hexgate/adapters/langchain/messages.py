@@ -37,6 +37,16 @@ _TOOL_CALL_BLOCK_TYPES = frozenset(
     {"function_call", "tool_use", "tool_call", "invalid_tool_call"}
 )
 
+# Reasoning blocks, dropped from the *completion* only (issue #221, matching
+# ``adapters/openai/messages.py``): every part of the output message shares one
+# 8 KiB budget, and ``cap_json_head_tail`` splits it evenly across string
+# leaves, so enough reasoning blocks starve the answer beside them — measured
+# at 12% of a 2.4 KiB answer surviving 20 of them. Both spellings, because
+# LangChain normalises to ``reasoning`` in ``content_blocks`` while the raw
+# provider block left in ``content`` is Anthropic's ``thinking``. Kept on the
+# input side, where it rides the far larger 256 KiB budget.
+_REASONING_BLOCK_TYPES = frozenset({"reasoning", "thinking", "redacted_thinking"})
+
 
 def _role(entry: dict[str, Any]) -> str:
     """The GenAI role for one message dict.
@@ -164,7 +174,8 @@ def input_message(message: BaseMessage | str) -> dict[str, Any]:
 
 
 def output_messages(response: LLMResult) -> list[dict[str, Any]]:
-    """An ``LLMResult`` as the completion of the call that produced it.
+    """An ``LLMResult`` as the completion of the call that produced it, minus
+    its reasoning (:data:`_REASONING_BLOCK_TYPES`).
 
     Only ``generations[0]`` belongs to this event, since ``generations`` is a
     list per prompt and the callback fires once per call. A non-chat LLM yields
@@ -178,9 +189,19 @@ def output_messages(response: LLMResult) -> list[dict[str, Any]]:
             messages.append(
                 {"role": "assistant", "parts": [text_part(generation.text)]}
             )
-        else:
-            # An AIMessage converts the same whether sent or just returned.
-            messages.append(input_message(message))
+            continue
+        # An AIMessage converts the same whether sent or just returned; only
+        # the reasoning drop is specific to this side.
+        converted = input_message(message)
+        parts = [
+            part
+            for part in converted["parts"]
+            if part.get("type") not in _REASONING_BLOCK_TYPES
+        ]
+        # No parts, no message — a completion that was reasoning and nothing
+        # else has nothing left to record, as in the OpenAI adapter.
+        if parts:
+            messages.append({**converted, "parts": parts})
     return messages
 
 
