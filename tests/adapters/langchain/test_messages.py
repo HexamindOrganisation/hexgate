@@ -139,6 +139,25 @@ def test_when_a_tool_call_failed_to_parse_then_it_is_kept_with_its_error() -> No
             ["tool_call"],
             id="anthropic-promoted",
         ),
+        # langchain_openai builds this for a custom tool on the Responses API,
+        # structurally the same double-write as function_call: a raw block plus
+        # a tool_calls entry, both keyed on call_id.
+        pytest.param(
+            AIMessage(
+                content=[
+                    {
+                        "type": "custom_tool_call",
+                        "call_id": "call_1",
+                        "id": "ctc_1",
+                        "name": "get_weather",
+                        "input": "Paris",
+                    }
+                ],
+                tool_calls=[_tool_call()],
+            ),
+            ["tool_call"],
+            id="openai-custom-tool-promoted",
+        ),
         # Unpromoted, so the block is the only record and dropping by *type*
         # would lose the call entirely.
         pytest.param(

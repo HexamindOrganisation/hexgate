@@ -34,7 +34,13 @@ _TEXT_BLOCK_TYPES = frozenset({"text"})
 # ``server_tool_use``/``mcp_tool_use`` are absent because the provider ran
 # those itself, so they never reach ``tool_calls``.
 _TOOL_CALL_BLOCK_TYPES = frozenset(
-    {"function_call", "tool_use", "tool_call", "invalid_tool_call"}
+    {
+        "function_call",
+        "custom_tool_call",
+        "tool_use",
+        "tool_call",
+        "invalid_tool_call",
+    }
 )
 
 # Reasoning blocks, dropped from the *completion* only (issue #221, matching
