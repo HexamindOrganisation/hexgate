@@ -3,9 +3,9 @@
 Writes the demo's `policy.yaml` + capability files into the default project's
 `policy_file` store, so the dashboard's **Policies** editor opens on a real
 multi-module compose policy — a front-line ``support_bot`` and a refunds
-specialist ``billing_bot``, tool permissions and agent reach composed from the
-same imported capabilities. The same scenario runs locally in
-``deploy/compose_support_demo.py``.
+specialist ``billing_bot``, with tool permissions, role→agent admission (who may
+start each bot), and agent→sub-agent reach all composed from the same imported
+capabilities. The same scenario runs locally in ``deploy/compose_support_demo.py``.
 
 Direct row inserts (not the write-time flip/recompile path), so seeding is a
 pure store fixture — idempotent per ``(project_id, name)``.
@@ -36,25 +36,31 @@ boundary:
     mcp-demo-read_secret: { mode: deny }      # dangerous MCP tool — always denied
   reach:
     billing_bot: { as: tool }   # reach ceiling: callable as a sub-agent tool
+  admission: { mode: allow }    # ingress ceiling: a seat may be admitted to start a bot
 agents:
   support_bot:
     roles:
+      # The default seat browses read-only data but may NOT start the bot (no ingress).
       default: { import: [ caps/base/read_only.yaml ] }
-      # The front-line seat can't refund itself — it MUST delegate to billing_bot.
+      # The support seat starts the front-line bot; it can't refund itself, so it
+      # MUST delegate to billing_bot.
       support:
         import:
-          [ caps/base/read_only.yaml, caps/support/desk.yaml,
-            caps/support/delegate.yaml ]
-      # The elevated seat refunds directly, and may still delegate.
+          [ caps/base/read_only.yaml, caps/base/ingress.yaml,
+            caps/support/desk.yaml, caps/support/delegate.yaml ]
+      # The billing seat starts the bot, refunds directly, and may still delegate.
       billing:
         import:
-          [ caps/base/read_only.yaml, caps/support/desk.yaml,
-            caps/billing/payments.yaml, caps/billing/invoicing.yaml,
-            caps/support/delegate.yaml ]
+          [ caps/base/read_only.yaml, caps/base/ingress.yaml,
+            caps/support/desk.yaml, caps/billing/payments.yaml,
+            caps/billing/invoicing.yaml, caps/support/delegate.yaml ]
   billing_bot:
     roles:
+      # Only the billing seat may start the refunds specialist directly.
       billing:
-        import: [ caps/billing/payments.yaml, caps/billing/invoicing.yaml ]
+        import:
+          [ caps/base/ingress.yaml, caps/billing/payments.yaml,
+            caps/billing/invoicing.yaml ]
 """
 
 # Leaf capability files (grant-only), imported by the roles above.
@@ -63,6 +69,9 @@ _CAPS = {
         "tools:\n  view_orders: { mode: allow }\n"
         "mcp:\n  mcp-demo-compute_tip: { mode: allow }\n"
     ),
+    # The ingress grant: a role that imports this may be admitted to START the
+    # agent it's imported into (lowers to the agent.run key the runtime gates).
+    "caps/base/ingress.yaml": ("admission:\n  mode: allow\n"),
     "caps/support/desk.yaml": (
         "tools:\n"
         "  send_email: { mode: allow }\n"
