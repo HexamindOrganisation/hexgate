@@ -238,6 +238,11 @@ curl -X POST https://app.hexgate.ai/v1/auth/register \
 
 ```bash
 cd /srv/hexgate-<stage> && git pull   # or checkout a new tag for prod
+
+# Postgres DDL needs locks the running API holds. Stops api + enricher and
+# leaves collector + redpanda up, so OTLP keeps buffering through the window.
+make platform-stop-writers STAGE=<stage>
+
 make platform-migrate STAGE=<stage>   # schema BEFORE images — see below; no-op when nothing is new
 make platform-up STAGE=<stage>        # rebuilds changed images, recreates containers
 ```
@@ -247,19 +252,35 @@ the files are idempotent, so a release that adds no column replays them to no
 effect. Reversing the two is an outage, not a slower path (see below). Skip it
 only on a first-ever deploy, where there is no existing schema to alter.
 
+**Read the last line of the run, not the last file it named.** The two stores
+are applied independently — a Postgres failure no longer skips ClickHouse — and
+the run ends with `migrate(<stage>): postgres=… clickhouse=…` plus a nonzero
+exit if either did not complete. A run that ends without that summary was
+interrupted, and you cannot assume either store finished.
+
+Postgres statements run under `lock_timeout=10s`. If you skip the `stop` above,
+expect `canceling statement due to lock timeout` rather than a hang: an
+`ADD COLUMN` waits behind any session idle in a transaction, and then blocks
+every query queued behind it. Stop the writers and re-run — the files are
+idempotent, so a partial run costs nothing.
+`HEXGATE_MIGRATE_LOCK_TIMEOUT_MS=0` waits forever, for a quiesced stack running
+a long index build.
+
 Promote a release: tag it, `git checkout` it in the prod checkout, then the
 same `platform-migrate` → `platform-up` pair. Rolling *back* past a release
 that added columns has its own step — see below.
 
-Upgrades reuse the env already on the box: `platform-up` only pulls a
-MISSING `.env.<stage>`, never refreshes an existing one. If the secret changed,
+Upgrades reuse the env already on the box: the deploy targets only pull a
+MISSING `.env.<stage>`, never refresh an existing one. If the secret changed,
 refresh it first: `make platform-env-pull STAGE=<stage>`.
 
 **When a release adds a required key** (the compose aborts with `required
-variable X is missing a value` — on `platform-up`, and on `platform-logs` /
-`platform-down` too, since compose interpolates the whole file for every
-subcommand; the running stack is unaffected), the order is: an admin adds the
-key to the `/hexgate/<stage>` secret (new version), then on the box
+variable X is missing a value` — on every target that shells out to compose,
+since it interpolates the whole file for every subcommand, `platform-up`,
+`platform-logs`, `platform-down` and `platform-stop-writers` alike; the running
+stack is unaffected). That makes it the very FIRST step of the recipe above,
+so do the refresh before starting the upgrade. The order is: an admin adds
+the key to the `/hexgate/<stage>` secret (new version), then on the box
 `make platform-env-pull STAGE=<stage>`, then `make platform-up`. Never
 hand-edit `.env.<stage>` — the next pull would drop the change. Releases so
 far that did this:
