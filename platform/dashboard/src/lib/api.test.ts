@@ -58,3 +58,45 @@ describe("request() error handling", () => {
     expect(err.message).not.toContain("[object Object]");
   });
 });
+
+/**
+ * The transcript read is the one call whose blanks are load-bearing: the
+ * server reads an empty `session_id` as "this run had no session" and uses
+ * it to keep the scan inside one sort-key block, so the client must send it
+ * rather than drop it.
+ */
+describe("listLlmMessages()", () => {
+  function stubOk(): string[] {
+    const urls: string[] = [];
+    vi.spyOn(window, "fetch").mockImplementation(async (input) => {
+      urls.push(typeof input === "string" ? input : input.toString());
+      return jsonResponse({ rows: [], total: 0, limit: 100, offset: 0 }, 200);
+    });
+    return urls;
+  }
+
+  it("sends both scopes verbatim", async () => {
+    const urls = stubOk();
+    await api.listLlmMessages(
+      "p1",
+      "sess-1",
+      "11111111-1111-1111-1111-111111111111",
+    );
+    expect(urls[0]).toBe(
+      "/v1/projects/p1/audit/llm-messages?session_id=sess-1" +
+        "&run_id=11111111-1111-1111-1111-111111111111&limit=50&offset=0",
+    );
+  });
+
+  it("when the session is blank then it is still sent", async () => {
+    const urls = stubOk();
+    await api.listLlmMessages("p1", "", "11111111-1111-1111-1111-111111111111");
+    expect(urls[0]).toContain("session_id=&run_id=1111");
+  });
+
+  it("when the run id is null then it goes out blank", async () => {
+    const urls = stubOk();
+    await api.listLlmMessages("p1", "sess-1", null);
+    expect(urls[0]).toContain("session_id=sess-1&run_id=&");
+  });
+});

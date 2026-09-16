@@ -21,7 +21,7 @@ import userEvent from "@testing-library/user-event";
 import { Route, Routes, useSearchParams } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { AuditAnomaly, AuditDecisionRow } from "@/lib/api";
+import type { AuditAnomaly, AuditDecisionRow, LlmMessageRow } from "@/lib/api";
 import { useActive } from "@/lib/active";
 import { EMPTY_AUDIT_FILTERS, useAuditFilters } from "@/lib/audit-filters";
 import { AuditPage } from "@/routes/Audit";
@@ -71,6 +71,118 @@ const ROW: AuditDecisionRow = {
   run_id: null,
 };
 
+/**
+ * A four-turn transcript for ROW's session, oldest first as the endpoint
+ * returns it. Sized so the drawer has one of each marker to place: a
+ * `message_seq` gap before the anchor, a truncated anchor, and a resynced
+ * turn after it.
+ */
+const MSG_BASE = {
+  received_at: "2026-06-01T10:00:02Z",
+  agent_name: "example_agent",
+  agent_version_id: "v1",
+  session_id: "sess-1",
+  user_id: "u1",
+  model: "gpt-5",
+  turn_key: "run-a",
+  resynced: false,
+  truncated: false,
+  // A parts list, not a message list — that is the gen_ai shape, and the
+  // adapters build it as `[text_part(prompt)]`. Only the first event of a
+  // turn_key carries it.
+  system_instructions: null as unknown,
+  run_id: null,
+};
+
+const MESSAGES: LlmMessageRow[] = [
+  {
+    ...MSG_BASE,
+    event_id: "msg-1",
+    occurred_at: "2026-06-01T09:59:00Z",
+    message_seq: 0,
+    system_instructions: [
+      { type: "text", content: "You are a careful agent." },
+    ],
+    input_messages: [
+      { role: "user", parts: [{ type: "text", content: "hello" }] },
+      // A reasoning item survives on the INPUT side only — the SDK drops it
+      // from the completion (issue #221) — and has no GenAI part to map
+      // onto, so the drawer must print it whole rather than blank it.
+      {
+        role: "assistant",
+        parts: [
+          { type: "reasoning", summary: [{ text: "weighing the request" }] },
+        ],
+      },
+    ],
+    output_messages: [
+      { role: "assistant", parts: [{ type: "text", content: "hi there" }] },
+    ],
+  },
+  {
+    // seq 2 after seq 0: the pipeline lost the turn in between.
+    ...MSG_BASE,
+    event_id: "msg-2",
+    occurred_at: "2026-06-01T09:59:30Z",
+    message_seq: 2,
+    input_messages: [
+      { role: "user", parts: [{ type: "text", content: "read a file" }] },
+    ],
+    output_messages: [
+      { role: "assistant", parts: [{ type: "text", content: "which one?" }] },
+    ],
+  },
+  {
+    // The anchor: the last event at or before ROW's 10:00:00.
+    ...MSG_BASE,
+    event_id: "msg-3",
+    occurred_at: "2026-06-01T09:59:59Z",
+    message_seq: 3,
+    truncated: true,
+    input_messages: [
+      { role: "user", parts: [{ type: "text", content: "/etc/passwd" }] },
+    ],
+    output_messages: [
+      {
+        role: "assistant",
+        parts: [
+          {
+            type: "tool_call",
+            id: "call-1",
+            name: "read_file",
+            arguments: '{"path": "/etc/passwd"}',
+          },
+        ],
+      },
+    ],
+  },
+  {
+    ...MSG_BASE,
+    event_id: "msg-4",
+    occurred_at: "2026-06-01T10:00:01Z",
+    message_seq: 4,
+    resynced: true,
+    input_messages: [
+      {
+        role: "tool",
+        parts: [
+          {
+            type: "tool_call_response",
+            id: "call-1",
+            response: "denied by policy",
+          },
+        ],
+      },
+    ],
+    output_messages: [
+      {
+        role: "assistant",
+        parts: [{ type: "text", content: "I cannot read that file." }],
+      },
+    ],
+  },
+];
+
 const ANOMALY: AuditAnomaly = {
   user_id: "bob",
   severity: "high",
@@ -108,6 +220,10 @@ const UNROLED_ALLOW: AuditDecisionRow = {
   user_roles: [],
   deciding_role: "",
 };
+
+/** Rows the llm-messages stub serves. Swapped by the windowing test for a
+ * transcript longer than one page. */
+let messageRows: () => LlmMessageRow[] = () => MESSAGES;
 
 /**
  * Same fetch-stub helper pattern as Orgs.test.tsx, extended to record
@@ -164,6 +280,19 @@ function stubFetch(anomalies: AuditAnomaly[] = [], role = "owner"): string[] {
           }
           return json({ rows: [ROW], total: 1, limit: 40, offset: 0 });
         }
+        case `/v1/projects/${PROJECT}/audit/llm-messages`: {
+          // Honour limit/offset so the drawer's head-then-tail windowing is
+          // exercised rather than stubbed away.
+          const limit = Number(url.searchParams.get("limit") ?? 50);
+          const offset = Number(url.searchParams.get("offset") ?? 0);
+          const all = messageRows();
+          return json({
+            rows: all.slice(offset, offset + limit),
+            total: all.length,
+            limit,
+            offset,
+          });
+        }
         case `/v1/projects/${PROJECT}/audit/anomalies`:
           return json(anomalies);
         default:
@@ -199,6 +328,7 @@ describe("AuditPage", () => {
         tableLimit: 40,
       });
     });
+    messageRows = () => MESSAGES;
   });
 
   afterEach(() => {
@@ -337,6 +467,161 @@ describe("AuditPage", () => {
     await waitFor(() => {
       expect(screen.queryByText("evt-1")).not.toBeInTheDocument();
     });
+  });
+
+  it("drawer anchors the transcript on the selected decision", async () => {
+    const calls = stubFetch();
+    const user = userEvent.setup();
+    renderWithProviders(<AuditPage />);
+
+    await openDrawer(user);
+    // Both scopes go out as ROW holds them — the blank run_id included.
+    await waitFor(() => {
+      expect(
+        calls.some((u) =>
+          u.includes("/audit/llm-messages?session_id=sess-1&run_id=&"),
+        ),
+      ).toBe(true);
+    });
+
+    // The anchor is msg-3 (09:59:59, the last event before the 10:00:00
+    // decision): its completion holds the tool call that was denied.
+    const anchor = await screen.findByText(/read_file/, {
+      selector: "pre span",
+    });
+    const anchorCard = anchor.closest("[data-testid='llm-turn']")!;
+    expect(
+      within(anchorCard as HTMLElement).getByText("This call"),
+    ).toBeInTheDocument();
+    // …and msg-4 is what followed: the denial fed back, then the answer.
+    expect(screen.getByText("What followed")).toBeInTheDocument();
+    expect(screen.getByText(/denied by policy/)).toBeInTheDocument();
+    expect(screen.getByText(/I cannot read that file/)).toBeInTheDocument();
+
+    // Only those two are expanded; the two before the anchor are collapsed.
+    expect(screen.getAllByTestId("llm-turn")).toHaveLength(2);
+    expect(screen.getByText(/2 earlier turns/)).toBeInTheDocument();
+    expect(screen.queryByText(/hi there/)).not.toBeInTheDocument();
+  });
+
+  it("when a turn is truncated or resynced then the drawer marks it", async () => {
+    stubFetch();
+    const user = userEvent.setup();
+    renderWithProviders(<AuditPage />);
+
+    await openDrawer(user);
+    // msg-3 was cut to its cap; msg-4 restated the whole list.
+    expect(await screen.findByText("truncated")).toBeInTheDocument();
+    expect(screen.getByText("history restated")).toBeInTheDocument();
+  });
+
+  it("when message_seq skips ahead then the drawer says the transcript is incomplete", async () => {
+    stubFetch();
+    const user = userEvent.setup();
+    renderWithProviders(<AuditPage />);
+
+    await openDrawer(user);
+    // msg-2 is seq 2 to msg-1's seq 0. The gap is inside the collapsed
+    // group, so the marker has to show on the collapsed control itself —
+    // otherwise the one thing an auditor must not miss is one click away.
+    const collapsed = await screen.findByText(/2 earlier turns/);
+    expect(
+      within(collapsed.closest("button") as HTMLElement).getByText(
+        "transcript incomplete",
+      ),
+    ).toBeInTheDocument();
+
+    await user.click(collapsed);
+    expect(await screen.findByText(/hi there/)).toBeInTheDocument();
+    expect(screen.getAllByText("transcript incomplete")).toHaveLength(2);
+  });
+
+  it("renders system instructions as the parts list they are", async () => {
+    stubFetch();
+    const user = userEvent.setup();
+    renderWithProviders(<AuditPage />);
+
+    await openDrawer(user);
+    await user.click(await screen.findByText(/2 earlier turns/));
+
+    // `gen_ai.system_instructions` is a list of PARTS — the adapters build it
+    // as `[text_part(prompt)]`, with no role. Read as a message list it would
+    // print the system prompt as raw JSON under an empty role.
+    const prompt = await screen.findByText("You are a careful agent.");
+    expect(prompt.tagName).toBe("PRE");
+    expect(prompt.textContent).not.toContain('"type"');
+  });
+
+  it("when the transcript is longer than one page then the window follows the decision", async () => {
+    // 60 turns, all before the decision, with the real anchor last. The head
+    // page (50 rows) cannot contain it, so keeping the head would caption
+    // turn 50 "This call" and claim the run ended there.
+    messageRows = () =>
+      Array.from({ length: 60 }, (_, i) => ({
+        ...MESSAGES[0],
+        event_id: `bulk-${i}`,
+        occurred_at: new Date(Date.parse("2026-06-01T09:00:00Z") + i * 1000)
+          .toISOString()
+          .replace(".000", ""),
+        message_seq: i,
+        system_instructions: null as unknown,
+        output_messages: [
+          {
+            role: "assistant",
+            parts: [{ type: "text", content: `turn ${i}` }],
+          },
+        ],
+      }));
+    const calls = stubFetch();
+    const user = userEvent.setup();
+    renderWithProviders(<AuditPage />);
+
+    await openDrawer(user);
+    // Head first, then the last window — offset 10 of 60 with a 50-row page.
+    await waitFor(() => {
+      expect(calls.some((u) => u.includes("offset=10"))).toBe(true);
+    });
+    // The anchor is the true last turn, not the head page's edge.
+    expect(await screen.findByText("turn 59")).toBeInTheDocument();
+    expect(screen.getByText(/Showing 50 of 60 turns/)).toBeInTheDocument();
+  });
+
+  it("never claims the run ended when no later turn is recorded", async () => {
+    // A follow-up turn can be absent for a reason the drawer cannot see:
+    // decisions and messages reach ClickHouse by different paths, so the row
+    // may simply still be in the pipeline. Only the last MESSAGES row is
+    // after the decision, so dropping it leaves nothing following.
+    messageRows = () => MESSAGES.slice(0, 3);
+    stubFetch();
+    const user = userEvent.setup();
+    renderWithProviders(<AuditPage />);
+
+    await openDrawer(user);
+    expect(
+      await screen.findByText("No later turn recorded."),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/run ended/)).not.toBeInTheDocument();
+  });
+
+  it("when an input message carries reasoning then it is printed whole", async () => {
+    stubFetch();
+    const user = userEvent.setup();
+    renderWithProviders(<AuditPage />);
+
+    await openDrawer(user);
+    await user.click(await screen.findByText(/2 earlier turns/));
+
+    // Reasoning has no GenAI part to map onto and reaches the drawer as a
+    // carried-through item; it must not be blanked. It never appears in a
+    // completion — the SDK drops it there (issue #221) — so the drawer
+    // looks for no thinking part on the output side.
+    expect(
+      await screen.findByText(
+        (_, el) =>
+          el?.tagName === "PRE" &&
+          (el.textContent ?? "").includes("weighing the request"),
+      ),
+    ).toBeInTheDocument();
   });
 
   it("drawer renders the context attributes bag that drove the decision", async () => {
