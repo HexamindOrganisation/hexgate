@@ -5,7 +5,6 @@ what the SDK hands a callback, what comes out is what lands in the
 
 from __future__ import annotations
 
-
 from openai.types.responses import (
     ResponseFunctionToolCall,
     ResponseOutputMessage,

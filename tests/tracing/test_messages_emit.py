@@ -19,9 +19,8 @@ import hexgate.audit as audit_mod
 import hexgate.tracing.usage as usage_mod
 from hexgate.runtime import HexgateContext
 from hexgate.runtime.run_facts import run_scope
-from hexgate.tracing import _senders
+from hexgate.tracing import _senders, semconv
 from hexgate.tracing import messages as messages_mod
-from hexgate.tracing import semconv
 from hexgate.tracing.messages import LOG_MESSAGES_ENV, emit_llm_messages
 
 _INPUT = [{"role": "user", "parts": [{"type": "text", "content": "hi"}]}]

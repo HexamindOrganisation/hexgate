@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+from hexgate.runtime.run_facts import KNOWN_RUN_PATHS, RUN_PATH_TYPES, RunFacts
 from hexgate.security import (
     AgentPolicy,
     C,
@@ -15,9 +16,7 @@ from hexgate.security import (
     assert_needs_approval,
     run_namespace,
 )
-from hexgate.runtime.run_facts import KNOWN_RUN_PATHS, RUN_PATH_TYPES, RunFacts
 from hexgate.security.constraints import ConstraintParseError
-
 
 # ---------------------------------------------------------------------------
 # C — typed constraint constructors emit the grammar strings the parser accepts
