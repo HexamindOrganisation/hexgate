@@ -82,22 +82,12 @@ class HexgateUsageCallbackHandler(BaseCallbackHandler):
         """Identity of the *message list* this call extends.
 
         The Hexgate run id, not LangChain's ``run_id`` or ``parent_run_id``,
-        because those are UUIDv7s minted per callback and would mint a fresh
-        key every turn, restarting ``message_seq`` at 0 and re-sending the
-        conversation as a snapshot each time.
-
-        Knowingly coarser than one message list: a run that calls a second
-        model with its own list (a summariser node, an unwrapped sub-graph)
-        files those calls here too, and the two then resync against each other
-        — complete and flagged, but the delta's compression and per-list gap
-        detection are lost for that run. Nothing on the callback surface
-        identifies a message list, since ``checkpoint_ns`` and
-        ``langgraph_step`` change per node execution, so the alternative is a
-        key that changes every turn. A sub-agent in its own proxy is
-        unaffected, since its ``run_scope`` mints a new run id.
-
-        Outside a run scope the call becomes its own one-message list, which is
-        verbose but beats filing unrelated conversations under one key.
+        which are minted per callback and would restart ``message_seq`` at 0
+        every turn. Knowingly coarser than one message list — a run whose
+        summariser node or unwrapped sub-graph holds a second list files it
+        here too, and the two then resync against each other — because nothing
+        on the callback surface identifies a list. Outside a run scope each
+        call becomes its own list, verbose but never two conversations in one.
         """
         run = get_run_facts().id
         return f"{run or f'lc-{run_id}'}:{self._agent_name}"
@@ -105,17 +95,13 @@ class HexgateUsageCallbackHandler(BaseCallbackHandler):
     def end_run(self, turn_key: str) -> None:
         """Forget one finished run's cursor state and any stash it left behind.
 
-        The key is passed in rather than re-read from the run scope, because
-        ``astream`` puts this call inside an async generator that an early
-        ``break`` leaves to be finalized in a *different* Context — where
-        re-deriving it names whichever run is bound then, letting an abandoned
-        run reset a live run's cursor mid-run and drop its in-flight prompt.
-
-        The sweep is by ``turn_key`` rather than a wholesale clear, since one
-        handler serves concurrent runs. That names one message list, so an
-        agent invoked inside another one's graph leaves ~200 bytes per nested
-        run that nothing collects; closing it needs the cursor's eviction
-        contract to change rather than this method.
+        The key is passed in, never re-read here: ``astream`` puts this call
+        inside an async generator that an early ``break`` finalizes in a
+        *different* Context, where re-deriving it would name whichever run is
+        bound then and let an abandoned run reset a live one mid-run. Swept by
+        ``turn_key`` rather than cleared, since one handler serves concurrent
+        runs — which leaves ~200 bytes per *nested* run uncollected, closable
+        only by changing the cursor's eviction contract.
         """
         self._cursor.reset(turn_key)
         for run_id, prompt in list(self._pending.items()):
@@ -170,11 +156,9 @@ class HexgateUsageCallbackHandler(BaseCallbackHandler):
     async def on_llm_error(
         self, error: BaseException, *, run_id: UUID, **kwargs: Any
     ) -> None:
-        """Drop the stash of a call that failed, since no ``on_llm_end`` will.
-
-        The cursor is left untouched so the next call still measures its delta
-        against the last prompt that actually reached a model.
-        """
+        """Drop the stash of a call that failed, since no ``on_llm_end`` will;
+        the cursor is left untouched so the next call still measures its delta
+        against the last prompt that reached a model."""
         self._pending.pop(run_id, None)
 
     # --- Response side ------------------------------------------------------
@@ -247,13 +231,10 @@ class HexgateUsageCallbackHandler(BaseCallbackHandler):
 
 
 def _started_model(metadata: dict[str, Any] | None, kwargs: dict[str, Any]) -> str:
-    """The model id LangChain names on the *request* side, or ``""``, since the
-    request half always knows what it is calling while the response echoes one
-    only if the provider bothered.
-
-    ``ls_model_name`` is the standard metadata key every chat model stamps and
-    ``invocation_params`` the older shape.
-    """
+    """The model id LangChain names on the *request* side, or ``""`` — the
+    request half always knows what it is calling, while the response echoes a
+    model only if the provider bothered. ``invocation_params`` is the older
+    shape of the same thing."""
     if metadata and metadata.get("ls_model_name"):
         return str(metadata["ls_model_name"])
     params = kwargs.get("invocation_params") or {}
@@ -271,10 +252,8 @@ def _first_message(response: LLMResult) -> BaseMessage | None:
 def _model_name(response: LLMResult) -> str:
     """Read the model name off the response, ``response_metadata`` first
     because ``llm_output`` is ``None`` for a streamed one (confirmed against a
-    real streaming ``ChatOpenAI`` call, not assumed).
-
-    ``llm_output`` stays as the fallback for providers that fill only it.
-    """
+    real ``ChatOpenAI`` call, not assumed) and second for providers that fill
+    only the legacy field."""
     message = _first_message(response)
     response_metadata = getattr(message, "response_metadata", None) or {}
     return response_metadata.get("model_name") or (response.llm_output or {}).get(
