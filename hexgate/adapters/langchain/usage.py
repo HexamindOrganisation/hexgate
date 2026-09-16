@@ -52,7 +52,7 @@ class _Prompt(NamedTuple):
     """
 
     turn_key: str
-    messages: list[Any]
+    messages: list[BaseMessage | str]
     model: str
 
 
@@ -260,7 +260,7 @@ def _started_model(metadata: dict[str, Any] | None, kwargs: dict[str, Any]) -> s
     return str(params.get("model_name") or params.get("model") or "")
 
 
-def _first_message(response: LLMResult) -> Any:
+def _first_message(response: LLMResult) -> BaseMessage | None:
     """The ``AIMessage`` of the first generation, or ``None`` — a bare
     ``Generation`` from a non-chat LLM carries none, and neither does an empty
     result."""

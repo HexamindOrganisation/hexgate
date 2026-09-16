@@ -9,6 +9,7 @@ from __future__ import annotations
 from typing import Any
 
 from langchain_core.messages import BaseMessage
+from langchain_core.outputs import LLMResult
 
 from hexgate.adapters._messages import as_dict, text_part
 
@@ -66,7 +67,9 @@ def _promoted_call_ids(entry: dict[str, Any]) -> frozenset[str]:
     )
 
 
-def _content_parts(content: Any, promoted: frozenset[str]) -> list[dict[str, Any]]:
+def _content_parts(
+    content: str | list[str | dict] | None, promoted: frozenset[str]
+) -> list[dict[str, Any]]:
     """A message's ``content`` as GenAI parts.
 
     A non-text block (an image, a ``thinking`` block) is carried through whole
@@ -160,7 +163,7 @@ def input_message(message: BaseMessage | str) -> dict[str, Any]:
     }
 
 
-def output_messages(response: Any) -> list[dict[str, Any]]:
+def output_messages(response: LLMResult) -> list[dict[str, Any]]:
     """An ``LLMResult`` as the completion of the call that produced it.
 
     Only ``generations[0]`` belongs to this event, since ``generations`` is a
