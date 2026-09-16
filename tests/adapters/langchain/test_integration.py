@@ -177,15 +177,12 @@ def _transcript(
 async def test_tool_calling_run_records_the_conversation_as_llm_messages(
     hexgate_platform_env: HexgatePlatformEnv,
 ) -> None:
-    """The same two-turn run, read back through `llm_message`: the rows must
-    concatenate into the conversation the agent actually saw.
+    """The same two-turn run read back through `llm_message`, where the rows
+    must concatenate into the conversation the agent actually saw.
 
-    LangGraph hands the whole message list to every chat-model call, so turn
-    2's input must be just what the graph appended — the assistant's tool-call
-    message and the ToolMessage carrying its result — not a second copy of the
-    user's question. That delta is the whole point of the stream, and the tool
-    result is stored nowhere else: a policy_decision row records the call,
-    never its return value.
+    LangGraph hands the whole list to every call, so turn 2's input must be
+    only what the graph appended rather than a second copy of the question,
+    and the tool result in it is stored nowhere else.
     """
     agent_name = f"{AGENT_NAME_PREFIX}langchain_msg_{uuid.uuid4().hex[:8]}"
     session_id = f"s-{uuid.uuid4().hex[:8]}"
@@ -229,8 +226,8 @@ async def test_tool_calling_run_records_the_conversation_as_llm_messages(
 
     first, second = rows
 
-    # Turn 1: the user's question in, the tool call out. The system prompt is
-    # lifted out of the head of the list into its own field, first row only.
+    # Turn 1: question in, tool call out, with the system prompt lifted into
+    # its own field on this row only.
     assert first["system"] == [
         {"type": "text", "content": "You are a weather assistant."}
     ]
@@ -245,8 +242,7 @@ async def test_tool_calling_run_records_the_conversation_as_llm_messages(
     assert tool_call["name"] == "get_weather"
     assert tool_call["arguments"] == {"city": "Paris"}
 
-    # Turn 2: only what the graph appended since — the tool call and its
-    # result — then the model's answer.
+    # Turn 2: only what the graph appended since, then the model's answer.
     assert second["system"] is None
     assert [m["role"] for m in second["input"]] == ["assistant", "tool"]
     assert second["input"][1]["parts"][0]["response"] == "Paris: sunny, 21C"

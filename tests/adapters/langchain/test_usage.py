@@ -1,6 +1,5 @@
 """Tests for HexgateUsageCallbackHandler: usage extraction from LLMResult, and
-the ``on_chat_model_start`` → ``on_llm_end`` pair that turns a LangChain
-message list and its completion into one message event."""
+the ``on_chat_model_start`` → ``on_llm_end`` pair behind the message event."""
 
 from __future__ import annotations
 
@@ -15,7 +14,6 @@ from hexgate.adapters.langchain import usage as usage_mod
 from hexgate.adapters.langchain.usage import HexgateUsageCallbackHandler
 from hexgate.runtime import run_scope
 from hexgate.tracing.messages import LOG_MESSAGES_ENV
-
 
 USAGE = {"input_tokens": 10, "output_tokens": 20, "total_tokens": 30}
 
@@ -61,9 +59,8 @@ def emitted(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
 
 @pytest.fixture(autouse=True)
 def messages(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
-    """Capture emit_llm_messages() calls. Autouse so no test that drives the
-    handler can reach the real emit, which would build an OTLP sender for the
-    fake api_key."""
+    """Capture emit_llm_messages() calls, autouse so no test reaches the real
+    emit and builds an OTLP sender for the fake api_key."""
     calls: list[dict[str, Any]] = []
 
     def fake_emit(
@@ -103,8 +100,8 @@ async def _turn(
     *,
     run_id: UUID | None = None,
 ) -> None:
-    """One full LLM call: start with ``prompt``, end with ``completion``. A
-    fresh ``run_id`` each time, as LangChain mints one per model call."""
+    """One full LLM call, with a fresh ``run_id`` as LangChain mints one per
+    model call."""
     call_id = run_id or uuid4()
     await handler.on_chat_model_start(
         {}, [prompt], run_id=call_id, metadata={"ls_model_name": "gpt-4o"}
@@ -157,8 +154,8 @@ async def test_on_llm_end_happy_path(emitted: list[dict[str, Any]]) -> None:
 async def test_when_only_the_legacy_token_usage_is_set_then_it_is_used(
     emitted: list[dict[str, Any]],
 ) -> None:
-    """Providers that don't populate the standardized UsageMetadata field still
-    report usage via the legacy llm_output shape."""
+    """Providers that skip the standardized UsageMetadata field still report
+    usage via the legacy llm_output shape."""
     await _handler().on_llm_end(
         _result(
             llm_output={
@@ -189,9 +186,8 @@ async def test_when_streaming_then_the_model_comes_from_response_metadata(
     emitted: list[dict[str, Any]],
 ) -> None:
     """Streaming aggregates llm_output to None (confirmed against a real
-    streaming ChatOpenAI call). model_name must still come from the per-message
-    response_metadata, which streaming does populate — not "" , which the
-    platform's schema rejects (min_length=1)."""
+    ChatOpenAI call), so model_name must come from response_metadata rather
+    than "" , which the platform's schema rejects (min_length=1)."""
     message = AIMessage(
         content="hi",
         usage_metadata=USAGE,
@@ -210,8 +206,8 @@ async def test_when_streaming_then_the_model_comes_from_response_metadata(
 async def test_on_llm_end_emits_messages_happy_path(
     messages: list[dict[str, Any]],
 ) -> None:
-    """The prompt stashed by ``on_chat_model_start`` and the completion seen by
-    ``on_llm_end`` leave as one event, under a key naming the Hexgate run."""
+    """The stashed prompt and the completion leave as one event, under a key
+    naming the Hexgate run."""
     handler = _handler()
 
     with run_scope("my-agent") as facts:
@@ -225,8 +221,8 @@ async def test_on_llm_end_emits_messages_happy_path(
     assert event["turn_key"] == f"{facts.id}:my-agent"
     assert (event["message_seq"], event["resynced"]) == (0, False)
     assert (event["model"], event["api_key"]) == ("gpt-4o", "k")
-    # The system prompt is lifted out of the list into its own capped field —
-    # LangChain has no separate system-prompt argument.
+    # Lifted into its own capped field, since LangChain has no system-prompt
+    # argument.
     assert event["system_instructions"] == [{"type": "text", "content": "Be terse."}]
     assert event["input_messages"] == [
         {"role": "user", "parts": [{"type": "text", "content": "Weather?"}]}
@@ -240,9 +236,9 @@ async def test_on_llm_end_emits_messages_happy_path(
 async def test_when_a_second_call_extends_the_list_then_only_the_delta_is_sent(
     messages: list[dict[str, Any]],
 ) -> None:
-    """LangGraph hands the whole conversation to every call. Re-sending it
-    would store the transcript once per turn, and the tool result in the delta
-    is stored nowhere else — a decision row records the call, not its return."""
+    """LangGraph hands the whole conversation to every call, so re-sending it
+    would store the transcript once per turn; the tool result in the delta is
+    stored nowhere else, since a decision row records the call, not its return."""
     handler = _handler()
     first = [SystemMessage(content="Be terse."), HumanMessage(content="Weather?")]
 
@@ -266,9 +262,8 @@ async def test_when_a_second_call_extends_the_list_then_only_the_delta_is_sent(
 async def test_when_the_framework_trimmed_the_list_then_the_event_is_resynced(
     messages: list[dict[str, Any]],
 ) -> None:
-    """Chains drop old turns to fit the context window. Slicing at a mark that
-    no longer means anything would emit the wrong tail, so the whole list goes
-    out flagged instead."""
+    """Chains drop old turns to fit the context window, so slicing at a mark
+    that no longer means anything would emit the wrong tail."""
     handler = _handler()
 
     with run_scope("my-agent"):
@@ -288,9 +283,8 @@ async def test_when_the_framework_trimmed_the_list_then_the_event_is_resynced(
 async def test_when_two_runs_share_a_handler_then_turn_keys_differ(
     messages: list[dict[str, Any]],
 ) -> None:
-    """One handler serves every call a proxy makes, unlike the OpenAI adapter's
-    per-run hooks. Keyed on anything the two runs shared, run 2's first call
-    would look like a continuation of run 1."""
+    """One handler serves every call a proxy makes, so keyed on anything the
+    two runs shared, run 2's first call would continue run 1."""
     handler = _handler()
 
     for _ in range(2):
@@ -307,7 +301,7 @@ async def test_when_two_runs_share_a_handler_then_turn_keys_differ(
 
 @pytest.mark.asyncio
 async def test_end_run_happy_path() -> None:
-    """Without it, the state of every run the process ever made would
+    """Without it the state of every run the process ever made would
     accumulate for its lifetime."""
     handler = _handler()
 
@@ -325,10 +319,9 @@ async def test_end_run_happy_path() -> None:
 async def test_when_a_run_ends_in_a_foreign_context_then_a_live_run_is_untouched(
     messages: list[dict[str, Any]],
 ) -> None:
-    """``astream`` puts ``end_run`` inside an async generator, which a consumer
-    breaking out early leaves to be finalized in a different Context — where
-    re-reading the run scope would name whichever run is bound then. The key is
-    captured on the way in, so an abandoned run cannot reset a live one."""
+    """``astream`` puts ``end_run`` inside an async generator that an early
+    break finalizes in a different Context, so the key is captured on the way
+    in and an abandoned run cannot reset a live one."""
     handler = _handler()
 
     with run_scope("my-agent"):
@@ -361,10 +354,9 @@ async def test_when_message_logging_is_off_then_only_usage_is_emitted(
     emitted: list[dict[str, Any]],
     messages: list[dict[str, Any]],
 ) -> None:
-    """The opt-out must not reach into usage — including the model, which rides
-    on the same stash as the prompt. Only the prompt is gated, or a provider
-    echoing no model_name would put every opted-out project's tokens into one
-    "default" bucket."""
+    """The opt-out must not reach into usage, including the model that rides
+    on the same stash, or a provider echoing no model_name would put every
+    opted-out project's tokens into one "default" bucket."""
     monkeypatch.setenv(LOG_MESSAGES_ENV, "0")
     handler = _handler()
     run_id = uuid4()
@@ -389,8 +381,8 @@ async def test_when_the_response_names_no_model_then_the_request_side_one_is_use
     emitted: list[dict[str, Any]],
     messages: list[dict[str, Any]],
 ) -> None:
-    """The request half always knows which model it is about to call; the
-    response carries one only if the provider echoed it."""
+    """The request half always knows what it is calling, while the response
+    carries a model only if the provider echoed it."""
     handler = _handler()
     run_id = uuid4()
 
@@ -411,8 +403,8 @@ async def test_when_the_response_names_no_model_then_the_request_side_one_is_use
 async def test_when_nothing_names_a_model_then_a_placeholder_is_used(
     messages: list[dict[str, Any]],
 ) -> None:
-    """The platform rejects an empty ``model`` outright (min_length=1), which
-    would drop the whole event over its least interesting field."""
+    """The platform rejects an empty ``model`` (min_length=1) and would drop
+    the whole event over its least interesting field."""
     with run_scope("my-agent"):
         await _handler().on_llm_end(_result(), run_id=uuid4())
 
@@ -426,8 +418,8 @@ async def test_when_nothing_names_a_model_then_a_placeholder_is_used(
 async def test_when_the_prompt_was_not_stashed_then_the_completion_still_lands(
     messages: list[dict[str, Any]],
 ) -> None:
-    """A handler attached mid-stream sees an ``on_llm_end`` whose start it
-    missed. An empty input beside a real completion beats no row at all."""
+    """A handler attached mid-stream misses the start, and an empty input
+    beside a real completion beats no row at all."""
     with run_scope("my-agent"):
         await _handler().on_llm_end(
             _result(message=AIMessage(content="Sunny.")), run_id=uuid4()
@@ -443,8 +435,8 @@ async def test_when_the_prompt_was_not_stashed_then_the_completion_still_lands(
 async def test_when_the_call_failed_then_its_stash_is_dropped(
     messages: list[dict[str, Any]],
 ) -> None:
-    """No ``on_llm_end`` follows a provider error, so the stash would sit there
-    for the life of the proxy."""
+    """No ``on_llm_end`` follows a provider error, so the stash would sit
+    there for the life of the proxy."""
     handler = _handler()
     run_id = uuid4()
 
@@ -486,8 +478,8 @@ async def test_when_converting_raises_then_the_event_is_dropped_not_the_run(
 async def test_when_the_model_is_not_a_chat_model_then_prompts_are_still_logged(
     messages: list[dict[str, Any]],
 ) -> None:
-    """``on_llm_start`` is the non-chat path: bare prompt strings in, and a
-    bare ``Generation`` with no ``.message`` on the way back."""
+    """``on_llm_start`` is the non-chat path, with bare prompt strings in and
+    a ``Generation`` carrying no ``.message`` on the way back."""
     handler = _handler()
     run_id = uuid4()
 

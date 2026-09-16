@@ -628,11 +628,9 @@ async def test_usage_handler_context_propagates_when_caller_opens_user_scope(
 
 @pytest.mark.asyncio
 async def test_hexgate_agent_ainvoke_drops_the_runs_transcript_state() -> None:
-    """The usage/message callback handler lives as long as the runtime, so
-    every run method owes ``MessageCursor`` a reset — otherwise the per-run
-    state of every run the process ever made accumulates for its lifetime.
-    ``HexgateLangchainAgent`` pays it at its own run boundary; this path opens
-    its own ``run_scope`` and has to pay it too."""
+    """The handler lives as long as the runtime, so every run method owes
+    ``MessageCursor`` a reset or the state of every run the process ever made
+    accumulates for its lifetime."""
     from hexgate.runtime import HexgateContext
 
     graph = FakeAgent()

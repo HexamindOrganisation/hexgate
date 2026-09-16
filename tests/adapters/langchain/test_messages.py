@@ -71,8 +71,8 @@ def test_when_the_message_is_X_then_the_role_is_Y(message: Any, role: str) -> No
 
 
 def test_when_ai_message_calls_a_tool_then_a_tool_call_part_is_emitted() -> None:
-    """Empty ``content`` contributes no part: a tool-calling turn normally has
-    no text, and an empty text part would be noise on every such row."""
+    """Empty ``content`` contributes no part, since a tool-calling turn
+    normally has no text and an empty one would be noise on every such row."""
     message = AIMessage(content="", tool_calls=[_tool_call()])
 
     assert input_message(message) == {
@@ -98,8 +98,8 @@ def test_when_ai_message_has_text_and_a_tool_call_then_both_parts_survive() -> N
 
 
 def test_when_a_tool_call_failed_to_parse_then_it_is_kept_with_its_error() -> None:
-    """A model that asked for a tool in malformed JSON is exactly what a reader
-    is trying to explain, so the raw string and the error both survive."""
+    """The raw string and the error both survive, since a tool call in
+    malformed JSON is exactly what a reader is trying to explain."""
     message = AIMessage(
         content="",
         invalid_tool_calls=[
@@ -121,9 +121,8 @@ def test_when_a_tool_call_failed_to_parse_then_it_is_kept_with_its_error() -> No
 @pytest.mark.parametrize(
     ("message", "kinds"),
     [
-        # Promoted into the standardized field, so the block would be a second
-        # copy of one call under a different id (the block carries the
-        # output-item id, the part the call id a ToolMessage correlates on).
+        # Promoted, so the block would be a second copy of one call under a
+        # different id than the part a ToolMessage correlates on.
         pytest.param(
             AIMessage(
                 content=[{"type": "function_call", "call_id": "call_1", "id": "fc_1"}],
@@ -140,9 +139,8 @@ def test_when_a_tool_call_failed_to_parse_then_it_is_kept_with_its_error() -> No
             ["tool_call"],
             id="anthropic-promoted",
         ),
-        # Nothing promoted it, so the block is the only record there is — an
-        # un-translated provider shape, a hand-built message, a replayed
-        # transcript. Dropping by block *type* would lose the call entirely.
+        # Unpromoted, so the block is the only record and dropping by *type*
+        # would lose the call entirely.
         pytest.param(
             AIMessage(
                 content=[{"type": "function_call", "call_id": "call_1", "id": "fc_1"}]
@@ -150,8 +148,8 @@ def test_when_a_tool_call_failed_to_parse_then_it_is_kept_with_its_error() -> No
             ["function_call"],
             id="orphan-block",
         ),
-        # Per call id, not per message: a partially translated message keeps
-        # the half with no standardized counterpart.
+        # Per call id, so a partially translated message keeps the half with
+        # no standardized counterpart.
         pytest.param(
             AIMessage(
                 content=[
@@ -163,10 +161,8 @@ def test_when_a_tool_call_failed_to_parse_then_it_is_kept_with_its_error() -> No
             ["tool_use", "tool_call"],
             id="one-of-two-promoted",
         ),
-        # ToolCall.id is str | None. Matching on a truthy id would leave an
-        # id-less block matching nothing and going out beside the part built
-        # from the very same call — two tool_call parts, nothing to tell them
-        # apart, which is the double-record the rule exists to prevent.
+        # ToolCall.id is str | None, so matching on a truthy id would leave an
+        # id-less block going out beside the part built from the same call.
         pytest.param(
             AIMessage(
                 content=[{"type": "tool_use", "name": "get_weather"}],
@@ -175,8 +171,8 @@ def test_when_a_tool_call_failed_to_parse_then_it_is_kept_with_its_error() -> No
             ["tool_call"],
             id="both-id-less",
         ),
-        # The provider ran this one itself, so it never reaches tool_calls and
-        # the block is the only record of it.
+        # Provider-run, so it never reaches tool_calls and the block is the
+        # only record of it.
         pytest.param(
             AIMessage(content=[{"type": "server_tool_use", "id": "s1"}]),
             ["server_tool_use"],
@@ -198,16 +194,16 @@ def test_a_tool_call_block_is_dropped_only_when_the_standardized_field_repeats_i
             "call_1",
             "get_weather",
         ),
-        # FunctionMessage has no tool_call_id field at all, so ``name`` is the
-        # only thing saying which call this answers.
+        # FunctionMessage has no tool_call_id, so ``name`` is the only thing
+        # saying which call this answers.
         (FunctionMessage(content="21C", name="get_weather"), "", "get_weather"),
     ],
 )
 def test_a_tool_result_becomes_a_tool_call_response(
     message: BaseMessage, call_id: str, name: str
 ) -> None:
-    """The only place a tool's return value is stored: a policy_decision row
-    records the call, never what came back."""
+    """The only place a tool's return value is stored, since a policy_decision
+    row records the call but never what came back."""
     assert input_message(message) == {
         "role": "tool",
         "parts": [
@@ -227,9 +223,8 @@ def test_a_tool_result_becomes_a_tool_call_response(
 @pytest.mark.parametrize(
     ("content", "parts"),
     [
-        # Multimodal: the text collapses into a GenAI text part and the image
-        # is carried through whole — dropping it would lose exactly the
-        # attachment an investigator came for.
+        # The image is carried through whole, since dropping it would lose
+        # exactly the attachment an investigator came for.
         (
             [{"type": "text", "text": "Describe this"}, {"type": "image_url"}],
             [{"type": "text", "content": "Describe this"}, {"type": "image_url"}],
@@ -290,8 +285,8 @@ def test_when_the_completion_is_a_tool_call_then_it_is_a_tool_call_part() -> Non
 
 
 def test_split_system_instructions_happy_path() -> None:
-    """LangChain keeps the system prompt at the head of the list; the wire
-    contract carries it in its own field, so it is lifted rather than copied."""
+    """Lifted rather than copied, since LangChain keeps the system prompt at
+    the head of the list while the wire contract gives it its own field."""
     user = {"role": "user", "parts": [text_part("Hi")]}
     messages = [{"role": "system", "parts": [text_part("Be terse.")]}, user]
 
@@ -302,7 +297,7 @@ def test_split_system_instructions_happy_path() -> None:
     "messages",
     [
         pytest.param([{"role": "user", "parts": []}], id="no-system-message"),
-        # Only the leading run is instructions. One injected later is part of
+        # Only the leading run is instructions; one injected later is part of
         # the exchange and belongs where it happened.
         pytest.param(
             [{"role": "user", "parts": []}, {"role": "system", "parts": []}],
