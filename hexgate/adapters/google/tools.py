@@ -28,7 +28,6 @@ from hexgate.security.enforcer import PolicyEnforcer
 from hexgate.security.models import agent_target_key
 from hexgate.security.naming import canonical_name
 
-
 ToolEntry = Union[BaseTool, Callable[..., Any]]
 
 

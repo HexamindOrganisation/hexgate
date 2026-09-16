@@ -11,6 +11,8 @@ from collections.abc import Callable
 
 import pytest
 
+from hexgate.runtime.roles import MAX_EVALUATED_ROLES
+from hexgate.runtime.run_facts import RunFacts
 from hexgate.security.decision import (
     DETACHED_RUN,
     Decision,
@@ -19,8 +21,6 @@ from hexgate.security.decision import (
     Verdict,
     combine_role_verdicts,
 )
-from hexgate.runtime.roles import MAX_EVALUATED_ROLES
-from hexgate.runtime.run_facts import RunFacts
 from hexgate.tracing import semconv
 
 

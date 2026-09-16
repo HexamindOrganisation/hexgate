@@ -21,8 +21,8 @@ from hexgate.security.compose.grammar import (
     Entry,
     _GrantScope,
 )
-from hexgate.security.module_loader import _canonical_hash
 from hexgate.security.models import AgentPolicy, AgentTargetPolicy, BaseToolPolicy
+from hexgate.security.module_loader import _canonical_hash
 from hexgate.security.modules import DEFAULT_AGENT, ModuleContent
 from hexgate.security.policy_set import DEFAULT_ROLE_NAME
 

@@ -34,8 +34,8 @@ from hexgate_api.core.clickhouse import (  # noqa: E402
 from hexgate_api.features.audit.service import (  # noqa: E402
     _ANOMALY_MIN_REQUESTS,
     _DECISION_COLUMNS,
-    _decision_row,
     _TIMEDELTA_ANOMALY_HOURS,
+    _decision_row,
 )
 from hexgate_api.schemas import AuditOutcome, DecisionEvent  # noqa: E402
 
