@@ -421,9 +421,20 @@ class MessageCursor:
         # two dict operations.
         self._lock = threading.Lock()
 
-    def advance(self, turn_key: str, messages: list[Any]) -> MessageDelta:
+    def advance(self, turn_key: str, messages: list[Any]) -> MessageDelta | None:
         """Record ``messages`` as the current state of ``turn_key`` and return
-        what is new since the last call.
+        what is new since the last call, or ``None`` when there is nothing to
+        record.
+
+        ``None`` for an empty list, which means the caller never saw a prompt
+        — a hook pair whose request half did not land — rather than a model
+        genuinely called with no messages, which no framework does. Returning
+        a delta there would be destructive: the mark goes to "unmatchable" and
+        the seq is spent, so the next real prompt resyncs at seq 1 instead of
+        starting clean at 0, and ``seq == 0`` is the only event an adapter
+        lifts ``system_instructions`` on. The mark is left untouched rather
+        than cleared — a cleared turn_key is byte-identical to one never seen,
+        which would slice the comeback from zero and emit the history twice.
 
         Extension is the normal case: the prefix we last emitted is still
         there, so everything past the mark is new. Otherwise the framework
@@ -441,6 +452,8 @@ class MessageCursor:
         place" already means on the wire, and it costs a bigger event, not a
         wrong one.
         """
+        if not messages:
+            return None
         with self._lock:
             state = self._turns.get(turn_key, _FRESH_TURN)
             try:

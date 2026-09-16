@@ -564,23 +564,25 @@ async def test_when_conversion_raises_then_the_run_is_not_broken(
 
 
 @pytest.mark.asyncio
-async def test_when_the_prompt_was_not_stashed_then_the_completion_still_lands(
+async def test_when_the_prompt_was_not_stashed_then_nothing_is_emitted(
     emitted: list[dict[str, Any]], messages: list[dict[str, Any]]
 ) -> None:
-    """Every delta asked for must be emitted, empty input included — the seq
-    is spent either way, and a reader is specified to read a hole as a lost
-    row."""
+    """No prompt means no delta to ask the cursor for. Emitting the completion
+    beside an empty input would spend seq 0, and that is the only event
+    ``system_instructions`` rides on."""
     hooks = HexgateUsageHooks(api_key="k")
-    agent = Agent(name="my-agent", model="gpt-4o")
+    agent = Agent(name="my-agent", model="gpt-4o", instructions="Be terse.")
 
+    await hooks.on_llm_end(context=object(), agent=agent, response=_response())
+    assert messages == []
+
+    # The next real call is still this turn's first event.
+    await hooks.on_llm_start(object(), agent, "Be terse.", [_user("Weather?")])
     await hooks.on_llm_end(context=object(), agent=agent, response=_response())
 
     [call] = messages
-    assert call["input_messages"] == []
     assert call["message_seq"] == 0
-    assert call["output_messages"] == [
-        {"role": "assistant", "parts": [{"type": "text", "content": "Sunny, 24C."}]}
-    ]
+    assert call["system_instructions"] == [{"type": "text", "content": "Be terse."}]
 
 
 @pytest.mark.asyncio
@@ -619,6 +621,7 @@ async def test_when_there_is_no_run_scope_then_the_turn_key_is_still_unique(
 
     for _ in range(2):
         hooks = HexgateUsageHooks(api_key="k")
+        await hooks.on_llm_start(object(), agent, None, [_user("Weather?")])
         await hooks.on_llm_end(context=object(), agent=agent, response=_response())
 
     assert messages[0]["turn_key"] != messages[1]["turn_key"]
