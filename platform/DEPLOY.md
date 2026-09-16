@@ -249,8 +249,10 @@ make platform-up STAGE=<stage>        # rebuilds changed images, recreates conta
 
 `platform-migrate` runs first on purpose and is safe to run on every upgrade:
 the files are idempotent, so a release that adds no column replays them to no
-effect. Reversing the two is an outage, not a slower path (see below). Skip it
-only on a first-ever deploy, where there is no existing schema to alter.
+effect. Reversing the two is an outage, not a slower path (see below). Run it
+unconditionally — including a first-ever deploy, where every Postgres file
+guards each table it touches and skips with a `NOTICE` rather than failing on
+one `create_all` has not built yet.
 
 **Read the last line of the run, not the last file it named.** The two stores
 are applied independently — a Postgres failure no longer skips ClickHouse — and

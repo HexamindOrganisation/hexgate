@@ -439,9 +439,12 @@ platform-stop-writers: _require-stage-env ## Stop api + enricher ahead of a migr
 # take OTLP ingest down. Every file is idempotent, so replaying the whole
 # directory is a no-op when there is nothing new. See platform/DEPLOY.md § 6.
 #
-# Upgrades only: the Postgres files ALTER tables the control plane has already
-# created, so on a first-ever deploy there is nothing to migrate (create_all
-# builds the current schema) and this fails on the missing table. Skip it there.
+# Unconditional, including a first-ever deploy: every Postgres file guards each
+# table it touches with to_regclass and skips with a NOTICE when create_all has
+# not built it yet. That used to be "upgrades only, skip it there" -- an
+# operating procedure that depended on the operator knowing how far behind a
+# stage was, and the reason prod stopped on `relation "policy_file" does not
+# exist`. It is a property of the files now.
 # The ClickHouse files are IF NOT EXISTS throughout, so replaying the whole
 # directory on every upgrade is a no-op once applied; a table the API or
 # enricher checks at boot (core.clickhouse.verify_all) must exist BEFORE

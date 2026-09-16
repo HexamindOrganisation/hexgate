@@ -7,9 +7,23 @@
 --
 -- Same conventions as 0002: no REFERENCES clause, NULL means "no human actor",
 -- idempotent. Apply BEFORE deploying the code that reads the columns.
+--
+-- GUARDED, and this is the file that proved why. On prod -- a stack predating
+-- #179 -- the bare ALTER below failed with `relation "policy_file" does not
+-- exist`, and because platform-migrate stopped there, every ClickHouse
+-- migration was skipped with it. `ADD COLUMN IF NOT EXISTS` guards the COLUMN,
+-- not the table. See plans/migration/ for the convention: every migration
+-- guards each table it touches.
 
 -- policy_file --------------------------------------------------------------
 -- updated_at already exists, and NULL is the correct actor for every row
 -- written before this, so no backfill.
-ALTER TABLE policy_file ADD COLUMN IF NOT EXISTS created_by_user_id varchar;
-ALTER TABLE policy_file ADD COLUMN IF NOT EXISTS updated_by_user_id varchar;
+DO $$
+BEGIN
+  IF to_regclass('public.policy_file') IS NULL THEN
+    RAISE NOTICE 'policy_file absent -- create_all builds it complete; skipping';
+    RETURN;
+  END IF;
+  ALTER TABLE policy_file ADD COLUMN IF NOT EXISTS created_by_user_id varchar;
+  ALTER TABLE policy_file ADD COLUMN IF NOT EXISTS updated_by_user_id varchar;
+END $$;
