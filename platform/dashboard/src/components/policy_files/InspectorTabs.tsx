@@ -76,6 +76,7 @@ export function InspectorTabs({
   resolves,
   modular,
   previewing,
+  agentNames,
   inspectAgent,
   onInspectAgentChange,
 }: {
@@ -86,6 +87,7 @@ export function InspectorTabs({
   resolves: boolean;
   modular: boolean;
   previewing: boolean;
+  agentNames: string[];
   inspectAgent: string;
   onInspectAgentChange: (agent: string) => void;
 }) {
@@ -153,6 +155,7 @@ export function InspectorTabs({
             resolves={resolves}
             modular={modular}
             roleNames={roleNames}
+            agentNames={agentNames}
             inspectAgent={inspectAgent}
             onInspectAgentChange={onInspectAgentChange}
           />
@@ -217,6 +220,7 @@ function ResolvedTab({
   resolves,
   modular,
   roleNames,
+  agentNames,
   inspectAgent,
   onInspectAgentChange,
 }: {
@@ -224,24 +228,11 @@ function ResolvedTab({
   resolves: boolean;
   modular: boolean;
   roleNames: string[];
+  agentNames: string[];
   inspectAgent: string;
   onInspectAgentChange: (agent: string) => void;
 }) {
   const [role, setRole] = useState<string>("");
-  // Local buffer so typing the agent name doesn't fire a resolve+preview
-  // round-trip per keystroke — commit on blur / Enter instead. Re-sync to the
-  // prop when it changes externally (e.g. a project switch resets it) via the
-  // render-phase adjust-on-prop-change pattern.
-  const [agentInput, setAgentInput] = useState(inspectAgent);
-  const [syncedAgent, setSyncedAgent] = useState(inspectAgent);
-  if (inspectAgent !== syncedAgent) {
-    setSyncedAgent(inspectAgent);
-    setAgentInput(inspectAgent);
-  }
-  const commitAgent = () => {
-    const v = agentInput.trim() || "*";
-    if (v !== inspectAgent) onInspectAgentChange(v);
-  };
   const [view, setView] = useState<"table" | "yaml">("table");
   const active = roleNames.includes(role) ? role : (roleNames[0] ?? "");
 
@@ -274,23 +265,21 @@ function ResolvedTab({
     <div className="h-full flex flex-col">
       {/* Which executing agent's column to inspect. "*" is the generic view; a
           named agent shows its own composed policy (a sub-agent it may reach, a
-          capability it's denied). Committed on blur / Enter, so the resolve +
-          preview fire once per agent, not per keystroke. */}
+          capability it's denied). The options are every agent the entry declares,
+          plus the current value if it's since been removed. */}
       <div className="flex items-center gap-2 px-3 py-1.5 border-b border-border/60 text-[11px]">
         <span className="text-muted-foreground">Agent</span>
-        <input
-          value={agentInput}
-          onChange={(e) => setAgentInput(e.target.value)}
-          onBlur={commitAgent}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") {
-              commitAgent();
-              e.currentTarget.blur();
-            }
-          }}
-          placeholder="*"
-          className="w-32 rounded border border-border bg-background px-1.5 py-0.5 font-mono text-[11px]"
-        />
+        <select
+          value={inspectAgent}
+          onChange={(e) => onInspectAgentChange(e.target.value)}
+          className="w-40 rounded border border-border bg-background px-1.5 py-0.5 font-mono text-[11px]"
+        >
+          {Array.from(new Set(["*", ...agentNames, inspectAgent])).map((a) => (
+            <option key={a} value={a}>
+              {a === "*" ? "* (generic)" : a}
+            </option>
+          ))}
+        </select>
       </div>
       <div className="flex items-center justify-between gap-2 px-3 py-2 border-b border-border">
         <div className="flex flex-wrap items-center gap-1 min-w-0">

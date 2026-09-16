@@ -64,23 +64,26 @@ export function FileTree({
   const del = useDeleteFile(projectId);
   const [adding, setAdding] = useState(false);
   const [newName, setNewName] = useState("");
-  const [addingFolder, setAddingFolder] = useState(false);
-  const [folderName, setFolderName] = useState("");
+  // Where an inline new-folder row is open: null = none, "" = at the root, a
+  // prefix = inside that folder. The row shows up in the tree at that spot.
+  const [addFolderPrefix, setAddFolderPrefix] = useState<string | null>(null);
+  const [folderDraft, setFolderDraft] = useState("");
 
   const known = new Set(files.map((f) => f.name));
 
   function startAdd(prefix = "") {
-    setAddingFolder(false);
+    setAddFolderPrefix(null);
     setNewName(prefix ? `${prefix}/` : "");
     setAdding(true);
   }
 
-  // Open the new-folder input, pre-filled with `prefix/` so the folder is
-  // created under `prefix` (empty prefix → a top-level folder).
+  // Open an inline new-folder row at `prefix` (empty prefix → a top-level
+  // folder). The row renders in the tree where the folder will land, and takes
+  // just the leaf name.
   function startAddFolder(prefix = "") {
     setAdding(false);
-    setFolderName(prefix ? `${prefix}/` : "");
-    setAddingFolder(true);
+    setFolderDraft("");
+    setAddFolderPrefix(prefix);
   }
 
   function submitNew() {
@@ -96,12 +99,20 @@ export function FileTree({
   }
 
   function submitFolder() {
-    const prefix = folderName.trim();
-    setAddingFolder(false);
-    setFolderName("");
-    // onAddFolder (useEmptyFolders) normalizes slashes and rejects non-empty
-    // prefixes, so just hand it the raw name.
-    if (prefix) onAddFolder(prefix);
+    const leaf = folderDraft.trim().replace(/^\/+|\/+$/g, "");
+    const prefix = addFolderPrefix;
+    setAddFolderPrefix(null);
+    setFolderDraft("");
+    // Join the leaf under the target prefix (root when prefix is ""); onAddFolder
+    // (useEmptyFolders) normalizes slashes.
+    if (leaf && prefix !== null) {
+      onAddFolder(prefix ? `${prefix}/${leaf}` : leaf);
+    }
+  }
+
+  function cancelFolder() {
+    setAddFolderPrefix(null);
+    setFolderDraft("");
   }
 
   function remove(name: string) {
@@ -134,6 +145,11 @@ export function FileTree({
     onRemoveFolder: canManage ? onRemoveFolder : undefined,
     onRename: canManage ? onRename : undefined,
     onMove: canManage ? move : undefined,
+    addFolderPrefix,
+    folderDraft,
+    onFolderDraftChange: setFolderDraft,
+    onSubmitFolder: submitFolder,
+    onCancelFolder: cancelFolder,
     dirtyKeys,
   };
 
@@ -173,26 +189,6 @@ export function FileTree({
           if (canManage && name) move(name, "");
         }}
       >
-        {addingFolder && (
-          <div className="px-2 py-1">
-            <input
-              autoFocus
-              value={folderName}
-              onChange={(e) => setFolderName(e.target.value)}
-              onBlur={submitFolder}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") submitFolder();
-                if (e.key === "Escape") {
-                  setAddingFolder(false);
-                  setFolderName("");
-                }
-              }}
-              placeholder="e.g. caps"
-              aria-label="New folder name"
-              className="w-full rounded border border-border bg-background px-1.5 py-1 text-xs focus:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-            />
-          </div>
-        )}
         {adding && (
           <div className="px-2 py-1">
             <input
@@ -213,7 +209,20 @@ export function FileTree({
             />
           </div>
         )}
-        {files.length === 0 && emptyFolders.length === 0 && !adding ? (
+        {/* A root-level new-folder row appears at the top of the tree. */}
+        {addFolderPrefix === "" && (
+          <NewFolderRow
+            depth={0}
+            value={folderDraft}
+            onChange={setFolderDraft}
+            onSubmit={submitFolder}
+            onCancel={cancelFolder}
+          />
+        )}
+        {files.length === 0 &&
+        emptyFolders.length === 0 &&
+        !adding &&
+        addFolderPrefix === null ? (
           <p className="px-3 py-2 text-xs text-muted-foreground">
             No files yet. Add a <span className="font-mono">{ENTRY_FILE}</span>{" "}
             to start.
@@ -233,6 +242,56 @@ export function FileTree({
   );
 }
 
+/** An inline, folder-styled row with an editable name, shown in the tree where a
+ * new folder will be created — so making a folder reads as a folder appearing in
+ * place, not a detached input bar. Takes just the leaf name. */
+function NewFolderRow({
+  depth,
+  value,
+  onChange,
+  onSubmit,
+  onCancel,
+}: {
+  depth: number;
+  value: string;
+  onChange: (v: string) => void;
+  onSubmit: () => void;
+  onCancel: () => void;
+}) {
+  // Enter/blur both fire, and unmounting on submit/cancel triggers a trailing
+  // blur — commit once so the folder isn't created twice (or after Escape).
+  const done = useRef(false);
+  const submit = () => {
+    if (done.current) return;
+    done.current = true;
+    onSubmit();
+  };
+  return (
+    <div
+      style={{ paddingLeft: `${depth * 12 + 8}px` }}
+      className="flex items-center gap-1 py-1 pr-2 text-xs text-muted-foreground"
+    >
+      <ChevronDown className="size-3 shrink-0" />
+      <input
+        autoFocus
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        onBlur={submit}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") submit();
+          if (e.key === "Escape") {
+            done.current = true; // suppress the unmount blur
+            onCancel();
+          }
+        }}
+        placeholder="folder name"
+        aria-label="New folder name"
+        className="min-w-0 flex-1 rounded border border-border bg-background px-1.5 py-0.5 text-xs focus:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+      />
+    </div>
+  );
+}
+
 /** The per-row callbacks + selection, bundled to avoid threading a dozen props
  * through the recursive rows. Absent callbacks (no manage rights) hide their
  * affordance. */
@@ -245,6 +304,14 @@ interface TreeActions {
   onRemoveFolder?: (prefix: string) => void;
   onRename?: (oldName: string, newName: string) => void;
   onMove?: (oldName: string, destPrefix: string) => void;
+  // Inline new-folder row: which prefix it's open at (null = closed), its draft
+  // value, and the commit/cancel handlers. A folder row whose prefix matches
+  // renders the row among its children.
+  addFolderPrefix: string | null;
+  folderDraft: string;
+  onFolderDraftChange: (v: string) => void;
+  onSubmitFolder: () => void;
+  onCancelFolder: () => void;
   dirtyKeys: Set<string>;
 }
 
@@ -261,8 +328,16 @@ function TreeRow({
   const [over, setOver] = useState(false);
   const pad = { paddingLeft: `${depth * 12 + 8}px` };
 
+  // Adding a folder here forces this one open so the new row is visible; persist
+  // that open state (adjust-during-render, no effect) so the folder stays
+  // expanded after the row commits and the freshly-created child is visible.
+  const addingHere =
+    node.type === "folder" && actions.addFolderPrefix === node.prefix;
+  if (addingHere && !open) setOpen(true);
+
   if (node.type === "folder") {
     const empty = !folderHasFiles(node);
+    const isOpen = open || addingHere;
     return (
       <div>
         <div
@@ -289,7 +364,7 @@ function TreeRow({
             onClick={() => setOpen((o) => !o)}
             className="flex min-w-0 flex-1 items-center gap-1"
           >
-            {open ? (
+            {isOpen ? (
               <ChevronDown className="size-3 shrink-0" />
             ) : (
               <ChevronRight className="size-3 shrink-0" />
@@ -333,15 +408,27 @@ function TreeRow({
             </button>
           )}
         </div>
-        {open &&
-          node.children.map((child) => (
-            <TreeRow
-              key={child.type === "file" ? child.full : child.prefix}
-              node={child}
-              depth={depth + 1}
-              actions={actions}
-            />
-          ))}
+        {isOpen && (
+          <>
+            {addingHere && (
+              <NewFolderRow
+                depth={depth + 1}
+                value={actions.folderDraft}
+                onChange={actions.onFolderDraftChange}
+                onSubmit={actions.onSubmitFolder}
+                onCancel={actions.onCancelFolder}
+              />
+            )}
+            {node.children.map((child) => (
+              <TreeRow
+                key={child.type === "file" ? child.full : child.prefix}
+                node={child}
+                depth={depth + 1}
+                actions={actions}
+              />
+            ))}
+          </>
+        )}
       </div>
     );
   }

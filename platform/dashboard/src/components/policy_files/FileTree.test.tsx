@@ -157,9 +157,32 @@ describe("FileTree", () => {
     const { onAddFolder } = renderTree(); // caps/ exists (holds refunds.yaml)
     await userEvent.click(screen.getByTitle("New folder in caps"));
     const input = screen.getByLabelText("New folder name");
-    expect(input).toHaveValue("caps/"); // pre-filled with the parent prefix
+    expect(input).toHaveValue(""); // an inline row under caps, leaf name only
     await userEvent.type(input, "archived{Enter}");
     expect(onAddFolder).toHaveBeenCalledWith("caps/archived");
+  });
+
+  it("keeps a collapsed parent expanded after adding a subfolder", async () => {
+    renderTree(); // caps/ holds refunds.yaml
+    await userEvent.click(screen.getByText("caps")); // collapse it
+    expect(screen.queryByText("refunds.yaml")).not.toBeInTheDocument();
+    await userEvent.click(screen.getByTitle("New folder in caps"));
+    await userEvent.type(
+      screen.getByLabelText("New folder name"),
+      "sub{Enter}",
+    );
+    // caps stays open after the row commits, so its contents stay visible.
+    expect(screen.getByText("refunds.yaml")).toBeInTheDocument();
+  });
+
+  it("cancels the new-folder row on Escape without creating one", async () => {
+    const { onAddFolder } = renderTree();
+    await userEvent.click(screen.getByRole("button", { name: "New folder" }));
+    const input = screen.getByLabelText("New folder name");
+    await userEvent.type(input, "scratch{Escape}");
+    // Escape closes the row (and the trailing blur must not commit it).
+    expect(screen.queryByLabelText("New folder name")).not.toBeInTheDocument();
+    expect(onAddFolder).not.toHaveBeenCalled();
   });
 
   it("renders a remembered empty folder and lets it be removed", async () => {

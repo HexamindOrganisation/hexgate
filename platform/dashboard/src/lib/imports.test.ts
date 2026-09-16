@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { referencesImport, rewriteImportPath } from "./imports";
+import {
+  composeAgentNames,
+  referencesImport,
+  rewriteImportPath,
+} from "./imports";
 
 const ENTRY = `agents:
   support_bot:
@@ -9,6 +13,9 @@ const ENTRY = `agents:
       billing:
         import:
           [ caps/read_only.yaml, caps/payments.yaml ]
+  billing_bot:
+    roles:
+      billing: { import: [ caps/payments.yaml ] }
 `;
 
 describe("referencesImport", () => {
@@ -35,6 +42,20 @@ describe("referencesImport", () => {
   it("falls back to a token scan when the file does not parse", () => {
     const broken = "import: [ caps/refunds.yaml ]\n\t: : bad yaml";
     expect(referencesImport(broken, "caps/refunds.yaml")).toBe(true);
+  });
+});
+
+describe("composeAgentNames", () => {
+  it("returns the entry's declared agents, sorted", () => {
+    expect(composeAgentNames(ENTRY)).toEqual(["billing_bot", "support_bot"]);
+  });
+
+  it("returns [] for a top-level-only policy (no agents block)", () => {
+    expect(composeAgentNames("tools:\n  x: { mode: allow }\n")).toEqual([]);
+  });
+
+  it("returns [] when the file does not parse", () => {
+    expect(composeAgentNames("agents:\n\t: : bad yaml")).toEqual([]);
   });
 });
 
