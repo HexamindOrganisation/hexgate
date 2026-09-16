@@ -808,7 +808,9 @@ class _PluginFiringRunner:
         for plugin in app.plugins if app else []:
             if isinstance(plugin, HexgateUsagePlugin):
                 await plugin.after_model_callback(
-                    callback_context=SimpleNamespace(agent_name="my-agent"),
+                    callback_context=SimpleNamespace(
+                        agent_name="my-agent", invocation_id="i"
+                    ),
                     llm_response=_fake_llm_response(),
                 )
         yield {"event": "done"}
