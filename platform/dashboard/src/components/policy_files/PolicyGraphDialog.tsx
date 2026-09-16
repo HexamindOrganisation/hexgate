@@ -808,17 +808,20 @@ const GRAPH_ACTION_BTN =
  * and the full-page `/graph` route. */
 export function PolicyGraphView({
   projectId,
-  roleNames,
+  roleNames = [],
   enabled = true,
   headerRight,
 }: {
   projectId: string;
-  roleNames: string[];
+  /** Load-time fallback for the role filter; once the graph resolves, its own
+   * `roles` (every role across all agents) take over. */
+  roleNames?: string[];
   enabled?: boolean;
   headerRight?: React.ReactNode;
 }) {
   const [role, setRole] = useState<string>("");
   const graph = usePolicyGraph(projectId, role || undefined, enabled);
+  const roleOptions = graph.data?.roles ?? roleNames;
 
   return (
     <div
@@ -839,7 +842,7 @@ export function PolicyGraphView({
               className="rounded border border-border bg-card px-1.5 py-0.5 text-[11px] text-foreground"
             >
               <option value="">all roles</option>
-              {roleNames.map((r) => (
+              {roleOptions.map((r) => (
                 <option key={r} value={r}>
                   {r}
                 </option>

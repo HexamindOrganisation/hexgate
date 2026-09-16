@@ -484,10 +484,12 @@ class PolicyGraphEdge(BaseModel):
 
 
 class PolicyGraphResponse(BaseModel):
-    """Nodes + edges for the resolved-policy graph view."""
+    """Nodes + edges for the resolved-policy graph view, plus every role across
+    all agents (the role picker's options — independent of any role filter)."""
 
     nodes: list[PolicyGraphNode] = Field(default_factory=list)
     edges: list[PolicyGraphEdge] = Field(default_factory=list)
+    roles: list[str] = Field(default_factory=list)
 
 
 class PolicyFileDraft(BaseModel):
