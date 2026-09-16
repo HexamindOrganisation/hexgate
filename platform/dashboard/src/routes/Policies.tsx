@@ -30,6 +30,9 @@ import { InspectorTabs } from "@/components/policy_files/InspectorTabs";
 
 const MAX_TABS = 6;
 
+// A stable empty list so the agent-picker reconcile can compare by identity.
+const EMPTY_AGENTS: string[] = [];
+
 /**
  * Compose policy editor. Three panes: the file tree (the project's
  * `policy_file` rows as a filesystem), a CodeMirror editor for the open file,
@@ -241,10 +244,23 @@ export function PoliciesPage() {
     files.find((f) => f.name === ENTRY_FILE)?.content ??
     "";
   const debouncedEntry = useDebouncedValue(entryContent, 400);
-  const agentNames = useMemo(
+  const parsedAgents = useMemo(
     () => composeAgentNames(debouncedEntry),
     [debouncedEntry],
   );
+  // Keep the last good list while the entry is mid-edit: transiently unparseable
+  // YAML parses to [], which would collapse the picker. Only clear it when the
+  // entry genuinely has no `agents:` block, not on a keystroke that momentarily
+  // breaks the document. Adjust-state-during-render (no effect); EMPTY_AGENTS is
+  // a stable reference so the reconcile can compare by identity and settle.
+  const [agentNames, setAgentNames] = useState<string[]>(parsedAgents);
+  const nextAgents =
+    parsedAgents.length > 0
+      ? parsedAgents
+      : /^\s*agents\s*:/m.test(debouncedEntry)
+        ? agentNames
+        : EMPTY_AGENTS;
+  if (nextAgents !== agentNames) setAgentNames(nextAgents);
 
   if (scope.status === "no-project") {
     return <NoProjectEmptyState resource="policies" />;
