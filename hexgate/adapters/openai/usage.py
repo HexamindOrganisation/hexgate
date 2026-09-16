@@ -203,7 +203,14 @@ class HexgateUsageHooks(RunHooks):
         if not log_messages_enabled():
             return
         key = self._turn_key(agent)
-        system_prompt, input_items = self._pending.pop(key, _Prompt(None, []))
+        # No stash means the request half of the hook pair never landed, so
+        # there is no prompt to diff. Keyed on the stash rather than on an
+        # empty list: under a server-managed conversation the SDK does call
+        # the model with no un-sent items, and that completion is real.
+        prompt = self._pending.pop(key, None)
+        if prompt is None:
+            return
+        system_prompt, input_items = prompt
         # Convert before advancing: a failed conversion must not spend the
         # turn's seq on an event that never goes out.
         try:
