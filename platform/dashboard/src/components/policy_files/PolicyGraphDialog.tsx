@@ -250,7 +250,9 @@ function PolicyEdge({
         ? "admit"
         : "";
   const active = selected || hovered;
-  const baseWidth = data?.verdict === "deny" ? 1.1 : 1.6;
+  // Resting width sits close to the focused width (3.4) so edges read clearly at
+  // a glance; the focus state still stands out via its glow + full 3.4 stroke.
+  const baseWidth = data?.verdict === "deny" ? 2.2 : 2.6;
   // A flowing dot travels source→target when the edge is selected/hovered, or
   // when Animate is on and the edge is in focus. The start is staggered by the
   // source's depth from a role, so a click's paths light role → agent → tool in
@@ -270,7 +272,7 @@ function PolicyEdge({
           opacity: dimmed
             ? 0.08
             : data?.verdict === "deny" && !active
-              ? 0.32
+              ? 0.6
               : 1,
           filter: active ? `drop-shadow(0 0 5px ${color})` : undefined,
           transition: "stroke-width 120ms, opacity 120ms",
