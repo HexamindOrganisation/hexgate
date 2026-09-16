@@ -1713,3 +1713,48 @@ def test_notebook_policy_files_match_seed() -> None:
     m = re.search(r"_FILES = (\{.*?\n    \})", src, re.DOTALL)
     assert m, "could not locate the _FILES dict in the demo notebook"
     assert ast.literal_eval(m.group(1)) == SEED_POLICY_FILES
+
+
+def test_notebook_billing_bot_policy_is_role_aware(tmp_path) -> None:
+    # billing_bot runs IN-KERNEL in the demo and enforces its OWN role-keyed
+    # policy: the caller's role rides the context into the nested run, so a
+    # support delegation is capped at $200 and a billing one at the $1000 org
+    # ceiling — a delegated refund is neither unbounded nor role-blind. Extract
+    # the role policies the notebook enforces and prove the caps per role.
+    import ast
+    import re
+    from pathlib import Path
+
+    from hexgate.security.policy_set import load_policy_set
+
+    notebook = None
+    for parent in Path(__file__).resolve().parents:
+        candidate = parent / "deploy" / "compose_support_demo.py"
+        if candidate.exists():
+            notebook = candidate
+            break
+    if notebook is None:
+        pytest.skip("marimo demo notebook not present in this checkout")
+
+    src = notebook.read_text(encoding="utf-8")
+    m = re.search(r"_BILLING_POLICIES = (\{.*?\n    \})", src, re.DOTALL)
+    assert m, "could not locate _BILLING_POLICIES in the demo notebook"
+    policies = ast.literal_eval(m.group(1))
+    # Lay the role files out as a policies/ dir (stem = role name) — exactly
+    # how build_billing() loads them.
+    pol_dir = tmp_path / "policies"
+    pol_dir.mkdir()
+    for role, body in policies.items():
+        (pol_dir / f"{role}.yaml").write_text(body, encoding="utf-8")
+    ps = load_policy_set(str(pol_dir))
+
+    def mode(role: str | None, amount: float) -> str:
+        return ps.evaluate(
+            role=role, tool="refund_order", args={"amount": amount}
+        ).outcome.value
+
+    assert mode("support", 100) == "allow"  # a small support delegation
+    assert mode("support", 500) == "deny"  # over the $200 support cap
+    assert mode("billing", 500) == "allow"  # billing's own $1000 ceiling
+    assert mode("billing", 5000) == "deny"
+    assert mode(None, 100) == "deny"  # a role billing_bot doesn't grant → nothing

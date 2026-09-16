@@ -113,29 +113,67 @@ def _():
 
     from hexgate import create_agent
 
-    # -- billing_bot: a SECOND agent, reached by support_bot AS A TOOL ---------
-    # (agent-as-tool). The delegation surfaces as the delegate_to_billing tool
-    # call, which the policy gates by role. Native create_agent has no
-    # first-class handoff primitive that can be served to the dashboard, so the
-    # sub-agent is wired as the tool that runs it.
+    # -- billing_bot: a SECOND agent that support_bot delegates to via the
+    # delegate_to_billing tool. It runs IN-KERNEL (not served by the platform),
+    # so it must enforce its OWN policy via enforce_policy — otherwise the
+    # delegated refund would bypass the gate entirely.
+    #
+    # It's ROLE-AWARE: the caller's role rides the ambient HexgateContext into the
+    # nested run, so billing_bot re-uses the delegating seat's role. A support-seat
+    # delegation is capped tighter ($200 — the seat can't refund directly, so its
+    # delegated refund is the smaller path) than a billing-seat one ($1000, the
+    # org ceiling); a caller whose role billing_bot doesn't grant refunds nothing.
+    #
+    # NOTE: these are classic (non-compose) role policies loaded by the SDK
+    # directly (one file per role in a policies/ dir), so they use the plural
+    # `constraints: [...]` list — NOT the singular `constraint:` compose alias the
+    # boundary/caps above use. The classic loader rejects `constraint:`.
+    _BILLING_POLICIES = {
+        # A caller with no matching role: billing_bot refunds nothing.
+        "default": "default_policy: { mode: deny }\n",
+        "support": (
+            "default_policy: { mode: deny }\n"
+            "tools:\n"
+            '  refund_order: { mode: allow, constraints: ["args.amount <= 200"] }\n'
+        ),
+        "billing": (
+            "default_policy: { mode: deny }\n"
+            "tools:\n"
+            '  refund_order: { mode: allow, constraints: ["args.amount <= 1000"] }\n'
+        ),
+    }
+
     def build_billing():
-        """Build the billing specialist sub-agent (its own tool + prompt)."""
+        """Build the billing specialist sub-agent, gated by its own role policy."""
+        import os
+        import tempfile
 
         @tool
-        def issue_refund(order_id: str, amount: float) -> str:
+        def refund_order(order_id: str, amount: float) -> str:
             """Issue a refund against an order."""
             return f"(demo) refunded ${amount:.2f} on order {order_id}."
 
         billing, _handler = create_agent(
             model="gpt-4o-mini",
-            tools=[issue_refund],
+            tools=[refund_order],
             system_prompt=(
                 "You are the billing specialist. Issue the requested refund with "
-                "issue_refund, confirming the order id and amount."
+                "refund_order, confirming the order id and amount."
             ),
             name="billing_bot",
         )
-        return billing
+        # Role-keyed policy dir: one file per role, the stem is the role name.
+        # enforce_policy loads + freezes the bundle here, so the temp dir can be
+        # torn down right after — a private dir (no symlink/race), no leak.
+        with tempfile.TemporaryDirectory() as _tmp:
+            _dir = os.path.join(_tmp, "policies")
+            os.makedirs(_dir)
+            for _role, _pol in _BILLING_POLICIES.items():
+                _path = os.path.join(_dir, f"{_role}.yaml")
+                with open(_path, "w", encoding="utf-8") as _f:
+                    _f.write(_pol)
+            # Gate 1 enforcement on the in-kernel sub-agent, keyed on the role.
+            return billing.enforce_policy(_dir)
 
     @tool
     def view_orders(order_id: str) -> str:
@@ -159,8 +197,10 @@ def _():
         """Delegate a refund to the billing_bot sub-agent.
 
         The support and billing seats may delegate (it's support's only path to a
-        refund); the default seat is denied by policy before this tool runs, so
-        billing_bot never sees its request.
+        refund); the default seat is denied by policy before this tool runs.
+        billing_bot is role-aware — the caller's role rides the context into the
+        nested run — so a support delegation is capped at $200 and a billing one
+        at the $1000 org ceiling. Delegation isn't an escape hatch.
         """
         if "agent" not in _billing:
             _billing["agent"] = build_billing()
@@ -391,7 +431,11 @@ def _(Path, mo, resolve_file):
         "`delegate_to_billing`** (the sub-agent); `billing` starts it and refunds "
         "directly up to the **$1000** ceiling. `billing_bot` is stricter still — "
         "only the `billing` seat may start it directly (the `support` seat "
-        "delegates to it via the tool, but can't start it head-on)."
+        "delegates to it via the tool, but can't start it head-on). `billing_bot` "
+        "runs in-kernel and **enforces its own role-aware policy**: the caller's "
+        "role rides the context into the nested run, so a **support** delegation "
+        "is capped at **$200** and a **billing** one at **$1000** — delegation is "
+        "not an escape hatch."
     )
     return
 
