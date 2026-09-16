@@ -1638,6 +1638,7 @@ async def test_seeded_compose_demo_resolves(session_factory) -> None:
         assert {
             "policy.yaml",
             "caps/base/read_only.yaml",
+            "caps/base/ingress.yaml",
             "caps/support/delegate.yaml",
             "caps/billing/payments.yaml",
         } <= names
@@ -1658,9 +1659,27 @@ async def test_seeded_compose_demo_resolves(session_factory) -> None:
         assert mode("support", "delegate_to_billing") == "allow"  # its only path
         assert mode("default", "delegate_to_billing") == "deny"
 
+        # Admission (ingress → agent.run): the support/billing seats may START
+        # support_bot; the default seat may not (read-only, no ingress grant).
+        assert mode("support", "agent.run") == "allow"
+        assert mode("billing", "agent.run") == "allow"
+        assert mode("default", "agent.run") == "deny"
+
         # The sub-agent reach edge is active: support may reach billing_bot as a
         # tool (lowered to agent.tool:billing_bot in the resolved policy).
         assert "agent.tool:billing_bot" in ps.policy_for("support").effective_tools
+
+        # billing_bot: only the billing seat is admitted to start it directly;
+        # the support seat reaches it as a sub-agent, but can't start it head-on.
+        bs = (
+            await svc.compose_resolve(s, DEFAULT_PROJECT_ID, agent="billing_bot")
+        ).policy_set
+        assert bs.evaluate(role="billing", tool="agent.run", args={}).outcome.value == (
+            "allow"
+        )
+        assert bs.evaluate(role="support", tool="agent.run", args={}).outcome.value == (
+            "deny"
+        )
 
         # MCP tools (mcp-demo-*): a safe one is open to all, an invoice needs
         # approval for billing, and the secret-reader is denied outright.
@@ -1668,3 +1687,28 @@ async def test_seeded_compose_demo_resolves(session_factory) -> None:
         assert mode("billing", "mcp-demo-send_invoice") == "needs_approval"
         assert mode("support", "mcp-demo-send_invoice") == "deny"
         assert mode("billing", "mcp-demo-read_secret") == "deny"
+
+
+def test_notebook_policy_files_match_seed() -> None:
+    # The marimo demo (deploy/compose_support_demo.py) inlines the same compose
+    # policy the API seeds, kept aligned by hand. Assert the two copies are
+    # byte-identical so an edit to one can't silently drift from the other.
+    import ast
+    import re
+    from pathlib import Path
+
+    from hexgate_api.features.policy_modules.seed_data import SEED_POLICY_FILES
+
+    notebook = None
+    for parent in Path(__file__).resolve().parents:
+        candidate = parent / "deploy" / "compose_support_demo.py"
+        if candidate.exists():
+            notebook = candidate
+            break
+    if notebook is None:
+        pytest.skip("marimo demo notebook not present in this checkout")
+
+    src = notebook.read_text(encoding="utf-8")
+    m = re.search(r"_FILES = (\{.*?\n    \})", src, re.DOTALL)
+    assert m, "could not locate the _FILES dict in the demo notebook"
+    assert ast.literal_eval(m.group(1)) == SEED_POLICY_FILES
