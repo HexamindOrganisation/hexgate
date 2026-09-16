@@ -854,8 +854,13 @@ def _graph_from(agent_names, resolve_for_agent, role: str | None = None) -> dict
     agent→agent edge tagged by ``via``), and the *admission* key (``agent.run`` → a
     role→agent ingress edge); a ``mcp-`` tool is an ``mcp`` node. ``role`` filters
     to one role, else unions across every role each agent resolves. Nodes/edges
-    de-dup: an edge keeps the strictest verdict (deny > approval_required > allow),
-    unions its constraints, and records the roles it appears under."""
+    de-dup: a merged edge keeps the MOST-PERMISSIVE verdict across roles
+    (allow > approval_required > deny), with the constraints + roles of the roles
+    at that verdict — so an edge allowed for some role reads as allowed, matching
+    how tool edges behave (a role lacking a grant omits the edge, while a
+    closed-world agent key materializes a deny that shouldn't mask a real allow).
+    The returned ``roles`` is every role across all agents (independent of the
+    ``role`` filter), for the UI's role picker. See R-AGENT-002 in the SDK."""
     from hexgate.security import DEFAULT_ROLE_NAME
     from hexgate.security.models import (
         AGENT_REACH_PREFIXES,
@@ -863,9 +868,11 @@ def _graph_from(agent_names, resolve_for_agent, role: str | None = None) -> dict
         is_agent_reach_key,
     )
 
-    _RANK = {"deny": 3, "approval_required": 2, "allow": 1}
+    # Most-permissive wins on merge across roles.
+    _PERM = {"allow": 3, "approval_required": 2, "deny": 1}
     nodes: dict[str, dict] = {}
     edges: dict[tuple, dict] = {}
+    all_roles: set[str] = set()
 
     def add_node(node_id: str, kind: str, label: str) -> None:
         nodes.setdefault(node_id, {"id": node_id, "kind": kind, "label": label})
@@ -883,21 +890,31 @@ def _graph_from(agent_names, resolve_for_agent, role: str | None = None) -> dict
                 "roles": [at_role] if at_role else [],
             }
             return
-        if _RANK.get(verdict, 0) > _RANK.get(prev["verdict"], 0):
+        rank_new = _PERM.get(verdict, 0)
+        rank_prev = _PERM.get(prev["verdict"], 0)
+        if rank_new > rank_prev:
+            # Strictly more permissive: this verdict wins, and its constraints +
+            # role replace the prior (stricter) ones — a denied role shouldn't
+            # leave its constraints on an edge that some role allows.
             prev["verdict"] = verdict
-        for c in constraints:
-            if c not in prev["constraints"]:
-                prev["constraints"].append(c)
-        if at_role and at_role not in prev["roles"]:
-            prev["roles"].append(at_role)
+            prev["constraints"] = list(constraints)
+            prev["roles"] = [at_role] if at_role else []
+        elif rank_new == rank_prev:
+            for c in constraints:
+                if c not in prev["constraints"]:
+                    prev["constraints"].append(c)
+            if at_role and at_role not in prev["roles"]:
+                prev["roles"].append(at_role)
+        # else: strictly less permissive — ignore (a real allow already stands)
 
     for agent in sorted(agent_names):
         add_node(f"agent:{agent}", "agent", agent)
         result = resolve_for_agent(agent)
         # In the union view (role=None) the same edge can appear under several
-        # roles; we keep the strictest verdict and union the constraints, so a
-        # merged edge can be more restrictive than any single role. The per-edge
-        # ``roles`` list (and the ?role= filter) give the exact per-role picture.
+        # roles; we keep the MOST-permissive verdict (a role that allows it wins
+        # over one the closed world denies). The per-edge ``roles`` list (and the
+        # ?role= filter) give the exact per-role picture.
+        all_roles.update(result.by_role)  # every role, regardless of the filter
         roles_here = [role] if role is not None else list(result.by_role)
         for r in roles_here:
             link_result = result.by_role.get(r)
@@ -955,7 +972,11 @@ def _graph_from(agent_names, resolve_for_agent, role: str | None = None) -> dict
     ):
         del nodes[star]
 
-    return {"nodes": list(nodes.values()), "edges": list(edges.values())}
+    return {
+        "nodes": list(nodes.values()),
+        "edges": list(edges.values()),
+        "roles": sorted(all_roles),
+    }
 
 
 async def policy_graph(

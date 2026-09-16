@@ -1,9 +1,7 @@
-import { useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { FileCode } from "lucide-react";
 
 import { useProjectScoped } from "@/lib/active";
-import { useResolvedPolicy } from "@/lib/policy_files";
 import { PolicyGraphView } from "@/components/policy_files/PolicyGraphDialog";
 import { NoProjectEmptyState } from "@/components/NoProjectEmptyState";
 
@@ -17,15 +15,6 @@ export function GraphPage() {
   const scope = useProjectScoped();
   const projectId = scope.projectId;
   const navigate = useNavigate();
-
-  // Roles for the filter come from resolving the project (compose has no
-  // separate role registry); a classic project 422s → no roles, and the graph
-  // shows its empty/error state.
-  const resolved = useResolvedPolicy(projectId, undefined, undefined);
-  const roleNames = useMemo(
-    () => Object.keys(resolved.data ?? {}).sort(),
-    [resolved.data],
-  );
 
   if (scope.status === "no-project") {
     return <NoProjectEmptyState resource="graph" />;
@@ -42,7 +31,6 @@ export function GraphPage() {
     <div className="-mx-8 -my-6 h-screen overflow-hidden">
       <PolicyGraphView
         projectId={projectId}
-        roleNames={roleNames}
         headerRight={
           <button
             type="button"

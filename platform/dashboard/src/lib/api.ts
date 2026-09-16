@@ -285,6 +285,9 @@ export interface PolicyGraphEdge {
 export interface PolicyGraph {
   nodes: PolicyGraphNode[];
   edges: PolicyGraphEdge[];
+  /** Every role across all agents (the role picker's options) — independent of
+   * any role filter applied to the edges. */
+  roles: string[];
 }
 
 /** The editor's unsaved edit of one file, overlaid before preview/test. */
