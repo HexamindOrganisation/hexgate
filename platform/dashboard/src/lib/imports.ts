@@ -49,6 +49,25 @@ function collectImports(node: unknown, into: Set<string>): void {
   }
 }
 
+/** The named agents declared in a compose entry file — the keys of its top-level
+ * `agents:` map, sorted. Agents can only be declared in the entry (leaf files are
+ * grant-only), so this is the authoritative list. Returns `[]` when the file
+ * doesn't parse or declares no agents (e.g. a top-level-only policy). */
+export function composeAgentNames(content: string): string[] {
+  try {
+    const doc = load(content);
+    const agents =
+      doc && typeof doc === "object"
+        ? (doc as { agents?: unknown }).agents
+        : undefined;
+    if (!agents || typeof agents !== "object" || Array.isArray(agents))
+      return [];
+    return Object.keys(agents).sort();
+  } catch {
+    return [];
+  }
+}
+
 /** Whether `content` imports `path` via an `import:` list. Falls back to a
  * textual token scan when the file doesn't parse, so a real importer with a
  * YAML quirk isn't missed. */

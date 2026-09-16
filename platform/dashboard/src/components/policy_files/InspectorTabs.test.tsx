@@ -38,6 +38,7 @@ function renderInspector(
       resolves
       modular
       previewing={false}
+      agentNames={[]}
       inspectAgent="*"
       onInspectAgentChange={noop}
       {...props}
@@ -89,15 +90,22 @@ describe("InspectorTabs", () => {
     expect(screen.getByRole("button", { name: /graph/i })).toBeInTheDocument();
   });
 
-  it("commits the agent field on Enter, not per keystroke", async () => {
+  it("lists the entry's agents (plus the generic *) and selects one", async () => {
     const onChange = vi.fn();
-    renderInspector({ onInspectAgentChange: onChange });
-    const input = screen.getByPlaceholderText("*");
-    await userEvent.clear(input);
-    await userEvent.type(input, "bot");
-    expect(onChange).not.toHaveBeenCalled(); // no per-keystroke round-trips
-    await userEvent.keyboard("{Enter}");
-    expect(onChange).toHaveBeenCalledWith("bot");
+    renderInspector({
+      agentNames: ["billing_bot", "support_bot"],
+      onInspectAgentChange: onChange,
+    });
+    const select = screen.getByRole("combobox");
+    // "*" generic view plus every declared agent are offered as options.
+    expect(
+      screen.getByRole("option", { name: "* (generic)" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("option", { name: "support_bot" }),
+    ).toBeInTheDocument();
+    await userEvent.selectOptions(select, "support_bot");
+    expect(onChange).toHaveBeenCalledWith("support_bot");
   });
 
   it("relabels agent.* / mcp keys as admission / reach / mcp", () => {

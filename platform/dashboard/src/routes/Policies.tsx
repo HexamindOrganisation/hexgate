@@ -14,7 +14,7 @@ import {
   useResolvedPolicy,
 } from "@/lib/policy_files";
 import { useEmptyFolders } from "@/lib/empty_folders";
-import { referencesImport } from "@/lib/imports";
+import { composeAgentNames, referencesImport } from "@/lib/imports";
 import { baseName, ENTRY_FILE } from "@/lib/file_tree";
 import { cn } from "@/lib/utils";
 import { NoProjectEmptyState } from "@/components/NoProjectEmptyState";
@@ -231,6 +231,21 @@ export function PoliciesPage() {
   );
   const resolves = lints.every((l) => l.severity !== "error");
 
+  // The agents the Resolved/preview column can inspect: every agent declared in
+  // the entry file, plus the "*" generic view. Prefer the entry's unsaved buffer
+  // (whichever tab is active) so a just-added agent shows up before Save; a
+  // missing key means untouched, so fall back to the saved content ("" is a real
+  // empty new file). Debounced so we parse settled text, not every keystroke.
+  const entryContent =
+    drafts[ENTRY_FILE] ??
+    files.find((f) => f.name === ENTRY_FILE)?.content ??
+    "";
+  const debouncedEntry = useDebouncedValue(entryContent, 400);
+  const agentNames = useMemo(
+    () => composeAgentNames(debouncedEntry),
+    [debouncedEntry],
+  );
+
   if (scope.status === "no-project") {
     return <NoProjectEmptyState resource="policies" />;
   }
@@ -362,6 +377,7 @@ export function PoliciesPage() {
                   resolves={resolves}
                   modular={modular}
                   previewing={draftActive && preview.isFetching}
+                  agentNames={agentNames}
                   inspectAgent={inspectAgent}
                   onInspectAgentChange={setInspectAgent}
                 />
