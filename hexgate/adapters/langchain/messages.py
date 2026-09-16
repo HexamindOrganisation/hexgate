@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from langchain_core.messages import BaseMessage
+
 from hexgate.adapters._messages import as_dict, text_part
 
 # ``chat`` is absent because ``ChatMessage`` carries a caller-chosen ``role``,
@@ -126,7 +128,7 @@ def _tool_call_parts(entry: dict[str, Any]) -> list[dict[str, Any]]:
     return parts
 
 
-def input_message(message: Any) -> dict[str, Any]:
+def input_message(message: BaseMessage | str) -> dict[str, Any]:
     """One ``BaseMessage`` (or a bare prompt string) as a GenAI message.
 
     A ``ToolMessage`` becomes a ``tool_call_response`` because a decision event
