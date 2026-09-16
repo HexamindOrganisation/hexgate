@@ -219,10 +219,9 @@ curl -X POST https://app.hexgate.ai/v1/auth/register \
 ```bash
 cd /srv/hexgate-<stage> && git pull   # or checkout a new tag for prod
 
-# Postgres DDL needs locks the running API holds. Stop the two writers, and
-# leave collector + redpanda up so OTLP keeps buffering through the window.
-docker compose -p hexgate-<stage> --env-file platform/.env.<stage> \
-  -f platform/docker-compose.deploy.yml stop api enricher
+# Postgres DDL needs locks the running API holds. Stops api + enricher and
+# leaves collector + redpanda up, so OTLP keeps buffering through the window.
+make platform-stop-writers STAGE=<stage>
 
 make platform-migrate STAGE=<stage>   # schema BEFORE images — see below; no-op when nothing is new
 make platform-up STAGE=<stage>        # rebuilds changed images, recreates containers
@@ -251,15 +250,17 @@ Promote a release: tag it, `git checkout` it in the prod checkout, then the
 same `platform-migrate` → `platform-up` pair. Rolling *back* past a release
 that added columns has its own step — see below.
 
-Upgrades reuse the env already on the box: `platform-up` only pulls a
-MISSING `.env.<stage>`, never refreshes an existing one. If the secret changed,
+Upgrades reuse the env already on the box: the deploy targets only pull a
+MISSING `.env.<stage>`, never refresh an existing one. If the secret changed,
 refresh it first: `make platform-env-pull STAGE=<stage>`.
 
 **When a release adds a required key** (the compose aborts with `required
-variable X is missing a value` — on `platform-up`, and on `platform-logs` /
-`platform-down` too, since compose interpolates the whole file for every
-subcommand; the running stack is unaffected), the order is: an admin adds the
-key to the `/hexgate/<stage>` secret (new version), then on the box
+variable X is missing a value` — on every target that shells out to compose,
+since it interpolates the whole file for every subcommand, `platform-up`,
+`platform-logs`, `platform-down` and `platform-stop-writers` alike; the running
+stack is unaffected). That makes it the very FIRST step of the recipe above,
+so do the refresh before starting the upgrade. The order is: an admin adds
+the key to the `/hexgate/<stage>` secret (new version), then on the box
 `make platform-env-pull STAGE=<stage>`, then `make platform-up`. Never
 hand-edit `.env.<stage>` — the next pull would drop the change. Releases so
 far that did this:

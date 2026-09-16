@@ -145,9 +145,14 @@ demo-override: ## Build a deny-everything bundle + chat with HEXGATE_LOCAL_POLIC
 
 COMPOSE := docker compose -f platform/docker-compose.yml
 
+# `--wait` is load-bearing, not tidiness: every consumer below execs a
+# clickhouse-client against the container on the next line, and `up -d` returns
+# on container start, not on server ready — so without it a cold container
+# fails with `Code: 210 ... Connection refused`, or, on an empty volume,
+# `Database hexgate_audit doesn't exist` before the init scripts have run.
 .PHONY: clickhouse-up
-clickhouse-up: ## Start the local ClickHouse server (creates schema on first run)
-	$(COMPOSE) up -d clickhouse
+clickhouse-up: ## Start the local ClickHouse server and wait until healthy (creates schema on first run)
+	$(COMPOSE) up -d --wait clickhouse
 
 .PHONY: clickhouse-down
 clickhouse-down: ## Stop ClickHouse (keeps the data volume)
@@ -413,6 +418,20 @@ platform-env-pull: ## Pull platform/.env.<stage> from Scaleway: make platform-en
 .PHONY: _require-stage-env
 _require-stage-env:
 	@test -f platform/.env.$(STAGE) || $(MAKE) platform-env-pull STAGE=$(STAGE)
+
+# The two writers whose sessions hold the locks platform-migrate needs.
+# collector and redpanda are deliberately absent: they stay up so OTLP keeps
+# buffering through the window, and neither holds a session idle in a
+# transaction on the tables being altered.
+DEPLOY_WRITERS = api enricher
+
+# A target rather than a raw compose line in the runbook. This is the FIRST
+# command of every upgrade, and _require-stage-env is the only thing that pulls
+# a missing .env.<stage> — a hand-written `docker compose --env-file` here dies
+# with `couldn't find env file` before platform-migrate would have fetched it.
+.PHONY: platform-stop-writers
+platform-stop-writers: _require-stage-env ## Stop api + enricher ahead of a migrate: make platform-stop-writers STAGE=prod
+	$(DEPLOY_COMPOSE) stop $(DEPLOY_WRITERS)
 
 # Runs BEFORE platform-up on any release that adds a column: init_db() is
 # create_all, which never alters an existing table, and the collector's snapshot
