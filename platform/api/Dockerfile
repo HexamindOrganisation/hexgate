@@ -47,8 +47,38 @@ COPY hexgate ./hexgate
 # source (copied below).
 COPY platform/api/pyproject.toml platform/api/uv.lock ./platform/api/
 WORKDIR /app/platform/api
+# --refresh-package hexgate is NOT redundant, and deleting it reintroduces a
+# production outage. The SDK is a path dependency and uv keys its build cache on
+# the package VERSION, never on source content. That version has sat at 0.3.1
+# across several releases that changed hexgate/, so the cache mount above serves
+# a wheel built from older source: the enricher died at import on a symbol that
+# was in /app/hexgate/ but not in the installed copy.
+# `docker build --no-cache` does NOT fix it -- that invalidates layers, not cache
+# mounts (the manual escape hatch is `docker builder prune -af`). Permanent, not
+# a one-off repair: any later source change without a version bump goes stale
+# again. Scoped to the one package, so every third-party dep still hits cache.
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-dev --no-editable
+    uv sync --frozen --no-dev --no-editable --refresh-package hexgate
+
+# Fail the BUILD, not the deploy, if the wheel installed above is older than the
+# source copied into this image. The stale wheel was invisible until the
+# enricher crash-looped in production -- behind a healthcheck set to
+# `disable: true`, so it reported "Up" throughout. A flag can be dropped by a
+# later tidy-up; this makes that mistake loud at build time instead.
+#
+# `uv run --no-sync python`, not bare `python`: the venv is not on PATH at this
+# stage and bare python raises ModuleNotFoundError (verified in the built image).
+# .py files only -- hexgate/CLAUDE.md lives in the source tree and is not packaged,
+# so a plain `diff -r` would fail the build for a benign reason.
+RUN INSTALLED="$(uv run --no-sync python -c 'import hexgate, os; print(os.path.dirname(hexgate.__file__))')" \
+    && cd /app/hexgate \
+    && find . -name '*.py' -exec diff -q {} "$INSTALLED/{}" ';' > /tmp/sdk_drift 2>&1 \
+    && if [ -s /tmp/sdk_drift ]; then cat /tmp/sdk_drift; \
+         echo 'ERROR: the installed hexgate SDK differs from the source in this image'; \
+         echo 'The uv cache served a stale wheel -- see --refresh-package above.'; \
+         exit 1; fi \
+    && rm -f /tmp/sdk_drift \
+    && echo 'SDK wheel matches the source in this image'
 
 # API source last so edits don't bust the deps layer.
 COPY platform/api ./
