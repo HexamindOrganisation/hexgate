@@ -8,10 +8,10 @@ from typing import Any
 
 from hexgate.audit import (
     MAX_ARGS_BYTES,
-    MAX_VIOLATION_CHARS,
-    MAX_VIOLATIONS,
     MAX_ATTRIBUTES_BYTES,
     MAX_HINT_BYTES,
+    MAX_VIOLATION_CHARS,
+    MAX_VIOLATIONS,
     AuditEvent,
 )
 from hexgate.runtime import MAX_EVALUATED_ROLES

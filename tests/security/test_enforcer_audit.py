@@ -8,11 +8,11 @@ from typing import Any
 import pytest
 
 from hexgate.audit import AuditEvent
-from hexgate.tracing import _senders, semconv
 from hexgate.runtime.context import HexgateContext
 from hexgate.runtime.run_facts import run_scope
 from hexgate.security.decision import DETACHED_RUN, DecisionOutcome, Verdict
 from hexgate.security.enforcer import PolicyEnforcer
+from hexgate.tracing import _senders, semconv
 
 
 class _StubEngine:

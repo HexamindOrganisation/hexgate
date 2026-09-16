@@ -29,12 +29,11 @@ from yaml.error import MarkedYAMLError
 from hexgate.runtime.context import ContextAttributeValue
 from hexgate.runtime.roles import distinct_roles, resolve_role_set
 from hexgate.runtime.run_facts import KNOWN_RUN_PATHS
-from hexgate.security.testing import run_namespace
 from hexgate.security import (
-    AgentPolicy,
-    DecisionOutcome,
     DEFAULT_AGENT,
     DEFAULT_ROLE_NAME,
+    AgentPolicy,
+    DecisionOutcome,
     OpaNotFoundError,
     PolicySetError,
     SignatureError,
@@ -55,6 +54,7 @@ from hexgate.security import (
     verdict_from_rego,
 )
 from hexgate.security.constraints import ConstraintParseError, parse_constraint
+from hexgate.security.testing import run_namespace
 
 # Same schema ``HexgateContext.attributes`` enforces at runtime, so a bag the
 # simulator accepts is a bag production can actually produce — including the

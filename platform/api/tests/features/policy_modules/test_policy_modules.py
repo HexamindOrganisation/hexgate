@@ -1315,6 +1315,68 @@ def test_policy_graph_role_filter(client):
     assert "tool:b" not in targets  # admin role filtered out
 
 
+def test_policy_graph_union_keeps_most_permissive_reach(client):
+    # A reach an unprivileged role lacks resolves to a closed-world deny (R-AGENT-002),
+    # while a privileged role allows it. The union view must read the edge as ALLOW —
+    # the real grant — not let the phantom deny mask it. Per-role stays exact.
+    pid = _project(client)
+    _put_file(
+        client,
+        pid,
+        "policy.yaml",
+        "boundary:\n"
+        "  reach: { sub: { as: tool } }\n"
+        "agents:\n"
+        "  bot:\n"
+        "    roles:\n"
+        "      plain: { tools: { a: { mode: allow } } }\n"
+        "      power: { reach: { sub: { as: tool } } }\n"
+        "  sub:\n"
+        "    roles:\n"
+        "      plain: { tools: { a: { mode: allow } } }\n",
+    )
+
+    def reach_edge(params=None):
+        body = client.get(f"/v1/projects/{pid}/policy/graph", params=params).json()
+        return next(
+            e
+            for e in body["edges"]
+            if e["kind"] == "reach"
+            and (e["source"], e["target"]) == ("agent:bot", "agent:sub")
+        )
+
+    union = reach_edge()
+    assert union["verdict"] == "allow"  # the real grant wins over the phantom deny
+    assert union["roles"] == ["power"]  # tagged by the role that grants it
+
+    assert reach_edge({"role": "plain"})["verdict"] == "deny"  # exact per-role
+    assert reach_edge({"role": "power"})["verdict"] == "allow"
+
+
+def test_policy_graph_returns_all_roles(client):
+    # `roles` is every role across all agents, independent of the ?role= filter —
+    # it's the role picker's option list, not the filtered edge set.
+    pid = _project(client)
+    _put_file(
+        client,
+        pid,
+        "policy.yaml",
+        "agents:\n"
+        "  bot:\n"
+        "    roles:\n"
+        "      support: { tools: { a: { mode: allow } } }\n"
+        "      admin: { tools: { b: { mode: allow } } }\n",
+    )
+    # Sorted union across agents; the generic "*" column always carries `default`.
+    full = client.get(f"/v1/projects/{pid}/policy/graph").json()["roles"]
+    assert full == ["admin", "default", "support"]
+    # A filter narrows the edges but not the advertised role list.
+    filtered = client.get(
+        f"/v1/projects/{pid}/policy/graph", params={"role": "support"}
+    ).json()["roles"]
+    assert filtered == ["admin", "default", "support"]
+
+
 def test_policy_test_allow_approval_deny(client):
     pid = _project(client)
     _put_file(

@@ -11,7 +11,12 @@
  */
 
 import { useEffect, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  keepPreviousData,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 
 import { useActive } from "./active";
 import { api, type PolicyFileDraft, type PolicyFileRead } from "./api";
@@ -99,6 +104,9 @@ export function usePolicyGraph(
     enabled: !!projectId && enabled,
     retry: false,
     staleTime: 15_000,
+    // A role change re-keys the query; keep the prior graph (and its role list)
+    // on screen through the refetch so the filter and canvas don't flicker.
+    placeholderData: keepPreviousData,
   });
 }
 

@@ -185,11 +185,31 @@ export HEXGATE_SMOKE_PASSWORD=...
 make platform-smoke STAGE=prod               # or STAGE=staging
 ```
 
-It sends five events (allow / deny / needs_approval decisions, one LLM usage,
-one ban enforcement) through the SDK's OTLP sender and polls the dashboard
-API until each shows up, then prints `PASS` or a per-event `MISSING` list.
-Rows are tagged `agent_name = otlp_smoke` and a per-run `session_id`, so they
-are easy to spot and harmless to leave. Run it after every `platform-up`.
+It sends eleven events (allow / deny / needs_approval decisions, one LLM
+usage, one ban enforcement, and six LLM message events) through the SDK's OTLP
+sender and polls the dashboard API until each shows up, then prints `PASS` or a
+per-event `MISSING` list. Rows are tagged `agent_name = otlp_smoke` and a
+per-run `session_id`, so they are easy to spot and harmless to leave. Run it
+after every `platform-up`.
+
+Five of the message events carry an input message past the SDK's 256 KiB cap,
+and the check asserts each came back marked `truncated`, at full size, rather
+than missing. Together they are ~1.25 MiB, which is deliberate: that is over
+both the 1,000,000-byte record the collector's exporter defaults to and the
+1 MiB the broker defaults to, so this run only passes on a stage that actually
+got the record-size limits of `docs/internals/audit-pipeline.md` §4.1 —
+altered topics, restarted collector and enricher — rather than merely a deploy
+of the code. A stage that did not fails with **everything** `MISSING`, because
+an oversized record is rejected whole and takes the decision spans with it.
+
+**Read the traceback before blaming the stage.** All-`MISSING` has a second,
+more common cause: the ~1.3 MB export goes out as one uncompressed POST inside
+the exporter's 5 s deadline, so an uplink much below ~2 Mbit/s — a tether, hotel
+wifi — never finishes the body and the whole batch is dropped locally. The two
+are easy to tell apart in the ERROR lines above `flush complete`:
+`Exception while exporting Span … TimeoutError` is this machine, `Failed to
+export` is the collector refusing the batch. Re-run from a better connection
+before altering any topics.
 
 Exit 0 is the only green: 1 means an event did not land, and 2 means the
 credentials above were missing so nothing was read back at all — the send step

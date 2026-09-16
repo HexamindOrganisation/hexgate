@@ -20,7 +20,6 @@ from hexgate.security import (
     load_policy_set_from_dict,
 )
 
-
 # ---------------------------------------------------------------------------
 # Construction from already-built models
 # ---------------------------------------------------------------------------

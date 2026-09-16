@@ -8,7 +8,7 @@ from types import SimpleNamespace
 from typing import Any, AsyncIterator
 
 import pytest
-from agents import Agent, FunctionTool, RunConfig, Runner, RunHooks
+from agents import Agent, FunctionTool, RunConfig, RunHooks, Runner
 from agents.items import ModelResponse
 from agents.usage import Usage
 

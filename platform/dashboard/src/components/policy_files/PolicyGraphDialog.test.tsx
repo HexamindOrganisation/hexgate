@@ -190,6 +190,7 @@ const GRAPH: PolicyGraph = {
       roles: [],
     },
   ],
+  roles: ["admin"],
 };
 
 function stubGraph(payload: unknown, status = 200): ReturnType<typeof vi.fn> {

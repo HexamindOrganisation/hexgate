@@ -12,9 +12,9 @@ import pytest
 
 from hexgate.runtime import HexgateContext
 from hexgate.runtime.run_facts import run_scope
+from hexgate.tracing import semconv
 from hexgate.tracing import usage as usage_mod
 from hexgate.tracing.usage import emit_llm_usage
-from hexgate.tracing import semconv
 
 
 class _FakeSender:

@@ -67,12 +67,10 @@ describe("GraphPage", () => {
     stubFetch({
       "/v1/orgs": [ORG],
       "/v1/orgs/org-a/projects": [{ id: PID, name: "proj-1", org_id: ORG.id }],
-      [`/v1/projects/${PID}/policy/resolve`]: {
-        roles: { support: {}, billing: {} },
-      },
       [`/v1/projects/${PID}/policy/graph`]: {
         nodes: [{ id: "agent:bot", kind: "agent", label: "bot" }],
         edges: [],
+        roles: ["billing", "support"],
       },
     });
     renderWithProviders(<GraphPage />);
@@ -81,7 +79,7 @@ describe("GraphPage", () => {
     expect(
       screen.getByRole("button", { name: /edit policies/i }),
     ).toBeInTheDocument();
-    // roles from the resolved policy populate the filter
+    // the graph's own `roles` union populates the filter (no resolve round-trip)
     await waitFor(() =>
       expect(
         screen.getByRole("option", { name: "support" }),
