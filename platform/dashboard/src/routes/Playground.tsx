@@ -115,13 +115,15 @@ function PlaygroundLive({ projectId }: { projectId: string }) {
     });
   }, [roleOptions]);
 
+  // Whether the user was pinned to the bottom BEFORE the latest update — read
+  // from the scroll handler, not measured post-render (a tall append or a
+  // session mounted with history would misjudge it there). Starts true so a
+  // fresh session lands on the newest turn.
+  const atBottomRef = useRef(true);
   useEffect(() => {
+    if (!atBottomRef.current) return;
     const el = transcriptRef.current;
-    if (!el) return;
-    // Stick to the bottom only when the user is already near it — otherwise a
-    // per-token stream would yank them down while they read an earlier turn.
-    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
-    if (nearBottom) el.scrollTo({ top: el.scrollHeight });
+    el?.scrollTo({ top: el.scrollHeight });
   }, [state.messages]);
 
   function submit() {
@@ -167,6 +169,11 @@ function PlaygroundLive({ projectId }: { projectId: string }) {
       {/* Transcript */}
       <div
         ref={transcriptRef}
+        onScroll={(e) => {
+          const el = e.currentTarget;
+          atBottomRef.current =
+            el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+        }}
         className="scrollbar-thin flex-1 overflow-y-auto"
       >
         <div className="mx-auto w-full max-w-2xl px-4 pb-6 pt-20">
@@ -205,11 +212,13 @@ function PlaygroundLive({ projectId }: { projectId: string }) {
         </div>
       </div>
 
-      {/* Streamed decisions as a floating deck — hidden while an approval is
-          pending so its pile can't overlap the Approve/Deny buttons. */}
-      {state.pendingApprovals.length === 0 && (
-        <DecisionDeck decisions={state.decisions} />
-      )}
+      {/* Streamed decisions as a floating deck — muted (non-interactive, hidden)
+          while an approval is pending so its pile can't overlap the Approve/Deny
+          buttons, but kept mounted so its pinned/scroll state survives. */}
+      <DecisionDeck
+        decisions={state.decisions}
+        muted={state.pendingApprovals.length > 0}
+      />
     </div>
   );
 }
@@ -232,6 +241,9 @@ function AgentStatus({
       <div className={cn(pill, "text-muted-foreground")}>
         <RadioReceiver className="size-3.5 text-approval" />
         no agent serving
+        {!relayConnected && (
+          <span className="text-[10px] text-approval">· reconnecting…</span>
+        )}
       </div>
     );
   }
@@ -469,10 +481,11 @@ function MessageView({ message }: { message: ChatMessage }) {
  * liquid blob via the #pg-goo SVG filter. Shown while the turn is still
  * thinking and no tokens have streamed yet. */
 function ThinkingGoo() {
+  // One announcement: the visible label carries the status; the goo is decorative.
   return (
-    <div className="flex flex-col gap-1.5">
+    <div className="flex flex-col gap-1.5" role="status">
       <span className="pg-shimmer text-xs font-medium">Thinking…</span>
-      <div className="pg-goo" role="status" aria-label="Thinking">
+      <div className="pg-goo" aria-hidden>
         <span className="d1" />
         <span className="d2" />
         <span className="d3" />
@@ -550,17 +563,27 @@ function ToolStep({ call }: { call: ToolCall }) {
 // hovering (or focusing) the deck fans the full list up with per-decision
 // details, so the decisions never claim a permanent panel.
 
-function DecisionDeck({ decisions }: { decisions: ToolCall[] }) {
+function DecisionDeck({
+  decisions,
+  muted,
+}: {
+  decisions: ToolCall[];
+  muted: boolean;
+}) {
   // Visibility is JS-driven so it works past hover: the mouse opens it, a
   // click/tap pins it open (touch), and the handle is keyboard-operable.
   const [pinned, setPinned] = useState(false);
   const [hover, setHover] = useState(false);
   if (decisions.length === 0) return null;
-  const shown = pinned || hover;
+  const shown = !muted && (pinned || hover);
   const pile = decisions.slice(-3); // top few, most recent last
   return (
     <div
-      className="absolute bottom-24 right-4 z-20 sm:bottom-6 sm:right-6"
+      aria-hidden={muted}
+      className={cn(
+        "absolute bottom-24 right-4 z-20 transition-opacity sm:bottom-6 sm:right-6",
+        muted && "pointer-events-none opacity-0",
+      )}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
     >

@@ -156,9 +156,7 @@ describe("PlaygroundPage", () => {
       ],
     });
     renderWithProviders(<PlaygroundPage />);
-    expect(
-      screen.getByRole("status", { name: "Thinking" }),
-    ).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent(/thinking/i);
   });
 
   it("floats the decision deck with a running count", () => {
@@ -208,5 +206,15 @@ describe("PlaygroundPage", () => {
     mockState = baseState({ agentName: null, agentOnline: false });
     renderWithProviders(<PlaygroundPage />);
     expect(screen.getByText(/no agent serving/i)).toBeInTheDocument();
+  });
+
+  it("still surfaces relay reconnecting when no agent is serving", () => {
+    mockState = baseState({
+      agentName: null,
+      agentOnline: false,
+      connected: false,
+    });
+    renderWithProviders(<PlaygroundPage />);
+    expect(screen.getByText(/reconnecting/i)).toBeInTheDocument();
   });
 });
