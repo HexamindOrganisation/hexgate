@@ -1665,12 +1665,13 @@ async def test_seeded_compose_demo_resolves(session_factory) -> None:
         assert mode("billing", "agent.run") == "allow"
         assert mode("default", "agent.run") == "deny"
 
-        # The sub-agent reach edge is active: support may reach billing_bot as a
-        # tool (lowered to agent.tool:billing_bot in the resolved policy).
-        assert "agent.tool:billing_bot" in ps.policy_for("support").effective_tools
+        # Delegation is gated by the delegate_to_billing TOOL (the served sub-agent
+        # surfaces as a tool call on the native adapter), not a compose reach — so
+        # the resolved policy carries no lowered agent.tool:billing_bot key.
+        assert "agent.tool:billing_bot" not in ps.policy_for("support").effective_tools
 
-        # billing_bot: only the billing seat is admitted to start it directly;
-        # the support seat reaches it as a sub-agent, but can't start it head-on.
+        # billing_bot: only the billing seat is admitted to start it directly; the
+        # support seat delegates via the tool but can't start it head-on.
         bs = (
             await svc.compose_resolve(s, DEFAULT_PROJECT_ID, agent="billing_bot")
         ).policy_set

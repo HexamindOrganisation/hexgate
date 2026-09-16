@@ -3,9 +3,11 @@
 Writes the demo's `policy.yaml` + capability files into the default project's
 `policy_file` store, so the dashboard's **Policies** editor opens on a real
 multi-module compose policy — a front-line ``support_bot`` and a refunds
-specialist ``billing_bot``, with tool permissions, role→agent admission (who may
-start each bot), and agent→sub-agent reach all composed from the same imported
-capabilities. The same scenario runs locally in ``deploy/compose_support_demo.py``.
+specialist ``billing_bot``, with tool permissions and role→agent admission (who
+may start each bot) composed from the same imported capabilities. The support
+seat can't refund itself, so it delegates to billing_bot via the gated
+``delegate_to_billing`` tool. The same scenario runs locally in
+``deploy/compose_support_demo.py``.
 
 Direct row inserts (not the write-time flip/recompile path), so seeding is a
 pure store fixture — idempotent per ``(project_id, name)``.
@@ -34,8 +36,6 @@ boundary:
     mcp-demo-compute_tip: { mode: allow }     # safe MCP tool
     mcp-demo-send_invoice: { mode: allow }    # ceiling; billing grants w/ approval
     mcp-demo-read_secret: { mode: deny }      # dangerous MCP tool — always denied
-  reach:
-    billing_bot: { as: tool }   # reach ceiling: callable as a sub-agent tool
   admission: { mode: allow }    # ingress ceiling: a seat may be admitted to start a bot
 agents:
   support_bot:
@@ -77,14 +77,11 @@ _CAPS = {
         "  send_email: { mode: allow }\n"
         "  escalate: { mode: approval_required }\n"
     ),
-    # Activates the sub-agent reach + the delegate-to-billing TOOL (a served
+    # The delegate-to-billing tool runs the billing_bot sub-agent (a served
     # sub-agent surfaces delegation as a tool call, so it's gated as one). The
     # support seat imports this but NOT payments, so delegation is its only path
     # to a refund.
-    "caps/support/delegate.yaml": (
-        "tools:\n  delegate_to_billing: { mode: allow }\n"
-        "reach:\n  billing_bot: { as: tool }\n"
-    ),
+    "caps/support/delegate.yaml": ("tools:\n  delegate_to_billing: { mode: allow }\n"),
     "caps/billing/payments.yaml": (
         "tools:\n"
         "  refund_order: { mode: allow, constraint: "
