@@ -3,9 +3,13 @@ converters. Pure functions over plain dicts — no handler, no emit."""
 
 from __future__ import annotations
 
+from typing import Any
+
+import pytest
 from langchain_core.messages import (
     AIMessage,
     AIMessageChunk,
+    BaseMessage,
     ChatMessage,
     FunctionMessage,
     HumanMessage,
@@ -22,7 +26,17 @@ from hexgate.adapters.langchain.messages import (
     text_part,
 )
 
-# --- input_message ------------------------------------------------------------
+
+def _tool_call(call_id: str | None = "call_1") -> dict[str, Any]:
+    return {
+        "name": "get_weather",
+        "args": {"city": "Paris"},
+        "id": call_id,
+        "type": "tool_call",
+    }
+
+
+# --- Roles --------------------------------------------------------------------
 
 
 def test_input_message_happy_path() -> None:
@@ -32,33 +46,37 @@ def test_input_message_happy_path() -> None:
     }
 
 
-def test_when_message_is_a_system_message_then_role_is_system() -> None:
-    assert input_message(SystemMessage(content="Be terse."))["role"] == "system"
+@pytest.mark.parametrize(
+    ("message", "role"),
+    [
+        (SystemMessage(content="Be terse."), "system"),
+        (HumanMessage(content="Hi"), "user"),
+        (AIMessage(content="Sunny."), "assistant"),
+        # A chunk's ``type`` is its own class name ("AIMessageChunk"), so an
+        # unnormalised lookup files a streamed completion under "user" — the
+        # model's own answer attributed to the user.
+        (AIMessageChunk(content="Sunny."), "assistant"),
+        (ToolMessageChunk(content="21C", tool_call_id="call_1"), "tool"),
+        # ChatMessage carries a caller-chosen role.
+        (ChatMessage(content="hi", role="critic"), "critic"),
+        # A bare prompt string from the non-chat ``on_llm_start`` path.
+        ("Say hi", "user"),
+    ],
+)
+def test_when_the_message_is_X_then_the_role_is_Y(message: Any, role: str) -> None:
+    assert input_message(message)["role"] == role
 
 
-def test_when_message_is_an_ai_message_then_role_is_assistant() -> None:
-    assert input_message(AIMessage(content="Sunny."))["role"] == "assistant"
+# --- Tool calls and their results ---------------------------------------------
 
 
 def test_when_ai_message_calls_a_tool_then_a_tool_call_part_is_emitted() -> None:
-    """The assistant's tool-call message is what a decision row points back
-    to, so the call id and the arguments have to survive the conversion."""
-    message = AIMessage(
-        content="",
-        tool_calls=[
-            {
-                "name": "get_weather",
-                "args": {"city": "Paris"},
-                "id": "call_1",
-                "type": "tool_call",
-            }
-        ],
-    )
+    """Empty ``content`` contributes no part: a tool-calling turn normally has
+    no text, and an empty text part would be noise on every such row."""
+    message = AIMessage(content="", tool_calls=[_tool_call()])
 
     assert input_message(message) == {
         "role": "assistant",
-        # content "" contributes no part: a tool-calling turn normally has
-        # no text, and an empty text part would be noise on every such row.
         "parts": [
             {
                 "type": "tool_call",
@@ -71,22 +89,17 @@ def test_when_ai_message_calls_a_tool_then_a_tool_call_part_is_emitted() -> None
 
 
 def test_when_ai_message_has_text_and_a_tool_call_then_both_parts_survive() -> None:
-    message = AIMessage(
-        content="Let me look that up.",
-        tool_calls=[
-            {"name": "get_weather", "args": {}, "id": "call_1", "type": "tool_call"}
-        ],
-    )
+    message = AIMessage(content="Looking that up.", tool_calls=[_tool_call()])
 
-    parts = input_message(message)["parts"]
-
-    assert [part["type"] for part in parts] == ["text", "tool_call"]
+    assert [part["type"] for part in input_message(message)["parts"]] == [
+        "text",
+        "tool_call",
+    ]
 
 
 def test_when_a_tool_call_failed_to_parse_then_it_is_kept_with_its_error() -> None:
-    """A model that asked for a tool in malformed JSON is exactly what a
-    reader is trying to explain, so the raw string and the parse error are
-    both kept rather than dropped with the call."""
+    """A model that asked for a tool in malformed JSON is exactly what a reader
+    is trying to explain, so the raw string and the error both survive."""
     message = AIMessage(
         content="",
         invalid_tool_calls=[
@@ -105,250 +118,172 @@ def test_when_a_tool_call_failed_to_parse_then_it_is_kept_with_its_error() -> No
     assert part["error"] == "Malformed args."
 
 
-def test_when_message_is_a_tool_result_then_it_becomes_a_tool_call_response() -> None:
+@pytest.mark.parametrize(
+    ("message", "kinds"),
+    [
+        # Promoted into the standardized field, so the block would be a second
+        # copy of one call under a different id (the block carries the
+        # output-item id, the part the call id a ToolMessage correlates on).
+        pytest.param(
+            AIMessage(
+                content=[{"type": "function_call", "call_id": "call_1", "id": "fc_1"}],
+                tool_calls=[_tool_call()],
+            ),
+            ["tool_call"],
+            id="openai-responses-promoted",
+        ),
+        pytest.param(
+            AIMessage(
+                content=[{"type": "tool_use", "id": "call_1", "name": "get_weather"}],
+                tool_calls=[_tool_call()],
+            ),
+            ["tool_call"],
+            id="anthropic-promoted",
+        ),
+        # Nothing promoted it, so the block is the only record there is — an
+        # un-translated provider shape, a hand-built message, a replayed
+        # transcript. Dropping by block *type* would lose the call entirely.
+        pytest.param(
+            AIMessage(
+                content=[{"type": "function_call", "call_id": "call_1", "id": "fc_1"}]
+            ),
+            ["function_call"],
+            id="orphan-block",
+        ),
+        # Per call id, not per message: a partially translated message keeps
+        # the half with no standardized counterpart.
+        pytest.param(
+            AIMessage(
+                content=[
+                    {"type": "tool_use", "id": "call_1"},
+                    {"type": "tool_use", "id": "call_2"},
+                ],
+                tool_calls=[_tool_call()],
+            ),
+            ["tool_use", "tool_call"],
+            id="one-of-two-promoted",
+        ),
+        # ToolCall.id is str | None. Matching on a truthy id would leave an
+        # id-less block matching nothing and going out beside the part built
+        # from the very same call — two tool_call parts, nothing to tell them
+        # apart, which is the double-record the rule exists to prevent.
+        pytest.param(
+            AIMessage(
+                content=[{"type": "tool_use", "name": "get_weather"}],
+                tool_calls=[_tool_call(None)],
+            ),
+            ["tool_call"],
+            id="both-id-less",
+        ),
+        # The provider ran this one itself, so it never reaches tool_calls and
+        # the block is the only record of it.
+        pytest.param(
+            AIMessage(content=[{"type": "server_tool_use", "id": "s1"}]),
+            ["server_tool_use"],
+            id="provider-run-tool",
+        ),
+    ],
+)
+def test_a_tool_call_block_is_dropped_only_when_the_standardized_field_repeats_it(
+    message: BaseMessage, kinds: list[str]
+) -> None:
+    assert [part["type"] for part in input_message(message)["parts"]] == kinds
+
+
+@pytest.mark.parametrize(
+    ("message", "call_id", "name"),
+    [
+        (
+            ToolMessage(content="21C", tool_call_id="call_1", name="get_weather"),
+            "call_1",
+            "get_weather",
+        ),
+        # FunctionMessage has no tool_call_id field at all, so ``name`` is the
+        # only thing saying which call this answers.
+        (FunctionMessage(content="21C", name="get_weather"), "", "get_weather"),
+    ],
+)
+def test_a_tool_result_becomes_a_tool_call_response(
+    message: BaseMessage, call_id: str, name: str
+) -> None:
     """The only place a tool's return value is stored: a policy_decision row
     records the call, never what came back."""
-    message = ToolMessage(
-        content="sunny, 21C", tool_call_id="call_1", name="get_weather"
-    )
-
     assert input_message(message) == {
         "role": "tool",
         "parts": [
             {
                 "type": "tool_call_response",
-                "id": "call_1",
-                "name": "get_weather",
-                "response": "sunny, 21C",
-            }
-        ],
-    }
-
-
-def test_when_the_tool_result_is_a_legacy_function_message_then_name_attributes_it() -> (
-    None
-):
-    """``FunctionMessage`` has no ``tool_call_id`` field at all, so ``name`` is
-    the only thing that says which call this is the result of."""
-    [part] = input_message(FunctionMessage(content="sunny", name="get_weather"))[
-        "parts"
-    ]
-
-    assert part["id"] == ""
-    assert part["name"] == "get_weather"
-
-
-def test_when_a_content_block_restates_a_tool_call_then_it_is_not_emitted_twice() -> (
-    None
-):
-    """Providers that put the call in ``content`` as well as in the
-    standardized field — OpenAI's Responses API (``function_call``), Anthropic
-    (``tool_use``) — would otherwise land one call as two parts under two
-    different ids: the output-item id in the block, the call id a later
-    ``ToolMessage`` correlates on in the part."""
-    message = AIMessage(
-        content=[
-            {
-                "type": "function_call",
-                "call_id": "call_1",
-                "id": "fc_1",
-                "name": "get_weather",
-                "arguments": '{"city": "Paris"}',
-            }
-        ],
-        tool_calls=[
-            {
-                "name": "get_weather",
-                "args": {"city": "Paris"},
-                "id": "call_1",
-                "type": "tool_call",
-            }
-        ],
-    )
-
-    assert input_message(message)["parts"] == [
-        {
-            "type": "tool_call",
-            "id": "call_1",
-            "name": "get_weather",
-            "arguments": {"city": "Paris"},
-        }
-    ]
-
-
-def test_when_a_tool_call_block_was_not_promoted_then_it_is_kept() -> None:
-    """Dropping by block *type* would lose the call entirely whenever nothing
-    promoted it into the standardized field — an un-translated provider shape,
-    a hand-built message, a transcript replayed from a checkpointer. The block
-    is then the only record there is."""
-    block = {
-        "type": "function_call",
-        "call_id": "call_1",
-        "id": "fc_1",
-        "name": "get_weather",
-        "arguments": '{"city": "Paris"}',
-    }
-
-    assert input_message(AIMessage(content=[block]))["parts"] == [block]
-
-
-def test_when_only_one_of_two_tool_call_blocks_was_promoted_then_both_survive() -> None:
-    """The drop is per call id, not per message: a partially-translated
-    message must not lose the half that has no standardized counterpart."""
-    promoted = {
-        "type": "function_call",
-        "call_id": "call_1",
-        "id": "fc_1",
-        "name": "get_weather",
-        "arguments": "{}",
-    }
-    orphan = {**promoted, "call_id": "call_2", "id": "fc_2"}
-    message = AIMessage(
-        content=[promoted, orphan],
-        tool_calls=[
-            {"name": "get_weather", "args": {}, "id": "call_1", "type": "tool_call"}
-        ],
-    )
-
-    assert [part["type"] for part in input_message(message)["parts"]] == [
-        "function_call",
-        "tool_call",
-    ]
-
-
-def test_when_neither_the_call_nor_the_block_has_an_id_then_it_is_still_one_part() -> (
-    None
-):
-    """``ToolCall.id`` is ``str | None``. Matching on a truthy id would leave
-    an id-less block matching nothing and going out beside the part built from
-    the very same call — two ``tool_call`` parts, same name, no id to tell them
-    apart, which is the double-record this rule exists to prevent."""
-    message = AIMessage(
-        content=[{"type": "tool_use", "name": "get_weather", "input": {}}],
-        tool_calls=[
-            {"name": "get_weather", "args": {}, "id": None, "type": "tool_call"}
-        ],
-    )
-
-    assert [part["type"] for part in input_message(message)["parts"]] == ["tool_call"]
-
-
-def test_when_a_content_block_is_a_provider_run_tool_then_it_is_carried_through() -> (
-    None
-):
-    """``server_tool_use`` never reaches ``tool_calls`` — the provider ran it
-    itself — so the block is the only record of it."""
-    block = {"type": "server_tool_use", "id": "srv_1", "name": "web_search"}
-
-    assert input_message(AIMessage(content=[block]))["parts"] == [block]
-
-
-def test_when_content_is_a_block_list_then_text_blocks_are_flattened() -> None:
-    """Multimodal content: the text collapses into GenAI text parts, and the
-    image block is carried through whole — dropping it would lose exactly the
-    attachment an investigator came for."""
-    image = {"type": "image_url", "image_url": {"url": "https://x/y.png"}}
-    message = HumanMessage(content=[{"type": "text", "text": "Describe this"}, image])
-
-    assert input_message(message)["parts"] == [
-        {"type": "text", "content": "Describe this"},
-        image,
-    ]
-
-
-def test_when_a_content_block_is_a_bare_string_then_it_becomes_a_text_part() -> None:
-    """``content`` may be a list of plain strings, not only of typed blocks."""
-    assert input_message(HumanMessage(content=["first", "second"]))["parts"] == [
-        {"type": "text", "content": "first"},
-        {"type": "text", "content": "second"},
-    ]
-
-
-def test_when_message_is_a_bare_string_then_it_is_a_user_text_message() -> None:
-    """The non-chat ``on_llm_start`` path hands over prompt strings."""
-    assert input_message("Say hi") == {
-        "role": "user",
-        "parts": [{"type": "text", "content": "Say hi"}],
-    }
-
-
-def test_when_the_message_is_a_streamed_chunk_then_the_role_still_resolves() -> None:
-    """A streamed call hands ``on_llm_end`` a merged chunk, not a plain
-    message, and a chunk's ``type`` is its own class name — so an unnormalised
-    lookup would file the model's answer under ``user``."""
-    assert input_message(AIMessageChunk(content="Sunny."))["role"] == "assistant"
-    assert input_message(ToolMessageChunk(content="21C", tool_call_id="call_1")) == {
-        "role": "tool",
-        "parts": [
-            {
-                "type": "tool_call_response",
-                "id": "call_1",
-                "name": "",
+                "id": call_id,
+                "name": name,
                 "response": "21C",
             }
         ],
     }
 
 
-def test_when_message_is_a_chat_message_then_its_own_role_is_used() -> None:
-    assert input_message(ChatMessage(content="hi", role="critic"))["role"] == "critic"
+# --- Content blocks -----------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("content", "parts"),
+    [
+        # Multimodal: the text collapses into a GenAI text part and the image
+        # is carried through whole — dropping it would lose exactly the
+        # attachment an investigator came for.
+        (
+            [{"type": "text", "text": "Describe this"}, {"type": "image_url"}],
+            [{"type": "text", "content": "Describe this"}, {"type": "image_url"}],
+        ),
+        # A list of plain strings, not typed blocks.
+        (["first"], [{"type": "text", "content": "first"}]),
+    ],
+)
+def test_when_content_is_a_block_list_then_text_blocks_are_flattened(
+    content: Any, parts: list[dict[str, Any]]
+) -> None:
+    assert input_message(HumanMessage(content=content))["parts"] == parts
 
 
 # --- output_messages ----------------------------------------------------------
 
 
-def test_output_messages_happy_path() -> None:
-    result = LLMResult(
-        generations=[[ChatGeneration(message=AIMessage(content="Sunny."))]]
-    )
+@pytest.mark.parametrize(
+    ("generations", "expected"),
+    [
+        (
+            [ChatGeneration(message=AIMessage(content="Sunny."))],
+            [{"role": "assistant", "parts": [text_part("Sunny.")]}],
+        ),
+        # Streaming merges the chunks and hands on_llm_end a ChatGenerationChunk.
+        (
+            [ChatGeneration(message=AIMessageChunk(content="Sunny."))],
+            [{"role": "assistant", "parts": [text_part("Sunny.")]}],
+        ),
+        # A non-chat LLM yields a bare Generation with no .message.
+        (
+            [Generation(text="Sunny.")],
+            [{"role": "assistant", "parts": [text_part("Sunny.")]}],
+        ),
+        ([], []),
+    ],
+)
+def test_output_messages_happy_path(
+    generations: list[Any], expected: list[dict[str, Any]]
+) -> None:
+    result = LLMResult(generations=[generations] if generations else [])
 
-    assert output_messages(result) == [
-        {"role": "assistant", "parts": [text_part("Sunny.")]}
-    ]
+    assert output_messages(result) == expected
 
 
 def test_when_the_completion_is_a_tool_call_then_it_is_a_tool_call_part() -> None:
-    message = AIMessage(
-        content="",
-        tool_calls=[
-            {
-                "name": "get_weather",
-                "args": {"city": "Paris"},
-                "id": "call_1",
-                "type": "tool_call",
-            }
-        ],
+    result = LLMResult(
+        generations=[
+            [ChatGeneration(message=AIMessage(content="", tool_calls=[_tool_call()]))]
+        ]
     )
-    result = LLMResult(generations=[[ChatGeneration(message=message)]])
 
     [completion] = output_messages(result)
     assert completion["parts"][0]["name"] == "get_weather"
-
-
-def test_when_the_llm_is_not_a_chat_model_then_the_generated_text_is_used() -> None:
-    """A bare ``Generation`` has no ``.message``; the text is the whole
-    completion."""
-    result = LLMResult(generations=[[Generation(text="Sunny.")]])
-
-    assert output_messages(result) == [
-        {"role": "assistant", "parts": [text_part("Sunny.")]}
-    ]
-
-
-def test_when_the_completion_was_streamed_then_it_is_still_the_assistant() -> None:
-    """``BaseChatModel.astream`` merges the chunks and hands ``on_llm_end`` a
-    ``ChatGenerationChunk`` carrying an ``AIMessageChunk``."""
-    result = LLMResult(
-        generations=[[ChatGeneration(message=AIMessageChunk(content="Sunny."))]]
-    )
-
-    assert output_messages(result) == [
-        {"role": "assistant", "parts": [text_part("Sunny.")]}
-    ]
-
-
-def test_when_there_are_no_generations_then_there_is_no_completion() -> None:
-    assert output_messages(LLMResult(generations=[])) == []
 
 
 # --- split_system_instructions ------------------------------------------------
@@ -357,29 +292,25 @@ def test_when_there_are_no_generations_then_there_is_no_completion() -> None:
 def test_split_system_instructions_happy_path() -> None:
     """LangChain keeps the system prompt at the head of the list; the wire
     contract carries it in its own field, so it is lifted rather than copied."""
-    messages = [
-        {"role": "system", "parts": [text_part("Be terse.")]},
-        {"role": "user", "parts": [text_part("Hi")]},
-    ]
+    user = {"role": "user", "parts": [text_part("Hi")]}
+    messages = [{"role": "system", "parts": [text_part("Be terse.")]}, user]
 
-    instructions, rest = split_system_instructions(messages)
-
-    assert instructions == [text_part("Be terse.")]
-    assert rest == [{"role": "user", "parts": [text_part("Hi")]}]
+    assert split_system_instructions(messages) == ([text_part("Be terse.")], [user])
 
 
-def test_when_there_is_no_system_message_then_nothing_is_lifted() -> None:
-    messages = [{"role": "user", "parts": [text_part("Hi")]}]
-
-    assert split_system_instructions(messages) == ([], messages)
-
-
-def test_when_a_system_message_is_mid_conversation_then_it_stays_put() -> None:
-    """Only the leading run is instructions. One injected later is part of the
-    exchange and belongs in the transcript where it happened."""
-    messages = [
-        {"role": "user", "parts": [text_part("Hi")]},
-        {"role": "system", "parts": [text_part("Now be terse.")]},
-    ]
-
+@pytest.mark.parametrize(
+    "messages",
+    [
+        pytest.param([{"role": "user", "parts": []}], id="no-system-message"),
+        # Only the leading run is instructions. One injected later is part of
+        # the exchange and belongs where it happened.
+        pytest.param(
+            [{"role": "user", "parts": []}, {"role": "system", "parts": []}],
+            id="system-message-mid-conversation",
+        ),
+    ],
+)
+def test_when_there_is_no_leading_system_message_then_nothing_is_lifted(
+    messages: list[dict[str, Any]],
+) -> None:
     assert split_system_instructions(messages) == ([], messages)

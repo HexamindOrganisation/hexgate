@@ -1,17 +1,15 @@
 """LangChain ``BaseMessage`` objects → OTel GenAI ``role``/``parts`` messages.
 
 The shape translation for the LangChain adapter, kept apart from the callback
-handler in ``usage.py`` exactly as ``adapters/openai/messages.py`` is from its
-hooks: pure functions over plain dicts that decide nothing about when or
-whether to emit. What this layer shares with the other adapters' lives in
-``adapters/_messages.py``.
+handler in ``usage.py`` as ``adapters/openai/messages.py`` is from its hooks:
+pure functions over plain dicts that decide nothing about when or whether to
+emit. What they share lives in ``adapters/_messages.py``.
 
-LangChain differs from the Responses API in two ways that matter here. Its
-messages name their kind under ``type`` rather than ``role``, with its own
-vocabulary (``human``/``ai``) that has to be mapped onto GenAI's
-``user``/``assistant``; and there is no separate system-prompt argument — the
-system message is simply the head of the list, which is why
-:func:`split_system_instructions` exists to lift it back out.
+Two LangChain differences drive most of this file. Messages name their kind
+under ``type``, in their own vocabulary (``human``/``ai``) that has to be
+mapped onto GenAI's ``user``/``assistant``; and there is no system-prompt
+argument — the system message is just the head of the list, which is what
+:func:`split_system_instructions` lifts back out.
 """
 
 from __future__ import annotations
@@ -39,22 +37,17 @@ _ROLES = {
 # block translators before a callback ever sees them.
 _TEXT_BLOCK_TYPES = frozenset({"text"})
 
-# Content-block types that may restate a tool call the message also carries in
-# its standardized ``tool_calls`` — ``function_call`` is the OpenAI Responses
-# shape, ``tool_use`` Anthropic's, and ``tool_call``/``invalid_tool_call`` are
-# LangChain's own. Emitting the block *and* the standardized part records one
-# call twice under two different ids: the block carries the output-item id
-# (``fc_1``), the part the call id a later ``ToolMessage`` correlates on
-# (``call_1``), so a reader matching parts by id sees twice the calls that
-# happened, half of them never answered.
+# Content-block types that *may* restate a tool call the message also carries
+# in its standardized ``tool_calls``: ``function_call`` is the OpenAI Responses
+# shape, ``tool_use`` Anthropic's, the rest LangChain's own. Emitting the block
+# and the part records one call twice under two ids — the block carries the
+# output-item id, the part the call id a later ``ToolMessage`` correlates on.
 #
-# "May" is the whole point — being one of these types is not enough to drop a
-# block, only being one *whose call id the standardized field also carries*
-# (see :func:`_promoted_call_ids`). A block whose id is absent from it is the
-# only record of that call: an un-translated provider shape, a hand-built
-# message, a transcript replayed from a checkpointer. ``server_tool_use`` and
-# ``mcp_tool_use`` are not listed at all — the provider ran those itself, so
-# they never reach ``tool_calls`` and never look promoted.
+# "May" is the point: being one of these types is not enough to drop a block,
+# only being one whose call id the standardized field also carries (see
+# :func:`_promoted_call_ids`), since an unpromoted block is the only record of
+# that call. ``server_tool_use``/``mcp_tool_use`` are absent deliberately — the
+# provider ran those itself, so they never reach ``tool_calls``.
 _TOOL_CALL_BLOCK_TYPES = frozenset(
     {"function_call", "tool_use", "tool_call", "invalid_tool_call"}
 )
@@ -64,10 +57,9 @@ def _role(entry: dict[str, Any]) -> str:
     """The GenAI role for one message dict.
 
     The chunk classes do not share their parent's ``type``: a streamed
-    completion arrives as an ``AIMessageChunk``, whose ``type`` is the literal
-    ``"AIMessageChunk"``. Unnormalised it misses the table and falls back to
-    ``user``, filing the model's own answer as the user's — so the suffix is
-    stripped before the lookup rather than each chunk class being listed.
+    completion arrives as an ``AIMessageChunk``, whose ``type`` is that literal
+    string. Unnormalised it misses the table and falls back to ``user``, filing
+    the model's own answer as the user's.
     """
     kind = entry.get("type") or ""
     kind = kind.removesuffix("MessageChunk").lower() or kind
@@ -79,17 +71,14 @@ def _role(entry: dict[str, Any]) -> str:
 def _promoted_call_ids(entry: dict[str, Any]) -> frozenset[str]:
     """The call ids :func:`_tool_call_parts` will emit for this message.
 
-    Read off the standardized fields rather than assumed from a block's type,
-    so dropping a block is conditional on something else actually recording
-    that call. A block's id lives under ``call_id`` on the OpenAI Responses
-    shape and under ``id`` on Anthropic's and LangChain's own.
+    Read off the standardized fields, so dropping a block is conditional on
+    something else actually recording that call. A block's id lives under
+    ``call_id`` on the OpenAI Responses shape, ``id`` on the others.
 
-    A missing id is normalised to ``""`` on both sides rather than filtered
-    out: ``ToolCall.id`` is ``str | None`` in langchain_core, and dropping
-    those from the set would leave an id-less block matching nothing and going
-    out beside the part built from the very same call — two ``tool_call``
-    parts with the same name and no id to tell them apart, which is the exact
-    double-record this rule exists to prevent.
+    A missing id normalises to ``""`` on both sides rather than being filtered:
+    ``ToolCall.id`` is ``str | None``, and filtering would leave an id-less
+    block matching nothing and going out beside the part built from the same
+    call — the exact double-record this rule prevents.
     """
     return frozenset(
         call.get("id") or ""
@@ -101,20 +90,16 @@ def _promoted_call_ids(entry: dict[str, Any]) -> frozenset[str]:
 def _content_parts(content: Any, promoted: frozenset[str]) -> list[dict[str, Any]]:
     """A message's ``content`` as GenAI parts.
 
-    ``content`` is either a bare string or a list of blocks, each a string or a
-    dict naming itself under ``type``. A text block becomes a ``text`` part;
-    anything else (an image, an Anthropic ``thinking`` block, a provider
-    extension) is carried through whole, since dropping it would lose exactly
-    the attachment an investigator came for.
+    A text block becomes a ``text`` part; anything else (an image, a
+    ``thinking`` block, a provider extension) is carried through whole, since
+    dropping it would lose exactly the attachment an investigator came for.
+    A tool-call block whose id is in ``promoted`` is dropped, because
+    :func:`_tool_call_parts` re-emits that call — see
+    :data:`_TOOL_CALL_BLOCK_TYPES`.
 
-    Empty content yields no parts at all rather than one empty ``text`` part:
-    an ``AIMessage`` that only calls a tool has ``content == ""``, and that is
-    the common case, not an anomaly.
-
-    A block naming a tool call whose id is in ``promoted`` is dropped here,
-    because :func:`_tool_call_parts` re-emits that call from the standardized
-    field — see :data:`_TOOL_CALL_BLOCK_TYPES`. One that is not promoted stays:
-    nothing else would record it.
+    Empty content yields no parts rather than one empty ``text`` part: an
+    ``AIMessage`` that only calls a tool has ``content == ""``, and that is the
+    common case.
     """
     if not content:
         return []
@@ -143,14 +128,13 @@ def _tool_call_parts(entry: dict[str, Any]) -> list[dict[str, Any]]:
 
     ``arguments`` is whatever LangChain put there: a parsed dict for a valid
     call, the raw string the model emitted for an invalid one. Neither is
-    re-encoded. Redaction reaches the dict natively, and reaches a *parseable*
-    string through ``TOOL_CALL_JSON_KEYS`` — but an invalid call's string is by
+    re-encoded. Redaction reaches the dict natively and a *parseable* string
+    through ``TOOL_CALL_JSON_KEYS`` — but an invalid call's string is by
     construction the one LangChain could not parse, and ``_redact_json_string``
-    hands unparseable text back untouched. So a secret inside a malformed tool
-    call is stored as the model emitted it. Kept anyway, with its parse
-    ``error``: a model that asked for a tool in broken JSON is precisely what a
-    reader is trying to explain, and no key-name rule can open a blob that is
-    not JSON.
+    hands unparseable text back untouched, so a secret in a malformed tool call
+    is stored as emitted. Kept anyway, with its parse ``error``: that is
+    precisely what a reader is trying to explain, and no key-name rule can open
+    a blob that is not JSON.
     """
     parts: list[dict[str, Any]] = [
         {
@@ -177,12 +161,11 @@ def _tool_call_parts(entry: dict[str, Any]) -> list[dict[str, Any]]:
 def input_message(message: Any) -> dict[str, Any]:
     """One ``BaseMessage`` (or a bare prompt string) as a GenAI message.
 
-    A ``ToolMessage`` becomes a ``tool_call_response`` part rather than a text
-    one: a decision event records that a tool was called but never what it
-    returned, so this is the only place that value is stored, and it needs the
-    ``tool_call_id`` beside it to be matched back to the call. ``name`` rides
-    along because the legacy ``FunctionMessage`` has no ``tool_call_id`` field
-    at all, which would otherwise leave its result unattributable.
+    A ``ToolMessage`` becomes a ``tool_call_response`` rather than text: a
+    decision event records that a tool was called but never what it returned,
+    so this is the only place that value is stored, and it needs the
+    ``tool_call_id`` to be matched back. ``name`` rides along because the
+    legacy ``FunctionMessage`` has no ``tool_call_id`` field at all.
     """
     entry = as_dict(message)
     if entry is None:
@@ -212,13 +195,10 @@ def input_message(message: Any) -> dict[str, Any]:
 def output_messages(response: Any) -> list[dict[str, Any]]:
     """An ``LLMResult`` as the completion of the call that produced it.
 
-    ``generations`` is a list per prompt, and the callback fires once per LLM
-    call, so only ``generations[0]`` belongs to this event; its own entries are
-    the ``n`` candidates the provider returned — normally one, and each is its
-    own assistant message.
-
-    A non-chat LLM yields a bare ``Generation`` with no ``message``, in which
-    case the generated text is the whole completion.
+    Only ``generations[0]`` belongs to this event — ``generations`` is a list
+    per prompt and the callback fires once per call; its entries are the ``n``
+    candidates, each its own assistant message. A non-chat LLM yields a bare
+    ``Generation`` with no ``message``, whose text is the whole completion.
     """
     generations = response.generations[0] if response.generations else []
     messages: list[dict[str, Any]] = []
@@ -240,15 +220,13 @@ def split_system_instructions(
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Lift the leading system messages out of a converted list.
 
-    LangChain has no separate system-prompt argument — the instructions are
-    just the head of the message list — while the wire contract carries them in
-    their own capped field, on the first event of each ``turn_key``. Splitting
-    rather than copying: the system prompt is often the largest thing in the
-    list, and storing it twice on the same event buys nothing.
+    The instructions are just the head of the list here, while the wire
+    contract carries them in their own capped field on the first event of each
+    ``turn_key``. Split rather than copied: the system prompt is often the
+    largest thing in the list.
 
-    Leading only. A system message that appears mid-conversation was injected
-    by the chain as part of the exchange and stays in the transcript where it
-    happened.
+    Leading only — one appearing mid-conversation was injected by the chain as
+    part of the exchange and stays where it happened.
     """
     cut = 0
     while cut < len(messages) and messages[cut].get("role") == "system":
