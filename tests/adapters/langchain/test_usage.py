@@ -405,8 +405,15 @@ async def test_when_nothing_names_a_model_then_a_placeholder_is_used(
 ) -> None:
     """The platform rejects an empty ``model`` (min_length=1) and would drop
     the whole event over its least interesting field."""
+    handler = _handler()
+    run_id = uuid4()
+
     with run_scope("my-agent"):
-        await _handler().on_llm_end(_result(), run_id=uuid4())
+        # No metadata on the request side and no model on the response.
+        await handler.on_chat_model_start(
+            {}, [[HumanMessage(content="Weather?")]], run_id=run_id
+        )
+        await handler.on_llm_end(_result(), run_id=run_id)
 
     assert messages[0]["model"] == "default"
 
@@ -415,20 +422,29 @@ async def test_when_nothing_names_a_model_then_a_placeholder_is_used(
 
 
 @pytest.mark.asyncio
-async def test_when_the_prompt_was_not_stashed_then_the_completion_still_lands(
+async def test_when_the_prompt_was_not_stashed_then_nothing_is_emitted(
     messages: list[dict[str, Any]],
 ) -> None:
-    """A handler attached mid-stream misses the start, and an empty input
-    beside a real completion beats no row at all."""
+    """A handler attached mid-stream misses the start. Emitting the completion
+    beside an empty input would cost more than that one row: advancing the
+    cursor on an empty list clobbers its mark and spends seq 0, which is the
+    only event that lifts the system prompt."""
+    handler = _handler()
+
     with run_scope("my-agent"):
-        await _handler().on_llm_end(
+        await handler.on_llm_end(
             _result(message=AIMessage(content="Sunny.")), run_id=uuid4()
         )
+        # The next real call must still be this turn's first event.
+        await _turn(
+            handler,
+            [SystemMessage(content="Be terse."), HumanMessage(content="Weather?")],
+            AIMessage(content="Sunny."),
+        )
 
-    assert messages[0]["input_messages"] == []
-    assert messages[0]["output_messages"][0]["parts"] == [
-        {"type": "text", "content": "Sunny."}
-    ]
+    [event] = messages
+    assert (event["message_seq"], event["resynced"]) == (0, False)
+    assert event["system_instructions"] == [{"type": "text", "content": "Be terse."}]
 
 
 @pytest.mark.asyncio
