@@ -710,7 +710,9 @@ def _transcript_rows(
     turn_key = f"{run_id}:{agent}"
     model = rng.choice(MODELS)
     # One imperfection per run at most: overlapping them would leave no
-    # seeded row showing a single marker on its own.
+    # seeded row showing a single marker on its own. `gap_at` is the turn
+    # whose ROW the pipeline lost — never turn 0, which carries the system
+    # instructions.
     gap_at = 1 if run_index % GAP_EVERY_N_RUNS == 0 and len(decisions) > 2 else None
     resync_at = 1 if gap_at is None and run_index % RESYNC_EVERY_N_RUNS == 0 else None
     truncate_at = (
@@ -759,31 +761,32 @@ def _transcript_rows(
                     ],
                 }
             ]
-        if index == gap_at:
-            # The event the pipeline lost: its seq is consumed, its row is not
-            # written, and the drawer must show the hole.
-            seq += 1
-        rows.append(
-            _message_seed_row(
-                target,
-                rng,
-                occurred_at=decision.timestamp
-                - timedelta(seconds=MESSAGE_LEAD_SECONDS),
-                session_id=decision.session_id,
-                user_id=decision.user_id,
-                run_id=run_id,
-                turn_key=turn_key,
-                agent_name=agent,
-                message_seq=seq,
-                model=model,
-                input_messages=new_input,
-                output_messages=_tool_call_completion(group, seq),
-                # First event of the turn_key only, as the adapters send it.
-                system_instructions=[_text(SYSTEM_PROMPT)] if seq == 0 else None,
-                resynced=index == resync_at,
-                truncated=index == truncate_at,
-            )
+        row = _message_seed_row(
+            target,
+            rng,
+            occurred_at=decision.timestamp - timedelta(seconds=MESSAGE_LEAD_SECONDS),
+            session_id=decision.session_id,
+            user_id=decision.user_id,
+            run_id=run_id,
+            turn_key=turn_key,
+            agent_name=agent,
+            message_seq=seq,
+            model=model,
+            input_messages=new_input,
+            output_messages=_tool_call_completion(group, seq),
+            # First event of the turn_key only, as the adapters send it.
+            system_instructions=[_text(SYSTEM_PROMPT)] if seq == 0 else None,
+            resynced=index == resync_at,
+            truncated=index == truncate_at,
         )
+        # The lost event: built in full, then dropped. Everything it caused
+        # stays — its seq is spent, its decision row is written, and the next
+        # turn's input cites the result of a call whose own event is gone. A
+        # dangling id is what a dropped span actually looks like; skipping
+        # only the number would leave the conversation reading continuously,
+        # which is the one thing a lost turn does not do.
+        if index != gap_at:
+            rows.append(row)
         seq += 1
 
     # What followed the last turn: its results fed back, and the model's
