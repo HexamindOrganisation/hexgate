@@ -100,3 +100,37 @@ describe("listLlmMessages()", () => {
     expect(urls[0]).toContain("session_id=sess-1&run_id=&");
   });
 });
+
+/**
+ * The AI Act downloads go through `requestBlob`, which shares the auth and
+ * error path with the JSON `request` but hands back bytes. These lock in both
+ * halves of that split.
+ */
+describe("AI Act downloads", () => {
+  it("returns the annex body as a blob", async () => {
+    vi.spyOn(window, "fetch").mockResolvedValue(
+      new Response('{"annex": true}', {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+
+    const blob = await api.downloadAiActAnnex("rpt_1", "p1");
+    expect(await blob.text()).toBe('{"annex": true}');
+  });
+
+  it("raises an ApiError with the tectonic log when a render fails", async () => {
+    // PR 4 returns 502 with the compile log attached rather than a partial
+    // PDF; the download button must surface that as an error, not save it.
+    vi.spyOn(window, "fetch").mockResolvedValue(
+      jsonResponse({ detail: "tectonic: undefined control sequence" }, 502),
+    );
+
+    const err = (await api
+      .downloadAiActReportPdf("rpt_1", "p1")
+      .catch((e) => e)) as ApiError;
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err.status).toBe(502);
+    expect(err.message).toBe("tectonic: undefined control sequence");
+  });
+});
