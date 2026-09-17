@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import random
@@ -596,17 +597,27 @@ def _text(content: str) -> Fields:
     return {"type": "text", "content": content}
 
 
-def _call_id(run_id: UUID, seq: int, index: int = 0) -> str:
-    """Identifies one call within one turn.
+def _call_id(turn_key: str, seq: int, index: int = 0) -> str:
+    """Identifies one call within one turn of one message list.
 
     The index is what keeps parallel calls apart: a completion asking for
     three tools at once produces three decisions, and the id is the only
     thing saying which decision belongs to which call.
+
+    Keyed on the `turn_key`, not on the run id: a handoff puts two message
+    lists in one session under one run, each counting `seq` from 0, so a
+    run-keyed id would hand the same string to a call in each — and a reader
+    matching a decision to its call by id inside a session has nothing left
+    to tell them apart. Digested rather than spelled out so the id still
+    reads like the opaque token a provider mints.
     """
-    return f"call_{run_id.hex[:8]}_{seq}_{index}"
+    digest = hashlib.blake2s(turn_key.encode(), digest_size=4).hexdigest()
+    return f"call_{digest}_{seq}_{index}"
 
 
-def _tool_call_completion(group: list[SeededDecision], seq: int) -> list[Fields]:
+def _tool_call_completion(
+    group: list[SeededDecision], turn_key: str, seq: int
+) -> list[Fields]:
     """The completion that asked for this turn's tools.
 
     One assistant message holding one `tool_call` part per decision, which
@@ -619,7 +630,7 @@ def _tool_call_completion(group: list[SeededDecision], seq: int) -> list[Fields]
             "parts": [
                 {
                     "type": "tool_call",
-                    "id": _call_id(decision.run.run_id, seq, index),
+                    "id": _call_id(turn_key, seq, index),
                     "name": decision.tool_name,
                     "arguments": json.dumps(
                         _tool_arguments(decision.tool_name, decision.case)
@@ -631,16 +642,23 @@ def _tool_call_completion(group: list[SeededDecision], seq: int) -> list[Fields]
     ]
 
 
-def _tool_result_messages(previous: list[SeededDecision], seq: int) -> list[Fields]:
+def _tool_result_messages(
+    previous: list[SeededDecision], turn_key: str, seq: int
+) -> list[Fields]:
     """One tool message per call the previous turn made.
 
     Parallel calls each return separately, so the next turn's input carries
     a result per call, matched to it by id.
     """
-    return [_tool_result_message(d, seq, index) for index, d in enumerate(previous)]
+    return [
+        _tool_result_message(d, turn_key, seq, index)
+        for index, d in enumerate(previous)
+    ]
 
 
-def _tool_result_message(previous: SeededDecision, seq: int, index: int = 0) -> Fields:
+def _tool_result_message(
+    previous: SeededDecision, turn_key: str, seq: int, index: int = 0
+) -> Fields:
     """What the framework fed back after the previous decision.
 
     One branch per outcome, because they are three different things and the
@@ -660,7 +678,7 @@ def _tool_result_message(previous: SeededDecision, seq: int, index: int = 0) -> 
         "parts": [
             {
                 "type": "tool_call_response",
-                "id": _call_id(previous.run.run_id, seq - 1, index),
+                "id": _call_id(turn_key, seq - 1, index),
                 "response": response,
             }
         ],
@@ -787,7 +805,7 @@ def _transcript_rows(
                 ]
             )
         else:
-            new_input = _tool_result_messages(groups[index - 1], seq)
+            new_input = _tool_result_messages(groups[index - 1], turn_key, seq)
         if index == resync_at:
             # A resync restates the whole list rather than extending it.
             new_input = [
@@ -814,7 +832,7 @@ def _transcript_rows(
             message_seq=seq,
             model=model,
             input_messages=new_input,
-            output_messages=_tool_call_completion(group, seq),
+            output_messages=_tool_call_completion(group, turn_key, seq),
             # First event of the turn_key only, as the adapters send it.
             system_instructions=[_text(SYSTEM_PROMPT)] if seq == 0 else None,
             resynced=index == resync_at,
@@ -846,7 +864,7 @@ def _transcript_rows(
             agent_name=agent,
             message_seq=seq,
             model=model,
-            input_messages=_tool_result_messages(groups[-1], seq),
+            input_messages=_tool_result_messages(groups[-1], turn_key, seq),
             output_messages=[
                 {"role": "assistant", "parts": [_text(rng.choice(FINAL_REPLIES))]}
             ],
