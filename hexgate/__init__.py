@@ -1,5 +1,6 @@
 """Public package surface for hexgate."""
 
+from hexgate.agents.enumeration import SubagentLink, enumerate_subagents
 from hexgate.agents.factory import (
     create_agent,
     enforce_policy,
@@ -56,6 +57,8 @@ __all__ = [
     "PolicyBuilder",
     "RolePolicyBuilder",
     "SubagentEdge",
+    "SubagentLink",
+    "enumerate_subagents",
     "assert_allows",
     "assert_denies",
     "assert_needs_approval",
