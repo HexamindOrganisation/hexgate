@@ -289,6 +289,10 @@ LONG_CONVERSATION_USER = USER_IDS[0]
 # several tools at once.
 HANDOFF_AGENT = "refunds-specialist"
 HANDOFF_USER = USER_IDS[1]
+# Its own agent name so the filter bar can reach it: there is no session
+# filter, and hunting a session id by eye through the events table is the
+# opposite of a usable example.
+PARALLEL_AGENT = "case-resolver"
 PARALLEL_USER = USER_IDS[2]
 
 # ── ClickHouse columns ────────────────────────────────────────────────────────
@@ -1140,6 +1144,7 @@ def generate_parallel_tool_calls_run(
             run=progress.snapshot(_elapsed_ms(start, timestamp)),
             case=case,
             tool_name=tool_name,
+            agent_name=PARALLEL_AGENT,
         )
         progress.record(outcome)
         return seeded
@@ -1156,7 +1161,9 @@ def generate_parallel_tool_calls_run(
     groups = [opening, fan_out]
     seeded = opening + fan_out
     rows = [_decision_seed_row(target, rng, d) for d in seeded]
-    return rows, _transcript_rows(target, rng, seeded, 2, groups=groups)
+    return rows, _transcript_rows(
+        target, rng, seeded, 2, groups=groups, agent_name=PARALLEL_AGENT
+    )
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
