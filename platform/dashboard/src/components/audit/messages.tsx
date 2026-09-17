@@ -104,7 +104,12 @@ function Part({ part }: { part: LlmMessagePart }) {
       <div className="py-0.5">
         <PartLabel label="Tool call" id={part.id} />
         <Pre>
-          <span className="font-medium text-foreground">
+          {/* The accent, not an outcome colour: allow/deny/approval are
+              verdicts, and this card already spends them on the decision
+              badge and the marker chips. The tool name is the token you
+              scan for and match against the decision row above, so it is
+              the one thing here that earns a hue. */}
+          <span className="font-medium text-primary">
             {String(part.name ?? "")}
           </span>
           {"("}
