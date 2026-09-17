@@ -10,6 +10,7 @@ from hexgate_api.core.clickhouse import (
     insert_batch,
     verify_written_columns,
 )
+from hexgate_api.features.audit.service import count_expr
 from hexgate_api.query_scope import scope_filters
 from hexgate_api.schemas import LlmInvocationEvent
 
@@ -158,17 +159,23 @@ def _scope(
 # their GROUPING() flags (1 = column rolled up); only the () set rolls up
 # every dimension, so that's the grand-total row.
 _GROUPING_SETS = "GROUPING SETS ((), (model), (agent_name), (user_id))"
-_SELECT_COLS = [
-    "model",
-    "agent_name",
-    "user_id",
-    "GROUPING(model) AS g_model",
-    "GROUPING(agent_name) AS g_agent",
-    "GROUPING(user_id) AS g_user",
-    "count() AS calls",
-    "sum(input_tokens) AS input_tokens",
-    "sum(output_tokens) AS output_tokens",
-]
+
+
+def _select_cols(distinct_events: bool) -> list[str]:
+    """The scan's projection. A function, not a constant, because how rows are
+    counted is the caller's call (``count_expr``); the column ORDER is fixed —
+    the unpacking below reads positionally."""
+    return [
+        "model",
+        "agent_name",
+        "user_id",
+        "GROUPING(model) AS g_model",
+        "GROUPING(agent_name) AS g_agent",
+        "GROUPING(user_id) AS g_user",
+        f"{count_expr(distinct_events)} AS calls",
+        "sum(input_tokens) AS input_tokens",
+        "sum(output_tokens) AS output_tokens",
+    ]
 
 
 def summarize_llm_invocations(
@@ -181,10 +188,20 @@ def summarize_llm_invocations(
     model: str | None = None,
     start_date: datetime | None = None,
     end_date: datetime | None = None,
+    distinct_events: bool = False,
 ) -> dict:
     """Totals + breakdowns for the scoped slice. Returns ``{totals, by_model,
     by_agent, by_user}``; each breakdown is ``{key, calls, input_tokens,
-    output_tokens, total_tokens}`` sorted by ``total_tokens`` desc."""
+    output_tokens, total_tokens}`` sorted by ``total_tokens`` desc.
+
+    ``distinct_events=True`` counts distinct ``event_id``s rather than rows, for
+    callers that must not report a retried invocation twice (the AI Act evidence
+    report). It does NOT extend to the token sums: deduplicating a ``sum``
+    needs one row per event, which is a different query. So under
+    ``distinct_events`` the token columns still count rows, and a caller that
+    cannot tolerate that must drop them rather than report them alongside
+    ``calls`` — which is what the evidence report's ``_call_counts`` does.
+    See ``features.audit.service.count_expr``."""
     where, params = _scope(
         project_id,
         since_hours,
@@ -195,8 +212,10 @@ def summarize_llm_invocations(
         end_date=end_date,
     )
     where_sql = " AND ".join(where)
+    # Reuses the audit slice's expression so "how a scan counts" has one
+    # definition across the two event tables that share this envelope.
     summary_sql = (
-        f"SELECT {', '.join(_SELECT_COLS)} "
+        f"SELECT {', '.join(_select_cols(distinct_events))} "
         f"FROM {LLM_INVOCATION_TABLE} WHERE {where_sql} GROUP BY {_GROUPING_SETS}"
     )
     result = client.query(summary_sql, parameters=params)

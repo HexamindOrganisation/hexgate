@@ -1021,3 +1021,57 @@ class AuditAnomaly(BaseModel):
     deny_rate: float
     first_seen: datetime
     last_seen: datetime
+
+
+# ---------------------------------------------------------------------------
+# AI Act evidence report (Specs/ai_act_evidence_report.md)
+# ---------------------------------------------------------------------------
+
+
+class AiActReportCreate(BaseModel):
+    """Generation request. Both bounds optional; the service defaults to the
+    full retention window ending now, and clamps whatever is supplied to what
+    the store can actually hold.
+
+    Field names are ``from``/``to`` on the wire (the spec's body shape) and
+    ``period_start``/``period_end`` in Python, where ``from`` is a keyword.
+    """
+
+    model_config = {"populate_by_name": True}
+
+    period_start: Optional[datetime] = Field(default=None, alias="from")
+    period_end: Optional[datetime] = Field(default=None, alias="to")
+
+
+class AiActReportSummary(BaseModel):
+    """A history row: what was generated, over what, by whom, and its digest.
+
+    ``annex_bytes`` is the signed byte length, not the row's storage size — a
+    verifier checking the digest needs to know how much it should have.
+    """
+
+    id: str
+    project_id: str
+    period_start: datetime
+    period_end: datetime
+    generated_at: datetime
+    # Both nullable: the row's actor FK degrades to NULL when the account is
+    # erased (models.actor_fk_column). The annex itself keeps the attribution
+    # — it is inside the signed bytes — so only this convenience view loses it.
+    generated_by_user_id: Optional[str] = None
+    generated_by_email: Optional[str] = None
+    annex_sha256: str
+    annex_bytes: int
+    annex_filename: str
+    signing_kid: str
+    signature_b64: str
+
+
+class AiActReportRead(AiActReportSummary):
+    """A history row plus the annex itself, parsed.
+
+    The parsed object is a convenience for a renderer; the signature covers the
+    bytes served by the annex download, not a re-serialization of this field.
+    """
+
+    annex: dict
