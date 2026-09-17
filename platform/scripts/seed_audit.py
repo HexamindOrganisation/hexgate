@@ -55,6 +55,8 @@ from hexgate_api.schemas import (  # noqa: E402
     LlmMessageEvent,
 )
 
+from hexgate.audit import MAX_INPUT_MESSAGES_BYTES  # noqa: E402
+
 # ── Agent & users ─────────────────────────────────────────────────────────────
 # Uses the dev default project id (imported above) so data is visible in the dashboard.
 # clear() scopes deletes to USER_IDS so real audit rows are not affected.
@@ -294,6 +296,41 @@ HANDOFF_USER = USER_IDS[1]
 # opposite of a usable example.
 PARALLEL_AGENT = "case-resolver"
 PARALLEL_USER = USER_IDS[2]
+
+# A retrieval-augmented call, filled to the SDK's input cap. This is the only
+# seeded row whose size is the point: the caps exist for RAG calls, where one
+# message carries every retrieved chunk, and everything else here is a few
+# hundred bytes. Sized off the constant rather than a fixed number of KiB so
+# it tracks the cap if the cap moves.
+RAG_AGENT = "policy-rag-agent"
+RAG_USER = USER_IDS[3]
+RAG_CHUNK_SOURCES = [
+    "handbook/refunds.md",
+    "handbook/shipping.md",
+    "handbook/chargebacks.md",
+    "policy/eu-consumer-rights.md",
+    "runbook/duplicate-charges.md",
+]
+# Retrieved prose, varied per chunk so the rendered block reads like real
+# retrieved context rather than a wall of one repeated line.
+RAG_SENTENCES = [
+    "A refund requested within 30 days of delivery is issued to the original "
+    "payment method and settles in three to five business days.",
+    "Where the customer paid by card and the card has since expired, the "
+    "refund is issued as store credit and the customer is notified by email.",
+    "Duplicate charges arising from a retried authorisation are reconciled "
+    "nightly; the second charge is voided before it settles wherever possible.",
+    "An order shipped to an address the customer did not enter is treated as "
+    "a fulfilment error, and the replacement ships at no cost to the customer.",
+    "Agents may not issue a refund above the order total, and any goodwill "
+    "credit beyond that is recorded against the case for review.",
+    "Under EU consumer law the customer may withdraw within fourteen days of "
+    "delivery without giving a reason, and the trader refunds all payments "
+    "received, including the standard cost of delivery.",
+    "A chargeback opened before the refund settles is contested with the "
+    "delivery record and the refund reference, and the case is held open "
+    "until the issuer decides.",
+]
 
 # ── ClickHouse columns ────────────────────────────────────────────────────────
 # Extends _DECISION_COLUMNS with received_at so the seed can control ingestion
@@ -1166,6 +1203,96 @@ def generate_parallel_tool_calls_run(
     )
 
 
+def _rag_chunk(rng: random.Random, index: int) -> str:
+    """One retrieved passage, cited the way a retriever hands it over."""
+    source = RAG_CHUNK_SOURCES[index % len(RAG_CHUNK_SOURCES)]
+    # Every sentence, shuffled: a retriever returns passages of roughly 500
+    # tokens, and drawing a subset gave chunks a quarter of that size — the
+    # cap would then be reached by implausibly many tiny ones.
+    body = " ".join(rng.sample(RAG_SENTENCES, k=len(RAG_SENTENCES)))
+    return f"[{source}#chunk-{index} score={rng.uniform(0.62, 0.94):.3f}]\n{body}"
+
+
+def _rag_context_parts(rng: random.Random, budget_bytes: int) -> list[Fields]:
+    """Retrieved chunks, filling the input budget without exceeding it.
+
+    Measured on the serialized part, because the cap is in serialized-JSON
+    bytes — the same units the SDK and the enricher enforce it in, and not
+    the same as the characters you can count in the text.
+    """
+    parts: list[Fields] = []
+    used = 0
+    index = 0
+    while True:
+        part = _text(_rag_chunk(rng, index))
+        addition = len(json.dumps(part).encode())
+        if used + addition > budget_bytes:
+            return parts
+        parts.append(part)
+        used += addition
+        index += 1
+
+
+def generate_rag_run(
+    target: SeedTarget, rng: random.Random, now: datetime
+) -> Tuple[list[Row], list[Row]]:
+    """A retrieval-augmented call whose input sits at the cap.
+
+    The caps were sized for exactly this call — one message carrying every
+    retrieved chunk — and nothing else seeded here is within two orders of
+    magnitude of them, so how the drawer renders a row of this size is
+    otherwise untested outside production. The row is marked truncated
+    because a real one arriving at the cap is one the SDK had to cut.
+    """
+    start = now - timedelta(hours=9)
+    session_id = str(uuid4())
+    progress = RunProgress(rng, uuid4())
+    case = rng.choice(CASES)
+
+    seeded: list[SeededDecision] = []
+    for i, tool_name in enumerate(("read_customer", "refund_customer")):
+        timestamp = start + timedelta(seconds=i * 45)
+        # The refund is denied: a denial on a RAG call is the case an auditor
+        # opens, and the retrieved context is what they have to read to judge
+        # whether the model had grounds for asking.
+        outcome = AuditOutcome.DENY if i == 1 else AuditOutcome.ALLOW
+        seeded.append(
+            _background_decision(
+                rng,
+                outcome=outcome,
+                timestamp=timestamp,
+                session_id=session_id,
+                user_id=RAG_USER,
+                run=progress.snapshot(_elapsed_ms(start, timestamp)),
+                case=case,
+                agent_name=RAG_AGENT,
+                tool_name=tool_name,
+            )
+        )
+        progress.record(outcome)
+
+    rows = [_decision_seed_row(target, rng, d) for d in seeded]
+    # run_index 2 keeps the ordinary imperfections off this run: its subject
+    # is the size, and a gap or a resync on top would muddle which of the two
+    # the drawer is showing.
+    messages = _transcript_rows(target, rng, seeded, 2, agent_name=RAG_AGENT)
+    # Refill turn 0's input with the retrieved context, at the cap, and mark
+    # it truncated. Rebuilt rather than threaded through _transcript_rows: the
+    # size is particular to this run, and the builder stays about the shape of
+    # a conversation rather than about how big any one message is.
+    cols = _MESSAGE_SEED_COLUMNS
+    first = dict(zip(cols, messages[0]))
+    context = _rag_context_parts(
+        rng, MAX_INPUT_MESSAGES_BYTES - len(case["ask"].encode()) - 512
+    )
+    first["input_messages"] = json.dumps(
+        [{"role": "user", "parts": [_text(case["ask"])] + context}]
+    )
+    first["truncated"] = 1
+    messages[0] = [first[column] for column in cols]
+    return rows, messages
+
+
 # ── Public API ────────────────────────────────────────────────────────────────
 
 
@@ -1184,14 +1311,16 @@ def build_rows(
     parallel_rows, parallel_messages = generate_parallel_tool_calls_run(
         target, rng, now
     )
+    rag_rows, rag_messages = generate_rag_run(target, rng, now)
     return (
-        normal + long_rows + handoff_rows + parallel_rows,
+        normal + long_rows + handoff_rows + parallel_rows + rag_rows,
         anomalous,
         normal_messages
         + anomaly_messages
         + long_messages
         + handoff_messages
-        + parallel_messages,
+        + parallel_messages
+        + rag_messages,
     )
 
 
