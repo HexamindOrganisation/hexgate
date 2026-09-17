@@ -190,23 +190,80 @@ SYSTEM_PROMPT = (
     "You are a support agent for an online store. Use the tools you are given "
     "to look up orders and issue refunds. Never guess a customer's details."
 )
-USER_ASKS = [
-    "Customer #4417 says their refund never arrived — can you check?",
-    "Order 98120 shipped to the wrong address. What are my options?",
-    "Please close the ticket for customer #2255, they replied that it is fixed.",
-    "Has customer #1043 been charged twice this month?",
+# One case per run, so a transcript reads as a single task: the opening ask,
+# the customer it is about, and the tools a support agent would actually
+# reach for. Everything a call carries is derived from the case, because a
+# transcript whose ask names one customer and whose calls name another says
+# nothing about whether the decision on it was right.
+CASES = [
+    {
+        "customer_id": 4417,
+        "ask": "Customer #4417 says their refund never arrived — can you check?",
+        "tools": ["read_customer", "refund_customer"],
+        "query": "refund not received timeline",
+    },
+    {
+        "customer_id": 8802,
+        "ask": "Order 98120 shipped to the wrong address. What are my options?",
+        "tools": ["read_customer", "create_ticket"],
+        "query": "wrong shipping address policy",
+    },
+    {
+        "customer_id": 2255,
+        "ask": "Please close the ticket for customer #2255, they replied that it is fixed.",
+        "tools": ["read_customer", "create_ticket"],
+        "query": "closing a resolved ticket",
+    },
+    {
+        "customer_id": 1043,
+        "ask": "Has customer #1043 been charged twice this month?",
+        "tools": ["read_customer", "refund_customer"],
+        "query": "duplicate charge same month",
+    },
 ]
 FINAL_REPLIES = [
     "I have checked the account and summarised what I found above.",
     "That is everything I can do here — the rest needs a human reviewer.",
     "Done. I have recorded the outcome against the customer's record.",
 ]
-TOOL_RESULTS = {
-    "read_customer": '{"id": 4417, "plan": "pro", "open_tickets": 1}',
-    "web_search": '{"results": [{"title": "Refund policy", "url": "..."}]}',
-    "create_ticket": '{"ticket_id": 88213, "status": "open"}',
-    "refund_customer": '{"refund_id": "rf_9931", "amount_cents": 2400}',
-}
+
+
+def _tool_arguments(tool_name: str, case: Fields) -> Fields:
+    """What the model would pass to this tool for this case.
+
+    Per tool, not one shape for all of them: a search takes a query and no
+    customer at all, and `web_search({"customer_id": …})` is nonsense on its
+    face — the kind of thing that makes a seeded transcript unreadable as a
+    story.
+    """
+    customer_id = case["customer_id"]
+    if tool_name == "web_search":
+        return {"query": case["query"]}
+    if tool_name == "create_ticket":
+        return {"customer_id": customer_id, "subject": "Follow-up"}
+    if tool_name == "refund_customer":
+        return {"customer_id": customer_id, "amount_cents": 2400}
+    return {"customer_id": customer_id}
+
+
+def _tool_result(tool_name: str, case: Fields) -> str:
+    """What the tool returned, about the same customer the call named."""
+    customer_id = case["customer_id"]
+    if tool_name == "web_search":
+        return json.dumps(
+            {"results": [{"title": "Refund policy", "url": "https://help/refunds"}]}
+        )
+    if tool_name == "create_ticket":
+        return json.dumps(
+            {"ticket_id": 88213, "customer_id": customer_id, "status": "open"}
+        )
+    if tool_name == "refund_customer":
+        return json.dumps(
+            {"refund_id": "rf_9931", "customer_id": customer_id, "amount_cents": 2400}
+        )
+    return json.dumps({"id": customer_id, "plan": "pro", "open_tickets": 1})
+
+
 # The model calls its tool a couple of seconds before the decision lands.
 MESSAGE_LEAD_SECONDS = 2
 
@@ -370,6 +427,10 @@ class SeededDecision:
     violations: list[str]
     attributes: dict | None
     run: RunSnapshot
+    # The case this run is working through (see CASES). Carried on the
+    # decision so the transcript's arguments and tool results name the same
+    # customer the ask did.
+    case: Fields
 
 
 def _decision_seed_row(
@@ -418,13 +479,19 @@ def _background_decision(
     session_id: str,
     user_id: str,
     run: RunSnapshot,
+    case: Fields,
 ) -> SeededDecision:
     denied = outcome == AuditOutcome.DENY
     return SeededDecision(
         timestamp=timestamp,
         session_id=session_id,
         user_id=user_id,
-        tool_name=rng.choice(TOOL_NAMES),
+        # From the case, not from TOOL_NAMES at large: the decision's tool is
+        # what the transcript's completion asks for, so an unrelated draw
+        # here is what made a run read as three errands for three customers.
+        # web_search joins them so every tool still appears in the
+        # dashboard's by-tool breakdown.
+        tool_name=rng.choice(case["tools"] + ["web_search"]),
         outcome=outcome,
         violations=DENY_VIOLATIONS if denied else [],
         # Absent a third of the time so the drawer's "omit when absent" path
@@ -435,6 +502,7 @@ def _background_decision(
             else None
         ),
         run=run,
+        case=case,
     )
 
 
@@ -445,6 +513,7 @@ def _anomaly_decision(
     session_id: str,
     user_id: str,
     run: RunSnapshot,
+    case: Fields,
 ) -> SeededDecision:
     return SeededDecision(
         timestamp=timestamp,
@@ -457,6 +526,7 @@ def _anomaly_decision(
         # low-clearance bag is what makes it explainable in the drawer.
         attributes=ANOMALY_ATTRIBUTES,
         run=run,
+        case=case,
     )
 
 
@@ -485,7 +555,9 @@ def _tool_call_completion(decision: SeededDecision, seq: int) -> list[Fields]:
                     "type": "tool_call",
                     "id": _call_id(decision.run.run_id, seq),
                     "name": decision.tool_name,
-                    "arguments": json.dumps({"customer_id": 4417}),
+                    "arguments": json.dumps(
+                        _tool_arguments(decision.tool_name, decision.case)
+                    ),
                 }
             ],
         }
@@ -495,15 +567,18 @@ def _tool_call_completion(decision: SeededDecision, seq: int) -> list[Fields]:
 def _tool_result_message(previous: SeededDecision, seq: int) -> Fields:
     """What the framework fed back after the previous decision.
 
-    A denied call returns the denial, which is the whole point of reading a
-    transcript next to a deny: the model's next move is a reaction to it.
+    One branch per outcome, because they are three different things and the
+    model's next move is a reaction to which one it got. Folding
+    needs_approval in with deny would put "permission_denied" in the
+    transcript beside a decision row that says the call was gated for
+    review — the transcript contradicting the record it exists to explain.
     """
-    denied = previous.outcome != AuditOutcome.ALLOW
-    response = (
-        f"{DENY_ERROR_TYPE}: {DENY_REASON}"
-        if denied
-        else TOOL_RESULTS.get(previous.tool_name, "{}")
-    )
+    if previous.outcome == AuditOutcome.DENY:
+        response = f"{DENY_ERROR_TYPE}: {DENY_REASON} ({previous.tool_name})"
+    elif previous.outcome == AuditOutcome.NEEDS_APPROVAL:
+        response = f"approval_required: {previous.tool_name} is held for human review"
+    else:
+        response = _tool_result(previous.tool_name, previous.case)
     return {
         "role": "tool",
         "parts": [
@@ -603,13 +678,13 @@ def _transcript_rows(
         # The delta: the user's ask opens the conversation, every later call
         # carries only what came back from the tool the last one requested.
         if index == 0:
-            new_input = [{"role": "user", "parts": [_text(rng.choice(USER_ASKS))]}]
+            new_input = [{"role": "user", "parts": [_text(first.case["ask"])]}]
         else:
             new_input = [_tool_result_message(decisions[index - 1], seq)]
         if index == resync_at:
             # A resync restates the whole list rather than extending it.
             new_input = [
-                {"role": "user", "parts": [_text(rng.choice(USER_ASKS))]}
+                {"role": "user", "parts": [_text(first.case["ask"])]}
             ] + new_input
         if index == truncate_at:
             new_input = new_input + [
@@ -804,6 +879,7 @@ def generate_normal_data(
         for decisions, start in zip(sizes, _run_starts(rng, now, len(sizes))):
             session_id = str(uuid4())
             progress = RunProgress(rng, uuid4())
+            case = rng.choice(CASES)
             outcomes = rng.choices(OUTCOMES, weights=OUTCOME_WEIGHTS, k=decisions)
             seeded: list[SeededDecision] = []
             for outcome, timestamp in zip(
@@ -817,6 +893,7 @@ def generate_normal_data(
                         session_id=session_id,
                         user_id=user_id,
                         run=progress.snapshot(_elapsed_ms(start, timestamp)),
+                        case=case,
                     )
                 )
                 progress.record(outcome)
@@ -842,6 +919,7 @@ def generate_anomalies(
         requests = rng.randint(REQUESTS_PER_ANOMALY_MIN, REQUESTS_PER_ANOMALY_MAX)
         session_id = str(uuid4())
         progress = RunProgress(rng, uuid4())
+        case = rng.choice(CASES)
         timestamps = sorted(
             anomaly_base - timedelta(minutes=rng.randint(0, 5)) for _ in range(requests)
         )
@@ -855,6 +933,7 @@ def generate_anomalies(
                     session_id=session_id,
                     user_id=anomaly_user,
                     run=progress.snapshot(_elapsed_ms(start, timestamp)),
+                    case=case,
                 )
             )
             progress.record(AuditOutcome.DENY)
@@ -877,6 +956,7 @@ def generate_long_conversation(
     start = now - timedelta(days=2)
     session_id = str(uuid4())
     progress = RunProgress(rng, uuid4())
+    case = rng.choice(CASES)
     seeded: list[SeededDecision] = []
     for turn in range(LONG_CONVERSATION_TURNS):
         timestamp = start + timedelta(minutes=turn * 2)
@@ -895,6 +975,7 @@ def generate_long_conversation(
                 session_id=session_id,
                 user_id=LONG_CONVERSATION_USER,
                 run=progress.snapshot(_elapsed_ms(start, timestamp)),
+                case=case,
             )
         )
         progress.record(outcome)
