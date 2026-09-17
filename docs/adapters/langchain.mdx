@@ -130,6 +130,36 @@ this adapter, which wraps a pre-built LangChain/LangGraph agent, is a planned
 follow-up.)
 </Note>
 
+## Message logging
+
+Nothing to wire. The agent `wrap_langchain_agent` returns appends a
+`HexgateUsageCallbackHandler` to `config["callbacks"]` on every call, beside
+the Langfuse handler, and it records the conversation alongside the token
+counts. Each model
+call emits one `llm_message` row holding the messages **new to that call**, tool
+results included, plus that call's completion; the audit drawer reads them back
+beside the decision they explain. See [audit
+trail](/concepts/audit-trail#llm-messages) for the shape and the retention, and
+`HEXGATE_LOG_MESSAGES=0` to switch the stream off.
+
+`on_chat_model_start` (or `on_llm_start`, for a non-chat LLM whose prompts are
+bare strings) stashes the prompt under LangChain's `run_id`; `on_llm_end`
+correlates on it and emits usage and messages together. `on_llm_error` drops
+the stash of a call that never returned. The handlers are `async` on purpose —
+LangChain awaits a coroutine handler inline on the real event loop, where a sync
+one would run on a thread pool with no loop and every event would be dropped.
+
+The system prompt sits at the head of LangChain's message list, so the first
+event of each run lifts it into `gen_ai.system_instructions` rather than storing
+it twice.
+
+**One caveat on grouping.** Nothing on LangChain's callback surface identifies
+*a message list* — its `run_id` is minted per callback and would restart
+`message_seq` at 0 every turn — so the transcript is keyed by Hexgate run id
+plus agent name instead. That is knowingly coarser: a run whose summariser node
+or unwrapped sub-graph keeps a second message list files it under the same key,
+and the two then show up as resyncs of each other.
+
 ## Runnable example
 
 `examples/devops_langchain.py` — `wrap_langchain_agent` (LangChain / LangGraph)

@@ -108,6 +108,27 @@ enforcing. Gate a sub-agent-as-tool by its **tool name** with an ordinary
 adapter are planned follow-ups.
 </Note>
 
+## Message logging
+
+Nothing to wire. `HexgatePydanticAgent` records the conversation when a run
+completes, alongside the token counts, and the audit drawer reads it back beside
+the decisions of that run. See [audit
+trail](/concepts/audit-trail#llm-messages) for the shape and the retention, and
+`HEXGATE_LOG_MESSAGES=0` to switch the stream off.
+
+**One event per run, not per model call.** pydantic_ai exposes no per-call
+model hook short of `iter()`, so — exactly as for [token
+usage](/concepts/audit-trail) — the adapter reads the finished result instead:
+one `llm_message` row per `run` / `run_sync` / `run_stream` / `iter`, at
+`message_seq` 0, with no delta cursor. The audit drawer therefore shows a
+pydantic_ai run as a single turn rather than anchoring on the call that
+produced the decision.
+
+It records `result.new_messages()`, not `all_messages()`: the latter replays
+whatever the caller passed as `message_history`, so an N-turn chat would store
+turn 1 N times and the 256 KiB cap would cut the newest exchange — the one being
+investigated. A session's rows concatenate back to the conversation either way.
+
 ## Runnable example
 
 `examples/devops_pydantic_ai.py` — `wrap_pydantic_agent` (Pydantic AI) end-to-end.

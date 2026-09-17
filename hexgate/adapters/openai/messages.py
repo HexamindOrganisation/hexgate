@@ -130,11 +130,11 @@ def output_messages(output: list[Any]) -> list[dict[str, Any]]:
     Reasoning items are dropped (issue #221). They are genuinely part of the
     completion, so the natural place for them is here — but every part of this
     message shares one ``MAX_OUTPUT_MESSAGES_BYTES`` budget, and that 8 KiB was
-    sized for a text answer before anything captured reasoning. Reasoning leads
-    the Responses API's output and head+tail truncation favours the head, so a
-    long chain of thought is cut out of the *answer*, not out of itself: the
-    field the auditor needs loses room to the field nobody asked for. Dropping
-    is the reversible half of that trade — the completion keeps its budget, and
+    sized for a text answer before anything captured reasoning.
+    ``cap_json_head_tail`` splits that budget evenly across the message's string
+    leaves, so enough reasoning blocks starve the answer beside them — the field
+    the auditor needs loses room to the field nobody asked for. Dropping is the
+    reversible half of that trade — the completion keeps its budget, and
     capturing reasoning under a cap of its own stays open.
     """
     parts: list[dict[str, Any]] = []

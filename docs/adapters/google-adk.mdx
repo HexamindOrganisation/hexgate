@@ -121,6 +121,35 @@ coverage, because ADK expresses both delegation modes as tool calls. It enforces
 (agent-as-tool, `agent.tool:<name>`) — a denied delegation is refused before it
 runs. Set `HexgateRunner(max_handoff_depth=N)` to cap a runaway handoff chain.
 
+## Message logging
+
+Nothing to wire. `HexgateRunner` registers `HexgateUsagePlugin` — an ADK
+`BasePlugin` — on the underlying `Runner`, and it records the conversation
+alongside the token counts. Each model call emits one `llm_message` row holding
+the messages **new to that call**, tool results included, plus that call's
+completion; the audit drawer reads them back beside the decision they explain.
+See [audit trail](/concepts/audit-trail#llm-messages) for the shape and the
+retention, and `HEXGATE_LOG_MESSAGES=0` to switch the stream off.
+
+`before_model_callback` stashes `LlmRequest.contents` and the system
+instruction under `callback_context.invocation_id`; `after_model_callback`
+emits usage and messages together. The invocation id is the transcript key:
+ADK rebuilds `contents` from the session on every call, so one invocation is
+one message list, and an `AgentTool` runs a nested `Runner` that gets an id of
+its own.
+
+- **Streaming.** In SSE mode `after_model_callback` fires once per chunk, and
+  each chunk repeats the call's running token counts. Only the non-partial
+  aggregate ends a call and emits, so an answer is billed and recorded once.
+  That aggregate carries no `model_version`, so the model name falls back to
+  the stashed request's.
+- **`transfer_to_agent` resyncs once.** A handoff stays on the same list, but
+  ADK rewrites the other agent's turns into narrated text for the target, so
+  the cursor sees a rewritten history and emits one `resynced` event per hop.
+- ADK skips `after_run_callback` when the agent loop raises or the caller stops
+  iterating — a policy deny and an SSE disconnect both do — so the stash of
+  in-flight prompts is LRU-capped rather than trusted to be drained.
+
 ## Runnable example
 
 `examples/devops_google.py` — `HexgateRunner` (Google ADK) end-to-end with

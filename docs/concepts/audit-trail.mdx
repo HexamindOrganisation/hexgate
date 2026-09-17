@@ -3,7 +3,7 @@ title: "Audit trail"
 description: "Every decision, LLM call and blocked attempt leaves as an OpenTelemetry span and lands in ClickHouse."
 ---
 
-When `HEXGATE_API_KEY` is set and local mode is off, the SDK records three kinds
+When `HEXGATE_API_KEY` is set and local mode is off, the SDK records four kinds
 of event and ships them to the platform out of band, fire-and-forget:
 
 | Event | Produced by | Lands in |
@@ -11,6 +11,7 @@ of event and ships them to the platform out of band, fire-and-forget:
 | Policy decision (`allow` / `deny` / `needs_approval`) | the enforcer, on every tool call | `policy_decision` |
 | LLM usage (model, tokens, latency) | the adapter's model hook | `llm_invocation` |
 | Ban enforcement (a refused agent or user) | the ban gate | `ban_enforcement` |
+| LLM messages (the prompt and the completion) | the adapter's model hook | `llm_message` |
 
 Each event is **one OpenTelemetry span**, exported over OTLP/HTTP to
 `<HEXGATE_API_URL>/v1/traces` with the API key as bearer. Nothing in the agent
@@ -20,6 +21,27 @@ dashboard's audit and usage pages read the resulting rows.
 
 Local mode (set automatically by [`hexgate chat`](/cli/chat), or by
 `HEXGATE_LOCAL_MODE`) keeps events on your machine instead.
+
+## LLM messages
+
+A denied tool call is hard to judge without the exchange that produced it, so
+the adapters also record the conversation. On the OpenAI Agents, LangChain and
+Google ADK adapters that is one row per model call, holding the messages **new
+to that call** — the assistant turn carrying the tool call, the tool results
+that came back, the next user turn — plus that call's completion. Pydantic AI
+exposes no per-call hook, so it records one row per agent run instead. Either
+way a session's rows concatenate back to the conversation the agent saw.
+
+Tool *results* are in there on purpose: a decision row records that a tool was
+called and with what arguments, but never what it returned.
+
+This stream is **on by default** and has its own switch —
+[`HEXGATE_LOG_MESSAGES=0`](/reference/environment) stops it while decisions,
+usage and bans keep flowing. Content goes through the same key-name redaction
+as tool arguments and is capped before it leaves your process (256 KiB of input
+messages per call, 8 KiB each for the completion and the system instructions);
+over-cap fields are cut head-and-tail and the row is flagged `truncated` rather
+than dropped. Rows are retained 180 days, like every other event.
 
 Because the SDK is a standard OTLP exporter, `HEXGATE_OTLP_ENDPOINT` can point it
 at a collector on a different host than the control plane; the default is the

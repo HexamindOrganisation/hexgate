@@ -66,6 +66,24 @@ from hexgate import (
 |---|---|
 | `HexgateContext(user_id, user_roles=[…], session_id=…, ttl_seconds=…, attributes={…})` | Per-request scope context manager — every role in `user_roles` is a decision input (most permissive wins). See [user scope](/concepts/user-scope). |
 
+## Audit emission
+
+Not re-exported from `hexgate` — these are the module entry points behind the
+[audit trail](/concepts/audit-trail), listed because a host application has to
+call `shutdown()` and may want to configure a sender explicitly.
+
+| Symbol | What it does |
+|---|---|
+| `hexgate.audit.configure(api_key=…, base_url=…)` | Get-or-create the OTLP sender for a key; returns `None` when no key resolves or `HEXGATE_LOCAL_MODE` is on. Idempotent per key. |
+| `await hexgate.audit.shutdown()` | Flush queued events and stop every sender (a coroutine). **Await it before the process exits** — the `atexit` hook is a fallback, not a guarantee. |
+| `hexgate.tracing.usage.emit_llm_usage(...)` | Emit one token-usage event. Called for you by every adapter — per model call on three of them, once per run on pydantic_ai, which has no per-call hook. |
+| `hexgate.tracing.messages.emit_llm_messages(...)` | Emit one prompt/completion event. Called for you by every adapter, on the same cadence as `emit_llm_usage`; a no-op under `HEXGATE_LOG_MESSAGES=0`. |
+| `hexgate.tracing.messages.MessageCursor` | Per-conversation high-water mark that turns a framework's full message list into just what is new. Used by the adapters that get a per-call hook; you need it only when writing one. |
+
+All four event types — decisions, usage, bans and messages — share one sender
+per API key and are told apart by the span's instrumentation scope, so
+`shutdown()` from any of these modules flushes all of them.
+
 ## Built-in tools
 
 Filesystem tools are importable from `hexgate`: `read_file`, `write_file`,
