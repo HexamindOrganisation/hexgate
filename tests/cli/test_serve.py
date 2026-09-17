@@ -493,6 +493,39 @@ def test_build_runtime_skips_auto_register_when_disabled(
     )
 
     assert "posted_manifest" not in captured  # POST was skipped
+
+
+def test_build_runtime_threads_subagents_force_into_register_tree(
+    _patched_runtime_deps: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``--register-subagents-force`` reaches ``register_tree(force=True)``.
+
+    Serve needs a force counterpart to `hexgate register --force` so an operator
+    with a legitimately name-colliding tree can still start the server.
+    """
+    captured = _patched_runtime_deps
+
+    def fake_register_tree(agent, **kwargs: Any) -> dict:
+        captured["register_tree_kwargs"] = kwargs
+        return {"created": True, "version": 1}
+
+    monkeypatch.setattr(
+        "hexgate.cli.register.register.register_tree", fake_register_tree
+    )
+
+    build_runtime_from_local_agent(
+        _stub_settings(),
+        agent_obj=object(),
+        description=None,
+        approval_handler=None,
+        auto_register=True,
+        auto_register_subagents=True,
+        auto_register_subagents_force=True,
+        console=Console(),
+    )
+
+    assert captured["register_tree_kwargs"]["force"] is True
     assert captured["get_agent_name"] == "customer_bot"
 
 
