@@ -55,6 +55,32 @@ function Pre({ children }: { children: React.ReactNode }) {
   );
 }
 
+/** What a part IS, above the part itself.
+ *
+ * The role header alone cannot carry this: a completion that mixes a
+ * sentence and a tool call puts both under one "assistant", and a reader
+ * would have nothing to tell the model's answer from the call the policy
+ * judged. Deliberately in the neutral label colour — `allow`/`deny`/
+ * `approval` are outcome tokens, spent in this same card on the decision
+ * badge and the marker chips, and a tool call carries no verdict.
+ *
+ * `id` is the call id: the only thing pairing a call with its return, and
+ * the only way to tell which call a decision is about when several
+ * parallel calls share one turn.
+ */
+function PartLabel({ label, id }: { label: string; id?: unknown }) {
+  return (
+    <div className="mb-0.5 flex items-baseline gap-1.5 text-[10px] uppercase tracking-wider text-muted-foreground">
+      <span>{label}</span>
+      {typeof id === "string" && id && (
+        <span className="font-mono normal-case tracking-normal opacity-70">
+          {id}
+        </span>
+      )}
+    </div>
+  );
+}
+
 function Part({ part }: { part: LlmMessagePart }) {
   if (part == null || typeof part !== "object")
     return <Pre>{String(part)}</Pre>;
@@ -75,14 +101,19 @@ function Part({ part }: { part: LlmMessagePart }) {
     // when it parses (TOOL_CALL_JSON_KEYS). Malformed JSON therefore reaches
     // here verbatim, so print it rather than trying to parse it again.
     return (
-      <Pre>
-        <span className="text-approval">→ {String(part.name ?? "")}</span>
-        {"("}
-        {typeof part.arguments === "string"
-          ? part.arguments
-          : JSON.stringify(part.arguments)}
-        {")"}
-      </Pre>
+      <div className="py-0.5">
+        <PartLabel label="Tool call" id={part.id} />
+        <Pre>
+          <span className="font-medium text-foreground">
+            {String(part.name ?? "")}
+          </span>
+          {"("}
+          {typeof part.arguments === "string"
+            ? part.arguments
+            : JSON.stringify(part.arguments)}
+          {")"}
+        </Pre>
+      </div>
     );
   }
   if (type === "tool_call_response") {
@@ -90,18 +121,26 @@ function Part({ part }: { part: LlmMessagePart }) {
     // records that the tool was called, never what came back.
     const response = part.response;
     return (
-      <Pre>
-        <span className="text-allow">← </span>
-        {typeof response === "string"
-          ? response
-          : JSON.stringify(response, null, 2)}
-      </Pre>
+      <div className="py-0.5">
+        <PartLabel label="Tool result" id={part.id} />
+        <Pre>
+          {typeof response === "string"
+            ? response
+            : JSON.stringify(response, null, 2)}
+        </Pre>
+      </div>
     );
   }
   // An item with no GenAI part to map onto — a reasoning item on the input
   // side, a built-in tool call, an image. Printed whole: the transcript
-  // exists to explain a run after the fact.
-  return <Pre>{JSON.stringify(part, null, 2)}</Pre>;
+  // exists to explain a run after the fact. Labelled by its own `type` when
+  // it declares one, so it is not mistaken for the model's prose.
+  return (
+    <div className="py-0.5">
+      {typeof type === "string" && type && <PartLabel label={type} />}
+      <Pre>{JSON.stringify(part, null, 2)}</Pre>
+    </div>
+  );
 }
 
 function Message({ message }: { message: LlmMessage }) {

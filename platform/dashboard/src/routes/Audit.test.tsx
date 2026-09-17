@@ -536,6 +536,22 @@ describe("AuditPage", () => {
     expect(screen.getAllByText("transcript incomplete")).toHaveLength(2);
   });
 
+  it("names a tool call and a tool result rather than only colouring them", async () => {
+    stubFetch();
+    const user = userEvent.setup();
+    renderWithProviders(<AuditPage />);
+
+    await openDrawer(user);
+    // The role header cannot carry this: a completion mixing prose and a
+    // tool call puts both under one "assistant". The anchor's completion is
+    // the call the policy judged, and the next turn's input is its result.
+    expect(await screen.findByText("Tool call")).toBeInTheDocument();
+    expect(screen.getByText("Tool result")).toBeInTheDocument();
+    // The call id pairs the two across turns — the only way to tell which
+    // call a decision is about when parallel calls share one turn.
+    expect(screen.getAllByText("call-1")).toHaveLength(2);
+  });
+
   it("renders system instructions as the parts list they are", async () => {
     stubFetch();
     const user = userEvent.setup();
