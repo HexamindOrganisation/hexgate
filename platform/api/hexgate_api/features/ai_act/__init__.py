@@ -8,6 +8,9 @@ back from data the platform already holds (the resolved policy bundle,
 ``policy_decision``, ``ban_enforcement``, ``llm_invocation``) plus the
 operator's own classification entries.
 
+The signed annex is the canonical artifact; everything under ``render/`` is
+downstream of it and reads nothing else.
+
 Nothing this slice emits may state that a system or an operator is compliant.
 That is a correctness requirement, not a style preference — the wording lives
 in :mod:`hexgate_api.features.ai_act.copy` so it can be reviewed in one place.

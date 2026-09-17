@@ -1,0 +1,18 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "claude",
+            "type": "shell",
+            "icon": { "id": "robot", "color": "terminal.ansiBrightYellow" },
+            "command": "/Users/victorludvig/.local/bin/claude -n '🤖 ai_act_report_pdf' '/color yellow'",
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "focus": true
+            },
+            "runOptions": { "runOn": "folderOpen" },
+            "problemMatcher": []
+        }
+    ]
+}
