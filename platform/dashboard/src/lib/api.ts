@@ -383,8 +383,8 @@ export interface AuditDecisionRow {
   attributes: unknown;
   /** Run this decision belongs to; `null` outside any run scope. Pass it, and
    * `session_id`, to `GET /projects/{id}/audit/llm-messages` to scope this
-   * decision's transcript — forward both verbatim, blanks included. No client
-   * for that endpoint exists yet; it lands with the drawer. */
+   * decision's transcript — forward both verbatim, blanks included. See
+   * `listLlmMessages`. */
   run_id: string | null;
 }
 
@@ -527,6 +527,67 @@ export interface LlmUsageScope {
   end_date?: string;
 }
 
+// --- LLM message transcripts (mirrors schemas.py LlmMessageRow/Page) -------
+
+/** One GenAI content part. `type` names it; the rest is shape-specific, so
+ * the renderer reads what it knows and falls back to the raw object.
+ *
+ * Reasoning is the part to expect nothing about: the OpenAI Agents adapter
+ * drops it from `output_messages` and keeps it on the input side as a whole
+ * carried-through item, and whether the other adapters do the same is still
+ * open (issue #221). The renderer prints any part it does not recognise,
+ * which is what makes either answer safe. */
+export interface LlmMessagePart {
+  type?: string;
+  [key: string]: unknown;
+}
+
+/** One GenAI message: a role plus its parts. */
+export interface LlmMessage {
+  role?: string;
+  parts?: LlmMessagePart[];
+  [key: string]: unknown;
+}
+
+/** One row of a session transcript. The three content fields are decoded
+ * server-side from their stored JSON, so they arrive as the `gen_ai.*`
+ * structures — except when the stored text no longer parses, in which case
+ * the raw string comes back instead. Hence `unknown`. */
+export interface LlmMessageRow {
+  event_id: string;
+  occurred_at: string;
+  received_at: string;
+  agent_name: string;
+  agent_version_id: string;
+  session_id: string;
+  user_id: string;
+  model: string;
+  /** Which message list this event extends. One session holds several — the
+   * main run, each sub-agent, each handoff — and `message_seq` restarts at 0
+   * in each, so a gap is only a gap within one `turn_key`. */
+  turn_key: string;
+  message_seq: number;
+  /** The event restated the whole list instead of extending it. */
+  resynced: boolean;
+  /** A content field was cut to its byte cap, by the SDK or the enricher. */
+  truncated: boolean;
+  input_messages: unknown;
+  output_messages: unknown;
+  system_instructions: unknown;
+  run_id: string | null;
+}
+
+export interface LlmMessagePage {
+  rows: LlmMessageRow[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+/** Rows per transcript window. See `listLlmMessages` for why it is not the
+ * server's `MAX_PAGE_SIZE` of 100. */
+export const LLM_MESSAGE_PAGE = 50;
+
 /** Percent-encode each path segment but keep the slashes, so a name like
  * `caps/refunds.yaml` reaches the server's `{name:path}` converter intact. */
 function encodePath(path: string): string {
@@ -632,6 +693,43 @@ export const api = {
   getLlmUsageSummary: (scope: LlmUsageScope, projectId: string) =>
     request<LlmInvocationSummary>(
       `/v1/projects/${projectId}/llm/summary${qs({ ...scope })}`,
+    ),
+
+  /**
+   * One decision's transcript, scoped by session and/or run.
+   *
+   * Both scopes go out exactly as the decision row held them, blanks
+   * included: `?session_id=&run_id=…` is the intended request, not a
+   * malformed one. `session_id` is the second column of the storage sort
+   * key, so pinning it — even to `""` — keeps the scan inside one
+   * contiguous block; omitting it means "I do not know the session" and
+   * makes a run-scoped read scan every session in the project. A null
+   * `run_id` goes out blank, which the server reads as absent.
+   *
+   * The caller must not send two blanks: that names no transcript and is a
+   * 422 by design.
+   *
+   * Rows come back oldest-first, so a page is a *window* on the transcript
+   * and `offset` chooses which. The default is the server's own default,
+   * half its `MAX_PAGE_SIZE` ceiling: one row carries up to ~272 KiB of
+   * capped content, so asking for the ceiling would put ~27 MiB on the wire
+   * (uncompressed — the API installs no gzip) to render the few turns the
+   * drawer expands.
+   */
+  listLlmMessages: (
+    projectId: string,
+    sessionId: string,
+    runId: string | null,
+    limit = LLM_MESSAGE_PAGE,
+    offset = 0,
+  ) =>
+    request<LlmMessagePage>(
+      `/v1/projects/${projectId}/audit/llm-messages${qs({
+        session_id: sessionId,
+        run_id: runId ?? "",
+        limit,
+        offset,
+      })}`,
     ),
 
   // --- Compose policy files ---

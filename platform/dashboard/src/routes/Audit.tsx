@@ -10,7 +10,12 @@ import {
 } from "lucide-react";
 import { endOfDay, startOfDay } from "date-fns";
 import { useNavigate } from "react-router-dom";
-import { api, type AuditDecisionRow, type AuditOutcome } from "@/lib/api";
+import {
+  api,
+  type AuditDecisionRow,
+  type AuditOutcome,
+  LLM_MESSAGE_PAGE,
+} from "@/lib/api";
 import { useActive, useProjectScoped } from "@/lib/active";
 import { useCanManageBans } from "@/lib/bans";
 import { useProjects } from "@/lib/projects";
@@ -32,6 +37,7 @@ import {
 } from "@/lib/audit-filters";
 import { rangeDays } from "@/lib/date-range";
 import { fmtTs } from "@/components/audit/fmt";
+import { LlmMessagesSection } from "@/components/audit/messages";
 import {
   ActiveChips,
   AnomaliesCard,
@@ -103,12 +109,14 @@ const TONE: Record<AuditOutcome, { text: string; box: string }> = {
 function DetailDrawer({
   event,
   related,
+  projectId,
   onClose,
   onSelect,
   setF,
 }: {
   event: AuditDecisionRow | null;
   related: AuditDecisionRow[];
+  projectId: string | null;
   onClose: () => void;
   onSelect: (e: AuditDecisionRow) => void;
   setF: (u: (p: Filters) => Filters) => void;
@@ -118,6 +126,60 @@ function DetailDrawer({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
+  // Both scopes go out exactly as the row holds them, blanks included — see
+  // api.listLlmMessages. Two blanks name no transcript, so the query is only
+  // enabled when at least one is set.
+  const scoped = !!(event?.session_id || event?.run_id);
+  // Keyed on the decision, not just the session: a page is a window on the
+  // transcript and which window we want depends on when the decision
+  // happened, so two decisions far apart in one long session need two
+  // fetches. Short transcripts — the overwhelming majority — come back whole
+  // on the first request and every decision in them reuses that one entry.
+  const messagesQ = useQuery({
+    queryKey: [
+      "audit",
+      "llm-messages",
+      projectId,
+      event?.session_id,
+      event?.run_id,
+      event?.occurred_at,
+    ],
+    enabled: !!projectId && scoped,
+    // One attempt, against the default of three. Every other read here is a
+    // kilobyte of decision rows; this one can page over a transcript of
+    // ~272 KiB rows with an uncapped offset, and ClickHouse runs it against
+    // a server-wide memory budget shared with the enricher's inserts. Three
+    // silent retries turn one expensive read into four, on a section the
+    // rest of the drawer does not depend on.
+    retry: 1,
+    queryFn: async () => {
+      const args = [
+        projectId as string,
+        event!.session_id,
+        event!.run_id,
+      ] as const;
+      const head = await api.listLlmMessages(...args);
+      // Rows are oldest-first, so a truncated page is the transcript's HEAD
+      // and the turns after it are the ones missing. When the decision is
+      // later than every row we got, its anchor is in that missing tail —
+      // keeping the head would silently highlight some earlier call as "this
+      // call". Take the last window instead, which is where a decision late
+      // in a long conversation sits.
+      const last = head.rows[head.rows.length - 1];
+      if (
+        head.total > head.rows.length &&
+        last &&
+        new Date(last.occurred_at) <= new Date(event!.occurred_at)
+      ) {
+        return api.listLlmMessages(
+          ...args,
+          LLM_MESSAGE_PAGE,
+          head.total - LLM_MESSAGE_PAGE,
+        );
+      }
+      return head;
+    },
+  });
   if (!event) return null;
   const e = event;
   const argStr =
@@ -245,6 +307,21 @@ function DetailDrawer({
             <pre className="m-0 whitespace-pre-wrap rounded-lg border border-border bg-muted p-3 font-mono text-[11.5px] leading-relaxed text-foreground">
               {argStr}
             </pre>
+          </DrawerSection>
+
+          <DrawerSection label="Messages">
+            <LlmMessagesSection
+              rows={messagesQ.data?.rows ?? []}
+              total={messagesQ.data?.total ?? 0}
+              decisionOccurredAt={e.occurred_at}
+              offset={messagesQ.data?.offset ?? 0}
+              scoped={scoped}
+              // The same condition as `enabled`, not a subset of it: a
+              // disabled query stays `pending` forever, so a clause missing
+              // here would show "Loading…" with no request in flight.
+              isLoading={messagesQ.isPending && !!projectId && scoped}
+              isError={messagesQ.isError}
+            />
           </DrawerSection>
 
           {attrStr && (
@@ -663,6 +740,7 @@ export function AuditPage() {
       <DetailDrawer
         event={sel}
         related={related}
+        projectId={projectId}
         onClose={() => setSel(null)}
         onSelect={setSel}
         setF={setF}
