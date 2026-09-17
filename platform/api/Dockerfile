@@ -36,6 +36,18 @@ ADD --checksum=sha256:00d114b94fdb1606a48cccdfc73c9ccdc62c38721150131ae578d5ff3d
     https://openpolicyagent.org/downloads/v0.70.0/opa_linux_amd64_static /usr/local/bin/opa
 RUN chmod +x /usr/local/bin/opa && opa version
 
+# WeasyPrint's native stack: the AI Act evidence report renders through it.
+# Pango does the text layout, so it and its font machinery are runtime
+# dependencies of the API process, not build tooling. Liberation and DejaVu
+# are the document's two faces (see render/report.css) — pinning them in the
+# image is what makes a re-render of an old report look like the original,
+# rather than like whatever host it landed on.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      libpango-1.0-0 libpangoft2-1.0-0 libharfbuzz0b \
+      libharfbuzz-subset0 libfribidi0 \
+      fonts-liberation2 fonts-dejavu-core \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
 # SDK source (needed to build the hexgate wheel).
