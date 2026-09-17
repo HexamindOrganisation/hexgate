@@ -47,8 +47,27 @@ COPY hexgate ./hexgate
 # source (copied below).
 COPY platform/api/pyproject.toml platform/api/uv.lock ./platform/api/
 WORKDIR /app/platform/api
+# --refresh-package is load-bearing, not redundant: uv keys the built wheel on
+# the mtime of the path dep's pyproject.toml (/app/pyproject.toml), NOT on the
+# source it builds from -- so any release that changed hexgate/ without touching
+# that file gets a wheel built from stale source off the cache mount. A version
+# bump only works as a side effect of rewriting that file. `--no-cache` does not
+# help -- it invalidates layers, not cache mounts.
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-dev --no-editable
+    uv sync --frozen --no-dev --no-editable --refresh-package hexgate
+
+# Guards the flag above: fail the build, not the deploy, if the installed wheel
+# drifts from the source. `uv run` because the venv is not on PATH here. Compared
+# both ways and across every file type, so a module missing from the wheel, one
+# deleted from the source but retained in it, and drifted package data all fail
+# the build. CLAUDE.md is in the source tree but deliberately not packaged.
+RUN INSTALLED="$(uv run --no-sync python -c 'import hexgate, os; print(os.path.dirname(hexgate.__file__))')" \
+    && if ! diff -r -x 'CLAUDE.md' -x '__pycache__' /app/hexgate "$INSTALLED"; then \
+         echo 'ERROR: the installed hexgate SDK differs from the source in this image'; \
+         echo 'Either the uv cache served a stale wheel (see --refresh-package above),'; \
+         echo 'or a source file is not packaged (see [tool.setuptools] in pyproject.toml).'; \
+         exit 1; fi \
+    && echo 'SDK wheel matches the source in this image'
 
 # API source last so edits don't bust the deps layer.
 COPY platform/api ./
