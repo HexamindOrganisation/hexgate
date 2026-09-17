@@ -193,6 +193,38 @@ describe("PlaygroundPage", () => {
     ).toBeInTheDocument();
   });
 
+  it("mutes the deck while the composer has text so it can't cover Send", async () => {
+    mockState = baseState({ decisions: [tool({ id: "d1" })] });
+    renderWithProviders(<PlaygroundPage />);
+    // Visible while the composer is empty …
+    expect(
+      screen.getByRole("button", { name: /1 policy decisions/i }),
+    ).toBeInTheDocument();
+    await userEvent.type(
+      screen.getByLabelText("Message the agent"),
+      "refund it",
+    );
+    // … muted (aria-hidden) once there's text to send, so a Send click can't
+    // land on the deck instead.
+    expect(
+      screen.queryByRole("button", { name: /policy decisions/i }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("takes the muted deck handle out of the tab order (a11y)", () => {
+    // aria-hidden hides it from getByRole, so query the DOM to prove the handle
+    // is disabled — not a focusable control inside an aria-hidden subtree.
+    mockState = baseState({
+      decisions: [tool({ id: "d1" })],
+      pendingApprovals: [approval()],
+    });
+    const { container } = renderWithProviders(<PlaygroundPage />);
+    const handle = container.querySelector(
+      'button[aria-label*="policy decisions"]',
+    );
+    expect(handle).toBeDisabled();
+  });
+
   it("keeps the offline notice visible mid-session", () => {
     mockState = baseState({
       agentOnline: false,

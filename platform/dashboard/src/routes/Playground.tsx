@@ -129,6 +129,9 @@ function PlaygroundLive({ projectId }: { projectId: string }) {
   function submit() {
     const text = composer.trim();
     if (!text) return;
+    // Re-pin to the bottom so the sent turn and its streamed reply are visible
+    // even if the user had scrolled up to re-read an earlier turn.
+    atBottomRef.current = true;
     sendChat(text, activeRoles.length ? { roles: activeRoles } : undefined);
     setComposer("");
   }
@@ -213,11 +216,12 @@ function PlaygroundLive({ projectId }: { projectId: string }) {
       </div>
 
       {/* Streamed decisions as a floating deck — muted (non-interactive, hidden)
-          while an approval is pending so its pile can't overlap the Approve/Deny
-          buttons, but kept mounted so its pinned/scroll state survives. */}
+          while an approval is pending (so its pile can't overlap the Approve/Deny
+          buttons) or while the composer has text (so it can't overlap Send on a
+          narrower window), but kept mounted so its pinned/scroll state survives. */}
       <DecisionDeck
         decisions={state.decisions}
-        muted={state.pendingApprovals.length > 0}
+        muted={state.pendingApprovals.length > 0 || composer.trim().length > 0}
       />
     </div>
   );
@@ -617,6 +621,7 @@ function DecisionDeck({
         type="button"
         aria-label={`${decisions.length} policy decisions`}
         aria-expanded={shown}
+        disabled={muted}
         onClick={() => setPinned((p) => !p)}
         className="relative block h-[52px] w-[216px]"
       >
@@ -725,14 +730,19 @@ function ApprovalPromptStack({ pending, onDecide }: ApprovalPromptStackProps) {
           ? "1 approval pending"
           : `${pending.length} approvals pending`}
       </div>
-      {pending.map((req) => (
-        <ApprovalPromptCard
-          key={req.decision_id}
-          request={req}
-          onDecide={onDecide}
-          now={now}
-        />
-      ))}
+      {/* Cap the pile so N concurrent approvals can't grow past the viewport and
+          push the composer (and lower Approve/Deny buttons) out of reach — the
+          header stays pinned, the cards scroll. */}
+      <div className="max-h-[45vh] space-y-2 overflow-y-auto scrollbar-thin">
+        {pending.map((req) => (
+          <ApprovalPromptCard
+            key={req.decision_id}
+            request={req}
+            onDecide={onDecide}
+            now={now}
+          />
+        ))}
+      </div>
     </div>
   );
 }
