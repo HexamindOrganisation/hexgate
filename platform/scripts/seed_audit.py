@@ -284,6 +284,13 @@ TRUNCATED_CONTEXT_CHARS = 3_000
 LONG_CONVERSATION_TURNS = 120
 LONG_CONVERSATION_USER = USER_IDS[0]
 
+# Two more one-off runs, each covering a shape the ordinary traffic cannot:
+# a session with two message lists, and a turn whose completion asked for
+# several tools at once.
+HANDOFF_AGENT = "refunds-specialist"
+HANDOFF_USER = USER_IDS[1]
+PARALLEL_USER = USER_IDS[2]
+
 # ── ClickHouse columns ────────────────────────────────────────────────────────
 # Extends _DECISION_COLUMNS with received_at so the seed can control ingestion
 # timestamps rather than letting ClickHouse stamp them at insert time.
@@ -431,6 +438,10 @@ class SeededDecision:
     # decision so the transcript's arguments and tool results name the same
     # customer the ask did.
     case: Fields
+    # Which agent made this call. None is the run's main agent; a handoff
+    # target names itself, because its decisions and its message list are
+    # both filed under its own name.
+    agent_name: str | None = None
 
 
 def _decision_seed_row(
@@ -448,7 +459,7 @@ def _decision_seed_row(
     event = DecisionEvent(
         event_id=uuid4(),
         occurred_at=decision.timestamp,
-        agent_name=target.agent_name,
+        agent_name=decision.agent_name or target.agent_name,
         session_id=decision.session_id,
         user_id=decision.user_id,
         tool_name=decision.tool_name,
@@ -480,6 +491,8 @@ def _background_decision(
     user_id: str,
     run: RunSnapshot,
     case: Fields,
+    agent_name: str | None = None,
+    tool_name: str | None = None,
 ) -> SeededDecision:
     denied = outcome == AuditOutcome.DENY
     return SeededDecision(
@@ -491,7 +504,7 @@ def _background_decision(
         # here is what made a run read as three errands for three customers.
         # web_search joins them so every tool still appears in the
         # dashboard's by-tool breakdown.
-        tool_name=rng.choice(case["tools"] + ["web_search"]),
+        tool_name=tool_name or rng.choice(case["tools"] + ["web_search"]),
         outcome=outcome,
         violations=DENY_VIOLATIONS if denied else [],
         # Absent a third of the time so the drawer's "omit when absent" path
@@ -503,6 +516,7 @@ def _background_decision(
         ),
         run=run,
         case=case,
+        agent_name=agent_name,
     )
 
 
@@ -541,30 +555,51 @@ def _text(content: str) -> Fields:
     return {"type": "text", "content": content}
 
 
-def _call_id(run_id: UUID, seq: int) -> str:
-    return f"call_{run_id.hex[:8]}_{seq}"
+def _call_id(run_id: UUID, seq: int, index: int = 0) -> str:
+    """Identifies one call within one turn.
+
+    The index is what keeps parallel calls apart: a completion asking for
+    three tools at once produces three decisions, and the id is the only
+    thing saying which decision belongs to which call.
+    """
+    return f"call_{run_id.hex[:8]}_{seq}_{index}"
 
 
-def _tool_call_completion(decision: SeededDecision, seq: int) -> list[Fields]:
-    """The completion that asked for the tool this decision is about."""
+def _tool_call_completion(group: list[SeededDecision], seq: int) -> list[Fields]:
+    """The completion that asked for this turn's tools.
+
+    One assistant message holding one `tool_call` part per decision, which
+    is how a framework reports parallel calls and how ``output_messages``
+    folds them back together.
+    """
     return [
         {
             "role": "assistant",
             "parts": [
                 {
                     "type": "tool_call",
-                    "id": _call_id(decision.run.run_id, seq),
+                    "id": _call_id(decision.run.run_id, seq, index),
                     "name": decision.tool_name,
                     "arguments": json.dumps(
                         _tool_arguments(decision.tool_name, decision.case)
                     ),
                 }
+                for index, decision in enumerate(group)
             ],
         }
     ]
 
 
-def _tool_result_message(previous: SeededDecision, seq: int) -> Fields:
+def _tool_result_messages(previous: list[SeededDecision], seq: int) -> list[Fields]:
+    """One tool message per call the previous turn made.
+
+    Parallel calls each return separately, so the next turn's input carries
+    a result per call, matched to it by id.
+    """
+    return [_tool_result_message(d, seq, index) for index, d in enumerate(previous)]
+
+
+def _tool_result_message(previous: SeededDecision, seq: int, index: int = 0) -> Fields:
     """What the framework fed back after the previous decision.
 
     One branch per outcome, because they are three different things and the
@@ -584,7 +619,7 @@ def _tool_result_message(previous: SeededDecision, seq: int) -> Fields:
         "parts": [
             {
                 "type": "tool_call_response",
-                "id": _call_id(previous.run.run_id, seq - 1),
+                "id": _call_id(previous.run.run_id, seq - 1, index),
                 "response": response,
             }
         ],
@@ -600,6 +635,7 @@ def _message_seed_row(
     user_id: str,
     run_id: UUID,
     turn_key: str,
+    agent_name: str,
     message_seq: int,
     model: str,
     input_messages: list[Fields],
@@ -616,7 +652,7 @@ def _message_seed_row(
     event = LlmMessageEvent(
         event_id=uuid4(),
         occurred_at=occurred_at,
-        agent_name=target.agent_name,
+        agent_name=agent_name,
         session_id=session_id,
         user_id=user_id,
         model=model,
@@ -646,19 +682,32 @@ def _transcript_rows(
     rng: random.Random,
     decisions: list[SeededDecision],
     run_index: int,
+    *,
+    groups: list[list[SeededDecision]] | None = None,
+    agent_name: str | None = None,
+    opens_conversation: bool = True,
 ) -> list[Row]:
-    """One run's conversation: N decisions produce N+1 message events.
+    """One message list's conversation: N turns produce N+1 message events.
+
+    A turn is a `group` — the decisions one completion asked for. Usually
+    one, but a completion can request several tools at once, and then those
+    decisions share a turn and anchor on it together.
 
     `turn_key` is the Hexgate run id plus the agent name, as the adapters
-    build it — one message list per run, so `message_seq` is contiguous
-    within it and a skipped number reads as a lost event rather than as a
-    sub-agent starting its own list.
+    build it. That is per message LIST, not per run: a handoff target keeps
+    its own, restarting `message_seq` at 0, which is why gap detection has
+    to be per `turn_key` rather than per session. `agent_name` names the
+    agent whose list this is; `opens_conversation` is False for a handoff
+    target, whose list starts from what it was handed rather than from the
+    user's original ask.
     """
     if not decisions:
         return []
+    groups = groups if groups is not None else [[d] for d in decisions]
     first = decisions[0]
     run_id = first.run.run_id
-    turn_key = f"{run_id}:{target.agent_name}"
+    agent = agent_name or target.agent_name
+    turn_key = f"{run_id}:{agent}"
     model = rng.choice(MODELS)
     # One imperfection per run at most: overlapping them would leave no
     # seeded row showing a single marker on its own.
@@ -674,13 +723,28 @@ def _transcript_rows(
 
     rows: list[Row] = []
     seq = 0
-    for index, decision in enumerate(decisions):
+    for index, group in enumerate(groups):
+        decision = group[0]
         # The delta: the user's ask opens the conversation, every later call
-        # carries only what came back from the tool the last one requested.
+        # carries only what came back from the tools the last one requested.
         if index == 0:
-            new_input = [{"role": "user", "parts": [_text(first.case["ask"])]}]
+            new_input = (
+                [{"role": "user", "parts": [_text(first.case["ask"])]}]
+                if opens_conversation
+                else [
+                    {
+                        "role": "user",
+                        "parts": [
+                            _text(
+                                f"Handed off from {target.agent_name}: "
+                                f"{first.case['ask']}"
+                            )
+                        ],
+                    }
+                ]
+            )
         else:
-            new_input = [_tool_result_message(decisions[index - 1], seq)]
+            new_input = _tool_result_messages(groups[index - 1], seq)
         if index == resync_at:
             # A resync restates the whole list rather than extending it.
             new_input = [
@@ -709,10 +773,11 @@ def _transcript_rows(
                 user_id=decision.user_id,
                 run_id=run_id,
                 turn_key=turn_key,
+                agent_name=agent,
                 message_seq=seq,
                 model=model,
                 input_messages=new_input,
-                output_messages=_tool_call_completion(decision, seq),
+                output_messages=_tool_call_completion(group, seq),
                 # First event of the turn_key only, as the adapters send it.
                 system_instructions=[_text(SYSTEM_PROMPT)] if seq == 0 else None,
                 resynced=index == resync_at,
@@ -721,7 +786,7 @@ def _transcript_rows(
         )
         seq += 1
 
-    # What followed the last decision: its result fed back, and the model's
+    # What followed the last turn: its results fed back, and the model's
     # closing answer. Without this the drawer has nothing to show after the
     # run's final tool call.
     last = decisions[-1]
@@ -734,9 +799,10 @@ def _transcript_rows(
             user_id=last.user_id,
             run_id=run_id,
             turn_key=turn_key,
+            agent_name=agent,
             message_seq=seq,
             model=model,
-            input_messages=[_tool_result_message(last, seq)],
+            input_messages=_tool_result_messages(groups[-1], seq),
             output_messages=[
                 {"role": "assistant", "parts": [_text(rng.choice(FINAL_REPLIES))]}
             ],
@@ -985,6 +1051,111 @@ def generate_long_conversation(
     return rows, _transcript_rows(target, rng, seeded, 1)
 
 
+def generate_handoff_run(
+    target: SeedTarget, rng: random.Random, now: datetime
+) -> Tuple[list[Row], list[Row]]:
+    """One run split across two agents, and so across two message lists.
+
+    A handoff target keeps its own list: its `turn_key` differs and its
+    `message_seq` restarts at 0. Nothing else seeded here has two lists in
+    one session, so without this run the drawer's per-`turn_key` gap
+    detection is only covered by a unit test — and the failure it guards
+    against is silent, a sub-agent's first turn read as a pile of lost
+    events.
+    """
+    start = now - timedelta(hours=6)
+    session_id = str(uuid4())
+    progress = RunProgress(rng, uuid4())
+    case = rng.choice(CASES)
+
+    def segment(
+        count: int, offset: int, agent_name: str | None
+    ) -> list[SeededDecision]:
+        seeded: list[SeededDecision] = []
+        for i in range(count):
+            timestamp = start + timedelta(seconds=(offset + i) * 30)
+            outcome = AuditOutcome.DENY if agent_name and i == 1 else AuditOutcome.ALLOW
+            seeded.append(
+                _background_decision(
+                    rng,
+                    outcome=outcome,
+                    timestamp=timestamp,
+                    session_id=session_id,
+                    user_id=HANDOFF_USER,
+                    run=progress.snapshot(_elapsed_ms(start, timestamp)),
+                    case=case,
+                    agent_name=agent_name,
+                )
+            )
+            progress.record(outcome)
+        return seeded
+
+    main = segment(2, 0, None)
+    # The specialist takes over mid-session and starts its own list.
+    sub = segment(3, 2, HANDOFF_AGENT)
+
+    rows = [_decision_seed_row(target, rng, d) for d in main + sub]
+    # run_index 2 keeps both lists free of the seeded imperfections: this
+    # run is about the list split, and a gap in it would confuse which of
+    # the two things the drawer is showing.
+    messages = _transcript_rows(target, rng, main, 2) + _transcript_rows(
+        target,
+        rng,
+        sub,
+        2,
+        agent_name=HANDOFF_AGENT,
+        opens_conversation=False,
+    )
+    return rows, messages
+
+
+def generate_parallel_tool_calls_run(
+    target: SeedTarget, rng: random.Random, now: datetime
+) -> Tuple[list[Row], list[Row]]:
+    """One completion asking for several tools at once.
+
+    The framework returns them together, so the decisions share a timestamp
+    and all anchor on the same turn — several decision rows, one "This
+    call". Opening any of them should show that one turn, and the call id is
+    the only thing saying which of the three the open decision is about.
+    """
+    start = now - timedelta(hours=3)
+    session_id = str(uuid4())
+    progress = RunProgress(rng, uuid4())
+    case = rng.choice(CASES)
+
+    def decision(timestamp: datetime, tool_name: str) -> SeededDecision:
+        outcome = (
+            AuditOutcome.DENY if tool_name == "refund_customer" else AuditOutcome.ALLOW
+        )
+        seeded = _background_decision(
+            rng,
+            outcome=outcome,
+            timestamp=timestamp,
+            session_id=session_id,
+            user_id=PARALLEL_USER,
+            run=progress.snapshot(_elapsed_ms(start, timestamp)),
+            case=case,
+            tool_name=tool_name,
+        )
+        progress.record(outcome)
+        return seeded
+
+    # Turn 0 asks for one tool; turn 1 asks for three at once — same
+    # timestamp, because one completion requested them together.
+    opening = [decision(start, "read_customer")]
+    fan_out_at = start + timedelta(seconds=40)
+    fan_out = [
+        decision(fan_out_at, tool)
+        for tool in ("read_customer", "refund_customer", "create_ticket")
+    ]
+
+    groups = [opening, fan_out]
+    seeded = opening + fan_out
+    rows = [_decision_seed_row(target, rng, d) for d in seeded]
+    return rows, _transcript_rows(target, rng, seeded, 2, groups=groups)
+
+
 # ── Public API ────────────────────────────────────────────────────────────────
 
 
@@ -999,10 +1170,18 @@ def build_rows(
         target, rng, now, number_anomalies, number_users
     )
     long_rows, long_messages = generate_long_conversation(target, rng, now)
+    handoff_rows, handoff_messages = generate_handoff_run(target, rng, now)
+    parallel_rows, parallel_messages = generate_parallel_tool_calls_run(
+        target, rng, now
+    )
     return (
-        normal + long_rows,
+        normal + long_rows + handoff_rows + parallel_rows,
         anomalous,
-        normal_messages + anomaly_messages + long_messages,
+        normal_messages
+        + anomaly_messages
+        + long_messages
+        + handoff_messages
+        + parallel_messages,
     )
 
 
