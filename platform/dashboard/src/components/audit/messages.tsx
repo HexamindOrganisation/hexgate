@@ -1,5 +1,5 @@
 /**
- * The Audit drawer's "LLM messages" section: the exchange around one
+ * The Audit drawer's "Messages" section: the exchange around one
  * decision, not a trace explorer.
  *
  * A transcript is anchored on the selected decision and matched by time
@@ -332,7 +332,7 @@ export function LlmMessagesSection({
     );
   if (isLoading) return note("Loading…");
   if (isError) return note("Could not load the transcript.");
-  if (!rows.length) return note("No LLM messages recorded for this session.");
+  if (!rows.length) return note("No messages recorded for this session.");
 
   const { earlier, anchor, next, later } = anchorTranscript(
     rows,

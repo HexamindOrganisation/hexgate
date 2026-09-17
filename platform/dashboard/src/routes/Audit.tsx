@@ -302,7 +302,7 @@ function DetailDrawer({
             </pre>
           </DrawerSection>
 
-          <DrawerSection label="LLM messages">
+          <DrawerSection label="Messages">
             <LlmMessagesSection
               rows={messagesQ.data?.rows ?? []}
               total={messagesQ.data?.total ?? 0}
