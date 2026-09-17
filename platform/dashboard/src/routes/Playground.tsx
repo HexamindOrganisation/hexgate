@@ -223,6 +223,13 @@ function PlaygroundLive({ projectId }: { projectId: string }) {
         decisions={state.decisions}
         muted={state.pendingApprovals.length > 0 || composer.trim().length > 0}
       />
+
+      {/* Persistent docs affordance — a subtle icon+label pill kept in the
+          bottom-right corner so docs stay one click away throughout, not just on
+          the empty state. The decision deck stacks just above it (see below). */}
+      <div className="absolute bottom-24 right-4 z-20 rounded-full border border-border/60 bg-card/70 px-3 py-1.5 backdrop-blur transition-colors hover:bg-accent sm:bottom-6 sm:right-6">
+        <DocsLink path={DOC_PATHS.playground} label="Docs" compact />
+      </div>
     </div>
   );
 }
@@ -585,7 +592,8 @@ function DecisionDeck({
     <div
       aria-hidden={muted}
       className={cn(
-        "absolute bottom-24 right-4 z-20 transition-opacity sm:bottom-6 sm:right-6",
+        // Stacked above the persistent Docs pill (which owns the very corner).
+        "absolute bottom-36 right-4 z-20 transition-opacity sm:bottom-[4.5rem] sm:right-6",
         muted && "pointer-events-none opacity-0",
       )}
       onMouseEnter={() => setHover(true)}

@@ -225,6 +225,14 @@ describe("PlaygroundPage", () => {
     expect(handle).toBeDisabled();
   });
 
+  it("keeps a docs link reachable mid-session, not just on the empty state", () => {
+    mockState = baseState({
+      messages: [{ id: "u1", role: "user", content: "hi" }],
+    });
+    renderWithProviders(<PlaygroundPage />);
+    expect(screen.getByRole("link", { name: "Docs" })).toBeInTheDocument();
+  });
+
   it("keeps the offline notice visible mid-session", () => {
     mockState = baseState({
       agentOnline: false,
