@@ -1,0 +1,450 @@
+{
+  "cover": {
+    "title": "<copy:TITLE>",
+    "spec_version": "<copy:SPEC_VERSION>",
+    "report_id": "rpt_000000000000",
+    "what_this_is": "<copy:WHAT_THIS_IS>",
+    "what_this_is_not": "<copy:WHAT_THIS_IS_NOT>",
+    "organization": {
+      "id": "org_1",
+      "slug": "acme",
+      "name": "Acme SAS"
+    },
+    "project": {
+      "id": "proj_1",
+      "name": "support"
+    },
+    "period": {
+      "start": "2026-03-21T00:00:00+00:00",
+      "end": "2026-09-17T00:00:00+00:00"
+    },
+    "agents": {
+      "registered": 2,
+      "complete": 1,
+      "incomplete": 1
+    },
+    "requested_by": {
+      "user_id": "usr_1",
+      "email": "dana@example.com"
+    },
+    "generated_at": "2026-09-17T10:30:00+00:00"
+  },
+  "inventory": {
+    "articles": [
+      "Art. 6",
+      "Annex III",
+      "Art. 26(2)"
+    ],
+    "attribution": "<copy:INVENTORY_ATTRIBUTION>",
+    "agents": [
+      {
+        "agent_name": "support_bot",
+        "agent_id": "agt_support_bot",
+        "version": 4,
+        "bundle": {
+          "source_hash": "ssssssss",
+          "wasm_hash": "wwwwwwww"
+        },
+        "intended_purpose": "Answer customer support questions about billing.",
+        "operator_role": "deployer",
+        "risk_tier": "high_risk",
+        "annex_iii_point": "5(b)",
+        "oversight_owner": {
+          "name": "Dana Okafor",
+          "contact": "dana@example.com"
+        },
+        "recorded_by": {
+          "user_id": "usr_1",
+          "email": "dana@example.com"
+        },
+        "recorded_at": "2026-09-01T12:00:00+00:00",
+        "checker_last_update_date": "2026-07-04",
+        "complete": true,
+        "missing_fields": []
+      },
+      {
+        "agent_name": "triage_bot",
+        "agent_id": "agt_triage_bot",
+        "version": 1,
+        "bundle": null,
+        "intended_purpose": null,
+        "operator_role": null,
+        "risk_tier": null,
+        "annex_iii_point": null,
+        "oversight_owner": {
+          "name": null,
+          "contact": null
+        },
+        "recorded_by": {
+          "user_id": null,
+          "email": null
+        },
+        "recorded_at": null,
+        "checker_last_update_date": null,
+        "complete": false,
+        "missing_fields": [
+          "intended purpose",
+          "operator role",
+          "risk tier",
+          "human-oversight owner",
+          "Annex III reference"
+        ]
+      }
+    ]
+  },
+  "controls": {
+    "articles": [
+      "Art. 9",
+      "Art. 14",
+      "Art. 15",
+      "Art. 26(1)",
+      "Art. 26(2)"
+    ],
+    "deny_by_default": "<copy:DENY_BY_DEFAULT>",
+    "agents": [
+      {
+        "agent_name": "support_bot",
+        "bundle": {
+          "source_hash": "ssssssss",
+          "wasm_hash": "wwwwwwww"
+        },
+        "inventory_entry_complete": true,
+        "authorisation_matrix": {
+          "roles": [
+            "default",
+            "support",
+            "admin"
+          ],
+          "tools": [
+            "read_file",
+            "refund"
+          ],
+          "rows": [
+            {
+              "tool": "read_file",
+              "cells": {
+                "default": {
+                  "mode": "deny",
+                  "label": "Deny",
+                  "constraint": null
+                },
+                "support": {
+                  "mode": "allow",
+                  "label": "Allow",
+                  "constraint": "path startswith \"/tickets/\""
+                },
+                "admin": {
+                  "mode": "allow",
+                  "label": "Allow",
+                  "constraint": null
+                }
+              }
+            },
+            {
+              "tool": "refund",
+              "cells": {
+                "default": {
+                  "mode": "deny",
+                  "label": "Deny",
+                  "constraint": null
+                },
+                "support": {
+                  "mode": "approval",
+                  "label": "Approval",
+                  "constraint": "amount <= 100"
+                },
+                "admin": {
+                  "mode": "allow",
+                  "label": "Allow",
+                  "constraint": null
+                }
+              }
+            }
+          ]
+        },
+        "matrix_unavailable_reason": null,
+        "human_oversight": "<copy:HUMAN_OVERSIGHT>",
+        "oversight_owner": {
+          "note": "<copy:OVERSIGHT_OWNER_NOTE>",
+          "name": "Dana Okafor",
+          "contact": "dana@example.com"
+        }
+      },
+      {
+        "agent_name": "triage_bot",
+        "bundle": null,
+        "inventory_entry_complete": false,
+        "authorisation_matrix": null,
+        "matrix_unavailable_reason": "<copy:MATRIX_UNAVAILABLE_NO_BUNDLE>",
+        "human_oversight": "<copy:HUMAN_OVERSIGHT>",
+        "oversight_owner": {
+          "note": "<copy:OVERSIGHT_OWNER_NOTE>",
+          "name": null,
+          "contact": null
+        }
+      }
+    ],
+    "data_protection_controls": [
+      {
+        "control": "key-based redaction",
+        "runs_in": "SDK, before an event leaves the host process",
+        "effect": "replaces the value under any key matching password, passwd, secret, token, apikey (with or without a - or _ separator), credential or authorization with [REDACTED]",
+        "applies_to": "the audit copy of a tool call's arguments (substring key match) and the policy-fact attribute bag (whole-key match)",
+        "registration": "always on; not operator-configurable",
+        "evidenced_here": "yes — every argument snapshot in section 3 passed through it"
+      },
+      {
+        "control": "secret_guard",
+        "runs_in": "SDK, before-guard at the tool boundary",
+        "effect": "refuses the call when its arguments carry a probable credential",
+        "applies_to": "tool call arguments",
+        "registration": "registered by the operator in host code; the platform cannot observe whether this agent has it wired",
+        "evidenced_here": "yes — a refusal is recorded as a decision with error type guard_denied, counted under guard refusals in section 3"
+      },
+      {
+        "control": "secret_redactor",
+        "runs_in": "SDK, before-guard at the tool boundary",
+        "effect": "strips the credential from the arguments and lets the call proceed",
+        "applies_to": "tool call arguments",
+        "registration": "registered by the operator in host code; the platform cannot observe whether this agent has it wired",
+        "evidenced_here": "no — the SDK emits no event when it redacts, so this report cannot show whether it fired; see the section 4 gap \"Redactor and watch hits do not leave the SDK\""
+      },
+      {
+        "control": "secret_watch",
+        "runs_in": "SDK, after-guard, observe only",
+        "effect": "flags a probable credential in a tool's result; does not alter the result or stop the call",
+        "applies_to": "tool call results",
+        "registration": "registered by the operator in host code; the platform cannot observe whether this agent has it wired",
+        "evidenced_here": "no — the observation stays in the host process; see the section 4 gap \"Redactor and watch hits do not leave the SDK\""
+      },
+      {
+        "control": "payload cap",
+        "runs_in": "SDK before transmission, and the platform at ingest",
+        "effect": "the SDK replaces an over-cap payload with a marked, truncated preview; the platform's direct-ingest endpoint refuses an over-cap payload outright rather than storing a silently trimmed one",
+        "applies_to": "the arguments column (8 KiB) and the hint and attributes columns (4 KiB each) of a decision event",
+        "registration": "always on; not operator-configurable",
+        "evidenced_here": "yes — a truncated snapshot in section 3 carries a _truncated marker and its original byte length"
+      }
+    ]
+  },
+  "activity": {
+    "articles": [
+      "Art. 12",
+      "Art. 19",
+      "Art. 26(6)",
+      "Art. 72",
+      "Art. 73"
+    ],
+    "counters": {
+      "decisions": 12,
+      "denials": 3,
+      "approvals_required": 2,
+      "guard_refusals": 2,
+      "ban_enforcements": 2,
+      "model_calls": 6,
+      "model_call_error_rate": 0.16666666666666666,
+      "distinct_models": 2
+    },
+    "decisions_by_agent_and_outcome": [
+      {
+        "key": "support_bot",
+        "all": 12,
+        "allow": 7,
+        "deny": 3,
+        "needs_approval": 2
+      }
+    ],
+    "decision_sample": {
+      "note": "<copy:DECISION_SAMPLE_NOTE>",
+      "rows": [
+        {
+          "event_id": "11111111-1111-1111-1111-111111111111",
+          "occurred_at": "2026-09-16T18:40:00Z",
+          "received_at": "2026-09-16T18:40:00Z",
+          "agent_name": "support_bot",
+          "agent_version_id": "agv_1",
+          "session_id": "sess_1",
+          "user_id": "u_alice",
+          "tool_name": "read_file",
+          "user_roles": [
+            "support"
+          ],
+          "deciding_role": "support",
+          "outcome": "deny",
+          "error_type": "policy_denied",
+          "reason": "outside the allowed path",
+          "violations": [
+            "path_not_allowed"
+          ],
+          "hint": null,
+          "arguments": {
+            "path": "/etc/passwd",
+            "api_key": "[REDACTED]"
+          },
+          "attributes": null,
+          "run_id": null
+        }
+      ]
+    },
+    "approval_required_sample": {
+      "note": "<copy:APPROVAL_SAMPLE_NOTE>",
+      "rows": [
+        {
+          "event_id": "22222222-2222-2222-2222-222222222222",
+          "occurred_at": "2026-09-16T18:40:00Z",
+          "received_at": "2026-09-16T18:40:00Z",
+          "agent_name": "support_bot",
+          "agent_version_id": "agv_1",
+          "session_id": "sess_1",
+          "user_id": "u_alice",
+          "tool_name": "read_file",
+          "user_roles": [
+            "support"
+          ],
+          "deciding_role": "support",
+          "outcome": "needs_approval",
+          "error_type": "approval_required",
+          "reason": "",
+          "violations": [],
+          "hint": null,
+          "arguments": {
+            "path": "/etc/passwd",
+            "api_key": "[REDACTED]"
+          },
+          "attributes": null,
+          "run_id": null
+        }
+      ]
+    },
+    "ban_enforcements": {
+      "note": "<copy:BAN_ENFORCEMENT_NOTE>",
+      "total": 2,
+      "returned": 2,
+      "truncated": false,
+      "rows": [
+        {
+          "event_id": "33333333-3333-3333-3333-333333333333",
+          "occurred_at": "2026-09-16T18:40:00Z",
+          "received_at": "2026-09-16T18:40:00Z",
+          "agent_name": "support_bot",
+          "session_id": "sess_9",
+          "user_id": "u_mallory",
+          "ban_type": "user",
+          "ban_id": "ban_abc123",
+          "reason": "offboarded"
+        },
+        {
+          "event_id": "44444444-4444-4444-4444-444444444444",
+          "occurred_at": "2026-04-02T09:15:00Z",
+          "received_at": "2026-04-02T09:15:00Z",
+          "agent_name": "support_bot",
+          "session_id": "sess_4",
+          "user_id": "u_alice",
+          "ban_type": "agent",
+          "ban_id": "ban_def456",
+          "reason": "paused during an incident"
+        }
+      ]
+    },
+    "model_calls_by_agent": [
+      {
+        "key": "support_bot",
+        "calls": 6
+      }
+    ],
+    "model_calls_by_model": [
+      {
+        "key": "claude-sonnet-5",
+        "calls": 4
+      },
+      {
+        "key": "gpt-4o",
+        "calls": 2
+      }
+    ]
+  },
+  "coverage": {
+    "articles": [
+      "Art. 21",
+      "Art. 26(12)",
+      "Art. 99(5)"
+    ],
+    "records_covered": [
+      {
+        "table": "policy_decision",
+        "contents": "one row per policy decision at the SDK's tool gate — allow, deny or approval required, including guard refusals",
+        "event_count": 12,
+        "earliest_received_at": "2026-04-02T09:15:00+00:00",
+        "latest_received_at": "2026-09-16T18:40:00+00:00",
+        "retention_days": 180
+      },
+      {
+        "table": "ban_enforcement",
+        "contents": "one row per call refused by an operator kill switch, before any policy evaluation",
+        "event_count": 2,
+        "earliest_received_at": "2026-04-02T09:15:00+00:00",
+        "latest_received_at": "2026-09-16T18:40:00+00:00",
+        "retention_days": 180
+      },
+      {
+        "table": "llm_invocation",
+        "contents": "one row per model call an instrumented agent made, with its token counts and outcome",
+        "event_count": 6,
+        "earliest_received_at": "2026-04-02T09:15:00+00:00",
+        "latest_received_at": "2026-09-16T18:40:00+00:00",
+        "retention_days": 180
+      }
+    ],
+    "caveats": [
+      "Retention: events older than the retention window shown for each table above have been deleted by the store's TTL, so a period reaching past it is covered only from the earliest surviving event.",
+      "Clock skew: occurred_at is stamped by the host process and may drift from the platform's received_at. The period filter is applied to occurred_at, so an event whose host clock was wrong can fall in the wrong period.",
+      "Identity: user_id and the role set are asserted by the host application when it calls the SDK. Hexgate records them; it does not authenticate the end user behind them.",
+      "Delivery: an event reaches the store through the host process and a buffered transport. A host that crashed before flushing, or a dropped batch, leaves no record and no marker, so these counts are a lower bound on what happened.",
+      "Deduplication: counts are over distinct event ids, so a retried send is counted once even before the store's background merge collapses it."
+    ],
+    "gaps": [
+      {
+        "id": "approval_outcomes_unrecorded",
+        "title": "Approval outcomes are not recorded",
+        "statement": "Calls in this period required human approval, but Hexgate records only that approval was required. The approval handler is the operator's own code and emits no event, so this report cannot show who approved a call, when, or whether the call then ran.",
+        "condition": "2 decision(s) in the period required approval"
+      },
+      {
+        "id": "sdk_only_secret_controls",
+        "title": "Redactor and watch hits do not leave the SDK",
+        "statement": "Of the three secret controls in section 2, only secret_guard refusals produce an event. A secret_redactor strip and a secret_watch flag stay inside the host process, so this report evidences neither, whether or not the operator registered them.",
+        "condition": "no event table records a secret_redactor or secret_watch hit in this platform version"
+      },
+      {
+        "id": "decisions_not_grouped_by_run",
+        "title": "Decisions are not grouped by run",
+        "statement": "Some decisions in this period carry no run identifier, so they cannot be attributed to the agent run that produced them. The counters and tables in section 3 count individual decisions, not runs.",
+        "condition": "5 decision(s) in the period carry no run identifier"
+      },
+      {
+        "id": "incomplete_inventory_entry:triage_bot",
+        "title": "Inventory entry for triage_bot is incomplete",
+        "statement": "The inventory entry for agent triage_bot is missing fields listed in section 1, so this report does not state that agent's intended purpose, asserted risk tier or named oversight owner.",
+        "condition": "the agent's classification entry is missing at least one required field"
+      }
+    ],
+    "not_evidenced": [
+      "That any tool call actually ran. The platform records the decision, not the execution: an allowed call the host never made looks identical to one it made.",
+      "The outcome of a call that required approval — whether a person granted it, who they were, and whether the call then ran.",
+      "Anything about a tool call made outside the SDK's gate. Only calls that went through Hexgate are recorded.",
+      "The correctness of the operator's risk-tier and Annex III assertions in section 1, or of the oversight owner named there."
+    ]
+  },
+  "signature": {
+    "statement": "<copy:SIGNATURE_STATEMENT>",
+    "algorithm": "Ed25519",
+    "digest_algorithm": "SHA-256",
+    "kid": "sha256:0123456789abcdef",
+    "jwks_url": "/v1/.well-known/keys",
+    "verification": [
+      "1. Download the annex and compute its SHA-256 digest over the exact bytes received; it must equal the digest published with the annex.",
+      "2. Fetch the platform's public signing key from the JWKS path in this section, resolved against the host this report was obtained from, and select the key whose fingerprint equals the kid in this section.",
+      "3. Verify the Ed25519 signature published with the annex against that public key, over the 32 raw digest bytes from step 1 — not over the annex itself, and not over the hex text of the digest."
+    ]
+  }
+}

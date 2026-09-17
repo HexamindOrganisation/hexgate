@@ -34,6 +34,9 @@ EXEMPT_TABLES: dict[str, str] = {
 # Tables that record their creator under a domain-specific name.
 CREATION_ACTOR_ALIASES: dict[str, str] = {
     "invitation": "invited_by_user_id",
+    # An evidence report is generated, not created: the row's only writer is
+    # the user who asked for it, under the name the annex itself uses.
+    "ai_act_report": "generated_by_user_id",
 }
 
 # (table, column) pairs added to a table that ALREADY EXISTED, so only a
