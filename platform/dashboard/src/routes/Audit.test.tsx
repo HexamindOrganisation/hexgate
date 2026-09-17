@@ -536,6 +536,21 @@ describe("AuditPage", () => {
     expect(screen.getAllByText("transcript incomplete")).toHaveLength(2);
   });
 
+  it("links a lone call to its result with a colour too", async () => {
+    // The ordinary case: one call per turn. The chain still crosses a card
+    // boundary, and the ids differ mid-string, which is what the dot fixes.
+    stubFetch();
+    const user = userEvent.setup();
+    renderWithProviders(<AuditPage />);
+
+    await openDrawer(user);
+    const [onCall, onResult] = await screen.findAllByText("call-1");
+    const slotOf = (el: HTMLElement) =>
+      (el.previousElementSibling as HTMLElement).style.background;
+    expect(slotOf(onCall)).toMatch(/^var\(--call-[123]\)$/);
+    expect(slotOf(onResult)).toBe(slotOf(onCall));
+  });
+
   it("names a tool call and a tool result rather than only colouring them", async () => {
     stubFetch();
     const user = userEvent.setup();
@@ -611,7 +626,8 @@ describe("AuditPage", () => {
 
     await openDrawer(user);
     // Each id appears twice — once on the call, once on its result — and both
-    // wear the same slot, or the colour would link the wrong pair.
+    // wear the same slot, or the colour would link the wrong pair. Three
+    // parallel calls take three distinct slots.
     for (const [id, slot] of [
       ["call-a", 1],
       ["call-b", 2],

@@ -34,16 +34,26 @@ import { fmtTs } from "./fmt";
  */
 const CallSlots = createContext<Map<string, number>>(new Map());
 
-/** Assign a slot to each call of every turn that made more than one.
+/** Assign a colour slot to every tool call, in order of appearance.
  *
- * Three slots, and a fourth call gets none: these are compared all-pairs —
- * any dot may need telling from any other, not just its neighbour — and
- * three hues is what clears the colour-vision floors in both themes. The id
- * is always rendered beside the dot, so a call past the third is still
- * identifiable; it just loses the shortcut.
+ * Slots advance per call and wrap at three, so consecutive calls always
+ * differ and a call never collides with its neighbours. Within one turn the
+ * calls are consecutive by construction, which is what keeps parallel calls
+ * distinct from each other; a turn making more than three gets no dot past
+ * the third rather than a hue it already used.
+ *
+ * Three hues, and they repeat every third call. That is a deliberate
+ * departure from "never cycle a categorical palette": the rule exists so a
+ * legend cannot lie about identity, and here there is no legend — the id is
+ * printed beside every dot and is the actual identifier. The colour's job is
+ * local, linking a call to its result across the card boundary between two
+ * turns, and a repeat three calls away never lands adjacent to its twin.
+ * Three is also the most that clears the colour-vision floors in both
+ * themes, so widening the cycle is not available.
  */
 function buildCallSlots(rows: LlmMessageRow[]): Map<string, number> {
   const slots = new Map<string, number>();
+  let next = 0;
   for (const row of rows) {
     const messages = Array.isArray(row.output_messages)
       ? (row.output_messages as LlmMessage[])
@@ -55,8 +65,8 @@ function buildCallSlots(rows: LlmMessageRow[]): Map<string, number> {
       .filter((part) => part?.type === "tool_call")
       .map((part) => part.id)
       .filter((id): id is string => typeof id === "string" && !!id);
-    if (ids.length < 2) continue;
-    ids.slice(0, 3).forEach((id, index) => slots.set(id, index));
+    ids.slice(0, 3).forEach((id, index) => slots.set(id, (next + index) % 3));
+    next = (next + ids.length) % 3;
   }
   return slots;
 }
@@ -121,9 +131,7 @@ function PartLabel({ label, id }: { label: string; id?: unknown }) {
               style={{ background: `var(--call-${slot + 1})` }}
             />
           )}
-          <span className="font-mono normal-case tracking-normal opacity-70">
-            {id}
-          </span>
+          <span className="font-mono normal-case tracking-normal">{id}</span>
         </span>
       )}
     </div>
