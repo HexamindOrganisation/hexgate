@@ -12,12 +12,16 @@ the system instruction), ``after_model_callback`` sees the completion and the
 token counts. The request side is stashed under the invocation id and picked
 up when the response lands, so usage and messages leave from one call site.
 
-``invocation_id`` is the ``turn_key``: ADK rebuilds ``contents`` from the
-session on every call, so one invocation is one list, and an ``AgentTool``
-runs its own nested ``Runner`` and so gets an id of its own. A
-``transfer_to_agent`` handoff stays on that list but ADK rewrites the other
-agent's turns into narrated text for the target, so the cursor sees a
-rewritten history and resyncs once per hop — the documented degradation.
+The ``turn_key`` is ``invocation_id`` plus the agent name. ADK rebuilds
+``contents`` from the session on every call, so the invocation identifies the
+conversation — but not on its own the *list*: a ``ParallelAgent`` runs its
+sub-agents concurrently under one invocation id, each seeing its own filtered
+``contents``, so keyed by the id alone they would overwrite each other's stash
+and interleave in one cursor. The agent name separates them. It also gives a
+``transfer_to_agent`` target its own list, which is what it has — ADK rewrites
+the source agent's turns into narrated text for it — so the handoff starts at
+``message_seq`` 0 with its own instructions rather than resyncing the parent's.
+An ``AgentTool`` runs its own nested ``Runner`` and so gets an id of its own.
 
 Turning ``Content``/``Part`` into GenAI messages is ``messages.py``'s job,
 beside this one.
@@ -62,18 +66,22 @@ class _Prompt(NamedTuple):
 _NO_PROMPT = _Prompt("", [], None)
 
 
+def _turn_key(callback_context: CallbackContext) -> str:
+    """Identity of the *message list* this call extends (see module docstring)."""
+    return f"{callback_context.invocation_id}:{callback_context.agent_name}"
+
+
 class HexgateUsagePlugin(BasePlugin):
     """Emits one :class:`~hexgate.tracing.usage.LlmUsageEvent` and one
     :class:`~hexgate.tracing.messages.LlmMessageEvent` per model call. Never
     rewrites the response — always returns ``None`` so the real model output
     reaches the agent unchanged."""
 
-    # Cap on stashed prompts. ADK skips after_run_callback when the agent loop
-    # raises or the caller stops iterating — a policy deny and an SSE client
-    # disconnect both do — so this plugin, shared across the runner's life,
-    # would otherwise retain one whole conversation per abnormally-ended run.
-    # Same bound _HexgateReachPlugin keeps, sized for in-flight calls rather
-    # than invocations because an entry here is the prompt, not a counter.
+    # Cap on tracked message lists. ADK skips after_run_callback when the agent
+    # loop raises or the caller stops iterating — a policy deny and an SSE
+    # client disconnect both do — so this plugin, shared across the runner's
+    # life, would otherwise retain state per abnormally-ended run. Every cursor
+    # entry has a _pending entry (see _tombstone), so this one cap bounds both.
     _MAX_PENDING = 256
 
     def __init__(self, *, api_key: str) -> None:
@@ -95,7 +103,7 @@ class HexgateUsagePlugin(BasePlugin):
         Stashed even with message logging off, because the request is also
         where the model name comes from when the response omits it.
         """
-        key = callback_context.invocation_id
+        key = _turn_key(callback_context)
         self._pending[key] = _Prompt(
             llm_request.model or "",
             # Copied: ADK mutates this list while building the request, and the
@@ -116,42 +124,62 @@ class HexgateUsagePlugin(BasePlugin):
         callback_context: CallbackContext,
         llm_response: LlmResponse,
     ) -> None:
-        key = callback_context.invocation_id
+        key = _turn_key(callback_context)
         # In SSE streaming mode this callback also fires once per chunk; only
         # the aggregated response ends a call, so only it consumes the stash.
         completed = not llm_response.partial
-        prompt = (
-            self._pending.pop(key, None) if completed else self._pending.get(key)
-        ) or _NO_PROMPT
+        prompt = self._pending.get(key) or _NO_PROMPT
+        if completed:
+            self._tombstone(key)
         # ADK builds that aggregate without a model_version
         # (``StreamingResponseAggregator.close``), and both events are rejected
         # platform-side on an empty model, so fall back to the request's.
         model = llm_response.model_version or prompt.model
         usage = llm_response.usage_metadata
-        # Chunks repeat the call's running counts, so counting them too would
-        # bill one answer once per chunk.
-        if completed and usage is not None:
-            emit_llm_usage(
-                callback_context.agent_name,
-                model,
-                usage.prompt_token_count or 0,
-                usage.candidates_token_count or 0,
-                api_key=self._api_key,
-            )
+        # One emit per stashed request, for both events. A chunk repeats the
+        # call's running counts, and on the non-progressive streaming path ADK
+        # yields two responses that both read as completed — either would bill
+        # one answer twice. A turn that streams no content at all produces no
+        # completed response, so it goes unrecorded; ADK offers nowhere
+        # reliable to flush it from, since the run-end callback is exactly what
+        # an aborted run skips.
         if completed and prompt is not _NO_PROMPT:
-            self._emit_messages(callback_context, model, llm_response, prompt)
+            if usage is not None:
+                emit_llm_usage(
+                    callback_context.agent_name,
+                    model,
+                    usage.prompt_token_count or 0,
+                    usage.candidates_token_count or 0,
+                    api_key=self._api_key,
+                )
+            self._emit_messages(callback_context, key, model, llm_response, prompt)
         return None
 
     async def after_run_callback(self, *, invocation_context: Any) -> None:
-        """Drop this invocation's cursor and stash, the reset every adapter
-        owes :class:`~hexgate.tracing.messages.MessageCursor` on run end."""
-        self._cursor.reset(invocation_context.invocation_id)
-        self._pending.pop(invocation_context.invocation_id, None)
+        """Drop every message list of this invocation — one per agent that ran
+        — the reset each adapter owes
+        :class:`~hexgate.tracing.messages.MessageCursor` on run end."""
+        prefix = f"{invocation_context.invocation_id}:"
+        for key in [k for k in self._pending if k.startswith(prefix)]:
+            del self._pending[key]
+            self._cursor.reset(key)
         return None
+
+    def _tombstone(self, key: str) -> None:
+        """Release a completed call's prompt but keep its key.
+
+        Dropping the key outright would strand the cursor entry beside it: the
+        LRU below only reaches cursors through ``_pending``, and ADK skips the
+        run-end callback on an abort. Keeping an empty marker is what makes
+        "every cursor entry has a _pending entry" true, so one cap bounds both.
+        """
+        if key in self._pending:
+            self._pending[key] = _NO_PROMPT
 
     def _emit_messages(
         self,
         callback_context: CallbackContext,
+        key: str,
         model: str,
         llm_response: LlmResponse,
         prompt: _Prompt,
@@ -163,7 +191,6 @@ class HexgateUsagePlugin(BasePlugin):
         """
         if not log_messages_enabled():
             return
-        key = callback_context.invocation_id
         # Convert before advancing: a failed conversion must not spend the
         # turn's seq on an event that never goes out.
         try:

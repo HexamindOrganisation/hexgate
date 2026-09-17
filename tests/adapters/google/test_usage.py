@@ -65,9 +65,13 @@ async def test_after_model_callback_emits_usage_from_response(
     emitted: list[dict[str, Any]],
 ) -> None:
     plugin = HexgateUsagePlugin(api_key="k")
+    context = _context("my-agent")
 
+    await plugin.before_model_callback(
+        callback_context=context, llm_request=_request([_user("a")])
+    )
     result = await plugin.after_model_callback(
-        callback_context=_context("my-agent"), llm_response=_response()
+        callback_context=context, llm_response=_response()
     )
 
     assert result is None  # never rewrites the response
@@ -88,6 +92,9 @@ async def test_after_model_callback_does_nothing_when_no_usage_metadata(
     plugin = HexgateUsagePlugin(api_key="k")
     response = LlmResponse(model_version="gemini-2.0-flash", usage_metadata=None)
 
+    await plugin.before_model_callback(
+        callback_context=_context(), llm_request=_request([_user("a")])
+    )
     await plugin.after_model_callback(
         callback_context=_context(), llm_response=response
     )
@@ -104,6 +111,9 @@ async def test_after_model_callback_defaults_missing_token_counts_to_zero(
     plugin = HexgateUsagePlugin(api_key="k")
     response = _response(prompt_tokens=None, candidates_tokens=None)
 
+    await plugin.before_model_callback(
+        callback_context=_context(), llm_request=_request([_user("a")])
+    )
     await plugin.after_model_callback(
         callback_context=_context(), llm_response=response
     )
@@ -201,7 +211,7 @@ async def test_after_model_callback_messages_happy_path(
         "output_messages": [
             {"role": "assistant", "parts": [{"type": "text", "content": "Sunny, 24C."}]}
         ],
-        "turn_key": "e-1",
+        "turn_key": "e-1:my-agent",
         "message_seq": 0,
         "system_instructions": [{"type": "text", "content": "Be terse."}],
         "resynced": False,
@@ -248,9 +258,9 @@ async def test_when_two_invocations_interleave_then_each_keeps_its_own_seq(
     await _turn(plugin, parent, _request([_user("a"), _user("c")]), _model_response())
 
     assert [(c["turn_key"], c["message_seq"]) for c in messages] == [
-        ("e-1", 0),
-        ("e-2", 0),
-        ("e-1", 1),
+        ("e-1:my-agent", 0),
+        ("e-2:my-agent", 0),
+        ("e-1:my-agent", 1),
     ]
 
 
@@ -389,7 +399,7 @@ async def test_when_the_response_omits_the_model_then_the_request_model_is_used(
 
 @pytest.mark.asyncio
 async def test_when_a_response_has_no_stashed_request_then_no_event_is_emitted(
-    messages: list[dict[str, Any]],
+    emitted: list[dict[str, Any]], messages: list[dict[str, Any]]
 ) -> None:
     """A second non-partial response for one call is not a second model call;
     emitting for it would spend a seq on an empty prompt and flag a resync."""
@@ -398,10 +408,19 @@ async def test_when_a_response_has_no_stashed_request_then_no_event_is_emitted(
 
     await _turn(plugin, context, _request([_user("a")]), _model_response())
     await plugin.after_model_callback(
-        callback_context=context, llm_response=_model_response("…and warm.")
+        callback_context=context,
+        llm_response=_model_response(
+            "…and warm.",
+            usage_metadata=types.GenerateContentResponseUsageMetadata(
+                prompt_token_count=10, candidates_token_count=20
+            ),
+        ),
     )
 
     assert len(messages) == 1
+    # Usage is guarded by the same stash: on ADK's non-progressive streaming
+    # path two responses for one call both read as completed.
+    assert emitted == []
 
 
 @pytest.mark.asyncio
@@ -432,16 +451,76 @@ async def test_when_chunks_stream_then_tokens_are_counted_once(
 
 
 @pytest.mark.asyncio
-async def test_when_runs_end_abnormally_then_stashed_prompts_are_bounded() -> None:
+async def test_when_runs_end_abnormally_then_both_halves_are_bounded(
+    messages: list[dict[str, Any]],
+) -> None:
     """ADK skips after_run_callback when the agent loop raises or the caller
-    stops iterating, so the stash cannot rely on it alone."""
+    stops iterating, so neither half can rely on it alone.
+
+    Each iteration is a whole model call, which is what makes this bite: the
+    prompt is released on the completed response, so a cap that reached the
+    cursor only through a live prompt would bound nothing.
+    """
     plugin = HexgateUsagePlugin(api_key="k")
 
     for n in range(plugin._MAX_PENDING + 10):
-        await plugin.before_model_callback(
-            callback_context=_context(invocation_id=f"e-{n}"),
-            llm_request=_request([_user("a")]),
-        )
+        context = _context(invocation_id=f"e-{n}")
+        await _turn(plugin, context, _request([_user("a")]), _model_response())
 
     assert len(plugin._pending) == plugin._MAX_PENDING
-    assert "e-0" not in plugin._pending  # the stalest went first
+    assert len(plugin._cursor._turns) <= plugin._MAX_PENDING
+    assert "e-0:my-agent" not in plugin._pending  # the stalest went first
+
+
+@pytest.mark.asyncio
+async def test_when_sub_agents_share_an_invocation_then_each_keeps_its_own_list(
+    messages: list[dict[str, Any]],
+) -> None:
+    """A ParallelAgent copies the invocation context and changes only `branch`,
+    so concurrent sub-agents share an invocation id — keyed on that alone one
+    would pop the other's prompt and the second would emit nothing."""
+    plugin = HexgateUsagePlugin(api_key="k")
+    first, second = _context("researcher", "e-1"), _context("writer", "e-1")
+
+    # Interleaved the way TaskGroup runs them: both requests before either
+    # response.
+    await plugin.before_model_callback(
+        callback_context=first, llm_request=_request([_user("research this")])
+    )
+    await plugin.before_model_callback(
+        callback_context=second, llm_request=_request([_user("write this")])
+    )
+    await plugin.after_model_callback(
+        callback_context=first, llm_response=_model_response()
+    )
+    await plugin.after_model_callback(
+        callback_context=second, llm_response=_model_response()
+    )
+
+    assert [(c["agent_name"], c["turn_key"]) for c in messages] == [
+        ("researcher", "e-1:researcher"),
+        ("writer", "e-1:writer"),
+    ]
+    # Each row carries its own agent's prompt, not the other's.
+    assert messages[0]["input_messages"][0]["parts"][0]["content"] == "research this"
+    assert messages[1]["input_messages"][0]["parts"][0]["content"] == "write this"
+
+
+@pytest.mark.asyncio
+async def test_when_a_run_ends_then_every_agent_list_is_dropped(
+    messages: list[dict[str, Any]],
+) -> None:
+    """after_run_callback sees only the invocation id, but one invocation can
+    hold a list per agent."""
+    plugin = HexgateUsagePlugin(api_key="k")
+    for name in ("researcher", "writer"):
+        await _turn(
+            plugin, _context(name, "e-1"), _request([_user("a")]), _model_response()
+        )
+
+    await plugin.after_run_callback(
+        invocation_context=SimpleNamespace(invocation_id="e-1")
+    )
+
+    assert plugin._pending == {}
+    assert plugin._cursor._turns == {}
