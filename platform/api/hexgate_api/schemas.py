@@ -1,10 +1,11 @@
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from enum import StrEnum
 from typing import Annotated, Any, Literal, Optional
 from uuid import UUID
 
 from pydantic import (
     BaseModel,
+    ConfigDict,
     EmailStr,
     Field,
     StringConstraints,
@@ -322,6 +323,96 @@ class AgentUpdate(BaseModel):
     agent_yaml: str | None = None
     policy_yaml: str | None = None
     system_md: str | None = None
+
+
+# --- AI Act classification ---------------------------------------------------
+#
+# The operator asserts these values; the platform records them and judges
+# nothing about them. The two closed sets below are wire-shape guards only —
+# the completeness rule keys off ``risk_tier == "high_risk"`` by exact string,
+# so a typo'd tier must be a 422 rather than a silently-not-high-risk entry.
+
+OperatorRole = Literal["provider", "deployer"]
+RiskTier = Literal["high_risk", "not_high_risk", "prohibited", "minimal"]
+
+
+class AgentClassificationWrite(BaseModel):
+    """``PUT …/agents/{name}/classification`` body.
+
+    A full replace of the agent's entry, not a patch: the dashboard form
+    submits every field, and an omitted field means the operator cleared it.
+    Blank strings are normalised to null so a whitespace-only value doesn't
+    read as a recorded assertion.
+
+    ``extra="forbid"`` where the rest of this module takes pydantic's default,
+    because replace semantics turn an ignored key into silent data loss: a
+    misspelled ``risk_teir`` would not merely fail to set the tier, it would
+    clear the tier already recorded, and still return 200.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    intended_purpose: Optional[str] = Field(default=None, max_length=4096)
+    operator_role: Optional[OperatorRole] = None
+    risk_tier: Optional[RiskTier] = None
+    annex_iii_point: Optional[str] = Field(default=None, max_length=32)
+    oversight_owner_name: Optional[str] = Field(default=None, max_length=256)
+    oversight_owner_contact: Optional[str] = Field(default=None, max_length=256)
+    checker_last_update_date: Optional[date] = None
+
+    @field_validator(
+        "intended_purpose",
+        "annex_iii_point",
+        "oversight_owner_name",
+        "oversight_owner_contact",
+        mode="after",
+    )
+    @classmethod
+    def _blank_to_none(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        stripped = value.strip()
+        return stripped or None
+
+    @model_validator(mode="after")
+    def _assert_something(self) -> "AgentClassificationWrite":
+        """Reject a body that asserts nothing at all.
+
+        A partial entry is fine — the report carries it as incomplete. A
+        wholly empty one is not: it would name an accountable recorder against
+        zero assertions, and, since PUT replaces, wipe a complete entry and
+        its original recorder if the form submitted before it had loaded.
+        """
+        if not any(self.model_dump().values()):
+            raise ValueError("a classification must assert at least one field")
+        return self
+
+
+class AgentClassificationRead(BaseModel):
+    """An agent's entry as the dashboard reads it.
+
+    ``recorded`` is False when no entry has been saved yet — the GET still
+    answers 200 with an empty entry (``intended_purpose`` prefilled from the
+    manifest where there is one) so the form has something to open on, but
+    nothing counts as recorded until the operator PUTs it.
+
+    ``missing_fields`` names what completeness is still waiting on, in a fixed
+    order, so the report and the dashboard agree on the wording.
+    """
+
+    agent_name: str
+    intended_purpose: Optional[str] = None
+    operator_role: Optional[str] = None
+    risk_tier: Optional[str] = None
+    annex_iii_point: Optional[str] = None
+    oversight_owner_name: Optional[str] = None
+    oversight_owner_contact: Optional[str] = None
+    checker_last_update_date: Optional[date] = None
+    recorded: bool
+    recorded_by_user_id: Optional[str] = None
+    recorded_at: Optional[datetime] = None
+    complete: bool
+    missing_fields: list[str] = Field(default_factory=list)
 
 
 class PolicyValidationError(BaseModel):

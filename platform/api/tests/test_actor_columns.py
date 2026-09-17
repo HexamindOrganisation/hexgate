@@ -34,6 +34,13 @@ EXEMPT_TABLES: dict[str, str] = {
 # Tables that record their creator under a domain-specific name.
 CREATION_ACTOR_ALIASES: dict[str, str] = {
     "invitation": "invited_by_user_id",
+    # The row IS the assertion, so its actor is named for the act: the
+    # operator who recorded the classification. Non-nullable by design, so it
+    # is not one of the display-only ``actor_fk_column()`` columns. It carries
+    # the update actor too — a PUT replaces the entry and restamps this column,
+    # which is why the table is mutated in place yet has no
+    # ``updated_by_user_id`` in the test below.
+    "agent_classification": "recorded_by_user_id",
 }
 
 # (table, column) pairs added to a table that ALREADY EXISTED, so only a
