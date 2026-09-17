@@ -380,6 +380,8 @@ class HexgateAgent:
         # (only hexgate_client, attached post-init by _bind_policy). If one is added,
         # thread it through here too, or usage events will keep silently resolving
         # from HEXGATE_API_KEY instead of the caller's explicit key.
+        # Lives as long as the runtime, so both run methods below owe its
+        # per-run transcript state a reset on the way out.
         self._usage_handler = HexgateUsageCallbackHandler(
             agent_name=name or DEFAULT_AGENT_NAME
         )
@@ -408,9 +410,13 @@ class HexgateAgent:
         await self._check_ban()
         await self._check_admission()
         with run_scope(self.name or DEFAULT_AGENT_NAME):
-            return await self._graph.ainvoke(
-                payload, config=self._with_usage_callback(config)
-            )
+            turn_key = self._usage_handler.turn_key()
+            try:
+                return await self._graph.ainvoke(
+                    payload, config=self._with_usage_callback(config)
+                )
+            finally:
+                self._usage_handler.end_run(turn_key)
 
     async def astream_events(
         self,
@@ -429,10 +435,17 @@ class HexgateAgent:
         await self._check_ban()
         await self._check_admission()
         with run_scope(self.name or DEFAULT_AGENT_NAME):
-            async for event in self._graph.astream_events(
-                payload, config=self._with_usage_callback(config), version=version
-            ):
-                yield event
+            # Captured on the way in because this is a generator, whose
+            # ``finally`` an early break runs in a different Context — see
+            # ``HexgateUsageCallbackHandler.end_run``.
+            turn_key = self._usage_handler.turn_key()
+            try:
+                async for event in self._graph.astream_events(
+                    payload, config=self._with_usage_callback(config), version=version
+                ):
+                    yield event
+            finally:
+                self._usage_handler.end_run(turn_key)
 
     async def _check_ban(self) -> None:
         """Refuse a banned agent/user before the graph runs, if a gate is

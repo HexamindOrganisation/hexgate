@@ -5,7 +5,8 @@ The shape translation for the OpenAI Agents adapter, kept apart from the
 decide nothing about when or whether to emit. Each of the other three
 adapters needs the same layer against its own message types, so each gets
 its own ``messages.py`` — beside its hooks where it has them, and beside the
-per-run emit for pydantic-ai, which has no per-call hook at all.
+per-run emit for pydantic-ai, which has no per-call hook at all. What those
+layers share lives in ``adapters/_messages.py``.
 
 The target shape is the official GenAI one — a message is ``{"role": …,
 "parts": [...]}`` and a part names itself under ``type`` — which is what
@@ -18,8 +19,10 @@ output side — see ``output_messages`` and issue #221.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from typing import Any
+
+from hexgate.adapters._messages import as_dict as _as_dict
+from hexgate.adapters._messages import text_part
 
 # Content-part types whose payload is plain text under a ``text`` key. The
 # Responses API names the same thing differently by direction (``input_text``
@@ -28,28 +31,6 @@ from typing import Any
 # a message replayed from a stored transcript. GenAI has one ``text`` part,
 # so they all collapse into it.
 _TEXT_PART_TYPES = frozenset({"input_text", "output_text", "text", "summary_text"})
-
-
-def _as_dict(item: Any) -> dict[str, Any] | None:
-    """One Responses-API item as a plain dict, or ``None`` if it is neither a
-    mapping nor a pydantic model.
-
-    Input items arrive as TypedDicts (so: dicts) and output items as pydantic
-    models, and both shapes appear inside ``content`` lists too. Everything
-    below reads ``type`` and ``role`` to decide a message's shape, which needs
-    a dict in hand; ``None`` is the caller's cue to fall back rather than guess
-    at an object it cannot open.
-    """
-    if isinstance(item, Mapping):
-        return dict(item)
-    dump = getattr(item, "model_dump", None)
-    if callable(dump):
-        return dump(mode="json")
-    return None
-
-
-def text_part(content: Any) -> dict[str, Any]:
-    return {"type": "text", "content": content}
 
 
 def _tool_call_part(item: dict[str, Any]) -> dict[str, Any]:
