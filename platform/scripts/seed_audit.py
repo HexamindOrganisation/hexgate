@@ -56,7 +56,10 @@ from hexgate_api.schemas import (  # noqa: E402
     LlmMessageEvent,
 )
 
-from hexgate.audit import MAX_INPUT_MESSAGES_BYTES  # noqa: E402
+from hexgate.audit import (  # noqa: E402
+    MAX_INPUT_MESSAGES_BYTES,
+    cap_json_head_tail,
+)
 
 # ── Agent & users ─────────────────────────────────────────────────────────────
 # Uses the dev default project id (imported above) so data is visible in the dashboard.
@@ -279,6 +282,10 @@ TRUNCATE_EVERY_N_RUNS = 11
 # Enough to look like a RAG call's retrieved context without approaching the
 # real 256 KiB cap — the flag is what the drawer renders, not the size.
 TRUNCATED_CONTEXT_CHARS = 3_000
+# The cap this content is cut against. Not the real one: a cut at 2 KiB leaves
+# exactly the marker a cut at 256 KiB does, the cap that produced it is stored
+# nowhere, and seventeen quarter-megabyte rows would dwarf the rest of the seed.
+SEEDED_TRUNCATION_CAP_BYTES = 2_048
 
 # One deliberately long conversation per seed. Normal runs are capped at four
 # decisions by the anomaly detector's threshold, so nothing else here crosses
@@ -303,6 +310,10 @@ PARALLEL_USER = USER_IDS[2]
 # message carries every retrieved chunk, and everything else here is a few
 # hundred bytes. Sized off the constant rather than a fixed number of KiB so
 # it tracks the cap if the cap moves.
+# Retrieved past the cap on purpose: the cutter only runs on content that
+# does not fit, and it is the cut that makes this a real capped row. Same
+# overshoot otlp_smoke.py uses to force the same path.
+RAG_OVERSHOOT_BYTES = 16 * 1024
 RAG_AGENT = "policy-rag-agent"
 RAG_USER = USER_IDS[3]
 RAG_CHUNK_SOURCES = [
@@ -811,6 +822,7 @@ def _transcript_rows(
             new_input = [
                 {"role": "user", "parts": [_text(first.case["ask"])]}
             ] + new_input
+        truncated = False
         if index == truncate_at:
             new_input = new_input + [
                 {
@@ -820,6 +832,16 @@ def _transcript_rows(
                     ],
                 }
             ]
+            # Cut by the pipeline's own cutter, and the flag is its verdict
+            # rather than a literal. Both the SDK and the enricher run this
+            # exact function over every content field, so a row stored
+            # truncated carries its marker inside the string that was cut
+            # (" ...[truncated N bytes]... "). Setting the flag by hand over
+            # whole content seeds a shape nothing in the pipeline writes, and
+            # the marker is the part a reader has to render.
+            new_input, truncated = cap_json_head_tail(
+                new_input, cap=SEEDED_TRUNCATION_CAP_BYTES
+            )
         row = _message_seed_row(
             target,
             rng,
@@ -836,7 +858,7 @@ def _transcript_rows(
             # First event of the turn_key only, as the adapters send it.
             system_instructions=[_text(SYSTEM_PROMPT)] if seq == 0 else None,
             resynced=index == resync_at,
-            truncated=index == truncate_at,
+            truncated=truncated,
         )
         # The lost event: built in full, then dropped. Everything it caused
         # stays — its seq is spent, its decision row is written, and the next
@@ -1232,11 +1254,13 @@ def _rag_chunk(rng: random.Random, index: int) -> str:
 
 
 def _rag_context_parts(rng: random.Random, budget_bytes: int) -> list[Fields]:
-    """Retrieved chunks, filling the input budget without exceeding it.
+    """Retrieved chunks, up to ``budget_bytes`` of them.
 
-    Measured on the serialized part, because the cap is in serialized-JSON
-    bytes — the same units the SDK and the enricher enforce it in, and not
-    the same as the characters you can count in the text.
+    A retrieval target, not a cap: the caller asks for more than fits so the
+    pipeline's cutter has something to cut, and the cutter is what enforces
+    the real limit. Measured on the serialized part, because the caps are in
+    serialized-JSON bytes — the same units the SDK and the enricher use, and
+    not the same as the characters you can count in the text.
     """
     parts: list[Fields] = []
     used = 0
@@ -1254,13 +1278,15 @@ def _rag_context_parts(rng: random.Random, budget_bytes: int) -> list[Fields]:
 def generate_rag_run(
     target: SeedTarget, rng: random.Random, now: datetime
 ) -> Tuple[list[Row], list[Row]]:
-    """A retrieval-augmented call whose input sits at the cap.
+    """A retrieval-augmented call whose input was cut down to the cap.
 
     The caps were sized for exactly this call — one message carrying every
     retrieved chunk — and nothing else seeded here is within two orders of
     magnitude of them, so how the drawer renders a row of this size is
-    otherwise untested outside production. The row is marked truncated
-    because a real one arriving at the cap is one the SDK had to cut.
+    otherwise untested outside production. It retrieves past the cap and is
+    cut back to it, which is the only way a row ever arrives at the cap: the
+    truncated flag and the marker in the retrieved block both come out of the
+    cut rather than being asserted alongside whole content.
     """
     start = now - timedelta(hours=9)
     session_id = str(uuid4())
@@ -1300,13 +1326,19 @@ def generate_rag_run(
     # a conversation rather than about how big any one message is.
     cols = _MESSAGE_SEED_COLUMNS
     first = dict(zip(cols, messages[0]))
-    context = _rag_context_parts(
-        rng, MAX_INPUT_MESSAGES_BYTES - len(case["ask"].encode()) - 512
+    context = _rag_context_parts(rng, MAX_INPUT_MESSAGES_BYTES + RAG_OVERSHOOT_BYTES)
+    # Overshoot, then let the pipeline's cutter bring it back to the cap, and
+    # take the flag from the cutter. Sizing the fill to land just under the
+    # cap instead was arithmetic on the serialized overhead — it had to
+    # reserve for the wrapper and for the separator between every part — and
+    # what it bought was a row the SDK would have passed through whole while
+    # this seed called it truncated.
+    capped, truncated = cap_json_head_tail(
+        [{"role": "user", "parts": [_text(case["ask"])] + context}],
+        cap=MAX_INPUT_MESSAGES_BYTES,
     )
-    first["input_messages"] = json.dumps(
-        [{"role": "user", "parts": [_text(case["ask"])] + context}]
-    )
-    first["truncated"] = 1
+    first["input_messages"] = json.dumps(capped)
+    first["truncated"] = int(truncated)
     messages[0] = [first[column] for column in cols]
     return rows, messages
 
