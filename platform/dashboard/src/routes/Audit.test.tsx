@@ -750,6 +750,36 @@ describe("AuditPage", () => {
     expect(screen.queryByText(/run ended/)).not.toBeInTheDocument();
   });
 
+  it("when a text part carries no content then the part is shown, not a blank", async () => {
+    // `content` is the key the spec and every adapter use, so this is a row
+    // written by something that did not — an older or future SDK. Rendering
+    // it as text put `JSON.stringify(undefined)` on screen: an empty box with
+    // nothing to say prose had gone missing.
+    messageRows = () => [
+      {
+        ...MESSAGES[2],
+        event_id: "blank-0",
+        occurred_at: "2026-06-01T09:59:59Z",
+        system_instructions: null as unknown,
+        input_messages: [
+          { role: "user", parts: [{ type: "text", legacy_text: "kept" }] },
+        ],
+      },
+    ];
+    stubFetch();
+    const user = userEvent.setup();
+    renderWithProviders(<AuditPage />);
+
+    await openDrawer(user);
+    expect(
+      await screen.findByText(
+        (_, el) =>
+          el?.tagName === "PRE" &&
+          (el.textContent ?? "").includes("legacy_text"),
+      ),
+    ).toBeInTheDocument();
+  });
+
   it("when an input message carries reasoning then it is printed whole", async () => {
     stubFetch();
     const user = userEvent.setup();

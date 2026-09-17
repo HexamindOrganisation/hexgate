@@ -116,7 +116,15 @@ function Part({ part }: { part: LlmMessagePart }) {
   if (part == null || typeof part !== "object")
     return <Pre>{String(part)}</Pre>;
   const type = part.type;
-  if (type === "text") {
+  // `content` is the key the spec's TextPart uses and the one every adapter
+  // writes (adapters/_messages.py:text_part). A part that says "text" and
+  // carries none is therefore not something to render as text — falling
+  // through to the whole-part printer below shows what actually arrived,
+  // where `JSON.stringify(undefined)` would have rendered an empty box with
+  // no sign that anything was missing. These rows are written by whichever
+  // SDK version produced them and read for 180 days, so the shape is not an
+  // invariant this component can assume.
+  if (type === "text" && part.content !== undefined && part.content !== null) {
     const content = part.content;
     return (
       <Pre>
@@ -375,6 +383,13 @@ export function LlmMessagesSection({
   // and its result live in different turns, and an expanded turn's result
   // may belong to a call inside a collapsed one.
   const callSlots = useMemo(() => buildCallSlots(rows), [rows]);
+  // Memoized for the same reason and hoisted for the same one: both walk the
+  // whole page, and toggling a collapsed group re-renders this component
+  // without changing either input.
+  const { earlier, anchor, next, later } = useMemo(
+    () => anchorTranscript(rows, decisionOccurredAt),
+    [rows, decisionOccurredAt],
+  );
   const note = (text: string) => (
     <div className="text-xs text-muted-foreground">{text}</div>
   );
@@ -385,11 +400,6 @@ export function LlmMessagesSection({
   if (isLoading) return note("Loading…");
   if (isError) return note("Could not load the transcript.");
   if (!rows.length) return note("No messages recorded for this session.");
-
-  const { earlier, anchor, next, later } = anchorTranscript(
-    rows,
-    decisionOccurredAt,
-  );
   // What lies outside this window is unknown, and every claim below is
   // limited by it: an absence inside the window is only an absence of the
   // transcript when the window reaches that end of it.

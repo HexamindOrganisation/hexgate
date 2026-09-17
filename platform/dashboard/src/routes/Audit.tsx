@@ -316,7 +316,10 @@ function DetailDrawer({
               decisionOccurredAt={e.occurred_at}
               offset={messagesQ.data?.offset ?? 0}
               scoped={scoped}
-              isLoading={messagesQ.isPending && scoped}
+              // The same condition as `enabled`, not a subset of it: a
+              // disabled query stays `pending` forever, so a clause missing
+              // here would show "Loading…" with no request in flight.
+              isLoading={messagesQ.isPending && !!projectId && scoped}
               isError={messagesQ.isError}
             />
           </DrawerSection>
