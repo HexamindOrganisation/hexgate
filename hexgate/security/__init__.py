@@ -74,6 +74,12 @@ from hexgate.security.linker import (
     link_policy_set,
     resolve_for_project,
 )
+from hexgate.security.matrix import (
+    Matrix,
+    MatrixCell,
+    MatrixMode,
+    authorisation_matrix,
+)
 from hexgate.security.models import (
     AGENT_RUN_TOOL,
     AgentPolicy,
@@ -207,6 +213,10 @@ __all__ = [
     "get_ban_source",
     "resolve_ban_gate",
     "C",
+    "Matrix",
+    "MatrixCell",
+    "MatrixMode",
+    "authorisation_matrix",
     "PolicyBuilder",
     "RolePolicyBuilder",
     "assert_allows",
