@@ -131,7 +131,14 @@ function PartLabel({ label, id }: { label: string; id?: unknown }) {
               style={{ background: `var(--call-${slot + 1})` }}
             />
           )}
-          <span className="font-mono normal-case tracking-normal">{id}</span>
+          {/* Brighter than the type label beside it. "TOOL CALL" is chrome —
+              it says what kind of part this is and never varies — while the
+              id is data you read and compare across two turns. Both in muted
+              ink made the one string worth reading as dim as the label that
+              introduces it. */}
+          <span className="font-mono normal-case tracking-normal text-foreground">
+            {id}
+          </span>
         </span>
       )}
     </div>
