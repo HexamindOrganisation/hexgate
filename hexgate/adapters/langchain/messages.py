@@ -45,9 +45,11 @@ _TOOL_CALL_BLOCK_TYPES = frozenset(
 
 # Reasoning blocks, dropped from the *completion* only (issue #221, matching
 # ``adapters/openai/messages.py``): every part of the output message shares one
-# 8 KiB budget, and ``cap_json_head_tail`` splits it evenly across string
-# leaves, so enough reasoning blocks starve the answer beside them — measured
-# at 12% of a 2.4 KiB answer surviving 20 of them. Both spellings, because
+# 8 KiB budget, and ``cap_json_head_tail`` levels every oversized leaf to one
+# common ceiling, so each extra block pushes that ceiling down and the answer,
+# as the biggest leaf, gives up the most — measured at ~13% of a 2.4 KiB answer
+# surviving 20 of them, and it is the count of blocks that drives that, not
+# their size. Both spellings, because
 # LangChain normalises to ``reasoning`` in ``content_blocks`` while the raw
 # provider block left in ``content`` is Anthropic's ``thinking``. Kept on the
 # input side, where it rides the far larger 256 KiB budget.

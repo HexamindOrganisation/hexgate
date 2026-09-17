@@ -131,10 +131,13 @@ def output_messages(output: list[Any]) -> list[dict[str, Any]]:
     completion, so the natural place for them is here — but every part of this
     message shares one ``MAX_OUTPUT_MESSAGES_BYTES`` budget, and that 8 KiB was
     sized for a text answer before anything captured reasoning.
-    ``cap_json_head_tail`` splits that budget evenly across the message's string
-    leaves, so enough reasoning blocks starve the answer beside them — the field
-    the auditor needs loses room to the field nobody asked for. Dropping is the
-    reversible half of that trade — the completion keeps its budget, and
+    ``cap_json_head_tail`` levels every oversized leaf to one common ceiling, so
+    each extra part pushes that ceiling down and the answer, as the biggest
+    leaf, gives up the most — the field the auditor needs loses room to the
+    field nobody asked for. What drives the squeeze is the *count* of oversized
+    parts, not their size: 20 reasoning blocks leave ~13% of a 2.4 KiB answer
+    whether each is 400 B or 4 KiB. Dropping is the reversible half of that
+    trade — the completion keeps its budget, and
     capturing reasoning under a cap of its own stays open.
     """
     parts: list[dict[str, Any]] = []

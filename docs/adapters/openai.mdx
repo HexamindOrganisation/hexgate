@@ -145,10 +145,11 @@ Two specifics of this SDK:
 
 Reasoning items are kept on the input side and dropped from the completion
 ([#221](https://github.com/HexamindOrganisation/hexgate/issues/221)): the 8 KiB
-output budget was sized for an answer, and the capper splits it evenly across
-every string in the message, so enough reasoning blocks shrink the answer's
-share along with their own. The input side has 256 KiB and no such squeeze,
-which is why the two sides differ.
+output budget was sized for an answer, and the capper levels every oversized
+string in the message to one common ceiling — so each extra part pushes that
+ceiling down, and the answer, as the biggest string, gives up the most. Twenty
+reasoning blocks leave about 13% of a 2.4 KiB answer. The input side has
+256 KiB and no such squeeze, which is why the two sides differ.
 
 ## Runnable example
 

@@ -29,8 +29,12 @@ the adapters also record the conversation. On the OpenAI Agents, LangChain and
 Google ADK adapters that is one row per model call, holding the messages **new
 to that call** — the assistant turn carrying the tool call, the tool results
 that came back, the next user turn — plus that call's completion. Pydantic AI
-exposes no per-call hook, so it records one row per agent run instead. Either
-way a session's rows concatenate back to the conversation the agent saw.
+exposes no per-call hook, so it records one row per agent run instead.
+
+Rows are deltas, so a session's transcript is its rows read in time order —
+except where one is flagged `resynced`, which means the framework rewrote its
+history (a context-window trim, a summary) and the row restates the list rather
+than extending it. Read a resynced row as history, not as a continuation.
 
 Tool *results* are in there on purpose: a decision row records that a tool was
 called and with what arguments, but never what it returned.

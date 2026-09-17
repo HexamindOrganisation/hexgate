@@ -179,8 +179,10 @@ Three rules set it apart from a decision span:
   routinely several messages, the assistant's tool-call message plus one tool
   result per parallel call. Tool results are kept deliberately: a decision
   event records that a tool was called but never what it returned, so this is
-  the only place that value lands. A session's transcript is its rows
-  concatenated in `(occurred_at, message_seq)` order; `message_seq` counts
+  the only place that value lands. A session's transcript is its rows read in
+  `(occurred_at, message_seq)` order — concatenated, except across a row
+  flagged `resynced`, which restates its list rather than extending it and
+  supersedes the rows before it on that `turn_key`. `message_seq` counts
   *within* one `turn_key` and cannot order rows across lists, which is why
   `occurred_at` does that job (§5.1).
 - **`turn_key` names a message list, not a session.** Handoffs and sub-agents
@@ -806,8 +808,10 @@ HTTP ingest uses the single-row `insert_decision`, whose settings are:
   survive in the transcript that was blanked on the decision row.
 - **Message caps truncate, they never reject.** Each content field is fitted to
   its own budget (256 / 8 / 8 KiB) by `hexgate.audit.cap_json_head_tail`, which
-  shrinks every string leaf to one shared byte allowance found by binary search
-  on the serialized size, keeping the **head and the tail** of each. The
+  binary-searches one shared per-string ceiling against the serialized size and
+  levels every string over it to that, keeping the **head and the tail** of
+  each. Strings already under the ceiling pass through whole, so the biggest
+  one gives up the most. The
   enricher applies the same caps again on ingest and ORs its own cut into
   `truncated`. A degraded record, never a lost one — the contrast with the
   `arguments` preview wrapper, which keeps only a prefix.
