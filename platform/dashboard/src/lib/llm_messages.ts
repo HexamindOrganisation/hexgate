@@ -7,7 +7,7 @@
  * llm-messages endpoint returns.
  */
 
-import type { LlmMessageRow } from "@/lib/api";
+import type { LlmMessage, LlmMessageRow } from "@/lib/api";
 
 /** One row plus the markers that only its neighbours can establish. */
 export interface Turn {
@@ -78,4 +78,48 @@ export function anchorTranscript(
     next: turns[anchorIndex + 1] ?? null,
     later: turns.slice(anchorIndex + 2),
   };
+}
+
+/** Assign a colour slot to every tool call, in order of appearance.
+ *
+ * **A hue does not identify a call.** It groups one call with its own
+ * result, and the same hue recurs elsewhere in the transcript — it can even
+ * recur inside one card. A card shows the previous turn's results above this
+ * turn's calls, so up to six ids are visible at once, and the palette caps
+ * at three: three hues cannot tell six things apart, and no assignment rule
+ * changes that. The id printed beside every dot is the identifier; the dot
+ * is a shortcut for the eye, and following it to the wrong one costs a
+ * glance, not a wrong conclusion.
+ *
+ * (An earlier version of this comment claimed a repeat "never lands adjacent
+ * to its twin". False: three parallel calls followed by one more gives the
+ * fourth the first's hue, and the first's result sits directly above it.)
+ *
+ * Three is the most that clears the colour-vision floors against both
+ * surfaces, so widening the cycle is not available. Within one turn the
+ * calls do stay distinct, which is the case the colour was added for; a turn
+ * making more than three gets no dot past the third rather than an
+ * immediately repeated hue.
+ */
+export function buildCallSlots(rows: LlmMessageRow[]): Map<string, number> {
+  const slots = new Map<string, number>();
+  let next = 0;
+  for (const row of rows) {
+    const messages = Array.isArray(row.output_messages)
+      ? (row.output_messages as LlmMessage[])
+      : [];
+    const ids = messages
+      .flatMap((message) =>
+        Array.isArray(message?.parts) ? message.parts : [],
+      )
+      .filter((part) => part?.type === "tool_call")
+      .map((part) => part.id)
+      .filter((id): id is string => typeof id === "string" && !!id);
+    ids.slice(0, 3).forEach((id, index) => slots.set(id, (next + index) % 3));
+    // Advance by the slots actually handed out, not by the call count: a
+    // turn of four would otherwise leave `next` where a three-call turn does
+    // and hand the next turn a hue still on screen.
+    next = (next + Math.min(ids.length, 3)) % 3;
+  }
+  return slots;
 }

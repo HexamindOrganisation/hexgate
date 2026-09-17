@@ -145,6 +145,13 @@ function DetailDrawer({
       event?.occurred_at,
     ],
     enabled: !!projectId && scoped,
+    // One attempt, against the default of three. Every other read here is a
+    // kilobyte of decision rows; this one can page over a transcript of
+    // ~272 KiB rows with an uncapped offset, and ClickHouse runs it against
+    // a server-wide memory budget shared with the enricher's inserts. Three
+    // silent retries turn one expensive read into four, on a section the
+    // rest of the drawer does not depend on.
+    retry: 1,
     queryFn: async () => {
       const args = [
         projectId as string,

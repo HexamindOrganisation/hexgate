@@ -22,7 +22,11 @@ import { createContext, useContext, useMemo, useState } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 
 import type { LlmMessage, LlmMessagePart, LlmMessageRow } from "@/lib/api";
-import { anchorTranscript, type Turn } from "@/lib/llm_messages";
+import {
+  anchorTranscript,
+  buildCallSlots,
+  type Turn,
+} from "@/lib/llm_messages";
 import { fmtTs } from "./fmt";
 
 /** id → colour slot, for the calls of a turn that made several at once.
@@ -33,43 +37,6 @@ import { fmtTs } from "./fmt";
  * be told apart from nothing.
  */
 const CallSlots = createContext<Map<string, number>>(new Map());
-
-/** Assign a colour slot to every tool call, in order of appearance.
- *
- * Slots advance per call and wrap at three, so consecutive calls always
- * differ and a call never collides with its neighbours. Within one turn the
- * calls are consecutive by construction, which is what keeps parallel calls
- * distinct from each other; a turn making more than three gets no dot past
- * the third rather than a hue it already used.
- *
- * Three hues, and they repeat every third call. That is a deliberate
- * departure from "never cycle a categorical palette": the rule exists so a
- * legend cannot lie about identity, and here there is no legend — the id is
- * printed beside every dot and is the actual identifier. The colour's job is
- * local, linking a call to its result across the card boundary between two
- * turns, and a repeat three calls away never lands adjacent to its twin.
- * Three is also the most that clears the colour-vision floors in both
- * themes, so widening the cycle is not available.
- */
-function buildCallSlots(rows: LlmMessageRow[]): Map<string, number> {
-  const slots = new Map<string, number>();
-  let next = 0;
-  for (const row of rows) {
-    const messages = Array.isArray(row.output_messages)
-      ? (row.output_messages as LlmMessage[])
-      : [];
-    const ids = messages
-      .flatMap((message) =>
-        Array.isArray(message?.parts) ? message.parts : [],
-      )
-      .filter((part) => part?.type === "tool_call")
-      .map((part) => part.id)
-      .filter((id): id is string => typeof id === "string" && !!id);
-    ids.slice(0, 3).forEach((id, index) => slots.set(id, (next + index) % 3));
-    next = (next + ids.length) % 3;
-  }
-  return slots;
-}
 
 /** Whatever a content field holds, as text — the fallback for a value that
  * is neither a message list nor empty.

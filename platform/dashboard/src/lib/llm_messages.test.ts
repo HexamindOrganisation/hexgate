@@ -8,7 +8,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { LlmMessageRow } from "./api";
-import { anchorTranscript } from "./llm_messages";
+import { anchorTranscript, buildCallSlots } from "./llm_messages";
 
 const DECISION_AT = "2026-06-01T10:00:00Z";
 
@@ -151,5 +151,53 @@ describe("anchorTranscript()", () => {
     );
 
     expect(t.anchor?.gap).toBe(false);
+  });
+});
+
+describe("buildCallSlots()", () => {
+  /** A row whose completion asks for `ids`. */
+  const turn = (ids: string[]): LlmMessageRow => ({
+    ...row("e", "2026-06-01T09:00:00Z", 0),
+    output_messages: [
+      {
+        role: "assistant",
+        parts: ids.map((id) => ({ type: "tool_call", id, name: "t" })),
+      },
+    ],
+  });
+  const slots = (turns: string[][]) =>
+    Object.fromEntries(buildCallSlots(turns.map(turn)));
+
+  it("happy path: parallel calls in one turn are all distinct", () => {
+    expect(slots([["a", "b", "c"]])).toEqual({ a: 0, b: 1, c: 2 });
+  });
+
+  it("when a turn follows another then its calls continue the cycle", () => {
+    // The cross-turn advance: b must not reuse a's hue, since a's result
+    // renders directly above b's call in the same card.
+    expect(slots([["a"], ["b"], ["c"]])).toEqual({ a: 0, b: 1, c: 2 });
+  });
+
+  it("when a turn makes more than three calls then the surplus gets no slot", () => {
+    // Three hues, four calls: the fourth takes no dot rather than an
+    // immediately repeated one, and the NEXT turn still advances by three —
+    // advancing by four would hand it a hue still on screen.
+    expect(slots([["a", "b", "c", "d"], ["e"]])).toEqual({
+      a: 0,
+      b: 1,
+      c: 2,
+      e: 0,
+    });
+  });
+
+  it("when the cycle wraps then a hue recurs — it groups, it does not identify", () => {
+    // Documented, not prevented: one card can show three results above three
+    // calls, and three hues cannot tell six things apart. The id beside the
+    // dot is the identifier.
+    expect(slots([["a", "b", "c"], ["d"]])).toEqual({ a: 0, b: 1, c: 2, d: 0 });
+  });
+
+  it("when a row carries no completion then it consumes no slot", () => {
+    expect(slots([["a"], [], ["b"]])).toEqual({ a: 0, b: 1 });
   });
 });
