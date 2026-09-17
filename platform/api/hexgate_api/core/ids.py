@@ -5,6 +5,7 @@ import secrets
 from hexgate_api.models import (
     Agent,
     AgentVersion,
+    AiActReport,
     ApiKey,
     Ban,
     PolicyFile,
@@ -24,6 +25,7 @@ _ID_PREFIXES: dict[type, str] = {
     PolicyModule: "pmd",
     PolicyFile: "pfl",
     RoleBinding: "rbd",
+    AiActReport: "rpt",
 }
 
 
