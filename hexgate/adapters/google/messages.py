@@ -7,11 +7,9 @@ message is ``{"role": …, "parts": [...]}`` and a part names itself under
 ``type`` — which is what ``hexgate.tracing.messages.LlmMessageEvent`` puts on
 the wire.
 
-Nothing is hoisted into a shared module yet even though this is the second
-adapter (§III SDK leaves that open): ADK hands over typed pydantic
-``Content``/``Part`` objects read by attribute, so none of the OpenAI
-adapter's dict-probing helpers repeat here — only the one-line
-:func:`text_part`.
+Only ``text_part`` comes from ``adapters/_messages.py``. ADK hands over typed
+pydantic ``Content``/``Part`` objects read by attribute, so ``as_dict`` and the
+OpenAI adapter's other dict-probing helpers have nothing to do here.
 """
 
 from __future__ import annotations
@@ -20,9 +18,9 @@ from typing import Any
 
 from google.genai import types
 
+from hexgate.adapters._messages import text_part
 
-def text_part(content: Any) -> dict[str, Any]:
-    return {"type": "text", "content": content}
+__all__ = ["input_message", "output_messages", "system_parts", "text_part"]
 
 
 def _part(part: types.Part) -> dict[str, Any]:
