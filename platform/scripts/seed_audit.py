@@ -1,3 +1,9 @@
+# Seeds two tables: policy_decision, and the llm_message transcript each run
+# came out of — the Audit drawer reads the second against the first, so a
+# decision seeded without its conversation has an empty "LLM messages"
+# section. Needs `make clickhouse-migrate` first on a database that predates
+# migration 0003.
+#
 # Example: generate data for 40 users and 3 anomalies, project 00000000-0000-0000-0000-000000000003 and agent support-bot.
 # cd platform/api && uv run python ../scripts/seed_audit.py --number_users 40 --number_anomalies 3 --project_id 00000000-0000-0000-0000-000000000003 --agent_name support-bot
 #
@@ -6,6 +12,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import random
 import sys
@@ -37,7 +44,16 @@ from hexgate_api.features.audit.service import (  # noqa: E402
     _TIMEDELTA_ANOMALY_HOURS,
     _decision_row,
 )
-from hexgate_api.schemas import AuditOutcome, DecisionEvent  # noqa: E402
+from hexgate_api.features.llm_messages.service import (  # noqa: E402
+    _LLM_MESSAGE_COLUMNS,
+    LLM_MESSAGE_TABLE,
+    _llm_message_row,
+)
+from hexgate_api.schemas import (  # noqa: E402
+    AuditOutcome,
+    DecisionEvent,
+    LlmMessageEvent,
+)
 
 # ── Agent & users ─────────────────────────────────────────────────────────────
 # Uses the dev default project id (imported above) so data is visible in the dashboard.
@@ -162,6 +178,55 @@ ATTRIBUTES_POPULATED_RATIO = 0.66
 AGENT_VERSION_ID = ""
 ANOMALY_ATTRIBUTES = {"department": "support", "region": "EU", "clearance_level": 1}
 
+# ── Transcripts ───────────────────────────────────────────────────────────────
+# Each run's decisions become one conversation. A model call ends with the
+# tool call the decision is about, and the next call's input carries what the
+# tool returned — so a run of N decisions has N+1 message events, one before
+# each decision plus one for what followed the last. That is the shape the
+# Audit drawer anchors on: the turn before the decision, and the turn after.
+
+MODELS = ["gpt-5", "claude-opus-5"]
+SYSTEM_PROMPT = (
+    "You are a support agent for an online store. Use the tools you are given "
+    "to look up orders and issue refunds. Never guess a customer's details."
+)
+USER_ASKS = [
+    "Customer #4417 says their refund never arrived — can you check?",
+    "Order 98120 shipped to the wrong address. What are my options?",
+    "Please close the ticket for customer #2255, they replied that it is fixed.",
+    "Has customer #1043 been charged twice this month?",
+]
+FINAL_REPLIES = [
+    "I have checked the account and summarised what I found above.",
+    "That is everything I can do here — the rest needs a human reviewer.",
+    "Done. I have recorded the outcome against the customer's record.",
+]
+TOOL_RESULTS = {
+    "read_customer": '{"id": 4417, "plan": "pro", "open_tickets": 1}',
+    "web_search": '{"results": [{"title": "Refund policy", "url": "..."}]}',
+    "create_ticket": '{"ticket_id": 88213, "status": "open"}',
+    "refund_customer": '{"refund_id": "rf_9931", "amount_cents": 2400}',
+}
+# The model calls its tool a couple of seconds before the decision lands.
+MESSAGE_LEAD_SECONDS = 2
+
+# Deterministic imperfections, so each drawer marker has seeded data behind
+# it rather than only a unit test. Counted over runs, not rows, because a
+# marker is a property of one event inside a conversation.
+GAP_EVERY_N_RUNS = 7
+RESYNC_EVERY_N_RUNS = 5
+TRUNCATE_EVERY_N_RUNS = 11
+# Enough to look like a RAG call's retrieved context without approaching the
+# real 256 KiB cap — the flag is what the drawer renders, not the size.
+TRUNCATED_CONTEXT_CHARS = 3_000
+
+# One deliberately long conversation per seed. Normal runs are capped at four
+# decisions by the anomaly detector's threshold, so nothing else here crosses
+# the drawer's 50-row page — the case where it has to fetch the transcript's
+# tail instead of its head.
+LONG_CONVERSATION_TURNS = 120
+LONG_CONVERSATION_USER = USER_IDS[0]
+
 # ── ClickHouse columns ────────────────────────────────────────────────────────
 # Extends _DECISION_COLUMNS with received_at so the seed can control ingestion
 # timestamps rather than letting ClickHouse stamp them at insert time.
@@ -170,6 +235,15 @@ _OCCURRED_AT = "occurred_at"
 _idx = _DECISION_COLUMNS.index(_OCCURRED_AT)
 _SEED_COLUMNS = (
     _DECISION_COLUMNS[: _idx + 1] + ["received_at"] + _DECISION_COLUMNS[_idx + 1 :]
+)
+
+# Same received_at splice for the message table, so a seeded transcript can be
+# backdated with its decisions instead of all landing at insert time.
+_MESSAGE_IDX = _LLM_MESSAGE_COLUMNS.index(_OCCURRED_AT)
+_MESSAGE_SEED_COLUMNS = (
+    _LLM_MESSAGE_COLUMNS[: _MESSAGE_IDX + 1]
+    + ["received_at"]
+    + _LLM_MESSAGE_COLUMNS[_MESSAGE_IDX + 1 :]
 )
 
 Row = list[Any]
@@ -386,6 +460,219 @@ def _anomaly_decision(
     )
 
 
+# ── Transcript builders ───────────────────────────────────────────────────────
+# Content is the OTel GenAI shape the adapters emit — a message is
+# {role, parts} and a part names itself under `type` — because that is what
+# the drawer renders. Reasoning is absent from every completion here, matching
+# what the OpenAI adapter stores today (issue #221).
+
+
+def _text(content: str) -> Fields:
+    return {"type": "text", "content": content}
+
+
+def _call_id(run_id: UUID, seq: int) -> str:
+    return f"call_{run_id.hex[:8]}_{seq}"
+
+
+def _tool_call_completion(decision: SeededDecision, seq: int) -> list[Fields]:
+    """The completion that asked for the tool this decision is about."""
+    return [
+        {
+            "role": "assistant",
+            "parts": [
+                {
+                    "type": "tool_call",
+                    "id": _call_id(decision.run.run_id, seq),
+                    "name": decision.tool_name,
+                    "arguments": json.dumps({"customer_id": 4417}),
+                }
+            ],
+        }
+    ]
+
+
+def _tool_result_message(previous: SeededDecision, seq: int) -> Fields:
+    """What the framework fed back after the previous decision.
+
+    A denied call returns the denial, which is the whole point of reading a
+    transcript next to a deny: the model's next move is a reaction to it.
+    """
+    denied = previous.outcome != AuditOutcome.ALLOW
+    response = (
+        f"{DENY_ERROR_TYPE}: {DENY_REASON}"
+        if denied
+        else TOOL_RESULTS.get(previous.tool_name, "{}")
+    )
+    return {
+        "role": "tool",
+        "parts": [
+            {
+                "type": "tool_call_response",
+                "id": _call_id(previous.run.run_id, seq - 1),
+                "response": response,
+            }
+        ],
+    }
+
+
+def _message_seed_row(
+    target: SeedTarget,
+    rng: random.Random,
+    *,
+    occurred_at: datetime,
+    session_id: str,
+    user_id: str,
+    run_id: UUID,
+    turn_key: str,
+    message_seq: int,
+    model: str,
+    input_messages: list[Fields],
+    output_messages: list[Fields],
+    system_instructions: list[Fields] | None,
+    resynced: bool,
+    truncated: bool,
+) -> Row:
+    """One llm_message row, built by the API's own row builder.
+
+    Same reasoning as _decision_seed_row: the builder is where the row shape
+    lives, so the seed names no column beyond splicing received_at in.
+    """
+    event = LlmMessageEvent(
+        event_id=uuid4(),
+        occurred_at=occurred_at,
+        agent_name=target.agent_name,
+        session_id=session_id,
+        user_id=user_id,
+        model=model,
+        turn_key=turn_key,
+        message_seq=message_seq,
+        resynced=resynced,
+        truncated=truncated,
+        input_messages=json.dumps(input_messages),
+        output_messages=json.dumps(output_messages),
+        system_instructions=(
+            json.dumps(system_instructions) if system_instructions else ""
+        ),
+        run_id=run_id,
+    )
+    row = _llm_message_row(
+        event, project_id=target.project_id, agent_version_id=AGENT_VERSION_ID
+    )
+    row.insert(
+        _MESSAGE_IDX + 1,
+        occurred_at + timedelta(seconds=rng.randint(0, INGEST_LAG_SECONDS_MAX)),
+    )
+    return row
+
+
+def _transcript_rows(
+    target: SeedTarget,
+    rng: random.Random,
+    decisions: list[SeededDecision],
+    run_index: int,
+) -> list[Row]:
+    """One run's conversation: N decisions produce N+1 message events.
+
+    `turn_key` is the Hexgate run id plus the agent name, as the adapters
+    build it — one message list per run, so `message_seq` is contiguous
+    within it and a skipped number reads as a lost event rather than as a
+    sub-agent starting its own list.
+    """
+    if not decisions:
+        return []
+    first = decisions[0]
+    run_id = first.run.run_id
+    turn_key = f"{run_id}:{target.agent_name}"
+    model = rng.choice(MODELS)
+    # One imperfection per run at most: overlapping them would leave no
+    # seeded row showing a single marker on its own.
+    gap_at = 1 if run_index % GAP_EVERY_N_RUNS == 0 and len(decisions) > 2 else None
+    resync_at = 1 if gap_at is None and run_index % RESYNC_EVERY_N_RUNS == 0 else None
+    truncate_at = (
+        0
+        if gap_at is None
+        and resync_at is None
+        and run_index % TRUNCATE_EVERY_N_RUNS == 0
+        else None
+    )
+
+    rows: list[Row] = []
+    seq = 0
+    for index, decision in enumerate(decisions):
+        # The delta: the user's ask opens the conversation, every later call
+        # carries only what came back from the tool the last one requested.
+        if index == 0:
+            new_input = [{"role": "user", "parts": [_text(rng.choice(USER_ASKS))]}]
+        else:
+            new_input = [_tool_result_message(decisions[index - 1], seq)]
+        if index == resync_at:
+            # A resync restates the whole list rather than extending it.
+            new_input = [
+                {"role": "user", "parts": [_text(rng.choice(USER_ASKS))]}
+            ] + new_input
+        if index == truncate_at:
+            new_input = new_input + [
+                {
+                    "role": "user",
+                    "parts": [
+                        _text("retrieved context " + "x" * TRUNCATED_CONTEXT_CHARS)
+                    ],
+                }
+            ]
+        if index == gap_at:
+            # The event the pipeline lost: its seq is consumed, its row is not
+            # written, and the drawer must show the hole.
+            seq += 1
+        rows.append(
+            _message_seed_row(
+                target,
+                rng,
+                occurred_at=decision.timestamp
+                - timedelta(seconds=MESSAGE_LEAD_SECONDS),
+                session_id=decision.session_id,
+                user_id=decision.user_id,
+                run_id=run_id,
+                turn_key=turn_key,
+                message_seq=seq,
+                model=model,
+                input_messages=new_input,
+                output_messages=_tool_call_completion(decision, seq),
+                # First event of the turn_key only, as the adapters send it.
+                system_instructions=[_text(SYSTEM_PROMPT)] if seq == 0 else None,
+                resynced=index == resync_at,
+                truncated=index == truncate_at,
+            )
+        )
+        seq += 1
+
+    # What followed the last decision: its result fed back, and the model's
+    # closing answer. Without this the drawer has nothing to show after the
+    # run's final tool call.
+    last = decisions[-1]
+    rows.append(
+        _message_seed_row(
+            target,
+            rng,
+            occurred_at=last.timestamp + timedelta(seconds=MESSAGE_LEAD_SECONDS),
+            session_id=last.session_id,
+            user_id=last.user_id,
+            run_id=run_id,
+            turn_key=turn_key,
+            message_seq=seq,
+            model=model,
+            input_messages=[_tool_result_message(last, seq)],
+            output_messages=[
+                {"role": "assistant", "parts": [_text(rng.choice(FINAL_REPLIES))]}
+            ],
+            system_instructions=None,
+            resynced=False,
+            truncated=False,
+        )
+    )
+    return rows
+
+
 def _validate_row_shape(rows: list[Row]) -> None:
     """Guard the one seam left between the seed and the API's row builder.
 
@@ -402,14 +689,35 @@ def _validate_row_shape(rows: list[Row]) -> None:
         )
 
 
-def _validate_columns(client: Client) -> None:
-    result = client.query("DESCRIBE TABLE policy_decision")
-    actual_columns = [row[0] for row in result.result_rows]
-    missing = set(_SEED_COLUMNS) - set(actual_columns)
-    if missing:
+def _validate_message_row_shape(rows: list[Row]) -> None:
+    """Same seam guard as _validate_row_shape, for the message table."""
+    widths = {len(row) for row in rows}
+    if widths - {len(_MESSAGE_SEED_COLUMNS)}:
         raise ValueError(
-            f"ClickHouse table policy_decision is missing columns: {missing}"
+            f"message row widths {sorted(widths)} != "
+            f"{len(_MESSAGE_SEED_COLUMNS)} columns — the row contract moved"
         )
+
+
+def _validate_columns(client: Client) -> None:
+    """Fail before inserting if either table is behind its migration.
+
+    llm_message ships as a hand-applied migration (0003), so a local
+    ClickHouse that predates it has the decision table and not this one —
+    which would otherwise surface as a mid-seed insert error with half the
+    rows already written.
+    """
+    for table, columns in (
+        ("policy_decision", _SEED_COLUMNS),
+        (LLM_MESSAGE_TABLE, _MESSAGE_SEED_COLUMNS),
+    ):
+        result = client.query(f"DESCRIBE TABLE {table}")
+        missing = set(columns) - {row[0] for row in result.result_rows}
+        if missing:
+            raise ValueError(
+                f"ClickHouse table {table} is missing columns: {missing} "
+                "— run `make clickhouse-migrate`"
+            )
 
 
 # ── Generators ────────────────────────────────────────────────────────────────
@@ -486,33 +794,36 @@ def generate_normal_data(
     rng: random.Random,
     now: datetime,
     number_users: int,
-) -> list[Row]:
+) -> Tuple[list[Row], list[Row]]:
+    """Background decisions and the conversations they came out of."""
     rows: list[Row] = []
+    messages: list[Row] = []
+    run_index = 0
     for user_id in USER_IDS[:number_users]:
         sizes = _run_sizes(rng, ROWS_PER_USER)
         for decisions, start in zip(sizes, _run_starts(rng, now, len(sizes))):
             session_id = str(uuid4())
             progress = RunProgress(rng, uuid4())
             outcomes = rng.choices(OUTCOMES, weights=OUTCOME_WEIGHTS, k=decisions)
+            seeded: list[SeededDecision] = []
             for outcome, timestamp in zip(
                 outcomes, _run_timestamps(rng, start, decisions)
             ):
-                rows.append(
-                    _decision_seed_row(
-                        target,
+                seeded.append(
+                    _background_decision(
                         rng,
-                        _background_decision(
-                            rng,
-                            outcome=outcome,
-                            timestamp=timestamp,
-                            session_id=session_id,
-                            user_id=user_id,
-                            run=progress.snapshot(_elapsed_ms(start, timestamp)),
-                        ),
+                        outcome=outcome,
+                        timestamp=timestamp,
+                        session_id=session_id,
+                        user_id=user_id,
+                        run=progress.snapshot(_elapsed_ms(start, timestamp)),
                     )
                 )
                 progress.record(outcome)
-    return rows
+            rows.extend(_decision_seed_row(target, rng, d) for d in seeded)
+            messages.extend(_transcript_rows(target, rng, seeded, run_index))
+            run_index += 1
+    return rows, messages
 
 
 def generate_anomalies(
@@ -521,9 +832,11 @@ def generate_anomalies(
     now: datetime,
     number_anomalies: int,
     number_users: int,
-) -> list[Row]:
+) -> Tuple[list[Row], list[Row]]:
+    """Deny spikes and the conversations they came out of."""
     rows: list[Row] = []
-    for _ in range(number_anomalies):
+    messages: list[Row] = []
+    for anomaly_index in range(number_anomalies):
         anomaly_user = rng.choice(USER_IDS[:number_users])
         anomaly_base = _past_instant(rng, now)
         requests = rng.randint(REQUESTS_PER_ANOMALY_MIN, REQUESTS_PER_ANOMALY_MAX)
@@ -533,22 +846,62 @@ def generate_anomalies(
             anomaly_base - timedelta(minutes=rng.randint(0, 5)) for _ in range(requests)
         )
         start = timestamps[0]
+        seeded: list[SeededDecision] = []
         for timestamp in timestamps:
-            rows.append(
-                _decision_seed_row(
-                    target,
+            seeded.append(
+                _anomaly_decision(
                     rng,
-                    _anomaly_decision(
-                        rng,
-                        timestamp=timestamp,
-                        session_id=session_id,
-                        user_id=anomaly_user,
-                        run=progress.snapshot(_elapsed_ms(start, timestamp)),
-                    ),
+                    timestamp=timestamp,
+                    session_id=session_id,
+                    user_id=anomaly_user,
+                    run=progress.snapshot(_elapsed_ms(start, timestamp)),
                 )
             )
             progress.record(AuditOutcome.DENY)
-    return rows
+        rows.extend(_decision_seed_row(target, rng, d) for d in seeded)
+        messages.extend(_transcript_rows(target, rng, seeded, anomaly_index))
+    return rows, messages
+
+
+def generate_long_conversation(
+    target: SeedTarget, rng: random.Random, now: datetime
+) -> Tuple[list[Row], list[Row]]:
+    """One run long enough that its transcript does not fit a single page.
+
+    Normal runs stop at four decisions (the anomaly threshold bounds them), so
+    without this nothing seeded crosses the drawer's 50-row page and the path
+    where it has to fetch the transcript's tail instead of its head is never
+    taken. Mostly allows, spread over hours, so the detector does not read the
+    volume as a spike.
+    """
+    start = now - timedelta(days=2)
+    session_id = str(uuid4())
+    progress = RunProgress(rng, uuid4())
+    seeded: list[SeededDecision] = []
+    for turn in range(LONG_CONVERSATION_TURNS):
+        timestamp = start + timedelta(minutes=turn * 2)
+        # One deny late in the conversation: the decision an auditor opens,
+        # and the one whose anchor lies past the first page.
+        outcome = (
+            AuditOutcome.DENY
+            if turn == LONG_CONVERSATION_TURNS - 8
+            else AuditOutcome.ALLOW
+        )
+        seeded.append(
+            _background_decision(
+                rng,
+                outcome=outcome,
+                timestamp=timestamp,
+                session_id=session_id,
+                user_id=LONG_CONVERSATION_USER,
+                run=progress.snapshot(_elapsed_ms(start, timestamp)),
+            )
+        )
+        progress.record(outcome)
+    rows = [_decision_seed_row(target, rng, d) for d in seeded]
+    # run_index 1 keeps every marker off this run: its job is the page
+    # boundary, and a gap in it would confuse which thing is being tested.
+    return rows, _transcript_rows(target, rng, seeded, 1)
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
@@ -556,12 +909,20 @@ def generate_anomalies(
 
 def build_rows(
     target: SeedTarget, number_users: int, number_anomalies: int
-) -> Tuple[list[Row], list[Row]]:
+) -> Tuple[list[Row], list[Row], list[Row]]:
+    """(normal decisions, anomalous decisions, llm_message rows)."""
     now = datetime.now(timezone.utc)
     rng = random.Random(0)
-    normal = generate_normal_data(target, rng, now, number_users)
-    anomalous = generate_anomalies(target, rng, now, number_anomalies, number_users)
-    return normal, anomalous
+    normal, normal_messages = generate_normal_data(target, rng, now, number_users)
+    anomalous, anomaly_messages = generate_anomalies(
+        target, rng, now, number_anomalies, number_users
+    )
+    long_rows, long_messages = generate_long_conversation(target, rng, now)
+    return (
+        normal + long_rows,
+        anomalous,
+        normal_messages + anomaly_messages + long_messages,
+    )
 
 
 def _validate_seed_args(number_users: int, number_anomalies: int) -> Tuple[int, int]:
@@ -587,26 +948,40 @@ def seed(
     target: SeedTarget,
     number_users: int,
     number_anomalies: int,
-) -> Tuple[int, int]:
+) -> Tuple[int, int, int]:
     clear(client, target.project_id)
-    normal, anomalous = build_rows(target, number_users, number_anomalies)
+    normal, anomalous, messages = build_rows(target, number_users, number_anomalies)
     _validate_row_shape(normal + anomalous)
+    _validate_message_row_shape(messages)
     client.insert(
         "policy_decision",
         normal + anomalous,
         column_names=_SEED_COLUMNS,
         settings=BATCH_INSERT_SETTINGS,
     )
-    return len(normal), len(anomalous)
+    client.insert(
+        LLM_MESSAGE_TABLE,
+        messages,
+        column_names=_MESSAGE_SEED_COLUMNS,
+        settings=BATCH_INSERT_SETTINGS,
+    )
+    return len(normal), len(anomalous), len(messages)
 
 
 def clear(client: Client, project_id: str) -> None:
-    client.command(
-        "ALTER TABLE policy_decision DELETE WHERE user_id IN {users:Array(String)} "
-        "AND project_id = {pid:String}",
-        parameters={"users": USER_IDS, "pid": project_id},
-        settings={"mutations_sync": "2"},
-    )
+    """Delete seed rows from both tables.
+
+    Scoped to USER_IDS, so real audit rows are untouched. The transcripts go
+    with the decisions they explain — leaving them behind would make the
+    drawer show a conversation for a decision that no longer exists.
+    """
+    for table in ("policy_decision", LLM_MESSAGE_TABLE):
+        client.command(
+            f"ALTER TABLE {table} DELETE WHERE user_id IN {{users:Array(String)}} "
+            "AND project_id = {pid:String}",
+            parameters={"users": USER_IDS, "pid": project_id},
+            settings={"mutations_sync": "2"},
+        )
 
 
 # ── CLI ───────────────────────────────────────────────────────────────────────
@@ -656,13 +1031,14 @@ if __name__ == "__main__":
         args.number_users, args.number_anomalies = _validate_seed_args(
             args.number_users, args.number_anomalies
         )
-        normal_count, anomalous_count = seed(
+        normal_count, anomalous_count, message_count = seed(
             client,
             SeedTarget(project_id=args.project_id, agent_name=args.agent_name),
             args.number_users,
             args.number_anomalies,
         )
         print(
-            f"Inserted {normal_count + anomalous_count} rows "
-            f"({normal_count} normal + {anomalous_count} anomalous)."
+            f"Inserted {normal_count + anomalous_count} decision rows "
+            f"({normal_count} normal + {anomalous_count} anomalous) "
+            f"and {message_count} llm_message rows."
         )
