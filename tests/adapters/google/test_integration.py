@@ -1,8 +1,8 @@
 """End-to-end verification that a real (wrapped) google-adk agent, run
 through :class:`HexgateRunner`, actually talks to the live platform for its
-policy and lands both a tool-call decision and an LLM-usage event in
-ClickHouse — the two audit paths ``PolicyEnforcer.decide()`` and
-``HexgateUsagePlugin.after_model_callback`` feed. This is plumbing, not
+policy and lands a tool-call decision, an LLM-usage event and the run's
+transcript in ClickHouse — the audit paths ``PolicyEnforcer.decide()`` and
+``HexgateUsagePlugin``'s callback pair feed. This is plumbing, not
 model-quality: the "LLM" is a two-turn scripted fake (see ``_ScriptedLlm``
 below) so the run is free and deterministic.
 
@@ -18,6 +18,7 @@ Opt in with: `pytest -m integration`.
 
 from __future__ import annotations
 
+import json
 import uuid
 from typing import Any, AsyncGenerator
 
@@ -39,6 +40,7 @@ from tests.adapters.helpers import (
     AGENT_NAME_PREFIX,
     USER_ID_PREFIX,
     assert_policy_and_usage_events_landed,
+    poll_until,
 )
 
 pytestmark = pytest.mark.integration
@@ -91,27 +93,14 @@ class _ScriptedLlm(BaseLlm):
         )
 
 
-def test_wrapped_run_pulls_policy_and_lands_decision_and_usage_events(
-    hexgate_platform_env: HexgatePlatformEnv,
+def _run_scripted_agent(
+    hexgate_platform_env: HexgatePlatformEnv, agent_name: str, session_id: str
 ) -> None:
-    """One wrapped-agent run against the live platform, checked from both
-    ends: the policy that gated ``get_weather`` came from the platform (not
-    an allow-all default), and both audit paths (decision + usage) actually
-    reached ClickHouse.
-
-    ``get_weather`` is deliberately read-shaped: the platform's starter
-    policy classifies tool names by substring heuristic
-    (``platform/api/hexgate_api/features/agents/compiler.py::_classify_tool``)
-    and only read-shaped tools get an explicit ``allow`` for the fallback
-    ``default`` role — every other tool bucket denies by default. That makes
-    the expected outcome deterministic: 'allow', not 'either'.
-    """
-    agent_name = f"{AGENT_NAME_PREFIX}google_{uuid.uuid4().hex[:8]}"
-    session_id = f"s-{uuid.uuid4().hex[:8]}"
-
+    """Register and drive one two-turn wrapped agent against the live platform."""
     raw_agent = LlmAgent(
         name=agent_name,
         model=_ScriptedLlm(model="hexgate-scripted-fake"),
+        instruction="You are a weather assistant.",
         tools=[FunctionTool(func=get_weather)],
     )
     register_agent(raw_agent)
@@ -135,8 +124,95 @@ def test_wrapped_run_pulls_policy_and_lands_decision_and_usage_events(
     )
     assert events  # the scripted model produced at least the final turn
 
+
+def test_wrapped_run_pulls_policy_and_lands_decision_and_usage_events(
+    hexgate_platform_env: HexgatePlatformEnv,
+) -> None:
+    """One wrapped-agent run against the live platform, checked from both
+    ends: the policy that gated ``get_weather`` came from the platform (not
+    an allow-all default), and both audit paths (decision + usage) actually
+    reached ClickHouse.
+
+    ``get_weather`` is deliberately read-shaped: the platform's starter
+    policy classifies tool names by substring heuristic
+    (``platform/api/hexgate_api/features/agents/compiler.py::_classify_tool``)
+    and only read-shaped tools get an explicit ``allow`` for the fallback
+    ``default`` role — every other tool bucket denies by default. That makes
+    the expected outcome deterministic: 'allow', not 'either'.
+    """
+    agent_name = f"{AGENT_NAME_PREFIX}google_{uuid.uuid4().hex[:8]}"
+    session_id = f"s-{uuid.uuid4().hex[:8]}"
+
+    _run_scripted_agent(hexgate_platform_env, agent_name, session_id)
+
     # Both sends are fire-and-forget (background thread / task) — poll
     # rather than assume they've landed the instant run() returns.
     assert_policy_and_usage_events_landed(
         hexgate_platform_env, agent_name, session_id, "get_weather"
     )
+
+
+def test_wrapped_run_lands_the_transcript_in_clickhouse(
+    hexgate_platform_env: HexgatePlatformEnv,
+) -> None:
+    """The same run's ``llm_message`` rows, concatenated back to the
+    conversation the agent actually saw: one message list per ADK invocation,
+    contiguous ``message_seq``, and each row carrying only what that call
+    added.
+    """
+    agent_name = f"{AGENT_NAME_PREFIX}google_msg_{uuid.uuid4().hex[:8]}"
+    session_id = f"s-{uuid.uuid4().hex[:8]}"
+
+    _run_scripted_agent(hexgate_platform_env, agent_name, session_id)
+
+    rows = poll_until(
+        lambda: (
+            r
+            if len(r := hexgate_platform_env.llm_message_rows(agent_name, session_id))
+            >= 2
+            else None
+        ),
+        message="llm_message rows never landed in ClickHouse",
+    )
+
+    assert len({row["turn_key"] for row in rows}) == 1, "one invocation, one list"
+    assert [row["message_seq"] for row in rows] == [0, 1], "no gap in the transcript"
+    assert not any(row["resynced"] or row["truncated"] for row in rows)
+
+    first, second = (
+        {
+            "input": json.loads(row["input_messages"]),
+            "output": json.loads(row["output_messages"]),
+            "system": json.loads(row["system_instructions"] or "null"),
+        }
+        for row in rows
+    )
+
+    # Turn 1: the user's question in, the tool call out. Instructions ride on
+    # the first row of the list only.
+    assert first["system"] is not None
+    assert "You are a weather assistant." in json.dumps(first["system"])
+    assert first["input"] == [
+        {
+            "role": "user",
+            "parts": [{"type": "text", "content": "What's the weather in Paris?"}],
+        }
+    ]
+    [tool_call] = first["output"][0]["parts"]
+    assert tool_call["type"] == "tool_call"
+    assert tool_call["name"] == "get_weather"
+    assert tool_call["arguments"] == {"city": "Paris"}
+
+    # Turn 2: only what ADK appended since — the tool call and its result —
+    # then the model's answer.
+    assert second["system"] is None
+    assert [m["role"] for m in second["input"]] == ["assistant", "tool"]
+    [tool_response] = second["input"][1]["parts"]
+    assert tool_response["type"] == "tool_call_response"
+    assert "sunny in Paris" in json.dumps(tool_response["response"])
+    assert second["output"] == [
+        {
+            "role": "assistant",
+            "parts": [{"type": "text", "content": "It is sunny in Paris."}],
+        }
+    ]

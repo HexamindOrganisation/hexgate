@@ -76,9 +76,9 @@ MAX_VIOLATION_CHARS = 1024
 # Being in the repo is not the same as being in force: that change is
 # operational, so no message cap — 32 KiB or 256 KiB — is safe on a stage until
 # its topics have been altered and its collector and enricher restarted.
-# The emitter exists (``hexgate.tracing.messages``) but no adapter calls it
-# yet, so both stay inert; wiring an adapter hook against a stage that has not
-# been redeployed is what is unsafe.
+# The OpenAI and Google adapters now emit against a redeployed pipeline;
+# wiring a further adapter hook against a stage that has not been redeployed
+# is what is unsafe.
 # Typical events stay a few KB; this is a ceiling, not a target.
 MAX_INPUT_MESSAGES_BYTES = 256 * 1024
 MAX_OUTPUT_MESSAGES_BYTES = 8 * 1024

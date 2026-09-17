@@ -9,6 +9,7 @@ from typing import Any, AsyncIterator
 
 import pytest
 from google.adk.agents import LlmAgent
+from google.adk.models.llm_request import LlmRequest
 from google.adk.models.llm_response import LlmResponse
 from google.adk.plugins.base_plugin import BasePlugin
 from google.adk.sessions import InMemorySessionService
@@ -792,6 +793,16 @@ def _fake_llm_response(
     )
 
 
+def _fake_llm_request() -> LlmRequest:
+    """The request half of the callback pair — the plugin needs it stashed
+    before it emits anything for the response."""
+    return LlmRequest(
+        model="gemini-2.0-flash",
+        contents=[types.Content(role="user", parts=[types.Part(text="hi")])],
+        config=types.GenerateContentConfig(),
+    )
+
+
 class _PluginFiringRunner:
     """Stand-in Runner that fires after_model_callback on any
     HexgateUsagePlugin in its plugins kwarg, from inside run_async, the way
@@ -807,8 +818,16 @@ class _PluginFiringRunner:
         app = self.kwargs.get("app")
         for plugin in app.plugins if app else []:
             if isinstance(plugin, HexgateUsagePlugin):
+                await plugin.before_model_callback(
+                    callback_context=SimpleNamespace(
+                        agent_name="my-agent", invocation_id="i"
+                    ),
+                    llm_request=_fake_llm_request(),
+                )
                 await plugin.after_model_callback(
-                    callback_context=SimpleNamespace(agent_name="my-agent"),
+                    callback_context=SimpleNamespace(
+                        agent_name="my-agent", invocation_id="i"
+                    ),
                     llm_response=_fake_llm_response(),
                 )
         yield {"event": "done"}
