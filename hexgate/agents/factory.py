@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Self, TypeAlias
@@ -34,6 +35,8 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.store.base import BaseStore
 from pydantic import BaseModel
+
+from hexgate.agents.subagents import SubagentEdge, UnsupportedReach, as_tool
 
 # BC re-export — canonical home is hexgate.approvals (framework-agnostic).
 from hexgate.approvals import ApprovalHandler  # noqa: F401 — re-export
@@ -338,6 +341,7 @@ class HexgateAgent:
         hexgate_client: HexgateClient | None = None,
         ban_gate: BanGate | None = None,
         agent_gate: AgentGate | None = None,
+        subagents: Sequence[SubagentEdge] = (),
     ) -> None:
         # Private: run only via ainvoke/astream_events, which apply policy
         # refresh + the ban gate. Reaching self._graph directly skips both.
@@ -376,6 +380,10 @@ class HexgateAgent:
         # no control plane needed). Threaded through with_tools rebuilds. Whether it
         # actually refuses is decided per run from the current policy.
         self._agent_gate: AgentGate | None = agent_gate
+        # Sub-agent edges (agent-as-tool) mounted via ``create_agent(subagents=…)``.
+        # The enumerable handle a later registration walk reads; threaded through
+        # with_tools so it survives every enforce_policy rebuild.
+        self.subagents: list[SubagentEdge] = list(subagents)
         # api_key intentionally omitted — create_agent has no explicit api_key param
         # (only hexgate_client, attached post-init by _bind_policy). If one is added,
         # thread it through here too, or usage events will keep silently resolving
@@ -508,6 +516,7 @@ class HexgateAgent:
             hexgate_client=self.hexgate_client,
             ban_gate=self._ban_gate,
             agent_gate=self._agent_gate,
+            subagents=self.subagents,
         )
 
     def enforce_policy(
@@ -559,7 +568,7 @@ class HexgateAgent:
         """
         from langchain_core.tools import BaseTool
 
-        from hexgate.adapters.langchain.tools import GuardedTool
+        from hexgate.adapters.langchain.tools import GuardedTool, SubagentTool
         from hexgate.guards.types import build_pipeline
         from hexgate.security.binding import PolicyBinding
         from hexgate.security.bundle import PolicyBundle
@@ -604,7 +613,22 @@ class HexgateAgent:
         # a guard Halt(NEEDS_APPROVAL).
         wrapped: list[ToolSpec] = []
         for tool_spec in self.tools:
-            if isinstance(tool_spec, BaseTool):
+            if isinstance(tool_spec, SubagentTool):
+                # A SubagentTool gates itself through ReachGate (agent.tool:<child>,
+                # honoring declares_reach). Routing it through GuardedTool would
+                # decide the wrong key, always-on, and closed-world-deny delegation
+                # whenever the policy has no agents block. Inject the SAME enforcer
+                # the binding holds so a refresh reaches it.
+                wrapped.append(
+                    tool_spec.model_copy(
+                        update={
+                            "enforcer": enforcer,
+                            "approval_handler": approval_handler,
+                            "pipeline": pipeline,
+                        }
+                    )
+                )
+            elif isinstance(tool_spec, BaseTool):
                 wrapped.append(
                     GuardedTool.wrap(
                         tool_spec,
@@ -630,12 +654,17 @@ class HexgateAgent:
             rebuilt._agent_gate = resolve_agent_gate(
                 enforcer, approval_handler=approval_handler
             )
-            # Admission is enforced here, but reach is not: the native agent is a
-            # single graph with no agent-to-agent handoff seam. Warn if the policy
-            # declares reach, so it is not a silent no-op.
-            warn_if_reach_unenforced(
-                enforcer.policy, framework="native", agent_name=self.name or "default"
-            )
+            # Reach: agent-as-tool reach is enforced for mounted `subagents=` edges
+            # (each SubagentTool gates agent.tool:<child>). Warn only when the
+            # declared reach isn't fully covered by those edges — i.e. it also
+            # covers handoff (no native seam) or an un-mounted tool target, both
+            # silent no-ops. A fully-covered config stays quiet.
+            if not _reach_fully_covered(self.subagents, enforcer.policy):
+                warn_if_reach_unenforced(
+                    enforcer.policy,
+                    framework="native",
+                    agent_name=self.name or "default",
+                )
         else:
             # Guards-only path: no enforcer, so no admission. Clear any gate a
             # prior enforce_policy left, which with_tools would otherwise carry.
@@ -654,6 +683,112 @@ class HexgateAgent:
 
 
 AgentGraph: TypeAlias = HexgateAgent
+
+
+def _tool_name(tool: ToolSpec) -> str | None:
+    """Best-effort LLM-facing name of a tool spec — for collision detection.
+
+    Covers a ``BaseTool``, a plain callable (LangChain names it by ``__name__``),
+    and a ``{"name": ...}`` dict tool def; ``None`` when a name can't be read.
+    """
+    if isinstance(tool, BaseTool):
+        return tool.name
+    if isinstance(tool, dict):
+        name = tool.get("name")
+        if not isinstance(name, str):
+            # OpenAI/function-style def: {"type": "function", "function": {"name": ...}}.
+            fn = tool.get("function")
+            name = fn.get("name") if isinstance(fn, dict) else None
+        return name if isinstance(name, str) else None
+    return getattr(tool, "name", None) or getattr(tool, "__name__", None)
+
+
+def _reach_fully_covered(subagents: "Sequence[SubagentEdge]", engine: object) -> bool:
+    """True if every reach key the policy declares is an ``agent.tool:<t>`` for a
+    mounted tool sub-agent — i.e. the mounted edges fully enforce the declared reach.
+
+    Only decidable for a ``PolicySet`` (its ``effective_tools`` is readable); a WASM
+    bundle is opaque, so treat it as not-covered and warn conservatively. Used to
+    suppress the reach-unenforced warning only when there is genuinely nothing left
+    unenforced (no handoff key, no un-mounted tool target).
+    """
+    from hexgate.security.models import agent_target_key, is_agent_reach_key
+    from hexgate.security.naming import canonical_name
+    from hexgate.security.policy_set import PolicySet
+
+    if not isinstance(engine, PolicySet):
+        return False
+    # Canonicalize the child name the same way the policy key and the reach gate do,
+    # so a non-canonical name (e.g. "Billing Bot") doesn't miss its mounted edge and
+    # trigger a spurious "reach unenforced" warning.
+    mounted = {
+        agent_target_key("tool", canonical_name(edge.child.name))
+        for edge in subagents
+        if edge.via == "tool"
+    }
+    declared = {
+        key
+        for role in engine.roles
+        for key in engine.policy_for(role).effective_tools
+        if is_agent_reach_key(key)
+    }
+    return bool(declared) and declared <= mounted
+
+
+def _resolve_subagents(
+    subagents: "Sequence[HexgateAgent | SubagentEdge]",
+) -> "tuple[list[SubagentEdge], list[BaseTool]]":
+    """Normalize the ``subagents`` list to edges + a gated delegation tool per edge.
+
+    A bare child normalizes to an ``as_tool`` edge. A ``handoff`` edge raises
+    ``UnsupportedReach`` (no native control-transfer seam); a nameless child raises
+    (the name is the ``agent.tool:<name>`` reach key the parent policy grants).
+    """
+    # Local import to dodge the langchain-adapter -> factory import cycle.
+    from hexgate.adapters.langchain.tools import SubagentTool
+
+    edges: list[SubagentEdge] = []
+    tools: list[BaseTool] = []
+    from hexgate.security.naming import canonical_name
+
+    for item in subagents:
+        edge = item if isinstance(item, SubagentEdge) else as_tool(item)
+        raw_name = getattr(edge.child, "name", None)
+        if edge.via != "tool":
+            raise UnsupportedReach(
+                f"as_handoff({raw_name!r}) is not supported on a native agent — "
+                "real control-transfer handoff has no native seam. Use as_tool(...) "
+                "(agent-as-tool), or an OpenAI/Google agent for handoff."
+            )
+        # Check the RAW name for emptiness: canonical_name would silently map a
+        # blank/whitespace-only name to "default" instead of failing loud.
+        if not raw_name or not raw_name.strip():
+            raise ValueError(
+                "a subagent must have a name (create_agent(name=...)) — the name is "
+                "the agent.tool:<name> reach key the parent policy grants."
+            )
+        # Canonicalize to the identity the reach key and the gate use, so the
+        # target matches agent.tool:<canonical> (and two names that canonicalize the
+        # same collide in the check below, not silently at runtime).
+        child_name = canonical_name(raw_name)
+        # The generated LLM-facing tool name must be a valid tool identifier
+        # (^[A-Za-z0-9_-]+$ for OpenAI/Anthropic), so sanitize the canonical name —
+        # e.g. "Billing Bot" → delegate_to_Billing_Bot. The reach key keeps the
+        # canonical target, only the tool NAME is sanitized. (as_name is the caller's.)
+        default_name = f"delegate_to_{re.sub(r'[^A-Za-z0-9_-]', '_', child_name)}"
+        edges.append(edge)
+        tools.append(
+            SubagentTool(
+                name=edge.as_name or default_name,
+                description=(
+                    f"Delegate a task to the {child_name} sub-agent and return its "
+                    "answer. Use when the request needs that specialist."
+                ),
+                child=edge.child,
+                target_name=child_name,
+            )
+        )
+    return edges, tools
 
 
 def enforce_policy(
@@ -702,6 +837,7 @@ def create_agent(
     approval_handler: ApprovalHandler | None = None,
     guards: "Sequence[Guard] | None" = None,
     guard_observer: "GuardObserver | None" = None,
+    subagents: Sequence["HexgateAgent | SubagentEdge"] = (),
 ) -> tuple[AgentGraph, CallbackHandler]:
     """Create a hexgate agent as a thin wrapper over LangChain.
 
@@ -718,6 +854,13 @@ def create_agent(
     tool whether or not a policy binds — with the resolved policy when it does,
     guards-only when it does not. ``guard_observer`` receives a provenance
     ``GuardEvent`` when a guard acts.
+
+    ``subagents`` mounts child ``HexgateAgent``s as **agent-as-tool** sub-agents
+    (bare children, or ``as_tool(child)`` edges). Each generates a policy-gated
+    delegation tool that decides ``agent.tool:<child>`` under this agent's policy,
+    then runs the child's own enforced ``ainvoke`` (the child governs itself, and
+    the caller's role rides the context in). ``as_handoff(...)`` — control transfer
+    — is unsupported on the native framework and raises ``UnsupportedReach``.
     """
     # Validate at the public boundary, before the (relatively expensive) graph
     # build, so the error lands at the call site rather than deep in dispatch.
@@ -731,9 +874,35 @@ def create_agent(
         if isinstance(system_prompt, SystemMessage)
         else load_system_prompt(system_prompt)
     )
+    # Normalize sub-agent edges and generate a gated delegation tool per edge; the
+    # LLM must see those tools, so they go into the graph alongside `tools`.
+    edges, delegation_tools = _resolve_subagents(subagents)
+    # Delegation tools must not collide: a duplicate/existing tool NAME makes the
+    # LLM's routing ambiguous, and a duplicate child (target) NAME conflates two
+    # agents under one agent.tool:<name> reach key. Existing names cover plain
+    # callables and dict tool defs too, not just BaseTool.
+    existing_names = {n for tool in tools if (n := _tool_name(tool))}
+    seen_names: set[str] = set()
+    seen_targets: set[str] = set()
+    for delegation in delegation_tools:
+        if delegation.name in existing_names or delegation.name in seen_names:
+            raise ValueError(
+                f"sub-agent delegation tool {delegation.name!r} collides with an "
+                "existing tool or another sub-agent — give the child a distinct "
+                "name, or pass as_tool(child, as_name=...)."
+            )
+        if delegation.target_name in seen_targets:
+            raise ValueError(
+                f"two sub-agents share the name {delegation.target_name!r} — they "
+                "would collapse onto one agent.tool: reach key; give each a distinct "
+                "name."
+            )
+        seen_names.add(delegation.name)
+        seen_targets.add(delegation.target_name)
+    all_tools: list[ToolSpec] = [*tools, *delegation_tools]
     graph = _build_langchain_agent(
         model=model,
-        tools=tools,
+        tools=all_tools,
         system_prompt=resolved_system_prompt,
         middleware=middleware,
         response_format=response_format,
@@ -750,7 +919,8 @@ def create_agent(
     agent = HexgateAgent(
         graph=graph,
         model=model,
-        tools=tools,
+        tools=all_tools,
+        subagents=edges,
         system_prompt=resolved_system_prompt,
         middleware=middleware,
         response_format=response_format,

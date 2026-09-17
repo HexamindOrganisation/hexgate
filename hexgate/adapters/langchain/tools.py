@@ -13,12 +13,13 @@ structured error — approval flows wire in on the host side.
 from __future__ import annotations
 
 import functools
+import json
 from collections.abc import Awaitable, Callable
 from typing import Any
 
 from langchain_core.tools import BaseTool
 from langchain_core.tools.structured import StructuredTool
-from pydantic import ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from hexgate.approvals import ApprovalHandler
 from hexgate.guards.runner import run_guarded_async, run_guarded_sync
@@ -44,6 +45,75 @@ def _langchain_error(decision: Decision) -> dict[str, Any]:
     sees governance failures as ``{"ok": False, ...}`` tool output.
     """
     return {"ok": False, "error": decision.as_error_payload()}
+
+
+def _content_text(content: Any) -> str:
+    """Coerce a message's ``content`` to text.
+
+    A LangChain message content may be a plain string or a list of content blocks
+    (e.g. Anthropic multimodal / structured output); flatten the latter to the
+    text parts so the parent LLM gets a string, not a raw block list.
+    """
+    if content is None:
+        return ""  # a tool-call-only / empty completion → no text, not the word "None"
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for block in content:
+            if isinstance(block, str):
+                parts.append(block)
+            elif isinstance(block, dict) and isinstance(block.get("text"), str):
+                parts.append(block["text"])
+        return "".join(parts)
+    return str(content)
+
+
+def _stringify(value: Any) -> str:
+    """Coerce a structured / ``response_format`` payload to a string.
+
+    A LangGraph ``ToolNode`` puts the tool's return into a ``ToolMessage`` whose
+    content must be text, so a raw dict/model would be ``str()``-ified to an ugly
+    Python repr. Prefer JSON (a pydantic model via ``model_dump_json``) so the parent
+    LLM sees clean, parseable text; fall back to ``str`` for the non-serializable."""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, BaseModel):
+        return value.model_dump_json()
+    try:
+        return json.dumps(value, default=str)
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def _final_message_text(result: Any) -> str:
+    """Extract the child's final answer from an ``ainvoke`` result, as a string.
+
+    A ``response_format`` child returns a LangGraph state with BOTH ``messages`` and
+    ``structured_response``; the structured answer is the real payload, so prefer it
+    over the last message (serialized to text). Otherwise handle a plain string, a
+    ``{"messages": [...]}`` state (the last message may be a ``BaseMessage`` or a
+    plain dict), or any other shape — always returned as a string, never a raw dict
+    (a ToolNode requires string tool-message content) and never silently dropped.
+    """
+    if isinstance(result, str):
+        return result
+    if isinstance(result, dict):
+        if result.get("structured_response") is not None:
+            return _stringify(result["structured_response"])
+        if "messages" in result:
+            # An agent-state result: empty messages → empty answer, not str(state).
+            messages = result["messages"]
+            if not messages:
+                return ""
+            last = messages[-1]
+            content = (
+                last.get("content")
+                if isinstance(last, dict)
+                else getattr(last, "content", last)
+            )
+            return _content_text(content)
+    return str(result)  # any other shape — convey as text, don't drop
 
 
 class GuardedTool(BaseTool):
@@ -161,6 +231,118 @@ class GuardedTool(BaseTool):
         ):
             return self.wrapped_tool.func(*args, **kwargs)
         return self.wrapped_tool._run(*args, **kwargs)
+
+
+# ---------------------------------------------------------------------------
+# Sub-agent delegation (agent-as-tool) seam.
+# ---------------------------------------------------------------------------
+
+
+class _SubagentInput(BaseModel):
+    """The single free-text argument the LLM passes to a sub-agent."""
+
+    task: str = Field(
+        description="The task or request to delegate to the sub-agent, in plain text."
+    )
+
+
+class SubagentTool(BaseTool):
+    """A policy-gated agent-as-tool delegation seam.
+
+    Exposed to the parent's LLM as a normal tool. On call it (1) decides
+    ``agent.tool:<target>`` under the PARENT's policy via :class:`ReachGate`
+    (a no-op unless the policy declares reach; a denial renders as the structured
+    tool error, like :class:`GuardedTool`), then (2) runs ``child.ainvoke`` — which
+    enforces the *child's* own policy and inherits the caller's role from the
+    ambient :class:`HexgateContext`. Control returns here with the child's answer.
+
+    ``enforcer`` is injected by ``enforce_policy`` (the same object the binding
+    holds, so a policy refresh reaches it); until then it is ``None`` and the reach
+    gate is skipped (the child still self-enforces).
+    """
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    args_schema: type[BaseModel] = _SubagentInput
+    # ``child`` is a HexgateAgent; typed Any to avoid the factory import cycle.
+    child: Any = None
+    target_name: str = ""  # the child's name — the ``agent.tool:<target>`` key
+    enforcer: PolicyEnforcer | None = None
+    approval_handler: ApprovalHandler | None = None
+    pipeline: ToolPipeline | None = None
+
+    async def _arun(self, task: str, **_: Any) -> Any:
+        # Reach (agent.tool:<child>) is the PARENT policy's gate on the delegation
+        # itself, so decide it BEFORE the guard pipeline: a denial short-circuits and
+        # never runs the pipeline. This also keeps the runner's success path honest —
+        # returning a denial dict as a normal invoke result would be recorded as a
+        # successful tool call (ToolOutcome ok=True) by post-guards/observers.
+        denial = await self._reach_denial()
+        if denial is not None:
+            return denial
+        if self.pipeline is not None and not self.pipeline.is_empty:
+            return await run_guarded_async(
+                self.name,
+                {"task": task},
+                enforcer=None,  # reach already decided above; no tool-name policy here
+                pipeline=self.pipeline,
+                approval_handler=self.approval_handler,
+                invoke=lambda final: self._delegate_child(final.get("task", task)),
+                render_error=_langchain_error,
+            )
+        return await self._delegate_child(task)
+
+    async def _reach_denial(self) -> dict[str, Any] | None:
+        """Decide ``agent.tool:<child>`` under the parent policy.
+
+        Returns a rendered tool error on deny, or ``None`` to proceed (allow, no reach
+        declared, or an unbound parent whose child self-enforces).
+        """
+        if self.enforcer is None:
+            return None
+        from hexgate.security.agent_gate import (
+            ReachNotAllowedError,
+            resolve_reach_gate,
+        )
+
+        gate = resolve_reach_gate(self.enforcer, approval_handler=self.approval_handler)
+        try:
+            # No-op unless the policy declares reach; raises on deny.
+            await gate.check_reach_async(self.target_name, via="tool")
+        except ReachNotAllowedError as err:
+            return _langchain_error(err.decision)
+        return None
+
+    async def _delegate_child(self, task: str) -> Any:
+        from hexgate.security.agent_gate import (
+            AgentNotAdmittedError,
+            ReachNotAllowedError,
+        )
+        from hexgate.security.bans import AgentBannedError
+
+        # The child enforces its OWN policy (admission + tools) under the inherited
+        # role. A refusal there is a governance outcome, so render it as tool output —
+        # the same {"ok": False, ...} shape as a reach deny — rather than letting it
+        # abort the parent run with a raw exception.
+        # NB (PR 1): the parent run config is not threaded into the child, so a
+        # sub-agent must not use a checkpointer and its run is not nested in the
+        # parent trace — config/trace threading is a follow-up.
+        try:
+            result = await self.child.ainvoke(
+                {"messages": [{"role": "user", "content": task}]}, {}
+            )
+        except (AgentNotAdmittedError, ReachNotAllowedError) as err:
+            return _langchain_error(err.decision)
+        except AgentBannedError as err:
+            return {"ok": False, "error": {"reason": str(err)}}
+        return _final_message_text(result)
+
+    def _run(self, task: str, **_: Any) -> Any:
+        # Native sub-agent delegation runs the child asynchronously; LangGraph
+        # drives tools via _arun, so the sync path is intentionally unsupported.
+        raise NotImplementedError(
+            "SubagentTool requires the async invoke path (ainvoke/astream_events)."
+        )
 
 
 # ---------------------------------------------------------------------------

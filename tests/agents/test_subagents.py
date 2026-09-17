@@ -1,0 +1,445 @@
+"""Tests for the ``subagents=`` construct — native agent-as-tool reach.
+
+`create_agent(subagents=[child])` mounts a child ``HexgateAgent`` as a gated
+delegation tool: on call it decides ``agent.tool:<child>`` under the PARENT's
+policy (via the reach gate), then runs the child's own ``ainvoke`` under the
+inherited role. `as_handoff` (control transfer) is unsupported on native and
+raises. These drive the seam directly (no live LLM): a fake child records the
+ambient role and echoes, so we can assert gating + propagation.
+"""
+
+from __future__ import annotations
+
+import pytest
+from langchain_core.messages import AIMessage
+
+from hexgate.adapters.langchain.tools import SubagentTool
+from hexgate.agents import factory
+from hexgate.agents.subagents import (
+    SubagentEdge,
+    UnsupportedReach,
+    as_handoff,
+)
+from hexgate.runtime.context import HexgateContext, get_current_context
+from hexgate.security import AgentPolicy, BaseToolPolicy
+from hexgate.security.enforcer import PolicyEnforcer
+from hexgate.security.policy_set import load_policy_set
+
+_ROLE = HexgateContext(user_id="u", user_roles=["support"])
+
+
+class _FakeChild:
+    """A HexgateAgent stand-in: a name + an async ``ainvoke`` that records the
+    ambient role (to prove propagation) and echoes the delegated task."""
+
+    def __init__(self, name: str = "billing_bot") -> None:
+        self.name = name
+        self.seen_roles: list[str] | None = None
+
+    async def ainvoke(self, payload: dict, config: dict) -> dict:
+        ctx = get_current_context()
+        self.seen_roles = list(ctx.user_roles) if ctx else None
+        task = payload["messages"][-1]["content"]
+        return {"messages": [AIMessage(content=f"child handled: {task}")]}
+
+
+def _enforcer(agents: dict) -> PolicyEnforcer:
+    policy = AgentPolicy(default_policy=BaseToolPolicy(mode="allow"), agents=agents)
+    return PolicyEnforcer(load_policy_set(policy), agent_name="parent")
+
+
+def _tool(child: _FakeChild, enforcer: PolicyEnforcer | None = None) -> SubagentTool:
+    return SubagentTool(
+        name="delegate",
+        description="d",
+        child=child,
+        target_name=child.name,
+        enforcer=enforcer,
+    )
+
+
+@pytest.fixture(autouse=True)
+def _hermetic(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stub the graph build + handler and clear governance env for construction."""
+    monkeypatch.setattr(
+        factory, "create_langchain_agent", lambda **kwargs: "graph-instance"
+    )
+    monkeypatch.setattr(
+        factory, "get_langfuse_handler", lambda **kwargs: "handler-instance"
+    )
+    for var in (
+        "HEXGATE_API_KEY",
+        "HEXGATE_LOCAL_POLICY",
+        "HEXGATE_BIND_AGENTS",
+        "HEXGATE_LOCAL_MODE",
+    ):
+        monkeypatch.delenv(var, raising=False)
+
+
+# --- construction -----------------------------------------------------------
+
+
+def test_create_agent_mounts_subagent_as_tool() -> None:
+    child = _FakeChild()
+    parent, _ = factory.create_agent("m", tools=[], name="parent", subagents=[child])
+    assert parent.subagents == [SubagentEdge(child=child, via="tool")]
+    delegation = [t for t in parent.tools if isinstance(t, SubagentTool)]
+    assert [t.name for t in delegation] == ["delegate_to_billing_bot"]
+    assert delegation[0].target_name == "billing_bot"
+
+
+def test_as_handoff_on_native_raises() -> None:
+    child = _FakeChild()
+    with pytest.raises(UnsupportedReach):
+        factory.create_agent(
+            "m", tools=[], name="parent", subagents=[as_handoff(child)]
+        )
+
+
+def test_nameless_child_raises() -> None:
+    child = _FakeChild(name="")
+    with pytest.raises(ValueError, match="must have a name"):
+        factory.create_agent("m", tools=[], name="parent", subagents=[child])
+
+
+# --- reach gating at the seam ----------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_reach_allow_runs_child_with_role() -> None:
+    child = _FakeChild()
+    tool = _tool(child, _enforcer({"billing_bot": {"mode": "allow", "via": ["tool"]}}))
+    async with _ROLE:
+        out = await tool._arun("refund it")
+    assert out == "child handled: refund it"
+    assert child.seen_roles == ["support"]  # caller's role propagated into the child
+
+
+@pytest.mark.asyncio
+async def test_reach_deny_renders_error_and_skips_child() -> None:
+    # billing_bot is reachable only via handoff → agent.tool:billing_bot is
+    # closed-world denied once reach is declared.
+    child = _FakeChild()
+    tool = _tool(
+        child, _enforcer({"billing_bot": {"mode": "allow", "via": ["handoff"]}})
+    )
+    async with _ROLE:
+        out = await tool._arun("refund it")
+    assert isinstance(out, dict) and out["ok"] is False  # structured governance error
+    assert child.seen_roles is None  # the child never ran
+
+
+@pytest.mark.asyncio
+async def test_no_reach_block_is_a_noop() -> None:
+    child = _FakeChild()
+    tool = _tool(child, _enforcer({}))  # no agents block → reach gate no-op
+    async with _ROLE:
+        out = await tool._arun("hi")
+    assert out == "child handled: hi"
+
+
+@pytest.mark.asyncio
+async def test_unbound_tool_skips_reach_but_runs_child() -> None:
+    # enforcer=None (agent built without policy) → reach skipped; child self-enforces.
+    child = _FakeChild()
+    tool = _tool(child, enforcer=None)
+    async with _ROLE:
+        out = await tool._arun("hi")
+    assert out == "child handled: hi"
+
+
+def test_sync_run_is_unsupported() -> None:
+    with pytest.raises(NotImplementedError):
+        _tool(_FakeChild())._run("hi")
+
+
+# --- robustness -------------------------------------------------------------
+
+
+class _StubDecision:
+    agent_name = "billing_bot"
+
+    def as_error_payload(self) -> dict:
+        return {"reason": "admission denied"}
+
+
+async def test_child_governance_refusal_renders_error() -> None:
+    # Reach allowed, but the child refuses the inherited caller (admission) — render
+    # as a governance tool error, not a raw exception out of _arun.
+    from hexgate.security.agent_gate import AgentNotAdmittedError
+
+    class _Denied:
+        name = "billing_bot"
+
+        async def ainvoke(self, payload: dict, config: dict) -> dict:
+            raise AgentNotAdmittedError(_StubDecision())
+
+    tool = _tool(
+        _Denied(), _enforcer({"billing_bot": {"mode": "allow", "via": ["tool"]}})
+    )
+    async with _ROLE:
+        out = await tool._arun("hi")
+    assert isinstance(out, dict) and out["ok"] is False
+
+
+async def test_empty_and_multiblock_child_results() -> None:
+    class _Empty:
+        name = "billing_bot"
+
+        async def ainvoke(self, payload: dict, config: dict) -> dict:
+            return {"messages": []}
+
+    class _Blocks:
+        name = "billing_bot"
+
+        async def ainvoke(self, payload: dict, config: dict) -> dict:
+            content = [{"type": "text", "text": "a"}, {"type": "text", "text": "b"}]
+            return {"messages": [AIMessage(content=content)]}
+
+    async with _ROLE:
+        assert await _tool(_Empty())._arun("x") == ""  # no message → empty string
+        assert await _tool(_Blocks())._arun("x") == "ab"  # blocks flattened to text
+
+
+def test_duplicate_subagent_names_raise() -> None:
+    a, b = _FakeChild("billing_bot"), _FakeChild("billing_bot")
+    with pytest.raises(ValueError, match="collides"):
+        factory.create_agent("m", tools=[], name="parent", subagents=[a, b])
+
+
+def test_delegation_name_collides_with_existing_tool() -> None:
+    from langchain_core.tools import tool as lc_tool
+
+    @lc_tool
+    def delegate_to_billing_bot(x: str) -> str:
+        """An existing tool that shadows the generated delegation name."""
+        return x
+
+    with pytest.raises(ValueError, match="collides"):
+        factory.create_agent(
+            "m",
+            tools=[delegate_to_billing_bot],
+            name="parent",
+            subagents=[_FakeChild("billing_bot")],
+        )
+
+
+def test_duplicate_target_under_distinct_tool_names_raises() -> None:
+    from hexgate.agents.subagents import as_tool
+
+    # Distinct tool names but the same child name → one agent.tool:billing_bot key.
+    a = as_tool(_FakeChild("billing_bot"), as_name="delegate_a")
+    b = as_tool(_FakeChild("billing_bot"), as_name="delegate_b")
+    with pytest.raises(ValueError, match="reach key"):
+        factory.create_agent("m", tools=[], name="parent", subagents=[a, b])
+
+
+def test_delegation_collides_with_plain_callable_tool() -> None:
+    def delegate_to_billing_bot(x: str) -> str:  # a raw callable, not a BaseTool
+        return x
+
+    with pytest.raises(ValueError, match="collides"):
+        factory.create_agent(
+            "m",
+            tools=[delegate_to_billing_bot],
+            name="parent",
+            subagents=[_FakeChild("billing_bot")],
+        )
+
+
+async def test_structured_result_is_not_dropped() -> None:
+    class _Structured:
+        name = "billing_bot"
+
+        async def ainvoke(self, payload: dict, config: dict) -> dict:
+            return {"result": {"refunded": 40}}  # response_format shape, no messages
+
+    async with _ROLE:
+        out = await _tool(_Structured())._arun("x")
+    assert out and "refunded" in out  # conveyed, not silently ""
+
+
+async def test_dict_final_message_reads_content() -> None:
+    class _DictMsg:
+        name = "billing_bot"
+
+        async def ainvoke(self, payload: dict, config: dict) -> dict:
+            return {"messages": [{"role": "assistant", "content": "done"}]}
+
+    async with _ROLE:
+        out = await _tool(_DictMsg())._arun("x")
+    assert out == "done"  # reads last["content"], not str(dict)
+
+
+async def test_structured_response_preferred_over_messages() -> None:
+    # A response_format child returns BOTH messages and structured_response — the
+    # structured payload is the real answer and must not be shadowed by the message.
+    class _Formatted:
+        name = "billing_bot"
+
+        async def ainvoke(self, payload: dict, config: dict) -> dict:
+            return {
+                "messages": [AIMessage(content="chatter")],
+                "structured_response": {"refunded": 40},
+            }
+
+    async with _ROLE:
+        out = await _tool(_Formatted())._arun("x")
+    # Structured answer wins over "chatter", serialized to text (a ToolNode needs a
+    # string tool-message content — never a raw dict).
+    assert isinstance(out, str)
+    import json
+
+    assert json.loads(out) == {"refunded": 40}
+
+
+def test_delegation_collides_with_function_style_dict_tool() -> None:
+    fn_tool = {"type": "function", "function": {"name": "delegate_to_billing_bot"}}
+    with pytest.raises(ValueError, match="collides"):
+        factory.create_agent(
+            "m",
+            tools=[fn_tool],
+            name="parent",
+            subagents=[_FakeChild("billing_bot")],
+        )
+
+
+def test_whitespace_only_child_name_raises() -> None:
+    # A whitespace-only name canonicalizes to "default"; fail loud instead of
+    # silently mounting under agent.tool:default with a malformed tool name.
+    with pytest.raises(ValueError, match="must have a name"):
+        factory.create_agent("m", tools=[], name="parent", subagents=[_FakeChild(" ")])
+
+
+def test_names_that_canonicalize_identically_collide() -> None:
+    # "billing_bot" and " billing_bot " canonicalize to the same reach key. Distinct
+    # as_name tool names dodge the name check, so the *target* guard must still catch
+    # the collapse onto one agent.tool:billing_bot key (it compares canonical names).
+    from hexgate.agents.subagents import as_tool
+
+    a = as_tool(_FakeChild("billing_bot"), as_name="delegate_a")
+    b = as_tool(_FakeChild(" billing_bot "), as_name="delegate_b")
+    with pytest.raises(ValueError, match="collapse onto one agent.tool"):
+        factory.create_agent("m", tools=[], name="parent", subagents=[a, b])
+
+
+def test_spaced_child_name_yields_valid_tool_name() -> None:
+    import re
+
+    # A name with a space is a valid reach target but an INVALID LLM tool name; the
+    # generated tool name is sanitized while the reach target keeps the canonical name.
+    parent, _ = factory.create_agent(
+        "m", tools=[], name="parent", subagents=[_FakeChild("Billing Bot")]
+    )
+    st = next(t for t in parent.tools if isinstance(t, SubagentTool))
+    assert st.name == "delegate_to_Billing_Bot"
+    assert re.fullmatch(r"[A-Za-z0-9_-]+", st.name)  # provider-valid
+    assert st.target_name == "Billing Bot"  # reach key keeps the canonical target
+
+
+async def test_none_content_message_yields_empty_string() -> None:
+    # A tool-call-only / empty completion has content=None → "", not the word "None".
+    class _NoneContent:
+        name = "billing_bot"
+
+        async def ainvoke(self, payload: dict, config: dict) -> dict:
+            return {"messages": [{"role": "assistant", "content": None}]}
+
+    async with _ROLE:
+        out = await _tool(_NoneContent())._arun("x")
+    assert out == ""
+
+
+# --- guards + coverage-aware warning ---------------------------------------
+
+
+def _halt_guard():
+    from hexgate.guards import before_tool
+    from hexgate.guards.types import Halt
+
+    return before_tool(lambda call: Halt(reason="blocked"))
+
+
+def test_guards_thread_into_subagent_tool() -> None:
+    parent, _ = factory.create_agent(
+        "m", tools=[], name="parent", subagents=[_FakeChild()], guards=[_halt_guard()]
+    )
+    st = next(t for t in parent.tools if isinstance(t, SubagentTool))
+    assert st.pipeline is not None and not st.pipeline.is_empty
+
+
+async def test_guard_halt_blocks_delegation() -> None:
+    child = _FakeChild()
+    parent, _ = factory.create_agent(
+        "m", tools=[], name="parent", subagents=[child], guards=[_halt_guard()]
+    )
+    st = next(t for t in parent.tools if isinstance(t, SubagentTool))
+    async with _ROLE:
+        out = await st._arun("hi")
+    assert isinstance(out, dict) and out["ok"] is False  # guard halted the delegation
+    assert child.seen_roles is None  # child never ran
+
+
+async def test_reach_deny_short_circuits_ahead_of_pipeline() -> None:
+    # A reach denial must short-circuit BEFORE the guard pipeline — otherwise the
+    # runner records the blocked delegation as a successful tool call.
+    from hexgate.guards import before_tool
+    from hexgate.guards.types import build_pipeline
+
+    ran: list[str] = []
+    pipeline = build_pipeline([before_tool(lambda call: ran.append(call.tool_name))])
+    child = _FakeChild()
+    tool = SubagentTool(
+        name="delegate",
+        description="d",
+        child=child,
+        target_name=child.name,
+        enforcer=_enforcer({"billing_bot": {"mode": "allow", "via": ["handoff"]}}),
+        pipeline=pipeline,
+    )
+    async with _ROLE:
+        out = await tool._arun("hi")
+    assert isinstance(out, dict) and out["ok"] is False  # reach denied
+    assert ran == []  # pipeline never ran — reach short-circuited ahead of it
+    assert child.seen_roles is None  # child never ran
+
+
+def test_reach_warning_is_coverage_aware(caplog) -> None:
+    import logging
+
+    parent, _ = factory.create_agent(
+        "m", tools=[], name="cov_parent", subagents=[_FakeChild("billing_bot")]
+    )
+    covered = AgentPolicy(
+        default_policy=BaseToolPolicy(mode="allow"),
+        agents={"billing_bot": {"mode": "allow", "via": ["tool"]}},
+    )
+    with caplog.at_level(logging.WARNING):
+        parent.enforce_policy(covered)
+    assert "reach" not in caplog.text.lower()  # fully covered → quiet
+    caplog.clear()
+    # Handoff declared but no native seam → warn.
+    handoff = AgentPolicy(
+        default_policy=BaseToolPolicy(mode="allow"),
+        agents={"billing_bot": {"mode": "allow", "via": ["handoff"]}},
+    )
+    with caplog.at_level(logging.WARNING):
+        parent.enforce_policy(handoff)
+    assert "reach" in caplog.text.lower()
+
+
+def test_coverage_uses_canonical_child_name(caplog) -> None:
+    import logging
+
+    # A non-canonical child name (surrounding whitespace) canonicalizes to the same
+    # key the policy authors — coverage must match it, not warn spuriously.
+    parent, _ = factory.create_agent(
+        "m", tools=[], name="canon_parent", subagents=[_FakeChild(" billing_bot ")]
+    )
+    covered = AgentPolicy(
+        default_policy=BaseToolPolicy(mode="allow"),
+        agents={"billing_bot": {"mode": "allow", "via": ["tool"]}},
+    )
+    with caplog.at_level(logging.WARNING):
+        parent.enforce_policy(covered)
+    assert "reach" not in caplog.text.lower()  # canonical match → quiet
