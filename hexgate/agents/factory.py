@@ -706,15 +706,24 @@ class HexgateAgent:
                 enforcer, approval_handler=approval_handler
             )
             # Reach: agent-as-tool reach is enforced for each mounted `child.as_tool()`
-            # (its SubagentTool gates agent.tool:<child>). Warn only when the declared
-            # reach isn't fully covered by those edges — i.e. it also covers handoff
-            # (no native seam) or an un-mounted tool target, both silent no-ops. A
-            # fully-covered config stays quiet.
-            if not _reach_fully_covered(self.subagents, enforcer.policy):
+            # (its SubagentTool gates agent.tool:<child>). Warn — naming the via —
+            # only about what those edges don't cover: declared handoff reach (no
+            # native seam) or an un-mounted tool target. A fully-covered config is
+            # quiet; an opaque bundle (uncovered is None) warns generically.
+            uncovered = _uncovered_reach(self.subagents, enforcer.policy)
+            if uncovered is None:
                 warn_if_reach_unenforced(
                     enforcer.policy,
                     framework="native",
                     agent_name=self.name or "default",
+                )
+            elif uncovered[0] or uncovered[1]:
+                warn_if_reach_unenforced(
+                    enforcer.policy,
+                    framework="native",
+                    agent_name=self.name or "default",
+                    handoff_targets=uncovered[0],
+                    tool_targets=uncovered[1],
                 )
         else:
             # Guards-only path: no enforcer, so no admission. Clear any gate a
@@ -754,34 +763,39 @@ def _tool_name(tool: ToolSpec) -> str | None:
     return getattr(tool, "name", None) or getattr(tool, "__name__", None)
 
 
-def _reach_fully_covered(subagents: "Sequence[SubagentEdge]", engine: object) -> bool:
-    """True if the mounted agent-as-tool edges fully enforce the declared reach.
+def _uncovered_reach(
+    subagents: "Sequence[SubagentEdge]", engine: object
+) -> "tuple[list[str], list[str]] | None":
+    """Split the policy's declared reach into what the mounted edges *don't* enforce.
 
-    Every declared ``agent.tool:<t>`` must have a mounted edge. A declared
-    ``agent.handoff:<t>`` is tolerated (not treated as uncovered) only when ``t``'s
-    tool reach is *both* mounted and granted: ``via`` defaults to ``["tool", "handoff"]``,
-    so the idiomatic ``{mode: allow}`` grant declares both keys — the handoff bit is a
-    permissive-default artifact, not an unenforced edge. A handoff-only grant, or an
-    un-mounted tool target, is genuinely uncovered → not fully covered.
+    Returns ``(handoff_targets, unmounted_tool_targets)`` — the target names of
+    declared ``agent.handoff:*`` keys (no seam on native) and declared
+    ``agent.tool:*`` keys with no mounted ``child.as_tool()`` edge. Both empty ⇒ fully
+    covered ⇒ no warning. Returns ``None`` for an opaque WASM bundle (its keys aren't
+    readable), so the caller falls back to the generic conservative warning.
 
-    Only decidable for a ``PolicySet`` (its ``effective_tools`` is readable); a WASM
-    bundle is opaque, so treat it as not-covered and warn conservatively.
+    A target whose tool reach is *both* mounted and granted is reported under neither
+    via: ``via`` defaults to ``["tool", "handoff"]``, so the idiomatic ``{mode: allow}``
+    grant declares both keys — warning about its handoff bit when the author correctly
+    wired (and granted) agent-as-tool would be noise on the common path. A handoff-*only*
+    grant on a tool-mounted child still warns, though: its tool edge is closed-world
+    denied and its handoff has no seam, so the config is genuinely broken.
     """
     from hexgate.security.models import (
         agent_target_key,
         is_agent_reach_key,
         is_agent_via_key,
     )
-    from hexgate.security.naming import canonical_name
+    from hexgate.security.naming import canonical_agent_name
     from hexgate.security.policy_set import PolicySet
 
     if not isinstance(engine, PolicySet):
-        return False
-    # Canonicalize the child name the same way the policy key and the reach gate do,
-    # so a non-canonical name (e.g. "Billing Bot") doesn't miss its mounted edge and
-    # trigger a spurious "reach unenforced" warning.
+        return None
+    # Canonicalize the child name the same way the reach gate and enumerate_subagents
+    # do (canonical_agent_name), so a non-canonical name (e.g. "Billing Bot") still
+    # matches its mounted edge and a name-less child degrades to 'default', not a raise.
     mounted = {
-        agent_target_key("tool", canonical_name(edge.child.name))
+        agent_target_key("tool", canonical_agent_name(edge.child))
         for edge in subagents
         if edge.via == "tool"
     }
@@ -791,18 +805,21 @@ def _reach_fully_covered(subagents: "Sequence[SubagentEdge]", engine: object) ->
         for key in engine.policy_for(role).effective_tools
         if is_agent_reach_key(key)
     }
-    if not declared:
-        return False
-    covered = mounted & declared  # tool edges both mounted AND granted
-    uncovered_tool = any(
-        is_agent_via_key(key, "tool") and key not in mounted for key in declared
-    )
-    uncovered_handoff = any(
-        is_agent_via_key(key, "handoff")
-        and agent_target_key("tool", key.split(":", 1)[1]) not in covered
+    # Targets genuinely covered by an enforced tool edge (mounted AND tool reach granted).
+    # Their default-via handoff bit is a permissive-default artifact, not an unenforced edge.
+    covered = mounted & declared
+    handoff = sorted(
+        target
         for key in declared
+        if is_agent_via_key(key, "handoff")
+        and agent_target_key("tool", (target := key.split(":", 1)[1])) not in covered
     )
-    return not uncovered_tool and not uncovered_handoff
+    tool = sorted(
+        key.split(":", 1)[1]
+        for key in declared
+        if is_agent_via_key(key, "tool") and key not in mounted
+    )
+    return handoff, tool
 
 
 def _check_subagent_tool_collisions(tools: "Sequence[ToolSpec]") -> None:

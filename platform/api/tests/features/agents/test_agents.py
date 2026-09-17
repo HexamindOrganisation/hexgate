@@ -1347,3 +1347,42 @@ def test_re_register_does_not_rewrite_the_original_creator(
         session_factory, project_id=DEFAULT_PROJECT_ID, name="stable_creator"
     )
     assert agent.created_by_user_id == DEFAULT_USER_ID
+
+
+async def test_register_stores_subagents_and_preserves_hash_continuity(
+    client: TestClient, session_factory
+) -> None:
+    """subagents round-trip into the stored manifest; an agent without them hashes
+    as before (dedup no-op), and adding them yields a new content_hash + version."""
+    from hexgate_api.schemas import AgentManifest
+    from hexgate_api.features.agents.service import register_manifest
+
+    async with session_factory() as session:
+        base = _sample_manifest("support_bot")
+        m1 = AgentManifest.model_validate(base)
+        v1, created1 = await register_manifest(
+            session, DEFAULT_PROJECT_ID, m1, sign=keystore_mod.keystore.sign
+        )
+        # Re-register the identical (sub-agent-less) manifest → dedup no-op, same hash.
+        v1b, created1b = await register_manifest(
+            session, DEFAULT_PROJECT_ID, m1, sign=keystore_mod.keystore.sign
+        )
+        assert created1 is True and created1b is False
+        assert v1b.content_hash == v1.content_hash
+        assert (v1.manifest or {}).get("subagents") in (None, [])  # excluded when None
+
+        # Now register with a sub-agent edge → different hash, new version, stored.
+        m2 = AgentManifest.model_validate(
+            {**base, "subagents": [{"name": "billing_bot", "via": "tool"}]}
+        )
+        v2, created2 = await register_manifest(
+            session, DEFAULT_PROJECT_ID, m2, sign=keystore_mod.keystore.sign
+        )
+        assert created2 is True
+        assert v2.content_hash != v1.content_hash
+        assert v2.manifest["subagents"] == [{"name": "billing_bot", "via": "tool"}]
+
+    # And the read view surfaces the sub-agent edge for the dashboard.
+    resp = client.get(f"/v1/projects/{DEFAULT_PROJECT_ID}/agents/manifest")
+    row = next(r for r in resp.json() if r["name"] == "support_bot")
+    assert row["manifest"]["subagents"] == [{"name": "billing_bot", "via": "tool"}]

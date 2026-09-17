@@ -470,12 +470,37 @@ def test_reach_warning_is_coverage_aware(caplog) -> None:
     assert "reach" in caplog.text.lower()
 
 
+def test_reach_warning_names_via_and_uncovered_targets(caplog) -> None:
+    import logging
+
+    # billing_bot is mounted (tool) → covered; refunds is a declared tool target with
+    # no mounted edge; escalation is a handoff target (no native seam). The warning
+    # must name the two uncovered targets by via and stay silent about billing_bot.
+    parent, _ = factory.create_agent(
+        "m", tools=[_tool(_FakeChild("billing_bot"))], name="via_parent"
+    )
+    policy = AgentPolicy(
+        default_policy=BaseToolPolicy(mode="allow"),
+        agents={
+            "billing_bot": {"mode": "allow", "via": ["tool"]},
+            "refunds": {"mode": "allow", "via": ["tool"]},
+            "escalation": {"mode": "allow", "via": ["handoff"]},
+        },
+    )
+    with caplog.at_level(logging.WARNING):
+        parent.enforce_policy(policy)
+    text = caplog.text
+    assert "refunds" in text and "not mounted" in text  # un-mounted tool target
+    assert "escalation" in text and "no seam" in text  # handoff, no native seam
+    assert "billing_bot" not in text  # the mounted edge is not flagged
+
+
 def test_default_via_grant_with_as_tool_is_quiet(caplog) -> None:
     import logging
 
     # The idiomatic minimal grant: no explicit `via`, so it defaults to
     # ["tool", "handoff"]. With the child mounted as a tool, the handoff bit is a
-    # permissive-default artifact, not an unenforced edge — coverage stays quiet.
+    # permissive-default artifact, not an unenforced edge — the warning must stay quiet.
     parent, _ = factory.create_agent(
         "m", tools=[_tool(_FakeChild("billing_bot"))], name="default_via_parent"
     )
@@ -485,7 +510,7 @@ def test_default_via_grant_with_as_tool_is_quiet(caplog) -> None:
     )
     with caplog.at_level(logging.WARNING):
         parent.enforce_policy(policy)
-    assert "reach" not in caplog.text.lower()  # tool-mounted+granted → no spurious warn
+    assert "reach" not in caplog.text.lower()  # tool-mounted → no spurious handoff warn
 
 
 def test_coverage_uses_canonical_child_name(caplog) -> None:

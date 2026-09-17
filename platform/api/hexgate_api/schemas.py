@@ -549,6 +549,17 @@ class ToolDefinition(BaseModel):
     input_schema: InputSchema
 
 
+class SubagentRef(BaseModel):
+    """A reach edge to a sub-agent (name + via), mirroring the SDK manifest.
+
+    A flat named reference to a sibling agent — ``via`` is ``tool`` (agent-as-tool)
+    or ``handoff`` (control transfer) — not a nested subtree.
+    """
+
+    name: str
+    via: Literal["tool", "handoff"]
+
+
 class AgentManifest(BaseModel):
     """Schema for the manifest of an agent."""
 
@@ -558,6 +569,9 @@ class AgentManifest(BaseModel):
     model: Optional[str] = None
     system_prompt: Optional[str] = None
     tools: list[ToolDefinition]
+    # Optional-None (not []) so an agent with no sub-agents hashes exactly as before
+    # this field existed (compute_manifest_hash uses exclude_none).
+    subagents: Optional[list[SubagentRef]] = None
 
 
 class RegisterAgentRequest(BaseModel):

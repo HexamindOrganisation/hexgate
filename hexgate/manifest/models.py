@@ -5,6 +5,8 @@ from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, Field, field_validator
 
+from hexgate.security.models import AgentVia
+
 # Hard cap on the serialized system prompt. The dashboard renders the full
 # prompt inside a <pre> block; a multi-MB prompt would lock the browser tab.
 # 64 KiB is well above any realistic hand-written prompt and still cheap to
@@ -67,6 +69,15 @@ class AgentManifest(BaseModel):
         ),
     )
     tools: list[ToolDefinition] = Field(description="The tools of the agent")
+    subagents: list[SubagentRef] | None = Field(
+        default=None,
+        description=(
+            "Sub-agent reach edges discovered on this agent (name + via), or None "
+            "when it has none / the framework hides them in a tool closure. Kept "
+            "Optional-None (not []) so an agent with no sub-agents hashes exactly as "
+            "before this field existed — content_hash uses exclude_none."
+        ),
+    )
 
     @field_validator("system_prompt")
     @classmethod
@@ -81,6 +92,18 @@ class AgentManifest(BaseModel):
         budget = MAX_SYSTEM_PROMPT_BYTES - len(_TRUNCATION_MARKER.encode("utf-8"))
         head = encoded[:budget].decode("utf-8", errors="ignore")
         return head + _TRUNCATION_MARKER
+
+
+class SubagentRef(BaseModel):
+    """A reach edge to a sub-agent, as recorded on the manifest.
+
+    Mirrors the policy ``agent.<via>:<name>`` key: ``name`` is the (canonical)
+    target agent, ``via`` is the edge kind (``tool`` or ``handoff``). A flat named
+    reference, not a nested subtree — each sub-agent is registered as its own agent.
+    """
+
+    name: str = Field(description="The canonical name of the target sub-agent")
+    via: AgentVia = Field(description="The reach edge kind: 'tool' or 'handoff'")
 
 
 class ToolDefinition(BaseModel):
