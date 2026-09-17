@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator
 
 import pytest
+from pydantic_ai.messages import ModelRequest, ModelResponse, TextPart, UserPromptPart
 from pydantic_ai.usage import RunUsage
 
 from hexgate.adapters.pydantic_ai.agent import HexgatePydanticAgent
@@ -13,6 +14,7 @@ from hexgate.runtime import HexgateContext
 from hexgate.runtime.context import get_current_context
 from hexgate.security.bans import BanEntry, BanGate, BanSet
 from hexgate.security.errors import AgentBannedError
+from hexgate.tracing import messages as tracing_messages_mod
 from hexgate.tracing import usage as tracing_usage_mod
 
 
@@ -51,7 +53,8 @@ class _FakeResult:
     test double; .value carries what the old plain-string fixtures used to
     return. .result mirrors AgentRun.result (None until the run completes).
     .is_complete mirrors StreamedRunResult.is_complete (True once the stream
-    has been fully consumed)."""
+    has been fully consumed). .new_messages() is the run history
+    emit_run_messages() reads."""
 
     def __init__(
         self, value: str, *, result: Any = "completed", is_complete: bool = True
@@ -63,6 +66,12 @@ class _FakeResult:
 
     def usage(self) -> RunUsage:
         return RunUsage(input_tokens=10, output_tokens=20)
+
+    def new_messages(self) -> list[Any]:
+        return [
+            ModelRequest(parts=[UserPromptPart("hello")]),
+            ModelResponse(parts=[TextPart(self.value)]),
+        ]
 
 
 class _RecordingAgent:
@@ -614,6 +623,8 @@ async def test_iter_does_not_emit_usage_when_caller_exits_early(
     )
 
     class _IncompleteAgent:
+        model = "test-model"
+
         @asynccontextmanager
         async def iter(self, *args: Any, **kwargs: Any) -> AsyncIterator[_FakeResult]:
             yield _FakeResult("iter-result", result=None)
@@ -628,3 +639,108 @@ async def test_iter_does_not_emit_usage_when_caller_exits_early(
         pass
 
     assert fake_sender.events == []
+
+
+# ---------------------------------------------------------------------------
+# emit_run_messages: the transcript leaves from all four run methods
+# ---------------------------------------------------------------------------
+
+
+async def _drive(proxy: HexgatePydanticAgent, method: str) -> None:
+    """Run one of the proxy's four entry points to completion."""
+    context = _user()
+    if method == "run":
+        await proxy.run("hello", hexgate_context=context)
+    elif method == "run_sync":
+        proxy.run_sync("hello", hexgate_context=context)
+    elif method == "run_stream":
+        async with proxy.run_stream("hello", hexgate_context=context):
+            pass
+    else:
+        async with proxy.iter("hello", hexgate_context=context):
+            pass
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["run", "run_sync", "run_stream", "iter"])
+async def test_every_run_method_emits_the_run_transcript(
+    monkeypatch: pytest.MonkeyPatch, method: str
+) -> None:
+    """One message event per completed run, at seq 0, with identity resolved
+    from the still-open HexgateContext scope."""
+    monkeypatch.setattr(
+        "hexgate.adapters.pydantic_ai.agent.Agent.instrument_all", lambda: None
+    )
+    fake_sender = _FakeSender()
+    monkeypatch.setattr(
+        tracing_messages_mod,
+        "configure_messages_sender",
+        lambda api_key=None: fake_sender,
+    )
+    monkeypatch.setattr(
+        tracing_usage_mod, "configure_usage_sender", lambda api_key=None: None
+    )
+
+    proxy = HexgatePydanticAgent(
+        agent=_RecordingAgent(),  # type: ignore[arg-type]
+        api_key="k",
+        agent_name="my-agent",
+    )
+
+    await _drive(proxy, method)
+
+    [event] = fake_sender.events
+    assert event.user_id == "u-1"
+    assert event.session_id == "s-1"
+    assert event.message_seq == 0
+    assert event.turn_key == event.run_id
+    assert event.input_messages == [
+        {"role": "user", "parts": [{"type": "text", "content": "hello"}]}
+    ]
+    assert event.output_messages[0]["role"] == "assistant"
+
+
+@pytest.mark.asyncio
+async def test_run_stream_still_records_the_transcript_when_the_caller_aborts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Usage is gated on completion because pydantic's counts are 0 until
+    then; the prompt is not, and a run someone cut short is the one an
+    incident review asks about."""
+    monkeypatch.setattr(
+        "hexgate.adapters.pydantic_ai.agent.Agent.instrument_all", lambda: None
+    )
+    fake_sender = _FakeSender()
+    monkeypatch.setattr(
+        tracing_messages_mod,
+        "configure_messages_sender",
+        lambda api_key=None: fake_sender,
+    )
+    usage_sender = _FakeSender()
+    monkeypatch.setattr(
+        tracing_usage_mod, "configure_usage_sender", lambda api_key=None: usage_sender
+    )
+
+    class _AbortedAgent:
+        model = "test-model"
+
+        @asynccontextmanager
+        async def run_stream(
+            self, *args: Any, **kwargs: Any
+        ) -> AsyncIterator[_FakeResult]:
+            yield _FakeResult("stream-result", is_complete=False)
+
+    proxy = HexgatePydanticAgent(
+        agent=_AbortedAgent(),  # type: ignore[arg-type]
+        api_key="k",
+        agent_name="my-agent",
+    )
+
+    async with proxy.run_stream("hello", hexgate_context=_user()):
+        pass
+
+    assert usage_sender.events == []
+    [event] = fake_sender.events
+    assert event.input_messages == [
+        {"role": "user", "parts": [{"type": "text", "content": "hello"}]}
+    ]

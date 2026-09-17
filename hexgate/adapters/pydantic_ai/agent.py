@@ -15,7 +15,7 @@ from pydantic_ai.agent import AgentRun, AgentRunResult
 from pydantic_ai.result import StreamedRunResult
 
 from hexgate.adapters._common import abind, bind
-from hexgate.adapters.pydantic_ai.usage import emit_run_usage
+from hexgate.adapters.pydantic_ai.usage import emit_run_messages, emit_run_usage
 from hexgate.runtime import HexgateContext
 
 if TYPE_CHECKING:
@@ -91,6 +91,21 @@ class HexgatePydanticAgent:
     def _tag(method: str) -> str:
         return f"pydantic_ai.agent.{method}"
 
+    def _emit_run_events(self, result: Any, *, usage: bool = True) -> None:
+        """Transcript, and token usage when the run reported usable counts.
+        Called inside the bound scope, and both resolve the model through the
+        same ``_resolve_model``, so the two rows cannot disagree about it.
+
+        Only usage is gated on completion: pydantic_ai reports 0 tokens until a
+        run ends, but an aborted stream still holds the prompt that was sent —
+        and a run someone cut short is the one an incident review asks about.
+        The transcript goes first so a raise while reading usage cannot take it
+        down too.
+        """
+        emit_run_messages(self._agent_name, self._agent, result, api_key=self._api_key)
+        if usage:
+            emit_run_usage(self._agent_name, self._agent, result, api_key=self._api_key)
+
     async def run(
         self,
         *args: Any,
@@ -102,7 +117,7 @@ class HexgatePydanticAgent:
         await self._check_ban_async(hexgate_context)
         async with self._abind(hexgate_context, "run"):
             result = await self._agent.run(*args, **kwargs)
-            emit_run_usage(self._agent_name, self._agent, result, api_key=self._api_key)
+            self._emit_run_events(result)
             return result
 
     def run_sync(
@@ -116,7 +131,7 @@ class HexgatePydanticAgent:
         self._check_ban(hexgate_context)
         with self._bind(hexgate_context, "run_sync"):
             result = self._agent.run_sync(*args, **kwargs)
-            emit_run_usage(self._agent_name, self._agent, result, api_key=self._api_key)
+            self._emit_run_events(result)
             return result
 
     @asynccontextmanager
@@ -132,15 +147,11 @@ class HexgatePydanticAgent:
         async with self._abind(hexgate_context, "run_stream"):
             async with self._agent.run_stream(*args, **kwargs) as result:
                 yield result
-                # Emit usage only if the run completed, not if the caller aborted mid-stream,
-                # because the usage counts from pydantic's side are 0 until the run completes.
-                # This can happen if a user cancels a LLM request mid-response: we will never
-                # know the total number of input / output tokens, however they are still charged by the LLM provider.
-                # This is a known limitation of pydantic_ai's usage reporting, and we will not be able to report usage in this case.
-                if result.is_complete:
-                    emit_run_usage(
-                        self._agent_name, self._agent, result, api_key=self._api_key
-                    )
+                # Usage only if the run completed: pydantic's counts are 0 until
+                # then, so a caller who cancels mid-response is billed by the
+                # provider for tokens we can never report. The transcript is not
+                # gated — see _emit_run_events.
+                self._emit_run_events(result, usage=result.is_complete)
 
     @asynccontextmanager
     async def iter(
@@ -155,10 +166,7 @@ class HexgatePydanticAgent:
         async with self._abind(hexgate_context, "iter"):
             async with self._agent.iter(*args, **kwargs) as run:
                 yield run
-                if run.result is not None:
-                    emit_run_usage(
-                        self._agent_name, self._agent, run, api_key=self._api_key
-                    )
+                self._emit_run_events(run, usage=run.result is not None)
 
     def __getattr__(self, name: str) -> Any:
         """Delegate unknown attributes to the wrapped agent.

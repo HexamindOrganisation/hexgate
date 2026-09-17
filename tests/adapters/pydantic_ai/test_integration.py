@@ -2,7 +2,8 @@
 its policy from the live platform, (2) delivers its LLM-usage event even
 with no asyncio event loop anywhere in the process — the sender's span
 export runs on its own worker thread, with no loop affinity — and (3) lands
-a policy_decision row for its tool call.
+a policy_decision row for its tool call, and (4) lands the run's
+transcript as a single llm_message row.
 
 Requires the full OTLP ingest pipeline — Postgres, ClickHouse, Redpanda,
 `make platform-api-pg`, `make collector-run` and `make enricher-run` — plus
@@ -16,6 +17,7 @@ Opt in with: `pytest -m integration`.
 
 from __future__ import annotations
 
+import json
 import uuid
 
 import pytest
@@ -31,6 +33,7 @@ from tests.adapters.helpers import (
     AGENT_NAME_PREFIX,
     USER_ID_PREFIX,
     assert_policy_and_usage_events_landed,
+    poll_until,
 )
 
 pytestmark = pytest.mark.integration
@@ -81,3 +84,51 @@ def test_run_sync_with_no_event_loop_delivers_llm_usage_event(
     assert_policy_and_usage_events_landed(
         hexgate_platform_env, agent_name, session_id, "get_weather"
     )
+
+
+def test_tool_calling_run_records_the_conversation_as_one_llm_message(
+    hexgate_platform_env: HexgatePlatformEnv,
+) -> None:
+    """pydantic_ai has no per-call hook, so a whole run is one row at seq 0 —
+    where the other adapters emit one row per model call.
+
+    The row must still hold the conversation the agent saw: the question, the
+    tool call, and its return value, which is stored nowhere else (a
+    policy_decision row records the call, never what came back).
+    """
+    agent_name = f"{AGENT_NAME_PREFIX}pydantic_msg_{uuid.uuid4().hex[:8]}"
+    session_id = f"s-{uuid.uuid4().hex[:8]}"
+
+    raw_agent = Agent(
+        model=TestModel(),
+        name=agent_name,
+        instructions="You are a weather assistant.",
+        tools=[Tool(_get_weather, name="get_weather")],
+    )
+    register_agent(raw_agent)
+    wrapped = wrap_pydantic_agent(agent=raw_agent, api_key=hexgate_platform_env.api_key)
+
+    context = HexgateContext(
+        user_id=f"{USER_ID_PREFIX}pydantic_ai",
+        session_id=session_id,
+        user_roles=["tester"],
+    )
+    wrapped.run_sync("What's the weather in Paris?", hexgate_context=context)
+
+    rows = poll_until(
+        lambda: hexgate_platform_env.llm_message_rows(agent_name, session_id) or None,
+        message="llm_message rows never landed in ClickHouse",
+    )
+
+    [row] = rows
+    assert row["message_seq"] == 0
+    assert not row["resynced"] and not row["truncated"]
+    assert json.loads(row["system_instructions"]) == [
+        {"type": "text", "content": "You are a weather assistant."}
+    ]
+
+    messages = json.loads(row["input_messages"])
+    assert [m["role"] for m in messages] == ["user", "assistant", "tool"]
+    assert messages[1]["parts"][0]["name"] == "get_weather"
+    assert "sunny" in messages[2]["parts"][0]["response"]
+    assert json.loads(row["output_messages"])[0]["role"] == "assistant"
