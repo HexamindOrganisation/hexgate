@@ -21,7 +21,21 @@
 -- nullable and only ever read for display, so adding a constraint to a live
 -- table is not worth the lock.
 --
--- Idempotent (IF NOT EXISTS on both), so re-running is a no-op.
+-- Idempotent (IF NOT EXISTS on both), so re-running is a no-op. Guarded per the
+-- convention every file in this directory follows: a migration guards each
+-- table it touches, because ADD COLUMN IF NOT EXISTS guards the COLUMN and
+-- still errors on a missing table. A stage old enough to lack devtoken is
+-- hypothetical today, but a rule with remembered exceptions is not a rule.
+-- 0002_actor_columns.sql carries the full rationale, unqualified guard names
+-- included.
 
-ALTER TABLE devtoken ADD COLUMN IF NOT EXISTS revoked_at timestamptz;
-ALTER TABLE devtoken ADD COLUMN IF NOT EXISTS revoked_by_user_id varchar;
+-- devtoken -----------------------------------------------------------------
+DO $$
+BEGIN
+  IF to_regclass('devtoken') IS NULL THEN
+    RAISE NOTICE 'devtoken absent -- create_all builds it complete; skipping';
+    RETURN;
+  END IF;
+  ALTER TABLE devtoken ADD COLUMN IF NOT EXISTS revoked_at timestamptz;
+  ALTER TABLE devtoken ADD COLUMN IF NOT EXISTS revoked_by_user_id varchar;
+END $$;
