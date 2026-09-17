@@ -557,6 +557,75 @@ describe("AuditPage", () => {
     expect(screen.getAllByText("assistant").length).toBeGreaterThan(0);
   });
 
+  it("when one turn makes several calls then each id carries its own colour", async () => {
+    // Three parallel calls in one completion, whose results come back in the
+    // next turn. Matching a call to its result across two cards by reading a
+    // long id is what the colour shortcut exists to replace.
+    messageRows = () => [
+      {
+        ...MESSAGES[0],
+        event_id: "par-0",
+        occurred_at: "2026-06-01T09:59:59Z",
+        message_seq: 0,
+        system_instructions: null as unknown,
+        input_messages: [
+          {
+            role: "user",
+            parts: [{ type: "text", content: "close the case" }],
+          },
+        ],
+        output_messages: [
+          {
+            role: "assistant",
+            parts: ["a", "b", "c"].map((id) => ({
+              type: "tool_call",
+              id: `call-${id}`,
+              name: "read_customer",
+              arguments: "{}",
+            })),
+          },
+        ],
+      },
+      {
+        ...MESSAGES[0],
+        event_id: "par-1",
+        occurred_at: "2026-06-01T10:00:05Z",
+        message_seq: 1,
+        system_instructions: null as unknown,
+        input_messages: [
+          {
+            role: "tool",
+            parts: ["a", "b", "c"].map((id) => ({
+              type: "tool_call_response",
+              id: `call-${id}`,
+              response: "ok",
+            })),
+          },
+        ],
+        output_messages: [],
+      },
+    ];
+    stubFetch();
+    const user = userEvent.setup();
+    renderWithProviders(<AuditPage />);
+
+    await openDrawer(user);
+    // Each id appears twice — once on the call, once on its result — and both
+    // wear the same slot, or the colour would link the wrong pair.
+    for (const [id, slot] of [
+      ["call-a", 1],
+      ["call-b", 2],
+      ["call-c", 3],
+    ] as const) {
+      const labels = await screen.findAllByText(id);
+      expect(labels).toHaveLength(2);
+      for (const label of labels) {
+        const dot = label.previousElementSibling as HTMLElement;
+        expect(dot.style.background).toBe(`var(--call-${slot})`);
+      }
+    }
+  });
+
   it("renders system instructions as the parts list they are", async () => {
     stubFetch();
     const user = userEvent.setup();

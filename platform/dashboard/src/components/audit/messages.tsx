@@ -18,12 +18,48 @@
  * thinking part, and nothing below assumes there is not one.
  */
 
-import { useState } from "react";
+import { createContext, useContext, useMemo, useState } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 
 import type { LlmMessage, LlmMessagePart, LlmMessageRow } from "@/lib/api";
 import { anchorTranscript, type Turn } from "@/lib/llm_messages";
 import { fmtTs } from "./fmt";
+
+/** id → colour slot, for the calls of a turn that made several at once.
+ *
+ * Keyed by id rather than by position, so a call and its result agree even
+ * if the results come back in another order — matching them is the whole
+ * point. Empty for a turn with one call: a lone identity needs no colour to
+ * be told apart from nothing.
+ */
+const CallSlots = createContext<Map<string, number>>(new Map());
+
+/** Assign a slot to each call of every turn that made more than one.
+ *
+ * Three slots, and a fourth call gets none: these are compared all-pairs —
+ * any dot may need telling from any other, not just its neighbour — and
+ * three hues is what clears the colour-vision floors in both themes. The id
+ * is always rendered beside the dot, so a call past the third is still
+ * identifiable; it just loses the shortcut.
+ */
+function buildCallSlots(rows: LlmMessageRow[]): Map<string, number> {
+  const slots = new Map<string, number>();
+  for (const row of rows) {
+    const messages = Array.isArray(row.output_messages)
+      ? (row.output_messages as LlmMessage[])
+      : [];
+    const ids = messages
+      .flatMap((message) =>
+        Array.isArray(message?.parts) ? message.parts : [],
+      )
+      .filter((part) => part?.type === "tool_call")
+      .map((part) => part.id)
+      .filter((id): id is string => typeof id === "string" && !!id);
+    if (ids.length < 2) continue;
+    ids.slice(0, 3).forEach((id, index) => slots.set(id, index));
+  }
+  return slots;
+}
 
 /** Whatever a content field holds, as text — the fallback for a value that
  * is neither a message list nor empty.
@@ -69,12 +105,25 @@ function Pre({ children }: { children: React.ReactNode }) {
  * parallel calls share one turn.
  */
 function PartLabel({ label, id }: { label: string; id?: unknown }) {
+  const slot = useContext(CallSlots).get(typeof id === "string" ? id : "");
   return (
-    <div className="mb-0.5 flex items-baseline gap-1.5 text-[10px] uppercase tracking-wider text-muted-foreground">
+    <div className="mb-0.5 flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-muted-foreground">
       <span>{label}</span>
       {typeof id === "string" && id && (
-        <span className="font-mono normal-case tracking-normal opacity-70">
-          {id}
+        <span className="flex items-center gap-1">
+          {slot !== undefined && (
+            // The dot carries the identity, not the id text: a colour is
+            // what makes a call and its result findable across two cards at
+            // a glance, while the id stays in ink and remains the thing you
+            // can actually verify against the record.
+            <span
+              className="size-2 shrink-0 rounded-[2px]"
+              style={{ background: `var(--call-${slot + 1})` }}
+            />
+          )}
+          <span className="font-mono normal-case tracking-normal opacity-70">
+            {id}
+          </span>
         </span>
       )}
     </div>
@@ -333,6 +382,14 @@ export function LlmMessagesSection({
   isLoading: boolean;
   isError: boolean;
 }) {
+  // Above every early return: this component returns a note for each of the
+  // not-yet-loaded states, and a hook below them would be called on some
+  // renders and not others.
+  //
+  // Built over every fetched row, not just the two expanded ones — a call
+  // and its result live in different turns, and an expanded turn's result
+  // may belong to a call inside a collapsed one.
+  const callSlots = useMemo(() => buildCallSlots(rows), [rows]);
   const note = (text: string) => (
     <div className="text-xs text-muted-foreground">{text}</div>
   );
@@ -357,7 +414,7 @@ export function LlmMessagesSection({
   const anchorAtEdge = partial && !next;
 
   return (
-    <div>
+    <CallSlots.Provider value={callSlots}>
       {total > rows.length && (
         <div className="mb-2 text-[11px] text-muted-foreground">
           Showing {rows.length} of {total} turns.
@@ -388,6 +445,6 @@ export function LlmMessagesSection({
           <CollapsedTurns turns={later} label="later turns" />
         </div>
       )}
-    </div>
+    </CallSlots.Provider>
   );
 }

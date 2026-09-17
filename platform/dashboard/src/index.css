@@ -104,6 +104,15 @@
   --gr-dim-stroke: rgba(0, 0, 0, 0.06);
   --gr-dim-text: #a8a8b4;
   --gr-dim-tag: #c4c4d0;
+
+  /* Tool-call identity (Audit drawer). Three slots, not more: these are
+     compared all-pairs — any call may need telling from any other, not just
+     its neighbour — and three is what clears the CVD and normal-vision
+     floors in both modes. A fourth parallel call gets no dot and is told
+     apart by its id, which is always shown. */
+  --call-1: #2a78d6;
+  --call-2: #eb6834;
+  --call-3: #1baf7a;
 }
 
 .dark {
@@ -159,6 +168,11 @@
   --gr-dim-stroke: rgba(255, 255, 255, 0.07);
   --gr-dim-text: #3f4550;
   --gr-dim-tag: #2f343d;
+
+  /* Same three hues, stepped for the dark surface. */
+  --call-1: #3987e5;
+  --call-2: #d95926;
+  --call-3: #199e70;
 }
 
 /* ── Accent scheme (blue default / plum) ──────────────────────────────────
