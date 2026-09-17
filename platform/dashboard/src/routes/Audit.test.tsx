@@ -550,6 +550,11 @@ describe("AuditPage", () => {
     // The call id pairs the two across turns — the only way to tell which
     // call a decision is about when parallel calls share one turn.
     expect(screen.getAllByText("call-1")).toHaveLength(2);
+    // …but the "tool" ROLE is not repeated above "Tool result": the speaker
+    // is the tool, which the part already names. The assistant role stays,
+    // since a completion can mix prose and a tool call under it.
+    expect(screen.queryByText("tool")).not.toBeInTheDocument();
+    expect(screen.getAllByText("assistant").length).toBeGreaterThan(0);
   });
 
   it("renders system instructions as the parts list they are", async () => {

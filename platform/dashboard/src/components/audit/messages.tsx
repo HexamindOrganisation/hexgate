@@ -143,13 +143,28 @@ function Part({ part }: { part: LlmMessagePart }) {
   );
 }
 
+/** One message: who produced it, and the parts it holds.
+ *
+ * The role header is dropped for a tool message whose parts all name
+ * themselves as results. "TOOL" then only repeats "TOOL RESULT" — the
+ * speaker IS the tool, and the part identifies it better, by call id. The
+ * assistant case is not symmetric and keeps both: a completion can mix a
+ * sentence and a tool call under one role, so there the header says
+ * something the part does not.
+ */
 function Message({ message }: { message: LlmMessage }) {
   const parts = Array.isArray(message?.parts) ? message.parts : [];
+  const roleIsRedundant =
+    message?.role === "tool" &&
+    parts.length > 0 &&
+    parts.every((part) => part?.type === "tool_call_response");
   return (
     <div className="border-t border-border/60 px-2.5 py-1.5 first:border-t-0">
-      <div className="mb-1 font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
-        {String(message?.role ?? "—")}
-      </div>
+      {!roleIsRedundant && (
+        <div className="mb-1 font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+          {String(message?.role ?? "—")}
+        </div>
+      )}
       {parts.length ? (
         parts.map((part, i) => <Part key={i} part={part} />)
       ) : (
