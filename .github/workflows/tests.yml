@@ -144,7 +144,7 @@ jobs:
     # the schema-builds smoke test, and the migration tests that EXECUTE
     # platform/{postgres,clickhouse}/migrations rather than pattern-matching
     # them. Nothing else in CI runs a migration file.
-    name: Platform API (Postgres smoke)
+    name: Platform API (migration execution)
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -199,6 +199,15 @@ jobs:
           cd platform/api && uv run pytest \
             tests/core/test_postgres_smoke.py \
             tests/core/test_migrations.py -v
+
+      # The ClickHouse half is marked `integration` (it creates and drops
+      # scratch databases), so conftest skips it above. Scoped to this file so
+      # the rest of the integration suite -- which wants a seeded schema this
+      # job does not build -- stays out.
+      - name: ClickHouse migration execution tests
+        run: |
+          cd platform/api && uv run pytest \
+            tests/core/test_migrations.py -m integration -v
 
   dashboard:
     name: Dashboard

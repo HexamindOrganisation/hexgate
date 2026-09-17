@@ -10,8 +10,9 @@ These tests run the files. Each builds its own scratch database, so they
 cannot order-couple through shared state.
 
 Postgres: skipped unless ``DATABASE_URL`` names one (``make postgres-up``).
-ClickHouse: skipped unless ``HEXGATE_CLICKHOUSE_HOST`` is set
-(``make clickhouse-up`` sets nothing — export it, or let CI's service do it).
+ClickHouse: opt-in via the repo's ``integration`` marker
+(``pytest tests/core/test_migrations.py -m integration``), because they create
+and drop scratch databases on whatever server the settings point at.
 """
 
 from __future__ import annotations
@@ -42,16 +43,21 @@ CREATE_INDEX_RE = re.compile(
 )
 
 CLICKHOUSE_DATABASE = "hexgate_audit"
+DEFAULT_DATABASE = "default"
 AUDIT_TABLES = ("policy_decision", "llm_invocation", "llm_message", "ban_enforcement")
+CREATE_DATABASE_RE = re.compile(r"^CREATE\s+DATABASE\b", re.IGNORECASE)
 
 pg_only = pytest.mark.skipif(
     "postgres" not in os.environ.get("DATABASE_URL", ""),
     reason="set DATABASE_URL to a Postgres DSN to run (see `make postgres-up`)",
 )
-clickhouse_only = pytest.mark.skipif(
-    not os.environ.get("HEXGATE_CLICKHOUSE_HOST"),
-    reason="set HEXGATE_CLICKHOUSE_HOST to run (see `make clickhouse-up`)",
-)
+# `integration` is the repo's opt-in gate for "needs a running ClickHouse" —
+# conftest skips it unless you ask for it by name. Load-bearing here beyond
+# consistency: these tests CREATE and DROP scratch databases, so gating on the
+# connection env alone would fire that against a developer's dev ClickHouse
+# during an ordinary `make platform-api-check`. Opting in is the assertion that
+# a throwaway server is what you are pointed at.
+clickhouse_only = pytest.mark.integration
 
 
 def migration_files(directory: Path) -> list[Path]:
@@ -261,15 +267,28 @@ async def test_replaying_the_migrations_twice_changes_nothing() -> None:
 
 
 @contextmanager
-def clickhouse_client(database: str | None = None) -> Iterator[object]:
+def clickhouse_client(database: str = DEFAULT_DATABASE) -> Iterator[object]:
+    """A client on one database, built from the app's own settings.
+
+    Host/port/credentials come from ``get_settings()`` so these tests cannot
+    drift from where the application connects. ``database`` stays a parameter
+    rather than reusing ``core.clickhouse.get_clickhouse``: that builder is
+    ``lru_cache``d into a process-wide singleton pinned to
+    ``settings.clickhouse_database``, and these tests need several clients on
+    different scratch databases without poisoning the app's cached one.
+    """
     import clickhouse_connect
 
+    from hexgate_api.settings import get_settings
+
+    settings = get_settings()
     client = clickhouse_connect.get_client(
-        host=os.environ["HEXGATE_CLICKHOUSE_HOST"],
-        port=int(os.environ.get("HEXGATE_CLICKHOUSE_PORT", "8124")),
-        username=os.environ.get("HEXGATE_CLICKHOUSE_USER", "hexgate"),
-        password=os.environ.get("HEXGATE_CLICKHOUSE_PASSWORD", "hexgate-dev-password"),
-        database=database or "default",
+        host=settings.clickhouse_host,
+        port=settings.clickhouse_port,
+        username=settings.clickhouse_user,
+        password=settings.clickhouse_password,
+        secure=settings.clickhouse_secure,
+        database=database,
         autogenerate_session_id=False,
     )
     try:
@@ -329,10 +348,16 @@ def run_clickhouse_script(client, sql: str, database: str) -> None:
     Every statement is qualified ``hexgate_audit.<table>`` — the deploy runner
     relies on that — so pointing a file elsewhere rewrites the prefix rather
     than switching the session's default database.
+    ``CREATE DATABASE`` is skipped rather than retargeted: the scratch database
+    already exists by construction, and the prefix rewrite does not touch
+    ``CREATE DATABASE IF NOT EXISTS hexgate_audit`` (no trailing dot), so running
+    it would reach outside the sandbox and create the real database on whatever
+    server the settings point at.
     """
     retargeted = sql.replace(f"{CLICKHOUSE_DATABASE}.", f"{database}.")
     for statement in split_statements(retargeted):
-        client.command(statement)
+        if not CREATE_DATABASE_RE.match(statement):
+            client.command(statement)
 
 
 def test_split_statements_ignores_semicolons_in_comments_and_strings() -> None:
@@ -378,16 +403,41 @@ def test_clickhouse_migrations_replay_onto_a_fresh_schema() -> None:
                 run_clickhouse_script(client, path.read_text(), database)
 
 
-CH_ADD_COLUMN_RE = re.compile(
-    r"ALTER\s+TABLE\s+\w+\.(\w+)((?:\s*,?\s*ADD\s+COLUMN\s+IF\s+NOT\s+EXISTS\s+\w+[^;]*?)+);",
-    re.IGNORECASE | re.DOTALL,
-)
+CH_ALTER_TABLE_RE = re.compile(r"^ALTER\s+TABLE\s+\w+\.(\w+)", re.IGNORECASE)
 CH_COLUMN_NAME_RE = re.compile(
     r"ADD\s+COLUMN\s+IF\s+NOT\s+EXISTS\s+(\w+)", re.IGNORECASE
 )
 CH_CREATE_TABLE_RE = re.compile(
-    r"CREATE\s+TABLE\s+IF\s+NOT\s+EXISTS\s+\w+\.(\w+)", re.IGNORECASE
+    r"^CREATE\s+TABLE\s+IF\s+NOT\s+EXISTS\s+\w+\.(\w+)", re.IGNORECASE
 )
+
+
+def clickhouse_objects_added(
+    files: Sequence[Path],
+) -> tuple[list[str], list[tuple[str, str]]]:
+    """The tables created and the (table, column) pairs added, per statement.
+
+    Statement-at-a-time via ``split_statements``, never a regex reaching across
+    the raw text for its own terminator. A single ``ALTER`` here adds six columns
+    and its first ``COMMENT`` literal contains a semicolon, so a pattern that
+    stops at the first raw ``;`` sees one column and silently drops five — which
+    made the equivalence test below pass over DDL it had never executed.
+    """
+    tables: list[str] = []
+    columns: list[tuple[str, str]] = []
+    for path in files:
+        for statement in split_statements(path.read_text()):
+            created = CH_CREATE_TABLE_RE.match(statement)
+            if created:
+                tables.append(created.group(1))
+                continue
+            altered = CH_ALTER_TABLE_RE.match(statement)
+            if altered:
+                table = altered.group(1)
+                columns.extend(
+                    (table, column) for column in CH_COLUMN_NAME_RE.findall(statement)
+                )
+    return tables, columns
 
 
 def strip_clickhouse_objects(client, database: str, files: Sequence[Path]) -> None:
@@ -399,14 +449,33 @@ def strip_clickhouse_objects(client, database: str, files: Sequence[Path]) -> No
     migration's own DDL to run — and what makes a drift from ``schema.sql``
     visible.
     """
-    sql = "\n".join(path.read_text() for path in files)
-    for table in CH_CREATE_TABLE_RE.findall(sql):
+    tables, columns = clickhouse_objects_added(files)
+    for table in tables:
         client.command(f"DROP TABLE IF EXISTS {database}.{table}")
-    for table, clauses in CH_ADD_COLUMN_RE.findall(sql):
-        for column in CH_COLUMN_NAME_RE.findall(clauses):
-            client.command(
-                f"ALTER TABLE {database}.{table} DROP COLUMN IF EXISTS {column}"
-            )
+    for table, column in columns:
+        client.command(f"ALTER TABLE {database}.{table} DROP COLUMN IF EXISTS {column}")
+
+
+def test_every_added_clickhouse_column_is_collected() -> None:
+    """No database needed. Pins the bug this parser was rewritten to fix.
+
+    ``0002`` adds six columns to policy_decision in one ALTER whose first
+    COMMENT literal contains a semicolon. The previous regex returned only
+    ``run_id``, so the five below were never dropped, never re-applied from the
+    migration, and drift in them could not fail the equivalence test.
+    """
+    _tables, columns = clickhouse_objects_added(migration_files(CLICKHOUSE_MIGRATIONS))
+    policy_decision = {
+        column for table, column in columns if table == "policy_decision"
+    }
+    assert {
+        "run_id",
+        "run_tool_calls",
+        "run_llm_calls",
+        "run_denials",
+        "run_total_tokens",
+        "run_elapsed_ms",
+    } <= policy_decision, policy_decision
 
 
 @clickhouse_only
