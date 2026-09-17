@@ -76,6 +76,14 @@ Run these as parallel subagents, one lens each. Give every lens the same
 instruction: read the real files and the real installed dependency source, never
 assume behaviour from the name of a setting.
 
+Where the diff's behaviour depends on a state machine inside a dependency — a
+stream aggregator, a retry loop, a callback sequencer — **run it** and enumerate
+what it emits on each branch, rather than reading one path and generalising.
+Reading proves the path you read; a thirty-line script proves the space. And
+when you find a bug on one branch, enumerate the remaining branches before you
+stop: the branch that carries the obvious bug is rarely the only one that
+behaves unlike your mental model.
+
 1. **CLAUDE.md compliance** — only what the file actually says, quoted.
 2. **Correctness** — bugs in the changed lines. The diff's own tests are not
    evidence: they were written by the reasoning that produced the code, so they
@@ -153,12 +161,28 @@ Then drop the finding if the example needs any of these to be true:
   most "the actor/timestamp/flag is not stamped here" findings.
 - **Config nobody sets.** Grep before claiming an env var, flag or setting
   matters — if nothing in the repo, compose files or DEPLOY.md sets it, the
-  finding rests on a hypothetical deployment.
+  finding rests on a hypothetical deployment. This does **not** cover a
+  *dependency's* own default: a flag the vendor ships `default_on` and marks
+  experimental is a default that moves in a version bump you will take, and it
+  moves silently. The question there is whether upstream can flip it, not
+  whether you set it.
 - **Three coincidences at once.** Two is a bad day; three is fiction.
 - **A code path that does not exist yet.** Constants declared ahead of their
   emitter are deliberate here; the future caller is a different PR's problem.
 - **Nothing at all.** If no example can be written, the finding is a theory.
   Drop it.
+
+Two things that are never drop reasons:
+
+- **What the fix would cost.** The gates above are about likelihood and
+  visibility, nothing else. "It would need a private attribute, a refactor, a
+  new fixture" belongs in the recommendation you write at the end, never in the
+  gate. A finding dropped because the fix looked expensive is a finding you
+  never actually judged.
+- **A fact you did not check.** Any factual claim in a drop line is
+  finding-grade and gets verified exactly as one you intended to report. A wrong
+  fact in a drop is worse than a wrong finding: nothing downstream re-reads it,
+  so it is never corrected.
 
 One exception overrides every drop rule above: **a cost claim is settled by
 measuring, not by judgement.** If the Break is about resource use — memory,
@@ -213,6 +237,10 @@ that evidence is a measurement, not a reading. A finding that
 cannot be verified either becomes uncertain-and-labelled or gets dropped; it
 never gets reported as fact.
 
+For every test written alongside a fix, name the mutation it would catch. A test
+that still passes with the fix reverted is passing for the wrong reason, and it
+is worse than no test: it is the thing that stops anyone looking again.
+
 ## 6. Report
 
 In the chat, never on GitHub. Most severe first:
@@ -251,3 +279,23 @@ and wait. Do not fix, commit, or open issues unless asked.
 
 If nothing survives the gate, say that in one line and list what you checked.
 That is a real outcome, not a failure to find something.
+
+## 7. Fixes are diffs
+
+When you are asked to apply the findings — or when you reviewed your own work and
+fixed as you went — the fixes are new, unreviewed code, and they are the code
+least likely to get a second pass, because you already believe them.
+
+Before applying a fix, write the **invariant** it is meant to establish, not the
+symptom it removes: "no state survives an aborted run", not "the prompt map stops
+growing". Then verify the invariant over every path, not over the path the
+finding happened to name. A lens hands you one framing of a problem; the fix is
+owed to the problem, and a fix verified against the framing leaves the rest of it
+in place.
+
+Then re-run section 4 over the fix itself. A fix changes behaviour, so it can
+create a finding: a guard applied to one emit and not its sibling, a cap on the
+half of the state that drains itself, a new early return that silently drops
+what the old code recorded. The code around a real finding is where the next one
+hides, because that is the code that was just rewritten under time pressure by
+someone who had stopped looking for problems.
