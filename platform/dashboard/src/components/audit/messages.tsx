@@ -171,7 +171,13 @@ function Message({ message }: { message: LlmMessage }) {
         </div>
       )}
       {parts.length ? (
-        parts.map((part, i) => <Part key={i} part={part} />)
+        // Spaced: a retrieved-context message holds hundreds of parts, and
+        // butted together they read as one undifferentiated block.
+        <div className="space-y-2">
+          {parts.map((part, i) => (
+            <Part key={i} part={part} />
+          ))}
+        </div>
       ) : (
         <Pre>{JSON.stringify(message, null, 2)}</Pre>
       )}
@@ -203,7 +209,11 @@ function Field({
       <div className="mb-1 text-[10px] uppercase tracking-wider text-muted-foreground">
         {label}
       </div>
-      <div className="overflow-hidden rounded-md border border-border bg-muted">
+      {/* Bounded, not unbounded: the input cap is 256 KiB, and a RAG call
+          arrives at it — one turn of retrieved chunks would otherwise run to
+          tens of thousands of pixels and push Envelope and Same session off
+          the drawer entirely. A field that fits is unaffected. */}
+      <div className="max-h-72 overflow-auto rounded-md border border-border bg-muted scrollbar-thin">
         {items ? (
           bare ? (
             <div className="px-2.5 py-1.5">
