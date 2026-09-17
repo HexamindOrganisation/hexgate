@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from hexgate.agents.enumeration import enumerate_subagents
 from hexgate.agents.factory import HexgateAgent
-from hexgate.manifest.models import AgentManifest, AgentType
+from hexgate.manifest.models import AgentManifest, AgentType, SubagentRef
 
 if TYPE_CHECKING:
     from langchain_core.tools import BaseTool
@@ -25,7 +26,36 @@ def create_manifest(
 
     Framework-specific submodules (and their SDK imports) are loaded lazily so
     callers only import the SDK they actually use.
+
+    Sub-agent reach edges are enumerated (:func:`enumerate_subagents`) and recorded
+    on ``manifest.subagents`` so registration and the dashboard can see the agent
+    graph. Kept ``None`` when there are none, for content-hash continuity.
     """
+    manifest = _build_base_manifest(
+        agent,
+        description=description,
+        tools=tools,
+        model=model,
+        system_prompt=system_prompt,
+    )
+    refs = [
+        SubagentRef(name=link.target, via=link.via)
+        for link in enumerate_subagents(agent)
+    ]
+    if refs:
+        manifest.subagents = refs
+    return manifest
+
+
+def _build_base_manifest(
+    agent: AgentType,
+    *,
+    description: str | None,
+    tools: list[BaseTool] | None,
+    model: object | None,
+    system_prompt: object | None,
+) -> AgentManifest:
+    """Dispatch to the framework-specific manifest builder (no sub-agents yet)."""
     if isinstance(agent, HexgateAgent):
         from hexgate.manifest.native import create_hexgate_manifest
 

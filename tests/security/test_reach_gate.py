@@ -197,3 +197,29 @@ def test_warn_if_tool_reach_unenforced(caplog) -> None:
     records = [r for r in caplog.records if r.levelno == logging.WARNING]
     assert len(records) == 1  # deduped
     assert "as-tool" in records[0].getMessage()
+
+
+def test_warn_if_reach_unenforced_empty_targets_is_noop(caplog) -> None:
+    # Via-specific mode with both target lists EMPTY (a fully-covered config) must be a
+    # no-op: no malformed "not enforced: ;" message, and the once-per-agent slot is not
+    # burned — a later genuine gap must still surface.
+    agent_gate_mod._reach_unenforced_warned.clear()
+    engine = load_policy_set(
+        AgentPolicy(agents={"b": {"mode": "allow", "via": ["tool"]}})
+    )
+    with caplog.at_level(logging.WARNING, logger=agent_gate_mod.__name__):
+        agent_gate_mod.warn_if_reach_unenforced(
+            engine,
+            framework="native",
+            agent_name="a",
+            handoff_targets=[],
+            tool_targets=[],
+        )
+        assert not [r for r in caplog.records if r.levelno == logging.WARNING]
+        # Slot not burned: a real uncovered target on the same agent still warns.
+        agent_gate_mod.warn_if_reach_unenforced(
+            engine, framework="native", agent_name="a", tool_targets=["b"]
+        )
+    records = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(records) == 1
+    assert "not mounted via child.as_tool()" in records[0].getMessage()
