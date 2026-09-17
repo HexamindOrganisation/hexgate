@@ -320,12 +320,16 @@ def _apply_decision_observer(
     """
     import logging
 
-    from hexgate.adapters.langchain.tools import GuardedTool
+    from hexgate.adapters.langchain.tools import GuardedTool, SubagentTool
 
     log = logging.getLogger(__name__)
     patched_enforcer_ids: set[int] = set()
     for tool_spec in agent.tools:
-        if isinstance(tool_spec, GuardedTool):
+        # A SubagentTool holds its own enforcer (not wrapped in a GuardedTool), so
+        # patch it too — else a delegation's reach decision fires no observer event.
+        if isinstance(tool_spec, (GuardedTool, SubagentTool)):
+            if tool_spec.enforcer is None:
+                continue
             tool_spec.enforcer._decision_observer = decision_observer
             patched_enforcer_ids.add(id(tool_spec.enforcer))
 
@@ -361,7 +365,7 @@ def _apply_approval_handler(
     """
     import logging
 
-    from hexgate.adapters.langchain.tools import GuardedTool
+    from hexgate.adapters.langchain.tools import GuardedTool, SubagentTool
 
     rewrapped: list[Any] = []
     touched = False
@@ -372,6 +376,16 @@ def _apply_approval_handler(
                     tool_spec,
                     approval_handler=approval_handler,
                 )
+            )
+            touched = True
+        elif isinstance(tool_spec, SubagentTool):
+            # A SubagentTool honors approval through the same runner, so re-stamp the
+            # handler onto it too — else `approval_required` on a reach target refuses
+            # without ever prompting. Fall through on None, like GuardedTool.wrap.
+            rewrapped.append(
+                tool_spec.model_copy(update={"approval_handler": approval_handler})
+                if approval_handler is not None
+                else tool_spec
             )
             touched = True
         else:
