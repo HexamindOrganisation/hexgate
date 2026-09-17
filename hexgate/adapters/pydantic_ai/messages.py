@@ -75,6 +75,15 @@ def _media_part(value: Any) -> dict[str, Any] | None:
     }
 
 
+def _media_content(value: Any) -> Any:
+    """Tool-return content with any inline bytes reduced to a descriptor. A
+    tool returning a screenshot hits the same 4x escaped-repr expansion as a
+    user prompt carrying one — see :func:`_media_part`."""
+    if isinstance(value, (list, tuple)):
+        return [_media_part(item) or item for item in value]
+    return _media_part(value) or value
+
+
 def _user_parts(content: Any) -> list[dict[str, Any]]:
     """A ``UserPromptPart``'s content, which is a string or a mixed sequence."""
     items = [content] if isinstance(content, str) else list(content)
@@ -121,7 +130,7 @@ def part_to_genai(part: Any) -> list[dict[str, Any]]:
             "type": "tool_call_response",
             "id": part.tool_call_id or "",
             "name": getattr(part, "tool_name", None) or "",
-            "response": part.content,
+            "response": _media_content(part.content),
         }
         if kind == "retry-prompt":
             response["error"] = True
@@ -156,7 +165,10 @@ def last_response(history: list[ModelMessage]) -> ModelResponse | None:
 
 
 def run_messages(
-    history: list[ModelMessage], *, completed: bool = True
+    history: list[ModelMessage],
+    *,
+    completed: bool = True,
+    session: list[ModelMessage] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]] | None]:
     """A run's messages as ``(input, output, system_instructions)``.
 
@@ -170,28 +182,37 @@ def run_messages(
     stays in ``input``, and an empty completion is the truthful record.
 
     System content is lifted out of the messages because the wire contract
-    carries it in its own field: every ``SystemPromptPart``, plus the
-    ``instructions`` of the *last* request that carried any. Last, not first:
-    pydantic_ai re-renders instructions on every request, so a dynamic
-    ``@agent.instructions`` function returns a different string each step, and
-    the last is the one the completion was produced under.
+    carries it in its own field. ``session`` is the whole conversation when the
+    run was started from a ``message_history``: a ``system_prompt=`` lands only
+    in the very first request of a conversation, so ``history`` — this run's
+    own messages — does not carry it from turn two onward.
+
+    The ``instructions`` reported are the ones the completion was produced
+    under: the last request *before* it, taken verbatim including ``None``.
+    pydantic_ai re-renders instructions per request, so a conditional
+    ``@agent.instructions`` that returns a policy on the first call and nothing
+    after would otherwise have the row claim a guardrail that was not in force.
     """
     completion = last_response(history) if completed else None
     system: list[dict[str, Any]] = []
     instructions: str | None = None
     input_messages: list[dict[str, Any]] = []
+    for message in session if session is not None else history:
+        if isinstance(message, ModelRequest):
+            system.extend(
+                text_part(part.content)
+                for part in message.parts
+                if _kind(part) == "system-prompt"
+            )
+    for message in history:
+        if message is completion:
+            break
+        if isinstance(message, ModelRequest):
+            instructions = message.instructions
     for message in history:
         if message is completion:
             continue
-        parts = list(message.parts)
-        if isinstance(message, ModelRequest):
-            instructions = message.instructions or instructions
-            system.extend(
-                text_part(part.content)
-                for part in parts
-                if _kind(part) == "system-prompt"
-            )
-            parts = [part for part in parts if _kind(part) != "system-prompt"]
+        parts = [part for part in message.parts if _kind(part) != "system-prompt"]
         input_messages.extend(_messages(parts))
     if instructions:
         system.insert(0, text_part(instructions))

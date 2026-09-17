@@ -59,6 +59,16 @@ def emit_run_usage(agent_name: str, agent: Agent, result: Any, *, api_key: str) 
     )
 
 
+def _session(result: Any) -> list[Any] | None:
+    """The whole conversation behind this run, or ``None`` if it cannot be
+    read. Only its system prompt is used, so a failure here is not worth
+    losing the row over."""
+    try:
+        return list(result.all_messages())
+    except Exception:
+        return None
+
+
 def emit_run_messages(
     agent_name: str,
     agent: Agent,
@@ -80,6 +90,10 @@ def emit_run_messages(
     256 KiB cap then cuts. Each run's row holds what that run added, and a
     session's rows concatenate back to the conversation.
 
+    ``all_messages()`` still rides along as ``session``, read for its system
+    prompt alone: a ``system_prompt=`` lands only in the conversation's first
+    request, which from turn two onward is not one of this run's messages.
+
     Guarded because the run methods do not: losing a transcript row must not
     fail the run it was logging.
     """
@@ -87,7 +101,9 @@ def emit_run_messages(
         return
     try:
         input_messages, output, system = run_messages(
-            result.new_messages(), completed=completed
+            result.new_messages(),
+            completed=completed,
+            session=_session(result),
         )
     except Exception:
         _log.exception("converting pydantic_ai messages raised; dropping this event")

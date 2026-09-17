@@ -745,3 +745,78 @@ async def test_run_stream_still_records_the_transcript_when_the_caller_aborts(
     # call, not an answer, so every message stays where it happened.
     assert event.output_messages == []
     assert [m["role"] for m in event.input_messages] == ["user", "assistant"]
+
+
+@pytest.mark.asyncio
+async def test_run_stream_records_the_transcript_when_the_callers_body_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """How a stream actually gets aborted: a dropped connection, a timeout, a
+    cancel. Emitting after the yield never runs — the exception is thrown into
+    the generator at the yield — so the run whose prompt matters records
+    nothing."""
+    monkeypatch.setattr(
+        "hexgate.adapters.pydantic_ai.agent.Agent.instrument_all", lambda: None
+    )
+    fake_sender = _FakeSender()
+    monkeypatch.setattr(
+        tracing_messages_mod,
+        "configure_messages_sender",
+        lambda api_key=None: fake_sender,
+    )
+    monkeypatch.setattr(
+        tracing_usage_mod, "configure_usage_sender", lambda api_key=None: None
+    )
+
+    class _StreamingAgent:
+        model = "test-model"
+
+        @asynccontextmanager
+        async def run_stream(
+            self, *args: Any, **kwargs: Any
+        ) -> AsyncIterator[_FakeResult]:
+            yield _FakeResult("stream-result", is_complete=False)
+
+    proxy = HexgatePydanticAgent(
+        agent=_StreamingAgent(),  # type: ignore[arg-type]
+        api_key="k",
+        agent_name="my-agent",
+    )
+
+    with pytest.raises(KeyboardInterrupt):
+        async with proxy.run_stream("hello", hexgate_context=_user()):
+            raise KeyboardInterrupt
+
+    [event] = fake_sender.events
+    assert [m["role"] for m in event.input_messages] == ["user", "assistant"]
+    assert event.output_messages == []
+
+
+@pytest.mark.asyncio
+async def test_iter_records_the_transcript_when_the_callers_body_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "hexgate.adapters.pydantic_ai.agent.Agent.instrument_all", lambda: None
+    )
+    fake_sender = _FakeSender()
+    monkeypatch.setattr(
+        tracing_messages_mod,
+        "configure_messages_sender",
+        lambda api_key=None: fake_sender,
+    )
+    monkeypatch.setattr(
+        tracing_usage_mod, "configure_usage_sender", lambda api_key=None: None
+    )
+
+    proxy = HexgatePydanticAgent(
+        agent=_RecordingAgent(),  # type: ignore[arg-type]
+        api_key="k",
+        agent_name="my-agent",
+    )
+
+    with pytest.raises(RuntimeError):
+        async with proxy.iter("hello", hexgate_context=_user()):
+            raise RuntimeError("tool exploded")
+
+    assert len(fake_sender.events) == 1

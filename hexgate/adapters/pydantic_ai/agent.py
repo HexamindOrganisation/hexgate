@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from contextlib import (
     AbstractAsyncContextManager,
     AbstractContextManager,
@@ -21,6 +22,8 @@ from hexgate.runtime import HexgateContext
 if TYPE_CHECKING:
     from hexgate.security.bans import BanGate
     from hexgate.security.binding import PolicyBinding
+
+_log = logging.getLogger(__name__)
 
 
 class HexgatePydanticAgent:
@@ -103,6 +106,9 @@ class HexgatePydanticAgent:
         unfinished run is a mid-run tool call rather than an answer. The
         transcript goes first so a raise while reading usage cannot take it
         down too.
+
+        Both are guarded: this runs from a ``finally``, where an exception
+        would replace the one the caller is already unwinding.
         """
         emit_run_messages(
             self._agent_name,
@@ -111,8 +117,12 @@ class HexgatePydanticAgent:
             api_key=self._api_key,
             completed=completed,
         )
-        if completed:
+        if not completed:
+            return
+        try:
             emit_run_usage(self._agent_name, self._agent, result, api_key=self._api_key)
+        except Exception:
+            _log.exception("emit_run_usage raised; ignoring")
 
     async def run(
         self,
@@ -154,12 +164,16 @@ class HexgatePydanticAgent:
         await self._check_ban_async(hexgate_context)
         async with self._abind(hexgate_context, "run_stream"):
             async with self._agent.run_stream(*args, **kwargs) as result:
-                yield result
-                # pydantic's counts are 0 until the run completes, so a
-                # caller who cancels mid-response is billed by the provider for
-                # tokens we can never report. The transcript still lands, minus
-                # its completion — see _emit_run_events.
-                self._emit_run_events(result, completed=result.is_complete)
+                try:
+                    yield result
+                finally:
+                    # In a finally, not after the yield: a caller who cancels or
+                    # whose body raises — a dropped connection, a timeout — is
+                    # how a stream actually gets aborted, and that is the run
+                    # whose prompt an incident review wants. pydantic's counts
+                    # are 0 until the run completes, so usage is still dropped;
+                    # the transcript lands without a completion.
+                    self._emit_run_events(result, completed=result.is_complete)
 
     @asynccontextmanager
     async def iter(
@@ -173,8 +187,10 @@ class HexgatePydanticAgent:
         await self._check_ban_async(hexgate_context)
         async with self._abind(hexgate_context, "iter"):
             async with self._agent.iter(*args, **kwargs) as run:
-                yield run
-                self._emit_run_events(run, completed=run.result is not None)
+                try:
+                    yield run
+                finally:
+                    self._emit_run_events(run, completed=run.result is not None)
 
     def __getattr__(self, name: str) -> Any:
         """Delegate unknown attributes to the wrapped agent.

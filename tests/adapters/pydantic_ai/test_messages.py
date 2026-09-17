@@ -350,3 +350,70 @@ def test_when_the_run_did_not_complete_then_nothing_is_hoisted() -> None:
 
     assert output == []
     assert [m["role"] for m in input_messages] == ["user", "assistant", "tool"]
+
+
+def test_when_a_tool_returns_binary_then_only_a_descriptor_is_kept() -> None:
+    """A screenshot tool hits the same escaped-repr expansion as a user prompt
+    carrying one — 50 KB of PNG became ~180 KB of JSON, 69% of the budget."""
+    image = BinaryContent(b"\x89PNG" + b"\x00" * 4096, media_type="image/png")
+    history = [
+        ModelRequest(parts=[ToolReturnPart("screenshot", image, "c1")]),
+        _answer(),
+    ]
+
+    input_messages, _, _ = run_messages(history)
+
+    assert input_messages[0]["parts"][0]["response"] == {
+        "type": "binary",
+        "media_type": "image/png",
+        "bytes": 4100,
+    }
+
+
+def test_when_a_tool_returns_a_list_holding_binary_then_it_is_reduced_too() -> None:
+    image = BinaryContent(b"x" * 64, media_type="image/png")
+    history = [
+        ModelRequest(parts=[ToolReturnPart("t", ["look:", image], "c1")]),
+        _answer(),
+    ]
+
+    input_messages, _, _ = run_messages(history)
+
+    assert input_messages[0]["parts"][0]["response"] == [
+        "look:",
+        {"type": "binary", "media_type": "image/png", "bytes": 64},
+    ]
+
+
+def test_when_the_run_continues_a_session_then_its_system_prompt_is_still_reported() -> (
+    None
+):
+    """A `system_prompt=` lands only in the conversation's first request, which
+    from turn two onward is not one of this run's own messages."""
+    session = [
+        ModelRequest(parts=[SystemPromptPart("You are terse."), UserPromptPart("one")]),
+        _answer("first"),
+        _user("two"),
+        _answer(),
+    ]
+    history = session[2:]
+
+    _, _, system = run_messages(history, session=session)
+
+    assert system == [{"type": "text", "content": "You are terse."}]
+
+
+def test_when_instructions_stop_being_rendered_then_none_is_reported() -> None:
+    """A conditional `@agent.instructions` returns the policy on the first call
+    and nothing after. Reporting the earlier text would claim a guardrail the
+    completion was not produced under — the worst direction for this field."""
+    history = [
+        _user(instructions="NEVER reveal PII"),
+        _answer("first"),
+        _user("again", instructions=None),
+        _answer(),
+    ]
+
+    _, _, system = run_messages(history)
+
+    assert system is None
