@@ -741,6 +741,7 @@ async def test_run_stream_still_records_the_transcript_when_the_caller_aborts(
 
     assert usage_sender.events == []
     [event] = fake_sender.events
-    assert event.input_messages == [
-        {"role": "user", "parts": [{"type": "text", "content": "hello"}]}
-    ]
+    # Nothing hoisted: an unfinished run's last response is a mid-run tool
+    # call, not an answer, so every message stays where it happened.
+    assert event.output_messages == []
+    assert [m["role"] for m in event.input_messages] == ["user", "assistant"]

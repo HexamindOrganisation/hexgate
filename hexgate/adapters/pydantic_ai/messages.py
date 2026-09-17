@@ -156,13 +156,18 @@ def last_response(history: list[ModelMessage]) -> ModelResponse | None:
 
 
 def run_messages(
-    history: list[ModelMessage],
+    history: list[ModelMessage], *, completed: bool = True
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]] | None]:
     """A run's messages as ``(input, output, system_instructions)``.
 
     The completion is the last ``ModelResponse`` — see the module docstring;
-    everything else is input, in the order it happened. A run with no response
-    at all (a stream the caller aborted before the first token) has none.
+    everything else is input, in the order it happened.
+
+    ``completed=False`` says the run never produced an answer, so nothing is
+    hoisted: the last ``ModelResponse`` of a run cut short is a mid-run tool
+    call, and promoting it would claim the model answered with a tool call and
+    strand the matching tool return in the input without it. Every message
+    stays in ``input``, and an empty completion is the truthful record.
 
     System content is lifted out of the messages because the wire contract
     carries it in its own field: every ``SystemPromptPart``, plus the
@@ -171,7 +176,7 @@ def run_messages(
     ``@agent.instructions`` function returns a different string each step, and
     the last is the one the completion was produced under.
     """
-    completion = last_response(history)
+    completion = last_response(history) if completed else None
     system: list[dict[str, Any]] = []
     instructions: str | None = None
     input_messages: list[dict[str, Any]] = []

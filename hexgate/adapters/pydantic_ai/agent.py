@@ -91,19 +91,27 @@ class HexgatePydanticAgent:
     def _tag(method: str) -> str:
         return f"pydantic_ai.agent.{method}"
 
-    def _emit_run_events(self, result: Any, *, usage: bool = True) -> None:
-        """Transcript, and token usage when the run reported usable counts.
-        Called inside the bound scope, and both resolve the model through the
-        same ``_resolve_model``, so the two rows cannot disagree about it.
+    def _emit_run_events(self, result: Any, *, completed: bool = True) -> None:
+        """Transcript, and token usage when the run actually finished. Called
+        inside the bound scope, and both resolve the model through the same
+        ``_resolve_model``, so the two rows cannot disagree about it.
 
-        Only usage is gated on completion: pydantic_ai reports 0 tokens until a
-        run ends, but an aborted stream still holds the prompt that was sent —
-        and a run someone cut short is the one an incident review asks about.
-        The transcript goes first so a raise while reading usage cannot take it
+        ``completed`` gates them differently. Usage is dropped outright, since
+        pydantic_ai reports 0 tokens until a run ends. The transcript is still
+        emitted — a run someone cut short is the one an incident review asks
+        about — but records no completion, because the last response of an
+        unfinished run is a mid-run tool call rather than an answer. The
+        transcript goes first so a raise while reading usage cannot take it
         down too.
         """
-        emit_run_messages(self._agent_name, self._agent, result, api_key=self._api_key)
-        if usage:
+        emit_run_messages(
+            self._agent_name,
+            self._agent,
+            result,
+            api_key=self._api_key,
+            completed=completed,
+        )
+        if completed:
             emit_run_usage(self._agent_name, self._agent, result, api_key=self._api_key)
 
     async def run(
@@ -147,11 +155,11 @@ class HexgatePydanticAgent:
         async with self._abind(hexgate_context, "run_stream"):
             async with self._agent.run_stream(*args, **kwargs) as result:
                 yield result
-                # Usage only if the run completed: pydantic's counts are 0 until
-                # then, so a caller who cancels mid-response is billed by the
-                # provider for tokens we can never report. The transcript is not
-                # gated — see _emit_run_events.
-                self._emit_run_events(result, usage=result.is_complete)
+                # pydantic's counts are 0 until the run completes, so a
+                # caller who cancels mid-response is billed by the provider for
+                # tokens we can never report. The transcript still lands, minus
+                # its completion — see _emit_run_events.
+                self._emit_run_events(result, completed=result.is_complete)
 
     @asynccontextmanager
     async def iter(
@@ -166,7 +174,7 @@ class HexgatePydanticAgent:
         async with self._abind(hexgate_context, "iter"):
             async with self._agent.iter(*args, **kwargs) as run:
                 yield run
-                self._emit_run_events(run, usage=run.result is not None)
+                self._emit_run_events(run, completed=run.result is not None)
 
     def __getattr__(self, name: str) -> Any:
         """Delegate unknown attributes to the wrapped agent.

@@ -333,3 +333,20 @@ def test_when_tool_arguments_arrive_in_any_form_then_they_are_not_re_encoded(
     input_messages, _, _ = run_messages(history)
 
     assert input_messages[0]["parts"][0]["arguments"] == args
+
+
+def test_when_the_run_did_not_complete_then_nothing_is_hoisted() -> None:
+    """A stream aborted mid-run ends on a tool return, so its last response is
+    a tool call rather than an answer. Hoisting it would claim the model
+    answered with a tool call and strand the matching return in the input
+    without it."""
+    history = [
+        _user("weather?"),
+        ModelResponse(parts=[ToolCallPart("get_weather", {"city": "Paris"}, "c1")]),
+        ModelRequest(parts=[ToolReturnPart("get_weather", "sunny", "c1")]),
+    ]
+
+    input_messages, output, _ = run_messages(history, completed=False)
+
+    assert output == []
+    assert [m["role"] for m in input_messages] == ["user", "assistant", "tool"]

@@ -60,12 +60,19 @@ def emit_run_usage(agent_name: str, agent: Agent, result: Any, *, api_key: str) 
 
 
 def emit_run_messages(
-    agent_name: str, agent: Agent, result: Any, *, api_key: str
+    agent_name: str,
+    agent: Agent,
+    result: Any,
+    *,
+    api_key: str,
+    completed: bool = True,
 ) -> None:
     """Emit one LlmMessageEvent for a pydantic_ai run.
 
     One event at ``message_seq=0``: with no per-call hook there is no delta
-    within a run, so no cursor either.
+    within a run, so no cursor either. ``completed`` says the run produced an
+    answer; without it nothing is hoisted into the completion (see
+    ``run_messages``).
 
     ``new_messages()``, not ``all_messages()``: the latter replays everything a
     caller passed as ``message_history``, so an N-turn chat would store turn 1
@@ -79,7 +86,9 @@ def emit_run_messages(
     if not log_messages_enabled():
         return
     try:
-        input_messages, output, system = run_messages(result.new_messages())
+        input_messages, output, system = run_messages(
+            result.new_messages(), completed=completed
+        )
     except Exception:
         _log.exception("converting pydantic_ai messages raised; dropping this event")
         return
