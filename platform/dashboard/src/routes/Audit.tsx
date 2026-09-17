@@ -307,11 +307,7 @@ function DetailDrawer({
               rows={messagesQ.data?.rows ?? []}
               total={messagesQ.data?.total ?? 0}
               decisionOccurredAt={e.occurred_at}
-              partial={
-                !!messagesQ.data &&
-                messagesQ.data.offset + messagesQ.data.rows.length <
-                  messagesQ.data.total
-              }
+              offset={messagesQ.data?.offset ?? 0}
               scoped={scoped}
               isLoading={messagesQ.isPending && scoped}
               isError={messagesQ.isError}

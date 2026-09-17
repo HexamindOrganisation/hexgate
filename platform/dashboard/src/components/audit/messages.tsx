@@ -379,7 +379,7 @@ export function LlmMessagesSection({
   total,
   decisionOccurredAt,
   scoped,
-  partial,
+  offset,
   isLoading,
   isError,
 }: {
@@ -389,11 +389,14 @@ export function LlmMessagesSection({
   /** The decision carries a session id or a run id. Without either there is
    * no transcript to name, and the endpoint 422s by design. */
   scoped: boolean;
-  /** Rows exist after this window, so its last turn has a successor we did
-   * not fetch. The drawer's head-then-tail windowing normally lands on the
-   * transcript's true end and this is false; it can still be true if rows
-   * land between the two requests. */
-  partial: boolean;
+  /** Where these rows start in the transcript. A page is a window, and the
+   * window can miss the decision entirely — the client picks it by fetching
+   * the head and then the tail, which brackets a decision near either end of
+   * a long transcript and not one in the middle (see issue for the
+   * server-side fix). What this bounds is the claiming: outside the window
+   * the section knows nothing and must say so rather than report an absence
+   * it cannot see. */
+  offset: number;
   isLoading: boolean;
   isError: boolean;
 }) {
@@ -420,45 +423,74 @@ export function LlmMessagesSection({
     rows,
     decisionOccurredAt,
   );
-  // The anchor is only "the call that produced this decision" if we can see
-  // that nothing sits between it and the decision. At the far edge of a
-  // partial window we cannot, so the card says what it actually is — the
-  // last turn we have — rather than asserting an identity the page cannot
-  // establish.
-  // No `next` means the anchor is the window's last row.
-  const anchorAtEdge = partial && !next;
+  // What lies outside this window is unknown, and every claim below is
+  // limited by it: an absence inside the window is only an absence of the
+  // transcript when the window reaches that end of it.
+  const roomBefore = offset > 0;
+  const roomAfter = offset + rows.length < total;
+  // The anchor is only "the call that produced this decision" if nothing can
+  // sit between it and the decision. At the window's far edge something can,
+  // so the card says what it actually is — the last turn we have.
+  const anchorAtEdge = roomAfter && !next;
+  // No anchor, with turns we did not fetch before this window: the decision
+  // is earlier than everything loaded, so the turn that produced it is in
+  // that gap. Saying "nothing precedes it" would be a claim about rows the
+  // page never saw, and captioning the first row "what followed" would date
+  // a turn to the decision it may be far from.
+  const decisionBeforeWindow = !anchor && roomBefore;
 
   return (
     <CallSlots.Provider value={callSlots}>
       {total > rows.length && (
         <div className="mb-2 text-[11px] text-muted-foreground">
-          Showing {rows.length} of {total} turns.
+          Showing turns {offset + 1}–{offset + rows.length} of {total}.
         </div>
       )}
-      <CollapsedTurns turns={earlier} label="earlier turns" />
-      <div className="space-y-2">
-        {anchor ? (
-          <TurnCard
-            turn={anchor}
-            highlight
-            caption={anchorAtEdge ? "Last turn loaded" : "This call"}
-          />
-        ) : (
-          note("No message event precedes this decision.")
-        )}
-        {next ? (
-          <TurnCard turn={next} caption="What followed" />
-        ) : (
-          // Never "the run ended": the follow-up turn may simply not have
-          // landed yet — decisions and messages reach ClickHouse by
-          // different paths — or may sit outside this window.
-          note("No later turn recorded.")
-        )}
-      </div>
-      {later.length > 0 && (
-        <div className="mt-2">
-          <CollapsedTurns turns={later} label="later turns" />
-        </div>
+      {decisionBeforeWindow ? (
+        // Nothing here is anchored on the decision, so nothing here is
+        // captioned as though it were. The rows are still offered — they are
+        // part of the session — just not dressed as the exchange that caused
+        // this call.
+        <>
+          {note(
+            "This decision is earlier than every turn loaded here, so the " +
+              "turn that produced it is not in this window.",
+          )}
+          <div className="mt-2">
+            <CollapsedTurns
+              turns={[...(next ? [next] : []), ...later]}
+              label="turns loaded"
+            />
+          </div>
+        </>
+      ) : (
+        <>
+          <CollapsedTurns turns={earlier} label="earlier turns" />
+          <div className="space-y-2">
+            {anchor ? (
+              <TurnCard
+                turn={anchor}
+                highlight
+                caption={anchorAtEdge ? "Last turn loaded" : "This call"}
+              />
+            ) : (
+              note("No message event precedes this decision.")
+            )}
+            {next ? (
+              <TurnCard turn={next} caption="What followed" />
+            ) : (
+              // Never "the run ended": the follow-up turn may simply not have
+              // landed yet — decisions and messages reach ClickHouse by
+              // different paths — or may sit outside this window.
+              note("No later turn recorded.")
+            )}
+          </div>
+          {later.length > 0 && (
+            <div className="mt-2">
+              <CollapsedTurns turns={later} label="later turns" />
+            </div>
+          )}
+        </>
       )}
     </CallSlots.Provider>
   );

@@ -689,7 +689,48 @@ describe("AuditPage", () => {
     });
     // The anchor is the true last turn, not the head page's edge.
     expect(await screen.findByText("turn 59")).toBeInTheDocument();
-    expect(screen.getByText(/Showing 50 of 60 turns/)).toBeInTheDocument();
+    // The banner names WHICH window, not just how many rows: "50 of 60" left
+    // the reader unable to tell the head from the tail.
+    expect(screen.getByText(/Showing turns 11–60 of 60/)).toBeInTheDocument();
+  });
+
+  it("when the window misses the decision then it claims nothing", async () => {
+    // 150 minute-spaced turns; ROW's decision at 10:00Z falls around turn 60.
+    // The head (0-49) ends before it, so the client takes the tail (100-149),
+    // which is entirely AFTER it. Every turn shown is unrelated to this
+    // decision, and the section must say so rather than report an absence it
+    // cannot see.
+    messageRows = () =>
+      Array.from({ length: 150 }, (_, i) => ({
+        ...MESSAGES[0],
+        event_id: `long-${i}`,
+        occurred_at: new Date(Date.UTC(2026, 5, 1, 9, i)).toISOString(),
+        message_seq: i,
+        system_instructions: null as unknown,
+        output_messages: [
+          {
+            role: "assistant",
+            parts: [{ type: "text", content: `turn ${i}` }],
+          },
+        ],
+      }));
+    stubFetch();
+    const user = userEvent.setup();
+    renderWithProviders(<AuditPage />);
+
+    await openDrawer(user);
+    expect(
+      await screen.findByText(/earlier than every turn loaded/),
+    ).toBeInTheDocument();
+    // The two claims that would be false: 60 turns DO precede this decision,
+    // and turn 100 is not what followed it.
+    expect(
+      screen.queryByText("No message event precedes this decision."),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText("What followed")).not.toBeInTheDocument();
+    expect(screen.queryByText("This call")).not.toBeInTheDocument();
+    // The rows stay reachable, just not dressed as this decision's exchange.
+    expect(screen.getByText(/turns loaded/)).toBeInTheDocument();
   });
 
   it("never claims the run ended when no later turn is recorded", async () => {
