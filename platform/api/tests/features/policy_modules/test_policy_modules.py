@@ -1640,11 +1640,12 @@ async def test_seeded_compose_demo_resolves(session_factory) -> None:
             "caps/base/read_only.yaml",
             "caps/base/ingress.yaml",
             "caps/support/delegate.yaml",
-            "caps/billing/payments.yaml",
+            "caps/billing/invoicing.yaml",
         } <= names
 
-        # support_bot: the billing seat refunds directly up to the $1000 ceiling;
-        # the support seat can't refund itself but MUST delegate to billing_bot.
+        # support_bot has NO refund tool: the boundary declares refund_order (the
+        # $1000 org cap) but grants it to no seat, so it resolves deny for everyone.
+        # Refunds happen only inside billing_bot, reached via delegate_to_billing.
         ps = (
             await svc.compose_resolve(s, DEFAULT_PROJECT_ID, agent="support_bot")
         ).policy_set
@@ -1652,11 +1653,12 @@ async def test_seeded_compose_demo_resolves(session_factory) -> None:
         def mode(role, tool, **args):
             return ps.evaluate(role=role, tool=tool, args=args).outcome.value
 
-        assert mode("billing", "refund_order", amount=800, currency="USD") == "allow"
-        assert mode("billing", "refund_order", amount=2000, currency="USD") == "deny"
-        assert mode("billing", "delegate_to_billing") == "allow"
+        # No seat refunds directly — delegation is the only refund path.
+        assert mode("billing", "refund_order", amount=800, currency="USD") == "deny"
         assert mode("support", "refund_order", amount=10, currency="USD") == "deny"
-        assert mode("support", "delegate_to_billing") == "allow"  # its only path
+        assert mode("default", "refund_order", amount=10, currency="USD") == "deny"
+        assert mode("support", "delegate_to_billing") == "allow"  # the only path
+        assert mode("billing", "delegate_to_billing") == "allow"
         assert mode("default", "delegate_to_billing") == "deny"
 
         # Admission (ingress → agent.run): the support/billing seats may START
@@ -1665,22 +1667,11 @@ async def test_seeded_compose_demo_resolves(session_factory) -> None:
         assert mode("billing", "agent.run") == "allow"
         assert mode("default", "agent.run") == "deny"
 
-        # Delegation is gated by the delegate_to_billing TOOL (the served sub-agent
-        # surfaces as a tool call on the native adapter), not a compose reach — so
-        # the resolved policy carries no lowered agent.tool:billing_bot key.
+        # Delegation is gated by the delegate_to_billing TOOL (billing_bot runs
+        # in-kernel, surfacing as a tool call on the native adapter), not a compose
+        # reach — so the resolved policy carries no lowered agent.tool:billing_bot
+        # key, and billing_bot is not a compose agent at all (no direct access).
         assert "agent.tool:billing_bot" not in ps.policy_for("support").effective_tools
-
-        # billing_bot: only the billing seat is admitted to start it directly; the
-        # support seat delegates via the tool but can't start it head-on.
-        bs = (
-            await svc.compose_resolve(s, DEFAULT_PROJECT_ID, agent="billing_bot")
-        ).policy_set
-        assert bs.evaluate(role="billing", tool="agent.run", args={}).outcome.value == (
-            "allow"
-        )
-        assert bs.evaluate(role="support", tool="agent.run", args={}).outcome.value == (
-            "deny"
-        )
 
         # MCP tools (mcp-demo-*): a safe one is open to all, an invoice needs
         # approval for billing, and the secret-reader is denied outright.

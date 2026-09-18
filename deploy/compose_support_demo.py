@@ -2,18 +2,24 @@
 
 The interactive half of the compose showcase. You define a real front-line
 **support_bot** with a **billing_bot sub-agent** (reached as the
-`delegate_to_billing` tool), serve it to the dashboard from this notebook, and
-drive it in the Playground:
+`delegate_to_billing` tool) and serve it to the dashboard from this notebook.
+
+support_bot has **no refund tool** — refunds live only in billing_bot, reached by
+`delegate_to_billing`; the user never touches billing_bot directly. Drive it in
+the Playground:
 
   * as `default` — read-only and **not admitted to start the bot** (`agent.run`
-    is denied); even if it ran, `refund_order` and `delegate_to_billing` are both
-    denied, so nothing bills.
-  * as `support` — admitted to start the bot; the front-line seat *can't refund
-    itself*, but it MAY delegate: `refund_order` is denied while
-    `delegate_to_billing` runs billing_bot. Delegation to the sub-agent is the
-    only path to a refund.
-  * as `billing` — admitted to start either bot; the elevated seat refunds
-    directly, up to the boundary's $1000 ceiling (and may still delegate).
+    is denied); `delegate_to_billing` is denied too, so nothing bills.
+  * as `support` — admitted to start the bot; it delegates to billing_bot, which
+    refunds up to **$200** for this seat (a bigger amount is denied *inside* the
+    sub-agent). Delegation is the only refund path.
+  * as `billing` — admitted; delegates the same way, but billing_bot allows up to
+    the **$1000** org ceiling (and this seat may also queue invoices, approval-gated).
+
+What's shipped: an **agent-level block** on the first-level agent (support_bot) +
+a **global boundary** (the $1000 refund ceiling), with billing_bot **self-enforcing
+its own role-aware policy in-kernel**. Per-sub-agent *dashboard* policy is the
+sub-agent-registration series (PRs #233/#243/#244/#245), landing next.
 
 support_bot's role-aware policy is the **compose** policy authored as
 `policy.yaml` + capability files and seeded into the default (support-bot) project
@@ -55,17 +61,23 @@ def _(mo):
     mo.md("""
     # 🎧 Hexgate — a live support agent, gated by a *compose* policy
 
-    **support_bot** is your front-line agent. It looks up orders and, when a
-    refund is needed, **delegates to a `billing_bot` sub-agent** via
-    `delegate_to_billing`. Both are **policy-gated by role**: `default` isn't even
-    **admitted to start** the bot; the `support` seat starts it but *can't refund
-    itself* and **must delegate** to billing_bot; only the `billing` seat refunds
-    directly (up to a $1000 ceiling).
+    **support_bot** is your front-line agent — the only one you talk to. It looks
+    up orders and, when a refund is needed, **delegates to a `billing_bot`
+    sub-agent** via `delegate_to_billing`. support_bot has **no refund tool of its
+    own**: nobody refunds directly, and you have **no direct access to billing_bot**
+    — you must go through support_bot.
 
-    That policy is the compose `policy.yaml` (+ capability files) seeded into the
-    default project — the same one the dashboard's **Policies** editor
-    shows. Here you serve support_bot and test it in the **Playground**. Paste
-    your OpenAI key below (used only in this kernel).
+    This shows what's **shipped today**: an **agent-level policy block** on the
+    first-level agent + a **global boundary** (the org's $1000 refund ceiling),
+    while the `billing_bot` sub-agent **self-enforces its own role-aware policy
+    in-kernel**. `default` isn't even **admitted to start** the bot; `support` and
+    `billing` start it and delegate; billing_bot caps a `support` delegation at
+    **$200** and a `billing` one at **$1000**.
+
+    support_bot's policy is the compose `policy.yaml` (+ capability files) seeded
+    into the default project — the same one the dashboard's **Policies** editor
+    shows. Here you serve support_bot and test it in the **Playground**. Paste your
+    OpenAI key below (used only in this kernel).
     """)
     return
 
@@ -105,10 +117,11 @@ def _(Path, mo):
 @app.cell
 def _():
     # -- Tools + agents --------------------------------------------------------
-    # view_orders is a safe read (allowed for every role). refund_order and
-    # delegate_to_billing are gated by role: the default seat is denied both; the
-    # support seat may delegate (its only refund path) but not refund directly;
-    # only the billing seat refunds directly.
+    # view_orders is a safe read (allowed for every role). support_bot has NO
+    # refund_order tool — refunds happen only inside billing_bot, reached via the
+    # delegate_to_billing tool, which is gated by role: the default seat is denied
+    # (not even admitted to start the bot); support and billing may delegate, and
+    # billing_bot caps the refund by the caller's role ($200 vs $1000).
     from langchain_core.tools import tool
 
     from hexgate import create_agent
@@ -183,10 +196,11 @@ def _():
             f"card ending 4242."
         )
 
-    @tool
-    def refund_order(order_id: str, amount: float, currency: str = "USD") -> str:
-        """Refund a customer's order (billing seats only; capped by policy)."""
-        return f"(demo) refunded {amount:.2f} {currency} on order {order_id}."
+    # NOTE: support_bot has NO refund_order tool. Refunds live ONLY in the
+    # billing_bot sub-agent, reached via delegate_to_billing — no seat refunds
+    # directly. (The org boundary still declares a refund ceiling; see the policy
+    # cell. Once the sub-agent-registration series lands, billing_bot's own policy
+    # becomes dashboard-editable; today it self-enforces in-kernel.)
 
     # billing_bot is built on first delegation (after the key is set, since
     # create_agent instantiates ChatOpenAI eagerly) and cached here.
@@ -196,11 +210,12 @@ def _():
     async def delegate_to_billing(order_id: str, amount: float, reason: str) -> str:
         """Delegate a refund to the billing_bot sub-agent.
 
-        The support and billing seats may delegate (it's support's only path to a
-        refund); the default seat is denied by policy before this tool runs.
-        billing_bot is role-aware — the caller's role rides the context into the
-        nested run — so a support delegation is capped at $200 and a billing one
-        at the $1000 org ceiling. Delegation isn't an escape hatch.
+        support_bot cannot refund directly, so delegation is the ONLY refund path —
+        for every seat. The support and billing seats may delegate; the default
+        seat is denied by policy before this tool runs. billing_bot is role-aware —
+        the caller's role rides the context into the nested run — so a support
+        delegation is capped at $200 and a billing one at the $1000 org ceiling.
+        Delegation isn't an escape hatch: the sub-agent re-gates the refund.
         """
         if "agent" not in _billing:
             _billing["agent"] = build_billing()
@@ -223,7 +238,9 @@ def _():
     @tool("mcp-demo-compute_tip")
     def compute_tip(amount: float, percent: float = 18.0) -> str:
         """Compute the tip on a bill (MCP demo tool)."""
-        return f"(demo) tip on ${amount:.2f} at {percent}% = ${amount * percent / 100:.2f}"
+        return (
+            f"(demo) tip on ${amount:.2f} at {percent}% = ${amount * percent / 100:.2f}"
+        )
 
     @tool("mcp-demo-send_invoice")
     def send_invoice(order_id: str, amount: float) -> str:
@@ -237,7 +254,6 @@ def _():
 
     TOOLS = [
         view_orders,
-        refund_order,
         delegate_to_billing,
         compute_tip,
         send_invoice,
@@ -252,9 +268,9 @@ def _():
             tools=TOOLS,
             system_prompt=(
                 "You are a front-line customer support agent for an online store. "
-                "Help customers check order status with view_orders. For a refund, "
-                "either refund it directly with refund_order or delegate it to "
-                "billing with delegate_to_billing (order id, amount, reason)."
+                "Help customers check order status with view_orders. You CANNOT "
+                "refund directly — for a refund, delegate it to billing with "
+                "delegate_to_billing (order id, amount, reason)."
             ),
             name="support_bot",
         )
@@ -321,10 +337,13 @@ def _(mo):
     support_bot's role-aware policy is composed from `policy.yaml` + capability
     files by the compose front-end (the same pipeline as
     `hexgate policy resolve --file policy.yaml`), then served by the platform. An
-    `ingress` capability grants admission (who may start the bot), `delegate`
-    grants `delegate_to_billing`, and `payments` grants `refund_order`; each role
-    imports only the capabilities it should have. The table below resolves that
-    exact policy — it matches what the served agent enforces.
+    `ingress` capability grants admission (who may start the bot), `desk` grants
+    the support tools, `delegate` grants `delegate_to_billing`, and `invoicing`
+    grants the (approval-gated) invoice tool; each role imports only the
+    capabilities it should have. No role grants `refund_order` — the boundary
+    keeps it as the org ceiling, but the refund itself lives in billing_bot. The
+    table below resolves that exact policy — it matches what the served agent
+    enforces.
     """)
     return
 
@@ -343,7 +362,7 @@ def _(Path, mo, resolve_file):
             "    view_orders: { mode: allow }\n"
             "    send_email: { mode: allow }\n"
             "    escalate: { mode: allow }\n"
-            '    refund_order: { mode: allow, constraint: "args.amount <= 1000" }  # org hard cap\n'
+            '    refund_order: { mode: allow, constraint: "args.amount <= 1000" }  # global org cap — declared, but granted to NO support_bot seat: refunds happen only inside billing_bot\n'
             "    delegate_to_billing: { mode: allow }   # ceiling; a capability grant activates it\n"
             "    mcp-demo-compute_tip: { mode: allow }     # safe MCP tool\n"
             "    mcp-demo-send_invoice: { mode: allow }    # ceiling; billing grants w/ approval\n"
@@ -354,25 +373,19 @@ def _(Path, mo, resolve_file):
             "    roles:\n"
             "      # The default seat browses read-only data but may NOT start the bot (no ingress).\n"
             "      default: { import: [ caps/base/read_only.yaml ] }\n"
-            "      # The support seat starts the front-line bot; it can't refund itself, so it\n"
-            "      # MUST delegate to billing_bot.\n"
+            "      # The support seat starts the front-line bot and delegates refunds to\n"
+            "      # billing_bot (support_bot has no refund_order tool — nobody refunds direct).\n"
             "      support:\n"
             "        import:\n"
             "          [ caps/base/read_only.yaml, caps/base/ingress.yaml,\n"
             "            caps/support/desk.yaml, caps/support/delegate.yaml ]\n"
-            "      # The billing seat starts the bot, refunds directly, and may still delegate.\n"
+            "      # The billing seat additionally may queue invoices (approval); it still\n"
+            "      # refunds only by delegating — billing_bot caps its delegation higher.\n"
             "      billing:\n"
             "        import:\n"
             "          [ caps/base/read_only.yaml, caps/base/ingress.yaml,\n"
-            "            caps/support/desk.yaml, caps/billing/payments.yaml,\n"
-            "            caps/billing/invoicing.yaml, caps/support/delegate.yaml ]\n"
-            "  billing_bot:\n"
-            "    roles:\n"
-            "      # Only the billing seat may start the refunds specialist directly.\n"
-            "      billing:\n"
-            "        import:\n"
-            "          [ caps/base/ingress.yaml, caps/billing/payments.yaml,\n"
-            "            caps/billing/invoicing.yaml ]\n"
+            "            caps/support/desk.yaml, caps/billing/invoicing.yaml,\n"
+            "            caps/support/delegate.yaml ]\n"
         ),
         "caps/base/read_only.yaml": (
             "tools:\n  view_orders: { mode: allow }\n"
@@ -386,11 +399,6 @@ def _(Path, mo, resolve_file):
         ),
         "caps/support/delegate.yaml": (
             "tools:\n  delegate_to_billing: { mode: allow }\n"
-        ),
-        "caps/billing/payments.yaml": (
-            "tools:\n"
-            "  refund_order: { mode: allow, constraint: "
-            '\'args.currency in ["USD", "EUR"]\' }\n'
         ),
         "caps/billing/invoicing.yaml": (
             "mcp:\n  mcp-demo-send_invoice: { mode: approval_required }\n"
@@ -426,16 +434,20 @@ def _(Path, mo, resolve_file):
     mo.md(
         "**Resolved policy (what the served support_bot enforces)**\n\n"
         + "\n".join(_rows)
-        + "\n\n> `default` can browse but **can't start the bot** (no admission); "
-        "`support` starts it but can't refund directly — it **must "
-        "`delegate_to_billing`** (the sub-agent); `billing` starts it and refunds "
-        "directly up to the **$1000** ceiling. `billing_bot` is stricter still — "
-        "only the `billing` seat may start it directly (the `support` seat "
-        "delegates to it via the tool, but can't start it head-on). `billing_bot` "
-        "runs in-kernel and **enforces its own role-aware policy**: the caller's "
-        "role rides the context into the nested run, so a **support** delegation "
-        "is capped at **$200** and a **billing** one at **$1000** — delegation is "
-        "not an escape hatch."
+        + "\n\n> `default` can browse but **can't start the bot** (no admission). "
+        "**No seat refunds directly** — `refund_order` isn't a support_bot tool, and "
+        "the boundary declares it (the **$1000** org cap) but grants it to no seat, so "
+        "it resolves ❌ for everyone. Refunds happen **only inside billing_bot**, reached "
+        "by `delegate_to_billing` (which `support` and `billing` may call, `default` "
+        "may not). billing_bot runs **in-kernel** and enforces its **own** role-aware "
+        "policy: the caller's role rides the context into the nested run, so a "
+        "**support** delegation is capped at **$200** and a **billing** one at the "
+        "**$1000** org ceiling — delegation is not an escape hatch, and the user never "
+        "talks to billing_bot directly.\n\n"
+        "> This is what's **shipped today**: an agent-level block on the first-level "
+        "agent (support_bot) + a global boundary, with the sub-agent self-enforcing "
+        "in-kernel. Making billing_bot's policy dashboard-editable is the "
+        "sub-agent-registration series (PRs #233/#243/#244/#245), landing next."
     )
     return
 
@@ -458,15 +470,17 @@ def _(Path, mo):
             "In the Playground:\n\n"
             "1. Under **Acting as**, pick a role.\n"
             '2. Ask: *"Please refund order A-1001 for $40, it arrived damaged."*\n'
-            "3. As `default` → `refund_order` and `delegate_to_billing` are both "
-            "**denied** in the Decisions sidebar; nothing bills.\n"
-            "4. As `support` → the direct `refund_order` is **denied**, but "
-            "`delegate_to_billing` is **allowed** and runs the billing_bot sub-agent — "
-            "delegation is the only way to refund from this seat.\n"
-            "5. As `billing` → the refund is **allowed** directly (under $1000).\n"
+            "3. As `default` → `delegate_to_billing` is **denied** in the Decisions "
+            "sidebar (the seat isn't even admitted to start the bot); nothing bills.\n"
+            "4. As `support` → `delegate_to_billing` is **allowed** and runs the "
+            "billing_bot sub-agent, which refunds the $40 — delegation is the only "
+            "refund path. Now ask for **$500**: billing_bot **denies** it (a support "
+            "delegation is capped at $200), so the escalated amount doesn't bill.\n"
+            "5. As `billing` → the same delegation refunds up to **$1000** — the $500 "
+            "now goes through.\n"
             "6. Edit `policy.yaml` (or a `caps/…` file) in the **Policies** tab — the "
             "next message picks it up. The **Graph** tab shows support_bot's "
-            "`delegate_to_billing` tool and each seat's admission edges to the bots."
+            "`delegate_to_billing` tool and each seat's admission edge to support_bot."
         )
     else:
         _out = mo.callout(

@@ -2,12 +2,12 @@
 
 Writes the demo's `policy.yaml` + capability files into the default project's
 `policy_file` store, so the dashboard's **Policies** editor opens on a real
-multi-module compose policy — a front-line ``support_bot`` and a refunds
-specialist ``billing_bot``, with tool permissions and role→agent admission (who
-may start each bot) composed from the same imported capabilities. The support
-seat can't refund itself, so it delegates to billing_bot via the gated
-``delegate_to_billing`` tool. The same scenario runs locally in
-``deploy/compose_support_demo.py``.
+multi-module compose policy — a front-line ``support_bot`` with role→agent
+admission (who may start it) and tool permissions composed from imported
+capabilities. support_bot has no refund tool: no seat refunds directly, so every
+refund goes through the in-kernel ``billing_bot`` sub-agent via the gated
+``delegate_to_billing`` tool (the user has no direct access to billing_bot). The
+same scenario runs locally in ``deploy/compose_support_demo.py``.
 
 Direct row inserts (not the write-time flip/recompile path), so seeding is a
 pure store fixture — idempotent per ``(project_id, name)``.
@@ -22,7 +22,7 @@ from hexgate_api.core.ids import new_id
 from hexgate_api.features.policy_modules.service import _content_hash
 from hexgate_api.models import PolicyFile
 
-# The entry file: a closed-world boundary + two agents whose roles import the
+# The entry file: a closed-world boundary + support_bot, whose roles import the
 # capability files below (organized into caps/base, caps/support, caps/billing).
 # Kept textually in sync with the marimo demo.
 _ENTRY = """\
@@ -31,7 +31,7 @@ boundary:
     view_orders: { mode: allow }
     send_email: { mode: allow }
     escalate: { mode: allow }
-    refund_order: { mode: allow, constraint: "args.amount <= 1000" }  # org hard cap
+    refund_order: { mode: allow, constraint: "args.amount <= 1000" }  # global org cap — declared, but granted to NO support_bot seat: refunds happen only inside billing_bot
     delegate_to_billing: { mode: allow }   # ceiling; a capability grant activates it
     mcp-demo-compute_tip: { mode: allow }     # safe MCP tool
     mcp-demo-send_invoice: { mode: allow }    # ceiling; billing grants w/ approval
@@ -42,25 +42,19 @@ agents:
     roles:
       # The default seat browses read-only data but may NOT start the bot (no ingress).
       default: { import: [ caps/base/read_only.yaml ] }
-      # The support seat starts the front-line bot; it can't refund itself, so it
-      # MUST delegate to billing_bot.
+      # The support seat starts the front-line bot and delegates refunds to
+      # billing_bot (support_bot has no refund_order tool — nobody refunds direct).
       support:
         import:
           [ caps/base/read_only.yaml, caps/base/ingress.yaml,
             caps/support/desk.yaml, caps/support/delegate.yaml ]
-      # The billing seat starts the bot, refunds directly, and may still delegate.
+      # The billing seat additionally may queue invoices (approval); it still
+      # refunds only by delegating — billing_bot caps its delegation higher.
       billing:
         import:
           [ caps/base/read_only.yaml, caps/base/ingress.yaml,
-            caps/support/desk.yaml, caps/billing/payments.yaml,
-            caps/billing/invoicing.yaml, caps/support/delegate.yaml ]
-  billing_bot:
-    roles:
-      # Only the billing seat may start the refunds specialist directly.
-      billing:
-        import:
-          [ caps/base/ingress.yaml, caps/billing/payments.yaml,
-            caps/billing/invoicing.yaml ]
+            caps/support/desk.yaml, caps/billing/invoicing.yaml,
+            caps/support/delegate.yaml ]
 """
 
 # Leaf capability files (grant-only), imported by the roles above.
@@ -82,11 +76,6 @@ _CAPS = {
     # support seat imports this but NOT payments, so delegation is its only path
     # to a refund.
     "caps/support/delegate.yaml": ("tools:\n  delegate_to_billing: { mode: allow }\n"),
-    "caps/billing/payments.yaml": (
-        "tools:\n"
-        "  refund_order: { mode: allow, constraint: "
-        '\'args.currency in ["USD", "EUR"]\' }\n'
-    ),
     "caps/billing/invoicing.yaml": (
         "mcp:\n  mcp-demo-send_invoice: { mode: approval_required }\n"
     ),
