@@ -650,6 +650,25 @@ def add_parser(subparsers: argparse._SubParsersAction) -> None:
             "deployments where registration is a separate step."
         ),
     )
+    parser.add_argument(
+        "--register-subagents",
+        dest="register_subagents",
+        action="store_true",
+        help=(
+            "At startup also register the agent's sub-agents (each its own agent, "
+            "with a starter policy the platform mints). Off by default."
+        ),
+    )
+    parser.add_argument(
+        "--register-subagents-force",
+        dest="register_subagents_force",
+        action="store_true",
+        help=(
+            "With --register-subagents, proceed past a name collision in the tree "
+            "(two different agents sharing a name) by keeping the first-seen one, "
+            "instead of aborting startup. Same as `hexgate register --force`."
+        ),
+    )
     parser.set_defaults(func=main)
 
 
@@ -683,6 +702,10 @@ def main(args: argparse.Namespace) -> int:
             description=args.description,
             approval_handler=approval_handler,
             auto_register=not args.no_auto_register,
+            auto_register_subagents=getattr(args, "register_subagents", False),
+            auto_register_subagents_force=getattr(
+                args, "register_subagents_force", False
+            ),
             console=console,
         )
     except HexgateError as exc:
