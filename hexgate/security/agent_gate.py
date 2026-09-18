@@ -77,26 +77,63 @@ def warn_if_admission_unenforced(
 
 
 def warn_if_reach_unenforced(
-    engine: PolicyEngine, *, framework: str, agent_name: str
+    engine: PolicyEngine,
+    *,
+    framework: str,
+    agent_name: str,
+    handoff_targets: list[str] | None = None,
+    tool_targets: list[str] | None = None,
 ) -> None:
     """Warn once when a policy declares reach on an adapter that can't enforce it.
 
     Reach (``agent.handoff:`` / ``agent.tool:``) is enforced only where the
     framework exposes a target-agent handle at the seam (OpenAI handoffs, Google
-    sub-agents/AgentTool). On adapters that hide the target (pydantic_ai delegation
-    inside a tool body, the native single-graph agent), a declared reach block is a
-    silent no-op, so surface it loudly. No-op when no reach is declared."""
+    sub-agents/AgentTool) or, on native, where a ``child.as_tool()`` edge is mounted
+    for the ``via: tool`` target. On adapters that hide the target (pydantic_ai
+    delegation inside a tool body, a raw single-graph agent), a declared reach block
+    is a silent no-op, so surface it loudly. No-op when no reach is declared.
+
+    When the caller can name the *uncovered* reach (the native construct path),
+    ``handoff_targets`` / ``tool_targets`` make the warning **via-specific** — a
+    declared ``agent.handoff:*`` has no native seam, while a declared ``agent.tool:*``
+    without a mounted edge is unenforced — instead of the generic message."""
     if not engine.declares_reach():
         return
-    if not _mark_warned(_reach_unenforced_warned, framework, agent_name):
+    if handoff_targets is None and tool_targets is None:
+        # Generic mode: the caller has no via detail to name.
+        if _mark_warned(_reach_unenforced_warned, framework, agent_name):
+            _log.warning(
+                "policy for agent %r declares agent reach ('agents' block), but reach "
+                "is not enforced on the %s adapter yet (it exposes no target-agent "
+                "handle at the handoff/delegation seam); handoffs will proceed without "
+                "a reach check.",
+                agent_name,
+                framework,
+            )
         return
-    _log.warning(
-        "policy for agent %r declares agent reach ('agents' block), but reach is not "
-        "enforced on the %s adapter yet (it exposes no target-agent handle at the "
-        "handoff/delegation seam); handoffs will proceed without a reach check.",
-        agent_name,
-        framework,
-    )
+    # Via-specific mode: name only the genuinely-uncovered targets. Both empty (a
+    # fully-covered config) ⇒ no-op — and don't burn the once-per-agent warn slot,
+    # so a later real gap still surfaces.
+    parts: list[str] = []
+    if handoff_targets:
+        parts.append(
+            f"handoff reach to {handoff_targets!r} has no seam on the {framework} "
+            "adapter (agent-as-tool only)"
+        )
+    if tool_targets:
+        parts.append(
+            f"agent-as-tool reach to {tool_targets!r} is declared but not mounted via "
+            "child.as_tool()"
+        )
+    if not parts:
+        return
+    if _mark_warned(_reach_unenforced_warned, framework, agent_name):
+        _log.warning(
+            "policy for agent %r declares reach that is not enforced: %s; those "
+            "delegations will proceed without a reach check.",
+            agent_name,
+            "; ".join(parts),
+        )
 
 
 def warn_if_tool_reach_unenforced(

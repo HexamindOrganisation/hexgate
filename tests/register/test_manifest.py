@@ -401,3 +401,62 @@ def test_pydantic_ai_manifest_static_prompts():
     manifest = create_pydantic_ai_manifest(agent)
     assert manifest.system_prompt == "part one\n\npart two"
     assert manifest.model == "test"
+
+
+# --- sub-agent refs (PR 3) -------------------------------------------------
+
+
+def _graph(name: str):
+    from langgraph.graph import END, START, StateGraph
+
+    builder = StateGraph(dict)
+    builder.add_node("noop", lambda state: state)
+    builder.add_edge(START, "noop")
+    builder.add_edge("noop", END)
+    return builder.compile(name=name)
+
+
+def test_manifest_subagents_default_none_and_hash_stable():
+    """No sub-agents → subagents is None and excluded from the canonical dump, so
+    an agent without sub-agents hashes exactly as before this field existed."""
+    manifest = AgentManifest(name="a", framework=AgentFramework.HEXGATE, tools=[])
+    assert manifest.subagents is None
+    assert "subagents" not in manifest.model_dump(mode="json", exclude_none=True)
+
+
+def test_create_manifest_populates_subagents_native():
+    """A native HexgateAgent's mounted agent-as-tool edges become manifest.subagents."""
+    from hexgate.adapters.langchain.tools import SubagentTool
+    from hexgate.agents.factory import HexgateAgent
+    from hexgate.manifest.models import SubagentRef
+
+    child = type("Child", (), {"name": "billing_bot"})()
+    agent = HexgateAgent(
+        graph=_graph("support_bot"),
+        model="m",
+        tools=[
+            SubagentTool(
+                name="delegate_to_billing_bot",
+                description="d",
+                child=child,
+                target_name="billing_bot",
+            )
+        ],
+        system_prompt=None,
+        name="support_bot",
+    )
+    manifest = create_manifest(agent)
+    assert manifest.subagents == [SubagentRef(name="billing_bot", via="tool")]
+    # And it now participates in the canonical dump (hash covers it).
+    assert "subagents" in manifest.model_dump(mode="json", exclude_none=True)
+
+
+def test_create_manifest_populates_subagents_openai_handoff():
+    """OpenAI handoffs surface as via='handoff' refs through create_manifest."""
+    from agents import Agent
+
+    from hexgate.manifest.models import SubagentRef
+
+    agent = Agent(name="parent", handoffs=[Agent(name="billing_bot")])
+    manifest = create_manifest(agent)
+    assert manifest.subagents == [SubagentRef(name="billing_bot", via="handoff")]
