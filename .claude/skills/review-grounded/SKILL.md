@@ -288,11 +288,19 @@ bash "${CLAUDE_REVIEW_HOOK:-$HOME/.claude/hooks/require-review.sh}" --certify
 ```
 
 That same script, as a `PreToolUse` hook on `Bash`, blocks `git commit` and
-`git push` while the marker does not match the tree — tracked edits *and*
-untracked files, so a new module under review counts. Skipping this step does
-not quietly ship; it stops the next commit. Run it only for a review you carried
-to completion: certifying a tree you did not review is forging your own sign-off,
-and `NO_REVIEW=1` is the honest way past a commit that needs no review.
+`git push` while the marker does not match. It fingerprints the *content that
+will ship* — every path differing from the merge base with upstream, plus
+untracked files, each by its bytes — so committing and `git add` do not
+invalidate a review, while any real edit does. Skipping this step does not
+quietly ship; it stops the next commit. Run it only for a review you carried to
+completion: certifying a tree you did not review is forging your own sign-off,
+and starting the command with `NO_REVIEW=1` is the honest way past a commit that
+needs no review.
+
+It catches the shapes a person types, not every shape a shell allows — a command
+line cannot be soundly parsed by a regex, so `bash -c "git commit"` and shell
+aliases pass. That is a missed reminder, not a hole: the gate guards against
+forgetting, not against someone evading it.
 
 ## 7. Fixes are diffs
 
