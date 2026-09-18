@@ -140,9 +140,11 @@ jobs:
 
   platform-api-postgres:
     # The platform-api job runs the whole suite on SQLite, never exercising
-    # asyncpg. This job sets DATABASE_URL and runs only the opt-in smoke test
-    # — the sole coverage that the schema builds on Postgres.
-    name: Platform API (Postgres smoke)
+    # asyncpg. This job sets DATABASE_URL and runs the opt-in Postgres tests:
+    # the schema-builds smoke test, and the migration tests that EXECUTE
+    # platform/{postgres,clickhouse}/migrations rather than pattern-matching
+    # them. Nothing else in CI runs a migration file.
+    name: Platform API (migration execution)
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -156,8 +158,27 @@ jobs:
         options: >-
           --health-cmd "pg_isready -U hexgate -d hexgate"
           --health-interval 5s --health-timeout 3s --health-retries 10
+      # The migration tests build scratch databases here, so this store gets the
+      # same replay/equivalence/idempotency coverage as Postgres. clickhouse/0003
+      # is the migration that took both stages down.
+      clickhouse:
+        image: clickhouse/clickhouse-server:24.10
+        env:
+          CLICKHOUSE_DB: hexgate_audit
+          CLICKHOUSE_USER: hexgate
+          CLICKHOUSE_PASSWORD: ci
+          CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+        ports:
+          - "8123:8123"
+        options: >-
+          --health-cmd "wget --no-verbose --tries=1 --spider http://localhost:8123/ping"
+          --health-interval 5s --health-timeout 3s --health-retries 10
     env:
       DATABASE_URL: postgresql+asyncpg://hexgate:ci@localhost:5432/hexgate
+      HEXGATE_CLICKHOUSE_HOST: localhost
+      HEXGATE_CLICKHOUSE_PORT: "8123"
+      HEXGATE_CLICKHOUSE_USER: hexgate
+      HEXGATE_CLICKHOUSE_PASSWORD: ci
     steps:
       - uses: actions/checkout@v4
 
@@ -173,8 +194,20 @@ jobs:
       - name: Sync platform-api deps
         run: cd platform/api && uv sync --group dev
 
-      - name: Postgres smoke test
-        run: cd platform/api && uv run pytest tests/core/test_postgres_smoke.py -v
+      - name: Postgres smoke + migration execution tests
+        run: |
+          cd platform/api && uv run pytest \
+            tests/core/test_postgres_smoke.py \
+            tests/core/test_migrations.py -v
+
+      # The ClickHouse half is marked `integration` (it creates and drops
+      # scratch databases), so conftest skips it above. Scoped to this file so
+      # the rest of the integration suite -- which wants a seeded schema this
+      # job does not build -- stays out.
+      - name: ClickHouse migration execution tests
+        run: |
+          cd platform/api && uv run pytest \
+            tests/core/test_migrations.py -m integration -v
 
   dashboard:
     name: Dashboard
