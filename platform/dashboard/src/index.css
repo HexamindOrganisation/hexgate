@@ -294,3 +294,131 @@
 .react-flow__controls-button:hover svg {
   fill: hsl(var(--foreground));
 }
+
+/* ── Playground: agentic thinking + motion ──────────────────────────────────
+   The "goo" metaball loader (three dots that fuse into a liquid blob via the
+   #pg-goo SVG filter), a shimmering status label, and a blinking stream caret.
+   Ported from the hexkit agent UI, retargeted to this app's theme tokens. */
+.pg-goo {
+  position: relative;
+  width: 52px;
+  height: 24px;
+  overflow: visible;
+  filter: url(#pg-goo);
+}
+.pg-goo span {
+  position: absolute;
+  top: 5px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: hsl(var(--primary));
+}
+.pg-goo .d1 {
+  left: 0;
+  animation: pg-goo-a 1.7s ease-in-out infinite;
+}
+.pg-goo .d2 {
+  left: 19px;
+  animation: pg-goo-b 1.7s ease-in-out infinite;
+}
+.pg-goo .d3 {
+  left: 38px;
+  animation: pg-goo-c 1.7s ease-in-out infinite;
+}
+@keyframes pg-goo-a {
+  0%,
+  100% {
+    transform: translateX(0) scale(0.88);
+  }
+  50% {
+    transform: translateX(19px) scale(1.12);
+  }
+}
+@keyframes pg-goo-b {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.32);
+  }
+}
+@keyframes pg-goo-c {
+  0%,
+  100% {
+    transform: translateX(0) scale(0.88);
+  }
+  50% {
+    transform: translateX(-19px) scale(1.12);
+  }
+}
+
+.pg-shimmer {
+  background: linear-gradient(
+    90deg,
+    hsl(var(--muted-foreground) / 0.45) 0%,
+    hsl(var(--foreground)) 50%,
+    hsl(var(--muted-foreground) / 0.45) 100%
+  );
+  background-size: 220% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: pg-shimmer 1.6s linear infinite;
+}
+@keyframes pg-shimmer {
+  from {
+    background-position: 120% 0;
+  }
+  to {
+    background-position: -120% 0;
+  }
+}
+
+.pg-caret {
+  display: inline-block;
+  width: 7px;
+  height: 1.05em;
+  margin-left: 3px;
+  vertical-align: -2px;
+  border-radius: 1px;
+  background: hsl(var(--primary));
+  animation: pg-blink 1.05s steps(2, jump-none) infinite;
+}
+@keyframes pg-blink {
+  0%,
+  50% {
+    opacity: 1;
+  }
+  51%,
+  100% {
+    opacity: 0;
+  }
+}
+
+/* A message settling into place: fade + a small rise. */
+.pg-enter {
+  animation: pg-enter 0.28s cubic-bezier(0.22, 1, 0.36, 1);
+}
+@keyframes pg-enter {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pg-goo .d1,
+  .pg-goo .d2,
+  .pg-goo .d3,
+  .pg-caret,
+  .pg-shimmer,
+  .pg-enter {
+    animation: none;
+  }
+}
