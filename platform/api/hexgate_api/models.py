@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Optional
 
 from sqlalchemy import JSON, Column, DateTime, ForeignKey, LargeBinary, String
@@ -513,3 +513,59 @@ class PolicyFile(SQLModel, table=True):
         default_factory=utcnow, sa_type=DateTime(timezone=True)
     )
     updated_by_user_id: Optional[str] = Field(default=None, sa_column=actor_fk_column())
+
+
+# ---------------------------------------------------------------------------
+# AI Act classification — the operator's own assertion about an agent, kept
+# apart from ``Agent`` on purpose:
+# ``Agent`` is what the agent is and enforces, written by the policy author and
+# read on every bundle fetch; a classification is a different person's
+# statement about the system, on a different cadence, needing its own
+# provenance (``Agent.updated_at`` moves on every policy save). "Incomplete"
+# then reads as *no row* rather than nine nullable columns on the hot table.
+# ---------------------------------------------------------------------------
+
+
+class AgentClassification(SQLModel, table=True):
+    """One operator-recorded AI Act entry for an agent.
+
+    Every descriptive column is nullable: an operator can save a partial entry
+    and come back to it, and the report lists such an agent as *incomplete*
+    rather than omitting it. The platform records the assertion and judges
+    nothing about it — no check that a risk tier fits the agent's tool set.
+    """
+
+    __tablename__ = "agent_classification"
+    __table_args__ = (UniqueConstraint("agent_id", name="uq_agent_classification"),)
+
+    id: str = Field(primary_key=True)  # new_id(AgentClassification) -> "acl_…"
+    # Unique: one current entry per agent. History is not kept in v0 — the
+    # entry carries who recorded the latest assertion and when. No ``index=True``
+    # — the unique constraint already indexes this single column (unlike
+    # ``AgentVersion``, whose constraints are composite).
+    agent_id: str = Field(foreign_key="agent.id")
+    intended_purpose: Optional[str] = None  # Art. 3(12)
+    operator_role: Optional[str] = None  # "provider" | "deployer"
+    # "high_risk" | "not_high_risk" | "prohibited" | "minimal"
+    risk_tier: Optional[str] = None
+    annex_iii_point: Optional[str] = None  # e.g. "5(b)"; null when not high risk
+    oversight_owner_name: Optional[str] = None  # Art. 26(2) named person
+    oversight_owner_contact: Optional[str] = None
+    # Revision of the compliance checker the operator relied on — Art. 6(4)
+    # wants a documented assessment with a name and a date attached.
+    checker_last_update_date: Optional[date] = None
+    # Not nullable, and not one of the display-only ``actor_fk_column()``
+    # columns: an assertion with no asserter is not an assertion, and a silent
+    # NULL would quietly strip the Art. 6(4) "who assessed this" from the
+    # report. The cost is real and deliberate: ``DELETE /v1/users/{id}``
+    # (FastAPI Users, mounted in features/auth/router.py) fails with an FK
+    # violation while any of that operator's entries survive. Deleting an
+    # operator has to decide what becomes of their assessments; NO ACTION makes
+    # that decision explicit rather than losing the name on the way out.
+    #
+    # Rewritten on every PUT, so it names the LATEST recorder, not the creator
+    # — v0 keeps no history (see the class docstring).
+    recorded_by_user_id: str = Field(foreign_key="user.id", index=True)
+    recorded_at: datetime = Field(
+        default_factory=utcnow, sa_type=DateTime(timezone=True)
+    )

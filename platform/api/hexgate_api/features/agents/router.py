@@ -14,8 +14,10 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from hexgate_api.core.db import get_session
 from hexgate_api.deps.org import require_org_member
 from hexgate_api.deps.tokens import TokenActor, require_project, require_project_actor
-from hexgate_api.models import Agent, AgentVersion, User
+from hexgate_api.models import Agent, AgentClassification, AgentVersion, User
 from hexgate_api.schemas import (
+    AgentClassificationRead,
+    AgentClassificationWrite,
     AgentManifest,
     AgentManifestView,
     AgentRead,
@@ -28,10 +30,14 @@ from hexgate_api.schemas import (
 )
 from hexgate_api.features.agents.service import (
     get_agent,
+    get_classification,
     get_latest_agent_versions_map,
     list_agents,
+    manifest_intended_purpose,
+    missing_fields,
     register_manifest,
     update_agent,
+    upsert_classification,
 )
 from hexgate_api.seeds.defaults import ensure_default_project
 
@@ -209,6 +215,120 @@ async def api_update_agent(
     if agent is None:
         raise HTTPException(status_code=404, detail="agent not found")
     return _agent_read(agent)
+
+
+# ---------------------------------------------------------------------------
+# AI Act classification — the operator's own entry for an agent. Same
+# cookie-authed org gate as the sibling agent routes; no bearer/SDK
+# counterpart, because nothing in the enforcement path reads this.
+# ---------------------------------------------------------------------------
+
+
+def _classification_read(
+    *,
+    agent_name: str,
+    entry: AgentClassification | None,
+    prefilled_purpose: str | None = None,
+) -> AgentClassificationRead:
+    """Serialise an entry — or the empty entry when the operator has none.
+
+    ``prefilled_purpose`` is used only when there is no entry at all. Once an
+    entry exists, every value in the response is one the operator recorded:
+    filling a null purpose on a recorded entry would put the SDK manifest's
+    developer-written blurb on screen under ``recorded: true``, and the next
+    Save would stamp it as that operator's Art. 3(12) assertion.
+    """
+    missing = missing_fields(entry)
+    if entry is None:
+        return AgentClassificationRead(
+            agent_name=agent_name,
+            intended_purpose=prefilled_purpose,
+            recorded=False,
+            complete=False,
+            missing_fields=missing,
+        )
+    return AgentClassificationRead(
+        agent_name=agent_name,
+        intended_purpose=entry.intended_purpose,
+        operator_role=entry.operator_role,
+        risk_tier=entry.risk_tier,
+        annex_iii_point=entry.annex_iii_point,
+        oversight_owner_name=entry.oversight_owner_name,
+        oversight_owner_contact=entry.oversight_owner_contact,
+        checker_last_update_date=entry.checker_last_update_date,
+        recorded=True,
+        recorded_by_user_id=entry.recorded_by_user_id,
+        recorded_at=entry.recorded_at,
+        complete=not missing,
+        missing_fields=missing,
+    )
+
+
+@router.get(
+    "/projects/{project_id}/agents/{name}/classification",
+    response_model=AgentClassificationRead,
+    dependencies=[Depends(require_org_member)],
+    tags=["ai-act"],
+)
+async def api_get_agent_classification(
+    project_id: str,
+    name: str,
+    session: AsyncSession = Depends(get_session),
+) -> AgentClassificationRead:
+    """Read an agent's AI Act entry, or an empty one when none is recorded.
+
+    200 with ``recorded=false`` rather than 404: the dashboard's form needs
+    something to open on, and "no entry yet" is a normal state the report
+    reports (as *incomplete*) rather than an error. On that empty entry only,
+    ``intended_purpose`` is prefilled from the registered manifest's
+    description — a suggestion, stored only once the operator PUTs it.
+    """
+    await ensure_default_project(session)
+    agent = await get_agent(session, project_id, name)
+    if agent is None:
+        raise HTTPException(status_code=404, detail="agent not found")
+
+    entry = await get_classification(session, agent.id)
+    prefill = await manifest_intended_purpose(session, agent) if entry is None else None
+    # ``name``, not ``agent.name``: the path parameter is what ``get_agent``
+    # matched on, so the two are the same string. Belt-and-braces, not the fix
+    # — the savepoint in ``upsert_classification`` is what keeps the ORM
+    # instance loaded; this just removes the response's dependence on it.
+    return _classification_read(agent_name=name, entry=entry, prefilled_purpose=prefill)
+
+
+@router.put(
+    "/projects/{project_id}/agents/{name}/classification",
+    response_model=AgentClassificationRead,
+    tags=["ai-act"],
+)
+async def api_put_agent_classification(
+    project_id: str,
+    name: str,
+    body: AgentClassificationWrite,
+    # Out of the decorator and into a parameter so the gate's ``User`` can be
+    # stamped as the recorder — the shape the other authoring routes use.
+    user: User = Depends(require_org_member),
+    session: AsyncSession = Depends(get_session),
+) -> AgentClassificationRead:
+    """Record the operator's entry for an agent, replacing any previous one.
+
+    The platform stores what the operator asserts and says nothing about it:
+    a tier that looks inconsistent with the agent's tools is recorded as
+    given, and a partial entry is accepted and reported as incomplete.
+    """
+    await ensure_default_project(session)
+    agent = await get_agent(session, project_id, name)
+    if agent is None:
+        raise HTTPException(status_code=404, detail="agent not found")
+
+    entry = await upsert_classification(
+        session,
+        agent_id=agent.id,
+        recorded_by_user_id=user.id,
+        values=body,
+    )
+    return _classification_read(agent_name=name, entry=entry)
 
 
 @router.post(
