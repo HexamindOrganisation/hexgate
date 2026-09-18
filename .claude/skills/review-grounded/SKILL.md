@@ -280,6 +280,20 @@ and wait. Do not fix, commit, or open issues unless asked.
 If nothing survives the gate, say that in one line and list what you checked.
 That is a real outcome, not a failure to find something.
 
+**Then certify the diff, as the last thing you do.** A review is about one state
+of the tree, so record which one:
+
+```bash
+bash "${CLAUDE_REVIEW_HOOK:-$HOME/.claude/hooks/require-review.sh}" --certify
+```
+
+That same script, as a `PreToolUse` hook on `Bash`, blocks `git commit` and
+`git push` while the marker does not match the tree — tracked edits *and*
+untracked files, so a new module under review counts. Skipping this step does
+not quietly ship; it stops the next commit. Run it only for a review you carried
+to completion: certifying a tree you did not review is forging your own sign-off,
+and `NO_REVIEW=1` is the honest way past a commit that needs no review.
+
 ## 7. Fixes are diffs
 
 When you are asked to apply the findings — or when you reviewed your own work and
@@ -293,7 +307,12 @@ finding happened to name. A lens hands you one framing of a problem; the fix is
 owed to the problem, and a fix verified against the framing leaves the rest of it
 in place.
 
-Then re-run section 4 over the fix itself. A fix changes behaviour, so it can
+Then re-enter at **section 3** with fresh lenses over what the fix changed, and
+run section 4 on what they find. Re-reading your own fix is not the same pass:
+the lenses are what caught the first problem, and the fix is the code least
+likely to survive them. Applying findings invalidates the certificate above, so
+the next commit is blocked until that pass has run — which is the point, because
+this is the step that gets skipped. A fix changes behaviour, so it can
 create a finding: a guard applied to one emit and not its sibling, a cap on the
 half of the state that drains itself, a new early return that silently drops
 what the old code recorded. The code around a real finding is where the next one
