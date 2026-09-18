@@ -130,11 +130,14 @@ def output_messages(output: list[Any]) -> list[dict[str, Any]]:
     Reasoning items are dropped (issue #221). They are genuinely part of the
     completion, so the natural place for them is here — but every part of this
     message shares one ``MAX_OUTPUT_MESSAGES_BYTES`` budget, and that 8 KiB was
-    sized for a text answer before anything captured reasoning. Reasoning leads
-    the Responses API's output and head+tail truncation favours the head, so a
-    long chain of thought is cut out of the *answer*, not out of itself: the
-    field the auditor needs loses room to the field nobody asked for. Dropping
-    is the reversible half of that trade — the completion keeps its budget, and
+    sized for a text answer before anything captured reasoning.
+    ``cap_json_head_tail`` levels every oversized leaf to one common ceiling, so
+    each extra part pushes that ceiling down and the answer, as the biggest
+    leaf, gives up the most — the field the auditor needs loses room to the
+    field nobody asked for. What drives the squeeze is the *count* of oversized
+    parts, not their size: 20 reasoning blocks leave ~13% of a 2.4 KiB answer
+    whether each is 400 B or 4 KiB. Dropping is the reversible half of that
+    trade — the completion keeps its budget, and
     capturing reasoning under a cap of its own stays open.
     """
     parts: list[dict[str, Any]] = []

@@ -64,8 +64,8 @@ flowchart LR
   the system of record; the raw topic only has to outlive an enricher restart.
 - **span-enricher** (`hexgate_api.jobs.enricher`, same image as the API): a
   consumer that decodes each span by instrumentation scope into a decision,
-  LLM-usage or ban-enforcement event, resolves `agent_version_id` from
-  Postgres, and batch-inserts into the three tables. Offsets commit only after
+  LLM-usage, ban-enforcement or LLM-message event, resolves `agent_version_id`
+  from Postgres, and batch-inserts into the four tables. Offsets commit only after
   ClickHouse acknowledges, so a crash replays the batch; `event_id` plus
   `ReplacingMergeTree` collapses the duplicates.
 

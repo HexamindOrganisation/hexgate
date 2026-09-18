@@ -108,6 +108,44 @@ enforcing. Gate a sub-agent-as-tool by its **tool name** with an ordinary
 adapter are planned follow-ups.
 </Note>
 
+## Message logging
+
+Nothing to wire. `HexgatePydanticAgent` records the conversation at the end of a
+run, alongside the token counts, and the audit drawer reads it back beside the
+decisions of that run. See [audit trail](/concepts/audit-trail#llm-messages) for
+the shape and the retention, and `HEXGATE_LOG_MESSAGES=0` to switch the stream
+off.
+
+**A run cut short is still recorded** — that is the one an incident review asks
+about. `run_stream` and `iter` emit from a `finally`, so a cancelled stream or an
+abandoned iteration still lands a row; the adapter drops only that run's token
+counts, which it treats as unreliable before the run ends. Such a row carries
+`gen_ai.output.messages` as an empty list, because the last response of an
+unfinished run is a mid-run tool call rather than an answer — the tool call
+itself still lands, on the input side. The boundary is `run` and `run_sync`,
+which emit after the await rather than from a `finally`, so a raise on those two
+produces no row at all.
+
+**One event per run, not per model call.** pydantic_ai exposes no per-call
+model hook short of `iter()`, so — exactly as for [token
+usage](/concepts/audit-trail) — the adapter reads the finished result instead:
+one `llm_message` row per `run` / `run_sync` / `run_stream` / `iter`, at
+`message_seq` 0, with no delta cursor. The audit drawer therefore shows a
+pydantic_ai run as a single turn rather than anchoring on the call that
+produced the decision.
+
+It records `result.new_messages()`, not `all_messages()`: the latter replays
+whatever the caller passed as `message_history`, so an N-turn chat would store
+turn 1 N times and the 256 KiB cap would cut the newest exchange — the one being
+investigated. Each run is its own `turn_key`, and `new_messages()` keeps the
+message lists from overlapping, so a session's pydantic_ai rows concatenate back
+to the conversation without the grouping caveat the per-call adapters need. One
+field is the exception: a `system_prompt=` is collected from the whole
+conversation, not just this run, because it lands only in the first request and
+would otherwise vanish from turn two onward — so it repeats on every row.
+Dynamic `@agent.instructions` are still read from this run alone, since a
+conditional one must be reported as it was for *that* call.
+
 ## Runnable example
 
 `examples/devops_pydantic_ai.py` — `wrap_pydantic_agent` (Pydantic AI) end-to-end.

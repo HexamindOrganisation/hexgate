@@ -7,8 +7,8 @@ description: "How hexgate wraps third-party agent frameworks, and which versions
 
 In addition to its native `create_agent(...)` runtime, `hexgate` ships adapters
 that wrap agents built with **OpenAI Agents SDK**, **LangChain / LangGraph**,
-**Google ADK**, or **Pydantic AI** to add two things without touching the agent's
-logic:
+**Google ADK**, or **Pydantic AI** to add three things without touching the
+agent's logic:
 
 1. **Tool-call policy enforcement.** Each tool the agent can invoke is gated by a
    `PolicyEnforcer` that returns a typed `Decision` (allow / deny / needs-approval)
@@ -18,6 +18,11 @@ logic:
 2. **User-aware observability.** Every run is traced through Langfuse with the
    active [`HexgateContext`](/concepts/user-scope)'s identity (user id, session id, role)
    propagated onto the spans.
+3. **Audit and message logging.** Every wrapper emits the model's token counts
+   and — unless `HEXGATE_LOG_MESSAGES=0` — the prompts and completions behind
+   each decision: once per model call where the framework offers a hook for it,
+   once per run on pydantic_ai, which does not. See [audit
+   trail](/concepts/audit-trail#llm-messages).
 
 Every wrapper also takes [`guards`](/concepts/guards) — before/after-tool functions
 that observe, rewrite arguments, or refuse a call — installed with `guards=[...]`
@@ -31,6 +36,7 @@ The four integrations differ in shape because the underlying SDKs do:
 | Tool wrapping | Copies each `FunctionTool`, replaces `on_invoke_tool` | Mutates each `BaseTool` in place (`install_enforcer_on_tool`), sets `handle_tool_error=True` | Copies each `BaseTool` (normalizing bare callables to `FunctionTool`), replaces `run_async` | Copies each `Tool` and overrides `function_schema.call` |
 | Denial behavior | Returns `decision.as_error_message()` as tool output | Returns `{"ok": False, "error": decision.as_error_payload()}` | Returns `decision.as_error_message()` as tool output | Raises `ModelRetry(decision.as_error_message())` |
 | Tracing | `OpenAIAgentsInstrumentor` + `propagate_attributes` | Langfuse `CallbackHandler` in each `RunnableConfig` + `propagate_attributes` | `GoogleADKInstrumentor` + `propagate_attributes` | `Agent.instrument_all()` + `propagate_attributes` |
+| [Message logging](/concepts/audit-trail#llm-messages) | `on_llm_start` → `on_llm_end`, one event per model call | `on_chat_model_start` → `on_llm_end`, one event per model call | `before_model_callback` → `after_model_callback`, one event per model call | no per-call hook — one event per **run** |
 | Per-call identity | `hexgate_context: HexgateContext` on `run` / `run_sync` / `run_streamed` | `hexgate_context: HexgateContext` on `invoke` / `ainvoke` / `stream` / `astream` / `astream_events` | `hexgate_context: HexgateContext` on `run` / `run_async` | `hexgate_context: HexgateContext` on `run` / `run_sync` / `run_stream` / `iter` |
 
 Role resolution happens **at call time** from the active `HexgateContext` contextvar — one

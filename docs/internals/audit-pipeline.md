@@ -145,6 +145,67 @@ attribute. Server-resolved fields (`project_id`, `agent_version_id`,
 derived from the bearer by the Collector's auth extension and travels as the
 Kafka record key — a self-declared project on the span is never trusted.
 
+### 2.4 Message spans — scope `hexgate.messages`
+
+The fourth event type, and the only one carrying model content: the prompt
+and completion of one LLM call, so a denied tool call can be read next to the
+exchange that produced it. `hexgate/tracing/messages.py` —
+`LlmMessageEvent.span_attributes()`. The content attributes are the official
+OTel GenAI names, unchanged; only the envelope is `sec_ai.*`.
+
+```
+scope: hexgate.messages                    (LlmMessageEvent.SCOPE)
+start_time == end_time = occurred_at       (point-in-time event; no attribute)
+
+gen_ai.request.model        "gpt-4o-mini"
+gen_ai.input.messages       '[{"role": "tool", "parts": [{"type": "tool_call_response", …}]}]'
+                            JSON string — the messages *new to this call*, never a snapshot
+gen_ai.output.messages      '[{"role": "assistant", "parts": [{"type": "text", "content": "…"}]}]'
+                            JSON string — this call's completion, folded into one message
+gen_ai.system_instructions  '[{"type": "text", "content": "You are a DevOps assistant…"}]'
+                            JSON string; first event of each turn_key only, absent otherwise
+sec_ai.turn_key             "0b9c…:devops_agent"  which message list this event extends
+sec_ai.message_seq          3                     counter within turn_key; a gap = a lost row
+sec_ai.resynced             false                 true when the event restates the list
+sec_ai.truncated            false                 true when any content field was cut
+sec_ai.run_id               "0b9c…"               RunFacts.id; absent (never "") outside a run
+sec_ai.event_id / agent_name / session_id / user_id   the shared envelope of §2.3
+```
+
+Three rules set it apart from a decision span:
+
+- **Delta, not snapshot.** Each event carries only what the framework's input
+  list gained since this `turn_key`'s last call — which between two calls is
+  routinely several messages, the assistant's tool-call message plus one tool
+  result per parallel call. Tool results are kept deliberately: a decision
+  event records that a tool was called but never what it returned, so this is
+  the only place that value lands. A session's transcript is its rows read in
+  `(occurred_at, message_seq)` order, **grouped by `turn_key`** — two kinds of
+  row restate history rather than extend it, so concatenating a session flat
+  double-counts. A row flagged `resynced` supersedes the earlier rows of its own
+  `turn_key` (grouping orders them; discarding what precedes the resync is still
+  the reader's job). And on the per-call adapters a second `turn_key` is a second
+  list rather than a continuation of the first — pydantic_ai is the exception,
+  minting a key per run whose rows *are* consecutive pieces of one conversation.
+  How a sub-agent or handoff lands is otherwise per-adapter:
+  an OpenAI Agents handoff target opens a new key at seq 0 with the conversation
+  the source already logged, an ADK `transfer_to_agent` target opens one holding
+  ADK's narrated rewrite of it, while an *unwrapped* LangChain sub-graph that
+  keeps a message list of its own shares the parent's key and the two surface as
+  resyncs of each other (§3.5) — one wrapped separately gets its own run id, and
+  so its own key. `message_seq` counts *within* one
+  `turn_key` and cannot order rows across lists, which is why `occurred_at` does
+  that job (§5.1).
+- **`turn_key` names a message list, not a session.** Handoffs and sub-agents
+  share a `session_id` while generally keeping a list each, so a per-session
+  mark would read a sub-agent's first call as a twenty-message jump. Each adapter
+  supplies the framework's own identity for one list (§3.5).
+- **Per-field caps, head+tail.** `gen_ai.input.messages` 256 KiB,
+  `gen_ai.output.messages` 8 KiB, `gen_ai.system_instructions` 8 KiB, measured
+  in serialized-JSON bytes and applied SDK-side before export (§6).
+  `sec_ai.truncated` is the OR across the three, so one flag tells a reader the
+  row is lossy and the marker inside the field says where.
+
 ---
 
 ## 3. SDK emission layer
@@ -166,12 +227,15 @@ The sender is **injected per enforcer**, not looked up globally — see §3.4.
 ### 3.2 `AuditSender` — one OTel span per event
 
 `hexgate/tracing/_senders.py` — shared by `hexgate.audit` (policy decisions),
-`hexgate.tracing.usage` (LLM token usage) and `hexgate.security.bans` (ban
-enforcements); none of those modules owns it. One sender per `api_key` holds
-one `TracerProvider` → `BatchSpanProcessor` → `OTLPSpanExporter` chain and
-three tracers, one per instrumentation scope (`hexgate.audit` /
-`hexgate.usage` / `hexgate.bans`) — the scope name is how the platform tells
-the event types apart. `emit(event)` starts a span on the event's tracer with
+`hexgate.tracing.usage` (LLM token usage), `hexgate.security.bans` (ban
+enforcements) and `hexgate.tracing.messages` (LLM prompts and completions);
+none of those modules owns it. One sender per `api_key` holds one
+`TracerProvider` → `BatchSpanProcessor` → `OTLPSpanExporter` chain and four
+tracers, one per instrumentation scope (`hexgate.audit` / `hexgate.usage` /
+`hexgate.bans` / `hexgate.messages`) — the scope name is how the platform
+tells the event types apart. That tuple is hardcoded: a scope missing from it
+has no tracer, so `emit()` raises `KeyError` on the lookup and logs one dropped
+event per span. `emit(event)` starts a span on the event's tracer with
 `start_time = occurred_at`, sets `event.span_attributes()`, and ends it at the
 same instant. Key behaviours:
 
@@ -221,10 +285,10 @@ is a thin, decisions-specific wrapper around the shared
   self-hosting. The export endpoint follows §3.3.
 - **Keyed by `api_key`.** Senders live in a shared registry
   `dict[str, AuditSender]` in `hexgate/tracing/_senders.py`. One sender per
-  key carries every event type — decisions, LLM usage and ban enforcements —
-  since the span's instrumentation scope, not a separate endpoint, tells them
-  apart. Calling `configure()` again with the **same** key returns the
-  existing sender (idempotent); a **different** key gets its own sender with
+  key carries every event type — decisions, LLM usage, ban enforcements and
+  LLM messages — since the span's instrumentation scope, not a separate
+  endpoint, tells them apart. Calling `configure()` again with the **same** key
+  returns the existing sender (idempotent); a **different** key gets its own sender with
   its own bearer token, which is what lets one process audit several
   tenants/keys.
 
@@ -295,9 +359,72 @@ flush that outlives the timeout loses whatever was queued. Call `shutdown()`.
 | `hexgate.tracing._senders.get_or_create_sender(key, url)` | Get-or-create the sender for `key`. Idempotent per key. |
 | `hexgate.tracing._senders.get_sender(key)` | Registry lookup by `key` (diagnostics). Prefer the injected sender. |
 | `hexgate.tracing._senders.shutdown()` | Flush + stop every sender. |
-| `hexgate.audit.configure(key, url)` / `hexgate.tracing.usage.configure_usage_sender(key, url)` / `hexgate.security.bans.configure_ban_sink(key, url)` | Per-module wrappers over `get_or_create_sender(key, url)`; all three return the same sender for the same key. |
+| `hexgate.audit.configure(key, url)` / `hexgate.tracing.usage.configure_usage_sender(key, url)` / `hexgate.security.bans.configure_ban_sink(key, url)` / `hexgate.tracing.messages.configure_messages_sender(key, url)` | Per-module wrappers over `get_or_create_sender(key, url)`; all four return the same sender for the same key. |
 | `hexgate.audit.get_sender(key)` / `hexgate.tracing.usage.get_usage_sender(key)` | Wrappers over `get_sender(key)`. |
 | `hexgate.audit.shutdown()` / `hexgate.tracing.usage.shutdown()` | Both call the shared `shutdown()`; either flushes all event types. |
+
+### 3.5 Message capture (`hexgate/tracing/messages.py`)
+
+Decisions leave from the enforcer; message events leave from the adapters'
+model hooks, which come in pairs because neither half carries the whole call.
+The request hook stashes the prompt, the response hook emits both the usage
+event and the message event from one call site, so the two can never disagree
+about the model of a single call:
+
+| Adapter | Request hook → response hook | `turn_key` |
+|---|---|---|
+| OpenAI Agents | `on_llm_start` → `on_llm_end` | Hexgate run id + agent name — a handoff target gets a list of its own |
+| LangChain / LangGraph | `on_chat_model_start` (or `on_llm_start`) → `on_llm_end`, correlated on LangChain's `run_id` | Hexgate run id + the proxy's fixed agent name — nothing on the callback surface identifies a list, so a summariser node or unwrapped sub-graph files under the same key and the two resync against each other |
+| Google ADK | `before_model_callback` → `after_model_callback` | `callback_context.invocation_id` + agent name — a `ParallelAgent`'s sub-agents share one invocation id and each need a list of their own |
+| Pydantic AI | none — one event per *run*, built from the result's `new_messages()` | the Hexgate run id |
+
+Not `id(context)`: CPython reuses the address once a run's context is freed, so
+a long-lived process would file unrelated conversations under one key, each
+restarting `message_seq` at 0.
+
+**The delta is ours to compute.** A hook is normally handed the *whole* input
+list, so `MessageCursor` keeps a per-`turn_key` high-water mark of `(count,
+fingerprint of the prefix, next seq)` and slices past it. The fingerprint is
+length plus a digest of the first and last emitted message, not a hash of the
+whole list — this runs on every LLM call and the list is the conversation so
+far. On mismatch the cursor emits the full list with `sec_ai.resynced=true`
+rather than slicing into nonsense: these lists are **not append-only**, since
+frameworks trim old turns or replace them with a summary to fit the context
+window, and `list[count:]` on a rewritten list returns the wrong tail.
+
+**One exception: a framework that already sends deltas.** Start an OpenAI
+Agents run under a server-managed conversation — `conversation_id`,
+`previous_response_id` or `auto_previous_response_id` — and the SDK holds the
+history server-side and hands the hook only the un-sent items. There is nothing
+to diff, so `HexgateUsageHooks` bypasses the cursor entirely, counts `seq` in a
+dict of its own, and pins `resynced` false: the flag means *the list was
+rewritten*, which is as untrue here as for an ordinary extension. Someone
+chasing a `sec_ai.message_seq` gap on such a run will find no cursor state for
+it.
+
+**`MessageCursor` itself has no LRU.** Eviction cannot distinguish a finished
+list from a live one, and a live one's comeback would go out as a *fresh* turn
+— the whole history again, at seq 0, unflagged, with the gap detection rewound.
+Retiring a key is therefore each adapter's job, and they do it differently:
+LangChain calls `reset(turn_key)` on run end, OpenAI Agents builds a fresh
+hooks instance per `run*` call so the cursor dies with the run, and the ADK
+plugin calls `reset` on run end *and* LRU-caps its in-flight stash at 256,
+resetting the evicted key — because ADK skips `after_run_callback` when the
+agent loop raises or the caller stops iterating, so its run-end hook cannot be
+relied on alone.
+
+**Never raises, twice over.** `emit_llm_messages()` swallows everything, as
+`emit_llm_usage` does — the framework hooks it runs from either re-raise or
+don't guard the call, and losing a transcript row must not fail the run it was
+logging. Each adapter additionally guards its converters and returns *before*
+advancing the cursor, so a failed conversion does not spend the turn's seq on
+an event that never goes out.
+
+**Opt-out.** `HEXGATE_LOG_MESSAGES` set to `0` / `false` / `no` / `off` turns
+this stream off and leaves decisions, usage and bans flowing; anything else,
+including a typo, leaves the default (on) in force. Checked on every emit
+rather than cached at import, and checked again in each adapter's request hook,
+so an opted-out process never pays to copy a prompt it will not keep.
 
 ---
 
@@ -475,9 +602,10 @@ fetch, and an oversized DLQ envelope would be dropped client-side. Per poll
    the DLQ (`missing_key`).
 3. **Map and validate** each span by instrumentation scope — `hexgate.audit`
    → `DecisionEvent`, `hexgate.usage` → `LlmInvocationEvent`, `hexgate.bans` →
-   `BanEnforcementEvent` (the platform pydantic schemas, so the same max
-   lengths and enum checks apply everywhere). `occurred_at` is the span's
-   `start_time_unix_nano` (zero → rejected). A rejected span becomes a DLQ
+   `BanEnforcementEvent`, `hexgate.messages` → `LlmMessageEvent` (the platform
+   pydantic schemas, so the same max lengths and enum checks apply
+   everywhere). `occurred_at` is the span's `start_time_unix_nano`
+   (zero → rejected). A rejected span becomes a DLQ
    envelope; its siblings in the same record are unaffected.
 4. **Resolve `agent_version_id`** for every distinct `(project_id, agent_name)`
    in the batch — two Postgres queries regardless of batch size. Unregistered
@@ -620,8 +748,9 @@ TTL toDateTime(received_at) + INTERVAL 180 DAY
 ```
 
 - **Separate table, not columns on `llm_invocation`** — content is large,
-  opt-in (nothing emits `hexgate.messages` yet, and capture stays off until an
-  emitter ships), and read by session rather than aggregated by user/model.
+  opt-out-able on its own (`HEXGATE_LOG_MESSAGES=0` stops this stream and
+  leaves the other three flowing), and read by session rather than aggregated
+  by user/model.
 - **Sort key** `(project_id, session_id, occurred_at, message_seq, event_id)`:
   the read is "reconstruct this session's transcript", and the endpoint returns
   rows ordered by `(occurred_at, message_seq)`, so this key delivers them
@@ -690,6 +819,27 @@ HTTP ingest uses the single-row `insert_decision`, whose settings are:
   same `_truncate_json(payload, cap=...)` helper. Only the audit copy is
   trimmed: the `Decision` the host holds — and `as_error_payload()`, which the
   model sees — keeps the full `hint`.
+- **Message content is the whole prompt and completion.** The
+  `hexgate.messages` stream stores what the model actually read and wrote —
+  user turns, tool arguments, tool *results*, the assistant's answers — for the
+  same 180 days, under the same key-name redactor as `arguments` and with the
+  same seatbelt-not-a-guarantee caveat. It is the largest-surface stream by
+  far, which is why it has its own switch: `HEXGATE_LOG_MESSAGES=0` stops it
+  alone. It is on by default — an audit log a customer has to discover and
+  enable is not there when an incident needs it — and the trade is stated in
+  [environment variables](/reference/environment). Redaction reaches inside a
+  tool-call part's `arguments` and `response` even when the framework
+  stringified them as JSON (`TOOL_CALL_JSON_KEYS`), so a secret does not
+  survive in the transcript that was blanked on the decision row.
+- **Message caps truncate, they never reject.** Each content field is fitted to
+  its own budget (256 / 8 / 8 KiB) by `hexgate.audit.cap_json_head_tail`, which
+  binary-searches one shared per-string ceiling against the serialized size and
+  levels every string over it to that, keeping the **head and the tail** of
+  each. Strings already under the ceiling pass through whole, so the biggest
+  one gives up the most. The
+  enricher applies the same caps again on ingest and ORs its own cut into
+  `truncated`. A degraded record, never a lost one — the contrast with the
+  `arguments` preview wrapper, which keeps only a prefix.
 - **`attributes` carries the caller ABAC bag** (the `ctx.*` namespace the
   decision was evaluated against): stored for 180 days and rendered verbatim in
   the dashboard's audit detail drawer for anyone with project read access. It
@@ -802,7 +952,15 @@ sort key `(project_id, agent_name, outcome, occurred_at, event_id)` and
    (`platform/api/biscuits.py`); an `emit_audit` scope fact + endpoint check is
    the natural fix. Note existing minted tokens won't carry the fact — needs a
    deprecation window or re-mint.
-7. **No rate limit or volume alerting on ingest** — an exfiltrated key can
+7. **Transcript gap rate is not measured** — `message_seq` makes a lost
+   message row *detectable* within one `turn_key`, but nothing aggregates it:
+   no query or alert answers "what fraction of this project's transcripts have
+   a hole in them". So the loss rate of the stream most likely to saturate the
+   sender (256 KiB spans against decisions' ~1 KiB) is visible one session at a
+   time, by eye. Needs a `groupArray(message_seq)` contiguity check per
+   `(session_id, turn_key)` behind the audit summary endpoint, and an alert on
+   it.
+8. **No rate limit or volume alerting on ingest** — an exfiltrated key can
    flood the log to bury real activity. Needs a per-project token bucket
    (`429 + Retry-After`; the SDK already logs-and-drops on ≥400) plus an
    ingest-volume-per-project alert.

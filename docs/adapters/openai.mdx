@@ -115,6 +115,42 @@ expose the tool origin, even the top level falls back to name-gating and a
 declared `via: tool` rule warns at setup.
 </Note>
 
+## Message logging
+
+Nothing to wire. `HexgateRunner` installs `HexgateUsageHooks` on every
+`run*` call — composed with your own `hooks=` object rather than replacing it —
+and it records the conversation alongside the token counts. Each model call
+emits one `llm_message` row holding the messages **new to that call**, tool
+results included, plus that call's completion; the audit drawer reads them back
+beside the decision they explain. See [audit
+trail](/concepts/audit-trail#llm-messages) for the shape and the retention, and
+`HEXGATE_LOG_MESSAGES=0` to switch the stream off.
+
+`on_llm_start` stashes the prompt, `on_llm_end` emits usage and messages
+together, so both always name the same model for one call. A fresh hooks
+instance per `run*` call means the delta cursor lives exactly one run.
+
+Two specifics of this SDK:
+
+- **Handoffs get their own transcript.** The message list is keyed by run id
+  *plus agent name*, so a handoff target is a new list starting at
+  `message_seq` 0. It is handed the same conversation, so its first event
+  restates what the source agent already logged
+  ([#215](https://github.com/HexamindOrganisation/hexgate/issues/215)).
+- **Server-managed conversations are already deltas.** Pass `conversation_id`,
+  `previous_response_id` or `auto_previous_response_id` to `run*` and OpenAI
+  holds the history, so the SDK sends only the un-sent items. The runner
+  detects this and turns the diff off rather than flagging every event
+  `resynced`.
+
+Reasoning items are kept on the input side and dropped from the completion
+([#221](https://github.com/HexamindOrganisation/hexgate/issues/221)): the 8 KiB
+output budget was sized for an answer, and the capper levels every oversized
+string in the message to one common ceiling — so each extra part pushes that
+ceiling down, and the answer, as the biggest string, gives up the most. Twenty
+reasoning blocks leave about 13% of a 2.4 KiB answer. The input side has
+256 KiB and no such squeeze, which is why the two sides differ.
+
 ## Runnable example
 
 `examples/devops_openai.py` — `HexgateRunner` (OpenAI Agents SDK) end-to-end.

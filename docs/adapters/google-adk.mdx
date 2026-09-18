@@ -121,6 +121,41 @@ coverage, because ADK expresses both delegation modes as tool calls. It enforces
 (agent-as-tool, `agent.tool:<name>`) — a denied delegation is refused before it
 runs. Set `HexgateRunner(max_handoff_depth=N)` to cap a runaway handoff chain.
 
+## Message logging
+
+Nothing to wire. `HexgateRunner` registers `HexgateUsagePlugin` — an ADK
+`BasePlugin` — on the underlying `Runner`, and it records the conversation
+alongside the token counts. Each model call emits one `llm_message` row holding
+the messages **new to that call**, tool results included, plus that call's
+completion; the audit drawer reads them back beside the decision they explain.
+See [audit trail](/concepts/audit-trail#llm-messages) for the shape and the
+retention, and `HEXGATE_LOG_MESSAGES=0` to switch the stream off.
+
+`before_model_callback` stashes `LlmRequest.contents` and the system
+instruction; `after_model_callback` emits usage and messages together. The
+transcript key is `callback_context.invocation_id` **plus the agent name**, not
+the invocation alone: ADK rebuilds `contents` from the session on every call, so
+the invocation identifies the conversation — but a `ParallelAgent` runs its
+sub-agents concurrently under one invocation id, each seeing its own filtered
+`contents`, and keyed by the id alone they would overwrite each other's stash.
+
+- **A handoff starts a new list.** `transfer_to_agent` rewrites the source
+  agent's turns into narrated text for the target, so the target really is
+  looking at a different list — it begins at `message_seq` 0 with its own
+  system instructions rather than resyncing the parent's.
+- **Streaming.** In SSE mode `after_model_callback` fires once per chunk. Only
+  the non-partial aggregate ends a call and emits, so an answer is billed and
+  recorded once — or not at all: ADK builds no aggregate when the stream ends
+  without content (a safety stop, a blocked prompt, an empty stream), and that
+  turn goes unrecorded. The aggregate also carries no `model_version`, so the
+  model name falls back to the stashed request's.
+- ADK skips `after_run_callback` when the agent loop raises or the caller stops
+  iterating — a policy deny and an SSE disconnect both do — so the stash of
+  in-flight prompts is LRU-capped rather than trusted to be drained.
+- An `AgentTool` runs its own nested `Runner`, which gets an invocation id of
+  its own and inherits the plugin; `AgentTool(agent, include_plugins=False)`
+  turns capture off for that sub-agent.
+
 ## Runnable example
 
 `examples/devops_google.py` — `HexgateRunner` (Google ADK) end-to-end with
