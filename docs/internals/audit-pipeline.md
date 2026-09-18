@@ -180,14 +180,25 @@ Three rules set it apart from a decision span:
   result per parallel call. Tool results are kept deliberately: a decision
   event records that a tool was called but never what it returned, so this is
   the only place that value lands. A session's transcript is its rows read in
-  `(occurred_at, message_seq)` order — concatenated, except across a row
-  flagged `resynced`, which restates its list rather than extending it and
-  supersedes the rows before it on that `turn_key`. `message_seq` counts
-  *within* one `turn_key` and cannot order rows across lists, which is why
-  `occurred_at` does that job (§5.1).
+  `(occurred_at, message_seq)` order, **grouped by `turn_key`** — two kinds of
+  row restate history rather than extend it, so concatenating a session flat
+  double-counts. A row flagged `resynced` supersedes the earlier rows of its own
+  `turn_key` (grouping orders them; discarding what precedes the resync is still
+  the reader's job). And on the per-call adapters a second `turn_key` is a second
+  list rather than a continuation of the first — pydantic_ai is the exception,
+  minting a key per run whose rows *are* consecutive pieces of one conversation.
+  How a sub-agent or handoff lands is otherwise per-adapter:
+  an OpenAI Agents handoff target opens a new key at seq 0 with the conversation
+  the source already logged, an ADK `transfer_to_agent` target opens one holding
+  ADK's narrated rewrite of it, while an *unwrapped* LangChain sub-graph that
+  keeps a message list of its own shares the parent's key and the two surface as
+  resyncs of each other (§3.5) — one wrapped separately gets its own run id, and
+  so its own key. `message_seq` counts *within* one
+  `turn_key` and cannot order rows across lists, which is why `occurred_at` does
+  that job (§5.1).
 - **`turn_key` names a message list, not a session.** Handoffs and sub-agents
-  share a `session_id` while each keeps its own list, so a per-session mark
-  would read a sub-agent's first call as a twenty-message jump. Each adapter
+  share a `session_id` while generally keeping a list each, so a per-session
+  mark would read a sub-agent's first call as a twenty-message jump. Each adapter
   supplies the framework's own identity for one list (§3.5).
 - **Per-field caps, head+tail.** `gen_ai.input.messages` 256 KiB,
   `gen_ai.output.messages` 8 KiB, `gen_ai.system_instructions` 8 KiB, measured
@@ -363,16 +374,16 @@ about the model of a single call:
 | Adapter | Request hook → response hook | `turn_key` |
 |---|---|---|
 | OpenAI Agents | `on_llm_start` → `on_llm_end` | Hexgate run id + agent name — a handoff target gets a list of its own |
-| LangChain / LangGraph | `on_chat_model_start` (or `on_llm_start`) → `on_llm_end`, correlated on LangChain's `run_id` | Hexgate run id + agent name |
-| Google ADK | `before_model_callback` → `after_model_callback` | `callback_context.invocation_id` |
+| LangChain / LangGraph | `on_chat_model_start` (or `on_llm_start`) → `on_llm_end`, correlated on LangChain's `run_id` | Hexgate run id + the proxy's fixed agent name — nothing on the callback surface identifies a list, so a summariser node or unwrapped sub-graph files under the same key and the two resync against each other |
+| Google ADK | `before_model_callback` → `after_model_callback` | `callback_context.invocation_id` + agent name — a `ParallelAgent`'s sub-agents share one invocation id and each need a list of their own |
 | Pydantic AI | none — one event per *run*, built from the result's `new_messages()` | the Hexgate run id |
 
 Not `id(context)`: CPython reuses the address once a run's context is freed, so
 a long-lived process would file unrelated conversations under one key, each
 restarting `message_seq` at 0.
 
-**The delta is ours to compute.** Every hook is handed the *whole* input list,
-so `MessageCursor` keeps a per-`turn_key` high-water mark of `(count,
+**The delta is ours to compute.** A hook is normally handed the *whole* input
+list, so `MessageCursor` keeps a per-`turn_key` high-water mark of `(count,
 fingerprint of the prefix, next seq)` and slices past it. The fingerprint is
 length plus a digest of the first and last emitted message, not a hash of the
 whole list — this runs on every LLM call and the list is the conversation so
@@ -381,12 +392,26 @@ rather than slicing into nonsense: these lists are **not append-only**, since
 frameworks trim old turns or replace them with a summary to fit the context
 window, and `list[count:]` on a rewritten list returns the wrong tail.
 
-Every adapter owes the cursor a `reset(turn_key)` on run end. There is
-deliberately no LRU: eviction cannot distinguish a finished list from a live
-one, and a live one's comeback would go out as a *fresh* turn — the whole
-history again, at seq 0, unflagged, with the gap detection rewound. A forgotten
-`reset` leaks a few hundred bytes per list, visibly; a silently corrupted
-transcript is the worse trade.
+**One exception: a framework that already sends deltas.** Start an OpenAI
+Agents run under a server-managed conversation — `conversation_id`,
+`previous_response_id` or `auto_previous_response_id` — and the SDK holds the
+history server-side and hands the hook only the un-sent items. There is nothing
+to diff, so `HexgateUsageHooks` bypasses the cursor entirely, counts `seq` in a
+dict of its own, and pins `resynced` false: the flag means *the list was
+rewritten*, which is as untrue here as for an ordinary extension. Someone
+chasing a `sec_ai.message_seq` gap on such a run will find no cursor state for
+it.
+
+**`MessageCursor` itself has no LRU.** Eviction cannot distinguish a finished
+list from a live one, and a live one's comeback would go out as a *fresh* turn
+— the whole history again, at seq 0, unflagged, with the gap detection rewound.
+Retiring a key is therefore each adapter's job, and they do it differently:
+LangChain calls `reset(turn_key)` on run end, OpenAI Agents builds a fresh
+hooks instance per `run*` call so the cursor dies with the run, and the ADK
+plugin calls `reset` on run end *and* LRU-caps its in-flight stash at 256,
+resetting the evicted key — because ADK skips `after_run_callback` when the
+agent loop raises or the caller stops iterating, so its run-end hook cannot be
+relied on alone.
 
 **Never raises, twice over.** `emit_llm_messages()` swallows everything, as
 `emit_llm_usage` does — the framework hooks it runs from either re-raise or

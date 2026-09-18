@@ -31,10 +31,22 @@ to that call** — the assistant turn carrying the tool call, the tool results
 that came back, the next user turn — plus that call's completion. Pydantic AI
 exposes no per-call hook, so it records one row per agent run instead.
 
-Rows are deltas, so a session's transcript is its rows read in time order —
-except where one is flagged `resynced`, which means the framework rewrote its
-history (a context-window trim, a summary) and the row restates the list rather
-than extending it. Read a resynced row as history, not as a continuation.
+Rows are deltas, so a session's transcript is its rows read in time order — with
+two caveats, both about rows that **restate** history instead of extending it:
+
+- A row flagged **`resynced`** means the framework rewrote its own history (a
+  context-window trim, a summary) and the row carries the whole list again.
+  Read it as history, not as a continuation. It normally supersedes the earlier
+  rows sharing its `turn_key` — the exception is LangChain, whose key can cover
+  two lists at once, so there the flag means "this list was restated", not
+  "discard everything above".
+- **`turn_key` identifies one message list, and a session can hold several.** On
+  the per-call adapters a sub-agent or handoff generally keeps its own, so rows
+  from two keys are two lists rather than one thread — and on the OpenAI Agents
+  adapter a handoff target opens its list with the conversation the source agent
+  already logged. Concatenating such a session flat double-counts; group by
+  `turn_key` first. Pydantic AI is the exception: it mints a key per *run*, and
+  those rows are consecutive, non-overlapping pieces of one conversation.
 
 Tool *results* are in there on purpose: a decision row records that a tool was
 called and with what arguments, but never what it returned.

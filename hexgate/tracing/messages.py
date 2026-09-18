@@ -13,10 +13,12 @@ default — a log a customer has to discover and switch on is a log that is not
 there when an incident needs it — and ``HEXGATE_LOG_MESSAGES=0`` turns it off
 without touching the other streams.
 
-Which messages are "new" is decided here too, by :class:`MessageCursor`: every
-adapter hook is handed the *whole* input list and has to work out what changed
-since its last call. One implementation shared by the four adapters rather than
-four subtly different ones.
+Which messages are "new" is decided here too, by :class:`MessageCursor`: an
+adapter hook is normally handed the *whole* input list and has to work out what
+changed since its last call. One implementation shared by the adapters rather
+than several subtly different ones — pydantic_ai has no per-call hook and needs
+no cursor, and the OpenAI adapter bypasses it under a server-managed
+conversation, where the SDK already sends only the un-sent items.
 """
 
 from __future__ import annotations
