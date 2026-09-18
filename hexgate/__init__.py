@@ -19,6 +19,7 @@ from hexgate.agents.loader import (
     register_agent_factory,
     unregister_agent_factory,
 )
+from hexgate.agents.subagents import SubagentEdge
 from hexgate.cloud import HexgateClient, HexgateConfig
 from hexgate.guards import after_tool, before_tool
 from hexgate.manifest import AgentManifest, create_manifest
@@ -54,6 +55,7 @@ __all__ = [
     "C",
     "PolicyBuilder",
     "RolePolicyBuilder",
+    "SubagentEdge",
     "assert_allows",
     "assert_denies",
     "assert_needs_approval",
