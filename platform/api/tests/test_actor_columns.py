@@ -39,6 +39,9 @@ CREATION_ACTOR_ALIASES: dict[str, str] = {
     # too — a PUT replaces the entry and restamps this column, which is why
     # the table is mutated in place yet has no ``updated_by_user_id`` below.
     "agent_classification": "recorded_by_user_id",
+    # An evidence report is generated, not created: the row's only writer is
+    # the user who asked for it, under the name the annex itself uses.
+    "ai_act_report": "generated_by_user_id",
 }
 
 # (table, column) pairs added to a table that ALREADY EXISTED, so only a
