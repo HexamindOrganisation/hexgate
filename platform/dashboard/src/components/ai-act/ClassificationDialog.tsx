@@ -26,14 +26,28 @@ import {
   CLASSIFICATION_LINKS,
   OPERATOR_ROLES,
   RISK_TIERS,
+  assertsSomething,
 } from "@/lib/ai-act";
 import {
   ApiError,
   api,
   type AgentClassificationRead,
+  type AgentClassificationUpdate,
   type OperatorRole,
   type RiskTier,
 } from "@/lib/api";
+
+/** Field caps the endpoint enforces (`AgentClassificationWrite`); mirrored on
+ * the inputs so the operator is stopped at the keyboard rather than by a 422
+ * after they have written four thousand characters. */
+const MAX_PURPOSE = 4096;
+const MAX_NAME = 256;
+
+/** Whether picking this tier should drop the Annex III reference. True only
+ * for a tier the form itself offers and that is not high-risk. */
+function clearsAnnexPoint(tier: string): boolean {
+  return tier !== "high_risk" && RISK_TIERS.some((t) => t.value === tier);
+}
 
 /** Empty string is "not asserted" everywhere in this form — Radix Select
  * rejects an empty item value, so an unset select simply has no value. */
@@ -95,30 +109,39 @@ export function ClassificationDialog({
     wasOpen.current = open;
   }, [open, classification]);
 
+  // The PUT replaces the entry outright, so the body is the whole assertion.
+  // Built once here and reused by the submit-guard below, so what the button
+  // checks and what the request sends cannot drift apart.
+  const body: AgentClassificationUpdate = {
+    intended_purpose: form.intended_purpose.trim() || null,
+    operator_role: form.operator_role || null,
+    risk_tier: form.risk_tier || null,
+    // The Annex III reference belongs to a high-risk assertion, so picking a
+    // different tier clears it. Only a tier this build actually offers counts
+    // as "picked something else", though: the PUT is a full replace, and a
+    // tier we have no option for is one whose field we never showed —-
+    // clearing on its behalf would delete a recorded reference the operator
+    // never touched.
+    annex_iii_point: clearsAnnexPoint(form.risk_tier)
+      ? null
+      : form.annex_iii_point || null,
+    oversight_owner_name: form.oversight_owner_name.trim() || null,
+    oversight_owner_contact: form.oversight_owner_contact.trim() || null,
+    checker_last_update_date: form.checker_last_update_date || null,
+  };
+
   const save = useMutation({
-    mutationFn: () =>
-      api.putAgentClassification(
-        agentName,
-        {
-          intended_purpose: form.intended_purpose.trim() || null,
-          operator_role: form.operator_role || null,
-          risk_tier: form.risk_tier || null,
-          // The Annex III reference belongs to a high-risk assertion; any
-          // other tier stores none, whatever was picked before.
-          annex_iii_point:
-            form.risk_tier === "high_risk"
-              ? form.annex_iii_point || null
-              : null,
-          oversight_owner_name: form.oversight_owner_name.trim() || null,
-          oversight_owner_contact: form.oversight_owner_contact.trim() || null,
-          checker_last_update_date: form.checker_last_update_date || null,
-        },
-        projectId,
-      ),
-    onSuccess: () => {
-      qc.invalidateQueries({
-        queryKey: ["ai-act", "classification", projectId, agentName],
-      });
+    mutationFn: () => api.putAgentClassification(agentName, body, projectId),
+    onSuccess: (saved) => {
+      // Write the response straight into the cache rather than only
+      // invalidating: the PUT returns the stored entry, so a refetch that
+      // fails would otherwise leave the row showing pre-save values next to a
+      // "recorded" toast, with nothing scheduled to correct it
+      // (refetchOnWindowFocus is off).
+      qc.setQueryData(
+        ["ai-act", "classification", projectId, agentName],
+        saved,
+      );
       toast.success(`Classification recorded for ${agentName}`);
       onOpenChange(false);
     },
@@ -130,6 +153,15 @@ export function ClassificationDialog({
       );
     },
   });
+
+  // A recorded tier this build has no option for still has to appear, or the
+  // trigger renders blank and reads as "no tier asserted" — the opposite of
+  // what the inventory row next to it says.
+  const tierOptions = RISK_TIERS.some((t) => t.value === form.risk_tier)
+    ? RISK_TIERS
+    : [...RISK_TIERS, { value: form.risk_tier, label: form.risk_tier }].filter(
+        (t) => t.value !== "",
+      );
 
   function set<K extends keyof FormState>(key: K, value: FormState[K]) {
     setForm((f) => ({ ...f, [key]: value }));
@@ -156,6 +188,7 @@ export function ClassificationDialog({
               value={form.intended_purpose}
               onChange={(e) => set("intended_purpose", e.target.value)}
               rows={3}
+              maxLength={MAX_PURPOSE}
               placeholder="What this system is intended to do, and for whom."
               className="flex w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
             />
@@ -195,7 +228,7 @@ export function ClassificationDialog({
                   <SelectValue placeholder="Select a tier" />
                 </SelectTrigger>
                 <SelectContent>
-                  {RISK_TIERS.map((t) => (
+                  {tierOptions.map((t) => (
                     <SelectItem key={t.value} value={t.value}>
                       {t.label}
                     </SelectItem>
@@ -233,6 +266,7 @@ export function ClassificationDialog({
                 id="cls-owner"
                 value={form.oversight_owner_name}
                 onChange={(e) => set("oversight_owner_name", e.target.value)}
+                maxLength={MAX_NAME}
                 placeholder="Name of the person assigned"
               />
             </div>
@@ -242,6 +276,7 @@ export function ClassificationDialog({
                 id="cls-contact"
                 value={form.oversight_owner_contact}
                 onChange={(e) => set("oversight_owner_contact", e.target.value)}
+                maxLength={MAX_NAME}
                 placeholder="email or phone"
               />
             </div>
@@ -276,11 +311,19 @@ export function ClassificationDialog({
           </div>
         </div>
 
-        <DialogFooter>
+        <DialogFooter className="sm:items-center">
+          {!assertsSomething(body) && (
+            <span className="mr-auto text-xs text-muted-foreground">
+              Fill in at least one field to record an entry.
+            </span>
+          )}
           <Button variant="ghost" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
-          <Button disabled={save.isPending} onClick={() => save.mutate()}>
+          <Button
+            disabled={save.isPending || !assertsSomething(body)}
+            onClick={() => save.mutate()}
+          >
             {save.isPending ? "Saving…" : "Save entry"}
           </Button>
         </DialogFooter>

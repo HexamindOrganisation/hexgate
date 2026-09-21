@@ -1,7 +1,7 @@
 /**
  * AI Act tab domain helpers: the vocabulary the classification form offers,
- * the completeness rule from the spec, the default reporting period, and the
- * save-a-download plumbing the history list uses.
+ * display copy for the server's completeness verdict, the default reporting
+ * period, and the save-a-download plumbing the history list uses.
  *
  * Copy rule for everything under /ai-act — the tab states the controls in
  * place and the events recorded. It never says a system or its operator is
@@ -9,7 +9,12 @@
  * tier and Hexgate records who asserted it and when.
  */
 
-import type { AgentClassificationRead, OperatorRole, RiskTier } from "./api";
+import type {
+  AgentClassificationRead,
+  AgentClassificationUpdate,
+  OperatorRole,
+  RiskTier,
+} from "./api";
 
 /** ClickHouse keeps every audit table 180 days
  * (`platform/clickhouse/init/schema.sql`, `TTL … + INTERVAL 180 DAY`), so
@@ -56,8 +61,13 @@ export const RISK_TIERS: { value: RiskTier; label: string }[] = [
   { value: "minimal", label: "Minimal" },
 ];
 
-export function riskTierLabel(tier: RiskTier | null): string | null {
-  return RISK_TIERS.find((t) => t.value === tier)?.label ?? null;
+/** Display copy for a recorded tier. A value this dashboard does not know
+ * falls through as itself rather than as null: the server counts it as a
+ * recorded assertion, so rendering it as the "not asserted" dash would show a
+ * complete entry with an empty tier. */
+export function riskTierLabel(tier: string | null): string | null {
+  if (!tier) return null;
+  return RISK_TIERS.find((t) => t.value === tier)?.label ?? tier;
 }
 
 /**
@@ -119,39 +129,46 @@ export const CLASSIFICATION_LINKS: { label: string; url: string }[] = [
 ];
 
 /**
- * The spec's completeness rule: intended purpose, operator role, risk tier
- * and a human-oversight owner, plus an Annex III point when the asserted tier
- * is high-risk. Returns the display names of whatever is absent, so the
- * inventory row can name the gap instead of only flagging it.
+ * Display copy for the wire field names `AgentClassificationRead.missing_fields`
+ * carries. The endpoint decides *which* fields are missing and in what order —
+ * it owns the completeness rule so the report and this tab cannot disagree —
+ * and the dashboard only names them.
  *
- * The contact is not required — Art. 26(2) wants a named person, and the
- * spec's rule lists the owner once.
+ * The map covers every field the entry has, not just the ones completeness
+ * currently requires: `oversight_owner_contact` and `checker_last_update_date`
+ * are optional today, and are here so a later rule that requires one is
+ * labelled rather than shown raw.
  */
-export function missingClassificationFields(
+export const CLASSIFICATION_FIELD_LABELS: Record<string, string> = {
+  intended_purpose: "Intended purpose",
+  operator_role: "Your role",
+  risk_tier: "Risk tier",
+  annex_iii_point: "Annex III point",
+  oversight_owner_name: "Human-oversight owner",
+  oversight_owner_contact: "Owner contact",
+  checker_last_update_date: "Checker last update date",
+};
+
+/** The server's missing-field list as display copy, in the order it sent. An
+ * unrecognised name falls through as itself rather than being dropped: a
+ * field this dashboard has not heard of is still a gap the operator must see. */
+export function missingFieldLabels(
   c: AgentClassificationRead | null,
 ): string[] {
-  if (!c) return ["Classification entry"];
-  const missing: string[] = [];
-  if (!c.intended_purpose) missing.push("Intended purpose");
-  if (!c.operator_role) missing.push("Operator role");
-  if (!c.risk_tier) missing.push("Risk tier");
-  if (!c.oversight_owner_name) missing.push("Human-oversight owner");
-  if (c.risk_tier === "high_risk" && !c.annex_iii_point) {
-    missing.push("Annex III point");
-  }
-  return missing;
+  if (!c) return [];
+  return c.missing_fields.map((f) => CLASSIFICATION_FIELD_LABELS[f] ?? f);
 }
 
 /**
- * Complete = nothing missing AND the operator has saved the entry. The
- * unsaved case matters because a GET prefills `intended_purpose` from the
- * manifest: a prefill is Hexgate's guess, not the operator's assertion, and
- * only a PUT turns it into one.
+ * Whether a form body asserts anything at all.
+ *
+ * The PUT rejects a wholly empty body (422): a replace that asserts nothing
+ * would name an accountable recorder against no assertions, and wipe a
+ * complete entry if the form submitted before it had loaded. Checked here too
+ * so the operator gets a disabled button instead of a round trip.
  */
-export function isClassificationComplete(
-  c: AgentClassificationRead | null,
-): boolean {
-  return !!c?.recorded_at && missingClassificationFields(c).length === 0;
+export function assertsSomething(body: AgentClassificationUpdate): boolean {
+  return Object.values(body).some((v) => v !== null && v !== "");
 }
 
 /** Hand a fetched blob to the browser as a file save. */

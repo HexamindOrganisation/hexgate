@@ -119,11 +119,22 @@ describe("AI Act downloads", () => {
     expect(await blob.text()).toBe('{"annex": true}');
   });
 
-  it("raises an ApiError with the tectonic log when a render fails", async () => {
-    // PR 4 returns 502 with the compile log attached rather than a partial
-    // PDF; the download button must surface that as an error, not save it.
+  it("raises an ApiError when a PDF render fails", async () => {
+    // #237 answers 502 with `detail: {error, renderer}` — an object, because
+    // the renderer's own message rides along. `messageFromDetail` reads only a
+    // string detail or a 422 array, so the message falls back to the status
+    // and the renderer text stays on `detail` for whoever wants it. The
+    // download button toasts its own copy either way.
     vi.spyOn(window, "fetch").mockResolvedValue(
-      jsonResponse({ detail: "tectonic: undefined control sequence" }, 502),
+      jsonResponse(
+        {
+          detail: {
+            error: "the report could not be rendered",
+            renderer: "ValueError: bad length",
+          },
+        },
+        502,
+      ),
     );
 
     const err = (await api
@@ -131,6 +142,11 @@ describe("AI Act downloads", () => {
       .catch((e) => e)) as ApiError;
     expect(err).toBeInstanceOf(ApiError);
     expect(err.status).toBe(502);
-    expect(err.message).toBe("tectonic: undefined control sequence");
+    expect(err.message).toContain("502");
+    // The object detail must not be String()'d into the message.
+    expect(err.message).not.toContain("[object Object]");
+    expect(err.detail).toMatchObject({
+      detail: { renderer: "ValueError: bad length" },
+    });
   });
 });

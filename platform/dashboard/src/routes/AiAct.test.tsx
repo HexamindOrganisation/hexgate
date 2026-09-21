@@ -10,7 +10,8 @@
  *   6. Generate posts the selected period and refreshes the history.
  *   7. Downloads fetch the annex and save it.
  *   8. A failed load never renders as an empty or incomplete result.
- *   9. No copy on the page — dialog included — claims conformity.
+ *   9. Generation in flight is visible, and a refusal is shown verbatim.
+ *  10. No copy on the page — dialog included — claims conformity.
  */
 
 import {
@@ -22,11 +23,16 @@ import {
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { toast } from "sonner";
 
 import type { AgentClassificationRead, AiActReport } from "@/lib/api";
 import { useActive } from "@/lib/active";
 import { AiActPage } from "@/routes/AiAct";
 import { renderWithProviders } from "@/test/render";
+
+vi.mock("sonner", () => ({
+  toast: { error: vi.fn(), success: vi.fn() },
+}));
 
 const PROJECT = "p1";
 
@@ -42,7 +48,10 @@ interface Call {
   body?: unknown;
 }
 
+/** What the GET serves for an agent with no entry: 200, `recorded: false`,
+ * and the server's own missing-field list in its own field names. */
 const EMPTY_ENTRY: AgentClassificationRead = {
+  agent_name: "devops_agent",
   intended_purpose: null,
   operator_role: null,
   risk_tier: null,
@@ -50,11 +59,20 @@ const EMPTY_ENTRY: AgentClassificationRead = {
   oversight_owner_name: null,
   oversight_owner_contact: null,
   checker_last_update_date: null,
+  recorded: false,
   recorded_by_user_id: null,
   recorded_at: null,
+  complete: false,
+  missing_fields: [
+    "intended_purpose",
+    "operator_role",
+    "risk_tier",
+    "oversight_owner_name",
+  ],
 };
 
 const COMPLETE_ENTRY: AgentClassificationRead = {
+  agent_name: "credit_review_agent",
   intended_purpose: "Prepares creditworthiness assessments.",
   operator_role: "deployer",
   risk_tier: "high_risk",
@@ -62,8 +80,11 @@ const COMPLETE_ENTRY: AgentClassificationRead = {
   oversight_owner_name: "C. Martin",
   oversight_owner_contact: "c.martin@acme.example",
   checker_last_update_date: "2026-05-14",
+  recorded: true,
   recorded_by_user_id: "usr_1",
   recorded_at: "2026-06-02T09:00:00Z",
+  complete: true,
+  missing_fields: [],
 };
 
 const REPORT: AiActReport = {
@@ -75,7 +96,10 @@ const REPORT: AiActReport = {
   generated_by_user_id: "usr_1",
   generated_by_email: "c.martin@acme.example",
   annex_sha256: "7c1e9b04aa11bb22cc33dd44",
+  annex_bytes: 20480,
+  annex_filename: "rpt_1-annex.json",
   signing_kid: "hexgate-root-2026-01",
+  signature_b64: "c2lnbmF0dXJl",
 };
 
 interface StubOptions {
@@ -84,8 +108,17 @@ interface StubOptions {
   reports?: AiActReport[];
   /** Agent names whose classification GET fails with this status. */
   classificationStatus?: Record<string, number>;
+  /** Agent names whose classification GET succeeds once, then fails — a
+   * refetch blip on an entry already on screen. */
+  classificationFailsAfterFirst?: string[];
+  /** The agent list succeeds once, then fails — a refetch blip over a list
+   * that is already cached and on screen. */
+  agentsFailAfterFirst?: boolean;
   /** Status for GET .../ai-act/reports; 200 unless set. */
   reportsStatus?: number;
+  /** Status for POST .../ai-act/report; 201 unless set. */
+  generateStatus?: number;
+  generateDetail?: string;
 }
 
 function stubFetch({
@@ -93,9 +126,15 @@ function stubFetch({
   classifications = {},
   reports = [],
   classificationStatus = {},
+  classificationFailsAfterFirst = [],
+  agentsFailAfterFirst = false,
   reportsStatus = 200,
+  generateStatus = 201,
+  generateDetail = "nope",
 }: StubOptions = {}): Call[] {
   const calls: Call[] = [];
+  const classificationGets: Record<string, number> = {};
+  let agentGets = 0;
   const json = (body: unknown, status = 200) =>
     new Response(JSON.stringify(body), {
       status,
@@ -142,19 +181,35 @@ function stubFetch({
           return json({
             ...EMPTY_ENTRY,
             ...(init?.body ? JSON.parse(String(init.body)) : {}),
+            recorded: true,
             recorded_by_user_id: "usr_1",
             recorded_at: "2026-09-17T10:00:00Z",
+            complete: false,
+            missing_fields: ["operator_role", "risk_tier"],
           });
         case !!classification: {
           const name = (classification as RegExpMatchArray)[1];
           const status = classificationStatus[name];
           if (status) return json({ detail: "nope" }, status);
+          if (classificationFailsAfterFirst.includes(name)) {
+            const seen = (classificationGets[name] ?? 0) + 1;
+            classificationGets[name] = seen;
+            if (seen > 1) return json({ detail: "nope" }, 500);
+          }
           return json(classifications[name] ?? EMPTY_ENTRY);
         }
-        case url.pathname === `${base}/agents`:
+        case url.pathname === `${base}/agents`: {
+          agentGets += 1;
+          if (agentsFailAfterFirst && agentGets > 1) {
+            return json({ detail: "nope" }, 500);
+          }
           return json(agents);
+        }
         case url.pathname === `${base}/ai-act/report` && method === "POST":
-          return json(REPORT, 201);
+          return generateStatus === 201
+            ? // POST answers with the summary plus the parsed annex.
+              json({ ...REPORT, annex: { report_id: REPORT.id } }, 201)
+            : json({ detail: generateDetail }, generateStatus);
         case url.pathname === `${base}/ai-act/reports`:
           return reportsStatus === 200
             ? json(reports)
@@ -207,7 +262,7 @@ describe("AiActPage", () => {
     expect(screen.getByText("Incomplete")).toBeInTheDocument();
     expect(
       screen.getByText(
-        "Missing: Intended purpose, Operator role, Risk tier, Human-oversight owner",
+        "Missing: Intended purpose, Your role, Risk tier, Human-oversight owner",
       ),
     ).toBeInTheDocument();
   });
@@ -227,18 +282,48 @@ describe("AiActPage", () => {
   });
 
   it("treats a prefilled-but-unsaved entry as incomplete", async () => {
-    // The GET prefills intended_purpose from the manifest; until the operator
-    // PUTs it, it's Hexgate's guess rather than their assertion.
+    // The GET prefills intended_purpose from the manifest but reports the
+    // entry unrecorded, with every required field still missing — a prefill is
+    // Hexgate's suggestion, not the operator's assertion.
     stubFetch({
       agents: [{ name: "support_agent" }],
       classifications: {
-        support_agent: { ...COMPLETE_ENTRY, recorded_at: null },
+        support_agent: {
+          ...EMPTY_ENTRY,
+          agent_name: "support_agent",
+          intended_purpose: "Answers questions about existing accounts.",
+        },
       },
     });
     renderWithProviders(<AiActPage />, { initialRoute: "/ai-act" });
 
     expect(await screen.findByText("Incomplete")).toBeInTheDocument();
-    expect(screen.queryByText(/^Missing:/)).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Record entry" }),
+    ).toBeInTheDocument();
+  });
+
+  it("names the missing fields the server named, in the server's order", async () => {
+    // Completeness is the endpoint's verdict, not a rule re-derived here, so
+    // the report and this tab can never disagree about it. A high-risk entry
+    // missing its Annex III point is the case where the two lists differ.
+    stubFetch({
+      agents: [{ name: "credit_review_agent" }],
+      classifications: {
+        credit_review_agent: {
+          ...COMPLETE_ENTRY,
+          annex_iii_point: null,
+          complete: false,
+          missing_fields: ["annex_iii_point"],
+        },
+      },
+    });
+    renderWithProviders(<AiActPage />, { initialRoute: "/ai-act" });
+
+    expect(
+      await screen.findByText("Missing: Annex III point"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Incomplete")).toBeInTheDocument();
   });
 
   it("PUTs the operator's assertion when an entry is recorded", async () => {
@@ -454,20 +539,256 @@ describe("AiActPage", () => {
     expect(screen.getAllByRole("button", { name: /entry$/i })).toHaveLength(1);
   });
 
-  it("reads a 404 classification as no entry recorded, not as a failure", async () => {
-    // PR 1 may answer a missing row with a 404 rather than a prefilled body;
-    // either way the row is "incomplete", never "unavailable".
+  it("shows the generation in flight, then the new report", async () => {
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const calls = stubFetch({ reports: [] });
+    const inner = vi.mocked(window.fetch).getMockImplementation();
+    // Hold the POST open so the in-flight state is observable; every other
+    // call passes straight through.
+    vi.spyOn(window, "fetch").mockImplementation(async (input, init) => {
+      if ((init?.method ?? "GET") === "POST") await gate;
+      return inner!(input, init);
+    });
+    const user = userEvent.setup();
+    renderWithProviders(<AiActPage />, { initialRoute: "/ai-act" });
+
+    await user.click(
+      await screen.findByRole("button", { name: /generate report/i }),
+    );
+    expect(
+      await screen.findByText(/Assembling and signing the report/),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /generating/i })).toBeDisabled();
+
+    release!();
+    await waitFor(() =>
+      expect(screen.queryByText(/Assembling and signing/)).toBeNull(),
+    );
+    expect(calls.some((c) => c.method === "POST")).toBe(true);
+  });
+
+  it("shows the endpoint's own refusal of a period verbatim", async () => {
+    // A 400 says why — "entirely older than the 180-day retention window" —
+    // and that is more than this page could infer, so it is not swallowed.
+    const detail =
+      "the requested period is entirely older than the 180-day retention " +
+      "window, so no records survive in it to report on";
+    stubFetch({ generateStatus: 400, generateDetail: detail });
+    const user = userEvent.setup();
+    renderWithProviders(<AiActPage />, { initialRoute: "/ai-act" });
+
+    await user.click(
+      await screen.findByRole("button", { name: /generate report/i }),
+    );
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith(detail));
+    // The in-flight banner clears on a refusal too — tying it to success only
+    // would leave it claiming a signing that already failed.
+    expect(screen.queryByText(/Assembling and signing/)).toBeNull();
+    expect(
+      screen.getByRole("button", { name: /generate report/i }),
+    ).toBeEnabled();
+  });
+
+  it("refuses to save a classification that asserts nothing", async () => {
+    // The PUT replaces the entry, so an empty body would wipe a recorded one
+    // and stamp a recorder against no assertions; the endpoint 422s it.
+    const calls = stubFetch({ agents: [{ name: "devops_agent" }] });
+    const user = userEvent.setup();
+    renderWithProviders(<AiActPage />, { initialRoute: "/ai-act" });
+
+    await user.click(
+      await screen.findByRole("button", { name: /record entry/i }),
+    );
+    const dialog = await screen.findByRole("dialog");
+    expect(
+      within(dialog).getByRole("button", { name: /save entry/i }),
+    ).toBeDisabled();
+
+    // Whitespace is not an assertion: the endpoint normalises blanks to null
+    // and then rejects the all-null body, so Save must stay disabled.
+    await user.type(
+      within(dialog).getByLabelText("Human-oversight owner"),
+      "   ",
+    );
+    expect(
+      within(dialog).getByRole("button", { name: /save entry/i }),
+    ).toBeDisabled();
+
+    await user.type(
+      within(dialog).getByLabelText("Human-oversight owner"),
+      "L. Okafor",
+    );
+    expect(
+      within(dialog).getByRole("button", { name: /save entry/i }),
+    ).toBeEnabled();
+    expect(calls.some((c) => c.method === "PUT")).toBe(false);
+  });
+
+  it("saves the annex under the filename the server chose", async () => {
     stubFetch({
-      agents: [{ name: "devops_agent" }],
-      classificationStatus: { devops_agent: 404 },
+      reports: [{ ...REPORT, annex_filename: "rpt_1-annex.json" }],
+    });
+    const anchors: HTMLAnchorElement[] = [];
+    const create = document.createElement.bind(document);
+    vi.spyOn(document, "createElement").mockImplementation((tag: string) => {
+      const el = create(tag);
+      if (tag === "a") anchors.push(el as HTMLAnchorElement);
+      return el;
+    });
+    const user = userEvent.setup();
+    renderWithProviders(<AiActPage />, { initialRoute: "/ai-act" });
+
+    await user.click(await screen.findByRole("button", { name: /annex/i }));
+
+    await waitFor(() =>
+      expect(anchors.some((a) => a.download === "rpt_1-annex.json")).toBe(true),
+    );
+  });
+
+  it("shows the saved entry even when the refetch after it fails", async () => {
+    // The PUT returns the stored entry, so the row is updated from the
+    // response. Depending on the invalidation refetch instead would leave the
+    // pre-save values on screen under a "recorded" toast, with nothing
+    // scheduled to correct them (refetchOnWindowFocus is off).
+    stubFetch({
+      agents: [{ name: "credit_review_agent" }],
+      classifications: { credit_review_agent: COMPLETE_ENTRY },
+      classificationFailsAfterFirst: ["credit_review_agent"],
+    });
+    const user = userEvent.setup();
+    renderWithProviders(<AiActPage />, { initialRoute: "/ai-act" });
+
+    expect(await screen.findByText("Complete")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /edit entry/i }));
+    const dialog = await screen.findByRole("dialog");
+    await user.click(
+      within(dialog).getByRole("button", { name: /save entry/i }),
+    );
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+
+    // The stub's PUT answers with an entry the server counts as incomplete;
+    // that is what the row must now show — not the pre-save "Complete", and
+    // not "Unavailable" because the refetch behind it 500'd.
+    expect(
+      await screen.findByText("Missing: Your role, Risk tier"),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("Unavailable")).toBeNull();
+    expect(
+      screen.getByRole("button", { name: /edit entry/i }),
+    ).toBeInTheDocument();
+  });
+
+  it("renders a risk tier it does not recognise rather than a dash", async () => {
+    // `risk_tier` is a plain string on the read schema. A tier this build has
+    // no label for is still a recorded assertion — showing the "not asserted"
+    // dash beside a Complete badge would read as a gap that isn't there.
+    stubFetch({
+      agents: [{ name: "credit_review_agent" }],
+      classifications: {
+        credit_review_agent: {
+          ...COMPLETE_ENTRY,
+          risk_tier: "limited_risk" as never,
+        },
+      },
     });
     renderWithProviders(<AiActPage />, { initialRoute: "/ai-act" });
 
-    expect(await screen.findByText("Incomplete")).toBeInTheDocument();
+    expect(await screen.findByText("limited_risk")).toBeInTheDocument();
+  });
+
+  it("keeps the chosen period across a project switch", async () => {
+    // The panel must not remount on a project change: re-running the period
+    // defaults would silently widen a narrowed window back to 180 days, and
+    // the next Generate would sign a report over the wrong one.
+    stubFetch();
+    renderWithProviders(<AiActPage />, { initialRoute: "/ai-act" });
+
+    const from = await screen.findByLabelText("From (UTC)");
+    fireEvent.change(from, { target: { value: "2026-08-01" } });
+
+    act(() => {
+      useActive.setState({ activeProjectId: "p2" });
+    });
+    act(() => {
+      useActive.setState({ activeProjectId: PROJECT });
+    });
+
+    expect(screen.getByLabelText("From (UTC)")).toHaveValue("2026-08-01");
+  });
+
+  it("keeps the inventory counts when an agent-list refetch blips", async () => {
+    // The header and the table have to state what they know on one rule: a
+    // populated table under a headline with no numbers is the panel
+    // contradicting itself about whether it knows the inventory.
+    stubFetch({
+      agents: [{ name: "credit_review_agent" }],
+      classifications: { credit_review_agent: COMPLETE_ENTRY },
+      agentsFailAfterFirst: true,
+    });
+    renderWithProviders(<AiActPage />, { initialRoute: "/ai-act" });
+
     expect(
-      screen.getByText("Missing: Classification entry"),
+      await screen.findByText(/1 registered · 1 complete · 0 incomplete/),
     ).toBeInTheDocument();
-    expect(screen.queryByText("Unavailable")).toBeNull();
+
+    // Leave the project and come back: the return refetch 500s while the
+    // cached list is still what the table is drawing.
+    act(() => {
+      useActive.setState({ activeProjectId: "p2" });
+    });
+    act(() => {
+      useActive.setState({ activeProjectId: PROJECT });
+    });
+
+    expect(await screen.findByText("credit_review_agent")).toBeInTheDocument();
+    expect(
+      screen.getByText(/1 registered · 1 complete · 0 incomplete/),
+    ).toBeInTheDocument();
+  });
+
+  it("does not drop the Annex III point when editing an entry whose tier it cannot render", async () => {
+    // The PUT is a full replace. A tier this build has no option for is one
+    // whose Annex III field the form never showed, so clearing it on the
+    // operator's behalf would delete a recorded reference from the next
+    // signed report. The tier itself must show as itself, not as a blank box.
+    const calls = stubFetch({
+      agents: [{ name: "credit_review_agent" }],
+      classifications: {
+        credit_review_agent: {
+          ...COMPLETE_ENTRY,
+          risk_tier: "limited_risk" as never,
+        },
+      },
+    });
+    const user = userEvent.setup();
+    renderWithProviders(<AiActPage />, { initialRoute: "/ai-act" });
+
+    await user.click(
+      await screen.findByRole("button", { name: /edit entry/i }),
+    );
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByLabelText("Risk tier")).toHaveTextContent(
+      "limited_risk",
+    );
+
+    await user.type(
+      within(dialog).getByLabelText("Owner contact (optional)"),
+      "x",
+    );
+    await user.click(
+      within(dialog).getByRole("button", { name: /save entry/i }),
+    );
+
+    await waitFor(() => {
+      const put = calls.find((c) => c.method === "PUT");
+      expect(put?.body).toMatchObject({
+        risk_tier: "limited_risk",
+        annex_iii_point: "5(b)",
+      });
+    });
   });
 
   it("renders the report period in UTC, matching the picker and the annex", async () => {
@@ -488,11 +809,9 @@ describe("AiActPage", () => {
   });
 
   it("falls back to the user id when the server resolves no email", async () => {
-    // `generated_by_email` is a display convenience the spec's AiActReport
-    // does not promise; the column must stay readable without it.
-    const withoutEmail: AiActReport = { ...REPORT };
-    delete withoutEmail.generated_by_email;
-    stubFetch({ reports: [withoutEmail] });
+    // The endpoint resolves the email server-side and sends null when the
+    // account row is gone; the column must stay readable in that case.
+    stubFetch({ reports: [{ ...REPORT, generated_by_email: null }] });
     renderWithProviders(<AiActPage />, { initialRoute: "/ai-act" });
 
     expect(await screen.findByText("usr_1")).toBeInTheDocument();

@@ -1,5 +1,6 @@
 import { useState } from "react";
 import {
+  useIsMutating,
   useMutation,
   useQueries,
   useQuery,
@@ -10,6 +11,7 @@ import {
   ClipboardList,
   Download,
   FileText,
+  LoaderCircle,
   Scale,
   TriangleAlert,
 } from "lucide-react";
@@ -24,8 +26,7 @@ import { Label } from "@/components/ui/label";
 import { useProjectScoped } from "@/lib/active";
 import {
   RETENTION_DAYS,
-  isClassificationComplete,
-  missingClassificationFields,
+  missingFieldLabels,
   periodEnd,
   periodStart,
   retentionPeriod,
@@ -96,15 +97,7 @@ function InventoryPanel({ projectId }: { projectId: string }) {
   const classificationQueries = useQueries({
     queries: agents.map((a) => ({
       queryKey: ["ai-act", "classification", projectId, a.name],
-      queryFn: () =>
-        api.getAgentClassification(a.name, projectId).catch((err) => {
-          // The endpoint answers 200 with a prefilled body for an agent that
-          // has no entry. Tolerate a 404 as the same answer, so whichever of
-          // those two shapes PR 1 lands with reads as "nothing recorded"
-          // rather than as a failed load.
-          if (err instanceof ApiError && err.status === 404) return null;
-          throw err;
-        }),
+      queryFn: () => api.getAgentClassification(a.name, projectId),
     })),
   });
 
@@ -114,17 +107,23 @@ function InventoryPanel({ projectId }: { projectId: string }) {
     const q = classificationQueries[i];
     return {
       name: a.name,
-      failed: !!q?.isError,
+      // Only a query with nothing to show counts as failed. A refetch that
+      // blips after the entry has loaded leaves `data` in place, and the row
+      // should keep reporting what it knows rather than flip to "Unavailable"
+      // — the same guard the agent list below uses.
+      failed: !!q?.isError && q?.data === undefined,
       entry: (q?.data ?? null) as AgentClassificationRead | null,
     };
   });
 
   const loading =
     agentsQuery.isLoading || classificationQueries.some((q) => q.isPending);
+  // One rule for the whole panel: a refetch that blips while the last-good
+  // list is still cached is not a failure to report, and the header counts
+  // must not vanish from above a table that is still rendering rows.
+  const agentsFailed = agentsQuery.isError && agentsQuery.data === undefined;
   const loaded = entries.filter((e) => !e.failed);
-  const completeCount = loaded.filter((e) =>
-    isClassificationComplete(e.entry),
-  ).length;
+  const completeCount = loaded.filter((e) => e.entry?.complete).length;
   const unavailable = entries.length - loaded.length;
   const editingEntry = entries.find((e) => e.name === editing);
 
@@ -133,7 +132,7 @@ function InventoryPanel({ projectId }: { projectId: string }) {
       <div className="flex items-center gap-2 border-b border-border px-5 py-3.5">
         <ClipboardList className="size-4 text-muted-foreground" />
         <span className="text-sm font-medium">AI system inventory</span>
-        {!loading && !agentsQuery.isError && (
+        {!loading && !agentsFailed && (
           <span className="text-sm text-muted-foreground">
             · {agents.length} registered · {completeCount} complete ·{" "}
             {loaded.length - completeCount} incomplete
@@ -142,7 +141,7 @@ function InventoryPanel({ projectId }: { projectId: string }) {
         )}
       </div>
 
-      {agentsQuery.isError && agentsQuery.data === undefined ? (
+      {agentsFailed ? (
         <LoadError what="the agent list" />
       ) : loading ? (
         <div className="p-12 text-center text-sm text-muted-foreground">
@@ -172,8 +171,7 @@ function InventoryPanel({ projectId }: { projectId: string }) {
           </thead>
           <tbody>
             {entries.map(({ name, entry, failed }) => {
-              const missing = missingClassificationFields(entry);
-              const complete = isClassificationComplete(entry);
+              const missing = missingFieldLabels(entry);
               return (
                 <tr
                   key={name}
@@ -187,7 +185,7 @@ function InventoryPanel({ projectId }: { projectId: string }) {
                       <Badge variant="outline" className="text-deny">
                         Unavailable
                       </Badge>
-                    ) : complete ? (
+                    ) : entry?.complete ? (
                       <Badge variant="allow">Complete</Badge>
                     ) : (
                       <div className="flex flex-col gap-1">
@@ -225,7 +223,7 @@ function InventoryPanel({ projectId }: { projectId: string }) {
                         className="text-xs"
                         onClick={() => setEditing(name)}
                       >
-                        {entry?.recorded_at ? "Edit entry" : "Record entry"}
+                        {entry?.recorded ? "Edit entry" : "Record entry"}
                       </Button>
                     )}
                   </td>
@@ -249,14 +247,53 @@ function InventoryPanel({ projectId }: { projectId: string }) {
   );
 }
 
+/**
+ * Turn a generation failure into copy the operator can act on.
+ *
+ * 400 is the endpoint's own refusal of the period — "entirely older than the
+ * 180-day retention window", "start must be before end" — and says more than
+ * anything this page could infer, so it is shown verbatim. 503 is ClickHouse
+ * being unreachable, which is a retry rather than a mistake.
+ */
+function generateErrorMessage(err: unknown): string {
+  if (err instanceof ApiError) {
+    if (err.status === 400) return err.message;
+    if (err.status === 503) {
+      return "The audit log is temporarily unavailable. Try again in a moment.";
+    }
+    if (err.status === 403) {
+      return "You don't have permission to generate reports in this project.";
+    }
+  }
+  return "Could not generate the report.";
+}
+
 /** Region C — pick the period and generate. Defaults to the full retention
  * window, which is the widest period the audit tables can evidence. */
+/** Mutation key for one project's generation. Keyed rather than kept in
+ * component state so the in-flight indicator reads the mutation cache: a
+ * generation takes seconds, and an operator who clicks over to Audit and back
+ * would otherwise return to an idle-looking button and sign a second report
+ * over the same period. Project-scoped so the banner never appears on a
+ * project nothing was generated for — and so that switching project detaches
+ * the observer (`MutationObserver.setOptions` resets on a key change) while
+ * the running mutation keeps the options it was fired with. */
+function generateKey(projectId: string) {
+  return ["ai-act", "generate", projectId] as const;
+}
+
+function useIsGenerating(projectId: string): boolean {
+  return useIsMutating({ mutationKey: generateKey(projectId) }) > 0;
+}
+
 function GeneratePanel({ projectId }: { projectId: string }) {
   const [from, setFrom] = useState(() => toDateInput(retentionPeriod().from));
   const [to, setTo] = useState(() => toDateInput(retentionPeriod().to));
   const qc = useQueryClient();
+  const generating = useIsGenerating(projectId);
 
   const generate = useMutation({
+    mutationKey: generateKey(projectId),
     mutationFn: () =>
       api.generateAiActReport(
         { from: periodStart(from), to: periodEnd(to) },
@@ -266,7 +303,7 @@ function GeneratePanel({ projectId }: { projectId: string }) {
       qc.invalidateQueries({ queryKey: ["ai-act", "reports", projectId] });
       toast.success("Report generated");
     },
-    onError: () => toast.error("Could not generate the report."),
+    onError: (err) => toast.error(generateErrorMessage(err)),
   });
 
   const invalidPeriod = !from || !to || from > to;
@@ -302,11 +339,11 @@ function GeneratePanel({ projectId }: { projectId: string }) {
         </div>
         <Button
           className="gap-2"
-          disabled={invalidPeriod || generate.isPending}
+          disabled={invalidPeriod || generating}
           onClick={() => generate.mutate()}
         >
           <FileText className="size-4" />
-          {generate.isPending ? "Generating…" : "Generate report"}
+          {generating ? "Generating…" : "Generate report"}
         </Button>
       </div>
       {invalidPeriod && (
@@ -321,6 +358,9 @@ function GeneratePanel({ projectId }: { projectId: string }) {
 /** Region D — every report generated for this project, with both downloads.
  * The annex is what the signature covers; the PDF renders it. */
 function HistoryPanel({ projectId }: { projectId: string }) {
+  // Assembling a 180-day window is seconds of synchronous work server-side,
+  // so the panel says so rather than looking unchanged until the row appears.
+  const generating = useIsGenerating(projectId);
   const reportsQuery = useQuery({
     queryKey: ["ai-act", "reports", projectId],
     queryFn: () => api.listAiActReports(projectId),
@@ -335,7 +375,9 @@ function HistoryPanel({ projectId }: { projectId: string }) {
           : await api.downloadAiActReportPdf(report.id, projectId);
       saveBlob(
         blob,
-        kind === "annex" ? `${report.id}-annex.json` : `${report.id}.pdf`,
+        // The annex endpoint sets this same name in Content-Disposition; the
+        // PDF route names itself after the report id.
+        kind === "annex" ? report.annex_filename : `${report.id}.pdf`,
       );
     } catch {
       toast.error(
@@ -357,6 +399,13 @@ function HistoryPanel({ projectId }: { projectId: string }) {
           </span>
         )}
       </div>
+
+      {generating && (
+        <div className="flex items-center gap-2 border-b border-border bg-muted/40 px-5 py-2.5 text-xs text-muted-foreground">
+          <LoaderCircle className="size-3.5 animate-spin" />
+          Assembling and signing the report over the selected period…
+        </div>
+      )}
 
       {reportsQuery.isError && reportsQuery.data === undefined ? (
         <LoadError what="the report history" />

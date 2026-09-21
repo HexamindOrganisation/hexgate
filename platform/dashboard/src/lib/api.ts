@@ -633,10 +633,14 @@ export const LLM_MESSAGE_PAGE = 50;
 
 // --- AI Act evidence report -------------------------------------------------
 //
-// Wire shapes for the two slices the tab talks to, as
-// Specs/ai_act_evidence_report.md fixes them: the per-agent classification
-// entry (PR 1) and the generated evidence report (PR 3). Neither endpoint is
-// merged yet, so these are written against the spec, not read off the server.
+// Wire shapes for the two slices the tab talks to. Neither endpoint is merged
+// yet, so these are pinned field-for-field to what the open branches serve —
+// not to the spec's prose, which is looser than both:
+//
+//   classification  #235 vl/feat/agent_ai_act_classification @ 5d110f5d
+//                   (hexgate_api/schemas.py: AgentClassificationRead/Write)
+//   report          #239 vl/feat/ai_act_report @ 89a040d0
+//                   (hexgate_api/schemas.py: AiActReportCreate/Summary/Read)
 
 export type OperatorRole = "provider" | "deployer";
 
@@ -646,43 +650,67 @@ export type RiskTier = "high_risk" | "not_high_risk" | "prohibited" | "minimal";
  * The operator's own Article 6 / Annex III assertion about one agent, as
  * `GET …/agents/{name}/classification` returns it.
  *
- * Every assertion field is nullable: the endpoint answers for an agent that
- * has no entry yet, with `intended_purpose` prefilled from the registered
- * manifest description. `recorded_at` stays null until the operator saves the
- * entry, so it is what separates a prefill from an assertion. Hexgate records
- * what the operator asserts and validates nothing about it.
+ * An agent with no entry gets 200 rather than 404: the endpoint serves an
+ * empty entry with `recorded: false` and `intended_purpose` prefilled from
+ * the registered manifest description, so the form has something to open on.
+ * Nothing counts as recorded until the operator PUTs it. (An agent the
+ * project does not have is still a 404.)
  *
- * The row's `id` / `agent_id` are deliberately not modelled — the tab
- * addresses a classification by agent name, the way the route does.
+ * `complete` and `missing_fields` are the server's, not re-derived here — the
+ * endpoint computes them so the report and this tab can never disagree about
+ * whether an entry counts. `missing_fields` carries wire field names in a
+ * fixed order (`intended_purpose`, `operator_role`, `risk_tier`,
+ * `annex_iii_point` when the tier is high-risk, `oversight_owner_name`);
+ * `CLASSIFICATION_FIELD_LABELS` in lib/ai-act.ts turns them into display copy.
  */
 export interface AgentClassificationRead {
+  agent_name: string;
   intended_purpose: string | null;
   operator_role: OperatorRole | null;
   risk_tier: RiskTier | null;
-  /** Annex III reference, e.g. `"5(b)"`. Null when the tier is not high-risk. */
+  /** Annex III reference, e.g. `"5(b)"`. Required only for a high-risk tier. */
   annex_iii_point: string | null;
   oversight_owner_name: string | null;
   oversight_owner_contact: string | null;
   /** `last_update_date` (ISO `YYYY-MM-DD`) of the compliance checker the
    * operator relied on when recording the entry. */
   checker_last_update_date: string | null;
+  /** False until the operator has saved an entry. */
+  recorded: boolean;
   recorded_by_user_id: string | null;
   recorded_at: string | null;
+  complete: boolean;
+  missing_fields: string[];
 }
 
-/** PUT body — the assertion fields only. Provenance (`recorded_by_user_id`,
- * `recorded_at`) is stamped server-side from the session. */
-export type AgentClassificationUpdate = Omit<
-  AgentClassificationRead,
-  "recorded_by_user_id" | "recorded_at"
->;
+/**
+ * PUT body — the assertion fields only. Provenance (`recorded_by_user_id`,
+ * `recorded_at`) is stamped server-side from the session.
+ *
+ * A full replace, not a patch: an omitted field means the operator cleared
+ * it. The endpoint sets `extra="forbid"`, so an unknown key is a 422 rather
+ * than a silently ignored one, and rejects a body that asserts nothing at all
+ * — `assertsSomething` in lib/ai-act.ts is the client-side half of that rule.
+ */
+export interface AgentClassificationUpdate {
+  intended_purpose: string | null;
+  operator_role: OperatorRole | null;
+  risk_tier: RiskTier | null;
+  annex_iii_point: string | null;
+  oversight_owner_name: string | null;
+  oversight_owner_contact: string | null;
+  checker_last_update_date: string | null;
+}
 
 /**
- * One generated evidence report, as `POST …/ai-act/report` returns it and
- * `GET …/ai-act/reports` lists it.
+ * One generated evidence report, as `GET …/ai-act/reports` lists it (newest
+ * first).
  *
- * `annex_json` — the signed bytes — is not modelled: the annex is downloaded
- * on demand so the history list stays small.
+ * `annex_json` — the signed bytes — is not carried here: the annex is
+ * downloaded on demand so the history list stays small. What it does carry is
+ * everything a verifier needs to check those bytes once downloaded: the
+ * digest, the byte length they should have, the signing key id and the
+ * base64 signature.
  */
 export interface AiActReport {
   id: string;
@@ -691,11 +719,23 @@ export interface AiActReport {
   period_end: string;
   generated_at: string;
   generated_by_user_id: string;
-  /** Resolved server-side for display, like `BanRead.created_by_email`.
-   * Optional: the history list falls back to the user id without it. */
-  generated_by_email?: string | null;
+  /** Resolved server-side for display; null when the account is gone. */
+  generated_by_email: string | null;
   annex_sha256: string;
+  /** Length of the signed annex in bytes. */
+  annex_bytes: number;
+  /** Download name the annex endpoint also sets in Content-Disposition. */
+  annex_filename: string;
   signing_kid: string;
+  /** Ed25519 signature over the digest, base64. */
+  signature_b64: string;
+}
+
+/** What `POST …/ai-act/report` returns (201): the history row plus the parsed
+ * annex. The parsed object is a convenience for a renderer — the signature
+ * covers the bytes the annex download serves, not a re-serialization of it. */
+export interface AiActReportRead extends AiActReport {
+  annex: unknown;
 }
 
 /** POST body. Both bounds are optional; omitting them asks the server for
@@ -911,7 +951,7 @@ export const api = {
     ),
 
   generateAiActReport: (body: AiActReportCreateBody, projectId: string) =>
-    request<AiActReport>(`/v1/projects/${projectId}/ai-act/report`, {
+    request<AiActReportRead>(`/v1/projects/${projectId}/ai-act/report`, {
       method: "POST",
       body: JSON.stringify(body),
     }),
@@ -923,7 +963,8 @@ export const api = {
   downloadAiActAnnex: (reportId: string, projectId: string) =>
     requestBlob(`/v1/projects/${projectId}/ai-act/reports/${reportId}/annex`),
 
-  /** The PDF rendering of the same annex (PR 4; 404s until that ships). */
+  /** The PDF rendering of the same annex — PR 4 (#237), stacked on #239, so
+   * this 404s until that lands. */
   downloadAiActReportPdf: (reportId: string, projectId: string) =>
     requestBlob(`/v1/projects/${projectId}/ai-act/reports/${reportId}.pdf`),
 };
