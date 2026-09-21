@@ -10,6 +10,8 @@ from hexgate.manifest.models import (
     AgentManifest,
     InputProperty,
     InputSchema,
+    SkillDefinition,
+    SkillResources,
     ToolDefinition,
 )
 
@@ -18,6 +20,8 @@ __all__ = [
     "AgentManifest",
     "InputProperty",
     "InputSchema",
+    "SkillDefinition",
+    "SkillResources",
     "ToolDefinition",
     "create_manifest",
 ]
