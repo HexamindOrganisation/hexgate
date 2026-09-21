@@ -1,7 +1,7 @@
 from datetime import date, datetime, timezone
 from enum import StrEnum
-from typing import Annotated, Any, Literal, Optional
-from uuid import UUID
+from typing import Annotated, Any, Final, Literal, Optional
+from uuid import NAMESPACE_DNS, UUID, uuid5
 
 from pydantic import (
     BaseModel,
@@ -1009,8 +1009,13 @@ class BanEnforcementPage(BaseModel):
 
 
 class AnomalySeverity(StrEnum):
+    # Additive to a live enum. ``GET /audit/anomalies`` never returns LOW — its
+    # detector only ever assigned the two — so an existing client's two-way
+    # branch on severity keeps seeing exactly what it saw before. LOW exists for
+    # the findings detectors, which ship a signal quiet rather than not at all.
     HIGH = "high"
     MEDIUM = "medium"
+    LOW = "low"
 
 
 class AuditAnomaly(BaseModel):
@@ -1021,3 +1026,109 @@ class AuditAnomaly(BaseModel):
     deny_rate: float
     first_seen: datetime
     last_seen: datetime
+
+
+# ---------------------------------------------------------------------------
+# Findings — the one shape all five detectors produce
+# ---------------------------------------------------------------------------
+
+
+class FindingKind(StrEnum):
+    """Which detector produced a finding. Each names its own dedup bucket."""
+
+    FIRST_SEEN = "first_seen"
+    RUN_SHAPE = "run_shape"
+    REPETITION = "repetition"
+    DENY_BURST = "deny_burst"
+    CONFORMANCE = "conformance"
+
+
+class FindingSubject(StrEnum):
+    """What a finding is *about* — and therefore what a mute targets."""
+
+    USER = "user"
+    AGENT = "agent"
+    RUN = "run"
+
+
+# Derived from the DNS namespace rather than pasted in as a magic constant, so
+# the value is reproducible from what it says it is. FROZEN once any finding is
+# stored: changing this string re-derives every finding_id, so a re-score would
+# land on a new row and the old one would linger until its TTL.
+FINDING_NAMESPACE: Final[UUID] = uuid5(NAMESPACE_DNS, "findings.hexgate.ai")
+
+# ASCII unit separator. Not a character any project id, kind, subject id or
+# bucket part contains, so ("a", "b|c") and ("a|b", "c") cannot hash to the
+# same finding — which would silently merge two findings into one row.
+_FINDING_KEY_SEPARATOR: Final[str] = "\x1f"
+
+
+def finding_id(
+    project_id: str,
+    kind: FindingKind | str,
+    subject_id: str,
+    *bucket: str,
+) -> UUID:
+    """The deterministic identity of a finding: ``uuid5`` over its bucket.
+
+    Re-scoring is what this exists for. A run is not finished when a detector
+    first sees it — a long run is re-scored every tick — and the same bucket
+    must produce the same id every time so ``audit_finding``'s
+    ``ReplacingMergeTree`` collapses the ticks into one finding whose severity,
+    summary, evidence and ``last_seen`` move. ``project_id`` is part of the key,
+    so two tenants cannot collide on one id.
+
+    ``bucket`` is the detector's own dedup key from §II of the spec, its parts
+    in a fixed order (``run_shape`` passes the run id, ``repetition`` the run id
+    and the tool, and so on).
+    """
+    key = _FINDING_KEY_SEPARATOR.join((project_id, str(kind), subject_id, *bucket))
+    return uuid5(FINDING_NAMESPACE, key)
+
+
+class AuditFinding(BaseModel):
+    """One finding, as the detectors write it and the Findings page reads it.
+
+    ``first_seen``/``last_seen`` are the *finding's* span, not the scoring
+    tick's: ``first_seen`` keeps the earliest value ever written for this
+    ``finding_id``, because a tick only reads decisions past the watermark and
+    recomputing the minimum there would walk a finding's start time forward on
+    every tick.
+    """
+
+    finding_id: UUID
+    detected_at: datetime
+    kind: FindingKind
+    severity: AnomalySeverity
+    subject: FindingSubject
+    subject_id: str
+
+    # Denormalised join keys, defaulted rather than nullable (the column
+    # defaults in schema.sql match). run_id is None rather than the zero UUID
+    # the column stores for "not about one run": the read surface says absent
+    # rather than handing out an id that joins to nothing.
+    agent_name: str = ""
+    run_id: Optional[UUID] = None
+    session_id: str = ""
+
+    first_seen: datetime
+    last_seen: datetime
+
+    # One sentence, rendered server-side. A finding a DPO cannot read is not
+    # shippable, and the UI never assembles this.
+    summary: str
+    # Decoded objects, not the JSON text the columns hold — the detector builds
+    # them as dicts and the page receives them as objects. ``suggested_control``
+    # is the policy fragment that would stop a repeat, empty for the kinds that
+    # have none yet.
+    evidence: dict[str, Any] = Field(default_factory=dict)
+    suggested_control: dict[str, Any] = Field(default_factory=dict)
+
+
+class AuditFindingPage(BaseModel):
+    """A page of findings; ``total`` is the unpaginated match count."""
+
+    rows: list[AuditFinding]
+    total: int
+    limit: int
+    offset: int

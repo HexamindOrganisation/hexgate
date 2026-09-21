@@ -342,6 +342,7 @@ columns — which is why the step is unconditional in the recipe.
 | policy_decision `attributes` | `clickhouse/0001_add_policy_decision_attributes.sql` |
 | run attribution on decisions/usage | `clickhouse/0002_add_run_columns.sql` |
 | LLM message logging (`llm_message` table) | `clickhouse/0003_add_llm_message.sql` — required before the build that stores `hexgate.messages` |
+| findings / anomaly detection (4 tables) | `clickhouse/0004_add_findings.sql` — required before the build that ships the findings feature |
 
 **Rolling back past a migration.** The columns stay behind when the code goes
 away, and old code does not know to filter on them. Nothing here is automatic,
