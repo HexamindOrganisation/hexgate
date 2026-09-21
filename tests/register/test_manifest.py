@@ -1,3 +1,7 @@
+import logging
+
+import pytest
+
 from hexgate.manifest import create_manifest
 from hexgate.manifest.google import create_google_manifest
 from hexgate.manifest.langchain import create_langchain_manifest
@@ -173,6 +177,105 @@ def test_google_manifest_extracts_mcp_tool_schema_from_json_schema():
     assert tool_def.input_schema.properties["channel"].type == "string"
     # Required list carries through too — pre-fix this was `[]`.
     assert sorted(tool_def.input_schema.required) == ["channel", "text"]
+
+
+def _google_toolset(tools, *, raises=False, **kwargs):
+    """A minimal BaseToolset whose tool list (or failure) the test controls.
+
+    Hand-rolled rather than ADK's SkillToolset, which only exists from ADK
+    1.25.0 while pyproject pins google-adk>=1.14.
+    """
+    from google.adk.tools.base_toolset import BaseToolset
+
+    class _FakeToolset(BaseToolset):
+        async def get_tools(self, readonly_context=None):
+            if raises:
+                raise RuntimeError("cannot enumerate offline")
+            return list(tools)
+
+    return _FakeToolset(**kwargs)
+
+
+def _google_function_tool(name):
+    from google.adk.tools.function_tool import FunctionTool
+
+    def tool(text: str) -> str:
+        """A toolset member."""
+        return text
+
+    tool.__name__ = name
+    return FunctionTool(func=tool)
+
+
+def _google_agent(tools):
+    from google.adk.agents import Agent
+
+    return Agent(
+        name="test_agent",
+        model="gemini-2.0-flash",
+        description="A test agent",
+        instruction="Greet the user.",
+        tools=tools,
+    )
+
+
+def test_google_manifest_expands_a_toolset():
+    """Regression for #248: a BaseToolset entry used to hit
+    FunctionTool(func=entry) and raise TypeError, because a toolset has no
+    _get_declaration. Its member tools now register alongside plain ones."""
+
+    def plain_tool(text: str) -> str:
+        """A plain tool."""
+        return text
+
+    toolset = _google_toolset(
+        [_google_function_tool("search"), _google_function_tool("fetch")]
+    )
+
+    manifest = create_google_manifest(_google_agent([plain_tool, toolset]))
+
+    assert [t.name for t in manifest.tools] == ["plain_tool", "search", "fetch"]
+
+
+def test_google_manifest_toolset_tools_use_prefixed_names():
+    """The manifest records the names the model will call, or a generated
+    starter policy would reference names that never appear."""
+    toolset = _google_toolset(
+        [_google_function_tool("search")], tool_name_prefix="mymcp"
+    )
+
+    manifest = create_google_manifest(_google_agent([toolset]))
+
+    assert [t.name for t in manifest.tools] == ["mymcp_search"]
+
+
+@pytest.mark.asyncio
+async def test_google_manifest_expands_a_toolset_inside_a_running_loop():
+    """Registration is sync but expansion is async. Called from inside a loop,
+    asyncio.run raises, so _run_sync falls back to a worker thread rather than
+    failing registration."""
+    toolset = _google_toolset([_google_function_tool("search")])
+
+    manifest = create_google_manifest(_google_agent([toolset]))
+
+    assert [t.name for t in manifest.tools] == ["search"]
+
+
+def test_google_manifest_survives_a_toolset_that_cannot_enumerate(caplog):
+    """A toolset that cannot list offline (a live MCP connection, say) must not
+    break registration: the agent still registers, minus that toolset's tools."""
+
+    def plain_tool(text: str) -> str:
+        """A plain tool."""
+        return text
+
+    agent = _google_agent([plain_tool, _google_toolset([], raises=True)])
+
+    with caplog.at_level(logging.WARNING, logger="hexgate.manifest.google"):
+        manifest = create_google_manifest(agent)
+
+    assert [t.name for t in manifest.tools] == ["plain_tool"]
+    assert "could not expand toolset" in caplog.text
 
 
 def test_pydantic_ai_manifest_schema():

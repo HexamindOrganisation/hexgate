@@ -15,8 +15,12 @@ import functools
 from collections.abc import Callable
 from typing import Any, Union
 
+from google.adk.agents.readonly_context import ReadonlyContext
+from google.adk.auth.auth_tool import AuthConfig
+from google.adk.models.llm_request import LlmRequest
 from google.adk.tools.agent_tool import AgentTool
 from google.adk.tools.base_tool import BaseTool
+from google.adk.tools.base_toolset import BaseToolset
 from google.adk.tools.function_tool import FunctionTool
 from google.adk.tools.tool_context import ToolContext
 
@@ -28,7 +32,7 @@ from hexgate.security.enforcer import PolicyEnforcer
 from hexgate.security.models import agent_target_key
 from hexgate.security.naming import canonical_name
 
-ToolEntry = Union[BaseTool, Callable[..., Any]]
+ToolEntry = Union[BaseTool, BaseToolset, Callable[..., Any]]
 
 
 def _render_error(decision: Any) -> str:
@@ -137,15 +141,84 @@ def wrap_tool(
     return wrapped
 
 
+class GuardedToolset(BaseToolset):
+    """A :class:`BaseToolset` whose every yielded tool is policy-gated.
+
+    Resolves the inner toolset on each call rather than snapshotting once, so
+    tools a toolset only exposes later in a run are gated too.
+    """
+
+    def __init__(
+        self,
+        inner: BaseToolset,
+        enforcer: PolicyEnforcer,
+        *,
+        approval_handler: ApprovalHandler | None = None,
+        pipeline: ToolPipeline | None = None,
+    ) -> None:
+        # Deliberately no tool_filter/tool_name_prefix: the inner has applied
+        # both by the time we see its tools, and setting them here would
+        # double-apply the prefix.
+        super().__init__()
+        self._inner = inner
+        self._enforcer = enforcer
+        self._approval_handler = approval_handler
+        self._pipeline = pipeline
+        # The inner toolset owns caching: ADK's final get_tools_with_prefix
+        # memoizes per invocation, and a toolset whose list grows mid-run clears
+        # the flag on itself. Caching here too would short-circuit before we ever
+        # delegate, and the late tools would arrive ungated.
+        self._use_invocation_cache = False
+
+    async def get_tools(
+        self, readonly_context: ReadonlyContext | None = None
+    ) -> list[BaseTool]:
+        # get_tools_with_prefix, not get_tools: it is what applies the inner's
+        # tool_name_prefix, and the gate must key on the name the model calls.
+        return [
+            wrap_tool(
+                tool,
+                self._enforcer,
+                approval_handler=self._approval_handler,
+                pipeline=self._pipeline,
+            )
+            for tool in await self._inner.get_tools_with_prefix(readonly_context)
+        ]
+
+    async def process_llm_request(
+        self, *, tool_context: ToolContext, llm_request: LlmRequest
+    ) -> None:
+        await self._inner.process_llm_request(
+            tool_context=tool_context, llm_request=llm_request
+        )
+
+    def get_auth_config(self) -> AuthConfig | None:
+        """ADK populates credentials from this before listing or running tools."""
+        return self._inner.get_auth_config()
+
+    async def close(self) -> None:
+        await self._inner.close()
+
+
 def wrap_tools(
     tools: list[ToolEntry],
     enforcer: PolicyEnforcer,
     *,
     approval_handler: ApprovalHandler | None = None,
     pipeline: ToolPipeline | None = None,
-) -> list[BaseTool]:
-    """Return a fresh list of policy-gated copies."""
+) -> list[BaseTool | BaseToolset]:
+    """Return a fresh list of policy-gated copies.
+
+    A ``BaseToolset`` entry is wrapped rather than expanded, so its tools are
+    resolved — and gated — at each use rather than snapshotted here.
+    """
     return [
-        wrap_tool(t, enforcer, approval_handler=approval_handler, pipeline=pipeline)
-        for t in tools
+        GuardedToolset(
+            entry, enforcer, approval_handler=approval_handler, pipeline=pipeline
+        )
+        if isinstance(entry, BaseToolset)
+        else wrap_tool(
+            entry, enforcer, approval_handler=approval_handler, pipeline=pipeline
+        )
+        for entry in tools
     ]
