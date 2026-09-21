@@ -37,6 +37,29 @@ def _truncate[T](value: list[T], limit: int, label: str) -> list[T]:
     return value[:limit]
 
 
+def _dedupe_by_name(skills: list[SkillDefinition]) -> list[SkillDefinition]:
+    """Keep one skill per name, the last declared winning.
+
+    Frameworks merge skill libraries by concatenation, not by name, so a
+    user-level skill overriding a bundled one of the same name arrives as two
+    entries — the normal override idiom. The platform carries
+    UNIQUE (agent_version_id, name) and would reject the whole registration,
+    so collapse here rather than fail at the moment someone merges libraries.
+
+    Last wins because an override is declared after what it overrides. The
+    winner keeps the first occurrence's position, so the ordering the manifest
+    hash sees stays stable.
+    """
+    by_name: dict[str, SkillDefinition] = {}
+    for skill in skills:
+        if skill.name in by_name:
+            _log.warning(
+                "skill %r declared more than once; keeping the last", skill.name
+            )
+        by_name[skill.name] = skill
+    return list(by_name.values())
+
+
 # Enable AgentType type checking, without requiring the agents package to be installed
 if TYPE_CHECKING:
     from agents import Agent as OpenAIAgent
@@ -102,12 +125,12 @@ class AgentManifest(BaseModel):
 
     @field_validator("skills")
     @classmethod
-    def _cap_skills(
+    def _normalize_skills(
         cls, value: list[SkillDefinition] | None
     ) -> list[SkillDefinition] | None:
         if value is None:
             return None
-        return _truncate(value, MAX_SKILLS, "skills")
+        return _truncate(_dedupe_by_name(value), MAX_SKILLS, "skills")
 
     @field_validator("system_prompt")
     @classmethod
@@ -153,7 +176,12 @@ class SkillResources(BaseModel):
 class SkillDefinition(BaseModel):
     """One skill available to an agent, as discovered at registration."""
 
-    name: str = Field(description="Skill name, unique within the agent")
+    name: str = Field(
+        description=(
+            "Skill name, unique within the agent — duplicates are collapsed "
+            "at validation, the last declared winning"
+        )
+    )
     description: str = Field(
         description="What the skill does and when the model should use it"
     )

@@ -428,12 +428,22 @@ class TestSkillDefinitions:
         )
 
     def test_manifest_without_skills_serializes_identically(self):
-        """The hash-continuity guard. Do not delete this test.
+        """The SDK half of the hash-continuity contract. Do not delete.
 
-        ``compute_manifest_hash`` dumps with ``exclude_none=True``. A ``[]``
-        default on ``skills`` would enter the canonical JSON and change the
-        digest of every manifest already registered, minting a redundant
+        This does **not** verify the digest. ``compute_manifest_hash`` runs in
+        the platform project, over the platform's mirror of this model, so
+        nothing asserted here can reach it — today the platform has no
+        ``skills`` field at all and drops it at parse time.
+
+        What this pins is the SDK's side of the bargain: ``skills`` defaults to
+        None and never serializes as ``[]``. A ``[]`` default would enter the
+        platform's canonical JSON once the mirror lands and change the digest
+        of every manifest already registered, minting a redundant
         AgentVersion per agent on the next ``hexgate register``.
+
+        The digest-side guard is a schema parity test in the platform project,
+        which cannot live here — separate uv project, and it would be red
+        until the mirror exists.
         """
         manifest = self._manifest()
 
@@ -480,6 +490,27 @@ class TestSkillDefinitions:
         assert len(manifest.skills) == MAX_SKILLS
         assert manifest.skills[-1].name == f"skill-{MAX_SKILLS - 1}"
         assert "skills" in caplog.text
+
+    def test_duplicate_skill_names_are_collapsed_last_wins(self, caplog):
+        """The platform's UNIQUE (agent_version_id, name) depends on this.
+
+        Frameworks merge skill libraries by concatenation, so overriding a
+        bundled skill with a user-level one of the same name arrives here as
+        two entries.
+        """
+        with caplog.at_level(logging.WARNING):
+            manifest = self._manifest(
+                skills=[
+                    SkillDefinition(name="pdf", description="bundled"),
+                    SkillDefinition(name="docx", description="bundled"),
+                    SkillDefinition(name="pdf", description="user override"),
+                ]
+            )
+
+        assert manifest.skills is not None
+        assert [skill.name for skill in manifest.skills] == ["pdf", "docx"]
+        assert manifest.skills[0].description == "user override"
+        assert "declared more than once" in caplog.text
 
     def test_skill_resources_are_truncated_at_the_cap(self, caplog):
         references = [f"ref-{index}.md" for index in range(MAX_RESOURCES_PER_SKILL + 1)]
