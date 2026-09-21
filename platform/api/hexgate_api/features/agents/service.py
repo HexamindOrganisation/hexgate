@@ -2,9 +2,10 @@
 
 Groups the agent read/write helpers, the save-time WASM bundle compile+sign
 (``compile_bundle`` shells out to the SDK/opa), the ``hexgate register``
-upsert path (manifest → Agent + AgentVersion + Tool rows, with a generated
-starter policy on first registration), and the agent's AI Act classification
-entry (the operator's own assertion about the system, at the end of the file).
+upsert path (manifest → Agent + AgentVersion + Tool + Skill rows, with a
+generated starter policy on first registration), and the agent's AI Act
+classification entry (the operator's own assertion about the system, at the
+end of the file).
 """
 
 import asyncio
@@ -19,10 +20,18 @@ from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from hexgate_api.core.ids import new_id
-from hexgate_api.models import Agent, AgentClassification, AgentVersion, Tool, utcnow
+from hexgate_api.models import (
+    Agent,
+    AgentClassification,
+    AgentVersion,
+    Skill,
+    Tool,
+    utcnow,
+)
 from hexgate_api.schemas import (
     AgentClassificationWrite,
     AgentManifest,
+    SkillDefinition,
     ToolDefinition,
 )
 from hexgate_api.features.agents.seed_data import SEED_AGENTS
@@ -516,6 +525,7 @@ async def register_manifest(
         created_by_user_id=actor_user_id,
     )
     await _create_tools(session, version.id, manifest.tools)
+    await _create_skills(session, version.id, manifest.skills)
 
     await session.commit()
     await session.refresh(version)
@@ -615,6 +625,35 @@ async def _create_tools(
                 name=tool.name,
                 description=tool.description,
                 input_schema=tool.input_schema.model_dump(mode="json"),
+            )
+        )
+
+
+async def _create_skills(
+    session: AsyncSession,
+    agent_version_id: str,
+    skills: list[SkillDefinition] | None,
+) -> None:
+    """Insert one Skill row per SkillDefinition under an agent version.
+
+    ``None`` — every framework without a skill concept — writes nothing.
+    """
+    for skill in skills or []:
+        session.add(
+            Skill(
+                id=new_id(Skill),
+                agent_version_id=agent_version_id,
+                name=skill.name,
+                description=skill.description,
+                source=skill.source,
+                resources=(
+                    skill.resources.model_dump(mode="json")
+                    if skill.resources is not None
+                    else None
+                ),
+                allowed_tools=list(skill.allowed_tools),
+                additional_tools=list(skill.additional_tools),
+                content_hash=skill.content_hash,
             )
         )
 

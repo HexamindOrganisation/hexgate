@@ -12,6 +12,7 @@ from hexgate_api.models import (
     PolicyFile,
     PolicyModule,
     RoleBinding,
+    Skill,
     Tool,
 )
 
@@ -22,6 +23,7 @@ _ID_PREFIXES: dict[type, str] = {
     AgentVersion: "agv",
     AgentClassification: "acl",
     Tool: "tol",
+    Skill: "skl",
     ApiKey: "tok",
     Ban: "ban",
     PolicyModule: "pmd",

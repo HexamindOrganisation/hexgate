@@ -651,6 +651,33 @@ class SubagentRef(BaseModel):
     via: Literal["tool", "handoff"]
 
 
+class SkillResources(BaseModel):
+    """L3 contents of a skill, by name."""
+
+    references: list[str] = Field(default_factory=list)
+    assets: list[str] = Field(default_factory=list)
+    scripts: list[str] = Field(default_factory=list)
+
+
+class SkillDefinition(BaseModel):
+    """One skill available to an agent, as discovered at registration.
+
+    The SDK's caps (MAX_SKILLS, MAX_RESOURCES_PER_SKILL) are deliberately not
+    mirrored: it truncates before it sends, and a second cap here would
+    silently disagree with the digest it computed against what it sent.
+    """
+
+    name: str
+    description: str
+    source: Optional[str] = None
+    # None means the framework does not enumerate resources; an instance with
+    # empty lists means it does and the skill ships none. Do not collapse.
+    resources: Optional[SkillResources] = None
+    allowed_tools: list[str] = Field(default_factory=list)
+    additional_tools: list[str] = Field(default_factory=list)
+    content_hash: Optional[str] = None
+
+
 class AgentManifest(BaseModel):
     """Schema for the manifest of an agent."""
 
@@ -663,6 +690,10 @@ class AgentManifest(BaseModel):
     # Optional-None (not []) so an agent with no sub-agents hashes exactly as before
     # this field existed (compute_manifest_hash uses exclude_none).
     subagents: Optional[list[SubagentRef]] = None
+    # None — not [] — when the framework has no skill concept, so
+    # ``compute_manifest_hash`` (exclude_none=True) is unchanged for every
+    # agent that has none.
+    skills: Optional[list[SkillDefinition]] = None
 
 
 class RegisterAgentRequest(BaseModel):
