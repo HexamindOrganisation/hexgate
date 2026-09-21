@@ -21,7 +21,7 @@ from hexgate.agents.loader import (
 )
 from hexgate.cloud import HexgateClient, HexgateConfig
 from hexgate.guards import after_tool, before_tool
-from hexgate.manifest import AgentManifest, create_manifest
+from hexgate.manifest import AgentManifest, create_manifest, create_manifest_async
 from hexgate.runtime import (
     ContextAttributeValue,
     HexgateContext,
@@ -72,6 +72,7 @@ __all__ = [
     "clear_registered_agents",
     "create_agent",
     "create_manifest",
+    "create_manifest_async",
     "enforce_policy",
     "glob",
     "grep",

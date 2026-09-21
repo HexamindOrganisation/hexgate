@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from hexgate.agents.factory import HexgateAgent
 from hexgate.manifest.models import AgentManifest, AgentType
 
 if TYPE_CHECKING:
+    from google.adk.agents import Agent as GoogleAgent
     from langchain_core.tools import BaseTool
 
 
@@ -63,3 +64,29 @@ def create_manifest(
         return create_pydantic_ai_manifest(agent, description=description)
 
     raise ValueError(f"Unsupported agent type: {type(agent)}")
+
+
+async def create_manifest_async(
+    agent: AgentType,
+    *,
+    description: str | None = None,
+    tools: list[BaseTool] | None = None,
+    model: object | None = None,
+    system_prompt: object | None = None,
+) -> AgentManifest:
+    """Async counterpart to :func:`create_manifest` for async agent APIs."""
+    module = type(agent).__module__
+    if module.startswith("google.adk"):
+        from hexgate.manifest.google import create_google_manifest_async
+
+        return await create_google_manifest_async(
+            cast("GoogleAgent", agent), description=description
+        )
+
+    return create_manifest(
+        agent,
+        description=description,
+        tools=tools,
+        model=model,
+        system_prompt=system_prompt,
+    )

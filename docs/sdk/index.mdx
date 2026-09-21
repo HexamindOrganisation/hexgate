@@ -12,6 +12,7 @@ from hexgate import (
     agent_tool,
     enforce_policy,
     create_manifest,
+    create_manifest_async,
     AgentManifest,
     AgentPolicy,
     stream_agent,
@@ -33,6 +34,7 @@ from hexgate import (
 | `create_agent(model, tools, system_prompt, …)` | Build a native agent + handler. See [Build an agent](/guides/build-an-agent). |
 | `agent_tool(name=…)` | Decorator that turns an async function into a policy-gated tool. |
 | `create_manifest(agent, …)` | Derive an `AgentManifest` from any supported agent without POSTing it. See [register](/cli/register). |
+| `create_manifest_async(agent, …)` | Async counterpart for frameworks with asynchronous manifest data, including Google ADK toolsets. |
 | `AgentManifest` | Pydantic model the platform stores and the dashboard renders. |
 
 ## Policy enforcement

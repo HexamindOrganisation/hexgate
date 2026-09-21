@@ -13,10 +13,11 @@ from __future__ import annotations
 import copy
 import functools
 from collections.abc import Callable
-from typing import Any, Union
+from typing import TYPE_CHECKING, Any, Union
 
 from google.adk.tools.agent_tool import AgentTool
 from google.adk.tools.base_tool import BaseTool
+from google.adk.tools.base_toolset import BaseToolset
 from google.adk.tools.function_tool import FunctionTool
 from google.adk.tools.tool_context import ToolContext
 
@@ -28,7 +29,13 @@ from hexgate.security.enforcer import PolicyEnforcer
 from hexgate.security.models import agent_target_key
 from hexgate.security.naming import canonical_name
 
+if TYPE_CHECKING:
+    from google.adk.agents.readonly_context import ReadonlyContext
+    from google.adk.auth.auth_tool import AuthConfig
+    from google.adk.models.llm_request import LlmRequest
+
 ToolEntry = Union[BaseTool, Callable[..., Any]]
+ToolUnion = Union[ToolEntry, BaseToolset]
 
 
 def _render_error(decision: Any) -> str:
@@ -137,15 +144,80 @@ def wrap_tool(
     return wrapped
 
 
+class GuardedToolset(BaseToolset):
+    """A toolset that policy-gates tools each time the inner set resolves them."""
+
+    def __init__(
+        self,
+        inner: BaseToolset,
+        enforcer: PolicyEnforcer,
+        *,
+        approval_handler: ApprovalHandler | None = None,
+        pipeline: ToolPipeline | None = None,
+    ) -> None:
+        super().__init__()
+        self._inner = inner
+        self._enforcer = enforcer
+        self._approval_handler = approval_handler
+        self._pipeline = pipeline
+        # ADK's default cache would hide tools that appear later in an invocation.
+        self._use_invocation_cache = False
+
+    async def get_tools(
+        self, readonly_context: ReadonlyContext | None = None
+    ) -> list[BaseTool]:
+        tools = await self._inner.get_tools_with_prefix(readonly_context)
+        return [
+            wrap_tool(
+                tool,
+                self._enforcer,
+                approval_handler=self._approval_handler,
+                pipeline=self._pipeline,
+            )
+            for tool in tools
+        ]
+
+    async def process_llm_request(
+        self, *, tool_context: ToolContext, llm_request: LlmRequest
+    ) -> None:
+        await self._inner.process_llm_request(
+            tool_context=tool_context, llm_request=llm_request
+        )
+
+    async def close(self) -> None:
+        await self._inner.close()
+
+    def get_auth_config(self) -> AuthConfig | None:
+        get_auth_config = getattr(self._inner, "get_auth_config", None)
+        return get_auth_config() if get_auth_config is not None else None
+
+
 def wrap_tools(
-    tools: list[ToolEntry],
+    tools: list[ToolUnion],
     enforcer: PolicyEnforcer,
     *,
     approval_handler: ApprovalHandler | None = None,
     pipeline: ToolPipeline | None = None,
-) -> list[BaseTool]:
-    """Return a fresh list of policy-gated copies."""
-    return [
-        wrap_tool(t, enforcer, approval_handler=approval_handler, pipeline=pipeline)
-        for t in tools
-    ]
+) -> list[BaseTool | BaseToolset]:
+    """Return policy-gated tools and composed toolsets without mutating inputs."""
+    wrapped: list[BaseTool | BaseToolset] = []
+    for tool in tools:
+        if isinstance(tool, BaseToolset):
+            wrapped.append(
+                GuardedToolset(
+                    tool,
+                    enforcer,
+                    approval_handler=approval_handler,
+                    pipeline=pipeline,
+                )
+            )
+        else:
+            wrapped.append(
+                wrap_tool(
+                    tool,
+                    enforcer,
+                    approval_handler=approval_handler,
+                    pipeline=pipeline,
+                )
+            )
+    return wrapped

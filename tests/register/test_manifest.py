@@ -1,4 +1,6 @@
-from hexgate.manifest import create_manifest
+import pytest
+
+from hexgate.manifest import create_manifest, create_manifest_async
 from hexgate.manifest.google import create_google_manifest
 from hexgate.manifest.langchain import create_langchain_manifest
 from hexgate.manifest.models import (
@@ -118,6 +120,51 @@ def test_google_manifest_schema():
     manifest = create_manifest(agent, description="A test agent")
     assert isinstance(manifest, AgentManifest)
     assert manifest == expected_manifest
+
+
+def _google_toolset_agent():
+    from google.adk.agents import Agent
+    from google.adk.tools.base_tool import BaseTool
+    from google.adk.tools.base_toolset import BaseToolset
+    from google.adk.tools.function_tool import FunctionTool
+
+    def tool_from_set(item_id: str) -> str:
+        """Read an item from the toolset."""
+        return item_id
+
+    class _Toolset(BaseToolset):
+        def __init__(self) -> None:
+            super().__init__(tool_name_prefix="inventory")
+            self.calls = 0
+
+        async def get_tools(self, readonly_context=None) -> list[BaseTool]:
+            self.calls += 1
+            return [FunctionTool(func=tool_from_set)]
+
+    return Agent(
+        name="toolset_agent",
+        model="gemini-2.0-flash",
+        tools=[_Toolset()],
+    )
+
+
+def test_google_manifest_resolves_toolsets_and_prefixes() -> None:
+    manifest = create_google_manifest(_google_toolset_agent())
+
+    assert [tool.name for tool in manifest.tools] == ["inventory_tool_from_set"]
+    assert manifest.tools[0].input_schema.required == ["item_id"]
+
+
+@pytest.mark.asyncio
+async def test_async_manifest_resolves_google_toolsets_inside_event_loop() -> None:
+    agent = _google_toolset_agent()
+
+    with pytest.raises(RuntimeError, match="create_google_manifest_async"):
+        create_google_manifest(agent)
+
+    manifest = await create_manifest_async(agent)
+
+    assert [tool.name for tool in manifest.tools] == ["inventory_tool_from_set"]
 
 
 def test_google_manifest_extracts_mcp_tool_schema_from_json_schema():

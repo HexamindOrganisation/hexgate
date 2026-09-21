@@ -11,6 +11,8 @@ from typing import Any
 
 import pytest
 from google.adk.agents import LlmAgent
+from google.adk.tools.base_tool import BaseTool
+from google.adk.tools.base_toolset import BaseToolset
 from google.adk.tools.function_tool import FunctionTool
 
 from hexgate.adapters.google import wrapper as wrapper_mod
@@ -124,6 +126,31 @@ def test_wrap_google_agent_with_no_tools_returns_clone_with_empty_tools(
 
     assert wrapped is not original
     assert list(wrapped.tools) == []
+
+
+@pytest.mark.asyncio
+async def test_wrap_google_agent_accepts_toolsets(
+    resolved: dict[str, Any],
+) -> None:
+    class _Toolset(BaseToolset):
+        async def get_tools(self, readonly_context: Any = None) -> list[BaseTool]:
+            return [FunctionTool(func=_make_callable("echo"))]
+
+    agent = LlmAgent(
+        name="toolset_agent",
+        model="gemini-2.0-flash",
+        tools=[_Toolset()],
+    )
+
+    wrapped, _ = wrap_google_agent(agent, api_key="k")
+
+    [guarded_toolset] = wrapped.tools
+    assert isinstance(guarded_toolset, BaseToolset)
+    [guarded_tool] = await guarded_toolset.get_tools_with_prefix()
+    assert (
+        await guarded_tool.run_async(args={"text": "hello"}, tool_context=None)
+        == "echo:hello"
+    )
 
 
 def test_wrap_shares_one_enforcer_between_tools_and_binding(

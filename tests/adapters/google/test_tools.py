@@ -6,6 +6,7 @@ from typing import Any
 
 import pytest
 from google.adk.tools.base_tool import BaseTool
+from google.adk.tools.base_toolset import BaseToolset
 from google.adk.tools.function_tool import FunctionTool
 
 from hexgate.adapters.google.tools import _normalize, wrap_tool, wrap_tools
@@ -226,6 +227,59 @@ def test_wrap_tools_returns_distinct_list_of_copies() -> None:
     for original_tool, wrapped_tool in zip(originals, wrapped):
         assert wrapped_tool is not original_tool
         assert wrapped_tool.name == original_tool.name
+
+
+class _DynamicToolset(BaseToolset):
+    def __init__(self) -> None:
+        super().__init__(tool_name_prefix="skills")
+        self._use_invocation_cache = False
+        self.tools = [_make_function_tool("static")]
+        self.get_tools_calls = 0
+        self.processed_request: Any = None
+        self.auth_config = object()
+        self.closed = False
+
+    async def get_tools(self, readonly_context: Any = None) -> list[BaseTool]:
+        self.get_tools_calls += 1
+        return self.tools
+
+    async def process_llm_request(self, *, tool_context: Any, llm_request: Any) -> None:
+        self.processed_request = llm_request
+
+    def get_auth_config(self) -> Any:
+        return self.auth_config
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+@pytest.mark.asyncio
+async def test_toolset_re_resolves_and_gates_tools_while_preserving_delegation() -> (
+    None
+):
+    toolset = _DynamicToolset()
+    [guarded] = wrap_tools([toolset], _deny_enforcer())
+
+    [static_tool] = await guarded.get_tools_with_prefix()
+    assert static_tool.name == "skills_static"
+    assert "policy_denied" in await static_tool.run_async(
+        args={"text": "x"}, tool_context=None
+    )
+
+    toolset.tools.append(_make_function_tool("late"))
+    [_static_tool, late_tool] = await guarded.get_tools_with_prefix()
+    assert late_tool.name == "skills_late"
+    assert toolset.get_tools_calls == 2
+    assert "policy_denied" in await late_tool.run_async(
+        args={"text": "x"}, tool_context=None
+    )
+
+    request = object()
+    await guarded.process_llm_request(tool_context=None, llm_request=request)
+    assert toolset.processed_request is request
+    assert guarded.get_auth_config() is toolset.auth_config
+    await guarded.close()
+    assert toolset.closed
 
 
 @pytest.mark.asyncio

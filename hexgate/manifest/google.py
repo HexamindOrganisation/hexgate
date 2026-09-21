@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from google.adk.agents import Agent
 from google.adk.models.base_llm import BaseLlm
 from google.adk.tools.base_tool import BaseTool
+from google.adk.tools.base_toolset import BaseToolset
 from google.adk.tools.function_tool import FunctionTool
 
 from hexgate.manifest.models import (
@@ -19,10 +21,46 @@ from hexgate.manifest.models import (
 def create_google_manifest(
     agent: Agent, *, description: str | None = None
 ) -> AgentManifest:
-    """Build an AgentManifest from a Google ADK agent."""
+    """Build an AgentManifest from a Google ADK agent.
+
+    Toolsets are asynchronous in ADK. Use this synchronous entry point outside
+    a running event loop, or await :func:`create_google_manifest_async`.
+    """
+    if any(isinstance(entry, BaseToolset) for entry in agent.tools):
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return asyncio.run(
+                create_google_manifest_async(agent, description=description)
+            )
+        raise RuntimeError(
+            "Google ADK toolsets require async manifest resolution; "
+            "await create_google_manifest_async() instead."
+        )
+
+    return _build_google_manifest(agent, agent.tools, description=description)
+
+
+async def create_google_manifest_async(
+    agent: Agent, *, description: str | None = None
+) -> AgentManifest:
+    """Build an AgentManifest, resolving Google ADK toolsets asynchronously."""
+    tools: list[Any] = []
+    for entry in agent.tools:
+        if isinstance(entry, BaseToolset):
+            tools.extend(await entry.get_tools_with_prefix())
+        else:
+            tools.append(entry)
+    return _build_google_manifest(agent, tools, description=description)
+
+
+def _build_google_manifest(
+    agent: Agent, entries: list[Any], *, description: str | None
+) -> AgentManifest:
+    """Build a manifest from tools already resolved from the agent."""
 
     tools: list[ToolDefinition] = []
-    for entry in agent.tools:
+    for entry in entries:
         tool = entry if hasattr(entry, "_get_declaration") else FunctionTool(func=entry)
         definition = _to_tool_definition(tool)
         if definition is not None:

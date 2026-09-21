@@ -64,3 +64,8 @@ register` accepts). For LangGraph you must pass `tools=` explicitly, and may pas
 `model=` / `system_prompt=`. The return value is an `AgentManifest` (a Pydantic
 model, re-exported from `hexgate`) — the same schema the platform stores and the
 dashboard renders.
+
+For async code that builds a Google ADK agent with toolsets, use
+`await create_manifest_async(agent)` so ADK can resolve those toolsets without
+nesting an event loop. The synchronous `create_manifest` remains available
+outside a running event loop.
