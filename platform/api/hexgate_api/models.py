@@ -411,8 +411,13 @@ class Skill(SQLModel, table=True):
     # NULL when the framework does not enumerate resources; a JSON object when
     # it does. The distinction is the point — an empty object means the skill
     # ships no resources, NULL means nobody looked.
+    #
+    # ``none_as_null`` is what makes that sentence true in SQL. Without it
+    # SQLAlchemy persists Python None as the JSON scalar ``'null'``, which is
+    # still distinguishable from ``{}`` in Python but makes
+    # ``WHERE resources IS NULL`` match zero rows.
     resources: Optional[dict] = Field(
-        default=None, sa_column=Column(JSON, nullable=True)
+        default=None, sa_column=Column(JSON(none_as_null=True), nullable=True)
     )
     allowed_tools: list = Field(sa_column=Column(JSON, nullable=False))
     additional_tools: list = Field(sa_column=Column(JSON, nullable=False))

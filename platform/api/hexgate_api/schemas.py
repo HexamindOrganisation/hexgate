@@ -662,9 +662,11 @@ class SkillResources(BaseModel):
 class SkillDefinition(BaseModel):
     """One skill available to an agent, as discovered at registration.
 
-    The SDK's caps (MAX_SKILLS, MAX_RESOURCES_PER_SKILL) are deliberately not
-    mirrored: it truncates before it sends, and a second cap here would
-    silently disagree with the digest it computed against what it sent.
+    The SDK's caps (MAX_SKILLS, MAX_RESOURCES_PER_SKILL) and its same-name
+    dedupe are deliberately not mirrored: it truncates before it sends, and
+    the platform's job is to accept what it is given. Hashing is no argument
+    either way — ``compute_manifest_hash`` runs over what the platform
+    *parsed*, so it would stay self-consistent under a cap.
     """
 
     name: str

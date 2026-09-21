@@ -21,10 +21,12 @@ import yaml
 from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
+from sqlalchemy import text
 from sqlmodel import SQLModel, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from hexgate_api.core import keystore as keystore_mod
+from hexgate_api.core.ids import new_id
 from hexgate_api.main import app
 from hexgate_api.models import Agent, AgentVersion, Skill
 from hexgate_api.seeds.defaults import ensure_default_project
@@ -732,7 +734,7 @@ def test_manifest_endpoint_unregistered_agents_have_no_leakage(
 
 
 def test_register_endpoint_accepts_legacy_shape_without_new_fields(
-    client: TestClient,
+    client: TestClient, session_factory
 ) -> None:
     """A manifest from an older SDK (no model / system_prompt keys) still 201s.
 
@@ -741,6 +743,7 @@ def test_register_endpoint_accepts_legacy_shape_without_new_fields(
     the new platform. The new fields are Optional with `None` defaults, so
     Pydantic validation should accept payloads that omit them entirely.
     """
+    token = _mint_owned_token(session_factory, owner_user_id=DEFAULT_USER_ID)
     payload = {
         "manifest": {
             "name": "legacy_agent",
@@ -750,14 +753,14 @@ def test_register_endpoint_accepts_legacy_shape_without_new_fields(
         }
     }
     resp = client.post(
-        "/v1/agents",
-        json=payload,
-        headers={"Authorization": "Bearer fake-but-unauthenticated"},
+        "/v1/agents", json=payload, headers={"Authorization": f"Bearer {token}"}
     )
-    # The legacy-shape body validates; the request itself fails auth (401)
-    # rather than schema validation (422). 422 here would mean we broke
-    # backwards compatibility.
-    assert resp.status_code != 422, resp.text
+    # Authenticated on purpose. This used to send an unauthenticated bearer and
+    # assert ``!= 422`` on the belief that the body validates first and only
+    # auth fails — it does not. FastAPI resolves dependencies BEFORE validating
+    # the body, so that request 401s with the schema never reached, and the
+    # assertion held even for a manifest missing every required field.
+    assert resp.status_code == 201, resp.text
 
 
 # ---------------------------------------------------------------------------
@@ -1443,6 +1446,15 @@ async def _skills_of(session_factory, agent_version_id: str) -> list[Skill]:
         return sorted(rows.all(), key=lambda row: row.name)
 
 
+def _skills_of_sync(session_factory, agent_version_id: str) -> list[Skill]:
+    """``_skills_of`` for the sync (TestClient + minted token) tests."""
+    import asyncio
+
+    return asyncio.get_event_loop().run_until_complete(
+        _skills_of(session_factory, agent_version_id)
+    )
+
+
 async def _register(session_factory, payload: dict):
     from hexgate_api.schemas import AgentManifest
     from hexgate_api.features.agents.service import register_manifest
@@ -1496,14 +1508,16 @@ async def test_register_manifest_without_skills_writes_no_skill_rows(
 
 
 def test_register_endpoint_accepts_manifest_without_skills_key(
-    client: TestClient,
+    client: TestClient, session_factory
 ) -> None:
-    """A body omitting ``skills`` entirely is not a 422.
+    """A body omitting ``skills`` entirely registers — the compat guarantee.
 
-    The same guarantee as the legacy-shape test above, re-asserted for the
-    field this PR adds: the platform deploys before any released SDK emits it,
-    so every in-flight register omits the key.
+    Authenticated on purpose. FastAPI resolves dependencies before it
+    validates the body, so an unauthenticated request 401s without the schema
+    ever being reached: asserting ``!= 422`` there would pass even against a
+    manifest missing every required field.
     """
+    token = _mint_owned_token(session_factory, owner_user_id=DEFAULT_USER_ID)
     payload = {
         "manifest": {
             "name": "no_skills_key",
@@ -1512,11 +1526,12 @@ def test_register_endpoint_accepts_manifest_without_skills_key(
         }
     }
     resp = client.post(
-        "/v1/agents",
-        json=payload,
-        headers={"Authorization": "Bearer fake-but-unauthenticated"},
+        "/v1/agents", json=payload, headers={"Authorization": f"Bearer {token}"}
     )
-    assert resp.status_code != 422, resp.text
+    assert resp.status_code == 201, resp.text
+
+    version_id = resp.json()["agent_version_id"]
+    assert _skills_of_sync(session_factory, version_id) == []
 
 
 def test_manifest_hash_is_unchanged_by_the_new_field() -> None:
@@ -1561,19 +1576,37 @@ async def test_register_manifest_preserves_resources_none_vs_empty(
     assert not_enumerated.resources is None
     assert enumerated.resources == {"references": [], "assets": [], "scripts": []}
 
+    # And distinct in SQL, not just after the ORM decodes them. Without
+    # ``none_as_null`` on the column, None persists as the JSON scalar
+    # ``'null'`` — the ORM still reads back None, so the assertions above pass
+    # while ``IS NULL`` silently matches nothing.
+    async with session_factory() as session:
+        rows = dict(
+            (
+                await session.exec(
+                    text(
+                        "SELECT name, resources IS NULL FROM skill "
+                        "WHERE agent_version_id = :v"
+                    ).bindparams(v=version.id)
+                )
+            ).all()
+        )
+    assert rows == {"not_enumerated": 1, "enumerated_empty": 0}
+
 
 async def test_duplicate_skill_names_in_one_version_are_rejected(
     session_factory,
 ) -> None:
-    """The unique constraint is the backstop for a client that duplicates.
+    """The service rejects duplicates before the DB has to.
 
-    The SDK collapses same-name skills before sending; the platform does not
-    mirror that, so a caller bypassing the SDK hits the DB rather than writing
-    two rows an agent could never tell apart.
+    The SDK collapses same-name skills before sending, so this only fires for
+    a caller that bypasses it. Pre-checked rather than left to UNIQUE because
+    nothing registers an exception handler — an IntegrityError escaping the
+    route would be a 500 with no usable message.
     """
-    from sqlalchemy.exc import IntegrityError
+    from hexgate_api.features.agents.service import DuplicateSkillNameError
 
-    with pytest.raises(IntegrityError):
+    with pytest.raises(DuplicateSkillNameError):
         await _register(
             session_factory,
             _sample_manifest(
@@ -1581,6 +1614,49 @@ async def test_duplicate_skill_names_in_one_version_are_rejected(
                 skills=[_skill_payload("twice"), _skill_payload("twice")],
             ),
         )
+
+
+def test_duplicate_skill_names_surface_as_409(
+    client: TestClient, session_factory
+) -> None:
+    """What the caller actually sees: a 409, not the default 500."""
+    token = _mint_owned_token(session_factory, owner_user_id=DEFAULT_USER_ID)
+    payload = {
+        "manifest": _sample_manifest(
+            "duplicate_over_http",
+            skills=[_skill_payload("twice"), _skill_payload("twice")],
+        )
+    }
+    resp = client.post(
+        "/v1/agents", json=payload, headers={"Authorization": f"Bearer {token}"}
+    )
+    assert resp.status_code == 409, resp.text
+    assert "twice" in resp.json()["detail"]
+
+
+async def test_unique_constraint_backstops_duplicate_skill_names(
+    session_factory,
+) -> None:
+    """The DB guard behind the pre-check, asserted directly.
+
+    The service can only refuse what it sees in one manifest; the constraint
+    is what stops two rows an agent could never tell apart from ever existing.
+    """
+    from sqlalchemy.exc import IntegrityError
+
+    async with session_factory() as session:
+        for _ in range(2):
+            session.add(
+                Skill(
+                    id=new_id(Skill),
+                    agent_version_id="agv_backstop",
+                    name="twice",
+                    allowed_tools=[],
+                    additional_tools=[],
+                )
+            )
+        with pytest.raises(IntegrityError):
+            await session.commit()
 
 
 async def test_agent_manifest_view_surfaces_skills(

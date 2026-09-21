@@ -48,6 +48,10 @@ from hexgate_api.features.policy_modules.service import DEFAULT_AGENT
 logger = logging.getLogger("hexgate.platform.agents")
 
 
+class DuplicateSkillNameError(Exception):
+    """One manifest declares two skills of the same name. Routes -> 409."""
+
+
 async def ensure_seeded_agents(session: AsyncSession, project_id: str) -> None:
     """Idempotently add any missing seeded agents to a project."""
     existing = {a.name for a in await list_agents(session, project_id)}
@@ -637,7 +641,21 @@ async def _create_skills(
     """Insert one Skill row per SkillDefinition under an agent version.
 
     ``None`` — every framework without a skill concept — writes nothing.
+
+    Pre-checks for same-name skills rather than letting UNIQUE raise at
+    commit, on the ``create_project`` precedent: an IntegrityError escaping
+    the route is a 500 with no usable message, since nothing registers an
+    exception handler. The SDK already collapses duplicates, so this only
+    fires for a caller that bypasses it.
     """
+    names: set[str] = set()
+    for skill in skills or []:
+        if skill.name in names:
+            raise DuplicateSkillNameError(
+                f"skill {skill.name!r} is declared more than once"
+            )
+        names.add(skill.name)
+
     for skill in skills or []:
         session.add(
             Skill(
