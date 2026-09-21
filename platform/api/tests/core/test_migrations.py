@@ -44,7 +44,20 @@ CREATE_INDEX_RE = re.compile(
 
 CLICKHOUSE_DATABASE = "hexgate_audit"
 DEFAULT_DATABASE = "default"
-AUDIT_TABLES = ("policy_decision", "llm_invocation", "llm_message", "ban_enforcement")
+# Every table the equivalence test compares. A table absent here is a table
+# whose migration DDL is never checked against init/schema.sql, which is the
+# whole point of the comparison — so a new CREATE in migrations/ adds its name
+# here in the same PR.
+AUDIT_TABLES = (
+    "policy_decision",
+    "llm_invocation",
+    "llm_message",
+    "ban_enforcement",
+    "audit_finding",
+    "feature_first_seen",
+    "agent_baseline",
+    "detector_watermark",
+)
 CREATE_DATABASE_RE = re.compile(r"^CREATE\s+DATABASE\b", re.IGNORECASE)
 
 pg_only = pytest.mark.skipif(
