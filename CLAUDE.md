@@ -24,3 +24,19 @@ tests/                # hexgate package tests (agents, cli, security, tracing, s
 - **Branches:** `{initials}/{type}/{short_description}` (e.g., `vl/feat/web_search`)
 - **Commits:** `type(scope): description` (lowercase, imperative, no period). Scopes: `platform-api`, `platform-scripts`, `dashboard`, `sdk`, `cli`, `clickhouse`, `redpanda`, `collector`. Types: `feat`, `fix`, `docs`, `build`, `refactor`, `test`.
 - **Envs:** All prefixed with `HEXGATE_`. Never commit private keys.
+
+## Worktrees
+`EnterWorktree` names the branch `worktree-<name>` (slashes in the name are sanitized to `+`), which violates the branch convention above. After entering a worktree, immediately rename the branch:
+
+    git branch -m {initials}/{type}/{short_description}
+
+`ExitWorktree` still tracks the pre-rename name, so do not rely on its `remove` action to delete a renamed branch.
+
+A fresh worktree is source-only — no `.venv`, no `node_modules`. Before any `make check` / `make check-all`:
+
+    make install-dev        # uv sync --extra dev: pytest + ruff, required by `make check`
+    make dashboard-install  # only when touching platform/dashboard/
+
+Worktrees branch from `origin/main`, not from the local `main`. Two consequences:
+- Uncommitted work in the main checkout is invisible inside a worktree.
+- Untracked directories (notably `plans/`) do not exist in a worktree. Read them from the main checkout by absolute path — the launch prompt must pass that path explicitly.
