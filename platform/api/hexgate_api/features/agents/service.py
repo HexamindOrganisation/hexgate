@@ -1,9 +1,10 @@
 """Agent + version persistence, policy-bundle compilation, manifest registration.
 
 Groups the agent read/write helpers, the save-time WASM bundle compile+sign
-(``compile_bundle`` shells out to the SDK/opa), and the ``hexgate register``
+(``compile_bundle`` shells out to the SDK/opa), the ``hexgate register``
 upsert path (manifest → Agent + AgentVersion + Tool rows, with a generated
-starter policy on first registration).
+starter policy on first registration), and the agent's AI Act classification
+entry (the operator's own assertion about the system, at the end of the file).
 """
 
 import asyncio
@@ -13,12 +14,17 @@ import logging
 from typing import Callable
 
 from sqlalchemy import func
+from sqlalchemy.exc import IntegrityError
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from hexgate_api.core.ids import new_id
-from hexgate_api.models import Agent, AgentVersion, Tool
-from hexgate_api.schemas import AgentManifest, ToolDefinition
+from hexgate_api.models import Agent, AgentClassification, AgentVersion, Tool, utcnow
+from hexgate_api.schemas import (
+    AgentClassificationWrite,
+    AgentManifest,
+    ToolDefinition,
+)
 from hexgate_api.features.agents.seed_data import SEED_AGENTS
 from hexgate_api.features.agents.compiler import (
     _default_policy_for_manifest,
@@ -611,3 +617,140 @@ async def _create_tools(
                 input_schema=tool.input_schema.model_dump(mode="json"),
             )
         )
+
+
+# ---------------------------------------------------------------------------
+# AI Act classification — one entry per agent, holding what the *operator*
+# asserts about the system: its intended purpose, their role under the Act,
+# the risk tier they assessed it into, and the person accountable for human
+# oversight.
+#
+# The platform records the assertion and validates nothing about its
+# substance: no check that a tier fits the agent's tool set, no warning when a
+# high-risk agent grants a dangerous tool. Classifying is the operator's act,
+# and second-guessing it would be asserting something we are not in a position
+# to assert. The only rule here is *completeness* — which fields are filled in
+# — because the report lists incomplete entries rather than omitting them.
+# ---------------------------------------------------------------------------
+
+
+# Fields completeness requires, in the order they're reported. ``annex_iii_point``
+# slots in after the tier and is required only when the operator asserted
+# "high_risk" — an Annex III point is what makes that tier checkable.
+_REQUIRED_FIELDS = (
+    "intended_purpose",
+    "operator_role",
+    "risk_tier",
+    "oversight_owner_name",
+)
+_HIGH_RISK_FIELDS = (
+    "intended_purpose",
+    "operator_role",
+    "risk_tier",
+    "annex_iii_point",
+    "oversight_owner_name",
+)
+_HIGH_RISK = "high_risk"
+
+
+def missing_fields(entry: AgentClassification | None) -> list[str]:
+    """Name what an entry still lacks — every required field when there is none.
+
+    A prefilled-but-unsaved purpose does not count: the operator has to record
+    the entry for it to be an assertion.
+    """
+    if entry is None:
+        return list(_REQUIRED_FIELDS)
+    required = _HIGH_RISK_FIELDS if entry.risk_tier == _HIGH_RISK else _REQUIRED_FIELDS
+    return [field for field in required if not getattr(entry, field)]
+
+
+async def get_classification(
+    session: AsyncSession, agent_id: str
+) -> AgentClassification | None:
+    """The agent's current entry, or None when the operator hasn't recorded one."""
+    stmt = select(AgentClassification).where(AgentClassification.agent_id == agent_id)
+    return (await session.exec(stmt)).first()
+
+
+async def manifest_intended_purpose(session: AsyncSession, agent: Agent) -> str | None:
+    """The registered manifest's description, for prefilling a fresh entry.
+
+    The SDK's manifest description is the closest thing the platform already
+    holds to an Art. 3(12) intended purpose, so the form opens on it rather
+    than on a blank field. It is a suggestion only — nothing is stored until
+    the operator PUTs the entry.
+    """
+    latest = (await get_latest_agent_versions_map(session, [agent.id])).get(agent.id)
+    if latest is None or not latest.manifest:
+        return None
+    description = latest.manifest.get("description")
+    return description or None
+
+
+def _apply(
+    entry: AgentClassification,
+    values: AgentClassificationWrite,
+    recorded_by_user_id: str,
+) -> None:
+    """Overwrite an entry's fields, then stamp the provenance server-side.
+
+    Provenance is never taken from the body: a caller cannot record an
+    assertion in someone else's name or backdate one.
+    """
+    for field, value in values.model_dump().items():
+        setattr(entry, field, value)
+    entry.recorded_by_user_id = recorded_by_user_id
+    entry.recorded_at = utcnow()
+
+
+async def upsert_classification(
+    session: AsyncSession,
+    *,
+    agent_id: str,
+    recorded_by_user_id: str,
+    values: AgentClassificationWrite,
+) -> AgentClassification:
+    """Replace the agent's entry with ``values``, stamped with who and when.
+
+    A full replace, matching the PUT: a field the operator left out is cleared,
+    not kept from the previous entry.
+    """
+    entry = await get_classification(session, agent_id)
+    if entry is not None:
+        _apply(entry, values, recorded_by_user_id)
+        await session.commit()
+        return entry
+
+    # No entry yet, so this is an INSERT and it can lose a race — a
+    # double-clicked Save, or two tabs (or two members) saving at once. Both
+    # requests read "no entry", both INSERT, and ``uq_agent_classification``
+    # rejects the second.
+    #
+    # The INSERT goes inside a SAVEPOINT rather than straight onto the request's
+    # transaction. A plain ``session.rollback()`` here would recover the write
+    # but expire every object the request had already loaded — the route's
+    # ``Agent`` among them — so the next attribute read on one of those raises
+    # MissingGreenlet and the operator gets a 500 on a write that landed. The
+    # savepoint rolls back only the failed INSERT and leaves the rest of the
+    # request's identity map untouched.
+    fresh = AgentClassification(
+        id=new_id(AgentClassification),
+        agent_id=agent_id,
+        recorded_by_user_id=recorded_by_user_id,
+    )
+    _apply(fresh, values, recorded_by_user_id)
+    try:
+        async with session.begin_nested():
+            session.add(fresh)
+    except IntegrityError:
+        # Take the row that won and write our values onto it: last write wins,
+        # and the provenance stamp follows the values it recorded.
+        winner = await get_classification(session, agent_id)
+        if winner is None:
+            raise  # Not the race — some other constraint; don't swallow it.
+        _apply(winner, values, recorded_by_user_id)
+        await session.commit()
+        return winner
+    await session.commit()
+    return fresh

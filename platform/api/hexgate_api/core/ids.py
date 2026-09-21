@@ -4,6 +4,7 @@ import secrets
 
 from hexgate_api.models import (
     Agent,
+    AgentClassification,
     AgentVersion,
     ApiKey,
     Ban,
@@ -18,6 +19,7 @@ from hexgate_api.models import (
 _ID_PREFIXES: dict[type, str] = {
     Agent: "agt",
     AgentVersion: "agv",
+    AgentClassification: "acl",
     Tool: "tol",
     ApiKey: "tok",
     Ban: "ban",
