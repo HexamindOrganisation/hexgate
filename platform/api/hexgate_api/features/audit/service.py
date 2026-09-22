@@ -419,15 +419,28 @@ _SELECT_COLS = [
     "GROUPING(tool_name) AS g_tool",
     "GROUPING(user_id) AS g_user",
     "GROUPING(outcome) AS g_outcome",
-    "count() AS n",
 ]
 
 # Membership breakdown, own scan over the same WHERE; an empty set keeps the ''
 # bucket the dashboard labels "(none)".
 _BY_ROLE_SELECT = (
-    "SELECT arrayJoin(if(empty(user_roles), [''], user_roles)) AS role, "
-    "outcome, count() AS n"
+    "SELECT arrayJoin(if(empty(user_roles), [''], user_roles)) AS role, outcome"
 )
+
+# How a scan counts rows. ``count()`` is the dashboard's reading: cheap, and a
+# briefly double-counted retry is invisible on a bar chart. ``distinct_events=True``
+# switches every scan to counting distinct event_ids, for callers that must not
+# report a retried decision twice — ReplacingMergeTree(received_at) collapses
+# duplicate event_ids only on a background merge, so both copies are visible to
+# a non-FINAL read until then.
+_COUNT_ALL = "count()"
+_COUNT_DISTINCT_EVENTS = "count(DISTINCT event_id)"
+
+
+def count_expr(distinct_events: bool) -> str:
+    """The count expression for a scan, given the caller's dedup requirement.
+    Unaliased — the caller names the column."""
+    return _COUNT_DISTINCT_EVENTS if distinct_events else _COUNT_ALL
 
 
 def summarize(
@@ -441,6 +454,7 @@ def summarize(
     user: str | None = None,
     start_date: datetime | None = None,
     end_date: datetime | None = None,
+    distinct_events: bool = False,
 ) -> dict:
     """Totals + breakdowns for the scoped slice. Returns ``{totals, by_agent,
     by_role, by_tool, by_user}``; each breakdown is ``{key, all, allow, deny,
@@ -451,7 +465,11 @@ def summarize(
     ``by_role`` counts role-set membership from its own scan, so a multi-role
     call lands in several buckets and ``sum(by_role[*].all) >= totals["all"]``.
     Every other breakdown stays one row per decision. Under a ``role`` filter
-    it collapses to that role alone, like every other dimension."""
+    it collapses to that role alone, like every other dimension.
+
+    ``distinct_events=True`` counts distinct ``event_id``s instead of rows —
+    see :data:`_COUNT_DISTINCT_EVENTS`. The AI Act evidence report uses it; the
+    dashboard does not."""
     where, params = _scope(
         project_id,
         since_hours,
@@ -463,8 +481,9 @@ def summarize(
         end_date=end_date,
     )
     where_sql = " AND ".join(where)
+    counted = f"{count_expr(distinct_events)} AS n"
     summary_sql = (
-        f"SELECT {', '.join(_SELECT_COLS)} "
+        f"SELECT {', '.join([*_SELECT_COLS, counted])} "
         f"FROM policy_decision WHERE {where_sql} GROUP BY {_GROUPING_SETS}"
     )
     result = client.query(summary_sql, parameters=params)
@@ -509,7 +528,7 @@ def summarize(
     # bound instant, not ``now()``, so both scans see one slice. Sharing only
     # the SQL text would not: ClickHouse re-evaluates now() per query.
     by_role_sql = (
-        f"{_BY_ROLE_SELECT} FROM policy_decision WHERE {where_sql} "
+        f"{_BY_ROLE_SELECT}, {counted} FROM policy_decision WHERE {where_sql} "
         "GROUP BY role, outcome"
     )
     if role:
@@ -612,10 +631,18 @@ def list_decisions(
     offset: int = 0,
     start_date: datetime | None = None,
     end_date: datetime | None = None,
+    with_total: bool = True,
 ) -> dict:
     """Detail rows for the events table, newest first. Scope filters plus
     table-only ``outcome``/``session_id``. Returns ``{rows, total, limit,
-    offset}`` with ``total`` the unpaginated match count."""
+    offset}`` with ``total`` the unpaginated match count.
+
+    ``with_total=False`` returns ``total=None`` and drops ``count() OVER ()``
+    from the SQL. That window is computed BEFORE ``LIMIT``, so it buffers every
+    matching row — blobs included — in the window transform: measured on a
+    3.2M-row slice, the same 20-row page costs 2644 MB with it and 158 MB
+    without. A caller that only wants a bounded sample and never reads ``total``
+    should say so rather than pay for a number it discards."""
     where, params = _scope(
         project_id,
         since_hours,
@@ -635,19 +662,22 @@ def list_decisions(
     where_sql = " AND ".join(where)
 
     # ``count() OVER ()`` is computed before LIMIT, so one scan yields the page
-    # and its full match count together.
+    # and its full match count together — at the cost of buffering every
+    # matching row (see ``with_total``).
     page_params = {**params, "lim": limit, "off": offset}
+    window = ", count() OVER () AS total_matches" if with_total else ""
     result = client.query(
-        f"SELECT {_LIST_COLUMNS}, count() OVER () AS total_matches "
+        f"SELECT {_LIST_COLUMNS}{window} "
         f"FROM policy_decision WHERE {where_sql} "
         "ORDER BY occurred_at DESC LIMIT {lim:UInt32} OFFSET {off:UInt32}",
         parameters=page_params,
     )
     rows = []
-    total = 0
+    total: int | None = 0 if with_total else None
     for raw in result.result_rows:
         row = dict(zip(result.column_names, raw))
-        total = int(row.pop("total_matches"))
+        if with_total:
+            total = int(row.pop("total_matches"))
         row["violations"] = list(row.get("violations") or [])
         row["user_roles"] = list(row.get("user_roles") or [])
         row["hint"] = decode_json_column(row.get("hint") or "")
@@ -661,7 +691,7 @@ def list_decisions(
 
     # An empty page past the end (offset > 0) carries no window value, so the
     # match count is unavailable; fall back to a plain count for that rare case.
-    if not rows and offset:
+    if with_total and not rows and offset:
         total = int(
             client.query(
                 f"SELECT count() FROM policy_decision WHERE {where_sql}",
@@ -689,11 +719,14 @@ def list_ban_enforcements(
     offset: int = 0,
     start_date: datetime | None = None,
     end_date: datetime | None = None,
+    with_total: bool = True,
 ) -> dict:
     """Blocked-attempt rows for the Bans page, newest first. Scoped by
     project + window only (no agent/role/tool/outcome — the table has none).
     Returns ``{rows, total, limit, offset}`` with ``total`` the unpaginated
-    match count. Reads ``ban_enforcement``; ``policy_decision`` is untouched."""
+    match count. Reads ``ban_enforcement``; ``policy_decision`` is untouched.
+
+    ``with_total=False`` drops the window count; see :func:`list_decisions`."""
     where, params = _scope(
         project_id,
         since_hours,
@@ -709,21 +742,23 @@ def list_ban_enforcements(
     # tick, so without it paginated offsets would duplicate/skip tied rows.
     # Matches the storage sort key (project_id, occurred_at, event_id).
     page_params = {**params, "lim": limit, "off": offset}
+    window = ", count() OVER () AS total_matches" if with_total else ""
     result = client.query(
-        f"SELECT {_BAN_ENFORCEMENT_LIST_COLUMNS}, count() OVER () AS total_matches "
+        f"SELECT {_BAN_ENFORCEMENT_LIST_COLUMNS}{window} "
         f"FROM ban_enforcement WHERE {where_sql} "
         "ORDER BY occurred_at DESC, event_id DESC LIMIT {lim:UInt32} OFFSET {off:UInt32}",
         parameters=page_params,
     )
     rows = []
-    total = 0
+    total: int | None = 0 if with_total else None
     for raw in result.result_rows:
         row = dict(zip(result.column_names, raw))
-        total = int(row.pop("total_matches"))
+        if with_total:
+            total = int(row.pop("total_matches"))
         rows.append(row)
 
     # Empty page past the end carries no window value — fall back to a count.
-    if not rows and offset:
+    if with_total and not rows and offset:
         total = int(
             client.query(
                 f"SELECT count() FROM ban_enforcement WHERE {where_sql}",

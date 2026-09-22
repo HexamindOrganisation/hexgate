@@ -21,7 +21,12 @@ from hexgate.agents.loader import (
 )
 from hexgate.cloud import HexgateClient, HexgateConfig
 from hexgate.guards import after_tool, before_tool
-from hexgate.manifest import AgentManifest, create_manifest
+from hexgate.manifest import (
+    AgentManifest,
+    SkillDefinition,
+    SkillResources,
+    create_manifest,
+)
 from hexgate.runtime import (
     ContextAttributeValue,
     HexgateContext,
@@ -54,6 +59,8 @@ __all__ = [
     "C",
     "PolicyBuilder",
     "RolePolicyBuilder",
+    "SkillDefinition",
+    "SkillResources",
     "assert_allows",
     "assert_denies",
     "assert_needs_approval",

@@ -576,3 +576,53 @@ class AgentClassification(SQLModel, table=True):
     recorded_at: datetime = Field(
         default_factory=utcnow, sa_type=DateTime(timezone=True)
     )
+
+
+# -------------------------------------------------------------------------
+# AI Act evidence report (Specs/ai_act_evidence_report.md). One row per
+# generated document, project-scoped and purely additive — create_all picks it
+# up with no migration.
+# ---------------------------------------------------------------------------
+
+
+class AiActReport(SQLModel, table=True):
+    """One generated AI Act evidence report.
+
+    ``annex_json`` is the canonical artifact: the exact bytes the signature
+    covers. The digest, signature and kid are derived from it at generation
+    time and stored alongside, so verifying a report later never re-assembles
+    it — a re-assembly would pick up events that arrived since, and produce a
+    different digest for the same report id.
+
+    The row is append-only. A report is evidence of what the platform held
+    over a period; editing one would defeat the point of signing it.
+    """
+
+    __tablename__ = "ai_act_report"
+
+    id: str = Field(primary_key=True)  # new_id(AiActReport) -> "rpt_…"
+    project_id: str = Field(foreign_key="project.id", index=True)
+    period_start: datetime = Field(sa_type=DateTime(timezone=True))
+    period_end: datetime = Field(sa_type=DateTime(timezone=True))
+    generated_at: datetime = Field(
+        default_factory=utcnow, sa_type=DateTime(timezone=True)
+    )
+    # actor_fk_column, not a hard FK: deleting a user who once generated a
+    # report must not fail, and this column is display-only. The attribution
+    # itself is not lost when it nulls — the annex records the requesting user
+    # inside the bytes the signature covers, so the evidence keeps its
+    # provenance even after the account is erased.
+    generated_by_user_id: Optional[str] = Field(
+        default=None, sa_column=actor_fk_column(index=True)
+    )
+    annex_json: str  # the exact signed bytes, as text
+    annex_sha256: str
+    # Stored rather than derived with ``len(annex_json.encode())`` on read: the
+    # history endpoint would otherwise have to load every annex a project has
+    # ever generated — hundreds of KB each — to produce one integer per row.
+    # It is also the more correct place for it: the byte count is a property of
+    # the artifact, fixed when the signature was taken over exactly these
+    # bytes, and a verifier uses it to know how much it should have received.
+    annex_bytes: int
+    signature: bytes = Field(sa_column=Column(LargeBinary, nullable=False))
+    signing_kid: str

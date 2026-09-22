@@ -1,3 +1,4 @@
+import json
 import logging
 
 import pytest
@@ -6,10 +7,14 @@ from hexgate.manifest import create_manifest
 from hexgate.manifest.google import create_google_manifest
 from hexgate.manifest.langchain import create_langchain_manifest
 from hexgate.manifest.models import (
+    MAX_RESOURCES_PER_SKILL,
+    MAX_SKILLS,
     AgentFramework,
     AgentManifest,
     InputProperty,
     InputSchema,
+    SkillDefinition,
+    SkillResources,
     ToolDefinition,
 )
 from hexgate.manifest.native import create_hexgate_manifest
@@ -504,3 +509,148 @@ def test_pydantic_ai_manifest_static_prompts():
     manifest = create_pydantic_ai_manifest(agent)
     assert manifest.system_prompt == "part one\n\npart two"
     assert manifest.model == "test"
+
+
+class TestSkillDefinitions:
+    """The manifest's skill contract.
+
+    Nothing populates ``skills`` yet — A2 (ADK) and D3 (deepagents) do that.
+    These tests pin the shape so the producers and the platform mirror agree.
+    """
+
+    @staticmethod
+    def _manifest(**overrides: object) -> AgentManifest:
+        return AgentManifest(
+            name="test-agent",
+            description="A test agent",
+            framework=AgentFramework.HEXGATE,
+            tools=[],
+            **overrides,
+        )
+
+    def test_manifest_without_skills_serializes_identically(self):
+        """The SDK half of the hash-continuity contract. Do not delete.
+
+        This does **not** verify the digest. ``compute_manifest_hash`` runs in
+        the platform project, over the platform's mirror of this model, so
+        nothing asserted here can reach it — today the platform has no
+        ``skills`` field at all and drops it at parse time.
+
+        What this pins is the SDK's side of the bargain: ``skills`` defaults to
+        None and never serializes as ``[]``. A ``[]`` default would enter the
+        platform's canonical JSON once the mirror lands and change the digest
+        of every manifest already registered, minting a redundant
+        AgentVersion per agent on the next ``hexgate register``.
+
+        The digest-side guard is a schema parity test in the platform project,
+        which cannot live here — separate uv project, and it would be red
+        until the mirror exists.
+        """
+        manifest = self._manifest()
+
+        assert manifest.skills is None
+        assert "skills" not in manifest.model_dump(mode="json", exclude_none=True)
+
+    def test_manifest_defaults_skills_to_none(self):
+        assert self._manifest().skills is None
+
+    def test_skill_definition_defaults(self):
+        skill = SkillDefinition(name="pdf", description="Work with PDF files")
+
+        assert skill.source is None
+        assert skill.resources is None
+        assert skill.content_hash is None
+        assert skill.allowed_tools == []
+        assert skill.additional_tools == []
+
+    def test_resources_none_is_distinct_from_empty(self):
+        """``None`` means not enumerated; ``SkillResources()`` means none ships."""
+        not_enumerated = SkillDefinition(name="pdf", description="d", resources=None)
+        enumerated_empty = SkillDefinition(
+            name="pdf", description="d", resources=SkillResources()
+        )
+
+        assert not_enumerated != enumerated_empty
+        assert "resources" not in not_enumerated.model_dump(
+            mode="json", exclude_none=True
+        )
+        assert enumerated_empty.model_dump(mode="json", exclude_none=True)[
+            "resources"
+        ] == {"references": [], "assets": [], "scripts": []}
+
+    def test_skills_list_is_truncated_at_the_cap(self, caplog):
+        skills = [
+            SkillDefinition(name=f"skill-{index}", description="d")
+            for index in range(MAX_SKILLS + 1)
+        ]
+
+        with caplog.at_level(logging.WARNING):
+            manifest = self._manifest(skills=skills)
+
+        assert manifest.skills is not None
+        assert len(manifest.skills) == MAX_SKILLS
+        assert manifest.skills[-1].name == f"skill-{MAX_SKILLS - 1}"
+        assert "skills" in caplog.text
+
+    def test_duplicate_skill_names_are_collapsed_last_wins(self, caplog):
+        """The platform's UNIQUE (agent_version_id, name) depends on this.
+
+        Frameworks merge skill libraries by concatenation, so overriding a
+        bundled skill with a user-level one of the same name arrives here as
+        two entries.
+        """
+        with caplog.at_level(logging.WARNING):
+            manifest = self._manifest(
+                skills=[
+                    SkillDefinition(name="pdf", description="bundled"),
+                    SkillDefinition(name="docx", description="bundled"),
+                    SkillDefinition(name="pdf", description="user override"),
+                ]
+            )
+
+        assert manifest.skills is not None
+        assert [skill.name for skill in manifest.skills] == ["pdf", "docx"]
+        assert manifest.skills[0].description == "user override"
+        assert "declared more than once" in caplog.text
+
+    def test_skill_resources_are_truncated_at_the_cap(self, caplog):
+        references = [f"ref-{index}.md" for index in range(MAX_RESOURCES_PER_SKILL + 1)]
+
+        with caplog.at_level(logging.WARNING):
+            resources = SkillResources(references=references)
+
+        assert len(resources.references) == MAX_RESOURCES_PER_SKILL
+        assert resources.references[-1] == f"ref-{MAX_RESOURCES_PER_SKILL - 1}.md"
+        assert "skill resources" in caplog.text
+
+    def test_skills_round_trip_through_json(self):
+        manifest = self._manifest(
+            skills=[
+                SkillDefinition(
+                    name="pdf",
+                    description="Work with PDF files",
+                    source="/skills",
+                    resources=SkillResources(
+                        references=["forms.md"], scripts=["fill.py"]
+                    ),
+                    allowed_tools=["read_file"],
+                    additional_tools=["fill_form"],
+                    content_hash="a" * 64,
+                ),
+                SkillDefinition(name="docx", description="Work with Word files"),
+            ]
+        )
+
+        restored = AgentManifest.model_validate(json.loads(manifest.model_dump_json()))
+
+        assert restored == manifest
+
+    def test_manifest_with_skills_serializes_the_field(self):
+        """Negative control for the hash-continuity guard."""
+        manifest = self._manifest(
+            skills=[SkillDefinition(name="pdf", description="Work with PDF files")]
+        )
+
+        dumped = manifest.model_dump(mode="json", exclude_none=True)
+
+        assert [skill["name"] for skill in dumped["skills"]] == ["pdf"]
