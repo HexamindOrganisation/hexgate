@@ -84,6 +84,35 @@ def _normalize(tool: ToolEntry) -> BaseTool:
     )
 
 
+def _prefix_tools(toolset: BaseToolset, tools: list[BaseTool]) -> list[BaseTool]:
+    """Apply an inner toolset's prefix without using its invocation cache."""
+    prefix = toolset.tool_name_prefix
+    if not prefix:
+        return tools
+
+    prefixed_tools: list[BaseTool] = []
+    for tool in tools:
+        tool_copy = copy.copy(tool)
+        prefixed_name = f"{prefix}_{tool.name}"
+        tool_copy.name = prefixed_name
+
+        def _create_prefixed_declaration(
+            original_get_declaration: Callable[[], Any] = tool._get_declaration,
+            prefixed_name: str = prefixed_name,
+        ) -> Callable[[], Any]:
+            def _get_prefixed_declaration() -> Any:
+                declaration = original_get_declaration()
+                if declaration is not None:
+                    declaration.name = prefixed_name
+                return declaration
+
+            return _get_prefixed_declaration
+
+        tool_copy._get_declaration = _create_prefixed_declaration()
+        prefixed_tools.append(tool_copy)
+    return prefixed_tools
+
+
 def wrap_tool(
     tool: ToolEntry,
     enforcer: PolicyEnforcer,
@@ -166,7 +195,10 @@ class GuardedToolset(BaseToolset):
     async def get_tools(
         self, readonly_context: ReadonlyContext | None = None
     ) -> list[BaseTool]:
-        tools = await self._inner.get_tools_with_prefix(readonly_context)
+        # Resolve the inner set directly so its default invocation cache cannot
+        # hide tools that appear later in the same invocation.
+        tools = await self._inner.get_tools(readonly_context)
+        tools = _prefix_tools(self._inner, tools)
         return [
             wrap_tool(
                 tool,

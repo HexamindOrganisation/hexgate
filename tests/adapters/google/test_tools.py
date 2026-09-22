@@ -232,7 +232,6 @@ def test_wrap_tools_returns_distinct_list_of_copies() -> None:
 class _DynamicToolset(BaseToolset):
     def __init__(self) -> None:
         super().__init__(tool_name_prefix="skills")
-        self._use_invocation_cache = False
         self.tools = [_make_function_tool("static")]
         self.get_tools_calls = 0
         self.processed_request: Any = None
