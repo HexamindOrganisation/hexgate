@@ -2,6 +2,12 @@
 
 The PDF is a rendering of the annex, not a second artifact: the signature
 covers the annex bytes, and this route reads nothing else.
+
+It gates on ``require_project_admin`` for the same reason the three routes in
+the sibling router do, and it has to: the document prints section 3.4 from the
+annex's ban-enforcement rows — who was blocked and the operator's free-text
+reason — so a laxer gate here would serve past a boundary the JSON route
+draws, and ``.pdf`` would be the way around it.
 """
 
 from __future__ import annotations
@@ -12,7 +18,7 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from hexgate_api.core.db import get_session
-from hexgate_api.deps.org import require_org_member
+from hexgate_api.deps.project import require_project_admin
 from hexgate_api.features.ai_act.render import PdfRenderError, render_annex_pdf_async
 from hexgate_api.features.ai_act.service import ReportNotFound, get_report
 
@@ -21,7 +27,7 @@ router = APIRouter()
 
 @router.get(
     "/projects/{project_id}/ai-act/reports/{rpt_id}.pdf",
-    dependencies=[Depends(require_org_member)],
+    dependencies=[Depends(require_project_admin)],
     response_class=Response,
     tags=["ai_act"],
 )

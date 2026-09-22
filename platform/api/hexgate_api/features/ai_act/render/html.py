@@ -100,7 +100,7 @@ def _dt(value: Any) -> str:
 
 
 def _num(value: Any) -> str:
-    """A count with thin thousands separators, or an em-dash if unset."""
+    """A count with space thousands separators, or an em-dash if unset."""
     if value is None or value == "":
         return EM_DASH
     if isinstance(value, bool) or not isinstance(value, (int, float)):
@@ -185,21 +185,46 @@ def _matrix_roles(matrix: dict) -> list[str]:
     return list(matrix.get("roles") or [])
 
 
-# Codepoints the document's own fonts are known to carry, plus the few the
-# template's own chrome uses. Everything else becomes a visible marker: Pango
-# draws a missing glyph as .notdef and says nothing, so without this a report
-# would quietly drop text the signed annex holds — an argument snapshot in
-# Chinese, a name in Devanagari. The annex keeps the real character; the
-# document says unambiguously which one it was.
+# Codepoints the document's three pinned faces all carry. Everything else
+# becomes a visible marker: Pango draws a missing glyph as .notdef and says
+# nothing, so without this a report would quietly drop text the signed annex
+# holds — an argument snapshot in Chinese, a name in Devanagari. The annex
+# keeps the real character; the document says unambiguously which one it was.
 #
-# ASCII, Latin-1 Supplement, and markup whitespace, which is the range both
-# Liberation and DejaVu cover without gaps. Coverage above that is patchy even
-# inside Latin Extended-B, so the marker takes over there.
+# "All three" is the bar because the face is chosen per element: .mono cells
+# are set in DejaVu Sans Mono and the rest in Liberation Sans falling back to
+# DejaVu Sans (report.css), and a value can land in either. So the safe set is
+# the intersection of the three cmaps, not the union — a codepoint only DejaVu
+# Sans carries would still draw tofu in a .mono cell.
+#
+# The ranges below were read off the pinned font files rather than guessed:
+# ASCII, Latin-1 Supplement and Latin Extended-A are the blocks all three
+# cover without a gap. Latin Extended-B, Greek and Cyrillic are patchy in at
+# least one face, so they take the marker. Above those, coverage is by
+# individual codepoint, so the three blocks an operator's prose actually
+# reaches — punctuation, currency, arrows — are listed as the exact members
+# all three faces carry.
+_PUNCTUATION = frozenset(
+    # General Punctuation: the spaces, dashes, quotes, bullet, ellipsis,
+    # per-mille and prime marks. U+2011 (non-breaking hyphen) is absent from
+    # Liberation Sans and so is deliberately not here.
+    list(range(0x2000, 0x200B))
+    + [0x2010, 0x2012, 0x2013, 0x2014, 0x2015, 0x2016, 0x2017]
+    + list(range(0x2018, 0x2020))
+    + [0x2020, 0x2021, 0x2022, 0x2026, 0x202F, 0x2030]
+    + [0x2032, 0x2033, 0x2034, 0x2039, 0x203A, 0x203C, 0x203E]
+)
+_CURRENCY = frozenset(range(0x20A0, 0x20B6))  # ₠ through ₵, includes € U+20AC
+_ARROWS = frozenset([0x2190, 0x2191, 0x2192, 0x2193, 0x2194, 0x2195, 0x21A8, 0x21D4])
+
 _REPRESENTABLE = (
-    frozenset(range(0x20, 0x7F))
-    | frozenset(range(0xA0, 0x100))
-    | {0x09, 0x0A, 0x0D}
-    | {ord(char) for char in "\u2014\u2026\u2192\u202f"}  # — … → thin space
+    frozenset(range(0x20, 0x7F))  # ASCII printable
+    | frozenset(range(0xA0, 0x100))  # Latin-1 Supplement
+    | frozenset(range(0x100, 0x180))  # Latin Extended-A — œ, š, ż, the digraphs
+    | {0x09, 0x0A, 0x0D}  # markup whitespace
+    | _PUNCTUATION
+    | _CURRENCY
+    | _ARROWS
 )
 
 
@@ -209,9 +234,17 @@ def _mark_unrepresentable(html: str) -> str:
     Applied once to the finished HTML rather than per value: there is no call
     site to forget, and the markup itself is ASCII, so nothing but text is
     touched.
+
+    The marker is written with escaped angle brackets. A literal ``<U+4E2D>``
+    is well-formed tag syntax — ``<`` followed by an ASCII letter opens a tag,
+    and ``+`` and digits are legal in a tag name — so the parser took it for
+    an unknown empty element and laid out nothing, which deleted the very text
+    this function exists to preserve. Substituting into finished HTML is what
+    puts the marker past autoescaping, so it has to carry its own escaping.
     """
     return "".join(
-        char if ord(char) in _REPRESENTABLE else f"<U+{ord(char):04X}>" for char in html
+        char if ord(char) in _REPRESENTABLE else f"&lt;U+{ord(char):04X}&gt;"
+        for char in html
     )
 
 

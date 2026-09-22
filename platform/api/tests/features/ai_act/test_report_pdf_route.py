@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import uuid
 from datetime import datetime, timezone
 
 import pytest
@@ -20,9 +21,10 @@ from sqlalchemy.pool import StaticPool
 from sqlmodel import SQLModel
 from sqlmodel.ext.asyncio.session import AsyncSession
 
+from hexgate_api.constants import ROLE_MEMBER
 from hexgate_api.core import keystore as keystore_mod
 from hexgate_api.main import app
-from hexgate_api.models import AiActReport
+from hexgate_api.models import AiActReport, OrganizationMember, User
 from hexgate_api.seeds.defaults import ensure_default_project
 from tests.features.ai_act.annex_fixture import sample_annex
 
@@ -86,6 +88,7 @@ def _make_project(client: TestClient, *, email: str, name: str = "proj") -> str:
 
 
 async def _insert_report(session_factory, *, project_id: str) -> None:
+    annex_json = json.dumps(sample_annex())
     async with session_factory() as session:
         session.add(
             AiActReport(
@@ -95,8 +98,9 @@ async def _insert_report(session_factory, *, project_id: str) -> None:
                 period_end=datetime(2026, 9, 17, tzinfo=timezone.utc),
                 generated_at=datetime(2026, 9, 17, tzinfo=timezone.utc),
                 generated_by_user_id="usr_1",
-                annex_json=json.dumps(sample_annex()),
+                annex_json=annex_json,
                 annex_sha256="0" * 64,
+                annex_bytes=len(annex_json.encode("utf-8")),
                 signature=b"\x00" * 64,
                 signing_kid="sha256:0123456789abcdef",
             )
@@ -128,6 +132,54 @@ def test_when_the_report_id_is_unknown_then_404(client: TestClient) -> None:
     r = client.get(f"/v1/projects/{project_id}/ai-act/reports/rpt_nope.pdf")
 
     assert r.status_code == 404, r.text
+
+
+async def _add_org_member(
+    session_factory, *, email: str, org_id: str, role: str
+) -> str:
+    """A user with a real membership in the project's org, at ``role``."""
+    async with session_factory() as s:
+        user = User(email=email)
+        s.add(user)
+        await s.commit()
+        await s.refresh(user)
+        s.add(
+            OrganizationMember(
+                id=str(uuid.uuid4()), user_id=user.id, org_id=org_id, role=role
+            )
+        )
+        await s.commit()
+        return user.id
+
+
+def test_when_the_caller_is_a_plain_org_member_then_the_pdf_is_refused(
+    client: TestClient, session_factory
+) -> None:
+    """The in-between case, and the one the route exists to refuse.
+
+    Section 3.4 of the document prints the annex's ban-enforcement rows — who
+    was blocked and the operator's free-text reason — which every other route
+    serving that data admin-gates. A non-member 403 does not cover this: the
+    gate was ``require_org_member`` and the suite was green, because the only
+    other callers tested were the org owner, who passes either check, and an
+    outsider, who fails both. ``.pdf`` was the way around the boundary.
+    """
+    project_id = _make_project(client, email="owner@example.com")
+    _store_report(session_factory, project_id=project_id)
+    org_id = client.get("/v1/orgs").json()[0]["id"]
+    member = asyncio.run(
+        _add_org_member(
+            session_factory, email="member@example.com", org_id=org_id, role=ROLE_MEMBER
+        )
+    )
+    client.cookies.clear()
+
+    r = client.get(
+        f"/v1/projects/{project_id}/ai-act/reports/{REPORT_ID}.pdf",
+        headers={"X-Dev-User": member},
+    )
+
+    assert r.status_code == 403, r.text
 
 
 def test_when_the_caller_is_not_an_org_member_then_the_pdf_is_refused(

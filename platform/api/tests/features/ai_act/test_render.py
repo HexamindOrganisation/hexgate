@@ -30,6 +30,7 @@ from hexgate_api.features.ai_act.render import (
 )
 from hexgate_api.features.ai_act.render.html import (
     EM_DASH,
+    STYLESHEET,
     _dt,
     _label,
     _strip_index,
@@ -150,20 +151,46 @@ def test_when_a_bundle_hash_is_absent_then_it_reads_as_an_em_dash() -> None:
     assert EM_DASH in html
 
 
-def test_when_a_codepoint_has_no_glyph_then_it_is_spelled_out() -> None:
+def test_when_a_codepoint_has_no_glyph_then_it_is_spelled_out(tmp_path) -> None:
     """Pango draws a missing glyph as .notdef and says nothing, so a report
-    would otherwise lose text the signed annex holds."""
+    would otherwise lose text the signed annex holds.
+
+    Asserted on the laid-out page, not on the HTML string. The marker used to
+    be written with bare angle brackets, which the parser read as a start tag
+    — ``<U+4E2D>`` is well-formed tag syntax — so it laid out nothing and the
+    text was deleted after all. An HTML-only assertion passed throughout,
+    because the string it looked for is exactly the one the parser ate.
+    """
     annex = sample_annex()
     annex["activity"]["decision_sample"]["rows"][0]["arguments"] = {
         "note": "\u4e2d\u6587"
     }
 
-    html = build_html(annex)
+    text = pdf_text(render_annex_pdf(annex), tmp_path)
 
-    assert "<U+4E2D>" in html
-    assert "\u4e2d" not in html
+    assert "<U+4E2D>" in text
+    assert "<U+6587>" in text
+    assert "\u4e2d" not in text
     # The document's own punctuation is not collateral damage.
-    assert EM_DASH in html
+    assert EM_DASH in text
+
+
+def test_text_the_pinned_fonts_can_draw_is_never_replaced_by_a_marker(
+    tmp_path,
+) -> None:
+    """The marker is for codepoints with no glyph. Routing a codepoint the
+    fonts carry into it deletes nothing visibly, but it does replace the
+    operator's own words with a hex escape in a signed document — and the
+    set was ASCII + Latin-1 only, which is most of written French.
+    """
+    annex = sample_annex()
+    purpose = "Traite les demandes d\u2019\u0153uvre, plafond 50\u20ac \u2014 \u201cscreening\u201d"
+    annex["activity"]["decision_sample"]["rows"][0]["arguments"] = {"note": purpose}
+
+    text = pdf_text(render_annex_pdf(annex), tmp_path)
+
+    assert purpose in text
+    assert "U+" not in text
 
 
 def test_every_role_header_can_wrap_inside_its_column() -> None:
@@ -208,13 +235,22 @@ def test_when_the_template_fails_then_the_route_still_gets_a_render_error() -> N
 
 def test_html_references_no_external_resource() -> None:
     """A render that reached the network could hang, and a document that
-    depended on what a CDN served that day would not be reproducible."""
-    html = build_html(sample_annex())
+    depended on what a CDN served that day would not be reproducible.
 
-    assert "http://" not in html
-    assert "https://" not in html.replace('lang="en"', "")
+    The stylesheet is checked alongside the template because it is the more
+    likely place for one to appear — a ``@font-face`` or a logo — and because
+    ``CSS(filename=...)`` carries its own base URL, so an absolute URL there
+    resolves whatever the document's ``base_url`` is set to.
+    """
+    html = build_html(sample_annex())
+    css = STYLESHEET.read_text()
+
+    for source in (html, css):
+        assert "http://" not in source
+        assert "https://" not in source
+        assert "@import" not in source
     assert "<img" not in html
-    assert "@import" not in html
+    assert "@font-face" not in css
 
 
 # ---------------------------------------------------------------------------
