@@ -24,9 +24,11 @@ from hexgate.agents.loader import (
     unregister_agent_factory,
 )
 from hexgate.agents.models import AgentSpec
+from hexgate.agents.subagents import SubagentEdge
 
 __all__ = [
     "AgentSpec",
+    "SubagentEdge",
     "clear_registered_agents",
     "create_agent",
     "enforce_policy",
