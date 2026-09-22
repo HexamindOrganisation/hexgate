@@ -188,9 +188,32 @@ class GuardedToolset(BaseToolset):
     async def process_llm_request(
         self, *, tool_context: ToolContext, llm_request: LlmRequest
     ) -> None:
+        registered_before = dict(llm_request.tools_dict)
         await self._inner.process_llm_request(
             tool_context=tool_context, llm_request=llm_request
         )
+        self._gate_directly_registered(llm_request, registered_before)
+
+    def _gate_directly_registered(
+        self, llm_request: LlmRequest, registered_before: dict[str, BaseTool]
+    ) -> None:
+        """Gate tools the inner wrote straight into ``llm_request.tools_dict``.
+
+        A toolset may bypass ``get_tools`` and register its tools itself — ADK's
+        ComputerUseToolset does. Dispatch resolves calls out of ``tools_dict``,
+        so anything the inner leaves there raw would run ungated: the gated
+        copies from :meth:`get_tools` land under their own (possibly prefixed)
+        names and never displace it.
+        """
+        for name, tool in list(llm_request.tools_dict.items()):
+            if registered_before.get(name) is tool:
+                continue
+            llm_request.tools_dict[name] = wrap_tool(
+                tool,
+                self._enforcer,
+                approval_handler=self._approval_handler,
+                pipeline=self._pipeline,
+            )
 
     def get_auth_config(self) -> AuthConfig | None:
         """ADK populates credentials from this before listing or running tools."""

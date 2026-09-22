@@ -64,6 +64,13 @@ def _run_sync(coro: Coroutine[Any, Any, _T]) -> _T:
     try:
         asyncio.get_running_loop()
     except RuntimeError:
+        in_running_loop = False
+    else:
+        in_running_loop = True
+    # Deliberately outside the except block: running the coroutine there would
+    # chain any failure onto the "no running event loop" probe, so the warning
+    # below would lead with that instead of the real cause.
+    if not in_running_loop:
         return asyncio.run(coro)
     with ThreadPoolExecutor(max_workers=1) as pool:
         return pool.submit(asyncio.run, coro).result()

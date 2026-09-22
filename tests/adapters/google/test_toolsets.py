@@ -14,6 +14,7 @@ import pytest
 from fastapi.openapi.models import APIKey, APIKeyIn
 from google.adk.agents.readonly_context import ReadonlyContext
 from google.adk.auth.auth_tool import AuthConfig
+from google.adk.models.llm_request import LlmRequest
 from google.adk.tools.base_tool import BaseTool
 from google.adk.tools.base_toolset import BaseToolset
 from google.adk.tools.function_tool import FunctionTool
@@ -95,6 +96,36 @@ class _FakeToolset(BaseToolset):
 
     async def close(self) -> None:
         self.closed = True
+
+
+class _DirectRegisteringToolset(_FakeToolset):
+    """Mirrors ComputerUseToolset: writes its own raw tools into tools_dict.
+
+    ``hidden`` are tools it registers but never returns from get_tools, so the
+    gated copies can never displace them.
+    """
+
+    def __init__(
+        self,
+        tools: list[BaseTool],
+        *,
+        hidden: list[BaseTool] | None = None,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(tools, **kwargs)
+        self.hidden = hidden or []
+
+    async def process_llm_request(self, *, tool_context: Any, llm_request: Any) -> None:
+        await super().process_llm_request(
+            tool_context=tool_context, llm_request=llm_request
+        )
+        for tool in self.tools + self.hidden:
+            llm_request.tools_dict[tool.name] = tool
+
+
+async def _denied(tool: BaseTool) -> bool:
+    result = await tool.run_async(args={"text": "hi"}, tool_context=None)
+    return "policy_denied" in str(result)
 
 
 class _StubInvocationContext:
@@ -183,7 +214,7 @@ async def test_guarded_toolset_delegates_process_llm_request() -> None:
     """The inner still sees the request — losing this silently loses skills."""
     inner = _FakeToolset([_make_function_tool()])
     guarded = GuardedToolset(inner, _allow_enforcer())
-    request = object()
+    request = LlmRequest()
 
     await guarded.process_llm_request(tool_context=None, llm_request=request)
 
@@ -289,3 +320,53 @@ def test_wrap_tool_still_rejects_a_toolset_directly() -> None:
     """wrap_tool keeps its clear error: only wrap_tools routes toolsets."""
     with pytest.raises(TypeError, match="BaseTool or callable"):
         wrap_tool(_FakeToolset([]), _allow_enforcer())  # type: ignore[arg-type]
+
+
+# ---------------------------------------------------------------------------
+# Tools the inner registers into tools_dict itself
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_guarded_toolset_gates_directly_registered_tools_under_a_prefix() -> None:
+    """A prefixing toolset registers raw tools under their BARE names, which the
+    prefixed gated copies never displace — so dispatch would find them ungated."""
+    inner = _DirectRegisteringToolset([_make_function_tool()], tool_name_prefix="mymcp")
+    guarded = GuardedToolset(inner, _deny_enforcer())
+    request = LlmRequest()
+
+    await guarded.process_llm_request(tool_context=None, llm_request=request)
+
+    assert await _denied(request.tools_dict["echo"])
+
+
+@pytest.mark.asyncio
+async def test_guarded_toolset_gates_tools_absent_from_get_tools() -> None:
+    """A tool the inner registers but never returns from get_tools still runs
+    through the gate — nothing else would ever wrap it."""
+    inner = _DirectRegisteringToolset(
+        [_make_function_tool()], hidden=[_make_function_tool("hidden")]
+    )
+    guarded = GuardedToolset(inner, _deny_enforcer())
+    request = LlmRequest()
+
+    await guarded.process_llm_request(tool_context=None, llm_request=request)
+
+    assert await _denied(request.tools_dict["hidden"])
+    assert await _denied(request.tools_dict["echo"])
+
+
+@pytest.mark.asyncio
+async def test_guarded_toolset_leaves_tools_it_did_not_register_untouched() -> None:
+    """Only entries the inner added or replaced are re-gated; an unrelated tool
+    already in the dict is left exactly as it was, never double-wrapped."""
+    untouched = _make_function_tool("untouched")
+    request = LlmRequest()
+    request.tools_dict["untouched"] = untouched
+    guarded = GuardedToolset(
+        _DirectRegisteringToolset([_make_function_tool()]), _deny_enforcer()
+    )
+
+    await guarded.process_llm_request(tool_context=None, llm_request=request)
+
+    assert request.tools_dict["untouched"] is untouched
