@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Coroutine
+from collections.abc import Coroutine, Iterable
 from concurrent.futures import ThreadPoolExecutor
+from hashlib import sha256
 from typing import Any, TypeVar
 
 from google.adk.agents import Agent
@@ -17,6 +18,8 @@ from hexgate.manifest.models import (
     AgentManifest,
     InputProperty,
     InputSchema,
+    SkillDefinition,
+    SkillResources,
     ToolDefinition,
 )
 
@@ -27,6 +30,14 @@ _T = TypeVar("_T")
 # Registration snapshot: no session state, so no state-derived tools.
 _NO_CONTEXT = None
 
+# Accessed structurally rather than by isinstance: SkillToolset does not exist
+# below ADK 1.25.0 and hexgate supports >=1.14, so importing it at module scope
+# would break the pinned floor.
+_SKILLS_ATTR = "_skills"
+_PROVIDED_TOOLS_ATTR = "_provided_tools_by_name"
+_PROVIDED_TOOLSETS_ATTR = "_provided_toolsets"
+_ADDITIONAL_TOOLS_KEY = "adk_additional_tools"
+
 
 def create_google_manifest(
     agent: Agent, *, description: str | None = None
@@ -34,11 +45,16 @@ def create_google_manifest(
     """Build an AgentManifest from a Google ADK agent."""
 
     tools: list[ToolDefinition] = []
+    skills: list[SkillDefinition] = []
     for entry in agent.tools:
+        if isinstance(entry, BaseToolset):
+            skills.extend(_collect_skills(entry))
         for tool in _expand_entry(entry):
             definition = _to_tool_definition(tool)
             if definition is not None:
                 tools.append(definition)
+
+    tools.extend(_additional_tool_definitions(agent.tools, skills, seen=tools))
 
     # resolve description from agent or provided description
     description = description or agent.description or None
@@ -50,6 +66,9 @@ def create_google_manifest(
         model=_extract_model(agent.model),
         system_prompt=_extract_system_prompt(agent.instruction),
         tools=tools,
+        # None, not [], so an agent without skills serializes — and therefore
+        # hashes — exactly as it did before this field existed.
+        skills=skills or None,
     )
 
 
@@ -109,6 +128,118 @@ def _expand_entry(entry: object) -> list[BaseTool]:
     if hasattr(entry, "_get_declaration"):
         return [entry]  # type: ignore[list-item]
     return [FunctionTool(func=entry)]
+
+
+def _skill_objects(entry: object) -> list[Any]:
+    """The Skill objects a toolset holds, or [] for any other toolset.
+
+    Structural rather than isinstance: SkillToolset does not exist below ADK
+    1.25.0, and hexgate supports >=1.14. A toolset that stops exposing
+    ``_skills`` degrades to "no skills in the manifest", never an exception.
+    """
+    skills = getattr(entry, _SKILLS_ATTR, None)
+    return list(skills.values()) if isinstance(skills, dict) else []
+
+
+def _collect_skills(entry: object) -> list[SkillDefinition]:
+    """Skill definitions from a skills toolset; [] for any other toolset."""
+    return [_to_skill_definition(skill) for skill in _skill_objects(entry)]
+
+
+def _to_skill_definition(skill: Any) -> SkillDefinition:
+    """Map one ADK Skill onto the manifest shape.
+
+    ``source`` stays None: a SkillToolset is built from already-loaded Skill
+    objects and retains no library path to record.
+    """
+    frontmatter = skill.frontmatter
+    return SkillDefinition(
+        name=skill.name,
+        description=skill.description,
+        resources=SkillResources(
+            references=skill.resources.list_references(),
+            assets=skill.resources.list_assets(),
+            scripts=skill.resources.list_scripts(),
+        ),
+        allowed_tools=_parse_allowed_tools(frontmatter.allowed_tools),
+        additional_tools=_parse_additional_tools(frontmatter.metadata),
+        content_hash=sha256(skill.instructions.encode("utf-8")).hexdigest(),
+    )
+
+
+def _parse_allowed_tools(value: object) -> list[str]:
+    """Split the agentskills.io ``allowed-tools`` frontmatter.
+
+    A space-delimited string, not a list — and bare ``.split()`` so runs of
+    whitespace collapse and an absent value yields [] rather than [""].
+    """
+    return value.split() if isinstance(value, str) else []
+
+
+def _parse_additional_tools(metadata: object) -> list[str]:
+    """Tool names from ``metadata.adk_additional_tools``.
+
+    ADK validates the key to be a list only when present, and ``extra="allow"``
+    on Frontmatter lets arbitrary YAML reach this dict, so coerce defensively.
+    """
+    if not isinstance(metadata, dict):
+        return []
+    names = metadata.get(_ADDITIONAL_TOOLS_KEY)
+    if not isinstance(names, list):
+        return []
+    return [name for name in names if isinstance(name, str)]
+
+
+def _provided_tools(entry: object) -> dict[str, BaseTool]:
+    """Tools a skills toolset was constructed with, by the name a skill uses.
+
+    Both shapes ADK accepts: tools passed individually and tools reached
+    through a nested toolset.
+    """
+    by_name = getattr(entry, _PROVIDED_TOOLS_ATTR, None)
+    provided: dict[str, BaseTool] = dict(by_name) if isinstance(by_name, dict) else {}
+    nested = getattr(entry, _PROVIDED_TOOLSETS_ATTR, None)
+    for toolset in nested if isinstance(nested, list) else []:
+        if isinstance(toolset, BaseToolset):
+            provided.update({tool.name: tool for tool in expand_toolset(toolset)})
+    return provided
+
+
+def _additional_tool_definitions(
+    entries: Iterable[object],
+    skills: list[SkillDefinition],
+    *,
+    seen: list[ToolDefinition],
+) -> list[ToolDefinition]:
+    """ToolDefinitions for tools a skill exposes only once activated.
+
+    These are supplied at toolset construction but resolved from session state,
+    so they are absent from a registration snapshot. Recording them keeps the
+    manifest — and the policy generated from it — aware of the agent's full
+    reachable tool surface.
+
+    Iterating ``sorted`` names keeps the manifest, and therefore its
+    content_hash, stable across runs. A name with no matching provided tool is
+    skipped: ADK itself resolves it to nothing at runtime.
+    """
+    wanted = {name for skill in skills for name in skill.additional_tools}
+    if not wanted:
+        return []
+    known = {definition.name for definition in seen}
+    found: list[ToolDefinition] = []
+    for entry in entries:
+        provided = _provided_tools(entry)
+        if not provided:
+            continue
+        for name in sorted(wanted - known):
+            tool = provided.get(name)
+            if tool is None:
+                continue
+            definition = _to_tool_definition(tool)
+            if definition is not None:
+                found.append(definition)
+                known.add(name)
+    return found
 
 
 def _extract_model(model: str | BaseLlm) -> str | None:
