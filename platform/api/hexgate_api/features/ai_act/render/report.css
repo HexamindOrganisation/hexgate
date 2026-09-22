@@ -18,8 +18,11 @@
 /* Liberation for text, DejaVu Sans Mono for code — both installed in the API
  * image (see platform/api/Dockerfile), so the font set is a property of the
  * build rather than of whatever host the render lands on. DejaVu trails the
- * text face too, for the Latin-Extended/Greek/Cyrillic coverage Liberation
- * lacks: an operator's name is not a place to draw tofu. */
+ * text face too, but the two are not interchangeable: a .mono cell is set in
+ * DejaVu Sans Mono, so a codepoint only the proportional faces carry would
+ * still draw tofu there. html.py's _REPRESENTABLE is the intersection of all
+ * three for that reason, and anything outside it is spelled out rather than
+ * left to the font stack. */
 :root {
   --ink: #0f1729;
   --prose: #334155;

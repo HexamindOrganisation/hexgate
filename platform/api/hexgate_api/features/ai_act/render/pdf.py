@@ -72,9 +72,19 @@ class PdfRenderError(RuntimeError):
 def render_pdf(html: str) -> bytes:
     """Compile the report's HTML to PDF bytes.
 
-    ``base_url=None``: the document references no external resource, and
-    leaving the base URL unset means a stray ``src`` or ``@import`` that ever
-    appeared in the template could not be resolved into a network fetch.
+    ``base_url=None``: the document references no external resource, so it
+    needs no base to resolve one against. It is not a guard — an absolute
+    ``http://`` URL in a ``src`` or an ``@import`` resolves without a base,
+    and a fetch inside a render holds one of the pool's two threads while it
+    runs. WeasyPrint's ``URLFetcher`` passes ``timeout=10``, but that is per
+    socket operation, not per fetch, and so bounds no total: the connect is
+    retried at the full timeout for every address ``getaddrinfo`` returns,
+    redirects are followed up to ten times with a fresh timeout each hop, and
+    a server trickling a byte at a time resets it indefinitely. A fetch can
+    therefore outlast ``RENDER_TIMEOUT_SECONDS``, which frees the caller but
+    not the thread. What keeps a render off the network is that neither the
+    template nor the stylesheet carries such a URL, which
+    ``test_html_references_no_external_resource`` holds for both.
 
     The bytes are deterministic. WeasyPrint writes ``/CreationDate`` only from
     the document's own ``dcterms.created`` metadata, which this template does
