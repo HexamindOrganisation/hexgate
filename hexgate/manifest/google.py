@@ -38,6 +38,11 @@ _PROVIDED_TOOLS_ATTR = "_provided_tools_by_name"
 _PROVIDED_TOOLSETS_ATTR = "_provided_toolsets"
 _ADDITIONAL_TOOLS_KEY = "adk_additional_tools"
 
+# Public on BaseToolset since 1.14, and assignable after construction, so it
+# applies on every supported ADK regardless of whether SkillToolset's own
+# constructor forwards it (which it does only from 2.4.0).
+_PREFIX_ATTR = "tool_name_prefix"
+
 
 def create_google_manifest(
     agent: Agent, *, description: str | None = None
@@ -151,15 +156,21 @@ def _to_skill_definition(skill: Any) -> SkillDefinition:
 
     ``source`` stays None: a SkillToolset is built from already-loaded Skill
     objects and retains no library path to record.
+
+    Resource names are sorted because ADK enumerates them with an unsorted
+    ``rglob``, so their order is whatever the filesystem returns. That order
+    would otherwise reach content_hash — re-registering the same skill from
+    another machine would mint a fresh AgentVersion — and, above
+    MAX_RESOURCES_PER_SKILL, decide *which* names survive truncation.
     """
     frontmatter = skill.frontmatter
     return SkillDefinition(
         name=skill.name,
         description=skill.description,
         resources=SkillResources(
-            references=skill.resources.list_references(),
-            assets=skill.resources.list_assets(),
-            scripts=skill.resources.list_scripts(),
+            references=sorted(skill.resources.list_references()),
+            assets=sorted(skill.resources.list_assets()),
+            scripts=sorted(skill.resources.list_scripts()),
         ),
         allowed_tools=_parse_allowed_tools(frontmatter.allowed_tools),
         additional_tools=_parse_additional_tools(frontmatter.metadata),
@@ -191,10 +202,13 @@ def _parse_additional_tools(metadata: object) -> list[str]:
 
 
 def _provided_tools(entry: object) -> dict[str, BaseTool]:
-    """Tools a skills toolset was constructed with, by the name a skill uses.
+    """Tools a skills toolset was constructed with, keyed as a skill names them.
 
     Both shapes ADK accepts: tools passed individually and tools reached
-    through a nested toolset.
+    through a nested toolset. The key is the name ``adk_additional_tools`` is
+    matched against — bare for an individually passed tool, already carrying
+    the nested toolset's own prefix for the rest. The outer toolset's prefix is
+    applied on top later, exactly as ADK applies it at runtime.
     """
     by_name = getattr(entry, _PROVIDED_TOOLS_ATTR, None)
     provided: dict[str, BaseTool] = dict(by_name) if isinstance(by_name, dict) else {}
@@ -203,6 +217,21 @@ def _provided_tools(entry: object) -> dict[str, BaseTool]:
         if isinstance(toolset, BaseToolset):
             provided.update({tool.name: tool for tool in expand_toolset(toolset)})
     return provided
+
+
+def _callable_name(entry: object, name: str) -> str:
+    """The name the model calls a toolset's tool by.
+
+    Mirrors ``BaseToolset.get_tools_with_prefix``, which is ``@final`` and
+    rewrites every name it returns to ``f"{prefix}_{tool.name}"``. Additional
+    tools are returned from ``get_tools``, so they pass through it too — while
+    ``_provided_tools_by_name`` holds them under their bare names. Recording
+    the bare name would put an entry in the manifest that no runtime tool
+    answers to, and the policy generated from it would deny the prefixed name
+    the gate actually sees.
+    """
+    prefix = getattr(entry, _PREFIX_ATTR, None)
+    return f"{prefix}_{name}" if isinstance(prefix, str) and prefix else name
 
 
 def _additional_tool_definitions(
@@ -231,14 +260,20 @@ def _additional_tool_definitions(
         provided = _provided_tools(entry)
         if not provided:
             continue
-        for name in sorted(wanted - known):
+        for name in sorted(wanted):
+            # Declared name looks the tool up; callable name is what gets
+            # recorded and what de-duplication compares, since that is the
+            # namespace every other entry in ``tools`` already lives in.
+            callable_name = _callable_name(entry, name)
+            if callable_name in known:
+                continue
             tool = provided.get(name)
             if tool is None:
                 continue
-            definition = _to_tool_definition(tool)
+            definition = _to_tool_definition(tool, name=callable_name)
             if definition is not None:
                 found.append(definition)
-                known.add(name)
+                known.add(callable_name)
     return found
 
 
@@ -270,8 +305,13 @@ def _extract_system_prompt(instruction: object) -> str | None:
     return None
 
 
-def _to_tool_definition(tool: BaseTool) -> ToolDefinition | None:
+def _to_tool_definition(
+    tool: BaseTool, *, name: str | None = None
+) -> ToolDefinition | None:
     """Convert a Google ADK tool to a ToolDefinition.
+
+    ``name`` overrides the tool's own, for a tool whose callable name is
+    decided by the toolset carrying it rather than by the tool itself.
 
     Reads schema from BOTH declaration fields: ``parameters`` (the typed
     ``google.genai.types.Schema`` shape ADK's native ``FunctionTool``
@@ -304,7 +344,7 @@ def _to_tool_definition(tool: BaseTool) -> ToolDefinition | None:
         )
 
     return ToolDefinition(
-        name=tool.name,
+        name=name or tool.name,
         description=tool.description or "",
         input_schema=InputSchema(properties=properties, required=required),
     )
