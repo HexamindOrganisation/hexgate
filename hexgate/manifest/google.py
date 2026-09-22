@@ -1,10 +1,15 @@
 from __future__ import annotations
 
-from typing import Any
+import asyncio
+import logging
+from collections.abc import Coroutine
+from concurrent.futures import ThreadPoolExecutor
+from typing import Any, TypeVar
 
 from google.adk.agents import Agent
 from google.adk.models.base_llm import BaseLlm
 from google.adk.tools.base_tool import BaseTool
+from google.adk.tools.base_toolset import BaseToolset
 from google.adk.tools.function_tool import FunctionTool
 
 from hexgate.manifest.models import (
@@ -15,6 +20,13 @@ from hexgate.manifest.models import (
     ToolDefinition,
 )
 
+_log = logging.getLogger(__name__)
+
+_T = TypeVar("_T")
+
+# Registration snapshot: no session state, so no state-derived tools.
+_NO_CONTEXT = None
+
 
 def create_google_manifest(
     agent: Agent, *, description: str | None = None
@@ -23,10 +35,10 @@ def create_google_manifest(
 
     tools: list[ToolDefinition] = []
     for entry in agent.tools:
-        tool = entry if hasattr(entry, "_get_declaration") else FunctionTool(func=entry)
-        definition = _to_tool_definition(tool)
-        if definition is not None:
-            tools.append(definition)
+        for tool in _expand_entry(entry):
+            definition = _to_tool_definition(tool)
+            if definition is not None:
+                tools.append(definition)
 
     # resolve description from agent or provided description
     description = description or agent.description or None
@@ -39,6 +51,64 @@ def create_google_manifest(
         system_prompt=_extract_system_prompt(agent.instruction),
         tools=tools,
     )
+
+
+def _run_sync(coro: Coroutine[Any, Any, _T]) -> _T:
+    """Run ``coro`` to completion from sync code, loop or no loop.
+
+    ``create_manifest`` is sync and normally called from the CLI, but nothing
+    stops a caller invoking it from inside a running loop, where ``asyncio.run``
+    raises. Fall back to a worker thread with its own loop rather than failing
+    registration.
+    """
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        in_running_loop = False
+    else:
+        in_running_loop = True
+    # Deliberately outside the except block: running the coroutine there would
+    # chain any failure onto the "no running event loop" probe, so the warning
+    # below would lead with that instead of the real cause.
+    if not in_running_loop:
+        return asyncio.run(coro)
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        return pool.submit(asyncio.run, coro).result()
+
+
+def expand_toolset(toolset: BaseToolset) -> list[BaseTool]:
+    """The tools a toolset declares, for a registration-time snapshot.
+
+    Uses the prefixed variant so the manifest records the names the model will
+    call. Passing no ReadonlyContext is deliberate: a toolset resolves
+    state-dependent tools only when given one, so this returns the static
+    surface and never touches session state.
+    """
+    try:
+        return _run_sync(toolset.get_tools_with_prefix(_NO_CONTEXT))
+    except Exception:
+        # A toolset that cannot enumerate offline (a live MCP connection, say)
+        # must not break registration: the agent still registers, minus that
+        # toolset's tools.
+        _log.warning(
+            "could not expand toolset %s; its tools are absent from the manifest",
+            type(toolset).__name__,
+            exc_info=True,
+        )
+        return []
+
+
+def _expand_entry(entry: object) -> list[BaseTool]:
+    """Normalize one ``agent.tools`` entry into zero or more BaseTools.
+
+    The toolset branch goes first: a toolset has no ``_get_declaration``, so it
+    would otherwise fall through to ``FunctionTool(func=entry)``.
+    """
+    if isinstance(entry, BaseToolset):
+        return expand_toolset(entry)
+    if hasattr(entry, "_get_declaration"):
+        return [entry]  # type: ignore[list-item]
+    return [FunctionTool(func=entry)]
 
 
 def _extract_model(model: str | BaseLlm) -> str | None:
