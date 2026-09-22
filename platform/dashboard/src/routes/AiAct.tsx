@@ -379,7 +379,14 @@ function HistoryPanel({ projectId }: { projectId: string }) {
         // PDF route names itself after the report id.
         kind === "annex" ? report.annex_filename : `${report.id}.pdf`,
       );
-    } catch {
+    } catch (err) {
+      // The PDF route ships separately from this tab (#237). Until it is
+      // deployed the request 404s, which is not a failure the operator can do
+      // anything about — say so rather than implying the download broke.
+      if (kind === "pdf" && err instanceof ApiError && err.status === 404) {
+        toast.info("PDF rendering is not available yet — download the annex.");
+        return;
+      }
       toast.error(
         kind === "annex"
           ? "Could not download the annex."
@@ -450,9 +457,11 @@ function HistoryPanel({ projectId }: { projectId: string }) {
                 </td>
                 <td
                   className="px-5 py-3 text-[13px] text-muted-foreground"
-                  title={r.generated_by_user_id}
+                  title={r.generated_by_user_id ?? undefined}
                 >
-                  {r.generated_by_email ?? r.generated_by_user_id}
+                  {/* Both null once the account is erased — the attribution
+                      survives inside the signed annex, not in this view. */}
+                  {r.generated_by_email ?? r.generated_by_user_id ?? "—"}
                 </td>
                 <td
                   className="px-5 py-3 font-mono text-xs text-muted-foreground"

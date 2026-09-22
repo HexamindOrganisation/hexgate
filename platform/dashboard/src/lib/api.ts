@@ -718,7 +718,10 @@ export interface AiActReport {
   period_start: string;
   period_end: string;
   generated_at: string;
-  generated_by_user_id: string;
+  /** Both nullable: the row's actor FK degrades to NULL when the account is
+   * erased. The annex keeps the attribution inside the signed bytes, so only
+   * this convenience view loses it. */
+  generated_by_user_id: string | null;
   /** Resolved server-side for display; null when the account is gone. */
   generated_by_email: string | null;
   annex_sha256: string;

@@ -31,7 +31,7 @@ import { AiActPage } from "@/routes/AiAct";
 import { renderWithProviders } from "@/test/render";
 
 vi.mock("sonner", () => ({
-  toast: { error: vi.fn(), success: vi.fn() },
+  toast: { error: vi.fn(), success: vi.fn(), info: vi.fn() },
 }));
 
 const PROJECT = "p1";
@@ -463,6 +463,28 @@ describe("AiActPage", () => {
       ).toBe(true),
     );
     await waitFor(() => expect(URL.createObjectURL).toHaveBeenCalled());
+  });
+
+  it("when the pdf route is not deployed then it says so instead of failing", async () => {
+    // The stub 404s every unrouted path, which is what the un-deployed PDF
+    // route (#237) actually does. The operator can do nothing about it, so
+    // this must not read as a broken download.
+    stubFetch({ reports: [REPORT] });
+    const user = userEvent.setup();
+    // `restoreAllMocks` does not clear a module mock's call history, so the
+    // "no error toast" assertion below would otherwise pass or fail on this
+    // test's position in the file rather than on the behaviour.
+    vi.mocked(toast.error).mockClear();
+    renderWithProviders(<AiActPage />, { initialRoute: "/ai-act" });
+
+    await user.click(await screen.findByRole("button", { name: /pdf/i }));
+
+    await waitFor(() =>
+      expect(toast.info).toHaveBeenCalledWith(
+        "PDF rendering is not available yet — download the annex.",
+      ),
+    );
+    expect(toast.error).not.toHaveBeenCalled();
   });
 
   it("shows the history row's period, author and digest", async () => {
