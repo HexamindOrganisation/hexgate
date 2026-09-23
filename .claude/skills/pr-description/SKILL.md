@@ -56,17 +56,28 @@ Use these in this order. Drop the ones a given PR does not need.
    reference the prior PRs and say where this one sits. Note the blast radius up
    front ("pure SDK, no platform change", or "adds a migration") so the reviewer
    knows what class of change they are reading.
-2. **Design / approach (required for anything non-trivial).** A few lines on the
+2. **Risk tier (required).** One line — `low` / `medium` / `high` — and a short
+   why, so the reviewer can scale their effort to the risk. Use these definitions:
+   - **low** — a secondary feature that does not touch core functionality (e.g. an
+     AI Act report).
+   - **medium** — could affect core functionality (e.g. makes the platform slower,
+     or changes a core UI page).
+   - **high** — core is impacted (e.g. public APIs, security / auth, a migration).
+
+   When in doubt, pick the higher tier. This composes with the blast radius above:
+   blast radius says *what class of change* it is; the tier says *how much review
+   it warrants*.
+3. **Design / approach (required for anything non-trivial).** A few lines on the
    technical shape: the key idea, the main type or function, what it reuses vs.
    what is new, and the one or two decisions worth knowing. A small table works
    well when the PR adds several related things (lints, endpoints, flags). Keep
    it to what a reviewer needs, not a full design doc. Link the design doc or the
    relevant ADR (`docs/adr/R-…`) if there is one.
-3. **Important files (required when the diff spans more than a few files).** A
+4. **Important files (required when the diff spans more than a few files).** A
    `| File | What to look at |` table naming the files that carry the design and
    what to check in each. Highest-leverage section: it turns a flat file list
    into a review order. Leave out the mechanical files.
-4. **Tests (required for anything that changes behaviour).** Not just what you
+5. **Tests (required for anything that changes behaviour).** Not just what you
    ran, but what you *added* so someone fresh to this code can catch a future
    regression. Break it out by layer, dropping the ones that do not apply:
    - **Unit** — the suite you ran and its result.
@@ -80,11 +91,11 @@ Use these in this order. Drop the ones a given PR does not need.
    rest. Plainly: "unit: full suite green (142 passed); integration: `pytest -m
    integration` green locally; by hand: deny path returns 403 for the billing
    role; added: a regression test for the empty-scope case."
-5. **Try it (when there is something runnable).** A fenced block of commands the
+6. **Try it (when there is something runnable).** A fenced block of commands the
    reviewer can paste to see the change work, ideally against a fixture already
    in the repo (for us, `deploy/demo_policies`). For UI changes, put a screenshot
    or short clip here instead.
-6. **Notes (optional).** Loose ends: what stayed unchanged on purpose; risk and
+7. **Notes (optional).** Loose ends: what stayed unchanged on purpose; risk and
    rollback (migrations, breaking changes, feature flags, how to revert); known
    limitations; follow-ups deferred to a later PR; link to the design doc or ticket.
 
@@ -93,6 +104,8 @@ Use these in this order. Drop the ones a given PR does not need.
 ````markdown
 <Objective: one paragraph. What this PR does and why. Series position and blast
 radius if relevant.>
+
+**Risk tier:** <low | medium | high> — <one line why>
 
 ## Design
 
