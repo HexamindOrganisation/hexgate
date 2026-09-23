@@ -150,7 +150,7 @@ function ManifestView({ agent }: { agent: AgentManifestView }) {
         unregistered={agent.manifest === null}
       />
       <SkillsSection
-        skills={agent.manifest?.skills ?? []}
+        skills={agent.manifest?.skills ?? null}
         unregistered={agent.manifest === null}
       />
       <SystemPromptSection
@@ -235,7 +235,7 @@ function SkillsSection({
   skills,
   unregistered,
 }: {
-  skills: SkillDefinition[];
+  skills: SkillDefinition[] | null;
   unregistered: boolean;
 }) {
   return (
@@ -243,15 +243,16 @@ function SkillsSection({
       <div className="px-5 py-4 border-b border-border flex items-center gap-2">
         <BookOpen className="size-4 text-muted-foreground" />
         <span className="text-sm font-medium">Skills</span>
-        <Badge variant="outline" className="ml-1 font-mono text-[11px]">
-          {skills.length}
-        </Badge>
+        {/* A count of 0 would assert the same thing the copy below refuses to. */}
+        {skills !== null && (
+          <Badge variant="outline" className="ml-1 font-mono text-[11px]">
+            {skills.length}
+          </Badge>
+        )}
       </div>
-      {skills.length === 0 ? (
+      {skills === null || skills.length === 0 ? (
         <p className="px-5 py-4 text-xs text-muted-foreground">
-          {unregistered
-            ? "Agent not registered yet — run `hexgate register` to populate."
-            : "No skills declared."}
+          {emptySkillsCopy(skills, unregistered)}
         </p>
       ) : (
         <ul className="divide-y divide-border">
@@ -262,6 +263,24 @@ function SkillsSection({
       )}
     </section>
   );
+}
+
+/**
+ * Null is not emptiness — the same distinction SkillResourceDetails draws one
+ * level down. Nothing enumerated this agent's skills (its framework has no
+ * skill concept, or it was registered before the SDK discovered any), so
+ * "No skills declared." would assert something the manifest never said.
+ */
+function emptySkillsCopy(
+  skills: SkillDefinition[] | null,
+  unregistered: boolean,
+): string {
+  if (unregistered) {
+    return "Agent not registered yet — run `hexgate register` to populate.";
+  }
+  return skills === null
+    ? "Skills not enumerated at registration."
+    : "No skills declared.";
 }
 
 function SystemPromptSection({

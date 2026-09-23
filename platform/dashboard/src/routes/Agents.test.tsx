@@ -212,10 +212,39 @@ describe("AgentsPage — skills section", () => {
     ).toBeNull();
   });
 
-  it("renders an empty state when skills is null", async () => {
+  // Paired with the next test, mirroring the resources guard one level down:
+  // every agent on this branch serialises skills: null, so collapsing it into
+  // [] would make the false assertion the only thing the section can show.
+  it("says skills were not enumerated when skills is null", async () => {
     await renderWithSkills(null);
 
+    expect(
+      screen.getByText("Skills not enumerated at registration."),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("No skills declared.")).toBeNull();
+  });
+
+  it("says no skills are declared when the manifest enumerates none", async () => {
+    await renderWithSkills([]);
+
     expect(screen.getByText("No skills declared.")).toBeInTheDocument();
+    expect(
+      screen.queryByText("Skills not enumerated at registration."),
+    ).toBeNull();
+  });
+
+  it("omits the count badge when skills is null", async () => {
+    await renderWithSkills(null);
+
+    const header = screen.getByText("Skills").parentElement as HTMLElement;
+    expect(within(header).queryByText("0")).toBeNull();
+  });
+
+  it("shows a zero count when the manifest enumerates no skills", async () => {
+    await renderWithSkills([]);
+
+    const header = screen.getByText("Skills").parentElement as HTMLElement;
+    expect(within(header).getByText("0")).toBeInTheDocument();
   });
 
   it("renders the unregistered state", async () => {
