@@ -197,40 +197,20 @@ def _():
         )
 
     # NOTE: support_bot has NO refund_order tool. Refunds live ONLY in the
-    # billing_bot sub-agent, reached via delegate_to_billing — no seat refunds
-    # directly. (The org boundary still declares a refund ceiling; see the policy
-    # cell. Once the sub-agent-registration series lands, billing_bot's own policy
-    # becomes dashboard-editable; today it self-enforces in-kernel.)
+    # billing_bot sub-agent, mounted via `billing_bot.as_tool()` (the shipped
+    # agent-as-tool construct) — no seat refunds directly. (The org boundary still
+    # declares a refund ceiling; see the policy cell. billing_bot self-enforces its own
+    # policy in-kernel here; registering it as its own dashboard-editable agent —
+    # `register_tree` — is the natural next step.)
 
-    # billing_bot is built on first delegation (after the key is set, since
-    # create_agent instantiates ChatOpenAI eagerly) and cached here.
-    _billing = {}
-
-    @tool
-    async def delegate_to_billing(order_id: str, amount: float, reason: str) -> str:
-        """Delegate a refund to the billing_bot sub-agent.
-
-        support_bot cannot refund directly, so delegation is the ONLY refund path —
-        for every seat. The support and billing seats may delegate; the default
-        seat is denied by policy before this tool runs. billing_bot is role-aware —
-        the caller's role rides the context into the nested run — so a support
-        delegation is capped at $200 and a billing one at the $1000 org ceiling.
-        Delegation isn't an escape hatch: the sub-agent re-gates the refund.
-        """
-        if "agent" not in _billing:
-            _billing["agent"] = build_billing()
-        result = await _billing["agent"].ainvoke(
-            {
-                "messages": [
-                    (
-                        "user",
-                        f"Refund order {order_id} for ${amount:.2f}. Reason: {reason}",
-                    )
-                ]
-            },
-            {},
-        )
-        return result["messages"][-1].content
+    # delegate_to_billing is billing_bot mounted as an agent-as-tool via the shipped
+    # `child.as_tool()` construct — no hand-written closure. On call it decides
+    # `delegate_to_billing` under support_bot's policy (the seed bundle name-gates it:
+    # default seat denied, support/billing allowed), then runs billing_bot's OWN enforced
+    # ainvoke with the caller's role riding the ambient context in — so billing_bot
+    # re-gates the refund ($200 for support, $1000 for billing). Delegation is the only
+    # refund path and never an escape hatch. Built in build_support (below), once the key
+    # is set — create_agent instantiates ChatOpenAI eagerly.
 
     # MCP tools from the demo server (named mcp-<server>-<tool>). The gate keys on
     # the tool name, so these match the policy's mcp: grants: compute_tip is open,
@@ -252,20 +232,33 @@ def _():
         """Read a stored secret (MCP demo tool; policy-denied)."""
         return f"(demo) secret[{key}] = ****"
 
-    TOOLS = [
-        view_orders,
-        delegate_to_billing,
-        compute_tip,
-        send_invoice,
-        read_secret,
-    ]
-
     def build_support():
         # name MUST be support_bot: the platform gates the served agent with the
         # seeded compose bundle for that agent in the default project.
+        #
+        # billing_bot is a first-class HexgateAgent (built + policy-enforced), mounted
+        # on support_bot with `child.as_tool()` — the shipped agent-as-tool construct.
+        # The delegation tool keeps the name `delegate_to_billing` so support_bot's seed
+        # policy (which gates that tool name by role) governs the delegation unchanged.
+        billing_bot = build_billing()
+        delegate_to_billing = billing_bot.as_tool(
+            name="delegate_to_billing",
+            description=(
+                "Delegate a refund to the billing_bot sub-agent — the ONLY refund path, "
+                "for every seat (support_bot cannot refund directly). Pass the order id, "
+                "amount, and reason. billing_bot re-gates the refund under the caller's "
+                "role, so it is not an escape hatch."
+            ),
+        )
         return create_agent(
             model="gpt-4o-mini",
-            tools=TOOLS,
+            tools=[
+                view_orders,
+                delegate_to_billing,
+                compute_tip,
+                send_invoice,
+                read_secret,
+            ],
             system_prompt=(
                 "You are a front-line customer support agent for an online store. "
                 "Help customers check order status with view_orders. You CANNOT "
@@ -444,10 +437,12 @@ def _(Path, mo, resolve_file):
         "**support** delegation is capped at **$200** and a **billing** one at the "
         "**$1000** org ceiling — delegation is not an escape hatch, and the user never "
         "talks to billing_bot directly.\n\n"
-        "> This is what's **shipped today**: an agent-level block on the first-level "
-        "agent (support_bot) + a global boundary, with the sub-agent self-enforcing "
-        "in-kernel. Making billing_bot's policy dashboard-editable is the "
-        "sub-agent-registration series (PRs #233/#243/#244/#245), landing next."
+        "> The delegation uses the shipped **agent-as-tool** construct — "
+        "`billing_bot.as_tool()` (PRs #233/#243/#244/#245) — so billing_bot is a "
+        "first-class sub-agent gated by support_bot's policy on the way in and "
+        "self-enforcing its own role-aware policy on the way through. It runs in-kernel "
+        "here; registering it as its own **dashboard-editable** agent (`register_tree`) "
+        "is the natural next step."
     )
     return
 
