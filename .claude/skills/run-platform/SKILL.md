@@ -14,6 +14,13 @@ there and don't run anything from this skill against them.
 Goal: a running instance the user can log into. End with the URL, email, and
 password, or with exactly what is missing.
 
+Works on macOS and Linux. The paths and `make` targets below are relative to
+the repo root, and each command runs in a fresh shell, so start **every**
+command with this line (it also sets the log directory used from step 3 on):
+```bash
+cd "$(git rev-parse --show-toplevel)" && LOGDIR="/tmp/hexgate-$(basename "$PWD")" && mkdir -p "$LOGDIR"
+```
+
 ## 1. Preflight
 
 ```bash
@@ -34,8 +41,10 @@ talking to the platform, or integration tests.
 
 **No Docker?** Explain the options to the user instead of failing:
 - Light mode needs no Docker. The API uses SQLite and the dashboard is plain Vite. You can log in, manage agents and policies, and mint tokens. But there is no audit trail, so agent decisions don't show up on the audit page.
-- Full mode needs Docker, because Postgres, Redpanda and ClickHouse run as containers. If Docker isn't installed, the fix is `brew install --cask docker` (or https://docs.docker.com/desktop/). If it's installed but not running, run `open -a Docker` and wait until it reports running. Then rerun the preflight.
-- Never try to install Docker yourself. It needs the user's approval and a GUI step.
+- Full mode needs Docker, because Postgres, Redpanda and ClickHouse run as containers. The preflight's hint differs between macOS (Docker Desktop) and Linux (Docker Engine, `systemctl`, the `docker` group).
+  - Installed but not running, on macOS: run `open -a Docker` yourself, then rerun the preflight until it prints `docker (running)` (don't poll `docker info` directly: it hangs while Docker is starting). Run `open -a Docker` once only. If Docker isn't running after about 2 minutes, stop and ask the user to check the Docker Desktop window: a first launch waits for them to accept the terms.
+  - Not running on Linux, or not installed anywhere: give the user the hint the preflight printed. Never do these yourself: starting it on Linux needs `sudo`, and installing needs the user's approval.
+  - Then rerun the preflight.
 
 ## 2. Install (first time, idempotent)
 
@@ -48,16 +57,21 @@ make dashboard-install
 
 ## 3. Start (each as a background command, logs to files)
 
+Logs go to `$LOGDIR` (set by the line at the top), one fixed directory per
+checkout, so a later command or a later session can find them again. Always
+append (`>>`): a restart must not erase the one-time password block.
+
 Light mode:
 ```bash
-UV_PYTHON=3.13 make platform-api > "$LOGDIR/api.log" 2>&1        # :8000
-make dashboard > "$LOGDIR/dash.log" 2>&1                          # :5173
+UV_PYTHON=3.13 make platform-api >> "$LOGDIR/api.log" 2>&1       # :8000
+make dashboard >> "$LOGDIR/dash.log" 2>&1                         # :5173
 ```
 
 Full mode is different:
 - Use `make platform-api-pg`, not `platform-api`. Keys minted on SQLite get a 401 from the collector.
-- Also run `make collector-run` and `make enricher-run`.
-- Build the collector once: `cd platform/collector && go build -o hexgate-collector .`
+- Build the collector once, before running it: `cd platform/collector && go build -o hexgate-collector .` (`collector-run` runs the binary and doesn't build it).
+- Wait for the API's `/health` before `make collector-run`: the collector needs `platform/api/data/hexgate.pub`, which the API writes on its first boot.
+- Then run `make collector-run` and `make enricher-run`, logging to `$LOGDIR/collector.log` and `$LOGDIR/enricher.log`.
 
 Wait until `curl -sf localhost:8000/health` and `curl -sf localhost:5173` both
 succeed. Watch `api.log` for a `Traceback` while you wait. A CSS `@import`
@@ -69,7 +83,7 @@ On first boot against an **empty** database, the API seeds `admin@hexgate.dev`
 and prints its password **once** to stderr:
 
 ```bash
-grep -A3 "FIRST-BOOT" "$LOGDIR/api.log"
+grep -A3 "FIRST-BOOT" "$LOGDIR/api.log" | tail -4   # the newest block, if there are several
 ```
 
 Check it works (expect `204`):
@@ -82,6 +96,9 @@ A dashboard login answering `400 LOGIN_BAD_CREDENTIALS` while the curl check
 gives 204 means the password didn't paste exactly: a trailing space, or `0`
 mistaken for `O`. Give it to the user in a code block.
 
+If the curl check itself fails, the block is stale (the password was rotated
+or reset since, or a different database is running): treat it as no block.
+
 **No FIRST-BOOT block** means the database was already seeded, and the
 password can't be printed again. Offer these options and let the user choose:
 - use the password they saved earlier;
@@ -92,23 +109,23 @@ password can't be printed again. Offer these options and let the user choose:
   but on the wrong one. Find its checkout, its target, and any exported
   `DATABASE_URL`:
   ```bash
-  pid=$(lsof -ti tcp:8000 -sTCP:LISTEN | head -1)
-  lsof -a -p "$pid" -d cwd -Fn | sed -n 's/^n//p'           # <checkout>/platform/api
-  ps -wwE -o command= -p "$pid" | tr ' ' '\n' | grep '^DATABASE_URL='
-  p=$pid; while [ -n "$p" ] && [ "$p" != 1 ]; do            # make platform-api[-pg]
-    c=$(ps -o command= -p "$p"); case $c in *make\ platform-api*) echo "$c"; break;; esac
-    p=$(ps -o ppid= -p "$p" | tr -d ' ')
-  done
+  .claude/skills/run-platform/instance.sh who
   ```
-  Restart from that checkout with that target, and the same `DATABASE_URL` if
-  one was exported. If the checkout or the target is missing, ask the user.
+  Stop only the API, not the whole instance: `kill <pid>` with the pid `who`
+  printed, and wait until `curl -sf -m 2 localhost:8000/health` fails. Then restart
+  from that checkout with that target, and the same `DATABASE_URL` if one was
+  exported. If the checkout or the target is missing, ask the user. When it is
+  another checkout, keep this checkout's `$LOGDIR` for that restart (don't rerun
+  the top line there), so the token lookup below reads the right log; a later
+  `instance.sh stop` must then run from that checkout.
   Either database survives a restart. If both `RESEND_API_KEY` and
   `HEXGATE_EMAIL_FROM` are set (in the shell or `platform/api/.env`), the email
   is really sent instead of printed, so no token reaches the log:
   ```bash
+  n=$(wc -l < "$LOGDIR/api.log")   # only read what this request logs
   curl -s -w ' %{http_code}\n' -X POST localhost:8000/v1/auth/forgot-password \
       -H 'content-type: application/json' -d '{"email":"admin@hexgate.dev"}'   # 202
-  TOKEN=$(grep -o 'reset-password/[^ ]*' "$LOGDIR/api.log" | tail -1 | cut -d/ -f2)
+  TOKEN=$(tail -n +$((n + 1)) "$LOGDIR/api.log" | grep -o 'reset-password/[^ ]*' | tail -1 | cut -d/ -f2)
   curl -s -w ' %{http_code}\n' -X POST localhost:8000/v1/auth/reset-password \
       -H 'content-type: application/json' \
       -d "{\"token\":\"$TOKEN\",\"password\":\"<letters-digits-dashes>\"}"             # 200
@@ -124,8 +141,8 @@ password can't be printed again. Offer these options and let the user choose:
 Give the user:
 - the dashboard URL, `http://localhost:5173`;
 - the email and password, and that they should rotate the password in account settings;
-- the log paths;
-- how to stop the instance: stop the background tasks, or `lsof -ti:8000,5173 | xargs kill`.
+- the log directory, `/tmp/hexgate-<checkout name>`;
+- how to stop the instance: stop the background tasks, or run `.claude/skills/run-platform/instance.sh stop`, which stops this checkout's API, dashboard, collector and enricher and nothing else.
 
 The password is a local dev credential, so printing it in chat is fine. Never do
 this against a staging or prod stack.
