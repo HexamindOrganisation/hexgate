@@ -219,6 +219,30 @@ def test_the_denials_counter_does_not_claim_to_exclude_guard_refusals() -> None:
     assert "policy" not in labels["denials"] or "guard" in labels["denials"]
 
 
+def test_every_counter_has_a_tile() -> None:
+    """A counter the annex carries and COUNTER_LABELS does not is a number the
+    document drops in silence. StrictUndefined only catches the other
+    direction: a counter the labels name and the annex has stopped carrying
+    fails the render loudly."""
+    from hexgate_api.features.ai_act.render.html import COUNTER_LABELS
+
+    assert set(sample_annex()["activity"]["counters"]) == {k for k, _ in COUNTER_LABELS}
+
+
+def test_when_a_role_has_no_cell_then_its_column_still_renders() -> None:
+    """The column order is every role the annex mentions. A role declared in
+    ``roles`` that no row carries a cell for is a verdict the annex does not
+    state, and the document says so with an em-dash — it does not drop the
+    authorisation column."""
+    annex = sample_annex()
+    matrix = annex["controls"]["agents"][0]["authorisation_matrix"]
+    matrix["roles"].append("auditor")
+
+    html = build_html(annex)
+
+    assert '<th class="brk">auditor</th>' in html
+
+
 def test_when_the_template_fails_then_the_route_still_gets_a_render_error() -> None:
     """A template failure is a failed render, and the route documents one
     answer for that. Outside the guard it would arrive as a bare 500."""
@@ -363,7 +387,7 @@ def test_when_the_renderer_raises_then_no_partial_pdf_comes_back(monkeypatch) ->
     def boom(*_args, **_kwargs):
         raise OSError("pango is not installed")
 
-    monkeypatch.setattr("hexgate_api.features.ai_act.render.pdf.HTML", boom)
+    monkeypatch.setattr("weasyprint.HTML", boom)
 
     with pytest.raises(PdfRenderError) as excinfo:
         render_pdf("<html><body>x</body></html>")

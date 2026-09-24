@@ -172,17 +172,23 @@ def _short_hash(value: Any) -> str:
 
 
 def _matrix_roles(matrix: dict) -> list[str]:
-    """The matrix's column order.
+    """The matrix's column order: every role the annex mentions.
 
-    Taken from a row's own cells when there is a row, not from ``roles``: the
-    two are built together by the assembler, and reading the grid through the
-    keys it is actually stored under means a role list that has drifted shows
-    up as an em-dash in one cell rather than as a failed render.
+    ``roles`` first, in its declared order, then any role a row carries a cell
+    for and ``roles`` does not. The two are built together by the assembler,
+    so the union is normally just ``roles``; taking it anyway means a list that
+    has drifted either way loses no column. A role with no cell in some row
+    renders as the em-dash the template already falls back to, which is the
+    honest answer for a verdict the annex does not state.
     """
-    rows = matrix.get("rows") or []
-    if rows:
-        return list(rows[0].get("cells") or {})
-    return list(matrix.get("roles") or [])
+    ordered = list(matrix.get("roles") or [])
+    seen = set(ordered)
+    for row in matrix.get("rows") or []:
+        for role in row.get("cells") or {}:
+            if role not in seen:
+                seen.add(role)
+                ordered.append(role)
+    return ordered
 
 
 # Codepoints the document's three pinned faces all carry. Everything else

@@ -31,8 +31,6 @@ import asyncio
 import logging
 from concurrent.futures import ThreadPoolExecutor
 
-from weasyprint import CSS, HTML
-
 from hexgate_api.features.ai_act.render.html import STYLESHEET, build_html
 
 _log = logging.getLogger(__name__)
@@ -91,6 +89,13 @@ def render_pdf(html: str) -> bytes:
     not set, so it stamps no clock of its own and two renders of one annex are
     byte-identical.
     """
+    # Imported here, not at module scope: WeasyPrint dlopens Pango when it is
+    # imported, so at module scope one report route would decide whether the
+    # whole API boots. The runtime image carries the native stack, but a host
+    # run or a rebased base image that does not should cost this endpoint a
+    # 502, not the control plane.
+    from weasyprint import CSS, HTML
+
     try:
         document = HTML(string=html, base_url=None)
         return document.write_pdf(

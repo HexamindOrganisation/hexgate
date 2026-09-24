@@ -224,7 +224,7 @@ def test_when_the_render_fails_then_502_carries_the_diagnostics(
     def boom(*_args, **_kwargs):
         raise OSError("pango is not installed")
 
-    monkeypatch.setattr("hexgate_api.features.ai_act.render.pdf.HTML", boom)
+    monkeypatch.setattr("weasyprint.HTML", boom)
 
     r = client.get(f"/v1/projects/{project_id}/ai-act/reports/{REPORT_ID}.pdf")
 
