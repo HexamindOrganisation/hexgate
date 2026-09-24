@@ -16,7 +16,7 @@ bypass** (the patch stops attaching, the tool runs unguarded), not an
 exception. So the probes assert the **deny path**, not just that a run
 completes.
 
-Three checks per framework:
+Three checks per framework, plus an optional fourth:
 
 - **Tier 0 — `test_contract`**: the private surfaces the adapter depends on
   still exist (imports, `Agent` is a dataclass / pydantic model, the tool type
@@ -30,6 +30,12 @@ Three checks per framework:
   tool-calling loop through the seam. Every probe runs on OpenAI `gpt-4o-mini`
   with `OPENAI_API_KEY` (google-adk reaches OpenAI via its LiteLLM wrapper), so
   the matrix needs a single provider key. Auto-skips when it's unset.
+- **Tier 3 — `test_*_skills_surface`** (google-adk only so far): an
+  `@experimental` upstream surface the skills work reads. Reported in its own
+  column and **never** folded into the cell verdict: a feature nothing enforces
+  on yet must not make a version look unusable while the seam Tiers 0-1 cover is
+  fine. The `skills_surface` fragment is deliberately narrow, so a later
+  `test_skills_deny_path` still classifies as Tier 1.
 
 ## Running
 
@@ -86,7 +92,7 @@ OPENAI_API_KEY=sk-... python scripts/framework_matrix.py \
   --frameworks pydantic --versions pydantic=1.88.0,1.89.1,2.12.0
 ```
 
-The table (per-cell T0/T1/T2 + supported Tier-1-green range) prints to the
+The table (per-cell T0/T1/T2/T3 + supported Tier-1-green range) prints to the
 console and writes to `build/framework-matrix/results.md`.
 
 ## Verdicts & findings

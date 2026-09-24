@@ -69,12 +69,21 @@ DEFAULT_LIMIT = 6
 E2E_PROVIDER_KEYS = ("OPENAI_API_KEY",)
 
 # Test-node name fragment -> tier. See tests/framework_compat/README.md.
+#
+# Scanned in insertion order, first substring match wins, so a narrow fragment
+# must precede a broader one it would otherwise be swallowed by. Tier 3 is the
+# experimental-surface tier: it is reported but deliberately excluded from
+# ``classify``, so upstream churn in a feature nothing enforces on yet cannot
+# condemn a cell whose wrap/deny seam is fine. The fragment is kept narrow on
+# purpose — a future ``test_skills_deny_path`` is Tier 1 and must stay Tier 1.
 _TIER_BY_FRAGMENT = {
+    "skills_surface": 3,
     "contract": 0,
     "deny_path": 1,
     "allow_decision": 1,
     "e2e": 2,
 }
+EXPERIMENTAL_TIER = 3
 
 
 @dataclass(frozen=True)
@@ -290,7 +299,9 @@ def parse_junit(xml_path: Path) -> tuple[dict[int, str], list[str]]:
     can flag a stale fragment map — silently dropping a failing unmapped test
     would likewise render the cell falsely green.
     """
-    raw: dict[int, list[str]] = {0: [], 1: [], 2: []}
+    raw: dict[int, list[str]] = {
+        tier: [] for tier in sorted(set(_TIER_BY_FRAGMENT.values()))
+    }
     unclassified: list[str] = []
     tree = ET.parse(xml_path)
     for case in tree.iter("testcase"):
@@ -323,7 +334,13 @@ def parse_junit(xml_path: Path) -> tuple[dict[int, str], list[str]]:
 
 
 def classify(tiers: dict[int, str]) -> str:
-    """Map per-tier outcomes to a cell verdict."""
+    """Map per-tier outcomes to a cell verdict.
+
+    Tiers 0-2 only. Tier 3 (experimental upstream surfaces) is reported in its own
+    column but never reaches a verdict: it probes a feature nothing enforces on, so
+    a failure there is news about the dependency, not grounds for calling a version
+    unusable while the deterministic seam passes.
+    """
     t0, t1, t2 = tiers.get(0, TIER_NA), tiers.get(1, TIER_NA), tiers.get(2, TIER_NA)
     if t1 == TIER_SKIP and t0 == TIER_SKIP:
         return "INCOMPAT (skipped)"
@@ -441,17 +458,19 @@ def render_table(results: list[CellResult]) -> str:
         "# Framework version-compatibility matrix",
         "",
         "T0 = contract · T1 = deny-path/allow (deterministic seam) · "
-        "T2 = LLM e2e (blank when no provider key). "
+        "T2 = LLM e2e (blank when no provider key) · "
+        "T3 = experimental upstream surface (reported, never part of Status). "
         "✓ pass · ✗ fail · – skip · ◐ ran only in part.",
         "",
-        "| Framework | Version | T0 | T1 | T2 | Status |",
-        "| --- | --- | :-: | :-: | :-: | --- |",
+        "| Framework | Version | T0 | T1 | T2 | T3 | Status |",
+        "| --- | --- | :-: | :-: | :-: | :-: | --- |",
     ]
     for r in results:
         detail = f" — {_md_inline(r.detail)}" if r.detail else ""
         lines.append(
             f"| {r.framework} | {r.version} | {_cell(r.tiers.get(0, TIER_NA))} | "
             f"{_cell(r.tiers.get(1, TIER_NA))} | {_cell(r.tiers.get(2, TIER_NA))} | "
+            f"{_cell(r.tiers.get(EXPERIMENTAL_TIER, TIER_NA))} | "
             f"{r.status}{detail} |"
         )
     lines.append("")
