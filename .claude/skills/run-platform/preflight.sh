@@ -12,20 +12,28 @@ warn() { printf '  warn  %s  (%s)\n' "$1" "$2"; }
 
 need() { command -v "$1" >/dev/null 2>&1 && ok "$1" || miss "$1" "$2"; }
 
+# Docker first: it decides which mode is possible at all.
+# Required in full mode (Postgres, Redpanda, ClickHouse), not in light mode.
+echo "docker:"
+docker_hint=""
+if ! command -v docker >/dev/null 2>&1; then
+  docker_hint="not installed: brew install --cask docker (or https://docs.docker.com/desktop/), then open Docker Desktop"
+elif ! docker info >/dev/null 2>&1; then
+  docker_hint="installed but the daemon isn't running: open -a Docker, wait for it to say running"
+fi
+if [ -z "$docker_hint" ]; then
+  ok "docker (running)"
+elif [ $full = 1 ]; then
+  miss docker "$docker_hint"
+else
+  warn docker "$docker_hint; light mode doesn't need it, full mode does"
+fi
+
 echo "tools:"
 need uv   "curl -LsSf https://astral.sh/uv/install.sh | sh"
 need pnpm "brew install pnpm"
 command -v opa >/dev/null 2>&1 && ok opa || warn opa "optional: brew install opa (WASM policy engine)"
-if [ $full = 1 ]; then
-  need go "brew install go (to build the collector)"
-  if ! command -v docker >/dev/null 2>&1; then
-    miss docker "install Docker Desktop"
-  elif ! docker info >/dev/null 2>&1; then
-    miss "docker daemon" "start Docker Desktop"
-  else
-    ok "docker (running)"
-  fi
-fi
+[ $full = 1 ] && need go "brew install go (to build the collector)"
 
 # biscuit-python has no Python 3.14 wheel and PyO3 can't build it there.
 if command -v uv >/dev/null 2>&1 && ! uv python find 3.13 >/dev/null 2>&1; then

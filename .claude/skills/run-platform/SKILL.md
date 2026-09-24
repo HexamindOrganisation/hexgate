@@ -26,6 +26,11 @@ talking to the platform, or integration tests.
 | light | `platform-api` (SQLite) + `dashboard` | uv, pnpm |
 | full | + Postgres, Redpanda, ClickHouse, collector, enricher (`make demo-platform` prints the recipe) | + Docker, Go |
 
+**No Docker?** Explain the options to the user instead of failing:
+- Light mode needs no Docker. The API uses SQLite and the dashboard is plain Vite. You can log in, manage agents and policies, and mint tokens. But there is no audit trail, so agent decisions don't show up on the audit page.
+- Full mode needs Docker, because Postgres, Redpanda and ClickHouse run as containers. If Docker isn't installed, the fix is `brew install --cask docker` (or https://docs.docker.com/desktop/). If it's installed but not running, run `open -a Docker` and wait until it reports running. Then rerun the preflight.
+- Never try to install Docker yourself. It needs the user's approval and a GUI step.
+
 ## 2. Install (first time, idempotent)
 
 ```bash
@@ -66,6 +71,10 @@ Check it works (expect `204`):
 curl -s -o /dev/null -w "%{http_code}\n" -X POST localhost:8000/v1/auth/cookie/login \
     -d "username=admin@hexgate.dev&password=<password>"
 ```
+
+A dashboard login answering `400 LOGIN_BAD_CREDENTIALS` while the curl check
+gives 204 means the password didn't paste exactly: a trailing space, or `0`
+mistaken for `O`. Give it to the user in a code block.
 
 **No FIRST-BOOT block** means the database was already seeded, and the
 password can't be printed again. Offer these options and let the user choose:
