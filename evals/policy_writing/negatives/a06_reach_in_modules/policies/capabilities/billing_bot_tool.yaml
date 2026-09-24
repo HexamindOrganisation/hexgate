@@ -1,0 +1,3 @@
+agents:
+  billing-bot: { via: [tool], mode: allow }
+  admin-bot: { mode: deny }

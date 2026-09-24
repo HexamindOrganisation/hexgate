@@ -1,0 +1,1 @@
+In a single-file policy one agents entry has one mode for both via modes, so I set both to approval_required: the handoff needs approval as asked, and calling it as a tool needs approval too. Splitting the rule needs the module layout.

@@ -19,6 +19,16 @@ Layout: a policy module tree.
 | `delete_database` | `name: string` |
 | `delete_customer` | `customer_id: string` |
 
+## Other agents this agent can reach
+
+Each can be reached as a tool (the result comes back to this agent) or by
+handoff (the conversation is transferred to it).
+
+| Agent | What it does |
+|---|---|
+| `billing-bot` | Billing questions and invoices |
+| `admin-bot` | Account administration |
+
 ## Roles
 
 `default`, `support`, `billing`.

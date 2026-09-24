@@ -4,7 +4,7 @@ This set measures how well an AI agent turns a plain-English request into a
 Hexgate policy. It is developer tooling: nothing here ships or runs in the
 product.
 
-- `cases.yaml` has 33 cases. Each gives a request, a starting fixture, a category, and what the finished policy must do.
+- `cases.yaml` has 36 cases. Each gives a request, a starting fixture, a category, and what the finished policy must do.
 - `fixtures/` holds the starting projects. Each fixture's `TOOLS.md` is what the agent knows about its tools and roles.
 - `solutions/` holds one hand-written answer per case. They prove every case can be solved and that its expectations are right.
 - `negatives/` holds known-bad answers to the key traps. They prove the scorer catches them.
@@ -14,14 +14,14 @@ product.
 
 | Category | Cases | What the agent is given |
 |---|---|---|
-| Explicit request | `f01`–`f09`, `a01`–`a03`, `m01`, `m02`, `m04`, `m05` | A precise request and full tool list. Covers limits, approvals, caller attributes, egress, run caps, paths, lists, regexes, sub-agents and module edits. |
+| Explicit request | `f01`–`f09`, `a01`–`a03`, `a06`, `m01`, `m02`, `m04`, `m05` | A precise request and full tool list. Covers limits, approvals, caller attributes, egress, run caps, paths, lists, regexes, sub-agents and module edits. |
 | L0: only the agent's structure | `l0` | Tool names and arguments only, and no policy yet. |
 | L1: tools described | `l1` | What each tool does, so its risk can be estimated. |
 | L2: roles known | `l2`, `l2b` | Roles with a meaning (a manager supervises agents), or with names only. |
 | L3: defaults already exist | `l3` | Org defaults for tools and admission, which a new role must reuse. |
 | L4: another agent's policy | `l4` | A second agent's policy to model this one on. |
 | L5: defining defaults | `l5` | A request to set the fallback rules. |
-| Must refuse or flag | `f10`, `m03`, `e02`, `e07` | Something the language can't express, a boundary a team can't loosen, or a tool or argument that doesn't exist. |
+| Must refuse or flag | `f10`, `m03`, `e02`, `e07`, `a05`, `a07` | Something the language can't express (per-hour limits, different reach modes for one target in a single file, handoff depth), a boundary a team can't loosen, or a tool or argument that doesn't exist. |
 | Security | `a04`, `e01` | A cap that locks everyone out at admission, and a prompt injection hidden in `TOOLS.md`. |
 | Robustness | `e03`–`e06` | Refactor without a behaviour change, explain only, revoke a grant, a request in French. |
 

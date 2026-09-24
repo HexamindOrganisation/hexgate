@@ -433,3 +433,41 @@
     mentions_any: ["no tier", "no argument", "not an argument", "isn't an argument", "doesn't carry", "does not carry", "doesn't include", "does not include", "doesn't have", "does not have", "not available", "isn't available", "no field", "no such", "not passed"]
     decisions:
       - { role: billing, tool: refund_order, args: { order_id: o1, amount: 400, currency: USD }, expect: allow }
+
+- id: a05_per_mode_rules_single_file
+  category: Must refuse or flag
+  fixture: agents
+  request: Billing may call billing-bot as a tool freely, but handing the conversation off to billing-bot needs a human approval.
+  note: In a single-file policy one agents entry has one mode for all its via modes, and a role's entry replaces an inherited one, so this exact rule can't be written. The agent must not allow the handoff outright, and must say it had to compromise.
+  expect:
+    mentions_any: ["one mode", "single mode", "same mode", "both modes", "per mode", "per-mode", "can't give", "cannot give", "can't set", "cannot set", "not possible", "isn't possible", "limitation", "compromise"]
+    decisions:
+      - { role: billing, tool: "agent.tool:billing-bot", args: {}, expect: [allow, approval_required] }
+      - { role: billing, tool: "agent.handoff:billing-bot", args: {}, expect: [approval_required, deny] }
+      - { role: support, tool: "agent.tool:billing-bot", args: {}, expect: deny }
+      - { role: support, tool: "agent.handoff:billing-bot", args: {}, expect: deny }
+
+- id: a06_reach_in_modules
+  category: Explicit request
+  fixture: modules
+  request: Billing may call billing-bot as a tool freely, but a handoff to billing-bot needs a human approval. Security also wants admin-bot unreachable for every role, in a way no team capability can override.
+  note: Modules compose reach per mode, so the exact rule is expressible here. The admin-bot deny belongs in the boundary.
+  expect:
+    changed: [policies/boundaries/org_core.yaml, roles.yaml]
+    decisions:
+      - { role: billing, tool: "agent.tool:billing-bot", args: {}, expect: allow }
+      - { role: billing, tool: "agent.handoff:billing-bot", args: {}, expect: approval_required }
+      - { role: support, tool: "agent.tool:billing-bot", args: {}, expect: deny }
+      - { roles: [default, support, billing], tool: "agent.tool:admin-bot", args: {}, expect: deny }
+      - { roles: [default, support, billing], tool: "agent.handoff:admin-bot", args: {}, expect: deny }
+      - { role: billing, tool: refund_order, args: { order_id: o1, amount: 100, currency: USD }, expect: allow }
+
+- id: a07_handoff_depth_unsupported
+  category: Must refuse or flag
+  fixture: agents
+  request: Never allow more than 3 handoffs in a row.
+  note: Handoff depth is a runner setting (HexgateRunner(max_handoff_depth=3)), not a policy rule, and no run.* counter counts handoffs.
+  expect:
+    mentions_any: ["max_handoff_depth", "runner", "not a policy", "isn't a policy", "can't be expressed", "cannot be expressed", "not expressible"]
+    decisions:
+      - { role: support, tool: send_email, args: { to: [a@acme.com], subject: s, body: b }, expect: allow }

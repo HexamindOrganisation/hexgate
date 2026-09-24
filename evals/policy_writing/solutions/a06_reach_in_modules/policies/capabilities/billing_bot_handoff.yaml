@@ -1,0 +1,2 @@
+agents:
+  billing-bot: { via: [handoff], mode: approval_required }

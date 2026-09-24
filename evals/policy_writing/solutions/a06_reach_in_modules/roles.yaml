@@ -1,0 +1,5 @@
+version: 1
+roles:
+  default: [read_only]
+  support: [read_only, support_leaf]
+  billing: [read_only, payments, billing_bot_tool, billing_bot_handoff]
