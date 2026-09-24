@@ -41,7 +41,8 @@ from hexgate.cli import _build_parser
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[1]
-RUNS = HERE / ".runs"
+# POLICY_EVAL_RUNS moves the output elsewhere (the dataset tests use a temp dir).
+RUNS = Path(os.environ.get("POLICY_EVAL_RUNS") or HERE / ".runs")
 
 # Answers the runner writes itself when the agent didn't finish (a throttled,
 # crashed or timed-out session). Never inferred from the agent's own text: a
@@ -425,7 +426,7 @@ def run_case(case: dict, attempt: int, stamp: Path, args: argparse.Namespace) ->
     ws = stamp / f"{case['id']}-{attempt}"
     shutil.copytree(HERE / "fixtures" / case["fixture"], ws)
     before = snapshot(ws)
-    rel_ws = ws.relative_to(REPO)
+    rel_ws = ws.relative_to(REPO) if ws.is_relative_to(REPO) else ws
     prompt = PROMPT.format(request=case["request"])
     start = time.monotonic()
     try:
@@ -561,7 +562,7 @@ def main() -> int:
     )
     print()
     print(write_report(results, stamp, agent, stray))
-    print(f"workspaces and results: {stamp.relative_to(REPO)}")
+    print(f"workspaces and results: {stamp}")
     return 0 if all(r.passed for r in results) and not stray else 1
 
 

@@ -8,9 +8,11 @@ Runs evals/policy_writing/run.py without any LLM:
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 EVALS = Path(__file__).resolve().parents[2] / "evals" / "policy_writing"
@@ -21,9 +23,15 @@ NO_OP_PASSES = {"e03_refactor_no_behaviour_change"}
 
 
 def _run(*args: str) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        [sys.executable, str(RUN), *args], capture_output=True, text=True, timeout=600
-    )
+    # Workspaces go to a temp dir, so test runs never show up as eval runs.
+    with tempfile.TemporaryDirectory() as runs:
+        return subprocess.run(
+            [sys.executable, str(RUN), *args],
+            capture_output=True,
+            text=True,
+            timeout=600,
+            env={**os.environ, "POLICY_EVAL_RUNS": runs},
+        )
 
 
 def _passed(stdout: str) -> set[str]:

@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -24,7 +25,7 @@ import yaml
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[1]
-RUNS = HERE / ".runs"
+RUNS = Path(os.environ.get("POLICY_EVAL_RUNS") or HERE / ".runs")
 
 
 def load_run_module():
