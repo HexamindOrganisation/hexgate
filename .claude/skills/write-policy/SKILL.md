@@ -28,7 +28,7 @@ and prefer them over this file if they disagree:
 ## Workflow
 
 1. **Pin down the inputs.** You need:
-   - the tool names and their argument names/types (from the agent code, its `AgentManifest`, or the user);
+   - the tool names and their argument names/types. Take these from the agent code or its `AgentManifest`. Otherwise, use what the requester named in their prompt, or ask them;
    - the roles (who calls);
    - the caller attributes available as `ctx.*`;
    - the shape to write in: a single file, a `policies/` dir, or modules.
