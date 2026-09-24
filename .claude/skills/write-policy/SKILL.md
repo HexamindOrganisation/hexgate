@@ -95,7 +95,7 @@ Each list item is one boolean expression, and every item must hold.
 | Facts | `role`, `tool`, `ctx.<attr>` (trusted caller attributes), `run.<counter>` |
 | Strings | `startswith(f, "s")` `endswith` `contains` `matches(f, "^re$")` (RE2, **unanchored**) |
 | Lists | `every(args.xs, <cond on . or .field>)` (empty → true), `any(...)` (empty → false) |
-| Bool | `and` `or` `not` `( )`; **not** allowed inside a quantifier body |
+| Bool | `and` `or` `not` `( )`; boolean composition (`and`/`or`/`not`) is rejected inside a quantifier body |
 
 `run.*` counters: `tool_calls`, `calls_of_this_tool`, `tools_used` (list), `llm_calls`, `input_tokens`, `output_tokens`, `total_tokens`, `denials`, `approvals`, `errors`, `elapsed_seconds`, `id`, `agent`.
 
@@ -133,7 +133,7 @@ Always include a host clause. For subdomains, use `endswith(args.host, ".example
 
 ## Pitfalls to check every time
 
-- **Unquoted strings.** Write `args.env == "prod"`. `args.env == prod` compares against the field `prod`, so it silently denies.
+- **Unquoted strings.** Write `args.env == "prod"`. `args.env == prod` fails `policy validate` with `bare identifier 'prod' ... did you forget quotes?`.
 - **Unanchored regex.** `matches(args.id, "inv_")` also accepts `xxinv_yy`. Anchor it: `^inv_[0-9]+$`.
 - **`args.*` at policy level.** Tools and `agent.run` without that argument fail closed, which can lock the agent out at admission. Keep `args.*` on the tool. Or exempt agent keys: `startswith(tool, "agent.") or args.amount <= 500`.
 - **Run caps in `default_policy.constraints`.** They miss every tool listed under `tools:`. Put run caps in top-level `constraints:`.
