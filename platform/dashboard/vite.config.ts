@@ -24,6 +24,11 @@ export default defineConfig({
   test: {
     // jsdom — RTL needs a DOM. We don't want a real browser for unit tests.
     environment: 'jsdom',
+    // A non-UTC zone on purpose. Anything that renders a UTC instant as a
+    // calendar date is identical to the buggy version under TZ=UTC, so a
+    // UTC runner (which is what GitHub gives us) cannot fail those tests at
+    // all. Pinning one fixed offset keeps them deterministic and able to bite.
+    env: { TZ: 'Europe/Paris' },
     // Shared setup file: @testing-library/jest-dom matchers,
     // localStorage stub between tests, etc.
     setupFiles: ['./src/test/setup.ts'],

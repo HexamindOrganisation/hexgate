@@ -633,14 +633,17 @@ export const LLM_MESSAGE_PAGE = 50;
 
 // --- AI Act evidence report -------------------------------------------------
 //
-// Wire shapes for the two slices the tab talks to. Neither endpoint is merged
-// yet, so these are pinned field-for-field to what the open branches serve —
-// not to the spec's prose, which is looser than both:
+// Wire shapes for the two slices the tab talks to, pinned field-for-field to
+// what the endpoints serve rather than to the spec's prose, which is looser
+// than both:
 //
-//   classification  #235 vl/feat/agent_ai_act_classification @ 5d110f5d
-//                   (hexgate_api/schemas.py: AgentClassificationRead/Write)
-//   report          #239 vl/feat/ai_act_report @ 89a040d0
-//                   (hexgate_api/schemas.py: AiActReportCreate/Summary/Read)
+//   classification  hexgate_api/schemas.py: AgentClassificationRead/Write
+//   report          hexgate_api/schemas.py: AiActReportCreate/Summary/Read
+//   render          features/ai_act/render/router.py (the `.pdf` route)
+
+/** What the history read asks for. The endpoint clamps to its own
+ * `MAX_HISTORY_LIMIT`, so this is the most it will ever serve in one page. */
+export const AI_ACT_HISTORY_LIMIT = 200;
 
 export type OperatorRole = "provider" | "deployer";
 
@@ -959,15 +962,22 @@ export const api = {
       body: JSON.stringify(body),
     }),
 
+  /** Newest first. The endpoint's own default is 25 and it answers with a bare
+   * array carrying no total, so a short read is indistinguishable from the
+   * whole history: ask for its maximum (`MAX_HISTORY_LIMIT`, service.py) so
+   * the list is complete for any project that has not passed it, and let the
+   * caller say so when a full page comes back. */
   listAiActReports: (projectId: string) =>
-    request<AiActReport[]>(`/v1/projects/${projectId}/ai-act/reports`),
+    request<AiActReport[]>(
+      `/v1/projects/${projectId}/ai-act/reports${qs({ limit: AI_ACT_HISTORY_LIMIT })}`,
+    ),
 
   /** The signed annex — the canonical artifact the signature covers. */
   downloadAiActAnnex: (reportId: string, projectId: string) =>
     requestBlob(`/v1/projects/${projectId}/ai-act/reports/${reportId}/annex`),
 
-  /** The PDF rendering of the same annex — PR 4 (#237), stacked on #239, so
-   * this 404s until that lands. */
+  /** The PDF rendering of the same annex. Renders from the stored annex, so a
+   * render failure is a 502 and leaves the signed bytes untouched. */
   downloadAiActReportPdf: (reportId: string, projectId: string) =>
     requestBlob(`/v1/projects/${projectId}/ai-act/reports/${reportId}.pdf`),
 };

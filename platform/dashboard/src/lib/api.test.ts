@@ -120,7 +120,8 @@ describe("AI Act downloads", () => {
   });
 
   it("raises an ApiError when a PDF render fails", async () => {
-    // #237 answers 502 with `detail: {error, renderer}` — an object, because
+    // The render route answers 502 with `detail: {error, renderer}` — an
+    // object, because
     // the renderer's own message rides along. `messageFromDetail` reads only a
     // string detail or a 422 array, so the message falls back to the status
     // and the renderer text stays on `detail` for whoever wants it. The

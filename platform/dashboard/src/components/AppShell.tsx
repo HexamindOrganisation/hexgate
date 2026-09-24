@@ -114,7 +114,9 @@ const workspaceLinks = [
   { to: "/audit", label: "Audit", icon: ScrollText },
   { to: "/usage", label: "Usage", icon: BarChart3 },
   { to: "/bans", label: "Bans", icon: Ban },
-  { to: "/ai-act", label: "AI Act", icon: Scale },
+  // "Evidence", not "Evidence & Reports": every other entry here is one
+  // word, and the page heading carries the fuller name.
+  { to: "/ai-act", label: "Evidence", icon: Scale },
   { to: "/tokens", label: "API keys", icon: KeyRound },
 ];
 

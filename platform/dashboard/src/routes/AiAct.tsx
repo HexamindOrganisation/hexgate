@@ -35,6 +35,7 @@ import {
   toDateInput,
 } from "@/lib/ai-act";
 import {
+  AI_ACT_HISTORY_LIMIT,
   ApiError,
   api,
   type AgentClassificationRead,
@@ -380,11 +381,18 @@ function HistoryPanel({ projectId }: { projectId: string }) {
         kind === "annex" ? report.annex_filename : `${report.id}.pdf`,
       );
     } catch (err) {
-      // The PDF route ships separately from this tab (#237). Until it is
-      // deployed the request 404s, which is not a failure the operator can do
-      // anything about — say so rather than implying the download broke.
-      if (kind === "pdf" && err instanceof ApiError && err.status === 404) {
-        toast.info("PDF rendering is not available yet — download the annex.");
+      // Both routes 404 only on "report not found", which here means the row
+      // on screen is stale rather than that the download is broken: say which
+      // it is, because the two ask for different things from the operator.
+      if (err instanceof ApiError && err.status === 404) {
+        toast.error("That report no longer exists. Refresh the history.");
+        return;
+      }
+      // The render is a separate step from the signing, so a failed render
+      // (502) leaves the stored annex intact and is worth retrying. Point at
+      // the annex, which is the artifact the signature actually covers.
+      if (kind === "pdf" && err instanceof ApiError && err.status === 502) {
+        toast.error("Could not render the PDF. The annex is still available.");
         return;
       }
       toast.error(
@@ -401,8 +409,13 @@ function HistoryPanel({ projectId }: { projectId: string }) {
         <FileText className="size-4 text-muted-foreground" />
         <span className="text-sm font-medium">Generated reports</span>
         {reportsQuery.data !== undefined && (
+          // A full page means the endpoint may be holding more: it answers
+          // with a bare array and no total, so the honest label is "the
+          // newest N", not a count of everything that exists.
           <span className="text-sm text-muted-foreground">
-            · {reports.length}
+            {reports.length === AI_ACT_HISTORY_LIMIT
+              ? `· newest ${reports.length}`
+              : `· ${reports.length}`}
           </span>
         )}
       </div>
@@ -438,7 +451,12 @@ function HistoryPanel({ projectId }: { projectId: string }) {
               </th>
               <th className="px-5 py-2.5 text-left font-medium">Generated</th>
               <th className="px-5 py-2.5 text-left font-medium">By</th>
-              <th className="px-5 py-2.5 text-left font-medium">Digest</th>
+              <th className="px-5 py-2.5 text-left font-medium">
+                {/* "SHA-256", not "Digest": the column is only useful to
+                      someone checking a downloaded annex against it, and that
+                      reader knows the algorithm's name, not our word for it. */}
+                SHA-256
+              </th>
               <th className="w-56 px-5 py-2.5" />
             </tr>
           </thead>
@@ -514,7 +532,9 @@ export function AiActPage() {
   if (scope.status === "no-project") {
     return (
       <div className="mx-auto max-w-[1400px]">
-        <h1 className="text-2xl font-semibold tracking-tight">AI Act</h1>
+        <h1 className="text-2xl font-semibold tracking-tight">
+          Evidence &amp; Reports
+        </h1>
         <NoProjectEmptyState resource="AI Act evidence" />
       </div>
     );
@@ -527,7 +547,7 @@ export function AiActPage() {
       <div>
         <h1 className="flex items-center gap-2.5 text-2xl font-semibold tracking-tight">
           <Scale className="size-6 text-primary" />
-          AI Act
+          Evidence &amp; Reports
         </h1>
         <p className="mt-2 max-w-[720px] text-sm text-muted-foreground">
           Generate a signed document describing the controls in place on this

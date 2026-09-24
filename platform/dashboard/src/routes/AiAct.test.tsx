@@ -29,9 +29,14 @@ import type { AgentClassificationRead, AiActReport } from "@/lib/api";
 import { useActive } from "@/lib/active";
 import { AiActPage } from "@/routes/AiAct";
 import { renderWithProviders } from "@/test/render";
+// `?raw` gives each file's own text, so the copy guard below can read every
+// string the tab can render, including states no single render reaches.
+import dialogSource from "@/components/ai-act/ClassificationDialog.tsx?raw";
+import aiActLibSource from "@/lib/ai-act.ts?raw";
+import aiActSource from "@/routes/AiAct.tsx?raw";
 
 vi.mock("sonner", () => ({
-  toast: { error: vi.fn(), success: vi.fn(), info: vi.fn() },
+  toast: { error: vi.fn(), success: vi.fn() },
 }));
 
 const PROJECT = "p1";
@@ -116,6 +121,8 @@ interface StubOptions {
   agentsFailAfterFirst?: boolean;
   /** Status for GET .../ai-act/reports; 200 unless set. */
   reportsStatus?: number;
+  /** Status for GET .../reports/{id}.pdf; 404 (the stub default) unless set. */
+  pdfStatus?: number;
   /** Status for POST .../ai-act/report; 201 unless set. */
   generateStatus?: number;
   generateDetail?: string;
@@ -129,6 +136,7 @@ function stubFetch({
   classificationFailsAfterFirst = [],
   agentsFailAfterFirst = false,
   reportsStatus = 200,
+  pdfStatus,
   generateStatus = 201,
   generateDetail = "nope",
 }: StubOptions = {}): Call[] {
@@ -214,6 +222,10 @@ function stubFetch({
           return reportsStatus === 200
             ? json(reports)
             : json({ detail: "nope" }, reportsStatus);
+        case url.pathname.endsWith(".pdf"):
+          return pdfStatus
+            ? json({ detail: "render failed" }, pdfStatus)
+            : new Response("not found", { status: 404 });
         case url.pathname.endsWith("/annex"):
           return new Response('{"annex": true}', {
             status: 200,
@@ -427,8 +439,9 @@ describe("AiActPage", () => {
     // local append — the server owns the id, digest and provenance.
     await waitFor(() =>
       expect(
-        calls.filter((c) => c.url === `/v1/projects/${PROJECT}/ai-act/reports`)
-          .length,
+        calls.filter((c) =>
+          c.url.startsWith(`/v1/projects/${PROJECT}/ai-act/reports?`),
+        ).length,
       ).toBeGreaterThan(1),
     );
   });
@@ -465,26 +478,37 @@ describe("AiActPage", () => {
     await waitFor(() => expect(URL.createObjectURL).toHaveBeenCalled());
   });
 
-  it("when the pdf route is not deployed then it says so instead of failing", async () => {
-    // The stub 404s every unrouted path, which is what the un-deployed PDF
-    // route (#237) actually does. The operator can do nothing about it, so
-    // this must not read as a broken download.
+  it("when the report is gone then the download says so, not that it broke", async () => {
+    // The stub 404s the unrouted `.pdf` path, which is the same status the
+    // real route returns for a report id that matches no row. That means the
+    // row on screen is stale, not that the renderer failed.
     stubFetch({ reports: [REPORT] });
     const user = userEvent.setup();
-    // `restoreAllMocks` does not clear a module mock's call history, so the
-    // "no error toast" assertion below would otherwise pass or fail on this
-    // test's position in the file rather than on the behaviour.
-    vi.mocked(toast.error).mockClear();
     renderWithProviders(<AiActPage />, { initialRoute: "/ai-act" });
 
     await user.click(await screen.findByRole("button", { name: /pdf/i }));
 
     await waitFor(() =>
-      expect(toast.info).toHaveBeenCalledWith(
-        "PDF rendering is not available yet — download the annex.",
+      expect(toast.error).toHaveBeenCalledWith(
+        "That report no longer exists. Refresh the history.",
       ),
     );
-    expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  it("when the pdf render fails then it points at the annex", async () => {
+    // 502 is the render's own failure: the annex is stored and signed either
+    // way, so this must not read as the report being lost.
+    stubFetch({ reports: [REPORT], pdfStatus: 502 });
+    const user = userEvent.setup();
+    renderWithProviders(<AiActPage />, { initialRoute: "/ai-act" });
+
+    await user.click(await screen.findByRole("button", { name: /pdf/i }));
+
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith(
+        "Could not render the PDF. The annex is still available.",
+      ),
+    );
   });
 
   it("shows the history row's period, author and digest", async () => {
@@ -496,6 +520,20 @@ describe("AiActPage", () => {
     ).toBeInTheDocument();
     expect(screen.getByText("7c1e9b04aa11…")).toBeInTheDocument();
   });
+
+  /** The policed words, minus the page's two legitimate uses: the sentence
+   * that denies conformity, and the proper names of the external checkers. */
+  function expectNoConformityClaim(text: string, where: string) {
+    const cleaned = text
+      .replaceAll(DISCLAIMER, "")
+      .replace(/compliance[- ]checker/gi, "");
+    for (const word of ["compliant", "compliance", "conformity"]) {
+      expect(
+        { where, match: cleaned.match(new RegExp(`\\b${word}\\b`, "i"))?.[0] },
+        `${where} claims conformity`,
+      ).toEqual({ where, match: undefined });
+    }
+  }
 
   it("never claims conformity, on the page or in the dialog", async () => {
     stubFetch({
@@ -515,17 +553,58 @@ describe("AiActPage", () => {
     await screen.findByRole("dialog");
 
     const rendered = baseElement.textContent ?? "";
-    // The page's one legitimate use of each policed word: the disclaimer
-    // denying conformity, and the proper names of the external checkers.
-    // Everything else is a claim, so strip these and assert the rest is clean
-    // — new copy is then guarded by default.
     expect(rendered).toContain(DISCLAIMER);
-    const text = rendered
-      .replace(DISCLAIMER, "")
-      .replace(/compliance checker/gi, "");
-    expect(text).not.toMatch(/\bcompliant\b/i);
-    expect(text).not.toMatch(/\bcompliance\b/i);
-    expect(text).not.toMatch(/\bconformity\b/i);
+    expectNoConformityClaim(rendered, "populated page + dialog");
+  });
+
+  it("never claims conformity in copy no single render reaches", () => {
+    // The render guard above paints one state, so it cannot police copy in
+    // the states it does not reach: the empty states, the error states, and
+    // every toast (sonner is mocked, so a toast string is never in the DOM at
+    // all). Read the source instead, which is state-independent.
+    const sources: Record<string, string> = {
+      "AiAct.tsx": aiActSource,
+      "ai-act.ts": aiActLibSource,
+      "ClassificationDialog.tsx": dialogSource,
+    };
+    const offenders: string[] = [];
+    for (const [file, source] of Object.entries(sources)) {
+      // A plain scan over quoted runs. Prettier enforces double quotes, so a
+      // '...' string cannot exist here; a comment holding a quoted policed
+      // word would be a false positive, which is loud and one line to fix.
+      // Two surfaces, because the tab's copy is written in both forms:
+      //   "..." / `...`  every toast, label and aria string
+      //   >text<         JSX text between tags, which is how the empty and
+      //                  error states are written and is not a literal at all
+      const quoted = source.match(/"(?:[^"\\]|\\.)*"|`(?:[^`\\]|\\.)*`/g) ?? [];
+      // Interpolated copy (`Couldn't load {what}`) must be scanned too, so the
+      // run cannot stop at a brace. That lets a run swallow code between two
+      // unrelated angle brackets, and a comment is the one kind of code that
+      // discusses the rule using the policed words — so drop comments first,
+      // then the interpolations, which are identifiers rather than copy.
+      const code = source
+        .replace(/\/\*[\s\S]*?\*\//g, " ")
+        .replace(/^\s*\/\/.*$/gm, " ");
+      const jsxText = (code.match(/>[^<>]+</g) ?? []).map((t) =>
+        t.slice(1, -1).replace(/\{[^}]*\}/g, " "),
+      );
+      for (const raw of [...quoted, ...jsxText]) {
+        // JSX text carries the source's line breaks and indentation, so
+        // compare on one line or the disclaimer never matches itself.
+        const raw1 = raw.replace(/\s+/g, " ").trim();
+        // Cut the two legitimate uses out of the run rather than skipping the
+        // run that holds them: the sentence that denies conformity, and the
+        // proper names and URLs of the external checkers. Skipping whole runs
+        // would exempt a claim written alongside either one.
+        const literal = raw1
+          .replaceAll(DISCLAIMER, " ")
+          .replace(/compliance[- ]checker/gi, " ");
+        if (/\b(compliant|compliance|conformity)\b/i.test(literal)) {
+          offenders.push(`${file}: ${raw1}`);
+        }
+      }
+    }
+    expect(offenders).toEqual([]);
   });
 
   it("shows a load failure instead of an empty report history", async () => {
