@@ -8,6 +8,11 @@ description: Run the opt-in integration test suites (pytest -m integration) for 
 The local stack below is the same one `docs/internals/development.md` ("Run the
 platform locally") documents for developers; keep the two in sync.
 
+Before starting anything, run `.claude/skills/run-platform/preflight.sh --full`.
+It reports a missing or stopped Docker, a missing Go, and busy ports up front.
+To bring the servers up, you can follow the `run-platform` skill in full mode instead of the
+three terminals below. Minting the key and running pytest stay here.
+
 ## SDK integration tests (repo root — `tests/adapters/*/test_integration.py`, `tests/audit/test_integration.py`)
 
 Infra (idempotent):
