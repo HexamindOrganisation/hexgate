@@ -47,6 +47,18 @@ reviewed; one commit later a second scope made that parameter optional, turning
 it into a 422 on the most common request. Nothing re-read it, because the review
 had already "happened".) When nothing has landed since your review, skip.
 
+A re-review is still a **general review of the whole PR**, never a check of the
+new hunks. Besides the pass over the commits added since, run one lens over the
+whole artifact, driven by realistic starting states (what is already running,
+which mode, which data), because new work breaks old lines without touching
+them. (On PR #265 five re-review rounds each covered only the latest fixes; a
+human reviewer then found that the skill reused whatever answered `/health`, a
+SQLite API under a full pipeline, on a line none of them had re-read.) When you
+review your own work, launch the review from a fresh subagent that gets only the
+PR number, never your list of what changed or what you fixed: a reviewer that
+shares the author's context confirms the author's framing. Never narrow the
+scope for speed without saying so.
+
 ## 2. Context
 
 **Get the code on disk first.** Every lens below reads real files and real
