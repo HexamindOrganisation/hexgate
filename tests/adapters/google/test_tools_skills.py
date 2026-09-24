@@ -339,3 +339,134 @@ async def test_guards_still_see_the_real_tool_name() -> None:
     [call] = seen
     assert call.tool_name == "load_skill"
     assert dict(call.args) == {"skill_name": SKILL}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("tool_class", "held"),
+    [
+        (LoadSkillResourceTool, "before its resource is read"),
+        (RunSkillScriptTool, "before its script runs"),
+    ],
+)
+async def test_approval_wording_names_the_held_level(
+    tool_class: type[_FakeSkillToolBase], held: str
+) -> None:
+    tool = tool_class(_toolset())
+    enforcer = _enforcer(_allow_skill(mode="approval_required"))
+
+    result = await _call(wrap_tool(tool, enforcer), file_path=SCRIPT_PATH)
+
+    assert f"requires human approval {held}." in result
+
+
+@pytest.mark.asyncio
+async def test_script_decision_carries_its_invocation_args(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    enforcer = _enforcer(_allow_skill())
+    seen = _spy_decisions(enforcer, monkeypatch)
+
+    await _call(
+        wrap_tool(RunSkillScriptTool(_toolset()), enforcer),
+        file_path=SCRIPT_PATH,
+        args={"amount": "10"},
+        short_options={"v": ""},
+        positional_args=["order-1"],
+    )
+
+    [(_, decision_args)] = seen
+    assert decision_args["script_args"] == {"amount": "10"}
+    assert decision_args["short_options"] == {"v": ""}
+    assert decision_args["positional_args"] == ["order-1"]
+
+
+@pytest.mark.asyncio
+async def test_script_constraint_bounds_the_invocation_args() -> None:
+    tool = RunSkillScriptTool(_toolset())
+    enforcer = _enforcer(_allow_skill(constraints=['args.script_args.amount == "10"']))
+    wrapped = wrap_tool(tool, enforcer)
+
+    allowed = await _call(wrapped, file_path=SCRIPT_PATH, args={"amount": "10"})
+    denied = await _call(wrapped, file_path=SCRIPT_PATH, args={"amount": "9999"})
+
+    assert allowed == "ran:run_skill_script"
+    assert "[policy_denied]" in denied
+    assert len(tool.calls) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("spelling", ["scripts/wipe.sh", "wipe.sh"])
+async def test_both_script_path_spellings_hit_the_same_constraint(
+    spelling: str,
+) -> None:
+    """ADK runs ``scripts/wipe.sh`` and ``wipe.sh`` as the same script."""
+    tool = RunSkillScriptTool(_toolset())
+    enforcer = _enforcer(
+        _allow_skill(constraints=['args.file_path != "scripts/wipe.sh"'])
+    )
+
+    result = await _call(wrap_tool(tool, enforcer), file_path=spelling)
+
+    assert tool.calls == []
+    assert "[policy_denied]" in result
+
+
+@pytest.mark.asyncio
+async def test_resource_path_is_passed_through_unchanged(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    enforcer = _enforcer(_allow_skill())
+    seen = _spy_decisions(enforcer, monkeypatch)
+
+    await _call(
+        wrap_tool(LoadSkillResourceTool(_toolset()), enforcer), file_path="limits.md"
+    )
+
+    [(_, decision_args)] = seen
+    assert decision_args["file_path"] == "limits.md"
+
+
+@pytest.mark.asyncio
+async def test_non_skill_tool_never_asks_whether_skills_are_declared(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def lookup(order_id: str) -> str:
+        """Look an order up."""
+        return order_id
+
+    enforcer = _enforcer(_allow_skill())
+    asked: list[bool] = []
+    real_declares = enforcer.policy.declares_skills
+
+    def declares_skills() -> bool:
+        asked.append(True)
+        return real_declares()
+
+    monkeypatch.setattr(enforcer.policy, "declares_skills", declares_skills)
+
+    await wrap_tool(FunctionTool(func=lookup), enforcer).run_async(
+        args={"order_id": "1"}, tool_context=None
+    )
+
+    assert asked == []
+
+
+@pytest.mark.asyncio
+async def test_unknown_skill_has_no_content_hash(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    enforcer = _enforcer(
+        {
+            "default_policy": {"mode": "allow"},
+            "skills": {"ghost": {"mode": "allow"}},
+        }
+    )
+    seen = _spy_decisions(enforcer, monkeypatch)
+
+    await wrap_tool(LoadSkillTool(_toolset()), enforcer).run_async(
+        args={"skill_name": "ghost"}, tool_context=None
+    )
+
+    [(_, decision_args)] = seen
+    assert decision_args["content_hash"] is None
