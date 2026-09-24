@@ -43,6 +43,12 @@ HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[1]
 RUNS = HERE / ".runs"
 
+# Answers the runner writes itself when the agent didn't finish (a throttled,
+# crashed or timed-out session). Never inferred from the agent's own text: a
+# correct answer may well talk about rate limits.
+AGENT_ERROR = "<agent error>"
+TIMED_OUT = "<timed out>"
+
 # Exactly what a user would type. Everything the agent needs to know about the
 # project comes from the workspace it starts in (TOOLS.md, the policy files)
 # and from the skill, as it would in real use.
@@ -158,9 +164,12 @@ def run_claude(prompt: str, ws: Path, model: str | None, timeout: int) -> str:
         cmd, cwd=ws, capture_output=True, text=True, timeout=timeout, env=child_env()
     )
     try:
-        return json.loads(proc.stdout).get("result", "")
+        out = json.loads(proc.stdout)
     except json.JSONDecodeError:
-        return proc.stdout + proc.stderr
+        return f"{AGENT_ERROR} {proc.stdout}{proc.stderr}"
+    if out.get("is_error"):
+        return f"{AGENT_ERROR} {out.get('result') or out.get('subtype', '')}"
+    return out.get("result", "")
 
 
 def run_cmd(command: str, case: dict, prompt: str, ws: Path, timeout: int) -> str:
@@ -180,6 +189,8 @@ def run_cmd(command: str, case: dict, prompt: str, ws: Path, timeout: int) -> st
         timeout=timeout,
         env=env,
     )
+    if proc.returncode != 0:
+        return f"{AGENT_ERROR} exit {proc.returncode}: {proc.stderr or proc.stdout}"
     return proc.stdout
 
 
@@ -427,9 +438,14 @@ def run_case(case: dict, attempt: int, stamp: Path, args: argparse.Namespace) ->
         else:
             answer = run_claude(prompt, ws, args.model, args.timeout)
     except subprocess.TimeoutExpired:
-        answer = "<timed out>"
+        answer = TIMED_OUT
     seconds = time.monotonic() - start
     (ws / ".answer.md").write_text(answer)
+    checks = score(case, ws, before, answer)
+    # A throttled, crashed or timed-out agent is an infrastructure failure, not
+    # a bad policy: say so first, so it can't be mistaken for one.
+    if answer.startswith((AGENT_ERROR, TIMED_OUT)):
+        checks.insert(0, Check("agent ran", False, answer[:300]))
     return Result(
         case["id"],
         case.get("category", "other"),
@@ -437,7 +453,7 @@ def run_case(case: dict, attempt: int, stamp: Path, args: argparse.Namespace) ->
         str(rel_ws),
         round(seconds, 1),
         answer,
-        score(case, ws, before, answer),
+        checks,
     )
 
 
