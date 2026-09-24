@@ -85,6 +85,19 @@ mistaken for `O`. Give it to the user in a code block.
 **No FIRST-BOOT block** means the database was already seeded, and the
 password can't be printed again. Offer these options and let the user choose:
 - use the password they saved earlier;
+- reset the password, which keeps the database. This needs the API's stderr, so
+  it only works on an API you started. If it was started elsewhere, restart it
+  with its log going to a file first; the database survives a restart. With
+  `RESEND_API_KEY` set, the email is really sent instead of printed:
+  ```bash
+  curl -s -X POST localhost:8000/v1/auth/forgot-password \
+      -H 'content-type: application/json' -d '{"email":"admin@hexgate.dev"}'   # 202
+  TOKEN=$(grep -o 'reset-password/[^ ]*' "$LOGDIR/api.log" | tail -1 | cut -d/ -f2)
+  curl -s -X POST localhost:8000/v1/auth/reset-password \
+      -H 'content-type: application/json' \
+      -d "{\"token\":\"$TOKEN\",\"password\":\"<new password>\"}"             # 200
+  ```
+  The token expires after an hour. Then run the login check above with the new password;
 - start from a fresh database. For SQLite, stop the API and move `platform/api/hexgate.db` aside (don't delete it). For Postgres, run `make postgres-reset`, which wipes the local volume, so ask first;
 - run in a fresh git worktree, which gets its own SQLite database.
 
