@@ -614,3 +614,19 @@ def test_flat_roles_still_resolve_agent_independently():
     for agent in ("main", "anything"):
         res = resolve_for_project([], [read_only], roles, agent=agent)
         assert "view" in res.by_role["member"].effective["default"].tools
+
+
+def test_modular_module_declaring_skills_is_rejected():
+    """``skills:`` is not composable by the module fold yet, so a module that sets
+    it must fail loud. The allow-list in ``_MODULE_COMPOSABLE_FIELDS`` is what makes
+    that automatic; this pins it, so adding ``skills`` there without the matching
+    lowering turns a fail-closed error into a silent drop."""
+    module = ModuleContent(
+        name="g",
+        kind="boundary",
+        policy=AgentPolicy(skills={"refunder": {"mode": "deny"}}),
+        source="g.yaml",
+        content_hash="hash-g",
+    )
+    with pytest.raises(LinkError, match="skills"):
+        link([module], [])

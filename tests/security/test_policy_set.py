@@ -528,3 +528,54 @@ def test_explicit_default_argument_overrides_the_alphabetical_pick() -> None:
 
     assert ps.aliased_default is None  # deliberate, not inferred
     assert "a" in ps.policy_for(None).tools
+
+
+# ---------------------------------------------------------------------------
+# skills: inheritance merge
+# ---------------------------------------------------------------------------
+
+
+def test_inherited_skills_survive_the_merge(tmp_path: Path) -> None:
+    """A mixin's ``skills:`` block must reach the child.
+
+    ``_resolve_inheritance`` rebuilds a fresh ``AgentPolicy`` field by field, so a
+    field it forgets is dropped in silence. For ``skills`` that drop is fail-open:
+    the child would stop declaring the block, the engagement gate would never fire,
+    and a denied skill would run.
+    """
+    root = tmp_path / "policies"
+    root.mkdir()
+    _write_policy(
+        root,
+        "skill_base",
+        "is_mixin: true\nskills:\n  refunder:\n    mode: allow\n",
+    )
+    _write_policy(root, "default", "inherits: [skill_base]\n")
+    ps = load_policy_set(root)
+    policy = ps.policy_for(None)
+    assert policy.skills["refunder"].mode == "allow"
+    assert policy.effective_tools["skill:refunder"].mode == "allow"
+
+
+def test_child_skill_overrides_the_parent_by_name(tmp_path: Path) -> None:
+    """``skills`` merges by name like ``agents`` — child wins, siblings survive."""
+    root = tmp_path / "policies"
+    root.mkdir()
+    _write_policy(
+        root,
+        "skill_base",
+        "is_mixin: true\n"
+        "skills:\n"
+        "  refunder:\n"
+        "    mode: deny\n"
+        "  reporter:\n"
+        "    mode: allow\n",
+    )
+    _write_policy(
+        root,
+        "default",
+        "inherits: [skill_base]\nskills:\n  refunder:\n    mode: allow\n",
+    )
+    policy = load_policy_set(root).policy_for(None)
+    assert policy.skills["refunder"].mode == "allow"
+    assert policy.skills["reporter"].mode == "allow"
