@@ -342,8 +342,14 @@ collector-check: ## Vet + test + build the collector, validate config.yaml (no o
 # own pyproject.toml. We invoke uv from there directly so it uses the
 # platform's venv, not the SDK's.
 
+# WeasyPrint (the AI Act report renderer) binds to Pango, which uv cannot
+# install: without it `import weasyprint` fails and the whole platform-api
+# suite errors at collection. macOS: `brew install pango`, plus
+# `brew install --cask font-liberation font-dejavu` so a local render uses the
+# same faces the image does. Debian/Ubuntu: the apt list in
+# platform/api/Dockerfile, which pins both the libraries and the fonts.
 .PHONY: platform-api-install
-platform-api-install: ## Install platform API deps (first time)
+platform-api-install: ## Install platform API deps (first time; needs Pango on the host, see above)
 	cd platform/api && uv sync --group dev
 
 .PHONY: platform-api

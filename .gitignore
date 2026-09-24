@@ -32,3 +32,13 @@ __marimo__/
 coverage.xml
 htmlcov/
 platform/dashboard/coverage/
+
+# Per-worktree editor state, written by the setup-worktree skill (Peacock
+# colour, auto-start task). One developer's window, not the project's.
+.vscode/
+
+# Specs live in Notion, which is the canonical copy. A repo copy diverges
+# per worktree — four branches described the LaTeX renderer for days after
+# it was replaced, because each held its own untracked file.
+Specs/
+

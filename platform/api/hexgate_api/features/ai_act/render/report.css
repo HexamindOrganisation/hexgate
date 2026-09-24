@@ -1,0 +1,323 @@
+/* AI Act evidence report — print stylesheet.
+ *
+ * The design is the mockup's: a flowing A4 document, restrained rules rather
+ * than boxed grids, a mono face for anything an auditor might have to type
+ * back (ids, hashes, tool names, arguments), and small-caps article
+ * references beside each section heading.
+ *
+ * Two rules everything else follows from:
+ *
+ *  - Nothing is fetched at render time. No web font, no remote stylesheet, no
+ *    image URL. A renderer that reaches the network can hang, and a document
+ *    that depends on what a CDN served that day is not reproducible.
+ *  - It has to survive a black-and-white printer. Colour marks a state that
+ *    the text already names ("Allow", "Deny", "Approval"); the tints carry no
+ *    information of their own.
+ */
+
+/* Liberation for text, DejaVu Sans Mono for code — both installed in the API
+ * image (see platform/api/Dockerfile), so the font set is a property of the
+ * build rather than of whatever host the render lands on. DejaVu trails the
+ * text face too, but the two are not interchangeable: a .mono cell is set in
+ * DejaVu Sans Mono, so a codepoint only the proportional faces carry would
+ * still draw tofu there. html.py's _REPRESENTABLE is the intersection of all
+ * three for that reason, and anything outside it is spelled out rather than
+ * left to the font stack. */
+:root {
+  --ink: #0f1729;
+  --prose: #334155;
+  --muted: #65758b;
+  --rule: #dadfe6;
+  --wash: #f8fafc;
+  --accent: #2f57da;
+  --allow-bg: #e8f8ee;
+  --allow-fg: #14733a;
+  --deny-bg: #fdeaea;
+  --deny-fg: #9b2222;
+  --appr-bg: #fff3e0;
+  --appr-fg: #8a5300;
+  --flat-bg: #eaf0f6;
+  --flat-fg: #334155;
+}
+
+@page {
+  size: A4;
+  margin: 16mm 15mm 18mm 15mm;
+
+  /* The running footer. string(report-id) is set from the masthead below, so
+   * the id never passes through CSS as interpolated text. */
+  @bottom-left {
+    content: "Hexgate · AI Act evidence report · " string(report-id)
+             " · Not a statutory filing";
+    font-family: "DejaVu Sans Mono", monospace;
+    font-size: 6.5pt;
+    letter-spacing: 0.02em;
+    color: #65758b;
+    padding-top: 3mm;
+  }
+  @bottom-right {
+    content: counter(page) " / " counter(pages);
+    font-family: "DejaVu Sans Mono", monospace;
+    font-size: 6.5pt;
+    color: #65758b;
+    padding-top: 3mm;
+  }
+}
+
+/* The cover carries the document's own identification, so it does not also
+ * need the running footer. */
+@page :first {
+  @bottom-left { content: ""; }
+  @bottom-right { content: ""; }
+}
+
+html {
+  font-family: "Liberation Sans", "DejaVu Sans", sans-serif;
+  font-size: 9pt;
+  line-height: 1.45;
+  color: var(--ink);
+}
+
+body { margin: 0; }
+
+h1, h2, h3 { margin: 0; font-weight: 700; }
+p { margin: 0 0 6pt 0; color: var(--prose); }
+p:last-child { margin-bottom: 0; }
+
+.mono, code {
+  font-family: "DejaVu Sans Mono", monospace;
+  font-size: 0.92em;
+}
+
+/* Every identifier, hash, path and argument snapshot goes through this.
+ * `anywhere` rather than `break-word`: a 64-character digest or an unbroken
+ * path has no space to break at, and a fixed table layout would otherwise
+ * let it print straight over the next column. */
+.brk { overflow-wrap: anywhere; }
+
+.cap {
+  font-family: "DejaVu Sans Mono", monospace;
+  font-size: 7pt;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.dim { color: var(--muted); }
+
+/* ---- masthead and title ------------------------------------------------ */
+
+.masthead {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  padding-bottom: 6pt;
+  border-bottom: 0.5pt solid var(--rule);
+}
+.wordmark { font-size: 11pt; font-weight: 700; letter-spacing: 0.01em; }
+/* Feeds the running footer on every later page. */
+.report-id { string-set: report-id content(); }
+
+.title-block { padding: 26pt 0 20pt 0; }
+.eyebrow {
+  display: block;
+  color: var(--accent);
+  margin-bottom: 10pt;
+}
+h1 {
+  font-size: 26pt;
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+  margin-bottom: 10pt;
+}
+.lede { font-size: 11pt; line-height: 1.45; color: var(--prose); }
+
+/* The scope disclaimer. Ruled box, not a tint: it has to read first on a
+ * greyscale print, and a grey fill would push it behind the body text. */
+.scope {
+  border: 0.75pt solid var(--ink);
+  border-radius: 2pt;
+  padding: 10pt 12pt;
+  break-inside: avoid;
+}
+.scope h3 { font-size: 9.5pt; margin-bottom: 4pt; }
+
+/* ---- key/value grids --------------------------------------------------- */
+
+.kv {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 9pt 22pt;
+  margin-top: 16pt;
+}
+.kv .k {
+  display: block;
+  font-size: 6.8pt;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 1.5pt;
+}
+.kv .v { display: block; font-size: 9.5pt; line-height: 1.35; }
+.kv.boxed {
+  background: var(--wash);
+  border: 0.5pt solid var(--rule);
+  border-radius: 2pt;
+  padding: 12pt 14pt;
+  break-inside: avoid;
+}
+
+/* ---- sections ---------------------------------------------------------- */
+
+.sec { padding-top: 22pt; }
+/* A section starts on its own page: at 9pt an evidence document runs long,
+ * and five sections that each begin mid-page are far harder to navigate than
+ * five that start at a top margin. */
+.sec.brk-before { break-before: page; }
+
+.sechead {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  border-bottom: 1.25pt solid var(--ink);
+  padding-bottom: 5pt;
+  margin-bottom: 10pt;
+  /* Never let a heading sit alone at the foot of a page. */
+  break-after: avoid;
+  break-inside: avoid;
+}
+.sechead h2 {
+  font-size: 15pt;
+  letter-spacing: -0.01em;
+  /* The title holds its line; the article list beside it wraps if anything has
+   * to. A two-line section title reads as a mistake. */
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+.sechead .cap { flex: 1 1 auto; text-align: right; padding-left: 10pt; }
+.sechead h2 .n {
+  font-family: "DejaVu Sans Mono", monospace;
+  font-size: 10pt;
+  font-weight: 400;
+  color: var(--muted);
+  margin-right: 9pt;
+}
+
+h3 {
+  font-size: 9.5pt;
+  margin: 14pt 0 5pt 0;
+  break-after: avoid;
+}
+h3 .cap { margin-left: 7pt; font-weight: 400; }
+.sub { break-inside: auto; }
+.sub.keep { break-inside: avoid; }
+
+/* Explanatory prose that is not itself evidence. */
+.note {
+  background: var(--wash);
+  border: 0.5pt solid var(--rule);
+  border-radius: 2pt;
+  padding: 8pt 10pt;
+  font-size: 8pt;
+  line-height: 1.45;
+  color: var(--prose);
+  margin-top: 7pt;
+  break-inside: avoid;
+}
+.note strong { color: var(--ink); }
+
+/* ---- tables ------------------------------------------------------------ */
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+  /* Fixed, so a column's width is the width this stylesheet declares and not
+   * a function of the widest value the period happened to contain. */
+  table-layout: fixed;
+  font-size: 8pt;
+  line-height: 1.35;
+}
+thead { display: table-header-group; }
+tbody { display: table-row-group; }
+th {
+  text-align: left;
+  vertical-align: bottom;
+  font-size: 6.8pt;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+  padding: 0 6pt 4pt 0;
+  border-bottom: 0.75pt solid var(--ink);
+}
+td {
+  vertical-align: top;
+  padding: 4.5pt 6pt 4.5pt 0;
+  border-bottom: 0.4pt solid var(--rule);
+}
+th:last-child, td:last-child { padding-right: 0; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+/* A row that splits across a page break loses the alignment between its
+ * columns, which in a matrix is the whole content of the row. */
+tr { break-inside: avoid; }
+table.contents td { border-bottom: none; padding: 2.5pt 6pt 2.5pt 0; }
+
+.empty { color: var(--muted); font-style: italic; }
+
+/* ---- state pills ------------------------------------------------------- */
+
+/* The word is the information. The tint is a second, redundant channel that
+ * disappears harmlessly on a monochrome printer. */
+.pill {
+  display: inline-block;
+  font-size: 7.2pt;
+  font-weight: 700;
+  line-height: 1;
+  padding: 2.5pt 4.5pt;
+  border-radius: 2pt;
+  white-space: nowrap;
+  background: var(--flat-bg);
+  color: var(--flat-fg);
+}
+.pill-allow { background: var(--allow-bg); color: var(--allow-fg); }
+.pill-deny { background: var(--deny-bg); color: var(--deny-fg); }
+.pill-approval { background: var(--appr-bg); color: var(--appr-fg); }
+.pill-hollow {
+  background: transparent;
+  color: var(--muted);
+  border: 0.5pt dashed #b8c2cf;
+}
+
+/* ---- counter row ------------------------------------------------------- */
+
+.stats {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12pt 16pt;
+  margin: 4pt 0 6pt 0;
+  break-inside: avoid;
+}
+.stat { border-top: 0.75pt solid var(--ink); padding-top: 6pt; }
+.stat .v {
+  display: block;
+  font-size: 17pt;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+.stat .k {
+  display: block;
+  font-size: 7.2pt;
+  color: var(--muted);
+  margin-top: 3pt;
+  line-height: 1.25;
+}
+
+/* ---- lists ------------------------------------------------------------- */
+
+ul.plain { margin: 7pt 0 0 0; padding-left: 12pt; }
+ul.plain li { margin-bottom: 3.5pt; color: var(--prose); }
+ol.steps { margin: 0; padding-left: 12pt; }
+ol.steps li { margin-bottom: 3.5pt; color: var(--prose); }
+
