@@ -41,6 +41,23 @@ _FILE_PATH_ARG = "file_path"
 _TOOLSET_ATTR = "_toolset"
 _GET_SKILL_ATTR = "_get_skill"
 _CONTENT_HASH_PREFIX = "sha256:"
+# run_skill_script resolves ``scripts/x`` and ``x`` to the same script, so the
+# decision sees one canonical spelling. load_skill_resource rejects an unprefixed
+# path, so resource paths need no rewriting.
+_SCRIPTS_DIR_PREFIX = "scripts/"
+# What run_skill_script forwards to the code executor, and the decision-arg key
+# each travels under (``args`` would read as ``args.args`` in a constraint).
+_SCRIPT_INVOCATION_ARGS: dict[str, str] = {
+    "args": "script_args",
+    "short_options": "short_options",
+    "positional_args": "positional_args",
+}
+
+_SKILL_HELD_ACTION_BY_VIA: dict[SkillVia, str] = {
+    "instructions": "before it is loaded",
+    "resource": "before its resource is read",
+    "script": "before its script runs",
+}
 
 # Keyed on the class, not the tool name: ADK's tool_name_prefix renames the copy
 # (``<prefix>_load_skill``), and a name lookup would drop a prefixed skill tool back
@@ -87,7 +104,7 @@ def _agent_tool_target(base: BaseTool) -> str | None:
     return None
 
 
-def _render_skill_error(skill: str) -> RenderError:
+def _render_skill_error(skill: str, via: SkillVia) -> RenderError:
     """Model-facing renderer for a denied/held skill activation.
 
     The closing sentence is deliberate: without it a model tends to improvise the
@@ -96,7 +113,8 @@ def _render_skill_error(skill: str) -> RenderError:
     def render(decision: Any) -> str:
         marker = decision.error_type or decision.outcome.value
         if decision.outcome is DecisionOutcome.NEEDS_APPROVAL:
-            body = f"skill {skill!r} requires human approval before it is loaded"
+            held = _SKILL_HELD_ACTION_BY_VIA[via]
+            body = f"skill {skill!r} requires human approval {held}"
         else:
             body = f"skill {skill!r} is not permitted by this agent's policy"
         return f"[{marker}] {body}. Do not attempt this task without it."
@@ -136,23 +154,32 @@ def _skill_content_hash(base: BaseTool, skill_name: str) -> str | None:
     return f"{_CONTENT_HASH_PREFIX}{digest}"
 
 
+def _canonical_script_path(file_path: Any) -> Any:
+    if isinstance(file_path, str) and not file_path.startswith(_SCRIPTS_DIR_PREFIX):
+        return f"{_SCRIPTS_DIR_PREFIX}{file_path}"
+    return file_path
+
+
 def _skill_decision(
-    base: BaseTool, args: dict[str, Any]
+    base: BaseTool, via: SkillVia, args: dict[str, Any]
 ) -> tuple[str, dict[str, Any]] | None:
-    """Policy key + decision args when this call reaches a skill, else None."""
-    via = _skill_via(base)
-    if via is None:
-        return None
+    """Policy key + decision args for a skill-tool call, or None if malformed."""
     skill_name = args.get(_SKILL_NAME_ARG)
     if not isinstance(skill_name, str) or not skill_name.strip():
         # Left to name gating; ADK itself answers this with INVALID_ARGUMENTS.
         return None
-    return skill_key(via, skill_name), {
+    file_path = args.get(_FILE_PATH_ARG)
+    decision_args: dict[str, Any] = {
         "skill": skill_name,
         "via": via,
-        _FILE_PATH_ARG: args.get(_FILE_PATH_ARG),
+        _FILE_PATH_ARG: file_path,
         "content_hash": _skill_content_hash(base, skill_name),
     }
+    if via == "script":
+        decision_args[_FILE_PATH_ARG] = _canonical_script_path(file_path)
+        for tool_arg, decision_arg in _SCRIPT_INVOCATION_ARGS.items():
+            decision_args[decision_arg] = args.get(tool_arg)
+    return skill_key(via, skill_name), decision_args
 
 
 def _normalize(tool: ToolEntry) -> BaseTool:
@@ -185,6 +212,8 @@ def wrap_tool(
     # An AgentTool is a reach edge; gate it under agent.tool:<target>, matching the
     # OpenAI adapter. ``None`` for an ordinary tool.
     reach_target = _agent_tool_target(base)
+    # Resolved once: it depends only on the tool's class. ``None`` for a non-skill tool.
+    skill_via = _skill_via(base)
 
     @functools.wraps(original_run_async, updated=())
     async def guarded_run_async(
@@ -194,8 +223,8 @@ def wrap_tool(
         # Engagement read per call (hot-reload-safe). The skill name arrives in the
         # call's args, so unlike the reach target it cannot be resolved at wrap time.
         skill = (
-            _skill_decision(base, call_args)
-            if enforcer.policy.declares_skills()
+            _skill_decision(base, skill_via, call_args)
+            if skill_via is not None and enforcer.policy.declares_skills()
             else None
         )
         policy_key: str | None
@@ -203,7 +232,9 @@ def wrap_tool(
         render_policy_error: RenderError | None
         if skill is not None:
             policy_key, policy_args = skill
-            render_policy_error = _render_skill_error(policy_args["skill"])
+            render_policy_error = _render_skill_error(
+                policy_args["skill"], policy_args["via"]
+            )
         # Gate the reach key only when the policy declares *tool* reach — matching
         # OpenAI, so a handoff-only policy leaves as-tools name-gated on both
         # adapters rather than diverging.
