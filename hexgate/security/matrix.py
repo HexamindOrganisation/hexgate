@@ -85,6 +85,7 @@ from hexgate.security.models import (
     PolicyMode,
     ToolPolicy,
     is_agent_key,
+    is_skill_key,
 )
 from hexgate.security.policy import get_tool_policy
 from hexgate.security.policy_set import DEFAULT_ROLE_NAME, PolicySet
@@ -164,13 +165,13 @@ class Matrix:
 
         Argument order matches :meth:`cell` so the two cannot be transposed by
         habit. ``tool`` is required because the answer depends on it: an ``agent.*``
-        key is closed-world and denies whatever ``default_policy`` says, so a
-        role with a permissive default must not be reported as reaching an agent
-        its policy never named. Reading :attr:`defaults` directly answers the
+        or ``skill*`` key is closed-world and denies whatever ``default_policy``
+        says, so a role with a permissive default must not be reported as reaching
+        an agent or a skill its policy never named. Reading :attr:`defaults` directly answers the
         narrower question — the fallback for an *ordinary* tool — and is what a
         report's "any other tool" row should state.
         """
-        if is_agent_key(tool):
+        if is_agent_key(tool) or is_skill_key(tool):
             return _DENIED
         return self.defaults[role]
 
