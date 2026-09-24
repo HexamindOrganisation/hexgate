@@ -8,7 +8,7 @@ from typing import Any, Literal, get_args
 from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator
 
 from hexgate.security.constraints import parse_constraint
-from hexgate.security.naming import canonical_name
+from hexgate.security.naming import canonical_name, canonical_skill_name
 
 PolicyMode = Literal["allow", "deny", "approval_required"]
 
@@ -115,6 +115,44 @@ def is_agent_key(name: str) -> bool:
     return name == AGENT_RUN_TOOL or is_agent_reach_key(name)
 
 
+SkillVia = Literal["instructions", "resource", "script"]
+
+# Key prefix per disclosure level. ``skill:`` is the bare activation key (the
+# instructions a skill discloses when it engages); the two deeper levels take a
+# dotted qualifier, spelled like the agent reach keys. Keep ``skill:`` last: it is
+# not a prefix of the other two (``skill.`` != ``skill:``), so the tuple order is
+# irrelevant to ``str.startswith`` today, but a first-match loop would want the
+# qualified spellings tried first.
+_SKILL_PREFIX_BY_VIA: dict[SkillVia, str] = {
+    "resource": "skill.resource:",
+    "script": "skill.script:",
+    "instructions": "skill:",
+}
+SKILL_PREFIXES = tuple(_SKILL_PREFIX_BY_VIA.values())
+
+
+def skill_key(via: SkillVia, name: str) -> str:
+    """Synthetic tool key for reaching one skill at one disclosure level.
+
+    The skill name is trimmed (:func:`~hexgate.security.naming.canonical_skill_name`)
+    for the same reason :meth:`AgentPolicy.lowered_agent_tools` trims a reach target:
+    the adapter builds this same key from the runtime skill's name, so a padded
+    authored name must normalize to the key the seam looks up or the rule is inert.
+    It deliberately does *not* borrow the reach path's blank → ``default`` fallback,
+    which would let ``skills: {"": ...}`` govern a real skill named ``default``.
+    """
+    return f"{_SKILL_PREFIX_BY_VIA[via]}{canonical_skill_name(name)}"
+
+
+def is_skill_key(name: str) -> bool:
+    """True for a ``skill:`` / ``skill.resource:`` / ``skill.script:`` key.
+
+    Reserves the namespace from authored tools, and (from M4) tells the engines
+    which keys evaluate closed-world. A tool literally named ``skills`` is not one:
+    the prefixes carry their separator."""
+    return name.startswith(SKILL_PREFIXES)
+
+
 class AgentTargetPolicy(BaseToolPolicy):
     """Authorize reaching one named target agent, per transfer mode.
 
@@ -131,6 +169,30 @@ class AgentTargetPolicy(BaseToolPolicy):
     def _validate_via(cls, value: list[AgentVia]) -> list[AgentVia]:
         if not value:
             raise ValueError("via must list at least one of 'tool', 'handoff'")
+        # De-dup, order-preserving.
+        return list(dict.fromkeys(value))
+
+
+class SkillPolicy(BaseToolPolicy):
+    """Authorize one named skill, per disclosure level.
+
+    ``via`` names the disclosure levels this rule governs: ``instructions`` (the
+    skill's prose is put in front of the model), ``resource`` (its bundled files
+    are readable) and ``script`` (its executables may run). A skill allowed for
+    ``instructions`` only can be read but its scripts cannot be run.
+    """
+
+    via: list[SkillVia] = Field(
+        default_factory=lambda: ["instructions", "resource", "script"]
+    )
+
+    @field_validator("via")
+    @classmethod
+    def _validate_via(cls, value: list[SkillVia]) -> list[SkillVia]:
+        if not value:
+            raise ValueError(
+                "via must list at least one of 'instructions', 'resource', 'script'"
+            )
         # De-dup, order-preserving.
         return list(dict.fromkeys(value))
 
@@ -161,7 +223,12 @@ class AgentPolicy(BaseModel):
     * ``agents`` — egress. Which *other* agents may this role reach, keyed by
       target name, each an :class:`AgentTargetPolicy`.
 
-    Both lower into synthetic tool keys via :attr:`effective_tools`, which both
+    ``skills`` is the third block that lowers this way: which named skills may this
+    role reach, keyed by skill name, each a :class:`SkillPolicy` naming the
+    disclosure levels it governs. Nothing decides on a ``skill:`` key yet — no
+    adapter produces one, and an unlisted skill still falls to ``default_policy``.
+
+    All three lower into synthetic tool keys via :attr:`effective_tools`, which both
     policy engines read, so agent-level rules evaluate through the identical
     decision path as tools with no engine change. Agent keys are closed-world
     (R-AGENT-002): an unlisted ``agent.run`` / ``agent.<via>:<target>`` denies at
@@ -193,6 +260,7 @@ class AgentPolicy(BaseModel):
     consts: dict[str, Any] = Field(default_factory=dict)
     admission: BaseToolPolicy | None = None
     agents: dict[str, AgentTargetPolicy] = Field(default_factory=dict)
+    skills: dict[str, SkillPolicy] = Field(default_factory=dict)
 
     @field_validator("constraints")
     @classmethod
@@ -204,26 +272,56 @@ class AgentPolicy(BaseModel):
     def _reject_reserved_tool_names(
         cls, value: dict[str, ToolPolicy], info: ValidationInfo
     ) -> dict[str, ToolPolicy]:
-        """Keep the ``agent.*`` key namespace for agent-level gating.
+        """Keep the ``agent.*`` and ``skill*:`` key namespaces for agent-level gating.
 
-        An authored tool named ``agent.run`` / ``agent.tool:x`` / ``agent.handoff:x``
-        would collide with a lowered agent rule in :attr:`effective_tools` and
+        An authored tool named ``agent.run`` / ``agent.tool:x`` / ``skill:x`` would
+        collide with a lowered agent or skill rule in :attr:`effective_tools` and
         silently shadow (or be shadowed by) it. Reject it at load.
 
         Skipped when validated under a ``{"resolved": True}`` context: a *resolved*
-        policy legitimately carries the lowered ``agent.*`` keys in ``tools`` (the
-        linker's :meth:`resolved` builder puts them there), and it must round-trip
-        back through this loader when a modular agent's bundle is compiled from its
+        policy legitimately carries the lowered keys in ``tools`` (the linker's
+        :meth:`resolved` builder puts them there), and it must round-trip back
+        through this loader when a modular agent's bundle is compiled from its
         resolved YAML (R-POL-002). The guard is an authoring ergonomic — it only
         needs to fire on hand-written source, not on a machine-resolved artifact."""
         if info.context and info.context.get("resolved"):
             return value
         for name in value:
-            if is_agent_key(name):
+            if is_agent_key(name) or is_skill_key(name):
                 raise ValueError(
                     f"tool name {name!r} is reserved for agent-level gating; "
-                    "use the 'admission'/'agents' blocks instead"
+                    "use the 'admission'/'agents'/'skills' blocks instead"
                 )
+        return value
+
+    @field_validator("skills")
+    @classmethod
+    def _reject_blank_or_colliding_skill_names(
+        cls, value: dict[str, SkillPolicy]
+    ) -> dict[str, SkillPolicy]:
+        """One authored skill name per lowered key, and never a blank one.
+
+        :func:`skill_key` trims, so two keys that differ only in padding lower onto
+        one entry and the later one silently wins — erasing a deny or a grant
+        depending on authoring order. A blank name lowers to a key nothing can
+        match, which is an inert rule rather than the deny its author wrote.
+
+        Only reachable through an explicitly quoted key (YAML strips a plain
+        scalar's padding itself, and a bare ``:`` will not parse), so this guards
+        the programmatic route: names arriving from a manifest or the dashboard.
+        The resolved path never sees this — a resolved policy carries its lowered
+        keys in ``tools`` and is built by :meth:`resolved`, which skips validation."""
+        by_key: dict[str, str] = {}
+        for name in value:
+            key = canonical_skill_name(name)
+            if not key:
+                raise ValueError("skill name must not be blank")
+            if key in by_key:
+                raise ValueError(
+                    f"skill names {by_key[key]!r} and {name!r} both normalize to "
+                    f"{key!r}; one rule would silently overwrite the other"
+                )
+            by_key[key] = name
         return value
 
     @classmethod
@@ -273,9 +371,27 @@ class AgentPolicy(BaseModel):
                 lowered[agent_target_key(via, canonical_name(target))] = target_policy
         return lowered
 
+    def lowered_skill_tools(self) -> dict[str, BaseToolPolicy]:
+        """Expand ``skills`` into synthetic tool entries, one per ``via`` level.
+
+        Each listed skill yields ``skill:<name>`` / ``skill.resource:<name>`` /
+        ``skill.script:<name>`` for the levels its rule governs. Only listed skills
+        are lowered; the fallback for an unlisted one is the engine's concern.
+
+        The :class:`SkillPolicy` is reused as the lowered value (it *is* a
+        :class:`BaseToolPolicy`) rather than rebuilt: a rebuild would silently drop
+        any field later added to the base. ``via`` rides along as an extra the
+        engines ignore, exactly as on a lowered agent rule.
+        """
+        return {
+            skill_key(via, name): policy
+            for name, policy in self.skills.items()
+            for via in policy.via
+        }
+
     @cached_property
     def effective_tools(self) -> dict[str, ToolPolicy]:
-        """Authored ``tools`` plus the lowered agent-level entries.
+        """Authored ``tools`` plus the lowered agent-level and skill entries.
 
         The single view both engines read (:func:`~hexgate.security.policy.get_tool_policy`
         and the Rego compiler), so a lowered ``agent.*`` key evaluates byte-for-byte
@@ -283,7 +399,7 @@ class AgentPolicy(BaseModel):
         this on every decision, and policies are immutable after load (inheritance
         builds fresh instances), so the merge runs once per policy, not per call.
         """
-        lowered = self.lowered_agent_tools()
+        lowered = {**self.lowered_agent_tools(), **self.lowered_skill_tools()}
         if not lowered:
             return self.tools
         return {**self.tools, **lowered}
