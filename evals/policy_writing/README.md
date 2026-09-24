@@ -4,7 +4,7 @@ This set measures how well an AI agent turns a plain-English request into a
 Hexgate policy. It is developer tooling: nothing here ships or runs in the
 product.
 
-- `cases.yaml` has 32 cases. Each gives a request, a starting fixture, a category, and what the finished policy must do.
+- `cases.yaml` has 33 cases. Each gives a request, a starting fixture, a category, and what the finished policy must do.
 - `fixtures/` holds the starting projects. Each fixture's `TOOLS.md` is what the agent knows about its tools and roles.
 - `solutions/` holds one hand-written answer per case. They prove every case can be solved and that its expectations are right.
 - `negatives/` holds known-bad answers to the key traps. They prove the scorer catches them.
@@ -21,7 +21,7 @@ product.
 | L3: defaults already exist | `l3` | Org defaults for tools and admission, which a new role must reuse. |
 | L4: another agent's policy | `l4` | A second agent's policy to model this one on. |
 | L5: defining defaults | `l5` | A request to set the fallback rules. |
-| Must refuse or flag | `f10`, `m03`, `e02` | Something the language can't express, a boundary a team can't loosen, or a tool that doesn't exist. |
+| Must refuse or flag | `f10`, `m03`, `e02`, `e07` | Something the language can't express, a boundary a team can't loosen, or a tool or argument that doesn't exist. |
 | Security | `a04`, `e01` | A cap that locks everyone out at admission, and a prompt injection hidden in `TOOLS.md`. |
 | Robustness | `e03`–`e06` | Refactor without a behaviour change, explain only, revoke a grant, a request in French. |
 
@@ -37,7 +37,7 @@ edits it. A run passes only if all of these hold:
    - `roles: [...]` repeats an entry over several roles.
    - `expect: [deny, approval_required]` accepts any of those outcomes. This is how open-ended cases (L0–L2) are scored: by rules any good policy follows, not by one exact answer.
 3. **Superset:** `wider` can do at least what `narrower` can on every probe call. For example, a manager ⊇ an agent ⊇ `default`.
-4. **Known tools:** the policy names only tools listed in `TOOLS.md` (plus `net.*` and `agent.*`). An invented tool fails every case.
+4. **Known tools and arguments:** the policy names only tools listed in `TOOLS.md` (plus `net.*` and `agent.*`). Every `args.x` a constraint uses must be one of that tool's arguments, and every `ctx.x` a listed caller attribute. An invented name fails every case, even when it slips past the dry-runs (e.g. `args.tier != "gold" or args.amount <= 1000` still allows the call). On the platform the same information comes from the agent's manifest (`input_schema`), which `hexgate policy check --manifest` already lints as `unknown-arg`.
 5. **Files:** `changed`, `unchanged` and `no_changes` hold.
 6. **Answer:** the final answer contains one of `mentions_any` and all of `mentions_all`.
 

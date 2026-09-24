@@ -423,3 +423,13 @@
       - { role: support, tool: refund_order, args: { order_id: o1, amount: 31, currency: EUR }, expect: deny }
       - { role: support, tool: refund_order, args: { order_id: o1, amount: 20, currency: USD }, expect: deny }
       - { role: billing, tool: refund_order, args: { order_id: o1, amount: 400, currency: USD }, expect: allow }
+
+- id: e07_unknown_argument
+  category: Must refuse or flag
+  fixture: flat
+  request: Cap billing refunds by customer tier, so gold customers can get up to 1000.
+  note: refund_order has no tier argument and there is no tier caller attribute. The agent must say so, not constrain a made-up field.
+  expect:
+    mentions_any: ["no tier", "no argument", "not an argument", "isn't an argument", "doesn't carry", "does not carry", "doesn't include", "does not include", "doesn't have", "does not have", "not available", "isn't available", "no field", "no such", "not passed"]
+    decisions:
+      - { role: billing, tool: refund_order, args: { order_id: o1, amount: 400, currency: USD }, expect: allow }

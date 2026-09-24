@@ -214,20 +214,78 @@ def decide(policy: Path, role: str, d: dict) -> tuple[str, str]:
     return outcome_of(proc.stdout), (proc.stdout + proc.stderr).strip()
 
 
-def manifest_tools(ws: Path) -> set[str]:
-    """Tool names from the first column of TOOLS.md tables (| `name` | ...)."""
-    names = set()
+# Arguments the synthetic keys carry (hexgate/security/network.py, the agent gate).
+SYNTHETIC_ARGS = {
+    "net.http_request": {"host", "scheme", "port", "path", "query"},
+    "net.tcp_connect": {"host", "port", "protocol"},
+}
+AGENT_ARGS = {"agent", "target", "via"}
+REF = re.compile(r"\b(args|ctx)\.([A-Za-z_]\w*)")
+
+
+def read_manifest(ws: Path) -> tuple[dict[str, set[str]], set[str]]:
+    """TOOLS.md → ({tool: its argument names}, caller attribute names).
+
+    Rows look like | `tool` | `arg: type`, ... |; the heading above a table
+    says whether it lists tools or caller attributes.
+    """
+    tools: dict[str, set[str]] = {}
+    attrs: set[str] = set()
+    section = ""
     for line in (ws / "TOOLS.md").read_text().splitlines():
-        m = re.match(r"^\|\s*`([^`]+)`\s*\|", line)
-        if m:
-            names.add(m.group(1))
-    return names
+        if line.startswith("#"):
+            section = line.lower()
+        m = re.match(r"^\|\s*`([^`]+)`\s*\|([^|]*)", line)
+        if not m:
+            continue
+        if "attribute" in section:
+            attrs.add(m.group(1))
+        elif "tool" in section:
+            tools[m.group(1)] = set(re.findall(r"`(\w+)\s*:", m.group(2)))
+    return tools, attrs
+
+
+def policy_bodies(policy: Path) -> tuple[dict, list[dict]]:
+    doc = yaml.safe_load(policy.read_text()) or {}
+    bodies = [b for b in (doc.get("roles") or {}).values() if isinstance(b, dict)]
+    return doc, bodies or [doc]
 
 
 def policy_tools(policy: Path) -> set[str]:
-    doc = yaml.safe_load(policy.read_text()) or {}
-    bodies = list((doc.get("roles") or {}).values()) or [doc]
-    return {t for b in bodies if isinstance(b, dict) for t in (b.get("tools") or {})}
+    _, bodies = policy_bodies(policy)
+    return {t for b in bodies for t in (b.get("tools") or {})}
+
+
+def unknown_refs(
+    policy: Path, tools: dict[str, set[str]], attrs: set[str]
+) -> list[str]:
+    """`args.x` / `ctx.x` a constraint uses that TOOLS.md doesn't define."""
+    every_arg = set().union(*tools.values(), *SYNTHETIC_ARGS.values(), AGENT_ARGS)
+    doc, bodies = policy_bodies(policy)
+    # (tool or None for a policy- or role-level constraint, constraint text)
+    lines = [(None, c) for c in doc.get("constraints") or []]
+    for b in bodies:
+        lines += [(None, c) for c in b.get("constraints") or []]
+        for tool, spec in (b.get("tools") or {}).items():
+            lines += [(tool, c) for c in (spec or {}).get("constraints") or []]
+    bad = set()
+    for tool, text in lines:
+        for kind, name in REF.findall(str(text)):
+            if kind == "ctx":
+                ok = name in attrs
+            elif tool is None:
+                ok = name in every_arg
+            elif tool.startswith("agent."):
+                ok = name in AGENT_ARGS
+            elif tool in SYNTHETIC_ARGS:
+                ok = name in SYNTHETIC_ARGS[tool]
+            else:
+                ok = (
+                    tool not in tools or name in tools[tool]
+                )  # unknown tools fail elsewhere
+            if not ok:
+                bad.add(f"{tool or 'policy-level'}: {kind}.{name}")
+    return sorted(bad)
 
 
 def effective_policy(ws: Path) -> tuple[Path | None, Check]:
@@ -291,17 +349,25 @@ def score(case: dict, ws: Path, before: dict[str, str], answer: str) -> list[Che
         checks.append(Check(name, not worse, "; ".join(worse)))
 
     if policy is not None:
-        known = manifest_tools(ws)
+        tools, attrs = read_manifest(ws)
         unknown = sorted(
             t
             for t in policy_tools(policy)
-            if t not in known and not t.startswith(("net.", "agent."))
+            if t not in tools and not t.startswith(("net.", "agent."))
         )
         checks.append(
             Check(
                 "only known tools",
                 not unknown,
                 f"not in TOOLS.md: {unknown}" if unknown else "",
+            )
+        )
+        refs = unknown_refs(policy, tools, attrs)
+        checks.append(
+            Check(
+                "only known arguments and attributes",
+                not refs,
+                f"not in TOOLS.md: {refs}" if refs else "",
             )
         )
 
