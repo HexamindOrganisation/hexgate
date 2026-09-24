@@ -96,6 +96,16 @@ class PolicyEngine(Protocol):
         true, so a handoff-only policy is not spammed."""
         ...
 
+    def declares_skills(self) -> bool:
+        """Whether this policy configures skills anywhere.
+
+        The skill gate's opt-in signal: an adapter maps a call to a skill key only
+        when this is true, so an agent whose policy never mentions skills is never
+        skill-gated (skill keys are otherwise closed-world). A pydantic engine
+        derives it from the resolved policy; a WASM bundle reads it from its signed
+        manifest."""
+        ...
+
 
 # Over the platform's ``DecisionEvent.reason`` max_length the audit event is
 # rejected outright, losing the record for the calls most worth keeping.

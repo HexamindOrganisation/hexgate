@@ -18,14 +18,16 @@ from hexgate.security.models import (
     FileToolPolicy,
     ToolPolicy,
     is_agent_key,
+    is_skill_key,
 )
 
-# Agent keys (admission agent.run AND reach agent.tool:/agent.handoff:) are
-# closed-world: an unlisted agent key denies regardless of default_policy. A role
-# that is not granted admission is denied, so a permissive tool default cannot
-# silently grant a run or a handoff. Whether admission is enforced at all is the
-# gate's opt-in engagement decision (declares_admission), not this fallback (R-AGENT-002).
-_AGENT_CLOSED_WORLD_DENY = BaseToolPolicy(mode="deny")
+# Agent keys (admission agent.run AND reach agent.tool:/agent.handoff:) and skill
+# keys (skill:/skill.resource:/skill.script:) are closed-world: an unlisted one
+# denies regardless of default_policy, so a permissive tool default cannot silently
+# grant a run, a handoff or a skill. Whether either gate fires at all is its opt-in
+# engagement decision (declares_admission / declares_skills), not this fallback
+# (R-AGENT-002).
+_CLOSED_WORLD_DENY = BaseToolPolicy(mode="deny")
 
 if TYPE_CHECKING:
     from hexgate.security.bundle import PolicyBundle
@@ -51,19 +53,19 @@ def load_policy(policy: str | Path | AgentPolicy | None) -> AgentPolicy:
 def get_tool_policy(policy: AgentPolicy, tool_name: str) -> ToolPolicy:
     """Resolve the effective policy for a tool name.
 
-    Reads ``effective_tools`` (authored tools plus lowered ``agent.*`` keys) so a
-    synthetic agent-level key resolves through the same path as any tool. An
-    unlisted **agent** key (admission or reach) denies, closed-world, so a
-    permissive ``default_policy`` never silently grants a run or a handoff; any
-    other unlisted tool falls to ``default_policy``. The Rego compiler mirrors this
-    (its permissive catch-all excludes every agent key), keeping the engines in
-    agreement (R-AGENT-002).
+    Reads ``effective_tools`` (authored tools plus lowered ``agent.*`` / ``skill*``
+    keys) so a synthetic key resolves through the same path as any tool. An
+    unlisted **agent** or **skill** key denies, closed-world, so a permissive
+    ``default_policy`` never silently grants a run, a handoff or a skill; any other
+    unlisted tool falls to ``default_policy``. The Rego compiler mirrors this (its
+    permissive catch-all excludes every agent and skill key), keeping the engines
+    in agreement (R-AGENT-002).
     """
     tool_policy = policy.effective_tools.get(tool_name)
     if tool_policy is not None:
         return tool_policy
-    if is_agent_key(tool_name):
-        return _AGENT_CLOSED_WORLD_DENY
+    if is_agent_key(tool_name) or is_skill_key(tool_name):
+        return _CLOSED_WORLD_DENY
     return policy.default_policy
 
 

@@ -1076,3 +1076,37 @@ def test_an_empty_policy_level_list_renders_byte_identically() -> None:
     assert compile_to_rego(without, source_hash="H") == compile_to_rego(
         with_empty, source_hash="H"
     )
+
+
+# ---------------------------------------------------------------------------
+# skill:* keys — excluded from the permissive catch-all (closed-world)
+# ---------------------------------------------------------------------------
+
+
+def _skills_payload(default_mode: str) -> dict:
+    return {
+        "roles": {
+            "default": {
+                "default_policy": {"mode": default_mode},
+                "skills": {"refunder": {"mode": "allow"}},
+            }
+        },
+    }
+
+
+def test_default_rules_excludes_skill_prefixes() -> None:
+    """Asserted on the emitted text of the catch-all rule itself: a guard emitted
+    in some other rule would pass a behaviour-only test and still fail open."""
+    rego = compile_to_rego(_skills_payload("allow"))
+
+    [catch_all] = [rule for rule in _allow_rules(rego) if "not input.tool in" in rule]
+    for prefix in ("skill:", "skill.resource:", "skill.script:"):
+        assert f'not startswith(input.tool, "{prefix}")' in catch_all
+
+
+def test_deny_default_emits_no_catch_all() -> None:
+    """Absence of an allow rule is the deny, so a deny default needs no exclusion."""
+    rego = compile_to_rego(_skills_payload("deny"))
+
+    assert "not input.tool in" not in rego
+    assert 'not startswith(input.tool, "skill:")' not in rego
