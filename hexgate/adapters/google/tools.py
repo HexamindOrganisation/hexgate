@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import copy
 import functools
+import hashlib
 from collections.abc import Callable
 from typing import Any, Union
 
@@ -29,10 +30,27 @@ from hexgate.guards.runner import RenderError, run_guarded_async
 from hexgate.guards.types import ToolPipeline
 from hexgate.security.decision import DecisionOutcome
 from hexgate.security.enforcer import PolicyEnforcer
-from hexgate.security.models import agent_target_key
+from hexgate.security.models import SkillVia, agent_target_key, skill_key
 from hexgate.security.naming import canonical_name
 
 ToolEntry = Union[BaseTool, BaseToolset, Callable[..., Any]]
+
+_SKILL_TOOLSET_MODULE = "google.adk.tools.skill_toolset"
+_SKILL_NAME_ARG = "skill_name"
+_FILE_PATH_ARG = "file_path"
+_TOOLSET_ATTR = "_toolset"
+_GET_SKILL_ATTR = "_get_skill"
+_CONTENT_HASH_PREFIX = "sha256:"
+
+# Keyed on the class, not the tool name: ADK's tool_name_prefix renames the copy
+# (``<prefix>_load_skill``), and a name lookup would drop a prefixed skill tool back
+# to name gating. ``ListSkillsTool`` is absent on purpose — the catalog is already
+# in the system prompt, so gating it only hides what exists.
+_SKILL_VIA_BY_TOOL_CLASS: dict[str, SkillVia] = {
+    "LoadSkillTool": "instructions",
+    "LoadSkillResourceTool": "resource",
+    "RunSkillScriptTool": "script",
+}
 
 
 def _render_error(decision: Any) -> str:
@@ -67,6 +85,74 @@ def _agent_tool_target(base: BaseTool) -> str | None:
         if target:
             return canonical_name(target)
     return None
+
+
+def _render_skill_error(skill: str) -> RenderError:
+    """Model-facing renderer for a denied/held skill activation.
+
+    The closing sentence is deliberate: without it a model tends to improvise the
+    procedure from memory, dropping exactly the guardrails the skill encoded."""
+
+    def render(decision: Any) -> str:
+        marker = decision.error_type or decision.outcome.value
+        if decision.outcome is DecisionOutcome.NEEDS_APPROVAL:
+            body = f"skill {skill!r} requires human approval before it is loaded"
+        else:
+            body = f"skill {skill!r} is not permitted by this agent's policy"
+        return f"[{marker}] {body}. Do not attempt this task without it."
+
+    return render
+
+
+def _skill_via(base: BaseTool) -> SkillVia | None:
+    """The disclosure level ``base`` gates, or None if it is not a skill tool.
+
+    Keyed on the defining module rather than the imported classes: they exist only
+    from ADK 1.25.0 and pyproject pins >=1.14. A user's own tool named
+    ``load_skill`` is defined elsewhere, so it does not match — nor does a subclass
+    of ``LoadSkillTool`` defined outside ADK.
+    """
+    tool_class = type(base)
+    if tool_class.__module__ != _SKILL_TOOLSET_MODULE:
+        return None
+    return _SKILL_VIA_BY_TOOL_CLASS.get(tool_class.__name__)
+
+
+def _skill_content_hash(base: BaseTool, skill_name: str) -> str | None:
+    """sha256 of the skill's SKILL.md body, or None if it cannot be read.
+
+    Reaches through ADK privates (``_toolset`` on the tool, ``_get_skill`` on the
+    toolset), so every hop is guarded and an ADK refactor degrades to no hash. None
+    is safe: a policy pinning a hash fails closed on an absent argument.
+    """
+    toolset = getattr(base, _TOOLSET_ATTR, None)
+    get_skill = getattr(toolset, _GET_SKILL_ATTR, None)
+    if not callable(get_skill):
+        return None
+    instructions = getattr(get_skill(skill_name), "instructions", None)
+    if not isinstance(instructions, str):
+        return None
+    digest = hashlib.sha256(instructions.encode("utf-8")).hexdigest()
+    return f"{_CONTENT_HASH_PREFIX}{digest}"
+
+
+def _skill_decision(
+    base: BaseTool, args: dict[str, Any]
+) -> tuple[str, dict[str, Any]] | None:
+    """Policy key + decision args when this call reaches a skill, else None."""
+    via = _skill_via(base)
+    if via is None:
+        return None
+    skill_name = args.get(_SKILL_NAME_ARG)
+    if not isinstance(skill_name, str) or not skill_name.strip():
+        # Left to name gating; ADK itself answers this with INVALID_ARGUMENTS.
+        return None
+    return skill_key(via, skill_name), {
+        "skill": skill_name,
+        "via": via,
+        _FILE_PATH_ARG: args.get(_FILE_PATH_ARG),
+        "content_hash": _skill_content_hash(base, skill_name),
+    }
 
 
 def _normalize(tool: ToolEntry) -> BaseTool:
@@ -104,26 +190,40 @@ def wrap_tool(
     async def guarded_run_async(
         *, args: dict[str, Any], tool_context: ToolContext
     ) -> Any:
-        # Engagement read per call (hot-reload-safe). Gate the reach key only when
-        # the policy declares *tool* reach — matching OpenAI, so a handoff-only
-        # policy leaves as-tools name-gated on both adapters rather than diverging.
-        if reach_target is not None and enforcer.policy.declares_tool_reach():
-            policy_key: str | None = agent_target_key("tool", reach_target)
-            policy_args: dict[str, Any] | None = {
+        call_args = args or {}
+        # Engagement read per call (hot-reload-safe). The skill name arrives in the
+        # call's args, so unlike the reach target it cannot be resolved at wrap time.
+        skill = (
+            _skill_decision(base, call_args)
+            if enforcer.policy.declares_skills()
+            else None
+        )
+        policy_key: str | None
+        policy_args: dict[str, Any] | None
+        render_policy_error: RenderError | None
+        if skill is not None:
+            policy_key, policy_args = skill
+            render_policy_error = _render_skill_error(policy_args["skill"])
+        # Gate the reach key only when the policy declares *tool* reach — matching
+        # OpenAI, so a handoff-only policy leaves as-tools name-gated on both
+        # adapters rather than diverging.
+        elif reach_target is not None and enforcer.policy.declares_tool_reach():
+            policy_key = agent_target_key("tool", reach_target)
+            policy_args = {
                 "agent": enforcer.agent_name,
                 "target": reach_target,
                 "via": "tool",
             }
             # Reach wording on the policy denial only; a guard Halt still renders
             # through _render_error (see run_guarded_async).
-            render_policy_error: RenderError | None = _render_reach_error(reach_target)
+            render_policy_error = _render_reach_error(reach_target)
         else:
             policy_key = None
             policy_args = None
             render_policy_error = None
         return await run_guarded_async(
             name,
-            args or {},
+            call_args,
             enforcer=enforcer,
             pipeline=pipeline,
             approval_handler=approval_handler,
