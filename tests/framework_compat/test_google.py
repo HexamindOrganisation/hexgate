@@ -14,9 +14,12 @@ from __future__ import annotations
 
 import inspect
 import os
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as installed_dist_version
 from typing import TYPE_CHECKING
 
 import pytest
+from packaging.version import Version
 
 from tests.framework_compat import _probe
 from tests.framework_compat._probe import ALLOWED_TOOL, DENIED_TOOL, DENY_MARKER
@@ -130,6 +133,9 @@ async def test_e2e_allow_executes(probe_context):
 # reaches into internals that carry no stability promise. These names are the
 # ones that work depends on; each assertion below says what it guards.
 
+ADK_DIST = "google-adk"
+SKILLS_FLOOR = Version("1.25.0")
+
 PROBE_SKILL_NAME = "surface-probe"
 PROBE_SKILL_DESCRIPTION = "In-memory skill used to probe the ADK skills surface."
 PROBE_SKILL_INSTRUCTIONS = "No-op probe instructions."
@@ -157,6 +163,30 @@ DELEGATED_TOOLSET_METHODS = ("get_auth_config", "close")
 FRONTMATTER_FIELDS = ("name", "description", "allowed_tools", "metadata")
 SKILL_FIELDS = ("frontmatter", "instructions", "resources")
 RESOURCE_ENUMERATORS = ("list_references", "list_assets", "list_scripts")
+
+
+def _adk_below_skills_floor() -> bool:
+    """True when the installed ADK predates ``SkillToolset``.
+
+    Gated on the version rather than on ``importorskip`` deliberately. Above the
+    floor the skills modules *must* import, and an ImportError there is precisely
+    the drift this probe exists to catch — an ``@experimental`` feature graduating
+    to stable is a plausible way for those module paths to move. An
+    ``importorskip`` would turn that into a skip, rendering ``–`` in the matrix's
+    T3 column: the same glyph as the legitimate pre-floor skip, under a Status
+    that stays OK because T3 never reaches ``classify``. The probe would go quiet
+    exactly when it should fire, and nothing else would notice — ``_skill_objects``
+    in ``hexgate/manifest/google.py`` reads ``_skills`` through
+    ``getattr(..., None)`` and degrades to "no skills in the manifest" rather than
+    raising, so a renamed attribute silently empties every manifest.
+
+    A missing distribution skips: ``test_contract`` already fails loudly on that,
+    and a second confusing error adds nothing.
+    """
+    try:
+        return Version(installed_dist_version(ADK_DIST)) < SKILLS_FLOOR
+    except PackageNotFoundError:
+        return True
 
 
 def _arm_experimental_warning() -> None:
@@ -220,6 +250,10 @@ async def _uncached_get_tools_calls(base_toolset_cls: type) -> int:
     return calls
 
 
+@pytest.mark.skipif(
+    _adk_below_skills_floor(),
+    reason=f"SkillToolset exists from {ADK_DIST} {SKILLS_FLOOR}",
+)
 async def test_skills_surface():
     """Tier 3 — the ADK skills surfaces the skills work depends on still exist.
 
@@ -227,13 +261,11 @@ async def test_skills_surface():
     and churn there must not classify the whole ADK cell UNUSABLE while the
     wrap/deny seam Tier 0 and Tier 1 cover is perfectly fine.
 
-    Skipped below google-adk 1.25.0, where ``SkillToolset`` does not exist.
+    Skipped below google-adk 1.25.0, where ``SkillToolset`` does not exist. Above
+    it the imports below are unguarded on purpose: see ``_adk_below_skills_floor``.
     A failure here means an ADK release moved something, not that hexgate is
     wrong: each assertion names the hexgate code it guards.
     """
-    pytest.importorskip("google.adk.skills")
-    skill_toolset = pytest.importorskip("google.adk.tools.skill_toolset")
-
     from google.adk.skills import (
         Frontmatter,
         Resources,
@@ -241,6 +273,7 @@ async def test_skills_surface():
         list_skills_in_dir,
         load_skill_from_dir,
     )
+    from google.adk.tools import skill_toolset
     from google.adk.tools.base_tool import BaseTool
     from google.adk.tools.base_toolset import BaseToolset
 
