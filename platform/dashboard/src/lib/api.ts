@@ -178,6 +178,31 @@ export interface ToolDefinition {
   input_schema: InputSchema;
 }
 
+/** L3 contents of a skill, by name. */
+export interface SkillResources {
+  references: string[];
+  assets: string[];
+  scripts: string[];
+}
+
+/**
+ * One skill on a registered manifest, mirroring SkillDefinition in
+ * platform/api/schemas.py.
+ *
+ * ``resources`` is null when the agent's framework does not enumerate them
+ * (deepagents discovers frontmatter only) — distinct from an object with empty
+ * arrays, which means it does enumerate and the skill ships none.
+ */
+export interface SkillDefinition {
+  name: string;
+  description: string;
+  source: string | null;
+  resources: SkillResources | null;
+  allowed_tools: string[];
+  additional_tools: string[];
+  content_hash: string | null;
+}
+
 /**
  * Registered manifest body, mirroring AgentManifest in platform/api/schemas.py.
  */
@@ -188,6 +213,8 @@ export interface AgentManifest {
   model: string | null;
   system_prompt: string | null;
   tools: ToolDefinition[];
+  /** Null for frameworks with no skill concept, and for pre-skills manifests. */
+  skills: SkillDefinition[] | null;
 }
 
 /**
