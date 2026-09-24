@@ -615,7 +615,7 @@ class AgentClassification(SQLModel, table=True):
 
 
 # -------------------------------------------------------------------------
-# AI Act evidence report (Specs/ai_act_evidence_report.md). One row per
+# AI Act evidence report (https://app.notion.com/p/3e2fb45dbae281f794fefa40ff4a1a8d). One row per
 # generated document, project-scoped and purely additive — create_all picks it
 # up with no migration.
 # ---------------------------------------------------------------------------

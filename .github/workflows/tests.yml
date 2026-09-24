@@ -121,6 +121,19 @@ jobs:
           sudo mv opa /usr/local/bin/opa
           opa version
 
+      # WeasyPrint renders the AI Act evidence report through Pango, and the
+      # two font families report.css names are what the pages are laid out in.
+      # Without the native stack the suite fails at import; without the fonts
+      # it lays out different pages from the ones the image produces. Same set
+      # as platform/api/Dockerfile.
+      - name: Install WeasyPrint system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libpango-1.0-0 libpangoft2-1.0-0 libharfbuzz0b \
+            libharfbuzz-subset0 libfribidi0 \
+            fonts-liberation2 fonts-dejavu-core
+
       - name: Sync platform-api deps
         run: cd platform/api && uv sync --group dev
 
