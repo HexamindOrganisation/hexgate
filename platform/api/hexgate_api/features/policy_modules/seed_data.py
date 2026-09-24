@@ -1,0 +1,115 @@
+"""First-boot seed for the compose policy showcase.
+
+Writes the demo's `policy.yaml` + capability files into the default project's
+`policy_file` store, so the dashboard's **Policies** editor opens on a real
+multi-module compose policy — a front-line ``support_bot`` with role→agent
+admission (who may start it) and tool permissions composed from imported
+capabilities. support_bot has no refund tool: no seat refunds directly, so every
+refund goes through the in-kernel ``billing_bot`` sub-agent via the gated
+``delegate_to_billing`` tool (the user has no direct access to billing_bot). The
+same scenario runs locally in ``deploy/compose_support_demo.py``.
+
+Direct row inserts (not the write-time flip/recompile path), so seeding is a
+pure store fixture — idempotent per ``(project_id, name)``.
+"""
+
+from __future__ import annotations
+
+from sqlmodel import select
+from sqlmodel.ext.asyncio.session import AsyncSession
+
+from hexgate_api.core.ids import new_id
+from hexgate_api.features.policy_modules.service import _content_hash
+from hexgate_api.models import PolicyFile
+
+# The entry file: a closed-world boundary + support_bot, whose roles import the
+# capability files below (organized into caps/base, caps/support, caps/billing).
+# Kept textually in sync with the marimo demo.
+_ENTRY = """\
+boundary:
+  tools:
+    view_orders: { mode: allow }
+    send_email: { mode: allow }
+    escalate: { mode: allow }
+    refund_order: { mode: allow, constraint: "args.amount <= 1000" }  # global org cap — declared, but granted to NO support_bot seat: refunds happen only inside billing_bot
+    delegate_to_billing: { mode: allow }   # ceiling; a capability grant activates it
+    mcp-demo-compute_tip: { mode: allow }     # safe MCP tool
+    mcp-demo-send_invoice: { mode: allow }    # ceiling; billing grants w/ approval
+    mcp-demo-read_secret: { mode: deny }      # dangerous MCP tool — always denied
+  admission: { mode: allow }    # ingress ceiling: a seat may be admitted to start a bot
+agents:
+  support_bot:
+    roles:
+      # The default seat browses read-only data but may NOT start the bot (no ingress).
+      default: { import: [ caps/base/read_only.yaml ] }
+      # The support seat starts the front-line bot and delegates refunds to
+      # billing_bot (support_bot has no refund_order tool — nobody refunds direct).
+      support:
+        import:
+          [ caps/base/read_only.yaml, caps/base/ingress.yaml,
+            caps/support/desk.yaml, caps/support/delegate.yaml ]
+      # The billing seat additionally may queue invoices (approval); it still
+      # refunds only by delegating — billing_bot caps its delegation higher.
+      billing:
+        import:
+          [ caps/base/read_only.yaml, caps/base/ingress.yaml,
+            caps/support/desk.yaml, caps/billing/invoicing.yaml,
+            caps/support/delegate.yaml ]
+"""
+
+# Leaf capability files (grant-only), imported by the roles above.
+_CAPS = {
+    "caps/base/read_only.yaml": (
+        "tools:\n  view_orders: { mode: allow }\n"
+        "mcp:\n  mcp-demo-compute_tip: { mode: allow }\n"
+    ),
+    # The ingress grant: a role that imports this may be admitted to START the
+    # agent it's imported into (lowers to the agent.run key the runtime gates).
+    "caps/base/ingress.yaml": ("admission:\n  mode: allow\n"),
+    "caps/support/desk.yaml": (
+        "tools:\n"
+        "  send_email: { mode: allow }\n"
+        "  escalate: { mode: approval_required }\n"
+    ),
+    # The delegate-to-billing tool runs the billing_bot sub-agent (a served
+    # sub-agent surfaces delegation as a tool call, so it's gated as one). The
+    # support seat imports this but NOT payments, so delegation is its only path
+    # to a refund.
+    "caps/support/delegate.yaml": ("tools:\n  delegate_to_billing: { mode: allow }\n"),
+    "caps/billing/invoicing.yaml": (
+        "mcp:\n  mcp-demo-send_invoice: { mode: approval_required }\n"
+    ),
+}
+
+SEED_POLICY_FILES: dict[str, str] = {"policy.yaml": _ENTRY, **_CAPS}
+
+
+async def ensure_seeded_compose_policy(session: AsyncSession, project_id: str) -> None:
+    """Idempotently seed the demo compose policy files for ``project_id``.
+
+    Only inserts a file that isn't already present, so re-seeding an existing DB
+    (or one an operator has since edited) never clobbers their content.
+    """
+    existing = set(
+        (
+            await session.exec(
+                select(PolicyFile.name).where(PolicyFile.project_id == project_id)
+            )
+        ).all()
+    )
+    added = False
+    for name, content in SEED_POLICY_FILES.items():
+        if name in existing:
+            continue
+        session.add(
+            PolicyFile(
+                id=new_id(PolicyFile),
+                project_id=project_id,
+                name=name,
+                content=content,
+                content_hash=_content_hash(content),
+            )
+        )
+        added = True
+    if added:
+        await session.commit()
