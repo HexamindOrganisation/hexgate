@@ -1,6 +1,6 @@
 ---
 name: pr-review
-description: Auto-review someone else's hexgate pull request in one invocation — fan out independent review agents, fact-check every finding in fresh context, then post the survivors as one PR comment once the human approves. Use when asked to "review PR 231", "auto-review this PR", or to run the review pass before approving someone's change.
+description: Auto-review someone else's hexgate pull request in one invocation — run the tuned finder without posting, re-verify only the uncertain findings in fresh context, then post the survivors as one PR comment once the human approves. Use when asked to "review PR 231", "auto-review this PR", or to run the review pass before approving someone's change.
 ---
 
 # Auto-review a hexgate pull request
@@ -13,21 +13,14 @@ Usage: `/pr-review <pr-number> [post-threshold]` — `post-threshold` defaults t
 
 ## Why the phases are separate
 
-A single review pass has a high false-positive rate, and findings posted on a
-colleague's PR cost reviewer credibility when they turn out to be wrong. The
-verify phase exists to spend cheap tokens buying back that credibility.
+A review pass has a high false-positive rate, and findings posted on a colleague's
+PR cost reviewer credibility when they turn out to be wrong. Verification exists
+to spend cheap tokens buying that credibility back.
 
-The rule that makes verification work: **the verifier must never see the
-reasoning that produced the finding.** A verifier that reads the finder's
-argument anchors on it and defends the claim. A verifier that sees only the claim
-and the code has to re-derive it, and drops the ones that do not survive. Every
-verification agent therefore starts in fresh context and receives only the diff,
-the claim, and the file and line — never the finder's transcript or rationale.
-
-Do **not** implement phase 1 by invoking `code-review:code-review`. That command
-owns its own pipeline: it filters findings below 80 and posts to the PR itself.
-Both fight this skill — the 50–80 band never reaches the human gate, and the
-comment goes up before anyone approves it. Own the review prompt here instead.
+The rule that makes verification work: **the verifier must never see the reasoning
+that produced the finding.** A verifier that reads the finder's argument anchors on
+it and defends the claim. One that sees only the claim and the code has to
+re-derive it, and drops what does not survive.
 
 ## Phase 0 — eligibility and context
 
@@ -39,39 +32,58 @@ Otherwise gather, with `gh` (never web fetch):
     gh pr view <n> --json title,body,author,state,isDraft,headRefOid,files
     gh pr diff <n>
 
-Capture `headRefOid` — the full SHA is required for permalinks in phase 3.
+Capture `headRefOid` — the full SHA is required for permalinks in phase 3. Keep
+the diff: phase 1's finder fetches its own, but phase 2's verifiers are handed
+theirs by this session.
 
-Collect the paths of the root `CLAUDE.md` and any `CLAUDE.md` in directories the
-PR touches. Review against those, not against `CLAUDE.local.md`: local files hold
-the reviewer's personal preferences, which are not binding on someone else's PR.
+Review against the root `CLAUDE.md` and any `CLAUDE.md` in directories the PR
+touches, never against `CLAUDE.local.md`: local files hold the reviewer's personal
+preferences, which are not binding on someone else's PR.
 
 ## Phase 1 — find
 
-Launch these agents **in a single message** so they run concurrently. Each gets
-the diff and the CLAUDE.md paths, works independently, and does not see the
-others' output.
+Do not hand-roll the finder. Invoke the built-in review skill, at high effort,
+targeting the PR number, and **without `--comment`**:
 
-1. **CLAUDE.md adherence** — only rules the relevant CLAUDE.md states explicitly.
-   Quote the rule text for each finding.
-2. **Bug scan** — read the diff alone, no wider context. Large bugs only.
-3. **History** — `git log` and `git blame` on the modified regions. Flag changes
-   that reintroduce a reverted fix or contradict why the code got that shape.
-4. **Prior review comments** — comments on earlier PRs touching these files, where
-   the same guidance applies again.
-5. **In-code guidance** — comments and docstrings in the modified files that the
-   change now contradicts.
-6. **Hexgate surfaces** — the change's blast radius across the monorepo: SDK
-   versus `platform/api` versus `platform/collector` versus `dashboard`, ClickHouse
-   or Postgres migrations that are not idempotent, and `HEXGATE_`-prefixed env or
-   policy-bundle behaviour.
+    code-review, args: "high <pr-number>"
 
-Each agent returns JSON only:
+It already fans out over the diff, applies a tuned false-positive rubric, and runs
+its own verification pass, returning each finding with a CONFIRMED or PLAUSIBLE
+verdict. Reproducing that by hand yields a weaker prompt.
 
-    {"findings": [{"file": "...", "line": 0, "claim": "one sentence",
-                   "evidence": "what in the code shows it",
-                   "dimension": "bug", "score": 0}]}
+Omitting `--comment` is what keeps the human gate intact: the skill reports its
+findings and posts nothing. Never pass `--comment` here — phase 3 posts, and only
+after the user approves.
 
-Score 0–100 on confidence that the finding is real, using this rubric verbatim:
+Do **not** substitute `code-review:code-review`. That command's own steps discard
+every finding scored below 80 and then comment on the PR itself. Both defeat this
+skill: the 50–79 band never reaches the user, and the comment goes up before
+anyone has seen it. Its filter and its self-posting are instructions inside its
+prompt, so telling it to report-only is a request the model may not honour — and a
+stray `gh pr comment` on a colleague's PR cannot be taken back.
+
+Carry each finding forward with its file, line, one-sentence claim, and verdict.
+
+## Phase 2 — verify the uncertain band
+
+The finder has already verified its own output, so re-checking everything buys
+little. Spend the verification pass where it changes a decision.
+
+- **CONFIRMED** findings pass through with a score of 80.
+- **PLAUSIBLE** findings go to a verifier — one agent per finding, all launched in
+  a single message so they run concurrently.
+
+Each verifier starts fresh and receives exactly: the PR diff, the file and line,
+and the one-sentence claim. It must not receive the finder's reasoning, evidence,
+or any other finding.
+
+Each returns:
+
+    {"adjusted_score": 0, "verdict": "CONFIRMED|PLAUSIBLE|REJECTED",
+     "why": "one sentence naming what in the code decided it",
+     "fix": "concrete suggested fix, or null"}
+
+Score 0–100 on confidence the finding is real, using this rubric verbatim:
 
 - **0** — false positive under light scrutiny, or a pre-existing issue.
 - **25** — might be real, could not verify. Stylistic points not stated in CLAUDE.md land here.
@@ -79,40 +91,15 @@ Score 0–100 on confidence that the finding is real, using this rubric verbatim
 - **75** — verified, very likely hit in practice, and the PR's approach is insufficient. Or stated directly in CLAUDE.md.
 - **100** — confirmed, with evidence, and frequent in practice.
 
-Not findings, in this phase or the next:
-
-- Pre-existing issues, and real issues on lines the PR did not modify
-- Anything a linter, typechecker, compiler, or CI run would catch
-- Nitpicks a senior engineer would not raise
-- Missing tests, docs, or general security posture, unless CLAUDE.md requires it
-- Issues explicitly silenced in the code
-- Behaviour changes that are plainly intentional parts of the change
-
-Merge the returned findings, collapsing duplicates across dimensions — keep the
-highest score and note every dimension that raised it. Discard below 50.
-
-## Phase 2 — verify
-
-For every surviving finding, launch **one agent per finding, all in a single
-message**. Each starts fresh and receives exactly: the PR diff, the file and line,
-and the one-sentence claim. It must not receive the finder's evidence string,
-dimension, original score, or any other finding.
-
-Each verifier reads the actual code and returns:
-
-    {"adjusted_score": 0, "verdict": "CONFIRMED|PLAUSIBLE|REJECTED",
-     "why": "one sentence naming what in the code decided it",
-     "fix": "concrete suggested fix, or null"}
-
-Same rubric. `REJECTED` forces a score below 50 regardless. A verifier that cannot
-locate the code the claim refers to returns `REJECTED`.
+`REJECTED` forces a score below 50 regardless. A verifier that cannot locate the
+code the claim refers to returns `REJECTED`.
 
 ## Phase 3 — report, gate, post
 
-Report every verified finding to the user as a table — file and line, original
-score, adjusted score, verdict, one-line claim — including the ones that fell
-below the threshold, marked as dropped and with the drop reason. The score
-movement is the signal that the verify pass is working.
+Report every finding to the user as a table — file and line, verdict from phase 1,
+adjusted score, one-line claim — including the ones that fell below the threshold,
+marked as dropped with the drop reason. The score movement between phases is the
+signal that verification is earning its keep.
 
 **Then stop and wait.** The user approves, edits, or discards findings. Do not
 post, and do not approve or request changes on the PR, without an explicit
