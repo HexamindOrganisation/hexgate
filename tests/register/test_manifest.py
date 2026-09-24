@@ -1,3 +1,4 @@
+import hashlib
 import json
 import logging
 
@@ -20,6 +21,7 @@ from hexgate.manifest.models import (
 from hexgate.manifest.native import create_hexgate_manifest
 from hexgate.manifest.openai import create_openai_manifest
 from hexgate.manifest.pydantic_ai import create_pydantic_ai_manifest
+from tests.adapters.google.conftest import _FakeToolset
 
 
 def test_agent_manifest_schema():
@@ -713,3 +715,395 @@ def test_create_manifest_populates_subagents_openai_handoff():
     agent = Agent(name="parent", handoffs=[Agent(name="billing_bot")])
     manifest = create_manifest(agent)
     assert manifest.subagents == [SubagentRef(name="billing_bot", via="handoff")]
+
+
+def _fake_skill(
+    name="refunder",
+    *,
+    description="Issue refunds",
+    instructions="Do the refund.",
+    allowed_tools=None,
+    metadata=None,
+    references=None,
+    assets=None,
+    scripts=None,
+):
+    """An ADK Skill's shape, hand-rolled so the mapping tests run on every
+    supported ADK — google.adk.skills only exists from 1.25.0."""
+
+    class _Resources:
+        def __init__(self):
+            self.references = references or []
+            self.assets = assets or []
+            self.scripts = scripts or []
+
+        def list_references(self):
+            return list(self.references)
+
+        def list_assets(self):
+            return list(self.assets)
+
+        def list_scripts(self):
+            return list(self.scripts)
+
+    class _Frontmatter:
+        def __init__(self):
+            self.name = name
+            self.description = description
+            self.allowed_tools = allowed_tools
+            self.metadata = metadata if metadata is not None else {}
+
+    class _Skill:
+        def __init__(self):
+            self.frontmatter = _Frontmatter()
+            self.instructions = instructions
+            self.resources = _Resources()
+            self.name = name
+            self.description = description
+
+    return _Skill()
+
+
+def _google_skills_toolset(tools, skills, *, provided=None, prefix=None):
+    """A toolset carrying ADK's private skill attributes.
+
+    Structural, like the adapter's own read: SkillToolset holds its skills in
+    ``_skills`` and its activation-time tools in ``_provided_tools_by_name``.
+    """
+    toolset = _FakeToolset(tools, tool_name_prefix=prefix)
+    toolset._skills = (
+        {skill.name: skill for skill in skills} if isinstance(skills, list) else skills
+    )
+    toolset._provided_tools_by_name = {tool.name: tool for tool in provided or []}
+    return toolset
+
+
+def _activated_skill_context(skill_name, agent_name="test_agent"):
+    """A context in which ``skill_name`` is already activated, so a real
+    SkillToolset resolves its additional tools from state."""
+
+    class _Context:
+        invocation_id = "inv-1"
+
+        def __init__(self):
+            self.agent_name = agent_name
+            self.state = {f"_adk_activated_skill_{agent_name}": [skill_name]}
+
+    return _Context()
+
+
+def _write_skill_dir(base):
+    """A real on-disk skill library ADK's loader accepts."""
+    skill_dir = base / "skills" / "refunder"
+    (skill_dir / "references").mkdir(parents=True)
+    (skill_dir / "assets").mkdir()
+    (skill_dir / "scripts").mkdir()
+    (skill_dir / "SKILL.md").write_text(
+        "---\n"
+        "name: refunder\n"
+        "description: Issue refunds to customers\n"
+        "allowed-tools: refund lookup\n"
+        "metadata:\n"
+        "  adk_additional_tools:\n"
+        "    - refund\n"
+        "---\n"
+        "Refund the order, then confirm.\n",
+        encoding="utf-8",
+    )
+    (skill_dir / "references" / "guide.md").write_text("Guide", encoding="utf-8")
+    (skill_dir / "assets" / "template.txt").write_text("Template", encoding="utf-8")
+    (skill_dir / "scripts" / "run.sh").write_text("echo hi", encoding="utf-8")
+    return skill_dir
+
+
+class TestGoogleSkillDiscovery:
+    """ADK skills reaching ``AgentManifest.skills``.
+
+    Mostly hand-rolled fakes, which run on every supported ADK; one case builds
+    a genuine ``SkillToolset`` so the structural ``_skills`` read is exercised
+    against the real object where it exists.
+    """
+
+    @staticmethod
+    def _manifest(toolset, *extra_tools):
+        return create_google_manifest(_google_agent([*extra_tools, toolset]))
+
+    def test_google_manifest_records_skills(self):
+        toolset = _google_skills_toolset(
+            [_google_function_tool("load_skill")], [_fake_skill()]
+        )
+
+        [skill] = self._manifest(toolset).skills
+
+        assert skill.name == "refunder"
+        assert skill.description == "Issue refunds"
+        assert skill.content_hash == hashlib.sha256(b"Do the refund.").hexdigest()
+
+    def test_google_manifest_enumerates_skill_resources(self):
+        toolset = _google_skills_toolset(
+            [],
+            [
+                _fake_skill(
+                    references=["guide.md"],
+                    assets=["template.txt"],
+                    scripts=["run.sh"],
+                )
+            ],
+        )
+
+        [skill] = self._manifest(toolset).skills
+
+        assert skill.resources.references == ["guide.md"]
+        assert skill.resources.assets == ["template.txt"]
+        assert skill.resources.scripts == ["run.sh"]
+
+    def test_google_manifest_resources_is_never_none_for_adk(self):
+        """ADK enumerates L3, so None here would mean "does not enumerate" — a lie."""
+        toolset = _google_skills_toolset([], [_fake_skill()])
+
+        [skill] = self._manifest(toolset).skills
+
+        assert skill.resources == SkillResources()
+
+    def test_allowed_tools_is_split_on_whitespace(self):
+        """'allowed-tools' is a space-delimited string, not a list."""
+        toolset = _google_skills_toolset(
+            [], [_fake_skill(allowed_tools="refund  lookup")]
+        )
+
+        [skill] = self._manifest(toolset).skills
+
+        assert skill.allowed_tools == ["refund", "lookup"]
+
+    def test_allowed_tools_absent_yields_empty_list(self):
+        toolset = _google_skills_toolset([], [_fake_skill(allowed_tools=None)])
+
+        [skill] = self._manifest(toolset).skills
+
+        assert skill.allowed_tools == []
+
+    def test_additional_tools_recorded_from_metadata(self):
+        toolset = _google_skills_toolset(
+            [], [_fake_skill(metadata={"adk_additional_tools": ["refund"]})]
+        )
+
+        [skill] = self._manifest(toolset).skills
+
+        assert skill.additional_tools == ["refund"]
+
+    def test_additional_tools_appear_in_the_tool_list(self):
+        """The under-reporting this guards: a tool resolved from session state
+        becomes callable once the skill activates, so the manifest — and the
+        policy generated from it — must carry it."""
+        toolset = _google_skills_toolset(
+            [_google_function_tool("load_skill")],
+            [_fake_skill(metadata={"adk_additional_tools": ["refund"]})],
+            provided=[_google_function_tool("refund")],
+        )
+
+        manifest = self._manifest(toolset)
+
+        assert [t.name for t in manifest.tools] == ["load_skill", "refund"]
+
+    def test_additional_tools_are_not_duplicated(self):
+        """A tool the agent already carries directly is not recorded twice."""
+        toolset = _google_skills_toolset(
+            [_google_function_tool("load_skill")],
+            [_fake_skill(metadata={"adk_additional_tools": ["refund"]})],
+            provided=[_google_function_tool("refund")],
+        )
+
+        manifest = self._manifest(toolset, _google_function_tool("refund"))
+
+        assert [t.name for t in manifest.tools] == ["refund", "load_skill"]
+
+    def test_unresolvable_additional_tool_is_skipped(self):
+        """ADK resolves an unmatched name to nothing at runtime, so neither
+        raise nor invent a phantom entry."""
+        toolset = _google_skills_toolset(
+            [_google_function_tool("load_skill")],
+            [_fake_skill(metadata={"adk_additional_tools": ["ghost"]})],
+        )
+
+        manifest = self._manifest(toolset)
+
+        assert [t.name for t in manifest.tools] == ["load_skill"]
+        assert manifest.skills[0].additional_tools == ["ghost"]
+
+    def test_agent_without_skills_leaves_skills_none(self):
+        """None, not [] — an empty list would serialize and change the
+        content_hash of every ADK manifest already registered."""
+        manifest = create_google_manifest(
+            _google_agent([_google_function_tool("search")])
+        )
+
+        assert manifest.skills is None
+
+    def test_toolset_without_skills_attr_degrades(self):
+        """A plain toolset expands its tools and contributes no skills."""
+        manifest = self._manifest(_google_toolset([_google_function_tool("search")]))
+
+        assert [t.name for t in manifest.tools] == ["search"]
+        assert manifest.skills is None
+
+    def test_skills_attr_of_wrong_type_degrades(self):
+        toolset = _google_skills_toolset([_google_function_tool("search")], "nonsense")
+
+        manifest = self._manifest(toolset)
+
+        assert [t.name for t in manifest.tools] == ["search"]
+        assert manifest.skills is None
+
+    def test_real_skill_toolset_is_discovered(self, tmp_path):
+        """The structural ``_skills`` read, against the genuine object."""
+        pytest.importorskip("google.adk.tools.skill_toolset")
+        from google.adk.skills import load_skill_from_dir
+        from google.adk.tools.skill_toolset import SkillToolset
+
+        def refund(order_id: str) -> str:
+            """Refund an order."""
+            return order_id
+
+        toolset = SkillToolset(
+            [load_skill_from_dir(_write_skill_dir(tmp_path))],
+            additional_tools=[refund],
+        )
+
+        manifest = self._manifest(toolset)
+
+        [skill] = manifest.skills
+        assert skill.name == "refunder"
+        assert skill.description == "Issue refunds to customers"
+        assert skill.allowed_tools == ["refund", "lookup"]
+        assert skill.additional_tools == ["refund"]
+        assert skill.resources.references == ["guide.md"]
+        assert skill.resources.assets == ["template.txt"]
+        assert skill.resources.scripts == ["run.sh"]
+        assert skill.source is None
+        assert "refund" in {t.name for t in manifest.tools}
+
+    def test_manifest_hash_inputs_are_stable_across_runs(self):
+        """Guards the sorted iteration: an unordered tool list would churn the
+        content_hash and mint a redundant AgentVersion on every register."""
+
+        def build():
+            toolset = _google_skills_toolset(
+                [_google_function_tool("load_skill")],
+                [
+                    _fake_skill(
+                        metadata={
+                            "adk_additional_tools": ["refund", "lookup", "annotate"]
+                        }
+                    )
+                ],
+                provided=[
+                    _google_function_tool("refund"),
+                    _google_function_tool("lookup"),
+                    _google_function_tool("annotate"),
+                ],
+            )
+            return self._manifest(toolset)
+
+        assert build().model_dump() == build().model_dump()
+        assert [t.name for t in build().tools] == [
+            "load_skill",
+            "annotate",
+            "lookup",
+            "refund",
+        ]
+
+    def test_skill_resources_are_sorted(self):
+        """ADK enumerates L3 with an unsorted rglob, so the order is whatever
+        the filesystem returns. Unsorted, it reaches content_hash — the same
+        skill re-registered from another machine would mint a fresh
+        AgentVersion — and above the cap it decides which names survive
+        truncation, so the manifest would misreport what the skill ships."""
+        toolset = _google_skills_toolset(
+            [],
+            [
+                _fake_skill(
+                    references=["zeta.md", "alpha.md", "mid.md"],
+                    assets=["b.txt", "a.txt"],
+                    scripts=["run.sh", "build.sh"],
+                )
+            ],
+        )
+
+        [skill] = self._manifest(toolset).skills
+
+        assert skill.resources.references == ["alpha.md", "mid.md", "zeta.md"]
+        assert skill.resources.assets == ["a.txt", "b.txt"]
+        assert skill.resources.scripts == ["build.sh", "run.sh"]
+
+    def test_additional_tools_are_recorded_under_the_toolset_prefix(self):
+        """get_tools_with_prefix is @final and rewrites every name it returns,
+        and additional tools come back through get_tools — so the model calls
+        'ops_refund'. Recording the bare name would leave a manifest entry no
+        runtime tool answers to, and the generated policy would deny the
+        prefixed name the gate actually sees."""
+        toolset = _google_skills_toolset(
+            [_google_function_tool("load_skill")],
+            [_fake_skill(metadata={"adk_additional_tools": ["refund"]})],
+            provided=[_google_function_tool("refund")],
+            prefix="ops",
+        )
+
+        manifest = self._manifest(toolset)
+
+        assert [t.name for t in manifest.tools] == ["ops_load_skill", "ops_refund"]
+
+    def test_additional_tools_keep_the_declared_name_on_the_skill(self):
+        """The prefix belongs to how the toolset is mounted, not to the skill:
+        ADK matches adk_additional_tools against the unprefixed name."""
+        toolset = _google_skills_toolset(
+            [],
+            [_fake_skill(metadata={"adk_additional_tools": ["refund"]})],
+            provided=[_google_function_tool("refund")],
+            prefix="ops",
+        )
+
+        [skill] = self._manifest(toolset).skills
+
+        assert skill.additional_tools == ["refund"]
+
+    def test_prefixed_additional_tools_are_not_duplicated(self):
+        """De-duplication compares callable names, so a tool the agent already
+        carries under the prefixed name is not recorded twice."""
+        toolset = _google_skills_toolset(
+            [_google_function_tool("load_skill")],
+            [_fake_skill(metadata={"adk_additional_tools": ["refund"]})],
+            provided=[_google_function_tool("refund")],
+            prefix="ops",
+        )
+
+        manifest = self._manifest(toolset, _google_function_tool("ops_refund"))
+
+        assert [t.name for t in manifest.tools] == ["ops_refund", "ops_load_skill"]
+
+    async def test_real_prefixed_toolset_matches_the_runtime_tool_names(self, tmp_path):
+        """The manifest must name exactly what the model can call. Compares the
+        recorded names against a genuine SkillToolset's own output with the
+        skill activated — the one assertion that cannot drift from ADK."""
+        pytest.importorskip("google.adk.tools.skill_toolset")
+        from google.adk.skills import load_skill_from_dir
+        from google.adk.tools.skill_toolset import SkillToolset
+
+        def refund(order_id: str) -> str:
+            """Refund an order."""
+            return order_id
+
+        toolset = SkillToolset(
+            [load_skill_from_dir(_write_skill_dir(tmp_path))],
+            additional_tools=[refund],
+        )
+        # Assigned post-construction: tool_name_prefix is public on BaseToolset
+        # from 1.14, while SkillToolset forwards it only from 2.4.0.
+        toolset.tool_name_prefix = "ops"
+
+        manifest = create_google_manifest(_google_agent([toolset]))
+        runtime = await toolset.get_tools_with_prefix(
+            _activated_skill_context("refunder")
+        )
+
+        assert sorted(t.name for t in manifest.tools) == sorted(t.name for t in runtime)
+        assert "ops_refund" in {t.name for t in manifest.tools}
