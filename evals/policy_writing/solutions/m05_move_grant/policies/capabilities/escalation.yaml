@@ -1,0 +1,3 @@
+# Escalation capability. Grants only.
+tools:
+  escalate: { mode: approval_required }

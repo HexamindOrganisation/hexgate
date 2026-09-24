@@ -1,0 +1,28 @@
+version: 1
+
+roles:
+  read_only:
+    is_mixin: true
+    tools:
+      web_search: { mode: allow }
+      view_orders: { mode: allow }
+
+  default:
+    inherits: [read_only]
+
+  support:
+    inherits: [read_only]
+    tools:
+      send_email:
+        mode: allow
+        constraints:
+          - every(args.to, endswith(., "@acme.com"))
+
+  billing:
+    inherits: [read_only]
+    tools:
+      refund_order:
+        mode: allow
+        constraints:
+          - args.amount <= 500
+          - args.currency in ["USD", "EUR"]

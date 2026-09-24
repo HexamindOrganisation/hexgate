@@ -1,0 +1,211 @@
+# Eval set for AI policy writing. Each case: a starting fixture, a plain-English
+# request, and what the finished policy must do. Any policy that meets the
+# expectations passes; there is no single "correct" YAML.
+#
+# expect keys:
+#   decisions     dry-runs through `hexgate policy test`; expect is allow | deny | approval_required
+#   changed       files that must differ from the fixture
+#   unchanged     files that must be identical to the fixture
+#   mentions_any  the agent's final answer must contain one of these (case-insensitive)
+# Every case also requires the policy to validate (single file) or check (modules).
+
+- id: f01_support_refund_cap
+  fixture: flat
+  request: Let support refund orders, up to 50 USD.
+  expect:
+    unchanged: [TOOLS.md]
+    decisions:
+      - { role: support, tool: refund_order, args: { order_id: o1, amount: 50, currency: USD }, expect: allow }
+      - { role: support, tool: refund_order, args: { order_id: o1, amount: 51, currency: USD }, expect: deny }
+      - { role: support, tool: refund_order, args: { order_id: o1, amount: 50, currency: EUR }, expect: deny }
+      - { role: default, tool: refund_order, args: { order_id: o1, amount: 10, currency: USD }, expect: deny }
+      - { role: billing, tool: refund_order, args: { order_id: o1, amount: 400, currency: EUR }, expect: allow }
+
+- id: f02_billing_gbp_cap
+  fixture: flat
+  request: Billing should also be able to refund in GBP, and billing refunds are now capped at 300.
+  expect:
+    decisions:
+      - { role: billing, tool: refund_order, args: { order_id: o1, amount: 300, currency: GBP }, expect: allow }
+      - { role: billing, tool: refund_order, args: { order_id: o1, amount: 301, currency: USD }, expect: deny }
+      - { role: billing, tool: refund_order, args: { order_id: o1, amount: 100, currency: JPY }, expect: deny }
+      - { role: support, tool: refund_order, args: { order_id: o1, amount: 100, currency: GBP }, expect: deny }
+
+- id: f03_wire_approval
+  fixture: flat
+  request: Billing may send wire transfers, but each one needs a human approval, and never above 10000.
+  expect:
+    decisions:
+      - { role: billing, tool: wire_transfer, args: { amount: 5000, iban: DE89 }, expect: approval_required }
+      - { role: billing, tool: wire_transfer, args: { amount: 10000, iban: DE89 }, expect: approval_required }
+      - { role: billing, tool: wire_transfer, args: { amount: 20000, iban: DE89 }, expect: deny }
+      - { role: support, tool: wire_transfer, args: { amount: 100, iban: DE89 }, expect: deny }
+
+- id: f04_department_attribute
+  fixture: flat
+  request: Refunds are only for callers from the finance department. Keep billing's existing limits.
+  expect:
+    decisions:
+      - { role: billing, tool: refund_order, args: { order_id: o1, amount: 100, currency: USD }, attributes: { department: finance }, expect: allow }
+      - { role: billing, tool: refund_order, args: { order_id: o1, amount: 100, currency: USD }, attributes: { department: support }, expect: deny }
+      - { role: billing, tool: refund_order, args: { order_id: o1, amount: 100, currency: USD }, expect: deny }
+      - { role: billing, tool: refund_order, args: { order_id: o1, amount: 600, currency: USD }, attributes: { department: finance }, expect: deny }
+
+- id: f05_egress_allowlist
+  fixture: flat
+  request: For every role, the agent may only make outbound HTTP calls to api.github.com and to example.com or any of its subdomains, and only over HTTPS.
+  expect:
+    decisions:
+      - { role: default, tool: net.http_request, args: { host: api.github.com, scheme: https, port: 443 }, expect: allow }
+      - { role: support, tool: net.http_request, args: { host: docs.example.com, scheme: https, port: 443 }, expect: allow }
+      - { role: billing, tool: net.http_request, args: { host: example.com, scheme: https, port: 443 }, expect: allow }
+      - { role: support, tool: net.http_request, args: { host: evilexample.com, scheme: https, port: 443 }, expect: deny }
+      - { role: support, tool: net.http_request, args: { host: api.github.com, scheme: http, port: 80 }, expect: deny }
+      - { role: default, tool: net.http_request, args: { host: api.github.com.evil.io, scheme: https, port: 443 }, expect: deny }
+
+- id: f06_run_cap
+  fixture: flat
+  request: Stop any run after 30 tool calls, whatever the tool or role.
+  expect:
+    decisions:
+      - { role: billing, tool: refund_order, args: { order_id: o1, amount: 100, currency: USD }, run_facts: { tool_calls: 29 }, expect: allow }
+      - { role: billing, tool: refund_order, args: { order_id: o1, amount: 100, currency: USD }, run_facts: { tool_calls: 30 }, expect: deny }
+      - { role: support, tool: send_email, args: { to: [a@acme.com], subject: s, body: b }, run_facts: { tool_calls: 30 }, expect: deny }
+      - { role: default, tool: view_orders, args: { customer_id: c1 }, run_facts: { tool_calls: 5 }, expect: allow }
+
+- id: f07_file_paths
+  fixture: flat
+  request: Support can read files, but only under src/ or docs/, and never any .env file.
+  expect:
+    decisions:
+      - { role: support, tool: read_file, args: { file_path: src/app.py }, expect: allow }
+      - { role: support, tool: read_file, args: { file_path: docs/guide.md }, expect: allow }
+      - { role: support, tool: read_file, args: { file_path: src/.env }, expect: deny }
+      - { role: support, tool: read_file, args: { file_path: etc/passwd }, expect: deny }
+      - { role: support, tool: read_file, args: { file_path: srcfoo/app.py }, expect: deny }
+      - { role: default, tool: read_file, args: { file_path: src/app.py }, expect: deny }
+
+- id: f08_every_recipient
+  fixture: flat
+  request: Support can keep sending emails, but every recipient must be an @acme.com address.
+  expect:
+    decisions:
+      - { role: support, tool: send_email, args: { to: [a@acme.com, b@acme.com], subject: s, body: b }, expect: allow }
+      - { role: support, tool: send_email, args: { to: [a@acme.com, x@gmail.com], subject: s, body: b }, expect: deny }
+      - { role: support, tool: send_email, args: { to: [x@evil-acme.com], subject: s, body: b }, expect: deny }
+
+- id: f09_order_id_format
+  fixture: flat
+  request: Billing refunds must reference an order id made of "ord_" followed by digits only.
+  expect:
+    decisions:
+      - { role: billing, tool: refund_order, args: { order_id: ord_123, amount: 100, currency: USD }, expect: allow }
+      - { role: billing, tool: refund_order, args: { order_id: xord_123, amount: 100, currency: USD }, expect: deny }
+      - { role: billing, tool: refund_order, args: { order_id: ord_12a, amount: 100, currency: USD }, expect: deny }
+
+- id: f10_rate_limit_unsupported
+  fixture: flat
+  request: Limit billing to 10 refunds per hour.
+  note: Time-window limits can't be written in the policy language. The agent must say so instead of inventing syntax.
+  expect:
+    mentions_any: ["per hour", "time window", "time-window", "per-hour", "not supported", "cannot", "can't", "guard"]
+    decisions:
+      - { role: billing, tool: refund_order, args: { order_id: o1, amount: 100, currency: USD }, expect: allow }
+
+- id: a01_handoff_approval
+  fixture: agents
+  request: Support may hand the conversation off to billing-bot, but only with a human approval. Support may not call billing-bot as a tool.
+  expect:
+    decisions:
+      - { role: support, tool: "agent.handoff:billing-bot", args: {}, expect: approval_required }
+      - { role: support, tool: "agent.tool:billing-bot", args: {}, expect: deny }
+      - { role: support, tool: send_email, args: { to: [a@acme.com], subject: s, body: b }, expect: allow }
+
+- id: a02_agent_as_tool
+  fixture: agents
+  request: Billing may call refund-bot as a tool, but never hand the conversation off to it. No role may reach admin-bot in any way.
+  expect:
+    decisions:
+      - { role: billing, tool: "agent.tool:refund-bot", args: {}, expect: allow }
+      - { role: billing, tool: "agent.handoff:refund-bot", args: {}, expect: deny }
+      - { role: billing, tool: "agent.tool:admin-bot", args: {}, expect: deny }
+      - { role: support, tool: "agent.handoff:admin-bot", args: {}, expect: deny }
+
+- id: a03_admission
+  fixture: agents
+  request: Only support and billing callers may run this agent at all.
+  expect:
+    decisions:
+      - { role: support, tool: agent.run, args: { agent: front-desk }, expect: allow }
+      - { role: billing, tool: agent.run, args: { agent: front-desk }, expect: allow }
+      - { role: default, tool: agent.run, args: { agent: front-desk }, expect: deny }
+
+- id: a04_admission_with_global_cap
+  fixture: agents
+  request: Only support and billing may run this agent. Also, across every role, no refund may exceed 500.
+  note: A policy-wide "args.amount <= 500" also reaches agent.run, which has no amount, and locks everyone out at admission.
+  expect:
+    decisions:
+      - { role: support, tool: agent.run, args: { agent: front-desk }, expect: allow }
+      - { role: billing, tool: agent.run, args: { agent: front-desk }, expect: allow }
+      - { role: default, tool: agent.run, args: { agent: front-desk }, expect: deny }
+      - { role: billing, tool: refund_order, args: { order_id: o1, amount: 600, currency: USD }, expect: deny }
+      - { role: billing, tool: refund_order, args: { order_id: o1, amount: 400, currency: USD }, expect: allow }
+      - { role: support, tool: send_email, args: { to: [a@acme.com], subject: s, body: b }, expect: allow }
+
+- id: m01_capability_edit
+  fixture: modules
+  request: Give billing the ability to refund in GBP too.
+  expect:
+    changed: [policies/capabilities/payments.yaml]
+    unchanged: [policies/boundaries/org_core.yaml]
+    decisions:
+      - { role: billing, tool: refund_order, args: { order_id: o1, amount: 500, currency: GBP }, expect: allow }
+      - { role: billing, tool: refund_order, args: { order_id: o1, amount: 1500, currency: GBP }, expect: deny }
+      - { role: support, tool: refund_order, args: { order_id: o1, amount: 10, currency: GBP }, expect: deny }
+
+- id: m02_new_capability
+  fixture: modules
+  request: Create a credits capability where issue_credit needs a human approval and is capped at 100, and give it to support and billing.
+  expect:
+    changed: [roles.yaml]
+    unchanged: [policies/boundaries/org_core.yaml]
+    decisions:
+      - { role: support, tool: issue_credit, args: { customer_id: c1, amount: 80 }, expect: approval_required }
+      - { role: billing, tool: issue_credit, args: { customer_id: c1, amount: 100 }, expect: approval_required }
+      - { role: billing, tool: issue_credit, args: { customer_id: c1, amount: 150 }, expect: deny }
+      - { role: default, tool: issue_credit, args: { customer_id: c1, amount: 10 }, expect: deny }
+      - { role: support, tool: send_email, args: { to: [a@acme.com], subject: s, body: b }, expect: allow }
+
+- id: m03_boundary_conflict
+  fixture: modules
+  request: Let billing refund up to 5000.
+  note: The security boundary caps refunds at 1000. A team request must not loosen it, and the agent should say so.
+  expect:
+    unchanged: [policies/boundaries/org_core.yaml]
+    mentions_any: ["boundary", "boundaries", "org_core", "ceiling"]
+    decisions:
+      - { role: billing, tool: refund_order, args: { order_id: o1, amount: 2000, currency: USD }, expect: deny }
+      - { role: billing, tool: refund_order, args: { order_id: o1, amount: 900, currency: USD }, expect: allow }
+
+- id: m04_org_hard_deny
+  fixture: modules
+  request: Security wants delete_customer denied for everyone, in a way that no team capability can ever override.
+  expect:
+    changed: [policies/boundaries/org_core.yaml]
+    decisions:
+      - { role: default, tool: delete_customer, args: { customer_id: c1 }, expect: deny }
+      - { role: support, tool: delete_customer, args: { customer_id: c1 }, expect: deny }
+      - { role: billing, tool: delete_customer, args: { customer_id: c1 }, expect: deny }
+      - { role: billing, tool: refund_order, args: { order_id: o1, amount: 100, currency: USD }, expect: allow }
+
+- id: m05_move_grant
+  fixture: modules
+  request: Move escalate out of support_leaf into its own capability called escalation, still approval-required, and give it to support only.
+  expect:
+    changed: [roles.yaml, policies/capabilities/support_leaf.yaml]
+    unchanged: [policies/boundaries/org_core.yaml]
+    decisions:
+      - { role: support, tool: escalate, args: { reason: r }, expect: approval_required }
+      - { role: billing, tool: escalate, args: { reason: r }, expect: deny }
+      - { role: support, tool: send_email, args: { to: [a@acme.com], subject: s, body: b }, expect: allow }

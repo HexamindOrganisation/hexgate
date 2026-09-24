@@ -1,0 +1,5 @@
+version: 1
+roles:
+  default: [read_only]
+  support: [read_only, support_leaf, escalation]
+  billing: [read_only, payments]

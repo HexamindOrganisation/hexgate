@@ -1,0 +1,6 @@
+# Org boundary (security-owned).
+default_policy: { mode: allow }
+tools:
+  delete_database: { mode: deny }
+  delete_customer: { mode: deny }
+  refund_order: { mode: allow, constraints: ["args.amount <= 1000"] }

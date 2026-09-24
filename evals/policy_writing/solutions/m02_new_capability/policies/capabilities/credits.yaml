@@ -1,0 +1,6 @@
+# Credits capability pack (team-owned). Grants only.
+tools:
+  issue_credit:
+    mode: approval_required
+    constraints:
+      - args.amount <= 100

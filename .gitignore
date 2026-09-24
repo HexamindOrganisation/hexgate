@@ -42,3 +42,6 @@ platform/dashboard/coverage/
 # it was replaced, because each held its own untracked file.
 Specs/
 
+
+# policy-writing eval runs (workspaces, results)
+evals/policy_writing/.runs/

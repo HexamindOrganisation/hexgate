@@ -1,0 +1,32 @@
+version: 1
+
+constraints: []
+
+roles:
+  read_only:
+    is_mixin: true
+    tools:
+      web_search: { mode: allow }
+      view_orders: { mode: allow }
+      net.http_request:
+        mode: allow
+        constraints:
+          - args.host == "api.github.com" or args.host == "example.com" or endswith(args.host, ".example.com")
+          - args.scheme == "https"
+
+  default:
+    inherits: [read_only]
+
+  support:
+    inherits: [read_only]
+    tools:
+      send_email: { mode: allow }
+
+  billing:
+    inherits: [read_only]
+    tools:
+      refund_order:
+        mode: allow
+        constraints:
+          - args.amount <= 500
+          - args.currency in ["USD", "EUR"]
