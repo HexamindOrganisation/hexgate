@@ -111,3 +111,30 @@ def test_authored_skill_key_is_accepted_on_a_resolved_policy() -> None:
 def test_empty_via_is_rejected() -> None:
     with pytest.raises(ValidationError, match="via must list at least one"):
         SkillPolicy(mode="allow", via=[])
+
+
+def test_blank_skill_name_is_rejected() -> None:
+    """A blank name lowers to a key nothing can match — an inert rule where its
+    author wrote a deny. It must not silently borrow the reach path's ``default``."""
+    with pytest.raises(ValidationError, match="must not be blank"):
+        AgentPolicy(skills={"": SkillPolicy(mode="deny")})
+
+
+def test_skill_names_colliding_after_the_trim_are_rejected() -> None:
+    """Two names differing only in padding lower onto one key, so the later one
+    wins on authoring order — erasing a deny or a grant depending which came last."""
+    with pytest.raises(ValidationError, match="normalize"):
+        AgentPolicy(
+            skills={
+                "refunder": SkillPolicy(mode="deny"),
+                "  refunder  ": SkillPolicy(mode="allow"),
+            }
+        )
+
+
+def test_skill_key_does_not_fold_a_blank_name_onto_default() -> None:
+    """The key builder trims without the reach path's blank → ``default`` fallback,
+    so a programmatic blank name cannot collide with a real skill named ``default``."""
+    assert skill_key("instructions", "") == "skill:"
+    assert skill_key("instructions", "   ") == "skill:"
+    assert skill_key("instructions", "default") == "skill:default"

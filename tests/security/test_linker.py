@@ -22,6 +22,7 @@ from hexgate.security import (
     DecisionOutcome,
     LinkError,
     ModuleContent,
+    effective_policy_by_role,
     evaluate_tool_call,
     link,
     link_policy_set,
@@ -630,3 +631,38 @@ def test_modular_module_declaring_skills_is_rejected():
     )
     with pytest.raises(LinkError, match="skills"):
         link([module], [])
+
+
+def test_resolved_policy_dump_shape_is_pinned():
+    """The bundle-hash guard for the resolved path.
+
+    ``effective_policy_by_role`` is what the platform serializes into a modular
+    agent's resolved YAML, and the sha256 of that text is the bundle manifest's
+    ``source_hash``. A key appearing or disappearing here moves every stored
+    project's hash, and the AI Act report then reads the mismatch as "the operator
+    edited the policy" (``MATRIX_SOURCE_DRIFTED``), dropping the authorisation
+    matrix from a compliance document for an edit nobody made.
+
+    ``test_an_empty_policy_level_list_renders_byte_identically`` in
+    ``test_rego_compile.py`` is the analogue on the rego renderer; this is the
+    serializer's. Updating the literal below is allowed — it is a decision, not an
+    accident — but it obliges a forced recompile of modular bundles with the
+    release that carries it."""
+    cap = _mod("c", "capability", {"x": _allow()})
+
+    result = resolve_for_project([], [cap], {"default": ["c"]})
+
+    assert effective_policy_by_role(result) == {
+        "default": {
+            "version": 1,
+            "is_mixin": False,
+            "inherits": [],
+            "default_policy": {"mode": "deny", "constraints": []},
+            "tools": {"x": {"mode": "allow", "constraints": []}},
+            "constraints": [],
+            "consts": {},
+            "admission": None,
+            "agents": {},
+            "skills": {},
+        }
+    }

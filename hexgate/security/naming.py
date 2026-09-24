@@ -31,6 +31,19 @@ def canonical_name(name: str | None) -> str:
     return name.strip() or DEFAULT_AGENT_NAME
 
 
+def canonical_skill_name(name: str) -> str:
+    """Normalize a skill name: trim only, with no blank fallback.
+
+    A skill is not an agent. There is no implicit ``default`` skill for a blank name
+    to collapse onto, so borrowing :func:`canonical_name`'s fallback would make an
+    empty key silently govern a real skill named ``default``. Only the trim is
+    shared, and the trim is the whole reason the two derivations must agree: the
+    adapter builds a skill key from the runtime skill's name and the policy builds
+    one from the authored name, so a padded authored name must reach the same key.
+    """
+    return name.strip()
+
+
 def canonical_agent_name(agent: Any) -> str:
     """The name a framework ``Agent`` object is known by for policy.
 

@@ -8,7 +8,7 @@ from typing import Any, Literal, get_args
 from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator
 
 from hexgate.security.constraints import parse_constraint
-from hexgate.security.naming import canonical_name
+from hexgate.security.naming import canonical_name, canonical_skill_name
 
 PolicyMode = Literal["allow", "deny", "approval_required"]
 
@@ -134,12 +134,14 @@ SKILL_PREFIXES = tuple(_SKILL_PREFIX_BY_VIA.values())
 def skill_key(via: SkillVia, name: str) -> str:
     """Synthetic tool key for reaching one skill at one disclosure level.
 
-    The skill name is canonicalized (:func:`~hexgate.security.naming.canonical_name`)
-    exactly as :meth:`AgentPolicy.lowered_agent_tools` canonicalizes a reach target:
+    The skill name is trimmed (:func:`~hexgate.security.naming.canonical_skill_name`)
+    for the same reason :meth:`AgentPolicy.lowered_agent_tools` trims a reach target:
     the adapter builds this same key from the runtime skill's name, so a padded
     authored name must normalize to the key the seam looks up or the rule is inert.
+    It deliberately does *not* borrow the reach path's blank → ``default`` fallback,
+    which would let ``skills: {"": ...}`` govern a real skill named ``default``.
     """
-    return f"{_SKILL_PREFIX_BY_VIA[via]}{canonical_name(name)}"
+    return f"{_SKILL_PREFIX_BY_VIA[via]}{canonical_skill_name(name)}"
 
 
 def is_skill_key(name: str) -> bool:
@@ -290,6 +292,36 @@ class AgentPolicy(BaseModel):
                     f"tool name {name!r} is reserved for agent-level gating; "
                     "use the 'admission'/'agents'/'skills' blocks instead"
                 )
+        return value
+
+    @field_validator("skills")
+    @classmethod
+    def _reject_blank_or_colliding_skill_names(
+        cls, value: dict[str, SkillPolicy]
+    ) -> dict[str, SkillPolicy]:
+        """One authored skill name per lowered key, and never a blank one.
+
+        :func:`skill_key` trims, so two keys that differ only in padding lower onto
+        one entry and the later one silently wins — erasing a deny or a grant
+        depending on authoring order. A blank name lowers to a key nothing can
+        match, which is an inert rule rather than the deny its author wrote.
+
+        Only reachable through an explicitly quoted key (YAML strips a plain
+        scalar's padding itself, and a bare ``:`` will not parse), so this guards
+        the programmatic route: names arriving from a manifest or the dashboard.
+        The resolved path never sees this — a resolved policy carries its lowered
+        keys in ``tools`` and is built by :meth:`resolved`, which skips validation."""
+        by_key: dict[str, str] = {}
+        for name in value:
+            key = canonical_skill_name(name)
+            if not key:
+                raise ValueError("skill name must not be blank")
+            if key in by_key:
+                raise ValueError(
+                    f"skill names {by_key[key]!r} and {name!r} both normalize to "
+                    f"{key!r}; one rule would silently overwrite the other"
+                )
+            by_key[key] = name
         return value
 
     @classmethod
