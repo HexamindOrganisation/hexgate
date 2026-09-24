@@ -86,9 +86,10 @@ async def _mint() -> str:
     from hexgate_api.seeds.defaults import ensure_default_seed
 
     # Which project the serve token (and so any agent served against it) is
-    # scoped to. Defaults to the classic default project; the compose showcase
-    # demo sets HEXGATE_SERVE_PROJECT to the seeded policy-showcase project so a
-    # served agent is gated by its compose policy.
+    # scoped to. Defaults to the default project — where the support-bot demo seeds
+    # its compose showcase policy (seeds/defaults.py), so a served support_bot is
+    # gated by it without any extra wiring. HEXGATE_SERVE_PROJECT is an optional
+    # override for serving against a different project.
     project_id = os.environ.get("HEXGATE_SERVE_PROJECT", DEFAULT_PROJECT_ID)
 
     await init_db()
