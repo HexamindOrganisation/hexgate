@@ -1,9 +1,15 @@
 ---
 name: run-platform
-description: Spin up a local hexgate platform instance (FastAPI platform-api + React dashboard, optionally the full OTLP pipeline) — check prerequisites first (uv, pnpm, Docker, Go, free ports), start the servers in the background, and hand back the dashboard URL plus the first-boot admin email and password. Use when asked to run, start, spin up, or demo the platform/dashboard locally, or to get a login for a local instance.
+description: Spin up a local hexgate platform instance (FastAPI platform-api + React dashboard, optionally the full OTLP pipeline) — check prerequisites first (uv, pnpm, Docker, Go, free ports), start the servers in the background, and hand back the dashboard URL plus the first-boot admin email and password. Use when asked to run, start, spin up, or demo the platform/dashboard locally, or to get a login for a local instance. Local dev machine only, not staging or prod (those are deploy stacks, see platform/DEPLOY.md).
 ---
 
 # Run the hexgate platform locally
+
+**Scope: your own machine only.** This skill runs dev servers on localhost
+against local SQLite or Docker databases. It does not start, stop, or log into
+staging or prod. Those are deploy stacks (`make platform-up STAGE=staging|prod`,
+see `platform/DEPLOY.md`). If the user asks for staging or prod, point them
+there and don't run anything from this skill against them.
 
 Goal: a running instance the user can log into. End with the URL, email, and
 password, or with exactly what is missing.

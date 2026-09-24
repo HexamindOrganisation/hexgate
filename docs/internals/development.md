@@ -37,7 +37,7 @@ make test-one T=tests/security/test_bundle.py   # single file
 
 ## Run the platform locally
 
-**Shortcut:** in Claude Code, `/run-platform` does all of this. It checks prerequisites and prints what's missing (uv, pnpm, Docker, Go, busy ports). It starts the platform-api and dashboard, and hands back the dashboard URL plus the first-boot admin password. Ask for the full pipeline to get the collector and enricher too. Without Claude, `.claude/skills/run-platform/preflight.sh [--full]` runs the same prerequisite check.
+**Shortcut:** in Claude Code, `/run-platform` does all of this, on your local machine only (for staging or prod, see `platform/DEPLOY.md`). It checks prerequisites and prints what's missing (uv, pnpm, Docker, Go, busy ports). It starts the platform-api and dashboard, and hands back the dashboard URL plus the first-boot admin password. Ask for the full pipeline to get the collector and enricher too. Without Claude, `.claude/skills/run-platform/preflight.sh [--full]` runs the same prerequisite check.
 
 The platform is four processes plus your agent. Two of them — the collector and
 the span-enricher, with the Redpanda buffer their targets start for you — make
