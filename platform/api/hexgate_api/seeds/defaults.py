@@ -145,11 +145,15 @@ async def ensure_default_seed(session: AsyncSession) -> Project | None:
     # pick up the `default` guarantee on any subsequent boot.
     await ensure_seeded_agents(session, project.id)
 
-    # In demo mode only, seed the compose policy showcase (policy.yaml + caps)
-    # into the default project, so the dashboard opens right on it (demo-login
-    # lands here) and a served support_bot is gated by it. Gated on HEXGATE_DEMO
-    # so tests — which don't set it — keep the default project classic.
-    if os.environ.get("HEXGATE_DEMO"):
+    # Seed the compose policy showcase (policy.yaml + caps) into the default project
+    # only for the support-bot demo, so the dashboard opens right on it (demo-login
+    # lands here) and a served support_bot is gated by it. Gated on the *specific*
+    # notebook, not just HEXGATE_DEMO: boot.py sets HEXGATE_DEMO=1 for every demo
+    # (BYOK, gates, …), so a bare HEXGATE_DEMO check would seed the support_bot policy
+    # into those unrelated demos' default project too. Tests don't set either var, so
+    # the default project stays classic for them.
+    notebook = os.environ.get("HEXGATE_NOTEBOOK", "")
+    if os.environ.get("HEXGATE_DEMO") and notebook.endswith("compose_support_demo.py"):
         await ensure_seeded_compose_policy(session, project.id)
     return project
 

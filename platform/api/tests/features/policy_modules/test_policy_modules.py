@@ -1681,29 +1681,46 @@ async def test_seeded_compose_demo_resolves(session_factory) -> None:
         assert mode("billing", "mcp-demo-read_secret") == "deny"
 
 
+def _find_demo_notebook():
+    """Locate deploy/compose_support_demo.py from the test file, or None."""
+    from pathlib import Path
+
+    for parent in Path(__file__).resolve().parents:
+        candidate = parent / "deploy" / "compose_support_demo.py"
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def _notebook_dict(src: str, name: str) -> dict:
+    """Return the literal dict assigned to ``name`` in the notebook source.
+
+    Parses the source with ``ast`` and walks for the assignment, rather than a
+    regex over the text — so a cosmetic reformat (re-indent, a value that happens
+    to contain ``\\n    }``) can't break the notebook↔seed drift guard.
+    """
+    import ast
+
+    tree = ast.parse(src)
+    for node in ast.walk(tree):
+        targets = node.targets if isinstance(node, ast.Assign) else []
+        if any(isinstance(t, ast.Name) and t.id == name for t in targets):
+            return ast.literal_eval(node.value)
+    raise AssertionError(f"could not locate {name} in the demo notebook")
+
+
 def test_notebook_policy_files_match_seed() -> None:
     # The marimo demo (deploy/compose_support_demo.py) inlines the same compose
     # policy the API seeds, kept aligned by hand. Assert the two copies are
     # byte-identical so an edit to one can't silently drift from the other.
-    import ast
-    import re
-    from pathlib import Path
-
     from hexgate_api.features.policy_modules.seed_data import SEED_POLICY_FILES
 
-    notebook = None
-    for parent in Path(__file__).resolve().parents:
-        candidate = parent / "deploy" / "compose_support_demo.py"
-        if candidate.exists():
-            notebook = candidate
-            break
+    notebook = _find_demo_notebook()
     if notebook is None:
         pytest.skip("marimo demo notebook not present in this checkout")
 
     src = notebook.read_text(encoding="utf-8")
-    m = re.search(r"_FILES = (\{.*?\n    \})", src, re.DOTALL)
-    assert m, "could not locate the _FILES dict in the demo notebook"
-    assert ast.literal_eval(m.group(1)) == SEED_POLICY_FILES
+    assert _notebook_dict(src, "_FILES") == SEED_POLICY_FILES
 
 
 def test_notebook_billing_bot_policy_is_role_aware(tmp_path) -> None:
@@ -1712,25 +1729,14 @@ def test_notebook_billing_bot_policy_is_role_aware(tmp_path) -> None:
     # support delegation is capped at $200 and a billing one at the $1000 org
     # ceiling — a delegated refund is neither unbounded nor role-blind. Extract
     # the role policies the notebook enforces and prove the caps per role.
-    import ast
-    import re
-    from pathlib import Path
-
     from hexgate.security.policy_set import load_policy_set
 
-    notebook = None
-    for parent in Path(__file__).resolve().parents:
-        candidate = parent / "deploy" / "compose_support_demo.py"
-        if candidate.exists():
-            notebook = candidate
-            break
+    notebook = _find_demo_notebook()
     if notebook is None:
         pytest.skip("marimo demo notebook not present in this checkout")
 
     src = notebook.read_text(encoding="utf-8")
-    m = re.search(r"_BILLING_POLICIES = (\{.*?\n    \})", src, re.DOTALL)
-    assert m, "could not locate _BILLING_POLICIES in the demo notebook"
-    policies = ast.literal_eval(m.group(1))
+    policies = _notebook_dict(src, "_BILLING_POLICIES")
     # Lay the role files out as a policies/ dir (stem = role name) — exactly
     # how build_billing() loads them.
     pol_dir = tmp_path / "policies"
