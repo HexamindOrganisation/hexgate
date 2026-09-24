@@ -62,11 +62,19 @@ def load_cases() -> list[dict]:
     return cases
 
 
-def results_from_records(records: list[dict], agent: str, stamp: str) -> dict:
-    """results.json rows (or run.Result dicts) → the page's results block."""
+def results_from_records(
+    records: list[dict], agent: str, stamp: str, run_dir: Path | None = None
+) -> dict:
+    """results.json rows (or run.Result dicts) → the page's results block.
+
+    Workspaces are looked up next to results.json when run_dir is given, so a
+    run folder copied from another checkout still shows its files.
+    """
     runs: dict[str, list] = {}
     for r in records:
         ws = REPO / r["workspace"]
+        if run_dir is not None and (run_dir / Path(r["workspace"]).name).is_dir():
+            ws = run_dir / Path(r["workspace"]).name
         runs.setdefault(r["case"], []).append(
             {
                 "attempt": r["attempt"],
@@ -86,7 +94,9 @@ def load_results(path: Path) -> dict:
     if report.exists():
         first = report.read_text().splitlines()[0]
         agent = first.split(":", 1)[-1].strip() if ":" in first else first
-    return results_from_records(json.loads(path.read_text()), agent, path.parent.name)
+    return results_from_records(
+        json.loads(path.read_text()), agent, path.parent.name, path.parent
+    )
 
 
 def latest_results_path() -> Path | None:
