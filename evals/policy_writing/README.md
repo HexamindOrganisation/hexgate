@@ -66,6 +66,20 @@ Each run writes `.runs/<stamp>/report.md` (pass rate per category and per
 case) and `results.json` (every check, plus the agent's answer). Each
 workspace keeps the agent's files and `.answer.md` for inspection.
 
+## Browse it
+
+```bash
+uv run python evals/policy_writing/viewer.py --latest   # or --results .runs/<stamp>/results.json
+open evals/policy_writing/.runs/viewer.html
+```
+
+This writes one self-contained HTML file. The cases are listed by category on
+the left. Selecting a case shows the request and the full prompt, the
+agent's context (`TOOLS.md` and the starting policy), the expectations, and
+the reference solution as a diff. When a run is loaded it also shows each
+attempt's checks, the agent's answer, and the files it changed. `--bare`
+drops the `<html>` wrapper, for hosts that add their own.
+
 ## Adding a case
 
 1. Add an entry to `cases.yaml` with a `category`. Include the boundary values (the limit itself, and the limit plus one), a negative case, and a role that must stay unaffected.

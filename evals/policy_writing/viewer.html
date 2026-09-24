@@ -1,0 +1,303 @@
+<title>Policy eval explorer</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+:root {
+  --bg: #f4f5f7;
+  --panel: #ffffff;
+  --panel-2: #fafafb;
+  --line: #e3e6ec;
+  --line-soft: #eef0f4;
+  --text: #0f172a;
+  --text-2: #475569;
+  --text-3: #64748b;
+  --accent: #3b4fd8;
+  --accent-soft: #e7ebfd;
+  --accent-text: #2c3db0;
+  --allow: #2c6b4a;
+  --allow-bg: #e3f1e9;
+  --approval: #7d5414;
+  --approval-bg: #f7ecd9;
+  --deny: #9c2f45;
+  --deny-bg: #f8e3e7;
+  --add-bg: #e6f4ea;
+  --del-bg: #fbe9ec;
+  --code-bg: #f8f9fb;
+  --sans: "Hanken Grotesk", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #0f1218; --panel: #161a22; --panel-2: #1a1f28; --line: #2a303c; --line-soft: #222834;
+    --text: #e6e9ef; --text-2: #b3bac7; --text-3: #8a93a3;
+    --accent: #7d8bf0; --accent-soft: #232a4d; --accent-text: #aeb7f7;
+    --allow: #7fcb9f; --allow-bg: #1c3327; --approval: #e2b56a; --approval-bg: #3a2d16;
+    --deny: #ee8fa2; --deny-bg: #3d1f27; --add-bg: #1b3325; --del-bg: #3a1f26; --code-bg: #12161d;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #0f1218; --panel: #161a22; --panel-2: #1a1f28; --line: #2a303c; --line-soft: #222834;
+  --text: #e6e9ef; --text-2: #b3bac7; --text-3: #8a93a3;
+  --accent: #7d8bf0; --accent-soft: #232a4d; --accent-text: #aeb7f7;
+  --allow: #7fcb9f; --allow-bg: #1c3327; --approval: #e2b56a; --approval-bg: #3a2d16;
+  --deny: #ee8fa2; --deny-bg: #3d1f27; --add-bg: #1b3325; --del-bg: #3a1f26; --code-bg: #12161d;
+}
+html, body { height: 100%; }
+body { background: var(--bg); color: var(--text); font-family: var(--sans); font-size: 14px; line-height: 1.5; }
+.app { height: 100%; display: flex; flex-direction: column; padding-inline: 16px; padding-block: 12px; box-sizing: border-box; gap: 12px; }
+header { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+h1 { font-size: 18px; font-weight: 700; margin: 0; letter-spacing: -0.01em; }
+.sub { color: var(--text-3); font-size: 13px; }
+.summary { display: flex; gap: 8px; flex-wrap: wrap; }
+.chip { font-size: 12px; font-weight: 600; padding: 3px 10px; border-radius: 999px; background: var(--line-soft); color: var(--text-2); white-space: nowrap; }
+.chip.ok { background: var(--allow-bg); color: var(--allow); }
+.chip.bad { background: var(--deny-bg); color: var(--deny); }
+.chip.accent { background: var(--accent-soft); color: var(--accent-text); }
+.main { flex: 1; min-height: 0; display: grid; grid-template-columns: 320px minmax(0, 1fr); gap: 12px; }
+.pane { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.side-top { padding: 10px; border-bottom: 1px solid var(--line); }
+.side-top input { width: 100%; box-sizing: border-box; height: 34px; border: 1px solid var(--line); border-radius: 8px; padding: 0 10px; font: inherit; background: var(--panel-2); color: var(--text); }
+.side-top input:focus-visible, button:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.tree { overflow: auto; padding: 6px; flex: 1; }
+details.folder { margin-bottom: 2px; }
+details.folder > summary { list-style: none; cursor: pointer; display: flex; align-items: center; gap: 6px; padding: 6px 8px; border-radius: 6px; font-weight: 600; font-size: 13px; color: var(--text-2); }
+details.folder > summary::-webkit-details-marker { display: none; }
+details.folder > summary::before { content: "▸"; font-size: 11px; color: var(--text-3); width: 10px; }
+details.folder[open] > summary::before { content: "▾"; }
+details.folder > summary:hover { background: var(--line-soft); }
+.count { margin-left: auto; font-weight: 500; color: var(--text-3); font-variant-numeric: tabular-nums; font-size: 12px; }
+.case-btn { display: flex; align-items: flex-start; gap: 8px; width: 100%; text-align: left; border: 0; background: transparent; color: var(--text); padding: 6px 8px 6px 24px; border-radius: 6px; cursor: pointer; font: inherit; }
+.case-btn:hover { background: var(--line-soft); }
+.case-btn[aria-current="true"] { background: var(--accent-soft); }
+.case-btn .cid { font-family: var(--mono); font-size: 12px; color: var(--text); }
+.case-btn .req { display: block; font-size: 12px; color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 250px; }
+.dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; margin-top: 6px; background: var(--line); }
+.dot.ok { background: var(--allow); } .dot.bad { background: var(--deny); } .dot.mixed { background: var(--approval); }
+.detail { overflow: auto; padding: 20px 24px; display: flex; flex-direction: column; gap: 18px; }
+.detail h2 { font-family: var(--mono); font-size: 16px; font-weight: 500; margin: 0; }
+.head-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.request { font-size: 17px; line-height: 1.45; font-weight: 500; max-width: 70ch; text-wrap: balance; margin: 0; }
+.note { color: var(--text-2); font-size: 13px; max-width: 75ch; margin: 0; }
+.label { font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-3); margin: 0 0 6px 0; }
+.tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.tab { border: 0; background: transparent; font: inherit; font-size: 13px; color: var(--text-2); padding: 8px 12px; cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px; }
+.tab[aria-selected="true"] { color: var(--text); font-weight: 600; border-bottom-color: var(--accent); }
+.files { display: flex; flex-direction: column; gap: 12px; }
+.file { border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.file > .fh { display: flex; align-items: center; gap: 8px; padding: 7px 12px; background: var(--panel-2); border-bottom: 1px solid var(--line); font-family: var(--mono); font-size: 12px; }
+.file > .fh .tag { font-family: var(--sans); margin-left: auto; }
+pre { margin: 0; padding: 10px 0; overflow-x: auto; background: var(--code-bg); font-family: var(--mono); font-size: 12.5px; line-height: 1.6; }
+pre .ln { display: block; padding: 0 12px; white-space: pre; }
+pre .ln.add { background: var(--add-bg); } pre .ln.del { background: var(--del-bg); }
+pre .ln .s { display: inline-block; width: 14px; color: var(--text-3); user-select: none; }
+.tbl-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 8px; }
+table { border-collapse: collapse; width: 100%; font-size: 13px; }
+th { text-align: left; font-weight: 600; font-size: 12px; color: var(--text-3); background: var(--panel-2); padding: 8px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+td { padding: 7px 10px; border-top: 1px solid var(--line-soft); vertical-align: top; }
+td.mono, .mono { font-family: var(--mono); font-size: 12px; }
+.pill { display: inline-block; font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 999px; margin: 1px 2px 1px 0; white-space: nowrap; }
+.pill.allow { background: var(--allow-bg); color: var(--allow); }
+.pill.approval_required { background: var(--approval-bg); color: var(--approval); }
+.pill.deny { background: var(--deny-bg); color: var(--deny); }
+.pill.error { background: var(--line-soft); color: var(--text-2); }
+ul.rules { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; }
+.answer { white-space: pre-wrap; background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; font-size: 13px; max-width: 80ch; }
+.checks { display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.check { display: flex; gap: 10px; padding: 7px 12px; border-top: 1px solid var(--line-soft); font-size: 13px; }
+.check:first-child { border-top: 0; }
+.check .mk { font-weight: 700; width: 14px; flex-shrink: 0; }
+.check.ok .mk { color: var(--allow); } .check.bad .mk { color: var(--deny); }
+.check .dt { color: var(--text-3); font-family: var(--mono); font-size: 11.5px; word-break: break-word; }
+.attempts { display: flex; gap: 6px; flex-wrap: wrap; }
+.attempt { border: 1px solid var(--line); background: var(--panel); color: var(--text-2); border-radius: 6px; font: inherit; font-size: 12px; padding: 4px 10px; cursor: pointer; }
+.attempt[aria-pressed="true"] { border-color: var(--accent); color: var(--accent-text); background: var(--accent-soft); }
+details.prompt summary { cursor: pointer; color: var(--accent-text); font-size: 13px; }
+details.prompt pre { margin-top: 8px; border-radius: 8px; border: 1px solid var(--line); padding: 10px 12px; white-space: pre-wrap; }
+.empty { color: var(--text-3); font-size: 13px; }
+@media (max-width: 800px) {
+  .app { height: auto; }
+  .main { grid-template-columns: minmax(0, 1fr); }
+  .pane.side { max-height: 45vh; }
+  .detail { padding: 16px; }
+  .case-btn .req { max-width: 70vw; }
+}
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<div class="app">
+  <header>
+    <div>
+      <h1>Policy eval explorer</h1>
+      <div class="sub" id="subtitle"></div>
+    </div>
+    <div class="summary" id="summary"></div>
+  </header>
+  <div class="main">
+    <nav class="pane side" aria-label="Cases">
+      <div class="side-top"><label for="q" hidden>Filter cases</label><input id="q" type="search" placeholder="Filter by id, request or tool…" autocomplete="off"></div>
+      <div class="tree" id="tree"></div>
+    </nav>
+    <main class="pane"><div class="detail" id="detail"></div></main>
+  </div>
+</div>
+
+<script type="application/json" id="data">__DATA__</script>
+<script>
+const D = JSON.parse(document.getElementById("data").textContent);
+const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const J = (o) => JSON.stringify(o);
+const hasResults = !!D.results;
+let current = null, tab = "context", attemptIdx = 0;
+
+function status(id) {
+  const runs = hasResults ? D.results.runs[id] : null;
+  if (!runs || !runs.length) return "";
+  const n = runs.filter((r) => r.passed).length;
+  return n === runs.length ? "ok" : n === 0 ? "bad" : "mixed";
+}
+
+function renderSummary() {
+  const n = D.cases.length, cats = new Set(D.cases.map((c) => c.category)).size;
+  $("#subtitle").textContent = `${n} cases in ${cats} categories · generated ${D.generated}`;
+  const s = [`<span class="chip">${n} cases</span>`];
+  if (hasResults) {
+    const all = Object.values(D.results.runs).flat(), ok = all.filter((r) => r.passed).length;
+    s.push(`<span class="chip ${ok === all.length ? "ok" : "bad"}">${ok}/${all.length} runs passed</span>`);
+    s.push(`<span class="chip accent">agent: ${esc(D.results.agent)}</span>`);
+  } else s.push(`<span class="chip">no run loaded</span>`);
+  $("#summary").innerHTML = s.join("");
+}
+
+function matches(c, q) {
+  if (!q) return true;
+  const hay = [c.id, c.request, c.category, c.fixture, ...(c.expect.decisions || []).map((d) => d.tool)].join(" ").toLowerCase();
+  return hay.includes(q);
+}
+
+function renderTree() {
+  const q = $("#q").value.trim().toLowerCase();
+  const groups = {};
+  for (const c of D.cases) if (matches(c, q)) (groups[c.category] ||= []).push(c);
+  $("#tree").innerHTML = Object.entries(groups).map(([cat, cs]) => {
+    const passed = hasResults ? cs.filter((c) => status(c.id) === "ok").length + "/" : "";
+    return `<details class="folder" open><summary>${esc(cat)}<span class="count">${passed}${cs.length}</span></summary>${cs.map((c) =>
+      `<button class="case-btn" data-id="${esc(c.id)}" aria-current="${c.id === current}"><span class="dot ${status(c.id)}"></span><span><span class="cid">${esc(c.id)}</span><span class="req">${esc(c.request)}</span></span></button>`).join("")}</details>`;
+  }).join("") || `<p class="empty" style="padding:8px">No case matches.</p>`;
+}
+
+// Line diff (LCS); the files are small.
+function diff(a, b) {
+  const x = a.split("\n"), y = b.split("\n"), m = x.length, n = y.length;
+  const t = Array.from({ length: m + 1 }, () => new Int32Array(n + 1));
+  for (let i = m - 1; i >= 0; i--) for (let j = n - 1; j >= 0; j--) t[i][j] = x[i] === y[j] ? t[i + 1][j + 1] + 1 : Math.max(t[i + 1][j], t[i][j + 1]);
+  const out = []; let i = 0, j = 0;
+  while (i < m && j < n) {
+    if (x[i] === y[j]) { out.push([" ", x[i]]); i++; j++; }
+    else if (t[i + 1][j] >= t[i][j + 1]) out.push(["-", x[i++]]);
+    else out.push(["+", y[j++]]);
+  }
+  while (i < m) out.push(["-", x[i++]]);
+  while (j < n) out.push(["+", y[j++]]);
+  return out;
+}
+const code = (text) => `<pre>${text.replace(/\n$/, "").split("\n").map((l) => `<span class="ln">${esc(l) || " "}</span>`).join("")}</pre>`;
+const diffCode = (a, b) => `<pre>${diff(a.replace(/\n$/, ""), b.replace(/\n$/, "")).map(([s, l]) => `<span class="ln ${s === "+" ? "add" : s === "-" ? "del" : ""}"><span class="s">${s === " " ? "" : s}</span>${esc(l) || " "}</span>`).join("")}</pre>`;
+
+function fileCard(path, body, tag) {
+  return `<div class="file"><div class="fh">${esc(path)}${tag ? `<span class="tag">${tag}</span>` : ""}</div>${body}</div>`;
+}
+
+// Files the agent (or the reference) ended with, shown against the starting fixture.
+function changedFiles(start, end, emptyMsg) {
+  const keys = [...new Set([...Object.keys(start), ...Object.keys(end)])].sort();
+  const cards = [];
+  for (const k of keys) {
+    if (!(k in end) || start[k] === end[k]) continue;
+    if (!(k in start)) cards.push(fileCard(k, diffCode("", end[k]), `<span class="pill allow">new file</span>`));
+    else cards.push(fileCard(k, diffCode(start[k], end[k]), `<span class="pill approval_required">modified</span>`));
+  }
+  return cards.length ? `<div class="files">${cards.join("")}</div>` : `<p class="empty">${emptyMsg}</p>`;
+}
+
+function pills(e) { return (Array.isArray(e) ? e : [e]).map((x) => `<span class="pill ${esc(x)}">${esc(x)}</span>`).join(" or "); }
+
+function expected(c) {
+  const e = c.expect, parts = [];
+  const rows = (e.decisions || []).map((d) => {
+    const roles = d.roles || [d.role];
+    const extra = [d.attributes && `ctx ${J(d.attributes)}`, d.run_facts && `run ${J(d.run_facts)}`].filter(Boolean).join("<br>");
+    return `<tr><td>${roles.map(esc).join(", ")}</td><td class="mono">${esc(d.tool)}</td><td class="mono">${esc(J(d.args || {}))}</td><td class="mono">${extra ? esc(extra).replace(/&lt;br&gt;/g, "<br>") : ""}</td><td>${pills(d.expect)}</td></tr>`;
+  }).join("");
+  if (rows) parts.push(`<div><p class="label">Dry-run decisions</p><div class="tbl-wrap"><table><thead><tr><th>Role</th><th>Tool</th><th>Arguments</th><th>Context</th><th>Expected</th></tr></thead><tbody>${rows}</tbody></table></div></div>`);
+  const rules = [];
+  for (const s of e.superset || []) rules.push(`<li><strong>${esc(s.wider)}</strong> can do at least what <strong>${esc(s.narrower)}</strong> can, on ${s.probes.length} probe calls (${s.probes.map((p) => `<span class="mono">${esc(p.tool)}</span>`).join(", ")})</li>`);
+  for (const f of e.changed || []) rules.push(`<li>Must change <span class="mono">${esc(f)}</span></li>`);
+  for (const f of e.unchanged || []) rules.push(`<li>Must leave <span class="mono">${esc(f)}</span> untouched</li>`);
+  if (e.no_changes) rules.push(`<li>Must not change any file</li>`);
+  if (e.mentions_any) rules.push(`<li>Answer mentions one of: ${e.mentions_any.map((w) => `<span class="mono">${esc(w)}</span>`).join(", ")}</li>`);
+  if (e.mentions_all) rules.push(`<li>Answer mentions all of: ${e.mentions_all.map((w) => `<span class="mono">${esc(w)}</span>`).join(", ")}</li>`);
+  rules.push(`<li>The policy validates, and names only tools, arguments and caller attributes listed in <span class="mono">TOOLS.md</span> (every case)</li>`);
+  parts.push(`<div><p class="label">Other rules</p><ul class="rules">${rules.join("")}</ul></div>`);
+  return parts.join("");
+}
+
+function context(c) {
+  const files = D.fixtures[c.fixture];
+  const order = Object.keys(files).sort((a, b) => (a === "TOOLS.md" ? -1 : b === "TOOLS.md" ? 1 : a.localeCompare(b)));
+  const policyless = !order.some((k) => k.endsWith(".yaml"));
+  return `<p class="note">Fixture <span class="mono">${esc(c.fixture)}</span>: copied into a fresh workspace before the agent starts.${policyless ? " There is no policy yet; the agent writes it from scratch." : ""}</p><div class="files">${order.map((k) => fileCard(k, code(files[k]), k === "TOOLS.md" ? `<span class="chip">what the agent knows</span>` : "")).join("")}</div>`;
+}
+
+function reference(c) {
+  const sol = D.solutions[c.id] || {}, start = D.fixtures[c.fixture];
+  const end = { ...start }; let answer = "";
+  for (const [k, v] of Object.entries(sol)) { if (k === "ANSWER.md") answer = v; else end[k] = v; }
+  return `<p class="note">One correct answer, not the only one: any policy meeting the expectations passes.</p>${changedFiles(start, end, "No file changes: the right answer leaves the policy as it is.")}${answer ? `<div><p class="label">Answer</p><div class="answer">${esc(answer)}</div></div>` : ""}`;
+}
+
+function run(c) {
+  const runs = hasResults ? D.results.runs[c.id] : null;
+  if (!runs || !runs.length) return `<p class="empty">${hasResults ? "This case wasn't part of the loaded run." : "No run loaded. Generate the page with --results .runs/<stamp>/results.json to see an agent's attempts here."}</p>`;
+  const r = runs[Math.min(attemptIdx, runs.length - 1)];
+  const btns = runs.length > 1 ? `<div class="attempts">${runs.map((x, i) => `<button class="attempt" data-attempt="${i}" aria-pressed="${i === Math.min(attemptIdx, runs.length - 1)}">#${x.attempt} ${x.passed ? "✓" : "✗"}</button>`).join("")}</div>` : "";
+  const checks = r.checks.map((k) => `<div class="check ${k.passed ? "ok" : "bad"}"><span class="mk">${k.passed ? "✓" : "✗"}</span><span>${esc(k.name)}${k.detail ? `<div class="dt">${esc(k.detail)}</div>` : ""}</span></div>`).join("");
+  return `${btns}<div class="head-row"><span class="chip ${r.passed ? "ok" : "bad"}">${r.passed ? "passed" : "failed"}</span><span class="sub">${r.seconds}s</span></div><div><p class="label">Checks</p><div class="checks">${checks}</div></div><div><p class="label">Agent's answer</p><div class="answer">${esc(r.answer || "(empty)")}</div></div><div><p class="label">Files the agent changed</p>${r.files ? changedFiles(D.fixtures[c.fixture], r.files, "The agent changed no file.") : `<p class="empty">Workspace not found.</p>`}</div>`;
+}
+
+function renderDetail() {
+  const c = D.cases.find((x) => x.id === current);
+  if (!c) { $("#detail").innerHTML = `<p class="empty">Pick a case on the left.</p>`; return; }
+  const tabs = [["context", "Agent's context"], ["expected", "Expected"], ["reference", "Reference solution"], ["run", hasResults ? "Latest run" : "Run"]];
+  const body = { context, expected, reference, run }[tab](c);
+  const st = status(c.id);
+  $("#detail").innerHTML = `
+    <div class="head-row"><h2>${esc(c.id)}</h2><span class="chip accent">${esc(c.category)}</span><span class="chip">fixture: ${esc(c.fixture)}</span>${st ? `<span class="chip ${st === "ok" ? "ok" : "bad"}">${st === "ok" ? "passing" : st === "bad" ? "failing" : "flaky"}</span>` : ""}</div>
+    <div><p class="label">Request</p><p class="request">${esc(c.request)}</p></div>
+    ${c.note ? `<div><p class="label">What this tests</p><p class="note">${esc(c.note)}</p></div>` : ""}
+    <details class="prompt"><summary>Full prompt sent to the agent</summary><pre>${esc(c.prompt)}</pre></details>
+    <div class="tabs" role="tablist">${tabs.map(([k, l]) => `<button class="tab" role="tab" data-tab="${k}" aria-selected="${k === tab}">${l}</button>`).join("")}</div>
+    <div style="display:flex;flex-direction:column;gap:16px">${body}</div>`;
+}
+
+function select(id) {
+  current = id; attemptIdx = 0;
+  try { history.replaceState(null, "", "#" + id); } catch (e) {}
+  renderTree(); renderDetail();
+}
+
+$("#tree").addEventListener("click", (e) => { const b = e.target.closest(".case-btn"); if (b) select(b.dataset.id); });
+$("#detail").addEventListener("click", (e) => {
+  const t = e.target.closest(".tab"); if (t) { tab = t.dataset.tab; try { localStorage.setItem("evalTab", tab); } catch (x) {} renderDetail(); return; }
+  const a = e.target.closest(".attempt"); if (a) { attemptIdx = +a.dataset.attempt; renderDetail(); }
+});
+$("#q").addEventListener("input", renderTree);
+
+try { tab = localStorage.getItem("evalTab") || tab; } catch (e) {}
+if (hasResults) tab = "run";
+renderSummary();
+const fromHash = location.hash.slice(1);
+select(D.cases.some((c) => c.id === fromHash) ? fromHash : (hasResults && (D.cases.find((c) => status(c.id) !== "ok") || {}).id) || D.cases[0].id);
+</script>
