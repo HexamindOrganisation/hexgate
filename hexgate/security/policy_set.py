@@ -54,6 +54,7 @@ from hexgate.security.models import (
     AgentPolicy,
     AgentTargetPolicy,
     BaseToolPolicy,
+    SkillPolicy,
     ToolPolicy,
     is_agent_reach_key,
     is_agent_via_key,
@@ -537,19 +538,21 @@ def _resolve_inheritance(
         return own
     merged_tools: dict[str, ToolPolicy] = {}
     merged_agents: dict[str, AgentTargetPolicy] = {}
+    merged_skills: dict[str, SkillPolicy] = {}
     merged_consts: dict[str, object] = {}
     merged_constraints: list[str] = []
     merged_default: BaseToolPolicy = own.default_policy
     merged_admission: BaseToolPolicy | None = own.admission
 
-    # Merge parents left-to-right (later parents override earlier). ``agents``
-    # merges by target name like ``tools`` does. ``admission`` only overwrites when
+    # Merge parents left-to-right (later parents override earlier). ``agents`` and
+    # ``skills`` merge by name like ``tools`` does. ``admission`` only overwrites when
     # a parent actually sets one, so a later mixin that omits it can't null out an
     # earlier parent's rule — dropping an agent gate silently would be fail-open.
     for parent_name in own.inherits:
         parent = _resolve_inheritance(parent_name, raw, chain + [name])
         merged_tools.update(parent.tools)
         merged_agents.update(parent.agents)
+        merged_skills.update(parent.skills)
         merged_consts.update(parent.consts)
         _extend_unique(merged_constraints, parent.constraints)
         merged_default = parent.default_policy
@@ -563,6 +566,7 @@ def _resolve_inheritance(
     # parent would be fail-open.
     merged_tools.update(own.tools)
     merged_agents.update(own.agents)
+    merged_skills.update(own.skills)
     merged_consts.update(own.consts)
     # Union, not override — the one field here that accumulates (see docstring).
     _extend_unique(merged_constraints, own.constraints)
@@ -581,6 +585,7 @@ def _resolve_inheritance(
         consts=merged_consts,
         admission=merged_admission,
         agents=merged_agents,
+        skills=merged_skills,
     )
 
 

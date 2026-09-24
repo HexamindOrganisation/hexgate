@@ -89,8 +89,12 @@ from hexgate.security.models import (
     FileScope,
     FileToolPolicy,
     PolicyMode,
+    SkillPolicy,
+    SkillVia,
     ToolPolicy,
     agent_target_key,
+    is_skill_key,
+    skill_key,
 )
 from hexgate.security.module_loader import (
     ModuleLoader,
@@ -177,6 +181,10 @@ __all__ = [
     "AgentTargetPolicy",
     "AgentVia",
     "agent_target_key",
+    "SkillPolicy",
+    "SkillVia",
+    "skill_key",
+    "is_skill_key",
     "DEFAULT_AGENT",
     "AgentBinding",
     "RoleMatrix",
