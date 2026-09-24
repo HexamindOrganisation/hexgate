@@ -1,0 +1,512 @@
+{#
+  AI Act evidence report — the whole document.
+
+  Reads the stored annex and nothing else: no clock, no database, no request.
+  Re-rendering a report from last quarter therefore reproduces that quarter's
+  document.
+
+  Autoescaping is on (html.py builds the environment), which is the entire
+  escaping story: every value below arrives as text, and the redacted argument
+  snapshots in section 3 — the one place arbitrary operator text lands in this
+  document — are escaped by the same rule as everything else.
+
+  `dash` renders an unset field as an em-dash rather than "None" or a blank
+  cell, so a reader can tell "not recorded" from "recorded as empty".
+#}<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>{{ cover.title }} — {{ cover.report_id }}</title>
+</head>
+<body>
+
+<div class="masthead">
+  <span class="wordmark">Hexgate</span>
+  <span class="cap">REPORT ID <span class="report-id">{{ cover.report_id }}</span> · GENERATED {{ cover.generated_at | dt }}</span>
+</div>
+
+<div class="title-block">
+  <span class="cap eyebrow">REGULATION (EU) 2024/1689 · SUPPORTING EVIDENCE · REPORT SPEC {{ cover.spec_version | upper }}</span>
+  <h1>{{ cover.title }}</h1>
+  <p class="lede">
+    Controls in place and events recorded for the AI systems registered in
+    project <span class="mono brk">{{ cover.project.name }}</span>,
+    {{ cover.period.start | dt }} to {{ cover.period.end | dt }}.
+  </p>
+</div>
+
+<div class="scope">
+  <h3>What this document is, and is not</h3>
+  <p>{{ cover.what_this_is }}</p>
+  <p>{{ cover.what_this_is_not }}</p>
+</div>
+
+<div class="kv">
+  <div><span class="k">Operator (organisation)</span><span class="v">{{ cover.organization.name }}</span></div>
+  <div><span class="k">Project</span><span class="v mono brk">{{ cover.project.name }} · {{ cover.project.id }}</span></div>
+  <div><span class="k">Period covered</span><span class="v">{{ cover.period.start | dt }} to {{ cover.period.end | dt }}</span></div>
+  <div><span class="k">AI systems in scope</span><span class="v">{{ cover.agents.registered | num }} registered · {{ cover.agents.complete | num }} complete · {{ cover.agents.incomplete | num }} incomplete</span></div>
+  <div><span class="k">Requested by</span><span class="v brk">{{ cover.requested_by.email | dash }}</span></div>
+  <div><span class="k">Document signature</span><span class="v mono brk">{{ signature.algorithm }} · kid {{ signature.kid }}</span></div>
+</div>
+
+<div class="sec">
+  <span class="cap">CONTENTS</span>
+  <table class="contents">
+    <colgroup><col style="width: 6%"><col style="width: 42%"><col style="width: 52%"></colgroup>
+    <tbody>
+      {% for n, name, articles in contents %}
+      <tr>
+        <td class="mono dim">{{ n }}</td>
+        <td>{{ name }}</td>
+        <td class="cap" style="text-align: right">{{ articles | join(' · ') }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+{# ---- 1. Inventory ---------------------------------------------------- #}
+<div class="sec brk-before">
+  <div class="sechead">
+    <h2><span class="n">1</span>AI system inventory</h2>
+    <span class="cap">{{ inventory.articles | join(' · ') | upper }}</span>
+  </div>
+  <p>{{ inventory.attribution }}</p>
+
+  <table>
+    <colgroup>
+      <col style="width: 13%"><col style="width: 19%"><col style="width: 10%">
+      <col style="width: 10%"><col style="width: 9%"><col style="width: 23%">
+      <col style="width: 16%">
+    </colgroup>
+    <thead>
+      <tr>
+        <th>Agent</th><th>Intended purpose</th><th>Role</th><th>Risk tier</th>
+        <th>Annex III</th><th>Human oversight</th><th>Entry</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for a in inventory.agents %}
+      <tr>
+        <td>
+          <span class="mono brk">{{ a.agent_name }}</span><br>
+          <span class="cap brk">{% if a.version %}v{{ a.version }}{% else %}{{ None | dash }}{% endif %}{% if a.bundle %} · bundle {{ a.bundle.source_hash | short_hash }}{% endif %}</span>
+        </td>
+        <td>{% if a.intended_purpose %}{{ a.intended_purpose }}{% else %}<span class="dim">Not entered</span>{% endif %}</td>
+        <td>{% if a.operator_role %}{{ a.operator_role | label }}{% else %}<span class="dim">Not entered</span>{% endif %}</td>
+        <td>
+          {% if a.risk_tier %}<span class="pill">{{ a.risk_tier | label }}</span>
+          {% else %}<span class="pill pill-hollow">Incomplete</span>{% endif %}
+        </td>
+        <td class="brk">{{ a.annex_iii_point | dash }}</td>
+        <td>
+          {% if a.oversight_owner and a.oversight_owner.name %}
+            {{ a.oversight_owner.name }}<br><span class="cap brk">{{ a.oversight_owner.contact | dash }}</span>
+          {% else %}<span class="dim">Not assigned</span>{% endif %}
+        </td>
+        <td>
+          {% if a.complete %}<span class="cap">COMPLETE</span>
+          {% else %}<span class="cap">MISSING<br>{{ a.missing_fields | join(', ') | dash }}</span>{% endif %}
+        </td>
+      </tr>
+      {% else %}
+      <tr><td colspan="7" class="empty">No agents are registered in this project.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <h3>1.1 Provenance of each entry</h3>
+  <table>
+    <colgroup>
+      <col style="width: 15%"><col style="width: 30%"><col style="width: 21%">
+      <col style="width: 17%"><col style="width: 17%">
+    </colgroup>
+    <thead>
+      <tr><th>Agent</th><th>Bundle (source · wasm)</th><th>Recorded by</th><th>Recorded at</th><th>Checker revision</th></tr>
+    </thead>
+    <tbody>
+      {% for a in inventory.agents %}
+      <tr>
+        <td class="mono brk">{{ a.agent_name }}</td>
+        <td class="brk">
+          {% if a.bundle %}
+            <span class="cap">SOURCE</span> <span class="mono">{{ a.bundle.source_hash | dash }}</span><br>
+            <span class="cap">WASM</span> <span class="mono">{{ a.bundle.wasm_hash | dash }}</span>
+          {% else %}{{ None | dash }}{% endif %}
+        </td>
+        <td class="brk">{{ (a.recorded_by.email if a.recorded_by else None) | dash }}</td>
+        <td class="mono">{{ a.recorded_at | dt }}</td>
+        <td class="mono">{{ a.checker_last_update_date | dash }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="5" class="empty">No agents are registered in this project.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+{# ---- 2. Controls ----------------------------------------------------- #}
+<div class="sec brk-before">
+  <div class="sechead">
+    <h2><span class="n">2</span>Controls in place</h2>
+    <span class="cap">{{ controls.articles | join(' · ') | upper }}</span>
+  </div>
+  <p>{{ controls.deny_by_default }}</p>
+
+  {% for agent in controls.agents %}
+  {# The deny-by-default badge is a claim about a matrix, so it goes only where
+     one is actually shown. #}
+  {% set shows_matrix = agent.inventory_entry_complete and agent.authorisation_matrix and agent.authorisation_matrix.rows %}
+  <div class="sub">
+    <h3><span class="mono brk">{{ agent.agent_name }}</span> · authorisation matrix
+      {% if agent.bundle %}<span class="cap">BUNDLE {{ agent.bundle.source_hash | short_hash }}{% if shows_matrix %} · DENY BY DEFAULT{% endif %}</span>{% endif %}
+    </h3>
+    {% if not agent.inventory_entry_complete %}
+      <div class="note">The inventory entry for this agent is incomplete (section 1), so its
+        authorisation matrix is carried in the signed annex only.
+        {% if agent.matrix_unavailable_reason %} {{ agent.matrix_unavailable_reason }}{% endif %}</div>
+    {% elif agent.authorisation_matrix is none %}
+      <div class="note">{{ agent.matrix_unavailable_reason | dash }}</div>
+    {% elif not agent.authorisation_matrix.rows %}
+      <div class="note">The compiled bundle for this agent grants no tool to any role.</div>
+    {% else %}
+      {% set roles = agent.authorisation_matrix | matrix_roles %}
+      {# A role column wider than a pill needs is just white space. Cap it, and
+         let the tool column take what is left — a one-role bundle then reads as
+         a list with a verdict beside it rather than as a stretched grid. #}
+      {% set role_pct = [26.0, 78.0 / roles | length] | min %}
+      <table>
+        <colgroup>
+          <col style="width: {{ (100.0 - role_pct * roles | length) | round(2) }}%">
+          {% for r in roles %}<col style="width: {{ role_pct | round(2) }}%">{% endfor %}
+        </colgroup>
+        <thead>
+          <tr><th>Tool</th>{% for r in roles %}<th class="brk">{{ r }}</th>{% endfor %}</tr>
+        </thead>
+        <tbody>
+          {% for row in agent.authorisation_matrix.rows %}
+          <tr>
+            <td class="mono brk">{{ row.tool }}</td>
+            {% for r in roles %}
+              {% set cell = row.cells.get(r) %}
+              <td>
+                {% if cell %}
+                  <span class="pill pill-{{ cell.mode | mode_class }}">{{ cell.label }}</span>
+                  {% if cell.constraint %}<br><span class="cap brk">{{ cell.constraint }}</span>{% endif %}
+                {% else %}—{% endif %}
+              </td>
+            {% endfor %}
+          </tr>
+          {% endfor %}
+          {# The standing verdict for a tool the bundle never names. This is
+             where "deny by default" stops being a claim in the prose and
+             becomes a per-role cell a reader can check. #}
+          {% if agent.authorisation_matrix.any_other_tool %}
+          {% set other = agent.authorisation_matrix.any_other_tool %}
+          <tr>
+            <td><em>Any other tool</em></td>
+            {% for r in roles %}
+              {% set cell = other.cells.get(r) %}
+              <td>
+                {% if cell %}
+                  <span class="pill pill-{{ cell.mode | mode_class }}">{{ cell.label }}</span>
+                  {% if cell.constraint %}<br><span class="cap brk">{{ cell.constraint }}</span>{% endif %}
+                {% else %}{{ None | dash }}{% endif %}
+              </td>
+            {% endfor %}
+          </tr>
+          {% endif %}
+        </tbody>
+      </table>
+      {% if agent.authorisation_matrix.any_other_tool %}
+        <div class="note">{{ agent.authorisation_matrix.any_other_tool.note }}</div>
+      {% endif %}
+      {% if agent.authorisation_matrix.aliased_default_note %}
+        <div class="note">{{ agent.authorisation_matrix.aliased_default_note }}</div>
+      {% endif %}
+    {% endif %}
+    {% if agent.authorisation_matrix %}
+      {# Two agent-level gates, each either declared by the policy or not. The
+         "not declared" wording is the one that matters: it says the report
+         evidences no control there, rather than leaving a reader to assume one. #}
+      {% if agent.authorisation_matrix.agent_admission %}
+        <div class="note"><strong>Admission (which roles may start this agent).</strong>
+          {{ agent.authorisation_matrix.agent_admission }}</div>
+      {% endif %}
+      {% if agent.authorisation_matrix.agent_reach %}
+        <div class="note"><strong>Agent reach (which other agents it may call).</strong>
+          {{ agent.authorisation_matrix.agent_reach }}</div>
+      {% endif %}
+    {% endif %}
+    {% if agent.human_oversight and agent.inventory_entry_complete and agent.authorisation_matrix %}
+      <div class="note"><strong>Human oversight (Art. 14, 26(2)).</strong> {{ agent.human_oversight }}
+        {% if agent.oversight_owner %} {{ agent.oversight_owner.note | dash }}
+          {% if agent.oversight_owner.name %} Named owner: {{ agent.oversight_owner.name }}{% if agent.oversight_owner.contact %} ({{ agent.oversight_owner.contact }}){% endif %}.{% endif %}
+        {% endif %}
+      </div>
+    {% endif %}
+  </div>
+  {% else %}
+  <p class="empty">No agents are registered in this project.</p>
+  {% endfor %}
+
+  <div class="sub">
+    <h3>2.1 Data protection and cybersecurity controls <span class="cap">ART. 15</span></h3>
+    <table>
+      <colgroup>
+        <col style="width: 16%"><col style="width: 18%"><col style="width: 23%">
+        <col style="width: 19%"><col style="width: 24%">
+      </colgroup>
+      <thead>
+        <tr><th>Control</th><th>Where it runs</th><th>Effect</th><th>Applies to</th><th>Registration</th></tr>
+      </thead>
+      <tbody>
+        {% for c in controls.data_protection_controls %}
+        <tr>
+          <td class="mono brk">{{ c.control }}</td>
+          <td>{{ c.runs_in }}</td>
+          <td class="brk">{{ c.effect }}</td>
+          <td class="brk">{{ c.applies_to }}</td>
+          <td>{{ c.registration }}<br><span class="cap brk">{{ c.evidenced_here | dash }}</span></td>
+        </tr>
+        {% else %}
+        <tr><td colspan="5" class="empty">No data-protection controls are registered.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+{# ---- 3. Activity ----------------------------------------------------- #}
+<div class="sec brk-before">
+  <div class="sechead">
+    <h2><span class="n">3</span>Activity record</h2>
+    <span class="cap">{{ activity.articles | join(' · ') | upper }}</span>
+  </div>
+  <p>Automatically recorded events for the period, from the platform's audit
+    store. Counts are over distinct event identifiers, so a retried send is
+    counted once.</p>
+
+  <div class="stats">
+    {% for key, label in counter_labels %}
+    <div class="stat">
+      <span class="v">{% if key == 'model_call_error_rate' %}{{ activity.counters[key] | pct }}{% else %}{{ activity.counters[key] | num }}{% endif %}</span>
+      <span class="k">{{ label }}</span>
+    </div>
+    {% endfor %}
+  </div>
+
+  <div class="sub">
+    <h3>3.1 Decisions by agent and outcome</h3>
+    <table>
+      <colgroup><col style="width: 40%"><col style="width: 15%"><col style="width: 15%"><col style="width: 15%"><col style="width: 15%"></colgroup>
+      <thead>
+        <tr><th>Agent</th><th class="num">Allow</th><th class="num">Deny</th><th class="num">Approval</th><th class="num">All</th></tr>
+      </thead>
+      <tbody>
+        {% for row in activity.decisions_by_agent_and_outcome %}
+        <tr>
+          <td class="mono brk">{{ row.key }}</td>
+          <td class="num">{{ row.allow | num }}</td>
+          <td class="num">{{ row.deny | num }}</td>
+          <td class="num">{{ row.needs_approval | num }}</td>
+          <td class="num">{{ row.all | num }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="5" class="empty">No decisions were recorded in this period.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  {% for key, heading in (('decision_sample', '3.2 Decision record'), ('approval_required_sample', '3.3 Decisions that required human approval')) %}
+  {% set sample = activity[key] %}
+  <div class="sub">
+    <h3>{{ heading }}</h3>
+    <table>
+      <colgroup>
+        <col style="width: 14%"><col style="width: 19%"><col style="width: 12%">
+        <col style="width: 17%"><col style="width: 25%"><col style="width: 13%">
+      </colgroup>
+      <thead>
+        <tr><th>Occurred (UTC)</th><th>Agent · tool</th><th>User</th><th>Roles · deciding</th><th>Arguments (redacted)</th><th>Outcome</th></tr>
+      </thead>
+      <tbody>
+        {% for row in sample.rows %}
+        <tr>
+          <td class="mono">{{ row.occurred_at | dt }}</td>
+          <td class="mono brk">{{ row.agent_name }}<br>{{ row.tool_name }}</td>
+          <td class="mono brk">{{ row.user_id | dash }}</td>
+          <td class="mono brk">{{ row.user_roles | join(', ') | dash }}<br>→ {{ row.deciding_role | dash }}</td>
+          <td class="mono brk">{{ row.arguments | args }}
+            {% if row.violations %}<br><span class="cap brk">violation: {{ row.violations | join(', ') }}</span>{% endif %}
+            {% if row.reason %}<br><span class="cap brk">{{ row.reason }}</span>{% endif %}
+          </td>
+          <td><span class="pill pill-{{ row.outcome | mode_class }}">{{ row.outcome | label }}</span></td>
+        </tr>
+        {% else %}
+        <tr><td colspan="6" class="empty">No such events were recorded in this period.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    <div class="note">{{ sample.note }}</div>
+  </div>
+  {% endfor %}
+
+  <div class="sub">
+    <h3>3.4 Ban enforcements
+      <span class="cap">{{ activity.ban_enforcements.total | num }} EVENTS · {{ activity.ban_enforcements.returned | num }} SHOWN{% if activity.ban_enforcements.truncated %} · TRUNCATED{% endif %}</span>
+    </h3>
+    <table>
+      <colgroup>
+        <col style="width: 16%"><col style="width: 10%"><col style="width: 15%">
+        <col style="width: 16%"><col style="width: 13%"><col style="width: 30%">
+      </colgroup>
+      <thead>
+        <tr><th>Occurred (UTC)</th><th>Type</th><th>Ban</th><th>Agent</th><th>User</th><th>Reason recorded</th></tr>
+      </thead>
+      <tbody>
+        {% for row in activity.ban_enforcements.rows %}
+        <tr>
+          <td class="mono">{{ row.occurred_at | dt }}</td>
+          <td><span class="pill">{{ row.ban_type | label }}</span></td>
+          <td class="mono brk">{{ row.ban_id | dash }}</td>
+          <td class="mono brk">{{ row.agent_name | dash }}</td>
+          <td class="mono brk">{{ row.user_id | dash }}</td>
+          <td class="brk">{{ row.reason | dash }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="6" class="empty">No ban was enforced in this period.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    <div class="note">{{ activity.ban_enforcements.note }}</div>
+  </div>
+
+  {# Two short tables that belong together; `avoid` is a hint, so a project
+     with many models still breaks rather than overflowing. #}
+  <div class="sub keep">
+    <h3>3.5 Model calls</h3>
+    <table>
+      <colgroup><col style="width: 75%"><col style="width: 25%"></colgroup>
+      <thead>
+        <tr><th>By agent</th><th class="num">Calls</th></tr>
+      </thead>
+      <tbody>
+        {% for row in activity.model_calls_by_agent %}
+        <tr><td class="mono brk">{{ row.key }}</td><td class="num">{{ row.calls | num }}</td></tr>
+        {% else %}
+        <tr><td colspan="2" class="empty">No model call was recorded in this period.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    <table>
+      <colgroup><col style="width: 75%"><col style="width: 25%"></colgroup>
+      <thead>
+        <tr><th>By model</th><th class="num">Calls</th></tr>
+      </thead>
+      <tbody>
+        {% for row in activity.model_calls_by_model %}
+        <tr><td class="mono brk">{{ row.key }}</td><td class="num">{{ row.calls | num }}</td></tr>
+        {% else %}
+        <tr><td colspan="2" class="empty">No model call was recorded in this period.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+{# ---- 4. Coverage ----------------------------------------------------- #}
+<div class="sec brk-before">
+  <div class="sechead">
+    <h2><span class="n">4</span>Coverage statement</h2>
+    <span class="cap">{{ coverage.articles | join(' · ') | upper }}</span>
+  </div>
+  <p>What this report covers, what it deliberately does not record, and what it
+    cannot evidence. Article 99(5) penalises incomplete or misleading
+    information supplied to an authority, so the limits of the evidence are
+    stated by the document itself.</p>
+
+  <div class="sub">
+    <h3>4.1 Records covered</h3>
+    <table>
+      <colgroup>
+        <col style="width: 16%"><col style="width: 34%"><col style="width: 12%">
+        <col style="width: 13%"><col style="width: 25%">
+      </colgroup>
+      <thead>
+        <tr><th>Record</th><th>Contents</th><th class="num">Events</th><th>Retention</th><th>Earliest · latest received</th></tr>
+      </thead>
+      <tbody>
+        {% for row in coverage.records_covered %}
+        <tr>
+          <td class="mono brk">{{ row.table }}</td>
+          <td>{{ row.contents }}</td>
+          <td class="num">{{ row.event_count | num }}</td>
+          <td>{{ row.retention_days | num }} days</td>
+          <td class="mono">{{ row.earliest_received_at | dt }}<br>{{ row.latest_received_at | dt }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="5" class="empty">No records are covered by this report.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    <ul class="plain">
+      {% for c in coverage.caveats %}<li>{{ c }}</li>{% endfor %}
+    </ul>
+  </div>
+
+  <div class="sub">
+    <h3>4.2 Known gaps in this period</h3>
+    <table>
+      <colgroup><col style="width: 5%"><col style="width: 30%"><col style="width: 45%"><col style="width: 20%"></colgroup>
+      <thead>
+        <tr><th>#</th><th>Gap</th><th>Effect on this report</th><th>Why it applies</th></tr>
+      </thead>
+      <tbody>
+        {% for gap in coverage.gaps %}
+        <tr>
+          <td class="mono dim">{{ loop.index }}</td>
+          <td>{{ gap.title }}</td>
+          <td>{{ gap.statement }}</td>
+          <td class="cap brk">{{ gap.condition | dash }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="4" class="empty">No gap condition held over this period.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="sub">
+    <h3>4.3 What this report does not evidence</h3>
+    <ul class="plain">
+      {% for item in coverage.not_evidenced %}<li>{{ item }}</li>{% endfor %}
+    </ul>
+  </div>
+</div>
+
+{# ---- 5. Signature ---------------------------------------------------- #}
+<div class="sec brk-before">
+  <div class="sechead">
+    <h2><span class="n">5</span>Signature and verification</h2>
+    <span class="cap">INTEGRITY OF THIS DOCUMENT</span>
+  </div>
+  <p>{{ signature.statement }}</p>
+
+  <div class="kv boxed">
+    <div><span class="k">Algorithm</span><span class="v mono">{{ signature.algorithm }}</span></div>
+    <div><span class="k">Digest algorithm</span><span class="v mono">{{ signature.digest_algorithm }}</span></div>
+    <div><span class="k">Key identifier</span><span class="v mono brk">{{ signature.kid }}</span></div>
+    <div><span class="k">Public key</span><span class="v mono brk">{{ signature.jwks_url }}</span></div>
+  </div>
+
+  <h3>5.1 How to verify</h3>
+  <ol class="steps">
+    {% for step in signature.verification %}<li>{{ step | strip_index }}</li>{% endfor %}
+  </ol>
+</div>
+
+</body>
+</html>

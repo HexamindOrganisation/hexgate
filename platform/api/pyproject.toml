@@ -52,6 +52,8 @@ dependencies = [
     # Transitive via the hexgate SDK's langfuse chain, but pinned since we
     # import it directly (same rule as python-dotenv above).
     "opentelemetry-proto>=1.41",
+    "weasyprint>=70.0",
+    "jinja2>=3.1.6",
 ]
 
 [dependency-groups]
@@ -61,6 +63,7 @@ dev = [
     "pytest-cov>=6.0.0",
     "httpx>=0.27",
     "ruff>=0.8",
+    "pypdf>=6.19.0",
 ]
 
 [tool.ruff.lint]
