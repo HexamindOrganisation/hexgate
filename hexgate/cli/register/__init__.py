@@ -6,6 +6,16 @@ this package only carries platform registration (`register_agent`,
 """
 
 from hexgate.cli.register.main import add_parser, main
-from hexgate.cli.register.register import register_agent
+from hexgate.cli.register.register import (
+    AgentTreeCollision,
+    register_agent,
+    register_tree,
+)
 
-__all__ = ["register_agent", "add_parser", "main"]
+__all__ = [
+    "AgentTreeCollision",
+    "register_agent",
+    "register_tree",
+    "add_parser",
+    "main",
+]

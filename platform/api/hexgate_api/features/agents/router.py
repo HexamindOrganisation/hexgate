@@ -29,6 +29,7 @@ from hexgate_api.schemas import (
     ValidatePolicyResponse,
 )
 from hexgate_api.features.agents.service import (
+    DuplicateSkillNameError,
     get_agent,
     get_classification,
     get_latest_agent_versions_map,
@@ -564,19 +565,31 @@ async def api_register_agent(
 
     The one bearer route that writes, hence ``require_project_actor``: the new
     rows are attributed to the key's owner, or to NULL if it has none.
+
+    409 when the manifest declares two skills of one name — the SDK collapses
+    those before sending, so it only reaches here from a hand-rolled client.
     """
     from hexgate_api.core.keystore import keystore
     from hexgate_api.core.locks import project_lock
     from hexgate_api.features.agents.service import get_agent
 
     project_id = actor.project_id
-    # Only a FIRST registration compiles + writes a bundle; re-registering an
-    # existing agent just snapshots the manifest (no compile). Take the project
-    # lock only in that case — otherwise a fleet redeploy's no-op re-registers
-    # (`hexgate serve` auto-registers on startup) would all queue behind the lock
-    # and any in-flight recompile for nothing.
-    if await get_agent(session, project_id, body.manifest.name) is None:
-        async with project_lock(project_id):
+    try:
+        # Only a FIRST registration compiles + writes a bundle; re-registering
+        # an existing agent just snapshots the manifest (no compile). Take the
+        # project lock only in that case — otherwise a fleet redeploy's no-op
+        # re-registers (`hexgate serve` auto-registers on startup) would all
+        # queue behind the lock and any in-flight recompile for nothing.
+        if await get_agent(session, project_id, body.manifest.name) is None:
+            async with project_lock(project_id):
+                version, created = await register_manifest(
+                    session,
+                    project_id,
+                    body.manifest,
+                    sign=keystore.sign,
+                    actor_user_id=actor.user_id,
+                )
+        else:
             version, created = await register_manifest(
                 session,
                 project_id,
@@ -584,14 +597,8 @@ async def api_register_agent(
                 sign=keystore.sign,
                 actor_user_id=actor.user_id,
             )
-    else:
-        version, created = await register_manifest(
-            session,
-            project_id,
-            body.manifest,
-            sign=keystore.sign,
-            actor_user_id=actor.user_id,
-        )
+    except DuplicateSkillNameError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     response.status_code = 201 if created else 200
     return RegisterAgentResponse(
         agent_id=version.agent_id,

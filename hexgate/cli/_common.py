@@ -32,6 +32,7 @@ from rich.text import Text
 
 from hexgate.agents.factory import AgentGraph, ApprovalHandler, CallbackHandler
 from hexgate.agents.loader import load_agent, resolve_agent_source
+from hexgate.cloud.client import HexgateError
 from hexgate.config.env import resolve_api_key
 from hexgate.config.settings import Settings
 from hexgate.security.decision import Decision
@@ -196,6 +197,8 @@ def build_runtime_from_local_agent(
     approval_handler: ApprovalHandler | None,
     auto_register: bool,
     console: Console,
+    auto_register_subagents: bool = False,
+    auto_register_subagents_force: bool = False,
 ) -> AgentRuntime:
     """Build an :class:`AgentRuntime` from a Python-loaded agent object.
 
@@ -217,28 +220,51 @@ def build_runtime_from_local_agent(
     Returns an :class:`AgentRuntime` whose ``agent_name`` is the manifest's name
     (matches what we'll announce to the relay's ``hello`` message).
     """
-    from hexgate.cli.register.register import post_manifest
+    from hexgate.cli.register.register import (
+        post_manifest,
+        register_tree,
+    )
     from hexgate.manifest import create_manifest
     from hexgate.manifest.models import AgentFramework
 
     manifest = create_manifest(agent_obj, description=description)
     agent_name = manifest.name
 
-    if auto_register and resolve_api_key():
-        # Idempotent POST. ``created`` flag in the response distinguishes
-        # "first registered" from "manifest unchanged" so we can give the
-        # operator a meaningful console line.
-        result = post_manifest(manifest)
+    def _announce(name: str, result: dict) -> None:
+        # ``created`` distinguishes "first registered" from "manifest unchanged".
         if result.get("created"):
             console.print(
-                f"[dim]ℹ Registered agent[/] [cyan]{agent_name}[/] "
+                f"[dim]ℹ Registered agent[/] [cyan]{name}[/] "
                 f"[dim](v{result.get('version', '?')})[/]"
             )
         else:
             console.print(
-                f"[dim]ℹ Agent[/] [cyan]{agent_name}[/] "
+                f"[dim]ℹ Agent[/] [cyan]{name}[/] "
                 f"[dim]already registered (manifest unchanged)[/]"
             )
+
+    if auto_register and resolve_api_key():
+        # Idempotent POST(s). With --register-subagents, walk the whole tree so each
+        # sub-agent lands as its own (dashboard-editable) agent; otherwise just the
+        # root. ``register_tree`` announces every node via the same callback. A POST
+        # failure (HTTP error / timeout) surfaces as ``ValueError``/``URLError``; wrap
+        # it as ``HexgateError`` so serve prints its clean message instead of a
+        # traceback — a whole-tree walk does several posts, so any can fail.
+        try:
+            if auto_register_subagents:
+                # Reuse the root manifest we just built (avoid a second introspection).
+                register_tree(
+                    agent_obj,
+                    manifest=manifest,
+                    on_register=_announce,
+                    force=auto_register_subagents_force,
+                )
+            else:
+                _announce(agent_name, post_manifest(manifest))
+        except HexgateError:
+            raise  # already the clean type (e.g. AgentTreeCollision)
+        except (ValueError, OSError) as exc:
+            raise HexgateError(f"agent registration failed: {exc}") from exc
 
     if manifest.framework == AgentFramework.HEXGATE:
         return _build_hexgate_serve_runtime(

@@ -388,6 +388,42 @@ class Tool(SQLModel, table=True):
     input_schema: dict = Field(sa_column=Column(JSON, nullable=False))
 
 
+class Skill(SQLModel, table=True):
+    """One skill on one :class:`AgentVersion`.
+
+    No actor trail, for the same reason as :class:`Tool`: only ever written as
+    part of a version snapshot, never mutated alone, so it inherits that row's.
+    Exempted in ``tests/test_actor_columns.py``.
+    """
+
+    __tablename__ = "skill"
+    __table_args__ = (
+        UniqueConstraint(
+            "agent_version_id", "name", name="uq_skill_agent_version_name"
+        ),
+    )
+
+    id: str = Field(primary_key=True)
+    agent_version_id: str = Field(foreign_key="agent_version.id", index=True)
+    name: str
+    description: Optional[str] = None
+    source: Optional[str] = None
+    # NULL when the framework does not enumerate resources; a JSON object when
+    # it does. The distinction is the point — an empty object means the skill
+    # ships no resources, NULL means nobody looked.
+    #
+    # ``none_as_null`` is what makes that sentence true in SQL. Without it
+    # SQLAlchemy persists Python None as the JSON scalar ``'null'``, which is
+    # still distinguishable from ``{}`` in Python but makes
+    # ``WHERE resources IS NULL`` match zero rows.
+    resources: Optional[dict] = Field(
+        default=None, sa_column=Column(JSON(none_as_null=True), nullable=True)
+    )
+    allowed_tools: list = Field(sa_column=Column(JSON, nullable=False))
+    additional_tools: list = Field(sa_column=Column(JSON, nullable=False))
+    content_hash: Optional[str] = None
+
+
 # ---------------------------------------------------------------------------
 # Kill switch — operator hard blocks that override policy at the SDK's
 # invoke-time gate. v1 targets: a whole agent or a whole user_id.

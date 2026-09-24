@@ -640,6 +640,46 @@ class ToolDefinition(BaseModel):
     input_schema: InputSchema
 
 
+class SubagentRef(BaseModel):
+    """A reach edge to a sub-agent (name + via), mirroring the SDK manifest.
+
+    A flat named reference to a sibling agent — ``via`` is ``tool`` (agent-as-tool)
+    or ``handoff`` (control transfer) — not a nested subtree.
+    """
+
+    name: str
+    via: Literal["tool", "handoff"]
+
+
+class SkillResources(BaseModel):
+    """L3 contents of a skill, by name."""
+
+    references: list[str] = Field(default_factory=list)
+    assets: list[str] = Field(default_factory=list)
+    scripts: list[str] = Field(default_factory=list)
+
+
+class SkillDefinition(BaseModel):
+    """One skill available to an agent, as discovered at registration.
+
+    The SDK's caps (MAX_SKILLS, MAX_RESOURCES_PER_SKILL) and its same-name
+    dedupe are deliberately not mirrored: it truncates before it sends, and
+    the platform's job is to accept what it is given. Hashing is no argument
+    either way — ``compute_manifest_hash`` runs over what the platform
+    *parsed*, so it would stay self-consistent under a cap.
+    """
+
+    name: str
+    description: str
+    source: Optional[str] = None
+    # None means the framework does not enumerate resources; an instance with
+    # empty lists means it does and the skill ships none. Do not collapse.
+    resources: Optional[SkillResources] = None
+    allowed_tools: list[str] = Field(default_factory=list)
+    additional_tools: list[str] = Field(default_factory=list)
+    content_hash: Optional[str] = None
+
+
 class AgentManifest(BaseModel):
     """Schema for the manifest of an agent."""
 
@@ -649,6 +689,13 @@ class AgentManifest(BaseModel):
     model: Optional[str] = None
     system_prompt: Optional[str] = None
     tools: list[ToolDefinition]
+    # Optional-None (not []) so an agent with no sub-agents hashes exactly as before
+    # this field existed (compute_manifest_hash uses exclude_none).
+    subagents: Optional[list[SubagentRef]] = None
+    # None — not [] — when the framework has no skill concept, so
+    # ``compute_manifest_hash`` (exclude_none=True) is unchanged for every
+    # agent that has none.
+    skills: Optional[list[SkillDefinition]] = None
 
 
 class RegisterAgentRequest(BaseModel):

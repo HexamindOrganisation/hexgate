@@ -6,7 +6,7 @@ import argparse
 from typing import TYPE_CHECKING, Any
 
 from hexgate.cli._common import load_spec
-from hexgate.cli.register.register import register_agent
+from hexgate.cli.register.register import register_agent, register_tree
 
 if TYPE_CHECKING:
     from langchain_core.tools import BaseTool
@@ -75,6 +75,24 @@ def add_parser(subparsers: argparse._SubParsersAction) -> None:
             "string or a path to a .md / .txt / .jinja file (loaded as text)."
         ),
     )
+    parser.add_argument(
+        "--register-subagents",
+        dest="register_subagents",
+        action="store_true",
+        help=(
+            "Also register the agent's sub-agents (each one its own agent, with a "
+            "starter policy the platform mints). Off by default."
+        ),
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help=(
+            "With --register-subagents, proceed instead of failing when two "
+            "sub-agents in the tree share a name with different manifests (the "
+            "first-seen is kept; the colliding one is skipped). Ignored otherwise."
+        ),
+    )
     parser.set_defaults(func=main)
 
 
@@ -95,13 +113,23 @@ def main(args: argparse.Namespace) -> int:
         else None
     )
 
-    register_agent(
-        agent,
-        description=args.description,
-        tools=tools,
-        model=args.model,
-        system_prompt=system_prompt,
-    )
+    if getattr(args, "register_subagents", False):
+        register_tree(
+            agent,
+            description=args.description,
+            tools=tools,
+            model=args.model,
+            system_prompt=system_prompt,
+            force=getattr(args, "force", False),
+        )
+    else:
+        register_agent(
+            agent,
+            description=args.description,
+            tools=tools,
+            model=args.model,
+            system_prompt=system_prompt,
+        )
     return 0
 
 

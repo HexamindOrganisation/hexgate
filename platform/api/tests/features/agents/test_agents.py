@@ -21,12 +21,14 @@ import yaml
 from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
+from sqlalchemy import text
 from sqlmodel import SQLModel, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from hexgate_api.core import keystore as keystore_mod
+from hexgate_api.core.ids import new_id
 from hexgate_api.main import app
-from hexgate_api.models import Agent, AgentVersion
+from hexgate_api.models import Agent, AgentVersion, Skill
 from hexgate_api.seeds.defaults import ensure_default_project
 from hexgate_api.constants import DEFAULT_PROJECT_ID, DEFAULT_USER_ID
 
@@ -588,14 +590,20 @@ def _sample_manifest(
     description: str | None = None,
     model: str | None = None,
     system_prompt: str | None = None,
+    skills: list[dict] | None = None,
 ) -> dict:
-    """Minimal AgentManifest payload for register_manifest in tests."""
+    """Minimal AgentManifest payload for register_manifest in tests.
+
+    ``skills`` stays out of the payload entirely when None — the shape every
+    framework without a skill concept sends.
+    """
     return {
         "name": name,
         "description": description,
         "framework": "hexgate",
         "model": model,
         "system_prompt": system_prompt,
+        **({"skills": skills} if skills is not None else {}),
         "tools": [
             {
                 "name": "echo",
@@ -726,7 +734,7 @@ def test_manifest_endpoint_unregistered_agents_have_no_leakage(
 
 
 def test_register_endpoint_accepts_legacy_shape_without_new_fields(
-    client: TestClient,
+    client: TestClient, session_factory
 ) -> None:
     """A manifest from an older SDK (no model / system_prompt keys) still 201s.
 
@@ -735,6 +743,7 @@ def test_register_endpoint_accepts_legacy_shape_without_new_fields(
     the new platform. The new fields are Optional with `None` defaults, so
     Pydantic validation should accept payloads that omit them entirely.
     """
+    token = _mint_owned_token(session_factory, owner_user_id=DEFAULT_USER_ID)
     payload = {
         "manifest": {
             "name": "legacy_agent",
@@ -744,14 +753,14 @@ def test_register_endpoint_accepts_legacy_shape_without_new_fields(
         }
     }
     resp = client.post(
-        "/v1/agents",
-        json=payload,
-        headers={"Authorization": "Bearer fake-but-unauthenticated"},
+        "/v1/agents", json=payload, headers={"Authorization": f"Bearer {token}"}
     )
-    # The legacy-shape body validates; the request itself fails auth (401)
-    # rather than schema validation (422). 422 here would mean we broke
-    # backwards compatibility.
-    assert resp.status_code != 422, resp.text
+    # Authenticated on purpose. This used to send an unauthenticated bearer and
+    # assert ``!= 422`` on the belief that the body validates first and only
+    # auth fails — it does not. FastAPI resolves dependencies BEFORE validating
+    # the body, so that request 401s with the schema never reached, and the
+    # assertion held even for a manifest missing every required field.
+    assert resp.status_code == 201, resp.text
 
 
 # ---------------------------------------------------------------------------
@@ -1347,3 +1356,344 @@ def test_re_register_does_not_rewrite_the_original_creator(
         session_factory, project_id=DEFAULT_PROJECT_ID, name="stable_creator"
     )
     assert agent.created_by_user_id == DEFAULT_USER_ID
+
+
+async def test_register_stores_subagents_and_preserves_hash_continuity(
+    client: TestClient, session_factory
+) -> None:
+    """subagents round-trip into the stored manifest; an agent without them hashes
+    as before (dedup no-op), and adding them yields a new content_hash + version."""
+    from hexgate_api.schemas import AgentManifest
+    from hexgate_api.features.agents.service import register_manifest
+
+    async with session_factory() as session:
+        base = _sample_manifest("support_bot")
+        m1 = AgentManifest.model_validate(base)
+        v1, created1 = await register_manifest(
+            session, DEFAULT_PROJECT_ID, m1, sign=keystore_mod.keystore.sign
+        )
+        # Re-register the identical (sub-agent-less) manifest → dedup no-op, same hash.
+        v1b, created1b = await register_manifest(
+            session, DEFAULT_PROJECT_ID, m1, sign=keystore_mod.keystore.sign
+        )
+        assert created1 is True and created1b is False
+        assert v1b.content_hash == v1.content_hash
+        # Stored as None (NOT []): a sub-agent-less manifest must carry no subagents key
+        # so exclude_none drops it and the hash is unchanged. `is None` (not `in (None,
+        # [])`) so a schema default of `[]` — which would remint a version for every
+        # already-registered agent — fails here.
+        assert (v1.manifest or {}).get("subagents") is None
+
+        # Guard the continuity contract itself: an explicit `[]` is NOT excluded by
+        # exclude_none, so it hashes differently from the None (field-absent) manifest —
+        # i.e. defaulting the field to `[]` would break dedup for every existing agent.
+        m_empty = AgentManifest.model_validate({**base, "subagents": []})
+        v_empty, _ = await register_manifest(
+            session, DEFAULT_PROJECT_ID, m_empty, sign=keystore_mod.keystore.sign
+        )
+        assert v_empty.content_hash != v1.content_hash
+
+        # Now register with a sub-agent edge → different hash, new version, stored.
+        m2 = AgentManifest.model_validate(
+            {**base, "subagents": [{"name": "billing_bot", "via": "tool"}]}
+        )
+        v2, created2 = await register_manifest(
+            session, DEFAULT_PROJECT_ID, m2, sign=keystore_mod.keystore.sign
+        )
+        assert created2 is True
+        assert v2.content_hash != v1.content_hash
+        assert v2.manifest["subagents"] == [{"name": "billing_bot", "via": "tool"}]
+
+    # And the read view surfaces the sub-agent edge for the dashboard.
+    resp = client.get(f"/v1/projects/{DEFAULT_PROJECT_ID}/agents/manifest")
+    row = next(r for r in resp.json() if r["name"] == "support_bot")
+    assert row["manifest"]["subagents"] == [{"name": "billing_bot", "via": "tool"}]
+
+
+# ---------------------------------------------------------------------------
+# M2 — skills carried on the manifest
+#
+# The platform mirrors the SDK's three shapes and writes one ``skill`` row per
+# definition per version, inside the same transaction as the tools. It caps
+# nothing and dedupes nothing: the SDK truncates before it sends, and the
+# unique constraint is the backstop.
+# ---------------------------------------------------------------------------
+
+
+def _skill_payload(name: str, **overrides: object) -> dict:
+    """A fully populated SkillDefinition payload, field-by-field overridable."""
+    return {
+        "name": name,
+        "description": f"what {name} does",
+        "source": ".claude/skills",
+        "resources": {
+            "references": ["reference.md"],
+            "assets": ["logo.png"],
+            "scripts": ["run.sh"],
+        },
+        "allowed_tools": ["Read", "Grep"],
+        "additional_tools": ["issue_refund"],
+        "content_hash": "sha256-of-the-body",
+        **overrides,
+    }
+
+
+async def _skills_of(session_factory, agent_version_id: str) -> list[Skill]:
+    async with session_factory() as session:
+        rows = await session.exec(
+            select(Skill).where(Skill.agent_version_id == agent_version_id)
+        )
+        return sorted(rows.all(), key=lambda row: row.name)
+
+
+def _skills_of_sync(session_factory, agent_version_id: str) -> list[Skill]:
+    """``_skills_of`` for the sync (TestClient + minted token) tests."""
+    import asyncio
+
+    return asyncio.get_event_loop().run_until_complete(
+        _skills_of(session_factory, agent_version_id)
+    )
+
+
+async def _register(session_factory, payload: dict):
+    from hexgate_api.schemas import AgentManifest
+    from hexgate_api.features.agents.service import register_manifest
+
+    async with session_factory() as session:
+        return await register_manifest(
+            session,
+            DEFAULT_PROJECT_ID,
+            AgentManifest.model_validate(payload),
+            sign=keystore_mod.keystore.sign,
+        )
+
+
+async def test_register_manifest_persists_skill_rows(session_factory) -> None:
+    """One row per definition, every field round-tripping through the JSON."""
+    version, created = await _register(
+        session_factory,
+        _sample_manifest(
+            "skilled_bot",
+            skills=[_skill_payload("refunds"), _skill_payload("escalation")],
+        ),
+    )
+    assert created
+
+    rows = await _skills_of(session_factory, version.id)
+    assert [row.name for row in rows] == ["escalation", "refunds"]
+
+    refunds = rows[1]
+    assert refunds.description == "what refunds does"
+    assert refunds.source == ".claude/skills"
+    assert refunds.resources == {
+        "references": ["reference.md"],
+        "assets": ["logo.png"],
+        "scripts": ["run.sh"],
+    }
+    assert refunds.allowed_tools == ["Read", "Grep"]
+    assert refunds.additional_tools == ["issue_refund"]
+    assert refunds.content_hash == "sha256-of-the-body"
+    assert refunds.id.startswith("skl_")
+
+
+async def test_register_manifest_without_skills_writes_no_skill_rows(
+    session_factory,
+) -> None:
+    """``skills=None`` — every framework with no skill concept — is a no-op."""
+    version, created = await _register(
+        session_factory, _sample_manifest("skill_less_bot")
+    )
+    assert created
+    assert await _skills_of(session_factory, version.id) == []
+
+
+def test_register_endpoint_accepts_manifest_without_skills_key(
+    client: TestClient, session_factory
+) -> None:
+    """A body omitting ``skills`` entirely registers — the compat guarantee.
+
+    Authenticated on purpose. FastAPI resolves dependencies before it
+    validates the body, so an unauthenticated request 401s without the schema
+    ever being reached: asserting ``!= 422`` there would pass even against a
+    manifest missing every required field.
+    """
+    token = _mint_owned_token(session_factory, owner_user_id=DEFAULT_USER_ID)
+    payload = {
+        "manifest": {
+            "name": "no_skills_key",
+            "framework": "hexgate",
+            "tools": [],
+        }
+    }
+    resp = client.post(
+        "/v1/agents", json=payload, headers={"Authorization": f"Bearer {token}"}
+    )
+    assert resp.status_code == 201, resp.text
+
+    version_id = resp.json()["agent_version_id"]
+    assert _skills_of_sync(session_factory, version_id) == []
+
+
+def test_manifest_hash_is_unchanged_by_the_new_field() -> None:
+    """The G2 guard: adding ``skills`` mints no version for agents without any.
+
+    ``compute_manifest_hash`` excludes None, so a pre-skills payload and the
+    same payload carrying an explicit ``skills: null`` hash identically — an
+    old SDK re-registering against the new platform matches its existing
+    version rather than duplicating it.
+    """
+    from hexgate_api.schemas import AgentManifest
+    from hexgate_api.features.agents.service import compute_manifest_hash
+
+    payload = _sample_manifest("hash_stability")
+    before = compute_manifest_hash(AgentManifest.model_validate(payload))
+    after = compute_manifest_hash(
+        AgentManifest.model_validate({**payload, "skills": None})
+    )
+    assert before == after
+
+
+async def test_register_manifest_preserves_resources_none_vs_empty(
+    session_factory,
+) -> None:
+    """NULL and ``{}`` mean different things and must read back distinct.
+
+    NULL: the framework does not enumerate L3 contents at all. ``{}``: it does,
+    and this skill ships none. M6 renders the two differently.
+    """
+    version, _ = await _register(
+        session_factory,
+        _sample_manifest(
+            "resource_bot",
+            skills=[
+                _skill_payload("not_enumerated", resources=None),
+                _skill_payload("enumerated_empty", resources={}),
+            ],
+        ),
+    )
+
+    enumerated, not_enumerated = await _skills_of(session_factory, version.id)
+    assert not_enumerated.resources is None
+    assert enumerated.resources == {"references": [], "assets": [], "scripts": []}
+
+    # And distinct in SQL, not just after the ORM decodes them. Without
+    # ``none_as_null`` on the column, None persists as the JSON scalar
+    # ``'null'`` — the ORM still reads back None, so the assertions above pass
+    # while ``IS NULL`` silently matches nothing.
+    async with session_factory() as session:
+        rows = dict(
+            (
+                await session.exec(
+                    text(
+                        "SELECT name, resources IS NULL FROM skill "
+                        "WHERE agent_version_id = :v"
+                    ).bindparams(v=version.id)
+                )
+            ).all()
+        )
+    assert rows == {"not_enumerated": 1, "enumerated_empty": 0}
+
+
+async def test_duplicate_skill_names_in_one_version_are_rejected(
+    session_factory,
+) -> None:
+    """The service rejects duplicates before the DB has to.
+
+    The SDK collapses same-name skills before sending, so this only fires for
+    a caller that bypasses it. Pre-checked rather than left to UNIQUE because
+    nothing registers an exception handler — an IntegrityError escaping the
+    route would be a 500 with no usable message.
+    """
+    from hexgate_api.features.agents.service import DuplicateSkillNameError
+
+    with pytest.raises(DuplicateSkillNameError):
+        await _register(
+            session_factory,
+            _sample_manifest(
+                "duplicate_bot",
+                skills=[_skill_payload("twice"), _skill_payload("twice")],
+            ),
+        )
+
+
+def test_duplicate_skill_names_surface_as_409(
+    client: TestClient, session_factory
+) -> None:
+    """What the caller actually sees: a 409, not the default 500."""
+    token = _mint_owned_token(session_factory, owner_user_id=DEFAULT_USER_ID)
+    payload = {
+        "manifest": _sample_manifest(
+            "duplicate_over_http",
+            skills=[_skill_payload("twice"), _skill_payload("twice")],
+        )
+    }
+    resp = client.post(
+        "/v1/agents", json=payload, headers={"Authorization": f"Bearer {token}"}
+    )
+    assert resp.status_code == 409, resp.text
+    assert "twice" in resp.json()["detail"]
+
+
+async def test_unique_constraint_backstops_duplicate_skill_names(
+    session_factory,
+) -> None:
+    """The DB guard behind the pre-check, asserted directly.
+
+    The service can only refuse what it sees in one manifest; the constraint
+    is what stops two rows an agent could never tell apart from ever existing.
+    """
+    from sqlalchemy.exc import IntegrityError
+
+    async with session_factory() as session:
+        for _ in range(2):
+            session.add(
+                Skill(
+                    id=new_id(Skill),
+                    agent_version_id="agv_backstop",
+                    name="twice",
+                    allowed_tools=[],
+                    additional_tools=[],
+                )
+            )
+        with pytest.raises(IntegrityError):
+            await session.commit()
+
+
+async def test_agent_manifest_view_surfaces_skills(
+    client: TestClient, session_factory
+) -> None:
+    """The read path M6 consumes: skills come back inside ``manifest``."""
+    await _register(
+        session_factory,
+        _sample_manifest(
+            "support_bot",
+            skills=[_skill_payload("refunds", resources=None)],
+        ),
+    )
+
+    resp = client.get(f"/v1/projects/{DEFAULT_PROJECT_ID}/agents/manifest")
+    row = next(r for r in resp.json() if r["name"] == "support_bot")
+    (skill,) = row["manifest"]["skills"]
+    assert skill["name"] == "refunds"
+    assert skill["resources"] is None
+    assert skill["allowed_tools"] == ["Read", "Grep"]
+    assert skill["additional_tools"] == ["issue_refund"]
+
+
+async def test_re_register_with_new_skills_creates_a_new_version(
+    session_factory,
+) -> None:
+    """The flip side of the hash guard: a real skill change is a real version."""
+    first, _ = await _register(session_factory, _sample_manifest("evolving_bot"))
+    second, created = await _register(
+        session_factory,
+        _sample_manifest("evolving_bot", skills=[_skill_payload("refunds")]),
+    )
+
+    assert created
+    assert second.version == first.version + 1
+    assert second.content_hash != first.content_hash
+    assert await _skills_of(session_factory, first.id) == []
+    assert [row.name for row in await _skills_of(session_factory, second.id)] == [
+        "refunds"
+    ]

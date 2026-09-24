@@ -1,11 +1,20 @@
 import { useQuery } from "@tanstack/react-query";
 import { useAgentSelection } from "@/lib/agent_param";
-import { Ban, Bot, FileText, ShieldCheck, Wrench } from "lucide-react";
+import {
+  Ban,
+  BookOpen,
+  Bot,
+  FileText,
+  ShieldCheck,
+  Wrench,
+} from "lucide-react";
 import { Link } from "react-router-dom";
 import {
   api,
   type AgentManifestView,
   type InputSchema,
+  type SkillDefinition,
+  type SkillResources,
   type ToolDefinition,
 } from "@/lib/api";
 import { useProjectScoped } from "@/lib/active";
@@ -140,6 +149,10 @@ function ManifestView({ agent }: { agent: AgentManifestView }) {
         tools={agent.manifest?.tools ?? []}
         unregistered={agent.manifest === null}
       />
+      <SkillsSection
+        skills={agent.manifest?.skills ?? null}
+        unregistered={agent.manifest === null}
+      />
       <SystemPromptSection
         prompt={agent.manifest?.system_prompt ?? null}
         unregistered={agent.manifest === null}
@@ -216,6 +229,58 @@ function ToolsSection({
       )}
     </section>
   );
+}
+
+function SkillsSection({
+  skills,
+  unregistered,
+}: {
+  skills: SkillDefinition[] | null;
+  unregistered: boolean;
+}) {
+  return (
+    <section className="rounded-lg border border-border bg-card">
+      <div className="px-5 py-4 border-b border-border flex items-center gap-2">
+        <BookOpen className="size-4 text-muted-foreground" />
+        <span className="text-sm font-medium">Skills</span>
+        {/* A count of 0 would assert the same thing the copy below refuses to. */}
+        {skills !== null && (
+          <Badge variant="outline" className="ml-1 font-mono text-[11px]">
+            {skills.length}
+          </Badge>
+        )}
+      </div>
+      {skills === null || skills.length === 0 ? (
+        <p className="px-5 py-4 text-xs text-muted-foreground">
+          {emptySkillsCopy(skills, unregistered)}
+        </p>
+      ) : (
+        <ul className="divide-y divide-border">
+          {skills.map((s) => (
+            <SkillRow key={s.name} skill={s} />
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+/**
+ * Null is not emptiness — the same distinction SkillResourceDetails draws one
+ * level down. Nothing enumerated this agent's skills (its framework has no
+ * skill concept, or it was registered before the SDK discovered any), so
+ * "No skills declared." would assert something the manifest never said.
+ */
+function emptySkillsCopy(
+  skills: SkillDefinition[] | null,
+  unregistered: boolean,
+): string {
+  if (unregistered) {
+    return "Agent not registered yet — run `hexgate register` to populate.";
+  }
+  return skills === null
+    ? "Skills not enumerated at registration."
+    : "No skills declared.";
 }
 
 function SystemPromptSection({
@@ -302,6 +367,86 @@ function InputSchemaDetails({ schema }: { schema: InputSchema }) {
       )}
     </details>
   );
+}
+
+/** Executable code and the tools a skill adds — the two risk-carrying counts. */
+function SkillRow({ skill }: { skill: SkillDefinition }) {
+  const scripts = skill.resources?.scripts.length ?? 0;
+  const addedTools = skill.additional_tools.length;
+  return (
+    <li className="px-5 py-4 space-y-2">
+      <div className="flex items-baseline gap-3">
+        <span className="font-mono text-sm text-foreground">{skill.name}</span>
+        {scripts > 0 && (
+          <Badge variant="outline" className="font-mono text-[10px] py-0">
+            {pluralise(scripts, "script")}
+          </Badge>
+        )}
+        {addedTools > 0 && (
+          <Badge variant="outline" className="font-mono text-[10px] py-0">
+            +{pluralise(addedTools, "tool")}
+          </Badge>
+        )}
+      </div>
+      {skill.description.trim() ? (
+        <p className="text-xs text-muted-foreground">{skill.description}</p>
+      ) : null}
+      <SkillResourceDetails resources={skill.resources} />
+    </li>
+  );
+}
+
+const RESOURCE_KINDS = ["references", "assets", "scripts"] as const;
+
+function SkillResourceDetails({
+  resources,
+}: {
+  resources: SkillResources | null;
+}) {
+  // Null is not emptiness: the framework never enumerated resources, so
+  // claiming the skill ships none would be a fabrication.
+  if (resources === null) {
+    return (
+      <p className="text-[11px] text-muted-foreground">
+        Resources not enumerated by this framework.
+      </p>
+    );
+  }
+  const populated = RESOURCE_KINDS.filter((kind) => resources[kind].length > 0);
+  const total = populated.reduce(
+    (sum, kind) => sum + resources[kind].length,
+    0,
+  );
+  return (
+    <details className="rounded-md border border-border bg-background/40 group">
+      <summary className="px-3 py-2 cursor-pointer flex items-center gap-2 text-[11px] text-muted-foreground select-none">
+        <span>resources</span>
+        <Badge variant="outline" className="font-mono text-[10px] py-0">
+          {total}
+        </Badge>
+      </summary>
+      {populated.length === 0 ? (
+        <p className="px-3 pb-2 text-[11px] text-muted-foreground">
+          No resources.
+        </p>
+      ) : (
+        <ul className="px-3 pb-2 space-y-1 text-[11px] font-mono">
+          {populated.map((kind) => (
+            <li key={kind} className="flex items-baseline gap-2">
+              <span className="text-foreground">{kind}</span>
+              <span className="text-muted-foreground">
+                : {resources[kind].length}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </details>
+  );
+}
+
+function pluralise(count: number, noun: string): string {
+  return `${count} ${noun}${count === 1 ? "" : "s"}`;
 }
 
 function ManifestRow({
