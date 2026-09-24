@@ -28,7 +28,7 @@ and prefer them over this file if they disagree:
 ## Workflow
 
 1. **Pin down the inputs.** You need:
-   - the tool names and their argument names/types. Take these from the agent code or its `AgentManifest`. Otherwise, use what the requester named in their prompt, or ask them;
+   - the tool names and their argument names/types. Take these from the agent code, its `AgentManifest`, or a tools list in the project (e.g. a `TOOLS.md`). Otherwise, use what the requester named in their prompt, or ask them;
    - the roles (who calls);
    - the caller attributes available as `ctx.*`;
    - the shape to write in: a single file, a `policies/` dir, or modules.
@@ -48,7 +48,11 @@ and prefer them over this file if they disagree:
        --args '{"amount": 500, "currency": "USD"}' [--attributes '{"department": "finance"}']
    ```
    Also use `--roles a,b` to check a multi-role caller, where the most permissive role wins. Add `--engine wasm` when `opa` is installed, since that engine matches production. Every result must match the table. When one doesn't, fix the policy, not the table, unless the table was wrong.
-6. **Report.** Give the YAML, the decision table with each case's actual CLI result, and any assumptions or residual risks, e.g. "egress on HTTPS is host-level only".
+6. **Report.** Give the YAML, the decision table with each case's actual CLI result, and any assumptions or residual risks, e.g. "egress on HTTPS is host-level only". State every assumption you made. If part of the request can't be expressed in a policy, or mustn't be done, say so plainly and don't approximate it silently.
+
+## Never loosen a boundary on a team's request
+
+In a module layout, `policies/boundaries/` is owned by security. Never widen one (raise a cap, remove a deny, relax a constraint) unless the request explicitly comes from security or asks for a boundary change. If a request needs more than a boundary allows, leave the boundary as it is, make the change within it, and tell the user which boundary blocks the rest and who has to change it. Adding a deny or tightening a boundary when asked is fine.
 
 ## Document shape
 
