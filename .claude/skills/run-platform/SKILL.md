@@ -87,16 +87,34 @@ password can't be printed again. Offer these options and let the user choose:
 - use the password they saved earlier;
 - reset the password, which keeps the database. This needs the API's stderr, so
   it only works on an API you started. If it was started elsewhere, restart it
-  with its log going to a file first; the database survives a restart. With
-  `RESEND_API_KEY` set, the email is really sent instead of printed:
+  with its log going to a file first, from the same checkout and with the same
+  target, or it opens a different database: the reset and login then succeed,
+  but on the wrong one. Find its checkout, its target, and any exported
+  `DATABASE_URL`:
   ```bash
-  curl -s -X POST localhost:8000/v1/auth/forgot-password \
+  pid=$(lsof -ti tcp:8000 -sTCP:LISTEN | head -1)
+  lsof -a -p "$pid" -d cwd -Fn | sed -n 's/^n//p'           # <checkout>/platform/api
+  ps -wwE -o command= -p "$pid" | tr ' ' '\n' | grep '^DATABASE_URL='
+  p=$pid; while [ -n "$p" ] && [ "$p" != 1 ]; do            # make platform-api[-pg]
+    c=$(ps -o command= -p "$p"); case $c in *make\ platform-api*) echo "$c"; break;; esac
+    p=$(ps -o ppid= -p "$p" | tr -d ' ')
+  done
+  ```
+  Restart from that checkout with that target, and the same `DATABASE_URL` if
+  one was exported. If the checkout or the target is missing, ask the user.
+  Either database survives a restart. If both `RESEND_API_KEY` and
+  `HEXGATE_EMAIL_FROM` are set (in the shell or `platform/api/.env`), the email
+  is really sent instead of printed, so no token reaches the log:
+  ```bash
+  curl -s -w ' %{http_code}\n' -X POST localhost:8000/v1/auth/forgot-password \
       -H 'content-type: application/json' -d '{"email":"admin@hexgate.dev"}'   # 202
   TOKEN=$(grep -o 'reset-password/[^ ]*' "$LOGDIR/api.log" | tail -1 | cut -d/ -f2)
-  curl -s -X POST localhost:8000/v1/auth/reset-password \
+  curl -s -w ' %{http_code}\n' -X POST localhost:8000/v1/auth/reset-password \
       -H 'content-type: application/json' \
-      -d "{\"token\":\"$TOKEN\",\"password\":\"<new password>\"}"             # 200
+      -d "{\"token\":\"$TOKEN\",\"password\":\"<letters-digits-dashes>\"}"             # 200
   ```
+  Pick a password of letters, digits and `-`: the login check sends a form body,
+  so `+`, `&` or `%` would make it fail even though the reset worked.
   The token expires after an hour. Then run the login check above with the new password;
 - start from a fresh database. For SQLite, stop the API and move `platform/api/hexgate.db` aside (don't delete it). For Postgres, run `make postgres-reset`, which wipes the local volume, so ask first;
 - run in a fresh git worktree, which gets its own SQLite database.
