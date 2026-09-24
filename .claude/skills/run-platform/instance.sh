@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Inspect or stop a local hexgate platform instance (macOS or Linux).
 #   instance.sh who    # checkout, make target and exported DATABASE_URL of the API on :8000
+#   instance.sh dash   # URL of this checkout's dashboard (Vite moves off 5173 when it's taken)
 #   instance.sh stop   # stop this checkout's API, dashboard, collector and enricher
 set -u
 
@@ -69,11 +70,20 @@ who)
   [ -z "${db#DATABASE_URL=}" ] && echo "              (none exported: SQLite, or whatever platform/api/.env sets)"
   exit 0
   ;;
+dash)
+  root=$(git rev-parse --show-toplevel 2>/dev/null) || { echo "instance.sh: run it inside a hexgate checkout" >&2; exit 1; }
+  for port in 5173 5174 5175 5176; do
+    for p in $(listeners "$port"); do
+      [ "$(checkout_of "$p")" = "$root" ] && { echo "http://localhost:$port"; exit 0; }
+    done
+  done
+  echo "no dashboard of this checkout listens on 5173-5176"; exit 1
+  ;;
 stop)
   root=$(git rev-parse --show-toplevel 2>/dev/null) || { echo "instance.sh: run it inside a hexgate checkout" >&2; exit 1; }
   # API, dashboard (Vite moves up from 5173 when it is taken), collector,
   # enricher (matched on its -m module, not on a file path an editor could hold).
-  cands=$( { for port in 8000 5173 5174 5175 4317 4318; do listeners "$port"; done
+  cands=$( { for port in 8000 5173 5174 5175 5176 4317 4318; do listeners "$port"; done
              pgrep -f -- '-m hexgate_api\.jobs\.enricher'; } 2>/dev/null | sort -u)
   pids=""
   for p in $cands; do
@@ -94,6 +104,6 @@ stop)
   echo "still running after 10s:$alive (kill -9 them if they don't exit)"; exit 1
   ;;
 *)
-  echo "usage: instance.sh who|stop" >&2; exit 2
+  echo "usage: instance.sh who|dash|stop" >&2; exit 2
   ;;
 esac

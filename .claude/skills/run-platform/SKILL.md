@@ -29,7 +29,12 @@ cd "$(git rev-parse --show-toplevel)" && LOGDIR="/tmp/hexgate-$(basename "$PWD")
 ```
 
 - Any `MISS` line: stop and give the user the install hint the script printed.
-- A busy port: an instance may already be running. Check `curl -sf localhost:8000/health` and reuse the instance rather than starting a second one.
+- `8000 busy`: an API may already be running, but `/health` looks the same whatever database it uses, so check with `.claude/skills/run-platform/instance.sh who` before reusing it. Reuse it only when its checkout is this one and its target fits the mode you pick below: `make platform-api` for light, `make platform-api-pg` (or a Postgres `DATABASE_URL`) for full. A light-mode API under a full pipeline looks healthy, but the collector rejects every key it mints with 401.
+  - This checkout, wrong mode: `kill <pid>` with the pid `who` printed, wait until `curl -sf -m 2 localhost:8000/health` fails, then start the right target in step 3.
+  - Another checkout: ask the user before stopping it; it may be in use.
+  - `not a hexgate API on :8000`: tell the user what holds the port.
+- `5173 busy`: fine if it's another checkout's dashboard; Vite starts this one on the next free port, and step 3 finds it.
+- `4317`/`4318 busy` in full mode: a collector is already running. `make collector-run` would fail on it, so find out whose it is before starting yours.
 
 **Pick the mode.** Default to light unless the user wants audit events, agents
 talking to the platform, or integration tests.
@@ -67,15 +72,34 @@ UV_PYTHON=3.13 make platform-api >> "$LOGDIR/api.log" 2>&1       # :8000
 make dashboard >> "$LOGDIR/dash.log" 2>&1                         # :5173
 ```
 
-Full mode is different:
-- Use `make platform-api-pg`, not `platform-api`. Keys minted on SQLite get a 401 from the collector.
-- Build the collector once, before running it: `cd platform/collector && go build -o hexgate-collector .` (`collector-run` runs the binary and doesn't build it).
-- Wait for the API's `/health` before `make collector-run`: the collector needs `platform/api/data/hexgate.pub`, which the API writes on its first boot.
-- Then run `make collector-run` and `make enricher-run`, logging to `$LOGDIR/collector.log` and `$LOGDIR/enricher.log`.
+Full mode, in this order:
+1. Bring up the infrastructure first, in one foreground command, so the two
+   background targets below don't race to create the same containers:
+   `make postgres-init redpanda-topics clickhouse-migrate`. `clickhouse-migrate`
+   also brings an old ClickHouse schema up to date; the enricher exits on a
+   stale one.
+2. Start the API with `make platform-api-pg`, not `platform-api` (keys minted
+   on SQLite get a 401 from the collector), and wait for its `/health`: the
+   collector needs `platform/api/data/hexgate.pub`, which the API writes on its
+   first boot.
+3. Build the collector, every time (the binary is gitignored, so an old one
+   would silently stay): `cd platform/collector && go build -o hexgate-collector .`.
+   `collector-run` runs the binary and doesn't build it.
+4. Start `make collector-run` and `make enricher-run` as background commands,
+   appending to `$LOGDIR/collector.log` and `$LOGDIR/enricher.log`.
 
-Wait until `curl -sf localhost:8000/health` and `curl -sf localhost:5173` both
-succeed. Watch `api.log` for a `Traceback` while you wait. A CSS `@import`
-warning in `dash.log` is harmless.
+Wait until the API answers `curl -sf localhost:8000/health` and
+`.claude/skills/run-platform/instance.sh dash` prints this checkout's dashboard
+URL. Don't probe `localhost:5173` directly: when another checkout's dashboard
+holds it, Vite quietly moves this one to the next port. Watch `api.log` for a
+`Traceback` while you wait. A CSS `@import` warning in `dash.log` is harmless.
+
+In full mode the pipeline must be up too, or the audit page stays empty while
+everything else looks fine. Before reporting, check that:
+- the collector answers: `curl -s -o /dev/null localhost:4318 && echo up`;
+- the collector and enricher background tasks are still running, and their logs
+  have no `Traceback` or error exit. On a schema error, run
+  `make clickhouse-migrate` and start the enricher again.
 
 ## 4. Credentials
 
@@ -133,13 +157,13 @@ password can't be printed again. Offer these options and let the user choose:
   Pick a password of letters, digits and `-`: the login check sends a form body,
   so `+`, `&` or `%` would make it fail even though the reset worked.
   The token expires after an hour. Then run the login check above with the new password;
-- start from a fresh database. For SQLite, stop the API and move `platform/api/hexgate.db` aside (don't delete it). For Postgres, run `make postgres-reset`, which wipes the local volume, so ask first;
-- run in a fresh git worktree, which gets its own SQLite database.
+- start from a fresh database. For SQLite, stop the API and move `platform/api/hexgate.db` aside (don't delete it). For Postgres, run `make postgres-reset`, which wipes the one Postgres volume every checkout shares, so ask first; then restart the API, which creates the tables and seeds (printing a new block) only at startup;
+- light mode only: run in a fresh git worktree, which gets its own SQLite database. Full mode gets nothing fresh from a new worktree, because all checkouts share the same Postgres.
 
 ## 5. Report
 
 Give the user:
-- the dashboard URL, `http://localhost:5173`;
+- the dashboard URL that `instance.sh dash` printed (normally `http://localhost:5173`);
 - the email and password, and that they should rotate the password in account settings;
 - the log directory, `/tmp/hexgate-<checkout name>`;
 - how to stop the instance: stop the background tasks, or run `.claude/skills/run-platform/instance.sh stop`, which stops this checkout's API, dashboard, collector and enricher and nothing else.

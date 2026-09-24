@@ -99,7 +99,24 @@ fi
 
 root=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
 echo "state:"
-if [ -f "$root/platform/api/hexgate.db" ]; then
+# Which database the API will open (core/db.py): DATABASE_URL first, from the
+# environment or platform/api/.env, else SQLite. platform-api-pg (full mode)
+# sets it to the local Postgres, whose data lives in the platform_postgres-data
+# volume that `make postgres-reset` removes.
+env_db=${DATABASE_URL:-}
+[ -z "$env_db" ] && [ -f "$root/platform/api/.env" ] && \
+  env_db=$(sed -n 's/^DATABASE_URL=//p' "$root/platform/api/.env" | tail -1)
+if [ $full = 1 ]; then
+  if [ -n "$docker_hint" ]; then
+    warn "Postgres state unknown" "Docker isn't running, so the platform_postgres-data volume can't be checked"
+  elif docker volume inspect platform_postgres-data >/dev/null 2>&1; then
+    warn "Postgres volume exists" "probably already seeded, so no admin password will print; see SKILL.md"
+  else
+    ok "fresh Postgres volume (admin password prints on first boot)"
+  fi
+elif [ -n "$env_db" ]; then
+  warn "DATABASE_URL is set" "the API uses it, not SQLite, so it may already be seeded; see SKILL.md"
+elif [ -f "$root/platform/api/hexgate.db" ]; then
   warn "SQLite db exists" "already seeded, so no admin password will print; see SKILL.md"
 else
   ok "fresh SQLite db (admin password prints on first boot)"
