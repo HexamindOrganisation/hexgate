@@ -88,6 +88,7 @@ from hexgate.security.constraints import (
 from hexgate.security.models import (
     AGENT_REACH_PREFIXES,
     AGENT_RUN_TOOL,
+    SKILL_PREFIXES,
     AgentPolicy,
     BaseToolPolicy,
     FileToolPolicy,
@@ -331,15 +332,16 @@ def _default_rules(
     """
     if default_policy.mode == "deny":
         return []
-    # Agent keys are closed-world: a permissive default must not grant an unlisted
-    # agent key, so exclude them from the catch-all (an unlisted agent key then
-    # matches no rule and denies). Excludes exactly the reserved shapes — agent.run
-    # and the reach prefixes — so an authored tool merely named "agent.foo" still
-    # follows the default, matching is_agent_key in the pydantic engine (R-AGENT-002).
+    # Agent and skill keys are closed-world: a permissive default must not grant an
+    # unlisted one, so exclude them from the catch-all (it then matches no rule and
+    # denies). Excludes exactly the reserved shapes — agent.run, the reach prefixes
+    # and the skill prefixes — so an authored tool merely named "agent.foo" still
+    # follows the default, matching is_agent_key / is_skill_key in the pydantic
+    # engine (R-AGENT-002).
     tool_guard = [f"    input.tool != {json.dumps(AGENT_RUN_TOOL)}"]
     tool_guard += [
         f"    not startswith(input.tool, {json.dumps(prefix)})"
-        for prefix in AGENT_REACH_PREFIXES
+        for prefix in (*AGENT_REACH_PREFIXES, *SKILL_PREFIXES)
     ]
     if listed:
         members = ", ".join(json.dumps(name) for name in listed)

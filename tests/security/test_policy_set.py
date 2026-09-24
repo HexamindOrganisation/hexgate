@@ -579,3 +579,41 @@ def test_child_skill_overrides_the_parent_by_name(tmp_path: Path) -> None:
     policy = load_policy_set(root).policy_for(None)
     assert policy.skills["refunder"].mode == "allow"
     assert policy.skills["reporter"].mode == "allow"
+
+
+# ---------------------------------------------------------------------------
+# declares_skills — the skill gate's engagement predicate
+# ---------------------------------------------------------------------------
+
+
+def test_declares_skills_is_false_without_a_skills_block() -> None:
+    ps = load_policy_set_from_dict(
+        {"roles": {"default": {"tools": {"skills": {"mode": "allow"}}}}}
+    )
+    assert ps.declares_skills() is False
+
+
+def test_declares_skills_is_true_with_a_skills_block_on_any_role() -> None:
+    ps = load_policy_set_from_dict(
+        {
+            "roles": {
+                "default": {},
+                "billing": {"skills": {"refunder": {"mode": "deny"}}},
+            }
+        }
+    )
+    assert ps.declares_skills() is True
+
+
+def test_declares_skills_sees_an_inherited_skill(tmp_path: Path) -> None:
+    """Derived from the resolved keys, so a skill granted only by a mixin still
+    engages the gate — the fail-open the inheritance merge exists to prevent."""
+    root = tmp_path / "policies"
+    root.mkdir()
+    _write_policy(
+        root,
+        "skill_base",
+        "is_mixin: true\nskills:\n  refunder:\n    mode: allow\n",
+    )
+    _write_policy(root, "default", "inherits: [skill_base]\n")
+    assert load_policy_set(root).declares_skills() is True

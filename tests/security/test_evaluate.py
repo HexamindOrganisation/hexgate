@@ -98,3 +98,16 @@ def test_malformed_constraint_rejected_at_load() -> None:
         _policy(
             {"tools": {"refund": {"mode": "allow", "constraints": ["args.amount <="]}}}
         )
+
+
+def test_unlisted_skill_key_denies_under_permissive_default() -> None:
+    policy = _policy(
+        {
+            "default_policy": {"mode": "allow"},
+            "skills": {"refunder": {"mode": "allow"}},
+        }
+    )
+    for key in ("skill:other", "skill.resource:other", "skill.script:other"):
+        assert evaluate_tool_call(policy, key).outcome is DecisionOutcome.DENY
+    assert evaluate_tool_call(policy, "skill:refunder").allowed
+    assert evaluate_tool_call(policy, "fetch").allowed
