@@ -20,12 +20,16 @@ MIGRATIONS_DIR = (
 
 CREATION_ACTOR_COLUMN = "created_by_user_id"
 
-# Tables with no creation actor, and why. A fourth entry needs an argument in
+# Tables with no creation actor, and why. A further entry needs an argument in
 # review, not a silent omission.
 EXEMPT_TABLES: dict[str, str] = {
     "user": "self-created at register; the table is owned by FastAPI Users",
     "oauth_account": "created by FastAPI Users when an OAuth login lands",
     "tool": (
+        "child of agent_version, only written as part of a version snapshot and "
+        "never mutated alone, so it inherits that row's trail"
+    ),
+    "skill": (
         "child of agent_version, only written as part of a version snapshot and "
         "never mutated alone, so it inherits that row's trail"
     ),
@@ -113,8 +117,9 @@ def test_update_actor_lands_only_on_tables_mutated_in_place() -> None:
     """``updated_by_user_id`` is deliberately NOT on every table (decision D3).
 
     It only means something where a row is edited in place. ``role_binding`` is
-    replaced wholesale, ``agent_version`` / ``tool`` are immutable, and a
-    ``devtoken``'s one real mutation already carries ``revoked_by_user_id``.
+    replaced wholesale, ``agent_version`` / ``tool`` / ``skill`` are immutable,
+    and a ``devtoken``'s one real mutation already carries
+    ``revoked_by_user_id``.
     Growing this set is a design decision — make it an explicit one.
     """
     expected = {
