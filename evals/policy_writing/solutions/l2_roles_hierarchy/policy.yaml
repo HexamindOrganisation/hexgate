@@ -1,0 +1,34 @@
+version: 1
+
+roles:
+  reads:
+    is_mixin: true
+    tools:
+      view_orders: { mode: allow }
+      lookup_order: { mode: allow }
+
+  default:
+    inherits: [reads]
+
+  agent:
+    inherits: [reads]
+    tools:
+      send_email: { mode: allow }
+      refund_order:
+        mode: allow
+        constraints:
+          - args.amount <= 100
+
+  manager:
+    inherits: [reads]
+    tools:
+      send_email: { mode: allow }
+      refund_order:
+        mode: allow
+        constraints:
+          - args.amount <= 1000
+      wire_transfer:
+        mode: approval_required
+        constraints:
+          - args.amount <= 10000
+      export_customers: { mode: approval_required }

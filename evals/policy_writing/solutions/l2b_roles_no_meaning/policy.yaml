@@ -1,0 +1,15 @@
+version: 1
+
+roles:
+  reads:
+    is_mixin: true
+    tools:
+      view_orders: { mode: allow }
+      lookup_order: { mode: allow }
+
+  default:
+    inherits: [reads]
+  team_a:
+    inherits: [reads]
+  team_b:
+    inherits: [reads]
