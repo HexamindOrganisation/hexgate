@@ -68,10 +68,20 @@ workspace keeps the agent's files and `.answer.md` for inspection.
 
 ## Browse it
 
+Two ways. The team will settle on one later.
+
+**Notebook, which can run cases:** `make policy-eval-notebook`. Pick categories and cases, choose the agent, and press Run. You get a scorecard by category and the explorer below it. Without a run, it shows the newest saved run.
+
+**Static page:**
+
 ```bash
-uv run python evals/policy_writing/viewer.py --latest   # or --results .runs/<stamp>/results.json
+make policy-eval-viewer        # = viewer.py --latest; or --results .runs/<stamp>/results.json
 open evals/policy_writing/.runs/viewer.html
 ```
+
+## What the agent receives
+
+The prompt is exactly what a user would type: `/write-policy <request>`. The agent starts inside a fresh copy of the fixture, so it finds `TOOLS.md` and the policy files on its own. The only extra is a short harness note in its system prompt (`HARNESS` in `run.py`): the run is unattended, so it states assumptions instead of asking, and ends with a summary.
 
 This writes one self-contained HTML file. The cases are listed by category on
 the left. Selecting a case shows the request and the full prompt, the

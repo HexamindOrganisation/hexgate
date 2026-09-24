@@ -8,7 +8,7 @@ Left: the cases by category. Right: the request, the full prompt, what the
 agent was given (TOOLS.md and the starting policy), the expectations, the
 reference solution as a diff, and, when a run is loaded, every attempt's
 checks, answer and changed files. Writes .runs/viewer.html (open it in a
-browser; it needs no server).
+browser; it needs no server). notebook.py embeds the same page.
 """
 
 from __future__ import annotations
@@ -23,10 +23,14 @@ from pathlib import Path
 import yaml
 
 HERE = Path(__file__).resolve().parent
+REPO = HERE.parents[1]
 RUNS = HERE / ".runs"
 
 
-def _run_module():
+def load_run_module():
+    """evals/policy_writing/run.py, imported by path (it isn't a package)."""
+    if "policy_eval_run" in sys.modules:
+        return sys.modules["policy_eval_run"]
     spec = importlib.util.spec_from_file_location("policy_eval_run", HERE / "run.py")
     mod = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = mod  # dataclasses look their module up here
@@ -46,11 +50,22 @@ def read_tree(root: Path) -> dict[str, str]:
     }
 
 
-def load_results(path: Path) -> dict:
-    repo = HERE.parents[1]
+def load_cases() -> list[dict]:
+    run = load_run_module()
+    cases = yaml.safe_load((HERE / "cases.yaml").read_text())
+    for c in cases:
+        c.setdefault("category", "other")
+        c.setdefault("expect", {})
+        c["prompt"] = run.PROMPT.format(request=c["request"])
+        c["system"] = run.HARNESS
+    return cases
+
+
+def results_from_records(records: list[dict], agent: str, stamp: str) -> dict:
+    """results.json rows (or run.Result dicts) → the page's results block."""
     runs: dict[str, list] = {}
-    for r in json.loads(path.read_text()):
-        ws = repo / r["workspace"]
+    for r in records:
+        ws = REPO / r["workspace"]
         runs.setdefault(r["case"], []).append(
             {
                 "attempt": r["attempt"],
@@ -61,12 +76,48 @@ def load_results(path: Path) -> dict:
                 "files": read_tree(ws) if ws.is_dir() else None,
             }
         )
+    return {"agent": agent, "stamp": stamp, "runs": runs}
+
+
+def load_results(path: Path) -> dict:
     report = path.parent / "report.md"
     agent = "unknown"
     if report.exists():
         first = report.read_text().splitlines()[0]
         agent = first.split(":", 1)[-1].strip() if ":" in first else first
-    return {"agent": agent, "stamp": path.parent.name, "runs": runs}
+    return results_from_records(json.loads(path.read_text()), agent, path.parent.name)
+
+
+def latest_results_path() -> Path | None:
+    stamps = sorted(RUNS.glob("*/results.json"))
+    return stamps[-1] if stamps else None
+
+
+def build_html(results: dict | None = None, bare: bool = False) -> str:
+    data = {
+        "generated": time.strftime("%Y-%m-%d %H:%M"),
+        "cases": load_cases(),
+        "fixtures": {
+            p.name: read_tree(p)
+            for p in sorted((HERE / "fixtures").iterdir())
+            if p.is_dir()
+        },
+        "solutions": {
+            p.name: read_tree(p)
+            for p in sorted((HERE / "solutions").iterdir())
+            if p.is_dir()
+        },
+        "results": results,
+    }
+    blob = json.dumps(data, ensure_ascii=False).replace("</", "<\\/")
+    html = (HERE / "viewer.html").read_text().replace("__DATA__", blob)
+    if bare:
+        return html
+    return (
+        '<!doctype html>\n<html lang="en">\n<head>\n<meta charset="utf-8">\n'
+        '<meta name="viewport" content="width=device-width, initial-scale=1">\n'
+        "</head>\n<body>\n" + html + "\n</body>\n</html>\n"
+    )
 
 
 def main() -> int:
@@ -89,46 +140,10 @@ def main() -> int:
     )
     args = ap.parse_args()
 
-    run = _run_module()
-    cases = yaml.safe_load((HERE / "cases.yaml").read_text())
-    for c in cases:
-        c.setdefault("category", "other")
-        c.setdefault("expect", {})
-        c["prompt"] = run.PROMPT.format(
-            request=c["request"],
-            workspace="<workspace>",
-            layout=run.layout_of(HERE / "fixtures" / c["fixture"]),
-        )
-
-    results_path = args.results
-    if args.latest:
-        stamps = sorted(RUNS.glob("*/results.json"))
-        results_path = stamps[-1] if stamps else None
-    data = {
-        "generated": time.strftime("%Y-%m-%d %H:%M"),
-        "cases": cases,
-        "fixtures": {
-            p.name: read_tree(p)
-            for p in sorted((HERE / "fixtures").iterdir())
-            if p.is_dir()
-        },
-        "solutions": {
-            p.name: read_tree(p)
-            for p in sorted((HERE / "solutions").iterdir())
-            if p.is_dir()
-        },
-        "results": load_results(results_path) if results_path else None,
-    }
-    blob = json.dumps(data, ensure_ascii=False).replace("</", "<\\/")
-    html = (HERE / "viewer.html").read_text().replace("__DATA__", blob)
-    if not args.bare:
-        html = (
-            '<!doctype html>\n<html lang="en">\n<head>\n<meta charset="utf-8">\n'
-            '<meta name="viewport" content="width=device-width, initial-scale=1">\n'
-            "</head>\n<body>\n" + html + "\n</body>\n</html>\n"
-        )
+    results_path = latest_results_path() if args.latest else args.results
+    results = load_results(results_path) if results_path else None
     args.out.parent.mkdir(parents=True, exist_ok=True)
-    args.out.write_text(html)
+    args.out.write_text(build_html(results, bare=args.bare))
     print(
         f"wrote {args.out}"
         + (f" (with run {results_path.parent.name})" if results_path else "")

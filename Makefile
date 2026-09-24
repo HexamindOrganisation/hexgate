@@ -122,6 +122,14 @@ demo-mcp: ## Run the MCP-proxy demo (self-contained, no external services or LLM
 demo-gates: ## Open the gates showcase notebook (agent + MCP + policy; no LLM key). Local only — does NOT touch the Daytona snapshot.
 	$(UV) --with marimo marimo edit deploy/gates-demo/notebook.py
 
+.PHONY: policy-eval-notebook
+policy-eval-notebook: ## Open the policy-writing eval notebook (run the AI agent on the eval set, explore results)
+	$(UV) --with marimo marimo edit evals/policy_writing/notebook.py
+
+.PHONY: policy-eval-viewer
+policy-eval-viewer: ## Build the static eval explorer on the newest run → evals/policy_writing/.runs/viewer.html
+	$(UV) python evals/policy_writing/viewer.py --latest
+
 .PHONY: demo-override
 demo-override: ## Build a deny-everything bundle + chat with HEXGATE_LOCAL_POLICY set
 	@echo "→ Writing a deny-everything override policy…"

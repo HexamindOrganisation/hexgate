@@ -277,7 +277,7 @@ function renderDetail() {
     <div class="head-row"><h2>${esc(c.id)}</h2><span class="chip accent">${esc(c.category)}</span><span class="chip">fixture: ${esc(c.fixture)}</span>${st ? `<span class="chip ${st === "ok" ? "ok" : "bad"}">${st === "ok" ? "passing" : st === "bad" ? "failing" : "flaky"}</span>` : ""}</div>
     <div><p class="label">Request</p><p class="request">${esc(c.request)}</p></div>
     ${c.note ? `<div><p class="label">What this tests</p><p class="note">${esc(c.note)}</p></div>` : ""}
-    <details class="prompt"><summary>Full prompt sent to the agent</summary><pre>${esc(c.prompt)}</pre></details>
+    <details class="prompt"><summary>What the agent receives</summary><p class="label" style="margin-top:10px">Prompt (what a user types)</p><pre>${esc(c.prompt)}</pre><p class="label" style="margin-top:10px">Harness note (system prompt)</p><pre>${esc(c.system || "")}</pre><p class="note" style="margin-top:6px">It starts inside a fresh copy of the fixture, so it finds TOOLS.md and the policy files on its own.</p></details>
     <div class="tabs" role="tablist">${tabs.map(([k, l]) => `<button class="tab" role="tab" data-tab="${k}" aria-selected="${k === tab}">${l}</button>`).join("")}</div>
     <div style="display:flex;flex-direction:column;gap:16px">${body}</div>`;
 }

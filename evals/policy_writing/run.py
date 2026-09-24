@@ -43,23 +43,19 @@ HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[1]
 RUNS = HERE / ".runs"
 
-PROMPT = """/write-policy {request}
+# Exactly what a user would type. Everything the agent needs to know about the
+# project comes from the workspace it starts in (TOOLS.md, the policy files)
+# and from the skill, as it would in real use.
+PROMPT = "/write-policy {request}"
 
-The policy lives in `{workspace}`, a {layout}. The agent's tools, their \
-arguments, the roles and the caller attributes are listed in \
-`{workspace}/TOOLS.md`. Edit only files under `{workspace}`.
-
-This is a non-interactive run: do not ask questions. Make a reasonable \
-assumption and state it. If part of the request can't be expressed in a \
-policy, say so plainly. End with a short summary of what you changed."""
-
-
-def layout_of(fixture: Path) -> str:
-    if (fixture / "policies").is_dir():
-        return "policy module tree (policies/boundaries, policies/capabilities, roles.yaml)"
-    if (fixture / "policy.yaml").exists():
-        return "single policy file, policy.yaml"
-    return "single policy file, policy.yaml, which does not exist yet: create it"
+# Facts about the harness, not the request: appended to the agent's system
+# prompt, the way the platform will hand its own agent context.
+HARNESS = (
+    "You are running unattended in an automated evaluation, started in the "
+    "project's directory. Nobody can answer questions, so don't ask any: make "
+    "a reasonable assumption and state it. End with a short summary of what "
+    "you changed."
+)
 
 
 @dataclass
@@ -140,11 +136,15 @@ def child_env() -> dict[str, str]:
     }
 
 
-def run_claude(prompt: str, model: str | None, timeout: int) -> str:
+def run_claude(prompt: str, ws: Path, model: str | None, timeout: int) -> str:
+    # Started inside the workspace, which sits in the repo, so the project's
+    # skills load and `uv run hexgate` finds the project.
     cmd = [
         "claude",
         "-p",
         prompt,
+        "--append-system-prompt",
+        HARNESS,
         "--output-format",
         "json",
         "--permission-mode",
@@ -155,7 +155,7 @@ def run_claude(prompt: str, model: str | None, timeout: int) -> str:
     if model:
         cmd += ["--model", model]
     proc = subprocess.run(
-        cmd, cwd=REPO, capture_output=True, text=True, timeout=timeout, env=child_env()
+        cmd, cwd=ws, capture_output=True, text=True, timeout=timeout, env=child_env()
     )
     try:
         return json.loads(proc.stdout).get("result", "")
@@ -167,13 +167,14 @@ def run_cmd(command: str, case: dict, prompt: str, ws: Path, timeout: int) -> st
     env = {
         **os.environ,
         "CASE_PROMPT": prompt,
+        "CASE_SYSTEM": HARNESS,
         "CASE_REQUEST": case["request"],
         "CASE_WORKSPACE": str(ws),
     }
     proc = subprocess.run(
         command,
         shell=True,
-        cwd=REPO,
+        cwd=ws,
         capture_output=True,
         text=True,
         timeout=timeout,
@@ -414,11 +415,7 @@ def run_case(case: dict, attempt: int, stamp: Path, args: argparse.Namespace) ->
     shutil.copytree(HERE / "fixtures" / case["fixture"], ws)
     before = snapshot(ws)
     rel_ws = ws.relative_to(REPO)
-    prompt = PROMPT.format(
-        request=case["request"],
-        workspace=rel_ws,
-        layout=layout_of(HERE / "fixtures" / case["fixture"]),
-    )
+    prompt = PROMPT.format(request=case["request"])
     start = time.monotonic()
     try:
         if args.agent_cmd:
@@ -428,7 +425,7 @@ def run_case(case: dict, attempt: int, stamp: Path, args: argparse.Namespace) ->
         elif args.agent == "negatives":
             answer = run_reference(case, ws, "negatives")
         else:
-            answer = run_claude(prompt, args.model, args.timeout)
+            answer = run_claude(prompt, ws, args.model, args.timeout)
     except subprocess.TimeoutExpired:
         answer = "<timed out>"
     seconds = time.monotonic() - start
