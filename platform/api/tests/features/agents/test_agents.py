@@ -1697,3 +1697,34 @@ async def test_re_register_with_new_skills_creates_a_new_version(
     assert [row.name for row in await _skills_of(session_factory, second.id)] == [
         "refunds"
     ]
+
+
+async def test_register_first_time_generates_skills_in_the_starter_policy(
+    session_factory,
+) -> None:
+    """The generator is reached from ``register_manifest``, not just in isolation."""
+    await _register(
+        session_factory,
+        _sample_manifest(
+            "starter_skills_bot",
+            skills=[
+                _skill_payload("runbook", resources=None, additional_tools=[]),
+                _skill_payload("refunds"),
+            ],
+        ),
+    )
+
+    async with session_factory() as session:
+        agent = (
+            await session.exec(
+                select(Agent).where(
+                    Agent.project_id == DEFAULT_PROJECT_ID,
+                    Agent.name == "starter_skills_bot",
+                )
+            )
+        ).one()
+
+    roles = yaml.safe_load(agent.policy_yaml)["roles"]
+    assert roles["read_only"]["skills"] == {"runbook": {"mode": "allow"}}
+    assert roles["member"]["skills"] == {"refunds": {"mode": "approval_required"}}
+    assert roles["admin"]["skills"] == {"refunds": {"mode": "allow"}}
