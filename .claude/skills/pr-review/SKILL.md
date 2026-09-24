@@ -1,15 +1,23 @@
 ---
 name: pr-review
-description: Auto-review someone else's hexgate pull request in one invocation — run the tuned finder without posting, re-verify only the uncertain findings in fresh context, then post the survivors as one PR comment once the human approves. Use when asked to "review PR 231", "auto-review this PR", or to run the review pass before approving someone's change.
+description: Auto-review someone else's hexgate pull request end to end — run the tuned finder, re-verify the uncertain findings in fresh context, and post the survivors to the PR as one comment, unattended. Use when asked to "review PR 231", "auto-review this PR", or to run the review pass before approving someone's change.
 ---
 
 # Auto-review a hexgate pull request
 
-Three phases in one invocation: **find**, **verify**, **post**. A human gate sits
-between verify and post. Never post without it.
+Three phases in one invocation: **find**, **verify**, **post**. It runs unattended
+and posts its own comment — no approval step.
 
 Usage: `/pr-review <pr-number> [post-threshold]` — `post-threshold` defaults to
 **50**.
+
+Because nothing stands between a finding and the PR, the threshold is the only
+filter. Under the phase 2 rubric, 50 admits findings that are real but may be
+nitpicks; raise it per-run when reviewing someone whose PR you do not want noise
+on.
+
+This skill comments. It never approves a PR and never requests changes — that
+judgement stays with the reviewer.
 
 ## Why the phases are separate
 
@@ -25,11 +33,14 @@ re-derive it, and drops what does not survive.
 ## Phase 0 — eligibility and context
 
 Skip the review entirely, and say why, if the PR is closed, is a draft, is
-automated, or already carries a review comment from a previous run.
+automated, or already carries a review comment from a previous run — a comment
+whose body opens with `### Code review`, authored by the current `gh` user. This
+guard is what stops an unattended re-run from posting a second time, so check it
+before spending anything on phase 1.
 
 Otherwise gather, with `gh` (never web fetch):
 
-    gh pr view <n> --json title,body,author,state,isDraft,headRefOid,files
+    gh pr view <n> --json title,body,author,state,isDraft,headRefOid,files,comments
     gh pr diff <n>
 
 Capture `headRefOid` — the full SHA is required for permalinks in phase 3. Keep
@@ -51,9 +62,10 @@ It already fans out over the diff, applies a tuned false-positive rubric, and ru
 its own verification pass, returning each finding with a CONFIRMED or PLAUSIBLE
 verdict. Reproducing that by hand yields a weaker prompt.
 
-Omitting `--comment` is what keeps the human gate intact: the skill reports its
-findings and posts nothing. Never pass `--comment` here — phase 3 posts, and only
-after the user approves.
+Never pass `--comment` here. With it, the finder posts its own raw findings inline
+and phase 2 never runs — the PR gets the unverified list, below-threshold entries
+and all. Phase 3 owns posting, and posts one comment containing only what survived
+verification.
 
 Do **not** substitute `code-review:code-review`. That command's own steps discard
 every finding scored below 80 and then comment on the PR itself. Both defeat this
@@ -94,19 +106,17 @@ Score 0–100 on confidence the finding is real, using this rubric verbatim:
 `REJECTED` forces a score below 50 regardless. A verifier that cannot locate the
 code the claim refers to returns `REJECTED`.
 
-## Phase 3 — report, gate, post
+## Phase 3 — post, then report
 
-Report every finding to the user as a table — file and line, verdict from phase 1,
-adjusted score, one-line claim — including the ones that fell below the threshold,
-marked as dropped with the drop reason. The score movement between phases is the
-signal that verification is earning its keep.
+Select the findings at or above the post threshold. If none clear it, post nothing
+and say the PR came back clean, naming what was checked.
 
-**Then stop and wait.** The user approves, edits, or discards findings. Do not
-post, and do not approve or request changes on the PR, without an explicit
-instruction in reply to that table.
+Before posting, repeat the phase 0 eligibility check against fresh `gh pr view`
+output. Phases 1 and 2 take minutes, and the PR may have merged, closed, turned
+draft, or picked up a review comment in the meantime. If it is no longer eligible,
+post nothing and report why.
 
-On approval, post **one** comment with `gh pr comment`, containing only findings
-at or above the post threshold, ordered by adjusted score:
+Then post **one** comment with `gh pr comment`, ordered by adjusted score:
 
     ### Code review
 
@@ -125,5 +135,15 @@ Permalink rules — a broken link wastes the author's time:
   expand it.
 - Centre the range on the line, with at least one line either side.
 
-No emojis. If nothing clears the threshold, post nothing and tell the user the PR
-came back clean, naming what was checked.
+No emojis.
+
+If `headRefOid` changed between phase 0 and the re-check, the author pushed while
+the review was running and the findings describe a diff that no longer exists.
+Post nothing, and tell the user the review went stale and needs a re-run.
+
+After posting, report to the user as a table — file and line, verdict from phase 1,
+adjusted score, one-line claim — marking which findings were posted and which fell
+below the threshold, with the drop reason. Include the URL of the comment. Nothing
+gates on this, but it is the record of what went onto someone else's PR in your
+name, and the score movement between phases is the signal that verification is
+earning its keep.
