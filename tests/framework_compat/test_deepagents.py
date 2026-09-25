@@ -125,7 +125,13 @@ def test_allow_decision(probe_context):
     assert decision.allowed
 
 
-def test_graph_binds_more_tools_than_the_caller_passed() -> None:
+# Names carry a ``_TIER_BY_FRAGMENT`` fragment (scripts/framework_matrix.py) so
+# the matrix driver classifies them; an unmapped failure never reads BROKEN.
+# Top-level ToolNode only: the ``task`` sub-agent's own ``execute`` is not
+# reached by wrapping (see ``discover_graph_tools``).
+
+
+def test_contract_graph_binds_more_tools_than_the_caller_passed() -> None:
     """Tier 0 — the framework injects tools the caller never passes (#249)."""
     tools = _build_tools()
     bound = _bound_tools(_build_graph(tools))
@@ -134,31 +140,42 @@ def test_graph_binds_more_tools_than_the_caller_passed() -> None:
     assert len(bound) > len(tools)
 
 
-def test_wrap_gates_a_framework_injected_tool(probe_context: Any) -> None:
-    """Tier 1 — wrapping installs the enforcer on a tool the caller never passed."""
+def _wrapped_framework_tool() -> Any:
     from hexgate.adapters.langchain import wrap_langchain_agent
 
     tools = _build_tools()
     graph = _build_graph(tools)
     wrap_langchain_agent(agent=graph, tools=tools)
-    injected = _bound_tools(graph)[FRAMEWORK_TOOL]
+    return _bound_tools(graph)[FRAMEWORK_TOOL]
+
+
+def _assert_denied(result: Any) -> None:
+    assert isinstance(result, dict) and result.get("ok") is False
+    assert DENY_MARKER in str(result.get("error"))
+
+
+def test_deny_path_wrap_gates_a_framework_injected_tool(probe_context: Any) -> None:
+    """Tier 1 — wrapping installs the enforcer on a tool the caller never passed."""
+    injected = _wrapped_framework_tool()
     assert getattr(injected, "_hexgate_enforcer_installed", False) is True
 
 
-def test_framework_injected_tool_denies_and_does_not_execute(
+def test_deny_path_framework_injected_tool_does_not_execute(
     probe_context: Any,
 ) -> None:
-    """Tier 1 — the injected shell tool falls through to default-deny."""
-    from hexgate.adapters.langchain import wrap_langchain_agent
-
-    tools = _build_tools()
-    graph = _build_graph(tools)
-    wrap_langchain_agent(agent=graph, tools=tools)
-    execute = _bound_tools(graph)[FRAMEWORK_TOOL]
+    """Tier 1 — the injected shell tool's sync gate falls through to default-deny."""
+    execute = _wrapped_framework_tool()
     with probe_context.sync_scope():
-        result = execute.func(command=HARMLESS_COMMAND)
-    assert isinstance(result, dict) and result.get("ok") is False
-    assert DENY_MARKER in str(result.get("error"))
+        _assert_denied(execute.func(command=HARMLESS_COMMAND))
+
+
+async def test_deny_path_framework_injected_tool_does_not_execute_async(
+    probe_context: Any,
+) -> None:
+    """Tier 1 — same, through the coroutine a real ``ainvoke`` run takes."""
+    execute = _wrapped_framework_tool()
+    async with probe_context:
+        _assert_denied(await execute.coroutine(command=HARMLESS_COMMAND))
 
 
 @pytest.mark.skipif(
