@@ -9,6 +9,7 @@ langgraph versions deepagents pulls in transitively.
 from __future__ import annotations
 
 import os
+from typing import Any
 
 import pytest
 
@@ -17,6 +18,11 @@ from tests.framework_compat._probe import ALLOWED_TOOL, DENIED_TOOL, DENY_MARKER
 from tests.framework_compat.conftest import AGENT_NAMES
 
 INSTRUCTIONS = "You are a helpful assistant. Use the available tools."
+
+_TOOLS_NODE = "tools"
+FRAMEWORK_TOOL = "execute"  # deepagents' arbitrary-shell primitive
+# Only runs if the gate is missing; ``echo`` keeps that failure harmless.
+HARMLESS_COMMAND = "echo hexgate-probe"
 
 # deepagents has no adapter of its own and rides the installed langchain. If
 # that pairing is incompatible (e.g. deepagents importing a symbol a newer
@@ -65,15 +71,28 @@ def _model():
     return ChatOpenAI(model="gpt-4o-mini", api_key=key)
 
 
-def _build_wrapped(tools):
-    from hexgate.adapters.langchain import wrap_langchain_agent
-
+def _build_graph(tools):
     graph = _create_deep_agent(model=_model(), tools=tools, system_prompt=INSTRUCTIONS)
     # deepagents may leave graph.name unset; resolve_policy needs a non-empty
     # lookup key, so name it explicitly before wrapping.
     if not getattr(graph, "name", None):
         graph.name = AGENT_NAMES["deepagents"]
-    return wrap_langchain_agent(agent=graph, tools=tools)
+    return graph
+
+
+def _build_wrapped(tools):
+    from hexgate.adapters.langchain import wrap_langchain_agent
+
+    return wrap_langchain_agent(agent=_build_graph(tools), tools=tools)
+
+
+def _bound_tools(graph: Any) -> dict[str, Any]:
+    """The tools actually bound in the graph's ToolNode, by name.
+
+    Read from the framework directly rather than via ``discover_graph_tools``,
+    so the probe cannot pass by agreeing with the code under test.
+    """
+    return graph.nodes[_TOOLS_NODE].bound.tools_by_name
 
 
 def test_contract():
@@ -104,6 +123,42 @@ def test_allow_decision(probe_context):
     with probe_context.sync_scope():
         decision = wrapped._binding.enforcer.decide(ALLOWED_TOOL, {"city": "Paris"})
     assert decision.allowed
+
+
+def test_graph_binds_more_tools_than_the_caller_passed() -> None:
+    """Tier 0 — the framework injects tools the caller never passes (#249)."""
+    tools = _build_tools()
+    bound = _bound_tools(_build_graph(tools))
+    assert FRAMEWORK_TOOL in bound
+    # Loose on purpose: deepagents' built-in set churns across releases.
+    assert len(bound) > len(tools)
+
+
+def test_wrap_gates_a_framework_injected_tool(probe_context: Any) -> None:
+    """Tier 1 — wrapping installs the enforcer on a tool the caller never passed."""
+    from hexgate.adapters.langchain import wrap_langchain_agent
+
+    tools = _build_tools()
+    graph = _build_graph(tools)
+    wrap_langchain_agent(agent=graph, tools=tools)
+    injected = _bound_tools(graph)[FRAMEWORK_TOOL]
+    assert getattr(injected, "_hexgate_enforcer_installed", False) is True
+
+
+def test_framework_injected_tool_denies_and_does_not_execute(
+    probe_context: Any,
+) -> None:
+    """Tier 1 — the injected shell tool falls through to default-deny."""
+    from hexgate.adapters.langchain import wrap_langchain_agent
+
+    tools = _build_tools()
+    graph = _build_graph(tools)
+    wrap_langchain_agent(agent=graph, tools=tools)
+    execute = _bound_tools(graph)[FRAMEWORK_TOOL]
+    with probe_context.sync_scope():
+        result = execute.func(command=HARMLESS_COMMAND)
+    assert isinstance(result, dict) and result.get("ok") is False
+    assert DENY_MARKER in str(result.get("error"))
 
 
 @pytest.mark.skipif(
