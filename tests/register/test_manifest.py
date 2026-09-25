@@ -1287,6 +1287,20 @@ class _FakeSkillsMiddleware:
         self.sources = sources
         self.source_labels = labels if labels is not None else list(sources)
 
+    def before_agent(self, state, runtime):
+        return None
+
+
+def _graph_with_skills_middleware(middleware, bound_tools: list | None = None):
+    """Stub graph carrying the middleware's hook node the way create_agent compiles it."""
+    from types import SimpleNamespace
+
+    graph = _graph_with_bound_tools("deep", bound_tools or [])
+    graph.nodes["SkillsMiddleware.before_agent"] = SimpleNamespace(
+        bound=SimpleNamespace(func=middleware.before_agent)
+    )
+    return graph
+
 
 def _skill_meta(name: str, root: str = _SKILLS_ROOT, **extra) -> dict:
     return {
@@ -1346,7 +1360,10 @@ def test_deepagents_allowed_tools_is_not_resplit(fake_deepagents):
 
 def test_deepagents_skill_content_hash_is_the_body_digest(fake_deepagents):
     a, b = _skill_meta("alpha"), _skill_meta("beta")
-    bodies = {a["path"]: b"alpha body", b["path"]: b"beta body"}
+    bodies = {
+        a["path"]: b"---\nname: alpha\n---\nalpha body\n",
+        b["path"]: b"---\nname: beta\n---\nbeta body\n",
+    }
     backend = _FakeSkillsBackend({_SKILLS_ROOT: [a, b]}, bodies)
 
     manifest = _skills_manifest(_FakeSkillsMiddleware(backend, [_SKILLS_ROOT]))
@@ -1356,6 +1373,36 @@ def test_deepagents_skill_content_hash_is_the_body_digest(fake_deepagents):
         "beta": hashlib.sha256(b"beta body").hexdigest(),
     }
     assert backend.download_calls == [[a["path"], b["path"]]]
+
+
+def test_deepagents_and_adk_hash_one_skill_md_alike(fake_deepagents, tmp_path):
+    pytest.importorskip("google.adk.tools.skill_toolset")
+    from google.adk.skills import load_skill_from_dir
+    from google.adk.tools.skill_toolset import SkillToolset
+
+    skill_dir = _write_skill_dir(tmp_path)
+    toolset = SkillToolset([load_skill_from_dir(skill_dir)])
+    adk = create_google_manifest(_google_agent([toolset]))
+    meta = _skill_meta("refunder")
+    raw = (skill_dir / "SKILL.md").read_bytes()
+    backend = _FakeSkillsBackend({_SKILLS_ROOT: [meta]}, {meta["path"]: raw})
+
+    deep = _skills_manifest(_FakeSkillsMiddleware(backend, [_SKILLS_ROOT]))
+
+    assert deep.skills[0].content_hash == adk.skills[0].content_hash
+
+
+def test_deepagents_frontmatter_only_edit_keeps_the_hash(fake_deepagents):
+    meta = _skill_meta("refunder")
+    before = b"---\nname: refunder\ndescription: old\n---\nRefund it.\n"
+    after = b"---\nname: refunder\ndescription: new\n---\nRefund it.\n"
+
+    def hash_of(body: bytes) -> str | None:
+        backend = _FakeSkillsBackend({_SKILLS_ROOT: [meta]}, {meta["path"]: body})
+        manifest = _skills_manifest(_FakeSkillsMiddleware(backend, [_SKILLS_ROOT]))
+        return manifest.skills[0].content_hash
+
+    assert hash_of(before) == hash_of(after)
 
 
 def test_content_hash_omitted_when_the_body_cannot_be_read(fake_deepagents):
@@ -1448,3 +1495,65 @@ def test_skills_do_not_disturb_the_discovered_tool_list(fake_deepagents):
     without = create_langchain_manifest(_graph_with_bound_tools("deep", bound), [])
 
     assert with_skills.tools == without.tools
+
+
+def test_skills_are_discovered_from_the_graph_middleware(fake_deepagents):
+    backend = _FakeSkillsBackend({_SKILLS_ROOT: [_skill_meta("refunder")]}, {})
+    graph = _graph_with_skills_middleware(
+        _FakeSkillsMiddleware(backend, [_SKILLS_ROOT])
+    )
+
+    manifest = create_langchain_manifest(graph, [])
+
+    assert [s.name for s in manifest.skills] == ["refunder"]
+
+
+def test_explicit_skills_middleware_overrides_the_graph_one(fake_deepagents):
+    in_graph = _FakeSkillsBackend({_SKILLS_ROOT: [_skill_meta("in-graph")]}, {})
+    explicit = _FakeSkillsBackend({_SKILLS_ROOT: [_skill_meta("explicit")]}, {})
+    graph = _graph_with_skills_middleware(
+        _FakeSkillsMiddleware(in_graph, [_SKILLS_ROOT])
+    )
+
+    manifest = create_langchain_manifest(
+        graph, [], skills_middleware=_FakeSkillsMiddleware(explicit, [_SKILLS_ROOT])
+    )
+
+    assert [s.name for s in manifest.skills] == ["explicit"]
+
+
+def test_backend_factory_is_reported_as_not_enumerable(fake_deepagents, caplog):
+    middleware = _FakeSkillsMiddleware(lambda runtime: None, [_SKILLS_ROOT])
+
+    with caplog.at_level(logging.WARNING, logger=_LANGCHAIN_MANIFEST_LOGGER):
+        manifest = _skills_manifest(middleware)
+
+    assert manifest.skills is None
+    assert "per-run factory" in caplog.text
+
+
+def test_run_state_backend_is_reported_as_not_enumerable(fake_deepagents, caplog):
+    def outside_a_run(backend, source):
+        raise RuntimeError("StateBackend must be used inside a LangGraph graph")
+
+    fake_deepagents._list_skills = outside_a_run
+    backend = _FakeSkillsBackend({}, {})
+
+    with caplog.at_level(logging.WARNING, logger=_LANGCHAIN_MANIFEST_LOGGER):
+        manifest = _skills_manifest(_FakeSkillsMiddleware(backend, [_SKILLS_ROOT]))
+
+    assert manifest.skills is None
+    assert "cannot be enumerated at registration" in caplog.text
+
+
+def test_deepagents_absent_warns_once_across_sources(monkeypatch, caplog):
+    import sys
+
+    monkeypatch.setitem(sys.modules, _DEEPAGENTS_SKILLS_MODULE, None)
+    backend = _FakeSkillsBackend({}, {})
+    middleware = _FakeSkillsMiddleware(backend, ["/a", "/b", "/c"])
+
+    with caplog.at_level(logging.WARNING, logger=_LANGCHAIN_MANIFEST_LOGGER):
+        _skills_manifest(middleware)
+
+    assert caplog.text.count("skill listing unavailable") == 1

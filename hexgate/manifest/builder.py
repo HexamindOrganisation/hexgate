@@ -23,9 +23,10 @@ def create_manifest(
 
     `tools` is required and used explicitly only when `agent` is a raw LangChain
     compiled graph, since those graphs do not reliably expose their tool nodes.
-    The same is true of `model` and `system_prompt`. `skills_middleware` (a
-    deepagents ``SkillsMiddleware``) records the graph's skills; other frameworks
-    ignore it so callers can pass a uniform kwarg set.
+    The same is true of `model` and `system_prompt`. A graph's deepagents skills
+    are discovered from its compiled ``SkillsMiddleware``; `skills_middleware`
+    overrides that instance. Other frameworks ignore it so callers can pass a
+    uniform kwarg set.
 
     Framework-specific submodules (and their SDK imports) are loaded lazily so
     callers only import the SDK they actually use.
