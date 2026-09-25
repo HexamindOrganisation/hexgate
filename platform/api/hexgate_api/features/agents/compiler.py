@@ -5,10 +5,13 @@ of the SDK/opa shell-out and the tool-name heuristics used to seed a
 brand-new agent's ``policy_yaml``.
 """
 
+import json
 import logging
 from typing import Callable
 
-from hexgate_api.schemas import AgentManifest
+import yaml
+
+from hexgate_api.schemas import AgentManifest, SkillDefinition
 
 logger = logging.getLogger("hexgate.platform.agents.compiler")
 
@@ -126,6 +129,26 @@ def _classify_tool(name: str) -> str:
     return "unknown"
 
 
+_KEY_PROBE_VALUE = 0
+
+
+def _yaml_key(name: str) -> str:
+    """Render ``name`` as a mapping key that YAML reads back as that exact string.
+
+    Bare when it already round-trips, so ordinary names stay unquoted and the
+    generated YAML is unchanged for them. Double-quoted otherwise: YAML 1.1 reads
+    ``on``/``yes`` as booleans, ``null`` as None and ``2024`` as an int, and the
+    policy loader rejects a non-string key — failing the whole starter policy.
+    A JSON string is a valid YAML double-quoted scalar.
+    """
+    try:
+        if yaml.safe_load(f"{name}: {_KEY_PROBE_VALUE}") == {name: _KEY_PROBE_VALUE}:
+            return name
+    except yaml.YAMLError:
+        pass
+    return json.dumps(name)
+
+
 def _emit_tool_lines(names: list[str], mode: str, indent: int = 6) -> str:
     """Render ``{name: { mode: ... }}`` lines for a YAML policy block.
 
@@ -135,7 +158,35 @@ def _emit_tool_lines(names: list[str], mode: str, indent: int = 6) -> str:
     children, which the AgentPolicy validator rejects).
     """
     pad = " " * indent
-    return "".join(f"{pad}{n}: {{ mode: {mode} }}\n" for n in names)
+    return "".join(f"{pad}{_yaml_key(n)}: {{ mode: {mode} }}\n" for n in names)
+
+
+_SKILL_GATED = "gated"
+_SKILL_PLAIN = "plain"
+
+
+def _classify_skill(skill: SkillDefinition) -> str:
+    """Return ``"gated" | "plain"`` for one skill.
+
+    A skill that ships scripts, or widens the agent's callable tool surface once
+    activated, is one an operator wants to see before it runs; instructions alone
+    are cheap. Unenumerated resources (``None``) mean "no scripts known", not
+    gated — otherwise every deepagents skill would sit behind approval on missing
+    information rather than a risk signal.
+    """
+    scripts = skill.resources.scripts if skill.resources is not None else []
+    return _SKILL_GATED if scripts or skill.additional_tools else _SKILL_PLAIN
+
+
+def _emit_skill_lines(names: list[str], mode: str, indent: int = 6) -> str:
+    """Render ``{name: { mode: ... }}`` lines for a ``skills:`` block.
+
+    Empty string for no names, so the caller can drop the surrounding ``skills:``
+    key. Byte-identical to :func:`_emit_tool_lines` today but kept separate on
+    purpose: the skills block is free to grow ``via:`` without a refactor.
+    """
+    pad = " " * indent
+    return "".join(f"{pad}{_yaml_key(n)}: {{ mode: {mode} }}\n" for n in names)
 
 
 def _default_policy_for_manifest(manifest: AgentManifest) -> str:
@@ -153,6 +204,11 @@ def _default_policy_for_manifest(manifest: AgentManifest) -> str:
     Unknown tools (those that didn't match any heuristic) land in the
     write bucket — fail-closed, surfaced to the operator via a comment so
     they can reclassify in the dashboard editor.
+
+    Skills follow the same placement: instruction-only skills are allowed on
+    the ``read_only`` mixin; gated skills (scripts or extra tools) are
+    ``approval_required`` for ``member`` and ``allow`` for ``admin``, and so
+    absent — closed-world denied — for ``default``.
 
     Only called for brand-new agents (first POST /v1/agents for a given
     name); re-registers of an existing agent leave the operator's edited
@@ -172,6 +228,25 @@ def _default_policy_for_manifest(manifest: AgentManifest) -> str:
             writes.append(tool.name)
         else:
             unknowns.append(tool.name)
+
+    plain_skills: list[str] = []
+    gated_skills: list[str] = []
+    for skill in manifest.skills or []:
+        if _classify_skill(skill) == _SKILL_GATED:
+            gated_skills.append(skill.name)
+        else:
+            plain_skills.append(skill.name)
+
+    skills_note = (
+        "#\n"
+        "# Skills discovered at registration. Skills that ship scripts or add\n"
+        "# tools are approval_required for 'member', allowed for 'admin', and\n"
+        "# denied for 'default'. All other skills — including those whose\n"
+        "# resources were not enumerated, so may still ship scripts — are\n"
+        "# allowed for every role via read_only. Review and adjust.\n"
+        if plain_skills or gated_skills
+        else ""
+    )
 
     # Heads-up comment for unknown-bucket tools — the operator sees them
     # in the dashboard editor and can move them to a more appropriate
@@ -211,6 +286,22 @@ def _default_policy_for_manifest(manifest: AgentManifest) -> str:
         else ""
     )
 
+    read_only_skills = (
+        f"    skills:\n{_emit_skill_lines(plain_skills, 'allow')}"
+        if plain_skills
+        else ""
+    )
+    member_skills = (
+        f"    skills:\n{_emit_skill_lines(gated_skills, 'approval_required')}"
+        if gated_skills
+        else ""
+    )
+    admin_skills = (
+        f"    skills:\n{_emit_skill_lines(gated_skills, 'allow')}"
+        if gated_skills
+        else ""
+    )
+
     return f"""version: 1
 # Generated by `hexgate register`. Edit freely — re-running register
 # never overwrites this; it only updates the manifest snapshot.
@@ -224,19 +315,19 @@ def _default_policy_for_manifest(manifest: AgentManifest) -> str:
 # Note: 'admin' here is an AGENT policy role (used by the SDK at request
 # time via User(role="admin")), distinct from the ORG admin role on
 # /orgs/:id/members.
-
+{skills_note}
 {unknown_note}roles:
   read_only:
     is_mixin: true
     default_policy:
       mode: deny
-{read_only_tools}
+{read_only_tools}{read_only_skills}
   default:
     inherits: [read_only]
 
   member:
     inherits: [read_only]
-{member_tools}
+{member_tools}{member_skills}
   admin:
     inherits: [read_only]
-{admin_tools}"""
+{admin_tools}{admin_skills}"""
