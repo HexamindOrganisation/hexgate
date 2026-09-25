@@ -17,12 +17,15 @@ def create_manifest(
     tools: list[BaseTool] | None = None,
     model: object | None = None,
     system_prompt: object | None = None,
+    skills_middleware: object | None = None,
 ) -> AgentManifest:
     """Create an AgentManifest from an Agent.
 
     `tools` is required and used explicitly only when `agent` is a raw LangChain
     compiled graph, since those graphs do not reliably expose their tool nodes.
-    The same is true of `model` and `system_prompt`.
+    The same is true of `model` and `system_prompt`. `skills_middleware` (a
+    deepagents ``SkillsMiddleware``) records the graph's skills; other frameworks
+    ignore it so callers can pass a uniform kwarg set.
 
     Framework-specific submodules (and their SDK imports) are loaded lazily so
     callers only import the SDK they actually use.
@@ -37,6 +40,7 @@ def create_manifest(
         tools=tools,
         model=model,
         system_prompt=system_prompt,
+        skills_middleware=skills_middleware,
     )
     refs = [
         SubagentRef(name=link.target, via=link.via)
@@ -54,6 +58,7 @@ def _build_base_manifest(
     tools: list[BaseTool] | None,
     model: object | None,
     system_prompt: object | None,
+    skills_middleware: object | None,
 ) -> AgentManifest:
     """Dispatch to the framework-specific manifest builder (no sub-agents yet)."""
     if isinstance(agent, HexgateAgent):
@@ -85,6 +90,7 @@ def _build_base_manifest(
             description=description,
             model=model,
             system_prompt=system_prompt,
+            skills_middleware=skills_middleware,
         )
 
     if module == "pydantic_ai" or module.startswith("pydantic_ai."):

@@ -1247,3 +1247,204 @@ def test_langchain_manifest_excludes_injected_state_and_tool_call_id():
     [definition] = manifest.tools
     assert list(definition.input_schema.properties) == ["order_id"]
     assert definition.input_schema.required == ["order_id"]
+
+
+# --- deepagents skill discovery ---------------------------------------------
+
+_SKILLS_ROOT = "/skills/project"
+_DEEPAGENTS_SKILLS_MODULE = "deepagents.middleware.skills"
+_LANGCHAIN_MANIFEST_LOGGER = "hexgate.manifest.langchain"
+
+
+class _FakeDownload:
+    def __init__(self, path: str, content: bytes | None, error: str | None = None):
+        self.path = path
+        self.content = content
+        self.error = error
+
+
+class _FakeSkillsBackend:
+    """Serves SKILL.md bodies; ``listing`` stands in for deepagents' parser."""
+
+    def __init__(self, listing: dict[str, list[dict]], bodies: dict[str, bytes]):
+        self.listing = listing
+        self.bodies = bodies
+        self.download_calls: list[list[str]] = []
+
+    def download_files(self, paths: list[str]) -> list[_FakeDownload]:
+        self.download_calls.append(list(paths))
+        return [
+            _FakeDownload(p, self.bodies[p])
+            if p in self.bodies
+            else _FakeDownload(p, None, "file_not_found")
+            for p in paths
+        ]
+
+
+class _FakeSkillsMiddleware:
+    def __init__(self, backend, sources: list[str], labels: list[str] | None = None):
+        self._backend = backend
+        self.sources = sources
+        self.source_labels = labels if labels is not None else list(sources)
+
+
+def _skill_meta(name: str, root: str = _SKILLS_ROOT, **extra) -> dict:
+    return {
+        "path": f"{root}/{name}/SKILL.md",
+        "name": name,
+        "description": f"{name} skill",
+        "allowed_tools": [],
+        **extra,
+    }
+
+
+@pytest.fixture
+def fake_deepagents(monkeypatch):
+    """Install a stand-in ``deepagents.middleware.skills`` backed by the fake backend."""
+    import sys
+    import types
+
+    module = types.ModuleType(_DEEPAGENTS_SKILLS_MODULE)
+    module._list_skills = lambda backend, source: backend.listing.get(source, [])
+    monkeypatch.setitem(sys.modules, _DEEPAGENTS_SKILLS_MODULE, module)
+    return module
+
+
+def _skills_manifest(middleware, tools: list | None = None):
+    return create_langchain_manifest(
+        _graph_with_bound_tools("deep", tools or []), [], skills_middleware=middleware
+    )
+
+
+def test_langchain_manifest_records_deepagents_skills(fake_deepagents):
+    meta = _skill_meta("refunder")
+    backend = _FakeSkillsBackend({_SKILLS_ROOT: [meta]}, {meta["path"]: b"# body"})
+
+    manifest = _skills_manifest(_FakeSkillsMiddleware(backend, [_SKILLS_ROOT]))
+
+    [skill] = manifest.skills
+    assert (skill.name, skill.description) == ("refunder", "refunder skill")
+    assert skill.additional_tools == []
+
+
+def test_deepagents_skill_resources_is_none(fake_deepagents):
+    backend = _FakeSkillsBackend({_SKILLS_ROOT: [_skill_meta("refunder")]}, {})
+
+    manifest = _skills_manifest(_FakeSkillsMiddleware(backend, [_SKILLS_ROOT]))
+
+    assert manifest.skills[0].resources is None
+
+
+def test_deepagents_allowed_tools_is_not_resplit(fake_deepagents):
+    meta = _skill_meta("refunder", allowed_tools=["read_file", "issue_refund"])
+    backend = _FakeSkillsBackend({_SKILLS_ROOT: [meta]}, {})
+
+    manifest = _skills_manifest(_FakeSkillsMiddleware(backend, [_SKILLS_ROOT]))
+
+    assert manifest.skills[0].allowed_tools == ["read_file", "issue_refund"]
+
+
+def test_deepagents_skill_content_hash_is_the_body_digest(fake_deepagents):
+    a, b = _skill_meta("alpha"), _skill_meta("beta")
+    bodies = {a["path"]: b"alpha body", b["path"]: b"beta body"}
+    backend = _FakeSkillsBackend({_SKILLS_ROOT: [a, b]}, bodies)
+
+    manifest = _skills_manifest(_FakeSkillsMiddleware(backend, [_SKILLS_ROOT]))
+
+    assert {s.name: s.content_hash for s in manifest.skills} == {
+        "alpha": hashlib.sha256(b"alpha body").hexdigest(),
+        "beta": hashlib.sha256(b"beta body").hexdigest(),
+    }
+    assert backend.download_calls == [[a["path"], b["path"]]]
+
+
+def test_content_hash_omitted_when_the_body_cannot_be_read(fake_deepagents):
+    backend = _FakeSkillsBackend({_SKILLS_ROOT: [_skill_meta("refunder")]}, {})
+
+    manifest = _skills_manifest(_FakeSkillsMiddleware(backend, [_SKILLS_ROOT]))
+
+    assert manifest.skills[0].content_hash is None
+
+
+def test_later_source_wins_on_a_name_collision(fake_deepagents):
+    base, project = "/skills/base", "/skills/project"
+    listing = {
+        base: [_skill_meta("refunder", root=base, description="base")],
+        project: [_skill_meta("refunder", root=project, description="project")],
+    }
+    backend = _FakeSkillsBackend(listing, {})
+
+    manifest = _skills_manifest(
+        _FakeSkillsMiddleware(backend, [base, project], ["Base", "Project"])
+    )
+
+    [skill] = manifest.skills
+    assert (skill.description, skill.source) == ("project", "Project")
+
+
+def test_source_label_is_recorded_from_source_labels(fake_deepagents):
+    backend = _FakeSkillsBackend({_SKILLS_ROOT: [_skill_meta("refunder")]}, {})
+
+    manifest = _skills_manifest(
+        _FakeSkillsMiddleware(backend, [_SKILLS_ROOT], ["User Claude"])
+    )
+
+    assert manifest.skills[0].source == "User Claude"
+
+
+def test_source_label_falls_back_to_the_path_without_aligned_labels(fake_deepagents):
+    backend = _FakeSkillsBackend({_SKILLS_ROOT: [_skill_meta("refunder")]}, {})
+
+    manifest = _skills_manifest(_FakeSkillsMiddleware(backend, [_SKILLS_ROOT], []))
+
+    assert manifest.skills[0].source == _SKILLS_ROOT
+
+
+def test_no_middleware_leaves_skills_none():
+    manifest = create_langchain_manifest(_graph_with_bound_tools("deep", []), [])
+
+    assert manifest.skills is None
+    assert "skills" not in manifest.model_dump(exclude_none=True)
+
+
+def test_middleware_without_skills_leaves_skills_none(fake_deepagents):
+    backend = _FakeSkillsBackend({}, {})
+
+    manifest = _skills_manifest(_FakeSkillsMiddleware(backend, [_SKILLS_ROOT]))
+
+    assert manifest.skills is None
+
+
+def test_missing_backend_attr_degrades_to_no_skills(fake_deepagents, caplog):
+    from types import SimpleNamespace
+
+    with caplog.at_level(logging.WARNING, logger=_LANGCHAIN_MANIFEST_LOGGER):
+        manifest = _skills_manifest(SimpleNamespace(sources=[_SKILLS_ROOT]))
+
+    assert manifest.skills is None
+    assert "no skills recorded" in caplog.text
+
+
+def test_deepagents_absent_degrades_to_no_skills(monkeypatch, caplog):
+    import sys
+
+    monkeypatch.setitem(sys.modules, _DEEPAGENTS_SKILLS_MODULE, None)
+    backend = _FakeSkillsBackend({_SKILLS_ROOT: [_skill_meta("refunder")]}, {})
+
+    with caplog.at_level(logging.WARNING, logger=_LANGCHAIN_MANIFEST_LOGGER):
+        manifest = _skills_manifest(_FakeSkillsMiddleware(backend, [_SKILLS_ROOT]))
+
+    assert manifest.skills is None
+    assert "skill listing unavailable" in caplog.text
+
+
+def test_skills_do_not_disturb_the_discovered_tool_list(fake_deepagents):
+    bound = [_lc_tool("read_file"), _lc_tool("execute")]
+    backend = _FakeSkillsBackend({_SKILLS_ROOT: [_skill_meta("refunder")]}, {})
+
+    with_skills = _skills_manifest(
+        _FakeSkillsMiddleware(backend, [_SKILLS_ROOT]), bound
+    )
+    without = create_langchain_manifest(_graph_with_bound_tools("deep", bound), [])
+
+    assert with_skills.tools == without.tools
