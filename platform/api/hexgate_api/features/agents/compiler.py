@@ -5,8 +5,11 @@ of the SDK/opa shell-out and the tool-name heuristics used to seed a
 brand-new agent's ``policy_yaml``.
 """
 
+import json
 import logging
 from typing import Callable
+
+import yaml
 
 from hexgate_api.schemas import AgentManifest, SkillDefinition
 
@@ -126,6 +129,26 @@ def _classify_tool(name: str) -> str:
     return "unknown"
 
 
+_KEY_PROBE_VALUE = 0
+
+
+def _yaml_key(name: str) -> str:
+    """Render ``name`` as a mapping key that YAML reads back as that exact string.
+
+    Bare when it already round-trips, so ordinary names stay unquoted and the
+    generated YAML is unchanged for them. Double-quoted otherwise: YAML 1.1 reads
+    ``on``/``yes`` as booleans, ``null`` as None and ``2024`` as an int, and the
+    policy loader rejects a non-string key — failing the whole starter policy.
+    A JSON string is a valid YAML double-quoted scalar.
+    """
+    try:
+        if yaml.safe_load(f"{name}: {_KEY_PROBE_VALUE}") == {name: _KEY_PROBE_VALUE}:
+            return name
+    except yaml.YAMLError:
+        pass
+    return json.dumps(name)
+
+
 def _emit_tool_lines(names: list[str], mode: str, indent: int = 6) -> str:
     """Render ``{name: { mode: ... }}`` lines for a YAML policy block.
 
@@ -135,7 +158,7 @@ def _emit_tool_lines(names: list[str], mode: str, indent: int = 6) -> str:
     children, which the AgentPolicy validator rejects).
     """
     pad = " " * indent
-    return "".join(f"{pad}{n}: {{ mode: {mode} }}\n" for n in names)
+    return "".join(f"{pad}{_yaml_key(n)}: {{ mode: {mode} }}\n" for n in names)
 
 
 _SKILL_GATED = "gated"
@@ -163,7 +186,7 @@ def _emit_skill_lines(names: list[str], mode: str, indent: int = 6) -> str:
     purpose: the skills block is free to grow ``via:`` without a refactor.
     """
     pad = " " * indent
-    return "".join(f"{pad}{n}: {{ mode: {mode} }}\n" for n in names)
+    return "".join(f"{pad}{_yaml_key(n)}: {{ mode: {mode} }}\n" for n in names)
 
 
 def _default_policy_for_manifest(manifest: AgentManifest) -> str:
@@ -216,9 +239,11 @@ def _default_policy_for_manifest(manifest: AgentManifest) -> str:
 
     skills_note = (
         "#\n"
-        "# Skills discovered at registration. A skill that ships scripts or adds\n"
-        "# tools defaults to approval_required for 'member'; instruction-only\n"
-        "# skills are allowed for everyone. Review and adjust.\n"
+        "# Skills discovered at registration. Skills that ship scripts or add\n"
+        "# tools are approval_required for 'member', allowed for 'admin', and\n"
+        "# denied for 'default'. All other skills — including those whose\n"
+        "# resources were not enumerated, so may still ship scripts — are\n"
+        "# allowed for every role via read_only. Review and adjust.\n"
         if plain_skills or gated_skills
         else ""
     )

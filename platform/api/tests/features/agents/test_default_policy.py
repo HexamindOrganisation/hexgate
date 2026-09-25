@@ -32,6 +32,7 @@ from hexgate_api.features.agents.compiler import (
     _classify_tool,
     _default_policy_for_manifest,
     _emit_tool_lines,
+    _yaml_key,
 )
 
 if TYPE_CHECKING:
@@ -413,3 +414,44 @@ def test_skills_note_only_appears_when_there_are_skills() -> None:
     note = "# Skills discovered at registration."
     assert note not in _default_policy_for_manifest(_manifest("web_search"))
     assert note in _default_policy_for_manifest(_manifest(skills=[_PLAIN]))
+
+
+def test_skills_note_describes_every_role_outcome_and_unenumerated_skills() -> None:
+    """An operator must not read ``read_only`` as "instruction-only"."""
+    yaml_text = _default_policy_for_manifest(_manifest(skills=[_PLAIN]))
+    for fragment in ("'member'", "'admin'", "'default'", "not enumerated"):
+        assert fragment in yaml_text
+
+
+# ---------------------------------------------------------------------------
+# Names YAML would otherwise coerce to a non-string key
+# ---------------------------------------------------------------------------
+
+_COERCED_NAMES = ["on", "yes", "null", "2024"]
+
+
+@pytest.mark.parametrize("name", ["runbook", "read_file", "web-search"])
+def test_yaml_key_leaves_ordinary_names_bare(name: str) -> None:
+    assert _yaml_key(name) == name
+
+
+@pytest.mark.parametrize("name", _COERCED_NAMES)
+def test_yaml_key_quotes_names_yaml_would_coerce(name: str) -> None:
+    assert yaml.safe_load(f"{_yaml_key(name)}: 0") == {name: 0}
+
+
+def test_skill_names_yaml_would_coerce_still_load_as_strings() -> None:
+    policy_set = _policy_set(
+        _manifest(
+            skills=[_skill(n) for n in _COERCED_NAMES]
+            + [_skill("2025", scripts=["run.sh"])]
+        )
+    )
+    admin = policy_set.policy_for("admin")
+    assert set(admin.skills) == {*_COERCED_NAMES, "2025"}
+    assert admin.skills["2025"].mode == "allow"
+
+
+def test_tool_names_yaml_would_coerce_still_load_as_strings() -> None:
+    policy_set = _policy_set(_manifest(*_COERCED_NAMES))
+    assert set(policy_set.policy_for("member").tools) == set(_COERCED_NAMES)
