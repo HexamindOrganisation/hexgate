@@ -98,13 +98,31 @@ def _(CASES, category_pick, mo):
 
 
 @app.cell
-def _(HERE, agent_pick, case_pick, category_pick, jobs, mo, repeat):
+def _(HERE, agent_pick, case_pick, category_pick, jobs, json, mo, repeat):
     run_button = mo.ui.run_button(label="Run", kind="success")
-    saved = sorted((HERE / ".runs").glob("*/results.json"), reverse=True)
+
+    def _label(path):
+        # "20260924-173138 · claude · 31/36" from the run's own files.
+        rows = json.loads(path.read_text())
+        report = path.parent / "report.md"
+        agent = (
+            report.read_text().splitlines()[0].split(":", 1)[-1].strip()
+            if report.exists()
+            else "?"
+        )
+        ok = sum(r["passed"] for r in rows)
+        return f"{path.parent.name} · {agent} · {ok}/{len(rows)}", agent
+
+    _saved = sorted((HERE / ".runs").glob("*/results.json"), reverse=True)
+    _labelled = [(_label(p), p) for p in _saved]
+    _options = {lab: str(p) for (lab, _a), p in _labelled}
+    # Default to the newest agent run, not a reference or scripted one.
+    _default = next(
+        (lab for (lab, a), _p in _labelled if a.startswith("claude")),
+        next(iter(_options), None),
+    )
     saved_pick = mo.ui.dropdown(
-        options={p.parent.name: str(p) for p in saved},
-        value=saved[0].parent.name if saved else None,
-        label="Or show a saved run",
+        options=_options, value=_default, label="Or show a saved run"
     )
     n = len(case_pick.value) * repeat.value
     mo.vstack(
