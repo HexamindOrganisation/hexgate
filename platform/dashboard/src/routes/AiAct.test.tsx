@@ -31,6 +31,7 @@ import { AiActPage } from "@/routes/AiAct";
 import { renderWithProviders } from "@/test/render";
 // `?raw` gives each file's own text, so the copy guard below can read every
 // string the tab can render, including states no single render reaches.
+import shellSource from "@/components/AppShell.tsx?raw";
 import dialogSource from "@/components/ai-act/ClassificationDialog.tsx?raw";
 import aiActLibSource from "@/lib/ai-act.ts?raw";
 import aiActSource from "@/routes/AiAct.tsx?raw";
@@ -123,6 +124,8 @@ interface StubOptions {
   reportsStatus?: number;
   /** Status for GET .../reports/{id}.pdf; 404 (the stub default) unless set. */
   pdfStatus?: number;
+  /** Resolve this before the PDF response, to observe the in-flight state. */
+  holdPdf?: Promise<void>;
   /** Status for POST .../ai-act/report; 201 unless set. */
   generateStatus?: number;
   generateDetail?: string;
@@ -137,6 +140,7 @@ function stubFetch({
   agentsFailAfterFirst = false,
   reportsStatus = 200,
   pdfStatus,
+  holdPdf,
   generateStatus = 201,
   generateDetail = "nope",
 }: StubOptions = {}): Call[] {
@@ -223,6 +227,7 @@ function stubFetch({
             ? json(reports)
             : json({ detail: "nope" }, reportsStatus);
         case url.pathname.endsWith(".pdf"):
+          if (holdPdf) await holdPdf;
           return pdfStatus
             ? json({ detail: "render failed" }, pdfStatus)
             : new Response("not found", { status: 404 });
@@ -566,6 +571,9 @@ describe("AiActPage", () => {
       "AiAct.tsx": aiActSource,
       "ai-act.ts": aiActLibSource,
       "ClassificationDialog.tsx": dialogSource,
+      // The sidebar label lives here: it is the tab's most visible string and
+      // would otherwise be the one piece of its copy the rule does not watch.
+      "AppShell.tsx": shellSource,
     };
     const offenders: string[] = [];
     for (const [file, source] of Object.entries(sources)) {
@@ -605,6 +613,145 @@ describe("AiActPage", () => {
       }
     }
     expect(offenders).toEqual([]);
+  });
+
+  it("when the caller is not a project admin then it says so, not retry", async () => {
+    // The report routes gate on project admin; the classification routes on
+    // this same page do not. A member therefore gets a working inventory and
+    // a 403 here, and "Refresh to retry" would be advice that cannot work.
+    stubFetch({
+      agents: [{ name: "credit_review_agent" }],
+      reportsStatus: 403,
+    });
+    renderWithProviders(<AiActPage />, { initialRoute: "/ai-act" });
+
+    expect(await screen.findByText(/needs project admin/i)).toBeInTheDocument();
+    expect(screen.queryByText(/refresh to retry/i)).not.toBeInTheDocument();
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: /generate report/i }),
+      ).toBeDisabled(),
+    );
+  });
+
+  it("when a download is in flight then its button is disabled", async () => {
+    // A PDF is rendered on demand and takes seconds. Without this the button
+    // looks inert, and the second click starts a second render.
+    let release: (() => void) | undefined;
+    const held = new Promise<void>((r) => {
+      release = r;
+    });
+    stubFetch({ reports: [REPORT], holdPdf: held });
+    const user = userEvent.setup();
+    renderWithProviders(<AiActPage />, { initialRoute: "/ai-act" });
+
+    const pdf = await screen.findByRole("button", { name: /pdf/i });
+    await user.click(pdf);
+    await waitFor(() => expect(pdf).toBeDisabled());
+    // The sibling download stays usable: one slow render must not lock the row.
+    expect(screen.getByRole("button", { name: /annex/i })).toBeEnabled();
+
+    release?.();
+    await waitFor(() => expect(pdf).toBeEnabled());
+  });
+
+  it("when a fast download finishes then a slow one stays guarded", async () => {
+    // Clicking Annex while the PDF is still rendering is the ordinary thing to
+    // do on this page, and the annex returns in milliseconds. One shared slot
+    // would clear the PDF's guard on that return and re-enable the button
+    // mid-render — the exact double-render the guard exists to stop.
+    let release: (() => void) | undefined;
+    const held = new Promise<void>((r) => {
+      release = r;
+    });
+    const calls = stubFetch({ reports: [REPORT], holdPdf: held });
+    const user = userEvent.setup();
+    renderWithProviders(<AiActPage />, { initialRoute: "/ai-act" });
+
+    const pdf = await screen.findByRole("button", { name: /pdf/i });
+    await user.click(pdf);
+    await waitFor(() => expect(pdf).toBeDisabled());
+
+    // The annex round trip completes while the PDF render is still held.
+    await user.click(screen.getByRole("button", { name: /annex/i }));
+    await waitFor(() =>
+      expect(calls.some((c) => c.url.endsWith("/annex"))).toBe(true),
+    );
+
+    expect(pdf).toBeDisabled();
+    expect(calls.filter((c) => c.url.endsWith(".pdf"))).toHaveLength(1);
+
+    release?.();
+    await waitFor(() => expect(pdf).toBeEnabled());
+  });
+
+  it("when the period has not been narrowed then it sends no end bound", async () => {
+    // The default is computed once, but a tab can outlive UTC midnight. Sending
+    // no `to` lets the server anchor the period on its own now, so the report
+    // cannot quietly stop short of today.
+    const calls = stubFetch({ reports: [] });
+    const user = userEvent.setup();
+    renderWithProviders(<AiActPage />, { initialRoute: "/ai-act" });
+
+    await user.click(
+      await screen.findByRole("button", { name: /generate report/i }),
+    );
+
+    await waitFor(() => {
+      const post = calls.find((c) => c.method === "POST");
+      expect(post?.body).toBeDefined();
+      expect(post?.body).not.toHaveProperty("to");
+      expect(post?.body).toHaveProperty("from");
+    });
+  });
+
+  it("when a future start is picked then generate is refused on screen", async () => {
+    // The server anchors the end on its own now, so a future start comes back
+    // as "period start must be before period end" against dates the screen
+    // still shows as a valid range.
+    stubFetch({ reports: [] });
+    renderWithProviders(<AiActPage />, { initialRoute: "/ai-act" });
+
+    const tomorrow = new Date(Date.now() + 86_400_000)
+      .toISOString()
+      .slice(0, 10);
+    // Both bounds in the future, so `from > to` is false and only the
+    // future-start rule can refuse this. Moving `from` alone would trip the
+    // ordering check instead and prove nothing about the new guard.
+    fireEvent.change(await screen.findByLabelText("To (UTC)"), {
+      target: { value: tomorrow },
+    });
+    fireEvent.change(screen.getByLabelText("From (UTC)"), {
+      target: { value: tomorrow },
+    });
+
+    expect(
+      screen.getByRole("button", { name: /generate report/i }),
+    ).toBeDisabled();
+  });
+
+  it("keeps an Annex III point this build has no option for", async () => {
+    // The server stores any string up to 32 chars, so a value from an older
+    // list or an API-made entry must still show. Rendering the placeholder
+    // instead would read as "no point asserted" while a save re-signs the
+    // hidden original — the same trap `tierOptions` already closes for tiers.
+    stubFetch({
+      agents: [{ name: "credit_review_agent" }],
+      classifications: {
+        credit_review_agent: { ...COMPLETE_ENTRY, annex_iii_point: "5" },
+      },
+    });
+    const user = userEvent.setup();
+    renderWithProviders(<AiActPage />, { initialRoute: "/ai-act" });
+
+    await user.click(
+      await screen.findByRole("button", { name: /edit entry/i }),
+    );
+    await screen.findByRole("dialog");
+
+    const trigger = screen.getByLabelText("Annex III point");
+    expect(trigger).toHaveTextContent("5");
+    expect(trigger).not.toHaveTextContent(/select a point/i);
   });
 
   it("shows a load failure instead of an empty report history", async () => {

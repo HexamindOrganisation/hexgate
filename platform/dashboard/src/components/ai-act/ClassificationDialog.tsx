@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { ExternalLink } from "lucide-react";
 import { toast } from "sonner";
@@ -100,14 +100,13 @@ export function ClassificationDialog({
   const [form, setForm] = useState<FormState>(() => seed(classification));
   const qc = useQueryClient();
 
-  // Seed on the closed→open transition only, so a background refetch of the
-  // classification can't overwrite what the operator is halfway through
-  // typing (same rule as CreateBanDialog).
-  const wasOpen = useRef(false);
-  useEffect(() => {
-    if (open && !wasOpen.current) setForm(seed(classification));
-    wasOpen.current = open;
-  }, [open, classification]);
+  // No closed→open reseed effect here, unlike CreateBanDialog: the caller
+  // mounts this dialog only while an entry is being edited and unmounts it on
+  // close, so `open` is always true on mount and the `useState` initializer
+  // above is the seed. That already gives the property the effect existed for
+  // — a background refetch of the classification cannot overwrite what the
+  // operator is halfway through typing, because nothing reseeds after mount.
+  // If this ever stays mounted across closes, the effect has to come back.
 
   // The PUT replaces the entry outright, so the body is the whole assertion.
   // Built once here and reused by the submit-guard below, so what the button
@@ -162,6 +161,19 @@ export function ClassificationDialog({
     : [...RISK_TIERS, { value: form.risk_tier, label: form.risk_tier }].filter(
         (t) => t.value !== "",
       );
+
+  // Same rule for the Annex III point, and for the same reason: the server
+  // stores any string up to 32 chars, so a value this build has no option for
+  // (an older list, or an entry made through the API) would render as the
+  // "Select a point" placeholder while a save re-signs the hidden original.
+  const annexOptions = ANNEX_III_POINTS.some(
+    (p) => p.value === form.annex_iii_point,
+  )
+    ? ANNEX_III_POINTS
+    : [
+        ...ANNEX_III_POINTS,
+        { value: form.annex_iii_point, label: form.annex_iii_point },
+      ].filter((p) => p.value !== "");
 
   function set<K extends keyof FormState>(key: K, value: FormState[K]) {
     setForm((f) => ({ ...f, [key]: value }));
@@ -249,7 +261,7 @@ export function ClassificationDialog({
                   <SelectValue placeholder="Select a point" />
                 </SelectTrigger>
                 <SelectContent>
-                  {ANNEX_III_POINTS.map((p) => (
+                  {annexOptions.map((p) => (
                     <SelectItem key={p.value} value={p.value}>
                       {p.label}
                     </SelectItem>

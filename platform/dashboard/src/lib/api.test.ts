@@ -119,6 +119,26 @@ describe("AI Act downloads", () => {
     expect(await blob.text()).toBe('{"annex": true}');
   });
 
+  it("percent-encodes an agent name in the classification path", async () => {
+    // `{name}` is one path segment server side. A name holding a slash would
+    // otherwise address a different route, and that agent could never be
+    // classified — a permanent gap in the report.
+    const seen: string[] = [];
+    vi.spyOn(window, "fetch").mockImplementation(async (input) => {
+      seen.push(typeof input === "string" ? input : input.toString());
+      return new Response("{}", {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    });
+
+    await api.getAgentClassification("billing/refunds", "p1");
+
+    expect(seen[0]).toBe(
+      "/v1/projects/p1/agents/billing%2Frefunds/classification",
+    );
+  });
+
   it("raises an ApiError when a PDF render fails", async () => {
     // The render route answers 502 with `detail: {error, renderer}` — an
     // object, because

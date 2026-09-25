@@ -12,6 +12,7 @@ import {
   Download,
   FileText,
   LoaderCircle,
+  Lock,
   Scale,
   TriangleAlert,
 } from "lucide-react";
@@ -74,6 +75,29 @@ function LoadError({ what }: { what: string }) {
       </div>
     </div>
   );
+}
+
+/** The report routes gate on project admin, while the classification routes
+ * on this same page only need org membership. A member therefore sees a
+ * working inventory beside a report panel they cannot use, and "refresh to
+ * retry" would be advice that cannot work: nothing about refreshing grants
+ * the role. Name the reason instead. */
+function NotAdmin({ what }: { what: string }) {
+  return (
+    <div className="flex flex-col items-center justify-center gap-2 py-16 text-center">
+      <Lock className="size-10 text-muted-foreground/60" />
+      <div className="text-sm font-medium">{what} needs project admin</div>
+      <div className="max-w-xs text-xs text-muted-foreground">
+        The report embeds ban-enforcement records, so it is admin-only. Your
+        classification entries above are unaffected.
+      </div>
+    </div>
+  );
+}
+
+/** A 403 from the report routes, which means the role, not the request. */
+function isForbidden(err: unknown): boolean {
+  return err instanceof ApiError && err.status === 403;
 }
 
 /**
@@ -290,14 +314,33 @@ function useIsGenerating(projectId: string): boolean {
 function GeneratePanel({ projectId }: { projectId: string }) {
   const [from, setFrom] = useState(() => toDateInput(retentionPeriod().from));
   const [to, setTo] = useState(() => toDateInput(retentionPeriod().to));
+  // Both defaults are computed once, but this panel outlives a project switch
+  // and a tab can sit open across UTC midnight. An untouched "To" would then
+  // still read yesterday, and the report would quietly stop short of today
+  // while the copy underneath promises the last RETENTION_DAYS days. So
+  // remember whether the operator actually chose this bound: if they did not,
+  // send no `to` at all and let the server anchor the period on its own now.
+  const [toEdited, setToEdited] = useState(false);
   const qc = useQueryClient();
   const generating = useIsGenerating(projectId);
+  // Same key as the history panel, so this shares that cache entry rather
+  // than firing a second request. Its 403 is what tells us the caller is not
+  // a project admin, which is the same gate POST .../ai-act/report applies:
+  // without this the button stays live and only fails after the round trip.
+  const reportsQuery = useQuery({
+    queryKey: ["ai-act", "reports", projectId],
+    queryFn: () => api.listAiActReports(projectId),
+  });
+  const forbidden = isForbidden(reportsQuery.error);
 
   const generate = useMutation({
     mutationKey: generateKey(projectId),
     mutationFn: () =>
       api.generateAiActReport(
-        { from: periodStart(from), to: periodEnd(to) },
+        {
+          from: periodStart(from),
+          ...(toEdited ? { to: periodEnd(to) } : {}),
+        },
         projectId,
       ),
     onSuccess: () => {
@@ -307,7 +350,12 @@ function GeneratePanel({ projectId }: { projectId: string }) {
     onError: (err) => toast.error(generateErrorMessage(err)),
   });
 
-  const invalidPeriod = !from || !to || from > to;
+  // A day that has not happened yet is not a period the server can report on:
+  // it anchors the end on its own now, so a future start would come back as
+  // "period start must be before period end" against dates the screen still
+  // shows as a valid range. Refuse it here, where the dates are visible.
+  const today = toDateInput(new Date());
+  const invalidPeriod = !from || !to || from > to || from > today;
 
   return (
     <div className="rounded-lg border border-border bg-card p-5">
@@ -319,6 +367,7 @@ function GeneratePanel({ projectId }: { projectId: string }) {
               id="period-from"
               type="date"
               className="w-44"
+              max={today}
               value={from}
               onChange={(e) => setFrom(e.target.value)}
             />
@@ -329,8 +378,12 @@ function GeneratePanel({ projectId }: { projectId: string }) {
               id="period-to"
               type="date"
               className="w-44"
+              max={today}
               value={to}
-              onChange={(e) => setTo(e.target.value)}
+              onChange={(e) => {
+                setTo(e.target.value);
+                setToEdited(true);
+              }}
             />
           </div>
           <p className="pb-2 text-xs text-muted-foreground">
@@ -340,7 +393,7 @@ function GeneratePanel({ projectId }: { projectId: string }) {
         </div>
         <Button
           className="gap-2"
-          disabled={invalidPeriod || generating}
+          disabled={invalidPeriod || generating || forbidden}
           onClick={() => generate.mutate()}
         >
           <FileText className="size-4" />
@@ -349,7 +402,12 @@ function GeneratePanel({ projectId }: { projectId: string }) {
       </div>
       {invalidPeriod && (
         <p className="mt-3 text-xs text-destructive">
-          Pick a period that starts on or before it ends.
+          {/* Says which rule was broken: the flag now fires on a future start
+              too, and "starts on or before it ends" would be false advice for
+              a range that is correctly ordered but has not happened yet. */}
+          {from > today
+            ? "Pick a period that has already started."
+            : "Pick a period that starts on or before it ends."}
         </p>
       )}
     </div>
@@ -367,8 +425,27 @@ function HistoryPanel({ projectId }: { projectId: string }) {
     queryFn: () => api.listAiActReports(projectId),
   });
   const reports = reportsQuery.data ?? [];
+  // Which downloads are in flight, keyed `${report.id}:${kind}`. A PDF is
+  // rendered on demand and takes seconds, so without this the button looks
+  // inert and the natural response is to click it again — which starts a
+  // second render and saves the operator a second copy of the same file.
+  //
+  // A set, not one slot: downloads overlap. Clicking Annex while the PDF is
+  // still rendering is the ordinary thing to do here, and the annex returns
+  // in milliseconds — a single slot would then clear the PDF's guard and
+  // re-enable the button mid-render, which is the case this exists for.
+  const [pending, setPending] = useState<ReadonlySet<string>>(new Set());
+  const mark = (key: string, running: boolean) =>
+    setPending((p) => {
+      const next = new Set(p);
+      if (running) next.add(key);
+      else next.delete(key);
+      return next;
+    });
 
   async function download(report: AiActReport, kind: "annex" | "pdf") {
+    const key = `${report.id}:${kind}`;
+    mark(key, true);
     try {
       const blob =
         kind === "annex"
@@ -400,6 +477,11 @@ function HistoryPanel({ projectId }: { projectId: string }) {
           ? "Could not download the annex."
           : "Could not download the PDF.",
       );
+    } finally {
+      // `finally`, because the branches above return early: on any of those
+      // paths a plain trailing reset would never run and the button would
+      // stay disabled for good.
+      mark(key, false);
     }
   }
 
@@ -427,7 +509,9 @@ function HistoryPanel({ projectId }: { projectId: string }) {
         </div>
       )}
 
-      {reportsQuery.isError && reportsQuery.data === undefined ? (
+      {isForbidden(reportsQuery.error) ? (
+        <NotAdmin what="The evidence report" />
+      ) : reportsQuery.isError && reportsQuery.data === undefined ? (
         <LoadError what="the report history" />
       ) : reportsQuery.isLoading ? (
         <div className="p-12 text-center text-sm text-muted-foreground">
@@ -488,22 +572,34 @@ function HistoryPanel({ projectId }: { projectId: string }) {
                   {shortDigest(r.annex_sha256)}
                 </td>
                 <td className="px-5 py-3 text-right">
+                  {/* Only the row's own in-flight download is disabled: one
+                      slow PDF render should not lock the other rows. */}
                   <Button
                     variant="ghost"
                     size="sm"
                     className="gap-1.5 text-xs"
+                    disabled={pending.has(`${r.id}:pdf`)}
                     onClick={() => download(r, "pdf")}
                   >
-                    <Download className="size-3.5" />
+                    {pending.has(`${r.id}:pdf`) ? (
+                      <LoaderCircle className="size-3.5 animate-spin" />
+                    ) : (
+                      <Download className="size-3.5" />
+                    )}
                     PDF
                   </Button>
                   <Button
                     variant="ghost"
                     size="sm"
                     className="gap-1.5 text-xs"
+                    disabled={pending.has(`${r.id}:annex`)}
                     onClick={() => download(r, "annex")}
                   >
-                    <Download className="size-3.5" />
+                    {pending.has(`${r.id}:annex`) ? (
+                      <LoaderCircle className="size-3.5 animate-spin" />
+                    ) : (
+                      <Download className="size-3.5" />
+                    )}
                     Annex
                   </Button>
                 </td>
@@ -517,7 +613,8 @@ function HistoryPanel({ projectId }: { projectId: string }) {
 }
 
 /**
- * AI Act page. One button — Generate report — producing a signed document per
+ * Governance page (route `/ai-act`, the AI Act evidence report). One button
+ * — Generate report — producing a signed document per
  * project that evidences the controls Hexgate enforces on the project's
  * agents and the events recorded about them over a period.
  *
@@ -532,9 +629,7 @@ export function AiActPage() {
   if (scope.status === "no-project") {
     return (
       <div className="mx-auto max-w-[1400px]">
-        <h1 className="text-2xl font-semibold tracking-tight">
-          Evidence &amp; Reports
-        </h1>
+        <h1 className="text-2xl font-semibold tracking-tight">Governance</h1>
         <NoProjectEmptyState resource="AI Act evidence" />
       </div>
     );
@@ -547,7 +642,7 @@ export function AiActPage() {
       <div>
         <h1 className="flex items-center gap-2.5 text-2xl font-semibold tracking-tight">
           <Scale className="size-6 text-primary" />
-          Evidence &amp; Reports
+          Governance
         </h1>
         <p className="mt-2 max-w-[720px] text-sm text-muted-foreground">
           Generate a signed document describing the controls in place on this

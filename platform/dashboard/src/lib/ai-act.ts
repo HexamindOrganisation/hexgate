@@ -1,5 +1,5 @@
 /**
- * AI Act tab domain helpers: the vocabulary the classification form offers,
+ * Governance tab domain helpers: the vocabulary the classification form offers,
  * display copy for the server's completeness verdict, the default reporting
  * period, and the save-a-download plumbing the history list uses.
  *
@@ -180,5 +180,8 @@ export function saveBlob(blob: Blob, filename: string): void {
   document.body.appendChild(a);
   a.click();
   a.remove();
-  URL.revokeObjectURL(url);
+  // Not in this tick: Safari starts the download asynchronously after the
+  // click, so revoking synchronously can hand the user a truncated or
+  // zero-byte file. The URL is per-blob, so holding it a beat costs nothing.
+  setTimeout(() => URL.revokeObjectURL(url), 0);
 }

@@ -941,9 +941,14 @@ export const api = {
 
   // --- AI Act evidence report ---
 
+  // `encodeURIComponent`, not the `encodePath` the policy-file routes use:
+  // that one keeps slashes for the server's `{name:path}` converter, while
+  // this route's `{name}` is a single segment. A name holding a slash or a
+  // `#` would otherwise address a different route, and that agent could
+  // never be classified — a permanent gap in the report.
   getAgentClassification: (name: string, projectId: string) =>
     request<AgentClassificationRead>(
-      `/v1/projects/${projectId}/agents/${name}/classification`,
+      `/v1/projects/${projectId}/agents/${encodeURIComponent(name)}/classification`,
     ),
 
   putAgentClassification: (
@@ -952,7 +957,7 @@ export const api = {
     projectId: string,
   ) =>
     request<AgentClassificationRead>(
-      `/v1/projects/${projectId}/agents/${name}/classification`,
+      `/v1/projects/${projectId}/agents/${encodeURIComponent(name)}/classification`,
       { method: "PUT", body: JSON.stringify(body) },
     ),
 
