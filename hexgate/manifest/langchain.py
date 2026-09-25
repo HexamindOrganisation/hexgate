@@ -52,7 +52,9 @@ def discover_graph_tools(graph: CompiledStateGraph) -> list[BaseTool]:
     """Tools bound in a compiled graph's ToolNode, including middleware-injected ones.
 
     Reads LangGraph internals with no stability promise, so every hop is guarded
-    and a graph without a recognisable tools node yields ``[]``.
+    and a graph without a recognisable tools node yields ``[]``. Top level only:
+    tools bound inside a sub-agent graph reached through a tool (deepagents'
+    ``task``) are neither discovered nor gated here.
     """
     nodes = getattr(graph, "nodes", None)
     node = nodes.get(_TOOLS_NODE) if isinstance(nodes, dict) else None
@@ -98,12 +100,17 @@ def _to_tool_definition(tool: BaseTool) -> ToolDefinition:
 
 
 def _tool_schema(tool: BaseTool) -> dict[str, Any]:
-    """Return a JSON schema describing a LangChain tool's arguments."""
-    args_schema = tool.args_schema
-    if args_schema is None:
+    """Return a JSON schema of the arguments the model supplies.
+
+    Reads ``tool_call_schema`` rather than ``args_schema`` so runtime-injected
+    parameters are left out: they are not inputs, and a ``ToolRuntime`` field
+    cannot be rendered as JSON schema at all.
+    """
+    if tool.args_schema is None:
         return {}
-    if isinstance(args_schema, dict):
-        return args_schema
-    if hasattr(args_schema, "model_json_schema"):
-        return args_schema.model_json_schema()
+    schema = tool.tool_call_schema
+    if isinstance(schema, dict):
+        return schema
+    if hasattr(schema, "model_json_schema"):
+        return schema.model_json_schema()
     return {}
