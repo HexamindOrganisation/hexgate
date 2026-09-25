@@ -1107,3 +1107,102 @@ class TestGoogleSkillDiscovery:
 
         assert sorted(t.name for t in manifest.tools) == sorted(t.name for t in runtime)
         assert "ops_refund" in {t.name for t in manifest.tools}
+
+
+# --- LangGraph tool-surface discovery (#249) --------------------------------
+
+
+def _lc_tool(name: str):
+    from langchain_core.tools import tool
+
+    @tool(name)
+    def _impl(text: str) -> str:
+        """Stub tool."""
+        return text
+
+    return _impl
+
+
+def _graph_with_bound_tools(name: str, bound_tools: list):
+    """Stub graph exposing tools the way a compiled ToolNode does."""
+    from types import SimpleNamespace
+
+    tools_node = SimpleNamespace(
+        bound=SimpleNamespace(tools_by_name={t.name: t for t in bound_tools})
+    )
+    return SimpleNamespace(name=name, nodes={"tools": tools_node})
+
+
+def test_langchain_manifest_discovers_graph_bound_tools():
+    refund = _lc_tool("issue_refund")
+    graph = _graph_with_bound_tools(
+        "support", [refund, _lc_tool("execute"), _lc_tool("write_file")]
+    )
+
+    manifest = create_langchain_manifest(graph, [refund])
+
+    assert [t.name for t in manifest.tools] == [
+        "issue_refund",
+        "execute",
+        "write_file",
+    ]
+
+
+def test_langchain_manifest_keeps_caller_tools_not_on_the_graph():
+    graph = _graph_with_bound_tools("support", [_lc_tool("execute")])
+
+    manifest = create_langchain_manifest(graph, [_lc_tool("elsewhere")])
+
+    assert [t.name for t in manifest.tools] == ["elsewhere", "execute"]
+
+
+def test_langchain_manifest_does_not_duplicate_a_shared_tool():
+    refund = _lc_tool("issue_refund")
+    graph = _graph_with_bound_tools("support", [refund])
+
+    manifest = create_langchain_manifest(graph, [refund])
+
+    assert [t.name for t in manifest.tools] == ["issue_refund"]
+
+
+def test_langchain_manifest_unchanged_for_a_graph_without_a_tools_node():
+    """A plain compiled graph records exactly the caller's list, as before."""
+    manifest = create_langchain_manifest(
+        _graph("plain"), [_lc_tool("a"), _lc_tool("b")]
+    )
+
+    assert [t.name for t in manifest.tools] == ["a", "b"]
+
+
+def test_langchain_manifest_tool_order_is_deterministic():
+    """Caller order first, then node order — stable across builds so the
+    manifest hash does not churn on every re-register."""
+    caller = [_lc_tool("z_caller"), _lc_tool("a_caller")]
+    bound = [_lc_tool("m_bound"), _lc_tool("b_bound"), caller[0]]
+
+    first = create_langchain_manifest(_graph_with_bound_tools("s", bound), caller)
+    second = create_langchain_manifest(_graph_with_bound_tools("s", bound), caller)
+
+    assert [t.name for t in first.tools] == [
+        "z_caller",
+        "a_caller",
+        "m_bound",
+        "b_bound",
+    ]
+    assert first.model_dump(mode="json") == second.model_dump(mode="json")
+
+
+def test_langchain_manifest_discovers_tools_of_a_real_create_agent_graph():
+    """The stub shape matches what langchain's create_agent actually compiles."""
+    from langchain.agents import create_agent
+    from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
+
+    graph = create_agent(
+        model=GenericFakeChatModel(messages=iter([])),
+        tools=[_lc_tool("issue_refund")],
+        name="real",
+    )
+
+    manifest = create_langchain_manifest(graph, [])
+
+    assert [t.name for t in manifest.tools] == ["issue_refund"]
