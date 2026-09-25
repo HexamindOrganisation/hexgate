@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import importlib
 import logging
-from hashlib import sha256
+from collections.abc import Callable
 from typing import Any
 
 from langchain_core.tools import BaseTool
@@ -16,6 +16,7 @@ from hexgate.manifest.models import (
     SkillDefinition,
     ToolDefinition,
 )
+from hexgate.manifest.skill_hash import skill_content_hash, skill_md_body
 
 _log = logging.getLogger(__name__)
 
@@ -27,6 +28,8 @@ _BACKEND_ATTR = "_backend"
 _SOURCES_ATTR = "sources"
 _SOURCE_LABELS_ATTR = "source_labels"
 _DOWNLOAD_FILES_ATTR = "download_files"
+_LS_ATTR = "ls"
+_SKILL_MD_ENCODING = "utf-8"
 _SKILLS_MODULE = "deepagents.middleware.skills"
 _LIST_SKILLS_FN = "_list_skills"
 
@@ -46,7 +49,8 @@ def create_langchain_manifest(
     LangGraph graphs do not reliably expose them after compilation. ``tools`` is
     unioned with the graph's bound tools, so middleware-injected tools are
     recorded too. ``skills_middleware`` is a deepagents ``SkillsMiddleware``
-    whose skills are recorded; typed ``object`` so deepagents stays optional.
+    whose skills are recorded, overriding the ones found in the graph; typed
+    ``object`` so deepagents stays optional.
     """
     agent_name = getattr(graph, "name", None)
     if agent_name is None:
@@ -55,11 +59,12 @@ def create_langchain_manifest(
             "manifest can identify it on the platform."
         )
     all_tools = _union_tools(tools, discover_graph_tools(graph))
-    skills = (
-        _collect_deepagents_skills(skills_middleware)
+    middlewares = (
+        [skills_middleware]
         if skills_middleware is not None
-        else []
+        else discover_skills_middlewares(graph)
     )
+    skills = _collect_deepagents_skills(middlewares)
     return AgentManifest(
         name=agent_name,
         description=description,
@@ -103,23 +108,65 @@ def _union_tools(
     return merged
 
 
-def _collect_deepagents_skills(middleware: object) -> list[SkillDefinition]:
-    """Skills a deepagents SkillsMiddleware exposes, mapped onto the manifest.
+def discover_skills_middlewares(graph: CompiledStateGraph) -> list[object]:
+    """deepagents SkillsMiddleware instances compiled into a graph, in node order.
+
+    ``create_deep_agent(skills=...)`` builds its middleware internally and returns
+    no handle, so the instance the agent actually runs is recovered from the node
+    its ``before_agent`` hook compiles to. Top level only, like tool discovery.
+    """
+    nodes = getattr(graph, "nodes", None)
+    if not isinstance(nodes, dict):
+        return []
+    found: dict[int, object] = {}
+    for node in nodes.values():
+        hook = getattr(getattr(node, "bound", None), "func", None)
+        owner = getattr(hook, "__self__", None)
+        if _is_skills_middleware(owner):
+            found.setdefault(id(owner), owner)
+    return list(found.values())
+
+
+def _is_skills_middleware(candidate: object) -> bool:
+    return hasattr(candidate, _BACKEND_ATTR) and hasattr(candidate, _SOURCES_ATTR)
+
+
+def _collect_deepagents_skills(middlewares: list[object]) -> list[SkillDefinition]:
+    """Skills the given SkillsMiddlewares expose, mapped onto the manifest.
 
     Later sources win on a name collision, matching deepagents' own layering.
     """
-    backend, sources = _skill_sources(middleware)
-    if backend is None:
+    if not middlewares:
         return []
-    by_name: dict[str, tuple[dict[str, Any], str]] = {}
-    for path, label in sources:
-        for meta in _list_skill_metadata(backend, path):
-            by_name[meta["name"]] = (meta, label)
-    hashes = _content_hashes(backend, [meta["path"] for meta, _ in by_name.values()])
+    list_skills = _resolve_list_skills()
+    if list_skills is None:
+        return []
+    by_name: dict[str, tuple[dict[str, Any], str, object]] = {}
+    for middleware in middlewares:
+        backend, sources = _skill_sources(middleware)
+        if backend is None:
+            continue
+        for path, label in sources:
+            for meta in _list_skill_metadata(list_skills, backend, path):
+                by_name[meta["name"]] = (meta, label, backend)
+    hashes = _content_hashes_by_backend(list(by_name.values()))
     return [
         _to_skill_definition(meta, label, hashes.get(meta["path"]))
-        for meta, label in by_name.values()
+        for meta, label, _ in by_name.values()
     ]
+
+
+def _resolve_list_skills() -> Callable[[object, str], Any] | None:
+    """deepagents' own skill parser, or None (with one warning) if unavailable.
+
+    Delegating to it keeps name validation and frontmatter semantics identical to
+    what the agent itself loads.
+    """
+    try:
+        return getattr(importlib.import_module(_SKILLS_MODULE), _LIST_SKILLS_FN)
+    except Exception:  # noqa: BLE001 — deepagents absent or restructured
+        _log.warning("deepagents skill listing unavailable; no skills recorded")
+        return None
 
 
 def _skill_sources(middleware: object) -> tuple[object | None, list[tuple[str, str]]]:
@@ -136,6 +183,12 @@ def _skill_sources(middleware: object) -> tuple[object | None, list[tuple[str, s
             "skills_middleware exposes no backend or sources; no skills recorded"
         )
         return None, []
+    if _is_backend_factory(backend):
+        _log.warning(
+            "deepagents skills backend is a per-run factory; skills cannot be "
+            "enumerated at registration and none are recorded"
+        )
+        return None, []
     labels = getattr(middleware, _SOURCE_LABELS_ATTR, None)
     if not isinstance(labels, (list, tuple)) or len(labels) != len(paths):
         labels = paths
@@ -146,32 +199,47 @@ def _skill_sources(middleware: object) -> tuple[object | None, list[tuple[str, s
     ]
 
 
-def _list_skill_metadata(backend: object, source_path: str) -> list[dict[str, Any]]:
-    """deepagents' own skill listing for one source, or [] if unavailable.
+def _is_backend_factory(backend: object) -> bool:
+    """Older deepagents accept ``backend=lambda runtime: ...``, resolved per run."""
+    return callable(backend) and not hasattr(backend, _LS_ATTR)
 
-    Delegates to deepagents' private parser so name validation and frontmatter
-    semantics cannot drift from what the agent itself loads.
-    """
-    try:
-        list_skills = getattr(importlib.import_module(_SKILLS_MODULE), _LIST_SKILLS_FN)
-    except Exception:  # noqa: BLE001 — deepagents absent or restructured
-        _log.warning("deepagents skill listing unavailable; no skills recorded")
-        return []
+
+def _list_skill_metadata(
+    list_skills: Callable[[object, str], Any], backend: object, source_path: str
+) -> list[dict[str, Any]]:
+    """One source's skill listing, or [] with a warning if it cannot be read."""
     try:
         return list(list_skills(backend, source_path))
     except Exception:  # noqa: BLE001
         _log.warning(
-            "could not list deepagents skills under %r; none recorded",
+            "could not list deepagents skills under %r; none recorded from it. "
+            "A backend that reads run state (such as StateBackend) cannot be "
+            "enumerated at registration; a filesystem backend can",
             source_path,
             exc_info=True,
         )
         return []
 
 
-def _content_hashes(backend: object, paths: list[str]) -> dict[str, str]:
-    """sha256 of each SKILL.md body, keyed by path, in one batched download.
+def _content_hashes_by_backend(
+    entries: list[tuple[dict[str, Any], str, object]],
+) -> dict[str, str]:
+    """Hashes for every listed skill, one batched download per distinct backend."""
+    paths_by_backend: dict[int, tuple[object, list[str]]] = {}
+    for meta, _, backend in entries:
+        paths_by_backend.setdefault(id(backend), (backend, []))[1].append(meta["path"])
+    hashes: dict[str, str] = {}
+    for backend, paths in paths_by_backend.values():
+        hashes.update(_content_hashes(backend, paths))
+    return hashes
 
-    A path whose body cannot be read is omitted rather than hashed as empty.
+
+def _content_hashes(backend: object, paths: list[str]) -> dict[str, str]:
+    """Body hash of each SKILL.md, keyed by path, in one batched download.
+
+    Hashes the instructions after the frontmatter, as the ADK adapter does, so a
+    skill hashes alike on both. A body that cannot be read or decoded is omitted
+    rather than hashed as empty.
     """
     download = getattr(backend, _DOWNLOAD_FILES_ATTR, None)
     if download is None or not paths:
@@ -186,7 +254,11 @@ def _content_hashes(backend: object, paths: list[str]) -> dict[str, str]:
         content = getattr(response, "content", None)
         if getattr(response, "error", None) or not isinstance(content, bytes):
             continue
-        hashes[response.path] = sha256(content).hexdigest()
+        try:
+            text = content.decode(_SKILL_MD_ENCODING)
+        except UnicodeDecodeError:
+            continue
+        hashes[response.path] = skill_content_hash(skill_md_body(text))
     return hashes
 
 
