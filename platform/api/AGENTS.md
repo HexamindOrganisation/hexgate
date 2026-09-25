@@ -1,4 +1,4 @@
-# API — Claude Code Instructions
+# API — Agent Instructions
 
 After you make changes, run: `make fmt-check && make platform-api-check`  # fmt-check + lint + tests with coverage
 

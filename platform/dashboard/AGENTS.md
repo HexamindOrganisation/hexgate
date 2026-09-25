@@ -1,4 +1,4 @@
-# Dashboard — Claude Code Instructions
+# Dashboard — Agent Instructions
 
 After you make changes, run: `make dashboard-fmt && make dashboard-fmt-check && make dashboard-lint && make dashboard-typecheck`  # format + CI fmt gate + lint + typecheck
 
