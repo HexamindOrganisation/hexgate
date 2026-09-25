@@ -61,6 +61,37 @@ def test_last_user_message() -> None:
     assert last_user_message([]) == ""
 
 
+def test_blank_latest_user_turn_is_not_replaced_by_an_older_one() -> None:
+    """A whitespace-only latest turn yields "" so the app rejects it, instead of
+    the agent silently re-answering the previous request."""
+    messages = [
+        {"role": "user", "content": "restart web-1"},
+        {"role": "assistant", "content": "ok"},
+        {"role": "user", "content": "  "},
+    ]
+
+    assert last_user_message(messages) == ""
+
+
+def test_content_parts_are_read_as_text() -> None:
+    """OpenAI-style content parts carry text too; non-text parts and non-dict
+    entries are skipped."""
+    messages = [
+        "not a message",
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "scale api"},
+                {"type": "image_url", "image_url": {"url": "x"}},
+                {"type": "text", "text": "to 3"},
+            ],
+        },
+    ]
+
+    assert to_agent_input(messages) == [{"role": "user", "content": "scale api\nto 3"}]
+    assert last_user_message(messages) == "scale api\nto 3"
+
+
 def test_text_delta_becomes_message_delta() -> None:
     event = BlockDeltaEvent(**RUN, block_id="b", block_type=BlockType.TEXT, text="Hi")
 
@@ -225,3 +256,88 @@ def test_streams_orchestrate_events_then_done(client) -> None:
         for f in frames[:-1]
     ]
     assert kinds == ["tool_calls", "tool_response", "text"]
+
+
+def test_bearer_or_api_key_either_may_match(client) -> None:
+    """An empty/wrong bearer must not hide a valid x-api-key (and vice versa)."""
+    http, _ = client
+
+    response = http.post(
+        "/chat/completions",
+        json=BODY,
+        headers={"Authorization": "Bearer ", "x-api-key": "s3cret"},
+    )
+
+    assert response.status_code == 200
+
+
+def test_non_ascii_token_is_401_not_500(client) -> None:
+    http, _ = client
+
+    response = http.post(
+        "/chat/completions",
+        json=BODY,
+        headers={"x-api-key": "tökén".encode("latin-1")},
+    )
+
+    assert response.status_code == 401
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        b"not json",
+        b"[]",
+        b'{"messages": "hi"}',
+        b'{"model": "x"}',
+        b'{"messages": [{"role": "user", "content": "   "}]}',
+    ],
+)
+def test_malformed_body_is_400(client, content) -> None:
+    http, _ = client
+
+    response = http.post(
+        "/chat/completions",
+        content=content,
+        headers={"x-api-key": "s3cret", "Content-Type": "application/json"},
+    )
+
+    assert response.status_code == 400
+
+
+def test_non_dict_extra_body_is_ignored(client) -> None:
+    http, seen = client
+
+    response = http.post(
+        "/chat/completions",
+        json={**BODY, "extra_body": "x"},
+        headers={"x-api-key": "s3cret"},
+    )
+
+    assert response.status_code == 200
+    assert seen["ctx"].session_id  # fell back to a generated thread id
+
+
+def test_non_streaming_keeps_errors_alongside_the_answer() -> None:
+    pytest.importorskip("fastapi")
+    from fastapi.testclient import TestClient
+
+    from examples.watsonx_orchestrate.app import create_app
+
+    async def stream(items, ctx, query):
+        yield ErrorEvent(**RUN, message="tool blew up")
+        yield RunEndEvent(
+            **RUN,
+            result=AgentRunResult(
+                run_id="run-1", root_run_id="run-1", message="partial"
+            ),
+        )
+
+    http = TestClient(create_app(stream=stream, model="m", token="s3cret"))
+    response = http.post(
+        "/chat/completions", json=BODY, headers={"x-api-key": "s3cret"}
+    )
+
+    assert response.json()["choices"][0]["message"]["content"] == (
+        "partial\n\n[error] tool blew up"
+    )

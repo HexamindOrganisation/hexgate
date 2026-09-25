@@ -1,7 +1,7 @@
 """The OpenAI Agents SDK agent the bridge serves to watsonx Orchestrate.
 
-Same stub DevOps tools as ``examples/devops_openai.py``, under its own name so it
-registers as a separate agent. Paste ``examples/devops_policy.yaml`` into the
+Serves the stub DevOps tools from ``examples/devops_openai.py`` under its own
+name, so it registers as a separate agent. Paste ``examples/devops_policy.yaml`` into the
 platform policy editor for ``orchestrate_devops_agent``.
 
 Register it once before serving (``HexgateRunner`` fails loud on an unregistered
@@ -14,7 +14,10 @@ from __future__ import annotations
 
 import os
 
-from agents import Agent, function_tool
+from agents import Agent
+
+# Reuse the DevOps stub tools so examples/devops_policy.yaml matches both agents.
+from examples.devops_openai import read_logs, restart_service, scale_deployment
 
 INSTRUCTION = (
     "You are a DevOps assistant for a Kubernetes platform. Help engineers read "
@@ -24,24 +27,6 @@ INSTRUCTION = (
     "returns a [policy_denied] or [approval_required] marker, tell the user the "
     "action was blocked by policy and why."
 )
-
-
-@function_tool
-def read_logs(service: str, env: str) -> str:
-    """Return recent log lines for `service` in `env` (dev/staging/prod)."""
-    return f"(stub) {service}@{env}: 200 OK, 200 OK, WARN upstream slow"
-
-
-@function_tool
-def restart_service(service: str, env: str) -> str:
-    """Restart `service` in `env`."""
-    return f"(stub) restarted {service}@{env}"
-
-
-@function_tool
-def scale_deployment(service: str, replicas: int, env: str) -> str:
-    """Scale `service` to `replicas` pods in `env`."""
-    return f"(stub) scaled {service}@{env} to {replicas} replicas"
 
 
 agent = Agent(

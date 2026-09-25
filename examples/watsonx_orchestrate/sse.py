@@ -37,25 +37,50 @@ DONE = "data: [DONE]\n\n"
 _INPUT_ROLES = {"user", "assistant", "system"}
 
 
-def to_agent_input(messages: list[dict[str, Any]]) -> list[dict[str, str]]:
+def _text(content: Any) -> str:
+    """Text of a message's ``content``: a string, or OpenAI-style content parts
+    (``[{"type": "text", "text": ...}]``) joined with newlines. Other part types
+    and shapes yield ``""``."""
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        parts = [
+            part["text"]
+            for part in content
+            if isinstance(part, dict)
+            and part.get("type") == "text"
+            and isinstance(part.get("text"), str)
+        ]
+        return "\n".join(parts).strip()
+    return ""
+
+
+def to_agent_input(messages: list[Any]) -> list[dict[str, str]]:
     """Map Orchestrate's ``messages`` to OpenAI Agents SDK input items.
 
-    Keeps user/assistant/system turns with non-empty string content.
+    Keeps user/assistant/system turns that carry text; skips anything else
+    (tool turns, empty content, non-dict entries).
     """
     items: list[dict[str, str]] = []
     for message in messages:
-        role = message.get("role")
-        content = message.get("content")
-        if role in _INPUT_ROLES and isinstance(content, str) and content.strip():
-            items.append({"role": role, "content": content})
+        if not isinstance(message, dict) or message.get("role") not in _INPUT_ROLES:
+            continue
+        text = _text(message.get("content"))
+        if text:
+            items.append({"role": message["role"], "content": text})
     return items
 
 
-def last_user_message(messages: list[dict[str, Any]]) -> str:
-    """Return the latest user turn's content (the run's ``query``), or ``""``."""
+def last_user_message(messages: list[Any]) -> str:
+    """Text of the latest user turn (the run's ``query``), or ``""``.
+
+    Looks only at the latest user turn: when it carries no text this returns
+    ``""`` rather than an older turn, so the caller can reject the request
+    instead of silently answering a previous message.
+    """
     for message in reversed(messages):
-        if message.get("role") == "user" and isinstance(message.get("content"), str):
-            return message["content"]
+        if isinstance(message, dict) and message.get("role") == "user":
+            return _text(message.get("content"))
     return ""
 
 
