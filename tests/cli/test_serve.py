@@ -751,3 +751,314 @@ def test_build_runtime_pydantic_uses_driver_and_skips_enforce(
     assert runtime.astream_normalized is not None
     assert "get_agent_name" not in captured
     assert "enforced_agent" not in captured
+
+
+# ---------------------------------------------------------------------------
+# _bind_subagents — serve-time per-sub-agent policy binding (leg 3)
+#
+# The serve path enforces only the ROOT's policy; these cover the walk that
+# binds each *registered* sub-agent to its own (dashboard-editable) platform
+# policy, so an edit to a sub-agent lands instead of the local one running.
+# ---------------------------------------------------------------------------
+
+from hexgate.agents import factory  # noqa: E402  — section-scoped
+from hexgate.cli._common import _bind_subagents  # noqa: E402  — section-scoped
+from hexgate.cloud.client import HexgateError  # noqa: E402  — section-scoped
+
+# A minimal parseable policy — one ``default`` role in allow mode. Enough for
+# platform_policy_from_payload's pydantic path (no bundle_* fields → unsigned).
+_SUBAGENT_POLICY_YAML = (
+    "version: 1\nroles:\n  default:\n    default_policy:\n      mode: allow\n"
+)
+
+
+class _BoundMarker:
+    """A distinct stand-in returned by the enforce spy, so a test can prove the
+    bound child (not the original) was swapped into the delegation tool."""
+
+    def __init__(self, name: str | None) -> None:
+        self.name = name
+
+
+class _FakeSubagentClient:
+    """A HexgateClient stand-in for the bind walk: serves a policy payload for
+    each ``registered`` name, and raises ``HexgateError(status=...)`` otherwise
+    (404 for unknown names, or a caller-supplied status via ``errors``)."""
+
+    def __init__(
+        self, registered: set[str], *, errors: dict[str, int] | None = None
+    ) -> None:
+        self.registered = registered
+        self.errors = errors or {}
+        self.asked: list[str] = []
+
+    def get_agent(self, name: str, *, if_none_match: str | None = None):
+        self.asked.append(name)
+        if name in self.errors:
+            raise HexgateError(f"boom {name}", status=self.errors[name])
+        if name not in self.registered:
+            raise HexgateError(f"agent {name!r} not found", status=404)
+        return {"policy_yaml": _SUBAGENT_POLICY_YAML}, f"etag-{name}"
+
+    def public_key_bytes(self) -> bytes:
+        # Unsigned payload path never consults this — 32 zero bytes satisfy the
+        # type contract (mirrors _FakeClient above).
+        return b"\x00" * 32
+
+
+@pytest.fixture
+def _hermetic_agents(monkeypatch: pytest.MonkeyPatch):
+    """Return a builder for real HexgateAgents with the graph + handler stubbed
+    (so as_tool / with_tools / enforce_policy work without a live LLM), and the
+    governance env cleared so construction never tries to bind on its own."""
+    monkeypatch.setattr(
+        factory, "create_langchain_agent", lambda **kwargs: "graph-instance"
+    )
+    monkeypatch.setattr(
+        factory, "get_langfuse_handler", lambda **kwargs: "handler-instance"
+    )
+    for var in (
+        "HEXGATE_API_KEY",
+        "HEXGATE_LOCAL_POLICY",
+        "HEXGATE_BIND_AGENTS",
+        "HEXGATE_LOCAL_MODE",
+    ):
+        monkeypatch.delenv(var, raising=False)
+
+    def _agent(name: str, tools: Any = ()) -> Any:
+        agent, _ = factory.create_agent("m", tools=list(tools), name=name)
+        return agent
+
+    return _agent
+
+
+def _spy_enforce(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
+    """Patch the module-level ``enforce_policy`` _bind_subagents calls, recording
+    the (agent name, policy, source) each invocation saw and returning a marker."""
+    calls: list[dict[str, Any]] = []
+
+    def spy(agent: Any, policy: Any, **kw: Any) -> _BoundMarker:
+        name = getattr(agent, "name", None)
+        calls.append({"name": name, "policy": policy, "source": kw.get("source")})
+        return _BoundMarker(name)
+
+    monkeypatch.setattr(factory, "enforce_policy", spy)
+    return calls
+
+
+def _only_subagent_tool(agent: Any) -> Any:
+    from hexgate.adapters.langchain.tools import SubagentTool
+
+    subs = [t for t in agent.tools if isinstance(t, SubagentTool)]
+    assert len(subs) == 1
+    return subs[0]
+
+
+def test_bind_subagents_binds_registered_child(
+    _hermetic_agents: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A registered sub-agent is fetched and enforced with ITS OWN platform
+    policy + a refresh source, and the bound child is swapped into the tool."""
+    from hexgate.security.source import PlatformPolicySource
+
+    child = _hermetic_agents("child_bot")
+    parent = _hermetic_agents("parent_bot", tools=[child.as_tool(name="delegate")])
+    calls = _spy_enforce(monkeypatch)
+    client = _FakeSubagentClient(registered={"child_bot"})
+
+    bound = _bind_subagents(parent, client, approval_handler=None)
+
+    # Fetched + enforced the child under its own name.
+    assert client.asked == ["child_bot"]
+    assert [c["name"] for c in calls] == ["child_bot"]
+    # With the CLOUD policy (the fetched policy_yaml declared ``default``)...
+    assert "default" in calls[0]["policy"].roles
+    # ...and a platform refresh source, so a dashboard edit hot-reloads.
+    assert isinstance(calls[0]["source"], PlatformPolicySource)
+    # The bound child replaced the local one in the delegation tool, and the
+    # parent was rebuilt (not mutated in place).
+    assert bound is not parent
+    assert isinstance(_only_subagent_tool(bound).child, _BoundMarker)
+
+
+def test_bind_subagents_leaves_unregistered_child_untouched(
+    _hermetic_agents: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Fail-soft: a child the platform doesn't know (404) is left exactly as the
+    visitor built it — binding a partially-registered tree degrades to local
+    child enforcement rather than raising."""
+    child = _hermetic_agents("child_bot")
+    parent = _hermetic_agents("parent_bot", tools=[child.as_tool(name="delegate")])
+    calls = _spy_enforce(monkeypatch)
+    client = _FakeSubagentClient(registered=set())  # child_bot → 404
+
+    bound = _bind_subagents(parent, client, approval_handler=None)
+
+    assert client.asked == ["child_bot"]  # we tried to fetch it
+    assert calls == []  # but never enforced a policy on it
+    # Nothing changed → same parent object, original local child still mounted.
+    assert bound is parent
+    assert _only_subagent_tool(bound).child is child
+
+
+def test_bind_subagents_recurses_into_grandchild(
+    _hermetic_agents: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The walk is post-order: a grandchild is bound before its parent, so the
+    child we enforce already carries its own bound sub-agents."""
+    grandchild = _hermetic_agents("grandchild_bot")
+    child = _hermetic_agents("child_bot", tools=[grandchild.as_tool(name="deeper")])
+    parent = _hermetic_agents("parent_bot", tools=[child.as_tool(name="delegate")])
+    calls = _spy_enforce(monkeypatch)
+    client = _FakeSubagentClient(registered={"child_bot", "grandchild_bot"})
+
+    _bind_subagents(parent, client, approval_handler=None)
+
+    # Grandchild fetched + enforced before its parent (child_bot).
+    assert client.asked == ["grandchild_bot", "child_bot"]
+    assert [c["name"] for c in calls] == ["grandchild_bot", "child_bot"]
+
+
+def test_bind_subagents_propagates_non_404_error(
+    _hermetic_agents: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A real API failure (5xx / unreachable) is NOT the fail-soft case — it
+    propagates instead of silently downgrading the child to stale local policy."""
+    child = _hermetic_agents("child_bot")
+    parent = _hermetic_agents("parent_bot", tools=[child.as_tool(name="delegate")])
+    _spy_enforce(monkeypatch)
+    client = _FakeSubagentClient(registered=set(), errors={"child_bot": 503})
+
+    with pytest.raises(HexgateError):
+        _bind_subagents(parent, client, approval_handler=None)
+
+
+def test_bind_subagents_fails_loud_on_none_payload_for_registered_child(
+    _hermetic_agents: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A None body (impossible without If-None-Match) for a registered child is
+    fail-LOUD, matching the root fetch — never a silent downgrade to local policy."""
+
+    class _NonePayloadClient:
+        def get_agent(self, name: str, *, if_none_match: str | None = None):
+            return None, "etag-x"
+
+        def public_key_bytes(self) -> bytes:
+            return b"\x00" * 32
+
+    child = _hermetic_agents("child_bot")
+    parent = _hermetic_agents("parent_bot", tools=[child.as_tool(name="delegate")])
+    _spy_enforce(monkeypatch)
+
+    with pytest.raises(RuntimeError, match="no payload"):
+        _bind_subagents(parent, _NonePayloadClient(), approval_handler=None)
+
+
+def test_bind_subagents_propagates_undecodable_registered_policy(
+    _hermetic_agents: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A registered child whose policy won't decode is fail-LOUD, not fail-soft:
+    unlike a 404 (never registered → local is intended), a broken *registered*
+    policy is a misconfiguration we refuse to serve ungoverned — same as the root."""
+    child = _hermetic_agents("child_bot")
+    parent = _hermetic_agents("parent_bot", tools=[child.as_tool(name="delegate")])
+    _spy_enforce(monkeypatch)
+    client = _FakeSubagentClient(registered={"child_bot"})  # 200, but decode fails:
+
+    def boom(*_a: Any, **_k: Any) -> Any:
+        raise ValueError("policy won't decode")
+
+    monkeypatch.setattr("hexgate.security.binding.platform_policy_from_payload", boom)
+
+    with pytest.raises(ValueError, match="won't decode"):
+        _bind_subagents(parent, client, approval_handler=None)
+
+
+def test_bind_subagents_memoizes_shared_child(
+    _hermetic_agents: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An agent mounted under several parents (a DAG) is fetched + enforced once,
+    not once per mount — the bind is memoized by target_name."""
+    shared = _hermetic_agents("shared_bot")
+    p1 = _hermetic_agents("parent_one", tools=[shared.as_tool(name="use_shared")])
+    p2 = _hermetic_agents("parent_two", tools=[shared.as_tool(name="use_shared")])
+    root = _hermetic_agents(
+        "root_bot",
+        tools=[p1.as_tool(name="to_p1"), p2.as_tool(name="to_p2")],
+    )
+    calls = _spy_enforce(monkeypatch)
+    client = _FakeSubagentClient(registered={"shared_bot", "parent_one", "parent_two"})
+
+    _bind_subagents(root, client, approval_handler=None)
+
+    # shared_bot fetched + enforced exactly once despite two mount points.
+    assert client.asked.count("shared_bot") == 1
+    assert [c["name"] for c in calls].count("shared_bot") == 1
+
+
+def test_build_runtime_binds_subagents_by_default(
+    _patched_runtime_deps: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Binding is default-on for the native serve path, independent of
+    registration: the root always binds here, so sub-agents do too. This is the
+    steady-state case — a tree registered earlier, served without
+    ``--register-subagents`` — where the sub-agents must still hot-reload."""
+    seen: dict[str, Any] = {}
+
+    def spy_bind(agent: Any, client: Any, approval_handler: Any) -> Any:
+        seen["called"] = True
+        return agent
+
+    monkeypatch.setattr("hexgate.cli._common._bind_subagents", spy_bind)
+
+    build_runtime_from_local_agent(
+        _stub_settings(),
+        agent_obj=object(),
+        description=None,
+        approval_handler=None,
+        auto_register=True,  # note: NOT auto_register_subagents
+        console=Console(),
+    )
+
+    assert seen.get("called") is True
+
+
+def test_build_runtime_skips_subagent_bind_when_disabled(
+    _patched_runtime_deps: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``bind_subagents=False`` opts out — sub-agents serve on local policy only,
+    the root still binds as usual."""
+    called = {"n": 0}
+
+    def spy_bind(agent: Any, client: Any, approval_handler: Any) -> Any:
+        called["n"] += 1
+        return agent
+
+    monkeypatch.setattr("hexgate.cli._common._bind_subagents", spy_bind)
+
+    build_runtime_from_local_agent(
+        _stub_settings(),
+        agent_obj=object(),
+        description=None,
+        approval_handler=None,
+        auto_register=True,
+        bind_subagents=False,
+        console=Console(),
+    )
+
+    assert called["n"] == 0
+
+
+def test_serve_parser_exposes_no_bind_subagents_flag() -> None:
+    """The documented opt-out is reachable from the CLI: binding is on by
+    default, and ``--no-bind-subagents`` flips it off."""
+    from hexgate.cli import _build_parser
+
+    parser = _build_parser()
+    assert parser.parse_args(["serve", "mod:attr"]).no_bind_subagents is False
+    assert (
+        parser.parse_args(
+            ["serve", "mod:attr", "--no-bind-subagents"]
+        ).no_bind_subagents
+        is True
+    )
