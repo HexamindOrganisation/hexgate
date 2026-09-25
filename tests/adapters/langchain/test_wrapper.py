@@ -9,6 +9,8 @@ proxy's per-call refresh.
 
 from __future__ import annotations
 
+import logging
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -234,6 +236,152 @@ def test_wrap_shares_one_client_across_policy_and_ban_resolvers(
 
     assert seen["policy"] is not None
     assert seen["policy"] is seen["ban"]
+
+
+# ---------------------------------------------------------------------------
+# wrap_langchain_agent — graph-bound tools the caller did not pass (#249)
+# ---------------------------------------------------------------------------
+
+
+class _GraphWithBoundTools:
+    """Stand in for a compiled graph whose ToolNode binds ``bound_tools``."""
+
+    name = "fake-graph"
+
+    def __init__(self, bound_tools: list[BaseTool]) -> None:
+        tools_node = SimpleNamespace(
+            bound=SimpleNamespace(tools_by_name={t.name: t for t in bound_tools})
+        )
+        self.nodes = {"tools": tools_node}
+
+
+class _UngateableTool(BaseTool):
+    """A tool with neither ``func`` nor ``coroutine`` — cannot be gated in place."""
+
+    name: str = "exotic"
+    description: str = "Runs through _run only."
+
+    def _run(self, *args: Any, **kwargs: Any) -> str:
+        return "ran"
+
+
+def _resolve_to(monkeypatch: pytest.MonkeyPatch, engine: PolicySet) -> None:
+    monkeypatch.setattr(
+        wrapper_mod,
+        "resolve_policy",
+        lambda name, *, api_key, client=None: ResolvedPolicy(engine, None),
+    )
+
+
+def test_wrap_gates_graph_bound_tools(monkeypatch: pytest.MonkeyPatch) -> None:
+    _resolve_to(monkeypatch, _engine(["execute"], mode="deny"))
+    execute = _make_tool("execute")
+
+    wrap_langchain_agent(agent=_GraphWithBoundTools([execute]), tools=[], api_key="k")
+
+    result = execute.func(text="rm -rf /")
+    assert result["ok"] is False
+    assert result["error"]["type"] == "policy_denied"
+
+
+def test_wrap_still_gates_caller_tools(monkeypatch: pytest.MonkeyPatch) -> None:
+    _resolve_to(monkeypatch, _engine(["a"], mode="deny"))
+    caller_tool = _make_tool("a")
+
+    wrap_langchain_agent(
+        agent=_GraphWithBoundTools([caller_tool, _make_tool("execute")]),
+        tools=[caller_tool],
+        api_key="k",
+    )
+
+    result = caller_tool.func(text="hi")
+    assert result["ok"] is False
+    assert result["error"]["type"] == "policy_denied"
+
+
+def test_wrap_skips_an_ungateable_discovered_tool_with_a_warning(
+    resolved: dict[str, Any], caplog: pytest.LogCaptureFixture
+) -> None:
+    gateable = _make_tool("b")
+    graph = _GraphWithBoundTools([_UngateableTool(), gateable])
+
+    with caplog.at_level(logging.WARNING, logger=wrapper_mod.__name__):
+        wrap_langchain_agent(agent=graph, tools=[], api_key="k")
+
+    assert "'exotic'" in caplog.text
+    assert "ungoverned" in caplog.text
+    assert getattr(gateable, "_hexgate_enforcer_installed") is True
+
+
+def test_wrap_raises_for_an_ungateable_caller_tool(
+    resolved: dict[str, Any],
+) -> None:
+    with pytest.raises(TypeError, match="exotic"):
+        wrap_langchain_agent(
+            agent=_FakeCompiledGraph(), tools=[_UngateableTool()], api_key="k"
+        )
+
+
+def test_tool_names_reports_the_union(resolved: dict[str, Any]) -> None:
+    caller_tool = _make_tool("a")
+    graph = _GraphWithBoundTools([caller_tool, _make_tool("execute")])
+
+    wrapped = wrap_langchain_agent(agent=graph, tools=[caller_tool], api_key="k")
+
+    assert wrapped._tool_names == ["a", "execute"]
+
+
+def _todo_agent() -> Any:
+    """A real create_agent graph whose middleware injects ``write_todos``, a tool
+    taking ``runtime: ToolRuntime``; the model calls it once, then stops."""
+    from langchain.agents import create_agent
+    from langchain.agents.middleware import TodoListMiddleware
+    from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
+    from langchain_core.messages import AIMessage
+
+    class _ScriptedModel(GenericFakeChatModel):
+        def bind_tools(self, tools: Any, **kwargs: Any) -> "_ScriptedModel":
+            return self
+
+    call = {"name": "write_todos", "args": {"todos": []}, "id": "call-1"}
+    model = _ScriptedModel(
+        messages=iter([AIMessage(content="", tool_calls=[call]), AIMessage("done")])
+    )
+    return create_agent(
+        model=model, tools=[], middleware=[TodoListMiddleware()], name="todo-agent"
+    )
+
+
+def test_wrap_runs_a_gated_runtime_injected_tool_through_a_real_graph(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An injected ToolRuntime must not reach the enforcer: it cannot be
+    deep-copied into the decision snapshot, so the tools node would abort."""
+    _resolve_to(monkeypatch, _engine(["write_todos"]))
+    graph = _todo_agent()
+
+    wrap_langchain_agent(agent=graph, tools=[], api_key="k")
+    result = graph.invoke({"messages": [{"role": "user", "content": "plan"}]})
+
+    tool_message = result["messages"][2]
+    assert tool_message.type == "tool"
+    assert "policy_denied" not in str(tool_message.content)
+
+
+def test_wrap_shows_guards_and_policy_only_model_supplied_args(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from hexgate.guards import before_tool
+
+    _resolve_to(monkeypatch, _engine(["write_todos"]))
+    seen: list[set[str]] = []
+    guard = before_tool(lambda call: seen.append(set(call.args)))
+    graph = _todo_agent()
+
+    wrap_langchain_agent(agent=graph, tools=[], api_key="k", guards=[guard])
+    graph.invoke({"messages": [{"role": "user", "content": "plan"}]})
+
+    assert seen == [{"todos"}]
 
 
 # ---------------------------------------------------------------------------
