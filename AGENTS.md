@@ -26,6 +26,7 @@ tests/                # hexgate package tests (agents, cli, security, tracing, s
 - **Envs:** All prefixed with `HEXGATE_`. Never commit private keys.
 
 ## Agent Instruction Files
-- These files follow [AGENTS.md](https://agents.md): the nearest one wins, so `platform/api/AGENTS.md` applies under `platform/api/` and this one everywhere else.
+- These files follow [AGENTS.md](https://agents.md). A nested one adds to this file rather than replacing it: Claude loads `platform/api/AGENTS.md` on top of this one once it reads a file under `platform/api/`.
+- There is no precedence rule between them — [if two rules contradict, Claude may pick either](https://code.claude.com/docs/en/memory#write-effective-instructions) — so keep them from disagreeing rather than relying on the nearer file to win.
 - Each `AGENTS.md` has a `CLAUDE.md` beside it holding one line, `@AGENTS.md`. Claude Code stops reading every `AGENTS.md` in a repo as soon as any `CLAUDE.md` exists at or above the working directory, so the pointers are what keep the nested files loading. Put Claude-specific notes under the import, not in `AGENTS.md`.
 - Repo skills live in `.claude/skills/`. That path is Claude-specific and deliberate: nothing under `.agents/` is read.
