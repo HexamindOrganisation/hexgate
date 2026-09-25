@@ -72,9 +72,9 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 # drifts from the source. `uv run` because the venv is not on PATH here. Compared
 # both ways and across every file type, so a module missing from the wheel, one
 # deleted from the source but retained in it, and drifted package data all fail
-# the build. AGENTS.md is in the source tree but deliberately not packaged.
+# the build. Markdown (AGENTS.md, CLAUDE.md) is in the source tree but not packaged.
 RUN INSTALLED="$(uv run --no-sync python -c 'import hexgate, os; print(os.path.dirname(hexgate.__file__))')" \
-    && if ! diff -r -x 'AGENTS.md' -x '__pycache__' /app/hexgate "$INSTALLED"; then \
+    && if ! diff -r -x '*.md' -x '__pycache__' /app/hexgate "$INSTALLED"; then \
          echo 'ERROR: the installed hexgate SDK differs from the source in this image'; \
          echo 'Either the uv cache served a stale wheel (see --refresh-package above),'; \
          echo 'or a source file is not packaged (see [tool.setuptools] in pyproject.toml).'; \

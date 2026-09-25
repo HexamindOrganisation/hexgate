@@ -27,5 +27,5 @@ tests/                # hexgate package tests (agents, cli, security, tracing, s
 
 ## Agent Instruction Files
 - These files follow [AGENTS.md](https://agents.md): the nearest one wins, so `platform/api/AGENTS.md` applies under `platform/api/` and this one everywhere else.
-- **Claude Code reads them only while no `CLAUDE.md` exists here or above.** Adding one — including a personal `CLAUDE.local.md` — makes Claude read that instead and ignore every `AGENTS.md` in the repo. Keep your local notes in `~/.claude/CLAUDE.md`, which does not count, or set **Project instructions** to `claude-md-and-agents-md` in `/config`.
+- Each `AGENTS.md` has a `CLAUDE.md` beside it holding one line, `@AGENTS.md`. Claude Code stops reading every `AGENTS.md` in a repo as soon as any `CLAUDE.md` exists at or above the working directory, so the pointers are what keep the nested files loading. Put Claude-specific notes under the import, not in `AGENTS.md`.
 - Repo skills live in `.claude/skills/`. That path is Claude-specific and deliberate: nothing under `.agents/` is read.
