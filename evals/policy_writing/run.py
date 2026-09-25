@@ -47,6 +47,8 @@ RUNS = Path(os.environ.get("POLICY_EVAL_RUNS") or HERE / ".runs")
 # Answers the runner writes itself when the agent didn't finish (a throttled,
 # crashed or timed-out session). Never inferred from the agent's own text: a
 # correct answer may well talk about rate limits.
+MAX_JOBS = 8
+
 AGENT_ERROR = "<agent error>"
 TIMED_OUT = "<timed out>"
 
@@ -521,9 +523,18 @@ def main() -> int:
     ap.add_argument(
         "--repeat", type=int, default=1, help="Attempts per case (LLM output varies)."
     )
-    ap.add_argument("--jobs", type=int, default=4)
+    ap.add_argument(
+        "--jobs", type=int, default=4, help=f"Agents in parallel (at most {MAX_JOBS})."
+    )
     ap.add_argument("--timeout", type=int, default=900, help="Seconds per agent run.")
     args = ap.parse_args()
+    if args.jobs > MAX_JOBS:
+        print(
+            f"--jobs {args.jobs} capped at {MAX_JOBS}: each agent is a Claude process "
+            "plus hexgate subprocesses, and 36 at once exhausted a 16 GB laptop.",
+            file=sys.stderr,
+        )
+        args.jobs = MAX_JOBS
 
     cases = yaml.safe_load((HERE / "cases.yaml").read_text())
     if args.case:

@@ -81,7 +81,8 @@ def _(CASES, mo):
         label="Agent",
     )
     repeat = mo.ui.number(start=1, stop=5, value=1, label="Attempts per case")
-    jobs = mo.ui.number(start=1, stop=36, value=8, label="In parallel")
+    # More than 8 Claude agents at once can exhaust a laptop's memory.
+    jobs = mo.ui.number(start=1, stop=8, value=6, label="In parallel")
     return agent_pick, category_pick, jobs, repeat
 
 
