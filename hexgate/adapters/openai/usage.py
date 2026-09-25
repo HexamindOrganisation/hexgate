@@ -212,7 +212,10 @@ class HexgateUsageHooks(RunHooks):
         except Exception:
             _log.exception("converting LLM messages raised; dropping this event")
             return
-        messages, seq, resynced = self._delta(key, new_input)
+        delta = self._delta(key, new_input)
+        if delta is None:
+            return
+        messages, seq, resynced = delta
         emit_llm_messages(
             agent.name,
             model,
@@ -229,9 +232,12 @@ class HexgateUsageHooks(RunHooks):
             api_key=self._api_key,
         )
 
-    def _delta(self, key: str, new_input: list[Any]) -> tuple[list[Any], int, bool]:
+    def _delta(
+        self, key: str, new_input: list[Any]
+    ) -> tuple[list[Any], int, bool] | None:
         """What to emit for this call: the messages, their ``message_seq`` and
-        whether they restate the turn's history.
+        whether they restate the turn's history, or ``None`` when the request
+        half of the hook pair never landed and there is no prompt to diff.
 
         Two sources, one shape. Normally the cursor diffs the full list it was
         handed. Under a server-managed conversation the SDK already sent only
@@ -245,7 +251,12 @@ class HexgateUsageHooks(RunHooks):
         """
         if not self._framework_sends_deltas:
             delta = self._cursor.advance(key, new_input)
-            return delta.messages, delta.seq, delta.resynced
+            return (delta.messages, delta.seq, delta.resynced) if delta else None
+        # Same reason the cursor refuses an empty list: spending a seq here
+        # would make the next real call look like a continuation of a turn
+        # that never had a first event.
+        if not new_input:
+            return None
         seq = self._delta_seq.get(key, 0)
         self._delta_seq[key] = seq + 1
         return new_input, seq, False
