@@ -669,6 +669,17 @@ def add_parser(subparsers: argparse._SubParsersAction) -> None:
             "instead of aborting startup. Same as `hexgate register --force`."
         ),
     )
+    parser.add_argument(
+        "--no-bind-subagents",
+        dest="no_bind_subagents",
+        action="store_true",
+        help=(
+            "Serve sub-agents on their LOCAL policy only, skipping the platform "
+            "policy bind. By default each registered sub-agent binds its "
+            "(dashboard-editable) platform policy like the root does; a child not "
+            "on the platform is unaffected either way."
+        ),
+    )
     parser.set_defaults(func=main)
 
 
@@ -706,6 +717,7 @@ def main(args: argparse.Namespace) -> int:
             auto_register_subagents_force=getattr(
                 args, "register_subagents_force", False
             ),
+            bind_subagents=not getattr(args, "no_bind_subagents", False),
             console=console,
         )
     except HexgateError as exc:
