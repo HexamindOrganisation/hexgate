@@ -11,7 +11,7 @@ is the cheapest way to speed up review — most of the time saved is questions t
 reviewer never has to ask.
 
 The commit subject is separate and stays `type(scope): description` (see
-CLAUDE.md). This skill is about the PR **body**.
+AGENTS.md). This skill is about the PR **body**.
 
 ## Why the structure matters
 
