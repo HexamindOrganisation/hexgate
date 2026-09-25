@@ -331,6 +331,59 @@ def test_tool_names_reports_the_union(resolved: dict[str, Any]) -> None:
     assert wrapped._tool_names == ["a", "execute"]
 
 
+def _todo_agent() -> Any:
+    """A real create_agent graph whose middleware injects ``write_todos``, a tool
+    taking ``runtime: ToolRuntime``; the model calls it once, then stops."""
+    from langchain.agents import create_agent
+    from langchain.agents.middleware import TodoListMiddleware
+    from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
+    from langchain_core.messages import AIMessage
+
+    class _ScriptedModel(GenericFakeChatModel):
+        def bind_tools(self, tools: Any, **kwargs: Any) -> "_ScriptedModel":
+            return self
+
+    call = {"name": "write_todos", "args": {"todos": []}, "id": "call-1"}
+    model = _ScriptedModel(
+        messages=iter([AIMessage(content="", tool_calls=[call]), AIMessage("done")])
+    )
+    return create_agent(
+        model=model, tools=[], middleware=[TodoListMiddleware()], name="todo-agent"
+    )
+
+
+def test_wrap_runs_a_gated_runtime_injected_tool_through_a_real_graph(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An injected ToolRuntime must not reach the enforcer: it cannot be
+    deep-copied into the decision snapshot, so the tools node would abort."""
+    _resolve_to(monkeypatch, _engine(["write_todos"]))
+    graph = _todo_agent()
+
+    wrap_langchain_agent(agent=graph, tools=[], api_key="k")
+    result = graph.invoke({"messages": [{"role": "user", "content": "plan"}]})
+
+    tool_message = result["messages"][2]
+    assert tool_message.type == "tool"
+    assert "policy_denied" not in str(tool_message.content)
+
+
+def test_wrap_shows_guards_and_policy_only_model_supplied_args(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from hexgate.guards import before_tool
+
+    _resolve_to(monkeypatch, _engine(["write_todos"]))
+    seen: list[set[str]] = []
+    guard = before_tool(lambda call: seen.append(set(call.args)))
+    graph = _todo_agent()
+
+    wrap_langchain_agent(agent=graph, tools=[], api_key="k", guards=[guard])
+    graph.invoke({"messages": [{"role": "user", "content": "plan"}]})
+
+    assert seen == [{"todos"}]
+
+
 # ---------------------------------------------------------------------------
 # HexgateLangchainAgent — per-call refresh
 # ---------------------------------------------------------------------------

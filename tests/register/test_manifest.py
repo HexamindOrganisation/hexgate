@@ -1206,3 +1206,44 @@ def test_langchain_manifest_discovers_tools_of_a_real_create_agent_graph():
     manifest = create_langchain_manifest(graph, [])
 
     assert [t.name for t in manifest.tools] == ["issue_refund"]
+
+
+def test_langchain_manifest_renders_a_tool_with_an_injected_tool_runtime():
+    """A ToolRuntime field has no JSON schema; rendering args_schema raised."""
+    from langchain.tools import ToolRuntime
+    from langchain_core.tools import tool
+
+    @tool
+    def ls(path: str, runtime: ToolRuntime) -> str:
+        """List files."""
+        return path
+
+    manifest = create_langchain_manifest(_graph_with_bound_tools("fs", [ls]), [])
+
+    [definition] = manifest.tools
+    assert list(definition.input_schema.properties) == ["path"]
+    assert definition.input_schema.required == ["path"]
+
+
+def test_langchain_manifest_excludes_injected_state_and_tool_call_id():
+    """Injected params are not model inputs, so they must not be recorded as
+    required arguments."""
+    from typing import Annotated
+
+    from langchain_core.tools import InjectedToolCallId, tool
+    from langgraph.prebuilt import InjectedState
+
+    @tool
+    def refund(
+        order_id: str,
+        state: Annotated[dict, InjectedState],
+        call_id: Annotated[str, InjectedToolCallId],
+    ) -> str:
+        """Refund an order."""
+        return order_id
+
+    manifest = create_langchain_manifest(_graph("plain"), [refund])
+
+    [definition] = manifest.tools
+    assert list(definition.input_schema.properties) == ["order_id"]
+    assert definition.input_schema.required == ["order_id"]
