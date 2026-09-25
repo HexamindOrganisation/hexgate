@@ -436,3 +436,43 @@ def test_build_signed_bundle_raises_on_bad_constraint() -> None:
     )
     with pytest.raises(Exception):  # PolicySetError, surfaced to the caller
         build_signed_bundle(bad, compile_wasm=False)
+
+
+# ---------------------------------------------------------------------------
+# agent_gating.skills — the skill gate's engagement flag
+# ---------------------------------------------------------------------------
+
+
+_SKILLS_YAML = """\
+version: 1
+roles:
+  default:
+    skills:
+      refunder:
+        mode: allow
+"""
+
+
+def test_bundle_manifest_carries_the_skills_flag() -> None:
+    declaring = build_signed_bundle(_SKILLS_YAML, compile_wasm=False)
+    silent = build_signed_bundle(_DEMO_YAML, compile_wasm=False)
+
+    assert declaring.manifest["agent_gating"]["skills"] is True
+    assert silent.manifest["agent_gating"]["skills"] is False
+
+
+@needs_opa
+def test_bundle_reads_the_skills_flag_from_its_manifest() -> None:
+    sb = build_signed_bundle(_SKILLS_YAML)
+    bundle = PolicyBundle.from_parts(
+        wasm_bytes=sb.wasm_bytes, manifest_bytes=sb.manifest_bytes
+    )
+    assert bundle.declares_skills() is True
+
+
+@needs_opa
+def test_old_bundle_without_the_flag_reads_false(bundle_dir: Path) -> None:
+    """A bundle signed before skill gating has no agent_gating.skills key."""
+    bundle = PolicyBundle.from_disk(bundle_dir)
+    assert "agent_gating" not in bundle.manifest
+    assert bundle.declares_skills() is False

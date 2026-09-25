@@ -329,6 +329,11 @@ class PolicyBundle:
         older bundle) reads False, so no spurious warning fires."""
         return bool(self.manifest.get("agent_gating", {}).get("reach_tool", False))
 
+    def declares_skills(self) -> bool:
+        """Read the skills-configured flag from the signed manifest. Absent (an
+        older bundle) reads False — safe, those predate skill gating."""
+        return bool(self.manifest.get("agent_gating", {}).get("skills", False))
+
     # ---- Metadata ------------------------------------------------------
 
     @property
@@ -410,6 +415,7 @@ def build_signed_bundle(
         "admission": resolved.declares_admission(),
         "reach": resolved.declares_reach(),
         "reach_tool": resolved.declares_tool_reach(),
+        "skills": resolved.declares_skills(),
     }
 
     wasm_bytes: bytes | None = None
