@@ -500,7 +500,7 @@ class RoleBinding(SQLModel, table=True):
     a mapping ``{agent-or-"*": [capability names]}``. A legacy flat ``[names]``
     list is read as the generic ``{"*": [names]}`` agent — so the agent axis is
     a value-shape evolution with no schema change (the column stays JSON, the
-    key stays ``(project_id, role)``). See ``agent-policy-dimension-design.md``.
+    key stays ``(project_id, role)``).
     """
 
     __tablename__ = "role_binding"
