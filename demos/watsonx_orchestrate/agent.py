@@ -7,7 +7,7 @@ platform policy editor for ``orchestrate_devops_agent``.
 Register it once before serving (``HexgateRunner`` fails loud on an unregistered
 agent)::
 
-    hexgate register --agent examples.watsonx_orchestrate.agent:agent
+    hexgate register --agent demos.watsonx_orchestrate.agent:agent
 """
 
 from __future__ import annotations

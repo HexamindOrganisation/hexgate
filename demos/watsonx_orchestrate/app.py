@@ -5,7 +5,7 @@ each turn runs through ``HexgateRunner`` so every tool call is policy-gated, and
 the normalized Hexgate stream is re-emitted in Orchestrate's SSE format
 (see ``sse.py``). Run from the repo root::
 
-    uvicorn examples.watsonx_orchestrate.app:app --host 0.0.0.0 --port 8080
+    uvicorn demos.watsonx_orchestrate.app:app --host 0.0.0.0 --port 8080
 
 Environment:
 
@@ -34,7 +34,7 @@ from typing import Any
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
-from examples.watsonx_orchestrate.sse import (
+from demos.watsonx_orchestrate.sse import (
     DONE,
     completion_body,
     last_user_message,
@@ -61,7 +61,7 @@ _LOCAL_PLACEHOLDER_KEY = "local-policy"
 
 def _hexgate_stream() -> tuple[StreamFn, str]:
     """Build the production stream function around ``HexgateRunner``."""
-    from examples.watsonx_orchestrate.agent import agent
+    from demos.watsonx_orchestrate.agent import agent
     from hexgate.adapters.openai import HexgateRunner
     from hexgate.adapters.openai.streaming import normalize_openai_events
 
@@ -232,7 +232,7 @@ def create_app(
 
 def __getattr__(name: str) -> Any:
     # Build lazily so importing this module (tests, tooling) needs no keys;
-    # uvicorn's `examples.watsonx_orchestrate.app:app` lookup triggers it.
+    # uvicorn's `demos.watsonx_orchestrate.app:app` lookup triggers it.
     if name == "app":
         from hexgate.bootstrap import bootstrap
 

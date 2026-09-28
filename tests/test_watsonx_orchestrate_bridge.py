@@ -1,4 +1,4 @@
-"""Tests for the watsonx Orchestrate bridge example (examples/watsonx_orchestrate)."""
+"""Tests for the watsonx Orchestrate bridge demo (demos/watsonx_orchestrate)."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import json
 
 import pytest
 
-from examples.watsonx_orchestrate.sse import (
+from demos.watsonx_orchestrate.sse import (
     DONE,
     completion_body,
     last_user_message,
@@ -176,7 +176,7 @@ def client():
     pytest.importorskip("fastapi")
     from fastapi.testclient import TestClient
 
-    from examples.watsonx_orchestrate.app import create_app
+    from demos.watsonx_orchestrate.app import create_app
 
     seen: dict = {}
 
@@ -322,7 +322,7 @@ def test_non_streaming_keeps_errors_alongside_the_answer() -> None:
     pytest.importorskip("fastapi")
     from fastapi.testclient import TestClient
 
-    from examples.watsonx_orchestrate.app import create_app
+    from demos.watsonx_orchestrate.app import create_app
 
     async def stream(items, ctx, query):
         yield ErrorEvent(**RUN, message="tool blew up")
