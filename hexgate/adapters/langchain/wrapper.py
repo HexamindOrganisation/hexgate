@@ -19,14 +19,21 @@ from langchain_core.tools import BaseTool
 from langgraph.graph.state import CompiledStateGraph
 
 from hexgate.adapters.langchain.agent import HexgateLangchainAgent
+from hexgate.adapters.langchain.skills import SkillKeyResolver, SkillPathIndex
 from hexgate.adapters.langchain.tools import (
+    PolicyKeyResolver,
     install_enforcer_on_tool,
     install_enforcer_on_tools,
 )
 from hexgate.cloud.client import HexgateClient, HexgateConfig
 from hexgate.config.env import resolve_api_key
 from hexgate.guards.types import ToolPipeline, build_pipeline
-from hexgate.manifest.langchain import discover_graph_tools
+from hexgate.manifest.langchain import (
+    discover_graph_tools,
+    locate_skills,
+    read_skill_hash,
+    resolve_skills_middlewares,
+)
 from hexgate.security.agent_gate import (
     warn_if_admission_unenforced,
     warn_if_reach_unenforced,
@@ -49,6 +56,7 @@ def wrap_langchain_agent(
     api_key: str | None = None,
     guards: Sequence[Guard] | None = None,
     guard_observer: GuardObserver | None = None,
+    skills_middleware: object | None = None,
 ) -> HexgateLangchainAgent:
     """Wrap a pre-built LangGraph agent with Hexgate policy enforcement.
 
@@ -62,6 +70,9 @@ def wrap_langchain_agent(
     list of guards authored with ``@before_tool`` / ``@after_tool``; they wrap each
     tool in place alongside the policy (``guard_observer`` receives their provenance
     events). The enforced policy is the platform's; unlisted tools are denied.
+    A ``read_file`` of a deepagents skill file decides under its ``skill:`` key
+    once the policy declares skills; skills come from the graph's own
+    ``SkillsMiddleware`` unless ``skills_middleware`` overrides it.
     """
     resolved_key = resolve_api_key(api_key)
     if not resolved_key:
@@ -90,8 +101,13 @@ def wrap_langchain_agent(
         resolved.engine, framework="LangChain", agent_name=agent_name
     )
     pipeline = build_pipeline(guards, observer=guard_observer)
-    install_enforcer_on_tools(tools, enforcer=enforcer, pipeline=pipeline)
-    _install_on_discovered(discovered, enforcer=enforcer, pipeline=pipeline)
+    resolver = _skill_resolver(agent, skills_middleware, enforcer)
+    install_enforcer_on_tools(
+        tools, enforcer=enforcer, pipeline=pipeline, resolve_policy_key=resolver
+    )
+    _install_on_discovered(
+        discovered, enforcer=enforcer, pipeline=pipeline, resolve_policy_key=resolver
+    )
 
     return HexgateLangchainAgent(
         agent=agent,
@@ -103,11 +119,23 @@ def wrap_langchain_agent(
     )
 
 
+def _skill_resolver(
+    agent: CompiledStateGraph,
+    skills_middleware: object | None,
+    enforcer: PolicyEnforcer,
+) -> PolicyKeyResolver | None:
+    """Skill-read resolver over the agent's skills, or None when it has none."""
+    middlewares = resolve_skills_middlewares(agent, skills_middleware)
+    index = SkillPathIndex.from_locations(locate_skills(middlewares))
+    return SkillKeyResolver(enforcer, index, read_skill_hash) if index else None
+
+
 def _install_on_discovered(
     tools: list[BaseTool],
     *,
     enforcer: PolicyEnforcer,
     pipeline: ToolPipeline | None,
+    resolve_policy_key: PolicyKeyResolver | None,
 ) -> None:
     """Gate graph-discovered tools, skipping any that cannot be gated.
 
@@ -116,7 +144,12 @@ def _install_on_discovered(
     """
     for tool in tools:
         try:
-            install_enforcer_on_tool(tool, enforcer=enforcer, pipeline=pipeline)
+            install_enforcer_on_tool(
+                tool,
+                enforcer=enforcer,
+                pipeline=pipeline,
+                resolve_policy_key=resolve_policy_key,
+            )
         except TypeError:
             _log.warning(
                 "tool %r is bound to the graph but cannot be gated; it will run "

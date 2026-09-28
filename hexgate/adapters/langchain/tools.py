@@ -14,7 +14,8 @@ from __future__ import annotations
 
 import functools
 import json
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import dataclass
 from typing import Any
 
 from langchain_core.tools import BaseTool
@@ -22,7 +23,7 @@ from langchain_core.tools.structured import StructuredTool
 from pydantic import BaseModel, ConfigDict, Field
 
 from hexgate.approvals import ApprovalHandler
-from hexgate.guards.runner import run_guarded_async, run_guarded_sync
+from hexgate.guards.runner import RenderError, run_guarded_async, run_guarded_sync
 from hexgate.guards.types import ToolPipeline
 from hexgate.security.decision import Decision, DecisionOutcome
 from hexgate.security.enforcer import PolicyEnforcer
@@ -377,6 +378,39 @@ class SubagentTool(BaseTool):
 # In-place installer for retrofitting existing CompiledStateGraph tools.
 # ---------------------------------------------------------------------------
 
+
+@dataclass(frozen=True)
+class PolicyOverride:
+    """Decide a call under ``key`` with ``args`` instead of its tool name and args.
+
+    ``render_error`` renders the policy denial only; a guard ``Halt`` still renders
+    as the ordinary tool error.
+    """
+
+    key: str
+    args: dict[str, Any]
+    render_error: RenderError | None = None
+
+
+PolicyKeyResolver = Callable[[str, Mapping[str, Any]], PolicyOverride | None]
+
+
+def _override_kwargs(
+    resolve_policy_key: PolicyKeyResolver | None,
+    name: str,
+    model_kwargs: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Runner keyword overrides for one call; empty when nothing resolves."""
+    override = resolve_policy_key(name, model_kwargs) if resolve_policy_key else None
+    if override is None:
+        return {}
+    return {
+        "policy_key": override.key,
+        "policy_args": override.args,
+        "render_policy_error": override.render_error,
+    }
+
+
 _ORIGINAL_FUNC_ATTR = "_hexgate_original_func"
 _ORIGINAL_COROUTINE_ATTR = "_hexgate_original_coroutine"
 _INSTALLED_ATTR = "_hexgate_enforcer_installed"
@@ -412,6 +446,7 @@ def install_enforcer_on_tool(
     *,
     enforcer: PolicyEnforcer,
     pipeline: ToolPipeline | None = None,
+    resolve_policy_key: PolicyKeyResolver | None = None,
 ) -> BaseTool:
     """Install :class:`PolicyEnforcer` gating on ``tool`` in place.
 
@@ -423,6 +458,8 @@ def install_enforcer_on_tool(
     flows belong on the host side, not on this in-place installer, so the
     runner runs with ``approval_handler=None``. Guards and policy see only
     model-supplied arguments; injected ones are passed straight through.
+    ``resolve_policy_key`` may redirect a call's decision to another key (see
+    :class:`PolicyOverride`); without it every call decides under the tool name.
     """
     name = tool.name
     model_args = _model_arg_names(tool)
@@ -456,6 +493,7 @@ def install_enforcer_on_tool(
                 approval_handler=None,
                 invoke=lambda final: captured_func(*args, **{**final, **injected}),
                 render_error=_langchain_error,
+                **_override_kwargs(resolve_policy_key, name, model_kwargs),
             )
 
         setattr(tool, _ORIGINAL_FUNC_ATTR, captured_func)
@@ -475,6 +513,7 @@ def install_enforcer_on_tool(
                 approval_handler=None,
                 invoke=lambda final: captured_coroutine(*args, **{**final, **injected}),
                 render_error=_langchain_error,
+                **_override_kwargs(resolve_policy_key, name, model_kwargs),
             )
 
         setattr(tool, _ORIGINAL_COROUTINE_ATTR, captured_coroutine)
@@ -490,8 +529,14 @@ def install_enforcer_on_tools(
     *,
     enforcer: PolicyEnforcer,
     pipeline: ToolPipeline | None = None,
+    resolve_policy_key: PolicyKeyResolver | None = None,
 ) -> list[BaseTool]:
     """Install enforcement on every StructuredTool-style tool in place."""
     for t in tools:
-        install_enforcer_on_tool(t, enforcer=enforcer, pipeline=pipeline)
+        install_enforcer_on_tool(
+            t,
+            enforcer=enforcer,
+            pipeline=pipeline,
+            resolve_policy_key=resolve_policy_key,
+        )
     return tools
