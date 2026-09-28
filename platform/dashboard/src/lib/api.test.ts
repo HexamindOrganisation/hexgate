@@ -100,3 +100,74 @@ describe("listLlmMessages()", () => {
     expect(urls[0]).toContain("session_id=sess-1&run_id=&");
   });
 });
+
+/**
+ * The AI Act downloads go through `requestBlob`, which shares the auth and
+ * error path with the JSON `request` but hands back bytes. These lock in both
+ * halves of that split.
+ */
+describe("AI Act downloads", () => {
+  it("returns the annex body as a blob", async () => {
+    vi.spyOn(window, "fetch").mockResolvedValue(
+      new Response('{"annex": true}', {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+
+    const blob = await api.downloadAiActAnnex("rpt_1", "p1");
+    expect(await blob.text()).toBe('{"annex": true}');
+  });
+
+  it("percent-encodes an agent name in the classification path", async () => {
+    // `{name}` is one path segment server side. A name holding a slash would
+    // otherwise address a different route, and that agent could never be
+    // classified — a permanent gap in the report.
+    const seen: string[] = [];
+    vi.spyOn(window, "fetch").mockImplementation(async (input) => {
+      seen.push(typeof input === "string" ? input : input.toString());
+      return new Response("{}", {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    });
+
+    await api.getAgentClassification("billing/refunds", "p1");
+
+    expect(seen[0]).toBe(
+      "/v1/projects/p1/agents/billing%2Frefunds/classification",
+    );
+  });
+
+  it("raises an ApiError when a PDF render fails", async () => {
+    // The render route answers 502 with `detail: {error, renderer}` — an
+    // object, because
+    // the renderer's own message rides along. `messageFromDetail` reads only a
+    // string detail or a 422 array, so the message falls back to the status
+    // and the renderer text stays on `detail` for whoever wants it. The
+    // download button toasts its own copy either way.
+    vi.spyOn(window, "fetch").mockResolvedValue(
+      jsonResponse(
+        {
+          detail: {
+            error: "the report could not be rendered",
+            renderer: "ValueError: bad length",
+          },
+        },
+        502,
+      ),
+    );
+
+    const err = (await api
+      .downloadAiActReportPdf("rpt_1", "p1")
+      .catch((e) => e)) as ApiError;
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err.status).toBe(502);
+    expect(err.message).toContain("502");
+    // The object detail must not be String()'d into the message.
+    expect(err.message).not.toContain("[object Object]");
+    expect(err.detail).toMatchObject({
+      detail: { renderer: "ValueError: bad length" },
+    });
+  });
+});

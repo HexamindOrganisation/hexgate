@@ -52,3 +52,64 @@ class _FakeToolset(BaseToolset):
 
     async def close(self) -> None:
         self.closed = True
+
+
+SKILL_TOOLSET_MODULE = "google.adk.tools.skill_toolset"
+
+
+class _FakeSkill:
+    """Stands in for ``google.adk.skills.models.Skill``; only ``instructions`` is read."""
+
+    def __init__(self, instructions: str) -> None:
+        self.instructions = instructions
+
+
+class _FakeSkillToolset:
+    """The ``_get_skill`` lookup a skill tool reaches through ``_toolset``."""
+
+    def __init__(self, skills: dict[str, _FakeSkill]) -> None:
+        self.skills = skills
+
+    def _get_skill(self, skill_name: str) -> _FakeSkill | None:
+        return self.skills.get(skill_name)
+
+
+class _FakeSkillToolBase(BaseTool):
+    """Records its calls instead of loading anything."""
+
+    TOOL_NAME = ""
+
+    def __init__(self, toolset: _FakeSkillToolset | None = None) -> None:
+        super().__init__(name=self.TOOL_NAME, description=self.TOOL_NAME)
+        self._toolset = toolset
+        self.calls: list[dict[str, Any]] = []
+
+    async def run_async(self, *, args: dict[str, Any], tool_context: Any) -> Any:
+        self.calls.append(args)
+        return f"ran:{self.name}"
+
+
+# Class name and module match ADK's, which is all the adapter keys a skill tool on.
+class LoadSkillTool(_FakeSkillToolBase):
+    TOOL_NAME = "load_skill"
+
+
+class LoadSkillResourceTool(_FakeSkillToolBase):
+    TOOL_NAME = "load_skill_resource"
+
+
+class RunSkillScriptTool(_FakeSkillToolBase):
+    TOOL_NAME = "run_skill_script"
+
+
+class ListSkillsTool(_FakeSkillToolBase):
+    TOOL_NAME = "list_skills"
+
+
+for _skill_tool_class in (
+    LoadSkillTool,
+    LoadSkillResourceTool,
+    RunSkillScriptTool,
+    ListSkillsTool,
+):
+    _skill_tool_class.__module__ = SKILL_TOOLSET_MODULE

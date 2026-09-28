@@ -8,6 +8,11 @@ description: Run the opt-in integration test suites (pytest -m integration) for 
 The local stack below is the same one `docs/internals/development.md` ("Run the
 platform locally") documents for developers; keep the two in sync.
 
+Before starting anything, run `"$(git rev-parse --show-toplevel)/.claude/skills/run-platform/preflight.sh" --full`.
+It reports a missing or stopped Docker, a missing Go, and busy ports up front.
+To bring the servers up, you can follow the `run-platform` skill in full mode instead of the
+three terminals below. Minting the key and running pytest stay here.
+
 ## SDK integration tests (repo root — `tests/adapters/*/test_integration.py`, `tests/audit/test_integration.py`)
 
 Infra (idempotent):
@@ -26,7 +31,7 @@ cd platform/api && DATABASE_URL=postgresql+asyncpg://hexgate:hexgate-dev-passwor
 Three blocking servers, one terminal each. Check first — they bind fixed ports and die with "Address already in use":
 ```bash
 curl -sf http://localhost:8000/health   # platform-api already up?
-ss -ltn | grep -q 4318                  # collector already up?
+curl -s -o /dev/null localhost:4318 && echo up   # collector already up? (any HTTP answer, even 404)
 
 make platform-api-pg    # :8000 — must be -pg, never `make platform-api`
 make collector-run      # :4317 / :4318

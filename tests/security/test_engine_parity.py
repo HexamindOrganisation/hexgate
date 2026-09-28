@@ -1122,3 +1122,77 @@ def test_policy_level_constraint_reaches_reach_keys_parity(
     policy: dict, tool: str, args: dict, expect: str
 ) -> None:
     _assert_parity(policy, None, tool, args, expect)
+
+
+# ---------------------------------------------------------------------------
+# skill:* keys — closed-world on both engines (roadmap gate G1)
+#
+# An unlisted skill key denies regardless of default_policy, exactly like the
+# agent.* keys. A permissive default compiled without the Rego catch-all
+# exclusion would match skill:* on WASM only — the production path failing open.
+# The engines are unconditionally closed-world; the opt-in is declares_skills(),
+# which an adapter consults before it emits a skill key at all.
+# ---------------------------------------------------------------------------
+
+
+def _skills_policy(default_mode: str, skills: dict | None = None) -> dict:
+    role: dict = {"default_policy": {"mode": default_mode}}
+    if skills is not None:
+        role["skills"] = skills
+    return {"version": 1, "roles": {"default": role}}
+
+
+_SKILL_ARGS = {"skill": "refunder", "file_path": "SKILL.md", "source": "skills"}
+_OTHER_SKILL = {"other": {"mode": "allow"}}
+_REFUNDER_ALLOW = {"refunder": {"mode": "allow"}}
+_REFUNDER_INSTRUCTIONS_ONLY = {"refunder": {"mode": "allow", "via": ["instructions"]}}
+
+
+@pytest.mark.parametrize(
+    ("policy", "tool", "expect"),
+    [
+        # An unlisted skill denies even with no skills: block on either engine...
+        (_skills_policy("allow"), "skill:refunder", "deny"),
+        # ...and still denies once the policy declares some other skill.
+        (_skills_policy("allow", _OTHER_SKILL), "skill:refunder", "deny"),
+        (_skills_policy("allow", _OTHER_SKILL), "skill.resource:refunder", "deny"),
+        (_skills_policy("allow", _OTHER_SKILL), "skill.script:refunder", "deny"),
+        # A listed skill is allowed — the denial is not over-broad.
+        (_skills_policy("allow", _REFUNDER_ALLOW), "skill:refunder", "allow"),
+        # A listed skill under a deny default: the lowering reaches the engine.
+        (_skills_policy("deny", _REFUNDER_ALLOW), "skill:refunder", "allow"),
+        # A narrowed via keeps the undisclosed levels closed.
+        (
+            _skills_policy("allow", _REFUNDER_INSTRUCTIONS_ONLY),
+            "skill.script:refunder",
+            "deny",
+        ),
+        (
+            _skills_policy("allow", _REFUNDER_INSTRUCTIONS_ONLY),
+            "skill:refunder",
+            "allow",
+        ),
+        # The mode survives the lowering.
+        (
+            _skills_policy("deny", {"refunder": {"mode": "approval_required"}}),
+            "skill:refunder",
+            "needs_approval",
+        ),
+        # Blast-radius check: declaring skills must not narrow ordinary tools.
+        (_skills_policy("allow", _OTHER_SKILL), "ordinary_tool", "allow"),
+        # A tool merely named like the namespace is not a reserved key.
+        (_skills_policy("allow", _OTHER_SKILL), "skills", "allow"),
+    ],
+)
+def test_skill_keys_closed_world_parity(policy: dict, tool: str, expect: str) -> None:
+    _assert_parity(policy, None, tool, _SKILL_ARGS, expect)
+
+
+def test_engagement_gate_is_off_without_a_skills_block() -> None:
+    """The case the engines cannot express: with no skills: block they still deny
+    a skill key, so the adapter must never emit one. declares_skills() is what
+    tells it not to — without it every existing skills agent breaks."""
+    silent = load_policy_set_from_dict(_skills_policy("allow"))
+    declaring = load_policy_set_from_dict(_skills_policy("allow", _OTHER_SKILL))
+    assert silent.declares_skills() is False
+    assert declaring.declares_skills() is True

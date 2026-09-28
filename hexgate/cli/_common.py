@@ -199,6 +199,7 @@ def build_runtime_from_local_agent(
     console: Console,
     auto_register_subagents: bool = False,
     auto_register_subagents_force: bool = False,
+    bind_subagents: bool | None = None,
 ) -> AgentRuntime:
     """Build an :class:`AgentRuntime` from a Python-loaded agent object.
 
@@ -219,6 +220,14 @@ def build_runtime_from_local_agent(
 
     Returns an :class:`AgentRuntime` whose ``agent_name`` is the manifest's name
     (matches what we'll announce to the relay's ``hello`` message).
+
+    ``bind_subagents`` binds each registered sub-agent to its own platform policy
+    at serve (native path only) — without it the root binds but a mounted
+    ``child.as_tool()`` keeps whatever policy the visitor built locally, so a
+    dashboard edit to a sub-agent never lands. Defaults on (``None`` → ``True``):
+    the root always binds here, so sub-agents do too, independent of whether this
+    run re-registered them (an unregistered child fail-softs to local — see
+    :func:`_bind_subagents`). Pass ``False`` to serve sub-agents on local policy only.
     """
     from hexgate.cli.register.register import (
         post_manifest,
@@ -267,11 +276,16 @@ def build_runtime_from_local_agent(
             raise HexgateError(f"agent registration failed: {exc}") from exc
 
     if manifest.framework == AgentFramework.HEXGATE:
+        # Default on: the root always binds its platform policy here, so sub-agents
+        # bind too (registration is a separate concern — an unregistered child 404s
+        # and fail-softs to local, so binding a not-yet-registered tree is a no-op).
+        bind = True if bind_subagents is None else bind_subagents
         return _build_hexgate_serve_runtime(
             settings,
             agent_obj=agent_obj,
             agent_name=agent_name,
             approval_handler=approval_handler,
+            bind_subagents=bind,
         )
     if manifest.framework == AgentFramework.OPENAI:
         return _build_openai_serve_runtime(
@@ -301,12 +315,121 @@ def build_runtime_from_local_agent(
     )
 
 
+def _bind_subagents(
+    agent: Any,
+    client: Any,
+    approval_handler: ApprovalHandler | None,
+    *,
+    _bound: dict[str, Any] | None = None,
+    _active: set[str] | None = None,
+) -> Any:
+    """Bind each mounted sub-agent to its own platform policy (post-order).
+
+    The serve path enforces only the ROOT's policy; a mounted ``child.as_tool()``
+    otherwise runs whatever the visitor built locally, so a dashboard edit to a
+    sub-agent never lands. Walk the tree bottom-up: bind a child's grandchildren
+    first (so the child we enforce already carries them — ``enforce_policy``
+    re-wraps a child's tools but keeps each ``SubagentTool.child``), then fetch the
+    child's platform policy and enforce it on the child, then swap the bound child
+    back into the tool.
+
+    ``_bound`` memoizes the bound child by ``target_name``, so an agent mounted under
+    several parents (a DAG) is fetched + enforced once; ``_active`` tracks the
+    in-progress branch so a cyclic mount (A→B→A) leaves the back-edge as the visitor
+    built it instead of recursing forever. Both are internal recursion state.
+
+    Failure modes, by class:
+      * child not on the platform (``get_agent`` → 404): fail-soft — left exactly as
+        the visitor built it, so a partially-registered tree degrades to local child
+        enforcement rather than aborting serve.
+      * child registered but its policy won't decode (bad/absent bundle, malformed
+        yaml), or any other API failure (5xx, unreachable): fail-loud — propagates.
+        A registered child is governed by the platform; silently downgrading it to
+        stale local policy would be a security regression, so — like the root — we
+        refuse to serve rather than serve it ungoverned.
+    """
+    from hexgate.adapters.langchain.tools import SubagentTool
+
+    bound_cache: dict[str, Any] = {} if _bound is None else _bound
+    active: set[str] = set() if _active is None else _active
+
+    changed = False
+    new_tools: list[Any] = []
+    for tool in getattr(agent, "tools", []):
+        if not isinstance(tool, SubagentTool) or tool.child is None:
+            new_tools.append(tool)
+            continue
+        target = tool.target_name
+        if target in bound_cache:
+            child = bound_cache[target]  # same agent seen elsewhere — reuse its bind
+        elif target in active:
+            new_tools.append(tool)  # cyclic back-edge — leave as built, break recursion
+            continue
+        else:
+            active.add(target)
+            try:
+                # Grandchildren first: the child we hand to enforce_policy already has
+                # its own bound sub-agents mounted, and enforce_policy preserves them.
+                child = _bind_subagents(
+                    tool.child,
+                    client,
+                    approval_handler,
+                    _bound=bound_cache,
+                    _active=active,
+                )
+                child = _bind_one_subagent(child, client, target, approval_handler)
+            finally:
+                active.discard(target)
+            bound_cache[target] = child
+        if child is not tool.child:
+            tool = tool.model_copy(update={"child": child})
+            changed = True
+        new_tools.append(tool)
+    return agent.with_tools(new_tools) if changed else agent
+
+
+def _bind_one_subagent(
+    child: Any,
+    client: Any,
+    target_name: str,
+    approval_handler: ApprovalHandler | None,
+) -> Any:
+    """Fetch ``target_name``'s platform policy and enforce it on ``child``.
+
+    Returns ``child`` unchanged when the platform doesn't know it (404); see
+    :func:`_bind_subagents` for the full failure-mode contract.
+    """
+    from hexgate.agents.factory import enforce_policy
+    from hexgate.security.binding import platform_policy_from_payload
+
+    try:
+        payload, etag = client.get_agent(target_name)
+    except HexgateError as exc:
+        if getattr(exc, "status", None) != 404:
+            raise  # a real failure, not "child isn't registered"
+        return child
+    if payload is None:
+        # No If-None-Match was sent, so a 304 (→ None body) is impossible. If the
+        # platform ever returns None for a registered child, fail loud like the root
+        # fetch does — returning `child` here would silently serve a platform-
+        # registered sub-agent on stale LOCAL policy, the regression we refuse.
+        raise RuntimeError(
+            f"HexgateClient.get_agent({target_name!r}) returned no payload for a "
+            "registered sub-agent (no If-None-Match was sent)"
+        )
+    policy, source = platform_policy_from_payload(client, target_name, payload, etag)
+    return enforce_policy(
+        child, policy, approval_handler=approval_handler, source=source
+    )
+
+
 def _build_hexgate_serve_runtime(
     settings: Settings,
     *,
     agent_obj: Any,
     agent_name: str,
     approval_handler: ApprovalHandler | None,
+    bind_subagents: bool = True,
 ) -> AgentRuntime:
     """Build the serve runtime for a native (LangChain) HexgateAgent.
 
@@ -339,6 +462,14 @@ def _build_hexgate_serve_runtime(
     policy, refresh_source = platform_policy_from_payload(
         client, agent_name, payload, initial_etag
     )
+
+    # Bind each registered sub-agent to ITS platform policy before we enforce the
+    # root's. enforce_policy re-wraps the root's tools but keeps each SubagentTool's
+    # `.child`, so the bound children survive the root enforce. Default-on (like the
+    # root fetch above); an unregistered child 404s and fail-softs to local, so this
+    # is a no-op on a not-yet-registered tree rather than an error.
+    if bind_subagents:
+        agent_obj = _bind_subagents(agent_obj, client, approval_handler)
 
     enforced = enforce_policy(
         agent_obj,
