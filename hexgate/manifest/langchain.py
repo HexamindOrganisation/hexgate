@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import importlib
 import logging
 from collections.abc import Callable, Iterator
@@ -29,6 +30,7 @@ _BACKEND_ATTR = "_backend"
 _SOURCES_ATTR = "sources"
 _SOURCE_LABELS_ATTR = "source_labels"
 _DOWNLOAD_FILES_ATTR = "download_files"
+_ADOWNLOAD_FILES_ATTR = "adownload_files"
 _LS_ATTR = "ls"
 _SKILL_MD_ENCODING = "utf-8"
 _SKILLS_MODULE = "deepagents.middleware.skills"
@@ -140,6 +142,24 @@ def read_skill_hash(location: SkillLocation) -> str | None:
     """Current body hash of one SKILL.md, or None if it cannot be read."""
     path = location.skill_md_path
     return _content_hashes(location.backend, [path]).get(path)
+
+
+async def aread_skill_hash(location: SkillLocation) -> str | None:
+    """:func:`read_skill_hash` without blocking the event loop.
+
+    Awaits the backend's ``adownload_files``; a backend without one is read on a
+    worker thread.
+    """
+    adownload = getattr(location.backend, _ADOWNLOAD_FILES_ATTR, None)
+    if adownload is None:
+        return await asyncio.to_thread(read_skill_hash, location)
+    path = location.skill_md_path
+    try:
+        responses = await adownload([path])
+    except Exception:  # noqa: BLE001
+        _log.warning("could not read skill body; hash omitted", exc_info=True)
+        return None
+    return _hash_responses(responses).get(path)
 
 
 def discover_skills_middlewares(graph: CompiledStateGraph) -> list[object]:
@@ -289,6 +309,11 @@ def _content_hashes(backend: object, paths: list[str]) -> dict[str, str]:
     except Exception:  # noqa: BLE001
         _log.warning("could not read skill bodies; hashes omitted", exc_info=True)
         return {}
+    return _hash_responses(responses)
+
+
+def _hash_responses(responses: list[Any]) -> dict[str, str]:
+    """Body hash per downloaded SKILL.md; unreadable or undecodable ones omitted."""
     hashes: dict[str, str] = {}
     for response in responses:
         content = getattr(response, "content", None)

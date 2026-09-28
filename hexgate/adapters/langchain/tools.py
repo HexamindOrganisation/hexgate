@@ -15,15 +15,14 @@ from __future__ import annotations
 import functools
 import json
 from collections.abc import Awaitable, Callable, Mapping
-from dataclasses import dataclass
-from typing import Any
+from typing import Any, Protocol
 
 from langchain_core.tools import BaseTool
 from langchain_core.tools.structured import StructuredTool
 from pydantic import BaseModel, ConfigDict, Field
 
 from hexgate.approvals import ApprovalHandler
-from hexgate.guards.runner import RenderError, run_guarded_async, run_guarded_sync
+from hexgate.guards.runner import PolicyOverride, run_guarded_async, run_guarded_sync
 from hexgate.guards.types import ToolPipeline
 from hexgate.security.decision import Decision, DecisionOutcome
 from hexgate.security.enforcer import PolicyEnforcer
@@ -379,36 +378,20 @@ class SubagentTool(BaseTool):
 # ---------------------------------------------------------------------------
 
 
-@dataclass(frozen=True)
-class PolicyOverride:
-    """Decide a call under ``key`` with ``args`` instead of its tool name and args.
+class PolicyKeyResolver(Protocol):
+    """Redirects a tool call's decision to another policy key, sync or async.
 
-    ``render_error`` renders the policy denial only; a guard ``Halt`` still renders
-    as the ordinary tool error.
+    Called with the args left after the pre-guards, so the decision covers the
+    call that is actually invoked. ``None`` keeps the tool-name decision.
     """
 
-    key: str
-    args: dict[str, Any]
-    render_error: RenderError | None = None
+    def resolve(
+        self, tool_name: str, args: Mapping[str, Any]
+    ) -> PolicyOverride | None: ...
 
-
-PolicyKeyResolver = Callable[[str, Mapping[str, Any]], PolicyOverride | None]
-
-
-def _override_kwargs(
-    resolve_policy_key: PolicyKeyResolver | None,
-    name: str,
-    model_kwargs: Mapping[str, Any],
-) -> dict[str, Any]:
-    """Runner keyword overrides for one call; empty when nothing resolves."""
-    override = resolve_policy_key(name, model_kwargs) if resolve_policy_key else None
-    if override is None:
-        return {}
-    return {
-        "policy_key": override.key,
-        "policy_args": override.args,
-        "render_policy_error": override.render_error,
-    }
+    async def aresolve(
+        self, tool_name: str, args: Mapping[str, Any]
+    ) -> PolicyOverride | None: ...
 
 
 _ORIGINAL_FUNC_ATTR = "_hexgate_original_func"
@@ -493,7 +476,11 @@ def install_enforcer_on_tool(
                 approval_handler=None,
                 invoke=lambda final: captured_func(*args, **{**final, **injected}),
                 render_error=_langchain_error,
-                **_override_kwargs(resolve_policy_key, name, model_kwargs),
+                resolve_policy=(
+                    functools.partial(resolve_policy_key.resolve, name)
+                    if resolve_policy_key
+                    else None
+                ),
             )
 
         setattr(tool, _ORIGINAL_FUNC_ATTR, captured_func)
@@ -513,7 +500,11 @@ def install_enforcer_on_tool(
                 approval_handler=None,
                 invoke=lambda final: captured_coroutine(*args, **{**final, **injected}),
                 render_error=_langchain_error,
-                **_override_kwargs(resolve_policy_key, name, model_kwargs),
+                resolve_policy=(
+                    functools.partial(resolve_policy_key.aresolve, name)
+                    if resolve_policy_key
+                    else None
+                ),
             )
 
         setattr(tool, _ORIGINAL_COROUTINE_ATTR, captured_coroutine)

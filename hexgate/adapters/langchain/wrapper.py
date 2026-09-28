@@ -29,6 +29,7 @@ from hexgate.cloud.client import HexgateClient, HexgateConfig
 from hexgate.config.env import resolve_api_key
 from hexgate.guards.types import ToolPipeline, build_pipeline
 from hexgate.manifest.langchain import (
+    aread_skill_hash,
     discover_graph_tools,
     locate_skills,
     read_skill_hash,
@@ -127,7 +128,9 @@ def _skill_resolver(
     """Skill-read resolver over the agent's skills, or None when it has none."""
     middlewares = resolve_skills_middlewares(agent, skills_middleware)
     index = SkillPathIndex.from_locations(locate_skills(middlewares))
-    return SkillKeyResolver(enforcer, index, read_skill_hash) if index else None
+    if not index:
+        return None
+    return SkillKeyResolver(enforcer, index, read_skill_hash, aread_skill_hash)
 
 
 def _install_on_discovered(

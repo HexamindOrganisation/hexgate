@@ -10,13 +10,12 @@ added to a source after wrapping, or served from per-run state, is not gated.
 from __future__ import annotations
 
 import posixpath
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from pathlib import PurePosixPath
 from typing import Any
 
-from hexgate.adapters.langchain.tools import PolicyOverride
-from hexgate.guards.runner import RenderError
+from hexgate.guards.runner import PolicyOverride, RenderError
 from hexgate.manifest.langchain import SkillLocation
 from hexgate.security.decision import Decision, DecisionOutcome
 from hexgate.security.enforcer import PolicyEnforcer
@@ -26,6 +25,8 @@ _FILE_READ_TOOL = "read_file"
 _FILE_PATH_ARG = "file_path"
 # Matches the ADK adapter's decision args, so one pin reads alike on both.
 _CONTENT_HASH_PREFIX = "sha256:"
+_POSIX_SEP = "/"
+_WINDOWS_SEP = "\\"
 
 _SKILL_HELD_ACTION_BY_VIA: dict[SkillVia, str] = {
     "instructions": "before it is loaded",
@@ -33,11 +34,21 @@ _SKILL_HELD_ACTION_BY_VIA: dict[SkillVia, str] = {
 }
 
 SkillHasher = Callable[[SkillLocation], str | None]
+AsyncSkillHasher = Callable[[SkillLocation], Awaitable[str | None]]
 
 
-def _normalize(path: str) -> str:
-    """Collapse ``..`` and duplicate separators so a respelled path still matches."""
-    return posixpath.normpath(path)
+def canonical_skill_path(path: str) -> str:
+    """The path deepagents' ``validate_path`` would read, for index lookup.
+
+    Mirrors its rewrites (backslashes to slashes, ``normpath``, a leading slash) so
+    ``skills/x/SKILL.md`` and ``\\skills\\x\\SKILL.md`` match ``/skills/x/SKILL.md``.
+    It also collapses ``..``, which deepagents rejects; matching more spellings
+    than it reads only gates more, never less.
+    """
+    normalized = posixpath.normpath(path.replace(_WINDOWS_SEP, _POSIX_SEP))
+    if not normalized.startswith(_POSIX_SEP):
+        normalized = f"{_POSIX_SEP}{normalized}"
+    return posixpath.normpath(normalized)
 
 
 @dataclass(frozen=True)
@@ -52,7 +63,7 @@ class SkillPathIndex:
         by_skill_md: dict[str, SkillLocation] = {}
         by_dir: dict[str, SkillLocation] = {}
         for location in locations:
-            skill_md = _normalize(location.skill_md_path)
+            skill_md = canonical_skill_path(location.skill_md_path)
             by_skill_md[skill_md] = location
             by_dir[str(PurePosixPath(skill_md).parent)] = location
         return cls(by_skill_md, by_dir)
@@ -66,7 +77,7 @@ class SkillPathIndex:
         A ``SKILL.md`` itself is the instructions; any file below a skill's
         directory, however deep, is a resource of the nearest enclosing skill.
         """
-        normalized = _normalize(path)
+        normalized = canonical_skill_path(path)
         location = self.by_skill_md.get(normalized)
         if location is not None:
             return "instructions", location
@@ -99,21 +110,39 @@ class SkillKeyResolver:
     """Resolve a ``read_file`` of a known skill file to its skill policy key.
 
     Engagement is read per call, so a hot-reloaded policy that starts declaring
-    skills engages the gate without re-wrapping. The content hash is read per call
-    too, so a pin checks the body the model is about to read, not the one present
-    at wrap time.
+    skills engages the gate without re-wrapping. The content hash is read per call,
+    just before the tool reads the file itself: a pin checks the body as it stands
+    at decision time, not at wrap time. It is a separate read, so a writable source
+    changed between the two can still slip past a pin.
     """
 
     def __init__(
-        self, enforcer: PolicyEnforcer, index: SkillPathIndex, hasher: SkillHasher
+        self,
+        enforcer: PolicyEnforcer,
+        index: SkillPathIndex,
+        hasher: SkillHasher,
+        ahasher: AsyncSkillHasher,
     ) -> None:
         self._enforcer = enforcer
         self._index = index
         self._hasher = hasher
+        self._ahasher = ahasher
 
-    def __call__(
+    def resolve(self, tool_name: str, args: Mapping[str, Any]) -> PolicyOverride | None:
+        read = self._match(tool_name, args)
+        if read is None:
+            return None
+        return read.override(self._hasher(read.location))
+
+    async def aresolve(
         self, tool_name: str, args: Mapping[str, Any]
     ) -> PolicyOverride | None:
+        read = self._match(tool_name, args)
+        if read is None:
+            return None
+        return read.override(await self._ahasher(read.location))
+
+    def _match(self, tool_name: str, args: Mapping[str, Any]) -> _SkillRead | None:
         if tool_name != _FILE_READ_TOOL:
             return None
         path = args.get(_FILE_PATH_ARG)
@@ -124,15 +153,25 @@ class SkillKeyResolver:
         matched = self._index.match(path)
         if matched is None:
             return None
-        via, location = matched
-        digest = self._hasher(location)
+        return _SkillRead(*matched, canonical_skill_path(path))
+
+
+@dataclass(frozen=True)
+class _SkillRead:
+    via: SkillVia
+    location: SkillLocation
+    path: str
+
+    def override(self, digest: str | None) -> PolicyOverride:
+        """Decision args carry the canonical path, so constraints see one spelling."""
+        name = self.location.name
         return PolicyOverride(
-            key=skill_key(via, location.name),
+            key=skill_key(self.via, name),
             args={
-                "skill": location.name,
-                "via": via,
-                _FILE_PATH_ARG: path,
+                "skill": name,
+                "via": self.via,
+                _FILE_PATH_ARG: self.path,
                 "content_hash": f"{_CONTENT_HASH_PREFIX}{digest}" if digest else None,
             },
-            render_error=_render_skill_error(location.name, via),
+            render_error=_render_skill_error(name, self.via),
         )

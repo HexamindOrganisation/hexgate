@@ -21,7 +21,13 @@ from hexgate.adapters.langchain import wrapper as wrapper_mod
 from hexgate.adapters.langchain.skills import SkillKeyResolver, SkillPathIndex
 from hexgate.adapters.langchain.tools import install_enforcer_on_tool
 from hexgate.adapters.langchain.wrapper import wrap_langchain_agent
-from hexgate.manifest.langchain import SkillLocation, read_skill_hash
+from hexgate.guards import before_tool
+from hexgate.guards.types import Proceed
+from hexgate.manifest.langchain import (
+    SkillLocation,
+    aread_skill_hash,
+    read_skill_hash,
+)
 from hexgate.security import AgentPolicy, PolicySet, ResolvedPolicy
 from hexgate.security.enforcer import PolicyEnforcer
 from hexgate.security.policy_set import DEFAULT_ROLE_NAME
@@ -62,6 +68,16 @@ class _Backend:
             else _Download(p, None, "file_not_found")
             for p in paths
         ]
+
+
+class _AsyncOnlyBackend(_Backend):
+    """Fails the sync read, so the async path must not use it."""
+
+    def download_files(self, paths: list[str]) -> list[_Download]:
+        raise AssertionError("sync download on the async path")
+
+    async def adownload_files(self, paths: list[str]) -> list[_Download]:
+        return _Backend.download_files(self, paths)
 
 
 class _SkillsMiddleware:
@@ -157,6 +173,8 @@ def _wrap(
     *,
     bodies: dict[str, bytes] | None = None,
     with_middleware: bool = True,
+    guards: list[Any] | None = None,
+    backend_type: type[_Backend] | None = None,
 ) -> _Wrapped:
     monkeypatch.setattr(
         wrapper_mod,
@@ -165,9 +183,13 @@ def _wrap(
     )
     reads: list[str] = []
     tool = _read_file_tool(reads)
-    backend = _Backend({SKILL_MD: SKILL_MD_BYTES} if bodies is None else bodies)
+    backend = (backend_type or _Backend)(
+        {SKILL_MD: SKILL_MD_BYTES} if bodies is None else bodies
+    )
     middleware = _SkillsMiddleware(backend) if with_middleware else None
-    wrap_langchain_agent(agent=_DeepGraph([tool], middleware), tools=[], api_key="k")
+    wrap_langchain_agent(
+        agent=_DeepGraph([tool], middleware), tools=[], api_key="k", guards=guards
+    )
     return _Wrapped(reads, tool, backend)
 
 
@@ -178,7 +200,7 @@ def _enforcer(spec: dict[str, Any]) -> PolicyEnforcer:
 def _resolver(spec: dict[str, Any]) -> SkillKeyResolver:
     backend = _Backend({SKILL_MD: SKILL_MD_BYTES})
     index = SkillPathIndex.from_locations([SkillLocation(SKILL, SKILL_MD, backend)])
-    return SkillKeyResolver(_enforcer(spec), index, read_skill_hash)
+    return SkillKeyResolver(_enforcer(spec), index, read_skill_hash, aread_skill_hash)
 
 
 # --- regression guard -------------------------------------------------------
@@ -242,6 +264,60 @@ def test_a_respelled_skill_md_path_still_decides_under_the_skill_key(
     assert [key for key, _ in decisions] == [f"skill:{SKILL}"]
 
 
+@pytest.mark.parametrize(
+    "spelling",
+    [
+        "skills/project/refunder/SKILL.md",
+        "\\skills\\project\\refunder\\SKILL.md",
+        "/skills//project/./refunder/SKILL.md",
+    ],
+)
+def test_spellings_deepagents_reads_as_the_skill_md_decide_under_the_skill_key(
+    monkeypatch, decisions, spelling: str
+) -> None:
+    wrapped = _wrap(monkeypatch, _skills_policy())
+
+    wrapped.read(spelling)
+
+    [(key, args)] = decisions
+    assert key == f"skill:{SKILL}"
+    assert args["file_path"] == SKILL_MD
+
+
+def test_a_relative_resource_path_uses_the_resource_key(monkeypatch, decisions) -> None:
+    wrapped = _wrap(monkeypatch, _skills_policy())
+
+    wrapped.read(RESOURCE.lstrip("/"))
+
+    [(key, args)] = decisions
+    assert key == f"skill.resource:{SKILL}"
+    assert args["file_path"] == RESOURCE
+
+
+def test_a_guard_rewrite_onto_a_skill_md_decides_under_the_skill_key(
+    monkeypatch, decisions
+) -> None:
+    redirect = before_tool(lambda call: Proceed(args={"file_path": SKILL_MD}))
+    wrapped = _wrap(monkeypatch, _skills_policy(mode="deny"), guards=[redirect])
+
+    result = wrapped.read(f"{ROOT}/README.md")
+
+    assert result["ok"] is False
+    assert wrapped.reads == []
+    assert [key for key, _ in decisions] == [f"skill:{SKILL}"]
+
+
+def test_a_guard_rewrite_off_a_skill_md_decides_under_read_file(
+    monkeypatch, decisions
+) -> None:
+    redirect = before_tool(lambda call: Proceed(args={"file_path": f"{ROOT}/x.md"}))
+    wrapped = _wrap(monkeypatch, _skills_policy(mode="deny"), guards=[redirect])
+
+    wrapped.read(SKILL_MD)
+
+    assert [key for key, _ in decisions] == ["read_file"]
+
+
 def test_reading_an_ordinary_file_decides_under_read_file(
     monkeypatch, decisions
 ) -> None:
@@ -261,11 +337,14 @@ def test_unknown_path_is_not_treated_as_a_skill(monkeypatch, decisions) -> None:
 
 
 def test_non_string_file_path_is_ignored() -> None:
-    assert _resolver(_skills_policy())("read_file", {"file_path": 3}) is None
+    assert _resolver(_skills_policy()).resolve("read_file", {"file_path": 3}) is None
 
 
 def test_other_tools_are_never_resolved() -> None:
-    assert _resolver(_skills_policy())("write_file", {"file_path": SKILL_MD}) is None
+    assert (
+        _resolver(_skills_policy()).resolve("write_file", {"file_path": SKILL_MD})
+        is None
+    )
 
 
 def test_engagement_gate_off_decides_on_tool_name(monkeypatch, decisions) -> None:
@@ -341,6 +420,18 @@ async def test_async_read_is_gated_under_the_skill_key(monkeypatch, decisions) -
     assert result["ok"] is False
     assert wrapped.reads == []
     assert [key for key, _ in decisions] == [f"skill:{SKILL}"]
+
+
+@pytest.mark.asyncio
+async def test_async_read_hashes_without_the_sync_download(
+    monkeypatch, decisions
+) -> None:
+    wrapped = _wrap(monkeypatch, _pinned_policy(), backend_type=_AsyncOnlyBackend)
+
+    result = await wrapped.tool.coroutine(file_path=SKILL_MD)
+
+    assert result == f"read:{SKILL_MD}"
+    assert decisions[0][1]["content_hash"] == _digest(BODY)
 
 
 # --- content pinning --------------------------------------------------------
