@@ -11,6 +11,7 @@ proxy at the top of every call.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
@@ -18,21 +19,27 @@ from langchain_core.tools import BaseTool
 from langgraph.graph.state import CompiledStateGraph
 
 from hexgate.adapters.langchain.agent import HexgateLangchainAgent
-from hexgate.adapters.langchain.tools import install_enforcer_on_tools
+from hexgate.adapters.langchain.tools import (
+    install_enforcer_on_tool,
+    install_enforcer_on_tools,
+)
 from hexgate.cloud.client import HexgateClient, HexgateConfig
 from hexgate.config.env import resolve_api_key
-from hexgate.guards.types import build_pipeline
+from hexgate.guards.types import ToolPipeline, build_pipeline
+from hexgate.manifest.langchain import discover_graph_tools
 from hexgate.security.agent_gate import (
     warn_if_admission_unenforced,
     warn_if_reach_unenforced,
 )
 from hexgate.security.bans import resolve_ban_gate
 from hexgate.security.binding import PolicyBinding, resolve_policy
-from hexgate.security.enforcer import build_enforcer
+from hexgate.security.enforcer import PolicyEnforcer, build_enforcer
 from hexgate.security.naming import canonical_agent_name
 
 if TYPE_CHECKING:
     from hexgate.guards.types import Guard, GuardObserver
+
+_log = logging.getLogger(__name__)
 
 
 def wrap_langchain_agent(
@@ -45,7 +52,9 @@ def wrap_langchain_agent(
 ) -> HexgateLangchainAgent:
     """Wrap a pre-built LangGraph agent with Hexgate policy enforcement.
 
-    Mutates ``tools`` in place so the graph keeps its references.
+    Mutates ``tools`` in place so the graph keeps its references. Tools bound
+    in the graph but absent from ``tools`` (e.g. middleware-injected) are gated
+    too; one that cannot be gated is skipped with a warning rather than raising.
     The returned proxy takes ``hexgate_context`` per invocation; role resolves at
     call time from the active :class:`HexgateContext`. ``api_key`` falls back to
     ``HEXGATE_API_KEY``. ``NEEDS_APPROVAL`` outcomes render as structured
@@ -61,7 +70,11 @@ def wrap_langchain_agent(
         )
 
     agent_name = canonical_agent_name(agent)
-    tool_names = [tool.name for tool in tools]
+    caller_names = {tool.name for tool in tools}
+    discovered = [
+        tool for tool in discover_graph_tools(agent) if tool.name not in caller_names
+    ]
+    tool_names = [tool.name for tool in [*tools, *discovered]]
 
     # One client shared by the policy and ban resolvers — avoids a second
     # biscuit verify + JWKS round-trip per wrapped agent.
@@ -78,6 +91,7 @@ def wrap_langchain_agent(
     )
     pipeline = build_pipeline(guards, observer=guard_observer)
     install_enforcer_on_tools(tools, enforcer=enforcer, pipeline=pipeline)
+    _install_on_discovered(discovered, enforcer=enforcer, pipeline=pipeline)
 
     return HexgateLangchainAgent(
         agent=agent,
@@ -87,3 +101,25 @@ def wrap_langchain_agent(
         binding=PolicyBinding(enforcer, resolved.source),
         ban_gate=resolve_ban_gate(agent_name, api_key=resolved_key, client=client),
     )
+
+
+def _install_on_discovered(
+    tools: list[BaseTool],
+    *,
+    enforcer: PolicyEnforcer,
+    pipeline: ToolPipeline | None,
+) -> None:
+    """Gate graph-discovered tools, skipping any that cannot be gated.
+
+    Lenient where install_enforcer_on_tools is strict: the caller did not choose
+    these, so one exotic tool must not stop the rest of the graph being gated.
+    """
+    for tool in tools:
+        try:
+            install_enforcer_on_tool(tool, enforcer=enforcer, pipeline=pipeline)
+        except TypeError:
+            _log.warning(
+                "tool %r is bound to the graph but cannot be gated; it will run "
+                "ungoverned",
+                tool.name,
+            )
