@@ -58,6 +58,7 @@ from hexgate.security.models import (
     ToolPolicy,
     is_agent_reach_key,
     is_agent_via_key,
+    is_skill_key,
 )
 
 DEFAULT_ROLE_NAME = "default"
@@ -188,6 +189,16 @@ class PolicySet:
         """True if any resolved role carries an ``agent.tool:`` (agent-as-tool) key."""
         return any(
             any(is_agent_via_key(key, "tool") for key in policy.effective_tools)
+            for policy in self._policies.values()
+        )
+
+    def declares_skills(self) -> bool:
+        """True if any resolved role carries a ``skill:`` / ``skill.*:`` key.
+
+        Derived from ``effective_tools`` rather than ``skills`` so it holds after
+        inheritance and module folding, where the block has become lowered keys."""
+        return any(
+            any(is_skill_key(key) for key in policy.effective_tools)
             for policy in self._policies.values()
         )
 

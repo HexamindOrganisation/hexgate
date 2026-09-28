@@ -376,6 +376,24 @@ def test_when_a_role_is_permissive_then_defaults_still_denies_agent_keys() -> No
     assert matrix.default_cell("agent.tool:x", "default").mode == "deny"
 
 
+def test_when_a_role_is_permissive_then_default_cell_denies_skill_keys() -> None:
+    """Skill keys are closed-world on both engines, like ``agent.*``: the report
+    must not evidence a skill the policy never named as reachable."""
+    policy_set = load_policy_set_from_dict(
+        {"roles": {"default": {"default_policy": {"mode": "allow"}}}}
+    )
+
+    matrix = authorisation_matrix(policy_set)
+
+    for key in ("skill:x", "skill.resource:x", "skill.script:x"):
+        assert matrix.default_cell(key, "default").mode == "deny", key
+        assert (
+            policy_set.evaluate(role="default", tool=key, args={}).outcome
+            is DecisionOutcome.DENY
+        ), key
+    assert matrix.default_cell("skills", "default").mode == "allow"
+
+
 # ---------------------------------------------------------------------------
 # Parity with the dashboard's TypeScript resolver
 #
