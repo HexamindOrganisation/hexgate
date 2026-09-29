@@ -1,7 +1,7 @@
 """Score a policy-writing workspace: what the agent (or one of our answers) left behind.
 
-No eval framework is imported here: the Inspect task and the dataset tests both
-call `score(case, workspace, before, answer)` and get back a list of `Check`s.
+No eval framework is imported here: the framework's scorer and the dataset tests
+both call `score(case, workspace, before, answer)` and get back a list of `Check`s.
 Each check runs the hexgate CLI in-process: the policy must validate without
 lint warnings, every dry-run decision must match, files must change (or not) as
 the case says, and the final answer must mention what the case requires.
@@ -54,9 +54,9 @@ def hexgate(*args: str) -> subprocess.CompletedProcess[str]:
 def snapshot(root: Path) -> dict[str, str]:
     """{relative path: sha256} of every file, skipping any path with a dot component.
 
-    A dot directory is tooling, not project: inspect_swe installs the skill under
-    `.claude/skills/`, and scoring writes `.effective.yaml`. Counting them would
-    fail every `no_changes` case.
+    A dot path is tooling, not project: the agent's skill sits under
+    `.claude/skills/` in the workspace, and scoring writes `.effective.yaml`.
+    Counting them would fail every `no_changes` case.
     """
     files = {}
     for p in root.rglob("*"):
