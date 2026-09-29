@@ -686,6 +686,20 @@ class HexgateAgent:
                 decision_observer=decision_observer,
             )
 
+        # Fail-fast closed-world check of the policy's guard stance (R-GUARD-007): a
+        # policy naming an undeclared or ambiguous guard stops cold at construction.
+        # The enable/disable stance itself is applied per call in the guard runner, so
+        # one shared pipeline is installed on every tool. `engine` exists whenever
+        # `enforcer` does. Check `resolved_guards` — the list actually installed (the
+        # stamp when this call omits `guards=`) — not the raw argument, or re-enforcing
+        # a stamped agent without restating its guards would wrongly stop cold.
+        if enforcer is not None:
+            from hexgate.guards.stance import validate_guard_policy
+
+            validate_guard_policy(
+                engine, resolved_guards, agent_name=self.name or DEFAULT_AGENT_NAME
+            )
+
         # One wrap loop for both paths, so the guards-only path can't drift from
         # the policy path (e.g. silently dropping approval_handler): a
         # GuardedTool with enforcer=None gates via guards alone and still honors

@@ -214,6 +214,16 @@ class HexgateRunner:
                 warn_if_tool_reach_unenforced(
                     resolved.engine, framework="OpenAI Agents", agent_name=name
                 )
+            # Closed-world check of the guard stance ONCE, at first resolution
+            # (R-GUARD-007): a policy naming an undeclared/ambiguous guard stops the
+            # agent cold here. It is NOT repeated on the per-run wrap, so a later
+            # refresh that swaps in a policy with a bad guard name degrades to a
+            # no-op run rather than crashing — the runner skips an unmatched guard.
+            from hexgate.guards.stance import validate_guard_policy
+
+            validate_guard_policy(
+                resolved.engine, self._guards_for(agent), agent_name=name
+            )
             binding = PolicyBinding(enforcer, resolved.source)
             self._bindings[name] = binding
         return binding

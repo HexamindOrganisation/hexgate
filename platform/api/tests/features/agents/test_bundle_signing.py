@@ -84,6 +84,25 @@ async def session(tmp_path):
 # ---------------------------------------------------------------------------
 
 
+def test_compile_bundle_degrades_on_divergent_guard_stance(signer) -> None:
+    """A divergent guard stance MUST degrade to no-bundle, not raise — backfill /
+    recompile call compile_bundle without a try and depend on that fail-safe (never
+    fail the boot; keep live bundles all-or-nothing). No opa needed: guard_stance
+    raises before the WASM compile. (R-GUARD-007; regression guard.)"""
+    sign, _ = signer
+    divergent = (
+        "version: 1\n"
+        "roles:\n"
+        "  support:\n"
+        "    guards:\n"
+        "      secret_guard: { enabled: false }\n"
+        "  admin:\n"
+        "    guards:\n"
+        "      secret_guard: { enabled: true }\n"
+    )
+    assert compile_bundle(divergent, sign) is None
+
+
 @needs_opa
 def test_compile_bundle_produces_signed_artifact(signer) -> None:
     sign, public_raw = signer

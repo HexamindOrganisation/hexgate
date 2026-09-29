@@ -75,7 +75,10 @@ def wrap_tools(
     approval_handler: ApprovalHandler | None = None,
     pipeline: ToolPipeline | None = None,
 ) -> list[Tool]:
-    """Return a fresh list of policy-gated copies."""
+    """Return a fresh list of policy-gated copies.
+
+    One shared ``pipeline`` per tool; the policy's guard enable/disable stance is
+    applied per call in the guard runner (R-GUARD-007), not baked here."""
     return [
         wrap_tool(t, enforcer, approval_handler=approval_handler, pipeline=pipeline)
         for t in tools

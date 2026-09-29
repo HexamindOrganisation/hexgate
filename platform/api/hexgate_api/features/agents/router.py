@@ -519,7 +519,12 @@ def _load_document(
     )
 
     try:
-        return load_policy_set_from_dict(parsed), None
+        policy_set = load_policy_set_from_dict(parsed)
+        # guard_stance() is lazy, so a cross-role guard divergence (R-GUARD-007) does
+        # not surface at load — force it here so /validate and save return a 422
+        # instead of storing a policy the SDK then crashes on at construction.
+        policy_set.guard_stance()
+        return policy_set, None
     except PolicySetError as exc:
         return None, PolicyValidationError(message=str(exc))
     except ValidationError as exc:

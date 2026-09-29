@@ -1752,3 +1752,22 @@ def test_notebook_policy_files_match_seed() -> None:
 # agent, so those caps live in the seeded policy — the notebook↔seed drift guard
 # (test_notebook_policy_files_match_seed) plus billing_bot's resolution in
 # test_seeded_compose_demo_resolves cover them, and _BILLING_POLICIES is gone.
+
+
+def test_compose_entry_guards_resolve_to_the_runtime_stance() -> None:
+    """A `guards:` block in the compose `policy.yaml` entry file (what the dashboard
+    edits) resolves through the platform's compose path to the agent-level stance the
+    runtime reads — so flipping `enabled` governs the plugin live (R-GUARD-006/007)."""
+    from hexgate_api.features.policy_modules.service import _resolve_files
+
+    files = {
+        "policy.yaml": (
+            "version: 1\n"
+            "guards: { secret_guard: { enabled: false } }\n"
+            "tools: { send_update: { mode: allow } }\n"
+        )
+    }
+    ps = _resolve_files(files).policy_set
+    assert ps.guard_stance() == {"baseline": {"secret_guard": False}}
+    assert ps.effective_guards("send_update") == {"secret_guard": False}
+    assert ps.governed_guard_names() == frozenset({"secret_guard"})
