@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import copy
 import functools
-import hashlib
 from collections.abc import Callable
 from typing import Any, Union
 
@@ -28,10 +27,12 @@ from google.adk.tools.tool_context import ToolContext
 from hexgate.approvals import ApprovalHandler
 from hexgate.guards.runner import RenderError, run_guarded_async
 from hexgate.guards.types import ToolPipeline
+from hexgate.manifest.skill_hash import skill_content_hash
 from hexgate.security.decision import DecisionOutcome
 from hexgate.security.enforcer import PolicyEnforcer
 from hexgate.security.models import SkillVia, agent_target_key, skill_key
 from hexgate.security.naming import canonical_name
+from hexgate.security.skill_gate import skill_decision_hash, skill_denial_message
 
 ToolEntry = Union[BaseTool, BaseToolset, Callable[..., Any]]
 
@@ -40,7 +41,6 @@ _SKILL_NAME_ARG = "skill_name"
 _FILE_PATH_ARG = "file_path"
 _TOOLSET_ATTR = "_toolset"
 _GET_SKILL_ATTR = "_get_skill"
-_CONTENT_HASH_PREFIX = "sha256:"
 # run_skill_script resolves ``scripts/x`` and ``x`` to the same script, so the
 # decision sees one canonical spelling. load_skill_resource rejects an unprefixed
 # path, so resource paths need no rewriting.
@@ -51,12 +51,6 @@ _SCRIPT_INVOCATION_ARGS: dict[str, str] = {
     "args": "script_args",
     "short_options": "short_options",
     "positional_args": "positional_args",
-}
-
-_SKILL_HELD_ACTION_BY_VIA: dict[SkillVia, str] = {
-    "instructions": "before it is loaded",
-    "resource": "before its resource is read",
-    "script": "before its script runs",
 }
 
 # Keyed on the class, not the tool name: ADK's tool_name_prefix renames the copy
@@ -105,19 +99,11 @@ def _agent_tool_target(base: BaseTool) -> str | None:
 
 
 def _render_skill_error(skill: str, via: SkillVia) -> RenderError:
-    """Model-facing renderer for a denied/held skill activation.
-
-    The closing sentence is deliberate: without it a model tends to improvise the
-    procedure from memory, dropping exactly the guardrails the skill encoded."""
+    """Model-facing renderer for a denied/held skill activation, ``[marker] …``."""
 
     def render(decision: Any) -> str:
         marker = decision.error_type or decision.outcome.value
-        if decision.outcome is DecisionOutcome.NEEDS_APPROVAL:
-            held = _SKILL_HELD_ACTION_BY_VIA[via]
-            body = f"skill {skill!r} requires human approval {held}"
-        else:
-            body = f"skill {skill!r} is not permitted by this agent's policy"
-        return f"[{marker}] {body}. Do not attempt this task without it."
+        return f"[{marker}] {skill_denial_message(skill, via, decision)}"
 
     return render
 
@@ -150,8 +136,7 @@ def _skill_content_hash(base: BaseTool, skill_name: str) -> str | None:
     instructions = getattr(get_skill(skill_name), "instructions", None)
     if not isinstance(instructions, str):
         return None
-    digest = hashlib.sha256(instructions.encode("utf-8")).hexdigest()
-    return f"{_CONTENT_HASH_PREFIX}{digest}"
+    return skill_decision_hash(skill_content_hash(instructions))
 
 
 def _canonical_script_path(file_path: Any) -> Any:

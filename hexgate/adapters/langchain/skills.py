@@ -17,21 +17,15 @@ from typing import Any
 
 from hexgate.guards.runner import PolicyOverride, RenderError
 from hexgate.manifest.langchain import SkillLocation
-from hexgate.security.decision import Decision, DecisionOutcome
+from hexgate.security.decision import Decision
 from hexgate.security.enforcer import PolicyEnforcer
 from hexgate.security.models import SkillVia, skill_key
+from hexgate.security.skill_gate import skill_decision_hash, skill_denial_message
 
 _FILE_READ_TOOL = "read_file"
 _FILE_PATH_ARG = "file_path"
-# Matches the ADK adapter's decision args, so one pin reads alike on both.
-_CONTENT_HASH_PREFIX = "sha256:"
 _POSIX_SEP = "/"
 _WINDOWS_SEP = "\\"
-
-_SKILL_HELD_ACTION_BY_VIA: dict[SkillVia, str] = {
-    "instructions": "before it is loaded",
-    "resource": "before its resource is read",
-}
 
 SkillHasher = Callable[[SkillLocation], str | None]
 AsyncSkillHasher = Callable[[SkillLocation], Awaitable[str | None]]
@@ -89,18 +83,11 @@ class SkillPathIndex:
 
 
 def _render_skill_error(skill: str, via: SkillVia) -> RenderError:
-    """Model-facing renderer for a denied/held skill read.
-
-    The closing sentence is deliberate: without it a model tends to improvise the
-    procedure from memory, dropping exactly the guardrails the skill encoded."""
+    """Model-facing renderer for a denied/held skill read, as a LangChain error dict."""
 
     def render(decision: Decision) -> dict[str, Any]:
-        if decision.outcome is DecisionOutcome.NEEDS_APPROVAL:
-            body = f"skill {skill!r} requires human approval {_SKILL_HELD_ACTION_BY_VIA[via]}"
-        else:
-            body = f"skill {skill!r} is not permitted by this agent's policy"
         payload = decision.as_error_payload()
-        payload["message"] = f"{body}. Do not attempt this task without it."
+        payload["message"] = skill_denial_message(skill, via, decision)
         return {"ok": False, "error": payload}
 
     return render
@@ -171,7 +158,7 @@ class _SkillRead:
                 "skill": name,
                 "via": self.via,
                 _FILE_PATH_ARG: self.path,
-                "content_hash": f"{_CONTENT_HASH_PREFIX}{digest}" if digest else None,
+                "content_hash": skill_decision_hash(digest),
             },
             render_error=_render_skill_error(name, self.via),
         )
