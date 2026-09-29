@@ -1641,11 +1641,11 @@ async def test_seeded_compose_demo_resolves(session_factory) -> None:
             "caps/base/ingress.yaml",
             "caps/support/delegate.yaml",
             "caps/billing/invoicing.yaml",
+            "caps/billing/refund_support.yaml",
+            "caps/billing/refund_billing.yaml",
         } <= names
 
-        # support_bot has NO refund tool: the boundary declares refund_order (the
-        # $1000 org cap) but grants it to no seat, so it resolves deny for everyone.
-        # Refunds happen only inside billing_bot, reached via delegate_to_billing.
+        # support_bot reaches billing_bot as a tool, never refunds directly.
         ps = (
             await svc.compose_resolve(s, DEFAULT_PROJECT_ID, agent="support_bot")
         ).policy_set
@@ -1653,13 +1653,19 @@ async def test_seeded_compose_demo_resolves(session_factory) -> None:
         def mode(role, tool, **args):
             return ps.evaluate(role=role, tool=tool, args=args).outcome.value
 
-        # No seat refunds directly — delegation is the only refund path.
+        # support_bot has NO refund tool — the org ceiling is granted to no seat.
         assert mode("billing", "refund_order", amount=800, currency="USD") == "deny"
         assert mode("support", "refund_order", amount=10, currency="USD") == "deny"
         assert mode("default", "refund_order", amount=10, currency="USD") == "deny"
-        assert mode("support", "delegate_to_billing") == "allow"  # the only path
-        assert mode("billing", "delegate_to_billing") == "allow"
-        assert mode("default", "delegate_to_billing") == "deny"
+
+        # The delegation is gated as a REACH edge (agent.tool:billing_bot), granted
+        # to support/billing and denied to default — the parent's policy governing
+        # the sub-agent tool use, not a plain tool name. (billing_bot then enforces
+        # its own role-aware refund caps from its own compose policy — resolved below.)
+        assert mode("support", "agent.tool:billing_bot") == "allow"
+        assert mode("billing", "agent.tool:billing_bot") == "allow"
+        assert mode("default", "agent.tool:billing_bot") == "deny"
+        assert "agent.tool:billing_bot" in ps.policy_for("support").effective_tools
 
         # Admission (ingress → agent.run): the support/billing seats may START
         # support_bot; the default seat may not (read-only, no ingress grant).
@@ -1667,18 +1673,36 @@ async def test_seeded_compose_demo_resolves(session_factory) -> None:
         assert mode("billing", "agent.run") == "allow"
         assert mode("default", "agent.run") == "deny"
 
-        # Delegation is gated by the delegate_to_billing TOOL (billing_bot runs
-        # in-kernel, surfacing as a tool call on the native adapter), not a compose
-        # reach — so the resolved policy carries no lowered agent.tool:billing_bot
-        # key, and billing_bot is not a compose agent at all (no direct access).
-        assert "agent.tool:billing_bot" not in ps.policy_for("support").effective_tools
-
         # MCP tools (mcp-demo-*): a safe one is open to all, an invoice needs
         # approval for billing, and the secret-reader is denied outright.
         assert mode("support", "mcp-demo-compute_tip") == "allow"
         assert mode("billing", "mcp-demo-send_invoice") == "needs_approval"
         assert mode("support", "mcp-demo-send_invoice") == "deny"
         assert mode("billing", "mcp-demo-read_secret") == "deny"
+
+        # billing_bot is its OWN compose agent (registered + bound to this policy at
+        # serve, dashboard-editable) enforcing role-aware refund caps: the delegating
+        # seat's role rides into the nested run, so support is capped at $200, billing
+        # at the $1000 org ceiling, and a role it doesn't grant (default) refunds
+        # nothing. This is the cap that actually gates a delegated refund.
+        bps = (
+            await svc.compose_resolve(s, DEFAULT_PROJECT_ID, agent="billing_bot")
+        ).policy_set
+
+        def bmode(role, tool, **args):
+            return bps.evaluate(role=role, tool=tool, args=args).outcome.value
+
+        assert bmode("support", "refund_order", amount=200, currency="USD") == "allow"
+        assert bmode("support", "refund_order", amount=500, currency="USD") == "deny"
+        assert bmode("billing", "refund_order", amount=1000, currency="USD") == "allow"
+        assert bmode("billing", "refund_order", amount=5000, currency="USD") == "deny"
+        assert bmode("default", "refund_order", amount=10, currency="USD") == "deny"
+
+        # Admission to billing_bot (who may be delegated TO): support/billing are
+        # admitted (ingress), default is not — defense in depth behind the reach gate.
+        assert bmode("support", "agent.run") == "allow"
+        assert bmode("billing", "agent.run") == "allow"
+        assert bmode("default", "agent.run") == "deny"
 
 
 def _find_demo_notebook():
@@ -1723,35 +1747,8 @@ def test_notebook_policy_files_match_seed() -> None:
     assert _notebook_dict(src, "_FILES") == SEED_POLICY_FILES
 
 
-def test_notebook_billing_bot_policy_is_role_aware(tmp_path) -> None:
-    # billing_bot runs IN-KERNEL in the demo and enforces its OWN role-keyed
-    # policy: the caller's role rides the context into the nested run, so a
-    # support delegation is capped at $200 and a billing one at the $1000 org
-    # ceiling — a delegated refund is neither unbounded nor role-blind. Extract
-    # the role policies the notebook enforces and prove the caps per role.
-    from hexgate.security.policy_set import load_policy_set
-
-    notebook = _find_demo_notebook()
-    if notebook is None:
-        pytest.skip("marimo demo notebook not present in this checkout")
-
-    src = notebook.read_text(encoding="utf-8")
-    policies = _notebook_dict(src, "_BILLING_POLICIES")
-    # Lay the role files out as a policies/ dir (stem = role name) — exactly
-    # how build_billing() loads them.
-    pol_dir = tmp_path / "policies"
-    pol_dir.mkdir()
-    for role, body in policies.items():
-        (pol_dir / f"{role}.yaml").write_text(body, encoding="utf-8")
-    ps = load_policy_set(str(pol_dir))
-
-    def mode(role: str | None, amount: float) -> str:
-        return ps.evaluate(
-            role=role, tool="refund_order", args={"amount": amount}
-        ).outcome.value
-
-    assert mode("support", 100) == "allow"  # a small support delegation
-    assert mode("support", 500) == "deny"  # over the $200 support cap
-    assert mode("billing", 500) == "allow"  # billing's own $1000 ceiling
-    assert mode("billing", 5000) == "deny"
-    assert mode(None, 100) == "deny"  # a role billing_bot doesn't grant → nothing
+# NB: billing_bot's role-aware refund caps used to live in-kernel (the notebook's
+# _BILLING_POLICIES dict) and were checked here. billing_bot is now its own compose
+# agent, so those caps live in the seeded policy — the notebook↔seed drift guard
+# (test_notebook_policy_files_match_seed) plus billing_bot's resolution in
+# test_seeded_compose_demo_resolves cover them, and _BILLING_POLICIES is gone.

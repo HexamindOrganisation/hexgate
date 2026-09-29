@@ -90,11 +90,13 @@ def _run(agent_obj) -> None:
             description=None,
             approval_handler=approval_handler,
             auto_register=True,  # idempotent register of the agent manifest
+            # Also register billing_bot (the mounted sub-agent) as its own agent, so
+            # the serve path binds its dashboard-editable platform policy — bind is
+            # default-on, so its per-role refund caps hot-reload like the root's.
+            auto_register_subagents=True,
             console=Console(),
         )
-        _task = _loop.create_task(
-            run_serve(runtime, approval_handler=approval_handler)
-        )
+        _task = _loop.create_task(run_serve(runtime, approval_handler=approval_handler))
         _status = "running"
         _loop.run_until_complete(_task)
     except asyncio.CancelledError:
