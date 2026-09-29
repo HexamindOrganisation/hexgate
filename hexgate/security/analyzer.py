@@ -13,6 +13,12 @@ a module). This module runs over a **successfully linked** bundle and reports th
   manifest is supplied; boundary drift is fail-open, so it's an error.
 - **permissive-default** — the ``default`` role grants something no named role
   grants (:func:`check_default_role_exposure`, over a resolved role map).
+- **unknown-guard** / **ambiguous-guard** — a baseline ``guards:`` rule that names a
+  guard the manifest doesn't declare, or names one declared more than once
+  (:func:`lint_guards`). These run over a resolved ``PolicySet`` + manifest, not the
+  module pipeline (guards live in a single-file policy; modules reject the block), so
+  they are invoked from ``hexgate policy validate --manifest`` rather than
+  :func:`analyze`.
 
 Every :class:`PolicyLint` carries the ``source`` file it attributes to — the same
 contract the CLI (`hexgate policy check`) and the dashboard editor both consume.
@@ -433,6 +439,78 @@ def _unknown_tool_severity(tier: LayerKind, mode: str) -> Severity:
     if tier == "capability":
         return "warning"
     return "info" if mode == "deny" else "error"
+
+
+def lint_guards(
+    policy_set: PolicySet,
+    manifest: AgentManifest,
+    *,
+    source: str | None = None,
+) -> list[PolicyLint]:
+    """Authoring lints for the ``guards:`` block against the agent's manifest.
+
+    The ergonomic ahead of the runtime "stop cold" (R-GUARD-006 / R-GUARD-007):
+    surface, at ``hexgate policy validate`` time, the guard mistakes that otherwise
+    only bite at construction or run silently. Severity mirrors the runtime
+    consequence, as ``_drift`` does — a guaranteed hard-stop is an ``error``, a silent
+    no-op is a ``warning``:
+
+    - ``unknown-guard`` (**error**) — a baseline ``guards:`` rule names a guard the
+      manifest does not declare (a typo, or a guard deleted from the code). The runtime
+      stops cold on this, so the policy is guaranteed to crash the agent; failing
+      validate is faithful.
+    - ``ambiguous-guard`` (**error**) — a governed name is declared by more than one
+      guard (two functions share a ``__name__``), so a policy cannot address them
+      separately. The runtime also stops cold (``GuardClosedWorldError`` "attached
+      more than once").
+
+    v1 governs guards only at the baseline (R-GUARD-006), so there is no per-tool
+    reach lint. Runs on the resolved ``policy_set`` (guards live in a single-file
+    policy; modules reject the block), across every role, deduped. Guard names are
+    matched by ``GuardManifest.name`` (the guard's function label), the same key the
+    runtime and the policy use.
+    """
+    by_name: dict[str, list] = {}
+    for gm in manifest.guards or []:
+        by_name.setdefault(gm.name, []).append(gm)
+
+    # Every baseline guard reference across roles, deduped. Iterating roles (not
+    # guard_stance) keeps this robust to a role-divergent policy, which is a separate
+    # build-time error.
+    baseline: set[str] = set()
+    for role in policy_set.roles:
+        baseline.update(policy_set.policy_for(role).guards)
+
+    out: list[PolicyLint] = []
+    for name in sorted(baseline):
+        entries = by_name.get(name, ())
+        if not entries:
+            out.append(
+                PolicyLint(
+                    code="unknown-guard",
+                    severity="error",
+                    message=(
+                        f"policy governs guard {name!r}, which the agent's manifest "
+                        "doesn't declare (a typo, or a guard removed from the code); "
+                        "the agent would stop cold at construction"
+                    ),
+                    source=source,
+                )
+            )
+        elif len(entries) > 1:
+            out.append(
+                PolicyLint(
+                    code="ambiguous-guard",
+                    severity="error",
+                    message=(
+                        f"policy governs guard {name!r}, which is attached more than "
+                        "once, so a policy cannot address them separately; the agent "
+                        "would stop cold at construction — give each a distinct name"
+                    ),
+                    source=source,
+                )
+            )
+    return out
 
 
 def _unknown_args(

@@ -18,6 +18,7 @@ from hexgate.security.analyzer import (
     analyze_project,
     check,
     check_project,
+    lint_guards,
 )
 from hexgate.security.bans import (
     EMPTY_BAN_SET,
@@ -203,6 +204,7 @@ __all__ = [
     "analyze_project",
     "check",
     "check_project",
+    "lint_guards",
     "link",
     "link_policy_set",
     "effective_policy_by_role",

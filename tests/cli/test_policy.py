@@ -297,6 +297,58 @@ def test_validate_handles_malformed_yaml(
     assert "line" in err.lower()
 
 
+def _guarded_policy(tmp_path: Path) -> Path:
+    p = tmp_path / "guarded.yaml"
+    p.write_text(
+        "tools:\n  send_email: { mode: allow }\nguards:\n  ghost_guard: { enabled: false }\n",
+        encoding="utf-8",
+    )
+    return p
+
+
+def _manifest_file(tmp_path: Path, guards_json: str) -> Path:
+    m = tmp_path / "manifest.json"
+    m.write_text(
+        '{"name": "bot", "framework": "hexgate", "tools": [], "guards": '
+        + guards_json
+        + "}",
+        encoding="utf-8",
+    )
+    return m
+
+
+def test_validate_manifest_flags_unknown_guard(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`validate --manifest` fails when a guards: rule names an undeclared guard: it
+    is an error (the runtime stops cold), so it gates even at the default threshold."""
+    policy = _guarded_policy(tmp_path)
+    manifest = _manifest_file(
+        tmp_path, '[{"name": "secret_guard", "position": "before", "kind": "official"}]'
+    )
+    rc = _main_validate(
+        _ns(source=str(policy), manifest=str(manifest), max_severity="error")
+    )
+    err = capsys.readouterr().err
+    assert rc == 1  # error, gates at the default threshold
+    assert "unknown-guard" in err
+    assert "ghost_guard" in err
+
+
+def test_validate_manifest_clean_when_guard_declared(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    policy = _guarded_policy(tmp_path)
+    manifest = _manifest_file(
+        tmp_path, '[{"name": "ghost_guard", "position": "before", "kind": "custom"}]'
+    )
+    rc = _main_validate(
+        _ns(source=str(policy), manifest=str(manifest), max_severity="warning")
+    )
+    assert rc == 0
+    assert "parses cleanly" in capsys.readouterr().out
+
+
 # ---------------------------------------------------------------------------
 # show-rego
 # ---------------------------------------------------------------------------
