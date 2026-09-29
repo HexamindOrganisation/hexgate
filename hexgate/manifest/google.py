@@ -4,7 +4,6 @@ import asyncio
 import logging
 from collections.abc import Coroutine, Iterable
 from concurrent.futures import ThreadPoolExecutor
-from hashlib import sha256
 from typing import Any, TypeVar
 
 from google.adk.agents import Agent
@@ -22,6 +21,7 @@ from hexgate.manifest.models import (
     SkillResources,
     ToolDefinition,
 )
+from hexgate.manifest.skill_hash import skill_content_hash
 
 _log = logging.getLogger(__name__)
 
@@ -174,7 +174,7 @@ def _to_skill_definition(skill: Any) -> SkillDefinition:
         ),
         allowed_tools=_parse_allowed_tools(frontmatter.allowed_tools),
         additional_tools=_parse_additional_tools(frontmatter.metadata),
-        content_hash=sha256(skill.instructions.encode("utf-8")).hexdigest(),
+        content_hash=skill_content_hash(skill.instructions),
     )
 
 
