@@ -20,14 +20,19 @@ from hexgate_api.constants import (
     DEFAULT_USER_ID,
 )
 from hexgate_api.features.agents.service import ensure_seeded_agents
-from hexgate_api.features.policy_modules.seed_data import (
-    ensure_seeded_compose_policy,
-)
 
 
 def _seed_disabled() -> bool:
     """``HEXGATE_SEED=skip`` opts a deployment out of the triple-default."""
     return os.environ.get("HEXGATE_SEED", "").strip().lower() == "skip"
+
+
+def _seed_agents_disabled() -> bool:
+    """``HEXGATE_SEED_AGENTS=skip`` keeps the triple-default (org/user/project)
+    but skips the sample agents. A generic knob — a self-hoster who wants a clean
+    project, or a demo that seeds its own agents (see deploy/provision.py) — not
+    keyed on any demo or notebook."""
+    return os.environ.get("HEXGATE_SEED_AGENTS", "").strip().lower() == "skip"
 
 
 # ---------------------------------------------------------------------------
@@ -141,20 +146,13 @@ async def ensure_default_seed(session: AsyncSession) -> Project | None:
 
     await session.commit()
     await session.refresh(project)
-    # Always ensure seeded agents exist — idempotent, so existing projects
-    # pick up the `default` guarantee on any subsequent boot.
-    await ensure_seeded_agents(session, project.id)
-
-    # Seed the compose policy showcase (policy.yaml + caps) into the default project
-    # only for the support-bot demo, so the dashboard opens right on it (demo-login
-    # lands here) and a served support_bot is gated by it. Gated on the *specific*
-    # notebook, not just HEXGATE_DEMO: boot.py sets HEXGATE_DEMO=1 for every demo
-    # (BYOK, gates, …), so a bare HEXGATE_DEMO check would seed the support_bot policy
-    # into those unrelated demos' default project too. Tests don't set either var, so
-    # the default project stays classic for them.
-    notebook = os.environ.get("HEXGATE_NOTEBOOK", "")
-    if os.environ.get("HEXGATE_DEMO") and notebook.endswith("compose_support_demo.py"):
-        await ensure_seeded_compose_policy(session, project.id)
+    # Ensure the sample agents exist (idempotent) unless a deployment opts out.
+    # A demo that seeds its own agents into this project (deploy/provision.py's
+    # compose showcase) sets HEXGATE_SEED_AGENTS=skip so the project isn't also
+    # populated with the unrelated sample agents (which would deny-all once the
+    # project is flipped to a compose policy).
+    if not _seed_agents_disabled():
+        await ensure_seeded_agents(session, project.id)
     return project
 
 
