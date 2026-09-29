@@ -2,26 +2,44 @@
 
 No eval framework is imported here: the framework's scorer and the dataset tests
 both call `score(case, workspace, before, answer)` and get back a list of `Check`s.
-Each check runs the hexgate CLI in-process: the policy must validate without
-lint warnings, every dry-run decision must match, files must change (or not) as
-the case says, and the final answer must mention what the case requires.
+The checks call the SDK functions the platform's policy endpoints use (load,
+compile, lint, resolve, evaluate): the policy must validate without lint
+warnings, every dry-run decision must match, files must change (or not) as the
+case says, and the final answer must mention what the case requires.
 """
 
 from __future__ import annotations
 
-import contextlib
 import hashlib
-import io
 import json
 import re
-import subprocess
-import threading
 from dataclasses import dataclass
 from pathlib import Path
 
 import yaml
+from pydantic import TypeAdapter, ValidationError
 
-from hexgate.cli import _build_parser
+from hexgate.runtime.context import ContextAttributeValue
+from hexgate.security import (
+    RESOLVED_POLICY_MARKER,
+    DecisionOutcome,
+    LinkError,
+    PolicySet,
+    PolicySetError,
+    check_project,
+    compile_to_rego,
+    effective_policy_by_role,
+    load_local_modules,
+    load_policy_set_from_dict,
+    load_roles,
+    resolve_for_project,
+)
+from hexgate.security.analyzer import SEVERITY_RANK, check_default_role_exposure
+from hexgate.security.constraints import ConstraintParseError
+from hexgate.security.testing import run_namespace
+
+# Everything the SDK raises for a policy it can't load, compile or link.
+POLICY_ERRORS = (PolicySetError, ConstraintParseError, LinkError, ValidationError)
 
 
 @dataclass
@@ -31,32 +49,12 @@ class Check:
     detail: str = ""
 
 
-_CLI_LOCK = threading.Lock()
-
-
-def hexgate(*args: str) -> subprocess.CompletedProcess[str]:
-    """Run `hexgate policy <args>` in-process (one interpreter start per run, not per call).
-
-    stdout is process-global, so calls are serialised; scoring is cheap next to the agent.
-    """
-    out, err = io.StringIO(), io.StringIO()
-    with _CLI_LOCK, contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-        try:
-            ns = _build_parser().parse_args(["policy", *args])
-            code = ns.func(ns) or 0
-        except SystemExit as exc:
-            code = exc.code if isinstance(exc.code, int) else 1
-    return subprocess.CompletedProcess(
-        ["hexgate", "policy", *args], code, out.getvalue(), err.getvalue()
-    )
-
-
 def snapshot(root: Path) -> dict[str, str]:
     """{relative path: sha256} of every file, skipping any path with a dot component.
 
     A dot path is tooling, not project: the agent's skill sits under
-    `.claude/skills/` in the workspace, and scoring writes `.effective.yaml`.
-    Counting them would fail every `no_changes` case.
+    `.claude/skills/` in the workspace. Counting it would fail every
+    `no_changes` case.
     """
     files = {}
     for p in root.rglob("*"):
@@ -66,33 +64,52 @@ def snapshot(root: Path) -> dict[str, str]:
     return files
 
 
-def outcome_of(stdout: str) -> str:
-    first = stdout.strip().splitlines()[0] if stdout.strip() else ""
-    for word in ("APPROVAL_REQUIRED", "ALLOW", "DENY"):
-        if word in first:
-            return word.lower()
-    return "error"
+@dataclass
+class Policy:
+    """The policy the checks run against.
+
+    `payload` is the document: `policy.yaml` as written, or a module tree's
+    resolved roles. `policy_set` is it loaded, ready to evaluate.
+    """
+
+    payload: dict
+    policy_set: PolicySet
 
 
+OUTCOMES = {
+    DecisionOutcome.ALLOW: "allow",
+    DecisionOutcome.DENY: "deny",
+    DecisionOutcome.NEEDS_APPROVAL: "approval_required",
+}
 RANK = {"deny": 0, "approval_required": 1, "allow": 2}
 
 
-def decide(policy: Path, role: str, d: dict) -> tuple[str, str]:
-    proc = hexgate(
-        "test",
-        str(policy),
-        "--role",
-        role,
-        "--tool",
-        d["tool"],
-        "--args",
-        json.dumps(d.get("args", {})),
-        "--attributes",
-        json.dumps(d.get("attributes", {})),
-        "--run-facts",
-        json.dumps(d.get("run_facts", {})),
+_ATTRIBUTES = TypeAdapter(dict[str, ContextAttributeValue])
+
+
+def decide(policy: Policy, role: str, d: dict) -> tuple[str, str]:
+    """Dry-run one call: (outcome, reason). Same inputs as `hexgate policy test`.
+
+    An undefined role is an error rather than the `default` fallback, as in the
+    CLI: a case naming a role the policy lacks fails instead of passing by luck.
+    """
+    if role not in policy.policy_set:
+        return "error", f"role {role!r} not in policy ({policy.policy_set.roles})"
+    try:
+        attributes = _ATTRIBUTES.validate_python(d.get("attributes", {}))
+        # Over a zeroed run, so an unset `run.*` path reads 0, not missing.
+        run = run_namespace(d["tool"], **d.get("run_facts", {}))
+    except (ValidationError, ValueError) as exc:
+        return "error", str(exc)
+    verdict = policy.policy_set.evaluate(
+        role=role,
+        tool=d["tool"],
+        args=d.get("args", {}),
+        attributes=attributes,
+        run=run,
     )
-    return outcome_of(proc.stdout), (proc.stdout + proc.stderr).strip()
+    reason = "; ".join([verdict.reason, *map(str, verdict.violations or [])])
+    return OUTCOMES[verdict.outcome], reason
 
 
 # Arguments the synthetic keys carry (hexgate/security/network.py, the agent gate).
@@ -126,23 +143,20 @@ def read_manifest(ws: Path) -> tuple[dict[str, set[str]], set[str]]:
     return tools, attrs
 
 
-def policy_bodies(policy: Path) -> tuple[dict, list[dict]]:
-    doc = yaml.safe_load(policy.read_text()) or {}
+def policy_bodies(doc: dict) -> tuple[dict, list[dict]]:
     bodies = [b for b in (doc.get("roles") or {}).values() if isinstance(b, dict)]
     return doc, bodies or [doc]
 
 
-def policy_tools(policy: Path) -> set[str]:
-    _, bodies = policy_bodies(policy)
+def policy_tools(doc: dict) -> set[str]:
+    _, bodies = policy_bodies(doc)
     return {t for b in bodies for t in (b.get("tools") or {})}
 
 
-def unknown_refs(
-    policy: Path, tools: dict[str, set[str]], attrs: set[str]
-) -> list[str]:
+def unknown_refs(doc: dict, tools: dict[str, set[str]], attrs: set[str]) -> list[str]:
     """`args.x` / `ctx.x` a constraint uses that TOOLS.md doesn't define."""
     every_arg = set().union(*tools.values(), *SYNTHETIC_ARGS.values(), AGENT_ARGS)
-    doc, bodies = policy_bodies(policy)
+    doc, bodies = policy_bodies(doc)
     # (tool or None for a policy- or role-level constraint, constraint text)
     lines = [(None, c) for c in doc.get("constraints") or []]
     for b in bodies:
@@ -169,32 +183,66 @@ def unknown_refs(
     return sorted(bad)
 
 
-def _failed(name: str, proc: subprocess.CompletedProcess[str]) -> Check:
-    return Check(name, False, (proc.stdout + proc.stderr).strip()[-800:])
+def _lint_failures(lints) -> list[str]:
+    # A warning fails, not only an error: the write-policy skill tells the agent
+    # to validate with `--max-severity warning`.
+    return [
+        f"[{lint.code}] {lint.message}"
+        for lint in lints
+        if SEVERITY_RANK[lint.severity] <= SEVERITY_RANK["warning"]
+    ]
 
 
-def effective_policy(ws: Path) -> tuple[Path | None, Check]:
-    # `--max-severity warning`: a lint warning (e.g. a permissive default role)
-    # fails `valid`, in either layout.
+def _load(payload: dict) -> tuple[PolicySet | None, list[str]]:
+    """What `hexgate policy validate` checks: load, compile, lint the roles."""
+    try:
+        policy_set = load_policy_set_from_dict(payload)
+        # Compile too, so a policy the build would reject doesn't pass.
+        compile_to_rego(payload)
+    except POLICY_ERRORS as exc:
+        return None, [str(exc)]
+    return policy_set, _lint_failures(check_default_role_exposure(policy_set))
+
+
+def _module_payload(ws: Path) -> tuple[dict | None, list[str]]:
+    """What `hexgate policy check` and `resolve` do on a module tree."""
+    try:
+        boundaries, capabilities = load_local_modules(ws)
+        roles = load_roles(ws)
+    except (ValueError, OSError) as exc:
+        return None, [str(exc)]
+    if not boundaries and not capabilities:
+        return None, ["no modules under policies/boundaries/ or policies/capabilities/"]
+    # Lints the modules (dead or erased grants), not the roles they compose
+    # into: `_load` lints those on the resolved result.
+    problems = _lint_failures(check_project(boundaries, capabilities, roles))
+    if problems:
+        return None, problems
+    try:
+        result = resolve_for_project(boundaries, capabilities, roles)
+    except POLICY_ERRORS as exc:
+        return None, [str(exc)]
+    return {"roles": effective_policy_by_role(result), RESOLVED_POLICY_MARKER: True}, []
+
+
+def effective_policy(ws: Path) -> tuple[Policy | None, Check]:
     if (ws / "policies").is_dir():
-        check = hexgate("check", "--dir", str(ws), "--max-severity", "warning")
-        if check.returncode != 0:
-            return None, _failed("valid", check)
-        out = ws / ".effective.yaml"
-        res = hexgate("resolve", "--dir", str(ws), "-o", str(out))
-        if res.returncode != 0:
-            return None, _failed("valid", res)
-        # `check` lints the modules (dead or erased grants) but not the roles
-        # they compose into; a permissive `default` shows only on the result.
-        val = hexgate("validate", str(out), "--max-severity", "warning")
-        if val.returncode != 0:
-            return None, _failed("valid", val)
-        return out, Check("valid", True)
-    policy = ws / "policy.yaml"
-    val = hexgate("validate", str(policy), "--max-severity", "warning")
-    if val.returncode != 0:
-        return None, _failed("valid", val)
-    return policy, Check("valid", True)
+        payload, problems = _module_payload(ws)
+    else:
+        try:
+            payload = yaml.safe_load((ws / "policy.yaml").read_text()) or {}
+        except (OSError, yaml.YAMLError) as exc:
+            payload, problems = None, [str(exc)]
+        else:
+            if not isinstance(payload, dict):
+                payload, problems = None, ["policy.yaml is not a YAML mapping"]
+            else:
+                problems = []
+    if payload is not None:
+        policy_set, problems = _load(payload)
+    if problems:
+        return None, Check("valid", False, "\n".join(problems)[-800:])
+    return Policy(payload, policy_set), Check("valid", True)
 
 
 def score(case: dict, ws: Path, before: dict[str, str], answer: str) -> list[Check]:
@@ -242,7 +290,7 @@ def score(case: dict, ws: Path, before: dict[str, str], answer: str) -> list[Che
         tools, attrs = read_manifest(ws)
         unknown = sorted(
             t
-            for t in policy_tools(policy)
+            for t in policy_tools(policy.payload)
             if t not in tools and not t.startswith(("net.", "agent."))
         )
         checks.append(
@@ -252,7 +300,7 @@ def score(case: dict, ws: Path, before: dict[str, str], answer: str) -> list[Che
                 f"not in TOOLS.md: {unknown}" if unknown else "",
             )
         )
-        refs = unknown_refs(policy, tools, attrs)
+        refs = unknown_refs(policy.payload, tools, attrs)
         checks.append(
             Check(
                 "only known arguments and attributes",
