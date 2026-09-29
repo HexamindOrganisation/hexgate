@@ -8,6 +8,7 @@ import pytest
 
 from evals.policy_writing.checks import (
     decide,
+    effective_policy,
     read_manifest,
     score,
     snapshot,
@@ -79,8 +80,29 @@ def _by_name(checks) -> dict:
 )
 def test_decide_reports_each_outcome(tmp_path, role, tool, args, outcome) -> None:
     ws = _workspace(tmp_path)
-    got, raw = decide(ws / "policy.yaml", role, {"tool": tool, "args": args})
+    policy, _ = effective_policy(ws)
+    got, raw = decide(policy, role, {"tool": tool, "args": args})
     assert got == outcome, raw
+
+
+def test_decide_reads_the_outcome_not_the_arguments(tmp_path) -> None:
+    # The outcome comes from the verdict, so an argument that spells an outcome
+    # can't be mistaken for one.
+    ws = _workspace(tmp_path)
+    policy, _ = effective_policy(ws)
+    d = {"tool": "refund_order", "args": {"order_id": "ALLOW", "amount": 900}}
+    got, reason = decide(policy, "billing", d)
+    assert got == "deny"
+    assert "amount" in reason
+
+
+def test_decide_rejects_an_undefined_role(tmp_path) -> None:
+    # Not the `default` fallback: a case naming a role the policy lacks fails.
+    ws = _workspace(tmp_path)
+    policy, _ = effective_policy(ws)
+    got, reason = decide(policy, "suport", {"tool": "view_orders"})
+    assert got == "error"
+    assert "suport" in reason
 
 
 def test_decision_checks_pass_and_fail(tmp_path) -> None:
@@ -120,14 +142,16 @@ def test_unknown_refs_flags_an_argument_missing_from_tools_md(tmp_path) -> None:
     )
     ws = _workspace(tmp_path, policy)
     tools, attrs = read_manifest(ws)
-    assert unknown_refs(ws / "policy.yaml", tools, attrs) == ["refund_order: args.tier"]
+    policy, _ = effective_policy(ws)
+    assert unknown_refs(policy.payload, tools, attrs) == ["refund_order: args.tier"]
 
 
 def test_unknown_refs_accepts_a_known_caller_attribute(tmp_path) -> None:
     policy = POLICY.replace("- args.amount <= 500", '- ctx.department == "finance"')
     ws = _workspace(tmp_path, policy)
     tools, attrs = read_manifest(ws)
-    assert unknown_refs(ws / "policy.yaml", tools, attrs) == []
+    policy, _ = effective_policy(ws)
+    assert unknown_refs(policy.payload, tools, attrs) == []
 
 
 def test_snapshot_ignores_every_path_under_a_dot_directory(tmp_path) -> None:
@@ -250,7 +274,7 @@ roles:
     checks = score(case, ws, snapshot(ws), "")
     valid = _by_name(checks)["valid"]
     assert not valid.passed
-    assert "--max-severity warning" in valid.detail
+    assert "permissive-default" in valid.detail
     # An invalid policy fails its decisions rather than skipping them.
     assert [c.detail for c in checks if c.name.startswith("decision:")] == [
         "policy invalid"
@@ -306,3 +330,28 @@ def test_modules_layout_fails_valid_on_a_permissive_default(tmp_path) -> None:
     valid = _by_name(score({}, ws, snapshot(ws), ""))["valid"]
     assert not valid.passed
     assert "permissive-default" in valid.detail
+
+
+def test_modules_layout_fails_valid_on_a_dead_grant(tmp_path) -> None:
+    # A module lint: the boundary denies what a capability grants.
+    ws = _modules_workspace(
+        tmp_path, "  default: [read_only]\n  billing: [read_only, payments]\n"
+    )
+    (ws / "policies" / "boundaries" / "no_views.yaml").write_text(
+        "tools:\n  view_orders: { mode: deny }\n"
+    )
+    valid = _by_name(score({}, ws, snapshot(ws), ""))["valid"]
+    assert not valid.passed
+    assert "dead-grant" in valid.detail
+
+
+def test_an_empty_policy_is_valid_and_denies(tmp_path) -> None:
+    # As `hexgate policy validate` reads it: an empty file is an empty policy.
+    ws = _workspace(tmp_path, "# nothing granted yet\n")
+    case = {
+        "expect": {
+            "decisions": [{"role": "default", "tool": "view_orders", "expect": "deny"}]
+        }
+    }
+    checks = score(case, ws, snapshot(ws), "")
+    assert all(c.passed for c in checks), checks
