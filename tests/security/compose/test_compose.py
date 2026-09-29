@@ -695,3 +695,93 @@ def test_capability_deny_style_rules_still_rejected_via_boundary_semantics():
     tools = _eff(res)["default"]["tools"]
     assert tools["a"]["mode"] == "allow"
     assert "b" not in tools  # b not in the ceiling → shadowed away
+
+
+# --- guards (R-GUARD-006): agent-level, not composable --------------------
+
+
+def test_guards_top_level_apply_to_every_role() -> None:
+    """A top-level `guards:` block governs every agent and every role (agent-level)."""
+    res = resolve_text(
+        """
+        version: 1
+        guards: { secret_guard: { enabled: false } }
+        agents:
+          bot:
+            roles:
+              default: { tools: { a: { mode: allow } } }
+              support: { tools: { a: { mode: allow } } }
+        """,
+        agent="bot",
+    )
+    eff = _eff(res)
+    for role in ("default", "support"):
+        assert eff[role]["guards"] == {"secret_guard": {"enabled": False}}
+
+
+def test_guards_agent_body_overlays_top_level_uniformly() -> None:
+    """An agent body's `guards` overlays the top-level per key, and the one stance is
+    identical for every role of that agent — so it can never diverge."""
+    res = resolve_text(
+        """
+        version: 1
+        guards:
+          secret_guard: { enabled: false }
+          secret_watch: { enabled: true }
+        agents:
+          bot:
+            guards: { secret_watch: { enabled: false } }
+            roles:
+              default: { tools: { a: { mode: allow } } }
+              admin:   { tools: { a: { mode: allow } } }
+        """,
+        agent="bot",
+    )
+    eff = _eff(res)
+    want = {"secret_guard": {"enabled": False}, "secret_watch": {"enabled": False}}
+    assert eff["default"]["guards"] == want
+    assert eff["admin"]["guards"] == want  # same stance across roles
+
+
+def test_guards_absent_leaves_no_stance() -> None:
+    """A guards-free policy carries no `guards` key (the serializer drops the empty
+    map), so its resolved dump is byte-identical to before the block existed."""
+    res = resolve_text("tools: { a: { mode: allow } }")
+    assert "guards" not in _eff(res)["default"]
+
+
+def test_guards_rejected_in_role_body() -> None:
+    """Guards are agent-level — a `guards:` inside a role body is rejected (there is
+    no such field on a role; `extra='forbid'` catches it)."""
+    with pytest.raises(LinkError):
+        resolve_text(
+            """
+            version: 1
+            agents:
+              bot:
+                roles:
+                  default: { guards: { g: { enabled: false } } }
+            """,
+            agent="bot",
+        )
+
+
+def test_guards_rejected_in_boundary() -> None:
+    """A guard is not a ceiling — a `guards:` inside a boundary block is rejected."""
+    with pytest.raises(LinkError):
+        resolve_text("boundary: { guards: { g: { enabled: false } } }")
+
+
+def test_guards_rejected_in_imported_fragment() -> None:
+    """Guards are not composable, so an imported file may not declare them."""
+    with pytest.raises(LinkError, match="guards"):
+        resolve_text(
+            "version: 1\nimport: [ caps/x.yaml ]\n",
+            loader=lambda _p: "guards: { g: { enabled: false } }\n",
+        )
+
+
+def test_agent_named_guards_is_reserved() -> None:
+    """`guards` is a structural keyword, so no agent may be named it."""
+    with pytest.raises(LinkError, match="reserved"):
+        resolve_text("agents: { guards: {} }")

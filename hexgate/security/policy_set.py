@@ -54,6 +54,7 @@ from hexgate.security.models import (
     AgentPolicy,
     AgentTargetPolicy,
     BaseToolPolicy,
+    GuardRule,
     SkillPolicy,
     ToolPolicy,
     is_agent_reach_key,
@@ -550,6 +551,7 @@ def _resolve_inheritance(
     merged_tools: dict[str, ToolPolicy] = {}
     merged_agents: dict[str, AgentTargetPolicy] = {}
     merged_skills: dict[str, SkillPolicy] = {}
+    merged_guards: dict[str, GuardRule] = {}
     merged_consts: dict[str, object] = {}
     merged_constraints: list[str] = []
     merged_default: BaseToolPolicy = own.default_policy
@@ -564,6 +566,7 @@ def _resolve_inheritance(
         merged_tools.update(parent.tools)
         merged_agents.update(parent.agents)
         merged_skills.update(parent.skills)
+        merged_guards.update(parent.guards)
         merged_consts.update(parent.consts)
         _extend_unique(merged_constraints, parent.constraints)
         merged_default = parent.default_policy
@@ -578,6 +581,7 @@ def _resolve_inheritance(
     merged_tools.update(own.tools)
     merged_agents.update(own.agents)
     merged_skills.update(own.skills)
+    merged_guards.update(own.guards)
     merged_consts.update(own.consts)
     # Union, not override — the one field here that accumulates (see docstring).
     _extend_unique(merged_constraints, own.constraints)
@@ -597,6 +601,7 @@ def _resolve_inheritance(
         admission=merged_admission,
         agents=merged_agents,
         skills=merged_skills,
+        guards=merged_guards,
     )
 
 

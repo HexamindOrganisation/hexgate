@@ -31,7 +31,7 @@ from pydantic import (
     model_validator,
 )
 
-from hexgate.security.models import AgentVia
+from hexgate.security.models import AgentVia, GuardRule
 
 # Keywords that are structural, so an agent or role may not be *named* one — a
 # `roles: { tools: … }` would be unreadable even though the parser could tell it
@@ -46,6 +46,7 @@ RESERVED_NAMES = frozenset(
         "reach",
         "mcp",
         "admission",
+        "guards",
         "agents",
         "roles",
     }
@@ -183,6 +184,12 @@ class AgentBlock(_GrantScope):
     """One agent's body: its all-roles grants/ceiling + a ``roles`` name-map."""
 
     roles: dict[str, RoleBlock] = Field(default_factory=dict)
+    # Guard enable/disable stance for THIS agent (R-GUARD-006). Agent-level, not
+    # per-role (no `guards` on RoleBlock) and not composable (no `guards` on a
+    # boundary or an imported fragment), so the one agent-wide stance can never
+    # diverge across roles. A guard name -> {enabled: bool}; merged over the
+    # entry's top-level guards, last-wins per key.
+    guards: dict[str, GuardRule] = Field(default_factory=dict)
 
     @field_validator("roles")
     @classmethod
@@ -203,6 +210,10 @@ class Entry(_GrantScope):
     version: int = 1
     exports: dict[str, RoleBlock] = Field(default_factory=dict, alias="export")
     agents: dict[str, AgentBlock] = Field(default_factory=dict)
+    # Top-level guard stance: applies to EVERY agent (R-GUARD-006). An agent body's
+    # own `guards` overlays this per key. Agent-level and non-composable, like the
+    # agent-body block above.
+    guards: dict[str, GuardRule] = Field(default_factory=dict)
 
     # Only the `export` alias is accepted (not the `exports` field name).
     model_config = ConfigDict(extra="forbid")
