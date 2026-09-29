@@ -449,3 +449,47 @@ def test_proxy_without_binding_runs_fine() -> None:
     proxy = HexgateLangchainAgent(agent=_RunnableGraph(), api_key="k", tool_names=[])
 
     assert proxy.invoke({"messages": []}, hexgate_context=_user()) == {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# wrap_langchain_agent — deepagents skill gating wiring
+# ---------------------------------------------------------------------------
+
+
+def test_wrap_gates_skill_reads_from_an_explicit_skills_middleware(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import sys
+    import types
+
+    from tests.adapters.langchain.test_skill_gating import (
+        DEEPAGENTS_SKILLS_MODULE,
+        SKILL_MD,
+        SKILL_MD_BYTES,
+        _Backend,
+        _DeepGraph,
+        _read_file_tool,
+        _SkillsMiddleware,
+    )
+
+    module = types.ModuleType(DEEPAGENTS_SKILLS_MODULE)
+    module._list_skills = lambda backend, source: backend.listing.get(source, [])
+    monkeypatch.setitem(sys.modules, DEEPAGENTS_SKILLS_MODULE, module)
+    no_skill_allowed = AgentPolicy.model_validate(
+        {"default_policy": {"mode": "allow"}, "skills": {"other": {"mode": "allow"}}}
+    )
+    _resolve_to(monkeypatch, PolicySet({DEFAULT_ROLE_NAME: no_skill_allowed}))
+    reads: list[str] = []
+    read_file = _read_file_tool(reads)
+    middleware = _SkillsMiddleware(_Backend({SKILL_MD: SKILL_MD_BYTES}))
+
+    wrap_langchain_agent(
+        agent=_DeepGraph([read_file], middleware=None),
+        tools=[],
+        api_key="k",
+        skills_middleware=middleware,
+    )
+    result = read_file.func(file_path=SKILL_MD)
+
+    assert result["ok"] is False
+    assert reads == []

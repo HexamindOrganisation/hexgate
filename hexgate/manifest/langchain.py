@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import importlib
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from dataclasses import dataclass
 from typing import Any
 
 from langchain_core.tools import BaseTool
@@ -28,6 +30,7 @@ _BACKEND_ATTR = "_backend"
 _SOURCES_ATTR = "sources"
 _SOURCE_LABELS_ATTR = "source_labels"
 _DOWNLOAD_FILES_ATTR = "download_files"
+_ADOWNLOAD_FILES_ATTR = "adownload_files"
 _LS_ATTR = "ls"
 _SKILL_MD_ENCODING = "utf-8"
 _SKILLS_MODULE = "deepagents.middleware.skills"
@@ -59,12 +62,9 @@ def create_langchain_manifest(
             "manifest can identify it on the platform."
         )
     all_tools = _union_tools(tools, discover_graph_tools(graph))
-    middlewares = (
-        [skills_middleware]
-        if skills_middleware is not None
-        else discover_skills_middlewares(graph)
+    skills = _collect_deepagents_skills(
+        resolve_skills_middlewares(graph, skills_middleware)
     )
-    skills = _collect_deepagents_skills(middlewares)
     return AgentManifest(
         name=agent_name,
         description=description,
@@ -108,6 +108,60 @@ def _union_tools(
     return merged
 
 
+@dataclass(frozen=True)
+class SkillLocation:
+    """One SKILL.md a deepagents agent can activate, and the backend serving it."""
+
+    name: str
+    skill_md_path: str
+    backend: object
+
+
+def resolve_skills_middlewares(
+    graph: CompiledStateGraph, skills_middleware: object | None
+) -> list[object]:
+    """The explicit middleware when given, else those compiled into ``graph``."""
+    if skills_middleware is not None:
+        return [skills_middleware]
+    return discover_skills_middlewares(graph)
+
+
+def locate_skills(middlewares: list[object]) -> list[SkillLocation]:
+    """Every SKILL.md the middlewares list, including ones a later source shadows.
+
+    Shadowed paths are kept: a read of one is still a read of that skill's
+    instructions, so it must not fall back to plain file gating.
+    """
+    return [
+        SkillLocation(meta["name"], meta["path"], backend)
+        for meta, _, backend in _iter_listed_skills(middlewares)
+    ]
+
+
+def read_skill_hash(location: SkillLocation) -> str | None:
+    """Current body hash of one SKILL.md, or None if it cannot be read."""
+    path = location.skill_md_path
+    return _content_hashes(location.backend, [path]).get(path)
+
+
+async def aread_skill_hash(location: SkillLocation) -> str | None:
+    """:func:`read_skill_hash` without blocking the event loop.
+
+    Awaits the backend's ``adownload_files``; a backend without one is read on a
+    worker thread.
+    """
+    adownload = getattr(location.backend, _ADOWNLOAD_FILES_ATTR, None)
+    if adownload is None:
+        return await asyncio.to_thread(read_skill_hash, location)
+    path = location.skill_md_path
+    try:
+        responses = await adownload([path])
+    except Exception:  # noqa: BLE001
+        _log.warning("could not read skill body; hash omitted", exc_info=True)
+        return None
+    return _hash_responses(responses).get(path)
+
+
 def discover_skills_middlewares(graph: CompiledStateGraph) -> list[object]:
     """deepagents SkillsMiddleware instances compiled into a graph, in node order.
 
@@ -136,24 +190,30 @@ def _collect_deepagents_skills(middlewares: list[object]) -> list[SkillDefinitio
 
     Later sources win on a name collision, matching deepagents' own layering.
     """
+    by_name = {entry[0]["name"]: entry for entry in _iter_listed_skills(middlewares)}
+    hashes = _content_hashes_by_backend(list(by_name.values()))
+    return [
+        _to_skill_definition(meta, label, hashes.get(meta["path"]))
+        for meta, label, _ in by_name.values()
+    ]
+
+
+def _iter_listed_skills(
+    middlewares: list[object],
+) -> Iterator[tuple[dict[str, Any], str, object]]:
+    """``(metadata, source label, backend)`` per listed skill, in source order."""
     if not middlewares:
-        return []
+        return
     list_skills = _resolve_list_skills()
     if list_skills is None:
-        return []
-    by_name: dict[str, tuple[dict[str, Any], str, object]] = {}
+        return
     for middleware in middlewares:
         backend, sources = _skill_sources(middleware)
         if backend is None:
             continue
         for path, label in sources:
             for meta in _list_skill_metadata(list_skills, backend, path):
-                by_name[meta["name"]] = (meta, label, backend)
-    hashes = _content_hashes_by_backend(list(by_name.values()))
-    return [
-        _to_skill_definition(meta, label, hashes.get(meta["path"]))
-        for meta, label, _ in by_name.values()
-    ]
+                yield meta, label, backend
 
 
 def _resolve_list_skills() -> Callable[[object, str], Any] | None:
@@ -249,6 +309,11 @@ def _content_hashes(backend: object, paths: list[str]) -> dict[str, str]:
     except Exception:  # noqa: BLE001
         _log.warning("could not read skill bodies; hashes omitted", exc_info=True)
         return {}
+    return _hash_responses(responses)
+
+
+def _hash_responses(responses: list[Any]) -> dict[str, str]:
+    """Body hash per downloaded SKILL.md; unreadable or undecodable ones omitted."""
     hashes: dict[str, str] = {}
     for response in responses:
         content = getattr(response, "content", None)
