@@ -11,6 +11,8 @@ merge, and that module composition rejects the block fail-loud in v1.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 from pydantic import ValidationError
 
@@ -22,6 +24,7 @@ from hexgate.security import (
     LinkError,
     ModuleContent,
     link,
+    lint_guards,
 )
 from hexgate.security.bundle import build_signed_bundle
 from hexgate.security.policy_set import PolicySetError, load_policy_set_from_dict
@@ -508,3 +511,74 @@ def test_validate_guard_policy_rejects_ambiguous_name() -> None:
     )
     with pytest.raises(GuardClosedWorldError, match="attached more than once"):
         validate_guard_policy(engine, [g_a, g_b], agent_name="a")
+
+
+# --- PR4: authoring lints (R-GUARD-006 / R-GUARD-007) --------------------------
+
+
+def _manifest(*names: str) -> SimpleNamespace:
+    """A duck-typed manifest of guard names. lint_guards keys by name and counts
+    duplicates (ambiguity); it does not read tool_names, so none is carried here."""
+    return SimpleNamespace(
+        guards=[SimpleNamespace(name=n, tool_names=None) for n in names]
+    )
+
+
+def _codes(lints: list) -> list[str]:
+    return [lint.code for lint in lints]
+
+
+def test_lint_unknown_guard_baseline() -> None:
+    ps = load_policy_set_from_dict(
+        {"roles": {"default": {"guards": {"ghost": {"enabled": False}}}}}
+    )
+    lints = lint_guards(ps, _manifest("secret_guard"), source="p.yaml")
+    assert _codes(lints) == ["unknown-guard"]
+    # error, not warning: the runtime stops cold, so the policy will crash the agent.
+    assert lints[0].severity == "error"
+    assert "ghost" in lints[0].message
+    assert lints[0].source == "p.yaml"
+
+
+def test_lint_declared_guard_is_clean() -> None:
+    ps = load_policy_set_from_dict(
+        {"roles": {"default": {"guards": {"secret_guard": {"enabled": False}}}}}
+    )
+    assert lint_guards(ps, _manifest("secret_guard"), source="p.yaml") == []
+
+
+def test_lint_flags_unknown_guard_from_a_compose_policy() -> None:
+    """lint_guards runs over the resolved PolicySet regardless of its source, so a guard
+    authored in the compose `policy.yaml` entry file but not declared by the agent's
+    manifest is flagged just like a classic one (R-GUARD-006)."""
+    from hexgate.security.compose import resolve_text
+
+    ps = resolve_text(
+        "version: 1\n"
+        "guards: { ghost_guard: { enabled: false } }\n"
+        "tools: { a: { mode: allow } }\n"
+    ).policy_set
+    lints = lint_guards(ps, _manifest("secret_guard"), source="policy.yaml")
+    assert _codes(lints) == ["unknown-guard"]
+    assert "ghost_guard" in lints[0].message
+
+
+def test_lint_ambiguous_guard_name() -> None:
+    """A governed name attached more than once is flagged: the runtime stops cold on it
+    (GuardClosedWorldError), so the lint must warn, not pass."""
+    ps = load_policy_set_from_dict(
+        {"roles": {"default": {"guards": {"w": {"enabled": False}}}}}
+    )
+    # Two manifest entries named 'w' -> ambiguous.
+    lints = lint_guards(ps, _manifest("w", "w"), source="p.yaml")
+    assert _codes(lints) == ["ambiguous-guard"]
+    assert lints[0].severity == "error"
+
+
+def test_lint_no_manifest_guards_flags_every_reference() -> None:
+    ps = load_policy_set_from_dict(
+        {"roles": {"default": {"guards": {"x": {"enabled": False}}}}}
+    )
+    assert _codes(lint_guards(ps, SimpleNamespace(guards=None), source="p.yaml")) == [
+        "unknown-guard"
+    ]
