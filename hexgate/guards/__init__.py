@@ -9,6 +9,7 @@ intuition, ``docs/adr/R-GUARD-001..003`` for the decisions, and the later phases
 
 from __future__ import annotations
 
+from hexgate.guards.attach import attach_guards, read_guards, resolve_guards
 from hexgate.guards.runner import run_guarded_async, run_guarded_sync
 from hexgate.guards.types import (
     GuardEvent,
@@ -32,8 +33,11 @@ __all__ = [
     "ToolCall",
     "ToolOutcome",
     "after_tool",
+    "attach_guards",
     "before_tool",
     "build_pipeline",
+    "read_guards",
+    "resolve_guards",
     "run_guarded_async",
     "run_guarded_sync",
 ]

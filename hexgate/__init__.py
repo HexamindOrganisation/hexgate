@@ -22,7 +22,7 @@ from hexgate.agents.loader import (
 )
 from hexgate.agents.subagents import SubagentEdge
 from hexgate.cloud import HexgateClient, HexgateConfig
-from hexgate.guards import after_tool, before_tool
+from hexgate.guards import after_tool, attach_guards, before_tool
 from hexgate.manifest import (
     AgentManifest,
     SkillDefinition,
@@ -78,6 +78,7 @@ __all__ = [
     "Workspace",
     "after_tool",
     "agent_tool",
+    "attach_guards",
     "before_tool",
     "bash",
     "edit_file",

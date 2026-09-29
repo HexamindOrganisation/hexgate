@@ -680,6 +680,22 @@ class SkillDefinition(BaseModel):
     content_hash: Optional[str] = None
 
 
+class GuardDefinition(BaseModel):
+    """A guard declared on an agent, mirroring ``GuardManifest`` in the SDK.
+
+    Surfaced so the platform can show which guards an agent ships with (and govern
+    them by name via the policy ``guards:`` block). ``kind`` is a display hint —
+    a built-in ``hexgate.plugins`` guard vs the developer's own code.
+    """
+
+    name: str
+    position: Literal["before", "after"]
+    tool_names: Optional[list[str]] = None
+    observe: bool = False
+    kind: Literal["official", "custom"]
+    plugin_id: Optional[str] = None
+
+
 class AgentManifest(BaseModel):
     """Schema for the manifest of an agent."""
 
@@ -696,6 +712,9 @@ class AgentManifest(BaseModel):
     # ``compute_manifest_hash`` (exclude_none=True) is unchanged for every
     # agent that has none.
     skills: Optional[list[SkillDefinition]] = None
+    # None — not [] — when the agent declares no guards, same hash-continuity reason
+    # (exclude_none); matches the SDK's GuardManifest/AgentManifest.guards default.
+    guards: Optional[list[GuardDefinition]] = None
 
 
 class RegisterAgentRequest(BaseModel):

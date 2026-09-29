@@ -591,11 +591,12 @@ def _sample_manifest(
     model: str | None = None,
     system_prompt: str | None = None,
     skills: list[dict] | None = None,
+    guards: list[dict] | None = None,
 ) -> dict:
     """Minimal AgentManifest payload for register_manifest in tests.
 
-    ``skills`` stays out of the payload entirely when None — the shape every
-    framework without a skill concept sends.
+    ``skills`` / ``guards`` stay out of the payload entirely when None — the shape
+    an agent that declares none sends.
     """
     return {
         "name": name,
@@ -604,6 +605,7 @@ def _sample_manifest(
         "model": model,
         "system_prompt": system_prompt,
         **({"skills": skills} if skills is not None else {}),
+        **({"guards": guards} if guards is not None else {}),
         "tools": [
             {
                 "name": "echo",
@@ -657,6 +659,70 @@ async def test_manifest_endpoint_returns_registered_manifest_with_tools(
     assert row["manifest"]["description"] == "customer support"
     assert [t["name"] for t in row["manifest"]["tools"]] == ["echo"]
     assert row["manifest"]["tools"][0]["input_schema"]["required"] == ["msg"]
+
+
+async def test_manifest_endpoint_round_trips_declared_guards(
+    client: TestClient, session_factory
+) -> None:
+    """A registered manifest's guards survive parse → store → view, so the dashboard
+    can show which guards an agent declares (R-GUARD, guards surfaced for governance)."""
+    from hexgate_api.schemas import AgentManifest
+    from hexgate_api.features.agents.service import register_manifest
+
+    guards = [
+        {
+            "name": "secret_guard",
+            "position": "before",
+            "tool_names": ["send_update"],
+            "observe": False,
+            "kind": "official",
+            "plugin_id": "secret_guard",
+        },
+        {
+            "name": "secret_watch",
+            "position": "after",
+            "tool_names": None,
+            "observe": True,
+            "kind": "official",
+            "plugin_id": "secret_watch",
+        },
+    ]
+    async with session_factory() as session:
+        manifest = AgentManifest.model_validate(
+            _sample_manifest("support_bot", guards=guards)
+        )
+        await register_manifest(
+            session, DEFAULT_PROJECT_ID, manifest, sign=keystore_mod.keystore.sign
+        )
+
+    resp = client.get(f"/v1/projects/{DEFAULT_PROJECT_ID}/agents/manifest")
+    row = next(r for r in resp.json() if r["name"] == "support_bot")
+    got = row["manifest"]["guards"]
+    assert [g["name"] for g in got] == ["secret_guard", "secret_watch"]
+    assert got[0]["position"] == "before"
+    assert got[0]["tool_names"] == ["send_update"]
+    assert got[0]["kind"] == "official"
+    assert got[1]["observe"] is True
+    assert got[1]["tool_names"] is None
+
+
+async def test_manifest_endpoint_guards_absent_when_none_declared(
+    client: TestClient, session_factory
+) -> None:
+    """An agent that declares no guards registers with guards omitted → the view
+    returns null (not []), keeping the content hash stable (exclude_none)."""
+    from hexgate_api.schemas import AgentManifest
+    from hexgate_api.features.agents.service import register_manifest
+
+    async with session_factory() as session:
+        manifest = AgentManifest.model_validate(_sample_manifest("support_bot"))
+        await register_manifest(
+            session, DEFAULT_PROJECT_ID, manifest, sign=keystore_mod.keystore.sign
+        )
+
+    resp = client.get(f"/v1/projects/{DEFAULT_PROJECT_ID}/agents/manifest")
+    row = next(r for r in resp.json() if r["name"] == "support_bot")
+    assert row["manifest"]["guards"] is None
 
 
 async def test_manifest_endpoint_returns_latest_version(

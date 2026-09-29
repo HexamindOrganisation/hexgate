@@ -27,6 +27,7 @@ from hexgate.adapters.langchain.tools import (
 )
 from hexgate.cloud.client import HexgateClient, HexgateConfig
 from hexgate.config.env import resolve_api_key
+from hexgate.guards.attach import resolve_guards
 from hexgate.guards.types import ToolPipeline, build_pipeline
 from hexgate.manifest.langchain import (
     aread_skill_hash,
@@ -101,7 +102,9 @@ def wrap_langchain_agent(
     warn_if_reach_unenforced(
         resolved.engine, framework="LangChain", agent_name=agent_name
     )
-    pipeline = build_pipeline(guards, observer=guard_observer)
+    # Fall back to the guards stamped on the agent (attach_guards), so a stamped agent
+    # served without an explicit guards= runs the guards its manifest declares.
+    pipeline = build_pipeline(resolve_guards(agent, guards), observer=guard_observer)
     resolver = _skill_resolver(agent, skills_middleware, enforcer)
     install_enforcer_on_tools(
         tools, enforcer=enforcer, pipeline=pipeline, resolve_policy_key=resolver

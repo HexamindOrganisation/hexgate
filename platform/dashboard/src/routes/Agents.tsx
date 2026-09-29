@@ -12,6 +12,7 @@ import { Link } from "react-router-dom";
 import {
   api,
   type AgentManifestView,
+  type GuardDefinition,
   type InputSchema,
   type SkillDefinition,
   type SkillResources,
@@ -149,6 +150,10 @@ function ManifestView({ agent }: { agent: AgentManifestView }) {
         tools={agent.manifest?.tools ?? []}
         unregistered={agent.manifest === null}
       />
+      <GuardsSection
+        guards={agent.manifest?.guards ?? null}
+        unregistered={agent.manifest === null}
+      />
       <SkillsSection
         skills={agent.manifest?.skills ?? null}
         unregistered={agent.manifest === null}
@@ -228,6 +233,73 @@ function ToolsSection({
         </ul>
       )}
     </section>
+  );
+}
+
+function GuardsSection({
+  guards,
+  unregistered,
+}: {
+  guards: GuardDefinition[] | null;
+  unregistered: boolean;
+}) {
+  return (
+    <section className="rounded-lg border border-border bg-card">
+      <div className="px-5 py-4 border-b border-border flex items-center gap-2">
+        <ShieldCheck className="size-4 text-muted-foreground" />
+        <span className="text-sm font-medium">Guards</span>
+        {guards !== null && (
+          <Badge variant="outline" className="ml-1 font-mono text-[11px]">
+            {guards.length}
+          </Badge>
+        )}
+      </div>
+      {guards === null || guards.length === 0 ? (
+        <p className="px-5 py-4 text-xs text-muted-foreground">
+          {unregistered
+            ? "Agent not registered yet — run `hexgate register` to populate."
+            : "No guards declared."}
+        </p>
+      ) : (
+        <ul className="divide-y divide-border">
+          {guards.map((g) => (
+            <GuardRow key={g.name} guard={g} />
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+function GuardRow({ guard }: { guard: GuardDefinition }) {
+  return (
+    <li className="px-5 py-4 space-y-2">
+      <div className="flex items-baseline gap-3">
+        <span className="font-mono text-sm text-foreground">{guard.name}</span>
+        <Badge variant="outline" className="font-mono text-[10px] py-0">
+          {guard.position}
+        </Badge>
+        {guard.kind === "official" && (
+          <Badge variant="outline" className="font-mono text-[10px] py-0">
+            plugin
+          </Badge>
+        )}
+        {guard.observe && (
+          <Badge variant="outline" className="font-mono text-[10px] py-0">
+            observe
+          </Badge>
+        )}
+      </div>
+      <p className="text-xs text-muted-foreground">
+        {guard.position === "before"
+          ? "Runs before the tool call"
+          : "Runs on the tool result"}
+        {" · "}
+        {guard.tool_names === null
+          ? "every tool"
+          : `scoped to ${guard.tool_names.join(", ")}`}
+      </p>
+    </li>
   );
 }
 

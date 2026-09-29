@@ -220,6 +220,21 @@ export interface SkillDefinition {
 }
 
 /**
+ * One guard declared on a registered manifest, mirroring GuardDefinition in
+ * platform/api/schemas.py. ``kind`` is a display hint (built-in plugin vs the
+ * developer's own code); a policy governs a guard by its ``name``.
+ */
+export interface GuardDefinition {
+  name: string;
+  position: "before" | "after";
+  /** Tools it is scoped to; null means every tool. */
+  tool_names: string[] | null;
+  observe: boolean;
+  kind: "official" | "custom";
+  plugin_id: string | null;
+}
+
+/**
  * Registered manifest body, mirroring AgentManifest in platform/api/schemas.py.
  */
 export interface AgentManifest {
@@ -231,6 +246,8 @@ export interface AgentManifest {
   tools: ToolDefinition[];
   /** Null for frameworks with no skill concept, and for pre-skills manifests. */
   skills: SkillDefinition[] | null;
+  /** Null when the agent declares no guards, and for pre-guards manifests. */
+  guards: GuardDefinition[] | null;
 }
 
 /**
