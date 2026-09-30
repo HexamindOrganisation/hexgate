@@ -93,6 +93,10 @@ hides its contents, not its existence.
   does not list is denied — even under a permissive `default_policy`. A skill
   library is a directory: dropping a folder into it adds a capability with no code
   change and no review, so a new skill has to be named before it runs.
+  Closed-world covers the skills the adapter knows about: on deepagents that means
+  the skills present when the agent was wrapped. A skill folder added afterwards is
+  not recognised, and a read of it decides as a plain `read_file` — see the
+  [deepagents limitations](/adapters/langchain#limitations).
 - **It is opt-in.** An agent whose policy never mentions skills is not skill-gated
   at all: skill activations are decided as the ordinary tool calls they are
   (`load_skill`, `read_file`, …). The gate engages across the whole agent once any
