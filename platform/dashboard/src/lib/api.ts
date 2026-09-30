@@ -60,7 +60,11 @@ function messageFromDetail(detail: unknown): string | null {
   return null;
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+/** Shared transport: fires the request, applies the global 401 redirect and
+ * turns every other non-2xx into an ``ApiError``. Returns the raw Response so
+ * the JSON callers and the binary ones (the AI Act annex / PDF downloads)
+ * go through one auth and error path. */
+async function send(path: string, init?: RequestInit): Promise<Response> {
   const res = await fetch(path, {
     ...init,
     // ``include`` so the hexgate_session cookie rides on cross-origin
@@ -97,8 +101,20 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       messageFromDetail(detail) ?? `${res.status} ${res.statusText}`;
     throw new ApiError(res.status, detail, message);
   }
+  return res;
+}
+
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const res = await send(path, init);
   if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
+}
+
+/** Binary GET. Same auth and error handling as ``request``; hands the body
+ * back as a Blob for the caller to save to disk. */
+async function requestBlob(path: string): Promise<Blob> {
+  const res = await send(path);
+  return await res.blob();
 }
 
 /** Mirror of platform/api/schemas.py:TokenListItem. Actor emails are resolved
@@ -615,6 +631,126 @@ export interface LlmMessagePage {
  * server's `MAX_PAGE_SIZE` of 100. */
 export const LLM_MESSAGE_PAGE = 50;
 
+// --- AI Act evidence report -------------------------------------------------
+//
+// Wire shapes for the two slices the tab talks to, pinned field-for-field to
+// what the endpoints serve rather than to the spec's prose, which is looser
+// than both:
+//
+//   classification  hexgate_api/schemas.py: AgentClassificationRead/Write
+//   report          hexgate_api/schemas.py: AiActReportCreate/Summary/Read
+//   render          features/ai_act/render/router.py (the `.pdf` route)
+
+/** What the history read asks for. The endpoint clamps to its own
+ * `MAX_HISTORY_LIMIT`, so this is the most it will ever serve in one page. */
+export const AI_ACT_HISTORY_LIMIT = 200;
+
+export type OperatorRole = "provider" | "deployer";
+
+export type RiskTier = "high_risk" | "not_high_risk" | "prohibited" | "minimal";
+
+/**
+ * The operator's own Article 6 / Annex III assertion about one agent, as
+ * `GET …/agents/{name}/classification` returns it.
+ *
+ * An agent with no entry gets 200 rather than 404: the endpoint serves an
+ * empty entry with `recorded: false` and `intended_purpose` prefilled from
+ * the registered manifest description, so the form has something to open on.
+ * Nothing counts as recorded until the operator PUTs it. (An agent the
+ * project does not have is still a 404.)
+ *
+ * `complete` and `missing_fields` are the server's, not re-derived here — the
+ * endpoint computes them so the report and this tab can never disagree about
+ * whether an entry counts. `missing_fields` carries wire field names in a
+ * fixed order (`intended_purpose`, `operator_role`, `risk_tier`,
+ * `annex_iii_point` when the tier is high-risk, `oversight_owner_name`);
+ * `CLASSIFICATION_FIELD_LABELS` in lib/ai-act.ts turns them into display copy.
+ */
+export interface AgentClassificationRead {
+  agent_name: string;
+  intended_purpose: string | null;
+  operator_role: OperatorRole | null;
+  risk_tier: RiskTier | null;
+  /** Annex III reference, e.g. `"5(b)"`. Required only for a high-risk tier. */
+  annex_iii_point: string | null;
+  oversight_owner_name: string | null;
+  oversight_owner_contact: string | null;
+  /** `last_update_date` (ISO `YYYY-MM-DD`) of the compliance checker the
+   * operator relied on when recording the entry. */
+  checker_last_update_date: string | null;
+  /** False until the operator has saved an entry. */
+  recorded: boolean;
+  recorded_by_user_id: string | null;
+  recorded_at: string | null;
+  complete: boolean;
+  missing_fields: string[];
+}
+
+/**
+ * PUT body — the assertion fields only. Provenance (`recorded_by_user_id`,
+ * `recorded_at`) is stamped server-side from the session.
+ *
+ * A full replace, not a patch: an omitted field means the operator cleared
+ * it. The endpoint sets `extra="forbid"`, so an unknown key is a 422 rather
+ * than a silently ignored one, and rejects a body that asserts nothing at all
+ * — `assertsSomething` in lib/ai-act.ts is the client-side half of that rule.
+ */
+export interface AgentClassificationUpdate {
+  intended_purpose: string | null;
+  operator_role: OperatorRole | null;
+  risk_tier: RiskTier | null;
+  annex_iii_point: string | null;
+  oversight_owner_name: string | null;
+  oversight_owner_contact: string | null;
+  checker_last_update_date: string | null;
+}
+
+/**
+ * One generated evidence report, as `GET …/ai-act/reports` lists it (newest
+ * first).
+ *
+ * `annex_json` — the signed bytes — is not carried here: the annex is
+ * downloaded on demand so the history list stays small. What it does carry is
+ * everything a verifier needs to check those bytes once downloaded: the
+ * digest, the byte length they should have, the signing key id and the
+ * base64 signature.
+ */
+export interface AiActReport {
+  id: string;
+  project_id: string;
+  period_start: string;
+  period_end: string;
+  generated_at: string;
+  /** Both nullable: the row's actor FK degrades to NULL when the account is
+   * erased. The annex keeps the attribution inside the signed bytes, so only
+   * this convenience view loses it. */
+  generated_by_user_id: string | null;
+  /** Resolved server-side for display; null when the account is gone. */
+  generated_by_email: string | null;
+  annex_sha256: string;
+  /** Length of the signed annex in bytes. */
+  annex_bytes: number;
+  /** Download name the annex endpoint also sets in Content-Disposition. */
+  annex_filename: string;
+  signing_kid: string;
+  /** Ed25519 signature over the digest, base64. */
+  signature_b64: string;
+}
+
+/** What `POST …/ai-act/report` returns (201): the history row plus the parsed
+ * annex. The parsed object is a convenience for a renderer — the signature
+ * covers the bytes the annex download serves, not a re-serialization of it. */
+export interface AiActReportRead extends AiActReport {
+  annex: unknown;
+}
+
+/** POST body. Both bounds are optional; omitting them asks the server for
+ * the full retention window ending now. */
+export interface AiActReportCreateBody {
+  from?: string;
+  to?: string;
+}
+
 /** Percent-encode each path segment but keep the slashes, so a name like
  * `caps/refunds.yaml` reaches the server's `{name:path}` converter intact. */
 function encodePath(path: string): string {
@@ -802,4 +938,51 @@ export const api = {
       method: "POST",
       body: JSON.stringify(body),
     }),
+
+  // --- AI Act evidence report ---
+
+  // `encodeURIComponent`, not the `encodePath` the policy-file routes use:
+  // that one keeps slashes for the server's `{name:path}` converter, while
+  // this route's `{name}` is a single segment. A name holding a slash or a
+  // `#` would otherwise address a different route, and that agent could
+  // never be classified — a permanent gap in the report.
+  getAgentClassification: (name: string, projectId: string) =>
+    request<AgentClassificationRead>(
+      `/v1/projects/${projectId}/agents/${encodeURIComponent(name)}/classification`,
+    ),
+
+  putAgentClassification: (
+    name: string,
+    body: AgentClassificationUpdate,
+    projectId: string,
+  ) =>
+    request<AgentClassificationRead>(
+      `/v1/projects/${projectId}/agents/${encodeURIComponent(name)}/classification`,
+      { method: "PUT", body: JSON.stringify(body) },
+    ),
+
+  generateAiActReport: (body: AiActReportCreateBody, projectId: string) =>
+    request<AiActReportRead>(`/v1/projects/${projectId}/ai-act/report`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+  /** Newest first. The endpoint's own default is 25 and it answers with a bare
+   * array carrying no total, so a short read is indistinguishable from the
+   * whole history: ask for its maximum (`MAX_HISTORY_LIMIT`, service.py) so
+   * the list is complete for any project that has not passed it, and let the
+   * caller say so when a full page comes back. */
+  listAiActReports: (projectId: string) =>
+    request<AiActReport[]>(
+      `/v1/projects/${projectId}/ai-act/reports${qs({ limit: AI_ACT_HISTORY_LIMIT })}`,
+    ),
+
+  /** The signed annex — the canonical artifact the signature covers. */
+  downloadAiActAnnex: (reportId: string, projectId: string) =>
+    requestBlob(`/v1/projects/${projectId}/ai-act/reports/${reportId}/annex`),
+
+  /** The PDF rendering of the same annex. Renders from the stored annex, so a
+   * render failure is a 502 and leaves the signed bytes untouched. */
+  downloadAiActReportPdf: (reportId: string, projectId: string) =>
+    requestBlob(`/v1/projects/${projectId}/ai-act/reports/${reportId}.pdf`),
 };

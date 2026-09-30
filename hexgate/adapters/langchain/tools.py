@@ -14,15 +14,15 @@ from __future__ import annotations
 
 import functools
 import json
-from collections.abc import Awaitable, Callable
-from typing import Any
+from collections.abc import Awaitable, Callable, Mapping
+from typing import Any, Protocol
 
 from langchain_core.tools import BaseTool
 from langchain_core.tools.structured import StructuredTool
 from pydantic import BaseModel, ConfigDict, Field
 
 from hexgate.approvals import ApprovalHandler
-from hexgate.guards.runner import run_guarded_async, run_guarded_sync
+from hexgate.guards.runner import PolicyOverride, run_guarded_async, run_guarded_sync
 from hexgate.guards.types import ToolPipeline
 from hexgate.security.decision import Decision, DecisionOutcome
 from hexgate.security.enforcer import PolicyEnforcer
@@ -377,9 +377,51 @@ class SubagentTool(BaseTool):
 # In-place installer for retrofitting existing CompiledStateGraph tools.
 # ---------------------------------------------------------------------------
 
+
+class PolicyKeyResolver(Protocol):
+    """Redirects a tool call's decision to another policy key, sync or async.
+
+    Called with the args left after the pre-guards, so the decision covers the
+    call that is actually invoked. ``None`` keeps the tool-name decision.
+    """
+
+    def resolve(
+        self, tool_name: str, args: Mapping[str, Any]
+    ) -> PolicyOverride | None: ...
+
+    async def aresolve(
+        self, tool_name: str, args: Mapping[str, Any]
+    ) -> PolicyOverride | None: ...
+
+
 _ORIGINAL_FUNC_ATTR = "_hexgate_original_func"
 _ORIGINAL_COROUTINE_ATTR = "_hexgate_original_coroutine"
 _INSTALLED_ATTR = "_hexgate_enforcer_installed"
+
+
+def _model_arg_names(tool: BaseTool) -> frozenset[str] | None:
+    """Arguments the model supplies, or ``None`` when the schema cannot say.
+
+    Excludes runtime-injected ones (``ToolRuntime``, ``InjectedState``,
+    ``InjectedToolCallId``): those are framework objects, not a decision input,
+    and some cannot be deep-copied into the audit snapshot.
+    """
+    schema = tool.tool_call_schema
+    if isinstance(schema, dict):
+        return frozenset(schema.get("properties", {}))
+    fields = getattr(schema, "model_fields", None)
+    return frozenset(fields) if fields is not None else None
+
+
+def _split_injected(
+    kwargs: dict[str, Any], model_args: frozenset[str] | None
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Split call kwargs into (model-supplied, runtime-injected)."""
+    if model_args is None:
+        return kwargs, {}
+    model_kwargs = {k: v for k, v in kwargs.items() if k in model_args}
+    injected = {k: v for k, v in kwargs.items() if k not in model_args}
+    return model_kwargs, injected
 
 
 def install_enforcer_on_tool(
@@ -387,6 +429,7 @@ def install_enforcer_on_tool(
     *,
     enforcer: PolicyEnforcer,
     pipeline: ToolPipeline | None = None,
+    resolve_policy_key: PolicyKeyResolver | None = None,
 ) -> BaseTool:
     """Install :class:`PolicyEnforcer` gating on ``tool`` in place.
 
@@ -396,9 +439,13 @@ def install_enforcer_on_tool(
     re-install restores captured originals first so gates don't stack.
     Non-allow outcomes render as the structured error dict; approval
     flows belong on the host side, not on this in-place installer, so the
-    runner runs with ``approval_handler=None``.
+    runner runs with ``approval_handler=None``. Guards and policy see only
+    model-supplied arguments; injected ones are passed straight through.
+    ``resolve_policy_key`` may redirect a call's decision to another key (see
+    :class:`PolicyOverride`); without it every call decides under the tool name.
     """
     name = tool.name
+    model_args = _model_arg_names(tool)
     original_func: Callable[..., Any] | None = getattr(tool, _ORIGINAL_FUNC_ATTR, None)
     if original_func is None:
         original_func = getattr(tool, "func", None)
@@ -420,14 +467,20 @@ def install_enforcer_on_tool(
 
         @functools.wraps(captured_func)
         def guarded_func(*args: Any, **kwargs: Any) -> Any:
+            model_kwargs, injected = _split_injected(kwargs, model_args)
             return run_guarded_sync(
                 name,
-                kwargs,
+                model_kwargs,
                 enforcer=enforcer,
                 pipeline=pipeline,
                 approval_handler=None,
-                invoke=lambda final: captured_func(*args, **final),
+                invoke=lambda final: captured_func(*args, **{**final, **injected}),
                 render_error=_langchain_error,
+                resolve_policy=(
+                    functools.partial(resolve_policy_key.resolve, name)
+                    if resolve_policy_key
+                    else None
+                ),
             )
 
         setattr(tool, _ORIGINAL_FUNC_ATTR, captured_func)
@@ -438,14 +491,20 @@ def install_enforcer_on_tool(
 
         @functools.wraps(captured_coroutine)
         async def guarded_coroutine(*args: Any, **kwargs: Any) -> Any:
+            model_kwargs, injected = _split_injected(kwargs, model_args)
             return await run_guarded_async(
                 name,
-                kwargs,
+                model_kwargs,
                 enforcer=enforcer,
                 pipeline=pipeline,
                 approval_handler=None,
-                invoke=lambda final: captured_coroutine(*args, **final),
+                invoke=lambda final: captured_coroutine(*args, **{**final, **injected}),
                 render_error=_langchain_error,
+                resolve_policy=(
+                    functools.partial(resolve_policy_key.aresolve, name)
+                    if resolve_policy_key
+                    else None
+                ),
             )
 
         setattr(tool, _ORIGINAL_COROUTINE_ATTR, captured_coroutine)
@@ -461,8 +520,14 @@ def install_enforcer_on_tools(
     *,
     enforcer: PolicyEnforcer,
     pipeline: ToolPipeline | None = None,
+    resolve_policy_key: PolicyKeyResolver | None = None,
 ) -> list[BaseTool]:
     """Install enforcement on every StructuredTool-style tool in place."""
     for t in tools:
-        install_enforcer_on_tool(t, enforcer=enforcer, pipeline=pipeline)
+        install_enforcer_on_tool(
+            t,
+            enforcer=enforcer,
+            pipeline=pipeline,
+            resolve_policy_key=resolve_policy_key,
+        )
     return tools

@@ -4,6 +4,7 @@ import { AppShell } from "@/components/AppShell";
 import { ProtectedRoute } from "@/components/ProtectedRoute";
 import { AcceptInvitationPage } from "@/routes/AcceptInvitation";
 import { AgentsPage } from "@/routes/Agents";
+import { AiActPage } from "@/routes/AiAct";
 import { AuditPage } from "@/routes/Audit";
 import { BansPage } from "@/routes/Bans";
 import { ForgotPasswordPage } from "@/routes/ForgotPassword";
@@ -63,6 +64,7 @@ export default function App() {
           <Route path="playground" element={<PlaygroundPage />} />
           <Route path="audit" element={<AuditPage />} />
           <Route path="bans" element={<BansPage />} />
+          <Route path="ai-act" element={<AiActPage />} />
           <Route path="usage" element={<UsagePage />} />
           <Route path="tokens" element={<TokensPage />} />
           <Route path="orgs" element={<OrgsPage />} />
