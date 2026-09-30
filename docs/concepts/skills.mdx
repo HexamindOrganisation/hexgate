@@ -113,8 +113,10 @@ Hexgate does not do.
 
 ## Where skills come from
 
-At registration, the adapter records each skill in the agent's manifest: name,
-description, the files it ships, and whether it carries scripts. The platform
+At registration, the adapter records each skill in the agent's manifest: its
+name, description and a hash of its `SKILL.md` body. On Google ADK it also
+records the reference, asset and script files the skill ships; deepagents
+discovery reads frontmatter only, so a deepagents skill shows no files. The platform
 shows them on the agent's page, and the first registration generates a
 [starter `skills:` block](/policy/yaml-shape#the-generated-starter-policy) from
 them.
