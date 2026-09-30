@@ -580,6 +580,15 @@ demo-notebook: ## Run the bundled BYOK demo locally (one process). Open http://l
 	  HEXGATE_DEMO=1 HEXGATE_COOKIE_SECURE=0 \
 	  python deploy/boot.py
 
+.PHONY: demo-support
+demo-support: ## Run the compose support-bot showcase — platform + dashboard + live agent in one process. Open http://localhost:2718
+	rm -f platform/api/demo.db platform/api/demo.db-wal platform/api/demo.db-shm
+	PATH="$(CURDIR)/platform/api/.venv/bin:$$PATH" \
+	  DATABASE_URL="sqlite+aiosqlite:///$(CURDIR)/platform/api/demo.db" \
+	  HEXGATE_DEMO=1 HEXGATE_COOKIE_SECURE=0 HEXGATE_SEED_AGENTS=skip \
+	  HEXGATE_NOTEBOOK=deploy/compose_support_demo.py \
+	  python deploy/boot.py
+
 .PHONY: demo-smoke
 demo-smoke: ## Smoke-test the bundled demo with a mock LLM (no real key)
 	cd platform/api && uv run python "$(CURDIR)/deploy/smoke_test.py"

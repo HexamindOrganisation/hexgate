@@ -76,12 +76,55 @@ async def _seed_gdocs_agent() -> None:
     )
 
 
+async def _seed_compose_policy(project_id: str) -> None:
+    """Idempotently seed the compose support-bot showcase into ``project_id``.
+
+    Demo-only (see :func:`_seed_gdocs_agent` for the rationale) — the showcase's
+    ``policy.yaml`` + ``caps/**`` files gate the served ``support_bot`` /
+    ``billing_bot``. Opens its OWN session, then recompiles the project so any
+    already-registered agent picks up the classic→compose flip; on the fresh demo
+    DB the project has no agents yet (they register at serve and compile from
+    compose then), so the recompile is a no-op there.
+    """
+    from hexgate_api.core.db import async_session_factory
+    from hexgate_api.core.keystore import keystore
+    from hexgate_api.features.agents.service import recompile_project
+    from hexgate_api.features.policy_modules.seed_data import (
+        ensure_seeded_compose_policy,
+    )
+
+    async with async_session_factory() as session:
+        await ensure_seeded_compose_policy(session, project_id)
+        # recompile_project returns None when the project is modular but its policy
+        # won't compile (e.g. opa missing) — live bundles left stale. For the demo
+        # that means the agents boot UNGOVERNED by the showcase, so fail loud rather
+        # than print success. (0 = nothing to compile yet, the fresh-DB case: fine.)
+        if await recompile_project(session, project_id, keystore.sign) is None:
+            raise RuntimeError(
+                f"compose showcase policy for {project_id} did not compile "
+                "(is opa on PATH?) — refusing to boot the demo ungoverned"
+            )
+    print(
+        f"[provision] seeded compose support-bot showcase into {project_id}",
+        file=sys.stderr,
+    )
+
+
 async def _mint() -> str:
+    import os
+
     from hexgate_api.constants import DEFAULT_PROJECT_ID
     from hexgate_api.core.db import async_session_factory, init_db
     from hexgate_api.core.keystore import keystore  # same singleton the API uses
     from hexgate_api.features.tokens.service import mint_api_key
     from hexgate_api.seeds.defaults import ensure_default_seed
+
+    # Which project the serve token (and so any agent served against it) is
+    # scoped to. Defaults to the default project — where the support-bot demo seeds
+    # its compose showcase policy (seeds/defaults.py), so a served support_bot is
+    # gated by it without any extra wiring. HEXGATE_SERVE_PROJECT is an optional
+    # override for serving against a different project.
+    project_id = os.environ.get("HEXGATE_SERVE_PROJECT", DEFAULT_PROJECT_ID)
 
     await init_db()
     keystore.ensure_keypair()
@@ -89,7 +132,7 @@ async def _mint() -> str:
         await ensure_default_seed(session)
         _, full_token = await mint_api_key(
             session,
-            DEFAULT_PROJECT_ID,
+            project_id,
             name="demo-serve",
             # Same scopes the dashboard's mint UI issues by default — these are
             # what the per-user attenuation flow (`user_attenuation`) needs.
@@ -98,13 +141,24 @@ async def _mint() -> str:
             signing_key_bytes=keystore._private_key_bytes(),
         )
 
-    # Best-effort, in its OWN session (see _seed_gdocs_agent): the gates demo's
-    # docs_agent is enrichment for the dashboard/hexkit half. A seed error must
-    # NOT take down the token mint above (the core BYOK notebook path).
-    try:
-        await _seed_gdocs_agent()
-    except Exception as exc:  # noqa: BLE001
-        print(f"[provision] docs_agent seed skipped: {exc}", file=sys.stderr)
+    # Demo seeding, routed by notebook. The compose support-bot demo seeds its
+    # showcase policy into the serve project (and, with HEXGATE_SEED_AGENTS=skip,
+    # that project holds only the showcase agents); every other demo gets the gates
+    # demo's docs_agent.
+    notebook = os.environ.get("HEXGATE_NOTEBOOK", "")
+    if notebook.endswith("compose_support_demo.py"):
+        # The showcase policy IS this demo — fail loud rather than boot the agents
+        # ungoverned by it (in its OWN session so a partial write can't poison the
+        # mint session above, but NOT best-effort like docs_agent below).
+        await _seed_compose_policy(project_id)
+    else:
+        # Best-effort, in its OWN session (see _seed_gdocs_agent): the gates demo's
+        # docs_agent is peripheral enrichment for the dashboard/hexkit half — a seed
+        # error must NOT take down the token mint above (the core BYOK path).
+        try:
+            await _seed_gdocs_agent()
+        except Exception as exc:  # noqa: BLE001
+            print(f"[provision] docs_agent seed skipped: {exc}", file=sys.stderr)
     return full_token
 
 
