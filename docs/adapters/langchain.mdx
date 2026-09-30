@@ -158,7 +158,7 @@ If the graph's middleware cannot be found, pass it explicitly with
 deepagents has no "load skill" action. The system prompt lists each skill's
 `SKILL.md` path, and the model activates one by calling `read_file` on it. When
 the agent is wrapped, Hexgate indexes every known skill path; once the policy
-declares a `skills:` block, a `read_file` that matches is decided under the skill's
+lists a skill under `skills:`, a `read_file` that matches is decided under the skill's
 key instead of `read_file`'s:
 
 | Read | Policy key | Level |

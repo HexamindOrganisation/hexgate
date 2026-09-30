@@ -67,8 +67,10 @@ roles:
   skill library is a *directory* — dropping a folder into it adds a capability with
   no code change and no review — so `default_policy: { mode: allow }` never grants
   a skill.
-- **The engagement gate.** Closed-world applies only once a policy declares a
-  `skills:` block in some role. An agent whose policy never mentions skills is not
+- **The engagement gate.** Closed-world applies only once some role (after
+  `inherits:`) lists at least one skill. An empty `skills: {}` does not engage it —
+  to mean "no skills for this role", list the skills and set them to `mode: deny`.
+  An agent whose policy never mentions skills is not
   skill-gated: activations are decided as the ordinary tool calls they are
   (`load_skill`, `read_file`, …) under `tools:` and `default_policy`. That is why
   adding the feature changed nothing for existing agents — and the first place to

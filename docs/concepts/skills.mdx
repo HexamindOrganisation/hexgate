@@ -101,7 +101,7 @@ hides its contents, not its existence.
 - **It is opt-in.** An agent whose policy never mentions skills is not skill-gated
   at all: skill activations are decided as the ordinary tool calls they are
   (`load_skill`, `read_file`, …). The gate engages across the whole agent once any
-  role declares a `skills:` block, the same way
+  role lists at least one skill (an empty `skills: {}` does not count), the same way
   [agent-level enforcement](/concepts/agent-level-enforcement#closed-world-and-opt-in)
   engages.
 
