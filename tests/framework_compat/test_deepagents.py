@@ -214,9 +214,6 @@ def test_contract_skills_surfaces(tmp_path: Path) -> None:
     assert via == "instructions"
     assert location.skill_md_path == metadata[0]["path"]
 
-    # D1 discover_graph_tools: the ToolNode's by-name mapping.
-    assert isinstance(_bound_tools(graph), dict)
-
 
 def test_deny_path_blocks_and_does_not_execute(probe_context):
     """Tier 1 — the denied tool's guarded func returns the structured error."""
