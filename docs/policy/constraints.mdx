@@ -403,7 +403,18 @@ skills:
     constraints: ["args.content_hash == consts.refunder_approved"]
 ```
 
-- **The value carries a `sha256:` prefix.** A bare hex digest never matches.
+- **The value carries a `sha256:` prefix.** A bare hex digest never matches —
+  and the digest Hexgate records is bare. Take the skill's `content_hash` from the
+  agent's registered manifest and write it as `"sha256:<content_hash>"`, or compute
+  it from the file with the same helpers the adapters use:
+
+  ```python
+  from pathlib import Path
+  from hexgate.manifest.skill_hash import skill_content_hash, skill_md_body
+
+  body = skill_md_body(Path("skills/refunder/SKILL.md").read_text())
+  print(f"sha256:{skill_content_hash(body)}")
+  ```
 - **It fails closed.** If the hash cannot be computed, `content_hash` is null,
   the constraint does not match, and the pinned skill denies rather than passes.
 - **It closes drift, not prompt injection.** A pinned skill whose approved
