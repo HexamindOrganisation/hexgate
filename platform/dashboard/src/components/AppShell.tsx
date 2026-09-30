@@ -14,6 +14,7 @@ import {
   Moon,
   Network,
   PanelLeft,
+  Scale,
   ScrollText,
   Settings2,
   Files,
@@ -113,6 +114,8 @@ const workspaceLinks = [
   { to: "/audit", label: "Audit", icon: ScrollText },
   { to: "/usage", label: "Usage", icon: BarChart3 },
   { to: "/bans", label: "Bans", icon: Ban },
+  // One word, like every other entry here.
+  { to: "/ai-act", label: "Governance", icon: Scale },
   { to: "/tokens", label: "API keys", icon: KeyRound },
 ];
 

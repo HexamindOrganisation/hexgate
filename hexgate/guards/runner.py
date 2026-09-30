@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Awaitable, Callable, Mapping
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from inspect import isawaitable
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any
@@ -53,6 +53,24 @@ if TYPE_CHECKING:
 _log = logging.getLogger(__name__)
 
 RenderError = Callable[[Decision], Any]
+
+
+@dataclass(frozen=True)
+class PolicyOverride:
+    """Decide a call under ``key`` with ``args`` instead of its tool name and args.
+
+    ``render_error`` renders the policy denial only; a guard ``Halt`` still renders
+    through the ordinary ``render_error``.
+    """
+
+    key: str
+    args: dict[str, Any]
+    render_error: RenderError | None = None
+
+
+# Resolved from the post-pre-guard args, so the decision covers what is invoked.
+PolicyResolver = Callable[[Mapping[str, Any]], PolicyOverride | None]
+AsyncPolicyResolver = Callable[[Mapping[str, Any]], Awaitable[PolicyOverride | None]]
 
 # Sentinel a post-guard runner returns when nothing halted, distinct from any
 # value ``render_error`` might produce (a dict or str). Identity-compared only.
@@ -374,6 +392,7 @@ async def run_guarded_async(
     policy_key: str | None = None,
     policy_args: Mapping[str, Any] | None = None,
     render_policy_error: RenderError | None = None,
+    resolve_policy: AsyncPolicyResolver | None = None,
 ) -> Any:
     """Run one guarded tool call, async. See module docstring for the order.
 
@@ -388,7 +407,11 @@ async def run_guarded_async(
     ``render_policy_error`` renders *only* a policy denial; ``render_error`` still
     renders guard halts. The reach adapters pass reach-specific wording here so a
     guard's ``Halt`` on the same call is not mislabeled as a reach denial; when it
-    is ``None`` the policy denial falls back to ``render_error``."""
+    is ``None`` the policy denial falls back to ``render_error``.
+
+    ``resolve_policy`` supplies all three from the args *after* the pre-guards, for
+    an override that depends on what the call will actually do (a deepagents
+    ``read_file`` of a skill file); a ``None`` result keeps the static overrides."""
     context = get_current_context() if _has_guards(pipeline) else None
     call = _new_call(tool_name, args, enforcer, context)
     mods: list[Modification] = []
@@ -427,6 +450,10 @@ async def run_guarded_async(
         # policy's are independent gates: if both fire on one call, the handler
         # is prompted for each. We do not merge them, because a guard's approval
         # must not silently satisfy the policy's separate requirement.
+        override = await resolve_policy(call.args) if resolve_policy else None
+        if override is not None:
+            policy_key, policy_args = override.key, override.args
+            render_policy_error = override.render_error
         decision = enforcer.decide(
             policy_key or call.tool_name,
             call.args if policy_args is None else policy_args,
@@ -572,9 +599,11 @@ def run_guarded_sync(
     policy_key: str | None = None,
     policy_args: Mapping[str, Any] | None = None,
     render_policy_error: RenderError | None = None,
+    resolve_policy: PolicyResolver | None = None,
 ) -> Any:
     """Run one guarded tool call, sync. Mirrors :func:`run_guarded_async`
-    (including ``policy_key`` / ``policy_args`` / ``render_policy_error``)."""
+    (including ``policy_key`` / ``policy_args`` / ``render_policy_error`` /
+    ``resolve_policy``)."""
     context = get_current_context() if _has_guards(pipeline) else None
     call = _new_call(tool_name, args, enforcer, context)
     mods: list[Modification] = []
@@ -607,6 +636,10 @@ def run_guarded_sync(
                 call = _apply_pre(call, guard, outcome, mods)
 
     if enforcer is not None:
+        override = resolve_policy(call.args) if resolve_policy else None
+        if override is not None:
+            policy_key, policy_args = override.key, override.args
+            render_policy_error = override.render_error
         decision = enforcer.decide(
             policy_key or call.tool_name,
             call.args if policy_args is None else policy_args,

@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+import asyncio
+import importlib
+import logging
+from collections.abc import Callable, Iterator
+from dataclasses import dataclass
 from typing import Any
 
 from langchain_core.tools import BaseTool
@@ -10,8 +15,26 @@ from hexgate.manifest.models import (
     AgentManifest,
     InputProperty,
     InputSchema,
+    SkillDefinition,
     ToolDefinition,
 )
+from hexgate.manifest.skill_hash import skill_content_hash, skill_md_body
+
+_log = logging.getLogger(__name__)
+
+_TOOLS_NODE = "tools"
+
+# deepagents SkillsMiddleware internals — deepagents is not a dependency, so the
+# middleware is read duck-typed and every access is guarded.
+_BACKEND_ATTR = "_backend"
+_SOURCES_ATTR = "sources"
+_SOURCE_LABELS_ATTR = "source_labels"
+_DOWNLOAD_FILES_ATTR = "download_files"
+_ADOWNLOAD_FILES_ATTR = "adownload_files"
+_LS_ATTR = "ls"
+_SKILL_MD_ENCODING = "utf-8"
+_SKILLS_MODULE = "deepagents.middleware.skills"
+_LIST_SKILLS_FN = "_list_skills"
 
 
 def create_langchain_manifest(
@@ -21,12 +44,16 @@ def create_langchain_manifest(
     description: str | None = None,
     model: str | None = None,
     system_prompt: str | None = None,
+    skills_middleware: object | None = None,
 ) -> AgentManifest:
     """Build an AgentManifest from a LangChain/LangGraph agent.
 
-    Tools — and, for the same reason, ``model`` and ``system_prompt`` — are
-    passed explicitly because compiled LangGraph graphs do not reliably expose
-    these fields after compilation.
+    ``model`` and ``system_prompt`` are passed explicitly because compiled
+    LangGraph graphs do not reliably expose them after compilation. ``tools`` is
+    unioned with the graph's bound tools, so middleware-injected tools are
+    recorded too. ``skills_middleware`` is a deepagents ``SkillsMiddleware``
+    whose skills are recorded, overriding the ones found in the graph; typed
+    ``object`` so deepagents stays optional.
     """
     agent_name = getattr(graph, "name", None)
     if agent_name is None:
@@ -34,13 +61,288 @@ def create_langchain_manifest(
             "LangChain graph has no name — set a name on the graph so the "
             "manifest can identify it on the platform."
         )
+    all_tools = _union_tools(tools, discover_graph_tools(graph))
+    skills = _collect_deepagents_skills(
+        resolve_skills_middlewares(graph, skills_middleware)
+    )
     return AgentManifest(
         name=agent_name,
         description=description,
         framework=AgentFramework.LANGCHAIN,
         model=model,
         system_prompt=system_prompt,
-        tools=[_to_tool_definition(t) for t in tools],
+        tools=[_to_tool_definition(t) for t in all_tools],
+        # None, not [], when there are none: content_hash uses exclude_none.
+        skills=skills or None,
+    )
+
+
+def discover_graph_tools(graph: CompiledStateGraph) -> list[BaseTool]:
+    """Tools bound in a compiled graph's ToolNode, including middleware-injected ones.
+
+    Reads LangGraph internals with no stability promise, so every hop is guarded
+    and a graph without a recognisable tools node yields ``[]``. Top level only:
+    tools bound inside a sub-agent graph reached through a tool (deepagents'
+    ``task``) are neither discovered nor gated here.
+    """
+    nodes = getattr(graph, "nodes", None)
+    node = nodes.get(_TOOLS_NODE) if isinstance(nodes, dict) else None
+    bound = getattr(node, "bound", None)
+    by_name = getattr(bound, "tools_by_name", None)
+    return list(by_name.values()) if isinstance(by_name, dict) else []
+
+
+def _union_tools(
+    explicit: list[BaseTool], discovered: list[BaseTool]
+) -> list[BaseTool]:
+    """Caller's tools first, then discovered tools not already named.
+
+    Order is deterministic because the manifest's tool list feeds its content hash.
+    """
+    merged = list(explicit)
+    seen = {tool.name for tool in merged}
+    for tool in discovered:
+        if tool.name not in seen:
+            merged.append(tool)
+            seen.add(tool.name)
+    return merged
+
+
+@dataclass(frozen=True)
+class SkillLocation:
+    """One SKILL.md a deepagents agent can activate, and the backend serving it."""
+
+    name: str
+    skill_md_path: str
+    backend: object
+
+
+def resolve_skills_middlewares(
+    graph: CompiledStateGraph, skills_middleware: object | None
+) -> list[object]:
+    """The explicit middleware when given, else those compiled into ``graph``."""
+    if skills_middleware is not None:
+        return [skills_middleware]
+    return discover_skills_middlewares(graph)
+
+
+def locate_skills(middlewares: list[object]) -> list[SkillLocation]:
+    """Every SKILL.md the middlewares list, including ones a later source shadows.
+
+    Shadowed paths are kept: a read of one is still a read of that skill's
+    instructions, so it must not fall back to plain file gating.
+    """
+    return [
+        SkillLocation(meta["name"], meta["path"], backend)
+        for meta, _, backend in _iter_listed_skills(middlewares)
+    ]
+
+
+def read_skill_hash(location: SkillLocation) -> str | None:
+    """Current body hash of one SKILL.md, or None if it cannot be read."""
+    path = location.skill_md_path
+    return _content_hashes(location.backend, [path]).get(path)
+
+
+async def aread_skill_hash(location: SkillLocation) -> str | None:
+    """:func:`read_skill_hash` without blocking the event loop.
+
+    Awaits the backend's ``adownload_files``; a backend without one is read on a
+    worker thread.
+    """
+    adownload = getattr(location.backend, _ADOWNLOAD_FILES_ATTR, None)
+    if adownload is None:
+        return await asyncio.to_thread(read_skill_hash, location)
+    path = location.skill_md_path
+    try:
+        responses = await adownload([path])
+    except Exception:  # noqa: BLE001
+        _log.warning("could not read skill body; hash omitted", exc_info=True)
+        return None
+    return _hash_responses(responses).get(path)
+
+
+def discover_skills_middlewares(graph: CompiledStateGraph) -> list[object]:
+    """deepagents SkillsMiddleware instances compiled into a graph, in node order.
+
+    ``create_deep_agent(skills=...)`` builds its middleware internally and returns
+    no handle, so the instance the agent actually runs is recovered from the node
+    its ``before_agent`` hook compiles to. Top level only, like tool discovery.
+    """
+    nodes = getattr(graph, "nodes", None)
+    if not isinstance(nodes, dict):
+        return []
+    found: dict[int, object] = {}
+    for node in nodes.values():
+        hook = getattr(getattr(node, "bound", None), "func", None)
+        owner = getattr(hook, "__self__", None)
+        if _is_skills_middleware(owner):
+            found.setdefault(id(owner), owner)
+    return list(found.values())
+
+
+def _is_skills_middleware(candidate: object) -> bool:
+    return hasattr(candidate, _BACKEND_ATTR) and hasattr(candidate, _SOURCES_ATTR)
+
+
+def _collect_deepagents_skills(middlewares: list[object]) -> list[SkillDefinition]:
+    """Skills the given SkillsMiddlewares expose, mapped onto the manifest.
+
+    Later sources win on a name collision, matching deepagents' own layering.
+    """
+    by_name = {entry[0]["name"]: entry for entry in _iter_listed_skills(middlewares)}
+    hashes = _content_hashes_by_backend(list(by_name.values()))
+    return [
+        _to_skill_definition(meta, label, hashes.get(meta["path"]))
+        for meta, label, _ in by_name.values()
+    ]
+
+
+def _iter_listed_skills(
+    middlewares: list[object],
+) -> Iterator[tuple[dict[str, Any], str, object]]:
+    """``(metadata, source label, backend)`` per listed skill, in source order."""
+    if not middlewares:
+        return
+    list_skills = _resolve_list_skills()
+    if list_skills is None:
+        return
+    for middleware in middlewares:
+        backend, sources = _skill_sources(middleware)
+        if backend is None:
+            continue
+        for path, label in sources:
+            for meta in _list_skill_metadata(list_skills, backend, path):
+                yield meta, label, backend
+
+
+def _resolve_list_skills() -> Callable[[object, str], Any] | None:
+    """deepagents' own skill parser, or None (with one warning) if unavailable.
+
+    Delegating to it keeps name validation and frontmatter semantics identical to
+    what the agent itself loads.
+    """
+    try:
+        return getattr(importlib.import_module(_SKILLS_MODULE), _LIST_SKILLS_FN)
+    except Exception:  # noqa: BLE001 — deepagents absent or restructured
+        _log.warning("deepagents skill listing unavailable; no skills recorded")
+        return None
+
+
+def _skill_sources(middleware: object) -> tuple[object | None, list[tuple[str, str]]]:
+    """``(backend, [(path, label), …])`` from a SkillsMiddleware, or ``(None, [])``.
+
+    Any missing internal degrades to "no skills discovered", never an exception:
+    a manifest without skills is recoverable, a register that cannot run is not.
+    A path without an aligned ``source_labels`` entry is its own label.
+    """
+    backend = getattr(middleware, _BACKEND_ATTR, None)
+    paths = getattr(middleware, _SOURCES_ATTR, None)
+    if backend is None or not isinstance(paths, (list, tuple)):
+        _log.warning(
+            "skills_middleware exposes no backend or sources; no skills recorded"
+        )
+        return None, []
+    if _is_backend_factory(backend):
+        _log.warning(
+            "deepagents skills backend is a per-run factory; skills cannot be "
+            "enumerated at registration and none are recorded"
+        )
+        return None, []
+    labels = getattr(middleware, _SOURCE_LABELS_ATTR, None)
+    if not isinstance(labels, (list, tuple)) or len(labels) != len(paths):
+        labels = paths
+    return backend, [
+        (path, str(label))
+        for path, label in zip(paths, labels, strict=True)
+        if isinstance(path, str)
+    ]
+
+
+def _is_backend_factory(backend: object) -> bool:
+    """Older deepagents accept ``backend=lambda runtime: ...``, resolved per run."""
+    return callable(backend) and not hasattr(backend, _LS_ATTR)
+
+
+def _list_skill_metadata(
+    list_skills: Callable[[object, str], Any], backend: object, source_path: str
+) -> list[dict[str, Any]]:
+    """One source's skill listing, or [] with a warning if it cannot be read."""
+    try:
+        return list(list_skills(backend, source_path))
+    except Exception:  # noqa: BLE001
+        _log.warning(
+            "could not list deepagents skills under %r; none recorded from it. "
+            "A backend that reads run state (such as StateBackend) cannot be "
+            "enumerated at registration; a filesystem backend can",
+            source_path,
+            exc_info=True,
+        )
+        return []
+
+
+def _content_hashes_by_backend(
+    entries: list[tuple[dict[str, Any], str, object]],
+) -> dict[str, str]:
+    """Hashes for every listed skill, one batched download per distinct backend."""
+    paths_by_backend: dict[int, tuple[object, list[str]]] = {}
+    for meta, _, backend in entries:
+        paths_by_backend.setdefault(id(backend), (backend, []))[1].append(meta["path"])
+    hashes: dict[str, str] = {}
+    for backend, paths in paths_by_backend.values():
+        hashes.update(_content_hashes(backend, paths))
+    return hashes
+
+
+def _content_hashes(backend: object, paths: list[str]) -> dict[str, str]:
+    """Body hash of each SKILL.md, keyed by path, in one batched download.
+
+    Hashes the instructions after the frontmatter, as the ADK adapter does, so a
+    skill hashes alike on both. A body that cannot be read or decoded is omitted
+    rather than hashed as empty.
+    """
+    download = getattr(backend, _DOWNLOAD_FILES_ATTR, None)
+    if download is None or not paths:
+        return {}
+    try:
+        responses = download(paths)
+    except Exception:  # noqa: BLE001
+        _log.warning("could not read skill bodies; hashes omitted", exc_info=True)
+        return {}
+    return _hash_responses(responses)
+
+
+def _hash_responses(responses: list[Any]) -> dict[str, str]:
+    """Body hash per downloaded SKILL.md; unreadable or undecodable ones omitted."""
+    hashes: dict[str, str] = {}
+    for response in responses:
+        content = getattr(response, "content", None)
+        if getattr(response, "error", None) or not isinstance(content, bytes):
+            continue
+        try:
+            text = content.decode(_SKILL_MD_ENCODING)
+        except UnicodeDecodeError:
+            continue
+        hashes[response.path] = skill_content_hash(skill_md_body(text))
+    return hashes
+
+
+def _to_skill_definition(
+    meta: dict[str, Any], label: str, content_hash: str | None
+) -> SkillDefinition:
+    """Map one deepagents SkillMetadata onto the manifest shape.
+
+    ``resources`` is None because deepagents discovery is frontmatter-only —
+    distinct from ``SkillResources()``, which would claim the skill ships none.
+    ``allowed_tools`` arrives already split by deepagents.
+    """
+    return SkillDefinition(
+        name=meta["name"],
+        description=meta.get("description") or "",
+        source=label,
+        resources=None,
+        allowed_tools=list(meta.get("allowed_tools") or []),
+        content_hash=content_hash,
     )
 
 
@@ -65,12 +367,17 @@ def _to_tool_definition(tool: BaseTool) -> ToolDefinition:
 
 
 def _tool_schema(tool: BaseTool) -> dict[str, Any]:
-    """Return a JSON schema describing a LangChain tool's arguments."""
-    args_schema = tool.args_schema
-    if args_schema is None:
+    """Return a JSON schema of the arguments the model supplies.
+
+    Reads ``tool_call_schema`` rather than ``args_schema`` so runtime-injected
+    parameters are left out: they are not inputs, and a ``ToolRuntime`` field
+    cannot be rendered as JSON schema at all.
+    """
+    if tool.args_schema is None:
         return {}
-    if isinstance(args_schema, dict):
-        return args_schema
-    if hasattr(args_schema, "model_json_schema"):
-        return args_schema.model_json_schema()
+    schema = tool.tool_call_schema
+    if isinstance(schema, dict):
+        return schema
+    if hasattr(schema, "model_json_schema"):
+        return schema.model_json_schema()
     return {}

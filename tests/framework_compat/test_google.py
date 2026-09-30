@@ -329,6 +329,14 @@ async def test_skills_surface():
     # Guards the discovery route — private, the riskiest assertion here.
     assert PROBE_SKILL_NAME in toolset._skills
 
+    # Guards skill-tool detection, keyed on the defining module and class name.
+    for class_name in SKILL_TOOL_CLASS_NAMES:
+        assert getattr(skill_toolset, class_name).__module__ == skill_toolset.__name__
+
+    # Guards the content-hash route: tool → _toolset → _get_skill → instructions.
+    assert load_skill._toolset is toolset
+    assert toolset._get_skill(PROBE_SKILL_NAME).instructions == PROBE_SKILL_INSTRUCTIONS
+
     # Guards reading the skill name out of a load_skill call's args.
     _declared, required = _declared_arguments(load_skill)
     assert required == {SKILL_NAME_ARG}
