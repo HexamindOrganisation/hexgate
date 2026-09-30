@@ -155,7 +155,9 @@ def _recover_skills_middlewares(graph: Any) -> list[Any]:
     ]
 
 
-def test_contract_skills_surfaces(tmp_path: Path) -> None:
+# Tier 0, not Tier 3: keep ``skills_surface`` out of the name, or the matrix
+# files it as experimental and a failure never affects the verdict.
+def test_contract_deepagents_skills(tmp_path: Path) -> None:
     """Tier 0 — the deepagents internals hexgate's skills support reads.
 
     A failure here means deepagents moved, not that hexgate is wrong: fix the
