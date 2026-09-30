@@ -43,11 +43,12 @@ maps to a skill key.
 | | Tool | Skill |
 | --- | --- | --- |
 | What it is | a function the agent calls | instructions the agent reads |
-| Arguments | yes, and policy can constrain them | none |
+| Arguments | the call's inputs, and policy can constrain them | metadata only (which skill, which file, a content hash); policy can constrain it, including [pinning the content](/policy/constraints#pinning-a-skills-content) |
 | Blast radius | bounded by the function | **unbounded — whatever tools it steers the agent toward** |
 
-A tool rule can say *refunds up to 500 USD*. A skill has no arguments to fence:
-its effect is whatever the text persuades the model to do next.
+A tool rule can say *refunds up to 500 USD*. A skill rule can say which skill, at
+which level, with which content — but no argument fence bounds what the text
+persuades the model to do next.
 
 ## Why Hexgate governs skills
 
