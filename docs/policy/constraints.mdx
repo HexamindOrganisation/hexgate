@@ -300,9 +300,10 @@ constraints:
 Use the prefix, not `tool == "agent.run"`: naming the admission key alone still
 leaves `agent.handoff:<target>` and `agent.tool:<target>` denied.
 
-A `skills:` block lowers the same way, and skill decisions carry only `skill`,
-`via`, `file_path` and `content_hash` (see
-[below](#pinning-a-skills-content)) — so the same `args.amount` fence denies every
+A `skills:` block lowers the same way, and skill decisions carry `skill`, `via`,
+`file_path` and `content_hash` (plus the script's invocation args on Google ADK;
+see [below](#pinning-a-skills-content)) — none of them `amount`, so the same
+`args.amount` fence denies every
 skill activation too. Exempt both skill prefixes alongside `agent.`:
 
 ```yaml
