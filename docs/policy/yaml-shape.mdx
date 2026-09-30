@@ -87,7 +87,14 @@ manifest, including a `skills:` block for every skill it discovered:
 | Skill | `read_only` mixin (`default`, `member`, `admin` inherit it) | `member` | `admin` |
 | --- | --- | --- | --- |
 | instructions and resources only | `allow` | inherited | inherited |
-| ships scripts, or adds tools once activated | not listed — `default` denies it | `approval_required` | `allow` |
+| ships scripts (Google ADK), or adds tools once activated | not listed — `default` denies it | `approval_required` | `allow` |
+
+Only Google ADK discovery enumerates a skill's files. deepagents discovery reads
+frontmatter only, so Hexgate cannot tell whether a deepagents skill ships
+scripts: every deepagents skill lands in the first row and is allowed for every
+role, the generated YAML says so in a comment, and you should review it. Its
+scripts run through `execute`, which is gated on its own terms — see the
+[deepagents limitations](/adapters/langchain#limitations).
 
 It is generated **once**. Re-registering the agent never overwrites the policy,
 so a skill added later is not in it. If the policy already has a `skills:` block,
