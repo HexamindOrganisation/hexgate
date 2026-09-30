@@ -163,7 +163,11 @@ def test_contract_skills_surfaces(tmp_path: Path) -> None:
     """
     from deepagents.middleware.skills import _list_skills
 
-    from hexgate.adapters.langchain.skills import SkillPathIndex
+    from hexgate.adapters.langchain.skills import (
+        _FILE_PATH_ARG,
+        _FILE_READ_TOOL,
+        SkillPathIndex,
+    )
     from hexgate.manifest.langchain import locate_skills
 
     graph, backend = _build_graph_with_skills(tmp_path)
@@ -213,6 +217,16 @@ def test_contract_skills_surfaces(tmp_path: Path) -> None:
     via, location = matched
     assert via == "instructions"
     assert location.skill_md_path == metadata[0]["path"]
+
+    # D4 SkillKeyResolver: activation is recognised by tool name and path arg.
+    read_file = _bound_tools(graph).get(_FILE_READ_TOOL)
+    assert read_file is not None, (
+        f"deepagents no longer binds {_FILE_READ_TOOL!r} — skill gating is silently inert"
+    )
+    assert _FILE_PATH_ARG in read_file.args, (
+        f"{_FILE_READ_TOOL!r} no longer takes {_FILE_PATH_ARG!r} — "
+        "skill gating is silently inert"
+    )
 
 
 def test_deny_path_blocks_and_does_not_execute(probe_context):
