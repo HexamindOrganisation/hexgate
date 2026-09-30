@@ -29,9 +29,11 @@ HARMLESS_COMMAND = "echo hexgate-probe"
 SKILL_NAME = "refunder"
 SKILLS_SOURCE = "/skills/"
 SKILL_MD = "SKILL.md"
+SKILL_ALLOWED_TOOLS = ["read_file", "grep"]
 SKILL_MD_TEXT = (
     f"---\nname: {SKILL_NAME}\ndescription: Issue refunds.\n"
-    "allowed-tools: read_file grep\n---\nRefund only after checking the order.\n"
+    f"allowed-tools: {' '.join(SKILL_ALLOWED_TOOLS)}\n"
+    "---\nRefund only after checking the order.\n"
 )
 # Keys of deepagents' SkillMetadata that hexgate's discovery reads.
 SKILL_METADATA_KEYS = {"name", "path", "description", "allowed_tools"}
@@ -184,6 +186,9 @@ def test_contract_skills_surfaces(tmp_path: Path) -> None:
     metadata = _list_skills(backend, SKILLS_SOURCE)
     assert [meta["name"] for meta in metadata] == [SKILL_NAME]
     assert SKILL_METADATA_KEYS <= metadata[0].keys()
+    # Already split: _to_skill_definition list()s it, so a raw string would
+    # become single characters.
+    assert metadata[0]["allowed_tools"] == SKILL_ALLOWED_TOOLS
 
     # D3/D4 _content_hashes: the backend download surface. If this breaks, the
     # hash is silently null and content-pinned skills start denying.
