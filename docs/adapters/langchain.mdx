@@ -130,6 +130,69 @@ this adapter, which wraps a pre-built LangChain/LangGraph agent, is a planned
 follow-up.)
 </Note>
 
+## deepagents skills
+
+**deepagents rides this adapter.** There is no separate deepagents adapter:
+`create_deep_agent` returns a `CompiledStateGraph`, and `wrap_langchain_agent`
+wraps it like any other graph. Its [skills](/concepts/skills) are discovered and
+gated from the graph's own `SkillsMiddleware`:
+
+```python
+from deepagents import create_deep_agent
+from deepagents.backends import FilesystemBackend
+
+graph = create_deep_agent(
+    model=llm,
+    tools=TOOLS,
+    backend=FilesystemBackend(root_dir="./agent_fs", virtual_mode=True),
+    skills=["/skills/"],
+)
+agent = wrap_langchain_agent(agent=graph, tools=TOOLS)
+```
+
+If the graph's middleware cannot be found, pass it explicitly with
+`wrap_langchain_agent(..., skills_middleware=...)`.
+
+### How a skill is recognised
+
+deepagents has no "load skill" action. The system prompt lists each skill's
+`SKILL.md` path, and the model activates one by calling `read_file` on it. When
+the agent is wrapped, Hexgate indexes every known skill path; once the policy
+declares a `skills:` block, a `read_file` that matches is decided under the skill's
+key instead of `read_file`'s:
+
+| Read | Policy key | Level |
+| --- | --- | --- |
+| the skill's `SKILL.md` | `skill:<name>` | instructions |
+| any other file under the skill's directory | `skill.resource:<name>` | resource |
+
+Paths are normalised the way deepagents reads them, so `skills/x/SKILL.md` and
+`\skills\x\SKILL.md` both match `/skills/x/SKILL.md`, and `args.file_path` carries
+that one spelling. The `content_hash` is read just before the file is, so a
+[pin](/policy/constraints#pinning-a-skills-content) checks the body as it stands at
+decision time.
+
+A denial uses the same wording as [Google ADK](/adapters/google-adk#what-a-denial-looks-like)
+— it is shared across adapters — as the `message` of the usual
+`{"ok": False, "error": ...}` payload.
+
+### Limitations
+
+- **`skill.script:` is not supported here.** A deepagents script runs through
+  `execute`, and matching an `execute` call to a skill's scripts would mean parsing
+  shell strings. `execute` is gated on its own terms under `tools:` instead; a
+  `via: [script]` rule never fires on this adapter.
+- **Skills whose paths are not known at wrap time are not gated** — a source
+  added mid-run, or a backend populated per invocation. Their reads decide as
+  ordinary `read_file` calls.
+- **Not containment.** A model can reach a skill's text another way — `grep`, `ls`
+  plus a read of a variant spelling, a copy elsewhere on the backend. This gates
+  the documented activation path, which is what the audit trail and the
+  kill-switch need. The [tool layer](/policy/yaml-shape) remains the boundary.
+- **The pin is a separate read.** The hash is taken just before `read_file` reads
+  the file itself, so on a writable backend a body changed between the two reads
+  can slip past a pin.
+
 ## Runnable example
 
 `examples/devops_langchain.py` — `wrap_langchain_agent` (LangChain / LangGraph)

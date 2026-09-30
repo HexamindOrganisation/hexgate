@@ -230,7 +230,7 @@ Three places, widening in reach:
 |---|---|
 | `tools.<name>.constraints` | that one tool |
 | `default_policy.constraints` | tools **not** listed under `tools:` |
-| `constraints:` (top level) | **every** tool the role can reach, the synthetic `agent.*` keys included |
+| `constraints:` (top level) | **every** tool the role can reach, the synthetic `agent.*` and `skill*:` keys included |
 
 `default_policy.constraints` is the common trap. It is the *catch-all* policy,
 not a floor: once a tool is listed under `tools:`, the default no longer applies
@@ -299,6 +299,16 @@ constraints:
 
 Use the prefix, not `tool == "agent.run"`: naming the admission key alone still
 leaves `agent.handoff:<target>` and `agent.tool:<target>` denied.
+
+A `skills:` block lowers the same way, and skill decisions carry only `skill`,
+`via`, `file_path` and `content_hash` (see
+[below](#pinning-a-skills-content)) — so the same `args.amount` fence denies every
+skill activation too. Exempt both skill prefixes alongside `agent.`:
+
+```yaml
+constraints:
+  - startswith(tool, "agent.") or startswith(tool, "skill:") or startswith(tool, "skill.") or args.amount <= 500
+```
 
 ### Inheritance unions them
 
@@ -369,6 +379,42 @@ Change a value in one place and every tool/role that references it updates.
 Constants merge through `inherits:` like `tools`, so shared constants belong in
 a mixin. A `consts.<name>` that isn't defined is rejected at build (and denies
 on the pydantic engine); across roles a name must map to a single value.
+
+### Pinning a skill's content
+
+A [skill](/concepts/skills) is matched by name, so editing an approved skill does
+not revoke its approval. Every skill decision carries these arguments, so pinning
+needs no new syntax — just a constraint and a constant:
+
+| Argument | Value |
+| --- | --- |
+| `args.skill` | the skill's name |
+| `args.via` | `instructions`, `resource` or `script` |
+| `args.file_path` | the file requested — the resource or script path, or the `SKILL.md` path on deepagents |
+| `args.content_hash` | `sha256:` + the hex digest of the `SKILL.md` body (frontmatter excluded) |
+
+```yaml
+consts:
+  refunder_approved: "sha256:3f2a9c0e…"   # the full 64-hex-digit digest
+
+skills:
+  refunder:
+    mode: allow
+    constraints: ["args.content_hash == consts.refunder_approved"]
+```
+
+- **The value carries a `sha256:` prefix.** A bare hex digest never matches.
+- **It fails closed.** If the hash cannot be computed, `content_hash` is null,
+  the constraint does not match, and the pinned skill denies rather than passes.
+- **It closes drift, not prompt injection.** A pinned skill whose approved
+  content was already hostile is still allowed. Review the text before you pin it.
+
+The hash covers the `SKILL.md` body at every level, so a pin on a rule whose `via`
+includes `resource` or `script` also stops those when the instructions change —
+but it does not cover the resource and script files themselves. On
+[Google ADK](/adapters/google-adk#skills), a `script` decision also carries the
+script's invocation as `args.script_args`, `args.short_options` and
+`args.positional_args`.
 
 ## Boolean composition
 

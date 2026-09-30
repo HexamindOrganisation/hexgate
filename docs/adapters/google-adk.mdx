@@ -121,6 +121,94 @@ coverage, because ADK expresses both delegation modes as tool calls. It enforces
 (agent-as-tool, `agent.tool:<name>`) — a denied delegation is refused before it
 runs. Set `HexgateRunner(max_handoff_depth=N)` to cap a runaway handoff chain.
 
+## Skills
+
+ADK ships [agent skills](/concepts/skills) through `SkillToolset`, and
+`HexgateRunner` discovers and gates them with no extra wiring:
+
+```python
+from google.adk.skills import load_skill_from_dir
+from google.adk.tools.skill_toolset import SkillToolset
+
+skills = SkillToolset(
+    [load_skill_from_dir("skills/refunder")],
+    additional_tools=[refund],
+)
+agent = Agent(name="support_agent", model=..., tools=[skills, lookup])
+```
+
+### What registration records
+
+For each skill in a `SkillToolset`, the manifest records its name, description,
+the reference, asset and script files it ships, and a hash of its `SKILL.md`
+body. The skill's `allowed-tools` frontmatter is recorded too.
+
+A skill whose frontmatter declares `metadata.adk_additional_tools` **enlarges the
+agent's callable tool surface once it is activated**: ADK only exposes those tools
+to the model after the skill loads. Hexgate records them in the manifest's tool
+list as well — under the name the model will call, toolset prefix included — so
+the generated policy covers them and they are gated like any other tool. A skill
+that declares additional tools is treated like one that ships scripts in the
+[starter policy](/policy/yaml-shape#the-generated-starter-policy).
+
+### What is gated
+
+Each `SkillToolset` tool maps to one level:
+
+| ADK tool | Policy key | Level |
+| --- | --- | --- |
+| `load_skill` | `skill:<name>` | instructions |
+| `load_skill_resource` | `skill.resource:<name>` | resource |
+| `run_skill_script` | `skill.script:<name>` | script |
+| `list_skills` | not gated | — |
+
+`list_skills` is left alone on purpose: the skill catalog is already in the system
+prompt, so gating it would only hide what exists. The mapping is by tool class, so
+a `tool_name_prefix` on the toolset does not change it, and a tool of your own
+named `load_skill` is gated as an ordinary tool.
+
+A `run_skill_script` decision sees one spelling of the path — `scripts/x` and `x`
+both arrive as `args.file_path == "scripts/x"` — and the script's invocation as
+`args.script_args`, `args.short_options` and `args.positional_args`, so a
+constraint can fence what a script is run with.
+
+Until the policy declares a `skills:` block, these are ordinary tool calls,
+decided under their tool names.
+
+### What a denial looks like
+
+A denied or held skill comes back to the model as the tool result, marked like any
+other ADK denial:
+
+```text
+[policy_denied] skill 'data-export' is not permitted by this agent's policy. Do not attempt this task without it.
+[approval_required] skill 'data-export' requires human approval before it is loaded. Do not attempt this task without it.
+```
+
+The held wording names the level: *before it is loaded* (instructions), *before
+its resource is read*, *before its script runs*. The closing sentence is
+deliberate. Without it a model tends to improvise the procedure from memory —
+dropping exactly the guardrails the skill encoded.
+
+<Note>
+How reliably models honour that sentence has not yet been observed and written
+up. Treat it as a nudge, not a guarantee: the tools the skill would have steered
+toward are still gated only by their own rules.
+</Note>
+
+### Caveats
+
+- **Requires `google-adk >= 1.25.0`**, where `SkillToolset` was added. Hexgate
+  itself supports `google-adk >= 1.14`; on an older ADK there are no skills to
+  discover and nothing changes.
+- **`SkillToolset` is experimental upstream.** Hexgate reaches some ADK internals to
+  hash a skill's body at decision time; if a future ADK moves them, the hash is
+  omitted — and a [pinned](/policy/constraints#pinning-a-skills-content) skill
+  denies rather than passes.
+- **Not containment.** A denied `load_skill` hides the instructions; it does not
+  stop the model calling the agent's other tools. See
+  [Agent skills](/concepts/skills#why-hexgate-governs-skills).
+
 ## Runnable example
 
 `examples/devops_google.py` — `HexgateRunner` (Google ADK) end-to-end with
