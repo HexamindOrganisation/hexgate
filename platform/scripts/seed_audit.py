@@ -63,7 +63,7 @@ from hexgate.audit import (  # noqa: E402
 
 # ── Agent & users ─────────────────────────────────────────────────────────────
 # Uses the dev default project id (imported above) so data is visible in the dashboard.
-# clear() scopes deletes to USER_IDS so real audit rows are not affected.
+# clear() scopes deletes to SEED_USER_IDS so real audit rows are not affected.
 
 USER_IDS = [
     f"test_{name}"
@@ -110,6 +110,12 @@ USER_IDS = [
         "Noah",
     ]
 ]
+# Each one-off run below gets a user of its own, outside the pool normal and
+# anomaly traffic draws from. The detector counts a user's decisions across
+# sessions, so a one-off run sharing a user with background runs can land in
+# the same window as one of them and flag an anomaly nobody seeded.
+ONE_OFF_USER_IDS = [f"test_{name}" for name in ["Olivia", "Pablo", "Ruth", "Sam"]]
+SEED_USER_IDS = USER_IDS + ONE_OFF_USER_IDS
 
 # ── Traffic shape ─────────────────────────────────────────────────────────────
 # Normal: exactly 300 rows per user over 30 days, grouped into short runs (one
@@ -129,6 +135,10 @@ ROWS_PER_USER = 300
 NUMBER_ANOMALIES = 1
 REQUESTS_PER_ANOMALY_MIN = 20
 REQUESTS_PER_ANOMALY_MAX = 50
+# A spike is denser than a normal run: at most 50 x 6s, the five minutes the
+# spike used to be drawn from, and far inside one detector window.
+ANOMALY_SECONDS_BETWEEN_MAX = 6
+ANOMALY_WINDOW_SECONDS = REQUESTS_PER_ANOMALY_MAX * ANOMALY_SECONDS_BETWEEN_MAX
 
 SEED_WINDOW_DAYS = 30
 SECONDS_BETWEEN_DECISIONS_MAX = 45
@@ -272,6 +282,9 @@ def _tool_result(tool_name: str, case: Fields) -> str:
 
 # The model calls its tool a couple of seconds before the decision lands.
 MESSAGE_LEAD_SECONDS = 2
+# The drawer anchors a decision on the last turn at or before it, so a gap no
+# wider than the lead lets the next turn land first and take that anchor.
+SECONDS_BETWEEN_DECISIONS_MIN = MESSAGE_LEAD_SECONDS + 1
 
 # Deterministic imperfections, so each drawer marker has seeded data behind
 # it rather than only a unit test. Counted over runs, not rows, because a
@@ -292,18 +305,18 @@ SEEDED_TRUNCATION_CAP_BYTES = 2_048
 # the drawer's 50-row page — the case where it has to fetch the transcript's
 # tail instead of its head.
 LONG_CONVERSATION_TURNS = 120
-LONG_CONVERSATION_USER = USER_IDS[0]
+LONG_CONVERSATION_USER = ONE_OFF_USER_IDS[0]
 
 # Two more one-off runs, each covering a shape the ordinary traffic cannot:
 # a session with two message lists, and a turn whose completion asked for
 # several tools at once.
 HANDOFF_AGENT = "refunds-specialist"
-HANDOFF_USER = USER_IDS[1]
+HANDOFF_USER = ONE_OFF_USER_IDS[1]
 # Its own agent name so the filter bar can reach it: there is no session
 # filter, and hunting a session id by eye through the events table is the
 # opposite of a usable example.
 PARALLEL_AGENT = "case-resolver"
-PARALLEL_USER = USER_IDS[2]
+PARALLEL_USER = ONE_OFF_USER_IDS[2]
 
 # A retrieval-augmented call, filled to the SDK's input cap. This is the only
 # seeded row whose size is the point: the caps exist for RAG calls, where one
@@ -315,7 +328,7 @@ PARALLEL_USER = USER_IDS[2]
 # overshoot otlp_smoke.py uses to force the same path.
 RAG_OVERSHOOT_BYTES = 16 * 1024
 RAG_AGENT = "policy-rag-agent"
-RAG_USER = USER_IDS[3]
+RAG_USER = ONE_OFF_USER_IDS[3]
 RAG_CHUNK_SOURCES = [
     "handbook/refunds.md",
     "handbook/shipping.md",
@@ -467,7 +480,7 @@ class RunProgress:
 
 
 def _role_set(user_id: str) -> list[str]:
-    return ROLE_SETS[USER_IDS.index(user_id) % len(ROLE_SETS)]
+    return ROLE_SETS[SEED_USER_IDS.index(user_id) % len(ROLE_SETS)]
 
 
 @dataclass(frozen=True, slots=True)
@@ -924,18 +937,28 @@ def _validate_message_row_shape(rows: list[Row]) -> None:
         )
 
 
+def _table_exists(client: Client, table: str) -> bool:
+    return bool(client.query(f"EXISTS TABLE {table}").result_rows[0][0])
+
+
 def _validate_columns(client: Client) -> None:
     """Fail before inserting if either table is behind its migration.
 
     llm_message ships as a hand-applied migration (0003), so a local
     ClickHouse that predates it has the decision table and not this one —
     which would otherwise surface as a mid-seed insert error with half the
-    rows already written.
+    rows already written. DESCRIBE raises on a missing table, so absence is
+    checked first to reach the same message.
     """
     for table, columns in (
         ("policy_decision", _SEED_COLUMNS),
         (LLM_MESSAGE_TABLE, _MESSAGE_SEED_COLUMNS),
     ):
+        if not _table_exists(client, table):
+            raise ValueError(
+                f"ClickHouse table {table} does not exist "
+                "— run `make clickhouse-migrate`"
+            )
         result = client.query(f"DESCRIBE TABLE {table}")
         missing = set(columns) - {row[0] for row in result.result_rows}
         if missing:
@@ -1002,12 +1025,17 @@ def _run_starts(rng: random.Random, now: datetime, count: int) -> list[datetime]
 
 
 def _run_timestamps(
-    rng: random.Random, start: datetime, count: int
+    rng: random.Random,
+    start: datetime,
+    count: int,
+    max_gap_seconds: int = SECONDS_BETWEEN_DECISIONS_MAX,
 ) -> Iterator[datetime]:
     timestamp = start
     for _ in range(count):
         yield timestamp
-        timestamp += timedelta(seconds=rng.randint(1, SECONDS_BETWEEN_DECISIONS_MAX))
+        timestamp += timedelta(
+            seconds=rng.randint(SECONDS_BETWEEN_DECISIONS_MIN, max_gap_seconds)
+        )
 
 
 def _elapsed_ms(start: datetime, timestamp: datetime) -> int:
@@ -1070,8 +1098,16 @@ def generate_anomalies(
         session_id = str(uuid4())
         progress = RunProgress(rng, uuid4())
         case = rng.choice(CASES)
-        timestamps = sorted(
-            anomaly_base - timedelta(minutes=rng.randint(0, 5)) for _ in range(requests)
+        # Distinct, spaced timestamps: minute-granular draws put most of a
+        # spike on a shared instant, and every decision in such a group would
+        # anchor on the group's last turn instead of its own.
+        timestamps = list(
+            _run_timestamps(
+                rng,
+                anomaly_base - timedelta(seconds=ANOMALY_WINDOW_SECONDS),
+                requests,
+                max_gap_seconds=ANOMALY_SECONDS_BETWEEN_MAX,
+            )
         )
         start = timestamps[0]
         seeded: list[SeededDecision] = []
@@ -1420,15 +1456,18 @@ def seed(
 def clear(client: Client, project_id: str) -> None:
     """Delete seed rows from both tables.
 
-    Scoped to USER_IDS, so real audit rows are untouched. The transcripts go
+    Scoped to SEED_USER_IDS, so real audit rows are untouched. The transcripts go
     with the decisions they explain — leaving them behind would make the
-    drawer show a conversation for a decision that no longer exists.
+    drawer show a conversation for a decision that no longer exists. A table
+    that predates its migration holds no seed rows, so it is skipped.
     """
     for table in ("policy_decision", LLM_MESSAGE_TABLE):
+        if not _table_exists(client, table):
+            continue
         client.command(
             f"ALTER TABLE {table} DELETE WHERE user_id IN {{users:Array(String)}} "
             "AND project_id = {pid:String}",
-            parameters={"users": USER_IDS, "pid": project_id},
+            parameters={"users": SEED_USER_IDS, "pid": project_id},
             settings={"mutations_sync": "2"},
         )
 
