@@ -4,10 +4,10 @@ No eval framework is imported here: the framework's scorer and the dataset tests
 both call `score(case, workspace, before, answer)` and get back a list of `Check`s.
 The checks call the SDK functions the platform's policy endpoints use (load,
 compile, lint, resolve, evaluate): the policy must validate without lint
-warnings, every dry-run decision must match, files must change (or not) as the
-case says, only the tools, arguments and caller attributes the Hexgate MCP would
-show for the case's agent may be used, and the final answer must mention what the
-case requires.
+warnings, every dry-run decision (and role superset) must hold, files must change
+(or not) as the case says, only the tools, arguments and caller attributes the
+Hexgate MCP would show may be used (the case agent's, or any agent's when the case
+names none), and the final answer must mention what the case requires.
 """
 
 from __future__ import annotations
