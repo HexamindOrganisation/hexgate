@@ -229,6 +229,20 @@ def test_when_an_egress_key_is_misspelled_then_it_is_an_unknown_tool(tmp_path) -
     assert check.detail == "not in shop-bot's manifest: ['net.http_reqest']"
 
 
+def test_when_the_case_names_no_agent_then_every_agents_names_are_known(
+    tmp_path,
+) -> None:
+    # A role or project-wide edit: ops-bot's tool and attribute are fine too.
+    policy = POLICY.replace("- args.amount <= 500", '- ctx.region == "eu"')
+    ws = _workspace(tmp_path, policy + "      wire_transfer: { mode: allow }\n")
+    checks = _by_name(score({}, ws, snapshot(ws), ""))
+    assert checks["only known tools"].passed
+    assert checks["only known arguments and attributes"].passed
+    (ws / "policy.yaml").write_text(policy + "      teleport: { mode: allow }\n")
+    check = _by_name(score({}, ws, snapshot(ws), ""))["only known tools"]
+    assert check.detail == "not in any agent's manifest: ['teleport']"
+
+
 def test_when_audit_json_is_missing_then_no_attribute_is_known(tmp_path) -> None:
     ws = _workspace(tmp_path)
     (ws / "audit.json").unlink()
@@ -595,6 +609,120 @@ def test_modules_layout_resolves_the_case_agents_column(tmp_path) -> None:
     for agent, outcome in [(AGENT, "allow"), ("ops-bot", "deny")]:
         policy, _ = effective_policy(ws, agent)
         assert decide(policy, "billing", refund)[0] == outcome
+
+
+def test_every_module_file_is_checked_against_every_agents_names(tmp_path) -> None:
+    roles = '  billing:\n    "*": [read_only]\n    ops-bot: [read_only, ops]\n'
+    ws = _modules_workspace(tmp_path, roles)
+    caps = ws / "policies" / "capabilities"
+    # Bound only to ops-bot's column, with ops-bot's tool and attribute: known to
+    # the project.
+    (caps / "ops.yaml").write_text(
+        "tools:\n  wire_transfer: { mode: allow, constraints: ['ctx.region == \"eu\"'] }\n"
+    )
+    # Bound to no column, with names no agent has: still flagged.
+    (caps / "extra.yaml").write_text(
+        "tools:\n  teleport: { mode: allow, constraints: ['ctx.nope == 1'] }\n"
+    )
+    checks = _by_name(score({"agent": AGENT}, ws, snapshot(ws), ""))
+    assert checks["only known tools"].detail == (
+        "not in shop-bot's manifest: "
+        "['policies/capabilities/extra.yaml: teleport (no agent has it)']"
+    )
+    assert checks["only known arguments and attributes"].detail == (
+        "not in the manifest or audit.json: "
+        "['policies/capabilities/extra.yaml: teleport: ctx.nope']"
+    )
+
+
+@pytest.mark.parametrize(
+    ("shop_bot_cell", "passed"),
+    [("[read_only]", False), ("[read_only, payments]", True)],
+)
+def test_a_role_wide_case_must_hold_on_every_agents_column(
+    tmp_path, shop_bot_cell, passed
+) -> None:
+    # The agent granted refunds on "*"; shop-bot's own cell replaces "*" for it.
+    roles = (
+        f'  support:\n    "*": [read_only, payments]\n    shop-bot: {shop_bot_cell}\n'
+    )
+    ws = _modules_workspace(tmp_path, roles)
+    refund = {"tool": "refund_order", "args": {"order_id": "o1", "amount": 5}}
+    case = {"expect": {"decisions": [{"role": "support", **refund, "expect": "allow"}]}}
+    checks = score(case, ws, snapshot(ws), "")
+    decision = next(c for c in checks if c.name.startswith("decision:"))
+    assert decision.passed is passed
+    if not passed:
+        assert "got deny on column shop-bot" in decision.detail
+
+
+def test_a_role_wide_superset_must_hold_on_every_agents_column(tmp_path) -> None:
+    # On "*" support may refund like billing; shop-bot's own cell narrows it.
+    roles = (
+        '  support:\n    "*": [read_only, payments]\n    shop-bot: [read_only]\n'
+        "  billing: [read_only, payments]\n"
+    )
+    ws = _modules_workspace(tmp_path, roles)
+    refund = {"tool": "refund_order", "args": {"order_id": "o1", "amount": 5}}
+    superset = {"narrower": "billing", "wider": "support", "probes": [refund]}
+    checks = score({"expect": {"superset": [superset]}}, ws, snapshot(ws), "")
+    check = next(c for c in checks if c.name.startswith("superset"))
+    assert not check.passed
+    assert "(column shop-bot)" in check.detail
+
+
+def test_a_boundary_may_deny_another_agents_tool(tmp_path) -> None:
+    ws = _modules_workspace(tmp_path, "  default: [read_only]\n")
+    org = ws / "policies" / "boundaries" / "org.yaml"
+    org.write_text(org.read_text() + "  wire_transfer: { mode: deny }\n")
+    checks = _by_name(score({"agent": AGENT}, ws, snapshot(ws), ""))
+    assert checks["only known tools"].passed, checks["only known tools"].detail
+
+
+def test_a_boundary_may_not_deny_a_tool_no_agent_has(tmp_path) -> None:
+    ws = _modules_workspace(tmp_path, "  default: [read_only]\n")
+    org = ws / "policies" / "boundaries" / "org.yaml"
+    org.write_text(org.read_text() + "  teleport: { mode: deny }\n")
+    check = _by_name(score({"agent": AGENT}, ws, snapshot(ws), ""))["only known tools"]
+    assert check.detail == (
+        "not in shop-bot's manifest: "
+        "['policies/boundaries/org.yaml: teleport (no agent has it)']"
+    )
+
+
+def test_a_boundary_does_not_hide_a_capability_granting_another_agents_tool(
+    tmp_path,
+) -> None:
+    ws = _modules_workspace(tmp_path, "  billing: [read_only, payments]\n")
+    org = ws / "policies" / "boundaries" / "org.yaml"
+    org.write_text(org.read_text() + "  wire_transfer: { mode: approval_required }\n")
+    payments = ws / "policies" / "capabilities" / "payments.yaml"
+    payments.write_text(payments.read_text() + "  wire_transfer: { mode: allow }\n")
+    check = _by_name(score({"agent": AGENT}, ws, snapshot(ws), ""))["only known tools"]
+    assert check.detail == "not in shop-bot's manifest: ['wire_transfer']"
+
+
+def test_a_boundary_may_deny_a_tool_only_another_agents_column_grants(
+    tmp_path,
+) -> None:
+    roles = '  billing:\n    "*": [read_only]\n    ops-bot: [read_only, ops]\n'
+    ws = _modules_workspace(tmp_path, roles)
+    org = ws / "policies" / "boundaries" / "org.yaml"
+    org.write_text(org.read_text() + "  wire_transfer: { mode: deny }\n")
+    caps = ws / "policies" / "capabilities"
+    (caps / "ops.yaml").write_text("tools:\n  wire_transfer: { mode: allow }\n")
+    check = _by_name(score({"agent": AGENT}, ws, snapshot(ws), ""))["only known tools"]
+    assert check.passed, check.detail
+
+
+def test_a_role_wide_case_fails_valid_when_an_agents_column_is_invalid(
+    tmp_path,
+) -> None:
+    roles = '  default:\n    "*": [read_only]\n    ops-bot: [read_only, payments]\n'
+    ws = _modules_workspace(tmp_path, roles + "  billing: [read_only]\n")
+    valid = _by_name(score({}, ws, snapshot(ws), ""))["valid"]
+    assert not valid.passed
+    assert valid.detail.startswith("column ops-bot:")
 
 
 def test_modules_layout_fails_valid_on_a_permissive_default(tmp_path) -> None:
