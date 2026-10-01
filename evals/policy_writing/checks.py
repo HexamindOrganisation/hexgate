@@ -23,6 +23,7 @@ from pydantic import TypeAdapter, ValidationError
 
 from hexgate.manifest.models import AgentManifest
 from hexgate.runtime.context import ContextAttributeValue
+from hexgate.runtime.run_facts import KNOWN_RUN_PATHS
 from hexgate.security import (
     RESOLVED_POLICY_MARKER,
     DecisionOutcome,
@@ -242,7 +243,11 @@ def unknown_refs(doc: dict, tools: dict[str, set[str]], attrs: set[str]) -> list
             kind, name = path[0], ".".join(path[1:2])
             if kind not in ROOTS:
                 ok = False
-            elif kind not in ("args", "ctx") or not name:
+            elif kind == "run":
+                ok = name in KNOWN_RUN_PATHS
+            elif kind in ("role", "tool"):
+                ok = not name  # a plain string: `role.x` never matches
+            elif not name:
                 continue
             elif kind == "ctx":
                 ok = name in attrs
@@ -257,7 +262,7 @@ def unknown_refs(doc: dict, tools: dict[str, set[str]], attrs: set[str]) -> list
                     tool not in tools or name in tools[tool]
                 )  # unknown tools fail elsewhere
             if not ok:
-                bad.add(f"{tool or 'policy-level'}: {'.'.join(path[:2])}")
+                bad.add(f"{tool or 'policy-level'}: {'.'.join(path)}")
     return sorted(bad)
 
 

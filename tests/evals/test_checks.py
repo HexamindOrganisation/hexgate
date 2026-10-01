@@ -270,13 +270,25 @@ def test_when_the_case_agent_has_no_manifest_then_loading_fails(tmp_path) -> Non
 
 @pytest.mark.parametrize(
     "constraint",
-    ['user.department == "finance"', "arg.amount <= 5", "attrs.vip == true"],
+    [
+        'user.department == "finance"',
+        "arg.amount <= 5",
+        "attrs.vip == true",
+        "run.tool_cals < 20",
+        'role.name == "x"',
+    ],
 )
 def test_unknown_refs_flags_a_path_with_no_such_root(constraint) -> None:
     doc = {"tools": {"refund_order": {"mode": "allow", "constraints": [constraint]}}}
     tools = {"refund_order": {"amount"}}
     [ref] = unknown_refs(doc, tools, {"department"})
     assert ref == f"refund_order: {constraint.split()[0]}"
+
+
+def test_unknown_refs_accepts_known_run_paths_and_bare_facts() -> None:
+    constraint = 'run.tool_calls < 20 and role == "billing" and tool == "refund_order"'
+    doc = {"tools": {"refund_order": {"mode": "allow", "constraints": [constraint]}}}
+    assert unknown_refs(doc, {"refund_order": set()}, set()) == []
 
 
 def test_unknown_refs_reads_paths_not_string_literals() -> None:
