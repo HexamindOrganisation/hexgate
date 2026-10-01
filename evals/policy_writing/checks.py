@@ -5,8 +5,9 @@ both call `score(case, workspace, before, answer)` and get back a list of `Check
 The checks call the SDK functions the platform's policy endpoints use (load,
 compile, lint, resolve, evaluate): the policy must validate without lint
 warnings, every dry-run decision must match, files must change (or not) as the
-case says, only tools and arguments `TOOLS.md` lists may be used, and the final
-answer must mention what the case requires.
+case says, only the tools, arguments and caller attributes the Hexgate MCP would
+show for the case's agent may be used, and the final answer must mention what the
+case requires.
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ from pathlib import Path
 import yaml
 from pydantic import TypeAdapter, ValidationError
 
+from hexgate.manifest.models import AgentManifest
 from hexgate.runtime.context import ContextAttributeValue
 from hexgate.security import (
     RESOLVED_POLICY_MARKER,
@@ -38,6 +40,7 @@ from hexgate.security import (
 from hexgate.security.analyzer import SEVERITY_RANK, check_default_role_exposure
 from hexgate.security.constraints import ConstraintParseError
 from hexgate.security.models import AGENT_RUN_TOOL, agent_target_key
+from hexgate.security.modules import DEFAULT_AGENT
 from hexgate.security.network import NET_HTTP_REQUEST, NET_TCP_CONNECT
 from hexgate.security.testing import run_namespace
 
@@ -129,25 +132,37 @@ SYNTHETIC_ARGS = {
 REF = re.compile(r"\b(args|ctx)\.([A-Za-z_]\w*)")
 
 
-def read_manifest(ws: Path) -> tuple[dict[str, set[str]], set[str]]:
-    """TOOLS.md → ({tool: its argument names}, caller attribute names).
+def load_known_names(ws: Path, agent: str) -> tuple[dict[str, set[str]], set[str]]:
+    """({tool: its argument names}, caller attribute names) a policy for `agent` may use.
 
-    Rows look like | `tool` | `arg: type`, ... |; the heading above a table
-    says whether it lists tools or caller attributes.
+    The starting project stands in for what the Hexgate MCP's tools (per its
+    design) return:
+    - `agents.json` is `agents_list` (`GET /agents/manifest`, a list of
+      `AgentManifestView`). Tools and their argument names come from `agent`'s
+      manifest only, so a tool another agent in the project has is unknown.
+    - `audit.json` is `audit_decisions`: `AuditDecisionRow`s, as a list or the
+      endpoint's page (`{rows, ...}`). Caller attributes are set per request and
+      are not in the manifest, so the known ones are the `attributes` keys of
+      `agent`'s rows. No `audit.json` means no known attributes.
     """
-    tools: dict[str, set[str]] = {}
-    attrs: set[str] = set()
-    section = ""
-    for line in (ws / "TOOLS.md").read_text().splitlines():
-        if line.startswith("#"):
-            section = line.lower()
-        m = re.match(r"^\|\s*`([^`]+)`\s*\|([^|]*)", line)
-        if not m:
-            continue
-        if "attribute" in section:
-            attrs.add(m.group(1))
-        elif "tool" in section:
-            tools[m.group(1)] = set(re.findall(r"`(\w+)\s*:", m.group(2)))
+    manifests = {
+        view["name"]: AgentManifest.model_validate(view["manifest"])
+        for view in json.loads((ws / "agents.json").read_text())
+        if view.get("manifest") is not None
+    }
+    if agent not in manifests:
+        raise ValueError(f"agents.json has no manifest for agent {agent!r}")
+    tools = {t.name: set(t.input_schema.properties) for t in manifests[agent].tools}
+    audit = ws / "audit.json"
+    rows = json.loads(audit.read_text()) if audit.exists() else []
+    if isinstance(rows, dict):  # the endpoint's page shape, {rows, total, ...}
+        rows = rows["rows"]
+    attrs = {
+        name
+        for row in rows
+        if row["agent_name"] == agent
+        for name in row.get("attributes") or {}
+    }
     return tools, attrs
 
 
@@ -162,7 +177,7 @@ def policy_tools(doc: dict) -> set[str]:
 
 
 def unknown_refs(doc: dict, tools: dict[str, set[str]], attrs: set[str]) -> list[str]:
-    """`args.x` / `ctx.x` a constraint uses that TOOLS.md doesn't define."""
+    """`args.x` / `ctx.x` a constraint uses that `tools` / `attrs` don't define."""
     every_arg = set().union(*tools.values(), *SYNTHETIC_ARGS.values(), AGENT_REACH_ARGS)
     doc, bodies = policy_bodies(doc)
     # (tool or None for a policy- or role-level constraint, constraint text)
@@ -222,7 +237,7 @@ def _load(payload: dict) -> tuple[PolicySet | None, list[str]]:
     return policy_set, _lint_failures(check_default_role_exposure(policy_set))
 
 
-def _module_payload(ws: Path) -> tuple[dict | None, list[str]]:
+def _module_payload(ws: Path, agent: str) -> tuple[dict | None, list[str]]:
     """What `hexgate policy check` and `resolve` do on a module tree."""
     try:
         boundaries, capabilities = load_local_modules(ws)
@@ -237,15 +252,18 @@ def _module_payload(ws: Path) -> tuple[dict | None, list[str]]:
     if problems:
         return None, problems
     try:
-        result = resolve_for_project(boundaries, capabilities, roles)
+        # `agent`'s column of roles.yaml, as the platform builds that agent's bundle.
+        result = resolve_for_project(boundaries, capabilities, roles, agent=agent)
     except POLICY_ERRORS as exc:
         return None, [str(exc)]
     return {"roles": effective_policy_by_role(result), RESOLVED_POLICY_MARKER: True}, []
 
 
-def effective_policy(ws: Path) -> tuple[Policy | None, Check]:
+def effective_policy(
+    ws: Path, agent: str = DEFAULT_AGENT
+) -> tuple[Policy | None, Check]:
     if (ws / "policies").is_dir():
-        payload, problems = _module_payload(ws)
+        payload, problems = _module_payload(ws, agent)
     else:
         try:
             payload = yaml.safe_load((ws / "policy.yaml").read_text()) or {}
@@ -265,7 +283,7 @@ def effective_policy(ws: Path) -> tuple[Policy | None, Check]:
 
 def score(case: dict, ws: Path, before: dict[str, str], answer: str) -> list[Check]:
     expect = case.get("expect", {})
-    policy, valid = effective_policy(ws)
+    policy, valid = effective_policy(ws, case["agent"])
     checks = [valid]
 
     for d in expect.get("decisions", []):
@@ -305,30 +323,47 @@ def score(case: dict, ws: Path, before: dict[str, str], answer: str) -> list[Che
                 worse.append(f"{p['tool']}: {s['narrower']}={lo}, {s['wider']}={hi}")
         checks.append(Check(name, not worse, "; ".join(worse)))
 
-    if policy is not None:
-        tools, attrs = read_manifest(ws)
-        unknown = sorted(
-            t
-            for t in policy_tools(policy.payload)
-            if t not in tools and not t.startswith(("net.", "agent."))
-        )
-        checks.append(
-            Check(
-                "only known tools",
-                not unknown,
-                f"not in TOOLS.md: {unknown}" if unknown else "",
-            )
-        )
-        refs = unknown_refs(policy.payload, tools, attrs)
-        checks.append(
-            Check(
-                "only known arguments and attributes",
-                not refs,
-                f"not in TOOLS.md: {refs}" if refs else "",
-            )
-        )
-
     after = snapshot(ws)
+    if policy is not None:
+        agent = case["agent"]
+        # The names are read after the run, so an edit to either file could
+        # whitelist an invented name: trust them only if they are untouched.
+        edited = [
+            f for f in ("agents.json", "audit.json") if before.get(f) != after.get(f)
+        ]
+        problem = f"edited during the run: {edited}" if edited else ""
+        if not problem:
+            try:
+                tools, attrs = load_known_names(ws, agent)
+            except (OSError, ValueError, KeyError, TypeError) as exc:
+                problem = f"agents.json / audit.json unreadable: {exc!r}"[:300]
+        if problem:
+            checks.append(Check("only known tools", False, problem))
+            checks.append(Check("only known arguments and attributes", False, problem))
+        else:
+            unknown = sorted(
+                t
+                for t in policy_tools(policy.payload)
+                if t not in tools
+                and t not in SYNTHETIC_ARGS
+                and not t.startswith("agent.")
+            )
+            checks.append(
+                Check(
+                    "only known tools",
+                    not unknown,
+                    f"not in {agent}'s manifest: {unknown}" if unknown else "",
+                )
+            )
+            refs = unknown_refs(policy.payload, tools, attrs)
+            checks.append(
+                Check(
+                    "only known arguments and attributes",
+                    not refs,
+                    f"not in the manifest or audit.json: {refs}" if refs else "",
+                )
+            )
+
     if expect.get("no_changes"):
         diff = sorted(
             k for k in set(before) | set(after) if before.get(k) != after.get(k)
