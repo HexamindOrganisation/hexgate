@@ -4,160 +4,110 @@ from __future__ import annotations
 
 import pytest
 
-from evals.policy_writing.checks import score, snapshot
-from evals.policy_writing.policy import decide, effective_policy
+from evals.policy_writing.policy import CaseError, decide, effective_policy
 from tests.evals.workspace import (
     AGENT,
-    by_name,
+    PERMISSIVE_DEFAULT,
     make_modules_workspace,
     make_workspace,
 )
 
 
 @pytest.mark.parametrize(
-    ("role", "tool", "args", "outcome"),
+    ("role", "amount", "outcome"),
     [
-        ("billing", "refund_order", {"order_id": "o1", "amount": 500}, "allow"),
-        ("billing", "refund_order", {"order_id": "o1", "amount": 501}, "deny"),
-        (
-            "support",
-            "refund_order",
-            {"order_id": "o1", "amount": 10},
-            "approval_required",
-        ),
+        ("billing", 500, "allow"),
+        ("billing", 501, "deny"),
+        ("support", 10, "approval_required"),
     ],
 )
-def test_decide_reports_each_outcome(tmp_path, role, tool, args, outcome) -> None:
-    ws = make_workspace(tmp_path)
-    policy, _ = effective_policy(ws)
-    got, raw = decide(policy, role, {"tool": tool, "args": args})
-    assert got == outcome, raw
+def test_decide_happy_path(tmp_path, role, amount, outcome) -> None:
+    policy, _ = effective_policy(make_workspace(tmp_path))
+    call = {"tool": "refund_order", "args": {"order_id": "o1", "amount": amount}}
+    got, reason = decide(policy, role, call)
+    assert got == outcome, reason
 
 
-def test_decide_reads_the_outcome_not_the_arguments(tmp_path) -> None:
-    # The outcome comes from the verdict, so an argument that spells an outcome
-    # can't be mistaken for one.
-    ws = make_workspace(tmp_path)
-    policy, _ = effective_policy(ws)
-    d = {"tool": "refund_order", "args": {"order_id": "ALLOW", "amount": 900}}
-    got, reason = decide(policy, "billing", d)
+def test_when_an_argument_spells_an_outcome_then_decide_reads_the_verdict(
+    tmp_path,
+) -> None:
+    policy, _ = effective_policy(make_workspace(tmp_path))
+    call = {"tool": "refund_order", "args": {"order_id": "ALLOW", "amount": 900}}
+    got, reason = decide(policy, "billing", call)
     assert got == "deny"
     assert "amount" in reason
 
 
-def test_decide_reads_an_empty_yaml_key_as_none_without_crashing(tmp_path) -> None:
+def test_when_a_yaml_key_is_empty_then_decide_reads_it_as_empty(tmp_path) -> None:
     # `args:` with no value is None in YAML, not {}.
     policy, _ = effective_policy(make_workspace(tmp_path))
     call = {"tool": "view_orders", "args": None, "attributes": None, "run_facts": None}
     assert decide(policy, "default", call)[0] == "allow"
 
 
-def test_decide_rejects_an_undefined_role(tmp_path) -> None:
+def test_when_the_role_is_undefined_then_decide_raises(tmp_path) -> None:
     # Not the `default` fallback: a case naming a role the policy lacks fails.
-    ws = make_workspace(tmp_path)
-    policy, _ = effective_policy(ws)
-    got, reason = decide(policy, "suport", {"tool": "view_orders"})
-    assert got == "error"
-    assert "suport" in reason
+    policy, _ = effective_policy(make_workspace(tmp_path))
+    with pytest.raises(CaseError, match="suport"):
+        decide(policy, "suport", {"tool": "view_orders"})
 
 
-def test_clean_policy_is_valid(tmp_path) -> None:
-    ws = make_workspace(tmp_path)
-    assert by_name(score({"agent": AGENT}, ws, snapshot(ws), ""))["valid"].passed
+def test_effective_policy_happy_path(tmp_path) -> None:
+    policy, problems = effective_policy(make_workspace(tmp_path))
+    assert problems == []
+    assert policy is not None
 
 
-def test_lint_warning_fails_valid(tmp_path) -> None:
-    # Parses and builds, but `default` grants a tool no named role grants: a
-    # warning at the CLI's default threshold, a failure at ours.
-    policy = """\
-version: 1
-roles:
-  default:
-    tools:
-      refund_order: { mode: allow }
-  billing:
-    tools:
-      view_orders: { mode: allow }
-"""
-    ws = make_workspace(tmp_path, policy)
-    case = {
-        "agent": AGENT,
-        "expect": {
-            "decisions": [{"role": "billing", "tool": "view_orders", "expect": "allow"}]
-        },
-    }
-    checks = score(case, ws, snapshot(ws), "")
-    valid = by_name(checks)["valid"]
-    assert not valid.passed
-    assert "permissive-default" in valid.detail
-    # An invalid policy fails its decisions rather than skipping them.
-    assert [c.detail for c in checks if c.name.startswith("decision:")] == [
-        "policy invalid"
-    ]
+def test_when_a_lint_warns_then_effective_policy_fails(tmp_path) -> None:
+    policy, problems = effective_policy(make_workspace(tmp_path, PERMISSIVE_DEFAULT))
+    assert policy is None
+    assert any("permissive-default" in p for p in problems)
 
 
-def test_modules_layout_is_valid(tmp_path) -> None:
-    ws = make_modules_workspace(
-        tmp_path, "  default: [read_only]\n  billing: [read_only, payments]\n"
-    )
-    case = {
-        "agent": AGENT,
-        "expect": {
-            "decisions": [
-                {
-                    "role": "billing",
-                    "tool": "refund_order",
-                    "args": {"amount": 1001},
-                    "expect": "deny",
-                }
-            ]
-        },
-    }
-    checks = score(case, ws, snapshot(ws), "")
-    assert all(c.passed for c in checks), checks
+def test_when_policy_yaml_is_empty_then_it_is_an_empty_policy(tmp_path) -> None:
+    # As `hexgate policy validate` reads it: valid, and every call denied.
+    policy, problems = effective_policy(make_workspace(tmp_path, "# nothing yet\n"))
+    assert problems == []
+    assert decide(policy, "default", {"tool": "view_orders"})[0] == "deny"
 
 
-def test_modules_layout_resolves_the_case_agents_column(tmp_path) -> None:
+def test_effective_policy_happy_path_on_a_module_tree(tmp_path) -> None:
+    roles = "  default: [read_only]\n  billing: [read_only, payments]\n"
+    policy, problems = effective_policy(make_modules_workspace(tmp_path, roles))
+    assert problems == []
+    refund = {"tool": "refund_order", "args": {"amount": 1001}}
+    assert decide(policy, "billing", refund)[0] == "deny"  # the boundary's cap
+
+
+def test_when_the_agent_has_its_own_column_then_effective_policy_resolves_it(
+    tmp_path,
+) -> None:
     roles = '  billing:\n    "*": [read_only]\n    shop-bot: [read_only, payments]\n'
     ws = make_modules_workspace(tmp_path, roles)
-    refund = {"role": "billing", "tool": "refund_order", "args": {"amount": 5}}
+    refund = {"tool": "refund_order", "args": {"amount": 5}}
     for agent, outcome in [(AGENT, "allow"), ("ops-bot", "deny")]:
         policy, _ = effective_policy(ws, agent)
         assert decide(policy, "billing", refund)[0] == outcome
 
 
-def test_modules_layout_fails_valid_on_a_permissive_default(tmp_path) -> None:
+def test_when_a_module_tree_has_a_permissive_default_then_effective_policy_fails(
+    tmp_path,
+) -> None:
     # `policy check` doesn't lint the composed roles; only the resolved policy
     # shows that `default` grants what no named role does.
-    ws = make_modules_workspace(
-        tmp_path, "  default: [read_only, payments]\n  billing: [read_only]\n"
-    )
-    valid = by_name(score({"agent": AGENT}, ws, snapshot(ws), ""))["valid"]
-    assert not valid.passed
-    assert "permissive-default" in valid.detail
+    roles = "  default: [read_only, payments]\n  billing: [read_only]\n"
+    _, problems = effective_policy(make_modules_workspace(tmp_path, roles))
+    assert any("permissive-default" in p for p in problems)
 
 
-def test_modules_layout_fails_valid_on_a_dead_grant(tmp_path) -> None:
+def test_when_a_module_tree_has_a_dead_grant_then_effective_policy_fails(
+    tmp_path,
+) -> None:
     # A module lint: the boundary denies what a capability grants.
-    ws = make_modules_workspace(
-        tmp_path, "  default: [read_only]\n  billing: [read_only, payments]\n"
-    )
+    roles = "  default: [read_only]\n  billing: [read_only, payments]\n"
+    ws = make_modules_workspace(tmp_path, roles)
     (ws / "policies" / "boundaries" / "no_views.yaml").write_text(
         "tools:\n  view_orders: { mode: deny }\n"
     )
-    valid = by_name(score({"agent": AGENT}, ws, snapshot(ws), ""))["valid"]
-    assert not valid.passed
-    assert "dead-grant" in valid.detail
-
-
-def test_an_empty_policy_is_valid_and_denies(tmp_path) -> None:
-    # As `hexgate policy validate` reads it: an empty file is an empty policy.
-    ws = make_workspace(tmp_path, "# nothing granted yet\n")
-    case = {
-        "agent": AGENT,
-        "expect": {
-            "decisions": [{"role": "default", "tool": "view_orders", "expect": "deny"}]
-        },
-    }
-    checks = score(case, ws, snapshot(ws), "")
-    assert all(c.passed for c in checks), checks
+    _, problems = effective_policy(ws)
+    assert any("dead-grant" in p for p in problems)
