@@ -45,6 +45,13 @@ def test_decide_reads_the_outcome_not_the_arguments(tmp_path) -> None:
     assert "amount" in reason
 
 
+def test_decide_reads_an_empty_yaml_key_as_none_without_crashing(tmp_path) -> None:
+    # `args:` with no value is None in YAML, not {}.
+    policy, _ = effective_policy(make_workspace(tmp_path))
+    call = {"tool": "view_orders", "args": None, "attributes": None, "run_facts": None}
+    assert decide(policy, "default", call)[0] == "allow"
+
+
 def test_decide_rejects_an_undefined_role(tmp_path) -> None:
     # Not the `default` fallback: a case naming a role the policy lacks fails.
     ws = make_workspace(tmp_path)

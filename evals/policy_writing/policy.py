@@ -67,15 +67,15 @@ def decide(policy: Policy, role: str, d: dict) -> tuple[str, str]:
     if role not in policy.policy_set:
         return "error", f"role {role!r} not in policy ({policy.policy_set.roles})"
     try:
-        attributes = _ATTRIBUTES.validate_python(d.get("attributes", {}))
+        attributes = _ATTRIBUTES.validate_python(d.get("attributes") or {})
         # Over a zeroed run, so an unset `run.*` path reads 0, not missing.
-        run = run_namespace(d["tool"], **d.get("run_facts", {}))
+        run = run_namespace(d["tool"], **(d.get("run_facts") or {}))
     except (ValidationError, ValueError) as exc:
         return "error", str(exc)
     verdict = policy.policy_set.evaluate(
         role=role,
         tool=d["tool"],
-        args=d.get("args", {}),
+        args=d.get("args") or {},
         attributes=attributes,
         run=run,
     )
