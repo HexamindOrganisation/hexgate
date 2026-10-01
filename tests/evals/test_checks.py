@@ -268,6 +268,25 @@ def test_when_the_case_agent_has_no_manifest_then_loading_fails(tmp_path) -> Non
         load_known_names(ws, "billing-bot")
 
 
+@pytest.mark.parametrize(
+    "constraint",
+    ['user.department == "finance"', "arg.amount <= 5", "attrs.vip == true"],
+)
+def test_unknown_refs_flags_a_path_with_no_such_root(constraint) -> None:
+    doc = {"tools": {"refund_order": {"mode": "allow", "constraints": [constraint]}}}
+    tools = {"refund_order": {"amount"}}
+    [ref] = unknown_refs(doc, tools, {"department"})
+    assert ref == f"refund_order: {constraint.split()[0]}"
+
+
+def test_unknown_refs_reads_paths_not_string_literals() -> None:
+    # `ctx.x` inside a string is data, and quantifier bodies are walked.
+    constraint = 'args.note == "see ctx.x" and any(args.items, .price < 5)'
+    doc = {"tools": {"refund_order": {"mode": "allow", "constraints": [constraint]}}}
+    tools = {"refund_order": {"note", "items"}}
+    assert unknown_refs(doc, tools, set()) == []
+
+
 def test_unknown_refs_scans_skill_constraints() -> None:
     skill = {"mode": "allow", "constraints": ["ctx.invented == 1"]}
     doc = {"roles": {"billing": {"skills": {"pdf": skill}}}}
