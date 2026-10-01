@@ -3,7 +3,8 @@
 No eval framework is imported here: the framework's scorer and the dataset tests
 both call `score(case, workspace, before, answer)` and get back a list of `Check`s.
 One function per kind of check: the policy validates without lint warnings
-(`policy.py`), dry-run decisions and role supersets hold, files change (or not)
+(`policy.py`), dry-run decisions and role supersets hold, only names the Hexgate
+MCP would show for the case's agent are used (`names.py`), files change (or not)
 as the case says, and the final answer mentions what the case requires.
 """
 
@@ -14,6 +15,7 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
+from evals.policy_writing.names import load_known_names, unknown_refs, unknown_tools
 from evals.policy_writing.policy import (
     RANK,
     CaseError,
@@ -103,6 +105,44 @@ def superset_checks(policy: Policy | None, supersets: list[dict]) -> list[Check]
     return checks
 
 
+def _name_checks_failed(detail: str) -> list[Check]:
+    return [
+        Check("only known tools", False, detail),
+        Check("only known arguments and attributes", False, detail),
+    ]
+
+
+def name_checks(
+    policy: Policy, ws: Path, agent: str, before: dict[str, str], after: dict[str, str]
+) -> list[Check]:
+    """Only tools, arguments and attributes the MCP would show for `agent`."""
+    # The names are read after the run, so an edit to either file could
+    # whitelist an invented name: trust them only if they are untouched.
+    edited = [f for f in ("agents.json", "audit.json") if before.get(f) != after.get(f)]
+    if edited:
+        return _name_checks_failed(f"edited during the run: {edited}")
+    try:
+        tools, attrs = load_known_names(ws, agent)
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        return _name_checks_failed(
+            f"agents.json / audit.json unreadable: {exc!r}"[:300]
+        )
+    unknown = unknown_tools(policy.payload, tools)
+    refs = unknown_refs(policy.payload, tools, attrs)
+    return [
+        Check(
+            "only known tools",
+            not unknown,
+            f"not in {agent}'s manifest: {unknown}" if unknown else "",
+        ),
+        Check(
+            "only known arguments and attributes",
+            not refs,
+            f"not in the manifest or audit.json: {refs}" if refs else "",
+        ),
+    ]
+
+
 def file_checks(
     expect: dict, before: dict[str, str], after: dict[str, str]
 ) -> list[Check]:
@@ -148,6 +188,7 @@ def score(case: dict, ws: Path, before: dict[str, str], answer: str) -> list[Che
         valid,
         *decision_checks(policy, expect.get("decisions", [])),
         *superset_checks(policy, expect.get("superset", [])),
+        *(name_checks(policy, ws, case["agent"], before, after) if policy else []),
         *file_checks(expect, before, after),
         *answer_checks(expect, answer),
     ]
