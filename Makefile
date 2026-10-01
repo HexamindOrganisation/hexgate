@@ -589,6 +589,15 @@ demo-support: ## Run the compose support-bot showcase — platform + dashboard +
 	  HEXGATE_NOTEBOOK=deploy/compose_support_demo.py \
 	  python deploy/boot.py
 
+.PHONY: demo-guards
+demo-guards: ## Guarded-agent platform demo (BYOK): flip a plugin on/off live. Open http://localhost:2718
+	rm -f platform/api/demo-guards.db platform/api/demo-guards.db-wal platform/api/demo-guards.db-shm
+	PATH="$(CURDIR)/platform/api/.venv/bin:$$PATH" \
+	  DATABASE_URL="sqlite+aiosqlite:///$(CURDIR)/platform/api/demo-guards.db" \
+	  HEXGATE_DEMO=1 HEXGATE_COOKIE_SECURE=0 HEXGATE_SEED_AGENTS=skip \
+	  HEXGATE_NOTEBOOK="$(CURDIR)/deploy/guards-demo/notebook.py" \
+	  python deploy/boot.py
+
 .PHONY: demo-smoke
 demo-smoke: ## Smoke-test the bundled demo with a mock LLM (no real key)
 	cd platform/api && uv run python "$(CURDIR)/deploy/smoke_test.py"
