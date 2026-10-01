@@ -42,7 +42,8 @@ class Policy:
     """The policy the checks run against.
 
     `payload` is the document: `policy.yaml` as written, or a module tree's
-    resolved roles. `policy_set` is it loaded, ready to evaluate.
+    resolved roles (read by the known-names checks). `policy_set` is it
+    loaded, ready to evaluate.
     """
 
     payload: dict
@@ -54,6 +55,13 @@ OUTCOMES = {
     DecisionOutcome.DENY: "deny",
     DecisionOutcome.NEEDS_APPROVAL: "approval_required",
 }
+# How freely each outcome lets a call through, for comparing two roles.
+RANK = {"deny": 0, "approval_required": 1, "allow": 2}
+
+
+class CaseError(ValueError):
+    """A case's call can't be dry-run: an undefined role, bad attributes or run facts."""
+
 
 _ATTRIBUTES = TypeAdapter(dict[str, ContextAttributeValue])
 
@@ -61,17 +69,18 @@ _ATTRIBUTES = TypeAdapter(dict[str, ContextAttributeValue])
 def decide(policy: Policy, role: str, d: dict) -> tuple[str, str]:
     """Dry-run one call: (outcome, reason). Same inputs as `hexgate policy test`.
 
-    An undefined role is an error rather than the `default` fallback, as in the
-    CLI: a case naming a role the policy lacks fails instead of passing by luck.
+    Raises `CaseError` where the CLI would refuse the call. An undefined role is
+    one, rather than the `default` fallback: a case naming a role the policy
+    lacks fails instead of passing by luck.
     """
     if role not in policy.policy_set:
-        return "error", f"role {role!r} not in policy ({policy.policy_set.roles})"
+        raise CaseError(f"role {role!r} not in policy ({policy.policy_set.roles})")
     try:
         attributes = _ATTRIBUTES.validate_python(d.get("attributes") or {})
         # Over a zeroed run, so an unset `run.*` path reads 0, not missing.
         run = run_namespace(d["tool"], **(d.get("run_facts") or {}))
     except (ValidationError, ValueError) as exc:
-        return "error", str(exc)
+        raise CaseError(str(exc)) from exc
     verdict = policy.policy_set.evaluate(
         role=role,
         tool=d["tool"],
@@ -127,25 +136,25 @@ def _module_payload(ws: Path, agent: str) -> tuple[dict | None, list[str]]:
     return {"roles": effective_policy_by_role(result), RESOLVED_POLICY_MARKER: True}, []
 
 
+def _yaml_payload(ws: Path) -> tuple[dict | None, list[str]]:
+    """`policy.yaml` as `hexgate policy validate` reads it: an empty file is `{}`."""
+    try:
+        payload = yaml.safe_load((ws / "policy.yaml").read_text()) or {}
+    except (OSError, yaml.YAMLError) as exc:
+        return None, [str(exc)]
+    if not isinstance(payload, dict):
+        return None, ["policy.yaml is not a YAML mapping"]
+    return payload, []
+
+
 def effective_policy(
     ws: Path, agent: str = DEFAULT_AGENT
 ) -> tuple[Policy | None, list[str]]:
     """The policy in `ws`, or why it doesn't validate (`hexgate policy validate`,
     or `check` + `resolve` on a module tree for `agent`'s roles.yaml column)."""
-    if (ws / "policies").is_dir():
-        payload, problems = _module_payload(ws, agent)
-    else:
-        try:
-            payload = yaml.safe_load((ws / "policy.yaml").read_text()) or {}
-        except (OSError, yaml.YAMLError) as exc:
-            payload, problems = None, [str(exc)]
-        else:
-            if not isinstance(payload, dict):
-                payload, problems = None, ["policy.yaml is not a YAML mapping"]
-            else:
-                problems = []
-    if payload is not None:
-        policy_set, problems = _load(payload)
-    if problems:
+    is_modules = (ws / "policies").is_dir()
+    payload, problems = _module_payload(ws, agent) if is_modules else _yaml_payload(ws)
+    if payload is None:
         return None, problems
-    return Policy(payload, policy_set), []
+    policy_set, problems = _load(payload)
+    return (None, problems) if problems else (Policy(payload, policy_set), [])

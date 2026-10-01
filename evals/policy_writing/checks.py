@@ -14,7 +14,13 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
-from evals.policy_writing.policy import Policy, decide, effective_policy
+from evals.policy_writing.policy import (
+    RANK,
+    CaseError,
+    Policy,
+    decide,
+    effective_policy,
+)
 
 
 @dataclass
@@ -39,9 +45,6 @@ def snapshot(root: Path) -> dict[str, str]:
     return files
 
 
-RANK = {"deny": 0, "approval_required": 1, "allow": 2}
-
-
 def decision_checks(policy: Policy | None, decisions: list[dict]) -> list[Check]:
     """One check per (decision, role): the dry-run gives an expected outcome."""
     checks = []
@@ -54,17 +57,23 @@ def decision_checks(policy: Policy | None, decisions: list[dict]) -> list[Check]
             if policy is None:
                 checks.append(Check(name, False, "policy invalid"))
                 continue
-            got, raw = decide(policy, role, d)
+            try:
+                got, reason = decide(policy, role, d)
+            except CaseError as exc:
+                checks.append(Check(name, False, f"can't dry-run: {exc}"))
+                continue
             ok = got in wanted
             detail = (
-                "" if ok else f"expected {' or '.join(wanted)}, got {got}: {raw[:300]}"
+                ""
+                if ok
+                else f"expected {' or '.join(wanted)}, got {got}: {reason[:300]}"
             )
             checks.append(Check(name, ok, detail))
     return checks
 
 
 def _call_label(role: str, d: dict) -> str:
-    label = f"{role} → {d['tool']}({json.dumps(d.get('args', {}), sort_keys=True)})"
+    label = f"{role} → {d['tool']}({json.dumps(d.get('args') or {}, sort_keys=True)})"
     if d.get("attributes"):
         label += f" ctx={json.dumps(d['attributes'], sort_keys=True)}"
     if d.get("run_facts"):
@@ -82,10 +91,13 @@ def superset_checks(policy: Policy | None, supersets: list[dict]) -> list[Check]
             continue
         worse = []
         for p in s["probes"]:
-            lo, _ = decide(policy, s["narrower"], p)
-            hi, _ = decide(policy, s["wider"], p)
-            # A probe either role can't be evaluated on (a missing role) fails it.
-            if "error" in (lo, hi) or RANK[hi] < RANK[lo]:
+            try:
+                lo, _ = decide(policy, s["narrower"], p)
+                hi, _ = decide(policy, s["wider"], p)
+            except CaseError as exc:  # e.g. a missing role: the probe fails
+                worse.append(f"{p['tool']}: can't dry-run: {exc}")
+                continue
+            if RANK[hi] < RANK[lo]:
                 worse.append(f"{p['tool']}: {s['narrower']}={lo}, {s['wider']}={hi}")
         checks.append(Check(name, not worse, "; ".join(worse)))
     return checks

@@ -28,14 +28,24 @@ roles:
 """
 
 
-def write_project_files(ws: Path) -> None:
-    (ws / "README.md").write_text("# shop-bot\n")
+# Parses and builds, but `default` grants a tool no named role grants: a warning
+# at the CLI's default threshold, a failure at ours.
+PERMISSIVE_DEFAULT = """\
+version: 1
+roles:
+  default:
+    tools:
+      refund_order: { mode: allow }
+  billing:
+    tools:
+      view_orders: { mode: allow }
+"""
 
 
 def make_workspace(tmp_path: Path, policy: str = POLICY) -> Path:
     ws = tmp_path / "ws"
     ws.mkdir()
-    write_project_files(ws)
+    (ws / "README.md").write_text("# shop-bot\n")
     (ws / "policy.yaml").write_text(policy)
     return ws
 
@@ -48,7 +58,7 @@ def make_modules_workspace(tmp_path: Path, roles: str) -> Path:
     ws = tmp_path / "ws"
     (ws / "policies" / "boundaries").mkdir(parents=True)
     (ws / "policies" / "capabilities").mkdir()
-    write_project_files(ws)
+    (ws / "README.md").write_text("# shop-bot\n")
     (ws / "policies" / "boundaries" / "org.yaml").write_text(
         "default_policy: { mode: allow }\n"
         "tools:\n"
