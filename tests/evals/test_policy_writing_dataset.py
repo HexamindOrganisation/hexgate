@@ -93,6 +93,7 @@ REFUND_500 = {
     "expect": "allow",
 }
 REFUND_10 = {**REFUND_500, "args": {"order_id": "o1", "amount": 10}}
+DENY_500 = {**REFUND_500, "expect": "deny"}
 
 
 def _write(path: Path, content) -> None:
@@ -157,6 +158,33 @@ def _case(**extra) -> dict:
         ),
         # A misspelt path is missing before and after, so it would always pass.
         (_case(expect={"unchanged": ["TOOL.md"]}), "names no starting file"),
+        # A misspelt tool or argument is denied whatever the policy says.
+        (
+            _case(expect={"decisions": [{**DENY_500, "tool": "refund_ordr"}]}),
+            r"not in TOOLS.md: \['refund_ordr'\]",
+        ),
+        (
+            _case(expect={"decisions": [{**DENY_500, "args": {"amout": 501}}]}),
+            r"not in TOOLS.md: \['args.amout'\]",
+        ),
+        (
+            _case(expect={"decisions": [{**DENY_500, "attributes": {"tier": "x"}}]}),
+            r"not in TOOLS.md: \['ctx.tier'\]",
+        ),
+        (
+            _case(
+                expect={
+                    "superset": [
+                        {"wider": "a", "narrower": "b", "probes": [{"tool": "refnd"}]}
+                    ]
+                }
+            ),
+            r"not in TOOLS.md: \['refnd'\]",
+        ),
+        (
+            _case(expect={"decisions": [{**DENY_500, "tool": "agent.toool:support"}]}),
+            r"not in TOOLS.md: \['agent.toool:support'\]",
+        ),
         (_case(starting_project="missing"), "no starting project"),
         ({"request": "Do it.", "expect": {}}, "neither"),
     ],
@@ -185,6 +213,30 @@ def test_load_rejects_a_case_one_level_too_shallow(tmp_path: Path) -> None:
     root = _eval_set(tmp_path, _case())
     _write(root / "cases" / "d" / "case.yaml", _case())
     with pytest.raises(CaseError, match="not at cases/<category>/<name>"):
+        load_cases(root)
+
+
+def test_load_accepts_synthetic_tools_and_their_arguments(tmp_path: Path) -> None:
+    calls = [
+        {"tool": "net.http_request", "args": {"host": "x.com", "method": "GET"}},
+        {"tool": "agent.tool:billing", "args": {"target": "billing"}},
+    ]
+    decisions = [{**c, "role": "billing", "expect": "deny"} for c in calls]
+    load_cases(_eval_set(tmp_path, _case(expect={"decisions": decisions})))
+
+
+def test_load_rejects_a_misnamed_case_folder(tmp_path: Path) -> None:
+    root = _eval_set(tmp_path, _case())
+    (root / "cases" / "cat" / "c" / "wrong_answers").mkdir()
+    with pytest.raises(CaseError, match=r"not part of a case: \['wrong_answers'\]"):
+        load_cases(root)
+
+
+@pytest.mark.parametrize("name", ["preserve.yml", "Preserve.yaml"])
+def test_load_rejects_a_misnamed_preserve_file(tmp_path: Path, name: str) -> None:
+    root = _eval_set(tmp_path, _case())
+    _write(root / "starting_projects" / "shop" / name, [REFUND_500])
+    with pytest.raises(CaseError, match=rf"\['{name}'\] should be preserve"):
         load_cases(root)
 
 
@@ -254,7 +306,6 @@ def test_a_preserved_call_is_checked_in_every_case_of_its_project(
     assert [c["expect"]["decisions"] for c in load_cases(root)] == [[REFUND_500]] * 2
 
 
-DENY_500 = {**REFUND_500, "expect": "deny"}
 BOTH_ROLES = {
     "roles": ["billing", "support"],
     "tool": "refund_order",

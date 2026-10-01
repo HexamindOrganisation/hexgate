@@ -31,9 +31,11 @@ cases/<category>/<name>/
 
 There is no `id` or `category` field: both come from the path, and the loader
 rejects a file that sets them. It also rejects any field, `expect` key or
-decision key it does not know, a string where a list belongs, and an
-`unchanged` path the starting project lacks, because each would otherwise drop
-a check without a word.
+decision key it does not know, a string where a list belongs, an
+`unchanged` path the starting project lacks, a tool, argument or caller
+attribute in a dry-run call that `TOOLS.md` does not list, anything else in the
+case folder (a `wrong_answers/`), and a `preserve.yml`, because each would
+otherwise drop a check without a word.
 
 `expect` keys:
 

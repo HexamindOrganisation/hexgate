@@ -25,7 +25,13 @@ from pydantic import (
     model_validator,
 )
 
-from evals.policy_writing.checks import snapshot
+from evals.policy_writing.checks import (
+    AGENT_REACH_ARGS,
+    SYNTHETIC_ARGS,
+    read_manifest,
+    snapshot,
+)
+from hexgate.security.models import AGENT_REACH_PREFIXES
 
 HERE = Path(__file__).resolve().parent
 
@@ -34,6 +40,8 @@ HERE = Path(__file__).resolve().parent
 # boundaries, and the other agents' policies.
 PROTECTED = ("TOOLS.md", "*/TOOLS.md", "policies/boundaries/**", "other_agents/**")
 PRESERVE = "preserve.yaml"
+# What a case directory may hold (README, "A case"); dot entries are tooling.
+CASE_ENTRIES = {"case.yaml", "starting_project", "solution", "wrong_answer"}
 
 
 class _Strict(BaseModel):
@@ -172,8 +180,48 @@ def _project(root: Path, case_dir: Path, named: str | None) -> Path:
     return shared / named
 
 
+def _unknown_names(call: dict, tools: dict[str, set[str]], attrs: set[str]) -> list:
+    """Tool, argument and attribute names a dry-run call uses that TOOLS.md lacks.
+
+    The SDK denies an unknown tool, and a constraint on an argument the call
+    doesn't carry, so a misspelt name would pass every `deny` check.
+    """
+    tool = call["tool"]
+    if tool in SYNTHETIC_ARGS:
+        known = SYNTHETIC_ARGS[tool]
+    elif tool.startswith(AGENT_REACH_PREFIXES):  # agent.<via>:<target>
+        known = AGENT_REACH_ARGS
+    elif tool in tools:
+        known = tools[tool]
+    else:
+        return [tool]
+    bad = [f"args.{a}" for a in call.get("args", {}) if a not in known]
+    return bad + [f"ctx.{a}" for a in call.get("attributes", {}) if a not in attrs]
+
+
+def _check_names(path: Path, project: Path, expect: dict) -> None:
+    calls = expect.get("decisions", []) + [
+        p for s in expect.get("superset", []) for p in s["probes"]
+    ]
+    if not calls:
+        return
+    tools, attrs = read_manifest(project)
+    for call in calls:
+        unknown = _unknown_names(call, tools, attrs)
+        if unknown:
+            raise CaseError(f"{path}: {call['tool']}: not in TOOLS.md: {unknown}")
+
+
 def _load_case(root: Path, case_dir: Path) -> dict:
     path = case_dir / "case.yaml"
+    # A misnamed folder (`wrong_answers/`) would never be scored.
+    stray = sorted(
+        p.name
+        for p in case_dir.iterdir()
+        if p.name not in CASE_ENTRIES and not p.name.startswith(".")
+    )
+    if stray:
+        raise CaseError(f"{case_dir}: not part of a case: {stray}")
     raw = _read_yaml(path)
     if not isinstance(raw, dict):
         raise CaseError(f"{path}: not a YAML mapping")
@@ -212,6 +260,13 @@ def _load_case(root: Path, case_dir: Path) -> dict:
     if unchanged:
         expect["unchanged"] = unchanged
 
+    # A `preserve.yml` or `Preserve.yaml` would be skipped (or, on a
+    # case-insensitive disk, read) and also handed to the agent as a project file.
+    misnamed = sorted(
+        rel for rel in files if "/" not in rel and Path(rel.lower()).stem == "preserve"
+    )
+    if misnamed:
+        raise CaseError(f"{case['project']}: {misnamed} should be {PRESERVE}")
     preserve = case["project"] / PRESERVE
     if preserve.is_file():
         try:
@@ -220,6 +275,7 @@ def _load_case(root: Path, case_dir: Path) -> dict:
             raise CaseError(f"{preserve}: {exc}") from exc
         preserved = _DECISIONS.dump_python(decisions, exclude_unset=True)
         expect["decisions"] = _merge_preserved(expect.get("decisions", []), preserved)
+    _check_names(path, case["project"], expect)
     return case
 
 
