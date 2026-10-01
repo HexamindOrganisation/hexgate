@@ -186,19 +186,22 @@ A denial uses the same wording as [Google ADK](/adapters/google-adk#what-a-denia
 - **Skills whose paths are not known at wrap time are not gated** — a source
   added mid-run, or a backend populated per invocation. Their reads decide as
   ordinary `read_file` calls.
-- **Sub-agents bypass filesystem, shell and skill gating.** deepagents' `task`
-  tool runs each sub-agent as a separate graph inside the tool call, and Hexgate
-  wraps the top-level graph only. Every sub-agent builds its own filesystem tools
-  on the same backend (`ls`, `read_file`, `write_file`, `edit_file`, `glob`,
-  `grep`, and `execute` when the backend can run commands), and Hexgate never
-  sees them. A `deny` or `approval_required` on any of them holds for the
-  top-level agent only: a sub-agent can run `execute` under `execute: deny`,
-  write a file under `write_file: deny`, or read a denied skill's `SKILL.md` (the
-  default `general-purpose` sub-agent gets the same skills). None of this
-  produces a decision; only the `task` call itself is recorded. Tools you pass in
-  `tools=` are shared with sub-agents and stay gated. `task` is a top-level tool
-  gated under `tools:`, so if any of these denials must hold, deny `task` too, or
-  leave it unlisted under a deny-default policy. That withdraws every sub-agent.
+- **Sub-agents are not gated.** Hexgate gates only the tool objects it wraps:
+  those passed to `wrap_langchain_agent(tools=)` and those bound on the top-level
+  graph. deepagents' `task` tool runs each sub-agent as a separate graph inside
+  the tool call, and any tool a sub-agent runs that is not one of those objects
+  runs with no decision. That includes:
+  - the filesystem tools every sub-agent builds on the same backend (`ls`,
+    `read_file`, `write_file`, `edit_file`, `glob`, `grep`, and `execute` when
+    the backend can run commands), so `execute: deny` or a denied skill's
+    `SKILL.md` holds for the top-level agent only;
+  - tools a sub-agent spec declares in its own `tools` list, unless the same
+    objects are also passed to `wrap_langchain_agent(tools=)`;
+  - everything inside a `CompiledSubAgent`.
+
+  Only the `task` call itself is recorded. `task` is a top-level tool gated under
+  `tools:`, so if a denial must hold inside sub-agents, deny `task` too, or leave
+  it unlisted under a deny-default policy. That withdraws every sub-agent.
   Gating sub-agent tools is tracked in
   [#273](https://github.com/HexamindOrganisation/hexgate/issues/273).
 - **Not containment.** A model can reach a skill's text another way — `grep`, `ls`
