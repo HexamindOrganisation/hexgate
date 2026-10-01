@@ -356,8 +356,9 @@ def test_platform_bundle_matches_pydantic(role, tool, args, expect_allow, signer
 
 @needs_opa
 def test_get_agent_returns_etag_header_when_bundle_present() -> None:
-    """The endpoint exposes the bundle's wasm_hash as a quoted ETag so
-    the SDK can use it on subsequent conditional GETs."""
+    """The endpoint exposes a quoted ETag over the signed manifest so the SDK can
+    use it on subsequent conditional GETs. Over the manifest, not the wasm, so a
+    guards-only edit (same wasm, different stance) still invalidates it (R-GUARD-007)."""
     from fastapi.testclient import TestClient
     from hexgate_api import main
 
@@ -369,10 +370,10 @@ def test_get_agent_returns_etag_header_when_bundle_present() -> None:
         assert r.status_code == 200
         etag = r.headers.get("etag")
         assert etag and etag.startswith('"') and etag.endswith('"')
-        # Server-side ETag matches the wasm sha256 the SDK can compute.
+        # Server-side ETag matches the sha256 of the signed manifest the SDK receives.
         body = r.json()
-        served_wasm = base64.b64decode(body["bundle_wasm_b64"])
-        assert etag == f'"{hashlib.sha256(served_wasm).hexdigest()}"'
+        manifest_bytes = body["bundle_manifest"].encode("utf-8")
+        assert etag == f'"{hashlib.sha256(manifest_bytes).hexdigest()}"'
 
 
 @needs_opa
