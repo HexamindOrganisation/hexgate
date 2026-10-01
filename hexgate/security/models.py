@@ -139,6 +139,12 @@ AgentVia = Literal["tool", "handoff"]
 # exactly as the ``net.*`` egress tools already do.
 AGENT_RUN_TOOL = "agent.run"
 
+# The arguments the agent gate passes with each key (``AgentGate._decide`` /
+# ``ReachGate._decide``), so a constraint can read ``args.agent`` and, on a
+# reach key, ``args.target`` / ``args.via``.
+AGENT_RUN_ARGS = frozenset({"agent"})
+AGENT_REACH_ARGS = frozenset({"agent", "target", "via"})
+
 # Prefixes for the reach keys (``agent.tool:<name>`` / ``agent.handoff:<name>``),
 # derived from AgentVia so a new via mode is covered everywhere automatically. One
 # source of truth for the namespace reservation and for both engines' closed-world

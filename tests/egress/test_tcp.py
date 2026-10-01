@@ -14,6 +14,7 @@ from hexgate.egress.tcp import TcpEgressProxy, tcp_egress_guard
 from hexgate.runtime.context import HexgateContext
 from hexgate.security.decision import Decision
 from hexgate.security.enforcer import build_enforcer
+from hexgate.security.network import NET_TCP_CONNECT_ARGS
 from hexgate.security.policy_set import load_policy_set_from_dict
 
 
@@ -176,6 +177,7 @@ async def test_binds_identity_and_records_tcp_tool() -> None:
         "port": echo_port,
         "protocol": "tcp",
     }
+    assert seen[0].arguments.keys() == NET_TCP_CONNECT_ARGS
 
 
 async def test_upstream_unreachable_drops_connection() -> None:

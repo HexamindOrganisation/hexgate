@@ -36,6 +36,13 @@ from hexgate.security import (
 )
 from hexgate.security.analyzer import SEVERITY_RANK, check_default_role_exposure
 from hexgate.security.constraints import ConstraintParseError
+from hexgate.security.models import AGENT_REACH_ARGS, AGENT_RUN_ARGS, AGENT_RUN_TOOL
+from hexgate.security.network import (
+    NET_HTTP_REQUEST,
+    NET_HTTP_REQUEST_ARGS,
+    NET_TCP_CONNECT,
+    NET_TCP_CONNECT_ARGS,
+)
 from hexgate.security.testing import run_namespace
 
 # Everything the SDK raises for a policy it can't load, compile or link.
@@ -112,12 +119,12 @@ def decide(policy: Policy, role: str, d: dict) -> tuple[str, str]:
     return OUTCOMES[verdict.outcome], reason
 
 
-# Arguments the synthetic keys carry (hexgate/security/network.py, the agent gate).
+# Arguments the synthetic keys carry, as the gates that build those calls define them.
 SYNTHETIC_ARGS = {
-    "net.http_request": {"host", "scheme", "port", "path", "query"},
-    "net.tcp_connect": {"host", "port", "protocol"},
+    NET_HTTP_REQUEST: NET_HTTP_REQUEST_ARGS,
+    NET_TCP_CONNECT: NET_TCP_CONNECT_ARGS,
+    AGENT_RUN_TOOL: AGENT_RUN_ARGS,
 }
-AGENT_ARGS = {"agent", "target", "via"}
 REF = re.compile(r"\b(args|ctx)\.([A-Za-z_]\w*)")
 
 
@@ -155,7 +162,7 @@ def policy_tools(doc: dict) -> set[str]:
 
 def unknown_refs(doc: dict, tools: dict[str, set[str]], attrs: set[str]) -> list[str]:
     """`args.x` / `ctx.x` a constraint uses that TOOLS.md doesn't define."""
-    every_arg = set().union(*tools.values(), *SYNTHETIC_ARGS.values(), AGENT_ARGS)
+    every_arg = set().union(*tools.values(), *SYNTHETIC_ARGS.values(), AGENT_REACH_ARGS)
     doc, bodies = policy_bodies(doc)
     # (tool or None for a policy- or role-level constraint, constraint text)
     lines = [(None, c) for c in doc.get("constraints") or []]
@@ -170,10 +177,10 @@ def unknown_refs(doc: dict, tools: dict[str, set[str]], attrs: set[str]) -> list
                 ok = name in attrs
             elif tool is None:
                 ok = name in every_arg
-            elif tool.startswith("agent."):
-                ok = name in AGENT_ARGS
             elif tool in SYNTHETIC_ARGS:
                 ok = name in SYNTHETIC_ARGS[tool]
+            elif tool.startswith("agent."):  # a reach key, agent.<via>:<target>
+                ok = name in AGENT_REACH_ARGS
             else:
                 ok = (
                     tool not in tools or name in tools[tool]
