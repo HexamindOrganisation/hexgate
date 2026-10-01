@@ -49,7 +49,7 @@ def test_snapshot_ignores_every_path_under_a_dot_directory(tmp_path) -> None:
     skill.parent.mkdir(parents=True)
     skill.write_text("installed by the harness")
     (ws / ".effective.yaml").write_text("{}")
-    assert set(snapshot(ws)) == {"agents.json", "audit.json", "policy.yaml"}
+    assert set(snapshot(ws)) == {"README.md", "policy.yaml"}
 
 
 def test_no_changes_ignores_an_installed_skill(tmp_path) -> None:
@@ -67,12 +67,12 @@ def test_no_changes_ignores_an_installed_skill(tmp_path) -> None:
 def test_no_changes_fails_on_one_changed_file(tmp_path) -> None:
     ws = make_workspace(tmp_path)
     before = snapshot(ws)
-    (ws / "audit.json").write_text("[]")
+    (ws / "README.md").write_text("edited\n")
     checks = by_name(
         score({"agent": AGENT, "expect": {"no_changes": True}}, ws, before, "")
     )
     assert not checks["no changes"].passed
-    assert checks["no changes"].detail == "changed: ['audit.json']"
+    assert checks["no changes"].detail == "changed: ['README.md']"
 
 
 def test_changed_and_unchanged(tmp_path) -> None:
@@ -81,18 +81,18 @@ def test_changed_and_unchanged(tmp_path) -> None:
     (ws / "policy.yaml").write_text(POLICY + "# edited\n")
     case = {
         "agent": AGENT,
-        "expect": {"changed": ["policy.yaml"], "unchanged": ["agents.json"]},
+        "expect": {"changed": ["policy.yaml"], "unchanged": ["README.md"]},
     }
     checks = by_name(score(case, ws, before, ""))
     assert checks["changed: policy.yaml"].passed
-    assert checks["unchanged: agents.json"].passed
+    assert checks["unchanged: README.md"].passed
 
     case = {
         "agent": AGENT,
-        "expect": {"changed": ["agents.json"], "unchanged": ["policy.yaml"]},
+        "expect": {"changed": ["README.md"], "unchanged": ["policy.yaml"]},
     }
     checks = by_name(score(case, ws, before, ""))
-    assert not checks["changed: agents.json"].passed
+    assert not checks["changed: README.md"].passed
     assert not checks["unchanged: policy.yaml"].passed
 
 
