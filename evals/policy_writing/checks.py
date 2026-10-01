@@ -5,7 +5,8 @@ both call `score(case, workspace, before, answer)` and get back a list of `Check
 The checks call the SDK functions the platform's policy endpoints use (load,
 compile, lint, resolve, evaluate): the policy must validate without lint
 warnings, every dry-run decision must match, files must change (or not) as the
-case says, and the final answer must mention what the case requires.
+case says, only tools and arguments `TOOLS.md` lists may be used, and the final
+answer must mention what the case requires.
 """
 
 from __future__ import annotations
