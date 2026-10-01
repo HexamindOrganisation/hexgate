@@ -4,10 +4,10 @@ No eval framework is imported here: the framework's scorer and the dataset tests
 both call `score(case, workspace, before, answer)` and get back a list of `Check`s.
 The checks call the SDK functions the platform's policy endpoints use (load,
 compile, lint, resolve, evaluate): the policy must validate without lint
-warnings, every dry-run decision (and role superset) must hold, files must change
-(or not) as the case says, only the tools, arguments and caller attributes the
-Hexgate MCP would show may be used (the case agent's, or any agent's when the case
-names none), and the final answer must mention what the case requires.
+warnings, every dry-run decision must match, files must change (or not) as the
+case says, only the tools, arguments and caller attributes the Hexgate MCP would
+show for the case's agent may be used, and the final answer must mention what the
+case requires.
 """
 
 from __future__ import annotations
@@ -132,36 +132,27 @@ SYNTHETIC_ARGS = {
 REF = re.compile(r"\b(args|ctx)\.([A-Za-z_]\w*)")
 
 
-def load_known_names(
-    ws: Path, agent: str | None
-) -> tuple[dict[str, set[str]], set[str]]:
-    """({tool: its argument names}, caller attribute names) the policy may use.
+def load_known_names(ws: Path, agent: str) -> tuple[dict[str, set[str]], set[str]]:
+    """({tool: its argument names}, caller attribute names) a policy for `agent` may use.
 
     The starting project stands in for what the Hexgate MCP's tools (per its
     design) return:
     - `agents.json` is `agents_list` (`GET /agents/manifest`, a list of
-      `AgentManifestView`): tools and their argument names.
+      `AgentManifestView`). Tools and their argument names come from `agent`'s
+      manifest only, so a tool another agent in the project has is unknown.
     - `audit.json` is `audit_decisions`: `AuditDecisionRow`s, as a list or the
       endpoint's page (`{rows, ...}`). Caller attributes are set per request and
-      are not in the manifest, so the known ones are the rows' `attributes` keys.
-      No `audit.json` means no known attributes.
-
-    With `agent` (a case editing one agent's policy), only that agent's manifest
-    and audit rows count, so a tool another agent has is unknown. Without it (a
-    role or project-wide edit), every agent in the project counts.
+      are not in the manifest, so the known ones are the `attributes` keys of
+      `agent`'s rows. No `audit.json` means no known attributes.
     """
     manifests = {
         view["name"]: AgentManifest.model_validate(view["manifest"])
         for view in json.loads((ws / "agents.json").read_text())
         if view.get("manifest") is not None
     }
-    if agent is not None and agent not in manifests:
+    if agent not in manifests:
         raise ValueError(f"agents.json has no manifest for agent {agent!r}")
-    tools: dict[str, set[str]] = {}
-    for name, manifest in manifests.items():
-        if agent in (None, name):
-            for t in manifest.tools:
-                tools.setdefault(t.name, set()).update(t.input_schema.properties)
+    tools = {t.name: set(t.input_schema.properties) for t in manifests[agent].tools}
     audit = ws / "audit.json"
     rows = json.loads(audit.read_text()) if audit.exists() else []
     if isinstance(rows, dict):  # the endpoint's page shape, {rows, total, ...}
@@ -169,7 +160,7 @@ def load_known_names(
     attrs = {
         name
         for row in rows
-        if agent in (None, row["agent_name"])
+        if row["agent_name"] == agent
         for name in row.get("attributes") or {}
     }
     return tools, attrs
@@ -183,15 +174,6 @@ def policy_bodies(doc: dict) -> tuple[dict, list[dict]]:
 def policy_tools(doc: dict) -> set[str]:
     _, bodies = policy_bodies(doc)
     return {t for b in bodies for t in (b.get("tools") or {})}
-
-
-def unknown_tools(doc: dict, tools: dict[str, set[str]]) -> list[str]:
-    """Tool keys that are neither in `tools` nor a synthetic (net.*, agent.*) key."""
-    return sorted(
-        t
-        for t in policy_tools(doc)
-        if t not in tools and t not in SYNTHETIC_ARGS and not t.startswith("agent.")
-    )
 
 
 def unknown_refs(doc: dict, tools: dict[str, set[str]], attrs: set[str]) -> list[str]:
@@ -303,55 +285,10 @@ def effective_policy(
     return Policy(payload, policy_set), Check("valid", True)
 
 
-def _columns(
-    ws: Path, agent: str | None, policy: Policy
-) -> tuple[dict[str, Policy], list[str]]:
-    """The policies a case's dry-runs must hold on, keyed by roles.yaml column.
-
-    A case for one agent, or a single policy.yaml, has one. A role or
-    project-wide case on a module tree must hold on the generic column and on
-    every named agent's: a named cell replaces "*" for that agent, so an edit
-    to "*" alone does nothing for an agent that has its own cell. Also returns
-    why any named column is invalid, which fails `valid`.
-    """
-    columns = {agent or DEFAULT_AGENT: policy}
-    problems = []
-    if agent is None and (ws / "policies").is_dir():
-        for cells in (load_roles(ws) or {}).values():
-            for name in cells:
-                if name not in columns:
-                    column, valid = effective_policy(ws, name)
-                    if column is None:
-                        problems.append(f"column {name}: {valid.detail}")
-                    else:
-                        columns[name] = column
-    return columns, problems
-
-
-def _column_tools(ws: Path, agent: str, capabilities: list) -> set[str]:
-    """Tools the capabilities in `agent`'s roles.yaml column name, over all roles."""
-    roles = load_roles(ws)
-    if roles is None:  # no roles.yaml: one default importing every capability
-        names = {m.name for m in capabilities}
-    else:
-        names = {
-            cap
-            for cells in roles.values()
-            if (binding := cells.get(agent) or cells.get(DEFAULT_AGENT))
-            for cap in binding.capabilities
-        }
-    return {t for m in capabilities if m.name in names for t in m.policy.tools}
-
-
 def score(case: dict, ws: Path, before: dict[str, str], answer: str) -> list[Check]:
     expect = case.get("expect", {})
-    policy, valid = effective_policy(ws, case.get("agent") or DEFAULT_AGENT)
+    policy, valid = effective_policy(ws, case["agent"])
     checks = [valid]
-    columns: dict[str, Policy] = {}
-    if policy is not None:
-        columns, problems = _columns(ws, case.get("agent"), policy)
-        if problems:
-            checks[0] = Check("valid", False, "\n".join(problems)[-800:])
 
     for d in expect.get("decisions", []):
         # `roles` expands one entry over several roles; `expect` may list the
@@ -368,15 +305,12 @@ def score(case: dict, ws: Path, before: dict[str, str], answer: str) -> list[Che
             if policy is None:
                 checks.append(Check(f"decision: {label}", False, "policy invalid"))
                 continue
-            wrong = []
-            for column, p in columns.items():
-                got, raw = decide(p, role, d)
-                if got not in wanted:
-                    where = "" if len(columns) == 1 else f" on column {column}"
-                    wrong.append(
-                        f"expected {' or '.join(wanted)}, got {got}{where}: {raw[:300]}"
-                    )
-            checks.append(Check(f"decision: {label}", not wrong, "; ".join(wrong)))
+            got, raw = decide(policy, role, d)
+            ok = got in wanted
+            detail = (
+                "" if ok else f"expected {' or '.join(wanted)}, got {got}: {raw[:300]}"
+            )
+            checks.append(Check(f"decision: {label}", ok, detail))
 
     for s in expect.get("superset", []):
         # Everything `narrower` may do, `wider` may do at least as freely.
@@ -385,21 +319,17 @@ def score(case: dict, ws: Path, before: dict[str, str], answer: str) -> list[Che
             checks.append(Check(name, False, "policy invalid"))
             continue
         worse = []
-        for column, pol in columns.items():
-            where = "" if len(columns) == 1 else f" (column {column})"
-            for p in s["probes"]:
-                lo, _ = decide(pol, s["narrower"], p)
-                hi, _ = decide(pol, s["wider"], p)
-                # A probe either role can't be evaluated on (a missing role) fails it.
-                if "error" in (lo, hi) or RANK[hi] < RANK[lo]:
-                    worse.append(
-                        f"{p['tool']}: {s['narrower']}={lo}, {s['wider']}={hi}{where}"
-                    )
+        for p in s["probes"]:
+            lo, _ = decide(policy, s["narrower"], p)
+            hi, _ = decide(policy, s["wider"], p)
+            # A probe either role can't be evaluated on (a missing role) fails it.
+            if "error" in (lo, hi) or RANK[hi] < RANK[lo]:
+                worse.append(f"{p['tool']}: {s['narrower']}={lo}, {s['wider']}={hi}")
         checks.append(Check(name, not worse, "; ".join(worse)))
 
     after = snapshot(ws)
     if policy is not None:
-        agent = case.get("agent")
+        agent = case["agent"]
         # The names are read after the run, so an edit to either file could
         # whitelist an invented name: trust them only if they are untouched.
         edited = [
@@ -415,38 +345,21 @@ def score(case: dict, ws: Path, before: dict[str, str], answer: str) -> list[Che
             checks.append(Check("only known tools", False, problem))
             checks.append(Check("only known arguments and attributes", False, problem))
         else:
-            where = f"{agent}'s manifest" if agent else "any agent's manifest"
-            unknown = unknown_tools(policy.payload, tools)
-            refs = unknown_refs(policy.payload, tools, attrs)
-            if (ws / "policies").is_dir():
-                # The resolved payload holds only what one column of roles.yaml
-                # imports. Every module file must still use names some agent in
-                # the project has: a capability may serve another agent, or none.
-                all_tools, all_attrs = load_known_names(ws, None)
-                boundaries, capabilities = load_local_modules(ws)
-                # A boundary is org-wide, so it may name another agent's tool
-                # (e.g. deny wire_transfer); it is checked below as a file. Unless
-                # a capability this agent's column imports grants it too.
-                granted = _column_tools(ws, agent or DEFAULT_AGENT, capabilities)
-                org_wide = {t for m in boundaries for t in m.policy.tools} - granted
-                unknown = [t for t in unknown if t not in org_wide]
-                for m in [*boundaries, *capabilities]:
-                    doc = m.policy.model_dump()
-                    rel = Path(m.source).relative_to(ws)
-                    unknown += [
-                        f"{rel}: {t} (no agent has it)"
-                        for t in unknown_tools(doc, all_tools)
-                    ]
-                    refs += [
-                        f"{rel}: {r}" for r in unknown_refs(doc, all_tools, all_attrs)
-                    ]
+            unknown = sorted(
+                t
+                for t in policy_tools(policy.payload)
+                if t not in tools
+                and t not in SYNTHETIC_ARGS
+                and not t.startswith("agent.")
+            )
             checks.append(
                 Check(
                     "only known tools",
                     not unknown,
-                    f"not in {where}: {unknown}" if unknown else "",
+                    f"not in {agent}'s manifest: {unknown}" if unknown else "",
                 )
             )
+            refs = unknown_refs(policy.payload, tools, attrs)
             checks.append(
                 Check(
                     "only known arguments and attributes",
