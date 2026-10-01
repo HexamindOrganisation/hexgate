@@ -22,20 +22,10 @@ from collections.abc import Iterable
 # reverse.
 NET_HTTP_REQUEST = "net.http_request"
 
-# The arguments a ``net.http_request`` call carries — the union of
-# ``hexgate.egress.model.connect_to_args`` and ``http_to_args``. ``path`` and
-# ``query`` are only present on plain HTTP (an HTTPS CONNECT hides them).
-NET_HTTP_REQUEST_ARGS = frozenset(
-    {"method", "scheme", "host", "port", "url", "path", "query"}
-)
-
 # The synthetic tool a raw-TCP egress connection (e.g. a database driver opening
 # a socket) is attributed to. Gated on host + port before any bytes flow, so it
 # works for any TCP service regardless of the wire protocol on top.
 NET_TCP_CONNECT = "net.tcp_connect"
-
-# The arguments a ``net.tcp_connect`` call carries (built in hexgate.egress.tcp).
-NET_TCP_CONNECT_ARGS = frozenset({"host", "port", "protocol"})
 
 
 def host_match_constraint(
