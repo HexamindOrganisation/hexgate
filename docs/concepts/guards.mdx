@@ -146,20 +146,25 @@ you can drop credential protection in without writing the matcher yourself.
 | --- | --- | --- |
 | `secret_guard` | before / halt | refuses a call whose arguments carry a credential |
 | `secret_redactor` | before / rewrite | strips the credential from the arguments and lets the cleaned call run |
-| `secret_watch` | after / observe | logs a warning when a credential leaks into a tool's result |
+| `secret_watch` | after / observe | logs a warning when a credential leaks into a tool's result, leaving it unchanged |
+| `secret_scrubber` | after / rewrite | strips the credential from a tool's result so the cleaned result flows on |
 
 ```python
 from hexgate import create_agent
-from hexgate.plugins import secret_guard, secret_watch
+from hexgate.plugins import secret_redactor, secret_scrubber
 
 agent, _ = create_agent(model="gpt-5.4", tools=[...],
-                        guards=[secret_guard, secret_watch])
+                        guards=[secret_redactor, secret_scrubber])
 ```
 
 `secret_guard` and `secret_redactor` are the two halves of the outbound case: pick
 per tool by whether a secret's presence means the call is wrong (guard) or merely
 incidental and safe to strip (redactor) — don't put both on the same tool, since
 the redactor would clean the arguments before the guard ever saw them.
+
+`secret_watch` and `secret_scrubber` are the inbound pair, for a credential that
+comes back in a tool's result: watch when you only want the leak flagged on the
+operator channel, scrub when the result must be made safe before it flows on.
 
 The refusal and the redaction record name the credential's **category and field**,
 never the value:
