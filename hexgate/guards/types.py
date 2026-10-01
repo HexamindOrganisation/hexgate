@@ -25,7 +25,7 @@ if TYPE_CHECKING:
     from hexgate.runtime.context import HexgateContext
 
 # Sentinel distinguishing "field not provided" from an explicit ``None`` (a
-# real value a later result-rewrite phase must be able to set). Identity-only.
+# real value a post-guard result rewrite must be able to set). Identity-only.
 _UNSET: Any = object()
 
 
@@ -75,8 +75,9 @@ class ToolOutcome:
 
     ``ok=True`` carries the return in ``value`` (JSON-ish or an opaque object);
     ``ok=False`` carries the stringified exception in ``error`` when the tool
-    raised, so an after-guard sees a failure the same way it sees a result. In
-    v1 after-guards observe or halt; they do not rewrite the value.
+    raised, so an after-guard sees a failure the same way it sees a result. An
+    after-guard may observe, halt, or rewrite the value via ``Proceed(result=...)``;
+    a failed outcome has no result to rewrite.
     """
 
     ok: bool
@@ -89,10 +90,12 @@ class Proceed:
     """Continue the pipeline.
 
     ``Proceed()`` continues unchanged. ``Proceed(args=...)`` rewrites the args
-    a before-guard passes downstream (to ``decide`` and the tool); the optional
-    ``modification`` documents it, and the runner synthesizes a generic one if
-    omitted. ``result`` is reserved for the later result-rewrite phase and is
-    rejected in v1.
+    a before-guard passes downstream (to ``decide`` and the tool); ``Proceed(
+    result=...)`` rewrites the value an after-guard passes on, once the tool has
+    run. The two are position-bound: ``args`` from an after-guard (the tool has
+    run, so there is nothing to rewrite) and ``result`` from a before-guard (the
+    tool has not run) are both rejected. The optional ``modification`` documents
+    the rewrite, and the runner synthesizes a generic one if omitted.
     """
 
     args: dict[str, Any] | None = None
@@ -212,8 +215,8 @@ def after_tool(
     """Attach a guard that runs after a tool call, on its result.
 
     Same forms as :func:`before_tool`. An after-guard sees the
-    :class:`ToolOutcome` (a return, or a raised error) and may observe or halt;
-    it does not rewrite the result in v1. Note the tool has already executed by
+    :class:`ToolOutcome` (a return, or a raised error) and may observe, rewrite the
+    result (``Proceed(result=...)``), or halt. Note the tool has already executed by
     the time an after-guard runs, so a `Halt` here gates whether the model *sees*
     the result, not the tool's side effect (which already happened). A
     `Halt(NEEDS_APPROVAL)` on an after-guard therefore gates result release, not
