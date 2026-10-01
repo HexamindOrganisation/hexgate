@@ -185,10 +185,19 @@ A denial uses the same wording as [Google ADK](/adapters/google-adk#what-a-denia
 - **Skills whose paths are not known at wrap time are not gated** — a source
   added mid-run, or a backend populated per invocation. Their reads decide as
   ordinary `read_file` calls.
+- **Sub-agents are not gated.** deepagents' `task` tool runs each sub-agent as a
+  separate graph inside the tool call, and Hexgate wraps the top-level graph only.
+  The default `general-purpose` sub-agent gets the same skills and its own
+  `read_file` (every sub-agent gets filesystem tools on the same backend), so it
+  can read a denied skill's `SKILL.md`. That read produces no skill decision; only
+  the `task` call itself is recorded. `task` is a top-level tool gated under
+  `tools:`, so if a skill must stay withdrawn, deny `task` too, or leave it
+  unlisted under a deny-default policy. That withdraws every sub-agent, not only
+  the skill path.
 - **Not containment.** A model can reach a skill's text another way — `grep`, `ls`
   plus a read of a variant spelling, a copy elsewhere on the backend. This gates
-  the documented activation path, which is what the audit trail and the
-  kill-switch need. The [tool layer](/policy/yaml-shape) remains the boundary.
+  the documented activation path on the top-level agent (not inside sub-agents,
+  see above), which is what the audit trail and the kill-switch need. The [tool layer](/policy/yaml-shape) remains the boundary.
 - **The pin is a separate read.** The hash is taken just before `read_file` reads
   the file itself, so on a writable backend a body changed between the two reads
   can slip past a pin.
