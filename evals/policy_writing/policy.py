@@ -54,11 +54,6 @@ OUTCOMES = {
     DecisionOutcome.DENY: "deny",
     DecisionOutcome.NEEDS_APPROVAL: "approval_required",
 }
-OUTCOMES = {
-    DecisionOutcome.ALLOW: "allow",
-    DecisionOutcome.DENY: "deny",
-    DecisionOutcome.NEEDS_APPROVAL: "approval_required",
-}
 
 _ATTRIBUTES = TypeAdapter(dict[str, ContextAttributeValue])
 
