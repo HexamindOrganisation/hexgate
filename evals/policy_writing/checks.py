@@ -104,7 +104,11 @@ def file_checks(
     for rel in expect.get("changed", []):
         checks.append(Check(f"changed: {rel}", after.get(rel) != before.get(rel)))
     for rel in expect.get("unchanged", []):
-        checks.append(Check(f"unchanged: {rel}", after.get(rel) == before.get(rel)))
+        # A path in neither snapshot is a typo in the case, not an untouched file.
+        if rel not in before and rel not in after:
+            checks.append(Check(f"unchanged: {rel}", False, "no such file"))
+        else:
+            checks.append(Check(f"unchanged: {rel}", after.get(rel) == before.get(rel)))
     return checks
 
 

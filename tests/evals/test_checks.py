@@ -96,6 +96,14 @@ def test_changed_and_unchanged(tmp_path) -> None:
     assert not checks["unchanged: policy.yaml"].passed
 
 
+def test_when_an_unchanged_path_does_not_exist_then_it_fails(tmp_path) -> None:
+    ws = make_workspace(tmp_path)
+    case = {"agent": AGENT, "expect": {"unchanged": ["policies/boundary/org.yaml"]}}
+    check = by_name(score(case, ws, snapshot(ws), ""))
+    assert check["unchanged: policies/boundary/org.yaml"].detail == "no such file"
+    assert not check["unchanged: policies/boundary/org.yaml"].passed
+
+
 def test_superset_reports_the_violating_probe(tmp_path) -> None:
     ws = make_workspace(tmp_path)
     case = {
