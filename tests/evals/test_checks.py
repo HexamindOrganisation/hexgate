@@ -154,6 +154,26 @@ def test_unknown_refs_accepts_a_known_caller_attribute(tmp_path) -> None:
     assert unknown_refs(policy.payload, tools, attrs) == []
 
 
+def test_when_a_synthetic_key_reads_its_gate_args_then_unknown_refs_checks_each() -> (
+    None
+):
+    def on(tool: str, constraint: str) -> dict:
+        return {"tools": {tool: {"mode": "allow", "constraints": [constraint]}}}
+
+    doc = {
+        "roles": {
+            "a": on("net.http_request", 'args.method == "GET"'),
+            "b": on("agent.tool:billing", 'args.via == "tool"'),
+            "c": on("agent.run", 'args.target == "billing"'),
+            "d": on("agent.handoff:billing", "args.amount <= 500"),
+        }
+    }
+    assert unknown_refs(doc, {}, set()) == [
+        "agent.handoff:billing: args.amount",
+        "agent.run: args.target",
+    ]
+
+
 def test_snapshot_ignores_every_path_under_a_dot_directory(tmp_path) -> None:
     ws = _workspace(tmp_path)
     skill = ws / ".claude" / "skills" / "x" / "SKILL.md"

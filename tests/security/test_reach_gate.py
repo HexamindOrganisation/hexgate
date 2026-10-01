@@ -21,18 +21,22 @@ from hexgate.security import (
     warn_if_tool_reach_unenforced,
 )
 from hexgate.security import agent_gate as agent_gate_mod
+from hexgate.security.decision import Decision
 from hexgate.security.enforcer import PolicyEnforcer
+from hexgate.security.models import AGENT_REACH_ARGS
 from hexgate.security.policy_set import load_policy_set
 
 _ROLE = HexgateContext(user_id="u", user_roles=["support"])
 
 
-def _enforcer(agents: dict | None) -> PolicyEnforcer:
+def _enforcer(agents: dict | None, observer=None) -> PolicyEnforcer:
     policy = AgentPolicy(
         default_policy=BaseToolPolicy(mode="allow"),  # permissive default...
         agents=agents or {},
     )
-    return PolicyEnforcer(load_policy_set(policy), agent_name="orchestrator")
+    return PolicyEnforcer(
+        load_policy_set(policy), agent_name="orchestrator", decision_observer=observer
+    )
 
 
 # --- engagement (opt-in) ---------------------------------------------------
@@ -52,6 +56,14 @@ def test_reach_allow_passes() -> None:
     gate = resolve_reach_gate(_enforcer({"billing-bot": {"mode": "allow"}}))
     with _ROLE.sync_scope():
         gate.check_reach("billing-bot", via="handoff")  # listed → allowed
+
+
+def test_when_reach_decided_then_args_match_declared_args() -> None:
+    seen: list[Decision] = []
+    enforcer = _enforcer({"billing-bot": {"mode": "allow"}}, observer=seen.append)
+    with _ROLE.sync_scope():
+        resolve_reach_gate(enforcer).check_reach("billing-bot", via="handoff")
+    assert seen[0].arguments.keys() == AGENT_REACH_ARGS
 
 
 def test_reach_unlisted_target_is_closed_world_denied() -> None:

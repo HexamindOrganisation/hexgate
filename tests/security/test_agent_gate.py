@@ -22,19 +22,23 @@ from hexgate.security import (
     warn_if_admission_unenforced,
 )
 from hexgate.security import agent_gate as agent_gate_mod
+from hexgate.security.decision import Decision
 from hexgate.security.enforcer import PolicyEnforcer
+from hexgate.security.models import AGENT_RUN_ARGS
 from hexgate.security.policy_set import load_policy_set, load_policy_set_from_dict
 
 _ROLE = HexgateContext(user_id="u", user_roles=["support"])
 
 
-def _enforcer(admission_mode: str | None) -> PolicyEnforcer:
+def _enforcer(admission_mode: str | None, observer=None) -> PolicyEnforcer:
     admission = BaseToolPolicy(mode=admission_mode) if admission_mode else None
     policy = AgentPolicy(
         default_policy=BaseToolPolicy(mode="deny"),
         admission=admission,
     )
-    return PolicyEnforcer(load_policy_set(policy), agent_name="my-agent")
+    return PolicyEnforcer(
+        load_policy_set(policy), agent_name="my-agent", decision_observer=observer
+    )
 
 
 # --- opt-in ----------------------------------------------------------------
@@ -59,6 +63,14 @@ def test_admission_allow_passes() -> None:
     gate = resolve_agent_gate(_enforcer("allow"))
     with _ROLE.sync_scope():
         gate.check_admission()  # does not raise
+
+
+def test_when_admission_decided_then_args_match_declared_args() -> None:
+    seen: list[Decision] = []
+    enforcer = _enforcer("allow", observer=seen.append)
+    with _ROLE.sync_scope():
+        resolve_agent_gate(enforcer).check_admission()
+    assert seen[0].arguments.keys() == AGENT_RUN_ARGS
 
 
 def test_admission_deny_raises() -> None:
