@@ -448,6 +448,52 @@ async def test_when_the_framework_sends_deltas_then_no_event_is_resynced(
 
 
 @pytest.mark.asyncio
+async def test_when_the_run_starts_on_an_empty_input_then_the_completion_still_lands(
+    emitted: list[dict[str, Any]], messages: list[dict[str, Any]]
+) -> None:
+    """``Runner.run(agent, [])`` on an instructions-only agent, or a
+    ``call_model_input_filter`` that returns ``[]``, is a real call: the prompt
+    was stashed, it is just empty. It still lands as the turn's seq 0 with its
+    ``system_instructions``."""
+    hooks = HexgateUsageHooks(api_key="k")
+    agent = Agent(name="my-agent", model="gpt-4o", instructions="Write the report.")
+
+    await hooks.on_llm_start(object(), agent, "Write the report.", [])
+    await hooks.on_llm_end(context=object(), agent=agent, response=_response())
+
+    [call] = messages
+    assert call["input_messages"] == []
+    assert call["message_seq"] == 0
+    assert call["system_instructions"] == [
+        {"type": "text", "content": "Write the report."}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_when_the_framework_sends_no_unsent_items_then_the_completion_still_lands(
+    emitted: list[dict[str, Any]], messages: list[dict[str, Any]]
+) -> None:
+    """Under a server-managed conversation the SDK calls the model with an
+    empty input when the server already holds every item (a turn that produced
+    only hosted tool calls, say). That call is real, so its completion is
+    emitted under the next seq rather than dropped as a missing stash."""
+    hooks = HexgateUsageHooks(api_key="k", framework_sends_deltas=True)
+    agent = Agent(name="my-agent", model="gpt-4o")
+    context = object()
+
+    await hooks.on_llm_start(context, agent, None, [_user("Weather?")])
+    await hooks.on_llm_end(context=context, agent=agent, response=_response())
+    await hooks.on_llm_start(context, agent, None, [])
+    await hooks.on_llm_end(context=context, agent=agent, response=_response())
+
+    assert [c["message_seq"] for c in messages] == [0, 1]
+    assert messages[1]["input_messages"] == []
+    assert messages[1]["output_messages"] == [
+        {"role": "assistant", "parts": [{"type": "text", "content": "Sunny, 24C."}]}
+    ]
+
+
+@pytest.mark.asyncio
 async def test_when_the_framework_sends_deltas_then_each_agent_counts_its_own_seq(
     emitted: list[dict[str, Any]], messages: list[dict[str, Any]]
 ) -> None:
@@ -564,23 +610,25 @@ async def test_when_conversion_raises_then_the_run_is_not_broken(
 
 
 @pytest.mark.asyncio
-async def test_when_the_prompt_was_not_stashed_then_the_completion_still_lands(
+async def test_when_the_prompt_was_not_stashed_then_nothing_is_emitted(
     emitted: list[dict[str, Any]], messages: list[dict[str, Any]]
 ) -> None:
-    """Every delta asked for must be emitted, empty input included — the seq
-    is spent either way, and a reader is specified to read a hole as a lost
-    row."""
+    """No prompt means no delta to ask the cursor for. Emitting the completion
+    beside an empty input would spend seq 0, and that is the only event
+    ``system_instructions`` rides on."""
     hooks = HexgateUsageHooks(api_key="k")
-    agent = Agent(name="my-agent", model="gpt-4o")
+    agent = Agent(name="my-agent", model="gpt-4o", instructions="Be terse.")
 
+    await hooks.on_llm_end(context=object(), agent=agent, response=_response())
+    assert messages == []
+
+    # The next real call is still this turn's first event.
+    await hooks.on_llm_start(object(), agent, "Be terse.", [_user("Weather?")])
     await hooks.on_llm_end(context=object(), agent=agent, response=_response())
 
     [call] = messages
-    assert call["input_messages"] == []
     assert call["message_seq"] == 0
-    assert call["output_messages"] == [
-        {"role": "assistant", "parts": [{"type": "text", "content": "Sunny, 24C."}]}
-    ]
+    assert call["system_instructions"] == [{"type": "text", "content": "Be terse."}]
 
 
 @pytest.mark.asyncio
@@ -619,6 +667,7 @@ async def test_when_there_is_no_run_scope_then_the_turn_key_is_still_unique(
 
     for _ in range(2):
         hooks = HexgateUsageHooks(api_key="k")
+        await hooks.on_llm_start(object(), agent, None, [_user("Weather?")])
         await hooks.on_llm_end(context=object(), agent=agent, response=_response())
 
     assert messages[0]["turn_key"] != messages[1]["turn_key"]
