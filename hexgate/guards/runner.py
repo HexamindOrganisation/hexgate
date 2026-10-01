@@ -45,6 +45,7 @@ from hexgate.security.decision import (
     RunAttribution,
     Verdict,
 )
+from hexgate.security.policy_set import PolicySetError
 
 if TYPE_CHECKING:
     from hexgate.approvals import ApprovalHandler
@@ -103,6 +104,46 @@ def _new_call(
 
 def _applies(guard: Guard, tool_name: str) -> bool:
     return guard.applies(tool_name)
+
+
+def _guard_stance(
+    enforcer: "PolicyEnforcer | None", tool_name: str
+) -> Mapping[str, bool]:
+    """The policy's per-tool guard enable/disable stance for this call (R-GUARD-007).
+
+    Read from the *current* engine on every call, so a refreshed bundle's stance
+    takes effect on the next call — uniformly across every framework, since they all
+    route their guarded calls through this runner. Empty when there is no engine (the
+    guards-only path) or an engine without the stance reader, meaning every guard runs
+    as declared."""
+    policy = getattr(enforcer, "policy", None) if enforcer is not None else None
+    getter = getattr(policy, "effective_guards", None)
+    if getter is None:
+        return {}
+    try:
+        return getter(tool_name)
+    except PolicySetError as exc:
+        # A refresh can swap in a policy whose guard stance can't be computed (a
+        # pydantic-fallback PolicySet whose roles diverge, which is not re-validated at
+        # refresh). The runner must not crash a live call over that (R-GUARD-007's
+        # no-crash-on-refresh promise); fail safe — every guard runs as declared. Only
+        # this specific error is swallowed, so a genuine bug in effective_guards still
+        # surfaces rather than hiding as a benign "running all guards".
+        _log.warning(
+            "guard stance for tool %r could not be computed (%s); running all guards",
+            tool_name,
+            exc,
+        )
+        return {}
+
+
+def _runs(guard: Guard, tool_name: str, stance: Mapping[str, bool]) -> bool:
+    """A guard runs when it is scoped to this tool AND the policy has not disabled it.
+
+    A guard the policy does not mention defaults to enabled (runs as the code attached
+    it); one the policy set ``enabled: false`` is skipped this call. Applied to before-
+    and after-guards identically, since both are gated by the same check."""
+    return _applies(guard, tool_name) and stance.get(guard.label, True)
 
 
 def _fail_closed(guard: Guard) -> Halt | None:
@@ -376,6 +417,7 @@ async def _run_post_async(
     approval_handler: "ApprovalHandler | None",
     enforcer: "PolicyEnforcer | None",
     render_error: RenderError,
+    stance: Mapping[str, bool],
 ) -> "_Halted | ToolOutcome":
     """Run the post-guards over ``outcome``.
 
@@ -386,12 +428,13 @@ async def _run_post_async(
     result and for a tool that raised (``outcome.ok is False``), so an observe guard
     sees failures too. A blocking halt is recorded to the audit trail *in addition
     to* the tool's genuine ALLOW (the tool did run; only the result is withheld).
+    ``stance`` is the per-call guard stance computed once by the caller.
     """
     if pipeline is None:
         return outcome
     current = outcome
     for guard in pipeline.post:
-        if not _applies(guard, call.tool_name):
+        if not _runs(guard, call.tool_name, stance):
             continue
         res = await _call_guard_async(guard, call, current)
         if isinstance(res, Halt):
@@ -446,11 +489,12 @@ async def run_guarded_async(
     ``read_file`` of a skill file); a ``None`` result keeps the static overrides."""
     context = get_current_context() if _has_guards(pipeline) else None
     call = _new_call(tool_name, args, enforcer, context)
+    stance = _guard_stance(enforcer, call.tool_name) if _has_guards(pipeline) else {}
     mods: list[Modification] = []
 
     if pipeline is not None:
         for guard in pipeline.pre:
-            if not _applies(guard, call.tool_name):
+            if not _runs(guard, call.tool_name, stance):
                 continue
             outcome = await _call_guard_async(guard, call)
             if isinstance(outcome, Halt):
@@ -520,6 +564,7 @@ async def run_guarded_async(
             approval_handler,
             enforcer,
             render_error,
+            stance,
         )
         if isinstance(post, _Halted):
             return post.rendered
@@ -536,6 +581,7 @@ async def run_guarded_async(
         approval_handler,
         enforcer,
         render_error,
+        stance,
     )
     if isinstance(post, _Halted):
         return post.rendered
@@ -595,13 +641,14 @@ def _run_post_sync(
     approval_handler: "ApprovalHandler | None",
     enforcer: "PolicyEnforcer | None",
     render_error: RenderError,
+    stance: Mapping[str, bool],
 ) -> "_Halted | ToolOutcome":
     """Sync mirror of :func:`_run_post_async`."""
     if pipeline is None:
         return outcome
     current = outcome
     for guard in pipeline.post:
-        if not _applies(guard, call.tool_name):
+        if not _runs(guard, call.tool_name, stance):
             continue
         res = _call_guard_sync(guard, call, current)
         if isinstance(res, Halt):
@@ -641,11 +688,12 @@ def run_guarded_sync(
     ``resolve_policy``)."""
     context = get_current_context() if _has_guards(pipeline) else None
     call = _new_call(tool_name, args, enforcer, context)
+    stance = _guard_stance(enforcer, call.tool_name) if _has_guards(pipeline) else {}
     mods: list[Modification] = []
 
     if pipeline is not None:
         for guard in pipeline.pre:
-            if not _applies(guard, call.tool_name):
+            if not _runs(guard, call.tool_name, stance):
                 continue
             outcome = _call_guard_sync(guard, call)
             if isinstance(outcome, Halt):
@@ -708,6 +756,7 @@ def run_guarded_sync(
             approval_handler,
             enforcer,
             render_error,
+            stance,
         )
         if isinstance(post, _Halted):
             return post.rendered
@@ -724,6 +773,7 @@ def run_guarded_sync(
         approval_handler,
         enforcer,
         render_error,
+        stance,
     )
     if isinstance(post, _Halted):
         return post.rendered

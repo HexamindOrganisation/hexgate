@@ -17,6 +17,7 @@ from google.adk.agents import BaseAgent
 
 from hexgate.adapters.google.tools import wrap_tools
 from hexgate.approvals import ApprovalHandler
+from hexgate.guards.stance import validate_guard_policy
 from hexgate.guards.types import build_pipeline
 from hexgate.security.binding import PolicyBinding, resolve_policy
 from hexgate.security.enforcer import build_enforcer
@@ -57,6 +58,9 @@ def wrap_google_agent(
     # at run entry, handoff reach + the depth cap at the runner's transfer plugin,
     # and agent-as-tool reach in wrap_tools below (an AgentTool is a real tool).
     pipeline = build_pipeline(guards, observer=guard_observer)
+    # Fail-fast closed-world check of the policy's guard stance (R-GUARD-007); the
+    # enable/disable stance itself is applied per call in the guard runner.
+    validate_guard_policy(resolved.engine, guards, agent_name=agent_name)
     guarded_tools = wrap_tools(
         tools, enforcer, approval_handler=approval_handler, pipeline=pipeline
     )

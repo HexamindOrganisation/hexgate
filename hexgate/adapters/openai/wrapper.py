@@ -44,6 +44,15 @@ def wrap_openai_agent(
     (the same argument the other adapters take); ``guard_observer`` receives the
     provenance ``GuardEvent``s.
     """
+    # The closed-world check of the policy's guard stance is NOT run here: this
+    # wrapper is called on every run (after a per-run refresh), and R-GUARD-007
+    # requires a refresh that swaps in a policy naming an unknown guard to degrade
+    # to a no-op, not crash the running agent. The runner validates once, when the
+    # binding is first resolved (see ``HexgateRunner._binding_for``) — that is the
+    # supported entry point. A caller that drives this mechanics-only wrapper itself
+    # (outside HexgateRunner) owns that fail-fast, exactly as it owns resolution and
+    # refresh. The enable/disable stance is applied per call in the guard runner, so
+    # one shared pipeline is installed on every tool.
     pipeline = build_pipeline(guards, observer=guard_observer)
     guarded_tools = wrap_tools(
         agent.tools, enforcer, approval_handler=approval_handler, pipeline=pipeline

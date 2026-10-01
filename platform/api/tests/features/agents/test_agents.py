@@ -339,6 +339,30 @@ def test_validate_reports_constraint_grammar_error_inside_role(
     assert "no recognised operator" in err["message"]
 
 
+def test_validate_reports_divergent_guard_stance(client: TestClient) -> None:
+    """A cross-role guard divergence is surfaced by /validate (R-GUARD-007). It is
+    lazy on the PolicySet, so _load_document forces it; without that the document
+    would validate here and then crash the SDK at construction (review #3)."""
+    resp = client.post(
+        f"/v1/projects/{DEFAULT_PROJECT_ID}/agents/support_bot/validate",
+        json={
+            "policy_yaml": (
+                "version: 1\n"
+                "roles:\n"
+                "  support:\n"
+                "    guards:\n"
+                "      secret_guard: { enabled: false }\n"
+                "  admin:\n"
+                "    guards:\n"
+                "      secret_guard: { enabled: true }\n"
+            )
+        },
+    )
+    body = resp.json()
+    assert body["ok"] is False
+    assert any("same stance across all roles" in e["message"] for e in body["errors"])
+
+
 def test_validate_accumulates_errors_across_roles(client: TestClient) -> None:
     """Multiple bad roles → multiple diagnostics, one per failure."""
     resp = client.post(
@@ -937,6 +961,67 @@ def test_bearer_get_agent_returns_304_on_matching_etag(
         },
     )
     assert second.status_code == 304
+
+
+def test_get_agent_etag_changes_when_only_the_guard_stance_changes(
+    client: TestClient, session_factory
+) -> None:
+    """A guards-only policy edit must invalidate the bundle ETag (R-GUARD-007).
+
+    Regression: the ETag was ``sha256(compiled_wasm)``, which is byte-identical
+    whether a guard is enabled or disabled — guards are read from the signed manifest
+    at runtime, never compiled into the policy wasm. So the SDK's per-turn
+    ``If-None-Match`` got a 304 and a live agent kept running a guard the dashboard had
+    just set ``enabled: false``. The ETag is over the signed manifest now, so flipping
+    a guard yields a new ETag → a 200 carrying the new stance, not a 304.
+    """
+    import json
+
+    enabled = (
+        "version: 1\n"
+        "guards:\n  secret_guard: { enabled: true }\n"
+        "tools: { send_update: { mode: allow } }\n"
+    )
+    disabled = enabled.replace("enabled: true", "enabled: false")
+
+    def _put(policy_yaml: str) -> None:
+        r = client.put(
+            f"/v1/projects/{DEFAULT_PROJECT_ID}/agents/default",
+            headers={"X-Dev-User": DEFAULT_USER_ID},
+            json={"policy_yaml": policy_yaml},
+        )
+        assert r.status_code == 200, r.text
+
+    token = _mint_token_for_test(session_factory)
+    _put(enabled)
+    first = client.get(
+        "/v1/agents/default", headers={"Authorization": f"Bearer {token}"}
+    )
+    assert first.status_code == 200, first.text
+    etag1 = first.headers.get("etag")
+    assert etag1 is not None, first.headers
+    assert json.loads(first.json()["bundle_manifest"])["guards"]["baseline"][
+        "secret_guard"
+    ]  # enabled
+
+    # Flip the guard off and re-save → recompile. The wasm is unchanged.
+    _put(disabled)
+    second = client.get(
+        "/v1/agents/default",
+        headers={"Authorization": f"Bearer {token}", "If-None-Match": etag1},
+    )
+    assert second.status_code == 200, (
+        "a guards-only edit returned 304 — the stale (enabled) bundle is still served, "
+        "so a live agent never sees the disable"
+    )
+    etag2 = second.headers.get("etag")
+    assert etag2 is not None and etag2 != etag1
+    assert (
+        json.loads(second.json()["bundle_manifest"])["guards"]["baseline"][
+            "secret_guard"
+        ]
+        is False
+    )
 
 
 def _trivial_policy_yaml() -> str:

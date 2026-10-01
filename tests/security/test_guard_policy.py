@@ -14,6 +14,8 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
+from hexgate.guards import ToolCall, before_tool, build_pipeline
+from hexgate.guards.stance import GuardClosedWorldError
 from hexgate.security import (
     AgentPolicy,
     GuardRule,
@@ -21,7 +23,8 @@ from hexgate.security import (
     ModuleContent,
     link,
 )
-from hexgate.security.policy_set import load_policy_set_from_dict
+from hexgate.security.bundle import build_signed_bundle
+from hexgate.security.policy_set import PolicySetError, load_policy_set_from_dict
 
 # --- GuardRule shape ----------------------------------------------------------
 
@@ -225,3 +228,283 @@ def test_non_empty_guards_preserved_in_dump() -> None:
     dumped = policy.model_dump(mode="json")
     assert dumped["guards"] == {"secret_guard": {"enabled": False}}
     assert "guards" not in dumped["tools"]["send_email"]
+
+
+# --- PR3: bundle carriage + stance projection + filter (R-GUARD-007) -----------
+
+
+def test_guard_stance_single_role() -> None:
+    ps = load_policy_set_from_dict(
+        {"roles": {"default": {"guards": {"secret_guard": {"enabled": False}}}}}
+    )
+    assert ps.guard_stance() == {"baseline": {"secret_guard": False}}
+    assert ps.effective_guards("any") == {"secret_guard": False}
+    assert ps.governed_guard_names() == frozenset({"secret_guard"})
+
+
+def test_guard_stance_none_when_no_guards() -> None:
+    ps = load_policy_set_from_dict(
+        {"roles": {"default": {"tools": {"t": {"mode": "allow"}}}}}
+    )
+    assert ps.guard_stance() is None
+    assert ps.effective_guards("t") == {}
+    assert ps.governed_guard_names() == frozenset()
+
+
+def test_compose_entry_file_guards_reach_the_runtime_stance() -> None:
+    """A `guards:` block authored in the compose `policy.yaml` entry file (what the
+    dashboard edits) resolves to the same agent-level stance the runtime reads — the
+    full compose -> AgentPolicy.guards -> guard_stance path (R-GUARD-006/007). It is
+    agent-level, so a multi-role agent resolves to one stance, no divergence."""
+    from hexgate.security.compose import resolve_text
+
+    ps = resolve_text(
+        "version: 1\n"
+        "guards: { secret_guard: { enabled: false } }\n"
+        "agents:\n"
+        "  bot:\n"
+        "    roles:\n"
+        "      default: { tools: { a: { mode: allow } } }\n"
+        "      admin:   { tools: { a: { mode: allow } } }\n",
+        agent="bot",
+    ).policy_set
+
+    assert sorted(ps.roles) == ["admin", "default"]
+    assert ps.guard_stance() == {"baseline": {"secret_guard": False}}
+    assert ps.effective_guards("a") == {"secret_guard": False}
+    assert ps.governed_guard_names() == frozenset({"secret_guard"})
+
+
+def test_guard_stance_multi_role_agree() -> None:
+    shared = {"guards": {"secret_guard": {"enabled": False}}}
+    ps = load_policy_set_from_dict(
+        {
+            "roles": {
+                "base": {"is_mixin": True, **shared},
+                "support": {"inherits": ["base"]},
+                "admin": {"inherits": ["base"]},
+            }
+        }
+    )
+    assert ps.guard_stance() == {"baseline": {"secret_guard": False}}
+
+
+def test_guard_stance_multi_role_diverge_raises() -> None:
+    ps = load_policy_set_from_dict(
+        {
+            "roles": {
+                "support": {"guards": {"secret_guard": {"enabled": False}}},
+                "admin": {"guards": {"secret_guard": {"enabled": True}}},
+            }
+        }
+    )
+    with pytest.raises(PolicySetError, match="same stance across all roles"):
+        ps.guard_stance()
+
+
+def test_guard_stance_caches_and_reraises_the_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A divergent stance is computed once: the PolicySetError is cached and re-raised,
+    so a live divergent fallback engine does not recompute (and re-log) every guarded
+    call (review #5)."""
+    from hexgate.security import policy_set as ps_mod
+
+    ps = load_policy_set_from_dict(
+        {
+            "roles": {
+                "support": {"guards": {"secret_guard": {"enabled": False}}},
+                "admin": {"guards": {"secret_guard": {"enabled": True}}},
+            }
+        }
+    )
+    calls = {"n": 0}
+    real = ps_mod.PolicySet._compute_guard_stance
+
+    def _counting(self: object) -> object:
+        calls["n"] += 1
+        return real(self)
+
+    monkeypatch.setattr(ps_mod.PolicySet, "_compute_guard_stance", _counting)
+
+    with pytest.raises(PolicySetError):
+        ps.guard_stance()
+    with pytest.raises(PolicySetError):
+        ps.guard_stance()
+    assert calls["n"] == 1  # second call re-raises the cached error, no recompute
+
+
+def test_bundle_carries_and_reads_guard_stance() -> None:
+    from hexgate.security.bundle import PolicyBundle
+
+    yaml_text = "guards:\n  secret_guard: {enabled: false}\ntools:\n  send_email:\n    mode: allow\n"
+    bundle = build_signed_bundle(yaml_text, compile_wasm=False)
+    assert bundle.manifest["guards"] == {"baseline": {"secret_guard": False}}
+    pb = PolicyBundle(
+        source_path=None,
+        rego_text=bundle.rego_text,
+        wasm_bytes=bundle.wasm_bytes,
+        manifest=bundle.manifest,
+    )
+    # Baseline-only: the stance is uniform for every tool.
+    assert pb.effective_guards("send_email") == {"secret_guard": False}
+    assert pb.effective_guards("other") == {"secret_guard": False}
+    assert pb.governed_guard_names() == frozenset({"secret_guard"})
+
+
+def test_bundle_omits_empty_guard_stance() -> None:
+    """A guards-free policy carries no `guards` manifest key, so its signed bytes do
+    not move (R-GUARD-007)."""
+    from hexgate.security.bundle import PolicyBundle
+
+    bundle = build_signed_bundle("tools:\n  t: {mode: allow}\n", compile_wasm=False)
+    assert "guards" not in bundle.manifest
+    pb = PolicyBundle(
+        source_path=None,
+        rego_text=bundle.rego_text,
+        wasm_bytes=bundle.wasm_bytes,
+        manifest=bundle.manifest,
+    )
+    assert pb.effective_guards("t") == {}  # default-safe: everything enabled
+    assert pb.governed_guard_names() == frozenset()
+
+
+def _named_before(label: str):
+    def _fn(call: ToolCall) -> None:
+        return None
+
+    _fn.__name__ = label
+    return before_tool(_fn)
+
+
+# --- The stance is applied per call in the runner (R-GUARD-007) ---------------
+
+
+def _recording_guard(label: str, fired: list[str]):
+    def _fn(call: ToolCall) -> None:
+        fired.append(label)
+        return None
+
+    _fn.__name__ = label
+    return before_tool(_fn)
+
+
+def _run(pipeline, engine, tool_name: str) -> None:
+    from hexgate.guards.runner import run_guarded_sync
+    from hexgate.security.enforcer import build_enforcer
+
+    enforcer = build_enforcer(engine, agent_name="a")
+    run_guarded_sync(
+        tool_name,
+        {},
+        enforcer=enforcer,
+        pipeline=pipeline,
+        approval_handler=None,
+        invoke=lambda final: "ok",
+        render_error=lambda decision: "denied",
+    )
+
+
+def test_disabled_guard_is_skipped_at_runtime() -> None:
+    fired: list[str] = []
+    g_keep = _recording_guard("g_keep", fired)
+    g_drop = _recording_guard("g_drop", fired)
+    pipeline = build_pipeline([g_keep, g_drop])
+    engine = load_policy_set_from_dict(
+        {
+            "roles": {
+                "default": {
+                    "tools": {"send_email": {"mode": "allow"}},
+                    "guards": {"g_drop": {"enabled": False}},
+                }
+            }
+        }
+    )
+    _run(pipeline, engine, "send_email")
+    assert fired == ["g_keep"]  # g_drop skipped, g_keep ran
+
+
+def test_unmentioned_guard_runs_by_default_at_runtime() -> None:
+    fired: list[str] = []
+    g = _recording_guard("g", fired)
+    pipeline = build_pipeline([g])
+    engine = load_policy_set_from_dict(
+        {"roles": {"default": {"tools": {"send_email": {"mode": "allow"}}}}}
+    )
+    _run(pipeline, engine, "send_email")
+    assert fired == ["g"]  # no stance for it -> runs as declared
+
+
+def test_runner_fail_safe_when_stance_cannot_be_computed() -> None:
+    """A refresh can swap in a policy whose stance can't be computed (a divergent-role
+    PolicySet, not re-validated at refresh). The runner must not crash the call — it
+    fails safe and runs every guard (R-GUARD-007)."""
+    from types import SimpleNamespace
+
+    from hexgate.guards.runner import _guard_stance
+
+    divergent = load_policy_set_from_dict(
+        {
+            "roles": {
+                "support": {"guards": {"g": {"enabled": False}}},
+                "admin": {"guards": {"g": {"enabled": True}}},
+            }
+        }
+    )
+    with pytest.raises(PolicySetError):  # confirms effective_guards would raise
+        divergent.effective_guards("some_tool")
+    # ...but the runner swallows it and returns the empty stance (all guards run).
+    assert _guard_stance(SimpleNamespace(policy=divergent), "some_tool") == {}
+
+
+# --- Construction-time closed-world validation (fail-fast) ---------------------
+
+
+def test_validate_guard_policy_rejects_undeclared_guard() -> None:
+    from hexgate.guards.stance import validate_guard_policy
+
+    g1 = _named_before("g1")
+    engine = load_policy_set_from_dict(
+        {"roles": {"default": {"guards": {"ghost_guard": {"enabled": False}}}}}
+    )
+    with pytest.raises(GuardClosedWorldError, match="ghost_guard"):
+        validate_guard_policy(engine, [g1], agent_name="a")
+
+
+def test_validate_guard_policy_noop_when_no_stance() -> None:
+    from hexgate.guards.stance import validate_guard_policy
+
+    g1 = _named_before("g1")
+    engine = load_policy_set_from_dict(
+        {"roles": {"default": {"tools": {"t": {"mode": "allow"}}}}}
+    )
+    assert validate_guard_policy(engine, [g1], agent_name="a") is None
+
+
+def test_validate_guard_policy_fires_when_agent_declares_no_guards() -> None:
+    """The 'guard deleted from code, policy still references it' case must not pass
+    silently (R-GUARD-007)."""
+    from hexgate.guards.stance import validate_guard_policy
+
+    engine = load_policy_set_from_dict(
+        {"roles": {"default": {"guards": {"ghost_guard": {"enabled": False}}}}}
+    )
+    with pytest.raises(GuardClosedWorldError, match="ghost_guard"):
+        validate_guard_policy(engine, None, agent_name="a")
+
+
+def test_validate_guard_policy_rejects_ambiguous_name() -> None:
+    from hexgate.guards.stance import validate_guard_policy
+
+    def _factory() -> object:
+        def check(call: ToolCall) -> None:
+            return None
+
+        return before_tool(check)
+
+    g_a, g_b = _factory(), _factory()  # both label 'check'
+    engine = load_policy_set_from_dict(
+        {"roles": {"default": {"guards": {"check": {"enabled": False}}}}}
+    )
+    with pytest.raises(GuardClosedWorldError, match="attached more than once"):
+        validate_guard_policy(engine, [g_a, g_b], agent_name="a")
