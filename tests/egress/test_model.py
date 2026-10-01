@@ -5,7 +5,6 @@ from __future__ import annotations
 import pytest
 
 from hexgate.egress.model import connect_to_args, http_to_args, split_authority
-from hexgate.security.network import NET_HTTP_REQUEST_ARGS
 
 
 def test_connect_to_args() -> None:
@@ -16,14 +15,6 @@ def test_connect_to_args() -> None:
         "port": 443,
         "url": "https://api.github.com:443",
     }
-
-
-def test_when_both_request_shapes_built_then_keys_match_declared_args() -> None:
-    built = (
-        connect_to_args("example.com", 443).keys()
-        | http_to_args("GET", "http://example.com/p?q=1").keys()
-    )
-    assert built == NET_HTTP_REQUEST_ARGS
 
 
 def test_http_to_args_defaults_port_80() -> None:

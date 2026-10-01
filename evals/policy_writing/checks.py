@@ -36,13 +36,8 @@ from hexgate.security import (
 )
 from hexgate.security.analyzer import SEVERITY_RANK, check_default_role_exposure
 from hexgate.security.constraints import ConstraintParseError
-from hexgate.security.models import AGENT_REACH_ARGS, AGENT_RUN_ARGS, AGENT_RUN_TOOL
-from hexgate.security.network import (
-    NET_HTTP_REQUEST,
-    NET_HTTP_REQUEST_ARGS,
-    NET_TCP_CONNECT,
-    NET_TCP_CONNECT_ARGS,
-)
+from hexgate.security.models import AGENT_RUN_TOOL, agent_target_key
+from hexgate.security.network import NET_HTTP_REQUEST, NET_TCP_CONNECT
 from hexgate.security.testing import run_namespace
 
 # Everything the SDK raises for a policy it can't load, compile or link.
@@ -119,11 +114,16 @@ def decide(policy: Policy, role: str, d: dict) -> tuple[str, str]:
     return OUTCOMES[verdict.outcome], reason
 
 
-# Arguments the synthetic keys carry, as the gates that build those calls define them.
+# Arguments the synthetic keys carry, copied from the gates that build those calls
+# (hexgate/egress/model.py and tcp.py, hexgate/security/agent_gate.py);
+# tests/evals/test_checks.py fails if a gate's built arguments drift from these.
+AGENT_REACH_ARGS = frozenset({"agent", "target", "via"})
 SYNTHETIC_ARGS = {
-    NET_HTTP_REQUEST: NET_HTTP_REQUEST_ARGS,
-    NET_TCP_CONNECT: NET_TCP_CONNECT_ARGS,
-    AGENT_RUN_TOOL: AGENT_RUN_ARGS,
+    NET_HTTP_REQUEST: frozenset(
+        {"method", "scheme", "host", "port", "url", "path", "query"}
+    ),
+    NET_TCP_CONNECT: frozenset({"host", "port", "protocol"}),
+    AGENT_RUN_TOOL: frozenset({"agent"}),
 }
 REF = re.compile(r"\b(args|ctx)\.([A-Za-z_]\w*)")
 
@@ -168,6 +168,16 @@ def unknown_refs(doc: dict, tools: dict[str, set[str]], attrs: set[str]) -> list
     lines = [(None, c) for c in doc.get("constraints") or []]
     for b in bodies:
         lines += [(None, c) for c in b.get("constraints") or []]
+        lines += [
+            (None, c) for c in (b.get("default_policy") or {}).get("constraints") or []
+        ]
+        lines += [
+            (AGENT_RUN_TOOL, c)
+            for c in (b.get("admission") or {}).get("constraints") or []
+        ]
+        for target, spec in (b.get("agents") or {}).items():
+            key = agent_target_key("tool", target)  # both vias carry the same args
+            lines += [(key, c) for c in (spec or {}).get("constraints") or []]
         for tool, spec in (b.get("tools") or {}).items():
             lines += [(tool, c) for c in (spec or {}).get("constraints") or []]
     bad = set()
@@ -289,7 +299,8 @@ def score(case: dict, ws: Path, before: dict[str, str], answer: str) -> list[Che
         for p in s["probes"]:
             lo, _ = decide(policy, s["narrower"], p)
             hi, _ = decide(policy, s["wider"], p)
-            if RANK.get(hi, -1) < RANK.get(lo, -1):
+            # A probe either role can't be evaluated on (a missing role) fails it.
+            if "error" in (lo, hi) or RANK[hi] < RANK[lo]:
                 worse.append(f"{p['tool']}: {s['narrower']}={lo}, {s['wider']}={hi}")
         checks.append(Check(name, not worse, "; ".join(worse)))
 
