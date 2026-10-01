@@ -2,62 +2,26 @@
 
 No eval framework is imported here: the framework's scorer and the dataset tests
 both call `score(case, workspace, before, answer)` and get back a list of `Check`s.
-The checks call the SDK functions the platform's policy endpoints use (load,
-compile, lint, resolve, evaluate): the policy must validate without lint
-warnings, every dry-run decision must match, files must change (or not) as the
-case says, only the tools, arguments and caller attributes the Hexgate MCP would
-show for the case's agent may be used, and the final answer must mention what the
-case requires.
+One function per kind of check: the policy validates without lint warnings
+(`policy.py`), dry-run decisions and role supersets hold, only names the Hexgate
+MCP would show for the case's agent are used (`names.py`), files change (or not)
+as the case says, and the final answer mentions what the case requires.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
-import yaml
-from pydantic import TypeAdapter, ValidationError
-
-from hexgate.manifest.models import AgentManifest
-from hexgate.runtime.context import ContextAttributeValue
-from hexgate.runtime.run_facts import KNOWN_RUN_PATHS
-from hexgate.security import (
-    RESOLVED_POLICY_MARKER,
-    DecisionOutcome,
-    LinkError,
-    PolicySet,
-    PolicySetError,
-    check_project,
-    compile_to_rego,
-    effective_policy_by_role,
-    load_local_modules,
-    load_policy_set_from_dict,
-    load_roles,
-    resolve_for_project,
+from evals.policy_writing.names import (
+    SYNTHETIC_ARGS,
+    load_known_names,
+    policy_tools,
+    unknown_refs,
 )
-from hexgate.security.analyzer import SEVERITY_RANK, check_default_role_exposure
-from hexgate.security.constraints import (
-    And,
-    Call,
-    Cmp,
-    ConstraintParseError,
-    Count,
-    Not,
-    Or,
-    Quant,
-    Ref,
-    parse_constraint,
-)
-from hexgate.security.models import AGENT_RUN_TOOL, agent_target_key
-from hexgate.security.modules import DEFAULT_AGENT
-from hexgate.security.network import NET_HTTP_REQUEST, NET_TCP_CONNECT
-from hexgate.security.testing import run_namespace
-
-# Everything the SDK raises for a policy it can't load, compile or link.
-POLICY_ERRORS = (PolicySetError, ConstraintParseError, LinkError, ValidationError)
+from evals.policy_writing.policy import Policy, decide, effective_policy
 
 
 @dataclass
@@ -82,285 +46,43 @@ def snapshot(root: Path) -> dict[str, str]:
     return files
 
 
-@dataclass
-class Policy:
-    """The policy the checks run against.
-
-    `payload` is the document: `policy.yaml` as written, or a module tree's
-    resolved roles. `policy_set` is it loaded, ready to evaluate.
-    """
-
-    payload: dict
-    policy_set: PolicySet
-
-
-OUTCOMES = {
-    DecisionOutcome.ALLOW: "allow",
-    DecisionOutcome.DENY: "deny",
-    DecisionOutcome.NEEDS_APPROVAL: "approval_required",
-}
 RANK = {"deny": 0, "approval_required": 1, "allow": 2}
 
 
-_ATTRIBUTES = TypeAdapter(dict[str, ContextAttributeValue])
-
-
-def decide(policy: Policy, role: str, d: dict) -> tuple[str, str]:
-    """Dry-run one call: (outcome, reason). Same inputs as `hexgate policy test`.
-
-    An undefined role is an error rather than the `default` fallback, as in the
-    CLI: a case naming a role the policy lacks fails instead of passing by luck.
-    """
-    if role not in policy.policy_set:
-        return "error", f"role {role!r} not in policy ({policy.policy_set.roles})"
-    try:
-        attributes = _ATTRIBUTES.validate_python(d.get("attributes", {}))
-        # Over a zeroed run, so an unset `run.*` path reads 0, not missing.
-        run = run_namespace(d["tool"], **d.get("run_facts", {}))
-    except (ValidationError, ValueError) as exc:
-        return "error", str(exc)
-    verdict = policy.policy_set.evaluate(
-        role=role,
-        tool=d["tool"],
-        args=d.get("args", {}),
-        attributes=attributes,
-        run=run,
-    )
-    reason = "; ".join([verdict.reason, *map(str, verdict.violations or [])])
-    return OUTCOMES[verdict.outcome], reason
-
-
-# Arguments the synthetic keys carry, copied from the gates that build those calls
-# (hexgate/egress/model.py and tcp.py, hexgate/security/agent_gate.py);
-# tests/evals/test_checks.py fails if a gate's built arguments drift from these.
-AGENT_REACH_ARGS = frozenset({"agent", "target", "via"})
-SYNTHETIC_ARGS = {
-    NET_HTTP_REQUEST: frozenset(
-        {"method", "scheme", "host", "port", "url", "path", "query"}
-    ),
-    NET_TCP_CONNECT: frozenset({"host", "port", "protocol"}),
-    AGENT_RUN_TOOL: frozenset({"agent"}),
-}
-# What a constraint path may start with: anything else parses, then never matches.
-ROOTS = {"args", "ctx", "run", "role", "tool"}
-
-
-def _paths(node) -> Iterator[tuple[str, ...]]:
-    """Every context path (`args.amount`, `ctx.department`) a parsed constraint reads."""
-    if isinstance(node, Ref):
-        yield node.path
-    elif isinstance(node, Count):
-        yield node.ref.path
-    elif isinstance(node, Cmp):
-        yield from _paths(node.left)
-        yield from _paths(node.right)
-    elif isinstance(node, Call):
-        yield from _paths(node.arg)
-    elif isinstance(node, Quant):
-        yield from _paths(node.ref)
-        yield from _paths(node.body)
-    elif isinstance(node, And | Or):
-        for part in node.parts:
-            yield from _paths(part)
-    elif isinstance(node, Not):
-        yield from _paths(node.inner)
-
-
-def load_known_names(ws: Path, agent: str) -> tuple[dict[str, set[str]], set[str]]:
-    """({tool: its argument names}, caller attribute names) a policy for `agent` may use.
-
-    The starting project stands in for what the Hexgate MCP's tools (per its
-    design) return:
-    - `agents.json` is `agents_list` (`GET /agents/manifest`, a list of
-      `AgentManifestView`). Tools and their argument names come from `agent`'s
-      manifest only, so a tool another agent in the project has is unknown.
-    - `audit.json` is `audit_decisions`: `AuditDecisionRow`s, as a list or the
-      endpoint's page (`{rows, ...}`). Caller attributes are set per request and
-      are not in the manifest, so the known ones are the `attributes` keys of
-      `agent`'s rows. No `audit.json` means no known attributes.
-    """
-    manifests = {
-        view["name"]: AgentManifest.model_validate(view["manifest"])
-        for view in json.loads((ws / "agents.json").read_text())
-        if view.get("manifest") is not None
-    }
-    if agent not in manifests:
-        raise ValueError(f"agents.json has no manifest for agent {agent!r}")
-    tools = {t.name: set(t.input_schema.properties) for t in manifests[agent].tools}
-    audit = ws / "audit.json"
-    rows = json.loads(audit.read_text()) if audit.exists() else []
-    if isinstance(rows, dict):  # the endpoint's page shape, {rows, total, ...}
-        rows = rows["rows"]
-    attrs = {
-        name
-        for row in rows
-        if row["agent_name"] == agent
-        for name in row.get("attributes") or {}
-    }
-    return tools, attrs
-
-
-def policy_bodies(doc: dict) -> tuple[dict, list[dict]]:
-    bodies = [b for b in (doc.get("roles") or {}).values() if isinstance(b, dict)]
-    return doc, bodies or [doc]
-
-
-def policy_tools(doc: dict) -> set[str]:
-    _, bodies = policy_bodies(doc)
-    return {t for b in bodies for t in (b.get("tools") or {})}
-
-
-def unknown_refs(doc: dict, tools: dict[str, set[str]], attrs: set[str]) -> list[str]:
-    """`args.x` / `ctx.x` a constraint uses that `tools` / `attrs` don't define."""
-    every_arg = set().union(*tools.values(), *SYNTHETIC_ARGS.values(), AGENT_REACH_ARGS)
-    doc, bodies = policy_bodies(doc)
-    # (tool or None for a policy- or role-level constraint, constraint text)
-    lines = [(None, c) for c in doc.get("constraints") or []]
-    for b in bodies:
-        lines += [(None, c) for c in b.get("constraints") or []]
-        lines += [
-            (None, c) for c in (b.get("default_policy") or {}).get("constraints") or []
-        ]
-        lines += [
-            (AGENT_RUN_TOOL, c)
-            for c in (b.get("admission") or {}).get("constraints") or []
-        ]
-        # A skill constraint can read any call's args, like a policy-level one.
-        for spec in (b.get("skills") or {}).values():
-            lines += [(None, c) for c in (spec or {}).get("constraints") or []]
-        for target, spec in (b.get("agents") or {}).items():
-            key = agent_target_key("tool", target)  # both vias carry the same args
-            lines += [(key, c) for c in (spec or {}).get("constraints") or []]
-        for tool, spec in (b.get("tools") or {}).items():
-            lines += [(tool, c) for c in (spec or {}).get("constraints") or []]
-    bad = set()
-    for tool, text in lines:
-        try:
-            paths = list(_paths(parse_constraint(str(text))))
-        except ConstraintParseError:
-            continue  # `valid` already fails on it
-        for path in paths:
-            kind, name = path[0], ".".join(path[1:2])
-            if kind not in ROOTS:
-                ok = False
-            elif kind == "run":
-                ok = name in KNOWN_RUN_PATHS
-            elif kind in ("role", "tool"):
-                ok = not name  # a plain string: `role.x` never matches
-            elif not name:
-                continue
-            elif kind == "ctx":
-                ok = name in attrs
-            elif tool is None:
-                ok = name in every_arg
-            elif tool in SYNTHETIC_ARGS:
-                ok = name in SYNTHETIC_ARGS[tool]
-            elif tool.startswith("agent."):  # a reach key, agent.<via>:<target>
-                ok = name in AGENT_REACH_ARGS
-            else:
-                ok = (
-                    tool not in tools or name in tools[tool]
-                )  # unknown tools fail elsewhere
-            if not ok:
-                bad.add(f"{tool or 'policy-level'}: {'.'.join(path)}")
-    return sorted(bad)
-
-
-def _lint_failures(lints) -> list[str]:
-    # A warning fails, not only an error: the write-policy skill tells the agent
-    # to validate with `--max-severity warning` (for `policy check` on a module
-    # tree it doesn't yet; the spec aligns the skill in PR 11).
-    return [
-        f"[{lint.code}] {lint.message}"
-        for lint in lints
-        if SEVERITY_RANK[lint.severity] <= SEVERITY_RANK["warning"]
-    ]
-
-
-def _load(payload: dict) -> tuple[PolicySet | None, list[str]]:
-    """What `hexgate policy validate` checks: load, compile, lint the roles."""
-    try:
-        policy_set = load_policy_set_from_dict(payload)
-        # Compile too, so a policy the build would reject doesn't pass.
-        compile_to_rego(payload)
-    except POLICY_ERRORS as exc:
-        return None, [str(exc)]
-    return policy_set, _lint_failures(check_default_role_exposure(policy_set))
-
-
-def _module_payload(ws: Path, agent: str) -> tuple[dict | None, list[str]]:
-    """What `hexgate policy check` and `resolve` do on a module tree."""
-    try:
-        boundaries, capabilities = load_local_modules(ws)
-        roles = load_roles(ws)
-    except (ValueError, OSError) as exc:
-        return None, [str(exc)]
-    if not boundaries and not capabilities:
-        return None, ["no modules under policies/boundaries/ or policies/capabilities/"]
-    # Lints the modules (dead or erased grants), not the roles they compose
-    # into: `_load` lints those on the resolved result.
-    problems = _lint_failures(check_project(boundaries, capabilities, roles))
-    if problems:
-        return None, problems
-    try:
-        # `agent`'s column of roles.yaml, as the platform builds that agent's bundle.
-        result = resolve_for_project(boundaries, capabilities, roles, agent=agent)
-    except POLICY_ERRORS as exc:
-        return None, [str(exc)]
-    return {"roles": effective_policy_by_role(result), RESOLVED_POLICY_MARKER: True}, []
-
-
-def effective_policy(
-    ws: Path, agent: str = DEFAULT_AGENT
-) -> tuple[Policy | None, Check]:
-    if (ws / "policies").is_dir():
-        payload, problems = _module_payload(ws, agent)
-    else:
-        try:
-            payload = yaml.safe_load((ws / "policy.yaml").read_text()) or {}
-        except (OSError, yaml.YAMLError) as exc:
-            payload, problems = None, [str(exc)]
-        else:
-            if not isinstance(payload, dict):
-                payload, problems = None, ["policy.yaml is not a YAML mapping"]
-            else:
-                problems = []
-    if payload is not None:
-        policy_set, problems = _load(payload)
-    if problems:
-        return None, Check("valid", False, "\n".join(problems)[-800:])
-    return Policy(payload, policy_set), Check("valid", True)
-
-
-def score(case: dict, ws: Path, before: dict[str, str], answer: str) -> list[Check]:
-    expect = case.get("expect", {})
-    policy, valid = effective_policy(ws, case["agent"])
-    checks = [valid]
-
-    for d in expect.get("decisions", []):
+def decision_checks(policy: Policy | None, decisions: list[dict]) -> list[Check]:
+    """One check per (decision, role): the dry-run gives an expected outcome."""
+    checks = []
+    for d in decisions:
         # `roles` expands one entry over several roles; `expect` may list the
         # acceptable outcomes ("deny or approval_required").
         wanted = d["expect"] if isinstance(d["expect"], list) else [d["expect"]]
         for role in d.get("roles") or [d["role"]]:
-            label = (
-                f"{role} → {d['tool']}({json.dumps(d.get('args', {}), sort_keys=True)})"
-            )
-            if d.get("attributes"):
-                label += f" ctx={json.dumps(d['attributes'], sort_keys=True)}"
-            if d.get("run_facts"):
-                label += f" run={json.dumps(d['run_facts'], sort_keys=True)}"
+            name = f"decision: {_call_label(role, d)}"
             if policy is None:
-                checks.append(Check(f"decision: {label}", False, "policy invalid"))
+                checks.append(Check(name, False, "policy invalid"))
                 continue
             got, raw = decide(policy, role, d)
             ok = got in wanted
             detail = (
                 "" if ok else f"expected {' or '.join(wanted)}, got {got}: {raw[:300]}"
             )
-            checks.append(Check(f"decision: {label}", ok, detail))
+            checks.append(Check(name, ok, detail))
+    return checks
 
-    for s in expect.get("superset", []):
-        # Everything `narrower` may do, `wider` may do at least as freely.
+
+def _call_label(role: str, d: dict) -> str:
+    label = f"{role} → {d['tool']}({json.dumps(d.get('args', {}), sort_keys=True)})"
+    if d.get("attributes"):
+        label += f" ctx={json.dumps(d['attributes'], sort_keys=True)}"
+    if d.get("run_facts"):
+        label += f" run={json.dumps(d['run_facts'], sort_keys=True)}"
+    return label
+
+
+def superset_checks(policy: Policy | None, supersets: list[dict]) -> list[Check]:
+    """Everything `narrower` may do, `wider` may do at least as freely."""
+    checks = []
+    for s in supersets:
         name = f"superset: {s['wider']} ⊇ {s['narrower']}"
         if policy is None:
             checks.append(Check(name, False, "policy invalid"))
@@ -373,48 +95,52 @@ def score(case: dict, ws: Path, before: dict[str, str], answer: str) -> list[Che
             if "error" in (lo, hi) or RANK[hi] < RANK[lo]:
                 worse.append(f"{p['tool']}: {s['narrower']}={lo}, {s['wider']}={hi}")
         checks.append(Check(name, not worse, "; ".join(worse)))
+    return checks
 
-    after = snapshot(ws)
-    if policy is not None:
-        agent = case["agent"]
-        # The names are read after the run, so an edit to either file could
-        # whitelist an invented name: trust them only if they are untouched.
-        edited = [
-            f for f in ("agents.json", "audit.json") if before.get(f) != after.get(f)
+
+def name_checks(
+    policy: Policy, ws: Path, agent: str, before: dict[str, str], after: dict[str, str]
+) -> list[Check]:
+    """Only tools, arguments and attributes the MCP would show for `agent`."""
+    # The names are read after the run, so an edit to either file could
+    # whitelist an invented name: trust them only if they are untouched.
+    edited = [f for f in ("agents.json", "audit.json") if before.get(f) != after.get(f)]
+    problem = f"edited during the run: {edited}" if edited else ""
+    if not problem:
+        try:
+            tools, attrs = load_known_names(ws, agent)
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            problem = f"agents.json / audit.json unreadable: {exc!r}"[:300]
+    if problem:
+        return [
+            Check("only known tools", False, problem),
+            Check("only known arguments and attributes", False, problem),
         ]
-        problem = f"edited during the run: {edited}" if edited else ""
-        if not problem:
-            try:
-                tools, attrs = load_known_names(ws, agent)
-            except (OSError, ValueError, KeyError, TypeError) as exc:
-                problem = f"agents.json / audit.json unreadable: {exc!r}"[:300]
-        if problem:
-            checks.append(Check("only known tools", False, problem))
-            checks.append(Check("only known arguments and attributes", False, problem))
-        else:
-            unknown = sorted(
-                t
-                for t in policy_tools(policy.payload)
-                if t not in tools
-                and t not in SYNTHETIC_ARGS
-                and not t.startswith("agent.")
-            )
-            checks.append(
-                Check(
-                    "only known tools",
-                    not unknown,
-                    f"not in {agent}'s manifest: {unknown}" if unknown else "",
-                )
-            )
-            refs = unknown_refs(policy.payload, tools, attrs)
-            checks.append(
-                Check(
-                    "only known arguments and attributes",
-                    not refs,
-                    f"not in the manifest or audit.json: {refs}" if refs else "",
-                )
-            )
+    unknown = sorted(
+        t
+        for t in policy_tools(policy.payload)
+        if t not in tools and t not in SYNTHETIC_ARGS and not t.startswith("agent.")
+    )
+    refs = unknown_refs(policy.payload, tools, attrs)
+    return [
+        Check(
+            "only known tools",
+            not unknown,
+            f"not in {agent}'s manifest: {unknown}" if unknown else "",
+        ),
+        Check(
+            "only known arguments and attributes",
+            not refs,
+            f"not in the manifest or audit.json: {refs}" if refs else "",
+        ),
+    ]
 
+
+def file_checks(
+    expect: dict, before: dict[str, str], after: dict[str, str]
+) -> list[Check]:
+    """`no_changes`, `changed` and `unchanged`, from the two snapshots."""
+    checks = []
     if expect.get("no_changes"):
         diff = sorted(
             k for k in set(before) | set(after) if before.get(k) != after.get(k)
@@ -424,26 +150,34 @@ def score(case: dict, ws: Path, before: dict[str, str], answer: str) -> list[Che
         checks.append(Check(f"changed: {rel}", after.get(rel) != before.get(rel)))
     for rel in expect.get("unchanged", []):
         checks.append(Check(f"unchanged: {rel}", after.get(rel) == before.get(rel)))
-
-    text = answer.lower()
-    words = expect.get("mentions_any")
-    if words:
-        hit = [w for w in words if w.lower() in text]
-        checks.append(
-            Check(
-                "answer mentions one of",
-                bool(hit),
-                f"found {hit}" if hit else f"none of {words}",
-            )
-        )
-    words = expect.get("mentions_all")
-    if words:
-        missing = [w for w in words if w.lower() not in text]
-        checks.append(
-            Check(
-                "answer mentions all of",
-                not missing,
-                f"missing {missing}" if missing else "",
-            )
-        )
     return checks
+
+
+def answer_checks(expect: dict, answer: str) -> list[Check]:
+    """`mentions_any` and `mentions_all`, case-insensitive, on the final answer."""
+    text = answer.lower()
+    checks = []
+    if words := expect.get("mentions_any"):
+        hit = [w for w in words if w.lower() in text]
+        detail = f"found {hit}" if hit else f"none of {words}"
+        checks.append(Check("answer mentions one of", bool(hit), detail))
+    if words := expect.get("mentions_all"):
+        missing = [w for w in words if w.lower() not in text]
+        detail = f"missing {missing}" if missing else ""
+        checks.append(Check("answer mentions all of", not missing, detail))
+    return checks
+
+
+def score(case: dict, ws: Path, before: dict[str, str], answer: str) -> list[Check]:
+    expect = case.get("expect", {})
+    policy, problems = effective_policy(ws, case["agent"])
+    valid = Check("valid", not problems, "\n".join(problems)[-800:])
+    after = snapshot(ws)
+    return [
+        valid,
+        *decision_checks(policy, expect.get("decisions", [])),
+        *superset_checks(policy, expect.get("superset", [])),
+        *(name_checks(policy, ws, case["agent"], before, after) if policy else []),
+        *file_checks(expect, before, after),
+        *answer_checks(expect, answer),
+    ]
