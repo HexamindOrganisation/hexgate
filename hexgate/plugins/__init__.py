@@ -1,15 +1,20 @@
 """Official guards, ready to drop into ``guards=[...]``.
 
-Three plugins built on one shared secret detector (:mod:`hexgate.plugins.secrets`),
-covering the two outbound cases and the inbound one:
+Four plugins built on one shared secret detector (:mod:`hexgate.plugins.secrets`),
+covering the two outbound cases and the two inbound ones:
 
 - :data:`secret_guard` — before-guard that **refuses** a call whose arguments
   carry a credential, with an actionable, value-free reason.
 - :data:`secret_redactor` — before-guard that **strips** the credential from the
   arguments and lets the cleaned call run.
 - :data:`secret_watch` — after-guard (observe) that **flags** a credential that
-  leaked into a tool's result. It never changes the result in v1; it is the exact
-  code that becomes a scrubber once result rewrite lands.
+  leaked into a tool's result, leaving the result untouched.
+- :data:`secret_scrubber` — after-guard that **strips** the credential from the
+  tool's result, so the cleaned result is what reaches the model and the user.
+
+``secret_watch`` and ``secret_scrubber`` are the inbound pair: watch when you only
+want the leak flagged on the operator channel, scrub when the result must be made
+safe before it flows on.
 
 ``secret_guard`` and ``secret_redactor`` are the two halves of the outbound case;
 pick per tool by whether a secret's presence means the call is wrong (guard) or
@@ -93,8 +98,8 @@ def secret_watch(call: ToolCall, outcome: ToolOutcome) -> None:
 
     Observe-only (fail-open, cannot halt or rewrite): it logs a value-free warning
     on the operator channel and leaves the result untouched. Scans JSON-ish results
-    only; an opaque return object is skipped. It becomes a scrubber once result
-    rewrite lands (a later phase).
+    only; an opaque return object is skipped. Reach for :data:`secret_scrubber`
+    instead when the result must be made safe, not merely flagged.
 
     It walks the full result on every call, so for a high-throughput tool that
     returns large payloads, register a scoped variant rather than this global one::
@@ -114,6 +119,38 @@ def secret_watch(call: ToolCall, outcome: ToolOutcome) -> None:
     return None
 
 
+@after_tool
+def secret_scrubber(call: ToolCall, outcome: ToolOutcome) -> Proceed | None:
+    """Strip every credential from a tool's result and let the cleaned result flow.
+
+    The inbound counterpart to :data:`secret_redactor`: where a read/search tool
+    returns a payload that carries a credential, this replaces the secret leaf with
+    a ``[REDACTED:<category>]`` marker so it never reaches the model or the user.
+    Records a value-free :class:`Modification` (count + categories) so the rewrite
+    is visible to the trail. A failed call has no result to scrub, so it is left
+    for the error to surface untouched.
+
+    Like :data:`secret_watch` it walks the whole result, so scope it to the tools
+    that return untrusted payloads rather than registering it globally::
+
+        after_tool(tool_names=["search"])(secret_scrubber.fn)
+    """
+    if not outcome.ok:
+        return None
+    cleaned, hits = redact_secrets(outcome.value)
+    if not hits:
+        return None
+    cats = ", ".join(sorted({h.category for h in hits}))
+    return Proceed(
+        result=cleaned,
+        modification=Modification(
+            plugin="secret_scrubber",
+            target="result",
+            summary=f"redacted {len(hits)} secret(s): {cats}",
+        ),
+    )
+
+
 __all__ = [
     "SecretHit",
     "redact_secrets",
@@ -122,5 +159,6 @@ __all__ = [
     "scan_secrets",
     "secret_guard",
     "secret_redactor",
+    "secret_scrubber",
     "secret_watch",
 ]
