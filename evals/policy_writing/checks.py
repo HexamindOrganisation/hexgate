@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-import re
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -38,7 +38,18 @@ from hexgate.security import (
     resolve_for_project,
 )
 from hexgate.security.analyzer import SEVERITY_RANK, check_default_role_exposure
-from hexgate.security.constraints import ConstraintParseError
+from hexgate.security.constraints import (
+    And,
+    Call,
+    Cmp,
+    ConstraintParseError,
+    Count,
+    Not,
+    Or,
+    Quant,
+    Ref,
+    parse_constraint,
+)
 from hexgate.security.models import AGENT_RUN_TOOL, agent_target_key
 from hexgate.security.modules import DEFAULT_AGENT
 from hexgate.security.network import NET_HTTP_REQUEST, NET_TCP_CONNECT
@@ -129,7 +140,29 @@ SYNTHETIC_ARGS = {
     NET_TCP_CONNECT: frozenset({"host", "port", "protocol"}),
     AGENT_RUN_TOOL: frozenset({"agent"}),
 }
-REF = re.compile(r"\b(args|ctx)\.([A-Za-z_]\w*)")
+# What a constraint path may start with: anything else parses, then never matches.
+ROOTS = {"args", "ctx", "run", "role", "tool"}
+
+
+def _paths(node) -> Iterator[tuple[str, ...]]:
+    """Every context path (`args.amount`, `ctx.department`) a parsed constraint reads."""
+    if isinstance(node, Ref):
+        yield node.path
+    elif isinstance(node, Count):
+        yield node.ref.path
+    elif isinstance(node, Cmp):
+        yield from _paths(node.left)
+        yield from _paths(node.right)
+    elif isinstance(node, Call):
+        yield from _paths(node.arg)
+    elif isinstance(node, Quant):
+        yield from _paths(node.ref)
+        yield from _paths(node.body)
+    elif isinstance(node, And | Or):
+        for part in node.parts:
+            yield from _paths(part)
+    elif isinstance(node, Not):
+        yield from _paths(node.inner)
 
 
 def load_known_names(ws: Path, agent: str) -> tuple[dict[str, set[str]], set[str]]:
@@ -201,8 +234,17 @@ def unknown_refs(doc: dict, tools: dict[str, set[str]], attrs: set[str]) -> list
             lines += [(tool, c) for c in (spec or {}).get("constraints") or []]
     bad = set()
     for tool, text in lines:
-        for kind, name in REF.findall(str(text)):
-            if kind == "ctx":
+        try:
+            paths = list(_paths(parse_constraint(str(text))))
+        except ConstraintParseError:
+            continue  # `valid` already fails on it
+        for path in paths:
+            kind, name = path[0], ".".join(path[1:2])
+            if kind not in ROOTS:
+                ok = False
+            elif kind not in ("args", "ctx") or not name:
+                continue
+            elif kind == "ctx":
                 ok = name in attrs
             elif tool is None:
                 ok = name in every_arg
@@ -215,7 +257,7 @@ def unknown_refs(doc: dict, tools: dict[str, set[str]], attrs: set[str]) -> list
                     tool not in tools or name in tools[tool]
                 )  # unknown tools fail elsewhere
             if not ok:
-                bad.add(f"{tool or 'policy-level'}: {kind}.{name}")
+                bad.add(f"{tool or 'policy-level'}: {'.'.join(path[:2])}")
     return sorted(bad)
 
 
