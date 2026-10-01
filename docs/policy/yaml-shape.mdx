@@ -95,7 +95,9 @@ Only Google ADK discovery enumerates a skill's files. deepagents discovery reads
 frontmatter only, so Hexgate cannot tell whether a deepagents skill ships
 scripts: every deepagents skill lands in the first row and is allowed for every
 role, the generated YAML says so in a comment, and you should review it. Its
-scripts run through `execute`, which is gated on its own terms — see the
+scripts run through `execute`, which is gated on its own terms on the top-level
+agent only: a sub-agent reached through `task` runs its own `execute` ungated,
+and the starter policy allows `task` for `admin`. See the
 [deepagents limitations](/adapters/langchain#limitations).
 
 It is generated **once**. Re-registering the agent never overwrites the policy,

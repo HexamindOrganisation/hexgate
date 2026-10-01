@@ -180,20 +180,27 @@ A denial uses the same wording as [Google ADK](/adapters/google-adk#what-a-denia
 
 - **`skill.script:` is not supported here.** A deepagents script runs through
   `execute`, and matching an `execute` call to a skill's scripts would mean parsing
-  shell strings. `execute` is gated on its own terms under `tools:` instead; a
+  shell strings. `execute` is gated on its own terms under `tools:` instead, on
+  the top-level agent only (a sub-agent's `execute` is not gated, see below); a
   `via: [script]` rule never fires on this adapter.
 - **Skills whose paths are not known at wrap time are not gated** — a source
   added mid-run, or a backend populated per invocation. Their reads decide as
   ordinary `read_file` calls.
-- **Sub-agents are not gated.** deepagents' `task` tool runs each sub-agent as a
-  separate graph inside the tool call, and Hexgate wraps the top-level graph only.
-  The default `general-purpose` sub-agent gets the same skills and its own
-  `read_file` (every sub-agent gets filesystem tools on the same backend), so it
-  can read a denied skill's `SKILL.md`. That read produces no skill decision; only
-  the `task` call itself is recorded. `task` is a top-level tool gated under
-  `tools:`, so if a skill must stay withdrawn, deny `task` too, or leave it
-  unlisted under a deny-default policy. That withdraws every sub-agent, not only
-  the skill path.
+- **Sub-agents bypass filesystem, shell and skill gating.** deepagents' `task`
+  tool runs each sub-agent as a separate graph inside the tool call, and Hexgate
+  wraps the top-level graph only. Every sub-agent builds its own filesystem tools
+  on the same backend (`ls`, `read_file`, `write_file`, `edit_file`, `glob`,
+  `grep`, and `execute` when the backend can run commands), and Hexgate never
+  sees them. A `deny` or `approval_required` on any of them holds for the
+  top-level agent only: a sub-agent can run `execute` under `execute: deny`,
+  write a file under `write_file: deny`, or read a denied skill's `SKILL.md` (the
+  default `general-purpose` sub-agent gets the same skills). None of this
+  produces a decision; only the `task` call itself is recorded. Tools you pass in
+  `tools=` are shared with sub-agents and stay gated. `task` is a top-level tool
+  gated under `tools:`, so if any of these denials must hold, deny `task` too, or
+  leave it unlisted under a deny-default policy. That withdraws every sub-agent.
+  Gating sub-agent tools is tracked in
+  [#273](https://github.com/HexamindOrganisation/hexgate/issues/273).
 - **Not containment.** A model can reach a skill's text another way — `grep`, `ls`
   plus a read of a variant spelling, a copy elsewhere on the backend. This gates
   the documented activation path on the top-level agent (not inside sub-agents,

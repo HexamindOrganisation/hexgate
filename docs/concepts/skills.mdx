@@ -57,7 +57,8 @@ persuades the model to do next.
   like any tool call — which skill, at which level.
 - **Kill-switch.** `mode: deny` withdraws a skill from every caller without a code
   change or a redeploy. On deepagents this holds for the top-level agent only: a
-  sub-agent reached through `task` is not gated, so deny `task` as well (see the
+  sub-agent reached through `task` reads skills, and runs its filesystem and shell
+  tools, without a decision, so deny `task` as well (see the
   [deepagents limitations](/adapters/langchain#limitations)).
 - **Approval.** `mode: approval_required` puts a human in front of a skill the
   same way it does in front of a tool — see
