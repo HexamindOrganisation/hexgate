@@ -176,6 +176,18 @@ class HexgateRunner:
         self._guards = guards
         self._guard_observer = guard_observer
 
+    def _guards_for(self, agent: Agent) -> "Sequence[Guard] | None":
+        """Resolve the guard list for a run.
+
+        The runner's ``guards=`` wins when it was passed (back-compat with code
+        that configures guards on the runner); otherwise the guards stamped on the
+        agent by :func:`~hexgate.guards.attach_guards` are used — the same list the
+        manifest declares, so a guarded agent runs guarded without restating them.
+        """
+        from hexgate.guards.attach import resolve_guards
+
+        return resolve_guards(agent, self._guards)
+
     def _binding_for(self, agent: Agent) -> PolicyBinding:
         """Get-or-resolve the cached policy binding for ``agent``'s name.
 
@@ -320,7 +332,7 @@ class HexgateRunner:
             agent,
             enforcer=binding.enforcer,
             approval_handler=self._approval_handler,
-            guards=self._guards,
+            guards=self._guards_for(agent),
             guard_observer=self._guard_observer,
         )
         async with hexgate_context:
@@ -357,7 +369,7 @@ class HexgateRunner:
             agent,
             enforcer=binding.enforcer,
             approval_handler=self._approval_handler,
-            guards=self._guards,
+            guards=self._guards_for(agent),
             guard_observer=self._guard_observer,
         )
         with hexgate_context.sync_scope():
@@ -485,7 +497,7 @@ class HexgateRunner:
             agent,
             enforcer=binding.enforcer,
             approval_handler=self._approval_handler,
-            guards=self._guards,
+            guards=self._guards_for(agent),
             guard_observer=self._guard_observer,
         )
 

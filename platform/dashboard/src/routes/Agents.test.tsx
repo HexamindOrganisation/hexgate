@@ -8,7 +8,7 @@ import { act, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useActive } from "@/lib/active";
-import type { SkillDefinition } from "@/lib/api";
+import type { GuardDefinition, SkillDefinition } from "@/lib/api";
 import { AgentsPage } from "@/routes/Agents";
 import { renderWithProviders } from "@/test/render";
 
@@ -24,6 +24,7 @@ const MANIFEST = {
     system_prompt: null,
     tools: [],
     skills: null,
+    guards: null,
   },
   version: 1,
   content_hash: "hash-1",
@@ -43,8 +44,24 @@ function skill(overrides: Partial<SkillDefinition> = {}): SkillDefinition {
   };
 }
 
+function guard(overrides: Partial<GuardDefinition> = {}): GuardDefinition {
+  return {
+    name: "secret_guard",
+    position: "before",
+    tool_names: null,
+    observe: false,
+    kind: "official",
+    plugin_id: "secret_guard",
+    ...overrides,
+  };
+}
+
 function withSkills(skills: SkillDefinition[] | null) {
   return { ...MANIFEST, manifest: { ...MANIFEST.manifest, skills } };
+}
+
+function withGuards(guards: GuardDefinition[] | null) {
+  return { ...MANIFEST, manifest: { ...MANIFEST.manifest, guards } };
 }
 
 function stubFetch(role: string, manifest: unknown = MANIFEST) {
@@ -262,5 +279,56 @@ describe("AgentsPage — skills section", () => {
         "Agent not registered yet — run `hexgate register` to populate.",
       ).length,
     ).toBeGreaterThan(0);
+  });
+});
+
+describe("AgentsPage — guards section", () => {
+  beforeEach(() => {
+    act(() => {
+      useActive.setState({ activeOrgId: "org-1", activeProjectId: PROJECT });
+    });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  async function renderWithGuards(guards: GuardDefinition[] | null) {
+    stubFetch("admin", withGuards(guards));
+    renderWithProviders(<AgentsPage />, { initialRoute: "/agents" });
+    await screen.findByText("Guards");
+  }
+
+  it("renders a guards section with the count", async () => {
+    await renderWithGuards([guard(), guard({ name: "secret_watch" })]);
+
+    const header = screen.getByText("Guards").parentElement as HTMLElement;
+    expect(within(header).getByText("2")).toBeInTheDocument();
+  });
+
+  it("shows each guard's name, position, and tool scope", async () => {
+    await renderWithGuards([
+      guard({ name: "secret_guard", tool_names: ["send_update"] }),
+    ]);
+
+    expect(screen.getByText("secret_guard")).toBeInTheDocument();
+    expect(screen.getByText("before")).toBeInTheDocument();
+    expect(screen.getByText(/scoped to send_update/)).toBeInTheDocument();
+  });
+
+  it("labels a global, observe-only guard", async () => {
+    await renderWithGuards([
+      guard({ name: "secret_watch", position: "after", observe: true }),
+    ]);
+
+    expect(screen.getByText("observe")).toBeInTheDocument();
+    expect(screen.getByText(/every tool/)).toBeInTheDocument();
+    expect(screen.getByText(/Runs on the tool result/)).toBeInTheDocument();
+  });
+
+  it("says no guards when none are declared", async () => {
+    await renderWithGuards([]);
+
+    expect(screen.getByText("No guards declared.")).toBeInTheDocument();
   });
 });

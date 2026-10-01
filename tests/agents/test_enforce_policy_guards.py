@@ -169,3 +169,38 @@ def test_create_agent_binds_policy_and_guards_together(
     assert isinstance(wrapped, GuardedTool)
     assert wrapped.enforcer is not None
     assert wrapped.pipeline is not None
+
+
+def test_with_tools_preserves_stamped_guards(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """with_tools underlies enforce_policy/refresh; it must carry the guard stamp
+    forward or create_manifest(rebuilt) would publish guards=None while they run
+    (review #2)."""
+    from hexgate.guards.attach import attach_guards, read_guards
+
+    guards = _guards()
+    agent = attach_guards(_agent(monkeypatch), guards)
+
+    rebuilt = agent.with_tools([echo])
+
+    assert read_guards(rebuilt) == tuple(guards)
+
+
+def test_enforce_policy_falls_back_to_stamped_guards(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """enforce_policy(None) with no guards= runs the stamped guards and re-stamps
+    the result, so runtime and manifest stay in agreement (review #2)."""
+    from hexgate.guards.attach import attach_guards, read_guards
+
+    guards = _guards()
+    agent = attach_guards(_agent(monkeypatch), guards)
+
+    guarded = agent.enforce_policy(None)
+
+    wrapped = guarded.tools[0]
+    assert isinstance(wrapped, GuardedTool)
+    assert wrapped.pipeline is not None
+    assert len(wrapped.pipeline.pre) == 1
+    assert read_guards(guarded) == tuple(guards)

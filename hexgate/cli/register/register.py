@@ -11,9 +11,11 @@ from hexgate.manifest import create_manifest
 from hexgate.manifest.models import AgentManifest, AgentType
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Sequence
 
     from langchain_core.tools import BaseTool
+
+    from hexgate.guards.types import Guard
 
 DEFAULT_REGISTER_TIMEOUT = 5.0
 _log = logging.getLogger(__name__)
@@ -63,6 +65,7 @@ def register_agent(
     tools: list[BaseTool] | None = None,
     model: str | None = None,
     system_prompt: str | None = None,
+    guards: Sequence[Guard] | None = None,
     timeout: float = DEFAULT_REGISTER_TIMEOUT,
 ) -> dict:
     """Create and register an agent manifest to platform /agents.
@@ -70,6 +73,11 @@ def register_agent(
     `tools`, `model` and `system_prompt` are only consulted for LangChain graphs —
     every other framework reads them off the agent object directly.
     See `create_manifest` for the dispatch logic.
+
+    `guards` overrides the guard list stamped on the agent by `attach_guards` /
+    `create_agent(guards=...)` (which `create_manifest` reads by default); omit it to
+    surface the stamped guards. Pass a partial list only to deliberately narrow what
+    the manifest declares — it hides the rest from the platform.
     """
     manifest = create_manifest(
         agent,
@@ -77,6 +85,7 @@ def register_agent(
         tools=tools,
         model=model,
         system_prompt=system_prompt,
+        guards=guards,
     )
     return post_manifest(manifest, timeout=timeout)
 
@@ -88,6 +97,7 @@ def register_tree(
     tools: list[BaseTool] | None = None,
     model: str | None = None,
     system_prompt: str | None = None,
+    guards: Sequence[Guard] | None = None,
     force: bool = False,
     timeout: float = DEFAULT_REGISTER_TIMEOUT,
     seen: dict[str, tuple[int, dict]] | None = None,
@@ -108,9 +118,9 @@ def register_tree(
     the first-seen manifest is kept and the colliding one is skipped (a cycle-safe
     walk memoizes each name, so it can't re-post one — force does not overwrite).
 
-    ``description``/``tools``/``model``/``system_prompt`` apply to the *root* only;
-    sub-agents are framework objects that introspect their own manifest. ``manifest``
-    lets a caller pass the root's already-built manifest so it isn't rebuilt.
+    ``description``/``tools``/``model``/``system_prompt``/``guards`` apply to the
+    *root* only; sub-agents are framework objects that introspect their own manifest.
+    ``manifest`` lets a caller pass the root's already-built manifest so it isn't rebuilt.
 
     Returns the root's ``post_manifest`` response.
     """
@@ -124,6 +134,7 @@ def register_tree(
             tools=tools,
             model=model,
             system_prompt=system_prompt,
+            guards=guards,
         )
     name = canonical_name(manifest.name)
     prior = seen.get(name)
@@ -181,8 +192,14 @@ def _register_children(
 
     for link in enumerate_subagents(agent):
         if link.child is not None:
+            # A handoff target runs under the SDK's own transfer, not this agent's
+            # runner, so its stamped guards never fire — declaring them on its manifest
+            # would over-claim. Register it with guards=[] so the manifest matches the
+            # runtime. An agent-as-tool child self-enforces (its own guarded ainvoke),
+            # so it keeps declaring its guards (guards=None reads its stamp).
             register_tree(
                 link.child,
+                guards=[] if link.via == "handoff" else None,
                 force=force,
                 timeout=timeout,
                 seen=seen,

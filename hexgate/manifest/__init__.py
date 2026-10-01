@@ -8,6 +8,7 @@ from hexgate.manifest.builder import create_manifest
 from hexgate.manifest.models import (
     AgentFramework,
     AgentManifest,
+    GuardManifest,
     InputProperty,
     InputSchema,
     SkillDefinition,
@@ -18,6 +19,7 @@ from hexgate.manifest.models import (
 __all__ = [
     "AgentFramework",
     "AgentManifest",
+    "GuardManifest",
     "InputProperty",
     "InputSchema",
     "SkillDefinition",

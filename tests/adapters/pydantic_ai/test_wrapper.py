@@ -261,3 +261,25 @@ async def test_wrap_enforces_the_resolved_policy_not_allow_all(
     echo_tool = wrapped._agent._function_toolset.tools["echo"]
     with pytest.raises(ModelRetry, match="policy_denied"):
         await echo_tool.function_schema.call({"text": "hi"}, None)
+
+
+def test_wrap_falls_back_to_stamped_guards(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A stamped agent wrapped without guards= builds its pipeline from the stamp,
+    so the guards its manifest declares actually run (review #1)."""
+    from hexgate.guards import attach_guards, before_tool
+
+    @before_tool
+    def g(call: Any) -> None:
+        return None
+
+    captured: dict[str, Any] = {}
+    real_build = wrapper_mod.build_pipeline
+
+    def _spy(guards: Any, **kw: Any) -> Any:
+        captured["guards"] = list(guards or [])
+        return real_build(guards, **kw)
+
+    monkeypatch.setattr(wrapper_mod, "build_pipeline", _spy)
+    agent = attach_guards(_make_agent(), [g])
+    wrap_pydantic_agent(agent=agent, api_key="k")
+    assert captured["guards"] == [g]
