@@ -35,7 +35,13 @@ from hexgate.security.analyzer import (
 )
 from hexgate.security.constraints import ConstraintParseError
 from hexgate.security.decision import Verdict
-from hexgate.security.models import PolicyMode
+from hexgate.security.models import (
+    AGENT_RUN_TOOL,
+    PolicyMode,
+    is_agent_reach_key,
+    is_agent_via_key,
+    is_skill_key,
+)
 from hexgate.security.modules import DEFAULT_AGENT
 from hexgate.security.testing import run_namespace
 
@@ -85,6 +91,24 @@ def outcome(label: str) -> DecisionOutcome:
     return _BY_LABEL[label]
 
 
+def _gate_declared(policy_set: PolicySet, tool: str) -> bool:
+    """Whether the runtime gate that would check `tool` is on.
+
+    Admission, reach and skill gates are opt-in: one the policy never declares
+    checks nothing, and the call goes through (agent_gate.py, the adapters'
+    reach and skill seams). Evaluating the synthetic key would deny it instead.
+    """
+    if tool == AGENT_RUN_TOOL:
+        return policy_set.declares_admission()
+    if is_agent_via_key(tool, "tool"):
+        return policy_set.declares_tool_reach()
+    if is_agent_reach_key(tool):
+        return policy_set.declares_reach()
+    if is_skill_key(tool):
+        return policy_set.declares_skills()
+    return True
+
+
 def decide(policy: Policy, role: str, d: dict) -> Verdict:
     """Dry-run one call, with the same inputs as `hexgate policy test`.
 
@@ -100,6 +124,10 @@ def decide(policy: Policy, role: str, d: dict) -> Verdict:
         run = run_namespace(d["tool"], **d.get("run_facts", {}))
     except (ValidationError, ValueError) as exc:
         raise CaseError(str(exc)) from exc
+    if not _gate_declared(policy.policy_set, d["tool"]):
+        return Verdict(
+            DecisionOutcome.ALLOW, reason="gate not declared, so not checked"
+        )
     return policy.policy_set.evaluate(
         role=role,
         tool=d["tool"],

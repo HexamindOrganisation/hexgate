@@ -13,6 +13,17 @@ from tests.evals.helpers import (
     make_workspace,
 )
 
+# Reach declared for handoff only, so agent-as-tool reach is never gated.
+HANDOFF_ONLY = """\
+version: 1
+roles:
+  default:
+    tools:
+      view_orders: { mode: allow }
+    agents:
+      billing-bot: { mode: allow, via: [handoff] }
+"""
+
 
 @pytest.mark.parametrize(
     ("role", "amount", "expected"),
@@ -27,6 +38,28 @@ def test_decide_happy_path(tmp_path, role, amount, expected) -> None:
     call = {"tool": "refund_order", "args": {"order_id": "o1", "amount": amount}}
     verdict = decide(policy, role, call)
     assert verdict.outcome == expected, verdict.reason
+
+
+@pytest.mark.parametrize(
+    "tool", ["agent.run", "agent.tool:ops-bot", "agent.handoff:ops-bot", "skill:pdf"]
+)
+def test_when_a_gate_is_not_declared_then_decide_allows_as_the_runtime_does(
+    tmp_path, tool
+) -> None:
+    policy, _ = effective_policy(make_workspace(tmp_path))
+    assert decide(policy, "default", {"tool": tool}).outcome == DecisionOutcome.ALLOW
+
+
+def test_when_a_gate_is_declared_then_decide_evaluates_it(tmp_path) -> None:
+    # Handoff reach declared, agent-as-tool not: only the handoff key is checked.
+    policy, problems = effective_policy(make_workspace(tmp_path, HANDOFF_ONLY))
+    assert problems == []
+    handoff = decide(policy, "default", {"tool": "agent.handoff:ops-bot"})
+    as_tool = decide(policy, "default", {"tool": "agent.tool:ops-bot"})
+    assert (handoff.outcome, as_tool.outcome) == (
+        DecisionOutcome.DENY,
+        DecisionOutcome.ALLOW,
+    )
 
 
 def test_when_the_role_is_undefined_then_decide_raises(tmp_path) -> None:
