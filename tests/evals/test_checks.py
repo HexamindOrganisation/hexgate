@@ -4,16 +4,26 @@ from __future__ import annotations
 
 import datetime
 
+import pytest
+
 from evals.policy_writing.checks import (
     answer_checks,
     decision_checks,
     file_checks,
+    name_checks,
     score,
     snapshot,
     superset_checks,
 )
 from evals.policy_writing.policy import effective_policy
-from tests.evals.helpers import AGENT, PERMISSIVE_DEFAULT, by_name, make_workspace
+from tests.evals.helpers import (
+    AGENT,
+    PERMISSIVE_DEFAULT,
+    POLICY,
+    by_name,
+    make_modules_workspace,
+    make_workspace,
+)
 
 REFUND = {"tool": "refund_order", "args": {"order_id": "o1", "amount": 5}}
 VIEW = {"tool": "view_orders", "args": {"customer_id": "c1"}}
@@ -70,6 +80,73 @@ def test_when_a_role_is_missing_then_superset_fails(tmp_path) -> None:
     [check] = superset_checks(policy, [superset])
     assert not check.passed
     assert check.detail.startswith("view_orders: can't dry-run: role 'nosuch'")
+
+
+def test_name_checks_happy_path(tmp_path) -> None:
+    ws = make_workspace(tmp_path)
+    policy, _ = effective_policy(ws)
+    before = snapshot(ws)
+    assert all(c.passed for c in name_checks(policy, ws, AGENT, before, before))
+
+
+def test_when_a_module_tree_lowers_agent_keys_then_name_checks_accept_them(
+    tmp_path,
+) -> None:
+    # Resolving a module tree lowers admission and reach into `agent.*` tools.
+    roles = "  default: [read_only]\n  billing: [read_only, reach]\n"
+    ws = make_modules_workspace(tmp_path, roles)
+    (ws / "policies" / "capabilities" / "reach.yaml").write_text(
+        'admission: { mode: allow, constraints: ["args.agent == \\"shop-bot\\""] }\n'
+        "agents:\n  ops-bot: { mode: allow }\n"
+    )
+    policy, problems = effective_policy(ws, AGENT)
+    assert problems == []
+    assert "agent.run" in policy.policy_set.policy_for("billing").tools
+    before = snapshot(ws)
+    assert all(c.passed for c in name_checks(policy, ws, AGENT, before, before))
+
+
+def test_when_the_policy_invents_names_then_both_name_checks_fail(tmp_path) -> None:
+    policy = (
+        POLICY
+        + '      wire_transfer: { mode: allow, constraints: ["ctx.tier == 1"] }\n'
+    )
+    ws = make_workspace(tmp_path, policy)
+    policy, _ = effective_policy(ws)
+    before = snapshot(ws)
+    checks = [
+        (c.passed, c.detail) for c in name_checks(policy, ws, AGENT, before, before)
+    ]
+    assert checks == [
+        (False, "not in shop-bot's manifest: ['wire_transfer']"),
+        (False, "not in the manifest or audit.json: ['wire_transfer: ctx.tier']"),
+    ]
+
+
+@pytest.mark.parametrize("broken", ["", "{not json", "[]"])
+def test_when_agents_json_is_unreadable_then_both_name_checks_fail(
+    tmp_path, broken
+) -> None:
+    ws = make_workspace(tmp_path)
+    policy, _ = effective_policy(ws)
+    (ws / "agents.json").write_text(broken)
+    after = snapshot(ws)
+    assert not any(c.passed for c in name_checks(policy, ws, AGENT, after, after))
+
+
+@pytest.mark.parametrize("edited", ["agents.json", "audit.json"])
+def test_when_the_agent_edits_a_name_source_then_both_name_checks_fail(
+    tmp_path, edited
+) -> None:
+    ws = make_workspace(tmp_path)
+    policy, _ = effective_policy(ws)
+    before = snapshot(ws)
+    # E.g. the agent "fixes" an invented name by adding it to the manifest.
+    (ws / edited).write_text("[]")
+    checks = name_checks(policy, ws, AGENT, before, snapshot(ws))
+    assert [(c.passed, c.detail) for c in checks] == [
+        (False, f"edited during the run: ['{edited}']")
+    ] * 2
 
 
 def test_snapshot_happy_path(tmp_path) -> None:

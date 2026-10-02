@@ -1,4 +1,5 @@
-"""Known names and invented ones (`names.py`), plus `name_checks` and drift tests."""
+"""Known names and invented ones (`names.py`), and the synthetic argument sets
+against the gates that build them."""
 
 from __future__ import annotations
 
@@ -8,7 +9,6 @@ from dataclasses import replace
 
 import pytest
 
-from evals.policy_writing.checks import name_checks, snapshot
 from evals.policy_writing.names import (
     AGENT_REACH_ARGS,
     SKILL_ARGS,
@@ -19,10 +19,8 @@ from evals.policy_writing.names import (
     unknown_keys,
     unknown_refs,
 )
-from evals.policy_writing.policy import effective_policy
 from hexgate.adapters.google.tools import _skill_decision
 from hexgate.adapters.langchain.skills import _SkillRead
-from hexgate.egress.model import connect_to_args, http_to_args
 from hexgate.egress.tcp import TcpEgressProxy
 from hexgate.manifest.langchain import SkillLocation
 from hexgate.runtime.context import HexgateContext
@@ -32,12 +30,8 @@ from hexgate.security.policy_set import load_policy_set_from_dict
 from tests.evals.helpers import (
     AGENT,
     AUDIT,
-    POLICY,
     agent_view,
-    by_name,
-    make_modules_workspace,
     make_workspace,
-    manifest_tool,
 )
 
 # shop-bot's manifest, as `load_known_names` reads it from the fixture.
@@ -104,12 +98,12 @@ def test_when_the_case_agent_has_no_manifest_then_loading_fails(tmp_path) -> Non
         "agent.runs",
     ],
 )
-def test_unknown_keys_flags_a_tool_not_in_the_manifest(tool) -> None:
+def test_when_a_tool_is_not_in_the_manifest_then_unknown_keys_flags_it(tool) -> None:
     doc = {"roles": {"billing": on("refund_order"), "ops": on(tool)}}
     assert unknown_keys(loaded(doc), KNOWN) == [tool]
 
 
-def test_unknown_keys_accepts_synthetic_and_agent_keys() -> None:
+def test_unknown_keys_happy_path() -> None:
     doc = {
         "tools": {"net.http_request": ALLOW, "net.tcp_connect": ALLOW},
         "admission": ALLOW,
@@ -118,7 +112,9 @@ def test_unknown_keys_accepts_synthetic_and_agent_keys() -> None:
     assert unknown_keys(loaded(doc), KNOWN) == []
 
 
-def test_unknown_keys_flags_a_skill_or_guard_not_in_the_manifest() -> None:
+def test_when_a_skill_or_guard_is_not_in_the_manifest_then_unknown_keys_flags_it() -> (
+    None
+):
     guards = {"redact_pii": {"enabled": True}, "redact_pi": {"enabled": False}}
     doc = {
         "roles": {
@@ -129,14 +125,14 @@ def test_unknown_keys_flags_a_skill_or_guard_not_in_the_manifest() -> None:
     assert unknown_keys(loaded(doc), KNOWN) == ["guard:redact_pi", "skill:ledger"]
 
 
-def test_unknown_keys_trims_a_skill_name_as_the_runtime_does() -> None:
+def test_when_a_skill_name_is_padded_then_unknown_keys_trims_it() -> None:
     assert unknown_keys(loaded({"skills": {" pdf ": ALLOW}}), KNOWN) == []
 
 
 # unknown_refs
 
 
-def test_unknown_refs_flags_an_argument_missing_from_the_manifest() -> None:
+def test_when_an_argument_is_not_in_the_manifest_then_unknown_refs_flags_it() -> None:
     doc = on("refund_order", 'args.tier != "gold" or args.amount <= 1000')
     assert unknown_refs(loaded(doc), KNOWN) == ["refund_order: args.tier"]
 
@@ -144,7 +140,9 @@ def test_unknown_refs_flags_an_argument_missing_from_the_manifest() -> None:
 @pytest.mark.parametrize(
     ("attribute", "known"), [("department", True), ("team", False)]
 )
-def test_unknown_refs_checks_caller_attributes(attribute, known) -> None:
+def test_when_an_attribute_is_in_no_audit_row_then_unknown_refs_flags_it(
+    attribute, known
+) -> None:
     refs = unknown_refs(loaded(on("refund_order", f'ctx.{attribute} == "x"')), KNOWN)
     assert refs == ([] if known else [f"refund_order: ctx.{attribute}"])
 
@@ -159,12 +157,12 @@ def test_unknown_refs_checks_caller_attributes(attribute, known) -> None:
         'tool.name == "x"',
     ],
 )
-def test_unknown_refs_flags_a_path_that_never_matches(constraint) -> None:
+def test_when_a_path_never_matches_then_unknown_refs_flags_it(constraint) -> None:
     [ref] = unknown_refs(loaded(on("refund_order", constraint)), KNOWN)
     assert ref == f"refund_order: {constraint.split()[0]}"
 
 
-def test_unknown_refs_accepts_run_paths_and_bare_facts() -> None:
+def test_unknown_refs_happy_path() -> None:
     constraint = (
         'run.tool_calls < 20 and role == "default" and tool == "refund_order"'
         " and count(args) > 0"
@@ -172,14 +170,16 @@ def test_unknown_refs_accepts_run_paths_and_bare_facts() -> None:
     assert unknown_refs(loaded(on("refund_order", constraint)), KNOWN) == []
 
 
-def test_unknown_refs_reads_paths_not_string_literals() -> None:
+def test_when_a_name_is_inside_a_string_then_unknown_refs_ignores_it() -> None:
     # `ctx.x` inside a string is data, and quantifier bodies are walked.
     constraint = 'args.note == "see ctx.x" and any(args.items, .price < 5)'
     known = replace(KNOWN, tools={"refund_order": {"note", "items"}})
     assert unknown_refs(loaded(on("refund_order", constraint)), known) == []
 
 
-def test_unknown_refs_checks_skill_constraints_against_each_levels_args() -> None:
+def test_when_a_skill_constraint_reads_another_levels_args_then_unknown_refs_flags_it() -> (
+    None
+):
     constraints = [
         'startswith(args.file_path, "scripts/") and args.script_args != ""',
         "args.amount <= 500",  # a tool argument, never on a skill call
@@ -204,18 +204,22 @@ def test_unknown_refs_checks_skill_constraints_against_each_levels_args() -> Non
         {"default_policy": {"mode": "allow", "constraints": ['ctx.departmnt == "x"']}},
     ],
 )
-def test_unknown_refs_scans_file_role_and_default_constraints(doc) -> None:
+def test_when_a_file_role_or_default_constraint_has_a_typo_then_unknown_refs_flags_it(
+    doc,
+) -> None:
     assert unknown_refs(loaded(doc), KNOWN) == ["policy-level: ctx.departmnt"]
 
 
-def test_a_policy_level_constraint_may_read_any_tools_args_but_no_invented_one() -> (
+def test_when_a_policy_level_constraint_reads_an_invented_arg_then_unknown_refs_flags_it() -> (
     None
 ):
     doc = {"constraints": ["args.amount <= 1000 and args.amont <= 1000"]}
     assert unknown_refs(loaded(doc), KNOWN) == ["policy-level: args.amont"]
 
 
-def test_a_policy_level_constraint_may_read_the_skill_args() -> None:
+def test_when_a_policy_level_constraint_reads_skill_args_then_unknown_refs_accepts_them() -> (
+    None
+):
     doc = {
         "constraints": ['args.skill != "shell"'],
         "skills": {"pdf": ALLOW, "shell": ALLOW},
@@ -223,7 +227,9 @@ def test_a_policy_level_constraint_may_read_the_skill_args() -> None:
     assert unknown_refs(loaded(doc), KNOWN) == []
 
 
-def test_unknown_refs_checks_synthetic_keys_against_their_gate_args() -> None:
+def test_when_a_synthetic_key_reads_another_gates_args_then_unknown_refs_flags_it() -> (
+    None
+):
     def fenced(constraint: str, **fields) -> dict:
         return {"mode": "allow", "constraints": [constraint], **fields}
 
@@ -241,87 +247,6 @@ def test_unknown_refs_checks_synthetic_keys_against_their_gate_args() -> None:
     ]
 
 
-# name_checks
-
-
-def test_name_checks_accept_a_module_trees_lowered_agent_keys(tmp_path) -> None:
-    # Resolving a module tree lowers admission and reach into `agent.*` tools.
-    roles = "  default: [read_only]\n  billing: [read_only, reach]\n"
-    ws = make_modules_workspace(tmp_path, roles)
-    (ws / "policies" / "capabilities" / "reach.yaml").write_text(
-        'admission: { mode: allow, constraints: ["args.agent == \\"shop-bot\\""] }\n'
-        "agents:\n  ops-bot: { mode: allow }\n"
-    )
-    policy, problems = effective_policy(ws, AGENT)
-    assert problems == []
-    assert "agent.run" in policy.policy_set.policy_for("billing").tools
-    before = snapshot(ws)
-    assert all(c.passed for c in name_checks(policy, ws, AGENT, before, before))
-
-
-def test_name_checks_happy_path(tmp_path) -> None:
-    ws = make_workspace(tmp_path)
-    policy, _ = effective_policy(ws)
-    before = snapshot(ws)
-    assert all(c.passed for c in name_checks(policy, ws, AGENT, before, before))
-
-
-def test_when_the_policy_invents_names_then_both_name_checks_fail(tmp_path) -> None:
-    policy = (
-        POLICY
-        + '      wire_transfer: { mode: allow, constraints: ["ctx.tier == 1"] }\n'
-    )
-    ws = make_workspace(tmp_path, policy)
-    policy, _ = effective_policy(ws)
-    before = snapshot(ws)
-    checks = [
-        (c.passed, c.detail) for c in name_checks(policy, ws, AGENT, before, before)
-    ]
-    assert checks == [
-        (False, "not in shop-bot's manifest: ['wire_transfer']"),
-        (False, "not in the manifest or audit.json: ['wire_transfer: ctx.tier']"),
-    ]
-
-
-@pytest.mark.parametrize("broken", ["", "{not json", "[]"])
-def test_when_agents_json_is_unreadable_then_both_name_checks_fail(
-    tmp_path, broken
-) -> None:
-    ws = make_workspace(tmp_path)
-    policy, _ = effective_policy(ws)
-    (ws / "agents.json").write_text(broken)
-    after = snapshot(ws)
-    assert not any(c.passed for c in name_checks(policy, ws, AGENT, after, after))
-
-
-def test_when_the_agent_edits_agents_json_then_both_name_checks_fail(tmp_path) -> None:
-    ws = make_workspace(tmp_path, POLICY + "      wire_transfer: { mode: allow }\n")
-    policy, _ = effective_policy(ws)
-    before = snapshot(ws)
-    # The agent "fixes" its invented tool by adding it to the manifest.
-    agents = json.loads((ws / "agents.json").read_text())
-    agents[0]["manifest"]["tools"].append(manifest_tool("wire_transfer", iban="string"))
-    (ws / "agents.json").write_text(json.dumps(agents))
-    checks = by_name(name_checks(policy, ws, AGENT, before, snapshot(ws)))
-    assert (
-        checks["only known tools, skills and guards"].detail
-        == "edited during the run: ['agents.json']"
-    )
-    assert not checks["only known tools, skills and guards"].passed
-    assert not checks["only known arguments and attributes"].passed
-
-
-def test_when_the_agent_edits_audit_json_then_both_name_checks_fail(tmp_path) -> None:
-    ws = make_workspace(tmp_path)
-    policy, _ = effective_policy(ws)
-    before = snapshot(ws)
-    # The agent "fixes" an invented attribute by adding an audit row with it.
-    row = {"agent_name": AGENT, "tool_name": "view_orders", "attributes": {"tier": 1}}
-    (ws / "audit.json").write_text(json.dumps([*AUDIT, row]))
-    checks = name_checks(policy, ws, AGENT, before, snapshot(ws))
-    assert [c.detail for c in checks] == ["edited during the run: ['audit.json']"] * 2
-
-
 # The synthetic argument sets against the gates that build them
 
 
@@ -333,15 +258,7 @@ def _recording_enforcer(policy: dict, seen: list):
     )
 
 
-def test_http_request_args_match_the_egress_proxy() -> None:
-    built = (
-        connect_to_args("example.com", 443).keys()
-        | http_to_args("GET", "http://example.com/p?q=1").keys()
-    )
-    assert built == SYNTHETIC_ARGS["net.http_request"]
-
-
-async def test_tcp_connect_args_match_the_tcp_proxy() -> None:
+async def test_when_the_tcp_proxy_decides_then_its_args_match_tcp_connect() -> None:
     seen: list = []
     upstream = await asyncio.start_server(lambda r, w: w.close(), "127.0.0.1", 0)
     target = ("127.0.0.1", upstream.sockets[0].getsockname()[1])
@@ -360,7 +277,7 @@ async def test_tcp_connect_args_match_the_tcp_proxy() -> None:
     assert seen[0].arguments.keys() == SYNTHETIC_ARGS["net.tcp_connect"]
 
 
-def test_agent_args_match_the_agent_gates() -> None:
+def test_when_the_agent_gates_decide_then_their_args_match() -> None:
     seen: list = []
     enforcer = _recording_enforcer(
         {"admission": {"mode": "allow"}, "agents": {"b": {"mode": "allow"}}}, seen
@@ -372,7 +289,7 @@ def test_agent_args_match_the_agent_gates() -> None:
     assert seen[1].arguments.keys() == AGENT_REACH_ARGS
 
 
-def test_skill_args_match_the_skill_seams() -> None:
+def test_when_the_skill_seams_decide_then_their_args_match() -> None:
     _, script = _skill_decision(object(), "script", {"skill_name": "pdf"})
     _, instructions = _skill_decision(object(), "instructions", {"skill_name": "pdf"})
     location = SkillLocation("pdf", "/skills/pdf/SKILL.md", None)

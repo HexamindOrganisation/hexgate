@@ -13,6 +13,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
+from hexgate.egress.model import connect_to_args, http_to_args
 from hexgate.manifest.models import AgentManifest
 from hexgate.security.constraints import iter_arg_refs, parse_constraint
 from hexgate.security.models import (
@@ -27,9 +28,10 @@ from hexgate.security.naming import canonical_skill_name
 from hexgate.security.network import NET_HTTP_REQUEST, NET_TCP_CONNECT
 from hexgate.security.policy_set import PolicySet
 
-# Arguments the synthetic keys carry, copied from the gates that build those calls
-# (hexgate/egress/model.py and tcp.py, hexgate/security/agent_gate.py, and the
-# skill seams in hexgate/adapters/langchain/skills.py and google/tools.py);
+# Arguments the synthetic keys carry. `net.http_request`'s come from the egress
+# proxy's own builders; the rest are copied from the gates that build those calls
+# (hexgate/egress/tcp.py, hexgate/security/agent_gate.py, and the skill seams in
+# hexgate/adapters/langchain/skills.py and google/tools.py), and
 # tests/evals/test_names.py fails if a gate's built arguments drift from these.
 # The adapters' agent-as-tool seams build their reach arguments inline, mirroring
 # agent_gate.py's ReachGate; only ReachGate is tested.
@@ -40,7 +42,7 @@ SKILL_ARGS = frozenset({"skill", "via", "file_path", "content_hash"})
 SKILL_SCRIPT_ARGS = SKILL_ARGS | {"script_args", "short_options", "positional_args"}
 SYNTHETIC_ARGS = {
     NET_HTTP_REQUEST: frozenset(
-        {"method", "scheme", "host", "port", "url", "path", "query"}
+        connect_to_args("h", 443).keys() | http_to_args("GET", "http://h/").keys()
     ),
     NET_TCP_CONNECT: frozenset({"host", "port", "protocol"}),
     AGENT_RUN_TOOL: frozenset({"agent"}),
