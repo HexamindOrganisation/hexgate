@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import datetime
+
 from evals.policy_writing.checks import (
     answer_checks,
     decision_checks,
@@ -126,6 +128,28 @@ def test_when_the_answer_misses_the_words_then_answer_checks_fail() -> None:
     checks = by_name(answer_checks(expect, "done"))
     assert not checks["answer mentions one of"].passed
     assert checks["answer mentions all of"].detail == "missing ['refund', 'security']"
+
+
+def test_when_a_mention_list_is_a_bare_string_then_answer_checks_fail() -> None:
+    [check] = answer_checks(
+        {"mentions_any": "boundary"}, "Done, refunds need approval."
+    )
+    assert (check.passed, check.detail) == (
+        False,
+        "mentions_any must be a list, got 'boundary'",
+    )
+
+
+def test_when_a_mention_is_a_number_then_answer_checks_read_it_as_text() -> None:
+    [check] = answer_checks({"mentions_all": [500]}, "Refunds are capped at 500.")
+    assert check.passed
+
+
+def test_when_a_call_holds_a_yaml_date_then_its_check_is_named(tmp_path) -> None:
+    policy, _ = effective_policy(make_workspace(tmp_path))
+    call = {"role": "default", **VIEW, "args": {"since": datetime.date(2026, 1, 1)}}
+    [check] = decision_checks(policy, [{**call, "expect": "allow"}])
+    assert "2026-01-01" in check.name
 
 
 def test_score_happy_path(tmp_path) -> None:
