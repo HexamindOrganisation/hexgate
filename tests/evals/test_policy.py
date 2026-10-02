@@ -52,6 +52,15 @@ def test_when_a_lint_warns_then_effective_policy_fails(tmp_path) -> None:
     assert any("permissive-default" in p for p in problems)
 
 
+def test_when_the_policy_holds_a_yaml_date_then_effective_policy_fails(
+    tmp_path,
+) -> None:
+    dated = "version: 1\nroles:\n  default:\n    consts:\n      cutoff: 2026-01-01\n"
+    policy, problems = effective_policy(make_workspace(tmp_path, dated))
+    assert policy is None
+    assert problems[0].startswith("can't compile:")
+
+
 def test_when_policy_yaml_is_empty_then_it_is_an_empty_policy(tmp_path) -> None:
     # As `hexgate policy validate` reads it: valid, and every call denied.
     policy, problems = effective_policy(make_workspace(tmp_path, "# nothing yet\n"))

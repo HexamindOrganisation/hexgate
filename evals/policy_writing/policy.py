@@ -128,6 +128,8 @@ def _load(payload: dict) -> tuple[PolicySet | None, list[str]]:
         compile_to_rego(payload)
     except POLICY_ERRORS as exc:
         return None, [str(exc)]
+    except TypeError as exc:  # e.g. an unquoted YAML date the compiler can't serialise
+        return None, [f"can't compile: {exc}"]
     return policy_set, _lint_failures(check_default_role_exposure(policy_set))
 
 
