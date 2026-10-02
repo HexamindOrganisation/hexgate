@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from evals.policy_writing.policy import CaseError, decide, effective_policy
-from tests.evals.workspace import (
+from tests.evals.helpers import (
     AGENT,
     PERMISSIVE_DEFAULT,
     make_modules_workspace,
