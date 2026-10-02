@@ -79,7 +79,7 @@ def test_snapshot_happy_path(tmp_path) -> None:
     skill.parent.mkdir(parents=True)
     skill.write_text("installed by the harness")
     (ws / ".effective.yaml").write_text("{}")
-    assert set(snapshot(ws)) == {"README.md", "policy.yaml"}
+    assert set(snapshot(ws)) == {"agents.json", "audit.json", "policy.yaml"}
 
 
 def test_file_checks_happy_path() -> None:
