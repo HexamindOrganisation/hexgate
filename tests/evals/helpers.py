@@ -21,8 +21,15 @@ def manifest_tool(name: str, **args: str) -> dict:
 
 def agent_view(name: str, *tools: dict, **fields) -> dict:
     # One `GET /projects/{id}/agents/manifest` entry (AgentManifestView), as
-    # `agents_list` returns it; `fields` adds manifest fields (skills, guards).
-    manifest = {"name": name, "framework": "langchain", "tools": list(tools), **fields}
+    # `agents_list` returns it, nulls included; `fields` sets skills or guards.
+    manifest = {
+        "name": name,
+        "framework": "langchain",
+        "tools": list(tools),
+        "skills": None,
+        "guards": None,
+        **fields,
+    }
     return {
         "name": name,
         "manifest": manifest,

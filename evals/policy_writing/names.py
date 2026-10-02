@@ -77,6 +77,22 @@ def load_known_names(ws: Path, agent: str) -> KnownNames:
       are not in the manifest, so the known ones are the `attributes` keys of
       `agent`'s rows. No `audit.json` means no known attributes.
     """
+    manifest = _manifest(ws, agent)
+    return KnownNames(
+        tools={
+            t["name"]: set(t["input_schema"]["properties"]) for t in manifest["tools"]
+        },
+        attrs=_attributes(ws, agent),
+        # The endpoint sends `null` for an agent with none.
+        skills={s["name"] for s in manifest.get("skills") or []},
+        guards={g["name"] for g in manifest.get("guards") or []},
+    )
+
+
+def _manifest(ws: Path, agent: str) -> dict:
+    """`agent`'s manifest from agents.json, read as the endpoint returns it rather
+    than as the SDK registers it: AgentManifestView is looser (a tool's
+    `description` may be null)."""
     views = json.loads((ws / AGENTS_JSON).read_text())
     view = next(
         (v for v in views if v["name"] == agent and v.get("manifest") is not None),
@@ -84,27 +100,21 @@ def load_known_names(ws: Path, agent: str) -> KnownNames:
     )
     if view is None:
         raise ValueError(f"agents.json has no manifest for agent {agent!r}")
-    # Read as the endpoint returns it, not as the SDK registers it: the platform's
-    # AgentManifestView is looser (a tool's `description` may be null).
-    manifest = view["manifest"]
+    return view["manifest"]
+
+
+def _attributes(ws: Path, agent: str) -> set[str]:
+    """The `attributes` keys of `agent`'s audit.json rows."""
     audit = ws / AUDIT_JSON
     rows = json.loads(audit.read_text()) if audit.exists() else []
     if isinstance(rows, dict):  # the endpoint's page shape, {rows, total, ...}
         rows = rows["rows"]
-    attrs = {
+    return {
         name
         for row in rows
         if row["agent_name"] == agent
         for name in row.get("attributes") or {}
     }
-    return KnownNames(
-        tools={
-            t["name"]: set(t["input_schema"]["properties"]) for t in manifest["tools"]
-        },
-        attrs=attrs,
-        skills={s["name"] for s in manifest.get("skills") or []},
-        guards={g["name"] for g in manifest.get("guards") or []},
-    )
 
 
 def _roles(policy_set: PolicySet) -> list[AgentPolicy]:

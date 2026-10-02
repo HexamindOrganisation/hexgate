@@ -89,7 +89,8 @@ def test_name_checks_happy_path(tmp_path) -> None:
     ws = make_workspace(tmp_path)
     policy, _ = effective_policy(ws)
     before = snapshot(ws)
-    assert all(c.passed for c in name_checks(policy, ws, AGENT, before, before))
+    checks = name_checks(policy, ws, AGENT, before, before)
+    assert [(c.name, c.passed) for c in checks] == [(n, True) for n in NAME_CHECKS]
 
 
 def test_when_a_module_tree_lowers_agent_keys_then_name_checks_accept_them(
@@ -106,7 +107,8 @@ def test_when_a_module_tree_lowers_agent_keys_then_name_checks_accept_them(
     assert problems == []
     assert "agent.run" in policy.policy_set.policy_for("billing").tools
     before = snapshot(ws)
-    assert all(c.passed for c in name_checks(policy, ws, AGENT, before, before))
+    checks = name_checks(policy, ws, AGENT, before, before)
+    assert [(c.name, c.passed) for c in checks] == [(n, True) for n in NAME_CHECKS]
 
 
 def test_when_the_policy_invents_names_then_both_name_checks_fail(tmp_path) -> None:
