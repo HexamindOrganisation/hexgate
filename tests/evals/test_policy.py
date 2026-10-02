@@ -11,12 +11,11 @@ from hexgate.security.decision import DecisionOutcome
 from tests.evals.helpers import (
     AGENT,
     PERMISSIVE_DEFAULT,
-    POLICY,
     make_modules_workspace,
     make_workspace,
 )
 
-# Reach declared for handoff only: agent-as-tool calls aren't gated by reach key.
+# Reach declared for handoff only, not for agent-as-tool.
 HANDOFF_ONLY = """\
 version: 1
 roles:
@@ -25,6 +24,14 @@ roles:
       view_orders: { mode: allow }
     agents:
       billing-bot: { mode: allow, via: [handoff] }
+"""
+
+DATED_CONSTRAINT = """\
+version: 1
+roles:
+  default:
+    tools:
+      view_orders: { mode: allow, constraints: ['args.since >= "2026-01-01"'] }
 """
 
 
@@ -44,9 +51,10 @@ def test_decide_happy_path(tmp_path, role, amount, expected) -> None:
 
 
 @pytest.mark.parametrize("tool", ["agent.run", "agent.handoff:ops-bot"])
-def test_when_a_gate_is_not_declared_then_decide_allows_as_the_runtime_does(
+def test_when_admission_or_handoff_is_not_declared_then_decide_allows(
     tmp_path, tool
 ) -> None:
+    # As the runtime: the gate checks nothing, and the call goes through.
     policy, _ = effective_policy(make_workspace(tmp_path))
     assert decide(policy, "default", {"tool": tool}).outcome == DecisionOutcome.ALLOW
 
@@ -66,16 +74,15 @@ def test_when_a_gate_is_declared_then_decide_evaluates_it(tmp_path) -> None:
     assert problems == []
     handoff = decide(policy, "default", {"tool": "agent.handoff:ops-bot"})
     assert handoff.outcome == DecisionOutcome.DENY  # declared, and ops-bot unlisted
+    with pytest.raises(CaseError, match="agent-as-tool reach"):
+        decide(policy, "default", {"tool": "agent.tool:ops-bot"})
 
 
-def test_when_an_argument_is_a_yaml_date_then_decide_reads_it_as_the_cli_does(
+def test_when_an_argument_is_a_yaml_date_then_decide_reads_it_as_text(
     tmp_path,
 ) -> None:
-    dated = POLICY.replace(
-        "      view_orders: { mode: allow }\n  support:",
-        "      view_orders: { mode: allow, constraints: ['args.since >= \"2026-01-01\"'] }\n  support:",
-    )
-    policy, problems = effective_policy(make_workspace(tmp_path, dated))
+    # As `policy test --args` (JSON) would give it.
+    policy, problems = effective_policy(make_workspace(tmp_path, DATED_CONSTRAINT))
     assert problems == []
     call = {"tool": "view_orders", "args": {"since": datetime.date(2026, 2, 1)}}
     assert decide(policy, "default", call).outcome == DecisionOutcome.ALLOW
