@@ -39,6 +39,7 @@ from hexgate.security.models import (
     FileToolPolicy,
     ToolPolicy,
     is_agent_key,
+    is_skill_key,
 )
 from hexgate.security.modules import (
     DEFAULT_AGENT,
@@ -330,6 +331,8 @@ _MODULE_COMPOSABLE_FIELDS = frozenset(
         # (a boundary agent-deny is authoritative, a capability agent-grant unions).
         "admission",
         "agents",
+        # `skills` lowers to skill*: keys the fold composes the same way.
+        "skills",
     }
 )
 # `inherits` / `is_mixin` are deliberately NOT here: the module fold composes
@@ -356,9 +359,17 @@ def _reject_unsupported_module_fields(
         if extra:
             raise LinkError(
                 f"module {module.name!r} sets {sorted(extra)}, which module "
-                f"composition does not support (the fold composes only tools); "
+                f"composition does not support (the fold composes tools and the agent/skill blocks); "
                 f"keep it in a single-file policy ({module.source})"
             )
+
+
+def _is_closed_world_key(tool: str) -> bool:
+    """Synthetic keys whose gate engages from their presence in the resolved policy
+    (declares_admission / declares_reach / declares_skills). The fold must keep them
+    as an explicit deny: dropping a shadowed or ungranted one can take the gate's
+    engagement to False and admit everyone / run every skill ungated — fail-open."""
+    return is_agent_key(tool) or is_skill_key(tool)
 
 
 def _fold_tool(
@@ -404,13 +415,9 @@ def _fold_tool(
             # doesn't (unlisted, or mentioned only via a conditional deny), the
             # tool is ineligible — a capability grant can't make it eligible.
             trace.shadow(tool, _prov(g))
-            # For an ordinary tool, dropping it (None) IS the implicit deny. An
-            # agent key must instead stay as an explicit deny: the gate's
-            # engagement is derived from whether the resolved policy still carries
-            # the key (declares_admission / declares_reach), so a shadowed-away
-            # agent.run would silently DISENGAGE the gate (admit everyone) rather
-            # than deny — a fail-open. Keep it present and closed.
-            return BaseToolPolicy(mode="deny") if is_agent_key(tool) else None
+            # An ordinary tool's omission IS the deny; a closed-world key must stay
+            # present or its gate disengages (see _is_closed_world_key).
+            return BaseToolPolicy(mode="deny") if _is_closed_world_key(tool) else None
 
     # 3+4. Capability grants. No grant → eligible but ungranted → implicit deny.
     grants: list[tuple[ModuleContent, ToolPolicy]] = []
@@ -419,12 +426,8 @@ def _fold_tool(
         if tp is not None and tp.mode in GRANT_MODES:
             grants.append((cap, tp))
     if not grants:
-        # Same reasoning as the ceiling-shadow branch above: for an ordinary tool
-        # omission IS the implicit deny, but an ungranted agent key must stay an
-        # explicit deny — dropping it removes agent.run/agent.<via>: from the
-        # resolved policy, so declares_admission()/declares_reach() reads it as
-        # absent and disengages the gate (admit everyone) instead of denying.
-        return BaseToolPolicy(mode="deny") if is_agent_key(tool) else None
+        # Same as the ceiling-shadow branch: keep a closed-world key as a deny.
+        return BaseToolPolicy(mode="deny") if _is_closed_world_key(tool) else None
     contributors.extend(_prov(cap) for cap, _ in grants)
 
     mode = (
