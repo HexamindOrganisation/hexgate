@@ -2,11 +2,13 @@
 
 `effective_policy` runs what `validate` (single file) or `check` + `resolve`
 (module tree) runs, failing on lint warnings; `decide` runs what `test` runs,
-with the CLI's input checks.
+with the CLI's input checks, except that an undeclared admission or handoff
+gate allows the call, as the runtime does, where `test` would deny it.
 """
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -91,22 +93,31 @@ def outcome(label: str) -> DecisionOutcome:
     return _BY_LABEL[label]
 
 
-def _gate_declared(policy_set: PolicySet, tool: str) -> bool:
-    """Whether the runtime gate that would check `tool` is on.
+def _undeclared_gate(policy_set: PolicySet, tool: str) -> Verdict | None:
+    """What the runtime does with a call on an opt-in gate the policy never declares.
 
-    Admission, reach and skill gates are opt-in: one the policy never declares
-    checks nothing, and the call goes through (agent_gate.py, the adapters'
-    reach and skill seams). Evaluating the synthetic key would deny it instead.
+    An undeclared admission or handoff gate checks nothing: the call goes through
+    (agent_gate.py, the runners' handoff seam). An undeclared agent-as-tool or
+    skill gate isn't checked under this key either, but the call is then decided
+    under the tool's own name (guards/runner.py, `policy_key or call.tool_name`),
+    so this key can't predict it: the case should dry-run that tool instead.
+    Returns None when the gate is declared, or `tool` isn't a gate key.
     """
-    if tool == AGENT_RUN_TOOL:
-        return policy_set.declares_admission()
-    if is_agent_via_key(tool, "tool"):
-        return policy_set.declares_tool_reach()
-    if is_agent_reach_key(tool):
-        return policy_set.declares_reach()
-    if is_skill_key(tool):
-        return policy_set.declares_skills()
-    return True
+    if tool == AGENT_RUN_TOOL and not policy_set.declares_admission():
+        return Verdict(DecisionOutcome.ALLOW, reason="admission not declared")
+    if is_agent_via_key(tool, "tool") and not policy_set.declares_tool_reach():
+        raise CaseError(
+            f"{tool}: agent-as-tool reach isn't declared, so the runtime decides "
+            "this call under the tool's own name; dry-run that tool instead"
+        )
+    if is_agent_reach_key(tool) and not policy_set.declares_reach():
+        return Verdict(DecisionOutcome.ALLOW, reason="reach not declared")
+    if is_skill_key(tool) and not policy_set.declares_skills():
+        raise CaseError(
+            f"{tool}: skills aren't declared, so the runtime decides this read "
+            "under the file tool's own name; dry-run that tool instead"
+        )
+    return None
 
 
 def decide(policy: Policy, role: str, d: dict) -> Verdict:
@@ -124,14 +135,14 @@ def decide(policy: Policy, role: str, d: dict) -> Verdict:
         run = run_namespace(d["tool"], **d.get("run_facts", {}))
     except (ValidationError, ValueError) as exc:
         raise CaseError(str(exc)) from exc
-    if not _gate_declared(policy.policy_set, d["tool"]):
-        return Verdict(
-            DecisionOutcome.ALLOW, reason="gate not declared, so not checked"
-        )
+    if verdict := _undeclared_gate(policy.policy_set, d["tool"]):
+        return verdict
     return policy.policy_set.evaluate(
         role=role,
         tool=d["tool"],
-        args=d.get("args", {}),
+        # As JSON, the way `policy test --args` receives them: an unquoted YAML
+        # date becomes its string, so `args.since >= "2026-01-01"` compares alike.
+        args=json.loads(json.dumps(d.get("args", {}), default=str)),
         attributes=attributes,
         run=run,
     )
