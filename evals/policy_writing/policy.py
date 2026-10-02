@@ -28,9 +28,14 @@ from hexgate.security import (
     load_roles,
     resolve_for_project,
 )
-from hexgate.security.analyzer import SEVERITY_RANK, check_default_role_exposure
+from hexgate.security.analyzer import (
+    SEVERITY_RANK,
+    PolicyLint,
+    check_default_role_exposure,
+)
 from hexgate.security.constraints import ConstraintParseError
 from hexgate.security.decision import Verdict
+from hexgate.security.models import PolicyMode
 from hexgate.security.modules import DEFAULT_AGENT
 from hexgate.security.testing import run_namespace
 
@@ -52,7 +57,7 @@ class Policy:
 
 
 # A case file names outcomes by their policy mode, not by the enum's values.
-LABELS = {
+LABELS: dict[DecisionOutcome, PolicyMode] = {
     DecisionOutcome.ALLOW: "allow",
     DecisionOutcome.DENY: "deny",
     DecisionOutcome.NEEDS_APPROVAL: "approval_required",
@@ -72,14 +77,12 @@ class CaseError(ValueError):
 _ATTRIBUTES = TypeAdapter(dict[str, ContextAttributeValue])
 
 
+_BY_LABEL = {label: value for value, label in LABELS.items()}
+
+
 def outcome(label: str) -> DecisionOutcome:
     """The outcome a case file names (`allow`, `deny`, `approval_required`)."""
-    for value, name in LABELS.items():
-        if name == label:
-            return value
-    raise CaseError(
-        f"unknown outcome {label!r} (expected one of {list(LABELS.values())})"
-    )
+    return _BY_LABEL[label]
 
 
 def decide(policy: Policy, role: str, d: dict) -> Verdict:
@@ -91,26 +94,22 @@ def decide(policy: Policy, role: str, d: dict) -> Verdict:
     """
     if role not in policy.policy_set:
         raise CaseError(f"role {role!r} not in policy ({policy.policy_set.roles})")
-    for key in ("args", "attributes", "run_facts"):
-        # A YAML key with no value is None: read it as empty, as the CLI's `{}`.
-        if not isinstance(d.get(key) or {}, dict):
-            raise CaseError(f"{key} must be a mapping, got {d[key]!r}")
     try:
-        attributes = _ATTRIBUTES.validate_python(d.get("attributes") or {})
+        attributes = _ATTRIBUTES.validate_python(d.get("attributes", {}))
         # Over a zeroed run, so an unset `run.*` path reads 0, not missing.
-        run = run_namespace(d["tool"], **(d.get("run_facts") or {}))
+        run = run_namespace(d["tool"], **d.get("run_facts", {}))
     except (ValidationError, ValueError) as exc:
         raise CaseError(str(exc)) from exc
     return policy.policy_set.evaluate(
         role=role,
         tool=d["tool"],
-        args=d.get("args") or {},
+        args=d.get("args", {}),
         attributes=attributes,
         run=run,
     )
 
 
-def _lint_failures(lints) -> list[str]:
+def _lint_failures(lints: list[PolicyLint]) -> list[str]:
     # A warning fails, not only an error: the write-policy skill tells the agent
     # to validate with `--max-severity warning` (for `policy check` on a module
     # tree it doesn't yet; the spec aligns the skill in PR 11).

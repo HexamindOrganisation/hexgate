@@ -9,6 +9,7 @@ as the case says, and the final answer mentions what the case requires.
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import json
 from dataclasses import dataclass
@@ -55,13 +56,13 @@ def decision_checks(policy: Policy | None, decisions: list[dict]) -> list[Check]
         # `roles` expands one entry over several roles; `expect` may list the
         # acceptable outcomes ("deny or approval_required").
         labels = d["expect"] if isinstance(d["expect"], list) else [d["expect"]]
+        wanted = {outcome(label) for label in labels}
         for role in d.get("roles") or [d["role"]]:
             name = f"decision: {_call_label(role, d)}"
             if policy is None:
                 checks.append(Check(name, False, "policy invalid"))
                 continue
             try:
-                wanted = {outcome(label) for label in labels}
                 verdict = decide(policy, role, d)
             except CaseError as exc:
                 checks.append(Check(name, False, f"can't dry-run: {exc}"))
@@ -79,12 +80,16 @@ def _reason(verdict: Verdict) -> str:
     return "; ".join([verdict.reason, *map(str, verdict.violations or [])])
 
 
+# default=str: a case loader keeps an unquoted YAML date as a date.
+_dump = functools.partial(json.dumps, sort_keys=True, default=str)
+
+
 def _call_label(role: str, d: dict) -> str:
-    label = f"{role} → {d['tool']}({json.dumps(d.get('args') or {}, sort_keys=True, default=str)})"
+    label = f"{role} → {d['tool']}({_dump(d.get('args', {}))})"
     if d.get("attributes"):
-        label += f" ctx={json.dumps(d['attributes'], sort_keys=True, default=str)}"
+        label += f" ctx={_dump(d['attributes'])}"
     if d.get("run_facts"):
-        label += f" run={json.dumps(d['run_facts'], sort_keys=True, default=str)}"
+        label += f" run={_dump(d['run_facts'])}"
     return label
 
 
@@ -137,31 +142,21 @@ def answer_checks(expect: dict, answer: str) -> list[Check]:
     """`mentions_any` and `mentions_all`, case-insensitive, on the final answer."""
     text = answer.lower()
     checks = []
-    for key, name in (
-        ("mentions_any", "answer mentions one of"),
-        ("mentions_all", "answer mentions all of"),
-    ):
-        words = expect.get(key)
-        if not words:
-            continue
-        if not isinstance(words, list):
-            # A bare string would be checked letter by letter and pass by luck.
-            checks.append(Check(name, False, f"{key} must be a list, got {words!r}"))
-            continue
-        # str(): YAML reads an unquoted 500 as a number.
-        found = [w for w in words if str(w).lower() in text]
-        if key == "mentions_any":
-            detail = f"found {found}" if found else f"none of {words}"
-            checks.append(Check(name, bool(found), detail))
-        else:
-            missing = [w for w in words if w not in found]
-            checks.append(
-                Check(name, not missing, f"missing {missing}" if missing else "")
-            )
+    if words := expect.get("mentions_any"):
+        hit = [w for w in words if w.lower() in text]
+        detail = f"found {hit}" if hit else f"none of {words}"
+        checks.append(Check("answer mentions one of", bool(hit), detail))
+    if words := expect.get("mentions_all"):
+        missing = [w for w in words if w.lower() not in text]
+        detail = f"missing {missing}" if missing else ""
+        checks.append(Check("answer mentions all of", not missing, detail))
     return checks
 
 
 def score(case: dict, ws: Path, before: dict[str, str], answer: str) -> list[Check]:
+    """Every check for `case`, as the case loader returns it (PR 2), which has
+    already validated its shape: calls are mappings, outcomes and mention lists
+    well-formed. `before` is the starting project's `snapshot`."""
     expect = case.get("expect", {})
     policy, problems = effective_policy(ws, case["agent"])
     valid = Check("valid", not problems, "\n".join(problems)[-800:])

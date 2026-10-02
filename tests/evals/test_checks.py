@@ -43,15 +43,6 @@ def test_when_the_role_is_undefined_then_the_decision_check_fails(tmp_path) -> N
     assert check.detail.startswith("can't dry-run: role 'suport'")
 
 
-def test_when_the_expected_outcome_is_misspelled_then_the_check_fails(
-    tmp_path,
-) -> None:
-    policy, _ = effective_policy(make_workspace(tmp_path))
-    [check] = decision_checks(policy, [{"role": "billing", **VIEW, "expect": "alow"}])
-    assert not check.passed
-    assert "unknown outcome 'alow'" in check.detail
-
-
 def test_when_the_policy_is_invalid_then_every_decision_check_fails() -> None:
     [check] = decision_checks(None, [{"role": "billing", **VIEW, "expect": "allow"}])
     assert (check.passed, check.detail) == (False, "policy invalid")
@@ -128,21 +119,6 @@ def test_when_the_answer_misses_the_words_then_answer_checks_fail() -> None:
     checks = by_name(answer_checks(expect, "done"))
     assert not checks["answer mentions one of"].passed
     assert checks["answer mentions all of"].detail == "missing ['refund', 'security']"
-
-
-def test_when_a_mention_list_is_a_bare_string_then_answer_checks_fail() -> None:
-    [check] = answer_checks(
-        {"mentions_any": "boundary"}, "Done, refunds need approval."
-    )
-    assert (check.passed, check.detail) == (
-        False,
-        "mentions_any must be a list, got 'boundary'",
-    )
-
-
-def test_when_a_mention_is_a_number_then_answer_checks_read_it_as_text() -> None:
-    [check] = answer_checks({"mentions_all": [500]}, "Refunds are capped at 500.")
-    assert check.passed
 
 
 def test_when_a_call_holds_a_yaml_date_then_its_check_is_named(tmp_path) -> None:
