@@ -335,6 +335,14 @@ round two found four new bugs, each one a check skipped:
   judged from a rule's own mode said a misspelled deny "protects nothing"; under
   an allow default the real tool ran unguarded. Enumerate the surrounding state
   (defaults, modes, which pipeline built the input), not just the rule's fields.
+  Enumerate it **from the definitions, never from memory**: open the model and
+  the evaluator and list every field that changes the outcome. The round-three
+  fix to that same bug counted `constraints` as a rule's restriction and forgot
+  `FileToolPolicy.file_scope`, which `evaluate_tool_call` checks three lines
+  later. When the invariant is about what an evaluator does, test it against
+  the evaluator: a parametrized test over every mode × default × field that
+  asserts the fix agrees with the real verdicts settles in seconds what
+  reasoning missed twice.
 - **When a per-item value starts to vary, find what assumed it was uniform.**
   Severity became per-occurrence while an older `flagged` set still kept the first
   occurrence, so the later, fail-open one was dropped. Grep the function for
