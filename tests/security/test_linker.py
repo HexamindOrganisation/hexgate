@@ -33,7 +33,7 @@ _OPA_AVAILABLE = shutil.which("opa") is not None
 needs_opa = pytest.mark.skipif(not _OPA_AVAILABLE, reason="opa not on PATH")
 
 
-def _mod(name, kind, tools, *, default_mode="allow", consts=None):
+def _mod(name, kind, tools, *, default_mode="allow", consts=None, skills=None):
     return ModuleContent(
         name=name,
         kind=kind,
@@ -41,6 +41,7 @@ def _mod(name, kind, tools, *, default_mode="allow", consts=None):
             default_policy=BaseToolPolicy(mode=default_mode),
             tools=tools,
             consts=consts or {},
+            skills=skills or {},
         ),
         source=f"{name}.yaml",
         content_hash=f"hash-{name}",
@@ -617,18 +618,6 @@ def test_flat_roles_still_resolve_agent_independently():
         assert "view" in res.by_role["member"].effective["default"].tools
 
 
-def _skills_mod(name, kind, skills, *, default_mode="allow"):
-    return ModuleContent(
-        name=name,
-        kind=kind,
-        policy=AgentPolicy(
-            default_policy=BaseToolPolicy(mode=default_mode), skills=skills
-        ),
-        source=f"{name}.yaml",
-        content_hash=f"hash-{name}",
-    )
-
-
 def test_module_skills_fold_and_shadowed_key_stays_deny():
     """``skills`` is composable, and a skill key the fold would drop (shadowed by a
     ceiling, or listed by a boundary but granted by no capability) stays an explicit
@@ -636,10 +625,14 @@ def test_module_skills_fold_and_shadowed_key_stays_deny():
     would not engage the skill gate and the skill would run ungated (fail-open).
     ``_MODULE_COMPOSABLE_FIELDS`` admitting ``skills`` and ``_fold_tool`` keeping
     skill keys must stay paired."""
-    ceiling = _skills_mod(
-        "ceiling", "boundary", {"listed": {"mode": "allow"}}, default_mode="deny"
+    ceiling = _mod(
+        "ceiling",
+        "boundary",
+        {},
+        default_mode="deny",
+        skills={"listed": {"mode": "allow"}},
     )
-    grant = _skills_mod("grant", "capability", {"shadowed": {"mode": "allow"}})
+    grant = _mod("grant", "capability", {}, skills={"shadowed": {"mode": "allow"}})
 
     result = link_policy_set([ceiling], [grant])
     tools = result.effective["default"].tools
@@ -650,13 +643,14 @@ def test_module_skills_fold_and_shadowed_key_stays_deny():
 
 
 def test_module_skills_grant_folds_through_a_ceiling():
-    ceiling = _skills_mod(
+    ceiling = _mod(
         "ceiling",
         "boundary",
-        {"runbook": {"mode": "allow", "via": ["instructions"]}},
+        {},
         default_mode="deny",
+        skills={"runbook": {"mode": "allow", "via": ["instructions"]}},
     )
-    grant = _skills_mod("grant", "capability", {"runbook": {"mode": "allow"}})
+    grant = _mod("grant", "capability", {}, skills={"runbook": {"mode": "allow"}})
 
     tools = link_policy_set([ceiling], [grant]).effective["default"].tools
 

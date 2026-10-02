@@ -366,8 +366,9 @@ def _reject_unsupported_module_fields(
 
 def _is_closed_world_key(tool: str) -> bool:
     """Synthetic keys whose gate engages from their presence in the resolved policy
-    (declares_admission / declares_reach / declares_skills): they must stay as an
-    explicit deny rather than be dropped, or dropping them disengages the gate."""
+    (declares_admission / declares_reach / declares_skills). The fold must keep them
+    as an explicit deny: dropping a shadowed or ungranted one can take the gate's
+    engagement to False and admit everyone / run every skill ungated — fail-open."""
     return is_agent_key(tool) or is_skill_key(tool)
 
 
@@ -414,13 +415,8 @@ def _fold_tool(
             # doesn't (unlisted, or mentioned only via a conditional deny), the
             # tool is ineligible — a capability grant can't make it eligible.
             trace.shadow(tool, _prov(g))
-            # For an ordinary tool, dropping it (None) IS the implicit deny. An
-            # agent or skill key must instead stay as an explicit deny: the gate's
-            # engagement is derived from whether the resolved policy still carries
-            # the key (declares_admission / declares_reach / declares_skills), so a
-            # shadowed-away agent.run or skill: key would silently DISENGAGE the
-            # gate (admit everyone, run every skill ungated) rather than deny — a
-            # fail-open. Keep it present and closed.
+            # An ordinary tool's omission IS the deny; a closed-world key must stay
+            # present or its gate disengages (see _is_closed_world_key).
             return BaseToolPolicy(mode="deny") if _is_closed_world_key(tool) else None
 
     # 3+4. Capability grants. No grant → eligible but ungranted → implicit deny.
@@ -430,12 +426,7 @@ def _fold_tool(
         if tp is not None and tp.mode in GRANT_MODES:
             grants.append((cap, tp))
     if not grants:
-        # Same reasoning as the ceiling-shadow branch above: for an ordinary tool
-        # omission IS the implicit deny, but an ungranted agent or skill key must
-        # stay an explicit deny — dropping it removes agent.run/agent.<via>:/skill*:
-        # from the resolved policy, so declares_admission()/declares_reach()/
-        # declares_skills() reads it as absent and disengages the gate instead of
-        # denying.
+        # Same as the ceiling-shadow branch: keep a closed-world key as a deny.
         return BaseToolPolicy(mode="deny") if _is_closed_world_key(tool) else None
     contributors.extend(_prov(cap) for cap, _ in grants)
 

@@ -20,7 +20,7 @@ that agent + all its roles; in a role body, that one cell.
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Literal, get_args
 
 from pydantic import (
     BaseModel,
@@ -112,22 +112,13 @@ class CeilingSpec(_ConstraintsMixin):
     mode: CeilingMode = "allow"
 
 
-def _all_skill_levels() -> list[SkillVia]:
-    return ["instructions", "resource", "script"]
-
-
 class _SkillLevelsMixin(_ConstraintsMixin):
-    """``via`` names the disclosure levels a skill rule governs, as on the
-    single-file :class:`~hexgate.security.models.SkillPolicy` — spelled ``via``
-    (not ``as``) so a ``skills:`` block pastes between the two formats unchanged.
-    Emptiness and duplicates are left to ``SkillPolicy``, which the lowering builds."""
+    """``via``: the disclosure levels governed, spelled as on ``SkillPolicy`` (which
+    the lowering builds, and which rejects an empty or duplicated list)."""
 
-    via: list[SkillVia] = Field(default_factory=_all_skill_levels)
+    via: list[SkillVia] = Field(default_factory=lambda: list(get_args(SkillVia)))
 
-    @field_validator("via", mode="before")
-    @classmethod
-    def _one_or_many(cls, v: object) -> object:
-        return [v] if isinstance(v, str) else v
+    _one_or_many = field_validator("via", mode="before")(_as_list)
 
 
 class SkillGrantSpec(_SkillLevelsMixin):
@@ -161,9 +152,8 @@ class BoundaryBlock(BaseModel):
     # like reach — with no admission ceiling, an authored admission grant is
     # intersected to deny, so a boundary must permit admission to allow it.
     admission: CeilingSpec | None = None
-    # The ceiling on skills, per level. Closed-world like reach: under a ceiling
-    # boundary, a skill (or one level of it) the boundary does not list is denied
-    # even if a role grants it — so a boundary must permit a skill to allow it.
+    # Per-level ceiling on skills; closed-world like reach — an unlisted level is
+    # denied even if a role grants it.
     skills: dict[str, SkillCeilingSpec] = Field(default_factory=dict)
 
 
@@ -187,9 +177,7 @@ class _GrantScope(BaseModel):
     # before a run accrues, so run counters read zero — a run budget belongs on a
     # tool or reach, not admission.
     admission: GrantSpec | None = None
-    # Which named skills this scope's role may reach, per disclosure level. Lowers
-    # to skill:/skill.resource:/skill.script: keys (closed-world once any role
-    # declares one), boundary-ceilinged like reach.
+    # Lowers to skill:/skill.resource:/skill.script: keys, ceilinged like reach.
     skills: dict[str, SkillGrantSpec] = Field(default_factory=dict)
     imports: list[str] = Field(default_factory=list, alias="import")
 
