@@ -79,10 +79,13 @@ def test_when_the_manifest_lists_no_skills_or_guards_then_none_are_known(
     assert (known.skills, known.guards) == (set(), set())
 
 
-def test_when_the_case_agent_has_no_manifest_then_loading_fails(tmp_path) -> None:
+@pytest.mark.parametrize("agent", ["billing-bot", "draft-bot"])  # absent, no manifest
+def test_when_the_case_agent_has_no_manifest_then_loading_fails(
+    tmp_path, agent
+) -> None:
     ws = make_workspace(tmp_path)
-    with pytest.raises(ValueError, match="billing-bot"):
-        load_known_names(ws, "billing-bot")
+    with pytest.raises(ValueError, match=f"has no manifest for agent '{agent}'"):
+        load_known_names(ws, agent)
 
 
 # unknown_keys
@@ -217,13 +220,14 @@ def test_when_a_policy_level_constraint_reads_an_invented_arg_then_unknown_refs_
     assert unknown_refs(loaded(doc), KNOWN) == ["policy-level: args.amont"]
 
 
-def test_when_a_policy_level_constraint_reads_skill_args_then_unknown_refs_accepts_them() -> (
-    None
-):
-    doc = {
-        "constraints": ['args.skill != "shell"'],
-        "skills": {"pdf": ALLOW, "shell": ALLOW},
-    }
+@pytest.mark.parametrize(
+    "constraint",
+    ['args.skill != "shell"', 'args.host != "evil.com"', 'args.target != "x"'],
+)
+def test_when_a_policy_level_constraint_reads_synthetic_args_then_unknown_refs_accepts_them(
+    constraint,
+) -> None:
+    doc = {"constraints": [constraint], "skills": {"pdf": ALLOW}}
     assert unknown_refs(loaded(doc), KNOWN) == []
 
 

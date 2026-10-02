@@ -107,7 +107,8 @@ def _roles(policy_set: PolicySet) -> list[AgentPolicy]:
 
 def unknown_keys(policy_set: PolicySet, known: KnownNames) -> list[str]:
     """Tools, skills (`skill:<name>`) and guards (`guard:<name>`) a policy keys on
-    that the manifest doesn't list. Synthetic tool keys are always known."""
+    that the manifest doesn't list. Synthetic tool keys are always known: the
+    `<target>` of `agent.<via>:<target>` is not checked against `agents.json`."""
     bad = set()
     for p in _roles(policy_set):
         bad |= {
