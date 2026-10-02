@@ -27,6 +27,14 @@ def _seed_disabled() -> bool:
     return os.environ.get("HEXGATE_SEED", "").strip().lower() == "skip"
 
 
+def _seed_agents_disabled() -> bool:
+    """``HEXGATE_SEED_AGENTS=skip`` keeps the triple-default (org/user/project)
+    but skips the sample agents. A generic knob — a self-hoster who wants a clean
+    project, or a demo that seeds its own agents (see deploy/provision.py) — not
+    keyed on any demo or notebook."""
+    return os.environ.get("HEXGATE_SEED_AGENTS", "").strip().lower() == "skip"
+
+
 # ---------------------------------------------------------------------------
 # First-boot seeding — the triple-default Org + User + Membership + Project
 # + agents. Cross-domain by nature.
@@ -138,9 +146,13 @@ async def ensure_default_seed(session: AsyncSession) -> Project | None:
 
     await session.commit()
     await session.refresh(project)
-    # Always ensure seeded agents exist — idempotent, so existing projects
-    # pick up the `default` guarantee on any subsequent boot.
-    await ensure_seeded_agents(session, project.id)
+    # Ensure the sample agents exist (idempotent) unless a deployment opts out.
+    # A demo that seeds its own agents into this project (deploy/provision.py's
+    # compose showcase) sets HEXGATE_SEED_AGENTS=skip so the project isn't also
+    # populated with the unrelated sample agents (which would deny-all once the
+    # project is flipped to a compose policy).
+    if not _seed_agents_disabled():
+        await ensure_seeded_agents(session, project.id)
     return project
 
 

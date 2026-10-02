@@ -18,6 +18,7 @@ from hexgate.security.analyzer import (
     analyze_project,
     check,
     check_project,
+    lint_guards,
 )
 from hexgate.security.bans import (
     EMPTY_BAN_SET,
@@ -88,6 +89,7 @@ from hexgate.security.models import (
     BaseToolPolicy,
     FileScope,
     FileToolPolicy,
+    GuardRule,
     PolicyMode,
     SkillPolicy,
     SkillVia,
@@ -202,6 +204,7 @@ __all__ = [
     "analyze_project",
     "check",
     "check_project",
+    "lint_guards",
     "link",
     "link_policy_set",
     "effective_policy_by_role",
@@ -232,6 +235,7 @@ __all__ = [
     "assert_needs_approval",
     "run_namespace",
     "BaseToolPolicy",
+    "GuardRule",
     "PolicyBinding",
     "PolicyBindingError",
     "ResolvedPolicy",

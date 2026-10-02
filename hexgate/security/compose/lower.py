@@ -21,7 +21,12 @@ from hexgate.security.compose.grammar import (
     Entry,
     _GrantScope,
 )
-from hexgate.security.models import AgentPolicy, AgentTargetPolicy, BaseToolPolicy
+from hexgate.security.models import (
+    AgentPolicy,
+    AgentTargetPolicy,
+    BaseToolPolicy,
+    GuardRule,
+)
 from hexgate.security.module_loader import _canonical_hash
 from hexgate.security.modules import DEFAULT_AGENT, ModuleContent
 from hexgate.security.policy_set import DEFAULT_ROLE_NAME
@@ -29,6 +34,21 @@ from hexgate.security.policy_set import DEFAULT_ROLE_NAME
 # The single role every project has: the generic agent, and any named agent with
 # no `roles:` map, resolve to it. Reuse the SDK's constant so the two can't drift.
 DEFAULT_ROLE = DEFAULT_ROLE_NAME
+
+
+def agent_guards(entry: Entry, agent: str) -> dict[str, GuardRule]:
+    """The agent-level guard stance for ``agent`` (R-GUARD-006).
+
+    The entry's top-level ``guards`` (every agent) overlaid by that agent's own
+    ``guards`` block, last-wins per name. Guards are **not** composed from imported
+    fragments or role bodies — they are agent-level, so this stance is the same for
+    every role of the agent and can never diverge. Empty when neither sets any.
+    """
+    merged: dict[str, GuardRule] = dict(entry.guards)
+    block = entry.agents.get(agent)
+    if block is not None:
+        merged.update(block.guards)
+    return merged
 
 
 def _content_hash(name: str, policy: AgentPolicy) -> str:

@@ -10,8 +10,8 @@ string).
 Ordering is fixed and load-bearing: **pre-guards run before ``decide``**, so
 ``decide`` always authorizes the exact args that will execute. A pre-guard can
 rewrite args or halt; it can never widen, because ``decide`` still runs on its
-output. Post-guards observe or halt in v1 (result rewrite is a later phase), and
-they run whether the tool returned or raised, so a watcher sees a failure the
+output. Post-guards observe, rewrite the result (``Proceed(result=...)``), or halt,
+and they run whether the tool returned or raised, so a watcher sees a failure the
 same way it sees a result. If the tool raised and no post-guard halts, the
 original exception propagates unchanged.
 """
@@ -45,6 +45,7 @@ from hexgate.security.decision import (
     RunAttribution,
     Verdict,
 )
+from hexgate.security.policy_set import PolicySetError
 
 if TYPE_CHECKING:
     from hexgate.approvals import ApprovalHandler
@@ -71,10 +72,6 @@ class PolicyOverride:
 # Resolved from the post-pre-guard args, so the decision covers what is invoked.
 PolicyResolver = Callable[[Mapping[str, Any]], PolicyOverride | None]
 AsyncPolicyResolver = Callable[[Mapping[str, Any]], Awaitable[PolicyOverride | None]]
-
-# Sentinel a post-guard runner returns when nothing halted, distinct from any
-# value ``render_error`` might produce (a dict or str). Identity-compared only.
-_NO_HALT: Any = object()
 
 
 # ---------------------------------------------------------------------------
@@ -107,6 +104,46 @@ def _new_call(
 
 def _applies(guard: Guard, tool_name: str) -> bool:
     return guard.applies(tool_name)
+
+
+def _guard_stance(
+    enforcer: "PolicyEnforcer | None", tool_name: str
+) -> Mapping[str, bool]:
+    """The policy's per-tool guard enable/disable stance for this call (R-GUARD-007).
+
+    Read from the *current* engine on every call, so a refreshed bundle's stance
+    takes effect on the next call — uniformly across every framework, since they all
+    route their guarded calls through this runner. Empty when there is no engine (the
+    guards-only path) or an engine without the stance reader, meaning every guard runs
+    as declared."""
+    policy = getattr(enforcer, "policy", None) if enforcer is not None else None
+    getter = getattr(policy, "effective_guards", None)
+    if getter is None:
+        return {}
+    try:
+        return getter(tool_name)
+    except PolicySetError as exc:
+        # A refresh can swap in a policy whose guard stance can't be computed (a
+        # pydantic-fallback PolicySet whose roles diverge, which is not re-validated at
+        # refresh). The runner must not crash a live call over that (R-GUARD-007's
+        # no-crash-on-refresh promise); fail safe — every guard runs as declared. Only
+        # this specific error is swallowed, so a genuine bug in effective_guards still
+        # surfaces rather than hiding as a benign "running all guards".
+        _log.warning(
+            "guard stance for tool %r could not be computed (%s); running all guards",
+            tool_name,
+            exc,
+        )
+        return {}
+
+
+def _runs(guard: Guard, tool_name: str, stance: Mapping[str, bool]) -> bool:
+    """A guard runs when it is scoped to this tool AND the policy has not disabled it.
+
+    A guard the policy does not mention defaults to enabled (runs as the code attached
+    it); one the policy set ``enabled: false`` is skipped this call. Applied to before-
+    and after-guards identically, since both are gated by the same check."""
+    return _applies(guard, tool_name) and stance.get(guard.label, True)
 
 
 def _fail_closed(guard: Guard) -> Halt | None:
@@ -158,7 +195,7 @@ def _apply_pre(
     if proceed.result is not _UNSET:
         raise ValueError(
             f"pre-guard {guard.label!r} returned Proceed(result=...); result "
-            "rewrite is a post-guard, later-phase feature"
+            "rewrite is a post-guard channel (R-GUARD-008)"
         )
     if proceed.args is None:
         return call
@@ -169,17 +206,49 @@ def _apply_pre(
     return replace(call, args=MappingProxyType(dict(proceed.args)))
 
 
-def _reject_post_proceed(guard: Guard, proceed: Proceed) -> None:
+class _Halted:
+    """A post-guard halted; carries the rendered error the caller returns.
+
+    Distinguishes a halt from the final (possibly rewritten) :class:`ToolOutcome`
+    that :func:`_run_post_async` / :func:`_run_post_sync` otherwise return."""
+
+    __slots__ = ("rendered",)
+
+    def __init__(self, rendered: Any) -> None:
+        self.rendered = rendered
+
+
+def _apply_post_proceed(
+    guard: Guard, proceed: Proceed, outcome: ToolOutcome, mods: list[Modification]
+) -> ToolOutcome:
+    """Apply a post-guard ``Proceed`` — a result rewrite (R-GUARD-008).
+
+    ``Proceed(result=...)`` replaces the tool's return value, handing the rewritten
+    outcome to the next post-guard and back to the caller. A post-guard cannot
+    rewrite ``args`` (the tool has already run) and cannot rewrite the result of a
+    *failed* call (there is no result to replace) — both are rejected. A plain
+    ``Proceed()`` is a no-op. The recorded :class:`Modification` names the field and
+    category, never the value.
+    """
     if proceed.args is not None:
         raise ValueError(
             f"post-guard {guard.label!r} returned Proceed(args=...); post-guards "
-            "cannot rewrite args"
+            "cannot rewrite args — the tool has already run"
         )
-    if proceed.result is not _UNSET:
+    if proceed.result is _UNSET:
+        return outcome  # Proceed() with nothing to change
+    if not outcome.ok:
         raise ValueError(
-            f"post-guard {guard.label!r} returned Proceed(result=...); result "
-            "rewrite is a later phase"
+            f"post-guard {guard.label!r} returned Proceed(result=...) on a failed "
+            "call; there is no result to rewrite"
         )
+    mods.append(
+        proceed.modification
+        or Modification(
+            plugin=guard.label, target="result", summary="rewrote the result"
+        )
+    )
+    return replace(outcome, value=proceed.result)
 
 
 def _halt_to_decision(halt: Halt, call: ToolCall) -> Decision:
@@ -217,7 +286,8 @@ def _halt_to_decision(halt: Halt, call: ToolCall) -> Decision:
 def _seal_result(value: Any) -> Any:
     """Wrap a dict result in a read-only view before the after-guards see it,
     so an in-place mutation can't escape into the tool's real return object
-    (R-GUARD-003). O(1), the same seal ``_new_call`` puts on args — a whole
+    (R-GUARD-008) — the sanctioned rewrite channel is ``Proceed(result=...)``, not
+    mutation. O(1), the same seal ``_new_call`` puts on args — a whole
     deep-copy on the hot path (a large response cloned for an observe-only
     watcher) is the cost this avoids. Lists and opaque objects pass through:
     there is no cheap read-only view for them, and a nested dict inside a
@@ -347,21 +417,26 @@ async def _run_post_async(
     approval_handler: "ApprovalHandler | None",
     enforcer: "PolicyEnforcer | None",
     render_error: RenderError,
-) -> Any:
+    stance: Mapping[str, bool],
+) -> "_Halted | ToolOutcome":
     """Run the post-guards over ``outcome``.
 
-    Returns a rendered error when a post-guard halts, else :data:`_NO_HALT`.
-    Runs for a successful result and for a tool that raised
-    (``outcome.ok is False``), so an observe or redact guard sees failures too.
-    A blocking halt is recorded to the audit trail *in addition to* the tool's
-    genuine ALLOW (the tool did run; only the result is withheld).
+    Returns a :class:`_Halted` carrying the rendered error when a post-guard halts,
+    else the final (possibly rewritten) :class:`ToolOutcome`. A post-guard that
+    rewrites the result (``Proceed(result=...)``) hands the rewritten value to the
+    next post-guard and back to the caller (R-GUARD-008). Runs for a successful
+    result and for a tool that raised (``outcome.ok is False``), so an observe guard
+    sees failures too. A blocking halt is recorded to the audit trail *in addition
+    to* the tool's genuine ALLOW (the tool did run; only the result is withheld).
+    ``stance`` is the per-call guard stance computed once by the caller.
     """
     if pipeline is None:
-        return _NO_HALT
+        return outcome
+    current = outcome
     for guard in pipeline.post:
-        if not _applies(guard, call.tool_name):
+        if not _runs(guard, call.tool_name, stance):
             continue
-        res = await _call_guard_async(guard, call, outcome)
+        res = await _call_guard_async(guard, call, current)
         if isinstance(res, Halt):
             halt_decision = _halt_to_decision(res, call)
             # No execution recorded: the tool already counted around ``invoke``.
@@ -374,10 +449,10 @@ async def _run_post_async(
                 continue
             _record_halt(enforcer, halt_decision, call)
             _notify(pipeline, call, mods, halt=res, halted_by=guard.label)
-            return render_error(halt_decision)
+            return _Halted(render_error(halt_decision))
         if isinstance(res, Proceed):
-            _reject_post_proceed(guard, res)
-    return _NO_HALT
+            current = _apply_post_proceed(guard, res, current, mods)
+    return current
 
 
 async def run_guarded_async(
@@ -414,11 +489,12 @@ async def run_guarded_async(
     ``read_file`` of a skill file); a ``None`` result keeps the static overrides."""
     context = get_current_context() if _has_guards(pipeline) else None
     call = _new_call(tool_name, args, enforcer, context)
+    stance = _guard_stance(enforcer, call.tool_name) if _has_guards(pipeline) else {}
     mods: list[Modification] = []
 
     if pipeline is not None:
         for guard in pipeline.pre:
-            if not _applies(guard, call.tool_name):
+            if not _runs(guard, call.tool_name, stance):
                 continue
             outcome = await _call_guard_async(guard, call)
             if isinstance(outcome, Halt):
@@ -480,7 +556,7 @@ async def run_guarded_async(
         raw = await invoke(dict(call.args))
     except Exception as exc:
         _record_run_error()
-        rendered = await _run_post_async(
+        post = await _run_post_async(
             pipeline,
             call,
             ToolOutcome(ok=False, value=None, error=str(exc)),
@@ -488,15 +564,16 @@ async def run_guarded_async(
             approval_handler,
             enforcer,
             render_error,
+            stance,
         )
-        if rendered is not _NO_HALT:
-            return rendered
+        if isinstance(post, _Halted):
+            return post.rendered
         if mods:
             _notify(pipeline, call, mods)
         raise
 
     result_value = _seal_result(raw) if (pipeline and pipeline.post) else raw
-    rendered = await _run_post_async(
+    post = await _run_post_async(
         pipeline,
         call,
         ToolOutcome(ok=True, value=result_value),
@@ -504,12 +581,15 @@ async def run_guarded_async(
         approval_handler,
         enforcer,
         render_error,
+        stance,
     )
-    if rendered is not _NO_HALT:
-        return rendered
+    if isinstance(post, _Halted):
+        return post.rendered
     if mods:
         _notify(pipeline, call, mods)
-    return raw
+    # A post-guard may have rewritten the result; return the rewritten value, else
+    # the tool's original (unsealed) return.
+    return raw if post.value is result_value else post.value
 
 
 # ---------------------------------------------------------------------------
@@ -561,14 +641,16 @@ def _run_post_sync(
     approval_handler: "ApprovalHandler | None",
     enforcer: "PolicyEnforcer | None",
     render_error: RenderError,
-) -> Any:
+    stance: Mapping[str, bool],
+) -> "_Halted | ToolOutcome":
     """Sync mirror of :func:`_run_post_async`."""
     if pipeline is None:
-        return _NO_HALT
+        return outcome
+    current = outcome
     for guard in pipeline.post:
-        if not _applies(guard, call.tool_name):
+        if not _runs(guard, call.tool_name, stance):
             continue
-        res = _call_guard_sync(guard, call, outcome)
+        res = _call_guard_sync(guard, call, current)
         if isinstance(res, Halt):
             halt_decision = _halt_to_decision(res, call)
             # No execution recorded: the tool already counted around ``invoke``.
@@ -581,10 +663,10 @@ def _run_post_sync(
                 continue
             _record_halt(enforcer, halt_decision, call)
             _notify(pipeline, call, mods, halt=res, halted_by=guard.label)
-            return render_error(halt_decision)
+            return _Halted(render_error(halt_decision))
         if isinstance(res, Proceed):
-            _reject_post_proceed(guard, res)
-    return _NO_HALT
+            current = _apply_post_proceed(guard, res, current, mods)
+    return current
 
 
 def run_guarded_sync(
@@ -606,11 +688,12 @@ def run_guarded_sync(
     ``resolve_policy``)."""
     context = get_current_context() if _has_guards(pipeline) else None
     call = _new_call(tool_name, args, enforcer, context)
+    stance = _guard_stance(enforcer, call.tool_name) if _has_guards(pipeline) else {}
     mods: list[Modification] = []
 
     if pipeline is not None:
         for guard in pipeline.pre:
-            if not _applies(guard, call.tool_name):
+            if not _runs(guard, call.tool_name, stance):
                 continue
             outcome = _call_guard_sync(guard, call)
             if isinstance(outcome, Halt):
@@ -665,7 +748,7 @@ def run_guarded_sync(
         raw = invoke(dict(call.args))
     except Exception as exc:
         _record_run_error()
-        rendered = _run_post_sync(
+        post = _run_post_sync(
             pipeline,
             call,
             ToolOutcome(ok=False, value=None, error=str(exc)),
@@ -673,15 +756,16 @@ def run_guarded_sync(
             approval_handler,
             enforcer,
             render_error,
+            stance,
         )
-        if rendered is not _NO_HALT:
-            return rendered
+        if isinstance(post, _Halted):
+            return post.rendered
         if mods:
             _notify(pipeline, call, mods)
         raise
 
     result_value = _seal_result(raw) if (pipeline and pipeline.post) else raw
-    rendered = _run_post_sync(
+    post = _run_post_sync(
         pipeline,
         call,
         ToolOutcome(ok=True, value=result_value),
@@ -689,12 +773,15 @@ def run_guarded_sync(
         approval_handler,
         enforcer,
         render_error,
+        stance,
     )
-    if rendered is not _NO_HALT:
-        return rendered
+    if isinstance(post, _Halted):
+        return post.rendered
     if mods:
         _notify(pipeline, call, mods)
-    return raw
+    # A post-guard may have rewritten the result; return the rewritten value, else
+    # the tool's original (unsealed) return.
+    return raw if post.value is result_value else post.value
 
 
 __all__ = ["run_guarded_async", "run_guarded_sync"]

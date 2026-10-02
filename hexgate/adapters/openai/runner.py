@@ -176,6 +176,18 @@ class HexgateRunner:
         self._guards = guards
         self._guard_observer = guard_observer
 
+    def _guards_for(self, agent: Agent) -> "Sequence[Guard] | None":
+        """Resolve the guard list for a run.
+
+        The runner's ``guards=`` wins when it was passed (back-compat with code
+        that configures guards on the runner); otherwise the guards stamped on the
+        agent by :func:`~hexgate.guards.attach_guards` are used — the same list the
+        manifest declares, so a guarded agent runs guarded without restating them.
+        """
+        from hexgate.guards.attach import resolve_guards
+
+        return resolve_guards(agent, self._guards)
+
     def _binding_for(self, agent: Agent) -> PolicyBinding:
         """Get-or-resolve the cached policy binding for ``agent``'s name.
 
@@ -202,6 +214,16 @@ class HexgateRunner:
                 warn_if_tool_reach_unenforced(
                     resolved.engine, framework="OpenAI Agents", agent_name=name
                 )
+            # Closed-world check of the guard stance ONCE, at first resolution
+            # (R-GUARD-007): a policy naming an undeclared/ambiguous guard stops the
+            # agent cold here. It is NOT repeated on the per-run wrap, so a later
+            # refresh that swaps in a policy with a bad guard name degrades to a
+            # no-op run rather than crashing — the runner skips an unmatched guard.
+            from hexgate.guards.stance import validate_guard_policy
+
+            validate_guard_policy(
+                resolved.engine, self._guards_for(agent), agent_name=name
+            )
             binding = PolicyBinding(enforcer, resolved.source)
             self._bindings[name] = binding
         return binding
@@ -320,7 +342,7 @@ class HexgateRunner:
             agent,
             enforcer=binding.enforcer,
             approval_handler=self._approval_handler,
-            guards=self._guards,
+            guards=self._guards_for(agent),
             guard_observer=self._guard_observer,
         )
         async with hexgate_context:
@@ -357,7 +379,7 @@ class HexgateRunner:
             agent,
             enforcer=binding.enforcer,
             approval_handler=self._approval_handler,
-            guards=self._guards,
+            guards=self._guards_for(agent),
             guard_observer=self._guard_observer,
         )
         with hexgate_context.sync_scope():
@@ -485,7 +507,7 @@ class HexgateRunner:
             agent,
             enforcer=binding.enforcer,
             approval_handler=self._approval_handler,
-            guards=self._guards,
+            guards=self._guards_for(agent),
             guard_observer=self._guard_observer,
         )
 

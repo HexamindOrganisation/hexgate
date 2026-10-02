@@ -172,12 +172,18 @@ class HexgateRunner:
         # reach plugin.
         self._max_handoff_depth = max_handoff_depth
         client = HexgateClient(HexgateConfig.from_env(api_key=self.api_key))
+        # The runner's ``guards=`` wins when passed (back-compat); otherwise use the
+        # guards stamped on the agent by attach_guards — the same list the manifest
+        # declares, so a guarded agent runs guarded without restating them.
+        from hexgate.guards.attach import resolve_guards
+
+        resolved_guards = resolve_guards(agent, guards)
         self._wrapped_agent, self._binding = wrap_google_agent(
             agent,
             api_key=self.api_key,
             approval_handler=approval_handler,
             client=client,
-            guards=guards,
+            guards=resolved_guards,
             guard_observer=guard_observer,
         )
         plugins = list(runner_kwargs.pop("plugins", None) or [])

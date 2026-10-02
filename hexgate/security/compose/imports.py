@@ -157,6 +157,13 @@ def _load(
             f"which imports do not support yet"
         )
 
+    if imported.guards:
+        raise LinkError(
+            f"{target_str}: an imported file may not declare 'guards:' — a guard "
+            f"stance is agent-level, not composable (R-GUARD-006); author it in the "
+            f"entry file's top-level or an agent body, not in an imported fragment"
+        )
+
     if name is not None:
         fragment: _GrantScope | None = imported.exports.get(name)
         if fragment is None:

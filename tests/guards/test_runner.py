@@ -313,11 +313,53 @@ async def test_post_guard_arg_rewrite_is_rejected() -> None:
 
 
 @pytest.mark.asyncio
-async def test_post_guard_result_rewrite_is_rejected() -> None:
-    enf, inv = FakeEnforcer(), RecordingInvoke()
-    pipe = _pipe(post=[lambda call, out: Proceed(result="rewritten")])
-    with pytest.raises(ValueError, match="result rewrite"):
-        await _run(enf, pipe, {"x": 1}, invoke=inv)
+async def test_post_guard_result_rewrite_replaces_the_value() -> None:
+    """A post-guard's Proceed(result=...) rewrites the tool's return (R-GUARD-003);
+    the tool still ran, only its result is replaced."""
+    enf, inv = FakeEnforcer(), RecordingInvoke("leaked-secret")
+    pipe = _pipe(post=[lambda call, out: Proceed(result="[REDACTED]")])
+    out = await _run(enf, pipe, {"x": 1}, invoke=inv)
+    assert out == "[REDACTED]"
+    assert inv.calls == [{"x": 1}]  # the tool DID run
+
+
+@pytest.mark.asyncio
+async def test_post_guard_result_rewrite_chains_to_the_next_post_guard() -> None:
+    """A later post-guard sees the rewritten value, not the original."""
+    seen: list = []
+
+    def first(call, out):
+        return Proceed(result="one")
+
+    def second(call, out):
+        seen.append(out.value)
+        return None
+
+    enf, inv = FakeEnforcer(), RecordingInvoke("orig")
+    out = await _run(enf, _pipe(post=[first, second]), {"x": 1}, invoke=inv)
+    assert out == "one"
+    assert seen == ["one"]  # second saw the rewrite, not "orig"
+
+
+@pytest.mark.asyncio
+async def test_post_guard_result_rewrite_rejected_on_a_failed_call() -> None:
+    """There is no result to rewrite when the tool raised."""
+    enf = FakeEnforcer()
+
+    async def boom(_final):
+        raise RuntimeError("boom")
+
+    pipe = _pipe(post=[lambda call, out: Proceed(result="x")])
+    with pytest.raises(ValueError, match="no result to rewrite"):
+        await run_guarded_async(
+            "echo",
+            {"x": 1},
+            enforcer=enf,
+            pipeline=pipe,
+            approval_handler=None,
+            invoke=boom,
+            render_error=langchain_error,
+        )
 
 
 # ---------------------------------------------------------------------------

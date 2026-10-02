@@ -561,7 +561,7 @@ class HexgateAgent:
         )
         # Thread the binding + client through the rebuild so refresh and
         # lazy user attenuation keep working after with_tools.
-        return type(self)(
+        rebuilt = type(self)(
             graph=graph,
             model=self.model,
             tools=tools,
@@ -583,6 +583,13 @@ class HexgateAgent:
             ban_gate=self._ban_gate,
             agent_gate=self._agent_gate,
         )
+        # create_agent stamps only the object it returns, so carry the guard stamp
+        # across every rebuild (with_tools underlies enforce_policy/refresh) — otherwise
+        # create_manifest(rebuilt) would publish guards=None while the guards still run.
+        # read_guards(self) is None when unstamped, so attach_guards no-ops there.
+        from hexgate.guards.attach import attach_guards, read_guards
+
+        return attach_guards(rebuilt, read_guards(self))
 
     def enforce_policy(
         self,
@@ -634,14 +641,19 @@ class HexgateAgent:
         from langchain_core.tools import BaseTool
 
         from hexgate.adapters.langchain.tools import GuardedTool, SubagentTool
+        from hexgate.guards.attach import attach_guards, resolve_guards
         from hexgate.guards.types import build_pipeline
         from hexgate.security.binding import PolicyBinding
         from hexgate.security.bundle import PolicyBundle
         from hexgate.security.enforcer import build_enforcer
         from hexgate.security.policy_set import PolicySet, load_policy_set
 
-        # Split the flat guard list into the internal pre/post pipeline once.
-        pipeline = build_pipeline(guards, observer=guard_observer)
+        # Guards fall back to the stamp the agent already carries (attach_guards /
+        # create_agent), so re-enforcing without restating guards keeps running them —
+        # and the result is stamped with exactly what runs, so create_manifest declares
+        # the same set (the manifest and the runtime must agree).
+        resolved_guards = resolve_guards(self, guards)
+        pipeline = build_pipeline(resolved_guards, observer=guard_observer)
 
         enforcer: PolicyEnforcer | None
         if policy is None:
@@ -659,6 +671,8 @@ class HexgateAgent:
                 # refuse admission.
                 unguarded = self.with_tools(list(self.tools))
                 unguarded._agent_gate = None
+                # resolved_guards is empty here (the pipeline is empty), so with_tools's
+                # carried stamp already matches "no guards" in the common case.
                 return unguarded
             enforcer = None  # guards-only gating, no policy engine
         else:
@@ -670,6 +684,20 @@ class HexgateAgent:
                 engine,
                 agent_name=self.name or DEFAULT_AGENT_NAME,
                 decision_observer=decision_observer,
+            )
+
+        # Fail-fast closed-world check of the policy's guard stance (R-GUARD-007): a
+        # policy naming an undeclared or ambiguous guard stops cold at construction.
+        # The enable/disable stance itself is applied per call in the guard runner, so
+        # one shared pipeline is installed on every tool. `engine` exists whenever
+        # `enforcer` does. Check `resolved_guards` — the list actually installed (the
+        # stamp when this call omits `guards=`) — not the raw argument, or re-enforcing
+        # a stamped agent without restating its guards would wrongly stop cold.
+        if enforcer is not None:
+            from hexgate.guards.stance import validate_guard_policy
+
+            validate_guard_policy(
+                engine, resolved_guards, agent_name=self.name or DEFAULT_AGENT_NAME
             )
 
         # One wrap loop for both paths, so the guards-only path can't drift from
@@ -750,7 +778,9 @@ class HexgateAgent:
             # Guards-only path: no enforcer, so no admission. Clear any gate a
             # prior enforce_policy left, which with_tools would otherwise carry.
             rebuilt._agent_gate = None
-        return rebuilt
+        # Stamp the result with exactly the guards its pipeline runs, so
+        # create_manifest declares the same set (a no-op when resolved_guards is empty).
+        return attach_guards(rebuilt, resolved_guards)
 
     def refresh_policy(self) -> None:
         """Pull the current policy from the attached source and swap it in.
@@ -1008,6 +1038,13 @@ def create_agent(
             approval_handler=approval_handler,
         )
 
+    # Stamp the guard list onto the returned agent so it travels with the object
+    # to registration — the CLI (`hexgate register` / `hexgate serve`) only holds
+    # the loaded agent, never the original list. Guards still run via the pipeline
+    # enforce_policy built above; this is purely so create_manifest can declare them.
+    from hexgate.guards.attach import attach_guards
+
+    attach_guards(agent, guards)
     handler = get_langfuse_handler(
         session_id=session_id,
         user_id=user_id,

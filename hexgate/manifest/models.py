@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from enum import StrEnum
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -23,6 +23,14 @@ _TRUNCATION_MARKER = "\n\n… [truncated by hexgate register]"
 # writes one row per skill per version.
 MAX_SKILLS = 200
 MAX_RESOURCES_PER_SKILL = 100
+
+# Guards are authored in a small flat list, but a concatenation mistake could
+# balloon it; cap what a manifest carries, mirroring the skills bound. Applied by
+# the builder where guards are assigned (post-construction, so a field_validator
+# would not run). No dedup: a guard name legitimately repeats across tool scopes
+# (a global watcher plus a per-tool variant), so name is not a manifest-unique key
+# the way a skill's is — the addressing key is designed with the policy guards block.
+MAX_GUARDS = 200
 
 
 def _truncate[T](value: list[T], limit: int, label: str) -> list[T]:
@@ -133,6 +141,14 @@ class AgentManifest(BaseModel):
             "before this field existed — content_hash uses exclude_none."
         ),
     )
+    guards: list[GuardManifest] | None = Field(
+        default=None,
+        description=(
+            "Guards declared on the agent — before/after-tool plugins the platform "
+            "can enable/disable. None — not [] — when none are declared, so the "
+            "manifest hash (exclude_none) is unchanged for every agent that has none."
+        ),
+    )
 
     @field_validator("skills")
     @classmethod
@@ -168,6 +184,36 @@ class SubagentRef(BaseModel):
 
     name: str = Field(description="The canonical name of the target sub-agent")
     via: AgentVia = Field(description="The reach edge kind: 'tool' or 'handoff'")
+
+
+class GuardManifest(BaseModel):
+    """One guard declared on an agent, surfaced so the platform can govern it.
+
+    Built from a runtime :class:`~hexgate.guards.types.Guard` at registration.
+    ``kind`` is a display hint (a built-in ``hexgate.plugins`` guard vs the dev's
+    own code); what a policy may govern is decided by a guard's presence in the
+    manifest, not by ``kind``.
+    """
+
+    name: str = Field(description="The guard's label (its function name)")
+    position: Literal["before", "after"] = Field(
+        description="Runs before decide ('before') or on the tool's result ('after')"
+    )
+    tool_names: list[str] | None = Field(
+        default=None,
+        description="Tools it is scoped to; None means every tool",
+    )
+    observe: bool = Field(
+        default=False,
+        description="A fail-open watcher that cannot halt or rewrite the call",
+    )
+    kind: Literal["official", "custom"] = Field(
+        description="'official' for a built-in hexgate.plugins guard, else 'custom'"
+    )
+    plugin_id: str | None = Field(
+        default=None,
+        description="The hexgate.plugins identifier when official, else None",
+    )
 
 
 class ToolDefinition(BaseModel):

@@ -190,3 +190,64 @@ def test_root_manifest_is_reused_when_provided(
     register_tree(root, manifest=prebuilt)
     assert calls["n"] == 1  # only the child is built; the root manifest is reused
     assert _posts == ["child", "root"]
+
+
+# --- guards on the tree: a handoff target must not over-declare (review #4) -----
+
+
+def _capture_manifests(monkeypatch: pytest.MonkeyPatch) -> dict:
+    """Stub post_manifest to capture each posted manifest by name."""
+    posted: dict = {}
+
+    def fake_post(manifest, *, timeout=None):
+        posted[manifest.name] = manifest
+        return {"created": True, "version": 1, "content_hash": "h"}
+
+    monkeypatch.setattr(register_mod, "post_manifest", fake_post)
+    return posted
+
+
+def test_handoff_child_registers_without_its_stamped_guards(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A handoff target runs under the SDK's own transfer, not the root's runner, so
+    its stamped guards never fire — the manifest must not declare them (guards=[])."""
+    agents = pytest.importorskip("agents")
+    from hexgate.guards import attach_guards, before_tool
+
+    @before_tool
+    def g(call: object) -> None:
+        return None
+
+    child = attach_guards(agents.Agent(name="billing_bot"), [g])
+    parent = agents.Agent(name="support_bot", handoffs=[child])
+
+    posted = _capture_manifests(monkeypatch)
+    register_tree(parent)
+
+    # The stamp is real — create_manifest(child) on its own would declare it...
+    from hexgate.manifest import create_manifest
+
+    assert [gm.name for gm in (create_manifest(child).guards or [])] == ["g"]
+    # ...but reached as a handoff target, the manifest declares no guards.
+    assert posted["billing_bot"].guards is None
+
+
+def test_as_tool_child_keeps_declaring_its_stamped_guards(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An agent-as-tool child self-enforces (its own guarded ainvoke), so it keeps
+    declaring its stamped guards (guards=None reads the stamp)."""
+    from hexgate.guards import attach_guards, before_tool
+
+    @before_tool
+    def g(call: object) -> None:
+        return None
+
+    child = attach_guards(_hg("billing_bot"), [g])
+    parent = _hg("support_bot", subs=[child])
+
+    posted = _capture_manifests(monkeypatch)
+    register_tree(parent)
+
+    assert [gm.name for gm in (posted["billing_bot"].guards or [])] == ["g"]

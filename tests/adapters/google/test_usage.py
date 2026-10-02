@@ -245,6 +245,32 @@ async def test_when_a_second_call_extends_the_contents_then_only_the_delta_is_se
 
 
 @pytest.mark.asyncio
+async def test_when_the_contents_are_empty_then_the_call_still_lands(
+    messages: list[dict[str, Any]],
+) -> None:
+    """ADK calls the model with empty ``contents`` when the system instruction
+    is the whole prompt (``BaseLlm._maybe_append_user_content`` fills it in
+    after this callback has stashed the list). That is a real call, so it
+    lands as seq 0 with its instructions, and the next call extends it."""
+    plugin = HexgateUsagePlugin(api_key="k")
+
+    await _turn(
+        plugin,
+        _context(),
+        _request([], system_instruction="Be terse."),
+        _model_response(),
+    )
+    await _turn(plugin, _context(), _request([_user("And?")]), _model_response())
+
+    assert [call["message_seq"] for call in messages] == [0, 1]
+    assert [call["resynced"] for call in messages] == [False, False]
+    assert messages[0]["input_messages"] == []
+    assert messages[0]["system_instructions"] == [
+        {"type": "text", "content": "Be terse."}
+    ]
+
+
+@pytest.mark.asyncio
 async def test_when_two_invocations_interleave_then_each_keeps_its_own_seq(
     messages: list[dict[str, Any]],
 ) -> None:

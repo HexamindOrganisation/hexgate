@@ -180,6 +180,10 @@ def effective_policy_by_role(
     narrows to a subset in the given order; ``None`` yields every role, sorted.
     """
     names = sorted(result.by_role) if roles is None else list(roles)
+    # Empty `guards` maps are dropped by AgentPolicy/BaseToolPolicy's own serializer
+    # (R-GUARD-006), so a guards-free resolved policy dumps byte-identically here and
+    # in every other dump path (the CLI's single-role/`--role` forms, tests) — no
+    # source_hash drift, no per-call-site strip to keep in sync.
     return {
         name: result.by_role[name].effective[DEFAULT_ROLE_NAME].model_dump(mode="json")
         for name in names

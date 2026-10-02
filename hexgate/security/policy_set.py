@@ -31,6 +31,7 @@ Mixin policies (``is_mixin: true``) can only be referenced via ``inherits``
 
 from __future__ import annotations
 
+import json
 from collections.abc import Iterable, Iterator, Mapping
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
@@ -54,6 +55,7 @@ from hexgate.security.models import (
     AgentPolicy,
     AgentTargetPolicy,
     BaseToolPolicy,
+    GuardRule,
     SkillPolicy,
     ToolPolicy,
     is_agent_reach_key,
@@ -69,6 +71,10 @@ DEFAULT_ROLE_NAME = "default"
 # modular agent's bundle from this re-parsed YAML). Hand-written policies omit it,
 # so the reserved-name guard still fires on authored source.
 RESOLVED_POLICY_MARKER = "_resolved"
+
+# Sentinel for the memoized guard stance: distinguishes "not computed" from a
+# genuinely computed None (no role configures a guard).
+_UNSET: object = object()
 
 _ROLES_KEY = "roles"
 _CONSTRAINTS_KEY = "constraints"
@@ -201,6 +207,76 @@ class PolicySet:
             any(is_skill_key(key) for key in policy.effective_tools)
             for policy in self._policies.values()
         )
+
+    def guard_stance(self) -> dict[str, dict] | None:
+        """The agent-level guard enable/disable stance to carry in the bundle.
+
+        Agent-level, not per-role (R-GUARD-007): the guard pipeline is built once at
+        construction, before any caller role exists, so a single stance governs the
+        agent. v1 is baseline-only (R-GUARD-006), and the baseline is uniform — it
+        applies to every tool and every caller alike — so the only requirement is that
+        every resolved role agree on it. A policy whose roles set *different* baselines
+        cannot be represented, so this fails loud rather than silently pick one (which
+        would enforce one role's disables on callers of another — a fail-open in the
+        disable direction). A role silent on a baseline guard runs it (enabled default),
+        so silence and an explicit ``enabled: false`` genuinely diverge; put shared
+        baseline guards in a mixin every role inherits.
+
+        Returns ``{"baseline": {name: enabled}}``, or ``None`` when no role configures
+        any guard — so the bundle omits the section and a guards-free policy's manifest
+        stays byte-identical (R-GUARD-006 / R-GUARD-007).
+
+        Memoized: ``effective_guards`` / ``governed_guard_names`` call this per guarded
+        call, and the stance is fixed after load, so it is computed once — including a
+        :class:`PolicySetError`, which is cached and re-raised rather than recomputed,
+        so a live divergent fallback engine does not re-run (and re-log) every call.
+        """
+        cached = getattr(self, "_guard_stance_cache", _UNSET)
+        if cached is not _UNSET:
+            if isinstance(cached, PolicySetError):
+                raise cached
+            return cached
+        try:
+            stance = self._compute_guard_stance()
+        except PolicySetError as exc:
+            self._guard_stance_cache: dict[str, dict] | PolicySetError | None = exc
+            raise
+        self._guard_stance_cache = stance
+        return stance
+
+    def _compute_guard_stance(self) -> dict[str, dict] | None:
+        """Fold every role's baseline into one agent-level stance (see
+        :meth:`guard_stance`); raise :class:`PolicySetError` on a divergent baseline."""
+        baselines = {
+            json.dumps({n: r.enabled for n, r in p.guards.items()}, sort_keys=True)
+            for p in self._policies.values()
+        }
+        if len(baselines) > 1:
+            roles = ", ".join(sorted(self._policies))
+            raise PolicySetError(
+                "baseline guards must resolve to the same stance across all roles (v1 "
+                f"governs the agent, not the caller); roles {roles} differ. Put shared "
+                "guards in a mixin every role inherits."
+            )
+        baseline = json.loads(next(iter(baselines))) if baselines else {}
+        return {"baseline": baseline} if baseline else None
+
+    def effective_guards(self, tool_name: str) -> dict[str, bool]:
+        """Agent-level guard stance (R-GUARD-007). Baseline-only in v1, so uniform for
+        every tool — ``tool_name`` is accepted for a signature shared with the bundle
+        mirror but does not change the result.
+
+        The readable-engine mirror of :meth:`PolicyBundle.effective_guards`, so the
+        guarded runner reads the stance identically whether the engine is a compiled
+        bundle or this set. Empty when no guard is configured."""
+        stance = self.guard_stance()
+        return dict(stance["baseline"]) if stance else {}
+
+    def governed_guard_names(self) -> frozenset[str]:
+        """Every guard name the stance references (R-GUARD-007), for the closed-world
+        check. Mirror of :meth:`PolicyBundle.governed_guard_names`."""
+        stance = self.guard_stance()
+        return frozenset(stance["baseline"]) if stance else frozenset()
 
     def __contains__(self, role: str) -> bool:
         return role in self._policies
@@ -550,6 +626,7 @@ def _resolve_inheritance(
     merged_tools: dict[str, ToolPolicy] = {}
     merged_agents: dict[str, AgentTargetPolicy] = {}
     merged_skills: dict[str, SkillPolicy] = {}
+    merged_guards: dict[str, GuardRule] = {}
     merged_consts: dict[str, object] = {}
     merged_constraints: list[str] = []
     merged_default: BaseToolPolicy = own.default_policy
@@ -564,6 +641,7 @@ def _resolve_inheritance(
         merged_tools.update(parent.tools)
         merged_agents.update(parent.agents)
         merged_skills.update(parent.skills)
+        merged_guards.update(parent.guards)
         merged_consts.update(parent.consts)
         _extend_unique(merged_constraints, parent.constraints)
         merged_default = parent.default_policy
@@ -578,6 +656,7 @@ def _resolve_inheritance(
     merged_tools.update(own.tools)
     merged_agents.update(own.agents)
     merged_skills.update(own.skills)
+    merged_guards.update(own.guards)
     merged_consts.update(own.consts)
     # Union, not override — the one field here that accumulates (see docstring).
     _extend_unique(merged_constraints, own.constraints)
@@ -597,6 +676,7 @@ def _resolve_inheritance(
         admission=merged_admission,
         agents=merged_agents,
         skills=merged_skills,
+        guards=merged_guards,
     )
 
 

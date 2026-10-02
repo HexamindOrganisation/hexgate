@@ -202,11 +202,10 @@ class HexgateUsageCallbackHandler(BaseCallbackHandler):
             return
         turn_key, messages, _ = prompt or _Prompt(self.turn_key(run_id), [], "")
         # Nothing was stashed, so there is no delta to measure and the
-        # completion goes unrecorded. Advancing on an empty list would cost
-        # more than that row: the cursor clobbers its mark to "unmatchable"
-        # and spends the turn's seq, so the next real prompt resyncs at seq 1
-        # — and seq 0 is the only event that lifts the system prompt, which
-        # would then stay inline in input_messages for the rest of the run.
+        # completion goes unrecorded. Advancing anyway would spend the turn's
+        # seq on a call with no prompt, and seq 0 is the only event that lifts
+        # the system prompt, which would then stay inline in input_messages
+        # for the rest of the run.
         if not messages:
             return
         # Convert before advancing: a failed conversion must not spend the

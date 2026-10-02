@@ -20,13 +20,16 @@ import hashlib
 import json
 import sys
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import yaml
 from pydantic import TypeAdapter, ValidationError
 from yaml.error import MarkedYAMLError
 
 from hexgate.runtime.context import ContextAttributeValue
+
+if TYPE_CHECKING:
+    from hexgate.manifest.models import AgentManifest
 from hexgate.runtime.roles import distinct_roles, resolve_role_set
 from hexgate.runtime.run_facts import KNOWN_RUN_PATHS
 from hexgate.security import (
@@ -156,6 +159,14 @@ def add_parser(subparsers: argparse._SubParsersAction) -> None:
         ),
     )
     p_val.add_argument("source", help="Path to the policy.yaml file.")
+    p_val.add_argument(
+        "--manifest",
+        help=(
+            "Path to the agent's manifest JSON. Enables guard lints: a guards: "
+            "rule naming a guard the agent doesn't declare, or a per-tool override "
+            "on a tool the guard isn't scoped to."
+        ),
+    )
     p_val.add_argument(
         "--max-severity",
         choices=_MAX_SEVERITY_CHOICES,
@@ -468,8 +479,29 @@ def _main_build(args: argparse.Namespace) -> int:
     return 0
 
 
+def _load_manifest(path: str) -> "tuple[AgentManifest | None, str | None]":
+    """Load an ``AgentManifest`` from a JSON file for the manifest-aware commands.
+
+    Returns ``(manifest, None)`` on success or ``(None, error_message)`` — the one
+    place ``validate`` and ``check`` load a manifest, so their error handling can't
+    drift. The manifest package is imported lazily (only these two paths need it)."""
+    from hexgate.manifest.models import AgentManifest
+
+    try:
+        return AgentManifest.model_validate_json(
+            Path(path).read_text(encoding="utf-8")
+        ), None
+    except (OSError, ValidationError, ValueError) as exc:
+        return None, f"manifest error: {exc}"
+
+
 def _main_validate(args: argparse.Namespace) -> int:
-    """Mirror the platform's /validate endpoint, locally."""
+    """Mirror the platform's /validate endpoint, locally.
+
+    With ``--manifest`` it additionally runs the guard lints (:func:`lint_guards`),
+    which the platform endpoint does not yet surface — wiring those into the platform
+    ``/validate`` is a follow-up so the dashboard catches guard typos too.
+    """
     source_path = Path(args.source)
     source_text, payload, err = _read_and_parse(source_path)
     if err is not None:
@@ -512,9 +544,24 @@ def _main_validate(args: argparse.Namespace) -> int:
 
     # Warnings, not errors: a permissive ``default`` is legitimate for a
     # single-role policy. CI opts in with --max-severity warning.
-    from hexgate.security.analyzer import SEVERITY_RANK, check_default_role_exposure
+    from hexgate.security.analyzer import (
+        SEVERITY_RANK,
+        check_default_role_exposure,
+        lint_guards,
+    )
 
     lints = check_default_role_exposure(policy_set)
+    # Guard lints need the agent's manifest (declared guard names + reach), so they run
+    # only when --manifest is supplied. This is the only command that lints guards:
+    # they live in a single-file policy, and `policy check` operates on module dirs,
+    # which reject the guards: block outright.
+    manifest_path = getattr(args, "manifest", None)
+    if manifest_path:
+        manifest, mf_err = _load_manifest(manifest_path)
+        if mf_err is not None:
+            print(mf_err, file=sys.stderr)
+            return 1
+        lints = lints + lint_guards(policy_set, manifest, source=str(source_path))
     for lint in lints:
         print(f"⚠ {lint.code}: {lint.message}", file=sys.stderr)
 
@@ -765,14 +812,9 @@ def _main_check(args: argparse.Namespace) -> int:
 
     manifest = None
     if args.manifest:
-        from hexgate.manifest.models import AgentManifest
-
-        try:
-            manifest = AgentManifest.model_validate_json(
-                Path(args.manifest).read_text(encoding="utf-8")
-            )
-        except (OSError, ValidationError, ValueError) as exc:
-            print(f"manifest error: {exc}", file=sys.stderr)
+        manifest, mf_err = _load_manifest(args.manifest)
+        if mf_err is not None:
+            print(mf_err, file=sys.stderr)
             return 1
 
     from hexgate.security.analyzer import SEVERITY_RANK

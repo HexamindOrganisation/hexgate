@@ -167,3 +167,25 @@ async def test_refresh_swap_reaches_every_clone() -> None:
         for clone in (first_clone, second_clone):
             allowed = await clone.tools[0].on_invoke_tool(None, '{"text": "x"}')
             assert allowed == 'invoked:{"text": "x"}'
+
+
+def test_wrap_does_not_run_the_closed_world_check() -> None:
+    """The per-run wrap must NOT validate the guard stance — it runs on every run
+    after a refresh, and R-GUARD-007 requires a refresh naming an unknown guard to
+    degrade to a no-op, not crash. The runner validates once at binding resolution
+    (review #2). Before the fix this raised GuardClosedWorldError."""
+    from hexgate.security.policy_set import load_policy_set_from_dict
+
+    engine = load_policy_set_from_dict(
+        {"roles": {"default": {"guards": {"ghost_guard": {"enabled": False}}}}}
+    )
+    enforcer = PolicyEnforcer(engine, agent_name="my-agent")
+    agent = _make_agent()
+
+    wrapped = wrap_openai_agent(agent, enforcer=enforcer, guards=[])
+
+    # No GuardClosedWorldError raised despite ghost_guard being governed; a gated
+    # clone (distinct object, tools rewrapped in place) is returned.
+    assert wrapped is not agent
+    assert len(wrapped.tools) == 2
+    assert [t.name for t in wrapped.tools] == ["echo", "shout"]

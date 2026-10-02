@@ -5,7 +5,16 @@ from __future__ import annotations
 from functools import cached_property
 from typing import Any, Literal, get_args
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SerializerFunctionWrapHandler,
+    ValidationInfo,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
 
 from hexgate.security.constraints import parse_constraint
 from hexgate.security.naming import canonical_name, canonical_skill_name
@@ -22,6 +31,39 @@ def _parse_all(constraints: list[str]) -> list[str]:
     return constraints
 
 
+def _drop_empty_guards(data: Any) -> Any:
+    """Remove an empty ``guards`` map from a serialized policy dict (R-GUARD-006).
+
+    ``guards`` defaults to ``{}`` on every :class:`BaseToolPolicy` and on
+    :class:`AgentPolicy`, so without this a guards-free policy would newly emit
+    ``guards: {}`` everywhere it serializes. The resolved-policy YAML is hashed into
+    the bundle manifest's ``source_hash``, so that noise would shift the hash of every
+    already-stored modular bundle for a field the policy does not use, and the AI Act
+    report would read the shift as an operator edit (``MATRIX_SOURCE_DRIFTED``) that
+    never happened. Dropping the empty map keeps the dump byte-identical to before the
+    field existed. A non-empty ``guards`` is left untouched, so this never hides a
+    real rule.
+    """
+    if isinstance(data, dict) and not data.get("guards"):
+        data.pop("guards", None)
+    return data
+
+
+class GuardRule(BaseModel):
+    """Enable or disable one manifest-declared guard (R-GUARD-006).
+
+    Version 1 is enable/disable only: the guard's behaviour lives in its plugin
+    code, and the policy only toggles it on or off. It is a model, not a bare
+    bool, so a later version can add fields without a grammar break, and so
+    ``extra="forbid"`` catches a typo'd key rather than silently dropping it.
+    ``enabled`` is required: a rule states an intent, never an implied default.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool
+
+
 class BaseToolPolicy(BaseModel):
     """Define the access mode and per-call constraints for a single tool.
 
@@ -31,6 +73,12 @@ class BaseToolPolicy(BaseModel):
     by :mod:`hexgate.security.constraints` — see that module for the full
     operator set. When the policy engine swaps to OPA/Rego in a later
     milestone, these strings carry through verbatim.
+
+    A tool entry carries no ``guards`` block: v1 governs guards only at the
+    policy baseline (the top-level ``guards:``), applied agent-wide — per-tool
+    (and per-caller) guard governance is deferred to v2 (R-GUARD-006). A
+    ``guards:`` on any tool / ``default_policy`` / ``admission`` / reach entry is
+    rejected loud so the author moves it to the baseline.
     """
 
     # extra="forbid" for the same reason AgentPolicy sets it: a mistyped field
@@ -41,6 +89,23 @@ class BaseToolPolicy(BaseModel):
 
     mode: PolicyMode = "deny"
     constraints: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_per_tool_guards(cls, data: Any) -> Any:
+        """Per-tool guard overrides are deferred to v2 — v1 governs guards only at the
+        policy baseline (R-GUARD-006). Reject a ``guards:`` on any tool /
+        ``default_policy`` / ``admission`` / reach entry loud (this class backs all of
+        them), so the author moves it to the top-level baseline rather than having it
+        silently ignored. ``extra="forbid"`` would already reject the now-absent field,
+        but this gives a message that names the fix."""
+        if isinstance(data, dict) and data.get("guards"):
+            raise ValueError(
+                "per-tool 'guards:' is not supported in v1 (guards govern the agent "
+                "at the policy baseline, not per tool or per caller); move the guard "
+                "to the top-level 'guards:' baseline"
+            )
+        return data
 
     @field_validator("constraints")
     @classmethod
@@ -261,11 +326,26 @@ class AgentPolicy(BaseModel):
     admission: BaseToolPolicy | None = None
     agents: dict[str, AgentTargetPolicy] = Field(default_factory=dict)
     skills: dict[str, SkillPolicy] = Field(default_factory=dict)
+    # Baseline guard stance (R-GUARD-006): a manifest guard name -> GuardRule,
+    # enabling/disabling it agent-wide. v1 is baseline-only — there is no per-tool
+    # override (a `guards:` on a tool entry is rejected, see BaseToolPolicy). Not
+    # lowered into effective_tools: guards are a build-time toggle, not an allow/deny
+    # decision, so they are read via `effective_guards`.
+    guards: dict[str, GuardRule] = Field(default_factory=dict)
 
     @field_validator("constraints")
     @classmethod
     def _validate_constraint_grammar(cls, value: list[str]) -> list[str]:
         return _parse_all(value)
+
+    @model_serializer(mode="wrap")
+    def _serialize(self, handler: SerializerFunctionWrapHandler) -> Any:
+        # Drop an empty top-level `guards` baseline (R-GUARD-006): keep a guards-free
+        # policy's dump byte-identical so no stored bundle's source_hash shifts. A
+        # rejection of `guards:` on a tool / default_policy / admission / reach entry
+        # is enforced at load by BaseToolPolicy._reject_per_tool_guards (v1 is
+        # baseline-only), so nothing nested carries a guards block to drop.
+        return _drop_empty_guards(handler(self))
 
     @field_validator("tools")
     @classmethod
@@ -403,3 +483,23 @@ class AgentPolicy(BaseModel):
         if not lowered:
             return self.tools
         return {**self.tools, **lowered}
+
+    def declares_guards(self) -> bool:
+        """True when the policy configures a baseline guard stance.
+
+        The opt-in signal for guard governance, mirroring ``declares_admission`` /
+        ``declares_reach``: a policy that configures nothing leaves every declared
+        guard running as coded, so the pipeline builder can skip guard filtering
+        entirely (R-GUARD-006, applied in R-GUARD-007)."""
+        return bool(self.guards)
+
+    def effective_guards(self, tool_name: str) -> dict[str, bool]:
+        """The enable/disable stance for each governed guard, as ``{name: enabled}``.
+
+        v1 governs guards only at the policy baseline (:attr:`guards`), applied
+        agent-wide, so the stance is the same for every tool — ``tool_name`` is
+        accepted for a uniform signature with the bundle mirror but does not change
+        the result. A guard the policy never mentions is absent here, meaning "run as
+        the manifest declares it" (the default is enabled). Consumed at pipeline-build
+        time (R-GUARD-007), never per call, so it is not on the hot path."""
+        return {name: rule.enabled for name, rule in self.guards.items()}
