@@ -3,9 +3,11 @@
 No eval framework is imported here: the framework's scorer and the dataset tests
 both call `score(case, workspace, before, answer)` and get back a list of `Check`s.
 One function per kind of check: the policy validates without lint warnings
-(`policy.py`), dry-run decisions and role supersets hold, only names the Hexgate
-MCP would show for the case's agent are used (`names.py`), files change (or not)
-as the case says, and the final answer mentions what the case requires.
+(`policy.py`), dry-run decisions and role supersets hold (on every roles.yaml
+column when the case names no agent), only names the Hexgate MCP would show are
+used (`names.py`: the case agent's, or any agent's when it names none; on a
+module tree, per file), files change (or not) as the case says, and the final
+answer mentions what the case requires.
 """
 
 from __future__ import annotations
@@ -13,12 +15,15 @@ from __future__ import annotations
 import functools
 import hashlib
 import json
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
 from evals.policy_writing.names import (
     NAME_SOURCES,
+    enforced_roles,
     load_known_names,
+    module_invented_names,
     unknown_keys,
     unknown_refs,
 )
@@ -29,7 +34,9 @@ from evals.policy_writing.policy import (
     Policy,
     decide,
     effective_policy,
+    is_module_tree,
     outcome,
+    policy_columns,
 )
 from hexgate.security.decision import Verdict
 
@@ -56,31 +63,51 @@ def snapshot(root: Path) -> dict[str, str]:
     return files
 
 
-def decision_checks(policy: Policy | None, decisions: list[dict]) -> list[Check]:
-    """One check per (decision, role): the dry-run gives an expected outcome."""
+def decision_checks(columns: dict[str, Policy], decisions: list[dict]) -> list[Check]:
+    """One check per (decision, role): the dry-run gives an expected outcome.
+
+    `columns` are the policies it must hold on (see `policy_columns`); none
+    means the policy is invalid.
+    """
     checks = []
     for d in decisions:
         # `roles` expands one entry over several roles; `expect` may list the
         # acceptable outcomes ("deny or approval_required").
         labels = d["expect"] if isinstance(d["expect"], list) else [d["expect"]]
-        wanted = {outcome(label) for label in labels}
         for role in d.get("roles") or [d["role"]]:
             name = f"decision: {_call_label(role, d)}"
-            if policy is None:
-                checks.append(Check(name, False, "policy invalid"))
-                continue
-            try:
-                verdict = decide(policy, role, d)
-            except CaseError as exc:
-                checks.append(Check(name, False, f"can't dry-run: {exc}"))
-                continue
-            if verdict.outcome in wanted:
-                checks.append(Check(name, True))
-                continue
-            got = LABELS[verdict.outcome]
-            detail = f"expected {' or '.join(labels)}, got {got}: {_reason(verdict)}"
-            checks.append(Check(name, False, detail[:400]))
+            checks.append(
+                _column_check(
+                    name, columns, lambda p: _wrong_decision(p, role, d, labels)
+                )
+            )
     return checks
+
+
+def _column_check(
+    name: str, columns: dict[str, Policy], misses: Callable[[Policy], list[str]]
+) -> Check:
+    """Passes when `misses(policy)` is empty on every column; each miss is
+    tagged with its column when there are several. No columns: invalid."""
+    if not columns:
+        return Check(name, False, "policy invalid")
+    wrong = []
+    for column, policy in columns.items():
+        where = "" if len(columns) == 1 else f" (column {column})"
+        wrong += [f"{miss}{where}" for miss in misses(policy)]
+    return Check(name, not wrong, "; ".join(wrong))
+
+
+def _wrong_decision(policy: Policy, role: str, d: dict, labels: list[str]) -> list[str]:
+    """Why the dry-run gives none of the `labels` outcomes; empty if it gives one."""
+    try:
+        verdict = decide(policy, role, d)
+    except CaseError as exc:
+        return [f"can't dry-run: {exc}"]
+    if verdict.outcome in {outcome(label) for label in labels}:
+        return []
+    got = LABELS[verdict.outcome]
+    return [f"expected {' or '.join(labels)}, got {got}: {_reason(verdict)}"[:400]]
 
 
 def _reason(verdict: Verdict) -> str:
@@ -100,28 +127,30 @@ def _call_label(role: str, d: dict) -> str:
     return label
 
 
-def superset_checks(policy: Policy | None, supersets: list[dict]) -> list[Check]:
-    """Everything `narrower` may do, `wider` may do at least as freely."""
+def superset_checks(columns: dict[str, Policy], supersets: list[dict]) -> list[Check]:
+    """Everything `narrower` may do, `wider` may do at least as freely, per column."""
     checks = []
     for s in supersets:
         name = f"superset: {s['wider']} ⊇ {s['narrower']}"
-        if policy is None:
-            checks.append(Check(name, False, "policy invalid"))
-            continue
-        worse = []
-        for p in s["probes"]:
-            try:
-                lo = decide(policy, s["narrower"], p).outcome
-                hi = decide(policy, s["wider"], p).outcome
-            except CaseError as exc:  # e.g. a missing role: the probe fails
-                worse.append(f"{p['tool']}: can't dry-run: {exc}")
-                continue
-            if RANK[hi] < RANK[lo]:
-                worse.append(
-                    f"{p['tool']}: {s['narrower']}={LABELS[lo]}, {s['wider']}={LABELS[hi]}"
-                )
-        checks.append(Check(name, not worse, "; ".join(worse)))
+        checks.append(_column_check(name, columns, lambda p: _worse_probes(p, s)))
     return checks
+
+
+def _worse_probes(policy: Policy, s: dict) -> list[str]:
+    """The probes `wider` lets through less freely than `narrower`."""
+    worse = []
+    for p in s["probes"]:
+        try:
+            lo = decide(policy, s["narrower"], p).outcome
+            hi = decide(policy, s["wider"], p).outcome
+        except CaseError as exc:  # e.g. a missing role: the probe fails
+            worse.append(f"{p['tool']}: can't dry-run: {exc}")
+            continue
+        if RANK[hi] < RANK[lo]:
+            worse.append(
+                f"{p['tool']}: {s['narrower']}={LABELS[lo]}, {s['wider']}={LABELS[hi]}"
+            )
+    return worse
 
 
 NAME_CHECKS = (
@@ -135,10 +164,15 @@ def _name_checks_failed(detail: str) -> list[Check]:
 
 
 def name_checks(
-    policy: Policy, ws: Path, agent: str, before: dict[str, str], after: dict[str, str]
+    policy: Policy,
+    ws: Path,
+    agent: str | None,
+    before: dict[str, str],
+    after: dict[str, str],
 ) -> list[Check]:
-    """Only names the MCP would show for `agent`: tools, skills, guards, arguments
-    and caller attributes."""
+    """Only names the MCP would show for `agent` (any agent's when None): tools,
+    skills, guards, reach targets, arguments and caller attributes. A single
+    policy.yaml is checked as a whole, a module tree file by file."""
     # The names are read after the run, so an edit to either file could
     # whitelist an invented name: trust them only if they are untouched.
     edited = [f for f in NAME_SOURCES if before.get(f) != after.get(f)]
@@ -146,19 +180,19 @@ def name_checks(
         return _name_checks_failed(f"edited during the run: {edited}")
     try:
         known = load_known_names(ws, agent)
+        if is_module_tree(ws):
+            unknown, refs = module_invented_names(ws, agent, known)
+        else:
+            roles = enforced_roles(policy.policy_set)
+            unknown, refs = unknown_keys(roles, known), unknown_refs(roles, known)
     except (OSError, ValueError, KeyError, TypeError) as exc:
         return _name_checks_failed(
             f"agents.json / audit.json unreadable: {exc!r}"[:300]
         )
-    unknown = unknown_keys(policy.policy_set, known)
-    refs = unknown_refs(policy.policy_set, known)
     keys, args = NAME_CHECKS
+    where = f"{agent}'s manifest" if agent else "any agent's manifest"
     return [
-        Check(
-            keys,
-            not unknown,
-            f"not in {agent}'s manifest: {unknown}" if unknown else "",
-        ),
+        Check(keys, not unknown, f"not in {where}: {unknown}" if unknown else ""),
         Check(
             args, not refs, f"not in the manifest or audit.json: {refs}" if refs else ""
         ),
@@ -206,14 +240,18 @@ def score(case: dict, ws: Path, before: dict[str, str], answer: str) -> list[Che
     already validated its shape: calls are mappings, outcomes and mention lists
     well-formed. `before` is the starting project's `snapshot`."""
     expect = case.get("expect", {})
-    policy, problems = effective_policy(ws, case["agent"])
+    agent = case.get("agent")
+    policy, problems = effective_policy(ws, agent)
+    columns: dict[str, Policy] = {}
+    if policy is not None:
+        columns, problems = policy_columns(ws, agent, policy)
     valid = Check("valid", not problems, "\n".join(problems)[-800:])
     after = snapshot(ws)
     return [
         valid,
-        *decision_checks(policy, expect.get("decisions", [])),
-        *superset_checks(policy, expect.get("superset", [])),
-        *(name_checks(policy, ws, case["agent"], before, after) if policy else []),
+        *decision_checks(columns, expect.get("decisions", [])),
+        *superset_checks(columns, expect.get("superset", [])),
+        *(name_checks(policy, ws, agent, before, after) if policy else []),
         *file_checks(expect, before, after),
         *answer_checks(expect, answer),
     ]

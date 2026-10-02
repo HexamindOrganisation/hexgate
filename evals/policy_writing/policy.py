@@ -215,14 +215,47 @@ def _yaml_payload(ws: Path) -> tuple[dict | None, list[str]]:
     return payload, []
 
 
+def is_module_tree(ws: Path) -> bool:
+    """A module tree (`policies/`) rather than a single `policy.yaml`."""
+    return (ws / "policies").is_dir()
+
+
 def effective_policy(
-    ws: Path, agent: str = DEFAULT_AGENT
+    ws: Path, agent: str | None = None
 ) -> tuple[Policy | None, list[str]]:
     """The policy in `ws`, or why it doesn't validate (`hexgate policy validate`,
-    or `check` + `resolve` on a module tree for `agent`'s roles.yaml column)."""
-    is_modules = (ws / "policies").is_dir()
-    payload, problems = _module_payload(ws, agent) if is_modules else _yaml_payload(ws)
+    or `check` + `resolve` on a module tree for `agent`'s roles.yaml column, the
+    generic one when None)."""
+    agent = agent or DEFAULT_AGENT
+    payload, problems = (
+        _module_payload(ws, agent) if is_module_tree(ws) else _yaml_payload(ws)
+    )
     if payload is None:
         return None, problems
     policy_set, problems = _load(payload)
     return (None, problems) if problems else (Policy(payload, policy_set), [])
+
+
+def policy_columns(
+    ws: Path, agent: str | None, policy: Policy
+) -> tuple[dict[str, Policy], list[str]]:
+    """The policies a case's dry-runs must hold on, keyed by roles.yaml column,
+    or none and why when a column is invalid (so no column passes unrun).
+
+    A case for one agent, or a single policy.yaml, has one: `policy`. A role or
+    project-wide case on a module tree must hold on the generic column and on
+    every named agent's: a named cell replaces "*" for that agent, so an edit
+    to "*" alone does nothing for an agent that has its own cell.
+    """
+    columns = {agent or DEFAULT_AGENT: policy}
+    if agent is not None or not is_module_tree(ws):
+        return columns, []
+    named = {name for cells in (load_roles(ws) or {}).values() for name in cells}
+    problems = []
+    for name in sorted(named - set(columns)):
+        column, column_problems = effective_policy(ws, name)
+        if column is None:
+            problems += [f"column {name}: {p}" for p in column_problems]
+        else:
+            columns[name] = column
+    return ({}, problems) if problems else (columns, [])

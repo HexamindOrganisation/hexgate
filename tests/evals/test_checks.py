@@ -17,15 +17,17 @@ from evals.policy_writing.checks import (
     snapshot,
     superset_checks,
 )
-from evals.policy_writing.policy import effective_policy
+from evals.policy_writing.policy import effective_policy, policy_columns
 from tests.evals.helpers import (
     AGENT,
     PERMISSIVE_DEFAULT,
     POLICY,
+    add_boundary_tool,
     by_name,
     make_modules_workspace,
     make_workspace,
     manifest_tool,
+    write_module,
 )
 
 REFUND = {"tool": "refund_order", "args": {"order_id": "o1", "amount": 5}}
@@ -38,33 +40,37 @@ def test_decision_checks_happy_path(tmp_path) -> None:
         {"role": "billing", **REFUND, "expect": "allow"},
         {"roles": ["default", "support"], **VIEW, "expect": ["allow"]},
     ]
-    assert all(c.passed for c in decision_checks(policy, decisions))
+    assert all(c.passed for c in decision_checks({"*": policy}, decisions))
 
 
 def test_when_the_outcome_differs_then_the_decision_check_fails(tmp_path) -> None:
     policy, _ = effective_policy(make_workspace(tmp_path))
     big = {**REFUND, "args": {"order_id": "o1", "amount": 900}}
-    [check] = decision_checks(policy, [{"role": "billing", **big, "expect": "allow"}])
+    [check] = decision_checks(
+        {"*": policy}, [{"role": "billing", **big, "expect": "allow"}]
+    )
     assert not check.passed
     assert "expected allow, got deny" in check.detail
 
 
 def test_when_the_role_is_undefined_then_the_decision_check_fails(tmp_path) -> None:
     policy, _ = effective_policy(make_workspace(tmp_path))
-    [check] = decision_checks(policy, [{"role": "suport", **VIEW, "expect": "deny"}])
+    [check] = decision_checks(
+        {"*": policy}, [{"role": "suport", **VIEW, "expect": "deny"}]
+    )
     assert not check.passed
     assert check.detail.startswith("can't dry-run: role 'suport'")
 
 
 def test_when_the_policy_is_invalid_then_every_decision_check_fails() -> None:
-    [check] = decision_checks(None, [{"role": "billing", **VIEW, "expect": "allow"}])
+    [check] = decision_checks({}, [{"role": "billing", **VIEW, "expect": "allow"}])
     assert (check.passed, check.detail) == (False, "policy invalid")
 
 
 def test_superset_checks_happy_path(tmp_path) -> None:
     policy, _ = effective_policy(make_workspace(tmp_path))
     superset = {"wider": "billing", "narrower": "support", "probes": [VIEW, REFUND]}
-    assert superset_checks(policy, [superset])[0].passed
+    assert superset_checks({"*": policy}, [superset])[0].passed
 
 
 def test_when_the_wider_role_is_stricter_then_superset_reports_the_probe(
@@ -72,7 +78,7 @@ def test_when_the_wider_role_is_stricter_then_superset_reports_the_probe(
 ) -> None:
     policy, _ = effective_policy(make_workspace(tmp_path))
     superset = {"wider": "support", "narrower": "billing", "probes": [VIEW, REFUND]}
-    [check] = superset_checks(policy, [superset])
+    [check] = superset_checks({"*": policy}, [superset])
     assert not check.passed
     assert check.detail == "refund_order: billing=allow, support=approval_required"
 
@@ -80,7 +86,7 @@ def test_when_the_wider_role_is_stricter_then_superset_reports_the_probe(
 def test_when_a_role_is_missing_then_superset_fails(tmp_path) -> None:
     policy, _ = effective_policy(make_workspace(tmp_path))
     superset = {"wider": "support", "narrower": "nosuch", "probes": [VIEW]}
-    [check] = superset_checks(policy, [superset])
+    [check] = superset_checks({"*": policy}, [superset])
     assert not check.passed
     assert check.detail.startswith("view_orders: can't dry-run: role 'nosuch'")
 
@@ -95,19 +101,20 @@ def test_name_checks_happy_path(tmp_path) -> None:
     ]
 
 
-def test_when_a_module_tree_lowers_agent_keys_then_name_checks_accept_them(
+def test_when_a_module_file_declares_admission_and_reach_then_name_checks_accept_them(
     tmp_path,
 ) -> None:
-    # Resolving a module tree lowers admission and reach into `agent.*` tools.
+    # A module file's `admission` and `agents` blocks lower to `agent.*` keys.
     roles = "  default: [read_only]\n  billing: [read_only, reach]\n"
     ws = make_modules_workspace(tmp_path, roles)
-    (ws / "policies" / "capabilities" / "reach.yaml").write_text(
+    write_module(
+        ws,
+        "capabilities/reach.yaml",
         'admission: { mode: allow, constraints: ["args.agent == \\"shop-bot\\""] }\n'
-        "agents:\n  ops-bot: { mode: allow }\n"
+        "agents:\n  ops-bot: { mode: allow }\n",
     )
     policy, problems = effective_policy(ws, AGENT)
     assert problems == []
-    assert "agent.run" in policy.policy_set.policy_for("billing").tools
     before = snapshot(ws)
     checks = name_checks(policy, ws, AGENT, before, before)
     assert [(c.name, c.passed, c.detail) for c in checks] == [
@@ -130,6 +137,36 @@ def test_when_the_policy_invents_names_then_both_name_checks_fail(tmp_path) -> N
         (False, "not in shop-bot's manifest: ['wire_transfer']"),
         (False, "not in the manifest or audit.json: ['wire_transfer: ctx.tier']"),
     ]
+
+
+def test_when_a_boundary_denies_another_agents_tool_then_name_checks_accept_it(
+    tmp_path,
+) -> None:
+    # The resolved column holds the deny; the boundary file is checked against
+    # every agent's names, so it isn't read as shop-bot inventing the tool.
+    roles = "  default: [read_only]\n  billing: [read_only, payments]\n"
+    ws = make_modules_workspace(tmp_path, roles)
+    add_boundary_tool(ws, "wire_transfer: { mode: deny }")
+    policy, problems = effective_policy(ws, AGENT)
+    assert problems == []
+    files = snapshot(ws)
+    checks = name_checks(policy, ws, AGENT, files, files)
+    assert [(c.passed, c.detail) for c in checks] == [(True, "")] * 2
+
+
+def test_when_the_case_names_no_agent_then_name_checks_accept_every_agents_names(
+    tmp_path,
+) -> None:
+    # A role or project-wide edit: ops-bot's tool and attribute are fine too.
+    policy = POLICY.replace("- args.amount <= 500", '- ctx.region == "eu"')
+    ws = make_workspace(tmp_path, policy + "      wire_transfer: { mode: allow }\n")
+    files = snapshot(ws)
+    checks = name_checks(effective_policy(ws)[0], ws, None, files, files)
+    assert all(c.passed for c in checks)
+    (ws / "policy.yaml").write_text(policy + "      teleport: { mode: allow }\n")
+    files = snapshot(ws)
+    keys = name_checks(effective_policy(ws)[0], ws, None, files, files)[0]
+    assert keys.detail == "not in any agent's manifest: ['teleport']"
 
 
 @pytest.mark.parametrize(
@@ -229,7 +266,7 @@ def test_when_the_answer_misses_the_words_then_answer_checks_fail() -> None:
 def test_when_a_call_holds_a_yaml_date_then_its_check_is_named(tmp_path) -> None:
     policy, _ = effective_policy(make_workspace(tmp_path))
     call = {"role": "default", **VIEW, "args": {"since": datetime.date(2026, 1, 1)}}
-    [check] = decision_checks(policy, [{**call, "expect": "allow"}])
+    [check] = decision_checks({"*": policy}, [{**call, "expect": "allow"}])
     assert "2026-01-01" in check.name
 
 
@@ -281,3 +318,51 @@ def test_when_the_policy_is_invalid_then_score_fails_valid_and_decisions(
     checks = score(case, ws, snapshot(ws), "")
     assert "permissive-default" in by_name(checks)["valid"].detail
     assert [c.passed for c in checks] == [False, False]
+
+
+# A role-wide case on a module tree: every roles.yaml column
+
+
+@pytest.mark.parametrize(
+    ("shop_bot_cell", "passed"),
+    [("[read_only]", False), ("[read_only, payments]", True)],
+)
+def test_a_role_wide_decision_must_hold_on_every_agents_column(
+    tmp_path, shop_bot_cell, passed
+) -> None:
+    # Refunds granted on "*"; shop-bot's own cell replaces "*" for it.
+    roles = (
+        f'  support:\n    "*": [read_only, payments]\n    shop-bot: {shop_bot_cell}\n'
+    )
+    ws = make_modules_workspace(tmp_path, roles)
+    columns, _ = policy_columns(ws, None, effective_policy(ws)[0])
+    [check] = decision_checks(
+        columns, [{"role": "support", **REFUND, "expect": "allow"}]
+    )
+    assert check.passed is passed
+    if not passed:
+        assert check.detail.endswith("(column shop-bot)")
+
+
+def test_a_role_wide_superset_must_hold_on_every_agents_column(tmp_path) -> None:
+    # On "*" support may refund like billing; shop-bot's own cell narrows it.
+    roles = (
+        '  support:\n    "*": [read_only, payments]\n    shop-bot: [read_only]\n'
+        "  billing: [read_only, payments]\n"
+    )
+    ws = make_modules_workspace(tmp_path, roles)
+    columns, _ = policy_columns(ws, None, effective_policy(ws)[0])
+    superset = {"narrower": "billing", "wider": "support", "probes": [REFUND]}
+    [check] = superset_checks(columns, [superset])
+    assert check.detail == "refund_order: billing=allow, support=deny (column shop-bot)"
+
+
+def test_when_an_agents_column_is_invalid_then_score_fails_valid(tmp_path) -> None:
+    roles = '  default:\n    "*": [read_only]\n    ops-bot: [read_only, payments]\n'
+    ws = make_modules_workspace(tmp_path, roles + "  billing: [read_only]\n")
+    case = {"expect": {"decisions": [{"role": "billing", **VIEW, "expect": "allow"}]}}
+    checks = by_name(score(case, ws, snapshot(ws), ""))
+    assert checks["valid"].detail.startswith("column ops-bot:")
+    # The invalid column's dry-runs can't run, so none passes by being skipped.
+    decision = next(c for n, c in checks.items() if n.startswith("decision:"))
+    assert (decision.passed, decision.detail) == (False, "policy invalid")

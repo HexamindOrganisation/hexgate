@@ -4,6 +4,7 @@ against the gates that build them."""
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 from dataclasses import replace
 
@@ -15,7 +16,9 @@ from evals.policy_writing.names import (
     SKILL_SCRIPT_ARGS,
     SYNTHETIC_ARGS,
     KnownNames,
+    enforced_roles,
     load_known_names,
+    module_invented_names,
     unknown_keys,
     unknown_refs,
 )
@@ -29,10 +32,14 @@ from hexgate.security.enforcer import build_enforcer
 from hexgate.security.policy_set import load_policy_set_from_dict
 from tests.evals.helpers import (
     AGENT,
+    AGENTS,
     AUDIT,
+    add_boundary_tool,
     agent_view,
+    make_modules_workspace,
     make_workspace,
     manifest_tool,
+    write_module,
 )
 
 # shop-bot's manifest, as `load_known_names` reads it from the fixture.
@@ -41,12 +48,13 @@ KNOWN = KnownNames(
     attrs={"department"},
     skills={"pdf"},
     guards={"redact_pii"},
+    agents={"shop-bot", "ops-bot", "draft-bot"},  # every agent in the project
 )
 ALLOW = {"mode": "allow"}
 
 
 def loaded(doc: dict):
-    return load_policy_set_from_dict({"version": 1, **doc})
+    return enforced_roles(load_policy_set_from_dict({"version": 1, **doc}))
 
 
 def on(tool: str, *constraints: str) -> dict:
@@ -92,6 +100,27 @@ def test_when_the_manifest_lists_no_skills_or_guards_then_none_are_known(
     assert (known.skills, known.guards) == (set(), set())
 
 
+def test_when_no_agent_is_given_then_every_agents_names_are_known(tmp_path) -> None:
+    known = load_known_names(make_workspace(tmp_path), None)
+    assert known == replace(
+        KNOWN,
+        tools={**KNOWN.tools, "wire_transfer": {"iban"}},
+        attrs={"department", "region"},
+        skills={"pdf", "ledger"},
+    )
+
+
+def test_when_a_manifest_names_a_subagent_then_it_is_a_known_reach_target(
+    tmp_path,
+) -> None:
+    ws = make_workspace(tmp_path)
+    helper = {"name": "refund-helper", "via": "tool"}
+    agents = copy.deepcopy(AGENTS)
+    agents[1]["manifest"]["subagents"] = [helper]  # ops-bot's, not the case agent's
+    (ws / "agents.json").write_text(json.dumps(agents))
+    assert "refund-helper" in load_known_names(ws, AGENT).agents
+
+
 @pytest.mark.parametrize("agent", ["billing-bot", "draft-bot"])  # absent, no manifest
 def test_when_the_case_agent_has_no_manifest_then_loading_fails(
     tmp_path, agent
@@ -117,6 +146,13 @@ def test_when_the_case_agent_has_no_manifest_then_loading_fails(
 def test_when_a_tool_is_not_in_the_manifest_then_unknown_keys_flags_it(tool) -> None:
     doc = {"roles": {"billing": on("refund_order"), "ops": on(tool)}}
     assert unknown_keys(loaded(doc), KNOWN) == [tool]
+
+
+def test_when_a_reach_target_is_no_known_agent_then_unknown_keys_flags_it() -> None:
+    doc = {
+        "agents": {"ops-bot": ALLOW, "billing-bot": {"mode": "allow", "via": ["tool"]}}
+    }
+    assert unknown_keys(loaded(doc), KNOWN) == ["agent.tool:billing-bot"]
 
 
 def test_unknown_keys_happy_path() -> None:
@@ -264,6 +300,125 @@ def test_when_a_synthetic_key_reads_another_gates_args_then_unknown_refs_flags_i
         "agent.handoff:ops-bot: args.amount",
         "agent.run: args.target",
     ]
+
+
+# module_invented_names: each module file against the agents it reaches
+
+
+def test_module_invented_names_happy_path(tmp_path) -> None:
+    roles = '  billing:\n    "*": [read_only]\n    ops-bot: [read_only, ops]\n'
+    ws = make_modules_workspace(tmp_path, roles)
+    # In ops-bot's column only, with ops-bot's tool and attribute.
+    write_module(
+        ws,
+        "capabilities/ops.yaml",
+        "tools:\n  wire_transfer: { mode: allow, constraints: ['ctx.region == \"eu\"'] }\n",
+    )
+    # Org-wide: a boundary may deny another agent's tool, on its attribute.
+    add_boundary_tool(
+        ws, "wire_transfer: { mode: deny, constraints: ['ctx.region == \"us\"'] }"
+    )
+    assert module_invented_names(ws, AGENT, load_known_names(ws, AGENT)) == ([], [])
+
+
+def test_when_a_boundary_reads_another_agents_attribute_on_the_agents_tool_then_it_is_unknown(
+    tmp_path,
+) -> None:
+    # Only shop-bot's calls reach a rule on its own tool, even in a boundary.
+    ws = make_modules_workspace(tmp_path, "  billing: [read_only, payments]\n")
+    org = ws / "policies" / "boundaries" / "org.yaml"
+    org.write_text(
+        org.read_text().replace(
+            '  refund_order: { mode: allow, constraints: ["args.amount <= 1000"] }\n',
+            "",
+        )
+    )
+    add_boundary_tool(
+        ws, "refund_order: { mode: allow, constraints: ['ctx.region == \"eu\"'] }"
+    )
+    _, refs = module_invented_names(ws, AGENT, load_known_names(ws, AGENT))
+    assert refs == ["policies/boundaries/org.yaml: refund_order: ctx.region"]
+
+
+def test_when_a_boundary_misreads_another_agents_tool_args_then_they_are_unknown(
+    tmp_path,
+) -> None:
+    ws = make_modules_workspace(tmp_path, "  billing: [read_only, payments]\n")
+    add_boundary_tool(
+        ws, "wire_transfer: { mode: deny, constraints: ['args.ibn == \"x\"'] }"
+    )
+    _, refs = module_invented_names(ws, AGENT, load_known_names(ws, AGENT))
+    assert refs == ["policies/boundaries/org.yaml: wire_transfer: args.ibn"]
+
+
+def test_when_a_capability_reads_a_boundarys_const_then_its_names_are_known(
+    tmp_path,
+) -> None:
+    # Consts merge across modules when resolving, so a file alone may lack them.
+    ws = make_modules_workspace(tmp_path, "  billing: [read_only, payments]\n")
+    org = ws / "policies" / "boundaries" / "org.yaml"
+    org.write_text("consts:\n  max_refund: 500\n" + org.read_text())
+    write_module(
+        ws,
+        "capabilities/payments.yaml",
+        "tools:\n  refund_order: { mode: allow, constraints: ['args.amount <= consts.max_refund'] }\n",
+    )
+    assert module_invented_names(ws, AGENT, load_known_names(ws, AGENT)) == ([], [])
+
+
+def test_when_a_module_file_no_column_imports_invents_names_then_they_are_unknown(
+    tmp_path,
+) -> None:
+    ws = make_modules_workspace(tmp_path, "  billing: [read_only]\n")
+    write_module(
+        ws,
+        "capabilities/extra.yaml",
+        "tools:\n  teleport: { mode: allow, constraints: ['ctx.nope == 1'] }\n",
+    )
+    add_boundary_tool(ws, "warp: { mode: deny }")
+    assert module_invented_names(ws, AGENT, load_known_names(ws, AGENT)) == (
+        [
+            "policies/boundaries/org.yaml: warp (no agent has it)",
+            "policies/capabilities/extra.yaml: teleport (no agent has it)",
+        ],
+        ["policies/capabilities/extra.yaml: teleport: ctx.nope"],
+    )
+
+
+@pytest.mark.parametrize(
+    "roles",
+    [
+        "  billing: [read_only, payments]\n",
+        # Only shop-bot's own cell imports it, not "*".
+        '  billing:\n    "*": [read_only]\n    shop-bot: [read_only, payments]\n',
+    ],
+)
+def test_when_the_agents_column_grants_another_agents_tool_then_it_is_unknown(
+    tmp_path, roles
+) -> None:
+    ws = make_modules_workspace(tmp_path, roles)
+    write_module(
+        ws,
+        "capabilities/payments.yaml",
+        "tools:\n  refund_order: { mode: allow }\n  wire_transfer: { mode: allow }\n",
+    )
+    keys, _ = module_invented_names(ws, AGENT, load_known_names(ws, AGENT))
+    assert keys == ["policies/capabilities/payments.yaml: wire_transfer"]
+    # A role or project-wide case accepts any agent's tool.
+    assert module_invented_names(ws, None, load_known_names(ws, None)) == ([], [])
+
+
+def test_when_the_agents_column_reads_another_agents_attribute_then_it_is_unknown(
+    tmp_path,
+) -> None:
+    ws = make_modules_workspace(tmp_path, "  billing: [read_only, payments]\n")
+    write_module(
+        ws,
+        "capabilities/payments.yaml",
+        "tools:\n  refund_order: { mode: allow, constraints: ['ctx.region == \"eu\"'] }\n",
+    )
+    _, refs = module_invented_names(ws, AGENT, load_known_names(ws, AGENT))
+    assert refs == ["policies/capabilities/payments.yaml: refund_order: ctx.region"]
 
 
 # The synthetic argument sets against the gates that build them

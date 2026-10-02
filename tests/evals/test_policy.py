@@ -6,13 +6,20 @@ import datetime
 
 import pytest
 
-from evals.policy_writing.policy import CaseError, decide, effective_policy, outcome
+from evals.policy_writing.policy import (
+    CaseError,
+    decide,
+    effective_policy,
+    outcome,
+    policy_columns,
+)
 from hexgate.security.decision import DecisionOutcome
 from tests.evals.helpers import (
     AGENT,
     PERMISSIVE_DEFAULT,
     make_modules_workspace,
     make_workspace,
+    write_module,
 )
 
 # Reach declared for handoff only, not for agent-as-tool.
@@ -175,8 +182,37 @@ def test_when_a_module_tree_has_a_dead_grant_then_effective_policy_fails(
     # A module lint: the boundary denies what a capability grants.
     roles = "  default: [read_only]\n  billing: [read_only, payments]\n"
     ws = make_modules_workspace(tmp_path, roles)
-    (ws / "policies" / "boundaries" / "no_views.yaml").write_text(
-        "tools:\n  view_orders: { mode: deny }\n"
+    write_module(
+        ws, "boundaries/no_views.yaml", "tools:\n  view_orders: { mode: deny }\n"
     )
     _, problems = effective_policy(ws)
     assert any("dead-grant" in p for p in problems)
+
+
+def test_policy_columns_happy_path(tmp_path) -> None:
+    roles = '  billing:\n    "*": [read_only]\n    ops-bot: [read_only, payments]\n'
+    ws = make_modules_workspace(tmp_path, roles)
+    policy, _ = effective_policy(ws)
+    columns, problems = policy_columns(ws, None, policy)
+    assert (set(columns), problems) == ({"*", "ops-bot"}, [])
+
+
+def test_when_the_case_names_an_agent_then_policy_columns_is_its_policy(
+    tmp_path,
+) -> None:
+    roles = '  billing:\n    "*": [read_only]\n    ops-bot: [read_only, payments]\n'
+    ws = make_modules_workspace(tmp_path, roles)
+    policy, _ = effective_policy(ws, AGENT)
+    assert policy_columns(ws, AGENT, policy) == ({AGENT: policy}, [])
+
+
+def test_when_an_agents_column_is_invalid_then_policy_columns_says_why(
+    tmp_path,
+) -> None:
+    roles = '  default:\n    "*": [read_only]\n    ops-bot: [read_only, payments]\n'
+    ws = make_modules_workspace(tmp_path, roles + "  billing: [read_only]\n")
+    policy, _ = effective_policy(ws)
+    columns, problems = policy_columns(ws, None, policy)
+    # None, rather than the valid ones: a column left out would pass unrun.
+    assert columns == {}
+    assert problems[0].startswith("column ops-bot:")
