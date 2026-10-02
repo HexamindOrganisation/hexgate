@@ -11,7 +11,7 @@ from evals.policy_writing.checks import (
     superset_checks,
 )
 from evals.policy_writing.policy import effective_policy
-from tests.evals.workspace import AGENT, PERMISSIVE_DEFAULT, by_name, make_workspace
+from tests.evals.helpers import AGENT, PERMISSIVE_DEFAULT, by_name, make_workspace
 
 REFUND = {"tool": "refund_order", "args": {"order_id": "o1", "amount": 5}}
 VIEW = {"tool": "view_orders", "args": {"customer_id": "c1"}}
