@@ -332,6 +332,41 @@ async def get_latest_agent_versions_map(
     }
 
 
+async def latest_manifests(
+    session: AsyncSession, project_id: str, names: list[str] | None = None
+) -> dict[str, AgentManifest]:
+    """Each agent's latest registered manifest, keyed by agent name — the named
+    agents, or every agent in the project when ``names`` is ``None``.
+
+    An agent that never registered (or whose version row has no manifest) is
+    omitted, so its manifest-dependent policy checks are skipped."""
+    if names is not None and not names:
+        return {}
+    agent_ids = select(Agent.id).where(Agent.project_id == project_id)
+    if names is not None:
+        agent_ids = agent_ids.where(Agent.name.in_(names))  # type: ignore[attr-defined]
+    latest = (
+        select(AgentVersion.agent_id, func.max(AgentVersion.version).label("v"))
+        .where(AgentVersion.agent_id.in_(agent_ids))  # type: ignore[attr-defined]
+        .group_by(AgentVersion.agent_id)
+        .subquery()
+    )
+    stmt = (
+        select(Agent.name, AgentVersion.manifest)
+        .join(AgentVersion, AgentVersion.agent_id == Agent.id)
+        .join(
+            latest,
+            (latest.c.agent_id == AgentVersion.agent_id)
+            & (latest.c.v == AgentVersion.version),
+        )
+    )
+    return {
+        name: AgentManifest.model_validate(manifest)
+        for name, manifest in (await session.exec(stmt)).all()
+        if manifest
+    }
+
+
 async def update_agent(
     session: AsyncSession,
     project_id: str,

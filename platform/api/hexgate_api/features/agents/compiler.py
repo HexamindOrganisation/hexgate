@@ -61,8 +61,8 @@ def compile_bundle(
         # guard_stance step) degrades here like any other compile failure — MUST NOT
         # re-raise: backfill_bundles / recompile_project call this without a try and
         # rely on the None fail-safe (never fail the boot; keep live bundles all-or-
-        # nothing, R-POL-002). The save path surfaces divergence as a 422 earlier, in
-        # `_load_document` (R-GUARD-007) — before this ever runs.
+        # nothing, R-POL-002). The save path surfaces divergence as a 422 earlier, as
+        # a blocking `guard-divergence` finding (R-GUARD-007) — before this ever runs.
         # Any other compile failure (bad constraint, schema error, opa build
         # error) degrades gracefully — the save still succeeds without a bundle.
         logger.warning("compile_bundle: policy did not compile: %s", exc)
