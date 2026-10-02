@@ -156,7 +156,7 @@ def test_when_a_name_source_is_unreadable_then_both_name_checks_fail(
         (ws / source).write_text(broken)
     after = snapshot(ws)
     checks = name_checks(policy, ws, AGENT, after, after)
-    assert not any(c.passed for c in checks)
+    assert [(c.name, c.passed) for c in checks] == [(n, False) for n in NAME_CHECKS]
     assert all(
         c.detail.startswith("agents.json / audit.json unreadable: ") for c in checks
     )

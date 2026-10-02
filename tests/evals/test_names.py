@@ -256,7 +256,7 @@ def test_when_a_synthetic_key_reads_another_gates_args_then_unknown_refs_flags_i
         "tools": {"net.http_request": fenced('args.method == "GET"')},
         "admission": fenced('args.target == "billing"'),
         "agents": {
-            "billing": fenced('args.via == "tool"', via=["tool"]),
+            "billing": fenced('args.target == "billing"', via=["tool"]),
             "ops-bot": fenced("args.amount <= 500", via=["handoff"]),
         },
     }
