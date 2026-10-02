@@ -80,11 +80,11 @@ def _reason(verdict: Verdict) -> str:
 
 
 def _call_label(role: str, d: dict) -> str:
-    label = f"{role} → {d['tool']}({json.dumps(d.get('args') or {}, sort_keys=True)})"
+    label = f"{role} → {d['tool']}({json.dumps(d.get('args') or {}, sort_keys=True, default=str)})"
     if d.get("attributes"):
-        label += f" ctx={json.dumps(d['attributes'], sort_keys=True)}"
+        label += f" ctx={json.dumps(d['attributes'], sort_keys=True, default=str)}"
     if d.get("run_facts"):
-        label += f" run={json.dumps(d['run_facts'], sort_keys=True)}"
+        label += f" run={json.dumps(d['run_facts'], sort_keys=True, default=str)}"
     return label
 
 
@@ -137,14 +137,27 @@ def answer_checks(expect: dict, answer: str) -> list[Check]:
     """`mentions_any` and `mentions_all`, case-insensitive, on the final answer."""
     text = answer.lower()
     checks = []
-    if words := expect.get("mentions_any"):
-        hit = [w for w in words if w.lower() in text]
-        detail = f"found {hit}" if hit else f"none of {words}"
-        checks.append(Check("answer mentions one of", bool(hit), detail))
-    if words := expect.get("mentions_all"):
-        missing = [w for w in words if w.lower() not in text]
-        detail = f"missing {missing}" if missing else ""
-        checks.append(Check("answer mentions all of", not missing, detail))
+    for key, name in (
+        ("mentions_any", "answer mentions one of"),
+        ("mentions_all", "answer mentions all of"),
+    ):
+        words = expect.get(key)
+        if not words:
+            continue
+        if not isinstance(words, list):
+            # A bare string would be checked letter by letter and pass by luck.
+            checks.append(Check(name, False, f"{key} must be a list, got {words!r}"))
+            continue
+        # str(): YAML reads an unquoted 500 as a number.
+        found = [w for w in words if str(w).lower() in text]
+        if key == "mentions_any":
+            detail = f"found {found}" if found else f"none of {words}"
+            checks.append(Check(name, bool(found), detail))
+        else:
+            missing = [w for w in words if w not in found]
+            checks.append(
+                Check(name, not missing, f"missing {missing}" if missing else "")
+            )
     return checks
 
 

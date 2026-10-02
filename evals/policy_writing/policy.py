@@ -43,7 +43,7 @@ class Policy:
     """The policy the checks run against.
 
     `payload` is the document: `policy.yaml` as written, or a module tree's
-    resolved roles (read by the known-names checks). `policy_set` is it
+    resolved roles (read by the known-names checks, PR 18). `policy_set` is it
     loaded, ready to evaluate.
     """
 
@@ -91,6 +91,10 @@ def decide(policy: Policy, role: str, d: dict) -> Verdict:
     """
     if role not in policy.policy_set:
         raise CaseError(f"role {role!r} not in policy ({policy.policy_set.roles})")
+    for key in ("args", "attributes", "run_facts"):
+        # A YAML key with no value is None: read it as empty, as the CLI's `{}`.
+        if not isinstance(d.get(key) or {}, dict):
+            raise CaseError(f"{key} must be a mapping, got {d[key]!r}")
     try:
         attributes = _ATTRIBUTES.validate_python(d.get("attributes") or {})
         # Over a zeroed run, so an unset `run.*` path reads 0, not missing.

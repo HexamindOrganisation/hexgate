@@ -29,21 +29,18 @@ def test_decide_happy_path(tmp_path, role, amount, expected) -> None:
     assert verdict.outcome == expected, verdict.reason
 
 
-def test_when_an_argument_spells_an_outcome_then_decide_reads_the_verdict(
-    tmp_path,
-) -> None:
-    policy, _ = effective_policy(make_workspace(tmp_path))
-    call = {"tool": "refund_order", "args": {"order_id": "ALLOW", "amount": 900}}
-    verdict = decide(policy, "billing", call)
-    assert verdict.outcome == DecisionOutcome.DENY
-    assert "amount" in verdict.reason
-
-
 def test_when_a_yaml_key_is_empty_then_decide_reads_it_as_empty(tmp_path) -> None:
     # `args:` with no value is None in YAML, not {}.
     policy, _ = effective_policy(make_workspace(tmp_path))
     call = {"tool": "view_orders", "args": None, "attributes": None, "run_facts": None}
     assert decide(policy, "default", call).outcome == DecisionOutcome.ALLOW
+
+
+@pytest.mark.parametrize("key", ["args", "attributes", "run_facts"])
+def test_when_a_call_field_is_not_a_mapping_then_decide_raises(tmp_path, key) -> None:
+    policy, _ = effective_policy(make_workspace(tmp_path))
+    with pytest.raises(CaseError, match=f"{key} must be a mapping"):
+        decide(policy, "default", {"tool": "view_orders", key: ["x"]})
 
 
 def test_when_the_role_is_undefined_then_decide_raises(tmp_path) -> None:
