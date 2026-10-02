@@ -41,6 +41,15 @@ def test_when_the_role_is_undefined_then_the_decision_check_fails(tmp_path) -> N
     assert check.detail.startswith("can't dry-run: role 'suport'")
 
 
+def test_when_the_expected_outcome_is_misspelled_then_the_check_fails(
+    tmp_path,
+) -> None:
+    policy, _ = effective_policy(make_workspace(tmp_path))
+    [check] = decision_checks(policy, [{"role": "billing", **VIEW, "expect": "alow"}])
+    assert not check.passed
+    assert "unknown outcome 'alow'" in check.detail
+
+
 def test_when_the_policy_is_invalid_then_every_decision_check_fails() -> None:
     [check] = decision_checks(None, [{"role": "billing", **VIEW, "expect": "allow"}])
     assert (check.passed, check.detail) == (False, "policy invalid")

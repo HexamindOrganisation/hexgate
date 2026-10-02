@@ -30,6 +30,7 @@ from hexgate.security import (
 )
 from hexgate.security.analyzer import SEVERITY_RANK, check_default_role_exposure
 from hexgate.security.constraints import ConstraintParseError
+from hexgate.security.decision import Verdict
 from hexgate.security.modules import DEFAULT_AGENT
 from hexgate.security.testing import run_namespace
 
@@ -50,13 +51,18 @@ class Policy:
     policy_set: PolicySet
 
 
-OUTCOMES = {
+# A case file names outcomes by their policy mode, not by the enum's values.
+LABELS = {
     DecisionOutcome.ALLOW: "allow",
     DecisionOutcome.DENY: "deny",
     DecisionOutcome.NEEDS_APPROVAL: "approval_required",
 }
 # How freely each outcome lets a call through, for comparing two roles.
-RANK = {"deny": 0, "approval_required": 1, "allow": 2}
+RANK = {
+    DecisionOutcome.DENY: 0,
+    DecisionOutcome.NEEDS_APPROVAL: 1,
+    DecisionOutcome.ALLOW: 2,
+}
 
 
 class CaseError(ValueError):
@@ -66,8 +72,18 @@ class CaseError(ValueError):
 _ATTRIBUTES = TypeAdapter(dict[str, ContextAttributeValue])
 
 
-def decide(policy: Policy, role: str, d: dict) -> tuple[str, str]:
-    """Dry-run one call: (outcome, reason). Same inputs as `hexgate policy test`.
+def outcome(label: str) -> DecisionOutcome:
+    """The outcome a case file names (`allow`, `deny`, `approval_required`)."""
+    for value, name in LABELS.items():
+        if name == label:
+            return value
+    raise CaseError(
+        f"unknown outcome {label!r} (expected one of {list(LABELS.values())})"
+    )
+
+
+def decide(policy: Policy, role: str, d: dict) -> Verdict:
+    """Dry-run one call, with the same inputs as `hexgate policy test`.
 
     Raises `CaseError` where the CLI would refuse the call. An undefined role is
     one, rather than the `default` fallback: a case naming a role the policy
@@ -81,15 +97,13 @@ def decide(policy: Policy, role: str, d: dict) -> tuple[str, str]:
         run = run_namespace(d["tool"], **(d.get("run_facts") or {}))
     except (ValidationError, ValueError) as exc:
         raise CaseError(str(exc)) from exc
-    verdict = policy.policy_set.evaluate(
+    return policy.policy_set.evaluate(
         role=role,
         tool=d["tool"],
         args=d.get("args") or {},
         attributes=attributes,
         run=run,
     )
-    reason = "; ".join([verdict.reason, *map(str, verdict.violations or [])])
-    return OUTCOMES[verdict.outcome], reason
 
 
 def _lint_failures(lints) -> list[str]:
