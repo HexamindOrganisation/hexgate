@@ -458,10 +458,7 @@ async def api_preview_policy(
     out = await service.compose_preview(
         session, project_id, name=body.name, content=body.content, agent=body.agent
     )
-    lints = [
-        PolicyLintOut(code=x["code"], severity=x["severity"], message=x["message"])
-        for x in out["lints"]
-    ]
+    lints = [PolicyLintOut(**x) for x in out["lints"]]
     return PolicyPreviewResponse(resolved=out["resolved"], lints=lints)
 
 

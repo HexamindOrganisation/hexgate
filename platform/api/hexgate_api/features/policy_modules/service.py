@@ -13,6 +13,7 @@ import hashlib
 import json
 import logging
 from collections.abc import Iterable
+from dataclasses import asdict
 
 import yaml
 from sqlalchemy.exc import IntegrityError
@@ -748,20 +749,6 @@ async def delete_file(session: AsyncSession, *, project_id: str, name: str) -> b
     return True
 
 
-async def compose_check(session: AsyncSession, project_id: str) -> list[dict]:
-    """Lints for the compose project: a resolution failure surfaces as one error
-    lint. (Rich analyzer lints for the compose model are a follow-up.)"""
-    files = await _files_map(session, project_id)
-    if ENTRY_FILE not in files:
-        return []
-    try:
-        for agent in _compose_agent_names(files):
-            _resolve_files(files, agent)
-    except compose_error_types() as exc:
-        return [{"code": "link-error", "severity": "error", "message": str(exc)}]
-    return []
-
-
 async def resolve_auto(
     session: AsyncSession, project_id: str, agent: str = DEFAULT_AGENT
 ):
@@ -775,39 +762,71 @@ async def resolve_auto(
 
 
 async def check_auto(session: AsyncSession, project_id: str) -> list[dict]:
-    """Lints for the check endpoint — compose (resolution errors) or tier (analyzer
-    lints), from a single files read. Returns uniform ``PolicyLintOut``-shaped
-    dicts so the router builds them the same way for both stores."""
+    """Lints for the check endpoint — compose (a resolution error, else the SDK's
+    ``analyze_policy`` findings) or tier (analyzer lints), from a single files
+    read. Returns uniform ``PolicyLintOut``-shaped dicts so the router builds them
+    the same way for both stores."""
     files = await _files_map(session, project_id)
     if ENTRY_FILE in files:
         try:
-            for agent in _compose_agent_names(files):
-                _resolve_files(files, agent)
+            resolved = _resolve_all_agents_files(files)
+            return await _compose_findings(session, project_id, files, resolved)
         except compose_error_types() as exc:
-            return [
-                {
-                    "code": "link-error",
-                    "severity": "error",
-                    "message": str(exc),
-                    "source": None,
-                    "tier": None,
-                    "tool": None,
-                    "role": None,
-                }
-            ]
-        return []
-    return [
-        {
-            "code": lint.code,
-            "severity": lint.severity,
-            "message": lint.message,
-            "source": lint.source,
-            "tier": lint.tier,
-            "tool": lint.tool,
-            "role": lint.role,
-        }
-        for lint in await check(session, project_id)
-    ]
+            return [_link_error(str(exc))]
+    return [_lint_dict(lint) for lint in await check(session, project_id)]
+
+
+def _lint_dict(lint) -> dict:
+    """An SDK ``PolicyLint`` as a ``PolicyLintOut``-shaped dict."""
+    return asdict(lint)
+
+
+def _link_error(message: str) -> dict:
+    return {"code": "link-error", "severity": "error", "message": message}
+
+
+def _resolve_all_agents_files(files: dict[str, str]) -> dict:
+    """Resolve ``"*"`` and every agent the entry declares, keyed by agent. Raises
+    :func:`compose_error_types` on the first agent that doesn't resolve."""
+    return {
+        agent: _resolve_files(files, agent) for agent in _compose_agent_names(files)
+    }
+
+
+async def _compose_findings(
+    session: AsyncSession, project_id: str, files: dict[str, str], resolved: dict
+) -> list[dict]:
+    """The SDK's ``analyze_policy`` findings for every agent the entry declares
+    (``resolved``) and every registered agent (the ones ``recompile_project``
+    builds a bundle for), each against its latest registered manifest; a declared
+    agent that never registered gets no manifest checks. The ``"*"`` view has no manifest, so it gets the manifest-free checks. Raises
+    :func:`compose_error_types` when a registered agent doesn't resolve.
+
+    A named agent's finding is prefixed with the agent and dropped only when the
+    ``"*"`` view already reported it (a top-level rule every agent shares) — two
+    named agents with the same defect each report it."""
+    from dataclasses import replace
+
+    from hexgate.security import analyze_policy
+    from hexgate.security.analyzer import SEVERITY_RANK
+
+    from hexgate_api.features.agents.service import latest_manifests
+
+    manifests = await latest_manifests(session, project_id)
+
+    def key(lint) -> tuple:
+        return (lint.code, lint.message, lint.tool, lint.role)
+
+    generic = analyze_policy(resolved[DEFAULT_AGENT].policy_set)
+    shared = {key(lint) for lint in generic}
+    lints = list(generic)
+    for agent in sorted((set(resolved) | set(manifests)) - {DEFAULT_AGENT}):
+        result = resolved.get(agent) or _resolve_files(files, agent)
+        for lint in analyze_policy(result.policy_set, manifest=manifests.get(agent)):
+            if key(lint) not in shared:
+                lints.append(replace(lint, message=f"agent {agent!r}: {lint.message}"))
+    lints.sort(key=lambda lint: SEVERITY_RANK[lint.severity])
+    return [_lint_dict(lint) for lint in lints]
 
 
 async def compose_preview(
@@ -822,29 +841,22 @@ async def compose_preview(
     editor's live preview. Returns the requested agent's effective policy, or an
     error lint. Validates *every* declared agent (like the save-time 409 check) so
     the preview and the save agree — a draft that breaks a different agent still
-    previews as an error, not falsely clean."""
+    previews as an error, not falsely clean. The lints are the same findings
+    :func:`check_auto` returns for the saved project."""
     files = {**await _files_map(session, project_id), name: content}
     if ENTRY_FILE not in files:
         return {
             "resolved": None,
-            "lints": [
-                {
-                    "code": "link-error",
-                    "severity": "error",
-                    "message": f"no entry file {ENTRY_FILE!r} in this project",
-                }
-            ],
+            "lints": [_link_error(f"no entry file {ENTRY_FILE!r} in this project")],
         }
     try:
-        for a in _compose_agent_names(files):
-            _resolve_files(files, a)  # validate every declared agent
-        requested = _resolve_files(files, agent)  # the one to return
+        # Every declared agent, so the preview and the save agree.
+        resolved = _resolve_all_agents_files(files)
+        requested = resolved.get(agent) or _resolve_files(files, agent)
+        lints = await _compose_findings(session, project_id, files, resolved)
     except compose_error_types() as exc:
-        return {
-            "resolved": None,
-            "lints": [{"code": "link-error", "severity": "error", "message": str(exc)}],
-        }
-    return {"resolved": roles_json(requested), "lints": []}
+        return {"resolved": None, "lints": [_link_error(str(exc))]}
+    return {"resolved": roles_json(requested), "lints": lints}
 
 
 def _graph_from(agent_names, resolve_for_agent, role: str | None = None) -> dict:
