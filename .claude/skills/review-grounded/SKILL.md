@@ -327,6 +327,29 @@ finding happened to name. A lens hands you one framing of a problem; the fix is
 owed to the problem, and a fix verified against the framing leaves the rest of it
 in place.
 
+Write the invariant down — in the chat, before the edit — and then run these four
+checks against it. On PR #306 four round-one fixes were applied without them, and
+round two found four new bugs, each one a check skipped:
+
+- **Grade against what the code falls back to, not the rule alone.** A severity
+  judged from a rule's own mode said a misspelled deny "protects nothing"; under
+  an allow default the real tool ran unguarded. Enumerate the surrounding state
+  (defaults, modes, which pipeline built the input), not just the rule's fields.
+- **When a per-item value starts to vary, find what assumed it was uniform.**
+  Severity became per-occurrence while an older `flagged` set still kept the first
+  occurrence, so the later, fail-open one was dropped. Grep the function for
+  dedupe sets, first-wins `continue`s and `setdefault`s the fix now makes wrong.
+- **A dedupe chooses a survivor; choose it on purpose.** Skipping repeated policy
+  objects kept whichever role sorted first — the synthetic `default` — and the
+  message named a role the user never wrote.
+- **Apply it at every sibling path.** A filter added to the resolved pipeline and
+  not the module one left the same input judged two ways. List the callers of the
+  shared helper and the parallel implementations before calling a fix done.
+
+Each fix gets a test that **fails with the fix reverted** — revert it, run the
+test, see red. And when the reviews ran in subagents, this section was never in
+your context while you fixed: re-read it before the first edit.
+
 Then re-enter at **section 3** with fresh lenses over what the fix changed, and
 run section 4 on what they find. Re-reading your own fix is not the same pass:
 the lenses are what caught the first problem, and the fix is the code least
