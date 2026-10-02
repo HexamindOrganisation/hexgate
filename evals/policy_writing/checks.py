@@ -15,12 +15,15 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from evals.policy_writing.policy import (
+    LABELS,
     RANK,
     CaseError,
     Policy,
     decide,
     effective_policy,
+    outcome,
 )
+from hexgate.security.decision import Verdict
 
 
 @dataclass
@@ -51,25 +54,29 @@ def decision_checks(policy: Policy | None, decisions: list[dict]) -> list[Check]
     for d in decisions:
         # `roles` expands one entry over several roles; `expect` may list the
         # acceptable outcomes ("deny or approval_required").
-        wanted = d["expect"] if isinstance(d["expect"], list) else [d["expect"]]
+        labels = d["expect"] if isinstance(d["expect"], list) else [d["expect"]]
         for role in d.get("roles") or [d["role"]]:
             name = f"decision: {_call_label(role, d)}"
             if policy is None:
                 checks.append(Check(name, False, "policy invalid"))
                 continue
             try:
-                got, reason = decide(policy, role, d)
+                wanted = {outcome(label) for label in labels}
+                verdict = decide(policy, role, d)
             except CaseError as exc:
                 checks.append(Check(name, False, f"can't dry-run: {exc}"))
                 continue
-            ok = got in wanted
-            detail = (
-                ""
-                if ok
-                else f"expected {' or '.join(wanted)}, got {got}: {reason[:300]}"
-            )
-            checks.append(Check(name, ok, detail))
+            if verdict.outcome in wanted:
+                checks.append(Check(name, True))
+                continue
+            got = LABELS[verdict.outcome]
+            detail = f"expected {' or '.join(labels)}, got {got}: {_reason(verdict)}"
+            checks.append(Check(name, False, detail[:400]))
     return checks
+
+
+def _reason(verdict: Verdict) -> str:
+    return "; ".join([verdict.reason, *map(str, verdict.violations or [])])
 
 
 def _call_label(role: str, d: dict) -> str:
@@ -92,13 +99,15 @@ def superset_checks(policy: Policy | None, supersets: list[dict]) -> list[Check]
         worse = []
         for p in s["probes"]:
             try:
-                lo, _ = decide(policy, s["narrower"], p)
-                hi, _ = decide(policy, s["wider"], p)
+                lo = decide(policy, s["narrower"], p).outcome
+                hi = decide(policy, s["wider"], p).outcome
             except CaseError as exc:  # e.g. a missing role: the probe fails
                 worse.append(f"{p['tool']}: can't dry-run: {exc}")
                 continue
             if RANK[hi] < RANK[lo]:
-                worse.append(f"{p['tool']}: {s['narrower']}={lo}, {s['wider']}={hi}")
+                worse.append(
+                    f"{p['tool']}: {s['narrower']}={LABELS[lo]}, {s['wider']}={LABELS[hi]}"
+                )
         checks.append(Check(name, not worse, "; ".join(worse)))
     return checks
 
