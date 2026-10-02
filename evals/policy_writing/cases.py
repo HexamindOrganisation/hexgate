@@ -28,17 +28,20 @@ from pydantic import (
 from evals.policy_writing.checks import (
     AGENT_REACH_ARGS,
     SYNTHETIC_ARGS,
-    read_manifest,
+    load_known_names,
     snapshot,
 )
-from hexgate.security.models import AGENT_REACH_PREFIXES
+from hexgate.egress.model import connect_to_args, http_to_args
+from hexgate.manifest.models import AgentManifest, InputSchema
+from hexgate.security.models import AGENT_REACH_PREFIXES, AGENT_RUN_TOOL
+from hexgate.security.network import NET_HTTP_REQUEST, NET_TCP_CONNECT
 
 HERE = Path(__file__).resolve().parent
 
 # Files in the starting project no case may change unless it lists them in
-# `expect.changed`: what the agent knows about its tools, the security team's
-# boundaries, and the other agents' policies.
-PROTECTED = ("TOOLS.md", "*/TOOLS.md", "policies/boundaries/**", "other_agents/**")
+# `expect.changed`: what the platform reports about the agents (their manifests
+# and audit rows), the security team's boundaries, and the other agents' policies.
+PROTECTED = ("agents.json", "audit.json", "policies/boundaries/**", "other_agents/**")
 PRESERVE = "preserve.yaml"
 # What a case directory may hold (README, "A case"); dot entries are tooling.
 CASE_ENTRIES = {"case.yaml", "starting_project", "solution", "wrong_answer"}
@@ -95,6 +98,8 @@ class CaseFile(_Strict):
     """`case.yaml`. `id` and `category` are not fields: they come from the path."""
 
     starting_project: str | None = None
+    # The agent whose policy the case edits: a name in the project's agents.json.
+    agent: str = Field(min_length=1)
     request: str = Field(min_length=1)
     held_out: bool = False
     # Why the case exists, for whoever reads the results; never the agent.
@@ -180,16 +185,21 @@ def _project(root: Path, case_dir: Path, named: str | None) -> Path:
     return shared / named
 
 
-def _unknown_names(call: dict, tools: dict[str, set[str]], attrs: set[str]) -> list:
-    """Tool, argument and attribute names a dry-run call uses that TOOLS.md lacks.
+def _unknown_names(
+    call: dict, tools: dict[str, set[str]], attrs: set[str], agents: set[str]
+) -> list:
+    """Tool, argument and attribute names a dry-run call uses that the agent lacks.
 
-    The SDK denies an unknown tool, and a constraint on an argument the call
-    doesn't carry, so a misspelt name would pass every `deny` check.
+    The SDK denies an unknown tool, a reach to an agent no rule names, and a
+    constraint on an argument the call doesn't carry, so a misspelt name would
+    pass every `deny` check.
     """
     tool = call["tool"]
     if tool in SYNTHETIC_ARGS:
         known = SYNTHETIC_ARGS[tool]
     elif tool.startswith(AGENT_REACH_PREFIXES):  # agent.<via>:<target>
+        if tool.split(":", 1)[1] not in agents:
+            return [tool]
         known = AGENT_REACH_ARGS
     elif tool in tools:
         known = tools[tool]
@@ -199,17 +209,149 @@ def _unknown_names(call: dict, tools: dict[str, set[str]], attrs: set[str]) -> l
     return bad + [f"ctx.{a}" for a in call.get("attributes", {}) if a not in attrs]
 
 
-def _check_names(path: Path, project: Path, expect: dict) -> None:
+# JSON-schema types an argument value must have; bool is not a number in JSON.
+_TYPES = {
+    "string": str,
+    "number": (int, float),
+    "integer": int,
+    "boolean": bool,
+    "array": list,
+    "object": dict,
+}
+
+
+def _bad_args(call: dict, schema: InputSchema) -> list[str]:
+    """Required arguments a manifest tool's call leaves out, and mistyped values.
+
+    The SDK denies a call whose constraint reads an argument it doesn't carry
+    or compares a value of the wrong type, so either would pass every `deny`
+    check. YAML reads a quoted `"51"` as a string and a blank `amount:` as null.
+    """
+    args = call.get("args", {})
+    bad = [f"args.{a} missing" for a in schema.required if a not in args]
+    for name, value in args.items():
+        kind = schema.properties[name].type
+        # Adapters record "string" for any schema without one top-level type
+        # (`int | None`, `bool | None`, a list, a model), so it says nothing; a
+        # precise type rules out null too, since a nullable one is never precise.
+        want = None if kind == "string" else _TYPES.get(kind)
+        if want and not _is_a(value, want):
+            bad.append(f"args.{name}={value!r} is not {kind}")
+    return bad
+
+
+def _is_a(value, want) -> bool:
+    # bool is an int in Python, not a number in JSON.
+    return isinstance(value, want) and (want is bool) == isinstance(value, bool)
+
+
+def _json_type(value) -> str:
+    for name, kind in _TYPES.items():
+        if name != "integer" and _is_a(value, kind):
+            return name
+    return "null"
+
+
+def _is_json(value) -> bool:
+    # What a real call's arguments can hold; YAML also makes dates and times.
+    if isinstance(value, list):
+        return all(_is_json(v) for v in value)
+    if isinstance(value, dict):
+        return all(isinstance(k, str) and _is_json(v) for k, v in value.items())
+    return value is None or isinstance(value, (str, int, float, bool))
+
+
+def _complete_synthetic(call: dict, agent: str) -> list[str]:
+    """Fill the arguments the gates always send; what a call contradicts or lacks.
+
+    `agent.run` carries the running agent, and `agent.<via>:<target>` also its
+    target and via (hexgate/security/agent_gate.py); `net.tcp_connect` carries
+    protocol "tcp" (hexgate/egress/tcp.py). Every `net.*` call carries an int
+    port and the arguments below (hexgate/egress/model.py). A dry-run without
+    them, or with other values, is denied by any constraint on them, so it
+    would pass every `deny` check.
+    """
+    tool, args = call["tool"], call.setdefault("args", {})
+    bad = [f"args.{k}={v!r} is not JSON" for k, v in args.items() if not _is_json(v)]
+    if tool.startswith(AGENT_REACH_PREFIXES):
+        via, target = tool.removeprefix("agent.").split(":", 1)
+        sent, needed = {"agent": agent, "target": target, "via": via}, ()
+    elif tool == AGENT_RUN_TOOL:
+        sent, needed = {"agent": agent}, ()
+    elif tool == NET_TCP_CONNECT:
+        sent, needed = {"protocol": "tcp"}, ("host", "port")
+    elif tool == NET_HTTP_REQUEST:
+        # What the proxy builds from the request line, so the rest must agree.
+        if args.get("method") == "CONNECT":
+            needed = ("host", "port")
+            ok = isinstance(args.get("host"), str) and _is_a(args.get("port"), int)
+            sent = connect_to_args(args["host"], args["port"]) if ok else {}
+        else:
+            needed = ("method", "url")
+            ok = all(isinstance(args.get(k), str) for k in needed)
+            sent = http_to_args(args["method"], args["url"]) if ok else {}
+    else:
+        return bad
+    bad += [f"args.{k} missing" for k in needed if args.get(k) is None]
+    port = args.get("port")
+    if port is not None and (isinstance(port, bool) or not isinstance(port, int)):
+        bad.append(f"args.port={port!r} is not an int")
+    bad += [
+        f"args.{k}={args[k]!r}, sent {v!r}"
+        for k, v in sent.items()
+        if args.get(k, v) != v
+    ]
+    args.update(sent)
+    return bad
+
+
+def _complete_calls(path: Path, agent: str, calls: list[dict]) -> None:
+    for call in calls:
+        bad = _complete_synthetic(call, agent)
+        if bad:
+            raise CaseError(f"{path}: {call['tool']}: not what {agent} sends: {bad}")
+
+
+def _check_names(path: Path, case: dict) -> None:
+    """The case's agent is in agents.json, and its calls use only names it knows."""
+    agent, expect = case["agent"], case["expect"]
+    try:
+        tools, attrs = load_known_names(case["project"], agent)
+        views = json.loads((case["project"] / "agents.json").read_text())
+        agents = {v["name"] for v in views}
+        [view] = [v for v in views if v["name"] == agent]
+        schemas = {
+            t.name: t.input_schema
+            for t in AgentManifest.model_validate(view["manifest"]).tools
+        }
+        audit = case["project"] / "audit.json"
+        rows = json.loads(audit.read_text()) if audit.exists() else []
+        rows = rows["rows"] if isinstance(rows, dict) else rows
+        # The JSON types each attribute arrived with: a quoted "2" for an int
+        # attribute is denied by `ctx.clearance >= 2` whatever the threshold.
+        seen: dict[str, set[str]] = {}
+        for row in rows:
+            if row["agent_name"] == agent:
+                for k, v in (row.get("attributes") or {}).items():
+                    seen.setdefault(k, set()).add(_json_type(v))
+    # No agents.json, bad JSON, an unknown agent, a row or view of the wrong shape.
+    except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+        raise CaseError(f"{path}: {exc}") from exc
     calls = expect.get("decisions", []) + [
         p for s in expect.get("superset", []) for p in s["probes"]
     ]
-    if not calls:
-        return
-    tools, attrs = read_manifest(project)
     for call in calls:
-        unknown = _unknown_names(call, tools, attrs)
+        unknown = _unknown_names(call, tools, attrs, agents)
         if unknown:
-            raise CaseError(f"{path}: {call['tool']}: not in TOOLS.md: {unknown}")
+            raise CaseError(f"{path}: {call['tool']}: unknown to {agent}: {unknown}")
+        bad = _bad_args(call, schemas[call["tool"]]) if call["tool"] in schemas else []
+        bad += [
+            f"ctx.{k}={v!r} is not {' or '.join(sorted(seen[k]))}"
+            for k, v in call.get("attributes", {}).items()
+            if _json_type(v) not in seen[k]
+        ]
+        if bad:
+            raise CaseError(f"{path}: {call['tool']}: not {agent}'s schema: {bad}")
 
 
 def _load_case(root: Path, case_dir: Path) -> dict:
@@ -236,6 +378,7 @@ def _load_case(root: Path, case_dir: Path) -> dict:
     case = {
         "id": f"{case_dir.parent.name}/{case_dir.name}",
         "category": case_dir.parent.name,
+        "agent": parsed.agent,
         "request": parsed.request,
         "held_out": parsed.held_out,
         "note": parsed.note,
@@ -267,6 +410,14 @@ def _load_case(root: Path, case_dir: Path) -> dict:
     )
     if misnamed:
         raise CaseError(f"{case['project']}: {misnamed} should be {PRESERVE}")
+    # Before the merge, so a preserved call and the case's own entry for it
+    # compare equal however much of the gate's arguments each spells out.
+    _complete_calls(
+        path,
+        case["agent"],
+        expect.get("decisions", [])
+        + [p for s in expect.get("superset", []) for p in s["probes"]],
+    )
     preserve = case["project"] / PRESERVE
     if preserve.is_file():
         try:
@@ -274,8 +425,9 @@ def _load_case(root: Path, case_dir: Path) -> dict:
         except ValidationError as exc:
             raise CaseError(f"{preserve}: {exc}") from exc
         preserved = _DECISIONS.dump_python(decisions, exclude_unset=True)
+        _complete_calls(preserve, case["agent"], preserved)
         expect["decisions"] = _merge_preserved(expect.get("decisions", []), preserved)
-    _check_names(path, case["project"], expect)
+    _check_names(path, case)
     return case
 
 

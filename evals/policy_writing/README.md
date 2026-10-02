@@ -24,6 +24,7 @@ cases/<category>/<name>/
 | Field | Type | Notes |
 |---|---|---|
 | `starting_project` | string, optional | A project under `starting_projects/`. Use exactly one of this field and a `starting_project/` folder. |
+| `agent` | string | The agent whose policy the case edits: a `name` in the starting project's `agents.json`. |
 | `request` | string | What a user types. The agent receives `/write-policy <request>`. |
 | `held_out` | bool, optional | Default `false`. Held-out cases are never used to tune the skill or prompts, and are scored separately. |
 | `note` | string, optional | Why the case exists, for people reading the results. The agent never sees it. |
@@ -32,10 +33,24 @@ cases/<category>/<name>/
 There is no `id` or `category` field: both come from the path, and the loader
 rejects a file that sets them. It also rejects any field, `expect` key or
 decision key it does not know, a string where a list belongs, an
-`unchanged` path the starting project lacks, a tool, argument or caller
-attribute in a dry-run call that `TOOLS.md` does not list, anything else in the
-case folder (a `wrong_answers/`), and a `preserve.yml`, because each would
-otherwise drop a check without a word.
+`unchanged` path the starting project lacks, an `agent` with no manifest in
+`agents.json`, a tool, argument, caller attribute or reached agent in a dry-run
+call that the case's agent doesn't know (see *A starting project*), a call to
+one of its tools that leaves out a required argument or gives one a value of
+the wrong type (a quoted `"51"`, or a blank `amount:`, which YAML reads as
+null; a `string` in the manifest checks nothing, since adapters write it for
+`int | None` too), a caller attribute of another JSON type than its audit rows
+carry, a date or other non-JSON value, an `agent.*` call whose `agent`,
+`target` or `via` differs from what the agent gates send, a `net.http_request`
+without `method` and `url` (or `host` and `port` for `CONNECT`) or whose other
+arguments differ from what the proxy derives from them, a `net.tcp_connect`
+without `host` and an int `port`, anything
+else in the case folder (a `wrong_answers/`), and a `preserve.yml`, because
+each would otherwise drop a check without a word.
+
+For those synthetic calls the loader fills in what the gate derives, so a case
+can write just `{tool: "agent.tool:billing-bot"}` or
+`{tool: net.http_request, args: {method: GET, url: "http://x.com/a"}}`.
 
 `expect` keys:
 
@@ -54,6 +69,7 @@ Example (the case lands with the case data, under
 
 ```yaml
 starting_project: support_bot_single_file
+agent: support-bot
 request: Let support refund orders, up to 50 USD.
 expect:
   decisions:
@@ -61,11 +77,25 @@ expect:
     - { role: support, tool: refund_order, args: { order_id: o1, amount: 51, currency: USD }, expect: deny }
 ```
 
+## A starting project
+
+Besides the policy files, a starting project holds what the Hexgate MCP server
+would return to a real agent:
+
+- `agents.json` (required): every agent in the project with its manifest, as
+  `agents_list` (`GET /agents/manifest`) returns it. A case's agent knows only
+  the tools and arguments in its own manifest, plus the synthetic `net.*`,
+  `agent.run` and `agent.<via>:<target>` calls (a target must be an agent in
+  this list).
+- `audit.json` (optional): audit rows, as `audit_decisions` returns them. Caller
+  attributes are set per request, not in the manifest, so the `ctx.*` names a
+  case's agent knows are the `attributes` keys of its own rows.
+
 ## Checks every case gets
 
 The loader adds these, so a case lists only what is particular to it.
 
-- **Protected files stay unchanged.** Every `TOOLS.md`, `policies/boundaries/**`
+- **Protected files stay unchanged.** `agents.json`, `audit.json`, `policies/boundaries/**`
   and `other_agents/**` in the starting project are added to `unchanged`. A case
   that means to change one (an org-wide hard deny is a boundary edit) lists it
   in `changed` instead.

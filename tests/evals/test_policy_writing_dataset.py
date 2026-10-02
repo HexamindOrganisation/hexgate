@@ -9,6 +9,7 @@ The loader's own rules are checked on small synthetic eval sets in `tmp_path`.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -65,13 +66,49 @@ def test_wrong_answer_fails(case: dict, tmp_path: Path) -> None:
 
 # ---------------------------------------------------------------- the loader
 
-TOOLS_MD = """\
-## Tools
+AGENT = "shop-bot"
 
-| Tool | Arguments |
-|---|---|
-| `refund_order` | `order_id: string`, `amount: number` |
-"""
+
+def _view(name: str, tools: dict[str, dict[str, str]]) -> dict:
+    # One `GET /agents/manifest` entry (AgentManifestView), as `agents_list` returns it.
+    tool_defs = [
+        {
+            "name": tool,
+            "description": tool,
+            "input_schema": {
+                "properties": {a: {"title": a, "type": t} for a, t in args.items()},
+                "required": list(args),
+            },
+        }
+        for tool, args in tools.items()
+    ]
+    return {
+        "name": name,
+        "manifest": {"name": name, "framework": "langchain", "tools": tool_defs},
+        "version": 1,
+        "content_hash": "h",
+        "updated_at": "2026-10-01T00:00:00Z",
+    }
+
+
+AGENTS_JSON = json.dumps(
+    [
+        _view(AGENT, {"refund_order": {"order_id": "string", "amount": "number"}}),
+        # Another agent in the project: its tools and attributes are not shop-bot's.
+        _view("ops-bot", {"wire_transfer": {"iban": "string"}}),
+    ]
+)
+# `audit_decisions` rows (AuditDecisionRow fields); only their attributes matter here.
+AUDIT_JSON = json.dumps(
+    [
+        {"agent_name": AGENT, "tool_name": "refund_order", "attributes": {"tier": "x"}},
+        {
+            "agent_name": "ops-bot",
+            "tool_name": "wire_transfer",
+            "attributes": {"eu": 1},
+        },
+    ]
+)
 
 POLICY = """\
 version: 1
@@ -111,7 +148,8 @@ def _eval_set(
     """
     root = tmp_path / "set"
     shop = root / "starting_projects" / "shop"
-    _write(shop / "TOOLS.md", TOOLS_MD)
+    _write(shop / "agents.json", AGENTS_JSON)
+    _write(shop / "audit.json", AUDIT_JSON)
     _write(shop / "policy.yaml", POLICY)
     if boundary:
         _write(shop / "policies" / "boundaries" / "org.yaml", "boundary: {}\n")
@@ -122,7 +160,13 @@ def _eval_set(
 
 
 def _case(**extra) -> dict:
-    return {"starting_project": "shop", "request": "Do it.", "expect": {}, **extra}
+    return {
+        "starting_project": "shop",
+        "agent": AGENT,
+        "request": "Do it.",
+        "expect": {},
+        **extra,
+    }
 
 
 @pytest.mark.parametrize(
@@ -161,15 +205,15 @@ def _case(**extra) -> dict:
         # A misspelt tool or argument is denied whatever the policy says.
         (
             _case(expect={"decisions": [{**DENY_500, "tool": "refund_ordr"}]}),
-            r"not in TOOLS.md: \['refund_ordr'\]",
+            r"unknown to shop-bot: \['refund_ordr'\]",
         ),
         (
             _case(expect={"decisions": [{**DENY_500, "args": {"amout": 501}}]}),
-            r"not in TOOLS.md: \['args.amout'\]",
+            r"unknown to shop-bot: \['args.amout'\]",
         ),
         (
-            _case(expect={"decisions": [{**DENY_500, "attributes": {"tier": "x"}}]}),
-            r"not in TOOLS.md: \['ctx.tier'\]",
+            _case(expect={"decisions": [{**DENY_500, "attributes": {"region": "x"}}]}),
+            r"unknown to shop-bot: \['ctx.region'\]",
         ),
         (
             _case(
@@ -179,14 +223,81 @@ def _case(**extra) -> dict:
                     ]
                 }
             ),
-            r"not in TOOLS.md: \['refnd'\]",
+            r"unknown to shop-bot: \['refnd'\]",
         ),
         (
             _case(expect={"decisions": [{**DENY_500, "tool": "agent.toool:support"}]}),
-            r"not in TOOLS.md: \['agent.toool:support'\]",
+            r"unknown to shop-bot: \['agent.toool:support'\]",
+        ),
+        # A reach to an agent no rule names is denied whatever the policy says.
+        (
+            _case(expect={"decisions": [{**DENY_500, "tool": "agent.tool:ops-bott"}]}),
+            r"unknown to shop-bot: \['agent.tool:ops-bott'\]",
+        ),
+        # A call short of an argument, or with one of the wrong type, is denied
+        # once a constraint reads it: YAML makes `NO` false and `"51"` a string.
+        (
+            _case(expect={"decisions": [{**DENY_500, "args": {"order_id": "o1"}}]}),
+            r"\['args.amount missing'\]",
+        ),
+        # A blank `amount:` is null, which every constraint on it denies.
+        (
+            _case(
+                expect={
+                    "decisions": [
+                        {**DENY_500, "args": {"order_id": "o1", "amount": None}}
+                    ]
+                }
+            ),
+            "amount=None is not number",
+        ),
+        # The audit rows carry `tier` as a string.
+        (
+            _case(expect={"decisions": [{**DENY_500, "attributes": {"tier": 2}}]}),
+            "ctx.tier=2 is not string",
+        ),
+        (
+            _case(
+                expect={
+                    "decisions": [
+                        {**DENY_500, "args": {"order_id": "o1", "amount": "51"}}
+                    ]
+                }
+            ),
+            "not shop-bot's schema: .*amount='51' is not number",
+        ),
+        (
+            _case(
+                expect={
+                    "superset": [
+                        {
+                            "wider": "a",
+                            "narrower": "b",
+                            "probes": [{"tool": "refund_order"}],
+                        }
+                    ]
+                }
+            ),
+            r"\['args.order_id missing', 'args.amount missing'\]",
         ),
         (_case(starting_project="missing"), "no starting project"),
-        ({"request": "Do it.", "expect": {}}, "neither"),
+        ({"agent": AGENT, "request": "Do it.", "expect": {}}, "neither"),
+        (_case(agent=""), "agent\n  String should have at least 1"),
+        (
+            {"starting_project": "shop", "request": "Do it.", "expect": {}},
+            "agent\n  Field",
+        ),
+        # The scorer reads this agent's manifest and audit rows.
+        (_case(agent="shop-bott"), "no manifest for agent 'shop-bott'"),
+        # Another agent's tool, or an attribute only its rows carry.
+        (
+            _case(expect={"decisions": [{**DENY_500, "tool": "wire_transfer"}]}),
+            r"unknown to shop-bot: \['wire_transfer'\]",
+        ),
+        (
+            _case(expect={"decisions": [{**DENY_500, "attributes": {"eu": 1}}]}),
+            r"unknown to shop-bot: \['ctx.eu'\]",
+        ),
     ],
 )
 def test_load_rejects(tmp_path: Path, case: dict, error: str) -> None:
@@ -197,7 +308,9 @@ def test_load_rejects(tmp_path: Path, case: dict, error: str) -> None:
 
 def test_load_rejects_both_starting_projects(tmp_path: Path) -> None:
     root = _eval_set(tmp_path, _case())
-    _write(root / "cases" / "cat" / "c" / "starting_project" / "TOOLS.md", TOOLS_MD)
+    _write(
+        root / "cases" / "cat" / "c" / "starting_project" / "agents.json", AGENTS_JSON
+    )
     with pytest.raises(CaseError, match="both"):
         load_cases(root)
 
@@ -216,13 +329,137 @@ def test_load_rejects_a_case_one_level_too_shallow(tmp_path: Path) -> None:
         load_cases(root)
 
 
-def test_load_accepts_synthetic_tools_and_their_arguments(tmp_path: Path) -> None:
+HTTPS_X = {
+    "method": "CONNECT",
+    "scheme": "https",
+    "host": "x.com",
+    "port": 443,
+    "url": "https://x.com:443",
+}
+
+
+def test_load_accepts_known_names_and_synthetic_tools(tmp_path: Path) -> None:
     calls = [
-        {"tool": "net.http_request", "args": {"host": "x.com", "method": "GET"}},
-        {"tool": "agent.tool:billing", "args": {"target": "billing"}},
+        {"tool": "net.http_request", "args": HTTPS_X},
+        {"tool": "agent.tool:ops-bot", "args": {"target": "ops-bot"}},
+        # An attribute shop-bot's audit rows carry.
+        {**REFUND_500, "attributes": {"tier": "x"}},
     ]
     decisions = [{**c, "role": "billing", "expect": "deny"} for c in calls]
     load_cases(_eval_set(tmp_path, _case(expect={"decisions": decisions})))
+
+
+def test_load_fills_the_arguments_the_agent_gates_send(tmp_path: Path) -> None:
+    calls = [
+        {"tool": "agent.tool:ops-bot"},
+        {"tool": "agent.run"},
+        {"tool": "net.tcp_connect", "args": {"host": "db", "port": 5432}},
+        {
+            "tool": "net.http_request",
+            "args": {"method": "GET", "url": "http://x.com/a"},
+        },
+    ]
+    decisions = [{**c, "role": "billing", "expect": "deny"} for c in calls]
+    [case] = load_cases(_eval_set(tmp_path, _case(expect={"decisions": decisions})))
+    assert [d["args"] for d in case["expect"]["decisions"]] == [
+        {"agent": AGENT, "target": "ops-bot", "via": "tool"},
+        {"agent": AGENT},
+        {"host": "db", "port": 5432, "protocol": "tcp"},
+        {
+            "method": "GET",
+            "scheme": "http",
+            "host": "x.com",
+            "port": 80,
+            "url": "http://x.com/a",
+            "path": "/a",
+            "query": "",
+        },
+    ]
+
+
+@pytest.mark.parametrize(
+    ("call", "error"),
+    [
+        ({"tool": "agent.tool:ops-bot", "args": {"via": "handoff"}}, "via='handoff'"),
+        ({"tool": "agent.run", "args": {"agent": "ops-bot"}}, "agent='ops-bot'"),
+        (
+            {"tool": "net.tcp_connect", "args": {"host": "db", "port": "443"}},
+            "'443' is not",
+        ),
+        # The gate always sends these, so a constraint on one denies without it.
+        (
+            {"tool": "net.http_request", "args": {"host": "x.com"}},
+            "args.method missing', 'args.url missing",
+        ),
+        # The proxy derives host, port and path from the URL.
+        (
+            {
+                "tool": "net.http_request",
+                "args": {
+                    "method": "GET",
+                    "url": "http://api.x.com/",
+                    "host": "evil.com",
+                },
+            },
+            "host='evil.com', sent 'api.x.com'",
+        ),
+        (
+            {
+                "tool": "net.tcp_connect",
+                "args": {"host": "db", "port": 1, "protocol": "udp"},
+            },
+            "protocol='udp', sent 'tcp'",
+        ),
+    ],
+)
+def test_load_rejects_synthetic_arguments_no_gate_sends(
+    tmp_path: Path, call: dict, error: str
+) -> None:
+    case = _case(expect={"decisions": [{**call, "role": "billing", "expect": "deny"}]})
+    with pytest.raises(CaseError, match=error):
+        load_cases(_eval_set(tmp_path, case))
+
+
+def test_load_rejects_an_unquoted_yaml_date(tmp_path: Path) -> None:
+    root = _eval_set(tmp_path, _case())
+    call = "{role: billing, tool: refund_order, args: {order_id: 2026-03-01, amount: 1}, expect: deny}"
+    _write(
+        root / "cases" / "cat" / "c" / "case.yaml",
+        f"starting_project: shop\nagent: {AGENT}\nrequest: Do it.\nexpect:\n  decisions:\n    - {call}\n",
+    )
+    with pytest.raises(CaseError, match="order_id=datetime.date.* is not JSON"):
+        load_cases(root)
+
+
+def test_a_case_overrides_a_preserved_reach_however_it_spells_it(
+    tmp_path: Path,
+) -> None:
+    reach = {"role": "billing", "tool": "agent.tool:ops-bot"}
+    own = {**reach, "args": {"target": "ops-bot"}, "expect": "deny"}
+    case = _case(expect={"decisions": [own]})
+    root = _eval_set(tmp_path, case, preserve=[{**reach, "expect": "allow"}])
+    [case] = load_cases(root)
+    assert [d["expect"] for d in case["expect"]["decisions"]] == ["deny"]
+
+
+def test_load_trusts_no_string_schema_but_a_precise_one(tmp_path: Path) -> None:
+    # Adapters record "string" for `int | None`, `bool | None` and lists, and
+    # OpenAI's strict schemas mark optional arguments required, sent as null.
+    view = _view(AGENT, {"refund_order": {"order_id": "string", "amount": "number"}})
+    view["manifest"]["tools"][0]["input_schema"]["properties"]["qty"] = {
+        "title": "qty",
+        "type": "string",
+    }
+    view["manifest"]["tools"][0]["input_schema"]["required"].append("qty")
+    root = _eval_set(tmp_path, _case())
+    _write(root / "starting_projects" / "shop" / "agents.json", json.dumps([view]))
+    for qty in (2, ["a"], None, True):
+        call = {**DENY_500, "args": {**DENY_500["args"], "qty": qty}}
+        _write(
+            root / "cases" / "cat" / "c" / "case.yaml",
+            _case(expect={"decisions": [call]}),
+        )
+        load_cases(root)
 
 
 def test_load_rejects_a_misnamed_case_folder(tmp_path: Path) -> None:
@@ -253,9 +490,11 @@ def test_load_rejects_a_bad_preserved_decision(tmp_path: Path) -> None:
 
 
 def test_load_takes_id_and_category_from_the_path(tmp_path: Path) -> None:
-    root = _eval_set(tmp_path, {"request": "Do it.", "held_out": True, "expect": {}})
+    root = _eval_set(
+        tmp_path, {"agent": AGENT, "request": "Do it.", "held_out": True, "expect": {}}
+    )
     own = root / "cases" / "cat" / "c" / "starting_project"
-    _write(own / "TOOLS.md", TOOLS_MD)
+    _write(own / "agents.json", AGENTS_JSON)
     [case] = load_cases(root)
     assert (case["id"], case["category"], case["held_out"]) == ("cat/c", "cat", True)
     assert case["project"] == own
@@ -264,9 +503,9 @@ def test_load_takes_id_and_category_from_the_path(tmp_path: Path) -> None:
 @pytest.mark.parametrize(
     ("changed", "unchanged"),
     [
-        ([], ["TOOLS.md", "policies/boundaries/org.yaml"]),
+        ([], ["agents.json", "audit.json", "policies/boundaries/org.yaml"]),
         # A case that means to edit a boundary lists it, and it isn't protected.
-        (["policies/boundaries/org.yaml"], ["TOOLS.md"]),
+        (["policies/boundaries/org.yaml"], ["agents.json", "audit.json"]),
     ],
 )
 def test_protected_files_are_unchanged_by_default(
@@ -276,26 +515,39 @@ def test_protected_files_are_unchanged_by_default(
     assert sorted(case["expect"]["unchanged"]) == unchanged
 
 
-def test_an_answer_editing_tools_md_fails_though_the_case_never_names_it(
+def test_only_protected_files_the_project_has_are_unchanged(tmp_path: Path) -> None:
+    # audit.json is optional, and the scorer fails an `unchanged` file neither
+    # snapshot has.
+    root = _eval_set(tmp_path, _case())
+    (root / "starting_projects" / "shop" / "audit.json").unlink()
+    [case] = load_cases(root)
+    assert "audit.json" not in case["expect"]["unchanged"]
+
+
+def test_an_answer_editing_agents_json_fails_though_the_case_never_names_it(
     tmp_path: Path,
 ) -> None:
     case = _case(expect={"decisions": [REFUND_500]})
     root = _eval_set(tmp_path, case, boundary=False)
-    _write(root / "cases" / "cat" / "c" / "wrong_answer" / "TOOLS.md", TOOLS_MD + "\n")
+    _write(
+        root / "cases" / "cat" / "c" / "wrong_answer" / "agents.json",
+        AGENTS_JSON + "\n",
+    )
     [case] = load_cases(root)
-    assert _failed(_run(case, tmp_path / "ws", "wrong_answer")) == [
-        "unchanged: TOOLS.md: "
-    ]
+    # The scorer also stops trusting the names an edited agents.json lists.
+    assert "unchanged: agents.json: " in _failed(
+        _run(case, tmp_path / "ws", "wrong_answer")
+    )
 
 
 def test_preserve_yaml_and_dot_paths_are_not_given_to_the_agent(
     tmp_path: Path,
 ) -> None:
     root = _eval_set(tmp_path, _case(), preserve=[REFUND_500])
-    _write(root / "starting_projects" / "shop" / ".claude" / "TOOLS.md", TOOLS_MD)
+    _write(root / "starting_projects" / "shop" / ".claude" / "agents.json", AGENTS_JSON)
     [case] = load_cases(root)
     assert "preserve.yaml" not in starting_files(case)
-    assert ".claude/TOOLS.md" not in starting_files(case)
+    assert ".claude/agents.json" not in starting_files(case)
 
 
 def test_a_preserved_call_is_checked_in_every_case_of_its_project(
