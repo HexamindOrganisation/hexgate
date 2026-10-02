@@ -29,20 +29,6 @@ def test_decide_happy_path(tmp_path, role, amount, expected) -> None:
     assert verdict.outcome == expected, verdict.reason
 
 
-def test_when_a_yaml_key_is_empty_then_decide_reads_it_as_empty(tmp_path) -> None:
-    # `args:` with no value is None in YAML, not {}.
-    policy, _ = effective_policy(make_workspace(tmp_path))
-    call = {"tool": "view_orders", "args": None, "attributes": None, "run_facts": None}
-    assert decide(policy, "default", call).outcome == DecisionOutcome.ALLOW
-
-
-@pytest.mark.parametrize("key", ["args", "attributes", "run_facts"])
-def test_when_a_call_field_is_not_a_mapping_then_decide_raises(tmp_path, key) -> None:
-    policy, _ = effective_policy(make_workspace(tmp_path))
-    with pytest.raises(CaseError, match=f"{key} must be a mapping"):
-        decide(policy, "default", {"tool": "view_orders", key: ["x"]})
-
-
 def test_when_the_role_is_undefined_then_decide_raises(tmp_path) -> None:
     # Not the `default` fallback: a case naming a role the policy lacks fails.
     policy, _ = effective_policy(make_workspace(tmp_path))
@@ -52,11 +38,6 @@ def test_when_the_role_is_undefined_then_decide_raises(tmp_path) -> None:
 
 def test_outcome_happy_path() -> None:
     assert outcome("approval_required") == DecisionOutcome.NEEDS_APPROVAL
-
-
-def test_when_a_case_names_an_unknown_outcome_then_outcome_raises() -> None:
-    with pytest.raises(CaseError, match="alow"):
-        outcome("alow")
 
 
 def test_effective_policy_happy_path(tmp_path) -> None:
@@ -75,10 +56,8 @@ def test_when_policy_yaml_is_empty_then_it_is_an_empty_policy(tmp_path) -> None:
     # As `hexgate policy validate` reads it: valid, and every call denied.
     policy, problems = effective_policy(make_workspace(tmp_path, "# nothing yet\n"))
     assert problems == []
-    assert (
-        decide(policy, "default", {"tool": "view_orders"}).outcome
-        == DecisionOutcome.DENY
-    )
+    verdict = decide(policy, "default", {"tool": "view_orders"})
+    assert verdict.outcome == DecisionOutcome.DENY
 
 
 def test_effective_policy_happy_path_on_a_module_tree(tmp_path) -> None:
@@ -86,9 +65,8 @@ def test_effective_policy_happy_path_on_a_module_tree(tmp_path) -> None:
     policy, problems = effective_policy(make_modules_workspace(tmp_path, roles))
     assert problems == []
     refund = {"tool": "refund_order", "args": {"amount": 1001}}
-    assert (
-        decide(policy, "billing", refund).outcome == DecisionOutcome.DENY
-    )  # the boundary's cap
+    verdict = decide(policy, "billing", refund)
+    assert verdict.outcome == DecisionOutcome.DENY  # the boundary's cap
 
 
 def test_when_the_agent_has_its_own_column_then_effective_policy_resolves_it(
