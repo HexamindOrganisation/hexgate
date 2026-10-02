@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import datetime
+
 import pytest
 
 from evals.policy_writing.checks import (
@@ -129,6 +131,13 @@ def test_when_the_answer_misses_the_words_then_answer_checks_fail() -> None:
     checks = by_name(answer_checks(expect, "done"))
     assert not checks["answer mentions one of"].passed
     assert checks["answer mentions all of"].detail == "missing ['refund', 'security']"
+
+
+def test_when_a_call_holds_a_yaml_date_then_its_check_is_named(tmp_path) -> None:
+    policy, _ = effective_policy(make_workspace(tmp_path))
+    call = {"role": "default", **VIEW, "args": {"since": datetime.date(2026, 1, 1)}}
+    [check] = decision_checks({"*": policy}, [{**call, "expect": "allow"}])
+    assert "2026-01-01" in check.name
 
 
 def test_score_happy_path(tmp_path) -> None:

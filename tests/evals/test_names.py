@@ -12,6 +12,7 @@ from evals.policy_writing.names import (
     AGENT_REACH_ARGS,
     SKILL_ARGS,
     SYNTHETIC_ARGS,
+    invented_names,
     load_known_names,
     unknown_refs,
     unknown_tools,
@@ -30,10 +31,12 @@ from tests.evals.helpers import (
     AGENT,
     AUDIT,
     POLICY,
+    add_boundary_tool,
     by_name,
     make_modules_workspace,
     make_workspace,
     manifest_tool,
+    write_module,
 )
 
 # shop-bot's manifest, as `load_known_names` reads it from the fixture.
@@ -266,86 +269,53 @@ def test_when_the_case_names_no_agent_then_name_checks_accept_every_agents_names
     # A role or project-wide edit: ops-bot's tool and attribute are fine too.
     policy = POLICY.replace("- args.amount <= 500", '- ctx.region == "eu"')
     ws = make_workspace(tmp_path, policy + "      wire_transfer: { mode: allow }\n")
-    assert all(c.passed for c in _name_checks(ws, None).values())
-    (ws / "policy.yaml").write_text(policy + "      teleport: { mode: allow }\n")
-    check = _name_checks(ws, None)["only known tools"]
-    assert check.detail == "not in any agent's manifest: ['teleport']"
-
-
-# name_checks on a module tree
-
-
-def _name_checks(ws, agent) -> dict:
-    policy, problems = effective_policy(ws, agent or "*")
-    assert policy is not None, problems
     files = snapshot(ws)
-    return by_name(name_checks(policy, ws, agent, files, files))
+    assert all(
+        c.passed for c in name_checks(effective_policy(ws)[0], ws, None, files, files)
+    )
+    (ws / "policy.yaml").write_text(policy + "      teleport: { mode: allow }\n")
+    files = snapshot(ws)
+    checks = by_name(name_checks(effective_policy(ws)[0], ws, None, files, files))
+    assert (
+        checks["only known tools"].detail == "not in any agent's manifest: ['teleport']"
+    )
 
 
-def _boundary(ws, line: str) -> None:
-    org = ws / "policies" / "boundaries" / "org.yaml"
-    org.write_text(org.read_text() + line)
+# invented_names on a module tree: each file against the agents it reaches
 
 
-def _capability(ws, name: str, text: str) -> None:
-    (ws / "policies" / "capabilities" / f"{name}.yaml").write_text(text)
-
-
-def test_name_checks_scan_every_module_file_against_every_agents_names(
-    tmp_path,
-) -> None:
+def test_invented_names_happy_path_on_a_module_tree(tmp_path) -> None:
     roles = '  billing:\n    "*": [read_only]\n    ops-bot: [read_only, ops]\n'
     ws = make_modules_workspace(tmp_path, roles)
-    # Bound only to ops-bot's column, with ops-bot's tool and attribute: known to
-    # the project.
-    _capability(
+    # In ops-bot's column only, with ops-bot's tool and attribute.
+    write_module(
         ws,
-        "ops",
+        "capabilities/ops.yaml",
         "tools:\n  wire_transfer: { mode: allow, constraints: ['ctx.region == \"eu\"'] }\n",
     )
-    # Bound to no column, with names no agent has: still flagged.
-    _capability(
+    # Org-wide: a boundary may deny another agent's tool, on its attribute.
+    add_boundary_tool(
+        ws, "wire_transfer: { mode: deny, constraints: ['ctx.region == \"us\"'] }"
+    )
+    assert invented_names(ws, {}, AGENT) == ([], [])
+
+
+def test_when_a_module_file_no_column_imports_invents_names_then_they_are_unknown(
+    tmp_path,
+) -> None:
+    ws = make_modules_workspace(tmp_path, "  billing: [read_only]\n")
+    write_module(
         ws,
-        "extra",
+        "capabilities/extra.yaml",
         "tools:\n  teleport: { mode: allow, constraints: ['ctx.nope == 1'] }\n",
     )
-    checks = _name_checks(ws, AGENT)
-    assert checks["only known tools"].detail == (
-        "not in shop-bot's manifest: "
-        "['policies/capabilities/extra.yaml: teleport (no agent has it)']"
-    )
-    assert checks["only known arguments and attributes"].detail == (
-        "not in the manifest or audit.json: "
-        "['policies/capabilities/extra.yaml: teleport: ctx.nope']"
-    )
-
-
-def test_a_boundary_may_deny_another_agents_tool(tmp_path) -> None:
-    ws = make_modules_workspace(tmp_path, "  default: [read_only]\n")
-    _boundary(ws, "  wire_transfer: { mode: deny }\n")
-    check = _name_checks(ws, AGENT)["only known tools"]
-    assert check.passed, check.detail
-
-
-def test_a_boundary_may_deny_a_tool_only_another_agents_column_grants(
-    tmp_path,
-) -> None:
-    roles = '  billing:\n    "*": [read_only]\n    ops-bot: [read_only, ops]\n'
-    ws = make_modules_workspace(tmp_path, roles)
-    _boundary(ws, "  wire_transfer: { mode: deny }\n")
-    _capability(ws, "ops", "tools:\n  wire_transfer: { mode: allow }\n")
-    check = _name_checks(ws, AGENT)["only known tools"]
-    assert check.passed, check.detail
-
-
-def test_when_a_boundary_denies_a_tool_no_agent_has_then_it_is_unknown(
-    tmp_path,
-) -> None:
-    ws = make_modules_workspace(tmp_path, "  default: [read_only]\n")
-    _boundary(ws, "  teleport: { mode: deny }\n")
-    assert _name_checks(ws, AGENT)["only known tools"].detail == (
-        "not in shop-bot's manifest: "
-        "['policies/boundaries/org.yaml: teleport (no agent has it)']"
+    add_boundary_tool(ws, "warp: { mode: deny }")
+    assert invented_names(ws, {}, AGENT) == (
+        [
+            "policies/boundaries/org.yaml: warp (no agent has it)",
+            "policies/capabilities/extra.yaml: teleport (no agent has it)",
+        ],
+        ["policies/capabilities/extra.yaml: teleport: ctx.nope"],
     )
 
 
@@ -353,19 +323,36 @@ def test_when_a_boundary_denies_a_tool_no_agent_has_then_it_is_unknown(
     "roles",
     [
         "  billing: [read_only, payments]\n",
-        # Only shop-bot's own cell grants it, not "*".
+        # Only shop-bot's own cell imports it, not "*".
         '  billing:\n    "*": [read_only]\n    shop-bot: [read_only, payments]\n',
     ],
 )
-def test_when_the_agents_column_grants_a_boundary_tool_then_it_is_unknown(
+def test_when_the_agents_column_grants_another_agents_tool_then_it_is_unknown(
     tmp_path, roles
 ) -> None:
     ws = make_modules_workspace(tmp_path, roles)
-    _boundary(ws, "  wire_transfer: { mode: approval_required }\n")
-    payments = ws / "policies" / "capabilities" / "payments.yaml"
-    payments.write_text(payments.read_text() + "  wire_transfer: { mode: allow }\n")
-    check = _name_checks(ws, AGENT)["only known tools"]
-    assert check.detail == "not in shop-bot's manifest: ['wire_transfer']"
+    write_module(
+        ws,
+        "capabilities/payments.yaml",
+        "tools:\n  refund_order: { mode: allow }\n  wire_transfer: { mode: allow }\n",
+    )
+    tools, _ = invented_names(ws, {}, AGENT)
+    assert tools == ["policies/capabilities/payments.yaml: wire_transfer"]
+    # A role or project-wide case accepts any agent's tool.
+    assert invented_names(ws, {}, None) == ([], [])
+
+
+def test_when_the_agents_column_reads_another_agents_attribute_then_it_is_unknown(
+    tmp_path,
+) -> None:
+    ws = make_modules_workspace(tmp_path, "  billing: [read_only, payments]\n")
+    write_module(
+        ws,
+        "capabilities/payments.yaml",
+        "tools:\n  refund_order: { mode: allow, constraints: ['ctx.region == \"eu\"'] }\n",
+    )
+    _, refs = invented_names(ws, {}, AGENT)
+    assert refs == ["policies/capabilities/payments.yaml: refund_order: ctx.region"]
 
 
 # The synthetic argument sets against the gates that build them

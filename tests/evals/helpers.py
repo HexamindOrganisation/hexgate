@@ -125,3 +125,14 @@ def make_modules_workspace(tmp_path: Path, roles: str) -> Path:
     )
     (ws / "roles.yaml").write_text(f"version: 1\nroles:\n{roles}")
     return ws
+
+
+def write_module(ws: Path, rel: str, text: str) -> None:
+    """Write `policies/<rel>`, e.g. `capabilities/ops.yaml`."""
+    (ws / "policies" / rel).write_text(text)
+
+
+def add_boundary_tool(ws: Path, entry: str) -> None:
+    """Add a `tools:` entry to the org boundary, e.g. `teleport: { mode: deny }`."""
+    org = ws / "policies" / "boundaries" / "org.yaml"
+    org.write_text(org.read_text() + f"  {entry}\n")

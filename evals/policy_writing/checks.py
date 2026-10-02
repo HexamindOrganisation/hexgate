@@ -5,34 +5,31 @@ both call `score(case, workspace, before, answer)` and get back a list of `Check
 One function per kind of check: the policy validates without lint warnings
 (`policy.py`), dry-run decisions and role supersets hold (on every roles.yaml
 column when the case names no agent), only names the Hexgate MCP would show are
-used (`names.py`: the case agent's, or any agent's when it names none; each
-module file, any agent's), files change (or not) as the case says, and the final
+used (`names.py`: the case agent's, or any agent's when it names none; on a
+module tree, per file), files change (or not) as the case says, and the final
 answer mentions what the case requires.
 """
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import json
 from dataclasses import dataclass
 from pathlib import Path
 
-from evals.policy_writing.names import (
-    load_known_names,
-    module_unknowns,
-    org_wide_tools,
-    unknown_refs,
-    unknown_tools,
-)
+from evals.policy_writing.names import invented_names
 from evals.policy_writing.policy import (
+    LABELS,
     RANK,
     CaseError,
     Policy,
     decide,
     effective_policy,
+    outcome,
     policy_columns,
 )
-from hexgate.security import load_local_modules, load_roles
+from hexgate.security.decision import Verdict
 from hexgate.security.modules import DEFAULT_AGENT
 
 
@@ -68,38 +65,55 @@ def decision_checks(columns: dict[str, Policy], decisions: list[dict]) -> list[C
     for d in decisions:
         # `roles` expands one entry over several roles; `expect` may list the
         # acceptable outcomes ("deny or approval_required").
-        wanted = d["expect"] if isinstance(d["expect"], list) else [d["expect"]]
+        labels = d["expect"] if isinstance(d["expect"], list) else [d["expect"]]
         for role in d.get("roles") or [d["role"]]:
             name = f"decision: {_call_label(role, d)}"
-            if not columns:
-                checks.append(Check(name, False, "policy invalid"))
-                continue
-            wrong = []
-            for column, policy in columns.items():
-                if miss := _wrong_decision(policy, role, d, wanted):
-                    where = "" if len(columns) == 1 else f" (column {column})"
-                    wrong.append(f"{miss}{where}")
-            checks.append(Check(name, not wrong, "; ".join(wrong)))
+            checks.append(
+                _column_check(
+                    name, columns, lambda p: _wrong_decision(p, role, d, labels)
+                )
+            )
     return checks
 
 
-def _wrong_decision(policy: Policy, role: str, d: dict, wanted: list[str]) -> str:
-    """Why the dry-run misses `wanted`, or "" when it gives one of them."""
+def _column_check(name: str, columns: dict[str, Policy], misses) -> Check:
+    """Passes when `misses(policy)` is empty on every column; each miss is
+    tagged with its column when there are several. No columns: invalid."""
+    if not columns:
+        return Check(name, False, "policy invalid")
+    wrong = []
+    for column, policy in columns.items():
+        where = "" if len(columns) == 1 else f" (column {column})"
+        wrong += [f"{miss}{where}" for miss in misses(policy)]
+    return Check(name, not wrong, "; ".join(wrong))
+
+
+def _wrong_decision(policy: Policy, role: str, d: dict, labels: list[str]) -> list[str]:
+    """Why the dry-run gives none of the `labels` outcomes; empty if it gives one."""
     try:
-        got, reason = decide(policy, role, d)
+        verdict = decide(policy, role, d)
     except CaseError as exc:
-        return f"can't dry-run: {exc}"
-    if got in wanted:
-        return ""
-    return f"expected {' or '.join(wanted)}, got {got}: {reason[:300]}"
+        return [f"can't dry-run: {exc}"]
+    if verdict.outcome in {outcome(label) for label in labels}:
+        return []
+    got = LABELS[verdict.outcome]
+    return [f"expected {' or '.join(labels)}, got {got}: {_reason(verdict)}"[:400]]
+
+
+def _reason(verdict: Verdict) -> str:
+    return "; ".join([verdict.reason, *map(str, verdict.violations or [])])
+
+
+# default=str: a case loader keeps an unquoted YAML date as a date.
+_dump = functools.partial(json.dumps, sort_keys=True, default=str)
 
 
 def _call_label(role: str, d: dict) -> str:
-    label = f"{role} → {d['tool']}({json.dumps(d.get('args') or {}, sort_keys=True)})"
+    label = f"{role} → {d['tool']}({_dump(d.get('args', {}))})"
     if d.get("attributes"):
-        label += f" ctx={json.dumps(d['attributes'], sort_keys=True)}"
+        label += f" ctx={_dump(d['attributes'])}"
     if d.get("run_facts"):
-        label += f" run={json.dumps(d['run_facts'], sort_keys=True)}"
+        label += f" run={_dump(d['run_facts'])}"
     return label
 
 
@@ -108,14 +122,7 @@ def superset_checks(columns: dict[str, Policy], supersets: list[dict]) -> list[C
     checks = []
     for s in supersets:
         name = f"superset: {s['wider']} ⊇ {s['narrower']}"
-        if not columns:
-            checks.append(Check(name, False, "policy invalid"))
-            continue
-        worse = []
-        for column, policy in columns.items():
-            where = "" if len(columns) == 1 else f" (column {column})"
-            worse += [f"{w}{where}" for w in _worse_probes(policy, s)]
-        checks.append(Check(name, not worse, "; ".join(worse)))
+        checks.append(_column_check(name, columns, lambda p: _worse_probes(p, s)))
     return checks
 
 
@@ -124,13 +131,15 @@ def _worse_probes(policy: Policy, s: dict) -> list[str]:
     worse = []
     for p in s["probes"]:
         try:
-            lo, _ = decide(policy, s["narrower"], p)
-            hi, _ = decide(policy, s["wider"], p)
+            lo = decide(policy, s["narrower"], p).outcome
+            hi = decide(policy, s["wider"], p).outcome
         except CaseError as exc:  # e.g. a missing role: the probe fails
             worse.append(f"{p['tool']}: can't dry-run: {exc}")
             continue
         if RANK[hi] < RANK[lo]:
-            worse.append(f"{p['tool']}: {s['narrower']}={lo}, {s['wider']}={hi}")
+            worse.append(
+                f"{p['tool']}: {s['narrower']}={LABELS[lo]}, {s['wider']}={LABELS[hi]}"
+            )
     return worse
 
 
@@ -148,36 +157,18 @@ def name_checks(
     before: dict[str, str],
     after: dict[str, str],
 ) -> list[Check]:
-    """Only tools, arguments and attributes the MCP would show for `agent`
-    (any agent's when None), and on a module tree, in every module file."""
+    """Only tools, arguments and attributes the MCP would show (`invented_names`)."""
     # The names are read after the run, so an edit to either file could
     # whitelist an invented name: trust them only if they are untouched.
     edited = [f for f in ("agents.json", "audit.json") if before.get(f) != after.get(f)]
     if edited:
         return _name_checks_failed(f"edited during the run: {edited}")
     try:
-        tools, attrs = load_known_names(ws, agent)
-        all_tools, all_attrs = (
-            (tools, attrs) if agent is None else load_known_names(ws, None)
-        )
+        unknown, refs = invented_names(ws, policy.payload, agent)
     except (OSError, ValueError, KeyError, TypeError) as exc:
         return _name_checks_failed(
             f"agents.json / audit.json unreadable: {exc!r}"[:300]
         )
-    unknown = unknown_tools(policy.payload, tools)
-    refs = unknown_refs(policy.payload, tools, attrs)
-    if (ws / "policies").is_dir():
-        # The policy validated, so the modules and roles.yaml load.
-        boundaries, capabilities = load_local_modules(ws)
-        exempt = org_wide_tools(
-            boundaries, capabilities, load_roles(ws), agent or DEFAULT_AGENT
-        )
-        unknown = [t for t in unknown if t not in exempt]
-        file_tools, file_refs = module_unknowns(
-            ws, [*boundaries, *capabilities], all_tools, all_attrs
-        )
-        unknown += file_tools
-        refs += file_refs
     where = f"{agent}'s manifest" if agent else "any agent's manifest"
     return [
         Check(
@@ -230,14 +221,15 @@ def answer_checks(expect: dict, answer: str) -> list[Check]:
 
 
 def score(case: dict, ws: Path, before: dict[str, str], answer: str) -> list[Check]:
+    """Every check for `case`, as the case loader returns it (PR 2), which has
+    already validated its shape: calls are mappings, outcomes and mention lists
+    well-formed. `before` is the starting project's `snapshot`."""
     expect = case.get("expect", {})
     agent = case.get("agent")
     policy, problems = effective_policy(ws, agent or DEFAULT_AGENT)
     columns: dict[str, Policy] = {}
     if policy is not None:
         columns, problems = policy_columns(ws, agent, policy)
-        if problems:  # a column left out would let its dry-runs pass unrun
-            columns = {}
     valid = Check("valid", not problems, "\n".join(problems)[-800:])
     after = snapshot(ws)
     return [

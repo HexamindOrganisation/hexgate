@@ -11,8 +11,10 @@ import json
 from collections.abc import Iterator
 from pathlib import Path
 
+from evals.policy_writing.policy import is_module_tree
 from hexgate.manifest.models import AgentManifest
 from hexgate.runtime.run_facts import KNOWN_RUN_PATHS
+from hexgate.security import load_local_modules, load_roles
 from hexgate.security.constraints import (
     ConstraintParseError,
     iter_arg_refs,
@@ -185,32 +187,37 @@ def unknown_refs(doc: dict, tools: dict[str, set[str]], attrs: set[str]) -> list
     return sorted(bad)
 
 
-def org_wide_tools(boundaries: list, capabilities: list, roles, agent: str) -> set[str]:
-    """Boundary tools a policy for `agent` may name though `agent` lacks them.
-
-    A boundary is org-wide, so it may deny another agent's tool (e.g. deny
-    wire_transfer). Unless a capability in `agent`'s roles.yaml column grants
-    it too: then `agent`'s policy grants a tool `agent` doesn't have.
-    """
-    columns = resolve_role_map(roles, capabilities, agent)
-    granted = {t for caps in columns.values() for m in caps for t in m.policy.tools}
-    return {t for m in boundaries for t in m.policy.tools} - granted
-
-
-def module_unknowns(
-    ws: Path, modules: list, tools: dict[str, set[str]], attrs: set[str]
+def invented_names(
+    ws: Path, payload: dict, agent: str | None
 ) -> tuple[list[str], list[str]]:
-    """(unknown tools, unknown refs) in each module file, prefixed with its path.
+    """(unknown tools, unknown constraint paths) the policy in `ws` uses.
 
-    A resolved column holds only what that column imports, so a file it leaves
-    out (a capability for another agent, or for none) is checked on its own.
+    A single policy.yaml is checked as a whole against `agent`'s names (every
+    agent's when None). A module tree is checked file by file, since its
+    resolved payload holds only what one roles.yaml column imports: a
+    capability in `agent`'s column against `agent`'s names; a boundary
+    (org-wide, so it may deny another agent's tool) or any other capability
+    against every agent's. Raises if agents.json, audit.json or the modules
+    can't be read.
     """
+    names = load_known_names(ws, agent)
+    if not is_module_tree(ws):
+        return unknown_tools(payload, names[0]), unknown_refs(payload, *names)
+    every = names if agent is None else load_known_names(ws, None)
+    boundaries, capabilities = load_local_modules(ws)
+    own = set()
+    if agent is not None:
+        columns = resolve_role_map(load_roles(ws), capabilities, agent)
+        own = {m.name for caps in columns.values() for m in caps}
     bad_tools, bad_refs = [], []
-    for m in modules:
+    files = [(m, False) for m in boundaries] + [
+        (m, m.name in own) for m in capabilities
+    ]
+    for m, scoped in files:
+        tools, attrs = names if scoped else every
+        note = "" if scoped or agent is None else " (no agent has it)"
         doc = m.policy.model_dump()
         rel = Path(m.source).relative_to(ws)
-        bad_tools += [
-            f"{rel}: {t} (no agent has it)" for t in unknown_tools(doc, tools)
-        ]
+        bad_tools += [f"{rel}: {t}{note}" for t in unknown_tools(doc, tools)]
         bad_refs += [f"{rel}: {r}" for r in unknown_refs(doc, tools, attrs)]
     return bad_tools, bad_refs
