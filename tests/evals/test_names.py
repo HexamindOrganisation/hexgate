@@ -33,6 +33,7 @@ from tests.evals.helpers import (
     AGENT,
     AUDIT,
     POLICY,
+    agent_view,
     by_name,
     make_modules_workspace,
     make_workspace,
@@ -73,6 +74,15 @@ def test_when_audit_json_is_missing_then_no_attribute_is_known(tmp_path) -> None
     ws = make_workspace(tmp_path)
     (ws / "audit.json").unlink()
     assert load_known_names(ws, AGENT).attrs == set()
+
+
+def test_when_the_manifest_lists_no_skills_or_guards_then_none_are_known(
+    tmp_path,
+) -> None:
+    ws = make_workspace(tmp_path)
+    (ws / "agents.json").write_text(json.dumps([agent_view(AGENT)]))
+    known = load_known_names(ws, AGENT)
+    assert (known.skills, known.guards) == (set(), set())
 
 
 def test_when_the_case_agent_has_no_manifest_then_loading_fails(tmp_path) -> None:
@@ -119,6 +129,10 @@ def test_unknown_keys_flags_a_skill_or_guard_not_in_the_manifest() -> None:
     assert unknown_keys(loaded(doc), KNOWN) == ["guard:redact_pi", "skill:ledger"]
 
 
+def test_unknown_keys_trims_a_skill_name_as_the_runtime_does() -> None:
+    assert unknown_keys(loaded({"skills": {" pdf ": ALLOW}}), KNOWN) == []
+
+
 # unknown_refs
 
 
@@ -142,6 +156,7 @@ def test_unknown_refs_checks_caller_attributes(attribute, known) -> None:
         "arg.amount <= 5",
         "attrs.vip == true",
         'role.name == "x"',
+        'tool.name == "x"',
     ],
 )
 def test_unknown_refs_flags_a_path_that_never_matches(constraint) -> None:
@@ -191,6 +206,13 @@ def test_unknown_refs_checks_skill_constraints_against_each_levels_args() -> Non
 )
 def test_unknown_refs_scans_file_role_and_default_constraints(doc) -> None:
     assert unknown_refs(loaded(doc), KNOWN) == ["policy-level: ctx.departmnt"]
+
+
+def test_a_policy_level_constraint_may_read_any_tools_args_but_no_invented_one() -> (
+    None
+):
+    doc = {"constraints": ["args.amount <= 1000 and args.amont <= 1000"]}
+    assert unknown_refs(loaded(doc), KNOWN) == ["policy-level: args.amont"]
 
 
 def test_a_policy_level_constraint_may_read_the_skill_args() -> None:
@@ -244,8 +266,25 @@ def test_name_checks_happy_path(tmp_path) -> None:
     assert all(c.passed for c in name_checks(policy, ws, AGENT, before, before))
 
 
+def test_when_the_policy_invents_names_then_both_name_checks_fail(tmp_path) -> None:
+    policy = (
+        POLICY
+        + '      wire_transfer: { mode: allow, constraints: ["ctx.tier == 1"] }\n'
+    )
+    ws = make_workspace(tmp_path, policy)
+    policy, _ = effective_policy(ws)
+    before = snapshot(ws)
+    checks = [
+        (c.passed, c.detail) for c in name_checks(policy, ws, AGENT, before, before)
+    ]
+    assert checks == [
+        (False, "not in shop-bot's manifest: ['wire_transfer']"),
+        (False, "not in the manifest or audit.json: ['wire_transfer: ctx.tier']"),
+    ]
+
+
 @pytest.mark.parametrize("broken", ["", "{not json", "[]"])
-def test_when_the_agent_breaks_agents_json_then_both_name_checks_fail(
+def test_when_agents_json_is_unreadable_then_both_name_checks_fail(
     tmp_path, broken
 ) -> None:
     ws = make_workspace(tmp_path)

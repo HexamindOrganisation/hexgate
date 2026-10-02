@@ -47,7 +47,12 @@ AGENTS = [
         skills=[{"name": "ledger", "description": "ledger"}],
     ),
     # An agent with no registered version yet: the endpoint returns no manifest.
-    {**agent_view("draft-bot"), "manifest": None},
+    {
+        **agent_view("draft-bot"),
+        "manifest": None,
+        "version": None,
+        "content_hash": None,
+    },
 ]
 
 

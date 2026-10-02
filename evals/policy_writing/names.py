@@ -23,6 +23,7 @@ from hexgate.security.models import (
     is_skill_key,
     skill_key,
 )
+from hexgate.security.naming import canonical_skill_name
 from hexgate.security.network import NET_HTTP_REQUEST, NET_TCP_CONNECT
 from hexgate.security.policy_set import PolicySet
 
@@ -112,13 +113,16 @@ def unknown_keys(policy_set: PolicySet, known: KnownNames) -> list[str]:
             for t in p.tools
             if t not in known.tools and t not in SYNTHETIC_ARGS and not is_agent_key(t)
         }
-        bad |= {skill_key("instructions", s) for s in p.skills.keys() - known.skills}
+        # Trimmed as the runtime trims them, so ` pdf ` governs the skill `pdf`.
+        skills = {canonical_skill_name(s) for s in p.skills}
+        bad |= {skill_key("instructions", s) for s in skills - known.skills}
         bad |= {f"guard:{g}" for g in p.guards.keys() - known.guards}
     return sorted(bad)
 
 
 def _constraint_lines(p: AgentPolicy) -> Iterator[tuple[str | None, str]]:
-    """(tool key the constraint applies to, or None for any call; its text)."""
+    """(tool key the constraint applies to, or None for a policy-level one that
+    may meet any call; its text)."""
     for c in [*p.constraints, *p.default_policy.constraints]:
         yield None, c
     for key, tool in p.effective_tools.items():
