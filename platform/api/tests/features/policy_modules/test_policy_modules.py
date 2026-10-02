@@ -1620,3 +1620,154 @@ async def test_recompile_does_not_touch_the_agents_authored_trail(
 
     assert after.updated_at == authored_at
     assert after.updated_by_user_id == authored_by
+
+
+async def test_seeded_compose_demo_resolves(session_factory) -> None:
+    # The first-boot seed writes the compose showcase into the demo project; it
+    # must be a real, resolvable multi-module policy (the dashboard opens on it).
+    from hexgate_api.constants import DEFAULT_PROJECT_ID
+    from hexgate_api.features.policy_modules import service as svc
+    from hexgate_api.features.policy_modules.seed_data import (
+        ensure_seeded_compose_policy,
+    )
+
+    async with session_factory() as s:
+        # The seed only runs in demo mode (HEXGATE_DEMO); call it directly here.
+        await ensure_seeded_compose_policy(s, DEFAULT_PROJECT_ID)
+        names = {f.name for f in await svc.list_files(s, DEFAULT_PROJECT_ID)}
+        assert {
+            "policy.yaml",
+            "caps/base/read_only.yaml",
+            "caps/base/ingress.yaml",
+            "caps/support/delegate.yaml",
+            "caps/billing/invoicing.yaml",
+            "caps/billing/refund_support.yaml",
+            "caps/billing/refund_billing.yaml",
+        } <= names
+
+        # support_bot reaches billing_bot as a tool, never refunds directly.
+        ps = (
+            await svc.compose_resolve(s, DEFAULT_PROJECT_ID, agent="support_bot")
+        ).policy_set
+
+        def mode(role, tool, **args):
+            return ps.evaluate(role=role, tool=tool, args=args).outcome.value
+
+        # support_bot has NO refund tool — the org ceiling is granted to no seat.
+        assert mode("billing", "refund_order", amount=800, currency="USD") == "deny"
+        assert mode("support", "refund_order", amount=10, currency="USD") == "deny"
+        assert mode("default", "refund_order", amount=10, currency="USD") == "deny"
+
+        # The delegation is gated as a REACH edge (agent.tool:billing_bot), granted
+        # to support/billing and denied to default — the parent's policy governing
+        # the sub-agent tool use, not a plain tool name. (billing_bot then enforces
+        # its own role-aware refund caps from its own compose policy — resolved below.)
+        assert mode("support", "agent.tool:billing_bot") == "allow"
+        assert mode("billing", "agent.tool:billing_bot") == "allow"
+        assert mode("default", "agent.tool:billing_bot") == "deny"
+        assert "agent.tool:billing_bot" in ps.policy_for("support").effective_tools
+
+        # Admission (ingress → agent.run): the support/billing seats may START
+        # support_bot; the default seat may not (read-only, no ingress grant).
+        assert mode("support", "agent.run") == "allow"
+        assert mode("billing", "agent.run") == "allow"
+        assert mode("default", "agent.run") == "deny"
+
+        # MCP tools (mcp-demo-*): a safe one is open to all, an invoice needs
+        # approval for billing, and the secret-reader is denied outright.
+        assert mode("support", "mcp-demo-compute_tip") == "allow"
+        assert mode("billing", "mcp-demo-send_invoice") == "needs_approval"
+        assert mode("support", "mcp-demo-send_invoice") == "deny"
+        assert mode("billing", "mcp-demo-read_secret") == "deny"
+
+        # billing_bot is its OWN compose agent (registered + bound to this policy at
+        # serve, dashboard-editable) enforcing role-aware refund caps: the delegating
+        # seat's role rides into the nested run, so support is capped at $200, billing
+        # at the $1000 org ceiling, and a role it doesn't grant (default) refunds
+        # nothing. This is the cap that actually gates a delegated refund.
+        bps = (
+            await svc.compose_resolve(s, DEFAULT_PROJECT_ID, agent="billing_bot")
+        ).policy_set
+
+        def bmode(role, tool, **args):
+            return bps.evaluate(role=role, tool=tool, args=args).outcome.value
+
+        assert bmode("support", "refund_order", amount=200, currency="USD") == "allow"
+        assert bmode("support", "refund_order", amount=500, currency="USD") == "deny"
+        assert bmode("billing", "refund_order", amount=1000, currency="USD") == "allow"
+        assert bmode("billing", "refund_order", amount=5000, currency="USD") == "deny"
+        assert bmode("default", "refund_order", amount=10, currency="USD") == "deny"
+
+        # Admission to billing_bot (who may be delegated TO): support/billing are
+        # admitted (ingress), default is not — defense in depth behind the reach gate.
+        assert bmode("support", "agent.run") == "allow"
+        assert bmode("billing", "agent.run") == "allow"
+        assert bmode("default", "agent.run") == "deny"
+
+
+def _find_demo_notebook():
+    """Locate deploy/compose_support_demo.py from the test file, or None."""
+    from pathlib import Path
+
+    for parent in Path(__file__).resolve().parents:
+        candidate = parent / "deploy" / "compose_support_demo.py"
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def _notebook_dict(src: str, name: str) -> dict:
+    """Return the literal dict assigned to ``name`` in the notebook source.
+
+    Parses the source with ``ast`` and walks for the assignment, rather than a
+    regex over the text — so a cosmetic reformat (re-indent, a value that happens
+    to contain ``\\n    }``) can't break the notebook↔seed drift guard.
+    """
+    import ast
+
+    tree = ast.parse(src)
+    for node in ast.walk(tree):
+        targets = node.targets if isinstance(node, ast.Assign) else []
+        if any(isinstance(t, ast.Name) and t.id == name for t in targets):
+            return ast.literal_eval(node.value)
+    raise AssertionError(f"could not locate {name} in the demo notebook")
+
+
+def test_notebook_policy_files_match_seed() -> None:
+    # The marimo demo (deploy/compose_support_demo.py) inlines the same compose
+    # policy the API seeds, kept aligned by hand. Assert the two copies are
+    # byte-identical so an edit to one can't silently drift from the other.
+    from hexgate_api.features.policy_modules.seed_data import SEED_POLICY_FILES
+
+    notebook = _find_demo_notebook()
+    if notebook is None:
+        pytest.skip("marimo demo notebook not present in this checkout")
+
+    src = notebook.read_text(encoding="utf-8")
+    assert _notebook_dict(src, "_FILES") == SEED_POLICY_FILES
+
+
+# NB: billing_bot's role-aware refund caps used to live in-kernel (the notebook's
+# _BILLING_POLICIES dict) and were checked here. billing_bot is now its own compose
+# agent, so those caps live in the seeded policy — the notebook↔seed drift guard
+# (test_notebook_policy_files_match_seed) plus billing_bot's resolution in
+# test_seeded_compose_demo_resolves cover them, and _BILLING_POLICIES is gone.
+
+
+def test_compose_entry_guards_resolve_to_the_runtime_stance() -> None:
+    """A `guards:` block in the compose `policy.yaml` entry file (what the dashboard
+    edits) resolves through the platform's compose path to the agent-level stance the
+    runtime reads — so flipping `enabled` governs the plugin live (R-GUARD-006/007)."""
+    from hexgate_api.features.policy_modules.service import _resolve_files
+
+    files = {
+        "policy.yaml": (
+            "version: 1\n"
+            "guards: { secret_guard: { enabled: false } }\n"
+            "tools: { send_update: { mode: allow } }\n"
+        )
+    }
+    ps = _resolve_files(files).policy_set
+    assert ps.guard_stance() == {"baseline": {"secret_guard": False}}
+    assert ps.effective_guards("send_update") == {"secret_guard": False}
+    assert ps.governed_guard_names() == frozenset({"secret_guard"})

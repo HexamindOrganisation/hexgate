@@ -189,7 +189,9 @@ def wrap_tool(
     """Return a copy of ``tool`` with ``run_async`` gated by ``enforcer``.
 
     Routes through the shared :func:`run_guarded_async`, so before/after
-    guards run around the policy check exactly as on the other adapters.
+    guards run around the policy check exactly as on the other adapters. The
+    policy's guard enable/disable stance is applied per call in the guard runner
+    (R-GUARD-007), not baked into this tool's pipeline.
     """
     base = _normalize(tool)
     name = base.name
@@ -349,15 +351,22 @@ def wrap_tools(
     """Return a fresh list of policy-gated copies.
 
     A ``BaseToolset`` entry is wrapped rather than expanded, so its tools are
-    resolved — and gated — at each use rather than snapshotted here.
+    resolved — and gated — at each use rather than snapshotted here. The policy's
+    guard enable/disable stance is applied per call in the guard runner (R-GUARD-007).
     """
     return [
         GuardedToolset(
-            entry, enforcer, approval_handler=approval_handler, pipeline=pipeline
+            entry,
+            enforcer,
+            approval_handler=approval_handler,
+            pipeline=pipeline,
         )
         if isinstance(entry, BaseToolset)
         else wrap_tool(
-            entry, enforcer, approval_handler=approval_handler, pipeline=pipeline
+            entry,
+            enforcer,
+            approval_handler=approval_handler,
+            pipeline=pipeline,
         )
         for entry in tools
     ]

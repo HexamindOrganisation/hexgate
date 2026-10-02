@@ -15,10 +15,18 @@ from __future__ import annotations
 import functools
 import hashlib
 import json
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from evals.policy_writing.names import invented_names
+from evals.policy_writing.names import (
+    NAME_SOURCES,
+    enforced_roles,
+    load_known_names,
+    module_invented_names,
+    unknown_keys,
+    unknown_refs,
+)
 from evals.policy_writing.policy import (
     LABELS,
     RANK,
@@ -26,11 +34,11 @@ from evals.policy_writing.policy import (
     Policy,
     decide,
     effective_policy,
+    is_module_tree,
     outcome,
     policy_columns,
 )
 from hexgate.security.decision import Verdict
-from hexgate.security.modules import DEFAULT_AGENT
 
 
 @dataclass
@@ -76,7 +84,9 @@ def decision_checks(columns: dict[str, Policy], decisions: list[dict]) -> list[C
     return checks
 
 
-def _column_check(name: str, columns: dict[str, Policy], misses) -> Check:
+def _column_check(
+    name: str, columns: dict[str, Policy], misses: Callable[[Policy], list[str]]
+) -> Check:
     """Passes when `misses(policy)` is empty on every column; each miss is
     tagged with its column when there are several. No columns: invalid."""
     if not columns:
@@ -143,11 +153,14 @@ def _worse_probes(policy: Policy, s: dict) -> list[str]:
     return worse
 
 
+NAME_CHECKS = (
+    "only known tools, skills and guards",
+    "only known arguments and attributes",
+)
+
+
 def _name_checks_failed(detail: str) -> list[Check]:
-    return [
-        Check("only known tools", False, detail),
-        Check("only known arguments and attributes", False, detail),
-    ]
+    return [Check(name, False, detail) for name in NAME_CHECKS]
 
 
 def name_checks(
@@ -157,29 +170,31 @@ def name_checks(
     before: dict[str, str],
     after: dict[str, str],
 ) -> list[Check]:
-    """Only tools, arguments and attributes the MCP would show (`invented_names`)."""
+    """Only names the MCP would show for `agent` (any agent's when None): tools,
+    skills, guards, reach targets, arguments and caller attributes. A single
+    policy.yaml is checked as a whole, a module tree file by file."""
     # The names are read after the run, so an edit to either file could
     # whitelist an invented name: trust them only if they are untouched.
-    edited = [f for f in ("agents.json", "audit.json") if before.get(f) != after.get(f)]
+    edited = [f for f in NAME_SOURCES if before.get(f) != after.get(f)]
     if edited:
         return _name_checks_failed(f"edited during the run: {edited}")
     try:
-        unknown, refs = invented_names(ws, policy.payload, agent)
+        known = load_known_names(ws, agent)
+        if is_module_tree(ws):
+            unknown, refs = module_invented_names(ws, agent, known)
+        else:
+            roles = enforced_roles(policy.policy_set)
+            unknown, refs = unknown_keys(roles, known), unknown_refs(roles, known)
     except (OSError, ValueError, KeyError, TypeError) as exc:
         return _name_checks_failed(
             f"agents.json / audit.json unreadable: {exc!r}"[:300]
         )
+    keys, args = NAME_CHECKS
     where = f"{agent}'s manifest" if agent else "any agent's manifest"
     return [
+        Check(keys, not unknown, f"not in {where}: {unknown}" if unknown else ""),
         Check(
-            "only known tools",
-            not unknown,
-            f"not in {where}: {unknown}" if unknown else "",
-        ),
-        Check(
-            "only known arguments and attributes",
-            not refs,
-            f"not in the manifest or audit.json: {refs}" if refs else "",
+            args, not refs, f"not in the manifest or audit.json: {refs}" if refs else ""
         ),
     ]
 
@@ -226,7 +241,7 @@ def score(case: dict, ws: Path, before: dict[str, str], answer: str) -> list[Che
     well-formed. `before` is the starting project's `snapshot`."""
     expect = case.get("expect", {})
     agent = case.get("agent")
-    policy, problems = effective_policy(ws, agent or DEFAULT_AGENT)
+    policy, problems = effective_policy(ws, agent)
     columns: dict[str, Policy] = {}
     if policy is not None:
         columns, problems = policy_columns(ws, agent, policy)

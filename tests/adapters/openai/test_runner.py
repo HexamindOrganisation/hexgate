@@ -925,3 +925,61 @@ async def test_usage_hook_context_propagates_through_run(
     assert event.session_id == "s-1"
     assert event.input_tokens == 10
     assert event.output_tokens == 20
+
+
+# --- R-GUARD-007: the closed-world guard check runs ONCE, at resolution ---------
+
+
+def test_binding_for_validates_guard_stance_once_at_resolution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The closed-world guard check fires when the binding is first resolved — a
+    policy naming an undeclared guard stops the agent cold there (review #2)."""
+    from hexgate.adapters.openai import runner as runner_mod
+    from hexgate.guards.stance import GuardClosedWorldError
+    from hexgate.security.policy_set import load_policy_set_from_dict
+
+    engine = load_policy_set_from_dict(
+        {"roles": {"default": {"guards": {"ghost_guard": {"enabled": False}}}}}
+    )
+    monkeypatch.setattr(
+        runner_mod,
+        "resolve_policy",
+        lambda name, *, api_key, client=None: ResolvedPolicy(engine, None),
+    )
+    runner = HexgateRunner(api_key="k")
+
+    with pytest.raises(GuardClosedWorldError, match="ghost_guard"):
+        runner._binding_for(_make_agent("my-agent"))
+
+
+def test_refresh_to_unknown_guard_does_not_crash_the_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A refresh that swaps in a policy naming an unknown guard must degrade to a
+    no-op run, not raise: the check is construction-time only, never on the per-run
+    wrap (review #2). Before the fix, wrap_openai_agent revalidated every run."""
+    _silence_observability(monkeypatch)
+    monkeypatch.setattr(
+        "hexgate.adapters.openai.runner.Runner.run_sync",
+        staticmethod(lambda *a, **k: "ok"),
+    )
+    from hexgate.security.policy_set import load_policy_set_from_dict
+
+    bad_engine = load_policy_set_from_dict(
+        {"roles": {"default": {"guards": {"ghost_guard": {"enabled": False}}}}}
+    )
+
+    class _BadBinding:
+        def __init__(self) -> None:
+            self.enforcer = PolicyEnforcer(bad_engine, agent_name="my-agent")
+
+        def refresh(self) -> None:  # a refresh already swapped in the bad policy
+            pass
+
+    runner = HexgateRunner(api_key="k")
+    runner._bindings["my-agent"] = _BadBinding()  # type: ignore[assignment]
+
+    result = runner.run_sync(_make_agent("my-agent"), "hi", hexgate_context=_user())
+
+    assert result == "ok"

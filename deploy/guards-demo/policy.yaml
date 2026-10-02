@@ -1,0 +1,22 @@
+# Guarded-agent demo — the project's compose entry file (deploy/guards-demo/notebook.py).
+#
+# The `guards:` block governs the plugins the agent declares (R-GUARD-006 / R-GUARD-007).
+# Two plugins, each scoped to one tool on the agent:
+#   secret_redactor — on send_message: strips a credential OUT of the args (call proceeds).
+#   secret_scrubber — on search_text: strips a credential OUT of the RESULT (call proceeds).
+# Flip either `enabled: true` -> `false` in the dashboard Policies tab, Save, and the next
+# message obeys it — the plugins are read fresh per call, so no restart.
+#
+# This is a compose `policy.yaml` entry file: deny-by-default (a tool must be granted),
+# top-level blocks apply to every agent, so `guarded_demo` is governed on register.
+version: 1
+
+guards:
+  secret_redactor:
+    enabled: true
+  secret_scrubber:
+    enabled: true
+
+tools:
+  send_message: { mode: allow }
+  search_text: { mode: allow }

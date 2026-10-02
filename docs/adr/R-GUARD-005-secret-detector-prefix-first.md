@@ -41,8 +41,9 @@ category + field + hash, never the value.
   high-value known providers are, and prefix/gated-entropy tuning is a later
   config/factory follow-up.
 - The detector is JSON-ish only — it walks `dict` / `list` / `str`. An opaque result
-  object is skipped, so `secret_watch` cannot scan it until result projection lands
-  (R-GUARD-003).
+  object is skipped, so `secret_watch` / `secret_scrubber` see through a JSON-ish
+  payload but not an opaque return; scrubbing such a type is the guard author's call
+  (R-GUARD-008).
 - PII / email is deliberately out of v1: email in arguments is routine business
   data, an observe signal or a later redactor, not a refuse.
 

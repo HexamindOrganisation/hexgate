@@ -134,41 +134,44 @@ def test_when_two_turn_keys_interleave_then_state_is_per_list() -> None:
     assert main_delta.resynced is sub_delta.resynced is False
 
 
-def test_when_the_list_is_empty_then_the_comeback_is_flagged() -> None:
-    """An empty input list leaves no prefix to mark, so the call that brings
-    the messages back restates them under ``resynced`` rather than passing them
-    off as an extension.
+def test_when_the_list_is_empty_then_the_mark_survives_for_the_comeback() -> None:
+    """An empty list is a real call with nothing to diff, so it spends its seq
+    and leaves the mark exactly as it was: the call that brings the messages
+    back is an ordinary extension.
 
-    The mark could not simply be dropped here: a cleared turn_key would be
-    byte-identical to one never seen, and the comeback would then slice from
-    zero and emit the whole history a second time with ``resynced=False`` — a
-    duplicate with nothing in ``message_seq`` for a reader to key on. Same mark
-    the fingerprinting-failure path uses, for the same reason."""
+    Neither of the alternatives works. Clearing the mark makes the turn_key
+    byte-identical to one never seen, so the comeback slices from zero and
+    emits the history twice. Clobbering it to "unmatchable", what this did
+    before, forces a needless resync."""
     cursor = MessageCursor()
     history = [_msg("a"), _msg("b")]
     cursor.advance("run-1", history)
 
     assert cursor.advance("run-1", []) == MessageDelta(
-        messages=[], seq=1, resynced=True
+        messages=[], seq=1, resynced=False
     )
 
-    comeback = cursor.advance("run-1", history)
-    assert comeback == MessageDelta(messages=history, seq=2, resynced=True)
-    # And the mark is usable again, so the next call extends rather than
-    # restates.
-    assert cursor.advance("run-1", [*history, _msg("c")]) == MessageDelta(
-        messages=[_msg("c")], seq=3, resynced=False
+    # The mark still describes ``history``, so the comeback is an extension of
+    # it: not a resync, and not a second copy of the history.
+    comeback = cursor.advance("run-1", [*history, _msg("c")])
+    assert comeback == MessageDelta(messages=[_msg("c")], seq=2, resynced=False)
+    assert cursor.advance("run-1", [*history, _msg("c"), _msg("d")]) == MessageDelta(
+        messages=[_msg("d")], seq=3, resynced=False
     )
 
 
-def test_when_the_first_call_is_empty_then_it_is_not_a_resync() -> None:
-    """Nothing has been emitted yet, so an empty list is not a restatement of
-    anything — adapters split system messages into ``system_instructions``, so
-    a call whose list holds only those hands over ``[]``."""
+def test_when_the_first_call_is_empty_then_it_keeps_seq_zero() -> None:
+    """A Google ADK request holding only a system instruction hands over
+    ``[]``. It is still the turn's first event, so it takes seq 0, the only
+    event an adapter lifts ``system_instructions`` on, and the next list is a
+    plain extension rather than a resync."""
     cursor = MessageCursor()
 
     assert cursor.advance("run-1", []) == MessageDelta(
         messages=[], seq=0, resynced=False
+    )
+    assert cursor.advance("run-1", [_msg("a")]) == MessageDelta(
+        messages=[_msg("a")], seq=1, resynced=False
     )
 
 

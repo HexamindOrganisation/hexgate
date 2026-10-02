@@ -339,6 +339,30 @@ def test_validate_reports_constraint_grammar_error_inside_role(
     assert "no recognised operator" in err["message"]
 
 
+def test_validate_reports_divergent_guard_stance(client: TestClient) -> None:
+    """A cross-role guard divergence is surfaced by /validate (R-GUARD-007). It is
+    lazy on the PolicySet, so _load_document forces it; without that the document
+    would validate here and then crash the SDK at construction (review #3)."""
+    resp = client.post(
+        f"/v1/projects/{DEFAULT_PROJECT_ID}/agents/support_bot/validate",
+        json={
+            "policy_yaml": (
+                "version: 1\n"
+                "roles:\n"
+                "  support:\n"
+                "    guards:\n"
+                "      secret_guard: { enabled: false }\n"
+                "  admin:\n"
+                "    guards:\n"
+                "      secret_guard: { enabled: true }\n"
+            )
+        },
+    )
+    body = resp.json()
+    assert body["ok"] is False
+    assert any("same stance across all roles" in e["message"] for e in body["errors"])
+
+
 def test_validate_accumulates_errors_across_roles(client: TestClient) -> None:
     """Multiple bad roles → multiple diagnostics, one per failure."""
     resp = client.post(
@@ -591,11 +615,12 @@ def _sample_manifest(
     model: str | None = None,
     system_prompt: str | None = None,
     skills: list[dict] | None = None,
+    guards: list[dict] | None = None,
 ) -> dict:
     """Minimal AgentManifest payload for register_manifest in tests.
 
-    ``skills`` stays out of the payload entirely when None — the shape every
-    framework without a skill concept sends.
+    ``skills`` / ``guards`` stay out of the payload entirely when None — the shape
+    an agent that declares none sends.
     """
     return {
         "name": name,
@@ -604,6 +629,7 @@ def _sample_manifest(
         "model": model,
         "system_prompt": system_prompt,
         **({"skills": skills} if skills is not None else {}),
+        **({"guards": guards} if guards is not None else {}),
         "tools": [
             {
                 "name": "echo",
@@ -657,6 +683,70 @@ async def test_manifest_endpoint_returns_registered_manifest_with_tools(
     assert row["manifest"]["description"] == "customer support"
     assert [t["name"] for t in row["manifest"]["tools"]] == ["echo"]
     assert row["manifest"]["tools"][0]["input_schema"]["required"] == ["msg"]
+
+
+async def test_manifest_endpoint_round_trips_declared_guards(
+    client: TestClient, session_factory
+) -> None:
+    """A registered manifest's guards survive parse → store → view, so the dashboard
+    can show which guards an agent declares (R-GUARD, guards surfaced for governance)."""
+    from hexgate_api.schemas import AgentManifest
+    from hexgate_api.features.agents.service import register_manifest
+
+    guards = [
+        {
+            "name": "secret_guard",
+            "position": "before",
+            "tool_names": ["send_update"],
+            "observe": False,
+            "kind": "official",
+            "plugin_id": "secret_guard",
+        },
+        {
+            "name": "secret_watch",
+            "position": "after",
+            "tool_names": None,
+            "observe": True,
+            "kind": "official",
+            "plugin_id": "secret_watch",
+        },
+    ]
+    async with session_factory() as session:
+        manifest = AgentManifest.model_validate(
+            _sample_manifest("support_bot", guards=guards)
+        )
+        await register_manifest(
+            session, DEFAULT_PROJECT_ID, manifest, sign=keystore_mod.keystore.sign
+        )
+
+    resp = client.get(f"/v1/projects/{DEFAULT_PROJECT_ID}/agents/manifest")
+    row = next(r for r in resp.json() if r["name"] == "support_bot")
+    got = row["manifest"]["guards"]
+    assert [g["name"] for g in got] == ["secret_guard", "secret_watch"]
+    assert got[0]["position"] == "before"
+    assert got[0]["tool_names"] == ["send_update"]
+    assert got[0]["kind"] == "official"
+    assert got[1]["observe"] is True
+    assert got[1]["tool_names"] is None
+
+
+async def test_manifest_endpoint_guards_absent_when_none_declared(
+    client: TestClient, session_factory
+) -> None:
+    """An agent that declares no guards registers with guards omitted → the view
+    returns null (not []), keeping the content hash stable (exclude_none)."""
+    from hexgate_api.schemas import AgentManifest
+    from hexgate_api.features.agents.service import register_manifest
+
+    async with session_factory() as session:
+        manifest = AgentManifest.model_validate(_sample_manifest("support_bot"))
+        await register_manifest(
+            session, DEFAULT_PROJECT_ID, manifest, sign=keystore_mod.keystore.sign
+        )
+
+    resp = client.get(f"/v1/projects/{DEFAULT_PROJECT_ID}/agents/manifest")
+    row = next(r for r in resp.json() if r["name"] == "support_bot")
+    assert row["manifest"]["guards"] is None
 
 
 async def test_manifest_endpoint_returns_latest_version(
@@ -871,6 +961,67 @@ def test_bearer_get_agent_returns_304_on_matching_etag(
         },
     )
     assert second.status_code == 304
+
+
+def test_get_agent_etag_changes_when_only_the_guard_stance_changes(
+    client: TestClient, session_factory
+) -> None:
+    """A guards-only policy edit must invalidate the bundle ETag (R-GUARD-007).
+
+    Regression: the ETag was ``sha256(compiled_wasm)``, which is byte-identical
+    whether a guard is enabled or disabled — guards are read from the signed manifest
+    at runtime, never compiled into the policy wasm. So the SDK's per-turn
+    ``If-None-Match`` got a 304 and a live agent kept running a guard the dashboard had
+    just set ``enabled: false``. The ETag is over the signed manifest now, so flipping
+    a guard yields a new ETag → a 200 carrying the new stance, not a 304.
+    """
+    import json
+
+    enabled = (
+        "version: 1\n"
+        "guards:\n  secret_guard: { enabled: true }\n"
+        "tools: { send_update: { mode: allow } }\n"
+    )
+    disabled = enabled.replace("enabled: true", "enabled: false")
+
+    def _put(policy_yaml: str) -> None:
+        r = client.put(
+            f"/v1/projects/{DEFAULT_PROJECT_ID}/agents/default",
+            headers={"X-Dev-User": DEFAULT_USER_ID},
+            json={"policy_yaml": policy_yaml},
+        )
+        assert r.status_code == 200, r.text
+
+    token = _mint_token_for_test(session_factory)
+    _put(enabled)
+    first = client.get(
+        "/v1/agents/default", headers={"Authorization": f"Bearer {token}"}
+    )
+    assert first.status_code == 200, first.text
+    etag1 = first.headers.get("etag")
+    assert etag1 is not None, first.headers
+    assert json.loads(first.json()["bundle_manifest"])["guards"]["baseline"][
+        "secret_guard"
+    ]  # enabled
+
+    # Flip the guard off and re-save → recompile. The wasm is unchanged.
+    _put(disabled)
+    second = client.get(
+        "/v1/agents/default",
+        headers={"Authorization": f"Bearer {token}", "If-None-Match": etag1},
+    )
+    assert second.status_code == 200, (
+        "a guards-only edit returned 304 — the stale (enabled) bundle is still served, "
+        "so a live agent never sees the disable"
+    )
+    etag2 = second.headers.get("etag")
+    assert etag2 is not None and etag2 != etag1
+    assert (
+        json.loads(second.json()["bundle_manifest"])["guards"]["baseline"][
+            "secret_guard"
+        ]
+        is False
+    )
 
 
 def _trivial_policy_yaml() -> str:

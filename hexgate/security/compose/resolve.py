@@ -16,7 +16,7 @@ from pydantic import ValidationError
 
 from hexgate.security.compose.grammar import Entry
 from hexgate.security.compose.imports import Loader, resolve_imports
-from hexgate.security.compose.lower import lower
+from hexgate.security.compose.lower import agent_guards, lower
 from hexgate.security.compose.parse import parse_entry
 from hexgate.security.constraints import ConstraintParseError
 from hexgate.security.linker import link_policy_set
@@ -79,10 +79,27 @@ def resolve_entry(
     # that parse/resolve failures come back as LinkError with the file named.
     try:
         per_role = lower(entry, agent)
+        # Guards are agent-level and NOT composed through the fold (they are not a
+        # capability/boundary) — inject the one agent-wide stance onto every folded
+        # role identically, so effective_guards reads it and no role can diverge
+        # (R-GUARD-006 / R-GUARD-007).
+        guards = agent_guards(entry, agent)
         by_role: dict[str, LinkResult] = {}
         effective: dict[str, AgentPolicy] = {}
         for role, (boundaries, caps) in per_role.items():
             result = link_policy_set(boundaries, caps)
+            if guards:
+                # Mutate the LinkResult's own effective (a frozen dataclass, but the
+                # dict is mutable) so BOTH views carry the stance: the policy_set below
+                # AND effective_policy_by_role — the shared serializer the platform's
+                # resolved-policy YAML and the CLI both go through. Copy the stance per
+                # role (fresh dict + fresh GuardRule instances) so the roles never
+                # share mutable state.
+                result.effective[DEFAULT_ROLE_NAME] = result.effective[
+                    DEFAULT_ROLE_NAME
+                ].model_copy(
+                    update={"guards": {n: r.model_copy() for n, r in guards.items()}}
+                )
             by_role[role] = result
             effective[role] = result.effective[DEFAULT_ROLE_NAME]
         return ProjectLinkResult(policy_set=PolicySet(effective), by_role=by_role)

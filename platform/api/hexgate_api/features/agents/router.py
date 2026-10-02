@@ -48,6 +48,25 @@ if TYPE_CHECKING:
 router = APIRouter()
 
 
+def _bundle_etag(agent: Agent) -> str | None:
+    """The conditional-GET ETag for an agent's served bundle.
+
+    Hashes the signed manifest bytes, not the wasm. The manifest carries the guard
+    enable/disable stance (R-GUARD-007) *and* the wasm_hash, so it is the one artifact
+    that changes on **any** policy edit. Keying the ETag on the wasm alone made a
+    guards-only change a no-op ETag: the wasm is byte-identical whether a guard is
+    enabled or disabled (guards are read from the manifest at runtime, never compiled
+    into the policy wasm), so the SDK's per-turn ``If-None-Match`` got a 304 and a live
+    agent kept running a guard the dashboard had just disabled. Falls back to the wasm
+    hash for an older bundle stored without its manifest, and ``None`` when nothing is
+    compiled (the pydantic-fallback path keys its own refresh off ``policy_yaml``)."""
+    if agent.bundle_manifest is not None:
+        return hashlib.sha256(agent.bundle_manifest.encode("utf-8")).hexdigest()
+    if agent.compiled_wasm is not None:
+        return hashlib.sha256(agent.compiled_wasm).hexdigest()
+    return None
+
+
 def _agent_read(agent: Agent) -> AgentRead:
     """Shared serialiser used by GET, list, and PUT — keeps the wire format aligned."""
     return AgentRead(
@@ -150,23 +169,19 @@ async def api_get_agent(
     /v1/agents/{name}`` — same response shape, project derived from
     the token instead of the URL.
 
-    Supports ETag-based conditional GETs: the response carries the
-    bundle's ``wasm_hash`` as an ``ETag`` header. A subsequent request
-    with ``If-None-Match: <wasm_hash>`` returns ``304 Not Modified``
-    when the bundle hasn't changed.
+    Supports ETag-based conditional GETs: the response carries a hash of the
+    signed manifest as an ``ETag`` header — over the manifest, not the wasm, so a
+    guards-only edit still invalidates it (see :func:`_bundle_etag`). A subsequent
+    request with a matching ``If-None-Match`` returns ``304 Not Modified``.
     """
     await ensure_default_project(session)
     agent = await get_agent(session, project_id, name)
     if agent is None:
         raise HTTPException(status_code=404, detail="agent not found")
 
-    # ETag is a quoted opaque string per RFC 7232. We use the wasm_hash
-    # (a sha256 hex digest); falls back to None when no bundle is stored.
-    bundle_hash = (
-        hashlib.sha256(agent.compiled_wasm).hexdigest()
-        if agent.compiled_wasm is not None
-        else None
-    )
+    # ETag is a quoted opaque string per RFC 7232, over the signed manifest so a
+    # guards-only edit still invalidates it (see _bundle_etag). None when unbuilt.
+    bundle_hash = _bundle_etag(agent)
     etag = f'"{bundle_hash}"' if bundle_hash else None
 
     if etag and if_none_match and if_none_match.strip() == etag:
@@ -519,7 +534,12 @@ def _load_document(
     )
 
     try:
-        return load_policy_set_from_dict(parsed), None
+        policy_set = load_policy_set_from_dict(parsed)
+        # guard_stance() is lazy, so a cross-role guard divergence (R-GUARD-007) does
+        # not surface at load — force it here so /validate and save return a 422
+        # instead of storing a policy the SDK then crashes on at construction.
+        policy_set.guard_stance()
+        return policy_set, None
     except PolicySetError as exc:
         return None, PolicyValidationError(message=str(exc))
     except ValidationError as exc:
@@ -626,19 +646,15 @@ async def api_get_agent_by_token(
     bearer-only via :func:`require_project`.
 
     ETag semantics mirror the cookie route — the SDK's per-run
-    conditional GET (``If-None-Match: <wasm_hash>`` → ``304``) costs
-    one short round-trip when the bundle hasn't changed.
+    conditional GET (``If-None-Match: <signed-manifest-hash>`` → ``304``)
+    costs one short round-trip when the bundle hasn't changed.
     """
     await ensure_default_project(session)
     agent = await get_agent(session, project_id, name)
     if agent is None:
         raise HTTPException(status_code=404, detail="agent not found")
 
-    bundle_hash = (
-        hashlib.sha256(agent.compiled_wasm).hexdigest()
-        if agent.compiled_wasm is not None
-        else None
-    )
+    bundle_hash = _bundle_etag(agent)
     etag = f'"{bundle_hash}"' if bundle_hash else None
 
     if etag and if_none_match and if_none_match.strip() == etag:

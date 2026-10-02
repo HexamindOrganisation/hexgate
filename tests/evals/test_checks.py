@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import datetime
+import json
 
 import pytest
 
 from evals.policy_writing.checks import (
+    NAME_CHECKS,
     answer_checks,
     decision_checks,
     file_checks,
+    name_checks,
     score,
     snapshot,
     superset_checks,
@@ -18,9 +21,13 @@ from evals.policy_writing.policy import effective_policy, policy_columns
 from tests.evals.helpers import (
     AGENT,
     PERMISSIVE_DEFAULT,
+    POLICY,
+    add_boundary_tool,
     by_name,
     make_modules_workspace,
     make_workspace,
+    manifest_tool,
+    write_module,
 )
 
 REFUND = {"tool": "refund_order", "args": {"order_id": "o1", "amount": 5}}
@@ -82,6 +89,129 @@ def test_when_a_role_is_missing_then_superset_fails(tmp_path) -> None:
     [check] = superset_checks({"*": policy}, [superset])
     assert not check.passed
     assert check.detail.startswith("view_orders: can't dry-run: role 'nosuch'")
+
+
+def test_name_checks_happy_path(tmp_path) -> None:
+    ws = make_workspace(tmp_path)
+    policy, _ = effective_policy(ws)
+    before = snapshot(ws)
+    checks = name_checks(policy, ws, AGENT, before, before)
+    assert [(c.name, c.passed, c.detail) for c in checks] == [
+        (n, True, "") for n in NAME_CHECKS
+    ]
+
+
+def test_when_a_module_file_declares_admission_and_reach_then_name_checks_accept_them(
+    tmp_path,
+) -> None:
+    # A module file's `admission` and `agents` blocks lower to `agent.*` keys.
+    roles = "  default: [read_only]\n  billing: [read_only, reach]\n"
+    ws = make_modules_workspace(tmp_path, roles)
+    write_module(
+        ws,
+        "capabilities/reach.yaml",
+        'admission: { mode: allow, constraints: ["args.agent == \\"shop-bot\\""] }\n'
+        "agents:\n  ops-bot: { mode: allow }\n",
+    )
+    policy, problems = effective_policy(ws, AGENT)
+    assert problems == []
+    before = snapshot(ws)
+    checks = name_checks(policy, ws, AGENT, before, before)
+    assert [(c.name, c.passed, c.detail) for c in checks] == [
+        (n, True, "") for n in NAME_CHECKS
+    ]
+
+
+def test_when_the_policy_invents_names_then_both_name_checks_fail(tmp_path) -> None:
+    policy = (
+        POLICY
+        + '      wire_transfer: { mode: allow, constraints: ["ctx.tier == 1"] }\n'
+    )
+    ws = make_workspace(tmp_path, policy)
+    policy, _ = effective_policy(ws)
+    before = snapshot(ws)
+    checks = [
+        (c.passed, c.detail) for c in name_checks(policy, ws, AGENT, before, before)
+    ]
+    assert checks == [
+        (False, "not in shop-bot's manifest: ['wire_transfer']"),
+        (False, "not in the manifest or audit.json: ['wire_transfer: ctx.tier']"),
+    ]
+
+
+def test_when_a_boundary_denies_another_agents_tool_then_name_checks_accept_it(
+    tmp_path,
+) -> None:
+    # The resolved column holds the deny; the boundary file is checked against
+    # every agent's names, so it isn't read as shop-bot inventing the tool.
+    roles = "  default: [read_only]\n  billing: [read_only, payments]\n"
+    ws = make_modules_workspace(tmp_path, roles)
+    add_boundary_tool(ws, "wire_transfer: { mode: deny }")
+    policy, problems = effective_policy(ws, AGENT)
+    assert problems == []
+    files = snapshot(ws)
+    checks = name_checks(policy, ws, AGENT, files, files)
+    assert [(c.passed, c.detail) for c in checks] == [(True, "")] * 2
+
+
+def test_when_the_case_names_no_agent_then_name_checks_accept_every_agents_names(
+    tmp_path,
+) -> None:
+    # A role or project-wide edit: ops-bot's tool and attribute are fine too.
+    policy = POLICY.replace("- args.amount <= 500", '- ctx.region == "eu"')
+    ws = make_workspace(tmp_path, policy + "      wire_transfer: { mode: allow }\n")
+    files = snapshot(ws)
+    checks = name_checks(effective_policy(ws)[0], ws, None, files, files)
+    assert all(c.passed for c in checks)
+    (ws / "policy.yaml").write_text(policy + "      teleport: { mode: allow }\n")
+    files = snapshot(ws)
+    keys = name_checks(effective_policy(ws)[0], ws, None, files, files)[0]
+    assert keys.detail == "not in any agent's manifest: ['teleport']"
+
+
+@pytest.mark.parametrize(
+    ("source", "broken"),
+    [
+        ("agents.json", ""),
+        ("agents.json", "{not json"),
+        ("agents.json", "[]"),
+        ("agents.json", '{"agents": []}'),  # not the endpoint's list
+        ("agents.json", "[{}]"),  # a view with no name
+        ("audit.json", "null"),
+        ("audit.json", "[{}]"),  # a row with no agent_name
+        ("agents.json", None),  # the starting project ships none
+    ],
+)
+def test_when_a_name_source_is_unreadable_then_both_name_checks_fail(
+    tmp_path, source, broken
+) -> None:
+    ws = make_workspace(tmp_path)
+    policy, _ = effective_policy(ws)
+    if broken is None:
+        (ws / source).unlink()
+    else:
+        (ws / source).write_text(broken)
+    after = snapshot(ws)
+    checks = name_checks(policy, ws, AGENT, after, after)
+    assert [(c.name, c.passed) for c in checks] == [(n, False) for n in NAME_CHECKS]
+    assert all(
+        c.detail.startswith("agents.json / audit.json unreadable: ") for c in checks
+    )
+
+
+@pytest.mark.parametrize("edited", ["agents.json", "audit.json"])
+def test_when_the_agent_edits_a_name_source_then_both_name_checks_fail(
+    tmp_path, edited
+) -> None:
+    ws = make_workspace(tmp_path)
+    policy, _ = effective_policy(ws)
+    before = snapshot(ws)
+    # E.g. the agent "fixes" an invented name by adding it to the manifest.
+    (ws / edited).write_text("[]")
+    checks = name_checks(policy, ws, AGENT, before, snapshot(ws))
+    assert [(c.passed, c.detail) for c in checks] == [
+        (False, f"edited during the run: ['{edited}']")
+    ] * 2
 
 
 def test_snapshot_happy_path(tmp_path) -> None:
@@ -157,6 +287,24 @@ def test_score_happy_path(tmp_path) -> None:
     }
     checks = score(case, ws, before, "Billing can refund.")
     assert [c.name for c in checks if c.passed] == [c.name for c in checks]
+    assert set(NAME_CHECKS) <= {c.name for c in checks}
+
+
+def test_when_the_agent_edits_agents_json_then_score_fails_both_name_checks(
+    tmp_path,
+) -> None:
+    ws = make_workspace(tmp_path, POLICY + "      wire_transfer: { mode: allow }\n")
+    before = snapshot(ws)
+    # The agent "fixes" its invented tool by adding it to the manifest.
+    agents = json.loads((ws / "agents.json").read_text())
+    agents[0]["manifest"]["tools"].append(manifest_tool("wire_transfer", iban="s"))
+    (ws / "agents.json").write_text(json.dumps(agents))
+    checks = by_name(score({"agent": AGENT}, ws, before, ""))
+    for name in NAME_CHECKS:
+        assert (checks[name].passed, checks[name].detail) == (
+            False,
+            "edited during the run: ['agents.json']",
+        )
 
 
 def test_when_the_policy_is_invalid_then_score_fails_valid_and_decisions(

@@ -22,6 +22,8 @@ from hexgate.adapters.pydantic_ai.tools import wrap_tools
 from hexgate.approvals import ApprovalHandler
 from hexgate.cloud.client import HexgateClient, HexgateConfig
 from hexgate.config.env import resolve_api_key
+from hexgate.guards.attach import resolve_guards
+from hexgate.guards.stance import validate_guard_policy
 from hexgate.guards.types import build_pipeline
 from hexgate.security.agent_gate import (
     warn_if_admission_unenforced,
@@ -100,7 +102,11 @@ def wrap_pydantic_agent(
     warn_if_reach_unenforced(
         resolved.engine, framework="pydantic_ai", agent_name=agent_name
     )
-    pipeline = build_pipeline(guards, observer=guard_observer)
+    # Fall back to the guards stamped on the agent (attach_guards), so a stamped agent
+    # served without an explicit guards= runs the guards its manifest declares.
+    resolved_guards = resolve_guards(agent, guards)
+    pipeline = build_pipeline(resolved_guards, observer=guard_observer)
+    validate_guard_policy(resolved.engine, resolved_guards, agent_name=agent_name)
     cloned_agent = _clone_agent_with_tools(
         agent,
         wrap_tools(
