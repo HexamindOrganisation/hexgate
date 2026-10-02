@@ -145,6 +145,11 @@ def test_score_happy_path(tmp_path) -> None:
     }
     checks = score(case, ws, before, "Billing can refund.")
     assert [c.name for c in checks if c.passed] == [c.name for c in checks]
+    names = {c.name for c in checks}
+    assert {
+        "only known tools, skills and guards",
+        "only known arguments and attributes",
+    } <= names
 
 
 def test_when_the_policy_is_invalid_then_score_fails_valid_and_decisions(

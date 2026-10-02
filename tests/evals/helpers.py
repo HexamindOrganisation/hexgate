@@ -19,9 +19,10 @@ def manifest_tool(name: str, **args: str) -> dict:
     }
 
 
-def agent_view(name: str, *tools: dict) -> dict:
-    # One `GET /agents/manifest` entry (AgentManifestView), as `agents_list` returns it.
-    manifest = {"name": name, "framework": "langchain", "tools": list(tools)}
+def agent_view(name: str, *tools: dict, **fields) -> dict:
+    # One `GET /projects/{id}/agents/manifest` entry (AgentManifestView), as
+    # `agents_list` returns it; `fields` adds manifest fields (skills, guards).
+    manifest = {"name": name, "framework": "langchain", "tools": list(tools), **fields}
     return {
         "name": name,
         "manifest": manifest,
@@ -36,9 +37,17 @@ AGENTS = [
         AGENT,
         manifest_tool("view_orders", customer_id="string"),
         manifest_tool("refund_order", order_id="string", amount="number"),
+        skills=[{"name": "pdf", "description": "pdf"}],
+        guards=[{"name": "redact_pii", "position": "after", "kind": "custom"}],
     ),
-    # Another agent in the project: its tools and attributes are not shop-bot's.
-    agent_view("ops-bot", manifest_tool("wire_transfer", iban="string")),
+    # Another agent in the project: its names are not shop-bot's.
+    agent_view(
+        "ops-bot",
+        manifest_tool("wire_transfer", iban="string"),
+        skills=[{"name": "ledger", "description": "ledger"}],
+    ),
+    # An agent with no registered version yet: the endpoint returns no manifest.
+    {**agent_view("draft-bot"), "manifest": None},
 ]
 
 

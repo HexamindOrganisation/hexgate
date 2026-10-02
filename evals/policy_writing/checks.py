@@ -16,7 +16,7 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
-from evals.policy_writing.names import load_known_names, unknown_refs, unknown_tools
+from evals.policy_writing.names import load_known_names, unknown_keys, unknown_refs
 from evals.policy_writing.policy import (
     LABELS,
     RANK,
@@ -121,7 +121,7 @@ def superset_checks(policy: Policy | None, supersets: list[dict]) -> list[Check]
 
 def _name_checks_failed(detail: str) -> list[Check]:
     return [
-        Check("only known tools", False, detail),
+        Check("only known tools, skills and guards", False, detail),
         Check("only known arguments and attributes", False, detail),
     ]
 
@@ -129,23 +129,24 @@ def _name_checks_failed(detail: str) -> list[Check]:
 def name_checks(
     policy: Policy, ws: Path, agent: str, before: dict[str, str], after: dict[str, str]
 ) -> list[Check]:
-    """Only tools, arguments and attributes the MCP would show for `agent`."""
+    """Only names the MCP would show for `agent`: tools, skills, guards, arguments
+    and caller attributes."""
     # The names are read after the run, so an edit to either file could
     # whitelist an invented name: trust them only if they are untouched.
     edited = [f for f in ("agents.json", "audit.json") if before.get(f) != after.get(f)]
     if edited:
         return _name_checks_failed(f"edited during the run: {edited}")
     try:
-        tools, attrs = load_known_names(ws, agent)
+        known = load_known_names(ws, agent)
     except (OSError, ValueError, KeyError, TypeError) as exc:
         return _name_checks_failed(
             f"agents.json / audit.json unreadable: {exc!r}"[:300]
         )
-    unknown = unknown_tools(policy.payload, tools)
-    refs = unknown_refs(policy.payload, tools, attrs)
+    unknown = unknown_keys(policy.policy_set, known)
+    refs = unknown_refs(policy.policy_set, known)
     return [
         Check(
-            "only known tools",
+            "only known tools, skills and guards",
             not unknown,
             f"not in {agent}'s manifest: {unknown}" if unknown else "",
         ),
