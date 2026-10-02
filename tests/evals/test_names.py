@@ -171,6 +171,8 @@ def test_when_an_attribute_is_in_no_audit_row_then_unknown_refs_flags_it(
         "attrs.vip == true",
         'role.name == "x"',
         'tool.name == "x"',
+        "role.amount == 1",  # dotted even when the rest names a real argument
+        "tool.amount == 1",
     ],
 )
 def test_when_a_path_never_matches_then_unknown_refs_flags_it(constraint) -> None:

@@ -90,7 +90,9 @@ def test_name_checks_happy_path(tmp_path) -> None:
     policy, _ = effective_policy(ws)
     before = snapshot(ws)
     checks = name_checks(policy, ws, AGENT, before, before)
-    assert [(c.name, c.passed) for c in checks] == [(n, True) for n in NAME_CHECKS]
+    assert [(c.name, c.passed, c.detail) for c in checks] == [
+        (n, True, "") for n in NAME_CHECKS
+    ]
 
 
 def test_when_a_module_tree_lowers_agent_keys_then_name_checks_accept_them(
@@ -108,7 +110,9 @@ def test_when_a_module_tree_lowers_agent_keys_then_name_checks_accept_them(
     assert "agent.run" in policy.policy_set.policy_for("billing").tools
     before = snapshot(ws)
     checks = name_checks(policy, ws, AGENT, before, before)
-    assert [(c.name, c.passed) for c in checks] == [(n, True) for n in NAME_CHECKS]
+    assert [(c.name, c.passed, c.detail) for c in checks] == [
+        (n, True, "") for n in NAME_CHECKS
+    ]
 
 
 def test_when_the_policy_invents_names_then_both_name_checks_fail(tmp_path) -> None:
@@ -151,7 +155,11 @@ def test_when_a_name_source_is_unreadable_then_both_name_checks_fail(
     else:
         (ws / source).write_text(broken)
     after = snapshot(ws)
-    assert not any(c.passed for c in name_checks(policy, ws, AGENT, after, after))
+    checks = name_checks(policy, ws, AGENT, after, after)
+    assert not any(c.passed for c in checks)
+    assert all(
+        c.detail.startswith("agents.json / audit.json unreadable: ") for c in checks
+    )
 
 
 @pytest.mark.parametrize("edited", ["agents.json", "audit.json"])
