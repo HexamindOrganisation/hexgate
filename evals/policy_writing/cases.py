@@ -25,16 +25,8 @@ from pydantic import (
     model_validator,
 )
 
-from evals.policy_writing.checks import (
-    AGENT_REACH_ARGS,
-    SYNTHETIC_ARGS,
-    load_known_names,
-    snapshot,
-)
-from hexgate.egress.model import connect_to_args, http_to_args
-from hexgate.manifest.models import AgentManifest, InputSchema
-from hexgate.security.models import AGENT_REACH_PREFIXES, AGENT_RUN_TOOL
-from hexgate.security.network import NET_HTTP_REQUEST, NET_TCP_CONNECT
+from evals.policy_writing.calls import bad_values, complete, load_known, unknown_names
+from evals.policy_writing.checks import snapshot
 
 HERE = Path(__file__).resolve().parent
 
@@ -185,177 +177,37 @@ def _project(root: Path, case_dir: Path, named: str | None) -> Path:
     return shared / named
 
 
-def _unknown_names(
-    call: dict, tools: dict[str, set[str]], attrs: set[str], agents: set[str]
-) -> list:
-    """Tool, argument and attribute names a dry-run call uses that the agent lacks.
-
-    The SDK denies an unknown tool, a reach to an agent no rule names, and a
-    constraint on an argument the call doesn't carry, so a misspelt name would
-    pass every `deny` check.
-    """
-    tool = call["tool"]
-    if tool in SYNTHETIC_ARGS:
-        known = SYNTHETIC_ARGS[tool]
-    elif tool.startswith(AGENT_REACH_PREFIXES):  # agent.<via>:<target>
-        if tool.split(":", 1)[1] not in agents:
-            return [tool]
-        known = AGENT_REACH_ARGS
-    elif tool in tools:
-        known = tools[tool]
-    else:
-        return [tool]
-    bad = [f"args.{a}" for a in call.get("args", {}) if a not in known]
-    return bad + [f"ctx.{a}" for a in call.get("attributes", {}) if a not in attrs]
-
-
-# JSON-schema types an argument value must have; bool is not a number in JSON.
-_TYPES = {
-    "string": str,
-    "number": (int, float),
-    "integer": int,
-    "boolean": bool,
-    "array": list,
-    "object": dict,
-}
-
-
-def _bad_args(call: dict, schema: InputSchema) -> list[str]:
-    """Required arguments a manifest tool's call leaves out, and mistyped values.
-
-    The SDK denies a call whose constraint reads an argument it doesn't carry
-    or compares a value of the wrong type, so either would pass every `deny`
-    check. YAML reads a quoted `"51"` as a string and a blank `amount:` as null.
-    """
-    args = call.get("args", {})
-    bad = [f"args.{a} missing" for a in schema.required if a not in args]
-    for name, value in args.items():
-        kind = schema.properties[name].type
-        # Adapters record "string" for any schema without one top-level type
-        # (`int | None`, `bool | None`, a list, a model), so it says nothing; a
-        # precise type rules out null too, since a nullable one is never precise.
-        want = None if kind == "string" else _TYPES.get(kind)
-        if want and not _is_a(value, want):
-            bad.append(f"args.{name}={value!r} is not {kind}")
-    return bad
-
-
-def _is_a(value, want) -> bool:
-    # bool is an int in Python, not a number in JSON.
-    return isinstance(value, want) and (want is bool) == isinstance(value, bool)
-
-
-def _json_type(value) -> str:
-    for name, kind in _TYPES.items():
-        if name != "integer" and _is_a(value, kind):
-            return name
-    return "null"
-
-
-def _is_json(value) -> bool:
-    # What a real call's arguments can hold; YAML also makes dates and times.
-    if isinstance(value, list):
-        return all(_is_json(v) for v in value)
-    if isinstance(value, dict):
-        return all(isinstance(k, str) and _is_json(v) for k, v in value.items())
-    return value is None or isinstance(value, (str, int, float, bool))
-
-
-def _complete_synthetic(call: dict, agent: str) -> list[str]:
-    """Fill the arguments the gates always send; what a call contradicts or lacks.
-
-    `agent.run` carries the running agent, and `agent.<via>:<target>` also its
-    target and via (hexgate/security/agent_gate.py); `net.tcp_connect` carries
-    protocol "tcp" (hexgate/egress/tcp.py). Every `net.*` call carries an int
-    port and the arguments below (hexgate/egress/model.py). A dry-run without
-    them, or with other values, is denied by any constraint on them, so it
-    would pass every `deny` check.
-    """
-    tool, args = call["tool"], call.setdefault("args", {})
-    bad = [f"args.{k}={v!r} is not JSON" for k, v in args.items() if not _is_json(v)]
-    if tool.startswith(AGENT_REACH_PREFIXES):
-        via, target = tool.removeprefix("agent.").split(":", 1)
-        sent, needed = {"agent": agent, "target": target, "via": via}, ()
-    elif tool == AGENT_RUN_TOOL:
-        sent, needed = {"agent": agent}, ()
-    elif tool == NET_TCP_CONNECT:
-        sent, needed = {"protocol": "tcp"}, ("host", "port")
-    elif tool == NET_HTTP_REQUEST:
-        # What the proxy builds from the request line, so the rest must agree.
-        if args.get("method") == "CONNECT":
-            needed = ("host", "port")
-            ok = isinstance(args.get("host"), str) and _is_a(args.get("port"), int)
-            sent = connect_to_args(args["host"], args["port"]) if ok else {}
-        else:
-            needed = ("method", "url")
-            ok = all(isinstance(args.get(k), str) for k in needed)
-            sent = http_to_args(args["method"], args["url"]) if ok else {}
-    else:
-        return bad
-    bad += [f"args.{k} missing" for k in needed if args.get(k) is None]
-    port = args.get("port")
-    if port is not None and (isinstance(port, bool) or not isinstance(port, int)):
-        bad.append(f"args.port={port!r} is not an int")
-    bad += [
-        f"args.{k}={args[k]!r}, sent {v!r}"
-        for k, v in sent.items()
-        if args.get(k, v) != v
-    ]
-    args.update(sent)
-    return bad
+def _calls(expect: dict) -> list[dict]:
+    """Every dry-run call a case lists: its decisions and its superset probes."""
+    probes = [p for s in expect.get("superset", []) for p in s["probes"]]
+    return expect.get("decisions", []) + probes
 
 
 def _complete_calls(path: Path, agent: str, calls: list[dict]) -> None:
     for call in calls:
-        bad = _complete_synthetic(call, agent)
+        bad = complete(call, agent)
         if bad:
             raise CaseError(f"{path}: {call['tool']}: not what {agent} sends: {bad}")
 
 
-def _check_names(path: Path, case: dict) -> None:
-    """The case's agent is in agents.json, and its calls use only names it knows."""
-    agent, expect = case["agent"], case["expect"]
+def _check_calls(path: Path, case: dict) -> None:
+    """The case's agent is in agents.json, and its calls use only what it knows."""
+    agent = case["agent"]
     try:
-        tools, attrs = load_known_names(case["project"], agent)
-        views = json.loads((case["project"] / "agents.json").read_text())
-        agents = {v["name"] for v in views}
-        [view] = [v for v in views if v["name"] == agent]
-        schemas = {
-            t.name: t.input_schema
-            for t in AgentManifest.model_validate(view["manifest"]).tools
-        }
-        audit = case["project"] / "audit.json"
-        rows = json.loads(audit.read_text()) if audit.exists() else []
-        rows = rows["rows"] if isinstance(rows, dict) else rows
-        # The JSON types each attribute arrived with: a quoted "2" for an int
-        # attribute is denied by `ctx.clearance >= 2` whatever the threshold.
-        seen: dict[str, set[str]] = {}
-        for row in rows:
-            if row["agent_name"] == agent:
-                for k, v in (row.get("attributes") or {}).items():
-                    seen.setdefault(k, set()).add(_json_type(v))
+        known = load_known(case["project"], agent)
     # No agents.json, bad JSON, an unknown agent, a row or view of the wrong shape.
     except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
         raise CaseError(f"{path}: {exc}") from exc
-    calls = expect.get("decisions", []) + [
-        p for s in expect.get("superset", []) for p in s["probes"]
-    ]
-    for call in calls:
-        unknown = _unknown_names(call, tools, attrs, agents)
+    for call in _calls(case["expect"]):
+        unknown = unknown_names(call, known)
         if unknown:
             raise CaseError(f"{path}: {call['tool']}: unknown to {agent}: {unknown}")
-        bad = _bad_args(call, schemas[call["tool"]]) if call["tool"] in schemas else []
-        bad += [
-            f"ctx.{k}={v!r} is not {' or '.join(sorted(seen[k]))}"
-            for k, v in call.get("attributes", {}).items()
-            if _json_type(v) not in seen[k]
-        ]
+        bad = bad_values(call, known)
         if bad:
             raise CaseError(f"{path}: {call['tool']}: not {agent}'s schema: {bad}")
 
 
-def _load_case(root: Path, case_dir: Path) -> dict:
-    path = case_dir / "case.yaml"
+def _check_entries(case_dir: Path) -> None:
     # A misnamed folder (`wrong_answers/`) would never be scored.
     stray = sorted(
         p.name
@@ -364,6 +216,9 @@ def _load_case(root: Path, case_dir: Path) -> dict:
     )
     if stray:
         raise CaseError(f"{case_dir}: not part of a case: {stray}")
+
+
+def _parse(path: Path) -> CaseFile:
     raw = _read_yaml(path)
     if not isinstance(raw, dict):
         raise CaseError(f"{path}: not a YAML mapping")
@@ -371,25 +226,13 @@ def _load_case(root: Path, case_dir: Path) -> dict:
     if shadowing:
         raise CaseError(f"{path}: {shadowing} come from the path, not the file")
     try:
-        parsed = CaseFile.model_validate(raw)
+        return CaseFile.model_validate(raw)
     except ValidationError as exc:
         raise CaseError(f"{path}: {exc}") from exc
 
-    case = {
-        "id": f"{case_dir.parent.name}/{case_dir.name}",
-        "category": case_dir.parent.name,
-        "agent": parsed.agent,
-        "request": parsed.request,
-        "held_out": parsed.held_out,
-        "note": parsed.note,
-        "dir": case_dir,
-        "project": _project(root, case_dir, parsed.starting_project),
-        # As written, so `checks.score` reads only the keys the case sets.
-        "expect": parsed.expect.model_dump(exclude_unset=True),
-    }
-    expect = case["expect"]
 
-    files = starting_files(case)
+def _protect(path: Path, expect: dict, files: dict[str, str]) -> None:
+    """Add the protected starting files the case doesn't list to `unchanged`."""
     changed = set(expect.get("changed", []))
     unchanged = list(expect.get("unchanged", []))
     # A misspelt path is missing before and after, so its check always passes.
@@ -403,31 +246,51 @@ def _load_case(root: Path, case_dir: Path) -> dict:
     if unchanged:
         expect["unchanged"] = unchanged
 
+
+def _load_preserved(project: Path, files: dict[str, str], agent: str) -> list[dict]:
+    """The project's `preserve.yaml` calls, completed like the case's own."""
     # A `preserve.yml` or `Preserve.yaml` would be skipped (or, on a
     # case-insensitive disk, read) and also handed to the agent as a project file.
     misnamed = sorted(
         rel for rel in files if "/" not in rel and Path(rel.lower()).stem == "preserve"
     )
     if misnamed:
-        raise CaseError(f"{case['project']}: {misnamed} should be {PRESERVE}")
+        raise CaseError(f"{project}: {misnamed} should be {PRESERVE}")
+    preserve = project / PRESERVE
+    if not preserve.is_file():
+        return []
+    try:
+        decisions = _DECISIONS.validate_python(_read_yaml(preserve) or [])
+    except ValidationError as exc:
+        raise CaseError(f"{preserve}: {exc}") from exc
+    preserved = _DECISIONS.dump_python(decisions, exclude_unset=True)
+    _complete_calls(preserve, agent, preserved)
+    return preserved
+
+
+def _load_case(root: Path, case_dir: Path) -> dict:
+    path = case_dir / "case.yaml"
+    _check_entries(case_dir)
+    parsed = _parse(path)
+    case = {
+        "id": f"{case_dir.parent.name}/{case_dir.name}",
+        "category": case_dir.parent.name,
+        **parsed.model_dump(include={"agent", "request", "held_out", "note"}),
+        "dir": case_dir,
+        "project": _project(root, case_dir, parsed.starting_project),
+        # As written, so `checks.score` reads only the keys the case sets.
+        "expect": parsed.expect.model_dump(exclude_unset=True),
+    }
+    expect = case["expect"]
+    files = starting_files(case)
+    _protect(path, expect, files)
     # Before the merge, so a preserved call and the case's own entry for it
     # compare equal however much of the gate's arguments each spells out.
-    _complete_calls(
-        path,
-        case["agent"],
-        expect.get("decisions", [])
-        + [p for s in expect.get("superset", []) for p in s["probes"]],
-    )
-    preserve = case["project"] / PRESERVE
-    if preserve.is_file():
-        try:
-            decisions = _DECISIONS.validate_python(_read_yaml(preserve) or [])
-        except ValidationError as exc:
-            raise CaseError(f"{preserve}: {exc}") from exc
-        preserved = _DECISIONS.dump_python(decisions, exclude_unset=True)
-        _complete_calls(preserve, case["agent"], preserved)
+    _complete_calls(path, case["agent"], _calls(expect))
+    preserved = _load_preserved(case["project"], files, case["agent"])
+    if preserved:
         expect["decisions"] = _merge_preserved(expect.get("decisions", []), preserved)
-    _check_names(path, case)
+    _check_calls(path, case)
     return case
 
 
