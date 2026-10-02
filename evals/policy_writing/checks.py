@@ -16,7 +16,12 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
-from evals.policy_writing.names import load_known_names, unknown_keys, unknown_refs
+from evals.policy_writing.names import (
+    NAME_SOURCES,
+    load_known_names,
+    unknown_keys,
+    unknown_refs,
+)
 from evals.policy_writing.policy import (
     LABELS,
     RANK,
@@ -119,11 +124,14 @@ def superset_checks(policy: Policy | None, supersets: list[dict]) -> list[Check]
     return checks
 
 
+NAME_CHECKS = (
+    "only known tools, skills and guards",
+    "only known arguments and attributes",
+)
+
+
 def _name_checks_failed(detail: str) -> list[Check]:
-    return [
-        Check("only known tools, skills and guards", False, detail),
-        Check("only known arguments and attributes", False, detail),
-    ]
+    return [Check(name, False, detail) for name in NAME_CHECKS]
 
 
 def name_checks(
@@ -133,7 +141,7 @@ def name_checks(
     and caller attributes."""
     # The names are read after the run, so an edit to either file could
     # whitelist an invented name: trust them only if they are untouched.
-    edited = [f for f in ("agents.json", "audit.json") if before.get(f) != after.get(f)]
+    edited = [f for f in NAME_SOURCES if before.get(f) != after.get(f)]
     if edited:
         return _name_checks_failed(f"edited during the run: {edited}")
     try:
@@ -144,16 +152,15 @@ def name_checks(
         )
     unknown = unknown_keys(policy.policy_set, known)
     refs = unknown_refs(policy.policy_set, known)
+    keys, args = NAME_CHECKS
     return [
         Check(
-            "only known tools, skills and guards",
+            keys,
             not unknown,
             f"not in {agent}'s manifest: {unknown}" if unknown else "",
         ),
         Check(
-            "only known arguments and attributes",
-            not refs,
-            f"not in the manifest or audit.json: {refs}" if refs else "",
+            args, not refs, f"not in the manifest or audit.json: {refs}" if refs else ""
         ),
     ]
 

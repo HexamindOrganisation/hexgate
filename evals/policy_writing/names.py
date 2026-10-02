@@ -52,6 +52,10 @@ SYNTHETIC_ARGS = {
 ROOTS = {"args", "ctx", "run", "role", "tool"}
 
 
+# The files the names come from, the starting project's stand-ins for the MCP.
+NAME_SOURCES = ("agents.json", "audit.json")
+
+
 @dataclass(frozen=True)
 class KnownNames:
     tools: dict[str, set[str]]  # tool name: its argument names

@@ -36,7 +36,9 @@ from tests.evals.helpers import (
 
 # shop-bot's manifest, as `load_known_names` reads it from the fixture.
 TOOLS = {"view_orders": {"customer_id"}, "refund_order": {"order_id", "amount"}}
-KNOWN = KnownNames(TOOLS, {"department"}, {"pdf"}, {"redact_pii"})
+KNOWN = KnownNames(
+    tools=TOOLS, attrs={"department"}, skills={"pdf"}, guards={"redact_pii"}
+)
 ALLOW = {"mode": "allow"}
 
 
@@ -273,11 +275,13 @@ async def test_when_the_tcp_proxy_decides_then_its_args_match_tcp_connect() -> N
     await proxy.start()
     try:
         reader, writer = await asyncio.open_connection("127.0.0.1", proxy.port)
-        await reader.read()  # the deny closes the connection
+        # The deny closes the connection.
+        assert await asyncio.wait_for(reader.read(100), timeout=5) == b""
         writer.close()
     finally:
         await proxy.stop()
         upstream.close()
+        await upstream.wait_closed()
     assert seen[0].arguments.keys() == SYNTHETIC_ARGS["net.tcp_connect"]
 
 

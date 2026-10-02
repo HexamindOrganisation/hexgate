@@ -107,11 +107,15 @@ roles:
 """
 
 
+def _write_name_sources(ws: Path) -> None:
+    (ws / "agents.json").write_text(json.dumps(AGENTS))
+    (ws / "audit.json").write_text(json.dumps(AUDIT))
+
+
 def make_workspace(tmp_path: Path, policy: str = POLICY) -> Path:
     ws = tmp_path / "ws"
     ws.mkdir()
-    (ws / "agents.json").write_text(json.dumps(AGENTS))
-    (ws / "audit.json").write_text(json.dumps(AUDIT))
+    _write_name_sources(ws)
     (ws / "policy.yaml").write_text(policy)
     return ws
 
@@ -124,8 +128,7 @@ def make_modules_workspace(tmp_path: Path, roles: str) -> Path:
     ws = tmp_path / "ws"
     (ws / "policies" / "boundaries").mkdir(parents=True)
     (ws / "policies" / "capabilities").mkdir()
-    (ws / "agents.json").write_text(json.dumps(AGENTS))
-    (ws / "audit.json").write_text(json.dumps(AUDIT))
+    _write_name_sources(ws)
     (ws / "policies" / "boundaries" / "org.yaml").write_text(
         "default_policy: { mode: allow }\n"
         "tools:\n"

@@ -7,6 +7,7 @@ import datetime
 import pytest
 
 from evals.policy_writing.checks import (
+    NAME_CHECKS,
     answer_checks,
     decision_checks,
     file_checks,
@@ -123,13 +124,24 @@ def test_when_the_policy_invents_names_then_both_name_checks_fail(tmp_path) -> N
     ]
 
 
-@pytest.mark.parametrize("broken", ["", "{not json", "[]"])
-def test_when_agents_json_is_unreadable_then_both_name_checks_fail(
-    tmp_path, broken
+@pytest.mark.parametrize(
+    ("source", "broken"),
+    [
+        ("agents.json", ""),
+        ("agents.json", "{not json"),
+        ("agents.json", "[]"),
+        ("agents.json", '{"agents": []}'),  # not the endpoint's list
+        ("agents.json", "[{}]"),  # a view with no name
+        ("audit.json", "null"),
+        ("audit.json", "[{}]"),  # a row with no agent_name
+    ],
+)
+def test_when_a_name_source_is_unreadable_then_both_name_checks_fail(
+    tmp_path, source, broken
 ) -> None:
     ws = make_workspace(tmp_path)
     policy, _ = effective_policy(ws)
-    (ws / "agents.json").write_text(broken)
+    (ws / source).write_text(broken)
     after = snapshot(ws)
     assert not any(c.passed for c in name_checks(policy, ws, AGENT, after, after))
 
@@ -222,11 +234,7 @@ def test_score_happy_path(tmp_path) -> None:
     }
     checks = score(case, ws, before, "Billing can refund.")
     assert [c.name for c in checks if c.passed] == [c.name for c in checks]
-    names = {c.name for c in checks}
-    assert {
-        "only known tools, skills and guards",
-        "only known arguments and attributes",
-    } <= names
+    assert set(NAME_CHECKS) <= {c.name for c in checks}
 
 
 def test_when_the_policy_is_invalid_then_score_fails_valid_and_decisions(
