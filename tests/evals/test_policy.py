@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import datetime
+
 import pytest
 
 from evals.policy_writing.policy import CaseError, decide, effective_policy, outcome
@@ -12,6 +14,25 @@ from tests.evals.helpers import (
     make_modules_workspace,
     make_workspace,
 )
+
+# Reach declared for handoff only, not for agent-as-tool.
+HANDOFF_ONLY = """\
+version: 1
+roles:
+  default:
+    tools:
+      view_orders: { mode: allow }
+    agents:
+      billing-bot: { mode: allow, via: [handoff] }
+"""
+
+DATED_CONSTRAINT = """\
+version: 1
+roles:
+  default:
+    tools:
+      view_orders: { mode: allow, constraints: ['args.since >= "2026-01-01"'] }
+"""
 
 
 @pytest.mark.parametrize(
@@ -27,6 +48,55 @@ def test_decide_happy_path(tmp_path, role, amount, expected) -> None:
     call = {"tool": "refund_order", "args": {"order_id": "o1", "amount": amount}}
     verdict = decide(policy, role, call)
     assert verdict.outcome == expected, verdict.reason
+
+
+@pytest.mark.parametrize("tool", ["agent.run", "agent.handoff:ops-bot"])
+def test_when_admission_or_handoff_is_not_declared_then_decide_allows(
+    tmp_path, tool
+) -> None:
+    # As the runtime: the gate checks nothing, and the call goes through.
+    policy, _ = effective_policy(make_workspace(tmp_path))
+    assert decide(policy, "default", {"tool": tool}).outcome == DecisionOutcome.ALLOW
+
+
+@pytest.mark.parametrize("tool", ["agent.tool:ops-bot", "skill:pdf"])
+def test_when_a_tool_reach_or_skill_gate_is_not_declared_then_decide_raises(
+    tmp_path, tool
+) -> None:
+    # The runtime decides such a call under the tool's own name instead.
+    policy, _ = effective_policy(make_workspace(tmp_path))
+    with pytest.raises(CaseError, match="dry-run that tool instead"):
+        decide(policy, "default", {"tool": tool})
+
+
+def test_when_a_gate_is_declared_then_decide_evaluates_it(tmp_path) -> None:
+    policy, problems = effective_policy(make_workspace(tmp_path, HANDOFF_ONLY))
+    assert problems == []
+    handoff = decide(policy, "default", {"tool": "agent.handoff:ops-bot"})
+    assert handoff.outcome == DecisionOutcome.DENY  # declared, and ops-bot unlisted
+    with pytest.raises(CaseError, match="agent-as-tool reach"):
+        decide(policy, "default", {"tool": "agent.tool:ops-bot"})
+
+
+def test_when_an_argument_is_a_yaml_date_then_decide_reads_it_as_text(
+    tmp_path,
+) -> None:
+    # As `policy test --args` (JSON) would give it.
+    policy, problems = effective_policy(make_workspace(tmp_path, DATED_CONSTRAINT))
+    assert problems == []
+    call = {"tool": "view_orders", "args": {"since": datetime.date(2026, 2, 1)}}
+    assert decide(policy, "default", call).outcome == DecisionOutcome.ALLOW
+
+
+def test_when_an_attribute_is_a_yaml_date_then_decide_reads_it_as_text(
+    tmp_path,
+) -> None:
+    policy, _ = effective_policy(make_workspace(tmp_path))
+    call = {
+        "tool": "view_orders",
+        "attributes": {"hired_on": datetime.date(2026, 1, 1)},
+    }
+    assert decide(policy, "default", call).outcome == DecisionOutcome.ALLOW
 
 
 def test_when_the_role_is_undefined_then_decide_raises(tmp_path) -> None:
@@ -50,6 +120,15 @@ def test_when_a_lint_warns_then_effective_policy_fails(tmp_path) -> None:
     policy, problems = effective_policy(make_workspace(tmp_path, PERMISSIVE_DEFAULT))
     assert policy is None
     assert any("permissive-default" in p for p in problems)
+
+
+def test_when_the_policy_holds_a_yaml_date_then_effective_policy_fails(
+    tmp_path,
+) -> None:
+    dated = "version: 1\nroles:\n  default:\n    consts:\n      cutoff: 2026-01-01\n"
+    policy, problems = effective_policy(make_workspace(tmp_path, dated))
+    assert policy is None
+    assert problems[0].startswith("can't compile:")
 
 
 def test_when_policy_yaml_is_empty_then_it_is_an_empty_policy(tmp_path) -> None:
