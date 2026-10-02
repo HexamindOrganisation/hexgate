@@ -31,7 +31,9 @@ version: 1
 roles:
   default:
     tools:
-      view_orders: { mode: allow, constraints: ['args.since >= "2026-01-01"'] }
+      view_orders:
+        mode: allow
+        constraints: ['args.since >= "2026-01-01"', 'ctx.hired_on >= "2026-01-01"']
 """
 
 
@@ -78,25 +80,20 @@ def test_when_a_gate_is_declared_then_decide_evaluates_it(tmp_path) -> None:
         decide(policy, "default", {"tool": "agent.tool:ops-bot"})
 
 
-def test_when_an_argument_is_a_yaml_date_then_decide_reads_it_as_text(
+def test_when_a_call_holds_yaml_dates_then_decide_compares_them_as_text(
     tmp_path,
 ) -> None:
-    # As `policy test --args` (JSON) would give it.
+    # As `policy test --args` / `--attributes` (JSON) would give them.
     policy, problems = effective_policy(make_workspace(tmp_path, DATED_CONSTRAINT))
     assert problems == []
-    call = {"tool": "view_orders", "args": {"since": datetime.date(2026, 2, 1)}}
-    assert decide(policy, "default", call).outcome == DecisionOutcome.ALLOW
-
-
-def test_when_an_attribute_is_a_yaml_date_then_decide_reads_it_as_text(
-    tmp_path,
-) -> None:
-    policy, _ = effective_policy(make_workspace(tmp_path))
-    call = {
-        "tool": "view_orders",
-        "attributes": {"hired_on": datetime.date(2026, 1, 1)},
-    }
-    assert decide(policy, "default", call).outcome == DecisionOutcome.ALLOW
+    february, december = datetime.date(2026, 2, 1), datetime.date(2025, 12, 1)
+    call = {"tool": "view_orders", "args": {"since": february}}
+    for hired_on, expected in [
+        (february, DecisionOutcome.ALLOW),
+        (december, DecisionOutcome.DENY),
+    ]:
+        dated = {**call, "attributes": {"hired_on": hired_on}}
+        assert decide(policy, "default", dated).outcome == expected
 
 
 def test_when_the_role_is_undefined_then_decide_raises(tmp_path) -> None:
