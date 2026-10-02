@@ -11,6 +11,7 @@ from hexgate.security import (
     ModuleContent,
     PolicySet,
     analyze,
+    analyze_policy,
     check,
     check_project,
     link_policy_set,
@@ -574,3 +575,103 @@ def test_run_constraints_are_not_linted_as_unknown_args():
     lints = check([boundary], [cap], manifest=manifest)
 
     assert not [lint for lint in lints if lint.code == "unknown-arg"]
+
+
+# --- analyze_policy: every check over a resolved policy set ---
+
+
+def _guarded_manifest(*tools, guards=()):
+    """``_manifest`` plus declared guard names."""
+    manifest = _manifest(*tools)
+    manifest.guards = [SimpleNamespace(name=g) for g in guards]
+    return manifest
+
+
+def _loaded(doc):
+    from hexgate.security import load_policy_set_from_dict
+
+    return load_policy_set_from_dict(doc)
+
+
+def test_analyze_policy_happy_path():
+    ps = _loaded(
+        {
+            "guards": {"secret_redactor": {"enabled": False}},
+            "tools": {"refund": {"mode": "allow", "constraints": ["args.amount < 5"]}},
+        }
+    )
+    manifest = _guarded_manifest(("refund", ["amount"]), guards=["secret_redactor"])
+    assert analyze_policy(ps, manifest=manifest) == []
+
+
+def test_when_no_manifest_then_manifest_checks_are_skipped():
+    ps = _loaded(
+        {
+            "guards": {"secret_redacter": {"enabled": False}},
+            "tools": {"refund": {"mode": "allow", "constraints": ["args.amont < 5"]}},
+        }
+    )
+    assert analyze_policy(ps) == []
+    manifest = _guarded_manifest(("refund", ["amount"]), guards=["secret_redactor"])
+    assert {lint.code for lint in analyze_policy(ps, manifest=manifest)} == {
+        "unknown-guard",
+        "unknown-arg",
+    }
+
+
+def test_when_roles_disagree_on_guards_then_guard_divergence():
+    ps = _loaded(
+        {
+            "roles": {
+                "default": {"guards": {"g": {"enabled": False}}},
+                "admin": {"guards": {"g": {"enabled": True}}},
+            }
+        }
+    )
+    lints = analyze_policy(ps, source="policy.yaml")
+    assert [(lint.code, lint.severity, lint.source) for lint in lints] == [
+        ("guard-divergence", "error", "policy.yaml")
+    ]
+
+
+def test_when_an_arg_is_unknown_then_severity_follows_the_rule_mode():
+    ps = _loaded(
+        {
+            "tools": {
+                "refund": {"mode": "allow", "constraints": ["args.amont < 5"]},
+                "wipe": {"mode": "deny", "constraints": ["args.forse == true"]},
+            }
+        }
+    )
+    manifest = _guarded_manifest(("refund", ["amount"]), ("wipe", ["force"]))
+    lints = analyze_policy(ps, manifest=manifest)
+    # A deny that can't match fails open (error); a grant that can't fails closed.
+    assert [(lint.code, lint.tool, lint.severity) for lint in lints] == [
+        ("unknown-arg", "wipe", "error"),
+        ("unknown-arg", "refund", "warning"),
+    ]
+    assert all(lint.role == "default" for lint in lints)
+
+
+def test_when_a_tool_is_unknown_then_severity_follows_the_rule_mode():
+    ps = _loaded({"tools": {"refnd": {"mode": "allow"}, "wipe_db": {"mode": "deny"}}})
+    lints = analyze_policy(ps, manifest=_guarded_manifest(("refund", [])))
+    assert {(lint.code, lint.tool, lint.severity) for lint in lints} == {
+        ("unknown-tool", "refnd", "warning"),
+        ("unknown-tool", "wipe_db", "info"),
+    }
+
+
+def test_when_a_key_is_not_a_manifest_tool_then_no_unknown_tool():
+    ps = _loaded(
+        {
+            "tools": {
+                "net.http_request": {"mode": "allow"},
+                "net.tcp_connect": {"mode": "allow"},
+                "agent.run": {"mode": "allow"},
+                "agent.tool:other": {"mode": "allow"},
+            },
+            "_resolved": True,
+        }
+    )
+    assert analyze_policy(ps, manifest=_guarded_manifest()) == []
