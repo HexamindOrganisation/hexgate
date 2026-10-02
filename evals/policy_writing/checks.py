@@ -10,6 +10,7 @@ as the case says, and the final answer mentions what the case requires.
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import json
 from dataclasses import dataclass
@@ -17,12 +18,15 @@ from pathlib import Path
 
 from evals.policy_writing.names import load_known_names, unknown_refs, unknown_tools
 from evals.policy_writing.policy import (
+    LABELS,
     RANK,
     CaseError,
     Policy,
     decide,
     effective_policy,
+    outcome,
 )
+from hexgate.security.decision import Verdict
 
 
 @dataclass
@@ -53,33 +57,41 @@ def decision_checks(policy: Policy | None, decisions: list[dict]) -> list[Check]
     for d in decisions:
         # `roles` expands one entry over several roles; `expect` may list the
         # acceptable outcomes ("deny or approval_required").
-        wanted = d["expect"] if isinstance(d["expect"], list) else [d["expect"]]
+        labels = d["expect"] if isinstance(d["expect"], list) else [d["expect"]]
+        wanted = {outcome(label) for label in labels}
         for role in d.get("roles") or [d["role"]]:
             name = f"decision: {_call_label(role, d)}"
             if policy is None:
                 checks.append(Check(name, False, "policy invalid"))
                 continue
             try:
-                got, reason = decide(policy, role, d)
+                verdict = decide(policy, role, d)
             except CaseError as exc:
                 checks.append(Check(name, False, f"can't dry-run: {exc}"))
                 continue
-            ok = got in wanted
-            detail = (
-                ""
-                if ok
-                else f"expected {' or '.join(wanted)}, got {got}: {reason[:300]}"
-            )
-            checks.append(Check(name, ok, detail))
+            if verdict.outcome in wanted:
+                checks.append(Check(name, True))
+                continue
+            got = LABELS[verdict.outcome]
+            detail = f"expected {' or '.join(labels)}, got {got}: {_reason(verdict)}"
+            checks.append(Check(name, False, detail[:400]))
     return checks
 
 
+def _reason(verdict: Verdict) -> str:
+    return "; ".join([verdict.reason, *map(str, verdict.violations or [])])
+
+
+# default=str: a case loader keeps an unquoted YAML date as a date.
+_dump = functools.partial(json.dumps, sort_keys=True, default=str)
+
+
 def _call_label(role: str, d: dict) -> str:
-    label = f"{role} → {d['tool']}({json.dumps(d.get('args') or {}, sort_keys=True)})"
+    label = f"{role} → {d['tool']}({_dump(d.get('args', {}))})"
     if d.get("attributes"):
-        label += f" ctx={json.dumps(d['attributes'], sort_keys=True)}"
+        label += f" ctx={_dump(d['attributes'])}"
     if d.get("run_facts"):
-        label += f" run={json.dumps(d['run_facts'], sort_keys=True)}"
+        label += f" run={_dump(d['run_facts'])}"
     return label
 
 
@@ -94,13 +106,15 @@ def superset_checks(policy: Policy | None, supersets: list[dict]) -> list[Check]
         worse = []
         for p in s["probes"]:
             try:
-                lo, _ = decide(policy, s["narrower"], p)
-                hi, _ = decide(policy, s["wider"], p)
+                lo = decide(policy, s["narrower"], p).outcome
+                hi = decide(policy, s["wider"], p).outcome
             except CaseError as exc:  # e.g. a missing role: the probe fails
                 worse.append(f"{p['tool']}: can't dry-run: {exc}")
                 continue
             if RANK[hi] < RANK[lo]:
-                worse.append(f"{p['tool']}: {s['narrower']}={lo}, {s['wider']}={hi}")
+                worse.append(
+                    f"{p['tool']}: {s['narrower']}={LABELS[lo]}, {s['wider']}={LABELS[hi]}"
+                )
         checks.append(Check(name, not worse, "; ".join(worse)))
     return checks
 
@@ -180,6 +194,9 @@ def answer_checks(expect: dict, answer: str) -> list[Check]:
 
 
 def score(case: dict, ws: Path, before: dict[str, str], answer: str) -> list[Check]:
+    """Every check for `case`, as the case loader returns it (PR 2), which has
+    already validated its shape: calls are mappings, outcomes and mention lists
+    well-formed. `before` is the starting project's `snapshot`."""
     expect = case.get("expect", {})
     policy, problems = effective_policy(ws, case["agent"])
     valid = Check("valid", not problems, "\n".join(problems)[-800:])

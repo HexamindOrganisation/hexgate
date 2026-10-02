@@ -28,8 +28,14 @@ from hexgate.security import (
     load_roles,
     resolve_for_project,
 )
-from hexgate.security.analyzer import SEVERITY_RANK, check_default_role_exposure
+from hexgate.security.analyzer import (
+    SEVERITY_RANK,
+    PolicyLint,
+    check_default_role_exposure,
+)
 from hexgate.security.constraints import ConstraintParseError
+from hexgate.security.decision import Verdict
+from hexgate.security.models import PolicyMode
 from hexgate.security.modules import DEFAULT_AGENT
 from hexgate.security.testing import run_namespace
 
@@ -42,7 +48,7 @@ class Policy:
     """The policy the checks run against.
 
     `payload` is the document: `policy.yaml` as written, or a module tree's
-    resolved roles (read by the known-names checks). `policy_set` is it
+    resolved roles (read by the known-names checks, PR 18). `policy_set` is it
     loaded, ready to evaluate.
     """
 
@@ -50,13 +56,18 @@ class Policy:
     policy_set: PolicySet
 
 
-OUTCOMES = {
+# A case file names outcomes by their policy mode, not by the enum's values.
+LABELS: dict[DecisionOutcome, PolicyMode] = {
     DecisionOutcome.ALLOW: "allow",
     DecisionOutcome.DENY: "deny",
     DecisionOutcome.NEEDS_APPROVAL: "approval_required",
 }
 # How freely each outcome lets a call through, for comparing two roles.
-RANK = {"deny": 0, "approval_required": 1, "allow": 2}
+RANK = {
+    DecisionOutcome.DENY: 0,
+    DecisionOutcome.NEEDS_APPROVAL: 1,
+    DecisionOutcome.ALLOW: 2,
+}
 
 
 class CaseError(ValueError):
@@ -66,8 +77,16 @@ class CaseError(ValueError):
 _ATTRIBUTES = TypeAdapter(dict[str, ContextAttributeValue])
 
 
-def decide(policy: Policy, role: str, d: dict) -> tuple[str, str]:
-    """Dry-run one call: (outcome, reason). Same inputs as `hexgate policy test`.
+_BY_LABEL = {label: value for value, label in LABELS.items()}
+
+
+def outcome(label: str) -> DecisionOutcome:
+    """The outcome a case file names (`allow`, `deny`, `approval_required`)."""
+    return _BY_LABEL[label]
+
+
+def decide(policy: Policy, role: str, d: dict) -> Verdict:
+    """Dry-run one call, with the same inputs as `hexgate policy test`.
 
     Raises `CaseError` where the CLI would refuse the call. An undefined role is
     one, rather than the `default` fallback: a case naming a role the policy
@@ -76,23 +95,21 @@ def decide(policy: Policy, role: str, d: dict) -> tuple[str, str]:
     if role not in policy.policy_set:
         raise CaseError(f"role {role!r} not in policy ({policy.policy_set.roles})")
     try:
-        attributes = _ATTRIBUTES.validate_python(d.get("attributes") or {})
+        attributes = _ATTRIBUTES.validate_python(d.get("attributes", {}))
         # Over a zeroed run, so an unset `run.*` path reads 0, not missing.
-        run = run_namespace(d["tool"], **(d.get("run_facts") or {}))
+        run = run_namespace(d["tool"], **d.get("run_facts", {}))
     except (ValidationError, ValueError) as exc:
         raise CaseError(str(exc)) from exc
-    verdict = policy.policy_set.evaluate(
+    return policy.policy_set.evaluate(
         role=role,
         tool=d["tool"],
-        args=d.get("args") or {},
+        args=d.get("args", {}),
         attributes=attributes,
         run=run,
     )
-    reason = "; ".join([verdict.reason, *map(str, verdict.violations or [])])
-    return OUTCOMES[verdict.outcome], reason
 
 
-def _lint_failures(lints) -> list[str]:
+def _lint_failures(lints: list[PolicyLint]) -> list[str]:
     # A warning fails, not only an error: the write-policy skill tells the agent
     # to validate with `--max-severity warning` (for `policy check` on a module
     # tree it doesn't yet; the spec aligns the skill in PR 11).
