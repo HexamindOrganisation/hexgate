@@ -2,8 +2,10 @@
 
 `effective_policy` runs what `validate` (single file) or `check` + `resolve`
 (module tree) runs, failing on lint warnings; `decide` runs what `test` runs,
-with the CLI's input checks, except that an undeclared admission or handoff
-gate allows the call, as the runtime does, where `test` would deny it.
+with the CLI's input checks. On an opt-in gate the policy never declares, it
+follows the runtime where `test` would deny: an admission or handoff call is
+allowed, and an agent-as-tool or skill call is refused as a case error, since
+the runtime decides it under the tool's own name.
 """
 
 from __future__ import annotations
@@ -117,6 +119,12 @@ def _passes_unchecked(policy_set: PolicySet, tool: str) -> bool:
     return is_agent_via_key(tool, "handoff") and not policy_set.declares_reach()
 
 
+def _as_json(value: dict) -> dict:
+    """`value` as `policy test --args` / `--attributes` receive it, through JSON:
+    an unquoted YAML date becomes its string, so `>= "2026-01-01"` compares alike."""
+    return json.loads(json.dumps(value, default=str))
+
+
 def decide(policy: Policy, role: str, d: dict) -> Verdict:
     """Dry-run one call, with the same inputs as `hexgate policy test`.
 
@@ -127,7 +135,7 @@ def decide(policy: Policy, role: str, d: dict) -> Verdict:
     if role not in policy.policy_set:
         raise CaseError(f"role {role!r} not in policy ({policy.policy_set.roles})")
     try:
-        attributes = _ATTRIBUTES.validate_python(d.get("attributes", {}))
+        attributes = _ATTRIBUTES.validate_python(_as_json(d.get("attributes", {})))
         # Over a zeroed run, so an unset `run.*` path reads 0, not missing.
         run = run_namespace(d["tool"], **d.get("run_facts", {}))
     except (ValidationError, ValueError) as exc:
@@ -142,9 +150,7 @@ def decide(policy: Policy, role: str, d: dict) -> Verdict:
     return policy.policy_set.evaluate(
         role=role,
         tool=d["tool"],
-        # As JSON, the way `policy test --args` receives them: an unquoted YAML
-        # date becomes its string, so `args.since >= "2026-01-01"` compares alike.
-        args=json.loads(json.dumps(d.get("args", {}), default=str)),
+        args=_as_json(d.get("args", {})),
         attributes=attributes,
         run=run,
     )
