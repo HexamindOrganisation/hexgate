@@ -63,6 +63,21 @@ if TYPE_CHECKING:  # avoid importing the manifest package eagerly
     from hexgate.manifest.models import AgentManifest
 
 Severity = Literal["error", "warning", "info"]
+LintCode = Literal[
+    "ambiguous-guard",
+    "constraint-erased",
+    "dead-grant",
+    "guard-divergence",
+    "implicit-default",
+    "link-error",
+    "no-default-role",
+    "permissive-default",
+    "redundant-grant",
+    "unknown-arg",
+    "unknown-guard",
+    "unknown-tool",
+    "unused-capability",
+]
 SEVERITY_RANK: dict[Severity, int] = {"error": 0, "warning": 1, "info": 2}
 
 
@@ -74,7 +89,7 @@ class PolicyLint:
     YAML position tracking in the loader. ``tier`` / ``tool`` are set when known.
     """
 
-    code: str
+    code: LintCode
     severity: Severity
     message: str
     source: str | None = None

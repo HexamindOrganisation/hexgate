@@ -13,7 +13,7 @@ import hashlib
 import json
 import logging
 from collections.abc import Iterable
-from dataclasses import asdict
+from typing import TYPE_CHECKING
 
 import yaml
 from sqlalchemy.exc import IntegrityError
@@ -22,6 +22,9 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from hexgate_api.core.ids import new_id
 from hexgate_api.models import PolicyFile, PolicyModule, RoleBinding, utcnow
+
+if TYPE_CHECKING:  # the SDK is imported lazily at run time
+    from hexgate.security import PolicyLint
 
 logger = logging.getLogger("hexgate.platform.policy_modules")
 
@@ -761,28 +764,26 @@ async def resolve_auto(
     return await resolve(session, project_id, agent=agent)
 
 
-async def check_auto(session: AsyncSession, project_id: str) -> list[dict]:
+async def check_auto(session: AsyncSession, project_id: str) -> list[PolicyLint]:
     """Lints for the check endpoint — compose (a resolution error, else the SDK's
     ``analyze_policy`` findings) or tier (analyzer lints), from a single files
-    read. Returns uniform ``PolicyLintOut``-shaped dicts so the router builds them
-    the same way for both stores."""
+    read. Both stores return SDK ``PolicyLint``s, so the router builds the
+    response the same way for each."""
     files = await _files_map(session, project_id)
     if ENTRY_FILE in files:
         try:
             resolved = _resolve_all_agents_files(files)
-            return await _compose_findings(session, project_id, files, resolved)
+            return await _compose_lints(session, project_id, files, resolved)
         except compose_error_types() as exc:
             return [_link_error(str(exc))]
-    return [_lint_dict(lint) for lint in await check(session, project_id)]
+    return await check(session, project_id)
 
 
-def _lint_dict(lint) -> dict:
-    """An SDK ``PolicyLint`` as a ``PolicyLintOut``-shaped dict."""
-    return asdict(lint)
+def _link_error(message: str) -> PolicyLint:
+    """A project that doesn't compose, reported as one error lint."""
+    from hexgate.security import PolicyLint
 
-
-def _link_error(message: str) -> dict:
-    return {"code": "link-error", "severity": "error", "message": message}
+    return PolicyLint("link-error", "error", message)
 
 
 def _resolve_all_agents_files(files: dict[str, str]) -> dict:
@@ -793,17 +794,18 @@ def _resolve_all_agents_files(files: dict[str, str]) -> dict:
     }
 
 
-async def _compose_findings(
+async def _compose_lints(
     session: AsyncSession, project_id: str, files: dict[str, str], resolved: dict
-) -> list[dict]:
-    """The SDK's ``analyze_policy`` findings for every agent the entry declares
-    (``resolved``) and every registered agent (the ones ``recompile_project``
-    builds a bundle for), each against its latest registered manifest; a declared
-    agent that never registered gets no manifest checks. The ``"*"`` view has no manifest, so it gets the manifest-free checks. Raises
+) -> list[PolicyLint]:
+    """The ``PolicyLint``s ``analyze_policy`` reports for every agent the entry
+    declares (``resolved``) and every registered agent (the ones
+    ``recompile_project`` builds a bundle for), each against its latest registered
+    manifest; a declared agent that never registered gets no manifest checks. The
+    ``"*"`` view has no manifest, so it gets the manifest-free checks. Raises
     :func:`compose_error_types` when a registered agent doesn't resolve.
 
-    A named agent's finding is prefixed with the agent and dropped only when the
-    ``"*"`` view already reported it (a top-level rule every agent shares) — two
+    A named agent's lint is prefixed with the agent and dropped only when the
+    ``"*"`` view already reported it (a top-level rule every agent shares), so two
     named agents with the same defect each report it."""
     from dataclasses import replace
 
@@ -826,7 +828,7 @@ async def _compose_findings(
             if key(lint) not in shared:
                 lints.append(replace(lint, message=f"agent {agent!r}: {lint.message}"))
     lints.sort(key=lambda lint: SEVERITY_RANK[lint.severity])
-    return [_lint_dict(lint) for lint in lints]
+    return lints
 
 
 async def compose_preview(
@@ -836,27 +838,24 @@ async def compose_preview(
     name: str,
     content: str,
     agent: str = DEFAULT_AGENT,
-) -> dict:
+) -> tuple[dict | None, list[PolicyLint]]:
     """Resolve the project with a draft ``name``=``content`` overlaid — the
-    editor's live preview. Returns the requested agent's effective policy, or an
-    error lint. Validates *every* declared agent (like the save-time 409 check) so
+    editor's live preview. Returns ``(resolved, lints)``: the requested agent's
+    effective policy (``None`` when it doesn't compose) and the lints. Validates *every* declared agent (like the save-time 409 check) so
     the preview and the save agree — a draft that breaks a different agent still
     previews as an error, not falsely clean. The lints are the same findings
     :func:`check_auto` returns for the saved project."""
     files = {**await _files_map(session, project_id), name: content}
     if ENTRY_FILE not in files:
-        return {
-            "resolved": None,
-            "lints": [_link_error(f"no entry file {ENTRY_FILE!r} in this project")],
-        }
+        return None, [_link_error(f"no entry file {ENTRY_FILE!r} in this project")]
     try:
         # Every declared agent, so the preview and the save agree.
         resolved = _resolve_all_agents_files(files)
         requested = resolved.get(agent) or _resolve_files(files, agent)
-        lints = await _compose_findings(session, project_id, files, resolved)
+        lints = await _compose_lints(session, project_id, files, resolved)
     except compose_error_types() as exc:
-        return {"resolved": None, "lints": [_link_error(str(exc))]}
-    return {"resolved": roles_json(requested), "lints": lints}
+        return None, [_link_error(str(exc))]
+    return roles_json(requested), lints
 
 
 def _graph_from(agent_names, resolve_for_agent, role: str | None = None) -> dict:
