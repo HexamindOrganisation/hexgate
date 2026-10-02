@@ -40,7 +40,6 @@ from hexgate.security.decision import Verdict
 from hexgate.security.models import (
     AGENT_RUN_TOOL,
     PolicyMode,
-    is_agent_reach_key,
     is_agent_via_key,
     is_skill_key,
 )
@@ -93,31 +92,29 @@ def outcome(label: str) -> DecisionOutcome:
     return _BY_LABEL[label]
 
 
-def _undeclared_gate(policy_set: PolicySet, tool: str) -> Verdict | None:
-    """What the runtime does with a call on an opt-in gate the policy never declares.
+def _undeclared_by_name(policy_set: PolicySet, tool: str) -> str | None:
+    """The gate `tool` belongs to, if the runtime would decide it by another name.
 
-    An undeclared admission or handoff gate checks nothing: the call goes through
-    (agent_gate.py, the runners' handoff seam). An undeclared agent-as-tool or
-    skill gate isn't checked under this key either, but the call is then decided
-    under the tool's own name (guards/runner.py, `policy_key or call.tool_name`),
-    so this key can't predict it: the case should dry-run that tool instead.
-    Returns None when the gate is declared, or `tool` isn't a gate key.
+    An undeclared agent-as-tool or skill gate isn't checked under its key: the
+    call is decided under the tool's own name (guards/runner.py, `policy_key or
+    call.tool_name`), so this key can't predict it.
     """
-    if tool == AGENT_RUN_TOOL and not policy_set.declares_admission():
-        return Verdict(DecisionOutcome.ALLOW, reason="admission not declared")
     if is_agent_via_key(tool, "tool") and not policy_set.declares_tool_reach():
-        raise CaseError(
-            f"{tool}: agent-as-tool reach isn't declared, so the runtime decides "
-            "this call under the tool's own name; dry-run that tool instead"
-        )
-    if is_agent_reach_key(tool) and not policy_set.declares_reach():
-        return Verdict(DecisionOutcome.ALLOW, reason="reach not declared")
+        return "agent-as-tool reach"
     if is_skill_key(tool) and not policy_set.declares_skills():
-        raise CaseError(
-            f"{tool}: skills aren't declared, so the runtime decides this read "
-            "under the file tool's own name; dry-run that tool instead"
-        )
+        return "skills"
     return None
+
+
+def _passes_unchecked(policy_set: PolicySet, tool: str) -> bool:
+    """Whether `tool` is on an admission or handoff gate the policy never declares.
+
+    Those gates check nothing then, and the call goes through (agent_gate.py, the
+    runners' handoff seam); evaluating the key would deny it instead.
+    """
+    if tool == AGENT_RUN_TOOL:
+        return not policy_set.declares_admission()
+    return is_agent_via_key(tool, "handoff") and not policy_set.declares_reach()
 
 
 def decide(policy: Policy, role: str, d: dict) -> Verdict:
@@ -135,8 +132,13 @@ def decide(policy: Policy, role: str, d: dict) -> Verdict:
         run = run_namespace(d["tool"], **d.get("run_facts", {}))
     except (ValidationError, ValueError) as exc:
         raise CaseError(str(exc)) from exc
-    if verdict := _undeclared_gate(policy.policy_set, d["tool"]):
-        return verdict
+    if gate := _undeclared_by_name(policy.policy_set, d["tool"]):
+        raise CaseError(
+            f"{d['tool']}: {gate} isn't declared, so the runtime decides this call "
+            "under the tool's own name; dry-run that tool instead"
+        )
+    if _passes_unchecked(policy.policy_set, d["tool"]):
+        return Verdict(DecisionOutcome.ALLOW, reason="gate not declared")
     return policy.policy_set.evaluate(
         role=role,
         tool=d["tool"],
@@ -163,6 +165,9 @@ def _load(payload: dict) -> tuple[PolicySet | None, list[str]]:
     """What `hexgate policy validate` checks: load, compile, lint the roles."""
     try:
         policy_set = load_policy_set_from_dict(payload)
+    except POLICY_ERRORS as exc:
+        return None, [str(exc)]
+    try:
         # Compile too, so a policy the build would reject doesn't pass.
         compile_to_rego(payload)
     except POLICY_ERRORS as exc:
