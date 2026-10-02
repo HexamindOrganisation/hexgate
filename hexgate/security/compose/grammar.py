@@ -10,7 +10,7 @@ Shape (scope by depth — a block keyword is a sibling of the ``agents``/``roles
 name-map, never a key inside it):
 
     version, import, export          # top-level only
-    boundary / tools / reach / mcp / admission   # at any scope → that scope
+    boundary / tools / reach / mcp / admission / skills   # at any scope → that scope
     agents: { <name>: agent-body }   # top level only; body may add roles:
     roles:  { <name>: role-body }    # agent-body only
 
@@ -31,7 +31,7 @@ from pydantic import (
     model_validator,
 )
 
-from hexgate.security.models import AgentVia, GuardRule
+from hexgate.security.models import AgentVia, GuardRule, SkillVia
 
 # Keywords that are structural, so an agent or role may not be *named* one — a
 # `roles: { tools: … }` would be unreadable even though the parser could tell it
@@ -46,6 +46,7 @@ RESERVED_NAMES = frozenset(
         "reach",
         "mcp",
         "admission",
+        "skills",
         "guards",
         "agents",
         "roles",
@@ -111,6 +112,37 @@ class CeilingSpec(_ConstraintsMixin):
     mode: CeilingMode = "allow"
 
 
+def _all_skill_levels() -> list[SkillVia]:
+    return ["instructions", "resource", "script"]
+
+
+class _SkillLevelsMixin(_ConstraintsMixin):
+    """``via`` names the disclosure levels a skill rule governs, as on the
+    single-file :class:`~hexgate.security.models.SkillPolicy` — spelled ``via``
+    (not ``as``) so a ``skills:`` block pastes between the two formats unchanged.
+    Emptiness and duplicates are left to ``SkillPolicy``, which the lowering builds."""
+
+    via: list[SkillVia] = Field(default_factory=_all_skill_levels)
+
+    @field_validator("via", mode="before")
+    @classmethod
+    def _one_or_many(cls, v: object) -> object:
+        return [v] if isinstance(v, str) else v
+
+
+class SkillGrantSpec(_SkillLevelsMixin):
+    """A ``skills`` grant. Grants only ever allow or gate on approval."""
+
+    mode: GrantMode = "allow"
+
+
+class SkillCeilingSpec(_SkillLevelsMixin):
+    """A ``boundary.skills`` entry — a ceiling per level: permits up to a
+    constraint, or subtracts (``deny``); it never grants."""
+
+    mode: CeilingMode = "allow"
+
+
 class BoundaryBlock(BaseModel):
     """A ceiling block. ``default_policy`` is fail-closed deny by construction, so
     a tool (or reach edge) it does not list is denied — the closed-world posture.
@@ -129,6 +161,10 @@ class BoundaryBlock(BaseModel):
     # like reach — with no admission ceiling, an authored admission grant is
     # intersected to deny, so a boundary must permit admission to allow it.
     admission: CeilingSpec | None = None
+    # The ceiling on skills, per level. Closed-world like reach: under a ceiling
+    # boundary, a skill (or one level of it) the boundary does not list is denied
+    # even if a role grants it — so a boundary must permit a skill to allow it.
+    skills: dict[str, SkillCeilingSpec] = Field(default_factory=dict)
 
 
 class _GrantScope(BaseModel):
@@ -151,6 +187,10 @@ class _GrantScope(BaseModel):
     # before a run accrues, so run counters read zero — a run budget belongs on a
     # tool or reach, not admission.
     admission: GrantSpec | None = None
+    # Which named skills this scope's role may reach, per disclosure level. Lowers
+    # to skill:/skill.resource:/skill.script: keys (closed-world once any role
+    # declares one), boundary-ceilinged like reach.
+    skills: dict[str, SkillGrantSpec] = Field(default_factory=dict)
     imports: list[str] = Field(default_factory=list, alias="import")
 
     # Resolved leaf fragments spliced at this scope — populated by the import
