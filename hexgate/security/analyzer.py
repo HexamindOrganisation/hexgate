@@ -16,9 +16,12 @@ a module). This module runs over a **successfully linked** bundle and reports th
 - **unknown-guard** / **ambiguous-guard** — a baseline ``guards:`` rule that names a
   guard the manifest doesn't declare, or names one declared more than once
   (:func:`lint_guards`). These run over a resolved ``PolicySet`` + manifest, not the
-  module pipeline (guards live in a single-file policy; modules reject the block), so
-  they are invoked from ``hexgate policy validate --manifest`` rather than
-  :func:`analyze`.
+  module pipeline (guards live in a single-file policy; modules reject the block).
+- **guard-divergence** — roles resolve to different guard settings, which the
+  agent-level guard stance cannot represent.
+
+:func:`analyze_policy` is the one entry point over a resolved ``PolicySet``: every
+check that applies to it, with the manifest-dependent ones gated on a manifest.
 
 Every :class:`PolicyLint` carries the ``source`` file it attributes to — the same
 contract the CLI (`hexgate policy check`) and the dashboard editor both consume.
@@ -42,6 +45,7 @@ from hexgate.security.linker import (
     resolve_for_project,
     resolve_role_map,
 )
+from hexgate.security.models import is_agent_key, is_skill_key
 from hexgate.security.modules import (
     DEFAULT_AGENT,
     GRANT_MODES,
@@ -52,12 +56,28 @@ from hexgate.security.modules import (
     ProjectLinkResult,
     RoleMatrix,
 )
+from hexgate.security.network import NET_HTTP_REQUEST, NET_TCP_CONNECT
 from hexgate.security.policy_set import DEFAULT_ROLE_NAME, PolicySet, PolicySetError
 
 if TYPE_CHECKING:  # avoid importing the manifest package eagerly
     from hexgate.manifest.models import AgentManifest
 
 Severity = Literal["error", "warning", "info"]
+LintCode = Literal[
+    "ambiguous-guard",
+    "constraint-erased",
+    "dead-grant",
+    "guard-divergence",
+    "implicit-default",
+    "link-error",
+    "no-default-role",
+    "permissive-default",
+    "redundant-grant",
+    "unknown-arg",
+    "unknown-guard",
+    "unknown-tool",
+    "unused-capability",
+]
 SEVERITY_RANK: dict[Severity, int] = {"error": 0, "warning": 1, "info": 2}
 
 
@@ -69,7 +89,7 @@ class PolicyLint:
     YAML position tracking in the loader. ``tier`` / ``tool`` are set when known.
     """
 
-    code: str
+    code: LintCode
     severity: Severity
     message: str
     source: str | None = None
@@ -411,24 +431,27 @@ def _drift(
             for tool, tp in module.policy.tools.items():
                 if tool not in known_tools:
                     out.append(
-                        PolicyLint(
-                            code="unknown-tool",
-                            severity=_unknown_tool_severity(tier, tp.mode),
-                            message=(
-                                f"{module.name!r} references tool {tool!r}, which "
-                                f"the agent's manifest doesn't declare"
-                            ),
+                        _unknown_tool(
+                            owner=repr(module.name),
                             source=module.source,
                             tier=tier,
                             tool=tool,
+                            severity=_unknown_tool_severity(tier, tp.mode),
                         )
                     )
                     continue
-                arg_severity: Severity = (
-                    "error" if (tier == "boundary" and tp.mode == "deny") else "warning"
-                )
                 out += _unknown_args(
-                    module, tier, tool, tp, tool_props[tool], arg_severity
+                    owner=repr(module.name),
+                    source=module.source,
+                    tier=tier,
+                    tool=tool,
+                    tool_policy=tp,
+                    valid_args=tool_props[tool],
+                    severity=(
+                        "error"
+                        if (tier == "boundary" and tp.mode == "deny")
+                        else "warning"
+                    ),
                 )
     return out
 
@@ -513,15 +536,45 @@ def lint_guards(
     return out
 
 
+def _unknown_tool(
+    *,
+    owner: str,
+    source: str | None,
+    tier: LayerKind | None,
+    tool: str,
+    severity: Severity,
+    role: str | None = None,
+) -> PolicyLint:
+    """A rule naming a tool the agent's manifest doesn't declare."""
+    return PolicyLint(
+        code="unknown-tool",
+        severity=severity,
+        message=(
+            f"{owner} references tool {tool!r}, which the agent's manifest "
+            "doesn't declare"
+        ),
+        source=source,
+        tier=tier,
+        tool=tool,
+        role=role,
+    )
+
+
 def _unknown_args(
-    module: ModuleContent,
-    tier: LayerKind,
+    *,
+    owner: str,
+    source: str | None,
+    tier: LayerKind | None,
     tool: str,
     tool_policy: Any,
     valid_args: set[str],
     severity: Severity,
+    role: str | None = None,
 ) -> list[PolicyLint]:
-    """Constraint ``args.<x>`` paths where ``<x>`` isn't a parameter of the tool."""
+    """Constraint ``args.<x>`` paths where ``<x>`` isn't a parameter of the tool.
+
+    ``owner`` names what holds the rule in the message (a module, or a role of a
+    resolved policy)."""
     out: list[PolicyLint] = []
     flagged: set[str] = set()
     for raw in tool_policy.constraints:
@@ -536,12 +589,13 @@ def _unknown_args(
                         code="unknown-arg",
                         severity=severity,
                         message=(
-                            f"{module.name!r} constrains {tool!r} on args.{arg}, "
+                            f"{owner} constrains {tool!r} on args.{arg}, "
                             f"which the tool doesn't accept"
                         ),
-                        source=module.source,
+                        source=source,
                         tier=tier,
                         tool=tool,
+                        role=role,
                     )
                 )
     return out
@@ -661,3 +715,97 @@ def check_default_role_exposure(policy_set: PolicySet) -> list[PolicyLint]:
             )
         )
     return lints
+
+
+# ---------------------------------------------------------------------------
+# The one entry point over a resolved policy set. A caller (the platform's compose
+# preview/check and agent /validate today; the CLI, the MCP and the eval scorer
+# next, #303) gathers its inputs and
+# calls this, so a check added here reaches every caller routed through it.
+# ---------------------------------------------------------------------------
+
+# Synthetic egress tools: enforced like tools, but never in a manifest's tool list.
+_EGRESS_TOOLS = frozenset({NET_HTTP_REQUEST, NET_TCP_CONNECT})
+
+
+def _is_manifest_tool_key(key: str) -> bool:
+    """Whether a resolved ``tools`` key should name a manifest tool. Lowered
+    agent (``agent.run`` / reach) and skill keys and the egress tools never do."""
+    return not (key in _EGRESS_TOOLS or is_agent_key(key) or is_skill_key(key))
+
+
+def analyze_policy(
+    policy_set: PolicySet,
+    *,
+    manifest: AgentManifest | None = None,
+    source: str | None = None,
+) -> list[PolicyLint]:
+    """Every check over a resolved policy set, most-severe first.
+
+    Manifest-free: ``guard-divergence`` and the ``default``-role exposure lints.
+    With ``manifest``: ``unknown-guard`` / ``ambiguous-guard`` and the
+    ``unknown-tool`` / ``unknown-arg`` drift. ``source`` attributes the findings
+    to the file the policy came from.
+    """
+    lints = _guard_divergence(policy_set, source=source)
+    lints += check_default_role_exposure(policy_set)
+    if manifest is not None:
+        lints += lint_guards(policy_set, manifest, source=source)
+        lints += _resolved_drift(policy_set, manifest, source=source)
+    return sorted(lints, key=lambda lint: SEVERITY_RANK[lint.severity])
+
+
+def _guard_divergence(policy_set: PolicySet, *, source: str | None) -> list[PolicyLint]:
+    """Roles that set different guard settings. The runtime builds one guard
+    pipeline per agent, so the loader raises on this at construction."""
+    try:
+        policy_set.guard_stance()
+    except PolicySetError as exc:
+        return [PolicyLint("guard-divergence", "error", str(exc), source=source)]
+    return []
+
+
+def _resolved_drift(
+    policy_set: PolicySet,
+    manifest: AgentManifest,
+    *,
+    source: str | None,
+) -> list[PolicyLint]:
+    """Tools and arguments each resolved role names that the manifest lacks.
+
+    The resolved form of :func:`_drift`: ceilings are already folded in, so
+    severity follows the rule's own mode. A deny on a missing tool protects
+    nothing (info), a grant of one never fires (warning). An arg typo in a deny
+    stops the deny from matching, which fails open (error); in a grant it fails
+    closed (warning).
+    """
+    tool_props = {t.name: set(t.input_schema.properties) for t in manifest.tools}
+    out: list[PolicyLint] = []
+    for role in policy_set.roles:
+        for tool, tp in policy_set.policy_for(role).tools.items():
+            if not _is_manifest_tool_key(tool):
+                continue
+            owner = f"role {role!r}"
+            if tool not in tool_props:
+                out.append(
+                    _unknown_tool(
+                        owner=owner,
+                        source=source,
+                        tier=None,
+                        tool=tool,
+                        severity="info" if tp.mode == "deny" else "warning",
+                        role=role,
+                    )
+                )
+                continue
+            out += _unknown_args(
+                owner=owner,
+                source=source,
+                tier=None,
+                tool=tool,
+                tool_policy=tp,
+                valid_args=tool_props[tool],
+                severity="error" if tp.mode == "deny" else "warning",
+                role=role,
+            )
+    return out
