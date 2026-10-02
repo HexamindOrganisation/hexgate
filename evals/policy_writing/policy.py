@@ -57,8 +57,7 @@ class Policy:
     """The policy the checks run against.
 
     `payload` is the document: `policy.yaml` as written, or a module tree's
-    resolved roles (read by the known-names checks, PR 18). `policy_set` is it
-    loaded, ready to evaluate.
+    resolved roles. `policy_set` is it loaded, ready to evaluate.
     """
 
     payload: dict
