@@ -88,6 +88,17 @@ def test_when_an_argument_is_a_yaml_date_then_decide_reads_it_as_text(
     assert decide(policy, "default", call).outcome == DecisionOutcome.ALLOW
 
 
+def test_when_an_attribute_is_a_yaml_date_then_decide_reads_it_as_text(
+    tmp_path,
+) -> None:
+    policy, _ = effective_policy(make_workspace(tmp_path))
+    call = {
+        "tool": "view_orders",
+        "attributes": {"hired_on": datetime.date(2026, 1, 1)},
+    }
+    assert decide(policy, "default", call).outcome == DecisionOutcome.ALLOW
+
+
 def test_when_the_role_is_undefined_then_decide_raises(tmp_path) -> None:
     # Not the `default` fallback: a case naming a role the policy lacks fails.
     policy, _ = effective_policy(make_workspace(tmp_path))
