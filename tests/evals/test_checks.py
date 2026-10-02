@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime
+import json
 
 import pytest
 
@@ -24,6 +25,7 @@ from tests.evals.helpers import (
     by_name,
     make_modules_workspace,
     make_workspace,
+    manifest_tool,
 )
 
 REFUND = {"tool": "refund_order", "args": {"order_id": "o1", "amount": 5}}
@@ -134,6 +136,7 @@ def test_when_the_policy_invents_names_then_both_name_checks_fail(tmp_path) -> N
         ("agents.json", "[{}]"),  # a view with no name
         ("audit.json", "null"),
         ("audit.json", "[{}]"),  # a row with no agent_name
+        ("agents.json", None),  # the starting project ships none
     ],
 )
 def test_when_a_name_source_is_unreadable_then_both_name_checks_fail(
@@ -141,7 +144,10 @@ def test_when_a_name_source_is_unreadable_then_both_name_checks_fail(
 ) -> None:
     ws = make_workspace(tmp_path)
     policy, _ = effective_policy(ws)
-    (ws / source).write_text(broken)
+    if broken is None:
+        (ws / source).unlink()
+    else:
+        (ws / source).write_text(broken)
     after = snapshot(ws)
     assert not any(c.passed for c in name_checks(policy, ws, AGENT, after, after))
 
@@ -235,6 +241,23 @@ def test_score_happy_path(tmp_path) -> None:
     checks = score(case, ws, before, "Billing can refund.")
     assert [c.name for c in checks if c.passed] == [c.name for c in checks]
     assert set(NAME_CHECKS) <= {c.name for c in checks}
+
+
+def test_when_the_agent_edits_agents_json_then_score_fails_both_name_checks(
+    tmp_path,
+) -> None:
+    ws = make_workspace(tmp_path, POLICY + "      wire_transfer: { mode: allow }\n")
+    before = snapshot(ws)
+    # The agent "fixes" its invented tool by adding it to the manifest.
+    agents = json.loads((ws / "agents.json").read_text())
+    agents[0]["manifest"]["tools"].append(manifest_tool("wire_transfer", iban="s"))
+    (ws / "agents.json").write_text(json.dumps(agents))
+    checks = by_name(score({"agent": AGENT}, ws, before, ""))
+    for name in NAME_CHECKS:
+        assert (checks[name].passed, checks[name].detail) == (
+            False,
+            "edited during the run: ['agents.json']",
+        )
 
 
 def test_when_the_policy_is_invalid_then_score_fails_valid_and_decisions(

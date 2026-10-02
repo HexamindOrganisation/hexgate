@@ -14,7 +14,6 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from hexgate.egress.model import connect_to_args, http_to_args
-from hexgate.manifest.models import AgentManifest
 from hexgate.security.constraints import iter_arg_refs, parse_constraint
 from hexgate.security.models import (
     AGENT_RUN_TOOL,
@@ -53,7 +52,7 @@ ROOTS = {"args", "ctx", "run", "role", "tool"}
 
 
 # The files the names come from, the starting project's stand-ins for the MCP.
-NAME_SOURCES = ("agents.json", "audit.json")
+AGENTS_JSON, AUDIT_JSON = NAME_SOURCES = ("agents.json", "audit.json")
 
 
 @dataclass(frozen=True)
@@ -78,15 +77,17 @@ def load_known_names(ws: Path, agent: str) -> KnownNames:
       are not in the manifest, so the known ones are the `attributes` keys of
       `agent`'s rows. No `audit.json` means no known attributes.
     """
-    views = json.loads((ws / "agents.json").read_text())
+    views = json.loads((ws / AGENTS_JSON).read_text())
     view = next(
         (v for v in views if v["name"] == agent and v.get("manifest") is not None),
         None,
     )
     if view is None:
         raise ValueError(f"agents.json has no manifest for agent {agent!r}")
-    manifest = AgentManifest.model_validate(view["manifest"])
-    audit = ws / "audit.json"
+    # Read as the endpoint returns it, not as the SDK registers it: the platform's
+    # AgentManifestView is looser (a tool's `description` may be null).
+    manifest = view["manifest"]
+    audit = ws / AUDIT_JSON
     rows = json.loads(audit.read_text()) if audit.exists() else []
     if isinstance(rows, dict):  # the endpoint's page shape, {rows, total, ...}
         rows = rows["rows"]
@@ -97,10 +98,12 @@ def load_known_names(ws: Path, agent: str) -> KnownNames:
         for name in row.get("attributes") or {}
     }
     return KnownNames(
-        tools={t.name: set(t.input_schema.properties) for t in manifest.tools},
+        tools={
+            t["name"]: set(t["input_schema"]["properties"]) for t in manifest["tools"]
+        },
         attrs=attrs,
-        skills={s.name for s in manifest.skills or []},
-        guards={g.name for g in manifest.guards or []},
+        skills={s["name"] for s in manifest.get("skills") or []},
+        guards={g["name"] for g in manifest.get("guards") or []},
     )
 
 

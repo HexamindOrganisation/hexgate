@@ -32,12 +32,15 @@ from tests.evals.helpers import (
     AUDIT,
     agent_view,
     make_workspace,
+    manifest_tool,
 )
 
 # shop-bot's manifest, as `load_known_names` reads it from the fixture.
-TOOLS = {"view_orders": {"customer_id"}, "refund_order": {"order_id", "amount"}}
 KNOWN = KnownNames(
-    tools=TOOLS, attrs={"department"}, skills={"pdf"}, guards={"redact_pii"}
+    tools={"view_orders": {"customer_id"}, "refund_order": {"order_id", "amount"}},
+    attrs={"department"},
+    skills={"pdf"},
+    guards={"redact_pii"},
 )
 ALLOW = {"mode": "allow"}
 
@@ -70,6 +73,14 @@ def test_when_audit_json_is_missing_then_no_attribute_is_known(tmp_path) -> None
     ws = make_workspace(tmp_path)
     (ws / "audit.json").unlink()
     assert load_known_names(ws, AGENT).attrs == set()
+
+
+def test_when_a_tool_has_no_description_then_its_names_still_load(tmp_path) -> None:
+    # The platform's AgentManifestView allows a null description; the SDK's doesn't.
+    tool = {**manifest_tool("view_orders", customer_id="string"), "description": None}
+    ws = make_workspace(tmp_path)
+    (ws / "agents.json").write_text(json.dumps([agent_view(AGENT, tool)]))
+    assert load_known_names(ws, AGENT).tools == {"view_orders": {"customer_id"}}
 
 
 def test_when_the_manifest_lists_no_skills_or_guards_then_none_are_known(
