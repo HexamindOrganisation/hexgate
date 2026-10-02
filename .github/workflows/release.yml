@@ -130,6 +130,19 @@ jobs:
           cache: pnpm
           cache-dependency-path: platform/dashboard/pnpm-lock.yaml
 
+      # Same set as tests.yml and platform/api/Dockerfile. The runner image
+      # ships Pango but not HarfBuzz-Subset, so without this WeasyPrint falls
+      # back to fontTools, which stamps the wall clock into every embedded
+      # font's `head.modified` — and the byte-identical render test fails
+      # whenever its two renders straddle a second.
+      - name: Install WeasyPrint system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libpango-1.0-0 libpangoft2-1.0-0 libharfbuzz0b \
+            libharfbuzz-subset0 libfribidi0 \
+            fonts-liberation2 fonts-dejavu-core
+
       # --------------------------------------------------------------
       # 2. Gate: re-run the full test matrix inline. We're not just
       #    publishing what tests.yml said was green at PR time — main

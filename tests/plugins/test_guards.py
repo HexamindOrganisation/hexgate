@@ -10,7 +10,12 @@ import pytest
 
 from hexgate.guards import Halt, Proceed, ToolCall, ToolOutcome, build_pipeline
 from hexgate.guards.runner import run_guarded_sync
-from hexgate.plugins import secret_guard, secret_redactor, secret_watch
+from hexgate.plugins import (
+    secret_guard,
+    secret_redactor,
+    secret_scrubber,
+    secret_watch,
+)
 from tests.guards.helpers import FakeEnforcer, RecordingInvoke, langchain_error
 
 _SECRET = "AKIAIOSFODNN7EXAMPLE"
@@ -85,6 +90,37 @@ def test_secret_watch_is_silent_on_clean_and_failed_results(
 
 
 # ---------------------------------------------------------------------------
+# secret_scrubber — strip the secret from the result and proceed
+# ---------------------------------------------------------------------------
+
+
+def test_secret_scrubber_is_an_enforcing_after_guard() -> None:
+    assert secret_scrubber.observe is False
+    assert secret_scrubber.position == "post"
+
+
+def test_secret_scrubber_passes_a_clean_result() -> None:
+    out = ToolOutcome(ok=True, value={"ok": "nothing here"})
+    assert secret_scrubber(_call(), out) is None
+
+
+def test_secret_scrubber_strips_the_secret_and_records_a_modification() -> None:
+    out = ToolOutcome(ok=True, value={"leaked": _SECRET, "keep": "me"})
+    result = secret_scrubber(_call(), out)
+    assert isinstance(result, Proceed)
+    assert result.result == {"leaked": "[REDACTED:aws_access_key]", "keep": "me"}
+    assert result.modification is not None
+    assert result.modification.plugin == "secret_scrubber"
+    assert result.modification.target == "result"
+    assert "aws_access_key" in result.modification.summary
+    assert _SECRET not in result.modification.summary
+
+
+def test_secret_scrubber_is_silent_on_a_failed_result() -> None:
+    assert secret_scrubber(_call(), ToolOutcome(ok=False, error="boom")) is None
+
+
+# ---------------------------------------------------------------------------
 # End-to-end through the shared runner
 # ---------------------------------------------------------------------------
 
@@ -120,3 +156,20 @@ def test_secret_redactor_hands_the_tool_cleaned_args_through_the_pipeline() -> N
     )
     assert inv.calls == [{"auth": {"token": "[REDACTED:aws_access_key]"}}]
     assert enf.seen_args == {"auth": {"token": "[REDACTED:aws_access_key]"}}
+
+
+def test_secret_scrubber_cleans_the_tool_result_through_the_pipeline() -> None:
+    enf = FakeEnforcer()
+    inv = RecordingInvoke({"doc": f"found {_SECRET} in the archive"})
+    pipe = build_pipeline([secret_scrubber])
+    out = run_guarded_sync(
+        "search",
+        {"q": "archive"},
+        enforcer=enf,
+        pipeline=pipe,
+        approval_handler=None,
+        invoke=inv.sync,
+        render_error=langchain_error,
+    )
+    assert out == {"doc": "found [REDACTED:aws_access_key] in the archive"}
+    assert _SECRET not in str(out)  # the cleaned result is what flows on

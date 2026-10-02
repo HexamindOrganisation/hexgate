@@ -522,7 +522,10 @@ def install_enforcer_on_tools(
     pipeline: ToolPipeline | None = None,
     resolve_policy_key: PolicyKeyResolver | None = None,
 ) -> list[BaseTool]:
-    """Install enforcement on every StructuredTool-style tool in place."""
+    """Install enforcement on every StructuredTool-style tool in place.
+
+    One shared ``pipeline`` per tool; the policy's guard enable/disable stance is
+    applied per call in the guard runner (R-GUARD-007), not baked here."""
     for t in tools:
         install_enforcer_on_tool(
             t,

@@ -493,3 +493,27 @@ def test_wrap_gates_skill_reads_from_an_explicit_skills_middleware(
 
     assert result["ok"] is False
     assert reads == []
+
+
+def test_wrap_falls_back_to_stamped_guards(
+    resolved: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A stamped graph wrapped without guards= builds its pipeline from the stamp,
+    so the guards its manifest declares actually run (review #1)."""
+    from hexgate.guards import attach_guards, before_tool
+
+    @before_tool
+    def g(call: Any) -> None:
+        return None
+
+    captured: dict[str, Any] = {}
+    real_build = wrapper_mod.build_pipeline
+
+    def _spy(guards: Any, **kw: Any) -> Any:
+        captured["guards"] = list(guards or [])
+        return real_build(guards, **kw)
+
+    monkeypatch.setattr(wrapper_mod, "build_pipeline", _spy)
+    graph = attach_guards(_FakeCompiledGraph(), [g])
+    wrap_langchain_agent(agent=graph, tools=[_make_tool("a")], api_key="k")
+    assert captured["guards"] == [g]

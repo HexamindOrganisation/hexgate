@@ -425,6 +425,17 @@ class MessageCursor:
         """Record ``messages`` as the current state of ``turn_key`` and return
         what is new since the last call.
 
+        An empty list is a real call with nothing in it to diff, such as a
+        Google ADK request carrying only a system instruction. It spends its
+        seq like any call, so a first call still gets ``seq == 0`` and its
+        ``system_instructions``, and it leaves the mark untouched, so the next
+        list is judged against what was last emitted. Clobbering the
+        mark would force a needless resync; clearing it would make the
+        turn_key byte-identical to one never seen, so the comeback would slice
+        from zero and emit the history twice. A hook pair whose request half
+        never landed is not an empty list: there is no prompt at all, and the
+        adapter must not call this.
+
         Extension is the normal case: the prefix we last emitted is still
         there, so everything past the mark is new. Otherwise the framework
         rewrote the list to fit a context window — trimmed old turns, or
@@ -465,7 +476,7 @@ class MessageCursor:
         fingerprints: in steady state it is the same message every call, and
         one of these lists can carry an inlined image."""
         if not messages:
-            return [], state.count > 0, _TurnState(0, _UNMATCHABLE_FINGERPRINT, 0)
+            return [], False, state
         first = _canonical(messages[0])
         current = _fingerprint(len(messages), first, _canonical(messages[-1]))
         mark = _TurnState(count=len(messages), fingerprint=current, next_seq=0)

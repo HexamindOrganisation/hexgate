@@ -88,8 +88,8 @@ class PlatformPolicySource:
 
       * **WASM bundle** (production shape) — when the platform's
         ``compiled_wasm`` is populated, we get a signed bundle back and
-        return a verified :class:`PolicyBundle`. ETag = ``wasm_hash``;
-        unchanged bundles hit ``304`` and re-use the cached object.
+        return a verified :class:`PolicyBundle`. ETag = the signed-manifest
+        hash; unchanged bundles hit ``304`` and re-use the cached object.
       * **Pydantic fallback** (no-opa / demo shape) — when the platform
         couldn't compile (no ``opa`` on the control plane), the response
         carries ``policy_yaml`` but null bundle fields. We hash the yaml,
@@ -160,13 +160,19 @@ class PlatformPolicySource:
                 payload, self._client.public_key_bytes()
             )
             if bundle is not None:
-                # WASM path. ETag tracking is on the wasm_hash; the yaml
-                # hash is irrelevant here, clear it so a later transition
-                # to the pydantic branch (platform loses opa) doesn't
-                # mistakenly reuse a stale hash from the old wasm world.
+                # WASM path. ETag tracking is on the signed-manifest hash (it
+                # carries the guard stance AND the wasm_hash, so a guards-only
+                # edit — same wasm — still invalidates it); the yaml hash is
+                # irrelevant here, clear it so a later transition to the pydantic
+                # branch (platform loses opa) doesn't reuse a stale hash.
                 self._cached_engine = bundle
+                # The server always sends the ETag header; mirror its manifest
+                # hash for the defensive fallback if it ever doesn't, so the
+                # fabricated ETag still matches and the 304 fast-path engages.
                 self._cached_etag = etag or (
-                    f'"{bundle.wasm_hash}"' if bundle.wasm_hash else None
+                    f'"{hashlib.sha256(bundle.manifest_bytes).hexdigest()}"'
+                    if bundle.manifest_bytes
+                    else None
                 )
                 self._cached_yaml_hash = None
                 return bundle

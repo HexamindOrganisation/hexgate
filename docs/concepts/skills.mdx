@@ -1,0 +1,130 @@
+---
+title: "Agent skills"
+description: "What a skill is, why Hexgate governs it, and the three levels policy can gate — instructions, resources and scripts."
+---
+
+A **skill** is a folder of instructions an agent opens when a task calls for it:
+a `SKILL.md` with YAML frontmatter, plus optional reference files, assets and
+scripts. The agent sees every skill's name and description up front, and reads
+the body only when it decides the skill is relevant.
+
+```text
+refund-runbook/
+├── SKILL.md            # frontmatter (name, description) + the instructions
+├── references/
+│   └── limits.md       # read on demand
+└── scripts/
+    └── issue_refund.py # run on demand
+```
+
+```markdown
+---
+name: refund-runbook
+description: Issue a refund for a delivered order.
+---
+1. Confirm the order was delivered with `get_order`.
+2. Check the amount against references/limits.md.
+3. Run scripts/issue_refund.py with the order id.
+```
+
+Two frameworks ship skills, and Hexgate discovers and gates both:
+
+| Framework | Requires | How the agent activates a skill |
+| --- | --- | --- |
+| [Google ADK](/adapters/google-adk#skills) | `google-adk >= 1.25.0` (`SkillToolset`) | calls `load_skill` / `load_skill_resource` / `run_skill_script` |
+| [deepagents](/adapters/langchain#deepagents-skills) | a release with `SkillsMiddleware` (`create_deep_agent(skills=...)`) | calls `read_file` on the skill's `SKILL.md` |
+
+No other adapter produces a skill decision. A `skills:` block on a policy for an
+OpenAI Agents or Pydantic AI agent is valid but inert — nothing on those runtimes
+maps to a skill key.
+
+## How a skill differs from a tool
+
+| | Tool | Skill |
+| --- | --- | --- |
+| What it is | a function the agent calls | instructions the agent reads |
+| Arguments | the call's inputs, and policy can constrain them | metadata only (which skill, which file, a content hash); policy can constrain it, including [pinning the content](/policy/constraints#pinning-a-skills-content) |
+| Blast radius | bounded by the function | **unbounded — whatever tools it steers the agent toward** |
+
+A tool rule can say *refunds up to 500 USD*. A skill rule can say which skill, at
+which level, with which content — but no argument fence bounds what the text
+persuades the model to do next.
+
+## Why Hexgate governs skills
+
+- **Audit.** Every activation is a [policy decision](/concepts/policy-decision)
+  under its skill key, so it lands in the [audit trail](/concepts/audit-trail)
+  like any tool call — which skill, at which level.
+- **Kill-switch.** `mode: deny` withdraws a skill from every caller without a code
+  change or a redeploy. On deepagents this holds for the top-level agent only: a
+  sub-agent reached through `task` reads skills, and runs its filesystem and shell
+  tools, without a decision, so deny `task` as well (see the
+  [deepagents limitations](/adapters/langchain#limitations)).
+- **Approval.** `mode: approval_required` puts a human in front of a skill the
+  same way it does in front of a tool — see
+  [approval-required calls](/concepts/approval-required).
+
+<Warning>
+**Gating a skill is audit and approval, not containment.** Once the
+instructions are read, their text can steer the agent to any tool it already
+holds. A denied skill does not stop the model from calling those tools on its
+own. The [tool layer](/policy/yaml-shape) remains the boundary: if a tool must not
+run, deny the tool.
+</Warning>
+
+## The three levels
+
+A skill discloses itself in stages, and policy can gate each one separately:
+
+| Level | `via` | Policy key | In plain terms |
+| --- | --- | --- | --- |
+| Instructions | `instructions` | `skill:<name>` | read the runbook |
+| Resources | `resource` | `skill.resource:<name>` | open its reference files |
+| Scripts | `script` | `skill.script:<name>` | **run its bundled code** |
+
+The split exists because running a skill's script is arbitrary code execution.
+"This team may read the payments runbook but may not run its scripts" has to be
+expressible, and `via: [instructions, resource]` expresses it. See
+[the `skills:` block](/policy/yaml-shape#skills) for the grammar.
+
+**What is not gated:** a skill's name and description. They sit in the system
+prompt before any tool call, so there is nothing to intercept. Denying a skill
+hides its contents, not its existence.
+
+## Closed-world, and opt-in
+
+- **Unlisted means denied.** Once a policy declares a `skills:` block, a skill it
+  does not list is denied — even under a permissive `default_policy`. A skill
+  library is a directory: dropping a folder into it adds a capability with no code
+  change and no review, so a new skill has to be named before it runs.
+  Closed-world covers the skills the adapter knows about: on deepagents that means
+  the skills present when the agent was wrapped. A skill folder added afterwards is
+  not recognised, and a read of it decides as a plain `read_file` — see the
+  [deepagents limitations](/adapters/langchain#limitations).
+- **It is opt-in.** An agent whose policy never mentions skills is not skill-gated
+  at all: skill activations are decided as the ordinary tool calls they are
+  (`load_skill`, `read_file`, …). The gate engages across the whole agent once any
+  role lists at least one skill (an empty `skills: {}` does not count), the same way
+  [agent-level enforcement](/concepts/agent-level-enforcement#closed-world-and-opt-in)
+  engages.
+
+## Drift
+
+A skill is matched **by name**. Editing an approved skill's `SKILL.md` does not
+revoke its approval — the next activation reads the new text under the old rule.
+
+The opt-in answer is [content pinning](/policy/constraints#pinning-a-skills-content):
+a constraint on the `content_hash` every skill decision carries, so a changed body
+no longer matches and denies. Pinning covers the `SKILL.md` body only. Versioning
+an agent as a whole — its skills, tools and prompt together — is a separate thing
+Hexgate does not do.
+
+## Where skills come from
+
+At registration, the adapter records each skill in the agent's manifest: its
+name, description and a hash of its `SKILL.md` body. On Google ADK it also
+records the reference, asset and script files the skill ships; deepagents
+discovery reads frontmatter only, so a deepagents skill shows no files. The platform
+shows them on the agent's page, and the first registration generates a
+[starter `skills:` block](/policy/yaml-shape#the-generated-starter-policy) from
+them.

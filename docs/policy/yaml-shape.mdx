@@ -35,6 +35,79 @@ tools:
 - `deny`
 - `approval_required` — see [Approval-required tool calls](/concepts/approval-required)
 
+## Skills
+
+A `skills:` block sits beside `tools:` in a role and governs which
+[agent skills](/concepts/skills) the role may reach, keyed by skill name:
+
+```yaml
+roles:
+  default:
+    default_policy: { mode: deny }
+
+  support:
+    default_policy: { mode: deny }
+    skills:
+      refund-runbook:
+        mode: allow
+        via: [instructions, resource]   # may read it, may not run its scripts
+      data-export:
+        mode: deny
+      # any skill not listed here is denied (closed-world)
+```
+
+- **`mode`** — the same three values as a tool: `allow`, `deny`,
+  `approval_required`. `constraints` work too; see
+  [pinning a skill's content](/policy/constraints#pinning-a-skills-content).
+- **`via`** — which levels the rule governs: `instructions` (`skill:<name>`),
+  `resource` (`skill.resource:<name>`), `script` (`skill.script:<name>`). It
+  defaults to all three. Narrowing it is how you allow reading without running: a
+  level the rule does not list is unlisted, and so denied.
+- **Closed-world.** An unlisted skill denies regardless of `default_policy`. A
+  skill library is a *directory* — dropping a folder into it adds a capability with
+  no code change and no review — so `default_policy: { mode: allow }` never grants
+  a skill.
+- **The engagement gate.** Closed-world applies only once some role (after
+  `inherits:`) lists at least one skill. An empty `skills: {}` does not engage it —
+  to mean "no skills for this role", list the skills and set them to `mode: deny`.
+  An agent whose policy never mentions skills is not
+  skill-gated: activations are decided as the ordinary tool calls they are
+  (`load_skill`, `read_file`, …) under `tools:` and `default_policy`. That is why
+  adding the feature changed nothing for existing agents — and the first place to
+  look when a skill you expected to be denied is allowed.
+- `skills` merge through `inherits:` by name, like `tools`.
+
+A tool named with a skill prefix (`skill:x` under `tools:`) is rejected at load;
+the `skill:` / `skill.resource:` / `skill.script:` namespace is reserved for this
+block.
+
+### The generated starter policy
+
+On an agent's **first** registration, Hexgate generates a starter policy from its
+manifest, including a `skills:` block for every skill it discovered:
+
+| Skill | `read_only` mixin (`default`, `member`, `admin` inherit it) | `member` | `admin` |
+| --- | --- | --- | --- |
+| instructions and resources only | `allow` | inherited | inherited |
+| ships scripts (Google ADK), or adds tools once activated | not listed — `default` denies it | `approval_required` | `allow` |
+
+Only Google ADK discovery enumerates a skill's files. deepagents discovery reads
+frontmatter only, so Hexgate cannot tell whether a deepagents skill ships
+scripts: every deepagents skill lands in the first row and is allowed for every
+role, the generated YAML says so in a comment, and you should review it. Its
+scripts run through `execute`, which is gated on its own terms on the top-level
+agent only: a sub-agent reached through `task` runs its own `execute` ungated,
+and the starter policy allows `task` for `admin`. See the
+[deepagents limitations](/adapters/langchain#limitations).
+
+It is generated **once**. Re-registering the agent never overwrites the policy,
+so a skill added later is not in it. If the policy already has a `skills:` block,
+that new skill is unlisted and denied until you add it; if the agent had no skills
+at first registration, there is no block, and the new skill is not gated at all
+until you write one. In a project
+that uses policy modules, a new agent starts deny-all instead and no starter is
+generated.
+
 ## Applying a policy in code
 
 `create_agent(...)` stays close to LangChain; policy enforcement is applied after

@@ -334,6 +334,33 @@ class PolicyBundle:
         older bundle) reads False — safe, those predate skill gating."""
         return bool(self.manifest.get("agent_gating", {}).get("skills", False))
 
+    def effective_guards(self, tool_name: str) -> dict[str, bool]:
+        """The guard enable/disable stance (R-GUARD-007). Baseline-only in v1, so
+        uniform for every tool — ``tool_name`` is accepted for a signature shared with
+        :meth:`AgentPolicy.effective_guards` but does not change the result.
+
+        The signed ``guards`` section's baseline, as ``{guard_name: enabled}``. Absent
+        (a guards-free policy, or an older bundle) reads ``{}``: every declared guard
+        runs as coded, the safe default. Read per call by the guarded runner to skip a
+        disabled guard.
+        """
+        section = self.manifest.get("guards")
+        if not isinstance(section, dict):
+            return {}
+        return dict(section.get("baseline", {}))
+
+    def governed_guard_names(self) -> frozenset[str]:
+        """Every guard name the policy's ``guards`` section references (R-GUARD-007).
+
+        The baseline keys, used for the closed-world check: a policy naming a guard the
+        agent's manifest does not declare stops cold. Empty for a guards-free or older
+        bundle, so the check is a no-op there.
+        """
+        section = self.manifest.get("guards")
+        if not isinstance(section, dict):
+            return frozenset()
+        return frozenset(section.get("baseline", {}))
+
     # ---- Metadata ------------------------------------------------------
 
     @property
@@ -417,6 +444,11 @@ def build_signed_bundle(
         "reach_tool": resolved.declares_tool_reach(),
         "skills": resolved.declares_skills(),
     }
+    # The guard enable/disable stance (R-GUARD-007), read back per call in the guarded
+    # runner to skip a disabled guard. Agent-level and signed like agent_gating;
+    # None when no role configures a guard, so the key is omitted and a guards-free
+    # policy's manifest bytes / source_hash stay identical (no bundle drift).
+    guard_stance = resolved.guard_stance()
 
     wasm_bytes: bytes | None = None
     wasm_hash: str | None = None
@@ -432,6 +464,10 @@ def build_signed_bundle(
         "wasm_hash": wasm_hash,
         "agent_gating": agent_gating,
     }
+    # Omit when absent so a guards-free policy's manifest is byte-identical to before
+    # the block existed — the signature/source_hash must not move (R-GUARD-007).
+    if guard_stance is not None:
+        manifest["guards"] = guard_stance
     # The one canonical serialization. Sign these exact bytes.
     manifest_bytes = (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode(
         "utf-8"

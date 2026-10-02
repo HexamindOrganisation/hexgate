@@ -1,7 +1,12 @@
 # R-GUARD-003: Post-guards may not rewrite results in v1
 
-**Status:** Accepted · 2026-08-12
+**Status:** Superseded by [R-GUARD-008](R-GUARD-008-post-guard-result-rewrite.md) · 2026-08-12
 **Applies to:** `hexgate/guards/**`
+
+> **Superseded (2026-10-01).** The projection rule this ADR said v1 did not build
+> has since landed, so post-guards now rewrite the result via `Proceed(result=...)`.
+> See [R-GUARD-008](R-GUARD-008-post-guard-result-rewrite.md). The record below is
+> kept for the reasoning that held while rewrite was deferred.
 
 ## Decision
 
@@ -46,8 +51,5 @@ later phase is an implementation, not a breaking change.
 
 ## Verify
 
-```
-pytest tests/guards/test_runner.py -k post_guard_result_rewrite_is_rejected
-```
-
-passes (a post-guard returning `Proceed(result=...)` raises in v1).
+Historical — the v1 rejection this ADR describes is lifted by R-GUARD-008; see
+that ADR's Verify for the current behaviour.
