@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 from contextlib import contextmanager
 from types import SimpleNamespace
 from typing import Any, AsyncIterator
@@ -31,7 +32,7 @@ from hexgate.security import (
     ReachNotAllowedError,
     ResolvedPolicy,
 )
-from hexgate.security.bans import BanEntry, BanGate, BanSet
+from hexgate.security.bans import EMPTY_BAN_SET, BanEntry, BanGate, BanSet
 from hexgate.security.enforcer import PolicyEnforcer
 from hexgate.security.errors import AgentBannedError
 from hexgate.security.policy_set import DEFAULT_ROLE_NAME
@@ -565,6 +566,46 @@ async def test_run_async_refreshes_binding_per_call(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     runner, binding = _runner_with_counting_binding(monkeypatch)
+
+    async for _ in runner.run_async(new_message="hi", hexgate_context=_user()):
+        pass
+
+    assert binding.refreshes == 1
+
+
+# A sequential regression leaves the first party waiting alone until this
+# breaks the barrier; a concurrent fetch meets it immediately.
+_BARRIER_TIMEOUT_S = 2.0
+
+
+class _BarrierBanSource:
+    def __init__(self, barrier: threading.Barrier) -> None:
+        self._barrier = barrier
+
+    def fetch(self) -> BanSet:
+        self._barrier.wait()
+        return EMPTY_BAN_SET
+
+
+class _BarrierBinding(_CountingBinding):
+    def __init__(self, barrier: threading.Barrier) -> None:
+        super().__init__()
+        self._barrier = barrier
+
+    async def refresh_async(self) -> None:
+        await asyncio.to_thread(self._barrier.wait)
+        self.refreshes += 1
+
+
+@pytest.mark.asyncio
+async def test_run_async_fetches_policy_and_bans_concurrently(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner, _ = _runner_with_counting_binding(monkeypatch)
+    barrier = threading.Barrier(2, timeout=_BARRIER_TIMEOUT_S)
+    binding = _BarrierBinding(barrier)
+    runner._binding = binding  # type: ignore[assignment]
+    runner._ban_gate = BanGate("my-agent", _BarrierBanSource(barrier))
 
     async for _ in runner.run_async(new_message="hi", hexgate_context=_user()):
         pass

@@ -6,12 +6,18 @@ import surface.
 
 from __future__ import annotations
 
+import asyncio
+from collections.abc import Awaitable, Callable
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager, contextmanager
-from typing import Any, AsyncIterator, Iterator
+from typing import TYPE_CHECKING, Any, AsyncIterator, Iterator
 
 from langfuse import propagate_attributes
 
 from hexgate.runtime import HexgateContext, run_scope
+
+if TYPE_CHECKING:
+    from hexgate.security.bans import BanGate
 
 # Langfuse silently drops a propagated metadata value over 200 chars, so the
 # joined role list is truncated to fit (with an ASCII ellipsis — non-ASCII
@@ -58,3 +64,35 @@ def bind(context: HexgateContext, agent_name: str, tag: str) -> Iterator[None]:
         with run_scope(agent_name):
             with propagate_attributes(**langfuse_propagate_kwargs(context, tag)):
                 yield
+
+
+async def aprepare_run(
+    refresh_policy: Awaitable[None],
+    ban_gate: BanGate | None,
+    context: HexgateContext | None,
+) -> None:
+    """Pre-run work shared by every boundary: the policy refresh and the ban fetch
+    run concurrently, then the ban decision. Admission stays with the caller, after
+    this returns, so it reads the refreshed policy."""
+    if ban_gate is None:
+        await refresh_policy
+        return
+    _, bans = await asyncio.gather(refresh_policy, asyncio.to_thread(ban_gate.fetch))
+    ban_gate.enforce(bans, context)
+
+
+def prepare_run(
+    refresh_policy: Callable[[], None],
+    ban_gate: BanGate | None,
+    context: HexgateContext | None,
+) -> None:
+    """Sync mirror of :func:`aprepare_run`: the ban fetch runs on a worker thread
+    while the policy refresh runs on the caller's."""
+    if ban_gate is None:
+        refresh_policy()
+        return
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        pending = pool.submit(ban_gate.fetch)
+        refresh_policy()
+        bans = pending.result()
+    ban_gate.enforce(bans, context)

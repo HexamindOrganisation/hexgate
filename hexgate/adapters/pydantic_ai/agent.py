@@ -15,7 +15,7 @@ from pydantic_ai import Agent
 from pydantic_ai.agent import AgentRun, AgentRunResult
 from pydantic_ai.result import StreamedRunResult
 
-from hexgate.adapters._common import abind, bind
+from hexgate.adapters._common import abind, aprepare_run, bind, prepare_run
 from hexgate.adapters.pydantic_ai.usage import emit_run_messages, emit_run_usage
 from hexgate.runtime import HexgateContext
 
@@ -63,15 +63,6 @@ class HexgatePydanticAgent:
         """Refresh the policy binding, if one is attached (sync entry points)."""
         if self._binding is not None:
             self._binding.refresh()
-
-    async def _check_ban_async(self, context: HexgateContext) -> None:
-        """Refuse a banned agent/user before running, if a gate is attached."""
-        if self._ban_gate is not None:
-            await self._ban_gate.check_async(context)
-
-    def _check_ban(self, context: HexgateContext) -> None:
-        if self._ban_gate is not None:
-            self._ban_gate.check(context)
 
     def _setup_observability(self) -> None:
         """Globally instrument all pydantic_ai Agents (idempotent)."""
@@ -131,8 +122,7 @@ class HexgatePydanticAgent:
         **kwargs: Any,
     ) -> AgentRunResult[Any]:
         """Run the agent asynchronously inside a HexgateContext scope."""
-        await self._refresh_async()
-        await self._check_ban_async(hexgate_context)
+        await aprepare_run(self._refresh_async(), self._ban_gate, hexgate_context)
         async with self._abind(hexgate_context, "run"):
             result = await self._agent.run(*args, **kwargs)
             self._emit_run_events(result)
@@ -145,8 +135,7 @@ class HexgatePydanticAgent:
         **kwargs: Any,
     ) -> AgentRunResult[Any]:
         """Run the agent synchronously inside a HexgateContext scope."""
-        self._refresh()
-        self._check_ban(hexgate_context)
+        prepare_run(self._refresh, self._ban_gate, hexgate_context)
         with self._bind(hexgate_context, "run_sync"):
             result = self._agent.run_sync(*args, **kwargs)
             self._emit_run_events(result)
@@ -160,8 +149,7 @@ class HexgatePydanticAgent:
         **kwargs: Any,
     ) -> AsyncIterator[StreamedRunResult[Any, Any]]:
         """Stream the agent response asynchronously inside a HexgateContext scope."""
-        await self._refresh_async()
-        await self._check_ban_async(hexgate_context)
+        await aprepare_run(self._refresh_async(), self._ban_gate, hexgate_context)
         async with self._abind(hexgate_context, "run_stream"):
             async with self._agent.run_stream(*args, **kwargs) as result:
                 try:
@@ -183,8 +171,7 @@ class HexgatePydanticAgent:
         **kwargs: Any,
     ) -> AsyncIterator[AgentRun[Any, Any]]:
         """Iterate over the agent execution graph asynchronously."""
-        await self._refresh_async()
-        await self._check_ban_async(hexgate_context)
+        await aprepare_run(self._refresh_async(), self._ban_gate, hexgate_context)
         async with self._abind(hexgate_context, "iter"):
             async with self._agent.iter(*args, **kwargs) as run:
                 try:

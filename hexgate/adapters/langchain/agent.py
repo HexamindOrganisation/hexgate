@@ -10,7 +10,7 @@ from langfuse import get_client
 from langfuse.langchain import CallbackHandler
 from langgraph.graph.state import CompiledStateGraph
 
-from hexgate.adapters._common import abind, bind
+from hexgate.adapters._common import abind, aprepare_run, bind, prepare_run
 from hexgate.adapters.langchain.usage import HexgateUsageCallbackHandler
 from hexgate.runtime import DEFAULT_AGENT_NAME, HexgateContext
 
@@ -61,15 +61,6 @@ class HexgateLangchainAgent:
         """Refresh the policy binding, if one is attached (sync entry points)."""
         if self._binding is not None:
             self._binding.refresh()
-
-    async def _check_ban_async(self, context: HexgateContext) -> None:
-        """Refuse a banned agent/user before running, if a gate is attached."""
-        if self._ban_gate is not None:
-            await self._ban_gate.check_async(context)
-
-    def _check_ban(self, context: HexgateContext) -> None:
-        if self._ban_gate is not None:
-            self._ban_gate.check(context)
 
     @asynccontextmanager
     async def _abind(self, context: HexgateContext, method: str) -> AsyncIterator[None]:
@@ -122,8 +113,7 @@ class HexgateLangchainAgent:
         **kwargs: Any,
     ) -> dict[str, Any]:
         """Invoke the agent asynchronously inside a HexgateContext scope."""
-        await self._refresh_async()
-        await self._check_ban_async(hexgate_context)
+        await aprepare_run(self._refresh_async(), self._ban_gate, hexgate_context)
         async with self._abind(hexgate_context, "ainvoke"):
             return await self._agent.ainvoke(
                 input, self._with_callbacks(config), **kwargs
@@ -138,8 +128,7 @@ class HexgateLangchainAgent:
         **kwargs: Any,
     ) -> dict[str, Any]:
         """Invoke the agent synchronously inside a HexgateContext scope."""
-        self._refresh()
-        self._check_ban(hexgate_context)
+        prepare_run(self._refresh, self._ban_gate, hexgate_context)
         with self._bind(hexgate_context, "invoke"):
             return self._agent.invoke(input, self._with_callbacks(config), **kwargs)
 
@@ -152,8 +141,7 @@ class HexgateLangchainAgent:
         **kwargs: Any,
     ) -> AsyncIterator[dict[str, Any]]:
         """Stream the agent asynchronously inside a HexgateContext scope."""
-        await self._refresh_async()
-        await self._check_ban_async(hexgate_context)
+        await aprepare_run(self._refresh_async(), self._ban_gate, hexgate_context)
         async with self._abind(hexgate_context, "astream"):
             async for chunk in self._agent.astream(
                 input, self._with_callbacks(config), **kwargs
@@ -169,8 +157,7 @@ class HexgateLangchainAgent:
         **kwargs: Any,
     ) -> Iterator[dict[str, Any]]:
         """Stream the agent synchronously inside a HexgateContext scope."""
-        self._refresh()
-        self._check_ban(hexgate_context)
+        prepare_run(self._refresh, self._ban_gate, hexgate_context)
         with self._bind(hexgate_context, "stream"):
             yield from self._agent.stream(input, self._with_callbacks(config), **kwargs)
 
@@ -184,8 +171,7 @@ class HexgateLangchainAgent:
         **kwargs: Any,
     ) -> AsyncIterator[dict[str, Any]]:
         """Stream the agent events asynchronously inside a HexgateContext scope."""
-        await self._refresh_async()
-        await self._check_ban_async(hexgate_context)
+        await aprepare_run(self._refresh_async(), self._ban_gate, hexgate_context)
         async with self._abind(hexgate_context, "astream_events"):
             async for event in self._agent.astream_events(
                 input,

@@ -25,6 +25,19 @@ _JOINS_SCOPE = "use_run_facts("
 # of calling run_scope() inline; test_shared_bind_helpers_open_a_scope pins that
 # the helpers do open one.
 _DELEGATES_TO_SHARED_BIND = ("abind(", "bind(")
+# Matches both aprepare_run( and prepare_run(: the shared pre-run seam that
+# fetches the policy and bans, then refuses a banned run.
+_PREPARES_RUN = "prepare_run("
+# Anything that starts the run: the identity scope, the run scope, or the
+# streamed launch that opens both.
+_STARTS_RUN = (
+    _OPENS_SCOPE,
+    "_abind(",
+    "_bind(",
+    "_launch_streamed(",
+    "sync_scope(",
+    "async with hexgate_context",
+)
 
 # These four take the caller's HexgateContext explicitly, so their boundaries are
 # derivable. The native HexgateAgent is ambient, so it is pinned but not derived.
@@ -159,7 +172,28 @@ def test_scope_opens_after_the_ban_check() -> None:
     source = _source_of(
         "hexgate.adapters.langchain.agent", "HexgateLangchainAgent", "ainvoke"
     )
-    assert source.index("_check_ban_async") < source.index("_abind")
+    assert source.index(_PREPARES_RUN) < source.index("_abind")
+
+
+@pytest.mark.parametrize(
+    ("module_name", "class_name", "method"),
+    [(module, klass, method) for module, klass, method, _ in SCOPE_SITES],
+    ids=[f"{m.rsplit('.', 1)[-1]}.{c}.{meth}" for m, c, meth, _ in SCOPE_SITES],
+)
+def test_every_boundary_prepares_the_run_before_starting_it(
+    module_name: str, class_name: str, method: str
+) -> None:
+    """Every boundary goes through the shared seam, before anything starts the
+    run — so a ban is refused outside the scope, and whatever joins the seam
+    later reaches every boundary."""
+    source = _source_of(module_name, class_name, method)
+    assert _PREPARES_RUN in source, (
+        f"{module_name}.{class_name}.{method} bypasses the aprepare_run / "
+        f"prepare_run seam, so it skips the concurrent fetch or the ban gate."
+    )
+    starts = [source.index(marker) for marker in _STARTS_RUN if marker in source]
+    assert starts, f"{module_name}.{class_name}.{method} never starts the run"
+    assert source.index(_PREPARES_RUN) < min(starts)
 
 
 @pytest.mark.parametrize("method", ["run_streamed", "arun_streamed"])
@@ -169,7 +203,7 @@ def test_streamed_boundaries_launch_after_the_ban_check(method: str) -> None:
     once a banned run has been refused."""
     source = _source_of("hexgate.adapters.openai.runner", "HexgateRunner", method)
     assert "_launch_streamed(" in source
-    assert source.index("ban_gate.check") < source.index("_launch_streamed(")
+    assert source.index(_PREPARES_RUN) < source.index("_launch_streamed(")
 
 
 def test_run_streamed_rejoins_rather_than_mints() -> None:
