@@ -128,6 +128,17 @@ def test_when_the_policy_holds_a_yaml_date_then_effective_policy_fails(
     assert problems[0].startswith("can't compile:")
 
 
+def test_when_roles_disagree_on_guards_then_effective_policy_fails(tmp_path) -> None:
+    # A check analyze_policy runs that the scorer didn't before.
+    divergent = (
+        "version: 1\nroles:\n"
+        "  default: { guards: { g: { enabled: false } } }\n"
+        "  admin: { guards: { g: { enabled: true } } }\n"
+    )
+    _, problems = effective_policy(make_workspace(tmp_path, divergent))
+    assert any("guard-divergence" in p for p in problems)
+
+
 def test_when_policy_yaml_is_empty_then_it_is_an_empty_policy(tmp_path) -> None:
     # As `hexgate policy validate` reads it: valid, and every call denied.
     policy, problems = effective_policy(make_workspace(tmp_path, "# nothing yet\n"))
