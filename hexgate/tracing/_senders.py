@@ -99,8 +99,8 @@ class SpanEvent(Protocol):
     """Structural type for anything ``AuditSender`` can emit — a frozen event
     dataclass that knows which instrumentation scope it belongs to and how
     to lay itself out as flat span attributes. ``AuditEvent``,
-    ``LlmUsageEvent``, ``BanEnforcementEvent`` and ``LlmMessageEvent`` all
-    satisfy this without being imported here. A scope must also be in the
+    ``LlmUsageEvent``, ``BanEnforcementEvent``, ``LlmMessageEvent`` and
+    ``RunStartEvent`` all satisfy this without being imported here. A scope must also be in the
     tracer table built in ``AuditSender.__init__`` — an event whose scope is
     missing there is logged and dropped at emit (``emit`` catches the
     ``KeyError`` like any other failure), so nothing tells the caller."""
@@ -149,7 +149,7 @@ class _BoundedShutdownProcessor(BatchSpanProcessor):
 class AuditSender:
     """Span emitter for a single ``api_key``: one ``TracerProvider`` feeding
     one ``BatchSpanProcessor`` → ``OTLPSpanExporter`` pair, with one tracer
-    per event stream (decisions / usage / bans) so the instrumentation-scope
+    per event stream (decisions / usage / bans / messages / runs) so the instrumentation-scope
     name tells the platform which event type each span is.
 
     ``emit()`` is sync, non-blocking and thread-agnostic: it only enqueues
@@ -220,6 +220,7 @@ class AuditSender:
                 semconv.SCOPE_USAGE,
                 semconv.SCOPE_BANS,
                 semconv.SCOPE_MESSAGES,
+                semconv.SCOPE_RUNS,
             )
         }
 

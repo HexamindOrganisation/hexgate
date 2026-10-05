@@ -53,8 +53,8 @@ The SDK side in more detail: `PolicyEnforcer.decide()` returns the `Decision`
 to the agent synchronously and authoritatively, then hands a copy to
 `AuditSender.emit()` as one OTel span, best-effort, through a bounded
 `BatchSpanProcessor` queue that drops on saturation (§3). ClickHouse holds
-`hexgate_audit.policy_decision`, `llm_invocation`, `ban_enforcement` and `llm_message`
-(§5); the dashboard reads them through the project-scoped aggregation
+`hexgate_audit.policy_decision`, `llm_invocation`, `ban_enforcement`, `llm_message`
+and `agent_run` (§5); the dashboard reads them through the project-scoped aggregation
 endpoints (§7).
 
 ### Design principles
@@ -459,7 +459,7 @@ PLAINTEXT with no auth and must never be exposed outside the Compose network.
 ### 4.3 span-enricher (`hexgate_api.jobs.enricher`)
 
 One consumer-group member (`hexgate-enricher`), run from the API image with
-`python -m hexgate_api.jobs.enricher`. On startup it verifies the four
+`python -m hexgate_api.jobs.enricher`. On startup it verifies the five
 ClickHouse tables against the expected schema and that both topics exist
 (`TopicsMissing` otherwise). Both Kafka clients are sized for the topic limit:
 `max_partition_fetch_bytes` on the consumer and `max_request_size` on the DLQ
@@ -475,14 +475,15 @@ fetch, and an oversized DLQ envelope would be dropped client-side. Per poll
    the DLQ (`missing_key`).
 3. **Map and validate** each span by instrumentation scope — `hexgate.audit`
    → `DecisionEvent`, `hexgate.usage` → `LlmInvocationEvent`, `hexgate.bans` →
-   `BanEnforcementEvent` (the platform pydantic schemas, so the same max
+   `BanEnforcementEvent`, `hexgate.messages` → `LlmMessageEvent`,
+   `hexgate.runs` → `AgentRunEvent` (the platform pydantic schemas, so the same max
    lengths and enum checks apply everywhere). `occurred_at` is the span's
    `start_time_unix_nano` (zero → rejected). A rejected span becomes a DLQ
    envelope; its siblings in the same record are unaffected.
 4. **Resolve `agent_version_id`** for every distinct `(project_id, agent_name)`
    in the batch — two Postgres queries regardless of batch size. Unregistered
    agents resolve to `""` and are inserted anyway.
-5. **Insert**, four batch inserts (one per table), retried as a whole with
+5. **Insert**, five batch inserts (one per table), retried as a whole with
    exponential backoff (cap 30 s) until ClickHouse acks. The consumer's
    `max_poll_interval` is raised to 30 min so a ClickHouse outage does not get
    the partition reassigned to a replica that would hit the same outage.
@@ -496,7 +497,7 @@ counted until a merge lands. Two edges make it more than a delay: dedup never
 crosses the monthly `received_at` partition, so a replay straddling a month
 boundary double-counts permanently, and duplicates within a single batch only
 collapse when they share an insert block. The `insert_decisions_batch`
-docstring (`features/audit/service.py`) is the reference for all four. A
+docstring (`features/audit/service.py`) is the reference for all five. A
 replay also duplicates DLQ envelopes, which carry no dedup key at all
 (consumers of the DLQ must tolerate that).
 
@@ -637,12 +638,47 @@ TTL toDateTime(received_at) + INTERVAL 180 DAY
 - **Migration:** `migrations/0003_add_llm_message.sql`, applied by hand before
   the enricher that writes to it is deployed.
 
+#### `agent_run` — admitted runs
+
+The fifth table, for the `hexgate.runs` scope: one row per agent run that got
+past the ban check and admission. `run_scope` emits it on entry, so a run that
+made no tool or model call is still recorded. It is the invocation count that
+`agent_usage.*` quotas are built from.
+
+```sql
+CREATE TABLE hexgate_audit.agent_run
+(
+  -- Envelope: identical to the other tables
+  ...
+  run_id              UUID  -- RunFacts.id; required, no zero default
+)
+ENGINE = ReplacingMergeTree(received_at)
+PARTITION BY toYYYYMM(received_at)
+ORDER BY (project_id, agent_name, occurred_at, event_id)
+TTL toDateTime(received_at) + INTERVAL 180 DAY
+```
+
+- **`run_id` is required.** The span only exists inside a run scope, so the
+  enricher rejects one without a run id to the DLQ (`validation`) instead of
+  storing a zero UUID as the other tables do.
+- **Sort key** `(project_id, agent_name, occurred_at, event_id)`: the read is
+  "runs of this agent in a window". `event_id` last keeps dedup to SDK retries.
+- **A refused invocation is not a run.** Ban and admission denials are decided
+  before `run_scope` opens and land in `policy_decision` / `ban_enforcement`,
+  never here. A sub-agent's invocation enters its own `run_scope` and gets its
+  own row.
+- **Migration:** `migrations/0004_add_agent_run.sql`, applied by hand before
+  the enricher that writes to it is deployed. Deploy that enricher to every
+  stage before releasing an SDK that emits `hexgate.runs`, or each run start
+  is DLQ'd as `unknown_scope` (`platform/DEPLOY.md`).
+
 ### 5.2 Insert semantics
 
 The enricher writes through `insert_decisions_batch` /
 `insert_llm_invocations_batch` / `insert_ban_enforcements_batch` /
-`insert_llm_messages_batch` (`features/audit/service.py`,
-`features/llm_invocations/service.py`, `features/llm_messages/service.py`): one
+`insert_llm_messages_batch` / `insert_agent_runs_batch`
+(`features/audit/service.py`, `features/llm_invocations/service.py`,
+`features/llm_messages/service.py`, `features/agent_runs/service.py`): one
 multi-row insert per table per poll, retried until acked (§4.3). The legacy
 HTTP ingest uses the single-row `insert_decision`, whose settings are:
 

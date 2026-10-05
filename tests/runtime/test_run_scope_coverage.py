@@ -12,8 +12,10 @@ missing line of code.
 
 from __future__ import annotations
 
+import ast
 import importlib
 import inspect
+import textwrap
 from typing import Any
 
 import pytest
@@ -25,6 +27,26 @@ _JOINS_SCOPE = "use_run_facts("
 # of calling run_scope() inline; test_shared_bind_helpers_open_a_scope pins that
 # the helpers do open one.
 _DELEGATES_TO_SHARED_BIND = ("abind(", "bind(")
+_CHECKS_ADMISSION = "_check_admission"
+_API_KEY_KWARG = "api_key"
+# Calls that open a run scope, and so pick the sender its run_start span leaves on.
+_SCOPE_OPENERS = frozenset({"run_scope", "abind", "bind"})
+# The native agent resolves its key from HEXGATE_API_KEY and has no explicit one
+# to forward, so it is the one boundary exempt from the api_key rule.
+_ENV_KEY_MODULE = "hexgate.agents.factory"
+
+# (module, class, symbol) of every boundary with an admission gate. Admission must
+# precede the scope: entering run_scope is what reports a run, and a refused
+# invocation is not one.
+ADMISSION_SITES: list[tuple[str, str, str]] = [
+    ("hexgate.adapters.google.runner", "HexgateRunner", "run"),
+    ("hexgate.adapters.google.runner", "HexgateRunner", "run_async"),
+    ("hexgate.adapters.openai.runner", "HexgateRunner", "run"),
+    ("hexgate.adapters.openai.runner", "HexgateRunner", "run_sync"),
+    ("hexgate.adapters.openai.runner", "HexgateRunner", "_launch_streamed"),
+    ("hexgate.agents.factory", "HexgateAgent", "ainvoke"),
+    ("hexgate.agents.factory", "HexgateAgent", "astream_events"),
+]
 
 # These four take the caller's HexgateContext explicitly, so their boundaries are
 # derivable. The native HexgateAgent is ambient, so it is pinned but not derived.
@@ -160,6 +182,65 @@ def test_scope_opens_after_the_ban_check() -> None:
         "hexgate.adapters.langchain.agent", "HexgateLangchainAgent", "ainvoke"
     )
     assert source.index("_check_ban_async") < source.index("_abind")
+
+
+@pytest.mark.parametrize(
+    ("module_name", "class_name", "symbol"),
+    ADMISSION_SITES,
+    ids=[f"{m.rsplit('.', 1)[-1]}.{c}.{s}" for m, c, s in ADMISSION_SITES],
+)
+def test_scope_opens_after_admission(
+    module_name: str, class_name: str, symbol: str
+) -> None:
+    source = _source_of(module_name, class_name, symbol)
+    assert source.index(_CHECKS_ADMISSION) < source.index(_OPENS_SCOPE), (
+        f"{module_name}.{class_name}.{symbol} opens its run scope before "
+        f"admission, so a refused invocation would be counted as a run."
+    )
+
+
+def _scope_opener_calls(source: str) -> list[ast.Call]:
+    """Every direct ``run_scope(...)`` / ``abind(...)`` / ``bind(...)`` call —
+    by AST, since ``"bind("`` as text also matches ``def _abind(``."""
+    return [
+        node
+        for node in ast.walk(ast.parse(textwrap.dedent(source)))
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id in _SCOPE_OPENERS
+    ]
+
+
+_KEYED_SITES = sorted(
+    {(m, c, symbol) for m, c, _, symbol in SCOPE_SITES if m != _ENV_KEY_MODULE}
+)
+
+
+@pytest.mark.parametrize(
+    ("module_name", "class_name", "symbol"),
+    _KEYED_SITES,
+    ids=[f"{m.rsplit('.', 1)[-1]}.{c}.{s}" for m, c, s in _KEYED_SITES],
+)
+def test_boundaries_forward_the_api_key(
+    module_name: str, class_name: str, symbol: str
+) -> None:
+    """A boundary that drops the key reports its runs on the env key's sender —
+    another project's quota, or none."""
+    calls = _scope_opener_calls(_source_of(module_name, class_name, symbol))
+    assert calls, f"{module_name}.{class_name}.{symbol} opens no scope directly"
+    for call in calls:
+        keywords = {keyword.arg for keyword in call.keywords}
+        assert _API_KEY_KWARG in keywords, (
+            f"{module_name}.{class_name}.{symbol} opens a scope without api_key="
+        )
+
+
+def test_shared_bind_helpers_forward_the_api_key() -> None:
+    from hexgate.adapters import _common
+
+    for name in ("abind", "bind"):
+        [call] = _scope_opener_calls(inspect.getsource(getattr(_common, name)))
+        assert _API_KEY_KWARG in {keyword.arg for keyword in call.keywords}
 
 
 @pytest.mark.parametrize("method", ["run_streamed", "arun_streamed"])

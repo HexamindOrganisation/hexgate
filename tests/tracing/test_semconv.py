@@ -4,7 +4,13 @@ from __future__ import annotations
 
 from hexgate.tracing import semconv
 
-_SCOPES = {"SCOPE_AUDIT", "SCOPE_USAGE", "SCOPE_BANS", "SCOPE_MESSAGES"}
+_SCOPES = {
+    "SCOPE_AUDIT",
+    "SCOPE_USAGE",
+    "SCOPE_BANS",
+    "SCOPE_MESSAGES",
+    "SCOPE_RUNS",
+}
 _GEN_AI = {
     "GEN_AI_REQUEST_MODEL",
     "GEN_AI_USAGE_INPUT_TOKENS",
@@ -57,3 +63,7 @@ def test_when_the_message_scope_is_read_then_it_names_the_emitting_library() -> 
     assert semconv.SCOPE_MESSAGES == "hexgate.messages"
     for name in ("MESSAGE_SEQ", "TURN_KEY", "RESYNCED", "TRUNCATED"):
         assert getattr(semconv, name).startswith("sec_ai."), name
+
+
+def test_runs_scope_matches_the_string_the_enricher_expects() -> None:
+    assert semconv.SCOPE_RUNS == "hexgate.runs"
