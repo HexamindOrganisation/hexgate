@@ -3,10 +3,9 @@
 `effective_policy` runs what `validate` (single file) or `check` + `resolve`
 (module tree) runs, plus what `build` rejects, failing on lint warnings;
 `decide` runs what `test` runs, with the CLI's input checks. On an opt-in gate
-the policy never declares, it
-follows the runtime where `test` would deny: an admission or handoff call is
-allowed, and an agent-as-tool or skill call is refused as a case error, since
-the runtime decides it under the tool's own name.
+the policy never declares, it follows the runtime where `test` would deny: an
+admission or handoff call is allowed, and an agent-as-tool or skill call is
+refused as a case error, since the runtime decides it under the tool's own name.
 """
 
 from __future__ import annotations
