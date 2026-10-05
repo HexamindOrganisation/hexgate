@@ -22,6 +22,12 @@ from typing import Any
 import pytest
 
 from hexgate.runtime import run_facts as run_facts_mod
+from hexgate.runtime.agent_usage import (
+    MAX_WINDOW_SECONDS,
+    UsageLedgers,
+    UsageMetric,
+    new_usage_ledger,
+)
 from hexgate.runtime.context import HexgateContext
 from hexgate.runtime.run_facts import (
     DETACHED,
@@ -47,7 +53,7 @@ _AN_INT = 1
 _AGENT_KEY = "agent-key"
 # Not counters, so out of scope for _mutable_state.
 _NOT_MUTABLE_STATE = frozenset(
-    {"id", "agent", "detached", "_started_monotonic", "_lock"}
+    {"id", "agent", "detached", "ledger", "_started_monotonic", "_lock"}
 )
 
 
@@ -514,3 +520,76 @@ def test_llm_usage_is_applied_atomically() -> None:
         finally:
             stop.set()
             thread.join()
+
+
+# ---------------------------------------------------------------------------
+# Forwarding to the agent_usage ledger
+# ---------------------------------------------------------------------------
+
+
+def _enabled_ledgers() -> UsageLedgers:
+    """A fresh registry — never enable the process-wide one, which is one-way."""
+    ledgers = UsageLedgers(new_usage_ledger)
+    ledgers.enable()
+    return ledgers
+
+
+def _usage(ledgers: UsageLedgers, agent: str) -> dict[UsageMetric, int]:
+    ledger = ledgers.ledger_for(agent)
+    assert ledger is not None
+    return ledger.within(MAX_WINDOW_SECONDS)
+
+
+def test_run_scope_counts_one_invocation_and_a_join_counts_none() -> None:
+    ledgers = _enabled_ledgers()
+
+    with run_scope("a", ledgers=ledgers) as facts:
+        with use_run_facts(facts):
+            pass
+        with run_scope("b", ledgers=ledgers):
+            pass
+
+    assert _usage(ledgers, "a")[UsageMetric.INVOCATIONS] == 1
+    assert _usage(ledgers, "b")[UsageMetric.INVOCATIONS] == 1
+
+
+def test_recorders_forward_their_v1_metrics_to_the_ledger() -> None:
+    ledgers = _enabled_ledgers()
+
+    with run_scope("a", ledgers=ledgers) as facts:
+        facts.record_execution(_ANY_TOOL)
+        facts.record_denial()
+        facts.record_llm_usage(7, 3)
+        facts.record_error()
+        facts.record_approval()
+
+    assert _usage(ledgers, "a") == {
+        UsageMetric.INVOCATIONS: 1,
+        UsageMetric.TOOL_CALLS: 1,
+        UsageMetric.DENIALS: 1,
+        UsageMetric.LLM_CALLS: 1,
+        UsageMetric.INPUT_TOKENS: 7,
+        UsageMetric.OUTPUT_TOKENS: 3,
+    }
+
+
+def test_a_disabled_registry_binds_no_ledger() -> None:
+    with run_scope("a", ledgers=UsageLedgers(new_usage_ledger)) as facts:
+        assert facts.ledger is None
+
+
+def test_detached_has_no_ledger() -> None:
+    assert DETACHED.ledger is None
+
+
+def test_consecutive_runs_of_one_agent_share_one_ledger() -> None:
+    ledgers = _enabled_ledgers()
+
+    with run_scope("a", ledgers=ledgers) as first:
+        first.record_execution(_ANY_TOOL)
+    with run_scope("a", ledgers=ledgers) as second:
+        pass
+
+    assert first.ledger is second.ledger
+    assert (first.tool_calls, second.tool_calls) == (1, 0)
+    assert _usage(ledgers, "a")[UsageMetric.INVOCATIONS] == 2
