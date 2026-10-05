@@ -665,8 +665,15 @@ TTL toDateTime(received_at) + INTERVAL 180 DAY
   "runs of this agent in a window". `event_id` last keeps dedup to SDK retries.
 - **A refused invocation is not a run.** Ban and admission denials are decided
   before `run_scope` opens and land in `policy_decision` / `ban_enforcement`,
-  never here. A sub-agent's invocation enters its own `run_scope` and gets its
-  own row.
+  never here.
+- **One row per Hexgate run boundary, not per agent.** Only an invocation that
+  crosses a Hexgate boundary opens its own `run_scope` and gets its own row: a
+  top-level run, or a native `HexgateAgent.as_tool()` child, which runs its own
+  enforced `ainvoke`. Delegation inside a framework (OpenAI handoffs and
+  `Agent.as_tool`, Google ADK `transfer_to_agent` and `AgentTool`) stays in the
+  root run: it writes no row, and its decisions carry the root's `run_id`. A
+  per-agent invocation count therefore reads zero for an agent that is only
+  ever reached that way.
 - **Migration:** `migrations/0004_add_agent_run.sql`, applied by hand before
   the enricher that writes to it is deployed. Deploy that enricher to every
   stage before releasing an SDK that emits `hexgate.runs`, or each run start
