@@ -24,6 +24,7 @@ import asyncio
 import contextlib
 import logging
 from collections.abc import AsyncIterator
+from typing import Any
 
 from hexgate.approvals import ApprovalHandler
 from hexgate.egress.gate import Gate
@@ -34,6 +35,11 @@ from hexgate.security.enforcer import PolicyEnforcer
 from hexgate.security.network import NET_TCP_CONNECT
 
 _log = logging.getLogger(__name__)
+
+
+def tcp_to_args(host: str, port: int) -> dict[str, Any]:
+    """Build enforcer args for a raw TCP connection to ``host:port``."""
+    return {"host": host, "port": port, "protocol": "tcp"}
 
 
 class TcpEgressProxy(ProxyServer):
@@ -78,7 +84,7 @@ class TcpEgressProxy(ProxyServer):
     ) -> None:
         # Task tracking and the generic error-close are handled by ProxyServer.
         host, port = self._target
-        result = await self._gate.check({"host": host, "port": port, "protocol": "tcp"})
+        result = await self._gate.check(tcp_to_args(host, port))
         if not result.allowed:
             _log.info("tcp egress DENY %s:%s — %s", host, port, result.decision.reason)
             # Raw TCP has no error frame to send; drop the socket. The client

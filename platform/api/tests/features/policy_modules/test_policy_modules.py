@@ -1771,3 +1771,39 @@ def test_compose_entry_guards_resolve_to_the_runtime_stance() -> None:
     assert ps.guard_stance() == {"baseline": {"secret_guard": False}}
     assert ps.effective_guards("send_update") == {"secret_guard": False}
     assert ps.governed_guard_names() == frozenset({"secret_guard"})
+
+
+def test_compose_entry_skills_resolve_to_gated_bundle() -> None:
+    """A `skills:` block in the compose `policy.yaml` entry file resolves through the
+    platform's compose path to skill keys, and the bundle compiled from the resolved
+    YAML declares skills — so both adapters engage the skill gate for the agent."""
+    import json
+
+    import yaml
+    from hexgate.security import RESOLVED_POLICY_MARKER
+
+    from hexgate_api.features.agents.compiler import compile_bundle
+    from hexgate_api.features.policy_modules.service import _resolve_files, roles_json
+
+    files = {
+        "policy.yaml": (
+            "version: 1\n"
+            "tools: { load_skill: { mode: allow } }\n"
+            "skills: { refund-runbook: { via: [instructions, resource] } }\n"
+        )
+    }
+    result = _resolve_files(files)
+    ps = result.policy_set
+    assert ps.declares_skills()
+    assert ps.evaluate(role=None, tool="skill:refund-runbook", args={}).allowed
+    script = ps.evaluate(role=None, tool="skill.script:refund-runbook", args={})
+    assert not script.allowed
+
+    if shutil.which("opa") is None:
+        pytest.skip("opa not on PATH")
+    resolved = yaml.safe_dump(
+        {"roles": roles_json(result), RESOLVED_POLICY_MARKER: True}, sort_keys=False
+    )
+    compiled = compile_bundle(resolved, lambda _manifest: b"test-signature")
+    assert compiled is not None
+    assert json.loads(compiled[1])["agent_gating"]["skills"] is True

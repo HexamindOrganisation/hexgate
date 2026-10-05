@@ -84,8 +84,7 @@ from hexgate.security.models import (
     FileToolPolicy,
     PolicyMode,
     ToolPolicy,
-    is_agent_key,
-    is_skill_key,
+    is_reserved_key,
 )
 from hexgate.security.policy import get_tool_policy
 from hexgate.security.policy_set import DEFAULT_ROLE_NAME, PolicySet
@@ -171,7 +170,7 @@ class Matrix:
         narrower question — the fallback for an *ordinary* tool — and is what a
         report's "any other tool" row should state.
         """
-        if is_agent_key(tool) or is_skill_key(tool):
+        if is_reserved_key(tool):
             return _DENIED
         return self.defaults[role]
 
