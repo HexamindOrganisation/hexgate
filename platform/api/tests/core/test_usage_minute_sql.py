@@ -7,6 +7,8 @@ silently fold those decisions back into the counts.
 
 from __future__ import annotations
 
+import pytest
+
 from hexgate.security.models import AGENT_REACH_PREFIXES, AGENT_RUN_TOOL
 from hexgate.security.network import EGRESS_TOOL_ARGS
 from tests.core.test_migrations import (
@@ -41,18 +43,13 @@ def test_the_filtered_keys_are_the_sdk_keys() -> None:
     assert all(key.startswith(EGRESS_PREFIX) for key in EGRESS_TOOL_ARGS)
 
 
-def test_the_decisions_view_drops_only_keys_decided_outside_the_guard_runner() -> None:
-    view = _decisions_view()
-
+@pytest.mark.parametrize(
+    "sql",
+    [_decisions_view(), USAGE_BACKFILL.read_text()],
+    ids=["view", "backfill"],
+)
+def test_only_keys_decided_outside_the_guard_runner_are_dropped(sql: str) -> None:
     for clause in DECISION_FILTER:
-        assert clause in view
+        assert clause in sql
     # agent-as-tool reach goes through the guard runner and is counted in run.*.
-    assert TOOL_REACH_PREFIX not in view
-
-
-def test_the_backfill_uses_the_same_decision_filter() -> None:
-    backfill = USAGE_BACKFILL.read_text()
-
-    for clause in DECISION_FILTER:
-        assert clause in backfill
-    assert TOOL_REACH_PREFIX not in backfill
+    assert TOOL_REACH_PREFIX not in sql

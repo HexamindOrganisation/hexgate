@@ -266,8 +266,7 @@ class EnricherJob:
         # tables' own identity is (project_id, ..., event_id) — one tenant
         # reusing another's id must never suppress the other's event. The
         # cross-poll cache extends this check past the poll (see dedup.py).
-        seen_event_ids: set[DedupKey] = set()
-        stamps: list[tuple[DedupKey, int]] = []  # (key, record timestamp ms)
+        fresh: dict[DedupKey, int] = {}  # key → record timestamp ms
         dlq_messages: list[tuple[bytes | None, bytes]] = []  # (key, envelope)
         for record in records:
             project_id = _project_id(record.key)
@@ -336,11 +335,10 @@ class EnricherJob:
                     )
                     continue
                 key = (project_id, event.event_id)
-                if key in seen_event_ids or key in self._recent:
+                if key in fresh or key in self._recent:
                     continue
-                seen_event_ids.add(key)
+                fresh[key] = record.timestamp
                 events.append((event, project_id))
-                stamps.append((key, record.timestamp))
 
         # Postgres is infra exactly like ClickHouse and the DLQ below: a
         # connection failure or exhausted pool halts this partition with
@@ -354,18 +352,17 @@ class EnricherJob:
 
         if not await self._retry_until_acked(_resolve, "agent version resolve"):
             return
-        batches = {
-            event_type: [
+        batches: dict[type[Event], list[BatchItem[Any]]] = {
+            event_type: [] for event_type, _insert in _SINKS
+        }
+        for event, pid in events:
+            batches[type(event)].append(
                 BatchItem(
                     event,
                     project_id=pid,
                     agent_version_id=versions[(pid, event.agent_name)],
                 )
-                for event, pid in events
-                if isinstance(event, event_type)
-            ]
-            for event_type, _insert in _SINKS
-        }
+            )
         acked: set[type[Event]] = set()
 
         # Retry until every table has acked. Only infra failures can land here
@@ -384,7 +381,7 @@ class EnricherJob:
             return
         # Only once the rows exist: a poll that stops before its insert acks
         # replays on restart and must not find its own ids already "seen".
-        self._recent.remember(stamps)
+        self._recent.remember(fresh.items())
 
         # Same posture for the DLQ: an envelope that never lands would be lost
         # for good once the offset commits, so a send failure halts here too.

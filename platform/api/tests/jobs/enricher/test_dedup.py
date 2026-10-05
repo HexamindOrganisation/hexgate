@@ -77,7 +77,6 @@ def test_over_the_cap_the_oldest_is_evicted_and_logged(
     with caplog.at_level(logging.WARNING):
         recent.remember([(first, 0), (second, 0), (third, 0)])
 
-    assert len(recent) == 2
     assert first not in recent
     assert second in recent and third in recent
     assert "evicted 1 ids still inside the window" in caplog.text
@@ -85,10 +84,11 @@ def test_over_the_cap_the_oldest_is_evicted_and_logged(
 
 def test_expiring_old_keys_is_not_logged(caplog: pytest.LogCaptureFixture) -> None:
     recent = RecentEventIds(window_ms=WINDOW_MS, max_entries=1)
+    old, new = _key(), _key()
 
     with caplog.at_level(logging.WARNING):
-        recent.remember([(_key(), 0)])
-        recent.remember([(_key(), WINDOW_MS + 1)])
+        recent.remember([(old, 0)])
+        recent.remember([(new, WINDOW_MS + 1)])
 
-    assert len(recent) == 1
+    assert old not in recent and new in recent
     assert caplog.text == ""

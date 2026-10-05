@@ -50,9 +50,6 @@ class RecentEventIds:
     def __contains__(self, key: DedupKey) -> bool:
         return key in self._seen
 
-    def __len__(self) -> int:
-        return len(self._seen)
-
     def remember(self, stored: Iterable[tuple[DedupKey, int]]) -> None:
         """Record ``(key, record_timestamp_ms)`` pairs ClickHouse has acked."""
         for key, timestamp_ms in stored:
@@ -67,9 +64,9 @@ class RecentEventIds:
         evicted_live = 0
         while self._seen:
             oldest_ms = next(iter(self._seen.values()))
-            if oldest_ms >= horizon and len(self._seen) <= self._max_entries:
-                break
             if oldest_ms >= horizon:
+                if len(self._seen) <= self._max_entries:
+                    break
                 evicted_live += 1
             self._seen.popitem(last=False)
         if evicted_live:

@@ -264,7 +264,7 @@ def test_every_mapped_event_type_has_exactly_one_sink() -> None:
     assert set(sink_types) == set(get_args(Event))
 
 
-async def test_when_an_insert_fails_then_whole_batch_retried_and_committed_once(
+async def test_when_an_insert_fails_then_it_is_retried_and_committed_once(
     make_job,
 ) -> None:
     job, clickhouse, consumer, producer, calls = make_job(
