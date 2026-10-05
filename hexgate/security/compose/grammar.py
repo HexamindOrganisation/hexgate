@@ -65,8 +65,9 @@ def _as_list(v: object) -> object:
 class _ConstraintsMixin(BaseModel):
     """Shared ``constraint``/``constraints`` ergonomics for every spec."""
 
-    # No populate_by_name: only the YAML aliases are accepted (e.g. `as:`, not the
-    # `via` field name), so a field-name spelling is rejected by extra="forbid".
+    # No populate_by_name: an aliased field is spelled only by its YAML alias, so
+    # its field name is rejected by extra="forbid" (ReachSpec takes `as:`, not
+    # `via:`). An unaliased field, like the skill specs' `via`, uses its name.
     model_config = ConfigDict(extra="forbid")
 
     constraints: list[str] = Field(default_factory=list)
