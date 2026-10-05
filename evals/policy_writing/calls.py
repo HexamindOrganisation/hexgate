@@ -23,11 +23,11 @@ from urllib.parse import urlsplit
 from evals.policy_writing.names import (
     AGENT_REACH_ARGS,
     SKILL_ARGS,
+    SKILL_SCRIPT_ARGS,
     SYNTHETIC_ARGS,
     load_known_names,
 )
 from hexgate.egress.model import connect_to_args, http_to_args
-from hexgate.manifest.models import AgentManifest, InputSchema
 from hexgate.security.models import (
     AGENT_RUN_TOOL,
     SkillVia,
@@ -55,7 +55,7 @@ class Known:
 
     tools: dict[str, set[str]]  # {tool: argument names}, as the scorer reads them
     attrs: set[str]
-    schemas: dict[str, InputSchema]
+    schemas: dict[str, dict]  # {tool: its input_schema, as agents.json has it}
     skills: set[str]
     agents: set[str]  # every agent in agents.json: the possible reach targets
     attr_types: dict[str, set[str]]  # the JSON types each attribute arrived with
@@ -67,9 +67,12 @@ def load_known(project: Path, agent: str) -> Known:
     Raises OSError, ValueError, KeyError, TypeError or AttributeError for a
     missing or malformed file, or an agent with no manifest.
     """
-    tools, attrs = load_known_names(project, agent)  # the scorer's own reading
-    views = {v["name"]: v for v in json.loads((project / "agents.json").read_text())}
-    manifest = AgentManifest.model_validate(views[agent]["manifest"])
+    names = load_known_names(project, agent)  # the scorer's own reading
+    views = json.loads((project / "agents.json").read_text())
+    # The view load_known_names read; the endpoint's shape, so null fields are fine.
+    manifest = next(
+        v["manifest"] for v in views if v["name"] == agent and v.get("manifest")
+    )
     audit = project / "audit.json"
     rows = json.loads(audit.read_text()) if audit.exists() else []
     attr_types: dict[str, set[str]] = {}
@@ -78,11 +81,11 @@ def load_known(project: Path, agent: str) -> Known:
             for name, value in (row.get("attributes") or {}).items():
                 attr_types.setdefault(name, set()).add(_json_type(value))
     return Known(
-        tools=tools,
-        attrs=attrs,
-        schemas={t.name: t.input_schema for t in manifest.tools},
-        skills={s.name for s in manifest.skills or []},
-        agents=set(views),
+        tools=names.tools,
+        attrs=names.attrs,
+        schemas={t["name"]: t["input_schema"] for t in manifest["tools"]},
+        skills=names.skills,
+        agents={v["name"] for v in views},
         attr_types=attr_types,
     )
 
@@ -239,9 +242,10 @@ def unknown_names(call: dict, known: Known) -> list[str]:
             return [tool]
         args = AGENT_REACH_ARGS
     elif is_skill_key(tool):
-        if _skill_parts(tool)[1] not in known.skills:
+        via, name = _skill_parts(tool)
+        if name not in known.skills:
             return [tool]
-        args = SKILL_ARGS
+        args = SKILL_SCRIPT_ARGS if via == "script" else SKILL_ARGS
     elif tool in known.tools:
         args = known.tools[tool]
     else:
@@ -252,14 +256,14 @@ def unknown_names(call: dict, known: Known) -> list[str]:
     ]
 
 
-def _bad_args(args: dict, schema: InputSchema) -> list[str]:
+def _bad_args(args: dict, schema: dict) -> list[str]:
     """Required arguments left out, and values of another type than the schema's.
 
     YAML reads a quoted `"51"` as a string and a blank `amount:` as null.
     """
-    bad = [f"args.{a} missing" for a in schema.required if a not in args]
+    bad = [f"args.{a} missing" for a in schema.get("required") or [] if a not in args]
     for name, value in args.items():
-        kind = schema.properties[name].type
+        kind = schema["properties"][name].get("type")
         # Adapters record "string" for any schema without one top-level type
         # (`int | None`, `bool | None`, a list, a model), so it says nothing; a
         # precise type rules out null too, since a nullable one is never precise.

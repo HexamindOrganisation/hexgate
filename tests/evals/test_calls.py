@@ -18,14 +18,13 @@ from evals.policy_writing.calls import (
     unknown_names,
 )
 from hexgate.egress.model import connect_to_args, http_to_args
-from hexgate.manifest.models import InputSchema
 from tests.evals.helpers import AGENT, agent_view, manifest_tool
 
 REFUND = manifest_tool("refund_order", order_id="string", amount="number")
 KNOWN = Known(
     tools={"refund_order": {"order_id", "amount"}},
     attrs={"tier"},
-    schemas={"refund_order": InputSchema.model_validate(REFUND["input_schema"])},
+    schemas={"refund_order": REFUND["input_schema"]},
     skills={"triage"},
     agents={AGENT, "ops-bot"},
     attr_types={"tier": {"string"}},
@@ -59,6 +58,20 @@ def test_load_known_reads_the_agent_s_manifest_and_audit_rows(
     audit = {"rows": rows, "total": 2} if page else rows
     (tmp_path / "audit.json").write_text(json.dumps(audit))
     assert load_known(tmp_path, AGENT) == KNOWN
+
+
+def test_load_known_reads_the_endpoint_s_loose_shape(tmp_path: Path) -> None:
+    # The endpoint sends null for a missing description, skills or guards, and
+    # for an agent registered with no manifest yet.
+    view = agent_view(AGENT, {**REFUND, "description": None})
+    draft = {**agent_view("draft-bot"), "manifest": None}
+    (tmp_path / "agents.json").write_text(json.dumps([draft, view]))
+    known = load_known(tmp_path, AGENT)
+    assert (known.schemas, known.skills, known.agents) == (
+        {"refund_order": REFUND["input_schema"]},
+        set(),
+        {AGENT, "draft-bot"},
+    )
 
 
 # ---------------------------------------------------------------- complete
@@ -205,6 +218,9 @@ def test_complete_rejects_what_no_gate_sends(call: dict, error: str) -> None:
         ({"tool": "net.http_request", "args": {"host": "x"}}, []),
         ({"tool": "agent.tool:ops-bot", "args": {"target": "ops-bot"}}, []),
         ({"tool": "skill:triage", "args": {"skill": "triage"}}, []),
+        ({"tool": "skill.script:triage", "args": {**SCRIPT_RUN}}, []),
+        # Only a script carries its invocation arguments.
+        ({"tool": "skill:triage", "args": {"script_args": None}}, ["args.script_args"]),
         # A misspelt name is denied whatever the policy says.
         ({"tool": "refund_ordr"}, ["refund_ordr"]),
         ({**REFUND_500, "args": {"amout": 1}}, ["args.amout"]),

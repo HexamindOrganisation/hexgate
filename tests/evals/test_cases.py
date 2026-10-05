@@ -234,6 +234,30 @@ def test_load_rejects_an_unquoted_yaml_date(tmp_path: Path) -> None:
         load_cases(root)
 
 
+def test_load_completes_and_checks_a_script_call(tmp_path: Path) -> None:
+    # complete requires a script's invocation arguments; unknown_names must
+    # then accept them.
+    view = agent_view(
+        AGENT, manifest_tool("refund_order", order_id="string", amount="number")
+    )
+    view["manifest"]["skills"] = [{"name": "pdf", "description": "pdf"}]
+    root = _eval_set(tmp_path, _case())
+    _write(root / "starting_projects" / "shop" / "agents.json", json.dumps([view]))
+    run = {"file_path": "s.sh", "content_hash": None, "script_args": None}
+    run |= {"short_options": None, "positional_args": None}
+    call = {
+        "role": "billing",
+        "tool": "skill.script:pdf",
+        "args": run,
+        "expect": "deny",
+    }
+    _write(
+        root / "cases" / "cat" / "c" / "case.yaml", _case(expect={"decisions": [call]})
+    )
+    [case] = load_cases(root)
+    assert case["expect"]["decisions"][0]["args"]["via"] == "script"
+
+
 def test_a_case_overrides_a_preserved_reach_however_it_spells_it(
     tmp_path: Path,
 ) -> None:
