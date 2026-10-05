@@ -349,7 +349,7 @@ nothing (no partial output, no fake terminal message).
 | **LangChain** (`adapters/langchain/agent.py`) | injected via wrapper | `invoke`, `ainvoke`, `stream`, `astream`, `astream_events` |
 | **Pydantic-AI** (`adapters/pydantic_ai/agent.py`) | injected via wrapper | `run`, `run_sync`, `run_stream`, `iter` |
 
-The wiring entry point is `resolve_ban_gate(agent_name, api_key=..., client=...)` (`bans.py:307`),
+The wiring entry point is `resolve_ban_gate(agent_name, api_key=..., client=...)` (`bans.py:314`),
 which returns **`None`** — and callers then skip the check entirely — for every "no platform" case:
 `HEXGATE_LOCAL_MODE`, `HEXGATE_LOCAL_POLICY` (offline local-policy dev), or no resolvable API key.
 `PolicyEnforcer.decide()` and the per-tool-call hot path are **never modified** by any of this.
