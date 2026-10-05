@@ -290,7 +290,11 @@ starts. The run being admitted is not counted yet, so use `<`:
 Each metric counts exactly what its `run.*` twin counts, summed over the window.
 The differences:
 
-- **`invocations` counts admitted runs.** A run refused at admission is not counted.
+- **`invocations` counts admitted runs, other than the current one.** A run refused
+  at admission is not counted. Inside a run, `invocations_*` leaves that run out, so
+  a top-level cap reads the same at admission and at every tool call in the run:
+  under `agent_usage.invocations_1h < 100`, the 100th run is admitted and can still
+  call its tools.
 - **`denials` counts denials inside a run.** Admission and ban refusals are decided
   before the run starts, so they are not counted, the same as for `run.denials`.
 - **Tokens trail.** They are known only once the model answers, so a token cap

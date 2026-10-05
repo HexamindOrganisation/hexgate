@@ -41,6 +41,11 @@ if TYPE_CHECKING:
 
 _log = logging.getLogger(__name__)
 
+# run.* paths the agent_usage namespace reads to recognise the agent's own run.
+_RUN_ID = "id"
+_RUN_AGENT = "agent"
+_RUN_ELAPSED = "elapsed_seconds"
+
 _warned_role_cap = False
 
 
@@ -183,7 +188,7 @@ class PolicyEnforcer:
         # Feeds the ``agent_usage.*`` namespace. Read once per decision, like run.*,
         # so roles can't disagree about the agent's usage. None when the policy
         # references none.
-        usage_snapshot = self._usage_namespace(bound.usage_paths)
+        usage_snapshot = self._usage_namespace(bound.usage_paths, run_snapshot)
 
         verdict, deciding_role = combine_role_verdicts(
             roles,
@@ -218,13 +223,24 @@ class PolicyEnforcer:
         )
         return decision
 
-    def _usage_namespace(self, paths: frozenset[str]) -> dict[str, int] | None:
+    def _usage_namespace(
+        self, paths: frozenset[str], run: Mapping[str, Any]
+    ) -> dict[str, int] | None:
         # By agent name, not RunFacts: admission is decided before run_scope opens,
         # while RunFacts is still DETACHED and carries no ledger.
         if not paths:
             return None
         ledger = self._ledgers.ledger_for(self.agent_name)
-        return ledger_namespace(ledger, paths) if ledger is not None else None
+        if ledger is None:
+            return None
+        # Inside this agent's own run (not a parent's, not DETACHED), so that run's
+        # invocation is left out of invocations_*, as it was at admission.
+        in_own_run = bool(run[_RUN_ID]) and run[_RUN_AGENT] == self.agent_name
+        return ledger_namespace(
+            ledger,
+            paths,
+            current_run_age=run[_RUN_ELAPSED] if in_own_run else None,
+        )
 
     def record(
         self, decision: Decision, *, user_id: str = "", session_id: str = ""
