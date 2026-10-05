@@ -348,7 +348,7 @@ class HexgateRunner:
         async with hexgate_context:
             await self._check_admission_async(binding)  # in-scope: reads the role
             with (
-                run_scope(agent.name, api_key=self.api_key),
+                run_scope(canonical_agent_name(agent), api_key=self.api_key),
                 self._propagate(hexgate_context, agent.name),
             ):
                 return await Runner.run(
@@ -388,7 +388,7 @@ class HexgateRunner:
         with hexgate_context.sync_scope():
             self._check_admission_sync(binding)  # in-scope: reads the role
             with (
-                run_scope(agent.name, api_key=self.api_key),
+                run_scope(canonical_agent_name(agent), api_key=self.api_key),
                 self._propagate(hexgate_context, agent.name),
             ):
                 return Runner.run_sync(
@@ -526,7 +526,9 @@ class HexgateRunner:
             # Scope must be open around run_streamed(): it snapshots the
             # contextvars into the background task where tools fire, and that
             # snapshot keeps the facts alive after this block exits.
-            with run_scope(agent.name, api_key=self.api_key) as run_facts:
+            with run_scope(
+                canonical_agent_name(agent), api_key=self.api_key
+            ) as run_facts:
                 with self._propagate(hexgate_context, agent.name):
                     result = Runner.run_streamed(
                         wrapped_agent,
