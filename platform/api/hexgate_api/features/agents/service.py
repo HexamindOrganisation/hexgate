@@ -354,28 +354,17 @@ async def latest_manifests(
     whole project."""
     if names is not None and not names:
         return {}
-    agent_ids = select(Agent.id).where(Agent.project_id == project_id)
-    if names is not None:
-        agent_ids = agent_ids.where(Agent.name.in_(names))  # type: ignore[attr-defined]
-    latest = (
-        select(AgentVersion.agent_id, func.max(AgentVersion.version).label("v"))
-        .where(AgentVersion.agent_id.in_(agent_ids))  # type: ignore[attr-defined]
-        .group_by(AgentVersion.agent_id)
-        .subquery()
-    )
-    stmt = (
-        select(Agent.name, AgentVersion.manifest)
-        .join(AgentVersion, AgentVersion.agent_id == Agent.id)
-        .join(
-            latest,
-            (latest.c.agent_id == AgentVersion.agent_id)
-            & (latest.c.v == AgentVersion.version),
-        )
-    )
     from hexgate.manifest.models import AgentManifest as SdkAgentManifest
 
+    stmt = select(Agent.id, Agent.name).where(Agent.project_id == project_id)
+    if names is not None:
+        stmt = stmt.where(Agent.name.in_(names))  # type: ignore[attr-defined]
+    name_by_id = dict((await session.exec(stmt)).all())
+    versions = await get_latest_agent_versions_map(session, list(name_by_id))
+
     manifests: dict[str, SdkAgentManifest] = {}
-    for name, manifest in (await session.exec(stmt)).all():
+    for agent_id, version in versions.items():
+        name, manifest = name_by_id[agent_id], version.manifest
         if not manifest:
             continue
         try:

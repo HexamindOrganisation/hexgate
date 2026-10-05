@@ -438,8 +438,7 @@ async def api_delete_policy_file(
                 if r.name != name
             }
             try:
-                for a in service._compose_agent_names(files):
-                    service._resolve_files(files, a)
+                service._resolve_all_agents_files(files)
             except service.compose_error_types() as exc:
                 raise HTTPException(
                     status_code=409,

@@ -1985,6 +1985,8 @@ async def test_when_a_registered_agent_is_not_declared_then_check_still_lints_it
     assert [(lint["code"], lint["message"].split(":", 1)[0]) for lint in lints] == [
         ("unknown-guard", "agent 'bot'")
     ]
+    # Attributed to the entry file, so the editor shows it inline.
+    assert lints[0]["source"] == "policy.yaml"
 
 
 async def test_when_a_stored_manifest_no_longer_validates_then_only_its_checks_skip(
@@ -1993,7 +1995,6 @@ async def test_when_a_stored_manifest_no_longer_validates_then_only_its_checks_s
     # A registration older than a schema change: the row is skipped, so the rest of
     # the project still lints and nothing reads as a link error or a 500.
     import hexgate_api.features.agents.service as asvc
-    from hexgate_api.models import Agent, AgentVersion
     from hexgate_api.schemas import AgentManifest
 
     pid = _project(client)
@@ -2001,13 +2002,8 @@ async def test_when_a_stored_manifest_no_longer_validates_then_only_its_checks_s
         for name in ("bot", "stale"):
             manifest = AgentManifest.model_validate({**_PARITY_MANIFEST, "name": name})
             await asvc.register_manifest(s, pid, manifest, sign=_dummy_sign)
-        stale = (
-            await s.exec(
-                select(AgentVersion)
-                .join(Agent, Agent.id == AgentVersion.agent_id)
-                .where(Agent.project_id == pid, Agent.name == "stale")
-            )
-        ).one()
+        agent = await asvc.get_agent(s, pid, "stale")
+        stale = (await asvc.get_latest_agent_versions_map(s, [agent.id]))[agent.id]
         stale.manifest = {"name": "stale"}  # missing required fields
         s.add(stale)
         await s.commit()
@@ -2029,3 +2025,55 @@ async def test_when_a_stored_manifest_no_longer_validates_then_only_its_checks_s
         f"/v1/projects/{pid}/agents/stale/validate", json={"policy_yaml": entry}
     )
     assert r.status_code == 200 and r.json()["ok"] is True
+
+
+def test_when_an_agent_is_not_declared_then_it_resolves_like_the_generic_view():
+    # _resolution_for reuses the "*" result for an undeclared agent; that is only
+    # sound while the two resolve identically (guards and imports included).
+    from hexgate_api.features.policy_modules.service import _resolve_files, roles_json
+
+    files = {
+        "caps.yaml": "export:\n  c:\n    tools: { a: { mode: allow } }\n",
+        "policy.yaml": (
+            "import: [ caps.yaml#c ]\n"
+            "guards: { g: { enabled: false } }\n"
+            "agents:\n  bot: { tools: { b: { mode: allow } } }\n"
+        ),
+    }
+    generic = _resolve_files(files, "*")
+    ghost = _resolve_files(files, "ghost")
+    assert roles_json(ghost) == roles_json(generic)
+    assert ghost.policy_set.guard_stance() == generic.policy_set.guard_stance()
+
+
+def test_when_the_sdk_lint_gains_a_field_then_the_wire_model_carries_it():
+    # The router builds PolicyLintOut(**asdict(lint)); pydantic would drop a field
+    # the wire model lacks without an error.
+    from dataclasses import fields
+
+    from hexgate.security import PolicyLint
+    from hexgate_api.schemas import PolicyLintOut
+
+    assert {f.name for f in fields(PolicyLint)} <= set(PolicyLintOut.model_fields)
+
+
+async def test_when_an_agent_re_registers_then_its_latest_manifest_is_used(
+    session_factory,
+):
+    import hexgate_api.features.agents.service as asvc
+    from hexgate_api.constants import DEFAULT_PROJECT_ID
+    from hexgate_api.schemas import AgentManifest
+
+    async with session_factory() as s:
+        for guard in ("old_guard", "new_guard"):
+            manifest = AgentManifest.model_validate(
+                {
+                    **_PARITY_MANIFEST,
+                    "guards": [{"name": guard, "position": "before", "kind": "custom"}],
+                }
+            )
+            await asvc.register_manifest(
+                s, DEFAULT_PROJECT_ID, manifest, sign=_dummy_sign
+            )
+        manifests = await asvc.latest_manifests(s, DEFAULT_PROJECT_ID, ["bot"])
+    assert [g.name for g in manifests["bot"].guards] == ["new_guard"]

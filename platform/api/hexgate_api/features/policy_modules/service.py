@@ -678,8 +678,7 @@ async def project_resolves_with_file(
     if ENTRY_FILE not in files:
         return True, None
     try:
-        for agent in _compose_agent_names(files):
-            _resolve_files(files, agent)
+        _resolve_all_agents_files(files)
     except compose_error_types() as exc:
         return False, str(exc)
     return True, None
@@ -769,16 +768,13 @@ async def check_auto(session: AsyncSession, project_id: str) -> list[PolicyLint]
     ``analyze_policy`` findings) or tier (analyzer lints), from a single files
     read. Both stores return SDK ``PolicyLint``s, so the router builds the
     response the same way for each."""
-    from hexgate_api.features.agents.service import latest_manifests
-
     files = await _files_map(session, project_id)
     if ENTRY_FILE in files:
-        manifests = await latest_manifests(session, project_id)
         try:
-            resolved = _resolve_all_agents_files(files)
-            return _compose_lints(files, resolved, manifests)
+            _, lints = await _resolve_and_lint(session, project_id, files)
         except compose_error_types() as exc:
             return [_link_error(str(exc))]
+        return lints
     return await check(session, project_id)
 
 
@@ -797,16 +793,36 @@ def _resolve_all_agents_files(files: dict[str, str]) -> dict:
     }
 
 
-def _compose_lints(
-    files: dict[str, str], resolved: dict, manifests: dict
-) -> list[PolicyLint]:
+def _resolution_for(resolved: dict, agent: str):
+    """``agent``'s resolution from :func:`_resolve_all_agents_files`. An agent the
+    entry doesn't declare resolves exactly like ``"*"`` (only the top-level scopes
+    apply to it), so it reuses that result instead of resolving again."""
+    return resolved[agent] if agent in resolved else resolved[DEFAULT_AGENT]
+
+
+async def _resolve_and_lint(
+    session: AsyncSession, project_id: str, files: dict[str, str]
+) -> tuple[dict, list[PolicyLint]]:
+    """Resolve every declared agent, then lint the project. Raises
+    :func:`compose_error_types` when an agent doesn't resolve, before the
+    manifests are loaded, so a draft that doesn't compose costs no DB query."""
+    from hexgate_api.features.agents.service import latest_manifests
+
+    resolved = _resolve_all_agents_files(files)
+    manifests = await latest_manifests(session, project_id)
+    return resolved, _compose_lints(resolved, manifests)
+
+
+def _compose_lints(resolved: dict, manifests: dict) -> list[PolicyLint]:
     """The ``PolicyLint``s ``analyze_policy`` reports for every agent the entry
     declares (``resolved``) and every registered agent (the ones
     ``recompile_project`` builds a bundle for), each against its latest registered
-    manifest (``manifests``, loaded by the caller outside its compose-error
-    ``try``, so a manifest problem can never read as a link error); a declared agent that never registered gets no manifest checks. The
-    ``"*"`` view has no manifest, so it gets the manifest-free checks. Raises
-    :func:`compose_error_types` when a registered agent doesn't resolve.
+    manifest (``manifests``; ``latest_manifests`` skips a stored manifest that no
+    longer validates, so a manifest problem can never read as a link error); a declared
+    agent that never registered gets no manifest checks. The ``"*"`` view has no
+    manifest, so it gets the manifest-free checks. Lints carry ``ENTRY_FILE`` as
+    their source so the editor shows them inline; drift can come from an imported
+    file, which the resolved form no longer tells apart.
 
     A named agent's lint is prefixed with the agent and dropped only when the
     ``"*"`` view already reported it (a top-level rule every agent shares), so two
@@ -819,12 +835,15 @@ def _compose_lints(
     def key(lint) -> tuple:
         return (lint.code, lint.message, lint.tool, lint.role)
 
-    generic = analyze_policy(resolved[DEFAULT_AGENT].policy_set)
+    generic = analyze_policy(resolved[DEFAULT_AGENT].policy_set, source=ENTRY_FILE)
     shared = {key(lint) for lint in generic}
     lints = list(generic)
     for agent in sorted((set(resolved) | set(manifests)) - {DEFAULT_AGENT}):
-        result = resolved.get(agent) or _resolve_files(files, agent)
-        for lint in analyze_policy(result.policy_set, manifest=manifests.get(agent)):
+        policy_set = _resolution_for(resolved, agent).policy_set
+        lints_for_agent = analyze_policy(
+            policy_set, manifest=manifests.get(agent), source=ENTRY_FILE
+        )
+        for lint in lints_for_agent:
             if key(lint) not in shared:
                 lints.append(replace(lint, message=f"agent {agent!r}: {lint.message}"))
     lints.sort(key=lambda lint: SEVERITY_RANK[lint.severity])
@@ -848,14 +867,10 @@ async def compose_preview(
     files = {**await _files_map(session, project_id), name: content}
     if ENTRY_FILE not in files:
         return None, [_link_error(f"no entry file {ENTRY_FILE!r} in this project")]
-    from hexgate_api.features.agents.service import latest_manifests
-
-    manifests = await latest_manifests(session, project_id)
     try:
         # Every declared agent, so the preview and the save agree.
-        resolved = _resolve_all_agents_files(files)
-        requested = resolved.get(agent) or _resolve_files(files, agent)
-        lints = _compose_lints(files, resolved, manifests)
+        resolved, lints = await _resolve_and_lint(session, project_id, files)
+        requested = _resolution_for(resolved, agent)
     except compose_error_types() as exc:
         return None, [_link_error(str(exc))]
     return roles_json(requested), lints

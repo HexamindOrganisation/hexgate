@@ -512,6 +512,7 @@ class PolicyLintOut(BaseModel):
     severity: str
     message: str
     source: str | None = None
+    line: int | None = None
     tier: str | None = None
     tool: str | None = None
     role: str | None = None
