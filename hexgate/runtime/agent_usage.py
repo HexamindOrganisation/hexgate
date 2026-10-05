@@ -156,7 +156,13 @@ class UsageLedger:
         )
 
 
-def new_usage_ledger(clock: Clock = time.monotonic) -> UsageLedger:
+def _monotonic() -> float:
+    # Resolved per call, like ``RunFacts._started_monotonic``: a bound reference
+    # would ignore a patched clock that ``run.elapsed_seconds`` follows.
+    return time.monotonic()
+
+
+def new_usage_ledger(clock: Clock = _monotonic) -> UsageLedger:
     return UsageLedger(
         series=(
             BucketSeries(FINE_BUCKET_SECONDS, FINE_RETENTION_SECONDS),

@@ -8,6 +8,7 @@ semantics PR 2b and PR 6 build on.
 from __future__ import annotations
 
 import threading
+import time
 from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
 
@@ -244,6 +245,19 @@ def test_parallel_writers_lose_no_increments() -> None:
 
     total = ledger.within(MAX_WINDOW_SECONDS)[UsageMetric.TOOL_CALLS]
     assert total == _WRITERS * _WRITES_EACH
+
+
+def test_the_default_clock_follows_a_patched_monotonic(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clock = _FakeClock()
+    ledger = new_usage_ledger()
+    monkeypatch.setattr(time, "monotonic", clock)
+    ledger.record(_ONE_TOOL_CALL)
+    clock.now += 2 * _DAY
+
+    assert ledger.since(_START)[UsageMetric.TOOL_CALLS] == 1
+    assert ledger.within(_DAY)[UsageMetric.TOOL_CALLS] == 0
 
 
 # ---------------------------------------------------------------------------
