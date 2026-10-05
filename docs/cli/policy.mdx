@@ -93,6 +93,15 @@ the fallback):
 hexgate policy validate policy.yaml --max-severity warning   # non-zero on either warning
 ```
 
+`validate` also fails when roles set different `guards:` settings, since the
+runtime builds one guard pipeline per agent. Pass the agent's manifest to check
+the policy against its code too: a `guards:` rule naming a guard the agent
+doesn't declare, and a tool or argument the agent doesn't have:
+
+```bash
+hexgate policy validate policy.yaml --manifest manifest.json
+```
+
 ## Testing `ctx.*` attribute rules
 
 Constraints can filter on caller attributes via `ctx.*` (see
