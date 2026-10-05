@@ -37,6 +37,19 @@ roles:
 """
 
 
+# Roles disagreeing on a guard: one guard pipeline per agent can't serve both.
+GUARD_DIVERGENCE = """\
+version: 1
+roles:
+  default:
+    guards:
+      g: { enabled: false }
+  admin:
+    guards:
+      g: { enabled: true }
+"""
+
+
 @pytest.mark.parametrize(
     ("role", "amount", "expected"),
     [
@@ -126,6 +139,13 @@ def test_when_the_policy_holds_a_yaml_date_then_effective_policy_fails(
     policy, problems = effective_policy(make_workspace(tmp_path, dated))
     assert policy is None
     assert problems[0].startswith("can't compile:")
+
+
+def test_when_roles_disagree_on_guards_then_effective_policy_fails(tmp_path) -> None:
+    # As `hexgate policy build` rejects it.
+    policy, problems = effective_policy(make_workspace(tmp_path, GUARD_DIVERGENCE))
+    assert policy is None
+    assert any("guard-divergence" in p for p in problems)
 
 
 def test_when_policy_yaml_is_empty_then_it_is_an_empty_policy(tmp_path) -> None:
