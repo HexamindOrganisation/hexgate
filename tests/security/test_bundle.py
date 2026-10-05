@@ -439,6 +439,46 @@ def test_build_signed_bundle_raises_on_bad_constraint() -> None:
 
 
 # ---------------------------------------------------------------------------
+# agent_usage — the referenced paths the enforcer enables the ledgers for
+# ---------------------------------------------------------------------------
+
+_USAGE_YAML = (
+    "version: 1\nroles:\n  default:\n"
+    "    constraints: ['agent_usage.tool_calls_5m < 10']\n"
+    "    admission:\n      mode: allow\n"
+    "      constraints: ['agent_usage.invocations_1h < 100']\n"
+)
+
+
+def _manifest_only_bundle(manifest: dict) -> PolicyBundle:
+    manifest_bytes = json.dumps(manifest, sort_keys=True).encode("utf-8")
+    return PolicyBundle.from_parts(wasm_bytes=b"\x00asm", manifest_bytes=manifest_bytes)
+
+
+def test_build_signed_bundle_records_the_usage_paths_sorted() -> None:
+    sb = build_signed_bundle(_USAGE_YAML, compile_wasm=False)
+
+    assert sb.manifest["agent_usage"] == ["invocations_1h", "tool_calls_5m"]
+    assert _manifest_only_bundle(sb.manifest).agent_usage_paths() == {
+        "invocations_1h",
+        "tool_calls_5m",
+    }
+
+
+def test_a_usage_free_manifest_has_no_agent_usage_key() -> None:
+    """Omitted, not empty: every existing bundle's manifest bytes, and so its
+    signature, must not move."""
+    sb = build_signed_bundle(_DEMO_YAML, compile_wasm=False)
+
+    assert "agent_usage" not in sb.manifest
+    assert b"agent_usage" not in sb.manifest_bytes
+
+
+def test_a_manifest_without_the_key_references_no_path() -> None:
+    assert _manifest_only_bundle({"version": 1}).agent_usage_paths() == frozenset()
+
+
+# ---------------------------------------------------------------------------
 # agent_gating.skills — the skill gate's engagement flag
 # ---------------------------------------------------------------------------
 

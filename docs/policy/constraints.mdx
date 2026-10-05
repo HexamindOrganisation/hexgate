@@ -68,8 +68,9 @@ a quantifier body.
 Besides `args.*`, constraints can reference two **call-scope facts**: `role`
 (the caller's role) and `tool` (the tool being invoked) — e.g.
 `role == "admin"` or `tool == "refund_order"`. These mirror Rego's
-`input.role` / `input.tool`. Two further namespaces follow below: `ctx.*` (who
-is calling) and `run.*` (what this invocation has done so far).
+`input.role` / `input.tool`. Three further namespaces follow below: `ctx.*` (who
+is calling), `run.*` (what this invocation has done so far) and `agent_usage.*`
+(what this agent has done across runs).
 
 ## Caller attributes (`ctx.*`)
 
@@ -221,6 +222,107 @@ round-robin **in the same task** will cross-contaminate, because Python has no
 per-generator context. Consume one at a time, or put each in its own task. (This
 already affects caller identity via `HexgateContext`, so it isn't new to
 `run.*`.)
+
+## Agent usage (`agent_usage.*`)
+
+`run.*` caps one invocation. `agent_usage.*` caps **this agent across runs**, over a
+rolling window: "100 invocations per hour", "2M tokens per day". Each path is
+`<metric>_<window>`, such as `agent_usage.invocations_1h` or
+`agent_usage.total_tokens_24h`.
+
+```yaml
+consts:
+  hourly_runs: 100
+  daily_tokens: 2000000
+
+admission:
+  mode: allow
+  constraints:
+    - agent_usage.invocations_1h < consts.hourly_runs
+    - agent_usage.total_tokens_24h < consts.daily_tokens
+
+tools:
+  send_email:
+    mode: allow
+    constraints:
+      - agent_usage.tool_calls_5m < 30   # burst cap across runs
+```
+
+### The paths
+
+Seven metrics, each over five windows (`5m`, `1h`, `24h`, `7d`, `30d`), for 35 paths:
+
+| Metric | Counts | `run.*` twin |
+|---|---|---|
+| `invocations` | Admitted runs | — |
+| `tool_calls` | Tools that executed | `run.tool_calls` |
+| `denials` | Calls the policy or a guard refused, inside a run | `run.denials` |
+| `llm_calls` | Model requests | `run.llm_calls` |
+| `input_tokens` | Prompt tokens | `run.input_tokens` |
+| `output_tokens` | Completion tokens | `run.output_tokens` |
+| `total_tokens` | `input_tokens + output_tokens` | `run.total_tokens` |
+
+Like `run.*`, a typo'd path (`agent_usage.tool_call_1h`), an unknown window
+(`agent_usage.tool_calls_2h`) or a path with no window is **rejected when the policy
+loads**.
+
+### Local to this process, today
+
+The values are what **this process** has counted since it started:
+
+- a restart resets them;
+- two replicas of the same agent each count their own;
+- nothing is fetched from the platform.
+
+That is exact for an agent that runs in a single process, and it is what
+`hexgate policy test` simulates. Counts shared across processes are planned, and
+will come with their own documentation.
+
+### Where to put a limit
+
+Put invocation and budget caps on `admission`: they then refuse the run before it
+starts. The run being admitted is not counted yet, so use `<`:
+`agent_usage.invocations_1h < 100` admits exactly 100 runs per hour. A top-level
+`constraints:` entry also reaches every tool call inside a run, not only admission.
+
+### What the counters mean
+
+Each metric counts exactly what its `run.*` twin counts, summed over the window.
+The differences:
+
+- **`invocations` counts admitted runs.** A run refused at admission is not counted.
+- **`denials` counts denials inside a run.** Admission and ban refusals are decided
+  before the run starts, so they are not counted, the same as for `run.denials`.
+- **Tokens trail.** They are known only once the model answers, so a token cap
+  stops the next admission or call, not the one that crossed it. On the Pydantic AI
+  adapter, usage is reported when each run finishes. So `agent_usage.*_tokens_*`
+  **does** cap later runs there, unlike `run.*_tokens`.
+- **Rolling, not latching.** A denial clears as usage ages out of the window. There
+  are no calendar resets. This is the opposite of `run.*`, which only ever grows.
+- **Windows round up, never down.** The oldest bucket counts whole, so a window can
+  read slightly *more* than its nominal length: under a second more for `5m`, under
+  a minute for `1h` and `24h`, under an hour for `7d` and `30d`.
+
+### Dry-running a quota
+
+`hexgate policy test` takes `--agent-usage`. Unset paths read zero, as in a fresh
+process:
+
+```bash
+hexgate policy test policy.yaml --role default --tool agent.run \
+  --args '{"agent": "billing"}' --agent-usage '{"invocations_1h": 100}'
+```
+
+In a pytest suite, build the namespace with `agent_usage_namespace`:
+
+```python
+from hexgate.security import agent_usage_namespace, assert_denies
+
+assert_denies(
+    policy, "agent.run", {"agent": "billing"},
+    agent_usage=agent_usage_namespace(invocations_1h=100),
+)
+```
 
 ## Where a constraint can live
 

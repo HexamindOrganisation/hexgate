@@ -29,6 +29,8 @@ from hexgate.security.decision import Verdict
 from hexgate.security.signing import SignatureError, verify_bytes
 from hexgate.security.wasm_engine import WasmPolicy
 
+_AGENT_USAGE_KEY = "agent_usage"
+
 
 class BundleIntegrityError(RuntimeError):
     """A bundle's on-disk content does not match the hashes in its manifest.
@@ -293,13 +295,15 @@ class PolicyBundle:
         args: Mapping[str, Any],
         attributes: Mapping[str, Any] | None = None,
         run: Mapping[str, Any] | None = None,
+        agent_usage: Mapping[str, Any] | None = None,
     ) -> Verdict:
         """:class:`~hexgate.security.decision.PolicyEngine` entry point.
 
         Runs the compiled WASM module; ``None`` role falls back to the
         ``default`` role, matching the pydantic engine. ``attributes`` become
-        the ``input.ctx`` document the compiled ``ctx.*`` conditions read, and
-        ``run`` the ``input.run`` document the ``run.*`` ones read."""
+        the ``input.ctx`` document the compiled ``ctx.*`` conditions read,
+        ``run`` the ``input.run`` document the ``run.*`` ones read, and
+        ``agent_usage`` the ``input.agent_usage`` one."""
         from hexgate.security.policy import evaluate_tool_call_wasm
         from hexgate.security.policy_set import DEFAULT_ROLE_NAME
 
@@ -310,6 +314,7 @@ class PolicyBundle:
             dict(args),
             attributes=attributes,
             run=run,
+            agent_usage=agent_usage,
         )
 
     def declares_admission(self) -> bool:
@@ -333,6 +338,11 @@ class PolicyBundle:
         """Read the skills-configured flag from the signed manifest. Absent (an
         older bundle) reads False — safe, those predate skill gating."""
         return bool(self.manifest.get("agent_gating", {}).get("skills", False))
+
+    def agent_usage_paths(self) -> frozenset[str]:
+        """Read the referenced ``agent_usage.*`` paths from the signed manifest.
+        Absent (a usage-free policy, or an older bundle) reads empty."""
+        return frozenset(self.manifest.get(_AGENT_USAGE_KEY, ()))
 
     def effective_guards(self, tool_name: str) -> dict[str, bool]:
         """The guard enable/disable stance (R-GUARD-007). Baseline-only in v1, so
@@ -449,6 +459,9 @@ def build_signed_bundle(
     # None when no role configures a guard, so the key is omitted and a guards-free
     # policy's manifest bytes / source_hash stay identical (no bundle drift).
     guard_stance = resolved.guard_stance()
+    # The agent_usage.* paths the enforcer must supply, so it knows to enable the
+    # usage ledgers. Signed, so stripping it can't switch quotas off.
+    usage_paths = resolved.agent_usage_paths()
 
     wasm_bytes: bytes | None = None
     wasm_hash: str | None = None
@@ -468,6 +481,9 @@ def build_signed_bundle(
     # the block existed — the signature/source_hash must not move (R-GUARD-007).
     if guard_stance is not None:
         manifest["guards"] = guard_stance
+    # Omitted when empty for the same reason: a usage-free policy's bytes must not move.
+    if usage_paths:
+        manifest[_AGENT_USAGE_KEY] = sorted(usage_paths)
     # The one canonical serialization. Sign these exact bytes.
     manifest_bytes = (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode(
         "utf-8"
