@@ -44,6 +44,7 @@ from hexgate_api.features.agents.service import (
 from hexgate_api.seeds.defaults import ensure_default_project
 
 if TYPE_CHECKING:
+    from hexgate.manifest.models import AgentManifest as SdkAgentManifest
     from hexgate.security.policy_set import PolicySet
 
 router = APIRouter()
@@ -404,7 +405,7 @@ def _reject_unloadable_policy(policy_yaml: str) -> None:
 
 
 def _validate_policy_document(
-    policy_yaml: str, *, manifest: "AgentManifest | None" = None
+    policy_yaml: str, *, manifest: "SdkAgentManifest | None" = None
 ) -> ValidatePolicyResponse:
     """Validate a policy document the whole way down. Handles both shapes:
 
@@ -559,7 +560,7 @@ _BLOCKING_FINDINGS = frozenset({"guard-divergence"})
 
 
 def _policy_findings(
-    policy_set: "PolicySet", manifest: "AgentManifest | None"
+    policy_set: "PolicySet", manifest: "SdkAgentManifest | None"
 ) -> tuple[list[PolicyValidationError], list[PolicyValidationError]]:
     """The SDK's ``analyze_policy`` findings over the loaded document, split into
     ``(errors, warnings)`` by :data:`_BLOCKING_FINDINGS`.

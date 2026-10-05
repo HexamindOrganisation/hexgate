@@ -1871,11 +1871,22 @@ async def _register_parity_bot(session_factory, project_id: str) -> None:
         )
 
 
-def _sdk_codes(policy_set) -> set[str]:
+async def _route_manifest(session_factory, project_id: str):
+    """The bot's manifest exactly as the routes load it."""
+    import hexgate_api.features.agents.service as asvc
     from hexgate.manifest.models import AgentManifest
+
+    async with session_factory() as s:
+        manifest = (await asvc.latest_manifests(s, project_id, ["bot"]))["bot"]
+    # The SDK's model, the one analyze_policy is written against, not the
+    # platform's hand-kept mirror in hexgate_api.schemas.
+    assert type(manifest) is AgentManifest
+    return manifest
+
+
+def _sdk_codes(policy_set, manifest) -> set[str]:
     from hexgate.security import analyze_policy
 
-    manifest = AgentManifest.model_validate(_PARITY_MANIFEST)
     return {lint.code for lint in analyze_policy(policy_set, manifest=manifest)}
 
 
@@ -1898,7 +1909,8 @@ async def test_when_a_policy_is_bad_then_every_entry_point_reports_the_sdk_findi
     }
     assert {"guard-divergence", "unknown-guard", "unknown-arg"} <= validate_codes
     classic = load_policy_set_from_dict(yaml.safe_load(_PARITY_CLASSIC))
-    assert validate_codes == _sdk_codes(classic)
+    manifest = await _route_manifest(session_factory, pid)
+    assert validate_codes == _sdk_codes(classic, manifest)
 
     # /policy/preview and /policy/check — the compose document.
     preview = client.post(
@@ -1909,7 +1921,7 @@ async def test_when_a_policy_is_bad_then_every_entry_point_reports_the_sdk_findi
     check = client.get(f"/v1/projects/{pid}/policy/check").json()
 
     composed = _resolve_files({"policy.yaml": _PARITY_COMPOSE}, "bot").policy_set
-    expected = _sdk_codes(composed)
+    expected = _sdk_codes(composed, manifest)
     assert {"unknown-guard", "unknown-arg"} <= expected
     assert {lint["code"] for lint in preview["lints"]} == expected
     assert {lint["code"] for lint in check["lints"]} == expected
