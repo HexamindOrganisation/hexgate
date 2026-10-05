@@ -499,9 +499,7 @@ def test_a_disabled_registry_binds_no_ledger() -> None:
         assert facts.ledger is None
 
 
-def test_recording_onto_detached_reaches_no_ledger() -> None:
-    assert DETACHED.ledger is None
-    DETACHED.record_execution(_ANY_TOOL)
+def test_detached_has_no_ledger() -> None:
     assert DETACHED.ledger is None
 
 

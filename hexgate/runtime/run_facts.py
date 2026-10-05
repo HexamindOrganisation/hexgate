@@ -273,8 +273,7 @@ def run_scope(
     Counts one ``invocations`` on the agent's ledger — here and not in
     :func:`use_run_facts`, which joins a run rather than starting one.
     """
-    ledger = ledgers.ledger_for(agent)
-    if ledger is not None:
-        ledger.record({UsageMetric.INVOCATIONS: 1})
-    with use_run_facts(RunFacts(id=str(uuid4()), agent=agent, ledger=ledger)) as facts:
+    facts = RunFacts(id=str(uuid4()), agent=agent, ledger=ledgers.ledger_for(agent))
+    facts._record_usage({UsageMetric.INVOCATIONS: 1})
+    with use_run_facts(facts):
         yield facts
