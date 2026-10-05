@@ -117,6 +117,28 @@ def test_an_old_cut_off_reads_coarse_buckets() -> None:
     assert ledger.since(cut_off)[UsageMetric.TOOL_CALLS] == 2
 
 
+class _TickingClock:
+    """Advances on every read, like a real monotonic clock."""
+
+    def __init__(self, now: float, tick: float = 1e-6) -> None:
+        self.now = now
+        self._tick = tick
+
+    def __call__(self) -> float:
+        self.now += self._tick
+        return self.now
+
+
+def test_a_fine_retention_window_reads_fine_buckets_on_a_ticking_clock() -> None:
+    clock = _TickingClock(_START * COARSE_BUCKET_SECONDS)
+    ledger = new_usage_ledger(clock=clock)
+    ledger.record(_ONE_TOOL_CALL)
+    clock.now += FINE_RETENTION_SECONDS + 2 * FINE_BUCKET_SECONDS
+
+    # Outside the 300 s window, but inside the coarse bucket holding its cut-off.
+    assert ledger.within(FINE_RETENTION_SECONDS)[UsageMetric.TOOL_CALLS] == 0
+
+
 @pytest.mark.parametrize(("age_days", "expected"), [(29, 1), (31, 0)])
 def test_the_longest_window_reaches_back_thirty_days(
     age_days: int, expected: int

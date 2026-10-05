@@ -118,13 +118,17 @@ class UsageLedger:
     def since(self, instant: float) -> dict[UsageMetric, int]:
         """Usage from the monotonic ``instant`` to now."""
         with self._lock:
-            fine_enough = self._clock() - instant <= self._fine.retention
-            series = self._fine if fine_enough else self._coarse
-            return series.total_since(instant)
+            return self._covering(self._clock() - instant).total_since(instant)
 
     def within(self, seconds: float) -> dict[UsageMetric, int]:
         """Usage over the trailing ``seconds``, a rolling window."""
-        return self.since(self._clock() - seconds)
+        # One clock read, and the tier chosen by the span itself: a second read
+        # would push a fine-retention window just past it, onto the coarse tier.
+        with self._lock:
+            return self._covering(seconds).total_since(self._clock() - seconds)
+
+    def _covering(self, span: float) -> BucketSeries:
+        return self._fine if span <= self._fine.retention else self._coarse
 
 
 def new_usage_ledger(clock: Clock = time.monotonic) -> UsageLedger:
