@@ -1973,3 +1973,47 @@ async def test_when_a_registered_agent_is_not_declared_then_check_still_lints_it
     assert [(lint["code"], lint["message"].split(":", 1)[0]) for lint in lints] == [
         ("unknown-guard", "agent 'bot'")
     ]
+
+
+async def test_when_a_stored_manifest_no_longer_validates_then_only_its_checks_skip(
+    client, session_factory
+):
+    # A registration older than a schema change: the row is skipped, so the rest of
+    # the project still lints and nothing reads as a link error or a 500.
+    import hexgate_api.features.agents.service as asvc
+    from hexgate_api.models import Agent, AgentVersion
+    from hexgate_api.schemas import AgentManifest
+
+    pid = _project(client)
+    async with session_factory() as s:
+        for name in ("bot", "stale"):
+            manifest = AgentManifest.model_validate({**_PARITY_MANIFEST, "name": name})
+            await asvc.register_manifest(s, pid, manifest, sign=_dummy_sign)
+        stale = (
+            await s.exec(
+                select(AgentVersion)
+                .join(Agent, Agent.id == AgentVersion.agent_id)
+                .where(Agent.project_id == pid, Agent.name == "stale")
+            )
+        ).one()
+        stale.manifest = {"name": "stale"}  # missing required fields
+        s.add(stale)
+        await s.commit()
+
+    entry = "guards: { secret_redacter: { enabled: false } }\n"
+    assert _put_file(client, pid, "policy.yaml", entry).status_code == 200
+    lints = client.get(f"/v1/projects/{pid}/policy/check").json()["lints"]
+    assert [(lint["code"], lint["message"].split(":", 1)[0]) for lint in lints] == [
+        ("unknown-guard", "agent 'bot'")
+    ]
+    preview = client.post(
+        f"/v1/projects/{pid}/policy/preview",
+        json={"name": "policy.yaml", "content": entry},
+    ).json()
+    assert preview["resolved"] is not None
+    assert [lint["code"] for lint in preview["lints"]] == ["unknown-guard"]
+
+    r = client.post(
+        f"/v1/projects/{pid}/agents/stale/validate", json={"policy_yaml": entry}
+    )
+    assert r.status_code == 200 and r.json()["ok"] is True

@@ -769,11 +769,14 @@ async def check_auto(session: AsyncSession, project_id: str) -> list[PolicyLint]
     ``analyze_policy`` findings) or tier (analyzer lints), from a single files
     read. Both stores return SDK ``PolicyLint``s, so the router builds the
     response the same way for each."""
+    from hexgate_api.features.agents.service import latest_manifests
+
     files = await _files_map(session, project_id)
     if ENTRY_FILE in files:
+        manifests = await latest_manifests(session, project_id)
         try:
             resolved = _resolve_all_agents_files(files)
-            return await _compose_lints(session, project_id, files, resolved)
+            return _compose_lints(files, resolved, manifests)
         except compose_error_types() as exc:
             return [_link_error(str(exc))]
     return await check(session, project_id)
@@ -794,13 +797,14 @@ def _resolve_all_agents_files(files: dict[str, str]) -> dict:
     }
 
 
-async def _compose_lints(
-    session: AsyncSession, project_id: str, files: dict[str, str], resolved: dict
+def _compose_lints(
+    files: dict[str, str], resolved: dict, manifests: dict
 ) -> list[PolicyLint]:
     """The ``PolicyLint``s ``analyze_policy`` reports for every agent the entry
     declares (``resolved``) and every registered agent (the ones
     ``recompile_project`` builds a bundle for), each against its latest registered
-    manifest; a declared agent that never registered gets no manifest checks. The
+    manifest (``manifests``, loaded by the caller outside its compose-error
+    ``try``, so a manifest problem can never read as a link error); a declared agent that never registered gets no manifest checks. The
     ``"*"`` view has no manifest, so it gets the manifest-free checks. Raises
     :func:`compose_error_types` when a registered agent doesn't resolve.
 
@@ -811,10 +815,6 @@ async def _compose_lints(
 
     from hexgate.security import analyze_policy
     from hexgate.security.analyzer import SEVERITY_RANK
-
-    from hexgate_api.features.agents.service import latest_manifests
-
-    manifests = await latest_manifests(session, project_id)
 
     def key(lint) -> tuple:
         return (lint.code, lint.message, lint.tool, lint.role)
@@ -848,11 +848,14 @@ async def compose_preview(
     files = {**await _files_map(session, project_id), name: content}
     if ENTRY_FILE not in files:
         return None, [_link_error(f"no entry file {ENTRY_FILE!r} in this project")]
+    from hexgate_api.features.agents.service import latest_manifests
+
+    manifests = await latest_manifests(session, project_id)
     try:
         # Every declared agent, so the preview and the save agree.
         resolved = _resolve_all_agents_files(files)
         requested = resolved.get(agent) or _resolve_files(files, agent)
-        lints = await _compose_lints(session, project_id, files, resolved)
+        lints = _compose_lints(files, resolved, manifests)
     except compose_error_types() as exc:
         return None, [_link_error(str(exc))]
     return roles_json(requested), lints

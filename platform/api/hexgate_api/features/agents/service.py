@@ -14,6 +14,8 @@ import json
 import logging
 from typing import Callable
 
+from pydantic import ValidationError
+
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import select
@@ -339,7 +341,10 @@ async def latest_manifests(
     agents, or every agent in the project when ``names`` is ``None``.
 
     An agent that never registered (or whose version row has no manifest) is
-    omitted, so its manifest-dependent policy checks are skipped."""
+    omitted, so its manifest-dependent policy checks are skipped. So is one whose
+    stored manifest no longer fits the current schema (a registration older than
+    a schema change): it is logged, and one stale row must not fail the caller's
+    whole project."""
     if names is not None and not names:
         return {}
     agent_ids = select(Agent.id).where(Agent.project_id == project_id)
@@ -360,11 +365,21 @@ async def latest_manifests(
             & (latest.c.v == AgentVersion.version),
         )
     )
-    return {
-        name: AgentManifest.model_validate(manifest)
-        for name, manifest in (await session.exec(stmt)).all()
-        if manifest
-    }
+    manifests: dict[str, AgentManifest] = {}
+    for name, manifest in (await session.exec(stmt)).all():
+        if not manifest:
+            continue
+        try:
+            manifests[name] = AgentManifest.model_validate(manifest)
+        except ValidationError as exc:
+            logger.warning(
+                "agent %r in project %s has a stored manifest that no longer "
+                "validates; skipping its manifest checks: %s",
+                name,
+                project_id,
+                exc,
+            )
+    return manifests
 
 
 async def update_agent(
