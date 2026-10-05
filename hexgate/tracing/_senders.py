@@ -307,7 +307,7 @@ _logged_local_mode_suppressed = False
 
 # One sender per api_key. A single process may wrap agents for several
 # tenants/keys, and each must export with its own bearer token — so senders
-# are keyed by key rather than kept as a first-wins singleton. All four
+# are keyed by key rather than kept as a first-wins singleton. All five
 # event types share one sender per key; the span's instrumentation scope,
 # not a separate endpoint, tells them apart.
 # The registry is unbounded and assumes a small, fixed key set per process;
