@@ -143,6 +143,32 @@ def test_prepare_run_fetches_in_the_callers_context() -> None:
     assert source.seen == _MARK
 
 
+class _BlockedBanSource:
+    def __init__(self) -> None:
+        self.release = threading.Event()
+        self.finished = threading.Event()
+
+    def fetch(self) -> BanSet:
+        self.release.wait(_BARRIER_TIMEOUT_S)
+        self.finished.set()
+        return EMPTY_BAN_SET
+
+
+def test_prepare_run_interrupt_does_not_wait_for_the_ban_fetch() -> None:
+    """Ctrl-C during the refresh surfaces at once, not after the fetch."""
+    source = _BlockedBanSource()
+
+    def _interrupted() -> None:
+        raise KeyboardInterrupt
+
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            prepare_run(_interrupted, BanGate(_AGENT, source), _context())
+        assert not source.finished.is_set()
+    finally:
+        source.release.set()
+
+
 async def test_aprepare_run_refuses_after_refresh_completes() -> None:
     """Deciding before the refresh lands would let admission read stale policy."""
     refresh = _Refresh()

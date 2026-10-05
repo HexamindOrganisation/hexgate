@@ -92,10 +92,16 @@ def prepare_run(
     if ban_gate is None:
         refresh_policy()
         return
-    with ThreadPoolExecutor(max_workers=1) as pool:
+    # Per call, not module-level: a shared pool used before a fork never runs
+    # work in the child.
+    pool = ThreadPoolExecutor(max_workers=1)
+    try:
         # Copied like asyncio.to_thread does, so the fetch sees the caller's
         # context (host tracing, log filters) on sync and async paths alike.
         pending = pool.submit(contextvars.copy_context().run, ban_gate.fetch)
         refresh_policy()
         bans = pending.result()
+    finally:
+        # The fetch is done on success; on an interrupt, don't block on it.
+        pool.shutdown(wait=False, cancel_futures=True)
     ban_gate.enforce(bans, context)
