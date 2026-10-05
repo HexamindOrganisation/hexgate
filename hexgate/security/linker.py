@@ -200,8 +200,9 @@ def _reject_capability_denies(capabilities: Sequence[ModuleContent]) -> None:
     hoisted here and run over every capability, bound or not.
     """
     for cap in capabilities:
-        # effective_tools, so a capability that denies an agent key (a lowered
-        # agents:/admission deny) is caught too — capabilities grant only.
+        # effective_tools, so a capability that denies an agent or skill key (a
+        # lowered agents:/admission/skills deny) is caught too — capabilities grant
+        # only.
         for tool, tp in cap.policy.effective_tools.items():
             if tp.mode == "deny":
                 raise LinkError(
@@ -227,8 +228,9 @@ def link(
             tools[name] = rule
 
     # Effective default is fail-closed: a tool no layer grants is denied. The
-    # folded map may include lowered agent.* keys (composed agent-level blocks),
-    # so build through the resolved path, which carries them in tools directly.
+    # folded map may include lowered agent.* / skill*: keys (composed agent/skill
+    # blocks), so build through the resolved path, which carries them in tools
+    # directly.
     effective = AgentPolicy.resolved(
         default_policy=BaseToolPolicy(mode="deny"), tools=tools, consts=consts
     )
@@ -348,7 +350,7 @@ def _reject_unsupported_module_fields(
     """Reject any top-level AgentPolicy field a module sets that the fold does not
     compose (whatever is added next).
 
-    The fold composes ``tools`` and the lowered ``agent.*`` keys from
+    The fold composes ``tools`` and the lowered ``agent.*`` / ``skill*:`` keys from
     ``effective_tools``, so an un-composed field would be silently dropped, erasing
     a rule an operator authored — the same fail-open :func:`_reject_file_scope`
     guards against, generalized. Allowlisting the fields the fold understands means
@@ -491,7 +493,7 @@ def _tool_names(*groups: list[ModuleContent]) -> list[str]:
     names: set[str] = set()
     for group in groups:
         for module in group:
-            # effective_tools, so lowered agent.* keys are folded like tool keys.
+            # effective_tools, so lowered agent.* / skill*: keys fold like tool keys.
             names.update(module.policy.effective_tools)
     return sorted(names)
 
