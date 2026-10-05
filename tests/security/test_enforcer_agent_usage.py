@@ -145,6 +145,46 @@ def test_an_admission_cap_counts_runs_and_clears_as_they_age_out() -> None:
     assert admit()
 
 
+def test_a_top_level_invocation_cap_reads_the_same_inside_the_run() -> None:
+    """The last admitted run can still call tools: inside a run, its own invocation
+    is left out, as it was at admission."""
+    policy = load_policy_set_from_dict(
+        {
+            "constraints": ["agent_usage.invocations_1h < 2"],
+            "admission": {"mode": "allow"},
+            "tools": {"refund": {"mode": "allow"}},
+        }
+    )
+    ledgers = _ledgers()
+    enforcer = PolicyEnforcer(policy, agent_name=_AGENT, ledgers=ledgers)
+    outcomes = []
+
+    for _ in range(3):
+        admitted = enforcer.decide(AGENT_RUN_TOOL, _ADMISSION_ARGS).allowed
+        if admitted:
+            with run_scope(_AGENT, ledgers=ledgers):
+                admitted = enforcer.decide("refund", {}).allowed
+        outcomes.append(admitted)
+
+    assert outcomes == [True, True, False]
+
+
+def test_another_agents_run_is_not_left_out() -> None:
+    ledgers = _ledgers()
+    enforcer = PolicyEnforcer(_tool_cap(2), agent_name=_AGENT, ledgers=ledgers)
+    engine = _RecordingEngine(frozenset({"invocations_1h"}))
+    enforcer.policy = engine
+
+    with run_scope(_AGENT, ledgers=ledgers):
+        pass
+    with run_scope("other", ledgers=ledgers):
+        enforcer.decide("refund", {})
+    with run_scope(_AGENT, ledgers=ledgers):
+        enforcer.decide("refund", {})
+
+    assert engine.namespaces == [{"invocations_1h": 1}, {"invocations_1h": 1}]
+
+
 def test_a_tool_cap_spans_runs() -> None:
     ledgers = _ledgers()
     enforcer = PolicyEnforcer(_tool_cap(2), agent_name=_AGENT, ledgers=ledgers)

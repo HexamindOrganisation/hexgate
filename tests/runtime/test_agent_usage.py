@@ -381,3 +381,36 @@ def test_the_namespace_rejects_an_unregistered_path() -> None:
 
     with pytest.raises(KeyError):
         ledger_namespace(ledger, ["tool_call_1h"])
+
+
+_TWO_INVOCATIONS = {UsageMetric.INVOCATIONS: 2, UsageMetric.TOOL_CALLS: 2}
+_IN_RUN_PATHS = ["invocations_5m", "invocations_1h", "tool_calls_1h"]
+
+
+@pytest.mark.parametrize(
+    ("run_age", "expected"),
+    [
+        (None, {"invocations_5m": 2, "invocations_1h": 2, "tool_calls_1h": 2}),
+        (10.0, {"invocations_5m": 1, "invocations_1h": 1, "tool_calls_1h": 2}),
+        # Older than 5 m: its invocation has aged out of that window, not of 1 h.
+        (400.0, {"invocations_5m": 2, "invocations_1h": 1, "tool_calls_1h": 2}),
+    ],
+    ids=["outside-a-run", "young-run", "run-older-than-a-window"],
+)
+def test_the_current_run_is_left_out_of_windows_still_holding_it(
+    run_age: float | None, expected: dict[str, int]
+) -> None:
+    ledger = _recorded_ledger(_TWO_INVOCATIONS)
+
+    namespace = ledger_namespace(ledger, _IN_RUN_PATHS, current_run_age=run_age)
+
+    assert namespace == expected
+
+
+def test_leaving_out_an_unrecorded_run_never_reads_negative() -> None:
+    """A run opened before the ledger was enabled never recorded its invocation."""
+    ledger = new_usage_ledger(clock=_FakeClock())
+
+    assert ledger_namespace(ledger, ["invocations_1h"], current_run_age=1.0) == {
+        "invocations_1h": 0
+    }

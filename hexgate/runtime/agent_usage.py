@@ -218,19 +218,42 @@ def new_usage_ledger(clock: Clock = _monotonic) -> UsageLedger:
     )
 
 
-def ledger_namespace(ledger: UsageLedger, paths: Iterable[str]) -> dict[str, int]:
+def ledger_namespace(
+    ledger: UsageLedger,
+    paths: Iterable[str],
+    *,
+    current_run_age: float | None = None,
+) -> dict[str, int]:
     """The ``agent_usage`` mapping for ``paths``, from this process's ledger alone.
 
     One ledger read per distinct window, not per path. Unknown paths raise
-    ``KeyError``: the linter guarantees a loaded policy has none.
+    ``KeyError``: callers pass only registered paths.
+
+    ``current_run_age`` is the age of the agent's run being decided inside, if any.
+    ``invocations_*`` then leaves that run out, so a cap reads the same inside the
+    run as it did at admission, before the run was counted.
     """
     wanted = [(path, AGENT_USAGE_PATHS[path]) for path in paths]
     windows = {spec.window_seconds for _, spec in wanted}
     reads = {seconds: ledger.within(seconds) for seconds in windows}
+    # Floored: a run opened before the ledger was enabled never recorded itself.
     return {
-        path: _metric_value(reads[spec.window_seconds], spec.metric)
+        path: max(
+            _metric_value(reads[spec.window_seconds], spec.metric)
+            - _own_invocation(spec, current_run_age),
+            0,
+        )
         for path, spec in wanted
     }
+
+
+def _own_invocation(spec: UsagePath, current_run_age: float | None) -> int:
+    # Only while the run's invocation can still be in the window: once it has aged
+    # out, subtracting would hide another run's. Bucket round-up may keep it counted
+    # a little longer, which reads one high, the strict direction.
+    if current_run_age is None or spec.metric != UsageMetric.INVOCATIONS:
+        return 0
+    return 1 if current_run_age < spec.window_seconds else 0
 
 
 def _metric_value(totals: Mapping[UsageMetric, int], metric: str) -> int:
