@@ -33,9 +33,7 @@ from uuid import uuid4
 from hexgate.runtime.agent_usage import (
     AGENT_USAGE_VOCABULARY,
     KNOWN_AGENT_USAGE_PATHS,
-    TOTAL_TOKENS,
     USAGE_WINDOWS,
-    UsageMetric,
 )
 from hexgate.runtime.run_facts import KNOWN_RUN_PATHS, RUN_PATH_TYPES, RunFacts
 from hexgate.security.decision import DecisionOutcome
@@ -50,7 +48,6 @@ _CALLS_OF_THIS_TOOL = "calls_of_this_tool"
 _TOOLS_USED = "tools_used"
 _TOTAL_TOKENS = "total_tokens"
 _TOKEN_SPLIT = ("input_tokens", "output_tokens")
-_USAGE_TOKEN_SPLIT = (UsageMetric.INPUT_TOKENS.value, UsageMetric.OUTPUT_TOKENS.value)
 
 
 def run_namespace(tool: str = "", **facts: Any) -> dict[str, Any]:
@@ -106,10 +103,7 @@ def agent_usage_namespace(**paths: int) -> dict[str, int]:
             )
     namespace = {**dict.fromkeys(KNOWN_AGENT_USAGE_PATHS, 0), **paths}
     for window in USAGE_WINDOWS:
-        split = [f"{metric}_{window}" for metric in _USAGE_TOKEN_SPLIT]
-        total = f"{TOTAL_TOKENS}_{window}"
-        if total not in paths and any(name in paths for name in split):
-            namespace[total] = sum(namespace[name] for name in split)
+        _apply_token_total(namespace, paths, suffix=f"_{window}")
     return namespace
 
 
@@ -137,16 +131,21 @@ def _credited_calls(tool: str, facts: Mapping[str, Any]) -> int:
     return facts.get(_CALLS_OF_THIS_TOOL, facts.get(_TOOL_CALLS, 0))
 
 
-def _apply_token_total(namespace: dict[str, Any], facts: Mapping[str, Any]) -> None:
-    """Derive ``total_tokens`` from a supplied token split.
+def _apply_token_total(
+    namespace: dict[str, Any], facts: Mapping[str, Any], *, suffix: str = ""
+) -> None:
+    """Derive ``total_tokens<suffix>`` from a supplied token split.
 
-    ``RunFacts.as_namespace`` derives it in production. Merged flat it would
-    keep the zeroed 0 while the split reads non-zero, so a
-    ``run.total_tokens`` cap would pass in the test and fire in production.
+    Production derives it (``RunFacts.as_namespace``, ``ledger_namespace``).
+    Merged flat it would keep the zeroed 0 while the split reads non-zero, so a
+    ``total_tokens`` cap would pass in the test and fire in production.
+    ``suffix`` names an ``agent_usage`` window, such as ``_1h``.
     """
-    if _TOTAL_TOKENS in facts or not any(name in facts for name in _TOKEN_SPLIT):
+    total = f"{_TOTAL_TOKENS}{suffix}"
+    split = [f"{name}{suffix}" for name in _TOKEN_SPLIT]
+    if total in facts or not any(name in facts for name in split):
         return
-    namespace[_TOTAL_TOKENS] = sum(namespace[name] for name in _TOKEN_SPLIT)
+    namespace[total] = sum(namespace[name] for name in split)
 
 
 def _check_run_value(name: str, value: Any) -> None:

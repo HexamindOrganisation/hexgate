@@ -125,10 +125,9 @@ class PolicySet:
             )
         _validate_const_refs(policies)
         _validate_path_refs(policies, _RUN)
-        _validate_path_refs(policies, _AGENT_USAGE)
+        self._agent_usage_paths = _validate_path_refs(policies, _AGENT_USAGE)
         self._policies = policies
         self._aliased_default = aliased_default
-        self._agent_usage_paths = _referenced_paths(policies, _AGENT_USAGE)
 
     @property
     def aliased_default(self) -> str | None:
@@ -389,8 +388,11 @@ def _validate_run_refs(
     _validate_path_refs(policies, _run_root(scalar_paths, list_paths))
 
 
-def _validate_path_refs(policies: Mapping[str, AgentPolicy], root: _PathRoot) -> None:
-    """Reject a ``<root>.*`` reference this SDK cannot answer, or answers silently.
+def _validate_path_refs(
+    policies: Mapping[str, AgentPolicy], root: _PathRoot
+) -> frozenset[str]:
+    """Reject a ``<root>.*`` reference this SDK cannot answer, or answers silently;
+    return every ``<root>.*`` name referenced, without the root.
 
     Sibling of :func:`_validate_const_refs` — same construction-time check, same
     reason (pydantic and the Rego compiler must agree a policy is valid).
@@ -400,6 +402,7 @@ def _validate_path_refs(policies: Mapping[str, AgentPolicy], root: _PathRoot) ->
     call; a list-valued path used as a scalar (``run.tools_used not in [...]``)
     can silently *pass* every call instead.
     """
+    referenced: set[str] = set()
     for role, policy in policies.items():
         # effective_tools, not tools — so a ref on a lowered agent key (admission
         # ``agent.run`` / reach ``agent.tool:``/``agent.handoff:``) is validated
@@ -409,18 +412,8 @@ def _validate_path_refs(policies: Mapping[str, AgentPolicy], root: _PathRoot) ->
             node = parse_constraint(raw)
             _reject_unknown_paths(node, role, raw, root)
             _reject_list_paths_in_scalar_position(node, role, raw, root)
-
-
-def _referenced_paths(
-    policies: Mapping[str, AgentPolicy], root: _PathRoot
-) -> frozenset[str]:
-    """Every ``<root>.*`` name any role references, without the root."""
-    return frozenset(
-        path[1]
-        for policy in policies.values()
-        for raw in _raw_constraints(policy, tools=policy.effective_tools.values())
-        for path in _rooted_paths_in(parse_constraint(raw), root.name)
-    )
+            referenced.update(path[1] for path in _rooted_paths_in(node, root.name))
+    return frozenset(referenced)
 
 
 def _reject_unknown_paths(node: Node, role: str, raw: str, root: _PathRoot) -> None:
