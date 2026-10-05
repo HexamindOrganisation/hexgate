@@ -573,7 +573,8 @@ def _tool_drift(
             continue  # a resolved deny is unconditional: its constraints never run
         # The linker folds a boundary deny's region into ``not (...)``.
         negated = tier == "boundary" and tp.mode == "deny"
-        for arg, severity in _unknown_args(tp, tool_props[tool], negated).items():
+        unknown = _unknown_args(tp.constraints, tool_props[tool], negated)
+        for arg, severity in unknown.items():
             out.append(
                 PolicyLint(
                     code="unknown-arg",
@@ -619,22 +620,27 @@ def _restricts_calls(rule: ToolPolicy) -> bool:
 
 
 def _unknown_args(
-    tool_policy: ToolPolicy, valid_args: set[str], negated: bool
+    constraints: list[str], valid_args: set[str], negated: bool
 ) -> dict[str, Severity]:
-    """Each ``args.<x>`` the constraints use that isn't a parameter of the tool,
-    with its worst severity over every use.
+    """Each ``args.<x>`` the constraints use that isn't in ``valid_args``, with
+    its worst severity over every use.
 
     A comparison on a missing arg is False. Under an even number of ``not``
     (counting ``negated``, the rule's own) that fails closed (warning); under an
     odd number it is always True, which fails open (error)."""
     out: dict[str, Severity] = {}
-    for raw in tool_policy.constraints:
+    for raw in constraints:
         for path, odd in iter_arg_refs_negated(parse_constraint(raw), negated):
             if len(path) >= 2 and path[0] == "args" and path[1] not in valid_args:
-                severity: Severity = "error" if odd else "warning"
-                if out.get(path[1]) != "error":
-                    out[path[1]] = severity
+                _keep_worst(out, path[1], "error" if odd else "warning")
     return out
+
+
+def _keep_worst(worst: dict[Any, Severity], key: Any, severity: Severity) -> None:
+    """Record ``severity`` under ``key`` unless a more severe one is there."""
+    current = worst.get(key)
+    if current is None or SEVERITY_RANK[severity] < SEVERITY_RANK[current]:
+        worst[key] = severity
 
 
 # ---------------------------------------------------------------------------
@@ -814,13 +820,22 @@ def _resolved_drift(
     :func:`_resolved_unknown_tool_severity`). A resolved deny is unconditional,
     so its constraints never run and are not checked; a grant's arg typo fails
     closed, or open under ``not`` (see :func:`_unknown_args`). An aliased
-    ``default`` is reported under the role it aliases.
+    ``default`` is reported under the role it aliases. Constraints that span
+    tools are checked by :func:`_shared_constraint_drift`.
     """
     tool_props = _tool_props(manifest)
+    default_policy = policy_set.policy_for(DEFAULT_ROLE_NAME)
+    # ``default`` can be the very object of a named role -- inferred by the
+    # loader, or named by an explicit ``default=`` -- so report it under that name.
+    default_is_alias = any(
+        policy_set.policy_for(role) is default_policy
+        for role in policy_set.roles
+        if role != DEFAULT_ROLE_NAME
+    )
     out: list[PolicyLint] = []
     for role in policy_set.roles:
-        if role == DEFAULT_ROLE_NAME and policy_set.aliased_default is not None:
-            continue  # the same policy as the role it aliases, named once there
+        if role == DEFAULT_ROLE_NAME and default_is_alias:
+            continue  # the same policy as a named role, reported under that name
         policy = policy_set.policy_for(role)
         out += _tool_drift(
             policy.tools,
@@ -831,4 +846,54 @@ def _resolved_drift(
             default=policy.default_policy,
             role=role,
         )
-    return out
+    return out + _shared_constraint_drift(policy_set, tool_props, source=source)
+
+
+def _shared_constraint_drift(
+    policy_set: PolicySet,
+    tool_props: dict[str, set[str]],
+    *,
+    source: str | None,
+) -> list[PolicyLint]:
+    """``args.<x>`` typos in constraints that span tools: the policy-level ones
+    (every call) and ``default_policy``'s (every tool the role doesn't list).
+
+    ``<x>`` is a typo only when no tool the constraint applies to accepts it;
+    an arg some tools lack is the author's own fence on the others. A file-level
+    constraint is copied into every role, so each arg is reported once, at its
+    worst severity, with no role.
+    """
+    every_arg = set().union(*tool_props.values())
+    worst: dict[tuple[str, str], Severity] = {}
+    for role in policy_set.roles:
+        policy = policy_set.policy_for(role)
+        scopes = [("policy-level", policy.constraints, every_arg)]
+        fallthrough = [
+            args
+            for tool, args in tool_props.items()
+            if tool not in policy.effective_tools
+        ]
+        # A deny default never evaluates its constraints.
+        if fallthrough and policy.default_policy.mode != "deny":
+            scopes.append(
+                (
+                    "default_policy",
+                    policy.default_policy.constraints,
+                    set().union(*fallthrough),
+                )
+            )
+        for kind, constraints, valid in scopes:
+            for arg, severity in _unknown_args(constraints, valid, False).items():
+                _keep_worst(worst, (kind, arg), severity)
+    return [
+        PolicyLint(
+            code="unknown-arg",
+            severity=severity,
+            message=(
+                f"a {kind} constraint uses args.{arg}, which no tool it applies "
+                "to accepts"
+            ),
+            source=source,
+        )
+        for (kind, arg), severity in sorted(worst.items())
+    ]

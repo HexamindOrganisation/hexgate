@@ -660,6 +660,15 @@ def test_when_a_role_aliases_default_then_its_drift_names_that_role_once():
     assert [lint.role for lint in lints if lint.code == "unknown-tool"] == ["admin"]
 
 
+def test_when_default_is_named_explicitly_then_its_drift_names_that_role_once():
+    # An explicit default= leaves aliased_default unset; default is still the
+    # very same policy object as admin.
+    admin = AgentPolicy(tools={"refnd": BaseToolPolicy(mode="allow")})
+    ps = load_policy_map({"admin": admin, "viewer": AgentPolicy()}, default="admin")
+    lints = analyze_policy(ps, manifest=_manifest(("refund", [])))
+    assert [lint.role for lint in lints if lint.code == "unknown-tool"] == ["admin"]
+
+
 def test_when_a_source_is_given_then_every_lint_carries_it():
     ps = load_policy_set_from_dict(
         {
@@ -837,10 +846,16 @@ def test_when_a_module_egress_rule_names_an_unknown_arg_then_unknown_arg():
 
 def test_egress_tool_args_match_what_the_proxy_builds():
     from hexgate.egress.model import connect_to_args, http_to_args
-    from hexgate.security.network import EGRESS_TOOL_ARGS, NET_HTTP_REQUEST
+    from hexgate.egress.tcp import tcp_to_args
+    from hexgate.security.network import (
+        EGRESS_TOOL_ARGS,
+        NET_HTTP_REQUEST,
+        NET_TCP_CONNECT,
+    )
 
     built = set(connect_to_args("h", 443)) | set(http_to_args("GET", "http://h/p?q"))
     assert built == EGRESS_TOOL_ARGS[NET_HTTP_REQUEST]
+    assert set(tcp_to_args("h", 5432)) == EGRESS_TOOL_ARGS[NET_TCP_CONNECT]
 
 
 def test_when_a_module_arg_typo_sits_under_not_then_severity_flips():
@@ -856,3 +871,81 @@ def test_when_a_module_arg_typo_sits_under_not_then_severity_flips():
     assert {
         (lint.tier, lint.severity) for lint in lints if lint.code == "unknown-arg"
     } == {("capability", "error"), ("boundary", "warning")}
+
+
+def _unknown_args_of(doc, *tools):
+    lints = analyze_policy(load_policy_set_from_dict(doc), manifest=_manifest(*tools))
+    return [
+        (lint.severity, lint.message, lint.role)
+        for lint in lints
+        if lint.code == "unknown-arg"
+    ]
+
+
+def test_when_a_policy_level_constraint_names_an_unknown_arg_then_once_per_policy():
+    # File-level constraints are copied into every role; a negated typo is
+    # always True, so the run-wide fence never fires.
+    doc = {
+        "constraints": ["not (args.amout > 1000)"],
+        "roles": {
+            "default": {"tools": {"refund": {"mode": "allow"}}},
+            "admin": {"tools": {"refund": {"mode": "allow"}}},
+        },
+    }
+    assert _unknown_args_of(doc, ("refund", ["amount"])) == [
+        (
+            "error",
+            "a policy-level constraint uses args.amout, which no tool it applies "
+            "to accepts",
+            None,
+        )
+    ]
+
+
+def test_when_roles_misuse_one_arg_differently_then_the_worst_severity_wins():
+    doc = {
+        "roles": {
+            # Roles are visited sorted, so the warning (admin) comes first.
+            "admin": {"constraints": ["args.amout < 5"]},
+            "default": {"constraints": ["not (args.amout > 5)"]},
+        },
+    }
+    assert [s for s, _, _ in _unknown_args_of(doc, ("refund", ["amount"]))] == ["error"]
+
+
+def test_when_a_policy_level_arg_exists_on_some_tool_then_no_unknown_arg():
+    # A fence on an arg only some tools take is deliberate, not a typo.
+    doc = {
+        "constraints": ["args.amount < 100"],
+        "tools": {"refund": {"mode": "allow"}, "lookup": {"mode": "allow"}},
+    }
+    tools = (("refund", ["amount"]), ("lookup", ["order_id"]))
+    assert _unknown_args_of(doc, *tools) == []
+
+
+def test_when_a_default_constraint_names_an_unknown_arg_then_unknown_arg():
+    doc = {
+        "default_policy": {"mode": "allow", "constraints": ["args.amout < 5"]},
+        "tools": {},
+    }
+    assert [s for s, _, _ in _unknown_args_of(doc, ("refund", ["amount"]))] == [
+        "warning"
+    ]
+
+
+def test_when_a_default_never_applies_then_its_constraints_are_not_checked():
+    tools = ("refund", ["amount"])
+    deny_default = {
+        "default_policy": {"mode": "deny", "constraints": ["args.amout < 5"]},
+    }
+    nothing_falls_through = {
+        "default_policy": {"mode": "allow", "constraints": ["args.amout < 5"]},
+        # Egress tools fall through to the default too, so list them.
+        "tools": {
+            "refund": {"mode": "allow"},
+            "net.http_request": {"mode": "deny"},
+            "net.tcp_connect": {"mode": "deny"},
+        },
+    }
+    assert _unknown_args_of(deny_default, tools) == []
+    assert _unknown_args_of(nothing_falls_through, tools) == []
