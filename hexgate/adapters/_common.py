@@ -7,6 +7,7 @@ import surface.
 from __future__ import annotations
 
 import asyncio
+import contextvars
 from collections.abc import Awaitable, Callable
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager, contextmanager
@@ -92,7 +93,9 @@ def prepare_run(
         refresh_policy()
         return
     with ThreadPoolExecutor(max_workers=1) as pool:
-        pending = pool.submit(ban_gate.fetch)
+        # Copied like asyncio.to_thread does, so the fetch sees the caller's
+        # context (host tracing, log filters) on sync and async paths alike.
+        pending = pool.submit(contextvars.copy_context().run, ban_gate.fetch)
         refresh_policy()
         bans = pending.result()
     ban_gate.enforce(bans, context)

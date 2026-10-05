@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import threading
 
 import pytest
@@ -112,6 +113,34 @@ def test_prepare_run_fetches_concurrently() -> None:
     prepare_run(refresh, BanGate(_AGENT, _BanSource(barrier=barrier)), _context())
 
     assert refresh.calls == 1
+
+
+_CALLER_MARK: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "_CALLER_MARK", default=None
+)
+_MARK = "caller"
+
+
+class _ContextReadingBanSource:
+    def __init__(self) -> None:
+        self.seen: str | None = None
+
+    def fetch(self) -> BanSet:
+        self.seen = _CALLER_MARK.get()
+        return EMPTY_BAN_SET
+
+
+def test_prepare_run_fetches_in_the_callers_context() -> None:
+    """Like asyncio.to_thread on the async path, so host tracing and log
+    filters see the same context on sync and async boundaries."""
+    source = _ContextReadingBanSource()
+    token = _CALLER_MARK.set(_MARK)
+    try:
+        prepare_run(_Refresh(), BanGate(_AGENT, source), _context())
+    finally:
+        _CALLER_MARK.reset(token)
+
+    assert source.seen == _MARK
 
 
 async def test_aprepare_run_refuses_after_refresh_completes() -> None:
