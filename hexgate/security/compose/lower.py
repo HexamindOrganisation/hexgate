@@ -15,10 +15,14 @@ resolves a single ``default`` role from the top-level blocks alone.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 from hexgate.security.compose.grammar import (
     AgentBlock,
     BoundaryBlock,
     Entry,
+    SkillCeilingSpec,
+    SkillGrantSpec,
     _GrantScope,
 )
 from hexgate.security.models import (
@@ -26,6 +30,7 @@ from hexgate.security.models import (
     AgentTargetPolicy,
     BaseToolPolicy,
     GuardRule,
+    SkillPolicy,
 )
 from hexgate.security.module_loader import _canonical_hash
 from hexgate.security.modules import DEFAULT_AGENT, ModuleContent
@@ -58,9 +63,19 @@ def _content_hash(name: str, policy: AgentPolicy) -> str:
     return _canonical_hash({"name": name, "policy": policy.model_dump(mode="json")})
 
 
+def _skill_policies(
+    specs: Mapping[str, SkillGrantSpec | SkillCeilingSpec],
+) -> dict[str, SkillPolicy]:
+    return {
+        name: SkillPolicy(via=spec.via, mode=spec.mode, constraints=spec.constraints)
+        for name, spec in specs.items()
+    }
+
+
 def _grants_policy(scope: _GrantScope) -> AgentPolicy | None:
     """An :class:`AgentPolicy` carrying a scope's ``tools``/``mcp``/``reach``/
-    ``admission`` grants (never a boundary). ``None`` when the scope grants nothing."""
+    ``admission``/``skills`` grants (never a boundary). ``None`` when the scope
+    grants nothing."""
     # mcp is readability sugar — an MCP tool is a tool; it composes identically
     # (same key namespace). A name in both blocks is rejected at parse (the
     # grammar's _no_tools_mcp_collision), so here they simply merge.
@@ -83,9 +98,10 @@ def _grants_policy(scope: _GrantScope) -> AgentPolicy | None:
         if scope.admission is not None
         else None
     )
-    if not tools and not agents and admission is None:
+    skills = _skill_policies(scope.skills)
+    if not tools and not agents and admission is None and not skills:
         return None
-    return AgentPolicy(tools=tools, agents=agents, admission=admission)
+    return AgentPolicy(tools=tools, agents=agents, admission=admission, skills=skills)
 
 
 def _boundary_policy(block: BoundaryBlock | None) -> AgentPolicy | None:
@@ -115,6 +131,7 @@ def _boundary_policy(block: BoundaryBlock | None) -> AgentPolicy | None:
         tools=tools,
         agents=agents,
         admission=admission,
+        skills=_skill_policies(block.skills),
     )
 
 
