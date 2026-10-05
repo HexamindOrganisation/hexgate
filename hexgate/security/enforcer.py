@@ -94,8 +94,9 @@ def _snapshot(values: Mapping[str, Any], *, deep: bool) -> dict[str, Any]:
 
 
 def _usage_paths_of(engine: PolicyEngine) -> frozenset[str]:
-    """The engine's ``agent_usage.*`` paths; none for an engine predating the method,
-    so a third-party or fake engine that implements only ``evaluate`` still works."""
+    """The engine's ``agent_usage.*`` paths; none for an engine predating the method.
+    Its ``evaluate`` must still accept the ``agent_usage`` keyword, as the protocol
+    requires: :meth:`PolicyEnforcer.decide` always passes it."""
     paths = getattr(engine, "agent_usage_paths", None)
     return paths() if paths is not None else frozenset()
 
