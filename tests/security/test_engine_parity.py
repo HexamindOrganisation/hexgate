@@ -37,12 +37,18 @@ def _py_outcome(
     args: dict,
     attributes: dict | None,
     run: dict | None = None,
+    agent_usage: dict | None = None,
 ) -> str:
     ps = load_policy_set_from_dict(policy)
     # Route through PolicySet.evaluate (the real engine entry) so role/tool are
     # threaded into the constraint context, matching what the runtime does.
     return ps.evaluate(
-        role=role, tool=tool, args=args, attributes=attributes, run=run
+        role=role,
+        tool=tool,
+        args=args,
+        attributes=attributes,
+        run=run,
+        agent_usage=agent_usage,
     ).outcome.value
 
 
@@ -58,10 +64,16 @@ def _wasm_outcome(
     args: dict,
     attributes: dict | None,
     run: dict | None = None,
+    agent_usage: dict | None = None,
 ) -> str:
     wasm = _wasm_bytes(compile_to_rego(policy))
     d = WasmPolicy.from_bytes(wasm).decide(
-        role=role, tool=tool, args=args, ctx=attributes, run=run
+        role=role,
+        tool=tool,
+        args=args,
+        ctx=attributes,
+        run=run,
+        agent_usage=agent_usage,
     )
     if d.allow:
         return "allow"
@@ -79,9 +91,10 @@ def _assert_parity(
     *,
     attributes: dict | None = None,
     run: dict | None = None,
+    agent_usage: dict | None = None,
 ) -> None:
-    py = _py_outcome(policy, role, tool, args, attributes, run)
-    wasm = _wasm_outcome(policy, role, tool, args, attributes, run)
+    py = _py_outcome(policy, role, tool, args, attributes, run, agent_usage)
+    wasm = _wasm_outcome(policy, role, tool, args, attributes, run, agent_usage)
     assert py == wasm, f"engine divergence {role}/{tool}/{args}: py={py} wasm={wasm}"
     assert py == expect, f"wrong outcome {role}/{tool}/{args}: {py} (want {expect})"
 
@@ -726,7 +739,9 @@ class _WasmEngine:
     def __init__(self, wasm_bytes: bytes) -> None:
         self._w = WasmPolicy.from_bytes(wasm_bytes)
 
-    def evaluate(self, *, role, tool, args, attributes=None, run=None):
+    def evaluate(
+        self, *, role, tool, args, attributes=None, run=None, agent_usage=None
+    ):
         from hexgate.security.policy import verdict_from_rego
 
         role_ = role or "default"
@@ -737,6 +752,7 @@ class _WasmEngine:
                 args=dict(args),
                 ctx=dict(attributes or {}),
                 run=dict(run or {}),
+                agent_usage=dict(agent_usage or {}),
             ),
             tool_name=tool,
             role=role_,
@@ -927,6 +943,70 @@ def test_run_fact_parity(tool: str, run: dict, expect: str) -> None:
 
 def test_run_none_namespace_fails_closed_both_engines() -> None:
     _assert_parity(_RUN_POLICY, "default", "identity", {}, "deny", run=None)
+
+
+# ---------------------------------------------------------------------------
+# agent_usage.* — this agent's usage across runs
+# ---------------------------------------------------------------------------
+
+_AGENT_USAGE_POLICY = {
+    "version": 1,
+    "roles": {
+        "default": {
+            "consts": {"daily": 1000},
+            "constraints": ["agent_usage.denials_5m < 5"],
+            "admission": {
+                "mode": "allow",
+                "constraints": ["agent_usage.invocations_1h < 3"],
+            },
+            "tools": {
+                "summarise": {
+                    "mode": "allow",
+                    "constraints": ["agent_usage.total_tokens_24h <= consts.daily"],
+                },
+            },
+        }
+    },
+}
+_QUIET_USAGE = {"denials_5m": 0, "invocations_1h": 0, "total_tokens_24h": 0}
+_ADMISSION = ("agent.run", {"agent": "a"})
+_SUMMARISE = ("summarise", {})
+
+
+@pytest.mark.parametrize(
+    ("call", "usage", "expect"),
+    [
+        (_ADMISSION, {"invocations_1h": 2}, "allow"),
+        (_ADMISSION, {"invocations_1h": 3}, "deny"),  # the boundary is exclusive
+        (_ADMISSION, {"invocations_1h": 4}, "deny"),
+        (_ADMISSION, {"invocations_1h": "2"}, "deny"),  # str vs num → fail closed
+        (_SUMMARISE, {"total_tokens_24h": 1000}, "allow"),  # <= is inclusive
+        (_SUMMARISE, {"total_tokens_24h": 1001}, "deny"),
+        (_SUMMARISE, {"denials_5m": 5}, "deny"),  # policy-level reaches every tool
+        (_ADMISSION, {"denials_5m": 5}, "deny"),  # ... and admission
+    ],
+)
+def test_agent_usage_parity(call: tuple, usage: dict, expect: str) -> None:
+    tool, args = call
+    _assert_parity(
+        _AGENT_USAGE_POLICY,
+        "default",
+        tool,
+        args,
+        expect,
+        agent_usage={**_QUIET_USAGE, **usage},
+    )
+
+
+@pytest.mark.parametrize("call", [_ADMISSION, _SUMMARISE], ids=["admission", "tool"])
+def test_agent_usage_missing_key_fails_closed_both_engines(call: tuple) -> None:
+    tool, args = call
+    _assert_parity(_AGENT_USAGE_POLICY, "default", tool, args, "deny", agent_usage={})
+
+
+def test_agent_usage_none_namespace_fails_closed_both_engines() -> None:
+    tool, args = _ADMISSION
+    _assert_parity(_AGENT_USAGE_POLICY, "default", tool, args, "deny", agent_usage=None)
 
 
 # ---------------------------------------------------------------------------

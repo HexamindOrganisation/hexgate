@@ -33,12 +33,14 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterable, Iterator, Mapping
+from dataclasses import dataclass
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any
 
 import yaml
 
+from hexgate.runtime.agent_usage import AGENT_USAGE_VOCABULARY, KNOWN_AGENT_USAGE_PATHS
 from hexgate.runtime.run_facts import LIST_PATHS, SCALAR_PATHS
 from hexgate.security.constraints import (
     LEFT,
@@ -86,8 +88,7 @@ _FILE_LEVEL_KEYS = frozenset(
     {_ROLES_KEY, _CONSTRAINTS_KEY, _VERSION_KEY, RESOLVED_POLICY_MARKER}
 )
 
-_RUN_ROOT = "run"
-_RUN_PATH_SEGMENTS = 2  # the namespace is flat: run.<name>
+_ROOTED_PATH_SEGMENTS = 2  # run.* and agent_usage.* are flat: <root>.<name>
 _ORDERED_OPS = frozenset({"<", "<=", ">", ">="})
 # ==/!= excluded: list equality is well-defined, just not useful here.
 _SCALAR_ONLY_OPS = _ORDERED_OPS | {"in", "not in"}
@@ -123,9 +124,11 @@ class PolicySet:
                 f"PolicySet missing required '{DEFAULT_ROLE_NAME}' role"
             )
         _validate_const_refs(policies)
-        _validate_run_refs(policies)
+        _validate_path_refs(policies, _RUN)
+        _validate_path_refs(policies, _AGENT_USAGE)
         self._policies = policies
         self._aliased_default = aliased_default
+        self._agent_usage_paths = _referenced_paths(policies, _AGENT_USAGE)
 
     @property
     def aliased_default(self) -> str | None:
@@ -151,12 +154,14 @@ class PolicySet:
         args: Mapping[str, Any],
         attributes: Mapping[str, Any] | None = None,
         run: Mapping[str, Any] | None = None,
+        agent_usage: Mapping[str, Any] | None = None,
     ) -> Verdict:
         """:class:`~hexgate.security.decision.PolicyEngine` entry point.
 
         Resolves the role's policy and runs the pydantic engine. ``attributes``
-        feed the ``ctx.*`` constraint namespace and ``run`` the ``run.*`` one;
-        the role still selects the policy bucket (``policy_for``) on its own."""
+        feed the ``ctx.*`` constraint namespace, ``run`` the ``run.*`` one and
+        ``agent_usage`` the ``agent_usage.*`` one; the role still selects the
+        policy bucket (``policy_for``) on its own."""
         from hexgate.security.policy import evaluate_tool_call
 
         return evaluate_tool_call(
@@ -166,6 +171,7 @@ class PolicySet:
             role=role,
             attributes=attributes,
             run=run,
+            agent_usage=agent_usage,
         )
 
     @property
@@ -207,6 +213,13 @@ class PolicySet:
             any(is_skill_key(key) for key in policy.effective_tools)
             for policy in self._policies.values()
         )
+
+    def agent_usage_paths(self) -> frozenset[str]:
+        """Every ``agent_usage.*`` path (without the root) any role references.
+
+        Derived from ``effective_tools`` like the ``declares_*`` family, so
+        admission and reach constraints count."""
+        return self._agent_usage_paths
 
     def guard_stance(self) -> dict[str, dict] | None:
         """The agent-level guard enable/disable stance to carry in the bundle.
@@ -325,10 +338,43 @@ def _sdk_version() -> str:
         return "unknown"
 
 
-def _run_paths_in(node: Node):
-    """Every ``run``-rooted path in a node, whatever its position."""
+@dataclass(frozen=True, slots=True)
+class _PathRoot:
+    """A flat ``<root>.<name>`` namespace the linter closes."""
+
+    name: str
+    scalar_paths: frozenset[str]
+    list_paths: frozenset[str]
+    # What "this SDK knows" renders as in the unknown-path error.
+    vocabulary: str
+
+    @property
+    def known(self) -> frozenset[str]:
+        return self.scalar_paths | self.list_paths
+
+
+def _run_root(scalar_paths: frozenset[str], list_paths: frozenset[str]) -> _PathRoot:
+    return _PathRoot(
+        "run",
+        scalar_paths,
+        list_paths,
+        vocabulary=", ".join(sorted(scalar_paths | list_paths)),
+    )
+
+
+_RUN = _run_root(SCALAR_PATHS, LIST_PATHS)
+_AGENT_USAGE = _PathRoot(
+    "agent_usage",
+    KNOWN_AGENT_USAGE_PATHS,
+    frozenset(),
+    vocabulary=AGENT_USAGE_VOCABULARY,
+)
+
+
+def _rooted_paths_in(node: Node, root: str) -> Iterator[tuple[str, ...]]:
+    """Every ``root``-rooted path in a node, whatever its position."""
     for path in iter_arg_refs(node):
-        if path and path[0] == _RUN_ROOT:
+        if path and path[0] == root:
             yield path
 
 
@@ -338,7 +384,13 @@ def _validate_run_refs(
     scalar_paths: frozenset[str] = SCALAR_PATHS,
     list_paths: frozenset[str] = LIST_PATHS,
 ) -> None:
-    """Reject a ``run.*`` reference this SDK cannot answer, or answers silently.
+    """:func:`_validate_path_refs` for ``run.*``, with injectable registries so the
+    list rule is testable before any list-valued path is registered."""
+    _validate_path_refs(policies, _run_root(scalar_paths, list_paths))
+
+
+def _validate_path_refs(policies: Mapping[str, AgentPolicy], root: _PathRoot) -> None:
+    """Reject a ``<root>.*`` reference this SDK cannot answer, or answers silently.
 
     Sibling of :func:`_validate_const_refs` — same construction-time check, same
     reason (pydantic and the Rego compiler must agree a policy is valid).
@@ -347,49 +399,56 @@ def _validate_run_refs(
     (``run.tool_call``, ``run.id.value``) resolves to missing and denies every
     call; a list-valued path used as a scalar (``run.tools_used not in [...]``)
     can silently *pass* every call instead.
-
-    Registries are parameters, not module reads, so the list rule is testable
-    before any list-valued path is registered.
     """
     for role, policy in policies.items():
-        # effective_tools, not tools — so a run.* ref on a lowered agent key
-        # (admission ``agent.run`` / reach ``agent.tool:``/``agent.handoff:``) is
-        # validated too, matching :func:`_validate_const_refs`. Walking only
-        # ``tools`` fail-opened run.* constraints on those keys.
+        # effective_tools, not tools — so a ref on a lowered agent key (admission
+        # ``agent.run`` / reach ``agent.tool:``/``agent.handoff:``) is validated
+        # too, matching :func:`_validate_const_refs`. Walking only ``tools``
+        # fail-opened run.* constraints on those keys.
         for raw in _raw_constraints(policy, tools=policy.effective_tools.values()):
             node = parse_constraint(raw)
-            _reject_unknown_run_paths(node, role, raw, scalar_paths | list_paths)
-            _reject_list_paths_in_scalar_position(node, role, raw, list_paths)
+            _reject_unknown_paths(node, role, raw, root)
+            _reject_list_paths_in_scalar_position(node, role, raw, root)
 
 
-def _reject_unknown_run_paths(
-    node: Node, role: str, raw: str, known: frozenset[str]
-) -> None:
-    for path in _run_paths_in(node):
-        if len(path) != _RUN_PATH_SEGMENTS:
+def _referenced_paths(
+    policies: Mapping[str, AgentPolicy], root: _PathRoot
+) -> frozenset[str]:
+    """Every ``<root>.*`` name any role references, without the root."""
+    return frozenset(
+        path[1]
+        for policy in policies.values()
+        for raw in _raw_constraints(policy, tools=policy.effective_tools.values())
+        for path in _rooted_paths_in(parse_constraint(raw), root.name)
+    )
+
+
+def _reject_unknown_paths(node: Node, role: str, raw: str, root: _PathRoot) -> None:
+    for path in _rooted_paths_in(node, root.name):
+        if len(path) != _ROOTED_PATH_SEGMENTS:
             raise PolicySetError(
-                f"role {role!r}: constraint {raw!r} references run.* path "
-                f"{'.'.join(path[1:])!r}; run.* paths are exactly two segments "
-                "(run.<name>)"
+                f"role {role!r}: constraint {raw!r} references {root.name}.* path "
+                f"{'.'.join(path[1:])!r}; {root.name}.* paths are exactly two "
+                f"segments ({root.name}.<name>)"
             )
-        if path[1] not in known:
+        if path[1] not in root.known:
             raise PolicySetError(
-                f"role {role!r}: constraint {raw!r} references unknown run.* "
-                f"path {path[1]!r} (hexgate {_sdk_version()} knows: "
-                f"{', '.join(sorted(known))}). Upgrade the SDK or fix the path."
+                f"role {role!r}: constraint {raw!r} references unknown "
+                f"{root.name}.* path {path[1]!r} (hexgate {_sdk_version()} knows: "
+                f"{root.vocabulary}). Upgrade the SDK or fix the path."
             )
 
 
 def _reject_list_paths_in_scalar_position(
-    node: Node, role: str, raw: str, list_paths: frozenset[str]
+    node: Node, role: str, raw: str, root: _PathRoot
 ) -> None:
     for operand, op, side in iter_cmp_operands(node):
         # Ref-only: a Count is the correct way to use a list here.
         if not isinstance(operand, Ref) or op not in _SCALAR_ONLY_OPS:
             continue
-        if len(operand.path) != _RUN_PATH_SEGMENTS or operand.path[0] != _RUN_ROOT:
+        if len(operand.path) != _ROOTED_PATH_SEGMENTS or operand.path[0] != root.name:
             continue
-        if operand.path[1] not in list_paths:
+        if operand.path[1] not in root.list_paths:
             continue
         # in/not in only accept a literal or const on the right, so a
         # list-valued ref can only ever be their left operand.

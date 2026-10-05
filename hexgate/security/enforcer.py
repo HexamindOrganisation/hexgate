@@ -16,9 +16,15 @@ from __future__ import annotations
 import copy
 import logging
 from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from hexgate.audit import AuditEvent, configure
+from hexgate.runtime.agent_usage import (
+    AGENT_USAGE_LEDGERS,
+    UsageLedgers,
+    ledger_namespace,
+)
 from hexgate.runtime.context import get_current_context
 from hexgate.runtime.roles import resolve_role_set
 from hexgate.runtime.run_facts import get_run_facts
@@ -82,6 +88,22 @@ def _snapshot(values: Mapping[str, Any], *, deep: bool) -> dict[str, Any]:
     return copy.deepcopy(dict(values)) if deep else dict(values)
 
 
+def _usage_paths_of(engine: PolicyEngine) -> frozenset[str]:
+    """The engine's ``agent_usage.*`` paths; none for an engine predating the method,
+    so a third-party or fake engine that implements only ``evaluate`` still works."""
+    paths = getattr(engine, "agent_usage_paths", None)
+    return paths() if paths is not None else frozenset()
+
+
+@dataclass(frozen=True, slots=True)
+class _BoundPolicy:
+    """An engine and its usage paths, published by one attribute write so a racing
+    decision never sees a new path without the ledger that answers it."""
+
+    engine: PolicyEngine
+    usage_paths: frozenset[str]
+
+
 class PolicyEnforcer:
     """Evaluate proposed tool calls against a policy engine.
 
@@ -91,6 +113,9 @@ class PolicyEnforcer:
     :class:`~hexgate.security.bundle.PolicyBundle` (a compiled WASM bundle,
     the Rego enforcement path). The enforcer only knows the protocol, so
     it never branches on which engine ran.
+
+    ``ledgers`` supplies the ``agent_usage.*`` namespace. Binding a policy that
+    references a usage path enables it, on construction and on every swap.
     """
 
     def __init__(
@@ -100,7 +125,9 @@ class PolicyEnforcer:
         agent_name: str = "default",
         audit_sender: AuditSender | None = None,
         decision_observer: DecisionObserver | None = None,
+        ledgers: UsageLedgers = AGENT_USAGE_LEDGERS,
     ) -> None:
+        self._ledgers = ledgers
         self.policy = policy
         self.agent_name = agent_name
         # Injected per-agent so each agent emits with its own api_key's sender.
@@ -111,6 +138,18 @@ class PolicyEnforcer:
         # a list-append. Distinct slot from audit so a deployment can have
         # one without the other.
         self._decision_observer = decision_observer
+
+    @property
+    def policy(self) -> PolicyEngine:
+        return self._bound.engine
+
+    @policy.setter
+    def policy(self, engine: PolicyEngine) -> None:
+        usage_paths = _usage_paths_of(engine)
+        if usage_paths:
+            # Before publishing: the first decision on the new policy must find a ledger.
+            self._ledgers.enable()
+        self._bound = _BoundPolicy(engine, usage_paths)
 
     def decide(self, tool_name: str, arguments: Mapping[str, Any]) -> Decision:
         """Fold one verdict per role from the active context into a
@@ -140,15 +179,21 @@ class PolicyEnforcer:
         # disagree about the same run. No snapshot needed — this dict is
         # freshly built and held nowhere else.
         run_snapshot = get_run_facts().as_namespace(tool_name)
+        bound = self._bound
+        # Feeds the ``agent_usage.*`` namespace. Read once per decision, like run.*,
+        # so roles can't disagree about the agent's usage. None when the policy
+        # references none.
+        usage_snapshot = self._usage_namespace(bound.usage_paths)
 
         verdict, deciding_role = combine_role_verdicts(
             roles,
-            lambda role: self.policy.evaluate(
+            lambda role: bound.engine.evaluate(
                 role=role,
                 tool=tool_name,
                 args=args_snapshot,
                 attributes=attrs_snapshot,
                 run=run_snapshot,
+                agent_usage=usage_snapshot,
             ),
         )
         decision = Decision.from_verdict(
@@ -172,6 +217,14 @@ class PolicyEnforcer:
             else "",
         )
         return decision
+
+    def _usage_namespace(self, paths: frozenset[str]) -> dict[str, int] | None:
+        # By agent name, not RunFacts: admission is decided before run_scope opens,
+        # while RunFacts is still DETACHED and carries no ledger.
+        if not paths:
+            return None
+        ledger = self._ledgers.ledger_for(self.agent_name)
+        return ledger_namespace(ledger, paths) if ledger is not None else None
 
     def record(
         self, decision: Decision, *, user_id: str = "", session_id: str = ""

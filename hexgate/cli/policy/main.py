@@ -31,6 +31,7 @@ from hexgate.runtime.context import ContextAttributeValue
 if TYPE_CHECKING:
     from hexgate.manifest.models import AgentManifest
     from hexgate.security.analyzer import PolicyLint
+from hexgate.runtime.agent_usage import AGENT_USAGE_VOCABULARY, KNOWN_AGENT_USAGE_PATHS
 from hexgate.runtime.roles import distinct_roles, resolve_role_set
 from hexgate.runtime.run_facts import KNOWN_RUN_PATHS
 from hexgate.security import (
@@ -58,7 +59,7 @@ from hexgate.security import (
     verdict_from_rego,
 )
 from hexgate.security.constraints import ConstraintParseError, parse_constraint
-from hexgate.security.testing import run_namespace
+from hexgate.security.testing import agent_usage_namespace, run_namespace
 
 # Same schema ``HexgateContext.attributes`` enforces at runtime, so a bag the
 # simulator accepts is a bag production can actually produce — including the
@@ -248,6 +249,15 @@ def add_parser(subparsers: argparse._SubParsersAction) -> None:
             "'{\"tool_calls\": 20}'). Unset paths read zero, matching a run's "
             "first call — so this is how a circuit breaker is dry-run at its "
             "threshold. Defaults to {}."
+        ),
+    )
+    p_test.add_argument(
+        "--agent-usage",
+        default="{}",
+        help=(
+            "Agent usage as a JSON object, exposed to agent_usage.* constraints "
+            "(e.g. '{\"invocations_1h\": 99}'). Unset paths read zero, matching "
+            "a fresh process. Defaults to {}."
         ),
     )
     p_test.add_argument(
@@ -895,6 +905,7 @@ def _main_test(args: argparse.Namespace) -> int:
 
     try:
         run = _resolve_run_facts(getattr(args, "run_facts", "{}"), args.tool)
+        agent_usage = _resolve_agent_usage(getattr(args, "agent_usage", "{}"))
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
         return 1
@@ -941,10 +952,10 @@ def _main_test(args: argparse.Namespace) -> int:
 
     if engine == "wasm":
         return _test_via_wasm(
-            payload, roles, args.tool, tool_args, attributes, run, label
+            payload, roles, args.tool, tool_args, attributes, run, agent_usage, label
         )
     return _test_via_pydantic(
-        policy_set, roles, args.tool, tool_args, attributes, run, label
+        policy_set, roles, args.tool, tool_args, attributes, run, agent_usage, label
     )
 
 
@@ -971,6 +982,28 @@ def _resolve_run_facts(raw: str, tool: str) -> dict[str, Any]:
         # comparison closed and prints as an ordinary threshold trip, so the
         # dry-run answers a question the user did not ask.
         raise ValueError(f"--run-facts has a wrong-typed value: {exc}") from exc
+
+
+def _resolve_agent_usage(raw: str) -> dict[str, int]:
+    """Parse ``--agent-usage`` over a fresh process's zeros, so an unset path reads
+    zero rather than failing the dry-run closed. Raises :class:`ValueError` with a
+    printable message; the caller renders it."""
+    try:
+        parsed: Any = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"--agent-usage is not valid JSON: {exc}") from exc
+    if not isinstance(parsed, dict):
+        raise ValueError("--agent-usage must be a JSON object (dict).")
+    unknown = sorted(set(parsed) - KNOWN_AGENT_USAGE_PATHS)
+    if unknown:
+        raise ValueError(
+            f"--agent-usage has unknown agent_usage.* path(s) {unknown} "
+            f"(this build knows: {AGENT_USAGE_VOCABULARY})"
+        )
+    try:
+        return agent_usage_namespace(**parsed)
+    except ValueError as exc:
+        raise ValueError(f"--agent-usage has a wrong-typed value: {exc}") from exc
 
 
 def _resolve_test_roles(args: argparse.Namespace) -> list[str]:
@@ -1024,6 +1057,7 @@ def _test_via_pydantic(
     tool_args: dict,
     attributes: dict,
     run: dict,
+    agent_usage: dict,
     label: str,
 ) -> int:
     """Run the decision through the in-process constraint evaluator.
@@ -1034,10 +1068,16 @@ def _test_via_pydantic(
 
     def evaluate(role: str | None) -> Verdict:
         policy: AgentPolicy = policy_set.policy_for(role)
-        # Forward role/attributes/run so their constraints decide the same as
-        # production — omitting any makes the dry-run fail closed.
+        # Forward role/attributes/run/agent_usage so their constraints decide the
+        # same as production — omitting any makes the dry-run fail closed.
         return evaluate_tool_call(
-            policy, tool, tool_args, role=role, attributes=attributes, run=run
+            policy,
+            tool,
+            tool_args,
+            role=role,
+            attributes=attributes,
+            run=run,
+            agent_usage=agent_usage,
         )
 
     verdict, deciding_role = combine_role_verdicts(
@@ -1053,6 +1093,7 @@ def _test_via_wasm(
     tool_args: dict,
     attributes: dict,
     run: dict,
+    agent_usage: dict,
     label: str,
 ) -> int:
     """Compile to wasm on the fly + evaluate — matches production semantics."""
@@ -1077,7 +1118,12 @@ def _test_via_wasm(
         # ``None`` maps to the default role, mirroring PolicyBundle.evaluate.
         role_ = role or DEFAULT_ROLE_NAME
         decision = wasm_policy.decide(
-            role=role_, tool=tool, args=tool_args, ctx=attributes, run=run
+            role=role_,
+            tool=tool,
+            args=tool_args,
+            ctx=attributes,
+            run=run,
+            agent_usage=agent_usage,
         )
         return verdict_from_rego(decision, tool_name=tool, role=role_)
 
