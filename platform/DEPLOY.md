@@ -365,7 +365,8 @@ make platform-up STAGE=<stage>
 ```
 
 A forgotten backfill only means `30d` usage reads start near zero. To rebuild
-the rollup (a late backfill, or a count that looks wrong): stop the writers,
+the rollup (a late backfill, a re-upgrade after a rollback that kept the table,
+or a count that looks wrong): stop the writers,
 `TRUNCATE TABLE hexgate_audit.usage_minute`, run the backfill, start the writers.
 
 **SDK release order for a new span scope.** The enricher sends any scope it
@@ -413,7 +414,9 @@ would not bring the credential back. Mint a fresh key instead.
 
 *Past `clickhouse/0005_add_usage_minute`* — drop the three views **before** an
 older enricher starts, or its cross-poll duplicates are summed into
-`usage_minute` again. The table can stay; nothing older reads it.
+`usage_minute` again. Empty the table too: nothing older reads it, and a
+re-upgrade backfills only an empty `usage_minute`, so rows left behind would
+hide the whole rollback window from every `30d` count.
 
 ```bash
 cd /srv/hexgate-<stage>
@@ -423,6 +426,7 @@ docker compose -p hexgate-<stage> --env-file platform/.env.<stage> \
 DROP VIEW IF EXISTS hexgate_audit.usage_minute_from_runs;
 DROP VIEW IF EXISTS hexgate_audit.usage_minute_from_decisions;
 DROP VIEW IF EXISTS hexgate_audit.usage_minute_from_llm;
+TRUNCATE TABLE IF EXISTS hexgate_audit.usage_minute;
 SQL
 ```
 
