@@ -21,6 +21,13 @@ from dataclasses import dataclass, field
 from typing import Any, Final
 from uuid import uuid4
 
+from hexgate.runtime.agent_usage import (
+    AGENT_USAGE_LEDGERS,
+    UsageLedger,
+    UsageLedgers,
+    UsageMetric,
+)
+
 # Every ``run.*`` path a policy may reference; :meth:`RunFacts.as_namespace` returns
 # exactly these and the load-time linter rejects anything else. Register a path only
 # once something projects it: a registered path with no value reads a permanent zero,
@@ -94,6 +101,9 @@ class RunFacts:
     agent: str
     # True only for DETACHED, whose mutators all no-op.
     detached: bool = False
+    # This agent's process-wide ledger, bound at run_scope entry; None while
+    # agent_usage.* is off, and always on DETACHED. Shared across runs of the agent.
+    ledger: UsageLedger | None = field(default=None, repr=False, compare=False)
     # Monotonic, not wall clock: an NTP step backwards would un-block a run that had
     # already exceeded its budget. The lambda matters — a bare ``time.monotonic``
     # reference binds at class definition while :meth:`as_namespace` resolves it at
@@ -126,6 +136,7 @@ class RunFacts:
         with self._lock:
             self.tool_calls += 1
             self._calls_by_tool[tool_name] = self._calls_by_tool.get(tool_name, 0) + 1
+        self._record_usage({UsageMetric.TOOL_CALLS: 1})
 
     def record_error(self) -> None:
         """Count one tool that raised."""
@@ -141,6 +152,7 @@ class RunFacts:
             return
         with self._lock:
             self.denials += 1
+        self._record_usage({UsageMetric.DENIALS: 1})
 
     def record_approval(self) -> None:
         """Count one call gated on approval. Execution is counted separately, so an
@@ -159,6 +171,18 @@ class RunFacts:
             self.llm_calls += 1
             self.input_tokens += input_tokens
             self.output_tokens += output_tokens
+        self._record_usage(
+            {
+                UsageMetric.LLM_CALLS: 1,
+                UsageMetric.INPUT_TOKENS: input_tokens,
+                UsageMetric.OUTPUT_TOKENS: output_tokens,
+            }
+        )
+
+    def _record_usage(self, amounts: dict[UsageMetric, int]) -> None:
+        # After the caller's lock is released, so the two locks never nest.
+        if self.ledger is not None:
+            self.ledger.record(amounts)
 
     def as_namespace(self, tool_name: str) -> dict[str, Any]:
         """The ``run`` mapping the policy grammar evaluates for a decision on
@@ -238,11 +262,19 @@ def use_run_facts(facts: RunFacts) -> Iterator[RunFacts]:
 
 
 @contextmanager
-def run_scope(agent: str) -> Iterator[RunFacts]:
+def run_scope(
+    agent: str, ledgers: UsageLedgers = AGENT_USAGE_LEDGERS
+) -> Iterator[RunFacts]:
     """Mint a :class:`RunFacts` and bind it — one scope per agent invocation.
 
     Belongs at the adapter run boundary, after the ban check (a refused invocation is
     not a run) and not in ``HexgateContext.__aenter__``, which may wrap several.
+
+    Counts one ``invocations`` on the agent's ledger — here and not in
+    :func:`use_run_facts`, which joins a run rather than starting one.
     """
-    with use_run_facts(RunFacts(id=str(uuid4()), agent=agent)) as facts:
+    ledger = ledgers.ledger_for(agent)
+    if ledger is not None:
+        ledger.record({UsageMetric.INVOCATIONS: 1})
+    with use_run_facts(RunFacts(id=str(uuid4()), agent=agent, ledger=ledger)) as facts:
         yield facts
