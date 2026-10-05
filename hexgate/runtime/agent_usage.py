@@ -128,7 +128,9 @@ class UsageLedger:
 
     def record(self, amounts: Mapping[UsageMetric, int]) -> None:
         """Add ``amounts`` atomically, so an LLM call is never seen without its
-        tokens. Non-positive amounts are dropped: the ledger is monotone."""
+        tokens. Non-positive amounts are dropped: the ledger is monotone. ``run.*``
+        sums them as given, so the two agree only while providers report
+        non-negative counts, as every current adapter does."""
         positive = {metric: amount for metric, amount in amounts.items() if amount > 0}
         if not positive:
             return
