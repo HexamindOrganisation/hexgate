@@ -179,6 +179,14 @@ clickhouse-migrate: clickhouse-up ## Replay platform/clickhouse/migrations/*.sql
 			--multiquery < "$$f" || exit 1; \
 	done
 
+# The local twin of `platform-backfill`. A fresh volume never needs it: schema.sql
+# creates the views before any row exists.
+.PHONY: clickhouse-backfill
+clickhouse-backfill: clickhouse-up ## Run one backfill against local ClickHouse: make clickhouse-backfill FILE=0005_usage_minute
+	docker exec -i hexgate-clickhouse clickhouse-client \
+		--user hexgate --password hexgate-dev-password --database hexgate_audit \
+		--multiquery < platform/clickhouse/backfills/$(FILE).sql
+
 .PHONY: clickhouse-reset
 clickhouse-reset: ## Wipe ONLY the ClickHouse data volume and re-run init scripts
 	$(COMPOSE) rm -sf clickhouse
@@ -465,6 +473,14 @@ platform-stop-writers: _require-stage-env ## Stop api + enricher ahead of a migr
 platform-migrate: _require-stage-env ## Apply platform/{postgres,clickhouse}/migrations/*.sql to a deploy stack: make platform-migrate STAGE=prod
 	$(DEPLOY_COMPOSE) up -d --wait postgres clickhouse
 	@bash platform/scripts/migrate.sh $(STAGE)
+
+# One-time backfills (platform/clickhouse/backfills/), run with the writers
+# stopped, between platform-migrate and platform-up on the release that ships
+# them. Not part of platform-migrate: a backfill is not safe to replay blindly.
+.PHONY: platform-backfill
+platform-backfill: _require-stage-env ## One-time backfill, writers stopped: make platform-backfill STAGE=prod FILE=0005_usage_minute
+	$(DEPLOY_COMPOSE) up -d --wait clickhouse
+	@bash platform/scripts/backfill.sh $(STAGE) platform/clickhouse/backfills/$(FILE).sql
 
 .PHONY: platform-up
 platform-up: _require-stage-env ## Build + (re)start a deploy stack: make platform-up STAGE=prod (default staging)

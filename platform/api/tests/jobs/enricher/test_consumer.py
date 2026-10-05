@@ -100,11 +100,12 @@ async def test_when_a_poll_holds_only_message_spans_then_one_insert_and_a_commit
     assert consumer.commits == 1
 
 
-async def test_when_the_message_insert_fails_then_whole_poll_retried_and_committed_once(
+async def test_when_the_message_insert_fails_then_only_the_unacked_inserts_are_retried(
     make_job,
 ) -> None:
-    """A ClickHouse failure on the fourth insert re-runs all four: decisions
-    land twice (dedup by event_id on merge) and the offset commits once."""
+    """A ClickHouse failure on the fourth insert re-runs only that one: the
+    three acked tables are not re-inserted, since usage_minute's views would
+    sum a repeated decision twice. The offset commits once."""
     job, clickhouse, consumer, producer, calls = make_job(
         # The first three inserts succeed; the fourth (llm_message) fails once.
         insert_side_effect=[None, None, None, OperationalError("clickhouse blip")]
@@ -122,7 +123,16 @@ async def test_when_the_message_insert_fails_then_whole_poll_retried_and_committ
 
     await job._process_poll(records)
 
-    assert calls == ["insert"] * 4 + ["insert"] * 4 + ["commit"]
+    # The empty agent_run batch makes no call.
+    assert calls == ["insert"] * 4 + ["insert"] + ["commit"]
+    tables = [call.args[0] for call in clickhouse.insert.call_args_list]
+    assert tables == [
+        "policy_decision",
+        "llm_invocation",
+        "ban_enforcement",
+        "llm_message",
+        "llm_message",
+    ]
     assert consumer.commits == 1
 
 
@@ -182,6 +192,76 @@ async def test_when_two_projects_share_an_event_id_then_both_are_inserted(
 
     decision_rows = clickhouse.insert.call_args_list[0].args[1]
     assert sorted(row[2] for row in decision_rows) == ["proj_1", "proj_2"]
+
+
+async def test_when_a_span_is_redelivered_in_a_later_poll_then_inserted_once(
+    make_job,
+) -> None:
+    """F1's main source: a produce retry lands the copy in a later poll, where
+    the per-poll set can't see it. The cross-poll cache must."""
+    job, clickhouse, consumer, producer, calls = make_job()
+    attrs = decision_attrs()
+
+    await job._process_poll([_record([(semconv.SCOPE_AUDIT, [make_span(attrs)])])])
+    await job._process_poll(
+        [_record([(semconv.SCOPE_AUDIT, [make_span(attrs)])], offset=1)]
+    )
+
+    assert calls == ["insert", "commit", "commit"]
+    assert producer.sent == []
+
+
+async def test_when_two_projects_share_an_event_id_across_polls_then_both_are_inserted(
+    make_job,
+) -> None:
+    job, clickhouse, consumer, producer, calls = make_job()
+    attrs = decision_attrs()
+
+    await job._process_poll(
+        [_record([(semconv.SCOPE_AUDIT, [make_span(attrs)])], key=b"proj_1")]
+    )
+    await job._process_poll(
+        [_record([(semconv.SCOPE_AUDIT, [make_span(attrs)])], key=b"proj_2")]
+    )
+
+    assert calls == ["insert", "commit", "insert", "commit"]
+
+
+async def test_when_a_poll_stops_before_its_insert_acks_then_its_ids_are_not_remembered(
+    monkeypatch, make_job
+) -> None:
+    """Remembering before the ack would make the replayed poll skip rows that
+    were never stored."""
+    import hexgate_api.jobs.enricher.consumer as consumer_mod
+
+    job, clickhouse, consumer, producer, calls = make_job(
+        insert_side_effect=[OperationalError("down"), OperationalError("still down")]
+    )
+    records = [_record([(semconv.SCOPE_AUDIT, [make_span(decision_attrs())])])]
+
+    async def _stop_instead_of_sleeping(_delay):
+        job.request_stop()
+
+    monkeypatch.setattr(consumer_mod.asyncio, "sleep", _stop_instead_of_sleeping)
+    await job._process_poll(records)
+    assert consumer.commits == 0
+
+    job._stop.clear()
+    await job._process_poll(records)
+
+    assert calls == ["insert", "insert", "insert", "commit"]
+
+
+def test_every_mapped_event_type_has_exactly_one_sink() -> None:
+    """A scope mapped to an Event but missing here would be committed and lost."""
+    from typing import get_args
+
+    from hexgate_api.jobs.enricher.consumer import _SINKS
+    from hexgate_api.jobs.enricher.mapping import Event
+
+    sink_types = [event_type for event_type, _insert in _SINKS]
+    assert len(sink_types) == len(set(sink_types))
+    assert set(sink_types) == set(get_args(Event))
 
 
 async def test_when_an_insert_fails_then_whole_batch_retried_and_committed_once(

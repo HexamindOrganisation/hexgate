@@ -480,14 +480,20 @@ fetch, and an oversized DLQ envelope would be dropped client-side. Per poll
    lengths and enum checks apply everywhere). `occurred_at` is the span's
    `start_time_unix_nano` (zero → rejected). A rejected span becomes a DLQ
    envelope; its siblings in the same record are unaffected.
-4. **Resolve `agent_version_id`** for every distinct `(project_id, agent_name)`
+4. **Dedup** by `(project_id, event_id)`, within the poll and across polls:
+   a span whose id this process already stored is skipped. The cross-poll
+   cache (`jobs/enricher/dedup.py`) keeps ids for 15 minutes of Kafka record
+   time, three times the Collector's produce-retry horizon, capped at 500 000
+   entries, and remembers an id only after its insert acks.
+5. **Resolve `agent_version_id`** for every distinct `(project_id, agent_name)`
    in the batch — two Postgres queries regardless of batch size. Unregistered
    agents resolve to `""` and are inserted anyway.
-5. **Insert**, five batch inserts (one per table), retried as a whole with
-   exponential backoff (cap 30 s) until ClickHouse acks. The consumer's
+6. **Insert**, five batch inserts (one per table), each retried with
+   exponential backoff (cap 30 s) until ClickHouse acks it, and never
+   re-inserted once it has. The consumer's
    `max_poll_interval` is raised to 30 min so a ClickHouse outage does not get
    the partition reassigned to a replica that would hit the same outage.
-6. **Send DLQ envelopes**, then **commit offsets**.
+7. **Send DLQ envelopes**, then **commit offsets**.
 
 Committing only after the ack means a crash anywhere in the cycle replays the
 poll. The tables absorb that — `event_id` is the idempotency key and the tables
@@ -500,6 +506,13 @@ collapse when they share an insert block. The `insert_decisions_batch`
 docstring (`features/audit/service.py`) is the reference for all five. A
 replay also duplicates DLQ envelopes, which carry no dedup key at all
 (consumers of the DLQ must tolerate that).
+
+The `usage_minute` views (§5.1) are not forgiving the same way: a view fires
+once per inserted block, before any merge, so every copy that reaches an insert
+is summed for good. That is why step 4 dedups across polls and step 6 never
+repeats an acked insert. What still gets through is over-counted: a replay
+after a restart or rebalance (the cache is in memory), and an insert that
+ClickHouse stored while the client saw an error, so the retry repeats it (§9).
 
 DLQ envelopes are JSON, keyed by project like the source record, and carry the
 decoded attributes with the dict-typed fields redacted (same sensitive-key
@@ -679,6 +692,47 @@ TTL toDateTime(received_at) + INTERVAL 180 DAY
   stage before releasing an SDK that emits `hexgate.runs`, or each run start
   is DLQ'd as `unknown_scope` (`platform/DEPLOY.md`).
 
+#### `usage_minute` — per-minute usage per agent
+
+The rollup behind `agent_usage.*` windows. Nothing inserts into it directly:
+three materialized views add each source insert to its minute.
+
+```sql
+CREATE TABLE hexgate_audit.usage_minute
+(
+  project_id, agent_name, minute DateTime('UTC'),
+  invocations, tool_calls, denials, llm_calls, input_tokens, output_tokens  -- UInt64
+)
+ENGINE = SummingMergeTree
+PARTITION BY toYYYYMM(minute)
+ORDER BY (project_id, agent_name, minute)
+TTL minute + INTERVAL 35 DAY
+```
+
+| View | Source | Writes |
+|---|---|---|
+| `usage_minute_from_runs` | `agent_run` | `invocations` |
+| `usage_minute_from_decisions` | `policy_decision` | `tool_calls` (`allow` + `needs_approval`), `denials` (`deny`) |
+| `usage_minute_from_llm` | `llm_invocation` | `llm_calls`, `input_tokens`, `output_tokens` |
+
+- **Decisions count what `run.*` counts.** Only decisions made through the
+  guard runner reach `run.tool_calls` / `run.denials`, so the view drops
+  `agent.run` (admission), `agent.handoff:` (handoff reach) and `net.*`
+  (egress), which are decided outside it, and keeps `agent.tool:`
+  (agent-as-tool reach) and skill keys. `needs_approval` counts as a tool call:
+  an approved call ran, and a refused one over-counts.
+- **Bucketed by `received_at`**, stamped by the server, never the SDK-asserted
+  `occurred_at`. A late event counts when it arrives.
+- **No `user_id`**, so an agent read is at most one row per minute however
+  many users are active.
+- **Read with `sum() … GROUP BY`.** SummingMergeTree collapses rows sharing a
+  key only on merge.
+- **Correct only with the enricher's cross-poll dedup** (§4.3).
+- **Migration:** `migrations/0005_add_usage_minute.sql`, applied with the
+  writers stopped, then the one-time 30-day fill
+  `backfills/0005_usage_minute.sql` before they restart (`platform/DEPLOY.md`).
+  The same file rebuilds the rollup after a `TRUNCATE`.
+
 ### 5.2 Insert semantics
 
 The enricher writes through `insert_decisions_batch` /
@@ -849,3 +903,10 @@ sort key `(project_id, agent_name, outcome, occurred_at, event_id)` and
    flood the log to bury real activity. Needs a per-project token bucket
    (`429 + Retry-After`; the SDK already logs-and-drops on ≥400) plus an
    ingest-volume-per-project alert.
+8. **`usage_minute` over-counts, never under-counts, at the edges** — a replay
+   after an enricher restart or rebalance (the cross-poll cache is in memory),
+   a cache overflow (logged), an insert stored while the client saw an error,
+   a refused approval (counted as a tool call), an approved guard halt (its
+   `needs_approval` row and the policy's `allow` row both count: both carry
+   `error_type = approval_required`), and the legacy HTTP ingest (§4.5), which
+   bypasses the enricher's dedup.

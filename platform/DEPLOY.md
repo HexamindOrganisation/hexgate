@@ -343,6 +343,26 @@ columns — which is why the step is unconditional in the recipe.
 | run attribution on decisions/usage | `clickhouse/0002_add_run_columns.sql` |
 | LLM message logging (`llm_message` table) | `clickhouse/0003_add_llm_message.sql` — required before the build that stores `hexgate.messages` |
 | run counting (`agent_run` table) | `clickhouse/0004_add_agent_run.sql` — required before the enricher build that stores `hexgate.runs` |
+| agent usage rollup (`usage_minute` + 3 views) | `clickhouse/0005_add_usage_minute.sql` — apply with the writers stopped, then `make platform-backfill STAGE=<stage> FILE=0005_usage_minute` before `platform-up` |
+
+**Materialized views and the writers (`0005`).** The `usage_minute` views sum
+every row inserted into their source tables, duplicates included, and only an
+enricher from the same release dedups retried spans across polls. So for this
+release `platform-stop-writers` is mandatory even though nothing in Postgres
+changes: never let `0005` run beside an older enricher, or every retried span
+is counted twice, permanently. Then backfill once, still with the writers
+stopped, so no row is both backfilled and counted by a view:
+
+```bash
+make platform-stop-writers STAGE=<stage>
+make platform-migrate STAGE=<stage>
+make platform-backfill STAGE=<stage> FILE=0005_usage_minute   # no-op if already run
+make platform-up STAGE=<stage>
+```
+
+A forgotten backfill only means `30d` usage reads start near zero. To rebuild
+the rollup (a late backfill, or a count that looks wrong): stop the writers,
+`TRUNCATE TABLE hexgate_audit.usage_minute`, run the backfill, start the writers.
 
 **SDK release order for a new span scope.** The enricher sends any scope it
 does not know to the DLQ as `unknown_scope`. So deploy the enricher build that
@@ -386,6 +406,21 @@ older code, so leave them in place. What the rollback cannot undo is the keys
 that member removal revoked while the new code was live — correctly so, and
 irreversibly: `postgres/0001` masked the secret on revoke, so clearing `revoked_at`
 would not bring the credential back. Mint a fresh key instead.
+
+*Past `clickhouse/0005_add_usage_minute`* — drop the three views **before** an
+older enricher starts, or its cross-poll duplicates are summed into
+`usage_minute` again. The table can stay; nothing older reads it.
+
+```bash
+cd /srv/hexgate-<stage>
+docker compose -p hexgate-<stage> --env-file platform/.env.<stage> \
+  -f platform/docker-compose.deploy.yml exec -T clickhouse sh -c \
+  'clickhouse-client --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD" --multiquery' <<'SQL'
+DROP VIEW IF EXISTS hexgate_audit.usage_minute_from_runs;
+DROP VIEW IF EXISTS hexgate_audit.usage_minute_from_decisions;
+DROP VIEW IF EXISTS hexgate_audit.usage_minute_from_llm;
+SQL
+```
 
 **When a release changes the topic config, re-run `redpanda-init` by hand** —
 `platform-up` will not. `create-topics.sh` reconciles `retention.ms` and
