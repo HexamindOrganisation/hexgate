@@ -269,7 +269,9 @@ idempotent, so a partial run costs nothing.
 a long index build.
 
 Promote a release: tag it, `git checkout` it in the prod checkout, then the
-same `platform-migrate` → `platform-up` pair. Rolling *back* past a release
+same `platform-stop-writers` → `platform-migrate` → `platform-up` sequence,
+plus any per-release step the migration table below names (e.g.
+`platform-backfill` for `clickhouse/0005`). Rolling *back* past a release
 that added columns has its own step — see below.
 
 Upgrades reuse the env already on the box: the deploy targets only pull a
@@ -332,7 +334,9 @@ The ClickHouse migrations fail differently again — not a 500 on the routes tha
 touch the table, but the boot-time `verify_all` crash loop described above.
 
 Every migration here is safe to run early — the *old* code never selects the new
-columns — which is why the step is unconditional in the recipe.
+columns — which is why the step is unconditional in the recipe. The one
+exception is `clickhouse/0005`: it must not run while an older enricher is still
+writing — see *Materialized views and the writers* below.
 
 | Release | Migration |
 |---|---|
