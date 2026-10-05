@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -25,9 +26,12 @@ from typing import Any
 
 import yaml
 
+from hexgate.runtime.agent_usage import KNOWN_AGENT_USAGE_PATHS
 from hexgate.security.decision import Verdict
 from hexgate.security.signing import SignatureError, verify_bytes
 from hexgate.security.wasm_engine import WasmPolicy
+
+_log = logging.getLogger(__name__)
 
 _AGENT_USAGE_KEY = "agent_usage"
 
@@ -341,8 +345,19 @@ class PolicyBundle:
 
     def agent_usage_paths(self) -> frozenset[str]:
         """Read the referenced ``agent_usage.*`` paths from the signed manifest.
-        Absent (a usage-free policy, or an older bundle) reads empty."""
-        return frozenset(self.manifest.get(_AGENT_USAGE_KEY, ()))
+        Absent (a usage-free policy, or an older bundle) reads empty.
+
+        Paths this SDK doesn't know (a bundle built by a newer one) are dropped, so
+        they read as missing and only their constraints fail closed."""
+        listed = frozenset(self.manifest.get(_AGENT_USAGE_KEY, ()))
+        unknown = listed - KNOWN_AGENT_USAGE_PATHS
+        if unknown:
+            _log.warning(
+                "bundle references agent_usage.* path(s) %s this SDK does not know; "
+                "their constraints deny. Upgrade the SDK.",
+                sorted(unknown),
+            )
+        return listed - unknown
 
     def effective_guards(self, tool_name: str) -> dict[str, bool]:
         """The guard enable/disable stance (R-GUARD-007). Baseline-only in v1, so
