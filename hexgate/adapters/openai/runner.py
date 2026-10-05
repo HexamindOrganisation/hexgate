@@ -449,10 +449,9 @@ class HexgateRunner:
         """Async-friendly ``run_streamed`` for callers already on an event loop.
 
         ``run_streamed`` refreshes the policy binding and fetches bans with
-        blocking sync HTTP (concurrently, but still blocking); on an asyncio loop
-        that freezes the loop thread (which, under
-        ``hexgate serve``, would stall the approval-reply and ping/pong frames
-        the per-frame dispatch depends on). This awaits the async variants
+        blocking sync HTTP; on an asyncio loop that freezes the loop thread
+        (which, under ``hexgate serve``, would stall the approval-reply and
+        ping/pong frames the per-frame dispatch depends on). This awaits the async variants
         first, then launches ``Runner.run_streamed`` on-loop. It stays on-loop
         rather than ``to_thread`` because ``run_streamed`` returns immediately
         and spawns the agent loop as an ``asyncio.create_task`` that must inherit

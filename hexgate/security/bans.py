@@ -249,10 +249,10 @@ class BanGate:
         self._sink = sink
 
     def fetch(self) -> BanSet:
-        """The current ban set. Fail-soft (the shared source owns last-good), so
-        it's safe to run off-loop and concurrently with the policy refresh."""
-        # Source is fail-soft (owns last-good), so no per-gate cache here —
-        # that avoids enforcement depending on which gate polled first.
+        """The current ban set. The shared source is fail-soft and owns
+        last-good, so this is safe to run off-loop, concurrently with the policy
+        refresh, and needs no per-gate cache (which would make enforcement
+        depend on which gate polled first)."""
         return EMPTY_BAN_SET if self._source is None else self._source.fetch()
 
     def enforce(self, bans: BanSet, context: HexgateContext | None) -> None:
@@ -276,7 +276,11 @@ class BanGate:
         )
 
     def check(self, context: HexgateContext | None) -> None:
-        """Raise :class:`AgentBannedError` if this agent or user is banned."""
+        """Raise :class:`AgentBannedError` if this agent or user is banned.
+
+        For a ban-only check. Run boundaries go through
+        :func:`hexgate.adapters._common.prepare_run` instead, which overlaps the
+        fetch with the policy refresh."""
         self.enforce(self.fetch(), context)
 
     async def check_async(self, context: HexgateContext | None) -> None:
