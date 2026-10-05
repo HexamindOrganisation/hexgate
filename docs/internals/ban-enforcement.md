@@ -344,7 +344,7 @@ nothing (no partial output, no fake terminal message).
 | Integration | Gate resolution | Fired in (alongside the policy refresh, before the LLM) |
 |-------------|-----------------|--------------------------------------------------|
 | **Native factory** (`agents/factory.py`) | threaded through `with_tools` rebuilds; user is **ambient** via `get_current_context()` | `ainvoke`, `astream_events` (via `aprepare_run`) |
-| **OpenAI** (`adapters/openai/runner.py`) | lazy per-agent cache `_ban_gate_for` | `run` (async), `run_sync`, `run_streamed` (before the background task spawns) |
+| **OpenAI** (`adapters/openai/runner.py`) | lazy per-agent cache `_ban_gate_for` | `run` (async), `run_sync`, `run_streamed`, `arun_streamed` (async, used by `hexgate serve`); both streamed variants before the background task spawns |
 | **Google ADK** (`adapters/google/runner.py`) | single gate at construction | `run` (sync generator), `run_async` |
 | **LangChain** (`adapters/langchain/agent.py`) | injected via wrapper | `invoke`, `ainvoke`, `stream`, `astream`, `astream_events` |
 | **Pydantic-AI** (`adapters/pydantic_ai/agent.py`) | injected via wrapper | `run`, `run_sync`, `run_stream`, `iter` |
