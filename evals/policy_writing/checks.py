@@ -16,7 +16,12 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
-from evals.policy_writing.names import load_known_names, unknown_refs, unknown_tools
+from evals.policy_writing.names import (
+    NAME_SOURCES,
+    load_known_names,
+    unknown_keys,
+    unknown_refs,
+)
 from evals.policy_writing.policy import (
     LABELS,
     RANK,
@@ -119,40 +124,43 @@ def superset_checks(policy: Policy | None, supersets: list[dict]) -> list[Check]
     return checks
 
 
+NAME_CHECKS = (
+    "only known tools, skills and guards",
+    "only known arguments and attributes",
+)
+
+
 def _name_checks_failed(detail: str) -> list[Check]:
-    return [
-        Check("only known tools", False, detail),
-        Check("only known arguments and attributes", False, detail),
-    ]
+    return [Check(name, False, detail) for name in NAME_CHECKS]
 
 
 def name_checks(
     policy: Policy, ws: Path, agent: str, before: dict[str, str], after: dict[str, str]
 ) -> list[Check]:
-    """Only tools, arguments and attributes the MCP would show for `agent`."""
+    """Only names the MCP would show for `agent`: tools, skills, guards, arguments
+    and caller attributes."""
     # The names are read after the run, so an edit to either file could
     # whitelist an invented name: trust them only if they are untouched.
-    edited = [f for f in ("agents.json", "audit.json") if before.get(f) != after.get(f)]
+    edited = [f for f in NAME_SOURCES if before.get(f) != after.get(f)]
     if edited:
         return _name_checks_failed(f"edited during the run: {edited}")
     try:
-        tools, attrs = load_known_names(ws, agent)
+        known = load_known_names(ws, agent)
     except (OSError, ValueError, KeyError, TypeError) as exc:
         return _name_checks_failed(
             f"agents.json / audit.json unreadable: {exc!r}"[:300]
         )
-    unknown = unknown_tools(policy.payload, tools)
-    refs = unknown_refs(policy.payload, tools, attrs)
+    unknown = unknown_keys(policy.policy_set, known)
+    refs = unknown_refs(policy.policy_set, known)
+    keys, args = NAME_CHECKS
     return [
         Check(
-            "only known tools",
+            keys,
             not unknown,
             f"not in {agent}'s manifest: {unknown}" if unknown else "",
         ),
         Check(
-            "only known arguments and attributes",
-            not refs,
-            f"not in the manifest or audit.json: {refs}" if refs else "",
+            args, not refs, f"not in the manifest or audit.json: {refs}" if refs else ""
         ),
     ]
 

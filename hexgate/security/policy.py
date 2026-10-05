@@ -17,8 +17,7 @@ from hexgate.security.models import (
     BaseToolPolicy,
     FileToolPolicy,
     ToolPolicy,
-    is_agent_key,
-    is_skill_key,
+    is_reserved_key,
 )
 
 # Agent keys (admission agent.run AND reach agent.tool:/agent.handoff:) and skill
@@ -64,7 +63,7 @@ def get_tool_policy(policy: AgentPolicy, tool_name: str) -> ToolPolicy:
     tool_policy = policy.effective_tools.get(tool_name)
     if tool_policy is not None:
         return tool_policy
-    if is_agent_key(tool_name) or is_skill_key(tool_name):
+    if is_reserved_key(tool_name):
         return _CLOSED_WORLD_DENY
     return policy.default_policy
 

@@ -8,7 +8,7 @@
 A project is **modular** iff it has at least one role binding. Follows from R-POL-001; this ADR covers how a modular project's agents are enforced.
 
 - A modular agent's signed bundle MUST be compiled from the project's *resolved* role-keyed policy (`resolve` → inline-`roles:` YAML → `build_signed_bundle`), not from `agent.policy_yaml`. A classic project (no bindings) MUST keep compiling from `policy_yaml`, unchanged.
-- Editing a module or a role binding MUST recompile every agent in the project (fan-out). Each agent is resolved for its own column of the `(role, agent)` matrix and compiled to its **own** bundle; agents that resolve to identical policy share a single `opa` compile (memoized). *(This superseded the original single-shared-bundle design once the `(role, agent)` matrix landed — see `agent-policy-dimension-design.md`.)*
+- Editing a module or a role binding MUST recompile every agent in the project (fan-out). Each agent is resolved for its own column of the `(role, agent)` matrix and compiled to its **own** bundle; agents that resolve to identical policy share a single `opa` compile (memoized). *(This superseded the original single-shared-bundle design once the `(role, agent)` matrix landed.)*
 - A recompile that can't resolve, or resolves but can't compile (e.g. `opa` absent), MUST leave existing bundles untouched. A broken or work-in-progress edit MUST NOT blank agents that were working.
 - Modular MUST be inferred from the presence of a role binding. There MUST NOT be a `policy_mode` column in this phase.
 - The serve path MUST NOT change: the bundle stays on the `Agent` row and the SDK fetches it as today.

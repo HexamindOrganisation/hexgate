@@ -25,8 +25,10 @@ governs the agent, not a tool or a caller.
   no `(tool, guard)` overrides.
 - Module composition MUST NOT silently accept `guards` in v1: the fold composes
   only tool decisions (via `effective_tools`), which guards are not, so a module
-  (boundary/capability) that sets `guards:` MUST be rejected fail-loud, exactly as
-  `skills:` is today. Composing guards across modules is deferred.
+  (boundary/capability) that sets `guards:` MUST be rejected fail-loud, like any
+  field outside `_MODULE_COMPOSABLE_FIELDS` in `hexgate/security/linker.py`
+  (`skills:` is composable, since it lowers to `skill*:` keys). Composing guards
+  across modules is deferred.
 - **Compose authoring surface** (`hexgate/security/compose/`, the `policy.yaml` entry
   file the platform edits): `guards:` is a block keyword at the **top level** (every
   agent) and in an **agent body** (that agent), merged last-wins per name. It is the

@@ -548,28 +548,36 @@ def iter_arg_refs(node: Node):
     refs (``.`` inside a quantifier) bind to a collection element, not a named
     field, so they're skipped.
     """
+    for path, _negated in iter_arg_refs_negated(node):
+        yield path
+
+
+def iter_arg_refs_negated(node: Node, negated: bool = False):
+    """:func:`iter_arg_refs`, paired with whether each path sits under an odd
+    number of ``not``. A comparison on a missing field is False, so a negated one
+    is True: that tells a typo that fails closed from one that fails open."""
 
     def _operand(op):
         if isinstance(op, Ref):
-            yield op.path
+            yield op.path, negated
         elif isinstance(op, Count) and isinstance(op.ref, Ref):
-            yield op.ref.path
+            yield op.ref.path, negated
 
     if isinstance(node, Cmp):
         yield from _operand(node.left)
         yield from _operand(node.right)
     elif isinstance(node, Call):
         if isinstance(node.arg, Ref):
-            yield node.arg.path
+            yield node.arg.path, negated
     elif isinstance(node, Quant):
         if isinstance(node.ref, Ref):
-            yield node.ref.path
-        yield from iter_arg_refs(node.body)
+            yield node.ref.path, negated
+        yield from iter_arg_refs_negated(node.body, negated)
     elif isinstance(node, (And, Or)):
         for part in node.parts:
-            yield from iter_arg_refs(part)
+            yield from iter_arg_refs_negated(part, negated)
     elif isinstance(node, Not):
-        yield from iter_arg_refs(node.inner)
+        yield from iter_arg_refs_negated(node.inner, not negated)
 
 
 LEFT = "left"
