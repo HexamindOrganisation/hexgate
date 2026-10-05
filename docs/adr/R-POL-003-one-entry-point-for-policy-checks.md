@@ -5,7 +5,7 @@
 
 ## Decision
 
-Every entry point that reports policy problems gets its lints from one SDK function per input form: `hexgate.security.analyze_policy(policy_set, *, manifest=None, source=None)` for a resolved `PolicySet`, and `check_project` for a module store.
+Get every entry point's policy lints from one SDK function per input form: `hexgate.security.analyze_policy(policy_set, *, manifest=None, source=None)` for a resolved `PolicySet`, and `check_project` for a module store.
 
 - An entry point (the CLI's `policy validate` / `check`, the platform's `/policy/preview`, `/policy/check` and agent `/validate`, the policy-writing eval scorer) MUST only gather inputs (resolve the `PolicySet`, load the manifest), call that function, and present what it returns.
 - An entry point MUST NOT call an individual check (`lint_guards`, `check_default_role_exposure`, `_resolved_drift`, a bare `PolicySet.guard_stance()`, ...) or keep its own list of them; a new check goes inside `analyze_policy`.
@@ -31,6 +31,7 @@ Blocking is kept apart from severity because a save asks two questions. *Can the
 
 - The platform's compose routes call `analyze_policy` once per agent: every declared agent and every registered agent, each with its own manifest, plus the generic `"*"` view without one (`_compose_lints`).
 - Guard divergence moved from the platform's `_load_document` (which forced `guard_stance()`) into `analyze_policy`, so every entry point reports it instead of only the save route.
+- `hexgate policy validate` now fails on `guard-divergence`, and with `--manifest` on an `error`-severity `unknown-tool` / `unknown-arg`, at its default `--max-severity error`. A CI job that passes `--manifest` can start failing on drift it never saw before; that is the intended effect, since the runtime would stop on the same policy.
 - Until it is routed (#303 follow-up), the eval scorer (#287) still violates this rule. The Verify grep covers `evals/` once #287 lands.
 - Two known gaps remain. A compose `policy.yaml` is module-built (each `boundary` lowers to a boundary module), but its routes lint the resolved `PolicySet`, so a boundary fence on a misspelled tool is not flagged there. And the tier (module-store) branch of `/policy/check` calls `check_project` without a manifest, so it reports no `unknown-tool` / `unknown-arg`.
 
@@ -47,7 +48,7 @@ Blocking is kept apart from severity because a save asks two questions. *Can the
 grep -rsnE "\b(lint_guards|check_default_role_exposure|_resolved_drift|guard_stance)\(" hexgate platform/api/hexgate_api evals --include='*.py' | grep -v "hexgate/security/"
 ```
 
-It prints nothing today, and must keep printing nothing once the eval follow-up lands.
+It must print nothing. `evals/` does not exist until #287 lands, and `-s` keeps the grep quiet about it until then.
 
 ```
 cd platform/api && uv run --python 3.13 pytest -q \
@@ -57,3 +58,10 @@ cd platform/api && uv run --python 3.13 pytest -q \
 ```
 
 That runs the parity test: one known-bad policy through `/validate`, `/policy/preview` and `/policy/check`. Each must report exactly the codes `analyze_policy` returns, so a check added to the function but bypassed by a route fails it. The other two check that divergence fails `/validate`, and that a guard typo warns with `severity: error` and `ok: true`.
+
+```
+uv run --python 3.13 pytest -q tests/cli/test_policy.py \
+  -k "test_when_roles_disagree_on_guards_then_validate_reports_guard_divergence or test_when_manifest_lacks_a_tool_or_arg_then_validate_reports_drift"
+```
+
+That covers the CLI: `policy validate` reports `guard-divergence` without a manifest, and the drift lints only with `--manifest`.
