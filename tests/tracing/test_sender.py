@@ -28,6 +28,7 @@ from hexgate.tracing._senders import (
     _unix_nanos,
 )
 from hexgate.tracing.messages import LlmMessageEvent
+from hexgate.tracing.runs import RunStartEvent
 from hexgate.tracing.usage import LlmUsageEvent
 
 
@@ -107,6 +108,7 @@ def test_emit_selects_the_tracer_by_event_scope() -> None:
             message_seq=0,
         )
     )
+    sender.emit(RunStartEvent(agent_name="a", run_id="r"))
     _flush(sender)
 
     scopes = [s.instrumentation_scope.name for s in exporter.get_finished_spans()]
@@ -115,6 +117,7 @@ def test_emit_selects_the_tracer_by_event_scope() -> None:
         semconv.SCOPE_USAGE,
         semconv.SCOPE_BANS,
         semconv.SCOPE_MESSAGES,
+        semconv.SCOPE_RUNS,
     ]
 
 

@@ -27,6 +27,8 @@ from hexgate.runtime.agent_usage import (
     UsageLedgers,
     UsageMetric,
 )
+from hexgate.runtime.context import get_current_context
+from hexgate.tracing.runs import emit_run_start
 
 # Every ``run.*`` path a policy may reference; :meth:`RunFacts.as_namespace` returns
 # exactly these and the load-time linter rejects anything else. Register a path only
@@ -263,12 +265,18 @@ def use_run_facts(facts: RunFacts) -> Iterator[RunFacts]:
 
 @contextmanager
 def run_scope(
-    agent: str, ledgers: UsageLedgers = AGENT_USAGE_LEDGERS
+    agent: str,
+    *,
+    api_key: str | None = None,
+    ledgers: UsageLedgers = AGENT_USAGE_LEDGERS,
 ) -> Iterator[RunFacts]:
-    """Mint a :class:`RunFacts` and bind it — one scope per agent invocation.
+    """Mint a :class:`RunFacts`, bind it, and report the run start: one scope per
+    agent invocation.
 
-    Belongs at the adapter run boundary, after the ban check (a refused invocation is
-    not a run) and not in ``HexgateContext.__aenter__``, which may wrap several.
+    Belongs at the adapter run boundary, after the ban check and admission (a refused
+    invocation is not a run, and entering this scope is what counts one) and not in
+    ``HexgateContext.__aenter__``, which may wrap several. ``api_key`` picks the
+    sender for the ``run_start`` span; ``None`` falls back to ``HEXGATE_API_KEY``.
 
     Counts one ``invocations`` on the agent's ledger — here and not in
     :func:`use_run_facts`, which joins a run rather than starting one.
@@ -276,4 +284,12 @@ def run_scope(
     facts = RunFacts(id=str(uuid4()), agent=agent, ledger=ledgers.ledger_for(agent))
     facts._record_usage({UsageMetric.INVOCATIONS: 1})
     with use_run_facts(facts):
+        context = get_current_context()
+        emit_run_start(
+            agent,
+            facts.id,
+            session_id=(context.session_id or "") if context is not None else "",
+            user_id=context.user_id if context is not None else "",
+            api_key=api_key,
+        )
         yield facts

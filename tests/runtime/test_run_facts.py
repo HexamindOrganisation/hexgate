@@ -21,12 +21,14 @@ from typing import Any
 
 import pytest
 
+from hexgate.runtime import run_facts as run_facts_mod
 from hexgate.runtime.agent_usage import (
     MAX_WINDOW_SECONDS,
     UsageLedgers,
     UsageMetric,
     new_usage_ledger,
 )
+from hexgate.runtime.context import HexgateContext
 from hexgate.runtime.run_facts import (
     DETACHED,
     KNOWN_RUN_PATHS,
@@ -48,6 +50,7 @@ _FAR_FUTURE_MONOTONIC = 1_000_000.0
 _RECORDER_PREFIX = "record_"
 _DETACHED_GUARD = "if self.detached:"
 _AN_INT = 1
+_AGENT_KEY = "agent-key"
 # Not counters, so out of scope for _mutable_state.
 _NOT_MUTABLE_STATE = frozenset(
     {"id", "agent", "detached", "ledger", "_started_monotonic", "_lock"}
@@ -194,6 +197,82 @@ def test_nested_scope_isolates_then_restores() -> None:
             assert child.id != parent.id
         assert get_run_facts() is parent
         assert parent.tool_calls == 1  # not 3 — no roll-up
+
+
+@dataclasses.dataclass(frozen=True)
+class _RunStart:
+    agent: str
+    run_id: str
+    session_id: str
+    user_id: str
+    api_key: str | None
+
+
+@pytest.fixture
+def run_starts(monkeypatch: pytest.MonkeyPatch) -> list[_RunStart]:
+    """Every ``emit_run_start`` call ``run_scope`` makes, captured in order."""
+    captured: list[_RunStart] = []
+
+    def _capture(
+        agent: str,
+        run_id: str,
+        *,
+        session_id: str = "",
+        user_id: str = "",
+        api_key: str | None = None,
+    ) -> None:
+        captured.append(_RunStart(agent, run_id, session_id, user_id, api_key))
+
+    monkeypatch.setattr(run_facts_mod, "emit_run_start", _capture)
+    return captured
+
+
+def test_run_scope_reports_exactly_one_run_start(
+    run_starts: list[_RunStart],
+) -> None:
+    """The invocation-count invariant every ``agent_usage.invocations_*`` path
+    is built on: one row per run, never zero, never two."""
+    with run_scope("billing", api_key=_AGENT_KEY) as facts:
+        assert len(run_starts) == 1
+
+    assert run_starts == [_RunStart("billing", facts.id, "", "", _AGENT_KEY)]
+
+
+async def test_run_scope_reports_the_callers_identity(
+    run_starts: list[_RunStart],
+) -> None:
+    async with HexgateContext(user_id="alice", session_id="sess-1"):
+        with run_scope("billing"):
+            pass
+
+    [start] = run_starts
+    assert (start.user_id, start.session_id) == ("alice", "sess-1")
+
+
+def test_use_run_facts_reports_no_run_start(run_starts: list[_RunStart]) -> None:
+    """Joining a run in flight (a streamed run's consumer) is not a new run."""
+    with run_scope("a") as facts:
+        pass
+    run_starts.clear()
+
+    with use_run_facts(facts):
+        pass
+
+    assert run_starts == []
+
+
+def test_nested_scopes_report_one_run_start_each(
+    run_starts: list[_RunStart],
+) -> None:
+    """A sub-agent is its own invocation of its own agent."""
+    with run_scope("parent") as parent:
+        with run_scope("child") as child:
+            pass
+
+    assert [(s.agent, s.run_id) for s in run_starts] == [
+        ("parent", parent.id),
+        ("child", child.id),
+    ]
 
 
 def test_use_run_facts_joins_an_existing_run() -> None:

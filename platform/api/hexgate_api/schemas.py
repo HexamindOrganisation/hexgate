@@ -878,6 +878,14 @@ class LlmMessageEvent(AuditEnvelope):
     run_id: Optional[UUID] = None
 
 
+class AgentRunEvent(AuditEnvelope):
+    """One admitted agent run; mirrors the agent_run table."""
+
+    # Required, unlike the other events' run_id: this span only exists inside a
+    # run scope, so a missing id is a malformed span, not an older SDK.
+    run_id: UUID
+
+
 class DecisionAccepted(BaseModel):
     """Response shape for POST /v1/audit/decisions."""
 

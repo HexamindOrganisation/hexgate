@@ -22,6 +22,8 @@ from hexgate.adapters.openai.usage import HexgateUsageHooks
 from hexgate.runtime import run_scope
 from hexgate.tracing.messages import LOG_MESSAGES_ENV
 
+_CANONICAL_NAME = "billing"
+
 
 class _StubModel(Model):
     """Minimal concrete Model for testing agent.model resolution."""
@@ -671,3 +673,22 @@ async def test_when_there_is_no_run_scope_then_the_turn_key_is_still_unique(
         await hooks.on_llm_end(context=object(), agent=agent, response=_response())
 
     assert messages[0]["turn_key"] != messages[1]["turn_key"]
+
+
+@pytest.mark.asyncio
+async def test_a_padded_agent_name_is_emitted_canonical(
+    emitted: list[dict[str, Any]], messages: list[dict[str, Any]]
+) -> None:
+    """Usage and messages key the agent like its decisions and its agent_run
+    row, so a per-agent read doesn't split one agent into two."""
+    hooks = HexgateUsageHooks(api_key="k")
+    agent = Agent(name=f"  {_CANONICAL_NAME}  ", model="gpt-4o")
+    context = object()
+
+    await hooks.on_llm_start(
+        context=context, agent=agent, system_prompt=None, input_items=[_user("hi")]
+    )
+    await hooks.on_llm_end(context=context, agent=agent, response=_response())
+
+    assert [call["agent_name"] for call in emitted] == [_CANONICAL_NAME]
+    assert [call["agent_name"] for call in messages] == [_CANONICAL_NAME]

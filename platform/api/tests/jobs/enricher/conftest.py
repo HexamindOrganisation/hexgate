@@ -153,6 +153,15 @@ def message_attrs(**overrides: Any) -> dict[str, Any]:
     return {**base, **overrides}
 
 
+def run_attrs(**overrides: Any) -> dict[str, Any]:
+    base = {
+        semconv.EVENT_ID: str(uuid.uuid4()),
+        semconv.AGENT_NAME: "researcher",
+        semconv.RUN_ID: str(uuid.uuid4()),
+    }
+    return {**base, **overrides}
+
+
 def ban_attrs(**overrides: Any) -> dict[str, Any]:
     base = {
         semconv.EVENT_ID: str(uuid.uuid4()),
