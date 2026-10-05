@@ -114,7 +114,7 @@ class CeilingSpec(_ConstraintsMixin):
 
 class _SkillLevelsMixin(_ConstraintsMixin):
     """``via``: the disclosure levels governed, spelled as on ``SkillPolicy`` (which
-    the lowering builds, and which rejects an empty or duplicated list)."""
+    the lowering builds, and which rejects an empty list and drops duplicates)."""
 
     via: list[SkillVia] = Field(default_factory=lambda: list(get_args(SkillVia)))
 
