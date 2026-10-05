@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import json
 import logging
+from dataclasses import asdict
+from typing import TYPE_CHECKING
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -38,6 +40,9 @@ from hexgate_api.schemas import (
     RoleBindingsRead,
     RoleBindingsWrite,
 )
+
+if TYPE_CHECKING:  # the SDK is imported lazily at run time
+    from hexgate.security import PolicyLint
 
 # SDK Verdict.outcome enum name → the wire string the editor expects.
 _OUTCOME_WIRE = {
@@ -445,6 +450,11 @@ async def api_delete_policy_file(
     return Response(status_code=204)
 
 
+def _lint_out(lint: PolicyLint) -> PolicyLintOut:
+    """An SDK ``PolicyLint`` as its wire model."""
+    return PolicyLintOut(**asdict(lint))
+
+
 @router.post("/projects/{project_id}/policy/preview", tags=["policy"])
 async def api_preview_policy(
     project_id: str,
@@ -455,14 +465,10 @@ async def api_preview_policy(
     """Resolve the project with a draft file overlaid, without saving — the
     editor's live preview. Always 200: a resolution failure returns an error lint,
     not an HTTP error, so the editor can render it inline."""
-    out = await service.compose_preview(
+    resolved, lints = await service.compose_preview(
         session, project_id, name=body.name, content=body.content, agent=body.agent
     )
-    lints = [
-        PolicyLintOut(code=x["code"], severity=x["severity"], message=x["message"])
-        for x in out["lints"]
-    ]
-    return PolicyPreviewResponse(resolved=out["resolved"], lints=lints)
+    return PolicyPreviewResponse(resolved=resolved, lints=[_lint_out(x) for x in lints])
 
 
 @router.get("/projects/{project_id}/policy/resolve", tags=["policy"])
@@ -500,7 +506,7 @@ async def api_check_policy(
     """Lints over the composed project (dead grants, unused capabilities, link
     errors...). Diagnostics-as-data: always 200. ``ok`` is False if any lint is
     an error."""
-    out = [PolicyLintOut(**d) for d in await service.check_auto(session, project_id)]
+    out = [_lint_out(x) for x in await service.check_auto(session, project_id)]
     ok = not any(lint.severity == "error" for lint in out)
     return PolicyCheckResponse(ok=ok, lints=out)
 

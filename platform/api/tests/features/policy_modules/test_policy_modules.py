@@ -14,6 +14,7 @@ import shutil
 
 import pytest
 import pytest_asyncio
+import yaml
 from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
@@ -1807,3 +1808,168 @@ def test_compose_entry_skills_resolve_to_gated_bundle() -> None:
     compiled = compile_bundle(resolved, lambda _manifest: b"test-signature")
     assert compiled is not None
     assert json.loads(compiled[1])["agent_gating"]["skills"] is True
+
+
+# --- entry-point parity (issue #303) -----------------------------------------
+#
+# One known-bad policy per document shape runs through every platform entry
+# point, and each must report exactly the codes the SDK's ``analyze_policy``
+# returns for the same input. Comparing against the SDK function (not a fixed
+# list) is what makes a check added there but bypassed by a route fail here.
+
+_PARITY_MANIFEST = {
+    "name": "bot",
+    "framework": "hexgate",
+    "tools": [
+        {
+            "name": "refund_order",
+            "description": "refund an order",
+            "input_schema": {
+                "properties": {"amount": {"title": "Amount", "type": "number"}},
+                "required": ["amount"],
+            },
+        }
+    ],
+    "guards": [{"name": "secret_redactor", "position": "before", "kind": "official"}],
+}
+
+# Classic single-document shape: a guard typo, an unknown argument, and guard
+# settings that disagree across roles.
+_PARITY_CLASSIC = (
+    "version: 1\n"
+    "roles:\n"
+    "  support:\n"
+    "    guards: { secret_redacter: { enabled: false } }\n"
+    "    tools:\n"
+    '      refund_order: { mode: allow, constraints: ["args.amont <= 100"] }\n'
+    "  admin:\n"
+    "    guards: { secret_redacter: { enabled: true } }\n"
+)
+
+# Compose shape: guards are agent-level there, so roles cannot disagree on them —
+# the guard typo and the unknown argument are the expressible defects.
+_PARITY_COMPOSE = (
+    "agents:\n"
+    "  bot:\n"
+    "    guards: { secret_redacter: { enabled: false } }\n"
+    "    roles:\n"
+    "      support:\n"
+    '        tools: { refund_order: { constraint: "args.amont <= 100" } }\n'
+)
+
+
+async def _register_parity_bot(session_factory, project_id: str) -> None:
+    import hexgate_api.features.agents.service as asvc
+    from hexgate_api.schemas import AgentManifest
+
+    async with session_factory() as s:
+        await asvc.register_manifest(
+            s,
+            project_id,
+            AgentManifest.model_validate(_PARITY_MANIFEST),
+            sign=_dummy_sign,
+        )
+
+
+def _sdk_codes(policy_set) -> set[str]:
+    from hexgate.manifest.models import AgentManifest
+    from hexgate.security import analyze_policy
+
+    manifest = AgentManifest.model_validate(_PARITY_MANIFEST)
+    return {lint.code for lint in analyze_policy(policy_set, manifest=manifest)}
+
+
+async def test_when_a_policy_is_bad_then_every_entry_point_reports_the_sdk_findings(
+    client, session_factory
+):
+    from hexgate.security import load_policy_set_from_dict
+    from hexgate_api.features.policy_modules.service import _resolve_files
+
+    pid = _project(client)
+    await _register_parity_bot(session_factory, pid)
+
+    # Agent /validate — the classic document.
+    body = client.post(
+        f"/v1/projects/{pid}/agents/bot/validate",
+        json={"policy_yaml": _PARITY_CLASSIC},
+    ).json()
+    validate_codes = {
+        d["message"].split(":", 1)[0] for d in body["errors"] + body["warnings"]
+    }
+    assert {"guard-divergence", "unknown-guard", "unknown-arg"} <= validate_codes
+    classic = load_policy_set_from_dict(yaml.safe_load(_PARITY_CLASSIC))
+    assert validate_codes == _sdk_codes(classic)
+
+    # /policy/preview and /policy/check — the compose document.
+    preview = client.post(
+        f"/v1/projects/{pid}/policy/preview",
+        json={"name": "policy.yaml", "content": _PARITY_COMPOSE},
+    ).json()
+    assert _put_file(client, pid, "policy.yaml", _PARITY_COMPOSE).status_code == 200
+    check = client.get(f"/v1/projects/{pid}/policy/check").json()
+
+    composed = _resolve_files({"policy.yaml": _PARITY_COMPOSE}, "bot").policy_set
+    expected = _sdk_codes(composed)
+    assert {"unknown-guard", "unknown-arg"} <= expected
+    assert {lint["code"] for lint in preview["lints"]} == expected
+    assert {lint["code"] for lint in check["lints"]} == expected
+
+
+async def test_when_validate_finds_a_guard_typo_then_it_warns_without_failing(
+    client, session_factory
+):
+    # The agent may re-register with the guard after the policy names it, so a
+    # guard lint must not fail validation (and with it, the save).
+    pid = _project(client)
+    await _register_parity_bot(session_factory, pid)
+    body = client.post(
+        f"/v1/projects/{pid}/agents/bot/validate",
+        json={"policy_yaml": "guards: { secret_redacter: { enabled: false } }\n"},
+    ).json()
+    assert body["ok"] is True and body["errors"] == []
+    assert [w["message"].split(":", 1)[0] for w in body["warnings"]] == [
+        "unknown-guard"
+    ]
+    # Advisory, but the runtime would stop cold on it: the severity says so.
+    assert body["warnings"][0]["severity"] == "error"
+
+
+async def test_when_two_agents_share_a_defect_then_check_reports_each(
+    client, session_factory
+):
+    import hexgate_api.features.agents.service as asvc
+    from hexgate_api.schemas import AgentManifest
+
+    pid = _project(client)
+    async with session_factory() as s:
+        for name in ("bot", "bot2"):
+            manifest = AgentManifest.model_validate({**_PARITY_MANIFEST, "name": name})
+            await asvc.register_manifest(s, pid, manifest, sign=_dummy_sign)
+    entry = (
+        "agents:\n"
+        "  bot: { guards: { secret_redacter: { enabled: false } } }\n"
+        "  bot2: { guards: { secret_redacter: { enabled: false } } }\n"
+    )
+    assert _put_file(client, pid, "policy.yaml", entry).status_code == 200
+    lints = client.get(f"/v1/projects/{pid}/policy/check").json()["lints"]
+    flagged = sorted(
+        lint["message"].split(":", 1)[0]
+        for lint in lints
+        if lint["code"] == "unknown-guard"
+    )
+    assert flagged == ["agent 'bot'", "agent 'bot2'"]
+
+
+async def test_when_a_registered_agent_is_not_declared_then_check_still_lints_its_guards(
+    client, session_factory
+):
+    # The seeded guards demo: a top-level guards: block and no agents: block. The
+    # agent compiles from its own (here, the generic) column, so it is checked too.
+    pid = _project(client)
+    await _register_parity_bot(session_factory, pid)
+    entry = "guards: { secret_redacter: { enabled: false } }\n"
+    assert _put_file(client, pid, "policy.yaml", entry).status_code == 200
+    lints = client.get(f"/v1/projects/{pid}/policy/check").json()["lints"]
+    assert [(lint["code"], lint["message"].split(":", 1)[0]) for lint in lints] == [
+        ("unknown-guard", "agent 'bot'")
+    ]

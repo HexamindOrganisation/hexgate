@@ -33,6 +33,7 @@ from hexgate_api.features.agents.service import (
     get_agent,
     get_classification,
     get_latest_agent_versions_map,
+    latest_manifests,
     list_agents,
     manifest_intended_purpose,
     missing_fields,
@@ -353,9 +354,10 @@ async def api_put_agent_classification(
     dependencies=[Depends(require_org_member)],
 )
 async def api_validate_policy(
-    project_id: str,  # noqa: ARG001 — routed by FastAPI, scope-checked by future auth
-    name: str,  # noqa: ARG001 — same
+    project_id: str,
+    name: str,
     body: ValidatePolicyRequest,
+    session: AsyncSession = Depends(get_session),
 ) -> ValidatePolicyResponse:
     """Parse ``policy.yaml`` end-to-end + check every ``constraints`` string.
 
@@ -364,8 +366,12 @@ async def api_validate_policy(
     :func:`_validate_policy_document` for what the pass covers; the save route
     runs the identical check, so a policy that validates here is one that saves
     and a policy that saves is one that validated.
+
+    The manifest-dependent findings (guard and drift lints) run against the
+    agent's latest registered manifest, and are skipped if it never registered.
     """
-    return _validate_policy_document(body.policy_yaml)
+    manifest = (await latest_manifests(session, project_id, [name])).get(name)
+    return _validate_policy_document(body.policy_yaml, manifest=manifest)
 
 
 # A policy the loader rejects is the author's mistake, not a server fault, and
@@ -397,7 +403,9 @@ def _reject_unloadable_policy(policy_yaml: str) -> None:
     )
 
 
-def _validate_policy_document(policy_yaml: str) -> ValidatePolicyResponse:
+def _validate_policy_document(
+    policy_yaml: str, *, manifest: "AgentManifest | None" = None
+) -> ValidatePolicyResponse:
     """Validate a policy document the whole way down. Handles both shapes:
 
     * flat single-policy document → validated as one :class:`AgentPolicy`
@@ -413,9 +421,9 @@ def _validate_policy_document(policy_yaml: str) -> ValidatePolicyResponse:
     is ``None`` for top-level YAML / schema errors; populated when the
     failure lives inside a specific role's section.
 
-    ``warnings`` carries authoring lints — grants reachable only through the
-    ``default`` fallback, i.e. by any caller carrying an undefined role name.
-    They never set ``ok`` to False.
+    ``warnings`` carries the SDK's ``analyze_policy`` findings (``manifest``
+    enables the guard and drift ones). They never set ``ok`` to False, except a
+    finding in :data:`_BLOCKING_FINDINGS`, which goes to ``errors``.
     """
     import yaml
     from pydantic import ValidationError
@@ -505,12 +513,11 @@ def _validate_policy_document(policy_yaml: str) -> ValidatePolicyResponse:
     # names the offending role.
     if document_error is not None and not errors:
         errors.append(document_error)
+    if errors:
+        return ValidatePolicyResponse(ok=False, errors=errors)
 
-    return ValidatePolicyResponse(
-        ok=not errors,
-        errors=errors,
-        warnings=[] if errors else _default_role_warnings(policy_set),
-    )
+    blocking, warnings = _policy_findings(policy_set, manifest)
+    return ValidatePolicyResponse(ok=not blocking, errors=blocking, warnings=warnings)
 
 
 def _load_document(
@@ -534,12 +541,7 @@ def _load_document(
     )
 
     try:
-        policy_set = load_policy_set_from_dict(parsed)
-        # guard_stance() is lazy, so a cross-role guard divergence (R-GUARD-007) does
-        # not surface at load — force it here so /validate and save return a 422
-        # instead of storing a policy the SDK then crashes on at construction.
-        policy_set.guard_stance()
-        return policy_set, None
+        return load_policy_set_from_dict(parsed), None
     except PolicySetError as exc:
         return None, PolicyValidationError(message=str(exc))
     except ValidationError as exc:
@@ -548,25 +550,36 @@ def _load_document(
         )
 
 
-def _default_role_warnings(
-    policy_set: "PolicySet | None",
-) -> list[PolicyValidationError]:
-    """Authoring lints over the document as a whole.
+# Findings that fail validation, and so block a save. A cross-role guard
+# divergence (R-GUARD-007) is lazy on the PolicySet, so the loader accepts it, but
+# the SDK crashes on it at construction whatever the manifest says. Every other
+# finding is advisory: a guard lint can name a guard before the agent re-registers
+# with a manifest that has it.
+_BLOCKING_FINDINGS = frozenset({"guard-divergence"})
+
+
+def _policy_findings(
+    policy_set: "PolicySet", manifest: "AgentManifest | None"
+) -> tuple[list[PolicyValidationError], list[PolicyValidationError]]:
+    """The SDK's ``analyze_policy`` findings over the loaded document, split into
+    ``(errors, warnings)`` by :data:`_BLOCKING_FINDINGS`.
 
     Needs a fully loaded :class:`PolicySet` — inheritance and mixins resolved —
     which the per-role checks don't build, validating roles in isolation.
     """
-    if policy_set is None:
-        return []
+    from hexgate.security import analyze_policy
 
-    from hexgate.security.analyzer import check_default_role_exposure
-
-    return [
-        PolicyValidationError(
-            role=lint.role, tool=lint.tool, message=f"{lint.code}: {lint.message}"
+    errors: list[PolicyValidationError] = []
+    warnings: list[PolicyValidationError] = []
+    for lint in analyze_policy(policy_set, manifest=manifest):
+        finding = PolicyValidationError(
+            role=lint.role,
+            tool=lint.tool,
+            message=f"{lint.code}: {lint.message}",
+            severity=lint.severity,
         )
-        for lint in check_default_role_exposure(policy_set)
-    ]
+        (errors if lint.code in _BLOCKING_FINDINGS else warnings).append(finding)
+    return errors, warnings
 
 
 @router.post("/agents", response_model=RegisterAgentResponse)
