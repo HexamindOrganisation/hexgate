@@ -905,12 +905,31 @@ def test_when_a_policy_level_constraint_names_an_unknown_arg_then_once_per_polic
 def test_when_roles_misuse_one_arg_differently_then_the_worst_severity_wins():
     doc = {
         "roles": {
-            # Roles are visited sorted, so the warning (admin) comes first.
+            # Roles are visited sorted: the error sits between two warnings, so
+            # neither first-wins nor last-wins passes.
             "admin": {"constraints": ["args.amout < 5"]},
             "default": {"constraints": ["not (args.amout > 5)"]},
+            "zeta": {"constraints": ["args.amout < 7"]},
         },
     }
     assert [s for s, _, _ in _unknown_args_of(doc, ("refund", ["amount"]))] == ["error"]
+
+
+def test_when_one_role_carries_a_constraint_typo_then_the_lint_names_it():
+    doc = {
+        "roles": {
+            "default": {"tools": {"refund": {"mode": "allow"}}},
+            "support": {"constraints": ["args.amout < 5"]},
+        },
+    }
+    assert _unknown_args_of(doc, ("refund", ["amount"])) == [
+        (
+            "warning",
+            "a policy-level constraint in role 'support' uses args.amout, which "
+            "no tool it applies to accepts",
+            "support",
+        )
+    ]
 
 
 def test_when_a_policy_level_arg_exists_on_some_tool_then_no_unknown_arg():

@@ -824,18 +824,8 @@ def _resolved_drift(
     tools are checked by :func:`_shared_constraint_drift`.
     """
     tool_props = _tool_props(manifest)
-    default_policy = policy_set.policy_for(DEFAULT_ROLE_NAME)
-    # ``default`` can be the very object of a named role -- inferred by the
-    # loader, or named by an explicit ``default=`` -- so report it under that name.
-    default_is_alias = any(
-        policy_set.policy_for(role) is default_policy
-        for role in policy_set.roles
-        if role != DEFAULT_ROLE_NAME
-    )
     out: list[PolicyLint] = []
-    for role in policy_set.roles:
-        if role == DEFAULT_ROLE_NAME and default_is_alias:
-            continue  # the same policy as a named role, reported under that name
+    for role in _reported_roles(policy_set):
         policy = policy_set.policy_for(role)
         out += _tool_drift(
             policy.tools,
@@ -849,6 +839,23 @@ def _resolved_drift(
     return out + _shared_constraint_drift(policy_set, tool_props, source=source)
 
 
+def _reported_roles(policy_set: PolicySet) -> list[str]:
+    """The roles to attribute lints to. ``default`` can be the very object of a
+    named role -- inferred by the loader, or named by an explicit ``default=`` --
+    and is then left out, so its findings carry the name the author wrote."""
+    default_policy = policy_set.policy_for(DEFAULT_ROLE_NAME)
+    default_is_alias = any(
+        policy_set.policy_for(role) is default_policy
+        for role in policy_set.roles
+        if role != DEFAULT_ROLE_NAME
+    )
+    return [
+        role
+        for role in policy_set.roles
+        if not (role == DEFAULT_ROLE_NAME and default_is_alias)
+    ]
+
+
 def _shared_constraint_drift(
     policy_set: PolicySet,
     tool_props: dict[str, set[str]],
@@ -859,13 +866,15 @@ def _shared_constraint_drift(
     (every call) and ``default_policy``'s (every tool the role doesn't list).
 
     ``<x>`` is a typo only when no tool the constraint applies to accepts it;
-    an arg some tools lack is the author's own fence on the others. A file-level
-    constraint is copied into every role, so each arg is reported once, at its
-    worst severity, with no role.
+    an arg some tools lack is the author's own fence on the others. Each arg is
+    reported once, at its worst severity, naming the roles that carry it -- or
+    none when every role does, as a file-level constraint is copied into each.
     """
     every_arg = set().union(*tool_props.values())
+    roles = _reported_roles(policy_set)
     worst: dict[tuple[str, str], Severity] = {}
-    for role in policy_set.roles:
+    carriers: dict[tuple[str, str], list[str]] = {}
+    for role in roles:
         policy = policy_set.policy_for(role)
         scopes = [("policy-level", policy.constraints, every_arg)]
         fallthrough = [
@@ -885,15 +894,22 @@ def _shared_constraint_drift(
         for kind, constraints, valid in scopes:
             for arg, severity in _unknown_args(constraints, valid, False).items():
                 _keep_worst(worst, (kind, arg), severity)
-    return [
-        PolicyLint(
-            code="unknown-arg",
-            severity=severity,
-            message=(
-                f"a {kind} constraint uses args.{arg}, which no tool it applies "
-                "to accepts"
-            ),
-            source=source,
+                carriers.setdefault((kind, arg), []).append(role)
+    out: list[PolicyLint] = []
+    for (kind, arg), severity in sorted(worst.items()):
+        named = carriers[(kind, arg)]
+        everywhere = len(named) == len(roles)
+        where = "" if everywhere else " in " + ", ".join(f"role {r!r}" for r in named)
+        out.append(
+            PolicyLint(
+                code="unknown-arg",
+                severity=severity,
+                message=(
+                    f"a {kind} constraint{where} uses args.{arg}, which no tool "
+                    "it applies to accepts"
+                ),
+                source=source,
+                role=named[0] if len(named) == 1 and not everywhere else None,
+            )
         )
-        for (kind, arg), severity in sorted(worst.items())
-    ]
+    return out
