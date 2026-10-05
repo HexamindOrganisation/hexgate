@@ -1,7 +1,7 @@
 # R-POL-003: Run every policy check through `analyze_policy`
 
 **Status:** Accepted · 2026-10-05
-**Applies to:** `hexgate/security/analyzer.py`, `hexgate/cli/policy/**`, `platform/api/hexgate_api/features/policy_modules/service.py`, `platform/api/hexgate_api/features/policy_modules/router.py`, `platform/api/hexgate_api/features/agents/router.py`, `evals/policy_writing/**`
+**Applies to:** `hexgate/security/analyzer.py`, `hexgate/cli/policy/**`, `platform/api/hexgate_api/features/policy_modules/service.py`, `platform/api/hexgate_api/features/policy_modules/router.py`, `platform/api/hexgate_api/features/agents/router.py`, `platform/dashboard/src/routes/Policies.tsx`, `evals/policy_writing/**`
 
 ## Decision
 
@@ -9,8 +9,9 @@ Every entry point that reports policy problems gets its lints from one SDK funct
 
 - An entry point (the CLI's `policy validate` / `check`, the platform's `/policy/preview`, `/policy/check` and agent `/validate`, the policy-writing eval scorer) MUST only gather inputs (resolve the `PolicySet`, load the manifest), call that function, and present what it returns.
 - An entry point MUST NOT call an individual check (`lint_guards`, `check_default_role_exposure`, `_resolved_drift`, a bare `PolicySet.guard_stance()`, ...) or keep its own list of them; a new check goes inside `analyze_policy`.
-- Manifest-dependent checks MUST run only when a manifest is passed. An entry point that has the agent's manifest MUST pass it, except the save route (R-POL-004).
-- An entry point MAY de-duplicate, filter by role or agent, apply a severity gate, or route lints by code (R-POL-004), but MUST NOT discard a check's lints unconditionally.
+- Manifest-dependent checks MUST run only when a manifest is passed. An entry point that has the agent's manifest MUST pass it, except the agent `policy_yaml` save, which passes none (see the last bullet).
+- An entry point MAY de-duplicate, filter by role or agent, apply a severity gate to what it reports (never to a save; see below), or route lints by code, but MUST NOT discard a check's lints unconditionally.
+- Severity MUST NOT decide whether a save is blocked. On the agent `policy_yaml` save and its `/validate` (`agents/router.py`), a lint is an error (a 422 on save, `ok: false` on `/validate`) only if its code is in `_BLOCKING_FINDINGS`, and a code goes there only if it is manifest-free and means the SDK cannot load the policy (today only `guard-divergence`). Every other lint, `error` severity included, is a warning that still reaches the client with its severity, and `/policy/check`'s `ok` describes the lints, not whether the policy saves. Module and policy-file saves (`policy_modules/router.py`) block on resolution failure instead, which this rule does not govern. Likewise the dashboard MUST treat only `link-error`, not any `error` lint, as "the policy doesn't compose".
 
 ## Why
 
@@ -24,6 +25,8 @@ Every new check repeated the drift: it was written in the SDK and then wired int
 
 `check_project` stays a separate function by design, not as debt. Linking drops a boundary fence on a misspelled tool, so the resolved `PolicySet` leaves the real tool uncapped with nothing left to flag; only the module form still sees that drift. Folding the module-store branch into `analyze_policy` would silently lose that check.
 
+Blocking is kept apart from severity because a save asks two questions. *Can the SDK load this?* `guard-divergence` says no: v1's guard stance applies to the whole agent (R-GUARD-007), so the SDK raises at construction whatever the manifest says. *Does it match the agent's code right now?* `unknown-guard` and the drift lints answer that against the latest registered manifest, which lags each deploy. Naming a guard and then deploying the code that adds it is the normal order, so blocking on those would refuse correct policies. They stay `error` severity anyway, because the runtime would stop on them if the agent built with that manifest. Keeping blocking codes manifest-free is also what makes `/validate` (which passes the manifest) and the save route (which passes none) agree.
+
 ## Consequences
 
 - The platform's compose routes call `analyze_policy` once per agent: every declared agent and every registered agent, each with its own manifest, plus the generic `"*"` view without one (`_compose_lints`).
@@ -35,6 +38,7 @@ Every new check repeated the drift: it was written in the SDK and then wired int
 
 - **A shared registry of checks that each entry point iterates.** It keeps N loops over the registry, and each loop can still skip or reorder entries; one function call leaves nothing to get wrong at the call site.
 - **A `project=` input alongside the policy.** Every single-agent shape (a classic single-file policy, each agent of a compose `policy.yaml`) already resolves to a `PolicySet`, so a second input would only re-encode the gathering step that differs per caller.
+- **Block on any `error`-severity lint, or downgrade the manifest lints to warnings.** The first refuses a guard named ahead of its deploy; the second hides that the runtime would stop on it.
 - **Requiring a manifest.** A policy is checked before its agent registers (R-GUARD-006), so the manifest-free checks must still run without one.
 
 ## Verify
@@ -46,7 +50,10 @@ grep -rsnE "\b(lint_guards|check_default_role_exposure|_resolved_drift|guard_sta
 It must print nothing once the CLI and eval follow-ups land (today it lists `hexgate/cli/policy/main.py`).
 
 ```
-cd platform/api && uv run --python 3.13 pytest -q "tests/features/policy_modules/test_policy_modules.py::test_when_a_policy_is_bad_then_every_entry_point_reports_the_sdk_findings"
+cd platform/api && uv run --python 3.13 pytest -q \
+  "tests/features/policy_modules/test_policy_modules.py::test_when_a_policy_is_bad_then_every_entry_point_reports_the_sdk_findings" \
+  "tests/features/agents/test_agents.py::test_validate_reports_divergent_guard_stance" \
+  "tests/features/policy_modules/test_policy_modules.py::test_when_validate_finds_a_guard_typo_then_it_warns_without_failing"
 ```
 
-That runs the parity test: one known-bad policy through `/validate`, `/policy/preview` and `/policy/check`. Each must report exactly the codes `analyze_policy` returns, so a check added to the function but bypassed by a route fails it.
+That runs the parity test: one known-bad policy through `/validate`, `/policy/preview` and `/policy/check`. Each must report exactly the codes `analyze_policy` returns, so a check added to the function but bypassed by a route fails it. The other two check that divergence fails `/validate`, and that a guard typo warns with `severity: error` and `ok: true`.
