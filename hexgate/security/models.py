@@ -218,6 +218,12 @@ def is_skill_key(name: str) -> bool:
     return name.startswith(SKILL_PREFIXES)
 
 
+def is_reserved_key(name: str) -> bool:
+    """True for a lowered agent or skill key: evaluated closed-world, and never
+    an authored tool name."""
+    return is_agent_key(name) or is_skill_key(name)
+
+
 class AgentTargetPolicy(BaseToolPolicy):
     """Authorize reaching one named target agent, per transfer mode.
 
@@ -367,7 +373,7 @@ class AgentPolicy(BaseModel):
         if info.context and info.context.get("resolved"):
             return value
         for name in value:
-            if is_agent_key(name) or is_skill_key(name):
+            if is_reserved_key(name):
                 raise ValueError(
                     f"tool name {name!r} is reserved for agent-level gating; "
                     "use the 'admission'/'agents'/'skills' blocks instead"

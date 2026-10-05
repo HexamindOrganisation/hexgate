@@ -5,6 +5,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
 from hexgate.security import (
     AgentPolicy,
     BaseToolPolicy,
@@ -16,6 +18,7 @@ from hexgate.security import (
     check_project,
     link_policy_set,
     load_policy_map,
+    load_policy_set_from_dict,
 )
 from hexgate.security.analyzer import check_default_role_exposure
 
@@ -40,8 +43,8 @@ def _deny(constraints=None):
     return BaseToolPolicy(mode="deny", constraints=constraints or [])
 
 
-def _manifest(*tools):
-    """Duck-typed AgentManifest: tools=[(name, [arg, ...]), ...]."""
+def _manifest(*tools, guards=()):
+    """Duck-typed AgentManifest: tools=[(name, [arg, ...]), ...] plus guard names."""
     return SimpleNamespace(
         tools=[
             SimpleNamespace(
@@ -49,7 +52,8 @@ def _manifest(*tools):
                 input_schema=SimpleNamespace(properties={a: None for a in args}),
             )
             for name, args in tools
-        ]
+        ],
+        guards=[SimpleNamespace(name=g) for g in guards],
     )
 
 
@@ -580,39 +584,26 @@ def test_run_constraints_are_not_linted_as_unknown_args():
 # --- analyze_policy: every check over a resolved policy set ---
 
 
-def _guarded_manifest(*tools, guards=()):
-    """``_manifest`` plus declared guard names."""
-    manifest = _manifest(*tools)
-    manifest.guards = [SimpleNamespace(name=g) for g in guards]
-    return manifest
-
-
-def _loaded(doc):
-    from hexgate.security import load_policy_set_from_dict
-
-    return load_policy_set_from_dict(doc)
-
-
 def test_analyze_policy_happy_path():
-    ps = _loaded(
+    ps = load_policy_set_from_dict(
         {
             "guards": {"secret_redactor": {"enabled": False}},
             "tools": {"refund": {"mode": "allow", "constraints": ["args.amount < 5"]}},
         }
     )
-    manifest = _guarded_manifest(("refund", ["amount"]), guards=["secret_redactor"])
+    manifest = _manifest(("refund", ["amount"]), guards=["secret_redactor"])
     assert analyze_policy(ps, manifest=manifest) == []
 
 
 def test_when_no_manifest_then_manifest_checks_are_skipped():
-    ps = _loaded(
+    ps = load_policy_set_from_dict(
         {
             "guards": {"secret_redacter": {"enabled": False}},
             "tools": {"refund": {"mode": "allow", "constraints": ["args.amont < 5"]}},
         }
     )
     assert analyze_policy(ps) == []
-    manifest = _guarded_manifest(("refund", ["amount"]), guards=["secret_redactor"])
+    manifest = _manifest(("refund", ["amount"]), guards=["secret_redactor"])
     assert {lint.code for lint in analyze_policy(ps, manifest=manifest)} == {
         "unknown-guard",
         "unknown-arg",
@@ -620,7 +611,7 @@ def test_when_no_manifest_then_manifest_checks_are_skipped():
 
 
 def test_when_roles_disagree_on_guards_then_guard_divergence():
-    ps = _loaded(
+    ps = load_policy_set_from_dict(
         {
             "roles": {
                 "default": {"guards": {"g": {"enabled": False}}},
@@ -634,18 +625,18 @@ def test_when_roles_disagree_on_guards_then_guard_divergence():
     ]
 
 
-def test_when_an_arg_is_unknown_then_severity_follows_the_rule_mode():
-    ps = _loaded(
+def test_when_an_arg_is_unknown_then_severity_follows_its_polarity():
+    ps = load_policy_set_from_dict(
         {
             "tools": {
                 "refund": {"mode": "allow", "constraints": ["args.amont < 5"]},
-                "wipe": {"mode": "deny", "constraints": ["args.forse == true"]},
+                "wipe": {"mode": "allow", "constraints": ["not (args.forse == true)"]},
             }
         }
     )
-    manifest = _guarded_manifest(("refund", ["amount"]), ("wipe", ["force"]))
+    manifest = _manifest(("refund", ["amount"]), ("wipe", ["force"]))
     lints = analyze_policy(ps, manifest=manifest)
-    # A deny that can't match fails open (error); a grant that can't fails closed.
+    # A missing arg compares False: a grant fails closed, its negation fails open.
     assert [(lint.code, lint.tool, lint.severity) for lint in lints] == [
         ("unknown-arg", "wipe", "error"),
         ("unknown-arg", "refund", "warning"),
@@ -653,9 +644,54 @@ def test_when_an_arg_is_unknown_then_severity_follows_the_rule_mode():
     assert all(lint.role == "default" for lint in lints)
 
 
+def test_when_a_deny_constrains_an_unknown_arg_then_no_lint():
+    # A resolved deny is unconditional: its constraints are never evaluated.
+    ps = load_policy_set_from_dict(
+        {"tools": {"wipe": {"mode": "deny", "constraints": ["args.forse == true"]}}}
+    )
+    assert analyze_policy(ps, manifest=_manifest(("wipe", ["force"]))) == []
+
+
+def test_when_a_role_aliases_default_then_its_drift_names_that_role_once():
+    ps = load_policy_set_from_dict(
+        {"roles": {"admin": {"tools": {"refnd": {"mode": "allow"}}}}}
+    )
+    lints = analyze_policy(ps, manifest=_manifest(("refund", [])))
+    assert [lint.role for lint in lints if lint.code == "unknown-tool"] == ["admin"]
+
+
+def test_when_a_source_is_given_then_every_lint_carries_it():
+    ps = load_policy_set_from_dict(
+        {
+            "roles": {
+                "default": {"tools": {"refund": {"mode": "allow"}}},
+                "admin": {"tools": {}},
+            }
+        }
+    )
+    manifest = _manifest(("refund", []), guards=[])
+    guards = {"secret_redactor": {"enabled": False}}
+    ps_with_drift = load_policy_set_from_dict(
+        {
+            "roles": {
+                "default": {"guards": guards, "tools": {"refund": {"mode": "allow"}}},
+                "admin": {"guards": guards, "tools": {"refnd": {"mode": "allow"}}},
+            },
+        }
+    )
+    lints = analyze_policy(ps, source="policy.yaml")
+    lints += analyze_policy(ps_with_drift, manifest=manifest, source="policy.yaml")
+    assert {"permissive-default", "unknown-guard", "unknown-tool"} <= {
+        lint.code for lint in lints
+    }
+    assert {lint.source for lint in lints} == {"policy.yaml"}
+
+
 def test_when_a_tool_is_unknown_then_severity_follows_the_rule_mode():
-    ps = _loaded({"tools": {"refnd": {"mode": "allow"}, "wipe_db": {"mode": "deny"}}})
-    lints = analyze_policy(ps, manifest=_guarded_manifest(("refund", [])))
+    ps = load_policy_set_from_dict(
+        {"tools": {"refnd": {"mode": "allow"}, "wipe_db": {"mode": "deny"}}}
+    )
+    lints = analyze_policy(ps, manifest=_manifest(("refund", [])))
     assert {(lint.code, lint.tool, lint.severity) for lint in lints} == {
         ("unknown-tool", "refnd", "warning"),
         ("unknown-tool", "wipe_db", "info"),
@@ -663,15 +699,160 @@ def test_when_a_tool_is_unknown_then_severity_follows_the_rule_mode():
 
 
 def test_when_a_key_is_not_a_manifest_tool_then_no_unknown_tool():
-    ps = _loaded(
+    ps = load_policy_set_from_dict(
         {
             "tools": {
                 "net.http_request": {"mode": "allow"},
                 "net.tcp_connect": {"mode": "allow"},
                 "agent.run": {"mode": "allow"},
                 "agent.tool:other": {"mode": "allow"},
+                "skill:triage": {"mode": "allow"},
+                "skill.resource:triage": {"mode": "allow"},
+                "skill.script:triage": {"mode": "allow"},
             },
             "_resolved": True,
         }
     )
-    assert analyze_policy(ps, manifest=_guarded_manifest()) == []
+    assert analyze_policy(ps, manifest=_manifest()) == []
+
+
+def test_when_the_default_allows_then_a_stricter_rule_on_a_typo_is_an_error():
+    # The real tool falls through to the allow default: it runs looser than meant.
+    ps = load_policy_set_from_dict(
+        {
+            "default_policy": {"mode": "allow"},
+            "tools": {
+                "delete_databse": {"mode": "deny"},
+                "refnd": {"mode": "approval_required"},
+                "refnd_capped": {"mode": "allow", "constraints": ["args.amount < 5"]},
+                "lookp": {"mode": "allow"},
+            },
+        }
+    )
+    lints = analyze_policy(ps, manifest=_manifest(("refund", ["amount"])))
+    assert {(lint.tool, lint.severity) for lint in lints} == {
+        ("delete_databse", "error"),
+        ("refnd", "error"),
+        ("refnd_capped", "error"),
+        ("lookp", "warning"),
+    }
+
+
+def test_when_an_unknown_arg_is_used_twice_then_the_worst_severity_wins():
+    ps = load_policy_set_from_dict(
+        {
+            "tools": {
+                "wipe": {
+                    "mode": "allow",
+                    "constraints": ["args.forse == false", "not (args.forse == true)"],
+                }
+            }
+        }
+    )
+    lints = analyze_policy(ps, manifest=_manifest(("wipe", ["force"])))
+    assert [(lint.code, lint.severity) for lint in lints] == [("unknown-arg", "error")]
+
+
+def test_when_a_module_names_an_egress_tool_then_no_unknown_tool():
+    boundary = _mod("b", "boundary", {"net.http_request": _allow()})
+    cap = _mod("c", "capability", {"net.http_request": _allow()})
+    lints = check([boundary], [cap], manifest=_manifest())
+    assert not [lint for lint in lints if lint.code == "unknown-tool"]
+
+
+_RESTRICTIONS = {
+    "none": {},
+    "constraints": {"constraints": ["args.n < 5"]},
+    "file_scope": {"file_scope": {"allowed_paths": ["/data/*"]}},
+}
+_STRICTNESS = {"allow": 0, "needs_approval": 1, "deny": 2}
+
+
+@pytest.mark.parametrize("restriction", sorted(_RESTRICTIONS))
+@pytest.mark.parametrize("default_mode", ["allow", "approval_required", "deny"])
+@pytest.mark.parametrize("rule_mode", ["allow", "approval_required", "deny"])
+def test_when_a_tool_is_misspelled_then_error_iff_the_real_tool_runs_looser(
+    rule_mode, default_mode, restriction
+):
+    """Grades against the real evaluator: the misspelled rule is an error exactly
+    when some call to the real tool now gets a looser verdict than intended."""
+    rule = {"mode": rule_mode, **_RESTRICTIONS[restriction]}
+
+    def policy(tool):
+        doc = {"default_policy": {"mode": default_mode}, "tools": {tool: rule}}
+        return load_policy_set_from_dict(doc)
+
+    intended, typo = policy("read_file"), policy("read_fiel")
+    calls = [{"path": p, "n": n} for p in ("/data/x", "/etc/passwd") for n in (1, 99)]
+
+    def strictness(ps, args):
+        verdict = ps.evaluate(role=None, tool="read_file", args=args)
+        return _STRICTNESS[verdict.outcome.value]
+
+    looser = any(strictness(typo, c) < strictness(intended, c) for c in calls)
+    manifest = _manifest(("read_file", ["path", "n"]))
+    [lint] = [
+        lint
+        for lint in analyze_policy(typo, manifest=manifest)
+        if lint.code == "unknown-tool"
+    ]
+    assert (lint.severity == "error") == looser
+
+
+def test_when_an_egress_rule_names_an_unknown_arg_then_unknown_arg():
+    ps = load_policy_set_from_dict(
+        {
+            "tools": {
+                "net.http_request": {
+                    "mode": "allow",
+                    "constraints": [
+                        'not (args.hots == "evil.com")',
+                        "args.port == 443",
+                    ],
+                },
+                "net.tcp_connect": {
+                    "mode": "allow",
+                    "constraints": ["args.prot == 5432"],
+                },
+            }
+        }
+    )
+    lints = analyze_policy(ps, manifest=_manifest())
+    assert {(lint.code, lint.tool, lint.severity) for lint in lints} == {
+        ("unknown-arg", "net.http_request", "error"),
+        ("unknown-arg", "net.tcp_connect", "warning"),
+    }
+
+
+def test_when_a_module_egress_rule_names_an_unknown_arg_then_unknown_arg():
+    boundary = _mod(
+        "b", "boundary", {"net.http_request": _allow(['args.hots == "api.x.com"'])}
+    )
+    cap = _mod("c", "capability", {"net.http_request": _allow()})
+    lints = check([boundary], [cap], manifest=_manifest())
+    assert [
+        (lint.code, lint.tool) for lint in lints if lint.code.startswith("unknown")
+    ] == [("unknown-arg", "net.http_request")]
+
+
+def test_egress_tool_args_match_what_the_proxy_builds():
+    from hexgate.egress.model import connect_to_args, http_to_args
+    from hexgate.security.network import EGRESS_TOOL_ARGS, NET_HTTP_REQUEST
+
+    built = set(connect_to_args("h", 443)) | set(http_to_args("GET", "http://h/p?q"))
+    assert built == EGRESS_TOOL_ARGS[NET_HTTP_REQUEST]
+
+
+def test_when_a_module_arg_typo_sits_under_not_then_severity_flips():
+    # A capability's negated typo is always True (fail-open); a boundary deny is
+    # itself wrapped in ``not``, so its negated typo cancels out (fail-closed).
+    cap = _mod("c", "capability", {"refund": _allow(["not (args.amoun > 1000)"])})
+    boundary = _mod(
+        "b",
+        "boundary",
+        {"refund": BaseToolPolicy(mode="deny", constraints=["not (args.amoun > 5)"])},
+    )
+    lints = check([boundary], [cap], manifest=_manifest(("refund", ["amount"])))
+    assert {
+        (lint.tier, lint.severity) for lint in lints if lint.code == "unknown-arg"
+    } == {("capability", "error"), ("boundary", "warning")}
