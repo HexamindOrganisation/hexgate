@@ -67,7 +67,7 @@ Key properties:
         │  PlatformBanSource  ──fetch()──▶ BanSet (cached)   │
         │        │  shared per (api-key, base-url)           │
         │        ▼                                           │
-        │  BanGate.check() / .check_async()                  │
+        │  BanGate.fetch() → .enforce()  (via prepare_run)   │
         │        │  runs in every adapter's run path         │
         │        │  BEFORE the LLM                           │
         │        ├── hit? ── emit BanEnforcementEvent ──┐    │
@@ -293,7 +293,7 @@ staging vs prod get distinct sources.
 The gate is `BanGate` (`bans.py:227`). It is per-agent but points at the shared source, and decides:
 
 ```python
-def _decide(self, bans, context):
+def enforce(self, bans, context):
     # Agent ban checked FIRST so a coincident agent+user ban emits a deterministic ban_type/ban_id.
     hit = bans.agent_ban(self._agent_name)
     if hit is None and context is not None:
@@ -308,12 +308,14 @@ def _decide(self, bans, context):
     )
 ```
 
-Two entry points:
+`fetch()` returns the current (fail-soft) `BanSet` and `enforce(bans, context)` decides on it.
+Run boundaries never call them directly: they go through `aprepare_run` / `prepare_run`
+(`adapters/_common.py`), which run the ban fetch on a worker thread concurrently with the policy
+refresh, then call `enforce` on the caller's loop or thread once both are done. Raising there keeps
+`AgentBannedError` in the caller's context. (The sender itself is thread-agnostic — its span export
+runs on its own worker — so this placement is about raising, not about delivery.)
 
-- `check(context)` — sync: fetch (fail-soft) → decide.
-- `check_async(context)` — fetches off-loop via `asyncio.to_thread`, then decides + emits + raises
-  on the loop. (The sender itself is thread-agnostic — its span export runs on its own worker — so
-  the on-loop placement is about raising in the caller's context, not about delivery.)
+`check(context)` / `check_async(context)` compose the two for a caller that only wants a ban check.
 
 **Precedence.** Agent ban wins over a coincident user ban. When `context is None`, only the agent
 dimension is evaluated. Tool-level bans don't exist on the SDK side.
@@ -339,9 +341,9 @@ nothing (no partial output, no fake terminal message).
 
 **Where the gate is composed in — all four adapters + the native factory:**
 
-| Integration | Gate resolution | Fired in (after policy refresh, before the LLM) |
+| Integration | Gate resolution | Fired in (alongside the policy refresh, before the LLM) |
 |-------------|-----------------|--------------------------------------------------|
-| **Native factory** (`agents/factory.py`) | threaded through `with_tools` rebuilds; user is **ambient** via `get_current_context()` | `ainvoke`, `astream_events` (via `_check_ban()`) |
+| **Native factory** (`agents/factory.py`) | threaded through `with_tools` rebuilds; user is **ambient** via `get_current_context()` | `ainvoke`, `astream_events` (via `aprepare_run`) |
 | **OpenAI** (`adapters/openai/runner.py`) | lazy per-agent cache `_ban_gate_for` | `run` (async), `run_sync`, `run_streamed` (before the background task spawns) |
 | **Google ADK** (`adapters/google/runner.py`) | single gate at construction | `run` (sync generator), `run_async` |
 | **LangChain** (`adapters/langchain/agent.py`) | injected via wrapper | `invoke`, `ainvoke`, `stream`, `astream`, `astream_events` |
@@ -481,7 +483,7 @@ All ban routes live in `features/bans/router.py`; the enforcement telemetry rout
 | `get_ban_source(key, client)` | get-or-create the shared source, keyed `(api_key, base_url)`. |
 | `BanEnforcementEvent` | the telemetry event, exported as a `hexgate.bans` span (`span_attributes()`). |
 | `configure_ban_sink(...)` | get-or-create the shared per-`api_key` `AuditSender`. |
-| `BanGate` | per-agent gate: refresh (fail-soft) → decide → emit + raise. `check` / `check_async`. |
+| `BanGate` | per-agent gate: `fetch` (fail-soft) → `enforce` (decide → emit + raise). `check` / `check_async` compose both. |
 | `resolve_ban_gate(name, ...)` | build the gate, or `None` for all "no platform" cases. |
 
 ---
