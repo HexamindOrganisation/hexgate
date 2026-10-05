@@ -846,7 +846,7 @@ def test_run_streamed_fetches_policy_and_bans_concurrently(
 async def test_arun_streamed_refused_before_task_spawns_when_banned(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The ban gate is awaited (check_async) before Runner.run_streamed spawns
+    """The ban gate is enforced (via aprepare_run) before Runner.run_streamed spawns
     its background task, so a banned stream never starts on the serve path."""
     _silence_observability(monkeypatch)
     called: list[str] = []
