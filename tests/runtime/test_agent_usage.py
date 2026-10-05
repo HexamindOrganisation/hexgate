@@ -8,16 +8,18 @@ semantics PR 2b and PR 6 build on.
 from __future__ import annotations
 
 import threading
+from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
 from hexgate.runtime.agent_usage import (
     AGENT_USAGE_LEDGERS,
-    COARSE_BUCKET_SECONDS,
     FINE_BUCKET_SECONDS,
     FINE_RETENTION_SECONDS,
+    HOUR_BUCKET_SECONDS,
     MAX_WINDOW_SECONDS,
+    MINUTE_BUCKET_SECONDS,
     BucketSeries,
     UsageLedger,
     UsageLedgers,
@@ -30,6 +32,8 @@ _WIDTH = 10.0
 _RETENTION = 100.0
 _START = 1_000.0
 _DAY = 86_400.0
+_HALF_HOUR = 1_800.0
+_TWO_HOURS = 7_200.0
 _WRITERS = 8
 _WRITES_EACH = 500
 _ONE_TOOL_CALL = {UsageMetric.TOOL_CALLS: 1}
@@ -64,28 +68,39 @@ def test_the_bucket_holding_the_cut_off_counts_whole(
 
 @pytest.mark.parametrize(
     ("next_add", "expected"),
-    [(_START + _RETENTION + _WIDTH, 1), (_START + _RETENTION - _WIDTH, 2)],
-    ids=["past-retention-pruned", "inside-retention-kept"],
+    [
+        (_START + _RETENTION + _WIDTH, 1),
+        (_START + _RETENTION - _WIDTH, 2),
+        (_START + 3 * _RETENTION, 1),
+    ],
+    ids=["lapped-slot-starts-from-zero", "inside-retention-kept", "gap-past-the-ring"],
 )
-def test_buckets_past_retention_are_pruned_on_the_next_add(
-    next_add: float, expected: int
-) -> None:
+def test_a_bucket_past_retention_is_not_read(next_add: float, expected: int) -> None:
     series = BucketSeries(_WIDTH, _RETENTION)
     series.add(_START, _ONE_TOOL_CALL)
 
     series.add(next_add, _ONE_TOOL_CALL)
 
-    assert len(series) == expected
     assert series.total_since(_START)[UsageMetric.TOOL_CALLS] == expected
 
 
-def test_two_adds_in_one_bucket_make_one_bucket() -> None:
+def test_two_adds_in_one_bucket_sum() -> None:
     series = BucketSeries(_WIDTH, _RETENTION)
     series.add(_START, _ONE_TOOL_CALL)
     series.add(_START + _WIDTH / 2, _ONE_TOOL_CALL)
 
-    assert len(series) == 1
-    assert series.total_since(_START)[UsageMetric.TOOL_CALLS] == 2
+    assert series.total_since(_START + _WIDTH / 2)[UsageMetric.TOOL_CALLS] == 2
+
+
+def test_a_clock_step_backwards_counts_in_the_newest_bucket() -> None:
+    series = BucketSeries(_WIDTH, _RETENTION)
+    series.add(_START + _WIDTH, _ONE_TOOL_CALL)
+    series.add(_START + 2 * _WIDTH, _ONE_TOOL_CALL)
+
+    series.add(_START - 5 * _WIDTH, _ONE_TOOL_CALL)
+
+    assert series.total_since(_START + _WIDTH)[UsageMetric.TOOL_CALLS] == 3
+    assert series.total_since(_START + 2 * _WIDTH)[UsageMetric.TOOL_CALLS] == 2
 
 
 # ---------------------------------------------------------------------------
@@ -105,15 +120,15 @@ def test_a_recent_cut_off_reads_fine_buckets() -> None:
     assert ledger.since(cut_off)[UsageMetric.TOOL_CALLS] == 1
 
 
-def test_an_old_cut_off_reads_coarse_buckets() -> None:
-    clock = _FakeClock(_START * COARSE_BUCKET_SECONDS)
+def test_an_old_cut_off_reads_minute_buckets() -> None:
+    clock = _FakeClock(_START * MINUTE_BUCKET_SECONDS)
     ledger = new_usage_ledger(clock=clock)
     ledger.record(_ONE_TOOL_CALL)
     clock.now += 2 * FINE_BUCKET_SECONDS
     ledger.record(_ONE_TOOL_CALL)
     clock.now += FINE_RETENTION_SECONDS + FINE_BUCKET_SECONDS
 
-    cut_off = _START * COARSE_BUCKET_SECONDS + 2 * FINE_BUCKET_SECONDS
+    cut_off = _START * MINUTE_BUCKET_SECONDS + 2 * FINE_BUCKET_SECONDS
     assert ledger.since(cut_off)[UsageMetric.TOOL_CALLS] == 2
 
 
@@ -130,12 +145,12 @@ class _TickingClock:
 
 
 def test_a_fine_retention_window_reads_fine_buckets_on_a_ticking_clock() -> None:
-    clock = _TickingClock(_START * COARSE_BUCKET_SECONDS)
+    clock = _TickingClock(_START * MINUTE_BUCKET_SECONDS)
     ledger = new_usage_ledger(clock=clock)
     ledger.record(_ONE_TOOL_CALL)
     clock.now += FINE_RETENTION_SECONDS + 2 * FINE_BUCKET_SECONDS
 
-    # Outside the 300 s window, but inside the coarse bucket holding its cut-off.
+    # Outside the 300 s window, but inside the minute bucket holding its cut-off.
     assert ledger.within(FINE_RETENTION_SECONDS)[UsageMetric.TOOL_CALLS] == 0
 
 
@@ -150,6 +165,30 @@ def test_the_longest_window_reaches_back_thirty_days(
     ledger.record({UsageMetric.DENIALS: 1})
 
     assert ledger.within(MAX_WINDOW_SECONDS)[UsageMetric.TOOL_CALLS] == expected
+
+
+@pytest.mark.parametrize(
+    ("age", "expected"),
+    [(7 * _DAY + _HALF_HOUR, 1), (7 * _DAY + _TWO_HOURS, 0)],
+    ids=["inside-the-leading-hour", "past-it"],
+)
+def test_a_week_window_rounds_out_to_the_hour(age: float, expected: int) -> None:
+    clock = _FakeClock(_START * HOUR_BUCKET_SECONDS)
+    ledger = new_usage_ledger(clock=clock)
+    ledger.record(_ONE_TOOL_CALL)
+    clock.now += age
+
+    assert ledger.within(7 * _DAY)[UsageMetric.TOOL_CALLS] == expected
+
+
+def test_an_idle_ledger_reads_zero_once_the_window_passes() -> None:
+    clock = _FakeClock()
+    ledger = new_usage_ledger(clock=clock)
+    ledger.record(_ONE_TOOL_CALL)
+    clock.now += 2 * _DAY
+
+    assert ledger.within(_DAY)[UsageMetric.TOOL_CALLS] == 0
+    assert ledger.within(MAX_WINDOW_SECONDS)[UsageMetric.TOOL_CALLS] == 1
 
 
 def test_every_read_returns_every_metric_zero_filled() -> None:
@@ -171,14 +210,23 @@ def test_record_drops_non_positive_amounts() -> None:
     assert read[UsageMetric.INPUT_TOKENS] == 0
 
 
-def test_an_all_zero_record_creates_no_bucket() -> None:
-    fine = BucketSeries(FINE_BUCKET_SECONDS, FINE_RETENTION_SECONDS)
-    coarse = BucketSeries(COARSE_BUCKET_SECONDS, MAX_WINDOW_SECONDS)
-    ledger = UsageLedger(fine=fine, coarse=coarse, clock=_FakeClock())
+class _CountingSeries(BucketSeries):
+    def __init__(self) -> None:
+        super().__init__(FINE_BUCKET_SECONDS, FINE_RETENTION_SECONDS)
+        self.adds = 0
+
+    def add(self, now: float, amounts: Mapping[UsageMetric, int]) -> None:
+        self.adds += 1
+        super().add(now, amounts)
+
+
+def test_an_all_zero_record_touches_no_series() -> None:
+    series = _CountingSeries()
+    ledger = UsageLedger(series=(series,), clock=_FakeClock())
 
     ledger.record({UsageMetric.INPUT_TOKENS: 0, UsageMetric.OUTPUT_TOKENS: 0})
 
-    assert (len(fine), len(coarse)) == (0, 0)
+    assert series.adds == 0
 
 
 def test_parallel_writers_lose_no_increments() -> None:
