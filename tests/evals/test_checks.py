@@ -308,6 +308,17 @@ def test_when_the_agent_edits_agents_json_then_score_fails_both_name_checks(
         )
 
 
+def test_when_a_case_expects_a_superset_then_score_runs_it(tmp_path) -> None:
+    ws = make_workspace(tmp_path)
+    superset = {"wider": "support", "narrower": "billing", "probes": [REFUND]}
+    case = {"agent": AGENT, "expect": {"superset": [superset]}}
+    check = by_name(score(case, ws, snapshot(ws), ""))["superset: support ⊇ billing"]
+    assert (check.passed, check.detail) == (
+        False,
+        "refund_order: billing=allow, support=approval_required",
+    )
+
+
 def test_when_the_policy_is_invalid_then_score_fails_valid_and_decisions(
     tmp_path,
 ) -> None:
