@@ -126,6 +126,31 @@ def test_records_tokens_without_a_sender(monkeypatch: pytest.MonkeyPatch) -> Non
     assert namespace["llm_calls"] == 1
 
 
+def test_records_llm_usage_on_the_agent_usage_ledger_without_a_sender(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A token quota must work in local mode too."""
+    from hexgate.runtime.agent_usage import (
+        MAX_WINDOW_SECONDS,
+        UsageLedgers,
+        UsageMetric,
+        new_usage_ledger,
+    )
+
+    monkeypatch.setattr(usage_mod, "configure_usage_sender", lambda api_key=None: None)
+    ledgers = UsageLedgers(new_usage_ledger)
+    ledgers.enable()
+
+    with run_scope("a", ledgers=ledgers) as facts:
+        emit_llm_usage("agent", "gpt-4o", 100, 20)
+
+    assert facts.ledger is not None
+    usage = facts.ledger.within(MAX_WINDOW_SECONDS)
+    assert usage[UsageMetric.LLM_CALLS] == 1
+    assert usage[UsageMetric.INPUT_TOKENS] == 100
+    assert usage[UsageMetric.OUTPUT_TOKENS] == 20
+
+
 def test_records_tokens_and_emits_when_a_sender_exists(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

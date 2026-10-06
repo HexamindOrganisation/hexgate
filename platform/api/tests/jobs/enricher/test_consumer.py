@@ -21,6 +21,7 @@ from tests.jobs.enricher.conftest import (
     make_request_bytes,
     make_span,
     message_attrs,
+    run_attrs,
     usage_attrs,
 )
 
@@ -30,7 +31,7 @@ def _record(groups, key: bytes | None = b"proj_1", offset: int = 0) -> FakeRecor
 
 
 async def test_process_poll_happy_path_inserts_then_commits(make_job) -> None:
-    """All four event types in one poll → four batch inserts, no DLQ,
+    """All five event types in one poll → five batch inserts, no DLQ,
     one commit, strictly after the inserts."""
     job, clickhouse, consumer, producer, calls = make_job()
     records = [
@@ -40,19 +41,21 @@ async def test_process_poll_happy_path_inserts_then_commits(make_job) -> None:
                 (semconv.SCOPE_USAGE, [make_span(usage_attrs())]),
                 (semconv.SCOPE_BANS, [make_span(ban_attrs())]),
                 (semconv.SCOPE_MESSAGES, [make_span(message_attrs())]),
+                (semconv.SCOPE_RUNS, [make_span(run_attrs())]),
             ]
         )
     ]
 
     await job._process_poll(records)
 
-    assert calls == ["insert", "insert", "insert", "insert", "commit"]
+    assert calls == ["insert"] * 5 + ["commit"]
     tables = [c.args[0] for c in clickhouse.insert.call_args_list]
     assert tables == [
         "policy_decision",
         "llm_invocation",
         "ban_enforcement",
         "llm_message",
+        "agent_run",
     ]
     assert producer.sent == []
     # project_id from the record key, agent_version_id from the resolver.
@@ -63,6 +66,9 @@ async def test_process_poll_happy_path_inserts_then_commits(make_job) -> None:
     message_rows = clickhouse.insert.call_args_list[3].args[1]
     assert message_rows[0][2] == "proj_1"
     assert message_rows[0][4] == "ver_researcher"
+    run_rows = clickhouse.insert.call_args_list[4].args[1]
+    assert run_rows[0][2] == "proj_1"
+    assert run_rows[0][4] == "ver_researcher"
 
 
 async def test_when_a_poll_holds_only_message_spans_then_one_insert_and_a_commit(
@@ -139,6 +145,25 @@ async def test_when_the_same_event_id_arrives_twice_in_one_poll_then_inserted_on
     assert len(decision_rows) == 1
     assert producer.sent == []  # a duplicate is not an error
     assert consumer.commits == 1
+
+
+async def test_when_a_run_span_arrives_twice_in_one_poll_then_inserted_once(
+    make_job,
+) -> None:
+    """The per-poll dedup is generic, so the new bucket inherits it."""
+    job, clickhouse, consumer, producer, calls = make_job()
+    attrs = run_attrs()
+    records = [
+        _record([(semconv.SCOPE_RUNS, [make_span(attrs)])], offset=0),
+        _record([(semconv.SCOPE_RUNS, [make_span(attrs)])], offset=1),
+    ]
+
+    await job._process_poll(records)
+
+    assert calls == ["insert", "commit"]
+    args = clickhouse.insert.call_args
+    assert args.args[0] == "agent_run"
+    assert len(args.args[1]) == 1
 
 
 async def test_when_two_projects_share_an_event_id_then_both_are_inserted(
@@ -377,6 +402,9 @@ def _lifecycle_job(monkeypatch, make_job, *, records, topics):
         "hexgate_api.jobs.enricher.consumer.verify_messages_schema", lambda c: None
     )
     monkeypatch.setattr(
+        "hexgate_api.jobs.enricher.consumer.verify_agent_runs_schema", lambda c: None
+    )
+    monkeypatch.setattr(
         "hexgate_api.jobs.enricher.consumer.engine", SimpleNamespace(dispose=_noop)
     )
     return job, clickhouse, consumer, calls
@@ -526,6 +554,33 @@ async def test_when_the_llm_message_table_is_missing_then_run_refuses_to_start(
         await job.run()
 
     assert exc.value.missing == {"llm_message": ["event_id", "input_messages"]}
+    assert not consumer.started
+
+
+async def test_when_the_agent_run_table_is_missing_then_run_refuses_to_start(
+    monkeypatch, make_job
+) -> None:
+    """Migration 0004 is hand-applied too; skipping it must fail at boot."""
+    from hexgate_api.core.clickhouse import SchemaOutOfDate
+
+    job, clickhouse, consumer, calls = _lifecycle_job(
+        monkeypatch,
+        make_job,
+        records=[],
+        topics={"hexgate.otlp.raw", "hexgate.otlp.dlq"},
+    )
+
+    def _table_absent(_client):
+        raise SchemaOutOfDate({"agent_run": ["event_id", "run_id"]})
+
+    monkeypatch.setattr(
+        "hexgate_api.jobs.enricher.consumer.verify_agent_runs_schema", _table_absent
+    )
+
+    with pytest.raises(SchemaOutOfDate) as exc:
+        await job.run()
+
+    assert exc.value.missing == {"agent_run": ["event_id", "run_id"]}
     assert not consumer.started
 
 

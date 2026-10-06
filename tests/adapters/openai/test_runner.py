@@ -21,13 +21,17 @@ from hexgate.adapters.openai.runner import (
 )
 from hexgate.adapters.openai.usage import HexgateUsageHooks
 from hexgate.runtime import HexgateContext
+from hexgate.runtime import run_facts as run_facts_mod
 from hexgate.runtime.context import get_current_context
+from hexgate.runtime.run_facts import get_run_facts
 from hexgate.security import AgentPolicy, BaseToolPolicy, PolicySet, ResolvedPolicy
 from hexgate.security.bans import BanEntry, BanGate, BanSet
 from hexgate.security.enforcer import PolicyEnforcer
 from hexgate.security.errors import AgentBannedError
 from hexgate.security.policy_set import DEFAULT_ROLE_NAME
 from hexgate.tracing import usage as tracing_usage_mod
+
+_CANONICAL_NAME = "billing"
 
 
 class _StaticBanSource:
@@ -382,6 +386,44 @@ def test_run_sync_opens_user_scope_and_calls_runner_run_sync(
     assert captured["input"] == "hello"
     assert captured["active_user"] is context
     assert get_current_context() is None
+
+
+@pytest.mark.asyncio
+async def test_run_scope_uses_the_canonical_agent_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The run's facts and its run_start row key the agent like its decisions
+    do, so a padded name still joins its policy_decision rows."""
+    _silence_observability(monkeypatch)
+    seen_agents: list[str] = []
+    reported_agents: list[str] = []
+
+    async def fake_run(starting_agent: Agent, input: Any, **kwargs: Any) -> str:
+        seen_agents.append(get_run_facts().agent)
+        return "run-result"
+
+    def fake_run_sync(starting_agent: Agent, input: Any, **kwargs: Any) -> str:
+        seen_agents.append(get_run_facts().agent)
+        return "run-sync-result"
+
+    def capture_run_start(agent: str, run_id: str, **_: Any) -> None:
+        reported_agents.append(agent)
+
+    monkeypatch.setattr(
+        "hexgate.adapters.openai.runner.Runner.run", staticmethod(fake_run)
+    )
+    monkeypatch.setattr(
+        "hexgate.adapters.openai.runner.Runner.run_sync", staticmethod(fake_run_sync)
+    )
+    monkeypatch.setattr(run_facts_mod, "emit_run_start", capture_run_start)
+    runner = HexgateRunner(api_key="k")
+    agent = _make_agent(f" {_CANONICAL_NAME} ")
+
+    await runner.run(agent, "hello", hexgate_context=_user())
+    runner.run_sync(agent, "hello", hexgate_context=_user())
+
+    assert seen_agents == [_CANONICAL_NAME, _CANONICAL_NAME]
+    assert reported_agents == [_CANONICAL_NAME, _CANONICAL_NAME]
 
 
 @pytest.mark.asyncio
