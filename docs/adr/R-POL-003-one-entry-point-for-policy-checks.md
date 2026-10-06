@@ -25,13 +25,13 @@ Every new check repeated the drift: it was written in the SDK and then wired int
 
 `check_project` stays a separate function by design, not as debt. Linking drops a boundary fence on a misspelled tool, so the resolved `PolicySet` leaves the real tool uncapped with nothing left to flag; only the module form still sees that drift. Folding the module-store branch into `analyze_policy` would silently lose that check.
 
-Blocking is kept apart from severity because a save asks two questions. *Can the SDK load this?* `guard-divergence` says no: v1's guard stance applies to the whole agent (R-GUARD-007), so the SDK raises at construction whatever the manifest says. *Does it match the agent's code right now?* `unknown-guard` and the drift lints answer that against the latest registered manifest, which lags each deploy. Naming a guard and then deploying the code that adds it is the normal order, so blocking on those would refuse correct policies. They stay `error` severity anyway, because the runtime would stop on them if the agent built with that manifest. Keeping blocking codes manifest-free is also what makes `/validate` (which passes the manifest) and the save route (which passes none) agree.
+Blocking is kept apart from severity because a save asks two questions. *Can the SDK load this?* `guard-divergence` says no: v1's guard stance applies to the whole agent (R-GUARD-007), so the SDK raises at construction whatever the manifest says. *Does it match the agent's code right now?* `unknown-guard` and the drift lints answer that against the latest registered manifest, which lags each deploy. Naming a guard and then deploying the code that adds it is the normal order, so blocking on those would refuse correct policies. They stay `error` severity anyway, because with that manifest the policy is wrong at runtime: the agent stops on `unknown-guard`, and an `error`-graded drift lint leaves the real tool less restricted than the policy says, with no error to show it. Keeping blocking codes manifest-free is also what makes `/validate` (which passes the manifest) and the save route (which passes none) agree.
 
 ## Consequences
 
 - The platform's compose routes call `analyze_policy` once per agent: every declared agent and every registered agent, each with its own manifest, plus the generic `"*"` view without one (`_compose_lints`).
 - Guard divergence moved from the platform's `_load_document` (which forced `guard_stance()`) into `analyze_policy`, so every entry point reports it instead of only the save route.
-- `hexgate policy validate` now fails on `guard-divergence`, and with `--manifest` on an `error`-severity `unknown-tool` / `unknown-arg`, at its default `--max-severity error`. A CI job that passes `--manifest` can start failing on drift it never saw before; that is the intended effect, since the runtime would stop on the same policy.
+- `hexgate policy validate` now fails on `guard-divergence`, and with `--manifest` on an `error`-severity `unknown-tool` / `unknown-arg`, at its default `--max-severity error`. A CI job that passes `--manifest` can start failing on drift it never saw before; that is the intended effect, since an `error` drift lint means the real tool runs looser than the policy says.
 - Until it is routed (#303 follow-up), the eval scorer (#287) still violates this rule. The Verify grep covers `evals/` once #287 lands.
 - Two known gaps remain. A compose `policy.yaml` is module-built (each `boundary` lowers to a boundary module), but its routes lint the resolved `PolicySet`, so a boundary fence on a misspelled tool is not flagged there. And the tier (module-store) branch of `/policy/check` calls `check_project` without a manifest, so it reports no `unknown-tool` / `unknown-arg`.
 
@@ -39,7 +39,7 @@ Blocking is kept apart from severity because a save asks two questions. *Can the
 
 - **A shared registry of checks that each entry point iterates.** It keeps N loops over the registry, and each loop can still skip or reorder entries; one function call leaves nothing to get wrong at the call site.
 - **A `project=` input alongside the policy.** Every single-agent shape (a classic single-file policy, each agent of a compose `policy.yaml`) already resolves to a `PolicySet`, so a second input would only re-encode the gathering step that differs per caller.
-- **Block on any `error`-severity lint, or downgrade the manifest lints to warnings.** The first refuses a guard named ahead of its deploy; the second hides that the runtime would stop on it.
+- **Block on any `error`-severity lint, or downgrade the manifest lints to warnings.** The first refuses a guard named ahead of its deploy; the second hides a guard typo the agent stops on, and drift that silently leaves a tool uncapped.
 - **Requiring a manifest.** A policy is checked before its agent registers (R-GUARD-006), so the manifest-free checks must still run without one.
 
 ## Verify

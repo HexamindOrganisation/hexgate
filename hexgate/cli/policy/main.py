@@ -30,6 +30,7 @@ from hexgate.runtime.context import ContextAttributeValue
 
 if TYPE_CHECKING:
     from hexgate.manifest.models import AgentManifest
+    from hexgate.security.analyzer import PolicyLint
 from hexgate.runtime.roles import distinct_roles, resolve_role_set
 from hexgate.runtime.run_facts import KNOWN_RUN_PATHS
 from hexgate.security import (
@@ -555,18 +556,19 @@ def _main_validate(args: argparse.Namespace) -> int:
             return 1
     lints = analyze_policy(policy_set, manifest=manifest, source=str(source_path))
     for lint in lints:
-        print(f"⚠ {lint.code}: {lint.message}", file=sys.stderr)
+        print(_format_lint(lint), file=sys.stderr)
 
-    # Same fold as ``policy check``: the worst lint decides, so an
-    # ``error``-severity lint gates at the default threshold instead of
-    # slipping through a comparison against a hardcoded "warning".
+    # Each lint's own severity decides, so an ``error``-severity lint gates at
+    # the default threshold instead of slipping through a comparison against
+    # a hardcoded "warning".
     severity = getattr(args, "max_severity", _DEFAULT_MAX_SEVERITY)
     threshold = SEVERITY_RANK[severity]
-    if lints and min(SEVERITY_RANK[lint.severity] for lint in lints) <= threshold:
+    gating = sum(1 for lint in lints if SEVERITY_RANK[lint.severity] <= threshold)
+    if gating:
         # Below the gate on purpose: stdout must not claim a clean policy on a
         # run that exits non-zero.
         print(
-            f"✗ Policy parses, but {len(lints)} lint(s) are at or above "
+            f"✗ Policy parses, but {gating} lint(s) are at or above "
             f"--max-severity {severity}.",
             file=sys.stderr,
         )
@@ -574,6 +576,17 @@ def _main_validate(args: argparse.Namespace) -> int:
 
     print("✓ Policy parses cleanly.")
     return 0
+
+
+_SEVERITY_ICON = {"error": "✗", "warning": "!", "info": "·"}
+
+
+def _format_lint(lint: PolicyLint) -> str:
+    """One lint as ``validate`` and ``check`` print it: a per-severity icon, so a
+    run that mixes severities shows which lints would fail the gate."""
+    where = f" ({lint.source})" if lint.source else ""
+    role = f" [{lint.role}]" if lint.role else ""
+    return f"{_SEVERITY_ICON[lint.severity]} [{lint.code}]{role} {lint.message}{where}"
 
 
 def _iter_raw_constraints(payload: dict) -> "list[tuple[str, str, str]]":
@@ -834,13 +847,8 @@ def _main_check(args: argparse.Namespace) -> int:
         _drift_hint()
         return 0
 
-    icon = {"error": "✗", "warning": "!", "info": "·"}
     for lint in lints:
-        where = f" ({lint.source})" if lint.source else ""
-        role = f" [{lint.role}]" if lint.role else ""
-        print(
-            f"{icon.get(lint.severity, '·')} [{lint.code}]{role} {lint.message}{where}"
-        )
+        print(_format_lint(lint))
     _drift_hint()
 
     threshold = SEVERITY_RANK[args.max_severity]

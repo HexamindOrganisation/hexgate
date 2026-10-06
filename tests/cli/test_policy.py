@@ -422,6 +422,42 @@ def test_when_manifest_lacks_a_tool_or_arg_then_validate_reports_drift(
     assert "unknown-arg" in err and "amont" in err
 
 
+def _mixed_drift_run(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> tuple[int, list[str]]:
+    """Validate a policy whose drift spans severities: a grant on a missing tool
+    (warning), a deny on one (info), and an arg typo that fails closed (warning)."""
+    policy = tmp_path / "mixed.yaml"
+    policy.write_text(
+        "tools:\n"
+        "  refnd: { mode: allow }\n"
+        "  wipe: { mode: deny }\n"
+        "  send_email: { mode: allow, constraints: ['args.too == \"a\"'] }\n",
+        encoding="utf-8",
+    )
+    manifest = _manifest_file(tmp_path)
+    rc = _main_validate(
+        _ns(source=str(policy), manifest=str(manifest), max_severity="warning")
+    )
+    return rc, capsys.readouterr().err.splitlines()
+
+
+def test_when_lints_mix_severities_then_validate_counts_only_those_at_the_gate(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    rc, err = _mixed_drift_run(tmp_path, capsys)
+    assert rc == 1
+    assert err[-1].startswith("✗ Policy parses, but 2 lint(s) are at or above")
+
+
+def test_when_lints_mix_severities_then_validate_marks_each_with_its_severity(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _, err = _mixed_drift_run(tmp_path, capsys)
+    marks = sorted(line.split("]")[0] + "]" for line in err[:-1])
+    assert marks == ["! [unknown-arg]", "! [unknown-tool]", "· [unknown-tool]"]
+
+
 # ---------------------------------------------------------------------------
 # show-rego
 # ---------------------------------------------------------------------------
