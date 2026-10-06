@@ -179,7 +179,7 @@ def _case(**extra) -> dict:
                     ]
                 }
             ),
-            "case.yaml: agent.run: not what shop-bot sends: .*agent='x'",
+            r"case.yaml: agent.run: not what shop-bot sends: .*drop \['agent'\]",
         ),
         (_case(starting_project="missing"), "no starting project"),
         ({"agent": AGENT, "request": "Do it.", "expect": {}}, "neither"),
@@ -258,12 +258,23 @@ def test_load_completes_and_checks_a_script_call(tmp_path: Path) -> None:
     assert case["expect"]["decisions"][0]["args"]["via"] == "script"
 
 
-def test_a_case_overrides_a_preserved_reach_however_it_spells_it(
-    tmp_path: Path,
-) -> None:
+def test_a_loaded_reach_call_is_one_decide_accepts(tmp_path: Path) -> None:
+    # decide fills a gate's args itself and refuses a call that spells any.
+    reach = {"role": "billing", "tool": "agent.tool:ops-bot", "expect": "allow"}
+    root = _eval_set(tmp_path, _case(expect={"decisions": [reach]}), boundary=False)
+    # A declared reach gate, where decide refuses a call's own args.
+    declared = POLICY + "    agents:\n      ops-bot:\n        mode: allow\n"
+    _write(root / "starting_projects" / "shop" / "policy.yaml", declared)
+    [case] = load_cases(root)
+    [decision] = [
+        c for c in run_answer(case, tmp_path / "ws", None) if "ops-bot" in c.name
+    ]
+    assert decision.passed, decision.detail
+
+
+def test_a_case_overrides_a_preserved_reach(tmp_path: Path) -> None:
     reach = {"role": "billing", "tool": "agent.tool:ops-bot"}
-    own = {**reach, "args": {"target": "ops-bot"}, "expect": "deny"}
-    case = _case(expect={"decisions": [own]})
+    case = _case(expect={"decisions": [{**reach, "expect": "deny"}]})
     root = _eval_set(tmp_path, case, preserve=[{**reach, "expect": "allow"}])
     [case] = load_cases(root)
     assert [d["expect"] for d in case["expect"]["decisions"]] == ["deny"]

@@ -27,6 +27,7 @@ from pydantic import (
 
 from evals.policy_writing.calls import bad_values, complete, load_known, unknown_names
 from evals.policy_writing.checks import snapshot
+from evals.policy_writing.policy import CaseError
 
 HERE = Path(__file__).resolve().parent
 
@@ -100,10 +101,6 @@ class CaseFile(_Strict):
 
 
 _DECISIONS = TypeAdapter(list[Decision])
-
-
-class CaseError(ValueError):
-    """A case directory that would load into a case scoring the wrong thing."""
 
 
 def _read_yaml(path: Path):

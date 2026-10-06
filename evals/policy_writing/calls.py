@@ -5,8 +5,9 @@ The SDK denies a call that names a tool, skill or agent it doesn't know, leaves
 out an argument a constraint reads, or gives one a value of the wrong type, so
 any such slip in a case would pass every `deny` check whatever the policy says.
 
-- `complete` fills in the arguments the gates always send and returns what a
-  call contradicts or lacks.
+- `complete` fills in the arguments the skill and `net.*` gates always send,
+  refuses args on an agent-gate call (the scorer fills those), and returns
+  what a call contradicts or lacks.
 - `unknown_names` returns the names a call uses that its agent doesn't know.
 - `bad_values` returns the values its agent would never send.
 """
@@ -137,13 +138,12 @@ class _Sent:
     problems: list[str] = field(default_factory=list)
 
 
-def _reach(tool: str, args: dict, agent: str) -> _Sent:
-    via, target = _reach_parts(tool)  # hexgate/security/agent_gate.py, ReachGate
-    return _Sent({"agent": agent, "target": target, "via": via})
-
-
-def _run(tool: str, args: dict, agent: str) -> _Sent:
-    return _Sent({"agent": agent})  # agent_gate.py, AdmissionGate
+def _agent_gate(tool: str, args: dict, agent: str) -> _Sent:
+    # Admission and reach send their own args (agent, target, via), and
+    # `policy.decide` fills them in itself and refuses a call that spells any.
+    if not args:
+        return _Sent()
+    return _Sent(problems=[f"the gate sends its own args; drop {sorted(args)}"])
 
 
 def _skill(tool: str, args: dict, agent: str) -> _Sent:
@@ -187,7 +187,7 @@ def _http(tool: str, args: dict, agent: str) -> _Sent:
 
 
 _GATES: dict[str, Callable[[str, dict, str], _Sent]] = {
-    AGENT_RUN_TOOL: _run,
+    AGENT_RUN_TOOL: _agent_gate,
     NET_TCP_CONNECT: _tcp,
     NET_HTTP_REQUEST: _http,
 }
@@ -195,7 +195,7 @@ _GATES: dict[str, Callable[[str, dict, str], _Sent]] = {
 
 def _gate(tool: str) -> Callable[[str, dict, str], _Sent] | None:
     if is_agent_reach_key(tool):
-        return _reach
+        return _agent_gate
     if is_skill_key(tool):
         return _skill
     return _GATES.get(tool)

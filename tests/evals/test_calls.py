@@ -80,11 +80,9 @@ def test_load_known_reads_the_endpoint_s_loose_shape(tmp_path: Path) -> None:
 @pytest.mark.parametrize(
     ("call", "args"),
     [
-        (
-            {"tool": "agent.tool:ops-bot"},
-            {"agent": AGENT, "target": "ops-bot", "via": "tool"},
-        ),
-        ({"tool": "agent.run"}, {"agent": AGENT}),
+        # The agent gates send their own args, which `policy.decide` fills in.
+        ({"tool": "agent.tool:ops-bot"}, {}),
+        ({"tool": "agent.run"}, {}),
         (
             {"tool": "skill:triage", "args": {"file_path": "f", "content_hash": None}},
             {
@@ -134,8 +132,11 @@ def test_complete_fills_the_arguments_the_gates_send(call: dict, args: dict) -> 
 @pytest.mark.parametrize(
     ("call", "error"),
     [
-        ({"tool": "agent.tool:ops-bot", "args": {"via": "handoff"}}, "via='handoff'"),
-        ({"tool": "agent.run", "args": {"agent": "ops-bot"}}, "agent='ops-bot'"),
+        (
+            {"tool": "agent.tool:ops-bot", "args": {"via": "tool"}},
+            r"the gate sends its own args; drop \['via'\]",
+        ),
+        ({"tool": "agent.run", "args": {"agent": AGENT}}, "drop \\['agent'\\]"),
         ({"tool": "skill:triage", "args": {"skill": "billing"}}, "skill='billing'"),
         ({"tool": "skill:triage"}, "args.file_path missing"),
         ({"tool": "net.tcp_connect", "args": {"host": "db", "port": "443"}}, "'443'"),
@@ -216,7 +217,7 @@ def test_complete_rejects_what_no_gate_sends(call: dict, error: str) -> None:
         (REFUND_500, []),
         ({**REFUND_500, "attributes": {"tier": "gold"}}, []),
         ({"tool": "net.http_request", "args": {"host": "x"}}, []),
-        ({"tool": "agent.tool:ops-bot", "args": {"target": "ops-bot"}}, []),
+        ({"tool": "agent.tool:ops-bot"}, []),
         ({"tool": "skill:triage", "args": {"skill": "triage"}}, []),
         ({"tool": "skill.script:triage", "args": {**SCRIPT_RUN}}, []),
         # Only a script carries its invocation arguments.

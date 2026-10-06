@@ -51,7 +51,8 @@ rejects anything that would otherwise drop a check without a word:
   - a date or any other value that isn't JSON.
 - **Synthetic calls** (`calls.py`, `complete`), which must match what the gate
   sends:
-  - `agent.run` and `agent.<via>:<target>`: `agent`, `target` and `via`;
+  - `agent.run` and `agent.<via>:<target>`: no args at all, since the gate
+    sends its own (`agent`, `target`, `via`) and the scorer fills them in;
   - `skill:` / `skill.resource:` / `skill.script:`: `skill` and `via`, plus a
     `file_path` and a `content_hash` (null allowed), and for a script its
     `script_args`, `short_options` and `positional_args` (null when unused);
@@ -60,7 +61,8 @@ rejects anything that would otherwise drop a check without a word:
     proxy; the rest must be what the proxy derives from them;
   - `net.tcp_connect`: `host` and an int `port`; `protocol` is `tcp`.
 
-  The loader fills in what the gate derives, so a case can write just
+  The loader fills in what a skill or `net.*` gate derives, and the scorer
+  fills in an agent gate's args, so a case can write just
   `{tool: "agent.tool:billing-bot"}` or
   `{tool: net.http_request, args: {method: GET, url: "http://x.com/a"}}`.
 
