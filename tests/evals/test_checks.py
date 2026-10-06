@@ -87,32 +87,54 @@ def test_when_a_role_is_missing_then_superset_fails(tmp_path) -> None:
 
 def test_name_checks_happy_path(tmp_path) -> None:
     ws = make_workspace(tmp_path)
-    policy, _ = effective_policy(ws)
+    policy, _ = effective_policy(ws, AGENT)
     before = snapshot(ws)
-    checks = name_checks(policy, ws, AGENT, before, before)
+    checks = name_checks(policy, ws, before, before)
     assert [(c.name, c.passed, c.detail) for c in checks] == [
         (n, True, "") for n in NAME_CHECKS
     ]
 
 
-def test_when_a_module_tree_lowers_agent_keys_then_name_checks_accept_them(
+def test_when_a_module_tree_lowers_agent_and_skill_keys_then_name_checks_accept_them(
     tmp_path,
 ) -> None:
-    # Resolving a module tree lowers admission and reach into `agent.*` tools.
+    # Resolving a module tree lowers admission, reach and skills into `tools`.
     roles = "  default: [read_only]\n  billing: [read_only, reach]\n"
     ws = make_modules_workspace(tmp_path, roles)
     (ws / "policies" / "capabilities" / "reach.yaml").write_text(
         'admission: { mode: allow, constraints: ["args.agent == \\"shop-bot\\""] }\n'
         "agents:\n  ops-bot: { mode: allow }\n"
+        "skills:\n  pdf: { mode: allow, via: [script], constraints:"
+        ' ["args.script_args == \\"x\\""] }\n'
     )
     policy, problems = effective_policy(ws, AGENT)
     assert problems == []
-    assert "agent.run" in policy.policy_set.policy_for("billing").tools
+    assert {"agent.run", "skill.script:pdf"} <= set(
+        policy.policy_set.policy_for("billing").tools
+    )
     before = snapshot(ws)
-    checks = name_checks(policy, ws, AGENT, before, before)
+    checks = name_checks(policy, ws, before, before)
     assert [(c.name, c.passed, c.detail) for c in checks] == [
         (n, True, "") for n in NAME_CHECKS
     ]
+
+
+def test_when_a_module_tree_grants_an_invented_skill_then_name_checks_flag_it(
+    tmp_path,
+) -> None:
+    roles = "  default: [read_only]\n  billing: [read_only, sk]\n"
+    ws = make_modules_workspace(tmp_path, roles)
+    (ws / "policies" / "capabilities" / "sk.yaml").write_text(
+        "skills:\n  pdff: { mode: allow, via: [resource] }\n"
+    )
+    policy, problems = effective_policy(ws, AGENT)
+    assert problems == []
+    before = snapshot(ws)
+    checks = name_checks(policy, ws, before, before)
+    assert (checks[0].passed, checks[0].detail) == (
+        False,
+        "not in shop-bot's manifest: ['skill:pdff']",
+    )
 
 
 def test_when_the_policy_invents_names_then_both_name_checks_fail(tmp_path) -> None:
@@ -121,11 +143,9 @@ def test_when_the_policy_invents_names_then_both_name_checks_fail(tmp_path) -> N
         + '      wire_transfer: { mode: allow, constraints: ["ctx.tier == 1"] }\n'
     )
     ws = make_workspace(tmp_path, policy)
-    policy, _ = effective_policy(ws)
+    policy, _ = effective_policy(ws, AGENT)
     before = snapshot(ws)
-    checks = [
-        (c.passed, c.detail) for c in name_checks(policy, ws, AGENT, before, before)
-    ]
+    checks = [(c.passed, c.detail) for c in name_checks(policy, ws, before, before)]
     assert checks == [
         (False, "not in shop-bot's manifest: ['wire_transfer']"),
         (False, "not in the manifest or audit.json: ['wire_transfer: ctx.tier']"),
@@ -149,13 +169,13 @@ def test_when_a_name_source_is_unreadable_then_both_name_checks_fail(
     tmp_path, source, broken
 ) -> None:
     ws = make_workspace(tmp_path)
-    policy, _ = effective_policy(ws)
+    policy, _ = effective_policy(ws, AGENT)
     if broken is None:
         (ws / source).unlink()
     else:
         (ws / source).write_text(broken)
     after = snapshot(ws)
-    checks = name_checks(policy, ws, AGENT, after, after)
+    checks = name_checks(policy, ws, after, after)
     assert [(c.name, c.passed) for c in checks] == [(n, False) for n in NAME_CHECKS]
     assert all(
         c.detail.startswith("agents.json / audit.json unreadable: ") for c in checks
@@ -167,11 +187,11 @@ def test_when_the_agent_edits_a_name_source_then_both_name_checks_fail(
     tmp_path, edited
 ) -> None:
     ws = make_workspace(tmp_path)
-    policy, _ = effective_policy(ws)
+    policy, _ = effective_policy(ws, AGENT)
     before = snapshot(ws)
     # E.g. the agent "fixes" an invented name by adding it to the manifest.
     (ws / edited).write_text("[]")
-    checks = name_checks(policy, ws, AGENT, before, snapshot(ws))
+    checks = name_checks(policy, ws, before, snapshot(ws))
     assert [(c.passed, c.detail) for c in checks] == [
         (False, f"edited during the run: ['{edited}']")
     ] * 2
