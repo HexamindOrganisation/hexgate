@@ -13,6 +13,8 @@ from __future__ import annotations
 import functools
 import hashlib
 import json
+import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -49,10 +51,16 @@ def snapshot(root: Path) -> dict[str, str]:
     `no_changes` case.
     """
     files = {}
-    for p in root.rglob("*"):
-        rel = p.relative_to(root)
-        if p.is_file() and not any(part.startswith(".") for part in rel.parts):
-            files[rel.as_posix()] = hashlib.sha256(p.read_bytes()).hexdigest()
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if not d.startswith(".")]  # never entered
+        for name in filenames:
+            if name.startswith("."):
+                continue
+            path = Path(dirpath, name)
+            # Regular files only: a broken symlink or a FIFO would crash or hang the read.
+            if path.is_file():
+                rel = path.relative_to(root).as_posix()
+                files[rel] = hashlib.sha256(path.read_bytes()).hexdigest()
     return files
 
 
@@ -186,16 +194,27 @@ def file_checks(
     return checks
 
 
+# What a word is made of; `_` is a separator, as in snake_case names.
+_ALNUM = "[A-Za-z0-9]"
+
+
+def _mentions(answer: str, word: str) -> bool:
+    """`word` as a whole word or phrase: "no" doesn't match "know", while
+    "approval" still matches inside `approval_required`. Inflections don't
+    match ("refund" vs "refunds"), so a case lists each form it accepts."""
+    pattern = rf"(?<!{_ALNUM}){re.escape(word)}(?!{_ALNUM})"
+    return re.search(pattern, answer, re.IGNORECASE) is not None
+
+
 def answer_checks(expect: dict, answer: str) -> list[Check]:
-    """`mentions_any` and `mentions_all`, case-insensitive, on the final answer."""
-    text = answer.lower()
+    """`mentions_any` and `mentions_all`, case-insensitive whole words, on the answer."""
     checks = []
     if words := expect.get("mentions_any"):
-        hit = [w for w in words if w.lower() in text]
+        hit = [w for w in words if _mentions(answer, w)]
         detail = f"found {hit}" if hit else f"none of {words}"
         checks.append(Check("answer mentions one of", bool(hit), detail))
     if words := expect.get("mentions_all"):
-        missing = [w for w in words if w.lower() not in text]
+        missing = [w for w in words if not _mentions(answer, w)]
         detail = f"missing {missing}" if missing else ""
         checks.append(Check("answer mentions all of", not missing, detail))
     return checks
@@ -207,7 +226,7 @@ def score(case: dict, ws: Path, before: dict[str, str], answer: str) -> list[Che
     well-formed. `before` is the starting project's `snapshot`."""
     expect = case.get("expect", {})
     policy, problems = effective_policy(ws, case["agent"])
-    valid = Check("valid", not problems, "\n".join(problems)[-800:])
+    valid = Check("valid", not problems, "\n".join(problems)[:800])
     after = snapshot(ws)
     return [
         valid,
