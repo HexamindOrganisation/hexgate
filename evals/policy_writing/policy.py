@@ -13,7 +13,6 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import get_args
 
 import yaml
 from pydantic import TypeAdapter, ValidationError
@@ -42,9 +41,9 @@ from hexgate.security.constraints import ConstraintParseError
 from hexgate.security.decision import Verdict
 from hexgate.security.models import (
     AGENT_RUN_TOOL,
-    AgentVia,
     PolicyMode,
     agent_target_key,
+    is_agent_reach_key,
     is_agent_via_key,
     is_skill_key,
 )
@@ -139,19 +138,20 @@ def _gate_call(tool: str, args: dict, agent: str | None) -> tuple[str, dict]:
     (`AgentGate._decide`, `ReachGate._decide`). The agent name is sent as the
     runtime sets it, `name or "default"`, untrimmed.
     """
-    kind, sep, raw = tool.partition(":")
-    via = kind.removeprefix("agent.")
-    is_reach = kind.startswith("agent.") and sep and via in get_args(AgentVia)
-    if tool != AGENT_RUN_TOOL and not is_reach:
+    name = agent or DEFAULT_AGENT_NAME
+    if tool == AGENT_RUN_TOOL:
+        key, gate_args = tool, {"agent": name}
+    elif is_agent_reach_key(tool):
+        kind, _, raw = tool.partition(":")
+        via, target = kind.removeprefix("agent."), canonical_name(raw)
+        key = agent_target_key(via, target)
+        gate_args = {"agent": name, "target": target, "via": via}
+    else:
         return tool, args
     if args:
         # The case would claim to test inputs the dry-run can't use.
         raise CaseError(f"{tool}: the gate sends its own args; drop {sorted(args)}")
-    if tool == AGENT_RUN_TOOL:
-        return tool, {"agent": agent or DEFAULT_AGENT_NAME}
-    target = canonical_name(raw)
-    reach = {"agent": agent or DEFAULT_AGENT_NAME, "target": target, "via": via}
-    return agent_target_key(via, target), reach
+    return key, gate_args
 
 
 def decide(policy: Policy, role: str, d: dict) -> Verdict:
@@ -172,12 +172,12 @@ def decide(policy: Policy, role: str, d: dict) -> Verdict:
         run = run_namespace(tool, **_as_json(d.get("run_facts", {})))
     except (ValidationError, ValueError) as exc:
         raise CaseError(str(exc)) from exc
-    if gate := _undeclared_by_name(policy.policy_set, d["tool"]):
+    if gate := _undeclared_by_name(policy.policy_set, tool):
         raise CaseError(
-            f"{d['tool']}: {gate} isn't declared, so the runtime decides this call "
+            f"{tool}: {gate} isn't declared, so the runtime decides this call "
             "under the tool's own name; dry-run that tool instead"
         )
-    if _passes_unchecked(policy.policy_set, d["tool"]):
+    if _passes_unchecked(policy.policy_set, tool):
         return Verdict(DecisionOutcome.ALLOW, reason="gate not declared")
     return policy.policy_set.evaluate(
         role=role,

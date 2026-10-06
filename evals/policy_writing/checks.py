@@ -47,9 +47,11 @@ def snapshot(root: Path) -> dict[str, str]:
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = [d for d in dirnames if not d.startswith(".")]  # never entered
         for name in filenames:
+            if name.startswith("."):
+                continue
             path = Path(dirpath, name)
-            # Regular files only: a broken symlink or a FIFO can't crash or hang it.
-            if not name.startswith(".") and path.is_file():
+            # Regular files only: a broken symlink or a FIFO would crash or hang the read.
+            if path.is_file():
                 rel = path.relative_to(root).as_posix()
                 files[rel] = hashlib.sha256(path.read_bytes()).hexdigest()
     return files
@@ -144,10 +146,14 @@ def file_checks(
     return checks
 
 
+# What a word is made of; `_` is a separator, as in snake_case names.
+_ALNUM = "[A-Za-z0-9]"
+
+
 def _mentions(answer: str, word: str) -> bool:
     """`word` as a whole word or phrase: "no" doesn't match "know", while
     "approval" still matches inside `approval_required`."""
-    pattern = rf"(?<![A-Za-z0-9]){re.escape(word)}(?![A-Za-z0-9])"
+    pattern = rf"(?<!{_ALNUM}){re.escape(word)}(?!{_ALNUM})"
     return re.search(pattern, answer, re.IGNORECASE) is not None
 
 
