@@ -765,9 +765,8 @@ def check_default_role_exposure(
 
 
 # ---------------------------------------------------------------------------
-# The one entry point over a resolved policy set. The platform's agent /validate,
-# the CLI, the MCP and the eval scorer move onto it in #303; from then a check
-# added here reaches every one of them.
+# The one entry point over a resolved policy set (R-POL-003): every caller that
+# reports lints on one goes through it, so a check added here reaches them all.
 # ---------------------------------------------------------------------------
 
 

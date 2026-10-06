@@ -3,7 +3,7 @@
 Four sub-subcommands today (M2 phase 2):
 
     hexgate policy build <source>        compile to Rego (+ wasm later)
-    hexgate policy validate <source>     parse + check constraint grammar
+    hexgate policy validate <source>     parse, compile and lint (analyze_policy)
     hexgate policy show-rego <source>    print compiled Rego to stdout
     hexgate policy test <source> --...   dry-run a tool-call decision
 

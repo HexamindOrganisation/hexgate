@@ -142,7 +142,7 @@ def test_when_the_policy_holds_a_yaml_date_then_effective_policy_fails(
 
 
 def test_when_roles_disagree_on_guards_then_effective_policy_fails(tmp_path) -> None:
-    # As `hexgate policy build` rejects it.
+    # As `hexgate policy validate` rejects it.
     policy, problems = effective_policy(make_workspace(tmp_path, GUARD_DIVERGENCE))
     assert policy is None
     assert any("guard-divergence" in p for p in problems)
