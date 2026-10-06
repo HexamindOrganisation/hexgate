@@ -47,8 +47,9 @@ def snapshot(root: Path) -> dict[str, str]:
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = [d for d in dirnames if not d.startswith(".")]  # never entered
         for name in filenames:
-            if not name.startswith("."):
-                path = Path(dirpath, name)
+            path = Path(dirpath, name)
+            # Regular files only: a broken symlink or a FIFO can't crash or hang it.
+            if not name.startswith(".") and path.is_file():
                 rel = path.relative_to(root).as_posix()
                 files[rel] = hashlib.sha256(path.read_bytes()).hexdigest()
     return files
@@ -144,8 +145,9 @@ def file_checks(
 
 
 def _mentions(answer: str, word: str) -> bool:
-    """`word` as a whole word or phrase: "no" doesn't match "know"."""
-    pattern = rf"(?<!\w){re.escape(word)}(?!\w)"
+    """`word` as a whole word or phrase: "no" doesn't match "know", while
+    "approval" still matches inside `approval_required`."""
+    pattern = rf"(?<![A-Za-z0-9]){re.escape(word)}(?![A-Za-z0-9])"
     return re.search(pattern, answer, re.IGNORECASE) is not None
 
 

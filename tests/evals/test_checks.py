@@ -133,6 +133,19 @@ def test_when_a_word_appears_only_inside_another_then_it_is_not_mentioned() -> N
     assert not check.passed
 
 
+def test_when_a_word_is_part_of_a_snake_case_name_then_it_is_mentioned() -> None:
+    [check] = answer_checks({"mentions_any": ["approval"]}, "set to approval_required")
+    assert check.passed
+
+
+def test_when_the_workspace_has_a_broken_symlink_then_snapshot_skips_it(
+    tmp_path,
+) -> None:
+    ws = make_workspace(tmp_path)
+    (ws / "dangling").symlink_to(ws / "missing")
+    assert "dangling" not in snapshot(ws)
+
+
 def test_score_happy_path(tmp_path) -> None:
     ws = make_workspace(tmp_path)
     before = snapshot(ws)

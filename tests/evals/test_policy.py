@@ -69,6 +69,18 @@ roles:
 """
 
 
+# A reach rule that reads the call's own key from the run's tools.
+HANDOFF_SEEN = """\
+version: 1
+roles:
+  default:
+    agents:
+      billing-bot:
+        mode: allow
+        constraints: ['any(run.tools_used, . == "agent.handoff:billing-bot")']
+"""
+
+
 @pytest.mark.parametrize(
     ("role", "amount", "expected"),
     [
@@ -146,6 +158,23 @@ def test_when_a_call_is_on_reach_then_decide_sends_the_trimmed_target_and_via(
     )
     assert problems == []
     verdict = decide(policy, "default", {"tool": tool})
+    assert verdict.outcome == DecisionOutcome.ALLOW, verdict.reason
+
+
+def test_when_a_gate_call_carries_its_own_args_then_decide_raises(tmp_path) -> None:
+    # The gate sends its own args, so a case's would be silently ignored.
+    policy, _ = effective_policy(make_workspace(tmp_path, ADMIT_SHOP_BOT), AGENT)
+    with pytest.raises(CaseError, match="gate sends its own args"):
+        decide(policy, "default", {"tool": "agent.run", "args": {"agent": "ops-bot"}})
+
+
+def test_when_a_reach_target_is_padded_then_run_facts_name_the_trimmed_key(
+    tmp_path,
+) -> None:
+    policy, problems = effective_policy(make_workspace(tmp_path, HANDOFF_SEEN), AGENT)
+    assert problems == []
+    call = {"tool": "agent.handoff: billing-bot ", "run_facts": {"tool_calls": 1}}
+    verdict = decide(policy, "default", call)
     assert verdict.outcome == DecisionOutcome.ALLOW, verdict.reason
 
 

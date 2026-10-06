@@ -139,12 +139,16 @@ def _gate_call(tool: str, args: dict, agent: str | None) -> tuple[str, dict]:
     (`AgentGate._decide`, `ReachGate._decide`). The agent name is sent as the
     runtime sets it, `name or "default"`, untrimmed.
     """
-    if tool == AGENT_RUN_TOOL:
-        return tool, {"agent": agent or DEFAULT_AGENT_NAME}
     kind, sep, raw = tool.partition(":")
     via = kind.removeprefix("agent.")
-    if not (kind.startswith("agent.") and sep and via in get_args(AgentVia)):
+    is_reach = kind.startswith("agent.") and sep and via in get_args(AgentVia)
+    if tool != AGENT_RUN_TOOL and not is_reach:
         return tool, args
+    if args:
+        # The case would claim to test inputs the dry-run can't use.
+        raise CaseError(f"{tool}: the gate sends its own args; drop {sorted(args)}")
+    if tool == AGENT_RUN_TOOL:
+        return tool, {"agent": agent or DEFAULT_AGENT_NAME}
     target = canonical_name(raw)
     reach = {"agent": agent or DEFAULT_AGENT_NAME, "target": target, "via": via}
     return agent_target_key(via, target), reach
@@ -160,10 +164,12 @@ def decide(policy: Policy, role: str, d: dict) -> Verdict:
     """
     if role not in policy.policy_set:
         raise CaseError(f"role {role!r} not in policy ({policy.policy_set.roles})")
+    tool, args = _gate_call(d["tool"], _as_json(d.get("args", {})), policy.agent)
     try:
         attributes = _ATTRIBUTES.validate_python(_as_json(d.get("attributes", {})))
-        # Over a zeroed run, so an unset `run.*` path reads 0, not missing.
-        run = run_namespace(d["tool"], **_as_json(d.get("run_facts", {})))
+        # Over a zeroed run, so an unset `run.*` path reads 0, not missing; keyed
+        # by the call's real key, so `run.tools_used` names what is decided.
+        run = run_namespace(tool, **_as_json(d.get("run_facts", {})))
     except (ValidationError, ValueError) as exc:
         raise CaseError(str(exc)) from exc
     if gate := _undeclared_by_name(policy.policy_set, d["tool"]):
@@ -173,7 +179,6 @@ def decide(policy: Policy, role: str, d: dict) -> Verdict:
         )
     if _passes_unchecked(policy.policy_set, d["tool"]):
         return Verdict(DecisionOutcome.ALLOW, reason="gate not declared")
-    tool, args = _gate_call(d["tool"], _as_json(d.get("args", {})), policy.agent)
     return policy.policy_set.evaluate(
         role=role,
         tool=tool,
