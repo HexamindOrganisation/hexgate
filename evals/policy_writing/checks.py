@@ -54,9 +54,7 @@ def snapshot(root: Path) -> dict[str, str]:
     return files
 
 
-def decision_checks(
-    policy: Policy | None, decisions: list[dict], agent: str | None = None
-) -> list[Check]:
+def decision_checks(policy: Policy | None, decisions: list[dict]) -> list[Check]:
     """One check per (decision, role): the dry-run gives an expected outcome."""
     checks = []
     for d in decisions:
@@ -70,7 +68,7 @@ def decision_checks(
                 checks.append(Check(name, False, "policy invalid"))
                 continue
             try:
-                verdict = decide(policy, role, d, agent=agent)
+                verdict = decide(policy, role, d)
             except CaseError as exc:
                 checks.append(Check(name, False, f"can't dry-run: {exc}"))
                 continue
@@ -100,9 +98,7 @@ def _call_label(role: str, d: dict) -> str:
     return label
 
 
-def superset_checks(
-    policy: Policy | None, supersets: list[dict], agent: str | None = None
-) -> list[Check]:
+def superset_checks(policy: Policy | None, supersets: list[dict]) -> list[Check]:
     """Everything `narrower` may do, `wider` may do at least as freely."""
     checks = []
     for s in supersets:
@@ -113,8 +109,8 @@ def superset_checks(
         worse = []
         for p in s["probes"]:
             try:
-                lo = decide(policy, s["narrower"], p, agent=agent).outcome
-                hi = decide(policy, s["wider"], p, agent=agent).outcome
+                lo = decide(policy, s["narrower"], p).outcome
+                hi = decide(policy, s["wider"], p).outcome
             except CaseError as exc:  # e.g. a missing role: the probe fails
                 worse.append(f"{p['tool']}: can't dry-run: {exc}")
                 continue
@@ -177,8 +173,8 @@ def score(case: dict, ws: Path, before: dict[str, str], answer: str) -> list[Che
     after = snapshot(ws)
     return [
         valid,
-        *decision_checks(policy, expect.get("decisions", []), case["agent"]),
-        *superset_checks(policy, expect.get("superset", []), case["agent"]),
+        *decision_checks(policy, expect.get("decisions", [])),
+        *superset_checks(policy, expect.get("superset", [])),
         *file_checks(expect, before, after),
         *answer_checks(expect, answer),
     ]

@@ -50,6 +50,25 @@ roles:
 """
 
 
+# Agent gates whose constraints read the args only the gate sends.
+ADMIT_SHOP_BOT = """\
+version: 1
+roles:
+  default:
+    admission: { mode: allow, constraints: ['args.agent == "shop-bot"'] }
+"""
+
+HANDOFF_TO_BILLING = """\
+version: 1
+roles:
+  default:
+    agents:
+      billing-bot:
+        mode: allow
+        constraints: ['args.target == "billing-bot"', 'args.via == "handoff"']
+"""
+
+
 @pytest.mark.parametrize(
     ("role", "amount", "expected"),
     [
@@ -109,30 +128,24 @@ def test_when_a_call_holds_yaml_dates_then_decide_compares_them_as_text(
         assert decide(policy, "default", dated).outcome == expected
 
 
+def test_when_a_call_is_on_admission_then_decide_sends_the_agent(tmp_path) -> None:
+    policy, problems = effective_policy(make_workspace(tmp_path, ADMIT_SHOP_BOT), AGENT)
+    assert problems == []
+    verdict = decide(policy, "default", {"tool": "agent.run"})
+    assert verdict.outcome == DecisionOutcome.ALLOW, verdict.reason
+
+
 @pytest.mark.parametrize(
-    ("tool", "constraint"),
-    [
-        ("agent.run", 'args.agent == "shop-bot"'),
-        ("agent.handoff: billing-bot ", 'args.via == "handoff"'),
-        ("agent.handoff:billing-bot", 'args.target == "billing-bot"'),
-    ],
+    "tool", ["agent.handoff:billing-bot", "agent.handoff: billing-bot "]
 )
-def test_when_a_call_is_on_an_agent_gate_then_decide_sends_the_gates_args(
-    tmp_path, tool, constraint
+def test_when_a_call_is_on_reach_then_decide_sends_the_trimmed_target_and_via(
+    tmp_path, tool
 ) -> None:
-    # The gates send {agent} or {agent, target, via}, with the target trimmed.
-    gate = "admission" if tool == "agent.run" else "billing-bot"
-    block = (
-        f"    admission: {{ mode: allow, constraints: ['{constraint}'] }}\n"
-        if gate == "admission"
-        else "    agents:\n"
-        f"      billing-bot: {{ mode: allow, constraints: ['{constraint}'] }}\n"
-    )
     policy, problems = effective_policy(
-        make_workspace(tmp_path, f"version: 1\nroles:\n  default:\n{block}")
+        make_workspace(tmp_path, HANDOFF_TO_BILLING), AGENT
     )
     assert problems == []
-    verdict = decide(policy, "default", {"tool": tool}, agent=AGENT)
+    verdict = decide(policy, "default", {"tool": tool})
     assert verdict.outcome == DecisionOutcome.ALLOW, verdict.reason
 
 

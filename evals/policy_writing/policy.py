@@ -49,7 +49,7 @@ from hexgate.security.models import (
     is_skill_key,
 )
 from hexgate.security.modules import DEFAULT_AGENT
-from hexgate.security.naming import canonical_name
+from hexgate.security.naming import DEFAULT_AGENT_NAME, canonical_name
 from hexgate.security.testing import run_namespace
 
 # Everything the SDK raises for a policy it can't load, compile or link.
@@ -62,11 +62,13 @@ class Policy:
 
     `payload` is the document: `policy.yaml` as written, or a module tree's
     resolved roles (read by the known-names checks, PR 18). `policy_set` is it
-    loaded, ready to evaluate.
+    loaded, ready to evaluate. `agent` is the agent running the calls, which an
+    agent gate sends as `args.agent`.
     """
 
     payload: dict
     policy_set: PolicySet
+    agent: str | None = None
 
 
 # A case file names outcomes by their policy mode, not by the enum's values.
@@ -134,28 +136,25 @@ def _gate_call(tool: str, args: dict, agent: str | None) -> tuple[str, dict]:
 
     The gates ignore a call's own args: admission sends `{agent}` and reach sends
     `{agent, target, via}`, with the target trimmed as the key is
-    (`AgentGate._decide`, `ReachGate._decide`).
+    (`AgentGate._decide`, `ReachGate._decide`). The agent name is sent as the
+    runtime sets it, `name or "default"`, untrimmed.
     """
-    name = canonical_name(agent)
     if tool == AGENT_RUN_TOOL:
-        return tool, {"agent": name}
-    for via in get_args(AgentVia):
-        if is_agent_via_key(tool, via):
-            target = canonical_name(tool.split(":", 1)[1])
-            return agent_target_key(via, target), {
-                "agent": name,
-                "target": target,
-                "via": via,
-            }
-    return tool, args
+        return tool, {"agent": agent or DEFAULT_AGENT_NAME}
+    kind, sep, raw = tool.partition(":")
+    via = kind.removeprefix("agent.")
+    if not (kind.startswith("agent.") and sep and via in get_args(AgentVia)):
+        return tool, args
+    target = canonical_name(raw)
+    reach = {"agent": agent or DEFAULT_AGENT_NAME, "target": target, "via": via}
+    return agent_target_key(via, target), reach
 
 
-def decide(policy: Policy, role: str, d: dict, *, agent: str | None = None) -> Verdict:
-    """Dry-run one call, with the same inputs as `hexgate policy test`.
+def decide(policy: Policy, role: str, d: dict) -> Verdict:
+    """Dry-run one call, with the same inputs as `hexgate policy test`, except that
+    a call on an agent gate carries the args that gate sends at runtime.
 
-    `agent` is the agent running the call, which an agent gate sends as
-    `args.agent`. Raises `CaseError` where the CLI would refuse the call. An
-    undefined role is
+    Raises `CaseError` where the CLI would refuse the call. An undefined role is
     one, rather than the `default` fallback: a case naming a role the policy
     lacks fails instead of passing by luck.
     """
@@ -174,7 +173,7 @@ def decide(policy: Policy, role: str, d: dict, *, agent: str | None = None) -> V
         )
     if _passes_unchecked(policy.policy_set, d["tool"]):
         return Verdict(DecisionOutcome.ALLOW, reason="gate not declared")
-    tool, args = _gate_call(d["tool"], _as_json(d.get("args", {})), agent)
+    tool, args = _gate_call(d["tool"], _as_json(d.get("args", {})), policy.agent)
     return policy.policy_set.evaluate(
         role=role,
         tool=tool,
@@ -245,13 +244,14 @@ def _yaml_payload(ws: Path) -> tuple[dict | None, list[str]]:
 
 
 def effective_policy(
-    ws: Path, agent: str = DEFAULT_AGENT
+    ws: Path, agent: str | None = None
 ) -> tuple[Policy | None, list[str]]:
     """The policy in `ws`, or why it doesn't validate (`hexgate policy validate`,
     or `check` + `resolve` on a module tree for `agent`'s roles.yaml column)."""
     is_modules = (ws / "policies").is_dir()
-    payload, problems = _module_payload(ws, agent) if is_modules else _yaml_payload(ws)
+    column = agent or DEFAULT_AGENT
+    payload, problems = _module_payload(ws, column) if is_modules else _yaml_payload(ws)
     if payload is None:
         return None, problems
     policy_set, problems = _load(payload)
-    return (None, problems) if problems else (Policy(payload, policy_set), [])
+    return (None, problems) if problems else (Policy(payload, policy_set, agent), [])
