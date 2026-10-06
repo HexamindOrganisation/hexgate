@@ -1,11 +1,11 @@
 """Load, validate and dry-run a policy the way `hexgate policy` does, via the SDK.
 
 `effective_policy` runs what `validate` (single file) or `check` + `resolve`
-(module tree) runs, plus what `build` rejects, failing on lint warnings;
-`decide` runs what `test` runs, with the CLI's input checks. On an opt-in gate
-the policy never declares, it follows the runtime where `test` would deny: an
-admission or handoff call is allowed, and an agent-as-tool or skill call is
-refused as a case error, since the runtime decides it under the tool's own name.
+(module tree) runs, failing on lint warnings; `decide` runs what `test` runs,
+with the CLI's input checks. On an opt-in gate the policy never declares, it
+follows the runtime where `test` would deny: an admission or handoff call is
+allowed, and an agent-as-tool or skill call is refused as a case error, since
+the runtime decides it under the tool's own name.
 """
 
 from __future__ import annotations
@@ -167,7 +167,7 @@ def _lint_failures(lints: list[PolicyLint]) -> list[str]:
 
 
 def _load(payload: dict) -> tuple[PolicySet | None, list[str]]:
-    """Load, compile, then `analyze_policy`: `validate` plus what `build` rejects (#303)."""
+    """What `hexgate policy validate` runs: load, compile, then `analyze_policy` (R-POL-003)."""
     try:
         policy_set = load_policy_set_from_dict(payload)
     except POLICY_ERRORS as exc:

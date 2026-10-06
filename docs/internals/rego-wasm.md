@@ -105,13 +105,13 @@ The examples below use the demo policy shipped at `examples/demo_policy.yaml` (a
 
 ### `hexgate policy validate` — check a policy without the network
 
-Parses the YAML and checks every constraint against the grammar. Same checks the platform runs at save time, but local and offline.
+Parses the YAML, checks every constraint against the grammar, compiles it as `build` would, and reports the lints `analyze_policy` returns: the same checks the platform runs, but local and offline. Pass `--manifest` to add the checks against the agent's code.
 
 ```bash
 hexgate policy validate examples/demo_policy.yaml
 ```
 
-Exit 0 on success, 1 with all errors printed otherwise. Good for a pre-commit hook or CI.
+Exits 1 on a parse or build error, or on a lint at or above `--max-severity` (default `error`), so it can fail on a policy the platform would still save. Good for a pre-commit hook or CI.
 
 ### `hexgate policy show-rego` — see what your YAML compiles to
 
