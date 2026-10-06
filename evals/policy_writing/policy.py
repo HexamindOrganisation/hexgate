@@ -88,7 +88,7 @@ RANK = {
 
 class CaseError(ValueError):
     """A case's call can't be dry-run: an undefined role, bad attributes or run facts,
-    or args on an agent-gate call."""
+    or args on a declared agent-gate call."""
 
 
 _ATTRIBUTES = TypeAdapter(dict[str, ContextAttributeValue])
@@ -157,7 +157,8 @@ def decide(policy: Policy, role: str, d: dict) -> Verdict:
     """Dry-run one call, with the same inputs as `hexgate policy test`, except that
     a call on an agent gate carries the args that gate sends at runtime.
 
-    Raises `CaseError` where the CLI would refuse the call. An undefined role is
+    Raises `CaseError` where the CLI would refuse the call, or where the eval
+    can't judge it (args on a declared agent-gate call). An undefined role is
     one, rather than the `default` fallback: a case naming a role the policy
     lacks fails instead of passing by luck.
     """
