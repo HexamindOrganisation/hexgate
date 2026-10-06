@@ -143,17 +143,17 @@ def _name_checks_failed(detail: str) -> list[Check]:
 
 
 def name_checks(
-    policy: Policy, ws: Path, agent: str, before: dict[str, str], after: dict[str, str]
+    policy: Policy, ws: Path, before: dict[str, str], after: dict[str, str]
 ) -> list[Check]:
-    """Only names the MCP would show for `agent`: tools, skills, guards, arguments
-    and caller attributes."""
+    """Only names the MCP would show for `policy.agent`: tools, skills, guards,
+    arguments and caller attributes."""
     # The names are read after the run, so an edit to either file could
     # whitelist an invented name: trust them only if they are untouched.
     edited = [f for f in NAME_SOURCES if before.get(f) != after.get(f)]
     if edited:
         return _name_checks_failed(f"edited during the run: {edited}")
     try:
-        known = load_known_names(ws, agent)
+        known = load_known_names(ws, policy.agent)
     except (OSError, ValueError, KeyError, TypeError) as exc:
         return _name_checks_failed(
             f"agents.json / audit.json unreadable: {exc!r}"[:300]
@@ -165,7 +165,7 @@ def name_checks(
         Check(
             keys,
             not unknown,
-            f"not in {agent}'s manifest: {unknown}" if unknown else "",
+            f"not in {policy.agent}'s manifest: {unknown}" if unknown else "",
         ),
         Check(
             args, not refs, f"not in the manifest or audit.json: {refs}" if refs else ""
@@ -232,7 +232,7 @@ def score(case: dict, ws: Path, before: dict[str, str], answer: str) -> list[Che
         valid,
         *decision_checks(policy, expect.get("decisions", [])),
         *superset_checks(policy, expect.get("superset", [])),
-        *(name_checks(policy, ws, case["agent"], before, after) if policy else []),
+        *(name_checks(policy, ws, before, after) if policy else []),
         *file_checks(expect, before, after),
         *answer_checks(expect, answer),
     ]
