@@ -16,6 +16,12 @@ import pytest
 from hexgate.guards import after_tool, before_tool
 from hexgate.guards.runner import run_guarded_async, run_guarded_sync
 from hexgate.guards.types import Halt, ToolPipeline
+from hexgate.runtime.agent_usage import (
+    MAX_WINDOW_SECONDS,
+    UsageLedgers,
+    UsageMetric,
+    new_usage_ledger,
+)
 from hexgate.runtime.run_facts import RunFacts, run_scope
 from hexgate.security.decision import DecisionOutcome
 from tests.guards.helpers import FakeEnforcer, RecordingInvoke, langchain_error
@@ -445,3 +451,26 @@ async def test_concurrent_runs_do_not_share_facts() -> None:
     assert first is not second
     assert first.id != second.id
     assert [first.tool_calls, second.tool_calls] == [2, 2]  # never 4
+
+
+@_BOTH
+@pytest.mark.asyncio
+async def test_agent_usage_ledger_matches_run_facts(path: str) -> None:
+    """``agent_usage.tool_calls`` means exactly what ``run.tool_calls`` means."""
+    ledgers = UsageLedgers(new_usage_ledger)
+    ledgers.enable()
+
+    with run_scope("a", ledgers=ledgers) as facts:
+        await _drive(path, enforcer=FakeEnforcer())
+        await _drive(path, enforcer=FakeEnforcer(outcome=DecisionOutcome.DENY))
+        await _drive(
+            path, enforcer=FakeEnforcer(), pipeline=_halting(DecisionOutcome.DENY)
+        )
+
+    assert facts.ledger is not None
+    usage = facts.ledger.within(MAX_WINDOW_SECONDS)
+    assert (usage[UsageMetric.TOOL_CALLS], usage[UsageMetric.DENIALS]) == (
+        facts.tool_calls,
+        facts.denials,
+    )
+    assert (facts.tool_calls, facts.denials) == (1, 2)

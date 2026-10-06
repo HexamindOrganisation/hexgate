@@ -15,6 +15,8 @@ from __future__ import annotations
 import functools
 import hashlib
 import json
+import os
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -56,10 +58,16 @@ def snapshot(root: Path) -> dict[str, str]:
     `no_changes` case.
     """
     files = {}
-    for p in root.rglob("*"):
-        rel = p.relative_to(root)
-        if p.is_file() and not any(part.startswith(".") for part in rel.parts):
-            files[rel.as_posix()] = hashlib.sha256(p.read_bytes()).hexdigest()
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if not d.startswith(".")]  # never entered
+        for name in filenames:
+            if name.startswith("."):
+                continue
+            path = Path(dirpath, name)
+            # Regular files only: a broken symlink or a FIFO would crash or hang the read.
+            if path.is_file():
+                rel = path.relative_to(root).as_posix()
+                files[rel] = hashlib.sha256(path.read_bytes()).hexdigest()
     return files
 
 
@@ -164,24 +172,20 @@ def _name_checks_failed(detail: str) -> list[Check]:
 
 
 def name_checks(
-    policy: Policy,
-    ws: Path,
-    agent: str | None,
-    before: dict[str, str],
-    after: dict[str, str],
+    policy: Policy, ws: Path, before: dict[str, str], after: dict[str, str]
 ) -> list[Check]:
-    """Only names the MCP would show for `agent` (any agent's when None): tools,
-    skills, guards, reach targets, arguments and caller attributes. A single
-    policy.yaml is checked as a whole, a module tree file by file."""
+    """Only names the MCP would show for `policy.agent` (any agent's when None):
+    tools, skills, guards, reach targets, arguments and caller attributes. A
+    single policy.yaml is checked as a whole, a module tree file by file."""
     # The names are read after the run, so an edit to either file could
     # whitelist an invented name: trust them only if they are untouched.
     edited = [f for f in NAME_SOURCES if before.get(f) != after.get(f)]
     if edited:
         return _name_checks_failed(f"edited during the run: {edited}")
     try:
-        known = load_known_names(ws, agent)
+        known = load_known_names(ws, policy.agent)
         if is_module_tree(ws):
-            unknown, refs = module_invented_names(ws, agent, known)
+            unknown, refs = module_invented_names(ws, policy.agent, known)
         else:
             roles = enforced_roles(policy.policy_set)
             unknown, refs = unknown_keys(roles, known), unknown_refs(roles, known)
@@ -190,6 +194,7 @@ def name_checks(
             f"agents.json / audit.json unreadable: {exc!r}"[:300]
         )
     keys, args = NAME_CHECKS
+    agent = policy.agent
     where = f"{agent}'s manifest" if agent else "any agent's manifest"
     return [
         Check(keys, not unknown, f"not in {where}: {unknown}" if unknown else ""),
@@ -220,16 +225,27 @@ def file_checks(
     return checks
 
 
+# What a word is made of; `_` is a separator, as in snake_case names.
+_ALNUM = "[A-Za-z0-9]"
+
+
+def _mentions(answer: str, word: str) -> bool:
+    """`word` as a whole word or phrase: "no" doesn't match "know", while
+    "approval" still matches inside `approval_required`. Inflections don't
+    match ("refund" vs "refunds"), so a case lists each form it accepts."""
+    pattern = rf"(?<!{_ALNUM}){re.escape(word)}(?!{_ALNUM})"
+    return re.search(pattern, answer, re.IGNORECASE) is not None
+
+
 def answer_checks(expect: dict, answer: str) -> list[Check]:
-    """`mentions_any` and `mentions_all`, case-insensitive, on the final answer."""
-    text = answer.lower()
+    """`mentions_any` and `mentions_all`, case-insensitive whole words, on the answer."""
     checks = []
     if words := expect.get("mentions_any"):
-        hit = [w for w in words if w.lower() in text]
+        hit = [w for w in words if _mentions(answer, w)]
         detail = f"found {hit}" if hit else f"none of {words}"
         checks.append(Check("answer mentions one of", bool(hit), detail))
     if words := expect.get("mentions_all"):
-        missing = [w for w in words if w.lower() not in text]
+        missing = [w for w in words if not _mentions(answer, w)]
         detail = f"missing {missing}" if missing else ""
         checks.append(Check("answer mentions all of", not missing, detail))
     return checks
@@ -245,13 +261,13 @@ def score(case: dict, ws: Path, before: dict[str, str], answer: str) -> list[Che
     columns: dict[str, Policy] = {}
     if policy is not None:
         columns, problems = policy_columns(ws, agent, policy)
-    valid = Check("valid", not problems, "\n".join(problems)[-800:])
+    valid = Check("valid", not problems, "\n".join(problems)[:800])
     after = snapshot(ws)
     return [
         valid,
         *decision_checks(columns, expect.get("decisions", [])),
         *superset_checks(columns, expect.get("superset", [])),
-        *(name_checks(policy, ws, agent, before, after) if policy else []),
+        *(name_checks(policy, ws, before, after) if policy else []),
         *file_checks(expect, before, after),
         *answer_checks(expect, answer),
     ]

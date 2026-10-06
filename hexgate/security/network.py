@@ -27,6 +27,17 @@ NET_HTTP_REQUEST = "net.http_request"
 # works for any TCP service regardless of the wire protocol on top.
 NET_TCP_CONNECT = "net.tcp_connect"
 
+# The arguments each egress tool is evaluated with: the union of what the HTTP
+# proxy builds for a CONNECT tunnel and a forwarded request
+# (hexgate.egress.model), and what the TCP proxy builds. The analyzer checks
+# ``args.*`` in egress rules against these, as it checks a manifest tool's.
+EGRESS_TOOL_ARGS: dict[str, frozenset[str]] = {
+    NET_HTTP_REQUEST: frozenset(
+        {"method", "scheme", "host", "port", "url", "path", "query"}
+    ),
+    NET_TCP_CONNECT: frozenset({"host", "port", "protocol"}),
+}
+
 
 def host_match_constraint(
     hosts: Iterable[str] = (), subdomains: Iterable[str] = ()

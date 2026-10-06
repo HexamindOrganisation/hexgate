@@ -15,6 +15,7 @@ from hexgate.security.agent_gate import (
 from hexgate.security.analyzer import (
     PolicyLint,
     analyze,
+    analyze_policy,
     analyze_project,
     check,
     check_project,
@@ -201,6 +202,7 @@ __all__ = [
     "Provenance",
     "RuleTrace",
     "analyze",
+    "analyze_policy",
     "analyze_project",
     "check",
     "check_project",

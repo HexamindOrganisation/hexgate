@@ -44,6 +44,50 @@ roles:
 """
 
 
+# Roles disagreeing on a guard: one guard pipeline per agent can't serve both.
+GUARD_DIVERGENCE = """\
+version: 1
+roles:
+  default:
+    guards:
+      g: { enabled: false }
+  admin:
+    guards:
+      g: { enabled: true }
+"""
+
+
+# Agent gates whose constraints read the args only the gate sends.
+ADMIT_SHOP_BOT = """\
+version: 1
+roles:
+  default:
+    admission: { mode: allow, constraints: ['args.agent == "shop-bot"'] }
+"""
+
+HANDOFF_TO_BILLING = """\
+version: 1
+roles:
+  default:
+    agents:
+      billing-bot:
+        mode: allow
+        constraints: ['args.target == "billing-bot"', 'args.via == "handoff"']
+"""
+
+
+# A reach rule that reads the call's own key from the run's tools.
+HANDOFF_SEEN = """\
+version: 1
+roles:
+  default:
+    agents:
+      billing-bot:
+        mode: allow
+        constraints: ['any(run.tools_used, . == "agent.handoff:billing-bot")']
+"""
+
+
 @pytest.mark.parametrize(
     ("role", "amount", "expected"),
     [
@@ -103,6 +147,66 @@ def test_when_a_call_holds_yaml_dates_then_decide_compares_them_as_text(
         assert decide(policy, "default", dated).outcome == expected
 
 
+def test_when_a_call_is_on_admission_then_decide_sends_the_agent(tmp_path) -> None:
+    policy, problems = effective_policy(make_workspace(tmp_path, ADMIT_SHOP_BOT), AGENT)
+    assert problems == []
+    verdict = decide(policy, "default", {"tool": "agent.run"})
+    assert verdict.outcome == DecisionOutcome.ALLOW, verdict.reason
+
+
+@pytest.mark.parametrize(
+    "tool", ["agent.handoff:billing-bot", "agent.handoff: billing-bot "]
+)
+def test_when_a_call_is_on_reach_then_decide_sends_the_trimmed_target_and_via(
+    tmp_path, tool
+) -> None:
+    policy, problems = effective_policy(
+        make_workspace(tmp_path, HANDOFF_TO_BILLING), AGENT
+    )
+    assert problems == []
+    verdict = decide(policy, "default", {"tool": tool})
+    assert verdict.outcome == DecisionOutcome.ALLOW, verdict.reason
+
+
+def test_when_a_gate_call_carries_its_own_args_then_decide_raises(tmp_path) -> None:
+    # The gate sends its own args, so a case's would be silently ignored.
+    policy, _ = effective_policy(make_workspace(tmp_path, ADMIT_SHOP_BOT), AGENT)
+    with pytest.raises(CaseError, match="gate sends its own args"):
+        decide(policy, "default", {"tool": "agent.run", "args": {"agent": "ops-bot"}})
+
+
+def test_when_an_undeclared_admission_call_carries_args_then_decide_allows_it(
+    tmp_path,
+) -> None:
+    policy, _ = effective_policy(make_workspace(tmp_path), AGENT)
+    call = {"tool": "agent.run", "args": {"agent": "ops-bot"}}
+    assert decide(policy, "default", call).outcome == DecisionOutcome.ALLOW
+
+
+def test_when_an_undeclared_tool_reach_call_carries_args_then_decide_says_undeclared(
+    tmp_path,
+) -> None:
+    policy, _ = effective_policy(make_workspace(tmp_path), AGENT)
+    with pytest.raises(CaseError, match="isn't declared"):
+        decide(policy, "default", {"tool": "agent.tool:ops-bot", "args": {"x": 1}})
+
+
+def test_when_a_reach_target_is_padded_then_run_facts_name_the_trimmed_key(
+    tmp_path,
+) -> None:
+    policy, problems = effective_policy(make_workspace(tmp_path, HANDOFF_SEEN), AGENT)
+    assert problems == []
+    call = {"tool": "agent.handoff: billing-bot ", "run_facts": {"tool_calls": 1}}
+    verdict = decide(policy, "default", call)
+    assert verdict.outcome == DecisionOutcome.ALLOW, verdict.reason
+
+
+def test_when_a_run_fact_key_is_not_a_string_then_decide_raises(tmp_path) -> None:
+    policy, _ = effective_policy(make_workspace(tmp_path))
+    with pytest.raises(CaseError):
+        decide(policy, "default", {"tool": "view_orders", "run_facts": {1: 2}})
+
+
 def test_when_the_role_is_undefined_then_decide_raises(tmp_path) -> None:
     # Not the `default` fallback: a case naming a role the policy lacks fails.
     policy, _ = effective_policy(make_workspace(tmp_path))
@@ -133,6 +237,13 @@ def test_when_the_policy_holds_a_yaml_date_then_effective_policy_fails(
     policy, problems = effective_policy(make_workspace(tmp_path, dated))
     assert policy is None
     assert problems[0].startswith("can't compile:")
+
+
+def test_when_roles_disagree_on_guards_then_effective_policy_fails(tmp_path) -> None:
+    # As `hexgate policy validate` rejects it.
+    policy, problems = effective_policy(make_workspace(tmp_path, GUARD_DIVERGENCE))
+    assert policy is None
+    assert any("guard-divergence" in p for p in problems)
 
 
 def test_when_policy_yaml_is_empty_then_it_is_an_empty_policy(tmp_path) -> None:

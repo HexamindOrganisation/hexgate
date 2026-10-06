@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import json
 import shutil
+from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
@@ -306,12 +307,30 @@ def _guarded_policy(tmp_path: Path) -> Path:
     return p
 
 
-def _manifest_file(tmp_path: Path, guards_json: str) -> Path:
+# The tool ``_guarded_policy`` grants, so its manifest checks see no drift.
+_SEND_EMAIL_TOOL = {
+    "name": "send_email",
+    "description": "Send an email.",
+    "input_schema": {"properties": {}, "required": []},
+}
+
+
+def _manifest_file(
+    tmp_path: Path,
+    *,
+    guards: Sequence[dict] = (),
+    tools: Sequence[dict] = (_SEND_EMAIL_TOOL,),
+) -> Path:
     m = tmp_path / "manifest.json"
     m.write_text(
-        '{"name": "bot", "framework": "hexgate", "tools": [], "guards": '
-        + guards_json
-        + "}",
+        json.dumps(
+            {
+                "name": "bot",
+                "framework": "hexgate",
+                "tools": list(tools),
+                "guards": list(guards),
+            }
+        ),
         encoding="utf-8",
     )
     return m
@@ -324,7 +343,8 @@ def test_validate_manifest_flags_unknown_guard(
     is an error (the runtime stops cold), so it gates even at the default threshold."""
     policy = _guarded_policy(tmp_path)
     manifest = _manifest_file(
-        tmp_path, '[{"name": "secret_guard", "position": "before", "kind": "official"}]'
+        tmp_path,
+        guards=[{"name": "secret_guard", "position": "before", "kind": "official"}],
     )
     rc = _main_validate(
         _ns(source=str(policy), manifest=str(manifest), max_severity="error")
@@ -340,13 +360,102 @@ def test_validate_manifest_clean_when_guard_declared(
 ) -> None:
     policy = _guarded_policy(tmp_path)
     manifest = _manifest_file(
-        tmp_path, '[{"name": "ghost_guard", "position": "before", "kind": "custom"}]'
+        tmp_path,
+        guards=[{"name": "ghost_guard", "position": "before", "kind": "custom"}],
     )
     rc = _main_validate(
         _ns(source=str(policy), manifest=str(manifest), max_severity="warning")
     )
     assert rc == 0
     assert "parses cleanly" in capsys.readouterr().out
+
+
+def test_when_roles_disagree_on_guards_then_validate_reports_guard_divergence(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Manifest-free: building a guarded agent from this policy raises, so it
+    # gates at the default threshold without --manifest.
+    policy = tmp_path / "divergent.yaml"
+    policy.write_text(
+        "version: 1\n"
+        "roles:\n"
+        "  default:\n    guards: { g: { enabled: false } }\n"
+        "  admin:\n    guards: { g: { enabled: true } }\n",
+        encoding="utf-8",
+    )
+    rc = _main_validate(_ns(source=str(policy), max_severity="error"))
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert "guard-divergence" in captured.err
+    assert "parses cleanly" not in captured.out
+
+
+def test_when_manifest_lacks_a_tool_or_arg_then_validate_reports_drift(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    policy = tmp_path / "drift.yaml"
+    policy.write_text(
+        "tools:\n"
+        "  refund: { mode: allow, constraints: ['args.amont < 5'] }\n"
+        "  refnd: { mode: allow }\n",
+        encoding="utf-8",
+    )
+    refund = {
+        "name": "refund",
+        "description": "Refund an order.",
+        "input_schema": {
+            "properties": {"amount": {"title": "Amount", "type": "number"}},
+            "required": ["amount"],
+        },
+    }
+    manifest = _manifest_file(tmp_path, tools=[refund])
+
+    assert _main_validate(_ns(source=str(policy), max_severity="warning")) == 0
+    assert "unknown-" not in capsys.readouterr().err
+
+    rc = _main_validate(
+        _ns(source=str(policy), manifest=str(manifest), max_severity="warning")
+    )
+    err = capsys.readouterr().err
+    assert rc == 1
+    assert "unknown-tool" in err and "refnd" in err
+    assert "unknown-arg" in err and "amont" in err
+
+
+def _mixed_drift_run(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> tuple[int, list[str]]:
+    """Validate a policy whose drift spans severities: a grant on a missing tool
+    (warning), a deny on one (info), and an arg typo that fails closed (warning)."""
+    policy = tmp_path / "mixed.yaml"
+    policy.write_text(
+        "tools:\n"
+        "  refnd: { mode: allow }\n"
+        "  wipe: { mode: deny }\n"
+        "  send_email: { mode: allow, constraints: ['args.too == \"a\"'] }\n",
+        encoding="utf-8",
+    )
+    manifest = _manifest_file(tmp_path)
+    rc = _main_validate(
+        _ns(source=str(policy), manifest=str(manifest), max_severity="warning")
+    )
+    return rc, capsys.readouterr().err.splitlines()
+
+
+def test_when_lints_mix_severities_then_validate_counts_only_those_at_the_gate(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    rc, err = _mixed_drift_run(tmp_path, capsys)
+    assert rc == 1
+    assert err[-1].startswith("✗ Policy parses, but 2 lint(s) are at or above")
+
+
+def test_when_lints_mix_severities_then_validate_marks_each_with_its_severity(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _, err = _mixed_drift_run(tmp_path, capsys)
+    marks = sorted(line.split("]")[0] + "]" for line in err[:-1])
+    assert marks == ["! [unknown-arg]", "! [unknown-tool]", "· [unknown-tool]"]
 
 
 # ---------------------------------------------------------------------------
@@ -1265,14 +1374,13 @@ def test_validate_gates_on_each_lint_severity_not_a_hardcoded_one(
 ) -> None:
     """The default threshold gates on the lint's own severity.
 
-    Only ``check_default_role_exposure``'s warnings exist today, so an
-    ``error``-severity lint slipping through the default threshold would be
-    invisible until the first one is written.
+    Stubbed so each severity is exercised on the same policy, whichever
+    checks happen to emit it today.
     """
     p = tmp_path / "clean.yaml"
     p.write_text(_MULTI_ROLE_POLICY, encoding="utf-8")
     monkeypatch.setattr(
-        analyzer, "check_default_role_exposure", lambda _: _lint_of_severity(severity)
+        analyzer, "analyze_policy", lambda *_, **__: _lint_of_severity(severity)
     )
 
     assert _main_validate(_ns(source=str(p), max_severity="error")) == expected_rc

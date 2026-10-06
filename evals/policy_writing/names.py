@@ -137,7 +137,10 @@ def unknown_keys(policies: Iterable[AgentPolicy], known: KnownNames) -> list[str
         bad |= {
             t
             for t in p.tools
-            if t not in known.tools and t not in SYNTHETIC_ARGS and not is_agent_key(t)
+            if t not in known.tools
+            and t not in SYNTHETIC_ARGS
+            and not is_agent_key(t)
+            and not is_skill_key(t)
         }
         bad |= {
             t
@@ -145,7 +148,9 @@ def unknown_keys(policies: Iterable[AgentPolicy], known: KnownNames) -> list[str
             if is_agent_reach_key(t) and t.partition(":")[2] not in known.agents
         }
         # Trimmed as the runtime trims them, so ` pdf ` governs the skill `pdf`.
+        # A module tree's skills arrive lowered into `tools` (`skill.script:pdf`).
         skills = {canonical_skill_name(s) for s in p.skills}
+        skills |= {t.split(":", 1)[1] for t in p.tools if is_skill_key(t)}
         bad |= {skill_key("instructions", s) for s in skills - known.skills}
         bad |= {f"guard:{g}" for g in p.guards.keys() - known.guards}
     return sorted(bad)

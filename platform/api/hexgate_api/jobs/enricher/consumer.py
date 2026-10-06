@@ -24,6 +24,10 @@ from clickhouse_connect.driver.client import Client
 
 from hexgate_api.core.clickhouse import BatchItem, get_clickhouse, verify_all
 from hexgate_api.core.db import engine
+from hexgate_api.features.agent_runs.service import insert_agent_runs_batch
+from hexgate_api.features.agent_runs.service import (
+    verify_schema as verify_agent_runs_schema,
+)
 from hexgate_api.features.audit.service import (
     insert_ban_enforcements_batch,
     insert_decisions_batch,
@@ -45,6 +49,7 @@ from hexgate_api.jobs.enricher.decode import RecordDecodeError, decode_record
 from hexgate_api.jobs.enricher.mapping import Event, map_span
 from hexgate_api.jobs.enricher.resolver import resolve_versions
 from hexgate_api.schemas import (
+    AgentRunEvent,
     BanEnforcementEvent,
     DecisionEvent,
     LlmInvocationEvent,
@@ -130,7 +135,12 @@ class EnricherJob:
         await asyncio.to_thread(
             verify_all,
             self._clickhouse,
-            (verify_audit_schema, verify_llm_schema, verify_messages_schema),
+            (
+                verify_audit_schema,
+                verify_llm_schema,
+                verify_messages_schema,
+                verify_agent_runs_schema,
+            ),
         )
 
         if self._consumer is None:
@@ -354,11 +364,20 @@ class EnricherJob:
             for event, pid in events
             if isinstance(event, LlmMessageEvent)
         ]
+        runs = [
+            BatchItem(
+                event,
+                project_id=pid,
+                agent_version_id=versions[(pid, event.agent_name)],
+            )
+            for event, pid in events
+            if isinstance(event, AgentRunEvent)
+        ]
 
         # Retry the whole batch until ClickHouse acks. Only infra failures can
         # land here (bad input was already diverted to the DLQ above), so
         # halting this partition is correct: committing would drop data, and
-        # redelivery after a restart dedups. Re-running all four inserts on a
+        # redelivery after a restart dedups. Re-running all five inserts on a
         # partial failure is safe per the batch functions' contract.
         async def _insert_all() -> None:
             await asyncio.to_thread(insert_decisions_batch, self._clickhouse, decisions)
@@ -371,6 +390,7 @@ class EnricherJob:
             await asyncio.to_thread(
                 insert_llm_messages_batch, self._clickhouse, messages
             )
+            await asyncio.to_thread(insert_agent_runs_batch, self._clickhouse, runs)
 
         if not await self._retry_until_acked(_insert_all, "ClickHouse insert"):
             return
