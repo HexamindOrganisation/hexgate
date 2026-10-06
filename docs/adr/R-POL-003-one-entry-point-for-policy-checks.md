@@ -32,7 +32,6 @@ Blocking is kept apart from severity because a save asks two questions. *Can the
 - The platform's compose routes call `analyze_policy` once per agent: every declared agent and every registered agent, each with its own manifest, plus the generic `"*"` view without one (`_compose_lints`).
 - Guard divergence moved from the platform's `_load_document` (which forced `guard_stance()`) into `analyze_policy`, so every entry point reports it instead of only the save route.
 - `hexgate policy validate` now fails on `guard-divergence`, and with `--manifest` on an `error`-severity `unknown-tool` / `unknown-arg`, at its default `--max-severity error`. A CI job that passes `--manifest` can start failing on drift it never saw before; that is the intended effect, since an `error` drift lint means the real tool runs looser than the policy says.
-- Until it is routed (#303 follow-up), the eval scorer (#287) still violates this rule. The Verify grep covers `evals/` once #287 lands.
 - Two known gaps remain. A compose `policy.yaml` is module-built (each `boundary` lowers to a boundary module), but its routes lint the resolved `PolicySet`, so a boundary fence on a misspelled tool is not flagged there. And the tier (module-store) branch of `/policy/check` calls `check_project` without a manifest, so it reports no `unknown-tool` / `unknown-arg`.
 
 ## Rejected alternatives
@@ -48,7 +47,7 @@ Blocking is kept apart from severity because a save asks two questions. *Can the
 grep -rsnE "\b(lint_guards|check_default_role_exposure|_resolved_drift|guard_stance)\(" hexgate platform/api/hexgate_api evals --include='*.py' | grep -v "hexgate/security/"
 ```
 
-It must print nothing. `evals/` does not exist until #287 lands, and `-s` keeps the grep quiet about it until then.
+It must print nothing, including under `evals/`.
 
 ```
 cd platform/api && uv run --python 3.13 pytest -q \
