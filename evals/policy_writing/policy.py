@@ -5,7 +5,9 @@
 with the CLI's input checks. On an opt-in gate the policy never declares, it
 follows the runtime where `test` would deny: an admission or handoff call is
 allowed, and an agent-as-tool or skill call is refused as a case error, since
-the runtime decides it under the tool's own name.
+the runtime decides it under the tool's own name. A call on a declared gate is
+dry-run with the args that gate sends at runtime, so a case giving its own is
+refused.
 """
 
 from __future__ import annotations
@@ -42,10 +44,13 @@ from hexgate.security.decision import Verdict
 from hexgate.security.models import (
     AGENT_RUN_TOOL,
     PolicyMode,
+    agent_target_key,
+    is_agent_reach_key,
     is_agent_via_key,
     is_skill_key,
 )
 from hexgate.security.modules import DEFAULT_AGENT
+from hexgate.security.naming import DEFAULT_AGENT_NAME, canonical_name
 from hexgate.security.testing import run_namespace
 
 # Everything the SDK raises for a policy it can't load, compile or link.
@@ -57,11 +62,13 @@ class Policy:
     """The policy the checks run against.
 
     `payload` is the document: `policy.yaml` as written, or a module tree's
-    resolved roles. `policy_set` is it loaded, ready to evaluate.
+    resolved roles. `policy_set` is it loaded, ready to evaluate. `agent` is the
+    agent running the calls, which an agent gate sends as `args.agent`.
     """
 
     payload: dict
     policy_set: PolicySet
+    agent: str | None = None
 
 
 # A case file names outcomes by their policy mode, not by the enum's values.
@@ -79,7 +86,8 @@ RANK = {
 
 
 class CaseError(ValueError):
-    """A case's call can't be dry-run: an undefined role, bad attributes or run facts."""
+    """A case's call can't be dry-run: an undefined role, bad attributes or run facts,
+    or args on a declared agent-gate call."""
 
 
 _ATTRIBUTES = TypeAdapter(dict[str, ContextAttributeValue])
@@ -124,32 +132,61 @@ def _as_json(value: dict) -> dict:
     return json.loads(json.dumps(value, default=str))
 
 
-def decide(policy: Policy, role: str, d: dict) -> Verdict:
-    """Dry-run one call, with the same inputs as `hexgate policy test`.
+def _gate_call(tool: str, agent: str | None) -> tuple[str, dict | None]:
+    """The key an agent gate decides under, and the args it sends; `(tool, None)`
+    for any other call.
 
-    Raises `CaseError` where the CLI would refuse the call. An undefined role is
+    The gates ignore a call's own args: admission sends `{agent}` and reach sends
+    `{agent, target, via}`, with the target trimmed as the key is
+    (`AgentGate._decide`, `ReachGate._decide`). The agent name is sent as the
+    runtime sets it, `name or "default"`, untrimmed.
+    """
+    name = agent or DEFAULT_AGENT_NAME
+    if tool == AGENT_RUN_TOOL:
+        return tool, {"agent": name}
+    if is_agent_reach_key(tool):
+        kind, _, raw = tool.partition(":")
+        via, target = kind.removeprefix("agent."), canonical_name(raw)
+        gate_args = {"agent": name, "target": target, "via": via}
+        return agent_target_key(via, target), gate_args
+    return tool, None
+
+
+def decide(policy: Policy, role: str, d: dict) -> Verdict:
+    """Dry-run one call, with the same inputs as `hexgate policy test`, except that
+    a call on an agent gate carries the args that gate sends at runtime.
+
+    Raises `CaseError` where the CLI would refuse the call, or where the eval
+    can't judge it (args on a declared agent-gate call). An undefined role is
     one, rather than the `default` fallback: a case naming a role the policy
     lacks fails instead of passing by luck.
     """
     if role not in policy.policy_set:
         raise CaseError(f"role {role!r} not in policy ({policy.policy_set.roles})")
+    key, gate_args = _gate_call(d["tool"], policy.agent)
     try:
+        args = _as_json(d.get("args", {}))
         attributes = _ATTRIBUTES.validate_python(_as_json(d.get("attributes", {})))
-        # Over a zeroed run, so an unset `run.*` path reads 0, not missing.
-        run = run_namespace(d["tool"], **d.get("run_facts", {}))
+        # Over a zeroed run, so an unset `run.*` path reads 0, not missing; keyed
+        # by the call's real key, so `run.tools_used` names what is decided.
+        run = run_namespace(key, **_as_json(d.get("run_facts", {})))
     except (ValidationError, ValueError) as exc:
         raise CaseError(str(exc)) from exc
-    if gate := _undeclared_by_name(policy.policy_set, d["tool"]):
+    if gate := _undeclared_by_name(policy.policy_set, key):
         raise CaseError(
-            f"{d['tool']}: {gate} isn't declared, so the runtime decides this call "
+            f"{key}: {gate} isn't declared, so the runtime decides this call "
             "under the tool's own name; dry-run that tool instead"
         )
-    if _passes_unchecked(policy.policy_set, d["tool"]):
+    if _passes_unchecked(policy.policy_set, key):
         return Verdict(DecisionOutcome.ALLOW, reason="gate not declared")
+    if gate_args is not None and args:  # inputs the dry-run couldn't use
+        raise CaseError(f"{key}: the gate sends its own args; drop {sorted(args)}")
+    if gate_args is not None:
+        args = gate_args
     return policy.policy_set.evaluate(
         role=role,
-        tool=d["tool"],
-        args=_as_json(d.get("args", {})),
+        tool=key,
+        args=args,
         attributes=attributes,
         run=run,
     )
@@ -216,13 +253,14 @@ def _yaml_payload(ws: Path) -> tuple[dict | None, list[str]]:
 
 
 def effective_policy(
-    ws: Path, agent: str = DEFAULT_AGENT
+    ws: Path, agent: str | None = None
 ) -> tuple[Policy | None, list[str]]:
     """The policy in `ws`, or why it doesn't validate (`hexgate policy validate`,
     or `check` + `resolve` on a module tree for `agent`'s roles.yaml column)."""
     is_modules = (ws / "policies").is_dir()
-    payload, problems = _module_payload(ws, agent) if is_modules else _yaml_payload(ws)
+    column = agent or DEFAULT_AGENT
+    payload, problems = _module_payload(ws, column) if is_modules else _yaml_payload(ws)
     if payload is None:
         return None, problems
     policy_set, problems = _load(payload)
-    return (None, problems) if problems else (Policy(payload, policy_set), [])
+    return (None, problems) if problems else (Policy(payload, policy_set, agent), [])

@@ -215,7 +215,7 @@ def test_when_an_unchanged_path_does_not_exist_then_it_fails() -> None:
 
 def test_answer_checks_happy_path() -> None:
     expect = {"mentions_any": ["Boundary", "ceiling"], "mentions_all": ["REFUND"]}
-    checks = answer_checks(expect, "The BOUNDARY caps refunds.")
+    checks = answer_checks(expect, "The BOUNDARY caps a refund.")
     assert all(c.passed for c in checks)
 
 
@@ -231,6 +231,24 @@ def test_when_a_call_holds_a_yaml_date_then_its_check_is_named(tmp_path) -> None
     call = {"role": "default", **VIEW, "args": {"since": datetime.date(2026, 1, 1)}}
     [check] = decision_checks(policy, [{**call, "expect": "allow"}])
     assert "2026-01-01" in check.name
+
+
+def test_when_a_word_appears_only_inside_another_then_it_is_not_mentioned() -> None:
+    [check] = answer_checks({"mentions_any": ["no"]}, "I know it is fine")
+    assert not check.passed
+
+
+def test_when_a_word_is_part_of_a_snake_case_name_then_it_is_mentioned() -> None:
+    [check] = answer_checks({"mentions_any": ["approval"]}, "set to approval_required")
+    assert check.passed
+
+
+def test_when_the_workspace_has_a_broken_symlink_then_snapshot_skips_it(
+    tmp_path,
+) -> None:
+    ws = make_workspace(tmp_path)
+    (ws / "dangling").symlink_to(ws / "missing")
+    assert "dangling" not in snapshot(ws)
 
 
 def test_score_happy_path(tmp_path) -> None:
