@@ -130,8 +130,9 @@ def _as_json(value: dict) -> dict:
     return json.loads(json.dumps(value, default=str))
 
 
-def _gate_call(tool: str, args: dict, agent: str | None) -> tuple[str, dict]:
-    """The key and args an agent gate sends at runtime; other calls unchanged.
+def _gate_call(tool: str, agent: str | None) -> tuple[str, dict | None]:
+    """The key an agent gate decides under, and the args it sends; `(tool, None)`
+    for any other call.
 
     The gates ignore a call's own args: admission sends `{agent}` and reach sends
     `{agent, target, via}`, with the target trimmed as the key is
@@ -140,18 +141,16 @@ def _gate_call(tool: str, args: dict, agent: str | None) -> tuple[str, dict]:
     """
     name = agent or DEFAULT_AGENT_NAME
     if tool == AGENT_RUN_TOOL:
-        key, gate_args = tool, {"agent": name}
-    elif is_agent_reach_key(tool):
+        return tool, {"agent": name}
+    if is_agent_reach_key(tool):
         kind, _, raw = tool.partition(":")
         via, target = kind.removeprefix("agent."), canonical_name(raw)
-        key = agent_target_key(via, target)
-        gate_args = {"agent": name, "target": target, "via": via}
-    else:
-        return tool, args
-    if args:
-        # The case would claim to test inputs the dry-run can't use.
-        raise CaseError(f"{tool}: the gate sends its own args; drop {sorted(args)}")
-    return key, gate_args
+        return agent_target_key(via, target), {
+            "agent": name,
+            "target": target,
+            "via": via,
+        }
+    return tool, None
 
 
 def decide(policy: Policy, role: str, d: dict) -> Verdict:
@@ -164,24 +163,29 @@ def decide(policy: Policy, role: str, d: dict) -> Verdict:
     """
     if role not in policy.policy_set:
         raise CaseError(f"role {role!r} not in policy ({policy.policy_set.roles})")
-    tool, args = _gate_call(d["tool"], _as_json(d.get("args", {})), policy.agent)
+    key, gate_args = _gate_call(d["tool"], policy.agent)
     try:
+        args = _as_json(d.get("args", {}))
         attributes = _ATTRIBUTES.validate_python(_as_json(d.get("attributes", {})))
         # Over a zeroed run, so an unset `run.*` path reads 0, not missing; keyed
         # by the call's real key, so `run.tools_used` names what is decided.
-        run = run_namespace(tool, **_as_json(d.get("run_facts", {})))
+        run = run_namespace(key, **_as_json(d.get("run_facts", {})))
     except (ValidationError, ValueError) as exc:
         raise CaseError(str(exc)) from exc
-    if gate := _undeclared_by_name(policy.policy_set, tool):
+    if gate := _undeclared_by_name(policy.policy_set, key):
         raise CaseError(
-            f"{tool}: {gate} isn't declared, so the runtime decides this call "
+            f"{key}: {gate} isn't declared, so the runtime decides this call "
             "under the tool's own name; dry-run that tool instead"
         )
-    if _passes_unchecked(policy.policy_set, tool):
+    if _passes_unchecked(policy.policy_set, key):
         return Verdict(DecisionOutcome.ALLOW, reason="gate not declared")
+    if gate_args is not None:
+        if args:  # the case would claim to test inputs the dry-run can't use
+            raise CaseError(f"{key}: the gate sends its own args; drop {sorted(args)}")
+        args = gate_args
     return policy.policy_set.evaluate(
         role=role,
-        tool=tool,
+        tool=key,
         args=args,
         attributes=attributes,
         run=run,

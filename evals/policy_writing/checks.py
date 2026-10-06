@@ -152,7 +152,8 @@ _ALNUM = "[A-Za-z0-9]"
 
 def _mentions(answer: str, word: str) -> bool:
     """`word` as a whole word or phrase: "no" doesn't match "know", while
-    "approval" still matches inside `approval_required`."""
+    "approval" still matches inside `approval_required`. Inflections don't
+    match ("refund" vs "refunds"), so a case lists each form it accepts."""
     pattern = rf"(?<!{_ALNUM}){re.escape(word)}(?!{_ALNUM})"
     return re.search(pattern, answer, re.IGNORECASE) is not None
 
