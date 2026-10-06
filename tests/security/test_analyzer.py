@@ -21,6 +21,7 @@ from hexgate.security import (
     load_policy_set_from_dict,
 )
 from hexgate.security.analyzer import check_default_role_exposure
+from hexgate.security.models import gate_args
 
 
 def _mod(name, kind, tools, *, default_mode="allow"):
@@ -43,8 +44,9 @@ def _deny(constraints=None):
     return BaseToolPolicy(mode="deny", constraints=constraints or [])
 
 
-def _manifest(*tools, guards=()):
-    """Duck-typed AgentManifest: tools=[(name, [arg, ...]), ...] plus guard names."""
+def _manifest(*tools, guards=(), skills=()):
+    """Duck-typed AgentManifest: tools=[(name, [arg, ...]), ...] plus guard and
+    skill names."""
     return SimpleNamespace(
         tools=[
             SimpleNamespace(
@@ -54,6 +56,7 @@ def _manifest(*tools, guards=()):
             for name, args in tools
         ],
         guards=[SimpleNamespace(name=g) for g in guards],
+        skills=[SimpleNamespace(name=s) for s in skills],
     )
 
 
@@ -682,6 +685,7 @@ def test_when_a_source_is_given_then_every_lint_carries_it():
     guards = {"secret_redactor": {"enabled": False}}
     ps_with_drift = load_policy_set_from_dict(
         {
+            "constraints": ["user.x == 1"],
             "roles": {
                 "default": {"guards": guards, "tools": {"refund": {"mode": "allow"}}},
                 "admin": {"guards": guards, "tools": {"refnd": {"mode": "allow"}}},
@@ -690,7 +694,7 @@ def test_when_a_source_is_given_then_every_lint_carries_it():
     )
     lints = analyze_policy(ps, source="policy.yaml")
     lints += analyze_policy(ps_with_drift, manifest=manifest, source="policy.yaml")
-    assert {"permissive-default", "unknown-guard", "unknown-tool"} <= {
+    assert {"permissive-default", "unknown-guard", "unknown-tool", "unknown-root"} <= {
         lint.code for lint in lints
     }
     assert {lint.source for lint in lints} == {"policy.yaml"}
@@ -722,7 +726,7 @@ def test_when_a_key_is_not_a_manifest_tool_then_no_unknown_tool():
             "_resolved": True,
         }
     )
-    assert analyze_policy(ps, manifest=_manifest()) == []
+    assert analyze_policy(ps, manifest=_manifest(skills=["triage"])) == []
 
 
 def test_when_the_default_allows_then_a_stricter_rule_on_a_typo_is_an_error():
@@ -968,3 +972,401 @@ def test_when_a_default_never_applies_then_its_constraints_are_not_checked():
     }
     assert _unknown_args_of(deny_default, tools) == []
     assert _unknown_args_of(nothing_falls_through, tools) == []
+
+
+# --- gate args: what a constraint on an agent or skill key may read ---
+
+
+class _RecordingEnforcer:
+    """Enough of a PolicyEnforcer for a gate: records each decision it asks for."""
+
+    agent_name = "orchestrator"
+    policy = SimpleNamespace(
+        declares_admission=lambda: True, declares_reach=lambda: True
+    )
+
+    def __init__(self):
+        self.decided = {}
+
+    def decide(self, key, args):
+        self.decided[key] = args
+        return SimpleNamespace(allowed=True)
+
+
+def test_admission_and_reach_args_match_what_the_agent_gates_build():
+    from hexgate.security.agent_gate import AgentGate, ReachGate
+
+    enforcer = _RecordingEnforcer()
+    AgentGate(enforcer).check_admission()
+    ReachGate(enforcer).check_reach("billing", via="handoff")
+    ReachGate(enforcer).check_reach("billing", via="tool")
+    assert {key: set(args) for key, args in enforcer.decided.items()} == {
+        key: gate_args(key)
+        for key in ("agent.run", "agent.handoff:billing", "agent.tool:billing")
+    }
+
+
+@pytest.mark.parametrize("via", ["instructions", "resource"])
+def test_skill_args_match_what_the_langchain_skill_seam_builds(via):
+    from hexgate.adapters.langchain.skills import _SkillRead
+    from hexgate.manifest.langchain import SkillLocation
+
+    location = SkillLocation("pdf", "/skills/pdf/SKILL.md", backend=None)
+    override = _SkillRead(via, location, "/skills/pdf/SKILL.md").override(None)
+    assert set(override.args) == gate_args(override.key)
+
+
+@pytest.mark.parametrize("via", ["instructions", "resource", "script"])
+def test_skill_args_match_what_the_google_skill_seam_builds(via):
+    from hexgate.adapters.google.tools import _skill_decision
+
+    call = {"skill_name": "pdf", "file_path": "x.py", "args": {}}
+    key, args = _skill_decision(object(), via, call)
+    assert set(args) == gate_args(key)
+
+
+@pytest.mark.parametrize(
+    ("block", "key"),
+    [
+        (
+            {"admission": {"mode": "allow", "constraints": ['args.agnt == "a"']}},
+            "agent.run",
+        ),
+        (
+            {
+                "agents": {
+                    "b": {
+                        "mode": "allow",
+                        "via": ["tool"],
+                        "constraints": ['args.trgt == "b"'],
+                    }
+                }
+            },
+            "agent.tool:b",
+        ),
+        (
+            {
+                "skills": {
+                    "pdf": {
+                        "mode": "allow",
+                        "via": ["resource"],
+                        "constraints": ['args.file_pth == "x"'],
+                    }
+                }
+            },
+            "skill.resource:pdf",
+        ),
+        (
+            # A script argument doesn't reach a skill's instructions.
+            {
+                "skills": {
+                    "pdf": {
+                        "mode": "allow",
+                        "via": ["instructions"],
+                        "constraints": ["args.script_args == []"],
+                    }
+                }
+            },
+            "skill:pdf",
+        ),
+    ],
+)
+def test_when_a_gate_rule_reads_an_arg_its_gate_never_passes_then_unknown_arg(
+    block, key
+):
+    ps = load_policy_set_from_dict(block)
+    lints = analyze_policy(ps, manifest=_manifest(skills=["pdf"]))
+    assert [(lint.code, lint.tool, lint.severity) for lint in lints] == [
+        ("unknown-arg", key, "warning")
+    ]
+
+
+def test_when_a_gate_rule_reads_its_gate_args_then_no_unknown_arg():
+    ps = load_policy_set_from_dict(
+        {
+            "admission": {"mode": "allow", "constraints": ['args.agent == "a"']},
+            "agents": {"b": {"mode": "allow", "constraints": ['args.via == "tool"']}},
+            "skills": {
+                "pdf": {
+                    "mode": "allow",
+                    "via": ["script"],
+                    "constraints": [
+                        'args.skill == "pdf"',
+                        "count(args.script_args) < 3",
+                    ],
+                }
+            },
+        }
+    )
+    assert analyze_policy(ps, manifest=_manifest(skills=["pdf"])) == []
+
+
+def test_when_a_policy_level_constraint_reads_a_gate_arg_then_no_unknown_arg():
+    doc = {
+        "constraints": [
+            'args.target != "x"',
+            'args.skill != "shell"',
+            "count(args.script_args) < 3",
+        ],
+        "agents": {"billing": {"mode": "allow"}},
+        "skills": {"pdf": {"mode": "allow", "via": ["script"]}},
+    }
+    assert _unknown_args_of(doc, ("refund", ["amount"])) == []
+
+
+@pytest.mark.parametrize(
+    "gates",
+    [
+        {},
+        # Listed, but denied: a deny never runs the policy-level constraints.
+        {"skills": {"pdf": {"mode": "deny"}}},
+    ],
+)
+def test_when_no_gate_grant_passes_an_arg_then_a_policy_level_use_is_unknown(gates):
+    # Always True under ``not``: the fence on read_file's path never fires.
+    doc = {
+        "constraints": ['not startswith(args.file_path, "/etc")'],
+        "tools": {"read_file": {"mode": "allow"}},
+        **gates,
+    }
+    assert [s for s, _, _ in _unknown_args_of(doc, ("read_file", ["path"]))] == [
+        "error"
+    ]
+
+
+def test_when_a_key_is_not_reserved_then_gate_args_raises():
+    with pytest.raises(ValueError, match="'refund' is not a reserved key"):
+        gate_args("refund")
+
+
+def test_when_a_module_gate_rule_reads_an_unknown_arg_then_unknown_arg():
+    cap = ModuleContent(
+        name="c",
+        kind="capability",
+        policy=AgentPolicy(
+            admission=BaseToolPolicy(mode="allow", constraints=['args.agnt == "a"'])
+        ),
+        source="c.yaml",
+        content_hash="hash-c",
+    )
+    lints = check([], [cap], manifest=_manifest())
+    assert _codes(lints) == {("unknown-arg", "agent.run")}
+
+
+# --- unknown-skill ---
+
+
+def test_when_a_skill_is_not_in_the_manifest_then_unknown_skill_by_rule_mode():
+    ps = load_policy_set_from_dict(
+        {
+            "skills": {
+                "shell": {"mode": "deny"},
+                "zip": {"mode": "allow"},
+                "pdff": {"mode": "allow"},
+                "pdf": {"mode": "allow"},
+            }
+        }
+    )
+    lints = analyze_policy(ps, manifest=_manifest(skills=["pdf"]))
+    # Once per skill, though each lowers to a key per level; sorted by name
+    # within a severity.
+    assert [(lint.severity, lint.message, lint.role) for lint in lints] == [
+        (
+            "warning",
+            "role 'default' governs skill 'pdff', which the agent's manifest "
+            "doesn't declare",
+            "default",
+        ),
+        (
+            "warning",
+            "role 'default' governs skill 'zip', which the agent's manifest "
+            "doesn't declare",
+            "default",
+        ),
+        (
+            "info",
+            "role 'default' governs skill 'shell', which the agent's manifest "
+            "doesn't declare",
+            "default",
+        ),
+    ]
+
+
+def test_when_a_skill_name_is_padded_then_it_matches_the_manifest_skill():
+    ps = load_policy_set_from_dict({"skills": {" pdf ": {"mode": "allow"}}})
+    assert analyze_policy(ps, manifest=_manifest(skills=["pdf "])) == []
+
+
+def test_when_the_manifest_has_no_skills_then_every_skill_is_unknown():
+    ps = load_policy_set_from_dict({"skills": {"pdf": {"mode": "allow"}}})
+    manifest = _manifest()
+    manifest.skills = None  # a framework with no skill concept
+    assert {lint.code for lint in analyze_policy(ps, manifest=manifest)} == {
+        "unknown-skill"
+    }
+    assert analyze_policy(ps) == []
+
+
+def test_when_a_module_governs_an_unknown_skill_then_unknown_skill():
+    cap = ModuleContent(
+        name="c",
+        kind="capability",
+        policy=AgentPolicy(skills={"pdff": {"mode": "allow"}}),
+        source="c.yaml",
+        content_hash="hash-c",
+    )
+    lints = check([], [cap], manifest=_manifest(skills=["pdf"]))
+    assert [(lint.code, lint.source, lint.tier) for lint in lints] == [
+        ("unknown-skill", "c.yaml", "capability")
+    ]
+
+
+# --- unknown-root: a constraint path no call sets ---
+
+
+def _unknown_roots_of(doc):
+    lints = analyze_policy(load_policy_set_from_dict(doc))
+    return [
+        (lint.severity, lint.message) for lint in lints if lint.code == "unknown-root"
+    ]
+
+
+@pytest.mark.parametrize(
+    ("constraint", "path"),
+    [
+        ('user.department == "finance"', "user.department"),
+        ('role.name == "admin"', "role.name"),
+        ('startswith(tool.name, "net")', "tool.name"),
+        ("count(caller.groups) > 0", "caller.groups"),
+    ],
+)
+def test_when_a_constraint_path_has_no_root_then_unknown_root(constraint, path):
+    doc = {"tools": {"refund": {"mode": "allow", "constraints": [constraint]}}}
+    assert _unknown_roots_of(doc) == [
+        (
+            "warning",
+            f"a constraint reads {path}, which no call sets: a path starts with "
+            "args., ctx. or run., and role and tool are plain strings",
+        )
+    ]
+
+
+def test_when_constraint_paths_use_a_root_then_no_unknown_root():
+    doc = {
+        "constraints": ["run.tool_calls < 50"],
+        "tools": {
+            "refund": {
+                "mode": "allow",
+                "constraints": [
+                    "args.amount < 5",
+                    'ctx.department == "finance"',
+                    'role == "admin"',
+                    'tool != "x"',
+                    "args.amount <= consts.cap",
+                ],
+            }
+        },
+        "consts": {"cap": 5},
+    }
+    assert _unknown_roots_of(doc) == []
+
+
+def test_when_an_unknown_root_sits_under_not_then_it_is_an_error():
+    # Always True: the fence never fires.
+    doc = {"constraints": ['not (user.department == "finance")']}
+    assert [s for s, _ in _unknown_roots_of(doc)] == ["error"]
+
+
+def test_when_roles_share_an_unknown_root_then_once_at_the_worst_severity():
+    doc = {
+        "roles": {
+            "admin": {"constraints": ["user.x == 1"]},
+            "default": {"constraints": ["not (user.x == 1)"]},
+            "zeta": {
+                "default_policy": {"mode": "allow", "constraints": ["user.x == 2"]}
+            },
+        }
+    }
+    assert [s for s, _ in _unknown_roots_of(doc)] == ["error"]
+
+
+def test_when_a_deny_constrains_an_unknown_root_then_no_unknown_root():
+    doc = {
+        "default_policy": {"mode": "deny", "constraints": ["user.x == 1"]},
+        "tools": {"refund": {"mode": "deny", "constraints": ["user.x == 1"]}},
+    }
+    assert _unknown_roots_of(doc) == []
+
+
+def test_when_a_gate_rule_has_an_unknown_root_then_unknown_root():
+    doc = {"admission": {"mode": "allow", "constraints": ['caller.team == "ops"']}}
+    assert [s for s, _ in _unknown_roots_of(doc)] == ["warning"]
+
+
+def test_when_a_module_boundary_deny_has_an_unknown_root_then_it_is_an_error():
+    # The linker folds a boundary deny into ``not (...)``: always True, fail-open.
+    boundary = _mod("b", "boundary", {"refund": _deny(["user.x == 1"])})
+    cap = _mod("c", "capability", {"refund": _allow(["caller.y == 1"])})
+    lints = check([boundary], [cap])
+    assert [(lint.code, lint.severity, lint.source, lint.tier) for lint in lints] == [
+        ("unknown-root", "error", "b.yaml", "boundary"),
+        ("unknown-root", "warning", "c.yaml", "capability"),
+    ]
+
+
+def test_path_roots_match_what_check_constraints_sets():
+    from hexgate.security.constraints import PATH_ROOTS, check_constraints
+
+    for root in PATH_ROOTS:
+        # Raises if <root>.x is missing from the evaluation context.
+        check_constraints(
+            [f"{root}.x == 1"], {"x": 1}, "t", attributes={"x": 1}, run={"x": 1}
+        )
+
+
+def test_when_a_default_constraint_has_an_unknown_root_then_unknown_root():
+    doc = {"default_policy": {"mode": "allow", "constraints": ["user.x == 1"]}}
+    assert [s for s, _ in _unknown_roots_of(doc)] == ["warning"]
+
+
+def test_when_several_paths_have_no_root_then_they_are_sorted():
+    doc = {"constraints": ["user.z == 1", "caller.a == 1"]}
+    assert [m.split()[3] for _, m in _unknown_roots_of(doc)] == [
+        "caller.a,",
+        "user.z,",
+    ]
+
+
+def test_when_a_module_boundary_grants_an_unknown_skill_then_it_is_an_error():
+    # The boundary's fence never reaches the real skill, which runs on the
+    # capability's grant alone.
+    def skills_module(name, kind, skills):
+        policy = AgentPolicy(default_policy=BaseToolPolicy(mode="allow"), skills=skills)
+        return ModuleContent(name, kind, policy, f"{name}.yaml", f"hash-{name}")
+
+    fence = {"mode": "allow", "constraints": ['args.file_path != "x"']}
+    boundary = skills_module("b", "boundary", {"pdf-tolls": fence})
+    cap = skills_module("c", "capability", {"pdf-tools": {"mode": "allow"}})
+    lints = check([boundary], [cap], manifest=_manifest(skills=["pdf-tools"]))
+    assert [(lint.code, lint.severity, lint.tier) for lint in lints] == [
+        ("unknown-skill", "error", "boundary")
+    ]
+
+
+@pytest.mark.parametrize(
+    ("constraint", "unset"),
+    [
+        ("count(args) < 3", []),
+        ("count(ctx) > 0", []),
+        ("every(args, . != null)", []),
+        ("count(groups) > 0", ["groups"]),
+        ("any(role, . == 1)", []),
+    ],
+)
+def test_when_a_collection_is_a_lone_identifier_then_only_a_root_or_fact_is_set(
+    constraint, unset
+):
+    doc = {"tools": {"refund": {"mode": "allow", "constraints": [constraint]}}}
+    ps = load_policy_set_from_dict(doc)
+    lints = analyze_policy(ps, manifest=_manifest(("refund", ["amount"])))
+    assert [lint.message.split()[3].rstrip(",") for lint in lints] == unset
