@@ -110,7 +110,14 @@ behaves unlike your mental model.
 5. **Availability** — a hang, stall, silent drop or slow drain is as serious as
    an error. Read upstream defaults the diff activates.
 6. **Internal consistency** — every number, cross-reference and claim in changed
-   comments and docs, checked against the file it points at.
+   comments and docs, checked against the file it points at. Then leave the
+   diff: grep the whole repo for what the change makes stale — the issue number
+   it resolves, the function it reroutes, the command whose behaviour moved — and
+   check every comment and doc that names it. And read a changed docs paragraph
+   for what it implies, not sentence by sentence: two true sentences in a row
+   ("`validate` fails on X. Pass the manifest to check Y") tell the reader Y
+   fails too. (On PR #318 every sentence checked out, a comment outside the diff
+   still said the CLI "moves onto it in #303", and a human found both.)
 7. **Wire compatibility** — when the diff changes an encoding, compression,
    serialization, protocol version or schema, name every other party that reads
    or writes those bytes and verify *that* side supports the new form in its
@@ -120,6 +127,18 @@ behaves unlike your mental model.
    writer accepts it, never that anything can decode it. Then ask what the
    reader does with the new bytes during the window where only one side is
    deployed.
+8. **Widened input** — when the diff widens what a value can hold (more
+   severities, more codes, a new `None`, a second source), list every consumer
+   of that value, **unchanged lines included**, and ask whether each was written
+   for the old range. The lines that break are not in the diff, so a
+   hunk-scoped lens never reads them. For anything a user runs — a CLI command,
+   an endpoint, a page — **run it** on inputs that hit the new range and judge
+   what the user reads: the per-line markers, the counts, the final verdict
+   line, not only the exit code. (On PR #318 rerouting `policy validate` fed it
+   `info` / `warning` / `error` lints; its printer, written for warnings only,
+   showed all three as `⚠`, and its failure line counted every lint, not the
+   ones at the gate. A lens ran the CLI on exactly that input and checked only
+   the exit code.)
 
 ## 4. The example gate
 
@@ -147,7 +166,11 @@ how twelve findings get reported.
 
 A finding whose Notice is "a reader" — a stale comment, a wrong line number, a
 misnamed function in a docstring, a commit-message format — has no Break in the
-code and is housekeeping, not a finding. Collect these in one line after the
+code and is housekeeping, not a finding. Text a **user** reads is different:
+CLI output, an API message, user-facing docs (`docs/**/*.mdx`) are the product,
+and a false one is a silent Break — the exit code is right, the user trusts the
+line that says "3 lints at or above warning" or the docs that say a check fails
+CI, and nobody notices it is wrong. Gate those like code. Collect these in one line after the
 numbered findings, never as numbered entries.
 
 Then drop the finding if the example needs any of these to be true:
