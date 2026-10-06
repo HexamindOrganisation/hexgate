@@ -407,6 +407,25 @@ def test_a_role_wide_superset_must_hold_on_every_agents_column(tmp_path) -> None
     assert check.detail == "refund_order: billing=allow, support=deny (column shop-bot)"
 
 
+def test_when_a_gate_reads_args_agent_then_each_column_sends_its_own_agent(
+    tmp_path,
+) -> None:
+    roles = '  billing:\n    "*": [read_only, reach]\n    ops-bot: [read_only, reach]\n'
+    ws = make_modules_workspace(tmp_path, roles)
+    write_module(
+        ws,
+        "capabilities/reach.yaml",
+        'admission: { mode: allow, constraints: ["args.agent == \\"ops-bot\\""] }\n',
+    )
+    policy, _ = effective_policy(ws)
+    columns, _ = policy_columns(ws, None, policy)
+    run = {"role": "billing", "tool": "agent.run", "expect": "allow"}
+    [check] = decision_checks(columns, [run])
+    # ops-bot's column sends its name and passes; "*" sends "default" and fails.
+    assert not check.passed
+    assert "(column *)" in check.detail and "(column ops-bot)" not in check.detail
+
+
 def test_when_an_agents_column_is_invalid_then_score_fails_valid(tmp_path) -> None:
     roles = '  default:\n    "*": [read_only]\n    ops-bot: [read_only, payments]\n'
     ws = make_modules_workspace(tmp_path, roles + "  billing: [read_only]\n")

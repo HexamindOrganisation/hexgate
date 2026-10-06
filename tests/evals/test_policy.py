@@ -305,7 +305,9 @@ def test_policy_columns_happy_path(tmp_path) -> None:
     ws = make_modules_workspace(tmp_path, roles)
     policy, _ = effective_policy(ws)
     columns, problems = policy_columns(ws, None, policy)
-    assert (set(columns), problems) == ({"*", "ops-bot"}, [])
+    assert problems == []
+    # Each column dry-runs as its agent; "*" as the unnamed one.
+    assert {k: v.agent for k, v in columns.items()} == {"*": None, "ops-bot": "ops-bot"}
 
 
 def test_when_the_case_names_an_agent_then_policy_columns_is_its_policy(
