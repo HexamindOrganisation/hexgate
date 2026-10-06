@@ -430,6 +430,10 @@ class PolicyValidationError(BaseModel):
     role: str | None = None
     tool: str | None = None
     line: int | None = None
+    # The SDK finding's severity, when the diagnostic is one (``None`` for a
+    # parse/schema error). A warning can still carry ``error``: an advisory
+    # finding the runtime would stop cold on.
+    severity: str | None = None
     message: str
 
 
@@ -508,6 +512,7 @@ class PolicyLintOut(BaseModel):
     severity: str
     message: str
     source: str | None = None
+    line: int | None = None
     tier: str | None = None
     tool: str | None = None
     role: str | None = None
@@ -876,6 +881,14 @@ class LlmMessageEvent(AuditEnvelope):
     # substitution as LlmInvocationEvent.run_id, so a transcript stays
     # attributable to its run when session_id is empty.
     run_id: Optional[UUID] = None
+
+
+class AgentRunEvent(AuditEnvelope):
+    """One admitted agent run; mirrors the agent_run table."""
+
+    # Required, unlike the other events' run_id: this span only exists inside a
+    # run scope, so a missing id is a malformed span, not an older SDK.
+    run_id: UUID
 
 
 class DecisionAccepted(BaseModel):

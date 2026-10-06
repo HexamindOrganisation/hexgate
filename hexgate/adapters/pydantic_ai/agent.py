@@ -82,13 +82,15 @@ class HexgatePydanticAgent:
     ) -> AbstractAsyncContextManager[None]:
         """Async HexgateContext scope + run facts + Langfuse propagation.
         See :func:`hexgate.adapters._common.abind`."""
-        return abind(context, self._agent_name, self._tag(method))
+        return abind(
+            context, self._agent_name, self._tag(method), api_key=self._api_key
+        )
 
     def _bind(
         self, context: HexgateContext, method: str
     ) -> AbstractContextManager[None]:
         """Sync mirror of :meth:`_abind`."""
-        return bind(context, self._agent_name, self._tag(method))
+        return bind(context, self._agent_name, self._tag(method), api_key=self._api_key)
 
     @staticmethod
     def _tag(method: str) -> str:

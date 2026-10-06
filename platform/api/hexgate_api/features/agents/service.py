@@ -12,7 +12,9 @@ import asyncio
 import hashlib
 import json
 import logging
-from typing import Callable
+from typing import TYPE_CHECKING, Callable
+
+from pydantic import ValidationError
 
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
@@ -44,6 +46,9 @@ from hexgate_api.features.agents.compiler import (
 # platform copy) so store and compile can't drift on the sentinel. This import is
 # SDK-free — policy_modules.service imports the SDK lazily — so it's safe at load.
 from hexgate_api.features.policy_modules.service import DEFAULT_AGENT
+
+if TYPE_CHECKING:
+    from hexgate.manifest.models import AgentManifest as SdkAgentManifest
 
 logger = logging.getLogger("hexgate.platform.agents")
 
@@ -330,6 +335,49 @@ async def get_latest_agent_versions_map(
     return {
         version.agent_id: version for version in (await session.exec(statement)).all()
     }
+
+
+async def latest_manifests(
+    session: AsyncSession, project_id: str, names: list[str] | None = None
+) -> "dict[str, SdkAgentManifest]":
+    """Each agent's latest registered manifest, keyed by agent name — the named
+    agents, or every agent in the project when ``names`` is ``None``.
+
+    Built as the SDK's ``AgentManifest``, not the platform's mirror in
+    ``schemas``: the policy checks (``analyze_policy``) are written against the SDK
+    model, and the two are kept by hand and already differ.
+
+    An agent that never registered (or whose version row has no manifest) is
+    omitted, so its manifest-dependent policy checks are skipped. So is one whose
+    stored manifest no longer fits the current schema (a registration older than
+    a schema change): it is logged, and one stale row must not fail the caller's
+    whole project."""
+    if names is not None and not names:
+        return {}
+    from hexgate.manifest.models import AgentManifest as SdkAgentManifest
+
+    stmt = select(Agent.id, Agent.name).where(Agent.project_id == project_id)
+    if names is not None:
+        stmt = stmt.where(Agent.name.in_(names))  # type: ignore[attr-defined]
+    name_by_id = dict((await session.exec(stmt)).all())
+    versions = await get_latest_agent_versions_map(session, list(name_by_id))
+
+    manifests: dict[str, SdkAgentManifest] = {}
+    for agent_id, version in versions.items():
+        name, manifest = name_by_id[agent_id], version.manifest
+        if not manifest:
+            continue
+        try:
+            manifests[name] = SdkAgentManifest.model_validate(manifest)
+        except ValidationError as exc:
+            logger.warning(
+                "agent %r in project %s has a stored manifest that no longer "
+                "validates; skipping its manifest checks: %s",
+                name,
+                project_id,
+                exc,
+            )
+    return manifests
 
 
 async def update_agent(

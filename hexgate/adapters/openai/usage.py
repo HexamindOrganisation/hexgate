@@ -49,6 +49,7 @@ from hexgate.adapters.openai.messages import (
     text_part,
 )
 from hexgate.runtime.run_facts import get_run_facts
+from hexgate.security.naming import canonical_agent_name
 from hexgate.tracing.messages import (
     MessageCursor,
     emit_llm_messages,
@@ -181,7 +182,7 @@ class HexgateUsageHooks(RunHooks):
     ) -> None:
         model = _resolve_model(agent, self._run_config)
         emit_llm_usage(
-            agent.name,
+            canonical_agent_name(agent),
             model,
             response.usage.input_tokens,
             response.usage.output_tokens,
@@ -221,7 +222,7 @@ class HexgateUsageHooks(RunHooks):
             return
         messages, seq, resynced = self._delta(key, new_input)
         emit_llm_messages(
-            agent.name,
+            canonical_agent_name(agent),
             model,
             messages,
             output,
