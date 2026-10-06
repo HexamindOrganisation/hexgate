@@ -5,7 +5,8 @@
 with the CLI's input checks. On an opt-in gate the policy never declares, it
 follows the runtime where `test` would deny: an admission or handoff call is
 allowed, and an agent-as-tool or skill call is refused as a case error, since
-the runtime decides it under the tool's own name.
+the runtime decides it under the tool's own name. A declared gate is sent the
+args it sends at runtime, so a case giving its own is refused.
 """
 
 from __future__ import annotations
@@ -85,7 +86,8 @@ RANK = {
 
 
 class CaseError(ValueError):
-    """A case's call can't be dry-run: an undefined role, bad attributes or run facts."""
+    """A case's call can't be dry-run: an undefined role, bad attributes or run facts,
+    or args on an agent-gate call."""
 
 
 _ATTRIBUTES = TypeAdapter(dict[str, ContextAttributeValue])
