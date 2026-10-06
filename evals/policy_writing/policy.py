@@ -5,8 +5,9 @@
 with the CLI's input checks. On an opt-in gate the policy never declares, it
 follows the runtime where `test` would deny: an admission or handoff call is
 allowed, and an agent-as-tool or skill call is refused as a case error, since
-the runtime decides it under the tool's own name. A declared gate is sent the
-args it sends at runtime, so a case giving its own is refused.
+the runtime decides it under the tool's own name. A call on a declared gate is
+dry-run with the args that gate sends at runtime, so a case giving its own is
+refused.
 """
 
 from __future__ import annotations
@@ -147,11 +148,8 @@ def _gate_call(tool: str, agent: str | None) -> tuple[str, dict | None]:
     if is_agent_reach_key(tool):
         kind, _, raw = tool.partition(":")
         via, target = kind.removeprefix("agent."), canonical_name(raw)
-        return agent_target_key(via, target), {
-            "agent": name,
-            "target": target,
-            "via": via,
-        }
+        gate_args = {"agent": name, "target": target, "via": via}
+        return agent_target_key(via, target), gate_args
     return tool, None
 
 
@@ -181,9 +179,9 @@ def decide(policy: Policy, role: str, d: dict) -> Verdict:
         )
     if _passes_unchecked(policy.policy_set, key):
         return Verdict(DecisionOutcome.ALLOW, reason="gate not declared")
+    if gate_args is not None and args:  # inputs the dry-run couldn't use
+        raise CaseError(f"{key}: the gate sends its own args; drop {sorted(args)}")
     if gate_args is not None:
-        if args:  # the case would claim to test inputs the dry-run can't use
-            raise CaseError(f"{key}: the gate sends its own args; drop {sorted(args)}")
         args = gate_args
     return policy.policy_set.evaluate(
         role=role,

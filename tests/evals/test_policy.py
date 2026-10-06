@@ -168,13 +168,18 @@ def test_when_a_gate_call_carries_its_own_args_then_decide_raises(tmp_path) -> N
         decide(policy, "default", {"tool": "agent.run", "args": {"agent": "ops-bot"}})
 
 
-def test_when_an_undeclared_gate_call_carries_args_then_the_gate_rule_wins(
+def test_when_an_undeclared_admission_call_carries_args_then_decide_allows_it(
     tmp_path,
 ) -> None:
-    # Undeclared admission passes; undeclared agent-as-tool reach names the tool.
     policy, _ = effective_policy(make_workspace(tmp_path), AGENT)
     call = {"tool": "agent.run", "args": {"agent": "ops-bot"}}
     assert decide(policy, "default", call).outcome == DecisionOutcome.ALLOW
+
+
+def test_when_an_undeclared_tool_reach_call_carries_args_then_decide_says_undeclared(
+    tmp_path,
+) -> None:
+    policy, _ = effective_policy(make_workspace(tmp_path), AGENT)
     with pytest.raises(CaseError, match="isn't declared"):
         decide(policy, "default", {"tool": "agent.tool:ops-bot", "args": {"x": 1}})
 
