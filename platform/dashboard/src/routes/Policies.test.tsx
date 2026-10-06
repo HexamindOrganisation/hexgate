@@ -121,6 +121,27 @@ describe("PoliciesPage", () => {
     );
   });
 
+  it("still renders the resolved policy when a lint is an error but not a link error", async () => {
+    stubFetch({
+      ...baseRoutes(),
+      [`/v1/projects/${PID}/policy/check`]: {
+        ok: false,
+        lints: [
+          {
+            code: "unknown-guard",
+            severity: "error",
+            message: "policy governs guard 'secret_redacter'",
+          },
+        ],
+      },
+    });
+    renderWithProviders(<PoliciesPage />);
+    await waitFor(() =>
+      expect(screen.getByText("read_ticket")).toBeInTheDocument(),
+    );
+    expect(screen.queryByText(/doesn't compose/)).not.toBeInTheDocument();
+  });
+
   it("opens, switches, and closes editor tabs", async () => {
     renderWithProviders(<PoliciesPage />);
     await waitFor(() => expect(screen.getByText("active")).toBeInTheDocument());

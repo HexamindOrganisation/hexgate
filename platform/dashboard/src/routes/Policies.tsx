@@ -232,7 +232,9 @@ export function PoliciesPage() {
       usePreviewData ? (preview.data?.lints ?? []) : (check.data?.lints ?? []),
     [usePreviewData, preview.data, check.data],
   );
-  const resolves = lints.every((l) => l.severity !== "error");
+  // Only a link error means the policy doesn't compose. Other error-severity
+  // findings (a guard typo) still leave a composed policy to inspect and test.
+  const resolves = lints.every((l) => l.code !== "link-error");
 
   // The agents the Resolved/preview column can inspect: every agent declared in
   // the entry file, plus the "*" generic view. Prefer the entry's unsaved buffer

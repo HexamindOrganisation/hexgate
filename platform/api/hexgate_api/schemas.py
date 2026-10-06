@@ -430,6 +430,10 @@ class PolicyValidationError(BaseModel):
     role: str | None = None
     tool: str | None = None
     line: int | None = None
+    # The SDK finding's severity, when the diagnostic is one (``None`` for a
+    # parse/schema error). A warning can still carry ``error``: an advisory
+    # finding the runtime would stop cold on.
+    severity: str | None = None
     message: str
 
 
@@ -508,6 +512,7 @@ class PolicyLintOut(BaseModel):
     severity: str
     message: str
     source: str | None = None
+    line: int | None = None
     tier: str | None = None
     tool: str | None = None
     role: str | None = None
