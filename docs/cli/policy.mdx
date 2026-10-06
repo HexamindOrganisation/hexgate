@@ -93,6 +93,26 @@ the fallback):
 hexgate policy validate policy.yaml --max-severity warning   # non-zero on either warning
 ```
 
+`validate` also fails when roles set different `guards:` settings, since the
+runtime builds one guard pipeline per agent.
+
+Pass the agent's manifest to check the policy against its code too. At the
+default `--max-severity error`, these fail validate:
+
+- a `guards:` rule naming a guard the agent doesn't declare (`unknown-guard`),
+  or one two of its guards share (`ambiguous-guard`);
+- a rule on a tool or argument the agent doesn't have that leaves the real tool
+  less restricted than intended (`unknown-tool` / `unknown-arg` at `error`).
+
+The rest of the drift is printed but passes: a grant that never fires or an
+argument typo that fails closed is a `warning`, and a deny on a missing tool is
+`info` when the role's default already denies it. Add `--max-severity warning` to fail on the warnings too:
+
+```bash
+hexgate policy validate policy.yaml --manifest manifest.json
+hexgate policy validate policy.yaml --manifest manifest.json --max-severity warning
+```
+
 ## Testing `ctx.*` attribute rules
 
 Constraints can filter on caller attributes via `ctx.*` (see
