@@ -30,6 +30,7 @@ from hexgate.runtime.context import ContextAttributeValue
 
 if TYPE_CHECKING:
     from hexgate.manifest.models import AgentManifest
+    from hexgate.security.analyzer import PolicyLint
 from hexgate.runtime.roles import distinct_roles, resolve_role_set
 from hexgate.runtime.run_facts import KNOWN_RUN_PATHS
 from hexgate.security import (
@@ -154,17 +155,17 @@ def add_parser(subparsers: argparse._SubParsersAction) -> None:
         help="Parse the YAML and check every constraint against the grammar.",
         description=(
             "Runs the same checks the platform's /validate endpoint does, "
-            "but locally — no network needed. Exits 0 on success, 1 on any "
-            "error (with all errors printed)."
+            "but locally — no network needed. Exits 1 on a parse or build "
+            "error, or on a lint at or above --max-severity; 0 otherwise."
         ),
     )
     p_val.add_argument("source", help="Path to the policy.yaml file.")
     p_val.add_argument(
         "--manifest",
         help=(
-            "Path to the agent's manifest JSON. Enables guard lints: a guards: "
-            "rule naming a guard the agent doesn't declare, or a per-tool override "
-            "on a tool the guard isn't scoped to."
+            "Path to the agent's manifest JSON. Enables the manifest lints: a "
+            "guards: rule naming a guard the agent doesn't declare (or declares "
+            "twice), and a tool or argument the agent doesn't have."
         ),
     )
     p_val.add_argument(
@@ -496,11 +497,13 @@ def _load_manifest(path: str) -> "tuple[AgentManifest | None, str | None]":
 
 
 def _main_validate(args: argparse.Namespace) -> int:
-    """Mirror the platform's /validate endpoint, locally.
+    """Check a single-file policy locally, as ``build`` would compile it.
 
-    With ``--manifest`` it additionally runs the guard lints (:func:`lint_guards`),
-    which the platform endpoint does not yet surface — wiring those into the platform
-    ``/validate`` is a follow-up so the dashboard catches guard typos too.
+    The lints come from :func:`analyze_policy`, the same call the platform's
+    /validate makes (R-POL-003). With ``--manifest`` they include the manifest
+    checks too: unknown guards, and tools or arguments the agent doesn't have.
+    Unlike the platform, the ``--max-severity`` gate decides the exit code, so
+    an ``error`` lint fails validate even where the platform would save.
     """
     source_path = Path(args.source)
     source_text, payload, err = _read_and_parse(source_path)
@@ -542,39 +545,30 @@ def _main_validate(args: argparse.Namespace) -> int:
         print(f"policy build: {exc}", file=sys.stderr)
         return 1
 
-    # Warnings, not errors: a permissive ``default`` is legitimate for a
-    # single-role policy. CI opts in with --max-severity warning.
-    from hexgate.security.analyzer import (
-        SEVERITY_RANK,
-        check_default_role_exposure,
-        lint_guards,
-    )
+    from hexgate.security.analyzer import SEVERITY_RANK, analyze_policy
 
-    lints = check_default_role_exposure(policy_set)
-    # Guard lints need the agent's manifest (declared guard names + reach), so they run
-    # only when --manifest is supplied. This is the only command that lints guards:
-    # they live in a single-file policy, and `policy check` operates on module dirs,
-    # which reject the guards: block outright.
+    manifest = None
     manifest_path = getattr(args, "manifest", None)
     if manifest_path:
         manifest, mf_err = _load_manifest(manifest_path)
         if mf_err is not None:
             print(mf_err, file=sys.stderr)
             return 1
-        lints = lints + lint_guards(policy_set, manifest, source=str(source_path))
+    lints = analyze_policy(policy_set, manifest=manifest, source=str(source_path))
     for lint in lints:
-        print(f"⚠ {lint.code}: {lint.message}", file=sys.stderr)
+        print(_format_lint(lint), file=sys.stderr)
 
-    # Same fold as ``policy check``: the worst lint decides, so a future
-    # ``error``-severity lint gates at the default threshold instead of
-    # slipping through a comparison against a hardcoded "warning".
+    # Each lint's own severity decides, so an ``error``-severity lint gates at
+    # the default threshold instead of slipping through a comparison against
+    # a hardcoded "warning".
     severity = getattr(args, "max_severity", _DEFAULT_MAX_SEVERITY)
     threshold = SEVERITY_RANK[severity]
-    if lints and min(SEVERITY_RANK[lint.severity] for lint in lints) <= threshold:
+    gating = sum(1 for lint in lints if SEVERITY_RANK[lint.severity] <= threshold)
+    if gating:
         # Below the gate on purpose: stdout must not claim a clean policy on a
         # run that exits non-zero.
         print(
-            f"✗ Policy parses, but {len(lints)} lint(s) are at or above "
+            f"✗ Policy parses, but {gating} lint(s) are at or above "
             f"--max-severity {severity}.",
             file=sys.stderr,
         )
@@ -582,6 +576,17 @@ def _main_validate(args: argparse.Namespace) -> int:
 
     print("✓ Policy parses cleanly.")
     return 0
+
+
+_SEVERITY_ICON = {"error": "✗", "warning": "!", "info": "·"}
+
+
+def _format_lint(lint: PolicyLint) -> str:
+    """One lint as ``validate`` and ``check`` print it: a per-severity icon, so a
+    run that mixes severities shows which lints would fail the gate."""
+    where = f" ({lint.source})" if lint.source else ""
+    role = f" [{lint.role}]" if lint.role else ""
+    return f"{_SEVERITY_ICON[lint.severity]} [{lint.code}]{role} {lint.message}{where}"
 
 
 def _iter_raw_constraints(payload: dict) -> "list[tuple[str, str, str]]":
@@ -842,13 +847,8 @@ def _main_check(args: argparse.Namespace) -> int:
         _drift_hint()
         return 0
 
-    icon = {"error": "✗", "warning": "!", "info": "·"}
     for lint in lints:
-        where = f" ({lint.source})" if lint.source else ""
-        role = f" [{lint.role}]" if lint.role else ""
-        print(
-            f"{icon.get(lint.severity, '·')} [{lint.code}]{role} {lint.message}{where}"
-        )
+        print(_format_lint(lint))
     _drift_hint()
 
     threshold = SEVERITY_RANK[args.max_severity]
