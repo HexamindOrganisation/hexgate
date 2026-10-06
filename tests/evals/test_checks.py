@@ -95,24 +95,46 @@ def test_name_checks_happy_path(tmp_path) -> None:
     ]
 
 
-def test_when_a_module_tree_lowers_agent_keys_then_name_checks_accept_them(
+def test_when_a_module_tree_lowers_agent_and_skill_keys_then_name_checks_accept_them(
     tmp_path,
 ) -> None:
-    # Resolving a module tree lowers admission and reach into `agent.*` tools.
+    # Resolving a module tree lowers admission, reach and skills into `tools`.
     roles = "  default: [read_only]\n  billing: [read_only, reach]\n"
     ws = make_modules_workspace(tmp_path, roles)
     (ws / "policies" / "capabilities" / "reach.yaml").write_text(
         'admission: { mode: allow, constraints: ["args.agent == \\"shop-bot\\""] }\n'
         "agents:\n  ops-bot: { mode: allow }\n"
+        "skills:\n  pdf: { mode: allow, via: [script], constraints:"
+        ' ["args.script_args == \\"x\\""] }\n'
     )
     policy, problems = effective_policy(ws, AGENT)
     assert problems == []
-    assert "agent.run" in policy.policy_set.policy_for("billing").tools
+    assert {"agent.run", "skill.script:pdf"} <= set(
+        policy.policy_set.policy_for("billing").tools
+    )
     before = snapshot(ws)
     checks = name_checks(policy, ws, before, before)
     assert [(c.name, c.passed, c.detail) for c in checks] == [
         (n, True, "") for n in NAME_CHECKS
     ]
+
+
+def test_when_a_module_tree_grants_an_invented_skill_then_name_checks_flag_it(
+    tmp_path,
+) -> None:
+    roles = "  default: [read_only]\n  billing: [read_only, sk]\n"
+    ws = make_modules_workspace(tmp_path, roles)
+    (ws / "policies" / "capabilities" / "sk.yaml").write_text(
+        "skills:\n  pdff: { mode: allow, via: [resource] }\n"
+    )
+    policy, problems = effective_policy(ws, AGENT)
+    assert problems == []
+    before = snapshot(ws)
+    checks = name_checks(policy, ws, before, before)
+    assert (checks[0].passed, checks[0].detail) == (
+        False,
+        "not in shop-bot's manifest: ['skill:pdff']",
+    )
 
 
 def test_when_the_policy_invents_names_then_both_name_checks_fail(tmp_path) -> None:
