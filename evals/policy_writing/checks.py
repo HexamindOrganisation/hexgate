@@ -12,6 +12,8 @@ from __future__ import annotations
 import functools
 import hashlib
 import json
+import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -42,14 +44,19 @@ def snapshot(root: Path) -> dict[str, str]:
     `no_changes` case.
     """
     files = {}
-    for p in root.rglob("*"):
-        rel = p.relative_to(root)
-        if p.is_file() and not any(part.startswith(".") for part in rel.parts):
-            files[rel.as_posix()] = hashlib.sha256(p.read_bytes()).hexdigest()
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if not d.startswith(".")]  # never entered
+        for name in filenames:
+            if not name.startswith("."):
+                path = Path(dirpath, name)
+                rel = path.relative_to(root).as_posix()
+                files[rel] = hashlib.sha256(path.read_bytes()).hexdigest()
     return files
 
 
-def decision_checks(policy: Policy | None, decisions: list[dict]) -> list[Check]:
+def decision_checks(
+    policy: Policy | None, decisions: list[dict], agent: str | None = None
+) -> list[Check]:
     """One check per (decision, role): the dry-run gives an expected outcome."""
     checks = []
     for d in decisions:
@@ -63,7 +70,7 @@ def decision_checks(policy: Policy | None, decisions: list[dict]) -> list[Check]
                 checks.append(Check(name, False, "policy invalid"))
                 continue
             try:
-                verdict = decide(policy, role, d)
+                verdict = decide(policy, role, d, agent=agent)
             except CaseError as exc:
                 checks.append(Check(name, False, f"can't dry-run: {exc}"))
                 continue
@@ -93,7 +100,9 @@ def _call_label(role: str, d: dict) -> str:
     return label
 
 
-def superset_checks(policy: Policy | None, supersets: list[dict]) -> list[Check]:
+def superset_checks(
+    policy: Policy | None, supersets: list[dict], agent: str | None = None
+) -> list[Check]:
     """Everything `narrower` may do, `wider` may do at least as freely."""
     checks = []
     for s in supersets:
@@ -104,8 +113,8 @@ def superset_checks(policy: Policy | None, supersets: list[dict]) -> list[Check]
         worse = []
         for p in s["probes"]:
             try:
-                lo = decide(policy, s["narrower"], p).outcome
-                hi = decide(policy, s["wider"], p).outcome
+                lo = decide(policy, s["narrower"], p, agent=agent).outcome
+                hi = decide(policy, s["wider"], p, agent=agent).outcome
             except CaseError as exc:  # e.g. a missing role: the probe fails
                 worse.append(f"{p['tool']}: can't dry-run: {exc}")
                 continue
@@ -138,16 +147,21 @@ def file_checks(
     return checks
 
 
+def _mentions(answer: str, word: str) -> bool:
+    """`word` as a whole word or phrase: "no" doesn't match "know"."""
+    pattern = rf"(?<!\w){re.escape(word)}(?!\w)"
+    return re.search(pattern, answer, re.IGNORECASE) is not None
+
+
 def answer_checks(expect: dict, answer: str) -> list[Check]:
-    """`mentions_any` and `mentions_all`, case-insensitive, on the final answer."""
-    text = answer.lower()
+    """`mentions_any` and `mentions_all`, case-insensitive whole words, on the answer."""
     checks = []
     if words := expect.get("mentions_any"):
-        hit = [w for w in words if w.lower() in text]
+        hit = [w for w in words if _mentions(answer, w)]
         detail = f"found {hit}" if hit else f"none of {words}"
         checks.append(Check("answer mentions one of", bool(hit), detail))
     if words := expect.get("mentions_all"):
-        missing = [w for w in words if w.lower() not in text]
+        missing = [w for w in words if not _mentions(answer, w)]
         detail = f"missing {missing}" if missing else ""
         checks.append(Check("answer mentions all of", not missing, detail))
     return checks
@@ -159,12 +173,12 @@ def score(case: dict, ws: Path, before: dict[str, str], answer: str) -> list[Che
     well-formed. `before` is the starting project's `snapshot`."""
     expect = case.get("expect", {})
     policy, problems = effective_policy(ws, case["agent"])
-    valid = Check("valid", not problems, "\n".join(problems)[-800:])
+    valid = Check("valid", not problems, "\n".join(problems)[:800])
     after = snapshot(ws)
     return [
         valid,
-        *decision_checks(policy, expect.get("decisions", [])),
-        *superset_checks(policy, expect.get("superset", [])),
+        *decision_checks(policy, expect.get("decisions", []), case["agent"]),
+        *superset_checks(policy, expect.get("superset", []), case["agent"]),
         *file_checks(expect, before, after),
         *answer_checks(expect, answer),
     ]

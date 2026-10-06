@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
+from typing import get_args
 
 import yaml
 from pydantic import TypeAdapter, ValidationError
@@ -41,11 +42,14 @@ from hexgate.security.constraints import ConstraintParseError
 from hexgate.security.decision import Verdict
 from hexgate.security.models import (
     AGENT_RUN_TOOL,
+    AgentVia,
     PolicyMode,
+    agent_target_key,
     is_agent_via_key,
     is_skill_key,
 )
 from hexgate.security.modules import DEFAULT_AGENT
+from hexgate.security.naming import canonical_name
 from hexgate.security.testing import run_namespace
 
 # Everything the SDK raises for a policy it can't load, compile or link.
@@ -125,10 +129,33 @@ def _as_json(value: dict) -> dict:
     return json.loads(json.dumps(value, default=str))
 
 
-def decide(policy: Policy, role: str, d: dict) -> Verdict:
+def _gate_call(tool: str, args: dict, agent: str | None) -> tuple[str, dict]:
+    """The key and args an agent gate sends at runtime; other calls unchanged.
+
+    The gates ignore a call's own args: admission sends `{agent}` and reach sends
+    `{agent, target, via}`, with the target trimmed as the key is
+    (`AgentGate._decide`, `ReachGate._decide`).
+    """
+    name = canonical_name(agent)
+    if tool == AGENT_RUN_TOOL:
+        return tool, {"agent": name}
+    for via in get_args(AgentVia):
+        if is_agent_via_key(tool, via):
+            target = canonical_name(tool.split(":", 1)[1])
+            return agent_target_key(via, target), {
+                "agent": name,
+                "target": target,
+                "via": via,
+            }
+    return tool, args
+
+
+def decide(policy: Policy, role: str, d: dict, *, agent: str | None = None) -> Verdict:
     """Dry-run one call, with the same inputs as `hexgate policy test`.
 
-    Raises `CaseError` where the CLI would refuse the call. An undefined role is
+    `agent` is the agent running the call, which an agent gate sends as
+    `args.agent`. Raises `CaseError` where the CLI would refuse the call. An
+    undefined role is
     one, rather than the `default` fallback: a case naming a role the policy
     lacks fails instead of passing by luck.
     """
@@ -137,7 +164,7 @@ def decide(policy: Policy, role: str, d: dict) -> Verdict:
     try:
         attributes = _ATTRIBUTES.validate_python(_as_json(d.get("attributes", {})))
         # Over a zeroed run, so an unset `run.*` path reads 0, not missing.
-        run = run_namespace(d["tool"], **d.get("run_facts", {}))
+        run = run_namespace(d["tool"], **_as_json(d.get("run_facts", {})))
     except (ValidationError, ValueError) as exc:
         raise CaseError(str(exc)) from exc
     if gate := _undeclared_by_name(policy.policy_set, d["tool"]):
@@ -147,10 +174,11 @@ def decide(policy: Policy, role: str, d: dict) -> Verdict:
         )
     if _passes_unchecked(policy.policy_set, d["tool"]):
         return Verdict(DecisionOutcome.ALLOW, reason="gate not declared")
+    tool, args = _gate_call(d["tool"], _as_json(d.get("args", {})), agent)
     return policy.policy_set.evaluate(
         role=role,
-        tool=d["tool"],
-        args=_as_json(d.get("args", {})),
+        tool=tool,
+        args=args,
         attributes=attributes,
         run=run,
     )
