@@ -40,6 +40,7 @@ from hexgate_api.jobs.enricher.enforcement import (
 )
 from hexgate_api.query_scope import EventOutOfWindow, validate_event_window
 from hexgate_api.schemas import (
+    AgentRunEvent,
     BanEnforcementEvent,
     DecisionEvent,
     LlmInvocationEvent,
@@ -59,9 +60,16 @@ KNOWN_SCOPES = (
     semconv.SCOPE_USAGE,
     semconv.SCOPE_BANS,
     semconv.SCOPE_MESSAGES,
+    semconv.SCOPE_RUNS,
 )
 
-Event = DecisionEvent | LlmInvocationEvent | BanEnforcementEvent | LlmMessageEvent
+Event = (
+    DecisionEvent
+    | LlmInvocationEvent
+    | BanEnforcementEvent
+    | LlmMessageEvent
+    | AgentRunEvent
+)
 
 
 def _envelope(
@@ -238,6 +246,11 @@ def _message_fields(attrs: dict[str, Any], scope: str) -> dict[str, Any]:
     }
 
 
+def _run_start_fields(attrs: dict[str, Any], scope: str) -> dict[str, Any]:
+    # Required here, unlike _run_fields: a run-start span outside a run is malformed.
+    return {"run_id": as_str(required(attrs, semconv.RUN_ID, scope=scope))}
+
+
 def _ban_fields(attrs: dict[str, Any], scope: str) -> dict[str, Any]:
     return {
         "ban_type": as_str(required(attrs, semconv.BAN_TYPE, scope=scope)),
@@ -265,6 +278,9 @@ def map_span(scope_name: str, span: Span, resource_attrs: dict[str, Any]) -> Eve
     elif scope_name == semconv.SCOPE_MESSAGES:
         model = LlmMessageEvent
         payload |= _message_fields(attrs, scope_name)
+    elif scope_name == semconv.SCOPE_RUNS:
+        model = AgentRunEvent
+        payload |= _run_start_fields(attrs, scope_name)
     else:
         model = BanEnforcementEvent
         payload |= _ban_fields(attrs, scope_name)

@@ -13,6 +13,8 @@ from google.genai import types
 from hexgate.adapters.google import usage as usage_mod
 from hexgate.adapters.google.usage import HexgateUsagePlugin
 
+_CANONICAL_NAME = "billing"
+
 
 def _context(agent_name: str = "my-agent", invocation_id: str = "e-1") -> Any:
     """Minimal duck-typed stand-in for CallbackContext — the hooks only read
@@ -550,3 +552,26 @@ async def test_when_a_run_ends_then_every_agent_list_is_dropped(
 
     assert plugin._pending == {}
     assert plugin._cursor._turns == {}
+
+
+@pytest.mark.asyncio
+async def test_a_padded_agent_name_is_emitted_canonical(
+    emitted: list[dict[str, Any]], messages: list[dict[str, Any]]
+) -> None:
+    """Usage and messages key the agent like its decisions and its agent_run
+    row, so a per-agent read doesn't split one agent into two."""
+    plugin = HexgateUsagePlugin(api_key="k")
+
+    await _turn(
+        plugin,
+        _context(agent_name=f"  {_CANONICAL_NAME}  "),
+        _request([_user("hi")]),
+        _model_response(
+            usage_metadata=types.GenerateContentResponseUsageMetadata(
+                prompt_token_count=1, candidates_token_count=2
+            )
+        ),
+    )
+
+    assert [call["agent_name"] for call in emitted] == [_CANONICAL_NAME]
+    assert [call["agent_name"] for call in messages] == [_CANONICAL_NAME]

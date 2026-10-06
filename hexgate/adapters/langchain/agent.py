@@ -82,7 +82,9 @@ class HexgateLangchainAgent:
         this ``finally`` inside an async generator, which an early ``break``
         leaves to be finalized in a different ``Context`` (see :meth:`end_run`).
         """
-        async with abind(context, self._agent_name, self._tag(method)):
+        async with abind(
+            context, self._agent_name, self._tag(method), api_key=self._api_key
+        ):
             turn_key = self._usage_handler.turn_key()
             try:
                 yield
@@ -92,7 +94,7 @@ class HexgateLangchainAgent:
     @contextmanager
     def _bind(self, context: HexgateContext, method: str) -> Iterator[None]:
         """Sync mirror of :meth:`_abind`."""
-        with bind(context, self._agent_name, self._tag(method)):
+        with bind(context, self._agent_name, self._tag(method), api_key=self._api_key):
             turn_key = self._usage_handler.turn_key()
             try:
                 yield

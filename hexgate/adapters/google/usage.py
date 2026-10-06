@@ -44,6 +44,7 @@ from hexgate.adapters.google.messages import (
     output_messages,
     system_parts,
 )
+from hexgate.security.naming import canonical_name
 from hexgate.tracing.messages import (
     MessageCursor,
     emit_llm_messages,
@@ -146,7 +147,7 @@ class HexgateUsagePlugin(BasePlugin):
         if completed and prompt is not _NO_PROMPT:
             if usage is not None:
                 emit_llm_usage(
-                    callback_context.agent_name,
+                    canonical_name(callback_context.agent_name),
                     model,
                     usage.prompt_token_count or 0,
                     usage.candidates_token_count or 0,
@@ -201,7 +202,7 @@ class HexgateUsagePlugin(BasePlugin):
             return
         delta = self._cursor.advance(key, new_input)
         emit_llm_messages(
-            callback_context.agent_name,
+            canonical_name(callback_context.agent_name),
             model,
             delta.messages,
             output,

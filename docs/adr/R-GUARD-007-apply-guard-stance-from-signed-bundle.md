@@ -97,8 +97,9 @@ nobody made.
 - Authoring lints (a guard rule matching no declared guard, a redundant override) land
   in PR4 as the ergonomic ahead of the construction stop-cold and the live no-op.
 - A divergent guard stance MUST surface at policy save/validate as a 422, not be swallowed.
-  `guard_stance()` is lazy on the `PolicySet`, so the single-document save/validate route
-  forces it in `_load_document` — before any compile — so a divergent baseline is rejected
+  `guard_stance()` is lazy on the `PolicySet`, so `analyze_policy` forces it and reports a
+  `guard-divergence` lint, which the single-document save/validate route treats as blocking
+  (`_BLOCKING_FINDINGS`) — before any compile — so a divergent baseline is rejected
   rather than stored to crash the SDK later. The modular path needs no equivalent gate: a
   `guards:` block is not module-composable (rejected at link), so a resolved modular policy
   never carries a stance to diverge. `compile_bundle` itself MUST still degrade a

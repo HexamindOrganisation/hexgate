@@ -19,6 +19,7 @@ from hexgate_api.jobs.enricher.mapping import (
 )
 from hexgate_api.schemas import (
     UINT32_MAX,
+    AgentRunEvent,
     BanEnforcementEvent,
     DecisionEvent,
     LlmInvocationEvent,
@@ -29,6 +30,7 @@ from tests.jobs.enricher.conftest import (
     decision_attrs,
     make_span,
     message_attrs,
+    run_attrs,
     usage_attrs,
 )
 
@@ -436,3 +438,50 @@ def test_when_message_seq_exceeds_uint32_then_validation_fails() -> None:
     attrs = message_attrs(**{semconv.MESSAGE_SEQ: UINT32_MAX + 1})
     with pytest.raises(ValueError):
         _message_event(attrs)
+
+
+# --- Agent runs -----------------------------------------------------------------
+
+
+def test_when_scope_is_runs_then_map_span_builds_an_agent_run_event() -> None:
+    """Its own branch, not the bans fall-through: there it would be rejected
+    for a missing ban_type."""
+    assert semconv.SCOPE_RUNS in KNOWN_SCOPES
+    attrs = run_attrs(**{semconv.SESSION_ID: "sess_1", semconv.USER_ID: "user_1"})
+
+    event = map_span(semconv.SCOPE_RUNS, make_span(attrs), {})
+
+    assert isinstance(event, AgentRunEvent)
+    assert str(event.event_id) == attrs[semconv.EVENT_ID]
+    assert str(event.run_id) == attrs[semconv.RUN_ID]
+    assert (event.session_id, event.user_id) == ("sess_1", "user_1")
+
+
+def test_when_a_run_span_has_no_run_id_then_span_rejected() -> None:
+    attrs = run_attrs()
+    del attrs[semconv.RUN_ID]
+    with pytest.raises(SpanRejected) as exc:
+        map_span(semconv.SCOPE_RUNS, make_span(attrs), {})
+    assert exc.value.error_class == "validation"
+    assert exc.value.scope == semconv.SCOPE_RUNS
+
+
+def test_when_a_run_span_run_id_is_not_a_uuid_then_span_rejected() -> None:
+    attrs = run_attrs(**{semconv.RUN_ID: "not-a-uuid"})
+    with pytest.raises(SpanRejected) as exc:
+        map_span(semconv.SCOPE_RUNS, make_span(attrs), {})
+    assert exc.value.error_class == "validation"
+
+
+def test_sdk_run_start_span_validates() -> None:
+    """The SDK's own event, not a hand-built dict, so the two sides can't drift."""
+    from hexgate.tracing.runs import RunStartEvent
+
+    run_id = str(uuid.uuid4())
+    sdk_event = RunStartEvent(agent_name="a", run_id=run_id, user_id="u")
+
+    event = map_span(semconv.SCOPE_RUNS, make_span(sdk_event.span_attributes()), {})
+
+    assert isinstance(event, AgentRunEvent)
+    assert event.event_id == sdk_event.event_id
+    assert str(event.run_id) == run_id
