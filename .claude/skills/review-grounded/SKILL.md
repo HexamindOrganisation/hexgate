@@ -138,7 +138,20 @@ behaves unlike your mental model.
    `info` / `warning` / `error` lints; its printer, written for warnings only,
    showed all three as `⚠`, and its failure line counted every lint, not the
    ones at the gate. A lens ran the CLI on exactly that input and checked only
-   the exit code.)
+   the exit code.) Count what it prints too: a check placed inside a per-role or
+   per-item loop repeats once per iteration when its result does not depend on
+   the loop variable. (On PR #321 a role-independent lint ran inside the
+   per-role pass and `policy check` printed and counted one error three times.)
+9. **Input producers** — when the diff judges something against a reference
+   set it treats as complete (a manifest's tools, skills or guards, a config
+   list, a registry), read the code that **produces** that set — builders,
+   validators, caps, dedupes — and list where it is lossy: `None` meaning both
+   "none" and "unknown", a list truncated at a cap, entries merged away. Each
+   lossy case is a false positive or negative the diff ships. (On PR #321
+   `unknown-skill` read `manifest.skills or []`; the builders write
+   `skills or None` when a listing fails and cut the list at `MAX_SKILLS`, so a
+   correct policy failed CI. Every lens varied `None` vs `[]` at the consumer;
+   none read the producer.)
 
 ## 4. The example gate
 
@@ -162,7 +175,10 @@ a candidate, never a finding; a past review comment that applied to an earlier
 PR is a candidate here, not a standing ruling. Write the examples as each
 subagent's list arrives — if a list is longer than three, write the example for
 each item before reading the next list. Aggregating first and gating later is
-how twelve findings get reported.
+how twelve findings get reported. A lens's "minor", "residual" or "not counting
+this as a finding" notes are candidates like any other and get their own
+example: on PR #321 two of the five findings a human later raised sat in lens
+reports under exactly those labels.
 
 A finding whose Notice is "a reader" — a stale comment, a wrong line number, a
 misnamed function in a docstring, a commit-message format — has no Break in the
@@ -189,7 +205,10 @@ Then drop the finding if the example needs any of these to be true:
   reacts, and nothing is silently wrong. Loud-and-recoverable is not a finding;
   say what it costs (a retry, a re-run, five minutes) and drop it. What survives
   this filter is the silent break: the one where the operation reports success
-  and the wrong thing is true afterwards.
+  and the wrong thing is true afterwards. Loud only drops a finding when the
+  reaction fixes something real: a check that rejects **correct** input (CI
+  failing on a policy that is right) is loud and still a finding, because the
+  only reaction it leaves is disabling the check or making the input worse.
 - **A value nothing reads.** Before reporting a wrong or missing write, find
   the read: a wire schema, a screen, a query, a branch. If no code path
   consumes the value, a regression in it is invisible and harmless. This kills
@@ -206,6 +225,25 @@ Then drop the finding if the example needs any of these to be true:
   emitter are deliberate here; the future caller is a different PR's problem.
 - **Nothing at all.** If no example can be written, the finding is a theory.
   Drop it.
+
+**Every drop line states its premise, with evidence.** The premise is the fact
+the drop rests on ("severity is warning", "same as `_drift`", "no author writes
+this"); cite the `file:line` that shows it. Three shapes need more than a
+sentence:
+
+- **"Same as <sibling>"** — name the sibling's `file:line` and the axis that
+  makes them equivalent, and read it: the sibling may do the opposite, or differ
+  on exactly the axis that matters (manifest-gated vs not, per-role vs
+  role-independent).
+- **"Rare input"** — grep the repo's docs, fixtures and examples for the shape
+  before calling it rare.
+- **"Only a warning" / "loud"** — the severity or loudness is a premise a later
+  fix can change; write it down so section 7 can find it.
+
+(On PR #321 four of five human findings had been raised and dropped in review:
+one on a severity a later fix in the same round raised to `error`, one on a
+sibling that was not equivalent, one on a sibling misquoted — it names roles, the
+drop said it didn't — and one as "rare" with nothing checked.)
 
 Two things that are never drop reasons:
 
@@ -376,6 +414,11 @@ round two found four new bugs, each one a check skipped:
 - **Apply it at every sibling path.** A filter added to the resolved pipeline and
   not the module one left the same input judged two ways. List the callers of the
   shared helper and the parallel implementations before calling a fix done.
+
+**Re-gate the drops a fix touched.** A fix can make a dropped finding real:
+after applying fixes, re-read every drop line from this review (and any
+dismissed list the caller keeps) whose premise names what the fix changed — a
+severity, where a check runs, a code path — and run its example again.
 
 Each fix gets a test that **fails with the fix reverted** — revert it, run the
 test, see red. And when the reviews ran in subagents, this section was never in
