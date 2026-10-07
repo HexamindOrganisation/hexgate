@@ -58,9 +58,9 @@ SCALAR_PATHS: Final[frozenset[str]] = frozenset(
 LIST_PATHS: Final[frozenset[str]] = frozenset({"tools_used"})
 KNOWN_RUN_PATHS: Final[frozenset[str]] = SCALAR_PATHS | LIST_PATHS
 
-# Fallback when a wrapped agent has no name. Lives here, below both callers, so a
-# nameless agent's audit events and its run facts agree on the label rather than
-# drifting apart — and so core (``agents.factory``) need not import the adapter layer.
+# Fallback label for a nameless agent wrapped by the LangChain adapter. Must equal
+# ``security.naming.DEFAULT_AGENT_NAME``, which ``agents.factory`` reaches through
+# ``canonical_name``, so a nameless agent gets one label on every path.
 DEFAULT_AGENT_NAME: Final[str] = "default"
 
 # The value shape each path projects, for the helpers that let a caller *supply*
