@@ -43,7 +43,7 @@ class InvalidUsagePaths(ValueError):
     """The ``paths`` query parameter is empty, too long, or has a bad path. -> 422."""
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, order=True)
 class UsageWindowSpec:
     metric: UsageMetric
     window_seconds: int
@@ -68,8 +68,6 @@ def parse_usage_paths(raw: str) -> dict[str, UsageWindowSpec]:
         raise InvalidUsagePaths(
             f"{len(items)} paths requested; at most {MAX_PATHS_PER_REQUEST} allowed"
         )
-    if not all(items):
-        raise InvalidUsagePaths(f"empty path in {raw!r}: expected {USAGE_PATH_GRAMMAR}")
     return {item: parse_usage_path(item) for item in items}
 
 

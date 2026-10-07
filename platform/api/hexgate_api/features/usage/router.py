@@ -61,7 +61,7 @@ async def api_get_agent_usage(
             status_code=status.HTTP_404_NOT_FOUND, detail=_AGENT_NOT_FOUND
         )
 
-    specs = sorted(set(requested.values()), key=lambda s: (s.metric, s.window_seconds))
+    specs = sorted(set(requested.values()))
     try:
         readout = await memo.get_or_load(
             (project_id, name, frozenset(specs)),

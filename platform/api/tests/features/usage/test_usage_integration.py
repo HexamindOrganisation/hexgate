@@ -25,10 +25,6 @@ _COLUMNS = [
 _AS_OF_TOLERANCE = timedelta(seconds=30)
 
 
-def _spec(metric: UsageMetric, seconds: int) -> UsageWindowSpec:
-    return UsageWindowSpec(metric, seconds)
-
-
 def _minute(ago: timedelta) -> datetime:
     return (datetime.now(UTC) - ago).replace(second=0, microsecond=0)
 
@@ -47,13 +43,15 @@ def project_id(clickhouse):
         yield pid
     finally:
         clickhouse.command(
-            f"ALTER TABLE {USAGE_MINUTE_TABLE} DELETE WHERE project_id = {{pid:String}}",
+            f"ALTER TABLE {USAGE_MINUTE_TABLE} "
+            "DELETE WHERE startsWith(project_id, {pid:String})",
             parameters={"pid": pid},
         )
 
 
 @pytest.mark.integration
 def test_windows_sum_the_agent_rows_inside_them(clickhouse, project_id: str) -> None:
+    # Shares the fixture's prefix, so its cleanup covers this project too.
     other_project = f"{project_id}_other"
     rows = [
         [project_id, "a", _minute(timedelta(minutes=2)), 1, 10, 20],
@@ -67,19 +65,13 @@ def test_windows_sum_the_agent_rows_inside_them(clickhouse, project_id: str) -> 
     ]
     clickhouse.insert(USAGE_MINUTE_TABLE, rows, column_names=_COLUMNS)
     specs = [
-        _spec(UsageMetric.INVOCATIONS, 300),
-        _spec(UsageMetric.INVOCATIONS, 3_600),
-        _spec(UsageMetric.INVOCATIONS, 86_400),
-        _spec(UsageMetric.INVOCATIONS, 7 * 86_400),
-        _spec(UsageMetric.TOTAL_TOKENS, 86_400),
+        UsageWindowSpec(UsageMetric.INVOCATIONS, 300),
+        UsageWindowSpec(UsageMetric.INVOCATIONS, 3_600),
+        UsageWindowSpec(UsageMetric.INVOCATIONS, 86_400),
+        UsageWindowSpec(UsageMetric.INVOCATIONS, 7 * 86_400),
+        UsageWindowSpec(UsageMetric.TOTAL_TOKENS, 86_400),
     ]
-    try:
-        readout = read_usage(clickhouse, project_id, "a", specs)
-    finally:
-        clickhouse.command(
-            f"ALTER TABLE {USAGE_MINUTE_TABLE} DELETE WHERE project_id = {{pid:String}}",
-            parameters={"pid": other_project},
-        )
+    readout = read_usage(clickhouse, project_id, "a", specs)
 
     assert [readout.values[s] for s in specs] == [3, 7, 15, 31, 330]
     assert readout.as_of.tzinfo is not None
@@ -88,7 +80,10 @@ def test_windows_sum_the_agent_rows_inside_them(clickhouse, project_id: str) -> 
 
 @pytest.mark.integration
 def test_an_agent_with_no_rows_reads_zeros(clickhouse, project_id: str) -> None:
-    specs = [_spec(UsageMetric.TOOL_CALLS, 3_600), _spec(UsageMetric.LLM_CALLS, 300)]
+    specs = [
+        UsageWindowSpec(UsageMetric.TOOL_CALLS, 3_600),
+        UsageWindowSpec(UsageMetric.LLM_CALLS, 300),
+    ]
 
     readout = read_usage(clickhouse, project_id, "nobody", specs)
 
@@ -106,7 +101,7 @@ def test_the_leading_partial_minute_is_in_the_window(
     )
 
     readout = read_usage(
-        clickhouse, project_id, "a", [_spec(UsageMetric.INVOCATIONS, 300)]
+        clickhouse, project_id, "a", [UsageWindowSpec(UsageMetric.INVOCATIONS, 300)]
     )
 
     assert list(readout.values.values()) == [1]

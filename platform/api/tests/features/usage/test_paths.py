@@ -75,7 +75,7 @@ def test_a_bad_path_is_rejected_with_the_grammar(path: str) -> None:
 
 @pytest.mark.parametrize("raw", ["", "invocations_1h,,denials_1h", "invocations_1h,"])
 def test_an_empty_item_is_rejected(raw: str) -> None:
-    with pytest.raises(InvalidUsagePaths, match="empty path"):
+    with pytest.raises(InvalidUsagePaths, match="expected"):
         parse_usage_paths(raw)
 
 
