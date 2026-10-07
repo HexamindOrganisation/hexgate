@@ -9,8 +9,9 @@ a module). This module runs over a **successfully linked** bundle and reports th
   grant never fires.
 - **redundant-grant** — two capabilities grant the same tool identically.
 - **unknown-tool** / **unknown-arg** — a rule references a tool or arg absent from
-  the agent's manifest (drift between policy and code). Only checked when a
-  manifest is supplied. Severity follows the failure direction: drift that
+  the agent's manifest (drift between policy and code), or an admission, reach or
+  skill rule reads an arg its gate doesn't pass. Only checked when a manifest is
+  supplied. Severity follows the failure direction: drift that
   leaves the real tool looser than intended (fail-open) is an error, see
   :func:`_drift` and :func:`_resolved_drift`.
 - **permissive-default** — the ``default`` role grants something no named role
@@ -21,6 +22,11 @@ a module). This module runs over a **successfully linked** bundle and reports th
   module pipeline (guards live in a single-file policy; modules reject the block).
 - **guard-divergence** — roles resolve to different guard settings, which the
   agent-level guard stance cannot represent.
+- **unknown-skill** — a ``skills:`` rule names a skill the manifest doesn't
+  declare. Only checked when a manifest is supplied and lists the skills.
+- **unknown-root** — a constraint path that no call ever sets: its root isn't
+  ``args`` / ``ctx`` / ``run``, or it dots into the ``role`` / ``tool`` string.
+  Manifest-free.
 
 :func:`analyze_policy` is the one entry point over a resolved ``PolicySet``: every
 check that applies to it, with the manifest-dependent ones gated on a manifest.
@@ -33,11 +39,13 @@ always-false, subsumption.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Collection, Iterable, Iterator, Mapping
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Literal
 
 from hexgate.security.constraints import (
+    FACTS,
+    PATH_ROOTS,
     ConstraintParseError,
     iter_arg_refs_negated,
     parse_constraint,
@@ -48,10 +56,13 @@ from hexgate.security.linker import (
     resolve_role_map,
 )
 from hexgate.security.models import (
+    AgentPolicy,
     BaseToolPolicy,
     FileToolPolicy,
     ToolPolicy,
+    gate_args,
     is_reserved_key,
+    is_skill_key,
 )
 from hexgate.security.modules import (
     DEFAULT_AGENT,
@@ -63,6 +74,7 @@ from hexgate.security.modules import (
     ProjectLinkResult,
     RoleMatrix,
 )
+from hexgate.security.naming import canonical_skill_name
 from hexgate.security.network import EGRESS_TOOL_ARGS
 from hexgate.security.policy_set import DEFAULT_ROLE_NAME, PolicySet, PolicySetError
 
@@ -82,6 +94,8 @@ LintCode = Literal[
     "redundant-grant",
     "unknown-arg",
     "unknown-guard",
+    "unknown-root",
+    "unknown-skill",
     "unknown-tool",
     "unused-capability",
 ]
@@ -125,7 +139,9 @@ def check(
         result = link_policy_set(boundaries, capabilities)
     except (LinkError, PolicySetError, ConstraintParseError) as exc:
         return [PolicyLint("link-error", "error", str(exc))]
-    return analyze(result, boundaries, capabilities, manifest=manifest)
+    lints = analyze(result, boundaries, capabilities, manifest=manifest)
+    lints += _module_unknown_roots(boundaries, capabilities)
+    return sorted(lints, key=lambda lint: SEVERITY_RANK[lint.severity])
 
 
 def analyze(
@@ -232,6 +248,8 @@ def analyze_project(
         for lint in analyze(role_result, boundaries, caps, manifest=manifest):
             lints.append(replace(lint, role=role))
 
+    # Once per module, not per role: a module's paths don't depend on the role.
+    lints += _module_unknown_roots(boundaries, library)
     lints += _unused_capabilities(library, _all_imported_names(roles, library))
     if roles and DEFAULT_ROLE_NAME not in roles:
         lints.append(
@@ -408,7 +426,7 @@ def _drift(
     capabilities: list[ModuleContent],
     manifest: AgentManifest,
 ) -> list[PolicyLint]:
-    """Rules referencing tools / args the agent's code doesn't have.
+    """Rules referencing tools / args / skills the agent's code doesn't have.
 
     Severity follows the failure direction, not just the tier:
       * boundary allow/approval (a ceiling) naming a missing tool leaves the real
@@ -425,21 +443,28 @@ def _drift(
     this pipeline never sees one.
     """
     tool_props = _tool_props(manifest)
+    skills = _manifest_skills(manifest)
     out: list[PolicyLint] = []
-    tiers: list[tuple[list[ModuleContent], LayerKind]] = [
-        (boundaries, "boundary"),
-        (capabilities, "capability"),
-    ]
-    for modules, tier in tiers:
-        for module in modules:
-            out += _tool_drift(
-                module.policy.tools,
-                tool_props,
-                owner=repr(module.name),
-                source=module.source,
-                tier=tier,
-            )
+    for module, tier in _tiered(boundaries, capabilities):
+        rules = module.policy.effective_tools
+        owner, source = repr(module.name), module.source
+        out += _tool_drift(rules, tool_props, owner=owner, source=source, tier=tier)
+        out += _skill_drift(rules, skills, owner=owner, source=source, tier=tier)
     return out
+
+
+def _tiered(
+    boundaries: list[ModuleContent], capabilities: list[ModuleContent]
+) -> Iterator[tuple[ModuleContent, LayerKind]]:
+    """Each module with its tier, boundaries first."""
+    yield from ((module, "boundary") for module in boundaries)
+    yield from ((module, "capability") for module in capabilities)
+
+
+def _runs_negated(tier: LayerKind | None, mode: str) -> bool:
+    """Whether a module rule's constraints run under ``not``: the linker folds
+    a boundary deny's region into ``not (...)``."""
+    return tier == "boundary" and mode == "deny"
 
 
 def _unknown_tool_severity(tier: LayerKind, mode: str) -> Severity:
@@ -542,13 +567,16 @@ def _tool_drift(
 ) -> list[PolicyLint]:
     """``unknown-tool`` / ``unknown-arg`` for one rule set: a module's (``tier``
     set) or a resolved role's (``default``, its fallback policy, set). ``owner``
-    names what holds the rules in the messages. Lowered agent and skill keys have
-    no argument schema, so they are skipped."""
+    names what holds the rules in the messages. A lowered agent or skill key is
+    never an unknown tool (:func:`_skill_drift` checks the skill name); its args
+    are checked against what its gate passes."""
     out: list[PolicyLint] = []
     for tool, tp in tools.items():
         if is_reserved_key(tool):
-            continue
-        if tool not in tool_props:
+            valid_args = gate_args(tool)
+        elif tool in tool_props:
+            valid_args = tool_props[tool]
+        else:
             severity = (
                 _resolved_unknown_tool_severity(tp, default)
                 if default is not None
@@ -571,9 +599,8 @@ def _tool_drift(
             continue
         if default is not None and tp.mode == "deny":
             continue  # a resolved deny is unconditional: its constraints never run
-        # The linker folds a boundary deny's region into ``not (...)``.
-        negated = tier == "boundary" and tp.mode == "deny"
-        unknown = _unknown_args(tp.constraints, tool_props[tool], negated)
+        negated = _runs_negated(tier, tp.mode)
+        unknown = _unknown_args(tp.constraints, valid_args, negated)
         for arg, severity in unknown.items():
             out.append(
                 PolicyLint(
@@ -590,6 +617,67 @@ def _tool_drift(
                 )
             )
     return out
+
+
+def _manifest_skills(manifest: AgentManifest) -> set[str] | None:
+    """The skills the agent has, named as the skill gate's keys name them, or
+    ``None`` when the manifest doesn't list them all: the builders record
+    ``None`` both for no skills and for a listing that failed, and cut a list
+    at ``MAX_SKILLS``, while the skill gate still runs for every skill."""
+    from hexgate.manifest.models import MAX_SKILLS
+
+    if manifest.skills is None or len(manifest.skills) >= MAX_SKILLS:
+        return None
+    return {canonical_skill_name(s.name) for s in manifest.skills}
+
+
+def _skill_drift(
+    tools: Mapping[str, ToolPolicy],
+    skills: set[str] | None,
+    *,
+    owner: str,
+    source: str | None,
+    tier: LayerKind | None,
+    role: str | None = None,
+) -> list[PolicyLint]:
+    """``unknown-skill`` for each skill the lowered ``skill*:`` keys in ``tools``
+    name that ``skills`` lacks, once per skill over its levels.
+
+    In a resolved role (``tier`` unset) the real skill, unlisted, is denied
+    closed-world either way: a grant never fires (warning), a deny protects
+    nothing (info). A module's is graded like an unknown tool's
+    (:func:`_unknown_tool_severity`): a boundary grant's fence never reaches the
+    real skill, which runs on a capability's grant alone (error)."""
+    if skills is None:
+        return []
+    worst: dict[str, Severity] = {}
+    for key, tp in tools.items():
+        if not is_skill_key(key):
+            continue
+        name = key.partition(":")[2]
+        if name not in skills:
+            _keep_worst(worst, name, _unknown_skill_severity(tier, tp.mode))
+    return [
+        PolicyLint(
+            code="unknown-skill",
+            severity=severity,
+            message=(
+                f"{owner} governs skill {name!r}, which the agent's manifest "
+                "doesn't declare"
+            ),
+            source=source,
+            tier=tier,
+            role=role,
+        )
+        for name, severity in sorted(worst.items())
+    ]
+
+
+def _unknown_skill_severity(tier: LayerKind | None, mode: str) -> Severity:
+    """See :func:`_skill_drift`."""
+    if tier is not None:
+        return _unknown_tool_severity(tier, mode)
+    return "info" if mode == "deny" else "warning"
 
 
 # How far each mode restricts a call, loosest first.
@@ -620,19 +708,37 @@ def _restricts_calls(rule: ToolPolicy) -> bool:
 
 
 def _unknown_args(
-    constraints: list[str], valid_args: set[str], negated: bool
+    constraints: list[str], valid_args: Collection[str], negated: bool
 ) -> dict[str, Severity]:
     """Each ``args.<x>`` the constraints use that isn't in ``valid_args``, with
-    its worst severity over every use.
+    its worst severity over every use (see :func:`_missing_refs`)."""
 
-    A comparison on a missing arg is False. Under an even number of ``not``
+    def unknown(path: tuple[str, ...]) -> str | None:
+        if len(path) < 2 or path[0] != "args" or path[1] in valid_args:
+            return None
+        return path[1]
+
+    return _missing_refs(constraints, negated, unknown)
+
+
+def _missing_refs(
+    constraints: list[str],
+    negated: bool,
+    missing: Callable[[tuple[str, ...]], str | None],
+) -> dict[str, Severity]:
+    """Each field path the constraints use that is never set at runtime, keyed by
+    what ``missing`` names it (``None``: the path is fine), with its worst
+    severity over every use.
+
+    A comparison on a missing field is False. Under an even number of ``not``
     (counting ``negated``, the rule's own) that fails closed (warning); under an
     odd number it is always True, which fails open (error)."""
     out: dict[str, Severity] = {}
     for raw in constraints:
         for path, odd in iter_arg_refs_negated(parse_constraint(raw), negated):
-            if len(path) >= 2 and path[0] == "args" and path[1] not in valid_args:
-                _keep_worst(out, path[1], "error" if odd else "warning")
+            name = missing(path)
+            if name is not None:
+                _keep_worst(out, name, "error" if odd else "warning")
     return out
 
 
@@ -778,10 +884,10 @@ def analyze_policy(
 ) -> list[PolicyLint]:
     """Every check over a resolved policy set, most-severe first.
 
-    Manifest-free: ``guard-divergence`` and the ``default``-role exposure lints.
-    With ``manifest``: ``unknown-guard`` / ``ambiguous-guard`` and the
-    ``unknown-tool`` / ``unknown-arg`` drift. ``source`` attributes the findings
-    to the file the policy came from.
+    Manifest-free: ``guard-divergence``, the ``default``-role exposure lints and
+    ``unknown-root``. With ``manifest``: ``unknown-guard`` / ``ambiguous-guard``
+    and the ``unknown-tool`` / ``unknown-arg`` / ``unknown-skill`` drift.
+    ``source`` attributes the findings to the file the policy came from.
 
     The drift runs on the resolved form, so it suits a single-file policy. A
     module-built one keeps :func:`check` / :func:`check_project`: linking drops a
@@ -790,6 +896,7 @@ def analyze_policy(
     """
     lints = _guard_divergence(policy_set, source=source)
     lints += check_default_role_exposure(policy_set, source=source)
+    lints += _unknown_roots(policy_set, source=source)
     if manifest is not None:
         lints += lint_guards(policy_set, manifest, source=source)
         lints += _resolved_drift(policy_set, manifest, source=source)
@@ -812,7 +919,8 @@ def _resolved_drift(
     *,
     source: str | None,
 ) -> list[PolicyLint]:
-    """Tools and arguments each resolved role names that the manifest lacks.
+    """Tools, arguments and skills each resolved role names that the manifest
+    lacks.
 
     The resolved form of :func:`_drift`. A rule on a missing tool is graded
     against the role's default, which the real tool falls through to (see
@@ -823,19 +931,37 @@ def _resolved_drift(
     tools are checked by :func:`_shared_constraint_drift`.
     """
     tool_props = _tool_props(manifest)
+    skills = _manifest_skills(manifest)
     out: list[PolicyLint] = []
     for role in _reported_roles(policy_set):
         policy = policy_set.policy_for(role)
+        rules, owner = policy.effective_tools, f"role {role!r}"
         out += _tool_drift(
-            policy.tools,
+            rules,
             tool_props,
-            owner=f"role {role!r}",
+            owner=owner,
             source=source,
             tier=None,
             default=policy.default_policy,
             role=role,
         )
+        out += _skill_drift(
+            rules, skills, owner=owner, source=source, tier=None, role=role
+        )
     return out + _shared_constraint_drift(policy_set, tool_props, source=source)
+
+
+def _granted_gate_args(policy: AgentPolicy) -> set[str]:
+    """The args of the gate decisions ``policy`` can let through, which its
+    policy-level constraints also run on. An unlisted reserved key is denied
+    closed-world, and a deny never runs constraints, so only listed grants count."""
+    return set().union(
+        *(
+            gate_args(key)
+            for key, rule in policy.effective_tools.items()
+            if is_reserved_key(key) and rule.mode != "deny"
+        )
+    )
 
 
 def _reported_roles(policy_set: PolicySet) -> list[str]:
@@ -869,12 +995,13 @@ def _shared_constraint_drift(
     reported once, at its worst severity, naming the roles that carry it -- or
     none when every role does, as a file-level constraint is copied into each.
     """
-    every_arg = set().union(*tool_props.values())
+    tool_args = set().union(*tool_props.values())
     roles = _reported_roles(policy_set)
     worst: dict[tuple[str, str], Severity] = {}
     carriers: dict[tuple[str, str], list[str]] = {}
     for role in roles:
         policy = policy_set.policy_for(role)
+        every_arg = tool_args | _granted_gate_args(policy)
         scopes = [("policy-level", policy.constraints, every_arg)]
         fallthrough = [
             args
@@ -912,3 +1039,109 @@ def _shared_constraint_drift(
             )
         )
     return out
+
+
+def _unknown_roots(policy_set: PolicySet, *, source: str | None) -> list[PolicyLint]:
+    """Constraint paths no call ever sets, such as ``user.department`` or
+    ``role.name``: the constraint loads, then the path is always missing.
+
+    Every constraint that runs is checked: policy-level, ``default_policy``'s and
+    each rule's, a deny's excepted. Each path is reported once, at its worst
+    severity (see :func:`_missing_refs`), naming the roles that carry it -- or
+    none when every role does, as :func:`_shared_constraint_drift` does."""
+    roles = _reported_roles(policy_set)
+    worst: dict[str, Severity] = {}
+    carriers: dict[str, list[str]] = {}
+    for role in roles:
+        live = _live_constraints(policy_set.policy_for(role))
+        for path, severity in _unset_paths([(live, False)]).items():
+            _keep_worst(worst, path, severity)
+            carriers.setdefault(path, []).append(role)
+    out: list[PolicyLint] = []
+    for path, severity in sorted(worst.items()):
+        named = carriers[path]
+        everywhere = len(named) == len(roles)
+        where = "" if everywhere else " in " + ", ".join(f"role {r!r}" for r in named)
+        role = named[0] if len(named) == 1 and not everywhere else None
+        out.append(
+            _unknown_root_lint(path, severity, where=where, role=role, source=source)
+        )
+    return out
+
+
+def _module_unknown_roots(
+    boundaries: list[ModuleContent], capabilities: list[ModuleContent]
+) -> list[PolicyLint]:
+    """The module form of :func:`_unknown_roots`, attributed to each module.
+    Modules reject policy-level and ``default_policy`` constraints, so only
+    rules carry any; a boundary deny's run inside the ``not (...)`` the linker
+    wraps it in."""
+    out: list[PolicyLint] = []
+    for module, tier in _tiered(boundaries, capabilities):
+        worst = _unset_paths(
+            (tp.constraints, _runs_negated(tier, tp.mode))
+            for tp in module.policy.effective_tools.values()
+        )
+        out += [
+            _unknown_root_lint(path, severity, source=module.source, tier=tier)
+            for path, severity in sorted(worst.items())
+        ]
+    return out
+
+
+def _unset_paths(groups: Iterable[tuple[list[str], bool]]) -> dict[str, Severity]:
+    """Each path no call sets over ``(constraints, negated)`` groups, at its
+    worst severity."""
+    worst: dict[str, Severity] = {}
+    for constraints, negated in groups:
+        for path, severity in _missing_refs(constraints, negated, _unset_path).items():
+            _keep_worst(worst, path, severity)
+    return worst
+
+
+def _unknown_root_lint(
+    path: str,
+    severity: Severity,
+    *,
+    source: str | None,
+    where: str = "",
+    role: str | None = None,
+    tier: LayerKind | None = None,
+) -> PolicyLint:
+    """One ``unknown-root``. A ``consts.<name>`` path is valid as a comparison
+    operand but reaches here from ``count()`` / ``every()`` / ``any()``, which
+    read a field path, never a constant, so it gets its own advice."""
+    if path.startswith("consts."):
+        why = (
+            "count(), every() and any() read a field path, not a constant; "
+            "compare against the constant instead, or inline its list"
+        )
+    else:
+        why = (
+            "no call sets it. A path starts with args., ctx. or run., and "
+            "role and tool are plain strings"
+        )
+    return PolicyLint(
+        code="unknown-root",
+        severity=severity,
+        message=f"a constraint{where} reads {path}: {why}",
+        source=source,
+        tier=tier,
+        role=role,
+    )
+
+
+def _live_constraints(policy: AgentPolicy) -> list[str]:
+    """The constraints that can run: policy-level, and every rule's but a deny's."""
+    rules = [policy.default_policy, *policy.effective_tools.values()]
+    return policy.constraints + [
+        c for rule in rules if rule.mode != "deny" for c in rule.constraints
+    ]
+
+
+def _unset_path(path: tuple[str, ...]) -> str | None:
+    """``path`` dotted, if no call sets it. A lone identifier reaches here as
+    a fact, or as the collection of ``count()`` / ``every()`` / ``any()``."""
+    if path[0] in PATH_ROOTS or (len(path) == 1 and path[0] in FACTS):
+        return None
+    return ".".join(path)

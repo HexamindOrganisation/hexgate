@@ -224,6 +224,32 @@ def is_reserved_key(name: str) -> bool:
     return is_agent_key(name) or is_skill_key(name)
 
 
+# The arguments each gate decides its reserved key with, as EGRESS_TOOL_ARGS
+# (hexgate.security.network) is for the egress tools: what AgentGate and
+# ReachGate (hexgate.security.agent_gate) and the adapters' agent-as-tool seams
+# build, and the skill seams (hexgate.adapters.langchain.skills,
+# hexgate.adapters.google.tools). The
+# analyzer checks ``args.*`` in an admission, reach or skill rule against these.
+ADMISSION_ARGS = frozenset({"agent"})
+REACH_ARGS = frozenset({"agent", "target", "via"})
+SKILL_ARGS = frozenset({"skill", "via", "file_path", "content_hash"})
+# A script call also carries the invocation it forwards to the code executor.
+SKILL_SCRIPT_ARGS = SKILL_ARGS | {"script_args", "short_options", "positional_args"}
+
+
+def gate_args(key: str) -> frozenset[str]:
+    """The arguments the gate deciding reserved ``key`` passes."""
+    if key == AGENT_RUN_TOOL:
+        return ADMISSION_ARGS
+    if is_agent_reach_key(key):
+        return REACH_ARGS
+    if key.startswith(_SKILL_PREFIX_BY_VIA["script"]):
+        return SKILL_SCRIPT_ARGS
+    if is_skill_key(key):
+        return SKILL_ARGS
+    raise ValueError(f"{key!r} is not a reserved key")
+
+
 class AgentTargetPolicy(BaseToolPolicy):
     """Authorize reaching one named target agent, per transfer mode.
 
