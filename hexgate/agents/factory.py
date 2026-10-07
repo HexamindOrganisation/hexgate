@@ -42,7 +42,6 @@ from hexgate.agents.subagents import SubagentEdge
 from hexgate.approvals import ApprovalHandler  # noqa: F401 — re-export
 from hexgate.config.env import resolve_api_key
 from hexgate.runtime import (
-    DEFAULT_AGENT_NAME,
     LocalWorkspace,
     ToolUseContext,
     Workspace,
@@ -50,6 +49,7 @@ from hexgate.runtime import (
     run_scope,
     set_current_tool_use_context,
 )
+from hexgate.security.naming import canonical_name
 from hexgate.streaming import StreamEvent, new_root_run_id, normalize_langchain_events
 from hexgate.tracing.langfuse import (
     CallbackHandler,
@@ -386,8 +386,12 @@ class HexgateAgent:
         # Lives as long as the runtime, so both run methods below owe its
         # per-run transcript state a reset on the way out.
         self._usage_handler = HexgateUsageCallbackHandler(
-            agent_name=name or DEFAULT_AGENT_NAME
+            agent_name=canonical_name(name)
         )
+
+    @property
+    def _canonical_name(self) -> str:
+        return canonical_name(self.name)
 
     @property
     def subagents(self) -> "list[SubagentEdge]":
@@ -477,7 +481,7 @@ class HexgateAgent:
         await _refresh_policy_safely(self)
         await self._check_ban()
         await self._check_admission()
-        with run_scope(self.name or DEFAULT_AGENT_NAME):
+        with run_scope(self._canonical_name):
             turn_key = self._usage_handler.turn_key()
             try:
                 return await self._graph.ainvoke(
@@ -502,7 +506,7 @@ class HexgateAgent:
         await _refresh_policy_safely(self)
         await self._check_ban()
         await self._check_admission()
-        with run_scope(self.name or DEFAULT_AGENT_NAME):
+        with run_scope(self._canonical_name):
             # Captured on the way in because this is a generator, whose
             # ``finally`` an early break runs in a different Context — see
             # ``HexgateUsageCallbackHandler.end_run``.
@@ -682,7 +686,7 @@ class HexgateAgent:
                 engine = load_policy_set(policy)
             enforcer = build_enforcer(
                 engine,
-                agent_name=self.name or DEFAULT_AGENT_NAME,
+                agent_name=self._canonical_name,
                 decision_observer=decision_observer,
             )
 
@@ -697,7 +701,7 @@ class HexgateAgent:
             from hexgate.guards.stance import validate_guard_policy
 
             validate_guard_policy(
-                engine, resolved_guards, agent_name=self.name or DEFAULT_AGENT_NAME
+                engine, resolved_guards, agent_name=self._canonical_name
             )
 
         # One wrap loop for both paths, so the guards-only path can't drift from
@@ -770,7 +774,7 @@ class HexgateAgent:
                 warn_if_reach_unenforced(
                     enforcer.policy,
                     framework="native",
-                    agent_name=self.name or "default",
+                    agent_name=self._canonical_name,
                     handoff_targets=uncovered[0],
                     tool_targets=uncovered[1],
                 )

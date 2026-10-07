@@ -14,7 +14,7 @@ from pydantic import BaseModel
 from hexgate.adapters.langchain.usage import HexgateUsageCallbackHandler
 from hexgate.agents import factory
 from hexgate.agents.factory import HexgateAgent
-from hexgate.runtime import HexgateContext
+from hexgate.runtime import HexgateContext, get_run_facts
 from hexgate.runtime.context import get_current_context
 from hexgate.tracing import usage as tracing_usage_mod
 
@@ -599,6 +599,64 @@ async def test_usage_handler_emits_with_agent_name(
     assert event.agent_name == "my-agent"
     assert event.input_tokens == 10
     assert event.output_tokens == 20
+
+
+@pytest.mark.asyncio
+async def test_usage_handler_emits_canonical_agent_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_sender = _FakeSender()
+    monkeypatch.setattr(
+        tracing_usage_mod, "configure_usage_sender", lambda api_key=None: fake_sender
+    )
+    agent, _ = _make_hexgate_agent(name=" my-agent ", graph=_CallbackFiringGraph())
+
+    await agent.ainvoke({"messages": []}, config={})
+
+    [event] = fake_sender.events
+    assert event.agent_name == "my-agent"
+
+
+class _RunFactsRecordingGraph:
+    """Records the run_scope agent name visible while the graph runs."""
+
+    def __init__(self) -> None:
+        self.agents: list[str] = []
+
+    async def ainvoke(self, payload: dict, config: Any = None) -> dict:
+        self.agents.append(get_run_facts().agent)
+        return {"messages": ["ok"]}
+
+    async def astream_events(
+        self, payload: dict, config: Any = None, version: str = "v2"
+    ) -> Any:
+        self.agents.append(get_run_facts().agent)
+        yield {"event": "one"}
+
+
+async def _run(agent: HexgateAgent, method: str) -> None:
+    if method == "ainvoke":
+        await agent.ainvoke({"messages": []}, config={})
+        return
+    async for _ in agent.astream_events({"messages": []}, config={}, version="v2"):
+        pass
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["ainvoke", "astream_events"])
+@pytest.mark.parametrize(
+    ("name", "expected"),
+    [(" billing ", "billing"), ("   ", "default"), (None, "default")],
+)
+async def test_run_scope_uses_canonical_agent_name(
+    method: str, name: str | None, expected: str
+) -> None:
+    graph = _RunFactsRecordingGraph()
+    agent, _ = _make_hexgate_agent(name=name, graph=graph)
+
+    await _run(agent, method)
+
+    assert graph.agents == [expected]
 
 
 @pytest.mark.asyncio
