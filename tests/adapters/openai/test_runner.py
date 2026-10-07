@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import inspect
+import threading
 from contextlib import contextmanager
 from types import SimpleNamespace
 from typing import Any, AsyncIterator
@@ -25,7 +27,7 @@ from hexgate.runtime import run_facts as run_facts_mod
 from hexgate.runtime.context import get_current_context
 from hexgate.runtime.run_facts import get_run_facts
 from hexgate.security import AgentPolicy, BaseToolPolicy, PolicySet, ResolvedPolicy
-from hexgate.security.bans import BanEntry, BanGate, BanSet
+from hexgate.security.bans import EMPTY_BAN_SET, BanEntry, BanGate, BanSet
 from hexgate.security.enforcer import PolicyEnforcer
 from hexgate.security.errors import AgentBannedError
 from hexgate.security.policy_set import DEFAULT_ROLE_NAME
@@ -818,11 +820,75 @@ async def test_arun_streamed_refreshes_async_before_run_streamed(
     assert order == ["refresh_async", "run_streamed"]
 
 
+# A sequential regression leaves the first party waiting alone until this
+# breaks the barrier; a concurrent fetch meets it immediately.
+_BARRIER_TIMEOUT_S = 2.0
+
+
+class _BarrierBanSource:
+    def __init__(self, barrier: threading.Barrier) -> None:
+        self._barrier = barrier
+
+    def fetch(self) -> BanSet:
+        self._barrier.wait()
+        return EMPTY_BAN_SET
+
+
+class _BarrierBinding(_CountingBinding):
+    def __init__(self, barrier: threading.Barrier) -> None:
+        super().__init__()
+        self._barrier = barrier
+
+    def refresh(self) -> None:
+        self._barrier.wait()
+        super().refresh()
+
+    async def refresh_async(self) -> None:
+        await asyncio.to_thread(self.refresh)
+
+
+def _concurrent_runner() -> tuple[HexgateRunner, _BarrierBinding]:
+    barrier = threading.Barrier(2, timeout=_BARRIER_TIMEOUT_S)
+    runner = HexgateRunner(api_key="k")
+    binding = _BarrierBinding(barrier)
+    runner._bindings["my-agent"] = binding  # type: ignore[assignment]
+    runner._ban_gates["my-agent"] = BanGate("my-agent", _BarrierBanSource(barrier))
+    return runner, binding
+
+
+@pytest.mark.asyncio
+async def test_run_fetches_policy_and_bans_concurrently(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _silence_observability(monkeypatch)
+    _patch_runner_run(monkeypatch)
+    runner, binding = _concurrent_runner()
+
+    await runner.run(_make_agent("my-agent"), "hi", hexgate_context=_user())
+
+    assert binding.refreshes == 1
+
+
+def test_run_streamed_fetches_policy_and_bans_concurrently(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _silence_observability(monkeypatch)
+    monkeypatch.setattr(
+        "hexgate.adapters.openai.runner.Runner.run_streamed",
+        staticmethod(lambda *_a, **_kw: _FakeStreamingResult()),
+    )
+    runner, binding = _concurrent_runner()
+
+    runner.run_streamed(_make_agent("my-agent"), "hi", hexgate_context=_user())
+
+    assert binding.refreshes == 1
+
+
 @pytest.mark.asyncio
 async def test_arun_streamed_refused_before_task_spawns_when_banned(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The ban gate is awaited (check_async) before Runner.run_streamed spawns
+    """The ban gate is enforced (via aprepare_run) before Runner.run_streamed spawns
     its background task, so a banned stream never starts on the serve path."""
     _silence_observability(monkeypatch)
     called: list[str] = []
