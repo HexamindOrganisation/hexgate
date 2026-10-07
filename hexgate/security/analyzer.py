@@ -23,7 +23,7 @@ a module). This module runs over a **successfully linked** bundle and reports th
 - **guard-divergence** — roles resolve to different guard settings, which the
   agent-level guard stance cannot represent.
 - **unknown-skill** — a ``skills:`` rule names a skill the manifest doesn't
-  declare. Only checked when a manifest is supplied.
+  declare. Only checked when a manifest is supplied and lists the skills.
 - **unknown-root** — a constraint path that no call ever sets: its root isn't
   ``args`` / ``ctx`` / ``run``, or it dots into the ``role`` / ``tool`` string.
   Manifest-free.
@@ -139,7 +139,9 @@ def check(
         result = link_policy_set(boundaries, capabilities)
     except (LinkError, PolicySetError, ConstraintParseError) as exc:
         return [PolicyLint("link-error", "error", str(exc))]
-    return analyze(result, boundaries, capabilities, manifest=manifest)
+    lints = analyze(result, boundaries, capabilities, manifest=manifest)
+    lints += _module_unknown_roots(boundaries, capabilities)
+    return sorted(lints, key=lambda lint: SEVERITY_RANK[lint.severity])
 
 
 def analyze(
@@ -158,7 +160,6 @@ def analyze(
     lints += _dead_grants(result, capabilities)
     lints += _redundant_grants(capabilities)
     lints += _constraint_erased(capabilities)
-    lints += _module_unknown_roots(boundaries, capabilities)
     if manifest is not None:
         lints += _drift(boundaries, capabilities, manifest)
     return sorted(lints, key=lambda lint: SEVERITY_RANK[lint.severity])
@@ -247,6 +248,8 @@ def analyze_project(
         for lint in analyze(role_result, boundaries, caps, manifest=manifest):
             lints.append(replace(lint, role=role))
 
+    # Once per module, not per role: a module's paths don't depend on the role.
+    lints += _module_unknown_roots(boundaries, library)
     lints += _unused_capabilities(library, _all_imported_names(roles, library))
     if roles and DEFAULT_ROLE_NAME not in roles:
         lints.append(
@@ -616,14 +619,19 @@ def _tool_drift(
     return out
 
 
-def _manifest_skills(manifest: AgentManifest) -> set[str]:
-    """The skills the agent has, named as the skill gate's keys name them."""
-    return {canonical_skill_name(s.name) for s in manifest.skills or []}
+def _manifest_skills(manifest: AgentManifest) -> set[str] | None:
+    """The skills the agent has, named as the skill gate's keys name them, or
+    ``None`` when the manifest doesn't list them: the builders record ``None``
+    both for no skills and for a listing that failed, while the skill gate
+    still runs."""
+    if manifest.skills is None:
+        return None
+    return {canonical_skill_name(s.name) for s in manifest.skills}
 
 
 def _skill_drift(
     tools: Mapping[str, ToolPolicy],
-    skills: set[str],
+    skills: set[str] | None,
     *,
     owner: str,
     source: str | None,
@@ -638,6 +646,8 @@ def _skill_drift(
     nothing (info). A module's is graded like an unknown tool's
     (:func:`_unknown_tool_severity`): a boundary grant's fence never reaches the
     real skill, which runs on a capability's grant alone (error)."""
+    if skills is None:
+        return []
     worst: dict[str, Severity] = {}
     for key, tp in tools.items():
         if not is_skill_key(key):
@@ -1035,12 +1045,26 @@ def _unknown_roots(policy_set: PolicySet, *, source: str | None) -> list[PolicyL
 
     Every constraint that runs is checked: policy-level, ``default_policy``'s and
     each rule's, a deny's excepted. Each path is reported once, at its worst
-    severity (see :func:`_missing_refs`)."""
-    worst = _unset_paths(
-        (_live_constraints(policy_set.policy_for(role)), False)
-        for role in _reported_roles(policy_set)
-    )
-    return _unknown_root_lints(worst, source=source, tier=None)
+    severity (see :func:`_missing_refs`), naming the roles that carry it -- or
+    none when every role does, as :func:`_shared_constraint_drift` does."""
+    roles = _reported_roles(policy_set)
+    worst: dict[str, Severity] = {}
+    carriers: dict[str, list[str]] = {}
+    for role in roles:
+        live = _live_constraints(policy_set.policy_for(role))
+        for path, severity in _unset_paths([(live, False)]).items():
+            _keep_worst(worst, path, severity)
+            carriers.setdefault(path, []).append(role)
+    out: list[PolicyLint] = []
+    for path, severity in sorted(worst.items()):
+        named = carriers[path]
+        everywhere = len(named) == len(roles)
+        where = "" if everywhere else " in " + ", ".join(f"role {r!r}" for r in named)
+        role = named[0] if len(named) == 1 and not everywhere else None
+        out.append(
+            _unknown_root_lint(path, severity, where=where, role=role, source=source)
+        )
+    return out
 
 
 def _module_unknown_roots(
@@ -1056,7 +1080,10 @@ def _module_unknown_roots(
             (tp.constraints, _runs_negated(tier, tp.mode))
             for tp in module.policy.effective_tools.values()
         )
-        out += _unknown_root_lints(worst, source=module.source, tier=tier)
+        out += [
+            _unknown_root_lint(path, severity, source=module.source, tier=tier)
+            for path, severity in sorted(worst.items())
+        ]
     return out
 
 
@@ -1070,22 +1097,36 @@ def _unset_paths(groups: Iterable[tuple[list[str], bool]]) -> dict[str, Severity
     return worst
 
 
-def _unknown_root_lints(
-    worst: dict[str, Severity], *, source: str | None, tier: LayerKind | None
-) -> list[PolicyLint]:
-    return [
-        PolicyLint(
-            code="unknown-root",
-            severity=severity,
-            message=(
-                f"a constraint reads {path}, which no call sets: a path starts "
-                "with args., ctx. or run., and role and tool are plain strings"
-            ),
-            source=source,
-            tier=tier,
+def _unknown_root_lint(
+    path: str,
+    severity: Severity,
+    *,
+    source: str | None,
+    where: str = "",
+    role: str | None = None,
+    tier: LayerKind | None = None,
+) -> PolicyLint:
+    """One ``unknown-root``. A ``consts.<name>`` path is valid as a comparison
+    operand but reaches here from ``count()`` / ``every()`` / ``any()``, which
+    read a field path, never a constant, so it gets its own advice."""
+    if path.startswith("consts."):
+        why = (
+            "count(), every() and any() read a field path, not a constant; "
+            "compare against the constant instead, or inline its list"
         )
-        for path, severity in sorted(worst.items())
-    ]
+    else:
+        why = (
+            "no call sets it. A path starts with args., ctx. or run., and "
+            "role and tool are plain strings"
+        )
+    return PolicyLint(
+        code="unknown-root",
+        severity=severity,
+        message=f"a constraint{where} reads {path}: {why}",
+        source=source,
+        tier=tier,
+        role=role,
+    )
 
 
 def _live_constraints(policy: AgentPolicy) -> list[str]:

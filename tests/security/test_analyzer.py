@@ -1197,14 +1197,26 @@ def test_when_a_skill_name_is_padded_then_it_matches_the_manifest_skill():
     assert analyze_policy(ps, manifest=_manifest(skills=["pdf "])) == []
 
 
-def test_when_the_manifest_has_no_skills_then_every_skill_is_unknown():
+def test_when_the_manifest_lists_no_skills_then_every_skill_is_unknown():
     ps = load_policy_set_from_dict({"skills": {"pdf": {"mode": "allow"}}})
-    manifest = _manifest()
-    manifest.skills = None  # a framework with no skill concept
-    assert {lint.code for lint in analyze_policy(ps, manifest=manifest)} == {
+    assert {lint.code for lint in analyze_policy(ps, manifest=_manifest())} == {
         "unknown-skill"
     }
-    assert analyze_policy(ps) == []
+
+
+def test_when_the_manifest_skills_are_missing_then_no_unknown_skill():
+    # The builders record None for no skills and for a listing that failed,
+    # while the skill gate still runs, so None doesn't mean "no skills".
+    manifest = _manifest()
+    manifest.skills = None
+    ps = load_policy_set_from_dict({"skills": {"pdf": {"mode": "allow"}}})
+    assert analyze_policy(ps, manifest=manifest) == []
+
+    policy = AgentPolicy(
+        default_policy=BaseToolPolicy(mode="allow"), skills={"pdf": {"mode": "allow"}}
+    )
+    boundary = ModuleContent("b", "boundary", policy, "b.yaml", "hash-b")
+    assert check([boundary], [], manifest=manifest) == []
 
 
 def test_when_a_module_governs_an_unknown_skill_then_unknown_skill():
@@ -1245,7 +1257,7 @@ def test_when_a_constraint_path_has_no_root_then_unknown_root(constraint, path):
     assert _unknown_roots_of(doc) == [
         (
             "warning",
-            f"a constraint reads {path}, which no call sets: a path starts with "
+            f"a constraint reads {path}: no call sets it. A path starts with "
             "args., ctx. or run., and role and tool are plain strings",
         )
     ]
@@ -1332,8 +1344,8 @@ def test_when_a_default_constraint_has_an_unknown_root_then_unknown_root():
 def test_when_several_paths_have_no_root_then_they_are_sorted():
     doc = {"constraints": ["user.z == 1", "caller.a == 1"]}
     assert [m.split()[3] for _, m in _unknown_roots_of(doc)] == [
-        "caller.a,",
-        "user.z,",
+        "caller.a:",
+        "user.z:",
     ]
 
 
@@ -1369,4 +1381,53 @@ def test_when_a_collection_is_a_lone_identifier_then_only_a_root_or_fact_is_set(
     doc = {"tools": {"refund": {"mode": "allow", "constraints": [constraint]}}}
     ps = load_policy_set_from_dict(doc)
     lints = analyze_policy(ps, manifest=_manifest(("refund", ["amount"])))
-    assert [lint.message.split()[3].rstrip(",") for lint in lints] == unset
+    assert [lint.message.split()[3].rstrip(":") for lint in lints] == unset
+
+
+def test_when_roles_share_a_module_with_an_unknown_root_then_it_is_reported_once():
+    boundary = _mod("b", "boundary", {"refund": _deny(["user.x == 1"])})
+    cap = _mod("c", "capability", {"refund": _allow(["caller.y == 1"])})
+    roles = {"default": ["c"], "admin": ["c"], "member": ["c"]}
+    lints = check_project([boundary], [cap], roles)
+    assert [
+        (lint.source, lint.tier, lint.role)
+        for lint in lints
+        if lint.code == "unknown-root"
+    ] == [("b.yaml", "boundary", None), ("c.yaml", "capability", None)]
+
+
+def test_when_one_role_carries_an_unknown_root_then_the_lint_names_it():
+    doc = {
+        "constraints": ["caller.team == 1"],
+        "roles": {
+            "default": {"tools": {"refund": {"mode": "allow"}}},
+            "admin": {"constraints": ['role.name == "x"']},
+        },
+    }
+    lints = analyze_policy(load_policy_set_from_dict(doc))
+    assert [
+        (lint.message.split(": ")[0], lint.role)
+        for lint in lints
+        if lint.code == "unknown-root"
+    ] == [
+        ("a constraint reads caller.team", None),
+        ("a constraint in role 'admin' reads role.name", "admin"),
+    ]
+
+
+@pytest.mark.parametrize(
+    "constraint", ["count(consts.xs) > 0", "any(consts.xs, . == 1)"]
+)
+def test_when_a_collection_is_a_constant_then_the_message_says_so(constraint):
+    doc = {
+        "consts": {"xs": [1]},
+        "tools": {"refund": {"mode": "allow", "constraints": [constraint]}},
+    }
+    assert _unknown_roots_of(doc) == [
+        (
+            "warning",
+            "a constraint reads consts.xs: count(), every() and any() read a "
+            "field path, not a constant; compare against the constant instead, "
+            "or inline its list",
+        )
+    ]

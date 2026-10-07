@@ -119,7 +119,8 @@ The rest of the drift is printed but passes: a grant that never fires or an
 argument typo that fails closed is a `warning`, and a deny on a missing tool is
 `info` when the role's default already denies it. A `skills:` rule on a skill
 the agent doesn't declare (`unknown-skill`) is a `warning`, or `info` for a deny:
-an unlisted skill is denied either way. Add `--max-severity warning` to fail on the warnings too:
+an unlisted skill is denied either way. It is only checked when the manifest
+lists the agent's skills; a manifest with no `skills` field skips it. Add `--max-severity warning` to fail on the warnings too:
 
 ```bash
 hexgate policy validate policy.yaml --manifest manifest.json
