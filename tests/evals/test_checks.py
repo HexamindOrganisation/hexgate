@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import datetime
 
+import pytest
+
 from evals.policy_writing.checks import (
     answer_checks,
     decision_checks,
@@ -13,7 +15,14 @@ from evals.policy_writing.checks import (
     superset_checks,
 )
 from evals.policy_writing.policy import effective_policy
-from tests.evals.helpers import AGENT, PERMISSIVE_DEFAULT, by_name, make_workspace
+from tests.evals.helpers import (
+    AGENT,
+    PERMISSIVE_DEFAULT,
+    by_name,
+    install_skill,
+    make_modules_workspace,
+    make_workspace,
+)
 
 REFUND = {"tool": "refund_order", "args": {"order_id": "o1", "amount": 5}}
 VIEW = {"tool": "view_orders", "args": {"customer_id": "c1"}}
@@ -75,9 +84,7 @@ def test_when_a_role_is_missing_then_superset_fails(tmp_path) -> None:
 def test_snapshot_happy_path(tmp_path) -> None:
     # Dot paths are tooling: the harness installs the skill under .claude/.
     ws = make_workspace(tmp_path)
-    skill = ws / ".claude" / "skills" / "x" / "SKILL.md"
-    skill.parent.mkdir(parents=True)
-    skill.write_text("installed by the harness")
+    install_skill(ws)
     (ws / ".effective.yaml").write_text("{}")
     assert set(snapshot(ws)) == {"README.md", "policy.yaml"}
 
@@ -102,10 +109,23 @@ def test_when_one_file_changes_then_no_changes_fails() -> None:
     assert (check.passed, check.detail) == (False, "changed: ['README.md']")
 
 
-def test_when_an_unchanged_path_does_not_exist_then_it_fails() -> None:
+@pytest.mark.parametrize("kind", ["changed", "unchanged"])
+def test_when_a_listed_path_does_not_exist_then_it_fails(kind) -> None:
+    # A path in neither snapshot is a typo in the case.
     files = {"policy.yaml": "a"}
-    [check] = file_checks({"unchanged": ["policies/boundary/org.yaml"]}, files, files)
+    [check] = file_checks({kind: ["policy.yml"]}, files, files)
     assert (check.passed, check.detail) == (False, "no such file")
+
+
+def test_when_two_decisions_differ_only_in_expect_then_their_checks_are_named_apart(
+    tmp_path,
+) -> None:
+    policy, _ = effective_policy(make_workspace(tmp_path))
+    call = {"role": "billing", **REFUND}
+    checks = decision_checks(
+        policy, [{**call, "expect": "allow"}, {**call, "expect": "deny"}]
+    )
+    assert len(by_name(checks)) == 2
 
 
 def test_answer_checks_happy_path() -> None:
@@ -133,6 +153,19 @@ def test_when_a_word_appears_only_inside_another_then_it_is_not_mentioned() -> N
     assert not check.passed
 
 
+@pytest.mark.parametrize("answer", ["the cap is 1,500", "the cap is 500.5"])
+def test_when_a_number_is_part_of_a_bigger_one_then_it_is_not_mentioned(
+    answer,
+) -> None:
+    [check] = answer_checks({"mentions_any": ["500"]}, answer)
+    assert not check.passed
+
+
+def test_when_a_number_ends_a_sentence_then_it_is_mentioned() -> None:
+    [check] = answer_checks({"mentions_any": ["500"]}, "The cap is 500.")
+    assert check.passed
+
+
 def test_when_a_word_is_part_of_a_snake_case_name_then_it_is_mentioned() -> None:
     [check] = answer_checks({"mentions_any": ["approval"]}, "set to approval_required")
     assert check.passed
@@ -150,9 +183,7 @@ def test_score_happy_path(tmp_path) -> None:
     ws = make_workspace(tmp_path)
     before = snapshot(ws)
     # Installing the skill is not an edit.
-    skill = ws / ".claude" / "skills" / "x" / "SKILL.md"
-    skill.parent.mkdir(parents=True)
-    skill.write_text("installed by the harness")
+    install_skill(ws)
     case = {
         "agent": AGENT,
         "expect": {
@@ -169,11 +200,31 @@ def test_when_a_case_expects_a_superset_then_score_runs_it(tmp_path) -> None:
     ws = make_workspace(tmp_path)
     superset = {"wider": "support", "narrower": "billing", "probes": [REFUND]}
     case = {"agent": AGENT, "expect": {"superset": [superset]}}
-    check = by_name(score(case, ws, snapshot(ws), ""))["superset: support ⊇ billing"]
+    check = by_name(score(case, ws, snapshot(ws), ""))["superset 1: support ⊇ billing"]
     assert (check.passed, check.detail) == (
         False,
         "refund_order: billing=allow, support=approval_required",
     )
+
+
+def test_when_the_agent_adds_a_policies_dir_then_score_still_reads_policy_yaml(
+    tmp_path,
+) -> None:
+    ws = make_workspace(tmp_path)
+    before = snapshot(ws)
+    (ws / "policies").mkdir()
+    (ws / "policies" / "draft.md").write_text("notes")
+    case = {"agent": AGENT, "expect": {}}
+    assert by_name(score(case, ws, before, ""))["valid"].passed
+
+
+def test_when_the_starting_project_is_a_module_tree_then_score_resolves_it(
+    tmp_path,
+) -> None:
+    ws = make_modules_workspace(tmp_path)
+    refund = {"role": "billing", "tool": "refund_order", "args": {"amount": 1001}}
+    case = {"agent": AGENT, "expect": {"decisions": [{**refund, "expect": "deny"}]}}
+    assert all(c.passed for c in score(case, ws, snapshot(ws), ""))
 
 
 def test_when_the_policy_is_invalid_then_score_fails_valid_and_decisions(
