@@ -15,9 +15,6 @@ a module). This module runs over a **successfully linked** bundle and reports th
   Severity follows the failure direction: drift that
   leaves the real tool looser than intended (fail-open) is an error, see
   :func:`_modules_drift` and :func:`_resolved_drift`.
-- **unknown-reach-target** — an ``agents:`` rule names an agent the project
-  neither registers nor reaches as a sub-agent. Only checked when
-  the project's manifests are supplied (:func:`analyze_project`'s ``manifests``).
 - **permissive-default** — the ``default`` role grants something no named role
   grants (:func:`check_default_role_exposure`, over a resolved role map).
 - **unknown-guard** / **ambiguous-guard** — a baseline ``guards:`` rule that names a
@@ -65,7 +62,6 @@ from hexgate.security.models import (
     BaseToolPolicy,
     FileToolPolicy,
     ToolPolicy,
-    agent_reach_target,
     gate_args,
     is_reserved_key,
     is_skill_key,
@@ -99,7 +95,6 @@ LintCode = Literal[
     "redundant-grant",
     "unknown-arg",
     "unknown-guard",
-    "unknown-reach-target",
     "unknown-root",
     "unknown-skill",
     "unknown-tool",
@@ -109,8 +104,6 @@ SEVERITY_RANK: dict[Severity, int] = {"error": 0, "warning": 1, "info": 2}
 # How an ``unknown-tool`` lint words a tool missing from one agent's manifest;
 # see :class:`_Roster` for the every-agent wording.
 _ABSENT_ONE = "which the agent's manifest doesn't declare"
-# Why a name is no agent, for the lints checking names against the roster.
-_NOT_AN_AGENT = "not registered, and not a sub-agent any manifest names"
 
 
 @dataclass(frozen=True)
@@ -245,9 +238,7 @@ def analyze_project(
     - where those are unknown (a named agent with no manifest; with
       ``manifests``, any agent registered without one in ``registered_agents``,
       or a sub-agent with none), only the arguments an agent, skill or egress
-      rule reads are checked, against what its gate or the egress proxy passes;
-    - with ``manifests``, ``unknown-reach-target`` flags an ``agents:`` rule whose
-      target is no registered agent and no sub-agent a manifest reaches.
+      rule reads are checked, against what its gate or the egress proxy passes.
 
     The registered agents are the roster: a ``roles`` column naming an agent
     outside it gets only the gate-argument checks, and widens nothing, so a
@@ -310,9 +301,9 @@ class _Roster:
     ``by_agent`` holds what each agent whose manifest is known declares.
     ``shared`` is every agent's, or :data:`_UNKNOWN` when some agent's is
     unknown; built from one ``manifest``, it is that manifest's, standing for
-    every agent. ``reach_targets`` is what an
-    ``agents:`` rule may name, or ``None`` when the roster comes from a single
-    ``manifest``, which says nothing about the other agents.
+    every agent. ``reach_targets`` is every agent the roster knows of, or
+    ``None`` when the roster comes from a single ``manifest``, which says
+    nothing about the other agents.
     """
 
     by_agent: dict[str, _Declared]
@@ -423,8 +414,6 @@ def _project_lints(
         shared, absent = roster.shared, roster.absent
         lints += _modules_drift(boundaries, "boundary", shared, absent=absent)
         lints += _modules_drift(unused, "capability", shared, absent=absent)
-    if roster is not None and roster.reach_targets is not None:
-        lints += _unknown_reach_targets([*boundaries, *library], roster.reach_targets)
     return lints
 
 
@@ -628,54 +617,6 @@ def _runs_negated(tier: LayerKind | None, mode: str) -> bool:
     """Whether a module rule's constraints run under ``not``: the linker folds
     a boundary deny's region into ``not (...)``."""
     return tier == "boundary" and mode == "deny"
-
-
-def _unknown_reach_targets(
-    modules: list[ModuleContent], targets: frozenset[str]
-) -> list[PolicyLint]:
-    """An ``agents:`` rule whose target is in none of ``targets``: the agents
-    registered or named as a sub-agent.
-
-    Graded by what the real target falls back to (:func:`_unknown_target_severity`).
-    One lint per rule, at its worst severity over the ``via`` modes it lowers to.
-    """
-    out: list[PolicyLint] = []
-    for module in modules:
-        worst: dict[str, Severity] = {}
-        for key, tp in module.policy.effective_tools.items():
-            target = agent_reach_target(key)
-            if target is not None and target not in targets:
-                _keep_worst(worst, target, _unknown_target_severity(module, tp.mode))
-        out += [
-            PolicyLint(
-                code="unknown-reach-target",
-                severity=severity,
-                message=(
-                    f"{module.name!r} governs reaching agent {target!r}, which no "
-                    f"agent is: {_NOT_AN_AGENT}"
-                ),
-                source=module.source,
-                tier=module.kind,
-            )
-            for target, severity in sorted(worst.items())
-        ]
-    return out
-
-
-def _unknown_target_severity(module: ModuleContent, mode: str) -> Severity:
-    """A misspelled reach target, graded by what the real one falls back to.
-
-    Reach is closed-world, so a capability's misspelled target is a grant that
-    never fires (warning). A boundary rule on one leaves the real target to the
-    boundary's default: under ``deny`` the real target is excluded anyway, so a
-    misspelled grant never fires (warning) and a misspelled deny is redundant
-    (info); under a non-deny default the real target is neither capped nor
-    denied, so any grant of it runs looser than the boundary says (error)."""
-    if module.kind == "capability":
-        return "warning"
-    if module.policy.default_policy.mode == "deny":
-        return "info" if mode == "deny" else "warning"
-    return "error"
 
 
 def _unknown_tool_severity(tier: LayerKind, mode: str) -> Severity:

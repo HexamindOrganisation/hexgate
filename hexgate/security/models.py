@@ -170,12 +170,6 @@ def is_agent_reach_key(name: str) -> bool:
     return name.startswith(AGENT_REACH_PREFIXES)
 
 
-def agent_reach_target(name: str) -> str | None:
-    """The target a reach key (``agent.<via>:<target>``) names, the inverse of
-    :func:`agent_target_key`; ``None`` for any other key."""
-    return name.partition(":")[2] if is_agent_reach_key(name) else None
-
-
 def is_agent_key(name: str) -> bool:
     """True for any synthetic agent-level key (``agent.run`` or a reach key).
 
