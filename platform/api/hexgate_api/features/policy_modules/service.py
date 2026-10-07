@@ -824,7 +824,7 @@ def _compose_lints(resolved: dict, manifests: dict) -> list[PolicyLint]:
     their source so the editor shows them inline; drift can come from an imported
     file, which the resolved form no longer tells apart.
 
-    A named agent's lint is tagged with the agent and dropped only when the
+    A named agent's lint is prefixed with the agent and dropped only when the
     ``"*"`` view already reported it (a top-level rule every agent shares), so two
     named agents with the same defect each report it."""
     from dataclasses import replace
@@ -845,7 +845,7 @@ def _compose_lints(resolved: dict, manifests: dict) -> list[PolicyLint]:
         )
         for lint in lints_for_agent:
             if key(lint) not in shared:
-                lints.append(replace(lint, agent=agent))
+                lints.append(replace(lint, message=f"agent {agent!r}: {lint.message}"))
     lints.sort(key=lambda lint: SEVERITY_RANK[lint.severity])
     return lints
 

@@ -18,10 +18,6 @@ a module). This module runs over a **successfully linked** bundle and reports th
 - **unknown-reach-target** — an ``agents:`` rule names an agent the project
   neither registers nor reaches as a sub-agent. Only checked when
   the project's manifests are supplied (:func:`analyze_project`'s ``manifests``).
-- **unknown-agent** — a ``roles`` column names an agent the project neither
-  registers nor reaches as a sub-agent, so the agent it was meant for gets the
-  role's ``"*"`` cell, or nothing without one. Only checked when the project's
-  manifests are supplied (:func:`analyze_project`'s ``manifests``).
 - **permissive-default** — the ``default`` role grants something no named role
   grants (:func:`check_default_role_exposure`, over a resolved role map).
 - **unknown-guard** / **ambiguous-guard** — a baseline ``guards:`` rule that names a
@@ -75,9 +71,7 @@ from hexgate.security.models import (
     is_skill_key,
 )
 from hexgate.security.modules import (
-    DEFAULT_AGENT,
     GRANT_MODES,
-    AgentBinding,
     LayerKind,
     LinkError,
     LinkResult,
@@ -103,7 +97,6 @@ LintCode = Literal[
     "no-default-role",
     "permissive-default",
     "redundant-grant",
-    "unknown-agent",
     "unknown-arg",
     "unknown-guard",
     "unknown-reach-target",
@@ -254,8 +247,7 @@ def analyze_project(
       or a sub-agent with none), only the arguments an agent, skill or egress
       rule reads are checked, against what its gate or the egress proxy passes;
     - with ``manifests``, ``unknown-reach-target`` flags an ``agents:`` rule whose
-      target is no registered agent and no sub-agent a manifest reaches, and
-      ``unknown-agent`` a ``roles`` column naming one.
+      target is no registered agent and no sub-agent a manifest reaches.
 
     The registered agents are the roster: a ``roles`` column naming an agent
     outside it gets only the gate-argument checks, and widens nothing, so a
@@ -282,7 +274,7 @@ def analyze_project(
     for agent, own_roles in sorted(named.items()):
         code = None if roster is None else roster.by_agent.get(agent, _UNKNOWN)
         lints += _named_column_lints(agent, own_roles, boundaries, library, roles, code)
-    lints += _project_lints(boundaries, library, roles, named, roster)
+    lints += _project_lints(boundaries, library, roles, roster)
     return sorted(lints, key=lambda lint: SEVERITY_RANK[lint.severity])
 
 
@@ -407,12 +399,10 @@ def _project_lints(
     boundaries: list[ModuleContent],
     library: list[ModuleContent],
     roles: RoleMatrix | None,
-    named: Mapping[str, set[str]],
     roster: _Roster | None,
 ) -> list[PolicyLint]:
-    """The lints that span cells. Role and agent stay ``None``, so a role-scoped
-    ``check --role X`` view still surfaces them, except on ``unknown-agent``,
-    which is tagged with the cell it flags."""
+    """The lints that span cells: role and agent stay ``None``, so a role-scoped
+    ``check --role X`` view still surfaces them."""
     imported = _all_imported_names(roles, library)
     unused = [cap for cap in library if cap.name not in imported]
     lints = _unused_capabilities(unused)
@@ -435,7 +425,6 @@ def _project_lints(
         lints += _modules_drift(unused, "capability", shared, absent=absent)
     if roster is not None and roster.reach_targets is not None:
         lints += _unknown_reach_targets([*boundaries, *library], roster.reach_targets)
-        lints += _unknown_agents(roles, named, roster.reach_targets)
     return lints
 
 
@@ -671,45 +660,6 @@ def _unknown_reach_targets(
             for target, severity in sorted(worst.items())
         ]
     return out
-
-
-def _unknown_agents(
-    roles: RoleMatrix | None, named: Mapping[str, set[str]], targets: frozenset[str]
-) -> list[PolicyLint]:
-    """A ``roles`` column whose agent is in none of ``targets``: no running agent
-    matches it, so the agent it was meant for (a misspelling, most likely) gets
-    the role's ``"*"`` cell instead. Where that cell imports a capability the
-    column leaves out and some agent in ``targets`` has no cell of its own
-    there, the column was a restriction the real agent escapes (error);
-    otherwise it only fails to grant (warning)."""
-    return [
-        PolicyLint(
-            code="unknown-agent",
-            severity="error"
-            if _star_widens(roles[role], agent, targets)
-            else "warning",
-            message=(
-                f"this roles column names no agent: {_NOT_AN_AGENT}, so the agent "
-                "it was meant for doesn't get it"
-            ),
-            role=role,
-            agent=agent,
-        )
-        for agent, own_roles in sorted(named.items())
-        if agent not in targets
-        for role in sorted(own_roles)
-    ]
-
-
-def _star_widens(
-    cells: Mapping[str, AgentBinding], agent: str, targets: frozenset[str]
-) -> bool:
-    """Whether some agent in ``targets`` falls back to a ``"*"`` cell that imports
-    a capability ``agent``'s cell leaves out."""
-    star = cells.get(DEFAULT_AGENT)
-    if star is None or targets <= cells.keys():
-        return False
-    return bool(set(star.capabilities) - set(cells[agent].capabilities))
 
 
 def _unknown_target_severity(module: ModuleContent, mode: str) -> Severity:

@@ -1706,7 +1706,6 @@ def test_when_roles_name_an_unregistered_agent_then_drift_still_runs():
     lints = check_project([org], [handoffs], roles, manifests=_MANIFESTS)
 
     assert sorted((lint.code, lint.agent) for lint in lints) == [
-        ("unknown-agent", "biling_bot"),
         ("unknown-reach-target", None),
         ("unknown-tool", None),
     ]
@@ -1916,31 +1915,6 @@ def test_when_some_agents_tools_are_unknown_then_gate_args_are_still_checked():
     ]
 
 
-@pytest.mark.parametrize(
-    ("star", "severity"),
-    [
-        # "*" grants refunds the column meant to withhold: the real agent escapes
-        (["read", "refunds"], "error"),
-        (["read"], "warning"),
-        (None, "warning"),  # no "*" cell: the real agent gets nothing
-    ],
-)
-def test_when_a_roles_column_names_no_agent_then_unknown_agent(star, severity):
-    read = _mod("read", "capability", {"lookup": _allow()})
-    refunds = _mod("refunds", "capability", {"refund": _allow()})
-    member = {"biling_bot": AgentBinding(capabilities=("read",))}
-    if star is not None:
-        member["*"] = AgentBinding(capabilities=tuple(star))
-    roles = {"default": {"*": AgentBinding()}, "member": member}
-
-    lints = check_project([], [read, refunds], roles, manifests=_MANIFESTS)
-
-    agent_lints = [lint for lint in lints if lint.code == "unknown-agent"]
-    assert [(lint.severity, lint.role, lint.agent) for lint in agent_lints] == [
-        (severity, "member", "biling_bot")
-    ]
-
-
 def test_when_an_unregistered_agents_cell_misreads_a_gate_arg_then_unknown_arg():
     reach = ModuleContent(
         "reach",
@@ -1957,20 +1931,9 @@ def test_when_an_unregistered_agents_cell_misreads_a_gate_arg_then_unknown_arg()
     lints = check_project([], [reach], _matrix(new_bot=["reach"]), manifests=_MANIFESTS)
 
     assert sorted((lint.code, lint.agent) for lint in lints) == [
-        ("unknown-agent", "new_bot"),
         ("unknown-arg", "new_bot"),
         ("unknown-arg", "new_bot"),
     ]
-
-
-def test_when_only_one_manifest_is_known_then_roles_columns_are_not_checked():
-    read = _mod("read", "capability", {"lookup": _allow()})
-
-    lints = check_project(
-        [], [read], _matrix(biling_bot=["read"]), manifest=_MANIFESTS["support_bot"]
-    )
-
-    assert "unknown-agent" not in {lint.code for lint in lints}
 
 
 def test_when_some_agents_tools_are_unknown_then_egress_args_are_still_checked():
@@ -1984,22 +1947,3 @@ def test_when_some_agents_tools_are_unknown_then_egress_args_are_still_checked()
     )
 
     assert [(lint.code, lint.severity) for lint in lints] == [("unknown-arg", "error")]
-
-
-def test_when_every_agent_has_its_own_cell_then_a_stale_column_is_a_warning():
-    B = AgentBinding
-    read = _mod("read", "capability", {"lookup": _allow()})
-    refunds = _mod("refunds", "capability", {"refund": _allow()})
-    member = {
-        "*": B(capabilities=("read", "refunds")),
-        "billing_bot": B(capabilities=("refunds",)),
-        "support_bot": B(capabilities=("read",)),
-        "biling_bot": B(capabilities=("read",)),
-    }
-    roles = {"default": {"*": B()}, "member": member}
-
-    lints = check_project([], [read, refunds], roles, manifests=_MANIFESTS)
-
-    assert [(lint.code, lint.severity) for lint in lints] == [
-        ("unknown-agent", "warning")
-    ]
