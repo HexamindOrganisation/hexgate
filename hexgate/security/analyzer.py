@@ -621,10 +621,12 @@ def _tool_drift(
 
 def _manifest_skills(manifest: AgentManifest) -> set[str] | None:
     """The skills the agent has, named as the skill gate's keys name them, or
-    ``None`` when the manifest doesn't list them: the builders record ``None``
-    both for no skills and for a listing that failed, while the skill gate
-    still runs."""
-    if manifest.skills is None:
+    ``None`` when the manifest doesn't list them all: the builders record
+    ``None`` both for no skills and for a listing that failed, and cut a list
+    at ``MAX_SKILLS``, while the skill gate still runs for every skill."""
+    from hexgate.manifest.models import MAX_SKILLS
+
+    if manifest.skills is None or len(manifest.skills) >= MAX_SKILLS:
         return None
     return {canonical_skill_name(s.name) for s in manifest.skills}
 

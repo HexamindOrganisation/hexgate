@@ -1384,6 +1384,19 @@ def test_when_a_collection_is_a_lone_identifier_then_only_a_root_or_fact_is_set(
     assert [lint.message.split()[3].rstrip(":") for lint in lints] == unset
 
 
+def test_when_the_manifest_skills_hit_the_cap_then_no_unknown_skill():
+    # The list was cut at MAX_SKILLS, so a skill past the cap is still real.
+    from hexgate.manifest.models import MAX_SKILLS
+
+    names = [f"s{i}" for i in range(MAX_SKILLS)]
+    ps = load_policy_set_from_dict({"skills": {"s_past_cap": {"mode": "allow"}}})
+    assert analyze_policy(ps, manifest=_manifest(skills=names)) == []
+    under_cap = _manifest(skills=names[:-1])
+    assert {lint.code for lint in analyze_policy(ps, manifest=under_cap)} == {
+        "unknown-skill"
+    }
+
+
 def test_when_roles_share_a_module_with_an_unknown_root_then_it_is_reported_once():
     boundary = _mod("b", "boundary", {"refund": _deny(["user.x == 1"])})
     cap = _mod("c", "capability", {"refund": _allow(["caller.y == 1"])})
