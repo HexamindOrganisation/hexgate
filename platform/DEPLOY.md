@@ -342,6 +342,14 @@ columns — which is why the step is unconditional in the recipe.
 | policy_decision `attributes` | `clickhouse/0001_add_policy_decision_attributes.sql` |
 | run attribution on decisions/usage | `clickhouse/0002_add_run_columns.sql` |
 | LLM message logging (`llm_message` table) | `clickhouse/0003_add_llm_message.sql` — required before the build that stores `hexgate.messages` |
+| run counting (`agent_run` table) | `clickhouse/0004_add_agent_run.sql` — required before the enricher build that stores `hexgate.runs` |
+
+**SDK release order for a new span scope.** The enricher sends any scope it
+does not know to the DLQ as `unknown_scope`. So deploy the enricher build that
+stores `hexgate.runs` to every stage *before* releasing an SDK that emits it:
+otherwise every run start becomes a DLQ record on a stage still running the old
+enricher. No other data is lost, and deploying the enricher stops it. To roll
+back, go the other way: revert the SDK release first, then the enricher.
 
 **Rolling back past a migration.** The columns stay behind when the code goes
 away, and old code does not know to filter on them. Nothing here is automatic,

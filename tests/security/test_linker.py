@@ -33,7 +33,7 @@ _OPA_AVAILABLE = shutil.which("opa") is not None
 needs_opa = pytest.mark.skipif(not _OPA_AVAILABLE, reason="opa not on PATH")
 
 
-def _mod(name, kind, tools, *, default_mode="allow", consts=None):
+def _mod(name, kind, tools, *, default_mode="allow", consts=None, skills=None):
     return ModuleContent(
         name=name,
         kind=kind,
@@ -41,6 +41,7 @@ def _mod(name, kind, tools, *, default_mode="allow", consts=None):
             default_policy=BaseToolPolicy(mode=default_mode),
             tools=tools,
             consts=consts or {},
+            skills=skills or {},
         ),
         source=f"{name}.yaml",
         content_hash=f"hash-{name}",
@@ -617,20 +618,44 @@ def test_flat_roles_still_resolve_agent_independently():
         assert "view" in res.by_role["member"].effective["default"].tools
 
 
-def test_modular_module_declaring_skills_is_rejected():
-    """``skills:`` is not composable by the module fold yet, so a module that sets
-    it must fail loud. The allow-list in ``_MODULE_COMPOSABLE_FIELDS`` is what makes
-    that automatic; this pins it, so adding ``skills`` there without the matching
-    lowering turns a fail-closed error into a silent drop."""
-    module = ModuleContent(
-        name="g",
-        kind="boundary",
-        policy=AgentPolicy(skills={"refunder": {"mode": "deny"}}),
-        source="g.yaml",
-        content_hash="hash-g",
+def test_module_skills_fold_and_shadowed_key_stays_deny():
+    """``skills`` is composable, and a skill key the fold would drop (shadowed by a
+    ceiling, or listed by a boundary but granted by no capability) stays an explicit
+    deny. Dropped instead, it would take ``declares_skills()`` to False — the bundle
+    would not engage the skill gate and the skill would run ungated (fail-open).
+    ``_MODULE_COMPOSABLE_FIELDS`` admitting ``skills`` and ``_fold_tool`` keeping
+    skill keys must stay paired."""
+    ceiling = _mod(
+        "ceiling",
+        "boundary",
+        {},
+        default_mode="deny",
+        skills={"listed": {"mode": "allow"}},
     )
-    with pytest.raises(LinkError, match="skills"):
-        link([module], [])
+    grant = _mod("grant", "capability", {}, skills={"shadowed": {"mode": "allow"}})
+
+    result = link_policy_set([ceiling], [grant])
+    tools = result.effective["default"].tools
+
+    assert tools["skill:shadowed"].mode == "deny"  # ceiling did not list it
+    assert tools["skill:listed"].mode == "deny"  # listed, but nothing granted it
+    assert result.policy_set.declares_skills()
+
+
+def test_module_skills_grant_folds_through_a_ceiling():
+    ceiling = _mod(
+        "ceiling",
+        "boundary",
+        {},
+        default_mode="deny",
+        skills={"runbook": {"mode": "allow", "via": ["instructions"]}},
+    )
+    grant = _mod("grant", "capability", {}, skills={"runbook": {"mode": "allow"}})
+
+    tools = link_policy_set([ceiling], [grant]).effective["default"].tools
+
+    assert tools["skill:runbook"].mode == "allow"
+    assert tools["skill.script:runbook"].mode == "deny"
 
 
 def test_resolved_policy_dump_shape_is_pinned():

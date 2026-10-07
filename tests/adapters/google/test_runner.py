@@ -950,3 +950,70 @@ async def test_usage_plugin_context_propagates_through_run_async(
     assert event.session_id == "s-1"
     assert event.input_tokens == 10
     assert event.output_tokens == 20
+
+
+# ---------------------------------------------------------------------------
+# _drive_inline: the sync run's per-call event pump
+# ---------------------------------------------------------------------------
+
+_HANDOFF_DEPTH = 3
+_HANDOFF_CAP = 2
+
+
+def test_drive_inline_yields_every_event_in_order() -> None:
+    async def events() -> AsyncIterator[str]:
+        yield "first"
+        yield "second"
+
+    assert list(HexgateRunner._drive_inline(events())) == ["first", "second"]
+
+
+def test_drive_inline_unwraps_a_seam_error_adk_rewrapped() -> None:
+    """ADK re-raises a plugin's typed error as a bare RuntimeError; the sync run
+    must surface the typed one, like the async path."""
+    closed: list[bool] = []
+
+    async def events() -> AsyncIterator[str]:
+        try:
+            yield "first"
+            raise RuntimeError("wrapped") from HandoffDepthExceededError(
+                _HANDOFF_DEPTH, _HANDOFF_CAP
+            )
+        finally:
+            closed.append(True)
+
+    with pytest.raises(HandoffDepthExceededError) as exc_info:
+        list(HexgateRunner._drive_inline(events()))
+
+    assert isinstance(exc_info.value.__cause__, RuntimeError)
+    assert closed == [True]
+
+
+def test_drive_inline_reraises_an_unrelated_runtime_error_unchanged() -> None:
+    original = RuntimeError("boom")
+
+    async def events() -> AsyncIterator[str]:
+        raise original
+        yield "unreachable"  # pragma: no cover - makes this an async generator
+
+    with pytest.raises(RuntimeError) as exc_info:
+        list(HexgateRunner._drive_inline(events()))
+
+    assert exc_info.value is original
+
+
+def test_drive_inline_closes_the_generator_on_an_early_exit() -> None:
+    closed: list[bool] = []
+
+    async def events() -> AsyncIterator[str]:
+        try:
+            yield "first"
+            yield "second"
+        finally:
+            closed.append(True)
+
+    pump = HexgateRunner._drive_inline(events())
+    assert next(pump) == "first"
+    pump.close()
+
+    assert closed == [True]

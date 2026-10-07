@@ -44,7 +44,11 @@ def langfuse_propagate_kwargs(context: HexgateContext, tag: str) -> dict[str, An
 
 @asynccontextmanager
 async def abind(
-    context: HexgateContext, agent_name: str, tag: str
+    context: HexgateContext,
+    agent_name: str,
+    tag: str,
+    *,
+    api_key: str | None = None,
 ) -> AsyncIterator[None]:
     """Async run boundary shared by every adapter proxy: identity scope, run facts,
     then Langfuse propagation, so the facts are live wherever a tool call executes.
@@ -53,16 +57,22 @@ async def abind(
     method name, and resolving it here keeps the attributes read inside the scopes.
     """
     async with context:
-        with run_scope(agent_name):
+        with run_scope(agent_name, api_key=api_key):
             with propagate_attributes(**langfuse_propagate_kwargs(context, tag)):
                 yield
 
 
 @contextmanager
-def bind(context: HexgateContext, agent_name: str, tag: str) -> Iterator[None]:
+def bind(
+    context: HexgateContext,
+    agent_name: str,
+    tag: str,
+    *,
+    api_key: str | None = None,
+) -> Iterator[None]:
     """Sync mirror of :func:`abind`."""
     with context.sync_scope():
-        with run_scope(agent_name):
+        with run_scope(agent_name, api_key=api_key):
             with propagate_attributes(**langfuse_propagate_kwargs(context, tag)):
                 yield
 

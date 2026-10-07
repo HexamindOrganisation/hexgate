@@ -168,3 +168,30 @@ PARTITION BY toYYYYMM(received_at)
 ORDER BY (project_id, session_id, occurred_at, message_seq, event_id)
 TTL toDateTime(received_at) + INTERVAL 180 DAY
 SETTINGS index_granularity = 8192;
+
+-- One row per admitted agent run — scope hexgate.runs, emitted on run_scope entry
+-- (after the ban check and admission). The only record of a run that made no tool
+-- or model call; the invocation count agent_usage.* is built from.
+CREATE TABLE IF NOT EXISTS hexgate_audit.agent_run
+(
+    -- Envelope (shared with the other event tables — same names, types, order)
+    event_id            UUID,
+    occurred_at         DateTime64(3, 'UTC'),
+    received_at         DateTime64(3, 'UTC') DEFAULT now64(3),
+    project_id          LowCardinality(String),
+    agent_name          LowCardinality(String),
+    agent_version_id    LowCardinality(String) DEFAULT '',
+    session_id          String DEFAULT '',
+    user_id             LowCardinality(String) DEFAULT '',
+
+    -- Run-specific. No zero-UUID default, unlike the sibling tables: a run-start
+    -- span without a run id is rejected to the DLQ, never stored.
+    run_id              UUID COMMENT 'RunFacts.id — joins to policy_decision / llm_invocation / llm_message rows of the same run'
+)
+ENGINE = ReplacingMergeTree(received_at)
+PARTITION BY toYYYYMM(received_at)
+-- Per agent over time: the read is "runs of this agent in a window". event_id
+-- last keeps dedup (the sort key IS the dedup key) to SDK retries of one event.
+ORDER BY (project_id, agent_name, occurred_at, event_id)
+TTL toDateTime(received_at) + INTERVAL 180 DAY
+SETTINGS index_granularity = 8192;

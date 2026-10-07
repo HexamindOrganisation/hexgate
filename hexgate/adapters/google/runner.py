@@ -264,35 +264,42 @@ class HexgateRunner:
         self._setup_observability()
         # per-run policy pull; 304 when unchanged
         prepare_run(self._binding.refresh, self._ban_gate, hexgate_context)
-        with (
-            hexgate_context.sync_scope(),
-            run_scope(self._agent_name),
-            self._propagate(hexgate_context),
-        ):
+        with hexgate_context.sync_scope():
             self._check_admission_sync()  # in-scope: reads the caller's role
-            agen = self._runner.run_async(
-                user_id=hexgate_context.user_id,
-                session_id=hexgate_context.session_id,
-                new_message=new_message,
-                **kwargs,
-            )
-            loop = asyncio.new_event_loop()
-            try:
-                while True:
-                    try:
-                        event = loop.run_until_complete(agen.__anext__())
-                    except StopAsyncIteration:
-                        break
-                    except RuntimeError as exc:
-                        # Recover a typed seam error ADK wrapped (see module top).
-                        unwrapped = _unwrap_plugin_error(exc)
-                        if unwrapped is exc:
-                            raise
-                        raise unwrapped from exc
-                    yield event
-            finally:
-                loop.run_until_complete(agen.aclose())
-                loop.close()
+            with (
+                run_scope(self._agent_name, api_key=self.api_key),
+                self._propagate(hexgate_context),
+            ):
+                yield from self._drive_inline(
+                    self._runner.run_async(
+                        user_id=hexgate_context.user_id,
+                        session_id=hexgate_context.session_id,
+                        new_message=new_message,
+                        **kwargs,
+                    )
+                )
+
+    @staticmethod
+    def _drive_inline(agen: AsyncGenerator[Any, None]) -> Generator[Any, None, None]:
+        """Drain ``agen`` on a per-call loop in the calling thread, so it keeps
+        the caller's context."""
+        loop = asyncio.new_event_loop()
+        try:
+            while True:
+                try:
+                    event = loop.run_until_complete(agen.__anext__())
+                except StopAsyncIteration:
+                    break
+                except RuntimeError as exc:
+                    # Recover a typed seam error ADK wrapped (see module top).
+                    unwrapped = _unwrap_plugin_error(exc)
+                    if unwrapped is exc:
+                        raise
+                    raise unwrapped from exc
+                yield event
+        finally:
+            loop.run_until_complete(agen.aclose())
+            loop.close()
 
     async def run_async(
         self,
@@ -320,7 +327,10 @@ class HexgateRunner:
         )
         async with hexgate_context:
             await self._check_admission_async()  # in-scope: reads the caller's role
-            with run_scope(self._agent_name), self._propagate(hexgate_context):
+            with (
+                run_scope(self._agent_name, api_key=self.api_key),
+                self._propagate(hexgate_context),
+            ):
                 try:
                     async for event in self._runner.run_async(
                         user_id=hexgate_context.user_id,

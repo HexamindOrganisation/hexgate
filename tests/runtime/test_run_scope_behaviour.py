@@ -16,11 +16,13 @@ import pytest
 
 from hexgate.adapters.langchain.agent import HexgateLangchainAgent
 from hexgate.runtime import HexgateContext
+from hexgate.runtime import run_facts as run_facts_mod
 from hexgate.runtime.run_facts import DETACHED, get_run_facts
 from hexgate.security.bans import BanEntry, BanGate, BanSet
 from hexgate.security.errors import AgentBannedError
 
 _AGENT_NAME = "run-scope-probe"
+_AGENT_KEY = "k"
 
 
 def _context() -> HexgateContext:
@@ -79,7 +81,7 @@ class _FactsRecordingGraph:
 def _proxy(graph: _FactsRecordingGraph, ban_gate: BanGate | None = None):
     return HexgateLangchainAgent(
         agent=graph,
-        api_key="k",
+        api_key=_AGENT_KEY,
         tool_names=[],
         agent_name=_AGENT_NAME,
         ban_gate=ban_gate,
@@ -174,6 +176,42 @@ def test_ban_refusal_opens_no_scope() -> None:
 
     assert graph.seen == []
     assert get_run_facts() is DETACHED
+
+
+@pytest.fixture
+def run_starts(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, str, str | None]]:
+    """``(agent, run_id, api_key)`` of every run start ``run_scope`` reports."""
+    captured: list[tuple[str, str, str | None]] = []
+
+    def _capture(
+        agent: str, run_id: str, *, api_key: str | None = None, **_: Any
+    ) -> None:
+        captured.append((agent, run_id, api_key))
+
+    monkeypatch.setattr(run_facts_mod, "emit_run_start", _capture)
+    return captured
+
+
+def test_ban_refusal_reports_no_run_start(
+    run_starts: list[tuple[str, str, str | None]],
+) -> None:
+    """Entering the scope is what counts a run, so a refused one never enters."""
+    proxy = _proxy(_FactsRecordingGraph(), ban_gate=_banning_gate())
+
+    with pytest.raises(AgentBannedError):
+        proxy.invoke({"messages": []}, hexgate_context=_context())
+
+    assert run_starts == []
+
+
+def test_streamed_invocation_reports_one_run_start(
+    run_starts: list[tuple[str, str, str | None]],
+) -> None:
+    """Two chunks, one run: a per-chunk start would double-count streaming."""
+    graph = _FactsRecordingGraph()
+    list(_proxy(graph).stream({"messages": []}, hexgate_context=_context()))
+
+    assert run_starts == [(_AGENT_NAME, graph.run_ids[0], _AGENT_KEY)]
 
 
 def test_bypassed_methods_run_detached() -> None:

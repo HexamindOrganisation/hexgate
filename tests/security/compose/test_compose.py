@@ -8,19 +8,24 @@ equivalent tier-folder project resolve to byte-identical effective policy.
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 
 import pytest
+import yaml
 
 from hexgate.security import (
     AgentPolicy,
     BaseToolPolicy,
     LinkError,
     ModuleContent,
+    PolicyBundle,
+    build_signed_bundle,
     resolve_for_project,
 )
 from hexgate.security.compose import parse_entry, resolve_file, resolve_text
 from hexgate.security.linker import effective_policy_by_role
+from hexgate.security.policy_set import RESOLVED_POLICY_MARKER
 
 
 def _eff(res):
@@ -785,3 +790,195 @@ def test_agent_named_guards_is_reserved() -> None:
     """`guards` is a structural keyword, so no agent may be named it."""
     with pytest.raises(LinkError, match="reserved"):
         resolve_text("agents: { guards: {} }")
+
+
+# --- skills: composed through the fold, like admission/reach ---------------
+
+
+def _decide(res, role: str, tool: str) -> str:
+    return res.policy_set.evaluate(role=role, tool=tool, args={}).outcome.value
+
+
+def test_parse_skills_block_at_every_scope() -> None:
+    entry = parse_entry(
+        """
+        version: 1
+        skills: { a: { mode: allow } }
+        agents:
+          bot:
+            skills: { b: { via: script } }
+            roles:
+              support: { skills: { c: { mode: approval_required } } }
+        """
+    )
+    assert entry.skills["a"].via == ["instructions", "resource", "script"]
+    assert entry.agents["bot"].skills["b"].via == ["script"]  # scalar folded to list
+    assert entry.agents["bot"].roles["support"].skills["c"].mode == "approval_required"
+
+
+@pytest.mark.parametrize(
+    "doc", ["agents: { skills: {} }", "agents: { bot: { roles: { skills: {} } } }"]
+)
+def test_skill_named_role_or_agent_is_reserved(doc: str) -> None:
+    with pytest.raises(LinkError, match="reserved"):
+        parse_entry(doc)
+
+
+def test_skills_grant_lowers_to_skill_keys_per_level() -> None:
+    res = resolve_text("skills: { x: { via: [instructions, resource] } }")
+    tools = _eff(res)["default"]["tools"]
+    assert tools["skill:x"]["mode"] == "allow"
+    assert tools["skill.resource:x"]["mode"] == "allow"
+    assert "skill.script:x" not in tools
+    assert _decide(res, "default", "skill.script:x") == "deny"  # closed-world
+    assert res.policy_set.declares_skills()
+
+
+def test_skills_differ_per_role() -> None:
+    res = resolve_text(
+        """
+        agents:
+          bot:
+            roles:
+              member: { skills: { x: { mode: approval_required } } }
+              admin:  { skills: { x: { mode: allow } } }
+        """,
+        agent="bot",
+    )
+    assert _decide(res, "member", "skill:x") == "needs_approval"
+    assert _decide(res, "admin", "skill:x") == "allow"
+    assert _decide(res, "default", "skill:x") == "deny"  # unlisted for default
+
+
+def test_skills_in_imported_fragment_compose() -> None:
+    res = resolve_text(
+        "version: 1\nimport: [ caps/x.yaml ]\n",
+        loader=lambda _p: "skills: { runbook: { mode: allow } }\n",
+    )
+    assert _decide(res, "default", "skill:runbook") == "allow"
+
+
+def test_skill_denied_when_boundary_omits_it_even_if_granted() -> None:
+    """The fold's fail-open trap: a ceiling that does not list the skill shadows the
+    grant, and the key must stay as an explicit deny. Dropped instead, it would
+    take declares_skills() to False and both adapters would skip the skill gate."""
+    res = resolve_text(
+        """
+        boundary:
+          tools: { load_skill: { mode: allow } }
+        tools: { load_skill: { mode: allow } }
+        skills: { x: { mode: allow } }
+        """
+    )
+    assert _eff(res)["default"]["tools"]["skill:x"]["mode"] == "deny"
+    assert _decide(res, "default", "skill:x") == "deny"
+    assert res.policy_set.declares_skills()
+
+
+def test_boundary_listing_an_ungranted_skill_keeps_it_as_deny() -> None:
+    res = resolve_text("boundary: { skills: { x: { mode: allow } } }")
+    assert _eff(res)["default"]["tools"]["skill:x"]["mode"] == "deny"
+    assert res.policy_set.declares_skills()
+
+
+def test_boundary_skill_level_ceiling() -> None:
+    """May read, may not run: the ceiling lists only the instructions level."""
+    res = resolve_text(
+        """
+        boundary: { skills: { x: { via: [instructions] } } }
+        skills: { x: { mode: allow } }
+        """
+    )
+    assert _decide(res, "default", "skill:x") == "allow"
+    assert _decide(res, "default", "skill.resource:x") == "deny"
+    assert _decide(res, "default", "skill.script:x") == "deny"
+
+
+def test_boundary_skill_deny_wins_over_grant() -> None:
+    res = resolve_text(
+        """
+        boundary: { skills: { x: { mode: deny } } }
+        agents:
+          bot:
+            roles:
+              admin: { skills: { x: { mode: allow } } }
+        """,
+        agent="bot",
+    )
+    assert _decide(res, "admin", "skill:x") == "deny"
+
+
+def test_authored_skill_key_under_tools_still_rejected() -> None:
+    with pytest.raises(LinkError, match="reserved"):
+        resolve_text('tools: { "skill:x": { mode: allow } }')
+
+
+def test_empty_skill_via_is_rejected() -> None:
+    with pytest.raises(LinkError, match="via"):
+        resolve_text("skills: { x: { via: [] } }")
+
+
+def test_no_skills_block_leaves_gate_disengaged() -> None:
+    res = resolve_text("tools: { load_skill: { mode: allow } }")
+    assert not res.policy_set.declares_skills()
+    assert not any(key.startswith("skill") for key in _eff(res)["default"]["tools"])
+
+
+def test_skills_free_policy_resolves_byte_identically() -> None:
+    """A compose doc with no skills resolves to the same dump as before the block
+    existed — no modular project's source_hash moves with this change."""
+    res = resolve_text(
+        """
+        boundary: { tools: { a: { mode: allow } } }
+        tools: { a: { mode: allow } }
+        """
+    )
+    assert _eff(res)["default"] == {
+        "version": 1,
+        "is_mixin": False,
+        "inherits": [],
+        "default_policy": {"mode": "deny", "constraints": []},
+        "constraints": [],
+        "tools": {"a": {"mode": "allow", "constraints": []}},
+        "consts": {},
+        "admission": None,
+        "agents": {},
+        "skills": {},
+    }
+
+
+@pytest.mark.skipif(shutil.which("opa") is None, reason="opa not on PATH")
+def test_compose_skills_engine_parity() -> None:
+    """The resolved compose policy decides skill keys identically on the WASM bundle
+    the platform signs, and the bundle manifest engages the skill gate."""
+    res = resolve_text(
+        """
+        boundary:
+          skills: { x: { via: [instructions, script] }, y: { mode: allow } }
+        skills: { x: { mode: allow }, y: { mode: allow } }
+        agents:
+          bot:
+            roles:
+              member: { skills: { y: { mode: approval_required } } }
+        """,
+        agent="bot",
+    )
+    payload = {"roles": _eff(res), RESOLVED_POLICY_MARKER: True}
+    sb = build_signed_bundle(yaml.safe_dump(payload))
+    bundle = PolicyBundle.from_parts(
+        wasm_bytes=sb.wasm_bytes, manifest_bytes=sb.manifest_bytes
+    )
+    assert bundle.declares_skills() is True
+    for role in ("default", "member"):
+        for tool in (
+            "skill:x",
+            "skill.resource:x",
+            "skill.script:x",
+            "skill:y",
+            "skill:unlisted",
+        ):
+            py = _decide(res, role, tool)
+            wasm = bundle.evaluate(role=role, tool=tool, args={}).outcome.value
+            assert py == wasm, f"engine divergence {role}/{tool}: {py} vs {wasm}"
+    assert _decide(res, "member", "skill:y") == "needs_approval"
+    assert _decide(res, "default", "skill.resource:x") == "deny"

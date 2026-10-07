@@ -44,7 +44,13 @@ CREATE_INDEX_RE = re.compile(
 
 CLICKHOUSE_DATABASE = "hexgate_audit"
 DEFAULT_DATABASE = "default"
-AUDIT_TABLES = ("policy_decision", "llm_invocation", "llm_message", "ban_enforcement")
+AUDIT_TABLES = (
+    "policy_decision",
+    "llm_invocation",
+    "llm_message",
+    "ban_enforcement",
+    "agent_run",
+)
 CREATE_DATABASE_RE = re.compile(r"^CREATE\s+DATABASE\b", re.IGNORECASE)
 
 pg_only = pytest.mark.skipif(

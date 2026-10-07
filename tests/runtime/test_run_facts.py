@@ -21,6 +21,14 @@ from typing import Any
 
 import pytest
 
+from hexgate.runtime import run_facts as run_facts_mod
+from hexgate.runtime.agent_usage import (
+    MAX_WINDOW_SECONDS,
+    UsageLedgers,
+    UsageMetric,
+    new_usage_ledger,
+)
+from hexgate.runtime.context import HexgateContext
 from hexgate.runtime.run_facts import (
     DETACHED,
     KNOWN_RUN_PATHS,
@@ -42,9 +50,10 @@ _FAR_FUTURE_MONOTONIC = 1_000_000.0
 _RECORDER_PREFIX = "record_"
 _DETACHED_GUARD = "if self.detached:"
 _AN_INT = 1
+_AGENT_KEY = "agent-key"
 # Not counters, so out of scope for _mutable_state.
 _NOT_MUTABLE_STATE = frozenset(
-    {"id", "agent", "detached", "_started_monotonic", "_lock"}
+    {"id", "agent", "detached", "ledger", "_started_monotonic", "_lock"}
 )
 
 
@@ -188,6 +197,82 @@ def test_nested_scope_isolates_then_restores() -> None:
             assert child.id != parent.id
         assert get_run_facts() is parent
         assert parent.tool_calls == 1  # not 3 — no roll-up
+
+
+@dataclasses.dataclass(frozen=True)
+class _RunStart:
+    agent: str
+    run_id: str
+    session_id: str
+    user_id: str
+    api_key: str | None
+
+
+@pytest.fixture
+def run_starts(monkeypatch: pytest.MonkeyPatch) -> list[_RunStart]:
+    """Every ``emit_run_start`` call ``run_scope`` makes, captured in order."""
+    captured: list[_RunStart] = []
+
+    def _capture(
+        agent: str,
+        run_id: str,
+        *,
+        session_id: str = "",
+        user_id: str = "",
+        api_key: str | None = None,
+    ) -> None:
+        captured.append(_RunStart(agent, run_id, session_id, user_id, api_key))
+
+    monkeypatch.setattr(run_facts_mod, "emit_run_start", _capture)
+    return captured
+
+
+def test_run_scope_reports_exactly_one_run_start(
+    run_starts: list[_RunStart],
+) -> None:
+    """The invocation-count invariant every ``agent_usage.invocations_*`` path
+    is built on: one row per run, never zero, never two."""
+    with run_scope("billing", api_key=_AGENT_KEY) as facts:
+        assert len(run_starts) == 1
+
+    assert run_starts == [_RunStart("billing", facts.id, "", "", _AGENT_KEY)]
+
+
+async def test_run_scope_reports_the_callers_identity(
+    run_starts: list[_RunStart],
+) -> None:
+    async with HexgateContext(user_id="alice", session_id="sess-1"):
+        with run_scope("billing"):
+            pass
+
+    [start] = run_starts
+    assert (start.user_id, start.session_id) == ("alice", "sess-1")
+
+
+def test_use_run_facts_reports_no_run_start(run_starts: list[_RunStart]) -> None:
+    """Joining a run in flight (a streamed run's consumer) is not a new run."""
+    with run_scope("a") as facts:
+        pass
+    run_starts.clear()
+
+    with use_run_facts(facts):
+        pass
+
+    assert run_starts == []
+
+
+def test_nested_scopes_report_one_run_start_each(
+    run_starts: list[_RunStart],
+) -> None:
+    """A sub-agent is its own invocation of its own agent."""
+    with run_scope("parent") as parent:
+        with run_scope("child") as child:
+            pass
+
+    assert [(s.agent, s.run_id) for s in run_starts] == [
+        ("parent", parent.id),
+        ("child", child.id),
+    ]
 
 
 def test_use_run_facts_joins_an_existing_run() -> None:
@@ -435,3 +520,76 @@ def test_llm_usage_is_applied_atomically() -> None:
         finally:
             stop.set()
             thread.join()
+
+
+# ---------------------------------------------------------------------------
+# Forwarding to the agent_usage ledger
+# ---------------------------------------------------------------------------
+
+
+def _enabled_ledgers() -> UsageLedgers:
+    """A fresh registry — never enable the process-wide one, which is one-way."""
+    ledgers = UsageLedgers(new_usage_ledger)
+    ledgers.enable()
+    return ledgers
+
+
+def _usage(ledgers: UsageLedgers, agent: str) -> dict[UsageMetric, int]:
+    ledger = ledgers.ledger_for(agent)
+    assert ledger is not None
+    return ledger.within(MAX_WINDOW_SECONDS)
+
+
+def test_run_scope_counts_one_invocation_and_a_join_counts_none() -> None:
+    ledgers = _enabled_ledgers()
+
+    with run_scope("a", ledgers=ledgers) as facts:
+        with use_run_facts(facts):
+            pass
+        with run_scope("b", ledgers=ledgers):
+            pass
+
+    assert _usage(ledgers, "a")[UsageMetric.INVOCATIONS] == 1
+    assert _usage(ledgers, "b")[UsageMetric.INVOCATIONS] == 1
+
+
+def test_recorders_forward_their_v1_metrics_to_the_ledger() -> None:
+    ledgers = _enabled_ledgers()
+
+    with run_scope("a", ledgers=ledgers) as facts:
+        facts.record_execution(_ANY_TOOL)
+        facts.record_denial()
+        facts.record_llm_usage(7, 3)
+        facts.record_error()
+        facts.record_approval()
+
+    assert _usage(ledgers, "a") == {
+        UsageMetric.INVOCATIONS: 1,
+        UsageMetric.TOOL_CALLS: 1,
+        UsageMetric.DENIALS: 1,
+        UsageMetric.LLM_CALLS: 1,
+        UsageMetric.INPUT_TOKENS: 7,
+        UsageMetric.OUTPUT_TOKENS: 3,
+    }
+
+
+def test_a_disabled_registry_binds_no_ledger() -> None:
+    with run_scope("a", ledgers=UsageLedgers(new_usage_ledger)) as facts:
+        assert facts.ledger is None
+
+
+def test_detached_has_no_ledger() -> None:
+    assert DETACHED.ledger is None
+
+
+def test_consecutive_runs_of_one_agent_share_one_ledger() -> None:
+    ledgers = _enabled_ledgers()
+
+    with run_scope("a", ledgers=ledgers) as first:
+        first.record_execution(_ANY_TOOL)
+    with run_scope("a", ledgers=ledgers) as second:
+        pass
+
+    assert first.ledger is second.ledger
+    assert (first.tool_calls, second.tool_calls) == (1, 0)
+    assert _usage(ledgers, "a")[UsageMetric.INVOCATIONS] == 2
