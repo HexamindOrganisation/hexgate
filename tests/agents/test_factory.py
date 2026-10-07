@@ -16,6 +16,7 @@ from hexgate.agents import factory
 from hexgate.agents.factory import HexgateAgent
 from hexgate.runtime import HexgateContext, get_run_facts
 from hexgate.runtime.context import get_current_context
+from hexgate.security.policy_set import load_policy_set_from_dict
 from hexgate.tracing import usage as tracing_usage_mod
 
 
@@ -584,14 +585,15 @@ class _CallbackFiringGraph:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("name", ["my-agent", " my-agent "])
 async def test_usage_handler_emits_with_agent_name(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, name: str
 ) -> None:
     fake_sender = _FakeSender()
     monkeypatch.setattr(
         tracing_usage_mod, "configure_usage_sender", lambda api_key=None: fake_sender
     )
-    agent, _ = _make_hexgate_agent(name="my-agent", graph=_CallbackFiringGraph())
+    agent, _ = _make_hexgate_agent(name=name, graph=_CallbackFiringGraph())
 
     await agent.ainvoke({"messages": []}, config={})
 
@@ -599,22 +601,6 @@ async def test_usage_handler_emits_with_agent_name(
     assert event.agent_name == "my-agent"
     assert event.input_tokens == 10
     assert event.output_tokens == 20
-
-
-@pytest.mark.asyncio
-async def test_usage_handler_emits_canonical_agent_name(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    fake_sender = _FakeSender()
-    monkeypatch.setattr(
-        tracing_usage_mod, "configure_usage_sender", lambda api_key=None: fake_sender
-    )
-    agent, _ = _make_hexgate_agent(name=" my-agent ", graph=_CallbackFiringGraph())
-
-    await agent.ainvoke({"messages": []}, config={})
-
-    [event] = fake_sender.events
-    assert event.agent_name == "my-agent"
 
 
 class _RunFactsRecordingGraph:
@@ -657,6 +643,24 @@ async def test_run_scope_uses_canonical_agent_name(
     await _run(agent, method)
 
     assert graph.agents == [expected]
+
+
+@pytest.mark.asyncio
+async def test_run_scope_name_matches_enforcer_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The ledger key (run_scope's name) must equal the enforcer's agent_name, which
+    agent_usage.* (#314) relies on to look the ledger up."""
+    graph = _RunFactsRecordingGraph()
+    monkeypatch.setattr(factory, "create_langchain_agent", lambda **k: graph)
+    agent, _ = _make_hexgate_agent(name=" billing ", graph=graph)
+    guarded = agent.enforce_policy(
+        load_policy_set_from_dict({"roles": {"default": {}}})
+    )
+
+    await guarded.ainvoke({"messages": []}, config={})
+
+    assert graph.agents == [guarded._binding.enforcer.agent_name]
 
 
 @pytest.mark.asyncio

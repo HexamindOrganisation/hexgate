@@ -18,7 +18,6 @@ from hexgate.agents.factory import HexgateAgent
 from hexgate.guards import before_tool
 from hexgate.guards.stance import GuardClosedWorldError
 from hexgate.guards.types import Halt
-from hexgate.runtime import get_run_facts
 from hexgate.security.policy_set import load_policy_set_from_dict
 
 
@@ -306,32 +305,3 @@ def test_guard_closed_world_error_names_canonical_agent(
     )
     with pytest.raises(GuardClosedWorldError, match="agent 'bot'"):
         agent.enforce_policy(policy, guards=[g_keep])
-
-
-class _RunFactsRecordingGraph:
-    def __init__(self) -> None:
-        self.agents: list[str] = []
-
-    async def ainvoke(self, payload: dict, config: Any = None) -> dict:
-        self.agents.append(get_run_facts().agent)
-        return {"messages": ["ok"]}
-
-
-@pytest.mark.asyncio
-async def test_run_scope_name_matches_enforcer_name(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The ledger key (run_scope's name) must equal the enforcer's agent_name, which
-    agent_usage.* (#314) relies on to look the ledger up."""
-    graph = _RunFactsRecordingGraph()
-    monkeypatch.setattr(factory, "create_langchain_agent", lambda **k: graph)
-    agent = HexgateAgent(
-        graph=graph, model="m", tools=[echo], system_prompt=None, name=" billing "
-    )
-    guarded = agent.enforce_policy(
-        load_policy_set_from_dict({"roles": {"default": {}}})
-    )
-
-    await guarded.ainvoke({"messages": []}, config={})
-
-    assert graph.agents == [guarded._binding.enforcer.agent_name]
