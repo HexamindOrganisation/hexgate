@@ -128,6 +128,20 @@ def resolve_role_map(
     return resolved
 
 
+def named_agent_roles(
+    roles: RoleMatrix | Mapping[str, Sequence[str]] | None,
+) -> dict[str, set[str]]:
+    """Each named agent (not ``"*"``) with the roles whose cell it defines: the
+    roles where :func:`resolve_role_map` uses the agent's own cell instead of
+    falling back to ``"*"``. A legacy flat binding names no agent."""
+    named: dict[str, set[str]] = {}
+    for role, cells in (roles or {}).items():
+        if isinstance(cells, Mapping):
+            for agent in cells.keys() - {DEFAULT_AGENT}:
+                named.setdefault(agent, set()).add(role)
+    return named
+
+
 def resolve_for_project(
     boundaries: list[ModuleContent],
     library: list[ModuleContent],
