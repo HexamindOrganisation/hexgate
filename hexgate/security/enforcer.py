@@ -38,12 +38,11 @@ from hexgate.tracing._senders import AuditSender
 
 if TYPE_CHECKING:
     from hexgate.runtime.context import HexgateContext
+    from hexgate.runtime.run_facts import RunFacts
 
 _log = logging.getLogger(__name__)
 
-# run.* paths the agent_usage namespace reads to recognise the agent's own run.
-_RUN_ID = "id"
-_RUN_AGENT = "agent"
+# run.* path the agent_usage namespace reads to age out the current run's invocation.
 _RUN_ELAPSED = "elapsed_seconds"
 
 _warned_role_cap = False
@@ -184,12 +183,13 @@ class PolicyEnforcer:
         # moves and counters can change mid-fold, so N reads could let roles
         # disagree about the same run. No snapshot needed — this dict is
         # freshly built and held nowhere else.
-        run_snapshot = get_run_facts().as_namespace(tool_name)
+        facts = get_run_facts()
+        run_snapshot = facts.as_namespace(tool_name)
         bound = self._bound
         # Feeds the ``agent_usage.*`` namespace. Read once per decision, like run.*,
         # so roles can't disagree about the agent's usage. None when the policy
         # references none.
-        usage_snapshot = self._usage_namespace(bound.usage_paths, run_snapshot)
+        usage_snapshot = self._usage_namespace(bound.usage_paths, facts, run_snapshot)
 
         verdict, deciding_role = combine_role_verdicts(
             roles,
@@ -225,7 +225,7 @@ class PolicyEnforcer:
         return decision
 
     def _usage_namespace(
-        self, paths: frozenset[str], run: Mapping[str, Any]
+        self, paths: frozenset[str], facts: RunFacts, run: Mapping[str, Any]
     ) -> dict[str, int] | None:
         # By agent name, not RunFacts: admission is decided before run_scope opens,
         # while RunFacts is still DETACHED and carries no ledger.
@@ -234,9 +234,10 @@ class PolicyEnforcer:
         ledger = self._ledgers.ledger_for(self.agent_name)
         if ledger is None:
             return None
-        # Inside this agent's own run (not a parent's, not DETACHED), so that run's
+        # Inside a run that recorded its invocation on this ledger (not a parent's,
+        # not DETACHED, not one opened before the ledgers were enabled), so that
         # invocation is left out of invocations_*, as it was at admission.
-        in_own_run = bool(run[_RUN_ID]) and run[_RUN_AGENT] == self.agent_name
+        in_own_run = facts.ledger is ledger
         return ledger_namespace(
             ledger,
             paths,
