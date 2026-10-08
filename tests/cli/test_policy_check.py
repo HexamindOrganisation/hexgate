@@ -195,3 +195,27 @@ def test_typo_in_roles_key_is_an_error_not_silent_all_compose(tmp_path):
     _write(tmp_path, "roles.yaml", "role:\n  default: [read_only]\n")
     assert _run("policy", "resolve", "--dir", str(tmp_path)) == 1
     assert _run("policy", "check", "--dir", str(tmp_path)) == 1
+
+
+def test_when_a_named_agent_cell_fails_then_check_tags_it_and_keeps_the_hint(
+    tmp_path, capsys
+):
+    _write(
+        tmp_path,
+        "policies/capabilities/read_only.yaml",
+        "tools:\n  view: { mode: allow }\n",
+    )
+    _write(
+        tmp_path,
+        "roles.yaml",
+        "version: 1\nroles:\n"
+        "  default: [read_only]\n"
+        '  member:\n    "*": [read_only]\n    billing_bot: [nope]\n',
+    )
+
+    assert _run("policy", "check", "--dir", str(tmp_path)) == 1
+
+    out = capsys.readouterr()
+    assert "[link-error] [agent billing_bot]" in out.out
+    # The "*" column linked, so drift was skipped and the hint still applies.
+    assert "pass --manifest to enable them" in out.err

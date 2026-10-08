@@ -36,6 +36,7 @@ from langgraph.graph.state import CompiledStateGraph
 from langgraph.store.base import BaseStore
 from pydantic import BaseModel
 
+from hexgate.adapters._common import aprepare_run
 from hexgate.agents.subagents import SubagentEdge
 
 # BC re-export — canonical home is hexgate.approvals (framework-agnostic).
@@ -46,6 +47,7 @@ from hexgate.runtime import (
     LocalWorkspace,
     ToolUseContext,
     Workspace,
+    get_current_context,
     reset_current_tool_use_context,
     run_scope,
     set_current_tool_use_context,
@@ -468,14 +470,16 @@ class HexgateAgent:
     ) -> dict[str, Any]:
         """Delegate invocation to the underlying graph.
 
-        Refreshes the attached policy source before delegating — see
-        :func:`_refresh_policy_safely`. The refresh seam lives here (not
+        Refreshes the attached policy source and fetches bans concurrently
+        before delegating — see :func:`_refresh_policy_safely` — then checks
+        admission against the refreshed policy. The refresh seam lives here (not
         only in :func:`invoke_agent`) so a direct caller of
         ``agent.ainvoke(...)`` gets hot-reload too, instead of silently
         running with stale policy.
         """
-        await _refresh_policy_safely(self)
-        await self._check_ban()
+        await aprepare_run(
+            _refresh_policy_safely(self), self._ban_gate, get_current_context()
+        )
         await self._check_admission()
         with run_scope(self.name or DEFAULT_AGENT_NAME):
             turn_key = self._usage_handler.turn_key()
@@ -499,8 +503,9 @@ class HexgateAgent:
         :meth:`ainvoke`. Wrapping both methods means hot-reload fires
         regardless of which entry point a caller picks.
         """
-        await _refresh_policy_safely(self)
-        await self._check_ban()
+        await aprepare_run(
+            _refresh_policy_safely(self), self._ban_gate, get_current_context()
+        )
         await self._check_admission()
         with run_scope(self.name or DEFAULT_AGENT_NAME):
             # Captured on the way in because this is a generator, whose
@@ -514,17 +519,6 @@ class HexgateAgent:
                     yield event
             finally:
                 self._usage_handler.end_run(turn_key)
-
-    async def _check_ban(self) -> None:
-        """Refuse a banned agent/user before the graph runs, if a gate is
-        attached. Context comes from the active :class:`HexgateContext` scope
-        (this path is ambient, unlike the framework adapters which pass it
-        explicitly)."""
-        if self._ban_gate is None:
-            return
-        from hexgate.runtime.context import get_current_context
-
-        await self._ban_gate.check_async(get_current_context())
 
     async def _check_admission(self) -> None:
         """Refuse a caller not admitted by policy before the graph runs, if an

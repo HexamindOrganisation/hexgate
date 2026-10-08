@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 from hexgate.security import (
+    AgentBinding,
     AgentPolicy,
     BaseToolPolicy,
     ModuleContent,
@@ -44,10 +45,11 @@ def _deny(constraints=None):
     return BaseToolPolicy(mode="deny", constraints=constraints or [])
 
 
-def _manifest(*tools, guards=(), skills=()):
-    """Duck-typed AgentManifest: tools=[(name, [arg, ...]), ...] plus guard and
-    skill names."""
+def _manifest(*tools, guards=(), skills=(), subagents=(), name="main"):
+    """Duck-typed AgentManifest: tools=[(name, [arg, ...]), ...] plus guard,
+    skill and sub-agent names."""
     return SimpleNamespace(
+        name=name,
         tools=[
             SimpleNamespace(
                 name=name,
@@ -57,6 +59,7 @@ def _manifest(*tools, guards=(), skills=()):
         ],
         guards=[SimpleNamespace(name=g) for g in guards],
         skills=[SimpleNamespace(name=s) for s in skills],
+        subagents=[SimpleNamespace(name=n) for n in subagents] or None,
     )
 
 
@@ -516,8 +519,6 @@ def test_check_project_unknown_capability_is_a_link_error():
 def test_check_project_surfaces_named_agent_column_link_error():
     # A named-agent column importing an unknown capability must show as a
     # link-error lint (the "*" column alone would never touch it).
-    from hexgate.security import AgentBinding
-
     read_only = _mod("read_only", "capability", {"view": _allow()})
     roles = {
         "member": {
@@ -527,7 +528,7 @@ def test_check_project_surfaces_named_agent_column_link_error():
     }
     lints = check_project([], [read_only], roles)
     assert any(
-        lint.code == "link-error" and "billing_bot" in lint.message for lint in lints
+        lint.code == "link-error" and lint.agent == "billing_bot" for lint in lints
     )
 
 
@@ -1444,3 +1445,423 @@ def test_when_a_collection_is_a_constant_then_the_message_says_so(constraint):
             "or inline its list",
         )
     ]
+
+
+# --- check_project over every agent's manifest -------------------------------
+
+
+def _matrix(**columns):
+    """One ``member`` role: agent column -> capability names."""
+    return {
+        "default": {"*": AgentBinding()},
+        "member": {a: AgentBinding(capabilities=tuple(c)) for a, c in columns.items()},
+    }
+
+
+_MANIFESTS = {
+    "billing_bot": _manifest(("refund", ["amount"]), name="billing_bot"),
+    "support_bot": _manifest(("lookup", ["order_id"]), name="support_bot"),
+}
+
+
+def test_check_project_happy_path():
+    org = _mod("org", "boundary", {"lookup": _allow()})
+    refunds = _mod("refunds", "capability", {"refund": _allow()})
+    lookups = _mod("lookups", "capability", {"lookup": _allow()})
+    roles = _matrix(**{"*": ["lookups"], "billing_bot": ["refunds"]})
+
+    lints = check_project([org], [refunds, lookups], roles, manifests=_MANIFESTS)
+
+    assert lints == []
+
+
+def test_when_a_boundary_caps_another_agents_tool_then_it_is_not_unknown():
+    # `lookup` is only support_bot's; the org boundary may still cap it.
+    org = _mod("org", "boundary", {"lookup": _allow(["args.order_id < 100"])})
+
+    lints = check_project([org], [], {"default": []}, manifests=_MANIFESTS)
+
+    assert lints == []
+
+
+def test_when_a_boundary_caps_a_tool_no_agent_has_then_unknown_tool_error():
+    org = _mod("org", "boundary", {"lookpu": _allow()})
+
+    lints = check_project([org], [], {"default": []}, manifests=_MANIFESTS)
+
+    assert [(lint.code, lint.severity, lint.role) for lint in lints] == [
+        ("unknown-tool", "error", None)
+    ]
+
+
+def test_when_a_named_column_grants_a_tool_its_agent_lacks_then_unknown_tool():
+    lookups = _mod("lookups", "capability", {"lookup": _allow()})
+    roles = _matrix(billing_bot=["lookups"])
+
+    lints = check_project([], [lookups], roles, manifests=_MANIFESTS)
+
+    assert [
+        (lint.code, lint.severity, lint.role, lint.agent, lint.tool) for lint in lints
+    ] == [("unknown-tool", "warning", "member", "billing_bot", "lookup")]
+
+
+def test_when_the_star_column_grants_any_agents_tool_then_it_is_not_unknown():
+    # Any agent can fall through to "*", so it is checked against every agent's.
+    both = _mod("both", "capability", {"lookup": _allow(), "refund": _allow()})
+
+    lints = check_project([], [both], _matrix(**{"*": ["both"]}), manifests=_MANIFESTS)
+
+    assert lints == []
+
+
+def test_when_a_named_agent_has_no_manifest_then_its_column_is_not_drift_checked():
+    lookups = _mod("lookups", "capability", {"nope": _allow()})
+
+    lints = check_project(
+        [],
+        [lookups],
+        _matrix(new_bot=["lookups"]),
+        manifests=_MANIFESTS,
+        registered_agents=["new_bot"],
+    )
+
+    assert lints == []
+
+
+def test_when_one_manifest_is_passed_then_it_stands_for_star_and_its_own_agent():
+    lookups = _mod("lookups", "capability", {"lookup": _allow()})
+    roles = _matrix(
+        **{"*": ["lookups"], "billing_bot": ["lookups"], "support_bot": ["lookups"]}
+    )
+
+    lints = check_project([], [lookups], roles, manifest=_MANIFESTS["billing_bot"])
+
+    # support_bot's tools are unknown, so its cell is not drift-checked.
+    assert {(lint.code, lint.agent) for lint in lints} == {
+        ("unknown-tool", None),
+        ("unknown-tool", "billing_bot"),
+    }
+    assert all("the agent's manifest doesn't declare" in lint.message for lint in lints)
+
+
+def test_when_an_agent_registered_without_a_manifest_then_shared_drift_is_skipped():
+    # bare_bot's tools are unknown, so `search` may be one of them.
+    org = _mod("org", "boundary", {"search": _allow()})
+    stale = _mod("stale", "capability", {"search": _allow()})
+    lookups = _mod("lookups", "capability", {"search": _allow()})
+
+    lints = check_project(
+        [org],
+        [stale, lookups],
+        _matrix(**{"*": ["lookups"], "billing_bot": ["lookups"]}),
+        manifests=_MANIFESTS,
+        registered_agents=["bare_bot"],
+    )
+
+    assert [(lint.code, lint.agent) for lint in lints] == [
+        ("unknown-tool", "billing_bot"),
+        ("unused-capability", None),
+    ]
+
+
+def test_when_manifests_is_empty_then_no_manifest_lints_run():
+    org = _mod("org", "boundary", {"lookpu": _allow()})
+
+    lints = check_project([org], [], None, manifests={})
+
+    assert lints == []
+
+
+def test_when_a_tool_is_missing_from_every_agent_then_the_message_says_so():
+    org = _mod("org", "boundary", {"lookpu": _allow()})
+
+    (lint,) = check_project([org], [], {"default": []}, manifests=_MANIFESTS)
+
+    assert lint.message.endswith("'lookpu', which no agent's manifest declares")
+
+
+def test_when_two_named_agents_have_lints_then_they_come_in_name_order():
+    ceiling = _mod("org", "boundary", {"refund": _allow()}, default_mode="deny")
+    pay = _mod("pay", "capability", {"send_email": _allow()})
+    roles = {
+        "default": {"*": AgentBinding()},
+        "member": {
+            name: AgentBinding(capabilities=("pay",))
+            for name in ["zeta_bot", "alpha_bot", "mid_bot"]
+        },
+    }
+
+    lints = check_project([ceiling], [pay], roles)
+
+    assert [lint.agent for lint in lints] == ["alpha_bot", "mid_bot", "zeta_bot"]
+
+
+def test_when_a_named_column_has_a_dead_grant_then_it_names_role_and_agent():
+    ceiling = _mod("org", "boundary", {"refund": _allow()}, default_mode="deny")
+    pay = _mod("pay", "capability", {"refund": _allow(), "send_email": _allow()})
+
+    lints = check_project([ceiling], [pay], _matrix(billing_bot=["pay"]))
+
+    assert [(lint.code, lint.tool, lint.role, lint.agent) for lint in lints] == [
+        ("dead-grant", "send_email", "member", "billing_bot")
+    ]
+
+
+def test_when_a_named_agent_inherits_star_in_a_role_then_it_is_linted_once():
+    # billing_bot has no `default` cell, so it falls back to "*" there: the
+    # "*" column already reports that cell.
+    ceiling = _mod("org", "boundary", {"refund": _allow()}, default_mode="deny")
+    pay = _mod("pay", "capability", {"send_email": _allow()})
+    roles = {
+        "default": {"*": AgentBinding(capabilities=("pay",))},
+        "member": {"billing_bot": AgentBinding()},
+    }
+
+    lints = check_project([ceiling], [pay], roles)
+
+    assert [(lint.code, lint.role, lint.agent) for lint in lints] == [
+        ("dead-grant", "default", None)
+    ]
+
+
+def test_when_no_cell_imports_a_capability_then_it_is_still_drift_checked():
+    stale = _mod("stale", "capability", {"refnud": _allow()})
+
+    lints = check_project([], [stale], {"default": []}, manifests=_MANIFESTS)
+
+    assert sorted((lint.code, lint.tool) for lint in lints) == [
+        ("unknown-tool", "refnud"),
+        ("unused-capability", None),
+    ]
+
+
+def test_when_roles_name_an_unregistered_agent_then_drift_still_runs():
+    # A misspelled column is no agent: it doesn't make every agent's tools unknown.
+    org = _mod("org", "boundary", {"lookpu": _allow()})
+    read = _mod("read", "capability", {"lookup": _allow()})
+    roles = _matrix(**{"*": ["read"], "biling_bot": ["read"]})
+
+    lints = check_project([org], [read], roles, manifests=_MANIFESTS)
+
+    assert sorted((lint.code, lint.agent) for lint in lints) == [
+        ("unknown-tool", None),
+    ]
+
+
+def test_when_both_manifest_and_manifests_are_passed_then_type_error():
+    with pytest.raises(TypeError):
+        check_project(
+            [], [], None, manifest=_MANIFESTS["billing_bot"], manifests=_MANIFESTS
+        )
+
+
+def test_when_a_named_cell_fails_to_link_then_its_other_cells_are_still_linted():
+    broken = ModuleContent(
+        name="broken",
+        kind="capability",
+        policy=AgentPolicy(
+            default_policy=BaseToolPolicy(mode="allow", constraints=["args.x < 1"])
+        ),
+        source="broken.yaml",
+        content_hash="hash-broken",
+    )
+    ceiling = _mod("org", "boundary", {"refund": _allow()}, default_mode="deny")
+    pay = _mod("pay", "capability", {"send_email": _allow()})
+    roles = {
+        "default": {"*": AgentBinding()},
+        "admin": {"billing_bot": AgentBinding(capabilities=("broken",))},
+        "member": {"billing_bot": AgentBinding(capabilities=("pay",))},
+    }
+
+    lints = check_project([ceiling], [broken, pay], roles)
+
+    assert [(lint.code, lint.role, lint.agent) for lint in lints] == [
+        ("link-error", "admin", "billing_bot"),
+        ("dead-grant", "member", "billing_bot"),
+    ]
+
+
+def test_when_a_named_agent_owns_several_cells_then_each_is_linted():
+    ceiling = _mod("org", "boundary", {"refund": _allow()}, default_mode="deny")
+    pay = _mod("pay", "capability", {"send_email": _allow()})
+    roles = {
+        "default": {"*": AgentBinding()},
+        "admin": {"billing_bot": AgentBinding(capabilities=("pay",))},
+        "member": {"billing_bot": AgentBinding(capabilities=("pay",))},
+    }
+
+    lints = check_project([ceiling], [pay], roles)
+
+    assert sorted(lint.role for lint in lints) == ["admin", "member"]
+
+
+def test_when_a_cell_has_soft_and_drift_lints_then_both_are_reported():
+    ceiling = _mod("org", "boundary", {"refund": _allow()}, default_mode="deny")
+    lookups = _mod("lookups", "capability", {"lookup": _allow()})
+
+    lints = check_project(
+        [ceiling], [lookups], _matrix(billing_bot=["lookups"]), manifests=_MANIFESTS
+    )
+
+    assert sorted(lint.code for lint in lints) == ["dead-grant", "unknown-tool"]
+
+
+def test_when_several_modules_drift_then_each_is_reported_at_project_level():
+    org = _mod("org", "boundary", {"lookpu": _allow()})
+    team = _mod("team", "boundary", {"refnud": _allow()})
+    stale = _mod("stale", "capability", {"refnud": _allow()})
+
+    lints = check_project([org, team], [stale], {"default": []}, manifests=_MANIFESTS)
+
+    drift = [lint for lint in lints if lint.code == "unknown-tool"]
+    assert [
+        (lint.source, lint.tier, lint.severity, lint.role, lint.agent) for lint in drift
+    ] == [
+        ("org.yaml", "boundary", "error", None, None),
+        ("team.yaml", "boundary", "error", None, None),
+        ("stale.yaml", "capability", "warning", None, None),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("manifests", "registered"),
+    [
+        # a sub-agent with no manifest of its own
+        ({"billing_bot": _manifest(subagents=["ledger_bot"], name="billing_bot")}, []),
+        # an agent registered without a manifest
+        ({"billing_bot": _manifest(name="billing_bot")}, ["bare_bot"]),
+    ],
+)
+def test_when_some_agents_tools_are_unknown_then_shared_drift_is_skipped(
+    manifests, registered
+):
+    org = _mod("org", "boundary", {"web_search": _allow()})
+
+    lints = check_project(
+        [org], [], {"default": []}, manifests=manifests, registered_agents=registered
+    )
+
+    assert lints == []
+
+
+def test_when_manifests_is_empty_then_a_manifest_alone_is_used():
+    org = _mod("org", "boundary", {"lookpu": _allow()})
+
+    lints = check_project(
+        [org], [], {"default": []}, manifest=_MANIFESTS["billing_bot"], manifests={}
+    )
+
+    assert [lint.code for lint in lints] == ["unknown-tool"]
+
+
+def _skills(name, kind, skills):
+    """A module whose ``skills:`` block allows each skill."""
+    policy = AgentPolicy(
+        default_policy=BaseToolPolicy(mode="allow"),
+        skills={s: {"mode": "allow"} for s in skills},
+    )
+    return ModuleContent(name, kind, policy, f"{name}.yaml", f"hash-{name}")
+
+
+def test_when_a_named_column_grants_a_skill_its_agent_lacks_then_unknown_skill():
+    manifests = {
+        "billing_bot": _manifest(skills=["ledger"], name="billing_bot"),
+        "support_bot": _manifest(skills=["pdf"], name="support_bot"),
+    }
+    # The org boundary and "*" may name either agent's skill.
+    org = _skills("org", "boundary", ["pdf", "ledger"])
+    docs = _skills("docs", "capability", ["pdf"])
+    roles = _matrix(**{"*": ["docs"], "billing_bot": ["docs"]})
+
+    lints = check_project([org], [docs], roles, manifests=manifests)
+
+    assert [(lint.code, lint.role, lint.agent) for lint in lints] == [
+        ("unknown-skill", "member", "billing_bot")
+    ]
+    assert lints[0].message.endswith("which the agent's manifest doesn't declare")
+
+
+def test_when_no_agent_has_a_skill_then_the_shared_message_says_so():
+    org = _skills("org", "boundary", ["pdff"])
+
+    (lint,) = check_project([org], [], {"default": []}, manifests=_MANIFESTS)
+
+    assert (lint.code, lint.severity) == ("unknown-skill", "error")
+    assert lint.message.endswith("'pdff', which no agent's manifest declares")
+
+
+def test_when_a_module_has_an_unknown_root_then_check_project_reports_it_once():
+    team = _mod("team", "capability", {"refund": _allow(['user.tier == "gold"'])})
+    roles = _matrix(**{"*": ["team"], "billing_bot": ["team"]})
+
+    lints = check_project([], [team], roles)
+
+    assert [(lint.code, lint.role, lint.agent) for lint in lints] == [
+        ("unknown-root", None, None)
+    ]
+
+
+def test_when_some_agents_tools_are_unknown_then_gate_args_are_still_checked():
+    # The reach gate passes no `tenent`, so this deny never fires: fail-open.
+    org = ModuleContent(
+        "org",
+        "boundary",
+        AgentPolicy(
+            default_policy=BaseToolPolicy(mode="allow"),
+            agents={
+                "billing_bot": {"mode": "deny", "constraints": ['args.tenent == "a"']}
+            },
+        ),
+        "org.yaml",
+        "hash-org",
+    )
+    stale = _mod("stale", "capability", {"web_search": _allow()})
+
+    lints = check_project(
+        [org],
+        [stale],
+        _matrix(new_bot=["stale"]),
+        manifests=_MANIFESTS,
+        registered_agents=["bare_bot"],
+    )
+
+    assert sorted(
+        (lint.code, lint.severity, lint.tool) for lint in lints if lint.agent is None
+    ) == [
+        ("unknown-arg", "error", "agent.handoff:billing_bot"),
+        ("unknown-arg", "error", "agent.tool:billing_bot"),
+    ]
+
+
+def test_when_an_unregistered_agents_cell_misreads_a_gate_arg_then_unknown_arg():
+    reach = ModuleContent(
+        "reach",
+        "capability",
+        AgentPolicy(
+            agents={
+                "support_bot": {"mode": "allow", "constraints": ['args.tagret == "x"']}
+            }
+        ),
+        "reach.yaml",
+        "hash-reach",
+    )
+
+    lints = check_project([], [reach], _matrix(new_bot=["reach"]), manifests=_MANIFESTS)
+
+    assert sorted((lint.code, lint.agent) for lint in lints) == [
+        ("unknown-arg", "new_bot"),
+        ("unknown-arg", "new_bot"),
+    ]
+
+
+def test_when_some_agents_tools_are_unknown_then_egress_args_are_still_checked():
+    # The proxy passes no `hots`: under the boundary deny's `not`, fail-open.
+    org = _mod(
+        "org", "boundary", {"net.http_request": _deny(['args.hots == "evil.com"'])}
+    )
+
+    lints = check_project(
+        [org], [], {"default": []}, manifests=_MANIFESTS, registered_agents=["bare"]
+    )
+
+    assert [(lint.code, lint.severity) for lint in lints] == [("unknown-arg", "error")]
