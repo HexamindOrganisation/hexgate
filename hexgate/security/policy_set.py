@@ -377,17 +377,6 @@ def _rooted_paths_in(node: Node, root: str) -> Iterator[tuple[str, ...]]:
             yield path
 
 
-def _validate_run_refs(
-    policies: Mapping[str, AgentPolicy],
-    *,
-    scalar_paths: frozenset[str] = SCALAR_PATHS,
-    list_paths: frozenset[str] = LIST_PATHS,
-) -> None:
-    """:func:`_validate_path_refs` for ``run.*``, with injectable registries so the
-    list rule is testable before any list-valued path is registered."""
-    _validate_path_refs(policies, _run_root(scalar_paths, list_paths))
-
-
 def _validate_path_refs(
     policies: Mapping[str, AgentPolicy], root: _PathRoot
 ) -> frozenset[str]:
