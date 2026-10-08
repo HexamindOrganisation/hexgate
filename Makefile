@@ -144,6 +144,8 @@ demo-override: ## Build a deny-everything bundle + chat with HEXGATE_LOCAL_POLIC
 # scripts; reach for it only when the migrations cannot get you there.
 
 COMPOSE := docker compose -f platform/docker-compose.yml
+# The container stays outside: clickhouse-cli execs with -it, the others with -i.
+CLICKHOUSE_CLIENT := clickhouse-client --user hexgate --password hexgate-dev-password --database hexgate_audit
 
 # `--wait` is load-bearing, not tidiness: every consumer below execs a
 # clickhouse-client against the container on the next line, and `up -d` returns
@@ -164,8 +166,7 @@ clickhouse-logs: ## Tail ClickHouse server logs
 
 .PHONY: clickhouse-cli
 clickhouse-cli: ## Open an interactive SQL shell against the local ClickHouse
-	docker exec -it hexgate-clickhouse clickhouse-client \
-	    --user hexgate --password hexgate-dev-password --database hexgate_audit
+	docker exec -it hexgate-clickhouse $(CLICKHOUSE_CLIENT)
 
 # The local twin of `platform-migrate`'s ClickHouse half. Without it the only
 # documented way to pick up a new table was clickhouse-reset, which wipes — so a
@@ -174,8 +175,7 @@ clickhouse-cli: ## Open an interactive SQL shell against the local ClickHouse
 clickhouse-migrate: clickhouse-up ## Replay platform/clickhouse/migrations/*.sql against local ClickHouse (idempotent)
 	@for f in platform/clickhouse/migrations/*.sql; do \
 		echo "applying $$f"; \
-		docker exec -i hexgate-clickhouse clickhouse-client \
-			--user hexgate --password hexgate-dev-password --database hexgate_audit \
+		docker exec -i hexgate-clickhouse $(CLICKHOUSE_CLIENT) \
 			--multiquery < "$$f" || exit 1; \
 	done
 
@@ -185,8 +185,7 @@ clickhouse-migrate: clickhouse-up ## Replay platform/clickhouse/migrations/*.sql
 clickhouse-backfill: ## Run one backfill against local ClickHouse: make clickhouse-backfill FILE=0005_usage_minute
 	@test -n "$(FILE)" || (echo "Set FILE=<name>, e.g. make clickhouse-backfill FILE=0005_usage_minute" && exit 1)
 	$(COMPOSE) up -d --wait clickhouse
-	docker exec -i hexgate-clickhouse clickhouse-client \
-		--user hexgate --password hexgate-dev-password --database hexgate_audit \
+	docker exec -i hexgate-clickhouse $(CLICKHOUSE_CLIENT) \
 		--multiquery < platform/clickhouse/backfills/$(FILE).sql
 
 .PHONY: clickhouse-reset

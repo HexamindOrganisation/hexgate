@@ -12,17 +12,9 @@ set -euo pipefail
 STAGE="${1:?usage: backfill.sh <stage> <file>}"
 FILE="${2:?usage: backfill.sh <stage> <file>}"
 
-compose() {
-  docker compose -p "hexgate-$STAGE" \
-    --env-file "platform/.env.$STAGE" \
-    -f platform/docker-compose.deploy.yml "$@"
-}
+# shellcheck source=lib/stage.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib/stage.sh"
 
-# Same client invocation as migrate.sh's run_clickhouse (see there for why
-# --database is passed).
-compose exec -T clickhouse sh -c \
-  'clickhouse-client --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD" \
-    --database "$CLICKHOUSE_DB" --multiquery' \
-  <"$FILE"
+run_clickhouse "$FILE"
 
 echo "backfill($STAGE): $FILE ok"
