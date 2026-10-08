@@ -13,7 +13,7 @@ WINDOW_MS = 1_000
 
 
 def _key(project_id: str = "proj_1") -> DedupKey:
-    return (project_id, uuid.uuid4())
+    return (project_id, uuid.uuid4().int)
 
 
 def test_a_key_is_seen_only_once_remembered() -> None:
@@ -27,7 +27,7 @@ def test_a_key_is_seen_only_once_remembered() -> None:
 
 def test_the_same_event_id_in_two_projects_is_two_keys() -> None:
     recent = RecentEventIds(window_ms=WINDOW_MS)
-    event_id = uuid.uuid4()
+    event_id = uuid.uuid4().int
 
     recent.remember([(("proj_1", event_id), 0)])
 

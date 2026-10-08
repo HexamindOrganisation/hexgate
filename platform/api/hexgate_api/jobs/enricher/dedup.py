@@ -11,7 +11,6 @@ import logging
 import time
 from collections import OrderedDict
 from collections.abc import Callable, Iterable
-from uuid import UUID
 
 _log = logging.getLogger(__name__)
 
@@ -26,7 +25,9 @@ DEDUP_MAX_ENTRIES = 500_000
 # every live entry, so record time is capped at our wall clock plus this.
 DEDUP_MAX_CLOCK_SKEW_MS = 60 * 1000
 
-DedupKey = tuple[str, UUID]  # (project_id, event_id): the tables' own identity
+# (project_id, event_id.int): the tables' own identity. The int, not the UUID
+# object, keeps a full cache well under 200MB.
+DedupKey = tuple[str, int]
 
 
 def _wall_clock_ms() -> int:

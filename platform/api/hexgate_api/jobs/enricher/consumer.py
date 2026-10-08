@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import signal
+import sys
 from collections.abc import Awaitable, Callable, Sequence
 from typing import Any
 
@@ -107,7 +108,8 @@ def _project_id(key: bytes | None) -> str | None:
     if key is None:
         return None
     try:
-        return key.decode("utf-8")
+        # Interned: the dedup cache holds one per entry, and tenants are few.
+        return sys.intern(key.decode("utf-8"))
     except UnicodeDecodeError:
         return None
 
@@ -334,7 +336,7 @@ class EnricherJob:
                         )
                     )
                     continue
-                key = (project_id, event.event_id)
+                key = (project_id, event.event_id.int)
                 if key in fresh or key in self._recent:
                     continue
                 fresh[key] = record.timestamp
