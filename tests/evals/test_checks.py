@@ -14,7 +14,6 @@ from evals.policy_writing.checks import (
     snapshot,
     superset_checks,
 )
-from evals.policy_writing.policy import effective_policy
 from tests.evals.helpers import (
     AGENT,
     PERMISSIVE_DEFAULT,
@@ -22,6 +21,7 @@ from tests.evals.helpers import (
     install_skill,
     make_modules_workspace,
     make_workspace,
+    valid_policy,
 )
 
 REFUND = {"tool": "refund_order", "args": {"order_id": "o1", "amount": 5}}
@@ -29,7 +29,7 @@ VIEW = {"tool": "view_orders", "args": {"customer_id": "c1"}}
 
 
 def test_decision_checks_happy_path(tmp_path) -> None:
-    policy, _ = effective_policy(make_workspace(tmp_path))
+    policy = valid_policy(make_workspace(tmp_path))
     decisions = [
         {"role": "billing", **REFUND, "expect": "allow"},
         {"roles": ["default", "support"], **VIEW, "expect": ["allow"]},
@@ -38,7 +38,7 @@ def test_decision_checks_happy_path(tmp_path) -> None:
 
 
 def test_when_the_outcome_differs_then_the_decision_check_fails(tmp_path) -> None:
-    policy, _ = effective_policy(make_workspace(tmp_path))
+    policy = valid_policy(make_workspace(tmp_path))
     big = {**REFUND, "args": {"order_id": "o1", "amount": 900}}
     [check] = decision_checks(policy, [{"role": "billing", **big, "expect": "allow"}])
     assert not check.passed
@@ -46,7 +46,7 @@ def test_when_the_outcome_differs_then_the_decision_check_fails(tmp_path) -> Non
 
 
 def test_when_the_role_is_undefined_then_the_decision_check_fails(tmp_path) -> None:
-    policy, _ = effective_policy(make_workspace(tmp_path))
+    policy = valid_policy(make_workspace(tmp_path))
     [check] = decision_checks(policy, [{"role": "suport", **VIEW, "expect": "deny"}])
     assert not check.passed
     assert check.detail.startswith("can't dry-run: role 'suport'")
@@ -58,7 +58,7 @@ def test_when_the_policy_is_invalid_then_every_decision_check_fails() -> None:
 
 
 def test_superset_checks_happy_path(tmp_path) -> None:
-    policy, _ = effective_policy(make_workspace(tmp_path))
+    policy = valid_policy(make_workspace(tmp_path))
     superset = {"wider": "billing", "narrower": "support", "probes": [VIEW, REFUND]}
     assert superset_checks(policy, [superset])[0].passed
 
@@ -66,7 +66,7 @@ def test_superset_checks_happy_path(tmp_path) -> None:
 def test_when_the_wider_role_is_stricter_then_superset_reports_the_probe(
     tmp_path,
 ) -> None:
-    policy, _ = effective_policy(make_workspace(tmp_path))
+    policy = valid_policy(make_workspace(tmp_path))
     superset = {"wider": "support", "narrower": "billing", "probes": [VIEW, REFUND]}
     [check] = superset_checks(policy, [superset])
     assert not check.passed
@@ -74,7 +74,7 @@ def test_when_the_wider_role_is_stricter_then_superset_reports_the_probe(
 
 
 def test_when_a_role_is_missing_then_superset_fails(tmp_path) -> None:
-    policy, _ = effective_policy(make_workspace(tmp_path))
+    policy = valid_policy(make_workspace(tmp_path))
     superset = {"wider": "support", "narrower": "nosuch", "probes": [VIEW]}
     [check] = superset_checks(policy, [superset])
     assert not check.passed
@@ -120,7 +120,7 @@ def test_when_a_listed_path_does_not_exist_then_it_fails(kind) -> None:
 def test_when_two_decisions_differ_only_in_expect_then_their_checks_are_named_apart(
     tmp_path,
 ) -> None:
-    policy, _ = effective_policy(make_workspace(tmp_path))
+    policy = valid_policy(make_workspace(tmp_path))
     call = {"role": "billing", **REFUND}
     checks = decision_checks(
         policy, [{**call, "expect": "allow"}, {**call, "expect": "deny"}]
@@ -142,7 +142,7 @@ def test_when_the_answer_misses_the_words_then_answer_checks_fail() -> None:
 
 
 def test_when_a_call_holds_a_yaml_date_then_its_check_is_named(tmp_path) -> None:
-    policy, _ = effective_policy(make_workspace(tmp_path))
+    policy = valid_policy(make_workspace(tmp_path))
     call = {"role": "default", **VIEW, "args": {"since": datetime.date(2026, 1, 1)}}
     [check] = decision_checks(policy, [{**call, "expect": "allow"}])
     assert "2026-01-01" in check.name

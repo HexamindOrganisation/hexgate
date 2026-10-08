@@ -14,6 +14,7 @@ or ones it sets with the value it sets them to; any other is refused.
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import get_args
@@ -59,6 +60,7 @@ from hexgate.security.naming import (
     canonical_name,
     canonical_skill_name,
 )
+from hexgate.security.network import EGRESS_TOOL_ARGS
 from hexgate.security.testing import run_namespace
 
 # Everything the SDK raises for a policy it can't load, compile or link.
@@ -113,12 +115,16 @@ def outcome(label: str) -> DecisionOutcome:
 @dataclass(frozen=True)
 class _Gate:
     """A call on a gate: the key it's decided under, the args the gate sets
-    itself, and what the runtime does when the policy never declares the gate.
+    itself, whether the policy declares the gate, and where the runtime
+    decides the call.
 
     Undeclared, admission and handoff check nothing and the call goes through
     (agent_gate.py, the runners' handoff seam). Agent-as-tool and skill calls
     are decided under the tool's own name instead (guards/runner.py,
     `policy_key or call.tool_name`), so the key can't predict them: `by_name`.
+    A top-level agent's admission is decided before its run starts
+    (`_check_admission`, then `run_scope`, in agents/factory.py and the
+    runners): not `in_run`.
     """
 
     key: str
@@ -126,6 +132,14 @@ class _Gate:
     name: str
     declared: bool
     by_name: bool
+    in_run: bool = True
+
+
+# Per reach mode: the gate's name, whether a policy declares it, and `by_name`.
+_REACH: dict[str, tuple[str, Callable[[PolicySet], bool], bool]] = {
+    "tool": ("agent-as-tool reach", PolicySet.declares_tool_reach, True),
+    "handoff": ("reach", PolicySet.declares_reach, False),
+}
 
 
 def _gate(tool: str, agent: str, policy_set: PolicySet) -> _Gate | None:
@@ -137,17 +151,15 @@ def _gate(tool: str, agent: str, policy_set: PolicySet) -> _Gate | None:
     """
     if tool == AGENT_RUN_TOOL:
         declared = policy_set.declares_admission()
-        return _Gate(tool, {"agent": agent}, "admission", declared, by_name=False)
+        return _Gate(tool, {"agent": agent}, "admission", declared, False, in_run=False)
     for via in get_args(AgentVia):
         prefix = agent_target_key(via, "")
         if tool.startswith(prefix):
+            name, declares, by_name = _REACH[via]
             target = canonical_name(tool.removeprefix(prefix))
             sent = {"agent": agent, "target": target, "via": via}
             key = agent_target_key(via, target)
-            if via == "tool":
-                declared = policy_set.declares_tool_reach()
-                return _Gate(key, sent, "agent-as-tool reach", declared, by_name=True)
-            return _Gate(key, sent, "reach", policy_set.declares_reach(), by_name=False)
+            return _Gate(key, sent, name, declares(policy_set), by_name)
     for via in get_args(SkillVia):
         prefix = skill_key(via, "")
         if tool.startswith(prefix):
@@ -192,26 +204,25 @@ def _as_json(value: dict) -> dict:
     return json.loads(dump_json(value))
 
 
-def _run(key: str, agent: str, facts: dict) -> dict:
-    """`run.*` as the runtime has it when it decides `key`.
-
-    Admission is decided before the run starts (`_check_admission`, then
-    `run_scope`, in agents/factory.py and the runners), so outside any run:
-    `DETACHED`, and a case's run facts would describe a run that doesn't
-    exist yet. Any other call is in the agent's run, over a zeroed one as
-    `policy test --run-facts` builds it, and `run.agent` is the case's agent.
-    """
-    if key == AGENT_RUN_TOOL:
+def _run(key: str, gate: _Gate | None, agent: str, facts: dict) -> dict:
+    """`run.*` as the runtime has it when it decides `key`: none outside a
+    run, else the agent's run, zeroed as `policy test --run-facts` builds it."""
+    # Egress is decided by a proxy above every run (docs/policy/constraints.mdx,
+    # "Where facts aren't collected").
+    if (gate and not gate.in_run) or key in EGRESS_TOOL_ARGS:
         if facts:
-            raise CaseError(f"{key} is decided before the run starts; drop run_facts")
+            raise CaseError(f"{key} is decided outside any run; drop run_facts")
         return DETACHED.as_namespace(key)
     # Checked here: a `tool` key would collide with `run_namespace`'s parameter.
     if unknown := sorted(facts.keys() - KNOWN_RUN_PATHS):
         raise CaseError(f"unknown run.* path(s) {unknown}")
     if "agent" in facts:
         raise CaseError("run.agent is the case's agent; drop run_facts.agent")
-    # Keyed by the call's real key, so `run.tools_used` names what is decided.
-    return run_namespace(key, agent=agent, **facts)
+    # The runtime counts a call under the tool's own name, never a gate key
+    # (guards/runner.py, `_record_run_execution(call.tool_name)`).
+    if gate and "calls_of_this_tool" in facts:
+        raise CaseError(f"{key} is never counted; drop run_facts.calls_of_this_tool")
+    return run_namespace("" if gate else key, agent=agent, **facts)
 
 
 def decide(policy: Policy, role: str, d: dict) -> Verdict:
@@ -232,7 +243,7 @@ def decide(policy: Policy, role: str, d: dict) -> Verdict:
     try:  # a pydantic ValidationError is a ValueError
         args = _as_json(d.get("args", {}))
         attributes = _ATTRIBUTES.validate_python(_as_json(d.get("attributes", {})))
-        run = _run(key, agent, _as_json(d.get("run_facts", {})))
+        run = _run(key, gate, agent, _as_json(d.get("run_facts", {})))
     except ValueError as exc:
         raise CaseError(str(exc)) from exc
     if gate and not gate.declared:

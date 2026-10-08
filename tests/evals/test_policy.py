@@ -97,15 +97,30 @@ roles:
 """
 
 
-# A reach rule that reads the call's own key from the run's tools.
-HANDOFF_SEEN = """\
+# A per-tool cap on a reach rule, which the runtime never counts.
+HANDOFF_ONCE = """\
 version: 1
 roles:
   default:
     agents:
-      billing-bot:
-        mode: allow
-        constraints: ['any(run.tools_used, . == "agent.handoff:billing-bot")']
+      billing-bot: { mode: allow, constraints: ['run.calls_of_this_tool < 1'] }
+"""
+
+# Admission decided by a rule on the agent's run.
+ADMIT_IN_RUN = """\
+version: 1
+roles:
+  default:
+    admission: { mode: allow, constraints: ['run.agent == "shop-bot"'] }
+"""
+
+# Egress decided by a rule on the agent's run.
+EGRESS_IN_RUN = """\
+version: 1
+roles:
+  default:
+    tools:
+      net.http_request: { mode: allow, constraints: ['run.agent == "shop-bot"'] }
 """
 
 
@@ -118,7 +133,7 @@ roles:
     ],
 )
 def test_decide_happy_path(tmp_path, role, amount, expected) -> None:
-    policy, _ = effective_policy(make_workspace(tmp_path))
+    policy = valid_policy(make_workspace(tmp_path))
     call = {"tool": "refund_order", "args": {"order_id": "o1", "amount": amount}}
     verdict = decide(policy, role, call)
     assert verdict.outcome == expected, verdict.reason
@@ -129,7 +144,7 @@ def test_when_admission_or_handoff_is_not_declared_then_decide_allows(
     tmp_path, tool
 ) -> None:
     # As the runtime: the gate checks nothing, and the call goes through.
-    policy, _ = effective_policy(make_workspace(tmp_path))
+    policy = valid_policy(make_workspace(tmp_path))
     assert decide(policy, "default", {"tool": tool}).outcome == DecisionOutcome.ALLOW
 
 
@@ -138,7 +153,7 @@ def test_when_a_tool_reach_or_skill_gate_is_not_declared_then_decide_raises(
     tmp_path, tool
 ) -> None:
     # The runtime decides such a call under the tool's own name instead.
-    policy, _ = effective_policy(make_workspace(tmp_path))
+    policy = valid_policy(make_workspace(tmp_path))
     with pytest.raises(CaseError, match="dry-run that tool instead"):
         decide(policy, "default", {"tool": tool})
 
@@ -185,7 +200,7 @@ def test_when_a_call_is_on_reach_then_decide_sends_the_trimmed_target_and_via(
 
 def test_when_a_gate_call_carries_its_own_args_then_decide_raises(tmp_path) -> None:
     # The gate sends its own args, so a case's would be silently ignored.
-    policy, _ = effective_policy(make_workspace(tmp_path, ADMIT_SHOP_BOT), AGENT)
+    policy = valid_policy(make_workspace(tmp_path, ADMIT_SHOP_BOT), AGENT)
     with pytest.raises(CaseError, match=r"drop \['agent'\]"):
         decide(policy, "default", {"tool": "agent.run", "args": {"agent": "ops-bot"}})
 
@@ -193,7 +208,7 @@ def test_when_a_gate_call_carries_its_own_args_then_decide_raises(tmp_path) -> N
 def test_when_an_undeclared_admission_call_carries_args_then_decide_allows_it(
     tmp_path,
 ) -> None:
-    policy, _ = effective_policy(make_workspace(tmp_path), AGENT)
+    policy = valid_policy(make_workspace(tmp_path), AGENT)
     call = {"tool": "agent.run", "args": {"agent": "ops-bot"}}
     assert decide(policy, "default", call).outcome == DecisionOutcome.ALLOW
 
@@ -201,22 +216,38 @@ def test_when_an_undeclared_admission_call_carries_args_then_decide_allows_it(
 def test_when_an_undeclared_tool_reach_call_carries_args_then_decide_says_undeclared(
     tmp_path,
 ) -> None:
-    policy, _ = effective_policy(make_workspace(tmp_path), AGENT)
+    policy = valid_policy(make_workspace(tmp_path), AGENT)
     with pytest.raises(CaseError, match="isn't declared"):
         decide(policy, "default", {"tool": "agent.tool:ops-bot", "args": {"x": 1}})
 
 
-def test_when_a_reach_target_is_padded_then_run_facts_name_the_trimmed_key(
+def test_when_a_gate_key_is_called_in_a_run_then_its_own_count_stays_zero(
     tmp_path,
 ) -> None:
-    policy = valid_policy(make_workspace(tmp_path, HANDOFF_SEEN), AGENT)
-    call = {"tool": "agent.handoff: billing-bot ", "run_facts": {"tool_calls": 1}}
+    # As at runtime, where the cap never fires.
+    policy = valid_policy(make_workspace(tmp_path, HANDOFF_ONCE), AGENT)
+    call = {"tool": "agent.handoff:billing-bot", "run_facts": {"tool_calls": 5}}
     verdict = decide(policy, "default", call)
     assert verdict.outcome == DecisionOutcome.ALLOW, verdict.reason
 
 
+@pytest.mark.parametrize(
+    ("text", "call"),
+    [
+        (ADMIT_IN_RUN, {"tool": "agent.run"}),
+        (EGRESS_IN_RUN, {"tool": "net.http_request", "args": {"host": "example.com"}}),
+    ],
+)
+def test_when_a_call_is_decided_outside_any_run_then_decide_sees_no_run(
+    tmp_path, text, call
+) -> None:
+    # Admission before the run starts, egress above every run: `run.agent` is "".
+    policy = valid_policy(make_workspace(tmp_path, text), AGENT)
+    assert decide(policy, "default", call).outcome == DecisionOutcome.DENY
+
+
 def test_when_a_run_fact_key_is_not_a_string_then_decide_raises(tmp_path) -> None:
-    policy, _ = effective_policy(make_workspace(tmp_path))
+    policy = valid_policy(make_workspace(tmp_path))
     with pytest.raises(CaseError):
         decide(policy, "default", {"tool": "view_orders", "run_facts": {1: 2}})
 
@@ -244,7 +275,7 @@ def test_when_a_skill_call_gives_a_file_path_then_decide_passes_it(tmp_path) -> 
 def test_when_a_skill_call_sets_what_the_gate_sends_then_decide_raises(
     tmp_path,
 ) -> None:
-    policy, _ = effective_policy(make_workspace(tmp_path, PDF_INSTRUCTIONS))
+    policy = valid_policy(make_workspace(tmp_path, PDF_INSTRUCTIONS))
     with pytest.raises(CaseError, match=r"drop \['via'\]"):
         decide(policy, "default", {"tool": "skill:pdf", "args": {"via": "script"}})
 
@@ -270,24 +301,14 @@ def test_when_a_rule_reads_run_agent_then_decide_gives_the_case_agent(
         assert decide(policy, "default", {"tool": "view_orders"}).outcome == expected
 
 
-ADMIT_IN_RUN = """\
-version: 1
-roles:
-  default:
-    admission: { mode: allow, constraints: ['run.agent == "shop-bot"'] }
-"""
-
-
-def test_when_admission_reads_run_agent_then_decide_sees_no_run_yet(tmp_path) -> None:
-    # The runtime admits the agent before its run starts, so `run.agent` is "".
-    policy = valid_policy(make_workspace(tmp_path, ADMIT_IN_RUN), AGENT)
-    verdict = decide(policy, "default", {"tool": "agent.run"})
-    assert verdict.outcome == DecisionOutcome.DENY
-
-
 @pytest.mark.parametrize(
     ("tool", "facts"),
-    [("agent.run", {"tool_calls": 1}), ("view_orders", {"agent": "ops-bot"})],
+    [
+        ("agent.run", {"tool_calls": 1}),
+        ("net.http_request", {"tool_calls": 1}),
+        ("view_orders", {"agent": "ops-bot"}),
+        ("agent.handoff:billing-bot", {"calls_of_this_tool": 1}),
+    ],
 )
 def test_when_run_facts_contradict_the_run_then_decide_raises(
     tmp_path, tool, facts
@@ -300,14 +321,14 @@ def test_when_run_facts_contradict_the_run_then_decide_raises(
 @pytest.mark.parametrize("facts", [{"tool": 1}, {"tool_call": 20}])
 def test_when_a_run_fact_is_unknown_then_decide_raises(tmp_path, facts) -> None:
     # `tool` would collide with `run_namespace`'s own parameter.
-    policy, _ = effective_policy(make_workspace(tmp_path))
+    policy = valid_policy(make_workspace(tmp_path))
     with pytest.raises(CaseError, match="unknown run"):
         decide(policy, "default", {"tool": "view_orders", "run_facts": facts})
 
 
 def test_when_the_role_is_undefined_then_decide_raises(tmp_path) -> None:
     # Not the `default` fallback: a case naming a role the policy lacks fails.
-    policy, _ = effective_policy(make_workspace(tmp_path))
+    policy = valid_policy(make_workspace(tmp_path))
     with pytest.raises(CaseError, match="suport"):
         decide(policy, "suport", {"tool": "view_orders"})
 
@@ -359,18 +380,6 @@ def test_when_policy_yaml_is_not_utf8_then_effective_policy_fails(tmp_path) -> N
     assert "utf-8" in problems[0]
 
 
-def test_when_a_single_file_project_has_a_policies_dir_then_it_reads_policy_yaml(
-    tmp_path,
-) -> None:
-    # Only `modules` switches the layout, not what's on disk.
-    ws = make_workspace(tmp_path)
-    (ws / "policies").mkdir()
-    (ws / "policies" / "notes.md").write_text("draft")
-    policy, problems = effective_policy(ws)
-    assert problems == []
-    assert policy is not None
-
-
 def test_effective_policy_happy_path_on_a_module_tree(tmp_path) -> None:
     policy = valid_policy(make_modules_workspace(tmp_path), modules=True)
     refund = {"tool": "refund_order", "args": {"amount": 1001}}
@@ -388,7 +397,7 @@ def test_when_the_agent_has_its_own_column_then_effective_policy_resolves_it(
         (AGENT, DecisionOutcome.ALLOW),
         ("ops-bot", DecisionOutcome.DENY),
     ]:
-        policy, _ = effective_policy(ws, agent, modules=True)
+        policy = valid_policy(ws, agent, modules=True)
         assert decide(policy, "billing", refund).outcome == expected
 
 

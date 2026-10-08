@@ -100,26 +100,29 @@ def _call_label(role: str, d: dict) -> str:
 
 def superset_checks(policy: Policy | None, supersets: list[dict]) -> list[Check]:
     """Everything `narrower` may do, `wider` may do at least as freely."""
-    checks = []
-    for i, s in enumerate(supersets, 1):
-        name = f"superset {i}: {s['wider']} ⊇ {s['narrower']}"
-        if policy is None:
-            checks.append(Check(name, False, "policy invalid"))
-            continue
-        worse = []
-        for p in s["probes"]:
-            try:
-                lo = decide(policy, s["narrower"], p).outcome
-                hi = decide(policy, s["wider"], p).outcome
-            except CaseError as exc:  # e.g. a missing role: the probe fails
-                worse.append(f"{p['tool']}: can't dry-run: {exc}")
-                continue
-            if RANK[hi] < RANK[lo]:
-                worse.append(
-                    f"{p['tool']}: {s['narrower']}={LABELS[lo]}, {s['wider']}={LABELS[hi]}"
-                )
-        checks.append(Check(name, not worse, "; ".join(worse)))
-    return checks
+    return [
+        _superset_check(policy, s, f"superset {i}: {s['wider']} ⊇ {s['narrower']}")
+        for i, s in enumerate(supersets, 1)
+    ]
+
+
+def _superset_check(policy: Policy | None, s: dict, name: str) -> Check:
+    if policy is None:
+        return Check(name, False, "policy invalid")
+    worse = [gap for p in s["probes"] if (gap := _probe_gap(policy, s, p))]
+    return Check(name, not worse, "; ".join(worse))
+
+
+def _probe_gap(policy: Policy, s: dict, p: dict) -> str | None:
+    """How `wider` is stricter than `narrower` on probe `p`, if it is."""
+    try:
+        lo = decide(policy, s["narrower"], p).outcome
+        hi = decide(policy, s["wider"], p).outcome
+    except CaseError as exc:  # e.g. a missing role: the probe fails
+        return f"{p['tool']}: can't dry-run: {exc}"
+    if RANK[hi] < RANK[lo]:
+        return f"{p['tool']}: {s['narrower']}={LABELS[lo]}, {s['wider']}={LABELS[hi]}"
+    return None
 
 
 def file_checks(
