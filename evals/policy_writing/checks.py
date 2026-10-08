@@ -4,7 +4,8 @@ No eval framework is imported here: the framework's scorer and the dataset tests
 both call `score(case, workspace, before, answer)` and get back a list of `Check`s.
 One function per kind of check: the policy validates without lint warnings
 (`policy.py`), dry-run decisions and role supersets hold, only names the Hexgate
-MCP would show for the case's agent are used (`names.py`), files change (or not)
+MCP would show are used (the SDK's drift lints, and `names.py` for caller
+attributes), files change (or not)
 as the case says, and the final answer mentions what the case requires.
 """
 
@@ -16,7 +17,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from evals.policy_writing.names import unknown_keys, unknown_refs
+from evals.policy_writing.names import unknown_attrs
 from evals.policy_writing.policy import (
     LABELS,
     RANK,
@@ -30,8 +31,7 @@ from evals.policy_writing.policy import (
 from evals.policy_writing.sources import (
     NAME_SOURCES,
     SourceError,
-    load_known_names,
-    load_project_names,
+    load_attributes,
 )
 from hexgate.security.decision import Verdict
 
@@ -143,38 +143,50 @@ def _name_checks_failed(detail: str) -> list[Check]:
     return [Check(name, False, detail) for name in NAME_CHECKS]
 
 
+def _untagged(lint) -> str:
+    """`lint` without its role, so one module mistake reads once; the agent
+    stays, as "the agent's manifest" in a named column's message means it."""
+    return (
+        f"[{lint.code}]"
+        + (f" [agent {lint.agent}]" if lint.agent else "")
+        + f" {lint.message}"
+    )
+
+
 def name_checks(
-    policy: Policy,
-    ws: Path,
-    before: dict[str, str],
-    after: dict[str, str],
-    modules: bool = False,
+    policy: Policy, ws: Path, before: dict[str, str], after: dict[str, str]
 ) -> list[Check]:
-    """Only names the MCP would show for `policy.agent`: tools, skills, guards,
-    arguments and caller attributes. A module tree's are any agent's (`modules`)."""
+    """Only names the MCP would show: the SDK's drift lints (`policy.drift`) for
+    tools, skills, guards and arguments (a module tree's against every agent's
+    manifest), and `policy.agent`'s caller attributes against audit.json, on
+    its resolved roles only."""
     # The names are read after the run, so an edit to either file could
     # whitelist an invented name: trust them only if they are untouched.
     edited = [f for f in NAME_SOURCES if before.get(f) != after.get(f)]
     if edited:
         return _name_checks_failed(f"edited during the run: {edited}")
+    if policy.manifest is None:
+        return _name_checks_failed(
+            f"agents.json has no readable manifest for {policy.agent!r}"
+        )
     try:
-        load = load_project_names if modules else load_known_names
-        known = load(ws, policy.agent)
+        attrs = load_attributes(ws, policy.agent)
     except SourceError as exc:
-        return _name_checks_failed(f"agents.json / audit.json unreadable: {exc}"[:300])
-    unknown = unknown_keys(policy.policy_set, known)
-    owner = "any agent's" if modules else f"{policy.agent}'s"
-    refs = unknown_refs(policy.policy_set, known)
-    keys, args = NAME_CHECKS
+        return _name_checks_failed(f"audit.json unreadable: {exc}"[:300])
+    # Deduped: a module's mistake is linted once per cell it's in.
+    keys = list(
+        dict.fromkeys(_untagged(x) for x in policy.drift if x.code != "unknown-arg")
+    )
+    args = list(
+        dict.fromkeys(_untagged(x) for x in policy.drift if x.code == "unknown-arg")
+    )
+    args += [
+        f"[unknown-attribute] {ref}: no audit.json row sends it"
+        for ref in unknown_attrs(policy.policy_set, attrs)
+    ]
     return [
-        Check(
-            keys,
-            not unknown,
-            f"not in {owner} manifest: {unknown}" if unknown else "",
-        ),
-        Check(
-            args, not refs, f"not in the manifest or audit.json: {refs}" if refs else ""
-        ),
+        Check(name, not found, "\n".join(found)[:800])
+        for name, found in zip(NAME_CHECKS, (keys, args), strict=True)
     ]
 
 
@@ -245,7 +257,7 @@ def score(case: dict, ws: Path, before: dict[str, str], answer: str) -> list[Che
         valid,
         *decision_checks(policy, expect.get("decisions", [])),
         *superset_checks(policy, expect.get("superset", [])),
-        *(name_checks(policy, ws, before, after, modules) if policy else []),
+        *(name_checks(policy, ws, before, after) if policy else []),
         *file_checks(expect, before, after),
         *answer_checks(expect, answer),
     ]

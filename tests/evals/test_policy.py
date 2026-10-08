@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime
+import json
 
 import pytest
 
@@ -11,6 +12,7 @@ from hexgate.security.decision import DecisionOutcome
 from tests.evals.helpers import (
     AGENT,
     PERMISSIVE_DEFAULT,
+    POLICY,
     make_modules_workspace,
     make_workspace,
     valid_policy,
@@ -456,3 +458,82 @@ def test_when_agents_json_is_missing_then_effective_policy_fails_on_a_module_tre
     (ws / "agents.json").unlink()
     _, problems = effective_policy(ws, AGENT, modules=True)
     assert len(problems) == 1 and problems[0].startswith("agents.json unreadable")
+
+
+# Policy.drift: the SDK's manifest lints, for the name checks
+
+
+def _drop_draft_bot(ws) -> None:
+    """Leave only agents with a manifest, so `"*"` cells and boundaries are checked."""
+    views = json.loads((ws / "agents.json").read_text())
+    (ws / "agents.json").write_text(json.dumps([v for v in views if v["manifest"]]))
+
+
+def test_when_a_policy_file_invents_a_tool_then_drift_holds_it_and_valid_passes(
+    tmp_path,
+) -> None:
+    ws = make_workspace(tmp_path, POLICY + "      refnd_order: { mode: allow }\n")
+    policy = valid_policy(ws, AGENT)
+    assert [(x.code, x.tool) for x in policy.drift] == [("unknown-tool", "refnd_order")]
+
+
+def test_when_no_agent_is_given_then_no_manifest_and_no_drift(tmp_path) -> None:
+    ws = make_workspace(tmp_path, POLICY + "      refnd_order: { mode: allow }\n")
+    policy = valid_policy(ws)
+    assert (policy.manifest, policy.drift) == (None, [])
+
+
+@pytest.mark.parametrize("without_manifest", [None, "draft-bot", "sub-agent"])
+def test_when_a_star_cell_has_a_typo_then_drift_holds_it(
+    tmp_path, without_manifest
+) -> None:
+    # An agent the MCP shows no manifest for, or a sub-agent with none, adds no
+    # names: the `"*"` cell is still checked against the rest.
+    ws = make_modules_workspace(tmp_path)
+    views = json.loads((ws / "agents.json").read_text())
+    if without_manifest != "draft-bot":
+        views = [v for v in views if v["manifest"]]
+    if without_manifest == "sub-agent":
+        views[0]["manifest"]["subagents"] = [{"name": "helper-bot", "via": "tool"}]
+    (ws / "agents.json").write_text(json.dumps(views))
+    (ws / "policies" / "capabilities" / "payments.yaml").write_text(
+        'tools:\n  refnd_order: { mode: allow }\n  refund_order: { mode: allow, constraints: ["args.amout < 5"] }\n'
+    )
+    drift = valid_policy(ws, AGENT, modules=True).drift
+    assert {(x.code, x.tool) for x in drift} == {
+        ("unknown-tool", "refnd_order"),
+        ("unknown-arg", "refund_order"),
+    }
+
+
+def test_when_the_manifest_lists_null_skills_then_an_invented_skill_is_drift(
+    tmp_path,
+) -> None:
+    # The MCP shows the agent no skills: none is known.
+    ws = make_workspace(tmp_path, "version: 1\nskills:\n  pdf: { mode: allow }\n")
+    views = json.loads((ws / "agents.json").read_text())
+    views[0]["manifest"]["skills"] = None
+    (ws / "agents.json").write_text(json.dumps(views))
+    assert [x.code for x in valid_policy(ws, AGENT).drift] == ["unknown-skill"]
+
+
+@pytest.mark.parametrize(
+    ("module", "text"),
+    [
+        # An org-wide deny on ops-bot's tool and skill.
+        (
+            "boundaries/org.yaml",
+            "default_policy: { mode: allow }\ntools:\n  wire_transfer: { mode: deny }\n"
+            "skills:\n  ledger: { mode: deny }\n",
+        ),
+        # A `"*"` cell's capability may grant any agent's tool.
+        ("capabilities/payments.yaml", "tools:\n  wire_transfer: { mode: allow }\n"),
+    ],
+)
+def test_when_a_module_tree_names_another_agents_tool_then_no_drift(
+    tmp_path, module, text
+) -> None:
+    ws = make_modules_workspace(tmp_path)
+    _drop_draft_bot(ws)
+    (ws / "policies" / module).write_text(text)
+    assert valid_policy(ws, AGENT, modules=True).drift == []
