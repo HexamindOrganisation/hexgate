@@ -19,6 +19,7 @@ import argparse
 import hashlib
 import json
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -959,51 +960,68 @@ def _main_test(args: argparse.Namespace) -> int:
     )
 
 
+_RUN_FACTS_FLAG = "--run-facts"
+_AGENT_USAGE_FLAG = "--agent-usage"
+
+
 def _resolve_run_facts(raw: str, tool: str) -> dict[str, Any]:
     """Parse ``--run-facts`` over a zeroed run, so an unset path reads zero
-    rather than failing the dry-run closed. Raises :class:`ValueError` with a
-    printable message; the caller renders it."""
-    try:
-        parsed: Any = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"--run-facts is not valid JSON: {exc}") from exc
-    if not isinstance(parsed, dict):
-        raise ValueError("--run-facts must be a JSON object (dict).")
-    unknown = sorted(set(parsed) - KNOWN_RUN_PATHS)
-    if unknown:
-        raise ValueError(
-            f"--run-facts has unknown run.* path(s) {unknown} "
-            f"(this build knows: {', '.join(sorted(KNOWN_RUN_PATHS))})"
-        )
-    try:
-        return run_namespace(tool, **parsed)
-    except ValueError as exc:
-        # Re-raised against the flag: a wrong-typed value otherwise fails the
-        # comparison closed and prints as an ordinary threshold trip, so the
-        # dry-run answers a question the user did not ask.
-        raise ValueError(f"--run-facts has a wrong-typed value: {exc}") from exc
+    rather than failing the dry-run closed."""
+    return _resolve_namespace_flag(
+        _RUN_FACTS_FLAG,
+        raw,
+        root="run",
+        known=KNOWN_RUN_PATHS,
+        vocabulary=", ".join(sorted(KNOWN_RUN_PATHS)),
+        build=lambda **values: run_namespace(tool, **values),
+    )
 
 
 def _resolve_agent_usage(raw: str) -> dict[str, int]:
     """Parse ``--agent-usage`` over a fresh process's zeros, so an unset path reads
-    zero rather than failing the dry-run closed. Raises :class:`ValueError` with a
-    printable message; the caller renders it."""
+    zero rather than failing the dry-run closed."""
+    return _resolve_namespace_flag(
+        _AGENT_USAGE_FLAG,
+        raw,
+        root="agent_usage",
+        known=KNOWN_AGENT_USAGE_PATHS,
+        vocabulary=AGENT_USAGE_VOCABULARY,
+        build=agent_usage_namespace,
+    )
+
+
+def _resolve_namespace_flag[T](
+    flag: str,
+    raw: str,
+    *,
+    root: str,
+    known: frozenset[str],
+    vocabulary: str,
+    build: Callable[..., T],
+) -> T:
+    """Parse a JSON-object flag into ``build(**values)``. Raises
+    :class:`ValueError` with a printable message; the caller renders it."""
     try:
         parsed: Any = json.loads(raw)
     except json.JSONDecodeError as exc:
-        raise ValueError(f"--agent-usage is not valid JSON: {exc}") from exc
+        raise ValueError(f"{flag} is not valid JSON: {exc}") from exc
     if not isinstance(parsed, dict):
-        raise ValueError("--agent-usage must be a JSON object (dict).")
-    unknown = sorted(set(parsed) - KNOWN_AGENT_USAGE_PATHS)
+        raise ValueError(f"{flag} must be a JSON object (dict).")
+    # Checked here although the builders check too: they raise one ValueError for
+    # unknown and wrong-typed alike, and a typo is not a wrong type.
+    unknown = sorted(set(parsed) - known)
     if unknown:
         raise ValueError(
-            f"--agent-usage has unknown agent_usage.* path(s) {unknown} "
-            f"(this build knows: {AGENT_USAGE_VOCABULARY})"
+            f"{flag} has unknown {root}.* path(s) {unknown} "
+            f"(this build knows: {vocabulary})"
         )
     try:
-        return agent_usage_namespace(**parsed)
+        return build(**parsed)
     except ValueError as exc:
-        raise ValueError(f"--agent-usage has a wrong-typed value: {exc}") from exc
+        # Re-raised against the flag: a wrong-typed value otherwise fails the
+        # comparison closed and prints as an ordinary threshold trip, so the
+        # dry-run answers a question the user did not ask.
+        raise ValueError(f"{flag} has a wrong-typed value: {exc}") from exc
 
 
 def _resolve_test_roles(args: argparse.Namespace) -> list[str]:
