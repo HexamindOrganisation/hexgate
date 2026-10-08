@@ -21,8 +21,14 @@ from pathlib import Path
 from typing import get_args
 from urllib.parse import urlsplit
 
-from evals.policy_writing.sources import load_known_names
+from evals.policy_writing.sources import (
+    AUDIT_JSON,
+    SourceError,
+    load_attributes,
+    load_project_agents,
+)
 from hexgate.egress.model import connect_to_args, http_to_args
+from hexgate.manifest.models import InputSchema
 from hexgate.security.models import (
     AGENT_RUN_TOOL,
     SkillVia,
@@ -56,7 +62,7 @@ class Known:
 
     tools: dict[str, set[str]]  # {tool: argument names}, as the scorer reads them
     attrs: set[str]
-    schemas: dict[str, dict]  # {tool: its input_schema, as agents.json has it}
+    schemas: dict[str, InputSchema]
     skills: set[str]
     agents: set[str]  # every agent in agents.json: the possible reach targets
     attr_types: dict[str, set[str]]  # the JSON types each attribute arrived with
@@ -65,30 +71,33 @@ class Known:
 def load_known(project: Path, agent: str) -> Known:
     """`agent`'s known names and types, from `agents.json` and `audit.json`.
 
-    Raises OSError, ValueError, KeyError, TypeError or AttributeError for a
-    missing or malformed file, or an agent with no manifest.
+    Raises `SourceError` for a missing or malformed file, or an agent with no
+    manifest.
     """
-    names = load_known_names(project, agent)  # the scorer's own reading
-    views = json.loads((project / "agents.json").read_text())
-    # The view load_known_names read; the endpoint's shape, so null fields are fine.
-    manifest = next(
-        v["manifest"] for v in views if v["name"] == agent and v.get("manifest")
+    agents = load_project_agents(project)
+    if agent not in agents.manifests:
+        raise SourceError(f"agents.json has no manifest for agent {agent!r}")
+    manifest = agents.manifests[agent]
+    return Known(
+        tools={t.name: set(t.input_schema.properties) for t in manifest.tools},
+        attrs=load_attributes(project, agent),  # the scorer's own reading
+        schemas={t.name: t.input_schema for t in manifest.tools},
+        skills={k.name for k in manifest.skills or []},
+        agents=set(agents.registered),
+        attr_types=_attr_types(project, agent),
     )
-    audit = project / "audit.json"
+
+
+def _attr_types(project: Path, agent: str) -> dict[str, set[str]]:
+    """The JSON types each of `agent`'s attributes arrived with in audit.json."""
+    audit = project / AUDIT_JSON
     rows = json.loads(audit.read_text()) if audit.exists() else []
-    attr_types: dict[str, set[str]] = {}
+    types: dict[str, set[str]] = {}
     for row in rows["rows"] if isinstance(rows, dict) else rows:
         if row["agent_name"] == agent:
             for name, value in (row.get("attributes") or {}).items():
-                attr_types.setdefault(name, set()).add(_json_type(value))
-    return Known(
-        tools=names.tools,
-        attrs=names.attrs,
-        schemas={t["name"]: t["input_schema"] for t in manifest["tools"]},
-        skills=names.skills,
-        agents={v["name"] for v in views},
-        attr_types=attr_types,
-    )
+                types.setdefault(name, set()).add(_json_type(value))
+    return types
 
 
 def _is_a(value, want) -> bool:
@@ -253,14 +262,14 @@ def unknown_names(call: dict, known: Known) -> list[str]:
     ]
 
 
-def _bad_args(args: dict, schema: dict) -> list[str]:
+def _bad_args(args: dict, schema: InputSchema) -> list[str]:
     """Required arguments left out, and values of another type than the schema's.
 
     YAML reads a quoted `"51"` as a string and a blank `amount:` as null.
     """
-    bad = [f"args.{a} missing" for a in schema.get("required") or [] if a not in args]
+    bad = [f"args.{a} missing" for a in schema.required if a not in args]
     for name, value in args.items():
-        kind = schema["properties"][name].get("type")
+        kind = schema.properties[name].type
         # Adapters record "string" for any schema without one top-level type
         # (`int | None`, `bool | None`, a list, a model), so it says nothing; a
         # precise type rules out null too, since a nullable one is never precise.

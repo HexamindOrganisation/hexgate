@@ -18,13 +18,14 @@ from evals.policy_writing.calls import (
     unknown_names,
 )
 from hexgate.egress.model import connect_to_args, http_to_args
+from hexgate.manifest.models import InputSchema
 from tests.evals.helpers import AGENT, agent_view, manifest_tool
 
 REFUND = manifest_tool("refund_order", order_id="string", amount="number")
 KNOWN = Known(
     tools={"refund_order": {"order_id", "amount"}},
     attrs={"tier"},
-    schemas={"refund_order": REFUND["input_schema"]},
+    schemas={"refund_order": InputSchema.model_validate(REFUND["input_schema"])},
     skills={"triage"},
     agents={AGENT, "ops-bot"},
     attr_types={"tier": {"string"}},
@@ -68,7 +69,7 @@ def test_load_known_reads_the_endpoint_s_loose_shape(tmp_path: Path) -> None:
     (tmp_path / "agents.json").write_text(json.dumps([draft, view]))
     known = load_known(tmp_path, AGENT)
     assert (known.schemas, known.skills, known.agents) == (
-        {"refund_order": REFUND["input_schema"]},
+        {"refund_order": InputSchema.model_validate(REFUND["input_schema"])},
         set(),
         {AGENT, "draft-bot"},
     )
