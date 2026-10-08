@@ -5,7 +5,9 @@
 -- FILE=0005_usage_minute`.
 --
 -- Guarded: inserts nothing unless usage_minute is empty, so a second run is a
--- no-op (the scalar subquery is evaluated before the insert writes).
+-- no-op (the scalar subquery is evaluated before the insert writes). A FAILED
+-- run may have committed some blocks, and a rerun then inserts nothing. Recover
+-- with the rebuild below.
 -- The same file rebuilds the rollup: stop the writers, TRUNCATE
 -- hexgate_audit.usage_minute, run this, start the writers. FINAL collapses
 -- duplicates the raw tables have not merged yet.

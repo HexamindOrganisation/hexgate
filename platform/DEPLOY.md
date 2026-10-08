@@ -360,13 +360,13 @@ stopped, so no row is both backfilled and counted by a view:
 ```bash
 make platform-stop-writers STAGE=<stage>
 make platform-migrate STAGE=<stage>
-make platform-backfill STAGE=<stage> FILE=0005_usage_minute   # no-op if already run
+make platform-backfill STAGE=<stage> FILE=0005_usage_minute   # no-op after a successful run
 make platform-up STAGE=<stage>
 ```
 
 A forgotten backfill only means `30d` usage reads start near zero. To rebuild
-the rollup (a late backfill, a re-upgrade after a rollback that kept the table,
-or a count that looks wrong): stop the writers,
+the rollup (a late backfill, a backfill that failed partway, a re-upgrade after
+a rollback that kept the table, or a count that looks wrong): stop the writers,
 `TRUNCATE TABLE hexgate_audit.usage_minute`, run the backfill, start the writers.
 
 **SDK release order for a new span scope.** The enricher sends any scope it

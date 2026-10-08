@@ -15,6 +15,13 @@ FILE="${2:?usage: backfill.sh <stage> <file>}"
 # shellcheck source=lib/stage.sh
 source "$(dirname "${BASH_SOURCE[0]}")/lib/stage.sh"
 
-run_clickhouse "$FILE"
+# An INSERT ... SELECT commits block by block, so a failed run can leave rows
+# behind, and the file's own re-run guard then turns a plain rerun into a no-op.
+if ! run_clickhouse "$FILE"; then
+  echo "backfill($STAGE): FAILED $FILE. Rows may be partly committed, and a plain" \
+    "rerun would skip them: with the writers still stopped, follow the recovery" \
+    "steps in the header of $FILE." >&2
+  exit 1
+fi
 
 echo "backfill($STAGE): $FILE ok"
