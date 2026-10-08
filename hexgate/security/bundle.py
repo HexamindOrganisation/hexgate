@@ -348,13 +348,14 @@ class PolicyBundle:
         Absent (a usage-free policy, or an older bundle) reads empty.
 
         Paths this SDK doesn't know (a bundle built by a newer one) are dropped, so
-        they read as missing and only their constraints fail closed."""
+        they read as missing: a plain comparison on one denies, a negated one passes."""
         listed = frozenset(self.manifest.get(_AGENT_USAGE_KEY, ()))
         unknown = listed - KNOWN_AGENT_USAGE_PATHS
         if unknown:
             _log.warning(
                 "bundle references agent_usage.* path(s) %s this SDK does not know; "
-                "their constraints deny. Upgrade the SDK.",
+                "they read as missing, so plain comparisons on them deny and negated ones "
+                "(not ...) pass. Upgrade the SDK.",
                 sorted(unknown),
             )
         return listed - unknown
