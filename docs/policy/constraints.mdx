@@ -274,15 +274,20 @@ The values are what **this process** has counted since it started:
 - two replicas of the same agent each count their own;
 - nothing is fetched from the platform.
 
-That is exact for an agent that runs in a single process, and it is what
-`hexgate policy test` simulates. Counts shared across processes are planned, and
-will come with their own documentation.
+That is exact for an agent that runs in a single process and admits one run at a
+time, and it is what `hexgate policy test` simulates. A run is counted when it starts,
+not when it is admitted, so admissions that overlap (sync runs on separate threads, or
+a run waiting on an approval) can all read the same count and each pass: an
+`invocations_*` cap can overshoot by the number of admissions in flight. Counts shared
+across processes, and hard reserved limits, are planned and will come with their own
+documentation.
 
 ### Where to put a limit
 
 Put invocation and budget caps on `admission`: they then refuse the run before it
 starts. The run being admitted is not counted yet, so use `<`:
-`agent_usage.invocations_1h < 100` admits exactly 100 runs per hour. A top-level
+`agent_usage.invocations_1h < 100` admits 100 runs per hour when runs are admitted
+one at a time. A top-level
 `constraints:` entry also reaches every tool call inside a run, not only admission.
 
 ### What the counters mean
