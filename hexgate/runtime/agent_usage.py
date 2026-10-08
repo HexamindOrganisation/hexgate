@@ -189,10 +189,21 @@ class UsageLedger:
 
     def within(self, seconds: float) -> dict[UsageMetric, int]:
         """Usage over the trailing ``seconds``, a rolling window."""
+        return self.within_each((seconds,))[seconds]
+
+    def within_each(
+        self, windows: Iterable[float]
+    ) -> dict[float, dict[UsageMetric, int]]:
+        """Usage over each trailing window, from one locked read, so no ``record``
+        lands between two windows and a narrower one never reads more."""
         # One clock read, and the tier chosen by the span itself: a second read
         # would push a tier-retention window just past it, onto the next tier.
         with self._lock:
-            return self._covering(seconds).total_since(self._clock() - seconds)
+            now = self._clock()
+            return {
+                seconds: self._covering(seconds).total_since(now - seconds)
+                for seconds in set(windows)
+            }
 
     def _covering(self, span: float) -> BucketSeries:
         return next(
@@ -226,7 +237,7 @@ def ledger_namespace(
 ) -> dict[str, int]:
     """The ``agent_usage`` mapping for ``paths``, from this process's ledger alone.
 
-    One ledger read per distinct window, not per path. Unknown paths raise
+    One locked ledger read covering every distinct window. Unknown paths raise
     ``KeyError``: callers pass only registered paths.
 
     ``current_run_age`` is the age of the agent's run being decided inside, if any.
@@ -235,8 +246,9 @@ def ledger_namespace(
     """
     wanted = [(path, AGENT_USAGE_PATHS[path]) for path in paths]
     windows = {spec.window_seconds for _, spec in wanted}
-    reads = {seconds: ledger.within(seconds) for seconds in windows}
-    # Floored: a run opened before the ledger was enabled never recorded itself.
+    reads = ledger.within_each(windows)
+    # Floored, a backstop: callers pass current_run_age only for a run that
+    # recorded itself on this ledger.
     return {
         path: max(
             _metric_value(reads[spec.window_seconds], spec.metric)
