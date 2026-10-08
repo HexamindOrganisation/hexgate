@@ -9,11 +9,12 @@ a module). This module runs over a **successfully linked** bundle and reports th
   grant never fires.
 - **redundant-grant** — two capabilities grant the same tool identically.
 - **unknown-tool** / **unknown-arg** — a rule references a tool or arg absent from
-  the agent's manifest (drift between policy and code), or an admission, reach or
-  skill rule reads an arg its gate doesn't pass. Only checked when a manifest is
-  supplied. Severity follows the failure direction: drift that
+  the agent's manifest (drift between policy and code; per agent with
+  :func:`analyze_project`'s ``manifests``), or an admission, reach or skill rule
+  reads an arg its gate doesn't pass. Only checked when a manifest is supplied.
+  Severity follows the failure direction: drift that
   leaves the real tool looser than intended (fail-open) is an error, see
-  :func:`_drift` and :func:`_resolved_drift`.
+  :func:`_modules_drift` and :func:`_resolved_drift`.
 - **permissive-default** — the ``default`` role grants something no named role
   grants (:func:`check_default_role_exposure`, over a resolved role map).
 - **unknown-guard** / **ambiguous-guard** — a baseline ``guards:`` rule that names a
@@ -52,6 +53,7 @@ from hexgate.security.constraints import (
 )
 from hexgate.security.linker import (
     link_policy_set,
+    named_agent_roles,
     resolve_for_project,
     resolve_role_map,
 )
@@ -65,7 +67,6 @@ from hexgate.security.models import (
     is_skill_key,
 )
 from hexgate.security.modules import (
-    DEFAULT_AGENT,
     GRANT_MODES,
     LayerKind,
     LinkError,
@@ -100,6 +101,9 @@ LintCode = Literal[
     "unused-capability",
 ]
 SEVERITY_RANK: dict[Severity, int] = {"error": 0, "warning": 1, "info": 2}
+# How an ``unknown-tool`` lint words a tool missing from one agent's manifest;
+# see :class:`_Roster` for the every-agent wording.
+_ABSENT_ONE = "which the agent's manifest doesn't declare"
 
 
 @dataclass(frozen=True)
@@ -107,7 +111,8 @@ class PolicyLint:
     """One authoring problem, attributed to the file that caused it.
 
     ``line`` is ``None`` for now (file-level attribution); line-level lands with
-    YAML position tracking in the loader. ``tier`` / ``tool`` are set when known.
+    YAML position tracking in the loader. ``tier`` / ``tool`` are set when known;
+    ``role`` / ``agent`` name the ``(role, agent)`` cell a project lint fired in.
     """
 
     code: LintCode
@@ -118,6 +123,7 @@ class PolicyLint:
     tier: LayerKind | None = None
     tool: str | None = None
     role: str | None = None
+    agent: str | None = None
 
 
 def check(
@@ -137,7 +143,7 @@ def check(
     """
     try:
         result = link_policy_set(boundaries, capabilities)
-    except (LinkError, PolicySetError, ConstraintParseError) as exc:
+    except _RESOLVE_ERRORS as exc:
         return [PolicyLint("link-error", "error", str(exc))]
     lints = analyze(result, boundaries, capabilities, manifest=manifest)
     lints += _module_unknown_roots(boundaries, capabilities)
@@ -156,13 +162,23 @@ def analyze(
     Needs the input modules (not just ``result``) to know what each layer
     *declared* versus what survived the fold.
     """
-    lints: list[PolicyLint] = []
-    lints += _dead_grants(result, capabilities)
-    lints += _redundant_grants(capabilities)
-    lints += _constraint_erased(capabilities)
+    lints = _soft_lints(result, capabilities)
     if manifest is not None:
-        lints += _drift(boundaries, capabilities, manifest)
+        code = _declared(manifest)
+        lints += _modules_drift(boundaries, "boundary", code, absent=_ABSENT_ONE)
+        lints += _modules_drift(capabilities, "capability", code, absent=_ABSENT_ONE)
     return sorted(lints, key=lambda lint: SEVERITY_RANK[lint.severity])
+
+
+def _soft_lints(
+    result: LinkResult, capabilities: list[ModuleContent]
+) -> list[PolicyLint]:
+    """The manifest-free lints over one linked role."""
+    return (
+        _dead_grants(result, capabilities)
+        + _redundant_grants(capabilities)
+        + _constraint_erased(capabilities)
+    )
 
 
 def check_project(
@@ -171,50 +187,26 @@ def check_project(
     roles: RoleMatrix | None,
     *,
     manifest: AgentManifest | None = None,
+    manifests: Mapping[str, AgentManifest] | None = None,
+    registered_agents: Collection[str] = (),
 ) -> list[PolicyLint]:
-    """Resolve a project and lint every role. See :func:`check` for the single-role
-    form. A hard failure folds into one ``error`` lint, same contract as ``check``.
-
-    Soft lints (dead-grant, drift, ...) run over the generic (``"*"``) agent
-    view — the baseline every agent shares; per-agent soft-lint refinement is a
-    follow-up. Hard **link errors** are surfaced for every named agent column too,
-    so a named-agent cell importing an unknown capability is visible on ``check``
-    (not just rejected at write time / silently fail-closed at serve time).
-    """
+    """Resolve a project and lint every role of every agent column. See
+    :func:`analyze_project` for the inputs and :func:`check` for the single-role
+    form. A ``"*"`` column that doesn't resolve folds into one ``error`` lint,
+    same contract as ``check``."""
     try:
         result = resolve_for_project(boundaries, library, roles)
-    except (LinkError, PolicySetError, ConstraintParseError) as exc:
+    except _RESOLVE_ERRORS as exc:
         return [PolicyLint("link-error", "error", str(exc))]
-    lints = analyze_project(result, boundaries, library, roles, manifest=manifest)
-    lints += _named_agent_link_errors(boundaries, library, roles)
-    return lints
-
-
-def _named_agent_link_errors(
-    boundaries: list[ModuleContent],
-    library: list[ModuleContent],
-    roles: RoleMatrix | None,
-) -> list[PolicyLint]:
-    """A ``link-error`` lint per named-agent column that doesn't resolve.
-
-    ``check_project`` resolves the ``"*"`` column for its soft lints; this covers
-    the hard-error case for named columns (an unknown-capability import in
-    ``roles: {member: {billing_bot: [nope]}}``), which ``"*"`` never touches."""
-    if not isinstance(roles, Mapping):
-        return []
-    named = {
-        agent
-        for cells in roles.values()
-        if isinstance(cells, Mapping)
-        for agent in cells
-    } - {DEFAULT_AGENT}
-    lints: list[PolicyLint] = []
-    for agent in sorted(named):
-        try:
-            resolve_for_project(boundaries, library, roles, agent=agent)
-        except (LinkError, PolicySetError, ConstraintParseError) as exc:
-            lints.append(PolicyLint("link-error", "error", f"agent {agent!r}: {exc}"))
-    return lints
+    return analyze_project(
+        result,
+        boundaries,
+        library,
+        roles,
+        manifest=manifest,
+        manifests=manifests,
+        registered_agents=registered_agents,
+    )
 
 
 def analyze_project(
@@ -224,33 +216,189 @@ def analyze_project(
     roles: RoleMatrix | None,
     *,
     manifest: AgentManifest | None = None,
+    manifests: Mapping[str, AgentManifest] | None = None,
+    registered_agents: Collection[str] = (),
 ) -> list[PolicyLint]:
-    """Soft lints across every role, each tagged with the role it fired in.
+    """Soft lints across every ``(role, agent)`` cell, most-severe first.
 
-    A grant dead under one role's ceiling can be alive under another, so the
-    per-capability lints run once per role over that role's imported set (for the
-    generic ``"*"`` agent view). Two project-level lints span roles:
-    ``unused-capability`` (a library pack no role/agent imports) and
-    ``no-default-role`` (roles defined but no ``default``, so unroled callers get
-    fail-closed deny).
+    ``result`` is the ``"*"`` column's resolution. A grant dead under one role's
+    ceiling can be alive under another, so the per-capability lints run once per
+    cell over the capabilities it imports, tagged with its role and, for a named
+    agent's cell, its agent. A named column that doesn't resolve (an unknown
+    capability in ``roles: {member: {billing_bot: [nope]}}``) is a ``link-error``.
+
+    The manifest-dependent lints need either ``manifest`` (one agent's) or
+    ``manifests`` (each registered agent's, by name), not both:
+
+    - a named agent's cells are drift-checked against its own manifest;
+    - the ``"*"`` cell, which any agent can fall through to, the boundaries,
+      org-wide ceilings that may name any agent's tool, and the capabilities no
+      cell imports are drift-checked against every agent's tools and skills:
+      ``manifest`` alone stands for them, as on the CLI's ``--manifest``;
+    - where those are unknown (a named agent with no manifest; with
+      ``manifests``, any agent registered without one in ``registered_agents``,
+      or a sub-agent with none), only the arguments an agent, skill or egress
+      rule reads are checked, against what its gate or the egress proxy passes.
+
+    The registered agents are the roster: a ``roles`` column naming an agent
+    outside it gets only the gate-argument checks, and widens nothing, so a
+    misspelled column cannot silence the project's drift.
+
+    An empty ``manifests`` is no manifest at all: with no agent's tools known,
+    every rule would read as drift.
+
+    Two project-level lints span roles: ``unused-capability`` (a library pack no
+    cell imports) and ``no-default-role`` (roles defined but no ``default``, so
+    unroled callers get fail-closed deny).
     """
-    # Same expansion the resolver used, so the analyzer lints exactly the roles
-    # that compiled. Raises LinkError on an unknown capability, matching
-    # resolve_for_project — but check_project resolves first, so by the time we
-    # get here the same input has already succeeded.
-    resolved = resolve_role_map(roles, library)
-
+    named = named_agent_roles(roles)
+    roster = _roster(manifest, manifests, registered_agents)
+    star_code = None if roster is None else roster.shared
+    star_absent = _ABSENT_ONE if roster is None else roster.absent
     lints: list[PolicyLint] = []
-    for role, caps in resolved.items():
-        role_result = result.by_role.get(role)
-        if role_result is None:
-            continue
-        for lint in analyze(role_result, boundaries, caps, manifest=manifest):
-            lints.append(replace(lint, role=role))
+    # The resolver's own expansion, so the analyzer lints exactly the cells that
+    # compiled; ``result`` resolved without error, so this can't raise here.
+    for role, caps in resolve_role_map(roles, library).items():
+        lints += _cell_lints(
+            result.by_role[role], caps, star_code, role, None, absent=star_absent
+        )
+    for agent, own_roles in sorted(named.items()):
+        code = None if roster is None else roster.by_agent.get(agent, _UNKNOWN)
+        lints += _named_column_lints(agent, own_roles, boundaries, library, roles, code)
+    lints += _project_lints(boundaries, library, roles, roster)
+    return sorted(lints, key=lambda lint: SEVERITY_RANK[lint.severity])
 
-    # Once per module, not per role: a module's paths don't depend on the role.
+
+# What resolving a project or linking a bundle can raise: ``LinkError`` from the
+# fold, ``PolicySetError`` / ``ConstraintParseError`` from the resolved policy.
+_RESOLVE_ERRORS = (LinkError, PolicySetError, ConstraintParseError)
+
+
+@dataclass(frozen=True)
+class _Declared:
+    """What agents' code declares: accepted argument names by tool (the egress
+    tools' included) and skill names, as the gates key them. ``None`` when some
+    agent's are unknown: then only the arguments a gate or the egress proxy
+    passes are checked, since a tool or skill missing from the rest may be that
+    agent's."""
+
+    tools: dict[str, set[str]] | None
+    skills: set[str] | None
+
+
+_UNKNOWN = _Declared(None, None)
+
+
+def _declared(*manifests: AgentManifest) -> _Declared:
+    """What ``manifests`` declare, merged."""
+    return _Declared(_tool_props(*manifests), _manifest_skills(*manifests))
+
+
+@dataclass(frozen=True)
+class _Roster:
+    """What the project's agents declare, for the manifest-dependent lints.
+
+    ``by_agent`` holds what each agent whose manifest is known declares.
+    ``shared`` is every agent's, or :data:`_UNKNOWN` when some agent's is
+    unknown; built from one ``manifest``, it is that manifest's, standing for
+    every agent. ``reach_targets`` is every agent the roster knows of, or
+    ``None`` when the roster comes from a single ``manifest``, which says
+    nothing about the other agents.
+    """
+
+    by_agent: dict[str, _Declared]
+    shared: _Declared
+    reach_targets: frozenset[str] | None
+
+    @property
+    def absent(self) -> str:
+        """How a tool or skill missing from ``shared`` is worded."""
+        if self.reach_targets is None:  # one agent's manifest stands for all
+            return _ABSENT_ONE
+        return "which no agent's manifest declares"
+
+
+def _roster(
+    manifest: AgentManifest | None,
+    manifests: Mapping[str, AgentManifest] | None,
+    registered_agents: Collection[str],
+) -> _Roster | None:
+    """The roster the inputs describe; ``None`` with no manifest at all."""
+    if manifest is not None and manifests:
+        raise TypeError("pass manifest or manifests, not both")
+    if not manifests:
+        if manifest is None:
+            return None
+        code = _declared(manifest)
+        return _Roster({manifest.name: code}, code, None)
+    subagents = {ref.name for m in manifests.values() for ref in m.subagents or ()}
+    agents = frozenset({*manifests, *registered_agents, *subagents})
+    return _Roster(
+        {name: _declared(m) for name, m in manifests.items()},
+        _declared(*manifests.values()) if agents <= manifests.keys() else _UNKNOWN,
+        agents,
+    )
+
+
+def _named_column_lints(
+    agent: str,
+    own_roles: set[str],
+    boundaries: list[ModuleContent],
+    library: list[ModuleContent],
+    roles: RoleMatrix | None,
+    code: _Declared | None,
+) -> list[PolicyLint]:
+    """Lints for the cells ``agent`` defines. Its other roles fall back to the
+    ``"*"`` cell, which is linted already. A cell that doesn't resolve (an
+    unknown capability in ``roles: {member: {billing_bot: [nope]}}``) is a
+    ``link-error``."""
+    try:
+        cells = resolve_role_map(roles, library, agent)
+    except LinkError as exc:
+        return [PolicyLint("link-error", "error", str(exc), agent=agent)]
+    lints: list[PolicyLint] = []
+    for role in sorted(own_roles):
+        try:
+            linked = link_policy_set(boundaries, cells[role])
+        except _RESOLVE_ERRORS as exc:
+            lints.append(
+                PolicyLint("link-error", "error", str(exc), role=role, agent=agent)
+            )
+            continue
+        lints += _cell_lints(linked, cells[role], code, role, agent, absent=_ABSENT_ONE)
+    return lints
+
+
+def _cell_lints(
+    linked: LinkResult,
+    caps: list[ModuleContent],
+    code: _Declared | None,
+    role: str,
+    agent: str | None,
+    *,
+    absent: str,
+) -> list[PolicyLint]:
+    """Soft lints, and with ``code`` capability drift, for one ``(role, agent)``
+    cell, tagged with it (``agent`` is ``None`` for ``"*"``)."""
+    lints = _soft_lints(linked, caps)
+    if code is not None:
+        lints += _modules_drift(caps, "capability", code, absent=absent)
+    return [replace(lint, role=role, agent=agent) for lint in lints]
+
+
+def _project_lints(
+    boundaries: list[ModuleContent],
+    library: list[ModuleContent],
+    roles: RoleMatrix | None,
+    roster: _Roster | None,
+) -> list[PolicyLint]:
+    """The lints that span cells: role and agent stay ``None``, so a role-scoped
+    ``check --role X`` view still surfaces them."""
+    imported = _all_imported_names(roles, library)
+    unused = [cap for cap in library if cap.name not in imported]
+    lints = _unused_capabilities(unused)
+    # Once per module, not per cell: a module's paths don't depend on the cell.
     lints += _module_unknown_roots(boundaries, library)
-    lints += _unused_capabilities(library, _all_imported_names(roles, library))
     if roles and DEFAULT_ROLE_NAME not in roles:
         lints.append(
             PolicyLint(
@@ -260,11 +408,13 @@ def analyze_project(
                     f"no {DEFAULT_ROLE_NAME!r} role defined; a caller with no role "
                     "resolves to fail-closed deny"
                 ),
-                # role stays None: this spans roles, so a role-scoped `check
-                # --role X` view must still surface it (like unused-capability).
             )
         )
-    return sorted(lints, key=lambda lint: SEVERITY_RANK[lint.severity])
+    if roster is not None:
+        shared, absent = roster.shared, roster.absent
+        lints += _modules_drift(boundaries, "boundary", shared, absent=absent)
+        lints += _modules_drift(unused, "capability", shared, absent=absent)
+    return lints
 
 
 def _all_imported_names(
@@ -288,9 +438,7 @@ def _all_imported_names(
     return names
 
 
-def _unused_capabilities(
-    library: list[ModuleContent], imported: set[str]
-) -> list[PolicyLint]:
+def _unused_capabilities(unused: list[ModuleContent]) -> list[PolicyLint]:
     """A library capability that no role/agent imports. Authoring dead-weight."""
     return [
         PolicyLint(
@@ -301,8 +449,7 @@ def _unused_capabilities(
             tier="capability",
             tool=None,
         )
-        for cap in library
-        if cap.name not in imported
+        for cap in unused
     ]
 
 
@@ -421,12 +568,15 @@ def _constraint_erased(capabilities: list[ModuleContent]) -> list[PolicyLint]:
     return out
 
 
-def _drift(
-    boundaries: list[ModuleContent],
-    capabilities: list[ModuleContent],
-    manifest: AgentManifest,
+def _modules_drift(
+    modules: list[ModuleContent],
+    tier: LayerKind,
+    declared: _Declared,
+    *,
+    absent: str,
 ) -> list[PolicyLint]:
-    """Rules referencing tools / args / skills the agent's code doesn't have.
+    """Rules in ``modules`` referencing tools / args / skills the code
+    ``declared`` doesn't have; ``absent`` words a missing tool or skill.
 
     Severity follows the failure direction, not just the tier:
       * boundary allow/approval (a ceiling) naming a missing tool leaves the real
@@ -442,14 +592,16 @@ def _drift(
     ``args.*`` against, and ``link()`` rejects the field in a module anyway, so
     this pipeline never sees one.
     """
-    tool_props = _tool_props(manifest)
-    skills = _manifest_skills(manifest)
     out: list[PolicyLint] = []
-    for module, tier in _tiered(boundaries, capabilities):
+    for module in modules:
         rules = module.policy.effective_tools
         owner, source = repr(module.name), module.source
-        out += _tool_drift(rules, tool_props, owner=owner, source=source, tier=tier)
-        out += _skill_drift(rules, skills, owner=owner, source=source, tier=tier)
+        out += _tool_drift(
+            rules, declared.tools, owner=owner, source=source, tier=tier, absent=absent
+        )
+        out += _skill_drift(
+            rules, declared.skills, owner=owner, source=source, tier=tier, absent=absent
+        )
     return out
 
 
@@ -486,7 +638,7 @@ def lint_guards(
     The ergonomic ahead of the runtime "stop cold" (R-GUARD-006 / R-GUARD-007):
     surface, at ``hexgate policy validate`` time, the guard mistakes that otherwise
     only bite at construction or run silently. Severity mirrors the runtime
-    consequence, as ``_drift`` does — a guaranteed hard-stop is an ``error``, a silent
+    consequence, as ``_modules_drift`` does — a guaranteed hard-stop is an ``error``, a silent
     no-op is a ``warning``:
 
     - ``unknown-guard`` (**error**) — a baseline ``guards:`` rule names a guard the
@@ -547,33 +699,43 @@ def lint_guards(
     return out
 
 
-def _tool_props(manifest: AgentManifest) -> dict[str, set[str]]:
-    """Accepted argument names by tool: each manifest tool's, plus the egress
-    tools', which are enforced like tools but never appear in a manifest."""
+def _tool_props(*manifests: AgentManifest) -> dict[str, set[str]]:
+    """Accepted argument names by tool, across ``manifests``: each manifest
+    tool's, plus the egress tools', which are enforced like tools but never
+    appear in a manifest."""
     props = {name: set(args) for name, args in EGRESS_TOOL_ARGS.items()}
-    props.update({t.name: set(t.input_schema.properties) for t in manifest.tools})
+    for manifest in manifests:
+        for tool in manifest.tools:
+            props.setdefault(tool.name, set()).update(tool.input_schema.properties)
     return props
 
 
 def _tool_drift(
     tools: dict[str, ToolPolicy],
-    tool_props: dict[str, set[str]],
+    tool_props: dict[str, set[str]] | None,
     *,
     owner: str,
     source: str | None,
     tier: LayerKind | None,
     default: BaseToolPolicy | None = None,
     role: str | None = None,
+    absent: str = _ABSENT_ONE,
 ) -> list[PolicyLint]:
     """``unknown-tool`` / ``unknown-arg`` for one rule set: a module's (``tier``
     set) or a resolved role's (``default``, its fallback policy, set). ``owner``
-    names what holds the rules in the messages. A lowered agent or skill key is
-    never an unknown tool (:func:`_skill_drift` checks the skill name); its args
-    are checked against what its gate passes."""
+    names what holds the rules in the messages and ``absent`` how a missing tool
+    is worded. A lowered agent or skill key is never an unknown tool
+    (:func:`_skill_drift` checks the skill name); its args are checked against
+    what its gate passes, and an egress tool's against what the proxy passes.
+    With ``tool_props`` ``None`` only those are checked."""
     out: list[PolicyLint] = []
     for tool, tp in tools.items():
         if is_reserved_key(tool):
             valid_args = gate_args(tool)
+        elif tool in EGRESS_TOOL_ARGS:  # the proxy's args, whatever the manifest
+            valid_args = EGRESS_TOOL_ARGS[tool]
+        elif tool_props is None:
+            continue
         elif tool in tool_props:
             valid_args = tool_props[tool]
         else:
@@ -586,10 +748,7 @@ def _tool_drift(
                 PolicyLint(
                     code="unknown-tool",
                     severity=severity,
-                    message=(
-                        f"{owner} references tool {tool!r}, which the agent's "
-                        "manifest doesn't declare"
-                    ),
+                    message=f"{owner} references tool {tool!r}, {absent}",
                     source=source,
                     tier=tier,
                     tool=tool,
@@ -619,16 +778,16 @@ def _tool_drift(
     return out
 
 
-def _manifest_skills(manifest: AgentManifest) -> set[str] | None:
-    """The skills the agent has, named as the skill gate's keys name them, or
-    ``None`` when the manifest doesn't list them all: the builders record
-    ``None`` both for no skills and for a listing that failed, and cut a list
-    at ``MAX_SKILLS``, while the skill gate still runs for every skill."""
+def _manifest_skills(*manifests: AgentManifest) -> set[str] | None:
+    """The skills ``manifests`` declare, named as the skill gate's keys name them,
+    or ``None`` when one doesn't list them all: the builders record ``None`` both
+    for no skills and for a listing that failed, and cut a list at
+    ``MAX_SKILLS``, while the skill gate still runs for every skill."""
     from hexgate.manifest.models import MAX_SKILLS
 
-    if manifest.skills is None or len(manifest.skills) >= MAX_SKILLS:
+    if any(m.skills is None or len(m.skills) >= MAX_SKILLS for m in manifests):
         return None
-    return {canonical_skill_name(s.name) for s in manifest.skills}
+    return {canonical_skill_name(s.name) for m in manifests for s in m.skills}
 
 
 def _skill_drift(
@@ -639,9 +798,11 @@ def _skill_drift(
     source: str | None,
     tier: LayerKind | None,
     role: str | None = None,
+    absent: str = _ABSENT_ONE,
 ) -> list[PolicyLint]:
     """``unknown-skill`` for each skill the lowered ``skill*:`` keys in ``tools``
-    name that ``skills`` lacks, once per skill over its levels.
+    name that ``skills`` lacks, once per skill over its levels; none when
+    ``skills`` is ``None`` (unknown).
 
     In a resolved role (``tier`` unset) the real skill, unlisted, is denied
     closed-world either way: a grant never fires (warning), a deny protects
@@ -661,10 +822,7 @@ def _skill_drift(
         PolicyLint(
             code="unknown-skill",
             severity=severity,
-            message=(
-                f"{owner} governs skill {name!r}, which the agent's manifest "
-                "doesn't declare"
-            ),
+            message=f"{owner} governs skill {name!r}, {absent}",
             source=source,
             tier=tier,
             role=role,
@@ -922,7 +1080,7 @@ def _resolved_drift(
     """Tools, arguments and skills each resolved role names that the manifest
     lacks.
 
-    The resolved form of :func:`_drift`. A rule on a missing tool is graded
+    The resolved form of :func:`_modules_drift`. A rule on a missing tool is graded
     against the role's default, which the real tool falls through to (see
     :func:`_resolved_unknown_tool_severity`). A resolved deny is unconditional,
     so its constraints never run and are not checked; a grant's arg typo fails

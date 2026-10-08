@@ -591,7 +591,8 @@ def _format_lint(lint: PolicyLint) -> str:
     run that mixes severities shows which lints would fail the gate."""
     where = f" ({lint.source})" if lint.source else ""
     role = f" [{lint.role}]" if lint.role else ""
-    return f"{_SEVERITY_ICON[lint.severity]} [{lint.code}]{role} {lint.message}{where}"
+    agent = f" [agent {lint.agent}]" if lint.agent else ""
+    return f"{_SEVERITY_ICON[lint.severity]} [{lint.code}]{role}{agent} {lint.message}{where}"
 
 
 def _iter_raw_constraints(payload: dict) -> "list[tuple[str, str, str]]":
@@ -836,9 +837,10 @@ def _main_check(args: argparse.Namespace) -> int:
     if args.role is not None:
         lints = [lint for lint in lints if lint.role in (args.role, None)]
 
-    # A link error short-circuits before drift/soft lints run, so the
-    # "supply a manifest" hint only makes sense when linking succeeded.
-    linked = not (len(lints) == 1 and lints[0].code == "link-error")
+    # A link error in the "*" column (agent None) short-circuits before drift and
+    # soft lints run, so the "supply a manifest" hint only makes sense without
+    # one. A named agent's link error leaves the rest of the project linted.
+    linked = not any(lint.code == "link-error" and lint.agent is None for lint in lints)
 
     def _drift_hint() -> None:
         if manifest is None and linked:
