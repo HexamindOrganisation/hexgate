@@ -21,23 +21,22 @@ from pathlib import Path
 from typing import get_args
 from urllib.parse import urlsplit
 
-from evals.policy_writing.names import (
-    AGENT_REACH_ARGS,
-    SKILL_ARGS,
-    SKILL_SCRIPT_ARGS,
-    SYNTHETIC_ARGS,
-    load_known_names,
-)
+from evals.policy_writing.sources import load_known_names
 from hexgate.egress.model import connect_to_args, http_to_args
 from hexgate.security.models import (
     AGENT_RUN_TOOL,
     SkillVia,
     agent_reach_target,
+    gate_args,
     is_agent_reach_key,
     is_skill_key,
     skill_key,
 )
-from hexgate.security.network import NET_HTTP_REQUEST, NET_TCP_CONNECT
+from hexgate.security.network import (
+    EGRESS_TOOL_ARGS,
+    NET_HTTP_REQUEST,
+    NET_TCP_CONNECT,
+)
 
 # JSON-schema types an argument value must have.
 _TYPES = {
@@ -232,17 +231,18 @@ def complete(call: dict, agent: str) -> list[str]:
 def unknown_names(call: dict, known: Known) -> list[str]:
     """Tool, skill, agent, argument and attribute names `call` uses that are unknown."""
     tool = call["tool"]
-    if tool in SYNTHETIC_ARGS:
-        args = SYNTHETIC_ARGS[tool]
+    if tool in EGRESS_TOOL_ARGS:
+        args = EGRESS_TOOL_ARGS[tool]
+    elif tool == AGENT_RUN_TOOL:
+        args = gate_args(tool)
     elif is_agent_reach_key(tool):
         if agent_reach_target(tool) not in known.agents:
             return [tool]
-        args = AGENT_REACH_ARGS
+        args = gate_args(tool)
     elif is_skill_key(tool):
-        via, name = _skill_parts(tool)
-        if name not in known.skills:
+        if _skill_parts(tool)[1] not in known.skills:
             return [tool]
-        args = SKILL_SCRIPT_ARGS if via == "script" else SKILL_ARGS
+        args = gate_args(tool)
     elif tool in known.tools:
         args = known.tools[tool]
     else:
