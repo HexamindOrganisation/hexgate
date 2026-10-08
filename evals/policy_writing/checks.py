@@ -153,6 +153,12 @@ def _untagged(lint) -> str:
     )
 
 
+def _lines(lints) -> list[str]:
+    """Each lint as one line, once: a module's mistake is linted once per cell
+    it's in."""
+    return list(dict.fromkeys(_untagged(x) for x in lints))
+
+
 def name_checks(
     policy: Policy, ws: Path, before: dict[str, str], after: dict[str, str]
 ) -> list[Check]:
@@ -173,13 +179,8 @@ def name_checks(
         attrs = load_attributes(ws, policy.agent)
     except SourceError as exc:
         return _name_checks_failed(f"audit.json unreadable: {exc}"[:300])
-    # Deduped: a module's mistake is linted once per cell it's in.
-    keys = list(
-        dict.fromkeys(_untagged(x) for x in policy.drift if x.code != "unknown-arg")
-    )
-    args = list(
-        dict.fromkeys(_untagged(x) for x in policy.drift if x.code == "unknown-arg")
-    )
+    keys = _lines(x for x in policy.drift if x.code != "unknown-arg")
+    args = _lines(x for x in policy.drift if x.code == "unknown-arg")
     args += [
         f"[unknown-attribute] {ref}: no audit.json row sends it"
         for ref in unknown_attrs(policy.policy_set, attrs)
