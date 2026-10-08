@@ -9,8 +9,8 @@ Committing only after the ClickHouse ack means a crash anywhere in the cycle
 replays the poll on restart, which is safe for the tables: event_id is the
 idempotency key and ReplacingMergeTree collapses the duplicates. It is not
 safe for usage_minute's materialized views, which sum every inserted copy:
-the cross-poll cache is in memory, so a replay after a restart over-counts
-there. DLQ envelopes have no dedup key and are simply re-sent on replay (see
+the cross-poll cache is in memory, so a replay after a restart or a
+rebalance over-counts there. DLQ envelopes have no dedup key and are simply re-sent on replay (see
 dlq.py).
 """
 
@@ -413,6 +413,8 @@ class EnricherJob:
             await self._consumer.commit()
         except CommitFailedError:
             # A rebalance took our partitions mid-cycle. Drop this poll — the
-            # new owner replays it and ClickHouse dedup absorbs the rows (DLQ
-            # consumers must tolerate the duplicate envelopes).
+            # new owner replays it. ReplacingMergeTree absorbs the table rows,
+            # but the new owner's dedup cache is empty, so usage_minute counts
+            # the poll again (accepted, see dedup.py). DLQ consumers must
+            # tolerate the duplicate envelopes.
             _log.warning("offset commit failed after a rebalance; poll will replay")
