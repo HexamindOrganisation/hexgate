@@ -1,7 +1,8 @@
 """Load, validate and dry-run a policy the way `hexgate policy` does, via the SDK.
 
 `effective_policy` runs what `validate` (single file) or `check` + `resolve`
-(module tree) runs, failing on lint warnings; `decide` runs what `test` runs,
+(module tree) runs, failing on lint warnings but the drift ones, which it
+keeps for the name checks (`DRIFT_CODES`); `decide` runs what `test` runs,
 with the CLI's input checks. On an opt-in gate the policy never declares, it
 follows the runtime where `test` would deny: an admission or handoff call is
 allowed, and an agent-as-tool or skill call is refused as a case error, since
@@ -15,22 +16,25 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import get_args
 
 import yaml
 from pydantic import TypeAdapter, ValidationError
 
-from evals.policy_writing.sources import SourceError, load_project_agents
+from evals.policy_writing.sources import ProjectAgents, SourceError, load_project_agents
+from hexgate.manifest.models import AgentManifest
 from hexgate.runtime.context import ContextAttributeValue
 from hexgate.runtime.run_facts import DETACHED, KNOWN_RUN_PATHS
 from hexgate.security import (
     RESOLVED_POLICY_MARKER,
     DecisionOutcome,
     LinkError,
+    ModuleContent,
     PolicySet,
     PolicySetError,
+    RoleMatrix,
     check_project,
     compile_to_rego,
     effective_policy_by_role,
@@ -66,6 +70,12 @@ from hexgate.security.testing import run_namespace
 
 # Everything the SDK raises for a policy it can't load, compile or link.
 POLICY_ERRORS = (PolicySetError, ConstraintParseError, LinkError, ValidationError)
+# The lints a manifest turns on for a name the agent's code doesn't declare
+# (`analyze_policy`, `check_project`). The name checks report them, at any
+# severity, so an invented name fails one check rather than `valid`.
+DRIFT_CODES = frozenset(
+    {"unknown-tool", "unknown-skill", "unknown-guard", "unknown-arg"}
+)
 
 
 @dataclass
@@ -75,12 +85,17 @@ class Policy:
     `payload` is the document: `policy.yaml` as written, or a module tree's
     resolved roles. `policy_set` is it loaded, ready to evaluate. `agent` is
     the agent running the calls: an agent gate sends it as `args.agent`, and
-    it is `run.agent` once the run has started.
+    it is `run.agent` once the run has started. `manifest` is that agent's from
+    agents.json, if it has a readable one, and `drift` the SDK's lints in
+    `DRIFT_CODES`: against that manifest for a policy file, against every
+    agent's for a module tree.
     """
 
     payload: dict
     policy_set: PolicySet
     agent: str | None = None
+    manifest: AgentManifest | None = None
+    drift: list[PolicyLint] = field(default_factory=list)
 
 
 # A case file names outcomes by their policy mode, not by the enum's values.
@@ -261,48 +276,64 @@ def decide(policy: Policy, role: str, d: dict) -> Verdict:
     )
 
 
-def _lint_failures(lints: list[PolicyLint]) -> list[str]:
-    # A warning fails, not only an error: the write-policy skill tells the agent
-    # to validate with `--max-severity warning` (for `policy check` on a module
-    # tree it doesn't yet; the spec aligns the skill in PR 11).
-    # Tagged with the cell as `policy check` prints it: an `unknown-agent`
-    # message doesn't name its column.
-    return [
+def format_lint(lint: PolicyLint) -> str:
+    """`lint` tagged with its cell, as `policy check` tags it: an
+    `unknown-agent` message doesn't name its column."""
+    return (
         f"[{lint.code}]"
         + (f" [{lint.role}]" if lint.role else "")
         + (f" [agent {lint.agent}]" if lint.agent else "")
         + f" {lint.message}"
+    )
+
+
+def _split(lints: list[PolicyLint]) -> tuple[list[PolicyLint], list[str]]:
+    """`lints` as (drift for the name checks, `valid`'s failures)."""
+    # A warning fails, not only an error: the write-policy skill tells the agent
+    # to validate with `--max-severity warning` (for `policy check` on a module
+    # tree it doesn't yet; the spec aligns the skill in PR 11).
+    drift = [lint for lint in lints if lint.code in DRIFT_CODES]
+    failures = [
+        format_lint(lint)
         for lint in lints
-        if SEVERITY_RANK[lint.severity] <= SEVERITY_RANK["warning"]
+        if lint.code not in DRIFT_CODES
+        and SEVERITY_RANK[lint.severity] <= SEVERITY_RANK["warning"]
     ]
+    return drift, failures
 
 
-def _load(payload: dict) -> tuple[PolicySet | None, list[str]]:
-    """What `hexgate policy validate` runs: load, compile, then `analyze_policy` (R-POL-003)."""
+def _load(
+    payload: dict, manifest: AgentManifest | None
+) -> tuple[PolicySet | None, list[PolicyLint], list[str]]:
+    """What `hexgate policy validate` runs: load, compile, then `analyze_policy`
+    with the agent's manifest (R-POL-003). Returns (policy set, drift, failures)."""
     try:
         policy_set = load_policy_set_from_dict(payload)
         # Compile too, so a policy the build would reject doesn't pass.
         compile_to_rego(payload)
     except POLICY_ERRORS as exc:
-        return None, [str(exc)]
+        return None, [], [str(exc)]
     except TypeError as exc:  # e.g. an unquoted YAML date the compiler can't serialise
-        return None, [f"can't compile: {exc}"]
-    return policy_set, _lint_failures(analyze_policy(policy_set))
+        return None, [], [f"can't compile: {exc}"]
+    return policy_set, *_split(analyze_policy(policy_set, manifest=manifest))
 
 
-def _module_payload(ws: Path, agent: str) -> tuple[dict | None, list[str]]:
-    """What `hexgate policy check` and `resolve` do on a module tree."""
+def _module_payload(
+    ws: Path, agent: str, agents: ProjectAgents
+) -> tuple[dict | None, list[PolicyLint], list[str]]:
+    """What `hexgate policy check` and `resolve` do on a module tree, with the
+    project's `agents`. Returns (resolved payload, drift, failures)."""
     try:
         boundaries, capabilities = load_local_modules(ws)
         roles = load_roles(ws)
     except (ValueError, OSError) as exc:
-        return None, [str(exc)]
+        return None, [], [str(exc)]
     if not boundaries and not capabilities:
-        return None, ["no modules under policies/boundaries/ or policies/capabilities/"]
-    try:
-        agents = load_project_agents(ws)
-    except SourceError as exc:
-        return None, [f"agents.json unreadable: {exc}"[:300]]
+        return (
+            None,
+            [],
+            ["no modules under policies/boundaries/ or policies/capabilities/"],
+        )
     # Lints the modules and every column's roles, as `policy check` does, with
     # the project's agents, so a roles column or `agents:` target naming no agent
     # fails; `_load` then lints the case agent's resolved roles as `validate` would.
@@ -313,27 +344,51 @@ def _module_payload(ws: Path, agent: str) -> tuple[dict | None, list[str]]:
         manifests=agents.manifests,
         registered_agents=agents.registered,
     )
-    problems = _lint_failures(lints)
+    _, problems = _split(lints)
     if problems:
-        return None, problems
+        return None, [], problems
+    drift = _module_drift(boundaries, capabilities, roles, agents)
     try:
         # `agent`'s column of roles.yaml, as the platform builds that agent's bundle.
         result = resolve_for_project(boundaries, capabilities, roles, agent=agent)
     except POLICY_ERRORS as exc:
-        return None, [str(exc)]
-    return {"roles": effective_policy_by_role(result), RESOLVED_POLICY_MARKER: True}, []
+        return None, [], [str(exc)]
+    payload = {"roles": effective_policy_by_role(result), RESOLVED_POLICY_MARKER: True}
+    return payload, drift, []
 
 
-def _yaml_payload(ws: Path) -> tuple[dict | None, list[str]]:
-    """`policy.yaml` as `hexgate policy validate` reads it: an empty file is `{}`."""
+def _module_drift(
+    boundaries: list[ModuleContent],
+    capabilities: list[ModuleContent],
+    roles: RoleMatrix | None,
+    agents: ProjectAgents,
+) -> list[PolicyLint]:
+    """The drift lints against the manifests the MCP shows. An agent with no
+    manifest, or a sub-agent with none of its own, shows no tools, so the roster
+    is the agents with one: with the whole project's, `check_project` leaves
+    `"*"` cells and boundaries unchecked, as a name may be the unknown agent's."""
+    shown = {
+        name: manifest.model_copy(update={"subagents": None})
+        for name, manifest in agents.manifests.items()
+    }
+    if not shown:
+        return []
+    lints = check_project(boundaries, capabilities, roles, manifests=shown)
+    return [lint for lint in lints if lint.code in DRIFT_CODES]
+
+
+def _yaml_payload(ws: Path) -> tuple[dict | None, list[PolicyLint], list[str]]:
+    """`policy.yaml` as `hexgate policy validate` reads it: an empty file is `{}`.
+    Returns (payload, drift, failures), as `_module_payload` does; the drift
+    comes from `_load`."""
     try:
         text = (ws / "policy.yaml").read_text(encoding="utf-8")
         payload = yaml.safe_load(text) or {}
     except (OSError, UnicodeDecodeError, yaml.YAMLError) as exc:
-        return None, [str(exc)]
+        return None, [], [str(exc)]
     if not isinstance(payload, dict):
-        return None, ["policy.yaml is not a YAML mapping"]
-    return payload, []
+        return None, [], ["policy.yaml is not a YAML mapping"]
+    return payload, [], []
 
 
 def effective_policy(
@@ -342,9 +397,24 @@ def effective_policy(
     """The policy in `ws`, or why it doesn't validate: `hexgate policy validate`
     on `policy.yaml`, or with `modules`, `check` + `resolve` on the module tree
     for `agent`'s roles.yaml column."""
-    column = agent or DEFAULT_AGENT
-    payload, problems = _module_payload(ws, column) if modules else _yaml_payload(ws)
+    try:
+        agents = load_project_agents(ws)
+    except SourceError as exc:
+        agents, unreadable = None, f"agents.json unreadable: {exc}"[:300]
+    manifest = agents.manifests.get(agent) if agents and agent else None
+    if modules:
+        if agents is None:
+            return None, [unreadable]
+        # The drift comes from `check_project`; the resolved roles are linted
+        # manifest-free, as their `"*"` grants may name any agent's tools.
+        payload, drift, problems = _module_payload(ws, agent or DEFAULT_AGENT, agents)
+    else:
+        # Without the case agent's manifest the drift lints don't run, and the
+        # name checks fail on its absence.
+        payload, drift, problems = _yaml_payload(ws)
     if payload is None:
         return None, problems
-    policy_set, problems = _load(payload)
-    return (None, problems) if problems else (Policy(payload, policy_set, agent), [])
+    policy_set, resolved_drift, problems = _load(payload, None if modules else manifest)
+    if problems:
+        return None, problems
+    return Policy(payload, policy_set, agent, manifest, drift + resolved_drift), []

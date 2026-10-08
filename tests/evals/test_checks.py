@@ -29,12 +29,6 @@ from tests.evals.helpers import (
     valid_policy,
 )
 
-# The fixture's org boundary, open for more tools.
-BOUNDARY = (
-    "default_policy: { mode: allow }\n"
-    "tools:\n"
-    '  refund_order: { mode: allow, constraints: ["args.amount <= 1000"] }\n'
-)
 REFUND = {"tool": "refund_order", "args": {"order_id": "o1", "amount": 5}}
 VIEW = {"tool": "view_orders", "args": {"customer_id": "c1"}}
 
@@ -102,74 +96,114 @@ def test_name_checks_happy_path(tmp_path) -> None:
     ]
 
 
+# The two name checks, in NAME_CHECKS order: which one an invented name fails.
+KEYS, ARGS = (False, True), (True, False)
+
+
 @pytest.mark.parametrize(
-    ("module", "text"),
+    ("rule", "fails"),
     [
-        # An org-wide deny on ops-bot's tool and skill: linking keeps a deny.
+        ("      refnd_order: { mode: allow }\n", KEYS),
+        ("      refnd_order: { mode: deny }\n", KEYS),  # graded info by the SDK
         (
-            "boundaries/org.yaml",
-            BOUNDARY
-            + "  wire_transfer: { mode: deny }\nskills:\n  ledger: { mode: deny }\n",
+            '      view_orders: { mode: allow, constraints: ["args.customr == 1"] }\n',
+            ARGS,
         ),
-        # A `"*"` cell's capability may grant any agent's tool.
+        ('      view_orders: { mode: allow, constraints: ["ctx.tier == 1"] }\n', ARGS),
+        ("      wire_transfer: { mode: allow }\n", KEYS),  # only ops-bot's
+    ],
+)
+def test_when_a_policy_file_invents_a_name_then_one_name_check_fails(
+    tmp_path, rule, fails
+) -> None:
+    ws = make_workspace(tmp_path, POLICY + rule)
+    checks = by_name(score({"agent": AGENT}, ws, snapshot(ws), ""))
+    assert checks["valid"].passed
+    assert tuple(checks[n].passed for n in NAME_CHECKS) == fails
+
+
+@pytest.mark.parametrize(
+    "role",
+    [
+        {"skills": {"pdff": {"mode": "allow"}}},
+        {"guards": {"redact_pi": {"enabled": True}}},
+    ],
+)
+def test_when_a_policy_file_invents_a_skill_or_guard_then_the_keys_check_fails(
+    tmp_path, role
+) -> None:
+    # One role, so its guards can't diverge from another's.
+    doc = {
+        "version": 1,
+        "roles": {"default": {"tools": {"view_orders": {"mode": "allow"}}, **role}},
+    }
+    ws = make_workspace(tmp_path, json.dumps(doc))
+    checks = by_name(score({"agent": AGENT}, ws, snapshot(ws), ""))
+    assert checks["valid"].passed, checks["valid"].detail
+    assert tuple(checks[n].passed for n in NAME_CHECKS) == KEYS
+
+
+# shop-bot's own column, which `check_project` checks against its manifest.
+OWN_COLUMN = (
+    "  default: [read_only]\n"
+    "  billing:\n    '*': [read_only, payments]\n    shop-bot: [read_only, inv]\n"
+)
+
+
+@pytest.mark.parametrize(
+    ("capability", "fails"),
+    [
+        ("tools:\n  refnd_order: { mode: allow }\n", KEYS),
+        ("skills:\n  pdff: { mode: allow, via: [resource] }\n", KEYS),
         (
-            "capabilities/payments.yaml",
-            "tools:\n  refund_order: { mode: allow }\n  wire_transfer: { mode: allow }\n",
+            'tools:\n  refund_order: { mode: allow, constraints: ["args.amout < 5"] }\n',
+            ARGS,
+        ),
+        (
+            'tools:\n  refund_order: { mode: allow, constraints: ["ctx.tier == 1"] }\n',
+            ARGS,
         ),
     ],
 )
-def test_when_a_module_tree_names_another_agents_tool_then_name_checks_accept_it(
-    tmp_path, module, text
+def test_when_a_module_tree_invents_a_name_then_one_name_check_fails(
+    tmp_path, capability, fails
 ) -> None:
-    ws = make_modules_workspace(tmp_path)
-    (ws / "policies" / module).write_text(text)
-    policy = valid_policy(ws, AGENT, modules=True)
-    before = snapshot(ws)
-    checks = name_checks(policy, ws, before, before, modules=True)
-    assert [(c.passed, c.detail) for c in checks] == [(True, "")] * 2
+    ws = make_modules_workspace(tmp_path, OWN_COLUMN)
+    (ws / "policies" / "capabilities" / "inv.yaml").write_text(capability)
+    checks = by_name(score({"agent": AGENT}, ws, snapshot(ws), ""))
+    assert checks["valid"].passed, checks["valid"].detail
+    assert tuple(checks[n].passed for n in NAME_CHECKS) == fails
 
 
-def test_when_a_module_tree_denies_an_invented_tool_then_name_checks_flag_it(
-    tmp_path,
+@pytest.mark.parametrize(
+    ("agent", "source", "broken", "detail"),
+    [
+        (
+            AGENT,
+            "agents.json",
+            "{not json",
+            "agents.json has no readable manifest for 'shop-bot'",
+        ),
+        (
+            "draft-bot",
+            None,
+            None,
+            "agents.json has no readable manifest for 'draft-bot'",
+        ),
+        (AGENT, "audit.json", "null", "audit.json unreadable: "),
+    ],
+)
+def test_when_a_name_source_is_unreadable_then_both_name_checks_fail(
+    tmp_path, agent, source, broken, detail
 ) -> None:
-    ws = make_modules_workspace(tmp_path)
-    (ws / "policies" / "boundaries" / "org.yaml").write_text(
-        BOUNDARY + "  wire_transfr: { mode: deny }\n"
-    )
-    policy = valid_policy(ws, AGENT, modules=True)
-    before = snapshot(ws)
-    checks = name_checks(policy, ws, before, before, modules=True)
-    assert (checks[0].passed, checks[0].detail) == (
-        False,
-        "not in any agent's manifest: ['wire_transfr']",
-    )
-
-
-def test_when_the_policy_invents_names_then_both_name_checks_fail(tmp_path) -> None:
-    policy = (
-        POLICY
-        + '      wire_transfer: { mode: allow, constraints: ["ctx.tier == 1"] }\n'
-    )
-    ws = make_workspace(tmp_path, policy)
-    policy = valid_policy(ws, AGENT)
-    before = snapshot(ws)
-    checks = [(c.passed, c.detail) for c in name_checks(policy, ws, before, before)]
-    assert checks == [
-        (False, "not in shop-bot's manifest: ['wire_transfer']"),
-        (False, "not in the manifest or audit.json: ['wire_transfer: ctx.tier']"),
-    ]
-
-
-def test_when_a_name_source_is_unreadable_then_both_name_checks_fail(tmp_path) -> None:
     ws = make_workspace(tmp_path)
-    policy = valid_policy(ws, AGENT)
-    (ws / "agents.json").write_text("{not json")
+    if source:
+        (ws / source).write_text(broken)
+    policy = valid_policy(ws, agent)
     after = snapshot(ws)
     checks = name_checks(policy, ws, after, after)
     assert [(c.name, c.passed) for c in checks] == [(n, False) for n in NAME_CHECKS]
-    assert all(
-        c.detail.startswith("agents.json / audit.json unreadable: ") for c in checks
-    )
+    assert all(c.detail.startswith(detail) for c in checks)
 
 
 @pytest.mark.parametrize("edited", ["agents.json", "audit.json"])
@@ -303,32 +337,44 @@ def test_score_happy_path(tmp_path) -> None:
     assert set(NAME_CHECKS) <= {c.name for c in checks}
 
 
-def test_when_a_module_tree_denies_another_agents_tool_then_score_passes(
-    tmp_path,
-) -> None:
-    ws = make_modules_workspace(tmp_path)
-    (ws / "policies" / "boundaries" / "org.yaml").write_text(
-        BOUNDARY + "  wire_transfer: { mode: deny }\n"
-    )
-    checks = score({"agent": AGENT}, ws, snapshot(ws), "")
-    assert [c.name for c in checks if not c.passed] == []
-
-
 def test_when_the_agent_edits_agents_json_then_score_fails_both_name_checks(
     tmp_path,
 ) -> None:
     ws = make_workspace(tmp_path, POLICY + "      wire_transfer: { mode: allow }\n")
     before = snapshot(ws)
-    # The agent "fixes" its invented tool by adding it to the manifest.
+    # The agent "fixes" its invented tool by adding it to the manifest, which
+    # the drift then reads.
     agents = json.loads((ws / "agents.json").read_text())
     agents[0]["manifest"]["tools"].append(manifest_tool("wire_transfer", iban="s"))
     (ws / "agents.json").write_text(json.dumps(agents))
     checks = by_name(score({"agent": AGENT}, ws, before, ""))
-    for name in NAME_CHECKS:
-        assert (checks[name].passed, checks[name].detail) == (
-            False,
-            "edited during the run: ['agents.json']",
-        )
+    assert [(checks[n].passed, checks[n].detail) for n in NAME_CHECKS] == [
+        (False, "edited during the run: ['agents.json']")
+    ] * 2
+
+
+def test_when_a_module_mistake_is_in_several_cells_then_its_name_check_lists_it_once(
+    tmp_path,
+) -> None:
+    roles = "  default: [read_only, payments]\n  billing: [read_only, payments]\n"
+    ws = make_modules_workspace(tmp_path, roles)
+    (ws / "policies" / "capabilities" / "payments.yaml").write_text(
+        "tools:\n  refnd_order: { mode: allow }\n"
+    )
+    checks = by_name(score({"agent": AGENT}, ws, snapshot(ws), ""))
+    assert checks[NAME_CHECKS[0]].detail.count("refnd_order") == 1
+
+
+def test_when_another_agents_column_invents_a_tool_then_the_detail_names_that_agent(
+    tmp_path,
+) -> None:
+    roles = "  default: [read_only]\n  billing:\n    '*': [read_only, payments]\n    ops-bot: [wire]\n"
+    ws = make_modules_workspace(tmp_path, roles)
+    (ws / "policies" / "capabilities" / "wire.yaml").write_text(
+        "tools:\n  wire_transfr: { mode: allow }\n"
+    )
+    checks = by_name(score({"agent": AGENT}, ws, snapshot(ws), ""))
+    assert checks[NAME_CHECKS[0]].detail.startswith("[unknown-tool] [agent ops-bot] ")
 
 
 def test_when_a_case_expects_a_superset_then_score_runs_it(tmp_path) -> None:
