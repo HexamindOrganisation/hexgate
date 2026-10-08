@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 from evals.policy_writing.policy import Policy, effective_policy
+from evals.policy_writing.sources import KnownNames
 
 AGENT = "shop-bot"
 
@@ -79,6 +80,15 @@ AUDIT = [
         "attributes": {"region": "eu"},
     },
 ]
+
+
+# shop-bot's names in the fixture, as `load_known_names` reads them.
+KNOWN = KnownNames(
+    tools={"view_orders": {"customer_id"}, "refund_order": {"order_id", "amount"}},
+    attrs={"department"},
+    skills={"pdf"},
+    guards={"redact_pii"},
+)
 
 
 POLICY = """\

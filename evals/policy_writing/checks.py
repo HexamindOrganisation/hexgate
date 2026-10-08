@@ -16,12 +16,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from evals.policy_writing.names import (
-    NAME_SOURCES,
-    load_known_names,
-    unknown_keys,
-    unknown_refs,
-)
+from evals.policy_writing.names import unknown_keys, unknown_refs
 from evals.policy_writing.policy import (
     LABELS,
     RANK,
@@ -31,6 +26,12 @@ from evals.policy_writing.policy import (
     dump_json,
     effective_policy,
     outcome,
+)
+from evals.policy_writing.sources import (
+    NAME_SOURCES,
+    SourceError,
+    load_known_names,
+    load_project_names,
 )
 from hexgate.security.decision import Verdict
 
@@ -143,29 +144,33 @@ def _name_checks_failed(detail: str) -> list[Check]:
 
 
 def name_checks(
-    policy: Policy, ws: Path, before: dict[str, str], after: dict[str, str]
+    policy: Policy,
+    ws: Path,
+    before: dict[str, str],
+    after: dict[str, str],
+    modules: bool = False,
 ) -> list[Check]:
     """Only names the MCP would show for `policy.agent`: tools, skills, guards,
-    arguments and caller attributes."""
+    arguments and caller attributes. A module tree's are any agent's (`modules`)."""
     # The names are read after the run, so an edit to either file could
     # whitelist an invented name: trust them only if they are untouched.
     edited = [f for f in NAME_SOURCES if before.get(f) != after.get(f)]
     if edited:
         return _name_checks_failed(f"edited during the run: {edited}")
     try:
-        known = load_known_names(ws, policy.agent)
-    except (OSError, ValueError, KeyError, TypeError) as exc:
-        return _name_checks_failed(
-            f"agents.json / audit.json unreadable: {exc!r}"[:300]
-        )
+        load = load_project_names if modules else load_known_names
+        known = load(ws, policy.agent)
+    except SourceError as exc:
+        return _name_checks_failed(f"agents.json / audit.json unreadable: {exc}"[:300])
     unknown = unknown_keys(policy.policy_set, known)
+    owner = "any agent's" if modules else f"{policy.agent}'s"
     refs = unknown_refs(policy.policy_set, known)
     keys, args = NAME_CHECKS
     return [
         Check(
             keys,
             not unknown,
-            f"not in {policy.agent}'s manifest: {unknown}" if unknown else "",
+            f"not in {owner} manifest: {unknown}" if unknown else "",
         ),
         Check(
             args, not refs, f"not in the manifest or audit.json: {refs}" if refs else ""
@@ -240,7 +245,7 @@ def score(case: dict, ws: Path, before: dict[str, str], answer: str) -> list[Che
         valid,
         *decision_checks(policy, expect.get("decisions", [])),
         *superset_checks(policy, expect.get("superset", [])),
-        *(name_checks(policy, ws, before, after) if policy else []),
+        *(name_checks(policy, ws, before, after, modules) if policy else []),
         *file_checks(expect, before, after),
         *answer_checks(expect, answer),
     ]

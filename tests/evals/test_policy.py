@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import datetime
-import json
 
 import pytest
 
@@ -457,14 +456,3 @@ def test_when_agents_json_is_missing_then_effective_policy_fails_on_a_module_tre
     (ws / "agents.json").unlink()
     _, problems = effective_policy(ws, AGENT, modules=True)
     assert len(problems) == 1 and problems[0].startswith("agents.json unreadable")
-
-
-def test_when_a_tool_description_is_null_then_effective_policy_reads_agents_json(
-    tmp_path,
-) -> None:
-    # The endpoint's view allows a null tool description; the SDK model doesn't.
-    ws = make_modules_workspace(tmp_path)
-    views = json.loads((ws / "agents.json").read_text())
-    views[0]["manifest"]["tools"][0]["description"] = None
-    (ws / "agents.json").write_text(json.dumps(views))
-    valid_policy(ws, AGENT, modules=True)

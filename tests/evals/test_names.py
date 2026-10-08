@@ -1,47 +1,15 @@
-"""Known names and invented ones (`names.py`), and the synthetic argument sets
-against the gates that build them."""
+"""Invented names (`names.py`), against shop-bot's known names."""
 
 from __future__ import annotations
 
-import asyncio
-import json
 from dataclasses import replace
 
 import pytest
 
-from evals.policy_writing.names import (
-    AGENT_REACH_ARGS,
-    SKILL_ARGS,
-    SKILL_SCRIPT_ARGS,
-    SYNTHETIC_ARGS,
-    KnownNames,
-    load_known_names,
-    unknown_keys,
-    unknown_refs,
-)
-from hexgate.adapters.google.tools import _skill_decision
-from hexgate.adapters.langchain.skills import _SkillRead
-from hexgate.egress.tcp import TcpEgressProxy
-from hexgate.manifest.langchain import SkillLocation
-from hexgate.runtime.context import HexgateContext
-from hexgate.security import resolve_agent_gate, resolve_reach_gate
-from hexgate.security.enforcer import build_enforcer
+from evals.policy_writing.names import unknown_keys, unknown_refs
 from hexgate.security.policy_set import load_policy_set_from_dict
-from tests.evals.helpers import (
-    AGENT,
-    AUDIT,
-    agent_view,
-    make_workspace,
-    manifest_tool,
-)
+from tests.evals.helpers import AGENT, KNOWN, make_modules_workspace, valid_policy
 
-# shop-bot's manifest, as `load_known_names` reads it from the fixture.
-KNOWN = KnownNames(
-    tools={"view_orders": {"customer_id"}, "refund_order": {"order_id", "amount"}},
-    attrs={"department"},
-    skills={"pdf"},
-    guards={"redact_pii"},
-)
 ALLOW = {"mode": "allow"}
 
 
@@ -51,54 +19,6 @@ def loaded(doc: dict):
 
 def on(tool: str, *constraints: str) -> dict:
     return {"tools": {tool: {"mode": "allow", "constraints": list(constraints)}}}
-
-
-# load_known_names
-
-
-def test_load_known_names_happy_path(tmp_path) -> None:
-    # `region`, `wire_transfer` and `ledger` are only ops-bot's; draft-bot has no
-    # manifest yet.
-    assert load_known_names(make_workspace(tmp_path), AGENT) == KNOWN
-
-
-def test_when_audit_json_is_the_endpoints_page_then_its_rows_are_read(tmp_path) -> None:
-    ws = make_workspace(tmp_path)
-    page = {"rows": AUDIT, "total": len(AUDIT), "limit": 25, "offset": 0}
-    (ws / "audit.json").write_text(json.dumps(page))
-    assert load_known_names(ws, AGENT).attrs == {"department"}
-
-
-def test_when_audit_json_is_missing_then_no_attribute_is_known(tmp_path) -> None:
-    ws = make_workspace(tmp_path)
-    (ws / "audit.json").unlink()
-    assert load_known_names(ws, AGENT).attrs == set()
-
-
-def test_when_a_tool_has_no_description_then_its_names_still_load(tmp_path) -> None:
-    # The platform's AgentManifestView allows a null description; the SDK's doesn't.
-    tool = {**manifest_tool("view_orders", customer_id="string"), "description": None}
-    ws = make_workspace(tmp_path)
-    (ws / "agents.json").write_text(json.dumps([agent_view(AGENT, tool)]))
-    assert load_known_names(ws, AGENT).tools == {"view_orders": {"customer_id"}}
-
-
-def test_when_the_manifest_lists_no_skills_or_guards_then_none_are_known(
-    tmp_path,
-) -> None:
-    ws = make_workspace(tmp_path)
-    (ws / "agents.json").write_text(json.dumps([agent_view(AGENT)]))
-    known = load_known_names(ws, AGENT)
-    assert (known.skills, known.guards) == (set(), set())
-
-
-@pytest.mark.parametrize("agent", ["billing-bot", "draft-bot"])  # absent, no manifest
-def test_when_the_case_agent_has_no_manifest_then_loading_fails(
-    tmp_path, agent
-) -> None:
-    ws = make_workspace(tmp_path)
-    with pytest.raises(ValueError, match=f"has no manifest for agent '{agent}'"):
-        load_known_names(ws, agent)
 
 
 # unknown_keys
@@ -143,6 +63,40 @@ def test_when_a_skill_or_guard_is_not_in_the_manifest_then_unknown_keys_flags_it
 
 def test_when_a_skill_name_is_padded_then_unknown_keys_trims_it() -> None:
     assert unknown_keys(loaded({"skills": {" pdf ": ALLOW}}), KNOWN) == []
+
+
+def test_when_a_module_tree_lowers_agent_and_skill_keys_then_both_accept_them(
+    tmp_path,
+) -> None:
+    # Resolving a module tree lowers admission, reach and skills into `tools`.
+    roles = "  default: [read_only]\n  billing: [read_only, reach]\n"
+    ws = make_modules_workspace(tmp_path, roles)
+    (ws / "policies" / "capabilities" / "reach.yaml").write_text(
+        'admission: { mode: allow, constraints: ["args.agent == \\"shop-bot\\""] }\n'
+        "agents:\n  ops-bot: { mode: allow }\n"
+        "skills:\n  pdf: { mode: allow, via: [script], constraints:"
+        ' ["args.script_args == \\"x\\""] }\n'
+    )
+    policy_set = valid_policy(ws, AGENT, modules=True).policy_set
+    assert {"agent.run", "skill.script:pdf"} <= set(
+        policy_set.policy_for("billing").tools
+    )
+    assert (unknown_keys(policy_set, KNOWN), unknown_refs(policy_set, KNOWN)) == (
+        [],
+        [],
+    )
+
+
+def test_when_a_module_tree_grants_an_invented_skill_then_unknown_keys_flags_it(
+    tmp_path,
+) -> None:
+    roles = "  default: [read_only]\n  billing: [read_only, sk]\n"
+    ws = make_modules_workspace(tmp_path, roles)
+    (ws / "policies" / "capabilities" / "sk.yaml").write_text(
+        "skills:\n  pdff: { mode: allow, via: [resource] }\n"
+    )
+    policy_set = valid_policy(ws, AGENT, modules=True).policy_set
+    assert unknown_keys(policy_set, KNOWN) == ["skill:pdff"]
 
 
 # unknown_refs
@@ -264,56 +218,3 @@ def test_when_a_synthetic_key_reads_another_gates_args_then_unknown_refs_flags_i
         "agent.handoff:ops-bot: args.amount",
         "agent.run: args.target",
     ]
-
-
-# The synthetic argument sets against the gates that build them
-
-
-def _recording_enforcer(policy: dict, seen: list):
-    return build_enforcer(
-        load_policy_set_from_dict(policy),
-        agent_name="a",
-        decision_observer=seen.append,
-    )
-
-
-async def test_when_the_tcp_proxy_decides_then_its_args_match_tcp_connect() -> None:
-    seen: list = []
-    upstream = await asyncio.start_server(lambda r, w: w.close(), "127.0.0.1", 0)
-    target = ("127.0.0.1", upstream.sockets[0].getsockname()[1])
-    enforcer = _recording_enforcer(
-        {"tools": {"net.tcp_connect": {"mode": "deny"}}}, seen
-    )
-    proxy = TcpEgressProxy(enforcer, HexgateContext(user_id="u"), target=target)
-    await proxy.start()
-    try:
-        reader, writer = await asyncio.open_connection("127.0.0.1", proxy.port)
-        # The deny closes the connection.
-        assert await asyncio.wait_for(reader.read(100), timeout=5) == b""
-        writer.close()
-    finally:
-        await proxy.stop()
-        upstream.close()
-        await upstream.wait_closed()
-    assert seen[0].arguments.keys() == SYNTHETIC_ARGS["net.tcp_connect"]
-
-
-def test_when_the_agent_gates_decide_then_their_args_match() -> None:
-    seen: list = []
-    enforcer = _recording_enforcer(
-        {"admission": {"mode": "allow"}, "agents": {"b": {"mode": "allow"}}}, seen
-    )
-    with HexgateContext(user_id="u").sync_scope():
-        resolve_agent_gate(enforcer).check_admission()
-        resolve_reach_gate(enforcer).check_reach("b", via="tool")
-    assert seen[0].arguments.keys() == SYNTHETIC_ARGS["agent.run"]
-    assert seen[1].arguments.keys() == AGENT_REACH_ARGS
-
-
-def test_when_the_skill_seams_decide_then_their_args_match() -> None:
-    _, script = _skill_decision(object(), "script", {"skill_name": "pdf"})
-    _, instructions = _skill_decision(object(), "instructions", {"skill_name": "pdf"})
-    location = SkillLocation("pdf", "/skills/pdf/SKILL.md", None)
-    read = _SkillRead("resource", location, "/skills/pdf/a.md").override(None)
-    assert script.keys() == SKILL_SCRIPT_ARGS
-    assert instructions.keys() == read.args.keys() == SKILL_ARGS

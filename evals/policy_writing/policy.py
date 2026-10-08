@@ -22,7 +22,7 @@ from typing import get_args
 import yaml
 from pydantic import TypeAdapter, ValidationError
 
-from evals.policy_writing.names import load_project_agents
+from evals.policy_writing.sources import SourceError, load_project_agents
 from hexgate.runtime.context import ContextAttributeValue
 from hexgate.runtime.run_facts import DETACHED, KNOWN_RUN_PATHS
 from hexgate.security import (
@@ -301,8 +301,8 @@ def _module_payload(ws: Path, agent: str) -> tuple[dict | None, list[str]]:
         return None, ["no modules under policies/boundaries/ or policies/capabilities/"]
     try:
         agents = load_project_agents(ws)
-    except (OSError, ValueError, KeyError, TypeError) as exc:
-        return None, [f"agents.json unreadable: {exc!r}"[:300]]
+    except SourceError as exc:
+        return None, [f"agents.json unreadable: {exc}"[:300]]
     # Lints the modules and every column's roles, as `policy check` does, with
     # the project's agents, so a roles column or `agents:` target naming no agent
     # fails; `_load` then lints the case agent's resolved roles as `validate` would.
