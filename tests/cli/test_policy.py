@@ -1547,7 +1547,7 @@ def test_test_rejects_a_wrong_typed_run_fact(
     )
     out, err = capsys.readouterr()
     assert rc == 1
-    assert "--run-facts has a wrong-typed value" in err
+    assert "--run-facts has an invalid value" in err
     assert "DENY" not in out
 
 
@@ -1643,9 +1643,10 @@ def test_test_agent_usage_agrees_across_engines(
             '{"invocation_1h": 1}',
             "--agent-usage has unknown agent_usage.* path(s) ['invocation_1h']",
         ),
-        ('{"invocations_1h": "1"}', "--agent-usage has a wrong-typed value"),
+        ('{"invocations_1h": "1"}', "--agent-usage has an invalid value"),
+        ('{"invocations_1h": -1}', "--agent-usage has an invalid value"),
     ],
-    ids=["non-json", "non-object", "unknown-path", "wrong-type"],
+    ids=["non-json", "non-object", "unknown-path", "wrong-type", "negative"],
 )
 def test_test_rejects_a_bad_agent_usage(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], raw: str, message: str

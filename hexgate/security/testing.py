@@ -33,7 +33,9 @@ from uuid import uuid4
 from hexgate.runtime.agent_usage import (
     AGENT_USAGE_VOCABULARY,
     KNOWN_AGENT_USAGE_PATHS,
+    TOTAL_TOKENS,
     USAGE_WINDOWS,
+    UsageMetric,
 )
 from hexgate.runtime.run_facts import KNOWN_RUN_PATHS, RUN_PATH_TYPES, RunFacts
 from hexgate.security.decision import DecisionOutcome
@@ -48,6 +50,8 @@ _CALLS_OF_THIS_TOOL = "calls_of_this_tool"
 _TOOLS_USED = "tools_used"
 _TOTAL_TOKENS = "total_tokens"
 _TOKEN_SPLIT = ("input_tokens", "output_tokens")
+_MIN_USAGE_COUNT = 0
+_NARROWEST_FIRST = sorted(USAGE_WINDOWS, key=USAGE_WINDOWS.__getitem__)
 
 
 def run_namespace(tool: str = "", **facts: Any) -> dict[str, Any]:
@@ -84,10 +88,10 @@ def run_namespace(tool: str = "", **facts: Any) -> dict[str, Any]:
 def agent_usage_namespace(**paths: int) -> dict[str, int]:
     """An ``agent_usage`` namespace: every registered path zero, ``paths`` applied.
 
-    ``total_tokens_<w>`` is derived from a supplied ``input_tokens_<w>`` /
-    ``output_tokens_<w>`` unless given outright, as in production. Raises on an
-    unregistered name or a non-int value, for the same reason :func:`run_namespace`
-    does.
+    As in production, an unset window reads at least the narrower windows of its
+    metric, and ``total_tokens_<w>`` is ``input_tokens_<w> + output_tokens_<w>``.
+    Supplied values win over both. Raises on an unregistered name or a value that
+    is not a non-negative int, for the same reason :func:`run_namespace` does.
     """
     unknown = sorted(set(paths) - KNOWN_AGENT_USAGE_PATHS)
     if unknown:
@@ -101,10 +105,34 @@ def agent_usage_namespace(**paths: int) -> dict[str, int]:
                 f"agent_usage.{name} expects int, got "
                 f"{type(value).__name__} ({value!r})"
             )
+        if value < _MIN_USAGE_COUNT:
+            raise ValueError(f"agent_usage.{name} is a count, got {value}")
     namespace = {**dict.fromkeys(KNOWN_AGENT_USAGE_PATHS, 0), **paths}
-    for window in USAGE_WINDOWS:
-        _apply_token_total(namespace, paths, suffix=f"_{window}")
+    for metric in UsageMetric:
+        _carry_into_wider_windows(namespace, paths, metric)
+    for window in _NARROWEST_FIRST:
+        total = f"{TOTAL_TOKENS}_{window}"
+        if total not in paths:
+            namespace[total] = sum(
+                namespace[f"{name}_{window}"] for name in _TOKEN_SPLIT
+            )
+    _carry_into_wider_windows(namespace, paths, TOTAL_TOKENS)
     return namespace
+
+
+def _carry_into_wider_windows(
+    namespace: dict[str, int], supplied: Mapping[str, int], metric: str
+) -> None:
+    """Raise each unset window of ``metric`` to the widest narrower one, since a
+    production window never reads less than one it contains. Without it,
+    ``invocations_1h=99`` would leave ``invocations_24h`` at 0 and a 24 h cap
+    would pass in the test and fire in production."""
+    floor = 0
+    for window in _NARROWEST_FIRST:
+        path = f"{metric}_{window}"
+        if path not in supplied:
+            namespace[path] = max(namespace[path], floor)
+        floor = max(floor, namespace[path])
 
 
 def _seeded_run(tool: str, facts: Mapping[str, Any]) -> dict[str, Any]:
@@ -131,21 +159,16 @@ def _credited_calls(tool: str, facts: Mapping[str, Any]) -> int:
     return facts.get(_CALLS_OF_THIS_TOOL, facts.get(_TOOL_CALLS, 0))
 
 
-def _apply_token_total(
-    namespace: dict[str, Any], facts: Mapping[str, Any], *, suffix: str = ""
-) -> None:
-    """Derive ``total_tokens<suffix>`` from a supplied token split.
+def _apply_token_total(namespace: dict[str, Any], facts: Mapping[str, Any]) -> None:
+    """Derive ``total_tokens`` from a supplied token split.
 
-    Production derives it (``RunFacts.as_namespace``, ``ledger_namespace``).
-    Merged flat it would keep the zeroed 0 while the split reads non-zero, so a
-    ``total_tokens`` cap would pass in the test and fire in production.
-    ``suffix`` names an ``agent_usage`` window, such as ``_1h``.
+    ``RunFacts.as_namespace`` derives it in production. Merged flat it would
+    keep the zeroed 0 while the split reads non-zero, so a
+    ``run.total_tokens`` cap would pass in the test and fire in production.
     """
-    total = f"{_TOTAL_TOKENS}{suffix}"
-    split = [f"{name}{suffix}" for name in _TOKEN_SPLIT]
-    if total in facts or not any(name in facts for name in split):
+    if _TOTAL_TOKENS in facts or not any(name in facts for name in _TOKEN_SPLIT):
         return
-    namespace[total] = sum(namespace[name] for name in split)
+    namespace[_TOTAL_TOKENS] = sum(namespace[name] for name in _TOKEN_SPLIT)
 
 
 def _check_run_value(name: str, value: Any) -> None:
