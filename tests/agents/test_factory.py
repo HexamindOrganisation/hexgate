@@ -386,6 +386,35 @@ async def test_hexgate_agent_astream_raises_before_first_event_when_banned() -> 
     assert graph.astream_event_calls == []  # banned → the graph never streamed
 
 
+# A sequential regression leaves the first party waiting alone until this
+# breaks the barrier; a concurrent fetch meets it immediately.
+_BARRIER_TIMEOUT_S = 2.0
+
+
+@pytest.mark.asyncio
+async def test_hexgate_agent_ainvoke_fetches_policy_and_bans_concurrently() -> None:
+    import threading
+
+    from hexgate.runtime import HexgateContext
+    from hexgate.security.bans import EMPTY_BAN_SET, BanGate, BanSet
+
+    barrier = threading.Barrier(2, timeout=_BARRIER_TIMEOUT_S)
+
+    class _BarrierBanSource:
+        def fetch(self) -> BanSet:
+            barrier.wait()
+            return EMPTY_BAN_SET
+
+    graph = FakeAgent()
+    agent = _agent_with_gate(graph, BanGate("bot", _BarrierBanSource()))
+    agent.refresh_policy = barrier.wait  # type: ignore[method-assign]
+
+    async with HexgateContext(user_id="u1"):
+        await agent.ainvoke({}, {})
+
+    assert len(graph.ainvoke_calls) == 1
+
+
 def _admission_gate(mode: str):
     """An admission gate whose policy admits/denies with the given mode."""
     from hexgate.security import AgentPolicy, BaseToolPolicy
