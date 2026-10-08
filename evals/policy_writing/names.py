@@ -4,6 +4,13 @@ attributes), and the ones it invents.
 Known names come from the starting project's stand-ins for the Hexgate MCP:
 `agents.json` (manifests) and `audit.json` (audit rows, the only source of
 caller-attribute names).
+
+These checks own invented names, so `policy.py` runs `analyze_policy` on a
+single-file policy without a manifest: its drift and `unknown-guard` lints would
+fail `valid` on the same names. A module tree's `check_project` gets the
+manifests (`load_project_agents`) for `unknown-agent` and `unknown-reach-target`,
+which also turns on its drift lints; those see a boundary on an invented tool,
+which linking drops before these checks run.
 """
 
 from __future__ import annotations
@@ -14,6 +21,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from hexgate.egress.model import connect_to_args, http_to_args
+from hexgate.manifest.models import AgentManifest
 from hexgate.security.constraints import iter_arg_refs, parse_constraint
 from hexgate.security.models import (
     AGENT_RUN_TOOL,
@@ -89,18 +97,54 @@ def load_known_names(ws: Path, agent: str) -> KnownNames:
     )
 
 
-def _manifest(ws: Path, agent: str) -> dict:
-    """`agent`'s manifest from agents.json, read as the endpoint returns it rather
-    than as the SDK registers it: AgentManifestView is looser (a tool's
+def _views(ws: Path) -> list[dict]:
+    """agents.json's `AgentManifestView`s, read as the endpoint returns them
+    rather than as the SDK registers them: the view is looser (a tool's
     `description` may be null)."""
-    views = json.loads((ws / AGENTS_JSON).read_text())
+    return json.loads((ws / AGENTS_JSON).read_text())
+
+
+def _manifest(ws: Path, agent: str) -> dict:
+    """`agent`'s manifest from agents.json, in the endpoint's shape."""
     view = next(
-        (v for v in views if v["name"] == agent and v.get("manifest") is not None),
+        (v for v in _views(ws) if v["name"] == agent and v.get("manifest") is not None),
         None,
     )
     if view is None:
         raise ValueError(f"agents.json has no manifest for agent {agent!r}")
     return view["manifest"]
+
+
+@dataclass(frozen=True)
+class ProjectAgents:
+    """The project's agents, as `check_project` takes them."""
+
+    registered: frozenset[str]  # every agent, with a manifest or not
+    manifests: dict[str, AgentManifest]  # the agents with one
+
+
+def load_project_agents(ws: Path) -> ProjectAgents:
+    """Every agent in agents.json, and the manifests of those registered with one,
+    as the SDK's `AgentManifest` (as the platform's `latest_manifests` builds them
+    for the policy checks)."""
+    views = _views(ws)
+    return ProjectAgents(
+        registered=frozenset(v["name"] for v in views),
+        manifests={
+            v["name"]: _sdk_manifest(v["manifest"])
+            for v in views
+            if v.get("manifest") is not None
+        },
+    )
+
+
+def _sdk_manifest(manifest: dict) -> AgentManifest:
+    """The endpoint's manifest as the SDK's model, whose tool `description` is
+    required: the policy checks never read it, so a null becomes empty."""
+    tools = [
+        {**t, "description": t.get("description") or ""} for t in manifest["tools"]
+    ]
+    return AgentManifest.model_validate({**manifest, "tools": tools})
 
 
 def _attributes(ws: Path, agent: str) -> set[str]:
@@ -124,8 +168,10 @@ def _roles(policy_set: PolicySet) -> list[AgentPolicy]:
 
 def unknown_keys(policy_set: PolicySet, known: KnownNames) -> list[str]:
     """Tools, skills (`skill:<name>`) and guards (`guard:<name>`) a policy keys on
-    that the manifest doesn't list. Synthetic tool keys are always known: the
-    `<target>` of `agent.<via>:<target>` is not checked against `agents.json`."""
+    that the manifest doesn't list. Synthetic tool keys are always known here: the
+    `<target>` of `agent.<via>:<target>` is checked against `agents.json` only in
+    a module tree, by `check_project`'s `unknown-reach-target` (`policy.py`); a
+    single-file policy's is not checked."""
     bad = set()
     for p in _roles(policy_set):
         bad |= {

@@ -22,6 +22,7 @@ from typing import get_args
 import yaml
 from pydantic import TypeAdapter, ValidationError
 
+from evals.policy_writing.names import load_project_agents
 from hexgate.runtime.context import ContextAttributeValue
 from hexgate.runtime.run_facts import DETACHED, KNOWN_RUN_PATHS
 from hexgate.security import (
@@ -275,8 +276,13 @@ def _lint_failures(lints: list[PolicyLint]) -> list[str]:
     # A warning fails, not only an error: the write-policy skill tells the agent
     # to validate with `--max-severity warning` (for `policy check` on a module
     # tree it doesn't yet; the spec aligns the skill in PR 11).
+    # Tagged with the cell as `policy check` prints it: an `unknown-agent`
+    # message doesn't name its column.
     return [
-        f"[{lint.code}] {lint.message}"
+        f"[{lint.code}]"
+        + (f" [{lint.role}]" if lint.role else "")
+        + (f" [agent {lint.agent}]" if lint.agent else "")
+        + f" {lint.message}"
         for lint in lints
         if SEVERITY_RANK[lint.severity] <= SEVERITY_RANK["warning"]
     ]
@@ -304,9 +310,21 @@ def _module_payload(ws: Path, agent: str) -> tuple[dict | None, list[str]]:
         return None, [str(exc)]
     if not boundaries and not capabilities:
         return None, ["no modules under policies/boundaries/ or policies/capabilities/"]
-    # Lints the modules and every column's roles, as `policy check` does; `_load`
-    # then lints the case agent's resolved roles as `validate` would.
-    problems = _lint_failures(check_project(boundaries, capabilities, roles))
+    try:
+        agents = load_project_agents(ws)
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        return None, [f"agents.json unreadable: {exc!r}"[:300]]
+    # Lints the modules and every column's roles, as `policy check` does, with
+    # the project's agents, so a roles column or `agents:` target naming no agent
+    # fails; `_load` then lints the case agent's resolved roles as `validate` would.
+    lints = check_project(
+        boundaries,
+        capabilities,
+        roles,
+        manifests=agents.manifests,
+        registered_agents=agents.registered,
+    )
+    problems = _lint_failures(lints)
     if problems:
         return None, problems
     try:

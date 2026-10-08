@@ -15,6 +15,14 @@ a module). This module runs over a **successfully linked** bundle and reports th
   Severity follows the failure direction: drift that
   leaves the real tool looser than intended (fail-open) is an error, see
   :func:`_modules_drift` and :func:`_resolved_drift`.
+- **unknown-reach-target** — an ``agents:`` rule names an agent the project
+  neither registers nor reaches as a sub-agent. Only checked when
+  the project's manifests are supplied (:func:`analyze_project`'s ``manifests``).
+- **unknown-agent** — a ``roles`` column names an agent the project doesn't
+  register, so no agent runs under it: a misspelling leaves the agent it was
+  meant for on the role's ``"*"`` cell, or nothing without one, and an
+  unregistered sub-agent never fetches the project policy. Only checked when
+  the project's manifests are supplied (:func:`analyze_project`'s ``manifests``).
 - **permissive-default** — the ``default`` role grants something no named role
   grants (:func:`check_default_role_exposure`, over a resolved role map).
 - **unknown-guard** / **ambiguous-guard** — a baseline ``guards:`` rule that names a
@@ -62,12 +70,15 @@ from hexgate.security.models import (
     BaseToolPolicy,
     FileToolPolicy,
     ToolPolicy,
+    agent_reach_target,
     gate_args,
     is_reserved_key,
     is_skill_key,
 )
 from hexgate.security.modules import (
+    DEFAULT_AGENT,
     GRANT_MODES,
+    AgentBinding,
     LayerKind,
     LinkError,
     LinkResult,
@@ -93,8 +104,10 @@ LintCode = Literal[
     "no-default-role",
     "permissive-default",
     "redundant-grant",
+    "unknown-agent",
     "unknown-arg",
     "unknown-guard",
+    "unknown-reach-target",
     "unknown-root",
     "unknown-skill",
     "unknown-tool",
@@ -104,6 +117,8 @@ SEVERITY_RANK: dict[Severity, int] = {"error": 0, "warning": 1, "info": 2}
 # How an ``unknown-tool`` lint words a tool missing from one agent's manifest;
 # see :class:`_Roster` for the every-agent wording.
 _ABSENT_ONE = "which the agent's manifest doesn't declare"
+# Why a name is no agent, for the lints checking names against the roster.
+_NOT_AN_AGENT = "not registered, and not a sub-agent any manifest names"
 
 
 @dataclass(frozen=True)
@@ -238,7 +253,10 @@ def analyze_project(
     - where those are unknown (a named agent with no manifest; with
       ``manifests``, any agent registered without one in ``registered_agents``,
       or a sub-agent with none), only the arguments an agent, skill or egress
-      rule reads are checked, against what its gate or the egress proxy passes.
+      rule reads are checked, against what its gate or the egress proxy passes;
+    - with ``manifests``, ``unknown-reach-target`` flags an ``agents:`` rule whose
+      target is no registered agent and no sub-agent a manifest reaches, and
+      ``unknown-agent`` a ``roles`` column naming no registered agent.
 
     The registered agents are the roster: a ``roles`` column naming an agent
     outside it gets only the gate-argument checks, and widens nothing, so a
@@ -265,6 +283,9 @@ def analyze_project(
     for agent, own_roles in sorted(named.items()):
         code = None if roster is None else roster.by_agent.get(agent, _UNKNOWN)
         lints += _named_column_lints(agent, own_roles, boundaries, library, roles, code)
+        if roster is not None and roster.registered is not None:
+            if agent not in roster.registered:
+                lints += _unknown_agent(agent, own_roles, roles, roster)
     lints += _project_lints(boundaries, library, roles, roster)
     return sorted(lints, key=lambda lint: SEVERITY_RANK[lint.severity])
 
@@ -301,13 +322,16 @@ class _Roster:
     ``by_agent`` holds what each agent whose manifest is known declares.
     ``shared`` is every agent's, or :data:`_UNKNOWN` when some agent's is
     unknown; built from one ``manifest``, it is that manifest's, standing for
-    every agent. ``reach_targets`` is every agent the roster knows of, or
-    ``None`` when the roster comes from a single ``manifest``, which says
-    nothing about the other agents.
+    every agent. ``registered`` is the agents the platform knows, the only ones
+    that can fetch the project policy, so what a ``roles`` column may name;
+    ``reach_targets`` adds the sub-agents a manifest names, so what an
+    ``agents:`` rule may name, since the parent enforces those. Both are ``None`` when the roster comes from a single
+    ``manifest``, which says nothing about the other agents.
     """
 
     by_agent: dict[str, _Declared]
     shared: _Declared
+    registered: frozenset[str] | None
     reach_targets: frozenset[str] | None
 
     @property
@@ -330,12 +354,14 @@ def _roster(
         if manifest is None:
             return None
         code = _declared(manifest)
-        return _Roster({manifest.name: code}, code, None)
+        return _Roster({manifest.name: code}, code, None, None)
     subagents = {ref.name for m in manifests.values() for ref in m.subagents or ()}
-    agents = frozenset({*manifests, *registered_agents, *subagents})
+    registered = frozenset({*manifests, *registered_agents})
+    agents = registered | subagents
     return _Roster(
         {name: _declared(m) for name, m in manifests.items()},
         _declared(*manifests.values()) if agents <= manifests.keys() else _UNKNOWN,
+        registered,
         agents,
     )
 
@@ -414,6 +440,9 @@ def _project_lints(
         shared, absent = roster.shared, roster.absent
         lints += _modules_drift(boundaries, "boundary", shared, absent=absent)
         lints += _modules_drift(unused, "capability", shared, absent=absent)
+        if roster.reach_targets is not None:
+            modules = [*boundaries, *library]
+            lints += _unknown_reach_targets(modules, roster.reach_targets)
     return lints
 
 
@@ -617,6 +646,114 @@ def _runs_negated(tier: LayerKind | None, mode: str) -> bool:
     """Whether a module rule's constraints run under ``not``: the linker folds
     a boundary deny's region into ``not (...)``."""
     return tier == "boundary" and mode == "deny"
+
+
+def _unknown_reach_targets(
+    modules: list[ModuleContent], targets: frozenset[str]
+) -> list[PolicyLint]:
+    """An ``agents:`` rule whose target is in none of ``targets``: the agents
+    registered or named as a sub-agent.
+
+    Graded by what the real target falls back to (:func:`_unknown_target_severity`).
+    One lint per rule, at its worst severity over the ``via`` modes it lowers to.
+    """
+    out: list[PolicyLint] = []
+    for module in modules:
+        worst: dict[str, Severity] = {}
+        for key, tp in module.policy.effective_tools.items():
+            target = agent_reach_target(key)
+            if target is not None and target not in targets:
+                _keep_worst(worst, target, _unknown_target_severity(module, tp))
+        out += [
+            PolicyLint(
+                code="unknown-reach-target",
+                severity=severity,
+                message=(
+                    f"{module.name!r} governs reaching agent {target!r}, which no "
+                    f"agent is: {_NOT_AN_AGENT}"
+                ),
+                source=module.source,
+                tier=module.kind,
+            )
+            for target, severity in sorted(worst.items())
+        ]
+    return out
+
+
+def _unknown_agent(
+    agent: str, own_roles: set[str], roles: RoleMatrix, roster: _Roster
+) -> list[PolicyLint]:
+    """``agent``'s ``roles`` column, where ``agent`` is not registered, so no
+    agent runs under it.
+
+    An unregistered sub-agent never fetches the project policy and keeps its
+    local one, so the column doesn't apply (warning). Any other name is no agent
+    (a misspelling, most likely), so the agent it was meant for gets the role's
+    ``"*"`` cell instead. Where that cell imports a capability the column leaves
+    out and some registered agent has no cell of its own there, the column was a
+    restriction the real agent escapes (error); otherwise it only fails to grant
+    (warning)."""
+    if agent in (roster.reach_targets or ()):
+        message = (
+            "this roles column names a sub-agent that isn't registered, so it "
+            "never fetches the project policy and keeps its local one: the "
+            "column doesn't apply"
+        )
+        return [
+            PolicyLint(
+                code="unknown-agent",
+                severity="warning",
+                message=message,
+                role=role,
+                agent=agent,
+            )
+            for role in sorted(own_roles)
+        ]
+    registered = roster.registered or frozenset()
+    return [
+        PolicyLint(
+            code="unknown-agent",
+            severity="error"
+            if _star_widens(roles[role], agent, registered)
+            else "warning",
+            message=(
+                f"this roles column names no agent: {_NOT_AN_AGENT}, so the agent "
+                "it was meant for doesn't get it"
+            ),
+            role=role,
+            agent=agent,
+        )
+        for role in sorted(own_roles)
+    ]
+
+
+def _star_widens(
+    cells: Mapping[str, AgentBinding], agent: str, targets: frozenset[str]
+) -> bool:
+    """Whether some agent in ``targets`` falls back to a ``"*"`` cell that imports
+    a capability ``agent``'s cell leaves out."""
+    star = cells.get(DEFAULT_AGENT)
+    if star is None or targets <= cells.keys():
+        return False
+    return bool(set(star.capabilities) - set(cells[agent].capabilities))
+
+
+def _unknown_target_severity(module: ModuleContent, rule: BaseToolPolicy) -> Severity:
+    """A misspelled reach target, graded by what the real one falls back to.
+
+    Reach is closed-world, so a capability's misspelled target is a grant that
+    never fires (warning). A boundary rule on one leaves the real target to the
+    boundary's default: under ``deny`` the real target is excluded anyway, so a
+    misspelled grant never fires (warning) and a misspelled deny is redundant
+    (info). Under a non-deny default the real target is neither capped nor
+    denied, so a rule that restricts (a deny, an approval, or constraints)
+    leaves it looser than the boundary says (error); a plain ``allow`` restricts
+    nothing, so its typo changes nothing (info)."""
+    if module.kind == "capability":
+        return "warning"
+    if module.policy.default_policy.mode == "deny":
+        return "info" if rule.mode == "deny" else "warning"
+    return "error" if rule.mode != "allow" or rule.constraints else "info"
 
 
 def _unknown_tool_severity(tier: LayerKind, mode: str) -> Severity:

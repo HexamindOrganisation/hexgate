@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime
+import json
 
 import pytest
 
@@ -423,3 +424,47 @@ def test_when_a_module_tree_has_a_dead_grant_then_effective_policy_fails(
     )
     _, problems = effective_policy(ws, modules=True)
     assert any("dead-grant" in p for p in problems)
+
+
+def test_when_a_roles_column_names_no_agent_in_agents_json_then_effective_policy_fails(
+    tmp_path,
+) -> None:
+    # A misspelled column: shop-bot falls back to `"*"`, which grants refunds.
+    roles = '  billing:\n    "*": [read_only, payments]\n    shop-bott: [read_only]\n'
+    ws = make_modules_workspace(tmp_path, roles)
+    _, problems = effective_policy(ws, AGENT, modules=True)
+    assert any(
+        p.startswith("[unknown-agent] [billing] [agent shop-bott] ") for p in problems
+    )
+
+
+def test_when_a_reach_target_names_no_agent_in_agents_json_then_effective_policy_fails(
+    tmp_path,
+) -> None:
+    roles = "  default: [read_only]\n  billing: [read_only, reach]\n"
+    ws = make_modules_workspace(tmp_path, roles)
+    (ws / "policies" / "capabilities" / "reach.yaml").write_text(
+        "agents:\n  opps-bot: { mode: allow }\n"
+    )
+    _, problems = effective_policy(ws, AGENT, modules=True)
+    assert any("[unknown-reach-target]" in p for p in problems)
+
+
+def test_when_agents_json_is_missing_then_effective_policy_fails_on_a_module_tree(
+    tmp_path,
+) -> None:
+    ws = make_modules_workspace(tmp_path)
+    (ws / "agents.json").unlink()
+    _, problems = effective_policy(ws, AGENT, modules=True)
+    assert len(problems) == 1 and problems[0].startswith("agents.json unreadable")
+
+
+def test_when_a_tool_description_is_null_then_effective_policy_reads_agents_json(
+    tmp_path,
+) -> None:
+    # The endpoint's view allows a null tool description; the SDK model doesn't.
+    ws = make_modules_workspace(tmp_path)
+    views = json.loads((ws / "agents.json").read_text())
+    views[0]["manifest"]["tools"][0]["description"] = None
+    (ws / "agents.json").write_text(json.dumps(views))
+    valid_policy(ws, AGENT, modules=True)
