@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import threading
 import time
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
@@ -312,6 +312,7 @@ def test_metrics_share_their_names_with_run_paths() -> None:
 # ---------------------------------------------------------------------------
 
 _HOUR = 3_600.0
+_TICK_SECONDS = 60.0
 _METRICS = (
     "invocations",
     "tool_calls",
@@ -327,11 +328,27 @@ _WINDOWS = ("5m", "1h", "24h", "7d", "30d")
 class _WindowCountingLedger(UsageLedger):
     def __init__(self, ledger: UsageLedger) -> None:
         self._inner = ledger
-        self.windows_read: list[float] = []
+        self.reads: list[list[float]] = []
 
-    def within(self, seconds: float) -> dict[UsageMetric, int]:
-        self.windows_read.append(seconds)
-        return self._inner.within(seconds)
+    def within_each(
+        self, windows: Iterable[float]
+    ) -> dict[float, dict[UsageMetric, int]]:
+        windows = list(windows)
+        self.reads.append(sorted(set(windows)))
+        return self._inner.within_each(windows)
+
+
+class _CountingClock(_TickingClock):
+    """Counts its reads, and moves far enough per read that a second one would
+    put the windows at different instants."""
+
+    def __init__(self) -> None:
+        super().__init__(_START, tick=_TICK_SECONDS)
+        self.reads = 0
+
+    def __call__(self) -> float:
+        self.reads += 1
+        return super().__call__()
 
 
 def _recorded_ledger(amounts: Mapping[UsageMetric, int]) -> UsageLedger:
@@ -373,7 +390,19 @@ def test_the_namespace_reads_each_window_once() -> None:
 
     ledger_namespace(ledger, ["tool_calls_1h", "denials_1h", "tool_calls_24h"])
 
-    assert sorted(ledger.windows_read) == [_HOUR, _DAY]
+    assert ledger.reads == [[_HOUR, _DAY]]
+
+
+def test_the_namespace_reads_every_window_at_one_instant() -> None:
+    clock = _CountingClock()
+    ledger = new_usage_ledger(clock=clock)
+    ledger.record(_ONE_TOOL_CALL)
+    clock.reads = 0
+
+    namespace = ledger_namespace(ledger, ["tool_calls_5m", "tool_calls_1h"])
+
+    assert clock.reads == 1
+    assert namespace["tool_calls_5m"] <= namespace["tool_calls_1h"]
 
 
 def test_the_namespace_rejects_an_unregistered_path() -> None:
