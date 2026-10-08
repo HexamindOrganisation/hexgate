@@ -478,9 +478,14 @@ platform-migrate: _require-stage-env ## Apply platform/{postgres,clickhouse}/mig
 # One-time backfills (platform/clickhouse/backfills/), run with the writers
 # stopped, between platform-migrate and platform-up on the release that ships
 # them. Not part of platform-migrate: a backfill is not safe to replay blindly.
+# Refuses while a writer runs: a row it inserts during the scan is counted by
+# the views and by the backfill, for good. `ps` without -a lists only running
+# (and restarting) containers.
 .PHONY: platform-backfill
 platform-backfill: _require-stage-env ## One-time backfill, writers stopped: make platform-backfill STAGE=prod FILE=0005_usage_minute
 	@test -n "$(FILE)" || (echo "Set FILE=<name>, e.g. make platform-backfill STAGE=prod FILE=0005_usage_minute" && exit 1)
+	@running="$$($(DEPLOY_COMPOSE) ps --services $(DEPLOY_WRITERS))" || exit 1; \
+		test -z "$$running" || (echo "Refusing to backfill while these writers run:" $$running "-- make platform-stop-writers STAGE=$(STAGE) first" && exit 1)
 	$(DEPLOY_COMPOSE) up -d --wait clickhouse
 	@bash platform/scripts/backfill.sh $(STAGE) platform/clickhouse/backfills/$(FILE).sql
 
