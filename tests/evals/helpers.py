@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from evals.policy_writing.policy import Policy, effective_policy
+
 AGENT = "shop-bot"
 
 
@@ -131,7 +133,24 @@ def by_name(checks) -> dict:
     return {c.name: c for c in checks}
 
 
-def make_modules_workspace(tmp_path: Path, roles: str) -> Path:
+def valid_policy(ws: Path, agent: str | None = None, modules: bool = False) -> Policy:
+    policy, problems = effective_policy(ws, agent, modules)
+    assert problems == []
+    return policy
+
+
+def install_skill(ws: Path) -> None:
+    """As the harness does: under a dot path, so not a project file."""
+    skill = ws / ".claude" / "skills" / "x" / "SKILL.md"
+    skill.parent.mkdir(parents=True)
+    skill.write_text("installed by the harness")
+
+
+# `billing` adds payments to the read-only `default`.
+ROLES = "  default: [read_only]\n  billing: [read_only, payments]\n"
+
+
+def make_modules_workspace(tmp_path: Path, roles: str = ROLES) -> Path:
     ws = tmp_path / "ws"
     (ws / "policies" / "boundaries").mkdir(parents=True)
     (ws / "policies" / "capabilities").mkdir()

@@ -12,9 +12,7 @@ answer mentions what the case requires.
 
 from __future__ import annotations
 
-import functools
 import hashlib
-import json
 import os
 import re
 from collections.abc import Callable
@@ -35,8 +33,8 @@ from evals.policy_writing.policy import (
     CaseError,
     Policy,
     decide,
+    dump_json,
     effective_policy,
-    is_module_tree,
     outcome,
     policy_columns,
 )
@@ -72,24 +70,22 @@ def snapshot(root: Path) -> dict[str, str]:
 
 
 def decision_checks(columns: dict[str, Policy], decisions: list[dict]) -> list[Check]:
-    """One check per (decision, role): the dry-run gives an expected outcome.
+    """One check per (decision, role): the dry-run gives an expected outcome on
+    every column the case holds on (see `policy_columns`; none: the policy is
+    invalid).
 
-    `columns` are the policies it must hold on (see `policy_columns`); none
-    means the policy is invalid.
-    """
-    checks = []
-    for d in decisions:
-        # `roles` expands one entry over several roles; `expect` may list the
-        # acceptable outcomes ("deny or approval_required").
-        labels = d["expect"] if isinstance(d["expect"], list) else [d["expect"]]
-        for role in d.get("roles") or [d["role"]]:
-            name = f"decision: {_call_label(role, d)}"
-            checks.append(
-                _column_check(
-                    name, columns, lambda p: _wrong_decision(p, role, d, labels)
-                )
-            )
-    return checks
+    Named by the decision's place in the list too, so two entries that differ
+    only in `expect`, or a call listed twice, still get one check each."""
+    # `roles` expands one entry over several roles.
+    return [
+        _decision_check(columns, role, d, f"decision {i}: {_call_label(role, d)}")
+        for i, d in enumerate(decisions, 1)
+        for role in d.get("roles") or [d["role"]]
+    ]
+
+
+def _decision_check(columns: dict[str, Policy], role: str, d: dict, name: str) -> Check:
+    return _column_check(name, columns, lambda p: _wrong_decision(p, role, d))
 
 
 def _column_check(
@@ -106,8 +102,10 @@ def _column_check(
     return Check(name, not wrong, "; ".join(wrong))
 
 
-def _wrong_decision(policy: Policy, role: str, d: dict, labels: list[str]) -> list[str]:
-    """Why the dry-run gives none of the `labels` outcomes; empty if it gives one."""
+def _wrong_decision(policy: Policy, role: str, d: dict) -> list[str]:
+    """Why the dry-run gives none of the outcomes `d` expects; empty if it gives one."""
+    # `expect` may list the acceptable outcomes ("deny or approval_required").
+    labels = d["expect"] if isinstance(d["expect"], list) else [d["expect"]]
     try:
         verdict = decide(policy, role, d)
     except CaseError as exc:
@@ -122,43 +120,42 @@ def _reason(verdict: Verdict) -> str:
     return "; ".join([verdict.reason, *map(str, verdict.violations or [])])
 
 
-# default=str: a case loader keeps an unquoted YAML date as a date.
-_dump = functools.partial(json.dumps, sort_keys=True, default=str)
-
-
 def _call_label(role: str, d: dict) -> str:
-    label = f"{role} → {d['tool']}({_dump(d.get('args', {}))})"
+    label = f"{role} → {d['tool']}({dump_json(d.get('args', {}))})"
     if d.get("attributes"):
-        label += f" ctx={_dump(d['attributes'])}"
+        label += f" ctx={dump_json(d['attributes'])}"
     if d.get("run_facts"):
-        label += f" run={_dump(d['run_facts'])}"
+        label += f" run={dump_json(d['run_facts'])}"
     return label
 
 
 def superset_checks(columns: dict[str, Policy], supersets: list[dict]) -> list[Check]:
     """Everything `narrower` may do, `wider` may do at least as freely, per column."""
-    checks = []
-    for s in supersets:
-        name = f"superset: {s['wider']} ⊇ {s['narrower']}"
-        checks.append(_column_check(name, columns, lambda p: _worse_probes(p, s)))
-    return checks
+    return [
+        _superset_check(columns, s, f"superset {i}: {s['wider']} ⊇ {s['narrower']}")
+        for i, s in enumerate(supersets, 1)
+    ]
 
 
-def _worse_probes(policy: Policy, s: dict) -> list[str]:
-    """The probes `wider` lets through less freely than `narrower`."""
-    worse = []
-    for p in s["probes"]:
-        try:
-            lo = decide(policy, s["narrower"], p).outcome
-            hi = decide(policy, s["wider"], p).outcome
-        except CaseError as exc:  # e.g. a missing role: the probe fails
-            worse.append(f"{p['tool']}: can't dry-run: {exc}")
-            continue
-        if RANK[hi] < RANK[lo]:
-            worse.append(
-                f"{p['tool']}: {s['narrower']}={LABELS[lo]}, {s['wider']}={LABELS[hi]}"
-            )
-    return worse
+def _superset_check(columns: dict[str, Policy], s: dict, name: str) -> Check:
+    return _column_check(name, columns, lambda p: _probe_gaps(p, s))
+
+
+def _probe_gaps(policy: Policy, s: dict) -> list[str]:
+    """The probes `wider` lets through less freely than `narrower` on `policy`."""
+    return [gap for p in s["probes"] if (gap := _probe_gap(policy, s, p))]
+
+
+def _probe_gap(policy: Policy, s: dict, p: dict) -> str | None:
+    """How `wider` is stricter than `narrower` on probe `p`, if it is."""
+    try:
+        lo = decide(policy, s["narrower"], p).outcome
+        hi = decide(policy, s["wider"], p).outcome
+    except CaseError as exc:  # e.g. a missing role: the probe fails
+        return f"{p['tool']}: can't dry-run: {exc}"
+    if RANK[hi] < RANK[lo]:
+        return f"{p['tool']}: {s['narrower']}={LABELS[lo]}, {s['wider']}={LABELS[hi]}"
+    return None
 
 
 NAME_CHECKS = (
@@ -172,11 +169,16 @@ def _name_checks_failed(detail: str) -> list[Check]:
 
 
 def name_checks(
-    policy: Policy, ws: Path, before: dict[str, str], after: dict[str, str]
+    policy: Policy,
+    ws: Path,
+    before: dict[str, str],
+    after: dict[str, str],
+    modules: bool = False,
 ) -> list[Check]:
     """Only names the MCP would show for `policy.agent` (any agent's when None):
     tools, skills, guards, reach targets, arguments and caller attributes. A
-    single policy.yaml is checked as a whole, a module tree file by file."""
+    single policy.yaml is checked as a whole, a module tree (`modules`) file by
+    file."""
     # The names are read after the run, so an edit to either file could
     # whitelist an invented name: trust them only if they are untouched.
     edited = [f for f in NAME_SOURCES if before.get(f) != after.get(f)]
@@ -184,7 +186,7 @@ def name_checks(
         return _name_checks_failed(f"edited during the run: {edited}")
     try:
         known = load_known_names(ws, policy.agent)
-        if is_module_tree(ws):
+        if modules:
             unknown, refs = module_invented_names(ws, policy.agent, known)
         else:
             roles = enforced_roles(policy.policy_set)
@@ -214,26 +216,31 @@ def file_checks(
             k for k in set(before) | set(after) if before.get(k) != after.get(k)
         )
         checks.append(Check("no changes", not diff, f"changed: {diff}" if diff else ""))
-    for rel in expect.get("changed", []):
-        checks.append(Check(f"changed: {rel}", after.get(rel) != before.get(rel)))
-    for rel in expect.get("unchanged", []):
-        # A path in neither snapshot is a typo in the case, not an untouched file.
-        if rel not in before and rel not in after:
-            checks.append(Check(f"unchanged: {rel}", False, "no such file"))
-        else:
-            checks.append(Check(f"unchanged: {rel}", after.get(rel) == before.get(rel)))
+    # A path in neither snapshot is a typo in the case, not an untouched file.
+    # Deleting a file changes it; the dry-runs judge what that did to the policy.
+    for kind, want_same in [("changed", False), ("unchanged", True)]:
+        for rel in expect.get(kind, []):
+            name = f"{kind}: {rel}"
+            if rel not in before and rel not in after:
+                checks.append(Check(name, False, "no such file"))
+            else:
+                same = after.get(rel) == before.get(rel)
+                checks.append(Check(name, same == want_same))
     return checks
 
 
-# What a word is made of; `_` is a separator, as in snake_case names.
+# What a word is made of; `_` is a separator, as in snake_case names. A `,` or
+# `.` between digits is part of a number: "500" isn't in "1,500" or "500.5".
 _ALNUM = "[A-Za-z0-9]"
+_START = rf"(?<!{_ALNUM})(?<![0-9][.,])"
+_END = rf"(?!{_ALNUM})(?![.,][0-9])"
 
 
 def _mentions(answer: str, word: str) -> bool:
     """`word` as a whole word or phrase: "no" doesn't match "know", while
     "approval" still matches inside `approval_required`. Inflections don't
     match ("refund" vs "refunds"), so a case lists each form it accepts."""
-    pattern = rf"(?<!{_ALNUM}){re.escape(word)}(?!{_ALNUM})"
+    pattern = rf"{_START}{re.escape(word)}{_END}"
     return re.search(pattern, answer, re.IGNORECASE) is not None
 
 
@@ -254,20 +261,23 @@ def answer_checks(expect: dict, answer: str) -> list[Check]:
 def score(case: dict, ws: Path, before: dict[str, str], answer: str) -> list[Check]:
     """Every check for `case`, as the case loader returns it (PR 2), which has
     already validated its shape: calls are mappings, outcomes and mention lists
-    well-formed. `before` is the starting project's `snapshot`."""
+    well-formed. `before` is the starting project's `snapshot`; its layout, not
+    the workspace's, says whether the policy is `policy.yaml` or a module tree,
+    so a stray `policies/` the agent made doesn't switch it."""
     expect = case.get("expect", {})
+    modules = any(rel.startswith("policies/") for rel in before)
     agent = case.get("agent")
-    policy, problems = effective_policy(ws, agent)
+    policy, problems = effective_policy(ws, agent, modules)
     columns: dict[str, Policy] = {}
     if policy is not None:
-        columns, problems = policy_columns(ws, agent, policy)
+        columns, problems = policy_columns(ws, agent, policy, modules)
     valid = Check("valid", not problems, "\n".join(problems)[:800])
     after = snapshot(ws)
     return [
         valid,
         *decision_checks(columns, expect.get("decisions", [])),
         *superset_checks(columns, expect.get("superset", [])),
-        *(name_checks(policy, ws, before, after) if policy else []),
+        *(name_checks(policy, ws, before, after, modules) if policy else []),
         *file_checks(expect, before, after),
         *answer_checks(expect, answer),
     ]

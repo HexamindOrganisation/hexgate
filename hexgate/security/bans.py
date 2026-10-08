@@ -248,12 +248,15 @@ class BanGate:
         self._source = source
         self._sink = sink
 
-    def _current(self) -> BanSet:
-        # Source is fail-soft (owns last-good), so no per-gate cache here —
-        # that avoids enforcement depending on which gate polled first.
+    def fetch(self) -> BanSet:
+        """The current ban set. The shared source is fail-soft and owns
+        last-good, so this is safe to run off-loop, concurrently with the policy
+        refresh, and needs no per-gate cache (which would make enforcement
+        depend on which gate polled first)."""
         return EMPTY_BAN_SET if self._source is None else self._source.fetch()
 
-    def _decide(self, bans: BanSet, context: HexgateContext | None) -> None:
+    def enforce(self, bans: BanSet, context: HexgateContext | None) -> None:
+        """Raise :class:`AgentBannedError` if ``bans`` hits this agent or user."""
         # Agent ban checked first so a coincident agent+user ban emits a
         # deterministic ban_type/ban_id.
         hit = bans.agent_ban(self._agent_name)
@@ -273,8 +276,12 @@ class BanGate:
         )
 
     def check(self, context: HexgateContext | None) -> None:
-        """Raise :class:`AgentBannedError` if this agent or user is banned."""
-        self._decide(self._current(), context)
+        """Raise :class:`AgentBannedError` if this agent or user is banned.
+
+        For a ban-only check. Run boundaries go through
+        :func:`hexgate.adapters._common.prepare_run` instead, which overlaps the
+        fetch with the policy refresh."""
+        self.enforce(self.fetch(), context)
 
     async def check_async(self, context: HexgateContext | None) -> None:
         """Async check: fetch off-loop, decide + emit + raise on the loop.
@@ -284,8 +291,8 @@ class BanGate:
         is about raising :class:`AgentBannedError` in the caller's context,
         not about delivery.
         """
-        bans = await asyncio.to_thread(self._current)
-        self._decide(bans, context)
+        bans = await asyncio.to_thread(self.fetch)
+        self.enforce(bans, context)
 
     def _emit(self, hit: BanEntry, context: HexgateContext | None) -> None:
         # Best-effort: a saturated sender drops the event; the refusal

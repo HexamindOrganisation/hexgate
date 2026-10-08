@@ -16,7 +16,7 @@ from pathlib import Path
 from hexgate.egress.model import connect_to_args, http_to_args
 from hexgate.security import load_local_modules, load_roles
 from hexgate.security.constraints import iter_arg_refs, parse_constraint
-from hexgate.security.linker import resolve_role_map
+from hexgate.security.linker import named_agent_roles, resolve_role_map
 from hexgate.security.models import (
     AGENT_RUN_TOOL,
     AgentPolicy,
@@ -25,6 +25,7 @@ from hexgate.security.models import (
     is_skill_key,
     skill_key,
 )
+from hexgate.security.modules import ModuleContent
 from hexgate.security.naming import canonical_skill_name
 from hexgate.security.network import NET_HTTP_REQUEST, NET_TCP_CONNECT
 from hexgate.security.policy_set import PolicySet
@@ -231,25 +232,27 @@ def module_invented_names(
     prefixed with its path. `known` is `agent`'s names.
 
     A resolved column holds only what that column imports, so each file is
-    checked on its own: a capability in `agent`'s column against `agent`'s
-    names, any other capability against every agent's. A boundary is org-wide:
-    it may name any agent's tool, but a constraint on `agent`'s own tool (or on
-    any call) is in `agent`'s bundle, so it may read only `agent`'s attributes.
-    Raises if a file can't be read.
+    checked on its own. A capability a cell naming `agent` imports is checked
+    against `agent`'s names. One `agent` only falls through to (a `"*"` cell)
+    may name any agent's tool, as `check_project` drift-checks the `"*"` cell,
+    and so may a boundary, which is org-wide; but both are in `agent`'s bundle,
+    so a constraint on `agent`'s own tool (or on any call) may read only
+    `agent`'s attributes. Any other capability is checked against every
+    agent's names. Raises if a file can't be read.
     """
     every = known if agent is None else load_known_names(ws, None)
     boundaries, capabilities = load_local_modules(ws)
-    own = set()
-    if agent is not None:
-        columns = resolve_role_map(load_roles(ws), capabilities, agent)
-        own = {m.name for caps in columns.values() for m in caps}
+    own, bundled = _own_and_bundled(ws, agent, capabilities)
     # (file, names for its keys, names for its refs); a ref under another
     # agent's tool is checked against every agent's names (`others`).
-    files = [(m, every, known) for m in boundaries] + [
-        (m, names, names)
-        for m in capabilities
-        for names in [known if m.name in own else every]
-    ]
+    files = [(m, every, known) for m in boundaries]
+    for m in capabilities:
+        if m.name in own:
+            files.append((m, known, known))
+        elif m.name in bundled:
+            files.append((m, every, known))
+        else:
+            files.append((m, every, every))
     bad_keys, bad_refs = [], []
     for m, key_names, ref_names in files:
         note = "" if key_names is known else " (no agent has it)"
@@ -258,3 +261,17 @@ def module_invented_names(
         refs = unknown_refs([m.policy], ref_names, others=every)
         bad_refs += [f"{rel}: {r}" for r in refs]
     return bad_keys, bad_refs
+
+
+def _own_and_bundled(
+    ws: Path, agent: str | None, capabilities: list[ModuleContent]
+) -> tuple[set[str], set[str]]:
+    """The capabilities `agent`'s own cells import, and every one in its
+    resolved column (own, or fallen through to from `"*"`). None for no agent."""
+    if agent is None:
+        return set(), set()
+    roles = load_roles(ws)
+    columns = resolve_role_map(roles, capabilities, agent)
+    own_roles = named_agent_roles(roles).get(agent, set())
+    own = {m.name for role in own_roles for m in columns[role]}
+    return own, {m.name for caps in columns.values() for m in caps}

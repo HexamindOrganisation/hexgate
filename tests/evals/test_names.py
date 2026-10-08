@@ -388,9 +388,10 @@ def test_when_a_module_file_no_column_imports_invents_names_then_they_are_unknow
 @pytest.mark.parametrize(
     "roles",
     [
-        "  billing: [read_only, payments]\n",
         # Only shop-bot's own cell imports it, not "*".
         '  billing:\n    "*": [read_only]\n    shop-bot: [read_only, payments]\n',
+        # "*" imports it too, but shop-bot's own cell is what shop-bot runs.
+        '  billing:\n    "*": [read_only, payments]\n    shop-bot: [read_only, payments]\n',
     ],
 )
 def test_when_the_agents_column_grants_another_agents_tool_then_it_is_unknown(
@@ -408,10 +409,32 @@ def test_when_the_agents_column_grants_another_agents_tool_then_it_is_unknown(
     assert module_invented_names(ws, None, load_known_names(ws, None)) == ([], [])
 
 
-def test_when_the_agents_column_reads_another_agents_attribute_then_it_is_unknown(
+def test_when_a_star_cell_grants_another_agents_tool_then_it_is_known(
     tmp_path,
 ) -> None:
+    # Any agent can fall through to "*", so its capabilities are checked against
+    # every agent's names, as `check_project` drift-checks the "*" cell.
     ws = make_modules_workspace(tmp_path, "  billing: [read_only, payments]\n")
+    write_module(
+        ws,
+        "capabilities/payments.yaml",
+        "tools:\n  refund_order: { mode: allow }\n  wire_transfer: { mode: allow }\n",
+    )
+    assert module_invented_names(ws, AGENT, load_known_names(ws, AGENT)) == ([], [])
+
+
+@pytest.mark.parametrize(
+    "roles",
+    [
+        "  billing:\n    shop-bot: [read_only, payments]\n",
+        # A "*" cell shop-bot falls through to is in its bundle too.
+        "  billing: [read_only, payments]\n",
+    ],
+)
+def test_when_the_agents_column_reads_another_agents_attribute_then_it_is_unknown(
+    tmp_path, roles
+) -> None:
+    ws = make_modules_workspace(tmp_path, roles)
     write_module(
         ws,
         "capabilities/payments.yaml",
