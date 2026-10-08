@@ -55,8 +55,18 @@ def load_attributes(ws: Path, agent: str) -> set[str]:
         name
         for row in rows
         if row["agent_name"] == agent
-        for name in row.get("attributes") or {}
+        for name in _row_attributes(row)
     }
+
+
+def _row_attributes(row: dict) -> dict:
+    """`row`'s attributes. The endpoint passes a stored value that isn't valid
+    JSON through as its raw text, which iterates as characters, so anything but
+    an object (or none) is malformed."""
+    attributes = row.get("attributes") or {}
+    if not isinstance(attributes, dict):
+        raise TypeError(f"audit row attributes are not an object: {attributes!r}")
+    return attributes
 
 
 @dataclass(frozen=True)

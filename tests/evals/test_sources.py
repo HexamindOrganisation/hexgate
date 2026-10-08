@@ -43,7 +43,15 @@ def test_when_audit_json_is_missing_then_no_attribute_is_known(tmp_path) -> None
 
 @pytest.mark.parametrize(
     "broken",
-    ["", "{not json", "null", "[{}]"],  # [{}]: a row with no agent_name
+    [
+        "",
+        "{not json",
+        "null",
+        "[{}]",  # a row with no agent_name
+        # Attributes the endpoint couldn't decode, passed through as raw text.
+        '[{"agent_name": "shop-bot", "attributes": "{department"}]',
+        '[{"agent_name": "shop-bot", "attributes": ["department"]}]',
+    ],
 )
 def test_when_audit_json_is_unreadable_then_load_attributes_fails(
     tmp_path, broken
