@@ -293,8 +293,8 @@ def _module_payload(ws: Path, agent: str) -> tuple[dict | None, list[str]]:
         return None, [str(exc)]
     if not boundaries and not capabilities:
         return None, ["no modules under policies/boundaries/ or policies/capabilities/"]
-    # Lints the modules (dead or erased grants), not the roles they compose
-    # into: `_load` lints those on the resolved result.
+    # Lints the modules and every column's roles, as `policy check` does; `_load`
+    # then lints the case agent's resolved roles as `validate` would.
     problems = _lint_failures(check_project(boundaries, capabilities, roles))
     if problems:
         return None, problems
