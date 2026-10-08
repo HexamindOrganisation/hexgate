@@ -1025,10 +1025,10 @@ def _resolve_namespace_flag[T](
     try:
         return build(**parsed)
     except ValueError as exc:
-        # Re-raised against the flag: a wrong-typed value otherwise fails the
-        # comparison closed and prints as an ordinary threshold trip, so the
-        # dry-run answers a question the user did not ask.
-        raise ValueError(f"{flag} has a wrong-typed value: {exc}") from exc
+        # Re-raised against the flag: a wrong-typed or negative value otherwise
+        # fails the comparison closed or reads as no usage, so the dry-run answers
+        # a question the user did not ask.
+        raise ValueError(f"{flag} has an invalid value: {exc}") from exc
 
 
 def _resolve_test_roles(args: argparse.Namespace) -> list[str]:
