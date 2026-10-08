@@ -663,7 +663,7 @@ def _unknown_reach_targets(
         for key, tp in module.policy.effective_tools.items():
             target = agent_reach_target(key)
             if target is not None and target not in targets:
-                _keep_worst(worst, target, _unknown_target_severity(module, tp.mode))
+                _keep_worst(worst, target, _unknown_target_severity(module, tp))
         out += [
             PolicyLint(
                 code="unknown-reach-target",
@@ -738,20 +738,22 @@ def _star_widens(
     return bool(set(star.capabilities) - set(cells[agent].capabilities))
 
 
-def _unknown_target_severity(module: ModuleContent, mode: str) -> Severity:
+def _unknown_target_severity(module: ModuleContent, rule: BaseToolPolicy) -> Severity:
     """A misspelled reach target, graded by what the real one falls back to.
 
     Reach is closed-world, so a capability's misspelled target is a grant that
     never fires (warning). A boundary rule on one leaves the real target to the
     boundary's default: under ``deny`` the real target is excluded anyway, so a
     misspelled grant never fires (warning) and a misspelled deny is redundant
-    (info); under a non-deny default the real target is neither capped nor
-    denied, so any grant of it runs looser than the boundary says (error)."""
+    (info). Under a non-deny default the real target is neither capped nor
+    denied, so a rule that restricts (a deny, an approval, or constraints)
+    leaves it looser than the boundary says (error); a plain ``allow`` restricts
+    nothing, so its typo changes nothing (info)."""
     if module.kind == "capability":
         return "warning"
     if module.policy.default_policy.mode == "deny":
-        return "info" if mode == "deny" else "warning"
-    return "error"
+        return "info" if rule.mode == "deny" else "warning"
+    return "error" if rule.mode != "allow" or rule.constraints else "info"
 
 
 def _unknown_tool_severity(tier: LayerKind, mode: str) -> Severity:

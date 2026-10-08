@@ -1651,7 +1651,7 @@ def test_when_no_cell_imports_a_capability_then_it_is_still_drift_checked():
 
 
 def test_when_a_reach_target_is_unknown_then_unknown_reach_target():
-    org = _reach("org", "boundary", ["ghost_bot"])
+    org = _reach("org", "boundary", ["ghost_bot"], mode="deny")
     handoffs = _reach("handoffs", "capability", ["ghost_bot", "support_bot"])
 
     lints = check_project([org], [handoffs], None, manifests=_MANIFESTS)
@@ -1673,6 +1673,10 @@ def test_when_a_reach_target_is_unknown_then_unknown_reach_target():
         ("deny", "deny", "info"),
         # The ceiling still excludes the real target, so it fails closed.
         ("allow", "deny", "warning"),
+        # A plain allow restricts nothing, so its typo changes nothing...
+        ("allow", "allow", "info"),
+        # ...but a missed approval leaves the real target unapproved.
+        ("approval_required", "allow", "error"),
     ],
 )
 def test_when_a_boundary_names_an_unknown_reach_target_then_its_default_grades_it(
