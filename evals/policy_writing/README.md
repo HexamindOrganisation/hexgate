@@ -109,6 +109,12 @@ would return to a real agent:
   attributes are set per request, not in the manifest, so the `ctx.*` names a
   case's agent knows are the `attributes` keys of its own rows.
 
+A module tree (`policies/` with a `roles.yaml`) is also linted against
+`agents.json` before the agent edits anything, so a starting project must
+already pass: every named `roles.yaml` column is an agent in `agents.json`,
+every `agents:` reach target is one too (or a sub-agent a manifest lists), and
+each column's grants name only tools and skills its agent's manifest has.
+
 ## Checks every case gets
 
 The loader adds these, so a case lists only what is particular to it.

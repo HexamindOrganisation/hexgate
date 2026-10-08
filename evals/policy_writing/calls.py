@@ -32,6 +32,7 @@ from hexgate.egress.model import connect_to_args, http_to_args
 from hexgate.security.models import (
     AGENT_RUN_TOOL,
     SkillVia,
+    agent_reach_target,
     is_agent_reach_key,
     is_skill_key,
     skill_key,
@@ -116,12 +117,6 @@ def _skill_parts(tool: str) -> tuple[str, str]:
     """(via, skill name) of a `skill:` / `skill.resource:` / `skill.script:` key."""
     prefix, name = tool.split(":", 1)
     return _SKILL_VIA_BY_PREFIX[f"{prefix}:"], name
-
-
-def _reach_parts(tool: str) -> tuple[str, str]:
-    """(via, target) of an `agent.<via>:<target>` key."""
-    via, target = tool.removeprefix("agent.").split(":", 1)
-    return via, target
 
 
 # ---------------------------------------------------------------- complete
@@ -240,7 +235,7 @@ def unknown_names(call: dict, known: Known) -> list[str]:
     if tool in SYNTHETIC_ARGS:
         args = SYNTHETIC_ARGS[tool]
     elif is_agent_reach_key(tool):
-        if _reach_parts(tool)[1] not in known.agents:
+        if agent_reach_target(tool) not in known.agents:
             return [tool]
         args = AGENT_REACH_ARGS
     elif is_skill_key(tool):
