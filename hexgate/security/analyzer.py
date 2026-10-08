@@ -18,10 +18,11 @@ a module). This module runs over a **successfully linked** bundle and reports th
 - **unknown-reach-target** — an ``agents:`` rule names an agent the project
   neither registers nor reaches as a sub-agent. Only checked when
   the project's manifests are supplied (:func:`analyze_project`'s ``manifests``).
-- **unknown-agent** — a ``roles`` column names an agent the project neither
-  registers nor reaches as a sub-agent, so the agent it was meant for gets the
-  role's ``"*"`` cell, or nothing without one. Only checked when the project's
-  manifests are supplied (:func:`analyze_project`'s ``manifests``).
+- **unknown-agent** — a ``roles`` column names an agent the project doesn't
+  register, so no agent runs under it: a misspelling leaves the agent it was
+  meant for on the role's ``"*"`` cell, or nothing without one, and an
+  unregistered sub-agent never fetches the project policy. Only checked when
+  the project's manifests are supplied (:func:`analyze_project`'s ``manifests``).
 - **permissive-default** — the ``default`` role grants something no named role
   grants (:func:`check_default_role_exposure`, over a resolved role map).
 - **unknown-guard** / **ambiguous-guard** — a baseline ``guards:`` rule that names a
@@ -255,7 +256,7 @@ def analyze_project(
       rule reads are checked, against what its gate or the egress proxy passes;
     - with ``manifests``, ``unknown-reach-target`` flags an ``agents:`` rule whose
       target is no registered agent and no sub-agent a manifest reaches, and
-      ``unknown-agent`` a ``roles`` column naming one.
+      ``unknown-agent`` a ``roles`` column naming no registered agent.
 
     The registered agents are the roster: a ``roles`` column naming an agent
     outside it gets only the gate-argument checks, and widens nothing, so a
@@ -282,7 +283,10 @@ def analyze_project(
     for agent, own_roles in sorted(named.items()):
         code = None if roster is None else roster.by_agent.get(agent, _UNKNOWN)
         lints += _named_column_lints(agent, own_roles, boundaries, library, roles, code)
-    lints += _project_lints(boundaries, library, roles, named, roster)
+        if roster is not None and roster.registered is not None:
+            if agent not in roster.registered:
+                lints += _unknown_agent(agent, own_roles, roles, roster)
+    lints += _project_lints(boundaries, library, roles, roster)
     return sorted(lints, key=lambda lint: SEVERITY_RANK[lint.severity])
 
 
@@ -318,13 +322,16 @@ class _Roster:
     ``by_agent`` holds what each agent whose manifest is known declares.
     ``shared`` is every agent's, or :data:`_UNKNOWN` when some agent's is
     unknown; built from one ``manifest``, it is that manifest's, standing for
-    every agent. ``reach_targets`` is what an
-    ``agents:`` rule may name, or ``None`` when the roster comes from a single
+    every agent. ``registered`` is the agents the platform knows, the only ones
+    that can fetch the project policy, so what a ``roles`` column may name;
+    ``reach_targets`` adds the sub-agents a manifest names, so what an
+    ``agents:`` rule may name, since the parent enforces those. Both are ``None`` when the roster comes from a single
     ``manifest``, which says nothing about the other agents.
     """
 
     by_agent: dict[str, _Declared]
     shared: _Declared
+    registered: frozenset[str] | None
     reach_targets: frozenset[str] | None
 
     @property
@@ -347,12 +354,14 @@ def _roster(
         if manifest is None:
             return None
         code = _declared(manifest)
-        return _Roster({manifest.name: code}, code, None)
+        return _Roster({manifest.name: code}, code, None, None)
     subagents = {ref.name for m in manifests.values() for ref in m.subagents or ()}
-    agents = frozenset({*manifests, *registered_agents, *subagents})
+    registered = frozenset({*manifests, *registered_agents})
+    agents = registered | subagents
     return _Roster(
         {name: _declared(m) for name, m in manifests.items()},
         _declared(*manifests.values()) if agents <= manifests.keys() else _UNKNOWN,
+        registered,
         agents,
     )
 
@@ -407,12 +416,10 @@ def _project_lints(
     boundaries: list[ModuleContent],
     library: list[ModuleContent],
     roles: RoleMatrix | None,
-    named: Mapping[str, set[str]],
     roster: _Roster | None,
 ) -> list[PolicyLint]:
-    """The lints that span cells. Role and agent stay ``None``, so a role-scoped
-    ``check --role X`` view still surfaces them, except on ``unknown-agent``,
-    which is tagged with the cell it flags."""
+    """The lints that span cells: role and agent stay ``None``, so a role-scoped
+    ``check --role X`` view still surfaces them."""
     imported = _all_imported_names(roles, library)
     unused = [cap for cap in library if cap.name not in imported]
     lints = _unused_capabilities(unused)
@@ -433,9 +440,9 @@ def _project_lints(
         shared, absent = roster.shared, roster.absent
         lints += _modules_drift(boundaries, "boundary", shared, absent=absent)
         lints += _modules_drift(unused, "capability", shared, absent=absent)
-    if roster is not None and roster.reach_targets is not None:
-        lints += _unknown_reach_targets([*boundaries, *library], roster.reach_targets)
-        lints += _unknown_agents(roles, named, roster.reach_targets)
+        if roster.reach_targets is not None:
+            modules = [*boundaries, *library]
+            lints += _unknown_reach_targets(modules, roster.reach_targets)
     return lints
 
 
@@ -673,20 +680,41 @@ def _unknown_reach_targets(
     return out
 
 
-def _unknown_agents(
-    roles: RoleMatrix | None, named: Mapping[str, set[str]], targets: frozenset[str]
+def _unknown_agent(
+    agent: str, own_roles: set[str], roles: RoleMatrix, roster: _Roster
 ) -> list[PolicyLint]:
-    """A ``roles`` column whose agent is in none of ``targets``: no running agent
-    matches it, so the agent it was meant for (a misspelling, most likely) gets
-    the role's ``"*"`` cell instead. Where that cell imports a capability the
-    column leaves out and some agent in ``targets`` has no cell of its own
-    there, the column was a restriction the real agent escapes (error);
-    otherwise it only fails to grant (warning)."""
+    """``agent``'s ``roles`` column, where ``agent`` is not registered, so no
+    agent runs under it.
+
+    An unregistered sub-agent never fetches the project policy and keeps its
+    local one, so the column doesn't apply (warning). Any other name is no agent
+    (a misspelling, most likely), so the agent it was meant for gets the role's
+    ``"*"`` cell instead. Where that cell imports a capability the column leaves
+    out and some registered agent has no cell of its own there, the column was a
+    restriction the real agent escapes (error); otherwise it only fails to grant
+    (warning)."""
+    if agent in (roster.reach_targets or ()):
+        message = (
+            "this roles column names a sub-agent that isn't registered, so it "
+            "never fetches the project policy and keeps its local one: the "
+            "column doesn't apply"
+        )
+        return [
+            PolicyLint(
+                code="unknown-agent",
+                severity="warning",
+                message=message,
+                role=role,
+                agent=agent,
+            )
+            for role in sorted(own_roles)
+        ]
+    registered = roster.registered or frozenset()
     return [
         PolicyLint(
             code="unknown-agent",
             severity="error"
-            if _star_widens(roles[role], agent, targets)
+            if _star_widens(roles[role], agent, registered)
             else "warning",
             message=(
                 f"this roles column names no agent: {_NOT_AN_AGENT}, so the agent "
@@ -695,8 +723,6 @@ def _unknown_agents(
             role=role,
             agent=agent,
         )
-        for agent, own_roles in sorted(named.items())
-        if agent not in targets
         for role in sorted(own_roles)
     ]
 
