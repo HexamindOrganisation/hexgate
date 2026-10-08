@@ -369,7 +369,9 @@ class EnricherJob:
         # (bad input was already diverted to the DLQ above), so halting this
         # partition is correct: committing would drop data. A table that has
         # acked is never re-inserted: ReplacingMergeTree would forgive the
-        # duplicate, but usage_minute's views would sum it twice.
+        # duplicate, but usage_minute's views would sum it twice. A table whose
+        # insert failed partway is re-inserted whole, so its landed blocks are
+        # over-counted (accepted, docs/internals/audit-pipeline.md §9).
         async def _insert_all() -> None:
             for event_type, insert in _SINKS:
                 if event_type in acked:

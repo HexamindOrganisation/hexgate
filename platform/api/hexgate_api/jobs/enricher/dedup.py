@@ -33,7 +33,9 @@ class RecentEventIds:
     memory tracks produced volume rather than consumption speed.
 
     Process-local: a restart or rebalance loses it, and the replayed poll is
-    over-counted in usage_minute — accepted, it errs toward denial.
+    over-counted in usage_minute — accepted, it errs toward denial. Remembers
+    only whole acked inserts, so it cannot see blocks of a failed insert that
+    landed anyway (see insert_decisions_batch); those over-count too.
     """
 
     def __init__(

@@ -512,7 +512,12 @@ once per inserted block, before any merge, so every copy that reaches an insert
 is summed for good. That is why step 4 dedups across polls and step 6 never
 repeats an acked insert. What still gets through is over-counted: a replay
 after a restart or rebalance (the cache is in memory), and an insert that
-ClickHouse stored while the client saw an error, so the retry repeats it (§9).
+ClickHouse stored in whole or in part while the client saw an error, so the
+retry repeats the blocks that landed (§9). The driver splits a batch into blocks
+of about 2MB, ClickHouse commits each one, and the driver re-sends the body once
+on a dropped keep-alive without raising, so a duplicate can land with no error
+at all. Insert dedup (`insert_deduplication_token`) is off on every table; it
+would close these re-sends but not a span re-batched into another poll.
 
 DLQ envelopes are JSON, keyed by project like the source record, and carry the
 decoded attributes with the dict-typed fields redacted (same sensitive-key
@@ -905,7 +910,8 @@ sort key `(project_id, agent_name, outcome, occurred_at, event_id)` and
    ingest-volume-per-project alert.
 8. **`usage_minute` over-counts, never under-counts, at the edges** — a replay
    after an enricher restart or rebalance (the cross-poll cache is in memory),
-   a cache overflow (logged), an insert stored while the client saw an error,
+   a cache overflow (logged), an insert stored in whole or in part while the
+   client saw an error, the driver's silent re-send on a dropped keep-alive,
    a refused approval (counted as a tool call), an approved guard halt (its
    `needs_approval` row and the policy's `allow` row both count: both carry
    `error_type = approval_required`), and the legacy HTTP ingest (§4.5), which
