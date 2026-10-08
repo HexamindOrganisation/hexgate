@@ -8,8 +8,9 @@ the same span on the topic again, usually in a later poll than the first copy.
 from __future__ import annotations
 
 import logging
+import time
 from collections import OrderedDict
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from uuid import UUID
 
 _log = logging.getLogger(__name__)
@@ -20,8 +21,16 @@ _log = logging.getLogger(__name__)
 DEDUP_WINDOW_MS = 15 * 60 * 1000
 # Memory backstop for a burst the window was not sized for.
 DEDUP_MAX_ENTRIES = 500_000
+# Record time is the producer's clock (topic CreateTime). One record from a
+# host whose clock jumped ahead must not drag the window forward and expire
+# every live entry, so record time is capped at our wall clock plus this.
+DEDUP_MAX_CLOCK_SKEW_MS = 60 * 1000
 
 DedupKey = tuple[str, UUID]  # (project_id, event_id): the tables' own identity
+
+
+def _wall_clock_ms() -> int:
+    return time.time_ns() // 1_000_000
 
 
 class RecentEventIds:
@@ -30,7 +39,8 @@ class RecentEventIds:
     The window is in Kafka record timestamps (produce time), not wall time: a
     retry's two copies are produced minutes apart however far behind this
     consumer is, so catch-up after an outage dedups like live traffic, and
-    memory tracks produced volume rather than consumption speed.
+    memory tracks produced volume rather than consumption speed. A timestamp
+    ahead of the wall clock by more than the skew allowance is capped there.
 
     Process-local: a restart or rebalance loses it, and the replayed poll is
     over-counted in usage_minute — accepted, it errs toward denial. Remembers
@@ -43,9 +53,13 @@ class RecentEventIds:
         *,
         window_ms: int = DEDUP_WINDOW_MS,
         max_entries: int = DEDUP_MAX_ENTRIES,
+        max_clock_skew_ms: int = DEDUP_MAX_CLOCK_SKEW_MS,
+        wall_clock_ms: Callable[[], int] = _wall_clock_ms,
     ) -> None:
         self._window_ms = window_ms
         self._max_entries = max_entries
+        self._max_clock_skew_ms = max_clock_skew_ms
+        self._wall_clock_ms = wall_clock_ms
         self._seen: OrderedDict[DedupKey, int] = OrderedDict()
         self._newest_ms = 0
 
@@ -54,9 +68,21 @@ class RecentEventIds:
 
     def remember(self, stored: Iterable[tuple[DedupKey, int]]) -> None:
         """Record ``(key, record_timestamp_ms)`` pairs ClickHouse has acked."""
+        ceiling_ms = self._wall_clock_ms() + self._max_clock_skew_ms
+        clamped = 0
         for key, timestamp_ms in stored:
+            if timestamp_ms > ceiling_ms:
+                clamped += 1
+                timestamp_ms = ceiling_ms
             self._seen[key] = timestamp_ms
             self._newest_ms = max(self._newest_ms, timestamp_ms)
+        if clamped:
+            _log.warning(
+                "%d record timestamps more than %d ms ahead of the wall clock; "
+                "capped so they cannot expire the dedup window early",
+                clamped,
+                self._max_clock_skew_ms,
+            )
         self._expire()
 
     def _expire(self) -> None:

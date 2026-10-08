@@ -92,3 +92,37 @@ def test_expiring_old_keys_is_not_logged(caplog: pytest.LogCaptureFixture) -> No
 
     assert old not in recent and new in recent
     assert caplog.text == ""
+
+
+def test_a_future_dated_record_cannot_expire_the_window(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A producer clock far ahead of ours is capped at wall clock + skew, so
+    the horizon it sets still covers keys remembered just before it."""
+    recent = RecentEventIds(
+        window_ms=WINDOW_MS, max_clock_skew_ms=0, wall_clock_ms=lambda: 0
+    )
+    live = _key()
+
+    with caplog.at_level(logging.WARNING):
+        recent.remember([(live, 0)])
+        recent.remember([(_key(), 100 * WINDOW_MS)])
+
+    assert live in recent
+    assert "1 record timestamps more than 0 ms ahead" in caplog.text
+
+
+def test_a_record_within_the_skew_allowance_is_not_capped(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    recent = RecentEventIds(
+        window_ms=WINDOW_MS, max_clock_skew_ms=2 * WINDOW_MS, wall_clock_ms=lambda: 0
+    )
+    old = _key()
+
+    with caplog.at_level(logging.WARNING):
+        recent.remember([(old, 0)])
+        recent.remember([(_key(), WINDOW_MS + 1)])
+
+    assert old not in recent
+    assert caplog.text == ""
