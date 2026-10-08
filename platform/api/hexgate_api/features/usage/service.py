@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -44,6 +45,9 @@ _READ_COLUMNS: Final = [
 QUERY_SETTINGS: Final = {"max_execution_time": 2}
 USAGE_MEMO_TTL_SECONDS: Final = 1.0
 USAGE_MEMO_MAX_ENTRIES: Final = 10_000
+
+# A load in flight never expires, so every request joins it however slow it is.
+_PENDING_EXPIRY: Final = math.inf
 
 _SCAN_PARAM: Final = "scan"
 _WINDOW_PARAM_PREFIX: Final = "w"
@@ -117,7 +121,8 @@ UsageMemoKey = tuple[str, str, frozenset[UsageWindowSpec]]
 class UsageMemo:
     """Per-worker memo of usage reads; concurrent misses on one key share one query.
 
-    Event-loop only: no lock, because every access happens on the loop thread."""
+    The TTL runs from when a load completes, so a read slower than the TTL is still
+    shared rather than started again. Event-loop only: no lock, because every access happens on the loop thread."""
 
     def __init__(
         self, ttl_seconds: float, max_entries: int, clock: Callable[[], float]
@@ -145,18 +150,19 @@ class UsageMemo:
     ) -> asyncio.Future[UsageReadout]:
         self._make_room()
         task = asyncio.ensure_future(load())
-        self._entries[key] = (self._clock() + self._ttl, task)
-        task.add_done_callback(lambda done: self._forget_if_failed(key, done))
+        self._entries[key] = (_PENDING_EXPIRY, task)
+        task.add_done_callback(lambda done: self._settle(key, done))
         return task
 
-    def _forget_if_failed(
-        self, key: UsageMemoKey, task: asyncio.Future[UsageReadout]
-    ) -> None:
-        if not task.cancelled() and task.exception() is None:
-            return
+    def _settle(self, key: UsageMemoKey, task: asyncio.Future[UsageReadout]) -> None:
+        """Start a success's TTL, forget a failure; never touch a newer entry."""
         entry = self._entries.get(key)
-        if entry is not None and entry[1] is task:
+        if entry is None or entry[1] is not task:
+            return
+        if task.cancelled() or task.exception() is not None:
             del self._entries[key]
+        else:
+            self._entries[key] = (self._clock() + self._ttl, task)
 
     def _make_room(self) -> None:
         if len(self._entries) < self._max_entries:

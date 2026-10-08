@@ -179,8 +179,7 @@ async def test_a_failed_load_is_not_memoized() -> None:
 
 
 async def test_a_failure_does_not_evict_a_newer_entry_for_the_same_key() -> None:
-    clock = _FakeClock()
-    memo = UsageMemo(1.0, 10, clock)
+    memo = UsageMemo(1.0, 1, _FakeClock())
     release_old = asyncio.Event()
     newer_loads: list[int] = []
 
@@ -194,7 +193,8 @@ async def test_a_failure_does_not_evict_a_newer_entry_for_the_same_key() -> None
 
     old = asyncio.ensure_future(memo.get_or_load(_key(), slow_fail))
     await asyncio.sleep(0)
-    clock.now = 2.0
+    await memo.get_or_load(_key("other"), newer)  # full: evicts the pending "a"
+    newer_loads.clear()
     assert await memo.get_or_load(_key(), newer) == _readout(9)
     release_old.set()
     with pytest.raises(DatabaseError):
@@ -202,6 +202,81 @@ async def test_a_failure_does_not_evict_a_newer_entry_for_the_same_key() -> None
 
     assert await memo.get_or_load(_key(), newer) == _readout(9)
     assert len(newer_loads) == 1
+
+
+async def test_a_load_slower_than_the_ttl_is_still_shared() -> None:
+    clock = _FakeClock()
+    memo = UsageMemo(1.0, 10, clock)
+    release = asyncio.Event()
+    loads: list[int] = []
+
+    async def slow() -> UsageReadout:
+        loads.append(1)
+        await release.wait()
+        return _readout(4)
+
+    first = asyncio.ensure_future(memo.get_or_load(_key(), slow))
+    await asyncio.sleep(0)
+    clock.now = 5.0
+    second = asyncio.ensure_future(memo.get_or_load(_key(), slow))
+    await asyncio.sleep(0)
+    release.set()
+
+    assert await first == await second == _readout(4)
+    assert len(loads) == 1
+
+
+async def test_the_ttl_runs_from_when_the_load_completes() -> None:
+    clock = _FakeClock()
+    memo = UsageMemo(1.0, 10, clock)
+    release = asyncio.Event()
+    loads: list[int] = []
+
+    async def load() -> UsageReadout:
+        loads.append(1)
+        await release.wait()
+        return _readout(len(loads))
+
+    pending = asyncio.ensure_future(memo.get_or_load(_key(), load))
+    await asyncio.sleep(0)
+    clock.now = 5.0
+    release.set()
+    await pending
+
+    clock.now = 5.5
+    assert await memo.get_or_load(_key(), load) == _readout(1)
+    clock.now = 6.0
+    assert await memo.get_or_load(_key(), load) == _readout(2)
+
+
+async def test_a_full_memo_keeps_a_pending_load_over_an_expired_one() -> None:
+    clock = _FakeClock()
+    memo = UsageMemo(1.0, 2, clock)
+    release = asyncio.Event()
+    loads: list[str] = []
+
+    def loader(name: str, gate: asyncio.Event | None = None):
+        async def load() -> UsageReadout:
+            loads.append(name)
+            if gate is not None:
+                await gate.wait()
+            return _readout()
+
+        return load
+
+    pending = asyncio.ensure_future(
+        memo.get_or_load(_key("slow"), loader("slow", release))
+    )
+    await asyncio.sleep(0)
+    await memo.get_or_load(_key("done"), loader("done"))
+    clock.now = 5.0  # "done" expired; "slow" is still in flight
+    await memo.get_or_load(_key("third"), loader("third"))
+    joined = asyncio.ensure_future(memo.get_or_load(_key("slow"), loader("slow")))
+    await asyncio.sleep(0)
+    release.set()
+    await asyncio.gather(pending, joined)
+
+    assert loads == ["slow", "done", "third"]
 
 
 async def test_a_full_memo_drops_expired_entries_first_then_the_oldest() -> None:
