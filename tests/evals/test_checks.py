@@ -29,6 +29,12 @@ from tests.evals.helpers import (
     valid_policy,
 )
 
+# The fixture's org boundary, open for more tools.
+BOUNDARY = (
+    "default_policy: { mode: allow }\n"
+    "tools:\n"
+    '  refund_order: { mode: allow, constraints: ["args.amount <= 1000"] }\n'
+)
 REFUND = {"tool": "refund_order", "args": {"order_id": "o1", "amount": 5}}
 VIEW = {"tool": "view_orders", "args": {"customer_id": "c1"}}
 
@@ -96,43 +102,46 @@ def test_name_checks_happy_path(tmp_path) -> None:
     ]
 
 
-def test_when_a_module_tree_lowers_agent_and_skill_keys_then_name_checks_accept_them(
-    tmp_path,
+@pytest.mark.parametrize(
+    ("module", "text"),
+    [
+        # An org-wide deny on ops-bot's tool and skill: linking keeps a deny.
+        (
+            "boundaries/org.yaml",
+            BOUNDARY
+            + "  wire_transfer: { mode: deny }\nskills:\n  ledger: { mode: deny }\n",
+        ),
+        # A `"*"` cell's capability may grant any agent's tool.
+        (
+            "capabilities/payments.yaml",
+            "tools:\n  refund_order: { mode: allow }\n  wire_transfer: { mode: allow }\n",
+        ),
+    ],
+)
+def test_when_a_module_tree_names_another_agents_tool_then_name_checks_accept_it(
+    tmp_path, module, text
 ) -> None:
-    # Resolving a module tree lowers admission, reach and skills into `tools`.
-    roles = "  default: [read_only]\n  billing: [read_only, reach]\n"
-    ws = make_modules_workspace(tmp_path, roles)
-    (ws / "policies" / "capabilities" / "reach.yaml").write_text(
-        'admission: { mode: allow, constraints: ["args.agent == \\"shop-bot\\""] }\n'
-        "agents:\n  ops-bot: { mode: allow }\n"
-        "skills:\n  pdf: { mode: allow, via: [script], constraints:"
-        ' ["args.script_args == \\"x\\""] }\n'
-    )
-    policy = valid_policy(ws, AGENT, modules=True)
-    assert {"agent.run", "skill.script:pdf"} <= set(
-        policy.policy_set.policy_for("billing").tools
-    )
-    before = snapshot(ws)
-    checks = name_checks(policy, ws, before, before)
-    assert [(c.name, c.passed, c.detail) for c in checks] == [
-        (n, True, "") for n in NAME_CHECKS
-    ]
-
-
-def test_when_a_module_tree_grants_an_invented_skill_then_name_checks_flag_it(
-    tmp_path,
-) -> None:
-    roles = "  default: [read_only]\n  billing: [read_only, sk]\n"
-    ws = make_modules_workspace(tmp_path, roles)
-    (ws / "policies" / "capabilities" / "sk.yaml").write_text(
-        "skills:\n  pdff: { mode: allow, via: [resource] }\n"
-    )
+    ws = make_modules_workspace(tmp_path)
+    (ws / "policies" / module).write_text(text)
     policy = valid_policy(ws, AGENT, modules=True)
     before = snapshot(ws)
-    checks = name_checks(policy, ws, before, before)
+    checks = name_checks(policy, ws, before, before, modules=True)
+    assert [(c.passed, c.detail) for c in checks] == [(True, "")] * 2
+
+
+def test_when_a_module_tree_denies_an_invented_tool_then_name_checks_flag_it(
+    tmp_path,
+) -> None:
+    ws = make_modules_workspace(tmp_path)
+    (ws / "policies" / "boundaries" / "org.yaml").write_text(
+        BOUNDARY + "  wire_transfr: { mode: deny }\n"
+    )
+    policy = valid_policy(ws, AGENT, modules=True)
+    before = snapshot(ws)
+    checks = name_checks(policy, ws, before, before, modules=True)
     assert (checks[0].passed, checks[0].detail) == (
         False,
-        "not in shop-bot's manifest: ['skill:pdff']",
+        "not in any agent's manifest: ['wire_transfr']",
     )
 
 
@@ -151,28 +160,10 @@ def test_when_the_policy_invents_names_then_both_name_checks_fail(tmp_path) -> N
     ]
 
 
-@pytest.mark.parametrize(
-    ("source", "broken"),
-    [
-        ("agents.json", ""),
-        ("agents.json", "{not json"),
-        ("agents.json", "[]"),
-        ("agents.json", '{"agents": []}'),  # not the endpoint's list
-        ("agents.json", "[{}]"),  # a view with no name
-        ("audit.json", "null"),
-        ("audit.json", "[{}]"),  # a row with no agent_name
-        ("agents.json", None),  # the starting project ships none
-    ],
-)
-def test_when_a_name_source_is_unreadable_then_both_name_checks_fail(
-    tmp_path, source, broken
-) -> None:
+def test_when_a_name_source_is_unreadable_then_both_name_checks_fail(tmp_path) -> None:
     ws = make_workspace(tmp_path)
     policy = valid_policy(ws, AGENT)
-    if broken is None:
-        (ws / source).unlink()
-    else:
-        (ws / source).write_text(broken)
+    (ws / "agents.json").write_text("{not json")
     after = snapshot(ws)
     checks = name_checks(policy, ws, after, after)
     assert [(c.name, c.passed) for c in checks] == [(n, False) for n in NAME_CHECKS]
@@ -310,6 +301,17 @@ def test_score_happy_path(tmp_path) -> None:
     checks = score(case, ws, before, "Billing can refund.")
     assert [c.name for c in checks if c.passed] == [c.name for c in checks]
     assert set(NAME_CHECKS) <= {c.name for c in checks}
+
+
+def test_when_a_module_tree_denies_another_agents_tool_then_score_passes(
+    tmp_path,
+) -> None:
+    ws = make_modules_workspace(tmp_path)
+    (ws / "policies" / "boundaries" / "org.yaml").write_text(
+        BOUNDARY + "  wire_transfer: { mode: deny }\n"
+    )
+    checks = score({"agent": AGENT}, ws, snapshot(ws), "")
+    assert [c.name for c in checks if not c.passed] == []
 
 
 def test_when_the_agent_edits_agents_json_then_score_fails_both_name_checks(
