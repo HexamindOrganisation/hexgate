@@ -270,6 +270,33 @@ def test_when_a_rule_reads_run_agent_then_decide_gives_the_case_agent(
         assert decide(policy, "default", {"tool": "view_orders"}).outcome == expected
 
 
+ADMIT_IN_RUN = """\
+version: 1
+roles:
+  default:
+    admission: { mode: allow, constraints: ['run.agent == "shop-bot"'] }
+"""
+
+
+def test_when_admission_reads_run_agent_then_decide_sees_no_run_yet(tmp_path) -> None:
+    # The runtime admits the agent before its run starts, so `run.agent` is "".
+    policy = valid_policy(make_workspace(tmp_path, ADMIT_IN_RUN), AGENT)
+    verdict = decide(policy, "default", {"tool": "agent.run"})
+    assert verdict.outcome == DecisionOutcome.DENY
+
+
+@pytest.mark.parametrize(
+    ("tool", "facts"),
+    [("agent.run", {"tool_calls": 1}), ("view_orders", {"agent": "ops-bot"})],
+)
+def test_when_run_facts_contradict_the_run_then_decide_raises(
+    tmp_path, tool, facts
+) -> None:
+    policy = valid_policy(make_workspace(tmp_path), AGENT)
+    with pytest.raises(CaseError, match="drop run_facts"):
+        decide(policy, "default", {"tool": tool, "run_facts": facts})
+
+
 @pytest.mark.parametrize("facts", [{"tool": 1}, {"tool_call": 20}])
 def test_when_a_run_fact_is_unknown_then_decide_raises(tmp_path, facts) -> None:
     # `tool` would collide with `run_namespace`'s own parameter.

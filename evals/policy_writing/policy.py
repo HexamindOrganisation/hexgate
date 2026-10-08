@@ -6,9 +6,9 @@ with the CLI's input checks. On an opt-in gate the policy never declares, it
 follows the runtime where `test` would deny: an admission or handoff call is
 allowed, and an agent-as-tool or skill call is refused as a case error, since
 the runtime decides it under the tool's own name. A call on a declared gate is
-dry-run with the args that gate sends at runtime: the case gives only those the
-gate takes from the call (a skill read's `file_path`), or ones it sets
-with the value it sets them to; any other is refused.
+dry-run with the args that gate sends at runtime: the case gives only those
+the gate doesn't set itself (a skill read's `file_path` and `content_hash`),
+or ones it sets with the value it sets them to; any other is refused.
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ import yaml
 from pydantic import TypeAdapter, ValidationError
 
 from hexgate.runtime.context import ContextAttributeValue
-from hexgate.runtime.run_facts import KNOWN_RUN_PATHS
+from hexgate.runtime.run_facts import DETACHED, KNOWN_RUN_PATHS
 from hexgate.security import (
     RESOLVED_POLICY_MARKER,
     DecisionOutcome,
@@ -70,9 +70,9 @@ class Policy:
     """The policy the checks run against.
 
     `payload` is the document: `policy.yaml` as written, or a module tree's
-    resolved roles (read by the known-names checks, PR 18). `policy_set` is it
-    loaded, ready to evaluate. `agent` is the agent running the calls: an agent
-    gate sends it as `args.agent`, and it is `run.agent`.
+    resolved roles. `policy_set` is it loaded, ready to evaluate. `agent` is
+    the agent running the calls: an agent gate sends it as `args.agent`, and
+    it is `run.agent` once the run has started.
     """
 
     payload: dict
@@ -96,7 +96,7 @@ RANK = {
 
 class CaseError(ValueError):
     """A case's call can't be dry-run: an undefined role, bad attributes or run facts,
-    or args a declared gate doesn't take from the call."""
+    or args a declared gate sets itself to other values."""
 
 
 _ATTRIBUTES = TypeAdapter(dict[str, ContextAttributeValue])
@@ -160,7 +160,8 @@ def _gate(tool: str, agent: str, policy_set: PolicySet) -> _Gate | None:
 
 def _with_gate_args(gate: _Gate, args: dict) -> dict:
     """`args` as the gate passes them: what it sets itself, plus the rest of
-    `gate_args` from the call (a skill read's `file_path`), None where the
+    `gate_args` from the case (a skill read's `file_path`, the skill's
+    `content_hash`, which the adapter hashes from the skill), None where the
     case leaves one out, as the adapters send it.
 
     A case may spell an arg the gate sets only with the gate's value, as the
@@ -173,8 +174,8 @@ def _with_gate_args(gate: _Gate, args: dict) -> dict:
         if k not in from_call and (k not in gate.sent or v != gate.sent[k])
     ):
         raise CaseError(
-            f"{gate.key}: the gate sends {gate.sent} itself and takes only "
-            f"{sorted(from_call)} from the call; drop {extra}"
+            f"{gate.key}: the gate sends {gate.sent} itself, and the case "
+            f"gives only {sorted(from_call)}; drop {extra}"
         )
     return {**dict.fromkeys(from_call), **args, **gate.sent}
 
@@ -192,13 +193,25 @@ def _as_json(value: dict) -> dict:
 
 
 def _run(key: str, agent: str, facts: dict) -> dict:
-    """`run.*` over a zeroed run, as `policy test --run-facts` builds it, with
-    `run.agent` the case's agent as at runtime (`run_scope`)."""
+    """`run.*` as the runtime has it when it decides `key`.
+
+    Admission is decided before the run starts (`_check_admission`, then
+    `run_scope`, in agents/factory.py and the runners), so outside any run:
+    `DETACHED`, and a case's run facts would describe a run that doesn't
+    exist yet. Any other call is in the agent's run, over a zeroed one as
+    `policy test --run-facts` builds it, and `run.agent` is the case's agent.
+    """
+    if key == AGENT_RUN_TOOL:
+        if facts:
+            raise CaseError(f"{key} is decided before the run starts; drop run_facts")
+        return DETACHED.as_namespace(key)
     # Checked here: a `tool` key would collide with `run_namespace`'s parameter.
     if unknown := sorted(facts.keys() - KNOWN_RUN_PATHS):
         raise CaseError(f"unknown run.* path(s) {unknown}")
+    if "agent" in facts:
+        raise CaseError("run.agent is the case's agent; drop run_facts.agent")
     # Keyed by the call's real key, so `run.tools_used` names what is decided.
-    return run_namespace(key, **{"agent": agent, **facts})
+    return run_namespace(key, agent=agent, **facts)
 
 
 def decide(policy: Policy, role: str, d: dict) -> Verdict:
@@ -206,7 +219,7 @@ def decide(policy: Policy, role: str, d: dict) -> Verdict:
     a call on a gate carries the args that gate sends at runtime.
 
     Raises `CaseError` where the CLI would refuse the call, or where the eval
-    can't judge it (args a declared gate doesn't take from the call). An
+    can't judge it (args a declared gate sets itself to other values). An
     undefined role is one, rather than the `default` fallback: a case naming a
     role the policy lacks fails instead of passing by luck.
     """
