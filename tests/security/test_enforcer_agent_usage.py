@@ -185,6 +185,22 @@ def test_another_agents_run_is_not_left_out() -> None:
     assert engine.namespaces == [{"invocations_1h": 1}, {"invocations_1h": 1}]
 
 
+def test_a_run_opened_before_the_ledgers_were_enabled_is_not_left_out() -> None:
+    """It recorded no invocation, so subtracting one would hide another run's."""
+    ledgers = _ledgers()
+    enforcer = PolicyEnforcer(_usage_free(), agent_name=_AGENT, ledgers=ledgers)
+    engine = _RecordingEngine(frozenset({"invocations_1h"}))
+
+    with run_scope(_AGENT, ledgers=ledgers):
+        enforcer.policy = engine
+        for _ in range(2):
+            with run_scope(_AGENT, ledgers=ledgers):
+                pass
+        enforcer.decide("refund", {})
+
+    assert engine.namespaces == [{"invocations_1h": 2}]
+
+
 def test_a_tool_cap_spans_runs() -> None:
     ledgers = _ledgers()
     enforcer = PolicyEnforcer(_tool_cap(2), agent_name=_AGENT, ledgers=ledgers)
