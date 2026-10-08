@@ -506,7 +506,8 @@ class ResolvedPolicyResponse(BaseModel):
 
 
 class PolicyLintOut(BaseModel):
-    """One analyzer lint, tagged with the role it fired in (None if project-wide)."""
+    """One analyzer lint, tagged with the role and the named agent it fired in
+    (None if project-wide; ``agent`` is also None for the generic ``"*"`` view)."""
 
     code: str
     severity: str
@@ -516,6 +517,7 @@ class PolicyLintOut(BaseModel):
     tier: str | None = None
     tool: str | None = None
     role: str | None = None
+    agent: str | None = None
 
 
 class PolicyCheckResponse(BaseModel):

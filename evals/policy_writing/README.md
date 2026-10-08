@@ -49,6 +49,10 @@ rejects anything that would otherwise drop a check without a word:
     adapters write it for `int | None` too;
   - a caller attribute of another JSON type than its audit rows carry;
   - a date or any other value that isn't JSON.
+- **Run facts** (`policy.py`, `check_run_facts`) the scorer would refuse: any
+  on `agent.run` or `net.*`, which are decided outside any run; `agent`, which
+  is the case's agent; `calls_of_this_tool` on a gate key, which is never
+  counted; an unknown `run.*` path, or a value of the wrong type.
 - **Synthetic calls** (`calls.py`, `complete`), which must match what the gate
   sends:
   - `agent.run` and `agent.<via>:<target>`: no args at all, since the gate

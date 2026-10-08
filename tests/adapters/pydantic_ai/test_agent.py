@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import threading
 from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator
 
@@ -12,7 +14,7 @@ from pydantic_ai.usage import RunUsage
 from hexgate.adapters.pydantic_ai.agent import HexgatePydanticAgent
 from hexgate.runtime import HexgateContext
 from hexgate.runtime.context import get_current_context
-from hexgate.security.bans import BanEntry, BanGate, BanSet
+from hexgate.security.bans import EMPTY_BAN_SET, BanEntry, BanGate, BanSet
 from hexgate.security.errors import AgentBannedError
 from hexgate.tracing import messages as tracing_messages_mod
 from hexgate.tracing import usage as tracing_usage_mod
@@ -427,6 +429,59 @@ def test_run_sync_refreshes_binding_per_call() -> None:
     proxy.run_sync("one", hexgate_context=_user())
 
     assert binding.refreshes == 1
+
+
+# A sequential regression leaves the first party waiting alone until this
+# breaks the barrier; a concurrent fetch meets it immediately.
+_BARRIER_TIMEOUT_S = 2.0
+
+
+class _BarrierBanSource:
+    def __init__(self, barrier: threading.Barrier) -> None:
+        self._barrier = barrier
+
+    def fetch(self) -> BanSet:
+        self._barrier.wait()
+        return EMPTY_BAN_SET
+
+
+class _BarrierBinding:
+    def __init__(self, barrier: threading.Barrier) -> None:
+        self._barrier = barrier
+
+    def refresh(self) -> None:
+        self._barrier.wait()
+
+    async def refresh_async(self) -> None:
+        await asyncio.to_thread(self._barrier.wait)
+
+
+def _concurrent_proxy(agent: _RecordingAgent) -> HexgatePydanticAgent:
+    barrier = threading.Barrier(2, timeout=_BARRIER_TIMEOUT_S)
+    return HexgatePydanticAgent(
+        agent=agent,  # type: ignore[arg-type]
+        api_key="k",
+        agent_name=agent.name,
+        binding=_BarrierBinding(barrier),  # type: ignore[arg-type]
+        ban_gate=BanGate(agent.name, _BarrierBanSource(barrier)),
+    )
+
+
+@pytest.mark.asyncio
+async def test_run_fetches_policy_and_bans_concurrently() -> None:
+    agent = _RecordingAgent()
+
+    await _concurrent_proxy(agent).run("hi", hexgate_context=_user())
+
+    assert len(agent.run_calls) == 1
+
+
+def test_run_sync_fetches_policy_and_bans_concurrently() -> None:
+    agent = _RecordingAgent()
+
+    _concurrent_proxy(agent).run_sync("hi", hexgate_context=_user())
+
+    assert len(agent.run_sync_calls) == 1
 
 
 @pytest.mark.asyncio

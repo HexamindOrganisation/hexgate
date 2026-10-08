@@ -6,20 +6,24 @@ with the CLI's input checks. On an opt-in gate the policy never declares, it
 follows the runtime where `test` would deny: an admission or handoff call is
 allowed, and an agent-as-tool or skill call is refused as a case error, since
 the runtime decides it under the tool's own name. A call on a declared gate is
-dry-run with the args that gate sends at runtime, so a case giving its own is
-refused.
+dry-run with the args that gate sends at runtime: the case gives only those
+the gate doesn't set itself (a skill read's `file_path` and `content_hash`),
+or ones it sets with the value it sets them to; any other is refused.
 """
 
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import get_args
 
 import yaml
 from pydantic import TypeAdapter, ValidationError
 
 from hexgate.runtime.context import ContextAttributeValue
+from hexgate.runtime.run_facts import DETACHED, KNOWN_RUN_PATHS
 from hexgate.security import (
     RESOLVED_POLICY_MARKER,
     DecisionOutcome,
@@ -43,14 +47,20 @@ from hexgate.security.constraints import ConstraintParseError
 from hexgate.security.decision import Verdict
 from hexgate.security.models import (
     AGENT_RUN_TOOL,
+    AgentVia,
     PolicyMode,
+    SkillVia,
     agent_target_key,
-    is_agent_reach_key,
-    is_agent_via_key,
-    is_skill_key,
+    gate_args,
+    skill_key,
 )
 from hexgate.security.modules import DEFAULT_AGENT
-from hexgate.security.naming import DEFAULT_AGENT_NAME, canonical_name
+from hexgate.security.naming import (
+    DEFAULT_AGENT_NAME,
+    canonical_name,
+    canonical_skill_name,
+)
+from hexgate.security.network import EGRESS_TOOL_ARGS
 from hexgate.security.testing import run_namespace
 
 # Everything the SDK raises for a policy it can't load, compile or link.
@@ -62,8 +72,9 @@ class Policy:
     """The policy the checks run against.
 
     `payload` is the document: `policy.yaml` as written, or a module tree's
-    resolved roles. `policy_set` is it loaded, ready to evaluate. `agent` is the
-    agent running the calls, which an agent gate sends as `args.agent`.
+    resolved roles. `policy_set` is it loaded, ready to evaluate. `agent` is
+    the agent running the calls: an agent gate sends it as `args.agent`, and
+    it is `run.agent` once the run has started.
     """
 
     payload: dict
@@ -87,7 +98,7 @@ RANK = {
 
 class CaseError(ValueError):
     """A case's call can't be dry-run: an undefined role, bad attributes or run facts,
-    or args on a declared agent-gate call."""
+    or args a declared gate sets itself to other values."""
 
 
 _ATTRIBUTES = TypeAdapter(dict[str, ContextAttributeValue])
@@ -101,94 +112,162 @@ def outcome(label: str) -> DecisionOutcome:
     return _BY_LABEL[label]
 
 
-def _undeclared_by_name(policy_set: PolicySet, tool: str) -> str | None:
-    """The gate `tool` belongs to, if the runtime would decide it by another name.
+@dataclass(frozen=True)
+class _Gate:
+    """A call on a gate: the key it's decided under, the args the gate sets
+    itself, whether the policy declares the gate, and where the runtime
+    decides the call.
 
-    An undeclared agent-as-tool or skill gate isn't checked under its key: the
-    call is decided under the tool's own name (guards/runner.py, `policy_key or
-    call.tool_name`), so this key can't predict it.
+    Undeclared, admission and handoff check nothing and the call goes through
+    (agent_gate.py, the runners' handoff seam). Agent-as-tool and skill calls
+    are decided under the tool's own name instead (guards/runner.py,
+    `policy_key or call.tool_name`), so the key can't predict them: `by_name`.
+    A top-level agent's admission is decided before its run starts
+    (`_check_admission`, then `run_scope`, in agents/factory.py and the
+    runners): not `in_run`.
     """
-    if is_agent_via_key(tool, "tool") and not policy_set.declares_tool_reach():
-        return "agent-as-tool reach"
-    if is_skill_key(tool) and not policy_set.declares_skills():
-        return "skills"
+
+    key: str
+    sent: dict
+    name: str
+    declared: bool
+    by_name: bool
+    in_run: bool = True
+
+
+# Per reach mode: the gate's name, whether a policy declares it, and `by_name`.
+_REACH: dict[str, tuple[str, Callable[[PolicySet], bool], bool]] = {
+    "tool": ("agent-as-tool reach", PolicySet.declares_tool_reach, True),
+    "handoff": ("reach", PolicySet.declares_reach, False),
+}
+
+
+def _gate(tool: str, agent: str, policy_set: PolicySet) -> _Gate | None:
+    """The gate `tool` is on, or None for a plain tool call.
+
+    Admission sets `{agent}`, reach `{agent, target, via}` with the target
+    trimmed as the key is (`AgentGate._decide`, `ReachGate._decide`), and a
+    skill gate `{skill, via}` with the name trimmed as `skill_key` does.
+    """
+    if tool == AGENT_RUN_TOOL:
+        declared = policy_set.declares_admission()
+        return _Gate(tool, {"agent": agent}, "admission", declared, False, in_run=False)
+    for via in get_args(AgentVia):
+        prefix = agent_target_key(via, "")
+        if tool.startswith(prefix):
+            name, declares, by_name = _REACH[via]
+            target = canonical_name(tool.removeprefix(prefix))
+            sent = {"agent": agent, "target": target, "via": via}
+            key = agent_target_key(via, target)
+            return _Gate(key, sent, name, declares(policy_set), by_name)
+    for via in get_args(SkillVia):
+        prefix = skill_key(via, "")
+        if tool.startswith(prefix):
+            name = canonical_skill_name(tool.removeprefix(prefix))
+            sent = {"skill": name, "via": via}
+            declared = policy_set.declares_skills()
+            return _Gate(skill_key(via, name), sent, "skills", declared, by_name=True)
     return None
 
 
-def _passes_unchecked(policy_set: PolicySet, tool: str) -> bool:
-    """Whether `tool` is on an admission or handoff gate the policy never declares.
+def _with_gate_args(gate: _Gate, args: dict) -> dict:
+    """`args` as the gate passes them: what it sets itself, plus the rest of
+    `gate_args` from the case (a skill read's `file_path`, the skill's
+    `content_hash`, which the adapter hashes from the skill), None where the
+    case leaves one out, as the adapters send it.
 
-    Those gates check nothing then, and the call goes through (agent_gate.py, the
-    runners' handoff seam); evaluating the key would deny it instead.
+    A case may spell an arg the gate sets only with the gate's value, as the
+    case loader (PR 2) fills it in; any other value would be silently replaced.
     """
-    if tool == AGENT_RUN_TOOL:
-        return not policy_set.declares_admission()
-    return is_agent_via_key(tool, "handoff") and not policy_set.declares_reach()
+    from_call = gate_args(gate.key) - gate.sent.keys()
+    if extra := sorted(
+        k
+        for k, v in args.items()
+        if k not in from_call and (k not in gate.sent or v != gate.sent[k])
+    ):
+        raise CaseError(
+            f"{gate.key}: the gate sends {gate.sent} itself, and the case "
+            f"gives only {sorted(from_call)}; drop {extra}"
+        )
+    return {**dict.fromkeys(from_call), **args, **gate.sent}
+
+
+def dump_json(value: object) -> str:
+    """`value` as JSON; an unquoted YAML date, kept as a date by the case
+    loader, becomes its string."""
+    return json.dumps(value, sort_keys=True, default=str)
 
 
 def _as_json(value: dict) -> dict:
-    """`value` as `policy test --args` / `--attributes` receive it, through JSON:
-    an unquoted YAML date becomes its string, so `>= "2026-01-01"` compares alike."""
-    return json.loads(json.dumps(value, default=str))
+    """`value` as `policy test --args` / `--attributes` receive it, through JSON,
+    so a date compares with `>= "2026-01-01"` as text."""
+    return json.loads(dump_json(value))
 
 
-def _gate_call(tool: str, agent: str | None) -> tuple[str, dict | None]:
-    """The key an agent gate decides under, and the args it sends; `(tool, None)`
-    for any other call.
+def _run(key: str, gate: _Gate | None, agent: str, facts: dict) -> dict:
+    """`run.*` as the runtime has it when it decides `key`: none outside a
+    run, else the agent's run, zeroed as `policy test --run-facts` builds it."""
+    # Egress is decided by a proxy above every run (docs/policy/constraints.mdx,
+    # "Where facts aren't collected").
+    if (gate and not gate.in_run) or key in EGRESS_TOOL_ARGS:
+        if facts:
+            raise CaseError(f"{key} is decided outside any run; drop run_facts")
+        return DETACHED.as_namespace(key)
+    # Checked here: a `tool` key would collide with `run_namespace`'s parameter.
+    if unknown := sorted(facts.keys() - KNOWN_RUN_PATHS):
+        raise CaseError(f"unknown run.* path(s) {unknown}")
+    if "agent" in facts:
+        raise CaseError("run.agent is the case's agent; drop run_facts.agent")
+    # The runtime counts a call under the tool's own name, never a gate key
+    # (guards/runner.py, `_record_run_execution(call.tool_name)`).
+    if gate and "calls_of_this_tool" in facts:
+        raise CaseError(f"{key} is never counted; drop run_facts.calls_of_this_tool")
+    return run_namespace("" if gate else key, agent=agent, **facts)
 
-    The gates ignore a call's own args: admission sends `{agent}` and reach sends
-    `{agent, target, via}`, with the target trimmed as the key is
-    (`AgentGate._decide`, `ReachGate._decide`). The agent name is sent as the
-    runtime sets it, `name or "default"`, untrimmed.
-    """
-    name = agent or DEFAULT_AGENT_NAME
-    if tool == AGENT_RUN_TOOL:
-        return tool, {"agent": name}
-    if is_agent_reach_key(tool):
-        kind, _, raw = tool.partition(":")
-        via, target = kind.removeprefix("agent."), canonical_name(raw)
-        gate_args = {"agent": name, "target": target, "via": via}
-        return agent_target_key(via, target), gate_args
-    return tool, None
+
+def check_run_facts(d: dict, agent: str) -> None:
+    """Raise `CaseError` for run facts `decide` refuses on `d` under any policy,
+    so the case loader rejects them before a run: whether a policy declares
+    the call's gate never changes the run `decide` builds."""
+    gate = _gate(d["tool"], agent, load_policy_set_from_dict({}))
+    try:
+        _run(gate.key if gate else d["tool"], gate, agent, _as_json(d["run_facts"]))
+    except ValueError as exc:  # CaseError is one
+        raise CaseError(str(exc)) from exc
 
 
 def decide(policy: Policy, role: str, d: dict) -> Verdict:
     """Dry-run one call, with the same inputs as `hexgate policy test`, except that
-    a call on an agent gate carries the args that gate sends at runtime.
+    a call on a gate carries the args that gate sends at runtime.
 
     Raises `CaseError` where the CLI would refuse the call, or where the eval
-    can't judge it (args on a declared agent-gate call). An undefined role is
-    one, rather than the `default` fallback: a case naming a role the policy
-    lacks fails instead of passing by luck.
+    can't judge it (args a declared gate sets itself to other values). An
+    undefined role is one, rather than the `default` fallback: a case naming a
+    role the policy lacks fails instead of passing by luck.
     """
     if role not in policy.policy_set:
         raise CaseError(f"role {role!r} not in policy ({policy.policy_set.roles})")
-    key, gate_args = _gate_call(d["tool"], policy.agent)
-    try:
+    # The name the runtime gives the agent, untrimmed.
+    agent = policy.agent or DEFAULT_AGENT_NAME
+    gate = _gate(d["tool"], agent, policy.policy_set)
+    key = gate.key if gate else d["tool"]
+    try:  # a pydantic ValidationError is a ValueError
         args = _as_json(d.get("args", {}))
         attributes = _ATTRIBUTES.validate_python(_as_json(d.get("attributes", {})))
-        # Over a zeroed run, so an unset `run.*` path reads 0, not missing; keyed
-        # by the call's real key, so `run.tools_used` names what is decided.
-        run = run_namespace(key, **_as_json(d.get("run_facts", {})))
-    except (ValidationError, ValueError) as exc:
+        run = _run(key, gate, agent, _as_json(d.get("run_facts", {})))
+    except ValueError as exc:
         raise CaseError(str(exc)) from exc
-    if gate := _undeclared_by_name(policy.policy_set, key):
-        raise CaseError(
-            f"{key}: {gate} isn't declared, so the runtime decides this call "
-            "under the tool's own name; dry-run that tool instead"
-        )
-    if _passes_unchecked(policy.policy_set, key):
+    if gate and not gate.declared:
+        if gate.by_name:
+            raise CaseError(
+                f"{key}: {gate.name} isn't declared, so the runtime decides this "
+                "call under the tool's own name; dry-run that tool instead"
+            )
         return Verdict(DecisionOutcome.ALLOW, reason="gate not declared")
-    if gate_args is not None and args:  # inputs the dry-run couldn't use
-        raise CaseError(f"{key}: the gate sends its own args; drop {sorted(args)}")
-    if gate_args is not None:
-        args = gate_args
+    if gate:
+        args = _with_gate_args(gate, args)
     return policy.policy_set.evaluate(
-        role=role,
-        tool=key,
-        args=args,
-        attributes=attributes,
-        run=run,
+        role=role, tool=key, args=args, attributes=attributes, run=run
     )
 
 
@@ -207,9 +286,6 @@ def _load(payload: dict) -> tuple[PolicySet | None, list[str]]:
     """What `hexgate policy validate` runs: load, compile, then `analyze_policy` (R-POL-003)."""
     try:
         policy_set = load_policy_set_from_dict(payload)
-    except POLICY_ERRORS as exc:
-        return None, [str(exc)]
-    try:
         # Compile too, so a policy the build would reject doesn't pass.
         compile_to_rego(payload)
     except POLICY_ERRORS as exc:
@@ -228,8 +304,8 @@ def _module_payload(ws: Path, agent: str) -> tuple[dict | None, list[str]]:
         return None, [str(exc)]
     if not boundaries and not capabilities:
         return None, ["no modules under policies/boundaries/ or policies/capabilities/"]
-    # Lints the modules (dead or erased grants), not the roles they compose
-    # into: `_load` lints those on the resolved result.
+    # Lints the modules and every column's roles, as `policy check` does; `_load`
+    # then lints the case agent's resolved roles as `validate` would.
     problems = _lint_failures(check_project(boundaries, capabilities, roles))
     if problems:
         return None, problems
@@ -244,8 +320,9 @@ def _module_payload(ws: Path, agent: str) -> tuple[dict | None, list[str]]:
 def _yaml_payload(ws: Path) -> tuple[dict | None, list[str]]:
     """`policy.yaml` as `hexgate policy validate` reads it: an empty file is `{}`."""
     try:
-        payload = yaml.safe_load((ws / "policy.yaml").read_text()) or {}
-    except (OSError, yaml.YAMLError) as exc:
+        text = (ws / "policy.yaml").read_text(encoding="utf-8")
+        payload = yaml.safe_load(text) or {}
+    except (OSError, UnicodeDecodeError, yaml.YAMLError) as exc:
         return None, [str(exc)]
     if not isinstance(payload, dict):
         return None, ["policy.yaml is not a YAML mapping"]
@@ -253,13 +330,13 @@ def _yaml_payload(ws: Path) -> tuple[dict | None, list[str]]:
 
 
 def effective_policy(
-    ws: Path, agent: str | None = None
+    ws: Path, agent: str | None = None, modules: bool = False
 ) -> tuple[Policy | None, list[str]]:
-    """The policy in `ws`, or why it doesn't validate (`hexgate policy validate`,
-    or `check` + `resolve` on a module tree for `agent`'s roles.yaml column)."""
-    is_modules = (ws / "policies").is_dir()
+    """The policy in `ws`, or why it doesn't validate: `hexgate policy validate`
+    on `policy.yaml`, or with `modules`, `check` + `resolve` on the module tree
+    for `agent`'s roles.yaml column."""
     column = agent or DEFAULT_AGENT
-    payload, problems = _module_payload(ws, column) if is_modules else _yaml_payload(ws)
+    payload, problems = _module_payload(ws, column) if modules else _yaml_payload(ws)
     if payload is None:
         return None, problems
     policy_set, problems = _load(payload)

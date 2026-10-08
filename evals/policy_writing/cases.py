@@ -10,7 +10,6 @@ answers (`solution/` or `wrong_answer/`) into a workspace in place of an agent.
 from __future__ import annotations
 
 import fnmatch
-import json
 import shutil
 from pathlib import Path
 from typing import Annotated, Any, Literal
@@ -27,7 +26,7 @@ from pydantic import (
 
 from evals.policy_writing.calls import bad_values, complete, load_known, unknown_names
 from evals.policy_writing.checks import snapshot
-from evals.policy_writing.policy import CaseError
+from evals.policy_writing.policy import CaseError, check_run_facts, dump_json
 
 HERE = Path(__file__).resolve().parent
 
@@ -128,15 +127,14 @@ def starting_files(case: dict) -> dict[str, str]:
 def _call(role: str, d: dict) -> str:
     # The whole call, so one intended change replaces only the preserved check
     # for that call, not every preserved check on the same tool.
-    return json.dumps(
+    return dump_json(
         [
             role,
             d["tool"],
             d.get("args", {}),
             d.get("attributes", {}),
             d.get("run_facts", {}),
-        ],
-        sort_keys=True,
+        ]
     )
 
 
@@ -185,6 +183,11 @@ def _complete_calls(path: Path, agent: str, calls: list[dict]) -> None:
         bad = complete(call, agent)
         if bad:
             raise CaseError(f"{path}: {call['tool']}: not what {agent} sends: {bad}")
+        if call.get("run_facts"):
+            try:
+                check_run_facts(call, agent)
+            except CaseError as exc:
+                raise CaseError(f"{path}: {call['tool']}: {exc}") from exc
 
 
 def _check_calls(path: Path, case: dict) -> None:

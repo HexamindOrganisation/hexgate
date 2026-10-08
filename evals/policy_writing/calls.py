@@ -139,8 +139,10 @@ class _Sent:
 
 
 def _agent_gate(tool: str, args: dict, agent: str) -> _Sent:
-    # Admission and reach send their own args (agent, target, via), and
-    # `policy.decide` fills them in itself and refuses a call that spells any.
+    # Admission and reach send their own args (agent, target, via), which
+    # `policy.decide` fills in itself; it accepts one a case spells only with
+    # the gate's value. Spelling one adds nothing, and a wrong value would fail
+    # the check rather than the load, so the loader refuses them all.
     if not args:
         return _Sent()
     return _Sent(problems=[f"the gate sends its own args; drop {sorted(args)}"])
