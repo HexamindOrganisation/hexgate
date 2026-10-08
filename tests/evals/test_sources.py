@@ -1,4 +1,4 @@
-"""The MCP stand-ins read (`sources.py`): agents.json and audit.json."""
+"""The name sources read (`sources.py`): agents.json and audit.json."""
 
 from __future__ import annotations
 

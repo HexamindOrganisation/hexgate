@@ -1,4 +1,4 @@
-"""The starting project's stand-ins for the Hexgate MCP, read: `agents.json`
+"""The starting project's name sources, read: `agents.json`
 (manifests) and `audit.json` (audit rows, the only source of caller-attribute
 names)."""
 
@@ -44,8 +44,7 @@ def _views(ws: Path) -> list[dict]:
 def load_attributes(ws: Path, agent: str) -> set[str]:
     """The caller attributes (`ctx.*`) `agent` is known to send.
 
-    `audit.json` stands in for the Hexgate MCP's `audit_decisions`:
-    `AuditDecisionRow`s, as a list or the endpoint's page (`{rows, ...}`).
+    `audit.json` holds `AuditDecisionRow`s, as a list or the endpoint's page (`{rows, ...}`).
     Attributes are set per request and are in no manifest, so the known ones are
     the `attributes` keys of `agent`'s rows. No `audit.json` means none."""
     audit = ws / AUDIT_JSON
@@ -73,8 +72,8 @@ def load_project_agents(ws: Path) -> ProjectAgents:
     """Every agent in agents.json, and the manifests of those registered with one,
     as the SDK's `AgentManifest`.
 
-    `agents.json` stands in for the Hexgate MCP's `agents_list`
-    (`GET /projects/{id}/agents/manifest`, a list of `AgentManifestView`)."""
+    `agents.json` is what `GET /projects/{id}/agents/manifest` returns, a list
+    of `AgentManifestView`."""
     views = _views(ws)
     return ProjectAgents(
         registered=frozenset(v["name"] for v in views),
@@ -90,7 +89,7 @@ def _sdk_manifest(manifest: dict) -> AgentManifest:
     """The endpoint's manifest as the SDK's model, whose tool `description` is
     required: the policy checks never read it, so a null becomes empty. Null
     `skills` become none: the SDK reads null as unknown (a listing that may have
-    failed), but the MCP shows this agent no skills."""
+    failed), but here it means the agent lists none."""
     tools = [
         {**t, "description": t.get("description") or ""} for t in manifest["tools"]
     ]

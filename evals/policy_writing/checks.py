@@ -3,8 +3,8 @@
 No eval framework is imported here: the framework's scorer and the dataset tests
 both call `score(case, workspace, before, answer)` and get back a list of `Check`s.
 One function per kind of check: the policy validates without lint warnings
-(`policy.py`), dry-run decisions and role supersets hold, only names the Hexgate
-MCP would show are used (the SDK's drift lints, and `names.py` for caller
+(`policy.py`), dry-run decisions and role supersets hold, only names in the
+project's agents.json and audit.json are used (the SDK's drift lints, and `names.py` for caller
 attributes), files change (or not)
 as the case says, and the final answer mentions what the case requires.
 """
@@ -156,7 +156,7 @@ def _untagged(lint) -> str:
 def name_checks(
     policy: Policy, ws: Path, before: dict[str, str], after: dict[str, str]
 ) -> list[Check]:
-    """Only names the MCP would show: the SDK's drift lints (`policy.drift`) for
+    """Only names in agents.json and audit.json: the SDK's drift lints (`policy.drift`) for
     tools, skills, guards and arguments (a module tree's against every agent's
     manifest), and `policy.agent`'s caller attributes against audit.json, on
     its resolved roles only."""

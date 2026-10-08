@@ -487,7 +487,7 @@ def test_when_no_agent_is_given_then_no_manifest_and_no_drift(tmp_path) -> None:
 def test_when_a_star_cell_has_a_typo_then_drift_holds_it(
     tmp_path, without_manifest
 ) -> None:
-    # An agent the MCP shows no manifest for, or a sub-agent with none, adds no
+    # An agent with no manifest, or a sub-agent with none, adds no
     # names: the `"*"` cell is still checked against the rest.
     ws = make_modules_workspace(tmp_path)
     views = json.loads((ws / "agents.json").read_text())
@@ -509,7 +509,7 @@ def test_when_a_star_cell_has_a_typo_then_drift_holds_it(
 def test_when_the_manifest_lists_null_skills_then_an_invented_skill_is_drift(
     tmp_path,
 ) -> None:
-    # The MCP shows the agent no skills: none is known.
+    # The agent lists no skills: none is known.
     ws = make_workspace(tmp_path, "version: 1\nskills:\n  pdf: { mode: allow }\n")
     views = json.loads((ws / "agents.json").read_text())
     views[0]["manifest"]["skills"] = None
