@@ -3,6 +3,7 @@ contract. Fixtures mirror tests/features/bans/test_bans.py."""
 
 from __future__ import annotations
 
+import threading
 from datetime import UTC, datetime
 from unittest.mock import MagicMock
 
@@ -20,6 +21,7 @@ from hexgate_api.core import keystore as keystore_mod
 from hexgate_api.core.ids import new_id
 from hexgate_api.deps.clickhouse import require_clickhouse
 from hexgate_api.deps.tokens import require_project
+from hexgate_api.features.usage import router as usage_router
 from hexgate_api.features.usage.service import UsageMemo, get_usage_memo
 from hexgate_api.main import app
 from hexgate_api.models import Agent, Project
@@ -30,6 +32,9 @@ _OTHER_PROJECT = "proj_other"
 _AGENT = "billing"
 _ONLY_ELSEWHERE = "elsewhere"
 _AS_OF = datetime(2026, 10, 7, 12, 0, tzinfo=UTC)
+_SHORT_TIMEOUT = 0.05
+# Bounded, so a worker thread the timeout abandoned can't hang loop shutdown.
+_STALL_SECONDS = 0.5
 
 
 async def _add_agent(factory, project_id: str, name: str) -> None:
@@ -159,6 +164,27 @@ def test_a_clickhouse_failure_is_503_and_not_memoized(
 
     first = _usage(client, "invocations_1h")
     second = _usage(client, "invocations_1h")
+
+    assert first.status_code == second.status_code == 503
+    assert first.headers["Retry-After"] == "5"
+    assert fake_clickhouse.query.call_count == 2
+
+
+def test_a_read_slower_than_the_timeout_is_503_and_not_memoized(
+    client: TestClient, fake_clickhouse: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(usage_router, "USAGE_READ_TIMEOUT_SECONDS", _SHORT_TIMEOUT)
+    released = threading.Event()
+
+    def stalled_query(*_args: object, **_kwargs: object) -> None:
+        released.wait(_STALL_SECONDS)
+
+    fake_clickhouse.query.side_effect = stalled_query
+    try:
+        first = _usage(client, "invocations_1h")
+        second = _usage(client, "invocations_1h")
+    finally:
+        released.set()
 
     assert first.status_code == second.status_code == 503
     assert first.headers["Retry-After"] == "5"

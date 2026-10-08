@@ -18,6 +18,7 @@ from hexgate_api.features.agents.service import get_agent
 from hexgate_api.features.usage.paths import InvalidUsagePaths, parse_usage_paths
 from hexgate_api.features.usage.service import (
     USAGE_MEMO_TTL_SECONDS,
+    USAGE_READ_TIMEOUT_SECONDS,
     UsageMemo,
     get_usage_memo,
     read_usage,
@@ -65,11 +66,16 @@ async def api_get_agent_usage(
     try:
         readout = await memo.get_or_load(
             (project_id, name, frozenset(specs)),
-            lambda: asyncio.to_thread(
-                read_usage, clickhouse_client, project_id, name, specs
+            # Inside the loader, so a stalled read fails the shared task (and isn't
+            # memoized) rather than releasing one caller.
+            lambda: asyncio.wait_for(
+                asyncio.to_thread(
+                    read_usage, clickhouse_client, project_id, name, specs
+                ),
+                timeout=USAGE_READ_TIMEOUT_SECONDS,
             ),
         )
-    except ClickHouseError as exc:
+    except (ClickHouseError, TimeoutError) as exc:
         _log.warning("usage read failed for agent %r: %s", name, exc)
         raise _audit_unavailable() from exc
 

@@ -41,8 +41,11 @@ _READ_COLUMNS: Final = [
     "input_tokens",
     "output_tokens",
 ]
-# The SDK gives up after its 2 s refresh_timeout; don't run longer than that.
-QUERY_SETTINGS: Final = {"max_execution_time": 2}
+# The SDK gives up after its 2 s refresh_timeout; don't answer later than that.
+USAGE_READ_TIMEOUT_SECONDS: Final = 2
+# Server-side bound only. The route adds the matching client-side wait; the worker
+# thread can still outlive it, up to the shared client's send_receive_timeout.
+QUERY_SETTINGS: Final = {"max_execution_time": USAGE_READ_TIMEOUT_SECONDS}
 USAGE_MEMO_TTL_SECONDS: Final = 1.0
 USAGE_MEMO_MAX_ENTRIES: Final = 10_000
 
