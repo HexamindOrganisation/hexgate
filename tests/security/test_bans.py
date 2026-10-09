@@ -6,6 +6,7 @@ BanGate, resolve_ban_gate gates, and the emitter. HexgateClient is mocked.
 
 from __future__ import annotations
 
+import dataclasses
 from collections.abc import Iterator
 from types import SimpleNamespace
 from typing import Any
@@ -419,6 +420,28 @@ def test_none_sink_is_noop_but_still_raises() -> None:
     gate = BanGate("bot", _StaticSource(bans), None)
     with pytest.raises(AgentBannedError):
         gate.check(_user())
+
+
+def test_fetch_then_enforce_equals_check() -> None:
+    """The split the run-boundary seam relies on is behaviour-preserving."""
+    bans = ban_set_from_payload([_agent_entry("bot", ban_id="b1")])
+    via_check, via_split = _RecordingSink(), _RecordingSink()
+    checked = BanGate("bot", _StaticSource(bans), via_check)  # type: ignore[arg-type]
+    split = BanGate("bot", _StaticSource(bans), via_split)  # type: ignore[arg-type]
+
+    with pytest.raises(AgentBannedError) as from_check:
+        checked.check(_user())
+    with pytest.raises(AgentBannedError) as from_split:
+        split.enforce(split.fetch(), _user())
+
+    assert (from_split.value.code, from_split.value.ban_type) == (
+        from_check.value.code,
+        from_check.value.ban_type,
+    )
+    [expected], [actual] = via_check.events, via_split.events
+    assert dataclasses.replace(actual, event_id=expected.event_id) == (
+        dataclasses.replace(expected, occurred_at=actual.occurred_at)
+    )
 
 
 async def test_check_async_emits_a_ban_span_through_a_real_sender() -> None:

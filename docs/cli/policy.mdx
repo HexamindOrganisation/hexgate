@@ -96,6 +96,12 @@ hexgate policy validate policy.yaml --max-severity warning   # non-zero on eithe
 `validate` also fails when roles set different `guards:` settings, since the
 runtime builds one guard pipeline per agent.
 
+It flags a constraint path no call ever sets (`unknown-root`): one that doesn't
+start with `args.`, `ctx.` or `run.`, such as `user.department == "finance"`, or
+one that dots into `role` or `tool`, which are plain strings. The path is always
+missing, so the comparison is always false: a `warning`, or an `error` under an
+odd number of `not`, where it is always true and the fence never fires.
+
 Pass the agent's manifest to check the policy against its code too. At the
 default `--max-severity error`, these fail validate:
 
@@ -104,9 +110,17 @@ default `--max-severity error`, these fail validate:
 - a rule on a tool or argument the agent doesn't have that leaves the real tool
   less restricted than intended (`unknown-tool` / `unknown-arg` at `error`).
 
+An `admission`, `agents` or `skills` rule's `args.*` are checked against what
+its gate passes: `agent` for admission; `agent`, `target` and `via` for reach;
+`skill`, `via`, `file_path` and `content_hash` for a skill, plus `script_args`,
+`short_options` and `positional_args` for a script.
+
 The rest of the drift is printed but passes: a grant that never fires or an
 argument typo that fails closed is a `warning`, and a deny on a missing tool is
-`info` when the role's default already denies it. Add `--max-severity warning` to fail on the warnings too:
+`info` when the role's default already denies it. A `skills:` rule on a skill
+the agent doesn't declare (`unknown-skill`) is a `warning`, or `info` for a deny:
+an unlisted skill is denied either way. It is only checked when the manifest
+lists the agent's skills; a manifest with no `skills` field skips it. Add `--max-severity warning` to fail on the warnings too:
 
 ```bash
 hexgate policy validate policy.yaml --manifest manifest.json
