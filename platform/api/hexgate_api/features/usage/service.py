@@ -125,7 +125,9 @@ class UsageMemo:
     """Per-worker memo of usage reads; concurrent misses on one key share one query.
 
     The TTL runs from when a load completes, so a read slower than the TTL is still
-    shared rather than started again. Event-loop only: no lock, because every access happens on the loop thread."""
+    shared rather than started again. A full memo evicts only settled entries: with
+    every slot in flight it overflows, bounded by the loads in flight. Event-loop
+    only: no lock, because every access happens on the loop thread."""
 
     def __init__(
         self, ttl_seconds: float, max_entries: int, clock: Callable[[], float]
@@ -174,7 +176,19 @@ class UsageMemo:
         for key in [k for k, (expiry, _) in self._entries.items() if expiry <= now]:
             del self._entries[key]
         if len(self._entries) >= self._max_entries:
-            del self._entries[next(iter(self._entries))]
+            self._evict_oldest_settled()
+
+    def _evict_oldest_settled(self) -> None:
+        oldest = next(
+            (
+                k
+                for k, (expiry, _) in self._entries.items()
+                if expiry != _PENDING_EXPIRY
+            ),
+            None,
+        )
+        if oldest is not None:
+            del self._entries[oldest]
 
 
 @lru_cache
