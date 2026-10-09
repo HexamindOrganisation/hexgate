@@ -19,6 +19,7 @@ from hexgate.adapters.langchain.tools import GuardedTool
 from hexgate.agents import factory
 from hexgate.cloud.client import HexgateError
 from hexgate.security import AgentPolicy, BaseToolPolicy, PolicySet
+from hexgate.security import enforcer as enforcer_mod
 from hexgate.security.policy_set import DEFAULT_ROLE_NAME
 from hexgate.security.source import PlatformPolicySource
 
@@ -77,6 +78,8 @@ def _hermetic(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("HEXGATE_LOCAL_POLICY", raising=False)
     monkeypatch.delenv("HEXGATE_BIND_AGENTS", raising=False)
     monkeypatch.delenv("HEXGATE_LOCAL_MODE", raising=False)
+    # Usage sources are not under test; one would be built on the scripted client.
+    monkeypatch.setattr(enforcer_mod, "resolve_usage_source", lambda **_: None)
 
 
 def _patch_platform(monkeypatch: pytest.MonkeyPatch, client: _FakeClient) -> None:

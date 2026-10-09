@@ -407,6 +407,8 @@ class AuditEvent:
             # Spread so the wire names live in one place.
             **d.run.as_span_attributes(),
         }
+        if d.usage_state is not None:
+            attrs[semconv.USAGE_STATE] = d.usage_state
         if d.arguments is not None:
             attrs[semconv.ARGUMENTS] = json.dumps(
                 _truncate_json(

@@ -32,6 +32,7 @@ from hexgate.adapters._common import (
     aprepare_run,
     langfuse_propagate_kwargs,
     prepare_run,
+    usage_refresh_of,
 )
 from hexgate.adapters.openai.tools import _CAN_DETECT_AGENT_TOOLS
 from hexgate.adapters.openai.usage import HexgateUsageHooks
@@ -340,7 +341,12 @@ class HexgateRunner:
         binding = self._binding_for(agent)
         ban_gate = self._ban_gate_for(agent)
         # per-run policy pull; 304 when unchanged
-        await aprepare_run(binding.refresh_async(), ban_gate, hexgate_context)
+        await aprepare_run(
+            binding.refresh_async(),
+            ban_gate,
+            hexgate_context,
+            usage=usage_refresh_of(binding),
+        )
         wrapped_agent = wrap_openai_agent(
             agent,
             enforcer=binding.enforcer,
@@ -379,7 +385,9 @@ class HexgateRunner:
         binding = self._binding_for(agent)
         ban_gate = self._ban_gate_for(agent)
         # per-run policy pull; 304 when unchanged
-        prepare_run(binding.refresh, ban_gate, hexgate_context)
+        prepare_run(
+            binding.refresh, ban_gate, hexgate_context, usage=usage_refresh_of(binding)
+        )
         wrapped_agent = wrap_openai_agent(
             agent,
             enforcer=binding.enforcer,
@@ -431,7 +439,9 @@ class HexgateRunner:
         ban_gate = self._ban_gate_for(agent)
         # The refresh must precede the wrap + setup, and the ban check must run
         # before run_streamed spawns its task, so a banned run yields nothing.
-        prepare_run(binding.refresh, ban_gate, hexgate_context)
+        prepare_run(
+            binding.refresh, ban_gate, hexgate_context, usage=usage_refresh_of(binding)
+        )
         return self._launch_streamed(
             agent,
             input,
@@ -467,7 +477,12 @@ class HexgateRunner:
         binding = self._binding_for(agent)
         ban_gate = self._ban_gate_for(agent)
         # per-run policy pull; 304 when unchanged
-        await aprepare_run(binding.refresh_async(), ban_gate, hexgate_context)
+        await aprepare_run(
+            binding.refresh_async(),
+            ban_gate,
+            hexgate_context,
+            usage=usage_refresh_of(binding),
+        )
         # Admission here, async — not the sync check in _launch_streamed — so an
         # async approval_handler is awaited rather than fail-closed (hexgate serve
         # drives arun_streamed with an async RelayApprovalHandler). This scope is

@@ -20,11 +20,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from hexgate.audit import AuditEvent, configure
-from hexgate.runtime.agent_usage import (
-    AGENT_USAGE_LEDGERS,
-    UsageLedgers,
-    ledger_namespace,
-)
+from hexgate.runtime.agent_usage import AGENT_USAGE_LEDGERS, UsageLedgers
 from hexgate.runtime.context import get_current_context
 from hexgate.runtime.roles import resolve_role_set
 from hexgate.runtime.run_facts import get_run_facts
@@ -33,6 +29,13 @@ from hexgate.security.decision import (
     PolicyEngine,
     RunAttribution,
     combine_role_verdicts,
+)
+from hexgate.security.usage_source import (
+    OnUnavailable,
+    PlatformUsageSource,
+    UsageReading,
+    local_reading,
+    resolve_usage_source,
 )
 from hexgate.tracing._senders import AuditSender
 
@@ -100,13 +103,40 @@ def _usage_paths_of(engine: PolicyEngine) -> frozenset[str]:
     return paths() if paths is not None else frozenset()
 
 
+# The engine method 6b adds; until then every engine reads as allow (G3).
+_ON_UNAVAILABLE_METHOD = "usage_on_unavailable"
+
+
+def _on_unavailable_of(engine: PolicyEngine) -> OnUnavailable:
+    read = getattr(engine, _ON_UNAVAILABLE_METHOD, None)
+    return read() if read is not None else OnUnavailable.ALLOW
+
+
 @dataclass(frozen=True, slots=True)
 class _BoundPolicy:
-    """An engine and its usage paths, published by one attribute write so a racing
-    decision never sees a new path without the ledger that answers it."""
+    """An engine, its usage paths and its fail mode, published by one attribute
+    write so a racing decision never sees a new path without the ledger that
+    answers it."""
 
     engine: PolicyEngine
     usage_paths: frozenset[str]
+    on_unavailable: OnUnavailable
+
+
+@dataclass(frozen=True, slots=True)
+class UsageRefresh:
+    """One boundary's usage refresh: the source, the agent and the paths of the
+    policy loaded when the run started (02 §5.5 Rule 2)."""
+
+    source: PlatformUsageSource
+    agent_name: str
+    paths: frozenset[str]
+
+    def run(self) -> None:
+        self.source.refresh(self.agent_name, self.paths)
+
+    async def arun(self) -> None:
+        await self.source.refresh_async(self.agent_name, self.paths)
 
 
 class PolicyEnforcer:
@@ -119,8 +149,10 @@ class PolicyEnforcer:
     the Rego enforcement path). The enforcer only knows the protocol, so
     it never branches on which engine ran.
 
-    ``ledgers`` supplies the ``agent_usage.*`` namespace. Binding a policy that
-    references a usage path enables it, on construction and on every swap.
+    ``ledgers`` supplies the local term of the ``agent_usage.*`` namespace.
+    Binding a policy that references a usage path enables it, on construction and
+    on every swap. ``usage_source`` adds the platform term; ``None`` reads the
+    ledger alone.
     """
 
     def __init__(
@@ -131,8 +163,10 @@ class PolicyEnforcer:
         audit_sender: AuditSender | None = None,
         decision_observer: DecisionObserver | None = None,
         ledgers: UsageLedgers = AGENT_USAGE_LEDGERS,
+        usage_source: PlatformUsageSource | None = None,
     ) -> None:
         self._ledgers = ledgers
+        self._usage_source = usage_source
         self.policy = policy
         self.agent_name = agent_name
         # Injected per-agent so each agent emits with its own api_key's sender.
@@ -154,7 +188,15 @@ class PolicyEnforcer:
         if usage_paths:
             # Before publishing: the first decision on the new policy must find a ledger.
             self._ledgers.enable()
-        self._bound = _BoundPolicy(engine, usage_paths)
+        self._bound = _BoundPolicy(engine, usage_paths, _on_unavailable_of(engine))
+
+    def usage_refresh(self) -> UsageRefresh | None:
+        """The boundary's usage refresh, or None when there is nothing to fetch, so
+        an agent without usage paths pays nothing at run start."""
+        paths = self._bound.usage_paths
+        if self._usage_source is None or not paths:
+            return None
+        return UsageRefresh(self._usage_source, self.agent_name, paths)
 
     def decide(self, tool_name: str, arguments: Mapping[str, Any]) -> Decision:
         """Fold one verdict per role from the active context into a
@@ -189,7 +231,8 @@ class PolicyEnforcer:
         # Feeds the ``agent_usage.*`` namespace. Read once per decision, like run.*,
         # so roles can't disagree about the agent's usage. None when the policy
         # references none.
-        usage_snapshot = self._usage_namespace(bound.usage_paths, facts, run_snapshot)
+        reading = self._usage_reading(bound, facts, run_snapshot)
+        usage_snapshot = reading.namespace if reading is not None else None
 
         verdict, deciding_role = combine_role_verdicts(
             roles,
@@ -213,6 +256,7 @@ class PolicyEnforcer:
             # The same snapshot the verdict saw, never a second read: the
             # record and the decision must not disagree about the run.
             run=RunAttribution.from_namespace(run_snapshot),
+            usage_state=reading.state.value if reading is not None else None,
         )
 
         self.record(
@@ -224,12 +268,12 @@ class PolicyEnforcer:
         )
         return decision
 
-    def _usage_namespace(
-        self, paths: frozenset[str], facts: RunFacts, run: Mapping[str, Any]
-    ) -> dict[str, int] | None:
+    def _usage_reading(
+        self, bound: _BoundPolicy, facts: RunFacts, run: Mapping[str, Any]
+    ) -> UsageReading | None:
         # By agent name, not RunFacts: admission is decided before run_scope opens,
         # while RunFacts is still DETACHED and carries no ledger.
-        if not paths:
+        if not bound.usage_paths:
             return None
         ledger = self._ledgers.ledger_for(self.agent_name)
         if ledger is None:
@@ -238,10 +282,17 @@ class PolicyEnforcer:
         # not DETACHED, not one opened before the ledgers were enabled), so that
         # invocation is left out of invocations_*, as it was at admission.
         in_own_run = facts.ledger is ledger
-        return ledger_namespace(
+        current_run_age = run[_RUN_ELAPSED] if in_own_run else None
+        if self._usage_source is None:
+            return local_reading(
+                ledger, bound.usage_paths, current_run_age=current_run_age
+            )
+        return self._usage_source.read(
+            self.agent_name,
+            bound.usage_paths,
             ledger,
-            paths,
-            current_run_age=run[_RUN_ELAPSED] if in_own_run else None,
+            on_unavailable=bound.on_unavailable,
+            current_run_age=current_run_age,
         )
 
     def record(
@@ -275,18 +326,20 @@ def build_enforcer(
     api_key: str | None = None,
     decision_observer: DecisionObserver | None = None,
 ) -> PolicyEnforcer:
-    """Compose a governed enforcer — engine + audit sender from ``api_key``.
+    """Compose a governed enforcer — engine + audit sender + usage source from
+    ``api_key``.
 
-    The one place that pairs an engine with its audit sink, so the six
-    surfaces (``HexgateAgent.enforce_policy``, the four adapters, the
-    OpenAI runner) don't each repeat the ``audit.configure`` wiring.
-    ``api_key=None`` falls back to ``HEXGATE_API_KEY`` (audit stays inert when
-    neither resolves). ``decision_observer`` threads the local-process
-    decision hook (see :class:`PolicyEnforcer`); ``None`` is silent.
+    The one place that pairs an engine with its audit sink and usage source, so
+    the six surfaces (``HexgateAgent.enforce_policy``, the four adapters, the
+    OpenAI runner) don't each repeat the wiring. ``api_key=None`` falls back to
+    ``HEXGATE_API_KEY`` (audit stays inert and usage stays local when neither
+    resolves). ``decision_observer`` threads the local-process decision hook
+    (see :class:`PolicyEnforcer`); ``None`` is silent.
     """
     return PolicyEnforcer(
         engine,
         agent_name=agent_name,
         audit_sender=configure(api_key),
         decision_observer=decision_observer,
+        usage_source=resolve_usage_source(api_key=api_key),
     )
