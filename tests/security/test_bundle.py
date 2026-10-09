@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import shutil
 from pathlib import Path
 
@@ -436,6 +437,82 @@ def test_build_signed_bundle_raises_on_bad_constraint() -> None:
     )
     with pytest.raises(Exception):  # PolicySetError, surfaced to the caller
         build_signed_bundle(bad, compile_wasm=False)
+
+
+# ---------------------------------------------------------------------------
+# agent_usage — the referenced paths the enforcer enables the ledgers for
+# ---------------------------------------------------------------------------
+
+_USAGE_YAML = (
+    "version: 1\nroles:\n  default:\n"
+    "    constraints: ['agent_usage.tool_calls_5m < 10']\n"
+    "    admission:\n      mode: allow\n"
+    "      constraints: ['agent_usage.invocations_1h < 100']\n"
+)
+
+
+def _manifest_only_bundle(manifest: dict) -> PolicyBundle:
+    manifest_bytes = json.dumps(manifest, sort_keys=True).encode("utf-8")
+    return PolicyBundle.from_parts(wasm_bytes=b"\x00asm", manifest_bytes=manifest_bytes)
+
+
+def test_build_signed_bundle_records_the_usage_paths_sorted() -> None:
+    sb = build_signed_bundle(_USAGE_YAML, compile_wasm=False)
+
+    assert sb.manifest["agent_usage"] == ["invocations_1h", "tool_calls_5m"]
+    assert _manifest_only_bundle(sb.manifest).agent_usage_paths() == {
+        "invocations_1h",
+        "tool_calls_5m",
+    }
+
+
+def test_a_usage_free_manifest_has_no_agent_usage_key() -> None:
+    """Omitted, not empty: every existing bundle's manifest bytes, and so its
+    signature, must not move."""
+    sb = build_signed_bundle(_DEMO_YAML, compile_wasm=False)
+
+    assert "agent_usage" not in sb.manifest
+    assert b"agent_usage" not in sb.manifest_bytes
+
+
+def test_a_manifest_without_the_key_references_no_path() -> None:
+    assert _manifest_only_bundle({"version": 1}).agent_usage_paths() == frozenset()
+
+
+def test_an_unknown_manifest_path_is_dropped_with_a_warning(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A newer SDK may list a path this one lacks. Bound as-is it would raise
+    KeyError on every decision; dropped, it reads missing and its constraint denies."""
+    bundle = _manifest_only_bundle(
+        {"version": 1, "agent_usage": ["invocations_1h", "tool_calls_2h"]}
+    )
+
+    with caplog.at_level(logging.WARNING, logger="hexgate.security.bundle"):
+        paths = bundle.agent_usage_paths()
+
+    assert paths == {"invocations_1h"}
+    assert "tool_calls_2h" in caplog.text
+
+
+@needs_opa
+def test_an_enforcer_over_a_bundle_with_an_unknown_path_still_decides() -> None:
+    from hexgate.runtime.agent_usage import UsageLedgers, new_usage_ledger
+    from hexgate.security.enforcer import PolicyEnforcer
+
+    sb = build_signed_bundle(_DEMO_YAML)
+    manifest = {**sb.manifest, "agent_usage": ["tool_calls_2h"]}
+    bundle = PolicyBundle.from_parts(
+        wasm_bytes=sb.wasm_bytes,
+        manifest_bytes=json.dumps(manifest, sort_keys=True).encode("utf-8"),
+    )
+    ledgers = UsageLedgers(new_usage_ledger)
+    enforcer = PolicyEnforcer(bundle, agent_name="billing", ledgers=ledgers)
+
+    decision = enforcer.decide("refund_order", {"amount": 200})
+
+    assert decision.outcome is not None
+    assert not ledgers.enabled
 
 
 # ---------------------------------------------------------------------------

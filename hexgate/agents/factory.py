@@ -43,7 +43,6 @@ from hexgate.agents.subagents import SubagentEdge
 from hexgate.approvals import ApprovalHandler  # noqa: F401 — re-export
 from hexgate.config.env import resolve_api_key
 from hexgate.runtime import (
-    DEFAULT_AGENT_NAME,
     LocalWorkspace,
     ToolUseContext,
     Workspace,
@@ -52,6 +51,7 @@ from hexgate.runtime import (
     run_scope,
     set_current_tool_use_context,
 )
+from hexgate.security.naming import canonical_name
 from hexgate.streaming import StreamEvent, new_root_run_id, normalize_langchain_events
 from hexgate.tracing.langfuse import (
     CallbackHandler,
@@ -301,7 +301,7 @@ def _resolve_tool_use_context(
     own facts in (e.g. tests, or production code that wants to bypass the
     context scope for a specific call).
     """
-    agent_name = getattr(agent, "name", None)
+    agent_name = canonical_name(getattr(agent, "name", None))
     agent_workspace = getattr(agent, "workspace", None)
     fallback_workspace = agent_workspace or LocalWorkspace(Path.cwd())
     if tool_use_context is not None:
@@ -388,8 +388,12 @@ class HexgateAgent:
         # Lives as long as the runtime, so both run methods below owe its
         # per-run transcript state a reset on the way out.
         self._usage_handler = HexgateUsageCallbackHandler(
-            agent_name=name or DEFAULT_AGENT_NAME
+            agent_name=canonical_name(name)
         )
+
+    @property
+    def _canonical_name(self) -> str:
+        return canonical_name(self.name)
 
     @property
     def subagents(self) -> "list[SubagentEdge]":
@@ -424,7 +428,6 @@ class HexgateAgent:
         overrides the default one-liner.
         """
         from hexgate.adapters.langchain.tools import SubagentTool
-        from hexgate.security.naming import canonical_name
 
         raw = self.name
         if not raw or not raw.strip():
@@ -435,7 +438,7 @@ class HexgateAgent:
         # Canonicalize to the identity the reach key + gate use; sanitize only the
         # LLM-facing tool name to ^[A-Za-z0-9_-]+$ (e.g. "Billing Bot" ->
         # delegate_to_Billing_Bot) — the reach target keeps the canonical name.
-        target = canonical_name(raw)
+        target = self._canonical_name
         default_name = f"delegate_to_{re.sub(r'[^A-Za-z0-9_-]', '_', target)}"
         # A `name` override is used verbatim (unlike the auto-sanitized default), so
         # validate it against the provider tool-name charset here — else the parent's
@@ -481,7 +484,7 @@ class HexgateAgent:
             _refresh_policy_safely(self), self._ban_gate, get_current_context()
         )
         await self._check_admission()
-        with run_scope(self.name or DEFAULT_AGENT_NAME):
+        with run_scope(self._canonical_name):
             turn_key = self._usage_handler.turn_key()
             try:
                 return await self._graph.ainvoke(
@@ -507,7 +510,7 @@ class HexgateAgent:
             _refresh_policy_safely(self), self._ban_gate, get_current_context()
         )
         await self._check_admission()
-        with run_scope(self.name or DEFAULT_AGENT_NAME):
+        with run_scope(self._canonical_name):
             # Captured on the way in because this is a generator, whose
             # ``finally`` an early break runs in a different Context — see
             # ``HexgateUsageCallbackHandler.end_run``.
@@ -676,7 +679,7 @@ class HexgateAgent:
                 engine = load_policy_set(policy)
             enforcer = build_enforcer(
                 engine,
-                agent_name=self.name or DEFAULT_AGENT_NAME,
+                agent_name=self._canonical_name,
                 decision_observer=decision_observer,
             )
 
@@ -691,7 +694,7 @@ class HexgateAgent:
             from hexgate.guards.stance import validate_guard_policy
 
             validate_guard_policy(
-                engine, resolved_guards, agent_name=self.name or DEFAULT_AGENT_NAME
+                engine, resolved_guards, agent_name=self._canonical_name
             )
 
         # One wrap loop for both paths, so the guards-only path can't drift from
@@ -764,7 +767,7 @@ class HexgateAgent:
                 warn_if_reach_unenforced(
                     enforcer.policy,
                     framework="native",
-                    agent_name=self.name or "default",
+                    agent_name=self._canonical_name,
                     handoff_targets=uncovered[0],
                     tool_targets=uncovered[1],
                 )
