@@ -118,7 +118,7 @@ def read_usage(
     )
 
 
-UsageMemoKey = tuple[str, str, frozenset[UsageWindowSpec]]
+UsageMemoKey = tuple[str, str, tuple[UsageWindowSpec, ...]]
 
 
 class UsageMemo:

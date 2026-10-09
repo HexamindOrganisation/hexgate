@@ -62,10 +62,10 @@ async def api_get_agent_usage(
             status_code=status.HTTP_404_NOT_FOUND, detail=_AGENT_NOT_FOUND
         )
 
-    specs = sorted(set(requested.values()))
+    specs = tuple(sorted(set(requested.values())))
     try:
         readout = await memo.get_or_load(
-            (project_id, name, frozenset(specs)),
+            (project_id, name, specs),
             # Inside the loader, so a stalled read fails the shared task (and isn't
             # memoized) rather than releasing one caller.
             lambda: asyncio.wait_for(

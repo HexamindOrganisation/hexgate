@@ -40,7 +40,7 @@ def _readout(value: int = 0) -> UsageReadout:
 
 
 def _key(name: str = "a") -> service.UsageMemoKey:
-    return ("p", name, frozenset({_HOUR}))
+    return ("p", name, (_HOUR,))
 
 
 # ---------------------------------------------------------------------------
