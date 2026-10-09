@@ -308,6 +308,80 @@ class ApiKey(SQLModel, table=True):
     )
 
 
+# ---------------------------------------------------------------------------
+# OAuth 2.1 authorization server (MCP clients log in as the user). Defined
+# here, not in features/oauth/: api-init imports only this module before
+# create_all, so a table declared in the feature slice is never created in
+# deploy. Secrets are stored as SHA-256 hashes only.
+# ---------------------------------------------------------------------------
+
+
+class OAuthAuthorizationCode(SQLModel, table=True):
+    """The one-time code handed to the client after consent, redeemed for
+    tokens once, within about a minute, by the client that started the login.
+
+    ``projects_csv`` is the project ids ticked at consent, kept apart from
+    ``scopes_csv`` so a scope stays a scope. Never empty: a grant with no
+    projects can do nothing.
+    """
+
+    __tablename__ = "oauth_authorization_code"
+
+    id: str = Field(default_factory=new_uuid_str, primary_key=True)
+    code_hash: str = Field(unique=True)
+    user_id: str = Field(foreign_key="user.id")
+    client_id: str  # the client's metadata document URL
+    redirect_uri: str
+    scopes_csv: str
+    projects_csv: str
+    resource: str
+    code_challenge: str  # PKCE, S256 only
+    created_at: datetime = Field(
+        default_factory=utcnow, sa_type=DateTime(timezone=True)
+    )
+    expires_at: datetime = Field(sa_type=DateTime(timezone=True))
+    used_at: Optional[datetime] = Field(default=None, sa_type=DateTime(timezone=True))
+
+
+class OAuthRefreshToken(SQLModel, table=True):
+    """One login of one client for one user; what the user revokes to log a
+    client out.
+
+    Each refresh writes a new row with the same ``family_id`` (the ``id`` of
+    the login's first token) and the same ``scopes_csv`` / ``projects_csv``,
+    and revokes the old one with ``replaced_by_id`` set. Reusing a revoked
+    token revokes the whole family in one update on ``family_id``.
+    """
+
+    __tablename__ = "oauth_refresh_token"
+
+    id: str = Field(default_factory=new_uuid_str, primary_key=True)
+    token_hash: str = Field(unique=True)
+    user_id: str = Field(foreign_key="user.id", index=True)
+    client_id: str
+    client_name: str
+    scopes_csv: str
+    projects_csv: str
+    resource: str
+    created_at: datetime = Field(
+        default_factory=utcnow, sa_type=DateTime(timezone=True)
+    )
+    last_used_at: Optional[datetime] = Field(
+        default=None, sa_type=DateTime(timezone=True)
+    )
+    expires_at: datetime = Field(sa_type=DateTime(timezone=True))
+    revoked_at: Optional[datetime] = Field(
+        default=None, sa_type=DateTime(timezone=True)
+    )
+    revoked_by_user_id: Optional[str] = Field(default=None, sa_column=actor_fk_column())
+    # Indexed: Postgres doesn't index a referencing FK, so every clean-up
+    # DELETE would scan the table for rows pointing at the one removed.
+    replaced_by_id: Optional[str] = Field(
+        default=None, foreign_key="oauth_refresh_token.id", index=True
+    )
+    family_id: str = Field(index=True)
+
+
 class Agent(SQLModel, table=True):
     __table_args__ = (
         UniqueConstraint("project_id", "name", name="uq_agent_project_name"),

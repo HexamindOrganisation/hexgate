@@ -242,7 +242,11 @@ _JSON_KEYWORDS = ("true", "false", "null")
 # Call-scope facts usable as a bare (undotted) identifier. Every other bare
 # word is either a field (must be dotted, e.g. args.x) or a forgotten-quotes
 # string — so a lone non-fact identifier is rejected rather than read as a ref.
-_FACTS = ("role", "tool")
+FACTS = ("role", "tool")
+# The other roots a path can start from: the call's ``args``, the caller's
+# ``ctx`` and the run's ``run`` (the context :func:`check_constraints` builds).
+# Facts are plain strings, so a path dotted into one is never set either.
+PATH_ROOTS = ("args", "ctx", "run")
 
 _FUNCS = ("startswith", "endswith", "contains", "matches")
 _FUNC_RE = re.compile(r"^([a-z]+)\((.*)\)$", re.DOTALL)
@@ -457,7 +461,7 @@ def _parse_operand(text: str, source: str, side: str) -> Operand:
         # A lone identifier is only valid as a fact (role/tool); anything else
         # is a forgotten-quotes typo (`== USD`) that would otherwise parse as a
         # ref to an absent field and fail closed with no config-time error.
-        if len(path) == 1 and path[0] not in _FACTS:
+        if len(path) == 1 and path[0] not in FACTS:
             raise ConstraintParseError(
                 f"bare identifier {text!r} in {source!r} is neither a field path "
                 f'nor a fact — did you forget quotes? Use "{text}" for a string '

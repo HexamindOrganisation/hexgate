@@ -2057,6 +2057,36 @@ def test_when_the_sdk_lint_gains_a_field_then_the_wire_model_carries_it():
     assert {f.name for f in fields(PolicyLint)} <= set(PolicyLintOut.model_fields)
 
 
+def test_when_a_lint_names_an_agent_then_the_wire_names_it_in_the_message_too():
+    # The dashboard shows the message, not the agent field: two agents' identical
+    # lints must still read apart.
+    from hexgate.security import PolicyLint
+    from hexgate_api.features.policy_modules.router import _lint_out
+
+    named = _lint_out(PolicyLint("dead-grant", "warning", "m", agent="bot"))
+    generic = _lint_out(PolicyLint("dead-grant", "warning", "m"))
+
+    assert (named.agent, named.message) == ("bot", "agent 'bot': m")
+    assert (generic.agent, generic.message) == (None, "m")
+
+
+def test_when_a_lint_message_already_names_its_agent_then_it_is_not_prefixed():
+    # A named column's link-error carries the agent in its LinkError text.
+    from hexgate.security import AgentBinding, check_project
+    from hexgate_api.features.policy_modules.router import _lint_out
+
+    roles = {
+        "default": {"*": AgentBinding()},
+        "member": {"billing_bot": AgentBinding(capabilities=("nope",))},
+    }
+    (lint,) = [x for x in check_project([], [], roles) if x.code == "link-error"]
+
+    out = _lint_out(lint)
+
+    assert out.message == lint.message
+    assert out.message.count("'billing_bot'") == 1
+
+
 async def test_when_an_agent_re_registers_then_its_latest_manifest_is_used(
     session_factory,
 ):

@@ -26,6 +26,7 @@ from hexgate.security import (
     ReachNotAllowedError,
     ResolvedPolicy,
 )
+from hexgate.security.bans import EMPTY_BAN_SET, BanGate, BanSet
 from hexgate.security.binding import PolicyBinding
 from hexgate.security.enforcer import PolicyEnforcer
 from hexgate.security.policy_set import DEFAULT_ROLE_NAME
@@ -172,6 +173,55 @@ async def test_run_admits_when_policy_allows(monkeypatch: pytest.MonkeyPatch) ->
     monkeypatch.setattr(runner_mod.Runner, "run", staticmethod(fake_run))
     runner = HexgateRunner(api_key="k")
     assert await runner.run(_agent("my-agent"), "hi", hexgate_context=_user()) == "ok"
+
+
+def _admission_enforcer(admission_mode: str) -> PolicyEnforcer:
+    engine = PolicySet(
+        {
+            DEFAULT_ROLE_NAME: AgentPolicy(
+                default_policy=BaseToolPolicy(mode="allow"),
+                admission=BaseToolPolicy(mode=admission_mode),
+            )
+        }
+    )
+    return PolicyEnforcer(engine, agent_name="my-agent")
+
+
+class _TighteningBinding:
+    """Admits until refreshed; the refresh swaps in a policy that refuses."""
+
+    def __init__(self) -> None:
+        self.enforcer = _admission_enforcer("allow")
+
+    async def refresh_async(self) -> None:
+        self.enforcer = _admission_enforcer("deny")
+
+
+class _NoBans:
+    def fetch(self) -> BanSet:
+        return EMPTY_BAN_SET
+
+
+@pytest.mark.asyncio
+async def test_admission_reads_the_refreshed_policy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Admission must run after the concurrent refresh, never alongside it."""
+    _silence_observability(monkeypatch)
+    called = {"run": False}
+
+    async def fake_run(*_a: Any, **_k: Any) -> str:
+        called["run"] = True
+        return "ok"
+
+    monkeypatch.setattr(runner_mod.Runner, "run", staticmethod(fake_run))
+    runner = HexgateRunner(api_key="k")
+    runner._bindings["my-agent"] = _TighteningBinding()  # type: ignore[assignment]
+    runner._ban_gates["my-agent"] = BanGate("my-agent", _NoBans())
+
+    with pytest.raises(AgentNotAdmittedError):
+        await runner.run(_agent("my-agent"), "hi", hexgate_context=_user())
+    assert called["run"] is False
 
 
 def test_run_sync_refuses_non_admitted_caller(monkeypatch: pytest.MonkeyPatch) -> None:

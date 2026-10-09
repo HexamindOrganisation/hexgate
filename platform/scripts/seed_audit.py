@@ -1453,8 +1453,17 @@ def seed(
     return len(normal), len(anomalous), len(messages)
 
 
+USAGE_MINUTE_TABLE = "usage_minute"
+USAGE_MINUTE_BACKFILL = (
+    Path(__file__).parent.parent / "clickhouse/backfills/0005_usage_minute.sql"
+)
+USAGE_MINUTE_BACKFILL_GUARD = (
+    "WHERE (SELECT count() FROM hexgate_audit.usage_minute) = 0;"
+)
+
+
 def clear(client: Client, project_id: str) -> None:
-    """Delete seed rows from both tables.
+    """Delete seed rows from the raw tables, then rebuild the project's rollup.
 
     Scoped to SEED_USER_IDS, so real audit rows are untouched. The transcripts go
     with the decisions they explain — leaving them behind would make the
@@ -1470,6 +1479,33 @@ def clear(client: Client, project_id: str) -> None:
             parameters={"users": SEED_USER_IDS, "pid": project_id},
             settings={"mutations_sync": "2"},
         )
+    if _table_exists(client, USAGE_MINUTE_TABLE):
+        _rebuild_usage_minute(client, project_id)
+
+
+def _rebuild_usage_minute(client: Client, project_id: str) -> None:
+    """Recount the project's usage_minute rows from the raw rows left behind.
+
+    Its views never see a DELETE and it has no user_id to scope one by, so
+    without this every seed run would add its rows to the rollup for good.
+    Reuses the backfill's SELECT, so the filters cannot drift from the views.
+    A writer inserting into this project meanwhile is counted twice: fine for
+    a dev and staging seed tool.
+    """
+    backfill = USAGE_MINUTE_BACKFILL.read_text().rstrip()
+    if not backfill.endswith(USAGE_MINUTE_BACKFILL_GUARD):
+        raise RuntimeError(
+            f"{USAGE_MINUTE_BACKFILL} no longer ends with its empty-table guard"
+        )
+    rebuild = backfill.removesuffix(USAGE_MINUTE_BACKFILL_GUARD)
+    client.command(
+        f"ALTER TABLE {USAGE_MINUTE_TABLE} DELETE WHERE project_id = {{pid:String}}",
+        parameters={"pid": project_id},
+        settings={"mutations_sync": "2"},
+    )
+    client.command(
+        rebuild + "WHERE project_id = {pid:String}", parameters={"pid": project_id}
+    )
 
 
 # ── CLI ───────────────────────────────────────────────────────────────────────

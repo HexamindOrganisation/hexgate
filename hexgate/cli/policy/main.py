@@ -167,7 +167,9 @@ def add_parser(subparsers: argparse._SubParsersAction) -> None:
         help=(
             "Path to the agent's manifest JSON. Enables the manifest lints: a "
             "guards: rule naming a guard the agent doesn't declare (or declares "
-            "twice), and a tool or argument the agent doesn't have."
+            "twice), a tool, skill or argument the agent doesn't have, and an "
+            "admission, agents or skills rule reading an argument its gate "
+            "doesn't pass."
         ),
     )
     p_val.add_argument(
@@ -332,8 +334,9 @@ def add_parser(subparsers: argparse._SubParsersAction) -> None:
             "Links the boundary + capability modules under <dir>/policies/ and "
             "reports authoring problems that don't stop composition but are "
             "almost always mistakes: a capability grant a boundary ceiling makes "
-            "dead, a duplicate grant, or (with --manifest) a rule referencing a "
-            "tool/arg the agent's code doesn't have. Exits non-zero when any lint "
+            "dead, a duplicate grant, a constraint path no call sets, or (with "
+            "--manifest) a rule referencing a tool, skill or arg the agent's code "
+            "doesn't have. Exits non-zero when any lint "
             "is at or above --max-severity, so CI can gate on it."
         ),
     )
@@ -352,8 +355,10 @@ def add_parser(subparsers: argparse._SubParsersAction) -> None:
         default=None,
         metavar="PATH",
         help=(
-            "Optional AgentManifest JSON. Enables drift checks (unknown tool / "
-            "arg); without it those are skipped."
+            "Optional AgentManifest JSON. Enables drift checks (unknown tool, "
+            "skill or arg, including an admission, agents or skills rule "
+            "reading an argument its gate doesn't pass); without it those are "
+            "skipped."
         ),
     )
     p_check.add_argument(
@@ -597,7 +602,8 @@ def _format_lint(lint: PolicyLint) -> str:
     run that mixes severities shows which lints would fail the gate."""
     where = f" ({lint.source})" if lint.source else ""
     role = f" [{lint.role}]" if lint.role else ""
-    return f"{_SEVERITY_ICON[lint.severity]} [{lint.code}]{role} {lint.message}{where}"
+    agent = f" [agent {lint.agent}]" if lint.agent else ""
+    return f"{_SEVERITY_ICON[lint.severity]} [{lint.code}]{role}{agent} {lint.message}{where}"
 
 
 def _iter_raw_constraints(payload: dict) -> "list[tuple[str, str, str]]":
@@ -842,9 +848,10 @@ def _main_check(args: argparse.Namespace) -> int:
     if args.role is not None:
         lints = [lint for lint in lints if lint.role in (args.role, None)]
 
-    # A link error short-circuits before drift/soft lints run, so the
-    # "supply a manifest" hint only makes sense when linking succeeded.
-    linked = not (len(lints) == 1 and lints[0].code == "link-error")
+    # A link error in the "*" column (agent None) short-circuits before drift and
+    # soft lints run, so the "supply a manifest" hint only makes sense without
+    # one. A named agent's link error leaves the rest of the project linted.
+    linked = not any(lint.code == "link-error" and lint.agent is None for lint in lints)
 
     def _drift_hint() -> None:
         if manifest is None and linked:
