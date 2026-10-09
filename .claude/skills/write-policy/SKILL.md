@@ -33,7 +33,7 @@ and prefer them over this file if they disagree:
    - the caller attributes available as `ctx.*`;
    - the shape to write in: a single file, a `policies/` dir, or modules.
 
-   Never invent a tool or argument name. A typo'd tool is silently default-denied, and a typo'd arg fails closed. If a name is unknown, ask, or state the assumption explicitly. If the agent's manifest JSON is available, pass it to `validate` (step 4), which flags tool and argument names the agent doesn't have.
+   Never invent a tool or argument name. A typo'd tool is silently default-denied, and a typo'd arg fails closed. If a name is unknown, ask, or state the assumption explicitly. If the agent's manifest JSON is available, pass it to `validate` (step 4), which flags tool, skill and argument names the agent doesn't have.
 2. **Restate the intent as a decision table** before writing YAML. List role × tool × condition → ALLOW / DENY / APPROVAL_REQUIRED, plus what happens to anything unlisted. Surface every ambiguity here, e.g. "refunds up to 500 — inclusive? which currency?".
 3. **Write the YAML.** Start deny-by-default and grant the minimum. Put each constraint at the narrowest scope that works (see *Where constraints live*).
 4. **Validate** until clean:

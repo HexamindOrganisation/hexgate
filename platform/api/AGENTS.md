@@ -4,7 +4,7 @@ After you make changes, run: `make fmt-check && make platform-api-check`  # fmt-
 
 ## Layout (`hexgate_api/`)
 - `main.py` — `create_app()` factory + router wiring only.
-- `constants.py` — shared seed identity (`DEFAULT_*`) + role names (`ROLE_*`).
+- `constants.py` — shared seed identity (`DEFAULT_*`) + role names (`ROLE_*`) + the OAuth scope registry and route `openapi_extra` keys (`OAUTH_*`).
 - `core/` — infra: `db`, `keystore` (holds the process-wide signing singleton), `biscuits`, `clickhouse`, `relay`, `mailer`, `spa`, `ids`.
 - `deps/` — FastAPI dependency gates: `identity`, `tokens`, `org`, `project`, `ws`, `clickhouse`.
 - `seeds/defaults.py` — first-boot triple-default seeding (agent seed data lives in `features/agents/seed_data.py`).

@@ -450,8 +450,13 @@ async def api_delete_policy_file(
 
 
 def _lint_out(lint: PolicyLint) -> PolicyLintOut:
-    """An SDK ``PolicyLint`` as its wire model."""
-    return PolicyLintOut(**asdict(lint))
+    """An SDK ``PolicyLint`` as its wire model. A named agent's lint also names
+    it in the message, which is what the dashboard shows, unless the message
+    names it already (a column's ``link-error`` from ``resolve_role_map``)."""
+    out = PolicyLintOut(**asdict(lint))
+    if lint.agent is not None and f"agent {lint.agent!r}" not in lint.message:
+        out.message = f"agent {lint.agent!r}: {lint.message}"
+    return out
 
 
 @router.post("/projects/{project_id}/policy/preview", tags=["policy"])
