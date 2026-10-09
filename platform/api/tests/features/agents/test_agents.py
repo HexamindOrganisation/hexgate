@@ -1049,9 +1049,12 @@ def test_get_agent_etag_changes_when_only_the_guard_stance_changes(
 def test_get_agent_etag_changes_when_only_the_usage_fail_mode_changes(
     client: TestClient, session_factory
 ) -> None:
-    """A usage-only edit must invalidate the bundle ETag. The fail mode is read from
-    the signed manifest, never compiled into the wasm, so only the manifest-hash ETag
-    lets a live agent pick up ``deny`` on its next refresh."""
+    """A usage-only edit must reach the signed manifest and be served, not 304'd.
+
+    The fail mode is read from the manifest, never compiled into the wasm. The 200 and
+    new-ETag checks only prove no stale 304 is served: any policy_yaml edit moves the
+    manifest's ``source_hash``, and so the ETag. The ``usage`` manifest assertion is
+    the real guard that ``on_unavailable: deny`` is signed in."""
     import json
 
     allow = (
