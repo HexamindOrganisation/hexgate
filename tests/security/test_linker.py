@@ -413,6 +413,22 @@ def test_link_rejects_policy_level_constraints_in_module() -> None:
         link([mod], [])
 
 
+@pytest.mark.parametrize("kind", ["capability", "boundary"])
+def test_link_rejects_usage_block_in_module(kind: str) -> None:
+    """The fail mode is agent-level, not composable, so a tier-folder module that
+    sets ``usage:`` is rejected loud rather than silently dropped by the fold."""
+    mod = ModuleContent(
+        name="d",
+        kind=kind,
+        policy=AgentPolicy(usage={"on_unavailable": "deny"}),
+        source="d.yaml",
+        content_hash="hash-d",
+    )
+    boundaries, capabilities = ([mod], []) if kind == "boundary" else ([], [mod])
+    with pytest.raises(LinkError, match=r"\['usage'\]"):
+        link(boundaries, capabilities)
+
+
 # --- provenance + policy-set wiring ---
 
 

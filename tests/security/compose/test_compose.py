@@ -14,6 +14,7 @@ from pathlib import Path
 import pytest
 import yaml
 
+from hexgate.runtime.agent_usage import OnUnavailable
 from hexgate.security import (
     AgentPolicy,
     BaseToolPolicy,
@@ -25,7 +26,10 @@ from hexgate.security import (
 )
 from hexgate.security.compose import parse_entry, resolve_file, resolve_text
 from hexgate.security.linker import effective_policy_by_role
-from hexgate.security.policy_set import RESOLVED_POLICY_MARKER
+from hexgate.security.policy_set import (
+    RESOLVED_POLICY_MARKER,
+    load_policy_set_from_dict,
+)
 
 
 def _eff(res):
@@ -790,6 +794,90 @@ def test_agent_named_guards_is_reserved() -> None:
     """`guards` is a structural keyword, so no agent may be named it."""
     with pytest.raises(LinkError, match="reserved"):
         resolve_text("agents: { guards: {} }")
+
+
+# --- usage: agent-level, not composable, one fail mode per agent -----------
+
+_TWO_AGENTS_TOP_LEVEL_DENY = """
+version: 1
+usage: { on_unavailable: deny }
+agents:
+  bot:
+    roles:
+      default: { tools: { a: { mode: allow } } }
+      admin:   { tools: { a: { mode: allow } } }
+  helper:
+    usage: { on_unavailable: allow }
+    tools: { a: { mode: allow } }
+"""
+
+
+def test_usage_top_level_reaches_every_role() -> None:
+    res = resolve_text(_TWO_AGENTS_TOP_LEVEL_DENY, agent="bot")
+    assert res.policy_set.usage_on_unavailable() is OnUnavailable.DENY
+    eff = _eff(res)
+    for role in ("default", "admin"):
+        assert eff[role]["usage"] == {"on_unavailable": "deny"}
+
+
+def test_usage_agent_body_replaces_top_level_for_that_agent_only() -> None:
+    helper = resolve_text(_TWO_AGENTS_TOP_LEVEL_DENY, agent="helper")
+    bot = resolve_text(_TWO_AGENTS_TOP_LEVEL_DENY, agent="bot")
+    assert helper.policy_set.usage_on_unavailable() is OnUnavailable.ALLOW
+    assert bot.policy_set.usage_on_unavailable() is OnUnavailable.DENY
+
+
+def test_usage_rejected_in_role_body() -> None:
+    with pytest.raises(LinkError):
+        parse_entry(
+            """
+            version: 1
+            agents:
+              bot:
+                roles:
+                  default: { usage: { on_unavailable: deny } }
+            """
+        )
+
+
+def test_usage_rejected_in_imported_fragment() -> None:
+    with pytest.raises(LinkError, match="agent-level"):
+        resolve_text(
+            "version: 1\nimport: [ caps/x.yaml ]\n",
+            loader=lambda _p: "usage: { on_unavailable: deny }\n",
+        )
+
+
+@pytest.mark.parametrize(
+    "doc",
+    ["agents: { usage: {} }", "agents: { bot: { roles: { usage: {} } } }"],
+    ids=["agent", "role"],
+)
+def test_agent_or_role_named_usage_is_reserved(doc: str) -> None:
+    with pytest.raises(LinkError, match="reserved"):
+        parse_entry(doc)
+
+
+def test_usage_free_compose_resolved_yaml_has_no_usage_key() -> None:
+    res = resolve_text(
+        """
+        version: 1
+        agents:
+          bot:
+            roles:
+              default: { tools: { a: { mode: allow } } }
+              admin:   { tools: { a: { mode: allow } } }
+        """,
+        agent="bot",
+    )
+    assert all("usage" not in role for role in _eff(res).values())
+
+
+def test_usage_deny_resolved_yaml_round_trips() -> None:
+    res = resolve_text(_TWO_AGENTS_TOP_LEVEL_DENY, agent="bot")
+    payload = {"roles": _eff(res), RESOLVED_POLICY_MARKER: True}
+    reloaded = load_policy_set_from_dict(yaml.safe_load(yaml.safe_dump(payload)))
+    assert reloaded.usage_on_unavailable() is OnUnavailable.DENY
 
 
 # --- skills: composed through the fold, like admission/reach ---------------

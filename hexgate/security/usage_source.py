@@ -25,6 +25,7 @@ from hexgate.cloud.client import HexgateError
 from hexgate.config.env import resolve_api_key
 from hexgate.runtime.agent_usage import (
     Clock,
+    OnUnavailable,
     UsageLedger,
     _monotonic,
     combined_namespace,
@@ -52,13 +53,6 @@ DEFAULT_MAX_STALENESS_SECONDS: Final[float] = 300.0
 _VALUES_KEY: Final = "values"
 _NOT_FOUND: Final = 404
 _EXECUTOR_THREAD_PREFIX: Final = "hexgate-usage"
-
-
-class OnUnavailable(StrEnum):
-    """What a decision reads when the platform term is missing."""
-
-    ALLOW = "allow"  # ledger-only values: zeros plus this process (G3)
-    DENY = "deny"  # the value is absent, so its constraints fail closed
 
 
 class UsageState(StrEnum):

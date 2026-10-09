@@ -31,7 +31,7 @@ from pydantic import (
     model_validator,
 )
 
-from hexgate.security.models import AgentVia, GuardRule, SkillVia
+from hexgate.security.models import AgentVia, GuardRule, SkillVia, UsagePolicy
 
 # Keywords that are structural, so an agent or role may not be *named* one — a
 # `roles: { tools: … }` would be unreadable even though the parser could tell it
@@ -48,6 +48,7 @@ RESERVED_NAMES = frozenset(
         "admission",
         "skills",
         "guards",
+        "usage",
         "agents",
         "roles",
     }
@@ -219,6 +220,9 @@ class AgentBlock(_GrantScope):
     # diverge across roles. A guard name -> {enabled: bool}; merged over the
     # entry's top-level guards, last-wins per key.
     guards: dict[str, GuardRule] = Field(default_factory=dict)
+    # Usage fail mode for THIS agent. Agent-level and not composable, like `guards`;
+    # replaces the entry's top-level `usage` block whole rather than per key.
+    usage: UsagePolicy | None = None
 
     @field_validator("roles")
     @classmethod
@@ -243,6 +247,9 @@ class Entry(_GrantScope):
     # own `guards` overlays this per key. Agent-level and non-composable, like the
     # agent-body block above.
     guards: dict[str, GuardRule] = Field(default_factory=dict)
+    # Top-level usage fail mode: applies to EVERY agent. An agent body's own `usage`
+    # replaces it. Agent-level and non-composable, like `guards`.
+    usage: UsagePolicy | None = None
 
     # Only the `export` alias is accepted (not the `exports` field name).
     model_config = ConfigDict(extra="forbid")
