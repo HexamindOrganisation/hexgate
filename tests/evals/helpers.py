@@ -84,6 +84,9 @@ AUDIT = [
 # The caller attributes shop-bot's audit rows show it sending.
 ATTRS = {"department"}
 
+# Every agent agents.json registers, with a manifest or not.
+REGISTERED = frozenset(view["name"] for view in AGENTS)
+
 
 POLICY = """\
 version: 1

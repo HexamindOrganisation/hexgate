@@ -16,7 +16,7 @@ from __future__ import annotations
 import hashlib
 import os
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -72,11 +72,13 @@ def snapshot(root: Path) -> dict[str, str]:
 
 
 def decision_checks(
-    policies: dict[str, Policy], decisions: list[dict], role_wide: bool = False
+    policies: dict[str, Policy],
+    decisions: list[dict],
+    agents: Collection[str] | None = None,
 ) -> list[Check]:
     """One check per (decision, role): the dry-run gives an expected outcome on
     the policies in `policies`, one per agent running it (see `agent_policies`);
-    none means the policy is invalid. In a `role_wide` case (no agent, on a
+    none means the policy is invalid. In a role-wide case (no agent, on a
     module tree), an expectation that accepts allow is met once one agent that
     can make the call (`can_call`) gets an accepted outcome; any other must hold
     for every agent that might (`_may_call`): one that can, one registered with
@@ -87,7 +89,7 @@ def decision_checks(
     # `roles` expands one entry over several roles.
     return [
         _decision_check(
-            f"decision {i}: {_call_label(role, d)}", policies, role, d, role_wide
+            f"decision {i}: {_call_label(role, d)}", policies, role, d, agents
         )
         for i, d in enumerate(decisions, 1)
         for role in d.get("roles") or [d["role"]]
@@ -95,17 +97,20 @@ def decision_checks(
 
 
 def _decision_check(
-    name: str, policies: dict[str, Policy], role: str, d: dict, role_wide: bool
+    name: str,
+    policies: dict[str, Policy],
+    role: str,
+    d: dict,
+    agents: Collection[str] | None,
 ) -> Check:
     """One decision, by the rule in `decision_checks`."""
     labels = _labels(d)
-    if not role_wide or not policies:
+    if agents is None or not policies:
         return _per_agent_check(
             name, policies, lambda policy: _decision_miss(policy, role, d, labels)
         )
-    if failed := _uncallable(name, policies, [d["tool"]]):
+    if failed := _uncallable(name, policies, [d["tool"]], agents):
         return failed
-    agents = _registered(policies)
     able = {a: p for a, p in policies.items() if can_call(p, d["tool"], agents)}
     if "allow" in labels:
         return _per_agent_check(
@@ -126,24 +131,18 @@ def _decision_check(
     )
 
 
-def _may_call(policy: Policy, tool: str, agents: set[str]) -> bool:
+def _may_call(policy: Policy, tool: str, agents: Collection[str]) -> bool:
     """Whether the agent `policy` runs for might make a call on `tool`: its
     manifest says it can, or it has none to say it can't (`"*"`, or an agent
     registered without a version, which the SDK reads as unknown too)."""
     return policy.manifest is None or can_call(policy, tool, agents)
 
 
-def _registered(policies: dict[str, Policy]) -> set[str]:
-    """The registered agents among `policies` (all but `"*"`'s)."""
-    return {p.agent for p in policies.values() if p.agent is not None}
-
-
 def _uncallable(
-    name: str, policies: dict[str, Policy], tools: list[str]
+    name: str, policies: dict[str, Policy], tools: list[str], agents: Collection[str]
 ) -> Check | None:
-    """A failed check if no registered agent can call one of `tools`: a case
-    about a call no agent makes says nothing about the policy."""
-    agents = _registered(policies)
+    """A failed check if no registered agent (`agents`) can call one of `tools`:
+    a case about a call no agent makes says nothing about the policy."""
     nobody = [
         t for t in tools if not any(can_call(p, t, agents) for p in policies.values())
     ]
@@ -207,35 +206,40 @@ def _call_label(role: str, d: dict) -> str:
 
 
 def superset_checks(
-    policies: dict[str, Policy], supersets: list[dict], role_wide: bool = False
+    policies: dict[str, Policy],
+    supersets: list[dict],
+    agents: Collection[str] | None = None,
 ) -> list[Check]:
     """Everything `narrower` may do, `wider` may do at least as freely, for every
-    agent in `policies`; in a `role_wide` case, a registered agent only on the
-    probes it can make (`"*"`, an agent not registered yet, on all of them)."""
+    agent in `policies`; in a role-wide case (`agents`, the registered ones), a
+    registered agent only on the probes it can make (`"*"`, an agent not
+    registered yet, on all of them)."""
     return [
         _superset_check(
-            f"superset {i}: {s['wider']} ⊇ {s['narrower']}", policies, s, role_wide
+            f"superset {i}: {s['wider']} ⊇ {s['narrower']}", policies, s, agents
         )
         for i, s in enumerate(supersets, 1)
     ]
 
 
 def _superset_check(
-    name: str, policies: dict[str, Policy], s: dict, role_wide: bool
+    name: str, policies: dict[str, Policy], s: dict, agents: Collection[str] | None
 ) -> Check:
-    if not role_wide or not policies:
+    if agents is None or not policies:
         return _per_agent_check(
             name, policies, lambda policy: _superset_gaps(policy, s, None)
         )
-    if failed := _uncallable(name, policies, [p["tool"] for p in s["probes"]]):
+    tools = [p["tool"] for p in s["probes"]]
+    if failed := _uncallable(name, policies, tools, agents):
         return failed
-    agents = _registered(policies)
     return _per_agent_check(
         name, policies, lambda policy: _superset_gaps(policy, s, agents), tagged=True
     )
 
 
-def _superset_gaps(policy: Policy, s: dict, agents: set[str] | None) -> list[str]:
+def _superset_gaps(
+    policy: Policy, s: dict, agents: Collection[str] | None
+) -> list[str]:
     """How `wider` is stricter than `narrower`, probe by probe; with `agents`
     (a role-wide case), a registered agent skips the probes it can't make."""
     return [
@@ -397,12 +401,14 @@ def score(case: dict, ws: Path, before: dict[str, str], answer: str) -> list[Che
     policies: dict[str, Policy] = {}
     if policy is not None:
         policies, problems = agent_policies(ws, agent, policy, role_wide)
+    # The registered agents, for a role-wide case: agents.json has been read by now.
+    agents = load_project_agents(ws).registered if role_wide and policies else None
     valid = Check("valid", not problems, "\n".join(problems)[:800])
     after = snapshot(ws)
     return [
         valid,
-        *decision_checks(policies, expect.get("decisions", []), role_wide),
-        *superset_checks(policies, expect.get("superset", []), role_wide),
+        *decision_checks(policies, expect.get("decisions", []), agents),
+        *superset_checks(policies, expect.get("superset", []), agents),
         # An invalid agent policy leaves none to dry-run, but the names still count.
         *(
             name_checks(policy, ws, before, after, list(policies.values()))

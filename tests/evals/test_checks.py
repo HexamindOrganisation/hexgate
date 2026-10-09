@@ -23,6 +23,7 @@ from tests.evals.helpers import (
     OPS_COLUMN_PERMISSIVE_DEFAULT,
     PERMISSIVE_DEFAULT,
     POLICY,
+    REGISTERED,
     ROLES,
     by_name,
     edit_manifest,
@@ -694,7 +695,7 @@ def test_when_the_case_names_no_agent_then_decisions_hold_per_agent(
     if isinstance(decision["expect"], tuple):
         decision = {**decision, "expect": list(decision["expect"])}
     policies = _role_wide(tmp_path, roles, capabilities, edits)
-    [check] = decision_checks(policies, [decision], role_wide=True)
+    [check] = decision_checks(policies, [decision], REGISTERED)
     assert check.passed is passed, check.detail
     assert (check.detail == "") if passed else check.detail
     assert all(s in check.detail for s in shown)
@@ -752,7 +753,7 @@ def test_when_the_case_names_no_agent_then_supersets_hold_per_agent(
     tmp_path, roles, superset, detail
 ) -> None:
     [check] = superset_checks(
-        _role_wide(tmp_path, roles, {}, {}), [superset], role_wide=True
+        _role_wide(tmp_path, roles, {}, {}), [superset], REGISTERED
     )
     assert (check.passed, check.detail) == (not detail, detail)
 
