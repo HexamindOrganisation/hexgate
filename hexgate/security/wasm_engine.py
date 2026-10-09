@@ -217,12 +217,14 @@ class WasmPolicy:
         args: dict[str, Any],
         ctx: dict[str, Any] | None = None,
         run: dict[str, Any] | None = None,
+        agent_usage: dict[str, Any] | None = None,
     ) -> RegoVerdict:
         """Evaluate one tool-call decision.
 
-        Composes ``input = {role, tool, args, ctx, run}`` and runs the
-        entrypoint. ``ctx`` and ``run`` mirror the pydantic engine's context
-        keys, read by compiled ``input.ctx.*`` / ``input.run.*`` conditions.
+        Composes ``input = {role, tool, args, ctx, run, agent_usage}`` and runs
+        the entrypoint. ``ctx``, ``run`` and ``agent_usage`` mirror the pydantic
+        engine's context keys, read by compiled ``input.ctx.*`` / ``input.run.*``
+        / ``input.agent_usage.*`` conditions.
         Hermetic — heap is reset before each call.
         """
         return self.evaluate(
@@ -232,6 +234,7 @@ class WasmPolicy:
                 "args": args,
                 "ctx": ctx or {},
                 "run": run or {},
+                "agent_usage": agent_usage or {},
             }
         )
 

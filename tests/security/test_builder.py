@@ -4,13 +4,16 @@ from __future__ import annotations
 
 import pytest
 
+from hexgate.runtime.agent_usage import KNOWN_AGENT_USAGE_PATHS
 from hexgate.runtime.run_facts import KNOWN_RUN_PATHS, RUN_PATH_TYPES, RunFacts
 from hexgate.security import (
+    AGENT_RUN_TOOL,
     AgentPolicy,
     C,
     PolicyBuilder,
     PolicySet,
     RolePolicyBuilder,
+    agent_usage_namespace,
     assert_allows,
     assert_denies,
     assert_needs_approval,
@@ -384,3 +387,120 @@ def test_a_wrong_typed_cap_is_not_mistaken_for_a_threshold_trip() -> None:
     assert_allows(policy, "refund", run=run_namespace("refund", tool_calls=5))
     with pytest.raises(ValueError):
         assert_denies(policy, "refund", run=run_namespace("refund", tool_calls="5"))
+
+
+# ---------------------------------------------------------------------------
+# agent_usage_namespace — a fresh process's usage, with overrides
+# ---------------------------------------------------------------------------
+
+
+def _admission_cap(limit: int) -> AgentPolicy:
+    return AgentPolicy.model_validate(
+        {
+            "admission": {
+                "mode": "allow",
+                "constraints": [f"agent_usage.invocations_1h < {limit}"],
+            }
+        }
+    )
+
+
+def test_agent_usage_namespace_zero_fills_every_registered_path() -> None:
+    namespace = agent_usage_namespace()
+
+    assert set(namespace) == KNOWN_AGENT_USAGE_PATHS
+    assert set(namespace.values()) == {0}
+
+
+def test_agent_usage_namespace_rejects_an_unregistered_path() -> None:
+    with pytest.raises(ValueError, match="unknown agent_usage"):
+        agent_usage_namespace(invocation_1h=1)
+
+
+@pytest.mark.parametrize("value", [True, "3", 3.0], ids=["bool", "str", "float"])
+def test_agent_usage_namespace_rejects_a_non_int(value: object) -> None:
+    with pytest.raises(ValueError, match="expects int"):
+        agent_usage_namespace(invocations_1h=value)
+
+
+def test_agent_usage_namespace_rejects_a_negative_count() -> None:
+    with pytest.raises(ValueError, match="is a count"):
+        agent_usage_namespace(invocations_1h=-1)
+
+
+def test_agent_usage_namespace_derives_total_tokens_per_window() -> None:
+    namespace = agent_usage_namespace(
+        input_tokens_1h=100, output_tokens_1h=50, input_tokens_24h=107
+    )
+
+    assert namespace["total_tokens_1h"] == 150
+    assert namespace["total_tokens_24h"] == 157
+    assert namespace["total_tokens_5m"] == 0
+
+
+def test_an_explicit_total_wins_over_the_derivation() -> None:
+    namespace = agent_usage_namespace(input_tokens_1h=100, total_tokens_1h=1)
+
+    assert namespace["total_tokens_1h"] == 1
+    assert namespace["total_tokens_24h"] == 100
+
+
+def test_a_narrow_window_carries_into_the_wider_ones() -> None:
+    namespace = agent_usage_namespace(invocations_1h=99)
+
+    assert namespace["invocations_5m"] == 0
+    assert [namespace[f"invocations_{w}"] for w in ("1h", "24h", "7d", "30d")] == [
+        99
+    ] * 4
+
+
+def test_an_explicit_wider_window_wins_over_the_carry() -> None:
+    namespace = agent_usage_namespace(invocations_1h=99, invocations_24h=5)
+
+    assert namespace["invocations_24h"] == 5
+    assert namespace["invocations_7d"] == 99
+
+
+def test_a_token_split_carries_into_the_wider_totals() -> None:
+    namespace = agent_usage_namespace(input_tokens_1h=100, output_tokens_1h=50)
+
+    assert namespace["total_tokens_24h"] == 150
+
+
+def test_a_wider_cap_fires_on_a_narrower_supplied_window() -> None:
+    policy = AgentPolicy.model_validate(
+        {
+            "admission": {
+                "mode": "allow",
+                "constraints": ["agent_usage.invocations_24h < 50"],
+            }
+        }
+    )
+
+    assert_denies(
+        policy,
+        AGENT_RUN_TOOL,
+        {"agent": "a"},
+        agent_usage=agent_usage_namespace(invocations_1h=99),
+    )
+
+
+def test_an_admission_cap_asserts_against_supplied_usage() -> None:
+    policy = _admission_cap(100)
+
+    assert_denies(
+        policy,
+        AGENT_RUN_TOOL,
+        {"agent": "a"},
+        agent_usage=agent_usage_namespace(invocations_1h=100),
+    )
+    assert_allows(
+        policy,
+        AGENT_RUN_TOOL,
+        {"agent": "a"},
+        agent_usage=agent_usage_namespace(invocations_1h=99),
+    )
+
+
+def test_an_unset_usage_cap_reads_a_fresh_process() -> None:
+    assert_allows(_admission_cap(1), AGENT_RUN_TOOL, {"agent": "a"})

@@ -192,6 +192,15 @@ hexgate policy test policy.yaml --role default --tool search \
 The [constraints reference](/policy/constraints#run-facts-run) lists all 13
 paths and the handful of places the count can lag reality.
 
+To cap the agent across runs instead, use
+[`agent_usage.*`](/policy/constraints#agent-usage-agent_usage), and dry-run it the
+same way with `--agent-usage`:
+
+```bash
+hexgate policy test policy.yaml --role default --tool agent.run \
+  --args '{"agent": "support"}' --agent-usage '{"invocations_1h": 100}'
+```
+
 ## A worked example
 
 A support agent that can email customers and issue refunds, with a stricter
