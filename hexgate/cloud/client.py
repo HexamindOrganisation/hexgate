@@ -18,7 +18,9 @@ import base64
 import json
 import os
 import urllib.error
+import urllib.parse
 import urllib.request
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any, cast
 
@@ -39,6 +41,7 @@ DEFAULT_TIMEOUT = 10.0
 # fallback fire fast.
 DEFAULT_REFRESH_TIMEOUT = 2.0
 TOKEN_PREFIX = "fty_"
+_USAGE_PATHS_PARAM = "paths"
 
 
 class HexgateError(RuntimeError):
@@ -208,6 +211,17 @@ class HexgateClient:
         )
         return cast("list[dict[str, Any]] | None", payload), etag
 
+    def get_agent_usage(self, name: str, paths: Sequence[str]) -> dict[str, Any]:
+        """Fetch ``agent_usage.*`` values for ``name`` (project from the bearer).
+
+        On the run-start path, so bounded by ``refresh_timeout`` despite having no
+        ETag."""
+        self._ensure_key_verified()
+        query = urllib.parse.urlencode({_USAGE_PATHS_PARAM: ",".join(paths)})
+        quoted = urllib.parse.quote(name, safe="")
+        url = f"{self.config.base_url}/v1/agents/{quoted}/usage?{query}"
+        return self._get(url, timeout=self.refresh_timeout)
+
     # ------------------------------------------------------------------
     # Biscuit verification
     # ------------------------------------------------------------------
@@ -295,11 +309,11 @@ class HexgateClient:
     # HTTP plumbing
     # ------------------------------------------------------------------
 
-    def _get(self, url: str) -> dict[str, Any]:
+    def _get(self, url: str, *, timeout: float | None = None) -> dict[str, Any]:
         """Body-only GET. ``_raw_get`` is the unified HTTP entry point;
         this drops the ETag tuple for callers that don't care about
         conditional requests."""
-        payload, _ = self._raw_get(url, authorize=True)
+        payload, _ = self._raw_get(url, authorize=True, timeout=timeout)
         if payload is None:
             # Invariant: _get is never called with If-None-Match, so a 304
             # is impossible. Raise so `python -O` can't strip the check.
@@ -314,6 +328,7 @@ class HexgateClient:
         *,
         authorize: bool,
         if_none_match: str | None = None,
+        timeout: float | None = None,
     ) -> tuple[dict[str, Any] | None, str | None]:
         """Single HTTP entry point — returns ``(payload, etag)``.
 
@@ -333,8 +348,11 @@ class HexgateClient:
         # Conditional GETs run on the per-turn hot path and fall back to
         # the cached bundle when they fail — use the tight refresh
         # timeout so a slow platform doesn't stall every chat turn for
-        # up to ``self.timeout`` seconds.
-        timeout = self.refresh_timeout if if_none_match is not None else self.timeout
+        # up to ``self.timeout`` seconds. An explicit ``timeout`` overrides both.
+        if timeout is None:
+            timeout = (
+                self.refresh_timeout if if_none_match is not None else self.timeout
+            )
         request = urllib.request.Request(url, headers=headers)
         try:
             with urllib.request.urlopen(request, timeout=timeout) as response:

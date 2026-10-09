@@ -259,6 +259,41 @@ def ledger_namespace(
     }
 
 
+def combined_namespace(
+    ledger: UsageLedger,
+    platform: Mapping[str, int],
+    *,
+    since: float,
+    current_run_age: float | None = None,
+) -> dict[str, int]:
+    """``platform`` (path -> value as fetched) plus this process's usage since the
+    monotonic ``since``, for exactly the paths in ``platform``.
+
+    One ledger read, whatever the number of paths or windows: the cut-off is the
+    same for all.
+
+    Two over-counts are accepted, both the conservative direction: events ingested
+    between ``since`` and the fetch are in both terms, and the local term is not
+    clipped to a path's window, so with a snapshot older than a window it reaches
+    back past that window.
+
+    The current run's invocation is left out whichever term holds it: the local
+    one if it opened at or after ``since``, else ``platform``, on the same
+    assumption that makes ``since`` the cut-off (anything older is ingested). So a
+    cap reads the same after a mid-run refresh as it did at admission.
+    """
+    local = ledger.since(since)
+    return {
+        path: max(
+            value
+            + _metric_value(local, AGENT_USAGE_PATHS[path].metric)
+            - _own_invocation(AGENT_USAGE_PATHS[path], current_run_age),
+            0,
+        )
+        for path, value in platform.items()
+    }
+
+
 def _own_invocation(spec: UsagePath, current_run_age: float | None) -> int:
     # Only while the run's invocation can still be in the window: once it has aged
     # out, subtracting would hide another run's. Bucket round-up may keep it counted

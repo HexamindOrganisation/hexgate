@@ -8,6 +8,7 @@ without making any real network calls.
 from __future__ import annotations
 
 import base64
+import urllib.request
 from typing import Any
 
 import pytest
@@ -546,3 +547,112 @@ def test_get_bans_verifies_key_before_http(
 
     with pytest.raises(HexgateError, match="signature does not chain"):
         client.get_bans()
+
+
+# ---------------------------------------------------------------------------
+# HexgateClient.get_agent_usage — the bounded usage GET
+# ---------------------------------------------------------------------------
+
+_TIMEOUT = 10.0
+_REFRESH_TIMEOUT = 2.0
+
+
+class _Response:
+    def __init__(self, body: bytes) -> None:
+        self._body = body
+        self.headers: dict[str, str] = {}
+
+    def __enter__(self) -> _Response:
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        return None
+
+    def read(self) -> bytes:
+        return self._body
+
+
+def _record_urlopen(
+    monkeypatch: pytest.MonkeyPatch, body: bytes = b"{}"
+) -> list[tuple[Any, float]]:
+    calls: list[tuple[Any, float]] = []
+
+    def fake_urlopen(request: Any, timeout: float) -> _Response:
+        calls.append((request, timeout))
+        return _Response(body)
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    return calls
+
+
+def _verified_client(keys: tuple[bytes, bytes]) -> HexgateClient:
+    priv, pub = keys
+    return HexgateClient(
+        HexgateConfig(base_url="http://test", api_key=_envelope(priv), public_key=pub),
+        timeout=_TIMEOUT,
+        refresh_timeout=_REFRESH_TIMEOUT,
+    )
+
+
+def test_get_agent_usage_builds_the_quoted_url_and_returns_the_body(
+    keys: tuple[bytes, bytes], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client = _verified_client(keys)
+    calls = _record_urlopen(monkeypatch, b'{"as_of": "x", "values": {"a": 1}}')
+
+    payload = client.get_agent_usage("billing bot/v2", ["a", "b"])
+
+    assert payload == {"as_of": "x", "values": {"a": 1}}
+    request, _ = calls[0]
+    assert request.full_url == (
+        "http://test/v1/agents/billing%20bot%2Fv2/usage?paths=a%2Cb"
+    )
+    assert request.get_header("Authorization", "").startswith("Bearer ")
+
+
+def test_get_agent_usage_is_bounded_by_the_refresh_timeout(
+    keys: tuple[bytes, bytes], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client = _verified_client(keys)
+    calls = _record_urlopen(monkeypatch)
+
+    client.get_agent_usage("billing", ["a"])
+
+    assert [timeout for _, timeout in calls] == [_REFRESH_TIMEOUT]
+
+
+def test_get_agent_usage_verifies_key_before_http(
+    keys: tuple[bytes, bytes], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    priv, pub = keys
+    tampered = _envelope(priv)[:-4] + "AAAA"
+    client = HexgateClient(
+        HexgateConfig(base_url="http://test", api_key=tampered, public_key=pub)
+    )
+    monkeypatch.setattr(
+        HexgateClient,
+        "_raw_get",
+        lambda *a, **kw: pytest.fail("HTTP fired despite signature failure"),
+    )
+
+    with pytest.raises(HexgateError, match="signature does not chain"):
+        client.get_agent_usage("billing", ["a"])
+
+
+@pytest.mark.parametrize(
+    ("if_none_match", "expected"),
+    [('"etag"', _REFRESH_TIMEOUT), (None, _TIMEOUT)],
+    ids=["conditional-uses-refresh-timeout", "unconditional-uses-timeout"],
+)
+def test_raw_get_keeps_its_timeout_choice_without_an_override(
+    keys: tuple[bytes, bytes],
+    monkeypatch: pytest.MonkeyPatch,
+    if_none_match: str | None,
+    expected: float,
+) -> None:
+    client = _verified_client(keys)
+    calls = _record_urlopen(monkeypatch)
+
+    client._raw_get("http://test/x", authorize=True, if_none_match=if_none_match)
+
+    assert [timeout for _, timeout in calls] == [expected]
