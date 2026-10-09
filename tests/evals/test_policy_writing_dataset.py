@@ -4,7 +4,7 @@ No LLM, no Docker: our answers stand in for the agent.
 - every `solution/` must pass its case;
 - doing nothing must fail every case that asks for a change;
 - every `wrong_answer/` must fail its case.
-The loader's rules are in test_cases.py.
+The loader's rules are in test_cases.py, the call rules in test_calls.py.
 """
 
 from __future__ import annotations
