@@ -5,38 +5,33 @@ The SDK denies a call that names a tool, skill or agent it doesn't know, leaves
 out an argument a constraint reads, or gives one a value of the wrong type, so
 any such slip in a case would pass every `deny` check whatever the policy says.
 
-- `complete` fills in the arguments the skill and `net.*` gates always send,
-  refuses args on an agent-gate call (the scorer fills those), and returns
-  what a call contradicts or lacks.
+- `complete` fills in what an egress proxy derives from a `net.*` call and
+  returns what the call contradicts or lacks. Agent and skill gates are
+  completed by the scorer's own `policy.complete_call`.
 - `unknown_names` returns the names a call uses that its agent doesn't know.
 - `bad_values` returns the values its agent would never send.
 """
 
 from __future__ import annotations
 
-import json
-from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import get_args
 from urllib.parse import urlsplit
 
 from evals.policy_writing.sources import (
-    AUDIT_JSON,
     SourceError,
-    load_attributes,
+    load_attribute_values,
     load_project_agents,
 )
 from hexgate.egress.model import connect_to_args, http_to_args
+from hexgate.egress.tcp import tcp_to_args
 from hexgate.manifest.models import InputSchema
 from hexgate.security.models import (
     AGENT_RUN_TOOL,
-    SkillVia,
     agent_reach_target,
     gate_args,
     is_agent_reach_key,
     is_skill_key,
-    skill_key,
 )
 from hexgate.security.network import (
     EGRESS_TOOL_ARGS,
@@ -53,51 +48,36 @@ _TYPES = {
     "array": list,
     "object": dict,
 }
-_SKILL_VIA_BY_PREFIX = {skill_key(via, ""): via for via in get_args(SkillVia)}
 
 
 @dataclass(frozen=True)
 class Known:
     """What one agent's calls may use, from its starting project."""
 
-    tools: dict[str, set[str]]  # {tool: argument names}, as the scorer reads them
-    attrs: set[str]
-    schemas: dict[str, InputSchema]
+    schemas: dict[str, InputSchema]  # the agent's tools
     skills: set[str]
-    agents: set[str]  # every agent in agents.json: the possible reach targets
-    attr_types: dict[str, set[str]]  # the JSON types each attribute arrived with
+    agents: set[str]  # the possible reach targets: agents.json's, and sub-agents
+    attr_types: dict[str, set[str]]  # each attribute, with the JSON types it arrived as
 
 
 def load_known(project: Path, agent: str) -> Known:
     """`agent`'s known names and types, from `agents.json` and `audit.json`.
 
-    Raises `SourceError` for a missing or malformed file, or an agent with no
-    manifest.
+    Raises `SourceError` for a malformed file or an agent with no manifest.
     """
     agents = load_project_agents(project)
     if agent not in agents.manifests:
         raise SourceError(f"agents.json has no manifest for agent {agent!r}")
     manifest = agents.manifests[agent]
+    values = load_attribute_values(project, agent)
     return Known(
-        tools={t.name: set(t.input_schema.properties) for t in manifest.tools},
-        attrs=load_attributes(project, agent),  # the scorer's own reading
         schemas={t.name: t.input_schema for t in manifest.tools},
         skills={k.name for k in manifest.skills or []},
-        agents=set(agents.registered),
-        attr_types=_attr_types(project, agent),
+        # A manifest's sub-agent is a reach target too, as the SDK counts it.
+        agents=set(agents.registered)
+        | {s.name for m in agents.manifests.values() for s in m.subagents or []},
+        attr_types={k: {_json_type(v) for v in vs} for k, vs in values.items()},
     )
-
-
-def _attr_types(project: Path, agent: str) -> dict[str, set[str]]:
-    """The JSON types each of `agent`'s attributes arrived with in audit.json."""
-    audit = project / AUDIT_JSON
-    rows = json.loads(audit.read_text()) if audit.exists() else []
-    types: dict[str, set[str]] = {}
-    for row in rows["rows"] if isinstance(rows, dict) else rows:
-        if row["agent_name"] == agent:
-            for name, value in (row.get("attributes") or {}).items():
-                types.setdefault(name, set()).add(_json_type(value))
-    return types
 
 
 def _is_a(value, want) -> bool:
@@ -112,72 +92,41 @@ def _json_type(value) -> str:
     return "null"
 
 
-def _is_json(value) -> bool:
-    # What a real call's arguments can hold; YAML also makes dates and times.
-    if isinstance(value, list):
-        return all(_is_json(v) for v in value)
-    if isinstance(value, dict):
-        return all(isinstance(k, str) and _is_json(v) for k, v in value.items())
-    return value is None or isinstance(value, (str, int, float, bool))
-
-
-def _skill_parts(tool: str) -> tuple[str, str]:
-    """(via, skill name) of a `skill:` / `skill.resource:` / `skill.script:` key."""
-    prefix, name = tool.split(":", 1)
-    return _SKILL_VIA_BY_PREFIX[f"{prefix}:"], name
-
-
 # ---------------------------------------------------------------- complete
 
 
 @dataclass
 class _Sent:
-    """What a gate sends for one call, and what the call must spell out itself."""
+    """What an egress proxy sends for one call, given what the call spells out."""
 
-    args: dict = field(default_factory=dict)  # values the gate always sends
-    required: tuple[str, ...] = ()  # present and not null
-    present: tuple[str, ...] = ()  # present, null allowed
-    exact: bool = False  # the gate sends nothing besides `args`
+    args: dict = field(default_factory=dict)  # what the proxy derives
+    required: tuple[str, ...] = ()  # what the call must give, not null
     problems: list[str] = field(default_factory=list)
 
 
-def _agent_gate(tool: str, args: dict, agent: str) -> _Sent:
-    # Admission and reach send their own args (agent, target, via), which
-    # `policy.decide` fills in itself; it accepts one a case spells only with
-    # the gate's value. Spelling one adds nothing, and a wrong value would fail
-    # the check rather than the load, so the loader refuses them all.
-    if not args:
-        return _Sent()
-    return _Sent(problems=[f"the gate sends its own args; drop {sorted(args)}"])
+def _tcp(args: dict) -> _Sent:
+    sent = _Sent(required=("host", "port"))
+    if isinstance(args.get("host"), str) and _is_a(args.get("port"), int):
+        sent.args = tcp_to_args(args["host"], args["port"])
+    return sent
 
 
-def _skill(tool: str, args: dict, agent: str) -> _Sent:
-    # hexgate/adapters/langchain/skills.py and google/tools.py; content_hash may
-    # be null, and a script's invocation arguments are null when the model
-    # leaves them out, which a constraint reads otherwise than an absent one.
-    via, name = _skill_parts(tool)
-    present = ("file_path", "content_hash")
-    if via == "script":
-        present += ("script_args", "short_options", "positional_args")
-    return _Sent({"skill": name, "via": via}, present=present)
-
-
-def _tcp(tool: str, args: dict, agent: str) -> _Sent:
-    return _Sent({"protocol": "tcp"}, required=("host", "port"))  # egress/tcp.py
-
-
-def _http(tool: str, args: dict, agent: str) -> _Sent:
+def _http(args: dict) -> _Sent:
     """What the proxy builds from the request line (hexgate/egress/model.py)."""
     if args.get("method") == "CONNECT":
-        sent = _Sent(required=("host", "port"), exact=True)
+        sent = _Sent(required=("host", "port"))
         if isinstance(args.get("host"), str) and _is_a(args.get("port"), int):
             sent.args = connect_to_args(args["host"], args["port"])
         return sent
-    sent = _Sent(required=("method", "url"), exact=True)
+    sent = _Sent(required=("method", "url"))
     method, url = args.get("method"), args.get("url")
     if not (isinstance(method, str) and isinstance(url, str)):
         return sent
-    parts = urlsplit(url)
+    try:
+        parts = urlsplit(url)
+    except ValueError as exc:  # a malformed IPv6 host
+        sent.problems.append(f"url={url!r}: {exc}")
+        return sent
     if parts.scheme.lower() == "https":
         # The proxy sees HTTPS only as a CONNECT tunnel: no path, no GET.
         sent.problems.append("an https url is a CONNECT with host and port")
@@ -187,40 +136,29 @@ def _http(tool: str, args: dict, agent: str) -> _Sent:
     elif method != method.upper():
         sent.problems.append(f"method={method!r} is not upper case")
     else:
-        sent.args = http_to_args(method, url)
+        try:
+            sent.args = http_to_args(method, url)
+        except ValueError as exc:  # a port out of range or not a number
+            sent.problems.append(f"url={url!r}: {exc}")
     return sent
 
 
-_GATES: dict[str, Callable[[str, dict, str], _Sent]] = {
-    AGENT_RUN_TOOL: _agent_gate,
-    NET_TCP_CONNECT: _tcp,
-    NET_HTTP_REQUEST: _http,
-}
+_PROXIES = {NET_TCP_CONNECT: _tcp, NET_HTTP_REQUEST: _http}
 
 
-def _gate(tool: str) -> Callable[[str, dict, str], _Sent] | None:
-    if is_agent_reach_key(tool):
-        return _agent_gate
-    if is_skill_key(tool):
-        return _skill
-    return _GATES.get(tool)
+def complete(call: dict) -> list[str]:
+    """Fill in what `call`'s egress proxy derives; what it contradicts or lacks.
 
-
-def complete(call: dict, agent: str) -> list[str]:
-    """Fill in the arguments `call`'s gate always sends; what it contradicts or lacks.
-
-    A dry-run without them, or with other values, is denied by any constraint
-    on them, so it would pass every `deny` check.
+    A dry-run without those args, or with other values, is denied by any
+    constraint on them, so it would pass every `deny` check.
     """
     args = call.setdefault("args", {})
-    bad = [f"args.{k}={v!r} is not JSON" for k, v in args.items() if not _is_json(v)]
-    gate = _gate(call["tool"])
-    if gate is None:
-        return bad
-    sent = gate(call["tool"], args, agent)
-    bad += sent.problems
+    proxy = _PROXIES.get(call["tool"])
+    if proxy is None:
+        return []
+    sent = proxy(args)
+    bad = list(sent.problems)
     bad += [f"args.{k} missing" for k in sent.required if args.get(k) is None]
-    bad += [f"args.{k} missing" for k in sent.present if k not in args]
     if args.get("port") is not None and not _is_a(args["port"], int):
         bad.append(f"args.port={args['port']!r} is not an int")
     bad += [
@@ -228,7 +166,7 @@ def complete(call: dict, agent: str) -> list[str]:
         for k, v in sent.args.items()
         if args.get(k, v) != v
     ]
-    if sent.exact and sent.args:
+    if sent.args:  # a proxy sends nothing else
         bad += [f"args.{k} is never sent" for k in sorted(set(args) - set(sent.args))]
     args.update(sent.args)
     return bad
@@ -238,27 +176,30 @@ def complete(call: dict, agent: str) -> list[str]:
 
 
 def unknown_names(call: dict, known: Known) -> list[str]:
-    """Tool, skill, agent, argument and attribute names `call` uses that are unknown."""
-    tool = call["tool"]
+    """Tool, skill, agent, argument and attribute names `call` uses that are unknown.
+
+    The call is completed first: a gate call carries its gate's key and args.
+    """
+    tool, args = call["tool"], call.get("args", {})
     if tool in EGRESS_TOOL_ARGS:
-        args = EGRESS_TOOL_ARGS[tool]
+        allowed = EGRESS_TOOL_ARGS[tool]
     elif tool == AGENT_RUN_TOOL:
-        args = gate_args(tool)
+        allowed = gate_args(tool)
     elif is_agent_reach_key(tool):
         if agent_reach_target(tool) not in known.agents:
             return [tool]
-        args = gate_args(tool)
+        allowed = gate_args(tool)
     elif is_skill_key(tool):
-        if _skill_parts(tool)[1] not in known.skills:
+        if args["skill"] not in known.skills:
             return [tool]
-        args = gate_args(tool)
-    elif tool in known.tools:
-        args = known.tools[tool]
+        allowed = gate_args(tool)
+    elif tool in known.schemas:
+        allowed = set(known.schemas[tool].properties)
     else:
         return [tool]
-    bad = [f"args.{a}" for a in call.get("args", {}) if a not in args]
+    bad = [f"args.{a}" for a in args if a not in allowed]
     return bad + [
-        f"ctx.{a}" for a in call.get("attributes", {}) if a not in known.attrs
+        f"ctx.{a}" for a in call.get("attributes", {}) if a not in known.attr_types
     ]
 
 
@@ -271,8 +212,12 @@ def _bad_args(args: dict, schema: InputSchema) -> list[str]:
     for name, value in args.items():
         kind = schema.properties[name].type
         # Adapters record "string" for any schema without one top-level type
-        # (`int | None`, `bool | None`, a list, a model), so it says nothing; a
-        # precise type rules out null too, since a nullable one is never precise.
+        # (`int | None`, `bool | None`, a list, a model), so it says nothing.
+        # Google records `Optional[int]` as "integer", so null passes on an
+        # argument that isn't required; on a required precise one it is a
+        # blank value.
+        if value is None and name not in schema.required:
+            continue
         want = None if kind == "string" else _TYPES.get(kind)
         if want and not _is_a(value, want):
             bad.append(f"args.{name}={value!r} is not {kind}")

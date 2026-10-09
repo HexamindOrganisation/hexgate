@@ -7,8 +7,10 @@ product.
 - `cases/<category>/<name>/` holds one case each. The case's id is
   `<category>/<name>`, and the category is its scoring group.
 - `starting_projects/<name>/` holds the projects several cases start from.
-- `cases.py` loads the cases, and `calls.py` checks and completes their dry-run
-  calls. `checks.py` scores what an agent left behind.
+- `cases.py` loads the cases, `calls.py` checks their dry-run calls against
+  the agent's names and completes egress calls, and `policy.py` completes the
+  agent and skill gate calls as the scorer sends them. `checks.py` scores what
+  an agent left behind.
 
 ## A case
 
@@ -47,28 +49,28 @@ rejects anything that would otherwise drop a check without a word:
     another type than its schema's: a quoted `"51"`, or a blank `amount:`,
     which YAML reads as null. A `string` in the manifest checks nothing, since
     adapters write it for `int | None` too;
-  - a caller attribute of another JSON type than its audit rows carry;
-  - a date or any other value that isn't JSON.
-- **Run facts** (`policy.py`, `check_run_facts`) the scorer would refuse: any
-  on `agent.run` or `net.*`, which are decided outside any run; `agent`, which
-  is the case's agent; `calls_of_this_tool` on a gate key, which is never
-  counted; an unknown `run.*` path, or a value of the wrong type.
-- **Synthetic calls** (`calls.py`, `complete`), which must match what the gate
-  sends:
-  - `agent.run` and `agent.<via>:<target>`: no args at all, since the gate
-    sends its own (`agent`, `target`, `via`) and the scorer fills them in;
-  - `skill:` / `skill.resource:` / `skill.script:`: `skill` and `via`, plus a
-    `file_path` and a `content_hash` (null allowed), and for a script its
-    `script_args`, `short_options` and `positional_args` (null when unused);
-  - `net.http_request`: an upper-case `method` and an absolute `http://`
-    `url`, or `host` and `port` for `CONNECT`, the only way HTTPS reaches the
-    proxy; the rest must be what the proxy derives from them;
-  - `net.tcp_connect`: `host` and an int `port`; `protocol` is `tcp`.
+  - a caller attribute of another JSON type than its audit rows carry.
 
-  The loader fills in what a skill or `net.*` gate derives, and the scorer
-  fills in an agent gate's args, so a case can write just
-  `{tool: "agent.tool:billing-bot"}` or
-  `{tool: net.http_request, args: {method: GET, url: "http://x.com/a"}}`.
+  A call's values are read through JSON first, as `policy test` reads them,
+  so an unquoted YAML date is its string. A timestamp must be quoted: YAML's
+  own string for one isn't ISO, and would compare wrongly.
+- **Calls no policy could dry-run** (`policy.py`, `complete_call`, the
+  scorer's own input checks): run facts on `agent.run` or `net.*`, which are
+  decided outside any run; `run_facts.agent`, which is the case's agent;
+  `calls_of_this_tool` on a gate key, which is never counted; an unknown
+  `run.*` path or a value of the wrong type; an attribute of a type no caller
+  sends; an arg an agent or skill gate sets itself, given another value.
+- **Egress calls** (`calls.py`, `complete`), which must match what the proxy
+  derives: `net.http_request` takes an upper-case `method` and an absolute
+  `http://` `url`, or `host` and `port` for `CONNECT`, the only way HTTPS
+  reaches the proxy; `net.tcp_connect` takes `host` and an int `port`. Any
+  other arg is refused.
+
+The loader writes each call as its gate sends it, so a case can write just
+`{tool: "agent.tool:billing-bot"}`, `{tool: "skill:pdf", args: {file_path:
+SKILL.md}}` (`content_hash` and a script's args are null when left out, as the
+adapters send them) or `{tool: net.http_request, args: {method: GET, url:
+"http://x.com/a"}}`.
 
 `expect` keys:
 
@@ -109,9 +111,9 @@ would return to a real agent:
   attributes are set per request, not in the manifest, so the `ctx.*` names a
   case's agent knows are the `attributes` keys of its own rows.
 
-A module tree (`policies/` with a `roles.yaml`) is also linted against
-`agents.json` before the agent edits anything, so a starting project must
-already pass: every named `roles.yaml` column is an agent in `agents.json`,
+The scorer lints a module tree (`policies/` with a `roles.yaml`) against
+`agents.json` in every answer, including one that changes nothing, so a
+starting project must already pass: every named `roles.yaml` column is an agent in `agents.json`,
 every `agents:` reach target is one too (or a sub-agent a manifest lists), and
 each column's grants name only tools and skills its agent's manifest has.
 

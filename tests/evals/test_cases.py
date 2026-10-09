@@ -19,28 +19,10 @@ from evals.policy_writing.cases import (
     starting_files,
 )
 from tests.evals.answers import failed, run_answer
-from tests.evals.helpers import AGENT, agent_view, manifest_tool
+from tests.evals.helpers import AGENT, AGENTS, AUDIT, agent_view, manifest_tool
 
-AGENTS_JSON = json.dumps(
-    [
-        agent_view(
-            AGENT, manifest_tool("refund_order", order_id="string", amount="number")
-        ),
-        # Another agent in the project: its tools and attributes are not shop-bot's.
-        agent_view("ops-bot", manifest_tool("wire_transfer", iban="string")),
-    ]
-)
-# `audit_decisions` rows (AuditDecisionRow fields); only their attributes matter here.
-AUDIT_JSON = json.dumps(
-    [
-        {"agent_name": AGENT, "tool_name": "refund_order", "attributes": {"tier": "x"}},
-        {
-            "agent_name": "ops-bot",
-            "tool_name": "wire_transfer",
-            "attributes": {"eu": 1},
-        },
-    ]
-)
+# The scorer's shop-bot fixture, as the starting project's files.
+AGENTS_TEXT, AUDIT_TEXT = json.dumps(AGENTS), json.dumps(AUDIT)
 
 POLICY = """\
 version: 1
@@ -80,8 +62,8 @@ def _eval_set(
     """
     root = tmp_path / "set"
     shop = root / "starting_projects" / "shop"
-    _write(shop / "agents.json", AGENTS_JSON)
-    _write(shop / "audit.json", AUDIT_JSON)
+    _write(shop / "agents.json", AGENTS_TEXT)
+    _write(shop / "audit.json", AUDIT_TEXT)
     _write(shop / "policy.yaml", POLICY)
     if boundary:
         _write(shop / "policies" / "boundaries" / "org.yaml", "boundary: {}\n")
@@ -179,7 +161,7 @@ def _case(**extra) -> dict:
                     ]
                 }
             ),
-            r"case.yaml: agent.run: not what shop-bot sends: .*drop \['agent'\]",
+            r"case.yaml: agent.run: .*the gate sends .*drop \['agent'\]",
         ),
         # Run facts the scorer would refuse (test_policy.py has the rules).
         (
@@ -246,7 +228,7 @@ def test_load_rejects(tmp_path: Path, case: dict, error: str) -> None:
 def test_load_rejects_both_starting_projects(tmp_path: Path) -> None:
     root = _eval_set(tmp_path, _case())
     _write(
-        root / "cases" / "cat" / "c" / "starting_project" / "agents.json", AGENTS_JSON
+        root / "cases" / "cat" / "c" / "starting_project" / "agents.json", AGENTS_TEXT
     )
     with pytest.raises(CaseError, match="both"):
         load_cases(root)
@@ -266,56 +248,66 @@ def test_load_rejects_a_case_one_level_too_shallow(tmp_path: Path) -> None:
         load_cases(root)
 
 
-def test_load_rejects_an_unquoted_yaml_date(tmp_path: Path) -> None:
-    # YAML makes a date of it, and the strict case model keeps it as one.
-    root = _eval_set(tmp_path, _case())
-    call = "{role: billing, tool: refund_order, args: {order_id: 2026-03-01, amount: 1}, expect: deny}"
-    _write(
-        root / "cases" / "cat" / "c" / "case.yaml",
-        f"starting_project: shop\nagent: {AGENT}\nrequest: Do it.\n"
-        f"expect:\n  decisions:\n    - {call}\n",
-    )
-    with pytest.raises(CaseError, match="order_id=datetime.date.* is not JSON"):
-        load_cases(root)
-
-
-def test_load_rejects_an_unquoted_yaml_date_beside_a_preserve_file(
-    tmp_path: Path,
-) -> None:
-    # Merging with preserve.yaml keys each call by its JSON; a date must not crash it.
+def test_load_reads_an_unquoted_yaml_date_as_its_string(tmp_path: Path) -> None:
+    # As `policy test` reads it; merging with preserve.yaml keys each call by
+    # its JSON, which a date object would crash.
     root = _eval_set(tmp_path, _case(), preserve=[REFUND_10])
-    call = "{role: billing, tool: refund_order, args: {order_id: o1, amount: 1}, attributes: {tier: 2026-03-01}, expect: deny}"
+    call = (
+        "{role: billing, tool: refund_order, args: {order_id: 2026-03-01, amount: 1},"
+        " attributes: {department: 2026-03-02}, expect: deny}"
+    )
     _write(
         root / "cases" / "cat" / "c" / "case.yaml",
         f"starting_project: shop\nagent: {AGENT}\nrequest: Do it.\n"
         f"expect:\n  decisions:\n    - {call}\n",
     )
-    with pytest.raises(CaseError, match="ctx.tier=datetime.date.* is not string"):
+    [case] = load_cases(root)
+    decision = case["expect"]["decisions"][0]
+    assert (decision["args"]["order_id"], decision["attributes"]) == (
+        "2026-03-01",
+        {"department": "2026-03-02"},
+    )
+
+
+def test_load_refuses_an_unquoted_yaml_timestamp(tmp_path: Path) -> None:
+    # Its string has a space and +00:00, so it compares wrongly with a T/Z one.
+    root = _eval_set(tmp_path, _case())
+    call = (
+        "{role: billing, tool: refund_order, args: {order_id: 2026-01-01T08:00:00Z,"
+        " amount: 1}, expect: deny}"
+    )
+    _write(
+        root / "cases" / "cat" / "c" / "case.yaml",
+        f"starting_project: shop\nagent: {AGENT}\nrequest: Do it.\n"
+        f"expect:\n  decisions:\n    - {call}\n",
+    )
+    with pytest.raises(CaseError, match="quote the timestamps"):
         load_cases(root)
 
 
 def test_load_completes_and_checks_a_script_call(tmp_path: Path) -> None:
-    # complete requires a script's invocation arguments; unknown_names must
-    # then accept them.
+    # The scorer's complete_call fills a script's args, null where left out;
+    # unknown_names must then accept them.
     view = agent_view(
         AGENT, manifest_tool("refund_order", order_id="string", amount="number")
     )
     view["manifest"]["skills"] = [{"name": "pdf", "description": "pdf"}]
     root = _eval_set(tmp_path, _case())
     _write(root / "starting_projects" / "shop" / "agents.json", json.dumps([view]))
-    run = {"file_path": "s.sh", "content_hash": None, "script_args": None}
-    run |= {"short_options": None, "positional_args": None}
-    call = {
-        "role": "billing",
-        "tool": "skill.script:pdf",
-        "args": run,
-        "expect": "deny",
-    }
+    call = {"role": "billing", "tool": "skill.script:pdf", "expect": "deny"}
     _write(
         root / "cases" / "cat" / "c" / "case.yaml", _case(expect={"decisions": [call]})
     )
     [case] = load_cases(root)
-    assert case["expect"]["decisions"][0]["args"]["via"] == "script"
+    assert case["expect"]["decisions"][0]["args"] == {
+        "skill": "pdf",
+        "via": "script",
+        "file_path": None,
+        "content_hash": None,
+        "script_args": None,
+        "short_options": None,
+        "positional_args": None,
+    }
 
 
 def test_a_loaded_reach_call_is_one_decide_accepts(tmp_path: Path) -> None:
@@ -358,6 +350,8 @@ def test_load_rejects_a_misnamed_preserve_file(tmp_path: Path, name: str) -> Non
 def test_load_skips_dot_folders(tmp_path: Path) -> None:
     root = _eval_set(tmp_path, _case())
     (root / "cases" / "cat" / ".ipynb_checkpoints").mkdir()
+    # A checkpoint copy of a case.yaml is not a misplaced case.
+    _write(root / "cases" / "cat" / "c" / ".ipynb_checkpoints" / "case.yaml", _case())
     assert [c["id"] for c in load_cases(root)] == ["cat/c"]
 
 
@@ -372,7 +366,7 @@ def test_load_takes_id_and_category_from_the_path(tmp_path: Path) -> None:
         tmp_path, {"agent": AGENT, "request": "Do it.", "held_out": True, "expect": {}}
     )
     own = root / "cases" / "cat" / "c" / "starting_project"
-    _write(own / "agents.json", AGENTS_JSON)
+    _write(own / "agents.json", AGENTS_TEXT)
     [case] = load_cases(root)
     assert (case["id"], case["category"], case["held_out"]) == ("cat/c", "cat", True)
     assert case["project"] == own
@@ -409,7 +403,7 @@ def test_an_answer_editing_agents_json_fails_though_the_case_never_names_it(
     root = _eval_set(tmp_path, case, boundary=False)
     _write(
         root / "cases" / "cat" / "c" / "wrong_answer" / "agents.json",
-        AGENTS_JSON + "\n",
+        AGENTS_TEXT + "\n",
     )
     [case] = load_cases(root)
     # The scorer also stops trusting the names an edited agents.json lists.
@@ -422,7 +416,7 @@ def test_preserve_yaml_and_dot_paths_are_not_given_to_the_agent(
     tmp_path: Path,
 ) -> None:
     root = _eval_set(tmp_path, _case(), preserve=[REFUND_500])
-    _write(root / "starting_projects" / "shop" / ".claude" / "agents.json", AGENTS_JSON)
+    _write(root / "starting_projects" / "shop" / ".claude" / "agents.json", AGENTS_TEXT)
     [case] = load_cases(root)
     assert "preserve.yaml" not in starting_files(case)
     assert ".claude/agents.json" not in starting_files(case)

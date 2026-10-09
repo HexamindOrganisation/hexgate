@@ -40,23 +40,28 @@ def _views(ws: Path) -> list[dict]:
     return json.loads((ws / AGENTS_JSON).read_text())
 
 
-@_reading
 def load_attributes(ws: Path, agent: str) -> set[str]:
     """The caller attributes (`ctx.*`) `agent` is known to send.
 
     `audit.json` holds `AuditDecisionRow`s, as a list or the endpoint's page (`{rows, ...}`).
     Attributes are set per request and are in no manifest, so the known ones are
     the `attributes` keys of `agent`'s rows. No `audit.json` means none."""
+    return set(load_attribute_values(ws, agent))
+
+
+@_reading
+def load_attribute_values(ws: Path, agent: str) -> dict[str, list]:
+    """Each of `agent`'s caller attributes, with every value its audit rows carry."""
     audit = ws / AUDIT_JSON
     rows = json.loads(audit.read_text()) if audit.exists() else []
     if isinstance(rows, dict):  # the endpoint's page shape, {rows, total, ...}
         rows = rows["rows"]
-    return {
-        name
-        for row in rows
-        if row["agent_name"] == agent
-        for name in _row_attributes(row)
-    }
+    values: dict[str, list] = {}
+    for row in rows:
+        if row["agent_name"] == agent:
+            for name, value in _row_attributes(row).items():
+                values.setdefault(name, []).append(value)
+    return values
 
 
 def _row_attributes(row: dict) -> dict:

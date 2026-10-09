@@ -9,7 +9,9 @@ answers (`solution/` or `wrong_answer/`) into a workspace in place of an agent.
 
 from __future__ import annotations
 
+import datetime
 import fnmatch
+import json
 import shutil
 from pathlib import Path
 from typing import Annotated, Any, Literal
@@ -26,7 +28,8 @@ from pydantic import (
 
 from evals.policy_writing.calls import bad_values, complete, load_known, unknown_names
 from evals.policy_writing.checks import snapshot
-from evals.policy_writing.policy import CaseError, check_run_facts, dump_json
+from evals.policy_writing.policy import CaseError, complete_call, dump_json
+from evals.policy_writing.sources import SourceError
 
 HERE = Path(__file__).resolve().parent
 
@@ -178,16 +181,35 @@ def _calls(expect: dict) -> list[dict]:
     return expect.get("decisions", []) + probes
 
 
+def _timestamps(value) -> list[str]:
+    """The unquoted YAML timestamps (not plain dates) anywhere in `value`."""
+    if isinstance(value, dict):
+        return [s for v in value.values() for s in _timestamps(v)]
+    if isinstance(value, list):
+        return [s for v in value for s in _timestamps(v)]
+    return [str(value)] if isinstance(value, datetime.datetime) else []
+
+
 def _complete_calls(path: Path, agent: str, calls: list[dict]) -> None:
+    """Complete each call as its gate sends it, refusing one no policy could
+    dry-run: egress calls by `calls.complete`, agent and skill gates by the
+    scorer's own `policy.complete_call`."""
     for call in calls:
-        bad = complete(call, agent)
-        if bad:
-            raise CaseError(f"{path}: {call['tool']}: not what {agent} sends: {bad}")
-        if call.get("run_facts"):
-            try:
-                check_run_facts(call, agent)
-            except CaseError as exc:
-                raise CaseError(f"{path}: {call['tool']}: {exc}") from exc
+        tool = call["tool"]
+        # As `policy test` reads them, so an unquoted YAML date is its string.
+        # A timestamp's string ("2026-01-01 08:00:00+00:00") isn't how a caller
+        # spells one, and compares wrongly with an ISO one, so it must be quoted.
+        for key in ("args", "attributes", "run_facts"):
+            if key in call:
+                if stamps := _timestamps(call[key]):
+                    raise CaseError(f"{path}: {tool}: quote the timestamps {stamps}")
+                call[key] = json.loads(dump_json(call[key]))
+        if bad := complete(call):
+            raise CaseError(f"{path}: {tool}: not what {agent} sends: {bad}")
+        try:
+            complete_call(call, agent)
+        except CaseError as exc:
+            raise CaseError(f"{path}: {tool}: {exc}") from exc
 
 
 def _check_calls(path: Path, case: dict) -> None:
@@ -195,8 +217,7 @@ def _check_calls(path: Path, case: dict) -> None:
     agent = case["agent"]
     try:
         known = load_known(case["project"], agent)
-    # No agents.json, bad JSON, an unknown agent, a row or view of the wrong shape.
-    except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+    except SourceError as exc:
         raise CaseError(f"{path}: {exc}") from exc
     for call in _calls(case["expect"]):
         unknown = unknown_names(call, known)
