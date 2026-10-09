@@ -13,6 +13,7 @@ hexgate/              # SDK source
 platform/api/         # FastAPI control plane (separate uv project)
 platform/api/tests/   # API tests
 platform/collector/   # OTLP ingestion Collector (Go)
+platform/mcp/         # MCP server (FastMCP, own uv project; never imports hexgate_api)
 platform/dashboard/   # React/Vite frontend
 tests/                # hexgate package tests (agents, cli, security, tracing, streaming…)
 
@@ -22,7 +23,7 @@ tests/                # hexgate package tests (agents, cli, security, tracing, s
 
 ## Rules & Constants
 - **Branches:** `{initials}/{type}/{short_description}` (e.g., `vl/feat/web_search`)
-- **Commits:** `type(scope): description` (lowercase, imperative, no period). Scopes: `platform-api`, `platform-scripts`, `dashboard`, `sdk`, `cli`, `clickhouse`, `redpanda`, `collector`, `evals`. Types: `feat`, `fix`, `docs`, `build`, `refactor`, `test`.
+- **Commits:** `type(scope): description` (lowercase, imperative, no period). Scopes: `platform-api`, `platform-scripts`, `dashboard`, `sdk`, `cli`, `clickhouse`, `redpanda`, `collector`, `evals`, `mcp`. Types: `feat`, `fix`, `docs`, `build`, `refactor`, `test`.
 - **Envs:** All prefixed with `HEXGATE_`. Never commit private keys.
 
 ## Agent Instruction Files
