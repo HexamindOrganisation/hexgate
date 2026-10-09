@@ -6,15 +6,25 @@ so enabling it here would leak into every later test.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping, Sequence
+from concurrent.futures import Executor, Future
 from typing import Any
+
+import pytest
 
 from hexgate.runtime.agent_usage import UsageLedgers, new_usage_ledger
 from hexgate.runtime.context import HexgateContext
 from hexgate.runtime.run_facts import get_run_facts, run_scope
-from hexgate.security import AGENT_RUN_TOOL, DecisionOutcome, Verdict
-from hexgate.security.enforcer import PolicyEnforcer
+from hexgate.security import AGENT_RUN_TOOL, DecisionOutcome, Verdict, usage_source
+from hexgate.security.enforcer import PolicyEnforcer, UsageRefresh, build_enforcer
 from hexgate.security.policy_set import PolicySet, load_policy_set_from_dict
+from hexgate.security.usage_source import (
+    OnUnavailable,
+    PlatformUsageSource,
+    UsageRefreshSettings,
+    UsageState,
+)
+from hexgate.tracing import _senders
 
 _AGENT = "billing"
 _START = 1_000_000.0
@@ -248,3 +258,254 @@ def test_a_usage_free_engine_gets_no_namespace_and_no_ledger() -> None:
 
     assert engine.namespaces == [None]
     assert ledgers.ledger_for(_AGENT) is None
+
+
+def test_without_a_usage_source_a_decision_reads_local() -> None:
+    enforcer = PolicyEnforcer(_tool_cap(2), agent_name=_AGENT, ledgers=_ledgers())
+
+    assert enforcer.decide("refund", {}).usage_state == UsageState.LOCAL
+
+
+# --- Through the platform usage source --------------------------------------------
+
+_INVOCATIONS = "invocations_1h"
+_ADMISSION_PATHS = frozenset({_INVOCATIONS})
+
+
+class _FakeFetcher:
+    """Answers the requested paths it has a value for, or raises ``error``."""
+
+    def __init__(self, values: Mapping[str, int] | None = None) -> None:
+        self.values = dict(values or {})
+        self.error: Exception | None = None
+
+    def get_agent_usage(self, name: str, paths: Sequence[str]) -> Mapping[str, Any]:
+        if self.error is not None:
+            raise self.error
+        return {
+            "values": {path: self.values[path] for path in paths if path in self.values}
+        }
+
+
+class _InlineExecutor(Executor):
+    """Runs each background fetch on submit, on the caller's thread."""
+
+    def submit(  # type: ignore[override]
+        self, fn: Callable[..., Any], /, *args: Any, **kwargs: Any
+    ) -> Future[Any]:
+        future: Future[Any] = Future()
+        future.set_result(fn(*args, **kwargs))
+        return future
+
+
+class _Platform:
+    """A usage source and the ledgers it combines with, on one clock."""
+
+    def __init__(self, values: Mapping[str, int] | None = None) -> None:
+        self.clock = _FakeClock()
+        self.fetcher = _FakeFetcher(values)
+        self.ledgers = _ledgers(self.clock)
+        self.source = PlatformUsageSource(
+            self.fetcher, _InlineExecutor(), UsageRefreshSettings(), self.clock
+        )
+
+    def enforcer(self, policy: Any) -> PolicyEnforcer:
+        return PolicyEnforcer(
+            policy,
+            agent_name=_AGENT,
+            ledgers=self.ledgers,
+            usage_source=self.source,
+        )
+
+    def boundary(self, enforcer: PolicyEnforcer) -> None:
+        usage = enforcer.usage_refresh()
+        assert usage is not None
+        usage.run()
+
+
+class _FailModeEngine:
+    """Delegates to ``policy`` and declares 6b's fail mode."""
+
+    def __init__(self, policy: PolicySet, on_unavailable: OnUnavailable) -> None:
+        self._policy = policy
+        self._on_unavailable = on_unavailable
+
+    def agent_usage_paths(self) -> frozenset[str]:
+        return self._policy.agent_usage_paths()
+
+    def usage_on_unavailable(self) -> OnUnavailable:
+        return self._on_unavailable
+
+    def evaluate(self, **kwargs: Any) -> Verdict:
+        return self._policy.evaluate(**kwargs)
+
+
+class _UnreadSource:
+    def read(self, *_: Any, **__: Any) -> None:
+        raise AssertionError("a usage-free policy must not read the source")
+
+
+def test_the_platform_term_is_counted() -> None:
+    platform = _Platform({_INVOCATIONS: 99})
+    enforcer = platform.enforcer(_admission_cap(100))
+    platform.boundary(enforcer)
+    with run_scope(_AGENT, ledgers=platform.ledgers):
+        pass
+
+    decision = enforcer.decide(AGENT_RUN_TOOL, _ADMISSION_ARGS)
+
+    assert not decision.allowed
+    assert decision.usage_state == UsageState.FRESH
+
+
+def test_an_unreachable_platform_reads_ledger_only_and_admits() -> None:
+    """G3: a platform outage never denies by default. A PolicySet has no fail-mode
+    method until 6b, so this also pins the enforcer's allow fallback."""
+    platform = _Platform()
+    platform.fetcher.error = RuntimeError("platform down")
+    enforcer = platform.enforcer(_admission_cap(2))
+    platform.boundary(enforcer)
+
+    decision = enforcer.decide(AGENT_RUN_TOOL, _ADMISSION_ARGS)
+
+    assert decision.allowed
+    assert decision.usage_state == UsageState.UNAVAILABLE
+
+
+def test_a_path_added_by_a_policy_swap_reads_partial_and_does_not_deny() -> None:
+    """G4 / F5: the snapshot predates the new path, which must not deny the call."""
+    platform = _Platform({_INVOCATIONS: 0})
+    enforcer = platform.enforcer(_admission_cap(5))
+    platform.boundary(enforcer)
+    enforcer.policy = load_policy_set_from_dict(
+        {
+            "constraints": [f"agent_usage.{_INVOCATIONS} < 5"],
+            "tools": {
+                "refund": {
+                    "mode": "allow",
+                    "constraints": ["agent_usage.tool_calls_5m < 5"],
+                }
+            },
+        }
+    )
+
+    decision = enforcer.decide("refund", {})
+
+    assert decision.allowed
+    assert decision.usage_state == UsageState.PARTIAL
+
+
+@pytest.mark.parametrize(
+    ("on_unavailable", "admitted"),
+    [(OnUnavailable.DENY, False), (OnUnavailable.ALLOW, True)],
+)
+def test_the_fail_mode_is_read_from_the_engine(
+    on_unavailable: OnUnavailable, admitted: bool
+) -> None:
+    platform = _Platform()
+    platform.fetcher.error = RuntimeError("platform down")
+    enforcer = platform.enforcer(_FailModeEngine(_admission_cap(2), on_unavailable))
+    platform.boundary(enforcer)
+
+    assert enforcer.decide(AGENT_RUN_TOOL, _ADMISSION_ARGS).allowed is admitted
+
+
+def test_no_usage_refresh_without_a_source() -> None:
+    enforcer = PolicyEnforcer(_admission_cap(2), agent_name=_AGENT, ledgers=_ledgers())
+
+    assert enforcer.usage_refresh() is None
+
+
+def test_no_usage_refresh_for_a_usage_free_policy() -> None:
+    assert _Platform().enforcer(_usage_free()).usage_refresh() is None
+
+
+def test_the_usage_refresh_follows_the_bound_policy() -> None:
+    platform = _Platform()
+    enforcer = platform.enforcer(_admission_cap(2))
+
+    assert enforcer.usage_refresh() == UsageRefresh(
+        platform.source, _AGENT, _ADMISSION_PATHS
+    )
+
+    enforcer.policy = _tool_cap(2)
+
+    assert enforcer.usage_refresh() == UsageRefresh(
+        platform.source, _AGENT, frozenset({"tool_calls_5m"})
+    )
+
+
+def test_the_own_run_is_left_out_through_the_source() -> None:
+    """Twin of ``test_a_top_level_invocation_cap_reads_the_same_inside_the_run``."""
+    policy = load_policy_set_from_dict(
+        {
+            "constraints": [f"agent_usage.{_INVOCATIONS} < 2"],
+            "admission": {"mode": "allow"},
+            "tools": {"refund": {"mode": "allow"}},
+        }
+    )
+    platform = _Platform({_INVOCATIONS: 0})
+    enforcer = platform.enforcer(policy)
+    platform.boundary(enforcer)
+    outcomes = []
+
+    for _ in range(3):
+        admitted = enforcer.decide(AGENT_RUN_TOOL, _ADMISSION_ARGS).allowed
+        if admitted:
+            with run_scope(_AGENT, ledgers=platform.ledgers):
+                admitted = enforcer.decide("refund", {}).allowed
+        outcomes.append(admitted)
+
+    assert outcomes == [True, True, False]
+
+
+def test_a_usage_free_policy_never_reads_the_source() -> None:
+    enforcer = PolicyEnforcer(
+        _usage_free(),
+        agent_name=_AGENT,
+        ledgers=_ledgers(),
+        usage_source=_UnreadSource(),  # type: ignore[arg-type]
+    )
+
+    assert enforcer.decide("refund", {}).usage_state is None
+
+
+_KEY = "fty_test_demo_dummybiscuit"
+
+
+@pytest.fixture
+def _platform_env(monkeypatch: pytest.MonkeyPatch) -> pytest.MonkeyPatch:
+    from hexgate.security import enforcer as enforcer_mod
+
+    monkeypatch.setattr(usage_source, "_usage_sources", {})
+    # Audit is not under test; a real sender would outlive the test.
+    monkeypatch.setattr(enforcer_mod, "configure", lambda _api_key: None)
+    for name in ("HEXGATE_API_KEY", "HEXGATE_LOCAL_POLICY", _senders._LOCAL_MODE_ENV):
+        monkeypatch.delenv(name, raising=False)
+    return monkeypatch
+
+
+def test_build_enforcer_with_a_key_has_a_usage_source(
+    _platform_env: pytest.MonkeyPatch,
+) -> None:
+    enforcer = build_enforcer(_usage_free(), agent_name=_AGENT, api_key=_KEY)
+
+    assert isinstance(enforcer._usage_source, PlatformUsageSource)
+
+
+def test_build_enforcer_without_a_key_has_none(
+    _platform_env: pytest.MonkeyPatch,
+) -> None:
+    enforcer = build_enforcer(_usage_free(), agent_name=_AGENT)
+
+    assert enforcer._usage_source is None
+
+
+def test_build_enforcer_in_local_mode_has_none(
+    _platform_env: pytest.MonkeyPatch,
+) -> None:
+    _platform_env.setenv(_senders._LOCAL_MODE_ENV, "1")
+
+    enforcer = build_enforcer(_usage_free(), agent_name=_AGENT, api_key=_KEY)
+
+    assert enforcer._usage_source is None

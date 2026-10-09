@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
+from types import SimpleNamespace
 from typing import Any, AsyncIterator, Iterator
 from uuid import uuid4
 
@@ -350,6 +351,9 @@ class _BarrierBanSource:
 
 
 class _BarrierBinding:
+    # A policy without agent_usage.* paths: the boundary has no usage refresh.
+    enforcer = SimpleNamespace(usage_refresh=lambda: None)
+
     def __init__(self, barrier: threading.Barrier) -> None:
         self._barrier = barrier
 

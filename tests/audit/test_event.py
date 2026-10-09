@@ -414,6 +414,30 @@ def test_span_attributes_do_not_redact_or_truncate_run_fields() -> None:
     assert wire[semconv.RUN_TOTAL_TOKENS] == 10**7
 
 
+_STALE = "stale"
+
+
+def test_span_attributes_carry_the_usage_state() -> None:
+    wire = AuditEvent(decision=_decision(usage_state=_STALE)).span_attributes()
+
+    assert wire[semconv.USAGE_STATE] == _STALE
+
+
+def test_span_attributes_omit_an_absent_usage_state() -> None:
+    """Absent, never "": OTLP can't carry null, same rule as RUN_ID."""
+    wire = AuditEvent(decision=_decision()).span_attributes()
+
+    assert semconv.USAGE_STATE not in wire
+
+
+def test_error_payload_never_carries_the_usage_state() -> None:
+    """The model must not learn about its budget's state, as with ``run``."""
+    with_state = _decision(usage_state=_STALE)
+
+    assert with_state.as_error_payload() == _decision().as_error_payload()
+    assert _STALE not in with_state.as_error_message()
+
+
 def test_span_attribute_key_set_is_the_wire_contract() -> None:
     """Mirrors what the enricher decodes, asserted as a set rather than field
     by field.
