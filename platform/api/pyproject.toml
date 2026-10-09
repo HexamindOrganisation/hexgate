@@ -3,8 +3,10 @@ name = "hexgate-api"
 version = "0.1.0"
 description = "Hexgate control plane API — policy bundles, tokens, audit ingestion"
 # Matches the hexgate SDK's floor (>=3.13) — the control plane now depends on
-# it for compile_to_rego / compile_to_wasm.
-requires-python = ">=3.13"
+# it for compile_to_rego / compile_to_wasm. Capped <3.14 because biscuit-python
+# has no 3.14 wheel and its sdist builds on pyo3 0.24 (max 3.13); drop the cap
+# when upstream ships 3.14.
+requires-python = ">=3.13,<3.14"
 dependencies = [
     "fastapi>=0.115",
     "uvicorn[standard]>=0.32",
