@@ -109,12 +109,7 @@ class FileKeyStore:
     # ------------------------------------------------------------------
 
     def ensure_keypair(self) -> None:
-        """Generate-or-load both keypairs. Idempotent, safe to call on every startup.
-
-        The one bootstrap entry point: ``api-init`` and the app lifespan both
-        call it, so the OAuth key is created here rather than by a function
-        of its own that deploy would never run.
-        """
+        """Generate-or-load both keypairs (the only bootstrap deploy runs). Idempotent."""
         self._base_dir.mkdir(parents=True, exist_ok=True)
         self._ensure_oauth_keypair()
         if self._private_path.exists():
@@ -213,12 +208,7 @@ class FileKeyStore:
     # ------------------------------------------------------------------
 
     def _ensure_oauth_keypair(self) -> None:
-        """Load the OAuth keypair, generating it on first run.
-
-        No backup banner, unlike the root key: losing it only invalidates
-        access tokens younger than ten minutes, since refresh tokens are
-        opaque database rows that mint new ones.
-        """
+        """Load or generate the OAuth keypair; no banner, as losing it costs ≤10 min of tokens."""
         if self._oauth_private_path.exists():
             key = self._read_private_key(self._oauth_private_path)
         else:

@@ -1,13 +1,7 @@
-"""OAuth access tokens: EdDSA JWTs signed with the keystore's OAuth key.
+"""OAuth access tokens: ten-minute EdDSA JWTs signed with the keystore's OAuth key.
 
-An access token lives ten minutes and is never stored. It names the user
-(``sub``), the client, the scopes the user approved and the projects they
-ticked, so a verifier can refuse a call with no database lookup.
-
-The OAuth key is not the root key: a token signed by ``keystore.sign`` (SDK
-tokens, sessions, bundles) must never verify here, and the ``kid`` header
-names which key signed, so a key rotation is visible to the MCP server's
-JWKS cache.
+The OAuth key is never the root key, so an SDK token, session or bundle
+signature never verifies here; ``kid`` names the signing key.
 """
 
 from __future__ import annotations
@@ -60,12 +54,9 @@ def mint_access_token(
 ) -> str:
     """Return a signed access token valid for ``ACCESS_TOKEN_TTL_SECONDS``.
 
-    ``projects`` comes from the grant's ``projects_csv``, split by the caller.
-    A token naming no project is refused here: it could reach nothing, so
-    minting it means a caller lost the grant's projects (a refresh that
-    forgot to copy them, whose ``"".split(",")`` is ``[""]``), and that should
-    fail loudly rather than hand the client a dead token. A bare string is
-    refused for the same reason: iterating ``"p1,p2"`` yields characters.
+    A token naming no project (``[]``, or ``[""]`` from ``"".split(",")``)
+    means the caller lost the grant's projects, so it is refused rather than
+    minted dead; so is a bare csv string, which would iterate as characters.
     """
     if isinstance(projects, str) or isinstance(scopes, str):
         raise TypeError("pass projects and scopes as lists, not a csv string")
@@ -88,12 +79,8 @@ def mint_access_token(
 
 
 def verify_access_token(token: str, *, issuer: str, audience: str) -> AccessTokenClaims:
-    """Return the claims of ``token``, or raise ``InvalidAccessTokenError``.
-
-    Checks the ``kid``, the EdDSA signature against the OAuth public key,
-    ``iss``, ``aud`` and ``exp``. A token signed by any other key — the root
-    key included — is refused.
-    """
+    """Return the claims of ``token`` (kid, EdDSA signature, iss, aud, exp checked),
+    or raise ``InvalidAccessTokenError``."""
     from hexgate_api.core.keystore import keystore
 
     try:
@@ -124,11 +111,7 @@ def verify_access_token(token: str, *, issuer: str, audience: str) -> AccessToke
 
 
 def _sign_compact(claims: dict) -> str:
-    """Encode ``claims`` as a compact JWS signed through ``keystore.oauth_sign``.
-
-    Signed through the keystore rather than ``jwt.encode`` so the private key
-    never leaves it, as with ``keystore.sign``; verification stays PyJWT's.
-    """
+    """Encode ``claims`` as a compact JWS, signed inside the keystore like ``keystore.sign``."""
     from hexgate_api.core.keystore import keystore
 
     header = {

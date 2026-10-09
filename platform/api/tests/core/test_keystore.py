@@ -256,16 +256,10 @@ def test_oauth_key_is_not_the_root_key(tmp_path: Path) -> None:
 
     assert ks.oauth_public_key_bytes() != ks.public_key_bytes()
     assert ks.oauth_sign(b"x") != ks.sign(b"x")
-
-
-def test_oauth_keypair_reloads_across_restarts(tmp_path: Path) -> None:
-    """A restart must not rotate the OAuth key, or every live access token dies."""
-    first = FileKeyStore(base_dir=tmp_path)
-    first.ensure_keypair()
-    second = FileKeyStore(base_dir=tmp_path)
-    second.ensure_keypair()
-
-    assert second.oauth_fingerprint() == first.oauth_fingerprint()
+    # A restart must reload it, or every live access token dies.
+    reloaded = FileKeyStore(base_dir=tmp_path)
+    reloaded.ensure_keypair()
+    assert reloaded.oauth_fingerprint() == ks.oauth_fingerprint()
 
 
 def test_when_root_key_exists_then_oauth_keypair_is_added_beside_it(

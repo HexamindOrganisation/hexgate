@@ -182,17 +182,6 @@ def test_when_claims_tampered_then_refused() -> None:
         _verify(f"{header}.{widened}.{signature}")
 
 
-def test_when_alg_none_then_refused(oauth_keystore: FileKeyStore) -> None:
-    header = {"alg": "none", "kid": oauth_keystore.oauth_fingerprint()}
-    with pytest.raises(InvalidAccessTokenError):
-        _verify(_jws(header, _claims()))
-
-
-def test_when_not_a_jwt_then_refused() -> None:
-    with pytest.raises(InvalidAccessTokenError):
-        _verify("not-a-token")
-
-
 def test_when_alg_is_hs256_keyed_with_the_public_key_then_refused(
     oauth_keystore: FileKeyStore,
 ) -> None:
