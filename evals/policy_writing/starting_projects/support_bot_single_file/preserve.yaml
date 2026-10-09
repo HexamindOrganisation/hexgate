@@ -8,5 +8,6 @@
 - { role: billing, tool: refund_order, args: { order_id: o1, amount: 501, currency: EUR }, expect: deny }
 - { role: billing, tool: refund_order, args: { order_id: o1, amount: 100, currency: GBP }, expect: deny }
 - { role: default, tool: refund_order, args: { order_id: o1, amount: 10, currency: USD }, expect: deny }
+- { role: support, tool: refund_order, args: { order_id: o1, amount: 10, currency: USD }, expect: deny }
 - { roles: [default, support, billing], tool: wire_transfer, args: { amount: 10, iban: DE89 }, expect: deny }
 - { roles: [default, support, billing], tool: read_file, args: { file_path: src/a.py }, expect: deny }
