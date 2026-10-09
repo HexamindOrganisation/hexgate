@@ -11,7 +11,6 @@ import pytest
 from evals.policy_writing.policy import (
     DRIFT_CODES,
     CaseError,
-    complete_call,
     decide,
     effective_policy,
     outcome,
@@ -552,62 +551,3 @@ def test_when_a_module_tree_names_another_agents_tool_then_no_drift(
     _drop_draft_bot(ws)
     (ws / "policies" / module).write_text(text)
     assert valid_policy(ws, AGENT, modules=True).drift == []
-
-
-# ---------------------------------------------------------------- complete_call
-
-
-@pytest.mark.parametrize(
-    ("call", "completed"),
-    [
-        # A gate's key and args as `decide` sends them, the name trimmed.
-        ({"tool": "agent.run"}, {"tool": "agent.run", "args": {"agent": AGENT}}),
-        (
-            {"tool": "agent.tool: ops-bot"},
-            {
-                "tool": "agent.tool:ops-bot",
-                "args": {"agent": AGENT, "target": "ops-bot", "via": "tool"},
-            },
-        ),
-        # A skill read's file and hash come from the call, null when left out.
-        (
-            {"tool": "skill: pdf ", "args": {"file_path": "SKILL.md"}},
-            {
-                "tool": "skill:pdf",
-                "args": {
-                    "skill": "pdf",
-                    "via": "instructions",
-                    "file_path": "SKILL.md",
-                    "content_hash": None,
-                },
-            },
-        ),
-        # A plain tool call is left as written.
-        (
-            {"tool": "view_orders", "args": {"x": 1}},
-            {"tool": "view_orders", "args": {"x": 1}},
-        ),
-    ],
-)
-def test_complete_call_writes_a_gate_call_as_decide_sends_it(call, completed) -> None:
-    complete_call(call, AGENT)
-    assert call == completed
-
-
-@pytest.mark.parametrize(
-    ("call", "error"),
-    [
-        # A gate's own arg with another value would be silently replaced.
-        ({"tool": "agent.run", "args": {"agent": "ops-bot"}}, "drop \\['agent'\\]"),
-        ({"tool": "skill:pdf", "args": {"skill": "x"}}, "drop \\['skill'\\]"),
-        # Refused whatever the policy, as decide refuses them.
-        ({"tool": "agent.run", "run_facts": {"tool_calls": 1}}, "drop run_facts"),
-        ({"tool": "view_orders", "run_facts": {"tool_call": 1}}, "unknown run"),
-        ({"tool": "view_orders", "attributes": {"tier": {"a": 1}}}, "tier"),
-    ],
-)
-def test_when_no_policy_could_dry_run_a_call_then_complete_call_raises(
-    call, error
-) -> None:
-    with pytest.raises(CaseError, match=error):
-        complete_call(call, AGENT)

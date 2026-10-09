@@ -7,10 +7,7 @@ product.
 - `cases/<category>/<name>/` holds one case each. The case's id is
   `<category>/<name>`, and the category is its scoring group.
 - `starting_projects/<name>/` holds the projects several cases start from.
-- `cases.py` loads the cases, `calls.py` checks their dry-run calls against
-  the agent's names and completes egress calls, and `policy.py` completes the
-  agent and skill gate calls as the scorer sends them. `checks.py` scores what
-  an agent left behind.
+- `cases.py` loads the cases. `checks.py` scores what an agent left behind.
 
 ## A case
 
@@ -37,41 +34,9 @@ There is no `id` or `category` field: both come from the path. The loader
 rejects anything that would otherwise drop a check without a word:
 
 - **The case file:** `id` or `category` set in it; a field, `expect` key or
-  decision key it doesn't know; a string where a list belongs; an `agent` with
-  no manifest in `agents.json`.
+  decision key it doesn't know; a string where a list belongs.
 - **Paths:** an `unchanged` path the starting project lacks; anything else in
   the case folder (a `wrong_answers/`); a `preserve.yml`.
-- **Names in a dry-run call** (`calls.py`, `unknown_names`): a tool, argument,
-  caller attribute, reached agent or skill the case's agent doesn't know (see
-  *A starting project*).
-- **Values in a dry-run call** (`calls.py`, `bad_values`):
-  - for one of the agent's tools, a missing required argument, or a value of
-    another type than its schema's: a quoted `"51"`, or a blank `amount:`,
-    which YAML reads as null. A `string` in the manifest checks nothing, since
-    adapters write it for `int | None` too;
-  - a caller attribute of another JSON type than its audit rows carry.
-
-  A call's values are read through JSON first, as `policy test` reads them,
-  so an unquoted YAML date is its string. A timestamp must be quoted: YAML's
-  own string for one isn't ISO, and would compare wrongly.
-- **Calls no policy could dry-run** (`policy.py`, `complete_call`, the
-  scorer's own input checks): run facts on `agent.run` or `net.*`, which are
-  decided outside any run; `run_facts.agent`, which is the case's agent;
-  `calls_of_this_tool` on a gate key, which is never counted; an unknown
-  `run.*` path or a value of the wrong type; an attribute of a type no caller
-  sends; an arg an agent or skill gate sets itself, given another value.
-- **Egress calls** (`calls.py`, `complete`), which must match what the proxy
-  derives: `net.http_request` takes an upper-case `method` and an absolute
-  `http://` `url`, or `host` and `port` for `CONNECT`, the only way HTTPS
-  reaches the proxy; `net.tcp_connect` takes `host` and an int `port`. Any
-  other arg is refused.
-
-The loader writes each call as its gate sends it, so a case can write just
-`{tool: "agent.tool:billing-bot"}`, `{tool: "skill:pdf", args: {file_path:
-SKILL.md}}` (`content_hash` and a script's args are null when left out, as the
-adapters send them) or `{tool: net.http_request, args: {method: GET, url:
-"http://x.com/a"}}`.
-
 `expect` keys:
 
 | Key | What must hold |
