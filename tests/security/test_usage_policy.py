@@ -32,24 +32,27 @@ ALLOW_BLOCK = {"on_unavailable": "allow"}
 TOOLS = {"send_email": {"mode": "allow"}}
 
 
+WASM_STUB = b"\x00asm"
+
+
+def _manifest_bytes(payload: dict) -> bytes:
+    return build_signed_bundle(
+        yaml.safe_dump(payload), compile_wasm=False
+    ).manifest_bytes
+
+
+def _read_back(manifest_bytes: bytes) -> PolicyBundle:
+    """The bundle as the SDK receives it: parsed from the served manifest bytes."""
+    return PolicyBundle.from_parts(wasm_bytes=WASM_STUB, manifest_bytes=manifest_bytes)
+
+
 def _bundle_from(payload: dict) -> PolicyBundle:
-    signed = build_signed_bundle(yaml.safe_dump(payload), compile_wasm=False)
-    return PolicyBundle(
-        source_path=None,
-        rego_text=signed.rego_text,
-        wasm_bytes=signed.wasm_bytes,
-        manifest=signed.manifest,
-    )
+    return _read_back(_manifest_bytes(payload))
 
 
 def _bundle_with_manifest_usage(section: object) -> PolicyBundle:
-    signed = build_signed_bundle(yaml.safe_dump({"tools": TOOLS}), compile_wasm=False)
-    return PolicyBundle(
-        source_path=None,
-        rego_text=signed.rego_text,
-        wasm_bytes=signed.wasm_bytes,
-        manifest={**signed.manifest, "usage": section},
-    )
+    manifest = json.loads(_manifest_bytes({"tools": TOOLS}))
+    return _read_back(json.dumps({**manifest, "usage": section}).encode("utf-8"))
 
 
 # --- UsagePolicy shape --------------------------------------------------------
@@ -254,8 +257,7 @@ def test_bundle_omits_usage_at_the_default(payload: dict) -> None:
 
 
 def test_usage_free_manifest_bytes_carry_no_usage_key() -> None:
-    signed = build_signed_bundle(yaml.safe_dump({"tools": TOOLS}), compile_wasm=False)
-    assert "usage" not in json.loads(signed.manifest_bytes)
+    assert "usage" not in json.loads(_manifest_bytes({"tools": TOOLS}))
 
 
 @pytest.mark.parametrize(

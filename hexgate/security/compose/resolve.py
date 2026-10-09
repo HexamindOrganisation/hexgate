@@ -85,11 +85,11 @@ def resolve_entry(
         # Guards and usage are agent-level and NOT composed through the fold (they
         # are not a capability/boundary) — inject the one agent-wide value onto every
         # folded role identically, so no role can diverge (R-GUARD-006 / R-GUARD-007).
-        agent_level = _agent_level_fields(entry, agent)
         by_role: dict[str, LinkResult] = {}
         effective: dict[str, AgentPolicy] = {}
         for role, (boundaries, caps) in per_role.items():
             result = link_policy_set(boundaries, caps)
+            agent_level = _agent_level_fields(entry, agent)
             if agent_level:
                 # Mutate the LinkResult's own effective (a frozen dataclass, but the
                 # dict is mutable) so BOTH views carry the values: the policy_set below
@@ -97,7 +97,7 @@ def resolve_entry(
                 # resolved-policy YAML and the CLI both go through.
                 result.effective[DEFAULT_ROLE_NAME] = result.effective[
                     DEFAULT_ROLE_NAME
-                ].model_copy(update=_fresh_copies(agent_level))
+                ].model_copy(update=agent_level)
             by_role[role] = result
             effective[role] = result.effective[DEFAULT_ROLE_NAME]
         return ProjectLinkResult(policy_set=PolicySet(effective), by_role=by_role)
@@ -108,27 +108,20 @@ def resolve_entry(
 
 
 def _agent_level_fields(entry: Entry, agent: str) -> dict[str, object]:
-    """The agent-wide ``AgentPolicy`` fields to inject onto every folded role."""
+    """The agent-wide ``AgentPolicy`` fields to inject onto one folded role.
+
+    Built per role, with fresh ``GuardRule`` copies, so the roles never share mutable
+    state. ``UsagePolicy`` is frozen, so it is shared."""
     fields: dict[str, object] = {}
     guards = agent_guards(entry, agent)
     if guards:
-        fields[_GUARDS_FIELD] = guards
+        fields[_GUARDS_FIELD] = {
+            name: rule.model_copy() for name, rule in guards.items()
+        }
     usage = agent_usage_policy(entry, agent)
     if usage is not None:
         fields[_USAGE_FIELD] = usage
     return fields
-
-
-def _fresh_copies(fields: dict[str, object]) -> dict[str, object]:
-    """Copy the guard stance per role (fresh dict + fresh GuardRule instances) so the
-    roles never share mutable state. ``UsagePolicy`` is frozen, so it is shared."""
-    guards = fields.get(_GUARDS_FIELD)
-    if not isinstance(guards, dict):
-        return dict(fields)
-    return {
-        **fields,
-        _GUARDS_FIELD: {name: rule.model_copy() for name, rule in guards.items()},
-    }
 
 
 def resolve_text(
