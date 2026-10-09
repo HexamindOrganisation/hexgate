@@ -4,5 +4,6 @@
 - { roles: [default, billing], tool: send_email, args: { to: [a@acme.com], subject: s, body: b }, expect: deny }
 - { role: billing, tool: refund_order, args: { order_id: o1, amount: 1000, currency: USD }, expect: allow }
 - { role: billing, tool: refund_order, args: { order_id: o1, amount: 100, currency: EUR }, expect: allow }
+- { role: billing, tool: refund_order, args: { order_id: o1, amount: 100, currency: GBP }, expect: allow }
 - { role: billing, tool: refund_order, args: { order_id: o1, amount: 1001, currency: USD }, expect: deny }
-- { roles: [default, support], tool: refund_order, args: { order_id: o1, amount: 1000, currency: USD }, expect: deny }
+- { roles: [default, support], tool: refund_order, args: { order_id: o1, amount: 10, currency: USD }, expect: deny }
