@@ -17,7 +17,7 @@ import threading
 from collections.abc import Mapping, Sequence
 from concurrent.futures import Executor, ThreadPoolExecutor
 from dataclasses import dataclass
-from enum import Enum, StrEnum
+from enum import Enum, StrEnum, auto
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Protocol
 
@@ -150,9 +150,9 @@ class UsageFetcher(Protocol):
 
 
 class _Tier(Enum):
-    NONE = "none"
-    BACKGROUND = "background"
-    SYNC = "sync"
+    NONE = auto()
+    BACKGROUND = auto()
+    SYNC = auto()
 
 
 @dataclass(frozen=True, slots=True)
@@ -220,29 +220,22 @@ class PlatformUsageSource:
         """The ``agent_usage`` namespace for ``paths``. Anything short of ``FRESH``
         schedules a background refresh, so a long run heals its own snapshot."""
         snapshot = self._remember(agent, paths)
-        reading = self._reading(
-            snapshot, paths, ledger, on_unavailable, current_run_age
-        )
+        if (
+            snapshot is not None
+            and (age := self._clock() - snapshot.fetched_at)
+            < self._settings.max_staleness_seconds
+        ):
+            reading = self._combine(
+                snapshot, age, paths, ledger, on_unavailable, current_run_age
+            )
+        else:
+            reading = UsageReading(
+                _fallback(ledger, paths, on_unavailable, current_run_age),
+                UsageState.UNAVAILABLE,
+            )
         if reading.state is not UsageState.FRESH:
             self._schedule(agent)
         return reading
-
-    def _reading(
-        self,
-        snapshot: UsageSnapshot | None,
-        paths: frozenset[str],
-        ledger: UsageLedger,
-        on_unavailable: OnUnavailable,
-        current_run_age: float | None,
-    ) -> UsageReading:
-        if snapshot is None:
-            return _unavailable_reading(ledger, paths, on_unavailable, current_run_age)
-        age = self._clock() - snapshot.fetched_at
-        if age >= self._settings.max_staleness_seconds:
-            return _unavailable_reading(ledger, paths, on_unavailable, current_run_age)
-        return self._combine(
-            snapshot, age, paths, ledger, on_unavailable, current_run_age
-        )
 
     def _combine(
         self,
@@ -264,13 +257,12 @@ class PlatformUsageSource:
             since_age=age + USAGE_INGEST_MARGIN_SECONDS,
             current_run_age=current_run_age,
         )
-        # Under DENY a missing path stays absent, so only its constraints fail
-        # closed; the rest of the policy keeps working (F5).
-        if missing and on_unavailable is OnUnavailable.ALLOW:
-            namespace |= ledger_namespace(
-                ledger, missing, current_run_age=current_run_age
-            )
         if missing:
+            # Under DENY a missing path stays absent, so only its constraints fail
+            # closed; the rest of the policy keeps working (F5).
+            namespace |= (
+                _fallback(ledger, missing, on_unavailable, current_run_age) or {}
+            )
             state = UsageState.PARTIAL
         elif age >= self._settings.sync_after_seconds:
             state = UsageState.STALE
@@ -343,18 +335,13 @@ class PlatformUsageSource:
         except UsageContentError as exc:
             logger.error("usage body for %r rejected; using last-good: %s", agent, exc)
             return
-        except HexgateError as exc:
-            if exc.status == _NOT_FOUND:
+        except Exception as exc:  # noqa: BLE001 — fail-soft: keep last-good
+            if isinstance(exc, HexgateError) and exc.status == _NOT_FOUND:
                 self._log_unregistered(agent)
             else:
                 logger.warning(
                     "usage refresh for %r failed; using last-good: %s", agent, exc
                 )
-            return
-        except Exception as exc:  # noqa: BLE001 — fail-soft: keep last-good
-            logger.warning(
-                "usage refresh for %r failed; using last-good: %s", agent, exc
-            )
             return
         with self._state_lock:
             self._snapshots[agent] = UsageSnapshot(MappingProxyType(values), started)
@@ -399,19 +386,17 @@ class PlatformUsageSource:
             return self._fetch_locks.setdefault(agent, threading.Lock())
 
 
-def _unavailable_reading(
+def _fallback(
     ledger: UsageLedger,
     paths: frozenset[str],
     on_unavailable: OnUnavailable,
     current_run_age: float | None,
-) -> UsageReading:
-    # Fail open by default (G3): ledger-only values, never an absent namespace.
+) -> dict[str, int] | None:
+    """The values for ``paths`` the platform could not supply: ledger-only by
+    default (G3), nothing under DENY."""
     if on_unavailable is OnUnavailable.DENY:
-        return UsageReading(None, UsageState.UNAVAILABLE)
-    return UsageReading(
-        ledger_namespace(ledger, paths, current_run_age=current_run_age),
-        UsageState.UNAVAILABLE,
-    )
+        return None
+    return ledger_namespace(ledger, paths, current_run_age=current_run_age)
 
 
 def local_reading(

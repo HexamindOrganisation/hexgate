@@ -220,10 +220,7 @@ class HexgateClient:
         query = urllib.parse.urlencode({_USAGE_PATHS_PARAM: ",".join(paths)})
         quoted = urllib.parse.quote(name, safe="")
         url = f"{self.config.base_url}/v1/agents/{quoted}/usage?{query}"
-        payload, _ = self._raw_get(url, authorize=True, timeout=self.refresh_timeout)
-        if payload is None:
-            raise HexgateError(f"usage GET for {name!r} returned no payload")
-        return payload
+        return self._get(url, timeout=self.refresh_timeout)
 
     # ------------------------------------------------------------------
     # Biscuit verification
@@ -312,11 +309,11 @@ class HexgateClient:
     # HTTP plumbing
     # ------------------------------------------------------------------
 
-    def _get(self, url: str) -> dict[str, Any]:
+    def _get(self, url: str, *, timeout: float | None = None) -> dict[str, Any]:
         """Body-only GET. ``_raw_get`` is the unified HTTP entry point;
         this drops the ETag tuple for callers that don't care about
         conditional requests."""
-        payload, _ = self._raw_get(url, authorize=True)
+        payload, _ = self._raw_get(url, authorize=True, timeout=timeout)
         if payload is None:
             # Invariant: _get is never called with If-None-Match, so a 304
             # is impossible. Raise so `python -O` can't strip the check.

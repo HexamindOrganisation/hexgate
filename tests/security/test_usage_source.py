@@ -103,13 +103,9 @@ class _FakeFetcher:
 class _InlineExecutor(Executor):
     """Runs each job on submit, on the caller's thread."""
 
-    def __init__(self) -> None:
-        self.submitted = 0
-
     def submit(  # type: ignore[override]
         self, fn: Callable[..., Any], /, *args: Any, **kwargs: Any
     ) -> Future[Any]:
-        self.submitted += 1
         future: Future[Any] = Future()
         future.set_result(fn(*args, **kwargs))
         return future
@@ -145,7 +141,6 @@ class _ClosedExecutor(Executor):
 class _Rig:
     clock: _FakeClock
     fetcher: _FakeFetcher
-    executor: Executor
     source: PlatformUsageSource
     ledger: UsageLedger
 
@@ -158,7 +153,7 @@ def _rig(
     fetcher = _FakeFetcher(clock, values)
     executor = executor if executor is not None else _InlineExecutor()
     source = PlatformUsageSource(fetcher, executor, _SETTINGS, clock)
-    return _Rig(clock, fetcher, executor, source, new_usage_ledger(clock=clock))
+    return _Rig(clock, fetcher, source, new_usage_ledger(clock=clock))
 
 
 def _seeded(
@@ -213,15 +208,15 @@ def test_a_bad_value_on_an_unrequested_key_is_ignored() -> None:
 
 
 def test_a_cold_agent_fetches_synchronously_on_the_callers_thread() -> None:
-    rig = _rig(_HeldExecutor())
+    executor = _HeldExecutor()
+    rig = _rig(executor)
 
     rig.source.refresh(_AGENT, _TWO_PATHS)
 
     assert rig.fetcher.calls == [
         (_AGENT, sorted(_TWO_PATHS), threading.current_thread().name)
     ]
-    assert isinstance(rig.executor, _HeldExecutor)
-    assert rig.executor.jobs == []
+    assert executor.jobs == []
 
 
 def test_a_young_snapshot_is_used_as_is() -> None:
