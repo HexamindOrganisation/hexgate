@@ -3,6 +3,7 @@
 import asyncio
 import logging
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from typing import Final
 
@@ -26,6 +27,7 @@ from hexgate_api.features.usage.service import (
     USAGE_READ_TIMEOUT_SECONDS,
     UsageMemo,
     UsageReadout,
+    get_usage_executor,
     get_usage_memo,
     read_usage,
 )
@@ -55,6 +57,7 @@ async def api_get_agent_usage(
     session: AsyncSession = Depends(get_session),
     get_client: Callable[[], Client] = Depends(clickhouse_getter),
     memo: UsageMemo = Depends(get_usage_memo),
+    executor: ThreadPoolExecutor = Depends(get_usage_executor),
 ) -> AgentUsageRead:
     """SDK read of agent_usage.* for the bearer's project. 404 if the agent isn't
     registered there, 422 on a bad path, 503 when ClickHouse is unavailable."""
@@ -76,8 +79,8 @@ async def api_get_agent_usage(
             # Inside the loader, so a stalled read fails the shared task (and isn't
             # memoized) rather than releasing one caller.
             lambda: asyncio.wait_for(
-                asyncio.to_thread(
-                    _connect_and_read, get_client, project_id, name, specs
+                asyncio.get_running_loop().run_in_executor(
+                    executor, _connect_and_read, get_client, project_id, name, specs
                 ),
                 timeout=USAGE_READ_TIMEOUT_SECONDS,
             ),

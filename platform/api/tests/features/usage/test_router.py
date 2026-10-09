@@ -4,6 +4,7 @@ contract. Fixtures mirror tests/features/bans/test_bans.py."""
 from __future__ import annotations
 
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from unittest.mock import MagicMock
 
@@ -22,7 +23,11 @@ from hexgate_api.core.ids import new_id
 from hexgate_api.deps.clickhouse import clickhouse_getter
 from hexgate_api.deps.tokens import require_project
 from hexgate_api.features.usage import router as usage_router
-from hexgate_api.features.usage.service import UsageMemo, get_usage_memo
+from hexgate_api.features.usage.service import (
+    UsageMemo,
+    get_usage_executor,
+    get_usage_memo,
+)
 from hexgate_api.main import app
 from hexgate_api.models import Agent, Project
 from hexgate_api.seeds.defaults import ensure_default_project
@@ -35,6 +40,7 @@ _AS_OF = datetime(2026, 10, 7, 12, 0, tzinfo=UTC)
 _SHORT_TIMEOUT = 0.05
 # Bounded, so a worker thread the timeout abandoned can't hang loop shutdown.
 _STALL_SECONDS = 0.5
+_TEST_POOL_PREFIX = "usage-test-pool"
 
 
 async def _add_agent(factory, project_id: str, name: str) -> None:
@@ -224,6 +230,25 @@ def test_validation_runs_before_any_connect(
 ) -> None:
     assert _usage(client, paths, agent=agent).status_code == expected
     unreachable_clickhouse.assert_not_called()
+
+
+def test_the_read_runs_on_the_injected_pool(
+    client: TestClient, fake_clickhouse: MagicMock
+) -> None:
+    threads: list[str] = []
+    result = fake_clickhouse.query.return_value
+    result.result_rows = [[_AS_OF, 1]]
+
+    def recording_query(*_args: object, **_kwargs: object) -> MagicMock:
+        threads.append(threading.current_thread().name)
+        return result
+
+    fake_clickhouse.query.side_effect = recording_query
+    with ThreadPoolExecutor(1, thread_name_prefix=_TEST_POOL_PREFIX) as pool:
+        app.dependency_overrides[get_usage_executor] = lambda: pool
+        assert _usage(client, "invocations_1h").status_code == 200
+
+    assert threads[0].startswith(_TEST_POOL_PREFIX)
 
 
 def test_no_bearer_is_401(anonymous_client: TestClient) -> None:

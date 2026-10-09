@@ -6,6 +6,7 @@ import asyncio
 import math
 import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from functools import lru_cache
@@ -44,8 +45,11 @@ _READ_COLUMNS: Final = [
 # The SDK gives up after its 2 s refresh_timeout; don't answer later than that.
 USAGE_READ_TIMEOUT_SECONDS: Final = 2
 # Server-side bound only. The route adds the matching client-side wait; the worker
-# thread can still outlive it, up to the shared client's send_receive_timeout.
+# thread can still outlive it, up to the shared client's send_receive_timeout, so
+# reads run on their own small pool and a stall can't drain the loop's default one.
 QUERY_SETTINGS: Final = {"max_execution_time": USAGE_READ_TIMEOUT_SECONDS}
+USAGE_READ_MAX_WORKERS: Final = 4
+_USAGE_READ_THREAD_PREFIX: Final = "usage-read"
 USAGE_MEMO_TTL_SECONDS: Final = 1.0
 USAGE_MEMO_MAX_ENTRIES: Final = 10_000
 
@@ -194,6 +198,14 @@ class UsageMemo:
 @lru_cache
 def get_usage_memo() -> UsageMemo:
     return UsageMemo(USAGE_MEMO_TTL_SECONDS, USAGE_MEMO_MAX_ENTRIES, time.monotonic)
+
+
+@lru_cache
+def get_usage_executor() -> ThreadPoolExecutor:
+    return ThreadPoolExecutor(
+        max_workers=USAGE_READ_MAX_WORKERS,
+        thread_name_prefix=_USAGE_READ_THREAD_PREFIX,
+    )
 
 
 def verify_schema(client: Client) -> None:
