@@ -17,7 +17,8 @@ product.
 ```
 cases/<category>/<name>/
   case.yaml          # the request and what the finished policy must do
-  starting_project/  # only when no other case starts from this project
+  starting_project/  # the files the agent edits, when no other case uses them
+                     # (a shared one lives in starting_projects/, named by `starting_project:`)
   solution/          # our correct answer: the checks must accept it
   wrong_answer/      # optional, a realistic mistake: the checks must reject it
 ```
@@ -106,7 +107,8 @@ would return to a real agent:
   `agents_list` (`GET /agents/manifest`) returns it. A case's agent knows only
   the tools, arguments and skills in its own manifest, plus the synthetic
   `net.*`, `agent.run`, `agent.<via>:<target>` (a target must be an agent in
-  this list) and `skill:` / `skill.resource:` / `skill.script:` calls.
+  this list, or a sub-agent a manifest lists) and `skill:` /
+  `skill.resource:` / `skill.script:` calls.
 - `audit.json` (optional): audit rows, as `audit_decisions` returns them. Caller
   attributes are set per request, not in the manifest, so the `ctx.*` names a
   case's agent knows are the `attributes` keys of its own rows.
@@ -130,7 +132,9 @@ The loader adds these, so a case lists only what is particular to it.
   any edit. Every case on that project checks them. A case that means to
   change one lists the same call (role, tool, arguments, attributes and run
   facts) in its own `decisions`, which replaces the preserved entry for that
-  call only. `preserve.yaml` is never copied into the agent's workspace.
+  call only. `preserve.yaml` is never copied into the agent's workspace. Its
+  calls are dry-run for each case's `agent`, so every case on a project with a
+  `preserve.yaml` should name the same agent.
 
 ## Our answers
 
