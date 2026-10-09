@@ -32,6 +32,7 @@ _PLATFORM = Path(__file__).resolve().parents[3]
 POSTGRES_MIGRATIONS = _PLATFORM / "postgres" / "migrations"
 CLICKHOUSE_MIGRATIONS = _PLATFORM / "clickhouse" / "migrations"
 CLICKHOUSE_INIT_SCHEMA = _PLATFORM / "clickhouse" / "init" / "schema.sql"
+CLICKHOUSE_BACKFILLS = _PLATFORM / "clickhouse" / "backfills"
 
 # Same patterns test_postgres_smoke.py uses, so the two tests cannot disagree
 # about what the migrations claim to add.
@@ -50,6 +51,7 @@ AUDIT_TABLES = (
     "llm_message",
     "ban_enforcement",
     "agent_run",
+    "usage_minute",
 )
 CREATE_DATABASE_RE = re.compile(r"^CREATE\s+DATABASE\b", re.IGNORECASE)
 
@@ -414,7 +416,8 @@ CH_COLUMN_NAME_RE = re.compile(
     r"ADD\s+COLUMN\s+IF\s+NOT\s+EXISTS\s+(\w+)", re.IGNORECASE
 )
 CH_CREATE_TABLE_RE = re.compile(
-    r"^CREATE\s+TABLE\s+IF\s+NOT\s+EXISTS\s+\w+\.(\w+)", re.IGNORECASE
+    r"^CREATE\s+(?:TABLE|MATERIALIZED\s+VIEW)\s+IF\s+NOT\s+EXISTS\s+\w+\.(\w+)",
+    re.IGNORECASE,
 )
 
 
@@ -456,7 +459,8 @@ def strip_clickhouse_objects(client, database: str, files: Sequence[Path]) -> No
     visible.
     """
     tables, columns = clickhouse_objects_added(files)
-    for table in tables:
+    # Reverse creation order: a view goes before the table it writes TO.
+    for table in reversed(tables):
         client.command(f"DROP TABLE IF EXISTS {database}.{table}")
     for table, column in columns:
         client.command(f"ALTER TABLE {database}.{table} DROP COLUMN IF EXISTS {column}")
@@ -484,6 +488,19 @@ def test_every_added_clickhouse_column_is_collected() -> None:
     } <= policy_decision, policy_decision
 
 
+def clickhouse_definitions(
+    client, database: str, names: Sequence[str]
+) -> dict[str, str]:
+    """``create_table_query`` per object, database-qualified names stripped so
+    two scratch databases compare. Columns alone can't see a view's SELECT or
+    a table's engine drifting."""
+    rows = client.query(
+        "SELECT name, create_table_query FROM system.tables "
+        f"WHERE database = '{database}' AND name IN {tuple(names)}"
+    ).result_rows
+    return {name: query.replace(f"{database}.", "") for name, query in rows}
+
+
 @clickhouse_only
 def test_a_migrated_clickhouse_matches_a_fresh_one() -> None:
     """0003's "keep this byte-identical to init/schema.sql" header, enforced.
@@ -492,11 +509,13 @@ def test_a_migrated_clickhouse_matches_a_fresh_one() -> None:
     to ``schema.sql``, not the migration to it.
     """
     migrations = migration_files(CLICKHOUSE_MIGRATIONS)
+    created, _columns = clickhouse_objects_added(migrations)
 
     with scratch_clickhouse_database("hexgate_ch_fresh") as fresh:
         with clickhouse_client() as client:
             run_clickhouse_script(client, CLICKHOUSE_INIT_SCHEMA.read_text(), fresh)
             fresh_columns = clickhouse_columns(client, fresh)
+            fresh_definitions = clickhouse_definitions(client, fresh, created)
 
     with scratch_clickhouse_database("hexgate_ch_migrated") as migrated:
         with clickhouse_client() as client:
@@ -505,26 +524,167 @@ def test_a_migrated_clickhouse_matches_a_fresh_one() -> None:
             for path in migrations:
                 run_clickhouse_script(client, path.read_text(), migrated)
             migrated_columns = clickhouse_columns(client, migrated)
+            migrated_definitions = clickhouse_definitions(client, migrated, created)
 
     assert migrated_columns == fresh_columns, (
         "the ClickHouse migrations and init/schema.sql disagree: "
         f"only migrated={sorted(migrated_columns - fresh_columns)} "
         f"only fresh={sorted(fresh_columns - migrated_columns)}"
     )
+    assert sorted(fresh_definitions) == sorted(created)
+    assert migrated_definitions == fresh_definitions, (
+        "a migration's CREATE and init/schema.sql disagree"
+    )
 
 
 @clickhouse_only
 def test_replaying_the_clickhouse_migrations_twice_changes_nothing() -> None:
     migrations = migration_files(CLICKHOUSE_MIGRATIONS)
+    created, _columns = clickhouse_objects_added(migrations)
     with scratch_clickhouse_database("hexgate_ch_twice") as database:
         with clickhouse_client() as client:
             run_clickhouse_script(client, CLICKHOUSE_INIT_SCHEMA.read_text(), database)
             for path in migrations:
                 run_clickhouse_script(client, path.read_text(), database)
             after_first = clickhouse_columns(client, database)
+            first_definitions = clickhouse_definitions(client, database, created)
 
             for path in migrations:
                 run_clickhouse_script(client, path.read_text(), database)
             after_second = clickhouse_columns(client, database)
+            second_definitions = clickhouse_definitions(client, database, created)
 
     assert after_first == after_second, "a second replay changed the schema"
+    assert first_definitions == second_definitions
+
+
+# --- usage_minute backfill ---------------------------------------------------
+
+USAGE_BACKFILL = CLICKHOUSE_BACKFILLS / "0005_usage_minute.sql"
+USAGE_PROJECT = "proj_usage"
+DECISION_COLUMNS = [
+    "event_id",
+    "received_at",
+    "project_id",
+    "agent_name",
+    "tool_name",
+    "outcome",
+]
+
+# (tool_name, outcome) for agent "a" — one per branch of the decision filter.
+AGENT_A_DECISIONS = [
+    ("search", "allow"),
+    ("search", "deny"),
+    ("search", "needs_approval"),
+    ("skill:report", "allow"),
+    ("agent.tool:billing", "allow"),
+    ("agent.tool:billing", "deny"),
+    ("agent.run", "deny"),
+    ("agent.handoff:billing", "deny"),
+    ("net.http_request", "allow"),
+    ("net.tcp_connect", "deny"),
+]
+# (agent, minute, invocations, tool_calls, denials, llm_calls, input, output):
+# needs_approval is a tool call; agent.run / agent.handoff: / net.* are dropped.
+EXPECTED_USAGE = [
+    ("a", 0, 2, 4, 2, 2, 30, 3),
+    ("b", 1, 1, 1, 0, 0, 0, 0),
+]
+
+
+def _usage(client, database: str) -> list[tuple]:
+    return [
+        tuple(row)
+        for row in client.query(
+            "SELECT agent_name, minute, sum(invocations), sum(tool_calls), "
+            "sum(denials), sum(llm_calls), sum(input_tokens), sum(output_tokens) "
+            f"FROM {database}.usage_minute GROUP BY agent_name, minute "
+            "ORDER BY agent_name, minute"
+        ).result_rows
+    ]
+
+
+def _expected_usage(minutes: Sequence) -> list[tuple]:
+    # clickhouse-connect returns DateTime('UTC') as a naive UTC datetime.
+    return [
+        (agent, minutes[m].replace(tzinfo=None), *counts)
+        for agent, m, *counts in EXPECTED_USAGE
+    ]
+
+
+def _seed_usage_sources(client, database: str, minutes: Sequence) -> list:
+    import uuid
+
+    a_at, b_at = minutes
+    decisions = [
+        [uuid.uuid4(), a_at, USAGE_PROJECT, "a", tool, outcome]
+        for tool, outcome in AGENT_A_DECISIONS
+    ] + [[uuid.uuid4(), b_at, USAGE_PROJECT, "b", "search", "allow"]]
+    client.insert(
+        "policy_decision", decisions, column_names=DECISION_COLUMNS, database=database
+    )
+    runs = [
+        [uuid.uuid4(), at, USAGE_PROJECT, agent, uuid.uuid4()]
+        for agent, at in (("a", a_at), ("a", a_at), ("b", b_at))
+    ]
+    client.insert(
+        "agent_run",
+        runs,
+        column_names=["event_id", "received_at", "project_id", "agent_name", "run_id"],
+        database=database,
+    )
+    client.insert(
+        "llm_invocation",
+        [
+            [uuid.uuid4(), a_at, USAGE_PROJECT, "a", "m", 10, 1],
+            [uuid.uuid4(), a_at, USAGE_PROJECT, "a", "m", 20, 2],
+        ],
+        column_names=[
+            "event_id",
+            "received_at",
+            "project_id",
+            "agent_name",
+            "model",
+            "input_tokens",
+            "output_tokens",
+        ],
+        database=database,
+    )
+    return decisions
+
+
+@clickhouse_only
+def test_usage_minute_backfill_matches_the_views() -> None:
+    """The backfill must count exactly what the views count — both DP1 answers,
+    pinned as numbers — and a second run must insert nothing."""
+    from datetime import datetime, timedelta, timezone
+
+    now = datetime.now(timezone.utc).replace(second=0, microsecond=0)
+    minutes = [now - timedelta(minutes=2), now - timedelta(minutes=1)]
+    expected = _expected_usage(minutes)
+
+    with scratch_clickhouse_database("hexgate_ch_backfill") as database:
+        with clickhouse_client() as client:
+            run_clickhouse_script(client, CLICKHOUSE_INIT_SCHEMA.read_text(), database)
+            decisions = _seed_usage_sources(client, database, minutes)
+            assert _usage(client, database) == expected  # built by the views
+
+            client.command(f"TRUNCATE TABLE {database}.usage_minute")
+            run_clickhouse_script(client, USAGE_BACKFILL.read_text(), database)
+            assert _usage(client, database) == expected  # built by the backfill
+
+            run_clickhouse_script(client, USAGE_BACKFILL.read_text(), database)
+            assert _usage(client, database) == expected, "a rerun inserted rows"
+
+            # A redelivered decision is summed by the view (F1), but FINAL
+            # collapses it when the backfill rebuilds the rollup.
+            client.insert(
+                "policy_decision",
+                [decisions[0]],
+                column_names=DECISION_COLUMNS,
+                database=database,
+            )
+            assert _usage(client, database)[0][3] == expected[0][3] + 1
+            client.command(f"TRUNCATE TABLE {database}.usage_minute")
+            run_clickhouse_script(client, USAGE_BACKFILL.read_text(), database)
+            assert _usage(client, database) == expected

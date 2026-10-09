@@ -28,7 +28,11 @@ from agents.lifecycle import RunHooksBase
 from langfuse import get_client, propagate_attributes
 from openinference.instrumentation.openai_agents import OpenAIAgentsInstrumentor
 
-from hexgate.adapters._common import langfuse_propagate_kwargs
+from hexgate.adapters._common import (
+    aprepare_run,
+    langfuse_propagate_kwargs,
+    prepare_run,
+)
 from hexgate.adapters.openai.tools import _CAN_DETECT_AGENT_TOOLS
 from hexgate.adapters.openai.usage import HexgateUsageHooks
 from hexgate.adapters.openai.wrapper import wrap_openai_agent
@@ -334,10 +338,9 @@ class HexgateRunner:
         """Run the OpenAI agent asynchronously inside a HexgateContext scope."""
         self._setup_observability()
         binding = self._binding_for(agent)
-        await binding.refresh_async()  # per-run policy pull; 304 when unchanged
         ban_gate = self._ban_gate_for(agent)
-        if ban_gate is not None:
-            await ban_gate.check_async(hexgate_context)
+        # per-run policy pull; 304 when unchanged
+        await aprepare_run(binding.refresh_async(), ban_gate, hexgate_context)
         wrapped_agent = wrap_openai_agent(
             agent,
             enforcer=binding.enforcer,
@@ -374,10 +377,9 @@ class HexgateRunner:
         """Run the OpenAI agent synchronously inside a HexgateContext scope."""
         self._setup_observability()
         binding = self._binding_for(agent)
-        binding.refresh()  # per-run policy pull; 304 when unchanged
         ban_gate = self._ban_gate_for(agent)
-        if ban_gate is not None:
-            ban_gate.check(hexgate_context)
+        # per-run policy pull; 304 when unchanged
+        prepare_run(binding.refresh, ban_gate, hexgate_context)
         wrapped_agent = wrap_openai_agent(
             agent,
             enforcer=binding.enforcer,
@@ -426,11 +428,10 @@ class HexgateRunner:
         """
         self._setup_observability()
         binding = self._binding_for(agent)
-        binding.refresh()  # must precede the wrap + setup
         ban_gate = self._ban_gate_for(agent)
-        if ban_gate is not None:
-            # Before run_streamed spawns its task, so a banned run yields nothing.
-            ban_gate.check(hexgate_context)
+        # The refresh must precede the wrap + setup, and the ban check must run
+        # before run_streamed spawns its task, so a banned run yields nothing.
+        prepare_run(binding.refresh, ban_gate, hexgate_context)
         return self._launch_streamed(
             agent,
             input,
@@ -453,10 +454,10 @@ class HexgateRunner:
     ) -> RunResultStreaming:
         """Async-friendly ``run_streamed`` for callers already on an event loop.
 
-        ``run_streamed`` refreshes the policy binding and ban gate with blocking
-        sync HTTP; on an asyncio loop that freezes the loop thread (which, under
-        ``hexgate serve``, would stall the approval-reply and ping/pong frames
-        the per-frame dispatch depends on). This awaits the async variants
+        ``run_streamed`` refreshes the policy binding and fetches bans with
+        blocking sync HTTP; on an asyncio loop that freezes the loop thread
+        (which, under ``hexgate serve``, would stall the approval-reply and
+        ping/pong frames the per-frame dispatch depends on). This awaits the async variants
         first, then launches ``Runner.run_streamed`` on-loop. It stays on-loop
         rather than ``to_thread`` because ``run_streamed`` returns immediately
         and spawns the agent loop as an ``asyncio.create_task`` that must inherit
@@ -464,10 +465,9 @@ class HexgateRunner:
         """
         self._setup_observability()
         binding = self._binding_for(agent)
-        await binding.refresh_async()  # per-run policy pull; 304 when unchanged
         ban_gate = self._ban_gate_for(agent)
-        if ban_gate is not None:
-            await ban_gate.check_async(hexgate_context)
+        # per-run policy pull; 304 when unchanged
+        await aprepare_run(binding.refresh_async(), ban_gate, hexgate_context)
         # Admission here, async — not the sync check in _launch_streamed — so an
         # async approval_handler is awaited rather than fail-closed (hexgate serve
         # drives arun_streamed with an async RelayApprovalHandler). This scope is

@@ -19,7 +19,11 @@ from google.genai import types
 from langfuse import get_client, propagate_attributes
 from openinference.instrumentation.google_adk import GoogleADKInstrumentor
 
-from hexgate.adapters._common import langfuse_propagate_kwargs
+from hexgate.adapters._common import (
+    aprepare_run,
+    langfuse_propagate_kwargs,
+    prepare_run,
+)
 from hexgate.adapters.google.usage import HexgateUsagePlugin
 from hexgate.adapters.google.wrapper import wrap_google_agent
 from hexgate.approvals import ApprovalHandler
@@ -258,9 +262,8 @@ class HexgateRunner:
         instead, keeping execution in this scoped thread.
         """
         self._setup_observability()
-        self._binding.refresh()  # per-run policy pull; 304 when unchanged
-        if self._ban_gate is not None:
-            self._ban_gate.check(hexgate_context)
+        # per-run policy pull; 304 when unchanged
+        prepare_run(self._binding.refresh, self._ban_gate, hexgate_context)
         with hexgate_context.sync_scope():
             self._check_admission_sync()  # in-scope: reads the caller's role
             with (
@@ -315,9 +318,10 @@ class HexgateRunner:
         is managed separately).
         """
         self._setup_observability()
-        await self._binding.refresh_async()  # per-run policy pull; 304 when unchanged
-        if self._ban_gate is not None:
-            await self._ban_gate.check_async(hexgate_context)
+        # per-run policy pull; 304 when unchanged
+        await aprepare_run(
+            self._binding.refresh_async(), self._ban_gate, hexgate_context
+        )
         adk_session_id = (
             session_id if session_id is not None else hexgate_context.session_id
         )

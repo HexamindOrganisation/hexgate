@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 from typing import Any, AsyncIterator, Iterator
 from uuid import uuid4
 
@@ -14,7 +15,7 @@ from hexgate.adapters.langchain.agent import HexgateLangchainAgent
 from hexgate.adapters.langchain.usage import HexgateUsageCallbackHandler
 from hexgate.runtime import HexgateContext
 from hexgate.runtime.context import get_current_context
-from hexgate.security.bans import BanEntry, BanGate, BanSet
+from hexgate.security.bans import EMPTY_BAN_SET, BanEntry, BanGate, BanSet
 from hexgate.security.errors import AgentBannedError
 from hexgate.tracing import usage as usage_mod
 
@@ -331,6 +332,59 @@ def test_not_banned_passes_through() -> None:
     result = proxy.invoke({"input": "hi"}, hexgate_context=_user())
 
     assert result == {"messages": ["sync-ok"]}
+    assert len(graph.invoke_calls) == 1
+
+
+# A sequential regression leaves the first party waiting alone until this
+# breaks the barrier; a concurrent fetch meets it immediately.
+_BARRIER_TIMEOUT_S = 2.0
+
+
+class _BarrierBanSource:
+    def __init__(self, barrier: threading.Barrier) -> None:
+        self._barrier = barrier
+
+    def fetch(self) -> BanSet:
+        self._barrier.wait()
+        return EMPTY_BAN_SET
+
+
+class _BarrierBinding:
+    def __init__(self, barrier: threading.Barrier) -> None:
+        self._barrier = barrier
+
+    def refresh(self) -> None:
+        self._barrier.wait()
+
+    async def refresh_async(self) -> None:
+        await asyncio.to_thread(self._barrier.wait)
+
+
+def _concurrent_proxy(graph: _RecordingGraph) -> HexgateLangchainAgent:
+    barrier = threading.Barrier(2, timeout=_BARRIER_TIMEOUT_S)
+    return HexgateLangchainAgent(
+        agent=graph,
+        api_key="k",
+        tool_names=["echo"],
+        binding=_BarrierBinding(barrier),  # type: ignore[arg-type]
+        ban_gate=BanGate(graph.name, _BarrierBanSource(barrier)),
+    )
+
+
+@pytest.mark.asyncio
+async def test_ainvoke_fetches_policy_and_bans_concurrently() -> None:
+    graph = _RecordingGraph()
+
+    await _concurrent_proxy(graph).ainvoke({"input": "hi"}, hexgate_context=_user())
+
+    assert len(graph.ainvoke_calls) == 1
+
+
+def test_invoke_fetches_policy_and_bans_concurrently() -> None:
+    graph = _RecordingGraph()
+
+    _concurrent_proxy(graph).invoke({"input": "hi"}, hexgate_context=_user())
+
     assert len(graph.invoke_calls) == 1
 
 

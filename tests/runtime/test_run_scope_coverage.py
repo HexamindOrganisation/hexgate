@@ -27,6 +27,16 @@ _JOINS_SCOPE = "use_run_facts("
 # of calling run_scope() inline; test_shared_bind_helpers_open_a_scope pins that
 # the helpers do open one.
 _DELEGATES_TO_SHARED_BIND = ("abind(", "bind(")
+# The shared pre-run seam that fetches the policy and bans, then refuses a
+# banned run. The ordering pins below match these as parsed calls, so a
+# docstring or comment naming one does not count.
+_PREPARES_RUN = frozenset({"aprepare_run", "prepare_run"})
+# Anything that starts the run: the identity scope, the run scope, or the
+# streamed launch that opens both. ``async with hexgate_context`` is not a call,
+# so _first_call matches it separately.
+_STARTS_RUN = frozenset(
+    {"run_scope", "_abind", "_bind", "_launch_streamed", "sync_scope"}
+)
 _CHECKS_ADMISSION = "_check_admission"
 _API_KEY_KWARG = "api_key"
 # Calls that open a run scope, and so pick the sender its run_start span leaves on.
@@ -132,6 +142,42 @@ def _source_of(module_name: str, class_name: str, symbol: str) -> str:
     return inspect.getsource(getattr(_load(module_name, class_name), symbol))
 
 
+def _called_name(node: ast.Call) -> str | None:
+    if isinstance(node.func, ast.Attribute):
+        return node.func.attr
+    if isinstance(node.func, ast.Name):
+        return node.func.id
+    return None
+
+
+def _enters_context(node: ast.AST) -> bool:
+    return isinstance(node, (ast.With, ast.AsyncWith)) and any(
+        isinstance(item.context_expr, ast.Name)
+        and item.context_expr.id == _CONTEXT_PARAM
+        for item in node.items
+    )
+
+
+def _first_call(
+    module_name: str,
+    class_name: str,
+    method: str,
+    names: frozenset[str],
+    *,
+    or_entering_context: bool = False,
+) -> tuple[int, int] | None:
+    """Position of the earliest real call to one of ``names``, parsed so a
+    docstring or comment naming it does not count."""
+    source = textwrap.dedent(_source_of(module_name, class_name, method))
+    positions = [
+        (node.lineno, node.col_offset)
+        for node in ast.walk(ast.parse(source))
+        if (isinstance(node, ast.Call) and _called_name(node) in names)
+        or (or_entering_context and _enters_context(node))
+    ]
+    return min(positions, default=None)
+
+
 @pytest.mark.parametrize(("module_name", "class_name"), _DERIVABLE)
 def test_every_adapter_boundary_is_covered(module_name: str, class_name: str) -> None:
     """The guard against a *future* unwired entry point: a new method taking
@@ -180,10 +226,36 @@ def test_shared_bind_helpers_open_a_scope() -> None:
 
 def test_scope_opens_after_the_ban_check() -> None:
     """A refused invocation is not a run, so the ban gate must fire first."""
-    source = _source_of(
-        "hexgate.adapters.langchain.agent", "HexgateLangchainAgent", "ainvoke"
+    site = ("hexgate.adapters.langchain.agent", "HexgateLangchainAgent", "ainvoke")
+    prepares = _first_call(*site, _PREPARES_RUN)
+    binds = _first_call(*site, frozenset({"_abind"}))
+    assert prepares is not None and binds is not None
+    assert prepares < binds
+
+
+@pytest.mark.parametrize(
+    ("module_name", "class_name", "method"),
+    [(module, klass, method) for module, klass, method, _ in SCOPE_SITES],
+    ids=[f"{m.rsplit('.', 1)[-1]}.{c}.{meth}" for m, c, meth, _ in SCOPE_SITES],
+)
+def test_every_boundary_prepares_the_run_before_starting_it(
+    module_name: str, class_name: str, method: str
+) -> None:
+    """Every boundary goes through the shared seam, before anything starts the
+    run — so a ban is refused outside the scope, and whatever joins the seam
+    later reaches every boundary."""
+    prepares = _first_call(module_name, class_name, method, _PREPARES_RUN)
+    assert prepares is not None, (
+        f"{module_name}.{class_name}.{method} bypasses the aprepare_run / "
+        f"prepare_run seam, so it skips the concurrent fetch or the ban gate."
     )
-    assert source.index("_check_ban_async") < source.index("_abind")
+    starts = _first_call(
+        module_name, class_name, method, _STARTS_RUN, or_entering_context=True
+    )
+    assert starts is not None, (
+        f"{module_name}.{class_name}.{method} never starts the run"
+    )
+    assert prepares < starts
 
 
 @pytest.mark.parametrize(
@@ -250,9 +322,11 @@ def test_streamed_boundaries_launch_after_the_ban_check(method: str) -> None:
     """The streaming boundaries own only the refresh + ban gate; the scope lives
     in ``_launch_streamed``, so each must actually hand off to it — and only
     once a banned run has been refused."""
-    source = _source_of("hexgate.adapters.openai.runner", "HexgateRunner", method)
-    assert "_launch_streamed(" in source
-    assert source.index("ban_gate.check") < source.index("_launch_streamed(")
+    site = ("hexgate.adapters.openai.runner", "HexgateRunner", method)
+    prepares = _first_call(*site, _PREPARES_RUN)
+    launches = _first_call(*site, frozenset({"_launch_streamed"}))
+    assert launches is not None
+    assert prepares is not None and prepares < launches
 
 
 def test_run_streamed_rejoins_rather_than_mints() -> None:
