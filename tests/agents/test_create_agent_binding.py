@@ -12,19 +12,16 @@ client patched over ``hexgate.cloud.client.HexgateClient``.
 
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 import pytest
 from langchain_core.tools import tool
 
 from hexgate.adapters.langchain.tools import GuardedTool
 from hexgate.agents import factory
 from hexgate.cloud.client import HexgateError
-from hexgate.security import AgentPolicy, BaseToolPolicy, PolicySet, usage_source
+from hexgate.security import AgentPolicy, BaseToolPolicy, PolicySet
+from hexgate.security import enforcer as enforcer_mod
 from hexgate.security.policy_set import DEFAULT_ROLE_NAME
 from hexgate.security.source import PlatformPolicySource
-
-_FAKE_BASE_URL = "https://platform.test"
 
 _POLICY_YAML = """\
 version: 1
@@ -44,9 +41,6 @@ def echo(text: str) -> str:
 
 class _FakeClient:
     """Scripted HexgateClient stand-in (same shape as the binding tests)."""
-
-    # Keys the shared usage source, as on the real client.
-    config = SimpleNamespace(base_url=_FAKE_BASE_URL)
 
     def __init__(self) -> None:
         self._queued: list[tuple[dict | None, str | None] | Exception] = []
@@ -84,8 +78,8 @@ def _hermetic(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("HEXGATE_LOCAL_POLICY", raising=False)
     monkeypatch.delenv("HEXGATE_BIND_AGENTS", raising=False)
     monkeypatch.delenv("HEXGATE_LOCAL_MODE", raising=False)
-    # The scripted client must not outlive its test in the shared source registry.
-    monkeypatch.setattr(usage_source, "_usage_sources", {})
+    # Usage sources are not under test; one would be built on the scripted client.
+    monkeypatch.setattr(enforcer_mod, "resolve_usage_source", lambda **_: None)
 
 
 def _patch_platform(monkeypatch: pytest.MonkeyPatch, client: _FakeClient) -> None:

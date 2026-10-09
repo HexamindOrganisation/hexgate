@@ -16,6 +16,7 @@ import ast
 import importlib
 import inspect
 import textwrap
+from collections.abc import Iterator
 from typing import Any
 
 import pytest
@@ -160,6 +161,11 @@ def _enters_context(node: ast.AST) -> bool:
     )
 
 
+def _parsed_nodes(module_name: str, class_name: str, method: str) -> Iterator[ast.AST]:
+    source = textwrap.dedent(_source_of(module_name, class_name, method))
+    return ast.walk(ast.parse(source))
+
+
 def _first_call(
     module_name: str,
     class_name: str,
@@ -170,10 +176,9 @@ def _first_call(
 ) -> tuple[int, int] | None:
     """Position of the earliest real call to one of ``names``, parsed so a
     docstring or comment naming it does not count."""
-    source = textwrap.dedent(_source_of(module_name, class_name, method))
     positions = [
         (node.lineno, node.col_offset)
-        for node in ast.walk(ast.parse(source))
+        for node in _parsed_nodes(module_name, class_name, method)
         if (isinstance(node, ast.Call) and _called_name(node) in names)
         or (or_entering_context and _enters_context(node))
     ]
@@ -261,10 +266,9 @@ def test_every_boundary_prepares_the_run_before_starting_it(
 
 
 def _seam_calls(module_name: str, class_name: str, method: str) -> list[ast.Call]:
-    source = textwrap.dedent(_source_of(module_name, class_name, method))
     return [
         node
-        for node in ast.walk(ast.parse(source))
+        for node in _parsed_nodes(module_name, class_name, method)
         if isinstance(node, ast.Call) and _called_name(node) in _PREPARES_RUN
     ]
 

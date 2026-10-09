@@ -76,8 +76,8 @@ class _Refresh:
         await asyncio.to_thread(self)
 
 
-def _barrier() -> threading.Barrier:
-    return threading.Barrier(2, timeout=_BARRIER_TIMEOUT_S)
+def _barrier(parties: int = 2) -> threading.Barrier:
+    return threading.Barrier(parties, timeout=_BARRIER_TIMEOUT_S)
 
 
 def _context() -> HexgateContext:
@@ -244,10 +244,6 @@ def _usage(source: _UsageSource) -> UsageRefresh:
     return UsageRefresh(source, _AGENT, _USAGE_PATHS)  # type: ignore[arg-type]
 
 
-def _parties(count: int) -> threading.Barrier:
-    return threading.Barrier(count, timeout=_BARRIER_TIMEOUT_S)
-
-
 async def test_aprepare_run_without_gate_or_usage_awaits_the_refresh_directly(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -267,7 +263,7 @@ async def test_aprepare_run_without_gate_or_usage_awaits_the_refresh_directly(
 
 @pytest.mark.parametrize("with_gate", [False, True])
 async def test_aprepare_run_refreshes_usage_concurrently(with_gate: bool) -> None:
-    barrier = _parties(3 if with_gate else 2)
+    barrier = _barrier(3 if with_gate else 2)
     refresh = _Refresh(barrier)
     source = _UsageSource(barrier)
     gate = BanGate(_AGENT, _BanSource(barrier=barrier)) if with_gate else None
@@ -280,7 +276,9 @@ async def test_aprepare_run_refreshes_usage_concurrently(with_gate: bool) -> Non
 
 @pytest.mark.parametrize("with_gate", [False, True])
 def test_prepare_run_refreshes_usage_concurrently(with_gate: bool) -> None:
-    barrier = _parties(3 if with_gate else 2)
+    """With a gate, both workers run at once: one shared Context would make the
+    second ``Context.run`` raise RuntimeError."""
+    barrier = _barrier(3 if with_gate else 2)
     refresh = _Refresh(barrier)
     source = _UsageSource(barrier)
     gate = BanGate(_AGENT, _BanSource(barrier=barrier)) if with_gate else None
@@ -288,22 +286,6 @@ def test_prepare_run_refreshes_usage_concurrently(with_gate: bool) -> None:
     prepare_run(refresh, gate, _context(), usage=_usage(source))
 
     assert refresh.calls == 1
-    assert source.calls == [(_AGENT, _USAGE_PATHS)]
-
-
-def test_prepare_run_gives_each_worker_its_own_context() -> None:
-    """Both workers run at once: one shared Context would make the second
-    ``Context.run`` raise RuntimeError."""
-    barrier = _barrier()
-    source = _UsageSource(barrier)
-
-    prepare_run(
-        _Refresh(),
-        BanGate(_AGENT, _BanSource(barrier=barrier)),
-        _context(),
-        usage=_usage(source),
-    )
-
     assert source.calls == [(_AGENT, _USAGE_PATHS)]
 
 

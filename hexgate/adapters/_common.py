@@ -32,6 +32,7 @@ _MAX_METADATA_CHARS = 200
 
 # The ban fetch and the usage refresh, each on its own worker.
 _MAX_PREFETCH_WORKERS = 2
+_USAGE_REFRESH_FAILED = "usage refresh for agent %r failed"
 
 
 def langfuse_propagate_kwargs(context: HexgateContext, tag: str) -> dict[str, Any]:
@@ -156,15 +157,11 @@ def _refresh_usage(usage: UsageRefresh) -> None:
     try:
         usage.run()
     except Exception:  # noqa: BLE001 — a usage refresh must never fail a run
-        _log.warning(
-            "usage refresh for agent %r failed", usage.agent_name, exc_info=True
-        )
+        _log.warning(_USAGE_REFRESH_FAILED, usage.agent_name, exc_info=True)
 
 
 async def _arefresh_usage(usage: UsageRefresh) -> None:
     try:
         await usage.arun()
     except Exception:  # noqa: BLE001 — a usage refresh must never fail a run
-        _log.warning(
-            "usage refresh for agent %r failed", usage.agent_name, exc_info=True
-        )
+        _log.warning(_USAGE_REFRESH_FAILED, usage.agent_name, exc_info=True)
