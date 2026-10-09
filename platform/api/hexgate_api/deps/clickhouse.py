@@ -1,8 +1,10 @@
 """ClickHouse dependency: resolve the client, mapping connect failures to 503."""
 
 import logging
+from collections.abc import Callable
 from typing import Final
 
+from clickhouse_connect.driver.client import Client
 from clickhouse_connect.driver.exceptions import ClickHouseError
 from fastapi import HTTPException
 
@@ -35,3 +37,9 @@ def require_clickhouse():
     except ClickHouseError as exc:
         _log.warning("ClickHouse unreachable resolving audit client: %s", exc)
         raise _audit_unavailable()
+
+
+def clickhouse_getter() -> Callable[[], Client]:
+    """The client factory itself, for a route that must connect lazily: after its
+    own validation, and inside its own time budget."""
+    return get_clickhouse

@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+from collections.abc import Callable
 from datetime import datetime
 from typing import Final
 
@@ -12,14 +13,19 @@ from pydantic import BaseModel
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from hexgate_api.core.db import get_session
-from hexgate_api.deps.clickhouse import clickhouse_unavailable, require_clickhouse
+from hexgate_api.deps.clickhouse import clickhouse_getter, clickhouse_unavailable
 from hexgate_api.deps.tokens import require_project
 from hexgate_api.features.agents.service import get_agent
-from hexgate_api.features.usage.paths import InvalidUsagePaths, parse_usage_paths
+from hexgate_api.features.usage.paths import (
+    InvalidUsagePaths,
+    UsageWindowSpec,
+    parse_usage_paths,
+)
 from hexgate_api.features.usage.service import (
     USAGE_MEMO_TTL_SECONDS,
     USAGE_READ_TIMEOUT_SECONDS,
     UsageMemo,
+    UsageReadout,
     get_usage_memo,
     read_usage,
 )
@@ -47,7 +53,7 @@ async def api_get_agent_usage(
     paths: str = Query(...),
     project_id: str = Depends(require_project),
     session: AsyncSession = Depends(get_session),
-    clickhouse_client: Client = Depends(require_clickhouse),
+    get_client: Callable[[], Client] = Depends(clickhouse_getter),
     memo: UsageMemo = Depends(get_usage_memo),
 ) -> AgentUsageRead:
     """SDK read of agent_usage.* for the bearer's project. 404 if the agent isn't
@@ -71,7 +77,7 @@ async def api_get_agent_usage(
             # memoized) rather than releasing one caller.
             lambda: asyncio.wait_for(
                 asyncio.to_thread(
-                    read_usage, clickhouse_client, project_id, name, specs
+                    _connect_and_read, get_client, project_id, name, specs
                 ),
                 timeout=USAGE_READ_TIMEOUT_SECONDS,
             ),
@@ -85,3 +91,14 @@ async def api_get_agent_usage(
         as_of=readout.as_of,
         values={path: readout.values[spec] for path, spec in requested.items()},
     )
+
+
+def _connect_and_read(
+    get_client: Callable[[], Client],
+    project_id: str,
+    agent_name: str,
+    specs: tuple[UsageWindowSpec, ...],
+) -> UsageReadout:
+    """The connect is lazy: it runs after the 422 and 404 checks, inside the read's
+    timeout, and a failure to connect is the same 503 as a failed read."""
+    return read_usage(get_client(), project_id, agent_name, specs)

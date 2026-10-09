@@ -9,7 +9,7 @@ from unittest.mock import MagicMock
 
 import pytest
 import pytest_asyncio
-from clickhouse_connect.driver.exceptions import DatabaseError
+from clickhouse_connect.driver.exceptions import DatabaseError, OperationalError
 from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
@@ -19,7 +19,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from hexgate_api.constants import DEFAULT_ORG_ID
 from hexgate_api.core import keystore as keystore_mod
 from hexgate_api.core.ids import new_id
-from hexgate_api.deps.clickhouse import require_clickhouse
+from hexgate_api.deps.clickhouse import clickhouse_getter
 from hexgate_api.deps.tokens import require_project
 from hexgate_api.features.usage import router as usage_router
 from hexgate_api.features.usage.service import UsageMemo, get_usage_memo
@@ -90,7 +90,7 @@ async def anonymous_client(session_factory, fake_clickhouse: MagicMock, tmp_path
             yield session
 
     app.dependency_overrides[get_session] = override_session
-    app.dependency_overrides[require_clickhouse] = lambda: fake_clickhouse
+    app.dependency_overrides[clickhouse_getter] = lambda: lambda: fake_clickhouse
     memo = UsageMemo(1.0, 100, lambda: 0.0)  # frozen clock: never expires
     app.dependency_overrides[get_usage_memo] = lambda: memo
     original_keystore = keystore_mod.keystore
@@ -191,6 +191,39 @@ def test_a_read_slower_than_the_timeout_is_503_and_not_memoized(
     assert first.headers["Retry-After"] == "5"
     assert first.json()["detail"] == "usage temporarily unavailable"
     assert fake_clickhouse.query.call_count == 2
+
+
+@pytest.fixture
+def unreachable_clickhouse() -> MagicMock:
+    connect = MagicMock(side_effect=OperationalError("connection refused"))
+    app.dependency_overrides[clickhouse_getter] = lambda: connect
+    return connect
+
+
+def test_an_unreachable_clickhouse_is_503_and_retried(
+    client: TestClient, unreachable_clickhouse: MagicMock
+) -> None:
+    first = _usage(client, "invocations_1h")
+    second = _usage(client, "invocations_1h")
+
+    assert first.status_code == second.status_code == 503
+    assert first.json()["detail"] == "usage temporarily unavailable"
+    assert unreachable_clickhouse.call_count == 2
+
+
+@pytest.mark.parametrize(
+    ("paths", "agent", "expected"),
+    [("errors_1h", _AGENT, 422), ("invocations_1h", "unknown", 404)],
+)
+def test_validation_runs_before_any_connect(
+    client: TestClient,
+    unreachable_clickhouse: MagicMock,
+    paths: str,
+    agent: str,
+    expected: int,
+) -> None:
+    assert _usage(client, paths, agent=agent).status_code == expected
+    unreachable_clickhouse.assert_not_called()
 
 
 def test_no_bearer_is_401(anonymous_client: TestClient) -> None:
