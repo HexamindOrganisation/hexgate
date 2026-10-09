@@ -9,7 +9,9 @@ answers (`solution/` or `wrong_answer/`) into a workspace in place of an agent.
 
 from __future__ import annotations
 
+import datetime
 import fnmatch
+import json
 import shutil
 from pathlib import Path
 from typing import Annotated, Any, Literal
@@ -24,8 +26,10 @@ from pydantic import (
     model_validator,
 )
 
+from evals.policy_writing.calls import bad_values, complete, load_known, unknown_names
 from evals.policy_writing.checks import snapshot
-from evals.policy_writing.policy import CaseError, dump_json
+from evals.policy_writing.policy import CaseError, complete_call, dump_json
+from evals.policy_writing.sources import SourceError
 
 HERE = Path(__file__).resolve().parent
 
@@ -171,6 +175,59 @@ def _project(root: Path, case_dir: Path, named: str | None) -> Path:
     return shared / named
 
 
+def _calls(expect: dict) -> list[dict]:
+    """Every dry-run call a case lists: its decisions and its superset probes."""
+    probes = [p for s in expect.get("superset", []) for p in s["probes"]]
+    return expect.get("decisions", []) + probes
+
+
+def _timestamps(value) -> list[str]:
+    """The unquoted YAML timestamps (not plain dates) anywhere in `value`."""
+    if isinstance(value, dict):
+        return [s for v in value.values() for s in _timestamps(v)]
+    if isinstance(value, list):
+        return [s for v in value for s in _timestamps(v)]
+    return [str(value)] if isinstance(value, datetime.datetime) else []
+
+
+def _complete_calls(path: Path, agent: str, calls: list[dict]) -> None:
+    """Complete each call as its gate sends it, refusing one no policy could
+    dry-run: egress calls by `calls.complete`, agent and skill gates by the
+    scorer's own `policy.complete_call`."""
+    for call in calls:
+        tool = call["tool"]
+        # As `policy test` reads them, so an unquoted YAML date is its string.
+        # A timestamp's string ("2026-01-01 08:00:00+00:00") isn't how a caller
+        # spells one, and compares wrongly with an ISO one, so it must be quoted.
+        for key in ("args", "attributes", "run_facts"):
+            if key in call:
+                if stamps := _timestamps(call[key]):
+                    raise CaseError(f"{path}: {tool}: quote the timestamps {stamps}")
+                call[key] = json.loads(dump_json(call[key]))
+        if bad := complete(call):
+            raise CaseError(f"{path}: {tool}: not what {agent} sends: {bad}")
+        try:
+            complete_call(call, agent)
+        except CaseError as exc:
+            raise CaseError(f"{path}: {tool}: {exc}") from exc
+
+
+def _check_calls(path: Path, case: dict) -> None:
+    """The case's agent is in agents.json, and its calls use only what it knows."""
+    agent = case["agent"]
+    try:
+        known = load_known(case["project"], agent)
+    except SourceError as exc:
+        raise CaseError(f"{path}: {exc}") from exc
+    for call in _calls(case["expect"]):
+        unknown = unknown_names(call, known)
+        if unknown:
+            raise CaseError(f"{path}: {call['tool']}: unknown to {agent}: {unknown}")
+        bad = bad_values(call, known)
+        if bad:
+            raise CaseError(f"{path}: {call['tool']}: not {agent}'s schema: {bad}")
+
+
 def _check_entries(case_dir: Path) -> None:
     # A misnamed folder (`wrong_answers/`) would never be scored.
     stray = sorted(
@@ -211,8 +268,8 @@ def _protect(path: Path, expect: dict, files: dict[str, str]) -> None:
         expect["unchanged"] = unchanged
 
 
-def _load_preserved(project: Path, files: dict[str, str]) -> list[dict]:
-    """The project's `preserve.yaml` calls."""
+def _load_preserved(project: Path, files: dict[str, str], agent: str) -> list[dict]:
+    """The project's `preserve.yaml` calls, completed like the case's own."""
     # A `preserve.yml` or `Preserve.yaml` would be skipped (or, on a
     # case-insensitive disk, read) and also handed to the agent as a project file.
     misnamed = sorted(
@@ -227,7 +284,9 @@ def _load_preserved(project: Path, files: dict[str, str]) -> list[dict]:
         decisions = _DECISIONS.validate_python(_read_yaml(preserve) or [])
     except ValidationError as exc:
         raise CaseError(f"{preserve}: {exc}") from exc
-    return _DECISIONS.dump_python(decisions, exclude_unset=True)
+    preserved = _DECISIONS.dump_python(decisions, exclude_unset=True)
+    _complete_calls(preserve, agent, preserved)
+    return preserved
 
 
 def _load_case(root: Path, case_dir: Path) -> dict:
@@ -246,9 +305,13 @@ def _load_case(root: Path, case_dir: Path) -> dict:
     expect = case["expect"]
     files = starting_files(case)
     _protect(path, expect, files)
-    preserved = _load_preserved(case["project"], files)
+    # Before the merge, so a preserved call and the case's own entry for it
+    # compare equal however much of the gate's arguments each spells out.
+    _complete_calls(path, case["agent"], _calls(expect))
+    preserved = _load_preserved(case["project"], files, case["agent"])
     if preserved:
         expect["decisions"] = _merge_preserved(expect.get("decisions", []), preserved)
+    _check_calls(path, case)
     return case
 
 

@@ -19,7 +19,7 @@ from evals.policy_writing.cases import (
     starting_files,
 )
 from tests.evals.answers import failed, run_answer
-from tests.evals.helpers import AGENT, AGENTS, AUDIT
+from tests.evals.helpers import AGENT, AGENTS, AUDIT, agent_view, manifest_tool
 
 # The scorer's shop-bot fixture, as the starting project's files.
 AGENTS_TEXT, AUDIT_TEXT = json.dumps(AGENTS), json.dumps(AUDIT)
@@ -127,6 +127,87 @@ def _case(**extra) -> dict:
         ),
         # A misspelt path is missing before and after, so it would always pass.
         (_case(expect={"unchanged": ["TOOL.md"]}), "names no starting file"),
+        # One of each call rule, raised against the case file (test_calls.py has
+        # the rules themselves).
+        (
+            _case(expect={"decisions": [{**DENY_500, "tool": "refund_ordr"}]}),
+            r"case.yaml: refund_ordr: unknown to shop-bot: \['refund_ordr'\]",
+        ),
+        (
+            _case(
+                expect={
+                    "superset": [
+                        {"wider": "a", "narrower": "b", "probes": [{"tool": "refnd"}]}
+                    ]
+                }
+            ),
+            r"unknown to shop-bot: \['refnd'\]",
+        ),
+        (
+            _case(
+                expect={
+                    "decisions": [
+                        {**DENY_500, "args": {"order_id": "o1", "amount": "51"}}
+                    ]
+                }
+            ),
+            "case.yaml: refund_order: not shop-bot's schema: .*amount='51'",
+        ),
+        (
+            _case(
+                expect={
+                    "decisions": [
+                        {**DENY_500, "tool": "agent.run", "args": {"agent": "x"}}
+                    ]
+                }
+            ),
+            r"case.yaml: agent.run: .*the gate sends .*drop \['agent'\]",
+        ),
+        # Run facts the scorer would refuse (test_policy.py has the rules).
+        (
+            _case(
+                expect={
+                    "decisions": [
+                        {**DENY_500, "tool": "agent.run", "args": {}}
+                        | {"run_facts": {"tool_calls": 1}}
+                    ]
+                }
+            ),
+            "case.yaml: agent.run: agent.run is decided outside any run",
+        ),
+        (
+            _case(
+                expect={
+                    "decisions": [
+                        {**DENY_500, "tool": "net.tcp_connect"}
+                        | {"args": {"host": "x.com", "port": 25}}
+                        | {"run_facts": {"tool_calls": 1}}
+                    ]
+                }
+            ),
+            "case.yaml: net.tcp_connect: net.tcp_connect is decided outside any run",
+        ),
+        (
+            _case(
+                expect={"decisions": [{**DENY_500, "run_facts": {"agent": "ops-bot"}}]}
+            ),
+            "case.yaml: refund_order: run.agent is the case's agent",
+        ),
+        (
+            _case(
+                expect={
+                    "decisions": [
+                        {**DENY_500, "tool": "agent.handoff:ops-bot", "args": {}}
+                        | {"run_facts": {"calls_of_this_tool": 1}}
+                    ]
+                }
+            ),
+            "case.yaml: agent.handoff:ops-bot: .* is never counted",
+        ),
+        (
+            _case(expect={"decisions": [{**DENY_500, "run_facts": {"nosuch": 1}}]}),
+            r"case.yaml: refund_order: unknown run.\* path\(s\) \['nosuch'\]",
+        ),
         (_case(starting_project="missing"), "no starting project"),
         ({"agent": AGENT, "request": "Do it.", "expect": {}}, "neither"),
         (_case(agent=""), "agent\n  String should have at least 1"),
@@ -134,6 +215,8 @@ def _case(**extra) -> dict:
             {"starting_project": "shop", "request": "Do it.", "expect": {}},
             "agent\n  Field",
         ),
+        # The scorer reads this agent's manifest and audit rows.
+        (_case(agent="shop-bott"), "no manifest for agent 'shop-bott'"),
     ],
 )
 def test_load_rejects(tmp_path: Path, case: dict, error: str) -> None:
@@ -163,6 +246,90 @@ def test_load_rejects_a_case_one_level_too_shallow(tmp_path: Path) -> None:
     _write(root / "cases" / "d" / "case.yaml", _case())
     with pytest.raises(CaseError, match="not at cases/<category>/<name>"):
         load_cases(root)
+
+
+def test_load_reads_an_unquoted_yaml_date_as_its_string(tmp_path: Path) -> None:
+    # As `policy test` reads it; merging with preserve.yaml keys each call by
+    # its JSON, which a date object would crash.
+    root = _eval_set(tmp_path, _case(), preserve=[REFUND_10])
+    call = (
+        "{role: billing, tool: refund_order, args: {order_id: 2026-03-01, amount: 1},"
+        " attributes: {department: 2026-03-02}, expect: deny}"
+    )
+    _write(
+        root / "cases" / "cat" / "c" / "case.yaml",
+        f"starting_project: shop\nagent: {AGENT}\nrequest: Do it.\n"
+        f"expect:\n  decisions:\n    - {call}\n",
+    )
+    [case] = load_cases(root)
+    decision = case["expect"]["decisions"][0]
+    assert (decision["args"]["order_id"], decision["attributes"]) == (
+        "2026-03-01",
+        {"department": "2026-03-02"},
+    )
+
+
+def test_load_refuses_an_unquoted_yaml_timestamp(tmp_path: Path) -> None:
+    # Its string has a space and +00:00, so it compares wrongly with a T/Z one.
+    root = _eval_set(tmp_path, _case())
+    call = (
+        "{role: billing, tool: refund_order, args: {order_id: 2026-01-01T08:00:00Z,"
+        " amount: 1}, expect: deny}"
+    )
+    _write(
+        root / "cases" / "cat" / "c" / "case.yaml",
+        f"starting_project: shop\nagent: {AGENT}\nrequest: Do it.\n"
+        f"expect:\n  decisions:\n    - {call}\n",
+    )
+    with pytest.raises(CaseError, match="quote the timestamps"):
+        load_cases(root)
+
+
+def test_load_completes_and_checks_a_script_call(tmp_path: Path) -> None:
+    # The scorer's complete_call fills a script's args, null where left out;
+    # unknown_names must then accept them.
+    view = agent_view(
+        AGENT, manifest_tool("refund_order", order_id="string", amount="number")
+    )
+    view["manifest"]["skills"] = [{"name": "pdf", "description": "pdf"}]
+    root = _eval_set(tmp_path, _case())
+    _write(root / "starting_projects" / "shop" / "agents.json", json.dumps([view]))
+    call = {"role": "billing", "tool": "skill.script:pdf", "expect": "deny"}
+    _write(
+        root / "cases" / "cat" / "c" / "case.yaml", _case(expect={"decisions": [call]})
+    )
+    [case] = load_cases(root)
+    assert case["expect"]["decisions"][0]["args"] == {
+        "skill": "pdf",
+        "via": "script",
+        "file_path": None,
+        "content_hash": None,
+        "script_args": None,
+        "short_options": None,
+        "positional_args": None,
+    }
+
+
+def test_a_loaded_reach_call_is_one_decide_accepts(tmp_path: Path) -> None:
+    # decide fills a gate's args itself; the loader leaves them out.
+    reach = {"role": "billing", "tool": "agent.tool:ops-bot", "expect": "allow"}
+    root = _eval_set(tmp_path, _case(expect={"decisions": [reach]}), boundary=False)
+    # A declared reach gate, where decide refuses args other than the gate's.
+    declared = POLICY + "    agents:\n      ops-bot:\n        mode: allow\n"
+    _write(root / "starting_projects" / "shop" / "policy.yaml", declared)
+    [case] = load_cases(root)
+    [decision] = [
+        c for c in run_answer(case, tmp_path / "ws", None) if "ops-bot" in c.name
+    ]
+    assert decision.passed, decision.detail
+
+
+def test_a_case_overrides_a_preserved_reach(tmp_path: Path) -> None:
+    reach = {"role": "billing", "tool": "agent.tool:ops-bot"}
+    case = _case(expect={"decisions": [{**reach, "expect": "deny"}]})
+    root = _eval_set(tmp_path, case, preserve=[{**reach, "expect": "allow"}])
+    [case] = load_cases(root)
+    assert [d["expect"] for d in case["expect"]["decisions"]] == ["deny"]
 
 
 def test_load_rejects_a_misnamed_case_folder(tmp_path: Path) -> None:

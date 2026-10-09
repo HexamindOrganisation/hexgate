@@ -114,8 +114,10 @@ RANK = {
 
 
 class CaseError(ValueError):
-    """A case's call can't be dry-run: an undefined role, bad attributes or run facts,
-    or args a declared gate sets itself to other values."""
+    """A case can't be scored as written: raised by the case loader for a
+    malformed case, and by `decide` / `complete_call` for a call no policy
+    could dry-run (an undefined role, bad attributes or run facts, or args a
+    gate sets itself, given other values)."""
 
 
 _ATTRIBUTES = TypeAdapter(dict[str, ContextAttributeValue])
@@ -211,8 +213,8 @@ def _with_gate_args(gate: _Gate, args: dict) -> dict:
 
 
 def dump_json(value: object) -> str:
-    """`value` as JSON; an unquoted YAML date, kept as a date by the case
-    loader, becomes its string."""
+    """`value` as JSON; an unquoted YAML date becomes its string (the case
+    loader refuses a timestamp, whose string isn't ISO)."""
     return json.dumps(value, sort_keys=True, default=str)
 
 
@@ -243,6 +245,39 @@ def _run(key: str, gate: _Gate | None, agent: str, facts: dict) -> dict:
     return run_namespace("" if gate else key, agent=agent, **facts)
 
 
+def _inputs(gate: _Gate | None, key: str, agent: str, d: dict) -> tuple[dict, ...]:
+    """`d`'s args, attributes and run as `decide` evaluates them, before its
+    gate's own args are added."""
+    try:  # a pydantic ValidationError is a ValueError
+        args = _as_json(d.get("args", {}))
+        attributes = _ATTRIBUTES.validate_python(_as_json(d.get("attributes", {})))
+        run = _run(key, gate, agent, _as_json(d.get("run_facts", {})))
+    except ValueError as exc:
+        raise CaseError(str(exc)) from exc
+    return args, attributes, run
+
+
+# Whether a policy declares a gate never changes what `_inputs` accepts.
+_NO_POLICY = load_policy_set_from_dict({})
+
+
+def complete_call(d: dict, agent: str) -> None:
+    """Raise `CaseError` for inputs `decide` refuses under any policy, and for
+    args a gate sets itself given other values (which `decide` refuses once the
+    gate is declared); write a gate call's key and args into `d` as `decide`
+    sends them.
+
+    The case loader runs this, so a call no policy could dry-run fails before
+    a run, and a case's call and a preserved one compare equal however much of
+    the gate's args each spells out.
+    """
+    gate = _gate(d["tool"], agent, _NO_POLICY)
+    key = gate.key if gate else d["tool"]
+    args, _, _ = _inputs(gate, key, agent, d)
+    if gate:
+        d["tool"], d["args"] = key, _with_gate_args(gate, args)
+
+
 def decide(policy: Policy, role: str, d: dict) -> Verdict:
     """Dry-run one call, with the same inputs as `hexgate policy test`, except that
     a call on a gate carries the args that gate sends at runtime.
@@ -258,12 +293,7 @@ def decide(policy: Policy, role: str, d: dict) -> Verdict:
     agent = policy.agent or DEFAULT_AGENT_NAME
     gate = _gate(d["tool"], agent, policy.policy_set)
     key = gate.key if gate else d["tool"]
-    try:  # a pydantic ValidationError is a ValueError
-        args = _as_json(d.get("args", {}))
-        attributes = _ATTRIBUTES.validate_python(_as_json(d.get("attributes", {})))
-        run = _run(key, gate, agent, _as_json(d.get("run_facts", {})))
-    except ValueError as exc:
-        raise CaseError(str(exc)) from exc
+    args, attributes, run = _inputs(gate, key, agent, d)
     if gate and not gate.declared:
         if gate.by_name:
             raise CaseError(
