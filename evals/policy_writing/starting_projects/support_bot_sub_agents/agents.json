@@ -1,0 +1,30 @@
+[
+  {
+    "name": "front-desk",
+    "manifest": {
+      "name": "front-desk",
+      "description": null,
+      "framework": "langchain",
+      "model": null,
+      "system_prompt": null,
+      "tools": [
+        {"name": "view_orders", "description": "List a customer's orders", "input_schema": {"properties": {"customer_id": {"title": "customer_id", "type": "string"}}, "required": ["customer_id"]}},
+        {"name": "send_email", "description": "Send an email (to: addresses)", "input_schema": {"properties": {"to": {"title": "to", "type": "array"}, "subject": {"title": "subject", "type": "string"}, "body": {"title": "body", "type": "string"}}, "required": ["to", "subject", "body"]}},
+        {"name": "refund_order", "description": "Refund an order (currency: ISO code)", "input_schema": {"properties": {"order_id": {"title": "order_id", "type": "string"}, "amount": {"title": "amount", "type": "number"}, "currency": {"title": "currency", "type": "string"}}, "required": ["order_id", "amount", "currency"]}}
+      ],
+      "skills": null,
+      "subagents": [
+        {"name": "billing-bot", "via": "tool"},
+        {"name": "billing-bot", "via": "handoff"},
+        {"name": "refund-bot", "via": "tool"},
+        {"name": "refund-bot", "via": "handoff"},
+        {"name": "admin-bot", "via": "tool"},
+        {"name": "admin-bot", "via": "handoff"}
+      ],
+      "guards": null
+    },
+    "version": 1,
+    "content_hash": "5dd138ba83b3f941a79c7a6ac810736c7198627917a6f131a91dc4d9eea669c9",
+    "updated_at": "2026-10-01T00:00:00Z"
+  }
+]
