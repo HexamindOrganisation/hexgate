@@ -485,7 +485,6 @@ def _combine(
         ledger,
         platform,
         since=_FETCHED_AT - _MARGIN,
-        since_age=_MARGIN,
         current_run_age=current_run_age,
     )
 
@@ -534,13 +533,30 @@ def test_the_combined_namespace_reads_the_ledger_once() -> None:
 
 @pytest.mark.parametrize(
     ("run_age", "expected"),
-    [(None, 6), (_MARGIN, 5), (_MARGIN + 1, 6)],
-    ids=["outside-a-run", "run-in-the-local-term", "run-older-than-the-cut-off"],
+    [(None, 6), (0.0, 5)],
+    ids=["outside-a-run", "run-in-the-local-term"],
 )
-def test_the_current_run_is_left_out_only_when_it_is_local(
+def test_a_run_opened_after_the_cut_off_is_left_out_of_the_local_term(
     run_age: float | None, expected: int
 ) -> None:
     ledger = _ledger_at(_FakeClock(), (_FETCHED_AT, {UsageMetric.INVOCATIONS: 1}))
+
+    namespace = _combine(ledger, {"invocations_1h": 5}, current_run_age=run_age)
+
+    assert namespace == {"invocations_1h": expected}
+
+
+@pytest.mark.parametrize(
+    ("run_age", "expected"),
+    [(_MARGIN + 1, 4), (_HOUR, 5)],
+    ids=["run-older-than-the-cut-off", "run-older-than-the-window"],
+)
+def test_a_run_opened_before_the_cut_off_is_left_out_of_the_platform_term(
+    run_age: float, expected: int
+) -> None:
+    """The platform value already holds the run (a mid-run refresh): it must read
+    as it did at admission, not one higher."""
+    ledger = _ledger_at(_FakeClock())
 
     namespace = _combine(ledger, {"invocations_1h": 5}, current_run_age=run_age)
 

@@ -254,7 +254,6 @@ class PlatformUsageSource:
             ledger,
             present,
             since=snapshot.fetched_at - USAGE_INGEST_MARGIN_SECONDS,
-            since_age=age + USAGE_INGEST_MARGIN_SECONDS,
             current_run_age=current_run_age,
         )
         if missing:

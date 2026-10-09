@@ -508,6 +508,23 @@ def test_the_current_run_is_left_out_when_it_is_in_the_local_term() -> None:
     assert reading.namespace == {_HOUR: 7}
 
 
+def test_a_mid_run_refresh_holding_the_run_reads_as_at_admission() -> None:
+    rig = _seeded()
+    rig.clock.now += 1
+    run_opened = rig.clock.now
+    rig.ledger.record({UsageMetric.INVOCATIONS: 1})
+    at_admission = rig.source.read(_AGENT, _ONE_PATH, rig.ledger, current_run_age=0.0)
+
+    rig.clock.now += _SYNC_AFTER
+    rig.fetcher.values[_HOUR] += 1  # the run's own start, now ingested
+    rig.source.refresh(_AGENT, _ONE_PATH)
+    after_refresh = rig.source.read(
+        _AGENT, _ONE_PATH, rig.ledger, current_run_age=rig.clock.now - run_opened
+    )
+
+    assert after_refresh.namespace == at_admission.namespace == {_HOUR: 7}
+
+
 def test_read_never_fetches_on_the_callers_thread() -> None:
     executor = _HeldExecutor()
     rig = _rig(executor)
