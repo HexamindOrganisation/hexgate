@@ -17,9 +17,11 @@ from hexgate.security.policy_set import PolicySet
 
 
 def _live_constraint_lines(p: AgentPolicy) -> Iterator[tuple[str, str]]:
-    """(what the constraint applies to: `policy-level`, `default_policy` or a
-    tool key; its text), for each constraint that can run: as the SDK checks
-    them, a deny's never do."""
+    """Each constraint in `p` that can run, with where it sits: `policy-level`,
+    `default_policy`, or the tool key it's on.
+
+    A deny rule's constraints are skipped: a deny never evaluates them, and the
+    SDK's checks skip them too."""
     yield from (("policy-level", c) for c in p.constraints)
     rules = [("default_policy", p.default_policy), *p.effective_tools.items()]
     for where, rule in rules:

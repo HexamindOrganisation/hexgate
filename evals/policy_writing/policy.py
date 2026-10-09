@@ -45,6 +45,7 @@ from hexgate.security import (
 )
 from hexgate.security.analyzer import (
     SEVERITY_RANK,
+    LintCode,
     PolicyLint,
     analyze_policy,
 )
@@ -73,7 +74,7 @@ POLICY_ERRORS = (PolicySetError, ConstraintParseError, LinkError, ValidationErro
 # The lints a manifest turns on for a name the agent's code doesn't declare
 # (`analyze_policy`, `check_project`). The name checks report them, at any
 # severity, so an invented name fails one check rather than `valid`.
-DRIFT_CODES = frozenset(
+DRIFT_CODES: frozenset[LintCode] = frozenset(
     {"unknown-tool", "unknown-skill", "unknown-guard", "unknown-arg"}
 )
 
@@ -374,8 +375,8 @@ def _module_drift(
     roles: RoleMatrix | None,
     agents: ProjectAgents,
 ) -> list[PolicyLint]:
-    """The drift lints against the manifests the MCP shows. An agent with no
-    manifest, or a sub-agent with none of its own, shows no tools, so the roster
+    """The drift lints against the manifests in agents.json. An agent with no
+    manifest, or a sub-agent with none of its own, lists no tools, so the roster
     is the agents with one: with the whole project's, `check_project` leaves
     `"*"` cells and boundaries unchecked, as a name may be the unknown agent's."""
     shown = {

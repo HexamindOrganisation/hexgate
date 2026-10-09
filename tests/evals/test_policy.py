@@ -4,10 +4,18 @@ from __future__ import annotations
 
 import datetime
 import json
+from typing import get_args
 
 import pytest
 
-from evals.policy_writing.policy import CaseError, decide, effective_policy, outcome
+from evals.policy_writing.policy import (
+    DRIFT_CODES,
+    CaseError,
+    decide,
+    effective_policy,
+    outcome,
+)
+from hexgate.security.analyzer import LintCode
 from hexgate.security.decision import DecisionOutcome
 from tests.evals.helpers import (
     AGENT,
@@ -463,6 +471,12 @@ def test_when_agents_json_is_missing_then_effective_policy_fails_on_a_module_tre
 # Policy.drift: the SDK's manifest lints, for the name checks
 
 
+def test_every_drift_code_is_one_the_sdk_emits() -> None:
+    # No type checker runs here, so a misspelled or renamed code would route
+    # nothing: pin it against the SDK's own list.
+    assert DRIFT_CODES <= set(get_args(LintCode))
+
+
 def _drop_draft_bot(ws) -> None:
     """Leave only agents with a manifest, so `"*"` cells and boundaries are checked."""
     views = json.loads((ws / "agents.json").read_text())
@@ -487,7 +501,7 @@ def test_when_no_agent_is_given_then_no_manifest_and_no_drift(tmp_path) -> None:
 def test_when_a_star_cell_has_a_typo_then_drift_holds_it(
     tmp_path, without_manifest
 ) -> None:
-    # An agent the MCP shows no manifest for, or a sub-agent with none, adds no
+    # An agent with no manifest, or a sub-agent with none, adds no
     # names: the `"*"` cell is still checked against the rest.
     ws = make_modules_workspace(tmp_path)
     views = json.loads((ws / "agents.json").read_text())
@@ -509,7 +523,7 @@ def test_when_a_star_cell_has_a_typo_then_drift_holds_it(
 def test_when_the_manifest_lists_null_skills_then_an_invented_skill_is_drift(
     tmp_path,
 ) -> None:
-    # The MCP shows the agent no skills: none is known.
+    # The agent lists no skills: none is known.
     ws = make_workspace(tmp_path, "version: 1\nskills:\n  pdf: { mode: allow }\n")
     views = json.loads((ws / "agents.json").read_text())
     views[0]["manifest"]["skills"] = None
