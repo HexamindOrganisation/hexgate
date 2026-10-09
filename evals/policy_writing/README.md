@@ -14,7 +14,8 @@ product.
 ```
 cases/<category>/<name>/
   case.yaml          # the request and what the finished policy must do
-  starting_project/  # only when no other case starts from this project
+  starting_project/  # the files the agent edits, when no other case uses them
+                     # (a shared one lives in starting_projects/, named by `starting_project:`)
   solution/          # our correct answer: the checks must accept it
   wrong_answer/      # optional, a realistic mistake: the checks must reject it
 ```
