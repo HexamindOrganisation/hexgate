@@ -34,6 +34,13 @@ class UsageMetric(StrEnum):
     OUTPUT_TOKENS = "output_tokens"
 
 
+class OnUnavailable(StrEnum):
+    """What a decision reads when the platform term is missing."""
+
+    ALLOW = "allow"  # ledger-only values: zeros plus this process (G3)
+    DENY = "deny"  # the value is absent, so its constraints fail closed
+
+
 _SECONDS_PER_MINUTE: Final = 60
 _SECONDS_PER_HOUR: Final = 3_600
 _SECONDS_PER_DAY: Final = 86_400

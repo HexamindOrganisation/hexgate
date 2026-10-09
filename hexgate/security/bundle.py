@@ -26,7 +26,7 @@ from typing import Any
 
 import yaml
 
-from hexgate.runtime.agent_usage import KNOWN_AGENT_USAGE_PATHS
+from hexgate.runtime.agent_usage import KNOWN_AGENT_USAGE_PATHS, OnUnavailable
 from hexgate.security.decision import Verdict
 from hexgate.security.signing import SignatureError, verify_bytes
 from hexgate.security.wasm_engine import WasmPolicy
@@ -34,6 +34,8 @@ from hexgate.security.wasm_engine import WasmPolicy
 _log = logging.getLogger(__name__)
 
 _AGENT_USAGE_KEY = "agent_usage"
+_USAGE_KEY = "usage"
+_ON_UNAVAILABLE_KEY = "on_unavailable"
 
 
 class BundleIntegrityError(RuntimeError):
@@ -360,6 +362,25 @@ class PolicyBundle:
             )
         return listed - unknown
 
+    def usage_on_unavailable(self) -> OnUnavailable:
+        """Read the fail mode from the signed manifest. Absent (the default, or an
+        older bundle) reads ``allow`` (G3). A value this SDK doesn't know (a newer
+        builder) also reads ``allow``, with a warning: an unknown mode must not turn
+        a platform blip into an outage."""
+        section = self.manifest.get(_USAGE_KEY)
+        if not isinstance(section, dict):
+            return OnUnavailable.ALLOW
+        raw = section.get(_ON_UNAVAILABLE_KEY)
+        try:
+            return OnUnavailable(raw)
+        except ValueError:
+            _log.warning(
+                "bundle sets usage.on_unavailable=%r, which this SDK does not know; "
+                "reading 'allow'. Upgrade the SDK.",
+                raw,
+            )
+            return OnUnavailable.ALLOW
+
     def effective_guards(self, tool_name: str) -> dict[str, bool]:
         """The guard enable/disable stance (R-GUARD-007). Baseline-only in v1, so
         uniform for every tool — ``tool_name`` is accepted for a signature shared with
@@ -478,6 +499,8 @@ def build_signed_bundle(
     # The agent_usage.* paths the enforcer must supply, so it knows to enable the
     # usage ledgers. Signed, so stripping it can't switch quotas off.
     usage_paths = resolved.agent_usage_paths()
+    # Signed so a caller can't strip a deny and fail open.
+    on_unavailable = resolved.usage_on_unavailable()
 
     wasm_bytes: bytes | None = None
     wasm_hash: str | None = None
@@ -500,6 +523,9 @@ def build_signed_bundle(
     # Omitted when empty for the same reason: a usage-free policy's bytes must not move.
     if usage_paths:
         manifest[_AGENT_USAGE_KEY] = sorted(usage_paths)
+    # Omitted at the default, so a usage-free policy's manifest bytes don't move.
+    if on_unavailable is not OnUnavailable.ALLOW:
+        manifest[_USAGE_KEY] = {_ON_UNAVAILABLE_KEY: on_unavailable.value}
     # The one canonical serialization. Sign these exact bytes.
     manifest_bytes = (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode(
         "utf-8"

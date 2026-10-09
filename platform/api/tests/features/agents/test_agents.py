@@ -363,6 +363,28 @@ def test_validate_reports_divergent_guard_stance(client: TestClient) -> None:
     assert any("same stance across all roles" in e["message"] for e in body["errors"])
 
 
+def test_validate_reports_divergent_usage_fail_mode(client: TestClient) -> None:
+    """A cross-role usage.on_unavailable divergence is reported by /validate. The
+    check is eager in PolicySet, so a regression to a lazy one would let the platform
+    store a policy the SDK then refuses to load."""
+    resp = client.post(
+        f"/v1/projects/{DEFAULT_PROJECT_ID}/agents/support_bot/validate",
+        json={
+            "policy_yaml": (
+                "version: 1\n"
+                "roles:\n"
+                "  support:\n"
+                "    usage: { on_unavailable: deny }\n"
+                "  admin:\n"
+                "    usage: { on_unavailable: allow }\n"
+            )
+        },
+    )
+    body = resp.json()
+    assert body["ok"] is False
+    assert any("same value across all roles" in e["message"] for e in body["errors"])
+
+
 def test_validate_accumulates_errors_across_roles(client: TestClient) -> None:
     """Multiple bad roles → multiple diagnostics, one per failure."""
     resp = client.post(
@@ -1022,6 +1044,54 @@ def test_get_agent_etag_changes_when_only_the_guard_stance_changes(
         ]
         is False
     )
+
+
+def test_get_agent_etag_changes_when_only_the_usage_fail_mode_changes(
+    client: TestClient, session_factory
+) -> None:
+    """A usage-only edit must invalidate the bundle ETag. The fail mode is read from
+    the signed manifest, never compiled into the wasm, so only the manifest-hash ETag
+    lets a live agent pick up ``deny`` on its next refresh."""
+    import json
+
+    allow = (
+        "version: 1\n"
+        "usage: { on_unavailable: allow }\n"
+        "tools: { send_update: { mode: allow } }\n"
+    )
+    deny = allow.replace("on_unavailable: allow", "on_unavailable: deny")
+
+    def _put(policy_yaml: str) -> None:
+        r = client.put(
+            f"/v1/projects/{DEFAULT_PROJECT_ID}/agents/default",
+            headers={"X-Dev-User": DEFAULT_USER_ID},
+            json={"policy_yaml": policy_yaml},
+        )
+        assert r.status_code == 200, r.text
+
+    token = _mint_token_for_test(session_factory)
+    _put(allow)
+    first = client.get(
+        "/v1/agents/default", headers={"Authorization": f"Bearer {token}"}
+    )
+    assert first.status_code == 200, first.text
+    etag1 = first.headers.get("etag")
+    assert etag1 is not None, first.headers
+    assert "usage" not in json.loads(first.json()["bundle_manifest"])
+
+    _put(deny)
+    second = client.get(
+        "/v1/agents/default",
+        headers={"Authorization": f"Bearer {token}", "If-None-Match": etag1},
+    )
+    assert second.status_code == 200, (
+        "a usage-only edit returned 304, so a live agent never sees the deny"
+    )
+    etag2 = second.headers.get("etag")
+    assert etag2 is not None and etag2 != etag1
+    assert json.loads(second.json()["bundle_manifest"])["usage"] == {
+        "on_unavailable": "deny"
+    }
 
 
 def _trivial_policy_yaml() -> str:

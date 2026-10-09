@@ -16,10 +16,13 @@ from pydantic import (
     model_validator,
 )
 
+from hexgate.runtime.agent_usage import OnUnavailable
 from hexgate.security.constraints import parse_constraint
 from hexgate.security.naming import canonical_name, canonical_skill_name
 
 PolicyMode = Literal["allow", "deny", "approval_required"]
+
+_USAGE_FIELD = "usage"
 
 
 def _parse_all(constraints: list[str]) -> list[str]:
@@ -49,6 +52,15 @@ def _drop_empty_guards(data: Any) -> Any:
     return data
 
 
+def _drop_absent_usage(data: Any) -> Any:
+    """Remove ``usage: None`` from a serialized policy dict, for the same
+    byte-stability reason as :func:`_drop_empty_guards`: a usage-free policy must
+    dump exactly as it did before the field existed."""
+    if isinstance(data, dict) and data.get(_USAGE_FIELD) is None:
+        data.pop(_USAGE_FIELD, None)
+    return data
+
+
 class GuardRule(BaseModel):
     """Enable or disable one manifest-declared guard (R-GUARD-006).
 
@@ -62,6 +74,21 @@ class GuardRule(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     enabled: bool
+
+
+class UsagePolicy(BaseModel):
+    """Agent-wide settings for ``agent_usage.*`` constraints.
+
+    ``on_unavailable`` says what a decision reads when the platform's usage snapshot
+    is missing: ``allow`` reads this process's counts alone, ``deny`` leaves the
+    value absent so its constraints fail closed. A model, not a bare value, so a
+    later version can add fields without a grammar break; ``on_unavailable`` is
+    required because a block states an intent, never an implied default.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    on_unavailable: OnUnavailable
 
 
 class BaseToolPolicy(BaseModel):
@@ -338,6 +365,9 @@ class AgentPolicy(BaseModel):
     # lowered into effective_tools: guards are a build-time toggle, not an allow/deny
     # decision, so they are read via `effective_guards`.
     guards: dict[str, GuardRule] = Field(default_factory=dict)
+    # Agent-wide, resolved to one value across roles by PolicySet. None means the
+    # author said nothing, which reads as OnUnavailable.ALLOW (G3).
+    usage: UsagePolicy | None = None
 
     @field_validator("constraints")
     @classmethod
@@ -351,7 +381,8 @@ class AgentPolicy(BaseModel):
         # rejection of `guards:` on a tool / default_policy / admission / reach entry
         # is enforced at load by BaseToolPolicy._reject_per_tool_guards (v1 is
         # baseline-only), so nothing nested carries a guards block to drop.
-        return _drop_empty_guards(handler(self))
+        # An unset `usage` block is dropped for the same byte-stability reason.
+        return _drop_absent_usage(_drop_empty_guards(handler(self)))
 
     @field_validator("tools")
     @classmethod
@@ -509,3 +540,7 @@ class AgentPolicy(BaseModel):
         the manifest declares it" (the default is enabled). Consumed at pipeline-build
         time (R-GUARD-007), never per call, so it is not on the hot path."""
         return {name: rule.enabled for name, rule in self.guards.items()}
+
+    def usage_on_unavailable(self) -> OnUnavailable:
+        """This role's fail mode for ``agent_usage.*``; ``allow`` when unset (G3)."""
+        return self.usage.on_unavailable if self.usage else OnUnavailable.ALLOW

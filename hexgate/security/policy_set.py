@@ -40,7 +40,11 @@ from typing import Any
 
 import yaml
 
-from hexgate.runtime.agent_usage import AGENT_USAGE_VOCABULARY, KNOWN_AGENT_USAGE_PATHS
+from hexgate.runtime.agent_usage import (
+    AGENT_USAGE_VOCABULARY,
+    KNOWN_AGENT_USAGE_PATHS,
+    OnUnavailable,
+)
 from hexgate.runtime.run_facts import LIST_PATHS, SCALAR_PATHS
 from hexgate.security.constraints import (
     LEFT,
@@ -60,6 +64,7 @@ from hexgate.security.models import (
     GuardRule,
     SkillPolicy,
     ToolPolicy,
+    UsagePolicy,
     is_agent_reach_key,
     is_agent_via_key,
     is_skill_key,
@@ -126,6 +131,7 @@ class PolicySet:
         _validate_const_refs(policies)
         _validate_path_refs(policies, _RUN)
         self._agent_usage_paths = _validate_path_refs(policies, _AGENT_USAGE)
+        self._on_unavailable = _agent_on_unavailable(policies)
         self._policies = policies
         self._aliased_default = aliased_default
 
@@ -219,6 +225,10 @@ class PolicySet:
         Derived from ``effective_tools`` like the ``declares_*`` family, so
         admission and reach constraints count."""
         return self._agent_usage_paths
+
+    def usage_on_unavailable(self) -> OnUnavailable:
+        """The agent's fail mode for ``agent_usage.*`` (one value, checked at load)."""
+        return self._on_unavailable
 
     def guard_stance(self) -> dict[str, dict] | None:
         """The agent-level guard enable/disable stance to carry in the bundle.
@@ -640,6 +650,24 @@ def _load_from_directory(root: Path) -> PolicySet:
     return PolicySet(concrete, aliased_default=aliased)
 
 
+def _agent_on_unavailable(policies: Mapping[str, AgentPolicy]) -> OnUnavailable:
+    """The one fail mode every role resolves to, or :class:`PolicySetError`.
+
+    Agent-wide because the usage snapshot is fetched per agent. A role that says
+    nothing reads ``allow``, so a silent role and a ``deny`` role disagree: put the
+    block in a mixin every role inherits."""
+    by_role = {role: policy.usage_on_unavailable() for role, policy in policies.items()}
+    modes = set(by_role.values())
+    if len(modes) > 1:
+        detail = ", ".join(f"{role}={mode}" for role, mode in sorted(by_role.items()))
+        raise PolicySetError(
+            "usage.on_unavailable must resolve to the same value across all roles "
+            f"(the usage snapshot is per agent); got {detail}. Put the usage block "
+            "in a mixin every role inherits."
+        )
+    return modes.pop()
+
+
 def _resolve_inheritance(
     name: str, raw: dict[str, AgentPolicy], chain: list[str]
 ) -> AgentPolicy:
@@ -672,11 +700,13 @@ def _resolve_inheritance(
     merged_constraints: list[str] = []
     merged_default: BaseToolPolicy = own.default_policy
     merged_admission: BaseToolPolicy | None = own.admission
+    merged_usage: UsagePolicy | None = own.usage
 
     # Merge parents left-to-right (later parents override earlier). ``agents`` and
-    # ``skills`` merge by name like ``tools`` does. ``admission`` only overwrites when
-    # a parent actually sets one, so a later mixin that omits it can't null out an
-    # earlier parent's rule — dropping an agent gate silently would be fail-open.
+    # ``skills`` merge by name like ``tools`` does. ``admission`` and ``usage`` only
+    # overwrite when a parent actually sets one, so a later mixin that omits it can't
+    # null out an earlier parent's rule — dropping an agent gate or a usage ``deny``
+    # silently would be fail-open.
     for parent_name in own.inherits:
         parent = _resolve_inheritance(parent_name, raw, chain + [name])
         merged_tools.update(parent.tools)
@@ -688,6 +718,8 @@ def _resolve_inheritance(
         merged_default = parent.default_policy
         if parent.admission is not None:
             merged_admission = parent.admission
+        if parent.usage is not None:
+            merged_usage = parent.usage
 
     # Self overrides everything from parents. Check ``model_fields_set`` rather
     # than comparing against ``BaseToolPolicy()``: a child that explicitly says
@@ -705,6 +737,8 @@ def _resolve_inheritance(
         merged_default = own.default_policy
     if "admission" in own.model_fields_set:
         merged_admission = own.admission
+    if own.usage is not None:
+        merged_usage = own.usage
 
     return AgentPolicy(
         version=own.version,
@@ -718,6 +752,7 @@ def _resolve_inheritance(
         agents=merged_agents,
         skills=merged_skills,
         guards=merged_guards,
+        usage=merged_usage,
     )
 
 

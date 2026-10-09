@@ -164,6 +164,13 @@ def _load(
             f"entry file's top-level or an agent body, not in an imported fragment"
         )
 
+    if imported.usage is not None:
+        raise LinkError(
+            f"{target_str}: an imported file may not declare 'usage:' — the usage "
+            f"block is agent-level, not composable; author it in the entry file's "
+            f"top-level or an agent body"
+        )
+
     if name is not None:
         fragment: _GrantScope | None = imported.exports.get(name)
         if fragment is None:
