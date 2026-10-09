@@ -430,25 +430,42 @@ def test_when_the_policy_is_invalid_then_score_fails_valid_and_decisions(
 # A role or project-wide case (no agent) on a module tree: every roles.yaml column
 
 
+# Refunds on "*" but not in shop-bot's own cell, which replaces "*" for it.
+SPLIT = '  support:\n    "*": [read_only, payments]\n    shop-bot: [read_only]\n'
+
+
+@pytest.mark.parametrize("expect", ["allow", ["allow", "approval_required"]])
 @pytest.mark.parametrize(
-    ("shop_bot_cell", "passed"),
-    [("[read_only]", False), ("[read_only, payments]", True)],
+    ("roles", "passed"),
+    [
+        (SPLIT, True),  # "*" allows it: some agent can refund
+        ('  support:\n    "*": [read_only]\n    shop-bot: [read_only]\n', False),
+    ],
 )
-def test_when_the_case_names_no_agent_then_a_decision_must_hold_on_every_column(
-    tmp_path, shop_bot_cell, passed
+def test_when_the_case_names_no_agent_then_an_allow_needs_one_column(
+    tmp_path, roles, passed, expect
 ) -> None:
-    # Refunds granted on "*"; shop-bot's own cell replaces "*" for it.
-    roles = (
-        f'  support:\n    "*": [read_only, payments]\n    shop-bot: {shop_bot_cell}\n'
-    )
     ws = make_modules_workspace(tmp_path, roles)
-    columns = role_wide_columns(ws)
-    [check] = decision_checks(
-        columns, [{"role": "support", **REFUND, "expect": "allow"}]
-    )
+    allow = {"role": "support", **REFUND, "expect": expect}
+    [check] = decision_checks(role_wide_columns(ws), [allow])
     assert check.passed is passed
-    if not passed:
-        assert check.detail.endswith("(column shop-bot)")
+    if passed:
+        assert check.detail == ""
+    else:
+        assert "(column *)" in check.detail and "(column shop-bot)" in check.detail
+
+
+@pytest.mark.parametrize(
+    "expect", ["deny", "approval_required", ["deny", "approval_required"]]
+)
+def test_when_the_case_names_no_agent_then_a_deny_must_hold_on_every_column(
+    tmp_path, expect
+) -> None:
+    ws = make_modules_workspace(tmp_path, SPLIT)
+    deny = {"role": "support", **REFUND, "expect": expect}
+    [check] = decision_checks(role_wide_columns(ws), [deny])
+    assert not check.passed
+    assert "(column *)" in check.detail  # "*" allows it
 
 
 def test_when_the_case_names_no_agent_then_a_superset_must_hold_on_every_column(
@@ -511,16 +528,30 @@ def test_when_a_case_with_no_agent_is_on_a_policy_file_then_both_name_checks_fai
     ] * 2
 
 
+def test_when_the_case_names_no_agent_then_an_approval_must_hold_on_every_column(
+    tmp_path,
+) -> None:
+    # shop-bot needs approval to refund; any other agent may refund freely.
+    roles = '  support:\n    "*": [read_only, payments]\n    shop-bot: [read_only, approvals]\n'
+    ws = make_modules_workspace(tmp_path, roles)
+    (ws / "policies" / "capabilities" / "approvals.yaml").write_text(
+        "tools:\n  refund_order: { mode: approval_required }\n"
+    )
+    approval = {"role": "support", **REFUND, "expect": "approval_required"}
+    [check] = decision_checks(role_wide_columns(ws), [approval])
+    assert not check.passed
+    assert check.detail.startswith("expected approval_required, got allow")
+
+
 def test_when_the_case_names_no_agent_then_score_dry_runs_every_column(
     tmp_path,
 ) -> None:
-    roles = '  support:\n    "*": [read_only, payments]\n    shop-bot: [read_only]\n'
-    ws = make_modules_workspace(tmp_path, roles)
-    case = {"expect": {"decisions": [{"role": "support", **REFUND, "expect": "allow"}]}}
+    ws = make_modules_workspace(tmp_path, SPLIT)
+    case = {"expect": {"decisions": [{"role": "support", **REFUND, "expect": "deny"}]}}
     checks = by_name(score(case, ws, snapshot(ws), ""))
     decision = next(c for n, c in checks.items() if n.startswith("decision"))
     assert not decision.passed
-    assert decision.detail.endswith("(column shop-bot)")
+    assert decision.detail.endswith("(column *)")
 
 
 def test_when_the_case_names_no_agent_and_no_agent_has_a_manifest_then_both_name_checks_fail(

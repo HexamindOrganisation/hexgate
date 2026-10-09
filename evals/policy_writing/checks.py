@@ -71,8 +71,11 @@ def snapshot(root: Path) -> dict[str, str]:
 
 def decision_checks(columns: dict[str, Policy], decisions: list[dict]) -> list[Check]:
     """One check per (decision, role): the dry-run gives an expected outcome on
-    every column in `columns` (see `policy_columns`); none means the policy is
-    invalid.
+    the columns in `columns` (see `policy_columns`); none means the policy is
+    invalid. With several (a role or project-wide case), an expectation that
+    accepts allow needs one column with an accepted outcome, as the request is
+    met once some agent can make the call; any other must hold on every column,
+    so no agent is left open.
 
     Named by the decision's place in the list too, so two entries that differ
     only in `expect`, or a call listed twice, still get one check each."""
@@ -82,6 +85,7 @@ def decision_checks(columns: dict[str, Policy], decisions: list[dict]) -> list[C
             f"decision {i}: {_call_label(role, d)}",
             columns,
             lambda policy: _decision_miss(policy, role, d),
+            any_column="allow" in _labels(d),
         )
         for i, d in enumerate(decisions, 1)
         for role in d.get("roles") or [d["role"]]
@@ -89,23 +93,33 @@ def decision_checks(columns: dict[str, Policy], decisions: list[dict]) -> list[C
 
 
 def _column_check(
-    name: str, columns: dict[str, Policy], misses: Callable[[Policy], list[str]]
+    name: str,
+    columns: dict[str, Policy],
+    misses: Callable[[Policy], list[str]],
+    any_column: bool = False,
 ) -> Check:
-    """Passes when `misses` finds nothing on any column; each miss is tagged
-    with its column when there are several."""
+    """Passes when `misses` finds nothing on every column, or with `any_column`
+    on at least one; each miss is tagged with its column when there are
+    several."""
     if not columns:
         return Check(name, False, "policy invalid")
-    found = []
-    for column, policy in columns.items():
-        where = "" if len(columns) == 1 else f" (column {column})"
-        found += [f"{miss}{where}" for miss in misses(policy)]
-    return Check(name, not found, "; ".join(found))
+    found = {column: misses(policy) for column, policy in columns.items()}
+    clean = [column for column, missed in found.items() if not missed]
+    passed = bool(clean) if any_column else len(clean) == len(found)
+    where = (lambda c: "") if len(found) == 1 else (lambda c: f" (column {c})")
+    detail = [f"{miss}{where(c)}" for c, missed in found.items() for miss in missed]
+    return Check(name, passed, "" if passed else "; ".join(detail))
+
+
+def _labels(d: dict) -> list[str]:
+    """The outcomes `d` accepts: `expect` may list several ("deny or
+    approval_required")."""
+    return d["expect"] if isinstance(d["expect"], list) else [d["expect"]]
 
 
 def _decision_miss(policy: Policy, role: str, d: dict) -> list[str]:
     """Why the dry-run misses the outcomes `d` expects, if it does."""
-    # `expect` may list the acceptable outcomes ("deny or approval_required").
-    labels = d["expect"] if isinstance(d["expect"], list) else [d["expect"]]
+    labels = _labels(d)
     try:
         verdict = decide(policy, role, d)
     except CaseError as exc:
