@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from evals.policy_writing.policy import Policy, effective_policy, policy_columns
+from evals.policy_writing.policy import Policy, agent_policies, effective_policy
 
 AGENT = "shop-bot"
 
@@ -143,11 +143,11 @@ def valid_policy(ws: Path, agent: str | None = None, modules: bool = False) -> P
     return policy
 
 
-def role_wide_columns(ws: Path) -> dict[str, Policy]:
-    """A module tree's roles.yaml columns, as a case with no agent holds on them."""
-    columns, problems = policy_columns(ws, None, valid_policy(ws, None, True), True)
+def role_wide_policies(ws: Path) -> dict[str, Policy]:
+    """A module tree's policy per agent, as a case with no agent runs on them."""
+    policies, problems = agent_policies(ws, None, valid_policy(ws, None, True), True)
     assert problems == []
-    return columns
+    return policies
 
 
 def install_skill(ws: Path) -> None:
@@ -160,7 +160,7 @@ def install_skill(ws: Path) -> None:
 # `billing` adds payments to the read-only `default`.
 ROLES = "  default: [read_only]\n  billing: [read_only, payments]\n"
 # Valid on `"*"`, but ops-bot's own cell grants `default` refunds no named role
-# has: its resolved column fails the permissive-default lint.
+# has: its resolved policy fails the permissive-default lint.
 OPS_COLUMN_PERMISSIVE_DEFAULT = (
     '  default:\n    "*": [read_only]\n    ops-bot: [read_only, payments]\n'
     "  billing: [read_only]\n"
@@ -185,3 +185,15 @@ def make_modules_workspace(tmp_path: Path, roles: str = ROLES) -> Path:
     )
     (ws / "roles.yaml").write_text(f"version: 1\nroles:\n{roles}")
     return ws
+
+
+def write_capability(ws: Path, name: str, body: str) -> None:
+    """Write `policies/capabilities/<name>.yaml`."""
+    (ws / "policies" / "capabilities" / f"{name}.yaml").write_text(body)
+
+
+def edit_manifest(ws: Path, agent: str, edit) -> None:
+    """Apply `edit` to `agent`'s manifest in agents.json."""
+    views = json.loads((ws / "agents.json").read_text())
+    edit(next(v for v in views if v["name"] == agent)["manifest"])
+    (ws / "agents.json").write_text(json.dumps(views))

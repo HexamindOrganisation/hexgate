@@ -11,10 +11,10 @@ import pytest
 from evals.policy_writing.policy import (
     DRIFT_CODES,
     CaseError,
+    agent_policies,
     decide,
     effective_policy,
     outcome,
-    policy_columns,
 )
 from hexgate.security.analyzer import LintCode
 from hexgate.security.decision import DecisionOutcome
@@ -555,36 +555,34 @@ def test_when_a_module_tree_names_another_agents_tool_then_no_drift(
     assert valid_policy(ws, AGENT, modules=True).drift == []
 
 
-# policy_columns
+# agent_policies
 
 COLUMNS = '  billing:\n    "*": [read_only]\n    ops-bot: [read_only, payments]\n'
 
 
-def test_policy_columns_happy_path(tmp_path) -> None:
+def test_agent_policies_happy_path(tmp_path) -> None:
     ws = make_modules_workspace(tmp_path, COLUMNS)
-    columns, problems = policy_columns(ws, None, valid_policy(ws, None, True), True)
-    assert (sorted(columns), problems) == (["*", "ops-bot"], [])
-    assert columns["ops-bot"].agent == "ops-bot"  # its gates send its name
+    policies, problems = agent_policies(ws, None, valid_policy(ws, None, True), True)
+    # One per agent in agents.json, plus "*" for one not registered yet.
+    assert (sorted(policies), problems) == (
+        ["*", "draft-bot", "ops-bot", "shop-bot"],
+        [],
+    )
+    assert policies["ops-bot"].agent == "ops-bot"  # its gates send its name
 
 
-@pytest.mark.parametrize(("agent", "modules"), [("shop-bot", True), (None, False)])
-def test_when_the_case_names_an_agent_or_has_a_policy_file_then_there_is_one_column(
-    tmp_path, agent, modules
-) -> None:
-    if modules:
-        ws = make_modules_workspace(tmp_path, COLUMNS)
-    else:  # a stray roles.yaml next to a policy file adds no columns
-        ws = make_workspace(tmp_path)
-        (ws / "roles.yaml").write_text(f"version: 1\nroles:\n{COLUMNS}")
-    policy = valid_policy(ws, agent, modules)
-    assert policy_columns(ws, agent, policy, modules) == ({agent or "*": policy}, [])
+def test_when_the_case_is_not_role_wide_then_there_is_one_policy(tmp_path) -> None:
+    # An agent case: its own policy only.
+    ws = make_modules_workspace(tmp_path, COLUMNS)
+    policy = valid_policy(ws, AGENT, True)
+    assert agent_policies(ws, AGENT, policy, role_wide=False) == ({AGENT: policy}, [])
 
 
-def test_when_an_agents_column_is_invalid_then_policy_columns_returns_none(
+def test_when_an_agents_policy_is_invalid_then_agent_policies_returns_none(
     tmp_path,
 ) -> None:
     ws = make_modules_workspace(tmp_path, OPS_COLUMN_PERMISSIVE_DEFAULT)
-    columns, problems = policy_columns(ws, None, valid_policy(ws, None, True), True)
-    # None, rather than the valid ones: a column left out would pass unrun.
-    assert columns == {}
-    assert problems[0].startswith("column ops-bot: [permissive-default]")
+    policies, problems = agent_policies(ws, None, valid_policy(ws, None, True), True)
+    # None, rather than the valid ones: an agent left out would pass unrun.
+    assert policies == {}
+    assert problems[0].startswith("agent ops-bot: [permissive-default]")

@@ -3,11 +3,12 @@
 No eval framework is imported here: the framework's scorer and the dataset tests
 both call `score(case, workspace, before, answer)` and get back a list of `Check`s.
 One function per kind of check: the policy validates without lint warnings
-(`policy.py`), dry-run decisions and role supersets hold (on every roles.yaml
-column for a case with no agent, a role or project-wide edit), only names in the
-project's agents.json and audit.json are used (the SDK's drift lints, and
-`names.py` for caller attributes), files change (or not) as the case says, and
-the final answer mentions what the case requires.
+(`policy.py`); dry-run decisions and role supersets hold (for a role or
+project-wide case, an allow for one agent that can make the call and anything
+else for every agent that might); only names in the project's agents.json and audit.json
+are used (the SDK's drift lints, and `names.py` for caller attributes); files
+change (or not) as the case says; and the final answer mentions what the case
+requires.
 """
 
 from __future__ import annotations
@@ -25,11 +26,12 @@ from evals.policy_writing.policy import (
     RANK,
     CaseError,
     Policy,
+    agent_policies,
+    can_call,
     decide,
     dump_json,
     effective_policy,
     outcome,
-    policy_columns,
 )
 from evals.policy_writing.sources import (
     NAME_SOURCES,
@@ -69,45 +71,107 @@ def snapshot(root: Path) -> dict[str, str]:
     return files
 
 
-def decision_checks(columns: dict[str, Policy], decisions: list[dict]) -> list[Check]:
+def decision_checks(
+    policies: dict[str, Policy], decisions: list[dict], role_wide: bool = False
+) -> list[Check]:
     """One check per (decision, role): the dry-run gives an expected outcome on
-    the columns in `columns` (see `policy_columns`); none means the policy is
-    invalid. With several (a role or project-wide case), an expectation that
-    accepts allow needs one column with an accepted outcome, as the request is
-    met once some agent can make the call; any other must hold on every column,
-    so no agent is left open.
+    the policies in `policies`, one per agent running it (see `agent_policies`);
+    none means the policy is invalid. In a `role_wide` case (no agent, on a
+    module tree), an expectation that accepts allow is met once one agent that
+    can make the call (`can_call`) gets an accepted outcome; any other must hold
+    for every agent that might (`_may_call`): one that can, one registered with
+    no manifest, and `"*"` (an agent not registered yet), so none is left open.
 
     Named by the decision's place in the list too, so two entries that differ
     only in `expect`, or a call listed twice, still get one check each."""
     # `roles` expands one entry over several roles.
     return [
-        _column_check(
-            f"decision {i}: {_call_label(role, d)}",
-            columns,
-            lambda policy: _decision_miss(policy, role, d),
-            any_column="allow" in _labels(d),
+        _decision_check(
+            f"decision {i}: {_call_label(role, d)}", policies, role, d, role_wide
         )
         for i, d in enumerate(decisions, 1)
         for role in d.get("roles") or [d["role"]]
     ]
 
 
-def _column_check(
-    name: str,
-    columns: dict[str, Policy],
-    misses: Callable[[Policy], list[str]],
-    any_column: bool = False,
+def _decision_check(
+    name: str, policies: dict[str, Policy], role: str, d: dict, role_wide: bool
 ) -> Check:
-    """Passes when `misses` finds nothing on every column, or with `any_column`
-    on at least one; each miss is tagged with its column when there are
-    several."""
-    if not columns:
+    """One decision, by the rule in `decision_checks`."""
+    labels = _labels(d)
+    if not role_wide or not policies:
+        return _per_agent_check(
+            name, policies, lambda policy: _decision_miss(policy, role, d, labels)
+        )
+    if failed := _uncallable(name, policies, [d["tool"]]):
+        return failed
+    agents = _registered(policies)
+    able = {a: p for a, p in policies.items() if can_call(p, d["tool"], agents)}
+    if "allow" in labels:
+        return _per_agent_check(
+            name,
+            able,
+            lambda policy: _decision_miss(policy, role, d, labels),
+            any_one=True,
+            tagged=True,
+        )
+    # An agent whose manifest rules the call out never makes it, so it isn't
+    # judged; one with no manifest ("*", or registered without a version) might.
+    judged = {a: p for a, p in policies.items() if _may_call(p, d["tool"], agents)}
+    return _per_agent_check(
+        name,
+        judged,
+        lambda policy: _decision_miss(policy, role, d, labels),
+        tagged=True,
+    )
+
+
+def _may_call(policy: Policy, tool: str, agents: set[str]) -> bool:
+    """Whether the agent `policy` runs for might make a call on `tool`: its
+    manifest says it can, or it has none to say it can't (`"*"`, or an agent
+    registered without a version, which the SDK reads as unknown too)."""
+    return policy.manifest is None or can_call(policy, tool, agents)
+
+
+def _registered(policies: dict[str, Policy]) -> set[str]:
+    """The registered agents among `policies` (all but `"*"`'s)."""
+    return {p.agent for p in policies.values() if p.agent is not None}
+
+
+def _uncallable(
+    name: str, policies: dict[str, Policy], tools: list[str]
+) -> Check | None:
+    """A failed check if no registered agent can call one of `tools`: a case
+    about a call no agent makes says nothing about the policy."""
+    agents = _registered(policies)
+    nobody = [
+        t for t in tools if not any(can_call(p, t, agents) for p in policies.values())
+    ]
+    if nobody:
+        return Check(
+            name, False, f"no agent in agents.json can call {', '.join(nobody)}"
+        )
+    return None
+
+
+def _per_agent_check(
+    name: str,
+    policies: dict[str, Policy],
+    misses: Callable[[Policy], list[str]],
+    any_one: bool = False,
+    tagged: bool = False,
+) -> Check:
+    """Passes when no policy in `policies` has a miss, or with `any_one` when
+    one doesn't; each miss is tagged with its agent when `tagged`."""
+    if not policies:
         return Check(name, False, "policy invalid")
-    found = {column: misses(policy) for column, policy in columns.items()}
-    clean = [column for column, missed in found.items() if not missed]
-    passed = bool(clean) if any_column else len(clean) == len(found)
-    where = (lambda c: "") if len(found) == 1 else (lambda c: f" (column {c})")
-    detail = [f"{miss}{where(c)}" for c, missed in found.items() for miss in missed]
+    found = {agent: misses(policy) for agent, policy in policies.items()}
+    detail = [
+        f"{miss} (agent {agent})" if tagged else miss
+        for agent, missed in found.items()
+        for miss in missed
+    ]
+    passed = (any if any_one else all)(not missed for missed in found.values())
     return Check(name, passed, "" if passed else "; ".join(detail))
 
 
@@ -117,9 +181,8 @@ def _labels(d: dict) -> list[str]:
     return d["expect"] if isinstance(d["expect"], list) else [d["expect"]]
 
 
-def _decision_miss(policy: Policy, role: str, d: dict) -> list[str]:
-    """Why the dry-run misses the outcomes `d` expects, if it does."""
-    labels = _labels(d)
+def _decision_miss(policy: Policy, role: str, d: dict, labels: list[str]) -> list[str]:
+    """Why the dry-run gives none of the outcomes in `labels`, if it does."""
     try:
         verdict = decide(policy, role, d)
     except CaseError as exc:
@@ -143,22 +206,44 @@ def _call_label(role: str, d: dict) -> str:
     return label
 
 
-def superset_checks(columns: dict[str, Policy], supersets: list[dict]) -> list[Check]:
-    """Everything `narrower` may do, `wider` may do at least as freely, on every
-    column."""
+def superset_checks(
+    policies: dict[str, Policy], supersets: list[dict], role_wide: bool = False
+) -> list[Check]:
+    """Everything `narrower` may do, `wider` may do at least as freely, for every
+    agent in `policies`; in a `role_wide` case, a registered agent only on the
+    probes it can make (`"*"`, an agent not registered yet, on all of them)."""
     return [
-        _column_check(
-            f"superset {i}: {s['wider']} ⊇ {s['narrower']}",
-            columns,
-            lambda policy: _superset_gaps(policy, s),
+        _superset_check(
+            f"superset {i}: {s['wider']} ⊇ {s['narrower']}", policies, s, role_wide
         )
         for i, s in enumerate(supersets, 1)
     ]
 
 
-def _superset_gaps(policy: Policy, s: dict) -> list[str]:
-    """How `wider` is stricter than `narrower`, probe by probe."""
-    return [gap for p in s["probes"] if (gap := _probe_gap(policy, s, p))]
+def _superset_check(
+    name: str, policies: dict[str, Policy], s: dict, role_wide: bool
+) -> Check:
+    if not role_wide or not policies:
+        return _per_agent_check(
+            name, policies, lambda policy: _superset_gaps(policy, s, None)
+        )
+    if failed := _uncallable(name, policies, [p["tool"] for p in s["probes"]]):
+        return failed
+    agents = _registered(policies)
+    return _per_agent_check(
+        name, policies, lambda policy: _superset_gaps(policy, s, agents), tagged=True
+    )
+
+
+def _superset_gaps(policy: Policy, s: dict, agents: set[str] | None) -> list[str]:
+    """How `wider` is stricter than `narrower`, probe by probe; with `agents`
+    (a role-wide case), a registered agent skips the probes it can't make."""
+    return [
+        gap
+        for p in s["probes"]
+        if agents is None or _may_call(policy, p["tool"], agents)
+        if (gap := _probe_gap(policy, s, p))
+    ]
 
 
 def _probe_gap(policy: Policy, s: dict, p: dict) -> str | None:
@@ -209,8 +294,8 @@ def name_checks(
     """Only names in agents.json and audit.json: the SDK's drift lints (`policy.drift`) for
     tools, skills, guards and arguments (a module tree's against every agent's
     manifest), and `policy.agent`'s caller attributes against audit.json, on
-    its resolved roles only: `resolved`, every column a role or project-wide
-    case holds on (`policy` alone by default). Such a case has no agent, so
+    its resolved roles only: `resolved`, the policy of every agent a role or
+    project-wide case runs on (`policy` alone by default). Such a case has no agent, so
     any agent's attributes count."""
     # The names are read after the run, so an edit to either file could
     # whitelist an invented name: trust them only if they are untouched.
@@ -307,19 +392,20 @@ def score(case: dict, ws: Path, before: dict[str, str], answer: str) -> list[Che
     expect = case.get("expect", {})
     modules = any(rel.startswith("policies/") for rel in before)
     agent = case.get("agent")  # none for a role or project-wide edit
+    role_wide = agent is None and modules
     policy, problems = effective_policy(ws, agent, modules)
-    columns: dict[str, Policy] = {}
+    policies: dict[str, Policy] = {}
     if policy is not None:
-        columns, problems = policy_columns(ws, agent, policy, modules)
+        policies, problems = agent_policies(ws, agent, policy, role_wide)
     valid = Check("valid", not problems, "\n".join(problems)[:800])
     after = snapshot(ws)
     return [
         valid,
-        *decision_checks(columns, expect.get("decisions", [])),
-        *superset_checks(columns, expect.get("superset", [])),
-        # An invalid column leaves none to dry-run, but the policy's names still count.
+        *decision_checks(policies, expect.get("decisions", []), role_wide),
+        *superset_checks(policies, expect.get("superset", []), role_wide),
+        # An invalid agent policy leaves none to dry-run, but the names still count.
         *(
-            name_checks(policy, ws, before, after, list(columns.values()))
+            name_checks(policy, ws, before, after, list(policies.values()))
             if policy
             else []
         ),
