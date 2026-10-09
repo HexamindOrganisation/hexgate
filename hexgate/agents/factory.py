@@ -299,7 +299,7 @@ def _resolve_tool_use_context(
     own facts in (e.g. tests, or production code that wants to bypass the
     context scope for a specific call).
     """
-    agent_name = getattr(agent, "name", None)
+    agent_name = canonical_name(getattr(agent, "name", None))
     agent_workspace = getattr(agent, "workspace", None)
     fallback_workspace = agent_workspace or LocalWorkspace(Path.cwd())
     if tool_use_context is not None:
