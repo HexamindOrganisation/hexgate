@@ -2,12 +2,16 @@
 
 Correctness contract, in processing order per poll:
 decode → per-span map/validate (rejects → DLQ envelopes, siblings survive)
-→ resolve agent versions → four batch inserts (retried as a whole until
-ClickHouse acks) → DLQ sends → offset commit. Committing only after the
-ClickHouse ack means a crash anywhere in the cycle replays the poll on
-restart, which is safe for the tables: event_id is the idempotency key and
-ReplacingMergeTree collapses the duplicates. DLQ envelopes have no such key
-and are simply re-sent on replay (see dlq.py).
+→ dedup by event_id, within the poll and across polls (dedup.py)
+→ resolve agent versions → one batch insert per table, each retried until
+ClickHouse acks and never repeated once it has → DLQ sends → offset commit.
+Committing only after the ClickHouse ack means a crash anywhere in the cycle
+replays the poll on restart, which is safe for the tables: event_id is the
+idempotency key and ReplacingMergeTree collapses the duplicates. It is not
+safe for usage_minute's materialized views, which sum every inserted copy:
+the cross-poll cache is in memory, so a replay after a restart or a
+rebalance over-counts there. DLQ envelopes have no dedup key and are simply re-sent on replay (see
+dlq.py).
 """
 
 from __future__ import annotations
@@ -15,7 +19,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import signal
-from collections.abc import Awaitable, Callable
+import sys
+from collections.abc import Awaitable, Callable, Sequence
 from typing import Any
 
 from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
@@ -46,6 +51,7 @@ from hexgate_api.features.llm_messages.service import (
 from hexgate_api.jobs.enricher import dlq
 from hexgate_api.jobs.enricher.coerce import SpanRejected
 from hexgate_api.jobs.enricher.decode import RecordDecodeError, decode_record
+from hexgate_api.jobs.enricher.dedup import DedupKey, RecentEventIds
 from hexgate_api.jobs.enricher.mapping import Event, map_span
 from hexgate_api.jobs.enricher.resolver import resolve_versions
 from hexgate_api.schemas import (
@@ -77,6 +83,19 @@ the two are set together so the DLQ path can never become the narrower one.
 Raised with the topic and the Collector's producer limit — see
 docs/internals/audit-pipeline.md §4.1/§4.2."""
 
+# One entry per Event member: the table's batch insert. A mapped scope with no
+# entry here would be committed and silently lost; test_consumer pins the
+# registry to mapping.Event.
+_SINKS: tuple[
+    tuple[type[Event], Callable[[Client, Sequence[BatchItem[Any]]], None]], ...
+] = (
+    (DecisionEvent, insert_decisions_batch),
+    (LlmInvocationEvent, insert_llm_invocations_batch),
+    (BanEnforcementEvent, insert_ban_enforcements_batch),
+    (LlmMessageEvent, insert_llm_messages_batch),
+    (AgentRunEvent, insert_agent_runs_batch),
+)
+
 
 def _project_id(key: bytes | None) -> str | None:
     """The auth-derived project attribution, or None when it is unusable.
@@ -89,7 +108,8 @@ def _project_id(key: bytes | None) -> str | None:
     if key is None:
         return None
     try:
-        return key.decode("utf-8")
+        # Interned: the dedup cache holds one per entry, and tenants are few.
+        return sys.intern(key.decode("utf-8"))
     except UnicodeDecodeError:
         return None
 
@@ -113,6 +133,7 @@ class EnricherJob:
         clickhouse_client: Client | None = None,
         consumer: Any | None = None,
         producer: Any | None = None,
+        recent_event_ids: RecentEventIds | None = None,
     ) -> None:
         # Kafka clients are injectable so unit tests drive _process_poll with
         # fakes; production leaves them None and run() builds real ones.
@@ -120,6 +141,9 @@ class EnricherJob:
         self._clickhouse = clickhouse_client
         self._consumer = consumer
         self._producer = producer
+        self._recent = (
+            recent_event_ids if recent_event_ids is not None else RecentEventIds()
+        )
         self._stop = asyncio.Event()
 
     def request_stop(self) -> None:
@@ -242,8 +266,9 @@ class EnricherJob:
         # first (see insert_decisions_batch). First copy wins. Scoped by
         # project: event_id is client-set, project_id is auth-derived, and the
         # tables' own identity is (project_id, ..., event_id) — one tenant
-        # reusing another's id must never suppress the other's event.
-        seen_event_ids: set[tuple[str, str]] = set()
+        # reusing another's id must never suppress the other's event. The
+        # cross-poll cache extends this check past the poll (see dedup.py).
+        fresh: dict[DedupKey, int] = {}  # key → record timestamp ms
         dlq_messages: list[tuple[bytes | None, bytes]] = []  # (key, envelope)
         for record in records:
             project_id = _project_id(record.key)
@@ -311,9 +336,10 @@ class EnricherJob:
                         )
                     )
                     continue
-                if (project_id, event.event_id) in seen_event_ids:
+                key = (project_id, event.event_id.int)
+                if key in fresh or key in self._recent:
                     continue
-                seen_event_ids.add((project_id, event.event_id))
+                fresh[key] = record.timestamp
                 events.append((event, project_id))
 
         # Postgres is infra exactly like ClickHouse and the DLQ below: a
@@ -328,72 +354,38 @@ class EnricherJob:
 
         if not await self._retry_until_acked(_resolve, "agent version resolve"):
             return
-        decisions = [
-            BatchItem(
-                event,
-                project_id=pid,
-                agent_version_id=versions[(pid, event.agent_name)],
+        batches: dict[type[Event], list[BatchItem[Any]]] = {
+            event_type: [] for event_type, _insert in _SINKS
+        }
+        for event, pid in events:
+            batches[type(event)].append(
+                BatchItem(
+                    event,
+                    project_id=pid,
+                    agent_version_id=versions[(pid, event.agent_name)],
+                )
             )
-            for event, pid in events
-            if isinstance(event, DecisionEvent)
-        ]
-        llms = [
-            BatchItem(
-                event,
-                project_id=pid,
-                agent_version_id=versions[(pid, event.agent_name)],
-            )
-            for event, pid in events
-            if isinstance(event, LlmInvocationEvent)
-        ]
-        bans = [
-            BatchItem(
-                event,
-                project_id=pid,
-                agent_version_id=versions[(pid, event.agent_name)],
-            )
-            for event, pid in events
-            if isinstance(event, BanEnforcementEvent)
-        ]
-        messages = [
-            BatchItem(
-                event,
-                project_id=pid,
-                agent_version_id=versions[(pid, event.agent_name)],
-            )
-            for event, pid in events
-            if isinstance(event, LlmMessageEvent)
-        ]
-        runs = [
-            BatchItem(
-                event,
-                project_id=pid,
-                agent_version_id=versions[(pid, event.agent_name)],
-            )
-            for event, pid in events
-            if isinstance(event, AgentRunEvent)
-        ]
+        acked: set[type[Event]] = set()
 
-        # Retry the whole batch until ClickHouse acks. Only infra failures can
-        # land here (bad input was already diverted to the DLQ above), so
-        # halting this partition is correct: committing would drop data, and
-        # redelivery after a restart dedups. Re-running all five inserts on a
-        # partial failure is safe per the batch functions' contract.
+        # Retry until every table has acked. Only infra failures can land here
+        # (bad input was already diverted to the DLQ above), so halting this
+        # partition is correct: committing would drop data. A table that has
+        # acked is never re-inserted: ReplacingMergeTree would forgive the
+        # duplicate, but usage_minute's views would sum it twice. A table whose
+        # insert failed partway is re-inserted whole, so its landed blocks are
+        # over-counted (accepted, docs/internals/audit-pipeline.md §9).
         async def _insert_all() -> None:
-            await asyncio.to_thread(insert_decisions_batch, self._clickhouse, decisions)
-            await asyncio.to_thread(
-                insert_llm_invocations_batch, self._clickhouse, llms
-            )
-            await asyncio.to_thread(
-                insert_ban_enforcements_batch, self._clickhouse, bans
-            )
-            await asyncio.to_thread(
-                insert_llm_messages_batch, self._clickhouse, messages
-            )
-            await asyncio.to_thread(insert_agent_runs_batch, self._clickhouse, runs)
+            for event_type, insert in _SINKS:
+                if event_type in acked:
+                    continue
+                await asyncio.to_thread(insert, self._clickhouse, batches[event_type])
+                acked.add(event_type)
 
         if not await self._retry_until_acked(_insert_all, "ClickHouse insert"):
             return
+        # Only once the rows exist: a poll that stops before its insert acks
+        # replays on restart and must not find its own ids already "seen".
+        self._recent.remember(fresh.items())
 
         # Same posture for the DLQ: an envelope that never lands would be lost
         # for good once the offset commits, so a send failure halts here too.
@@ -425,6 +417,8 @@ class EnricherJob:
             await self._consumer.commit()
         except CommitFailedError:
             # A rebalance took our partitions mid-cycle. Drop this poll — the
-            # new owner replays it and ClickHouse dedup absorbs the rows (DLQ
-            # consumers must tolerate the duplicate envelopes).
+            # new owner replays it. ReplacingMergeTree absorbs the table rows,
+            # but the new owner's dedup cache is empty, so usage_minute counts
+            # the poll again (accepted, see dedup.py). DLQ consumers must
+            # tolerate the duplicate envelopes.
             _log.warning("offset commit failed after a rebalance; poll will replay")

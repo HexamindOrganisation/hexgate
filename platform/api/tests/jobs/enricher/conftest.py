@@ -184,6 +184,7 @@ class FakeRecord:
     topic: str = "hexgate.otlp.raw"
     partition: int = 0
     offset: int = 0
+    timestamp: int = 0  # ms, Kafka record time
 
 
 @dataclass
@@ -226,8 +227,10 @@ def make_job(monkeypatch: pytest.MonkeyPatch):
 
         def _log_insert(*args: Any, **kwargs: Any) -> None:
             calls.append("insert")
-            if _make.insert_failures:  # consume one scheduled failure
-                raise _make.insert_failures.pop(0)
+            if _make.insert_failures:  # consume one scheduled outcome
+                failure = _make.insert_failures.pop(0)
+                if failure is not None:  # None schedules a success
+                    raise failure
 
         clickhouse.insert.side_effect = _log_insert
         _make.insert_failures = list(insert_side_effect or [])
