@@ -46,6 +46,10 @@ CREATION_ACTOR_ALIASES: dict[str, str] = {
     # An evidence report is generated, not created: the row's only writer is
     # the user who asked for it, under the name the annex itself uses.
     "ai_act_report": "generated_by_user_id",
+    # Written only for the user who consented at /authorize (or refreshed
+    # their own login): the grant's owner is its creator.
+    "oauth_authorization_code": "user_id",
+    "oauth_refresh_token": "user_id",
 }
 
 # (table, column) pairs added to a table that ALREADY EXISTED, so only a
