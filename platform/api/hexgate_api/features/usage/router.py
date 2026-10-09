@@ -71,6 +71,8 @@ async def api_get_agent_usage(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=_AGENT_NOT_FOUND
         )
+    # Hand the pooled connection back rather than hold it across the ClickHouse wait.
+    await session.rollback()
 
     specs = tuple(sorted(set(requested.values())))
     try:

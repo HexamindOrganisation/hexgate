@@ -251,6 +251,32 @@ def test_the_read_runs_on_the_injected_pool(
     assert threads[0].startswith(_TEST_POOL_PREFIX)
 
 
+def test_the_postgres_transaction_ends_before_the_clickhouse_read(
+    client: TestClient, session_factory, fake_clickhouse: MagicMock
+) -> None:
+    from hexgate_api.core.db import get_session
+
+    sessions: list[AsyncSession] = []
+
+    async def capturing_session():
+        async with session_factory() as session:
+            sessions.append(session)
+            yield session
+
+    app.dependency_overrides[get_session] = capturing_session
+    in_transaction: list[bool] = []
+    result = fake_clickhouse.query.return_value
+
+    def recording_query(*_args: object, **_kwargs: object) -> MagicMock:
+        in_transaction.append(sessions[0].in_transaction())
+        return result
+
+    fake_clickhouse.query.side_effect = recording_query
+
+    assert _usage(client, "invocations_1h,denials_5m").status_code == 200
+    assert in_transaction == [False]
+
+
 def test_no_bearer_is_401(anonymous_client: TestClient) -> None:
     assert _usage(anonymous_client, "invocations_1h").status_code == 401
 
