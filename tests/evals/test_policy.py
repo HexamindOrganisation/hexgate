@@ -293,7 +293,7 @@ def test_when_a_skill_call_sets_what_the_gate_sends_then_decide_raises(
 def test_when_a_skill_call_spells_the_gate_args_it_sends_then_decide_accepts_them(
     tmp_path,
 ) -> None:
-    # As the case loader (PR 2) completes a skill call.
+    # As the case loader's call checks (#330) complete a skill call.
     policy = valid_policy(make_workspace(tmp_path, PDF_INSTRUCTIONS))
     call = {"tool": "skill:pdf", "args": {"skill": "pdf", "via": "instructions"}}
     assert decide(policy, "default", call).outcome == DecisionOutcome.ALLOW

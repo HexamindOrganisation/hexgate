@@ -31,12 +31,13 @@ cases/<category>/<name>/
 | `expect` | mapping | What the finished policy must do. The keys are below. |
 
 There is no `id` or `category` field: both come from the path. The loader
-rejects anything that would otherwise drop a check without a word:
+rejects a malformed case, which would otherwise drop a check without a word:
 
 - **The case file:** `id` or `category` set in it; a field, `expect` key or
   decision key it doesn't know; a string where a list belongs.
 - **Paths:** an `unchanged` path the starting project lacks; anything else in
   the case folder (a `wrong_answers/`); a `preserve.yml`.
+
 `expect` keys:
 
 | Key | What must hold |
@@ -71,7 +72,8 @@ would return to a real agent:
   `agents_list` (`GET /agents/manifest`) returns it. A case's agent knows only
   the tools, arguments and skills in its own manifest, plus the synthetic
   `net.*`, `agent.run`, `agent.<via>:<target>` (a target must be an agent in
-  this list) and `skill:` / `skill.resource:` / `skill.script:` calls.
+  this list, or a sub-agent a manifest lists) and `skill:` /
+  `skill.resource:` / `skill.script:` calls.
 - `audit.json` (optional): audit rows, as `audit_decisions` returns them. Caller
   attributes are set per request, not in the manifest, so the `ctx.*` names a
   case's agent knows are the `attributes` keys of its own rows.
@@ -95,7 +97,9 @@ The loader adds these, so a case lists only what is particular to it.
   any edit. Every case on that project checks them. A case that means to
   change one lists the same call (role, tool, arguments, attributes and run
   facts) in its own `decisions`, which replaces the preserved entry for that
-  call only. `preserve.yaml` is never copied into the agent's workspace.
+  call only. `preserve.yaml` is never copied into the agent's workspace. Its
+  calls are dry-run for each case's `agent`, so every case on a project with a
+  `preserve.yaml` should name the same agent.
 
 ## Our answers
 
