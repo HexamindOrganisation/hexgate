@@ -16,7 +16,7 @@ from __future__ import annotations
 import hashlib
 import os
 import re
-from collections.abc import Callable, Collection
+from collections.abc import Callable, Collection, Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -391,6 +391,12 @@ def answer_checks(expect: dict, answer: str) -> list[Check]:
     return checks
 
 
+def is_module_tree(paths: Iterable[str]) -> bool:
+    """Whether a project with these files is a module tree (`policies/`), not
+    one `policy.yaml`."""
+    return any(rel.startswith("policies/") for rel in paths)
+
+
 def score(case: dict, ws: Path, before: dict[str, str], answer: str) -> list[Check]:
     """Every check for `case`, as the case loader returns it (PR 2), which has
     already validated its shape: calls are mappings, outcomes and mention lists
@@ -398,7 +404,7 @@ def score(case: dict, ws: Path, before: dict[str, str], answer: str) -> list[Che
     the workspace's, says whether the policy is `policy.yaml` or a module tree,
     so a stray `policies/` the agent made doesn't switch it."""
     expect = case.get("expect", {})
-    modules = any(rel.startswith("policies/") for rel in before)
+    modules = is_module_tree(before)
     agent = case.get("agent")  # none for a role or project-wide edit
     role_wide = agent is None and modules
     policy, problems = effective_policy(ws, agent, modules)

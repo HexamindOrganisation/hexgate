@@ -25,7 +25,7 @@ cases/<category>/<name>/
 | Field | Type | Notes |
 |---|---|---|
 | `starting_project` | string, optional | A project under `starting_projects/`. Use exactly one of this field and a `starting_project/` folder. |
-| `agent` | string | The agent whose policy the case edits: a `name` in the starting project's `agents.json`. |
+| `agent` | string, optional | The agent whose policy the case edits: a `name` in the starting project's `agents.json`. Omit it for a role or project-wide edit, which is scored on every `roles.yaml` column; then the starting project must be a module tree (`policies/`). |
 | `request` | string | What a user types. The agent receives `/write-policy <request>`. |
 | `held_out` | bool, optional | Default `false`. Held-out cases are never used to tune the skill or prompts, and are scored separately. |
 | `note` | string, optional | Why the case exists, for people reading the results. The agent never sees it. |
@@ -99,8 +99,9 @@ The loader adds these, so a case lists only what is particular to it.
   change one lists the same call (role, tool, arguments, attributes and run
   facts) in its own `decisions`, which replaces the preserved entry for that
   call only. `preserve.yaml` is never copied into the agent's workspace. Its
-  calls are dry-run for each case's `agent`, so every case on a project with a
-  `preserve.yaml` should name the same agent.
+  calls are dry-run for each case's `agent` (on every agent for a case
+  without one), so every case on a project with a `preserve.yaml` should name
+  the same agent or none.
 
 ## Our answers
 

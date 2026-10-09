@@ -130,16 +130,25 @@ def _case(**extra) -> dict:
         (_case(starting_project="missing"), "no starting project"),
         ({"agent": AGENT, "request": "Do it.", "expect": {}}, "neither"),
         (_case(agent=""), "agent\n  String should have at least 1"),
-        (
-            {"starting_project": "shop", "request": "Do it.", "expect": {}},
-            "agent\n  Field",
-        ),
     ],
 )
 def test_load_rejects(tmp_path: Path, case: dict, error: str) -> None:
     root = _eval_set(tmp_path, case)
     with pytest.raises(CaseError, match=error):
         load_cases(root)
+
+
+def test_a_case_without_an_agent_loads_on_a_module_tree(tmp_path: Path) -> None:
+    # `shop` has a boundary module, so it is a module tree.
+    case = {"starting_project": "shop", "request": "Do it.", "expect": {}}
+    [loaded] = load_cases(_eval_set(tmp_path, case))
+    assert loaded["agent"] is None
+
+
+def test_a_case_without_an_agent_is_refused_on_one_policy_yaml(tmp_path: Path) -> None:
+    case = {"starting_project": "shop", "request": "Do it.", "expect": {}}
+    with pytest.raises(CaseError, match="without `agent` needs a module tree"):
+        load_cases(_eval_set(tmp_path, case, boundary=False))
 
 
 def test_load_rejects_both_starting_projects(tmp_path: Path) -> None:
