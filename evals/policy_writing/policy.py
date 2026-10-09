@@ -218,7 +218,8 @@ def _with_gate_args(gate: _Gate, args: dict) -> dict:
     case leaves one out, as the adapters send it.
 
     A case may spell an arg the gate sets only with the gate's value, as the
-    case loader (PR 2) fills it in; any other value would be silently replaced.
+    case loader's call checks (#330) fill it in; any other value would be
+    silently replaced.
     """
     from_call = gate_args(gate.key) - gate.sent.keys()
     if extra := sorted(
