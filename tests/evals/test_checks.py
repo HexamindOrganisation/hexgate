@@ -23,6 +23,7 @@ from tests.evals.helpers import (
     OPS_COLUMN_PERMISSIVE_DEFAULT,
     PERMISSIVE_DEFAULT,
     POLICY,
+    ROLES,
     by_name,
     edit_manifest,
     install_skill,
@@ -431,341 +432,329 @@ def test_when_the_policy_is_invalid_then_score_fails_valid_and_decisions(
 
 
 # A role or project-wide case (no agent) on a module tree: an allow for one agent
-# that has the tool, anything else for every agent
+# that can make the call, anything else for every agent that might
+
+
+def _cells(*rows: str) -> str:
+    return "".join(f"  {row}\n" for row in rows)
 
 
 # Refunds on "*" but not in shop-bot's own cell, which replaces "*" for it.
-SPLIT = '  support:\n    "*": [read_only, payments]\n    shop-bot: [read_only]\n'
+SPLIT = _cells("support:", '  "*": [read_only, payments]', "  shop-bot: [read_only]")
+APPROVALS = "tools:\n  refund_order: { mode: approval_required }\n"
+PDF = skill_key("resource", "pdf")
 
 
-@pytest.mark.parametrize("expect", ["allow", ["allow", "approval_required"]])
-@pytest.mark.parametrize(
-    ("roles", "passed"),
-    [
-        # shop-bot, the only agent with refund_order, refunds on its own cell.
-        (
-            '  support:\n    "*": [read_only]\n    shop-bot: [read_only, payments]\n',
-            True,
-        ),
-        # With no cell of its own, shop-bot runs on "*", which refunds.
-        (
-            '  support:\n    "*": [read_only, payments]\n    ops-bot: [read_only]\n',
-            True,
-        ),
-        # Only "*" refunds, and shop-bot's own cell replaces it: no agent can.
-        (SPLIT, False),
-    ],
+def _pdf(mode: str) -> str:
+    return f"skills:\n  pdf: {{ mode: {mode}, via: [resource] }}\n"
+
+
+def _reach(target: str, mode: str, via: str) -> str:
+    return f"agents:\n  {target}: {{ mode: {mode}, via: [{via}] }}\n"
+
+
+def _set(**fields):
+    return lambda manifest: manifest.update(fields)
+
+
+def _call(tool: str, expect, role: str = "support") -> dict:
+    args = REFUND["args"] if tool == "refund_order" else {}
+    return {"role": role, "tool": tool, "args": args, "expect": expect}
+
+
+NO_CALLER = "no agent in agents.json can call {}"
+OWN_REFUNDS = _cells(
+    "support:", '  "*": [read_only]', "  shop-bot: [read_only, payments]"
 )
-def test_when_the_case_names_no_agent_then_an_allow_needs_one_agent_that_has_the_tool(
-    tmp_path, roles, passed, expect
-) -> None:
-    ws = make_modules_workspace(tmp_path, roles)
-    allow = {"role": "support", **REFUND, "expect": expect}
-    [check] = decision_checks(role_wide_policies(ws), [allow], role_wide=True)
-    assert check.passed is passed
-    if passed:
-        assert check.detail == ""
-    else:  # ops-bot and "*" refund, but neither has the tool
-        assert check.detail.endswith("(agent shop-bot)")
-        assert "(agent *)" not in check.detail and "(agent ops-bot)" not in check.detail
-
-
-def test_when_two_agents_have_the_tool_then_an_allow_needs_only_one(tmp_path) -> None:
-    # ops-bot gets refund_order too and runs on "*", which refunds.
-    ws = make_modules_workspace(tmp_path, SPLIT)
-    edit_manifest(
-        ws, "ops-bot", lambda m: m["tools"].append(manifest_tool("refund_order"))
-    )
-    allow = {"role": "support", **REFUND, "expect": "allow"}
-    [check] = decision_checks(role_wide_policies(ws), [allow], role_wide=True)
-    assert (check.passed, check.detail) == (True, "")
-
-
-def test_when_the_case_names_no_agent_then_a_skill_allow_needs_an_agent_with_the_skill(
-    tmp_path,
-) -> None:
-    # Only shop-bot lists the pdf skill, and its own cell only grants it with
-    # approval: "*" allowing it gives no agent that has it a free read.
-    roles = '  support:\n    "*": [read_only, pdf]\n    shop-bot: [read_only, pdf_approval]\n'
-    ws = make_modules_workspace(tmp_path, roles)
-    write_capability(ws, "pdf", "skills:\n  pdf: { mode: allow, via: [resource] }\n")
-    write_capability(
-        ws,
-        "pdf_approval",
-        "skills:\n  pdf: { mode: approval_required, via: [resource] }\n",
-    )
-    read = {"role": "support", "tool": skill_key("resource", "pdf"), "expect": "allow"}
-    [check] = decision_checks(role_wide_policies(ws), [read], role_wide=True)
-    assert not check.passed
-    assert check.detail.endswith("(agent shop-bot)")
-
-
-@pytest.mark.parametrize(
-    ("via", "detail"),
-    [
-        # Only shop-bot hands off to ops-bot, and its own cell reaches only
-        # draft-bot: "*" reaching ops-bot lets no agent with the edge use it.
-        ("handoff", "(agent shop-bot)"),
-        # shop-bot's edge is agent-as-tool; ops-bot records none: no agent can.
-        ("tool", "no agent in agents.json can call agent.handoff:ops-bot"),
-    ],
+STAR_REFUNDS = _cells(
+    "support:", '  "*": [read_only, payments]', "  ops-bot: [read_only]"
 )
-def test_when_the_case_names_no_agent_then_a_reach_allow_needs_an_agent_with_that_sub_agent(
-    tmp_path, via, detail
-) -> None:
-    roles = (
-        '  support:\n    "*": [read_only, reach_ops]\n'
-        "    shop-bot: [read_only, reach_draft]\n"
-    )
-    ws = make_modules_workspace(tmp_path, roles)
-    for name, target in [("reach_ops", "ops-bot"), ("reach_draft", "draft-bot")]:
-        write_capability(
-            ws, name, f"agents:\n  {target}: {{ mode: allow, via: [handoff] }}\n"
+REACH_OPS = _cells("support:", '  "*": [read_only, reach_ops]')
+
+
+def _row(roles, call, passed, shown=(), hidden=(), caps=None, edits=None):
+    """One role-wide decision: `shown` must be in its detail, `hidden` not."""
+    return roles, caps or {}, edits or {}, call, passed, shown, hidden
+
+
+def _edge(via: str):
+    return {AGENT: _set(subagents=[{"name": "ops-bot", "via": via}])}
+
+
+SECOND_OWNER = {"ops-bot": lambda m: m["tools"].append(manifest_tool("refund_order"))}
+PDF_SPLIT = _cells(
+    "support:", '  "*": [read_only, pdf]', "  shop-bot: [read_only, pdf_approval]"
+)
+REACH_SPLIT = _cells(
+    "support:", '  "*": [read_only, reach_ops]', "  shop-bot: [read_only, reach_draft]"
+)
+REACH_BOTH = {
+    "reach_ops": _reach("ops-bot", "allow", "handoff"),
+    "reach_draft": _reach("draft-bot", "allow", "handoff"),
+}
+EGRESS_STAR = _cells(
+    "support:",
+    '  "*": [read_only, egress]',
+    "  shop-bot: [read_only]",
+    "  ops-bot: [read_only]",
+    "  draft-bot: [read_only]",
+)
+EGRESS = {"egress": "tools:\n  net.http_request: { mode: allow }\n"}
+ALLOW, APPROVAL = "allow", "approval_required"
+REFUND_CALL = _call("refund_order", ALLOW)
+STAR_DRAFT = ["(agent *)", "(agent draft-bot)"]
+
+
+def _approvals(*cells: str) -> str:
+    return _cells("support:", *cells)
+
+
+ROLE_WIDE_DECISIONS = {
+    # An allow needs one agent that can make the call; "*" alone never counts.
+    "allow on own cell": _row(OWN_REFUNDS, REFUND_CALL, True),
+    "allow via star": _row(STAR_REFUNDS, REFUND_CALL, True),
+    "allow or approval on own cell": _row(
+        OWN_REFUNDS, _call("refund_order", [ALLOW, APPROVAL]), True
+    ),
+    "allow or approval via star": _row(
+        STAR_REFUNDS, _call("refund_order", [ALLOW, APPROVAL]), True
+    ),
+    "allow only on star": _row(
+        SPLIT,
+        REFUND_CALL,
+        False,
+        ["(agent shop-bot)"],
+        ["(agent *)", "(agent ops-bot)"],
+    ),
+    "allow or approval only on star": _row(
+        SPLIT, _call("refund_order", [ALLOW, APPROVAL]), False, ["(agent shop-bot)"]
+    ),
+    "allow by a second owner": _row(SPLIT, REFUND_CALL, True, edits=SECOND_OWNER),
+    "skill allow only on star": _row(
+        PDF_SPLIT,
+        _call(PDF, ALLOW),
+        False,
+        ["(agent shop-bot)"],
+        caps={"pdf": _pdf(ALLOW), "pdf_approval": _pdf(APPROVAL)},
+    ),
+    "handoff allow only on star": _row(
+        REACH_SPLIT,
+        _call("agent.handoff:ops-bot", ALLOW),
+        False,
+        ["(agent shop-bot)"],
+        caps=REACH_BOTH,
+        edits=_edge("handoff"),
+    ),
+    "handoff on a tool edge": _row(
+        REACH_OPS,
+        _call("agent.handoff:ops-bot", ALLOW),
+        False,
+        [NO_CALLER.format("agent.handoff:ops-bot")],
+        caps={"reach_ops": _reach("ops-bot", ALLOW, "handoff")},
+        edits=_edge("tool"),
+    ),
+    # LangGraph hides agent-as-tool edges and gates them; Pydantic AI never gates.
+    **{
+        f"hidden tool edge, {fw}": _row(
+            REACH_OPS,
+            _call("agent.tool:ops-bot", ALLOW),
+            ok,
+            caps={"reach_ops": _reach("ops-bot", ALLOW, "tool")},
+            edits={AGENT: _set(framework=fw), "ops-bot": _set(framework=fw)},
         )
-    edge = {"name": "ops-bot", "via": via}
-    edit_manifest(ws, AGENT, lambda m: m.update(subagents=[edge]))
-    handoff = {"role": "support", "tool": "agent.handoff:ops-bot", "expect": "allow"}
-    [check] = decision_checks(role_wide_policies(ws), [handoff], role_wide=True)
-    assert not check.passed
-    assert check.detail.endswith(detail)
+        for fw, ok in [("langchain", True), ("openai", False), ("pydantic-ai", False)]
+    },
+    "hidden edge to no registered agent": _row(
+        ROLES,
+        _call("agent.tool:opsbot", "deny", "billing"),
+        False,
+        [NO_CALLER.format("agent.tool:opsbot")],
+    ),
+    "hidden edge only to itself": _row(
+        ROLES,
+        _call("agent.tool:ops-bot", "deny", "billing"),
+        False,
+        [NO_CALLER.format("agent.tool:ops-bot")],
+        edits={AGENT: _set(framework="openai")},
+    ),
+    **{
+        f"no agent has the tool, {e}": _row(
+            ROLES,
+            _call("refund_orders", e, "billing"),
+            False,
+            [NO_CALLER.format("refund_orders")],
+        )
+        for e in [ALLOW, APPROVAL, ("deny", APPROVAL)]
+    },
+    "admission is every agent's": _row(
+        _approvals('  "*": [read_only, admit]', "  shop-bot: [read_only]"),
+        _call("agent.run", ALLOW),
+        True,
+        caps={"admit": "admission: { mode: allow }\n"},
+    ),
+    "egress allowed on star only": _row(
+        EGRESS_STAR,
+        _call("net.http_request", ALLOW),
+        False,
+        ["(agent shop-bot)"],
+        ["(agent *)"],
+        caps=EGRESS,
+    ),
+    # Anything else holds for every agent that might make the call: one that
+    # can, one with no manifest, and "*" (an agent not registered yet).
+    **{
+        f"deny, {e}": _row(
+            SPLIT,
+            _call("refund_order", e),
+            False,
+            STAR_DRAFT,
+            ["(agent ops-bot)", "(agent shop-bot)"],
+        )
+        for e in ["deny", ("deny", APPROVAL)]
+    },
+    "deny with an own cell and no manifest": _row(
+        _approvals('  "*": [read_only]', "  draft-bot: [read_only, payments]"),
+        _call("refund_order", "deny"),
+        False,
+        ["(agent draft-bot)"],
+    ),
+    "approval allowed elsewhere": _row(
+        _approvals(
+            '  "*": [read_only, payments]', "  shop-bot: [read_only, approvals]"
+        ),
+        _call("refund_order", APPROVAL),
+        False,
+        ["expected approval_required, got allow", "(agent *)"],
+        ["(agent shop-bot)"],
+        caps={"approvals": APPROVALS},
+    ),
+    "approval denied by star": _row(
+        _approvals('  "*": [read_only]', "  shop-bot: [read_only, approvals]"),
+        _call("refund_order", APPROVAL),
+        False,
+        ["(agent *)"],
+        caps={"approvals": APPROVALS},
+    ),
+    "approval denied by an agent with the tool": _row(
+        _approvals('  "*": [read_only, approvals]', "  shop-bot: [read_only]"),
+        _call("refund_order", APPROVAL),
+        False,
+        ["expected approval_required, got deny", "(agent shop-bot)"],
+        caps={"approvals": APPROVALS},
+    ),
+    "approval denied by an agent without the tool": _row(
+        _approvals('  "*": [read_only, approvals]', "  ops-bot: [read_only]"),
+        _call("refund_order", APPROVAL),
+        True,
+        caps={"approvals": APPROVALS},
+    ),
+    "skill approval undeclared without the skill": _row(
+        _approvals('  "*": [read_only, pdf]', "  ops-bot: [read_only]"),
+        _call(PDF, APPROVAL),
+        True,
+        caps={"pdf": _pdf(APPROVAL)},
+    ),
+    "skill approval undeclared on star": _row(
+        _approvals('  "*": [read_only]', "  shop-bot: [read_only, pdf]"),
+        _call(PDF, APPROVAL),
+        False,
+        ["can't dry-run", "(agent *)"],
+        caps={"pdf": _pdf(APPROVAL)},
+    ),
+    **{
+        f"{via} approval undeclared without the edge": _row(
+            _approvals('  "*": [read_only, reach_ops]', "  ops-bot: [read_only]"),
+            _call(f"agent.{via}:ops-bot", APPROVAL),
+            True,
+            caps={"reach_ops": _reach("ops-bot", APPROVAL, via)},
+            edits=_edge(via),
+        )
+        for via in ["handoff", "tool"]
+    },
+}
+
+
+def _role_wide(tmp_path, roles: str, capabilities: dict, edits: dict) -> dict:
+    ws = make_modules_workspace(tmp_path, roles)
+    for name, body in capabilities.items():
+        write_capability(ws, name, body)
+    for agent, edit in edits.items():
+        edit_manifest(ws, agent, edit)
+    return role_wide_policies(ws)
 
 
 @pytest.mark.parametrize(
-    ("framework", "passed"),
-    [("langchain", True), ("openai", False), ("pydantic-ai", False)],
+    ("roles", "capabilities", "edits", "decision", "passed", "shown", "hidden"),
+    list(ROLE_WIDE_DECISIONS.values()),
+    ids=list(ROLE_WIDE_DECISIONS),
 )
-def test_when_a_framework_hides_agent_as_tool_edges_then_its_agent_may_call(
-    tmp_path, framework, passed
+def test_when_the_case_names_no_agent_then_decisions_hold_per_agent(
+    tmp_path, roles, capabilities, edits, decision, passed, shown, hidden
 ) -> None:
-    # No agent records an edge to ops-bot, but a LangGraph agent's agent-as-tool
-    # edges hide in a tool closure: shop-bot, on "*", may still reach it. A
-    # Pydantic AI agent hides them too, but never gates them.
-    ws = make_modules_workspace(
-        tmp_path, '  support:\n    "*": [read_only, reach_ops]\n'
-    )
-    write_capability(
-        ws, "reach_ops", "agents:\n  ops-bot: { mode: allow, via: [tool] }\n"
-    )
-    for agent in (AGENT, "ops-bot"):
-        edit_manifest(ws, agent, lambda m: m.update(framework=framework))
-    call = {"role": "support", "tool": "agent.tool:ops-bot", "expect": "allow"}
-    [check] = decision_checks(role_wide_policies(ws), [call], role_wide=True)
-    assert check.passed is passed
+    if isinstance(decision["expect"], tuple):
+        decision = {**decision, "expect": list(decision["expect"])}
+    policies = _role_wide(tmp_path, roles, capabilities, edits)
+    [check] = decision_checks(policies, [decision], role_wide=True)
+    assert check.passed is passed, check.detail
+    assert (check.detail == "") if passed else check.detail
+    assert all(s in check.detail for s in shown)
+    assert not any(s in check.detail for s in hidden)
 
 
-def test_when_no_agent_has_the_tool_then_a_role_wide_allow_fails(tmp_path) -> None:
-    # A tool in no manifest (here, one a case invents): no agent can call it,
-    # even where "*" or an agent's cell allows it.
-    ws = make_modules_workspace(tmp_path, '  support:\n    "*": [read_only, ghost]\n')
-    write_capability(ws, "ghost", "tools:\n  ghost_tool: { mode: allow }\n")
-    call = {"role": "support", "tool": "ghost_tool", "expect": "allow"}
-    [check] = decision_checks(role_wide_policies(ws), [call], role_wide=True)
-    assert (check.passed, check.detail) == (
-        False,
-        "no agent in agents.json can call ghost_tool",
-    )
+BILLING = "  billing: [read_only, payments]\n"
+REFUND_SUPERSET = {"narrower": "billing", "wider": "support", "probes": [REFUND]}
 
 
 @pytest.mark.parametrize(
-    "expect", ["allow", "approval_required", ["deny", "approval_required"]]
+    ("roles", "superset", "detail"),
+    [
+        pytest.param(
+            SPLIT + BILLING,
+            REFUND_SUPERSET,
+            "refund_order: billing=allow, support=deny (agent shop-bot)",
+            id="own cell narrows",
+        ),
+        pytest.param(
+            STAR_REFUNDS + BILLING,
+            REFUND_SUPERSET,
+            "",
+            id="agent without the tool skipped",
+        ),
+        pytest.param(
+            OWN_REFUNDS + BILLING,
+            REFUND_SUPERSET,
+            "refund_order: billing=allow, support=deny (agent *); "
+            "refund_order: billing=allow, support=deny (agent draft-bot)",
+            id="star narrows",
+        ),
+        pytest.param(
+            _cells(
+                "support:", '  "*": [read_only, payments]', "  draft-bot: [read_only]"
+            )
+            + BILLING,
+            REFUND_SUPERSET,
+            "refund_order: billing=allow, support=deny (agent draft-bot)",
+            id="no manifest narrows",
+        ),
+        pytest.param(
+            ROLES,
+            {
+                "narrower": "default",
+                "wider": "billing",
+                "probes": [{"tool": "refund_orders", "args": {}}],
+            },
+            NO_CALLER.format("refund_orders"),
+            id="no agent can make the probe",
+        ),
+    ],
 )
-def test_when_no_agent_can_call_the_key_then_any_role_wide_decision_fails(
-    tmp_path, expect
+def test_when_the_case_names_no_agent_then_supersets_hold_per_agent(
+    tmp_path, roles, superset, detail
 ) -> None:
-    # A typo'd tool no manifest lists: every agent denies it, but that says
-    # nothing about the call the case meant.
-    ws = make_modules_workspace(tmp_path)
-    call = {"role": "billing", "tool": "refund_orders", "expect": expect}
-    [check] = decision_checks(role_wide_policies(ws), [call], role_wide=True)
-    assert (check.passed, check.detail) == (
-        False,
-        "no agent in agents.json can call refund_orders",
+    [check] = superset_checks(
+        _role_wide(tmp_path, roles, {}, {}), [superset], role_wide=True
     )
-
-
-def test_when_the_case_names_no_agent_then_admission_is_every_agents(tmp_path) -> None:
-    # agent.run is in no manifest, but every registered agent is admitted.
-    roles = '  support:\n    "*": [read_only, admit]\n    shop-bot: [read_only]\n'
-    ws = make_modules_workspace(tmp_path, roles)
-    write_capability(ws, "admit", "admission: { mode: allow }\n")
-    call = {"role": "support", "tool": "agent.run", "expect": "allow"}
-    [check] = decision_checks(role_wide_policies(ws), [call], role_wide=True)
-    assert (check.passed, check.detail) == (True, "")
-
-
-def test_when_an_agent_cant_make_a_probe_then_a_role_wide_superset_skips_it(
-    tmp_path,
-) -> None:
-    # ops-bot's own support cell lacks refunds, but ops-bot has no refund_order.
-    roles = (
-        '  support:\n    "*": [read_only, payments]\n    ops-bot: [read_only]\n'
-        "  billing: [read_only, payments]\n"
-    )
-    ws = make_modules_workspace(tmp_path, roles)
-    superset = {"narrower": "billing", "wider": "support", "probes": [REFUND]}
-    [check] = superset_checks(role_wide_policies(ws), [superset], role_wide=True)
-    assert (check.passed, check.detail) == (True, "")
-
-
-def test_when_no_agent_can_make_a_probe_then_a_role_wide_superset_fails(
-    tmp_path,
-) -> None:
-    ws = make_modules_workspace(tmp_path)
-    probe = {"tool": "refund_orders", "args": {}}
-    superset = {"narrower": "default", "wider": "billing", "probes": [probe]}
-    [check] = superset_checks(role_wide_policies(ws), [superset], role_wide=True)
-    assert (check.passed, check.detail) == (
-        False,
-        "no agent in agents.json can call refund_orders",
-    )
-
-
-def test_when_star_narrows_the_wider_role_then_a_role_wide_superset_fails(
-    tmp_path,
-) -> None:
-    # "*" stands for agents not registered yet: support there can't refund
-    # while billing can, though shop-bot's own cell keeps the superset.
-    roles = (
-        '  support:\n    "*": [read_only]\n    shop-bot: [read_only, payments]\n'
-        "  billing: [read_only, payments]\n"
-    )
-    ws = make_modules_workspace(tmp_path, roles)
-    superset = {"narrower": "billing", "wider": "support", "probes": [REFUND]}
-    [check] = superset_checks(role_wide_policies(ws), [superset], role_wide=True)
-    assert not check.passed
-    assert "(agent *)" in check.detail
-
-
-def test_when_a_hidden_reach_targets_no_registered_agent_then_no_agent_can_call(
-    tmp_path,
-) -> None:
-    # A LangGraph agent may hide agent-as-tool edges, but only to an agent in
-    # agents.json, so a typo'd target still names a call no agent makes.
-    ws = make_modules_workspace(tmp_path)
-    call = {"role": "billing", "tool": "agent.tool:opsbot", "expect": "deny"}
-    [check] = decision_checks(role_wide_policies(ws), [call], role_wide=True)
-    assert (check.passed, check.detail) == (
-        False,
-        "no agent in agents.json can call agent.tool:opsbot",
-    )
-
-
-def test_when_only_the_target_hides_its_edges_then_no_agent_can_call(tmp_path) -> None:
-    # Only ops-bot is LangGraph, and an agent doesn't reach itself as a tool.
-    ws = make_modules_workspace(tmp_path)
-    edit_manifest(ws, AGENT, lambda m: m.update(framework="openai"))
-    call = {"role": "billing", "tool": "agent.tool:ops-bot", "expect": "deny"}
-    [check] = decision_checks(role_wide_policies(ws), [call], role_wide=True)
-    assert (check.passed, check.detail) == (
-        False,
-        "no agent in agents.json can call agent.tool:ops-bot",
-    )
-
-
-def test_when_an_agent_without_the_skill_never_declares_it_then_an_approval_holds(
-    tmp_path,
-) -> None:
-    # ops-bot has no pdf skill and keeps its own cell, which declares no skills:
-    # it never reads pdf, so its policy needn't govern it.
-    roles = '  support:\n    "*": [read_only, pdf]\n    ops-bot: [read_only]\n'
-    ws = make_modules_workspace(tmp_path, roles)
-    write_capability(
-        ws, "pdf", "skills:\n  pdf: { mode: approval_required, via: [resource] }\n"
-    )
-    read = {
-        "role": "support",
-        "tool": skill_key("resource", "pdf"),
-        "expect": "approval_required",
-    }
-    [check] = decision_checks(role_wide_policies(ws), [read], role_wide=True)
-    assert (check.passed, check.detail) == (True, "")
-
-
-@pytest.mark.parametrize("via", ["handoff", "tool"])
-def test_when_an_agent_without_the_edge_never_declares_reach_then_an_approval_holds(
-    tmp_path, via
-) -> None:
-    # Only shop-bot (on "*") reaches ops-bot; ops-bot keeps its own cell with no
-    # `agents:` rule, but it never makes the call, so it isn't judged.
-    roles = '  support:\n    "*": [read_only, reach_ops]\n    ops-bot: [read_only]\n'
-    ws = make_modules_workspace(tmp_path, roles)
-    write_capability(
-        ws,
-        "reach_ops",
-        f"agents:\n  ops-bot: {{ mode: approval_required, via: [{via}] }}\n",
-    )
-    edit_manifest(
-        ws, AGENT, lambda m: m.update(subagents=[{"name": "ops-bot", "via": via}])
-    )
-    call = {
-        "role": "support",
-        "tool": f"agent.{via}:ops-bot",
-        "expect": "approval_required",
-    }
-    [check] = decision_checks(role_wide_policies(ws), [call], role_wide=True)
-    assert (check.passed, check.detail) == (True, "")
-
-
-# draft-bot is registered with no manifest, and its own cell grants refunds.
-DRAFT_REFUNDS = (
-    '  support:\n    "*": [read_only]\n    draft-bot: [read_only, payments]\n'
-)
-
-
-def test_when_an_agent_with_no_manifest_allows_it_then_a_role_wide_deny_fails(
-    tmp_path,
-) -> None:
-    # No manifest says draft-bot can't refund, so its cell must deny too.
-    ws = make_modules_workspace(tmp_path, DRAFT_REFUNDS)
-    deny = {"role": "support", **REFUND, "expect": "deny"}
-    [check] = decision_checks(role_wide_policies(ws), [deny], role_wide=True)
-    assert not check.passed
-    assert check.detail.endswith("(agent draft-bot)")
-
-
-def test_when_an_agent_with_no_manifest_narrows_a_role_then_a_role_wide_superset_fails(
-    tmp_path,
-) -> None:
-    ws = make_modules_workspace(
-        tmp_path,
-        '  support:\n    "*": [read_only, payments]\n    draft-bot: [read_only]\n'
-        "  billing: [read_only, payments]\n",
-    )
-    superset = {"narrower": "billing", "wider": "support", "probes": [REFUND]}
-    [check] = superset_checks(role_wide_policies(ws), [superset], role_wide=True)
-    assert check.detail == "refund_order: billing=allow, support=deny (agent draft-bot)"
-
-
-def test_when_star_never_declares_the_skill_then_an_approval_fails(tmp_path) -> None:
-    # "*" declares no skills, so an agent not registered yet would read pdf
-    # ungated: that isn't "needs approval".
-    roles = '  support:\n    "*": [read_only]\n    shop-bot: [read_only, pdf]\n'
-    ws = make_modules_workspace(tmp_path, roles)
-    write_capability(
-        ws, "pdf", "skills:\n  pdf: { mode: approval_required, via: [resource] }\n"
-    )
-    read = {
-        "role": "support",
-        "tool": skill_key("resource", "pdf"),
-        "expect": "approval_required",
-    }
-    [check] = decision_checks(role_wide_policies(ws), [read], role_wide=True)
-    assert not check.passed
-    assert check.detail.startswith("can't dry-run") and "(agent *)" in check.detail
-
-
-def test_when_star_denies_what_needs_approval_then_the_approval_fails(tmp_path) -> None:
-    # shop-bot's own cell needs approval, but "*" denies: an agent registered
-    # later with refund_order would be denied, not asked for approval.
-    roles = '  support:\n    "*": [read_only]\n    shop-bot: [read_only, approvals]\n'
-    ws = make_modules_workspace(tmp_path, roles)
-    write_capability(
-        ws, "approvals", "tools:\n  refund_order: { mode: approval_required }\n"
-    )
-    approval = {"role": "support", **REFUND, "expect": "approval_required"}
-    [check] = decision_checks(role_wide_policies(ws), [approval], role_wide=True)
-    assert not check.passed
-    assert "(agent *)" in check.detail
+    assert (check.passed, check.detail) == (not detail, detail)
 
 
 def test_when_a_case_with_no_agent_is_on_a_policy_file_then_its_one_policy_is_dry_run(
@@ -780,92 +769,6 @@ def test_when_a_case_with_no_agent_is_on_a_policy_file_then_its_one_policy_is_dr
     assert not decision.passed
     assert decision.detail.startswith("expected deny, got allow")
     assert "(agent" not in decision.detail
-
-
-def test_when_an_agent_with_the_tool_denies_it_then_an_approval_fails(tmp_path) -> None:
-    # shop-bot can refund, so its own cell denying it doesn't meet "needs approval".
-    roles = '  support:\n    "*": [read_only, approvals]\n    shop-bot: [read_only]\n'
-    ws = make_modules_workspace(tmp_path, roles)
-    write_capability(
-        ws, "approvals", "tools:\n  refund_order: { mode: approval_required }\n"
-    )
-    approval = {"role": "support", **REFUND, "expect": "approval_required"}
-    [check] = decision_checks(role_wide_policies(ws), [approval], role_wide=True)
-    assert not check.passed
-    assert check.detail.startswith("expected approval_required, got deny")
-    assert check.detail.endswith("(agent shop-bot)")
-
-
-def test_when_an_agent_without_the_tool_has_its_own_cell_then_it_isnt_judged(
-    tmp_path,
-) -> None:
-    # Support needs approval to refund: "*" grants it with approval, and ops-bot,
-    # which has no refund_order, keeps its own cell, which denies it.
-    roles = '  support:\n    "*": [read_only, approvals]\n    ops-bot: [read_only]\n'
-    ws = make_modules_workspace(tmp_path, roles)
-    write_capability(
-        ws, "approvals", "tools:\n  refund_order: { mode: approval_required }\n"
-    )
-    approval = {"role": "support", **REFUND, "expect": "approval_required"}
-    [check] = decision_checks(role_wide_policies(ws), [approval], role_wide=True)
-    assert (check.passed, check.detail) == (True, "")
-
-
-def test_when_no_agent_lists_the_key_then_an_allow_on_star_alone_fails(
-    tmp_path,
-) -> None:
-    # Egress is no manifest's: any registered agent counts, but "*" stands for
-    # an agent not registered yet, and every registered one has its own cell.
-    roles = (
-        '  support:\n    "*": [read_only, egress]\n    shop-bot: [read_only]\n'
-        "    ops-bot: [read_only]\n    draft-bot: [read_only]\n"
-    )
-    ws = make_modules_workspace(tmp_path, roles)
-    write_capability(ws, "egress", "tools:\n  net.http_request: { mode: allow }\n")
-    call = {"role": "support", "tool": "net.http_request", "expect": "allow"}
-    [check] = decision_checks(role_wide_policies(ws), [call], role_wide=True)
-    assert not check.passed
-    assert "(agent *)" not in check.detail and "(agent shop-bot)" in check.detail
-
-
-@pytest.mark.parametrize("expect", ["deny", ["deny", "approval_required"]])
-def test_when_the_case_names_no_agent_then_a_deny_must_hold_for_every_agent(
-    tmp_path, expect
-) -> None:
-    ws = make_modules_workspace(tmp_path, SPLIT)
-    deny = {"role": "support", **REFUND, "expect": expect}
-    [check] = decision_checks(role_wide_policies(ws), [deny], role_wide=True)
-    assert not check.passed
-    # "*" refunds, and an agent registered later could have the tool; ops-bot,
-    # also on "*", has none, so it isn't judged.
-    # draft-bot, on "*" with no manifest, may refund too; ops-bot can't.
-    assert "(agent *)" in check.detail and "(agent draft-bot)" in check.detail
-    assert "(agent ops-bot)" not in check.detail
-
-
-def test_when_the_case_names_no_agent_then_an_approval_must_hold_for_every_agent(
-    tmp_path,
-) -> None:
-    # shop-bot needs approval to refund; any other agent may refund freely.
-    roles = '  support:\n    "*": [read_only, payments]\n    shop-bot: [read_only, approvals]\n'
-    ws = make_modules_workspace(tmp_path, roles)
-    write_capability(
-        ws, "approvals", "tools:\n  refund_order: { mode: approval_required }\n"
-    )
-    approval = {"role": "support", **REFUND, "expect": "approval_required"}
-    [check] = decision_checks(role_wide_policies(ws), [approval], role_wide=True)
-    assert not check.passed
-    assert check.detail.startswith("expected approval_required, got allow")
-    assert "(agent *)" in check.detail and "(agent shop-bot)" not in check.detail
-
-
-def test_when_the_case_names_no_agent_then_a_superset_must_hold_for_every_agent(
-    tmp_path,
-) -> None:
-    ws = make_modules_workspace(tmp_path, SPLIT + "  billing: [read_only, payments]\n")
-    superset = {"narrower": "billing", "wider": "support", "probes": [REFUND]}
-    [check] = superset_checks(role_wide_policies(ws), [superset], role_wide=True)
-    assert check.detail == "refund_order: billing=allow, support=deny (agent shop-bot)"
 
 
 def test_when_an_agents_policy_is_invalid_then_score_fails_valid_and_every_dry_run(
