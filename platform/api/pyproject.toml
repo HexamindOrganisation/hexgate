@@ -41,6 +41,7 @@ dependencies = [
     # Users' get_oauth_router consumes any httpx-oauth client uniformly,
     # so swapping providers is one constructor line.
     "httpx-oauth>=0.16",
+    "httpx>=0.27",
     # Transactional email — verify-email + password-reset go through Resend
     # in production. Dev mode stays on StderrEmailSender (no key needed).
     # Sync SDK; wrapped via asyncio.to_thread in mailer.py.
@@ -54,6 +55,10 @@ dependencies = [
     "opentelemetry-proto>=1.41",
     "weasyprint>=70.0",
     "jinja2>=3.1.6",
+    # OAuth access tokens are EdDSA JWTs (core/oauth_tokens.py). Transitive
+    # via fastapi-users, pinned since we import it directly (same rule as
+    # python-dotenv above).
+    "pyjwt[crypto]>=2.10",
 ]
 
 [dependency-groups]
