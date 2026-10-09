@@ -11,6 +11,7 @@ import pytest
 from evals.policy_writing.policy import (
     DRIFT_CODES,
     CaseError,
+    agent_policies,
     decide,
     effective_policy,
     outcome,
@@ -19,6 +20,7 @@ from hexgate.security.analyzer import LintCode
 from hexgate.security.decision import DecisionOutcome
 from tests.evals.helpers import (
     AGENT,
+    OPS_COLUMN_PERMISSIVE_DEFAULT,
     PERMISSIVE_DEFAULT,
     POLICY,
     make_modules_workspace,
@@ -551,3 +553,36 @@ def test_when_a_module_tree_names_another_agents_tool_then_no_drift(
     _drop_draft_bot(ws)
     (ws / "policies" / module).write_text(text)
     assert valid_policy(ws, AGENT, modules=True).drift == []
+
+
+# agent_policies
+
+COLUMNS = '  billing:\n    "*": [read_only]\n    ops-bot: [read_only, payments]\n'
+
+
+def test_agent_policies_happy_path(tmp_path) -> None:
+    ws = make_modules_workspace(tmp_path, COLUMNS)
+    policies, problems = agent_policies(ws, None, valid_policy(ws, None, True), True)
+    # One per agent in agents.json, plus "*" for one not registered yet.
+    assert (sorted(policies), problems) == (
+        ["*", "draft-bot", "ops-bot", "shop-bot"],
+        [],
+    )
+    assert policies["ops-bot"].agent == "ops-bot"  # its gates send its name
+
+
+def test_when_the_case_is_not_role_wide_then_there_is_one_policy(tmp_path) -> None:
+    # An agent case: its own policy only.
+    ws = make_modules_workspace(tmp_path, COLUMNS)
+    policy = valid_policy(ws, AGENT, True)
+    assert agent_policies(ws, AGENT, policy, role_wide=False) == ({AGENT: policy}, [])
+
+
+def test_when_an_agents_policy_is_invalid_then_agent_policies_returns_none(
+    tmp_path,
+) -> None:
+    ws = make_modules_workspace(tmp_path, OPS_COLUMN_PERMISSIVE_DEFAULT)
+    policies, problems = agent_policies(ws, None, valid_policy(ws, None, True), True)
+    # None, rather than the valid ones: an agent left out would pass unrun.
+    assert policies == {}
+    assert problems[0].startswith("agent ops-bot: [permissive-default]")
