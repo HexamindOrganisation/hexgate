@@ -41,8 +41,9 @@ def _views(ws: Path) -> list[dict]:
 
 
 @_reading
-def load_attributes(ws: Path, agent: str) -> set[str]:
-    """The caller attributes (`ctx.*`) `agent` is known to send.
+def load_attributes(ws: Path, agent: str | None) -> set[str]:
+    """The caller attributes (`ctx.*`) `agent` is known to send (any agent, when
+    None).
 
     `audit.json` holds `AuditDecisionRow`s, as a list or the endpoint's page (`{rows, ...}`).
     Attributes are set per request and are in no manifest, so the known ones are
@@ -54,7 +55,7 @@ def load_attributes(ws: Path, agent: str) -> set[str]:
     return {
         name
         for row in rows
-        if row["agent_name"] == agent
+        if agent in (None, row["agent_name"])
         for name in _row_attributes(row)
     }
 

@@ -15,7 +15,7 @@ or ones it sets with the value it sets them to; any other is refused.
 from __future__ import annotations
 
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import get_args
@@ -24,7 +24,7 @@ import yaml
 from pydantic import TypeAdapter, ValidationError
 
 from evals.policy_writing.sources import ProjectAgents, SourceError, load_project_agents
-from hexgate.manifest.models import AgentManifest
+from hexgate.manifest.models import AgentFramework, AgentManifest
 from hexgate.runtime.context import ContextAttributeValue
 from hexgate.runtime.run_facts import DETACHED, KNOWN_RUN_PATHS
 from hexgate.security import (
@@ -47,6 +47,7 @@ from hexgate.security.analyzer import (
     SEVERITY_RANK,
     LintCode,
     PolicyLint,
+    _declared,
     analyze_policy,
 )
 from hexgate.security.constraints import ConstraintParseError
@@ -56,8 +57,10 @@ from hexgate.security.models import (
     AgentVia,
     PolicyMode,
     SkillVia,
+    agent_reach_target,
     agent_target_key,
     gate_args,
+    is_agent_via_key,
     skill_key,
 )
 from hexgate.security.modules import DEFAULT_AGENT
@@ -169,22 +172,43 @@ def _gate(tool: str, agent: str, policy_set: PolicySet) -> _Gate | None:
     if tool == AGENT_RUN_TOOL:
         declared = policy_set.declares_admission()
         return _Gate(tool, {"agent": agent}, "admission", declared, False, in_run=False)
-    for via in get_args(AgentVia):
-        prefix = agent_target_key(via, "")
-        if tool.startswith(prefix):
-            name, declares, by_name = _REACH[via]
-            target = canonical_name(tool.removeprefix(prefix))
-            sent = {"agent": agent, "target": target, "via": via}
-            key = agent_target_key(via, target)
-            return _Gate(key, sent, name, declares(policy_set), by_name)
+    if reach := _reach_of(tool):
+        via, target = reach
+        name, declares, by_name = _REACH[via]
+        sent = {"agent": agent, "target": target, "via": via}
+        key = agent_target_key(via, target)
+        return _Gate(key, sent, name, declares(policy_set), by_name)
+    if skill := _skill_of(tool):
+        via, name = skill
+        sent = {"skill": name, "via": via}
+        declared = policy_set.declares_skills()
+        return _Gate(skill_key(via, name), sent, "skills", declared, by_name=True)
+    return None
+
+
+def _reach_of(key: str) -> tuple[AgentVia, str] | None:
+    """(via, trimmed target) of a reach key (`agent.<via>:<target>`), else None."""
+    target = agent_reach_target(key)
+    if target is None:
+        return None
+    via = next(v for v in get_args(AgentVia) if is_agent_via_key(key, v))
+    return via, canonical_name(target)
+
+
+def _skill_of(key: str) -> tuple[SkillVia, str] | None:
+    """(via, trimmed name) of a skill key (`skill:`, `skill.resource:`, ...), else
+    None."""
     for via in get_args(SkillVia):
         prefix = skill_key(via, "")
-        if tool.startswith(prefix):
-            name = canonical_skill_name(tool.removeprefix(prefix))
-            sent = {"skill": name, "via": via}
-            declared = policy_set.declares_skills()
-            return _Gate(skill_key(via, name), sent, "skills", declared, by_name=True)
+        if key.startswith(prefix):
+            return via, canonical_skill_name(key.removeprefix(prefix))
     return None
+
+
+# A raw LangGraph graph's agent-as-tool edges hide in a tool closure, so the
+# manifest builder can't record them (`enumerate_subagents`), though its tools
+# adapter still gates them. Pydantic AI hides them too, but never gates them.
+_HIDDEN_TOOL_EDGES = frozenset({AgentFramework.LANGCHAIN})
 
 
 def _with_gate_args(gate: _Gate, args: dict) -> dict:
@@ -419,3 +443,57 @@ def effective_policy(
     if problems:
         return None, problems
     return Policy(payload, policy_set, agent, manifest, drift + resolved_drift), []
+
+
+def agent_policies(
+    ws: Path, agent: str | None, policy: Policy, role_wide: bool
+) -> tuple[dict[str, Policy], list[str]]:
+    """The policies a case's dry-runs run on, keyed by the agent running them,
+    or none and why when one is invalid (so none passes unrun).
+
+    A case for one agent, or on a single policy.yaml, has one: `policy`. A
+    `role_wide` case (no `agent`, on a module tree) has one per agent in
+    agents.json, each resolved from its own roles.yaml cell or, without one,
+    from `"*"`, plus `"*"` itself for an agent not registered yet: a named cell
+    replaces `"*"`, so an edit to `"*"` alone does nothing for its agent.
+    """
+    policies = {agent or DEFAULT_AGENT: policy}
+    if not role_wide:
+        return policies, []
+    problems = []
+    for name in sorted(load_project_agents(ws).registered):
+        named, named_problems = effective_policy(ws, name, modules=True)
+        if named is None:
+            problems += [f"agent {name}: {p}" for p in named_problems]
+        else:
+            policies[name] = named
+    return ({}, problems) if problems else (policies, [])
+
+
+def can_call(policy: Policy, key: str, agents: Collection[str]) -> bool:
+    """Whether the agent `policy` runs for can make a call on `key`, as far as
+    its manifest tells; `agents` are the project's registered agents.
+
+    `"*"`'s never can: it stands for an agent not registered yet. Nor can an
+    agent with no manifest: it never ran. Tools (egress included) and skills
+    are what the SDK's drift lints read from the manifest (`_declared`); a
+    skill list it can't trust counts as having it. Admission is every agent's.
+    A reach key needs the sub-agent edge, which the builder records whenever it
+    finds one; on a framework that hides agent-as-tool edges in a tool closure,
+    an agent with none recorded may reach any other agent.
+    """
+    manifest = policy.manifest
+    if manifest is None:
+        return False
+    if key == AGENT_RUN_TOOL:
+        return True
+    declared = _declared(manifest)
+    if skill := _skill_of(key):
+        return declared.skills is None or skill[1] in declared.skills
+    if reach := _reach_of(key):
+        via, target = reach
+        if manifest.subagents is None:  # none found, or hidden in a tool closure
+            hidden = via == "tool" and manifest.framework in _HIDDEN_TOOL_EDGES
+            return hidden and target in agents and target != policy.agent
+        return reach in {(s.via, canonical_name(s.name)) for s in manifest.subagents}
+    return key in declared.tools
