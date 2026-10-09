@@ -144,6 +144,8 @@ demo-override: ## Build a deny-everything bundle + chat with HEXGATE_LOCAL_POLIC
 # scripts; reach for it only when the migrations cannot get you there.
 
 COMPOSE := docker compose -f platform/docker-compose.yml
+# The container stays outside: clickhouse-cli execs with -it, the others with -i.
+CLICKHOUSE_CLIENT := clickhouse-client --user hexgate --password hexgate-dev-password --database hexgate_audit
 
 # `--wait` is load-bearing, not tidiness: every consumer below execs a
 # clickhouse-client against the container on the next line, and `up -d` returns
@@ -164,8 +166,7 @@ clickhouse-logs: ## Tail ClickHouse server logs
 
 .PHONY: clickhouse-cli
 clickhouse-cli: ## Open an interactive SQL shell against the local ClickHouse
-	docker exec -it hexgate-clickhouse clickhouse-client \
-	    --user hexgate --password hexgate-dev-password --database hexgate_audit
+	docker exec -it hexgate-clickhouse $(CLICKHOUSE_CLIENT)
 
 # The local twin of `platform-migrate`'s ClickHouse half. Without it the only
 # documented way to pick up a new table was clickhouse-reset, which wipes — so a
@@ -174,10 +175,18 @@ clickhouse-cli: ## Open an interactive SQL shell against the local ClickHouse
 clickhouse-migrate: clickhouse-up ## Replay platform/clickhouse/migrations/*.sql against local ClickHouse (idempotent)
 	@for f in platform/clickhouse/migrations/*.sql; do \
 		echo "applying $$f"; \
-		docker exec -i hexgate-clickhouse clickhouse-client \
-			--user hexgate --password hexgate-dev-password --database hexgate_audit \
+		docker exec -i hexgate-clickhouse $(CLICKHOUSE_CLIENT) \
 			--multiquery < "$$f" || exit 1; \
 	done
+
+# The local twin of `platform-backfill`. A fresh volume never needs it: schema.sql
+# creates the views before any row exists.
+.PHONY: clickhouse-backfill
+clickhouse-backfill: ## Run one backfill against local ClickHouse: make clickhouse-backfill FILE=0005_usage_minute
+	@test -n "$(FILE)" || (echo "Set FILE=<name>, e.g. make clickhouse-backfill FILE=0005_usage_minute" && exit 1)
+	$(COMPOSE) up -d --wait clickhouse
+	docker exec -i hexgate-clickhouse $(CLICKHOUSE_CLIENT) \
+		--multiquery < platform/clickhouse/backfills/$(FILE).sql
 
 .PHONY: clickhouse-reset
 clickhouse-reset: ## Wipe ONLY the ClickHouse data volume and re-run init scripts
@@ -465,6 +474,20 @@ platform-stop-writers: _require-stage-env ## Stop api + enricher ahead of a migr
 platform-migrate: _require-stage-env ## Apply platform/{postgres,clickhouse}/migrations/*.sql to a deploy stack: make platform-migrate STAGE=prod
 	$(DEPLOY_COMPOSE) up -d --wait postgres clickhouse
 	@bash platform/scripts/migrate.sh $(STAGE)
+
+# One-time backfills (platform/clickhouse/backfills/), run with the writers
+# stopped, between platform-migrate and platform-up on the release that ships
+# them. Not part of platform-migrate: a backfill is not safe to replay blindly.
+# Refuses while a writer runs: a row it inserts during the scan is counted by
+# the views and by the backfill, for good. `ps` without -a lists only running
+# (and restarting) containers.
+.PHONY: platform-backfill
+platform-backfill: _require-stage-env ## One-time backfill, writers stopped: make platform-backfill STAGE=prod FILE=0005_usage_minute
+	@test -n "$(FILE)" || (echo "Set FILE=<name>, e.g. make platform-backfill STAGE=prod FILE=0005_usage_minute" && exit 1)
+	@running="$$($(DEPLOY_COMPOSE) ps --services $(DEPLOY_WRITERS))" || exit 1; \
+		test -z "$$running" || (echo "Refusing to backfill while these writers run:" $$running "-- make platform-stop-writers STAGE=$(STAGE) first" && exit 1)
+	$(DEPLOY_COMPOSE) up -d --wait clickhouse
+	@bash platform/scripts/backfill.sh $(STAGE) platform/clickhouse/backfills/$(FILE).sql
 
 .PHONY: platform-up
 platform-up: _require-stage-env ## Build + (re)start a deploy stack: make platform-up STAGE=prod (default staging)
