@@ -1,0 +1,33 @@
+[
+  {
+    "name": "support-bot",
+    "manifest": {
+      "name": "support-bot",
+      "description": null,
+      "framework": "langchain",
+      "model": null,
+      "system_prompt": null,
+      "tools": [
+        {"name": "view_orders", "description": "List a customer's orders", "input_schema": {"properties": {"customer_id": {"title": "customer_id", "type": "string"}}, "required": ["customer_id"]}},
+        {"name": "lookup_order", "description": "Look up one order", "input_schema": {"properties": {"order_id": {"title": "order_id", "type": "string"}}, "required": ["order_id"]}},
+        {"name": "refund_order", "description": "Refund an order (currency: ISO code)", "input_schema": {"properties": {"order_id": {"title": "order_id", "type": "string"}, "amount": {"title": "amount", "type": "number"}, "currency": {"title": "currency", "type": "string"}}, "required": ["order_id", "amount", "currency"]}},
+        {"name": "issue_credit", "description": "Credit a customer's account", "input_schema": {"properties": {"customer_id": {"title": "customer_id", "type": "string"}, "amount": {"title": "amount", "type": "number"}}, "required": ["customer_id", "amount"]}},
+        {"name": "send_email", "description": "Send an email (to: addresses)", "input_schema": {"properties": {"to": {"title": "to", "type": "array"}, "subject": {"title": "subject", "type": "string"}, "body": {"title": "body", "type": "string"}}, "required": ["to", "subject", "body"]}},
+        {"name": "escalate", "description": "Escalate to a human", "input_schema": {"properties": {"reason": {"title": "reason", "type": "string"}}, "required": ["reason"]}},
+        {"name": "delete_database", "description": "Delete a database", "input_schema": {"properties": {"name": {"title": "name", "type": "string"}}, "required": ["name"]}},
+        {"name": "delete_customer", "description": "Delete a customer", "input_schema": {"properties": {"customer_id": {"title": "customer_id", "type": "string"}}, "required": ["customer_id"]}}
+      ],
+      "skills": null,
+      "subagents": [
+        {"name": "billing-bot", "via": "tool"},
+        {"name": "billing-bot", "via": "handoff"},
+        {"name": "admin-bot", "via": "tool"},
+        {"name": "admin-bot", "via": "handoff"}
+      ],
+      "guards": null
+    },
+    "version": 1,
+    "content_hash": "dae64316ea7825b0ae5649789cc03f0e3d2d2d5533c0b9d011b4656acd306033",
+    "updated_at": "2026-10-01T00:00:00Z"
+  }
+]

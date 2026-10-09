@@ -1,0 +1,9 @@
+{
+  "rows": [
+    {"event_id": "0b7e3c1a-5f2d-4c8e-9a41-6d2f8e0b1c37", "occurred_at": "2026-10-01T09:12:04Z", "received_at": "2026-10-01T09:12:04Z", "agent_name": "support-bot", "agent_version_id": "", "session_id": "", "user_id": "", "tool_name": "refund_order", "user_roles": ["billing"], "deciding_role": "billing", "outcome": "allow", "error_type": "", "reason": "", "violations": [], "hint": null, "arguments": null, "attributes": {"department": "finance", "clearance_level": 3}, "run_id": null},
+    {"event_id": "7c41d9e2-3a6b-4f15-8e27-b9c0a5d4e612", "occurred_at": "2026-10-01T09:15:47Z", "received_at": "2026-10-01T09:15:47Z", "agent_name": "support-bot", "agent_version_id": "", "session_id": "", "user_id": "", "tool_name": "send_email", "user_roles": ["support"], "deciding_role": "support", "outcome": "allow", "error_type": "", "reason": "", "violations": [], "hint": null, "arguments": null, "attributes": {"department": "support", "clearance_level": 1}, "run_id": null}
+  ],
+  "total": 2,
+  "limit": 25,
+  "offset": 0
+}

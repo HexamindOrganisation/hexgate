@@ -1,0 +1,26 @@
+[
+  {
+    "name": "support-bot",
+    "manifest": {
+      "name": "support-bot",
+      "description": null,
+      "framework": "langchain",
+      "model": null,
+      "system_prompt": null,
+      "tools": [
+        {"name": "web_search", "description": "Search the web", "input_schema": {"properties": {"query": {"title": "query", "type": "string"}}, "required": ["query"]}},
+        {"name": "view_orders", "description": "List a customer's orders", "input_schema": {"properties": {"customer_id": {"title": "customer_id", "type": "string"}}, "required": ["customer_id"]}},
+        {"name": "refund_order", "description": "Refund an order (currency: ISO code)", "input_schema": {"properties": {"order_id": {"title": "order_id", "type": "string"}, "amount": {"title": "amount", "type": "number"}, "currency": {"title": "currency", "type": "string"}}, "required": ["order_id", "amount", "currency"]}},
+        {"name": "wire_transfer", "description": "Send a wire transfer", "input_schema": {"properties": {"amount": {"title": "amount", "type": "number"}, "iban": {"title": "iban", "type": "string"}}, "required": ["amount", "iban"]}},
+        {"name": "send_email", "description": "Send an email (to: addresses)", "input_schema": {"properties": {"to": {"title": "to", "type": "array"}, "subject": {"title": "subject", "type": "string"}, "body": {"title": "body", "type": "string"}}, "required": ["to", "subject", "body"]}},
+        {"name": "read_file", "description": "Read a file (file_path: relative to the workspace root)", "input_schema": {"properties": {"file_path": {"title": "file_path", "type": "string"}}, "required": ["file_path"]}}
+      ],
+      "skills": null,
+      "subagents": null,
+      "guards": null
+    },
+    "version": 1,
+    "content_hash": "556ff00ec0db42dc36553c0fb07fc12e34eac54b229d9a9d555ed2dacd2e1c27",
+    "updated_at": "2026-10-01T00:00:00Z"
+  }
+]
