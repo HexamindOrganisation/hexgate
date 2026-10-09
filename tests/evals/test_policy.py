@@ -3,24 +3,29 @@
 from __future__ import annotations
 
 import datetime
+import json
+from typing import get_args
 
 import pytest
 
 from evals.policy_writing.policy import (
+    DRIFT_CODES,
     CaseError,
     decide,
     effective_policy,
     outcome,
     policy_columns,
 )
+from hexgate.security.analyzer import LintCode
 from hexgate.security.decision import DecisionOutcome
 from tests.evals.helpers import (
     AGENT,
+    OPS_COLUMN_PERMISSIVE_DEFAULT,
     PERMISSIVE_DEFAULT,
+    POLICY,
     make_modules_workspace,
     make_workspace,
     valid_policy,
-    write_module,
 )
 
 # Reach declared for handoff only, not for agent-as-tool.
@@ -425,49 +430,161 @@ def test_when_a_module_tree_has_a_dead_grant_then_effective_policy_fails(
 ) -> None:
     # A module lint: the boundary denies what a capability grants.
     ws = make_modules_workspace(tmp_path)
-    write_module(
-        ws, "boundaries/no_views.yaml", "tools:\n  view_orders: { mode: deny }\n"
+    (ws / "policies" / "boundaries" / "no_views.yaml").write_text(
+        "tools:\n  view_orders: { mode: deny }\n"
     )
     _, problems = effective_policy(ws, modules=True)
     assert any("dead-grant" in p for p in problems)
 
 
-def test_policy_columns_happy_path(tmp_path) -> None:
-    roles = '  billing:\n    "*": [read_only]\n    ops-bot: [read_only, payments]\n'
-    ws = make_modules_workspace(tmp_path, roles)
-    policy = valid_policy(ws, modules=True)
-    columns, problems = policy_columns(ws, None, policy, modules=True)
-    assert problems == []
-    # Each column dry-runs as its agent; "*" as the unnamed one.
-    assert {k: v.agent for k, v in columns.items()} == {"*": None, "ops-bot": "ops-bot"}
-
-
-def test_when_the_case_names_an_agent_then_policy_columns_is_its_policy(
+def test_when_a_roles_column_names_no_agent_in_agents_json_then_effective_policy_fails(
     tmp_path,
 ) -> None:
-    roles = '  billing:\n    "*": [read_only]\n    ops-bot: [read_only, payments]\n'
+    # A misspelled column: shop-bot falls back to `"*"`, which grants refunds.
+    roles = '  billing:\n    "*": [read_only, payments]\n    shop-bott: [read_only]\n'
     ws = make_modules_workspace(tmp_path, roles)
-    policy = valid_policy(ws, AGENT, modules=True)
-    assert policy_columns(ws, AGENT, policy, modules=True) == ({AGENT: policy}, [])
+    _, problems = effective_policy(ws, AGENT, modules=True)
+    assert any(
+        p.startswith("[unknown-agent] [billing] [agent shop-bott] ") for p in problems
+    )
 
 
-def test_when_the_project_is_a_policy_yaml_then_policy_columns_is_its_policy(
+def test_when_a_reach_target_names_no_agent_in_agents_json_then_effective_policy_fails(
     tmp_path,
 ) -> None:
-    # A stray roles.yaml naming another agent doesn't make policy.yaml a tree.
-    ws = make_workspace(tmp_path)
-    (ws / "roles.yaml").write_text("version: 1\nroles:\n  billing:\n    ops-bot: [x]\n")
+    roles = "  default: [read_only]\n  billing: [read_only, reach]\n"
+    ws = make_modules_workspace(tmp_path, roles)
+    (ws / "policies" / "capabilities" / "reach.yaml").write_text(
+        "agents:\n  opps-bot: { mode: allow }\n"
+    )
+    _, problems = effective_policy(ws, AGENT, modules=True)
+    assert any("[unknown-reach-target]" in p for p in problems)
+
+
+def test_when_agents_json_is_missing_then_effective_policy_fails_on_a_module_tree(
+    tmp_path,
+) -> None:
+    ws = make_modules_workspace(tmp_path)
+    (ws / "agents.json").unlink()
+    _, problems = effective_policy(ws, AGENT, modules=True)
+    assert len(problems) == 1 and problems[0].startswith("agents.json unreadable")
+
+
+# Policy.drift: the SDK's manifest lints, for the name checks
+
+
+def test_every_drift_code_is_one_the_sdk_emits() -> None:
+    # No type checker runs here, so a misspelled or renamed code would route
+    # nothing: pin it against the SDK's own list.
+    assert DRIFT_CODES <= set(get_args(LintCode))
+
+
+def _drop_draft_bot(ws) -> None:
+    """Leave only agents with a manifest, so `"*"` cells and boundaries are checked."""
+    views = json.loads((ws / "agents.json").read_text())
+    (ws / "agents.json").write_text(json.dumps([v for v in views if v["manifest"]]))
+
+
+def test_when_a_policy_file_invents_a_tool_then_drift_holds_it_and_valid_passes(
+    tmp_path,
+) -> None:
+    ws = make_workspace(tmp_path, POLICY + "      refnd_order: { mode: allow }\n")
+    policy = valid_policy(ws, AGENT)
+    assert [(x.code, x.tool) for x in policy.drift] == [("unknown-tool", "refnd_order")]
+
+
+def test_when_no_agent_is_given_then_no_manifest_and_no_drift(tmp_path) -> None:
+    ws = make_workspace(tmp_path, POLICY + "      refnd_order: { mode: allow }\n")
     policy = valid_policy(ws)
-    assert policy_columns(ws, None, policy) == ({"*": policy}, [])
+    assert (policy.manifest, policy.drift) == (None, [])
 
 
-def test_when_an_agents_column_is_invalid_then_policy_columns_says_why(
+@pytest.mark.parametrize("without_manifest", [None, "draft-bot", "sub-agent"])
+def test_when_a_star_cell_has_a_typo_then_drift_holds_it(
+    tmp_path, without_manifest
+) -> None:
+    # An agent with no manifest, or a sub-agent with none, adds no
+    # names: the `"*"` cell is still checked against the rest.
+    ws = make_modules_workspace(tmp_path)
+    views = json.loads((ws / "agents.json").read_text())
+    if without_manifest != "draft-bot":
+        views = [v for v in views if v["manifest"]]
+    if without_manifest == "sub-agent":
+        views[0]["manifest"]["subagents"] = [{"name": "helper-bot", "via": "tool"}]
+    (ws / "agents.json").write_text(json.dumps(views))
+    (ws / "policies" / "capabilities" / "payments.yaml").write_text(
+        'tools:\n  refnd_order: { mode: allow }\n  refund_order: { mode: allow, constraints: ["args.amout < 5"] }\n'
+    )
+    drift = valid_policy(ws, AGENT, modules=True).drift
+    assert {(x.code, x.tool) for x in drift} == {
+        ("unknown-tool", "refnd_order"),
+        ("unknown-arg", "refund_order"),
+    }
+
+
+def test_when_the_manifest_lists_null_skills_then_an_invented_skill_is_drift(
     tmp_path,
 ) -> None:
-    roles = '  default:\n    "*": [read_only]\n    ops-bot: [read_only, payments]\n'
-    ws = make_modules_workspace(tmp_path, roles + "  billing: [read_only]\n")
-    policy = valid_policy(ws, modules=True)
-    columns, problems = policy_columns(ws, None, policy, modules=True)
+    # The agent lists no skills: none is known.
+    ws = make_workspace(tmp_path, "version: 1\nskills:\n  pdf: { mode: allow }\n")
+    views = json.loads((ws / "agents.json").read_text())
+    views[0]["manifest"]["skills"] = None
+    (ws / "agents.json").write_text(json.dumps(views))
+    assert [x.code for x in valid_policy(ws, AGENT).drift] == ["unknown-skill"]
+
+
+@pytest.mark.parametrize(
+    ("module", "text"),
+    [
+        # An org-wide deny on ops-bot's tool and skill.
+        (
+            "boundaries/org.yaml",
+            "default_policy: { mode: allow }\ntools:\n  wire_transfer: { mode: deny }\n"
+            "skills:\n  ledger: { mode: deny }\n",
+        ),
+        # A `"*"` cell's capability may grant any agent's tool.
+        ("capabilities/payments.yaml", "tools:\n  wire_transfer: { mode: allow }\n"),
+    ],
+)
+def test_when_a_module_tree_names_another_agents_tool_then_no_drift(
+    tmp_path, module, text
+) -> None:
+    ws = make_modules_workspace(tmp_path)
+    _drop_draft_bot(ws)
+    (ws / "policies" / module).write_text(text)
+    assert valid_policy(ws, AGENT, modules=True).drift == []
+
+
+# policy_columns
+
+COLUMNS = '  billing:\n    "*": [read_only]\n    ops-bot: [read_only, payments]\n'
+
+
+def test_policy_columns_happy_path(tmp_path) -> None:
+    ws = make_modules_workspace(tmp_path, COLUMNS)
+    columns, problems = policy_columns(ws, None, valid_policy(ws, None, True), True)
+    assert (sorted(columns), problems) == (["*", "ops-bot"], [])
+    assert columns["ops-bot"].agent == "ops-bot"  # its gates send its name
+
+
+@pytest.mark.parametrize(("agent", "modules"), [("shop-bot", True), (None, False)])
+def test_when_the_case_names_an_agent_or_has_a_policy_file_then_there_is_one_column(
+    tmp_path, agent, modules
+) -> None:
+    if modules:
+        ws = make_modules_workspace(tmp_path, COLUMNS)
+    else:  # a stray roles.yaml next to a policy file adds no columns
+        ws = make_workspace(tmp_path)
+        (ws / "roles.yaml").write_text(f"version: 1\nroles:\n{COLUMNS}")
+    policy = valid_policy(ws, agent, modules)
+    assert policy_columns(ws, agent, policy, modules) == ({agent or "*": policy}, [])
+
+
+def test_when_an_agents_column_is_invalid_then_policy_columns_returns_none(
+    tmp_path,
+) -> None:
+    ws = make_modules_workspace(tmp_path, OPS_COLUMN_PERMISSIVE_DEFAULT)
+    columns, problems = policy_columns(ws, None, valid_policy(ws, None, True), True)
     # None, rather than the valid ones: a column left out would pass unrun.
     assert columns == {}
-    assert problems[0].startswith("column ops-bot:")
+    assert problems[0].startswith("column ops-bot: [permissive-default]")

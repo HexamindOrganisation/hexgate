@@ -4,10 +4,10 @@ No eval framework is imported here: the framework's scorer and the dataset tests
 both call `score(case, workspace, before, answer)` and get back a list of `Check`s.
 One function per kind of check: the policy validates without lint warnings
 (`policy.py`), dry-run decisions and role supersets hold (on every roles.yaml
-column when the case names no agent), only names the Hexgate MCP would show are
-used (`names.py`: the case agent's, or any agent's when it names none; on a
-module tree, per file), files change (or not) as the case says, and the final
-answer mentions what the case requires.
+column for a case with no agent, a role or project-wide edit), only names in the
+project's agents.json and audit.json are used (the SDK's drift lints, and
+`names.py` for caller attributes), files change (or not) as the case says, and
+the final answer mentions what the case requires.
 """
 
 from __future__ import annotations
@@ -19,14 +19,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from evals.policy_writing.names import (
-    NAME_SOURCES,
-    enforced_roles,
-    load_known_names,
-    module_invented_names,
-    unknown_keys,
-    unknown_refs,
-)
+from evals.policy_writing.names import unknown_attrs
 from evals.policy_writing.policy import (
     LABELS,
     RANK,
@@ -38,6 +31,13 @@ from evals.policy_writing.policy import (
     outcome,
     policy_columns,
 )
+from evals.policy_writing.sources import (
+    NAME_SOURCES,
+    SourceError,
+    load_attributes,
+    load_project_agents,
+)
+from hexgate.security import RESOLVED_POLICY_MARKER
 from hexgate.security.decision import Verdict
 
 
@@ -71,39 +71,39 @@ def snapshot(root: Path) -> dict[str, str]:
 
 def decision_checks(columns: dict[str, Policy], decisions: list[dict]) -> list[Check]:
     """One check per (decision, role): the dry-run gives an expected outcome on
-    every column the case holds on (see `policy_columns`; none: the policy is
-    invalid).
+    every column in `columns` (see `policy_columns`); none means the policy is
+    invalid.
 
     Named by the decision's place in the list too, so two entries that differ
     only in `expect`, or a call listed twice, still get one check each."""
     # `roles` expands one entry over several roles.
     return [
-        _decision_check(columns, role, d, f"decision {i}: {_call_label(role, d)}")
+        _column_check(
+            f"decision {i}: {_call_label(role, d)}",
+            columns,
+            lambda policy: _decision_miss(policy, role, d),
+        )
         for i, d in enumerate(decisions, 1)
         for role in d.get("roles") or [d["role"]]
     ]
 
 
-def _decision_check(columns: dict[str, Policy], role: str, d: dict, name: str) -> Check:
-    return _column_check(name, columns, lambda p: _wrong_decision(p, role, d))
-
-
 def _column_check(
     name: str, columns: dict[str, Policy], misses: Callable[[Policy], list[str]]
 ) -> Check:
-    """Passes when `misses(policy)` is empty on every column; each miss is
-    tagged with its column when there are several. No columns: invalid."""
+    """Passes when `misses` finds nothing on any column; each miss is tagged
+    with its column when there are several."""
     if not columns:
         return Check(name, False, "policy invalid")
-    wrong = []
+    found = []
     for column, policy in columns.items():
         where = "" if len(columns) == 1 else f" (column {column})"
-        wrong += [f"{miss}{where}" for miss in misses(policy)]
-    return Check(name, not wrong, "; ".join(wrong))
+        found += [f"{miss}{where}" for miss in misses(policy)]
+    return Check(name, not found, "; ".join(found))
 
 
-def _wrong_decision(policy: Policy, role: str, d: dict) -> list[str]:
-    """Why the dry-run gives none of the outcomes `d` expects; empty if it gives one."""
+def _decision_miss(policy: Policy, role: str, d: dict) -> list[str]:
+    """Why the dry-run misses the outcomes `d` expects, if it does."""
     # `expect` may list the acceptable outcomes ("deny or approval_required").
     labels = d["expect"] if isinstance(d["expect"], list) else [d["expect"]]
     try:
@@ -130,19 +130,20 @@ def _call_label(role: str, d: dict) -> str:
 
 
 def superset_checks(columns: dict[str, Policy], supersets: list[dict]) -> list[Check]:
-    """Everything `narrower` may do, `wider` may do at least as freely, per column."""
+    """Everything `narrower` may do, `wider` may do at least as freely, on every
+    column."""
     return [
-        _superset_check(columns, s, f"superset {i}: {s['wider']} ⊇ {s['narrower']}")
+        _column_check(
+            f"superset {i}: {s['wider']} ⊇ {s['narrower']}",
+            columns,
+            lambda policy: _superset_gaps(policy, s),
+        )
         for i, s in enumerate(supersets, 1)
     ]
 
 
-def _superset_check(columns: dict[str, Policy], s: dict, name: str) -> Check:
-    return _column_check(name, columns, lambda p: _probe_gaps(p, s))
-
-
-def _probe_gaps(policy: Policy, s: dict) -> list[str]:
-    """The probes `wider` lets through less freely than `narrower` on `policy`."""
+def _superset_gaps(policy: Policy, s: dict) -> list[str]:
+    """How `wider` is stricter than `narrower`, probe by probe."""
     return [gap for p in s["probes"] if (gap := _probe_gap(policy, s, p))]
 
 
@@ -168,41 +169,66 @@ def _name_checks_failed(detail: str) -> list[Check]:
     return [Check(name, False, detail) for name in NAME_CHECKS]
 
 
+def _untagged(lint) -> str:
+    """`lint` without its role, so one module mistake reads once; the agent
+    stays, as "the agent's manifest" in a named column's message means it."""
+    return (
+        f"[{lint.code}]"
+        + (f" [agent {lint.agent}]" if lint.agent else "")
+        + f" {lint.message}"
+    )
+
+
+def _lines(lints) -> list[str]:
+    """Each lint as one line, once: a module's mistake is linted once per cell
+    it's in."""
+    return list(dict.fromkeys(_untagged(x) for x in lints))
+
+
 def name_checks(
     policy: Policy,
     ws: Path,
     before: dict[str, str],
     after: dict[str, str],
-    modules: bool = False,
+    resolved: list[Policy] | None = None,
 ) -> list[Check]:
-    """Only names the MCP would show for `policy.agent` (any agent's when None):
-    tools, skills, guards, reach targets, arguments and caller attributes. A
-    single policy.yaml is checked as a whole, a module tree (`modules`) file by
-    file."""
+    """Only names in agents.json and audit.json: the SDK's drift lints (`policy.drift`) for
+    tools, skills, guards and arguments (a module tree's against every agent's
+    manifest), and `policy.agent`'s caller attributes against audit.json, on
+    its resolved roles only: `resolved`, every column a role or project-wide
+    case holds on (`policy` alone by default). Such a case has no agent, so
+    any agent's attributes count."""
     # The names are read after the run, so an edit to either file could
     # whitelist an invented name: trust them only if they are untouched.
     edited = [f for f in NAME_SOURCES if before.get(f) != after.get(f)]
     if edited:
         return _name_checks_failed(f"edited during the run: {edited}")
-    try:
-        known = load_known_names(ws, policy.agent)
-        if modules:
-            unknown, refs = module_invented_names(ws, policy.agent, known)
-        else:
-            roles = enforced_roles(policy.policy_set)
-            unknown, refs = unknown_keys(roles, known), unknown_refs(roles, known)
-    except (OSError, ValueError, KeyError, TypeError) as exc:
+    if policy.agent is None and RESOLVED_POLICY_MARKER not in policy.payload:
+        # A single policy.yaml is one agent's: its names need that agent.
+        return _name_checks_failed("a case without an agent needs a module tree")
+    if policy.agent is not None and policy.manifest is None:
         return _name_checks_failed(
-            f"agents.json / audit.json unreadable: {exc!r}"[:300]
+            f"agents.json has no readable manifest for {policy.agent!r}"
         )
-    keys, args = NAME_CHECKS
-    agent = policy.agent
-    where = f"{agent}'s manifest" if agent else "any agent's manifest"
+    # With no manifest at all, the drift lints check nothing. (A module tree
+    # only resolves once agents.json reads, so this read doesn't fail.)
+    if policy.agent is None and not load_project_agents(ws).manifests:
+        return _name_checks_failed("no agent in agents.json has a manifest")
+    try:
+        attrs = load_attributes(ws, policy.agent)
+    except SourceError as exc:
+        return _name_checks_failed(f"audit.json unreadable: {exc}"[:300])
+    keys = _lines(x for x in policy.drift if x.code != "unknown-arg")
+    args = _lines(x for x in policy.drift if x.code == "unknown-arg")
+    refs = {
+        ref for p in resolved or [policy] for ref in unknown_attrs(p.policy_set, attrs)
+    }
+    args += [
+        f"[unknown-attribute] {ref}: no audit.json row sends it" for ref in sorted(refs)
+    ]
     return [
-        Check(keys, not unknown, f"not in {where}: {unknown}" if unknown else ""),
-        Check(
-            args, not refs, f"not in the manifest or audit.json: {refs}" if refs else ""
-        ),
+        Check(name, not found, "\n".join(found)[:800])
+        for name, found in zip(NAME_CHECKS, (keys, args), strict=True)
     ]
 
 
@@ -266,7 +292,7 @@ def score(case: dict, ws: Path, before: dict[str, str], answer: str) -> list[Che
     so a stray `policies/` the agent made doesn't switch it."""
     expect = case.get("expect", {})
     modules = any(rel.startswith("policies/") for rel in before)
-    agent = case.get("agent")
+    agent = case.get("agent")  # none for a role or project-wide edit
     policy, problems = effective_policy(ws, agent, modules)
     columns: dict[str, Policy] = {}
     if policy is not None:
@@ -277,7 +303,12 @@ def score(case: dict, ws: Path, before: dict[str, str], answer: str) -> list[Che
         valid,
         *decision_checks(columns, expect.get("decisions", [])),
         *superset_checks(columns, expect.get("superset", [])),
-        *(name_checks(policy, ws, before, after, modules) if policy else []),
+        # An invalid column leaves none to dry-run, but the policy's names still count.
+        *(
+            name_checks(policy, ws, before, after, list(columns.values()))
+            if policy
+            else []
+        ),
         *file_checks(expect, before, after),
         *answer_checks(expect, answer),
     ]

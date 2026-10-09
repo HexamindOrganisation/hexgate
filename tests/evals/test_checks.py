@@ -17,19 +17,18 @@ from evals.policy_writing.checks import (
     snapshot,
     superset_checks,
 )
-from evals.policy_writing.policy import policy_columns
 from tests.evals.helpers import (
     AGENT,
+    OPS_COLUMN_PERMISSIVE_DEFAULT,
     PERMISSIVE_DEFAULT,
     POLICY,
-    add_boundary_tool,
     by_name,
     install_skill,
     make_modules_workspace,
     make_workspace,
     manifest_tool,
+    role_wide_columns,
     valid_policy,
-    write_module,
 )
 
 REFUND = {"tool": "refund_order", "args": {"order_id": "o1", "amount": 5}}
@@ -103,120 +102,114 @@ def test_name_checks_happy_path(tmp_path) -> None:
     ]
 
 
-def test_when_a_module_tree_lowers_agent_and_skill_keys_then_name_checks_accept_them(
-    tmp_path,
-) -> None:
-    # Resolving a module tree lowers admission, reach and skills into `tools`.
-    roles = "  default: [read_only]\n  billing: [read_only, reach]\n"
-    ws = make_modules_workspace(tmp_path, roles)
-    write_module(
-        ws,
-        "capabilities/reach.yaml",
-        'admission: { mode: allow, constraints: ["args.agent == \\"shop-bot\\""] }\n'
-        "agents:\n  ops-bot: { mode: allow }\n"
-        "skills:\n  pdf: { mode: allow, via: [script], constraints:"
-        ' ["args.script_args == \\"x\\""] }\n',
-    )
-    policy = valid_policy(ws, AGENT, modules=True)
-    assert {"agent.run", "skill.script:pdf"} <= set(
-        policy.policy_set.policy_for("billing").tools
-    )
-    before = snapshot(ws)
-    checks = name_checks(policy, ws, before, before, modules=True)
-    assert [(c.name, c.passed, c.detail) for c in checks] == [
-        (n, True, "") for n in NAME_CHECKS
-    ]
-
-
-def test_when_a_module_tree_grants_an_invented_skill_then_name_checks_flag_it(
-    tmp_path,
-) -> None:
-    # shop-bot's own cell: checked against its names, not every agent's.
-    roles = "  default: [read_only]\n  billing:\n    shop-bot: [read_only, sk]\n"
-    ws = make_modules_workspace(tmp_path, roles)
-    (ws / "policies" / "capabilities" / "sk.yaml").write_text(
-        "skills:\n  pdff: { mode: allow, via: [resource] }\n"
-    )
-    policy = valid_policy(ws, AGENT, modules=True)
-    before = snapshot(ws)
-    checks = name_checks(policy, ws, before, before, modules=True)
-    assert (checks[0].passed, checks[0].detail) == (
-        False,
-        "not in shop-bot's manifest: ['policies/capabilities/sk.yaml: skill:pdff']",
-    )
-
-
-def test_when_the_policy_invents_names_then_both_name_checks_fail(tmp_path) -> None:
-    policy = (
-        POLICY
-        + '      wire_transfer: { mode: allow, constraints: ["ctx.tier == 1"] }\n'
-    )
-    ws = make_workspace(tmp_path, policy)
-    policy = valid_policy(ws, AGENT)
-    before = snapshot(ws)
-    checks = [(c.passed, c.detail) for c in name_checks(policy, ws, before, before)]
-    assert checks == [
-        (False, "not in shop-bot's manifest: ['wire_transfer']"),
-        (False, "not in the manifest or audit.json: ['wire_transfer: ctx.tier']"),
-    ]
-
-
-def test_when_a_boundary_denies_another_agents_tool_then_name_checks_accept_it(
-    tmp_path,
-) -> None:
-    # The resolved column holds the deny; the boundary file is checked against
-    # every agent's names, so it isn't read as shop-bot inventing the tool.
-    ws = make_modules_workspace(tmp_path)
-    add_boundary_tool(ws, "wire_transfer: { mode: deny }")
-    policy = valid_policy(ws, AGENT, modules=True)
-    files = snapshot(ws)
-    checks = name_checks(policy, ws, files, files, modules=True)
-    assert [(c.passed, c.detail) for c in checks] == [(True, "")] * 2
-
-
-def test_when_the_case_names_no_agent_then_name_checks_accept_every_agents_names(
-    tmp_path,
-) -> None:
-    # A role or project-wide edit: ops-bot's tool and attribute are fine too.
-    policy = POLICY.replace("- args.amount <= 500", '- ctx.region == "eu"')
-    ws = make_workspace(tmp_path, policy + "      wire_transfer: { mode: allow }\n")
-    files = snapshot(ws)
-    checks = name_checks(valid_policy(ws), ws, files, files)
-    assert all(c.passed for c in checks)
-    (ws / "policy.yaml").write_text(policy + "      teleport: { mode: allow }\n")
-    files = snapshot(ws)
-    keys = name_checks(valid_policy(ws), ws, files, files)[0]
-    assert keys.detail == "not in any agent's manifest: ['teleport']"
+# The two name checks, in NAME_CHECKS order: which one an invented name fails.
+KEYS, ARGS = (False, True), (True, False)
 
 
 @pytest.mark.parametrize(
-    ("source", "broken"),
+    ("rule", "fails"),
     [
-        ("agents.json", ""),
-        ("agents.json", "{not json"),
-        ("agents.json", "[]"),
-        ("agents.json", '{"agents": []}'),  # not the endpoint's list
-        ("agents.json", "[{}]"),  # a view with no name
-        ("audit.json", "null"),
-        ("audit.json", "[{}]"),  # a row with no agent_name
-        ("agents.json", None),  # the starting project ships none
+        ("      refnd_order: { mode: allow }\n", KEYS),
+        ("      refnd_order: { mode: deny }\n", KEYS),  # graded info by the SDK
+        (
+            '      view_orders: { mode: allow, constraints: ["args.customr == 1"] }\n',
+            ARGS,
+        ),
+        ('      view_orders: { mode: allow, constraints: ["ctx.tier == 1"] }\n', ARGS),
+        ("      wire_transfer: { mode: allow }\n", KEYS),  # only ops-bot's
+    ],
+)
+def test_when_a_policy_file_invents_a_name_then_one_name_check_fails(
+    tmp_path, rule, fails
+) -> None:
+    ws = make_workspace(tmp_path, POLICY + rule)
+    checks = by_name(score({"agent": AGENT}, ws, snapshot(ws), ""))
+    assert checks["valid"].passed
+    assert tuple(checks[n].passed for n in NAME_CHECKS) == fails
+
+
+@pytest.mark.parametrize(
+    "role",
+    [
+        {"skills": {"pdff": {"mode": "allow"}}},
+        {"guards": {"redact_pi": {"enabled": True}}},
+    ],
+)
+def test_when_a_policy_file_invents_a_skill_or_guard_then_the_keys_check_fails(
+    tmp_path, role
+) -> None:
+    # One role, so its guards can't diverge from another's.
+    doc = {
+        "version": 1,
+        "roles": {"default": {"tools": {"view_orders": {"mode": "allow"}}, **role}},
+    }
+    ws = make_workspace(tmp_path, json.dumps(doc))
+    checks = by_name(score({"agent": AGENT}, ws, snapshot(ws), ""))
+    assert checks["valid"].passed, checks["valid"].detail
+    assert tuple(checks[n].passed for n in NAME_CHECKS) == KEYS
+
+
+# shop-bot's own column, which `check_project` checks against its manifest.
+OWN_COLUMN = (
+    "  default: [read_only]\n"
+    "  billing:\n    '*': [read_only, payments]\n    shop-bot: [read_only, inv]\n"
+)
+
+
+@pytest.mark.parametrize(
+    ("capability", "fails"),
+    [
+        ("tools:\n  refnd_order: { mode: allow }\n", KEYS),
+        ("skills:\n  pdff: { mode: allow, via: [resource] }\n", KEYS),
+        (
+            'tools:\n  refund_order: { mode: allow, constraints: ["args.amout < 5"] }\n',
+            ARGS,
+        ),
+        (
+            'tools:\n  refund_order: { mode: allow, constraints: ["ctx.tier == 1"] }\n',
+            ARGS,
+        ),
+    ],
+)
+def test_when_a_module_tree_invents_a_name_then_one_name_check_fails(
+    tmp_path, capability, fails
+) -> None:
+    ws = make_modules_workspace(tmp_path, OWN_COLUMN)
+    (ws / "policies" / "capabilities" / "inv.yaml").write_text(capability)
+    checks = by_name(score({"agent": AGENT}, ws, snapshot(ws), ""))
+    assert checks["valid"].passed, checks["valid"].detail
+    assert tuple(checks[n].passed for n in NAME_CHECKS) == fails
+
+
+@pytest.mark.parametrize(
+    ("agent", "source", "broken", "detail"),
+    [
+        (
+            AGENT,
+            "agents.json",
+            "{not json",
+            "agents.json has no readable manifest for 'shop-bot'",
+        ),
+        (
+            "draft-bot",
+            None,
+            None,
+            "agents.json has no readable manifest for 'draft-bot'",
+        ),
+        (AGENT, "audit.json", "null", "audit.json unreadable: "),
     ],
 )
 def test_when_a_name_source_is_unreadable_then_both_name_checks_fail(
-    tmp_path, source, broken
+    tmp_path, agent, source, broken, detail
 ) -> None:
     ws = make_workspace(tmp_path)
-    policy = valid_policy(ws, AGENT)
-    if broken is None:
-        (ws / source).unlink()
-    else:
+    if source:
         (ws / source).write_text(broken)
+    policy = valid_policy(ws, agent)
     after = snapshot(ws)
     checks = name_checks(policy, ws, after, after)
     assert [(c.name, c.passed) for c in checks] == [(n, False) for n in NAME_CHECKS]
-    assert all(
-        c.detail.startswith("agents.json / audit.json unreadable: ") for c in checks
-    )
+    assert all(c.detail.startswith(detail) for c in checks)
 
 
 @pytest.mark.parametrize("edited", ["agents.json", "audit.json"])
@@ -355,16 +348,39 @@ def test_when_the_agent_edits_agents_json_then_score_fails_both_name_checks(
 ) -> None:
     ws = make_workspace(tmp_path, POLICY + "      wire_transfer: { mode: allow }\n")
     before = snapshot(ws)
-    # The agent "fixes" its invented tool by adding it to the manifest.
+    # The agent "fixes" its invented tool by adding it to the manifest, which
+    # the drift then reads.
     agents = json.loads((ws / "agents.json").read_text())
     agents[0]["manifest"]["tools"].append(manifest_tool("wire_transfer", iban="s"))
     (ws / "agents.json").write_text(json.dumps(agents))
     checks = by_name(score({"agent": AGENT}, ws, before, ""))
-    for name in NAME_CHECKS:
-        assert (checks[name].passed, checks[name].detail) == (
-            False,
-            "edited during the run: ['agents.json']",
-        )
+    assert [(checks[n].passed, checks[n].detail) for n in NAME_CHECKS] == [
+        (False, "edited during the run: ['agents.json']")
+    ] * 2
+
+
+def test_when_a_module_mistake_is_in_several_cells_then_its_name_check_lists_it_once(
+    tmp_path,
+) -> None:
+    roles = "  default: [read_only, payments]\n  billing: [read_only, payments]\n"
+    ws = make_modules_workspace(tmp_path, roles)
+    (ws / "policies" / "capabilities" / "payments.yaml").write_text(
+        "tools:\n  refnd_order: { mode: allow }\n"
+    )
+    checks = by_name(score({"agent": AGENT}, ws, snapshot(ws), ""))
+    assert checks[NAME_CHECKS[0]].detail.count("refnd_order") == 1
+
+
+def test_when_another_agents_column_invents_a_tool_then_the_detail_names_that_agent(
+    tmp_path,
+) -> None:
+    roles = "  default: [read_only]\n  billing:\n    '*': [read_only, payments]\n    ops-bot: [wire]\n"
+    ws = make_modules_workspace(tmp_path, roles)
+    (ws / "policies" / "capabilities" / "wire.yaml").write_text(
+        "tools:\n  wire_transfr: { mode: allow }\n"
+    )
+    checks = by_name(score({"agent": AGENT}, ws, snapshot(ws), ""))
+    assert checks[NAME_CHECKS[0]].detail.startswith("[unknown-tool] [agent ops-bot] ")
 
 
 def test_when_a_case_expects_a_superset_then_score_runs_it(tmp_path) -> None:
@@ -411,14 +427,14 @@ def test_when_the_policy_is_invalid_then_score_fails_valid_and_decisions(
     assert [c.passed for c in checks] == [False, False]
 
 
-# A role-wide case on a module tree: every roles.yaml column
+# A role or project-wide case (no agent) on a module tree: every roles.yaml column
 
 
 @pytest.mark.parametrize(
     ("shop_bot_cell", "passed"),
     [("[read_only]", False), ("[read_only, payments]", True)],
 )
-def test_a_role_wide_decision_must_hold_on_every_agents_column(
+def test_when_the_case_names_no_agent_then_a_decision_must_hold_on_every_column(
     tmp_path, shop_bot_cell, passed
 ) -> None:
     # Refunds granted on "*"; shop-bot's own cell replaces "*" for it.
@@ -426,7 +442,7 @@ def test_a_role_wide_decision_must_hold_on_every_agents_column(
         f'  support:\n    "*": [read_only, payments]\n    shop-bot: {shop_bot_cell}\n'
     )
     ws = make_modules_workspace(tmp_path, roles)
-    columns, _ = policy_columns(ws, None, valid_policy(ws, modules=True), True)
+    columns = role_wide_columns(ws)
     [check] = decision_checks(
         columns, [{"role": "support", **REFUND, "expect": "allow"}]
     )
@@ -435,43 +451,89 @@ def test_a_role_wide_decision_must_hold_on_every_agents_column(
         assert check.detail.endswith("(column shop-bot)")
 
 
-def test_a_role_wide_superset_must_hold_on_every_agents_column(tmp_path) -> None:
+def test_when_the_case_names_no_agent_then_a_superset_must_hold_on_every_column(
+    tmp_path,
+) -> None:
     # On "*" support may refund like billing; shop-bot's own cell narrows it.
     roles = (
         '  support:\n    "*": [read_only, payments]\n    shop-bot: [read_only]\n'
         "  billing: [read_only, payments]\n"
     )
     ws = make_modules_workspace(tmp_path, roles)
-    columns, _ = policy_columns(ws, None, valid_policy(ws, modules=True), True)
+    columns = role_wide_columns(ws)
     superset = {"narrower": "billing", "wider": "support", "probes": [REFUND]}
     [check] = superset_checks(columns, [superset])
     assert check.detail == "refund_order: billing=allow, support=deny (column shop-bot)"
 
 
-def test_when_a_gate_reads_args_agent_then_each_column_sends_its_own_agent(
+def test_when_an_agents_column_is_invalid_then_score_fails_valid_and_every_dry_run(
     tmp_path,
 ) -> None:
-    roles = '  billing:\n    "*": [read_only, reach]\n    ops-bot: [read_only, reach]\n'
-    ws = make_modules_workspace(tmp_path, roles)
-    write_module(
-        ws,
-        "capabilities/reach.yaml",
-        'admission: { mode: allow, constraints: ["args.agent == \\"ops-bot\\""] }\n',
-    )
-    columns, _ = policy_columns(ws, None, valid_policy(ws, modules=True), True)
-    run = {"role": "billing", "tool": "agent.run", "expect": "allow"}
-    [check] = decision_checks(columns, [run])
-    # ops-bot's column sends its name and passes; "*" sends "default" and fails.
-    assert not check.passed
-    assert "(column *)" in check.detail and "(column ops-bot)" not in check.detail
-
-
-def test_when_an_agents_column_is_invalid_then_score_fails_valid(tmp_path) -> None:
-    roles = '  default:\n    "*": [read_only]\n    ops-bot: [read_only, payments]\n'
-    ws = make_modules_workspace(tmp_path, roles + "  billing: [read_only]\n")
+    ws = make_modules_workspace(tmp_path, OPS_COLUMN_PERMISSIVE_DEFAULT)
     case = {"expect": {"decisions": [{"role": "billing", **VIEW, "expect": "allow"}]}}
     checks = by_name(score(case, ws, snapshot(ws), ""))
-    assert checks["valid"].detail.startswith("column ops-bot:")
+    assert checks["valid"].detail.startswith("column ops-bot: [permissive-default]")
     # The invalid column's dry-runs can't run, so none passes by being skipped.
-    decision = next(c for n, c in checks.items() if n.startswith("decision 1:"))
+    decision = next(c for n, c in checks.items() if n.startswith("decision"))
     assert (decision.passed, decision.detail) == (False, "policy invalid")
+
+
+def test_when_the_case_names_no_agent_then_name_checks_read_every_agents_attributes_on_every_column(
+    tmp_path,
+) -> None:
+    # ops-bot's own column reads its own attribute (`region`): fine for a
+    # project-wide edit; an attribute no agent sends fails on that column too.
+    roles = '  billing:\n    "*": [read_only]\n    ops-bot: [ops]\n'
+    ws = make_modules_workspace(tmp_path, roles)
+    ops = ws / "policies" / "capabilities" / "ops.yaml"
+    ops.write_text(
+        "tools:\n"
+        "  wire_transfer: { mode: allow, constraints: ['ctx.region == \"eu\"'] }\n"
+    )
+    before = snapshot(ws)
+    assert all(c.passed for c in score({}, ws, before, "") if c.name in NAME_CHECKS)
+    ops.write_text(ops.read_text().replace("ctx.region", "ctx.regoin"))
+    checks = by_name(score({}, ws, before, ""))
+    assert checks[NAME_CHECKS[1]].detail == (
+        "[unknown-attribute] wire_transfer: ctx.regoin: no audit.json row sends it"
+    )
+
+
+def test_when_a_case_with_no_agent_is_on_a_policy_file_then_both_name_checks_fail(
+    tmp_path,
+) -> None:
+    ws = make_workspace(tmp_path)
+    policy = valid_policy(ws)
+    files = snapshot(ws)
+    checks = name_checks(policy, ws, files, files)
+    assert [(c.passed, c.detail) for c in checks] == [
+        (False, "a case without an agent needs a module tree")
+    ] * 2
+
+
+def test_when_the_case_names_no_agent_then_score_dry_runs_every_column(
+    tmp_path,
+) -> None:
+    roles = '  support:\n    "*": [read_only, payments]\n    shop-bot: [read_only]\n'
+    ws = make_modules_workspace(tmp_path, roles)
+    case = {"expect": {"decisions": [{"role": "support", **REFUND, "expect": "allow"}]}}
+    checks = by_name(score(case, ws, snapshot(ws), ""))
+    decision = next(c for n, c in checks.items() if n.startswith("decision"))
+    assert not decision.passed
+    assert decision.detail.endswith("(column shop-bot)")
+
+
+def test_when_the_case_names_no_agent_and_no_agent_has_a_manifest_then_both_name_checks_fail(
+    tmp_path,
+) -> None:
+    # The drift lints would check nothing, so an invented tool would pass.
+    ws = make_modules_workspace(tmp_path)
+    views = json.loads((ws / "agents.json").read_text())
+    (ws / "agents.json").write_text(
+        json.dumps([{**v, "manifest": None} for v in views])
+    )
+    files = snapshot(ws)
+    checks = name_checks(valid_policy(ws, None, True), ws, files, files)
+    assert [(c.passed, c.detail) for c in checks] == [
+        (False, "no agent in agents.json has a manifest")
+    ] * 2

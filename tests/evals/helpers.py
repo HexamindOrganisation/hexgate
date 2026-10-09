@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from evals.policy_writing.policy import Policy, effective_policy
+from evals.policy_writing.policy import Policy, effective_policy, policy_columns
 
 AGENT = "shop-bot"
 
@@ -81,6 +81,10 @@ AUDIT = [
 ]
 
 
+# The caller attributes shop-bot's audit rows show it sending.
+ATTRS = {"department"}
+
+
 POLICY = """\
 version: 1
 roles:
@@ -139,6 +143,13 @@ def valid_policy(ws: Path, agent: str | None = None, modules: bool = False) -> P
     return policy
 
 
+def role_wide_columns(ws: Path) -> dict[str, Policy]:
+    """A module tree's roles.yaml columns, as a case with no agent holds on them."""
+    columns, problems = policy_columns(ws, None, valid_policy(ws, None, True), True)
+    assert problems == []
+    return columns
+
+
 def install_skill(ws: Path) -> None:
     """As the harness does: under a dot path, so not a project file."""
     skill = ws / ".claude" / "skills" / "x" / "SKILL.md"
@@ -148,6 +159,12 @@ def install_skill(ws: Path) -> None:
 
 # `billing` adds payments to the read-only `default`.
 ROLES = "  default: [read_only]\n  billing: [read_only, payments]\n"
+# Valid on `"*"`, but ops-bot's own cell grants `default` refunds no named role
+# has: its resolved column fails the permissive-default lint.
+OPS_COLUMN_PERMISSIVE_DEFAULT = (
+    '  default:\n    "*": [read_only]\n    ops-bot: [read_only, payments]\n'
+    "  billing: [read_only]\n"
+)
 
 
 def make_modules_workspace(tmp_path: Path, roles: str = ROLES) -> Path:
@@ -168,14 +185,3 @@ def make_modules_workspace(tmp_path: Path, roles: str = ROLES) -> Path:
     )
     (ws / "roles.yaml").write_text(f"version: 1\nroles:\n{roles}")
     return ws
-
-
-def write_module(ws: Path, rel: str, text: str) -> None:
-    """Write `policies/<rel>`, e.g. `capabilities/ops.yaml`."""
-    (ws / "policies" / rel).write_text(text)
-
-
-def add_boundary_tool(ws: Path, entry: str) -> None:
-    """Add a `tools:` entry to the org boundary, e.g. `teleport: { mode: deny }`."""
-    org = ws / "policies" / "boundaries" / "org.yaml"
-    org.write_text(org.read_text() + f"  {entry}\n")

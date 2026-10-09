@@ -1450,6 +1450,20 @@ def test_when_a_collection_is_a_constant_then_the_message_says_so(constraint):
 # --- check_project over every agent's manifest -------------------------------
 
 
+def _reach(name, kind, targets, *, mode="allow", default_mode="allow"):
+    """A module whose ``agents:`` block governs reaching each target."""
+    return ModuleContent(
+        name=name,
+        kind=kind,
+        policy=AgentPolicy(
+            default_policy=BaseToolPolicy(mode=default_mode),
+            agents={t: {"mode": mode} for t in targets},
+        ),
+        source=f"{name}.yaml",
+        content_hash=f"hash-{name}",
+    )
+
+
 def _matrix(**columns):
     """One ``member`` role: agent column -> capability names."""
     return {
@@ -1565,9 +1579,10 @@ def test_when_an_agent_registered_without_a_manifest_then_shared_drift_is_skippe
 
 
 def test_when_manifests_is_empty_then_no_manifest_lints_run():
-    org = _mod("org", "boundary", {"lookpu": _allow()})
+    org = _mod("org", "boundary", {"refund": _allow()})
+    handoffs = _reach("handoffs", "capability", ["ghost_bot"])
 
-    lints = check_project([org], [], None, manifests={})
+    lints = check_project([org], [handoffs], None, manifests={})
 
     assert lints == []
 
@@ -1635,17 +1650,82 @@ def test_when_no_cell_imports_a_capability_then_it_is_still_drift_checked():
     ]
 
 
-def test_when_roles_name_an_unregistered_agent_then_drift_still_runs():
-    # A misspelled column is no agent: it doesn't make every agent's tools unknown.
-    org = _mod("org", "boundary", {"lookpu": _allow()})
-    read = _mod("read", "capability", {"lookup": _allow()})
-    roles = _matrix(**{"*": ["read"], "biling_bot": ["read"]})
+def test_when_a_reach_target_is_unknown_then_unknown_reach_target():
+    org = _reach("org", "boundary", ["ghost_bot"], mode="deny")
+    handoffs = _reach("handoffs", "capability", ["ghost_bot", "support_bot"])
 
-    lints = check_project([org], [read], roles, manifests=_MANIFESTS)
+    lints = check_project([org], [handoffs], None, manifests=_MANIFESTS)
+
+    reach = [lint for lint in lints if lint.code == "unknown-reach-target"]
+    # One per rule, though `via` lowers each to a tool and a handoff key.
+    assert [(lint.severity, lint.tier, lint.source) for lint in reach] == [
+        ("error", "boundary", "org.yaml"),
+        ("warning", "capability", "handoffs.yaml"),
+    ]
+    assert "'ghost_bot'" in reach[0].message
+
+
+@pytest.mark.parametrize(
+    ("mode", "default_mode", "severity"),
+    [
+        # Under an allow default the real target is not denied: fail-open.
+        ("deny", "allow", "error"),
+        ("deny", "deny", "info"),
+        # The ceiling still excludes the real target, so it fails closed.
+        ("allow", "deny", "warning"),
+        # A plain allow restricts nothing, so its typo changes nothing...
+        ("allow", "allow", "info"),
+        # ...but a missed approval leaves the real target unapproved.
+        ("approval_required", "allow", "error"),
+    ],
+)
+def test_when_a_boundary_names_an_unknown_reach_target_then_its_default_grades_it(
+    mode, default_mode, severity
+):
+    org = _reach("org", "boundary", ["ghost_bot"], mode=mode, default_mode=default_mode)
+
+    lints = check_project([org], [], None, manifests=_MANIFESTS)
+
+    assert [(lint.code, lint.severity) for lint in lints] == [
+        ("unknown-reach-target", severity)
+    ]
+
+
+def test_when_a_target_is_a_sub_agent_or_registered_then_it_is_known():
+    manifests = {"billing_bot": _manifest(subagents=["ledger_bot"], name="billing_bot")}
+    targets = ["billing_bot", "ledger_bot", "bare_bot"]
+    handoffs = _reach("handoffs", "capability", targets)
+
+    lints = check_project(
+        [], [handoffs], None, manifests=manifests, registered_agents=["bare_bot"]
+    )
+
+    assert lints == []
+
+
+def test_when_roles_name_an_unregistered_agent_then_drift_still_runs():
+    # A misspelled column is no agent: it neither widens the reach targets nor
+    # makes every agent's tools unknown.
+    org = _mod("org", "boundary", {"lookpu": _allow()})
+    handoffs = _reach("handoffs", "capability", ["biling_bot"])
+    roles = _matrix(**{"*": ["handoffs"], "biling_bot": ["handoffs"]})
+
+    lints = check_project([org], [handoffs], roles, manifests=_MANIFESTS)
 
     assert sorted((lint.code, lint.agent) for lint in lints) == [
+        ("unknown-agent", "biling_bot"),
+        ("unknown-reach-target", None),
         ("unknown-tool", None),
     ]
+
+
+def test_when_only_one_manifest_is_known_then_reach_targets_and_columns_are_not_checked():
+    handoffs = _reach("handoffs", "capability", ["ghost_bot"])
+    roles = _matrix(biling_bot=["handoffs"])
+
+    lints = check_project([], [handoffs], roles, manifest=_MANIFESTS["billing_bot"])
+
+    assert lints == []
 
 
 def test_when_both_manifest_and_manifests_are_passed_then_type_error():
@@ -1833,6 +1913,63 @@ def test_when_some_agents_tools_are_unknown_then_gate_args_are_still_checked():
     ]
 
 
+_OWN_CELLS = {"billing_bot": ["refunds"], "support_bot": ["read"]}
+
+
+@pytest.mark.parametrize(
+    ("star", "own_cells", "severity"),
+    [
+        # "*" grants refunds the column meant to withhold: the real agent escapes
+        (["read", "refunds"], {}, "error"),
+        # ...unless every agent has its own cell, so none falls back to "*"
+        (["read", "refunds"], _OWN_CELLS, "warning"),
+        (["read"], {}, "warning"),
+        (None, {}, "warning"),  # no "*" cell: the real agent gets nothing
+    ],
+)
+def test_when_a_roles_column_names_no_agent_then_unknown_agent(
+    star, own_cells, severity
+):
+    read = _mod("read", "capability", {"lookup": _allow()})
+    refunds = _mod("refunds", "capability", {"refund": _allow()})
+    member = {a: AgentBinding(capabilities=tuple(c)) for a, c in own_cells.items()}
+    member["biling_bot"] = AgentBinding(capabilities=("read",))
+    if star is not None:
+        member["*"] = AgentBinding(capabilities=tuple(star))
+    roles = {"default": {"*": AgentBinding()}, "member": member}
+
+    lints = check_project([], [read, refunds], roles, manifests=_MANIFESTS)
+
+    # Some rows leave `refunds` unimported, which is not what's under test.
+    rest = [lint for lint in lints if lint.code != "unused-capability"]
+    assert [(lint.code, lint.severity, lint.role, lint.agent) for lint in rest] == [
+        ("unknown-agent", severity, "member", "biling_bot")
+    ]
+
+
+@pytest.mark.parametrize(
+    ("registered", "expected"),
+    [
+        # Never fetches the project policy: the column doesn't apply.
+        ([], [("unknown-agent", "warning", "member", "ledger_bot")]),
+        (["ledger_bot"], []),
+    ],
+)
+def test_when_a_roles_column_names_a_sub_agent_then_only_a_registered_one_is_known(
+    registered, expected
+):
+    manifests = {"billing_bot": _manifest(subagents=["ledger_bot"], name="billing_bot")}
+    read = _mod("read", "capability", {"lookup": _allow()})
+    roles = _matrix(**{"*": ["read"], "ledger_bot": []})
+
+    lints = check_project(
+        [], [read], roles, manifests=manifests, registered_agents=registered
+    )
+
+    assert [(x.code, x.severity, x.role, x.agent) for x in lints] == expected
+    assert all("sub-agent that isn't registered" in x.message for x in lints)
+
+
 def test_when_an_unregistered_agents_cell_misreads_a_gate_arg_then_unknown_arg():
     reach = ModuleContent(
         "reach",
@@ -1849,6 +1986,7 @@ def test_when_an_unregistered_agents_cell_misreads_a_gate_arg_then_unknown_arg()
     lints = check_project([], [reach], _matrix(new_bot=["reach"]), manifests=_MANIFESTS)
 
     assert sorted((lint.code, lint.agent) for lint in lints) == [
+        ("unknown-agent", "new_bot"),
         ("unknown-arg", "new_bot"),
         ("unknown-arg", "new_bot"),
     ]
