@@ -35,12 +35,15 @@ from evals.policy_writing.policy import (
 )
 from evals.policy_writing.sources import (
     NAME_SOURCES,
+    ProjectAgents,
     SourceError,
     load_attributes,
     load_project_agents,
 )
-from hexgate.security import RESOLVED_POLICY_MARKER
 from hexgate.security.decision import Verdict
+
+# The longest a check's detail gets: enough to read, short enough for a report.
+DETAIL_MAX_CHARS = 800
 
 
 @dataclass
@@ -171,7 +174,7 @@ def _per_agent_check(
         for miss in missed
     ]
     passed = (any if any_one else all)(not missed for missed in found.values())
-    return Check(name, passed, "" if passed else "; ".join(detail))
+    return Check(name, passed, "" if passed else "; ".join(detail)[:DETAIL_MAX_CHARS])
 
 
 def _labels(d: dict) -> list[str]:
@@ -294,28 +297,29 @@ def name_checks(
     before: dict[str, str],
     after: dict[str, str],
     resolved: list[Policy] | None = None,
+    project: ProjectAgents | None = None,
 ) -> list[Check]:
     """Only names in agents.json and audit.json: the SDK's drift lints (`policy.drift`) for
     tools, skills, guards and arguments (a module tree's against every agent's
     manifest), and `policy.agent`'s caller attributes against audit.json, on
     its resolved roles only: `resolved`, the policy of every agent a role or
     project-wide case runs on (`policy` alone by default). Such a case has no agent, so
-    any agent's attributes count."""
+    any agent's attributes count. `project` is agents.json as `score` read it on a
+    module tree, None for a policy.yaml."""
     # The names are read after the run, so an edit to either file could
     # whitelist an invented name: trust them only if they are untouched.
     edited = [f for f in NAME_SOURCES if before.get(f) != after.get(f)]
     if edited:
         return _name_checks_failed(f"edited during the run: {edited}")
-    if policy.agent is None and RESOLVED_POLICY_MARKER not in policy.payload:
+    if policy.agent is None and project is None:
         # A single policy.yaml is one agent's: its names need that agent.
         return _name_checks_failed("a case without an agent needs a module tree")
     if policy.agent is not None and policy.manifest is None:
         return _name_checks_failed(
             f"agents.json has no readable manifest for {policy.agent!r}"
         )
-    # With no manifest at all, the drift lints check nothing. (A module tree
-    # only resolves once agents.json reads, so this read doesn't fail.)
-    if policy.agent is None and not load_project_agents(ws).manifests:
+    # With no manifest at all, the drift lints check nothing.
+    if policy.agent is None and project is not None and not project.manifests:
         return _name_checks_failed("no agent in agents.json has a manifest")
     try:
         attrs = load_attributes(ws, policy.agent)
@@ -330,7 +334,7 @@ def name_checks(
         f"[unknown-attribute] {ref}: no audit.json row sends it" for ref in sorted(refs)
     ]
     return [
-        Check(name, not found, "\n".join(found)[:800])
+        Check(name, not found, "\n".join(found)[:DETAIL_MAX_CHARS])
         for name, found in zip(NAME_CHECKS, (keys, args), strict=True)
     ]
 
@@ -401,9 +405,10 @@ def score(case: dict, ws: Path, before: dict[str, str], answer: str) -> list[Che
     policies: dict[str, Policy] = {}
     if policy is not None:
         policies, problems = agent_policies(ws, agent, policy, role_wide)
-    # The registered agents, for a role-wide case: agents.json has been read by now.
-    agents = load_project_agents(ws).registered if role_wide and policies else None
-    valid = Check("valid", not problems, "\n".join(problems)[:800])
+    # agents.json on a module tree: it has been read without error by now.
+    project = load_project_agents(ws) if modules and policy else None
+    agents = project.registered if role_wide and policies else None
+    valid = Check("valid", not problems, "\n".join(problems)[:DETAIL_MAX_CHARS])
     after = snapshot(ws)
     return [
         valid,
@@ -411,7 +416,7 @@ def score(case: dict, ws: Path, before: dict[str, str], answer: str) -> list[Che
         *superset_checks(policies, expect.get("superset", []), agents),
         # An invalid agent policy leaves none to dry-run, but the names still count.
         *(
-            name_checks(policy, ws, before, after, list(policies.values()))
+            name_checks(policy, ws, before, after, list(policies.values()), project)
             if policy
             else []
         ),

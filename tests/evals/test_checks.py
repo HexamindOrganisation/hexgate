@@ -8,7 +8,9 @@ import json
 import pytest
 
 from evals.policy_writing.checks import (
+    DETAIL_MAX_CHARS,
     NAME_CHECKS,
+    _per_agent_check,
     answer_checks,
     decision_checks,
     file_checks,
@@ -17,6 +19,7 @@ from evals.policy_writing.checks import (
     snapshot,
     superset_checks,
 )
+from evals.policy_writing.sources import load_project_agents
 from hexgate.security.models import skill_key
 from tests.evals.helpers import (
     AGENT,
@@ -846,7 +849,28 @@ def test_when_the_case_names_no_agent_and_no_agent_has_a_manifest_then_both_name
         json.dumps([{**v, "manifest": None} for v in views])
     )
     files = snapshot(ws)
-    checks = name_checks(valid_policy(ws, None, True), ws, files, files)
+    policy = valid_policy(ws, None, True)
+    checks = name_checks(policy, ws, files, files, project=load_project_agents(ws))
     assert [(c.passed, c.detail) for c in checks] == [
         (False, "no agent in agents.json has a manifest")
     ] * 2
+
+
+def test_when_a_policy_file_claims_to_be_resolved_then_a_case_with_no_agent_still_needs_a_module_tree(
+    tmp_path,
+) -> None:
+    # The layout decides, not a marker the agent could write into policy.yaml.
+    ws = make_workspace(tmp_path, POLICY + "_resolved: true\n")
+    checks = by_name(score({}, ws, snapshot(ws), ""))
+    assert (
+        checks[NAME_CHECKS[0]].detail == "a case without an agent needs a module tree"
+    )
+
+
+def test_when_many_agents_miss_then_the_detail_is_capped() -> None:
+    policies = {f"agent-{i}": None for i in range(20)}
+    check = _per_agent_check(
+        "x", policies, lambda _: ["a long miss " * 10], tagged=True
+    )
+    assert not check.passed
+    assert len(check.detail) == DETAIL_MAX_CHARS
