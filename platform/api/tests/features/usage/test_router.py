@@ -167,6 +167,7 @@ def test_a_clickhouse_failure_is_503_and_not_memoized(
 
     assert first.status_code == second.status_code == 503
     assert first.headers["Retry-After"] == "5"
+    assert first.json()["detail"] == "usage temporarily unavailable"
     assert fake_clickhouse.query.call_count == 2
 
 
@@ -188,6 +189,7 @@ def test_a_read_slower_than_the_timeout_is_503_and_not_memoized(
 
     assert first.status_code == second.status_code == 503
     assert first.headers["Retry-After"] == "5"
+    assert first.json()["detail"] == "usage temporarily unavailable"
     assert fake_clickhouse.query.call_count == 2
 
 

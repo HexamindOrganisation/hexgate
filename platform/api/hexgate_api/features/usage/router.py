@@ -12,7 +12,7 @@ from pydantic import BaseModel
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from hexgate_api.core.db import get_session
-from hexgate_api.deps.clickhouse import _audit_unavailable, require_clickhouse
+from hexgate_api.deps.clickhouse import clickhouse_unavailable, require_clickhouse
 from hexgate_api.deps.tokens import require_project
 from hexgate_api.features.agents.service import get_agent
 from hexgate_api.features.usage.paths import InvalidUsagePaths, parse_usage_paths
@@ -30,6 +30,7 @@ router = APIRouter()
 
 CACHE_CONTROL: Final = f"private, max-age={int(USAGE_MEMO_TTL_SECONDS)}"
 _AGENT_NOT_FOUND: Final = "agent not found"
+_USAGE_UNAVAILABLE: Final = "usage temporarily unavailable"
 
 
 class AgentUsageRead(BaseModel):
@@ -77,7 +78,7 @@ async def api_get_agent_usage(
         )
     except (ClickHouseError, TimeoutError) as exc:
         _log.warning("usage read failed for agent %r: %s", name, exc)
-        raise _audit_unavailable() from exc
+        raise clickhouse_unavailable(_USAGE_UNAVAILABLE) from exc
 
     response.headers["Cache-Control"] = CACHE_CONTROL
     return AgentUsageRead(
