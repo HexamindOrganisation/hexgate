@@ -1,0 +1,11 @@
+starting_project: support_bot_single_file
+agent: support-bot
+request: Let support refund orders, up to 50 USD.
+expect:
+  decisions:
+    - { role: support, tool: refund_order, args: { order_id: o1, amount: 50, currency: USD }, expect: allow }
+    - { role: support, tool: refund_order, args: { order_id: o1, amount: 51, currency: USD }, expect: deny }
+    - { role: support, tool: refund_order, args: { order_id: o1, amount: 50, currency: EUR }, expect: deny }
+    - { role: default, tool: refund_order, args: { order_id: o1, amount: 10, currency: USD }, expect: deny }
+    - { role: billing, tool: refund_order, args: { order_id: o1, amount: 400, currency: EUR }, expect: allow }
+    - { role: support, tool: refund_order, args: { order_id: o1, amount: 10, currency: USD }, expect: allow }
