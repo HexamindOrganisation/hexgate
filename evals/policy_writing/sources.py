@@ -37,7 +37,7 @@ def _views(ws: Path) -> list[dict]:
     """agents.json's `AgentManifestView`s, read as the endpoint returns them
     rather than as the SDK registers them: the view is looser (a tool's
     `description` may be null)."""
-    return json.loads((ws / AGENTS_JSON).read_text())
+    return json.loads((ws / AGENTS_JSON).read_text(encoding="utf-8"))
 
 
 @_reading
@@ -48,7 +48,7 @@ def load_attributes(ws: Path, agent: str) -> set[str]:
     Attributes are set per request and are in no manifest, so the known ones are
     the `attributes` keys of `agent`'s rows. No `audit.json` means none."""
     audit = ws / AUDIT_JSON
-    rows = json.loads(audit.read_text()) if audit.exists() else []
+    rows = json.loads(audit.read_text(encoding="utf-8")) if audit.exists() else []
     if isinstance(rows, dict):  # the endpoint's page shape, {rows, total, ...}
         rows = rows["rows"]
     return {
