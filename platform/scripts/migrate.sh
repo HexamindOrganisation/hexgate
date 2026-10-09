@@ -17,29 +17,12 @@ STAGE="${1:?usage: migrate.sh <stage>}"
 # wait forever, which is what a quiesced stack running a long index build wants.
 LOCK_TIMEOUT_MS="${HEXGATE_MIGRATE_LOCK_TIMEOUT_MS:-10000}"
 
-compose() {
-  docker compose -p "hexgate-$STAGE" \
-    --env-file "platform/.env.$STAGE" \
-    -f platform/docker-compose.deploy.yml "$@"
-}
+# shellcheck source=lib/stage.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib/stage.sh"
 
 run_postgres() {
   compose exec -T -e PGOPTIONS="-c lock_timeout=$LOCK_TIMEOUT_MS" postgres \
     psql -v ON_ERROR_STOP=1 -U hexgate -d hexgate <"$1"
-}
-
-# --database is not redundant: CLICKHOUSE_DB creates the database but does NOT
-# make it the user's default, so without this the session lands on `default`.
-# Every migration today is fully qualified (hexgate_audit.llm_message, ...) so
-# nothing depends on it yet -- but `make clickhouse-migrate` passes --database,
-# and an unqualified ALTER would then pass locally and fail here with
-# `Code: 60 ... UNKNOWN_TABLE`. Read from the container's own env, as the
-# credentials above are.
-run_clickhouse() {
-  compose exec -T clickhouse sh -c \
-    'clickhouse-client --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD" \
-      --database "$CLICKHOUSE_DB" --multiquery' \
-    <"$1"
 }
 
 # Applies every file in a directory through `runner`, stopping at the first
