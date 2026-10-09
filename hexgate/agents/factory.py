@@ -426,7 +426,6 @@ class HexgateAgent:
         overrides the default one-liner.
         """
         from hexgate.adapters.langchain.tools import SubagentTool
-        from hexgate.security.naming import canonical_name
 
         raw = self.name
         if not raw or not raw.strip():
@@ -437,7 +436,7 @@ class HexgateAgent:
         # Canonicalize to the identity the reach key + gate use; sanitize only the
         # LLM-facing tool name to ^[A-Za-z0-9_-]+$ (e.g. "Billing Bot" ->
         # delegate_to_Billing_Bot) — the reach target keeps the canonical name.
-        target = canonical_name(raw)
+        target = self._canonical_name
         default_name = f"delegate_to_{re.sub(r'[^A-Za-z0-9_-]', '_', target)}"
         # A `name` override is used verbatim (unlike the auto-sanitized default), so
         # validate it against the provider tool-name charset here — else the parent's
