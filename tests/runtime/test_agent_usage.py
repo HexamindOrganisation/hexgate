@@ -27,6 +27,7 @@ from hexgate.runtime.agent_usage import (
     UsageLedger,
     UsageLedgers,
     UsageMetric,
+    combined_namespace,
     ledger_namespace,
     new_usage_ledger,
 )
@@ -441,5 +442,114 @@ def test_leaving_out_an_unrecorded_run_never_reads_negative() -> None:
     ledger = new_usage_ledger(clock=_FakeClock())
 
     assert ledger_namespace(ledger, ["invocations_1h"], current_run_age=1.0) == {
+        "invocations_1h": 0
+    }
+
+
+# ---------------------------------------------------------------------------
+# combined_namespace: the platform snapshot plus the local term
+# ---------------------------------------------------------------------------
+
+_MARGIN = 30.0
+_FETCHED_AT = _START + _HOUR
+
+
+class _SinceCountingLedger(UsageLedger):
+    def __init__(self, ledger: UsageLedger) -> None:
+        self._inner = ledger
+        self.reads: list[float] = []
+
+    def since(self, instant: float) -> dict[UsageMetric, int]:
+        self.reads.append(instant)
+        return self._inner.since(instant)
+
+
+def _ledger_at(
+    clock: _FakeClock, *events: tuple[float, Mapping[UsageMetric, int]]
+) -> UsageLedger:
+    ledger = new_usage_ledger(clock=clock)
+    for at, amounts in events:
+        clock.now = at
+        ledger.record(amounts)
+    clock.now = _FETCHED_AT
+    return ledger
+
+
+def _combine(
+    ledger: UsageLedger,
+    platform: Mapping[str, int],
+    *,
+    current_run_age: float | None = None,
+) -> dict[str, int]:
+    return combined_namespace(
+        ledger,
+        platform,
+        since=_FETCHED_AT - _MARGIN,
+        since_age=_MARGIN,
+        current_run_age=current_run_age,
+    )
+
+
+def test_the_combined_namespace_adds_local_usage_to_each_platform_value() -> None:
+    ledger = _ledger_at(_FakeClock(), (_FETCHED_AT - 1, {UsageMetric.TOOL_CALLS: 2}))
+
+    namespace = _combine(ledger, {"tool_calls_1h": 5, "tool_calls_5m": 1})
+
+    assert namespace == {"tool_calls_1h": 7, "tool_calls_5m": 3}
+
+
+@pytest.mark.parametrize(
+    ("recorded_before_fetch", "expected"),
+    [(10.0, 5), (40.0, 4)],
+    ids=["inside-the-margin", "before-the-margin"],
+)
+def test_the_cut_off_reaches_back_by_the_ingest_margin(
+    recorded_before_fetch: float, expected: int
+) -> None:
+    """G7: an own event still in the pipeline at fetch time is counted locally."""
+    ledger = _ledger_at(
+        _FakeClock(),
+        (_FETCHED_AT - recorded_before_fetch, {UsageMetric.INVOCATIONS: 1}),
+    )
+
+    assert _combine(ledger, {"invocations_1h": 4}) == {"invocations_1h": expected}
+
+
+def test_combined_total_tokens_add_local_input_and_output() -> None:
+    ledger = _ledger_at(
+        _FakeClock(),
+        (_FETCHED_AT, {UsageMetric.INPUT_TOKENS: 3, UsageMetric.OUTPUT_TOKENS: 4}),
+    )
+
+    assert _combine(ledger, {"total_tokens_24h": 100}) == {"total_tokens_24h": 107}
+
+
+def test_the_combined_namespace_reads_the_ledger_once() -> None:
+    ledger = _SinceCountingLedger(_ledger_at(_FakeClock()))
+
+    _combine(ledger, {"tool_calls_5m": 0, "denials_1h": 0, "invocations_30d": 0})
+
+    assert ledger.reads == [_FETCHED_AT - _MARGIN]
+
+
+@pytest.mark.parametrize(
+    ("run_age", "expected"),
+    [(None, 6), (_MARGIN, 5), (_MARGIN + 1, 6)],
+    ids=["outside-a-run", "run-in-the-local-term", "run-older-than-the-cut-off"],
+)
+def test_the_current_run_is_left_out_only_when_it_is_local(
+    run_age: float | None, expected: int
+) -> None:
+    ledger = _ledger_at(_FakeClock(), (_FETCHED_AT, {UsageMetric.INVOCATIONS: 1}))
+
+    namespace = _combine(ledger, {"invocations_1h": 5}, current_run_age=run_age)
+
+    assert namespace == {"invocations_1h": expected}
+
+
+def test_the_combined_namespace_never_reads_negative() -> None:
+    ledger = _ledger_at(_FakeClock())
+
+    assert _combine(ledger, {"invocations_1h": 0}, current_run_age=0.0) == {
         "invocations_1h": 0
     }
