@@ -4,6 +4,7 @@ import logging
 
 import pytest
 
+from hexgate.agents.factory import HexgateAgent
 from hexgate.manifest import create_manifest
 from hexgate.manifest.google import create_google_manifest
 from hexgate.manifest.langchain import create_langchain_manifest
@@ -460,6 +461,34 @@ def test_hexgate_manifest_system_message_prompt():
     manifest = create_hexgate_manifest(agent)
     assert manifest.system_prompt == "hi"
     assert manifest.model == "test-model"
+
+
+def _named_hexgate_agent(name: str | None) -> HexgateAgent:
+    from langgraph.graph import END, START, StateGraph
+
+    builder = StateGraph(dict)
+    builder.add_node("noop", lambda state: state)
+    builder.add_edge(START, "noop")
+    builder.add_edge("noop", END)
+    return HexgateAgent(
+        graph=builder.compile(),
+        model="test-model",
+        tools=[],
+        system_prompt="hi",
+        name=name,
+    )
+
+
+def test_hexgate_manifest_registers_trimmed_name() -> None:
+    """The registered name matches the name runs, audits and usage report."""
+    manifest = create_hexgate_manifest(_named_hexgate_agent(" billing "))
+    assert manifest.name == "billing"
+
+
+@pytest.mark.parametrize("name", [None, "", "   "])
+def test_hexgate_manifest_rejects_blank_name(name: str | None) -> None:
+    with pytest.raises(ValueError, match="has no name"):
+        create_hexgate_manifest(_named_hexgate_agent(name))
 
 
 def test_openai_manifest_callable_instructions():

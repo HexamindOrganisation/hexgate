@@ -38,3 +38,16 @@ ROLE_OWNER = "owner"
 ROLE_ADMIN = "admin"
 ROLE_MEMBER = "member"
 ALL_ROLES = {ROLE_OWNER, ROLE_ADMIN, ROLE_MEMBER}
+
+# OAuth 2.1 scopes an MCP client may request (the authorization server's
+# scope registry). An unknown scope at /authorize is ``invalid_scope``, never
+# silently dropped.
+OAUTH_SCOPES = frozenset(
+    {"policy:read", "policy:write", "audit:read", "agents:read", "projects:read"}
+)
+# ``openapi_extra`` keys on a route. A route accepts an OAuth token only when
+# it declares the scope that covers it (default-deny), and the token's
+# ``projects`` claim must name the route's ``project_id`` unless the route is
+# tagged as having none -- the two org routes a client uses to find one.
+OAUTH_SCOPE_KEY = "x-oauth-scope"
+OAUTH_NO_PROJECT = "x-oauth-no-project"
