@@ -16,7 +16,8 @@ Bootstrap behaviour:
 The path is overridable via ``HEXGATE_KEYSTORE_PATH`` so prod can point at
 ``/var/lib/hexgate/keys`` (or wherever the operator stores secrets). The
 location is a directory; we always look for ``hexgate.priv`` and
-``hexgate.pub`` inside it.
+``hexgate.pub`` inside it, and beside them ``oauth.priv`` / ``oauth.pub``,
+the separate keypair that signs OAuth access tokens.
 """
 
 from __future__ import annotations
@@ -40,6 +41,10 @@ logger = logging.getLogger(__name__)
 
 PRIVATE_KEY_FILENAME = "hexgate.priv"
 PUBLIC_KEY_FILENAME = "hexgate.pub"
+# A separate keypair that signs OAuth access tokens and nothing else, so an
+# OAuth token never verifies where SDK tokens, sessions or bundles do.
+OAUTH_PRIVATE_KEY_FILENAME = "oauth.priv"
+OAUTH_PUBLIC_KEY_FILENAME = "oauth.pub"
 DEFAULT_KEYSTORE_DIR = API_ROOT / "data"
 
 
@@ -54,6 +59,15 @@ class KeyStore(Protocol):
 
     def fingerprint(self) -> str:
         """Return a short, stable identifier for the public key."""
+
+    def oauth_sign(self, payload: bytes) -> bytes:
+        """Return an Ed25519 signature over ``payload`` with the OAuth key."""
+
+    def oauth_public_key_bytes(self) -> bytes:
+        """Return the OAuth key's raw 32-byte Ed25519 public key."""
+
+    def oauth_fingerprint(self) -> str:
+        """Return a short, stable identifier for the OAuth public key."""
 
 
 def resolve_keystore_dir() -> Path:
@@ -85,14 +99,19 @@ class FileKeyStore:
         self._public_path = self._base_dir / PUBLIC_KEY_FILENAME
         self._private_key: Ed25519PrivateKey | None = None
         self._public_key: Ed25519PublicKey | None = None
+        self._oauth_private_path = self._base_dir / OAUTH_PRIVATE_KEY_FILENAME
+        self._oauth_public_path = self._base_dir / OAUTH_PUBLIC_KEY_FILENAME
+        self._oauth_private_key: Ed25519PrivateKey | None = None
+        self._oauth_public_key_bytes: bytes | None = None
 
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
 
     def ensure_keypair(self) -> None:
-        """Generate-or-load. Idempotent, safe to call on every startup."""
+        """Generate-or-load both keypairs (the only bootstrap deploy runs). Idempotent."""
         self._base_dir.mkdir(parents=True, exist_ok=True)
+        self._ensure_oauth_keypair()
         if self._private_path.exists():
             self._load()
             logger.info(
@@ -101,7 +120,10 @@ class FileKeyStore:
                 self.fingerprint(),
             )
             return
-        self._generate_and_persist()
+        self._private_key = self._generate_and_persist(
+            self._private_path, self._public_path
+        )
+        self._public_key = self._private_key.public_key()
         self._announce_first_run()
 
     # ------------------------------------------------------------------
@@ -161,32 +183,76 @@ class FileKeyStore:
         fingerprint — useful for sanity-checking that an SDK's embedded
         key matches what the platform is actually signing with.
         """
-        digest = hashlib.sha256(self.public_key_bytes()).hexdigest()
-        return f"sha256:{digest[:16]}"
+        return _fingerprint(self.public_key_bytes())
+
+    # ------------------------------------------------------------------
+    # OAuth key — signs OAuth access tokens and nothing else
+    # ------------------------------------------------------------------
+
+    def oauth_sign(self, payload: bytes) -> bytes:
+        """Return a 64-byte Ed25519 signature over ``payload`` with the OAuth key."""
+        return self._require_oauth_key().sign(payload)
+
+    def oauth_public_key_bytes(self) -> bytes:
+        """Return the OAuth key's raw 32-byte Ed25519 public key."""
+        if self._oauth_public_key_bytes is None:
+            raise RuntimeError("keystore not initialised; call ensure_keypair() first")
+        return self._oauth_public_key_bytes
+
+    def oauth_fingerprint(self) -> str:
+        """Return the OAuth key's fingerprint — the access tokens' ``kid``."""
+        return _fingerprint(self.oauth_public_key_bytes())
 
     # ------------------------------------------------------------------
     # Internals
     # ------------------------------------------------------------------
 
+    def _ensure_oauth_keypair(self) -> None:
+        """Load or generate the OAuth keypair; no banner, as losing it costs ≤10 min of tokens."""
+        if self._oauth_private_path.exists():
+            key = self._read_private_key(self._oauth_private_path)
+        else:
+            key = self._generate_and_persist(
+                self._oauth_private_path, self._oauth_public_path
+            )
+        self._oauth_private_key = key
+        self._oauth_public_key_bytes = _raw_public_bytes(key)
+        logger.info(
+            "oauth signing key at %s (fingerprint=%s)",
+            self._oauth_private_path,
+            self.oauth_fingerprint(),
+        )
+
+    def _require_oauth_key(self) -> Ed25519PrivateKey:
+        if self._oauth_private_key is None:
+            raise RuntimeError("keystore not initialised; call ensure_keypair() first")
+        return self._oauth_private_key
+
     def _load(self) -> None:
+        """Load the root keypair from disk."""
+        self._private_key = self._read_private_key(self._private_path)
+        self._public_key = self._private_key.public_key()
+
+    def _read_private_key(self, private_path: Path) -> Ed25519PrivateKey:
         """Read and parse an existing private key from disk.
 
         Raises with a loud message if the file is the wrong size — silently
         regenerating in that case would invalidate every token already
         minted, which is much worse than a startup failure.
         """
-        private_bytes = self._private_path.read_bytes()
+        private_bytes = private_path.read_bytes()
         if len(private_bytes) != 32:
             raise RuntimeError(
-                f"corrupted private key at {self._private_path} "
+                f"corrupted private key at {private_path} "
                 f"(expected 32 bytes, got {len(private_bytes)}). "
                 f"Refusing to silently regenerate — this would invalidate every token in the wild."
             )
-        self._private_key = Ed25519PrivateKey.from_private_bytes(private_bytes)
-        self._public_key = self._private_key.public_key()
+        return Ed25519PrivateKey.from_private_bytes(private_bytes)
 
-    def _generate_and_persist(self) -> None:
-        """Generate a fresh keypair and write both halves to disk atomically.
+    def _generate_and_persist(
+        self, private_path: Path, public_path: Path
+    ) -> Ed25519PrivateKey:
+        """Generate a fresh keypair, write both halves to disk atomically, return it.
 
         Race protection uses the write-temp-then-link pattern so a
         concurrent reader never observes the canonical file in a
@@ -215,16 +281,13 @@ class FileKeyStore:
             format=serialization.PrivateFormat.Raw,
             encryption_algorithm=serialization.NoEncryption(),
         )
-        public_bytes = private_key.public_key().public_bytes(
-            encoding=serialization.Encoding.Raw,
-            format=serialization.PublicFormat.Raw,
-        )
+        public_bytes = _raw_public_bytes(private_key)
 
         # Temp file in the same directory so ``os.link`` stays intra-FS
         # (links across mounts fail with EXDEV). Random suffix so two
         # concurrent threads pick non-colliding names.
-        tmp_path = self._private_path.with_name(
-            f".{self._private_path.name}.tmp.{secrets.token_hex(8)}"
+        tmp_path = private_path.with_name(
+            f".{private_path.name}.tmp.{secrets.token_hex(8)}"
         )
         fd = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         try:
@@ -233,25 +296,23 @@ class FileKeyStore:
             os.close(fd)
 
         try:
-            os.link(tmp_path, self._private_path)
+            os.link(tmp_path, private_path)
         except FileExistsError:
             # Another thread already linked the canonical path — adopt
             # their keypair instead of overwriting it.
             tmp_path.unlink(missing_ok=True)
-            self._load()
-            return
+            return self._read_private_key(private_path)
         finally:
             # Always clean up the temp, whether link succeeded or raced.
             tmp_path.unlink(missing_ok=True)
 
-        self._public_path.write_bytes(public_bytes)
+        public_path.write_bytes(public_bytes)
         try:
-            os.chmod(self._public_path, 0o644)
+            os.chmod(public_path, 0o644)
         except OSError:
             pass
 
-        self._private_key = private_key
-        self._public_key = private_key.public_key()
+        return private_key
 
     def _announce_first_run(self) -> None:
         """Log a loud, one-shot warning after generating a fresh keypair.
@@ -278,6 +339,20 @@ class FileKeyStore:
             self.fingerprint(),
             bar,
         )
+
+
+def _raw_public_bytes(private_key: Ed25519PrivateKey) -> bytes:
+    """Return the raw 32-byte public half of ``private_key``."""
+    return private_key.public_key().public_bytes(
+        encoding=serialization.Encoding.Raw,
+        format=serialization.PublicFormat.Raw,
+    )
+
+
+def _fingerprint(public_key_bytes: bytes) -> str:
+    """Return ``sha256:<first 16 hex chars of SHA-256(public_key_bytes)>``."""
+    digest = hashlib.sha256(public_key_bytes).hexdigest()
+    return f"sha256:{digest[:16]}"
 
 
 # Process-wide signing keystore singleton. Construction is side-effect-free
