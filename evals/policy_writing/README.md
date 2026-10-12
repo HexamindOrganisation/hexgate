@@ -173,6 +173,29 @@ No language model or Docker: every `solution/` must pass, every
 `wrong_answer/` must fail, and doing nothing must fail every case that asks
 for a change.
 
+### Run in Inspect
+
+`task.py` runs the same cases through [Inspect AI](https://inspect.aisi.org.uk)
+(`uv sync --extra dev --extra evals`): one sample per case in a fresh sandbox
+holding only the starting project, scored on the files left behind. No model,
+no Docker: `reference` copies `solution/`, `wrong_answers` copies `wrong_answer/`
+(only the cases that have one), `noop` copies nothing. Run from the repo root:
+`python -m` puts it on the import path, as `evals` is not an installed package.
+
+```bash
+uv run python -m inspect_ai eval evals/policy_writing/task.py --model none \
+    -T agent=reference --log-dir evals/policy_writing/logs   # or wrong_answers, noop
+make policy-eval-check                          # all three; asserts nothing, tests/evals/test_task.py does
+uv run inspect view --log-dir evals/policy_writing/logs  # the check list and a diff per changed file
+```
+
+- `-T cases=explicit_request`: only the cases whose id starts with one of the
+  comma-separated prefixes.
+- `--epochs 3 --epochs-reducer mean,at_least_3`: each case's mean and whether
+  it passed on every attempt.
+- `-T agent=claude` (Claude Code in a Docker sandbox) lands in PR 5 and refuses
+  to build until then.
+
 ## Adding a case
 
 1. Add `cases/<category>/<name>/case.yaml`. Include the boundary values (the

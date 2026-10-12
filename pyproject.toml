@@ -67,6 +67,12 @@ dev = [
     "pytest-cov>=6.0.0",
     "ruff>=0.12.2",
 ]
+# Inspect runs the policy-writing eval set (evals/policy_writing/task.py).
+# Both release every few days and are pre-1.0, so they are pinned exactly.
+evals = [
+    "inspect-ai==0.3.278",
+    "inspect-swe==0.2.71",
+]
 
 [tool.ruff.lint]
 # Keep ruff's default rules (E4/E7/E9, F) and add isort (I) on top via

@@ -109,6 +109,13 @@ platform-api-check: ## Lint + test (with coverage) on the platform API
 policy-build: ## Compile examples/example_agent/policy.yaml to a bundle under /tmp/m2-bundle
 	$(UV) hexgate policy build examples/example_agent/policy.yaml --out /tmp/m2-bundle
 
+.PHONY: policy-eval-check
+policy-eval-check: ## Run the policy-writing eval on our own answers (reference, wrong_answers, noop) for `inspect view --log-dir evals/policy_writing/logs`; asserts nothing, the pass/fail assertions live in tests/evals/test_task.py
+	for agent in reference wrong_answers noop; do \
+	  $(UV) python -m inspect_ai eval evals/policy_writing/task.py --model none -T agent=$$agent \
+	    --log-dir evals/policy_writing/logs; \
+	done
+
 .PHONY: policy-test-wasm
 policy-test-wasm: ## Smoke a wasm-engine decision on the example policy
 	$(UV) hexgate policy test examples/example_agent/policy.yaml \
