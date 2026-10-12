@@ -55,6 +55,9 @@ _NOT_FOUND: Final = 404
 _REJECTED_STATUSES: Final = frozenset({401, 403, _NOT_FOUND})
 REJECTED_RETRY_SECONDS: Final[float] = 300.0
 _EXECUTOR_THREAD_PREFIX: Final = "hexgate-usage"
+# Single-flight per agent already, so workers only keep one slow agent from
+# delaying another's refresh.
+_EXECUTOR_MAX_WORKERS: Final = 4
 
 
 class OnUnavailable(StrEnum):
@@ -432,19 +435,21 @@ _usage_sources_lock = threading.Lock()
 def get_usage_source(api_key: str, client: HexgateClient) -> PlatformUsageSource:
     """Get-or-create the shared source for this key and platform.
 
-    Its executor's worker is joined at interpreter exit, so a hung background
-    fetch can delay exit by up to the client's refresh timeout.
+    Its executor's workers drain every queued fetch at interpreter exit, so exit
+    can wait up to the refresh timeout per round of ``_EXECUTOR_MAX_WORKERS``
+    queued agents.
     """
     cache_key = (api_key, client.config.base_url)
-    # Held across creation: each source owns an executor thread, and a lost race
-    # would leak one.
+    # Held across creation: each source owns an executor, and a lost race would
+    # leak its threads.
     with _usage_sources_lock:
         source = _usage_sources.get(cache_key)
         if source is None:
             source = _usage_sources[cache_key] = PlatformUsageSource(
                 fetcher=client,
                 executor=ThreadPoolExecutor(
-                    max_workers=1, thread_name_prefix=_EXECUTOR_THREAD_PREFIX
+                    max_workers=_EXECUTOR_MAX_WORKERS,
+                    thread_name_prefix=_EXECUTOR_THREAD_PREFIX,
                 ),
                 settings=UsageRefreshSettings.from_env(),
                 clock=_monotonic,
