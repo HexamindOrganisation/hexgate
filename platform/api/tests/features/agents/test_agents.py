@@ -32,6 +32,9 @@ from hexgate_api.models import Agent, AgentVersion, Skill
 from hexgate_api.seeds.defaults import ensure_default_project
 from hexgate_api.constants import DEFAULT_PROJECT_ID, DEFAULT_USER_ID
 
+_OPA_AVAILABLE = shutil.which("opa") is not None
+_needs_opa = pytest.mark.skipif(not _OPA_AVAILABLE, reason="opa not on PATH")
+
 
 @pytest_asyncio.fixture
 async def session_factory():
@@ -985,6 +988,7 @@ def test_bearer_get_agent_returns_304_on_matching_etag(
     assert second.status_code == 304
 
 
+@_needs_opa
 def test_get_agent_etag_changes_when_only_the_guard_stance_changes(
     client: TestClient, session_factory
 ) -> None:
@@ -1046,6 +1050,7 @@ def test_get_agent_etag_changes_when_only_the_guard_stance_changes(
     )
 
 
+@_needs_opa
 def test_get_agent_etag_changes_when_only_the_usage_fail_mode_changes(
     client: TestClient, session_factory
 ) -> None:
@@ -1146,10 +1151,6 @@ def test_me_key_rejects_missing_bearer(client: TestClient) -> None:
 # Re-registers of an existing agent leave the operator's policy_yaml
 # alone — only the AgentVersion snapshot history grows.
 # ---------------------------------------------------------------------------
-
-
-_OPA_AVAILABLE = shutil.which("opa") is not None
-_needs_opa = pytest.mark.skipif(not _OPA_AVAILABLE, reason="opa not on PATH")
 
 
 def _register_payload(name: str, tools: list[str]) -> dict:
