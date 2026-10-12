@@ -4,7 +4,7 @@
     "manifest": {
       "name": "front-desk",
       "description": null,
-      "framework": "langchain",
+      "framework": "openai",
       "model": null,
       "system_prompt": null,
       "tools": [
@@ -14,7 +14,7 @@
           "input_schema": {
             "properties": {
               "customer_id": {
-                "title": "customer_id",
+                "title": "Customer Id",
                 "type": "string"
               }
             },
@@ -29,15 +29,15 @@
           "input_schema": {
             "properties": {
               "to": {
-                "title": "to",
+                "title": "To",
                 "type": "array"
               },
               "subject": {
-                "title": "subject",
+                "title": "Subject",
                 "type": "string"
               },
               "body": {
-                "title": "body",
+                "title": "Body",
                 "type": "string"
               }
             },
@@ -54,15 +54,15 @@
           "input_schema": {
             "properties": {
               "order_id": {
-                "title": "order_id",
+                "title": "Order Id",
                 "type": "string"
               },
               "amount": {
-                "title": "amount",
+                "title": "Amount",
                 "type": "number"
               },
               "currency": {
-                "title": "currency",
+                "title": "Currency",
                 "type": "string"
               }
             },
@@ -72,39 +72,84 @@
               "currency"
             ]
           }
+        },
+        {
+          "name": "billing_bot",
+          "description": "Billing questions and invoices",
+          "input_schema": {
+            "properties": {
+              "input": {
+                "title": "Input",
+                "type": "string"
+              }
+            },
+            "required": [
+              "input"
+            ]
+          }
+        },
+        {
+          "name": "refund_bot",
+          "description": "Processes refunds",
+          "input_schema": {
+            "properties": {
+              "input": {
+                "title": "Input",
+                "type": "string"
+              }
+            },
+            "required": [
+              "input"
+            ]
+          }
+        },
+        {
+          "name": "admin_bot",
+          "description": "Account administration",
+          "input_schema": {
+            "properties": {
+              "input": {
+                "title": "Input",
+                "type": "string"
+              }
+            },
+            "required": [
+              "input"
+            ]
+          }
         }
       ],
       "skills": null,
       "subagents": [
         {
           "name": "billing-bot",
-          "via": "tool"
+          "via": "handoff"
+        },
+        {
+          "name": "refund-bot",
+          "via": "handoff"
+        },
+        {
+          "name": "admin-bot",
+          "via": "handoff"
         },
         {
           "name": "billing-bot",
-          "via": "handoff"
+          "via": "tool"
         },
         {
           "name": "refund-bot",
           "via": "tool"
         },
         {
-          "name": "refund-bot",
-          "via": "handoff"
-        },
-        {
           "name": "admin-bot",
           "via": "tool"
-        },
-        {
-          "name": "admin-bot",
-          "via": "handoff"
         }
       ],
       "guards": null
     },
     "version": 1,
-    "content_hash": "5dd138ba83b3f941a79c7a6ac810736c7198627917a6f131a91dc4d9eea669c9",
+    "content_hash": "1d10905c2a5e1d0c69cba9a5e9847f56bb0695ab9ac65083ad41f2cabbb7e64f",
     "updated_at": "2026-10-01T00:00:00Z"
   }
 ]

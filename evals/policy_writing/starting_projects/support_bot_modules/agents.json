@@ -4,7 +4,7 @@
     "manifest": {
       "name": "support-bot",
       "description": null,
-      "framework": "langchain",
+      "framework": "openai",
       "model": null,
       "system_prompt": null,
       "tools": [
@@ -14,7 +14,7 @@
           "input_schema": {
             "properties": {
               "customer_id": {
-                "title": "customer_id",
+                "title": "Customer Id",
                 "type": "string"
               }
             },
@@ -29,7 +29,7 @@
           "input_schema": {
             "properties": {
               "order_id": {
-                "title": "order_id",
+                "title": "Order Id",
                 "type": "string"
               }
             },
@@ -44,15 +44,15 @@
           "input_schema": {
             "properties": {
               "order_id": {
-                "title": "order_id",
+                "title": "Order Id",
                 "type": "string"
               },
               "amount": {
-                "title": "amount",
+                "title": "Amount",
                 "type": "number"
               },
               "currency": {
-                "title": "currency",
+                "title": "Currency",
                 "type": "string"
               }
             },
@@ -69,11 +69,11 @@
           "input_schema": {
             "properties": {
               "customer_id": {
-                "title": "customer_id",
+                "title": "Customer Id",
                 "type": "string"
               },
               "amount": {
-                "title": "amount",
+                "title": "Amount",
                 "type": "number"
               }
             },
@@ -89,15 +89,15 @@
           "input_schema": {
             "properties": {
               "to": {
-                "title": "to",
+                "title": "To",
                 "type": "array"
               },
               "subject": {
-                "title": "subject",
+                "title": "Subject",
                 "type": "string"
               },
               "body": {
-                "title": "body",
+                "title": "Body",
                 "type": "string"
               }
             },
@@ -114,7 +114,7 @@
           "input_schema": {
             "properties": {
               "reason": {
-                "title": "reason",
+                "title": "Reason",
                 "type": "string"
               }
             },
@@ -129,7 +129,7 @@
           "input_schema": {
             "properties": {
               "name": {
-                "title": "name",
+                "title": "Name",
                 "type": "string"
               }
             },
@@ -144,12 +144,42 @@
           "input_schema": {
             "properties": {
               "customer_id": {
-                "title": "customer_id",
+                "title": "Customer Id",
                 "type": "string"
               }
             },
             "required": [
               "customer_id"
+            ]
+          }
+        },
+        {
+          "name": "billing_bot",
+          "description": "Billing questions and invoices",
+          "input_schema": {
+            "properties": {
+              "input": {
+                "title": "Input",
+                "type": "string"
+              }
+            },
+            "required": [
+              "input"
+            ]
+          }
+        },
+        {
+          "name": "admin_bot",
+          "description": "Account administration",
+          "input_schema": {
+            "properties": {
+              "input": {
+                "title": "Input",
+                "type": "string"
+              }
+            },
+            "required": [
+              "input"
             ]
           }
         }
@@ -158,25 +188,25 @@
       "subagents": [
         {
           "name": "billing-bot",
-          "via": "tool"
+          "via": "handoff"
+        },
+        {
+          "name": "admin-bot",
+          "via": "handoff"
         },
         {
           "name": "billing-bot",
-          "via": "handoff"
-        },
-        {
-          "name": "admin-bot",
           "via": "tool"
         },
         {
           "name": "admin-bot",
-          "via": "handoff"
+          "via": "tool"
         }
       ],
       "guards": null
     },
     "version": 1,
-    "content_hash": "dae64316ea7825b0ae5649789cc03f0e3d2d2d5533c0b9d011b4656acd306033",
+    "content_hash": "71f4b47504b52d593f54808be9c4e4df4ae0109857c2793e0e4e86749925206c",
     "updated_at": "2026-10-01T00:00:00Z"
   }
 ]
