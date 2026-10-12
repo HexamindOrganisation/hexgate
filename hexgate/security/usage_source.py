@@ -184,8 +184,8 @@ class PlatformUsageSource:
         # Held only for dict reads and writes, never across HTTP.
         self._state_lock = threading.Lock()
         self._snapshots: dict[str, UsageSnapshot] = {}
-        # Read when a fetch runs, not when it was scheduled, so a queued fetch
-        # picks up a policy's new paths.
+        # Every path any caller has asked for, read when a fetch runs, so callers
+        # wanting different paths share one snapshot instead of evicting each other.
         self._wanted: dict[str, frozenset[str]] = {}
         self._last_attempt: dict[str, _Attempt] = {}
         self._in_flight: set[str] = set()
@@ -272,7 +272,7 @@ class PlatformUsageSource:
     def _remember(self, agent: str, paths: frozenset[str]) -> UsageSnapshot | None:
         with self._state_lock:
             if paths:
-                self._wanted[agent] = paths
+                self._wanted[agent] = self._wanted.get(agent, frozenset()) | paths
             return self._snapshots.get(agent)
 
     def _tier(self, agent: str, paths: frozenset[str]) -> _Tier:

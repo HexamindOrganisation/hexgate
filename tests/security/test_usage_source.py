@@ -308,6 +308,22 @@ def test_a_background_fetch_asks_for_the_paths_wanted_when_it_runs() -> None:
     assert rig.fetcher.calls[-1][1] == sorted(_TWO_PATHS)
 
 
+def test_callers_wanting_different_paths_share_one_snapshot() -> None:
+    executor = _HeldExecutor()
+    rig = _seeded(executor)
+    other = frozenset({_FIVE_MIN})
+
+    rig.source.read(_AGENT, other, rig.ledger)
+    executor.run_all()
+    readings = [
+        rig.source.read(_AGENT, paths, rig.ledger) for paths in (_ONE_PATH, other)
+    ]
+
+    assert rig.fetcher.calls[-1][1] == sorted(_TWO_PATHS)
+    assert [reading.state for reading in readings] == [UsageState.FRESH] * 2
+    assert executor.jobs == []
+
+
 def test_a_closed_executor_never_reaches_the_reader() -> None:
     rig = _seeded(_ClosedExecutor())
     rig.clock.now += _BETWEEN_TIERS
