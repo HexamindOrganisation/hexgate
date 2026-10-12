@@ -32,7 +32,7 @@ Mixin policies (``is_mixin: true``) can only be referenced via ``inherits``
 from __future__ import annotations
 
 import json
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Callable, Hashable, Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
@@ -270,18 +270,16 @@ class PolicySet:
     def _compute_guard_stance(self) -> dict[str, dict] | None:
         """Fold every role's baseline into one agent-level stance (see
         :meth:`guard_stance`); raise :class:`PolicySetError` on a divergent baseline."""
-        baselines = {
-            json.dumps({n: r.enabled for n, r in p.guards.items()}, sort_keys=True)
-            for p in self._policies.values()
-        }
-        if len(baselines) > 1:
-            roles = ", ".join(sorted(self._policies))
-            raise PolicySetError(
-                "baseline guards must resolve to the same stance across all roles (v1 "
-                f"governs the agent, not the caller); roles {roles} differ. Put shared "
-                "guards in a mixin every role inherits."
+        baseline = json.loads(
+            _agent_wide(
+                self._policies,
+                "baseline guards",
+                "v1 governs the agent, not the caller",
+                lambda p: json.dumps(
+                    {n: r.enabled for n, r in p.guards.items()}, sort_keys=True
+                ),
             )
-        baseline = json.loads(next(iter(baselines))) if baselines else {}
+        )
         return {"baseline": baseline} if baseline else None
 
     def effective_guards(self, tool_name: str) -> dict[str, bool]:
@@ -657,16 +655,31 @@ def _agent_on_unavailable(policies: Mapping[str, AgentPolicy]) -> OnUnavailable:
     Agent-wide because the usage snapshot is fetched per agent. A role that says
     nothing reads ``allow``, so a silent role and a ``deny`` role disagree: put the
     block in a mixin every role inherits."""
-    by_role = {role: policy.usage_on_unavailable() for role, policy in policies.items()}
-    modes = set(by_role.values())
-    if len(modes) > 1:
-        detail = ", ".join(f"{role}={mode}" for role, mode in sorted(by_role.items()))
+    return _agent_wide(
+        policies,
+        "usage.on_unavailable",
+        "the usage snapshot is per agent",
+        AgentPolicy.usage_on_unavailable,
+    )
+
+
+def _agent_wide[V: Hashable](
+    policies: Mapping[str, AgentPolicy],
+    field: str,
+    reason: str,
+    value_of: Callable[[AgentPolicy], V],
+) -> V:
+    """The one value of an agent-level ``field`` every role resolves to, or
+    :class:`PolicySetError` naming each role's value."""
+    by_role = {role: value_of(policy) for role, policy in policies.items()}
+    values = set(by_role.values())
+    if len(values) > 1:
+        detail = ", ".join(f"{role}={value}" for role, value in sorted(by_role.items()))
         raise PolicySetError(
-            "usage.on_unavailable must resolve to the same value across all roles "
-            f"(the usage snapshot is per agent); got {detail}. Put the usage block "
-            "in a mixin every role inherits."
+            f"{field} must resolve to the same value across all roles ({reason}); "
+            f"got {detail}. Put it in a mixin every role inherits."
         )
-    return modes.pop()
+    return values.pop()
 
 
 def _resolve_inheritance(

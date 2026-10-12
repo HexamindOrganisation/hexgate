@@ -360,7 +360,7 @@ def test_validate_reports_divergent_guard_stance(client: TestClient) -> None:
     )
     body = resp.json()
     assert body["ok"] is False
-    assert any("same stance across all roles" in e["message"] for e in body["errors"])
+    assert any("same value across all roles" in e["message"] for e in body["errors"])
 
 
 def test_validate_reports_divergent_usage_fail_mode(client: TestClient) -> None:
