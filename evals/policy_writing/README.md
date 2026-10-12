@@ -206,7 +206,8 @@ make policy-eval CASES=explicit_request   # one case, 3 epochs; builds the image
 ```
 
 Of your environment only that token enters the container; the task refuses one
-holding `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN`, which would take precedence.
+holding `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN`: Claude Code prefers either
+over the subscription token and would silently bill the key per token.
 
 ## Adding a case
 

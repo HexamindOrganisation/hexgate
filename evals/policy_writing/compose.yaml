@@ -1,4 +1,4 @@
-# Inspect's sandbox for `agent=claude` (task.py checks IS_SANDBOX). The token comes from the host's env; never an ANTHROPIC_* key, it would take precedence.
+# Inspect's sandbox for `agent=claude` (task.py checks IS_SANDBOX). Only the token comes in from the host's env: Claude Code prefers ANTHROPIC_AUTH_TOKEN or ANTHROPIC_API_KEY when set, silently billing the key instead of the subscription.
 services:
   default:
     build:

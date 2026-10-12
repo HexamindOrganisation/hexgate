@@ -227,8 +227,8 @@ async def check_sandbox_env(sb: SandboxEnvironment) -> None:
         raise RuntimeError("not the compose.yaml sandbox: agent=claude runs only there")
     if found := API_KEY_VARS & names:
         raise RuntimeError(
-            f"{', '.join(sorted(found))} set in the sandbox: it would take "
-            f"precedence over {TOKEN_VAR}"
+            f"{', '.join(sorted(found))} set in the sandbox: Claude Code would "
+            f"use it instead of {TOKEN_VAR} and bill it per token"
         )
 
 
