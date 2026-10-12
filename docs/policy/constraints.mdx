@@ -322,8 +322,10 @@ one run with `run.*`. How far a value can be off:
     platform, so its own events still in the pipeline are never missed;
   - a call that hits `approval_required` counts as a tool call when the gate fires,
     even if the approval is refused.
-- **It can read low** when the SDK's span queue drops spans under saturation. The
-  local count still sees them, so only other processes' drops are lost.
+- **It can read low** when the SDK's span queue drops spans under saturation.
+  Dropped spans never reach the platform, and the local count only adds back this
+  process's last 30 seconds before each fetch, so drops older than that are lost,
+  this process's included.
 - **Not latching.** A denial clears as usage ages out of the window
   ([Rolling, not latching](#what-the-counters-mean)).
 </Warning>
