@@ -14,9 +14,12 @@ agent plus this process's own ledger. When the platform can't answer, a value fa
 back to the ledger alone, unless the policy opts into `deny`.
 
 - A value MUST be `snapshot + ledger.since(fetched_at − USAGE_INGEST_MARGIN_SECONDS)`.
-  The margin MUST stay above the span pipeline's lag, and (snapshot age + margin) MUST
-  stay within the ledger's fine tier (`FINE_RETENTION_SECONDS`, 300 s). The current run
-  is left out of whichever term holds it.
+  The margin MUST stay above the span pipeline's lag. While (snapshot age + margin) is
+  within the ledger's fine tier (`FINE_RETENTION_SECONDS`, 300 s), the cut-off is exact
+  to the second. Past it (a snapshot older than 270 s at the defaults, still read up to
+  `max_staleness_seconds`), the ledger term MUST come from a coarser tier that counts
+  the cut-off's whole bucket: an over-count of under one minute, never an under-count.
+  The current run is left out of whichever term holds it.
 - The usage fetch MUST NOT add a sequential network call at run start. It joins the
   policy and ban fetches concurrently, and a run waits only when the snapshot is
   missing or older than `sync_after_seconds`. A decision MUST NOT make a network call.
@@ -56,9 +59,11 @@ would be in neither term. That is an under-count, so the quota would fail open b
 exactly the amount the pipeline was behind. Starting the ledger term
 `USAGE_INGEST_MARGIN_SECONDS` (30 s) earlier means an event can instead be in both terms.
 That is an over-count, and it errs in the conservative direction. The margin has to stay
-above the pipeline lag for this to hold. The ledger has to keep 1-second buckets for at
-least (snapshot age + margin), or the subtraction would read a coarser tier and lose
-the cut-off.
+above the pipeline lag for this to hold. The ledger keeps 1-second buckets for 300 s,
+which covers (snapshot age + margin) for any snapshot that is refreshing normally. An
+older snapshot, kept as last-good while the platform is unreachable, reads the minute
+tier instead. There the bucket holding the cut-off counts whole, so the error stays an
+over-count of under a minute, in the same conservative direction.
 
 The default is **fail-open** because a soft quota that is stricter on failure than on
 success is incoherent. With fail-closed by default, a platform blip (a deploy, a
