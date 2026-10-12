@@ -1,9 +1,8 @@
-# Role bindings. A role is a named set of capabilities, not a policy — it lives
-# outside policies/ on purpose. Boundaries (policies/boundaries/) apply to every
-# role automatically and are never listed here.
-#
-#   hexgate policy resolve --dir deploy/demo_policies              # all roles
-#   hexgate policy resolve --dir deploy/demo_policies --role billing
+# Which capabilities (policies/capabilities/) each role gets. The boundaries
+# (policies/boundaries/) apply to every role on their own, so they aren't listed.
+# To see each role's resulting policy, from this directory:
+#   hexgate policy resolve --dir .                 # every role
+#   hexgate policy resolve --dir . --role billing  # one role
 version: 1
 roles:
   default: [read_only]                        # fallback: read-only

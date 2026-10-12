@@ -1,6 +1,6 @@
-# Org boundary (security-owned). Floor posture: default_policy allow means it
-# only SUBTRACTS what it names — unlisted tools pass through to capabilities.
-# Its `allow` on refund_order is a CEILING (a cap), not a grant.
+# Org boundary, owned by security. It applies to every role and can only take
+# permissions away: a tool it doesn't name is decided by the capabilities, and
+# its `allow` on refund_order is a cap (at most 1000), not a grant.
 default_policy: { mode: allow }
 tools:
   delete_database: { mode: deny }                       # absolute — no layer can undo
