@@ -13,9 +13,14 @@
           "description": "Search the web",
           "input_schema": {
             "properties": {
-              "query": {"title": "query", "type": "string"}
+              "query": {
+                "title": "query",
+                "type": "string"
+              }
             },
-            "required": ["query"]
+            "required": [
+              "query"
+            ]
           }
         },
         {
@@ -23,9 +28,14 @@
           "description": "List a customer's orders",
           "input_schema": {
             "properties": {
-              "customer_id": {"title": "customer_id", "type": "string"}
+              "customer_id": {
+                "title": "customer_id",
+                "type": "string"
+              }
             },
-            "required": ["customer_id"]
+            "required": [
+              "customer_id"
+            ]
           }
         },
         {
@@ -33,11 +43,24 @@
           "description": "Refund an order (currency: ISO code)",
           "input_schema": {
             "properties": {
-              "order_id": {"title": "order_id", "type": "string"},
-              "amount": {"title": "amount", "type": "number"},
-              "currency": {"title": "currency", "type": "string"}
+              "order_id": {
+                "title": "order_id",
+                "type": "string"
+              },
+              "amount": {
+                "title": "amount",
+                "type": "number"
+              },
+              "currency": {
+                "title": "currency",
+                "type": "string"
+              }
             },
-            "required": ["order_id", "amount", "currency"]
+            "required": [
+              "order_id",
+              "amount",
+              "currency"
+            ]
           }
         },
         {
@@ -45,10 +68,19 @@
           "description": "Send a wire transfer",
           "input_schema": {
             "properties": {
-              "amount": {"title": "amount", "type": "number"},
-              "iban": {"title": "iban", "type": "string"}
+              "amount": {
+                "title": "amount",
+                "type": "number"
+              },
+              "iban": {
+                "title": "iban",
+                "type": "string"
+              }
             },
-            "required": ["amount", "iban"]
+            "required": [
+              "amount",
+              "iban"
+            ]
           }
         },
         {
@@ -56,11 +88,24 @@
           "description": "Send an email (to: addresses)",
           "input_schema": {
             "properties": {
-              "to": {"title": "to", "type": "array"},
-              "subject": {"title": "subject", "type": "string"},
-              "body": {"title": "body", "type": "string"}
+              "to": {
+                "title": "to",
+                "type": "array"
+              },
+              "subject": {
+                "title": "subject",
+                "type": "string"
+              },
+              "body": {
+                "title": "body",
+                "type": "string"
+              }
             },
-            "required": ["to", "subject", "body"]
+            "required": [
+              "to",
+              "subject",
+              "body"
+            ]
           }
         },
         {
@@ -68,9 +113,14 @@
           "description": "Read a file (file_path: relative to the workspace root)",
           "input_schema": {
             "properties": {
-              "file_path": {"title": "file_path", "type": "string"}
+              "file_path": {
+                "title": "file_path",
+                "type": "string"
+              }
             },
-            "required": ["file_path"]
+            "required": [
+              "file_path"
+            ]
           }
         }
       ],

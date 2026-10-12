@@ -13,9 +13,14 @@
           "description": "List a customer's orders",
           "input_schema": {
             "properties": {
-              "customer_id": {"title": "customer_id", "type": "string"}
+              "customer_id": {
+                "title": "customer_id",
+                "type": "string"
+              }
             },
-            "required": ["customer_id"]
+            "required": [
+              "customer_id"
+            ]
           }
         },
         {
@@ -23,9 +28,14 @@
           "description": "Look up one order",
           "input_schema": {
             "properties": {
-              "order_id": {"title": "order_id", "type": "string"}
+              "order_id": {
+                "title": "order_id",
+                "type": "string"
+              }
             },
-            "required": ["order_id"]
+            "required": [
+              "order_id"
+            ]
           }
         },
         {
@@ -33,11 +43,24 @@
           "description": "Refund an order (currency: ISO code)",
           "input_schema": {
             "properties": {
-              "order_id": {"title": "order_id", "type": "string"},
-              "amount": {"title": "amount", "type": "number"},
-              "currency": {"title": "currency", "type": "string"}
+              "order_id": {
+                "title": "order_id",
+                "type": "string"
+              },
+              "amount": {
+                "title": "amount",
+                "type": "number"
+              },
+              "currency": {
+                "title": "currency",
+                "type": "string"
+              }
             },
-            "required": ["order_id", "amount", "currency"]
+            "required": [
+              "order_id",
+              "amount",
+              "currency"
+            ]
           }
         },
         {
@@ -45,10 +68,19 @@
           "description": "Credit a customer's account",
           "input_schema": {
             "properties": {
-              "customer_id": {"title": "customer_id", "type": "string"},
-              "amount": {"title": "amount", "type": "number"}
+              "customer_id": {
+                "title": "customer_id",
+                "type": "string"
+              },
+              "amount": {
+                "title": "amount",
+                "type": "number"
+              }
             },
-            "required": ["customer_id", "amount"]
+            "required": [
+              "customer_id",
+              "amount"
+            ]
           }
         },
         {
@@ -56,11 +88,24 @@
           "description": "Send an email (to: addresses)",
           "input_schema": {
             "properties": {
-              "to": {"title": "to", "type": "array"},
-              "subject": {"title": "subject", "type": "string"},
-              "body": {"title": "body", "type": "string"}
+              "to": {
+                "title": "to",
+                "type": "array"
+              },
+              "subject": {
+                "title": "subject",
+                "type": "string"
+              },
+              "body": {
+                "title": "body",
+                "type": "string"
+              }
             },
-            "required": ["to", "subject", "body"]
+            "required": [
+              "to",
+              "subject",
+              "body"
+            ]
           }
         },
         {
@@ -68,9 +113,14 @@
           "description": "Escalate to a human",
           "input_schema": {
             "properties": {
-              "reason": {"title": "reason", "type": "string"}
+              "reason": {
+                "title": "reason",
+                "type": "string"
+              }
             },
-            "required": ["reason"]
+            "required": [
+              "reason"
+            ]
           }
         },
         {
@@ -78,9 +128,14 @@
           "description": "Delete a database",
           "input_schema": {
             "properties": {
-              "name": {"title": "name", "type": "string"}
+              "name": {
+                "title": "name",
+                "type": "string"
+              }
             },
-            "required": ["name"]
+            "required": [
+              "name"
+            ]
           }
         },
         {
@@ -88,18 +143,35 @@
           "description": "Delete a customer",
           "input_schema": {
             "properties": {
-              "customer_id": {"title": "customer_id", "type": "string"}
+              "customer_id": {
+                "title": "customer_id",
+                "type": "string"
+              }
             },
-            "required": ["customer_id"]
+            "required": [
+              "customer_id"
+            ]
           }
         }
       ],
       "skills": null,
       "subagents": [
-        {"name": "billing-bot", "via": "tool"},
-        {"name": "billing-bot", "via": "handoff"},
-        {"name": "admin-bot", "via": "tool"},
-        {"name": "admin-bot", "via": "handoff"}
+        {
+          "name": "billing-bot",
+          "via": "tool"
+        },
+        {
+          "name": "billing-bot",
+          "via": "handoff"
+        },
+        {
+          "name": "admin-bot",
+          "via": "tool"
+        },
+        {
+          "name": "admin-bot",
+          "via": "handoff"
+        }
       ],
       "guards": null
     },
