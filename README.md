@@ -108,7 +108,7 @@ Contributor setup, `make` targets, and the test suites are documented in
 version:
 
 ```bash
-make install-dev     # uv sync --extra dev (first time only)
+make install-dev     # uv sync --extra dev --extra evals (first time only)
 make check           # lint + fmt-check + test (matches CI)
 ```
 

@@ -5,7 +5,7 @@ remember the `uv` incantations.
 
 ```bash
 make help            # list every target with descriptions
-make install-dev     # uv sync --extra dev (first time only)
+make install-dev     # uv sync --extra dev --extra evals (first time only)
 make test            # full SDK test suite, quiet
 make check           # lint + fmt-check + test (matches CI)
 make test-one T=tests/security/test_bundle.py   # single file
@@ -106,7 +106,7 @@ once and `make` picks it up:
 
 ```bash
 export UV_PROJECT_ENVIRONMENT=/Users/<you>/micromamba/envs/<your-env>
-uv sync --extra dev           # one-time: install dev deps into that env
+uv sync --extra dev --extra evals  # one-time: install dev deps into that env
 make test                     # now runs against the micromamba env
 ```
 
