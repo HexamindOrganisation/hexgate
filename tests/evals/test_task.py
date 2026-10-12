@@ -62,12 +62,13 @@ def test_when_claude_then_task_build_names_pr_5() -> None:
         task.policy_writing(agent="claude")
 
 
-@pytest.mark.parametrize(
-    "cases", ["explicit_request", ["explicit_request"], "zzz,explicit"]
-)
-def test_cases_prefix_selects_the_case(cases) -> None:
+@pytest.mark.parametrize("cases", ["a/", ["a/"], "zzz,a/", ["zzz", " a/ "]])
+def test_cases_prefix_selects_the_matching_cases(cases, monkeypatch) -> None:
+    # Synthetic ids, so the test still holds as categories gain cases.
+    ids = ["a/one", "a/two", "b/one"]
+    monkeypatch.setattr(task, "CASES", {i: {**task.CASES[CASE], "id": i} for i in ids})
     dataset = task.policy_writing(agent="reference", cases=cases).dataset
-    assert [s.id for s in dataset] == [CASE]
+    assert [s.id for s in dataset] == ["a/one", "a/two"]
 
 
 def test_when_a_case_has_no_wrong_answer_then_only_wrong_answers_skips_it(
