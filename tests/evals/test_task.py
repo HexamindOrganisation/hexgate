@@ -17,7 +17,7 @@ from inspect_ai.scorer import CORRECT, INCORRECT  # noqa: E402
 
 from evals.policy_writing import task  # noqa: E402
 from evals.policy_writing.cases import apply_solution, starting_files  # noqa: E402
-from evals.policy_writing.checks import Check  # noqa: E402
+from evals.policy_writing.checks import Check, snapshot  # noqa: E402
 
 CASE = "explicit_request/support_refund_cap"
 ANSWERS = ("solution", "wrong_answer", "preserve.yaml")
@@ -97,10 +97,26 @@ def test_sample_holds_the_starting_project_and_nothing_of_ours() -> None:
 # `grade` is the step after the pull: a workspace on the host, as the sandbox left it.
 
 
+def write(root: Path, files: dict[str, str]) -> None:
+    for rel, text in files.items():
+        (root / rel).parent.mkdir(parents=True, exist_ok=True)
+        (root / rel).write_bytes(text.encode("utf-8"))
+
+
+def test_hashes_match_snapshot(tmp_path: Path) -> None:
+    # `grade` hashes `before` in memory; it must agree with `snapshot` of the same files.
+    files = {
+        "policy.yaml": "version: 1\n",
+        "policies/boundaries/org.yaml": "# café → 50 €\n",
+    }
+    write(tmp_path, files)
+    assert task.hashes(files) == snapshot(tmp_path)
+
+
 @pytest.fixture
 def ws(tmp_path: Path) -> Path:
     """The starting project with our solution on top, as the reference agent leaves it."""
-    task.write_files(tmp_path, starting_files(task.CASES[CASE]))
+    write(tmp_path, starting_files(task.CASES[CASE]))
     apply_solution(task.CASES[CASE], tmp_path)
     return tmp_path
 

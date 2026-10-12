@@ -15,6 +15,7 @@ Every sandbox read and write goes through `sandbox()`, so the Claude Code agent
 from __future__ import annotations
 
 import difflib
+import hashlib
 import tempfile
 from dataclasses import asdict
 from pathlib import Path
@@ -188,11 +189,9 @@ def agent_ran(state: TaskState) -> checks.Check | None:
 
 def grade(case: dict, ws: Path, answer: str, ran: checks.Check | None = None) -> Score:
     """Score a workspace pulled to the host. `before` is the starting project as
-    the sandbox received it, written on the host: never the sandbox's own files."""
+    the sandbox received it, hashed on the host: never the sandbox's own files."""
     start = starting_files(case)
-    with tempfile.TemporaryDirectory() as tmp:
-        write_files(Path(tmp), start)
-        before = checks.snapshot(Path(tmp))
+    before = hashes(start)
     after = checks.snapshot(ws)
     size = sum((ws / rel).stat().st_size for rel in after)
     results = [ran] if ran else []
@@ -214,11 +213,12 @@ def grade(case: dict, ws: Path, answer: str, ran: checks.Check | None = None) ->
     )
 
 
-def write_files(root: Path, files: dict[str, str]) -> None:
-    for rel, text in files.items():
-        (root / rel).parent.mkdir(parents=True, exist_ok=True)
-        # The bytes Inspect sends to the sandbox, whatever the host locale.
-        (root / rel).write_text(text, encoding="utf-8")
+def hashes(files: dict[str, str]) -> dict[str, str]:
+    """`checks.snapshot` of these files, from the UTF-8 bytes Inspect sends to the sandbox."""
+    return {
+        rel: hashlib.sha256(text.encode("utf-8")).hexdigest()
+        for rel, text in files.items()
+    }
 
 
 def diffs(
