@@ -630,6 +630,32 @@ def test_complete_call_writes_a_gate_call_as_decide_sends_it(call, completed) ->
 
 
 @pytest.mark.parametrize(
+    ("call", "completed"),
+    [
+        ({"tool": "agent.run"}, {"tool": "agent.run", "args": {}}),
+        (
+            {"tool": "agent.tool: ops-bot"},
+            {
+                "tool": "agent.tool:ops-bot",
+                "args": {"target": "ops-bot", "via": "tool"},
+            },
+        ),
+    ],
+)
+def test_when_the_case_has_no_agent_then_complete_call_leaves_the_agent_out(
+    call, completed
+) -> None:
+    # Each agent's dry-run sends its own name (`agent_policies`).
+    complete_call(call, None)
+    assert call == completed
+
+
+def test_when_the_case_has_no_agent_then_complete_call_refuses_one_in_args() -> None:
+    with pytest.raises(CaseError, match="each agent sends its own name"):
+        complete_call({"tool": "agent.run", "args": {"agent": AGENT}}, None)
+
+
+@pytest.mark.parametrize(
     ("call", "error"),
     [
         # A gate's own arg with another value would be silently replaced.

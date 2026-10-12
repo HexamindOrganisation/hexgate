@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from evals.policy_writing.policy import manifest_can_call
 from evals.policy_writing.sources import (
     SourceError,
     load_attribute_values,
@@ -25,19 +26,20 @@ from evals.policy_writing.sources import (
 )
 from hexgate.egress.model import connect_to_args, http_to_args
 from hexgate.egress.tcp import tcp_to_args
-from hexgate.manifest.models import InputSchema
+from hexgate.manifest.models import AgentFramework, AgentManifest, InputSchema
 from hexgate.security.models import (
     AGENT_RUN_TOOL,
-    agent_reach_target,
     gate_args,
     is_agent_reach_key,
     is_skill_key,
+    skill_key,
 )
 from hexgate.security.network import (
     EGRESS_TOOL_ARGS,
     NET_HTTP_REQUEST,
     NET_TCP_CONNECT,
 )
+from hexgate.security.skill_gate import CONTENT_HASH_PREFIX
 
 # JSON-schema types an argument value must have.
 _TYPES = {
@@ -54,30 +56,37 @@ _TYPES = {
 class Known:
     """What one agent's calls may use, from its starting project."""
 
-    schemas: dict[str, InputSchema]  # the agent's tools
-    skills: set[str]
-    agents: set[str]  # the possible reach targets: agents.json's, and sub-agents
+    agent: str
+    manifest: AgentManifest
+    registered: frozenset[str]  # agents.json's agents, the possible reach targets
     attr_types: dict[str, set[str]]  # each attribute, with the JSON types it arrived as
 
+    @property
+    def schemas(self) -> dict[str, InputSchema]:
+        """The agent's tools."""
+        return {t.name: t.input_schema for t in self.manifest.tools}
 
-def load_known(project: Path, agent: str) -> Known:
-    """`agent`'s known names and types, from `agents.json` and `audit.json`.
 
-    Raises `SourceError` for a malformed file or an agent with no manifest.
+def load_known(project: Path, agent: str | None) -> list[Known]:
+    """What `agent` knows, from `agents.json` and `audit.json`; with no `agent`
+    (a role-wide case), what each agent with a manifest knows, any agent's
+    attributes counting for each, as the scorer's name checks count them.
+
+    Raises `SourceError` for a malformed file, an agent with no manifest, or
+    no manifest at all.
     """
     agents = load_project_agents(project)
-    if agent not in agents.manifests:
+    if agent is not None and agent not in agents.manifests:
         raise SourceError(f"agents.json has no manifest for agent {agent!r}")
-    manifest = agents.manifests[agent]
+    if not agents.manifests:
+        raise SourceError("no agent in agents.json has a manifest")
     values = load_attribute_values(project, agent)
-    return Known(
-        schemas={t.name: t.input_schema for t in manifest.tools},
-        skills={k.name for k in manifest.skills or []},
-        # A manifest's sub-agent is a reach target too, as the SDK counts it.
-        agents=set(agents.registered)
-        | {s.name for m in agents.manifests.values() for s in m.subagents or []},
-        attr_types={k: {_json_type(v) for v in vs} for k, vs in values.items()},
-    )
+    attr_types = {k: {_json_type(v) for v in vs} for k, vs in values.items()}
+    return [
+        Known(name, manifest, agents.registered, attr_types)
+        for name, manifest in sorted(agents.manifests.items())
+        if agent in (None, name)
+    ]
 
 
 def _is_a(value, want) -> bool:
@@ -179,24 +188,19 @@ def unknown_names(call: dict, known: Known) -> list[str]:
     """Tool, skill, agent, argument and attribute names `call` uses that are unknown.
 
     The call is completed first: a gate call carries its gate's key and args.
+    A tool, skill or reach target is known when the agent can make the call
+    (`policy.can_call`, as the scorer judges a role-wide case): a reach key
+    needs the sub-agent edge for that `via`, not just a registered target.
     """
     tool, args = call["tool"], call.get("args", {})
+    if not manifest_can_call(known.manifest, known.agent, tool, known.registered):
+        return [tool]
     if tool in EGRESS_TOOL_ARGS:
         allowed = EGRESS_TOOL_ARGS[tool]
-    elif tool == AGENT_RUN_TOOL:
+    elif tool == AGENT_RUN_TOOL or is_agent_reach_key(tool) or is_skill_key(tool):
         allowed = gate_args(tool)
-    elif is_agent_reach_key(tool):
-        if agent_reach_target(tool) not in known.agents:
-            return [tool]
-        allowed = gate_args(tool)
-    elif is_skill_key(tool):
-        if args["skill"] not in known.skills:
-            return [tool]
-        allowed = gate_args(tool)
-    elif tool in known.schemas:
-        allowed = set(known.schemas[tool].properties)
     else:
-        return [tool]
+        allowed = set(known.schemas[tool].properties)
     bad = [f"args.{a}" for a in args if a not in allowed]
     return bad + [
         f"ctx.{a}" for a in call.get("attributes", {}) if a not in known.attr_types
@@ -224,11 +228,37 @@ def _bad_args(args: dict, schema: InputSchema) -> list[str]:
     return bad
 
 
+def _bad_skill_args(tool: str, args: dict, framework: AgentFramework) -> list[str]:
+    """The skill gate's args no adapter sends: a null `content_hash` (it hashes
+    the skill's body), and a null `file_path` on a read or a script (the path
+    read or run), or on a LangChain skill load (its `SKILL.md`). A constraint
+    on either denies the null, so a `deny` check would pass whatever the policy.
+    """
+    bad = []
+    content_hash = args.get("content_hash")
+    if not (
+        isinstance(content_hash, str) and content_hash.startswith(CONTENT_HASH_PREFIX)
+    ):
+        bad.append(
+            f"args.content_hash={content_hash!r}, sent {CONTENT_HASH_PREFIX}<hex>"
+        )
+    loads = tool.startswith(skill_key("instructions", ""))
+    if args.get("file_path") is None and (
+        not loads or framework is AgentFramework.LANGCHAIN
+    ):
+        bad.append("args.file_path missing")
+    return bad
+
+
 def bad_values(call: dict, known: Known) -> list[str]:
     """Values `call` gives its tool's arguments or the caller's attributes that
     no real call would carry. Run after `unknown_names` finds nothing."""
-    schema = known.schemas.get(call["tool"])
-    bad = _bad_args(call.get("args", {}), schema) if schema else []
+    tool, args = call["tool"], call.get("args", {})
+    if is_skill_key(tool):
+        bad = _bad_skill_args(tool, args, known.manifest.framework)
+    else:
+        schema = known.schemas.get(tool)
+        bad = _bad_args(args, schema) if schema else []
     # A quoted "2" for an int attribute is denied by `ctx.clearance >= 2`
     # whatever the threshold.
     return bad + [

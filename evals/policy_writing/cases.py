@@ -26,7 +26,13 @@ from pydantic import (
     model_validator,
 )
 
-from evals.policy_writing.calls import bad_values, complete, load_known, unknown_names
+from evals.policy_writing.calls import (
+    Known,
+    bad_values,
+    complete,
+    load_known,
+    unknown_names,
+)
 from evals.policy_writing.checks import is_module_tree, snapshot
 from evals.policy_writing.policy import CaseError, complete_call, dump_json
 from evals.policy_writing.sources import SourceError
@@ -191,7 +197,7 @@ def _timestamps(value) -> list[str]:
     return [str(value)] if isinstance(value, datetime.datetime) else []
 
 
-def _complete_calls(path: Path, agent: str, calls: list[dict]) -> None:
+def _complete_calls(path: Path, agent: str | None, calls: list[dict]) -> None:
     """Complete each call as its gate sends it, refusing one no policy could
     dry-run: egress calls by `calls.complete`, agent and skill gates by the
     scorer's own `policy.complete_call`."""
@@ -206,27 +212,42 @@ def _complete_calls(path: Path, agent: str, calls: list[dict]) -> None:
                     raise CaseError(f"{path}: {tool}: quote the timestamps {stamps}")
                 call[key] = json.loads(dump_json(call[key]))
         if bad := complete(call):
-            raise CaseError(f"{path}: {tool}: not what {agent} sends: {bad}")
+            raise CaseError(f"{path}: {tool}: not what an agent sends: {bad}")
         try:
             complete_call(call, agent)
         except CaseError as exc:
             raise CaseError(f"{path}: {tool}: {exc}") from exc
 
 
-def _check_calls(path: Path, case: dict) -> None:
-    """The case's agent is in agents.json, and its calls use only what it knows."""
+def _check_calls(path: Path, case: dict, calls: list[dict]) -> None:
+    """The case's agent is in agents.json, and each of `calls` uses only what
+    it knows; with no agent (a role-wide case), what some agent knows, as the
+    scorer needs one agent that can make each call."""
     agent = case["agent"]
     try:
         known = load_known(case["project"], agent)
     except SourceError as exc:
         raise CaseError(f"{path}: {exc}") from exc
-    for call in _calls(case["expect"]):
-        unknown = unknown_names(call, known)
-        if unknown:
-            raise CaseError(f"{path}: {call['tool']}: unknown to {agent}: {unknown}")
-        bad = bad_values(call, known)
-        if bad:
-            raise CaseError(f"{path}: {call['tool']}: not {agent}'s schema: {bad}")
+    who = agent or "every agent"
+    for call in calls:
+        problems = [_problems(call, k) for k in known]
+        if not all(problems):
+            continue
+        # An agent that can make the call says what is wrong with it; when none
+        # can, the first agent's unknown names.
+        kind, bad = min(problems, key=lambda p: p[0] == "unknown")
+        if kind == "unknown":
+            raise CaseError(f"{path}: {call['tool']}: unknown to {who}: {bad}")
+        raise CaseError(f"{path}: {call['tool']}: not {who}'s schema: {bad}")
+
+
+def _problems(call: dict, known: Known) -> tuple[str, list[str]] | None:
+    """What is wrong with `call` for one agent, by kind, or None."""
+    if unknown := unknown_names(call, known):
+        return "unknown", unknown
+    if bad := bad_values(call, known):
+        return "schema", bad
+    return None
 
 
 def _check_entries(case_dir: Path) -> None:
@@ -269,7 +290,9 @@ def _protect(path: Path, expect: dict, files: dict[str, str]) -> None:
         expect["unchanged"] = unchanged
 
 
-def _load_preserved(project: Path, files: dict[str, str], agent: str) -> list[dict]:
+def _load_preserved(
+    project: Path, files: dict[str, str], agent: str | None
+) -> list[dict]:
     """The project's `preserve.yaml` calls, completed like the case's own."""
     # A `preserve.yml` or `Preserve.yaml` would be skipped (or, on a
     # case-insensitive disk, read) and also handed to the agent as a project file.
@@ -312,10 +335,11 @@ def _load_case(root: Path, case_dir: Path) -> dict:
     # Before the merge, so a preserved call and the case's own entry for it
     # compare equal however much of the gate's arguments each spells out.
     _complete_calls(path, case["agent"], _calls(expect))
+    _check_calls(path, case, _calls(expect))
     preserved = _load_preserved(case["project"], files, case["agent"])
+    _check_calls(case["project"] / PRESERVE, case, preserved)
     if preserved:
         expect["decisions"] = _merge_preserved(expect.get("decisions", []), preserved)
-    _check_calls(path, case)
     return case
 
 

@@ -228,6 +228,54 @@ def test_a_case_without_an_agent_loads_on_a_module_tree(tmp_path: Path) -> None:
     assert loaded["agent"] is None
 
 
+def _role_wide(*decisions: dict) -> dict:
+    expect = {"decisions": list(decisions)}
+    return {"starting_project": "shop", "request": "Do it.", "expect": expect}
+
+
+def test_a_case_without_an_agent_checks_each_call_against_every_agent(
+    tmp_path: Path,
+) -> None:
+    # One shop-bot call and one ops-bot call (with ops-bot's attribute).
+    wire = {"role": "billing", "tool": "wire_transfer", "args": {"iban": "FR1"}}
+    wire |= {"attributes": {"region": "eu"}, "expect": "deny"}
+    run = {"role": "billing", "tool": "agent.run", "expect": "allow"}
+    [loaded] = load_cases(_eval_set(tmp_path, _role_wide(DENY_500, wire, run)))
+    # Each agent's dry-run sends its own name, so none is written in.
+    assert loaded["expect"]["decisions"][2]["args"] == {}
+
+
+@pytest.mark.parametrize(
+    ("call", "error"),
+    [
+        ({**DENY_500, "tool": "refund_ordr"}, "unknown to every agent"),
+        # shop-bot can make the call, so its schema says what is wrong.
+        (
+            {**DENY_500, "args": {"order_id": "o1"}},
+            "not every agent's schema: \\['args.amount missing'\\]",
+        ),
+        (
+            {"role": "billing", "tool": "agent.run", "args": {"agent": AGENT}}
+            | {"expect": "allow"},
+            "each agent sends its own name",
+        ),
+    ],
+)
+def test_when_no_agent_can_make_a_call_then_a_case_without_one_is_refused(
+    tmp_path: Path, call: dict, error: str
+) -> None:
+    with pytest.raises(CaseError, match=error):
+        load_cases(_eval_set(tmp_path, _role_wide(call)))
+
+
+def test_a_bad_preserved_call_is_reported_against_preserve_yaml(
+    tmp_path: Path,
+) -> None:
+    root = _eval_set(tmp_path, _case(), preserve=[{**REFUND_10, "tool": "refund_ordr"}])
+    with pytest.raises(CaseError, match="shop/preserve.yaml: refund_ordr: unknown"):
+        load_cases(root)
+
+
 def test_a_case_without_an_agent_is_refused_on_one_policy_yaml(tmp_path: Path) -> None:
     case = {"starting_project": "shop", "request": "Do it.", "expect": {}}
     with pytest.raises(CaseError, match="without `agent` needs a module tree"):
@@ -258,8 +306,8 @@ def test_load_rejects_a_case_one_level_too_shallow(tmp_path: Path) -> None:
 
 
 def test_load_reads_an_unquoted_yaml_date_as_its_string(tmp_path: Path) -> None:
-    # As `policy test` reads it; merging with preserve.yaml keys each call by
-    # its JSON, which a date object would crash.
+    # As `policy test` reads it, so the case's call and a preserved one compare
+    # by the same JSON.
     root = _eval_set(tmp_path, _case(), preserve=[REFUND_10])
     call = (
         "{role: billing, tool: refund_order, args: {order_id: 2026-03-01, amount: 1},"
@@ -296,14 +344,16 @@ def test_load_refuses_an_unquoted_yaml_timestamp(tmp_path: Path) -> None:
 
 def test_load_completes_and_checks_a_script_call(tmp_path: Path) -> None:
     # The scorer's complete_call fills a script's args, null where left out;
-    # unknown_names must then accept them.
+    # the checks accept them, the path and hash the adapters always send given.
     view = agent_view(
         AGENT, manifest_tool("refund_order", order_id="string", amount="number")
     )
     view["manifest"]["skills"] = [{"name": "pdf", "description": "pdf"}]
     root = _eval_set(tmp_path, _case())
     _write(root / "starting_projects" / "shop" / "agents.json", json.dumps([view]))
-    call = {"role": "billing", "tool": "skill.script:pdf", "expect": "deny"}
+    sent = {"file_path": "scripts/x.sh", "content_hash": "sha256:ab12"}
+    call = {"role": "billing", "tool": "skill.script:pdf", "args": sent}
+    call["expect"] = "deny"
     _write(
         root / "cases" / "cat" / "c" / "case.yaml", _case(expect={"decisions": [call]})
     )
@@ -311,8 +361,8 @@ def test_load_completes_and_checks_a_script_call(tmp_path: Path) -> None:
     assert case["expect"]["decisions"][0]["args"] == {
         "skill": "pdf",
         "via": "script",
-        "file_path": None,
-        "content_hash": None,
+        "file_path": "scripts/x.sh",
+        "content_hash": "sha256:ab12",
         "script_args": None,
         "short_options": None,
         "positional_args": None,

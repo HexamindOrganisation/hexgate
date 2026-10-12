@@ -16,25 +16,36 @@ from evals.policy_writing.calls import (
     load_known,
     unknown_names,
 )
+from evals.policy_writing.sources import SourceError
 from hexgate.egress.model import connect_to_args, http_to_args
 from hexgate.egress.tcp import tcp_to_args
-from hexgate.manifest.models import InputSchema
+from hexgate.manifest.models import AgentManifest, InputSchema
 from tests.evals.helpers import AGENT, agent_view, manifest_tool
 
 REFUND = manifest_tool("refund_order", order_id="string", amount="number")
-KNOWN = Known(
-    schemas={"refund_order": InputSchema.model_validate(REFUND["input_schema"])},
-    skills={"triage"},
-    agents={AGENT, "ops-bot"},
-    attr_types={"tier": {"string"}},
-)
+TRIAGE = {"name": "triage", "description": "triage"}
+HASH = "sha256:ab12"
+
+
+def _known(*tools: dict, **fields) -> Known:
+    """`AGENT`'s Known, with `ops-bot` registered too; `fields` set its manifest's."""
+    manifest = agent_view(AGENT, *tools, **fields)["manifest"]
+    return Known(
+        AGENT,
+        AgentManifest.model_validate(manifest),
+        frozenset({AGENT, "ops-bot"}),
+        {"tier": {"string"}},
+    )
+
+
+KNOWN = _known(REFUND, skills=[TRIAGE])
 REFUND_500 = {"tool": "refund_order", "args": {"order_id": "o1", "amount": 500}}
 # A skill script call, completed by `policy.complete_call`.
 SCRIPT_RUN = {
     "skill": "triage",
     "via": "script",
     "file_path": "scripts/run.sh",
-    "content_hash": None,
+    "content_hash": HASH,
     "script_args": None,
     "short_options": None,
     "positional_args": None,
@@ -59,7 +70,14 @@ def test_load_known_reads_the_agent_s_manifest_and_audit_rows(
     # A plain list, or the endpoint's page, as `audit_decisions` returns it.
     audit = {"rows": rows, "total": 2} if page else rows
     (tmp_path / "audit.json").write_text(json.dumps(audit))
-    assert load_known(tmp_path, AGENT) == KNOWN
+    [known] = load_known(tmp_path, AGENT)
+    assert (known.agent, known.schemas, known.registered, known.attr_types) == (
+        AGENT,
+        KNOWN.schemas,
+        {AGENT, "ops-bot"},
+        {"tier": {"string"}},
+    )
+    assert [s.name for s in known.manifest.skills] == ["triage"]
 
 
 def test_load_known_reads_the_endpoint_s_loose_shape(tmp_path: Path) -> None:
@@ -68,12 +86,36 @@ def test_load_known_reads_the_endpoint_s_loose_shape(tmp_path: Path) -> None:
     view = agent_view(AGENT, {**REFUND, "description": None})
     draft = {**agent_view("draft-bot"), "manifest": None}
     (tmp_path / "agents.json").write_text(json.dumps([draft, view]))
-    known = load_known(tmp_path, AGENT)
-    assert (known.schemas, known.skills, known.agents) == (
+    [known] = load_known(tmp_path, AGENT)
+    assert (known.schemas, known.manifest.skills, known.registered) == (
         {"refund_order": InputSchema.model_validate(REFUND["input_schema"])},
-        set(),
+        [],
         {AGENT, "draft-bot"},
     )
+
+
+def test_when_the_case_has_no_agent_then_load_known_reads_every_agent(
+    tmp_path: Path,
+) -> None:
+    # A role-wide case: each agent with a manifest, any agent's attributes.
+    other = agent_view("ops-bot", manifest_tool("wire_transfer", iban="string"))
+    draft = {**agent_view("draft-bot"), "manifest": None}
+    views = [agent_view(AGENT, REFUND), other, draft]
+    (tmp_path / "agents.json").write_text(json.dumps(views))
+    rows = [{"agent_name": "ops-bot", "attributes": {"eu": True}}]
+    (tmp_path / "audit.json").write_text(json.dumps(rows))
+    known = load_known(tmp_path, None)
+    assert [(k.agent, k.attr_types) for k in known] == [
+        ("ops-bot", {"eu": {"boolean"}}),
+        (AGENT, {"eu": {"boolean"}}),
+    ]
+
+
+def test_when_no_agent_has_a_manifest_then_load_known_raises(tmp_path: Path) -> None:
+    draft = {**agent_view("draft-bot"), "manifest": None}
+    (tmp_path / "agents.json").write_text(json.dumps([draft]))
+    with pytest.raises(SourceError, match="no agent in agents.json has a manifest"):
+        load_known(tmp_path, None)
 
 
 # ---------------------------------------------------------------- complete
@@ -203,6 +245,10 @@ def test_complete_rejects_what_no_gate_sends(call: dict, error: str) -> None:
         ({"tool": "agent.tool:ops-bot"}, []),
         ({"tool": "skill:triage", "args": {"skill": "triage"}}, []),
         ({"tool": "skill.script:triage", "args": SCRIPT_RUN}, []),
+        # LangChain hides agent-as-tool edges, so a tool reach to another
+        # registered agent may be real; a handoff or a self-reach never is.
+        ({"tool": "agent.handoff:ops-bot"}, ["agent.handoff:ops-bot"]),
+        ({"tool": f"agent.tool:{AGENT}"}, [f"agent.tool:{AGENT}"]),
         # Only a script carries its invocation arguments.
         (
             {"tool": "skill:triage", "args": {"skill": "triage", "script_args": None}},
@@ -268,22 +314,64 @@ def test_an_unset_optional_argument_may_be_null() -> None:
         **schema["properties"],
         "limit": {"title": "limit", "type": "integer"},
     }
-    known = Known(
-        schemas={"refund_order": InputSchema.model_validate(schema)},
-        skills=set(),
-        agents={AGENT},
-        attr_types={},
-    )
+    known = _known({**REFUND, "input_schema": schema})
     call = {**REFUND_500, "args": {"order_id": "o1", "amount": 1, "limit": None}}
     assert bad_values(call, known) == []
 
 
-def test_load_known_counts_a_manifest_s_sub_agent_as_a_reach_target(
-    tmp_path: Path,
+@pytest.mark.parametrize(
+    ("tool", "unknown"),
+    [
+        ("agent.tool:refund-sub", []),
+        # The edge is a tool call: a handoff to it is denied whatever the policy.
+        ("agent.handoff:refund-sub", ["agent.handoff:refund-sub"]),
+        # A recorded edge list is complete, so a registered agent isn't one.
+        ("agent.tool:ops-bot", ["agent.tool:ops-bot"]),
+    ],
+)
+def test_a_reach_target_needs_the_manifest_s_edge_for_its_via(
+    tool: str, unknown: list[str]
 ) -> None:
     # Registered on its own only with `serve --register-subagents`.
-    view = agent_view(AGENT, REFUND)
-    view["manifest"]["subagents"] = [{"name": "refund-sub", "via": "tool"}]
-    (tmp_path / "agents.json").write_text(json.dumps([view]))
-    known = load_known(tmp_path, AGENT)
-    assert unknown_names({"tool": "agent.tool:refund-sub"}, known) == []
+    known = _known(REFUND, subagents=[{"name": "refund-sub", "via": "tool"}])
+    assert unknown_names({"tool": tool}, known) == unknown
+
+
+# ---------------------------------------------------------------- skill args
+
+
+@pytest.mark.parametrize(
+    ("tool", "args", "framework", "bad"),
+    [
+        ("skill:triage", {"file_path": "/skills/triage/SKILL.md"}, "langchain", []),
+        # Google's skill load passes no path.
+        ("skill:triage", {"file_path": None}, "google", []),
+        ("skill:triage", {"file_path": None}, "langchain", ["args.file_path missing"]),
+        (
+            "skill.resource:triage",
+            {"file_path": None},
+            "google",
+            ["args.file_path missing"],
+        ),
+        ("skill.script:triage", SCRIPT_RUN, "google", []),
+        # The adapters hash the skill's body; a null hash fails any pin on it.
+        (
+            "skill:triage",
+            {"file_path": "/skills/triage/SKILL.md", "content_hash": None},
+            "langchain",
+            ["args.content_hash=None, sent sha256:<hex>"],
+        ),
+        (
+            "skill.script:triage",
+            {**SCRIPT_RUN, "content_hash": "ab12"},
+            "langchain",
+            ["args.content_hash='ab12', sent sha256:<hex>"],
+        ),
+    ],
+)
+def test_bad_values_on_a_skill_call(
+    tool: str, args: dict, framework: str, bad: list[str]
+) -> None:
+    known = _known(skills=[TRIAGE], framework=framework)
+    call = {"tool": tool, "args": {"content_hash": HASH, **args}}
+    assert bad_values(call, known) == bad
