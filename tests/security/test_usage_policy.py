@@ -97,7 +97,7 @@ def test_usage_rejected_below_the_policy(payload: dict) -> None:
 
 
 def test_file_level_usage_beside_roles_is_rejected() -> None:
-    with pytest.raises(PolicySetError, match="move them under a role"):
+    with pytest.raises(PolicySetError, match="mixin .* every role lists"):
         load_policy_set_from_dict(
             {"usage": DENY_BLOCK, "roles": {"default": {"tools": TOOLS}}}
         )

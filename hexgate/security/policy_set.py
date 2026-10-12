@@ -94,6 +94,10 @@ _FILE_LEVEL_KEYS = frozenset(
     {_ROLES_KEY, _CONSTRAINTS_KEY, _VERSION_KEY, RESOLVED_POLICY_MARKER}
 )
 
+# Policy fields every role must resolve identically. Beside ``roles:`` they are
+# rejected like any other stray key, but with advice that leads to a loadable policy.
+_AGENT_LEVEL_KEYS = frozenset({"guards", USAGE_FIELD})
+
 _ROOTED_PATH_SEGMENTS = 2  # run.* and agent_usage.* are flat: <root>.<name>
 _ORDERED_OPS = frozenset({"<", "<=", ">", ">="})
 # ==/!= excluded: list equality is well-defined, just not useful here.
@@ -537,6 +541,14 @@ def _load_legacy_file(path: Path) -> PolicySet:
 def _reject_unknown_file_level_keys(payload: dict[str, Any]) -> None:
     """Fail closed on an unrecognised sibling of ``roles:``."""
     unknown = sorted(set(payload) - _FILE_LEVEL_KEYS)
+    agent_level = [key for key in unknown if key in _AGENT_LEVEL_KEYS]
+    if agent_level:
+        raise PolicySetError(
+            f"{agent_level} beside {_ROLES_KEY!r} is agent-level: every role must "
+            "resolve to the same value, so put it in a mixin (is_mixin: true) that "
+            "every role lists in `inherits`. Setting it under only some roles fails "
+            "the cross-role check."
+        )
     if unknown:
         allowed = sorted(_FILE_LEVEL_KEYS - {_ROLES_KEY, RESOLVED_POLICY_MARKER})
         raise PolicySetError(
