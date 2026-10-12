@@ -95,12 +95,17 @@ async def aprepare_run(
 ) -> None:
     """Pre-run work shared by every boundary: the policy refresh, the ban fetch and
     the usage refresh run concurrently, then the ban decision. Admission stays with
-    the caller, after this returns, so it reads the refreshed policy."""
+    the caller, after this returns, so it reads the refreshed policy.
+
+    The concurrent usage refresh asks for the pre-refresh policy's paths (02 §5.5
+    Rule 2); paths the policy refresh adds are refreshed once it returns."""
     usage = _usage_refresh_of(binding)
     if ban_gate is None and usage is None:
         await refresh_policy
     else:
         await _aprefetch_alongside(refresh_policy, ban_gate, context, usage)
+    if (added := _usage_added_by_refresh(binding, usage)) is not None:
+        await _arefresh_usage(added)
 
 
 def prepare_run(
@@ -117,6 +122,8 @@ def prepare_run(
         refresh_policy()
     else:
         _prefetch_alongside(refresh_policy, ban_gate, context, usage)
+    if (added := _usage_added_by_refresh(binding, usage)) is not None:
+        _refresh_usage(added)
 
 
 async def _aprefetch_alongside(
@@ -171,6 +178,18 @@ def _prefetch_alongside(
 
 def _usage_refresh_of(binding: PolicyBinding | None) -> UsageRefresh | None:
     return binding.enforcer.usage_refresh() if binding is not None else None
+
+
+def _usage_added_by_refresh(
+    binding: PolicyBinding | None, before: UsageRefresh | None
+) -> UsageRefresh | None:
+    """The refreshed policy's usage refresh when it wants paths the prefetch didn't
+    ask for. Without it, a policy's first ``agent_usage.*`` cap has no snapshot, so
+    its first decisions read ``UNAVAILABLE`` and fall back to the local ledger."""
+    after = _usage_refresh_of(binding)
+    if after is None or (before is not None and after.paths <= before.paths):
+        return None
+    return after
 
 
 def _refresh_usage(usage: UsageRefresh) -> None:

@@ -378,3 +378,81 @@ def test_prepare_run_refuses_a_ban_after_every_fetch_completes() -> None:
 
     assert refresh.calls == 1
     assert len(source.calls) == 1
+
+
+class _SwappingBinding:
+    """A binding whose policy refresh swaps in a policy with other usage paths."""
+
+    def __init__(self, before: UsageRefresh | None, after: UsageRefresh | None) -> None:
+        self.enforcer = self
+        self._usage = before
+        self._after = after
+
+    def usage_refresh(self) -> UsageRefresh | None:
+        return self._usage
+
+    def refresh(self) -> None:
+        self._usage = self._after
+
+    async def refresh_async(self) -> None:
+        self.refresh()
+
+
+_GROWN_PATHS = _USAGE_PATHS | {"tool_calls_1h"}
+
+# (paths before the policy refresh, paths after, paths each usage refresh asked for)
+_POLICY_SWAPS = [
+    pytest.param(None, _USAGE_PATHS, [_USAGE_PATHS], id="first-cap"),
+    pytest.param(_USAGE_PATHS, _GROWN_PATHS, [_USAGE_PATHS, _GROWN_PATHS], id="grown"),
+    pytest.param(_USAGE_PATHS, _USAGE_PATHS, [_USAGE_PATHS], id="unchanged"),
+    pytest.param(_GROWN_PATHS, _USAGE_PATHS, [_GROWN_PATHS], id="shrunk"),
+]
+
+
+def _swapping(
+    source: _UsageSource,
+    before: frozenset[str] | None,
+    after: frozenset[str] | None,
+) -> _SwappingBinding:
+    def usage(paths: frozenset[str] | None) -> UsageRefresh | None:
+        return None if paths is None else UsageRefresh(source, _AGENT, paths)  # type: ignore[arg-type]
+
+    return _SwappingBinding(usage(before), usage(after))
+
+
+@pytest.mark.parametrize(("before", "after", "fetched"), _POLICY_SWAPS)
+async def test_aprepare_run_refreshes_the_paths_a_policy_refresh_adds(
+    before: frozenset[str] | None,
+    after: frozenset[str] | None,
+    fetched: list[frozenset[str]],
+) -> None:
+    source = _UsageSource()
+    binding = _swapping(source, before, after)
+
+    await aprepare_run(binding.refresh_async(), None, _context(), binding=binding)  # type: ignore[arg-type]
+
+    assert [paths for _, paths in source.calls] == fetched
+
+
+@pytest.mark.parametrize(("before", "after", "fetched"), _POLICY_SWAPS)
+def test_prepare_run_refreshes_the_paths_a_policy_refresh_adds(
+    before: frozenset[str] | None,
+    after: frozenset[str] | None,
+    fetched: list[frozenset[str]],
+) -> None:
+    source = _UsageSource()
+    binding = _swapping(source, before, after)
+
+    prepare_run(binding.refresh, None, _context(), binding=binding)  # type: ignore[arg-type]
+
+    assert [paths for _, paths in source.calls] == fetched
+
+
+def test_a_banned_run_skips_the_added_paths_refresh() -> None:
+    source = _UsageSource()
+    binding = _swapping(source, None, _USAGE_PATHS)
+
+    with pytest.raises(AgentBannedError):
+        prepare_run(binding.refresh, _banning_gate(), _context(), binding=binding)  # type: ignore[arg-type]
+
+    assert source.calls == []
