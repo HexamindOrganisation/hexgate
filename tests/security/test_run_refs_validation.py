@@ -15,7 +15,8 @@ from hexgate.security.policy_set import (
     DEFAULT_ROLE_NAME,
     PolicySet,
     PolicySetError,
-    _validate_run_refs,
+    _run_root,
+    _validate_path_refs,
 )
 
 _LIST_PATHS = frozenset({"tools_used"})
@@ -36,10 +37,9 @@ def _default_policy(*constraints: str) -> AgentPolicy:
 
 
 def _validate(*constraints: str, policy: AgentPolicy | None = None) -> None:
-    _validate_run_refs(
+    _validate_path_refs(
         {_ROLE: policy if policy is not None else _policy(*constraints)},
-        scalar_paths=_SCALAR_PATHS,
-        list_paths=_LIST_PATHS,
+        _run_root(_SCALAR_PATHS, _LIST_PATHS),
     )
 
 

@@ -222,6 +222,22 @@ async def test_resolve_tool_use_context_warns_for_local_agent(
     assert any("no hexgate_client" in record.message for record in caplog.records)
 
 
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [(" support-bot ", "support-bot"), ("   ", "default"), (None, "default")],
+)
+@pytest.mark.parametrize("explicit", [False, True])
+def test_resolve_tool_use_context_uses_canonical_agent_name(
+    raw: str | None, expected: str, explicit: bool
+) -> None:
+    """A tool sees the same agent name as run facts and the enforcer."""
+    from hexgate.runtime import ToolUseContext
+
+    supplied = ToolUseContext() if explicit else None
+    ctx = factory._resolve_tool_use_context(_FakeAgent(name=raw), supplied)
+    assert ctx.agent_name == expected
+
+
 @pytest.mark.asyncio
 async def test_resolve_tool_use_context_explicit_arg_wins(
     keys: tuple[bytes, bytes],
@@ -332,7 +348,9 @@ class _RoleRecordingEngine:
         self.seen_roles: list[str | None] = []
         self._verdict = Verdict(outcome=DecisionOutcome.DENY, reason="recorded")
 
-    def evaluate(self, *, role, tool, args, attributes=None, run=None):  # type: ignore[no-untyped-def]
+    def evaluate(
+        self, *, role, tool, args, attributes=None, run=None, agent_usage=None
+    ):  # type: ignore[no-untyped-def]
         self.seen_roles.append(role)
         return self._verdict
 

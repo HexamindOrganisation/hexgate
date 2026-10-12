@@ -15,6 +15,13 @@ code (or YAML) can be exercised in a pytest suite:
 Assert a ``run.*`` cap by supplying the run's facts via :func:`run_namespace`:
 
     assert_denies(policy, "refund", run=run_namespace("refund", tool_calls=20))
+
+and an ``agent_usage.*`` cap via :func:`agent_usage_namespace`:
+
+    assert_denies(
+        policy, "agent.run", {"agent": "a"},
+        agent_usage=agent_usage_namespace(invocations_1h=100),
+    )
 """
 
 from __future__ import annotations
@@ -23,6 +30,13 @@ from collections.abc import Mapping
 from typing import Any
 from uuid import uuid4
 
+from hexgate.runtime.agent_usage import (
+    AGENT_USAGE_VOCABULARY,
+    KNOWN_AGENT_USAGE_PATHS,
+    TOTAL_TOKENS,
+    USAGE_WINDOWS,
+    UsageMetric,
+)
 from hexgate.runtime.run_facts import KNOWN_RUN_PATHS, RUN_PATH_TYPES, RunFacts
 from hexgate.security.decision import DecisionOutcome
 from hexgate.security.models import AgentPolicy
@@ -36,6 +50,8 @@ _CALLS_OF_THIS_TOOL = "calls_of_this_tool"
 _TOOLS_USED = "tools_used"
 _TOTAL_TOKENS = "total_tokens"
 _TOKEN_SPLIT = ("input_tokens", "output_tokens")
+_MIN_USAGE_COUNT = 0
+_NARROWEST_FIRST = sorted(USAGE_WINDOWS, key=USAGE_WINDOWS.__getitem__)
 
 
 def run_namespace(tool: str = "", **facts: Any) -> dict[str, Any]:
@@ -67,6 +83,56 @@ def run_namespace(tool: str = "", **facts: Any) -> dict[str, Any]:
     namespace = {**_seeded_run(tool, facts), **facts}
     _apply_token_total(namespace, facts)
     return namespace
+
+
+def agent_usage_namespace(**paths: int) -> dict[str, int]:
+    """An ``agent_usage`` namespace: every registered path zero, ``paths`` applied.
+
+    As in production, an unset window reads at least the narrower windows of its
+    metric, and ``total_tokens_<w>`` is ``input_tokens_<w> + output_tokens_<w>``.
+    Supplied values win over both. Raises on an unregistered name or a value that
+    is not a non-negative int, for the same reason :func:`run_namespace` does.
+    """
+    unknown = sorted(set(paths) - KNOWN_AGENT_USAGE_PATHS)
+    if unknown:
+        raise ValueError(
+            f"unknown agent_usage.* path(s) {unknown} "
+            f"(this build knows: {AGENT_USAGE_VOCABULARY})"
+        )
+    for name, value in paths.items():
+        if not _matches_run_type(value, int):
+            raise ValueError(
+                f"agent_usage.{name} expects int, got "
+                f"{type(value).__name__} ({value!r})"
+            )
+        if value < _MIN_USAGE_COUNT:
+            raise ValueError(f"agent_usage.{name} is a count, got {value}")
+    namespace = {**dict.fromkeys(KNOWN_AGENT_USAGE_PATHS, 0), **paths}
+    for metric in UsageMetric:
+        _carry_into_wider_windows(namespace, paths, metric)
+    for window in _NARROWEST_FIRST:
+        total = f"{TOTAL_TOKENS}_{window}"
+        if total not in paths:
+            namespace[total] = sum(
+                namespace[f"{name}_{window}"] for name in _TOKEN_SPLIT
+            )
+    _carry_into_wider_windows(namespace, paths, TOTAL_TOKENS)
+    return namespace
+
+
+def _carry_into_wider_windows(
+    namespace: dict[str, int], supplied: Mapping[str, int], metric: str
+) -> None:
+    """Raise each unset window of ``metric`` to the widest narrower one, since a
+    production window never reads less than one it contains. Without it,
+    ``invocations_1h=99`` would leave ``invocations_24h`` at 0 and a 24 h cap
+    would pass in the test and fire in production."""
+    floor = 0
+    for window in _NARROWEST_FIRST:
+        path = f"{metric}_{window}"
+        if path not in supplied:
+            namespace[path] = max(namespace[path], floor)
+        floor = max(floor, namespace[path])
 
 
 def _seeded_run(tool: str, facts: Mapping[str, Any]) -> dict[str, Any]:
@@ -139,8 +205,11 @@ def _outcome(
     role: str | None,
     attributes: dict[str, Any] | None,
     run: Mapping[str, Any] | None,
+    agent_usage: Mapping[str, Any] | None,
 ) -> DecisionOutcome:
     resolved_run = run if run is not None else _zeroed_run(tool)
+    # A fresh process, so an unset agent_usage.* cap reads zero instead of failing closed.
+    resolved_usage = agent_usage if agent_usage is not None else agent_usage_namespace()
     if isinstance(policy, PolicySet):
         return policy.evaluate(
             role=role,
@@ -148,9 +217,16 @@ def _outcome(
             args=args or {},
             attributes=attributes,
             run=resolved_run,
+            agent_usage=resolved_usage,
         ).outcome
     return evaluate_tool_call(
-        policy, tool, args or {}, role=role, attributes=attributes, run=resolved_run
+        policy,
+        tool,
+        args or {},
+        role=role,
+        attributes=attributes,
+        run=resolved_run,
+        agent_usage=resolved_usage,
     ).outcome
 
 
@@ -161,9 +237,10 @@ def _check(
     role: str | None,
     attributes: dict[str, Any] | None,
     run: Mapping[str, Any] | None,
+    agent_usage: Mapping[str, Any] | None,
     expected: DecisionOutcome,
 ) -> None:
-    actual = _outcome(policy, tool, args, role, attributes, run)
+    actual = _outcome(policy, tool, args, role, attributes, run, agent_usage)
     if actual is not expected:
         scope = f"role={role!r} " if role is not None else ""
         raise AssertionError(
@@ -180,12 +257,17 @@ def assert_allows(
     role: str | None = None,
     attributes: dict[str, Any] | None = None,
     run: Mapping[str, Any] | None = None,
+    agent_usage: Mapping[str, Any] | None = None,
 ) -> None:
     """Assert the policy ALLOWS this call.
 
-    ``attributes`` and ``run`` feed ``ctx.*`` and ``run.*`` constraints; ``run``
-    defaults to a freshly-started run — see :func:`run_namespace` to set one."""
-    _check(policy, tool, args, role, attributes, run, DecisionOutcome.ALLOW)
+    ``attributes``, ``run`` and ``agent_usage`` feed ``ctx.*``, ``run.*`` and
+    ``agent_usage.*`` constraints; ``run`` defaults to a freshly-started run and
+    ``agent_usage`` to a fresh process — see :func:`run_namespace` and
+    :func:`agent_usage_namespace` to set them."""
+    _check(
+        policy, tool, args, role, attributes, run, agent_usage, DecisionOutcome.ALLOW
+    )
 
 
 def assert_denies(
@@ -196,9 +278,10 @@ def assert_denies(
     role: str | None = None,
     attributes: dict[str, Any] | None = None,
     run: Mapping[str, Any] | None = None,
+    agent_usage: Mapping[str, Any] | None = None,
 ) -> None:
     """Assert the policy DENIES this call."""
-    _check(policy, tool, args, role, attributes, run, DecisionOutcome.DENY)
+    _check(policy, tool, args, role, attributes, run, agent_usage, DecisionOutcome.DENY)
 
 
 def assert_needs_approval(
@@ -209,6 +292,16 @@ def assert_needs_approval(
     role: str | None = None,
     attributes: dict[str, Any] | None = None,
     run: Mapping[str, Any] | None = None,
+    agent_usage: Mapping[str, Any] | None = None,
 ) -> None:
     """Assert the policy routes this call to approval."""
-    _check(policy, tool, args, role, attributes, run, DecisionOutcome.NEEDS_APPROVAL)
+    _check(
+        policy,
+        tool,
+        args,
+        role,
+        attributes,
+        run,
+        agent_usage,
+        DecisionOutcome.NEEDS_APPROVAL,
+    )

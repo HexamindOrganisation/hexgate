@@ -27,7 +27,7 @@ from pydantic import (
 )
 
 from evals.policy_writing.calls import bad_values, complete, load_known, unknown_names
-from evals.policy_writing.checks import snapshot
+from evals.policy_writing.checks import is_module_tree, snapshot
 from evals.policy_writing.policy import CaseError, complete_call, dump_json
 from evals.policy_writing.sources import SourceError
 
@@ -94,7 +94,8 @@ class CaseFile(_Strict):
 
     starting_project: str | None = None
     # The agent whose policy the case edits: a name in the project's agents.json.
-    agent: str = Field(min_length=1)
+    # Omitted for a role or project-wide edit, scored on every roles.yaml column.
+    agent: str | None = Field(None, min_length=1)
     request: str = Field(min_length=1)
     held_out: bool = False
     # Why the case exists, for whoever reads the results; never the agent.
@@ -304,6 +305,9 @@ def _load_case(root: Path, case_dir: Path) -> dict:
     }
     expect = case["expect"]
     files = starting_files(case)
+    if case["agent"] is None and not is_module_tree(files):
+        # One policy.yaml is one agent's; the scorer would fail every name check.
+        raise CaseError(f"{path}: a case without `agent` needs a module tree")
     _protect(path, expect, files)
     # Before the merge, so a preserved call and the case's own entry for it
     # compare equal however much of the gate's arguments each spells out.

@@ -2,14 +2,14 @@
 
 Every failure here is silent — a window reading low fails a quota open, a missing
 key fails it closed — so these tests pin the rounding, retention and registry
-semantics PR 2b and PR 6 build on.
+semantics the ``agent_usage.*`` namespace and PR 6 build on.
 """
 
 from __future__ import annotations
 
 import threading
 import time
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
@@ -19,12 +19,15 @@ from hexgate.runtime.agent_usage import (
     FINE_BUCKET_SECONDS,
     FINE_RETENTION_SECONDS,
     HOUR_BUCKET_SECONDS,
+    KNOWN_AGENT_USAGE_PATHS,
     MAX_WINDOW_SECONDS,
     MINUTE_BUCKET_SECONDS,
+    USAGE_WINDOWS,
     BucketSeries,
     UsageLedger,
     UsageLedgers,
     UsageMetric,
+    ledger_namespace,
     new_usage_ledger,
 )
 from hexgate.runtime.run_facts import KNOWN_RUN_PATHS
@@ -295,9 +298,148 @@ def test_a_concurrent_first_lookup_yields_one_ledger() -> None:
 
 
 def test_the_process_registry_is_disabled_at_import() -> None:
-    """Pins the roadmap's "inert on main" invariant until PR 2b enables it."""
+    """Only an enforcer over a usage policy enables it, and tests inject their own
+    registry. Failing here means a test leaked into the process one."""
     assert AGENT_USAGE_LEDGERS.enabled is False
 
 
 def test_metrics_share_their_names_with_run_paths() -> None:
     assert set(UsageMetric) - {UsageMetric.INVOCATIONS} <= KNOWN_RUN_PATHS
+
+
+# ---------------------------------------------------------------------------
+# Path registry and namespace
+# ---------------------------------------------------------------------------
+
+_HOUR = 3_600.0
+_TICK_SECONDS = 60.0
+_METRICS = (
+    "invocations",
+    "tool_calls",
+    "denials",
+    "llm_calls",
+    "input_tokens",
+    "output_tokens",
+    "total_tokens",
+)
+_WINDOWS = ("5m", "1h", "24h", "7d", "30d")
+
+
+class _WindowCountingLedger(UsageLedger):
+    def __init__(self, ledger: UsageLedger) -> None:
+        self._inner = ledger
+        self.reads: list[list[float]] = []
+
+    def within_each(
+        self, windows: Iterable[float]
+    ) -> dict[float, dict[UsageMetric, int]]:
+        windows = list(windows)
+        self.reads.append(sorted(set(windows)))
+        return self._inner.within_each(windows)
+
+
+class _CountingClock(_TickingClock):
+    """Counts its reads, and moves far enough per read that a second one would
+    put the windows at different instants."""
+
+    def __init__(self) -> None:
+        super().__init__(_START, tick=_TICK_SECONDS)
+        self.reads = 0
+
+    def __call__(self) -> float:
+        self.reads += 1
+        return super().__call__()
+
+
+def _recorded_ledger(amounts: Mapping[UsageMetric, int]) -> UsageLedger:
+    ledger = new_usage_ledger(clock=_FakeClock())
+    ledger.record(amounts)
+    return ledger
+
+
+def test_the_registry_is_every_metric_over_every_window() -> None:
+    expected = {f"{metric}_{window}" for metric in _METRICS for window in _WINDOWS}
+
+    assert len(expected) == 35
+    assert KNOWN_AGENT_USAGE_PATHS == expected
+
+
+def test_no_window_outlasts_the_ledger() -> None:
+    assert max(USAGE_WINDOWS.values()) <= MAX_WINDOW_SECONDS
+
+
+def test_every_window_is_read_from_a_tier_that_retains_it() -> None:
+    ledger = new_usage_ledger(clock=_FakeClock())
+
+    for seconds in USAGE_WINDOWS.values():
+        assert ledger._covering(seconds).retention >= seconds
+
+
+def test_the_namespace_holds_exactly_the_requested_paths() -> None:
+    ledger = _recorded_ledger(
+        {UsageMetric.INPUT_TOKENS: 3, UsageMetric.OUTPUT_TOKENS: 4}
+    )
+
+    namespace = ledger_namespace(ledger, ["total_tokens_1h", "invocations_5m"])
+
+    assert namespace == {"total_tokens_1h": 7, "invocations_5m": 0}
+
+
+def test_the_namespace_reads_each_window_once() -> None:
+    ledger = _WindowCountingLedger(_recorded_ledger(_ONE_TOOL_CALL))
+
+    ledger_namespace(ledger, ["tool_calls_1h", "denials_1h", "tool_calls_24h"])
+
+    assert ledger.reads == [[_HOUR, _DAY]]
+
+
+def test_the_namespace_reads_every_window_at_one_instant() -> None:
+    clock = _CountingClock()
+    ledger = new_usage_ledger(clock=clock)
+    ledger.record(_ONE_TOOL_CALL)
+    clock.reads = 0
+
+    namespace = ledger_namespace(ledger, ["tool_calls_5m", "tool_calls_1h"])
+
+    assert clock.reads == 1
+    assert namespace["tool_calls_5m"] <= namespace["tool_calls_1h"]
+
+
+def test_the_namespace_rejects_an_unregistered_path() -> None:
+    ledger = _recorded_ledger(_ONE_TOOL_CALL)
+
+    with pytest.raises(KeyError):
+        ledger_namespace(ledger, ["tool_call_1h"])
+
+
+_TWO_INVOCATIONS = {UsageMetric.INVOCATIONS: 2, UsageMetric.TOOL_CALLS: 2}
+_IN_RUN_PATHS = ["invocations_5m", "invocations_1h", "tool_calls_1h"]
+
+
+@pytest.mark.parametrize(
+    ("run_age", "expected"),
+    [
+        (None, {"invocations_5m": 2, "invocations_1h": 2, "tool_calls_1h": 2}),
+        (10.0, {"invocations_5m": 1, "invocations_1h": 1, "tool_calls_1h": 2}),
+        # Older than 5 m: its invocation has aged out of that window, not of 1 h.
+        (400.0, {"invocations_5m": 2, "invocations_1h": 1, "tool_calls_1h": 2}),
+    ],
+    ids=["outside-a-run", "young-run", "run-older-than-a-window"],
+)
+def test_the_current_run_is_left_out_of_windows_still_holding_it(
+    run_age: float | None, expected: dict[str, int]
+) -> None:
+    ledger = _recorded_ledger(_TWO_INVOCATIONS)
+
+    namespace = ledger_namespace(ledger, _IN_RUN_PATHS, current_run_age=run_age)
+
+    assert namespace == expected
+
+
+def test_leaving_out_an_unrecorded_run_never_reads_negative() -> None:
+    """A run opened before the ledger was enabled never recorded its invocation."""
+    ledger = new_usage_ledger(clock=_FakeClock())
+
+    assert ledger_namespace(ledger, ["invocations_1h"], current_run_age=1.0) == {
+        "invocations_1h": 0
+    }

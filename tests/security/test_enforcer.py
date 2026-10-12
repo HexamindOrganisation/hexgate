@@ -43,6 +43,7 @@ class _RecordingEngine:
         args: Mapping[str, Any],
         attributes: Mapping[str, Any] | None = None,
         run: Mapping[str, Any] | None = None,
+        agent_usage: Mapping[str, Any] | None = None,
     ) -> Verdict:
         self.calls.append(
             {

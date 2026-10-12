@@ -37,11 +37,12 @@ def _views(ws: Path) -> list[dict]:
     """agents.json's `AgentManifestView`s, read as the endpoint returns them
     rather than as the SDK registers them: the view is looser (a tool's
     `description` may be null)."""
-    return json.loads((ws / AGENTS_JSON).read_text())
+    return json.loads((ws / AGENTS_JSON).read_text(encoding="utf-8"))
 
 
-def load_attributes(ws: Path, agent: str) -> set[str]:
-    """The caller attributes (`ctx.*`) `agent` is known to send.
+def load_attributes(ws: Path, agent: str | None) -> set[str]:
+    """The caller attributes (`ctx.*`) `agent` is known to send (any agent, when
+    None).
 
     `audit.json` holds `AuditDecisionRow`s, as a list or the endpoint's page (`{rows, ...}`).
     Attributes are set per request and are in no manifest, so the known ones are
@@ -50,15 +51,16 @@ def load_attributes(ws: Path, agent: str) -> set[str]:
 
 
 @_reading
-def load_attribute_values(ws: Path, agent: str) -> dict[str, list]:
-    """Each of `agent`'s caller attributes, with every value its audit rows carry."""
+def load_attribute_values(ws: Path, agent: str | None) -> dict[str, list]:
+    """Each of `agent`'s caller attributes (any agent's, when None), with every
+    value its audit rows carry."""
     audit = ws / AUDIT_JSON
-    rows = json.loads(audit.read_text()) if audit.exists() else []
+    rows = json.loads(audit.read_text(encoding="utf-8")) if audit.exists() else []
     if isinstance(rows, dict):  # the endpoint's page shape, {rows, total, ...}
         rows = rows["rows"]
     values: dict[str, list] = {}
     for row in rows:
-        if row["agent_name"] == agent:
+        if agent in (None, row["agent_name"]):
             for name, value in _row_attributes(row).items():
                 values.setdefault(name, []).append(value)
     return values

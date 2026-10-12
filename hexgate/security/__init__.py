@@ -160,6 +160,7 @@ from hexgate.security.source import (
     YamlPolicySource,
 )
 from hexgate.security.testing import (
+    agent_usage_namespace,
     assert_allows,
     assert_denies,
     assert_needs_approval,
@@ -232,6 +233,7 @@ __all__ = [
     "C",
     "PolicyBuilder",
     "RolePolicyBuilder",
+    "agent_usage_namespace",
     "assert_allows",
     "assert_denies",
     "assert_needs_approval",
