@@ -196,8 +196,8 @@ uv run inspect view --log-dir evals/policy_writing/logs  # the check list and a 
 ### Run Claude Code
 
 `-T agent=claude` runs Claude Code itself (`claude -p`, the `write-policy` skill
-copied in) in the Docker sandbox of `compose.yaml`, built from this repo. It runs
-on the Claude subscription, not an API key: **every run bills its rate windows**.
+copied in) in the Docker sandbox of `compose.yaml`, built from this repo, on the
+Claude subscription, not an API key: **every run bills its rate windows**.
 
 ```bash
 claude setup-token                     # once: prints a long-lived token

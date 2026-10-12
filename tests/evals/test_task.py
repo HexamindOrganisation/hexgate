@@ -119,9 +119,7 @@ def test_sample_holds_the_starting_project_and_nothing_of_ours() -> None:
 # The Claude Code agent, through a fake sandbox.
 
 
-class FakeSandbox:
-    """Records what the solver asks of the sandbox; `exec` answers from `replies`."""
-
+class FakeSandbox:  # records what the solver asks; `exec` answers from `replies`
     def __init__(self, replies: dict[str, ExecResult | Exception] | None = None):
         self.replies = replies or {}
         self.execs: list[tuple[list[str], dict]] = []
@@ -174,8 +172,10 @@ def message(kind: str, *blocks: dict) -> dict:
     return {"type": kind, "message": {"content": list(blocks)}}
 
 
+SKILL = "Base directory for this skill: /workspace/.claude/skills/write-policy"
 TRANSCRIPT = [
     {"type": "system", "subtype": "init", "cwd": "/workspace"},
+    message("user", {"type": "text", "text": SKILL}),  # the slash command, expanded
     message("assistant", {"type": "text", "text": "Reading the policy."}, READ),
     {"type": "rate_limit_event", "rate_limit_info": {}},
     message("user", READ_RESULT),
@@ -191,11 +191,12 @@ def stream(events: list[dict]) -> str:
 def test_parse_stream_happy_path() -> None:
     result, messages = task.parse_stream(stream(TRANSCRIPT))
     assert result == RESULT
-    assert [m.role for m in messages] == ["assistant", "tool", "assistant"]
-    (call,) = messages[0].tool_calls
+    assert [m.role for m in messages] == ["user", "assistant", "tool", "assistant"]
+    assert messages[0].text == SKILL
+    (call,) = messages[1].tool_calls
     assert (call.id, call.function, call.arguments) == ("t1", "Read", READ["input"])
-    assert (messages[1].tool_call_id, messages[1].text) == ("t1", "version: 1")
-    assert messages[2].text == "Capped at 50 USD."
+    assert (messages[2].tool_call_id, messages[2].text) == ("t1", "version: 1")
+    assert messages[3].text == "Capped at 50 USD."
 
 
 def test_when_result_is_error_then_output_error() -> None:
@@ -235,7 +236,7 @@ def test_when_the_output_is_cut_or_compacted_then_parse_keeps_the_rest() -> None
         stream(TRANSCRIPT[:-1] + [compacted]) + "\n" + stream([RESULT])[:20] + "stderr"
     )
     result, messages = task.parse_stream(cut)
-    assert result is None and len(messages) == 3
+    assert result is None and len(messages) == 4
 
 
 async def test_when_the_sandbox_env_is_wrong_then_the_solver_refuses() -> None:
@@ -249,8 +250,7 @@ async def test_when_the_sandbox_env_is_wrong_then_the_solver_refuses() -> None:
         )
     sb = FakeSandbox({"sh": ok("IS_SANDBOX\n")})
     await task.check_sandbox_env(sb)
-    # Names only: the sample's log keeps the exec's output, the token must not be in it.
-    assert sb.execs[0][0] == ["sh", "-c", "env | cut -d= -f1"]
+    assert sb.execs[0][0] == ["sh", "-c", "env | cut -d= -f1"]  # names only: logged
 
 
 def test_compose_passes_only_the_token_and_the_image_holds_none() -> None:
@@ -271,7 +271,6 @@ async def test_when_a_read_fails_then_pull_reports_agent_ran(tmp_path: Path) -> 
 
 
 async def test_claude_agent_and_scorer_happy_path(ws: Path, monkeypatch) -> None:
-    """Solve then score on one fake sandbox: skill in, transcript, answer, grade, usage out."""
     files = checks.snapshot(ws)
     listing = ok("".join(f"{(ws / f).stat().st_size} ./{f}\n" for f in files))
     replies = {
@@ -287,7 +286,12 @@ async def test_claude_agent_and_scorer_happy_path(ws: Path, monkeypatch) -> None
     state = await task.claude_agent(7)(state, None)
     assert {".claude/skills/write-policy/SKILL.md"} == set(sb.written)
     assert state.output.completion == "Capped at 50 USD."
-    assert [m.role for m in state.messages] == ["assistant", "tool", "assistant"]
+    assert [m.role for m in state.messages] == [
+        "user",
+        "assistant",
+        "tool",
+        "assistant",
+    ]
     score = await task.policy_checks()(state, Target(""))
     assert score.value == CORRECT
     assert score.metadata["usage"] == {k: RESULT[k] for k in task.USAGE_KEYS}

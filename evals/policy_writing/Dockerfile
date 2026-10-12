@@ -1,7 +1,6 @@
 # Claude Code's sandbox for the policy-writing eval (`agent=claude` in task.py),
 # built by compose.yaml from the REPO ROOT so the agent's `hexgate policy …`
-# dry-runs use the scorer's SDK (its .dockerignore lists what is copied). No token
-# in here: compose passes it at run time.
+# dry-runs use the scorer's SDK. No token in here: compose passes it at run time.
 FROM ghcr.io/astral-sh/uv:python3.13-bookworm-slim
 
 # Node LTS from its official image, then Claude Code pinned: it is the agent under test.

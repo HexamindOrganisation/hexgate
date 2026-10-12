@@ -9,9 +9,8 @@ scorer pulls the files left behind to the host and runs `checks.score` on them.
 The local agents (`reference`: `solution/`, `wrong_answers`: `wrong_answer/`,
 `noop`: nothing) test the checks and this wiring with no model and no Docker.
 `claude` runs Claude Code itself (`claude -p`) in the Docker sandbox of
-`compose.yaml`, on the Claude subscription's token from `claude setup-token`
-(README): no API key, and still `--model none`, Inspect makes no model call.
-Every sandbox read and write goes through `sandbox()`.
+`compose.yaml` on the subscription token from `claude setup-token` (README): no
+API key, still `--model none`.
 """
 
 from __future__ import annotations
@@ -31,6 +30,7 @@ from inspect_ai.model import (
     ChatMessage,
     ChatMessageAssistant,
     ChatMessageTool,
+    ChatMessageUser,
     ModelOutput,
 )
 from inspect_ai.scorer import (
@@ -133,7 +133,6 @@ def policy_writing(
 
 
 def claude_sandbox(kind: str | None) -> SandboxEnvironmentSpec:
-    """Docker with our compose file, which needs the subscription token on the host."""
     if kind not in (None, "docker"):
         raise ValueError(
             f"agent=claude runs only in the docker sandbox, not {kind!r}: it "
@@ -233,7 +232,6 @@ async def check_sandbox_env(sb: SandboxEnvironment) -> None:
 
 
 async def push_skill(sb: SandboxEnvironment) -> None:
-    """The repo's write-policy skill, at the same path under the workspace."""
     root = REPO / SKILL
     for path in sorted(p for p in root.rglob("*") if p.is_file()):
         await sb.write_file(str(SKILL / path.relative_to(root)), path.read_bytes())
@@ -262,7 +260,7 @@ def parse_stream(stdout: str) -> tuple[dict | None, list[ChatMessage]]:
         if kind == "assistant":
             messages += assistant_message(blocks)
         elif kind == "user":
-            messages += tool_messages(blocks)
+            messages += user_messages(blocks)
         elif kind == "result":
             result = ev
     return result, messages
@@ -287,7 +285,6 @@ def content_blocks(ev: dict) -> list[dict]:
 
 
 def assistant_message(blocks: list[dict]) -> list[ChatMessage]:
-    """One assistant message with its tool calls; none for a thinking-only event."""
     text = "\n".join(b["text"] for b in blocks if b.get("type") == "text")
     calls = [
         ToolCall(id=b["id"], function=b["name"], arguments=b.get("input") or {})
@@ -299,8 +296,10 @@ def assistant_message(blocks: list[dict]) -> list[ChatMessage]:
     return [ChatMessageAssistant(content=text, tool_calls=calls or None)]
 
 
-def tool_messages(blocks: list[dict]) -> list[ChatMessage]:
-    return [
+def user_messages(blocks: list[dict]) -> list[ChatMessage]:
+    """Tool results; and the text Claude Code injects, the `/write-policy` skill expanded."""
+    text = "\n".join(b["text"] for b in blocks if b.get("type") == "text")
+    return ([ChatMessageUser(content=text)] if text else []) + [
         ChatMessageTool(
             content=tool_text(b.get("content")), tool_call_id=b["tool_use_id"]
         )
@@ -309,8 +308,7 @@ def tool_messages(blocks: list[dict]) -> list[ChatMessage]:
     ]
 
 
-def tool_text(content) -> str:
-    """A tool_result's content: a string, or a list of {type: text} blocks."""
+def tool_text(content) -> str:  # a string, or a list of {type: text} blocks
     if isinstance(content, str):
         return content
     return "\n".join(b.get("text", "") for b in content or [] if isinstance(b, dict))
