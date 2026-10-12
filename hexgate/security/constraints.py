@@ -911,6 +911,7 @@ def check_constraints(
     consts: dict[str, Any] | None = None,
     attributes: Mapping[str, Any] | None = None,
     run: Mapping[str, Any] | None = None,
+    agent_usage: Mapping[str, Any] | None = None,
 ) -> None:
     """Evaluate every constraint; raise on the first failure.
 
@@ -920,9 +921,11 @@ def check_constraints(
 
     ``role`` and the tool name are exposed as top-level ``role`` / ``tool``
     facts, mirroring Rego's ``input.role`` / ``input.tool``. ``consts``
-    supplies ``consts.<name>``. ``attributes`` and ``run`` are exposed under
-    ``ctx.<key>`` / ``run.<path>``, mirroring ``input.ctx`` / ``input.run``. A
-    missing ``ctx.<key>`` or ``run.<path>`` fails closed like any other ref.
+    supplies ``consts.<name>``. ``attributes``, ``run`` and ``agent_usage`` are
+    exposed under ``ctx.<key>`` / ``run.<path>`` / ``agent_usage.<path>``,
+    mirroring ``input.ctx`` / ``input.run`` / ``input.agent_usage``. A missing
+    ``ctx.<key>``, ``run.<path>`` or ``agent_usage.<path>`` fails closed like any
+    other ref.
     """
     if not constraints:
         return
@@ -932,6 +935,7 @@ def check_constraints(
         "tool": tool_name,
         "ctx": dict(attributes or {}),
         "run": dict(run or {}),
+        "agent_usage": dict(agent_usage or {}),
         _CONSTS_KEY: consts or {},
     }
     for entry in constraints:

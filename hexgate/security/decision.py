@@ -70,6 +70,7 @@ class PolicyEngine(Protocol):
         args: Mapping[str, Any],
         attributes: Mapping[str, Any] | None = None,
         run: Mapping[str, Any] | None = None,
+        agent_usage: Mapping[str, Any] | None = None,
     ) -> Verdict: ...
 
     def declares_admission(self) -> bool:
@@ -104,6 +105,14 @@ class PolicyEngine(Protocol):
         skill-gated (skill keys are otherwise closed-world). A pydantic engine
         derives it from the resolved policy; a WASM bundle reads it from its signed
         manifest."""
+        ...
+
+    def agent_usage_paths(self) -> frozenset[str]:
+        """Every ``agent_usage.*`` path (without the root) this policy references.
+
+        Empty means the enforcer builds no namespace and the process records no
+        usage. A pydantic engine derives it from the resolved policy; a WASM bundle
+        reads it from its signed manifest, like the ``declares_*`` flags."""
         ...
 
 

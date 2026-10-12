@@ -76,6 +76,7 @@ def evaluate_tool_call(
     role: str | None = None,
     attributes: Mapping[str, Any] | None = None,
     run: Mapping[str, Any] | None = None,
+    agent_usage: Mapping[str, Any] | None = None,
 ) -> Verdict:
     """Return a :class:`Verdict` for a proposed tool call (pydantic engine).
 
@@ -109,6 +110,7 @@ def evaluate_tool_call(
             consts=policy.consts,
             attributes=attributes,
             run=run,
+            agent_usage=agent_usage,
         )
     except PolicyDeniedError as exc:
         return Verdict(outcome=DecisionOutcome.DENY, reason=str(exc))
@@ -151,17 +153,25 @@ def authorize_tool_call(
     role: str | None = None,
     attributes: Mapping[str, Any] | None = None,
     run: Mapping[str, Any] | None = None,
+    agent_usage: Mapping[str, Any] | None = None,
 ) -> None:
     """Raise when a tool call is denied or requires approval.
 
     Thin raise-on-deny wrapper over :func:`evaluate_tool_call`, kept for
     callers (the CLI, direct API users) that prefer the exception contract.
-    ``role``, ``attributes`` and ``run`` are all forwarded so their respective
-    constraints see the same inputs the WASM engine always receives.
+    ``role``, ``attributes``, ``run`` and ``agent_usage`` are all forwarded so
+    their respective constraints see the same inputs the WASM engine always
+    receives.
     """
     _raise_for_verdict(
         evaluate_tool_call(
-            policy, tool_name, arguments, role=role, attributes=attributes, run=run
+            policy,
+            tool_name,
+            arguments,
+            role=role,
+            attributes=attributes,
+            run=run,
+            agent_usage=agent_usage,
         )
     )
 
@@ -174,6 +184,7 @@ def evaluate_tool_call_wasm(
     *,
     attributes: Mapping[str, Any] | None = None,
     run: Mapping[str, Any] | None = None,
+    agent_usage: Mapping[str, Any] | None = None,
 ) -> Verdict:
     """WASM-backed counterpart of :func:`evaluate_tool_call`.
 
@@ -193,6 +204,7 @@ def evaluate_tool_call_wasm(
         args=arguments or {},
         ctx=dict(attributes or {}),
         run=dict(run or {}),
+        agent_usage=dict(agent_usage or {}),
     )
     return verdict_from_rego(decision, tool_name=tool_name, role=role)
 
@@ -238,6 +250,7 @@ def authorize_tool_call_wasm(
     *,
     attributes: Mapping[str, Any] | None = None,
     run: Mapping[str, Any] | None = None,
+    agent_usage: Mapping[str, Any] | None = None,
 ) -> None:
     """Raise-on-deny wrapper over :func:`evaluate_tool_call_wasm`.
 
@@ -246,6 +259,12 @@ def authorize_tool_call_wasm(
     """
     _raise_for_verdict(
         evaluate_tool_call_wasm(
-            bundle, role, tool_name, arguments, attributes=attributes, run=run
+            bundle,
+            role,
+            tool_name,
+            arguments,
+            attributes=attributes,
+            run=run,
+            agent_usage=agent_usage,
         )
     )

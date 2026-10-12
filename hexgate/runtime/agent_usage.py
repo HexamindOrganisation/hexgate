@@ -13,8 +13,10 @@ from __future__ import annotations
 import threading
 import time
 from array import array
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
+from dataclasses import dataclass
 from enum import StrEnum
+from types import MappingProxyType
 from typing import Final
 
 Clock = Callable[[], float]
@@ -36,7 +38,7 @@ _SECONDS_PER_MINUTE: Final = 60
 _SECONDS_PER_HOUR: Final = 3_600
 _SECONDS_PER_DAY: Final = 86_400
 # The longest window ``agent_usage.*`` may register. A longer one would silently read
-# a truncated count, so 2b pins its windows against this.
+# a truncated count, so the registry's windows are pinned against this.
 MAX_WINDOW_SECONDS: Final[float] = 30 * _SECONDS_PER_DAY
 # Three tiers, finest first. Fine buckets serve the snapshot cut-off, minutes old at
 # most; minute buckets serve windows up to a day; hour buckets serve the rest, so a
@@ -46,6 +48,47 @@ FINE_RETENTION_SECONDS: Final[float] = 300.0
 MINUTE_BUCKET_SECONDS: Final[float] = float(_SECONDS_PER_MINUTE)
 MINUTE_RETENTION_SECONDS: Final[float] = float(_SECONDS_PER_DAY)
 HOUR_BUCKET_SECONDS: Final[float] = float(_SECONDS_PER_HOUR)
+
+# Rolling windows only. Each path is <metric>_<window>. The platform endpoint accepts a
+# pattern, so adding a window later is an SDK-only change, as long as it stays
+# <= MAX_WINDOW_SECONDS.
+USAGE_WINDOWS: Final[Mapping[str, float]] = MappingProxyType(
+    {
+        "5m": 5 * _SECONDS_PER_MINUTE,
+        "1h": _SECONDS_PER_HOUR,
+        "24h": _SECONDS_PER_DAY,
+        "7d": 7 * _SECONDS_PER_DAY,
+        "30d": 30 * _SECONDS_PER_DAY,
+    }
+)
+# Derived when a namespace is built, never recorded: input + output.
+TOTAL_TOKENS: Final = "total_tokens"
+USAGE_METRICS: Final[tuple[str, ...]] = (
+    *(metric.value for metric in UsageMetric),
+    TOTAL_TOKENS,
+)
+
+
+@dataclass(frozen=True, slots=True)
+class UsagePath:
+    metric: str
+    window_seconds: float
+
+
+# Every agent_usage.* path a policy may reference: 7 metrics x 5 windows = 35.
+AGENT_USAGE_PATHS: Final[Mapping[str, UsagePath]] = MappingProxyType(
+    {
+        f"{metric}_{window}": UsagePath(metric, seconds)
+        for metric in USAGE_METRICS
+        for window, seconds in USAGE_WINDOWS.items()
+    }
+)
+KNOWN_AGENT_USAGE_PATHS: Final[frozenset[str]] = frozenset(AGENT_USAGE_PATHS)
+# How errors name the registry: the rule reads better than the 35 names it generates.
+AGENT_USAGE_VOCABULARY: Final = (
+    f"<metric>_<window>, metrics: {', '.join(sorted(USAGE_METRICS))}; "
+    f"windows: {', '.join(USAGE_WINDOWS)}"
+)
 
 # One signed 64-bit counter per metric per bucket.
 _ZERO_COUNTER: Final = array("q", [0])
@@ -146,10 +189,21 @@ class UsageLedger:
 
     def within(self, seconds: float) -> dict[UsageMetric, int]:
         """Usage over the trailing ``seconds``, a rolling window."""
+        return self.within_each((seconds,))[seconds]
+
+    def within_each(
+        self, windows: Iterable[float]
+    ) -> dict[float, dict[UsageMetric, int]]:
+        """Usage over each trailing window, from one locked read, so no ``record``
+        lands between two windows and a narrower one never reads more."""
         # One clock read, and the tier chosen by the span itself: a second read
         # would push a tier-retention window just past it, onto the next tier.
         with self._lock:
-            return self._covering(seconds).total_since(self._clock() - seconds)
+            now = self._clock()
+            return {
+                seconds: self._covering(seconds).total_since(now - seconds)
+                for seconds in set(windows)
+            }
 
     def _covering(self, span: float) -> BucketSeries:
         return next(
@@ -173,6 +227,51 @@ def new_usage_ledger(clock: Clock = _monotonic) -> UsageLedger:
         ),
         clock=clock,
     )
+
+
+def ledger_namespace(
+    ledger: UsageLedger,
+    paths: Iterable[str],
+    *,
+    current_run_age: float | None = None,
+) -> dict[str, int]:
+    """The ``agent_usage`` mapping for ``paths``, from this process's ledger alone.
+
+    One locked ledger read covering every distinct window. Unknown paths raise
+    ``KeyError``: callers pass only registered paths.
+
+    ``current_run_age`` is the age of the agent's run being decided inside, if any.
+    ``invocations_*`` then leaves that run out, so a cap reads the same inside the
+    run as it did at admission, before the run was counted.
+    """
+    wanted = [(path, AGENT_USAGE_PATHS[path]) for path in paths]
+    windows = {spec.window_seconds for _, spec in wanted}
+    reads = ledger.within_each(windows)
+    # Floored, a backstop: callers pass current_run_age only for a run that
+    # recorded itself on this ledger.
+    return {
+        path: max(
+            _metric_value(reads[spec.window_seconds], spec.metric)
+            - _own_invocation(spec, current_run_age),
+            0,
+        )
+        for path, spec in wanted
+    }
+
+
+def _own_invocation(spec: UsagePath, current_run_age: float | None) -> int:
+    # Only while the run's invocation can still be in the window: once it has aged
+    # out, subtracting would hide another run's. Bucket round-up may keep it counted
+    # a little longer, which reads one high, the strict direction.
+    if current_run_age is None or spec.metric != UsageMetric.INVOCATIONS:
+        return 0
+    return 1 if current_run_age < spec.window_seconds else 0
+
+
+def _metric_value(totals: Mapping[UsageMetric, int], metric: str) -> int:
+    if metric == TOTAL_TOKENS:
+        return totals[UsageMetric.INPUT_TOKENS] + totals[UsageMetric.OUTPUT_TOKENS]
+    return totals[UsageMetric(metric)]
 
 
 class UsageLedgers:
