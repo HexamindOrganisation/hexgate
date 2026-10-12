@@ -364,8 +364,10 @@ fails closed, like any missing field.
   resolve to the same mode, and a role that says nothing reads `allow`. A `deny` in
   some roles only fails to load, with an error that names each role's value.
 - **It is signed.** The mode travels in the [signed policy bundle](/concepts/signed-bundles), so a caller can't
-  strip `deny`. An SDK that predates the key rejects a policy that contains it, so
-  upgrade the SDK and the platform before you add the block.
+  strip `deny`. An SDK that predates the key **ignores** it in a signed bundle and
+  fails open; it rejects the policy only when it loads the YAML itself (a local
+  policy, or a platform with no compiled bundle). Upgrade every SDK and the platform
+  before you add the block.
 - **`on_unavailable` is required.** An empty `usage: {}` is a load error.
 
 Every decision that reads `agent_usage.*` carries a `sec_ai.usage_state` attribute on
