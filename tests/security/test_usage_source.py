@@ -25,6 +25,7 @@ from hexgate.security.usage_source import (
     DEFAULT_MAX_STALENESS_SECONDS,
     DEFAULT_MIN_REFRESH_SECONDS,
     DEFAULT_SYNC_AFTER_SECONDS,
+    REJECTED_RETRY_SECONDS,
     USAGE_INGEST_MARGIN_SECONDS,
     OnUnavailable,
     PlatformUsageSource,
@@ -364,6 +365,25 @@ def test_a_new_path_set_bypasses_the_throttle() -> None:
     assert len(rig.fetcher.calls) == 2
 
 
+@pytest.mark.parametrize("status", [401, 403, 404])
+def test_a_rejected_agent_is_not_asked_again_until_the_rejection_expires(
+    status: int,
+) -> None:
+    rig = _rig()
+    rig.fetcher.error = HexgateError("rejected", status=status)
+    rig.source.refresh(_AGENT, _ONE_PATH)
+
+    rig.clock.now += REJECTED_RETRY_SECONDS - 1
+    rig.source.refresh(_AGENT, _TWO_PATHS)
+    reading = rig.source.read(_AGENT, _TWO_PATHS, rig.ledger)
+    assert len(rig.fetcher.calls) == 1
+    assert reading.state is UsageState.UNAVAILABLE
+
+    rig.clock.now += 1
+    rig.source.refresh(_AGENT, _TWO_PATHS)
+    assert len(rig.fetcher.calls) == 2
+
+
 def test_a_failed_fetch_keeps_last_good_and_reads_stale() -> None:
     rig = _seeded()
     rig.fetcher.error = HexgateError("platform down", status=503)
@@ -398,7 +418,7 @@ def test_an_unregistered_agent_is_reported_once(
 
     with caplog.at_level(logging.WARNING, logger=usage_source.logger.name):
         rig.source.refresh(_AGENT, _ONE_PATH)
-        rig.clock.now += _MIN_REFRESH
+        rig.clock.now += REJECTED_RETRY_SECONDS
         rig.source.refresh(_AGENT, _ONE_PATH)
 
     assert len(rig.fetcher.calls) == 2

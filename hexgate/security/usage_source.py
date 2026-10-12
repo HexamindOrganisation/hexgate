@@ -51,6 +51,9 @@ DEFAULT_MAX_STALENESS_SECONDS: Final[float] = 300.0
 
 _VALUES_KEY: Final = "values"
 _NOT_FOUND: Final = 404
+# Answers a retry won't change soon: unregistered agent, bad or unscoped key.
+_REJECTED_STATUSES: Final = frozenset({401, 403, _NOT_FOUND})
+REJECTED_RETRY_SECONDS: Final[float] = 300.0
 _EXECUTOR_THREAD_PREFIX: Final = "hexgate-usage"
 
 
@@ -167,7 +170,8 @@ class PlatformUsageSource:
     ``refresh`` may block on one bounded fetch when the snapshot is cold or older
     than ``sync_after``; otherwise it schedules at most one background fetch per
     agent. ``read`` never touches the network. Fetches keep last-good on failure,
-    and a failed one is not retried within ``min_refresh`` unless the path set grew.
+    and a failed one is not retried within ``min_refresh`` unless the path set grew;
+    a 401, 403 or 404 is not retried within ``REJECTED_RETRY_SECONDS`` at all.
     """
 
     def __init__(
@@ -188,6 +192,7 @@ class PlatformUsageSource:
         # wanting different paths share one snapshot instead of evicting each other.
         self._wanted: dict[str, frozenset[str]] = {}
         self._last_attempt: dict[str, _Attempt] = {}
+        self._rejected_until: dict[str, float] = {}
         self._in_flight: set[str] = set()
         self._unregistered_logged: set[str] = set()
         # Per agent, so a sync fetch for one agent never waits on another's.
@@ -335,7 +340,11 @@ class PlatformUsageSource:
             logger.error("usage body for %r rejected; using last-good: %s", agent, exc)
             return
         except Exception as exc:  # noqa: BLE001 — fail-soft: keep last-good
-            if isinstance(exc, HexgateError) and exc.status == _NOT_FOUND:
+            status = exc.status if isinstance(exc, HexgateError) else None
+            if status in _REJECTED_STATUSES:
+                with self._state_lock:
+                    self._rejected_until[agent] = started + REJECTED_RETRY_SECONDS
+            if status == _NOT_FOUND:
                 self._log_unregistered(agent)
             else:
                 logger.warning(
@@ -362,6 +371,9 @@ class PlatformUsageSource:
             return self._throttled_locked(agent)
 
     def _throttled_locked(self, agent: str) -> bool:
+        # A new path does not lift a rejection: the platform refuses the agent.
+        if self._clock() < self._rejected_until.get(agent, float("-inf")):
+            return True
         last = self._last_attempt.get(agent)
         return (
             last is not None
