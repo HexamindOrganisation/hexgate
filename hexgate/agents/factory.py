@@ -36,7 +36,7 @@ from langgraph.graph.state import CompiledStateGraph
 from langgraph.store.base import BaseStore
 from pydantic import BaseModel
 
-from hexgate.adapters._common import aprepare_run, usage_refresh_of
+from hexgate.adapters._common import aprepare_run
 from hexgate.agents.subagents import SubagentEdge
 
 # BC re-export — canonical home is hexgate.approvals (framework-agnostic).
@@ -484,7 +484,7 @@ class HexgateAgent:
             _refresh_policy_safely(self),
             self._ban_gate,
             get_current_context(),
-            usage=usage_refresh_of(self._binding),
+            binding=self._binding,
         )
         await self._check_admission()
         with run_scope(self._canonical_name):
@@ -513,7 +513,7 @@ class HexgateAgent:
             _refresh_policy_safely(self),
             self._ban_gate,
             get_current_context(),
-            usage=usage_refresh_of(self._binding),
+            binding=self._binding,
         )
         await self._check_admission()
         with run_scope(self._canonical_name):

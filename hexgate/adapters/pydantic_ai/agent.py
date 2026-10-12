@@ -20,7 +20,6 @@ from hexgate.adapters._common import (
     aprepare_run,
     bind,
     prepare_run,
-    usage_refresh_of,
 )
 from hexgate.adapters.pydantic_ai.usage import emit_run_messages, emit_run_usage
 from hexgate.runtime import HexgateContext
@@ -134,7 +133,7 @@ class HexgatePydanticAgent:
             self._refresh_async(),
             self._ban_gate,
             hexgate_context,
-            usage=usage_refresh_of(self._binding),
+            binding=self._binding,
         )
         async with self._abind(hexgate_context, "run"):
             result = await self._agent.run(*args, **kwargs)
@@ -152,7 +151,7 @@ class HexgatePydanticAgent:
             self._refresh,
             self._ban_gate,
             hexgate_context,
-            usage=usage_refresh_of(self._binding),
+            binding=self._binding,
         )
         with self._bind(hexgate_context, "run_sync"):
             result = self._agent.run_sync(*args, **kwargs)
@@ -171,7 +170,7 @@ class HexgatePydanticAgent:
             self._refresh_async(),
             self._ban_gate,
             hexgate_context,
-            usage=usage_refresh_of(self._binding),
+            binding=self._binding,
         )
         async with self._abind(hexgate_context, "run_stream"):
             async with self._agent.run_stream(*args, **kwargs) as result:
@@ -198,7 +197,7 @@ class HexgatePydanticAgent:
             self._refresh_async(),
             self._ban_gate,
             hexgate_context,
-            usage=usage_refresh_of(self._binding),
+            binding=self._binding,
         )
         async with self._abind(hexgate_context, "iter"):
             async with self._agent.iter(*args, **kwargs) as run:
