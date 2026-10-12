@@ -383,7 +383,7 @@ its audit span, saying how the values were built:
 | `fresh` | Snapshot under a minute old (by default), with every path the policy needs |
 | `stale` | Last good snapshot, over a minute old but under five (by default) |
 | `partial` | Usable snapshot that lacks some paths; those follow the fail mode |
-| `unavailable` | No snapshot, or one over five minutes old (by default); every path follows the fail mode |
+| `unavailable` | No snapshot, or one over five minutes old (by default); every path follows the fail mode. An agent not registered in the API key's project never gets a snapshot, so under `deny` its `agent_usage.*` constraints fail closed on every run |
 | `local` | No platform to ask: local mode, local policy, or no API key |
 
 The platform doesn't store or display `usage_state` yet.
