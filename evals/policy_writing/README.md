@@ -96,8 +96,7 @@ null when left out) or `{tool: net.http_request, args: {method: GET, url:
 | `mentions_all` | The final answer contains every one of these words. |
 | `superset` | A list of `{wider, narrower, probes}`: on every probe call, `wider` may do at least what `narrower` may. |
 
-Example (the case lands with the case data, under
-`cases/explicit_request/support_refund_cap/`):
+Example, trimmed from `cases/explicit_request/support_refund_cap/case.yaml`:
 
 ```yaml
 starting_project: support_bot_single_file
@@ -125,6 +124,12 @@ would return to a real agent:
   attributes are set per request, not in the manifest, so the `ctx.*` names a
   case's agent knows are the `attributes` keys of its own rows (any agent's,
   for a case without `agent`).
+
+A shared project (under `starting_projects/`) also needs a `preserve.yaml`
+(see *Checks every case gets*); a case's own `starting_project/` has one when
+it has a policy. It is ours, not part of what the agent receives.
+`tests/evals/test_starting_projects.py` checks each shared project alone: it
+loads, lints clean, and every preserved call holds on the untouched project.
 
 The scorer lints a module tree (`policies/` with a `roles.yaml`) against
 `agents.json` in every answer, including one that changes nothing, so a
