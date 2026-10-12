@@ -87,7 +87,6 @@ HARNESS = (
     "a reasonable assumption and state it. End with a short summary of what "
     "you changed."
 )
-# What the `result` event reports, kept for the cost report (PR 15).
 USAGE_KEYS = ("usage", "total_cost_usd", "modelUsage", "duration_ms", "num_turns")
 SAMPLE_MARGIN = (
     60  # the agent's own timeout fires first: no workspace in flux is scored
@@ -235,8 +234,9 @@ async def check_sandbox_env(sb: SandboxEnvironment) -> None:
 
 async def push_skill(sb: SandboxEnvironment) -> None:
     """The repo's write-policy skill, at the same path under the workspace."""
-    for rel in checks.snapshot(REPO / SKILL):
-        await sb.write_file(str(SKILL / rel), (REPO / SKILL / rel).read_bytes())
+    root = REPO / SKILL
+    for path in sorted(p for p in root.rglob("*") if p.is_file()):
+        await sb.write_file(str(SKILL / path.relative_to(root)), path.read_bytes())
 
 
 async def run_claude(
