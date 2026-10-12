@@ -24,6 +24,8 @@ from evals.policy_writing.sources import (
     load_attribute_values,
     load_project_agents,
 )
+from hexgate.adapters.google.tools import _canonical_script_path
+from hexgate.adapters.langchain.skills import canonical_skill_path
 from hexgate.egress.model import connect_to_args, http_to_args
 from hexgate.egress.tcp import tcp_to_args
 from hexgate.manifest.models import AgentFramework, AgentManifest, InputSchema
@@ -189,7 +191,7 @@ def unknown_names(call: dict, known: Known) -> list[str]:
 
     The call is completed first: a gate call carries its gate's key and args.
     A tool, skill or reach target is known when the agent can make the call
-    (`policy.can_call`, as the scorer judges a role-wide case): a reach key
+    (`policy.manifest_can_call`, as the scorer's `can_call` judges a role-wide case): a reach key
     needs the sub-agent edge for that `via`, not just a registered target.
     """
     tool, args = call["tool"], call.get("args", {})
@@ -230,9 +232,10 @@ def _bad_args(args: dict, schema: InputSchema) -> list[str]:
 
 def _bad_skill_args(tool: str, args: dict, framework: AgentFramework) -> list[str]:
     """The skill gate's args no adapter sends: a null `content_hash` (it hashes
-    the skill's body), and a null `file_path` on a read or a script (the path
-    read or run), or on a LangChain skill load (its `SKILL.md`). A constraint
-    on either denies the null, so a `deny` check would pass whatever the policy.
+    the skill's body); a null `file_path` on a read or a script (the path
+    read or run), or on a LangChain skill load (its `SKILL.md`); a `file_path`
+    spelled otherwise than the adapter sends it. A constraint on either denies
+    those, so a `deny` check would pass whatever the policy.
     """
     bad = []
     content_hash = args.get("content_hash")
@@ -243,11 +246,25 @@ def _bad_skill_args(tool: str, args: dict, framework: AgentFramework) -> list[st
             f"args.content_hash={content_hash!r}, sent {CONTENT_HASH_PREFIX}<hex>"
         )
     loads = tool.startswith(skill_key("instructions", ""))
-    if args.get("file_path") is None and (
-        not loads or framework is AgentFramework.LANGCHAIN
-    ):
-        bad.append("args.file_path missing")
+    path = args.get("file_path")
+    if path is None:
+        if not loads or framework is AgentFramework.LANGCHAIN:
+            bad.append("args.file_path missing")
+    elif (sent := _sent_skill_path(tool, path, framework)) != path:
+        # `skills/pdf/a.md` for `/skills/pdf/a.md` fails any path constraint.
+        bad.append(f"args.file_path={path!r}, sent {sent!r}")
     return bad
+
+
+def _sent_skill_path(tool: str, path, framework: AgentFramework):
+    """`path` as the agent's adapter puts it in the skill decision."""
+    if not isinstance(path, str):
+        return path
+    if framework is AgentFramework.LANGCHAIN:
+        return canonical_skill_path(path)
+    if framework is AgentFramework.GOOGLE and tool.startswith(skill_key("script", "")):
+        return _canonical_script_path(path)
+    return path
 
 
 def bad_values(call: dict, known: Known) -> list[str]:

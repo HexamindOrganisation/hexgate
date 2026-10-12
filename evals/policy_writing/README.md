@@ -44,8 +44,10 @@ rejects anything that would otherwise drop a check without a word:
   the case folder (a `wrong_answers/`); a `preserve.yml`.
 - **Names in a dry-run call** (`calls.py`, `unknown_names`): a tool, argument,
   caller attribute, reached agent or skill the case's agent doesn't know (see
-  *A starting project*). A case without `agent` needs one agent that knows
-  them all, as the scorer needs one that can make the call.
+  *A starting project*). A case without `agent` needs one agent that can
+  make the call as written, as the scorer needs one; when its check accepts
+  `deny` (or it is a `superset` probe), every agent that can make it must,
+  since a malformed call is denied whatever that agent's policy.
 - **Values in a dry-run call** (`calls.py`, `bad_values`):
   - for one of the agent's tools, a missing required argument, or a value of
     another type than its schema's: a quoted `"51"`, or a blank `amount:` on
@@ -53,8 +55,11 @@ rejects anything that would otherwise drop a check without a word:
     checks nothing, since adapters write it for `int | None` too, so an
     unquoted `order_id: 51` or YAML's `NO` (false) passes there;
   - for a skill, a `content_hash` without the `sha256:` prefix (the adapters hash
-    the skill's body), or no `file_path` on a `skill.resource:` or
-    `skill.script:` call, or on a LangChain agent's `skill:` call;
+    the skill's body); no `file_path` on a `skill.resource:` or
+    `skill.script:` call, or on a LangChain agent's `skill:` call; or a
+    `file_path` spelled otherwise than the adapter sends it (LangChain's is
+    absolute, `/skills/pdf/forms.md`; a Google script's is under `scripts/`;
+    a Google `skill:` load sends none, which isn't checked);
   - a caller attribute of another JSON type than its audit rows carry.
 
   A call's values are read through JSON first, as `policy test` reads them,

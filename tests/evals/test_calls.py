@@ -364,9 +364,25 @@ def test_a_reach_target_needs_the_manifest_s_edge_for_its_via(
         (
             "skill.script:triage",
             {**SCRIPT_RUN, "content_hash": "ab12"},
-            "langchain",
+            "google",
             ["args.content_hash='ab12', sent sha256:<hex>"],
         ),
+        # Spelled otherwise than the adapter sends it, a path fails any
+        # constraint on it: LangChain's is absolute, Google's script under scripts/.
+        (
+            "skill.resource:triage",
+            {"file_path": "skills/triage/forms.md"},
+            "langchain",
+            ["args.file_path='skills/triage/forms.md', sent '/skills/triage/forms.md'"],
+        ),
+        (
+            "skill.script:triage",
+            {**SCRIPT_RUN, "file_path": "run.sh"},
+            "google",
+            ["args.file_path='run.sh', sent 'scripts/run.sh'"],
+        ),
+        # Google sends a resource's path as the model gives it.
+        ("skill.resource:triage", {"file_path": "forms.md"}, "google", []),
     ],
 )
 def test_bad_values_on_a_skill_call(

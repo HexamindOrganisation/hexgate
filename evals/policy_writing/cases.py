@@ -34,7 +34,12 @@ from evals.policy_writing.calls import (
     unknown_names,
 )
 from evals.policy_writing.checks import is_module_tree, snapshot
-from evals.policy_writing.policy import CaseError, complete_call, dump_json
+from evals.policy_writing.policy import (
+    CaseError,
+    complete_call,
+    dump_json,
+    manifest_can_call,
+)
 from evals.policy_writing.sources import SourceError
 
 HERE = Path(__file__).resolve().parent
@@ -219,26 +224,52 @@ def _complete_calls(path: Path, agent: str | None, calls: list[dict]) -> None:
             raise CaseError(f"{path}: {tool}: {exc}") from exc
 
 
-def _check_calls(path: Path, case: dict, calls: list[dict]) -> None:
-    """The case's agent is in agents.json, and each of `calls` uses only what
-    it knows; with no agent (a role-wide case), what some agent knows, as the
-    scorer needs one agent that can make each call."""
-    agent = case["agent"]
+def _load_known(path: Path, case: dict) -> list[Known]:
     try:
-        known = load_known(case["project"], agent)
+        return load_known(case["project"], case["agent"])
     except SourceError as exc:
         raise CaseError(f"{path}: {exc}") from exc
-    who = agent or "every agent"
+
+
+def _check_calls(
+    path: Path, agent: str | None, known: list[Known], calls: list[dict]
+) -> None:
+    """Each of `calls` uses only what the case's agent knows; with no agent (a
+    role-wide case), it is well formed for each agent the scorer may count.
+
+    A malformed call is denied, so it passes a check that accepts deny, and a
+    superset probe, whatever that agent's policy: then every agent that can
+    make the call must find it well formed. Otherwise (an expected allow or
+    approval) one agent that can make it is enough, as the scorer needs one."""
     for call in calls:
-        problems = [_problems(call, k) for k in known]
-        if not all(problems):
+        found = [(k.agent, _problems(call, k)) for k in known]
+        able = [(a, p) for (a, p), k in zip(found, known) if _can_make(call, k)]
+        if _deny_counts(call):
+            if able and not any(p for _, p in able):
+                continue
+        elif not all(p for _, p in found):
             continue
         # An agent that can make the call says what is wrong with it; when none
-        # can, the first agent's unknown names.
-        kind, bad = min(problems, key=lambda p: p[0] == "unknown")
+        # can, the call is unknown to every agent (or to the case's own).
+        who, (kind, bad) = next(
+            ((a, p) for a, p in able if p), (agent or "every agent", found[0][1])
+        )
         if kind == "unknown":
             raise CaseError(f"{path}: {call['tool']}: unknown to {who}: {bad}")
         raise CaseError(f"{path}: {call['tool']}: not {who}'s schema: {bad}")
+
+
+def _can_make(call: dict, known: Known) -> bool:
+    return manifest_can_call(
+        known.manifest, known.agent, call["tool"], known.registered
+    )
+
+
+def _deny_counts(call: dict) -> bool:
+    """Whether a denied dry-run of `call` can pass its check: a probe (no
+    `expect`), or an expectation that accepts deny."""
+    expect = call.get("expect", "deny")
+    return "deny" in (expect if isinstance(expect, list) else [expect])
 
 
 def _problems(call: dict, known: Known) -> tuple[str, list[str]] | None:
@@ -335,9 +366,10 @@ def _load_case(root: Path, case_dir: Path) -> dict:
     # Before the merge, so a preserved call and the case's own entry for it
     # compare equal however much of the gate's arguments each spells out.
     _complete_calls(path, case["agent"], _calls(expect))
-    _check_calls(path, case, _calls(expect))
+    known = _load_known(path, case)
+    _check_calls(path, case["agent"], known, _calls(expect))
     preserved = _load_preserved(case["project"], files, case["agent"])
-    _check_calls(case["project"] / PRESERVE, case, preserved)
+    _check_calls(case["project"] / PRESERVE, case["agent"], known, preserved)
     if preserved:
         expect["decisions"] = _merge_preserved(expect.get("decisions", []), preserved)
     return case

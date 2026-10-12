@@ -252,7 +252,7 @@ def test_a_case_without_an_agent_checks_each_call_against_every_agent(
         # shop-bot can make the call, so its schema says what is wrong.
         (
             {**DENY_500, "args": {"order_id": "o1"}},
-            "not every agent's schema: \\['args.amount missing'\\]",
+            "not shop-bot's schema: \\['args.amount missing'\\]",
         ),
         (
             {"role": "billing", "tool": "agent.run", "args": {"agent": AGENT}}
@@ -266,6 +266,32 @@ def test_when_no_agent_can_make_a_call_then_a_case_without_one_is_refused(
 ) -> None:
     with pytest.raises(CaseError, match=error):
         load_cases(_eval_set(tmp_path, _role_wide(call)))
+
+
+@pytest.mark.parametrize(
+    ("expect", "error"),
+    [
+        ("allow", None),
+        # A deny would pass for ops-bot whatever its policy: its refund_order
+        # takes no `amount`.
+        ("deny", r"refund_order: unknown to ops-bot: \['args.amount'\]"),
+        (["deny", "approval_required"], "unknown to ops-bot"),
+    ],
+)
+def test_a_case_without_an_agent_needs_a_deny_call_well_formed_for_every_agent(
+    tmp_path: Path, expect, error: str | None
+) -> None:
+    root = _eval_set(tmp_path, _role_wide({**REFUND_500, "expect": expect}))
+    ops = agent_view("ops-bot", manifest_tool("refund_order", order_id="string"))
+    _write(
+        root / "starting_projects" / "shop" / "agents.json",
+        json.dumps([AGENTS[0], ops]),
+    )
+    if error is None:
+        load_cases(root)
+    else:
+        with pytest.raises(CaseError, match=error):
+            load_cases(root)
 
 
 def test_a_bad_preserved_call_is_reported_against_preserve_yaml(
@@ -345,8 +371,11 @@ def test_load_refuses_an_unquoted_yaml_timestamp(tmp_path: Path) -> None:
 def test_load_completes_and_checks_a_script_call(tmp_path: Path) -> None:
     # The scorer's complete_call fills a script's args, null where left out;
     # the checks accept them, the path and hash the adapters always send given.
+    # Google's adapter gates scripts (LangChain's never does).
     view = agent_view(
-        AGENT, manifest_tool("refund_order", order_id="string", amount="number")
+        AGENT,
+        manifest_tool("refund_order", order_id="string", amount="number"),
+        framework="google",
     )
     view["manifest"]["skills"] = [{"name": "pdf", "description": "pdf"}]
     root = _eval_set(tmp_path, _case())
