@@ -58,6 +58,7 @@ from hexgate.security.constraints import (
 from hexgate.security.decision import Verdict
 from hexgate.security.models import (
     AGENT_RUN_TOOL,
+    USAGE_FIELD,
     AgentPolicy,
     AgentTargetPolicy,
     BaseToolPolicy,
@@ -690,6 +691,7 @@ def _resolve_inheritance(
             f"role {name!r} not found (inherited from {chain[-1] if chain else '<root>'})"
         )
     own = raw[name]
+    _reject_explicit_null_usage(name, own)
     if not own.inherits:
         return own
     merged_tools: dict[str, ToolPolicy] = {}
@@ -754,6 +756,17 @@ def _resolve_inheritance(
         guards=merged_guards,
         usage=merged_usage,
     )
+
+
+def _reject_explicit_null_usage(name: str, policy: AgentPolicy) -> None:
+    """The merge never lets a role drop an inherited ``deny`` (fail-open), so
+    ``usage: null`` would keep the parent's value where ``admission: null`` clears
+    it. Reject the spelling rather than let one syntax mean two things."""
+    if USAGE_FIELD in policy.model_fields_set and policy.usage is None:
+        raise PolicySetError(
+            f"role {name!r}: usage: null is not allowed; omit the key to inherit, "
+            "or set usage.on_unavailable"
+        )
 
 
 def _extend_unique(target: list[str], values: Iterable[str]) -> None:

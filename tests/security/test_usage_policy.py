@@ -18,8 +18,9 @@ import yaml
 from pydantic import ValidationError
 
 from hexgate.runtime.agent_usage import OnUnavailable
+from hexgate.security import UsagePolicy
 from hexgate.security.bundle import PolicyBundle, build_signed_bundle
-from hexgate.security.models import AgentPolicy, UsagePolicy
+from hexgate.security.models import AgentPolicy
 from hexgate.security.policy_set import (
     PolicySetError,
     load_policy_set,
@@ -99,6 +100,19 @@ def test_file_level_usage_beside_roles_is_rejected() -> None:
     with pytest.raises(PolicySetError, match="move them under a role"):
         load_policy_set_from_dict(
             {"usage": DENY_BLOCK, "roles": {"default": {"tools": TOOLS}}}
+        )
+
+
+@pytest.mark.parametrize("inherits", [["base"], []])
+def test_explicit_null_usage_in_a_role_is_rejected(inherits: list[str]) -> None:
+    with pytest.raises(PolicySetError, match="usage: null is not allowed"):
+        load_policy_set_from_dict(
+            {
+                "roles": {
+                    "base": {"is_mixin": True, "usage": DENY_BLOCK},
+                    "default": {"inherits": inherits, "usage": None, "tools": TOOLS},
+                }
+            }
         )
 
 
