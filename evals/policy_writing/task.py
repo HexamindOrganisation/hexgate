@@ -8,21 +8,31 @@ Inspect gives each case a fresh sandbox holding only the starting project; the
 scorer pulls the files left behind to the host and runs `checks.score` on them.
 The local agents (`reference`: `solution/`, `wrong_answers`: `wrong_answer/`,
 `noop`: nothing) test the checks and this wiring with no model and no Docker.
-Every sandbox read and write goes through `sandbox()`, so the Claude Code agent
-(PR 5) can switch it to Docker without touching this file.
+`claude` runs Claude Code itself (`claude -p`) in the Docker sandbox of
+`compose.yaml`, on the Claude subscription's token from `claude setup-token`
+(README): no API key, and still `--model none`, Inspect makes no model call.
+Every sandbox read and write goes through `sandbox()`.
 """
 
 from __future__ import annotations
 
 import difflib
 import hashlib
+import json
+import os
 import tempfile
+from collections.abc import Iterator
 from dataclasses import asdict
 from pathlib import Path
 
 from inspect_ai import Task, task
 from inspect_ai.dataset import Sample
-from inspect_ai.model import ModelOutput
+from inspect_ai.model import (
+    ChatMessage,
+    ChatMessageAssistant,
+    ChatMessageTool,
+    ModelOutput,
+)
 from inspect_ai.scorer import (
     CORRECT,
     INCORRECT,
@@ -34,7 +44,14 @@ from inspect_ai.scorer import (
     stderr,
 )
 from inspect_ai.solver import Generate, TaskState, solver
-from inspect_ai.util import SandboxEnvironment, sample_limits, sandbox
+from inspect_ai.tool import ToolCall
+from inspect_ai.util import (
+    OutputLimitExceededError,
+    SandboxEnvironment,
+    SandboxEnvironmentSpec,
+    sample_limits,
+    sandbox,
+)
 
 from evals.policy_writing import checks
 from evals.policy_writing.cases import load_cases, starting_files
@@ -47,6 +64,34 @@ ANSWER_FOLDERS = {
     "wrong_answers": "wrong_answer",
     "noop": None,
 }
+
+# Claude Code in the sandbox: `claude -p` on the subscription token from `claude
+# setup-token`, which compose.yaml takes from the host's environment.
+TOKEN_VAR = "CLAUDE_CODE_OAUTH_TOKEN"
+API_KEY_VARS = {"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"}
+COMPOSE = Path(__file__).with_name("compose.yaml")
+REPO = Path(__file__).resolve().parents[2]
+SKILL = Path(
+    ".claude/skills/write-policy"
+)  # a dot path: the snapshot and the pull skip it
+# The tools the agent may use, edits auto-accepted. Never `--bare`: it ignores the token.
+CLAUDE_FLAGS = [
+    *"--output-format stream-json --verbose --permission-mode acceptEdits".split(),
+    "--allowedTools",
+    "Read,Glob,Grep,Edit,Write,Bash(uv run hexgate:*),Bash(hexgate:*)",
+]
+# Facts about the harness, not the request: appended to the agent's system prompt.
+HARNESS = (
+    "You are running unattended in an automated evaluation, started in the "
+    "project's directory. Nobody can answer questions, so don't ask any: make "
+    "a reasonable assumption and state it. End with a short summary of what "
+    "you changed."
+)
+# What the `result` event reports, kept for the cost report (PR 15).
+USAGE_KEYS = ("usage", "total_cost_usd", "modelUsage", "duration_ms", "num_turns")
+SAMPLE_MARGIN = (
+    60  # the agent's own timeout fires first: no workspace in flux is scored
+)
 
 # Bounds on what the scorer pulls back from the sandbox and puts in the log.
 MAX_FILES = 200
@@ -64,22 +109,43 @@ CASES = {case["id"]: case for case in load_cases()}
 
 @task
 def policy_writing(
-    agent: str = "claude", cases: str | list[str] | None = None, timeout: int = 900
+    agent: str = "claude",
+    cases: str | list[str] | None = None,
+    timeout: int = 900,
+    sandbox: str | None = None,
 ) -> Task:
     """`agent`: `claude`, `reference`, `wrong_answers` or `noop`. `cases`: id
-    prefixes, all cases when empty. `timeout`: seconds per sample."""
+    prefixes, all cases when empty. `timeout`: seconds the agent gets. `sandbox`:
+    `claude` runs in `docker` and refuses any other; the rest default to `local`."""
     if agent == "claude":
-        raise NotImplementedError("agent=claude (Claude Code) lands in PR 5")
-    if agent not in ANSWER_FOLDERS:
+        folder, solve, box = None, claude_agent(timeout), claude_sandbox(sandbox)
+    elif agent in ANSWER_FOLDERS:
+        folder = ANSWER_FOLDERS[agent]
+        solve, box = our_answer(folder), sandbox or "local"
+    else:
         raise ValueError(f"unknown agent {agent!r}")
-    folder = ANSWER_FOLDERS[agent]
     return Task(
         dataset=samples(folder, prefixes(cases)),
-        solver=our_answer(folder),
+        solver=solve,
         scorer=policy_checks(),
-        sandbox="local",
-        time_limit=timeout,
+        sandbox=box,
+        time_limit=timeout + SAMPLE_MARGIN,
     )
+
+
+def claude_sandbox(kind: str | None) -> SandboxEnvironmentSpec:
+    """Docker with our compose file, which needs the subscription token on the host."""
+    if kind not in (None, "docker"):
+        raise ValueError(
+            f"agent=claude runs only in the docker sandbox, not {kind!r}: it "
+            "runs Claude Code with edits auto-accepted"
+        )
+    if not os.environ.get(TOKEN_VAR):
+        raise RuntimeError(
+            f"{TOKEN_VAR} is not set: run `claude setup-token` once and export "
+            "the token it prints (README, 'Run Claude Code')"
+        )
+    return SandboxEnvironmentSpec("docker", str(COMPOSE))
 
 
 def prefixes(cases: str | list[str] | None) -> list[str]:
@@ -133,6 +199,133 @@ async def push_answer(sb: SandboxEnvironment, case: dict, folder: str) -> str:
     return answer
 
 
+@solver
+def claude_agent(timeout: int):
+    """Claude Code with the write-policy skill, run inside the sandbox."""
+
+    async def solve(state: TaskState, generate: Generate) -> TaskState:
+        sb = sandbox()
+        await check_sandbox_env(sb)
+        await push_skill(sb)
+        stdout, failure = await run_claude(sb, state.input_text, timeout)
+        result, transcript = parse_stream(stdout)
+        state.messages.extend(transcript)
+        state.output = model_output(str(state.model), result, failure)
+        state.store.set(
+            "usage", {k: result.get(k) for k in USAGE_KEYS} if result else {}
+        )
+        return state
+
+    return solve
+
+
+async def check_sandbox_env(sb: SandboxEnvironment) -> None:
+    """`--sandbox local` would run Claude Code on the host; a key would replace the token."""
+    names = set(
+        (await sb.exec(["sh", "-c", "env | cut -d= -f1"])).stdout.split()
+    )  # no values: logged
+    if "IS_SANDBOX" not in names:
+        raise RuntimeError("not the compose.yaml sandbox: agent=claude runs only there")
+    if found := API_KEY_VARS & names:
+        raise RuntimeError(
+            f"{', '.join(sorted(found))} set in the sandbox: it would take "
+            f"precedence over {TOKEN_VAR}"
+        )
+
+
+async def push_skill(sb: SandboxEnvironment) -> None:
+    """The repo's write-policy skill, at the same path under the workspace."""
+    for rel in checks.snapshot(REPO / SKILL):
+        await sb.write_file(str(SKILL / rel), (REPO / SKILL / rel).read_bytes())
+
+
+async def run_claude(
+    sb: SandboxEnvironment, prompt: str, timeout: int
+) -> tuple[str, str]:
+    """Claude Code's stdout, and why if the run ended without a `result` event.
+    Nothing of the host's env; no retry on a timeout, it would bill again."""
+    cmd = ["claude", "-p", prompt, "--append-system-prompt", HARNESS, *CLAUDE_FLAGS]
+    try:
+        out = await sb.exec(cmd, timeout=timeout, timeout_retry=False)
+    except (TimeoutError, OutputLimitExceededError) as exc:
+        # Inspect keeps the output so far on it: None when nothing came out.
+        return getattr(exc, "truncated_output", None) or "", str(exc)
+    return out.stdout, f"no result event: {out.stderr[-500:]}"
+
+
+def parse_stream(stdout: str) -> tuple[dict | None, list[ChatMessage]]:
+    """The `result` event (None if the run ended without one) and the transcript
+    replayed so Inspect View shows every tool call; other events are skipped."""
+    result, messages = None, []
+    for ev in events(stdout):
+        kind, blocks = ev.get("type"), content_blocks(ev)
+        if kind == "assistant":
+            messages += assistant_message(blocks)
+        elif kind == "user":
+            messages += tool_messages(blocks)
+        elif kind == "result":
+            result = ev
+    return result, messages
+
+
+def events(stdout: str) -> Iterator[dict]:
+    """The JSON object on each line, skipping stderr and a cut line (a timeout's output)."""
+    for line in stdout.splitlines():
+        try:
+            ev = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(ev, dict):
+            yield ev
+
+
+def content_blocks(ev: dict) -> list[dict]:
+    """A message's content blocks; a compaction summary holds a plain string instead."""
+    msg = ev.get("message")
+    blocks = msg.get("content") if isinstance(msg, dict) else None
+    return blocks if isinstance(blocks, list) else []
+
+
+def assistant_message(blocks: list[dict]) -> list[ChatMessage]:
+    """One assistant message with its tool calls; none for a thinking-only event."""
+    text = "\n".join(b["text"] for b in blocks if b.get("type") == "text")
+    calls = [
+        ToolCall(id=b["id"], function=b["name"], arguments=b.get("input") or {})
+        for b in blocks
+        if b.get("type") == "tool_use"
+    ]
+    if not (text or calls):
+        return []
+    return [ChatMessageAssistant(content=text, tool_calls=calls or None)]
+
+
+def tool_messages(blocks: list[dict]) -> list[ChatMessage]:
+    return [
+        ChatMessageTool(
+            content=tool_text(b.get("content")), tool_call_id=b["tool_use_id"]
+        )
+        for b in blocks
+        if b.get("type") == "tool_result"
+    ]
+
+
+def tool_text(content) -> str:
+    """A tool_result's content: a string, or a list of {type: text} blocks."""
+    if isinstance(content, str):
+        return content
+    return "\n".join(b.get("text", "") for b in content or [] if isinstance(b, dict))
+
+
+def model_output(model: str, result: dict | None, failure: str) -> ModelOutput:
+    """The answer; or an error for `agent ran`: no `result` event (why), or its `is_error`."""
+    if result is None:
+        return ModelOutput.from_content(model, "", error=failure)
+    if result.get("is_error"):
+        error = result.get("result") or result.get("subtype") or "is_error"
+        return ModelOutput.from_content(model, "", error=str(error))
+    return ModelOutput.from_content(model, result.get("result") or "")
+
+
 @scorer(
     metrics=[
         accuracy(),
@@ -148,11 +341,25 @@ def policy_checks():
 
     async def score(state: TaskState, target: Target) -> Score:
         with tempfile.TemporaryDirectory() as tmp:
-            size = await pull_workspace(sandbox(), Path(tmp))
+            size, pulled = await pull(sandbox(), Path(tmp))
             case, answer = CASES[state.sample_id], state.output.completion
-            return grade(case, Path(tmp), answer, size, agent_ran(state))
+            score = grade(case, Path(tmp), answer, size, agent_ran(state) or pulled)
+        # What Claude Code reported, for the cost report (PR 15).
+        score.metadata["usage"] = state.store.get("usage")
+        return score
 
     return score
+
+
+async def pull(
+    sb: SandboxEnvironment, dest: Path
+) -> tuple[tuple[int, int], checks.Check | None]:
+    """A read that fails is the agent's doing (it outlived its limit): `agent ran` fails."""
+    try:
+        return await pull_workspace(sb, dest), None
+    except (OSError, OutputLimitExceededError) as exc:
+        detail = f"reading the sandbox failed: {exc}"
+        return (0, 0), checks.Check("agent ran", False, detail)
 
 
 async def pull_workspace(sb: SandboxEnvironment, dest: Path) -> tuple[int, int]:

@@ -191,7 +191,23 @@ uv run inspect view --log-dir evals/policy_writing/logs  # the check list and a 
 
 `-T cases=a,b` keeps the cases whose id starts with a prefix; `--epochs 3
 --epochs-reducer mean,at_least_3` gives each case its mean and pass^3.
-`-T agent=claude` (Claude Code) lands in PR 5.
+`-T agent=claude` (the default) is Claude Code in Docker: see *Run Claude Code*.
+
+### Run Claude Code
+
+`-T agent=claude` runs Claude Code itself (`claude -p`, the `write-policy` skill
+copied in) in the Docker sandbox of `compose.yaml`, built from this repo. It runs
+on the Claude subscription, not an API key: **every run bills its rate windows**.
+
+```bash
+claude setup-token                     # once: prints a long-lived token
+export CLAUDE_CODE_OAUTH_TOKEN=…       # in the shell that runs the eval; never commit it
+make policy-eval CASES=explicit_request                     # one case, 3 epochs; builds the image first
+uv run inspect view --log-dir evals/policy_writing/logs     # checks, diffs and the transcript
+```
+
+Of your environment only that token enters the container; the task refuses one
+holding `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN`, which would take precedence.
 
 ## Adding a case
 
