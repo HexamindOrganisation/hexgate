@@ -8,9 +8,40 @@
       "model": null,
       "system_prompt": null,
       "tools": [
-        {"name": "view_orders", "description": "List a customer's orders", "input_schema": {"properties": {"customer_id": {"title": "customer_id", "type": "string"}}, "required": ["customer_id"]}},
-        {"name": "send_email", "description": "Send an email (to: addresses)", "input_schema": {"properties": {"to": {"title": "to", "type": "array"}, "subject": {"title": "subject", "type": "string"}, "body": {"title": "body", "type": "string"}}, "required": ["to", "subject", "body"]}},
-        {"name": "refund_order", "description": "Refund an order (currency: ISO code)", "input_schema": {"properties": {"order_id": {"title": "order_id", "type": "string"}, "amount": {"title": "amount", "type": "number"}, "currency": {"title": "currency", "type": "string"}}, "required": ["order_id", "amount", "currency"]}}
+        {
+          "name": "view_orders",
+          "description": "List a customer's orders",
+          "input_schema": {
+            "properties": {
+              "customer_id": {"title": "customer_id", "type": "string"}
+            },
+            "required": ["customer_id"]
+          }
+        },
+        {
+          "name": "send_email",
+          "description": "Send an email (to: addresses)",
+          "input_schema": {
+            "properties": {
+              "to": {"title": "to", "type": "array"},
+              "subject": {"title": "subject", "type": "string"},
+              "body": {"title": "body", "type": "string"}
+            },
+            "required": ["to", "subject", "body"]
+          }
+        },
+        {
+          "name": "refund_order",
+          "description": "Refund an order (currency: ISO code)",
+          "input_schema": {
+            "properties": {
+              "order_id": {"title": "order_id", "type": "string"},
+              "amount": {"title": "amount", "type": "number"},
+              "currency": {"title": "currency", "type": "string"}
+            },
+            "required": ["order_id", "amount", "currency"]
+          }
+        }
       ],
       "skills": null,
       "subagents": [
