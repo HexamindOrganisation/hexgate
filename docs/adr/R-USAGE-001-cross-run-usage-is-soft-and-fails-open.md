@@ -45,9 +45,8 @@ part of the enforcer is built around, so usage is **pulled**: once per run bound
 alongside the policy and ban fetches, and cached between runs.
 
 A snapshot alone is not enough. Spans reach the platform's rollup 5–15 s after they
-happen, so a process that read only the snapshot would not see its own recent activity.
-A busy process would blow straight through its own cap, because nothing it did in the
-last few seconds counts yet. The process-local ledger closes that gap: it counts this
+happen, so a process reading only the snapshot would miss its own last few seconds and
+blow straight through its own cap. The process-local ledger closes that gap: it counts this
 process's events immediately, and the value is the snapshot plus whatever the ledger
 saw after the snapshot was taken.
 

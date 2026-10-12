@@ -105,9 +105,8 @@ Each list item is one boolean expression, and every item must hold.
 These are circuit breakers, not precise quotas. Read the warning in `constraints.mdx` before promising exact limits.
 
 `agent_usage.<metric>_<window>` caps the agent across runs, over a rolling window. Metrics: `invocations`, `tool_calls`, `denials`, `llm_calls`, `input_tokens`, `output_tokens`, `total_tokens`. Windows: `5m`, `1h`, `24h`, `7d`, `30d`.
-- They are **soft** across processes, so never promise an exact cap. For "at most N, ever", use `run.*` or `approval_required`.
 - Put invocation and budget caps on `admission`, with `<`: `agent_usage.invocations_1h < 100`.
-- By default, a platform outage reads this process's counts alone. To fail closed, add `usage: { on_unavailable: deny }`. It is agent-wide and must resolve to one value across roles: in a role-keyed document, put it inside every role or in a mixin they all inherit, never beside `roles:`.
+- By default, a platform outage reads this process's counts alone. To fail closed, add `usage: { on_unavailable: deny }`: one value per agent, in every role or a shared mixin, never beside `roles:` (placement: `constraints.mdx`).
 
 ## Egress
 
@@ -149,6 +148,6 @@ Always include a host clause. For subdomains, use `endswith(args.host, ".example
 - **Admission is closed-world.** Once any role declares `admission`, every role without it is refused. `agents:` is closed-world too: an unlisted target is denied.
 - **`file_scope`.** It is rejected by the WASM/Rego build, which is what production uses. Prefer constraints: `startswith(args.file_path, "src/")`, or `every(args.paths, startswith(., "src/"))`.
 - **Strict types.** `true` is not `1`. A number compared against a string fails closed. A missing field fails closed.
-- **Rate limits.** Per-window caps exist as `agent_usage.*`, but they are soft. Whenever the requester asks for "at most N", say so, and offer `run.*` or `approval_required` for an exact cap.
-- **Negated usage caps.** Under `on_unavailable: deny`, write `agent_usage.x < N`, never `not (agent_usage.x >= N)`: a missing value makes the negated form pass.
+- **Rate limits.** Per-window caps exist as `agent_usage.*`, but they are soft. Whenever the requester asks for "at most N", say so, and offer `approval_required` or a `run.*` cap instead.
+- **Negated usage caps.** Under `on_unavailable: deny`, `not (agent_usage.x >= N)` passes on a missing value; write `agent_usage.x < N`.
 - **Trust.** `ctx.*` and `role` are only as trustworthy as the server code that sets them. Mention this whenever a grant hinges on them.
