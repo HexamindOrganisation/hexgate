@@ -305,8 +305,11 @@ one run with `run.*`. How far a value can be off:
   at the moment it is crossed. The delay is:
   - normally 5 to 15 seconds: a busy process refreshes every 5 seconds, plus the
     ingest lag;
-  - up to about a minute for a quiet process, or inside a long run, since a snapshot
-    under 60 seconds old is not refreshed mid-run;
+  - up to about a minute (plus the ingest lag) for a process whose runs are 5 to 60
+    seconds apart, since its run reads the cached snapshot while the background
+    refresh is in flight; and inside a long run, since a snapshot under 60 seconds
+    old is not refreshed mid-run. A process whose runs are more than a minute apart
+    fetches before the run instead;
   - up to 5 minutes while the platform is unreachable, on the last good snapshot;
   - after that, [the fail mode](#when-the-platform-cant-answer) applies.
 - **Overlapping admissions.** A run is counted when it starts, not when it is
