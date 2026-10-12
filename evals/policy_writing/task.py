@@ -37,7 +37,7 @@ from inspect_ai.solver import Generate, TaskState, solver
 from inspect_ai.util import SandboxEnvironment, sample_limits, sandbox
 
 from evals.policy_writing import checks
-from evals.policy_writing.cases import apply_solution, load_cases, starting_files
+from evals.policy_writing.cases import load_cases, starting_files
 
 # Agent name → the answer folder its solver copies in. Only `wrong_answer/` is
 # optional (README): without `solution/`, the answer is to do nothing.
@@ -54,6 +54,10 @@ MAX_BYTES = 1 << 20
 MAX_DIFF_LINES = 200
 MAX_ANSWER_CHARS = 4_000
 
+# Each file's size in bytes, skipping dot paths (tooling such as `.claude/skills/`,
+# as `checks.snapshot` does); `wc` adds a total line. Run as argv, not a shell.
+LIST = "find . -type f ! -path */.* -exec wc -c {} +"
+
 # Looked up by sample id: a case holds `Path`s, so it can't ride in `Sample.metadata`.
 CASES = {case["id"]: case for case in load_cases()}
 
@@ -65,14 +69,9 @@ def policy_writing(
     """`agent`: `claude`, `reference`, `wrong_answers` or `noop`. `cases`: id
     prefixes, all cases when empty. `timeout`: seconds per sample."""
     if agent == "claude":
-        raise NotImplementedError(
-            "agent=claude (Claude Code in a Docker sandbox) lands in PR 5; "
-            "run reference, wrong_answers or noop"
-        )
+        raise NotImplementedError("agent=claude (Claude Code) lands in PR 5")
     if agent not in ANSWER_FOLDERS:
-        raise ValueError(
-            f"unknown agent {agent!r}; one of claude, {', '.join(ANSWER_FOLDERS)}"
-        )
+        raise ValueError(f"unknown agent {agent!r}")
     folder = ANSWER_FOLDERS[agent]
     return Task(
         dataset=samples(folder, prefixes(cases)),
@@ -123,11 +122,14 @@ def our_answer(folder: str | None):
 
 
 async def push_answer(sb: SandboxEnvironment, case: dict, folder: str) -> str:
-    """Copy the answer's files into the sandbox; return its `ANSWER.md`."""
-    with tempfile.TemporaryDirectory() as tmp:
-        answer = apply_solution(case, Path(tmp), folder)
-        for rel in checks.snapshot(Path(tmp)):
-            await sb.write_file(rel, (Path(tmp) / rel).read_bytes())
+    """Write the answer into the sandbox as `apply_solution` does; return `ANSWER.md`."""
+    root, answer = case["dir"] / folder, ""
+    for path in sorted(p for p in root.rglob("*") if p.is_file()):
+        rel = path.relative_to(root).as_posix()
+        if rel == "ANSWER.md":
+            answer = path.read_text()
+        else:
+            await sb.write_file(rel, path.read_bytes())
     return answer
 
 
@@ -146,29 +148,29 @@ def policy_checks():
 
     async def score(state: TaskState, target: Target) -> Score:
         with tempfile.TemporaryDirectory() as tmp:
-            await pull_workspace(sandbox(), Path(tmp))
+            size = await pull_workspace(sandbox(), Path(tmp))
             case, answer = CASES[state.sample_id], state.output.completion
-            return grade(case, Path(tmp), answer, agent_ran(state))
+            return grade(case, Path(tmp), answer, size, agent_ran(state))
 
     return score
 
 
-async def pull_workspace(sb: SandboxEnvironment, dest: Path) -> None:
-    """Copy the sandbox's files to `dest`, stopping one file or one read past
-    the bounds: `grade` measures the copy and judges it."""
-    # No dot path: tooling (`.claude/skills/`), not project, as `checks.snapshot` has it.
-    listing = await sb.exec(["find", ".", "-type", "f", "!", "-path", "*/.*"])
+async def pull_workspace(sb: SandboxEnvironment, dest: Path) -> tuple[int, int]:
+    """Measure the sandbox's files, copy them to `dest` if within the bounds: (files, bytes)."""
+    listing = await sb.exec(LIST.split())
     if not listing.success:
         raise RuntimeError(f"listing the sandbox failed: {listing.stderr}")
-    paths = [p.removeprefix("./") for p in listing.stdout.splitlines()]
-    total = 0
-    for rel in paths[: MAX_FILES + 1]:
-        data = await sb.read_file(rel, text=False)
-        (dest / rel).parent.mkdir(parents=True, exist_ok=True)
-        (dest / rel).write_bytes(data)
-        total += len(data)
-        if total > MAX_BYTES:
-            break
+    sizes = {}
+    for line in listing.stdout.splitlines():
+        count, _, path = line.strip().partition(" ")
+        if path.lstrip().startswith("./"):
+            sizes[path.lstrip().removeprefix("./")] = int(count)
+    files, total = len(sizes), sum(sizes.values())
+    if files <= MAX_FILES and total <= MAX_BYTES:
+        for rel in sizes:
+            (dest / rel).parent.mkdir(parents=True, exist_ok=True)
+            (dest / rel).write_bytes(await sb.read_file(rel, text=False))
+    return files, total
 
 
 def agent_ran(state: TaskState) -> checks.Check | None:
@@ -187,22 +189,19 @@ def agent_ran(state: TaskState) -> checks.Check | None:
     return None
 
 
-def grade(case: dict, ws: Path, answer: str, ran: checks.Check | None = None) -> Score:
-    """Score a workspace pulled to the host. `before` is the starting project as
-    the sandbox received it, hashed on the host: never the sandbox's own files."""
+def grade(case: dict, ws: Path, answer: str, size: tuple[int, int], ran=None) -> Score:
+    """Score a workspace pulled to the host, `size` being the sandbox's (files, bytes).
+    `before` is the starting project hashed on the host, never the sandbox's files."""
     start = starting_files(case)
     before = hashes(start)
-    after = checks.snapshot(ws)
-    size = sum((ws / rel).stat().st_size for rel in after)
     results = [ran] if ran else []
     changes: dict[str, str] | None = None
-    if len(after) > MAX_FILES or size > MAX_BYTES:
-        # Not diffed either: the one read past the byte bound may be huge.
-        detail = (
-            f"{len(after)} files, {size} bytes; at most {MAX_FILES} and {MAX_BYTES}"
-        )
+    files, total = size
+    if files > MAX_FILES or total > MAX_BYTES:
+        detail = f"{files} files, {total} bytes; at most {MAX_FILES} and {MAX_BYTES}"
         results.append(checks.Check("workspace size", False, detail))
     else:
+        after = checks.snapshot(ws)
         results += checks.score(case, ws, before, answer)
         changes = diffs(start, before, after, ws)
     return Score(

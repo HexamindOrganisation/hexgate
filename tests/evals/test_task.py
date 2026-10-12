@@ -5,6 +5,7 @@ No model: `--model none`. The local sandbox stands in for PR 5's Docker one.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 
@@ -14,6 +15,7 @@ pytest.importorskip("inspect_ai")
 
 from inspect_ai import eval as inspect_eval  # noqa: E402
 from inspect_ai.scorer import CORRECT, INCORRECT  # noqa: E402
+from inspect_ai.util._sandbox.local import LocalSandboxEnvironment  # noqa: E402
 
 from evals.policy_writing import task  # noqa: E402
 from evals.policy_writing.cases import apply_solution, starting_files  # noqa: E402
@@ -71,9 +73,7 @@ def test_cases_prefix_selects_the_matching_cases(cases, monkeypatch) -> None:
     assert [s.id for s in dataset] == ["a/one", "a/two"]
 
 
-def test_when_a_case_has_no_wrong_answer_then_only_wrong_answers_skips_it(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_only_wrong_answers_skips_a_case_without_it(tmp_path, monkeypatch) -> None:
     # Doing nothing is a valid solution, so `solution/` may be absent too.
     bare = {**task.CASES[CASE], "id": "x/bare", "dir": tmp_path}
     monkeypatch.setitem(task.CASES, "x/bare", bare)
@@ -94,9 +94,6 @@ def test_sample_holds_the_starting_project_and_nothing_of_ours() -> None:
     }
 
 
-# `grade` is the step after the pull: a workspace on the host, as the sandbox left it.
-
-
 def write(root: Path, files: dict[str, str]) -> None:
     for rel, text in files.items():
         (root / rel).parent.mkdir(parents=True, exist_ok=True)
@@ -105,10 +102,7 @@ def write(root: Path, files: dict[str, str]) -> None:
 
 def test_hashes_match_snapshot(tmp_path: Path) -> None:
     # `grade` hashes `before` in memory; it must agree with `snapshot` of the same files.
-    files = {
-        "policy.yaml": "version: 1\n",
-        "policies/boundaries/org.yaml": "# café → 50 €\n",
-    }
+    files = {"policy.yaml": "v: 1\n", "policies/org.yaml": "# café → 50 €\n"}
     write(tmp_path, files)
     assert task.hashes(files) == snapshot(tmp_path)
 
@@ -121,8 +115,8 @@ def ws(tmp_path: Path) -> Path:
     return tmp_path
 
 
-def grade(ws: Path, answer: str = "", ran: Check | None = None):
-    return task.grade(task.CASES[CASE], ws, answer, ran)
+def grade(ws: Path, answer: str = "", ran=None, size: tuple[int, int] = (3, 3)):
+    return task.grade(task.CASES[CASE], ws, answer, size, ran)
 
 
 def names(score) -> list[str]:
@@ -145,18 +139,18 @@ def test_when_agent_did_not_run_then_that_check_comes_first(ws: Path) -> None:
     }
 
 
-@pytest.mark.parametrize(
-    "files, size", [(task.MAX_FILES + 1, 1), (1, task.MAX_BYTES + 1)]
-)
-def test_when_past_a_bound_then_only_the_size_check(
-    ws: Path, files: int, size: int
-) -> None:
-    for i in range(files):
-        (ws / f"f{i}.txt").write_text("x" * size)
-    score = grade(ws)
+@pytest.mark.parametrize("size", [(task.MAX_FILES + 1, 10), (5, task.MAX_BYTES + 1)])
+def test_when_past_a_bound_then_only_the_size_check(ws: Path, size) -> None:
+    score = grade(ws, size=size)
     assert score.value == INCORRECT
     assert names(score) == ["workspace size"]
+    assert f"{size[0]} files, {size[1]} bytes" in score.metadata["checks"][0]["detail"]
     assert "(not diffed: workspace past the bounds)" in score.explanation
+
+
+def test_when_at_the_bounds_then_scored(ws: Path) -> None:
+    score = grade(ws, size=(task.MAX_FILES, task.MAX_BYTES))
+    assert "workspace size" not in names(score)
 
 
 def test_diff_is_cut_at_max_lines(ws: Path) -> None:
@@ -173,3 +167,37 @@ def test_answer_is_cut_in_the_explanation_only(ws: Path) -> None:
     assert score.answer == answer
     assert "a" * 4_000 + "…" in score.explanation
     assert "a" * 4_001 not in score.explanation
+
+
+# The sandbox side, on Inspect's own local sandbox (a temp folder).
+
+
+def tree(root: Path) -> dict[str, bytes]:
+    return {
+        p.relative_to(root).as_posix(): p.read_bytes()
+        for p in root.rglob("*")
+        if p.is_file()
+    }
+
+
+def test_push_answer_writes_what_apply_solution_does(tmp_path: Path) -> None:
+    case = {"dir": tmp_path / "case"}
+    write(
+        case["dir"] / "solution",
+        {"a.yaml": "1", "b c/d.yaml": "é", "ANSWER.md": "Done."},
+    )
+    sb, host = LocalSandboxEnvironment(), tmp_path / "host"
+    answer = asyncio.run(task.push_answer(sb, case, "solution"))
+    assert answer == apply_solution(case, host, "solution") == "Done."
+    assert tree(Path(sb.directory.name)) == tree(host)
+
+
+def test_pull_workspace_copies_within_bounds(tmp_path, monkeypatch) -> None:
+    sb = LocalSandboxEnvironment()
+    write(Path(sb.directory.name), {"a": "abc", "b c/d": "hello", ".claude/x": "no"})
+    dest, over = tmp_path / "dest", tmp_path / "over"
+    assert asyncio.run(task.pull_workspace(sb, dest)) == (2, 8)
+    assert set(tree(dest)) == {"a", "b c/d"}
+    monkeypatch.setattr(task, "MAX_FILES", 1)
+    assert asyncio.run(task.pull_workspace(sb, over)) == (2, 8)
+    assert not over.exists()

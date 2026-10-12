@@ -189,12 +189,9 @@ make policy-eval-check                          # all three; asserts nothing, te
 uv run inspect view --log-dir evals/policy_writing/logs  # the check list and a diff per changed file
 ```
 
-- `-T cases=explicit_request`: only the cases whose id starts with one of the
-  comma-separated prefixes.
-- `--epochs 3 --epochs-reducer mean,at_least_3`: each case's mean and whether
-  it passed on every attempt.
-- `-T agent=claude` (Claude Code in a Docker sandbox) lands in PR 5 and refuses
-  to build until then.
+`-T cases=a,b` keeps the cases whose id starts with a prefix; `--epochs 3
+--epochs-reducer mean,at_least_3` gives each case its mean and pass^3.
+`-T agent=claude` (Claude Code) lands in PR 5.
 
 ## Adding a case
 
