@@ -22,7 +22,7 @@ from hexgate.security.naming import canonical_name, canonical_skill_name
 
 PolicyMode = Literal["allow", "deny", "approval_required"]
 
-_USAGE_FIELD = "usage"
+USAGE_FIELD = "usage"
 
 
 def _parse_all(constraints: list[str]) -> list[str]:
@@ -56,8 +56,8 @@ def _drop_absent_usage(data: Any) -> Any:
     """Remove ``usage: None`` from a serialized policy dict, for the same
     byte-stability reason as :func:`_drop_empty_guards`: a usage-free policy must
     dump exactly as it did before the field existed."""
-    if isinstance(data, dict) and data.get(_USAGE_FIELD) is None:
-        data.pop(_USAGE_FIELD, None)
+    if isinstance(data, dict) and data.get(USAGE_FIELD) is None:
+        data.pop(USAGE_FIELD, None)
     return data
 
 

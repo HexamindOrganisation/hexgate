@@ -20,7 +20,7 @@ from hexgate.security.compose.lower import agent_guards, agent_usage_policy, low
 from hexgate.security.compose.parse import parse_entry
 from hexgate.security.constraints import ConstraintParseError
 from hexgate.security.linker import link_policy_set
-from hexgate.security.models import AgentPolicy
+from hexgate.security.models import USAGE_FIELD, AgentPolicy
 from hexgate.security.modules import (
     DEFAULT_AGENT,
     LinkError,
@@ -30,7 +30,6 @@ from hexgate.security.modules import (
 from hexgate.security.policy_set import DEFAULT_ROLE_NAME, PolicySet, PolicySetError
 
 _GUARDS_FIELD = "guards"
-_USAGE_FIELD = "usage"
 
 
 def file_loader(base_dir: str | Path) -> Loader:
@@ -120,7 +119,7 @@ def _agent_level_fields(entry: Entry, agent: str) -> dict[str, object]:
         }
     usage = agent_usage_policy(entry, agent)
     if usage is not None:
-        fields[_USAGE_FIELD] = usage
+        fields[USAGE_FIELD] = usage
     return fields
 
 
