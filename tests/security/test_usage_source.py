@@ -90,7 +90,7 @@ class _FakeFetcher:
         self.advance = 0.0
         self.calls: list[tuple[str, list[str], str]] = []
 
-    def get_agent_usage(self, name: str, paths: Sequence[str]) -> Mapping[str, Any]:
+    def get_agent_usage(self, name: str, paths: Sequence[str]) -> dict[str, Any]:
         self.calls.append((name, list(paths), threading.current_thread().name))
         self.clock.now += self.advance
         if self.error is not None:

@@ -146,7 +146,7 @@ def usage_values_from_payload(payload: Any, paths: frozenset[str]) -> dict[str, 
 
 
 class UsageFetcher(Protocol):
-    def get_agent_usage(self, name: str, paths: Sequence[str]) -> Mapping[str, Any]: ...
+    def get_agent_usage(self, name: str, paths: Sequence[str]) -> dict[str, Any]: ...
 
 
 class _Tier(Enum):
