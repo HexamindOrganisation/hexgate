@@ -228,7 +228,9 @@ already affects caller identity via `HexgateContext`, so it isn't new to
 `run.*` caps one invocation. `agent_usage.*` caps **this agent across runs**, over a
 rolling window: "100 invocations per hour", "2M tokens per day". Each path is
 `<metric>_<window>`, such as `agent_usage.invocations_1h` or
-`agent_usage.total_tokens_24h`.
+`agent_usage.total_tokens_24h`. The counts are shared by every process that runs the
+agent in the same project, and they are **soft**: a cap can be passed by a margin
+(see [Shared across processes](#shared-across-processes) and the warning after it).
 
 ```yaml
 consts:
@@ -266,28 +268,140 @@ Like `run.*`, a typo'd path (`agent_usage.tool_call_1h`), an unknown window
 (`agent_usage.tool_calls_2h`) or a path with no window is **rejected when the policy
 loads**.
 
-### Local to this process, today
+### Shared across processes
 
-The values are what **this process** has counted since it started:
+A value is the platform's count for this agent, as last fetched, plus what **this
+process** has done since shortly before that fetch. The platform's count covers every
+process and replica that runs the agent under the same project (the project of the API
+key).
 
-- a restart resets them;
-- two replicas of the same agent each count their own;
-- nothing is fetched from the platform.
+- **Fetched at run start, never per decision.** The fetch happens at the run boundary,
+  alongside the policy and ban checks. Inside a run, a decision reads the cached count
+  plus the local one; it never calls the network.
+- **Same name, same counter.** Two deployments that use the same agent name in the
+  same project share one count. Different projects never do. Names are trimmed, so
+  `" billing "` and `billing` are one agent.
+- **Run-start cost.** A busy agent pays nothing extra: its run uses the cached count
+  and refreshes it in the background. A freshly started process, or an agent whose
+  runs are more than a minute apart, waits for one fetch. That fetch runs at the same
+  time as the policy and ban fetches and times out after 2 seconds. An agent whose
+  policy references no `agent_usage.*` path never fetches.
+- **Local only, in three cases.** With `HEXGATE_LOCAL_MODE`, with
+  `HEXGATE_LOCAL_POLICY`, or without an API key, the platform isn't asked. The values
+  are then what this process has counted since it started: a restart resets them, and
+  each replica counts its own.
 
-That is exact for an agent that runs in a single process and admits one run at a
-time, and it is what `hexgate policy test` simulates. A run is counted when it starts,
-not when it is admitted, so admissions that overlap (sync runs on separate threads, or
-a run waiting on an approval) can all read the same count and each pass: an
-`invocations_*` cap can overshoot by the number of admissions in flight. Counts shared
-across processes, and hard reserved limits, are planned and will come with their own
-documentation.
+<Warning>
+**`agent_usage.*` caps are soft quotas.** They keep cost and fair use in check; they
+do not guarantee "never more than N". **`run.*` is the only exact cap.** For "at most
+3 wire transfers per hour, ever", use `approval_required`, or keep the count inside
+one run with `run.*`. How far a value can be off:
+
+- **Other processes are seen late.** Their activity reaches this process after the
+  snapshot's age plus the platform's ingest lag. A cap can be passed by roughly
+  *(the rate of every other process) × (that delay)*. With 4 replicas each admitting
+  1 run per second, a 5-second refresh and 10 seconds of ingest lag,
+  `agent_usage.invocations_1h < 100` can let through about 3 × 1 × 15 ≈ 45 extra runs
+  at the moment it is crossed. The delay is:
+  - normally 5 to 15 seconds: a busy process refreshes every 5 seconds, plus the
+    ingest lag;
+  - up to about a minute for a quiet process, or inside a long run, since a snapshot
+    under 60 seconds old is not refreshed mid-run;
+  - up to 5 minutes while the platform is unreachable, on the last good snapshot;
+  - after that, [the fail mode](#when-the-platform-cant-answer) applies.
+- **Overlapping admissions.** A run is counted when it starts, not when it is
+  admitted. Runs admitted at the same moment (sync runs on separate threads, or a
+  run waiting on an approval) can all read the same count and each pass, even in one
+  process.
+- **It errs toward counting more.** Three ways a value reads high, each on purpose:
+  - the platform counts the oldest minute of a window whole;
+  - this process's last 30 seconds can be counted twice, once locally and once on the
+    platform, so its own events still in the pipeline are never missed;
+  - a call that hits `approval_required` counts as a tool call when the gate fires,
+    even if the approval is refused.
+- **It can read low** when the SDK's span queue drops spans under saturation. The
+  local count still sees them, so only other processes' drops are lost.
+- **Not latching.** A denial clears as usage ages out of the window
+  ([Rolling, not latching](#what-the-counters-mean)).
+</Warning>
+
+### When the platform can't answer
+
+By default, **runs continue**. A value the platform can't supply reads this process's
+own count alone: zero, plus what this process has done. A platform outage weakens a
+cap to per-process; it never stops an agent.
+
+To fail closed instead:
+
+```yaml
+usage:
+  on_unavailable: deny     # allow (default) | deny
+
+admission:
+  mode: allow
+  constraints:
+    - agent_usage.invocations_1h < 100
+```
+
+Under `deny`, a value the platform can't supply is **absent**, so a comparison on it
+fails closed, like any missing field.
+
+- **Write caps as plain comparisons.** Under `deny`, `agent_usage.invocations_1h < 100`
+  denies when the value is missing, but `not (agent_usage.invocations_1h >= 100)`
+  **passes**.
+- **Per path.** When a policy update adds a usage path the cached snapshot doesn't
+  have yet, only that path follows the fail mode until the next refresh. The rest of
+  the policy keeps its platform counts.
+- **Where the block goes.** `usage:` is agent-wide:
+  - in a single-file policy, at the top level;
+  - in a role-keyed document, inside each role, or in a mixin every role inherits.
+    A `usage:` beside `roles:` is a load error;
+  - in a `policies/` directory, in each role file, or in a mixin they inherit;
+  - in a composed policy, at the entry file's top level or in an agent body. An
+    imported fragment can't declare it, and neither can a boundary or capability
+    module.
+- **One value per agent.** The snapshot is fetched per agent, so every role must
+  resolve to the same mode, and a role that says nothing reads `allow`. A `deny` in
+  some roles only fails to load, with an error that names each role's value.
+- **It is signed.** The mode travels in the signed policy bundle, so a caller can't
+  strip `deny`. An SDK that predates the key rejects a policy that contains it, so
+  upgrade the SDK and the platform before you add the block.
+- **`on_unavailable` is required.** An empty `usage: {}` is a load error.
+
+Every decision that reads `agent_usage.*` carries a `sec_ai.usage_state` attribute on
+its audit span, saying how the values were built:
+
+| `usage_state` | Meaning |
+|---|---|
+| `fresh` | Snapshot under a minute old, with every path the policy needs |
+| `stale` | Last good snapshot, over a minute old but under five |
+| `partial` | Usable snapshot that lacks some paths; those follow the fail mode |
+| `unavailable` | No snapshot, or one over five minutes old; every path follows the fail mode |
+| `local` | No platform to ask: local mode, local policy, or no API key |
+
+The platform doesn't store or display `usage_state` yet.
+
+<Note>
+Three environment variables tune the refresh:
+
+- `HEXGATE_USAGE_REFRESH_SECONDS` (default `5`): the snapshot age after which a run
+  start refreshes it in the background;
+- `HEXGATE_USAGE_SYNC_AFTER_SECONDS` (default `60`): the age after which a run start
+  waits for a fresh snapshot;
+- `HEXGATE_USAGE_MAX_STALENESS_SECONDS` (default `300`): the age after which the
+  snapshot is unavailable.
+
+They must satisfy `0 < refresh ≤ sync_after ≤ max_staleness`. A bad value logs a
+warning, and all three fall back to their defaults. A shorter refresh means less
+overshoot and more load on the platform.
+</Note>
 
 ### Where to put a limit
 
 Put invocation and budget caps on `admission`: they then refuse the run before it
 starts. The run being admitted is not counted yet, so use `<`:
-`agent_usage.invocations_1h < 100` admits 100 runs per hour when runs are admitted
-one at a time. A top-level
+`agent_usage.invocations_1h < 100` admits about 100 runs per hour (see the soft-quota
+warning above). A top-level
 `constraints:` entry also reaches every tool call inside a run, not only admission.
 
 ### What the counters mean
@@ -309,13 +423,16 @@ The differences:
 - **Rolling, not latching.** A denial clears as usage ages out of the window. There
   are no calendar resets. This is the opposite of `run.*`, which only ever grows.
 - **Windows round up, never down.** The oldest bucket counts whole, so a window can
-  read slightly *more* than its nominal length: under a second more for `5m`, under
-  a minute for `1h` and `24h`, under an hour for `7d` and `30d`.
+  read slightly *more* than its nominal length. The platform's share counts in
+  minutes, so any window can read up to a minute more. This process's own share
+  follows its local buckets: under a second more for `5m`, under a minute for
+  `1h` and `24h`, under an hour for `7d` and `30d`.
 
 ### Dry-running a quota
 
-`hexgate policy test` takes `--agent-usage`. Unset paths read zero, as in a fresh
-process:
+`hexgate policy test` takes `--agent-usage`, which sets the combined value a decision
+would read; no platform is involved. Unset paths read zero, as in a fresh process, so
+the fail mode isn't simulated:
 
 ```bash
 hexgate policy test policy.yaml --role default --tool agent.run \
@@ -332,6 +449,9 @@ assert_denies(
     agent_usage=agent_usage_namespace(invocations_1h=100),
 )
 ```
+
+On an `agent_usage.*` denial the model sees the constraint text, as for `run.*`. It
+is never told the current count or the `usage_state`.
 
 ## Where a constraint can live
 
