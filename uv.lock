@@ -1665,7 +1665,6 @@ dev = [
 ]
 evals = [
     { name = "inspect-ai" },
-    { name = "inspect-swe" },
 ]
 
 [package.metadata]
@@ -1677,7 +1676,6 @@ requires-dist = [
     { name = "google-genai", specifier = ">=1.0" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "inspect-ai", marker = "extra == 'evals'", specifier = "==0.3.278" },
-    { name = "inspect-swe", marker = "extra == 'evals'", specifier = "==0.2.71" },
     { name = "ipykernel", marker = "extra == 'dev'" },
     { name = "jupyter", marker = "extra == 'dev'" },
     { name = "langchain", specifier = ">=1.2.15" },
@@ -1931,27 +1929,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/fe/2f/40f4a8cc0723e1ab1f2db9ab569a75dc1fa6a10d8e65de5e58fbc45f9b63/inspect_ai-0.3.278.tar.gz", hash = "sha256:eec85204a843c4c64884512aae038c3016ad2f4e332e05434852dbf170165bea", size = 36382979, upload-time = "2026-10-09T16:55:10.801Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/29/65/681cc1f4caae3aee170424c147a4a687904b120e02210fcae9c9a19f9c75/inspect_ai-0.3.278-py3-none-any.whl", hash = "sha256:58e97375eb2f85b9abaaf5049f8f9be6bd332eefe485751052747c7580de452e", size = 35199726, upload-time = "2026-10-09T16:55:07.053Z" },
-]
-
-[[package]]
-name = "inspect-swe"
-version = "0.2.71"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "agent-client-protocol" },
-    { name = "anyio" },
-    { name = "httpx" },
-    { name = "inspect-ai" },
-    { name = "nest-asyncio" },
-    { name = "platformdirs" },
-    { name = "pydantic" },
-    { name = "pyyaml" },
-    { name = "sniffio" },
-    { name = "typing-extensions" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/c6/66/19bb3b4fa9930aeccdcb01d6f3e8fec446002728cadf1628f03341d433be/inspect_swe-0.2.71.tar.gz", hash = "sha256:60bb2ee28e8cc0c2aac18e65141ccd38d0f22c1800fe1495d91269a88eea0d57", size = 153421, upload-time = "2026-09-17T20:51:33.13Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/c0/fa/a8166d2c30d04f13c6ab41220f2e4797792b79871cb5e2683af75482af11/inspect_swe-0.2.71-py3-none-any.whl", hash = "sha256:f9d27b5ca5c4a154b6d8d0b5b4e330401b65c833fd56e67f37f1f378a111d2b4", size = 194865, upload-time = "2026-09-17T20:51:31.492Z" },
 ]
 
 [[package]]
