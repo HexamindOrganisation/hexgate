@@ -88,9 +88,10 @@ HARNESS = (
     "you changed."
 )
 USAGE_KEYS = ("usage", "total_cost_usd", "modelUsage", "duration_ms", "num_turns")
-SAMPLE_MARGIN = (
-    60  # the agent's own timeout fires first: no workspace in flux is scored
-)
+# Claude Code's session log: the only place the expanded slash command is written.
+SESSION_LOG = "/home/agent/.claude/projects/-workspace/{}.jsonl"
+# The agent's own timeout fires first, so no workspace in flux is ever scored.
+SAMPLE_MARGIN = 60
 
 # Bounds on what the scorer pulls back from the sandbox and puts in the log.
 MAX_FILES = 200
@@ -207,7 +208,7 @@ def claude_agent(timeout: int):
         await push_skill(sb)
         stdout, failure = await run_claude(sb, state.input_text, timeout)
         result, transcript = parse_stream(stdout)
-        state.messages.extend(transcript)
+        state.messages.extend(await injected(sb, result) + transcript)
         state.output = model_output(str(state.model), result, failure)
         state.store.set(
             "usage", {k: result.get(k) for k in USAGE_KEYS} if result else {}
@@ -260,7 +261,7 @@ def parse_stream(stdout: str) -> tuple[dict | None, list[ChatMessage]]:
         if kind == "assistant":
             messages += assistant_message(blocks)
         elif kind == "user":
-            messages += user_messages(blocks)
+            messages += tool_messages(blocks)
         elif kind == "result":
             result = ev
     return result, messages
@@ -296,10 +297,8 @@ def assistant_message(blocks: list[dict]) -> list[ChatMessage]:
     return [ChatMessageAssistant(content=text, tool_calls=calls or None)]
 
 
-def user_messages(blocks: list[dict]) -> list[ChatMessage]:
-    """Tool results; and the text Claude Code injects, the `/write-policy` skill expanded."""
-    text = "\n".join(b["text"] for b in blocks if b.get("type") == "text")
-    return ([ChatMessageUser(content=text)] if text else []) + [
+def tool_messages(blocks: list[dict]) -> list[ChatMessage]:
+    return [
         ChatMessageTool(
             content=tool_text(b.get("content")), tool_call_id=b["tool_use_id"]
         )
@@ -314,8 +313,18 @@ def tool_text(content) -> str:  # a string, or a list of {type: text} blocks
     return "\n".join(b.get("text", "") for b in content or [] if isinstance(b, dict))
 
 
+async def injected(sb: SandboxEnvironment, result: dict | None) -> list[ChatMessage]:
+    """What Claude Code injected for the slash command (the skill), as user turns."""
+    try:
+        log = await sb.read_file(SESSION_LOG.format(result["session_id"]))
+    except (TypeError, KeyError, OSError):  # no `result` event, or no session log
+        return []
+    metas = [ev for ev in events(log) if ev.get("type") == "user" and ev.get("isMeta")]
+    blocks = [b for ev in metas for b in content_blocks(ev) if b.get("type") == "text"]
+    return [ChatMessageUser(content=b["text"]) for b in blocks]
+
+
 def model_output(model: str, result: dict | None, failure: str) -> ModelOutput:
-    """The answer; or an error for `agent ran`: no `result` event (why), or its `is_error`."""
     if result is None:
         return ModelOutput.from_content(model, "", error=failure)
     if result.get("is_error"):

@@ -158,6 +158,7 @@ RESULT = {
     "modelUsage": {"claude-fable-5-1": {"costUSD": 0.29}},
     "duration_ms": 4408,
     "num_turns": 2,
+    "session_id": "sid",
 }
 READ = {
     "type": "tool_use",
@@ -172,10 +173,18 @@ def message(kind: str, *blocks: dict) -> dict:
     return {"type": kind, "message": {"content": list(blocks)}}
 
 
+def stream(events: list[dict]) -> str:
+    return "\n".join(json.dumps(e) for e in events)
+
+
 SKILL = "Base directory for this skill: /workspace/.claude/skills/write-policy"
+# Claude Code's session log: the command, then what it injected for it (`isMeta`).
+COMMAND = {"type": "user", "message": {"content": "<command-name>/write-policy"}}
+SESSION_LOG = stream(
+    [COMMAND, {**message("user", {"type": "text", "text": SKILL}), "isMeta": True}]
+)
 TRANSCRIPT = [
     {"type": "system", "subtype": "init", "cwd": "/workspace"},
-    message("user", {"type": "text", "text": SKILL}),  # the slash command, expanded
     message("assistant", {"type": "text", "text": "Reading the policy."}, READ),
     {"type": "rate_limit_event", "rate_limit_info": {}},
     message("user", READ_RESULT),
@@ -184,30 +193,29 @@ TRANSCRIPT = [
 ]
 
 
-def stream(events: list[dict]) -> str:
-    return "\n".join(json.dumps(e) for e in events)
-
-
 def test_parse_stream_happy_path() -> None:
     result, messages = task.parse_stream(stream(TRANSCRIPT))
     assert result == RESULT
-    assert [m.role for m in messages] == ["user", "assistant", "tool", "assistant"]
-    assert messages[0].text == SKILL
-    (call,) = messages[1].tool_calls
+    assert [m.role for m in messages] == ["assistant", "tool", "assistant"]
+    (call,) = messages[0].tool_calls
     assert (call.id, call.function, call.arguments) == ("t1", "Read", READ["input"])
-    assert (messages[2].tool_call_id, messages[2].text) == ("t1", "version: 1")
-    assert messages[3].text == "Capped at 50 USD."
+    assert (messages[1].tool_call_id, messages[1].text) == ("t1", "version: 1")
+    assert messages[2].text == "Capped at 50 USD."
 
 
-def test_when_result_is_error_then_output_error() -> None:
+async def test_injected_happy_path() -> None:
+    sb = FakeSandbox()
+    sb.files = {task.SESSION_LOG.format("sid"): SESSION_LOG}
+    (turn,) = await task.injected(sb, RESULT)
+    assert (turn.role, turn.text) == ("user", SKILL)  # the command itself is not meta
+    assert await task.injected(sb, None) == [] and await task.injected(sb, {}) == []
+    assert await task.injected(FakeSandbox(), RESULT) == []  # no session log
+
+
+def test_when_the_run_failed_then_output_error() -> None:
     bad = {**RESULT, "is_error": True, "result": "rate limited"}
-    out = task.model_output("none", bad, "unused")
-    assert (out.completion, out.error) == ("", "rate limited")
-
-
-def test_when_no_result_event_then_output_error() -> None:
-    out = task.model_output("none", None, "no result event: boom")
-    assert (out.completion, out.error) == ("", "no result event: boom")
+    assert task.model_output("none", bad, "unused").error == "rate limited"
+    assert task.model_output("none", None, "no result: x").error == "no result: x"
 
 
 async def test_run_claude_happy_path() -> None:
@@ -236,7 +244,7 @@ def test_when_the_output_is_cut_or_compacted_then_parse_keeps_the_rest() -> None
         stream(TRANSCRIPT[:-1] + [compacted]) + "\n" + stream([RESULT])[:20] + "stderr"
     )
     result, messages = task.parse_stream(cut)
-    assert result is None and len(messages) == 4
+    assert result is None and len(messages) == 3
 
 
 async def test_when_the_sandbox_env_is_wrong_then_the_solver_refuses() -> None:
@@ -280,6 +288,7 @@ async def test_claude_agent_and_scorer_happy_path(ws: Path, monkeypatch) -> None
     }
     sb = FakeSandbox(replies)
     sb.files = {f: (ws / f).read_bytes() for f in files}
+    sb.files[task.SESSION_LOG.format("sid")] = SESSION_LOG
     monkeypatch.setattr(task, "sandbox", lambda: sb)
     monkeypatch.setattr(task, "sample_limits", SimpleNamespace)
     state = TaskState(ModelName("none/none"), CASE, 0, "/write-policy x", [])
