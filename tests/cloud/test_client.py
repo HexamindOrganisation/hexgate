@@ -8,6 +8,7 @@ without making any real network calls.
 from __future__ import annotations
 
 import base64
+import json
 import urllib.request
 from typing import Any
 
@@ -248,6 +249,7 @@ def test_client_verifies_on_first_call_then_caches(
         *,
         authorize: bool,
         if_none_match: str | None = None,
+        timeout: float | None = None,
     ) -> tuple[dict[str, Any] | None, str | None]:
         calls.append((url, authorize))
         return _stub_get_agent_response(), None
@@ -334,6 +336,7 @@ def test_client_fetches_jwks_when_pubkey_unset(
         *,
         authorize: bool,
         if_none_match: str | None = None,
+        timeout: float | None = None,
     ) -> tuple[dict[str, Any] | None, str | None]:
         calls.append((url, authorize))
         if url.endswith("/.well-known/keys"):
@@ -377,7 +380,7 @@ def test_client_jwks_response_with_unexpected_shape_raises(
     monkeypatch.setattr(
         HexgateClient,
         "_raw_get",
-        lambda self, url, *, authorize, if_none_match=None: (
+        lambda self, url, *, authorize, if_none_match=None, timeout=None: (
             {"unexpected": "shape"},
             None,
         ),
@@ -555,6 +558,7 @@ def test_get_bans_verifies_key_before_http(
 
 _TIMEOUT = 10.0
 _REFRESH_TIMEOUT = 2.0
+_JWKS_PATH = "/v1/.well-known/keys"
 
 
 class _Response:
@@ -619,6 +623,30 @@ def test_get_agent_usage_is_bounded_by_the_refresh_timeout(
     client.get_agent_usage("billing", ["a"])
 
     assert [timeout for _, timeout in calls] == [_REFRESH_TIMEOUT]
+
+
+def test_get_agent_usage_bounds_a_first_use_jwks_fetch_too(
+    keys: tuple[bytes, bytes], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    priv, pub = keys
+    client = HexgateClient(
+        HexgateConfig(base_url="http://test", api_key=_envelope(priv)),
+        timeout=_TIMEOUT,
+        refresh_timeout=_REFRESH_TIMEOUT,
+    )
+    jwks = json.dumps({"keys": [{"x": _b64url(pub)}]}).encode()
+    calls: list[tuple[str, float]] = []
+
+    def fake_urlopen(request: Any, timeout: float) -> _Response:
+        calls.append((request.full_url, timeout))
+        return _Response(jwks if request.full_url.endswith(_JWKS_PATH) else b"{}")
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+
+    client.get_agent_usage("billing", ["a"])
+
+    assert [timeout for _, timeout in calls] == [_REFRESH_TIMEOUT] * 2
+    assert calls[0][0].endswith(_JWKS_PATH)
 
 
 def test_get_agent_usage_verifies_key_before_http(

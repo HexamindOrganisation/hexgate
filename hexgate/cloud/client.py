@@ -215,8 +215,8 @@ class HexgateClient:
         """Fetch ``agent_usage.*`` values for ``name`` (project from the bearer).
 
         On the run-start path, so bounded by ``refresh_timeout`` despite having no
-        ETag."""
-        self._ensure_key_verified()
+        ETag, and so is a first-use JWKS fetch for the key check."""
+        self._ensure_key_verified(timeout=self.refresh_timeout)
         query = urllib.parse.urlencode({_USAGE_PATHS_PARAM: ",".join(paths)})
         quoted = urllib.parse.quote(name, safe="")
         url = f"{self.config.base_url}/v1/agents/{quoted}/usage?{query}"
@@ -226,7 +226,7 @@ class HexgateClient:
     # Biscuit verification
     # ------------------------------------------------------------------
 
-    def _ensure_key_verified(self) -> None:
+    def _ensure_key_verified(self, *, timeout: float | None = None) -> None:
         """Verify the Biscuit signature once before trusting the API key.
 
         Lazy on first use so that ``HexgateClient(...)`` itself stays cheap
@@ -244,7 +244,7 @@ class HexgateClient:
         except TokenError as exc:
             raise HexgateError(f"HEXGATE_API_KEY is malformed: {exc}") from exc
 
-        pub = self._resolve_public_key()
+        pub = self._resolve_public_key(timeout=timeout)
         try:
             verify_biscuit(biscuit_b64, pub)
             self._facts = extract_facts(biscuit_b64, pub)
@@ -281,17 +281,17 @@ class HexgateClient:
         """
         return self._resolve_public_key()
 
-    def _resolve_public_key(self) -> bytes:
+    def _resolve_public_key(self, *, timeout: float | None = None) -> bytes:
         """Return the platform's signing public key, fetching JWKS if needed."""
         if self._public_key is not None:
             return self._public_key
-        self._public_key = self._fetch_public_key()
+        self._public_key = self._fetch_public_key(timeout=timeout)
         return self._public_key
 
-    def _fetch_public_key(self) -> bytes:
+    def _fetch_public_key(self, *, timeout: float | None = None) -> bytes:
         """GET /v1/.well-known/keys and return the first key's raw bytes."""
         url = f"{self.config.base_url}/v1/.well-known/keys"
-        payload, _ = self._raw_get(url, authorize=False)
+        payload, _ = self._raw_get(url, authorize=False, timeout=timeout)
         try:
             keys = payload["keys"]
             x = keys[0]["x"]
