@@ -15,11 +15,6 @@ from hexgate_api.features.usage.paths import (
     parse_usage_paths,
 )
 
-# Only on 2b (#314). The skip is evaluated against the SDK each CI run installs
-# (editable path dep), so whichever of #314 and this PR merges second runs it
-# unskipped. Drop the skipif once both are on main.
-_SDK_AGENT_USAGE_PATHS = getattr(agent_usage, "AGENT_USAGE_PATHS", None)
-
 
 @pytest.mark.parametrize(
     ("path", "metric", "seconds"),
@@ -92,12 +87,10 @@ def test_every_sdk_metric_is_a_platform_metric() -> None:
     assert sdk_metrics <= {m.value for m in UsageMetric}
 
 
-@pytest.mark.skipif(_SDK_AGENT_USAGE_PATHS is None, reason="needs 2b (#314)")
 def test_every_sdk_path_is_accepted() -> None:
     """G5: a path the SDK lints as valid but the endpoint rejects, or reads over a
     different window, would be wrong for every policy using it."""
-    assert _SDK_AGENT_USAGE_PATHS is not None
-    for name, sdk_path in _SDK_AGENT_USAGE_PATHS.items():
+    for name, sdk_path in agent_usage.AGENT_USAGE_PATHS.items():
         spec = parse_usage_path(name)
         assert spec.metric == sdk_path.metric, name
         assert spec.window_seconds == sdk_path.window_seconds, name
