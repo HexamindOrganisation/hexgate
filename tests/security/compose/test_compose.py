@@ -820,6 +820,14 @@ def test_usage_top_level_reaches_every_role() -> None:
         assert eff[role]["usage"] == {"on_unavailable": "deny"}
 
 
+def test_per_role_link_results_carry_the_agent_level_fields() -> None:
+    res = resolve_text(_TWO_AGENTS_TOP_LEVEL_DENY, agent="bot")
+    for role in ("default", "admin"):
+        role_set = res.by_role[role].policy_set
+        assert role_set.usage_on_unavailable() is OnUnavailable.DENY
+        assert role_set.policy_for("default") is res.by_role[role].effective["default"]
+
+
 def test_usage_agent_body_replaces_top_level_for_that_agent_only() -> None:
     helper = resolve_text(_TWO_AGENTS_TOP_LEVEL_DENY, agent="helper")
     bot = resolve_text(_TWO_AGENTS_TOP_LEVEL_DENY, agent="bot")

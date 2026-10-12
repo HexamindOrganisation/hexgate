@@ -10,6 +10,7 @@ what lets a per-agent / per-role ``boundary`` apply only to its own cell.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 from pydantic import ValidationError
@@ -90,13 +91,7 @@ def resolve_entry(
             result = link_policy_set(boundaries, caps)
             agent_level = _agent_level_fields(entry, agent)
             if agent_level:
-                # Mutate the LinkResult's own effective (a frozen dataclass, but the
-                # dict is mutable) so BOTH views carry the values: the policy_set below
-                # AND effective_policy_by_role — the shared serializer the platform's
-                # resolved-policy YAML and the CLI both go through.
-                result.effective[DEFAULT_ROLE_NAME] = result.effective[
-                    DEFAULT_ROLE_NAME
-                ].model_copy(update=agent_level)
+                result = _with_agent_level(result, agent_level)
             by_role[role] = result
             effective[role] = result.effective[DEFAULT_ROLE_NAME]
         return ProjectLinkResult(policy_set=PolicySet(effective), by_role=by_role)
@@ -104,6 +99,18 @@ def resolve_entry(
         raise  # already carries module provenance
     except (ValidationError, ConstraintParseError, PolicySetError) as exc:
         raise LinkError(f"{source}: {exc}") from exc
+
+
+def _with_agent_level(result: LinkResult, fields: dict[str, object]) -> LinkResult:
+    """``result`` with the agent-wide fields on its folded policy, in every view:
+    its own ``policy_set``, and ``effective`` — which ``effective_policy_by_role``
+    serializes for the platform's resolved-policy YAML and the CLI."""
+    patched = result.effective[DEFAULT_ROLE_NAME].model_copy(update=fields)
+    return replace(
+        result,
+        policy_set=PolicySet({DEFAULT_ROLE_NAME: patched}),
+        effective={DEFAULT_ROLE_NAME: patched},
+    )
 
 
 def _agent_level_fields(entry: Entry, agent: str) -> dict[str, object]:
