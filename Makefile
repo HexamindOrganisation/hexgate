@@ -29,8 +29,8 @@ install: ## Install runtime deps via uv (creates .venv if needed)
 	uv sync
 
 .PHONY: install-dev
-install-dev: ## Install with dev extras (pytest, ruff)
-	uv sync --extra dev
+install-dev: ## Install with dev extras (pytest, ruff) and evals (inspect-ai), as CI does
+	uv sync --extra dev --extra evals
 
 # -------- Dev loop --------
 
@@ -74,19 +74,19 @@ coverage-html: ## Coverage with a browsable HTML report under htmlcov/
 
 .PHONY: lint
 lint: ## Static check via ruff
-	$(UV) ruff check hexgate tests platform/scripts
+	$(UV) ruff check hexgate tests evals platform/scripts
 
 .PHONY: lint-fix
 lint-fix: ## Apply ruff autofixes
-	$(UV) ruff check --fix hexgate tests platform/scripts
+	$(UV) ruff check --fix hexgate tests evals platform/scripts
 
 .PHONY: fmt
-fmt: ## Format with ruff (SDK + platform/api + platform/scripts)
-	$(UV) ruff format hexgate tests platform/api platform/scripts
+fmt: ## Format with ruff (SDK + evals + platform/api + platform/scripts)
+	$(UV) ruff format hexgate tests evals platform/api platform/scripts
 
 .PHONY: fmt-check
 fmt-check: ## Check formatting without writing changes
-	$(UV) ruff format --check hexgate tests platform/api platform/scripts
+	$(UV) ruff format --check hexgate tests evals platform/api platform/scripts
 
 .PHONY: check
 check: lint fmt-check test ## Python CI parity: lint + fmt-check + test (no coverage overhead)
@@ -108,6 +108,13 @@ platform-api-check: ## Lint + test (with coverage) on the platform API
 .PHONY: policy-build
 policy-build: ## Compile examples/example_agent/policy.yaml to a bundle under /tmp/m2-bundle
 	$(UV) hexgate policy build examples/example_agent/policy.yaml --out /tmp/m2-bundle
+
+.PHONY: policy-eval-check
+policy-eval-check: ## Run the policy-writing eval on our own answers (reference, wrong_answers, noop) for `inspect view --log-dir evals/policy_writing/logs`; asserts nothing, the pass/fail assertions live in tests/evals/test_task.py
+	for agent in reference wrong_answers noop; do \
+	  $(UV) python -m inspect_ai eval evals/policy_writing/task.py --model none -T agent=$$agent \
+	    --log-dir evals/policy_writing/logs || exit 1; \
+	done
 
 .PHONY: policy-test-wasm
 policy-test-wasm: ## Smoke a wasm-engine decision on the example policy
