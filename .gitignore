@@ -42,3 +42,5 @@ platform/dashboard/coverage/
 # it was replaced, because each held its own untracked file.
 Specs/
 
+# Inspect logs of policy-writing eval runs: local results, not project files.
+evals/policy_writing/logs/

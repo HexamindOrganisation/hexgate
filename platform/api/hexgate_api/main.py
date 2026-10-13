@@ -35,6 +35,8 @@ from hexgate_api.features.orgs.router import router as orgs_router
 from hexgate_api.features.policy_modules.router import router as policy_modules_router
 from hexgate_api.features.projects.router import router as projects_router
 from hexgate_api.features.tokens.router import router as tokens_router
+from hexgate_api.features.usage.router import router as usage_router
+from hexgate_api.features.usage.service import verify_schema as verify_usage_schema
 
 # Load .env into os.environ before any HEXGATE_* read (CORS resolves at import
 # time). Real env vars still take precedence.
@@ -131,6 +133,7 @@ def _build_v1_router() -> APIRouter:
     v1.include_router(projects_router)
     v1.include_router(policy_modules_router)
     v1.include_router(bans_router)
+    v1.include_router(usage_router)
     v1.include_router(ai_act_router)
     v1.include_router(ai_act_pdf_router)
     include_auth_routers(v1)
@@ -178,7 +181,12 @@ async def lifespan(app_: FastAPI):
         # rather than one per restart.
         verify_all(
             get_clickhouse(),
-            (verify_audit_schema, verify_llm_schema, verify_messages_schema),
+            (
+                verify_audit_schema,
+                verify_llm_schema,
+                verify_messages_schema,
+                verify_usage_schema,
+            ),
         )
     # Surface deployment config at startup so a misconfig shows in logs
     # rather than as a silent browser CORS/cookie failure.
