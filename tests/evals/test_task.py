@@ -138,9 +138,10 @@ class FakeSandbox:  # records what the solver asks; `exec` answers from `replies
         self.written[file] = contents
 
     async def read_file(self, file: str, text: bool = True) -> bytes:
-        if isinstance(self.files[file], Exception):
-            raise self.files[file]
-        return self.files[file]
+        data = self.files.get(file, FileNotFoundError(file))  # as Inspect raises
+        if isinstance(data, Exception):
+            raise data
+        return data
 
 
 def ok(stdout: str, stderr: str = "") -> ExecResult:
@@ -216,7 +217,19 @@ async def test_injected_happy_path() -> None:
     (turn,) = await task.injected(sb, RESULT)
     assert (turn.role, turn.text) == ("user", SKILL)  # the command itself is not meta
     assert await task.injected(sb, None) == [] and await task.injected(sb, {}) == []
-    assert await task.injected(FakeSandbox(), RESULT) == []  # no session log
+
+
+def test_when_the_session_log_is_missing_then_a_warning(caplog) -> None:
+    assert asyncio.run(task.injected(FakeSandbox(), RESULT)) == []
+    assert "no Claude Code session log" in caplog.text
+
+
+def test_session_log_follows_the_image_user_and_working_dir() -> None:
+    dockerfile = task.COMPOSE.with_name("Dockerfile").read_text().splitlines()
+    user = [ln.split()[1] for ln in dockerfile if ln.startswith("USER ")][-1]
+    (service,) = yaml.safe_load(task.COMPOSE.read_text())["services"].values()
+    slug = service["working_dir"].replace("/", "-")
+    assert task.SESSION_LOG == f"/home/{user}/.claude/projects/{slug}/{{}}.jsonl"
 
 
 def test_when_the_run_failed_then_output_error() -> None:

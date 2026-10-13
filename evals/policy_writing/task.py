@@ -18,6 +18,7 @@ from __future__ import annotations
 import difflib
 import hashlib
 import json
+import logging
 import os
 import tempfile
 from collections.abc import Iterator
@@ -86,6 +87,7 @@ CLAUDE_FLAGS = [
 NO_RESULT = "no result event"
 USAGE_KEYS = ("usage", "total_cost_usd", "modelUsage", "duration_ms", "num_turns")
 # Claude Code's session log: the only place the expanded slash command is written.
+# Follows the Dockerfile's user, compose's working_dir and the pinned CLI's layout.
 SESSION_LOG = "/home/agent/.claude/projects/-workspace/{}.jsonl"
 # The agent's own timeout fires first, so no workspace in flux is ever scored.
 SAMPLE_MARGIN = 60
@@ -99,6 +101,8 @@ MAX_ANSWER_CHARS = 4_000
 # Each file's size in bytes, skipping dot paths (tooling such as `.claude/skills/`,
 # as `checks.snapshot` does); `wc` adds a total line. Run as argv, not a shell.
 LIST = "find . -type f ! -path */.* -exec wc -c {} +"
+
+logger = logging.getLogger(__name__)
 
 # Looked up by sample id: a case holds `Path`s, so it can't ride in `Sample.metadata`.
 CASES = {case["id"]: case for case in load_cases()}
@@ -317,9 +321,12 @@ def tool_text(content) -> str:  # a string, or a list of {type: text} blocks
 
 async def injected(sb: SandboxEnvironment, result: dict | None) -> list[ChatMessage]:
     """What Claude Code injected for the slash command (the skill), as user turns."""
+    if not (result and result.get("session_id")):
+        return []
     try:
         log = await sb.read_file(SESSION_LOG.format(result["session_id"]))
-    except (TypeError, KeyError, OSError):  # no `result` event, or no session log
+    except OSError as exc:  # the path drifted from the image or the CLI
+        logger.warning("no Claude Code session log, skill turn not shown: %s", exc)
         return []
     metas = [ev for ev in events(log) if ev.get("type") == "user" and ev.get("isMeta")]
     blocks = [b for ev in metas for b in content_blocks(ev) if b.get("type") == "text"]
