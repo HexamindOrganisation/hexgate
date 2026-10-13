@@ -209,8 +209,8 @@ Of your environment only that token enters the container; the task refuses one
 holding `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN`: Claude Code prefers either
 over the subscription token and would silently bill the key per token.
 
-The model is the subscription's default (`claude-sonnet-5-5` in the first runs),
-not set by the task; each score's `usage.modelUsage` in the log records it.
+The model is the subscription's default, not set by the task; each score's
+`usage.modelUsage` in the log records which one ran.
 
 ## Adding a case
 
