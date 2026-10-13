@@ -83,6 +83,7 @@ CLAUDE_FLAGS = [
 ]
 # No eval-only system prompt: the agent gets the request and the skill, as in
 # real use (design doc, Annex D).
+NO_RESULT = "no result event"
 USAGE_KEYS = ("usage", "total_cost_usd", "modelUsage", "duration_ms", "num_turns")
 # Claude Code's session log: the only place the expanded slash command is written.
 SESSION_LOG = "/home/agent/.claude/projects/-workspace/{}.jsonl"
@@ -126,6 +127,9 @@ def policy_writing(
         scorer=policy_checks(),
         sandbox=box,
         time_limit=timeout + SAMPLE_MARGIN,
+        # An infrastructure failure errors its sample, which leaves the metrics
+        # and is retried by `inspect eval-retry`; the other samples carry on.
+        fail_on_error=False if agent == "claude" else None,
     )
 
 
@@ -204,6 +208,8 @@ def claude_agent(timeout: int):
         await push_skill(sb)
         stdout, failure = await run_claude(sb, state.input_text, timeout)
         result, transcript = parse_stream(stdout)
+        if infra := infra_error(stdout, result, failure):
+            raise RuntimeError(infra)
         state.messages.extend(await injected(sb, result) + transcript)
         state.output = model_output(str(state.model), result, failure)
         state.store.set(
@@ -245,7 +251,7 @@ async def run_claude(
     except (TimeoutError, OutputLimitExceededError) as exc:
         # Inspect keeps the output so far on it: None when nothing came out.
         return getattr(exc, "truncated_output", None) or "", str(exc)
-    return out.stdout, f"no result event: {out.stderr[-500:]}"
+    return out.stdout, f"{NO_RESULT}: {out.stderr[-500:]}"
 
 
 def parse_stream(stdout: str) -> tuple[dict | None, list[ChatMessage]]:
@@ -318,6 +324,21 @@ async def injected(sb: SandboxEnvironment, result: dict | None) -> list[ChatMess
     metas = [ev for ev in events(log) if ev.get("type") == "user" and ev.get("isMeta")]
     blocks = [b for ev in metas for b in content_blocks(ev) if b.get("type") == "text"]
     return [ChatMessageUser(content=b["text"]) for b in blocks]
+
+
+def infra_error(stdout: str, result: dict | None, failure: str) -> str | None:
+    """Why the run failed for a reason that is not the agent's: an API error
+    (bad token, rate limit) or a CLI that never started. Timeouts, max turns
+    and errors during execution are the agent's, scored by `agent ran`."""
+    if result and (
+        result.get("api_error_status") or result.get("terminal_reason") == "api_error"
+    ):
+        return (
+            f"Claude API error {result.get('api_error_status')}: {result.get('result')}"
+        )
+    if result is None and failure.startswith(NO_RESULT) and not any(events(stdout)):
+        return f"Claude Code never started: {failure}"
+    return None
 
 
 def model_output(model: str, result: dict | None, failure: str) -> ModelOutput:

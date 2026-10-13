@@ -72,6 +72,7 @@ def token(monkeypatch) -> None:
 def test_claude_task_happy_path(token) -> None:
     t = task.policy_writing(agent="claude", cases=CASE)
     assert (t.sandbox.type, t.sandbox.config) == ("docker", str(task.COMPOSE))
+    assert t.fail_on_error is False  # infra errors are retried, not scored
     assert t.time_limit == 900 + task.SAMPLE_MARGIN  # the agent's timeout fires first
 
 
@@ -160,6 +161,12 @@ RESULT = {
     "num_turns": 2,
     "session_id": "sid",
 }
+REFUSED = {
+    **RESULT,
+    "is_error": True,
+    "api_error_status": 401,
+    "terminal_reason": "api_error",
+}
 READ = {
     "type": "tool_use",
     "id": "t1",
@@ -216,6 +223,32 @@ def test_when_the_run_failed_then_output_error() -> None:
     bad = {**RESULT, "is_error": True, "result": "rate limited"}
     assert task.model_output("none", bad, "unused").error == "rate limited"
     assert task.model_output("none", None, "no result: x").error == "no result: x"
+
+
+@pytest.mark.parametrize(
+    "result, stdout, failure, infra",
+    [
+        (REFUSED, "{}", "", True),  # as recorded with a revoked token
+        ({**REFUSED, "api_error_status": None}, "{}", "", True),
+        (None, "", f"{task.NO_RESULT}: exec format error", True),  # never started
+        (None, "", "Command timed out after 7 seconds", False),  # the agent's time
+        (None, '{"type": "system"}', f"{task.NO_RESULT}: killed", False),  # died
+        ({**RESULT, "is_error": True, "subtype": "error_max_turns"}, "{}", "", False),
+        (RESULT, "{}", "", False),
+    ],
+)
+def test_infra_error_tells_infrastructure_from_the_agent(
+    result, stdout, failure, infra
+) -> None:
+    assert bool(task.infra_error(stdout, result, failure)) is infra
+
+
+async def test_when_the_api_refuses_then_the_sample_errors(monkeypatch) -> None:
+    replies = {"claude": ok(stream([REFUSED])), "sh": ok("IS_SANDBOX")}
+    monkeypatch.setattr(task, "sandbox", lambda: FakeSandbox(replies))
+    state = TaskState(ModelName("none/none"), CASE, 0, "/write-policy x", [])
+    with pytest.raises(RuntimeError, match="Claude API error 401"):
+        await task.claude_agent(7)(state, None)
 
 
 async def test_run_claude_happy_path() -> None:
