@@ -224,7 +224,9 @@ async def test_run_claude_happy_path() -> None:
     assert (stdout, failure) == ("{}", "no result event: warn")
     ((cmd, kwargs),) = sb.execs
     assert cmd[:3] == ["claude", "-p", "/write-policy x"]
-    assert "--allowedTools" in cmd
+    flags = dict(zip(cmd, cmd[1:]))
+    assert flags["--permission-mode"] == "bypassPermissions"
+    assert flags["--disallowedTools"] == "WebFetch,WebSearch"
     assert not {"--bare", "--append-system-prompt", "--system-prompt"} & set(cmd)
     assert kwargs == {"timeout": 7, "timeout_retry": False}  # nothing of the host's env
 
@@ -269,6 +271,8 @@ def test_compose_passes_only_the_token_and_the_image_holds_none() -> None:
     dockerfile = task.COMPOSE.with_name("Dockerfile").read_text()
     assert "ANTHROPIC" not in dockerfile and "sk-ant" not in dockerfile
     assert "OAUTH_TOKEN=" not in dockerfile and "claude-code@2." in dockerfile
+    users = [ln.split()[1] for ln in dockerfile.splitlines() if ln.startswith("USER ")]
+    assert users[-1] not in ("root", "0")  # bypassPermissions is refused as root
 
 
 async def test_when_a_read_fails_then_pull_reports_agent_ran(tmp_path: Path) -> None:

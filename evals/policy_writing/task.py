@@ -74,11 +74,12 @@ REPO = Path(__file__).resolve().parents[2]
 SKILL = Path(
     ".claude/skills/write-policy"
 )  # a dot path: the snapshot and the pull skip it
-# The tools the agent may use, edits auto-accepted. Never `--bare`: it ignores the token.
+# Every tool, unprompted, in the disposable container (non-root, which bypass
+# requires), except the web: the agent reads only our files. Never `--bare`: it
+# ignores the token.
 CLAUDE_FLAGS = [
-    *"--output-format stream-json --verbose --permission-mode acceptEdits".split(),
-    "--allowedTools",
-    "Read,Glob,Grep,Edit,Write,Bash(uv run hexgate:*),Bash(hexgate:*)",
+    *"--output-format stream-json --verbose --permission-mode bypassPermissions".split(),
+    *["--disallowedTools", "WebFetch,WebSearch"],
 ]
 # No eval-only system prompt: the agent gets the request and the skill, as in
 # real use (design doc, Annex D).

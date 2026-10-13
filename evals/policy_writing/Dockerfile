@@ -10,7 +10,7 @@ RUN ln -s /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
 
 # Hexgate from this checkout, pinned by the lock: dependencies in their own
 # layer, then the SDK. Its venv goes first on PATH so both `hexgate …` and
-# `uv run hexgate …` (the agent's allow-list) resolve to it from the workspace.
+# `uv run hexgate …` resolve to it from the workspace.
 WORKDIR /opt/hexgate
 COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev --no-install-project
