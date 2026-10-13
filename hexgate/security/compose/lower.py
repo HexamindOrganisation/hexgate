@@ -31,6 +31,7 @@ from hexgate.security.models import (
     BaseToolPolicy,
     GuardRule,
     SkillPolicy,
+    UsagePolicy,
 )
 from hexgate.security.module_loader import _canonical_hash
 from hexgate.security.modules import DEFAULT_AGENT, ModuleContent
@@ -54,6 +55,15 @@ def agent_guards(entry: Entry, agent: str) -> dict[str, GuardRule]:
     if block is not None:
         merged.update(block.guards)
     return merged
+
+
+def agent_usage_policy(entry: Entry, agent: str) -> UsagePolicy | None:
+    """The agent's ``usage`` block: its own body's, else the entry's top-level one.
+    Not composed from imports or role bodies, so every role reads the same value."""
+    block = entry.agents.get(agent)
+    if block is not None and block.usage is not None:
+        return block.usage
+    return entry.usage
 
 
 def _content_hash(name: str, policy: AgentPolicy) -> str:

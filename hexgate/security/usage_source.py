@@ -25,6 +25,7 @@ from hexgate.cloud.client import HexgateError
 from hexgate.config.env import resolve_api_key
 from hexgate.runtime.agent_usage import (
     Clock,
+    OnUnavailable,
     UsageLedger,
     _monotonic,
     combined_namespace,
@@ -58,13 +59,6 @@ _EXECUTOR_THREAD_PREFIX: Final = "hexgate-usage"
 # Single-flight per agent already, so workers only keep one slow agent from
 # delaying another's refresh.
 _EXECUTOR_MAX_WORKERS: Final = 4
-
-
-class OnUnavailable(StrEnum):
-    """What a decision reads when the platform term is missing."""
-
-    ALLOW = "allow"  # ledger-only values: zeros plus this process (G3)
-    DENY = "deny"  # the value is absent, so its constraints fail closed
 
 
 class UsageState(StrEnum):
