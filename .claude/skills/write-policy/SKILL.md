@@ -47,7 +47,8 @@ and prefer them over this file if they disagree:
    uv run hexgate policy test <file> --role billing --tool refund_order \
        --args '{"amount": 500, "currency": "USD"}' [--attributes '{"department": "finance"}']
    ```
-   Also use `--roles a,b` to check a multi-role caller, where the most permissive role wins. Add `--engine wasm` when `opa` is installed, since that engine matches production. Every result must match the table. When one doesn't, fix the policy, not the table, unless the table was wrong.
+   Also use `--roles a,b` to check a multi-role caller, where the most permissive role wins.
+   Run `command -v opa` once first: if it prints a path, pass `--engine wasm` on every `policy test` run, since that engine matches production. Every result must match the table. When one doesn't, fix the policy, not the table, unless the table was wrong.
 6. **Report.** Give the YAML, the decision table with each case's actual CLI result, and any assumptions or residual risks, e.g. "egress on HTTPS is host-level only".
 
 ## Document shape
