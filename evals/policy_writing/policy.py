@@ -117,8 +117,10 @@ RANK = {
 
 
 class CaseError(ValueError):
-    """A case's call can't be dry-run: an undefined role, bad attributes or run facts,
-    or args a declared gate sets itself to other values."""
+    """A case can't be scored as written: raised by the case loader for a
+    malformed case, and by `decide` / `complete_call` for a call no policy
+    could dry-run (an undefined role, bad attributes or run facts, or args a
+    gate sets itself, given other values)."""
 
 
 _ATTRIBUTES = TypeAdapter(dict[str, ContextAttributeValue])
@@ -215,10 +217,12 @@ def _with_gate_args(gate: _Gate, args: dict) -> dict:
     """`args` as the gate passes them: what it sets itself, plus the rest of
     `gate_args` from the case (a skill read's `file_path`, the skill's
     `content_hash`, which the adapter hashes from the skill), None where the
-    case leaves one out, as the adapters send it.
+    case leaves one out (the case loader refuses a null hash, which no adapter
+    sends for a readable skill).
 
     A case may spell an arg the gate sets only with the gate's value, as the
-    case loader (PR 2) fills it in; any other value would be silently replaced.
+    case loader's call checks (#330) fill it in; any other value would be
+    silently replaced.
     """
     from_call = gate_args(gate.key) - gate.sent.keys()
     if extra := sorted(
@@ -234,8 +238,8 @@ def _with_gate_args(gate: _Gate, args: dict) -> dict:
 
 
 def dump_json(value: object) -> str:
-    """`value` as JSON; an unquoted YAML date, kept as a date by the case
-    loader, becomes its string."""
+    """`value` as JSON; an unquoted YAML date becomes its string (the case
+    loader refuses a timestamp, whose string isn't ISO)."""
     return json.dumps(value, sort_keys=True, default=str)
 
 
@@ -266,6 +270,46 @@ def _run(key: str, gate: _Gate | None, agent: str, facts: dict) -> dict:
     return run_namespace("" if gate else key, agent=agent, **facts)
 
 
+def _inputs(gate: _Gate | None, key: str, agent: str, d: dict) -> tuple[dict, ...]:
+    """`d`'s args, attributes and run as `decide` evaluates them, before its
+    gate's own args are added."""
+    try:  # a pydantic ValidationError is a ValueError
+        args = _as_json(d.get("args", {}))
+        attributes = _ATTRIBUTES.validate_python(_as_json(d.get("attributes", {})))
+        run = _run(key, gate, agent, _as_json(d.get("run_facts", {})))
+    except ValueError as exc:
+        raise CaseError(str(exc)) from exc
+    return args, attributes, run
+
+
+# Whether a policy declares a gate never changes what `_inputs` accepts.
+_NO_POLICY = load_policy_set_from_dict({})
+
+
+def complete_call(d: dict, agent: str | None) -> None:
+    """Raise `CaseError` for inputs `decide` refuses under any policy, and for
+    args a gate sets itself given other values (which `decide` refuses once the
+    gate is declared); write a gate call's key and args into `d` as `decide`
+    sends them.
+
+    The case loader runs this, so a call no policy could dry-run fails before
+    a run, and a case's call and a preserved one compare equal however much of
+    the gate's args each spells out. With no `agent` (a role-wide case), the
+    gate's `agent` arg is left out: each agent's dry-run sends its own name.
+    """
+    sender = agent or DEFAULT_AGENT_NAME
+    gate = _gate(d["tool"], sender, _NO_POLICY)
+    key = gate.key if gate else d["tool"]
+    args, _, _ = _inputs(gate, key, sender, d)
+    if not gate:
+        return
+    if agent is None and "agent" in gate.sent and "agent" in args:
+        raise CaseError(f"{key}: each agent sends its own name; drop ['agent']")
+    d["tool"], d["args"] = key, _with_gate_args(gate, args)
+    if agent is None:
+        d["args"].pop("agent", None)
+
+
 def decide(policy: Policy, role: str, d: dict) -> Verdict:
     """Dry-run one call, with the same inputs as `hexgate policy test`, except that
     a call on a gate carries the args that gate sends at runtime.
@@ -281,12 +325,7 @@ def decide(policy: Policy, role: str, d: dict) -> Verdict:
     agent = policy.agent or DEFAULT_AGENT_NAME
     gate = _gate(d["tool"], agent, policy.policy_set)
     key = gate.key if gate else d["tool"]
-    try:  # a pydantic ValidationError is a ValueError
-        args = _as_json(d.get("args", {}))
-        attributes = _ATTRIBUTES.validate_python(_as_json(d.get("attributes", {})))
-        run = _run(key, gate, agent, _as_json(d.get("run_facts", {})))
-    except ValueError as exc:
-        raise CaseError(str(exc)) from exc
+    args, attributes, run = _inputs(gate, key, agent, d)
     if gate and not gate.declared:
         if gate.by_name:
             raise CaseError(
@@ -482,9 +521,15 @@ def can_call(policy: Policy, key: str, agents: Collection[str]) -> bool:
     finds one; on a framework that hides agent-as-tool edges in a tool closure,
     an agent with none recorded may reach any other agent.
     """
-    manifest = policy.manifest
-    if manifest is None:
+    if policy.manifest is None:
         return False
+    return manifest_can_call(policy.manifest, policy.agent, key, agents)
+
+
+def manifest_can_call(
+    manifest: AgentManifest, agent: str | None, key: str, agents: Collection[str]
+) -> bool:
+    """`can_call` for the agent named `agent` with this manifest."""
     if key == AGENT_RUN_TOOL:
         return True
     declared = _declared(manifest)
@@ -494,6 +539,6 @@ def can_call(policy: Policy, key: str, agents: Collection[str]) -> bool:
         via, target = reach
         if manifest.subagents is None:  # none found, or hidden in a tool closure
             hidden = via == "tool" and manifest.framework in _HIDDEN_TOOL_EDGES
-            return hidden and target in agents and target != policy.agent
+            return hidden and target in agents and target != agent
         return reach in {(s.via, canonical_name(s.name)) for s in manifest.subagents}
     return key in declared.tools

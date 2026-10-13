@@ -57,7 +57,7 @@ jobs:
           opa version
 
       - name: Sync deps
-        run: uv sync --extra dev
+        run: uv sync --extra dev --extra evals
 
       # Split out from `make check` (lint + fmt-check + test) so we can
       # run pytest with coverage without re-running it. Same gating, one
