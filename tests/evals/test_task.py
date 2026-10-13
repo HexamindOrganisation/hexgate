@@ -224,7 +224,8 @@ async def test_run_claude_happy_path() -> None:
     assert (stdout, failure) == ("{}", "no result event: warn")
     ((cmd, kwargs),) = sb.execs
     assert cmd[:3] == ["claude", "-p", "/write-policy x"]
-    assert "--bare" not in cmd and "--allowedTools" in cmd
+    assert "--allowedTools" in cmd
+    assert not {"--bare", "--append-system-prompt", "--system-prompt"} & set(cmd)
     assert kwargs == {"timeout": 7, "timeout_retry": False}  # nothing of the host's env
 
 

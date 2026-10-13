@@ -80,13 +80,8 @@ CLAUDE_FLAGS = [
     "--allowedTools",
     "Read,Glob,Grep,Edit,Write,Bash(uv run hexgate:*),Bash(hexgate:*)",
 ]
-# Facts about the harness, not the request: appended to the agent's system prompt.
-HARNESS = (
-    "You are running unattended in an automated evaluation, started in the "
-    "project's directory. Nobody can answer questions, so don't ask any: make "
-    "a reasonable assumption and state it. End with a short summary of what "
-    "you changed."
-)
+# No eval-only system prompt: the agent gets the request and the skill, as in
+# real use (design doc, Annex D).
 USAGE_KEYS = ("usage", "total_cost_usd", "modelUsage", "duration_ms", "num_turns")
 # Claude Code's session log: the only place the expanded slash command is written.
 SESSION_LOG = "/home/agent/.claude/projects/-workspace/{}.jsonl"
@@ -243,7 +238,7 @@ async def run_claude(
 ) -> tuple[str, str]:
     """Claude Code's stdout, and why if the run ended without a `result` event.
     Nothing of the host's env; no retry on a timeout, it would bill again."""
-    cmd = ["claude", "-p", prompt, "--append-system-prompt", HARNESS, *CLAUDE_FLAGS]
+    cmd = ["claude", "-p", prompt, *CLAUDE_FLAGS]
     try:
         out = await sb.exec(cmd, timeout=timeout, timeout_retry=False)
     except (TimeoutError, OutputLimitExceededError) as exc:
