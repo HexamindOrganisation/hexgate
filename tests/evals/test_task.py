@@ -321,6 +321,18 @@ def test_compose_passes_only_the_token_and_the_image_holds_none() -> None:
     assert users[-1] not in ("root", "0")  # bypassPermissions is refused as root
 
 
+def test_sandbox_image_installs_opa_per_architecture_before_dropping_root() -> None:
+    dockerfile = task.COMPOSE.with_name("Dockerfile").read_text()
+    for arch, sha in [
+        ("amd64", "00d114b94fdb1606a48cccdfc73c9ccdc62c38721150131ae578d5ff3df5c084"),
+        ("arm64", "48061407a2d7b0b59440fc3a257e7bb251e9ec62f6ce7b1e45c142263ae24413"),
+    ]:
+        url = f"https://openpolicyagent.org/downloads/v0.70.0/opa_linux_{arch}_static"
+        assert f"--checksum=sha256:{sha} \\\n    {url} /opa" in dockerfile
+    assert "FROM opa-${TARGETARCH}" in dockerfile
+    assert dockerfile.index("/usr/local/bin/opa") < dockerfile.index("\nUSER ")
+
+
 async def test_when_a_read_fails_then_pull_reports_agent_ran(tmp_path: Path) -> None:
     sb = FakeSandbox({"find": ok("10 ./policy.yaml\n 0 ./gone.yaml\n10 total\n")})
     sb.files = {"policy.yaml": b"version: 1", "gone.yaml": FileNotFoundError("gone")}
