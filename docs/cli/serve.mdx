@@ -15,6 +15,9 @@ hexgate serve my_app.agents:my_agent
 
 # CI / deliberate-deploy: error if not pre-registered
 hexgate serve my_app.agents:my_agent --no-auto-register
+
+# Give the registered manifest a description
+hexgate serve my_app.agents:my_agent --description "Refunds and order lookups"
 ```
 
 The bridge works like Cloudflare Tunnel or ngrok — your local agent runtime is

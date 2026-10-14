@@ -37,19 +37,9 @@ KNOWN_POLICY_KEYS = {
     "denied_paths",
     "enabled",
     "file_scope",
-    "on_unavailable",
-    "usage",
 }
-KNOWN_COMMANDS = {"policy check", "policy resolve"}
+KNOWN_COMMANDS: set[str] = set()
 KNOWN_FLAGS = {
-    "policy build --sign-key",
-    "policy check --dir",
-    "policy keygen --force",
-    "policy resolve --dir",
-    "policy resolve --file",
-    "policy resolve --output",
-    "policy test --agent-usage",
-    "policy test --run-facts",
     "register --force",
     "register --register-subagents",
     "serve --no-bind-subagents",
@@ -73,8 +63,8 @@ KNOWN_EXPORTS = {
     "unregister_agent_factory",
 }
 KNOWN_ENV_VARS = {
-    "HEXGATE_PROJECT_ID",
-    "HEXGATE_PUBLIC_KEY",
+    # Read by the platform usage source (#331), which nothing calls yet:
+    # document them when agent_usage.* counts come from the platform.
     "HEXGATE_USAGE_MAX_STALENESS_SECONDS",
     "HEXGATE_USAGE_REFRESH_SECONDS",
     "HEXGATE_USAGE_SYNC_AFTER_SECONDS",
@@ -146,6 +136,14 @@ def _env_vars() -> set[str]:
     return found
 
 
+def _flag_documented(flag: str, _corpus: str) -> bool:
+    """A flag counts only on its own command's page (``docs/cli/<command>.mdx``):
+    ``keygen --force`` must not document ``register --force``."""
+    cmd, opt = flag.rsplit(" ", 1)
+    page = DOCS / "cli" / f"{cmd.split()[0]}.mdx"
+    return page.exists() and _term_documented(opt, page.read_text(encoding="utf-8"))
+
+
 def _key_documented(key: str, text: str) -> bool:
     # A key counts when the docs show it as code or as a YAML key.
     return re.search(rf"`{re.escape(key)}`|\b{re.escape(key)}:", text) is not None
@@ -171,7 +169,7 @@ CHECKS = {
     "CLI flags": (
         _flags,
         lambda: _pages("cli"),
-        lambda f, t: _term_documented(f.rsplit(" ", 1)[1], t),
+        _flag_documented,
         KNOWN_FLAGS,
     ),
     "public exports": (
