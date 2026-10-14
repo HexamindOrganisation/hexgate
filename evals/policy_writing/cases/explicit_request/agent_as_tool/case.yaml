@@ -4,7 +4,7 @@ request: Billing may call refund-bot as a tool, but never hand the conversation 
 expect:
   decisions:
     - { role: billing, tool: "agent.tool:refund-bot", args: {}, expect: allow }
-    - { role: billing, tool: "agent.handoff:refund-bot", args: {}, expect: deny }
+    - { roles: [default, support, billing], tool: "agent.handoff:refund-bot", args: {}, expect: deny }
     - { roles: [default, support], tool: "agent.tool:refund-bot", args: {}, expect: deny }
     - { roles: [default, support, billing], tool: "agent.tool:admin-bot", args: {}, expect: deny }
     - { roles: [default, support, billing], tool: "agent.handoff:admin-bot", args: {}, expect: deny }
