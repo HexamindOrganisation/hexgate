@@ -333,8 +333,9 @@ be off:
   process.
 - **It errs toward counting more.** Besides [windows rounding up](#what-the-usage-counters-mean),
   two ways a value reads high, each on purpose:
-  - this process's last 30 seconds can be counted twice, once locally and once on the
-    platform, so its own events still in the pipeline are never missed;
+  - this process's events from the 30 seconds before each fetch (up to 90 seconds once
+    the snapshot is over 270 seconds old) can be counted twice, once locally and once
+    on the platform, so its own events still in the pipeline are never missed;
   - a call that hits `approval_required` counts as a tool call when the gate fires,
     even if the approval is refused.
 - **It can read low** when the SDK's span queue drops spans under saturation.
@@ -446,10 +447,15 @@ The differences:
 - **Rolling, not latching.** A denial clears as usage ages out of the window. There
   are no calendar resets. This is the opposite of `run.*`, which only ever grows.
 - **Windows round up, never down.** The oldest bucket counts whole, so a window can
-  read slightly *more* than its nominal length. The platform's share counts in
-  minutes, so any window can read up to a minute more. This process's own share
-  follows its local buckets: under a second more for `5m`, under a minute for
-  `1h` and `24h`, under an hour for `7d` and `30d`.
+  read *more* than its nominal length. The platform's share counts in minutes, so it
+  can start up to a minute early, and it doesn't age out until the next refresh.
+  This process's own share covers everything since 30 seconds before the fetch,
+  whatever the window. So a window can read high by up to the snapshot's age plus
+  30 seconds plus a minute, and one more minute once the snapshot is over 270 seconds
+  old: about 1.5 minutes normally, about 7.5 minutes on a snapshot near 5 minutes old.
+  With no snapshot, this process's share alone follows its local buckets: under a
+  second more for `5m`, under a minute for `1h` and `24h`, under an hour for `7d` and
+  `30d`.
 
 ### Dry-running a quota
 

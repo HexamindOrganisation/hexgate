@@ -70,7 +70,9 @@ above the pipeline lag for this to hold. The ledger keeps 1-second buckets for 3
 which covers (snapshot age + margin) for any snapshot that is refreshing normally. An
 older snapshot, kept as last-good while the platform is unreachable, reads the minute
 tier instead. There the bucket holding the cut-off counts whole, so the error stays an
-over-count of under a minute, in the same conservative direction.
+over-count of under a minute, in the same conservative direction. The ledger term is
+not clipped to a path's window and the snapshot term ends at the fetch, so a value can
+also span up to (snapshot age + margin) past its window.
 
 The default is **fail-open** because a soft quota that is stricter on failure than on
 success is incoherent. With fail-closed by default, a platform blip (a deploy, a
