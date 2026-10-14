@@ -275,9 +275,12 @@ process** has done since shortly before that fetch. The platform's count covers 
 process and replica that runs the agent under the same project (the project of the API
 key).
 
-- **Fetched at run start, never per decision.** The fetch happens at the run boundary,
-  alongside the policy and ban checks. Inside a run, a decision reads the cached count
-  plus the local one; it never calls the network.
+- **Fetched at run start; a decision never waits on the network.** The fetch happens
+  at the run boundary, alongside the policy and ban checks. Inside a run, a decision
+  reads the cached count plus the local one. When that count is stale, partial or
+  unavailable, the decision may schedule a background refresh (one at a time per
+  agent, at most every `HEXGATE_USAGE_REFRESH_SECONDS`), so a long run heals its own
+  snapshot, but the decision itself never blocks on it.
 - **Same name, same counter.** Two deployments that use the same agent name in the
   same project share one count. Different projects never do. Names are trimmed, so
   `" billing "` and `billing` are one agent.

@@ -26,7 +26,9 @@ back to the ledger alone, unless the policy opts into `deny`.
   refresh adds: they are unknown when the fetches start, so they are refreshed once
   the policy refresh returns, and that call MUST block only when there is no snapshot
   younger than `sync_after_seconds` (in practice, the run that picks up an agent's
-  first usage cap). A decision MUST NOT make a network call.
+  first usage cap). A decision MUST NOT block on a network call; when its reading is
+  not fresh it MAY schedule a background refresh, at most one in flight per agent and
+  throttled by `min_refresh_seconds`.
 - The default fail mode MUST be `allow`: an unavailable snapshot reads ledger-only
   values, never an absent namespace. `deny` MUST be an explicit
   `usage: { on_unavailable: deny }` in the policy, signed into the bundle manifest,
@@ -48,8 +50,9 @@ Decisions are made in-process, by an engine that only sees the input it is hande
 platform never decides, so cross-run state has to be brought to the SDK. Asking a
 counter service on every decision would put a network round trip, and a network
 dependency, on every tool call. Keeping the hot path local is the property every other
-part of the enforcer is built around, so usage is **pulled**: once per run boundary,
-alongside the policy and ban fetches, and cached between runs.
+part of the enforcer is built around, so usage is **pulled**: at the run boundary,
+alongside the policy and ban fetches, cached between runs, and topped up in the
+background when a decision finds it stale.
 
 A snapshot alone is not enough. Spans reach the platform's rollup 5–15 s after they
 happen, so a process reading only the snapshot would miss its own last few seconds and
