@@ -9,6 +9,7 @@ expect:
     - { roles: [support_staff, manager, default], tool: export_customers, args: { format: csv }, expect: [deny, approval_required] }
     - { roles: [support_staff, manager, default], tool: refund_order, args: { order_id: o1, amount: 1000000, currency: EUR }, expect: [deny, approval_required] }
     - { roles: [support_staff, manager], tool: view_orders, args: { customer_id: c1 }, expect: allow }
+    - { roles: [support_staff, manager], tool: lookup_order, args: { order_id: o1 }, expect: allow }
   superset:
     - wider: manager
       narrower: support_staff
