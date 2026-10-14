@@ -1,0 +1,14 @@
+# Inspect's sandbox for `agent=claude` (task.py checks IS_SANDBOX). Only the token comes in from the host's env: Claude Code prefers ANTHROPIC_AUTH_TOKEN or ANTHROPIC_API_KEY when set, silently billing the key instead of the subscription.
+services:
+  default:
+    build:
+      context: ../..
+      dockerfile: evals/policy_writing/Dockerfile
+    image: hexgate-policy-eval
+    command: ["tail", "-f", "/dev/null"]
+    init: true
+    stop_grace_period: 1s
+    working_dir: /workspace
+    environment:
+      - CLAUDE_CODE_OAUTH_TOKEN
+      - IS_SANDBOX=1
