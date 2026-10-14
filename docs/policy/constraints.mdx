@@ -319,7 +319,7 @@ one run with `run.*`. How far a value can be off:
   admitted. Runs admitted at the same moment (sync runs on separate threads, or a
   run waiting on an approval) can all read the same count and each pass, even in one
   process.
-- **It errs toward counting more.** Besides [windows rounding up](#what-the-counters-mean),
+- **It errs toward counting more.** Besides [windows rounding up](#what-the-usage-counters-mean),
   two ways a value reads high, each on purpose:
   - this process's last 30 seconds can be counted twice, once locally and once on the
     platform, so its own events still in the pipeline are never missed;
@@ -330,7 +330,7 @@ one run with `run.*`. How far a value can be off:
   process's last 30 seconds before each fetch, so drops older than that are lost,
   this process's included.
 - **Not latching.** A denial clears as usage ages out of the window
-  ([Rolling, not latching](#what-the-counters-mean)).
+  ([Rolling, not latching](#what-the-usage-counters-mean)).
 </Warning>
 
 ### When the platform can't answer
@@ -415,7 +415,7 @@ starts. The run being admitted is not counted yet, so use `<`:
 warning above). A top-level
 `constraints:` entry also reaches every tool call inside a run, not only admission.
 
-### What the counters mean
+### What the usage counters mean
 
 Each metric counts exactly what its `run.*` twin counts, summed over the window.
 The differences:
