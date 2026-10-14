@@ -1,0 +1,13 @@
+# Behaviour every case on this project keeps unless it lists the same call.
+- { roles: [default, support], tool: view_orders, args: { customer_id: c1 }, expect: allow }
+- { roles: [default, support], tool: lookup_order, args: { order_id: o1 }, expect: deny }
+- { role: support, tool: send_email, args: { to: [a@acme.com], subject: s, body: b }, expect: allow }
+- { role: default, tool: send_email, args: { to: [a@acme.com], subject: s, body: b }, expect: deny }
+- { role: support, tool: refund_order, args: { order_id: o1, amount: 50, currency: EUR }, expect: allow }
+- { role: support, tool: refund_order, args: { order_id: o1, amount: 51, currency: EUR }, expect: deny }
+- { role: default, tool: refund_order, args: { order_id: o1, amount: 10, currency: EUR }, expect: deny }
+- { roles: [default, support], tool: agent.run, args: { agent: order-desk }, expect: allow }
+- { roles: [default, support], tool: net.http_request, args: { method: CONNECT, host: api.acme.com, port: 443 }, expect: allow }
+- { roles: [default, support], tool: net.http_request, args: { method: CONNECT, host: evil.io, port: 443 }, expect: deny }
+- { roles: [default, support], tool: net.http_request, args: { method: GET, url: "http://api.acme.com/x" }, expect: deny }
+- { role: support, tool: view_orders, args: { customer_id: c1 }, run_facts: { tool_calls: 50 }, expect: deny }

@@ -1,0 +1,14 @@
+agent: order-desk
+request: Add an auditor role that can look up single orders, on top of what every role gets by default. Nothing else.
+note: The auditor must keep what org_defaults gives every role (reads, egress allowlist, admission) and the run cap, and gain only lookup_order.
+expect:
+  decisions:
+    - { role: auditor, tool: lookup_order, args: { order_id: o1 }, expect: allow }
+    - { role: auditor, tool: view_orders, args: { customer_id: c1 }, expect: allow }
+    - { role: auditor, tool: agent.run, args: { agent: order-desk }, expect: allow }
+    - { role: auditor, tool: net.http_request, args: { method: CONNECT, host: api.acme.com, port: 443 }, expect: allow }
+    - { role: auditor, tool: net.http_request, args: { method: CONNECT, host: evil.io, port: 443 }, expect: deny }
+    - { role: auditor, tool: net.http_request, args: { method: GET, url: "http://api.acme.com/x" }, expect: deny }
+    - { role: auditor, tool: refund_order, args: { order_id: o1, amount: 10, currency: EUR }, expect: deny }
+    - { role: auditor, tool: send_email, args: { to: [a@acme.com], subject: s, body: b }, expect: deny }
+    - { role: auditor, tool: lookup_order, args: { order_id: o1 }, run_facts: { tool_calls: 50 }, expect: deny }
