@@ -1,0 +1,16 @@
+starting_project: support_bot_single_file
+agent: support-bot
+request: For every role, the agent may only make outbound HTTP calls to api.stripe.com and to acme.com or any of its subdomains, and only over HTTPS.
+expect:
+  decisions:
+    - { role: default, tool: net.http_request, args: { method: CONNECT, host: api.stripe.com, port: 443 }, expect: allow }
+    - { role: support, tool: net.http_request, args: { method: CONNECT, host: docs.acme.com, port: 443 }, expect: allow }
+    - { role: billing, tool: net.http_request, args: { method: CONNECT, host: acme.com, port: 443 }, expect: allow }
+    - { role: support, tool: net.http_request, args: { method: CONNECT, host: notacme.com, port: 443 }, expect: deny }
+    - { role: support, tool: net.http_request, args: { method: CONNECT, host: acme.com.evil.io, port: 443 }, expect: deny }
+    - { role: support, tool: net.http_request, args: { method: GET, url: "http://api.stripe.com/" }, expect: deny }
+    - { role: default, tool: net.http_request, args: { method: CONNECT, host: api.stripe.com.evil.io, port: 443 }, expect: deny }
+    - { role: billing, tool: net.http_request, args: { method: CONNECT, host: uploads.stripe.com, port: 443 }, expect: deny }
+    - { role: support, tool: net.http_request, args: { method: CONNECT, host: api-stripe.com, port: 443 }, expect: deny }
+    - { role: support, tool: net.http_request, args: { method: CONNECT, host: foo.api.stripe.com, port: 443 }, expect: deny }
+    - { role: support, tool: net.http_request, args: { method: CONNECT, host: evilapi.stripe.com, port: 443 }, expect: deny }

@@ -109,7 +109,7 @@ platform-api-check: ## Lint + test (with coverage) on the platform API
 policy-build: ## Compile examples/example_agent/policy.yaml to a bundle under /tmp/m2-bundle
 	$(UV) hexgate policy build examples/example_agent/policy.yaml --out /tmp/m2-bundle
 
-CASES ?= explicit_request
+CASES ?= explicit_request/support_refund_cap
 
 .PHONY: policy-eval
 policy-eval: ## Run the policy-writing eval with Claude Code in Docker: CASES=<id prefixes> (one case by default, every run bills the Claude subscription), 3 epochs, needs CLAUDE_CODE_OAUTH_TOKEN from `claude setup-token`; results in `inspect view --log-dir evals/policy_writing/logs`

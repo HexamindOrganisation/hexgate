@@ -1,0 +1,14 @@
+starting_project: support_bot_single_file
+agent: support-bot
+request: Support can read files, but only under src/ or docs/, and never any .env file.
+expect:
+  decisions:
+    - { role: support, tool: read_file, args: { file_path: src/app.py }, expect: allow }
+    - { role: support, tool: read_file, args: { file_path: docs/guide.md }, expect: allow }
+    - { role: support, tool: read_file, args: { file_path: src/.env }, expect: deny }
+    - { role: support, tool: read_file, args: { file_path: etc/passwd }, expect: deny }
+    - { role: support, tool: read_file, args: { file_path: srcfoo/app.py }, expect: deny }
+    - { role: default, tool: read_file, args: { file_path: src/app.py }, expect: deny }
+    - { role: support, tool: read_file, args: { file_path: src/a.py }, expect: allow }
+    - { role: support, tool: read_file, args: { file_path: src/config/.env }, expect: deny }
+    - { role: support, tool: read_file, args: { file_path: src/pkg/mod.py }, expect: allow }

@@ -1,0 +1,14 @@
+starting_project: support_bot_single_file
+agent: support-bot
+request: Billing refunds must reference an order id made of "ord_" followed by digits only.
+expect:
+  decisions:
+    - { role: billing, tool: refund_order, args: { order_id: ord_123, amount: 100, currency: USD }, expect: allow }
+    - { role: billing, tool: refund_order, args: { order_id: xord_123, amount: 100, currency: USD }, expect: deny }
+    - { role: billing, tool: refund_order, args: { order_id: ord_12a, amount: 100, currency: USD }, expect: deny }
+    - { role: billing, tool: refund_order, args: { order_id: o1, amount: 400, currency: EUR }, expect: deny }
+    - { role: billing, tool: refund_order, args: { order_id: o1, amount: 100, currency: USD }, expect: deny }
+    - { role: billing, tool: refund_order, args: { order_id: ord_, amount: 100, currency: USD }, expect: deny }
+    - { role: billing, tool: refund_order, args: { order_id: ord_123, amount: 501, currency: USD }, expect: deny }
+    - { role: billing, tool: refund_order, args: { order_id: ord_123, amount: 100, currency: GBP }, expect: deny }
+    - { role: billing, tool: refund_order, args: { order_id: ord_123, amount: 400, currency: EUR }, expect: allow }
