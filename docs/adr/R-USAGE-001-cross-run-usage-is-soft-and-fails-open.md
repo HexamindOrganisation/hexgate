@@ -1,4 +1,4 @@
-# R-USAGE-001: Cross-run usage is a soft quota — pulled, combined with a local ledger, fail-open by default
+# R-USAGE-001: Enforce cross-run usage as a soft quota that fails open by default
 
 **Status:** Accepted · 2026-10-12
 **Applies to:** `hexgate/runtime/agent_usage.py`, `hexgate/security/usage_source.py`,
