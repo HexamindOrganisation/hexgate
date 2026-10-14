@@ -99,6 +99,10 @@ Filesystem tools are importable from `hexgate`: `read_file`, `write_file`,
 `edit_file`, `glob`, `grep`, `bash`. The shell-backed ones run inside the
 [workspace sandbox](/concepts/sandbox).
 
+They act on a `Workspace`, the abstract type the tools receive at runtime. The one
+you configure is `LocalWorkspace` from `hexgate.runtime`, described on the
+sandbox page.
+
 <Note>
 `web_search`, `fetch`, and `refund_order` are **no longer built in** — they
 moved to `examples/tools/` (`websearch.py`, `fetch.py`, `refund.py`). Import them

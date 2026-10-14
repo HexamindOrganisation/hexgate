@@ -3,7 +3,7 @@
 Each check lists what the code exposes (policy keys, CLI commands and flags,
 public exports, environment variables) and looks for it in the Mintlify pages
 under ``docs/`` (``*.mdx`` only: ``internals/`` and ``adr/`` are ``.md`` and
-written for contributors, so they don't count).
+written for contributors, so they don't count, and ``node_modules`` is skipped).
 
 What is undocumented today sits in a ``KNOWN_*`` set. A new gap fails the
 suite; so does a known one that has since been documented, so the sets only
@@ -18,7 +18,8 @@ import ast
 import re
 import types
 import typing
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
+from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
@@ -26,13 +27,19 @@ from pydantic import BaseModel
 
 import hexgate
 from hexgate.cli import _build_parser
+from hexgate.security.compose.grammar import Entry
 from hexgate.security.models import AgentPolicy
 
 REPO = Path(__file__).resolve().parents[2]
 DOCS = REPO / "docs"
 
 # What the docs don't cover yet. Remove an entry when you document it.
-KNOWN_POLICY_KEYS: set[str] = set()
+KNOWN_POLICY_KEYS = {
+    # Authoring-grammar keys (hexgate/security/compose/grammar.py), explained
+    # only in docs/internals/policy-modules.md so far.
+    "as",
+    "import",
+}
 KNOWN_COMMANDS: set[str] = set()
 KNOWN_FLAGS: set[str] = set()
 KNOWN_EXPORTS: set[str] = set()
@@ -45,12 +52,70 @@ KNOWN_ENV_VARS = {
 }
 
 ENV_VAR = re.compile(r"HEXGATE_[A-Z0-9_]*[A-Z0-9]")
+HEADING = re.compile(r"#{1,6} ")
+FENCE = "```"
 
 
-def _pages(subdir: str = "") -> str:
-    return "\n".join(
-        p.read_text(encoding="utf-8") for p in sorted((DOCS / subdir).rglob("*.mdx"))
+# ---- reading the docs ------------------------------------------------------
+
+
+def _pages(subdir: str = "") -> list[Path]:
+    return sorted(
+        p
+        for p in (DOCS / subdir).rglob("*.mdx")
+        if not any(part == "node_modules" or part.startswith(".") for part in p.parts)
     )
+
+
+def _text(subdir: str = "") -> str:
+    return "\n".join(p.read_text(encoding="utf-8") for p in _pages(subdir))
+
+
+def _term_documented(term: str, text: str) -> bool:
+    # Whole term only: `--manifest` must not count as documented by `--manifesto`.
+    return re.search(rf"(?<![\w-]){re.escape(term)}(?![\w-])", text) is not None
+
+
+def _key_documented(key: str, text: str) -> bool:
+    # A key counts when the docs show it as code or as a YAML key.
+    return re.search(rf"`{re.escape(key)}`|\b{re.escape(key)}:", text) is not None
+
+
+def _code_documented(name: str, text: str) -> bool:
+    """A Python name counts when the docs show it as code: `` `name` ``,
+    ``name(`` or a line of an import list. A bare word does not, so an export
+    named ``bash`` is not documented by every ```` ```bash ```` fence."""
+    n = re.escape(name)
+    return (
+        re.search(
+            rf"(?<!`)`{n}[`(.\[ ]|(?<![\w.]){n}\(|^\s*{n},?\s*$|import [^\n]*\b{n}\b",
+            text,
+            re.MULTILINE,
+        )
+        is not None
+    )
+
+
+def _sections(text: str) -> Iterator[tuple[str, str]]:
+    """``(heading, body)`` per heading, ignoring ``#`` lines inside code fences."""
+    heading, body, in_fence = "", [], False
+    for line in text.splitlines():
+        if line.lstrip().startswith(FENCE):
+            in_fence = not in_fence
+        if not in_fence and HEADING.match(line):
+            yield heading, "\n".join(body)
+            heading, body = line, []
+        else:
+            body.append(line)
+    yield heading, "\n".join(body)
+
+
+def _command_lines(text: str) -> list[str]:
+    """Lines of text with shell continuations (a trailing ``\\``) joined."""
+    return re.sub(r"\\\n\s*", " ", text).splitlines()
+
+
+# ---- what the code exposes -------------------------------------------------
 
 
 def _models(tp: object, seen: set[type]) -> Iterator[type[BaseModel]]:
@@ -66,9 +131,12 @@ def _models(tp: object, seen: set[type]) -> Iterator[type[BaseModel]]:
 
 
 def _policy_keys() -> set[str]:
+    """Keys of the resolved policy model and of the authoring grammar."""
+    seen: set[type] = set()
+    models = [*_models(AgentPolicy, seen), *_models(Entry, seen)]
     return {
         field.alias or name
-        for model in _models(AgentPolicy, set())
+        for model in models
         for name, field in model.model_fields.items()
     }
 
@@ -110,76 +178,103 @@ def _env_vars() -> set[str]:
     return found
 
 
-def _flag_documented(flag: str, _corpus: str) -> bool:
-    """A flag counts only on its own command's page (``docs/cli/<command>.mdx``):
-    ``keygen --force`` must not document ``register --force``."""
+# ---- where each flag may be documented -------------------------------------
+
+
+def _flag_corpus() -> dict[str, str]:
+    """For each command, the text that may document its flags.
+
+    A top-level command (``serve``) has its own page, so the whole page counts. A
+    subcommand (``policy check``) shares its page with its siblings, so only the
+    sections whose heading names it (`` `check` ``) and the command lines that
+    run it (``hexgate policy check …``) count: ``test --role`` must not document
+    ``check --role``.
+    """
+    corpus: dict[str, str] = {}
+    for cmd in _commands():
+        top, *rest = cmd.split()
+        page = DOCS / "cli" / f"{top}.mdx"
+        if not page.exists():
+            corpus[cmd] = ""
+            continue
+        text = page.read_text(encoding="utf-8")
+        if not rest:
+            corpus[cmd] = text
+            continue
+        sub = rest[-1]
+        parts = [
+            body
+            for heading, body in _sections(text)
+            if _term_documented(f"`{sub}`", heading)
+            or _term_documented(f"{top} {sub}", heading)
+        ]
+        parts += [
+            line
+            for line in _command_lines(text)
+            if _term_documented(f"hexgate {cmd}", line)
+        ]
+        corpus[cmd] = "\n".join(parts)
+    return corpus
+
+
+def _flag_documented(flag: str, corpus: dict[str, str]) -> bool:
     cmd, opt = flag.rsplit(" ", 1)
-    page = DOCS / "cli" / f"{cmd.split()[0]}.mdx"
-    return page.exists() and _term_documented(opt, page.read_text(encoding="utf-8"))
+    return _term_documented(opt, corpus.get(cmd, ""))
 
 
-def _key_documented(key: str, text: str) -> bool:
-    # A key counts when the docs show it as code or as a YAML key.
-    return re.search(rf"`{re.escape(key)}`|\b{re.escape(key)}:", text) is not None
+# ---- the checks ------------------------------------------------------------
 
 
-def _word_documented(word: str, text: str) -> bool:
-    return re.search(rf"\b{re.escape(word)}\b", text) is not None
-
-
-def _term_documented(term: str, text: str) -> bool:
-    # Whole term only: `--manifest` must not count as documented by `--manifesto`.
-    return re.search(rf"(?<![\w-]){re.escape(term)}(?![\w-])", text) is not None
+@dataclass(frozen=True)
+class Check:
+    items: Callable[[], set[str]]
+    corpus: Callable[[], typing.Any]
+    documented: Callable[[str, typing.Any], bool]
+    known: set[str]
 
 
 CHECKS = {
-    "policy keys": (_policy_keys, lambda: _pages(), _key_documented, KNOWN_POLICY_KEYS),
-    "CLI commands": (
+    "policy keys": Check(_policy_keys, _text, _key_documented, KNOWN_POLICY_KEYS),
+    "CLI commands": Check(
         _commands,
-        lambda: _pages("cli"),
-        lambda c, t: _term_documented(f"hexgate {c}", t),
+        lambda: _text("cli"),
+        lambda cmd, text: _term_documented(f"hexgate {cmd}", text),
         KNOWN_COMMANDS,
     ),
-    "CLI flags": (
-        _flags,
-        lambda: _pages("cli"),
-        _flag_documented,
-        KNOWN_FLAGS,
+    "CLI flags": Check(_flags, _flag_corpus, _flag_documented, KNOWN_FLAGS),
+    "public exports": Check(
+        lambda: set(hexgate.__all__), _text, _code_documented, KNOWN_EXPORTS
     ),
-    "public exports": (
-        lambda: set(hexgate.__all__),
-        lambda: _pages(),
-        _word_documented,
-        KNOWN_EXPORTS,
-    ),
-    "environment variables": (
+    "environment variables": Check(
         _env_vars,
         lambda: (DOCS / "reference" / "environment.mdx").read_text(encoding="utf-8"),
-        _word_documented,
+        _term_documented,
         KNOWN_ENV_VARS,
     ),
 }
 
 
-@pytest.mark.parametrize("check", list(CHECKS))
-def test_no_new_undocumented(check: str) -> None:
-    items, text, documented, known = CHECKS[check]
-    corpus = text()
-    missing = {item for item in items() if not documented(item, corpus)}
-    new = sorted(missing - known)
+@pytest.mark.parametrize("name", list(CHECKS))
+def test_no_new_undocumented(name: str) -> None:
+    check = CHECKS[name]
+    corpus = check.corpus()
+    missing = {item for item in check.items() if not check.documented(item, corpus)}
+    new = sorted(missing - check.known)
     assert not new, (
-        f"undocumented {check}: {new}. Document them in docs/ (see this test's "
+        f"undocumented {name}: {new}. Document them in docs/ (see this test's "
         "docstring for where each check looks)."
     )
 
 
-@pytest.mark.parametrize("check", list(CHECKS))
-def test_known_gaps_are_still_gaps(check: str) -> None:
-    items, text, documented, known = CHECKS[check]
-    corpus = text()
-    present = items()
-    stale = sorted(k for k in known if k not in present or documented(k, corpus))
+@pytest.mark.parametrize("name", list(CHECKS))
+def test_known_gaps_are_still_gaps(name: str) -> None:
+    check = CHECKS[name]
+    corpus = check.corpus()
+    present = check.items()
+    stale = sorted(
+        k for k in check.known if k not in present or check.documented(k, corpus)
+    )
     assert not stale, (
-        f"{stale} no longer need to be in the known gaps for {check}: remove them "
+        f"{stale} no longer need to be in the known gaps for {name}: remove them "
         "from the KNOWN_* set in tests/docs/test_docs_coverage.py."
     )

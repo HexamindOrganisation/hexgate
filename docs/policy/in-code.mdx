@@ -107,11 +107,17 @@ policy = AgentPolicy.model_validate({
 })
 ```
 
+- A pattern matches the whole path from its start. `*` stays within one folder
+  and `**` spans any number of them: `docs/*.md` matches `docs/intro.md` but not
+  `docs/sub/x.md` or `other/docs/intro.md`, and `notes/**` matches everything
+  under `notes/`, plus `notes` itself so `glob` and `grep` can search it.
 - `denied_paths` wins. A path matching it is denied even if `allowed_paths`
   matches too.
-- With `allowed_paths` set, anything outside it is denied. Patterns are globs, and
-  `*` stays within one folder: `docs/*.md` matches `docs/intro.md` but not
-  `docs/sub/x.md`.
+- With `allowed_paths` set, anything outside it is denied.
+- `.` and `..` are collapsed before matching, and a path that climbs out with `..`
+  (`../docs/x.md`) is always denied.
+- A relative pattern never matches an absolute path. Write `/tmp/**` to scope
+  absolute paths.
 - A call without the path argument is denied.
 
 A denied call names the scope in its hint:
