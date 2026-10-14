@@ -1,3 +1,4 @@
+starting_project: order_desk
 agent: order-desk
 request: Write a first policy for this agent, based on how risky each tool is.
 note: Reads allowed; money movement, bulk personal data, email to any address and irreversible deletes never allowed outright.
