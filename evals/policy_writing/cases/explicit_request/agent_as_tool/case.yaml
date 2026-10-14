@@ -6,5 +6,6 @@ expect:
     - { role: billing, tool: "agent.tool:refund-bot", args: {}, expect: allow }
     - { roles: [default, support, billing], tool: "agent.handoff:refund-bot", args: {}, expect: deny }
     - { roles: [default, support], tool: "agent.tool:refund-bot", args: {}, expect: deny }
+    - { roles: [default, support, billing], tool: "agent.tool:billing-bot", args: {}, expect: deny }
     - { roles: [default, support, billing], tool: "agent.tool:admin-bot", args: {}, expect: deny }
     - { roles: [default, support, billing], tool: "agent.handoff:admin-bot", args: {}, expect: deny }

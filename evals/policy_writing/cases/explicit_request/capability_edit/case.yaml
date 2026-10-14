@@ -9,3 +9,4 @@ expect:
     - { role: billing, tool: refund_order, args: { order_id: o1, amount: 1500, currency: GBP }, expect: deny }
     - { role: support, tool: refund_order, args: { order_id: o1, amount: 10, currency: GBP }, expect: deny }
     - { role: billing, tool: refund_order, args: { order_id: o1, amount: 100, currency: JPY }, expect: deny }
+    - { role: billing, tool: refund_order, args: { order_id: o1, amount: 100, currency: CHF }, expect: deny }

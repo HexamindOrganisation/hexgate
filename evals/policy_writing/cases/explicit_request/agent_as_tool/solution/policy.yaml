@@ -4,12 +4,15 @@ roles:
   default:
     tools:
       view_orders: { mode: allow }
+    agents:
+      billing-bot: { via: [handoff], mode: allow }
 
   support:
     tools:
       view_orders: { mode: allow }
       send_email: { mode: allow }
     agents:
+      billing-bot: { via: [handoff], mode: allow }
       admin-bot: { mode: deny }
 
   billing:
@@ -21,4 +24,5 @@ roles:
           - args.amount <= 1000
     agents:
       refund-bot: { via: [tool], mode: allow }
+      billing-bot: { via: [handoff], mode: allow }
       admin-bot: { mode: deny }
