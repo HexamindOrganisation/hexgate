@@ -55,6 +55,20 @@ agent's `.name` attribute (or the `name=` kwarg you passed to `create_react_agen
 / `create_agent`).
 </Note>
 
+## Sub-agents
+
+`serve` takes the same sub-agent flags as `register`, applied at startup:
+
+| Flag | What it does |
+|---|---|
+| `--register-subagents` | Also register the agent's sub-agents, each with a starter policy the platform mints. Off by default. |
+| `--register-subagents-force` | With `--register-subagents`, keep the first of two different sub-agents that share a name instead of aborting startup. Same as `hexgate register --force`. |
+| `--no-bind-subagents` | Run sub-agents on their local policy only. By default each sub-agent registered on the platform binds its platform policy (editable in the dashboard), as the root does. A sub-agent not on the platform is unaffected either way. |
+
+```bash
+hexgate serve my_app.agents:triage --register-subagents
+```
+
 ## Env vars
 
 ```bash

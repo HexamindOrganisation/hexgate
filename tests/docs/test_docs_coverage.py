@@ -32,36 +32,10 @@ REPO = Path(__file__).resolve().parents[2]
 DOCS = REPO / "docs"
 
 # What the docs don't cover yet. Remove an entry when you document it.
-KNOWN_POLICY_KEYS = {
-    "allowed_paths",
-    "denied_paths",
-    "enabled",
-    "file_scope",
-}
+KNOWN_POLICY_KEYS: set[str] = set()
 KNOWN_COMMANDS: set[str] = set()
-KNOWN_FLAGS = {
-    "register --force",
-    "register --register-subagents",
-    "serve --no-bind-subagents",
-    "serve --register-subagents",
-    "serve --register-subagents-force",
-}
-KNOWN_EXPORTS = {
-    "ContextAttributeValue",
-    "HexgateClient",
-    "HexgateConfig",
-    "SkillDefinition",
-    "SkillResources",
-    "SubagentEdge",
-    "SubagentLink",
-    "attach_guards",
-    "clear_registered_agents",
-    "enumerate_subagents",
-    "list_available_agents",
-    "list_local_agents",
-    "list_registered_agents",
-    "unregister_agent_factory",
-}
+KNOWN_FLAGS: set[str] = set()
+KNOWN_EXPORTS: set[str] = set()
 KNOWN_ENV_VARS = {
     # Read by the platform usage source (#331), which nothing calls yet:
     # document them when agent_usage.* counts come from the platform.
