@@ -32,6 +32,9 @@ from hexgate_api.models import Agent, AgentVersion, Skill
 from hexgate_api.seeds.defaults import ensure_default_project
 from hexgate_api.constants import DEFAULT_PROJECT_ID, DEFAULT_USER_ID
 
+_OPA_AVAILABLE = shutil.which("opa") is not None
+_needs_opa = pytest.mark.skipif(not _OPA_AVAILABLE, reason="opa not on PATH")
+
 
 @pytest_asyncio.fixture
 async def session_factory():
@@ -360,7 +363,29 @@ def test_validate_reports_divergent_guard_stance(client: TestClient) -> None:
     )
     body = resp.json()
     assert body["ok"] is False
-    assert any("same stance across all roles" in e["message"] for e in body["errors"])
+    assert any("same value across all roles" in e["message"] for e in body["errors"])
+
+
+def test_validate_reports_divergent_usage_fail_mode(client: TestClient) -> None:
+    """A cross-role usage.on_unavailable divergence is reported by /validate. The
+    check is eager in PolicySet, so a regression to a lazy one would let the platform
+    store a policy the SDK then refuses to load."""
+    resp = client.post(
+        f"/v1/projects/{DEFAULT_PROJECT_ID}/agents/support_bot/validate",
+        json={
+            "policy_yaml": (
+                "version: 1\n"
+                "roles:\n"
+                "  support:\n"
+                "    usage: { on_unavailable: deny }\n"
+                "  admin:\n"
+                "    usage: { on_unavailable: allow }\n"
+            )
+        },
+    )
+    body = resp.json()
+    assert body["ok"] is False
+    assert any("same value across all roles" in e["message"] for e in body["errors"])
 
 
 def test_validate_accumulates_errors_across_roles(client: TestClient) -> None:
@@ -963,6 +988,7 @@ def test_bearer_get_agent_returns_304_on_matching_etag(
     assert second.status_code == 304
 
 
+@_needs_opa
 def test_get_agent_etag_changes_when_only_the_guard_stance_changes(
     client: TestClient, session_factory
 ) -> None:
@@ -1024,6 +1050,58 @@ def test_get_agent_etag_changes_when_only_the_guard_stance_changes(
     )
 
 
+@_needs_opa
+def test_get_agent_etag_changes_when_only_the_usage_fail_mode_changes(
+    client: TestClient, session_factory
+) -> None:
+    """A usage-only edit must reach the signed manifest and be served, not 304'd.
+
+    The fail mode is read from the manifest, never compiled into the wasm. The 200 and
+    new-ETag checks only prove no stale 304 is served: any policy_yaml edit moves the
+    manifest's ``source_hash``, and so the ETag. The ``usage`` manifest assertion is
+    the real guard that ``on_unavailable: deny`` is signed in."""
+    import json
+
+    allow = (
+        "version: 1\n"
+        "usage: { on_unavailable: allow }\n"
+        "tools: { send_update: { mode: allow } }\n"
+    )
+    deny = allow.replace("on_unavailable: allow", "on_unavailable: deny")
+
+    def _put(policy_yaml: str) -> None:
+        r = client.put(
+            f"/v1/projects/{DEFAULT_PROJECT_ID}/agents/default",
+            headers={"X-Dev-User": DEFAULT_USER_ID},
+            json={"policy_yaml": policy_yaml},
+        )
+        assert r.status_code == 200, r.text
+
+    token = _mint_token_for_test(session_factory)
+    _put(allow)
+    first = client.get(
+        "/v1/agents/default", headers={"Authorization": f"Bearer {token}"}
+    )
+    assert first.status_code == 200, first.text
+    etag1 = first.headers.get("etag")
+    assert etag1 is not None, first.headers
+    assert "usage" not in json.loads(first.json()["bundle_manifest"])
+
+    _put(deny)
+    second = client.get(
+        "/v1/agents/default",
+        headers={"Authorization": f"Bearer {token}", "If-None-Match": etag1},
+    )
+    assert second.status_code == 200, (
+        "a usage-only edit returned 304, so a live agent never sees the deny"
+    )
+    etag2 = second.headers.get("etag")
+    assert etag2 is not None and etag2 != etag1
+    assert json.loads(second.json()["bundle_manifest"])["usage"] == {
+        "on_unavailable": "deny"
+    }
+
+
 def _trivial_policy_yaml() -> str:
     """A policy that compiles cleanly — enough to trigger bundle signing."""
     return (
@@ -1073,10 +1151,6 @@ def test_me_key_rejects_missing_bearer(client: TestClient) -> None:
 # Re-registers of an existing agent leave the operator's policy_yaml
 # alone — only the AgentVersion snapshot history grows.
 # ---------------------------------------------------------------------------
-
-
-_OPA_AVAILABLE = shutil.which("opa") is not None
-_needs_opa = pytest.mark.skipif(not _OPA_AVAILABLE, reason="opa not on PATH")
 
 
 def _register_payload(name: str, tools: list[str]) -> dict:

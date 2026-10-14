@@ -301,7 +301,7 @@ def test_guard_stance_multi_role_diverge_raises() -> None:
             }
         }
     )
-    with pytest.raises(PolicySetError, match="same stance across all roles"):
+    with pytest.raises(PolicySetError, match="same value across all roles"):
         ps.guard_stance()
 
 

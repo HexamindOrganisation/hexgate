@@ -32,8 +32,8 @@ _DELEGATES_TO_SHARED_BIND = ("abind(", "bind(")
 # banned run. The ordering pins below match these as parsed calls, so a
 # docstring or comment naming one does not count.
 _PREPARES_RUN = frozenset({"aprepare_run", "prepare_run"})
-# The seam's keyword for the agent_usage.* refresh, required at every boundary.
-_USAGE_KWARG = "usage"
+# The seam's keyword for the binding it derives the agent_usage.* refresh from.
+_BINDING_KWARG = "binding"
 # Anything that starts the run: the identity scope, the run scope, or the
 # streamed launch that opens both. ``async with hexgate_context`` is not a call,
 # so _first_call matches it separately.
@@ -278,17 +278,18 @@ def _seam_calls(module_name: str, class_name: str, method: str) -> list[ast.Call
     [(module, klass, method) for module, klass, method, _ in SCOPE_SITES],
     ids=[f"{m.rsplit('.', 1)[-1]}.{c}.{meth}" for m, c, meth, _ in SCOPE_SITES],
 )
-def test_every_boundary_passes_the_usage_refresh(
+def test_every_boundary_passes_its_binding(
     module_name: str, class_name: str, method: str
 ) -> None:
-    """A boundary that forgets it skips the usage prefetch silently: its quiet
-    agent then pays a fail-open first read instead."""
+    """A boundary that passes ``binding=None`` instead skips the usage refresh
+    silently: its quiet agent then pays a fail-open first read instead."""
     calls = _seam_calls(module_name, class_name, method)
     assert calls
     for call in calls:
-        assert any(kw.arg == _USAGE_KWARG for kw in call.keywords), (
-            f"{module_name}.{class_name}.{method} calls the run seam without "
-            f"{_USAGE_KWARG}=, so it never refreshes agent_usage.* at run start."
+        binding = next(kw.value for kw in call.keywords if kw.arg == _BINDING_KWARG)
+        assert not (isinstance(binding, ast.Constant) and binding.value is None), (
+            f"{module_name}.{class_name}.{method} calls the run seam with "
+            f"{_BINDING_KWARG}=None, so it never refreshes agent_usage.* at run start."
         )
 
 

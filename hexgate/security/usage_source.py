@@ -25,6 +25,7 @@ from hexgate.cloud.client import HexgateError
 from hexgate.config.env import resolve_api_key
 from hexgate.runtime.agent_usage import (
     Clock,
+    OnUnavailable,
     UsageLedger,
     _monotonic,
     combined_namespace,
@@ -51,14 +52,13 @@ DEFAULT_MAX_STALENESS_SECONDS: Final[float] = 300.0
 
 _VALUES_KEY: Final = "values"
 _NOT_FOUND: Final = 404
+# Answers a retry won't change soon: unregistered agent, bad or unscoped key.
+_REJECTED_STATUSES: Final = frozenset({401, 403, _NOT_FOUND})
+REJECTED_RETRY_SECONDS: Final[float] = 300.0
 _EXECUTOR_THREAD_PREFIX: Final = "hexgate-usage"
-
-
-class OnUnavailable(StrEnum):
-    """What a decision reads when the platform term is missing."""
-
-    ALLOW = "allow"  # ledger-only values: zeros plus this process (G3)
-    DENY = "deny"  # the value is absent, so its constraints fail closed
+# Single-flight per agent already, so workers only keep one slow agent from
+# delaying another's refresh.
+_EXECUTOR_MAX_WORKERS: Final = 4
 
 
 class UsageState(StrEnum):
@@ -146,7 +146,7 @@ def usage_values_from_payload(payload: Any, paths: frozenset[str]) -> dict[str, 
 
 
 class UsageFetcher(Protocol):
-    def get_agent_usage(self, name: str, paths: Sequence[str]) -> Mapping[str, Any]: ...
+    def get_agent_usage(self, name: str, paths: Sequence[str]) -> dict[str, Any]: ...
 
 
 class _Tier(Enum):
@@ -167,7 +167,8 @@ class PlatformUsageSource:
     ``refresh`` may block on one bounded fetch when the snapshot is cold or older
     than ``sync_after``; otherwise it schedules at most one background fetch per
     agent. ``read`` never touches the network. Fetches keep last-good on failure,
-    and a failed one is not retried within ``min_refresh`` unless the path set grew.
+    and a failed one is not retried within ``min_refresh`` unless the path set grew;
+    a 401, 403 or 404 is not retried within ``REJECTED_RETRY_SECONDS`` at all.
     """
 
     def __init__(
@@ -184,10 +185,11 @@ class PlatformUsageSource:
         # Held only for dict reads and writes, never across HTTP.
         self._state_lock = threading.Lock()
         self._snapshots: dict[str, UsageSnapshot] = {}
-        # Read when a fetch runs, not when it was scheduled, so a queued fetch
-        # picks up a policy's new paths.
+        # Every path any caller has asked for, read when a fetch runs, so callers
+        # wanting different paths share one snapshot instead of evicting each other.
         self._wanted: dict[str, frozenset[str]] = {}
         self._last_attempt: dict[str, _Attempt] = {}
+        self._rejected_until: dict[str, float] = {}
         self._in_flight: set[str] = set()
         self._unregistered_logged: set[str] = set()
         # Per agent, so a sync fetch for one agent never waits on another's.
@@ -272,7 +274,7 @@ class PlatformUsageSource:
     def _remember(self, agent: str, paths: frozenset[str]) -> UsageSnapshot | None:
         with self._state_lock:
             if paths:
-                self._wanted[agent] = paths
+                self._wanted[agent] = self._wanted.get(agent, frozenset()) | paths
             return self._snapshots.get(agent)
 
     def _tier(self, agent: str, paths: frozenset[str]) -> _Tier:
@@ -335,7 +337,11 @@ class PlatformUsageSource:
             logger.error("usage body for %r rejected; using last-good: %s", agent, exc)
             return
         except Exception as exc:  # noqa: BLE001 — fail-soft: keep last-good
-            if isinstance(exc, HexgateError) and exc.status == _NOT_FOUND:
+            status = exc.status if isinstance(exc, HexgateError) else None
+            if status in _REJECTED_STATUSES:
+                with self._state_lock:
+                    self._rejected_until[agent] = started + REJECTED_RETRY_SECONDS
+            if status == _NOT_FOUND:
                 self._log_unregistered(agent)
             else:
                 logger.warning(
@@ -362,6 +368,9 @@ class PlatformUsageSource:
             return self._throttled_locked(agent)
 
     def _throttled_locked(self, agent: str) -> bool:
+        # A new path does not lift a rejection: the platform refuses the agent.
+        if self._clock() < self._rejected_until.get(agent, float("-inf")):
+            return True
         last = self._last_attempt.get(agent)
         return (
             last is not None
@@ -420,19 +429,21 @@ _usage_sources_lock = threading.Lock()
 def get_usage_source(api_key: str, client: HexgateClient) -> PlatformUsageSource:
     """Get-or-create the shared source for this key and platform.
 
-    Its executor's worker is joined at interpreter exit, so a hung background
-    fetch can delay exit by up to the client's refresh timeout.
+    Its executor's workers drain every queued fetch at interpreter exit, so exit
+    can wait up to the refresh timeout per round of ``_EXECUTOR_MAX_WORKERS``
+    queued agents.
     """
     cache_key = (api_key, client.config.base_url)
-    # Held across creation: each source owns an executor thread, and a lost race
-    # would leak one.
+    # Held across creation: each source owns an executor, and a lost race would
+    # leak its threads.
     with _usage_sources_lock:
         source = _usage_sources.get(cache_key)
         if source is None:
             source = _usage_sources[cache_key] = PlatformUsageSource(
                 fetcher=client,
                 executor=ThreadPoolExecutor(
-                    max_workers=1, thread_name_prefix=_EXECUTOR_THREAD_PREFIX
+                    max_workers=_EXECUTOR_MAX_WORKERS,
+                    thread_name_prefix=_EXECUTOR_THREAD_PREFIX,
                 ),
                 settings=UsageRefreshSettings.from_env(),
                 clock=_monotonic,

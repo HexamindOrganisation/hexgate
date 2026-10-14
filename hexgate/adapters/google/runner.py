@@ -23,7 +23,6 @@ from hexgate.adapters._common import (
     aprepare_run,
     langfuse_propagate_kwargs,
     prepare_run,
-    usage_refresh_of,
 )
 from hexgate.adapters.google.usage import HexgateUsagePlugin
 from hexgate.adapters.google.wrapper import wrap_google_agent
@@ -268,7 +267,7 @@ class HexgateRunner:
             self._binding.refresh,
             self._ban_gate,
             hexgate_context,
-            usage=usage_refresh_of(self._binding),
+            binding=self._binding,
         )
         with hexgate_context.sync_scope():
             self._check_admission_sync()  # in-scope: reads the caller's role
@@ -329,7 +328,7 @@ class HexgateRunner:
             self._binding.refresh_async(),
             self._ban_gate,
             hexgate_context,
-            usage=usage_refresh_of(self._binding),
+            binding=self._binding,
         )
         adk_session_id = (
             session_id if session_id is not None else hexgate_context.session_id
