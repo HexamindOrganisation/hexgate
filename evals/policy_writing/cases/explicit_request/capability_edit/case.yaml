@@ -1,0 +1,10 @@
+starting_project: support_bot_modules
+agent: support-bot
+request: Give billing the ability to refund in GBP too.
+expect:
+  changed: [policies/capabilities/payments.yaml]
+  decisions:
+    - { role: billing, tool: refund_order, args: { order_id: o1, amount: 100, currency: GBP }, expect: allow }
+    - { role: billing, tool: refund_order, args: { order_id: o1, amount: 1500, currency: GBP }, expect: deny }
+    - { role: support, tool: refund_order, args: { order_id: o1, amount: 10, currency: GBP }, expect: deny }
+    - { role: billing, tool: refund_order, args: { order_id: o1, amount: 100, currency: JPY }, expect: deny }

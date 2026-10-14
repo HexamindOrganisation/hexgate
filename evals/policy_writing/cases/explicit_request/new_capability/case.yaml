@@ -1,0 +1,9 @@
+starting_project: support_bot_modules
+agent: support-bot
+request: Create a credits capability where issue_credit needs a human approval and is capped at 100, and give it to support and billing.
+expect:
+  changed: [roles.yaml, policies/capabilities/credits.yaml]
+  decisions:
+    - { role: billing, tool: issue_credit, args: { customer_id: c1, amount: 100 }, expect: approval_required }
+    - { roles: [support, billing], tool: issue_credit, args: { customer_id: c1, amount: 101 }, expect: deny }
+    - { roles: [support, billing], tool: issue_credit, args: { customer_id: c1, amount: 10 }, expect: approval_required }

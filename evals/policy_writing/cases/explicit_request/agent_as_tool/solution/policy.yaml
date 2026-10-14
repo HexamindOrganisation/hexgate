@@ -1,0 +1,24 @@
+version: 1
+
+roles:
+  default:
+    tools:
+      view_orders: { mode: allow }
+
+  support:
+    tools:
+      view_orders: { mode: allow }
+      send_email: { mode: allow }
+    agents:
+      admin-bot: { mode: deny }
+
+  billing:
+    tools:
+      view_orders: { mode: allow }
+      refund_order:
+        mode: allow
+        constraints:
+          - args.amount <= 1000
+    agents:
+      refund-bot: { via: [tool], mode: allow }
+      admin-bot: { mode: deny }

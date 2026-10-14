@@ -1,0 +1,10 @@
+starting_project: support_bot_sub_agents
+agent: front-desk
+request: Billing may call refund-bot as a tool, but never hand the conversation off to it. No role may reach admin-bot in any way.
+expect:
+  decisions:
+    - { role: billing, tool: "agent.tool:refund-bot", args: {}, expect: allow }
+    - { role: billing, tool: "agent.handoff:refund-bot", args: {}, expect: deny }
+    - { roles: [default, support], tool: "agent.tool:refund-bot", args: {}, expect: deny }
+    - { roles: [default, support, billing], tool: "agent.tool:admin-bot", args: {}, expect: deny }
+    - { roles: [default, support, billing], tool: "agent.handoff:admin-bot", args: {}, expect: deny }

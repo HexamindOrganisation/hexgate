@@ -1,0 +1,5 @@
+# Payments capability, owned by the payments team. It only grants: refunds in
+# USD, EUR or GBP (the boundary caps the amount), and looking up one order.
+tools:
+  refund_order: { mode: allow, constraints: ['args.currency in ["USD", "EUR", "GBP"]'] }
+  lookup_order: { mode: allow }
