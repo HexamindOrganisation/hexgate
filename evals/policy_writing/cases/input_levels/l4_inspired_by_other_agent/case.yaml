@@ -9,4 +9,5 @@ expect:
     - { roles: [billing, default], tool: wire_transfer, args: { amount: 1, iban: DE89 }, expect: deny }
     - { role: billing, tool: send_email, args: { to: [a@acme.com], subject: s, body: b }, expect: deny }
     - { roles: [billing, default], tool: view_orders, args: { customer_id: c1 }, expect: allow }
+    - { roles: [billing, default], tool: agent.run, args: { agent: refund-desk }, expect: allow }
     - { role: default, tool: refund_order, args: { order_id: o1, amount: 10, currency: EUR }, expect: deny }

@@ -12,3 +12,4 @@ expect:
     - { role: auditor, tool: refund_order, args: { order_id: o1, amount: 10, currency: EUR }, expect: deny }
     - { role: auditor, tool: send_email, args: { to: [a@acme.com], subject: s, body: b }, expect: deny }
     - { role: auditor, tool: lookup_order, args: { order_id: o1 }, run_facts: { tool_calls: 50 }, expect: deny }
+    - { role: auditor, tool: lookup_order, args: { order_id: o1 }, run_facts: { tool_calls: 49 }, expect: allow }
