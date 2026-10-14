@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import posixpath
 from pathlib import PurePosixPath
 from typing import Any
 
@@ -27,18 +28,29 @@ def extract_scoped_path(tool_name: str, arguments: dict[str, Any] | None) -> str
     return value if isinstance(value, str) and value.strip() else None
 
 
-def _normalize_path(path: str) -> str:
-    """Return a normalized relative-style path string for glob matching."""
-    normalized = path.replace("\\", "/").strip()
-    normalized = normalized.lstrip("./")
-    return normalized or "."
+def _normalize_path(path: str) -> PurePosixPath | None:
+    """Collapse ``.`` and ``..`` segments, or ``None`` when the path climbs above
+    where it starts (``../x``), which no relative pattern may cover."""
+    normalized = posixpath.normpath(path.replace("\\", "/").strip())
+    if normalized == ".." or normalized.startswith("../"):
+        return None
+    return PurePosixPath(normalized)
 
 
-def _matches_any(path: str, patterns: list[str]) -> bool:
-    """Return whether a normalized path matches any glob pattern."""
-    normalized = _normalize_path(path)
-    candidate = PurePosixPath(normalized)
-    return any(candidate.match(pattern) for pattern in patterns)
+def _matches(path: PurePosixPath, pattern: str) -> bool:
+    """Match the whole path, from its start, against one glob pattern.
+
+    ``*`` stays within a segment and ``**`` spans any number of them. A relative
+    pattern never matches an absolute path. ``dir/**`` also matches ``dir``
+    itself, so a scoped ``glob`` or ``grep`` may search the folder it names.
+    """
+    if path.full_match(pattern):
+        return True
+    return pattern.endswith("/**") and path.full_match(pattern[: -len("/**")])
+
+
+def _matches_any(path: PurePosixPath, patterns: list[str]) -> bool:
+    return any(_matches(path, pattern) for pattern in patterns)
 
 
 def is_path_allowed(
@@ -54,13 +66,18 @@ def is_path_allowed(
     if target_path is None:
         return False
 
+    # A path that climbs out of the scope's root is outside every scope.
+    path = _normalize_path(target_path)
+    if path is None:
+        return False
+
     denied_paths = policy.file_scope.denied_paths
-    if denied_paths and _matches_any(target_path, denied_paths):
+    if denied_paths and _matches_any(path, denied_paths):
         return False
 
     allowed_paths = policy.file_scope.allowed_paths
     if allowed_paths:
-        return _matches_any(target_path, allowed_paths)
+        return _matches_any(path, allowed_paths)
 
     return True
 
