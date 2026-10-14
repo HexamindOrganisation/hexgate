@@ -287,7 +287,8 @@ key).
 - **Run-start cost.** A busy agent pays nothing extra: its run uses the cached count
   and refreshes it in the background. A freshly started process, or an agent whose
   runs are more than a minute apart, waits for one fetch, which times out after 2
-  seconds. An agent whose policy references no `agent_usage.*` path never fetches.
+  seconds. A process's first fetch first checks the API key against the platform's
+  signing key, under its own 2-second timeout, so it can take up to about 4 seconds. An agent whose policy references no `agent_usage.*` path never fetches.
   One exception to "alongside": when a policy update gives an agent its first
   `agent_usage.*` cap, the run that picks it up fetches usage *after* the policy
   fetch, because the new paths weren't known when the fetches started. A path added

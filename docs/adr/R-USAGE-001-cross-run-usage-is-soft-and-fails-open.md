@@ -127,7 +127,9 @@ run.
   enricher restarts is accepted.
 - A quiet process (runs more than `sync_after_seconds` apart) pays one round trip at
   run start, concurrent with the policy and ban fetches. A platform outage costs at
-  most the client's 2 s refresh timeout, overlapped with the same fetches. The run
+  most the client's 2 s refresh timeout, overlapped with the same fetches; a slow but
+  reachable platform can cost up to about 4 s on a process's first fetch, which also
+  fetches the signing key. The run
   that picks up an agent's first usage cap pays that round trip after the policy
   fetch instead, not alongside it.
 - A future `user_usage.*` reuses this machinery and inherits this decision, plus a
