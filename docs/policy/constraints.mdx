@@ -295,7 +295,9 @@ key).
 - **Local only, in three cases.** With `HEXGATE_LOCAL_MODE`, with
   `HEXGATE_LOCAL_POLICY`, or without an API key, the platform isn't asked. The values
   are then what this process has counted since it started: a restart resets them, and
-  each replica counts its own.
+  each replica counts its own. `on_unavailable` doesn't apply here: even under `deny`,
+  the cap is per-process. (Without a key, a platform-served policy doesn't load at
+  all, so this only affects local policies.)
 
 <Warning>
 **`agent_usage.*` caps are soft quotas.** They keep cost and fair use in check; they
@@ -394,7 +396,7 @@ its audit span, saying how the values were built:
 | `stale` | Last good snapshot, over a minute old but under five (by default) |
 | `partial` | Usable snapshot that lacks some paths; those follow the fail mode |
 | `unavailable` | No snapshot, or one over five minutes old (by default); every path follows the fail mode. When the platform refuses the request (an agent not registered in the API key's project, or a rejected key), there is no snapshot and the fetch is retried only every five minutes, so under `deny` its `agent_usage.*` constraints fail closed on every run until that is fixed |
-| `local` | No platform to ask: local mode, local policy, or no API key |
+| `local` | No platform to ask: local mode, local policy, or no API key. Values are this process's count; `on_unavailable` is ignored |
 
 The platform doesn't store or display `usage_state` yet.
 
