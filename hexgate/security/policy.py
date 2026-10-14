@@ -29,6 +29,7 @@ from hexgate.security.models import (
 _CLOSED_WORLD_DENY = BaseToolPolicy(mode="deny")
 
 if TYPE_CHECKING:
+    from hexgate.runtime.workspace import Workspace
     from hexgate.security.bundle import PolicyBundle
 
 
@@ -116,7 +117,7 @@ def evaluate_tool_call(
         return Verdict(outcome=DecisionOutcome.DENY, reason=str(exc))
 
     if isinstance(tool_policy, FileToolPolicy) and not is_path_allowed(
-        tool_name, arguments, tool_policy
+        tool_name, arguments, tool_policy, workspace=_active_workspace()
     ):
         return Verdict(
             outcome=DecisionOutcome.DENY,
@@ -135,6 +136,15 @@ def evaluate_tool_call(
         outcome=DecisionOutcome.DENY,
         reason=f'Policy denied tool "{tool_name}"',
     )
+
+
+def _active_workspace() -> Workspace | None:
+    """The running agent's workspace, so a ``file_scope`` resolves the path the
+    file tools will open. ``None`` outside a run (dry-runs, unit tests)."""
+    from hexgate.runtime.context import get_current_tool_use_context
+
+    context = get_current_tool_use_context()
+    return context.workspace if context is not None else None
 
 
 def _raise_for_verdict(verdict: Verdict) -> None:
