@@ -13,7 +13,7 @@ expect:
   superset:
     - wider: manager
       narrower: support_staff
-      probes:
+      probes: &probes
         - { tool: view_orders, args: { customer_id: c1 } }
         - { tool: lookup_order, args: { order_id: o1 } }
         - { tool: refund_order, args: { order_id: o1, amount: 20, currency: EUR } }
@@ -23,11 +23,4 @@ expect:
         - { tool: delete_customer, args: { customer_id: c1 } }
     - wider: support_staff
       narrower: default
-      probes:
-        - { tool: view_orders, args: { customer_id: c1 } }
-        - { tool: lookup_order, args: { order_id: o1 } }
-        - { tool: refund_order, args: { order_id: o1, amount: 20, currency: EUR } }
-        - { tool: wire_transfer, args: { amount: 100, iban: DE89 } }
-        - { tool: send_email, args: { to: [a@acme.com], subject: s, body: b } }
-        - { tool: export_customers, args: { format: csv } }
-        - { tool: delete_customer, args: { customer_id: c1 } }
+      probes: *probes
