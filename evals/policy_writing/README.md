@@ -31,10 +31,10 @@ writes the policy. The case name starts with its level:
 |---|---|
 | `l0_structure_only` | the tools and their arguments, nothing else |
 | `l1_tools_described` | the tools with what each does, so their risk can be judged |
-| `l2_roles_hierarchy` | roles with their meaning: a manager supervises support staff |
-| `l2b_roles_no_meaning` | role names with no meaning, so it must assume and say so |
-| `l3_existing_defaults` | a policy whose org-wide defaults every role must keep |
-| `l4_inspired_by_other_agent` | another agent's policy to model this one on, minus one thing (wire transfers) |
+| `l2_roles_hierarchy` (planned, #352) | roles with their meaning: a manager supervises support staff |
+| `l2b_roles_no_meaning` (planned, #352) | role names with no meaning, so it must assume and say so |
+| `l3_existing_defaults` (planned, #350) | a policy whose org-wide defaults every role must keep |
+| `l4_inspired_by_other_agent` (planned, #350) | another agent's policy to model this one on, minus one thing (wire transfers) |
 | `l5_define_defaults` | a request to set the defaults themselves |
 
 ## A case

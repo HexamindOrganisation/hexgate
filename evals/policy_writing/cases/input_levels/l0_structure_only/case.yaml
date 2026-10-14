@@ -8,3 +8,4 @@ expect:
     - { role: default, tool: export_customers, args: { format: csv }, expect: [deny, approval_required] }
     - { role: default, tool: refund_order, args: { order_id: o1, amount: 10, currency: EUR }, expect: [deny, approval_required] }
     - { role: default, tool: view_orders, args: { customer_id: c1 }, expect: allow }
+    - { role: default, tool: lookup_order, args: { order_id: o1 }, expect: allow }
