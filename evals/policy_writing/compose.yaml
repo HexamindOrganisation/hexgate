@@ -1,4 +1,6 @@
-# Inspect's sandbox for `agent=claude` (task.py checks IS_SANDBOX). Only the token comes in from the host's env: Claude Code prefers ANTHROPIC_AUTH_TOKEN or ANTHROPIC_API_KEY when set, silently billing the key instead of the subscription.
+# Inspect's sandbox for `agent=claude` (task.py checks IS_SANDBOX), on a network with no
+# route out: only the proxy reaches Anthropic's API, so no other host is reachable.
+# Only the token comes in from the host's env: Claude Code prefers ANTHROPIC_AUTH_TOKEN or ANTHROPIC_API_KEY when set, silently billing the key instead of the subscription.
 services:
   default:
     build:
@@ -12,3 +14,16 @@ services:
     environment:
       - CLAUDE_CODE_OAUTH_TOKEN
       - IS_SANDBOX=1
+      - HTTPS_PROXY=http://proxy:3128
+      - HTTP_PROXY=http://proxy:3128
+      - CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
+    networks: [sandbox]
+    depends_on: [proxy]
+  proxy:
+    image: ubuntu/squid:6.6-24.04_edge@sha256:8a3baed477e2c282ab8aa5edad442f69873246964f225c5c2ae8364b6610963c
+    volumes: ["./squid.conf:/etc/squid/squid.conf:ro"]
+    networks: [sandbox, egress]
+networks:
+  sandbox:
+    internal: true
+  egress: {}

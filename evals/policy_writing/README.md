@@ -210,6 +210,10 @@ Of your environment only that token enters the container; the task refuses one
 holding `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN`: Claude Code prefers either
 over the subscription token and would silently bill the key per token.
 
+The container has no route out: its only network is internal, and a `proxy`
+sidecar (`squid.conf`) tunnels to `api.anthropic.com:443` and refuses anything
+else, so a hijacked run can reach no host but Anthropic's API.
+
 The model is the subscription's default, not set by the task; each score's
 `usage.modelUsage` in the log records which one ran.
 

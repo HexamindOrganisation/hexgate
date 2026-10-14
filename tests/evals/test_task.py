@@ -227,7 +227,7 @@ def test_when_the_session_log_is_missing_then_a_warning(caplog) -> None:
 def test_session_log_follows_the_image_user_and_working_dir() -> None:
     dockerfile = task.COMPOSE.with_name("Dockerfile").read_text().splitlines()
     user = [ln.split()[1] for ln in dockerfile if ln.startswith("USER ")][-1]
-    (service,) = yaml.safe_load(task.COMPOSE.read_text())["services"].values()
+    service = yaml.safe_load(task.COMPOSE.read_text())["services"]["default"]
     slug = service["working_dir"].replace("/", "-")
     assert task.SESSION_LOG == f"/home/{user}/.claude/projects/{slug}/{{}}.jsonl"
 
@@ -311,14 +311,44 @@ async def test_when_the_sandbox_env_is_wrong_then_the_solver_refuses() -> None:
 
 
 def test_compose_passes_only_the_token_and_the_image_holds_none() -> None:
-    (service,) = yaml.safe_load(task.COMPOSE.read_text())["services"].values()
+    service = yaml.safe_load(task.COMPOSE.read_text())["services"]["default"]
     assert service["working_dir"] == "/workspace"
-    assert service["environment"] == ["CLAUDE_CODE_OAUTH_TOKEN", "IS_SANDBOX=1"]
+    assert service["environment"] == [
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        "IS_SANDBOX=1",
+        "HTTPS_PROXY=http://proxy:3128",
+        "HTTP_PROXY=http://proxy:3128",
+        "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1",
+    ]
     dockerfile = task.COMPOSE.with_name("Dockerfile").read_text()
     assert "ANTHROPIC" not in dockerfile and "sk-ant" not in dockerfile
     assert "OAUTH_TOKEN=" not in dockerfile and "claude-code@2." in dockerfile
     users = [ln.split()[1] for ln in dockerfile.splitlines() if ln.startswith("USER ")]
     assert users[-1] not in ("root", "0")  # bypassPermissions is refused as root
+
+
+def test_sandbox_reaches_only_anthropic_through_the_proxy() -> None:
+    compose = yaml.safe_load(task.COMPOSE.read_text())
+    assert compose["services"].keys() == {"default", "proxy"}  # no other way out
+    agent, proxy = compose["services"]["default"], compose["services"]["proxy"]
+    assert agent["networks"] == ["sandbox"] and compose["networks"]["sandbox"] == {
+        "internal": True
+    }
+    assert (
+        set(proxy["networks"]) == {"sandbox", "egress"} and "@sha256:" in proxy["image"]
+    )
+    conf = task.COMPOSE.with_name("squid.conf").read_text().splitlines()
+    assert proxy["volumes"] == ["./squid.conf:/etc/squid/squid.conf:ro"]
+    lines = [ln.strip() for ln in conf]
+    assert [ln for ln in lines if ln and not ln.startswith("#")] == [
+        "http_port 3128",
+        "acl anthropic dstdomain -n api.anthropic.com",  # -n: no reverse DNS on an IP
+        "acl tls port 443",
+        "acl CONNECT method CONNECT",
+        "http_access allow CONNECT anthropic tls",
+        "http_access deny all",
+        "cache deny all",
+    ]
 
 
 def test_sandbox_image_installs_opa_per_architecture_before_dropping_root() -> None:
