@@ -314,9 +314,11 @@ be off:
   *(the rate of every other process) × (that delay)*. With 4 replicas each admitting
   1 run per second, a 5-second refresh and 10 seconds of ingest lag,
   `agent_usage.invocations_1h < 100` can let through about 3 × 1 × 15 ≈ 45 extra runs
-  at the moment it is crossed. The delay is:
-  - normally 5 to 15 seconds: a busy process refreshes every 5 seconds, plus the
-    ingest lag;
+  at the moment it is crossed, and about 3 × 1 × 21 ≈ 63 at the top of the normal
+  range below. Size the overshoot from the upper bound. The delay is:
+  - normally 5 to about 21 seconds: a busy process's snapshot is up to 5 seconds
+    old (a little more while a refresh is in flight), the platform may reuse an
+    answer for up to 1 second, and the ingest lag adds 5 to 15 seconds;
   - up to about a minute (plus the ingest lag) for a process whose runs are 5 to 60
     seconds apart, since its run reads the cached snapshot while the background
     refresh is in flight; and inside a long run, since a snapshot under 60 seconds

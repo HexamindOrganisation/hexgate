@@ -106,9 +106,11 @@ model's error payload because nothing about quota state is for the model: as wit
 
 The guarantee is **soft**, and the docs must say so. Other processes' activity reaches
 this one late, by the snapshot's age plus the pipeline lag, so a cap can be passed by
-roughly Σ(other processes' rate) × (snapshot age + lag). With 4 replicas each admitting
-1 run/s, a 5 s refresh and 10 s of lag, `agent_usage.invocations_1h < 100` can overshoot
-by about 3 × 1 × 15 ≈ 45 runs at the moment of crossing. That is fine for cost control
+roughly Σ(other processes' rate) × (snapshot age + platform memo + lag). With 4
+replicas each admitting 1 run/s, a 5 s refresh and 10 s of lag,
+`agent_usage.invocations_1h < 100` can overshoot by about 3 × 1 × 15 ≈ 45 runs at the
+moment of crossing. At the 15 s top of the lag range, plus the platform's 1 s memo
+(`USAGE_MEMO_TTL_SECONDS`), it is about 3 × 1 × 21 ≈ 63. That is fine for cost control
 and fair use. It is wrong for "at most 3 wire transfers per hour, ever", and an author
 who reads `< 100` as exact will write exactly that policy. `run.*` is no substitute:
 it resets with every run, so it bounds a run, not an hour. An exact cross-run limit
