@@ -284,8 +284,11 @@ key).
 - **Run-start cost.** A busy agent pays nothing extra: its run uses the cached count
   and refreshes it in the background. A freshly started process, or an agent whose
   runs are more than a minute apart, waits for one fetch, which times out after 2
-  seconds. An agent whose
-  policy references no `agent_usage.*` path never fetches.
+  seconds. An agent whose policy references no `agent_usage.*` path never fetches.
+  One exception to "alongside": when a policy update gives an agent its first
+  `agent_usage.*` cap, the run that picks it up fetches usage *after* the policy
+  fetch, because the new paths weren't known when the fetches started. A path added
+  to a policy that already has caps is fetched in the background instead.
 - **Local only, in three cases.** With `HEXGATE_LOCAL_MODE`, with
   `HEXGATE_LOCAL_POLICY`, or without an API key, the platform isn't asked. The values
   are then what this process has counted since it started: a restart resets them, and
@@ -373,7 +376,8 @@ fails closed, like any missing field.
   fails open; it rejects the policy only when it loads the YAML itself (a local
   policy, or a platform with no compiled bundle). Upgrade every SDK and the platform
   before you add the block.
-- **`on_unavailable` is required.** An empty `usage: {}` is a load error.
+- **`on_unavailable` is required.** An empty `usage: {}` is a load error, and so is
+  `usage: null` in a role: omit the key to inherit a parent's value.
 
 Every decision that reads `agent_usage.*` carries a `sec_ai.usage_state` attribute on
 its audit span, saying how the values were built:
@@ -383,7 +387,7 @@ its audit span, saying how the values were built:
 | `fresh` | Snapshot under a minute old (by default), with every path the policy needs |
 | `stale` | Last good snapshot, over a minute old but under five (by default) |
 | `partial` | Usable snapshot that lacks some paths; those follow the fail mode |
-| `unavailable` | No snapshot, or one over five minutes old (by default); every path follows the fail mode. An agent not registered in the API key's project never gets a snapshot, so under `deny` its `agent_usage.*` constraints fail closed on every run |
+| `unavailable` | No snapshot, or one over five minutes old (by default); every path follows the fail mode. When the platform refuses the request (an agent not registered in the API key's project, or a rejected key), there is no snapshot and the fetch is retried only every five minutes, so under `deny` its `agent_usage.*` constraints fail closed on every run until that is fixed |
 | `local` | No platform to ask: local mode, local policy, or no API key |
 
 The platform doesn't store or display `usage_state` yet.

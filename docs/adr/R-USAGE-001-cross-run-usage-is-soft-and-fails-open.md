@@ -22,7 +22,11 @@ back to the ledger alone, unless the policy opts into `deny`.
   The current run is left out of whichever term holds it.
 - The usage fetch MUST NOT add a sequential network call at run start. It joins the
   policy and ban fetches concurrently, and a run waits only when the snapshot is
-  missing or older than `sync_after_seconds`. A decision MUST NOT make a network call.
+  missing or older than `sync_after_seconds`. The one exception is paths a policy
+  refresh adds: they are unknown when the fetches start, so they are refreshed once
+  the policy refresh returns, and that call MUST block only when there is no snapshot
+  younger than `sync_after_seconds` (in practice, the run that picks up an agent's
+  first usage cap). A decision MUST NOT make a network call.
 - The default fail mode MUST be `allow`: an unavailable snapshot reads ledger-only
   values, never an absent namespace. `deny` MUST be an explicit
   `usage: { on_unavailable: deny }` in the policy, signed into the bundle manifest,
@@ -119,7 +123,9 @@ run.
   enricher restarts is accepted.
 - A quiet process (runs more than `sync_after_seconds` apart) pays one round trip at
   run start, concurrent with the policy and ban fetches. A platform outage costs at
-  most the client's 2 s refresh timeout, overlapped with the same fetches.
+  most the client's 2 s refresh timeout, overlapped with the same fetches. The run
+  that picks up an agent's first usage cap pays that round trip after the policy
+  fetch instead, not alongside it.
 - A future `user_usage.*` reuses this machinery and inherits this decision, plus a
   trust question this record doesn't answer.
 
