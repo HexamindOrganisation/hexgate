@@ -6,6 +6,7 @@ roles:
       view_orders: { mode: allow }
     agents:
       billing-bot: { via: [handoff], mode: allow }
+      refund-bot: { via: [handoff], mode: allow }
 
   support:
     tools:
@@ -13,6 +14,7 @@ roles:
       send_email: { mode: allow }
     agents:
       billing-bot: { via: [handoff], mode: allow }
+      refund-bot: { via: [handoff], mode: allow }
       admin-bot: { mode: deny }
 
   billing:
