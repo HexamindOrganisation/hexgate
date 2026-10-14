@@ -150,6 +150,6 @@ Always include a host clause. For subdomains, use `endswith(args.host, ".example
 - **Admission is closed-world.** Once any role declares `admission`, every role without it is refused. `agents:` is closed-world too: an unlisted target is denied.
 - **`file_scope`.** It is rejected by the WASM/Rego build, which is what production uses. Prefer constraints: `startswith(args.file_path, "src/")`, or `every(args.paths, startswith(., "src/"))`.
 - **Strict types.** `true` is not `1`. A number compared against a string fails closed. A missing field fails closed.
-- **Rate limits.** Per-window caps exist as `agent_usage.*`, but they are soft. Whenever the requester asks for "at most N", say so, and offer `approval_required` or a `run.*` cap instead.
+- **Rate limits.** Per-window caps exist as `agent_usage.*`, but they are soft. Whenever the requester asks for "at most N" across runs, say so. Nothing in a policy enforces that exactly: `run.*` resets every run (`run.tool_calls < 3` at 10 runs/hour admits 30), so offer it only as a per-run bound. For a hard cross-run limit, offer `approval_required` (a person decides each call) or a limiter in the downstream service.
 - **Negated usage caps.** Under `on_unavailable: deny`, `not (agent_usage.x >= N)` passes on a missing value; write `agent_usage.x < N`.
 - **Trust.** `ctx.*` and `role` are only as trustworthy as the server code that sets them. Mention this whenever a grant hinges on them.

@@ -38,9 +38,9 @@ back to the ledger alone, unless the policy opts into `deny`.
   load (`PolicySetError`), never silently pick one.
 - Every decision that reads `agent_usage.*` MUST carry `sec_ai.usage_state`, and that
   state MUST NOT reach the model's error payload.
-- Docs MUST present `agent_usage.*` as a soft quota with overshoot, and `run.*` as the
-  only exact cap. A hard limit MUST NOT be built on this pipeline. It needs its own
-  decision record (reserve-then-reconcile, or leases).
+- Docs MUST present `agent_usage.*` as a soft quota with overshoot, and `run.*` as a
+  per-run bound, never as a cross-run alternative. A hard limit MUST NOT be built on
+  this pipeline. It needs its own decision record (reserve-then-reconcile, or leases).
 
 ## Why
 
@@ -107,8 +107,9 @@ roughly Σ(other processes' rate) × (snapshot age + lag). With 4 replicas each 
 1 run/s, a 5 s refresh and 10 s of lag, `agent_usage.invocations_1h < 100` can overshoot
 by about 3 × 1 × 15 ≈ 45 runs at the moment of crossing. That is fine for cost control
 and fair use. It is wrong for "at most 3 wire transfers per hour, ever", and an author
-who reads `< 100` as exact will write exactly that policy. `run.*` is monotone within
-one run and decided in one process, so it remains the only exact cap.
+who reads `< 100` as exact will write exactly that policy. `run.*` is no substitute:
+it resets with every run, so it bounds a run, not an hour. An exact cross-run limit
+today means `approval_required` on each call or a limiter in the downstream service.
 
 The windows **slide**, so a denial clears as usage ages out. A rate limit is meant to
 behave this way, and it is the opposite of `run.*`, whose counters only grow within a

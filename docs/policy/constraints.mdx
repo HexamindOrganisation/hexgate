@@ -296,9 +296,12 @@ key).
 
 <Warning>
 **`agent_usage.*` caps are soft quotas.** They keep cost and fair use in check; they
-do not guarantee "never more than N". **`run.*` is the only exact cap.** For "at most
-3 wire transfers per hour, ever", use `approval_required`, or keep the count inside
-one run with `run.*`. How far a value can be off:
+do not guarantee "never more than N". No policy path counts exactly across runs:
+`run.*` bounds one invocation and starts again at zero in the next, so
+`run.tool_calls < 3` with 10 runs an hour admits 30. For "at most 3 wire transfers
+per hour, ever", put the tool behind `approval_required` so a person decides each
+transfer, or enforce the limit in the service that executes it. How far a value can
+be off:
 
 - **Other processes are seen late.** Their activity reaches this process after the
   snapshot's age plus the platform's ingest lag. A cap can be passed by roughly
