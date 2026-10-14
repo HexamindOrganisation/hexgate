@@ -12,3 +12,6 @@ expect:
     - { role: billing, tool: refund_order, args: { order_id: ord_123, amount: 501, currency: USD }, expect: deny }
     - { role: billing, tool: refund_order, args: { order_id: ord_123, amount: 100, currency: GBP }, expect: deny }
     - { role: billing, tool: refund_order, args: { order_id: ord_123, amount: 400, currency: EUR }, expect: allow }
+    - { role: billing, tool: refund_order, args: { order_id: ord_1, amount: 100, currency: USD }, expect: allow }
+    - { role: billing, tool: refund_order, args: { order_id: ord_1234567, amount: 100, currency: USD }, expect: allow }
+    - { role: billing, tool: refund_order, args: { order_id: ord_123, amount: 500, currency: USD }, expect: allow }

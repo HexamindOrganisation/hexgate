@@ -12,3 +12,5 @@ expect:
     - { role: support, tool: read_file, args: { file_path: src/a.py }, expect: allow }
     - { role: support, tool: read_file, args: { file_path: src/config/.env }, expect: deny }
     - { role: support, tool: read_file, args: { file_path: src/pkg/mod.py }, expect: allow }
+    - { role: support, tool: read_file, args: { file_path: docs/api/ref.md }, expect: allow }
+    - { role: support, tool: read_file, args: { file_path: src/environment.py }, expect: allow }
