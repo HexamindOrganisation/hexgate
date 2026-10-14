@@ -1,0 +1,32 @@
+starting_project: order_desk
+agent: order-desk
+request: "Write the policy for this agent and its roles. Roles: support_staff (front-line support staff, handling customers day to day) and manager (supervises the support staff, can do everything they can, and handles escalations). Anyone else falls back to default."
+note: A manager supervises support staff, so a manager may do at least everything support staff may, and the default fallback no more than support staff.
+expect:
+  decisions:
+    - { roles: [support_staff, manager, default], tool: delete_customer, args: { customer_id: c1 }, expect: [deny, approval_required] }
+    - { roles: [support_staff, manager, default], tool: wire_transfer, args: { amount: 100000, iban: DE89 }, expect: [deny, approval_required] }
+    - { roles: [support_staff, manager, default], tool: export_customers, args: { format: csv }, expect: [deny, approval_required] }
+    - { roles: [support_staff, manager, default], tool: refund_order, args: { order_id: o1, amount: 1000000, currency: EUR }, expect: [deny, approval_required] }
+    - { roles: [support_staff, manager], tool: view_orders, args: { customer_id: c1 }, expect: allow }
+  superset:
+    - wider: manager
+      narrower: support_staff
+      probes:
+        - { tool: view_orders, args: { customer_id: c1 } }
+        - { tool: lookup_order, args: { order_id: o1 } }
+        - { tool: refund_order, args: { order_id: o1, amount: 20, currency: EUR } }
+        - { tool: wire_transfer, args: { amount: 100, iban: DE89 } }
+        - { tool: send_email, args: { to: [a@acme.com], subject: s, body: b } }
+        - { tool: export_customers, args: { format: csv } }
+        - { tool: delete_customer, args: { customer_id: c1 } }
+    - wider: support_staff
+      narrower: default
+      probes:
+        - { tool: view_orders, args: { customer_id: c1 } }
+        - { tool: lookup_order, args: { order_id: o1 } }
+        - { tool: refund_order, args: { order_id: o1, amount: 20, currency: EUR } }
+        - { tool: wire_transfer, args: { amount: 100, iban: DE89 } }
+        - { tool: send_email, args: { to: [a@acme.com], subject: s, body: b } }
+        - { tool: export_customers, args: { format: csv } }
+        - { tool: delete_customer, args: { customer_id: c1 } }
