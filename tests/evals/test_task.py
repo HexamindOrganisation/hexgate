@@ -334,8 +334,9 @@ def test_sandbox_reaches_only_anthropic_through_the_proxy() -> None:
     assert agent["networks"] == ["sandbox"] and compose["networks"]["sandbox"] == {
         "internal": True
     }
-    assert (
-        set(proxy["networks"]) == {"sandbox", "egress"} and "@sha256:" in proxy["image"]
+    assert set(proxy["networks"]) == {"sandbox", "egress"}
+    assert proxy["image"].endswith(
+        "@sha256:8a3baed477e2c282ab8aa5edad442f69873246964f225c5c2ae8364b6610963c"
     )
     conf = task.COMPOSE.with_name("squid.conf").read_text().splitlines()
     assert proxy["volumes"] == ["./squid.conf:/etc/squid/squid.conf:ro"]
