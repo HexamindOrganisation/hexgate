@@ -1259,7 +1259,7 @@ def test_when_a_constraint_path_has_no_root_then_unknown_root(constraint, path):
         (
             "warning",
             f"a constraint reads {path}: no call sets it. A path starts with "
-            "args., ctx. or run., and role and tool are plain strings",
+            "args., ctx., run. or agent_usage., and role and tool are plain strings",
         )
     ]
 
@@ -1273,6 +1273,7 @@ def test_when_constraint_paths_use_a_root_then_no_unknown_root():
                 "constraints": [
                     "args.amount < 5",
                     'ctx.department == "finance"',
+                    "agent_usage.invocations_1h < 100",
                     'role == "admin"',
                     'tool != "x"',
                     "args.amount <= consts.cap",
@@ -1333,8 +1334,23 @@ def test_path_roots_match_what_check_constraints_sets():
     for root in PATH_ROOTS:
         # Raises if <root>.x is missing from the evaluation context.
         check_constraints(
-            [f"{root}.x == 1"], {"x": 1}, "t", attributes={"x": 1}, run={"x": 1}
+            [f"{root}.x == 1"],
+            {"x": 1},
+            "t",
+            attributes={"x": 1},
+            run={"x": 1},
+            agent_usage={"x": 1},
         )
+
+
+def test_when_a_module_reads_agent_usage_then_no_unknown_root():
+    boundary = _mod("b", "boundary", {"refund": _deny(["agent_usage.denials_5m >= 5"])})
+    cap = _mod(
+        "c", "capability", {"refund": _allow(["agent_usage.invocations_1h < 100"])}
+    )
+    assert [
+        lint for lint in check([boundary], [cap]) if lint.code == "unknown-root"
+    ] == []
 
 
 def test_when_a_default_constraint_has_an_unknown_root_then_unknown_root():

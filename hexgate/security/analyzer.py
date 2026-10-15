@@ -119,6 +119,10 @@ SEVERITY_RANK: dict[Severity, int] = {"error": 0, "warning": 1, "info": 2}
 _ABSENT_ONE = "which the agent's manifest doesn't declare"
 # Why a name is no agent, for the lints checking names against the roster.
 _NOT_AN_AGENT = "not registered, and not a sub-agent any manifest names"
+# The roots an ``unknown-root`` lint lists, e.g. "args., ctx., run. or agent_usage.".
+_ROOT_PREFIXES = (
+    ", ".join(f"{root}." for root in PATH_ROOTS[:-1]) + f" or {PATH_ROOTS[-1]}."
+)
 
 
 @dataclass(frozen=True)
@@ -1413,7 +1417,7 @@ def _unknown_root_lint(
         )
     else:
         why = (
-            "no call sets it. A path starts with args., ctx. or run., and "
+            f"no call sets it. A path starts with {_ROOT_PREFIXES}, and "
             "role and tool are plain strings"
         )
     return PolicyLint(
