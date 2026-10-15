@@ -1,2 +1,0 @@
-# Behaviour every case on this project keeps unless it lists the same call.
-- { role: default, tool: send_email, args: { to: [a@acme.com], subject: s, body: b }, expect: deny }

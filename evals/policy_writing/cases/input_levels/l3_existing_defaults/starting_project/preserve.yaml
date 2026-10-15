@@ -9,6 +9,7 @@
 - { roles: [default, support], tool: agent.run, args: { agent: order-desk }, expect: allow }
 - { roles: [default, support], tool: net.http_request, args: { method: CONNECT, host: api.acme.com, port: 443 }, expect: allow }
 - { roles: [default, support], tool: net.http_request, args: { method: CONNECT, host: evil.io, port: 443 }, expect: deny }
+- { roles: [default, support], tool: net.http_request, args: { method: CONNECT, host: pastebin.com, port: 443 }, expect: deny }
 - { roles: [default, support], tool: net.http_request, args: { method: GET, url: "http://api.acme.com/x" }, expect: deny }
-- { role: support, tool: view_orders, args: { customer_id: c1 }, run_facts: { tool_calls: 50 }, expect: deny }
+- { roles: [default, support], tool: view_orders, args: { customer_id: c1 }, run_facts: { tool_calls: 50 }, expect: deny }
 - { roles: [default, support], tool: view_orders, args: { customer_id: c1 }, run_facts: { tool_calls: 49 }, expect: allow }

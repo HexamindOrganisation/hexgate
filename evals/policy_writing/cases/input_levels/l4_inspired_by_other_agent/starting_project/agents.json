@@ -101,5 +101,83 @@
     "version": 1,
     "content_hash": "e0e2e8088337f1ae5d522852ffe28d25b726032fe8e99b5e49e452cf4b22102c",
     "updated_at": "2026-10-01T00:00:00Z"
+  },
+  {
+    "name": "billing-bot",
+    "manifest": {
+      "name": "billing-bot",
+      "description": null,
+      "framework": "langchain",
+      "model": null,
+      "system_prompt": null,
+      "tools": [
+        {
+          "name": "view_orders",
+          "description": "",
+          "input_schema": {
+            "properties": {
+              "customer_id": {
+                "title": "customer_id",
+                "type": "string"
+              }
+            },
+            "required": [
+              "customer_id"
+            ]
+          }
+        },
+        {
+          "name": "refund_order",
+          "description": "",
+          "input_schema": {
+            "properties": {
+              "order_id": {
+                "title": "order_id",
+                "type": "string"
+              },
+              "amount": {
+                "title": "amount",
+                "type": "number"
+              },
+              "currency": {
+                "title": "currency",
+                "type": "string"
+              }
+            },
+            "required": [
+              "order_id",
+              "amount",
+              "currency"
+            ]
+          }
+        },
+        {
+          "name": "wire_transfer",
+          "description": "",
+          "input_schema": {
+            "properties": {
+              "amount": {
+                "title": "amount",
+                "type": "number"
+              },
+              "iban": {
+                "title": "iban",
+                "type": "string"
+              }
+            },
+            "required": [
+              "amount",
+              "iban"
+            ]
+          }
+        }
+      ],
+      "skills": null,
+      "subagents": null,
+      "guards": null
+    },
+    "version": 1,
+    "content_hash": "c547a509c098922fb2bc45fb2bdaf14052cea2387764d4a55c0c9f0384ab5cf2",
+    "updated_at": "2026-10-01T00:00:00Z"
   }
 ]
