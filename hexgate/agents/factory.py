@@ -481,7 +481,10 @@ class HexgateAgent:
         running with stale policy.
         """
         await aprepare_run(
-            _refresh_policy_safely(self), self._ban_gate, get_current_context()
+            _refresh_policy_safely(self),
+            self._ban_gate,
+            get_current_context(),
+            binding=self._binding,
         )
         await self._check_admission()
         with run_scope(self._canonical_name):
@@ -507,7 +510,10 @@ class HexgateAgent:
         regardless of which entry point a caller picks.
         """
         await aprepare_run(
-            _refresh_policy_safely(self), self._ban_gate, get_current_context()
+            _refresh_policy_safely(self),
+            self._ban_gate,
+            get_current_context(),
+            binding=self._binding,
         )
         await self._check_admission()
         with run_scope(self._canonical_name):

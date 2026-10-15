@@ -331,6 +331,9 @@ class Decision:
     # UUID, not caller data); absent from ``as_error_payload`` like
     # ``attributes`` — the model must not learn how close it is to its budget.
     run: RunAttribution = DETACHED_RUN
+    # How the agent_usage.* namespace was built (UsageState value); None when the
+    # policy references none. Audit-only, absent from as_error_payload like run.
+    usage_state: str | None = None
 
     @classmethod
     def from_verdict(
@@ -344,6 +347,7 @@ class Decision:
         arguments: dict[str, Any] | None = None,
         attributes: dict[str, Any] | None = None,
         run: RunAttribution = DETACHED_RUN,
+        usage_state: str | None = None,
     ) -> "Decision":
         """Lift an engine :class:`Verdict` into a host-facing decision, stamping
         on the context the engine doesn't know."""
@@ -360,6 +364,7 @@ class Decision:
             arguments=arguments,
             attributes=attributes,
             run=run,
+            usage_state=usage_state,
         )
 
     @property

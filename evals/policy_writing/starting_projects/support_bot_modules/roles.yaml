@@ -1,0 +1,10 @@
+# Which capabilities (policies/capabilities/) each role gets. The boundaries
+# (policies/boundaries/) apply to every role on their own, so they aren't listed.
+# To see each role's resulting policy, from this directory:
+#   hexgate policy resolve --dir .                 # every role
+#   hexgate policy resolve --dir . --role billing  # one role
+version: 1
+roles:
+  default: [read_only]                        # fallback: read-only
+  support: [read_only, support_leaf]          # + email / escalate
+  billing: [read_only, payments]              # + refunds (capped by the boundary)
