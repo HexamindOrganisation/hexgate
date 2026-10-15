@@ -52,7 +52,15 @@ def _():
 
     from hexgate.security.compose import resolve_file
 
-    return Path, mo, resolve_file, serve_manager, time
+    # The running dashboard URL, written by boot.py under `make demo-devops`. Read
+    # once here and shared with both banner cells below; None standalone
+    # (`marimo edit`), where there is no dashboard.
+    try:
+        dash = Path("/tmp/hexgate_dash_url").read_text().strip().rstrip("/")
+    except OSError:
+        dash = None
+
+    return Path, dash, mo, resolve_file, serve_manager, time
 
 
 @app.cell
@@ -83,18 +91,14 @@ def _(mo):
 
 
 @app.cell
-def _(Path, mo):
-    # Under `make demo-devops`, boot.py writes the running dashboard URL here and
-    # /v1/demo-login signs you in. Standalone (`marimo edit`) there's no dashboard —
-    # guard the read and show how to launch one.
-    try:
-        _dash = Path("/tmp/hexgate_dash_url").read_text().strip().rstrip("/")
-    except OSError:
-        _dash = None
-    if _dash:
+def _(dash, mo):
+    # `dash` (the running dashboard URL) is read once in the first cell; under
+    # `make demo-devops` /v1/demo-login signs you in. None standalone
+    # (`marimo edit`), where there's no dashboard — show how to launch one.
+    if dash:
         _banner = mo.md(
             f"""
-            ### [▶ Open the live dashboard →]({_dash}/v1/demo-login)
+            ### [▶ Open the live dashboard →]({dash}/v1/demo-login)
 
             Signs you in on the dashboard, scoped to the seeded showcase project.
             Start the agent below, then chat with it in the **Playground** — the
@@ -122,15 +126,29 @@ def _():
     # release_lead, the root we serve). Each child is a plain, named HexgateAgent
     # mounted on its parent with `child.as_tool()`; serve registers the whole tree
     # (auto_register_subagents) and binds each node's dashboard-editable platform
-    # policy — so we build them PLAIN here, no in-kernel enforcement and no build-time
-    # credential. Each tier's role-aware policy lives in its compose block
-    # (devops_seed.py / _FILES below), editable in the dashboard's Policies tab.
+    # policy. Each tier's role-aware policy lives in its compose block (devops_seed.py
+    # / _FILES below), editable in the dashboard's Policies tab.
+    #
+    # The two privileged leaves carry a local DENY-ALL floor. The serve bind replaces
+    # it with their platform policy on success (GuardedTool re-wrap is idempotent),
+    # but a MISSED bind is fail-SOFT (serve's _bind_subagents leaves an unregistered
+    # 404'd child as built) — so without the floor they'd serve the raw restart/deploy
+    # tools. With it, a missed bind degrades to "nothing works", not "everything
+    # works". The root (developer) needs no floor: serve binds it fail-loud (aborts if
+    # the root 404s).
     from langchain_core.tools import tool
 
     from hexgate import create_agent
+    from hexgate.security import AgentPolicy, BaseToolPolicy
+
+    # Deny everything until the platform policy is bound (see above).
+    _deny_all = AgentPolicy(default_policy=BaseToolPolicy(mode="deny"))
 
     def build_deploy_bot():
-        """L3 — the deploy bot that holds the privileged restart + deploy tools."""
+        """L3 — the deploy bot that holds the privileged restart + deploy tools.
+
+        Returns the agent under a local deny-all floor; serve binds its platform
+        policy over it (a missed bind fails closed, not open)."""
 
         @tool
         def restart_service(service: str, env: str) -> str:
@@ -142,9 +160,7 @@ def _():
             service: str, version: str, env: str, config: str = "default"
         ) -> str:
             """Roll out a new version of a service to an environment with a config."""
-            return (
-                f"(demo) deployed {service} {version} to {env} (config: {config})."
-            )
+            return f"(demo) deployed {service} {version} to {env} (config: {config})."
 
         deploy_bot, _handler = create_agent(
             model="gpt-4o-mini",
@@ -157,7 +173,7 @@ def _():
             ),
             name="deploy_bot",
         )
-        return deploy_bot
+        return deploy_bot.enforce_policy(_deny_all)
 
     def build_release_lead():
         """L2 — the release lead. Has no deploy tool; escalates to deploy_bot."""
@@ -182,7 +198,7 @@ def _():
             ),
             name="release_lead",
         )
-        return release_lead
+        return release_lead.enforce_policy(_deny_all)
 
     def build_developer():
         """L1 — the only agent the user talks to. Reads status; escalates deploys."""
@@ -327,9 +343,8 @@ agents:
   # is to escalate further to deploy_bot (reach edge agent.tool:deploy_bot).
   release_lead:
     roles:
-      # Never reached by viewer (developer denies it the reach) and not admitted
-      # here either — defense in depth.
-      viewer: { import: [ caps/base/status.yaml ] }
+      # viewer is not declared here — it's never reached (developer denies it the
+      # reach), so it resolves to the closed-world boundary: deny, not admitted.
       engineer:
         import: [ caps/base/ingress.yaml, caps/release/escalate.yaml ]
       release:
@@ -340,7 +355,7 @@ agents:
   # restart any env, and its version deploys are approval-gated (change control).
   deploy_bot:
     roles:
-      viewer: { import: [ caps/base/status.yaml ] }
+      # viewer not declared — never reached, resolves to deny (closed-world).
       engineer:
         import: [ caps/base/ingress.yaml, caps/deploy/staging.yaml ]
       release:
@@ -370,9 +385,17 @@ agents:
 
     _L = {"allow": "✅ allow", "deny": "❌ deny", "needs_approval": "🔶 approval"}
 
+    # Resolve each agent's compose policy once (parse+link the 7-file tree is not
+    # free), then evaluate the table cells off the cached policy sets.
+    _ps = {
+        _a: resolve_file(str(_root / "policy.yaml"), agent=_a).policy_set
+        for _a in ("developer", "release_lead", "deploy_bot")
+    }
+
     def _cell(agent, role, tool, args):
-        _ps = resolve_file(str(_root / "policy.yaml"), agent=agent).policy_set
-        return _L.get(_ps.evaluate(role=role, tool=tool, args=args).outcome.value, "?")
+        return _L.get(
+            _ps[agent].evaluate(role=role, tool=tool, args=args).outcome.value, "?"
+        )
 
     _roles = ["viewer", "engineer", "release"]
 
@@ -443,12 +466,10 @@ def _(mo):
 
 
 @app.cell
-def _(Path, mo):
-    _p = Path("/tmp/hexgate_dash_url")
-    if _p.is_file():
-        _dash = _p.read_text().strip().rstrip("/")
+def _(dash, mo):
+    if dash:
         _out = mo.md(
-            f"### [▶ Open the dashboard →]({_dash}/v1/demo-login)\n\n"
+            f"### [▶ Open the dashboard →]({dash}/v1/demo-login)\n\n"
             "In the Playground:\n\n"
             "1. Under **Acting as**, pick a role.\n"
             '2. Ask: *"Deploy checkout v2.3.1 to staging with the canary config."*\n'
@@ -465,9 +486,11 @@ def _(Path, mo):
             "and it rolls out; a `restart_service` on prod runs without approval.\n"
             "6. Edit any tier's policy in the **Policies** tab, live: revoke "
             "`release_lead`'s reach to `deploy_bot` (remove `caps/release/escalate.yaml` "
-            "from its imports) and the chain breaks at the **second** hop; or give "
-            "`engineer` the `caps/deploy/prod.yaml` cap and its prod deploy now goes "
-            "through (with approval). The **Graph** tab shows the "
+            "from its imports) and the chain breaks at the **second** hop; or add "
+            "`caps/deploy/prod.yaml` to `engineer` and its deploys become "
+            "**approval-gated for every env** — grants union, so the "
+            "`approval_required` on `deploy_version` propagates and even the staging "
+            "deploy that was instant now prompts first. The **Graph** tab shows the "
             "`developer → release_lead → deploy_bot` chain of `agent.tool:` edges."
         )
     else:

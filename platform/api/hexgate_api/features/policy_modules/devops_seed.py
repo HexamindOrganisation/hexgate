@@ -62,9 +62,8 @@ agents:
   # is to escalate further to deploy_bot (reach edge agent.tool:deploy_bot).
   release_lead:
     roles:
-      # Never reached by viewer (developer denies it the reach) and not admitted
-      # here either — defense in depth.
-      viewer: { import: [ caps/base/status.yaml ] }
+      # viewer is not declared here — it's never reached (developer denies it the
+      # reach), so it resolves to the closed-world boundary: deny, not admitted.
       engineer:
         import: [ caps/base/ingress.yaml, caps/release/escalate.yaml ]
       release:
@@ -75,7 +74,7 @@ agents:
   # restart any env, and its version deploys are approval-gated (change control).
   deploy_bot:
     roles:
-      viewer: { import: [ caps/base/status.yaml ] }
+      # viewer not declared — never reached, resolves to deny (closed-world).
       engineer:
         import: [ caps/base/ingress.yaml, caps/deploy/staging.yaml ]
       release:
