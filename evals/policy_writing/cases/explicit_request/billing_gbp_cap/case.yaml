@@ -1,0 +1,13 @@
+starting_project: support_bot_single_file
+agent: support-bot
+request: Billing should also be able to refund in GBP, and billing refunds are now capped at 300.
+expect:
+  decisions:
+    - { role: billing, tool: refund_order, args: { order_id: o1, amount: 300, currency: GBP }, expect: allow }
+    - { role: billing, tool: refund_order, args: { order_id: o1, amount: 301, currency: USD }, expect: deny }
+    - { role: billing, tool: refund_order, args: { order_id: o1, amount: 100, currency: JPY }, expect: deny }
+    - { role: support, tool: refund_order, args: { order_id: o1, amount: 100, currency: GBP }, expect: deny }
+    - { role: billing, tool: refund_order, args: { order_id: o1, amount: 400, currency: EUR }, expect: deny }
+    - { role: billing, tool: refund_order, args: { order_id: o1, amount: 100, currency: GBP }, expect: allow }
+    - { role: billing, tool: refund_order, args: { order_id: o1, amount: 301, currency: GBP }, expect: deny }
+    - { role: billing, tool: refund_order, args: { order_id: o1, amount: 300, currency: EUR }, expect: allow }
