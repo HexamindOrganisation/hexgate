@@ -29,6 +29,11 @@ import {
 } from "@/components/ui/popover";
 import { useIsDark, useTheme } from "@/lib/theme";
 import {
+  accentForeground,
+  hexToHslChannels,
+  hslChannelsToHex,
+} from "@/lib/color";
+import {
   usePlayground,
   type ApprovalRequestEvent,
   type ChatMessage,
@@ -41,90 +46,8 @@ import { useProjectScoped } from "@/lib/active";
 import { NoProjectEmptyState } from "@/components/NoProjectEmptyState";
 import { parseRolesFromPolicy } from "@/lib/policy";
 import { useResolvedPolicy } from "@/lib/policy_files";
+import { usePlaygroundPrefs } from "@/lib/playground_prefs";
 import { cn } from "@/lib/utils";
-
-/** useState backed by localStorage (per-device), for presentation-mode prefs
- * that should survive the "open in a new tab" flow and reloads. Every access is
- * guarded — a private window or blocked storage just degrades to in-memory. */
-function usePersistedState(
-  key: string,
-  initial: string,
-): readonly [string, (v: string) => void] {
-  const [value, setValue] = useState<string>(() => {
-    try {
-      return localStorage.getItem(key) ?? initial;
-    } catch {
-      return initial;
-    }
-  });
-  // Write-through on set (not an effect) — avoids a redundant write of the just-
-  // read value on mount, and the string-only setter type rejects a stray
-  // functional updater at compile time.
-  const set = useCallback(
-    (v: string) => {
-      setValue(v);
-      try {
-        localStorage.setItem(key, v);
-      } catch {
-        /* ignore: private mode / blocked storage */
-      }
-    },
-    [key],
-  );
-  return [value, set] as const;
-}
-
-/** "#rrggbb" → the "H S% L%" channel triple our --primary token expects
- * (consumed as `hsl(var(--primary))`). Returns "" for an unparseable value. */
-function hexToHslChannels(hex: string): string {
-  const m = /^#?([0-9a-f]{6})$/i.exec(hex.trim());
-  if (!m) return "";
-  const int = parseInt(m[1], 16);
-  const r = ((int >> 16) & 255) / 255;
-  const g = ((int >> 8) & 255) / 255;
-  const b = (int & 255) / 255;
-  const max = Math.max(r, g, b);
-  const min = Math.min(r, g, b);
-  const l = (max + min) / 2;
-  let h = 0;
-  let s = 0;
-  if (max !== min) {
-    const d = max - min;
-    s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
-    if (max === r) h = (g - b) / d + (g < b ? 6 : 0);
-    else if (max === g) h = (b - r) / d + 2;
-    else h = (r - g) / d + 4;
-    h /= 6;
-  }
-  return `${Math.round(h * 360)} ${Math.round(s * 100)}% ${Math.round(l * 100)}%`;
-}
-
-/** "H S% L%" channels → "#rrggbb", for a controlled <input type="color"> so it
- * reflects the active accent. Returns "#000000" for an unparseable value. */
-function hslChannelsToHex(channels: string): string {
-  const [hs, ss, ls] = channels.split(/\s+/);
-  const h = Number(hs) / 360;
-  const s = Number((ss ?? "").replace("%", "")) / 100;
-  const l = Number((ls ?? "").replace("%", "")) / 100;
-  if (![h, s, l].every(Number.isFinite)) return "#000000";
-  const f = (n: number) => {
-    const k = (n + h * 12) % 12;
-    const c =
-      l - s * Math.min(l, 1 - l) * Math.max(-1, Math.min(k - 3, 9 - k, 1));
-    return Math.round(c * 255)
-      .toString(16)
-      .padStart(2, "0");
-  };
-  return `#${f(0)}${f(8)}${f(4)}`;
-}
-
-/** A readable foreground (near-black or near-white, as theme channels) for text
- * placed on an accent, chosen by the accent's lightness — so --primary-foreground
- * tracks a custom --primary instead of staying the theme default. */
-function accentForeground(accent: string): string {
-  const l = Number((accent.split(/\s+/)[2] ?? "").replace("%", ""));
-  return Number.isFinite(l) && l >= 55 ? "222 47% 11%" : "210 40% 98%";
-}
 
 export function PlaygroundPage() {
   const scope = useProjectScoped();
@@ -153,13 +76,19 @@ function PlaygroundLive({ projectId }: { projectId: string }) {
   // A set, not a scalar: the enforcer evaluates every role the caller carries,
   // so the playground has to be able to reproduce a multi-role caller.
   const [activeRoles, setActiveRoles] = useState<string[]>([]);
-  // Presentation-mode state, persisted per-device so it survives the "open in a
-  // new tab" flow and reloads. `name` is the acting caller identity sent to the
-  // agent (→ HexgateContext.user_id); `accent` is a custom highlight (HSL
-  // channels like "226 70% 52%") applied to --primary/--ring on the playground
-  // root, re-theming only this surface.
-  const [name, setName] = usePersistedState("hexgate-pg-name", "");
-  const [accent, setAccent] = usePersistedState("hexgate-pg-accent", "");
+  // Presentation-mode prefs (persisted per-device, see playground_prefs). The
+  // acting `name` is keyed by project — it becomes the caller identity sent to
+  // the agent (→ HexgateContext.user_id), so it must not ride from one project's
+  // agent to another on a project switch. `accent` is a global custom highlight
+  // (HSL channels like "226 70% 52%").
+  const accent = usePlaygroundPrefs((s) => s.accent);
+  const setAccent = usePlaygroundPrefs((s) => s.setAccent);
+  const name = usePlaygroundPrefs((s) => s.names[projectId] ?? "");
+  const setNameForProject = usePlaygroundPrefs((s) => s.setName);
+  const setName = useCallback(
+    (v: string) => setNameForProject(projectId, v),
+    [setNameForProject, projectId],
+  );
   // Full-screen presentation mode (own tab, no app sidebar — see AppShell). The
   // playground drops its breakout margins and swaps "open in tab" for a close.
   const [params] = useSearchParams();
@@ -708,12 +637,13 @@ function PresentationControls({
         <button
           type="button"
           onClick={() => {
-            // Close the presentation tab if the browser allows it (it was
-            // script-opened); otherwise just drop out of full-screen in place.
+            // Always exit full-screen reliably (drop the ?present param); also
+            // close the tab when the browser allows it — refused for a tab that
+            // was reloaded, which is why navigate is the real action, not close.
             window.close();
             navigate("/playground");
           }}
-          title="Close full screen"
+          title="Exit full screen"
           className={ctl}
         >
           <X className="size-3.5" />
