@@ -229,7 +229,8 @@ The image carries OPA, so the agent's `hexgate policy test --engine wasm` runs.
 ```bash
 claude setup-token                     # once: prints a long-lived token
 export CLAUDE_CODE_OAUTH_TOKEN=…       # in the shell that runs the eval; never commit it
-make policy-eval CASES=explicit_request   # one case, 3 epochs; builds the image; then `inspect view` as above
+make policy-eval CASES=explicit_request/support_refund_cap   # one case, 3 epochs; builds the image; then `inspect view` as above
+make policy-eval EPOCHS=1                # quick check: one epoch, reducer mean,at_least_1
 ```
 
 Of your environment only that token enters the container; the task refuses one
