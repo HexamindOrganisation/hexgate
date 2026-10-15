@@ -15,6 +15,13 @@ from hexgate_mcp.jwks import JwksCache
 
 logger = logging.getLogger(__name__)
 
+# The access-token header `typ` (RFC 9068), the exact string the API writes
+# (its core/oauth_tokens.py; copied, since this package never imports
+# hexgate_api). It keeps any other JWT the API signs from passing as one.
+# Stricter than RFC 9068 §4, which also allows "application/at+jwt" in any
+# case: only the API mints these tokens, and it writes this form.
+ACCESS_TOKEN_TYPE = "at+jwt"
+
 
 class HexgateAccessToken(AccessToken):
     subject: str
@@ -31,9 +38,13 @@ class JwksTokenVerifier:
 
     async def verify_token(self, token: str) -> HexgateAccessToken | None:
         try:
-            kid = jwt.get_unverified_header(token).get("kid")
+            header = jwt.get_unverified_header(token)
         except jwt.PyJWTError:
             return None
+        if header.get("typ") != ACCESS_TOKEN_TYPE:
+            logger.info("token refused: header typ is not %r", ACCESS_TOKEN_TYPE)
+            return None
+        kid = header.get("kid")
         if not isinstance(kid, str):
             logger.info("token refused: no `kid` in its header")
             return None

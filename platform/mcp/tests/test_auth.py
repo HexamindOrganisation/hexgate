@@ -79,6 +79,17 @@ async def test_when_iss_or_aud_mismatch_then_logged_as_warning(
     assert [r.levelno for r in caplog.records] == [logging.WARNING]
 
 
+@pytest.mark.parametrize("typ", ["JWT", "application/at+jwt", "AT+JWT"])
+@respx.mock
+async def test_when_header_typ_is_not_at_jwt_then_refused(verifier, key, typ, caplog):
+    route = respx.get(JWKS_URL).respond(json=jwks(key))
+    caplog.set_level(logging.INFO, logger="hexgate_mcp.auth")
+
+    assert await verifier.verify_token(key.mint(typ=typ)) is None
+    assert "header typ is not 'at+jwt'" in caplog.text
+    assert route.call_count == 0
+
+
 @respx.mock
 async def test_when_signed_by_another_key_under_known_kid_then_refused(verifier, key):
     respx.get(JWKS_URL).respond(json=jwks(key))
