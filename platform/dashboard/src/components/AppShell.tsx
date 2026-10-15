@@ -223,7 +223,12 @@ export function AppShell() {
 
   // Two sidebar "spaces" share this one shell frame: the product features, and
   // an org/account settings space (its own nav), entered from the account menu.
-  const { pathname } = useLocation();
+  const location = useLocation();
+  const { pathname } = location;
+  // Full-screen "presentation" mode (opened in its own tab from the Playground):
+  // render just the route, no sidebar/nav chrome. Detected from the URL so it
+  // survives a reload of the presentation tab.
+  const present = new URLSearchParams(location.search).get("present") === "1";
   const inSettings = isSettingsPath(pathname);
   const activeOrgId = useActive((s) => s.activeOrgId);
   // Scope the settings links to the URL's org (falling back to the active one)
@@ -259,6 +264,16 @@ export function AppShell() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [toggleSidebar]);
+
+  if (present) {
+    // No sidebar, no nav — just the route, full-bleed. The playground drops its
+    // negative margins in this mode and renders its own close affordance.
+    return (
+      <div className="h-screen bg-background text-foreground">
+        <Outlet />
+      </div>
+    );
+  }
 
   return (
     <div className="flex h-screen bg-background text-foreground">
