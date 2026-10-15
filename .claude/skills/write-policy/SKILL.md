@@ -1,6 +1,6 @@
 ---
 name: write-policy
-description: Write or modify a Hexgate YAML policy from a plain-language request — tool modes, argument constraints, caller attributes (ctx.*), run budgets (run.*), network egress (net.http_request / net.tcp_connect), agent admission and reach, roles and inheritance, or policy modules — then prove it with `hexgate policy validate` and `hexgate policy test` dry-runs. Use when asked to write, draft, generate, extend, tighten, or explain a Hexgate policy, or to turn "the agent may only…" into policy YAML.
+description: Write or modify a Hexgate YAML policy from a plain-language request — tool modes, argument constraints, caller attributes (ctx.*), run budgets (run.*), cross-run usage quotas (agent_usage.*), network egress (net.http_request / net.tcp_connect), agent admission and reach, roles and inheritance, or policy modules — then prove it with `hexgate policy validate` and `hexgate policy test` dry-runs. Use when asked to write, draft, generate, extend, tighten, or explain a Hexgate policy, or to turn "the agent may only…" into policy YAML.
 ---
 
 # Write a Hexgate policy
@@ -20,6 +20,7 @@ and prefer them over this file if they disagree:
 | Roles, `policies/` dir, inheritance | `docs/concepts/user-scope.mdx` |
 | Egress | `docs/concepts/egress.mdx` |
 | Admission / agent reach | `docs/concepts/agent-level-enforcement.mdx` |
+| Cross-run quotas, fail mode | `docs/policy/constraints.mdx` (Agent usage), `docs/adr/R-USAGE-001-cross-run-usage-is-soft-and-fails-open.md` |
 | Modules (boundaries / capabilities) | `docs/internals/policy-modules.md` |
 | CLI | `docs/cli/policy.mdx` |
 | Schema (authoritative) | `hexgate/security/models.py`, `hexgate/security/constraints.py` |
@@ -36,17 +37,20 @@ and prefer them over this file if they disagree:
    Never invent a tool or argument name. A typo'd tool is silently default-denied, and a typo'd arg fails closed. If a name is unknown, ask, or state the assumption explicitly. If the agent's manifest JSON is available, pass it to `validate` (step 4), which flags tool, skill and argument names the agent doesn't have.
 2. **Restate the intent as a decision table** before writing YAML. List role × tool × condition → ALLOW / DENY / APPROVAL_REQUIRED, plus what happens to anything unlisted. Surface every ambiguity here, e.g. "refunds up to 500 — inclusive? which currency?".
 3. **Write the YAML.** Start deny-by-default and grant the minimum. Put each constraint at the narrowest scope that works (see *Where constraints live*).
-4. **Validate** until clean:
+4. **Validate** until clean, except for one known false positive:
    ```bash
    uv run hexgate policy validate <file> --max-severity warning [--manifest m.json]
    ```
+   The analyzer does not know the `agent_usage` root yet, so every `agent_usage.*` path raises an `unknown-root` warning and the run exits 1. Ignore that one lint when the path is a valid `<metric>_<window>` (see *Constraint grammar*); never delete or reword a correct cap to silence it. Treat every other lint as real, including `unknown-root` on any other path, and say in the report that this warning was expected.
    If `uv` fails building `biscuit-python` on Python 3.14, add `--python 3.13`.
    For a module tree, use `uv run hexgate policy check --dir <root> [--manifest m.json]` and `uv run hexgate policy resolve --dir <root>`.
 5. **Prove it.** Turn every row of the decision table into a `policy test` run, including the negative cases and the boundary values (`== limit`, `limit + 1`, missing arg, wrong type):
    ```bash
    uv run hexgate policy test <file> --role billing --tool refund_order \
-       --args '{"amount": 500, "currency": "USD"}' [--attributes '{"department": "finance"}']
+       --args '{"amount": 500, "currency": "USD"}' [--attributes '{"department": "finance"}'] \
+       [--agent-usage '{"invocations_1h": 100}']
    ```
+   Test a usage cap at `limit - 1` and at `limit`.
    Also use `--roles a,b` to check a multi-role caller, where the most permissive role wins.
    Pass `--engine wasm` on every `policy test` run, since that engine matches production. If it fails because OPA itself is unusable (e.g. `opa not found`, `HEXGATE_OPA_BIN points to…`, `below the tested floor`), drop the flag and say in the report that the production engine went unchecked, and why; any other wasm error is a problem in the policy to fix. Every result must match the table. When one doesn't, fix the policy, not the table, unless the table was wrong.
 6. **Report.** Give the YAML, the decision table with each case's actual CLI result, and any assumptions or residual risks, e.g. "egress on HTTPS is host-level only".
@@ -93,7 +97,7 @@ Each list item is one boolean expression, and every item must hold.
 |---|---|
 | Compare | `==` `!=` `<` `<=` `>` `>=` · `in [..]` · `not in [..]` (RHS a JSON list or `consts.x`) |
 | Operands | `args.a.b`, `args.max` (cross-field), `count(args.list)`, `consts.x`, JSON literals |
-| Facts | `role`, `tool`, `ctx.<attr>` (trusted caller attributes), `run.<counter>` |
+| Facts | `role`, `tool`, `ctx.<attr>` (trusted caller attributes), `run.<counter>`, `agent_usage.<metric>_<window>` |
 | Strings | `startswith(f, "s")` `endswith` `contains` `matches(f, "^re$")` (RE2, **unanchored**) |
 | Lists | `every(args.xs, <cond on . or .field>)` (empty → true), `any(...)` (empty → false) |
 | Bool | `and` `or` `not` `( )`; boolean composition (`and`/`or`/`not`) is rejected inside a quantifier body |
@@ -101,6 +105,10 @@ Each list item is one boolean expression, and every item must hold.
 `run.*` counters: `tool_calls`, `calls_of_this_tool`, `tools_used` (list), `llm_calls`, `input_tokens`, `output_tokens`, `total_tokens`, `denials`, `approvals`, `errors`, `elapsed_seconds`, `id`, `agent`.
 
 These are circuit breakers, not precise quotas. Read the warning in `constraints.mdx` before promising exact limits.
+
+`agent_usage.<metric>_<window>` caps the agent across runs, over a rolling window. Metrics: `invocations`, `tool_calls`, `denials`, `llm_calls`, `input_tokens`, `output_tokens`, `total_tokens`. Windows: `5m`, `1h`, `24h`, `7d`, `30d`.
+- Put invocation and budget caps on `admission`, with `<`: `agent_usage.invocations_1h < 100`.
+- By default, a platform outage reads this process's counts alone. To fail closed, add `usage: { on_unavailable: deny }`: one value per agent, in every role or a shared mixin, never beside `roles:` (placement: `constraints.mdx`).
 
 ## Egress
 
@@ -142,5 +150,6 @@ Always include a host clause. For subdomains, use `endswith(args.host, ".example
 - **Admission is closed-world.** Once any role declares `admission`, every role without it is refused. `agents:` is closed-world too: an unlisted target is denied.
 - **`file_scope`.** It is rejected by the WASM/Rego build, which is what production uses. Prefer constraints: `startswith(args.file_path, "src/")`, or `every(args.paths, startswith(., "src/"))`.
 - **Strict types.** `true` is not `1`. A number compared against a string fails closed. A missing field fails closed.
-- **Rate limits.** There are no per-time-window limits in YAML; say so. Use `run.*` caps or a Python guard (`docs/concepts/guards.mdx`).
+- **Rate limits.** Per-window caps exist as `agent_usage.*`, but they are soft. Whenever the requester asks for "at most N" across runs, say so. Nothing in a policy enforces that exactly: `run.*` resets every run (`run.tool_calls < 3` at 10 runs/hour admits 30), so offer it only as a per-run bound. For a hard cross-run limit, offer `approval_required` (a person decides each call) or a limiter in the downstream service.
+- **Negated usage caps.** Under `on_unavailable: deny`, `not (agent_usage.x >= N)` passes on a missing value; write `agent_usage.x < N`.
 - **Trust.** `ctx.*` and `role` are only as trustworthy as the server code that sets them. Mention this whenever a grant hinges on them.
