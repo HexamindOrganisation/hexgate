@@ -147,37 +147,51 @@ async def _seed_gdocs_agent() -> None:
     )
 
 
-async def _seed_compose_policy(project_id: str) -> None:
-    """Idempotently seed the compose support-bot showcase into ``project_id``.
+async def _seed_showcase_policy(project_id: str, ensure_fn, label: str) -> None:
+    """Seed a showcase's compose policy files (via ``ensure_fn``) and recompile —
+    the shared body of every compose-style demo seeder.
 
-    Demo-only (see :func:`_seed_gdocs_agent` for the rationale) — the showcase's
-    ``policy.yaml`` + ``caps/**`` files gate the served ``support_bot`` /
-    ``billing_bot``. Opens its OWN session, then recompiles the project so any
-    already-registered agent picks up the classic→compose flip; on the fresh demo
-    DB the project has no agents yet (they register at serve and compile from
-    compose then), so the recompile is a no-op there.
+    Demo-only (see :func:`_seed_gdocs_agent` for the rationale). Opens its OWN
+    session, then recompiles so any already-registered agent picks up the
+    classic→compose flip; on the fresh demo DB the agents register at serve and
+    compile from compose then, so the recompile is a no-op (returns 0). A None
+    result means the project is modular but its policy won't compile (e.g. opa
+    missing), leaving live bundles stale — for the demo that means the agents boot
+    UNGOVERNED by the showcase, so fail loud rather than print success.
     """
     from hexgate_api.core.db import async_session_factory
     from hexgate_api.core.keystore import keystore
     from hexgate_api.features.agents.service import recompile_project
+
+    async with async_session_factory() as session:
+        await ensure_fn(session, project_id)
+        if await recompile_project(session, project_id, keystore.sign) is None:
+            raise RuntimeError(
+                f"{label} policy for {project_id} did not compile (is opa on PATH?) "
+                "— refusing to boot the demo ungoverned"
+            )
+    print(f"[provision] seeded {label} into {project_id}", file=sys.stderr)
+
+
+async def _seed_compose_policy(project_id: str) -> None:
+    """Seed the compose support-bot showcase (support_bot → billing_bot) policy."""
     from hexgate_api.features.policy_modules.seed_data import (
         ensure_seeded_compose_policy,
     )
 
-    async with async_session_factory() as session:
-        await ensure_seeded_compose_policy(session, project_id)
-        # recompile_project returns None when the project is modular but its policy
-        # won't compile (e.g. opa missing) — live bundles left stale. For the demo
-        # that means the agents boot UNGOVERNED by the showcase, so fail loud rather
-        # than print success. (0 = nothing to compile yet, the fresh-DB case: fine.)
-        if await recompile_project(session, project_id, keystore.sign) is None:
-            raise RuntimeError(
-                f"compose showcase policy for {project_id} did not compile "
-                "(is opa on PATH?) — refusing to boot the demo ungoverned"
-            )
-    print(
-        f"[provision] seeded compose support-bot showcase into {project_id}",
-        file=sys.stderr,
+    await _seed_showcase_policy(
+        project_id, ensure_seeded_compose_policy, "compose support-bot showcase"
+    )
+
+
+async def _seed_devops_policy(project_id: str) -> None:
+    """Seed the 3-level DevOps showcase (developer → release_lead → deploy_bot)."""
+    from hexgate_api.features.policy_modules.devops_seed import (
+        ensure_seeded_devops_policy,
+    )
+
+    await _seed_showcase_policy(
+        project_id, ensure_seeded_devops_policy, "DevOps showcase"
     )
 
 
@@ -221,6 +235,10 @@ async def _mint() -> str:
         # ungoverned by it (in its OWN session so a partial write can't poison the
         # mint session above, but NOT best-effort like docs_agent below).
         await _seed_compose_policy(project_id)
+    elif notebook.endswith("devops_demo.py"):
+        # The 3-level developer → release_lead → deploy_bot chain policy IS this demo
+        # — fail loud, same as the compose showcase above.
+        await _seed_devops_policy(project_id)
     elif notebook.endswith("guards-demo/notebook.py"):
         # The guarded_demo agent + its guards policy ARE this demo (flipping the
         # plugin on/off is the whole point) — fail loud, same as the compose policy.
