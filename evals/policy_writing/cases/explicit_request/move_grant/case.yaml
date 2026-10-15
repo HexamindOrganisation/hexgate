@@ -1,0 +1,8 @@
+starting_project: support_bot_modules
+agent: support-bot
+request: Move escalate out of support_leaf into its own capability called escalation, still approval-required, and give it to support only.
+expect:
+  changed: [roles.yaml, policies/capabilities/support_leaf.yaml, policies/capabilities/escalation.yaml]
+  decisions:
+    - { role: support, tool: escalate, args: { reason: r }, expect: approval_required }
+    - { role: billing, tool: escalate, args: { reason: r }, expect: deny }
