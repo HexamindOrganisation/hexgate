@@ -49,12 +49,30 @@ coverage:
         flags:
           - dashboard
     patch:
-      # New code in PRs should hit 70% — applies to the lines the PR
-      # actually changes, not the whole repo, so it's a more meaningful
-      # bar than the project target.
-      default:
+      # New code in PRs should hit 70% — applies to the lines the PR actually
+      # changes, not the whole repo, so it's a more meaningful bar than the
+      # project target. Scoped per flag (no unflagged `default`) so the
+      # dashboard's untested-components reality can be informational without
+      # loosening the Python surfaces.
+      sdk:
         target: 70%
         threshold: 5%
+        flags:
+          - sdk
+      platform-api:
+        target: 70%
+        threshold: 5%
+        flags:
+          - platform-api
+      # Informational, mirroring the dashboard PROJECT status above (components
+      # are mostly untested): notifies on a drop but doesn't block the merge.
+      # Ratchet to a real target once component/render tests exist.
+      dashboard:
+        target: 70%
+        threshold: 5%
+        informational: true
+        flags:
+          - dashboard
 
 # Flag definitions: which paths each flag covers, so Codecov knows where
 # to attribute uncovered lines from a given upload.
