@@ -349,13 +349,20 @@ export function usePlayground({ projectId }: Options) {
   }, [hasPending]);
 
   /**
-   * Send a chat message, optionally scoped to one or more roles.
+   * Send a chat message, optionally scoped to one or more roles and acting as a
+   * named caller.
    *
-   * A non-empty `roles` sends a `user_attenuation` block, which makes the dev's
-   * `hexgate serve` attenuate its token to carry one `role()` fact per name for
-   * this turn. The most permissive outcome wins, so adding a role only widens.
+   * A non-empty `roles` (or a `name`) sends a `user_attenuation` block, which
+   * makes the dev's `hexgate serve` attenuate its token to carry one `role()`
+   * fact per name for this turn. The most permissive outcome wins, so adding a
+   * role only widens. `name` becomes the caller identity: serve maps the
+   * attenuation `user` to `HexgateContext.user_id`, so the agent sees it as who's
+   * acting (default `"playground"` when unset).
    */
-  function sendChat(message: string, opts?: { roles?: string[] }) {
+  function sendChat(
+    message: string,
+    opts?: { roles?: string[]; name?: string },
+  ) {
     const ws = activeSocket;
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
     const turnId = randomId();
@@ -382,9 +389,11 @@ export function usePlayground({ projectId }: Options) {
     }));
     const frame: Record<string, unknown> = { type: "chat", message };
     const roles = (opts?.roles ?? []).filter(Boolean);
-    if (roles.length) {
+    const name = opts?.name?.trim();
+    if (roles.length || name) {
       frame.user_attenuation = {
-        user: "playground",
+        // Acting identity → HexgateContext.user_id on the serve side.
+        user: name || "playground",
         roles,
         // Singular kept for one release: a pinned older `hexgate serve` reads
         // only `role`. The current one prefers `roles`.
