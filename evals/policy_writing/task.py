@@ -114,12 +114,16 @@ def policy_writing(
     cases: str | list[str] | None = None,
     timeout: int = 900,
     sandbox: str | None = None,
+    model: str | None = None,
 ) -> Task:
     """`agent`: `claude`, `reference`, `wrong_answers` or `noop`. `cases`: id
     prefixes, all cases when empty. `timeout`: seconds the agent gets. `sandbox`:
-    `claude` runs in `docker` and refuses any other; the rest default to `local`."""
+    `claude` runs in `docker` and refuses any other; the rest default to `local`.
+    `model`: Claude Code's `--model`, the subscription's default when unset."""
+    if model and agent != "claude":
+        raise ValueError(f"model is for agent=claude, not {agent!r}")
     if agent == "claude":
-        folder, solve, box = None, claude_agent(timeout), claude_sandbox(sandbox)
+        folder, solve, box = None, claude_agent(timeout, model), claude_sandbox(sandbox)
     elif agent in ANSWER_FOLDERS:
         folder = ANSWER_FOLDERS[agent]
         solve, box = our_answer(folder), sandbox or "local"
@@ -128,7 +132,7 @@ def policy_writing(
     return Task(
         dataset=samples(folder, prefixes(cases)),
         solver=solve,
-        scorer=policy_checks(),
+        scorer=policy_checks(model),
         sandbox=box,
         time_limit=timeout + SAMPLE_MARGIN,
         # An infrastructure failure errors its sample, which leaves the metrics
@@ -203,14 +207,14 @@ async def push_answer(sb: SandboxEnvironment, case: dict, folder: str) -> str:
 
 
 @solver
-def claude_agent(timeout: int):
+def claude_agent(timeout: int, model: str | None = None):
     """Claude Code with the write-policy skill, run inside the sandbox."""
 
     async def solve(state: TaskState, generate: Generate) -> TaskState:
         sb = sandbox()
         await check_sandbox_env(sb)
         await push_skill(sb)
-        stdout, failure = await run_claude(sb, state.input_text, timeout)
+        stdout, failure = await run_claude(sb, state.input_text, timeout, model)
         result, transcript = parse_stream(stdout)
         if infra := infra_error(stdout, result, failure):
             raise RuntimeError(infra)
@@ -245,11 +249,13 @@ async def push_skill(sb: SandboxEnvironment) -> None:
 
 
 async def run_claude(
-    sb: SandboxEnvironment, prompt: str, timeout: int
+    sb: SandboxEnvironment, prompt: str, timeout: int, model: str | None = None
 ) -> tuple[str, str]:
     """Claude Code's stdout, and why if the run ended without a `result` event.
     Nothing of the host's env; no retry on a timeout, it would bill again."""
     cmd = ["claude", "-p", prompt, *CLAUDE_FLAGS]
+    if model:
+        cmd += ["--model", model]
     try:
         out = await sb.exec(cmd, timeout=timeout, timeout_retry=False)
     except (TimeoutError, OutputLimitExceededError) as exc:
@@ -367,7 +373,7 @@ def model_output(model: str, result: dict | None, failure: str) -> ModelOutput:
         ),
     ]
 )
-def policy_checks():
+def policy_checks(model: str | None = None):
     """Score the files the agent left in the sandbox, on a host copy."""
 
     async def score(state: TaskState, target: Target) -> Score:
@@ -375,8 +381,10 @@ def policy_checks():
             size, pulled = await pull(sandbox(), Path(tmp))
             case, answer = CASES[state.sample_id], state.output.completion
             score = grade(case, Path(tmp), answer, size, agent_ran(state) or pulled)
-        # What Claude Code reported, for the cost report (PR 15).
+        # What Claude Code reported, for the cost report (PR 15), and the
+        # `--model` asked for (None: the subscription's default).
         score.metadata["usage"] = state.store.get("usage")
+        score.metadata["model"] = model
         return score
 
     return score

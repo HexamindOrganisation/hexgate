@@ -111,11 +111,12 @@ policy-build: ## Compile examples/example_agent/policy.yaml to a bundle under /t
 
 CASES ?= explicit_request/support_refund_cap
 EPOCHS ?= 3
+MODEL ?=
 
 .PHONY: policy-eval
-policy-eval: ## Run the policy-writing eval with Claude Code in Docker: CASES=<id prefixes> (one case by default, every run bills the Claude subscription), EPOCHS=<n> (default 3), needs CLAUDE_CODE_OAUTH_TOKEN from `claude setup-token`; results in `inspect view --log-dir evals/policy_writing/logs`
+policy-eval: ## Run the policy-writing eval with Claude Code in Docker: CASES=<id prefixes> (one case by default, every run bills the Claude subscription), EPOCHS=<n> (default 3), MODEL=<id> (Claude Code's --model, default the subscription's), needs CLAUDE_CODE_OAUTH_TOKEN from `claude setup-token`; results in `inspect view --log-dir evals/policy_writing/logs`
 	$(UV) python -m inspect_ai eval evals/policy_writing/task.py --model none -T agent=claude \
-	  -T cases=$(CASES) --epochs $(EPOCHS) --epochs-reducer mean,at_least_$(EPOCHS) --log-dir evals/policy_writing/logs
+	  -T cases=$(CASES) $(if $(MODEL),-T model=$(MODEL)) --epochs $(EPOCHS) --epochs-reducer mean,at_least_$(EPOCHS) --log-dir evals/policy_writing/logs
 
 .PHONY: policy-eval-check
 policy-eval-check: ## Run the policy-writing eval on our own answers (reference, wrong_answers, noop) for `inspect view --log-dir evals/policy_writing/logs`; asserts nothing, the pass/fail assertions live in tests/evals/test_task.py
