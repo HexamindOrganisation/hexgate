@@ -1,0 +1,31 @@
+version: 1
+
+roles:
+  default:
+    tools:
+      view_orders: { mode: allow }
+    agents:
+      billing-bot: { via: [handoff], mode: allow }
+      refund-bot: { via: [handoff], mode: allow }
+      admin-bot: { via: [handoff], mode: allow }
+
+  support:
+    tools:
+      view_orders: { mode: allow }
+      send_email: { mode: allow }
+    agents:
+      billing-bot: { via: [handoff], mode: approval_required }
+      refund-bot: { via: [handoff], mode: allow }
+      admin-bot: { via: [handoff], mode: allow }
+
+  billing:
+    tools:
+      view_orders: { mode: allow }
+      refund_order:
+        mode: allow
+        constraints:
+          - args.amount <= 1000
+    agents:
+      billing-bot: { via: [handoff], mode: allow }
+      refund-bot: { via: [handoff], mode: allow }
+      admin-bot: { via: [handoff], mode: allow }
