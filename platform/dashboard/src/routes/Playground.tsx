@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { Streamdown } from "streamdown";
 import {
   ArrowUp,
@@ -160,6 +160,10 @@ function PlaygroundLive({ projectId }: { projectId: string }) {
   // root, re-theming only this surface.
   const [name, setName] = usePersistedState("hexgate-pg-name", "");
   const [accent, setAccent] = usePersistedState("hexgate-pg-accent", "");
+  // Full-screen presentation mode (own tab, no app sidebar — see AppShell). The
+  // playground drops its breakout margins and swaps "open in tab" for a close.
+  const [params] = useSearchParams();
+  const present = params.get("present") === "1";
   const transcriptRef = useRef<HTMLDivElement>(null);
 
   // Fetch the serving agent so we know which roles are available. Roles are a
@@ -259,7 +263,12 @@ function PlaygroundLive({ projectId }: { projectId: string }) {
   const empty = state.messages.length === 0;
 
   return (
-    <div className="-mx-8 -my-6 relative flex h-screen flex-col overflow-hidden bg-background">
+    <div
+      className={cn(
+        "relative flex h-screen flex-col overflow-hidden bg-background",
+        !present && "-mx-8 -my-6",
+      )}
+    >
       <GooFilter />
 
       {/* Status + controls, mixed into the top corners over the chat. */}
@@ -281,7 +290,11 @@ function PlaygroundLive({ projectId }: { projectId: string }) {
         </div>
         {/* Top-right: presentation controls — open in a tab, theme, accent, reset. */}
         <div className="pointer-events-auto flex items-center gap-2">
-          <PresentationControls accent={accent} setAccent={setAccent} />
+          <PresentationControls
+            present={present}
+            accent={accent}
+            setAccent={setAccent}
+          />
           <button
             type="button"
             onClick={reset}
@@ -676,26 +689,47 @@ function AccentPicker({
 /** Top-right presentation controls: open in a new tab, toggle dark/light, and
  * pick a custom accent — the bits that make the playground a demo surface. */
 function PresentationControls({
+  present,
   accent,
   setAccent,
 }: {
+  present: boolean;
   accent: string;
   setAccent: (v: string) => void;
 }) {
+  const navigate = useNavigate();
   const setMode = useTheme((s) => s.setMode);
   const dark = useIsDark();
   const ctl =
     "grid size-8 place-items-center rounded-full border border-border/60 bg-card/70 text-muted-foreground backdrop-blur transition-colors hover:bg-accent hover:text-foreground";
   return (
     <>
-      <button
-        type="button"
-        onClick={() => window.open("/playground", "_blank", "noopener")}
-        title="Open the playground in a new tab"
-        className={ctl}
-      >
-        <ExternalLink className="size-3.5" />
-      </button>
+      {present ? (
+        <button
+          type="button"
+          onClick={() => {
+            // Close the presentation tab if the browser allows it (it was
+            // script-opened); otherwise just drop out of full-screen in place.
+            window.close();
+            navigate("/playground");
+          }}
+          title="Close full screen"
+          className={ctl}
+        >
+          <X className="size-3.5" />
+        </button>
+      ) : (
+        <button
+          type="button"
+          onClick={() =>
+            window.open("/playground?present=1", "_blank", "noopener")
+          }
+          title="Open full screen in a new tab"
+          className={ctl}
+        >
+          <ExternalLink className="size-3.5" />
+        </button>
+      )}
       <button
         type="button"
         onClick={() => setMode(dark ? "light" : "dark")}
