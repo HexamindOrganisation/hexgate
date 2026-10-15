@@ -25,7 +25,9 @@ class SigningKey:
         public = OKPAlgorithm.to_jwk(self.private.public_key(), as_dict=True)
         return {**public, "kid": self.kid, "use": "sig"}
 
-    def mint(self, *, kid: str | None = None, **overrides: Any) -> str:
+    def mint(
+        self, *, kid: str | None = None, typ: str = "at+jwt", **overrides: Any
+    ) -> str:
         now = int(time.time())
         claims = {
             "iss": ISSUER,
@@ -44,7 +46,7 @@ class SigningKey:
             claims,
             self.private,
             algorithm="EdDSA",
-            headers={"kid": kid or self.kid},
+            headers={"kid": kid or self.kid, "typ": typ},
         )
 
 
