@@ -36,6 +36,9 @@ a module). This module runs over a **successfully linked** bundle and reports th
 - **unknown-root** — a constraint path that no call ever sets: its root isn't
   ``args`` / ``ctx`` / ``run`` / ``agent_usage``, or it dots into the ``role`` /
   ``tool`` string. Manifest-free.
+- **negated-usage-cap** — an ``agent_usage.*`` path under an odd number of
+  ``not`` (a boundary deny counts as one). Under ``usage.on_unavailable: deny``
+  a missing value makes it true, so the cap passes. Manifest-free.
 
 :func:`analyze_policy` is the one entry point over a resolved ``PolicySet``: every
 check that applies to it, with the manifest-dependent ones gated on a manifest.
@@ -52,6 +55,7 @@ from collections.abc import Callable, Collection, Iterable, Iterator, Mapping
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Literal
 
+from hexgate.runtime.agent_usage import OnUnavailable
 from hexgate.security.constraints import (
     FACTS,
     PATH_ROOTS,
@@ -101,6 +105,7 @@ LintCode = Literal[
     "guard-divergence",
     "implicit-default",
     "link-error",
+    "negated-usage-cap",
     "no-default-role",
     "permissive-default",
     "redundant-grant",
@@ -123,6 +128,7 @@ _NOT_AN_AGENT = "not registered, and not a sub-agent any manifest names"
 _ROOT_PREFIXES = (
     ", ".join(f"{root}." for root in PATH_ROOTS[:-1]) + f" or {PATH_ROOTS[-1]}."
 )
+_AGENT_USAGE_ROOT = "agent_usage"
 
 
 @dataclass(frozen=True)
@@ -166,6 +172,7 @@ def check(
         return [PolicyLint("link-error", "error", str(exc))]
     lints = analyze(result, boundaries, capabilities, manifest=manifest)
     lints += _module_unknown_roots(boundaries, capabilities)
+    lints += _module_negated_usage_caps(boundaries, capabilities)
     return sorted(lints, key=lambda lint: SEVERITY_RANK[lint.severity])
 
 
@@ -429,6 +436,7 @@ def _project_lints(
     lints = _unused_capabilities(unused)
     # Once per module, not per cell: a module's paths don't depend on the cell.
     lints += _module_unknown_roots(boundaries, library)
+    lints += _module_negated_usage_caps(boundaries, library)
     if roles and DEFAULT_ROLE_NAME not in roles:
         lints.append(
             PolicyLint(
@@ -1183,8 +1191,8 @@ def analyze_policy(
 ) -> list[PolicyLint]:
     """Every check over a resolved policy set, most-severe first.
 
-    Manifest-free: ``guard-divergence``, the ``default``-role exposure lints and
-    ``unknown-root``. With ``manifest``: ``unknown-guard`` / ``ambiguous-guard``
+    Manifest-free: ``guard-divergence``, the ``default``-role exposure lints,
+    ``unknown-root`` and ``negated-usage-cap``. With ``manifest``: ``unknown-guard`` / ``ambiguous-guard``
     and the ``unknown-tool`` / ``unknown-arg`` / ``unknown-skill`` drift.
     ``source`` attributes the findings to the file the policy came from.
 
@@ -1196,6 +1204,7 @@ def analyze_policy(
     lints = _guard_divergence(policy_set, source=source)
     lints += check_default_role_exposure(policy_set, source=source)
     lints += _unknown_roots(policy_set, source=source)
+    lints += _negated_usage_caps(policy_set, source=source)
     if manifest is not None:
         lints += lint_guards(policy_set, manifest, source=source)
         lints += _resolved_drift(policy_set, manifest, source=source)
@@ -1424,6 +1433,95 @@ def _unknown_root_lint(
         code="unknown-root",
         severity=severity,
         message=f"a constraint{where} reads {path}: {why}",
+        source=source,
+        tier=tier,
+        role=role,
+    )
+
+
+def _negated_usage_caps(
+    policy_set: PolicySet, *, source: str | None
+) -> list[PolicyLint]:
+    """``agent_usage.*`` paths under an odd number of ``not``, as errors. Only
+    under ``on_unavailable: deny``: under ``allow`` every known path holds a
+    ledger value, so nothing is missing."""
+    if policy_set.usage_on_unavailable() is not OnUnavailable.DENY:
+        return []
+    roles = _reported_roles(policy_set)
+    carriers: dict[str, list[str]] = {}
+    for role in roles:
+        live = _live_constraints(policy_set.policy_for(role))
+        for path in _negated_usage_paths([(live, False)]):
+            carriers.setdefault(path, []).append(role)
+    out: list[PolicyLint] = []
+    for path, named in sorted(carriers.items()):
+        everywhere = len(named) == len(roles)
+        where = "" if everywhere else " in " + ", ".join(f"role {r!r}" for r in named)
+        role = named[0] if len(named) == 1 and not everywhere else None
+        out.append(
+            _negated_usage_cap_lint(
+                path, "error", where=where, role=role, source=source
+            )
+        )
+    return out
+
+
+def _module_negated_usage_caps(
+    boundaries: list[ModuleContent], capabilities: list[ModuleContent]
+) -> list[PolicyLint]:
+    """The module form of :func:`_negated_usage_caps`. A module can't set
+    ``usage:``, so the agent's fail mode is unknown here: a warning."""
+    out: list[PolicyLint] = []
+    for module, tier in _tiered(boundaries, capabilities):
+        paths = _negated_usage_paths(
+            (tp.constraints, _runs_negated(tier, tp.mode))
+            for tp in module.policy.effective_tools.values()
+        )
+        out += [
+            _negated_usage_cap_lint(path, "warning", source=module.source, tier=tier)
+            for path in sorted(paths)
+        ]
+    return out
+
+
+def _negated_usage_paths(groups: Iterable[tuple[list[str], bool]]) -> set[str]:
+    """Each ``agent_usage.*`` path read under an odd number of ``not`` over
+    ``(constraints, negated)`` groups: the uses :func:`_missing_refs` grades
+    ``error``."""
+    return {
+        path
+        for constraints, negated in groups
+        for path, severity in _missing_refs(constraints, negated, _usage_path).items()
+        if severity == "error"
+    }
+
+
+def _usage_path(path: tuple[str, ...]) -> str | None:
+    """``path`` dotted, if it reads an ``agent_usage`` value."""
+    if len(path) < 2 or path[0] != _AGENT_USAGE_ROOT:
+        return None
+    return ".".join(path)
+
+
+def _negated_usage_cap_lint(
+    path: str,
+    severity: Severity,
+    *,
+    source: str | None,
+    where: str = "",
+    role: str | None = None,
+    tier: LayerKind | None = None,
+) -> PolicyLint:
+    """One ``negated-usage-cap``."""
+    return PolicyLint(
+        code="negated-usage-cap",
+        severity=severity,
+        message=(
+            f"a constraint{where} reads {path} under an odd number of not (a "
+            "boundary deny counts as one): under usage.on_unavailable: deny a "
+            "missing value makes it true and the call passes; write the cap as "
+            f"a plain comparison, such as {path} < N"
+        ),
         source=source,
         tier=tier,
         role=role,
