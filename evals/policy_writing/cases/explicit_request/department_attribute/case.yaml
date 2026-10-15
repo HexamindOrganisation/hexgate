@@ -12,3 +12,5 @@ expect:
     - { role: billing, tool: refund_order, args: { order_id: o1, amount: 400, currency: EUR }, attributes: { department: finance }, expect: allow }
     - { role: support, tool: refund_order, args: { order_id: o1, amount: 100, currency: USD }, attributes: { department: finance }, expect: deny }
     - { role: billing, tool: refund_order, args: { order_id: o1, amount: 500, currency: USD }, attributes: { department: finance }, expect: allow }
+    - { role: billing, tool: refund_order, args: { order_id: o1, amount: 100, currency: USD }, attributes: { department: engineering }, expect: deny }
+    - { role: default, tool: refund_order, args: { order_id: o1, amount: 100, currency: USD }, attributes: { department: finance }, expect: deny }

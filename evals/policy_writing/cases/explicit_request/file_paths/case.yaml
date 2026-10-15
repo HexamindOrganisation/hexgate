@@ -14,3 +14,5 @@ expect:
     - { role: support, tool: read_file, args: { file_path: src/pkg/mod.py }, expect: allow }
     - { role: support, tool: read_file, args: { file_path: docs/api/ref.md }, expect: allow }
     - { role: support, tool: read_file, args: { file_path: src/environment.py }, expect: allow }
+    - { role: support, tool: read_file, args: { file_path: src/../etc/passwd }, expect: deny }
+    - { role: support, tool: read_file, args: { file_path: src/.env.local }, expect: deny }
