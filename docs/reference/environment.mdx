@@ -36,7 +36,7 @@ raises a key-named error when the agent is built.
 | `HEXGATE_LOG_MESSAGES` | `0` (or `false` / `no` / `off`) switches off LLM message logging — the prompt delta and completion of every model call, exported under scope `hexgate.messages` — while decisions, usage and bans keep flowing. **Default on**: an audit log a customer has to discover and enable is not there when an incident needs it. Content is redacted and byte-capped by the SDK before export, retained 180 days, and stays under your controllership: it is your data, processed on your behalf. |
 | `HEXGATE_BIND_AGENTS` | Truthy value opts a code-built agent into the platform path at construction time (requires `HEXGATE_API_KEY` — the platform path is otherwise opt-in). |
 | `HEXGATE_PROJECT_ID` | Project shown next to the key (`project=…`). Display only: by default it is read from the key itself. |
-| `HEXGATE_PUBLIC_KEY` | The platform's public key (base64url, 32 bytes), used to verify `HEXGATE_API_KEY` before it is sent. Unset, the SDK fetches it from `GET /v1/.well-known/keys` on first use. |
+| `HEXGATE_PUBLIC_KEY` | The platform's public key (base64url, 32 bytes), used to verify `HEXGATE_API_KEY` before it is sent and the signature of every policy bundle the platform delivers. A wrong or rotated key shows up as bundle signature failures. Unset, the SDK fetches it from `GET /v1/.well-known/keys` on first use. |
 
 The key and the URL are coupled: a `fty_live_…` key only verifies against the
 platform instance that minted it.

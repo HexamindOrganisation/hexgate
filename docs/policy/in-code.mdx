@@ -107,18 +107,19 @@ policy = AgentPolicy.model_validate({
 })
 ```
 
-- A pattern matches the whole path from its start. `*` stays within one folder
-  and `**` spans any number of them: `docs/*.md` matches `docs/intro.md` but not
-  `docs/sub/x.md` or `other/docs/intro.md`, and `notes/**` matches everything
-  under `notes/`, plus `notes` itself so `glob` and `grep` can search it.
-- `denied_paths` wins. A path matching it is denied even if `allowed_paths`
-  matches too.
-- With `allowed_paths` set, anything outside it is denied.
-- `.` and `..` are collapsed before matching, and a path that climbs out with `..`
-  (`../docs/x.md`) is always denied.
-- A relative pattern never matches an absolute path. Write `/tmp/**` to scope
-  absolute paths.
+- `tools.<name>.file_scope.denied_paths` wins: a path matching it is denied even
+  if `file_scope.allowed_paths` matches too.
+- With `file_scope.allowed_paths` set, a path that matches none of its patterns
+  is denied.
 - A call without the path argument is denied.
+
+<Warning>
+`file_scope` is not a security boundary yet. Its path matching is being reworked:
+today some spellings of a path, such as `../`, absolute paths or
+symlinks, can reach files the patterns were meant to exclude. Use it to steer an
+agent away from files, and rely on the [workspace sandbox](/concepts/sandbox) to
+contain it.
+</Warning>
 
 A denied call names the scope in its hint:
 

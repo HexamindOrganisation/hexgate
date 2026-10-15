@@ -23,6 +23,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
+import yaml
 from pydantic import BaseModel
 
 import hexgate
@@ -35,10 +36,45 @@ DOCS = REPO / "docs"
 
 # What the docs don't cover yet. Remove an entry when you document it.
 KNOWN_POLICY_KEYS = {
-    # Authoring-grammar keys (hexgate/security/compose/grammar.py), explained
-    # only in docs/internals/policy-modules.md so far.
-    "as",
+    # The authoring grammar (hexgate/security/compose/grammar.py): boundary,
+    # reach, mcp, import/export and the agents/roles bodies. Explained only in
+    # docs/internals/policy-modules.md so far.
+    "agents.admission",
+    "agents.boundary",
+    "agents.constraints",
+    "agents.guards",
+    "agents.import",
+    "agents.mcp",
+    "agents.reach",
+    "agents.roles",
+    "agents.skills",
+    "agents.tools",
+    "agents.usage",
+    "boundary",
+    "boundary.admission",
+    "boundary.reach",
+    "boundary.skills",
+    "boundary.tools",
+    "export",
+    "export.admission",
+    "export.boundary",
+    "export.import",
+    "export.mcp",
+    "export.reach",
+    "export.skills",
+    "export.tools",
     "import",
+    "mcp",
+    "mcp.constraints",
+    "mcp.mode",
+    "reach",
+    "reach.as",
+    "reach.constraints",
+    "reach.mode",
+    "roles.boundary",
+    "roles.import",
+    "roles.mcp",
+    "roles.reach",
 }
 KNOWN_COMMANDS: set[str] = set()
 KNOWN_FLAGS: set[str] = set()
@@ -52,8 +88,9 @@ KNOWN_ENV_VARS = {
 }
 
 ENV_VAR = re.compile(r"HEXGATE_[A-Z0-9_]*[A-Z0-9]")
-HEADING = re.compile(r"#{1,6} ")
+HEADING = re.compile(r"(#{1,6}) ")
 FENCE = "```"
+YAML_BLOCK = re.compile(r"```ya?ml[^\n]*\n(.*?)```", re.DOTALL)
 
 
 # ---- reading the docs ------------------------------------------------------
@@ -63,7 +100,12 @@ def _pages(subdir: str = "") -> list[Path]:
     return sorted(
         p
         for p in (DOCS / subdir).rglob("*.mdx")
-        if not any(part == "node_modules" or part.startswith(".") for part in p.parts)
+        # Relative parts only: a checkout under a dot folder (.claude/worktrees/…)
+        # must still see its pages.
+        if not any(
+            part == "node_modules" or part.startswith(".")
+            for part in p.relative_to(DOCS).parts
+        )
     )
 
 
@@ -97,17 +139,23 @@ def _code_documented(name: str, text: str) -> bool:
 
 
 def _sections(text: str) -> Iterator[tuple[str, str]]:
-    """``(heading, body)`` per heading, ignoring ``#`` lines inside code fences."""
-    heading, body, in_fence = "", [], False
-    for line in text.splitlines():
+    """``(heading, body)`` per heading, ignoring ``#`` lines inside code fences.
+
+    A section runs to the next heading of the same or a higher level, so a
+    ``###`` inside a ``##`` belongs to both."""
+    lines = text.splitlines()
+    headings: list[tuple[int, int]] = []  # (line index, level)
+    in_fence = False
+    for index, line in enumerate(lines):
         if line.lstrip().startswith(FENCE):
             in_fence = not in_fence
-        if not in_fence and HEADING.match(line):
-            yield heading, "\n".join(body)
-            heading, body = line, []
-        else:
-            body.append(line)
-    yield heading, "\n".join(body)
+        elif not in_fence and (match := HEADING.match(line)):
+            headings.append((index, len(match.group(1))))
+    for position, (start, level) in enumerate(headings):
+        end = next(
+            (i for i, lvl in headings[position + 1 :] if lvl <= level), len(lines)
+        )
+        yield lines[start], "\n".join(lines[start + 1 : end])
 
 
 def _command_lines(text: str) -> list[str]:
@@ -118,27 +166,77 @@ def _command_lines(text: str) -> list[str]:
 # ---- what the code exposes -------------------------------------------------
 
 
-def _models(tp: object, seen: set[type]) -> Iterator[type[BaseModel]]:
-    """Every pydantic model reachable from ``tp``, through unions, lists and dicts."""
+def _keys_under(
+    tp: object, parent: str | None, seen: set[tuple[type, str | None]], out: set[str]
+) -> None:
+    """Add ``parent.key`` for every field of every model reachable from ``tp``
+    (through unions, lists and dicts), or the bare ``key`` at the top level.
+
+    ``parent`` is the nearest named field above, skipping the name-maps in
+    between: ``mode`` under ``tools: {refund: {mode: …}}`` is ``tools.mode``."""
     for arg in typing.get_args(tp):
-        yield from _models(arg, seen)
-    if isinstance(tp, type) and not isinstance(tp, types.GenericAlias):
-        if issubclass(tp, BaseModel) and tp not in seen:
-            seen.add(tp)
-            yield tp
-            for field in tp.model_fields.values():
-                yield from _models(field.annotation, seen)
+        _keys_under(arg, parent, seen, out)
+    if not (isinstance(tp, type) and not isinstance(tp, types.GenericAlias)):
+        return
+    if not issubclass(tp, BaseModel) or (tp, parent) in seen:
+        return
+    seen.add((tp, parent))
+    for name, field in tp.model_fields.items():
+        key = field.alias or name
+        out.add(f"{parent}.{key}" if parent else key)
+        _keys_under(field.annotation, key, seen, out)
 
 
 def _policy_keys() -> set[str]:
-    """Keys of the resolved policy model and of the authoring grammar."""
-    seen: set[type] = set()
-    models = [*_models(AgentPolicy, seen), *_models(Entry, seen)]
-    return {
-        field.alias or name
-        for model in models
-        for name, field in model.model_fields.items()
-    }
+    """Keys of the resolved policy model and of the authoring grammar, each with
+    the field it sits under: a nested ``mode`` must be documented as such."""
+    out: set[str] = set()
+    seen: set[tuple[type, str | None]] = set()
+    _keys_under(AgentPolicy, None, seen, out)
+    _keys_under(Entry, None, seen, out)
+    return out
+
+
+def _yaml_keys() -> set[tuple[tuple[str, ...], str]]:
+    """``(ancestors, key)`` for every key in every YAML example in the docs."""
+    found: set[tuple[tuple[str, ...], str]] = set()
+
+    def walk(node: object, ancestors: tuple[str, ...]) -> None:
+        if isinstance(node, dict):
+            for key, value in node.items():
+                found.add((ancestors, str(key)))
+                walk(value, (*ancestors, str(key)))
+        elif isinstance(node, list):
+            for value in node:
+                walk(value, ancestors)
+
+    for page in _pages():
+        for block in YAML_BLOCK.findall(page.read_text(encoding="utf-8")):
+            try:
+                walk(yaml.safe_load(block), ())
+            except yaml.YAMLError:
+                continue
+    return found
+
+
+def _key_corpus() -> tuple[set[tuple[tuple[str, ...], str]], str]:
+    return _yaml_keys(), _text()
+
+
+def _key_documented(
+    item: str, corpus: tuple[set[tuple[tuple[str, ...], str]], str]
+) -> bool:
+    """A top-level key counts as a top-level YAML key or as `` `key` ``. A nested
+    one counts inside a YAML example under its parent, or written out as
+    ``parent.key`` (``parent.<name>.key`` through a name-map)."""
+    yaml_keys, text = corpus
+    parent, _, key = item.rpartition(".")
+    if not parent:
+        return ((), key) in yaml_keys or f"`{key}`" in text
+    if any(k == key and parent in ancestors for ancestors, k in yaml_keys):
+        return True
+    path = rf"{re.escape(parent)}\.(?:[\w*<>-]+\.)?{re.escape(key)}(?![\w-])"
+    return re.search(path, text) is not None
 
 
 def _subcommands(
@@ -186,7 +284,7 @@ def _flag_corpus() -> dict[str, str]:
 
     A top-level command (``serve``) has its own page, so the whole page counts. A
     subcommand (``policy check``) shares its page with its siblings, so only the
-    sections whose heading names it (`` `check` ``) and the command lines that
+    sections whose heading opens with it (`` `check` ``) and the command lines that
     run it (``hexgate policy check …``) count: ``test --role`` must not document
     ``check --role``.
     """
@@ -202,12 +300,10 @@ def _flag_corpus() -> dict[str, str]:
             corpus[cmd] = text
             continue
         sub = rest[-1]
-        parts = [
-            body
-            for heading, body in _sections(text)
-            if _term_documented(f"`{sub}`", heading)
-            or _term_documented(f"{top} {sub}", heading)
-        ]
+        # Only a heading that opens with the subcommand as code (`` ### `check` ``)
+        # is that subcommand's: one that merely mentions it covers several.
+        own = re.compile(rf"#+ `(?:{re.escape(top)} )?{re.escape(sub)}`")
+        parts = [body for heading, body in _sections(text) if own.match(heading)]
         parts += [
             line
             for line in _command_lines(text)
@@ -234,7 +330,7 @@ class Check:
 
 
 CHECKS = {
-    "policy keys": Check(_policy_keys, _text, _key_documented, KNOWN_POLICY_KEYS),
+    "policy keys": Check(_policy_keys, _key_corpus, _key_documented, KNOWN_POLICY_KEYS),
     "CLI commands": Check(
         _commands,
         lambda: _text("cli"),

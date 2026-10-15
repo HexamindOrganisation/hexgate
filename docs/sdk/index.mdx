@@ -90,7 +90,7 @@ governs which sub-agents an agent may reach.
 
 | Symbol | What it does |
 |---|---|
-| `HexgateConfig.from_env(project_id=None, base_url=None, api_key=None, public_key=None)` | Resolve the platform connection from arguments, falling back to `HEXGATE_API_KEY`, `HEXGATE_API_URL`, `HEXGATE_PROJECT_ID` and `HEXGATE_PUBLIC_KEY`. Raises when no key is set. |
+| `HexgateConfig.from_env(*, project_id=None, base_url=None, api_key=None, public_key=None)` | Resolve the platform connection from arguments, falling back to `HEXGATE_API_KEY`, `HEXGATE_API_URL`, `HEXGATE_PROJECT_ID` and `HEXGATE_PUBLIC_KEY`. Raises when no key is set. |
 | `HexgateClient(config)` | HTTP client for one project and key. It verifies the key's signature before sending it. Methods: `get_agent`, `get_bans`, `get_agent_usage`. You rarely need it directly: `load_agent` and the adapters create one when `HEXGATE_API_KEY` is set. |
 
 ## Built-in tools
