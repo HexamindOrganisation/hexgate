@@ -97,8 +97,9 @@ hexgate policy validate policy.yaml --max-severity warning   # non-zero on eithe
 runtime builds one guard pipeline per agent.
 
 It flags a constraint path no call ever sets (`unknown-root`): one that doesn't
-start with `args.`, `ctx.` or `run.`, such as `user.department == "finance"`, or
-one that dots into `role` or `tool`, which are plain strings. The path is always
+start with `args.`, `ctx.`, `run.` or `agent_usage.`, such as
+`user.department == "finance"`, or one that dots into `role` or `tool`, which are
+plain strings. The path is always
 missing, so the comparison is always false: a `warning`, or an `error` under an
 odd number of `not`, where it is always true and the fence never fires.
 

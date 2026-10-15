@@ -34,8 +34,8 @@ a module). This module runs over a **successfully linked** bundle and reports th
 - **unknown-skill** — a ``skills:`` rule names a skill the manifest doesn't
   declare. Only checked when a manifest is supplied and lists the skills.
 - **unknown-root** — a constraint path that no call ever sets: its root isn't
-  ``args`` / ``ctx`` / ``run``, or it dots into the ``role`` / ``tool`` string.
-  Manifest-free.
+  ``args`` / ``ctx`` / ``run`` / ``agent_usage``, or it dots into the ``role`` /
+  ``tool`` string. Manifest-free.
 
 :func:`analyze_policy` is the one entry point over a resolved ``PolicySet``: every
 check that applies to it, with the manifest-dependent ones gated on a manifest.
