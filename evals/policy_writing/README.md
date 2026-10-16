@@ -233,14 +233,15 @@ make policy-eval CASES=explicit_request/support_refund_cap   # one case, 3 epoch
 make policy-eval EPOCHS=1                # quick check: one epoch, reducer mean,at_least_1
 ```
 
-At most `MAX_SANDBOXES` (default 4) samples run at once: each sandbox is a full Claude Code, and more than about four on a laptop makes every case time out. An empty `MAX_SANDBOXES=` falls back to Inspect's default.
-
 Of your environment only that token enters the container; the task refuses one
 holding `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN`: Claude Code prefers either
 over the subscription token and would silently bill the key per token.
 
-The model is the subscription's default, not set by the task; each score's
-`usage.modelUsage` in the log records which one ran.
+The model is the subscription's default unless `MODEL=<id>` (`-T model=<id>`)
+passes Claude Code a `--model`; each score's `model` records what was asked
+for, and its `usage.modelUsage` which one ran.
+
+At most `MAX_SANDBOXES` (default 4) samples run at once: each sandbox is a full Claude Code, and more than about four on a laptop makes every case time out. An empty `MAX_SANDBOXES=` falls back to Inspect's default.
 
 ## Adding a case
 

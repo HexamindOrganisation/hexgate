@@ -1259,7 +1259,7 @@ def test_when_a_constraint_path_has_no_root_then_unknown_root(constraint, path):
         (
             "warning",
             f"a constraint reads {path}: no call sets it. A path starts with "
-            "args., ctx. or run., and role and tool are plain strings",
+            "args., ctx., run. or agent_usage., and role and tool are plain strings",
         )
     ]
 
@@ -1273,6 +1273,7 @@ def test_when_constraint_paths_use_a_root_then_no_unknown_root():
                 "constraints": [
                     "args.amount < 5",
                     'ctx.department == "finance"',
+                    "agent_usage.invocations_1h < 100",
                     'role == "admin"',
                     'tool != "x"',
                     "args.amount <= consts.cap",
@@ -1333,8 +1334,75 @@ def test_path_roots_match_what_check_constraints_sets():
     for root in PATH_ROOTS:
         # Raises if <root>.x is missing from the evaluation context.
         check_constraints(
-            [f"{root}.x == 1"], {"x": 1}, "t", attributes={"x": 1}, run={"x": 1}
+            [f"{root}.x == 1"],
+            {"x": 1},
+            "t",
+            attributes={"x": 1},
+            run={"x": 1},
+            agent_usage={"x": 1},
         )
+
+
+def test_when_a_module_reads_agent_usage_then_no_unknown_root():
+    boundary = _mod("b", "boundary", {"refund": _deny(["agent_usage.denials_5m >= 5"])})
+    cap = _mod(
+        "c", "capability", {"refund": _allow(["agent_usage.invocations_1h < 100"])}
+    )
+    assert [
+        lint for lint in check([boundary], [cap]) if lint.code == "unknown-root"
+    ] == []
+
+
+def _negated_usage_caps(lints):
+    return [
+        (lint.severity, lint.message)
+        for lint in lints
+        if lint.code == "negated-usage-cap"
+    ]
+
+
+def test_when_a_boundary_denies_on_agent_usage_then_negated_usage_cap_warning():
+    boundary = _mod("b", "boundary", {"refund": _deny(["agent_usage.denials_5m >= 5"])})
+    cap = _mod("c", "capability", {"refund": _allow()})
+    assert _negated_usage_caps(check([boundary], [cap])) == [
+        (
+            "warning",
+            "a constraint reads agent_usage.denials_5m under an odd number of not "
+            "(a boundary deny counts as one): under usage.on_unavailable: deny a "
+            "missing value makes it true and the call passes; write the cap as a "
+            "plain comparison, such as agent_usage.denials_5m < N",
+        )
+    ]
+
+
+@pytest.mark.parametrize(
+    "constraint",
+    ["agent_usage.invocations_1h < 100", "not not (agent_usage.invocations_1h >= 100)"],
+)
+def test_when_a_module_caps_agent_usage_plainly_then_no_negated_usage_cap(constraint):
+    boundary = _mod("b", "boundary", {"refund": _allow([constraint])})
+    cap = _mod("c", "capability", {"refund": _allow([constraint])})
+    assert _negated_usage_caps(check([boundary], [cap])) == []
+
+
+def _usage_cap_doc(constraint, usage):
+    doc = {"tools": {"refund": {"mode": "allow", "constraints": [constraint]}}}
+    return doc if usage is None else {**doc, "usage": usage}
+
+
+@pytest.mark.parametrize(
+    ("constraint", "usage", "expected"),
+    [
+        ("not (agent_usage.denials_5m >= 5)", {"on_unavailable": "deny"}, ["error"]),
+        ("not (agent_usage.denials_5m >= 5)", {"on_unavailable": "allow"}, []),
+        ("not (agent_usage.denials_5m >= 5)", None, []),
+        ("agent_usage.denials_5m < 5", {"on_unavailable": "deny"}, []),
+        ("not not (agent_usage.denials_5m >= 5)", {"on_unavailable": "deny"}, []),
+    ],
+)
+def test_negated_usage_cap_is_an_error_only_under_deny(constraint, usage, expected):
+    ps = load_policy_set_from_dict(_usage_cap_doc(constraint, usage))
+    assert [s for s, _ in _negated_usage_caps(analyze_policy(ps))] == expected
 
 
 def test_when_a_default_constraint_has_an_unknown_root_then_unknown_root():
@@ -1879,6 +1947,20 @@ def test_when_a_module_has_an_unknown_root_then_check_project_reports_it_once():
     assert [(lint.code, lint.role, lint.agent) for lint in lints] == [
         ("unknown-root", None, None)
     ]
+
+
+def test_when_a_boundary_denies_on_agent_usage_then_check_project_reports_it_once():
+    org = _mod("org", "boundary", {"refund": _deny(["agent_usage.denials_5m >= 5"])})
+    team = _mod("team", "capability", {"refund": _allow()})
+    roles = _matrix(**{"*": ["team"], "billing_bot": ["team"]})
+
+    lints = check_project([org], [team], roles)
+
+    assert [
+        (lint.severity, lint.role, lint.agent)
+        for lint in lints
+        if lint.code == "negated-usage-cap"
+    ] == [("warning", None, None)]
 
 
 def test_when_some_agents_tools_are_unknown_then_gate_args_are_still_checked():

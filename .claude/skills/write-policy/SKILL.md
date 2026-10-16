@@ -37,11 +37,10 @@ and prefer them over this file if they disagree:
    Never invent a tool or argument name. A typo'd tool is silently default-denied, and a typo'd arg fails closed. If a name is unknown, ask, or state the assumption explicitly. If the agent's manifest JSON is available, pass it to `validate` (step 4), which flags tool, skill and argument names the agent doesn't have.
 2. **Restate the intent as a decision table** before writing YAML. List role × tool × condition → ALLOW / DENY / APPROVAL_REQUIRED, plus what happens to anything unlisted. Surface every ambiguity here, e.g. "refunds up to 500 — inclusive? which currency?".
 3. **Write the YAML.** Start deny-by-default and grant the minimum. Put each constraint at the narrowest scope that works (see *Where constraints live*).
-4. **Validate** until clean, except for one known false positive:
+4. **Validate** until clean:
    ```bash
    uv run hexgate policy validate <file> --max-severity warning [--manifest m.json]
    ```
-   The analyzer does not know the `agent_usage` root yet, so every `agent_usage.*` path raises an `unknown-root` warning and the run exits 1. Ignore that one lint when the path is a valid `<metric>_<window>` (see *Constraint grammar*); never delete or reword a correct cap to silence it. Treat every other lint as real, including `unknown-root` on any other path, and say in the report that this warning was expected.
    If `uv` fails building `biscuit-python` on Python 3.14, add `--python 3.13`.
    For a module tree, use `uv run hexgate policy check --dir <root> [--manifest m.json]` and `uv run hexgate policy resolve --dir <root>`.
 5. **Prove it.** Turn every row of the decision table into a `policy test` run, including the negative cases and the boundary values (`== limit`, `limit + 1`, missing arg, wrong type):
@@ -151,5 +150,5 @@ Always include a host clause. For subdomains, use `endswith(args.host, ".example
 - **`file_scope`.** It is rejected by the WASM/Rego build, which is what production uses. Prefer constraints: `startswith(args.file_path, "src/")`, or `every(args.paths, startswith(., "src/"))`.
 - **Strict types.** `true` is not `1`. A number compared against a string fails closed. A missing field fails closed.
 - **Rate limits.** Per-window caps exist as `agent_usage.*`, but they are soft. Whenever the requester asks for "at most N" across runs, say so. Nothing in a policy enforces that exactly: `run.*` resets every run (`run.tool_calls < 3` at 10 runs/hour admits 30), so offer it only as a per-run bound. For a hard cross-run limit, offer `approval_required` (a person decides each call) or a limiter in the downstream service.
-- **Negated usage caps.** Under `on_unavailable: deny`, `not (agent_usage.x >= N)` passes on a missing value; write `agent_usage.x < N`.
+- **Negated usage caps.** Under `on_unavailable: deny`, `not (agent_usage.x >= N)` passes on a missing value, and so does a boundary `deny` on `agent_usage.x >= N`, which runs under `not`; write `agent_usage.x < N` in a grant. `validate` flags both as `negated-usage-cap`.
 - **Trust.** `ctx.*` and `role` are only as trustworthy as the server code that sets them. Mention this whenever a grant hinges on them.
