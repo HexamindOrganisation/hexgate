@@ -1,0 +1,18 @@
+# Native Orchestrate agent that delegates to the Hexgate bridge. External agents
+# can only be collaborators of a native agent, so this is what users chat with.
+# Field reference: https://developer.watson-orchestrate.ibm.com/agents/build_agent
+#
+#   orchestrate agents import -f router_agent.yaml   # after external_agent.yaml
+spec_version: v1
+kind: native
+name: hexgate_router
+llm: groq/openai/gpt-oss-120b
+style: react_core
+description: |
+  Entry point for DevOps requests; delegates them to the Hexgate DevOps agent.
+instructions: |
+  For any request about service logs, restarting services, or scaling
+  deployments, delegate to hexgate_devops_agent and relay its answer verbatim,
+  including any message saying an action was blocked by policy.
+collaborators:
+  - hexgate_devops_agent
