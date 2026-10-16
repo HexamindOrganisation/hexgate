@@ -71,7 +71,8 @@ def platform_of(
 ) -> tuple[str | None, str | None]:
     """The key and base URL to reach the platform with: the client's when there is
     one, so usage reads, audit and run events go where the surface's policy came
-    from."""
+    from. ``HEXGATE_OTLP_ENDPOINT`` still overrides the base URL for span export
+    (see :func:`resolve_otlp_endpoint`)."""
     if client is None:
         return api_key, None
     return client.config.api_key, client.config.base_url

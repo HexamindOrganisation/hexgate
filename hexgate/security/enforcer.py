@@ -333,7 +333,8 @@ def build_enforcer(
 
     ``client`` is the surface's platform client. When given, its key and base URL
     win over ``api_key`` for both the audit sender and the usage source, which
-    reuses the client (no second key check). Without one, ``api_key`` falls back to
+    reuses the client (no second key check); ``HEXGATE_OTLP_ENDPOINT`` still
+    overrides where audit spans are exported. Without one, ``api_key`` falls back to
     ``HEXGATE_API_KEY`` and the URL to ``HEXGATE_API_URL``; audit stays inert and
     usage stays local when no key resolves. ``decision_observer`` is the
     local-process decision hook (see :class:`PolicyEnforcer`).
