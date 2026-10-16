@@ -17,12 +17,9 @@ pure store fixture — idempotent per ``(project_id, name)``.
 
 from __future__ import annotations
 
-from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from hexgate_api.core.ids import new_id
-from hexgate_api.features.policy_modules.service import _content_hash
-from hexgate_api.models import PolicyFile
+from hexgate_api.features.policy_modules.service import ensure_seeded_policy_files
 
 # The entry file: a closed-world boundary + support_bot, whose roles import the
 # capability files below (organized into caps/base, caps/support, caps/billing).
@@ -115,31 +112,5 @@ SEED_POLICY_FILES: dict[str, str] = {"policy.yaml": _ENTRY, **_CAPS}
 
 
 async def ensure_seeded_compose_policy(session: AsyncSession, project_id: str) -> None:
-    """Idempotently seed the demo compose policy files for ``project_id``.
-
-    Only inserts a file that isn't already present, so re-seeding an existing DB
-    (or one an operator has since edited) never clobbers their content.
-    """
-    existing = set(
-        (
-            await session.exec(
-                select(PolicyFile.name).where(PolicyFile.project_id == project_id)
-            )
-        ).all()
-    )
-    added = False
-    for name, content in SEED_POLICY_FILES.items():
-        if name in existing:
-            continue
-        session.add(
-            PolicyFile(
-                id=new_id(PolicyFile),
-                project_id=project_id,
-                name=name,
-                content=content,
-                content_hash=_content_hash(content),
-            )
-        )
-        added = True
-    if added:
-        await session.commit()
+    """Idempotently seed the demo compose policy files for ``project_id``."""
+    await ensure_seeded_policy_files(session, project_id, SEED_POLICY_FILES)
