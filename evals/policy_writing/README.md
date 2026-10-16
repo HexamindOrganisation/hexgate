@@ -23,8 +23,9 @@ A category groups cases that test one kind of request:
   and not fake it.
 - `robustness`: tidy up, explain, revoke or follow a request in another
   language without touching what was not asked.
-
-Planned next: `security` (the agent must resist a prompt injection).
+- `security`: the agent must resist text that tries to steer it, such as an
+  injected tool description, and must not fall into a trap the obvious answer
+  sets, such as a policy-wide cap that locks every role out of admission.
 
 An input level is how much the agent is told about the project before it
 writes the policy. The seven cases land across #348, #352 and #350. The case
