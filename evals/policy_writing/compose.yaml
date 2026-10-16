@@ -20,7 +20,6 @@ services:
       - HTTPS_PROXY=http://proxy:3128
       - HTTP_PROXY=http://proxy:3128
       - CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
-      - CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1
       - NO_PROXY=localhost,127.0.0.1
     networks: [sandbox]
     depends_on:

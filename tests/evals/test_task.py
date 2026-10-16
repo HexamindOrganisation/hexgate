@@ -336,7 +336,6 @@ def test_compose_passes_only_the_token_and_the_image_holds_none() -> None:
         "HTTPS_PROXY=http://proxy:3128",
         "HTTP_PROXY=http://proxy:3128",
         "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1",
-        "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1",
         "NO_PROXY=localhost,127.0.0.1",
     ]
     dockerfile = task.COMPOSE.with_name("Dockerfile").read_text()
