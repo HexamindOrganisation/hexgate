@@ -12,6 +12,10 @@ client patched over ``hexgate.cloud.client.HexgateClient``.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from types import ModuleType
+from typing import Any
+
 import pytest
 from langchain_core.tools import tool
 
@@ -254,26 +258,20 @@ def test_bind_wraps_tools_and_attaches_source_and_client(
 
 def test_bind_builds_the_enforcer_from_the_bound_client(
     monkeypatch: pytest.MonkeyPatch,
+    enforcer_clients: Callable[[ModuleType], list[Any]],
 ) -> None:
     """The client that fetched the policy also builds the enforcer, so usage
     reads and audit go to the same platform, and it is the one attached."""
     fc = _FakeClient()
     fc.serve({"policy_yaml": _POLICY_YAML}, etag='"hash-a"')
     _patch_platform(monkeypatch, fc)
-    seen: list[object] = []
-    real_build_enforcer = enforcer_mod.build_enforcer
-
-    def spy_build_enforcer(*args, **kwargs):
-        seen.append(kwargs.get("client"))
-        return real_build_enforcer(*args, **kwargs)
-
-    monkeypatch.setattr(enforcer_mod, "build_enforcer", spy_build_enforcer)
+    clients = enforcer_clients(enforcer_mod)
 
     agent, _ = factory.create_agent(
         model="openai:gpt-5.4", tools=[echo], name="support-bot"
     )
 
-    assert seen == [fc]
+    assert clients == [fc]
     assert agent.hexgate_client is fc
 
 

@@ -20,6 +20,7 @@ from hexgate.runtime import run_facts as run_facts_mod
 from hexgate.runtime.context import get_current_context
 from hexgate.security.policy_set import load_policy_set_from_dict
 from hexgate.tracing import usage as tracing_usage_mod
+from tests.agents.helpers import run_once
 
 
 class FakeAgent:
@@ -700,7 +701,7 @@ async def test_run_start_follows_the_attached_client(
     if attached:
         agent.hexgate_client = _keyed_client()
 
-    await _run(agent, method)
+    await run_once(agent, method)
 
     assert keys == [_EXPLICIT_KEY if attached else None]
 
@@ -722,14 +723,6 @@ class _RunFactsRecordingGraph:
         yield {"event": "one"}
 
 
-async def _run(agent: HexgateAgent, method: str) -> None:
-    if method == "ainvoke":
-        await agent.ainvoke({"messages": []}, config={})
-        return
-    async for _ in agent.astream_events({"messages": []}, config={}, version="v2"):
-        pass
-
-
 @pytest.mark.asyncio
 @pytest.mark.parametrize("method", ["ainvoke", "astream_events"])
 @pytest.mark.parametrize(
@@ -742,7 +735,7 @@ async def test_run_scope_uses_canonical_agent_name(
     graph = _RunFactsRecordingGraph()
     agent, _ = _make_hexgate_agent(name=name, graph=graph)
 
-    await _run(agent, method)
+    await run_once(agent, method)
 
     assert graph.agents == [expected]
 

@@ -10,7 +10,8 @@ proxy's per-call refresh.
 from __future__ import annotations
 
 import logging
-from types import SimpleNamespace
+from collections.abc import Callable
+from types import ModuleType, SimpleNamespace
 from typing import Any
 
 import pytest
@@ -215,15 +216,11 @@ def test_wrap_attaches_binding_with_audited_enforcer(
 
 def test_wrap_shares_one_client_across_policy_and_ban_resolvers(
     monkeypatch: pytest.MonkeyPatch,
+    enforcer_clients: Callable[[ModuleType], list[Any]],
 ) -> None:
     """One HexgateClient is threaded into both resolvers and the enforcer (no
     duplicate verify, and usage and audit follow the policy's platform)."""
     seen: dict[str, Any] = {}
-    real_build_enforcer = wrapper_mod.build_enforcer
-
-    def spy_build_enforcer(*args: Any, **kwargs: Any) -> PolicyEnforcer:
-        seen["enforcer"] = kwargs.get("client")
-        return real_build_enforcer(*args, **kwargs)
 
     def fake_resolve(name, *, api_key, client=None):
         seen["policy"] = client
@@ -235,7 +232,7 @@ def test_wrap_shares_one_client_across_policy_and_ban_resolvers(
 
     monkeypatch.setattr(wrapper_mod, "resolve_policy", fake_resolve)
     monkeypatch.setattr(wrapper_mod, "resolve_ban_gate", fake_ban)
-    monkeypatch.setattr(wrapper_mod, "build_enforcer", spy_build_enforcer)
+    clients = enforcer_clients(wrapper_mod)
 
     wrap_langchain_agent(
         agent=_FakeCompiledGraph(), tools=[_make_tool("a")], api_key="k"
@@ -243,7 +240,7 @@ def test_wrap_shares_one_client_across_policy_and_ban_resolvers(
 
     assert seen["policy"] is not None
     assert seen["policy"] is seen["ban"]
-    assert seen["enforcer"] is seen["policy"]
+    assert clients == [seen["policy"]]
 
 
 # ---------------------------------------------------------------------------

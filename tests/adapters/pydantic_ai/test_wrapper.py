@@ -7,6 +7,8 @@ a 404). These tests stub that seam so no platform is needed.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from types import ModuleType
 from typing import Any
 
 import pytest
@@ -236,11 +238,11 @@ def test_wrap_attaches_binding_sharing_the_tools_enforcer() -> None:
 
 def test_wrap_shares_one_client_across_policy_and_enforcer(
     monkeypatch: pytest.MonkeyPatch,
+    enforcer_clients: Callable[[ModuleType], list[Any]],
 ) -> None:
     """The policy resolver's client also builds the enforcer, so usage reads and
     audit follow the policy's platform."""
     seen: dict[str, Any] = {}
-    real_build_enforcer = wrapper_mod.build_enforcer
 
     def fake_resolve(
         name: str, *, api_key: str, client: object = None
@@ -248,17 +250,13 @@ def test_wrap_shares_one_client_across_policy_and_enforcer(
         seen["policy"] = client
         return ResolvedPolicy(_allow_all(["echo", "shout"]), None)
 
-    def spy_build_enforcer(*args: Any, **kwargs: Any) -> PolicyEnforcer:
-        seen["enforcer"] = kwargs.get("client")
-        return real_build_enforcer(*args, **kwargs)
-
     monkeypatch.setattr(wrapper_mod, "resolve_policy", fake_resolve)
-    monkeypatch.setattr(wrapper_mod, "build_enforcer", spy_build_enforcer)
+    clients = enforcer_clients(wrapper_mod)
 
     wrap_pydantic_agent(agent=_make_agent(), api_key="k")
 
     assert seen["policy"] is not None
-    assert seen["enforcer"] is seen["policy"]
+    assert clients == [seen["policy"]]
 
 
 @pytest.mark.asyncio

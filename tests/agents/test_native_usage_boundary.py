@@ -19,6 +19,7 @@ from hexgate.runtime.agent_usage import AGENT_USAGE_LEDGERS
 from hexgate.security import AgentPolicy, BaseToolPolicy, PolicySet
 from hexgate.security import enforcer as enforcer_mod
 from hexgate.security.policy_set import DEFAULT_ROLE_NAME, load_policy_set_from_dict
+from tests.agents.helpers import run_once
 
 _KEY = "fty_test_demo_dummybiscuit"
 _AGENT = "bot"
@@ -190,14 +191,6 @@ def _tool_cap() -> PolicySet:
     )
 
 
-async def _run(agent: factory.HexgateAgent, method: str) -> None:
-    if method == "ainvoke":
-        await agent.ainvoke({"messages": []}, config={})
-        return
-    async for _ in agent.astream_events({"messages": []}, config={}, version="v2"):
-        pass
-
-
 @pytest.mark.asyncio
 @pytest.mark.parametrize("method", ["ainvoke", "astream_events"])
 async def test_a_frozen_policy_refreshes_usage_before_the_graph_runs(
@@ -207,7 +200,7 @@ async def test_a_frozen_policy_refreshes_usage_before_the_graph_runs(
     seam user quotas rely on for native agents."""
     agent = _agent().enforce_policy(_tool_cap())
 
-    await _run(agent, method)
+    await run_once(agent, method)
 
     assert events == [("refresh", _AGENT, {_CAPPED_PATH}), _GRAPH_RAN]
 
@@ -216,7 +209,7 @@ async def test_a_frozen_policy_refreshes_usage_before_the_graph_runs(
 async def test_a_usage_free_policy_does_not_fetch(events: list[object]) -> None:
     agent = _agent().enforce_policy(_allow_echo())
 
-    await _run(agent, "ainvoke")
+    await run_once(agent, "ainvoke")
 
     assert events == [_GRAPH_RAN]
 
@@ -227,7 +220,7 @@ async def test_guards_only_agent_has_no_binding_and_runs(
 ) -> None:
     agent = _agent().enforce_policy(None, guards=[passthrough])
 
-    await _run(agent, "ainvoke")
+    await run_once(agent, "ainvoke")
 
     assert agent._binding is None
     assert events == [_GRAPH_RAN]

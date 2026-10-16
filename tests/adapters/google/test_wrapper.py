@@ -7,6 +7,8 @@ a 404). These tests stub that seam so no platform is needed.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from types import ModuleType
 from typing import Any
 
 import pytest
@@ -139,7 +141,10 @@ def test_wrap_shares_one_enforcer_between_tools_and_binding(
 
 @pytest.mark.parametrize("supplied", [True, False], ids=["client", "no-client"])
 def test_wrap_passes_the_callers_client_to_the_enforcer(
-    resolved: dict[str, Any], monkeypatch: pytest.MonkeyPatch, supplied: bool
+    resolved: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+    enforcer_clients: Callable[[ModuleType], list[Any]],
+    supplied: bool,
 ) -> None:
     """Usage reads and audit follow the caller's client; ``None`` keeps the env
     fallback."""
@@ -152,18 +157,11 @@ def test_wrap_passes_the_callers_client_to_the_enforcer(
         if supplied
         else None
     )
-    seen: dict[str, Any] = {}
-    real_build_enforcer = wrapper_mod.build_enforcer
-
-    def spy_build_enforcer(*args: Any, **kwargs: Any) -> PolicyEnforcer:
-        seen["client"] = kwargs.get("client")
-        return real_build_enforcer(*args, **kwargs)
-
-    monkeypatch.setattr(wrapper_mod, "build_enforcer", spy_build_enforcer)
+    clients = enforcer_clients(wrapper_mod)
 
     wrap_google_agent(_make_agent(), api_key="k", client=client)
 
-    assert seen["client"] is client
+    assert clients == [client]
 
 
 # ---------------------------------------------------------------------------
