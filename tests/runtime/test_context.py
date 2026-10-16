@@ -22,6 +22,7 @@ from biscuit_auth import BiscuitBuilder, KeyPair
 from hexgate.agents import factory
 from hexgate.cloud.client import HexgateClient, HexgateConfig
 from hexgate.runtime import HexgateContext, get_current_context
+from hexgate.security.usage_inputs import NO_USAGE
 
 # ---------------------------------------------------------------------------
 # Fixtures + helpers
@@ -348,9 +349,7 @@ class _RoleRecordingEngine:
         self.seen_roles: list[str | None] = []
         self._verdict = Verdict(outcome=DecisionOutcome.DENY, reason="recorded")
 
-    def evaluate(
-        self, *, role, tool, args, attributes=None, run=None, agent_usage=None
-    ):  # type: ignore[no-untyped-def]
+    def evaluate(self, *, role, tool, args, attributes=None, run=None, usage=NO_USAGE):  # type: ignore[no-untyped-def]
         self.seen_roles.append(role)
         return self._verdict
 

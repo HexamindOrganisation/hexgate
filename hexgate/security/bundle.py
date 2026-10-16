@@ -29,6 +29,7 @@ import yaml
 from hexgate.runtime.agent_usage import KNOWN_AGENT_USAGE_PATHS, OnUnavailable
 from hexgate.security.decision import Verdict
 from hexgate.security.signing import SignatureError, verify_bytes
+from hexgate.security.usage_inputs import NO_USAGE, UsageInputs
 from hexgate.security.wasm_engine import WasmPolicy
 
 _log = logging.getLogger(__name__)
@@ -301,7 +302,7 @@ class PolicyBundle:
         args: Mapping[str, Any],
         attributes: Mapping[str, Any] | None = None,
         run: Mapping[str, Any] | None = None,
-        agent_usage: Mapping[str, Any] | None = None,
+        usage: UsageInputs = NO_USAGE,
     ) -> Verdict:
         """:class:`~hexgate.security.decision.PolicyEngine` entry point.
 
@@ -309,7 +310,7 @@ class PolicyBundle:
         ``default`` role, matching the pydantic engine. ``attributes`` become
         the ``input.ctx`` document the compiled ``ctx.*`` conditions read,
         ``run`` the ``input.run`` document the ``run.*`` ones read, and
-        ``agent_usage`` the ``input.agent_usage`` one."""
+        ``usage`` the usage roots (``input.agent_usage``)."""
         from hexgate.security.policy import evaluate_tool_call_wasm
         from hexgate.security.policy_set import DEFAULT_ROLE_NAME
 
@@ -320,7 +321,7 @@ class PolicyBundle:
             dict(args),
             attributes=attributes,
             run=run,
-            agent_usage=agent_usage,
+            usage=usage,
         )
 
     def declares_admission(self) -> bool:

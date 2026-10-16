@@ -31,6 +31,7 @@ from hexgate.security.decision import (
     RunAttribution,
     combine_role_verdicts,
 )
+from hexgate.security.usage_inputs import NO_USAGE, UsageInputs
 from hexgate.security.usage_source import (
     OnUnavailable,
     PlatformUsageSource,
@@ -99,7 +100,7 @@ def _snapshot(values: Mapping[str, Any], *, deep: bool) -> dict[str, Any]:
 
 def _usage_paths_of(engine: PolicyEngine) -> frozenset[str]:
     """The engine's ``agent_usage.*`` paths; none for an engine predating the method.
-    Its ``evaluate`` must still accept the ``agent_usage`` keyword, as the protocol
+    Its ``evaluate`` must still accept the ``usage`` keyword, as the protocol
     requires: :meth:`PolicyEnforcer.decide` always passes it."""
     paths = getattr(engine, "agent_usage_paths", None)
     return paths() if paths is not None else frozenset()
@@ -234,7 +235,9 @@ class PolicyEnforcer:
         # so roles can't disagree about the agent's usage. None when the policy
         # references none.
         reading = self._usage_reading(bound, facts, run_snapshot)
-        usage_snapshot = reading.namespace if reading is not None else None
+        usage = (
+            NO_USAGE if reading is None else UsageInputs(agent_usage=reading.namespace)
+        )
 
         verdict, deciding_role = combine_role_verdicts(
             roles,
@@ -244,7 +247,7 @@ class PolicyEnforcer:
                 args=args_snapshot,
                 attributes=attrs_snapshot,
                 run=run_snapshot,
-                agent_usage=usage_snapshot,
+                usage=usage,
             ),
         )
         decision = Decision.from_verdict(

@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Final, Protocol, runtime_checkable
 
+from hexgate.security.usage_inputs import NO_USAGE, UsageInputs
 from hexgate.tracing import semconv
 
 
@@ -59,7 +60,8 @@ class PolicyEngine(Protocol):
     pydantic engine) and :class:`~hexgate.security.bundle.PolicyBundle`
     (the WASM engine). The two are interchangeable from
     :class:`~hexgate.security.enforcer.PolicyEnforcer`'s point of view —
-    it depends on this protocol, not on either concrete type.
+    it depends on this protocol, not on either concrete type. ``usage``
+    carries every cross-run usage root; an engine forwards it whole.
     """
 
     def evaluate(
@@ -70,7 +72,7 @@ class PolicyEngine(Protocol):
         args: Mapping[str, Any],
         attributes: Mapping[str, Any] | None = None,
         run: Mapping[str, Any] | None = None,
-        agent_usage: Mapping[str, Any] | None = None,
+        usage: UsageInputs = NO_USAGE,
     ) -> Verdict: ...
 
     def declares_admission(self) -> bool:

@@ -12,6 +12,7 @@ from hexgate.runtime.context import HexgateContext
 from hexgate.runtime.run_facts import run_scope
 from hexgate.security.decision import DETACHED_RUN, DecisionOutcome, Verdict
 from hexgate.security.enforcer import PolicyEnforcer
+from hexgate.security.usage_inputs import NO_USAGE, UsageInputs
 from hexgate.tracing import _senders, semconv
 
 
@@ -24,7 +25,7 @@ class _StubEngine:
         args: Mapping[str, Any],
         attributes: Mapping[str, Any] | None = None,
         run: Mapping[str, Any] | None = None,
-        agent_usage: Mapping[str, Any] | None = None,
+        usage: UsageInputs = NO_USAGE,
     ) -> Verdict:
         return Verdict(outcome=DecisionOutcome.DENY, reason="stub")
 
@@ -153,7 +154,7 @@ async def test_audited_decision_carries_the_full_role_set_and_deciding_role() ->
             args: Mapping[str, Any],
             attributes: Mapping[str, Any] | None = None,
             run: Mapping[str, Any] | None = None,
-            agent_usage: Mapping[str, Any] | None = None,
+            usage: UsageInputs = NO_USAGE,
         ) -> Verdict:
             if role == "billing":
                 return Verdict(outcome=DecisionOutcome.ALLOW)

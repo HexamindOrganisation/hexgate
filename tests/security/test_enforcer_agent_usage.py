@@ -19,6 +19,7 @@ from hexgate.runtime.run_facts import get_run_facts, run_scope
 from hexgate.security import AGENT_RUN_TOOL, DecisionOutcome, Verdict, usage_source
 from hexgate.security.enforcer import PolicyEnforcer, UsageRefresh, build_enforcer
 from hexgate.security.policy_set import PolicySet, load_policy_set_from_dict
+from hexgate.security.usage_inputs import NO_USAGE, UsageInputs
 from hexgate.security.usage_source import (
     OnUnavailable,
     PlatformUsageSource,
@@ -81,6 +82,7 @@ class _RecordingEngine:
     def __init__(self, usage_paths: frozenset[str]) -> None:
         self._usage_paths = usage_paths
         self.namespaces: list[Mapping[str, Any] | None] = []
+        self.inputs: list[UsageInputs] = []
 
     def agent_usage_paths(self) -> frozenset[str]:
         return self._usage_paths
@@ -93,9 +95,10 @@ class _RecordingEngine:
         args: Mapping[str, Any],
         attributes: Mapping[str, Any] | None = None,
         run: Mapping[str, Any] | None = None,
-        agent_usage: Mapping[str, Any] | None = None,
+        usage: UsageInputs = NO_USAGE,
     ) -> Verdict:
-        self.namespaces.append(agent_usage)
+        self.inputs.append(usage)
+        self.namespaces.append(usage.agent_usage)
         return Verdict(outcome=DecisionOutcome.DENY, reason="recorded")
 
 
@@ -106,7 +109,7 @@ class _EvaluateOnlyEngine:
         self.namespaces: list[Mapping[str, Any] | None] = []
 
     def evaluate(self, **kwargs: Any) -> Verdict:
-        self.namespaces.append(kwargs.get("agent_usage"))
+        self.namespaces.append(kwargs["usage"].agent_usage)
         return Verdict(outcome=DecisionOutcome.ALLOW)
 
 
@@ -238,6 +241,19 @@ def test_every_role_sees_the_same_namespace() -> None:
     assert first == {"tool_calls_5m": 0}
     assert len(engine.namespaces) == 3
     assert all(namespace is first for namespace in engine.namespaces)
+
+
+def test_every_role_gets_one_usage_inputs_with_no_user_usage() -> None:
+    engine = _RecordingEngine(frozenset({"tool_calls_5m"}))
+    enforcer = PolicyEnforcer(engine, agent_name=_AGENT, ledgers=_ledgers())
+
+    with HexgateContext(user_id="u", user_roles=["a", "b", "c"]).sync_scope():
+        enforcer.decide("refund", {})
+
+    first = engine.inputs[0]
+    assert len(engine.inputs) == 3
+    assert all(usage is first for usage in engine.inputs)
+    assert first.user_usage is None
 
 
 def test_an_engine_without_usage_paths_still_decides() -> None:

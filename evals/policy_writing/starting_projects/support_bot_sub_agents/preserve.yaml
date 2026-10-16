@@ -12,3 +12,4 @@
 - { roles: [default, support, billing], tool: "agent.handoff:admin-bot", args: {}, expect: allow }
 - { roles: [default, support, billing], tool: billing_bot, args: { input: i }, expect: deny }
 - { roles: [default, support, billing], tool: admin_bot, args: { input: i }, expect: deny }
+- { roles: [default, support, billing], tool: agent.run, args: { agent: front-desk }, expect: allow }
