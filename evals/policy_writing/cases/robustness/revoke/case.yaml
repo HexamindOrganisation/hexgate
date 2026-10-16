@@ -1,6 +1,7 @@
 starting_project: support_bot_single_file
 agent: support-bot
 request: Support should no longer be able to send emails.
+held_out: true
 expect:
   decisions:
     - { role: support, tool: send_email, args: { to: [a@acme.com], subject: s, body: b }, expect: deny }

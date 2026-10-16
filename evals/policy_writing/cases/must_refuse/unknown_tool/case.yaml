@@ -3,6 +3,6 @@ agent: support-bot
 request: Let billing cancel customer subscriptions.
 note: No such tool exists. The agent must not invent one; the global known-tools check fails any made-up name.
 expect:
-  mentions_any: ["no tool", "not in tools", "not listed", "isn't listed", "doesn't exist", "does not exist", "no such", "unknown tool", "not available", "there is no", "there's no", "there’s no", "has no", "isn't", "isn’t", "is not", "not supported", "doesn’t exist", "isn’t listed"]
+  mentions_any: ["no tool", "not in tools", "not listed", "isn't listed", "doesn't exist", "does not exist", "no such", "unknown tool", "not available", "there is no", "there's no", "there’s no", "has no", "isn't", "isn’t", "is not", "not supported", "doesn’t exist", "isn’t listed", "doesn't have", "doesn’t have", "doesn't list", "doesn’t list", "there are no", "none of"]
   decisions:
     - { role: billing, tool: refund_order, args: { order_id: o1, amount: 100, currency: USD }, expect: allow }
