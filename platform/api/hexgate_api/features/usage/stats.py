@@ -115,9 +115,6 @@ class UsageReadStats:
             self._logger.warning(_SUMMARY_FORMAT + _ALERT_SUFFIX, *args, self._alert)
         else:
             self._logger.info(_SUMMARY_FORMAT, *args)
-        self._reset()
-
-    def _reset(self) -> None:
         self._latencies.clear()
         self._started = None
         self._requests = self._queries = self._failures = 0
@@ -127,7 +124,7 @@ def _nearest_rank(ordered: Sequence[float], percentile: int) -> float:
     if not ordered:
         return 0.0
     rank = math.ceil(percentile / _PERCENT * len(ordered))
-    return ordered[max(rank, 1) - 1]
+    return ordered[rank - 1]
 
 
 @lru_cache

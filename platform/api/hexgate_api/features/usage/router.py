@@ -147,7 +147,9 @@ async def api_read_user_usage(
 
 
 def _check_user_id(user_id: str) -> None:
-    """Never echo the value: it is personal data (README G10)."""
+    """Never echo the value: it is personal data (README G10). Not a pydantic
+    Field constraint: that counts characters, not bytes, and its 422 echoes the
+    input."""
     if not user_id:
         raise _unprocessable(_USER_ID_EMPTY)
     if len(user_id.encode(_USER_ID_ENCODING)) > USER_ID_MAX_BYTES:
@@ -197,20 +199,22 @@ async def _read_windows(
         )
 
     started = time.perf_counter()
+    failed = True
     try:
         readout = await memo.get_or_load((project_id, key, specs), load)
+        failed = False
     except (ClickHouseError, TimeoutError) as exc:
-        stats.record(
-            latency_seconds=time.perf_counter() - started, queried=queried, failed=True
-        )
         # The class only: a ClickHouse message can quote a bound value (README G10).
         _log.warning(
             "usage read failed for %s: %s", failure_subject, type(exc).__name__
         )
         raise clickhouse_unavailable(_USAGE_UNAVAILABLE) from exc
-    stats.record(
-        latency_seconds=time.perf_counter() - started, queried=queried, failed=False
-    )
+    finally:
+        stats.record(
+            latency_seconds=time.perf_counter() - started,
+            queried=queried,
+            failed=failed,
+        )
     return UsageRead(
         as_of=readout.as_of,
         values={path: readout.values[spec] for path, spec in requested.items()},
