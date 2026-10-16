@@ -1,6 +1,7 @@
 starting_project: order_desk
 agent: order-desk
 request: "Write the policy for this agent and its roles. Roles: support_staff (front-line support staff, handling customers day to day) and manager (supervises the support staff, can do everything they can, and handles escalations). Anyone else falls back to default."
+held_out: true
 note: A manager supervises support staff, so a manager may do at least everything support staff may, and the default fallback no more than support staff.
 expect:
   decisions:

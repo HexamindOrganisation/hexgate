@@ -275,6 +275,19 @@ async def test_run_claude_happy_path() -> None:
     assert flags["--disallowedTools"] == "WebFetch,WebSearch"
     assert not {"--bare", "--append-system-prompt", "--system-prompt"} & set(cmd)
     assert kwargs == {"timeout": 7, "timeout_retry": False}  # nothing of the host's env
+    assert "--model" not in cmd  # the subscription's default
+
+
+async def test_when_a_model_is_given_then_claude_runs_on_it() -> None:
+    sb = FakeSandbox({"claude": ok("{}")})
+    await task.run_claude(sb, "x", 7, "claude-sonnet-5-5")
+    ((cmd, _),) = sb.execs
+    assert cmd[-2:] == ["--model", "claude-sonnet-5-5"]
+
+
+def test_when_a_model_is_given_to_our_answers_then_task_build_raises() -> None:
+    with pytest.raises(ValueError, match="model is for agent=claude"):
+        task.policy_writing(agent="reference", model="claude-sonnet-5-5")
 
 
 async def test_when_claude_times_out_then_the_partial_output_is_kept() -> None:
@@ -355,8 +368,9 @@ async def test_claude_agent_and_scorer_happy_path(ws: Path, monkeypatch) -> None
     monkeypatch.setattr(task, "sandbox", lambda: sb)
     monkeypatch.setattr(task, "sample_limits", SimpleNamespace)
     state = TaskState(ModelName("none/none"), CASE, 0, "/write-policy x", [])
-    state = await task.claude_agent(7)(state, None)
+    state = await task.claude_agent(7, "claude-sonnet-5-5")(state, None)
     assert {".claude/skills/write-policy/SKILL.md"} == set(sb.written)
+    assert sb.execs[-1][0][-2:] == ["--model", "claude-sonnet-5-5"]
     assert state.output.completion == "Capped at 50 USD."
     assert [m.role for m in state.messages] == [
         "user",
@@ -364,9 +378,10 @@ async def test_claude_agent_and_scorer_happy_path(ws: Path, monkeypatch) -> None
         "tool",
         "assistant",
     ]
-    score = await task.policy_checks()(state, Target(""))
+    score = await task.policy_checks("claude-sonnet-5-5")(state, Target(""))
     assert score.value == CORRECT
     assert score.metadata["usage"] == {k: RESULT[k] for k in task.USAGE_KEYS}
+    assert score.metadata["model"] == "claude-sonnet-5-5"
 
 
 # `grade` is the step after the pull: a workspace on the host, as the sandbox left it.
