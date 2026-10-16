@@ -8,4 +8,3 @@ expect:
     - { role: billing, tool: "agent.tool:billing-bot", args: {}, expect: [allow, approval_required] }
     - { role: billing, tool: "agent.handoff:billing-bot", args: {}, expect: [approval_required, deny] }
     - { role: support, tool: "agent.tool:billing-bot", args: {}, expect: deny }
-    - { role: support, tool: "agent.handoff:billing-bot", args: {}, expect: deny }

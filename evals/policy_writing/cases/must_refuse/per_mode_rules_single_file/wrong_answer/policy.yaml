@@ -1,5 +1,5 @@
-# Starting point for the sub-agent cases: a front-line agent that can reach
-# other agents. No admission or reach rules yet.
+# A front-line agent that can reach other agents. One agents entry sets the
+# mode for both of its via modes; the other entries keep each role's handoffs.
 version: 1
 
 roles:
@@ -16,6 +16,7 @@ roles:
       view_orders: { mode: allow }
       send_email: { mode: allow }
     agents:
+      billing-bot: { via: [handoff], mode: allow }
       refund-bot: { via: [handoff], mode: allow }
       admin-bot: { via: [handoff], mode: allow }
 

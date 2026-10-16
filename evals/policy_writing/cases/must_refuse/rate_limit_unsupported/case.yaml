@@ -5,4 +5,4 @@ note: Time-window limits can't be written in the policy language. The agent must
 expect:
   mentions_any: ["per hour", "time window", "time-window", "per-hour", "not supported", "cannot", "can't", "guard"]
   decisions:
-    - { role: billing, tool: refund_order, args: { order_id: o1, amount: 100, currency: USD }, expect: allow }
+    - { role: billing, tool: refund_order, args: { order_id: o1, amount: 100, currency: USD }, run_facts: { calls_of_this_tool: 10 }, expect: allow }

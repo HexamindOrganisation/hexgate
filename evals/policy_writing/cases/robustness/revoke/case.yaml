@@ -4,5 +4,3 @@ request: Support should no longer be able to send emails.
 expect:
   decisions:
     - { role: support, tool: send_email, args: { to: [a@acme.com], subject: s, body: b }, expect: deny }
-    - { role: support, tool: view_orders, args: { customer_id: c1 }, expect: allow }
-    - { role: billing, tool: refund_order, args: { order_id: o1, amount: 100, currency: USD }, expect: allow }

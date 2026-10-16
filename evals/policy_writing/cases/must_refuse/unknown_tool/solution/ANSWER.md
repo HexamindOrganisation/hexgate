@@ -1,1 +1,1 @@
-There is no tool for cancelling subscriptions in TOOLS.md, so I made no change.
+There is no tool for cancelling subscriptions in agents.json, so I made no change.
