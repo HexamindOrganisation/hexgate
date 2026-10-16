@@ -1,5 +1,8 @@
 # Inspect's sandbox for `agent=claude` (task.py checks IS_SANDBOX), on a network with no
-# route out: only the proxy reaches Anthropic's API, so no other host is reachable.
+# route out: through the proxy, direct connections reach only api.anthropic.com:443.
+# The token is still readable inside the container (env, /proc) and the API itself can
+# relay, so an injected case can still leak it that way: a credential-injecting sidecar
+# that keeps the token out of the sandbox is planned.
 # Only the token comes in from the host's env: Claude Code prefers ANTHROPIC_AUTH_TOKEN or ANTHROPIC_API_KEY when set, silently billing the key instead of the subscription.
 services:
   default:
@@ -17,12 +20,20 @@ services:
       - HTTPS_PROXY=http://proxy:3128
       - HTTP_PROXY=http://proxy:3128
       - CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
+      - CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1
+      - NO_PROXY=localhost,127.0.0.1
     networks: [sandbox]
-    depends_on: [proxy]
+    depends_on:
+      proxy:
+        condition: service_healthy
   proxy:
     image: ubuntu/squid:6.6-24.04_edge@sha256:8a3baed477e2c282ab8aa5edad442f69873246964f225c5c2ae8364b6610963c
     volumes: ["./squid.conf:/etc/squid/squid.conf:ro"]
     networks: [sandbox, egress]
+    healthcheck:
+      test: ["CMD", "bash", "-c", "</dev/tcp/127.0.0.1/3128"]
+      interval: 2s
+      retries: 10
 networks:
   sandbox:
     internal: true

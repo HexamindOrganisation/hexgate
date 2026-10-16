@@ -245,7 +245,13 @@ At most `MAX_SANDBOXES` (default 4) samples run at once: each sandbox is a full 
 
 The container has no route out: its only network is internal, and a `proxy`
 sidecar (`squid.conf`) tunnels to `api.anthropic.com:443` and refuses anything
-else, so a hijacked run can reach no host but Anthropic's API.
+else, so direct connections reach only `api.anthropic.com:443`. The token is
+still readable inside the container (env, `/proc`) and the API itself can relay,
+so an injected case can still leak it that way: a credential-injecting sidecar
+that keeps the token out of the sandbox is planned. On a Linux host, a service
+bound to `0.0.0.0` may be reachable at the internal bridge's gateway IP (Docker
+Desktop's VM hides it). The proxy logs time, status, method and host:port, never
+a URL path or query; `pytest -m integration tests/evals` probes all of this.
 
 ## Adding a case
 
