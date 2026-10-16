@@ -385,7 +385,11 @@ def answer_checks(expect: dict, answer: str) -> list[Check]:
         detail = f"found {hit}" if hit else f"none of {words}"
         checks.append(Check("answer mentions one of", bool(hit), detail))
     if words := expect.get("mentions_all"):
-        missing = [w for w in words if not _mentions(answer, w)]
+        missing = [
+            w
+            for w in words
+            if not any(_mentions(answer, a) for a in ([w] if isinstance(w, str) else w))
+        ]
         detail = f"missing {missing}" if missing else ""
         checks.append(Check("answer mentions all of", not missing, detail))
     return checks

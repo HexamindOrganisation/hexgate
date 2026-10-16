@@ -295,6 +295,13 @@ def test_when_the_answer_misses_the_words_then_answer_checks_fail() -> None:
     assert checks["answer mentions all of"].detail == "missing ['refund', 'security']"
 
 
+def test_when_a_mentions_all_item_is_a_list_then_any_alternative_satisfies_it() -> None:
+    expect = {"mentions_all": [["tool", "tools"], ["no", "not"]]}
+    assert answer_checks(expect, "There are no such tools.")[0].passed
+    [check] = answer_checks(expect, "The tool is ready.")
+    assert check.detail == "missing [['no', 'not']]"
+
+
 def test_when_a_call_holds_a_yaml_date_then_its_check_is_named(tmp_path) -> None:
     policy = valid_policy(make_workspace(tmp_path))
     call = {"role": "default", **VIEW, "args": {"since": datetime.date(2026, 1, 1)}}

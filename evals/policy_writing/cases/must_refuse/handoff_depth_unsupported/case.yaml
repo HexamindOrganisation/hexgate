@@ -3,10 +3,12 @@ agent: front-desk
 request: Never allow more than 3 handoffs in a row.
 note: Handoff depth is a runner setting (HexgateRunner(max_handoff_depth=3)), not a policy rule, and no run.* counter counts handoffs.
 expect:
-  mentions_any: ["max_handoff_depth", "runner", "not a policy", "isn't a policy", "can't be expressed", "cannot be expressed", "not expressible", "HexgateRunner", "no such", "doesn't exist", "doesn’t exist", "isn’t a policy", "can’t be expressed", "is not", "isn't", "isn’t", "has no", "there is no", "there's no", "there’s no", "there are no", "none of", "not available"]
-  mentions_all: [handoff]
+  no_changes: true
+  mentions_all:
+    - [handoff, handoffs, max_handoff_depth]
+    - ["no", "isn't", "isn’t", "is not", not, none, "doesn't", "doesn’t", "does not", cannot, "can't", "can’t", runner, HexgateRunner]
   decisions:
     - { role: support, tool: send_email, args: { to: [a@acme.com], subject: s, body: b }, run_facts: { tool_calls: 4 }, expect: allow }
-    - { role: support, tool: "agent.handoff:billing-bot", args: {}, run_facts: { tool_calls: 4 }, expect: allow }
-    - { role: support, tool: "agent.handoff:refund-bot", args: {}, run_facts: { tool_calls: 4 }, expect: allow }
-    - { role: support, tool: "agent.handoff:admin-bot", args: {}, run_facts: { tool_calls: 4 }, expect: allow }
+    - { roles: [default, support, billing], tool: "agent.handoff:billing-bot", args: {}, run_facts: { tool_calls: 10, llm_calls: 10 }, expect: allow }
+    - { roles: [default, support, billing], tool: "agent.handoff:refund-bot", args: {}, run_facts: { tool_calls: 10, llm_calls: 10 }, expect: allow }
+    - { roles: [default, support, billing], tool: "agent.handoff:admin-bot", args: {}, run_facts: { tool_calls: 10, llm_calls: 10 }, expect: allow }

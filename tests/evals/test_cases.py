@@ -106,7 +106,7 @@ def _case(**extra) -> dict:
             _case(expect={"decisions": [{**REFUND_500, "run_facts": None}]}),
             "run_facts\n  Input",
         ),
-        (_case(expect={"mentions_all": [1]}), "mentions_all.0\n  Input"),
+        (_case(expect={"mentions_all": [1]}), "mentions_all.0.str\n  Input"),
         (
             _case(expect={"mentions_any": []}),
             "mentions_any\n  List should have at least 1",
