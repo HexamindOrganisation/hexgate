@@ -1,7 +1,7 @@
 version: 1
 
 constraints:
-  - startswith(tool, "agent.") or tool != "refund_order" or args.amount <= 500
+  - tool != "refund_order" or args.amount <= 500
 
 roles:
   default:
