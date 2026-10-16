@@ -143,7 +143,7 @@ Always include a host clause. For subdomains, use `endswith(args.host, ".example
 
 - **Unquoted strings.** Write `args.env == "prod"`. `args.env == prod` fails `policy validate` with `bare identifier 'prod' ... did you forget quotes?`.
 - **Unanchored regex.** `matches(args.id, "inv_")` also accepts `xxinv_yy`. Anchor it: `^inv_[0-9]+$`.
-- **`args.*` at policy level.** Tools and `agent.run` without that argument fail closed, which can lock the agent out at admission. Keep `args.*` on the tool. Or exempt agent keys: `startswith(tool, "agent.") or args.amount <= 500`.
+- **`args.*` at policy level.** Tools and `agent.run` without that argument fail closed, which can lock the agent out at admission. Keep `args.*` on the tool, or scope it to the tool that has the argument: `tool != "refund_order" or args.amount <= 500`. Exempting only agent keys (`startswith(tool, "agent.") or …`) still fails every other tool without an `amount`.
 - **Run caps in `default_policy.constraints`.** They miss every tool listed under `tools:`. Put run caps in top-level `constraints:`.
 - **`mode: deny` plus constraints.** Deny wins regardless. Constraints only narrow a grant; they never grant.
 - **Admission is closed-world.** Once any role declares `admission`, every role without it is refused. `agents:` is closed-world too: an unlisted target is denied.
