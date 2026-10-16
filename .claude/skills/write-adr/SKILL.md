@@ -18,7 +18,7 @@ is the one part you must never compress.
 
 ## Before writing
 
-- **Pick the area and the next id.** Existing areas: `AGENT`, `GUARD`, `POL`.
+- **Pick the area and the next id.** Existing areas: `AGENT`, `GUARD`, `POL`, `USAGE`.
   Reuse one if the decision fits it; open a new area only for a genuinely new
   subsystem. Number is the next free integer in that area (`ls docs/adr/`).
 - **One decision per file.** If you can't state it in two sentences, it's

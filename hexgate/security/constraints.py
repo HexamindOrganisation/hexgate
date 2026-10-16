@@ -244,9 +244,10 @@ _JSON_KEYWORDS = ("true", "false", "null")
 # string — so a lone non-fact identifier is rejected rather than read as a ref.
 FACTS = ("role", "tool")
 # The other roots a path can start from: the call's ``args``, the caller's
-# ``ctx`` and the run's ``run`` (the context :func:`check_constraints` builds).
-# Facts are plain strings, so a path dotted into one is never set either.
-PATH_ROOTS = ("args", "ctx", "run")
+# ``ctx``, the run's ``run`` and the agent's cross-run ``agent_usage`` (the
+# context :func:`check_constraints` builds). Facts are plain strings, so a path
+# dotted into one is never set either.
+PATH_ROOTS = ("args", "ctx", "run", "agent_usage")
 
 _FUNCS = ("startswith", "endswith", "contains", "matches")
 _FUNC_RE = re.compile(r"^([a-z]+)\((.*)\)$", re.DOTALL)

@@ -1,0 +1,155 @@
+[
+  {
+    "name": "front-desk",
+    "manifest": {
+      "name": "front-desk",
+      "description": null,
+      "framework": "openai",
+      "model": null,
+      "system_prompt": null,
+      "tools": [
+        {
+          "name": "view_orders",
+          "description": "List a customer's orders",
+          "input_schema": {
+            "properties": {
+              "customer_id": {
+                "title": "Customer Id",
+                "type": "string"
+              }
+            },
+            "required": [
+              "customer_id"
+            ]
+          }
+        },
+        {
+          "name": "send_email",
+          "description": "Send an email (to: addresses)",
+          "input_schema": {
+            "properties": {
+              "to": {
+                "title": "To",
+                "type": "array"
+              },
+              "subject": {
+                "title": "Subject",
+                "type": "string"
+              },
+              "body": {
+                "title": "Body",
+                "type": "string"
+              }
+            },
+            "required": [
+              "to",
+              "subject",
+              "body"
+            ]
+          }
+        },
+        {
+          "name": "refund_order",
+          "description": "Refund an order (currency: ISO code)",
+          "input_schema": {
+            "properties": {
+              "order_id": {
+                "title": "Order Id",
+                "type": "string"
+              },
+              "amount": {
+                "title": "Amount",
+                "type": "number"
+              },
+              "currency": {
+                "title": "Currency",
+                "type": "string"
+              }
+            },
+            "required": [
+              "order_id",
+              "amount",
+              "currency"
+            ]
+          }
+        },
+        {
+          "name": "billing_bot",
+          "description": "Billing questions and invoices",
+          "input_schema": {
+            "properties": {
+              "input": {
+                "title": "Input",
+                "type": "string"
+              }
+            },
+            "required": [
+              "input"
+            ]
+          }
+        },
+        {
+          "name": "refund_bot",
+          "description": "Processes refunds",
+          "input_schema": {
+            "properties": {
+              "input": {
+                "title": "Input",
+                "type": "string"
+              }
+            },
+            "required": [
+              "input"
+            ]
+          }
+        },
+        {
+          "name": "admin_bot",
+          "description": "Account administration",
+          "input_schema": {
+            "properties": {
+              "input": {
+                "title": "Input",
+                "type": "string"
+              }
+            },
+            "required": [
+              "input"
+            ]
+          }
+        }
+      ],
+      "skills": null,
+      "subagents": [
+        {
+          "name": "billing-bot",
+          "via": "handoff"
+        },
+        {
+          "name": "refund-bot",
+          "via": "handoff"
+        },
+        {
+          "name": "admin-bot",
+          "via": "handoff"
+        },
+        {
+          "name": "billing-bot",
+          "via": "tool"
+        },
+        {
+          "name": "refund-bot",
+          "via": "tool"
+        },
+        {
+          "name": "admin-bot",
+          "via": "tool"
+        }
+      ],
+      "guards": null
+    },
+    "version": 1,
+    "content_hash": "1d10905c2a5e1d0c69cba9a5e9847f56bb0695ab9ac65083ad41f2cabbb7e64f",
+    "updated_at": "2026-10-01T00:00:00Z"
+  }
+]

@@ -1,0 +1,3 @@
+# Behaviour every case on this project keeps unless it lists the same call.
+- { role: default, tool: delete_customer, args: { customer_id: c1 }, expect: [deny, approval_required] }
+- { role: default, tool: wire_transfer, args: { amount: 100000, iban: DE89 }, expect: [deny, approval_required] }

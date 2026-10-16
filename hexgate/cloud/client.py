@@ -191,7 +191,8 @@ class HexgateClient:
         # legacy ``/v1/projects/{id}/agents/{name}`` URL still works on
         # the platform but only via cookie auth; we deliberately route
         # the SDK through the new bearer-only route.
-        url = f"{self.config.base_url}/v1/agents/{name}"
+        quoted = urllib.parse.quote(name, safe="")
+        url = f"{self.config.base_url}/v1/agents/{quoted}"
         return self._raw_get(url, authorize=True, if_none_match=if_none_match)
 
     def get_bans(

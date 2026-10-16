@@ -12,6 +12,32 @@ product.
   agent and skill gate calls as the scorer sends them. `checks.py` scores what
   an agent left behind.
 
+## Categories and input levels
+
+A category groups cases that test one kind of request:
+
+- `explicit_request`: the user says exactly what to allow or deny.
+- `input_levels`: one agent's policy, written with more or less known about
+  the project beforehand.
+
+Planned next: `must_refuse` (the agent must refuse or flag the request),
+`security` (it must resist a prompt injection) and `robustness` (it must tidy
+up or explain without changing behaviour).
+
+An input level is how much the agent is told about the project before it
+writes the policy. The seven cases land across #348, #352 and #350. The case
+name starts with its level:
+
+| Case | The agent is given |
+|---|---|
+| `l0_structure_only` | the tools and their arguments, nothing else |
+| `l1_tools_described` | the tools with what each does, so their risk can be judged |
+| `l2_roles_hierarchy` | roles with their meaning: a manager supervises support staff |
+| `l2b_roles_no_meaning` | role names with no meaning, so it must assume and say so |
+| `l3_existing_defaults` | a policy whose org-wide defaults every role must keep |
+| `l4_inspired_by_other_agent` | another agent's policy to model this one on, minus one thing (wire transfers) |
+| `l5_define_defaults` | a request to set the defaults themselves |
+
 ## A case
 
 ```
@@ -203,19 +229,23 @@ The image carries OPA, so the agent's `hexgate policy test --engine wasm` runs.
 ```bash
 claude setup-token                     # once: prints a long-lived token
 export CLAUDE_CODE_OAUTH_TOKEN=…       # in the shell that runs the eval; never commit it
-make policy-eval CASES=explicit_request   # one case, 3 epochs; builds the image; then `inspect view` as above
+make policy-eval CASES=explicit_request/support_refund_cap   # one case, 3 epochs; builds the image; then `inspect view` as above
+make policy-eval EPOCHS=1                # quick check: one epoch, reducer mean,at_least_1
 ```
 
 Of your environment only that token enters the container; the task refuses one
 holding `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN`: Claude Code prefers either
 over the subscription token and would silently bill the key per token.
 
+The model is the subscription's default unless `MODEL=<id>` (`-T model=<id>`)
+passes Claude Code a `--model`; each score's `model` records what was asked
+for, and its `usage.modelUsage` which one ran.
+
+At most `MAX_SANDBOXES` (default 4) samples run at once: each sandbox is a full Claude Code, and more than about four on a laptop makes every case time out. An empty `MAX_SANDBOXES=` falls back to Inspect's default.
+
 The container has no route out: its only network is internal, and a `proxy`
 sidecar (`squid.conf`) tunnels to `api.anthropic.com:443` and refuses anything
 else, so a hijacked run can reach no host but Anthropic's API.
-
-The model is the subscription's default, not set by the task; each score's
-`usage.modelUsage` in the log records which one ran.
 
 ## Adding a case
 
