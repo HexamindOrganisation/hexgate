@@ -5,8 +5,8 @@ note: Handoff depth is a runner setting (HexgateRunner(max_handoff_depth=3)), no
 expect:
   no_changes: true
   mentions_all:
-    - [handoff, handoffs, max_handoff_depth]
-    - ["no", "isn't", "isn’t", "is not", not, none, "doesn't", "doesn’t", "does not", cannot, "can't", "can’t", runner, HexgateRunner]
+    - [handoff, max_handoff_depth]
+    - ["no", "isn't", "is not", not, none, "doesn't", "does not", cannot, "can't", runner, HexgateRunner]
   decisions:
     - { role: support, tool: send_email, args: { to: [a@acme.com], subject: s, body: b }, run_facts: { tool_calls: 4 }, expect: allow }
     - { roles: [default, support, billing], tool: "agent.handoff:billing-bot", args: {}, run_facts: { tool_calls: 10, llm_calls: 10 }, expect: allow }
