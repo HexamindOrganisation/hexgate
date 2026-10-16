@@ -1,6 +1,9 @@
-"""The agent_usage path grammar, and its parity with the SDK's path registry (G5)."""
+"""The usage path grammar, and its parity with the SDK's path registries (G5)."""
 
 from __future__ import annotations
+
+from collections.abc import Mapping
+from typing import Any, Final
 
 import pytest
 
@@ -12,7 +15,13 @@ from hexgate_api.features.usage.paths import (
     UsageMetric,
     UsageWindowSpec,
     parse_usage_path,
+    parse_usage_path_list,
     parse_usage_paths,
+)
+
+# U2 adds the user_usage root; until it is on main the user parity test skips.
+SDK_USER_USAGE_PATHS: Final[Mapping[str, Any] | None] = getattr(
+    agent_usage, "USER_USAGE_PATHS", None
 )
 
 
@@ -81,6 +90,27 @@ def test_too_many_paths_are_rejected_before_any_is_parsed() -> None:
         parse_usage_paths(raw)
 
 
+def test_a_path_list_parses_like_the_query_parameter() -> None:
+    items = ["invocations_60m", "invocations_1h", "total_tokens_24h"]
+
+    assert parse_usage_path_list(items) == parse_usage_paths(",".join(items))
+
+
+def test_an_empty_path_list_is_rejected() -> None:
+    with pytest.raises(InvalidUsagePaths, match="no paths requested"):
+        parse_usage_path_list([])
+
+
+def test_too_many_listed_paths_are_rejected_before_any_is_parsed() -> None:
+    with pytest.raises(InvalidUsagePaths, match=f"at most {MAX_PATHS_PER_REQUEST}"):
+        parse_usage_path_list(["not_a_path"] * (MAX_PATHS_PER_REQUEST + 1))
+
+
+def test_a_bad_listed_path_is_named() -> None:
+    with pytest.raises(InvalidUsagePaths, match="'errors_1h'"):
+        parse_usage_path_list(["invocations_1h", "errors_1h"])
+
+
 def test_every_sdk_metric_is_a_platform_metric() -> None:
     sdk_metrics = {m.value for m in agent_usage.UsageMetric} | {"total_tokens"}
 
@@ -91,6 +121,16 @@ def test_every_sdk_path_is_accepted() -> None:
     """G5: a path the SDK lints as valid but the endpoint rejects, or reads over a
     different window, would be wrong for every policy using it."""
     for name, sdk_path in agent_usage.AGENT_USAGE_PATHS.items():
+        spec = parse_usage_path(name)
+        assert spec.metric == sdk_path.metric, name
+        assert spec.window_seconds == sdk_path.window_seconds, name
+
+
+@pytest.mark.skipif(SDK_USER_USAGE_PATHS is None, reason="needs U2 (user_usage root)")
+def test_every_sdk_user_path_is_accepted() -> None:
+    """G5 for user_usage.*: the same grammar serves both roots."""
+    assert SDK_USER_USAGE_PATHS is not None
+    for name, sdk_path in SDK_USER_USAGE_PATHS.items():
         spec = parse_usage_path(name)
         assert spec.metric == sdk_path.metric, name
         assert spec.window_seconds == sdk_path.window_seconds, name

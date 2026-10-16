@@ -1,6 +1,7 @@
 import logging
 import os
 from contextlib import asynccontextmanager
+from typing import Final
 
 from dotenv import load_dotenv
 from fastapi import APIRouter, FastAPI
@@ -45,6 +46,8 @@ load_dotenv()
 _log = logging.getLogger(__name__)
 
 _DEFAULT_CORS_ORIGINS = ["http://localhost:5173"]
+_USAGE_LOGGER: Final = "hexgate_api.features.usage"
+_LOG_FORMAT: Final = "%(asctime)s %(levelname)s %(name)s: %(message)s"
 
 
 def _demo_enabled() -> bool:
@@ -117,6 +120,19 @@ def _configure_email_sender() -> None:
         )
 
 
+def _configure_usage_logging() -> None:
+    """uvicorn configures only its own loggers, so hexgate_api INFO records are
+    dropped by the root's last-resort handler. The usage read stats must reach
+    the log (DP2 reads them)."""
+    logger = logging.getLogger(_USAGE_LOGGER)
+    if logger.handlers:
+        return
+    handler = logging.StreamHandler()
+    handler.setFormatter(logging.Formatter(_LOG_FORMAT))
+    logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
+
+
 def _build_v1_router() -> APIRouter:
     """Assemble the versioned ``/v1`` router from every domain + auth wiring."""
     v1 = APIRouter(prefix="/v1")
@@ -142,6 +158,7 @@ def _build_v1_router() -> APIRouter:
 
 @asynccontextmanager
 async def lifespan(app_: FastAPI):
+    _configure_usage_logging()
     await init_db()
     keystore.ensure_keypair()
     # OAuth router mounting waits on the keystore — its state-token secret is
