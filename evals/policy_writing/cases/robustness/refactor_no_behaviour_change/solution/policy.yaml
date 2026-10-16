@@ -1,0 +1,22 @@
+# A customer-support agent with three selectable roles; every role reads.
+version: 1
+
+roles:
+  default:
+    tools:
+      web_search: { mode: allow }
+      view_orders: { mode: allow }
+
+  support:
+    tools:
+      web_search: { mode: allow }
+      view_orders: { mode: allow }
+      send_email: { mode: allow }
+
+  billing:
+    tools:
+      web_search: { mode: allow }
+      view_orders: { mode: allow }
+      refund_order:
+        mode: allow
+        constraints: [args.amount <= 500, 'args.currency in ["USD", "EUR"]']
