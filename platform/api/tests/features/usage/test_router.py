@@ -8,6 +8,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from unittest.mock import MagicMock
+from uuid import uuid4
 
 import pytest
 import pytest_asyncio
@@ -34,6 +35,7 @@ from hexgate_api.features.usage.service import (
 from hexgate_api.features.usage.stats import get_agent_read_stats, get_user_read_stats
 from hexgate_api.main import app
 from hexgate_api.models import Agent, Project
+from hexgate_api.schemas import USER_ID_MAX_LENGTH, AuditEnvelope
 from hexgate_api.seeds.defaults import ensure_default_project
 
 _PROJECT = "proj_usage"
@@ -349,10 +351,10 @@ def test_an_unknown_user_reads_zeros_not_404(
     ("user_id", "detail"),
     [
         ("", "user_id is empty"),
-        ("a" * 257, "user_id is longer than 256 bytes"),
-        (_MULTIBYTE * 129, "user_id is longer than 256 bytes"),
+        ("a" * 257, "user_id is longer than 256 characters"),
+        (_MULTIBYTE * 257, "user_id is longer than 256 characters"),
     ],
-    ids=["empty", "257-ascii", "258-bytes-129-chars"],
+    ids=["empty", "257-ascii", "257-multibyte"],
 )
 def test_a_bad_user_id_is_422_without_echoing_it(
     client: TestClient, fake_clickhouse: MagicMock, user_id: str, detail: str
@@ -366,8 +368,11 @@ def test_a_bad_user_id_is_422_without_echoing_it(
     fake_clickhouse.query.assert_not_called()
 
 
-def test_a_256_byte_user_id_is_accepted(client: TestClient) -> None:
-    user_id = _MULTIBYTE * 128  # 128 chars, 256 bytes
+def test_every_user_id_ingest_accepts_can_be_read(client: TestClient) -> None:
+    """The cap counts characters, as AuditEnvelope.user_id does: a 256-character
+    multibyte id (512 bytes) is counted by the rollup, so it must be readable."""
+    user_id = _MULTIBYTE * USER_ID_MAX_LENGTH
+    AuditEnvelope(event_id=uuid4(), occurred_at=_AS_OF, agent_name="a", user_id=user_id)
 
     assert _user_usage(client, _TWO_PATHS, user_id=user_id).status_code == 200
 

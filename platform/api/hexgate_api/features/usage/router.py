@@ -19,6 +19,7 @@ from hexgate_api.core.db import get_session
 from hexgate_api.deps.clickhouse import clickhouse_getter, clickhouse_unavailable
 from hexgate_api.deps.tokens import require_project
 from hexgate_api.features.agents.service import get_agent
+from hexgate_api.schemas import USER_ID_MAX_LENGTH
 from hexgate_api.features.usage.paths import (
     InvalidUsagePaths,
     UsageWindowSpec,
@@ -52,12 +53,11 @@ router = APIRouter()
 CACHE_CONTROL: Final = f"private, max-age={int(USAGE_MEMO_TTL_SECONDS)}"
 # The body is keyed by personal data: no intermediary may keep it.
 USER_USAGE_CACHE_CONTROL: Final = "private, no-store"
-USER_ID_MAX_BYTES: Final = 256
 _USER_ID_ENCODING: Final = "utf-8"
 _AGENT_NOT_FOUND: Final = "agent not found"
 _USAGE_UNAVAILABLE: Final = "usage temporarily unavailable"
 _USER_ID_EMPTY: Final = "user_id is empty"
-_USER_ID_TOO_LONG: Final = f"user_id is longer than {USER_ID_MAX_BYTES} bytes"
+_USER_ID_TOO_LONG: Final = f"user_id is longer than {USER_ID_MAX_LENGTH} characters"
 _USER_ID_NOT_UTF8: Final = "user_id is not valid UTF-8"
 
 
@@ -149,16 +149,16 @@ async def api_read_user_usage(
 
 def _check_user_id(user_id: str) -> None:
     """Never echo the value: it is personal data (README G10). Not a pydantic
-    Field constraint: that counts characters, not bytes, and its 422 echoes the
-    input."""
+    Field constraint, because its 422 echoes the input. The length cap is ingest's
+    (AuditEnvelope.user_id), so every id the rollup counts can be read back."""
     if not user_id:
         raise _unprocessable(_USER_ID_EMPTY)
+    if len(user_id) > USER_ID_MAX_LENGTH:
+        raise _unprocessable(_USER_ID_TOO_LONG)
     try:
-        encoded = user_id.encode(_USER_ID_ENCODING)
+        user_id.encode(_USER_ID_ENCODING)
     except UnicodeEncodeError as exc:  # a lone surrogate from a \ud800 escape
         raise _unprocessable(_USER_ID_NOT_UTF8) from exc
-    if len(encoded) > USER_ID_MAX_BYTES:
-        raise _unprocessable(_USER_ID_TOO_LONG)
 
 
 def _parse_or_422[T](
