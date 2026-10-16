@@ -14,6 +14,7 @@ from langchain_core.tools import tool
 
 from hexgate.agents import factory
 from hexgate.cloud.client import HexgateClient, HexgateConfig
+from hexgate.guards import before_tool
 from hexgate.runtime.agent_usage import AGENT_USAGE_LEDGERS
 from hexgate.security import AgentPolicy, BaseToolPolicy, PolicySet
 from hexgate.security import enforcer as enforcer_mod
@@ -27,6 +28,12 @@ _AGENT = "bot"
 def echo(text: str) -> str:
     """Echo the input back."""
     return text
+
+
+@before_tool
+def passthrough(_call: Any) -> None:
+    """A guard that lets every call through."""
+    return None
 
 
 def _platform_client(base_url: str = "https://other.example") -> HexgateClient:
@@ -104,12 +111,6 @@ def test_an_explicit_client_beats_the_attached_one_and_is_attached(
 
 
 def test_the_guards_only_path_attaches_the_client() -> None:
-    from hexgate.guards import before_tool
-
-    @before_tool
-    def passthrough(_call: Any) -> None:
-        return None
-
     explicit = _platform_client()
 
     enforced = _agent().enforce_policy(None, guards=[passthrough], client=explicit)
@@ -224,12 +225,6 @@ async def test_a_usage_free_policy_does_not_fetch(events: list[object]) -> None:
 async def test_guards_only_agent_has_no_binding_and_runs(
     events: list[object],
 ) -> None:
-    from hexgate.guards import before_tool
-
-    @before_tool
-    def passthrough(_call: Any) -> None:
-        return None
-
     agent = _agent().enforce_policy(None, guards=[passthrough])
 
     await _run(agent, "ainvoke")
