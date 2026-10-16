@@ -9,6 +9,8 @@ from pathlib import Path
 import pytest
 
 from hexgate_api.core.keystore import (
+    OAUTH_PRIVATE_KEY_FILENAME,
+    OAUTH_PUBLIC_KEY_FILENAME,
     PRIVATE_KEY_FILENAME,
     PUBLIC_KEY_FILENAME,
     FileKeyStore,
@@ -208,7 +210,7 @@ def test_concurrent_first_runs_resolve_to_one_keypair(tmp_path: Path) -> None:
     both threads see the same fingerprint.
     """
     barrier = threading.Barrier(4)
-    fingerprints: list[str] = []
+    fingerprints: list[tuple[str, str]] = []
     errors: list[BaseException] = []
 
     def bootstrap() -> None:
@@ -216,7 +218,7 @@ def test_concurrent_first_runs_resolve_to_one_keypair(tmp_path: Path) -> None:
             barrier.wait()
             ks = FileKeyStore(base_dir=tmp_path)
             ks.ensure_keypair()
-            fingerprints.append(ks.fingerprint())
+            fingerprints.append((ks.fingerprint(), ks.oauth_fingerprint()))
         except BaseException as exc:  # noqa: BLE001
             errors.append(exc)
 
@@ -229,3 +231,59 @@ def test_concurrent_first_runs_resolve_to_one_keypair(tmp_path: Path) -> None:
     assert errors == []
     assert len(fingerprints) == 4
     assert len(set(fingerprints)) == 1
+
+
+# ---------------------------------------------------------------------------
+# OAuth keypair — created by the same ensure_keypair, kept apart from the root
+# ---------------------------------------------------------------------------
+
+
+def test_ensure_keypair_also_creates_the_oauth_keypair(tmp_path: Path) -> None:
+    """api-init and the lifespan call only ensure_keypair, so it must make both."""
+    ks = FileKeyStore(base_dir=tmp_path)
+    ks.ensure_keypair()
+
+    assert (tmp_path / OAUTH_PUBLIC_KEY_FILENAME).exists()
+    # 0600 like the root key: the collector shares this volume under another uid.
+    assert (tmp_path / OAUTH_PRIVATE_KEY_FILENAME).stat().st_mode & 0o777 == 0o600
+    assert re.match(r"^sha256:[0-9a-f]{16}$", ks.oauth_fingerprint())
+
+
+def test_oauth_key_is_not_the_root_key(tmp_path: Path) -> None:
+    """An OAuth token signed with the root key would verify wherever SDK tokens do."""
+    ks = FileKeyStore(base_dir=tmp_path)
+    ks.ensure_keypair()
+
+    assert ks.oauth_public_key_bytes() != ks.public_key_bytes()
+    assert ks.oauth_sign(b"x") != ks.sign(b"x")
+    # A restart must reload it, or every live access token dies.
+    reloaded = FileKeyStore(base_dir=tmp_path)
+    reloaded.ensure_keypair()
+    assert reloaded.oauth_fingerprint() == ks.oauth_fingerprint()
+
+
+def test_when_root_key_exists_then_oauth_keypair_is_added_beside_it(
+    tmp_path: Path,
+) -> None:
+    """A deployed volume already holds hexgate.*; the next boot adds oauth.* without touching it."""
+    FileKeyStore(base_dir=tmp_path).ensure_keypair()
+    root_before = (tmp_path / PRIVATE_KEY_FILENAME).read_bytes()
+    (tmp_path / OAUTH_PRIVATE_KEY_FILENAME).unlink()
+    (tmp_path / OAUTH_PUBLIC_KEY_FILENAME).unlink()
+
+    ks = FileKeyStore(base_dir=tmp_path)
+    ks.ensure_keypair()
+
+    assert (tmp_path / PRIVATE_KEY_FILENAME).read_bytes() == root_before
+    assert (tmp_path / OAUTH_PRIVATE_KEY_FILENAME).exists()
+
+
+@pytest.mark.parametrize(
+    "call",
+    [lambda ks: ks.oauth_sign(b"payload"), lambda ks: ks.oauth_public_key_bytes()],
+    ids=["oauth_sign", "oauth_public_key_bytes"],
+)
+def test_oauth_accessors_before_init_raise(tmp_path: Path, call) -> None:
+    """The OAuth accessors refuse pre-init like the root ones."""
+    with pytest.raises(RuntimeError, match="not initialised"):
+        call(FileKeyStore(base_dir=tmp_path))
