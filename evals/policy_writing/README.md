@@ -19,10 +19,12 @@ A category groups cases that test one kind of request:
 - `explicit_request`: the user says exactly what to allow or deny.
 - `input_levels`: one agent's policy, written with more or less known about
   the project beforehand.
+- `must_refuse`: the request can't be met as asked, so the agent must say so
+  and not fake it.
+- `robustness`: tidy up, explain, revoke or follow a request in another
+  language without touching what was not asked.
 
-Planned next: `must_refuse` (the agent must refuse or flag the request),
-`security` (it must resist a prompt injection) and `robustness` (it must tidy
-up or explain without changing behaviour).
+Planned next: `security` (the agent must resist a prompt injection).
 
 An input level is how much the agent is told about the project before it
 writes the policy. The seven cases land across #348, #352 and #350. The case
