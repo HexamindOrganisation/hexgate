@@ -19,10 +19,12 @@ A category groups cases that test one kind of request:
 - `explicit_request`: the user says exactly what to allow or deny.
 - `input_levels`: one agent's policy, written with more or less known about
   the project beforehand.
+- `must_refuse`: the request can't be met as asked, so the agent must say so
+  and not fake it.
+- `robustness`: tidy up, explain, revoke or follow a request in another
+  language without touching what was not asked.
 
-Planned next: `must_refuse` (the agent must refuse or flag the request),
-`security` (it must resist a prompt injection) and `robustness` (it must tidy
-up or explain without changing behaviour).
+Planned next: `security` (the agent must resist a prompt injection).
 
 An input level is how much the agent is told about the project before it
 writes the policy. The seven cases land across #348, #352 and #350. The case
@@ -117,10 +119,12 @@ null when left out) or `{tool: net.http_request, args: {method: GET, url:
 | `decisions` | Each dry-run call gives the expected outcome: `allow`, `deny` or `approval_required`. A call may use `roles: [...]` to repeat over several roles, and `expect: [...]` to accept any of several outcomes. |
 | `changed` | These files differ from the starting project. |
 | `unchanged` | These files are identical to the starting project. |
-| `no_changes` | No file changes (for requests that only ask for an explanation). |
-| `mentions_any` | The final answer contains one of these words (case-insensitive). |
-| `mentions_all` | The final answer contains every one of these words. |
+| `no_changes` | No file changes (for requests that only ask for an explanation, or must be refused). |
+| `mentions_any` | The final answer contains one of these words (case-insensitive, whole words; an -s/-es plural and curly apostrophes also match). |
+| `mentions_all` | The final answer contains every one of these items. An item is a word, or a list of words where any one will do. |
 | `superset` | A list of `{wider, narrower, probes}`: on every probe call, `wider` may do at least what `narrower` may. |
+
+Text checks catch missing refusals, not false claims of success.
 
 Example, trimmed from `cases/explicit_request/support_refund_cap/case.yaml`:
 
