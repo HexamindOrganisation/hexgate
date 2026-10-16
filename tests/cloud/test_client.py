@@ -598,6 +598,19 @@ def _verified_client(keys: tuple[bytes, bytes]) -> HexgateClient:
     )
 
 
+def test_get_agent_builds_the_quoted_url(
+    keys: tuple[bytes, bytes], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client = _verified_client(keys)
+    calls = _record_urlopen(monkeypatch, b'{"policy_yaml": ""}')
+
+    payload, _ = client.get_agent("billing bot/v2")
+
+    assert payload == {"policy_yaml": ""}
+    request, _ = calls[0]
+    assert request.full_url == "http://test/v1/agents/billing%20bot%2Fv2"
+
+
 def test_get_agent_usage_builds_the_quoted_url_and_returns_the_body(
     keys: tuple[bytes, bytes], monkeypatch: pytest.MonkeyPatch
 ) -> None:

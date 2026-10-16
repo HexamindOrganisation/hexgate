@@ -109,12 +109,16 @@ platform-api-check: ## Lint + test (with coverage) on the platform API
 policy-build: ## Compile examples/example_agent/policy.yaml to a bundle under /tmp/m2-bundle
 	$(UV) hexgate policy build examples/example_agent/policy.yaml --out /tmp/m2-bundle
 
-CASES ?= explicit_request
+CASES ?= explicit_request/support_refund_cap
+EPOCHS ?= 3
+MODEL ?=
+MAX_SANDBOXES ?= 4
 
 .PHONY: policy-eval
-policy-eval: ## Run the policy-writing eval with Claude Code in Docker: CASES=<id prefixes> (one case by default, every run bills the Claude subscription), 3 epochs, needs CLAUDE_CODE_OAUTH_TOKEN from `claude setup-token`; results in `inspect view --log-dir evals/policy_writing/logs`
+policy-eval: ## Run the policy-writing eval with Claude Code in Docker: CASES=<id prefixes> (one case by default, every run bills the Claude subscription), EPOCHS=<n> (default 3), MODEL=<id> (Claude Code's --model, default the subscription's), MAX_SANDBOXES=<n> (default 4, an empty MAX_SANDBOXES= falls back to Inspect's default), needs CLAUDE_CODE_OAUTH_TOKEN from `claude setup-token`; results in `inspect view --log-dir evals/policy_writing/logs`
 	$(UV) python -m inspect_ai eval evals/policy_writing/task.py --model none -T agent=claude \
-	  -T cases=$(CASES) --epochs 3 --epochs-reducer mean,at_least_3 --log-dir evals/policy_writing/logs
+	  -T cases=$(CASES) $(if $(MODEL),-T model=$(MODEL)) --epochs $(EPOCHS) --epochs-reducer mean,at_least_$(EPOCHS) \
+	  $(if $(MAX_SANDBOXES),--max-sandboxes $(MAX_SANDBOXES)) --log-dir evals/policy_writing/logs
 
 .PHONY: policy-eval-check
 policy-eval-check: ## Run the policy-writing eval on our own answers (reference, wrong_answers, noop) for `inspect view --log-dir evals/policy_writing/logs`; asserts nothing, the pass/fail assertions live in tests/evals/test_task.py

