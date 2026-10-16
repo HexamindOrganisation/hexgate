@@ -606,7 +606,7 @@ def _call_to_rego(node: Call, elem_var: str | None = None) -> str:
     value = json.dumps(node.value.value)
     if node.fn == "matches":
         # Rego's regex.match takes (pattern, value) and is unanchored — same
-        # as the pydantic engine's re.search.
+        # as the pydantic engine's RE2 search.
         return f"regex.match({value}, {ref})"
     return f"{node.fn}({ref}, {value})"
 

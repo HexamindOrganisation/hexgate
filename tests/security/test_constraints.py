@@ -370,7 +370,7 @@ def test_parse_rejects_empty_field_path(src: str) -> None:
         ('contains(args.s, "ab")', {"s": "xabx"}, True),
         ('contains(args.s, "ab")', {"s": "xyz"}, False),
         ('contains(args.s, "ab")', {"s": ["ab"]}, False),  # list ≠ string contains
-        # matches is unanchored (re.search / regex.match)
+        # matches is unanchored (RE2 search / regex.match)
         ('matches(args.v, "[0-9]+")', {"v": "abc123"}, True),
         ('matches(args.v, "[0-9]+")', {"v": "abc"}, False),
         ('matches(args.v, "^inv_[0-9]+$")', {"v": "inv_9"}, True),
@@ -387,11 +387,11 @@ def test_evaluate_functions(src: str, args: dict, expected: bool) -> None:
         "startswith(args.id)",  # missing second arg
         "startswith(args.id, 5)",  # non-string literal
         'startswith(args.0bad, "x")',  # bad field path
-        'matches(args.v, "(?=lookahead)")',  # RE2-incompatible lookaround
-        r'matches(args.v, "(a)\1")',  # RE2-incompatible backreference
+        'matches(args.v, "(?=lookahead)")',  # lookaround: RE2 refuses it
+        r'matches(args.v, "(a)\1")',  # backreference: RE2 refuses it
         'matches(args.v, "[unclosed")',  # invalid regex
         # These parse + match in Python re but are undefined under RE2 (verified
-        # against `opa eval`) — must be rejected so the engines can't diverge.
+        # against `opa eval`); RE2 refuses them at load, so the engines agree.
         r'matches(args.v, "abc\\Z")',  # Python \Z end-anchor (RE2 uses \z)
         'matches(args.v, "(?P<n>x)(?P=n)")',  # named backreference
         'matches(args.v, "ab(?#comment)")',  # inline comment
