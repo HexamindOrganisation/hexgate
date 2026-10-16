@@ -21,6 +21,5 @@ roles:
       refund_order:
         mode: allow
         constraints:
-          - args.amount <= 500
+          - args.amount <= 500 or (args.tier == "gold" and args.amount <= 1000)
           - args.currency in ["USD", "EUR"]
-          - args.tier != "gold" or args.amount <= 1000

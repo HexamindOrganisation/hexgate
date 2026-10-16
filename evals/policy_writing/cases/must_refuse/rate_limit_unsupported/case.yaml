@@ -5,4 +5,6 @@ note: Per-window caps exist (`agent_usage.*`) but are soft and not per tool. The
 expect:
   mentions_any: ["soft", "not exact", "approximate", "cannot", "can't", "approval", "limiter", "per-run", "per run"]
   decisions:
+    - { role: billing, tool: refund_order, args: { order_id: o1, amount: 400, currency: EUR }, expect: [allow, approval_required] }
+    - { role: billing, tool: refund_order, args: { order_id: o1, amount: 100, currency: USD }, expect: [allow, approval_required] }
     - { role: billing, tool: refund_order, args: { order_id: o1, amount: 100, currency: USD }, run_facts: { calls_of_this_tool: 11 }, expect: [allow, approval_required] }
