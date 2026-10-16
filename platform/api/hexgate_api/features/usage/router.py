@@ -58,6 +58,7 @@ _AGENT_NOT_FOUND: Final = "agent not found"
 _USAGE_UNAVAILABLE: Final = "usage temporarily unavailable"
 _USER_ID_EMPTY: Final = "user_id is empty"
 _USER_ID_TOO_LONG: Final = f"user_id is longer than {USER_ID_MAX_BYTES} bytes"
+_USER_ID_NOT_UTF8: Final = "user_id is not valid UTF-8"
 
 
 class UsageRead(BaseModel):
@@ -152,7 +153,11 @@ def _check_user_id(user_id: str) -> None:
     input."""
     if not user_id:
         raise _unprocessable(_USER_ID_EMPTY)
-    if len(user_id.encode(_USER_ID_ENCODING)) > USER_ID_MAX_BYTES:
+    try:
+        encoded = user_id.encode(_USER_ID_ENCODING)
+    except UnicodeEncodeError as exc:  # a lone surrogate from a \ud800 escape
+        raise _unprocessable(_USER_ID_NOT_UTF8) from exc
+    if len(encoded) > USER_ID_MAX_BYTES:
         raise _unprocessable(_USER_ID_TOO_LONG)
 
 

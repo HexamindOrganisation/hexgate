@@ -372,6 +372,22 @@ def test_a_256_byte_user_id_is_accepted(client: TestClient) -> None:
     assert _user_usage(client, _TWO_PATHS, user_id=user_id).status_code == 200
 
 
+def test_a_lone_surrogate_user_id_is_422_without_echoing_it(
+    client: TestClient, fake_clickhouse: MagicMock
+) -> None:
+    # Raw bytes: httpx can't encode a lone surrogate through json=.
+    r = client.post(
+        _USER_PATH,
+        content=b'{"user_id": "\\ud800", "paths": ["invocations_1h"]}',
+        headers={"content-type": "application/json"},
+    )
+
+    assert r.status_code == 422
+    assert r.json()["detail"] == "user_id is not valid UTF-8"
+    assert "ud800" not in r.text
+    fake_clickhouse.query.assert_not_called()
+
+
 @pytest.mark.parametrize(
     "body",
     [
