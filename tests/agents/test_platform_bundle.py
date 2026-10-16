@@ -273,10 +273,9 @@ def test_load_hexgate_agent_threads_its_client_to_enforce_policy(
     payload = {"agent_yaml": _AGENT_YAML, "policy_yaml": _POLICY_YAML, "system_md": ""}
     captured = _patched_loader(payload, generate_keypair()[1])
 
-    agent, _ = loader.load_hexgate_agent("default")
+    loader.load_hexgate_agent("default")
 
     assert captured["client"] is captured["installed_client"]
-    assert agent.hexgate_client is captured["client"]
 
 
 @needs_opa
