@@ -14,6 +14,7 @@ from hexgate_api.core import keystore as keystore_mod
 from hexgate_api.core.keystore import FileKeyStore
 from hexgate_api.core.oauth_tokens import (
     ACCESS_TOKEN_TTL_SECONDS,
+    ACCESS_TOKEN_TYPE,
     InvalidAccessTokenError,
     mint_access_token,
     verify_access_token,
@@ -71,7 +72,7 @@ def _jws(header: dict, claims: dict, sign=lambda _: b"") -> str:
 
 
 def _oauth_header(ks: FileKeyStore) -> dict:
-    return {"alg": "EdDSA", "typ": "JWT", "kid": ks.oauth_fingerprint()}
+    return {"alg": "EdDSA", "typ": ACCESS_TOKEN_TYPE, "kid": ks.oauth_fingerprint()}
 
 
 def test_mint_access_token_happy_path() -> None:
@@ -94,6 +95,7 @@ def test_when_minted_then_header_names_the_oauth_key(
 ) -> None:
     header = jwt.get_unverified_header(_mint())
     assert header["alg"] == "EdDSA"
+    assert header["typ"] == "at+jwt"
     assert header["kid"] == oauth_keystore.oauth_fingerprint()
 
 
@@ -169,6 +171,13 @@ def test_when_signed_by_the_root_key_under_the_oauth_kid_then_refused(
         _verify(token)
 
 
+def test_when_typ_is_not_at_jwt_then_refused(oauth_keystore: FileKeyStore) -> None:
+    """A validly signed JWT of another type must not pass as an access token."""
+    header = _oauth_header(oauth_keystore) | {"typ": "JWT"}
+    with pytest.raises(InvalidAccessTokenError, match="typ"):
+        _verify(_jws(header, _claims(), oauth_keystore.oauth_sign))
+
+
 def test_when_claims_tampered_then_refused() -> None:
     """Widening only the projects claim after signing breaks the signature."""
     token = _mint()
@@ -186,7 +195,11 @@ def test_when_alg_is_hs256_keyed_with_the_public_key_then_refused(
     oauth_keystore: FileKeyStore,
 ) -> None:
     """The public key is published; an HMAC token keyed with it must not verify."""
-    header = {"alg": "HS256", "typ": "JWT", "kid": oauth_keystore.oauth_fingerprint()}
+    header = {
+        "alg": "HS256",
+        "typ": ACCESS_TOKEN_TYPE,
+        "kid": oauth_keystore.oauth_fingerprint(),
+    }
     token = jwt.encode(
         _claims(), oauth_keystore.oauth_public_key_bytes(), "HS256", header
     )

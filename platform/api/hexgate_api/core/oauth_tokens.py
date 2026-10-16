@@ -22,6 +22,9 @@ ACCESS_TOKEN_TTL_SECONDS = 600
 # ``keystore.oauth_fingerprint()`` — never ``/v1/.well-known/keys``, whose
 # first key the SDK pins as the root key.
 ACCESS_TOKEN_ALGORITHM = "EdDSA"
+# The JWS ``typ`` of an access token (RFC 9068). Verifiers require it, so no
+# other JWT the API signs can pass as an access token.
+ACCESS_TOKEN_TYPE = "at+jwt"
 
 
 class InvalidAccessTokenError(Exception):
@@ -79,13 +82,15 @@ def mint_access_token(
 
 
 def verify_access_token(token: str, *, issuer: str, audience: str) -> AccessTokenClaims:
-    """Return the claims of ``token`` (kid, EdDSA signature, iss, aud, exp checked),
-    or raise ``InvalidAccessTokenError``."""
+    """Return the claims of ``token`` (typ, kid, EdDSA signature, iss, aud, exp
+    checked), or raise ``InvalidAccessTokenError``."""
     from hexgate_api.core.keystore import keystore
 
     try:
-        kid = jwt.get_unverified_header(token).get("kid")
-        if kid != keystore.oauth_fingerprint():
+        header = jwt.get_unverified_header(token)
+        if header.get("typ") != ACCESS_TOKEN_TYPE:
+            raise InvalidAccessTokenError("not an access token (typ)")
+        if header.get("kid") != keystore.oauth_fingerprint():
             raise InvalidAccessTokenError("access token signed by an unknown key")
         public_key = Ed25519PublicKey.from_public_bytes(
             keystore.oauth_public_key_bytes()
@@ -116,7 +121,7 @@ def _sign_compact(claims: dict) -> str:
 
     header = {
         "alg": ACCESS_TOKEN_ALGORITHM,
-        "typ": "JWT",
+        "typ": ACCESS_TOKEN_TYPE,
         "kid": keystore.oauth_fingerprint(),
     }
     signing_input = b".".join(

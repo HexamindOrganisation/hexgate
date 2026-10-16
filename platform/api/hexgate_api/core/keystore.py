@@ -208,7 +208,11 @@ class FileKeyStore:
     # ------------------------------------------------------------------
 
     def _ensure_oauth_keypair(self) -> None:
-        """Load or generate the OAuth keypair; no banner, as losing it costs ≤10 min of tokens."""
+        """Load or generate the OAuth keypair.
+
+        Unlike the root key, no "back it up" warning on first generation:
+        losing this key only invalidates access tokens under 10 minutes old.
+        """
         if self._oauth_private_path.exists():
             key = self._read_private_key(self._oauth_private_path)
         else:
