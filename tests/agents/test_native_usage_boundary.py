@@ -1,4 +1,5 @@
-"""The native agent's platform seam: which client its enforcer is built from.
+"""The native agent's platform seam: which client its enforcer is built from, and
+the run-start usage fetch its binding drives.
 
 The LangChain graph build and the Langfuse handler are stubbed as
 tests/agents/test_create_agent_binding.py does; the usage source is a spy.
@@ -13,9 +14,10 @@ from langchain_core.tools import tool
 
 from hexgate.agents import factory
 from hexgate.cloud.client import HexgateClient, HexgateConfig
+from hexgate.runtime.agent_usage import AGENT_USAGE_LEDGERS
 from hexgate.security import AgentPolicy, BaseToolPolicy, PolicySet
 from hexgate.security import enforcer as enforcer_mod
-from hexgate.security.policy_set import DEFAULT_ROLE_NAME
+from hexgate.security.policy_set import DEFAULT_ROLE_NAME, load_policy_set_from_dict
 
 _KEY = "fty_test_demo_dummybiscuit"
 _AGENT = "bot"
@@ -125,3 +127,112 @@ def test_the_module_alias_forwards_the_client(
 
     assert source_clients == [explicit]
     assert enforced.hexgate_client is explicit
+
+
+_GRAPH_RAN = "graph"
+_CAPPED_PATH = "tool_calls_5m"
+
+
+class _RecordingSource:
+    """A usage source that records each refresh into the shared event log."""
+
+    def __init__(self, events: list[object]) -> None:
+        self._events = events
+
+    def refresh(self, agent: str, paths: frozenset[str]) -> None:
+        self._events.append(("refresh", agent, set(paths)))
+
+    async def refresh_async(self, agent: str, paths: frozenset[str]) -> None:
+        self._events.append(("refresh", agent, set(paths)))
+
+
+class _RecordingGraph:
+    def __init__(self, events: list[object]) -> None:
+        self._events = events
+
+    async def ainvoke(self, payload: dict, config: Any = None) -> dict:
+        self._events.append(_GRAPH_RAN)
+        return {"messages": ["ok"]}
+
+    async def astream_events(
+        self, payload: dict, config: Any = None, version: str = "v2"
+    ) -> Any:
+        self._events.append(_GRAPH_RAN)
+        yield {"event": "one"}
+
+
+@pytest.fixture
+def events(monkeypatch: pytest.MonkeyPatch) -> list[object]:
+    """The ordered log of usage refreshes and graph runs."""
+    log: list[object] = []
+    graph = _RecordingGraph(log)
+    monkeypatch.setattr(factory, "create_langchain_agent", lambda **kwargs: graph)
+    monkeypatch.setattr(
+        enforcer_mod, "resolve_usage_source", lambda **_: _RecordingSource(log)
+    )
+    # A usage policy enables the process ledger registry for good; restore it.
+    monkeypatch.setattr(AGENT_USAGE_LEDGERS, "_enabled", AGENT_USAGE_LEDGERS.enabled)
+    monkeypatch.setattr(AGENT_USAGE_LEDGERS, "_ledgers", {})
+    return log
+
+
+def _tool_cap() -> PolicySet:
+    return load_policy_set_from_dict(
+        {
+            "tools": {
+                "echo": {
+                    "mode": "allow",
+                    "constraints": [f"agent_usage.{_CAPPED_PATH} < 3"],
+                }
+            }
+        }
+    )
+
+
+async def _run(agent: factory.HexgateAgent, method: str) -> None:
+    if method == "ainvoke":
+        await agent.ainvoke({"messages": []}, config={})
+        return
+    async for _ in agent.astream_events({"messages": []}, config={}, version="v2"):
+        pass
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["ainvoke", "astream_events"])
+async def test_a_frozen_policy_refreshes_usage_before_the_graph_runs(
+    events: list[object], method: str
+) -> None:
+    """No refresh source, yet the binding still drives the run-start fetch: the
+    seam user quotas rely on for native agents."""
+    agent = _agent().enforce_policy(_tool_cap())
+
+    await _run(agent, method)
+
+    assert events == [("refresh", _AGENT, {_CAPPED_PATH}), _GRAPH_RAN]
+
+
+@pytest.mark.asyncio
+async def test_a_usage_free_policy_does_not_fetch(events: list[object]) -> None:
+    agent = _agent().enforce_policy(_allow_echo())
+
+    await _run(agent, "ainvoke")
+
+    assert events == [_GRAPH_RAN]
+
+
+@pytest.mark.asyncio
+async def test_guards_only_agent_has_no_binding_and_runs(
+    events: list[object],
+) -> None:
+    from hexgate.guards import before_tool
+
+    @before_tool
+    def passthrough(_call: Any) -> None:
+        return None
+
+    agent = _agent().enforce_policy(None, guards=[passthrough])
+
+    await _run(agent, "ainvoke")
+
+    assert agent._binding is None
+    assert events == [_GRAPH_RAN]
