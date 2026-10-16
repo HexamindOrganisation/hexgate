@@ -603,6 +603,7 @@ class HexgateAgent:
         decision_observer: "DecisionObserver | None" = None,
         guards: "Sequence[Guard] | None" = None,
         guard_observer: "GuardObserver | None" = None,
+        client: HexgateClient | None = None,
     ) -> Self:
         """Return a new agent with Gate 1 policy enforcement applied.
 
@@ -621,6 +622,10 @@ class HexgateAgent:
         ``decision_observer`` (callable) receives every :class:`Decision`
         after it's built — ``hexgate chat`` uses it to render denies /
         approvals inline; default ``None`` is silent.
+
+        ``client`` is the platform the agent's enforcer and events talk to. It is
+        attached as ``hexgate_client`` and defaults to the current one; without
+        either, env.
 
         ``guards`` is a flat list of guards authored with ``@before_tool`` /
         ``@after_tool``; they run around each guarded tool call (before-guards
@@ -657,6 +662,7 @@ class HexgateAgent:
         # the same set (the manifest and the runtime must agree).
         resolved_guards = resolve_guards(self, guards)
         pipeline = build_pipeline(resolved_guards, observer=guard_observer)
+        platform = client if client is not None else self.hexgate_client
 
         enforcer: PolicyEnforcer | None
         if policy is None:
@@ -674,6 +680,7 @@ class HexgateAgent:
                 # refuse admission.
                 unguarded = self.with_tools(list(self.tools))
                 unguarded._agent_gate = None
+                unguarded.hexgate_client = platform
                 # resolved_guards is empty here (the pipeline is empty), so with_tools's
                 # carried stamp already matches "no guards" in the common case.
                 return unguarded
@@ -686,6 +693,7 @@ class HexgateAgent:
             enforcer = build_enforcer(
                 engine,
                 agent_name=self._canonical_name,
+                client=platform,
                 decision_observer=decision_observer,
             )
 
@@ -781,6 +789,7 @@ class HexgateAgent:
             # Guards-only path: no enforcer, so no admission. Clear any gate a
             # prior enforce_policy left, which with_tools would otherwise carry.
             rebuilt._agent_gate = None
+        rebuilt.hexgate_client = platform
         # Stamp the result with exactly the guards its pipeline runs, so
         # create_manifest declares the same set (a no-op when resolved_guards is empty).
         return attach_guards(rebuilt, resolved_guards)
@@ -916,6 +925,7 @@ def enforce_policy(
     decision_observer: "DecisionObserver | None" = None,
     guards: "Sequence[Guard] | None" = None,
     guard_observer: "GuardObserver | None" = None,
+    client: HexgateClient | None = None,
 ) -> AgentGraph:
     """Functional alias for :meth:`HexgateAgent.enforce_policy`."""
     return agent.enforce_policy(
@@ -925,6 +935,7 @@ def enforce_policy(
         decision_observer=decision_observer,
         guards=guards,
         guard_observer=guard_observer,
+        client=client,
     )
 
 
@@ -1130,8 +1141,8 @@ def _bind_policy(
         source=resolved.source,
         guards=guards,
         guard_observer=guard_observer,
+        client=client,
     )
-    enforced.hexgate_client = client
     return enforced
 
 

@@ -186,12 +186,20 @@ def _patched_loader(monkeypatch):
         return types.SimpleNamespace(name="agent"), "handler-instance"
 
     def fake_enforce_policy(
-        _agent, policy, *, approval_handler=None, source=None, decision_observer=None
+        _agent,
+        policy,
+        *,
+        approval_handler=None,
+        source=None,
+        decision_observer=None,
+        client=None,
     ):
         captured["policy"] = policy
         captured["approval_handler"] = approval_handler
         captured["source"] = source
         captured["decision_observer"] = decision_observer
+        captured["client"] = client
+        _agent.hexgate_client = client
         return _agent
 
     monkeypatch.setattr(loader, "HexgateConfig", _FakeConfig)
@@ -207,6 +215,7 @@ def _patched_loader(monkeypatch):
     def install(payload: dict, public_raw: bytes):
         client = _FakeClient(payload, public_raw)
         monkeypatch.setattr(loader, "HexgateClient", lambda _config: client)
+        captured["installed_client"] = client
         return captured
 
     return install
@@ -254,6 +263,20 @@ def test_load_hexgate_agent_attaches_ban_gate(_patched_loader, monkeypatch) -> N
     assert seen["name"] == "default"
     assert seen["api_key"] == "fty_test_support-bot_secret"
     assert seen["client"] is agent.hexgate_client
+
+
+def test_load_hexgate_agent_threads_its_client_to_enforce_policy(
+    _patched_loader,
+) -> None:
+    """The loader's client reaches enforce_policy, so the enforcer reads usage
+    from and audits to the platform the policy came from."""
+    payload = {"agent_yaml": _AGENT_YAML, "policy_yaml": _POLICY_YAML, "system_md": ""}
+    captured = _patched_loader(payload, generate_keypair()[1])
+
+    agent, _ = loader.load_hexgate_agent("default")
+
+    assert captured["client"] is captured["installed_client"]
+    assert agent.hexgate_client is captured["client"]
 
 
 @needs_opa

@@ -137,6 +137,35 @@ def test_wrap_shares_one_enforcer_between_tools_and_binding(
     assert binding.enforcer.agent_name == "my_agent"
 
 
+@pytest.mark.parametrize("supplied", [True, False], ids=["client", "no-client"])
+def test_wrap_passes_the_callers_client_to_the_enforcer(
+    resolved: dict[str, Any], monkeypatch: pytest.MonkeyPatch, supplied: bool
+) -> None:
+    """Usage reads and audit follow the caller's client; ``None`` keeps the env
+    fallback."""
+    from hexgate.cloud.client import HexgateClient, HexgateConfig
+    from hexgate.security import usage_source
+
+    monkeypatch.setattr(usage_source, "_usage_sources", {})
+    client = (
+        HexgateClient(HexgateConfig(base_url="https://other.example", api_key="k"))
+        if supplied
+        else None
+    )
+    seen: dict[str, Any] = {}
+    real_build_enforcer = wrapper_mod.build_enforcer
+
+    def spy_build_enforcer(*args: Any, **kwargs: Any) -> PolicyEnforcer:
+        seen["client"] = kwargs.get("client")
+        return real_build_enforcer(*args, **kwargs)
+
+    monkeypatch.setattr(wrapper_mod, "build_enforcer", spy_build_enforcer)
+
+    wrap_google_agent(_make_agent(), api_key="k", client=client)
+
+    assert seen["client"] is client
+
+
 # ---------------------------------------------------------------------------
 # wrap_google_agent — the RESOLVED policy is what's enforced
 # ---------------------------------------------------------------------------

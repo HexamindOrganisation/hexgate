@@ -696,6 +696,26 @@ async def test_distinct_agent_names_get_distinct_bindings(
     assert set(runner._bindings) == {"agent-a", "agent-b"}
 
 
+def test_binding_for_builds_the_enforcer_from_the_runners_client(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The runner's one client, which resolved the policy, also builds the
+    enforcer, so usage reads and audit follow the policy's platform."""
+    runner = HexgateRunner(api_key="k")
+    seen: dict[str, Any] = {}
+    real_build_enforcer = runner_mod.build_enforcer
+
+    def spy_build_enforcer(*args: Any, **kwargs: Any) -> PolicyEnforcer:
+        seen["client"] = kwargs.get("client")
+        return real_build_enforcer(*args, **kwargs)
+
+    monkeypatch.setattr(runner_mod, "build_enforcer", spy_build_enforcer)
+
+    runner._binding_for(_make_agent())
+
+    assert seen["client"] is runner._client
+
+
 def test_binding_for_normalises_none_agent_name_to_default(
     _stub_resolve: list[str],
 ) -> None:

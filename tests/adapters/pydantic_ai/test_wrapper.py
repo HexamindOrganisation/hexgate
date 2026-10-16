@@ -234,6 +234,33 @@ def test_wrap_attaches_binding_sharing_the_tools_enforcer() -> None:
     assert wrapped._binding.enforcer.agent_name == "my-agent"
 
 
+def test_wrap_shares_one_client_across_policy_and_enforcer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The policy resolver's client also builds the enforcer, so usage reads and
+    audit follow the policy's platform."""
+    seen: dict[str, Any] = {}
+    real_build_enforcer = wrapper_mod.build_enforcer
+
+    def fake_resolve(
+        name: str, *, api_key: str, client: object = None
+    ) -> ResolvedPolicy:
+        seen["policy"] = client
+        return ResolvedPolicy(_allow_all(["echo", "shout"]), None)
+
+    def spy_build_enforcer(*args: Any, **kwargs: Any) -> PolicyEnforcer:
+        seen["enforcer"] = kwargs.get("client")
+        return real_build_enforcer(*args, **kwargs)
+
+    monkeypatch.setattr(wrapper_mod, "resolve_policy", fake_resolve)
+    monkeypatch.setattr(wrapper_mod, "build_enforcer", spy_build_enforcer)
+
+    wrap_pydantic_agent(agent=_make_agent(), api_key="k")
+
+    assert seen["policy"] is not None
+    assert seen["enforcer"] is seen["policy"]
+
+
 @pytest.mark.asyncio
 async def test_wrap_enforces_the_resolved_policy_not_allow_all(
     monkeypatch: pytest.MonkeyPatch,

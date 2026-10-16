@@ -12,6 +12,7 @@ from typing import Any
 
 import pytest
 
+from hexgate.cloud.client import HexgateClient, HexgateConfig
 from hexgate.runtime.agent_usage import UsageLedgers, new_usage_ledger
 from hexgate.runtime.context import HexgateContext
 from hexgate.runtime.run_facts import get_run_facts, run_scope
@@ -479,7 +480,7 @@ def _platform_env(monkeypatch: pytest.MonkeyPatch) -> pytest.MonkeyPatch:
 
     monkeypatch.setattr(usage_source, "_usage_sources", {})
     # Audit is not under test; a real sender would outlive the test.
-    monkeypatch.setattr(enforcer_mod, "configure", lambda _api_key: None)
+    monkeypatch.setattr(enforcer_mod, "configure", lambda *_a, **_k: None)
     for name in ("HEXGATE_API_KEY", "HEXGATE_LOCAL_POLICY", _senders._LOCAL_MODE_ENV):
         monkeypatch.delenv(name, raising=False)
     return monkeypatch
@@ -507,5 +508,79 @@ def test_build_enforcer_in_local_mode_has_none(
     _platform_env.setenv(_senders._LOCAL_MODE_ENV, "1")
 
     enforcer = build_enforcer(_usage_free(), agent_name=_AGENT, api_key=_KEY)
+
+    assert enforcer._usage_source is None
+
+
+_OTHER_URL = "https://other.example"
+
+
+def _other_platform_client() -> HexgateClient:
+    return HexgateClient(HexgateConfig(base_url=_OTHER_URL, api_key=_KEY))
+
+
+def _record_configure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> list[tuple[str | None, str | None]]:
+    from hexgate.security import enforcer as enforcer_mod
+
+    calls: list[tuple[str | None, str | None]] = []
+
+    def _spy(api_key: str | None = None, base_url: str | None = None) -> None:
+        calls.append((api_key, base_url))
+
+    monkeypatch.setattr(enforcer_mod, "configure", _spy)
+    return calls
+
+
+def test_build_enforcer_with_a_client_reuses_it_for_usage(
+    _platform_env: pytest.MonkeyPatch,
+) -> None:
+    client = _other_platform_client()
+    _platform_env.setattr(
+        "hexgate.cloud.client.HexgateClient",
+        lambda *_a, **_k: pytest.fail("built a second client"),
+    )
+
+    enforcer = build_enforcer(_usage_free(), agent_name=_AGENT, client=client)
+
+    assert enforcer._usage_source is usage_source._usage_sources[(_KEY, _OTHER_URL)]
+
+
+def test_build_enforcer_client_wins_over_api_key(
+    _platform_env: pytest.MonkeyPatch,
+) -> None:
+    calls = _record_configure(_platform_env)
+
+    enforcer = build_enforcer(
+        _usage_free(),
+        agent_name=_AGENT,
+        api_key="other",
+        client=_other_platform_client(),
+    )
+
+    assert enforcer._usage_source is usage_source._usage_sources[(_KEY, _OTHER_URL)]
+    assert [key for key, _ in calls] == [_KEY]
+
+
+def test_build_enforcer_audits_to_the_client_base_url(
+    _platform_env: pytest.MonkeyPatch,
+) -> None:
+    calls = _record_configure(_platform_env)
+
+    build_enforcer(_usage_free(), agent_name=_AGENT, client=_other_platform_client())
+    build_enforcer(_usage_free(), agent_name=_AGENT, api_key=_KEY)
+
+    assert calls == [(_KEY, _OTHER_URL), (_KEY, None)]
+
+
+def test_build_enforcer_with_a_client_in_local_mode_has_none(
+    _platform_env: pytest.MonkeyPatch,
+) -> None:
+    _platform_env.setenv(_senders._LOCAL_MODE_ENV, "1")
+
+    enforcer = build_enforcer(
+        _usage_free(), agent_name=_AGENT, client=_other_platform_client()
+    )
 
     assert enforcer._usage_source is None
