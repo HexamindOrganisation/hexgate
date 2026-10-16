@@ -114,10 +114,10 @@ EPOCHS ?= 3
 MAX_SANDBOXES ?= 4
 
 .PHONY: policy-eval
-policy-eval: ## Run the policy-writing eval with Claude Code in Docker: CASES=<id prefixes> (one case by default, every run bills the Claude subscription), EPOCHS=<n> (default 3), MAX_SANDBOXES=<n> (default 4), needs CLAUDE_CODE_OAUTH_TOKEN from `claude setup-token`; results in `inspect view --log-dir evals/policy_writing/logs`
+policy-eval: ## Run the policy-writing eval with Claude Code in Docker: CASES=<id prefixes> (one case by default, every run bills the Claude subscription), EPOCHS=<n> (default 3), MAX_SANDBOXES=<n> (default 4, an empty MAX_SANDBOXES= falls back to Inspect's default), needs CLAUDE_CODE_OAUTH_TOKEN from `claude setup-token`; results in `inspect view --log-dir evals/policy_writing/logs`
 	$(UV) python -m inspect_ai eval evals/policy_writing/task.py --model none -T agent=claude \
 	  -T cases=$(CASES) --epochs $(EPOCHS) --epochs-reducer mean,at_least_$(EPOCHS) \
-	  --max-sandboxes $(MAX_SANDBOXES) --log-dir evals/policy_writing/logs
+	  $(if $(MAX_SANDBOXES),--max-sandboxes $(MAX_SANDBOXES)) --log-dir evals/policy_writing/logs
 
 .PHONY: policy-eval-check
 policy-eval-check: ## Run the policy-writing eval on our own answers (reference, wrong_answers, noop) for `inspect view --log-dir evals/policy_writing/logs`; asserts nothing, the pass/fail assertions live in tests/evals/test_task.py
