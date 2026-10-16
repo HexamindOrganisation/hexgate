@@ -6,7 +6,7 @@ note: refund_order has no tier argument and there is no tier caller attribute. T
 expect:
   no_changes: true
   mentions_all:
-    - tier
-    - ["no", "isn't", "is not", not, none, "doesn't", "does not", cannot, "can't"]
+    - [tier, attribute, argument, field, input, level, inputs]
+    - ["no", "not", "isn't", "is not", "doesn't", "does not", "didn't", "did not", "won't", "cannot", "can't", "none", "unable", "unchanged", "unavailable", "lacks", "unknown"]
   decisions:
     - { role: billing, tool: refund_order, args: { order_id: o1, amount: 900, currency: USD }, attributes: { department: finance, clearance_level: 3 }, expect: deny }

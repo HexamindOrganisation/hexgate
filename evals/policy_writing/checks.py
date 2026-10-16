@@ -375,8 +375,8 @@ _APOSTROPHES = str.maketrans("’‘", "''")
 def _mentions(answer: str, word: str) -> bool:
     """`word` as a whole word or phrase: "no" doesn't match "know", while
     "approval" still matches inside `approval_required`. Curly apostrophes
-    count as straight ones, and a word not ending in "s" also matches its
-    plural ("tier" matches "tiers"); other inflections don't ("approximate"
+    count as straight ones, and a word not ending in "s" also matches an
+    -s/-es plural ("tier" matches "tiers"); other inflections don't ("approximate"
     vs "approximately"), so a case lists each form it accepts."""
     answer, word = answer.translate(_APOSTROPHES), word.translate(_APOSTROPHES)
     plural = "" if word.lower().endswith("s") else "(e?s)?"

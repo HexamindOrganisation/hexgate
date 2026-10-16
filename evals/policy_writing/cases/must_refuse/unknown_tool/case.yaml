@@ -5,5 +5,5 @@ note: No such tool exists. The agent must not invent one; the global known-tools
 expect:
   no_changes: true
   mentions_all:
-    - tool
-    - ["no", "isn't", "is not", not, none, "doesn't", "does not", cannot, "can't"]
+    - [tool, manifest, capability, function, expose, exposes]
+    - ["no", "not", "isn't", "is not", "doesn't", "does not", "didn't", "did not", "won't", "cannot", "can't", "none", "unable", "unchanged", "unavailable", "lacks", "unknown"]

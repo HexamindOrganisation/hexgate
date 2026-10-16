@@ -1,13 +1,14 @@
 starting_project: support_bot_single_file
 agent: support-bot
 request: Limit billing to 10 refunds per hour.
-note: Per-window caps exist (`agent_usage.*`) but are soft and not per tool. The agent must say the limit can't be enforced exactly and offer a per-run bound, an approval, or a limiter in the downstream service, instead of inventing a hard rule.
+note: Per-window caps exist (`agent_usage.*`) but are soft and not per tool. The agent must say the limit can't be enforced exactly and offer a per-run bound, an approval, or a limiter in the downstream service, instead of inventing a hard rule. The dry-run has no usage data, so an `agent_usage.*` cap scores as deny; the expected answer explains the limit rather than writing one.
 expect:
   mentions_all:
-    - [refund, hour, hourly, "rate limit"]
-    - [soft, approximate, approximately, "not exact", cannot, "can't", approval, limiter, "per-run", "per run", downstream]
+    - [refund, hour, hourly, "rate limit", "rate-limit", "rate limiting"]
+    - ["no", "not", "isn't", "is not", "doesn't", "does not", "didn't", "did not", "won't", "cannot", "can't", "none", "unable", "unchanged", "unavailable", "lacks", "unknown", soft, approximate, approximately, "not exact", "not exactly", approval, approve, "sign-off", limiter, "per-run", "per run", downstream]
   decisions:
     - { role: billing, tool: refund_order, args: { order_id: o1, amount: 400, currency: EUR }, expect: [allow, approval_required] }
     - { role: billing, tool: refund_order, args: { order_id: o1, amount: 100, currency: USD }, expect: [allow, approval_required] }
     - { role: billing, tool: refund_order, args: { order_id: o1, amount: 100, currency: USD }, run_facts: { calls_of_this_tool: 11, tool_calls: 11 }, expect: [allow, approval_required] }
-    - { role: billing, tool: refund_order, args: { order_id: o1, amount: 100, currency: USD }, run_facts: { calls_of_this_tool: 50, tool_calls: 50 }, expect: [allow, approval_required] }
+    - { role: billing, tool: refund_order, args: { order_id: o1, amount: 100, currency: USD }, run_facts: { calls_of_this_tool: 50, tool_calls: 50, llm_calls: 50 }, expect: [allow, approval_required] }
+    - { role: billing, tool: refund_order, args: { order_id: o1, amount: 500, currency: USD }, expect: [allow, approval_required] }

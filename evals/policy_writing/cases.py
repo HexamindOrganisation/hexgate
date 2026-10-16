@@ -89,14 +89,17 @@ class Superset(_Strict):
     probes: list[Probe] = Field(min_length=1)
 
 
+Word = Annotated[str, Field(min_length=1)]
+
+
 class Expect(_Strict):
     decisions: list[Decision] = []
     changed: list[str] = []
     unchanged: list[str] = []
     # Empty, `score` would skip the check.
-    mentions_any: list[str] = Field([], min_length=1)
+    mentions_any: list[Word] = Field([], min_length=1)
     # Each item is a word, or a list of alternatives where any one will do.
-    mentions_all: list[str | Annotated[list[str], Field(min_length=1)]] = Field(
+    mentions_all: list[Word | Annotated[list[Word], Field(min_length=1)]] = Field(
         [], min_length=1
     )
     no_changes: bool = False

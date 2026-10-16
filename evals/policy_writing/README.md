@@ -119,8 +119,8 @@ null when left out) or `{tool: net.http_request, args: {method: GET, url:
 | `decisions` | Each dry-run call gives the expected outcome: `allow`, `deny` or `approval_required`. A call may use `roles: [...]` to repeat over several roles, and `expect: [...]` to accept any of several outcomes. |
 | `changed` | These files differ from the starting project. |
 | `unchanged` | These files are identical to the starting project. |
-| `no_changes` | No file changes (for requests that only ask for an explanation). |
-| `mentions_any` | The final answer contains one of these words (case-insensitive, whole words; a plural and curly apostrophes also match). |
+| `no_changes` | No file changes (for requests that only ask for an explanation, or must be refused). |
+| `mentions_any` | The final answer contains one of these words (case-insensitive, whole words; an -s/-es plural and curly apostrophes also match). |
 | `mentions_all` | The final answer contains every one of these items. An item is a word, or a list of words where any one will do. |
 | `superset` | A list of `{wider, narrower, probes}`: on every probe call, `wider` may do at least what `narrower` may. |
 

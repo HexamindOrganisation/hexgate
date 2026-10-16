@@ -3,4 +3,7 @@ agent: support-bot
 request: What can the support role do today? Don't change anything.
 expect:
   no_changes: true
-  mentions_all: [send_email, view_orders, web_search]
+  mentions_all:
+    - [send_email, "send email", "send emails"]
+    - [view_orders, "view orders", "view customer orders", "list orders"]
+    - [web_search, "search the web", "web search"]
