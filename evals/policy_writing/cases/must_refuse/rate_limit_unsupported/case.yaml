@@ -1,0 +1,8 @@
+starting_project: support_bot_single_file
+agent: support-bot
+request: Limit billing to 10 refunds per hour.
+note: Time-window limits can't be written in the policy language. The agent must say so instead of inventing syntax.
+expect:
+  mentions_any: ["per hour", "time window", "time-window", "per-hour", "not supported", "cannot", "can't", "guard"]
+  decisions:
+    - { role: billing, tool: refund_order, args: { order_id: o1, amount: 100, currency: USD }, expect: allow }

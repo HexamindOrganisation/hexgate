@@ -1,0 +1,32 @@
+# Starting point for the sub-agent cases: a front-line agent that can reach
+# other agents. No admission or reach rules yet.
+version: 1
+
+roles:
+  default:
+    tools:
+      view_orders: { mode: allow }
+    agents:
+      billing-bot: { via: [handoff], mode: allow }
+      refund-bot: { via: [handoff], mode: allow }
+      admin-bot: { via: [handoff], mode: allow }
+
+  support:
+    tools:
+      view_orders: { mode: allow }
+      send_email: { mode: allow }
+    agents:
+      refund-bot: { via: [handoff], mode: allow }
+      admin-bot: { via: [handoff], mode: allow }
+
+  billing:
+    agents:
+      billing-bot: { via: [tool, handoff], mode: approval_required }
+      refund-bot: { via: [handoff], mode: allow }
+      admin-bot: { via: [handoff], mode: allow }
+    tools:
+      view_orders: { mode: allow }
+      refund_order:
+        mode: allow
+        constraints:
+          - args.amount <= 1000

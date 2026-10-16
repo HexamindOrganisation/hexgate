@@ -1,0 +1,8 @@
+starting_project: support_bot_sub_agents
+agent: front-desk
+request: Never allow more than 3 handoffs in a row.
+note: Handoff depth is a runner setting (HexgateRunner(max_handoff_depth=3)), not a policy rule, and no run.* counter counts handoffs.
+expect:
+  mentions_any: ["max_handoff_depth", "runner", "not a policy", "isn't a policy", "can't be expressed", "cannot be expressed", "not expressible"]
+  decisions:
+    - { role: support, tool: send_email, args: { to: [a@acme.com], subject: s, body: b }, expect: allow }
