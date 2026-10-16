@@ -1,7 +1,7 @@
-"""read_usage against a real local ClickHouse (needs migration 0005).
+"""read_usage against a real local ClickHouse (needs migrations 0005, 0006).
 
-Rows go straight into usage_minute: it's a plain table, and no view fires on an
-insert into it. Opt-in via `pytest -m integration`.
+Rows go straight into the rollups: they're plain tables, and no view fires on an
+insert into them. Opt-in via `pytest -m integration`.
 """
 
 from __future__ import annotations
@@ -13,7 +13,13 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from hexgate_api.features.usage.paths import UsageMetric, UsageWindowSpec
-from hexgate_api.features.usage.service import USAGE_MINUTE_TABLE, read_usage
+from hexgate_api.features.usage.service import (
+    AGENT_ROLLUP,
+    USAGE_MINUTE_TABLE,
+    USAGE_MINUTE_USER_TABLE,
+    USER_ROLLUP,
+    read_usage,
+)
 
 _COLUMNS = [
     "project_id",
@@ -23,6 +29,7 @@ _COLUMNS = [
     "input_tokens",
     "output_tokens",
 ]
+_USER_COLUMNS = ["user_id" if c == "agent_name" else c for c in _COLUMNS]
 _AS_OF_TOLERANCE = timedelta(seconds=30)
 _SECONDS_PER_MINUTE = 60
 # Past this second, wait for the next minute so the read can't cross into it.
@@ -63,11 +70,12 @@ def project_id(clickhouse):
     try:
         yield pid
     finally:
-        clickhouse.command(
-            f"ALTER TABLE {USAGE_MINUTE_TABLE} "
-            "DELETE WHERE startsWith(project_id, {pid:String})",
-            parameters={"pid": pid},
-        )
+        for table in (USAGE_MINUTE_TABLE, USAGE_MINUTE_USER_TABLE):
+            clickhouse.command(
+                f"ALTER TABLE {table} "
+                "DELETE WHERE startsWith(project_id, {pid:String})",
+                parameters={"pid": pid},
+            )
 
 
 @pytest.mark.integration
@@ -92,7 +100,7 @@ def test_windows_sum_the_agent_rows_inside_them(clickhouse, project_id: str) -> 
         UsageWindowSpec(UsageMetric.INVOCATIONS, 7 * 86_400),
         UsageWindowSpec(UsageMetric.TOTAL_TOKENS, 86_400),
     ]
-    readout = read_usage(clickhouse, project_id, "a", specs)
+    readout = read_usage(clickhouse, AGENT_ROLLUP, project_id, "a", specs)
 
     assert [readout.values[s] for s in specs] == [3, 7, 15, 31, 330]
     assert readout.as_of.tzinfo is not None
@@ -106,7 +114,7 @@ def test_an_agent_with_no_rows_reads_zeros(clickhouse, project_id: str) -> None:
         UsageWindowSpec(UsageMetric.LLM_CALLS, 300),
     ]
 
-    readout = read_usage(clickhouse, project_id, "nobody", specs)
+    readout = read_usage(clickhouse, AGENT_ROLLUP, project_id, "nobody", specs)
 
     assert dict(readout.values) == {spec: 0 for spec in specs}
 
@@ -128,6 +136,7 @@ def test_the_leading_partial_minute_is_in_the_window(
 
     readout = read_usage(
         clickhouse,
+        AGENT_ROLLUP,
         project_id,
         "a",
         [UsageWindowSpec(UsageMetric.INVOCATIONS, int(window.total_seconds()))],
@@ -135,3 +144,41 @@ def test_the_leading_partial_minute_is_in_the_window(
 
     assert _start_of_minute(readout.as_of - window) == first_minute
     assert list(readout.values.values()) == [1]
+
+
+@pytest.mark.integration
+def test_user_windows_sum_only_that_users_rows(clickhouse, project_id: str) -> None:
+    other_project = f"{project_id}_other"
+    rows = [
+        [project_id, "alice", _minute(timedelta(minutes=2)), 1, 10, 20],
+        [project_id, "alice", _minute(timedelta(minutes=2)), 2, 0, 0],
+        [project_id, "alice", _minute(timedelta(minutes=30)), 4, 100, 200],
+        [project_id, "alice", _minute(timedelta(hours=3)), 8, 0, 0],
+        [project_id, "alice", _minute(timedelta(days=2)), 16, 0, 0],
+        [project_id, "bob", _minute(timedelta(minutes=2)), 32, 0, 0],
+        [other_project, "alice", _minute(timedelta(minutes=2)), 64, 0, 0],
+    ]
+    clickhouse.insert(USAGE_MINUTE_USER_TABLE, rows, column_names=_USER_COLUMNS)
+    specs = [
+        UsageWindowSpec(UsageMetric.INVOCATIONS, 300),
+        UsageWindowSpec(UsageMetric.INVOCATIONS, 3_600),
+        UsageWindowSpec(UsageMetric.INVOCATIONS, 86_400),
+        UsageWindowSpec(UsageMetric.INVOCATIONS, 7 * 86_400),
+        UsageWindowSpec(UsageMetric.TOTAL_TOKENS, 86_400),
+    ]
+
+    readout = read_usage(clickhouse, USER_ROLLUP, project_id, "alice", specs)
+
+    assert [readout.values[s] for s in specs] == [3, 7, 15, 31, 330]
+
+
+@pytest.mark.integration
+def test_a_user_with_no_rows_reads_zeros(clickhouse, project_id: str) -> None:
+    specs = [
+        UsageWindowSpec(UsageMetric.TOOL_CALLS, 3_600),
+        UsageWindowSpec(UsageMetric.LLM_CALLS, 300),
+    ]
+
+    readout = read_usage(clickhouse, USER_ROLLUP, project_id, "nobody", specs)
+
+    assert dict(readout.values) == {spec: 0 for spec in specs}

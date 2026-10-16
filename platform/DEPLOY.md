@@ -271,7 +271,8 @@ a long index build.
 Promote a release: tag it, `git checkout` it in the prod checkout, then the
 same `platform-stop-writers` → `platform-migrate` → `platform-up` sequence,
 plus any per-release step the migration table below names (e.g.
-`platform-backfill` for `clickhouse/0005`). Rolling *back* past a release
+`platform-backfill` for `clickhouse/0005` and `clickhouse/0006`). Rolling
+*back* past a release
 that added columns has its own step — see below.
 
 Upgrades reuse the env already on the box: the deploy targets only pull a
@@ -334,9 +335,9 @@ The ClickHouse migrations fail differently again — not a 500 on the routes tha
 touch the table, but the boot-time `verify_all` crash loop described above.
 
 Every migration here is safe to run early — the *old* code never selects the new
-columns — which is why the step is unconditional in the recipe. The one
-exception is `clickhouse/0005`: it must not run while an older enricher is still
-writing — see *Materialized views and the writers* below.
+columns — which is why the step is unconditional in the recipe. The exceptions
+are `clickhouse/0005` and `clickhouse/0006`: neither may run while a writer is
+running — see *Materialized views and the writers* below.
 
 | Release | Migration |
 |---|---|
@@ -348,8 +349,9 @@ writing — see *Materialized views and the writers* below.
 | LLM message logging (`llm_message` table) | `clickhouse/0003_add_llm_message.sql` — required before the build that stores `hexgate.messages` |
 | run counting (`agent_run` table) | `clickhouse/0004_add_agent_run.sql` — required before the enricher build that stores `hexgate.runs` |
 | agent usage rollup (`usage_minute` + 3 views) | `clickhouse/0005_add_usage_minute.sql` — apply with the writers stopped, then `make platform-backfill STAGE=<stage> FILE=0005_usage_minute` before `platform-up` |
+| user usage rollup (`usage_minute_user` + 3 views) | `clickhouse/0006_add_usage_minute_user.sql` — apply with the writers stopped, then `make platform-backfill STAGE=<stage> FILE=0006_usage_minute_user` before `platform-up`; required before the API build that serves `/v1/usage/users:read` |
 
-**Materialized views and the writers (`0005`).** The `usage_minute` views sum
+**Materialized views and the writers (`0005`, `0006`).** The `usage_minute` views sum
 every row inserted into their source tables, duplicates included, and only an
 enricher from the same release dedups retried spans across polls. So for this
 release `platform-stop-writers` is mandatory even though nothing in Postgres
@@ -368,6 +370,14 @@ A forgotten backfill only means `30d` usage reads start near zero. To rebuild
 the rollup (a late backfill, a backfill that failed partway, a re-upgrade after
 a rollback that kept the table, or a count that looks wrong): stop the writers,
 `TRUNCATE TABLE hexgate_audit.usage_minute`, run the backfill, start the writers.
+
+`0006`'s hazard is the backfill overlap, not old-enricher duplicates: a row
+written between the `CREATE` of the `usage_minute_user` views and the backfill
+is counted by a view and again by the backfill, for good. So the same recipe
+holds, with `FILE=0006_usage_minute_user`. On a release that ships both, run
+the two backfills back to back in the same stopped window. To rebuild the user
+rollup: stop the writers, `TRUNCATE TABLE hexgate_audit.usage_minute_user`, run
+the backfill, start the writers.
 
 **SDK release order for a new span scope.** The enricher sends any scope it
 does not know to the DLQ as `unknown_scope`. So deploy the enricher build that
@@ -427,6 +437,25 @@ DROP VIEW IF EXISTS hexgate_audit.usage_minute_from_runs;
 DROP VIEW IF EXISTS hexgate_audit.usage_minute_from_decisions;
 DROP VIEW IF EXISTS hexgate_audit.usage_minute_from_llm;
 TRUNCATE TABLE IF EXISTS hexgate_audit.usage_minute;
+SQL
+```
+
+*Past `clickhouse/0006_add_usage_minute_user`* — **no step is needed** while the
+enricher stays at or after `0005`: older API builds never read the table, and
+its views keep counting correctly, so a re-upgrade finds it current and the
+backfill guard skips it. Rolling back past `0005` as well: drop the three
+`usage_minute_user_from_*` views alongside the agent ones, and empty the table,
+for the same reason as `0005`:
+
+```bash
+cd /srv/hexgate-<stage>
+docker compose -p hexgate-<stage> --env-file platform/.env.<stage> \
+  -f platform/docker-compose.deploy.yml exec -T clickhouse sh -c \
+  'clickhouse-client --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD" --multiquery' <<'SQL'
+DROP VIEW IF EXISTS hexgate_audit.usage_minute_user_from_runs;
+DROP VIEW IF EXISTS hexgate_audit.usage_minute_user_from_decisions;
+DROP VIEW IF EXISTS hexgate_audit.usage_minute_user_from_llm;
+TRUNCATE TABLE IF EXISTS hexgate_audit.usage_minute_user;
 SQL
 ```
 
