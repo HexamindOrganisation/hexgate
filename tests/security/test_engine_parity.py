@@ -26,6 +26,7 @@ import pytest
 
 from hexgate.security import WasmPolicy, compile_to_wasm, load_policy_set_from_dict
 from hexgate.security.rego import compile_to_rego
+from hexgate.security.usage_inputs import NO_USAGE, UsageInputs
 
 pytestmark = pytest.mark.skipif(shutil.which("opa") is None, reason="opa not on PATH")
 
@@ -48,7 +49,7 @@ def _py_outcome(
         args=args,
         attributes=attributes,
         run=run,
-        agent_usage=agent_usage,
+        usage=UsageInputs(agent_usage=agent_usage),
     ).outcome.value
 
 
@@ -73,7 +74,7 @@ def _wasm_outcome(
         args=args,
         ctx=attributes,
         run=run,
-        agent_usage=agent_usage,
+        usage=UsageInputs(agent_usage=agent_usage),
     )
     if d.allow:
         return "allow"
@@ -739,9 +740,7 @@ class _WasmEngine:
     def __init__(self, wasm_bytes: bytes) -> None:
         self._w = WasmPolicy.from_bytes(wasm_bytes)
 
-    def evaluate(
-        self, *, role, tool, args, attributes=None, run=None, agent_usage=None
-    ):
+    def evaluate(self, *, role, tool, args, attributes=None, run=None, usage=NO_USAGE):
         from hexgate.security.policy import verdict_from_rego
 
         role_ = role or "default"
@@ -752,7 +751,7 @@ class _WasmEngine:
                 args=dict(args),
                 ctx=dict(attributes or {}),
                 run=dict(run or {}),
-                agent_usage=dict(agent_usage or {}),
+                usage=usage,
             ),
             tool_name=tool,
             role=role_,

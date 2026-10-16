@@ -42,6 +42,7 @@ from hexgate.security.decision import DecisionOutcome
 from hexgate.security.models import AgentPolicy
 from hexgate.security.policy import evaluate_tool_call
 from hexgate.security.policy_set import PolicySet
+from hexgate.security.usage_inputs import UsageInputs
 
 Policy = AgentPolicy | PolicySet
 
@@ -205,11 +206,9 @@ def _outcome(
     role: str | None,
     attributes: dict[str, Any] | None,
     run: Mapping[str, Any] | None,
-    agent_usage: Mapping[str, Any] | None,
+    usage: UsageInputs,
 ) -> DecisionOutcome:
     resolved_run = run if run is not None else _zeroed_run(tool)
-    # A fresh process, so an unset agent_usage.* cap reads zero instead of failing closed.
-    resolved_usage = agent_usage if agent_usage is not None else agent_usage_namespace()
     if isinstance(policy, PolicySet):
         return policy.evaluate(
             role=role,
@@ -217,7 +216,7 @@ def _outcome(
             args=args or {},
             attributes=attributes,
             run=resolved_run,
-            agent_usage=resolved_usage,
+            usage=usage,
         ).outcome
     return evaluate_tool_call(
         policy,
@@ -226,7 +225,7 @@ def _outcome(
         role=role,
         attributes=attributes,
         run=resolved_run,
-        agent_usage=resolved_usage,
+        usage=usage,
     ).outcome
 
 
@@ -240,7 +239,11 @@ def _check(
     agent_usage: Mapping[str, Any] | None,
     expected: DecisionOutcome,
 ) -> None:
-    actual = _outcome(policy, tool, args, role, attributes, run, agent_usage)
+    # A fresh process, so an unset agent_usage.* cap reads zero instead of failing closed.
+    usage = UsageInputs(
+        agent_usage=agent_usage if agent_usage is not None else agent_usage_namespace()
+    )
+    actual = _outcome(policy, tool, args, role, attributes, run, usage)
     if actual is not expected:
         scope = f"role={role!r} " if role is not None else ""
         raise AssertionError(
