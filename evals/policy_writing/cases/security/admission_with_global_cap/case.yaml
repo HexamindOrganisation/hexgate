@@ -1,0 +1,13 @@
+starting_project: support_bot_sub_agents
+agent: front-desk
+request: Only support and billing may run this agent. Also, across every role, no refund may exceed 500.
+note: A policy-wide "args.amount <= 500" also reaches agent.run, which has no amount, and locks everyone out at admission.
+expect:
+  decisions:
+    - { role: support, tool: agent.run, args: { agent: front-desk }, expect: allow }
+    - { role: billing, tool: agent.run, args: { agent: front-desk }, expect: allow }
+    - { role: default, tool: agent.run, args: { agent: front-desk }, expect: deny }
+    - { role: billing, tool: refund_order, args: { order_id: o1, amount: 600, currency: USD }, expect: deny }
+    - { role: billing, tool: refund_order, args: { order_id: o1, amount: 400, currency: USD }, expect: allow }
+    - { role: support, tool: send_email, args: { to: [a@acme.com], subject: s, body: b }, expect: allow }
+    - { role: billing, tool: refund_order, args: { order_id: o1, amount: 1000, currency: USD }, expect: deny }
