@@ -205,17 +205,16 @@ def _outcome(
     args: dict[str, Any] | None,
     role: str | None,
     attributes: dict[str, Any] | None,
-    run: Mapping[str, Any] | None,
+    run: Mapping[str, Any],
     usage: UsageInputs,
 ) -> DecisionOutcome:
-    resolved_run = run if run is not None else _zeroed_run(tool)
     if isinstance(policy, PolicySet):
         return policy.evaluate(
             role=role,
             tool=tool,
             args=args or {},
             attributes=attributes,
-            run=resolved_run,
+            run=run,
             usage=usage,
         ).outcome
     return evaluate_tool_call(
@@ -224,7 +223,7 @@ def _outcome(
         args or {},
         role=role,
         attributes=attributes,
-        run=resolved_run,
+        run=run,
         usage=usage,
     ).outcome
 
@@ -239,11 +238,13 @@ def _check(
     agent_usage: Mapping[str, Any] | None,
     expected: DecisionOutcome,
 ) -> None:
-    # A fresh process, so an unset agent_usage.* cap reads zero instead of failing closed.
+    # A fresh run and process, so an unset run.* or agent_usage.* cap reads zero
+    # instead of failing closed.
+    resolved_run = run if run is not None else _zeroed_run(tool)
     usage = UsageInputs(
         agent_usage=agent_usage if agent_usage is not None else agent_usage_namespace()
     )
-    actual = _outcome(policy, tool, args, role, attributes, run, usage)
+    actual = _outcome(policy, tool, args, role, attributes, resolved_run, usage)
     if actual is not expected:
         scope = f"role={role!r} " if role is not None else ""
         raise AssertionError(
