@@ -41,7 +41,7 @@ from hexgate.agents.subagents import SubagentEdge
 
 # BC re-export — canonical home is hexgate.approvals (framework-agnostic).
 from hexgate.approvals import ApprovalHandler  # noqa: F401 — re-export
-from hexgate.config.env import resolve_api_key
+from hexgate.config.env import platform_of, resolve_api_key
 from hexgate.runtime import (
     LocalWorkspace,
     ToolUseContext,
@@ -317,10 +317,6 @@ def _resolve_tool_use_context(
     )
 
 
-def _platform_api_key(client: HexgateClient | None) -> str | None:
-    return client.config.api_key if client is not None else None
-
-
 class HexgateAgent:
     """A small wrapper around a LangChain agent graph with room for layering."""
 
@@ -399,7 +395,7 @@ class HexgateAgent:
     @hexgate_client.setter
     def hexgate_client(self, client: HexgateClient | None) -> None:
         self._hexgate_client = client
-        self._usage_handler.api_key = _platform_api_key(client)
+        self._usage_handler.api_key = platform_of(None, client)[0]
 
     @property
     def _canonical_name(self) -> str:
@@ -498,7 +494,7 @@ class HexgateAgent:
         )
         await self._check_admission()
         with run_scope(
-            self._canonical_name, api_key=_platform_api_key(self.hexgate_client)
+            self._canonical_name, api_key=platform_of(None, self.hexgate_client)[0]
         ):
             turn_key = self._usage_handler.turn_key()
             try:
@@ -529,7 +525,7 @@ class HexgateAgent:
         )
         await self._check_admission()
         with run_scope(
-            self._canonical_name, api_key=_platform_api_key(self.hexgate_client)
+            self._canonical_name, api_key=platform_of(None, self.hexgate_client)[0]
         ):
             # Captured on the way in because this is a generator, whose
             # ``finally`` an early break runs in a different Context — see

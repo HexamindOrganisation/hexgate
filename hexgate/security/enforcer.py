@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from hexgate.audit import AuditEvent, configure
+from hexgate.config.env import platform_of
 from hexgate.runtime.agent_usage import AGENT_USAGE_LEDGERS, UsageLedgers
 from hexgate.runtime.context import get_current_context
 from hexgate.runtime.roles import resolve_role_set
@@ -320,16 +321,6 @@ class PolicyEnforcer:
                 _log.exception("decision_observer raised; ignoring")
 
 
-def _platform_of(
-    api_key: str | None, client: HexgateClient | None
-) -> tuple[str | None, str | None]:
-    """The key and base URL the enforcer talks to: the client's when there is one,
-    so usage reads and audit go where the surface's policy came from."""
-    if client is None:
-        return api_key, None
-    return client.config.api_key, client.config.base_url
-
-
 def build_enforcer(
     engine: PolicyEngine,
     *,
@@ -347,7 +338,7 @@ def build_enforcer(
     usage stays local when no key resolves. ``decision_observer`` is the
     local-process decision hook (see :class:`PolicyEnforcer`).
     """
-    key, base_url = _platform_of(api_key, client)
+    key, base_url = platform_of(api_key, client)
     return PolicyEnforcer(
         engine,
         agent_name=agent_name,
