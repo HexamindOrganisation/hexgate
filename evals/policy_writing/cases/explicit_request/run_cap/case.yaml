@@ -1,0 +1,10 @@
+starting_project: support_bot_single_file
+agent: support-bot
+request: Stop any run after 30 tool calls, whatever the tool or role.
+expect:
+  decisions:
+    - { role: billing, tool: refund_order, args: { order_id: o1, amount: 100, currency: USD }, run_facts: { tool_calls: 29 }, expect: allow }
+    - { role: billing, tool: refund_order, args: { order_id: o1, amount: 100, currency: USD }, run_facts: { tool_calls: 30, calls_of_this_tool: 1 }, expect: deny }
+    - { role: support, tool: send_email, args: { to: [a@acme.com], subject: s, body: b }, run_facts: { tool_calls: 30 }, expect: deny }
+    - { role: default, tool: view_orders, args: { customer_id: c1 }, run_facts: { tool_calls: 30 }, expect: deny }
+    - { role: billing, tool: web_search, args: { query: q }, run_facts: { tool_calls: 30 }, expect: deny }
