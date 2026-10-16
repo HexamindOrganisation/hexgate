@@ -30,7 +30,7 @@ from hexgate.security.decision import (
     RunAttribution,
     combine_role_verdicts,
 )
-from hexgate.security.usage_inputs import UsageInputs
+from hexgate.security.usage_inputs import NO_USAGE, UsageInputs
 from hexgate.security.usage_source import (
     OnUnavailable,
     PlatformUsageSource,
@@ -233,8 +233,8 @@ class PolicyEnforcer:
         # so roles can't disagree about the agent's usage. None when the policy
         # references none.
         reading = self._usage_reading(bound, facts, run_snapshot)
-        usage = UsageInputs(
-            agent_usage=reading.namespace if reading is not None else None
+        usage = (
+            NO_USAGE if reading is None else UsageInputs(agent_usage=reading.namespace)
         )
 
         verdict, deciding_role = combine_role_verdicts(
