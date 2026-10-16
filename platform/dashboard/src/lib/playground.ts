@@ -349,13 +349,20 @@ export function usePlayground({ projectId }: Options) {
   }, [hasPending]);
 
   /**
-   * Send a chat message, optionally scoped to one or more roles.
+   * Send a chat message, optionally scoped to one or more roles and acting as a
+   * named caller.
    *
-   * A non-empty `roles` sends a `user_attenuation` block, which makes the dev's
-   * `hexgate serve` attenuate its token to carry one `role()` fact per name for
-   * this turn. The most permissive outcome wins, so adding a role only widens.
+   * A non-empty `roles` (or a `name`) sends a `user_attenuation` block, which
+   * makes the dev's `hexgate serve` attenuate its token to carry one `role()`
+   * fact per name for this turn. The most permissive outcome wins, so adding a
+   * role only widens. `name` becomes the caller identity: serve maps the
+   * attenuation `user` to `HexgateContext.user_id`, so the agent sees it as who's
+   * acting (default `"playground"` when unset).
    */
-  function sendChat(message: string, opts?: { roles?: string[] }) {
+  function sendChat(
+    message: string,
+    opts?: { roles?: string[]; name?: string },
+  ) {
     const ws = activeSocket;
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
     const turnId = randomId();
@@ -382,15 +389,22 @@ export function usePlayground({ projectId }: Options) {
     }));
     const frame: Record<string, unknown> = { type: "chat", message };
     const roles = (opts?.roles ?? []).filter(Boolean);
-    if (roles.length) {
-      frame.user_attenuation = {
-        user: "playground",
-        roles,
-        // Singular kept for one release: a pinned older `hexgate serve` reads
-        // only `role`. The current one prefers `roles`.
-        role: roles[0],
+    const name = opts?.name?.trim();
+    if (roles.length || name) {
+      // Acting identity → HexgateContext.user_id on the serve side. Only attach
+      // the role facts when there are some — a name-only turn runs as a named,
+      // unroled caller, not one explicitly narrowed to zero roles.
+      const attenuation: Record<string, unknown> = {
+        user: name || "playground",
         ttl_seconds: 300,
       };
+      if (roles.length) {
+        attenuation.roles = roles;
+        // Singular kept for one release: a pinned older `hexgate serve` reads
+        // only `role`. The current one prefers `roles`.
+        attenuation.role = roles[0];
+      }
+      frame.user_attenuation = attenuation;
     }
     ws.send(JSON.stringify(frame));
   }

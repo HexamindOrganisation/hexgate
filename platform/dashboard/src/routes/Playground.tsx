@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { Link } from "react-router-dom";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { Streamdown } from "streamdown";
 import {
   ArrowUp,
@@ -7,20 +7,32 @@ import {
   Check,
   ChevronDown,
   CircleDashed,
+  ExternalLink,
+  Moon,
+  Palette,
   RefreshCcw,
   RadioReceiver,
+  Settings2,
   ShieldAlert,
+  Sun,
   UserCog,
   Wrench,
   X,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import {
   Popover,
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
+import { useIsDark, useTheme } from "@/lib/theme";
+import {
+  accentForeground,
+  hexToHslChannels,
+  hslChannelsToHex,
+} from "@/lib/color";
 import {
   usePlayground,
   type ApprovalRequestEvent,
@@ -34,6 +46,7 @@ import { useProjectScoped } from "@/lib/active";
 import { NoProjectEmptyState } from "@/components/NoProjectEmptyState";
 import { parseRolesFromPolicy } from "@/lib/policy";
 import { useResolvedPolicy } from "@/lib/policy_files";
+import { usePlaygroundPrefs } from "@/lib/playground_prefs";
 import { cn } from "@/lib/utils";
 
 export function PlaygroundPage() {
@@ -63,6 +76,23 @@ function PlaygroundLive({ projectId }: { projectId: string }) {
   // A set, not a scalar: the enforcer evaluates every role the caller carries,
   // so the playground has to be able to reproduce a multi-role caller.
   const [activeRoles, setActiveRoles] = useState<string[]>([]);
+  // Presentation-mode prefs (persisted per-device, see playground_prefs). The
+  // acting `name` is keyed by project — it becomes the caller identity sent to
+  // the agent (→ HexgateContext.user_id), so it must not ride from one project's
+  // agent to another on a project switch. `accent` is a global custom highlight
+  // (HSL channels like "226 70% 52%").
+  const accent = usePlaygroundPrefs((s) => s.accent);
+  const setAccent = usePlaygroundPrefs((s) => s.setAccent);
+  const name = usePlaygroundPrefs((s) => s.names[projectId] ?? "");
+  const setNameForProject = usePlaygroundPrefs((s) => s.setName);
+  const setName = useCallback(
+    (v: string) => setNameForProject(projectId, v),
+    [setNameForProject, projectId],
+  );
+  // Full-screen presentation mode (own tab, no app sidebar — see AppShell). The
+  // playground drops its breakout margins and swaps "open in tab" for a close.
+  const [params] = useSearchParams();
+  const present = params.get("present") === "1";
   const transcriptRef = useRef<HTMLDivElement>(null);
 
   // Fetch the serving agent so we know which roles are available. Roles are a
@@ -126,30 +156,59 @@ function PlaygroundLive({ projectId }: { projectId: string }) {
     el?.scrollTo({ top: el.scrollHeight });
   }, [state.messages]);
 
+  // Paint a custom accent onto the whole document (not just this subtree) so
+  // Radix popovers — which portal to <body> — pick it up too, with a readable
+  // --primary-foreground; clean it up on unmount so it never leaks to other
+  // routes.
+  useEffect(() => {
+    if (!accent) return;
+    const root = document.documentElement;
+    root.style.setProperty("--primary", accent);
+    root.style.setProperty("--ring", accent);
+    root.style.setProperty("--primary-foreground", accentForeground(accent));
+    return () => {
+      root.style.removeProperty("--primary");
+      root.style.removeProperty("--ring");
+      root.style.removeProperty("--primary-foreground");
+    };
+  }, [accent]);
+
   function submit() {
     const text = composer.trim();
     if (!text) return;
     // Re-pin to the bottom so the sent turn and its streamed reply are visible
     // even if the user had scrolled up to re-read an earlier turn.
     atBottomRef.current = true;
-    sendChat(text, activeRoles.length ? { roles: activeRoles } : undefined);
+    const trimmedName = name.trim();
+    sendChat(
+      text,
+      activeRoles.length || trimmedName
+        ? { roles: activeRoles, name: trimmedName || undefined }
+        : undefined,
+    );
     setComposer("");
   }
 
   const empty = state.messages.length === 0;
 
   return (
-    <div className="-mx-8 -my-6 relative flex h-screen flex-col overflow-hidden bg-background">
+    <div
+      className={cn(
+        "relative flex h-screen flex-col overflow-hidden bg-background",
+        !present && "-mx-8 -my-6",
+      )}
+    >
       <GooFilter />
 
-      {/* Status, mixed into the top corners over the chat — no side panel. */}
+      {/* Status + controls, mixed into the top corners over the chat. */}
       <div className="pointer-events-none absolute inset-x-0 top-0 z-20 flex items-start justify-between gap-3 px-4 py-3">
-        <AgentStatus
-          agentName={state.agentName}
-          online={state.agentOnline}
-          relayConnected={state.connected}
-        />
+        {/* Top-left: the served agent + the acting-role dropdown. */}
         <div className="pointer-events-auto flex items-center gap-2">
+          <AgentStatus
+            agentName={state.agentName}
+            online={state.agentOnline}
+            relayConnected={state.connected}
+          />
           {roleOptions.length > 0 && (
             <ActingAsControl
               roleOptions={roleOptions}
@@ -157,6 +216,14 @@ function PlaygroundLive({ projectId }: { projectId: string }) {
               setActiveRoles={setActiveRoles}
             />
           )}
+        </div>
+        {/* Top-right: presentation controls — open in a tab, theme, accent, reset. */}
+        <div className="pointer-events-auto flex items-center gap-2">
+          <PresentationControls
+            present={present}
+            accent={accent}
+            setAccent={setAccent}
+          />
           <button
             type="button"
             onClick={reset}
@@ -222,6 +289,16 @@ function PlaygroundLive({ projectId }: { projectId: string }) {
       <DecisionDeck
         decisions={state.decisions}
         muted={state.pendingApprovals.length > 0 || composer.trim().length > 0}
+      />
+
+      {/* Bottom-left: who you're acting as (name + role), with a gear that opens
+          an editor for both — the name rides into the agent's HexgateContext. */}
+      <IdentityChip
+        name={name}
+        setName={setName}
+        roleOptions={roleOptions}
+        activeRoles={activeRoles}
+        setActiveRoles={setActiveRoles}
       />
 
       {/* Persistent docs affordance — a subtle icon+label pill kept in the
@@ -290,6 +367,72 @@ function AgentStatus({
   );
 }
 
+function roleLabel(activeRoles: string[]): string {
+  if (activeRoles.length === 0) return "default";
+  if (activeRoles.length === 1) return activeRoles[0];
+  return `${activeRoles[0]} +${activeRoles.length - 1}`;
+}
+
+/** The role multi-select + explainer, shared by the top-left "acting as"
+ * dropdown and the bottom-left identity editor. */
+function RoleCheckboxList({
+  roleOptions,
+  activeRoles,
+  setActiveRoles,
+}: {
+  roleOptions: string[];
+  activeRoles: string[];
+  setActiveRoles: React.Dispatch<React.SetStateAction<string[]>>;
+}) {
+  return (
+    <>
+      <div className="flex flex-col gap-0.5">
+        {roleOptions.map((role) => (
+          <label
+            key={role}
+            className="flex cursor-pointer items-center gap-2 rounded px-1.5 py-1 font-mono text-sm hover:bg-accent"
+          >
+            <input
+              type="checkbox"
+              checked={activeRoles.includes(role)}
+              onChange={(e) =>
+                setActiveRoles((prev) =>
+                  e.target.checked
+                    ? // Re-derive so the emitted order is the policy's, not
+                      // the click order.
+                      roleOptions.filter((r) => r === role || prev.includes(r))
+                    : prev.filter((r) => r !== role),
+                )
+              }
+              className="size-3.5 accent-primary"
+            />
+            {role}
+          </label>
+        ))}
+      </div>
+      <p className="mt-2 border-t border-border/60 px-1 pt-2 text-[11px] leading-snug text-muted-foreground">
+        {activeRoles.length ? (
+          <>
+            Each turn attenuates the token with{" "}
+            <span className="font-mono">
+              {activeRoles.map((r) => `role("${r}")`).join(", ")}
+            </span>
+            .{" "}
+            {activeRoles.length > 1
+              ? "The most permissive outcome across roles wins."
+              : "That role's bundle decides which tools fire."}
+          </>
+        ) : (
+          <>
+            No role — the turn runs unroled and the{" "}
+            <span className="font-mono">default</span> policy decides.
+          </>
+        )}
+      </p>
+    </>
+  );
+}
+
 function ActingAsControl({
   roleOptions,
   activeRoles,
@@ -299,12 +442,6 @@ function ActingAsControl({
   activeRoles: string[];
   setActiveRoles: React.Dispatch<React.SetStateAction<string[]>>;
 }) {
-  const label =
-    activeRoles.length === 0
-      ? "default"
-      : activeRoles.length === 1
-        ? activeRoles[0]
-        : `${activeRoles[0]} +${activeRoles.length - 1}`;
   return (
     <Popover>
       <PopoverTrigger asChild>
@@ -315,62 +452,224 @@ function ActingAsControl({
           <UserCog className="size-3.5 text-primary" />
           <span className="text-muted-foreground">acting as</span>
           <span className="max-w-[24vw] truncate font-mono font-medium">
-            {label}
+            {roleLabel(activeRoles)}
           </span>
           <ChevronDown className="size-3 text-muted-foreground" />
         </button>
       </PopoverTrigger>
-      <PopoverContent align="end" className="w-60 p-2">
+      <PopoverContent align="start" className="w-60 p-2">
         <div className="mb-1 px-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
           Acting as
         </div>
-        <div className="flex flex-col gap-0.5">
-          {roleOptions.map((role) => (
-            <label
-              key={role}
-              className="flex cursor-pointer items-center gap-2 rounded px-1.5 py-1 font-mono text-sm hover:bg-accent"
-            >
-              <input
-                type="checkbox"
-                checked={activeRoles.includes(role)}
-                onChange={(e) =>
-                  setActiveRoles((prev) =>
-                    e.target.checked
-                      ? // Re-derive so the emitted order is the policy's, not
-                        // the click order.
-                        roleOptions.filter(
-                          (r) => r === role || prev.includes(r),
-                        )
-                      : prev.filter((r) => r !== role),
-                  )
-                }
-                className="size-3.5 accent-primary"
-              />
-              {role}
-            </label>
+        <RoleCheckboxList
+          roleOptions={roleOptions}
+          activeRoles={activeRoles}
+          setActiveRoles={setActiveRoles}
+        />
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+/** Bottom-left identity: shows "{name} · {role}" with a gear that opens an editor
+ * for the acting name (→ HexgateContext) and the role(s). */
+function IdentityChip({
+  name,
+  setName,
+  roleOptions,
+  activeRoles,
+  setActiveRoles,
+}: {
+  name: string;
+  setName: (v: string) => void;
+  roleOptions: string[];
+  activeRoles: string[];
+  setActiveRoles: React.Dispatch<React.SetStateAction<string[]>>;
+}) {
+  return (
+    <div className="pointer-events-auto absolute bottom-24 left-4 z-20 sm:bottom-6 sm:left-6">
+      <Popover>
+        <PopoverTrigger asChild>
+          <button
+            type="button"
+            title="Edit acting name & role"
+            className="flex max-w-[70vw] items-center gap-2 rounded-full border border-border/60 bg-card/70 px-3 py-1.5 text-xs backdrop-blur transition-colors hover:bg-accent"
+          >
+            <Settings2 className="size-3.5 shrink-0 text-primary" />
+            <span className="truncate font-mono font-medium">
+              {name.trim() || "anonymous"}
+            </span>
+            <span className="text-muted-foreground">·</span>
+            <span className="truncate font-mono text-muted-foreground">
+              {roleLabel(activeRoles)}
+            </span>
+          </button>
+        </PopoverTrigger>
+        <PopoverContent align="start" side="top" className="w-64 p-2">
+          <div className="mb-1 px-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+            Acting as
+          </div>
+          <Input
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="name (optional)"
+            className="h-8 font-mono text-sm"
+          />
+          <p className="mb-2 mt-1 px-1 text-[11px] leading-snug text-muted-foreground">
+            Rides into the agent's{" "}
+            <span className="font-mono">HexgateContext</span> as the caller id.
+          </p>
+          {roleOptions.length > 0 ? (
+            <RoleCheckboxList
+              roleOptions={roleOptions}
+              activeRoles={activeRoles}
+              setActiveRoles={setActiveRoles}
+            />
+          ) : (
+            <p className="px-1 text-[11px] text-muted-foreground">
+              No roles on the served agent yet.
+            </p>
+          )}
+        </PopoverContent>
+      </Popover>
+    </div>
+  );
+}
+
+// Curated accent swatches (HSL channels, matching the --primary token format).
+// "Blue"/"Plum" mirror the two built-in schemes; the rest are extra demo accents.
+const ACCENT_PRESETS: { name: string; value: string }[] = [
+  { name: "Blue", value: "226 70% 52%" },
+  { name: "Violet", value: "262 70% 58%" },
+  { name: "Plum", value: "313 62% 48%" },
+  { name: "Rose", value: "340 75% 55%" },
+  { name: "Amber", value: "38 92% 50%" },
+  { name: "Emerald", value: "152 60% 40%" },
+];
+
+function AccentPicker({
+  accent,
+  setAccent,
+}: {
+  accent: string;
+  setAccent: (v: string) => void;
+}) {
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          title="Customize the accent color"
+          className="grid size-8 place-items-center rounded-full border border-border/60 bg-card/70 text-muted-foreground backdrop-blur transition-colors hover:bg-accent hover:text-foreground"
+        >
+          <Palette
+            className="size-3.5"
+            style={accent ? { color: `hsl(${accent})` } : undefined}
+          />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-56 p-3">
+        <div className="mb-2 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+          Accent color
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {ACCENT_PRESETS.map((p) => (
+            <button
+              key={p.value}
+              type="button"
+              title={p.name}
+              onClick={() => setAccent(p.value)}
+              className={cn(
+                "size-6 rounded-full ring-offset-2 ring-offset-popover transition",
+                accent === p.value && "ring-2 ring-foreground",
+              )}
+              style={{ backgroundColor: `hsl(${p.value})` }}
+            />
           ))}
         </div>
-        <p className="mt-2 border-t border-border/60 px-1 pt-2 text-[11px] leading-snug text-muted-foreground">
-          {activeRoles.length ? (
-            <>
-              Each turn attenuates the token with{" "}
-              <span className="font-mono">
-                {activeRoles.map((r) => `role("${r}")`).join(", ")}
-              </span>
-              .{" "}
-              {activeRoles.length > 1
-                ? "The most permissive outcome across roles wins."
-                : "That role's bundle decides which tools fire."}
-            </>
-          ) : (
-            <>
-              No role — the turn runs unroled and the{" "}
-              <span className="font-mono">default</span> policy decides.
-            </>
-          )}
+        <div className="mt-3 flex items-center justify-between gap-2">
+          <label className="flex cursor-pointer items-center gap-2 text-xs text-muted-foreground">
+            <input
+              type="color"
+              value={accent ? hslChannelsToHex(accent) : "#3b82f6"}
+              onChange={(e) => setAccent(hexToHslChannels(e.target.value))}
+              className="size-6 cursor-pointer rounded border border-border/60 bg-transparent p-0"
+            />
+            Custom
+          </label>
+          <button
+            type="button"
+            onClick={() => setAccent("")}
+            className="text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+          >
+            Reset
+          </button>
+        </div>
+        <p className="mt-2 text-[11px] leading-snug text-muted-foreground">
+          Repaints this playground's highlight (
+          <span className="font-mono">--primary</span>) — your own
+          agent-interface look.
         </p>
       </PopoverContent>
     </Popover>
+  );
+}
+
+/** Top-right presentation controls: open in a new tab, toggle dark/light, and
+ * pick a custom accent — the bits that make the playground a demo surface. */
+function PresentationControls({
+  present,
+  accent,
+  setAccent,
+}: {
+  present: boolean;
+  accent: string;
+  setAccent: (v: string) => void;
+}) {
+  const navigate = useNavigate();
+  const setMode = useTheme((s) => s.setMode);
+  const dark = useIsDark();
+  const ctl =
+    "grid size-8 place-items-center rounded-full border border-border/60 bg-card/70 text-muted-foreground backdrop-blur transition-colors hover:bg-accent hover:text-foreground";
+  return (
+    <>
+      {present ? (
+        <button
+          type="button"
+          onClick={() => {
+            // Always exit full-screen reliably (drop the ?present param); also
+            // close the tab when the browser allows it — refused for a tab that
+            // was reloaded, which is why navigate is the real action, not close.
+            window.close();
+            navigate("/playground");
+          }}
+          title="Exit full screen"
+          className={ctl}
+        >
+          <X className="size-3.5" />
+        </button>
+      ) : (
+        <button
+          type="button"
+          onClick={() =>
+            window.open("/playground?present=1", "_blank", "noopener")
+          }
+          title="Open full screen in a new tab"
+          className={ctl}
+        >
+          <ExternalLink className="size-3.5" />
+        </button>
+      )}
+      <button
+        type="button"
+        onClick={() => setMode(dark ? "light" : "dark")}
+        title={dark ? "Switch to light" : "Switch to dark"}
+        className={ctl}
+      >
+        {dark ? <Sun className="size-3.5" /> : <Moon className="size-3.5" />}
+      </button>
+      <AccentPicker accent={accent} setAccent={setAccent} />
+    </>
   );
 }
 
