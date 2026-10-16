@@ -317,6 +317,10 @@ def _resolve_tool_use_context(
     )
 
 
+def _platform_api_key(client: HexgateClient | None) -> str | None:
+    return client.config.api_key if client is not None else None
+
+
 class HexgateAgent:
     """A small wrapper around a LangChain agent graph with room for layering."""
 
@@ -371,9 +375,8 @@ class HexgateAgent:
         # Enforcement seam: the binding (enforcer + optional refresh source)
         # that enforce_policy attaches and refresh_policy swaps in place;
         # threaded through with_tools rebuilds. hexgate_client is separate —
-        # load_hexgate_agent attaches it for lazy cloud-side attenuation.
+        # enforce_policy(client=) attaches it for lazy cloud-side attenuation.
         self._binding: PolicyBinding | None = binding
-        self.hexgate_client: HexgateClient | None = hexgate_client
         # Kill-switch gate; attached by load_hexgate_agent (platform path only —
         # no gate without a control plane). Threaded through with_tools rebuilds.
         self._ban_gate: BanGate | None = ban_gate
@@ -381,15 +384,22 @@ class HexgateAgent:
         # no control plane needed). Threaded through with_tools rebuilds. Whether it
         # actually refuses is decided per run from the current policy.
         self._agent_gate: AgentGate | None = agent_gate
-        # api_key intentionally omitted — create_agent has no explicit api_key param
-        # (only hexgate_client, attached post-init by _bind_policy). If one is added,
-        # thread it through here too, or usage events will keep silently resolving
-        # from HEXGATE_API_KEY instead of the caller's explicit key.
+        # The usage handler and run_start follow ``hexgate_client`` (see its setter).
         # Lives as long as the runtime, so both run methods below owe its
         # per-run transcript state a reset on the way out.
         self._usage_handler = HexgateUsageCallbackHandler(
             agent_name=canonical_name(name)
         )
+        self.hexgate_client = hexgate_client
+
+    @property
+    def hexgate_client(self) -> HexgateClient | None:
+        return self._hexgate_client
+
+    @hexgate_client.setter
+    def hexgate_client(self, client: HexgateClient | None) -> None:
+        self._hexgate_client = client
+        self._usage_handler.api_key = _platform_api_key(client)
 
     @property
     def _canonical_name(self) -> str:
@@ -487,7 +497,9 @@ class HexgateAgent:
             binding=self._binding,
         )
         await self._check_admission()
-        with run_scope(self._canonical_name):
+        with run_scope(
+            self._canonical_name, api_key=_platform_api_key(self.hexgate_client)
+        ):
             turn_key = self._usage_handler.turn_key()
             try:
                 return await self._graph.ainvoke(
@@ -516,7 +528,9 @@ class HexgateAgent:
             binding=self._binding,
         )
         await self._check_admission()
-        with run_scope(self._canonical_name):
+        with run_scope(
+            self._canonical_name, api_key=_platform_api_key(self.hexgate_client)
+        ):
             # Captured on the way in because this is a generator, whose
             # ``finally`` an early break runs in a different Context — see
             # ``HexgateUsageCallbackHandler.end_run``.

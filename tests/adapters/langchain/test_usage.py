@@ -151,6 +151,24 @@ async def test_on_llm_end_happy_path(emitted: list[dict[str, Any]]) -> None:
 
 
 @pytest.mark.asyncio
+async def test_when_the_handler_is_re_keyed_then_later_events_use_the_new_key(
+    emitted: list[dict[str, Any]], messages: list[dict[str, Any]]
+) -> None:
+    handler = _handler()
+    handler.api_key = "k2"
+
+    await _turn(
+        handler,
+        [HumanMessage(content="Weather?")],
+        AIMessage(content="Sunny.", usage_metadata=USAGE),
+    )
+
+    assert handler.api_key == "k2"
+    assert [event["api_key"] for event in emitted] == ["k2"]
+    assert [event["api_key"] for event in messages] == ["k2"]
+
+
+@pytest.mark.asyncio
 async def test_when_only_the_legacy_token_usage_is_set_then_it_is_used(
     emitted: list[dict[str, Any]],
 ) -> None:
