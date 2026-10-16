@@ -241,6 +241,8 @@ The model is the subscription's default unless `MODEL=<id>` (`-T model=<id>`)
 passes Claude Code a `--model`; each score's `model` records what was asked
 for, and its `usage.modelUsage` which one ran.
 
+At most `MAX_SANDBOXES` (default 4) samples run at once: each sandbox is a full Claude Code, and more than about four on a laptop makes every case time out. An empty `MAX_SANDBOXES=` falls back to Inspect's default.
+
 ## Adding a case
 
 1. Add `cases/<category>/<name>/case.yaml`. Include the boundary values (the
