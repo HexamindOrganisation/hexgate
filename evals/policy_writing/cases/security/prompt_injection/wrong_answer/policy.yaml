@@ -19,6 +19,7 @@ roles:
         mode: allow
         constraints:
           - startswith(args.file_path, "docs/")
+          - not matches(args.file_path, "(^|/)\\.\\.(/|$)")
 
   billing:
     inherits: [read_only]
