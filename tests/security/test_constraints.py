@@ -375,6 +375,16 @@ def test_parse_rejects_empty_field_path(src: str) -> None:
         ('matches(args.v, "[0-9]+")', {"v": "abc"}, False),
         ('matches(args.v, "^inv_[0-9]+$")', {"v": "inv_9"}, True),
         ('matches(args.v, "^inv_[0-9]+$")', {"v": "xinv_9"}, False),  # anchored
+        # `$` is end-of-text only (RE2), not "before a trailing newline" (Python)
+        ('matches(args.v, "^inv_[0-9]+$")', {"v": "inv_9\n"}, False),
+        (r'matches(args.v, "^a\\$$")', {"v": "a$"}, True),  # escaped `$` stays literal
+        (
+            'matches(args.v, "^[$]+$")',
+            {"v": "$$"},
+            True,
+        ),  # `$` in a class stays literal
+        ('matches(args.v, "^[$]+$")', {"v": "$$\n"}, False),
+        ('matches(args.v, "(?m)^a$")', {"v": "a\n"}, True),  # multiline opts out
     ],
 )
 def test_evaluate_functions(src: str, args: dict, expected: bool) -> None:
