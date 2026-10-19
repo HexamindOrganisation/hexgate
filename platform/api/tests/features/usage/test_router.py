@@ -754,9 +754,17 @@ def test_a_failed_top_users_read_is_503_and_logs_no_message(
 
 
 def test_top_users_never_touches_the_sdk_user_pool_or_stats(
-    dashboard: TestClient,
+    dashboard: TestClient, fake_clickhouse: MagicMock
 ) -> None:
     """G9: dashboard tabs must not queue SDK user reads or move their read rate."""
+    threads: list[str] = []
+    result = fake_clickhouse.query.return_value
+
+    def recording_query(*_args: object, **_kwargs: object) -> MagicMock:
+        threads.append(threading.current_thread().name)
+        return result
+
+    fake_clickhouse.query.side_effect = recording_query
     released = threading.Event()
     stats = MagicMock()
     with ThreadPoolExecutor(1, thread_name_prefix=_BLOCKED_POOL_PREFIX) as pool:
@@ -769,4 +777,5 @@ def test_top_users_never_touches_the_sdk_user_pool_or_stats(
             released.set()
 
     assert r.status_code == 200, r.text
+    assert not threads[0].startswith(_BLOCKED_POOL_PREFIX)
     stats.record.assert_not_called()
