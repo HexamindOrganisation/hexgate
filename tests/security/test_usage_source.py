@@ -8,7 +8,6 @@ gates pinned here fail silently in production: G3 (fail open by default), G4 / F
 from __future__ import annotations
 
 import asyncio
-import dataclasses
 import logging
 import threading
 from collections.abc import Callable, Iterator, Mapping, Sequence
@@ -41,6 +40,7 @@ from hexgate.security.usage_source import (
     USER_REFRESH_ENV,
     OnUnavailable,
     PlatformUsageSource,
+    ScopeFetcher,
     ScopeKindSpec,
     UsageContentError,
     UsageRefreshSettings,
@@ -179,25 +179,16 @@ def _rig(
     values: Mapping[str, int] = _PLATFORM_VALUES,
     *,
     fetch_users: bool = False,
-    user_settings: UsageRefreshSettings = _SETTINGS,
-    capacity: int | None = None,
-    shared_backoff: bool = False,
-    accepts: Callable[[str], bool] | None = None,
+    user_spec: Callable[[ScopeFetcher], ScopeKindSpec] = lambda fetch: ScopeKindSpec(
+        fetch, _SETTINGS
+    ),
 ) -> _Rig:
     clock = _FakeClock()
     fetcher = _FakeFetcher(clock, values)
     user_fetcher = _FakeFetcher(clock, _USER_VALUES)
     kinds = {UsageScopeKind.AGENT: ScopeKindSpec(fetcher.fetch, _SETTINGS)}
     if fetch_users:
-        user_spec = ScopeKindSpec(
-            user_fetcher.fetch,
-            user_settings,
-            capacity=capacity,
-            shared_backoff=shared_backoff,
-        )
-        if accepts is not None:
-            user_spec = dataclasses.replace(user_spec, accepts=accepts)
-        kinds[UsageScopeKind.USER] = user_spec
+        kinds[UsageScopeKind.USER] = user_spec(user_fetcher.fetch)
     executor = executor if executor is not None else _InlineExecutor()
     source = PlatformUsageSource(kinds, executor, clock)
     return _Rig(clock, fetcher, user_fetcher, source, new_usage_ledger(clock=clock))
@@ -209,10 +200,13 @@ def _user_rig(executor: Executor | None = None, *, capacity: int = 2) -> _Rig:
     return _rig(
         executor,
         fetch_users=True,
-        user_settings=USER_REFRESH_DEFAULTS,
-        capacity=capacity,
-        shared_backoff=True,
-        accepts=user_id_is_readable,
+        user_spec=lambda fetch: ScopeKindSpec(
+            fetch,
+            USER_REFRESH_DEFAULTS,
+            capacity=capacity,
+            shared_backoff=True,
+            accepts=user_id_is_readable,
+        ),
     )
 
 
@@ -796,11 +790,20 @@ def test_bad_settings_fall_back_to_the_defaults(
 # ---------------------------------------------------------------------------
 
 
-def _client(base_url: str = "http://platform") -> Any:
+def _no_values(_key: str, _paths: Sequence[str]) -> dict[str, Any]:
+    return {}
+
+
+def _client(
+    base_url: str = "http://platform",
+    *,
+    agent: ScopeFetcher = _no_values,
+    user: ScopeFetcher = _no_values,
+) -> Any:
     return SimpleNamespace(
         config=SimpleNamespace(base_url=base_url),
-        get_agent_usage=lambda name, paths: {},
-        read_user_usage=lambda user_id, paths: {},
+        get_agent_usage=agent,
+        read_user_usage=user,
     )
 
 
@@ -824,12 +827,7 @@ def test_resolve_returns_the_shared_source_when_a_key_is_set() -> None:
 
 def test_the_shared_source_fetches_agent_scopes_by_bare_name() -> None:
     fetcher = _FakeFetcher(_FakeClock(), _PLATFORM_VALUES)
-    client = SimpleNamespace(
-        config=SimpleNamespace(base_url="http://platform"),
-        get_agent_usage=fetcher.fetch,
-        read_user_usage=lambda user_id, paths: {},
-    )
-    source = get_usage_source("k", client)
+    source = get_usage_source("k", _client(agent=fetcher.fetch))
 
     source.refresh(_SCOPE, _ONE_PATH)
     reading = source.read(_SCOPE, _ONE_PATH, new_usage_ledger())
@@ -944,7 +942,7 @@ def test_a_user_snapshot_younger_than_min_refresh_schedules_nothing() -> None:
 
 
 def test_the_least_recently_used_user_is_evicted_past_capacity() -> None:
-    rig = _user_rig(_HeldExecutor(), capacity=2)
+    rig = _user_rig(_HeldExecutor())
     for key in ("a", "b", "c"):
         rig.source.refresh(_user(key), _ONE_PATH)
 
@@ -958,7 +956,7 @@ def test_the_least_recently_used_user_is_evicted_past_capacity() -> None:
 
 
 def test_reading_a_user_keeps_it_from_eviction() -> None:
-    rig = _user_rig(_HeldExecutor(), capacity=2)
+    rig = _user_rig(_HeldExecutor())
     rig.source.refresh(_user("a"), _ONE_PATH)
     rig.source.refresh(_user("b"), _ONE_PATH)
 
@@ -971,7 +969,7 @@ def test_reading_a_user_keeps_it_from_eviction() -> None:
 
 def test_eviction_drops_a_users_rejection_and_throttle() -> None:
     """F5: the side state goes with the snapshot."""
-    rig = _user_rig(capacity=2)
+    rig = _user_rig()
     rig.user_fetcher.error = HexgateError("refused", status=422)
     rig.source.refresh(_user("a"), _ONE_PATH)
     rig.user_fetcher.error = None
@@ -986,7 +984,7 @@ def test_eviction_drops_a_users_rejection_and_throttle() -> None:
 
 
 def test_the_user_table_never_outgrows_its_capacity() -> None:
-    rig = _user_rig(capacity=2)
+    rig = _user_rig()
 
     for index in range(1_000):
         rig.source.refresh(_user(f"user-{index}"), _ONE_PATH)
@@ -995,7 +993,10 @@ def test_the_user_table_never_outgrows_its_capacity() -> None:
 
 
 def test_agents_are_never_evicted() -> None:
-    rig = _rig(fetch_users=True, capacity=1)
+    rig = _rig(
+        fetch_users=True,
+        user_spec=lambda fetch: ScopeKindSpec(fetch, _SETTINGS, capacity=1),
+    )
     agents = [UsageScope.agent(f"agent-{index}") for index in range(50)]
 
     for scope in agents:
@@ -1256,20 +1257,10 @@ def test_no_log_line_carries_a_user_id(
 # ---------------------------------------------------------------------------
 
 
-def _fetching_client(
-    agent: _FakeFetcher, user: _FakeFetcher, base_url: str = "http://platform"
-) -> Any:
-    return SimpleNamespace(
-        config=SimpleNamespace(base_url=base_url),
-        get_agent_usage=agent.fetch,
-        read_user_usage=user.fetch,
-    )
-
-
 def test_the_shared_source_reads_users_through_the_client() -> None:
     clock = _FakeClock()
     agent, user = _FakeFetcher(clock, _PLATFORM_VALUES), _FakeFetcher(clock, {})
-    source = get_usage_source("k", _fetching_client(agent, user))
+    source = get_usage_source("k", _client(agent=agent.fetch, user=user.fetch))
 
     source.refresh(_user(_ALICE), _TWO_PATHS)
     source.refresh(_SCOPE, _ONE_PATH)
@@ -1284,7 +1275,7 @@ def test_the_shared_source_sizes_users_from_the_user_cache_variable(
     monkeypatch.setenv(USER_CACHE_ENV, "1")
     clock = _FakeClock()
     agent, user = _FakeFetcher(clock, {}), _FakeFetcher(clock, _USER_VALUES)
-    source = get_usage_source("k", _fetching_client(agent, user))
+    source = get_usage_source("k", _client(agent=agent.fetch, user=user.fetch))
 
     for key in ("a", "b", "a"):
         source.refresh(_user(key), _ONE_PATH)
@@ -1296,7 +1287,7 @@ def test_agent_scopes_alone_never_touch_the_user_kind() -> None:
     """G3 for this PR: nothing about users runs until a user scope is asked for."""
     clock = _FakeClock()
     agent, user = _FakeFetcher(clock, _PLATFORM_VALUES), _FakeFetcher(clock, {})
-    source = get_usage_source("k", _fetching_client(agent, user))
+    source = get_usage_source("k", _client(agent=agent.fetch, user=user.fetch))
 
     source.refresh(_SCOPE, _ONE_PATH)
     source.read(_SCOPE, _ONE_PATH, new_usage_ledger())

@@ -117,6 +117,20 @@ class UsageReading:
 
 
 @dataclass(frozen=True, slots=True)
+class RefreshEnv:
+    """The variables one scope kind's thresholds are read from."""
+
+    min_refresh: str
+    sync_after: str
+    max_staleness: str
+
+
+AGENT_REFRESH_ENV: Final = RefreshEnv(
+    _MIN_REFRESH_ENV, _SYNC_AFTER_ENV, _MAX_STALENESS_ENV
+)
+
+
+@dataclass(frozen=True, slots=True)
 class UsageRefreshSettings:
     min_refresh_seconds: float = DEFAULT_MIN_REFRESH_SECONDS
     sync_after_seconds: float = DEFAULT_SYNC_AFTER_SECONDS
@@ -140,13 +154,12 @@ class UsageRefreshSettings:
         cls,
         environ: Mapping[str, str] = os.environ,
         *,
-        env: RefreshEnv | None = None,
+        env: RefreshEnv = AGENT_REFRESH_ENV,
         defaults: UsageRefreshSettings | None = None,
     ) -> UsageRefreshSettings:
         """Read the thresholds from ``env`` (the agents' ``HEXGATE_USAGE_*`` when
         omitted). A bad value logs and falls back to ``defaults``: it runs at the
         run boundary and must not stop agents."""
-        env = AGENT_REFRESH_ENV if env is None else env
         defaults = cls() if defaults is None else defaults
         try:
             return cls(
@@ -165,18 +178,6 @@ class UsageRefreshSettings:
             return defaults
 
 
-@dataclass(frozen=True, slots=True)
-class RefreshEnv:
-    """The variables one scope kind's thresholds are read from."""
-
-    min_refresh: str
-    sync_after: str
-    max_staleness: str
-
-
-AGENT_REFRESH_ENV: Final = RefreshEnv(
-    _MIN_REFRESH_ENV, _SYNC_AFTER_ENV, _MAX_STALENESS_ENV
-)
 USER_REFRESH_ENV: Final = RefreshEnv(
     "HEXGATE_USAGE_USER_REFRESH_SECONDS",
     "HEXGATE_USAGE_USER_SYNC_AFTER_SECONDS",
@@ -235,6 +236,10 @@ class _Notice(StrEnum):
 
     ROUTE_MISSING = auto()
     KEY_UNREADABLE = auto()
+
+
+# A notice logged once per source: an agent's 404 per scope, the others per kind.
+_ReportKey = UsageScope | tuple[UsageScopeKind, _Notice]
 
 
 @dataclass(frozen=True, slots=True)
@@ -334,10 +339,13 @@ class PlatformUsageSource:
         }
         self._paused_until: dict[UsageScopeKind, float] = {}
         self._in_flight: set[UsageScope] = set()
-        self._reported: set[UsageScope | tuple[UsageScopeKind, _Notice]] = set()
+        self._reported: set[_ReportKey] = set()
 
     def refresh(self, scope: UsageScope, paths: frozenset[str]) -> None:
-        state, tier = self._tier(scope, paths)
+        state = self._remember(scope, paths) if paths else None
+        if state is None:
+            return
+        tier = self._tier(scope, state, paths)
         if tier is _Tier.SYNC:
             self._fetch_now(scope, state)
         elif tier is _Tier.BACKGROUND:
@@ -345,7 +353,10 @@ class PlatformUsageSource:
 
     async def refresh_async(self, scope: UsageScope, paths: frozenset[str]) -> None:
         """As :meth:`refresh`; only the synchronous fetch leaves the loop."""
-        state, tier = self._tier(scope, paths)
+        state = self._remember(scope, paths) if paths else None
+        if state is None:
+            return
+        tier = self._tier(scope, state, paths)
         if tier is _Tier.SYNC:
             await asyncio.to_thread(self._fetch_now, scope, state)
         elif tier is _Tier.BACKGROUND:
@@ -366,15 +377,13 @@ class PlatformUsageSource:
         scope is throttled."""
         state = self._remember(scope, paths)
         snapshot = None if state is None else state.snapshot
-        settings = self._kinds[scope.kind].settings if state is not None else None
         if (
             snapshot is not None
-            and settings is not None
             and (age := self._clock() - snapshot.fetched_at)
-            < settings.max_staleness_seconds
+            < self._kinds[scope.kind].settings.max_staleness_seconds
         ):
             reading = self._combine(
-                snapshot, age, settings, paths, ledger, on_unavailable, current_run_age
+                scope, snapshot, age, paths, ledger, on_unavailable, current_run_age
             )
         else:
             reading = UsageReading(
@@ -387,9 +396,9 @@ class PlatformUsageSource:
 
     def _combine(
         self,
+        scope: UsageScope,
         snapshot: UsageSnapshot,
         age: float,
-        settings: UsageRefreshSettings,
         paths: frozenset[str],
         ledger: UsageLedger,
         on_unavailable: OnUnavailable,
@@ -412,7 +421,7 @@ class PlatformUsageSource:
                 _fallback(ledger, missing, on_unavailable, current_run_age) or {}
             )
             state = UsageState.PARTIAL
-        elif age >= settings.sync_after_seconds:
+        elif age >= self._kinds[scope.kind].settings.sync_after_seconds:
             state = UsageState.STALE
         else:
             state = UsageState.FRESH
@@ -424,7 +433,7 @@ class PlatformUsageSource:
         if not self._fetchable(scope):
             if scope.kind in self._kinds:
                 self._report_once(
-                    scope.kind, _Notice.KEY_UNREADABLE, _KEY_UNREADABLE_MESSAGE, scope
+                    (scope.kind, _Notice.KEY_UNREADABLE), _KEY_UNREADABLE_MESSAGE, scope
                 )
             return None
         with self._state_lock:
@@ -437,32 +446,25 @@ class PlatformUsageSource:
         return spec is not None and spec.accepts(scope.key)
 
     def _tier(
-        self, scope: UsageScope, paths: frozenset[str]
-    ) -> tuple[_ScopeState | None, _Tier]:
-        if not paths:
-            return None, _Tier.NONE
-        state = self._remember(scope, paths)
-        if state is None:
-            return None, _Tier.NONE
+        self, scope: UsageScope, state: _ScopeState, paths: frozenset[str]
+    ) -> _Tier:
         with self._state_lock:
             # A cold user during a pause doesn't even leave the loop.
             if self._kind_paused_locked(scope.kind):
-                return state, _Tier.NONE
+                return _Tier.NONE
             snapshot = state.snapshot
         settings = self._kinds[scope.kind].settings
         if snapshot is None:
-            return state, _Tier.SYNC
+            return _Tier.SYNC
         age = self._clock() - snapshot.fetched_at
         if age >= settings.sync_after_seconds:
-            return state, _Tier.SYNC
+            return _Tier.SYNC
         # A new path never blocks the run: it reads ledger-only until this lands (F5).
         if not paths <= snapshot.values.keys() or age >= settings.min_refresh_seconds:
-            return state, _Tier.BACKGROUND
-        return state, _Tier.NONE
+            return _Tier.BACKGROUND
+        return _Tier.NONE
 
-    def _fetch_now(self, scope: UsageScope, state: _ScopeState | None) -> None:
-        if state is None:
-            return
+    def _fetch_now(self, scope: UsageScope, state: _ScopeState) -> None:
         with state.fetch_lock:
             if self._throttled(scope, state) or self._covered(scope, state):
                 return
@@ -512,21 +514,26 @@ class PlatformUsageSource:
             payload = spec.fetch(scope.key, sorted(wanted))
             values = usage_values_from_payload(payload, wanted)
         except Exception as exc:  # noqa: BLE001 — fail-soft: keep last-good
+            status = exc.status if isinstance(exc, HexgateError) else None
             if spec.shared_backoff:
-                self._pause_kind(scope, state, spec.settings, started, exc)
+                self._pause_kind(scope, state, spec.settings, started, exc, status)
             else:
-                self._back_off_scope(scope, state, started, exc)
+                self._back_off_scope(scope, state, started, exc, status)
             return
         with self._state_lock:
             state.snapshot = UsageSnapshot(MappingProxyType(values), started)
 
     def _back_off_scope(
-        self, scope: UsageScope, state: _ScopeState, started: float, exc: Exception
+        self,
+        scope: UsageScope,
+        state: _ScopeState,
+        started: float,
+        exc: Exception,
+        status: int | None,
     ) -> None:
         if isinstance(exc, UsageContentError):
             logger.error("usage body for %s rejected; using last-good: %s", scope, exc)
             return
-        status = exc.status if isinstance(exc, HexgateError) else None
         if status in _REJECTED_STATUSES:
             with self._state_lock:
                 state.rejected_until = started + REJECTED_RETRY_SECONDS
@@ -544,10 +551,10 @@ class PlatformUsageSource:
         settings: UsageRefreshSettings,
         started: float,
         exc: Exception,
+        status: int | None,
     ) -> None:
         """Back off a kind whose scopes are mostly cold. Logs the exception class
         and status, never its message: that may carry the key."""
-        status = exc.status if isinstance(exc, HexgateError) else None
         if status == _UNPROCESSABLE:
             # The platform refused this key, not the kind.
             with self._state_lock:
@@ -566,7 +573,7 @@ class PlatformUsageSource:
             )
         if status == _NOT_FOUND:
             self._report_once(
-                scope.kind, _Notice.ROUTE_MISSING, _ROUTE_MISSING_MESSAGE, scope.kind
+                (scope.kind, _Notice.ROUTE_MISSING), _ROUTE_MISSING_MESSAGE, scope.kind
             )
         elif began:
             logger.warning(
@@ -578,22 +585,17 @@ class PlatformUsageSource:
                 seconds,
             )
 
-    def _report_once(
-        self, kind: UsageScopeKind, notice: _Notice, message: str, *args: object
-    ) -> None:
+    def _report_once(self, key: _ReportKey, message: str, *args: object) -> None:
         with self._state_lock:
-            if (kind, notice) in self._reported:
+            if key in self._reported:
                 return
-            self._reported.add((kind, notice))
+            self._reported.add(key)
         logger.warning(message, *args)
 
     def _log_unregistered(self, scope: UsageScope) -> None:
         # Otherwise it reads as an outage forever, so say what it is, once.
-        with self._state_lock:
-            if scope in self._reported:
-                return
-            self._reported.add(scope)
-        logger.warning(
+        self._report_once(
+            scope,
             "%s is not registered in this API key's project; "
             "agent_usage.* reads local usage only",
             scope,
