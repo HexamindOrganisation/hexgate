@@ -15,6 +15,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from pydantic import BaseModel, ConfigDict
 from sqlmodel.ext.asyncio.session import AsyncSession
 
+from hexgate_api.core.clickhouse import server_error_code
 from hexgate_api.core.db import get_session
 from hexgate_api.deps.clickhouse import clickhouse_getter, clickhouse_unavailable
 from hexgate_api.deps.tokens import require_project
@@ -209,9 +210,13 @@ async def _read_windows(
         readout = await memo.get_or_load((project_id, key, specs), load)
         failed = False
     except (ClickHouseError, TimeoutError) as exc:
-        # The class only: a ClickHouse message can quote a bound value (README G10).
+        # The class and the numeric server code only: a ClickHouse message can
+        # quote a bound value (README G10).
         _log.warning(
-            "usage read failed for %s: %s", failure_subject, type(exc).__name__
+            "usage read failed for %s: %s (clickhouse code %s)",
+            failure_subject,
+            type(exc).__name__,
+            server_error_code(exc),
         )
         raise clickhouse_unavailable(_USAGE_UNAVAILABLE) from exc
     finally:

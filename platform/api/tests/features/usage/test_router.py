@@ -460,16 +460,43 @@ def test_a_user_read_slower_than_the_timeout_is_503_and_not_memoized(
     assert fake_clickhouse.query.call_count == 2
 
 
-def test_the_agent_failure_log_names_the_class_not_the_message(
+def test_the_agent_failure_log_names_the_class_and_code_not_the_message(
     client: TestClient, fake_clickhouse: MagicMock, caplog: pytest.LogCaptureFixture
 ) -> None:
-    fake_clickhouse.query.side_effect = DatabaseError("secret detail")
+    fake_clickhouse.query.side_effect = DatabaseError(
+        "Received ClickHouse exception, code: 241, server response: secret detail"
+    )
 
     with caplog.at_level("WARNING"):
         assert _usage(client, "invocations_1h").status_code == 503
 
-    assert "DatabaseError" in caplog.text
+    assert "DatabaseError (clickhouse code 241)" in caplog.text
     assert "secret detail" not in caplog.text
+
+
+def test_the_user_failure_log_carries_the_code_but_not_the_user_id(
+    client: TestClient, fake_clickhouse: MagicMock, caplog: pytest.LogCaptureFixture
+) -> None:
+    fake_clickhouse.query.side_effect = DatabaseError(
+        f"Received ClickHouse exception, code: 60, server response: bad value {_USER!r}"
+    )
+
+    with caplog.at_level("WARNING"):
+        assert _user_usage(client, ["invocations_1h"]).status_code == 503
+
+    assert "clickhouse code 60" in caplog.text
+    assert _USER not in caplog.text
+
+
+def test_a_failure_without_a_server_code_logs_none(
+    client: TestClient, fake_clickhouse: MagicMock, caplog: pytest.LogCaptureFixture
+) -> None:
+    fake_clickhouse.query.side_effect = DatabaseError("connection reset")
+
+    with caplog.at_level("WARNING"):
+        assert _usage(client, "invocations_1h").status_code == 503
+
+    assert "DatabaseError (clickhouse code None)" in caplog.text
 
 
 def test_same_user_same_window_queries_once_and_two_users_twice(
