@@ -152,9 +152,11 @@ export function UsagePage() {
         f={f}
         setF={setF}
       />
-      <div className="mt-4">
-        <TopUsersCard projectId={projectId as string} f={f} setF={setF} />
-      </div>
+      {projectId && (
+        <div className="mt-4">
+          <TopUsersCard projectId={projectId} f={f} setF={setF} />
+        </div>
+      )}
     </div>
   );
 }
