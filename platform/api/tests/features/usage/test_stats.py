@@ -15,6 +15,7 @@ from hexgate_api.features.usage.stats import (
     get_agent_read_stats,
     get_user_read_stats,
 )
+from tests.features.usage.fakes import FakeClock
 
 _INTERVAL = 60.0
 _ALERT = 2.0
@@ -22,16 +23,8 @@ _LOGGER = "tests.usage.stats"
 _USAGE_STATS_LOGGER = "hexgate_api.features.usage.stats"
 
 
-class _FakeClock:
-    def __init__(self) -> None:
-        self.now = 0.0
-
-    def __call__(self) -> float:
-        return self.now
-
-
 def _stats(
-    clock: _FakeClock, *, alert: float | None = _ALERT, max_samples: int = 1_000
+    clock: FakeClock, *, alert: float | None = _ALERT, max_samples: int = 1_000
 ) -> UsageReadStats:
     return UsageReadStats(
         "user",
@@ -50,7 +43,7 @@ def _records(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
 def test_nothing_is_logged_before_the_interval(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    clock = _FakeClock()
+    clock = FakeClock()
     stats = _stats(clock)
 
     with caplog.at_level(logging.INFO, logger=_LOGGER):
@@ -66,7 +59,7 @@ def test_nothing_is_logged_before_the_interval(
 def test_the_interval_logs_one_summary_and_resets(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    clock = _FakeClock()
+    clock = FakeClock()
     stats = _stats(clock, alert=None)
     # 100 samples of 1..100 ms: nearest-rank p50 is 50 ms, p99 is 99 ms.
     latencies = [ms / 1_000 for ms in range(1, 101)]
@@ -91,7 +84,7 @@ def test_the_interval_logs_one_summary_and_resets(
 
 
 def test_the_summary_figures(caplog: pytest.LogCaptureFixture) -> None:
-    clock = _FakeClock()
+    clock = FakeClock()
     stats = _stats(clock)
     for latency in (0.004, 0.002, 0.010, 0.001):
         stats.record(latency_seconds=latency, queried=True, failed=False)
@@ -110,7 +103,7 @@ def test_the_summary_figures(caplog: pytest.LogCaptureFixture) -> None:
 def test_above_the_alert_the_summary_is_a_warning(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    clock = _FakeClock()
+    clock = FakeClock()
     stats = _stats(clock)
     requests = int(_ALERT * _INTERVAL) + 1
 
@@ -126,7 +119,7 @@ def test_above_the_alert_the_summary_is_a_warning(
 
 
 def test_at_the_alert_the_summary_stays_info(caplog: pytest.LogCaptureFixture) -> None:
-    clock = _FakeClock()
+    clock = FakeClock()
     stats = _stats(clock)
 
     with caplog.at_level(logging.INFO, logger=_LOGGER):
@@ -140,7 +133,7 @@ def test_at_the_alert_the_summary_stays_info(caplog: pytest.LogCaptureFixture) -
 
 
 def test_no_alert_threshold_never_warns(caplog: pytest.LogCaptureFixture) -> None:
-    clock = _FakeClock()
+    clock = FakeClock()
     stats = _stats(clock, alert=None)
 
     with caplog.at_level(logging.INFO, logger=_LOGGER):
@@ -156,7 +149,7 @@ def test_no_alert_threshold_never_warns(caplog: pytest.LogCaptureFixture) -> Non
 def test_a_burst_after_idle_is_not_diluted_by_the_idle_before_it(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    clock = _FakeClock()
+    clock = FakeClock()
     stats = _stats(clock)
 
     with caplog.at_level(logging.INFO, logger=_LOGGER):
@@ -177,7 +170,7 @@ def test_a_burst_after_idle_is_not_diluted_by_the_idle_before_it(
 def test_a_late_flush_rates_over_the_interval_not_the_idle_tail(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    clock = _FakeClock()
+    clock = FakeClock()
     stats = _stats(clock)
 
     with caplog.at_level(logging.INFO, logger=_LOGGER):
@@ -192,7 +185,7 @@ def test_a_late_flush_rates_over_the_interval_not_the_idle_tail(
 
 
 def test_the_triggering_read_opens_the_next_window() -> None:
-    clock = _FakeClock()
+    clock = FakeClock()
     stats = _stats(clock)
     stats.record(latency_seconds=0.001, queried=True, failed=False)
     clock.now = 5 * _INTERVAL
@@ -206,7 +199,7 @@ def test_the_triggering_read_opens_the_next_window() -> None:
 
 
 def test_max_samples_bounds_the_latencies_kept() -> None:
-    clock = _FakeClock()
+    clock = FakeClock()
     stats = _stats(clock, max_samples=3)
     for latency in (1.0, 1.0, 1.0, 0.001, 0.002, 0.003):
         stats.record(latency_seconds=latency, queried=True, failed=False)
@@ -218,7 +211,7 @@ def test_max_samples_bounds_the_latencies_kept() -> None:
 
 
 def test_no_requests_reads_zeros() -> None:
-    summary = _stats(_FakeClock()).summary()
+    summary = _stats(FakeClock()).summary()
 
     assert summary.requests == 0
     assert summary.memo_hit_ratio == 0.0

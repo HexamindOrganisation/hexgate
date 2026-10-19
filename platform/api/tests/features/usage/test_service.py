@@ -22,18 +22,11 @@ from hexgate_api.features.usage.service import (
     build_usage_query,
     read_usage,
 )
+from tests.features.usage.fakes import FakeClock
 
 _HOUR = UsageWindowSpec(UsageMetric.INVOCATIONS, 3_600)
 _DAY_TOKENS = UsageWindowSpec(UsageMetric.TOTAL_TOKENS, 86_400)
 _AS_OF = datetime(2026, 10, 7, 12, 0, tzinfo=UTC)
-
-
-class _FakeClock:
-    def __init__(self) -> None:
-        self.now = 0.0
-
-    def __call__(self) -> float:
-        return self.now
 
 
 def _readout(value: int = 0) -> UsageReadout:
@@ -190,7 +183,7 @@ def test_a_naive_as_of_is_read_as_utc() -> None:
 
 
 async def test_a_hit_inside_the_ttl_does_not_load_again() -> None:
-    clock = _FakeClock()
+    clock = FakeClock()
     memo = UsageMemo(1.0, 10, clock)
     loads: list[int] = []
 
@@ -208,7 +201,7 @@ async def test_a_hit_inside_the_ttl_does_not_load_again() -> None:
 
 
 async def test_concurrent_misses_on_one_key_share_one_load() -> None:
-    memo = UsageMemo(1.0, 10, _FakeClock())
+    memo = UsageMemo(1.0, 10, FakeClock())
     release = asyncio.Event()
     loads: list[int] = []
 
@@ -226,7 +219,7 @@ async def test_concurrent_misses_on_one_key_share_one_load() -> None:
 
 
 async def test_a_failed_load_is_not_memoized() -> None:
-    memo = UsageMemo(1.0, 10, _FakeClock())
+    memo = UsageMemo(1.0, 10, FakeClock())
 
     async def fail() -> UsageReadout:
         raise DatabaseError("boom")
@@ -241,7 +234,7 @@ async def test_a_failed_load_is_not_memoized() -> None:
 
 
 async def test_a_failure_does_not_evict_a_newer_entry_for_the_same_key() -> None:
-    memo = UsageMemo(1.0, 10, _FakeClock())
+    memo = UsageMemo(1.0, 10, FakeClock())
     release_old = asyncio.Event()
     newer_loads: list[int] = []
 
@@ -267,7 +260,7 @@ async def test_a_failure_does_not_evict_a_newer_entry_for_the_same_key() -> None
 
 
 async def test_a_load_slower_than_the_ttl_is_still_shared() -> None:
-    clock = _FakeClock()
+    clock = FakeClock()
     memo = UsageMemo(1.0, 10, clock)
     release = asyncio.Event()
     loads: list[int] = []
@@ -289,7 +282,7 @@ async def test_a_load_slower_than_the_ttl_is_still_shared() -> None:
 
 
 async def test_the_ttl_runs_from_when_the_load_completes() -> None:
-    clock = _FakeClock()
+    clock = FakeClock()
     memo = UsageMemo(1.0, 10, clock)
     release = asyncio.Event()
     loads: list[int] = []
@@ -312,7 +305,7 @@ async def test_the_ttl_runs_from_when_the_load_completes() -> None:
 
 
 async def test_a_full_memo_keeps_a_pending_load_over_an_expired_one() -> None:
-    clock = _FakeClock()
+    clock = FakeClock()
     memo = UsageMemo(1.0, 2, clock)
     release = asyncio.Event()
     loads: list[str] = []
@@ -342,7 +335,7 @@ async def test_a_full_memo_keeps_a_pending_load_over_an_expired_one() -> None:
 
 
 async def test_a_full_memo_drops_expired_entries_first_then_the_oldest() -> None:
-    clock = _FakeClock()
+    clock = FakeClock()
     memo = UsageMemo(1.0, 2, clock)
     loads: list[str] = []
 
@@ -381,7 +374,7 @@ def _counting_loader(loads: list[str]):
 
 
 async def test_a_full_memo_never_evicts_a_pending_load() -> None:
-    memo = UsageMemo(1.0, 2, _FakeClock())
+    memo = UsageMemo(1.0, 2, FakeClock())
     release = asyncio.Event()
     loads: list[str] = []
     loader = _counting_loader(loads)
@@ -401,7 +394,7 @@ async def test_a_full_memo_never_evicts_a_pending_load() -> None:
 
 
 async def test_a_memo_full_of_pending_loads_overflows_rather_than_drops_one() -> None:
-    memo = UsageMemo(1.0, 1, _FakeClock())
+    memo = UsageMemo(1.0, 1, FakeClock())
     release = asyncio.Event()
     loads: list[str] = []
     loader = _counting_loader(loads)
@@ -421,7 +414,7 @@ async def test_a_memo_full_of_pending_loads_overflows_rather_than_drops_one() ->
 
 
 async def test_reloading_an_expired_key_does_not_evict_a_live_one() -> None:
-    clock = _FakeClock()
+    clock = FakeClock()
     memo = UsageMemo(1.0, 2, clock)
     loads: list[str] = []
     loader = _counting_loader(loads)
