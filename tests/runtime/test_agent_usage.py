@@ -388,7 +388,6 @@ def test_agent_ledgers_are_never_evicted() -> None:
     for name in ("u", "v", "w"):
         ledgers.ledger_for(UsageScope.user(name))
 
-    assert [ledgers.ledger_for(scope) for scope in agents] == first
     assert all(
         ledgers.ledger_for(scope) is ledger
         for scope, ledger in zip(agents, first, strict=True)

@@ -431,7 +431,7 @@ class UsageLedgers:
             self._user_ledgers.move_to_end(scope)
             return ledger
         ledger = self._user_ledgers[scope] = self._ledger_factory()
-        while len(self._user_ledgers) > self._user_capacity:
+        if len(self._user_ledgers) > self._user_capacity:
             self._user_ledgers.popitem(last=False)
         return ledger
 
