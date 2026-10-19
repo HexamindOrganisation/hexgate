@@ -18,11 +18,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from hexgate_api.core.clickhouse import server_error_code
 from hexgate_api.core.db import get_session
-from hexgate_api.deps.clickhouse import (
-    clickhouse_getter,
-    clickhouse_unavailable,
-    require_clickhouse,
-)
+from hexgate_api.deps.clickhouse import clickhouse_getter, clickhouse_unavailable
 from hexgate_api.deps.org import require_org_member
 from hexgate_api.deps.tokens import require_project
 from hexgate_api.features.agents.service import get_agent
@@ -57,6 +53,7 @@ from hexgate_api.features.usage.top_users import (
     TOP_USERS_DEFAULT_LIMIT,
     TOP_USERS_MAX_LIMIT,
     TOP_USERS_WINDOW_SECONDS,
+    TopUser,
     TopUsersWindow,
     read_top_users,
 )
@@ -204,14 +201,14 @@ async def api_top_users(
     window: TopUsersWindow = "24h",
     metric: UsageMetric = UsageMetric.TOTAL_TOKENS,
     limit: int = Query(TOP_USERS_DEFAULT_LIMIT, ge=1, le=TOP_USERS_MAX_LIMIT),
-    clickhouse_client: Client = Depends(require_clickhouse),
+    get_client: Callable[[], Client] = Depends(clickhouse_getter),
 ) -> TopUsersRead:
     """Dashboard ranking of the project's end users across every agent. Runs on
     the default thread pool, never the SDK user-read pool (README G9)."""
     try:
         users = await asyncio.to_thread(
-            read_top_users,
-            clickhouse_client,
+            _connect_and_rank,
+            get_client,
             project_id,
             TOP_USERS_WINDOW_SECONDS[window],
             metric,
@@ -329,3 +326,15 @@ def _connect_and_read(
     """The connect is lazy: it runs after the request checks, inside the read's
     timeout, and a failure to connect is the same 503 as a failed read."""
     return read_usage(get_client(), rollup, project_id, key, specs)
+
+
+def _connect_and_rank(
+    get_client: Callable[[], Client],
+    project_id: str,
+    window_seconds: int,
+    metric: UsageMetric,
+    limit: int,
+) -> list[TopUser]:
+    """Lazy connect, as in _connect_and_read: a connect failure is the route's
+    own 503 and log line, not require_clickhouse's audit one."""
+    return read_top_users(get_client(), project_id, window_seconds, metric, limit)

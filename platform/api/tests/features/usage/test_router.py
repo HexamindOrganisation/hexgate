@@ -23,7 +23,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from hexgate_api.constants import DEFAULT_ORG_ID
 from hexgate_api.core import keystore as keystore_mod
 from hexgate_api.core.ids import new_id
-from hexgate_api.deps.clickhouse import clickhouse_getter, require_clickhouse
+from hexgate_api.deps.clickhouse import clickhouse_getter
 from hexgate_api.deps.org import require_org_member
 from hexgate_api.deps.tokens import require_project
 from hexgate_api.features.usage import router as usage_router
@@ -669,27 +669,16 @@ _BLOCKED_POOL_PREFIX = "usage-test-blocked-user-pool"
 
 
 @pytest.fixture
-def dashboard_anonymous(
-    anonymous_client: TestClient, fake_clickhouse: MagicMock
-) -> TestClient:
-    """Cookie auth runs for real; ClickHouse is the fake."""
-    app.dependency_overrides[require_clickhouse] = lambda: fake_clickhouse
+def dashboard(anonymous_client: TestClient, fake_clickhouse: MagicMock) -> TestClient:
+    app.dependency_overrides[require_org_member] = lambda: MagicMock()
+    fake_clickhouse.query.return_value.result_rows = [(_USER, 50), ("bob", 30)]
     return anonymous_client
 
 
-@pytest.fixture
-def dashboard(
-    dashboard_anonymous: TestClient, fake_clickhouse: MagicMock
-) -> TestClient:
-    app.dependency_overrides[require_org_member] = lambda: MagicMock()
-    fake_clickhouse.query.return_value.result_rows = [(_USER, 50), ("bob", 30)]
-    return dashboard_anonymous
-
-
 def test_top_users_without_a_session_is_401(
-    dashboard_anonymous: TestClient, fake_clickhouse: MagicMock
+    anonymous_client: TestClient, fake_clickhouse: MagicMock
 ) -> None:
-    r = dashboard_anonymous.get(_TOP_USERS_PATH)
+    r = anonymous_client.get(_TOP_USERS_PATH)
 
     assert r.status_code == 401
     fake_clickhouse.query.assert_not_called()
@@ -749,8 +738,26 @@ def test_a_failed_top_users_read_is_503_and_logs_no_message(
 
     assert r.status_code == 503
     assert r.headers["Retry-After"] == "5"
+    assert r.json()["detail"] == "usage temporarily unavailable"
     assert "DatabaseError" in caplog.text
     assert quoted not in caplog.text
+
+
+def test_an_unreachable_clickhouse_on_top_users_is_the_same_usage_503(
+    dashboard: TestClient,
+    unreachable_clickhouse: MagicMock,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A connect failure answers and logs like a failed read, not as the audit
+    log's (require_clickhouse), whose log line carries the message."""
+    with caplog.at_level("WARNING"):
+        r = dashboard.get(_TOP_USERS_PATH)
+
+    assert r.status_code == 503
+    assert r.json()["detail"] == "usage temporarily unavailable"
+    assert unreachable_clickhouse.call_count == 1
+    assert "OperationalError" in caplog.text
+    assert "connection refused" not in caplog.text
 
 
 def test_top_users_never_touches_the_sdk_user_pool_or_stats(
