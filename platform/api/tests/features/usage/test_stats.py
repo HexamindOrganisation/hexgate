@@ -71,13 +71,13 @@ def test_the_interval_logs_one_summary_and_resets(
     latencies = [ms / 1_000 for ms in range(1, 101)]
 
     with caplog.at_level(logging.INFO, logger=_LOGGER):
-        for i, latency in enumerate(latencies[:-1]):
+        for i, latency in enumerate(latencies):
             stats.record(latency_seconds=latency, queried=i < 25, failed=i == 0)
         before = stats.summary()
         clock.now = _INTERVAL
-        stats.record(latency_seconds=latencies[-1], queried=False, failed=False)
+        stats.record(latency_seconds=0.5, queried=False, failed=False)
 
-    assert before.requests == 99
+    assert before.requests == 100
     assert before.queries == 25
     assert before.failures == 1
     (record,) = _records(caplog)
@@ -86,7 +86,7 @@ def test_the_interval_logs_one_summary_and_resets(
         "usage reads [user]: 100 in 60s (1.7/s), 25 queries (memo hit 75%), "
         "1 failed, p50 50 ms, p99 99 ms"
     )
-    assert stats.summary().requests == 0
+    assert stats.summary().requests == 1
 
 
 def test_the_summary_figures(caplog: pytest.LogCaptureFixture) -> None:
@@ -114,7 +114,7 @@ def test_above_the_alert_the_summary_is_a_warning(
     requests = int(_ALERT * _INTERVAL) + 1
 
     with caplog.at_level(logging.INFO, logger=_LOGGER):
-        for _ in range(requests - 1):
+        for _ in range(requests):
             stats.record(latency_seconds=0.001, queried=True, failed=False)
         clock.now = _INTERVAL
         stats.record(latency_seconds=0.001, queried=True, failed=False)
@@ -129,7 +129,7 @@ def test_at_the_alert_the_summary_stays_info(caplog: pytest.LogCaptureFixture) -
     stats = _stats(clock)
 
     with caplog.at_level(logging.INFO, logger=_LOGGER):
-        for _ in range(int(_ALERT * _INTERVAL) - 1):
+        for _ in range(int(_ALERT * _INTERVAL)):
             stats.record(latency_seconds=0.001, queried=True, failed=False)
         clock.now = _INTERVAL
         stats.record(latency_seconds=0.001, queried=True, failed=False)
@@ -150,6 +150,58 @@ def test_no_alert_threshold_never_warns(caplog: pytest.LogCaptureFixture) -> Non
 
     (record,) = _records(caplog)
     assert record.levelno == logging.INFO
+
+
+def test_a_burst_after_idle_is_not_diluted_by_the_idle_before_it(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    clock = _FakeClock()
+    stats = _stats(clock)
+
+    with caplog.at_level(logging.INFO, logger=_LOGGER):
+        stats.record(latency_seconds=0.001, queried=True, failed=False)
+        clock.now = 10 * _INTERVAL
+        for _ in range(300):
+            stats.record(latency_seconds=0.001, queried=True, failed=False)
+        clock.now = 11 * _INTERVAL
+        stats.record(latency_seconds=0.001, queried=True, failed=False)
+
+    idle, burst = _records(caplog)
+    assert idle.levelno == logging.INFO
+    assert "1 in 60s" in idle.getMessage()
+    assert burst.levelno == logging.WARNING
+    assert "300 in 60s (5.0/s)" in burst.getMessage()
+
+
+def test_a_late_flush_rates_over_the_interval_not_the_idle_tail(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    clock = _FakeClock()
+    stats = _stats(clock)
+
+    with caplog.at_level(logging.INFO, logger=_LOGGER):
+        for _ in range(200):
+            stats.record(latency_seconds=0.001, queried=True, failed=False)
+        clock.now = 60 * _INTERVAL
+        stats.record(latency_seconds=0.001, queried=True, failed=False)
+
+    (record,) = _records(caplog)
+    assert record.levelno == logging.WARNING
+    assert "200 in 60s (3.3/s)" in record.getMessage()
+
+
+def test_the_triggering_read_opens_the_next_window() -> None:
+    clock = _FakeClock()
+    stats = _stats(clock)
+    stats.record(latency_seconds=0.001, queried=True, failed=False)
+    clock.now = 5 * _INTERVAL
+    stats.record(latency_seconds=0.001, queried=True, failed=False)
+    clock.now += 10.0
+
+    summary = stats.summary()
+
+    assert summary.requests == 1
+    assert summary.elapsed_seconds == 10.0
 
 
 def test_max_samples_bounds_the_latencies_kept() -> None:

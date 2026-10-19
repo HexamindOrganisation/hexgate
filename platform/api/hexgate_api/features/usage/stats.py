@@ -75,18 +75,28 @@ class UsageReadStats:
         self._failures = 0
 
     def record(self, *, latency_seconds: float, queried: bool, failed: bool) -> None:
-        """Count one request; log and reset once the interval has elapsed."""
+        """Count one request, first logging and resetting an expired window.
+
+        Flushing before counting starts a burst after idle time in a window of
+        its own, so the idle time cannot dilute it below the alert."""
+        now = self._clock()
+        if self._started is not None and now - self._started >= self._interval:
+            self._flush()
         if self._started is None:
-            self._started = self._clock()
+            self._started = now
         self._requests += 1
         self._queries += queried
         self._failures += failed
         self._latencies.append(latency_seconds)
-        if self._clock() - self._started >= self._interval:
-            self._flush()
 
     def summary(self) -> UsageReadSummary:
-        elapsed = 0.0 if self._started is None else self._clock() - self._started
+        # Every counted read fell inside one interval, so a late flush rates them
+        # over the interval, not over the idle time that followed.
+        elapsed = (
+            0.0
+            if self._started is None
+            else min(self._clock() - self._started, self._interval)
+        )
         latencies = sorted(self._latencies)
         return UsageReadSummary(
             scope=self._scope,
