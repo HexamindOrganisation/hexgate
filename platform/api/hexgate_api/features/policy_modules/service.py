@@ -64,6 +64,41 @@ def _content_hash(content: str) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
+async def ensure_seeded_policy_files(
+    session: AsyncSession, project_id: str, files: dict[str, str]
+) -> None:
+    """Idempotently insert demo seed ``{name: content}`` policy files.
+
+    Shared by the showcase seeders (``*_seed*.py`` in this package) — a pure store
+    fixture: only inserts a file not already present, so re-seeding an existing DB
+    (or one an operator has since edited) never clobbers content. Direct row inserts,
+    not the write-time flip/recompile path; commits only when it added something.
+    """
+    existing = set(
+        (
+            await session.exec(
+                select(PolicyFile.name).where(PolicyFile.project_id == project_id)
+            )
+        ).all()
+    )
+    added = False
+    for name, content in files.items():
+        if name in existing:
+            continue
+        session.add(
+            PolicyFile(
+                id=new_id(PolicyFile),
+                project_id=project_id,
+                name=name,
+                content=content,
+                content_hash=_content_hash(content),
+            )
+        )
+        added = True
+    if added:
+        await session.commit()
+
+
 def _parse_policy(content: str):
     """Parse a module's YAML into an AgentPolicy. The one place content is parsed,
     shared by write-time validation and read-time ModuleContent building so they

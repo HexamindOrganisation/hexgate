@@ -15,18 +15,20 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 
 from hexgate.runtime.agent_usage import (
-    AGENT_USAGE_LEDGERS,
     FINE_BUCKET_SECONDS,
     FINE_RETENTION_SECONDS,
     HOUR_BUCKET_SECONDS,
     KNOWN_AGENT_USAGE_PATHS,
     MAX_WINDOW_SECONDS,
     MINUTE_BUCKET_SECONDS,
+    USAGE_LEDGERS,
     USAGE_WINDOWS,
     BucketSeries,
     UsageLedger,
     UsageLedgers,
     UsageMetric,
+    UsageScope,
+    UsageScopeKind,
     combined_namespace,
     ledger_namespace,
     new_usage_ledger,
@@ -272,28 +274,29 @@ def test_the_default_clock_follows_a_patched_monotonic(
 def test_a_disabled_registry_hands_out_no_ledger() -> None:
     ledgers = UsageLedgers(new_usage_ledger)
 
-    assert not ledgers.enabled
-    assert ledgers.ledger_for("a") is None
+    assert not ledgers.is_enabled(UsageScopeKind.AGENT)
+    assert ledgers.ledger_for(UsageScope.agent("a")) is None
 
 
 def test_an_enabled_registry_keeps_one_ledger_per_agent() -> None:
     ledgers = UsageLedgers(new_usage_ledger)
-    ledgers.enable()
-    ledgers.enable()
+    ledgers.enable(UsageScopeKind.AGENT)
+    ledgers.enable(UsageScopeKind.AGENT)
 
-    first = ledgers.ledger_for("a")
+    first = ledgers.ledger_for(UsageScope.agent("a"))
     assert first is not None
-    assert ledgers.ledger_for("a") is first
-    assert ledgers.ledger_for("b") is not first
-    assert ledgers.enabled
+    assert ledgers.ledger_for(UsageScope.agent("a")) is first
+    assert ledgers.ledger_for(UsageScope.agent("b")) is not first
+    assert ledgers.is_enabled(UsageScopeKind.AGENT)
 
 
 def test_a_concurrent_first_lookup_yields_one_ledger() -> None:
     ledgers = UsageLedgers(new_usage_ledger)
-    ledgers.enable()
+    ledgers.enable(UsageScopeKind.AGENT)
+    scope = UsageScope.agent("a")
 
     with ThreadPoolExecutor(max_workers=_WRITERS) as pool:
-        found = list(pool.map(lambda _: ledgers.ledger_for("a"), range(_WRITERS * 4)))
+        found = list(pool.map(lambda _: ledgers.ledger_for(scope), range(_WRITERS * 4)))
 
     assert len({id(ledger) for ledger in found}) == 1
 
@@ -301,7 +304,34 @@ def test_a_concurrent_first_lookup_yields_one_ledger() -> None:
 def test_the_process_registry_is_disabled_at_import() -> None:
     """Only an enforcer over a usage policy enables it, and tests inject their own
     registry. Failing here means a test leaked into the process one."""
-    assert AGENT_USAGE_LEDGERS.enabled is False
+    assert not any(USAGE_LEDGERS.is_enabled(kind) for kind in UsageScopeKind)
+
+
+def test_scopes_of_different_kinds_with_one_key_get_different_ledgers() -> None:
+    ledgers = UsageLedgers(new_usage_ledger)
+    ledgers.enable(UsageScopeKind.AGENT)
+    ledgers.enable(UsageScopeKind.USER)
+
+    agent = ledgers.ledger_for(UsageScope.agent("alice"))
+    user = ledgers.ledger_for(UsageScope(UsageScopeKind.USER, "alice"))
+
+    assert agent is not None
+    assert user is not None
+    assert agent is not user
+
+
+def test_enabling_agents_leaves_users_off() -> None:
+    ledgers = UsageLedgers(new_usage_ledger)
+    ledgers.enable(UsageScopeKind.AGENT)
+
+    assert ledgers.is_enabled(UsageScopeKind.USER) is False
+    assert ledgers.ledger_for(UsageScope(UsageScopeKind.USER, "u")) is None
+
+
+def test_usage_scope_is_a_value_and_prints_its_kind() -> None:
+    assert UsageScope.agent("b") == UsageScope(UsageScopeKind.AGENT, "b")
+    assert hash(UsageScope.agent("b")) == hash(UsageScope(UsageScopeKind.AGENT, "b"))
+    assert str(UsageScope.agent("b")) == "agent 'b'"
 
 
 def test_metrics_share_their_names_with_run_paths() -> None:

@@ -497,7 +497,11 @@ def test_an_unknown_manifest_path_is_dropped_with_a_warning(
 
 @needs_opa
 def test_an_enforcer_over_a_bundle_with_an_unknown_path_still_decides() -> None:
-    from hexgate.runtime.agent_usage import UsageLedgers, new_usage_ledger
+    from hexgate.runtime.agent_usage import (
+        UsageLedgers,
+        UsageScopeKind,
+        new_usage_ledger,
+    )
     from hexgate.security.enforcer import PolicyEnforcer
 
     sb = build_signed_bundle(_DEMO_YAML)
@@ -512,7 +516,7 @@ def test_an_enforcer_over_a_bundle_with_an_unknown_path_still_decides() -> None:
     decision = enforcer.decide("refund_order", {"amount": 200})
 
     assert decision.outcome is not None
-    assert not ledgers.enabled
+    assert not ledgers.is_enabled(UsageScopeKind.AGENT)
 
 
 # ---------------------------------------------------------------------------

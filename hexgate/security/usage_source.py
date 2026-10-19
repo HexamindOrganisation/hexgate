@@ -1,11 +1,11 @@
-"""The platform term of ``agent_usage.*``.
+"""The platform term of the usage namespaces (``agent_usage.*`` today).
 
-Keeps one snapshot per agent of ``GET /v1/agents/{name}/usage``, refreshed
-stale-while-revalidate, and combines it with the process-local ledger into the
-namespace a decision reads. Shared per ``(api_key, base_url)`` like
-:class:`~hexgate.security.bans.PlatformBanSource`, and fail-soft: a platform blip
-degrades to ledger-only values by default, never to an error. Inert until the run
-boundary calls it.
+Keeps one snapshot per usage scope, fetched by that scope kind's fetcher (an agent's
+is ``GET /v1/agents/{name}/usage``), refreshed stale-while-revalidate, and combines
+it with the process-local ledger into the namespace a decision reads. Shared per
+``(api_key, base_url)`` like :class:`~hexgate.security.bans.PlatformBanSource`, and
+fail-soft: a platform blip degrades to ledger-only values by default, never to an
+error. Inert until the run boundary calls it.
 """
 
 from __future__ import annotations
@@ -14,12 +14,12 @@ import asyncio
 import logging
 import os
 import threading
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import Executor, ThreadPoolExecutor
 from dataclasses import dataclass
 from enum import Enum, StrEnum, auto
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Protocol
+from typing import TYPE_CHECKING, Any, Final
 
 from hexgate.cloud.client import HexgateError
 from hexgate.config.env import resolve_api_key
@@ -27,6 +27,8 @@ from hexgate.runtime.agent_usage import (
     Clock,
     OnUnavailable,
     UsageLedger,
+    UsageScope,
+    UsageScopeKind,
     _monotonic,
     combined_namespace,
     ledger_namespace,
@@ -52,11 +54,11 @@ DEFAULT_MAX_STALENESS_SECONDS: Final[float] = 300.0
 
 _VALUES_KEY: Final = "values"
 _NOT_FOUND: Final = 404
-# Answers a retry won't change soon: unregistered agent, bad or unscoped key.
+# Answers a retry won't change soon: unregistered scope, bad or unscoped key.
 _REJECTED_STATUSES: Final = frozenset({401, 403, _NOT_FOUND})
 REJECTED_RETRY_SECONDS: Final[float] = 300.0
 _EXECUTOR_THREAD_PREFIX: Final = "hexgate-usage"
-# Single-flight per agent already, so workers only keep one slow agent from
+# Single-flight per scope already, so workers only keep one slow scope from
 # delaying another's refresh.
 _EXECUTOR_MAX_WORKERS: Final = 4
 
@@ -145,8 +147,8 @@ def usage_values_from_payload(payload: Any, paths: frozenset[str]) -> dict[str, 
     return parsed
 
 
-class UsageFetcher(Protocol):
-    def get_agent_usage(self, name: str, paths: Sequence[str]) -> dict[str, Any]: ...
+# Fetches one scope's values: (key, sorted paths) -> the response body.
+ScopeFetcher = Callable[[str, Sequence[str]], dict[str, Any]]
 
 
 class _Tier(Enum):
@@ -162,66 +164,69 @@ class _Attempt:
 
 
 class PlatformUsageSource:
-    """Per-agent usage snapshots: refreshed at the run boundary, read per decision.
+    """Per-scope usage snapshots: refreshed at the run boundary, read per decision.
 
     ``refresh`` may block on one bounded fetch when the snapshot is cold or older
     than ``sync_after``; otherwise it schedules at most one background fetch per
-    agent. ``read`` never touches the network. Fetches keep last-good on failure,
+    scope. ``read`` never touches the network. Fetches keep last-good on failure,
     and a failed one is not retried within ``min_refresh`` unless the path set grew;
     a 401, 403 or 404 is not retried within ``REJECTED_RETRY_SECONDS`` at all.
+    A scope whose kind has no fetcher never fetches, so it reads ``UNAVAILABLE``.
     """
 
     def __init__(
         self,
-        fetcher: UsageFetcher,
+        fetchers: Mapping[UsageScopeKind, ScopeFetcher],
         executor: Executor,
         settings: UsageRefreshSettings,
         clock: Clock,
     ) -> None:
-        self._fetcher = fetcher
+        self._fetchers = dict(fetchers)
         self._executor = executor
         self._settings = settings
         self._clock = clock
         # Held only for dict reads and writes, never across HTTP.
         self._state_lock = threading.Lock()
-        self._snapshots: dict[str, UsageSnapshot] = {}
+        self._snapshots: dict[UsageScope, UsageSnapshot] = {}
         # Every path any caller has asked for, read when a fetch runs, so callers
         # wanting different paths share one snapshot instead of evicting each other.
-        self._wanted: dict[str, frozenset[str]] = {}
-        self._last_attempt: dict[str, _Attempt] = {}
-        self._rejected_until: dict[str, float] = {}
-        self._in_flight: set[str] = set()
-        self._unregistered_logged: set[str] = set()
-        # Per agent, so a sync fetch for one agent never waits on another's.
-        self._fetch_locks: dict[str, threading.Lock] = {}
+        self._wanted: dict[UsageScope, frozenset[str]] = {}
+        self._last_attempt: dict[UsageScope, _Attempt] = {}
+        self._rejected_until: dict[UsageScope, float] = {}
+        self._in_flight: set[UsageScope] = set()
+        self._unregistered_logged: set[UsageScope] = set()
+        # Per scope, so a sync fetch for one scope never waits on another's.
+        self._fetch_locks: dict[UsageScope, threading.Lock] = {}
 
-    def refresh(self, agent: str, paths: frozenset[str]) -> None:
-        tier = self._tier(agent, paths)
+    def refresh(self, scope: UsageScope, paths: frozenset[str]) -> None:
+        tier = self._tier(scope, paths)
         if tier is _Tier.SYNC:
-            self._fetch_now(agent)
+            self._fetch_now(scope)
         elif tier is _Tier.BACKGROUND:
-            self._schedule(agent)
+            self._schedule(scope)
 
-    async def refresh_async(self, agent: str, paths: frozenset[str]) -> None:
+    async def refresh_async(self, scope: UsageScope, paths: frozenset[str]) -> None:
         """As :meth:`refresh`; only the synchronous fetch leaves the loop."""
-        tier = self._tier(agent, paths)
+        tier = self._tier(scope, paths)
         if tier is _Tier.SYNC:
-            await asyncio.to_thread(self._fetch_now, agent)
+            await asyncio.to_thread(self._fetch_now, scope)
         elif tier is _Tier.BACKGROUND:
-            self._schedule(agent)
+            self._schedule(scope)
 
     def read(
         self,
-        agent: str,
+        scope: UsageScope,
         paths: frozenset[str],
         ledger: UsageLedger,
         *,
         on_unavailable: OnUnavailable = OnUnavailable.ALLOW,
         current_run_age: float | None = None,
     ) -> UsageReading:
-        """The ``agent_usage`` namespace for ``paths``. Anything short of ``FRESH``
-        schedules a background refresh, so a long run heals its own snapshot."""
-        snapshot = self._remember(agent, paths)
+        """The usage namespace for ``paths``. Anything short of ``FRESH`` asks for
+        a background refresh, so a long run heals its own snapshot. The ask is
+        dropped for a kind with no fetcher, while one is in flight, or while the
+        scope is throttled."""
+        snapshot = self._remember(scope, paths)
         if (
             snapshot is not None
             and (age := self._clock() - snapshot.fetched_at)
@@ -236,7 +241,7 @@ class PlatformUsageSource:
                 UsageState.UNAVAILABLE,
             )
         if reading.state is not UsageState.FRESH:
-            self._schedule(agent)
+            self._schedule(scope)
         return reading
 
     def _combine(
@@ -271,16 +276,21 @@ class PlatformUsageSource:
             state = UsageState.FRESH
         return UsageReading(namespace, state)
 
-    def _remember(self, agent: str, paths: frozenset[str]) -> UsageSnapshot | None:
+    def _remember(
+        self, scope: UsageScope, paths: frozenset[str]
+    ) -> UsageSnapshot | None:
         with self._state_lock:
             if paths:
-                self._wanted[agent] = self._wanted.get(agent, frozenset()) | paths
-            return self._snapshots.get(agent)
+                self._wanted[scope] = self._wanted.get(scope, frozenset()) | paths
+            return self._snapshots.get(scope)
 
-    def _tier(self, agent: str, paths: frozenset[str]) -> _Tier:
-        if not paths:
+    def _fetchable(self, scope: UsageScope) -> bool:
+        return scope.kind in self._fetchers
+
+    def _tier(self, scope: UsageScope, paths: frozenset[str]) -> _Tier:
+        if not paths or not self._fetchable(scope):
             return _Tier.NONE
-        snapshot = self._remember(agent, paths)
+        snapshot = self._remember(scope, paths)
         if snapshot is None:
             return _Tier.SYNC
         age = self._clock() - snapshot.fetched_at
@@ -294,104 +304,106 @@ class PlatformUsageSource:
             return _Tier.BACKGROUND
         return _Tier.NONE
 
-    def _fetch_now(self, agent: str) -> None:
-        with self._fetch_lock(agent):
-            if self._throttled(agent) or self._covered(agent):
+    def _fetch_now(self, scope: UsageScope) -> None:
+        with self._fetch_lock(scope):
+            if self._throttled(scope) or self._covered(scope):
                 return
-            self._fetch(agent)
+            self._fetch(scope)
 
-    def _schedule(self, agent: str) -> None:
-        with self._state_lock:
-            if agent in self._in_flight or self._throttled_locked(agent):
-                return
-            self._in_flight.add(agent)
-        try:
-            future = self._executor.submit(self._fetch_in_background, agent)
-        except RuntimeError as exc:  # executor shut down at interpreter exit
-            logger.debug("usage refresh for %r not scheduled: %s", agent, exc)
-            self._finish(agent)
+    def _schedule(self, scope: UsageScope) -> None:
+        if not self._fetchable(scope):
             return
-        future.add_done_callback(lambda _done: self._finish(agent))
-
-    def _fetch_in_background(self, agent: str) -> None:
-        with self._fetch_lock(agent):
-            if not self._throttled(agent):
-                self._fetch(agent)
-
-    def _finish(self, agent: str) -> None:
         with self._state_lock:
-            self._in_flight.discard(agent)
+            if scope in self._in_flight or self._throttled_locked(scope):
+                return
+            self._in_flight.add(scope)
+        try:
+            future = self._executor.submit(self._fetch_in_background, scope)
+        except RuntimeError as exc:  # executor shut down at interpreter exit
+            logger.debug("usage refresh for %s not scheduled: %s", scope, exc)
+            self._finish(scope)
+            return
+        future.add_done_callback(lambda _done: self._finish(scope))
 
-    def _fetch(self, agent: str) -> None:
-        """One fetch under ``agent``'s fetch lock. Never raises: last-good stays."""
+    def _fetch_in_background(self, scope: UsageScope) -> None:
+        with self._fetch_lock(scope):
+            if not self._throttled(scope):
+                self._fetch(scope)
+
+    def _finish(self, scope: UsageScope) -> None:
         with self._state_lock:
-            wanted = self._wanted.get(agent, frozenset())
+            self._in_flight.discard(scope)
+
+    def _fetch(self, scope: UsageScope) -> None:
+        """One fetch under ``scope``'s fetch lock. Never raises: last-good stays."""
+        with self._state_lock:
+            wanted = self._wanted.get(scope, frozenset())
             started = self._clock()
-            self._last_attempt[agent] = _Attempt(started, wanted)
+            self._last_attempt[scope] = _Attempt(started, wanted)
         if not wanted:
             return
         try:
-            payload = self._fetcher.get_agent_usage(agent, sorted(wanted))
+            payload = self._fetchers[scope.kind](scope.key, sorted(wanted))
             values = usage_values_from_payload(payload, wanted)
         except UsageContentError as exc:
-            logger.error("usage body for %r rejected; using last-good: %s", agent, exc)
+            logger.error("usage body for %s rejected; using last-good: %s", scope, exc)
             return
         except Exception as exc:  # noqa: BLE001 — fail-soft: keep last-good
             status = exc.status if isinstance(exc, HexgateError) else None
             if status in _REJECTED_STATUSES:
                 with self._state_lock:
-                    self._rejected_until[agent] = started + REJECTED_RETRY_SECONDS
+                    self._rejected_until[scope] = started + REJECTED_RETRY_SECONDS
             if status == _NOT_FOUND:
-                self._log_unregistered(agent)
+                self._log_unregistered(scope)
             else:
                 logger.warning(
-                    "usage refresh for %r failed; using last-good: %s", agent, exc
+                    "usage refresh for %s failed; using last-good: %s", scope, exc
                 )
             return
         with self._state_lock:
-            self._snapshots[agent] = UsageSnapshot(MappingProxyType(values), started)
+            self._snapshots[scope] = UsageSnapshot(MappingProxyType(values), started)
 
-    def _log_unregistered(self, agent: str) -> None:
+    def _log_unregistered(self, scope: UsageScope) -> None:
         # Otherwise it reads as an outage forever, so say what it is, once.
         with self._state_lock:
-            if agent in self._unregistered_logged:
+            if scope in self._unregistered_logged:
                 return
-            self._unregistered_logged.add(agent)
+            self._unregistered_logged.add(scope)
         logger.warning(
-            "agent %r is not registered in this API key's project; "
+            "%s is not registered in this API key's project; "
             "agent_usage.* reads local usage only",
-            agent,
+            scope,
         )
 
-    def _throttled(self, agent: str) -> bool:
+    def _throttled(self, scope: UsageScope) -> bool:
         with self._state_lock:
-            return self._throttled_locked(agent)
+            return self._throttled_locked(scope)
 
-    def _throttled_locked(self, agent: str) -> bool:
-        # A new path does not lift a rejection: the platform refuses the agent.
-        if self._clock() < self._rejected_until.get(agent, float("-inf")):
+    def _throttled_locked(self, scope: UsageScope) -> bool:
+        # A new path does not lift a rejection: the platform refuses the scope.
+        if self._clock() < self._rejected_until.get(scope, float("-inf")):
             return True
-        last = self._last_attempt.get(agent)
+        last = self._last_attempt.get(scope)
         return (
             last is not None
             and self._clock() - last.at < self._settings.min_refresh_seconds
-            and self._wanted.get(agent, frozenset()) <= last.paths
+            and self._wanted.get(scope, frozenset()) <= last.paths
         )
 
-    def _covered(self, agent: str) -> bool:
+    def _covered(self, scope: UsageScope) -> bool:
         """Another fetch finished while this one waited for the lock."""
         with self._state_lock:
-            snapshot = self._snapshots.get(agent)
-            wanted = self._wanted.get(agent, frozenset())
+            snapshot = self._snapshots.get(scope)
+            wanted = self._wanted.get(scope, frozenset())
         return (
             snapshot is not None
             and self._clock() - snapshot.fetched_at < self._settings.sync_after_seconds
             and wanted <= snapshot.values.keys()
         )
 
-    def _fetch_lock(self, agent: str) -> threading.Lock:
+    def _fetch_lock(self, scope: UsageScope) -> threading.Lock:
         with self._state_lock:
-            return self._fetch_locks.setdefault(agent, threading.Lock())
+            return self._fetch_locks.setdefault(scope, threading.Lock())
 
 
 def _fallback(
@@ -431,7 +443,7 @@ def get_usage_source(api_key: str, client: HexgateClient) -> PlatformUsageSource
 
     Its executor's workers drain every queued fetch at interpreter exit, so exit
     can wait up to the refresh timeout per round of ``_EXECUTOR_MAX_WORKERS``
-    queued agents.
+    queued scopes.
     """
     cache_key = (api_key, client.config.base_url)
     # Held across creation: each source owns an executor, and a lost race would
@@ -440,7 +452,7 @@ def get_usage_source(api_key: str, client: HexgateClient) -> PlatformUsageSource
         source = _usage_sources.get(cache_key)
         if source is None:
             source = _usage_sources[cache_key] = PlatformUsageSource(
-                fetcher=client,
+                fetchers={UsageScopeKind.AGENT: client.get_agent_usage},
                 executor=ThreadPoolExecutor(
                     max_workers=_EXECUTOR_MAX_WORKERS,
                     thread_name_prefix=_EXECUTOR_THREAD_PREFIX,

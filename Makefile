@@ -621,23 +621,29 @@ demo-notebook: ## Run the bundled BYOK demo locally (one process). Open http://l
 	  HEXGATE_DEMO=1 HEXGATE_COOKIE_SECURE=0 \
 	  python deploy/boot.py
 
+# A one-process platform showcase: wipe the demo's own SQLite world for a clean
+# run, then boot platform + dashboard + the notebook's live agent (boot.py).
+# $(1) = db stem under platform/api/, $(2) = the HEXGATE_NOTEBOOK value.
+define run-showcase
+	rm -f platform/api/$(1).db platform/api/$(1).db-wal platform/api/$(1).db-shm
+	PATH="$(CURDIR)/platform/api/.venv/bin:$$PATH" \
+	  DATABASE_URL="sqlite+aiosqlite:///$(CURDIR)/platform/api/$(1).db" \
+	  HEXGATE_DEMO=1 HEXGATE_COOKIE_SECURE=0 HEXGATE_SEED_AGENTS=skip \
+	  HEXGATE_NOTEBOOK="$(2)" \
+	  python deploy/boot.py
+endef
+
 .PHONY: demo-support
 demo-support: ## Run the compose support-bot showcase — platform + dashboard + live agent in one process. Open http://localhost:2718
-	rm -f platform/api/demo.db platform/api/demo.db-wal platform/api/demo.db-shm
-	PATH="$(CURDIR)/platform/api/.venv/bin:$$PATH" \
-	  DATABASE_URL="sqlite+aiosqlite:///$(CURDIR)/platform/api/demo.db" \
-	  HEXGATE_DEMO=1 HEXGATE_COOKIE_SECURE=0 HEXGATE_SEED_AGENTS=skip \
-	  HEXGATE_NOTEBOOK=deploy/compose_support_demo.py \
-	  python deploy/boot.py
+	$(call run-showcase,demo,deploy/compose_support_demo.py)
 
 .PHONY: demo-guards
 demo-guards: ## Guarded-agent platform demo (BYOK): flip a plugin on/off live. Open http://localhost:2718
-	rm -f platform/api/demo-guards.db platform/api/demo-guards.db-wal platform/api/demo-guards.db-shm
-	PATH="$(CURDIR)/platform/api/.venv/bin:$$PATH" \
-	  DATABASE_URL="sqlite+aiosqlite:///$(CURDIR)/platform/api/demo-guards.db" \
-	  HEXGATE_DEMO=1 HEXGATE_COOKIE_SECURE=0 HEXGATE_SEED_AGENTS=skip \
-	  HEXGATE_NOTEBOOK="$(CURDIR)/deploy/guards-demo/notebook.py" \
-	  python deploy/boot.py
+	$(call run-showcase,demo-guards,$(CURDIR)/deploy/guards-demo/notebook.py)
+
+.PHONY: demo-devops
+demo-devops: ## Run the 3-level DevOps showcase (developer -> release_lead -> deploy_bot) -- platform + dashboard + live agent. Open http://localhost:2718
+	$(call run-showcase,demo-devops,deploy/devops_demo.py)
 
 .PHONY: demo-smoke
 demo-smoke: ## Smoke-test the bundled demo with a mock LLM (no real key)
