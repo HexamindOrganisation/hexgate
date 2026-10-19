@@ -63,7 +63,7 @@ class UsageScope:
     key: str
 
     def __post_init__(self) -> None:
-        # G4: anonymous traffic is never counted, so no user scope is ever "".
+        # Anonymous traffic is never counted, so no user scope is ever "".
         if self.kind is UsageScopeKind.USER and not self.key:
             raise ValueError("a user usage scope needs a non-empty user_id")
 
@@ -138,7 +138,7 @@ AGENT_USAGE_VOCABULARY: Final = (
 
 USER_CACHE_ENV: Final = "HEXGATE_USAGE_USER_CACHE"
 # End users whose usage one process keeps. A full ledger is ~118 KB, so this bounds
-# user ledgers at ~1.2 GB until U6 gives users the short tier.
+# user ledgers at ~1.2 GB.
 DEFAULT_USER_CACHE_SIZE: Final = 10_000
 
 
