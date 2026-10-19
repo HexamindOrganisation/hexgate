@@ -59,8 +59,10 @@ export function TopUsersCard({
     refetchInterval: TOP_USERS_REFETCH_MS,
   });
 
+  // A failed background refetch keeps the last good rows on screen.
+  const failed = q.isError && q.data === undefined;
   // Already ranked and limited by the server: no client-side sort.
-  const rows: Row[] = q.isError
+  const rows: Row[] = failed
     ? []
     : (q.data?.users ?? []).map((u) => ({
         key: u.user_id,
@@ -83,7 +85,7 @@ export function TopUsersCard({
         metricOptions={METRIC_OPTIONS}
         onMetricChange={setMetric}
         emptyMessage={
-          q.isError
+          failed
             ? UNAVAILABLE_MESSAGE
             : q.isPending
               ? LOADING_MESSAGE

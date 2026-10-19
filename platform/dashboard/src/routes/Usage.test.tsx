@@ -15,6 +15,7 @@
  *   6. The no-project empty state renders when the active org has none.
  */
 
+import { QueryClient } from "@tanstack/react-query";
 import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -449,6 +450,28 @@ describe("UsagePage", () => {
         await screen.findByText("Top users are unavailable right now."),
       ).toBeInTheDocument();
       expect(screen.getByText("1.20M")).toBeInTheDocument();
+    });
+
+    it("a failed background refetch keeps the loaded rows", async () => {
+      stubFetch();
+      const client = new QueryClient({
+        defaultOptions: { queries: { retry: false } },
+      });
+      renderWithProviders(<UsagePage />, { client });
+
+      const region = await card();
+      await within(region).findByText(HEAVY_USER);
+      stubFetch(SUMMARY, new Response("unavailable", { status: 503 }));
+      await act(() =>
+        client.refetchQueries({ queryKey: ["usage", "top-users"] }),
+      );
+      // React Query notifies observers on a later tick.
+      await act(() => new Promise((r) => setTimeout(r, 0)));
+
+      expect(within(region).getByText(HEAVY_USER)).toBeInTheDocument();
+      expect(
+        within(region).queryByText("Top users are unavailable right now."),
+      ).not.toBeInTheDocument();
     });
 
     it("shows the empty message when no user has activity", async () => {
