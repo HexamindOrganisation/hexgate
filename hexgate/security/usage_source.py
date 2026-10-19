@@ -222,8 +222,10 @@ class PlatformUsageSource:
         on_unavailable: OnUnavailable = OnUnavailable.ALLOW,
         current_run_age: float | None = None,
     ) -> UsageReading:
-        """The usage namespace for ``paths``. Anything short of ``FRESH``
-        schedules a background refresh, so a long run heals its own snapshot."""
+        """The usage namespace for ``paths``. Anything short of ``FRESH`` asks for
+        a background refresh, so a long run heals its own snapshot. The ask is
+        dropped for a kind with no fetcher, while one is in flight, or while the
+        scope is throttled."""
         snapshot = self._remember(scope, paths)
         if (
             snapshot is not None
