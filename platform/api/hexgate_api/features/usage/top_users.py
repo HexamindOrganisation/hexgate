@@ -5,11 +5,11 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Final, Literal
+from typing import Final, Literal, get_args
 
 from clickhouse_connect.driver.client import Client
 
-from hexgate_api.features.usage.paths import MAX_WINDOW_SECONDS, UsageMetric
+from hexgate_api.features.usage.paths import UsageMetric, parse_window_seconds
 from hexgate_api.features.usage.service import (
     METRIC_SQL,
     USER_ROLLUP,
@@ -17,9 +17,9 @@ from hexgate_api.features.usage.service import (
 )
 
 TopUsersWindow = Literal["1h", "24h", "7d", "30d"]
-# Quota windows, all within the rollup's TTL (paths.MAX_WINDOW_SECONDS).
+# Parsed as quota windows are, so each one is within the rollup's TTL.
 TOP_USERS_WINDOW_SECONDS: Final[Mapping[str, int]] = MappingProxyType(
-    {"1h": 3_600, "24h": 86_400, "7d": 7 * 86_400, "30d": MAX_WINDOW_SECONDS}
+    {window: parse_window_seconds(window) for window in get_args(TopUsersWindow)}
 )
 TOP_USERS_DEFAULT_LIMIT: Final = 10
 TOP_USERS_MAX_LIMIT: Final = 50
