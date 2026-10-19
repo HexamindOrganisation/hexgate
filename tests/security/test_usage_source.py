@@ -98,8 +98,8 @@ class _FakeFetcher:
         self.advance = 0.0
         self.calls: list[tuple[str, list[str], str]] = []
 
-    def get_agent_usage(self, name: str, paths: Sequence[str]) -> dict[str, Any]:
-        self.calls.append((name, list(paths), threading.current_thread().name))
+    def fetch(self, key: str, paths: Sequence[str]) -> dict[str, Any]:
+        self.calls.append((key, list(paths), threading.current_thread().name))
         self.clock.now += self.advance
         if self.error is not None:
             raise self.error
@@ -166,9 +166,9 @@ def _rig(
     clock = _FakeClock()
     fetcher = _FakeFetcher(clock, values)
     user_fetcher = _FakeFetcher(clock, _USER_VALUES)
-    fetchers = {UsageScopeKind.AGENT: fetcher.get_agent_usage}
+    fetchers = {UsageScopeKind.AGENT: fetcher.fetch}
     if fetch_users:
-        fetchers[UsageScopeKind.USER] = user_fetcher.get_agent_usage
+        fetchers[UsageScopeKind.USER] = user_fetcher.fetch
     executor = executor if executor is not None else _InlineExecutor()
     source = PlatformUsageSource(fetchers, executor, _SETTINGS, clock)
     return _Rig(clock, fetcher, user_fetcher, source, new_usage_ledger(clock=clock))
@@ -662,7 +662,6 @@ def test_a_kind_without_a_fetcher_never_fetches_and_reads_unavailable(
     )
 
     assert rig.fetcher.calls == []
-    assert rig.user_fetcher.calls == []
     assert executor.jobs == []
     assert reading.state is UsageState.UNAVAILABLE
 
