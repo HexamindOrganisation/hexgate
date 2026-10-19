@@ -282,8 +282,11 @@ class PlatformUsageSource:
                 self._wanted[scope] = self._wanted.get(scope, frozenset()) | paths
             return self._snapshots.get(scope)
 
+    def _fetchable(self, scope: UsageScope) -> bool:
+        return scope.kind in self._fetchers
+
     def _tier(self, scope: UsageScope, paths: frozenset[str]) -> _Tier:
-        if not paths or scope.kind not in self._fetchers:
+        if not paths or not self._fetchable(scope):
             return _Tier.NONE
         snapshot = self._remember(scope, paths)
         if snapshot is None:
@@ -306,7 +309,7 @@ class PlatformUsageSource:
             self._fetch(scope)
 
     def _schedule(self, scope: UsageScope) -> None:
-        if scope.kind not in self._fetchers:
+        if not self._fetchable(scope):
             return
         with self._state_lock:
             if scope in self._in_flight or self._throttled_locked(scope):
