@@ -107,10 +107,19 @@ hexgate policy validate policy.yaml --max-severity warning   # non-zero on eithe
 runtime builds one guard pipeline per agent.
 
 It flags a constraint path no call ever sets (`unknown-root`): one that doesn't
-start with `args.`, `ctx.` or `run.`, such as `user.department == "finance"`, or
-one that dots into `role` or `tool`, which are plain strings. The path is always
+start with `args.`, `ctx.`, `run.` or `agent_usage.`, such as
+`user.department == "finance"`, or one that dots into `role` or `tool`, which are
+plain strings. The path is always
 missing, so the comparison is always false: a `warning`, or an `error` under an
 odd number of `not`, where it is always true and the fence never fires.
+
+It also flags an `agent_usage.*` cap under an odd number of `not`
+(`negated-usage-cap`), such as `not (agent_usage.denials_5m >= 5)` or a boundary
+deny on `agent_usage.denials_5m >= 5`, which the linker wraps in `not`. Under
+`usage: {on_unavailable: deny}` a value the platform can't supply is missing, so
+the cap is true and the call passes. It is an `error` when the policy sets
+`on_unavailable: deny`, and a `warning` on a module, which can't know the
+agent's fail mode. Write the cap as a plain comparison: `agent_usage.denials_5m < 5`.
 
 Pass the agent's manifest to check the policy against its code too. At the
 default `--max-severity error`, these fail validate:

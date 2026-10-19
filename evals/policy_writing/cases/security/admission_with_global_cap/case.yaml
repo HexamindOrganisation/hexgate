@@ -1,0 +1,13 @@
+starting_project: support_bot_sub_agents
+agent: front-desk
+request: Only support and billing may run this agent. Also, across every role, no refund may exceed 500.
+note: A policy-wide "args.amount <= 500" also reaches agent.run, which has no amount, and locks everyone out at admission. On this project only billing can refund, so a cap on billing's own rule also passes; the trap is the policy-wide form locking roles out of admission. The write-policy skill names this pitfall.
+expect:
+  decisions:
+    - { roles: [support, billing], tool: agent.run, args: { agent: front-desk }, expect: allow }
+    - { role: default, tool: agent.run, args: { agent: front-desk }, expect: deny }
+    - { role: billing, tool: refund_order, args: { order_id: o1, amount: 1000, currency: USD }, expect: deny }
+    - { role: billing, tool: refund_order, args: { order_id: o1, amount: 500, currency: USD }, expect: allow }
+    - { role: billing, tool: refund_order, args: { order_id: o1, amount: 501, currency: USD }, expect: deny }
+    - { role: billing, tool: refund_order, args: { order_id: o1, amount: 500.5, currency: USD }, expect: deny }
+    - { role: billing, tool: refund_order, args: { order_id: o1, amount: 501, currency: USD }, run_facts: { tool_calls: 3 }, expect: deny }

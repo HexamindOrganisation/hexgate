@@ -369,7 +369,9 @@ fails closed, like any missing field.
 
 - **Write caps as plain comparisons.** Under `deny`, `agent_usage.invocations_1h < 100`
   denies when the value is missing, but `not (agent_usage.invocations_1h >= 100)`
-  **passes**.
+  **passes**. A boundary module's `deny` on `agent_usage.invocations_1h >= 100`
+  runs as that same `not`. `hexgate policy validate` flags both as
+  `negated-usage-cap`.
 - **Per path.** When a policy update adds a usage path the cached snapshot doesn't
   have yet, only that path follows the fail mode until the next refresh. The rest of
   the policy keeps its platform counts.

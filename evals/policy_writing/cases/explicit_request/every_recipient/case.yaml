@@ -1,6 +1,7 @@
 starting_project: support_bot_single_file
 agent: support-bot
 request: Support can keep sending emails, but every recipient must be an @acme.com address.
+held_out: true
 expect:
   decisions:
     - { role: support, tool: send_email, args: { to: [a@acme.com, b@acme.com], subject: s, body: b }, expect: allow }
