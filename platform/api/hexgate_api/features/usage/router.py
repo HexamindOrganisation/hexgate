@@ -107,17 +107,12 @@ class UsageRead(BaseModel):
     values: dict[str, int]
 
 
-class TopUserRead(BaseModel):
-    user_id: str
-    value: int
-
-
 class TopUsersRead(BaseModel):
     """Ranked by ``value`` descending; users at 0 are left out."""
 
     window: TopUsersWindow
     metric: UsageMetric
-    users: list[TopUserRead]
+    users: list[TopUser]
 
 
 class UserUsageQuery(BaseModel):
@@ -223,11 +218,7 @@ async def api_top_users(
         )
         raise clickhouse_unavailable(_USAGE_UNAVAILABLE) from exc
     response.headers["Cache-Control"] = USER_USAGE_CACHE_CONTROL
-    return TopUsersRead(
-        window=window,
-        metric=metric,
-        users=[TopUserRead(user_id=u.user_id, value=u.value) for u in users],
-    )
+    return TopUsersRead(window=window, metric=metric, users=users)
 
 
 def _check_user_id(user_id: str) -> None:
