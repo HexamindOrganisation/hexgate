@@ -100,7 +100,8 @@ const TOP_USERS_PATH = `/v1/projects/${PROJECT}/usage/top-users`;
 
 /** Same fetch-stub helper pattern as Audit.test.tsx, recording every
  * requested URL so tests can assert what filter state reached the API.
- * A `Response` for `topUsers` is returned as is (e.g. a 503). */
+ * A `Response` or `Promise` for `topUsers` is returned as is (e.g. a 503,
+ * or a read that never lands). */
 function stubFetch(
   summary: unknown = SUMMARY,
   topUsers: unknown = TOP_USERS,
@@ -127,7 +128,9 @@ function stubFetch(
         case `/v1/projects/${PROJECT}/llm/summary`:
           return json(summary);
         case TOP_USERS_PATH:
-          return topUsers instanceof Response ? topUsers : json(topUsers);
+          return topUsers instanceof Response || topUsers instanceof Promise
+            ? topUsers
+            : json(topUsers);
         default:
           return new Response("not found", { status: 404 });
       }
@@ -455,6 +458,17 @@ describe("UsagePage", () => {
       expect(
         await screen.findByText("No user activity in this window."),
       ).toBeInTheDocument();
+    });
+
+    it("reads as loading, not idle, until the first response lands", async () => {
+      stubFetch(SUMMARY, new Promise<Response>(() => {}));
+      renderWithProviders(<UsagePage />);
+
+      const region = await card();
+      expect(within(region).getByText("Loading…")).toBeInTheDocument();
+      expect(
+        within(region).queryByText("No user activity in this window."),
+      ).not.toBeInTheDocument();
     });
   });
 });

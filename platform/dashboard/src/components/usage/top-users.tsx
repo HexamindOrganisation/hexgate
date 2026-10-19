@@ -30,6 +30,7 @@ const METRIC_OPTIONS = (
   Object.entries(METRIC_LABELS) as [TopUsersMetric, string][]
 ).map(([value, label]) => ({ value, label: `by ${label}` }));
 
+const LOADING_MESSAGE = "Loading…";
 const EMPTY_MESSAGE = "No user activity in this window.";
 const UNAVAILABLE_MESSAGE = "Top users are unavailable right now.";
 
@@ -106,7 +107,13 @@ export function TopUsersCard({
         metric={metric}
         metricOptions={METRIC_OPTIONS}
         onMetricChange={setMetric}
-        emptyMessage={q.isError ? UNAVAILABLE_MESSAGE : EMPTY_MESSAGE}
+        emptyMessage={
+          q.isError
+            ? UNAVAILABLE_MESSAGE
+            : q.isPending
+              ? LOADING_MESSAGE
+              : EMPTY_MESSAGE
+        }
         legend={
           <span className="flex items-center gap-1.5">
             <span className="size-2 rounded-sm bg-primary" />
