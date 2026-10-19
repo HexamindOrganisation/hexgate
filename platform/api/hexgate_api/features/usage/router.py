@@ -210,13 +210,7 @@ async def api_top_users(
             limit,
         )
     except ClickHouseError as exc:
-        _log.warning(
-            "top users read failed for project %s: %s (clickhouse code %s)",
-            project_id,
-            type(exc).__name__,
-            server_error_code(exc),
-        )
-        raise clickhouse_unavailable(_USAGE_UNAVAILABLE) from exc
+        raise _usage_unavailable(exc, f"top users of project {project_id}") from exc
     response.headers["Cache-Control"] = USER_USAGE_CACHE_CONTROL
     return TopUsersRead(window=window, metric=metric, users=users)
 
@@ -248,6 +242,18 @@ def _unprocessable(detail: str) -> HTTPException:
     return HTTPException(
         status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=detail
     )
+
+
+def _usage_unavailable(exc: Exception, subject: str) -> HTTPException:
+    """Logs the class and the numeric server code only: a ClickHouse message can
+    quote a bound value (README G10)."""
+    _log.warning(
+        "usage read failed for %s: %s (clickhouse code %s)",
+        subject,
+        type(exc).__name__,
+        server_error_code(exc),
+    )
+    return clickhouse_unavailable(_USAGE_UNAVAILABLE)
 
 
 async def _read_windows(
@@ -286,15 +292,7 @@ async def _read_windows(
         readout = await scope.memo.get_or_load((project_id, key, specs), load)
         failed = False
     except (ClickHouseError, TimeoutError) as exc:
-        # The class and the numeric server code only: a ClickHouse message can
-        # quote a bound value (README G10).
-        _log.warning(
-            "usage read failed for %s: %s (clickhouse code %s)",
-            failure_subject,
-            type(exc).__name__,
-            server_error_code(exc),
-        )
-        raise clickhouse_unavailable(_USAGE_UNAVAILABLE) from exc
+        raise _usage_unavailable(exc, failure_subject) from exc
     finally:
         scope.stats.record(
             latency_seconds=time.perf_counter() - started,
