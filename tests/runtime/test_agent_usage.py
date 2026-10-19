@@ -328,18 +328,6 @@ def test_enabling_agents_leaves_users_off() -> None:
     assert ledgers.ledger_for(UsageScope(UsageScopeKind.USER, "u")) is None
 
 
-def test_enable_rebinds_the_switch_set() -> None:
-    """Restore fixtures put back the attribute they saved; an in-place mutation
-    would leak the one-way switch into the saved value."""
-    ledgers = UsageLedgers(new_usage_ledger)
-    before = ledgers._enabled
-
-    ledgers.enable(UsageScopeKind.AGENT)
-
-    assert before == frozenset()
-    assert ledgers._enabled == frozenset({UsageScopeKind.AGENT})
-
-
 def test_usage_scope_is_a_value_and_prints_its_kind() -> None:
     assert UsageScope.agent("b") == UsageScope(UsageScopeKind.AGENT, "b")
     assert hash(UsageScope.agent("b")) == hash(UsageScope(UsageScopeKind.AGENT, "b"))

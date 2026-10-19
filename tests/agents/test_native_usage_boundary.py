@@ -173,7 +173,7 @@ def events(monkeypatch: pytest.MonkeyPatch) -> list[object]:
         enforcer_mod, "resolve_usage_source", lambda **_: _RecordingSource(log)
     )
     # A usage policy enables the process ledger registry for good; restore it.
-    monkeypatch.setattr(USAGE_LEDGERS, "_enabled", USAGE_LEDGERS._enabled)
+    monkeypatch.setattr(USAGE_LEDGERS, "_enabled", frozenset())
     monkeypatch.setattr(USAGE_LEDGERS, "_ledgers", {})
     return log
 

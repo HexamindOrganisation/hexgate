@@ -346,7 +346,6 @@ class UsageLedgers:
 
     def __init__(self, ledger_factory: Callable[[], UsageLedger]) -> None:
         self._ledger_factory = ledger_factory
-        # Rebound, never mutated, so a test can restore it by attribute.
         self._enabled: frozenset[UsageScopeKind] = frozenset()
         self._ledgers: dict[UsageScope, UsageLedger] = {}
         self._lock = threading.Lock()
