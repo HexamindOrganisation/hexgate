@@ -18,6 +18,7 @@ import {
   UsageBreakdownCard,
   UsageFilterBar,
 } from "@/components/usage/pieces";
+import { TopUsersCard } from "@/components/usage/top-users";
 import { useUsageFilters } from "@/lib/usage-filters";
 
 // Compact token counts (1.2M / 84.6K) — KpiCard values elsewhere use
@@ -151,6 +152,9 @@ export function UsagePage() {
         f={f}
         setF={setF}
       />
+      <div className="mt-4">
+        <TopUsersCard projectId={projectId as string} f={f} setF={setF} />
+      </div>
     </div>
   );
 }
