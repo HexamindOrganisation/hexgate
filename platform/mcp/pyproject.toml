@@ -1,0 +1,44 @@
+[project]
+name = "hexgate-mcp"
+version = "0.1.0"
+description = "Hexgate MCP server — policy, audit and agent tools over the platform API, as the logged-in user"
+requires-python = ">=3.13"
+dependencies = [
+    # 2.x renamed FastMCP to MCPServer; the spec and the API's auth routes are
+    # written against the 1.x surface. 1.30 is the first with
+    # AuthSettings.validate_token_resource, which older versions silently drop.
+    "mcp>=1.30,<2",
+    "httpx>=0.27.1",
+    # Verifies the API's EdDSA access tokens; [crypto] pulls in cryptography
+    # for Ed25519. 2.10.0 compared `iss` by substring (CVE-2024-53861).
+    "pyjwt[crypto]>=2.10.1",
+    # The next three are transitive via mcp but imported directly (pydantic by
+    # the token model, starlette by /health, uvicorn by __main__), so pinned
+    # the same way platform/api pins python-dotenv.
+    "pydantic>=2.11",
+    "starlette>=0.40",
+    "uvicorn>=0.32",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "respx>=0.22",
+    # Tests generate Ed25519 keys directly; transitive via pyjwt[crypto].
+    "cryptography>=43",
+    "ruff>=0.8",
+]
+
+[tool.ruff.lint]
+# Declaring a [tool.ruff] table stops inheritance from the repo root, so
+# isort is re-enabled here to match it.
+extend-select = ["I"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+asyncio_mode = "auto"
+
+[tool.uv]
+package = false
