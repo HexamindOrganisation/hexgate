@@ -13,7 +13,12 @@ from typing import Any
 import pytest
 
 from hexgate.cloud.client import HexgateClient, HexgateConfig
-from hexgate.runtime.agent_usage import UsageLedgers, new_usage_ledger
+from hexgate.runtime.agent_usage import (
+    UsageLedgers,
+    UsageScope,
+    UsageScopeKind,
+    new_usage_ledger,
+)
 from hexgate.runtime.context import HexgateContext
 from hexgate.runtime.run_facts import get_run_facts, run_scope
 from hexgate.security import AGENT_RUN_TOOL, DecisionOutcome, Verdict, usage_source
@@ -29,6 +34,7 @@ from hexgate.security.usage_source import (
 from hexgate.tracing import _senders
 
 _AGENT = "billing"
+_SCOPE = UsageScope.agent(_AGENT)
 _START = 1_000_000.0
 _HOUR = 3_600.0
 _MINUTE = 60.0
@@ -118,7 +124,7 @@ def test_binding_a_usage_policy_enables_the_ledgers() -> None:
 
     PolicyEnforcer(_admission_cap(2), agent_name=_AGENT, ledgers=ledgers)
 
-    assert ledgers.enabled
+    assert ledgers.is_enabled(UsageScopeKind.AGENT)
 
 
 def test_binding_a_usage_free_policy_leaves_them_off() -> None:
@@ -126,7 +132,7 @@ def test_binding_a_usage_free_policy_leaves_them_off() -> None:
 
     PolicyEnforcer(_usage_free(), agent_name=_AGENT, ledgers=ledgers)
 
-    assert not ledgers.enabled
+    assert not ledgers.is_enabled(UsageScopeKind.AGENT)
 
 
 def test_swapping_in_a_usage_policy_enables_the_ledgers() -> None:
@@ -136,7 +142,7 @@ def test_swapping_in_a_usage_policy_enables_the_ledgers() -> None:
 
     enforcer.policy = _tool_cap(2)
 
-    assert ledgers.enabled
+    assert ledgers.is_enabled(UsageScopeKind.AGENT)
     assert enforcer.decide("refund", {}).allowed
 
 
@@ -263,7 +269,7 @@ def test_an_engine_without_usage_paths_still_decides() -> None:
 
     assert enforcer.decide("refund", {}).allowed
     assert engine.namespaces == [None]
-    assert not ledgers.enabled
+    assert not ledgers.is_enabled(UsageScopeKind.AGENT)
 
 
 def test_a_usage_free_engine_gets_no_namespace_and_no_ledger() -> None:
@@ -274,7 +280,7 @@ def test_a_usage_free_engine_gets_no_namespace_and_no_ledger() -> None:
     enforcer.decide("refund", {})
 
     assert engine.namespaces == [None]
-    assert ledgers.ledger_for(_AGENT) is None
+    assert ledgers.ledger_for(_SCOPE) is None
 
 
 def test_without_a_usage_source_a_decision_reads_local() -> None:
@@ -323,7 +329,10 @@ class _Platform:
         self.fetcher = _FakeFetcher(values)
         self.ledgers = _ledgers(self.clock)
         self.source = PlatformUsageSource(
-            self.fetcher, _InlineExecutor(), UsageRefreshSettings(), self.clock
+            {UsageScopeKind.AGENT: self.fetcher.get_agent_usage},
+            _InlineExecutor(),
+            UsageRefreshSettings(),
+            self.clock,
         )
 
     def enforcer(self, policy: Any) -> PolicyEnforcer:
@@ -442,14 +451,30 @@ def test_the_usage_refresh_follows_the_bound_policy() -> None:
     enforcer = platform.enforcer(_admission_cap(2))
 
     assert enforcer.usage_refresh() == UsageRefresh(
-        platform.source, _AGENT, _ADMISSION_PATHS
+        platform.source, _SCOPE, _ADMISSION_PATHS
     )
 
     enforcer.policy = _tool_cap(2)
 
     assert enforcer.usage_refresh() == UsageRefresh(
-        platform.source, _AGENT, frozenset({"tool_calls_5m"})
+        platform.source, _SCOPE, frozenset({"tool_calls_5m"})
     )
+
+
+def test_an_agent_usage_policy_enables_only_the_agent_scope() -> None:
+    """G3: an agent quota never turns on user ledgers or user fetches."""
+    platform = _Platform({_INVOCATIONS: 0})
+    enforcer = platform.enforcer(_admission_cap(2))
+
+    assert platform.ledgers.is_enabled(UsageScopeKind.AGENT)
+    assert not platform.ledgers.is_enabled(UsageScopeKind.USER)
+
+    platform.boundary(enforcer)
+    assert enforcer.decide(AGENT_RUN_TOOL, _ADMISSION_ARGS).allowed
+
+    assert {scope.kind for scope in platform.source._snapshots} == {
+        UsageScopeKind.AGENT
+    }
 
 
 def test_the_own_run_is_left_out_through_the_source() -> None:

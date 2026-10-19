@@ -26,6 +26,8 @@ from hexgate.runtime.agent_usage import (
     MAX_WINDOW_SECONDS,
     UsageLedgers,
     UsageMetric,
+    UsageScope,
+    UsageScopeKind,
     new_usage_ledger,
 )
 from hexgate.runtime.context import HexgateContext
@@ -530,12 +532,12 @@ def test_llm_usage_is_applied_atomically() -> None:
 def _enabled_ledgers() -> UsageLedgers:
     """A fresh registry — never enable the process-wide one, which is one-way."""
     ledgers = UsageLedgers(new_usage_ledger)
-    ledgers.enable()
+    ledgers.enable(UsageScopeKind.AGENT)
     return ledgers
 
 
 def _usage(ledgers: UsageLedgers, agent: str) -> dict[UsageMetric, int]:
-    ledger = ledgers.ledger_for(agent)
+    ledger = ledgers.ledger_for(UsageScope.agent(agent))
     assert ledger is not None
     return ledger.within(MAX_WINDOW_SECONDS)
 
@@ -551,6 +553,19 @@ def test_run_scope_counts_one_invocation_and_a_join_counts_none() -> None:
 
     assert _usage(ledgers, "a")[UsageMetric.INVOCATIONS] == 1
     assert _usage(ledgers, "b")[UsageMetric.INVOCATIONS] == 1
+
+
+def test_run_scope_counts_only_on_the_agent_scope() -> None:
+    ledgers = _enabled_ledgers()
+    ledgers.enable(UsageScopeKind.USER)
+
+    with run_scope("a", ledgers=ledgers):
+        pass
+
+    assert _usage(ledgers, "a")[UsageMetric.INVOCATIONS] == 1
+    user_ledger = ledgers.ledger_for(UsageScope(UsageScopeKind.USER, "a"))
+    assert user_ledger is not None
+    assert not any(user_ledger.within(MAX_WINDOW_SECONDS).values())
 
 
 def test_recorders_forward_their_v1_metrics_to_the_ledger() -> None:
