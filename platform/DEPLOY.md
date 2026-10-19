@@ -371,10 +371,13 @@ the rollup (a late backfill, a backfill that failed partway, a re-upgrade after
 a rollback that kept the table, or a count that looks wrong): stop the writers,
 `TRUNCATE TABLE hexgate_audit.usage_minute`, run the backfill, start the writers.
 
-`0006`'s hazard is the backfill overlap, not old-enricher duplicates: a row
-written between the `CREATE` of the `usage_minute_user` views and the backfill
-is counted by a view and again by the backfill, for good. So the same recipe
-holds, with `FILE=0006_usage_minute_user`. On a release that ships both, run
+`0006`'s hazard is a writer running beside the migration and backfill, not
+old-enricher duplicates. A row written after the `CREATE` of the
+`usage_minute_user` views but before the backfill leaves the table non-empty,
+so the backfill's empty-table guard skips it entirely and `30d` user reads
+start near zero, silently. A row written while the backfill runs is counted by
+a view and again by the backfill, for good. So the same recipe holds, with
+`FILE=0006_usage_minute_user`. On a release that ships both, run
 the two backfills back to back in the same stopped window. To rebuild the user
 rollup: stop the writers, `TRUNCATE TABLE hexgate_audit.usage_minute_user`, run
 the backfill, start the writers.
