@@ -148,7 +148,7 @@ def usage_values_from_payload(payload: Any, paths: frozenset[str]) -> dict[str, 
 
 
 # Fetches one scope's values: (key, sorted paths) -> the response body.
-ScopeFetcher = Callable[[str, Sequence[str]], Mapping[str, Any]]
+ScopeFetcher = Callable[[str, Sequence[str]], dict[str, Any]]
 
 
 class _Tier(Enum):
