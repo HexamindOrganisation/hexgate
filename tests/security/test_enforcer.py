@@ -23,6 +23,7 @@ from hexgate.security import (
 from hexgate.security.decision import Decision
 from hexgate.security.enforcer import PolicyEnforcer
 from hexgate.security.policy_set import PolicySet
+from hexgate.security.usage_inputs import NO_USAGE, UsageInputs
 
 
 class _RecordingEngine:
@@ -43,6 +44,7 @@ class _RecordingEngine:
         args: Mapping[str, Any],
         attributes: Mapping[str, Any] | None = None,
         run: Mapping[str, Any] | None = None,
+        usage: UsageInputs = NO_USAGE,
     ) -> Verdict:
         self.calls.append(
             {

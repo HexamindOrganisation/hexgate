@@ -19,9 +19,7 @@ from __future__ import annotations
 
 from typing import Any
 
-# The identity a null/blank-named agent collapses to, so it never reaches a policy
-# lookup, a cache key, or a reach match as ``None``/``""``.
-DEFAULT_AGENT_NAME = "default"
+from hexgate.runtime.run_facts import DEFAULT_AGENT_NAME
 
 
 def canonical_name(name: str | None) -> str:

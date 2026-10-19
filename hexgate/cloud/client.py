@@ -18,7 +18,9 @@ import base64
 import json
 import os
 import urllib.error
+import urllib.parse
 import urllib.request
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any, cast
 
@@ -39,6 +41,7 @@ DEFAULT_TIMEOUT = 10.0
 # fallback fire fast.
 DEFAULT_REFRESH_TIMEOUT = 2.0
 TOKEN_PREFIX = "fty_"
+_USAGE_PATHS_PARAM = "paths"
 
 
 class HexgateError(RuntimeError):
@@ -188,7 +191,8 @@ class HexgateClient:
         # legacy ``/v1/projects/{id}/agents/{name}`` URL still works on
         # the platform but only via cookie auth; we deliberately route
         # the SDK through the new bearer-only route.
-        url = f"{self.config.base_url}/v1/agents/{name}"
+        quoted = urllib.parse.quote(name, safe="")
+        url = f"{self.config.base_url}/v1/agents/{quoted}"
         return self._raw_get(url, authorize=True, if_none_match=if_none_match)
 
     def get_bans(
@@ -208,11 +212,22 @@ class HexgateClient:
         )
         return cast("list[dict[str, Any]] | None", payload), etag
 
+    def get_agent_usage(self, name: str, paths: Sequence[str]) -> dict[str, Any]:
+        """Fetch ``agent_usage.*`` values for ``name`` (project from the bearer).
+
+        On the run-start path, so bounded by ``refresh_timeout`` despite having no
+        ETag, and so is a first-use JWKS fetch for the key check."""
+        self._ensure_key_verified(timeout=self.refresh_timeout)
+        query = urllib.parse.urlencode({_USAGE_PATHS_PARAM: ",".join(paths)})
+        quoted = urllib.parse.quote(name, safe="")
+        url = f"{self.config.base_url}/v1/agents/{quoted}/usage?{query}"
+        return self._get(url, timeout=self.refresh_timeout)
+
     # ------------------------------------------------------------------
     # Biscuit verification
     # ------------------------------------------------------------------
 
-    def _ensure_key_verified(self) -> None:
+    def _ensure_key_verified(self, *, timeout: float | None = None) -> None:
         """Verify the Biscuit signature once before trusting the API key.
 
         Lazy on first use so that ``HexgateClient(...)`` itself stays cheap
@@ -230,7 +245,7 @@ class HexgateClient:
         except TokenError as exc:
             raise HexgateError(f"HEXGATE_API_KEY is malformed: {exc}") from exc
 
-        pub = self._resolve_public_key()
+        pub = self._resolve_public_key(timeout=timeout)
         try:
             verify_biscuit(biscuit_b64, pub)
             self._facts = extract_facts(biscuit_b64, pub)
@@ -267,17 +282,17 @@ class HexgateClient:
         """
         return self._resolve_public_key()
 
-    def _resolve_public_key(self) -> bytes:
+    def _resolve_public_key(self, *, timeout: float | None = None) -> bytes:
         """Return the platform's signing public key, fetching JWKS if needed."""
         if self._public_key is not None:
             return self._public_key
-        self._public_key = self._fetch_public_key()
+        self._public_key = self._fetch_public_key(timeout=timeout)
         return self._public_key
 
-    def _fetch_public_key(self) -> bytes:
+    def _fetch_public_key(self, *, timeout: float | None = None) -> bytes:
         """GET /v1/.well-known/keys and return the first key's raw bytes."""
         url = f"{self.config.base_url}/v1/.well-known/keys"
-        payload, _ = self._raw_get(url, authorize=False)
+        payload, _ = self._raw_get(url, authorize=False, timeout=timeout)
         try:
             keys = payload["keys"]
             x = keys[0]["x"]
@@ -295,11 +310,11 @@ class HexgateClient:
     # HTTP plumbing
     # ------------------------------------------------------------------
 
-    def _get(self, url: str) -> dict[str, Any]:
+    def _get(self, url: str, *, timeout: float | None = None) -> dict[str, Any]:
         """Body-only GET. ``_raw_get`` is the unified HTTP entry point;
         this drops the ETag tuple for callers that don't care about
         conditional requests."""
-        payload, _ = self._raw_get(url, authorize=True)
+        payload, _ = self._raw_get(url, authorize=True, timeout=timeout)
         if payload is None:
             # Invariant: _get is never called with If-None-Match, so a 304
             # is impossible. Raise so `python -O` can't strip the check.
@@ -314,6 +329,7 @@ class HexgateClient:
         *,
         authorize: bool,
         if_none_match: str | None = None,
+        timeout: float | None = None,
     ) -> tuple[dict[str, Any] | None, str | None]:
         """Single HTTP entry point — returns ``(payload, etag)``.
 
@@ -333,8 +349,11 @@ class HexgateClient:
         # Conditional GETs run on the per-turn hot path and fall back to
         # the cached bundle when they fail — use the tight refresh
         # timeout so a slow platform doesn't stall every chat turn for
-        # up to ``self.timeout`` seconds.
-        timeout = self.refresh_timeout if if_none_match is not None else self.timeout
+        # up to ``self.timeout`` seconds. An explicit ``timeout`` overrides both.
+        if timeout is None:
+            timeout = (
+                self.refresh_timeout if if_none_match is not None else self.timeout
+            )
         request = urllib.request.Request(url, headers=headers)
         try:
             with urllib.request.urlopen(request, timeout=timeout) as response:

@@ -41,6 +41,10 @@ def test_when_audit_json_is_missing_then_no_attribute_is_known(tmp_path) -> None
     assert load_attributes(ws, AGENT) == set()
 
 
+def test_when_no_agent_is_given_then_load_attributes_reads_every_row(tmp_path) -> None:
+    assert load_attributes(make_workspace(tmp_path), None) == ATTRS | {"region"}
+
+
 @pytest.mark.parametrize(
     "broken",
     [

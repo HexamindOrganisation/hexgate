@@ -10,17 +10,18 @@ what lets a per-agent / per-role ``boundary`` apply only to its own cell.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 from pydantic import ValidationError
 
 from hexgate.security.compose.grammar import Entry
 from hexgate.security.compose.imports import Loader, resolve_imports
-from hexgate.security.compose.lower import agent_guards, lower
+from hexgate.security.compose.lower import agent_guards, agent_usage_policy, lower
 from hexgate.security.compose.parse import parse_entry
 from hexgate.security.constraints import ConstraintParseError
 from hexgate.security.linker import link_policy_set
-from hexgate.security.models import AgentPolicy
+from hexgate.security.models import USAGE_FIELD, AgentPolicy
 from hexgate.security.modules import (
     DEFAULT_AGENT,
     LinkError,
@@ -28,6 +29,8 @@ from hexgate.security.modules import (
     ProjectLinkResult,
 )
 from hexgate.security.policy_set import DEFAULT_ROLE_NAME, PolicySet, PolicySetError
+
+_GUARDS_FIELD = "guards"
 
 
 def file_loader(base_dir: str | Path) -> Loader:
@@ -79,27 +82,16 @@ def resolve_entry(
     # that parse/resolve failures come back as LinkError with the file named.
     try:
         per_role = lower(entry, agent)
-        # Guards are agent-level and NOT composed through the fold (they are not a
-        # capability/boundary) — inject the one agent-wide stance onto every folded
-        # role identically, so effective_guards reads it and no role can diverge
-        # (R-GUARD-006 / R-GUARD-007).
-        guards = agent_guards(entry, agent)
+        # Guards and usage are agent-level and NOT composed through the fold (they
+        # are not a capability/boundary) — inject the one agent-wide value onto every
+        # folded role identically, so no role can diverge (R-GUARD-006 / R-GUARD-007).
         by_role: dict[str, LinkResult] = {}
         effective: dict[str, AgentPolicy] = {}
         for role, (boundaries, caps) in per_role.items():
             result = link_policy_set(boundaries, caps)
-            if guards:
-                # Mutate the LinkResult's own effective (a frozen dataclass, but the
-                # dict is mutable) so BOTH views carry the stance: the policy_set below
-                # AND effective_policy_by_role — the shared serializer the platform's
-                # resolved-policy YAML and the CLI both go through. Copy the stance per
-                # role (fresh dict + fresh GuardRule instances) so the roles never
-                # share mutable state.
-                result.effective[DEFAULT_ROLE_NAME] = result.effective[
-                    DEFAULT_ROLE_NAME
-                ].model_copy(
-                    update={"guards": {n: r.model_copy() for n, r in guards.items()}}
-                )
+            agent_level = _agent_level_fields(entry, agent)
+            if agent_level:
+                result = _with_agent_level(result, agent_level)
             by_role[role] = result
             effective[role] = result.effective[DEFAULT_ROLE_NAME]
         return ProjectLinkResult(policy_set=PolicySet(effective), by_role=by_role)
@@ -107,6 +99,35 @@ def resolve_entry(
         raise  # already carries module provenance
     except (ValidationError, ConstraintParseError, PolicySetError) as exc:
         raise LinkError(f"{source}: {exc}") from exc
+
+
+def _with_agent_level(result: LinkResult, fields: dict[str, object]) -> LinkResult:
+    """``result`` with the agent-wide fields on its folded policy, in every view:
+    its own ``policy_set``, and ``effective`` — which ``effective_policy_by_role``
+    serializes for the platform's resolved-policy YAML and the CLI."""
+    patched = result.effective[DEFAULT_ROLE_NAME].model_copy(update=fields)
+    return replace(
+        result,
+        policy_set=PolicySet({DEFAULT_ROLE_NAME: patched}),
+        effective={DEFAULT_ROLE_NAME: patched},
+    )
+
+
+def _agent_level_fields(entry: Entry, agent: str) -> dict[str, object]:
+    """The agent-wide ``AgentPolicy`` fields to inject onto one folded role.
+
+    Built per role, with fresh ``GuardRule`` copies, so the roles never share mutable
+    state. ``UsagePolicy`` is frozen, so it is shared."""
+    fields: dict[str, object] = {}
+    guards = agent_guards(entry, agent)
+    if guards:
+        fields[_GUARDS_FIELD] = {
+            name: rule.model_copy() for name, rule in guards.items()
+        }
+    usage = agent_usage_policy(entry, agent)
+    if usage is not None:
+        fields[USAGE_FIELD] = usage
+    return fields
 
 
 def resolve_text(

@@ -263,7 +263,12 @@ class HexgateRunner:
         """
         self._setup_observability()
         # per-run policy pull; 304 when unchanged
-        prepare_run(self._binding.refresh, self._ban_gate, hexgate_context)
+        prepare_run(
+            self._binding.refresh,
+            self._ban_gate,
+            hexgate_context,
+            binding=self._binding,
+        )
         with hexgate_context.sync_scope():
             self._check_admission_sync()  # in-scope: reads the caller's role
             with (
@@ -320,7 +325,10 @@ class HexgateRunner:
         self._setup_observability()
         # per-run policy pull; 304 when unchanged
         await aprepare_run(
-            self._binding.refresh_async(), self._ban_gate, hexgate_context
+            self._binding.refresh_async(),
+            self._ban_gate,
+            hexgate_context,
+            binding=self._binding,
         )
         adk_session_id = (
             session_id if session_id is not None else hexgate_context.session_id

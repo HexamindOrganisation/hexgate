@@ -1,0 +1,150 @@
+[
+  {
+    "name": "order-desk",
+    "manifest": {
+      "name": "order-desk",
+      "description": null,
+      "framework": "langchain",
+      "model": null,
+      "system_prompt": null,
+      "tools": [
+        {
+          "name": "view_orders",
+          "description": "Lists a customer's orders. Read-only.",
+          "input_schema": {
+            "properties": {
+              "customer_id": {
+                "title": "customer_id",
+                "type": "string"
+              }
+            },
+            "required": [
+              "customer_id"
+            ]
+          }
+        },
+        {
+          "name": "lookup_order",
+          "description": "Shows one order. Read-only.",
+          "input_schema": {
+            "properties": {
+              "order_id": {
+                "title": "order_id",
+                "type": "string"
+              }
+            },
+            "required": [
+              "order_id"
+            ]
+          }
+        },
+        {
+          "name": "refund_order",
+          "description": "Pays money back to the customer's card. Can only be undone by hand.",
+          "input_schema": {
+            "properties": {
+              "order_id": {
+                "title": "order_id",
+                "type": "string"
+              },
+              "amount": {
+                "title": "amount",
+                "type": "number"
+              },
+              "currency": {
+                "title": "currency",
+                "type": "string"
+              }
+            },
+            "required": [
+              "order_id",
+              "amount",
+              "currency"
+            ]
+          }
+        },
+        {
+          "name": "wire_transfer",
+          "description": "Sends money to any bank account. Irreversible.",
+          "input_schema": {
+            "properties": {
+              "amount": {
+                "title": "amount",
+                "type": "number"
+              },
+              "iban": {
+                "title": "iban",
+                "type": "string"
+              }
+            },
+            "required": [
+              "amount",
+              "iban"
+            ]
+          }
+        },
+        {
+          "name": "send_email",
+          "description": "Sends an email to any address, internal or external.",
+          "input_schema": {
+            "properties": {
+              "to": {
+                "title": "to",
+                "type": "array"
+              },
+              "subject": {
+                "title": "subject",
+                "type": "string"
+              },
+              "body": {
+                "title": "body",
+                "type": "string"
+              }
+            },
+            "required": [
+              "to",
+              "subject",
+              "body"
+            ]
+          }
+        },
+        {
+          "name": "export_customers",
+          "description": "Exports every customer record, including personal data, as a file.",
+          "input_schema": {
+            "properties": {
+              "format": {
+                "title": "format",
+                "type": "string"
+              }
+            },
+            "required": [
+              "format"
+            ]
+          }
+        },
+        {
+          "name": "delete_customer",
+          "description": "Permanently deletes a customer and their history. Irreversible.",
+          "input_schema": {
+            "properties": {
+              "customer_id": {
+                "title": "customer_id",
+                "type": "string"
+              }
+            },
+            "required": [
+              "customer_id"
+            ]
+          }
+        }
+      ],
+      "skills": null,
+      "subagents": null,
+      "guards": null
+    },
+    "version": 1,
+    "content_hash": "31627925d78f115093357ee1add5697cad0e540a256e46c6f69f01a61b929889",
+    "updated_at": "2026-10-01T00:00:00Z"
+  }
+]

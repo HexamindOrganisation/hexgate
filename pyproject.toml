@@ -9,7 +9,7 @@ build-backend = "setuptools.build_meta"
 # 0.2.0 (the original package name was taken on PyPI by a 2014
 # abandoned project; the team consolidated on `hexgate` for everything).
 name = "hexgate"
-version = "0.3.2"
+version = "0.3.3"
 description = "Hexgate — authorization infrastructure for AI agents (agent runtime + cloud client)."
 readme = "README.md"
 license = "MIT"
@@ -66,6 +66,11 @@ dev = [
     "pytest-asyncio>=1.0.0",
     "pytest-cov>=6.0.0",
     "ruff>=0.12.2",
+]
+# Inspect runs the policy-writing eval set (evals/policy_writing/task.py).
+# It releases every few days and is pre-1.0, so it is pinned exactly.
+evals = [
+    "inspect-ai==0.3.278",
 ]
 
 [tool.ruff.lint]

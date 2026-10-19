@@ -11,6 +11,8 @@ import pytest
 from evals.policy_writing.policy import (
     DRIFT_CODES,
     CaseError,
+    agent_policies,
+    complete_call,
     decide,
     effective_policy,
     outcome,
@@ -19,6 +21,7 @@ from hexgate.security.analyzer import LintCode
 from hexgate.security.decision import DecisionOutcome
 from tests.evals.helpers import (
     AGENT,
+    OPS_COLUMN_PERMISSIVE_DEFAULT,
     PERMISSIVE_DEFAULT,
     POLICY,
     make_modules_workspace,
@@ -293,7 +296,7 @@ def test_when_a_skill_call_sets_what_the_gate_sends_then_decide_raises(
 def test_when_a_skill_call_spells_the_gate_args_it_sends_then_decide_accepts_them(
     tmp_path,
 ) -> None:
-    # As the case loader (PR 2) completes a skill call.
+    # As the case loader's call checks (#330) complete a skill call.
     policy = valid_policy(make_workspace(tmp_path, PDF_INSTRUCTIONS))
     call = {"tool": "skill:pdf", "args": {"skill": "pdf", "via": "instructions"}}
     assert decide(policy, "default", call).outcome == DecisionOutcome.ALLOW
@@ -551,3 +554,121 @@ def test_when_a_module_tree_names_another_agents_tool_then_no_drift(
     _drop_draft_bot(ws)
     (ws / "policies" / module).write_text(text)
     assert valid_policy(ws, AGENT, modules=True).drift == []
+
+
+# agent_policies
+
+COLUMNS = '  billing:\n    "*": [read_only]\n    ops-bot: [read_only, payments]\n'
+
+
+def test_agent_policies_happy_path(tmp_path) -> None:
+    ws = make_modules_workspace(tmp_path, COLUMNS)
+    policies, problems = agent_policies(ws, None, valid_policy(ws, None, True), True)
+    # One per agent in agents.json, plus "*" for one not registered yet.
+    assert (sorted(policies), problems) == (
+        ["*", "draft-bot", "ops-bot", "shop-bot"],
+        [],
+    )
+    assert policies["ops-bot"].agent == "ops-bot"  # its gates send its name
+
+
+def test_when_the_case_is_not_role_wide_then_there_is_one_policy(tmp_path) -> None:
+    # An agent case: its own policy only.
+    ws = make_modules_workspace(tmp_path, COLUMNS)
+    policy = valid_policy(ws, AGENT, True)
+    assert agent_policies(ws, AGENT, policy, role_wide=False) == ({AGENT: policy}, [])
+
+
+def test_when_an_agents_policy_is_invalid_then_agent_policies_returns_none(
+    tmp_path,
+) -> None:
+    ws = make_modules_workspace(tmp_path, OPS_COLUMN_PERMISSIVE_DEFAULT)
+    policies, problems = agent_policies(ws, None, valid_policy(ws, None, True), True)
+    # None, rather than the valid ones: an agent left out would pass unrun.
+    assert policies == {}
+    assert problems[0].startswith("agent ops-bot: [permissive-default]")
+
+
+# ---------------------------------------------------------------- complete_call
+
+
+@pytest.mark.parametrize(
+    ("call", "completed"),
+    [
+        # A gate's key and args as `decide` sends them, the name trimmed.
+        ({"tool": "agent.run"}, {"tool": "agent.run", "args": {"agent": AGENT}}),
+        (
+            {"tool": "agent.tool: ops-bot"},
+            {
+                "tool": "agent.tool:ops-bot",
+                "args": {"agent": AGENT, "target": "ops-bot", "via": "tool"},
+            },
+        ),
+        # A skill read's file and hash come from the call, null when left out.
+        (
+            {"tool": "skill: pdf ", "args": {"file_path": "SKILL.md"}},
+            {
+                "tool": "skill:pdf",
+                "args": {
+                    "skill": "pdf",
+                    "via": "instructions",
+                    "file_path": "SKILL.md",
+                    "content_hash": None,
+                },
+            },
+        ),
+        # A plain tool call is left as written.
+        (
+            {"tool": "view_orders", "args": {"x": 1}},
+            {"tool": "view_orders", "args": {"x": 1}},
+        ),
+    ],
+)
+def test_complete_call_writes_a_gate_call_as_decide_sends_it(call, completed) -> None:
+    complete_call(call, AGENT)
+    assert call == completed
+
+
+@pytest.mark.parametrize(
+    ("call", "completed"),
+    [
+        ({"tool": "agent.run"}, {"tool": "agent.run", "args": {}}),
+        (
+            {"tool": "agent.tool: ops-bot"},
+            {
+                "tool": "agent.tool:ops-bot",
+                "args": {"target": "ops-bot", "via": "tool"},
+            },
+        ),
+    ],
+)
+def test_when_the_case_has_no_agent_then_complete_call_leaves_the_agent_out(
+    call, completed
+) -> None:
+    # Each agent's dry-run sends its own name (`agent_policies`).
+    complete_call(call, None)
+    assert call == completed
+
+
+def test_when_the_case_has_no_agent_then_complete_call_refuses_one_in_args() -> None:
+    with pytest.raises(CaseError, match="each agent sends its own name"):
+        complete_call({"tool": "agent.run", "args": {"agent": AGENT}}, None)
+
+
+@pytest.mark.parametrize(
+    ("call", "error"),
+    [
+        # A gate's own arg with another value would be silently replaced.
+        ({"tool": "agent.run", "args": {"agent": "ops-bot"}}, "drop \\['agent'\\]"),
+        ({"tool": "skill:pdf", "args": {"skill": "x"}}, "drop \\['skill'\\]"),
+        # Refused whatever the policy, as decide refuses them.
+        ({"tool": "agent.run", "run_facts": {"tool_calls": 1}}, "drop run_facts"),
+        ({"tool": "view_orders", "run_facts": {"tool_call": 1}}, "unknown run"),
+        ({"tool": "view_orders", "attributes": {"tier": {"a": 1}}}, "tier"),
+    ],
+)
+def test_when_no_policy_could_dry_run_a_call_then_complete_call_raises(
+    call, error
+) -> None:
+    with pytest.raises(CaseError, match=error):
+        complete_call(call, AGENT)
