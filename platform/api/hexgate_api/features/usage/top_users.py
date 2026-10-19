@@ -10,7 +10,11 @@ from typing import Final, Literal
 from clickhouse_connect.driver.client import Client
 
 from hexgate_api.features.usage.paths import MAX_WINDOW_SECONDS, UsageMetric
-from hexgate_api.features.usage.service import METRIC_SQL, USER_ROLLUP
+from hexgate_api.features.usage.service import (
+    METRIC_SQL,
+    USER_ROLLUP,
+    window_start_filter,
+)
 
 TopUsersWindow = Literal["1h", "24h", "7d", "30d"]
 # Quota windows, all within the rollup's TTL (paths.MAX_WINDOW_SECONDS).
@@ -23,6 +27,7 @@ TOP_USERS_MAX_LIMIT: Final = 50
 # SDK user reads share the server with a 2 s budget: bound it.
 TOP_USERS_READ_TIMEOUT_SECONDS: Final = 10
 _QUERY_SETTINGS: Final = {"max_execution_time": TOP_USERS_READ_TIMEOUT_SECONDS}
+_WINDOW_PARAM: Final = "window"
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,15 +39,15 @@ class TopUser:
 def build_top_users_query(
     project_id: str, window_seconds: int, metric: UsageMetric, limit: int
 ) -> tuple[str, dict[str, object]]:
-    """Users with a non-zero value only. The window starts at
-    ``toStartOfMinute(now - w)``, as in build_usage_query."""
+    """Users with a non-zero value only. Windows start as in build_usage_query."""
     sql = (
+        "WITH now('UTC') AS as_of\n"
         "SELECT\n"
         f"    {USER_ROLLUP.key_column},\n"
         f"    sum({METRIC_SQL[metric]}) AS value\n"
         f"FROM {USER_ROLLUP.table}\n"
         "WHERE project_id = {project_id:String}\n"
-        "  AND minute >= toStartOfMinute(now('UTC') - toIntervalSecond({window:UInt32}))\n"
+        f"  AND {window_start_filter(_WINDOW_PARAM)}\n"
         f"GROUP BY {USER_ROLLUP.key_column}\n"
         "HAVING value > 0\n"
         f"ORDER BY value DESC, {USER_ROLLUP.key_column} ASC\n"
@@ -50,7 +55,7 @@ def build_top_users_query(
     )
     params: dict[str, object] = {
         "project_id": project_id,
-        "window": window_seconds,
+        _WINDOW_PARAM: window_seconds,
         "limit": limit,
     }
     return sql, params

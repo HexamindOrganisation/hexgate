@@ -97,7 +97,7 @@ def build_usage_query(
     }
     columns = ",\n".join(
         f"    sumIf({METRIC_SQL[spec.metric]}, "
-        f"{_window_start_filter(window_params[spec.window_seconds])}) "
+        f"{window_start_filter(window_params[spec.window_seconds])}) "
         f"AS {_VALUE_ALIAS_PREFIX}{i}"
         for i, spec in enumerate(specs)
     )
@@ -109,7 +109,7 @@ def build_usage_query(
         f"FROM {rollup.table}\n"
         "WHERE project_id = {project_id:String}\n"
         f"  AND {rollup.key_column} = {{{rollup.key_column}:String}}\n"
-        f"  AND {_window_start_filter(_SCAN_PARAM)}"
+        f"  AND {window_start_filter(_SCAN_PARAM)}"
     )
     params: dict[str, object] = {
         "project_id": project_id,
@@ -120,7 +120,7 @@ def build_usage_query(
     return sql, params
 
 
-def _window_start_filter(param: str) -> str:
+def window_start_filter(param: str) -> str:
     return f"minute >= toStartOfMinute(as_of - toIntervalSecond({{{param}:UInt32}}))"
 
 
