@@ -28,6 +28,7 @@ from hexgate_api.deps.org import require_org_member
 from hexgate_api.deps.tokens import require_project
 from hexgate_api.features.usage import router as usage_router
 from hexgate_api.features.usage.service import (
+    _USAGE_READ_THREAD_PREFIX,
     UsageMemo,
     get_usage_executor,
     get_usage_memo,
@@ -785,4 +786,7 @@ def test_top_users_never_touches_the_sdk_user_pool_or_stats(
 
     assert r.status_code == 200, r.text
     assert not threads[0].startswith(_BLOCKED_POOL_PREFIX)
+    # Also off the real pools, so calling the executor directly instead of through
+    # the overridden dependency still fails ("usage-read-user" shares the prefix).
+    assert not threads[0].startswith(_USAGE_READ_THREAD_PREFIX)
     stats.record.assert_not_called()
