@@ -777,6 +777,21 @@ def test_resolve_returns_the_shared_source_when_a_key_is_set() -> None:
     )
 
 
+def test_the_shared_source_fetches_agent_scopes_by_bare_name() -> None:
+    fetcher = _FakeFetcher(_FakeClock(), _PLATFORM_VALUES)
+    client = SimpleNamespace(
+        config=SimpleNamespace(base_url="http://platform"),
+        get_agent_usage=fetcher.fetch,
+    )
+    source = get_usage_source("k", client)
+
+    source.refresh(_SCOPE, _ONE_PATH)
+    reading = source.read(_SCOPE, _ONE_PATH, new_usage_ledger())
+
+    assert [call[:2] for call in fetcher.calls] == [(_AGENT, [_HOUR])]
+    assert reading.state is UsageState.FRESH
+
+
 @pytest.mark.parametrize(
     ("env", "api_key"),
     [
