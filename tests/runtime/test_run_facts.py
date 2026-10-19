@@ -567,19 +567,6 @@ def test_run_scope_counts_one_invocation_and_a_join_counts_none() -> None:
     assert _usage(ledgers, "b")[UsageMetric.INVOCATIONS] == 1
 
 
-def test_run_scope_counts_only_on_the_agent_scope() -> None:
-    ledgers = _enabled_ledgers()
-    ledgers.enable(UsageScopeKind.USER)
-
-    with run_scope("a", ledgers=ledgers):
-        pass
-
-    assert _usage(ledgers, "a")[UsageMetric.INVOCATIONS] == 1
-    user_ledger = ledgers.ledger_for(UsageScope(UsageScopeKind.USER, "a"))
-    assert user_ledger is not None
-    assert not any(user_ledger.within(MAX_WINDOW_SECONDS).values())
-
-
 async def test_a_run_counts_on_its_users_ledger() -> None:
     ledgers = _both_enabled()
 
@@ -631,8 +618,13 @@ async def test_an_anonymous_run_binds_no_user_ledger() -> None:
 
 
 def test_a_run_outside_any_context_binds_no_user_ledger() -> None:
-    with run_scope("a", ledgers=_both_enabled()) as facts:
+    ledgers = _both_enabled()
+
+    with run_scope("a", ledgers=ledgers) as facts:
         assert facts.user_ledger is None
+
+    assert not ledgers._user_ledgers
+    assert _usage(ledgers, "a")[UsageMetric.INVOCATIONS] == 1
 
 
 async def test_an_agent_only_registry_never_counts_users() -> None:
