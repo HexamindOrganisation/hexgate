@@ -21,7 +21,7 @@ from hexgate_api.features.usage.paths import UsageMetric, UsageWindowSpec
 USAGE_MINUTE_TABLE: Final = "usage_minute"
 USAGE_MINUTE_USER_TABLE: Final = "usage_minute_user"
 # Code-owned SQL per metric. No request string ever reaches the SQL text.
-_METRIC_SQL: Final[Mapping[UsageMetric, str]] = MappingProxyType(
+METRIC_SQL: Final[Mapping[UsageMetric, str]] = MappingProxyType(
     {
         UsageMetric.INVOCATIONS: "invocations",
         UsageMetric.TOOL_CALLS: "tool_calls",
@@ -96,8 +96,8 @@ def build_usage_query(
         for i, seconds in enumerate(dict.fromkeys(s.window_seconds for s in specs))
     }
     columns = ",\n".join(
-        f"    sumIf({_METRIC_SQL[spec.metric]}, "
-        f"{_window_start_filter(window_params[spec.window_seconds])}) "
+        f"    sumIf({METRIC_SQL[spec.metric]}, "
+        f"{window_start_filter(window_params[spec.window_seconds])}) "
         f"AS {_VALUE_ALIAS_PREFIX}{i}"
         for i, spec in enumerate(specs)
     )
@@ -109,7 +109,7 @@ def build_usage_query(
         f"FROM {rollup.table}\n"
         "WHERE project_id = {project_id:String}\n"
         f"  AND {rollup.key_column} = {{{rollup.key_column}:String}}\n"
-        f"  AND {_window_start_filter(_SCAN_PARAM)}"
+        f"  AND {window_start_filter(_SCAN_PARAM)}"
     )
     params: dict[str, object] = {
         "project_id": project_id,
@@ -120,7 +120,7 @@ def build_usage_query(
     return sql, params
 
 
-def _window_start_filter(param: str) -> str:
+def window_start_filter(param: str) -> str:
     return f"minute >= toStartOfMinute(as_of - toIntervalSecond({{{param}:UInt32}}))"
 
 

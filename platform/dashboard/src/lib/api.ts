@@ -587,6 +587,36 @@ export interface LlmUsageScope {
   end_date?: string;
 }
 
+/** Mirrors features/usage/top_users.py: quota windows, within the rollup's TTL. */
+export type TopUsersWindow = "1h" | "24h" | "7d" | "30d";
+
+/** Mirrors features/usage/paths.py UsageMetric. */
+export type UsageMetric =
+  | "invocations"
+  | "tool_calls"
+  | "denials"
+  | "llm_calls"
+  | "input_tokens"
+  | "output_tokens"
+  | "total_tokens";
+
+export interface TopUsersScope {
+  window: TopUsersWindow;
+  metric: UsageMetric;
+  limit?: number;
+}
+
+export interface TopUser {
+  user_id: string;
+  value: number;
+}
+
+export interface TopUsersRead {
+  window: TopUsersWindow;
+  metric: UsageMetric;
+  users: TopUser[];
+}
+
 // --- LLM message transcripts (mirrors schemas.py LlmMessageRow/Page) -------
 
 /** One GenAI content part. `type` names it; the rest is shape-specific, so
@@ -873,6 +903,11 @@ export const api = {
   getLlmUsageSummary: (scope: LlmUsageScope, projectId: string) =>
     request<LlmInvocationSummary>(
       `/v1/projects/${projectId}/llm/summary${qs({ ...scope })}`,
+    ),
+
+  getTopUsers: (scope: TopUsersScope, projectId: string) =>
+    request<TopUsersRead>(
+      `/v1/projects/${projectId}/usage/top-users${qs({ ...scope })}`,
     ),
 
   /**
