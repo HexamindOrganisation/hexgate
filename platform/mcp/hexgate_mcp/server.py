@@ -60,7 +60,7 @@ def _advertise_scopes(app: Starlette, auth: AuthSettings) -> None:
     `scopes_supported`. The SDK fills that field from `required_scopes`, which
     stays None because each tool checks its own scope; without the field a
     client that follows the MCP spec asks /authorize for no scope at all, and
-    its token can call nothing."""
+    its token can call nothing. mcp 1.30 has no other way to set the field."""
     ours = create_protected_resource_routes(
         resource_url=auth.resource_server_url,
         authorization_servers=[auth.issuer_url],

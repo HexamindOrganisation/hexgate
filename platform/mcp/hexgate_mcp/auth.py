@@ -37,16 +37,8 @@ class JwksTokenVerifier:
         self._audience = audience
 
     async def verify_token(self, token: str) -> HexgateAccessToken | None:
-        try:
-            header = jwt.get_unverified_header(token)
-        except jwt.PyJWTError:
-            return None
-        if header.get("typ") != ACCESS_TOKEN_TYPE:
-            logger.info("token refused: header typ is not %r", ACCESS_TOKEN_TYPE)
-            return None
-        kid = header.get("kid")
-        if not isinstance(kid, str):
-            logger.info("token refused: no `kid` in its header")
+        kid = _header_kid(token)
+        if kid is None:
             return None
         key = await self._keys.get(kid)
         if key is None:
@@ -72,6 +64,24 @@ class JwksTokenVerifier:
             logger.log(level, "token refused: %s: %s", type(exc).__name__, exc)
             return None
         return _access_token(token, claims)
+
+
+def _header_kid(token: str) -> str | None:
+    """The token's `kid`, once its header passes as an access token's."""
+    try:
+        header = jwt.get_unverified_header(token)
+    except jwt.PyJWTError as exc:
+        # The type only: its message can quote the undecodable header.
+        logger.info("token refused: not a JWT: %s", type(exc).__name__)
+        return None
+    if header.get("typ") != ACCESS_TOKEN_TYPE:
+        logger.info("token refused: header typ is not %r", ACCESS_TOKEN_TYPE)
+        return None
+    kid = header.get("kid")
+    if not isinstance(kid, str):
+        logger.info("token refused: no `kid` in its header")
+        return None
+    return kid
 
 
 def _access_token(token: str, claims: dict[str, Any]) -> HexgateAccessToken | None:

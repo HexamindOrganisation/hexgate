@@ -8,6 +8,12 @@ from hexgate_mcp.auth import JwksTokenVerifier
 from hexgate_mcp.jwks import JwksCache
 from tests.conftest import ISSUER, JWKS_URL, PROJECT, RESOURCE, SigningKey, jwks
 
+# A validly signed token from an API whose config disagrees with ours.
+CONFIG_MISMATCH = [
+    pytest.param({"aud": "https://other.example/mcp"}, id="wrong-aud"),
+    pytest.param({"iss": "https://evil.example"}, id="wrong-iss"),
+]
+
 
 @pytest.fixture
 async def verifier():
@@ -36,8 +42,7 @@ async def test_verify_token_happy_path(verifier, key):
 @pytest.mark.parametrize(
     "overrides",
     [
-        pytest.param({"aud": "https://other.example/mcp"}, id="wrong-aud"),
-        pytest.param({"iss": "https://evil.example"}, id="wrong-iss"),
+        *CONFIG_MISMATCH,
         pytest.param({"exp": 1}, id="expired"),
         pytest.param({"exp": None}, id="missing-exp"),
         pytest.param({"iss": None}, id="missing-iss"),
@@ -62,13 +67,7 @@ async def test_when_claim_is_wrong_then_token_refused(verifier, key, overrides, 
     assert token not in caplog.text
 
 
-@pytest.mark.parametrize(
-    "overrides",
-    [
-        pytest.param({"aud": "https://other.example/mcp"}, id="wrong-aud"),
-        pytest.param({"iss": "https://evil.example"}, id="wrong-iss"),
-    ],
-)
+@pytest.mark.parametrize("overrides", CONFIG_MISMATCH)
 @respx.mock
 async def test_when_iss_or_aud_mismatch_then_logged_as_warning(
     verifier, key, overrides, caplog
@@ -108,8 +107,11 @@ async def test_when_kid_is_unknown_then_refusal_is_logged(verifier, key, caplog)
 
 
 @respx.mock
-async def test_when_token_is_not_a_jwt_then_refused_without_fetch(verifier):
+async def test_when_token_is_not_a_jwt_then_refused_without_fetch(verifier, caplog):
     route = respx.get(JWKS_URL).respond(json={"keys": []})
+    caplog.set_level(logging.INFO, logger="hexgate_mcp.auth")
 
     assert await verifier.verify_token("fty_not-a-jwt") is None
     assert route.call_count == 0
+    assert "token refused: not a JWT: DecodeError" in caplog.text
+    assert "fty_not-a-jwt" not in caplog.text
