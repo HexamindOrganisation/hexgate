@@ -17,6 +17,7 @@ import pytest
 from hexgate.runtime.context import HexgateContext
 from hexgate.security.decision import Decision, DecisionOutcome, Verdict
 from hexgate.security.enforcer import PolicyEnforcer
+from hexgate.security.usage_inputs import NO_USAGE, UsageInputs
 
 
 class _StubEngine:
@@ -33,7 +34,7 @@ class _StubEngine:
         args: Mapping[str, Any],
         attributes: Mapping[str, Any] | None = None,
         run: Mapping[str, Any] | None = None,
-        agent_usage: Mapping[str, Any] | None = None,
+        usage: UsageInputs = NO_USAGE,
     ) -> Verdict:
         return self._verdict
 
@@ -205,7 +206,7 @@ async def test_observer_sees_the_whole_role_set_and_the_deciding_role() -> None:
             args: Mapping[str, Any],
             attributes: Mapping[str, Any] | None = None,
             run: Mapping[str, Any] | None = None,
-            agent_usage: Mapping[str, Any] | None = None,
+            usage: UsageInputs = NO_USAGE,
         ) -> Verdict:
             if role == "billing":
                 return Verdict(

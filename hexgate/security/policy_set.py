@@ -70,6 +70,7 @@ from hexgate.security.models import (
     is_agent_via_key,
     is_skill_key,
 )
+from hexgate.security.usage_inputs import NO_USAGE, UsageInputs
 
 DEFAULT_ROLE_NAME = "default"
 
@@ -164,13 +165,13 @@ class PolicySet:
         args: Mapping[str, Any],
         attributes: Mapping[str, Any] | None = None,
         run: Mapping[str, Any] | None = None,
-        agent_usage: Mapping[str, Any] | None = None,
+        usage: UsageInputs = NO_USAGE,
     ) -> Verdict:
         """:class:`~hexgate.security.decision.PolicyEngine` entry point.
 
         Resolves the role's policy and runs the pydantic engine. ``attributes``
         feed the ``ctx.*`` constraint namespace, ``run`` the ``run.*`` one and
-        ``agent_usage`` the ``agent_usage.*`` one; the role still selects the
+        ``usage`` the usage roots (``agent_usage.*``); the role still selects the
         policy bucket (``policy_for``) on its own."""
         from hexgate.security.policy import evaluate_tool_call
 
@@ -181,7 +182,7 @@ class PolicySet:
             role=role,
             attributes=attributes,
             run=run,
-            agent_usage=agent_usage,
+            usage=usage,
         )
 
     @property

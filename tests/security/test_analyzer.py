@@ -1330,6 +1330,7 @@ def test_when_a_module_boundary_deny_has_an_unknown_root_then_it_is_an_error():
 
 def test_path_roots_match_what_check_constraints_sets():
     from hexgate.security.constraints import PATH_ROOTS, check_constraints
+    from hexgate.security.usage_inputs import UsageInputs
 
     for root in PATH_ROOTS:
         # Raises if <root>.x is missing from the evaluation context.
@@ -1339,7 +1340,7 @@ def test_path_roots_match_what_check_constraints_sets():
             "t",
             attributes={"x": 1},
             run={"x": 1},
-            agent_usage={"x": 1},
+            usage=UsageInputs(agent_usage={"x": 1}),
         )
 
 

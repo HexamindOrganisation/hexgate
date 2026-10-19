@@ -9,6 +9,10 @@ disambiguate it from the signing-key family — ``HEXGATE_KEYSTORE_PATH``,
 from __future__ import annotations
 
 import os
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from hexgate.cloud.client import HexgateClient
 
 API_KEY_ENV = "HEXGATE_API_KEY"
 API_URL_ENV = "HEXGATE_API_URL"
@@ -60,3 +64,15 @@ def resolve_otlp_endpoint(
     if endpoint:
         return endpoint
     return f"{resolve_api_url(base_url)}{OTLP_TRACES_PATH}"
+
+
+def platform_of(
+    api_key: str | None, client: HexgateClient | None
+) -> tuple[str | None, str | None]:
+    """The key and base URL to reach the platform with: the client's when there is
+    one, so usage reads, audit and run events go where the surface's policy came
+    from. ``HEXGATE_OTLP_ENDPOINT`` still overrides the base URL for span export
+    (see :func:`resolve_otlp_endpoint`)."""
+    if client is None:
+        return api_key, None
+    return client.config.api_key, client.config.base_url

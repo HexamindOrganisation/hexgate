@@ -20,6 +20,27 @@ signs a WASM bundle so `hexgate serve` runs against real enforcement from the
 first request. Edit the policy in the dashboard's `/policies` page; subsequent
 re-registers preserve those edits — only the manifest snapshot grows.
 
+## Sub-agents
+
+An agent that calls other agents (as tools or through handoffs) registers only
+itself by default. `--register-subagents` also registers each sub-agent in its
+tree as an agent of its own, and the platform mints a starter policy for each:
+
+```bash
+hexgate register --agent my_app.agents:triage --register-subagents
+```
+
+Two different sub-agents that share a name make the run fail. Add `--force` to
+keep the first one found and skip the other. `--force` does nothing without
+`--register-subagents`.
+
+```bash
+hexgate register --agent my_app.agents:triage --register-subagents --force
+```
+
+See [agent-level enforcement](/concepts/agent-level-enforcement) for how the
+root's policy governs which sub-agents it may reach.
+
 ## LangGraph compiled graphs
 
 LangGraph compiled graphs don't expose their tool nodes — nor the model or system

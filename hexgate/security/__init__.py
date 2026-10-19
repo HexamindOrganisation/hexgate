@@ -167,6 +167,7 @@ from hexgate.security.testing import (
     assert_needs_approval,
     run_namespace,
 )
+from hexgate.security.usage_inputs import NO_USAGE, UsageInputs
 from hexgate.security.wasm_engine import (
     DEFAULT_ENTRYPOINT,
     RegoVerdict,
@@ -281,6 +282,8 @@ __all__ = [
     "WasmPolicy",
     "DecisionOutcome",
     "PolicyEngine",
+    "NO_USAGE",
+    "UsageInputs",
     "Verdict",
     "authorize_tool_call",
     "authorize_tool_call_wasm",

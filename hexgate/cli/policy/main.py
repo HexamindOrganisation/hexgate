@@ -43,6 +43,7 @@ from hexgate.security import (
     OpaNotFoundError,
     PolicySetError,
     SignatureError,
+    UsageInputs,
     Verdict,
     WasmCompileError,
     WasmEvalError,
@@ -917,6 +918,7 @@ def _main_test(args: argparse.Namespace) -> int:
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
         return 1
+    usage = UsageInputs(agent_usage=agent_usage)
 
     try:
         policy_set = load_policy_set_from_dict(payload)
@@ -960,10 +962,10 @@ def _main_test(args: argparse.Namespace) -> int:
 
     if engine == "wasm":
         return _test_via_wasm(
-            payload, roles, args.tool, tool_args, attributes, run, agent_usage, label
+            payload, roles, args.tool, tool_args, attributes, run, usage, label
         )
     return _test_via_pydantic(
-        policy_set, roles, args.tool, tool_args, attributes, run, agent_usage, label
+        policy_set, roles, args.tool, tool_args, attributes, run, usage, label
     )
 
 
@@ -1082,7 +1084,7 @@ def _test_via_pydantic(
     tool_args: dict,
     attributes: dict,
     run: dict,
-    agent_usage: dict,
+    usage: UsageInputs,
     label: str,
 ) -> int:
     """Run the decision through the in-process constraint evaluator.
@@ -1093,7 +1095,7 @@ def _test_via_pydantic(
 
     def evaluate(role: str | None) -> Verdict:
         policy: AgentPolicy = policy_set.policy_for(role)
-        # Forward role/attributes/run/agent_usage so their constraints decide the
+        # Forward role/attributes/run/usage so their constraints decide the
         # same as production — omitting any makes the dry-run fail closed.
         return evaluate_tool_call(
             policy,
@@ -1102,7 +1104,7 @@ def _test_via_pydantic(
             role=role,
             attributes=attributes,
             run=run,
-            agent_usage=agent_usage,
+            usage=usage,
         )
 
     verdict, deciding_role = combine_role_verdicts(
@@ -1118,7 +1120,7 @@ def _test_via_wasm(
     tool_args: dict,
     attributes: dict,
     run: dict,
-    agent_usage: dict,
+    usage: UsageInputs,
     label: str,
 ) -> int:
     """Compile to wasm on the fly + evaluate — matches production semantics."""
@@ -1148,7 +1150,7 @@ def _test_via_wasm(
             args=tool_args,
             ctx=attributes,
             run=run,
-            agent_usage=agent_usage,
+            usage=usage,
         )
         return verdict_from_rego(decision, tool_name=tool, role=role_)
 
