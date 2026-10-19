@@ -16,6 +16,7 @@ import ast
 import importlib
 import inspect
 import textwrap
+from collections.abc import Iterator
 from typing import Any
 
 import pytest
@@ -31,6 +32,8 @@ _DELEGATES_TO_SHARED_BIND = ("abind(", "bind(")
 # banned run. The ordering pins below match these as parsed calls, so a
 # docstring or comment naming one does not count.
 _PREPARES_RUN = frozenset({"aprepare_run", "prepare_run"})
+# The seam's keyword for the binding it derives the agent_usage.* refresh from.
+_BINDING_KWARG = "binding"
 # Anything that starts the run: the identity scope, the run scope, or the
 # streamed launch that opens both. ``async with hexgate_context`` is not a call,
 # so _first_call matches it separately.
@@ -41,11 +44,6 @@ _CHECKS_ADMISSION = "_check_admission"
 _API_KEY_KWARG = "api_key"
 # Calls that open a run scope, and so pick the sender its run_start span leaves on.
 _SCOPE_OPENERS = frozenset({"run_scope", "abind", "bind"})
-# The native agent's decisions and usage leave on HEXGATE_API_KEY even when
-# load_hexgate_agent(api_key=...) binds another key, so its run start follows them
-# there rather than landing in a different project. Lift the exemption only when
-# the enforcer and usage handler take the explicit key too.
-_ENV_KEY_MODULE = "hexgate.agents.factory"
 
 # (module, class, symbol) of every boundary with an admission gate. Admission must
 # precede the scope: entering run_scope is what reports a run, and a refused
@@ -158,6 +156,11 @@ def _enters_context(node: ast.AST) -> bool:
     )
 
 
+def _parsed_nodes(module_name: str, class_name: str, method: str) -> Iterator[ast.AST]:
+    source = textwrap.dedent(_source_of(module_name, class_name, method))
+    return ast.walk(ast.parse(source))
+
+
 def _first_call(
     module_name: str,
     class_name: str,
@@ -168,10 +171,9 @@ def _first_call(
 ) -> tuple[int, int] | None:
     """Position of the earliest real call to one of ``names``, parsed so a
     docstring or comment naming it does not count."""
-    source = textwrap.dedent(_source_of(module_name, class_name, method))
     positions = [
         (node.lineno, node.col_offset)
-        for node in ast.walk(ast.parse(source))
+        for node in _parsed_nodes(module_name, class_name, method)
         if (isinstance(node, ast.Call) and _called_name(node) in names)
         or (or_entering_context and _enters_context(node))
     ]
@@ -258,6 +260,34 @@ def test_every_boundary_prepares_the_run_before_starting_it(
     assert prepares < starts
 
 
+def _seam_calls(module_name: str, class_name: str, method: str) -> list[ast.Call]:
+    return [
+        node
+        for node in _parsed_nodes(module_name, class_name, method)
+        if isinstance(node, ast.Call) and _called_name(node) in _PREPARES_RUN
+    ]
+
+
+@pytest.mark.parametrize(
+    ("module_name", "class_name", "method"),
+    [(module, klass, method) for module, klass, method, _ in SCOPE_SITES],
+    ids=[f"{m.rsplit('.', 1)[-1]}.{c}.{meth}" for m, c, meth, _ in SCOPE_SITES],
+)
+def test_every_boundary_passes_its_binding(
+    module_name: str, class_name: str, method: str
+) -> None:
+    """A boundary that passes ``binding=None`` instead skips the usage refresh
+    silently: its quiet agent then pays a fail-open first read instead."""
+    calls = _seam_calls(module_name, class_name, method)
+    assert calls
+    for call in calls:
+        binding = next(kw.value for kw in call.keywords if kw.arg == _BINDING_KWARG)
+        assert not (isinstance(binding, ast.Constant) and binding.value is None), (
+            f"{module_name}.{class_name}.{method} calls the run seam with "
+            f"{_BINDING_KWARG}=None, so it never refreshes agent_usage.* at run start."
+        )
+
+
 @pytest.mark.parametrize(
     ("module_name", "class_name", "symbol"),
     ADMISSION_SITES,
@@ -285,9 +315,7 @@ def _scope_opener_calls(source: str) -> list[ast.Call]:
     ]
 
 
-_KEYED_SITES = sorted(
-    {(m, c, symbol) for m, c, _, symbol in SCOPE_SITES if m != _ENV_KEY_MODULE}
-)
+_KEYED_SITES = sorted({(m, c, symbol) for m, c, _, symbol in SCOPE_SITES})
 
 
 @pytest.mark.parametrize(

@@ -20,13 +20,14 @@ def create_hexgate_manifest(
     agent: HexgateAgent, *, description: str | None = None
 ) -> AgentManifest:
     """Build an AgentManifest from a Hexgate agent created by `create_agent`."""
-    if not agent.name:
+    name = agent.name.strip() if isinstance(agent.name, str) else ""
+    if not name:
         raise ValueError(
             "Hexgate agent has no name — set a name on the HexgateAgent so the "
             "manifest can identify it on the platform."
         )
     return AgentManifest(
-        name=agent.name,
+        name=name,
         description=description,
         framework=AgentFramework.HEXGATE,
         model=_extract_model(agent.model),

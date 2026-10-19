@@ -1,0 +1,12 @@
+version: 1
+
+default_policy: { mode: deny }
+
+tools:
+  view_orders: { mode: allow }
+  lookup_order: { mode: allow }
+  refund_order:
+    mode: approval_required
+    constraints:
+      - args.amount <= 500
+  send_email: { mode: approval_required }

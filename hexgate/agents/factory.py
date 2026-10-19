@@ -41,9 +41,8 @@ from hexgate.agents.subagents import SubagentEdge
 
 # BC re-export — canonical home is hexgate.approvals (framework-agnostic).
 from hexgate.approvals import ApprovalHandler  # noqa: F401 — re-export
-from hexgate.config.env import resolve_api_key
+from hexgate.config.env import platform_of, resolve_api_key
 from hexgate.runtime import (
-    DEFAULT_AGENT_NAME,
     LocalWorkspace,
     ToolUseContext,
     Workspace,
@@ -52,6 +51,7 @@ from hexgate.runtime import (
     run_scope,
     set_current_tool_use_context,
 )
+from hexgate.security.naming import canonical_name
 from hexgate.streaming import StreamEvent, new_root_run_id, normalize_langchain_events
 from hexgate.tracing.langfuse import (
     CallbackHandler,
@@ -301,7 +301,7 @@ def _resolve_tool_use_context(
     own facts in (e.g. tests, or production code that wants to bypass the
     context scope for a specific call).
     """
-    agent_name = getattr(agent, "name", None)
+    agent_name = canonical_name(getattr(agent, "name", None))
     agent_workspace = getattr(agent, "workspace", None)
     fallback_workspace = agent_workspace or LocalWorkspace(Path.cwd())
     if tool_use_context is not None:
@@ -371,9 +371,8 @@ class HexgateAgent:
         # Enforcement seam: the binding (enforcer + optional refresh source)
         # that enforce_policy attaches and refresh_policy swaps in place;
         # threaded through with_tools rebuilds. hexgate_client is separate —
-        # load_hexgate_agent attaches it for lazy cloud-side attenuation.
+        # enforce_policy(client=) attaches it for lazy cloud-side attenuation.
         self._binding: PolicyBinding | None = binding
-        self.hexgate_client: HexgateClient | None = hexgate_client
         # Kill-switch gate; attached by load_hexgate_agent (platform path only —
         # no gate without a control plane). Threaded through with_tools rebuilds.
         self._ban_gate: BanGate | None = ban_gate
@@ -381,15 +380,26 @@ class HexgateAgent:
         # no control plane needed). Threaded through with_tools rebuilds. Whether it
         # actually refuses is decided per run from the current policy.
         self._agent_gate: AgentGate | None = agent_gate
-        # api_key intentionally omitted — create_agent has no explicit api_key param
-        # (only hexgate_client, attached post-init by _bind_policy). If one is added,
-        # thread it through here too, or usage events will keep silently resolving
-        # from HEXGATE_API_KEY instead of the caller's explicit key.
+        # The usage handler and run_start follow ``hexgate_client`` (see its setter).
         # Lives as long as the runtime, so both run methods below owe its
         # per-run transcript state a reset on the way out.
         self._usage_handler = HexgateUsageCallbackHandler(
-            agent_name=name or DEFAULT_AGENT_NAME
+            agent_name=canonical_name(name)
         )
+        self.hexgate_client = hexgate_client
+
+    @property
+    def hexgate_client(self) -> HexgateClient | None:
+        return self._hexgate_client
+
+    @hexgate_client.setter
+    def hexgate_client(self, client: HexgateClient | None) -> None:
+        self._hexgate_client = client
+        self._usage_handler.api_key = platform_of(None, client)[0]
+
+    @property
+    def _canonical_name(self) -> str:
+        return canonical_name(self.name)
 
     @property
     def subagents(self) -> "list[SubagentEdge]":
@@ -424,7 +434,6 @@ class HexgateAgent:
         overrides the default one-liner.
         """
         from hexgate.adapters.langchain.tools import SubagentTool
-        from hexgate.security.naming import canonical_name
 
         raw = self.name
         if not raw or not raw.strip():
@@ -435,7 +444,7 @@ class HexgateAgent:
         # Canonicalize to the identity the reach key + gate use; sanitize only the
         # LLM-facing tool name to ^[A-Za-z0-9_-]+$ (e.g. "Billing Bot" ->
         # delegate_to_Billing_Bot) — the reach target keeps the canonical name.
-        target = canonical_name(raw)
+        target = self._canonical_name
         default_name = f"delegate_to_{re.sub(r'[^A-Za-z0-9_-]', '_', target)}"
         # A `name` override is used verbatim (unlike the auto-sanitized default), so
         # validate it against the provider tool-name charset here — else the parent's
@@ -478,10 +487,15 @@ class HexgateAgent:
         running with stale policy.
         """
         await aprepare_run(
-            _refresh_policy_safely(self), self._ban_gate, get_current_context()
+            _refresh_policy_safely(self),
+            self._ban_gate,
+            get_current_context(),
+            binding=self._binding,
         )
         await self._check_admission()
-        with run_scope(self.name or DEFAULT_AGENT_NAME):
+        with run_scope(
+            self._canonical_name, api_key=platform_of(None, self.hexgate_client)[0]
+        ):
             turn_key = self._usage_handler.turn_key()
             try:
                 return await self._graph.ainvoke(
@@ -504,10 +518,15 @@ class HexgateAgent:
         regardless of which entry point a caller picks.
         """
         await aprepare_run(
-            _refresh_policy_safely(self), self._ban_gate, get_current_context()
+            _refresh_policy_safely(self),
+            self._ban_gate,
+            get_current_context(),
+            binding=self._binding,
         )
         await self._check_admission()
-        with run_scope(self.name or DEFAULT_AGENT_NAME):
+        with run_scope(
+            self._canonical_name, api_key=platform_of(None, self.hexgate_client)[0]
+        ):
             # Captured on the way in because this is a generator, whose
             # ``finally`` an early break runs in a different Context — see
             # ``HexgateUsageCallbackHandler.end_run``.
@@ -594,6 +613,7 @@ class HexgateAgent:
         decision_observer: "DecisionObserver | None" = None,
         guards: "Sequence[Guard] | None" = None,
         guard_observer: "GuardObserver | None" = None,
+        client: HexgateClient | None = None,
     ) -> Self:
         """Return a new agent with Gate 1 policy enforcement applied.
 
@@ -612,6 +632,10 @@ class HexgateAgent:
         ``decision_observer`` (callable) receives every :class:`Decision`
         after it's built — ``hexgate chat`` uses it to render denies /
         approvals inline; default ``None`` is silent.
+
+        ``client`` is the platform the agent's enforcer and events talk to. It is
+        attached as ``hexgate_client`` and defaults to the current one; without
+        either, env.
 
         ``guards`` is a flat list of guards authored with ``@before_tool`` /
         ``@after_tool``; they run around each guarded tool call (before-guards
@@ -648,6 +672,7 @@ class HexgateAgent:
         # the same set (the manifest and the runtime must agree).
         resolved_guards = resolve_guards(self, guards)
         pipeline = build_pipeline(resolved_guards, observer=guard_observer)
+        platform = client if client is not None else self.hexgate_client
 
         enforcer: PolicyEnforcer | None
         if policy is None:
@@ -665,6 +690,7 @@ class HexgateAgent:
                 # refuse admission.
                 unguarded = self.with_tools(list(self.tools))
                 unguarded._agent_gate = None
+                unguarded.hexgate_client = platform
                 # resolved_guards is empty here (the pipeline is empty), so with_tools's
                 # carried stamp already matches "no guards" in the common case.
                 return unguarded
@@ -676,7 +702,8 @@ class HexgateAgent:
                 engine = load_policy_set(policy)
             enforcer = build_enforcer(
                 engine,
-                agent_name=self.name or DEFAULT_AGENT_NAME,
+                agent_name=self._canonical_name,
+                client=platform,
                 decision_observer=decision_observer,
             )
 
@@ -691,7 +718,7 @@ class HexgateAgent:
             from hexgate.guards.stance import validate_guard_policy
 
             validate_guard_policy(
-                engine, resolved_guards, agent_name=self.name or DEFAULT_AGENT_NAME
+                engine, resolved_guards, agent_name=self._canonical_name
             )
 
         # One wrap loop for both paths, so the guards-only path can't drift from
@@ -764,7 +791,7 @@ class HexgateAgent:
                 warn_if_reach_unenforced(
                     enforcer.policy,
                     framework="native",
-                    agent_name=self.name or "default",
+                    agent_name=self._canonical_name,
                     handoff_targets=uncovered[0],
                     tool_targets=uncovered[1],
                 )
@@ -772,6 +799,7 @@ class HexgateAgent:
             # Guards-only path: no enforcer, so no admission. Clear any gate a
             # prior enforce_policy left, which with_tools would otherwise carry.
             rebuilt._agent_gate = None
+        rebuilt.hexgate_client = platform
         # Stamp the result with exactly the guards its pipeline runs, so
         # create_manifest declares the same set (a no-op when resolved_guards is empty).
         return attach_guards(rebuilt, resolved_guards)
@@ -907,6 +935,7 @@ def enforce_policy(
     decision_observer: "DecisionObserver | None" = None,
     guards: "Sequence[Guard] | None" = None,
     guard_observer: "GuardObserver | None" = None,
+    client: HexgateClient | None = None,
 ) -> AgentGraph:
     """Functional alias for :meth:`HexgateAgent.enforce_policy`."""
     return agent.enforce_policy(
@@ -916,6 +945,7 @@ def enforce_policy(
         decision_observer=decision_observer,
         guards=guards,
         guard_observer=guard_observer,
+        client=client,
     )
 
 
@@ -1121,8 +1151,8 @@ def _bind_policy(
         source=resolved.source,
         guards=guards,
         guard_observer=guard_observer,
+        client=client,
     )
-    enforced.hexgate_client = client
     return enforced
 
 

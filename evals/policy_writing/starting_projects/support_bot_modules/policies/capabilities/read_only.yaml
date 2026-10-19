@@ -1,0 +1,5 @@
+# Read-only capability, given to every role in roles.yaml. It only grants:
+# viewing customers' orders and looking up one order.
+tools:
+  view_orders: { mode: allow }
+  lookup_order: { mode: allow }

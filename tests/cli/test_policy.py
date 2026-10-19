@@ -1547,7 +1547,7 @@ def test_test_rejects_a_wrong_typed_run_fact(
     )
     out, err = capsys.readouterr()
     assert rc == 1
-    assert "--run-facts has a wrong-typed value" in err
+    assert "--run-facts has an invalid value" in err
     assert "DENY" not in out
 
 
@@ -1565,3 +1565,95 @@ def test_test_reports_an_unknown_run_path_in_the_policy_itself(
     )
     assert rc == 1
     assert "unknown run.* path 'elapsed_secondz'" in capsys.readouterr().err
+
+
+# ---------------------------------------------------------------------------
+# `policy test --agent-usage` — dry-running a cross-run quota
+# ---------------------------------------------------------------------------
+
+
+_USAGE_GATED_POLICY = """\
+version: 1
+admission:
+  mode: allow
+  constraints:
+    - agent_usage.invocations_1h < 100
+"""
+
+
+def _usage_gated(tmp_path: Path) -> str:
+    p = tmp_path / "usage.yaml"
+    p.write_text(_USAGE_GATED_POLICY, encoding="utf-8")
+    return str(p)
+
+
+def _test_admission(source: str, **flags: str) -> int:
+    return _main_test(
+        _ns(
+            source=source,
+            role="default",
+            tool="agent.run",
+            args='{"agent": "a"}',
+            engine=flags.pop("engine", "pydantic"),
+            **flags,
+        )
+    )
+
+
+def test_test_defaults_to_a_fresh_process_rather_than_a_missing_namespace(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert _test_admission(_usage_gated(tmp_path)) == 0
+    assert "ALLOW" in capsys.readouterr().out
+
+
+def test_test_agent_usage_fires_the_cap(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    rc = _test_admission(_usage_gated(tmp_path), agent_usage='{"invocations_1h": 100}')
+
+    assert rc == 1
+    out = capsys.readouterr().out
+    assert "DENY" in out
+    assert "agent_usage.invocations_1h < 100" in out
+
+
+@needs_opa
+@pytest.mark.parametrize(("usage", "expected"), [("99", 0), ("100", 1)])
+def test_test_agent_usage_agrees_across_engines(
+    tmp_path: Path, usage: str, expected: int
+) -> None:
+    source = _usage_gated(tmp_path)
+    codes = [
+        _test_admission(
+            source, agent_usage=f'{{"invocations_1h": {usage}}}', engine=engine
+        )
+        for engine in ("pydantic", "wasm")
+    ]
+
+    assert codes == [expected, expected]
+
+
+@pytest.mark.parametrize(
+    ("raw", "message"),
+    [
+        ("not json", "--agent-usage is not valid JSON"),
+        ("[1]", "--agent-usage must be a JSON object (dict)"),
+        (
+            '{"invocation_1h": 1}',
+            "--agent-usage has unknown agent_usage.* path(s) ['invocation_1h']",
+        ),
+        ('{"invocations_1h": "1"}', "--agent-usage has an invalid value"),
+        ('{"invocations_1h": -1}', "--agent-usage has an invalid value"),
+    ],
+    ids=["non-json", "non-object", "unknown-path", "wrong-type", "negative"],
+)
+def test_test_rejects_a_bad_agent_usage(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], raw: str, message: str
+) -> None:
+    rc = _test_admission(_usage_gated(tmp_path), agent_usage=raw)
+
+    out, err = capsys.readouterr()
+    assert rc == 1
+    assert message in err
+    assert "DENY" not in out

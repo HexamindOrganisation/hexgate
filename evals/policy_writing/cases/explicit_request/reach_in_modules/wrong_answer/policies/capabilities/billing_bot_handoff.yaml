@@ -1,0 +1,4 @@
+# Capability for the billing role. It only grants: handing off to billing-bot,
+# with a human's approval.
+agents:
+  billing-bot: { via: [handoff], mode: approval_required }

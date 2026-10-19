@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+import logging
 import threading
+from types import SimpleNamespace
 
 import pytest
 
@@ -17,6 +19,7 @@ from hexgate.adapters._common import (
 )
 from hexgate.runtime import HexgateContext
 from hexgate.security.bans import EMPTY_BAN_SET, BanGate, BanSet, ban_set_from_payload
+from hexgate.security.enforcer import UsageRefresh
 from hexgate.security.errors import AgentBannedError
 
 # Long enough never to flake, short enough that a sequential regression fails
@@ -72,8 +75,8 @@ class _Refresh:
         await asyncio.to_thread(self)
 
 
-def _barrier() -> threading.Barrier:
-    return threading.Barrier(2, timeout=_BARRIER_TIMEOUT_S)
+def _barrier(parties: int = 2) -> threading.Barrier:
+    return threading.Barrier(parties, timeout=_BARRIER_TIMEOUT_S)
 
 
 def _context() -> HexgateContext:
@@ -100,7 +103,10 @@ async def test_aprepare_run_fetches_concurrently() -> None:
     refresh = _Refresh(barrier)
 
     await aprepare_run(
-        refresh.run_async(), BanGate(_AGENT, _BanSource(barrier=barrier)), _context()
+        refresh.run_async(),
+        BanGate(_AGENT, _BanSource(barrier=barrier)),
+        _context(),
+        binding=None,
     )
 
     assert refresh.calls == 1
@@ -110,7 +116,9 @@ def test_prepare_run_fetches_concurrently() -> None:
     barrier = _barrier()
     refresh = _Refresh(barrier)
 
-    prepare_run(refresh, BanGate(_AGENT, _BanSource(barrier=barrier)), _context())
+    prepare_run(
+        refresh, BanGate(_AGENT, _BanSource(barrier=barrier)), _context(), binding=None
+    )
 
     assert refresh.calls == 1
 
@@ -136,7 +144,7 @@ def test_prepare_run_fetches_in_the_callers_context() -> None:
     source = _ContextReadingBanSource()
     token = _CALLER_MARK.set(_MARK)
     try:
-        prepare_run(_Refresh(), BanGate(_AGENT, source), _context())
+        prepare_run(_Refresh(), BanGate(_AGENT, source), _context(), binding=None)
     finally:
         _CALLER_MARK.reset(token)
 
@@ -163,7 +171,7 @@ def test_prepare_run_interrupt_does_not_wait_for_the_ban_fetch() -> None:
 
     try:
         with pytest.raises(KeyboardInterrupt):
-            prepare_run(_interrupted, BanGate(_AGENT, source), _context())
+            prepare_run(_interrupted, BanGate(_AGENT, source), _context(), binding=None)
         assert not source.finished.is_set()
     finally:
         source.release.set()
@@ -174,7 +182,9 @@ async def test_aprepare_run_refuses_after_refresh_completes() -> None:
     refresh = _Refresh()
 
     with pytest.raises(AgentBannedError):
-        await aprepare_run(refresh.run_async(), _banning_gate(), _context())
+        await aprepare_run(
+            refresh.run_async(), _banning_gate(), _context(), binding=None
+        )
 
     assert refresh.calls == 1
 
@@ -183,7 +193,7 @@ def test_prepare_run_refuses_after_refresh_completes() -> None:
     refresh = _Refresh()
 
     with pytest.raises(AgentBannedError):
-        prepare_run(refresh, _banning_gate(), _context())
+        prepare_run(refresh, _banning_gate(), _context(), binding=None)
 
     assert refresh.calls == 1
 
@@ -191,7 +201,7 @@ def test_prepare_run_refuses_after_refresh_completes() -> None:
 async def test_aprepare_run_without_gate_only_refreshes() -> None:
     refresh = _Refresh()
 
-    await aprepare_run(refresh.run_async(), None, _context())
+    await aprepare_run(refresh.run_async(), None, _context(), binding=None)
 
     assert refresh.calls == 1
 
@@ -205,6 +215,244 @@ def test_prepare_run_without_gate_only_refreshes(
     monkeypatch.setattr(_common, "ThreadPoolExecutor", _no_executor)
     refresh = _Refresh()
 
-    prepare_run(refresh, None, _context())
+    prepare_run(refresh, None, _context(), binding=None)
 
     assert refresh.calls == 1
+
+
+class _UsageSource:
+    """A usage source whose refresh can wait on a barrier, or raise."""
+
+    def __init__(
+        self,
+        barrier: threading.Barrier | None = None,
+        error: Exception | None = None,
+    ) -> None:
+        self._barrier = barrier
+        self._error = error
+        self.calls: list[tuple[str, frozenset[str]]] = []
+
+    def refresh(self, agent: str, paths: frozenset[str]) -> None:
+        if self._barrier is not None:
+            self._barrier.wait()
+        if self._error is not None:
+            raise self._error
+        self.calls.append((agent, paths))
+
+    async def refresh_async(self, agent: str, paths: frozenset[str]) -> None:
+        await asyncio.to_thread(self.refresh, agent, paths)
+
+
+_USAGE_PATHS = frozenset({"invocations_1h"})
+
+
+def _usage(source: _UsageSource) -> UsageRefresh:
+    return UsageRefresh(source, _AGENT, _USAGE_PATHS)  # type: ignore[arg-type]
+
+
+def _binding(usage: UsageRefresh) -> SimpleNamespace:
+    """A binding whose enforcer wants ``usage`` before and after the refresh."""
+    return SimpleNamespace(enforcer=SimpleNamespace(usage_refresh=lambda: usage))
+
+
+async def test_aprepare_run_without_gate_or_usage_awaits_the_refresh_directly(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The latency invariant: a usage-free agent's boundary is unchanged. A gather
+    around a lone awaitable would wrap it in a task and copy the context."""
+
+    def _no_gather(*_: object, **__: object) -> None:
+        raise AssertionError("nothing to overlap, so no gather")
+
+    monkeypatch.setattr(_common.asyncio, "gather", _no_gather)
+    refresh = _Refresh()
+
+    await aprepare_run(refresh.run_async(), None, _context(), binding=None)
+
+    assert refresh.calls == 1
+
+
+@pytest.mark.parametrize("with_gate", [False, True])
+async def test_aprepare_run_refreshes_usage_concurrently(with_gate: bool) -> None:
+    barrier = _barrier(3 if with_gate else 2)
+    refresh = _Refresh(barrier)
+    source = _UsageSource(barrier)
+    gate = BanGate(_AGENT, _BanSource(barrier=barrier)) if with_gate else None
+
+    await aprepare_run(
+        refresh.run_async(), gate, _context(), binding=_binding(_usage(source))
+    )
+
+    assert refresh.calls == 1
+    assert source.calls == [(_AGENT, _USAGE_PATHS)]
+
+
+@pytest.mark.parametrize("with_gate", [False, True])
+def test_prepare_run_refreshes_usage_concurrently(with_gate: bool) -> None:
+    """With a gate, both workers run at once: one shared Context would make the
+    second ``Context.run`` raise RuntimeError."""
+    barrier = _barrier(3 if with_gate else 2)
+    refresh = _Refresh(barrier)
+    source = _UsageSource(barrier)
+    gate = BanGate(_AGENT, _BanSource(barrier=barrier)) if with_gate else None
+
+    prepare_run(refresh, gate, _context(), binding=_binding(_usage(source)))
+
+    assert refresh.calls == 1
+    assert source.calls == [(_AGENT, _USAGE_PATHS)]
+
+
+async def test_a_failing_async_usage_refresh_does_not_fail_the_run(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    refresh = _Refresh()
+    source = _UsageSource(error=RuntimeError("usage bug"))
+
+    with caplog.at_level(logging.WARNING, logger=_common.__name__):
+        await aprepare_run(
+            refresh.run_async(), None, _context(), binding=_binding(_usage(source))
+        )
+
+    assert refresh.calls == 1
+    assert len(caplog.records) == 1
+
+
+def test_a_failing_usage_refresh_does_not_fail_the_run(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    refresh = _Refresh()
+    source = _UsageSource(error=RuntimeError("usage bug"))
+
+    with caplog.at_level(logging.WARNING, logger=_common.__name__):
+        prepare_run(refresh, None, _context(), binding=_binding(_usage(source)))
+
+    assert refresh.calls == 1
+    assert len(caplog.records) == 1
+
+
+async def test_a_failing_async_usage_refresh_still_lets_the_ban_decide() -> None:
+    source = _UsageSource(error=RuntimeError("usage bug"))
+
+    with pytest.raises(AgentBannedError):
+        await aprepare_run(
+            _Refresh().run_async(),
+            _banning_gate(),
+            _context(),
+            binding=_binding(_usage(source)),
+        )
+
+
+def test_a_failing_usage_refresh_still_lets_the_ban_decide() -> None:
+    source = _UsageSource(error=RuntimeError("usage bug"))
+
+    with pytest.raises(AgentBannedError):
+        prepare_run(
+            _Refresh(), _banning_gate(), _context(), binding=_binding(_usage(source))
+        )
+
+
+async def test_aprepare_run_refuses_a_ban_after_every_fetch_completes() -> None:
+    refresh = _Refresh()
+    source = _UsageSource()
+
+    with pytest.raises(AgentBannedError):
+        await aprepare_run(
+            refresh.run_async(),
+            _banning_gate(),
+            _context(),
+            binding=_binding(_usage(source)),
+        )
+
+    assert refresh.calls == 1
+    assert len(source.calls) == 1
+
+
+def test_prepare_run_refuses_a_ban_after_every_fetch_completes() -> None:
+    refresh = _Refresh()
+    source = _UsageSource()
+
+    with pytest.raises(AgentBannedError):
+        prepare_run(
+            refresh, _banning_gate(), _context(), binding=_binding(_usage(source))
+        )
+
+    assert refresh.calls == 1
+    assert len(source.calls) == 1
+
+
+class _SwappingBinding:
+    """A binding whose policy refresh swaps in a policy with other usage paths."""
+
+    def __init__(self, before: UsageRefresh | None, after: UsageRefresh | None) -> None:
+        self.enforcer = self
+        self._usage = before
+        self._after = after
+
+    def usage_refresh(self) -> UsageRefresh | None:
+        return self._usage
+
+    def refresh(self) -> None:
+        self._usage = self._after
+
+    async def refresh_async(self) -> None:
+        self.refresh()
+
+
+_GROWN_PATHS = _USAGE_PATHS | {"tool_calls_1h"}
+
+# (paths before the policy refresh, paths after, paths each usage refresh asked for)
+_POLICY_SWAPS = [
+    pytest.param(None, _USAGE_PATHS, [_USAGE_PATHS], id="first-cap"),
+    pytest.param(_USAGE_PATHS, _GROWN_PATHS, [_USAGE_PATHS, _GROWN_PATHS], id="grown"),
+    pytest.param(_USAGE_PATHS, _USAGE_PATHS, [_USAGE_PATHS], id="unchanged"),
+    pytest.param(_GROWN_PATHS, _USAGE_PATHS, [_GROWN_PATHS], id="shrunk"),
+]
+
+
+def _swapping(
+    source: _UsageSource,
+    before: frozenset[str] | None,
+    after: frozenset[str] | None,
+) -> _SwappingBinding:
+    def usage(paths: frozenset[str] | None) -> UsageRefresh | None:
+        return None if paths is None else UsageRefresh(source, _AGENT, paths)  # type: ignore[arg-type]
+
+    return _SwappingBinding(usage(before), usage(after))
+
+
+@pytest.mark.parametrize(("before", "after", "fetched"), _POLICY_SWAPS)
+async def test_aprepare_run_refreshes_the_paths_a_policy_refresh_adds(
+    before: frozenset[str] | None,
+    after: frozenset[str] | None,
+    fetched: list[frozenset[str]],
+) -> None:
+    source = _UsageSource()
+    binding = _swapping(source, before, after)
+
+    await aprepare_run(binding.refresh_async(), None, _context(), binding=binding)  # type: ignore[arg-type]
+
+    assert [paths for _, paths in source.calls] == fetched
+
+
+@pytest.mark.parametrize(("before", "after", "fetched"), _POLICY_SWAPS)
+def test_prepare_run_refreshes_the_paths_a_policy_refresh_adds(
+    before: frozenset[str] | None,
+    after: frozenset[str] | None,
+    fetched: list[frozenset[str]],
+) -> None:
+    source = _UsageSource()
+    binding = _swapping(source, before, after)
+
+    prepare_run(binding.refresh, None, _context(), binding=binding)  # type: ignore[arg-type]
+
+    assert [paths for _, paths in source.calls] == fetched
+
+
+def test_a_banned_run_skips_the_added_paths_refresh() -> None:
+    source = _UsageSource()
+    binding = _swapping(source, None, _USAGE_PATHS)
+
+    with pytest.raises(AgentBannedError):
+        prepare_run(binding.refresh, _banning_gate(), _context(), binding=binding)  # type: ignore[arg-type]
+
+    assert source.calls == []
