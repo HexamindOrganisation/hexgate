@@ -35,28 +35,35 @@ class JwksCache:
         self._keys: dict[str, jwt.PyJWK] = {}
         self._fetched_at = float("-inf")  # last successful fetch
         self._attempted_at = float("-inf")  # last fetch, successful or not
-        self._lock = asyncio.Lock()
+        self._task: asyncio.Task[None] | None = None  # the one fetch in flight
 
     async def get(self, kid: str) -> jwt.PyJWK | None:
-        if self._needs_refetch(kid):
-            async with self._lock:
-                # Re-checked under the lock: requests that queued behind a
-                # refetch find it done and must not start another.
-                if self._needs_refetch(kid):
-                    await self._refetch()
-        # If the API can't be reached, the keys already cached keep working: the
-        # API re-checks every token anyway, and while it's down no call gets
-        # through.
+        if kid in self._keys:
+            # A known key is served at once, even past its ten minutes: the
+            # refetch runs in the background, so no request waits on the
+            # network for a key it already has. If the API can't be reached,
+            # the cached keys keep working: the API re-checks every token
+            # anyway, and while it's down no call gets through.
+            if self._expired() and self._refetch_allowed():
+                self._refetch_task()
+            return self._keys[kid]
+        if self._refetch_allowed():
+            # Every request waits on the same fetch, so concurrent misses cost
+            # one. Shielded: a cancelled request leaves the fetch running for
+            # the others instead of cancelling it.
+            await asyncio.shield(self._refetch_task())
         return self._keys.get(kid)
 
-    def _needs_refetch(self, kid: str) -> bool:
-        now = self._clock()
-        missing_or_expired = (
-            kid not in self._keys or now - self._fetched_at >= JWKS_TTL_SECONDS
-        )
-        return (
-            missing_or_expired and now - self._attempted_at >= REFETCH_INTERVAL_SECONDS
-        )
+    def _expired(self) -> bool:
+        return self._clock() - self._fetched_at >= JWKS_TTL_SECONDS
+
+    def _refetch_allowed(self) -> bool:
+        return self._clock() - self._attempted_at >= REFETCH_INTERVAL_SECONDS
+
+    def _refetch_task(self) -> asyncio.Task[None]:
+        if self._task is None or self._task.done():
+            self._task = asyncio.create_task(self._refetch())
+        return self._task
 
     async def _refetch(self) -> None:
         try:
@@ -66,8 +73,8 @@ class JwksCache:
             return
         finally:
             # Stamped when the fetch ends, not when it starts: a request that
-            # arrives mid-fetch must still see a refetch as due, so it queues
-            # on the lock and reads the new keys instead of refusing.
+            # arrives mid-fetch still sees a refetch as due, so it joins the
+            # fetch in flight and reads the new keys instead of refusing.
             self._attempted_at = self._clock()
         # Replaced, not merged, so a key the API dropped stops verifying.
         self._keys = keys
