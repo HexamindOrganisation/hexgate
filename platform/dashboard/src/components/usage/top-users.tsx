@@ -2,7 +2,8 @@ import { useState } from "react";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { api, type TopUsersWindow, type UsageMetric } from "@/lib/api";
 import type { SetUsageFilters, UsageFilters } from "@/lib/usage-filters";
-import { BarRow, BreakdownCardShell } from "@/components/ui/breakdown-card";
+import { BreakdownCardShell } from "@/components/ui/breakdown-card";
+import { UsageBar } from "@/components/usage/pieces";
 
 const TOP_USERS_LIMIT = 10;
 // Half the summary's rate: each refetch can be a 30-day GROUP BY.
@@ -35,35 +36,6 @@ const EMPTY_MESSAGE = "No user activity in this window.";
 const UNAVAILABLE_MESSAGE = "Top users are unavailable right now.";
 
 type Row = { key: string; value: number };
-
-function TopUserBar({
-  row,
-  max,
-  active,
-  onClick,
-}: {
-  row: Row;
-  max: number;
-  active: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <BarRow
-      onClick={onClick}
-      active={active}
-      widthPct={max ? (row.value / max) * 100 : 0}
-      header={
-        <>
-          <span className="truncate font-mono">{row.key}</span>
-          <span className="shrink-0 text-foreground">
-            {row.value.toLocaleString()}
-          </span>
-        </>
-      }
-      segments={[{ className: "bg-primary", widthPct: 100 }]}
-    />
-  );
-}
 
 export function TopUsersCard({
   projectId,
@@ -124,7 +96,13 @@ export function TopUsersCard({
         activeFilterValue={f.user}
         onFilterChange={(v) => setF((p) => ({ ...p, user: v }))}
         renderRow={(row, { active, onClick }) => (
-          <TopUserBar row={row} max={max} active={active} onClick={onClick} />
+          <UsageBar
+            label={row.key}
+            value={row.value}
+            max={max}
+            active={active}
+            onClick={onClick}
+          />
         )}
       />
     </section>
