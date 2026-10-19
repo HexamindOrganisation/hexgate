@@ -125,7 +125,8 @@ SEVERITY_RANK: dict[Severity, int] = {"error": 0, "warning": 1, "info": 2}
 _ABSENT_ONE = "which the agent's manifest doesn't declare"
 # Why a name is no agent, for the lints checking names against the roster.
 _NOT_AN_AGENT = "not registered, and not a sub-agent any manifest names"
-# The roots an ``unknown-root`` lint lists, e.g. "args., ctx., run. or agent_usage.".
+# The roots an ``unknown-root`` lint lists, e.g.
+# "args., ctx., run., agent_usage. or user_usage.".
 _ROOT_PREFIXES = (
     ", ".join(f"{root}." for root in PATH_ROOTS[:-1]) + f" or {PATH_ROOTS[-1]}."
 )
