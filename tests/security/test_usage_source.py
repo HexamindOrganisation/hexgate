@@ -610,7 +610,7 @@ def test_local_reading_is_the_ledger_alone() -> None:
 # Scope kinds
 # ---------------------------------------------------------------------------
 
-_USER_SCOPE = UsageScope(UsageScopeKind.USER, _AGENT)
+_USER_SCOPE = UsageScope.user(_AGENT)
 
 
 def test_each_kind_is_fetched_by_its_own_fetcher() -> None:
