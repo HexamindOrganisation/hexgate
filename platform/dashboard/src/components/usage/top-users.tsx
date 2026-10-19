@@ -46,12 +46,15 @@ export function TopUsersCard({
   f: UsageFilters;
   setF: SetUsageFilters;
 }) {
-  const [window, setWindow] = useState<TopUsersWindow>("24h");
+  const [timeWindow, setTimeWindow] = useState<TopUsersWindow>("24h");
   const [metric, setMetric] = useState<TopUsersMetric>("total_tokens");
   const q = useQuery({
-    queryKey: ["usage", "top-users", projectId, { window, metric }],
+    queryKey: ["usage", "top-users", projectId, { timeWindow, metric }],
     queryFn: () =>
-      api.getTopUsers({ window, metric, limit: TOP_USERS_LIMIT }, projectId),
+      api.getTopUsers(
+        { window: timeWindow, metric, limit: TOP_USERS_LIMIT },
+        projectId,
+      ),
     placeholderData: keepPreviousData,
     refetchInterval: TOP_USERS_REFETCH_MS,
   });
@@ -74,8 +77,8 @@ export function TopUsersCard({
       </p>
       <BreakdownCardShell
         dims={WINDOWS}
-        dim={window}
-        onDimChange={setWindow}
+        dim={timeWindow}
+        onDimChange={setTimeWindow}
         metric={metric}
         metricOptions={METRIC_OPTIONS}
         onMetricChange={setMetric}
