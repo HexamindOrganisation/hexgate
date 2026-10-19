@@ -26,6 +26,9 @@ export function FilterSelect({
   opts: string[];
   onChange: (v: string) => void;
 }) {
+  // A value set from elsewhere (e.g. the top users card) may not be among
+  // opts; Radix renders an empty trigger for a value with no item.
+  const items = value && !opts.includes(value) ? [...opts, value] : opts;
   return (
     <Select
       value={value || ALL}
@@ -36,7 +39,7 @@ export function FilterSelect({
       </SelectTrigger>
       <SelectContent>
         <SelectItem value={ALL}>{all}</SelectItem>
-        {opts.map((o) => (
+        {items.map((o) => (
           <SelectItem key={o} value={o} className="font-mono text-xs">
             {o}
           </SelectItem>

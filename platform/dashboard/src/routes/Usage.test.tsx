@@ -442,6 +442,26 @@ describe("UsagePage", () => {
       });
     });
 
+    it("a clicked user absent from the summary still shows in the user select", async () => {
+      stubFetch();
+      const user = userEvent.setup();
+      renderWithProviders(<UsagePage />);
+
+      const region = await card();
+      const bar = (await within(region).findByText(HEAVY_USER)).closest(
+        ".mb-\\[11px\\]",
+      ) as HTMLElement;
+      await user.click(bar);
+
+      await waitFor(() => {
+        expect(
+          screen
+            .getAllByRole("combobox")
+            .some((trigger) => trigger.textContent === HEAVY_USER),
+        ).toBe(true);
+      });
+    });
+
     it("a failed read shows in the card only", async () => {
       stubFetch(SUMMARY, new Response("unavailable", { status: 503 }));
       renderWithProviders(<UsagePage />);
