@@ -11,6 +11,8 @@ from dataclasses import dataclass
 from functools import lru_cache
 from typing import Final
 
+USAGE_LOGGER: Final = "hexgate_api.features.usage"
+_LOG_FORMAT: Final = "%(asctime)s %(levelname)s %(name)s: %(message)s"
 USAGE_STATS_INTERVAL_SECONDS: Final = 60.0
 # 01 §4.8 guardrail 2: past this, start the near-limit watchlist (README DP3).
 USER_READ_ALERT_PER_SECOND: Final = 200.0
@@ -128,6 +130,19 @@ class UsageReadStats:
         self._latencies.clear()
         self._started = None
         self._requests = self._queries = self._failures = 0
+
+
+def configure_usage_logging() -> None:
+    """uvicorn configures only its own loggers, so hexgate_api INFO records are
+    dropped by the root's last-resort handler. The usage read stats must reach
+    the log (DP2 reads them)."""
+    logger = logging.getLogger(USAGE_LOGGER)
+    if logger.handlers:
+        return
+    handler = logging.StreamHandler()
+    handler.setFormatter(logging.Formatter(_LOG_FORMAT))
+    logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
 
 
 def _nearest_rank(ordered: Sequence[float], percentile: int) -> float:

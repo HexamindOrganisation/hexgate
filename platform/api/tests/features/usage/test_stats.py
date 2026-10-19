@@ -7,10 +7,11 @@ from collections.abc import Iterator
 
 import pytest
 
-from hexgate_api import main
 from hexgate_api.features.usage.stats import (
+    USAGE_LOGGER,
     USER_READ_ALERT_PER_SECOND,
     UsageReadStats,
+    configure_usage_logging,
     get_agent_read_stats,
     get_user_read_stats,
 )
@@ -232,7 +233,7 @@ def test_only_user_reads_carry_the_alert() -> None:
 
 @pytest.fixture
 def usage_logger() -> Iterator[logging.Logger]:
-    logger = logging.getLogger(main._USAGE_LOGGER)
+    logger = logging.getLogger(USAGE_LOGGER)
     saved_handlers, saved_level = logger.handlers[:], logger.level
     logger.handlers.clear()
     try:
@@ -245,8 +246,8 @@ def usage_logger() -> Iterator[logging.Logger]:
 def test_usage_logging_is_configured_once_and_passes_info(
     usage_logger: logging.Logger,
 ) -> None:
-    main._configure_usage_logging()
-    main._configure_usage_logging()
+    configure_usage_logging()
+    configure_usage_logging()
 
     (handler,) = usage_logger.handlers
     seen: list[logging.LogRecord] = []
