@@ -459,6 +459,34 @@ The differences:
   second more for `5m`, under a minute for `1h` and `24h`, under an hour for `7d` and
   `30d`.
 
+### When platform counts are unavailable (`usage.on_unavailable`)
+
+Counts shared across processes will come from the platform. The `usage` block
+says what a decision reads when the platform's count is missing:
+
+```yaml
+usage:
+  on_unavailable: deny   # or allow
+```
+
+- `allow` reads this process's own counts alone. This is what you get when the
+  block is left out.
+- `deny` leaves the value missing, so the constraints that read it fail closed.
+  The rest of the policy keeps working.
+
+`on_unavailable` is required once you write the block. The setting is per agent,
+because the platform counts per agent, so every role has to resolve to the same
+value. A role that leaves the block out reads `allow`, so setting `deny` on one
+role only fails validation:
+
+```text
+policy schema: usage.on_unavailable must resolve to the same value across all roles (the usage snapshot is per agent); got default=allow, ops=deny. Put it in a mixin every role inherits.
+```
+
+The value is signed into the bundle. While the counts are local to the process
+(see above), there is no platform count to miss, so the setting doesn't change any
+decision yet.
+
 ### Dry-running a quota
 
 `hexgate policy test` takes `--agent-usage`, which sets the combined value a decision
