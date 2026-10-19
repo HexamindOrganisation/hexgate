@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from hexgate.audit import AuditEvent, configure
+from hexgate.config.env import platform_of
 from hexgate.runtime.agent_usage import AGENT_USAGE_LEDGERS, UsageLedgers
 from hexgate.runtime.context import get_current_context
 from hexgate.runtime.roles import resolve_role_set
@@ -41,6 +42,7 @@ from hexgate.security.usage_source import (
 from hexgate.tracing._senders import AuditSender
 
 if TYPE_CHECKING:
+    from hexgate.cloud.client import HexgateClient
     from hexgate.runtime.context import HexgateContext
     from hexgate.runtime.run_facts import RunFacts
 
@@ -327,22 +329,24 @@ def build_enforcer(
     *,
     agent_name: str = "default",
     api_key: str | None = None,
+    client: HexgateClient | None = None,
     decision_observer: DecisionObserver | None = None,
 ) -> PolicyEnforcer:
-    """Compose a governed enforcer — engine + audit sender + usage source from
-    ``api_key``.
+    """Compose a governed enforcer: engine + audit sender + usage source.
 
-    The one place that pairs an engine with its audit sink and usage source, so
-    the six surfaces (``HexgateAgent.enforce_policy``, the four adapters, the
-    OpenAI runner) don't each repeat the wiring. ``api_key=None`` falls back to
-    ``HEXGATE_API_KEY`` (audit stays inert and usage stays local when neither
-    resolves). ``decision_observer`` threads the local-process decision hook
-    (see :class:`PolicyEnforcer`); ``None`` is silent.
+    ``client`` is the surface's platform client. When given, its key and base URL
+    win over ``api_key`` for both the audit sender and the usage source, which
+    reuses the client (no second key check); ``HEXGATE_OTLP_ENDPOINT`` still
+    overrides where audit spans are exported. Without one, ``api_key`` falls back to
+    ``HEXGATE_API_KEY`` and the URL to ``HEXGATE_API_URL``; audit stays inert and
+    usage stays local when no key resolves. ``decision_observer`` is the
+    local-process decision hook (see :class:`PolicyEnforcer`).
     """
+    key, base_url = platform_of(api_key, client)
     return PolicyEnforcer(
         engine,
         agent_name=agent_name,
-        audit_sender=configure(api_key),
+        audit_sender=configure(key, base_url=base_url),
         decision_observer=decision_observer,
-        usage_source=resolve_usage_source(api_key=api_key),
+        usage_source=resolve_usage_source(api_key=key, client=client),
     )
