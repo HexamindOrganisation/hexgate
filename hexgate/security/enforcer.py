@@ -21,7 +21,12 @@ from typing import TYPE_CHECKING, Any
 
 from hexgate.audit import AuditEvent, configure
 from hexgate.config.env import platform_of
-from hexgate.runtime.agent_usage import AGENT_USAGE_LEDGERS, UsageLedgers
+from hexgate.runtime.agent_usage import (
+    USAGE_LEDGERS,
+    UsageLedgers,
+    UsageScope,
+    UsageScopeKind,
+)
 from hexgate.runtime.context import get_current_context
 from hexgate.runtime.roles import resolve_role_set
 from hexgate.runtime.run_facts import get_run_facts
@@ -128,18 +133,18 @@ class _BoundPolicy:
 
 @dataclass(frozen=True, slots=True)
 class UsageRefresh:
-    """One boundary's usage refresh: the source, the agent and the paths of the
+    """One boundary's usage refresh: the source, the scope and the paths of the
     policy loaded when the run started (02 §5.5 Rule 2)."""
 
     source: PlatformUsageSource
-    agent_name: str
+    scope: UsageScope
     paths: frozenset[str]
 
     def run(self) -> None:
-        self.source.refresh(self.agent_name, self.paths)
+        self.source.refresh(self.scope, self.paths)
 
     async def arun(self) -> None:
-        await self.source.refresh_async(self.agent_name, self.paths)
+        await self.source.refresh_async(self.scope, self.paths)
 
 
 class PolicyEnforcer:
@@ -165,7 +170,7 @@ class PolicyEnforcer:
         agent_name: str = "default",
         audit_sender: AuditSender | None = None,
         decision_observer: DecisionObserver | None = None,
-        ledgers: UsageLedgers = AGENT_USAGE_LEDGERS,
+        ledgers: UsageLedgers = USAGE_LEDGERS,
         usage_source: PlatformUsageSource | None = None,
     ) -> None:
         self._ledgers = ledgers
@@ -190,7 +195,7 @@ class PolicyEnforcer:
         usage_paths = _usage_paths_of(engine)
         if usage_paths:
             # Before publishing: the first decision on the new policy must find a ledger.
-            self._ledgers.enable()
+            self._ledgers.enable(UsageScopeKind.AGENT)
         self._bound = _BoundPolicy(engine, usage_paths, _on_unavailable_of(engine))
 
     def usage_refresh(self) -> UsageRefresh | None:
@@ -199,7 +204,9 @@ class PolicyEnforcer:
         paths = self._bound.usage_paths
         if self._usage_source is None or not paths:
             return None
-        return UsageRefresh(self._usage_source, self.agent_name, paths)
+        return UsageRefresh(
+            self._usage_source, UsageScope.agent(self.agent_name), paths
+        )
 
     def decide(self, tool_name: str, arguments: Mapping[str, Any]) -> Decision:
         """Fold one verdict per role from the active context into a
@@ -280,7 +287,8 @@ class PolicyEnforcer:
         # while RunFacts is still DETACHED and carries no ledger.
         if not bound.usage_paths:
             return None
-        ledger = self._ledgers.ledger_for(self.agent_name)
+        scope = UsageScope.agent(self.agent_name)
+        ledger = self._ledgers.ledger_for(scope)
         if ledger is None:
             return None
         # Inside a run that recorded its invocation on this ledger (not a parent's,
@@ -293,7 +301,7 @@ class PolicyEnforcer:
                 ledger, bound.usage_paths, current_run_age=current_run_age
             )
         return self._usage_source.read(
-            self.agent_name,
+            scope,
             bound.usage_paths,
             ledger,
             on_unavailable=bound.on_unavailable,

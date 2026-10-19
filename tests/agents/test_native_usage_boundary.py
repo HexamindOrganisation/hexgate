@@ -15,7 +15,7 @@ from langchain_core.tools import tool
 from hexgate.agents import factory
 from hexgate.cloud.client import HexgateClient, HexgateConfig
 from hexgate.guards import before_tool
-from hexgate.runtime.agent_usage import AGENT_USAGE_LEDGERS
+from hexgate.runtime.agent_usage import USAGE_LEDGERS, UsageScope
 from hexgate.security import AgentPolicy, BaseToolPolicy, PolicySet
 from hexgate.security import enforcer as enforcer_mod
 from hexgate.security.policy_set import DEFAULT_ROLE_NAME, load_policy_set_from_dict
@@ -141,11 +141,11 @@ class _RecordingSource:
     def __init__(self, events: list[object]) -> None:
         self._events = events
 
-    def refresh(self, agent: str, paths: frozenset[str]) -> None:
-        self._events.append(("refresh", agent, set(paths)))
+    def refresh(self, scope: UsageScope, paths: frozenset[str]) -> None:
+        self._events.append(("refresh", scope, set(paths)))
 
-    async def refresh_async(self, agent: str, paths: frozenset[str]) -> None:
-        self._events.append(("refresh", agent, set(paths)))
+    async def refresh_async(self, scope: UsageScope, paths: frozenset[str]) -> None:
+        self._events.append(("refresh", scope, set(paths)))
 
 
 class _RecordingGraph:
@@ -173,8 +173,8 @@ def events(monkeypatch: pytest.MonkeyPatch) -> list[object]:
         enforcer_mod, "resolve_usage_source", lambda **_: _RecordingSource(log)
     )
     # A usage policy enables the process ledger registry for good; restore it.
-    monkeypatch.setattr(AGENT_USAGE_LEDGERS, "_enabled", AGENT_USAGE_LEDGERS.enabled)
-    monkeypatch.setattr(AGENT_USAGE_LEDGERS, "_ledgers", {})
+    monkeypatch.setattr(USAGE_LEDGERS, "_enabled", USAGE_LEDGERS._enabled)
+    monkeypatch.setattr(USAGE_LEDGERS, "_ledgers", {})
     return log
 
 
@@ -202,7 +202,7 @@ async def test_a_frozen_policy_refreshes_usage_before_the_graph_runs(
 
     await run_once(agent, method)
 
-    assert events == [("refresh", _AGENT, {_CAPPED_PATH}), _GRAPH_RAN]
+    assert events == [("refresh", UsageScope.agent(_AGENT), {_CAPPED_PATH}), _GRAPH_RAN]
 
 
 @pytest.mark.asyncio

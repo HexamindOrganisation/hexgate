@@ -18,6 +18,7 @@ from hexgate.adapters._common import (
     prepare_run,
 )
 from hexgate.runtime import HexgateContext
+from hexgate.runtime.agent_usage import UsageScope
 from hexgate.security.bans import EMPTY_BAN_SET, BanGate, BanSet, ban_set_from_payload
 from hexgate.security.enforcer import UsageRefresh
 from hexgate.security.errors import AgentBannedError
@@ -26,6 +27,7 @@ from hexgate.security.errors import AgentBannedError
 # fast: run one after the other, the first party waits alone and breaks it.
 _BARRIER_TIMEOUT_S = 2.0
 _AGENT = "bot"
+_USAGE_SCOPE = UsageScope.agent(_AGENT)
 
 
 def test_propagate_kwargs_joins_roles_as_string() -> None:
@@ -230,24 +232,24 @@ class _UsageSource:
     ) -> None:
         self._barrier = barrier
         self._error = error
-        self.calls: list[tuple[str, frozenset[str]]] = []
+        self.calls: list[tuple[UsageScope, frozenset[str]]] = []
 
-    def refresh(self, agent: str, paths: frozenset[str]) -> None:
+    def refresh(self, scope: UsageScope, paths: frozenset[str]) -> None:
         if self._barrier is not None:
             self._barrier.wait()
         if self._error is not None:
             raise self._error
-        self.calls.append((agent, paths))
+        self.calls.append((scope, paths))
 
-    async def refresh_async(self, agent: str, paths: frozenset[str]) -> None:
-        await asyncio.to_thread(self.refresh, agent, paths)
+    async def refresh_async(self, scope: UsageScope, paths: frozenset[str]) -> None:
+        await asyncio.to_thread(self.refresh, scope, paths)
 
 
 _USAGE_PATHS = frozenset({"invocations_1h"})
 
 
 def _usage(source: _UsageSource) -> UsageRefresh:
-    return UsageRefresh(source, _AGENT, _USAGE_PATHS)  # type: ignore[arg-type]
+    return UsageRefresh(source, _USAGE_SCOPE, _USAGE_PATHS)  # type: ignore[arg-type]
 
 
 def _binding(usage: UsageRefresh) -> SimpleNamespace:
@@ -284,7 +286,7 @@ async def test_aprepare_run_refreshes_usage_concurrently(with_gate: bool) -> Non
     )
 
     assert refresh.calls == 1
-    assert source.calls == [(_AGENT, _USAGE_PATHS)]
+    assert source.calls == [(_USAGE_SCOPE, _USAGE_PATHS)]
 
 
 @pytest.mark.parametrize("with_gate", [False, True])
@@ -299,7 +301,7 @@ def test_prepare_run_refreshes_usage_concurrently(with_gate: bool) -> None:
     prepare_run(refresh, gate, _context(), binding=_binding(_usage(source)))
 
     assert refresh.calls == 1
-    assert source.calls == [(_AGENT, _USAGE_PATHS)]
+    assert source.calls == [(_USAGE_SCOPE, _USAGE_PATHS)]
 
 
 async def test_a_failing_async_usage_refresh_does_not_fail_the_run(
@@ -415,7 +417,7 @@ def _swapping(
     after: frozenset[str] | None,
 ) -> _SwappingBinding:
     def usage(paths: frozenset[str] | None) -> UsageRefresh | None:
-        return None if paths is None else UsageRefresh(source, _AGENT, paths)  # type: ignore[arg-type]
+        return None if paths is None else UsageRefresh(source, _USAGE_SCOPE, paths)  # type: ignore[arg-type]
 
     return _SwappingBinding(usage(before), usage(after))
 

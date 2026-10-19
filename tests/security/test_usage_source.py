@@ -19,7 +19,13 @@ from typing import Any
 import pytest
 
 from hexgate.cloud.client import HexgateError
-from hexgate.runtime.agent_usage import UsageLedger, UsageMetric, new_usage_ledger
+from hexgate.runtime.agent_usage import (
+    UsageLedger,
+    UsageMetric,
+    UsageScope,
+    UsageScopeKind,
+    new_usage_ledger,
+)
 from hexgate.security import usage_source
 from hexgate.security.usage_source import (
     DEFAULT_MAX_STALENESS_SECONDS,
@@ -45,6 +51,7 @@ _SYNC_AFTER = 60.0
 _MAX_STALENESS = 300.0
 _BETWEEN_TIERS = 10.0
 _AGENT = "billing"
+_SCOPE = UsageScope.agent(_AGENT)
 _HOUR = "invocations_1h"
 _FIVE_MIN = "tool_calls_5m"
 _ONE_PATH = frozenset({_HOUR})
@@ -153,7 +160,9 @@ def _rig(
     clock = _FakeClock()
     fetcher = _FakeFetcher(clock, values)
     executor = executor if executor is not None else _InlineExecutor()
-    source = PlatformUsageSource(fetcher, executor, _SETTINGS, clock)
+    source = PlatformUsageSource(
+        {UsageScopeKind.AGENT: fetcher.get_agent_usage}, executor, _SETTINGS, clock
+    )
     return _Rig(clock, fetcher, source, new_usage_ledger(clock=clock))
 
 
@@ -164,7 +173,7 @@ def _seeded(
 ) -> _Rig:
     """A rig whose snapshot was fetched at ``_START`` for ``paths``."""
     rig = _rig(executor, values)
-    rig.source.refresh(_AGENT, paths)
+    rig.source.refresh(_SCOPE, paths)
     assert len(rig.fetcher.calls) == 1
     return rig
 
@@ -212,7 +221,7 @@ def test_a_cold_agent_fetches_synchronously_on_the_callers_thread() -> None:
     executor = _HeldExecutor()
     rig = _rig(executor)
 
-    rig.source.refresh(_AGENT, _TWO_PATHS)
+    rig.source.refresh(_SCOPE, _TWO_PATHS)
 
     assert rig.fetcher.calls == [
         (_AGENT, sorted(_TWO_PATHS), threading.current_thread().name)
@@ -224,7 +233,7 @@ def test_a_young_snapshot_is_used_as_is() -> None:
     rig = _seeded()
     rig.clock.now += _MIN_REFRESH - 1
 
-    rig.source.refresh(_AGENT, _ONE_PATH)
+    rig.source.refresh(_SCOPE, _ONE_PATH)
 
     assert len(rig.fetcher.calls) == 1
 
@@ -234,7 +243,7 @@ def test_a_snapshot_between_tiers_refreshes_in_the_background() -> None:
     rig = _seeded(executor)
     rig.clock.now += _BETWEEN_TIERS
 
-    rig.source.refresh(_AGENT, _ONE_PATH)
+    rig.source.refresh(_SCOPE, _ONE_PATH)
 
     assert len(rig.fetcher.calls) == 1
     assert len(executor.jobs) == 1
@@ -247,7 +256,7 @@ def test_a_snapshot_past_sync_after_fetches_synchronously() -> None:
     rig = _seeded(executor)
     rig.clock.now += _SYNC_AFTER
 
-    rig.source.refresh(_AGENT, _ONE_PATH)
+    rig.source.refresh(_SCOPE, _ONE_PATH)
 
     assert len(rig.fetcher.calls) == 2
     assert executor.jobs == []
@@ -256,7 +265,7 @@ def test_a_snapshot_past_sync_after_fetches_synchronously() -> None:
 def test_refresh_with_no_paths_never_fetches() -> None:
     rig = _rig()
 
-    rig.source.refresh(_AGENT, frozenset())
+    rig.source.refresh(_SCOPE, frozenset())
 
     assert rig.fetcher.calls == []
 
@@ -265,7 +274,7 @@ def test_a_new_path_refreshes_in_the_background_without_blocking() -> None:
     executor = _HeldExecutor()
     rig = _seeded(executor)
 
-    rig.source.refresh(_AGENT, _TWO_PATHS)
+    rig.source.refresh(_SCOPE, _TWO_PATHS)
 
     assert len(rig.fetcher.calls) == 1
     executor.run_all()
@@ -277,9 +286,9 @@ def test_background_refreshes_are_single_flight() -> None:
     rig = _seeded(executor)
     rig.clock.now += _BETWEEN_TIERS
 
-    rig.source.refresh(_AGENT, _ONE_PATH)
-    rig.source.refresh(_AGENT, _ONE_PATH)
-    rig.source.read(_AGENT, _TWO_PATHS, rig.ledger)
+    rig.source.refresh(_SCOPE, _ONE_PATH)
+    rig.source.refresh(_SCOPE, _ONE_PATH)
+    rig.source.read(_SCOPE, _TWO_PATHS, rig.ledger)
 
     assert len(executor.jobs) == 1
 
@@ -288,11 +297,11 @@ def test_a_finished_background_refresh_frees_the_slot() -> None:
     executor = _HeldExecutor()
     rig = _seeded(executor)
     rig.clock.now += _BETWEEN_TIERS
-    rig.source.refresh(_AGENT, _ONE_PATH)
+    rig.source.refresh(_SCOPE, _ONE_PATH)
     executor.run_all()
 
     rig.clock.now += _BETWEEN_TIERS
-    rig.source.refresh(_AGENT, _ONE_PATH)
+    rig.source.refresh(_SCOPE, _ONE_PATH)
 
     assert len(executor.jobs) == 1
 
@@ -301,9 +310,9 @@ def test_a_background_fetch_asks_for_the_paths_wanted_when_it_runs() -> None:
     executor = _HeldExecutor()
     rig = _seeded(executor)
     rig.clock.now += _BETWEEN_TIERS
-    rig.source.refresh(_AGENT, _ONE_PATH)
+    rig.source.refresh(_SCOPE, _ONE_PATH)
 
-    rig.source.refresh(_AGENT, _TWO_PATHS)
+    rig.source.refresh(_SCOPE, _TWO_PATHS)
     executor.run_all()
 
     assert rig.fetcher.calls[-1][1] == sorted(_TWO_PATHS)
@@ -314,10 +323,10 @@ def test_callers_wanting_different_paths_share_one_snapshot() -> None:
     rig = _seeded(executor)
     other = frozenset({_FIVE_MIN})
 
-    rig.source.read(_AGENT, other, rig.ledger)
+    rig.source.read(_SCOPE, other, rig.ledger)
     executor.run_all()
     readings = [
-        rig.source.read(_AGENT, paths, rig.ledger) for paths in (_ONE_PATH, other)
+        rig.source.read(_SCOPE, paths, rig.ledger) for paths in (_ONE_PATH, other)
     ]
 
     assert rig.fetcher.calls[-1][1] == sorted(_TWO_PATHS)
@@ -329,8 +338,8 @@ def test_a_closed_executor_never_reaches_the_reader() -> None:
     rig = _seeded(_ClosedExecutor())
     rig.clock.now += _BETWEEN_TIERS
 
-    rig.source.refresh(_AGENT, _ONE_PATH)
-    reading = rig.source.read(_AGENT, _TWO_PATHS, rig.ledger)
+    rig.source.refresh(_SCOPE, _ONE_PATH)
+    reading = rig.source.read(_SCOPE, _TWO_PATHS, rig.ledger)
 
     assert reading.state is UsageState.PARTIAL
 
@@ -343,24 +352,24 @@ def test_a_closed_executor_never_reaches_the_reader() -> None:
 def test_a_failed_fetch_is_not_retried_within_min_refresh() -> None:
     rig = _rig()
     rig.fetcher.error = HexgateError("platform down", status=503)
-    rig.source.refresh(_AGENT, _ONE_PATH)
+    rig.source.refresh(_SCOPE, _ONE_PATH)
 
     rig.clock.now += _MIN_REFRESH - 1
-    rig.source.refresh(_AGENT, _ONE_PATH)
-    rig.source.read(_AGENT, _ONE_PATH, rig.ledger)
+    rig.source.refresh(_SCOPE, _ONE_PATH)
+    rig.source.read(_SCOPE, _ONE_PATH, rig.ledger)
     assert len(rig.fetcher.calls) == 1
 
     rig.clock.now += 1
-    rig.source.refresh(_AGENT, _ONE_PATH)
+    rig.source.refresh(_SCOPE, _ONE_PATH)
     assert len(rig.fetcher.calls) == 2
 
 
 def test_a_new_path_set_bypasses_the_throttle() -> None:
     rig = _rig()
     rig.fetcher.error = HexgateError("platform down", status=503)
-    rig.source.refresh(_AGENT, _ONE_PATH)
+    rig.source.refresh(_SCOPE, _ONE_PATH)
 
-    rig.source.refresh(_AGENT, _TWO_PATHS)
+    rig.source.refresh(_SCOPE, _TWO_PATHS)
 
     assert len(rig.fetcher.calls) == 2
 
@@ -371,16 +380,16 @@ def test_a_rejected_agent_is_not_asked_again_until_the_rejection_expires(
 ) -> None:
     rig = _rig()
     rig.fetcher.error = HexgateError("rejected", status=status)
-    rig.source.refresh(_AGENT, _ONE_PATH)
+    rig.source.refresh(_SCOPE, _ONE_PATH)
 
     rig.clock.now += REJECTED_RETRY_SECONDS - 1
-    rig.source.refresh(_AGENT, _TWO_PATHS)
-    reading = rig.source.read(_AGENT, _TWO_PATHS, rig.ledger)
+    rig.source.refresh(_SCOPE, _TWO_PATHS)
+    reading = rig.source.read(_SCOPE, _TWO_PATHS, rig.ledger)
     assert len(rig.fetcher.calls) == 1
     assert reading.state is UsageState.UNAVAILABLE
 
     rig.clock.now += 1
-    rig.source.refresh(_AGENT, _TWO_PATHS)
+    rig.source.refresh(_SCOPE, _TWO_PATHS)
     assert len(rig.fetcher.calls) == 2
 
 
@@ -389,8 +398,8 @@ def test_a_failed_fetch_keeps_last_good_and_reads_stale() -> None:
     rig.fetcher.error = HexgateError("platform down", status=503)
     rig.clock.now += _SYNC_AFTER
 
-    rig.source.refresh(_AGENT, _ONE_PATH)
-    reading = rig.source.read(_AGENT, _ONE_PATH, rig.ledger)
+    rig.source.refresh(_SCOPE, _ONE_PATH)
+    reading = rig.source.read(_SCOPE, _ONE_PATH, rig.ledger)
 
     assert len(rig.fetcher.calls) == 2
     assert reading == usage_source.UsageReading({_HOUR: 7}, UsageState.STALE)
@@ -404,10 +413,10 @@ def test_a_content_error_keeps_last_good_and_logs_an_error(
     rig.clock.now += _SYNC_AFTER
 
     with caplog.at_level(logging.WARNING, logger=usage_source.logger.name):
-        rig.source.refresh(_AGENT, _ONE_PATH)
+        rig.source.refresh(_SCOPE, _ONE_PATH)
 
     assert [record.levelno for record in caplog.records] == [logging.ERROR]
-    assert rig.source.read(_AGENT, _ONE_PATH, rig.ledger).namespace == {_HOUR: 7}
+    assert rig.source.read(_SCOPE, _ONE_PATH, rig.ledger).namespace == {_HOUR: 7}
 
 
 def test_an_unregistered_agent_is_reported_once(
@@ -417,9 +426,9 @@ def test_an_unregistered_agent_is_reported_once(
     rig.fetcher.error = HexgateError("not found", status=404)
 
     with caplog.at_level(logging.WARNING, logger=usage_source.logger.name):
-        rig.source.refresh(_AGENT, _ONE_PATH)
+        rig.source.refresh(_SCOPE, _ONE_PATH)
         rig.clock.now += REJECTED_RETRY_SECONDS
-        rig.source.refresh(_AGENT, _ONE_PATH)
+        rig.source.refresh(_SCOPE, _ONE_PATH)
 
     assert len(rig.fetcher.calls) == 2
     assert len(caplog.records) == 1
@@ -430,9 +439,9 @@ def test_any_fetch_error_is_swallowed() -> None:
     rig = _rig()
     rig.fetcher.error = OSError("boom")
 
-    rig.source.refresh(_AGENT, _ONE_PATH)
+    rig.source.refresh(_SCOPE, _ONE_PATH)
 
-    assert rig.source.read(_AGENT, _ONE_PATH, rig.ledger).state is (
+    assert rig.source.read(_SCOPE, _ONE_PATH, rig.ledger).state is (
         UsageState.UNAVAILABLE
     )
 
@@ -441,9 +450,9 @@ def test_the_snapshot_is_stamped_when_the_fetch_starts() -> None:
     rig = _rig()
     rig.fetcher.advance = 1.5
 
-    rig.source.refresh(_AGENT, _ONE_PATH)
+    rig.source.refresh(_SCOPE, _ONE_PATH)
 
-    assert rig.source._snapshots[_AGENT].fetched_at == _START
+    assert rig.source._snapshots[_SCOPE].fetched_at == _START
 
 
 # ---------------------------------------------------------------------------
@@ -456,7 +465,7 @@ def test_a_fresh_snapshot_adds_the_local_term() -> None:
     rig.clock.now += 1
     rig.ledger.record({UsageMetric.INVOCATIONS: 2})
 
-    reading = rig.source.read(_AGENT, _ONE_PATH, rig.ledger)
+    reading = rig.source.read(_SCOPE, _ONE_PATH, rig.ledger)
 
     assert reading == usage_source.UsageReading({_HOUR: 9}, UsageState.FRESH)
 
@@ -467,9 +476,9 @@ def test_an_event_inside_the_ingest_margin_is_counted_once_more() -> None:
     rig.clock.now -= USAGE_INGEST_MARGIN_SECONDS / 3
     rig.ledger.record({UsageMetric.INVOCATIONS: 1})
     rig.clock.now = _START
-    rig.source.refresh(_AGENT, _ONE_PATH)
+    rig.source.refresh(_SCOPE, _ONE_PATH)
 
-    reading = rig.source.read(_AGENT, _ONE_PATH, rig.ledger)
+    reading = rig.source.read(_SCOPE, _ONE_PATH, rig.ledger)
 
     assert reading.namespace == {_HOUR: _PLATFORM_VALUES[_HOUR] + 1}
 
@@ -485,7 +494,7 @@ def test_an_unavailable_snapshot_fails_open_by_default(seed: bool) -> None:
     rig.clock.now += _MAX_STALENESS
     rig.ledger.record({UsageMetric.INVOCATIONS: 2})
 
-    reading = rig.source.read(_AGENT, _ONE_PATH, rig.ledger)
+    reading = rig.source.read(_SCOPE, _ONE_PATH, rig.ledger)
 
     assert reading == usage_source.UsageReading({_HOUR: 2}, UsageState.UNAVAILABLE)
 
@@ -494,7 +503,7 @@ def test_an_unavailable_snapshot_under_deny_reads_nothing() -> None:
     rig = _rig(_HeldExecutor())
 
     reading = rig.source.read(
-        _AGENT, _ONE_PATH, rig.ledger, on_unavailable=OnUnavailable.DENY
+        _SCOPE, _ONE_PATH, rig.ledger, on_unavailable=OnUnavailable.DENY
     )
 
     assert reading == usage_source.UsageReading(None, UsageState.UNAVAILABLE)
@@ -506,7 +515,7 @@ def test_a_path_missing_from_the_snapshot_reads_ledger_only() -> None:
     rig = _seeded(executor)
     rig.ledger.record({UsageMetric.TOOL_CALLS: 1})
 
-    reading = rig.source.read(_AGENT, _TWO_PATHS, rig.ledger)
+    reading = rig.source.read(_SCOPE, _TWO_PATHS, rig.ledger)
 
     assert reading == usage_source.UsageReading(
         {_HOUR: 7, _FIVE_MIN: 1}, UsageState.PARTIAL
@@ -519,7 +528,7 @@ def test_a_path_missing_from_the_snapshot_under_deny_fails_only_itself() -> None
     rig = _seeded(_HeldExecutor())
 
     reading = rig.source.read(
-        _AGENT, _TWO_PATHS, rig.ledger, on_unavailable=OnUnavailable.DENY
+        _SCOPE, _TWO_PATHS, rig.ledger, on_unavailable=OnUnavailable.DENY
     )
 
     assert reading == usage_source.UsageReading({_HOUR: 7}, UsageState.PARTIAL)
@@ -528,7 +537,7 @@ def test_a_path_missing_from_the_snapshot_under_deny_fails_only_itself() -> None
 def test_a_path_the_platform_left_out_reads_partial() -> None:
     rig = _seeded(_HeldExecutor(), paths=_TWO_PATHS, values={_HOUR: 7})
 
-    reading = rig.source.read(_AGENT, _TWO_PATHS, rig.ledger)
+    reading = rig.source.read(_SCOPE, _TWO_PATHS, rig.ledger)
 
     assert reading.state is UsageState.PARTIAL
     assert reading.namespace == {_HOUR: 7, _FIVE_MIN: 0}
@@ -539,7 +548,7 @@ def test_the_current_run_is_left_out_when_it_is_in_the_local_term() -> None:
     rig.clock.now += 1
     rig.ledger.record({UsageMetric.INVOCATIONS: 1})
 
-    reading = rig.source.read(_AGENT, _ONE_PATH, rig.ledger, current_run_age=0.0)
+    reading = rig.source.read(_SCOPE, _ONE_PATH, rig.ledger, current_run_age=0.0)
 
     assert reading.namespace == {_HOUR: 7}
 
@@ -549,13 +558,13 @@ def test_a_mid_run_refresh_holding_the_run_reads_as_at_admission() -> None:
     rig.clock.now += 1
     run_opened = rig.clock.now
     rig.ledger.record({UsageMetric.INVOCATIONS: 1})
-    at_admission = rig.source.read(_AGENT, _ONE_PATH, rig.ledger, current_run_age=0.0)
+    at_admission = rig.source.read(_SCOPE, _ONE_PATH, rig.ledger, current_run_age=0.0)
 
     rig.clock.now += _SYNC_AFTER
     rig.fetcher.values[_HOUR] += 1  # the run's own start, now ingested
-    rig.source.refresh(_AGENT, _ONE_PATH)
+    rig.source.refresh(_SCOPE, _ONE_PATH)
     after_refresh = rig.source.read(
-        _AGENT, _ONE_PATH, rig.ledger, current_run_age=rig.clock.now - run_opened
+        _SCOPE, _ONE_PATH, rig.ledger, current_run_age=rig.clock.now - run_opened
     )
 
     assert after_refresh.namespace == at_admission.namespace == {_HOUR: 7}
@@ -565,7 +574,7 @@ def test_read_never_fetches_on_the_callers_thread() -> None:
     executor = _HeldExecutor()
     rig = _rig(executor)
 
-    rig.source.read(_AGENT, _ONE_PATH, rig.ledger)
+    rig.source.read(_SCOPE, _ONE_PATH, rig.ledger)
 
     assert rig.fetcher.calls == []
     assert len(executor.jobs) == 1
@@ -575,7 +584,7 @@ def test_a_fresh_read_schedules_nothing() -> None:
     executor = _HeldExecutor()
     rig = _seeded(executor)
 
-    rig.source.read(_AGENT, _ONE_PATH, rig.ledger)
+    rig.source.read(_SCOPE, _ONE_PATH, rig.ledger)
 
     assert executor.jobs == []
 
@@ -587,6 +596,93 @@ def test_local_reading_is_the_ledger_alone() -> None:
     assert local_reading(ledger, _ONE_PATH) == usage_source.UsageReading(
         {_HOUR: 3}, UsageState.LOCAL
     )
+
+
+# ---------------------------------------------------------------------------
+# Scope kinds
+# ---------------------------------------------------------------------------
+
+_USER_SCOPE = UsageScope(UsageScopeKind.USER, _AGENT)
+_USER_VALUES = {_HOUR: 2, _FIVE_MIN: 1}
+
+
+@dataclass
+class _TwoKindRig:
+    agent_fetcher: _FakeFetcher
+    user_fetcher: _FakeFetcher
+    source: PlatformUsageSource
+    ledger: UsageLedger
+
+
+def _two_kind_rig() -> _TwoKindRig:
+    clock = _FakeClock()
+    agent_fetcher = _FakeFetcher(clock, _PLATFORM_VALUES)
+    user_fetcher = _FakeFetcher(clock, _USER_VALUES)
+    source = PlatformUsageSource(
+        {
+            UsageScopeKind.AGENT: agent_fetcher.get_agent_usage,
+            UsageScopeKind.USER: user_fetcher.get_agent_usage,
+        },
+        _InlineExecutor(),
+        _SETTINGS,
+        clock,
+    )
+    return _TwoKindRig(
+        agent_fetcher, user_fetcher, source, new_usage_ledger(clock=clock)
+    )
+
+
+def test_each_kind_is_fetched_by_its_own_fetcher() -> None:
+    rig = _two_kind_rig()
+
+    rig.source.refresh(_SCOPE, _ONE_PATH)
+    rig.source.refresh(_USER_SCOPE, _ONE_PATH)
+
+    assert [call[0] for call in rig.agent_fetcher.calls] == [_AGENT]
+    assert [call[0] for call in rig.user_fetcher.calls] == [_AGENT]
+
+
+def test_snapshots_of_two_kinds_with_one_key_never_mix() -> None:
+    rig = _two_kind_rig()
+    rig.source.refresh(_SCOPE, _ONE_PATH)
+    rig.source.refresh(_USER_SCOPE, _ONE_PATH)
+
+    agent = rig.source.read(_SCOPE, _ONE_PATH, rig.ledger)
+    user = rig.source.read(_USER_SCOPE, _ONE_PATH, rig.ledger)
+
+    assert agent.namespace == {_HOUR: _PLATFORM_VALUES[_HOUR]}
+    assert user.namespace == {_HOUR: _USER_VALUES[_HOUR]}
+
+
+def test_a_rejected_scope_does_not_throttle_another_kind() -> None:
+    rig = _two_kind_rig()
+    rig.agent_fetcher.error = HexgateError("rejected", status=403)
+
+    rig.source.refresh(_SCOPE, _ONE_PATH)
+    rig.source.refresh(_USER_SCOPE, _ONE_PATH)
+
+    assert len(rig.agent_fetcher.calls) == 1
+    assert len(rig.user_fetcher.calls) == 1
+    assert rig.source.read(_USER_SCOPE, _ONE_PATH, rig.ledger).state is (
+        UsageState.FRESH
+    )
+
+
+@pytest.mark.parametrize("on_unavailable", list(OnUnavailable))
+def test_a_kind_without_a_fetcher_never_fetches_and_reads_unavailable(
+    on_unavailable: OnUnavailable,
+) -> None:
+    executor = _HeldExecutor()
+    rig = _rig(executor)
+
+    rig.source.refresh(_USER_SCOPE, _ONE_PATH)
+    reading = rig.source.read(
+        _USER_SCOPE, _ONE_PATH, rig.ledger, on_unavailable=on_unavailable
+    )
+
+    assert rig.fetcher.calls == []
+    assert executor.jobs == []
+    assert reading.state is UsageState.UNAVAILABLE
 
 
 # ---------------------------------------------------------------------------
@@ -611,11 +707,11 @@ async def test_refresh_async_fetches_off_the_loop_only_when_synchronous(
     executor = _HeldExecutor()
     rig = _rig(executor)
 
-    await rig.source.refresh_async(_AGENT, _ONE_PATH)
+    await rig.source.refresh_async(_SCOPE, _ONE_PATH)
     assert (spy.calls, len(rig.fetcher.calls)) == (1, 1)
 
     rig.clock.now += _BETWEEN_TIERS
-    await rig.source.refresh_async(_AGENT, _ONE_PATH)
+    await rig.source.refresh_async(_SCOPE, _ONE_PATH)
     assert (spy.calls, len(executor.jobs)) == (1, 1)
 
 
@@ -676,7 +772,10 @@ def test_bad_settings_fall_back_to_the_defaults(
 
 
 def _client(base_url: str = "http://platform") -> Any:
-    return SimpleNamespace(config=SimpleNamespace(base_url=base_url))
+    return SimpleNamespace(
+        config=SimpleNamespace(base_url=base_url),
+        get_agent_usage=lambda name, paths: {},
+    )
 
 
 def test_one_source_per_key_and_platform() -> None:
