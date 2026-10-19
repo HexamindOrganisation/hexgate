@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
-from typing import Any, Final
-
 import pytest
 
 from hexgate.runtime import agent_usage
+from hexgate.security import constraints
 from hexgate_api.features.usage.paths import (
     MAX_PATHS_PER_REQUEST,
     USAGE_PATH_GRAMMAR,
@@ -19,10 +17,7 @@ from hexgate_api.features.usage.paths import (
     parse_usage_paths,
 )
 
-# U2 adds the user_usage root; until it is on main the user parity test skips.
-SDK_USER_USAGE_PATHS: Final[Mapping[str, Any] | None] = getattr(
-    agent_usage, "USER_USAGE_PATHS", None
-)
+USER_USAGE_ROOT = "user_usage"
 
 
 @pytest.mark.parametrize(
@@ -126,11 +121,14 @@ def test_every_sdk_path_is_accepted() -> None:
         assert spec.window_seconds == sdk_path.window_seconds, name
 
 
-@pytest.mark.skipif(SDK_USER_USAGE_PATHS is None, reason="needs U2 (user_usage root)")
+# Keyed on the root U2 cannot ship without, not on its registry's name: once the
+# root exists, a missing or renamed USER_USAGE_PATHS fails here instead of skipping.
+@pytest.mark.skipif(
+    USER_USAGE_ROOT not in constraints.PATH_ROOTS, reason="needs U2 (user_usage root)"
+)
 def test_every_sdk_user_path_is_accepted() -> None:
     """G5 for user_usage.*: the same grammar serves both roots."""
-    assert SDK_USER_USAGE_PATHS is not None
-    for name, sdk_path in SDK_USER_USAGE_PATHS.items():
+    for name, sdk_path in agent_usage.USER_USAGE_PATHS.items():
         spec = parse_usage_path(name)
         assert spec.metric == sdk_path.metric, name
         assert spec.window_seconds == sdk_path.window_seconds, name
