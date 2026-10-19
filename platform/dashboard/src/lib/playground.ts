@@ -145,6 +145,40 @@ interface Options {
   projectId: string;
 }
 
+/**
+ * Build the `chat` frame for a turn, attaching a `user_attenuation` block only
+ * when the caller narrows to one or more roles OR acts under a name.
+ *
+ * `name` becomes the caller identity (serve maps the attenuation `user` to
+ * `HexgateContext.user_id`, default `"playground"` when unset). Roles ride as
+ * `role()` facts (most permissive outcome wins); the singular `role` is kept one
+ * release for a pinned older `hexgate serve`. Empty/whitespace roles are dropped,
+ * and a name-only turn runs as a named, unroled caller (no `roles` key) rather
+ * than one explicitly narrowed to zero roles.
+ *
+ * Pure — no socket, no store — so the attenuation shape is unit-testable.
+ */
+export function buildChatFrame(
+  message: string,
+  opts?: { roles?: string[]; name?: string },
+): Record<string, unknown> {
+  const frame: Record<string, unknown> = { type: "chat", message };
+  const roles = (opts?.roles ?? []).filter(Boolean);
+  const name = opts?.name?.trim();
+  if (roles.length || name) {
+    const attenuation: Record<string, unknown> = {
+      user: name || "playground",
+      ttl_seconds: 300,
+    };
+    if (roles.length) {
+      attenuation.roles = roles;
+      attenuation.role = roles[0];
+    }
+    frame.user_attenuation = attenuation;
+  }
+  return frame;
+}
+
 // ---------------------------------------------------------------------
 // Module-level store
 // ---------------------------------------------------------------------
@@ -350,14 +384,7 @@ export function usePlayground({ projectId }: Options) {
 
   /**
    * Send a chat message, optionally scoped to one or more roles and acting as a
-   * named caller.
-   *
-   * A non-empty `roles` (or a `name`) sends a `user_attenuation` block, which
-   * makes the dev's `hexgate serve` attenuate its token to carry one `role()`
-   * fact per name for this turn. The most permissive outcome wins, so adding a
-   * role only widens. `name` becomes the caller identity: serve maps the
-   * attenuation `user` to `HexgateContext.user_id`, so the agent sees it as who's
-   * acting (default `"playground"` when unset).
+   * named caller — the attenuation shape is built by `buildChatFrame`.
    */
   function sendChat(
     message: string,
@@ -387,26 +414,7 @@ export function usePlayground({ projectId }: Options) {
         { id: turn.id, role: "assistant", content: "", turn },
       ],
     }));
-    const frame: Record<string, unknown> = { type: "chat", message };
-    const roles = (opts?.roles ?? []).filter(Boolean);
-    const name = opts?.name?.trim();
-    if (roles.length || name) {
-      // Acting identity → HexgateContext.user_id on the serve side. Only attach
-      // the role facts when there are some — a name-only turn runs as a named,
-      // unroled caller, not one explicitly narrowed to zero roles.
-      const attenuation: Record<string, unknown> = {
-        user: name || "playground",
-        ttl_seconds: 300,
-      };
-      if (roles.length) {
-        attenuation.roles = roles;
-        // Singular kept for one release: a pinned older `hexgate serve` reads
-        // only `role`. The current one prefers `roles`.
-        attenuation.role = roles[0];
-      }
-      frame.user_attenuation = attenuation;
-    }
-    ws.send(JSON.stringify(frame));
+    ws.send(JSON.stringify(buildChatFrame(message, opts)));
   }
 
   function reset() {

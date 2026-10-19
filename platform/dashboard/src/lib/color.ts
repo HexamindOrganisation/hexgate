@@ -7,15 +7,25 @@
  * and derives a readable foreground for text placed on a custom accent.
  */
 
+/** "#rrggbb" (with or without '#') → normalized [r, g, b] in 0..1, or null for an
+ * unparseable value (missing/short/non-hex). */
+function hexToRgb(hex: string): [number, number, number] | null {
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex.trim());
+  if (!m) return null;
+  const int = parseInt(m[1], 16);
+  return [
+    ((int >> 16) & 255) / 255,
+    ((int >> 8) & 255) / 255,
+    (int & 255) / 255,
+  ];
+}
+
 /** "#rrggbb" → the "H S% L%" channel triple. Returns "" for an unparseable
  * value (missing/short/non-hex). */
 export function hexToHslChannels(hex: string): string {
-  const m = /^#?([0-9a-f]{6})$/i.exec(hex.trim());
-  if (!m) return "";
-  const int = parseInt(m[1], 16);
-  const r = ((int >> 16) & 255) / 255;
-  const g = ((int >> 8) & 255) / 255;
-  const b = (int & 255) / 255;
+  const rgb = hexToRgb(hex);
+  if (!rgb) return "";
+  const [r, g, b] = rgb;
   const max = Math.max(r, g, b);
   const min = Math.min(r, g, b);
   const l = (max + min) / 2;
@@ -56,11 +66,9 @@ export function hslChannelsToHex(channels: string): string {
  * --primary-foreground tracks a custom --primary instead of staying the theme
  * default (e.g. a light amber accent gets dark text, a deep blue gets light). */
 export function accentForeground(accent: string): string {
-  const hex = hslChannelsToHex(accent);
-  const int = parseInt(hex.slice(1), 16);
-  const r = ((int >> 16) & 255) / 255;
-  const g = ((int >> 8) & 255) / 255;
-  const b = (int & 255) / 255;
+  // hslChannelsToHex always returns a valid "#rrggbb" (or "#000000"), so the
+  // parse can't fail here; default to black defensively.
+  const [r, g, b] = hexToRgb(hslChannelsToHex(accent)) ?? [0, 0, 0];
   const luminance = 0.299 * r + 0.587 * g + 0.114 * b;
   return luminance > 0.5 ? "222 47% 11%" : "210 40% 98%";
 }

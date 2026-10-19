@@ -42,7 +42,8 @@ import { useLogout, useUser } from "@/lib/auth";
 import { useOrgs } from "@/lib/orgs";
 import { useProjects } from "@/lib/projects";
 import { useUi } from "@/lib/ui";
-import { useTheme } from "@/lib/theme";
+import { isDark, schemeAccent, useTheme, type Scheme } from "@/lib/theme";
+import { usePresentMode } from "@/lib/present";
 import { cn } from "@/lib/utils";
 
 /**
@@ -228,7 +229,7 @@ export function AppShell() {
   // Full-screen "presentation" mode (opened in its own tab from the Playground):
   // render just the route, no sidebar/nav chrome. Detected from the URL so it
   // survives a reload of the presentation tab.
-  const present = new URLSearchParams(location.search).get("present") === "1";
+  const present = usePresentMode();
   const inSettings = isSettingsPath(pathname);
   const activeOrgId = useActive((s) => s.activeOrgId);
   // Scope the settings links to the URL's org (falling back to the active one)
@@ -454,10 +455,10 @@ const MODES = [
   ["system", Monitor, "System"],
 ] as const;
 
-const SCHEMES = [
-  ["blue", "226 78% 65%", "Blue"],
-  ["plum", "313 75% 68%", "Plum"],
-] as const;
+const SCHEMES: [Scheme, string][] = [
+  ["blue", "Blue"],
+  ["plum", "Plum"],
+];
 
 /** Appearance picker inside the account menu: mode (light/dark/system) + accent
  * scheme (blue/plum). Plain buttons so a pick doesn't close the menu. */
@@ -466,6 +467,9 @@ function AppearanceControl() {
   const scheme = useTheme((s) => s.scheme);
   const setMode = useTheme((s) => s.setMode);
   const setScheme = useTheme((s) => s.setScheme);
+  // Resolve the swatch colour for the current palette from theme's single source
+  // so the dots track light/dark like the real --primary token.
+  const dark = isDark(mode);
 
   const seg =
     "flex h-7 flex-1 items-center justify-center gap-1.5 rounded-md text-xs text-muted-foreground transition-colors hover:text-foreground";
@@ -491,7 +495,7 @@ function AppearanceControl() {
         ))}
       </div>
       <div className="mt-1 flex gap-1">
-        {SCHEMES.map(([s, hsl, label]) => (
+        {SCHEMES.map(([s, label]) => (
           <button
             key={s}
             type="button"
@@ -502,7 +506,7 @@ function AppearanceControl() {
           >
             <span
               className="size-3 rounded-full"
-              style={{ backgroundColor: `hsl(${hsl})` }}
+              style={{ backgroundColor: `hsl(${schemeAccent(s, dark)})` }}
             />
             {label}
           </button>

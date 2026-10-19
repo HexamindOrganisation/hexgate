@@ -51,18 +51,16 @@ coverage:
     patch:
       # New code in PRs should hit 70% — applies to the lines the PR actually
       # changes, not the whole repo, so it's a more meaningful bar than the
-      # project target. Scoped per flag (no unflagged `default`) so the
-      # dashboard's untested-components reality can be informational without
-      # loosening the Python surfaces.
-      sdk:
+      # project target. The `default` key is what reports the `codecov/patch`
+      # context the branch ruleset requires, so it must exist; scope it to the
+      # Python flags (keeping them at the bar) and leave the dashboard to its own
+      # informational status below, so a dashboard-only PR isn't blocked while
+      # components stay untested.
+      default:
         target: 70%
         threshold: 5%
         flags:
           - sdk
-      platform-api:
-        target: 70%
-        threshold: 5%
-        flags:
           - platform-api
       # Informational, mirroring the dashboard PROJECT status above (components
       # are mostly untested): notifies on a drop but doesn't block the merge.
@@ -94,7 +92,7 @@ flags:
 comment:
   layout: "header, diff, flags, components, footer"
   behavior: default
-  require_changes: false  # comment even on PRs that don't change coverage
+  require_changes: false # comment even on PRs that don't change coverage
   require_base: false
   require_head: true
 
@@ -107,4 +105,4 @@ ignore:
   - "**/__init__.py"
   - "**/tests/**"
   - "platform/dashboard/dist/**"
-  - "fortify/"  # stale pre-rename leftover
+  - "fortify/" # stale pre-rename leftover
