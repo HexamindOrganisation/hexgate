@@ -1146,7 +1146,7 @@ wheels = [
 
 [[package]]
 name = "hexgate"
-version = "0.3.2"
+version = "0.3.3"
 source = { editable = "../../" }
 dependencies = [
     { name = "bashlex" },
@@ -1185,6 +1185,7 @@ requires-dist = [
     { name = "google-adk", specifier = ">=1.14" },
     { name = "google-genai", specifier = ">=1.0" },
     { name = "httpx", specifier = ">=0.28.1" },
+    { name = "inspect-ai", marker = "extra == 'evals'", specifier = "==0.3.278" },
     { name = "ipykernel", marker = "extra == 'dev'" },
     { name = "jupyter", marker = "extra == 'dev'" },
     { name = "langchain", specifier = ">=1.2.15" },
@@ -1212,7 +1213,7 @@ requires-dist = [
     { name = "wasmtime", specifier = ">=20.0" },
     { name = "websockets", specifier = ">=13.0" },
 ]
-provides-extras = ["dev"]
+provides-extras = ["dev", "evals"]
 
 [[package]]
 name = "hexgate-api"

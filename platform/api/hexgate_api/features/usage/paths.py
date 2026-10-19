@@ -1,4 +1,4 @@
-"""agent_usage path grammar: <metric>_<N><m|h|d>, whole minutes, 1m to 30d.
+"""agent_usage / user_usage path grammar: <metric>_<N><m|h|d>, whole minutes, 1m to 30d.
 
 A pattern rather than the SDK's closed list, so a new SDK window needs no
 platform release. The SDK's list must stay a subset (tests/features/usage).
@@ -7,6 +7,7 @@ platform release. The SDK's list must stay a subset (tests/features/usage).
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Final
@@ -28,6 +29,7 @@ MIN_WINDOW_SECONDS: Final = 60
 MAX_WINDOW_SECONDS: Final = 30 * 86_400
 MAX_PATHS_PER_REQUEST: Final = 64  # the SDK can ask for at most 35
 PATH_SEPARATOR: Final = ","
+_NO_PATHS: Final = "no paths requested"
 
 _PATH_RE: Final = re.compile(
     rf"(?P<metric>{'|'.join(m.value for m in UsageMetric)})"
@@ -40,7 +42,7 @@ USAGE_PATH_GRAMMAR: Final = (
 
 
 class InvalidUsagePaths(ValueError):
-    """The ``paths`` query parameter is empty, too long, or has a bad path. -> 422."""
+    """The requested paths are empty, too long, or has a bad path. -> 422."""
 
 
 @dataclass(frozen=True, slots=True, order=True)
@@ -61,9 +63,15 @@ def parse_usage_path(path: str) -> UsageWindowSpec:
 
 
 def parse_usage_paths(raw: str) -> dict[str, UsageWindowSpec]:
+    """The agent route's comma-separated query parameter."""
+    return parse_usage_path_list(raw.split(PATH_SEPARATOR))
+
+
+def parse_usage_path_list(items: Sequence[str]) -> dict[str, UsageWindowSpec]:
     """Keyed by the names as requested: ``invocations_60m`` and ``invocations_1h``
     are two keys with equal specs, because the caller drops keys it didn't ask for."""
-    items = raw.split(PATH_SEPARATOR)
+    if not items:
+        raise InvalidUsagePaths(_NO_PATHS)
     if len(items) > MAX_PATHS_PER_REQUEST:
         raise InvalidUsagePaths(
             f"{len(items)} paths requested; at most {MAX_PATHS_PER_REQUEST} allowed"
