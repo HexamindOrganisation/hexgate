@@ -145,10 +145,14 @@ class _ClosedExecutor(Executor):
         raise RuntimeError("cannot schedule new futures after interpreter shutdown")
 
 
+_USER_VALUES = {_HOUR: 2, _FIVE_MIN: 1}
+
+
 @dataclass
 class _Rig:
     clock: _FakeClock
     fetcher: _FakeFetcher
+    user_fetcher: _FakeFetcher  # registered only when the rig fetches users
     source: PlatformUsageSource
     ledger: UsageLedger
 
@@ -156,14 +160,18 @@ class _Rig:
 def _rig(
     executor: Executor | None = None,
     values: Mapping[str, int] = _PLATFORM_VALUES,
+    *,
+    fetch_users: bool = False,
 ) -> _Rig:
     clock = _FakeClock()
     fetcher = _FakeFetcher(clock, values)
+    user_fetcher = _FakeFetcher(clock, _USER_VALUES)
+    fetchers = {UsageScopeKind.AGENT: fetcher.get_agent_usage}
+    if fetch_users:
+        fetchers[UsageScopeKind.USER] = user_fetcher.get_agent_usage
     executor = executor if executor is not None else _InlineExecutor()
-    source = PlatformUsageSource(
-        {UsageScopeKind.AGENT: fetcher.get_agent_usage}, executor, _SETTINGS, clock
-    )
-    return _Rig(clock, fetcher, source, new_usage_ledger(clock=clock))
+    source = PlatformUsageSource(fetchers, executor, _SETTINGS, clock)
+    return _Rig(clock, fetcher, user_fetcher, source, new_usage_ledger(clock=clock))
 
 
 def _seeded(
@@ -603,47 +611,20 @@ def test_local_reading_is_the_ledger_alone() -> None:
 # ---------------------------------------------------------------------------
 
 _USER_SCOPE = UsageScope(UsageScopeKind.USER, _AGENT)
-_USER_VALUES = {_HOUR: 2, _FIVE_MIN: 1}
-
-
-@dataclass
-class _TwoKindRig:
-    agent_fetcher: _FakeFetcher
-    user_fetcher: _FakeFetcher
-    source: PlatformUsageSource
-    ledger: UsageLedger
-
-
-def _two_kind_rig() -> _TwoKindRig:
-    clock = _FakeClock()
-    agent_fetcher = _FakeFetcher(clock, _PLATFORM_VALUES)
-    user_fetcher = _FakeFetcher(clock, _USER_VALUES)
-    source = PlatformUsageSource(
-        {
-            UsageScopeKind.AGENT: agent_fetcher.get_agent_usage,
-            UsageScopeKind.USER: user_fetcher.get_agent_usage,
-        },
-        _InlineExecutor(),
-        _SETTINGS,
-        clock,
-    )
-    return _TwoKindRig(
-        agent_fetcher, user_fetcher, source, new_usage_ledger(clock=clock)
-    )
 
 
 def test_each_kind_is_fetched_by_its_own_fetcher() -> None:
-    rig = _two_kind_rig()
+    rig = _rig(fetch_users=True)
 
     rig.source.refresh(_SCOPE, _ONE_PATH)
     rig.source.refresh(_USER_SCOPE, _ONE_PATH)
 
-    assert [call[0] for call in rig.agent_fetcher.calls] == [_AGENT]
+    assert [call[0] for call in rig.fetcher.calls] == [_AGENT]
     assert [call[0] for call in rig.user_fetcher.calls] == [_AGENT]
 
 
 def test_snapshots_of_two_kinds_with_one_key_never_mix() -> None:
-    rig = _two_kind_rig()
+    rig = _rig(fetch_users=True)
     rig.source.refresh(_SCOPE, _ONE_PATH)
     rig.source.refresh(_USER_SCOPE, _ONE_PATH)
 
@@ -655,13 +636,13 @@ def test_snapshots_of_two_kinds_with_one_key_never_mix() -> None:
 
 
 def test_a_rejected_scope_does_not_throttle_another_kind() -> None:
-    rig = _two_kind_rig()
-    rig.agent_fetcher.error = HexgateError("rejected", status=403)
+    rig = _rig(fetch_users=True)
+    rig.fetcher.error = HexgateError("rejected", status=403)
 
     rig.source.refresh(_SCOPE, _ONE_PATH)
     rig.source.refresh(_USER_SCOPE, _ONE_PATH)
 
-    assert len(rig.agent_fetcher.calls) == 1
+    assert len(rig.fetcher.calls) == 1
     assert len(rig.user_fetcher.calls) == 1
     assert rig.source.read(_USER_SCOPE, _ONE_PATH, rig.ledger).state is (
         UsageState.FRESH
@@ -681,6 +662,7 @@ def test_a_kind_without_a_fetcher_never_fetches_and_reads_unavailable(
     )
 
     assert rig.fetcher.calls == []
+    assert rig.user_fetcher.calls == []
     assert executor.jobs == []
     assert reading.state is UsageState.UNAVAILABLE
 

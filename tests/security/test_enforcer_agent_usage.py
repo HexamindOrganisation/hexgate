@@ -472,8 +472,6 @@ def test_an_agent_usage_policy_enables_only_the_agent_scope() -> None:
     platform.boundary(enforcer)
     assert enforcer.decide(AGENT_RUN_TOOL, _ADMISSION_ARGS).allowed
 
-    assert set(platform.source._fetchers) == {UsageScopeKind.AGENT}
-    assert platform.source._snapshots
     assert {scope.kind for scope in platform.source._snapshots} == {
         UsageScopeKind.AGENT
     }

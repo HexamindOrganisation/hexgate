@@ -2,10 +2,10 @@
 
 Keeps one snapshot per usage scope, fetched by that scope kind's fetcher (an agent's
 is ``GET /v1/agents/{name}/usage``), refreshed stale-while-revalidate, and combines
-it with the process-local ledger into the namespace a decision reads. Shared per ``(api_key, base_url)`` like
-:class:`~hexgate.security.bans.PlatformBanSource`, and fail-soft: a platform blip
-degrades to ledger-only values by default, never to an error. Inert until the run
-boundary calls it.
+it with the process-local ledger into the namespace a decision reads. Shared per
+``(api_key, base_url)`` like :class:`~hexgate.security.bans.PlatformBanSource`, and
+fail-soft: a platform blip degrades to ledger-only values by default, never to an
+error. Inert until the run boundary calls it.
 """
 
 from __future__ import annotations
@@ -222,7 +222,7 @@ class PlatformUsageSource:
         on_unavailable: OnUnavailable = OnUnavailable.ALLOW,
         current_run_age: float | None = None,
     ) -> UsageReading:
-        """The ``agent_usage`` namespace for ``paths``. Anything short of ``FRESH``
+        """The usage namespace for ``paths``. Anything short of ``FRESH``
         schedules a background refresh, so a long run heals its own snapshot."""
         snapshot = self._remember(scope, paths)
         if (

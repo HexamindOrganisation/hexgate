@@ -293,14 +293,10 @@ def test_an_enabled_registry_keeps_one_ledger_per_agent() -> None:
 def test_a_concurrent_first_lookup_yields_one_ledger() -> None:
     ledgers = UsageLedgers(new_usage_ledger)
     ledgers.enable(UsageScopeKind.AGENT)
+    scope = UsageScope.agent("a")
 
     with ThreadPoolExecutor(max_workers=_WRITERS) as pool:
-        found = list(
-            pool.map(
-                lambda _: ledgers.ledger_for(UsageScope.agent("a")),
-                range(_WRITERS * 4),
-            )
-        )
+        found = list(pool.map(lambda _: ledgers.ledger_for(scope), range(_WRITERS * 4)))
 
     assert len({id(ledger) for ledger in found}) == 1
 
