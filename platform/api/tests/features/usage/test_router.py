@@ -523,6 +523,20 @@ def test_an_agent_and_a_user_sharing_a_name_never_share_a_memo_entry(
     assert fake_clickhouse.query.call_count == 2
 
 
+def test_the_agent_and_user_scopes_share_no_memo_pool_or_stats() -> None:
+    agent = usage_router.get_agent_scope(
+        get_usage_memo(), get_usage_executor(), get_agent_read_stats()
+    )
+    user = usage_router.get_user_scope(
+        get_user_usage_memo(), get_user_usage_executor(), get_user_read_stats()
+    )
+
+    assert agent.rollup is not user.rollup
+    assert agent.memo is not user.memo
+    assert agent.executor is not user.executor
+    assert agent.stats is not user.stats
+
+
 def test_the_user_read_runs_on_the_user_pool(
     client: TestClient, fake_clickhouse: MagicMock
 ) -> None:

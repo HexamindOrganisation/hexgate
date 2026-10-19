@@ -6,6 +6,7 @@ import logging
 import time
 from collections.abc import Awaitable, Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Final
 
@@ -62,6 +63,33 @@ _USER_ID_TOO_LONG: Final = f"user_id is longer than {USER_ID_MAX_LENGTH} charact
 _USER_ID_NOT_UTF8: Final = "user_id is not valid UTF-8"
 
 
+@dataclass(frozen=True, slots=True)
+class UsageScope:
+    """One rollup with its own memo, pool and stats, so a burst on one scope
+    cannot queue or evict the other's reads (README G9)."""
+
+    rollup: UsageRollup
+    memo: UsageMemo
+    executor: ThreadPoolExecutor
+    stats: UsageReadStats
+
+
+def get_agent_scope(
+    memo: UsageMemo = Depends(get_usage_memo),
+    executor: ThreadPoolExecutor = Depends(get_usage_executor),
+    stats: UsageReadStats = Depends(get_agent_read_stats),
+) -> UsageScope:
+    return UsageScope(AGENT_ROLLUP, memo, executor, stats)
+
+
+def get_user_scope(
+    memo: UsageMemo = Depends(get_user_usage_memo),
+    executor: ThreadPoolExecutor = Depends(get_user_usage_executor),
+    stats: UsageReadStats = Depends(get_user_read_stats),
+) -> UsageScope:
+    return UsageScope(USER_ROLLUP, memo, executor, stats)
+
+
 class UsageRead(BaseModel):
     """``values`` is keyed by the paths as requested."""
 
@@ -87,9 +115,7 @@ async def api_get_agent_usage(
     project_id: str = Depends(require_project),
     session: AsyncSession = Depends(get_session),
     get_client: Callable[[], Client] = Depends(clickhouse_getter),
-    memo: UsageMemo = Depends(get_usage_memo),
-    executor: ThreadPoolExecutor = Depends(get_usage_executor),
-    stats: UsageReadStats = Depends(get_agent_read_stats),
+    scope: UsageScope = Depends(get_agent_scope),
 ) -> UsageRead:
     """SDK read of agent_usage.* for the bearer's project. 404 if the agent isn't
     registered there, 422 on a bad path, 503 when ClickHouse is unavailable."""
@@ -102,14 +128,11 @@ async def api_get_agent_usage(
     await session.rollback()
 
     read = await _read_windows(
-        rollup=AGENT_ROLLUP,
+        scope,
         project_id=project_id,
         key=name,
         requested=requested,
         get_client=get_client,
-        memo=memo,
-        executor=executor,
-        stats=stats,
         failure_subject=f"agent {name!r} in project {project_id}",
     )
     response.headers["Cache-Control"] = CACHE_CONTROL
@@ -122,9 +145,7 @@ async def api_read_user_usage(
     response: Response,
     project_id: str = Depends(require_project),
     get_client: Callable[[], Client] = Depends(clickhouse_getter),
-    memo: UsageMemo = Depends(get_user_usage_memo),
-    executor: ThreadPoolExecutor = Depends(get_user_usage_executor),
-    stats: UsageReadStats = Depends(get_user_read_stats),
+    scope: UsageScope = Depends(get_user_scope),
 ) -> UsageRead:
     """SDK read of user_usage.* for the bearer's project, summed over every agent.
     A user with no activity reads zeros (there is no user registry, and a 404 would
@@ -134,14 +155,11 @@ async def api_read_user_usage(
     requested = _parse_or_422(parse_usage_path_list, query.paths)
 
     read = await _read_windows(
-        rollup=USER_ROLLUP,
+        scope,
         project_id=project_id,
         key=query.user_id,
         requested=requested,
         get_client=get_client,
-        memo=memo,
-        executor=executor,
-        stats=stats,
         failure_subject=f"a user in project {project_id}",
     )
     response.headers["Cache-Control"] = USER_USAGE_CACHE_CONTROL
@@ -178,15 +196,12 @@ def _unprocessable(detail: str) -> HTTPException:
 
 
 async def _read_windows(
+    scope: UsageScope,
     *,
-    rollup: UsageRollup,
     project_id: str,
     key: str,
     requested: Mapping[str, UsageWindowSpec],
     get_client: Callable[[], Client],
-    memo: UsageMemo,
-    executor: ThreadPoolExecutor,
-    stats: UsageReadStats,
     failure_subject: str,
 ) -> UsageRead:
     specs = tuple(sorted(set(requested.values())))
@@ -199,7 +214,13 @@ async def _read_windows(
         # memoized) rather than releasing one caller.
         return asyncio.wait_for(
             asyncio.get_running_loop().run_in_executor(
-                executor, _connect_and_read, get_client, rollup, project_id, key, specs
+                scope.executor,
+                _connect_and_read,
+                get_client,
+                scope.rollup,
+                project_id,
+                key,
+                specs,
             ),
             timeout=USAGE_READ_TIMEOUT_SECONDS,
         )
@@ -207,7 +228,7 @@ async def _read_windows(
     started = time.perf_counter()
     failed = True
     try:
-        readout = await memo.get_or_load((project_id, key, specs), load)
+        readout = await scope.memo.get_or_load((project_id, key, specs), load)
         failed = False
     except (ClickHouseError, TimeoutError) as exc:
         # The class and the numeric server code only: a ClickHouse message can
@@ -220,7 +241,7 @@ async def _read_windows(
         )
         raise clickhouse_unavailable(_USAGE_UNAVAILABLE) from exc
     finally:
-        stats.record(
+        scope.stats.record(
             latency_seconds=time.perf_counter() - started,
             queried=queried,
             failed=failed,
