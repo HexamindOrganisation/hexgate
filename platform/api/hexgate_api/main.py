@@ -37,6 +37,7 @@ from hexgate_api.features.projects.router import router as projects_router
 from hexgate_api.features.tokens.router import router as tokens_router
 from hexgate_api.features.usage.router import router as usage_router
 from hexgate_api.features.usage.service import verify_schema as verify_usage_schema
+from hexgate_api.features.usage.stats import configure_usage_logging
 
 # Load .env into os.environ before any HEXGATE_* read (CORS resolves at import
 # time). Real env vars still take precedence.
@@ -142,6 +143,7 @@ def _build_v1_router() -> APIRouter:
 
 @asynccontextmanager
 async def lifespan(app_: FastAPI):
+    configure_usage_logging()
     await init_db()
     keystore.ensure_keypair()
     # OAuth router mounting waits on the keystore — its state-token secret is

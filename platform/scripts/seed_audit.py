@@ -1454,6 +1454,7 @@ def seed(
 
 
 USAGE_MINUTE_TABLE = "usage_minute"
+USAGE_MINUTE_USER_TABLE = "usage_minute_user"
 USAGE_MINUTE_BACKFILL = (
     Path(__file__).parent.parent / "clickhouse/backfills/0005_usage_minute.sql"
 )
@@ -1467,10 +1468,12 @@ def clear(client: Client, project_id: str) -> None:
 
     Scoped to SEED_USER_IDS, so real audit rows are untouched. The transcripts go
     with the decisions they explain — leaving them behind would make the
-    drawer show a conversation for a decision that no longer exists. A table
-    that predates its migration holds no seed rows, so it is skipped.
+    drawer show a conversation for a decision that no longer exists. The
+    per-user rollup is keyed by user_id, so its seed rows are deleted under the
+    same filter rather than rebuilt. A table that predates its migration holds
+    no seed rows, so it is skipped.
     """
-    for table in ("policy_decision", LLM_MESSAGE_TABLE):
+    for table in ("policy_decision", LLM_MESSAGE_TABLE, USAGE_MINUTE_USER_TABLE):
         if not _table_exists(client, table):
             continue
         client.command(
