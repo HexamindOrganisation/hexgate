@@ -20,7 +20,7 @@ import os
 import urllib.error
 import urllib.parse
 import urllib.request
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, cast
 
@@ -42,6 +42,9 @@ DEFAULT_TIMEOUT = 10.0
 DEFAULT_REFRESH_TIMEOUT = 2.0
 TOKEN_PREFIX = "fty_"
 _USAGE_PATHS_PARAM = "paths"
+_USER_USAGE_URL_PATH = "/v1/usage/users:read"
+_USER_ID_FIELD = "user_id"
+_JSON_CONTENT_TYPE = "application/json"
 
 
 class HexgateError(RuntimeError):
@@ -223,6 +226,18 @@ class HexgateClient:
         url = f"{self.config.base_url}/v1/agents/{quoted}/usage?{query}"
         return self._get(url, timeout=self.refresh_timeout)
 
+    def read_user_usage(self, user_id: str, paths: Sequence[str]) -> dict[str, Any]:
+        """Fetch ``user_usage.*`` values for one end user (project from the bearer).
+
+        ``user_id`` goes in the body, never the URL: it is often an email, and URLs
+        reach access logs. Bounded by ``refresh_timeout``, as for agents."""
+        self._ensure_key_verified(timeout=self.refresh_timeout)
+        return self._post_json(
+            f"{self.config.base_url}{_USER_USAGE_URL_PATH}",
+            {_USER_ID_FIELD: user_id, _USAGE_PATHS_PARAM: list(paths)},
+            timeout=self.refresh_timeout,
+        )
+
     # ------------------------------------------------------------------
     # Biscuit verification
     # ------------------------------------------------------------------
@@ -338,12 +353,7 @@ class HexgateClient:
         through here so tests have one place to mock and the ETag-aware
         refresh path doesn't duplicate the urllib dance.
         """
-        headers: dict[str, str] = {
-            "Accept": "application/json",
-            "User-Agent": "hexgate-sdk/0.1",
-        }
-        if authorize:
-            headers["Authorization"] = f"Bearer {self.config.api_key}"
+        headers = self._headers(authorize=authorize)
         if if_none_match is not None:
             headers["If-None-Match"] = if_none_match
         # Conditional GETs run on the per-turn hot path and fall back to
@@ -355,6 +365,40 @@ class HexgateClient:
                 self.refresh_timeout if if_none_match is not None else self.timeout
             )
         request = urllib.request.Request(url, headers=headers)
+        return self._send(request, timeout=timeout, if_none_match=if_none_match)
+
+    def _post_json(
+        self, url: str, body: Mapping[str, Any], *, timeout: float
+    ) -> dict[str, Any]:
+        headers = self._headers(authorize=True)
+        headers["Content-Type"] = _JSON_CONTENT_TYPE
+        request = urllib.request.Request(
+            url, data=json.dumps(body).encode(), headers=headers, method="POST"
+        )
+        payload, _ = self._send(request, timeout=timeout)
+        if payload is None:
+            # Invariant: a 304 needs If-None-Match, which a POST never sends.
+            # Raise so `python -O` can't strip the check.
+            raise HexgateError(f"POST {url!r} returned no payload")
+        return payload
+
+    def _headers(self, *, authorize: bool) -> dict[str, str]:
+        headers: dict[str, str] = {
+            "Accept": "application/json",
+            "User-Agent": "hexgate-sdk/0.1",
+        }
+        if authorize:
+            headers["Authorization"] = f"Bearer {self.config.api_key}"
+        return headers
+
+    def _send(
+        self,
+        request: urllib.request.Request,
+        *,
+        timeout: float,
+        if_none_match: str | None = None,
+    ) -> tuple[dict[str, Any] | None, str | None]:
+        url = request.full_url
         try:
             with urllib.request.urlopen(request, timeout=timeout) as response:
                 etag = response.headers.get("ETag")

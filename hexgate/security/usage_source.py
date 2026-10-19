@@ -1,11 +1,13 @@
-"""The platform term of the usage namespaces (``agent_usage.*`` today).
+"""The platform term of the usage namespaces (``agent_usage.*`` and ``user_usage.*``).
 
 Keeps one snapshot per usage scope, fetched by that scope kind's fetcher (an agent's
-is ``GET /v1/agents/{name}/usage``), refreshed stale-while-revalidate, and combines
-it with the process-local ledger into the namespace a decision reads. Shared per
-``(api_key, base_url)`` like :class:`~hexgate.security.bans.PlatformBanSource`, and
-fail-soft: a platform blip degrades to ledger-only values by default, never to an
-error. Inert until the run boundary calls it.
+is ``GET /v1/agents/{name}/usage``, a user's ``POST /v1/usage/users:read``), refreshed
+stale-while-revalidate, and combines it with the process-local ledger into the
+namespace a decision reads. Shared per ``(api_key, base_url)`` like
+:class:`~hexgate.security.bans.PlatformBanSource`, and fail-soft: a platform blip
+degrades to ledger-only values by default, never to an error. User states are held
+in an LRU (``HEXGATE_USAGE_USER_CACHE``) and back off together, and log lines print a
+user as a fingerprint. Inert until the run boundary calls it.
 """
 
 from __future__ import annotations
@@ -14,9 +16,10 @@ import asyncio
 import logging
 import os
 import threading
+from collections import OrderedDict
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import Executor, ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum, StrEnum, auto
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
@@ -32,6 +35,7 @@ from hexgate.runtime.agent_usage import (
     _monotonic,
     combined_namespace,
     ledger_namespace,
+    user_cache_size_from_env,
 )
 from hexgate.security.source import _LOCAL_POLICY_ENV_VAR
 from hexgate.tracing._senders import _local_mode_active
@@ -52,11 +56,37 @@ DEFAULT_MIN_REFRESH_SECONDS: Final[float] = 5.0
 DEFAULT_SYNC_AFTER_SECONDS: Final[float] = 60.0
 DEFAULT_MAX_STALENESS_SECONDS: Final[float] = 300.0
 
+# Users come and go, so a background refresh every 5 s buys nothing; the sync and
+# staleness thresholds are the agents'.
+DEFAULT_USER_MIN_REFRESH_SECONDS: Final[float] = 30.0
+
+# The platform's read and ingest cap on user_id, in characters, not bytes.
+USER_ID_MAX_LENGTH: Final = 256
+_USER_ID_ENCODING: Final = "utf-8"
+
 _VALUES_KEY: Final = "values"
 _NOT_FOUND: Final = 404
+_UNPROCESSABLE: Final = 422
 # Answers a retry won't change soon: unregistered scope, bad or unscoped key.
 _REJECTED_STATUSES: Final = frozenset({401, 403, _NOT_FOUND})
 REJECTED_RETRY_SECONDS: Final[float] = 300.0
+
+# User log lines carry the fingerprinted scope, the exception class and the
+# status, never the exception's message.
+_KIND_PAUSED_MESSAGE: Final = (
+    "usage refresh for %s failed (%s, status %s); "
+    "pausing every %s refresh for %.0f s, using last-good"
+)
+_SCOPE_REFUSED_MESSAGE: Final = (
+    "usage read for %s refused (status %s); not retrying it for a while"
+)
+_ROUTE_MISSING_MESSAGE: Final = (
+    "this platform has no %s usage read; user_usage.* reads local usage only"
+)
+_KEY_UNREADABLE_MESSAGE: Final = (
+    f"%s is not a key the platform can read (over {USER_ID_MAX_LENGTH} characters "
+    "or not valid UTF-8), so it is never sent; such keys read as unavailable"
+)
 _EXECUTOR_THREAD_PREFIX: Final = "hexgate-usage"
 # Single-flight per scope already, so workers only keep one slow scope from
 # delaying another's refresh.
@@ -106,24 +136,67 @@ class UsageRefreshSettings:
             )
 
     @classmethod
-    def from_env(cls, environ: Mapping[str, str] = os.environ) -> UsageRefreshSettings:
-        """Read the thresholds from ``HEXGATE_USAGE_*``. A bad value logs and falls
-        back to the defaults: it runs at the run boundary and must not stop agents."""
+    def from_env(
+        cls,
+        environ: Mapping[str, str] = os.environ,
+        *,
+        env: RefreshEnv | None = None,
+        defaults: UsageRefreshSettings | None = None,
+    ) -> UsageRefreshSettings:
+        """Read the thresholds from ``env`` (the agents' ``HEXGATE_USAGE_*`` when
+        omitted). A bad value logs and falls back to ``defaults``: it runs at the
+        run boundary and must not stop agents."""
+        env = AGENT_REFRESH_ENV if env is None else env
+        defaults = cls() if defaults is None else defaults
         try:
             return cls(
                 min_refresh_seconds=float(
-                    environ.get(_MIN_REFRESH_ENV, DEFAULT_MIN_REFRESH_SECONDS)
+                    environ.get(env.min_refresh, defaults.min_refresh_seconds)
                 ),
                 sync_after_seconds=float(
-                    environ.get(_SYNC_AFTER_ENV, DEFAULT_SYNC_AFTER_SECONDS)
+                    environ.get(env.sync_after, defaults.sync_after_seconds)
                 ),
                 max_staleness_seconds=float(
-                    environ.get(_MAX_STALENESS_ENV, DEFAULT_MAX_STALENESS_SECONDS)
+                    environ.get(env.max_staleness, defaults.max_staleness_seconds)
                 ),
             )
         except ValueError as exc:
             logger.warning("ignoring usage refresh settings, using defaults: %s", exc)
-            return cls()
+            return defaults
+
+
+@dataclass(frozen=True, slots=True)
+class RefreshEnv:
+    """The variables one scope kind's thresholds are read from."""
+
+    min_refresh: str
+    sync_after: str
+    max_staleness: str
+
+
+AGENT_REFRESH_ENV: Final = RefreshEnv(
+    _MIN_REFRESH_ENV, _SYNC_AFTER_ENV, _MAX_STALENESS_ENV
+)
+USER_REFRESH_ENV: Final = RefreshEnv(
+    "HEXGATE_USAGE_USER_REFRESH_SECONDS",
+    "HEXGATE_USAGE_USER_SYNC_AFTER_SECONDS",
+    "HEXGATE_USAGE_USER_MAX_STALENESS_SECONDS",
+)
+USER_REFRESH_DEFAULTS: Final = UsageRefreshSettings(
+    min_refresh_seconds=DEFAULT_USER_MIN_REFRESH_SECONDS
+)
+
+
+def user_id_is_readable(user_id: str) -> bool:
+    """Whether the platform's user read accepts ``user_id``. A refused one is a
+    422 per run that teaches nothing, so it is never sent."""
+    if len(user_id) > USER_ID_MAX_LENGTH:
+        return False
+    try:
+        user_id.encode(_USER_ID_ENCODING)
+    except UnicodeEncodeError:  # a lone surrogate
+        return False
+    return True
 
 
 class UsageContentError(RuntimeError):
@@ -157,10 +230,76 @@ class _Tier(Enum):
     SYNC = auto()
 
 
+class _Notice(StrEnum):
+    """What a kind reports once per source, however many scopes hit it."""
+
+    ROUTE_MISSING = auto()
+    KEY_UNREADABLE = auto()
+
+
 @dataclass(frozen=True, slots=True)
 class _Attempt:
     at: float
     paths: frozenset[str]
+
+
+def _any_key(_key: str) -> bool:
+    return True
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeKindSpec:
+    """How the source fetches and keeps one scope kind."""
+
+    fetch: ScopeFetcher
+    settings: UsageRefreshSettings
+    # None keeps every scope for good: a process has a handful of agents.
+    capacity: int | None = None
+    # When most fetches are for a key never seen before, a per-scope pause never
+    # kicks in, so one failure pauses the whole kind.
+    shared_backoff: bool = False
+    # Keys the platform would refuse are never sent: they read UNAVAILABLE.
+    accepts: Callable[[str], bool] = _any_key
+
+
+@dataclass(slots=True, eq=False)
+class _ScopeState:
+    """Everything the source knows about one scope. Mutated under the source's
+    state lock, except ``fetch_lock``, which serialises this scope's fetches."""
+
+    fetch_lock: threading.Lock = field(default_factory=threading.Lock)
+    snapshot: UsageSnapshot | None = None
+    # Every path any caller has asked for, read when a fetch runs, so callers
+    # wanting different paths share one snapshot instead of evicting each other.
+    wanted: frozenset[str] = frozenset()
+    last_attempt: _Attempt | None = None
+    rejected_until: float = float("-inf")
+
+
+class _ScopeTable:
+    """One kind's scope states. A bounded table drops its least recently used
+    scope past capacity. Called under the source's state lock only."""
+
+    def __init__(self, capacity: int | None) -> None:
+        self._capacity = capacity
+        self._states: OrderedDict[UsageScope, _ScopeState] = OrderedDict()
+
+    def __len__(self) -> int:
+        return len(self._states)
+
+    def get(self, scope: UsageScope) -> _ScopeState | None:
+        return self._states.get(scope)
+
+    def touch(self, scope: UsageScope) -> _ScopeState:
+        """``scope``'s state, created if new, now the most recently used."""
+        state = self._states.get(scope)
+        if state is None:
+            state = self._states[scope] = _ScopeState()
+            if self._capacity is not None and len(self._states) > self._capacity:
+                self._states.popitem(last=False)
+        else:
+            self._states.move_to_end(scope)
+        return state
 
 
 class PlatformUsageSource:
@@ -168,48 +307,47 @@ class PlatformUsageSource:
 
     ``refresh`` may block on one bounded fetch when the snapshot is cold or older
     than ``sync_after``; otherwise it schedules at most one background fetch per
-    scope. ``read`` never touches the network. Fetches keep last-good on failure,
-    and a failed one is not retried within ``min_refresh`` unless the path set grew;
-    a 401, 403 or 404 is not retried within ``REJECTED_RETRY_SECONDS`` at all.
-    A scope whose kind has no fetcher never fetches, so it reads ``UNAVAILABLE``.
+    scope. ``read`` never touches the network. Fetches keep last-good on failure.
+
+    Each kind has its own thresholds. An agent's failed fetch is not retried within
+    ``min_refresh`` unless the path set grew, and a 401, 403 or 404 is not retried
+    within ``REJECTED_RETRY_SECONDS`` at all. Users come and go, so their states sit
+    in an LRU, and one user's failure pauses every user's fetch (a 422 rejects that
+    user only). A user ID the platform would refuse is never sent. A scope whose
+    kind has no spec never fetches, so it reads ``UNAVAILABLE``. Log lines print a
+    user scope as a fingerprint, and never a user failure's message.
     """
 
     def __init__(
         self,
-        fetchers: Mapping[UsageScopeKind, ScopeFetcher],
+        kinds: Mapping[UsageScopeKind, ScopeKindSpec],
         executor: Executor,
-        settings: UsageRefreshSettings,
         clock: Clock,
     ) -> None:
-        self._fetchers = dict(fetchers)
+        self._kinds = dict(kinds)
         self._executor = executor
-        self._settings = settings
         self._clock = clock
-        # Held only for dict reads and writes, never across HTTP.
+        # Held only for state reads and writes, never across HTTP.
         self._state_lock = threading.Lock()
-        self._snapshots: dict[UsageScope, UsageSnapshot] = {}
-        # Every path any caller has asked for, read when a fetch runs, so callers
-        # wanting different paths share one snapshot instead of evicting each other.
-        self._wanted: dict[UsageScope, frozenset[str]] = {}
-        self._last_attempt: dict[UsageScope, _Attempt] = {}
-        self._rejected_until: dict[UsageScope, float] = {}
+        self._tables: dict[UsageScopeKind, _ScopeTable] = {
+            kind: _ScopeTable(spec.capacity) for kind, spec in self._kinds.items()
+        }
+        self._paused_until: dict[UsageScopeKind, float] = {}
         self._in_flight: set[UsageScope] = set()
-        self._unregistered_logged: set[UsageScope] = set()
-        # Per scope, so a sync fetch for one scope never waits on another's.
-        self._fetch_locks: dict[UsageScope, threading.Lock] = {}
+        self._reported: set[UsageScope | tuple[UsageScopeKind, _Notice]] = set()
 
     def refresh(self, scope: UsageScope, paths: frozenset[str]) -> None:
-        tier = self._tier(scope, paths)
+        state, tier = self._tier(scope, paths)
         if tier is _Tier.SYNC:
-            self._fetch_now(scope)
+            self._fetch_now(scope, state)
         elif tier is _Tier.BACKGROUND:
             self._schedule(scope)
 
     async def refresh_async(self, scope: UsageScope, paths: frozenset[str]) -> None:
         """As :meth:`refresh`; only the synchronous fetch leaves the loop."""
-        tier = self._tier(scope, paths)
+        state, tier = self._tier(scope, paths)
         if tier is _Tier.SYNC:
-            await asyncio.to_thread(self._fetch_now, scope)
+            await asyncio.to_thread(self._fetch_now, scope, state)
         elif tier is _Tier.BACKGROUND:
             self._schedule(scope)
 
@@ -224,16 +362,19 @@ class PlatformUsageSource:
     ) -> UsageReading:
         """The usage namespace for ``paths``. Anything short of ``FRESH`` asks for
         a background refresh, so a long run heals its own snapshot. The ask is
-        dropped for a kind with no fetcher, while one is in flight, or while the
+        dropped for a kind with no spec, while one is in flight, or while the
         scope is throttled."""
-        snapshot = self._remember(scope, paths)
+        state = self._remember(scope, paths)
+        snapshot = None if state is None else state.snapshot
+        settings = self._kinds[scope.kind].settings if state is not None else None
         if (
             snapshot is not None
+            and settings is not None
             and (age := self._clock() - snapshot.fetched_at)
-            < self._settings.max_staleness_seconds
+            < settings.max_staleness_seconds
         ):
             reading = self._combine(
-                snapshot, age, paths, ledger, on_unavailable, current_run_age
+                snapshot, age, settings, paths, ledger, on_unavailable, current_run_age
             )
         else:
             reading = UsageReading(
@@ -248,6 +389,7 @@ class PlatformUsageSource:
         self,
         snapshot: UsageSnapshot,
         age: float,
+        settings: UsageRefreshSettings,
         paths: frozenset[str],
         ledger: UsageLedger,
         on_unavailable: OnUnavailable,
@@ -270,140 +412,223 @@ class PlatformUsageSource:
                 _fallback(ledger, missing, on_unavailable, current_run_age) or {}
             )
             state = UsageState.PARTIAL
-        elif age >= self._settings.sync_after_seconds:
+        elif age >= settings.sync_after_seconds:
             state = UsageState.STALE
         else:
             state = UsageState.FRESH
         return UsageReading(namespace, state)
 
-    def _remember(
-        self, scope: UsageScope, paths: frozenset[str]
-    ) -> UsageSnapshot | None:
+    def _remember(self, scope: UsageScope, paths: frozenset[str]) -> _ScopeState | None:
+        """``scope``'s state, now the most recently used, with ``paths`` wanted.
+        ``None``, and nothing kept, for a scope the source never fetches."""
+        if not self._fetchable(scope):
+            if scope.kind in self._kinds:
+                self._report_once(
+                    scope.kind, _Notice.KEY_UNREADABLE, _KEY_UNREADABLE_MESSAGE, scope
+                )
+            return None
         with self._state_lock:
-            if paths:
-                self._wanted[scope] = self._wanted.get(scope, frozenset()) | paths
-            return self._snapshots.get(scope)
+            state = self._tables[scope.kind].touch(scope)
+            state.wanted |= paths
+            return state
 
     def _fetchable(self, scope: UsageScope) -> bool:
-        return scope.kind in self._fetchers
+        spec = self._kinds.get(scope.kind)
+        return spec is not None and spec.accepts(scope.key)
 
-    def _tier(self, scope: UsageScope, paths: frozenset[str]) -> _Tier:
-        if not paths or not self._fetchable(scope):
-            return _Tier.NONE
-        snapshot = self._remember(scope, paths)
+    def _tier(
+        self, scope: UsageScope, paths: frozenset[str]
+    ) -> tuple[_ScopeState | None, _Tier]:
+        if not paths:
+            return None, _Tier.NONE
+        state = self._remember(scope, paths)
+        if state is None:
+            return None, _Tier.NONE
+        with self._state_lock:
+            # A cold user during a pause doesn't even leave the loop.
+            if self._kind_paused_locked(scope.kind):
+                return state, _Tier.NONE
+            snapshot = state.snapshot
+        settings = self._kinds[scope.kind].settings
         if snapshot is None:
-            return _Tier.SYNC
+            return state, _Tier.SYNC
         age = self._clock() - snapshot.fetched_at
-        if age >= self._settings.sync_after_seconds:
-            return _Tier.SYNC
+        if age >= settings.sync_after_seconds:
+            return state, _Tier.SYNC
         # A new path never blocks the run: it reads ledger-only until this lands (F5).
-        if (
-            not paths <= snapshot.values.keys()
-            or age >= self._settings.min_refresh_seconds
-        ):
-            return _Tier.BACKGROUND
-        return _Tier.NONE
+        if not paths <= snapshot.values.keys() or age >= settings.min_refresh_seconds:
+            return state, _Tier.BACKGROUND
+        return state, _Tier.NONE
 
-    def _fetch_now(self, scope: UsageScope) -> None:
-        with self._fetch_lock(scope):
-            if self._throttled(scope) or self._covered(scope):
+    def _fetch_now(self, scope: UsageScope, state: _ScopeState | None) -> None:
+        if state is None:
+            return
+        with state.fetch_lock:
+            if self._throttled(scope, state) or self._covered(scope, state):
                 return
-            self._fetch(scope)
+            self._fetch(scope, state)
 
     def _schedule(self, scope: UsageScope) -> None:
         if not self._fetchable(scope):
             return
         with self._state_lock:
-            if scope in self._in_flight or self._throttled_locked(scope):
+            state = self._tables[scope.kind].get(scope)
+            if (
+                state is None
+                or scope in self._in_flight
+                or self._throttled_locked(scope, state)
+            ):
                 return
             self._in_flight.add(scope)
         try:
-            future = self._executor.submit(self._fetch_in_background, scope)
+            # The state, not the key: a job outliving its scope's eviction writes
+            # to the orphan, which is never re-inserted.
+            future = self._executor.submit(self._fetch_in_background, scope, state)
         except RuntimeError as exc:  # executor shut down at interpreter exit
             logger.debug("usage refresh for %s not scheduled: %s", scope, exc)
             self._finish(scope)
             return
         future.add_done_callback(lambda _done: self._finish(scope))
 
-    def _fetch_in_background(self, scope: UsageScope) -> None:
-        with self._fetch_lock(scope):
-            if not self._throttled(scope):
-                self._fetch(scope)
+    def _fetch_in_background(self, scope: UsageScope, state: _ScopeState) -> None:
+        with state.fetch_lock:
+            if not self._throttled(scope, state):
+                self._fetch(scope, state)
 
     def _finish(self, scope: UsageScope) -> None:
         with self._state_lock:
             self._in_flight.discard(scope)
 
-    def _fetch(self, scope: UsageScope) -> None:
-        """One fetch under ``scope``'s fetch lock. Never raises: last-good stays."""
+    def _fetch(self, scope: UsageScope, state: _ScopeState) -> None:
+        """One fetch under ``state``'s fetch lock. Never raises: last-good stays."""
+        spec = self._kinds[scope.kind]
         with self._state_lock:
-            wanted = self._wanted.get(scope, frozenset())
+            wanted = state.wanted
             started = self._clock()
-            self._last_attempt[scope] = _Attempt(started, wanted)
+            state.last_attempt = _Attempt(started, wanted)
         if not wanted:
             return
         try:
-            payload = self._fetchers[scope.kind](scope.key, sorted(wanted))
+            payload = spec.fetch(scope.key, sorted(wanted))
             values = usage_values_from_payload(payload, wanted)
-        except UsageContentError as exc:
-            logger.error("usage body for %s rejected; using last-good: %s", scope, exc)
-            return
         except Exception as exc:  # noqa: BLE001 — fail-soft: keep last-good
-            status = exc.status if isinstance(exc, HexgateError) else None
-            if status in _REJECTED_STATUSES:
-                with self._state_lock:
-                    self._rejected_until[scope] = started + REJECTED_RETRY_SECONDS
-            if status == _NOT_FOUND:
-                self._log_unregistered(scope)
+            if spec.shared_backoff:
+                self._pause_kind(scope, state, spec.settings, started, exc)
             else:
-                logger.warning(
-                    "usage refresh for %s failed; using last-good: %s", scope, exc
-                )
+                self._back_off_scope(scope, state, started, exc)
             return
         with self._state_lock:
-            self._snapshots[scope] = UsageSnapshot(MappingProxyType(values), started)
+            state.snapshot = UsageSnapshot(MappingProxyType(values), started)
+
+    def _back_off_scope(
+        self, scope: UsageScope, state: _ScopeState, started: float, exc: Exception
+    ) -> None:
+        if isinstance(exc, UsageContentError):
+            logger.error("usage body for %s rejected; using last-good: %s", scope, exc)
+            return
+        status = exc.status if isinstance(exc, HexgateError) else None
+        if status in _REJECTED_STATUSES:
+            with self._state_lock:
+                state.rejected_until = started + REJECTED_RETRY_SECONDS
+        if status == _NOT_FOUND:
+            self._log_unregistered(scope)
+        else:
+            logger.warning(
+                "usage refresh for %s failed; using last-good: %s", scope, exc
+            )
+
+    def _pause_kind(
+        self,
+        scope: UsageScope,
+        state: _ScopeState,
+        settings: UsageRefreshSettings,
+        started: float,
+        exc: Exception,
+    ) -> None:
+        """Back off a kind whose scopes are mostly cold. Logs the exception class
+        and status, never its message: that may carry the key."""
+        status = exc.status if isinstance(exc, HexgateError) else None
+        if status == _UNPROCESSABLE:
+            # The platform refused this key, not the kind.
+            with self._state_lock:
+                state.rejected_until = started + REJECTED_RETRY_SECONDS
+            logger.warning(_SCOPE_REFUSED_MESSAGE, scope, status)
+            return
+        seconds = (
+            REJECTED_RETRY_SECONDS
+            if status in _REJECTED_STATUSES
+            else settings.min_refresh_seconds
+        )
+        with self._state_lock:
+            began = not self._kind_paused_locked(scope.kind)
+            self._paused_until[scope.kind] = max(
+                self._paused_until.get(scope.kind, float("-inf")), started + seconds
+            )
+        if status == _NOT_FOUND:
+            self._report_once(
+                scope.kind, _Notice.ROUTE_MISSING, _ROUTE_MISSING_MESSAGE, scope.kind
+            )
+        elif began:
+            logger.warning(
+                _KIND_PAUSED_MESSAGE,
+                scope,
+                type(exc).__name__,
+                status,
+                scope.kind,
+                seconds,
+            )
+
+    def _report_once(
+        self, kind: UsageScopeKind, notice: _Notice, message: str, *args: object
+    ) -> None:
+        with self._state_lock:
+            if (kind, notice) in self._reported:
+                return
+            self._reported.add((kind, notice))
+        logger.warning(message, *args)
 
     def _log_unregistered(self, scope: UsageScope) -> None:
         # Otherwise it reads as an outage forever, so say what it is, once.
         with self._state_lock:
-            if scope in self._unregistered_logged:
+            if scope in self._reported:
                 return
-            self._unregistered_logged.add(scope)
+            self._reported.add(scope)
         logger.warning(
             "%s is not registered in this API key's project; "
             "agent_usage.* reads local usage only",
             scope,
         )
 
-    def _throttled(self, scope: UsageScope) -> bool:
-        with self._state_lock:
-            return self._throttled_locked(scope)
+    def _kind_paused_locked(self, kind: UsageScopeKind) -> bool:
+        return self._clock() < self._paused_until.get(kind, float("-inf"))
 
-    def _throttled_locked(self, scope: UsageScope) -> bool:
+    def _throttled(self, scope: UsageScope, state: _ScopeState) -> bool:
+        with self._state_lock:
+            return self._throttled_locked(scope, state)
+
+    def _throttled_locked(self, scope: UsageScope, state: _ScopeState) -> bool:
         # A new path does not lift a rejection: the platform refuses the scope.
-        if self._clock() < self._rejected_until.get(scope, float("-inf")):
+        if self._kind_paused_locked(scope.kind) or self._clock() < state.rejected_until:
             return True
-        last = self._last_attempt.get(scope)
+        last = state.last_attempt
+        min_refresh = self._kinds[scope.kind].settings.min_refresh_seconds
         return (
             last is not None
-            and self._clock() - last.at < self._settings.min_refresh_seconds
-            and self._wanted.get(scope, frozenset()) <= last.paths
+            and self._clock() - last.at < min_refresh
+            and state.wanted <= last.paths
         )
 
-    def _covered(self, scope: UsageScope) -> bool:
+    def _covered(self, scope: UsageScope, state: _ScopeState) -> bool:
         """Another fetch finished while this one waited for the lock."""
         with self._state_lock:
-            snapshot = self._snapshots.get(scope)
-            wanted = self._wanted.get(scope, frozenset())
+            snapshot = state.snapshot
+            wanted = state.wanted
+        sync_after = self._kinds[scope.kind].settings.sync_after_seconds
         return (
             snapshot is not None
-            and self._clock() - snapshot.fetched_at < self._settings.sync_after_seconds
+            and self._clock() - snapshot.fetched_at < sync_after
             and wanted <= snapshot.values.keys()
         )
-
-    def _fetch_lock(self, scope: UsageScope) -> threading.Lock:
-        with self._state_lock:
-            return self._fetch_locks.setdefault(scope, threading.Lock())
 
 
 def _fallback(
@@ -452,12 +677,24 @@ def get_usage_source(api_key: str, client: HexgateClient) -> PlatformUsageSource
         source = _usage_sources.get(cache_key)
         if source is None:
             source = _usage_sources[cache_key] = PlatformUsageSource(
-                fetchers={UsageScopeKind.AGENT: client.get_agent_usage},
+                kinds={
+                    UsageScopeKind.AGENT: ScopeKindSpec(
+                        client.get_agent_usage, UsageRefreshSettings.from_env()
+                    ),
+                    UsageScopeKind.USER: ScopeKindSpec(
+                        client.read_user_usage,
+                        UsageRefreshSettings.from_env(
+                            env=USER_REFRESH_ENV, defaults=USER_REFRESH_DEFAULTS
+                        ),
+                        capacity=user_cache_size_from_env(),
+                        shared_backoff=True,
+                        accepts=user_id_is_readable,
+                    ),
+                },
                 executor=ThreadPoolExecutor(
                     max_workers=_EXECUTOR_MAX_WORKERS,
                     thread_name_prefix=_EXECUTOR_THREAD_PREFIX,
                 ),
-                settings=UsageRefreshSettings.from_env(),
                 clock=_monotonic,
             )
         return source

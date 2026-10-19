@@ -28,6 +28,7 @@ from hexgate.security.usage_inputs import NO_USAGE, UsageInputs
 from hexgate.security.usage_source import (
     OnUnavailable,
     PlatformUsageSource,
+    ScopeKindSpec,
     UsageRefreshSettings,
     UsageState,
 )
@@ -329,9 +330,12 @@ class _Platform:
         self.fetcher = _FakeFetcher(values)
         self.ledgers = _ledgers(self.clock)
         self.source = PlatformUsageSource(
-            {UsageScopeKind.AGENT: self.fetcher.get_agent_usage},
+            {
+                UsageScopeKind.AGENT: ScopeKindSpec(
+                    self.fetcher.get_agent_usage, UsageRefreshSettings()
+                )
+            },
             _InlineExecutor(),
-            UsageRefreshSettings(),
             self.clock,
         )
 
@@ -472,7 +476,7 @@ def test_an_agent_usage_policy_enables_only_the_agent_scope() -> None:
     platform.boundary(enforcer)
     assert enforcer.decide(AGENT_RUN_TOOL, _ADMISSION_ARGS).allowed
 
-    assert {scope.kind for scope in platform.source._snapshots} == {
+    assert {kind for kind, table in platform.source._tables.items() if table} == {
         UsageScopeKind.AGENT
     }
 

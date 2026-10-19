@@ -88,6 +88,11 @@ KNOWN_ENV_VARS = {
     # Sizes the user usage ledgers, which stay off until a policy can reference
     # user_usage.*: document it with that namespace.
     "HEXGATE_USAGE_USER_CACHE",
+    # The user refresh thresholds, read by the platform usage source but inert
+    # until the run boundary refreshes user scopes: document them with that wiring.
+    "HEXGATE_USAGE_USER_MAX_STALENESS_SECONDS",
+    "HEXGATE_USAGE_USER_REFRESH_SECONDS",
+    "HEXGATE_USAGE_USER_SYNC_AFTER_SECONDS",
 }
 
 ENV_VAR = re.compile(r"HEXGATE_[A-Z0-9_]*[A-Z0-9]")

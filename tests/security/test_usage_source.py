@@ -8,6 +8,7 @@ gates pinned here fail silently in production: G3 (fail open by default), G4 / F
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import logging
 import threading
 from collections.abc import Callable, Iterator, Mapping, Sequence
@@ -20,6 +21,7 @@ import pytest
 
 from hexgate.cloud.client import HexgateError
 from hexgate.runtime.agent_usage import (
+    USER_CACHE_ENV,
     UsageLedger,
     UsageMetric,
     UsageScope,
@@ -31,10 +33,15 @@ from hexgate.security.usage_source import (
     DEFAULT_MAX_STALENESS_SECONDS,
     DEFAULT_MIN_REFRESH_SECONDS,
     DEFAULT_SYNC_AFTER_SECONDS,
+    DEFAULT_USER_MIN_REFRESH_SECONDS,
     REJECTED_RETRY_SECONDS,
     USAGE_INGEST_MARGIN_SECONDS,
+    USER_ID_MAX_LENGTH,
+    USER_REFRESH_DEFAULTS,
+    USER_REFRESH_ENV,
     OnUnavailable,
     PlatformUsageSource,
+    ScopeKindSpec,
     UsageContentError,
     UsageRefreshSettings,
     UsageState,
@@ -42,6 +49,7 @@ from hexgate.security.usage_source import (
     local_reading,
     resolve_usage_source,
     usage_values_from_payload,
+    user_id_is_readable,
 )
 from hexgate.tracing import _senders
 
@@ -65,6 +73,10 @@ _ENV_VARS = (
     "HEXGATE_USAGE_REFRESH_SECONDS",
     "HEXGATE_USAGE_SYNC_AFTER_SECONDS",
     "HEXGATE_USAGE_MAX_STALENESS_SECONDS",
+    USER_REFRESH_ENV.min_refresh,
+    USER_REFRESH_ENV.sync_after,
+    USER_REFRESH_ENV.max_staleness,
+    USER_CACHE_ENV,
     _senders._LOCAL_MODE_ENV,
 )
 
@@ -96,11 +108,16 @@ class _FakeFetcher:
         self.error: Exception | None = None
         self.body: Any = None
         self.advance = 0.0
+        # Runs inside the fetch, to model another fetch overlapping this one.
+        self.during: Callable[[str], None] | None = None
         self.calls: list[tuple[str, list[str], str]] = []
 
     def fetch(self, key: str, paths: Sequence[str]) -> dict[str, Any]:
         self.calls.append((key, list(paths), threading.current_thread().name))
         self.clock.now += self.advance
+        if self.during is not None:
+            during, self.during = self.during, None
+            during(key)
         if self.error is not None:
             raise self.error
         if self.body is not None:
@@ -162,16 +179,41 @@ def _rig(
     values: Mapping[str, int] = _PLATFORM_VALUES,
     *,
     fetch_users: bool = False,
+    user_settings: UsageRefreshSettings = _SETTINGS,
+    capacity: int | None = None,
+    shared_backoff: bool = False,
+    accepts: Callable[[str], bool] | None = None,
 ) -> _Rig:
     clock = _FakeClock()
     fetcher = _FakeFetcher(clock, values)
     user_fetcher = _FakeFetcher(clock, _USER_VALUES)
-    fetchers = {UsageScopeKind.AGENT: fetcher.fetch}
+    kinds = {UsageScopeKind.AGENT: ScopeKindSpec(fetcher.fetch, _SETTINGS)}
     if fetch_users:
-        fetchers[UsageScopeKind.USER] = user_fetcher.fetch
+        user_spec = ScopeKindSpec(
+            user_fetcher.fetch,
+            user_settings,
+            capacity=capacity,
+            shared_backoff=shared_backoff,
+        )
+        if accepts is not None:
+            user_spec = dataclasses.replace(user_spec, accepts=accepts)
+        kinds[UsageScopeKind.USER] = user_spec
     executor = executor if executor is not None else _InlineExecutor()
-    source = PlatformUsageSource(fetchers, executor, _SETTINGS, clock)
+    source = PlatformUsageSource(kinds, executor, clock)
     return _Rig(clock, fetcher, user_fetcher, source, new_usage_ledger(clock=clock))
+
+
+def _user_rig(executor: Executor | None = None, *, capacity: int = 2) -> _Rig:
+    """Users as the shared source keeps them: bounded, paused together, pre-checked,
+    refreshed at 30 / 60 / 300."""
+    return _rig(
+        executor,
+        fetch_users=True,
+        user_settings=USER_REFRESH_DEFAULTS,
+        capacity=capacity,
+        shared_backoff=True,
+        accepts=user_id_is_readable,
+    )
 
 
 def _seeded(
@@ -455,12 +497,14 @@ def test_any_fetch_error_is_swallowed() -> None:
 
 
 def test_the_snapshot_is_stamped_when_the_fetch_starts() -> None:
-    rig = _rig()
+    rig = _rig(_HeldExecutor())
     rig.fetcher.advance = 1.5
-
     rig.source.refresh(_SCOPE, _ONE_PATH)
 
-    assert rig.source._snapshots[_SCOPE].fetched_at == _START
+    # Age 60 from the start, 58.5 from the end: only a start stamp reads STALE.
+    rig.clock.now = _START + _SYNC_AFTER
+
+    assert rig.source.read(_SCOPE, _ONE_PATH, rig.ledger).state is UsageState.STALE
 
 
 # ---------------------------------------------------------------------------
@@ -756,6 +800,7 @@ def _client(base_url: str = "http://platform") -> Any:
     return SimpleNamespace(
         config=SimpleNamespace(base_url=base_url),
         get_agent_usage=lambda name, paths: {},
+        read_user_usage=lambda user_id, paths: {},
     )
 
 
@@ -782,6 +827,7 @@ def test_the_shared_source_fetches_agent_scopes_by_bare_name() -> None:
     client = SimpleNamespace(
         config=SimpleNamespace(base_url="http://platform"),
         get_agent_usage=fetcher.fetch,
+        read_user_usage=lambda user_id, paths: {},
     )
     source = get_usage_source("k", client)
 
@@ -808,3 +854,452 @@ def test_resolve_returns_none_without_a_platform(
         monkeypatch.setenv(name, value)
 
     assert resolve_usage_source(api_key=api_key, client=_client()) is None
+
+
+# ---------------------------------------------------------------------------
+# Users: settings
+# ---------------------------------------------------------------------------
+
+_USER_MIN_REFRESH = DEFAULT_USER_MIN_REFRESH_SECONDS
+_ALICE = "alice@example.com"
+
+
+def _user(key: str) -> UsageScope:
+    return UsageScope.user(key)
+
+
+def _read_user(rig: _Rig, key: str, **kwargs: Any) -> usage_source.UsageReading:
+    return rig.source.read(_user(key), _ONE_PATH, rig.ledger, **kwargs)
+
+
+def test_user_settings_are_read_from_their_own_variables() -> None:
+    environ = {
+        "HEXGATE_USAGE_REFRESH_SECONDS": "2",
+        "HEXGATE_USAGE_SYNC_AFTER_SECONDS": "30",
+        "HEXGATE_USAGE_MAX_STALENESS_SECONDS": "120",
+        USER_REFRESH_ENV.min_refresh: "40",
+        USER_REFRESH_ENV.sync_after: "90",
+        USER_REFRESH_ENV.max_staleness: "400",
+    }
+
+    assert UsageRefreshSettings.from_env(environ) == UsageRefreshSettings(
+        2.0, 30.0, 120.0
+    )
+    assert UsageRefreshSettings.from_env(
+        environ, env=USER_REFRESH_ENV, defaults=USER_REFRESH_DEFAULTS
+    ) == UsageRefreshSettings(40.0, 90.0, 400.0)
+
+
+def test_user_settings_default_to_30_60_300() -> None:
+    expected = UsageRefreshSettings(30.0, 60.0, 300.0)
+
+    assert USER_REFRESH_DEFAULTS == expected
+    assert (
+        UsageRefreshSettings.from_env(
+            {"HEXGATE_USAGE_REFRESH_SECONDS": "2"},
+            env=USER_REFRESH_ENV,
+            defaults=USER_REFRESH_DEFAULTS,
+        )
+        == expected
+    )
+
+
+@pytest.mark.parametrize(
+    "environ",
+    [
+        {USER_REFRESH_ENV.min_refresh: "soon"},
+        {USER_REFRESH_ENV.sync_after: "900"},
+    ],
+    ids=["unparsable", "out-of-order"],
+)
+def test_bad_user_settings_fall_back_to_the_user_defaults(
+    environ: dict[str, str], caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.WARNING, logger=usage_source.logger.name):
+        settings = UsageRefreshSettings.from_env(
+            environ, env=USER_REFRESH_ENV, defaults=USER_REFRESH_DEFAULTS
+        )
+
+    assert settings == USER_REFRESH_DEFAULTS
+    assert len(caplog.records) == 1
+
+
+def test_a_user_snapshot_younger_than_min_refresh_schedules_nothing() -> None:
+    executor = _HeldExecutor()
+    rig = _user_rig(executor)
+    rig.source.refresh(_user("a"), _ONE_PATH)
+
+    rig.clock.now += _BETWEEN_TIERS
+    rig.source.refresh(_user("a"), _ONE_PATH)
+    assert executor.jobs == []
+
+    rig.clock.now = _START + _USER_MIN_REFRESH
+    rig.source.refresh(_user("a"), _ONE_PATH)
+    assert len(executor.jobs) == 1
+
+
+# ---------------------------------------------------------------------------
+# Users: the LRU (F5)
+# ---------------------------------------------------------------------------
+
+
+def test_the_least_recently_used_user_is_evicted_past_capacity() -> None:
+    rig = _user_rig(_HeldExecutor(), capacity=2)
+    for key in ("a", "b", "c"):
+        rig.source.refresh(_user(key), _ONE_PATH)
+
+    assert _read_user(rig, "b").state is UsageState.FRESH
+    assert _read_user(rig, "c").state is UsageState.FRESH
+    assert _read_user(rig, "a").state is UsageState.UNAVAILABLE
+    rig.source.refresh(_user("a"), _ONE_PATH)
+
+    assert [call[0] for call in rig.user_fetcher.calls] == ["a", "b", "c", "a"]
+    assert rig.user_fetcher.calls[-1][2] == threading.current_thread().name
+
+
+def test_reading_a_user_keeps_it_from_eviction() -> None:
+    rig = _user_rig(_HeldExecutor(), capacity=2)
+    rig.source.refresh(_user("a"), _ONE_PATH)
+    rig.source.refresh(_user("b"), _ONE_PATH)
+
+    _read_user(rig, "a")
+    rig.source.refresh(_user("c"), _ONE_PATH)
+
+    assert _read_user(rig, "a").state is UsageState.FRESH
+    assert _read_user(rig, "b").state is UsageState.UNAVAILABLE
+
+
+def test_eviction_drops_a_users_rejection_and_throttle() -> None:
+    """F5: the side state goes with the snapshot."""
+    rig = _user_rig(capacity=2)
+    rig.user_fetcher.error = HexgateError("refused", status=422)
+    rig.source.refresh(_user("a"), _ONE_PATH)
+    rig.user_fetcher.error = None
+    rig.source.refresh(_user("a"), _ONE_PATH)
+    assert len(rig.user_fetcher.calls) == 1
+
+    rig.source.refresh(_user("b"), _ONE_PATH)
+    rig.source.refresh(_user("c"), _ONE_PATH)
+    rig.source.refresh(_user("a"), _ONE_PATH)
+
+    assert [call[0] for call in rig.user_fetcher.calls] == ["a", "b", "c", "a"]
+
+
+def test_the_user_table_never_outgrows_its_capacity() -> None:
+    rig = _user_rig(capacity=2)
+
+    for index in range(1_000):
+        rig.source.refresh(_user(f"user-{index}"), _ONE_PATH)
+
+    assert len(rig.source._tables[UsageScopeKind.USER]) == 2
+
+
+def test_agents_are_never_evicted() -> None:
+    rig = _rig(fetch_users=True, capacity=1)
+    agents = [UsageScope.agent(f"agent-{index}") for index in range(50)]
+
+    for scope in agents:
+        rig.source.refresh(scope, _ONE_PATH)
+    rig.source.refresh(_user("a"), _ONE_PATH)
+    rig.source.refresh(_user("b"), _ONE_PATH)
+
+    assert {
+        rig.source.read(scope, _ONE_PATH, rig.ledger).state for scope in agents
+    } == {UsageState.FRESH}
+    assert len(rig.fetcher.calls) == len(agents)
+
+
+# ---------------------------------------------------------------------------
+# Users: the shared back-off (F6)
+# ---------------------------------------------------------------------------
+
+
+def test_a_failed_user_fetch_pauses_every_user_for_min_refresh() -> None:
+    executor = _HeldExecutor()
+    rig = _user_rig(executor)
+    rig.user_fetcher.error = HexgateError("unavailable", status=503)
+    rig.source.refresh(_user("a"), _ONE_PATH)
+    rig.user_fetcher.error = None
+    rig.ledger.record({UsageMetric.INVOCATIONS: 1})
+
+    rig.clock.now += _USER_MIN_REFRESH - 1
+    rig.source.refresh(_user("b"), _ONE_PATH)
+    denied = _read_user(rig, "b", on_unavailable=OnUnavailable.DENY)
+    allowed = _read_user(rig, "b")
+
+    assert len(rig.user_fetcher.calls) == 1
+    assert executor.jobs == []
+    assert denied == usage_source.UsageReading(None, UsageState.UNAVAILABLE)
+    assert allowed == usage_source.UsageReading({_HOUR: 1}, UsageState.UNAVAILABLE)
+
+    rig.clock.now += 1
+    rig.source.refresh(_user("b"), _ONE_PATH)
+    assert [call[0] for call in rig.user_fetcher.calls] == ["a", "b"]
+
+
+async def test_a_paused_cold_user_never_leaves_the_loop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rig = _user_rig()
+    rig.user_fetcher.error = HexgateError("unavailable", status=503)
+    rig.source.refresh(_user("a"), _ONE_PATH)
+    spy = _ToThreadSpy()
+    monkeypatch.setattr(asyncio, "to_thread", spy)
+
+    await rig.source.refresh_async(_user("b"), _ONE_PATH)
+
+    assert spy.calls == 0
+    assert len(rig.user_fetcher.calls) == 1
+
+
+@pytest.mark.parametrize("status", [401, 403])
+def test_a_401_or_403_pauses_every_user_for_the_rejection_window(
+    status: int,
+) -> None:
+    rig = _user_rig()
+    rig.user_fetcher.error = HexgateError("rejected", status=status)
+    rig.source.refresh(_user("a"), _ONE_PATH)
+    rig.user_fetcher.error = None
+
+    rig.clock.now = _START + REJECTED_RETRY_SECONDS - 1
+    rig.source.refresh(_user("b"), _ONE_PATH)
+    assert len(rig.user_fetcher.calls) == 1
+
+    rig.clock.now += 1
+    rig.source.refresh(_user("b"), _ONE_PATH)
+    assert len(rig.user_fetcher.calls) == 2
+
+
+def test_a_404_on_users_reports_a_missing_route_once(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    rig = _user_rig()
+    rig.user_fetcher.error = HexgateError("not found", status=404)
+
+    with caplog.at_level(logging.WARNING, logger=usage_source.logger.name):
+        rig.source.refresh(_user("a"), _ONE_PATH)
+        rig.source.refresh(_user("b"), _ONE_PATH)
+        rig.clock.now += REJECTED_RETRY_SECONDS
+        rig.source.refresh(_user("c"), _ONE_PATH)
+        rig.source.refresh(_user("d"), _ONE_PATH)
+
+    assert [call[0] for call in rig.user_fetcher.calls] == ["a", "c"]
+    assert len(caplog.records) == 1
+    assert "no user usage read" in caplog.records[0].getMessage()
+
+
+def test_a_422_rejects_only_that_user() -> None:
+    rig = _user_rig()
+    rig.user_fetcher.error = HexgateError("refused", status=422)
+    rig.source.refresh(_user("a"), _ONE_PATH)
+    rig.user_fetcher.error = None
+
+    rig.source.refresh(_user("b"), _ONE_PATH)
+    rig.clock.now += REJECTED_RETRY_SECONDS - 1
+    rig.source.refresh(_user("a"), _ONE_PATH)
+
+    assert [call[0] for call in rig.user_fetcher.calls] == ["a", "b"]
+
+    rig.clock.now += 1
+    rig.source.refresh(_user("a"), _ONE_PATH)
+    assert [call[0] for call in rig.user_fetcher.calls] == ["a", "b", "a"]
+
+
+def test_a_content_error_pauses_users() -> None:
+    rig = _user_rig()
+    rig.user_fetcher.body = {"values": [1]}
+    rig.source.refresh(_user("a"), _ONE_PATH)
+    rig.user_fetcher.body = None
+
+    rig.source.refresh(_user("b"), _ONE_PATH)
+    assert len(rig.user_fetcher.calls) == 1
+
+    rig.clock.now += _USER_MIN_REFRESH
+    rig.source.refresh(_user("b"), _ONE_PATH)
+    assert len(rig.user_fetcher.calls) == 2
+
+
+def test_a_pause_logs_once_however_many_users_wait(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    rig = _user_rig()
+    rig.user_fetcher.error = HexgateError("unavailable", status=503)
+    # b's fetch starts and fails while a's is still running.
+    rig.user_fetcher.during = lambda _key: rig.source.refresh(_user("b"), _ONE_PATH)
+
+    with caplog.at_level(logging.WARNING, logger=usage_source.logger.name):
+        rig.source.refresh(_user("a"), _ONE_PATH)
+        for key in ("c", "d", "e"):
+            rig.source.refresh(_user(key), _ONE_PATH)
+
+    assert [call[0] for call in rig.user_fetcher.calls] == ["a", "b"]
+    assert len(caplog.records) == 1
+
+
+def test_a_user_failure_does_not_pause_agents() -> None:
+    rig = _user_rig()
+    rig.user_fetcher.error = HexgateError("unavailable", status=503)
+    rig.source.refresh(_user("a"), _ONE_PATH)
+
+    rig.source.refresh(_SCOPE, _ONE_PATH)
+
+    assert len(rig.fetcher.calls) == 1
+
+
+def test_an_agent_failure_does_not_pause_users() -> None:
+    rig = _user_rig()
+    rig.fetcher.error = HexgateError("unavailable", status=503)
+    rig.source.refresh(_SCOPE, _ONE_PATH)
+
+    rig.source.refresh(_user("a"), _ONE_PATH)
+
+    assert len(rig.user_fetcher.calls) == 1
+
+
+def test_an_agent_failure_still_backs_off_that_agent_only() -> None:
+    rig = _user_rig()
+    other = UsageScope.agent("support")
+    rig.fetcher.error = HexgateError("unavailable", status=503)
+    rig.source.refresh(_SCOPE, _ONE_PATH)
+    rig.fetcher.error = None
+
+    rig.source.refresh(other, _ONE_PATH)
+    rig.source.refresh(_SCOPE, _ONE_PATH)
+
+    assert [call[0] for call in rig.fetcher.calls] == [_AGENT, "support"]
+
+
+# ---------------------------------------------------------------------------
+# Users: the ID pre-check and G10
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "key",
+    ["x" * (USER_ID_MAX_LENGTH + 1), "\ud800"],
+    ids=["too-long", "lone-surrogate"],
+)
+def test_an_unreadable_user_id_is_never_sent(
+    key: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    executor = _HeldExecutor()
+    rig = _user_rig(executor)
+
+    with caplog.at_level(logging.WARNING, logger=usage_source.logger.name):
+        rig.source.refresh(_user(key), _ONE_PATH)
+        reading = _read_user(rig, key)
+        rig.source.refresh(_user(key), _ONE_PATH)
+        rig.source.refresh(_user("a"), _ONE_PATH)
+
+    assert reading.state is UsageState.UNAVAILABLE
+    assert executor.jobs == []
+    assert [call[0] for call in rig.user_fetcher.calls] == ["a"]
+    assert len(rig.source._tables[UsageScopeKind.USER]) == 1
+    assert len(caplog.records) == 1
+
+
+def test_a_256_character_multibyte_user_id_is_sent() -> None:
+    key = "é" * USER_ID_MAX_LENGTH
+    rig = _user_rig()
+
+    rig.source.refresh(_user(key), _ONE_PATH)
+
+    assert len(key.encode()) > USER_ID_MAX_LENGTH
+    assert [call[0] for call in rig.user_fetcher.calls] == [key]
+
+
+def _fail_with_status(status: int) -> Callable[[_Rig], None]:
+    def arrange(rig: _Rig) -> None:
+        rig.user_fetcher.error = HexgateError(f"{status} for {_ALICE}", status=status)
+
+    return arrange
+
+
+def _fail_with_body(rig: _Rig) -> None:
+    rig.user_fetcher.body = {"values": {_HOUR: _ALICE}}
+
+
+def _fail_in_transport(rig: _Rig) -> None:
+    rig.user_fetcher.error = OSError(f"connection reset reading {_ALICE}")
+
+
+@pytest.mark.parametrize(
+    ("arrange", "key"),
+    [
+        (_fail_with_status(503), _ALICE),
+        (_fail_with_status(401), _ALICE),
+        (_fail_with_status(404), _ALICE),
+        (_fail_with_status(422), _ALICE),
+        (_fail_with_body, _ALICE),
+        (_fail_in_transport, _ALICE),
+        (lambda _rig: None, _ALICE + "x" * USER_ID_MAX_LENGTH),
+    ],
+    ids=["503", "401", "404", "422", "content", "transport", "unreadable"],
+)
+def test_no_log_line_carries_a_user_id(
+    arrange: Callable[[_Rig], None], key: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    """G10: an ID in a log line can't be recalled."""
+    rig = _user_rig()
+    arrange(rig)
+
+    with caplog.at_level(logging.DEBUG, logger=usage_source.logger.name):
+        rig.source.refresh(_user(key), _ONE_PATH)
+        _read_user(rig, key)
+
+    assert caplog.records
+    assert "alice" not in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# Users: the shared source
+# ---------------------------------------------------------------------------
+
+
+def _fetching_client(
+    agent: _FakeFetcher, user: _FakeFetcher, base_url: str = "http://platform"
+) -> Any:
+    return SimpleNamespace(
+        config=SimpleNamespace(base_url=base_url),
+        get_agent_usage=agent.fetch,
+        read_user_usage=user.fetch,
+    )
+
+
+def test_the_shared_source_reads_users_through_the_client() -> None:
+    clock = _FakeClock()
+    agent, user = _FakeFetcher(clock, _PLATFORM_VALUES), _FakeFetcher(clock, {})
+    source = get_usage_source("k", _fetching_client(agent, user))
+
+    source.refresh(_user(_ALICE), _TWO_PATHS)
+    source.refresh(_SCOPE, _ONE_PATH)
+
+    assert [call[:2] for call in user.calls] == [(_ALICE, sorted(_TWO_PATHS))]
+    assert [call[:2] for call in agent.calls] == [(_AGENT, [_HOUR])]
+
+
+def test_the_shared_source_sizes_users_from_the_user_cache_variable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(USER_CACHE_ENV, "1")
+    clock = _FakeClock()
+    agent, user = _FakeFetcher(clock, {}), _FakeFetcher(clock, _USER_VALUES)
+    source = get_usage_source("k", _fetching_client(agent, user))
+
+    for key in ("a", "b", "a"):
+        source.refresh(_user(key), _ONE_PATH)
+
+    assert [call[0] for call in user.calls] == ["a", "b", "a"]
+
+
+def test_agent_scopes_alone_never_touch_the_user_kind() -> None:
+    """G3 for this PR: nothing about users runs until a user scope is asked for."""
+    clock = _FakeClock()
+    agent, user = _FakeFetcher(clock, _PLATFORM_VALUES), _FakeFetcher(clock, {})
+    source = get_usage_source("k", _fetching_client(agent, user))
+
+    source.refresh(_SCOPE, _ONE_PATH)
+    source.read(_SCOPE, _ONE_PATH, new_usage_ledger())
+
+    assert user.calls == []
+    assert len(source._tables[UsageScopeKind.USER]) == 0
