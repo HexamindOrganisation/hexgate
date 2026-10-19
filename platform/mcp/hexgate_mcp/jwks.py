@@ -1,10 +1,11 @@
 """The platform API's OAuth public key, fetched from its JWKS and cached.
 
-The server holds no key of its own. Keys are cached for ten minutes. A `kid`
-not in the cache triggers one refetch, so a rotated key is picked up without
-waiting for the cache to expire; refetches (and retries after a failed fetch)
-are spaced at least 30 s apart, so a flood of forged `kid`s costs one fetch
-per 30 s, not one per request.
+The MCP server never has the private key; it only checks signatures with the
+public one. Keys are cached for ten minutes. A `kid` not in the cache triggers
+one refetch, so a rotated key is picked up without waiting for the cache to
+expire; refetches (and retries after a failed fetch) are spaced at least 30 s
+apart, so a flood of forged `kid`s costs one fetch per 30 s, not one per
+request.
 """
 
 import asyncio
@@ -43,8 +44,9 @@ class JwksCache:
                 # refetch find it done and must not start another.
                 if self._needs_refetch(kid):
                     await self._refetch()
-        # Stale keys keep serving while the JWKS is unreachable: the API, which
-        # makes the real check, is then unreachable too.
+        # If the API can't be reached, the keys already cached keep working: the
+        # API re-checks every token anyway, and while it's down no call gets
+        # through.
         return self._keys.get(kid)
 
     def _needs_refetch(self, kid: str) -> bool:
@@ -81,6 +83,7 @@ class JwksCache:
         key_set = jwt.PyJWKSet.from_dict(document)
         keys = {k.key_id: k for k in key_set.keys if k.key_id}
         if not keys:
-            # Same failure as no usable key: a token can only be matched by kid.
+            # Treated like an empty key list: tokens are matched to keys by
+            # `kid`, so a key without one is useless.
             raise jwt.PyJWKSetError("JWKS has no key with a `kid`")
         return keys
