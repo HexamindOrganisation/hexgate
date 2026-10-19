@@ -34,6 +34,20 @@ from hexgate import (
 | `agent_tool(name=…)` | Decorator that turns an async function into a policy-gated tool. |
 | `create_manifest(agent, …)` | Derive an `AgentManifest` from any supported agent without POSTing it. See [register](/cli/register). |
 | `AgentManifest` | Pydantic model the platform stores and the dashboard renders. |
+| `SkillDefinition` | One skill in a manifest: `name`, `description`, `source`, `resources`, `allowed_tools`, `additional_tools`, `content_hash`. See [skills](/concepts/skills). |
+| `SkillResources` | The files a skill bundles, by name. |
+| `attach_guards(agent, guards)` | Stamp a guard list onto a framework agent so its manifest declares them. See [guards](/concepts/guards#turning-a-guard-off-from-the-policy). |
+
+## Sub-agents
+
+| Symbol | What it does |
+|---|---|
+| `enumerate_subagents(agent)` | List an agent's outgoing sub-agent edges as `SubagentLink`s, read off the framework object (OpenAI, Google ADK, Hexgate agents; `[]` where the framework hides them). It only reads, nothing is wrapped. |
+| `SubagentLink` | One edge from `enumerate_subagents`: `target` (the sub-agent's name), `via` (`"tool"` or `"handoff"`) and `child` (the live object when the framework exposes it, else `None`). |
+| `SubagentEdge` | One edge from a Hexgate agent's `.subagents`: `child`, `via` and `as_name` (the tool name the model calls, `delegate_to_<child>` by default). |
+
+See [agent-level enforcement](/concepts/agent-level-enforcement) for how a policy
+governs which sub-agents an agent may reach.
 
 ## Policy enforcement
 
@@ -59,18 +73,35 @@ from hexgate import (
 | `load_registered_agent(name)` | Load an agent registered in-process via a factory. |
 | `load_hexgate_agent(name)` | Fetch a named agent (+ roles) from the platform. See [user scope](/concepts/user-scope). |
 | `register_agent_factory(name, factory)` | Register a code-defined agent factory so `load_agent` / `load_registered_agent` can resolve it. |
+| `unregister_agent_factory(name)` | Remove a factory registered with `register_agent_factory`. |
+| `clear_registered_agents()` | Remove every registered factory. Useful between tests. |
+| `list_registered_agents()` | Names of the agents registered in this process. |
+| `list_local_agents(base_dir=None)` | Names of the directory agents (`agent.yaml`) found in `base_dir` and its `agents/` and `examples/` folders. `base_dir` defaults to the current directory. |
+| `list_available_agents(base_dir=None)` | Both lists merged: what `hexgate chat --list-agents` shows. |
 
 ## Identity
 
 | Symbol | What it does |
 |---|---|
 | `HexgateContext(user_id, user_roles=[…], session_id=…, ttl_seconds=…, attributes={…})` | Per-request scope context manager — every role in `user_roles` is a decision input (most permissive wins). See [user scope](/concepts/user-scope). |
+| `ContextAttributeValue` | The type an entry of `attributes` may take: `str`, `int`, `bool` or `list[str]`. These are what `ctx.*` constraints read. |
+
+## Platform client
+
+| Symbol | What it does |
+|---|---|
+| `HexgateConfig.from_env(*, project_id=None, base_url=None, api_key=None, public_key=None)` | Resolve the platform connection from arguments, falling back to `HEXGATE_API_KEY`, `HEXGATE_API_URL`, `HEXGATE_PROJECT_ID` and `HEXGATE_PUBLIC_KEY`. Raises when no key is set. |
+| `HexgateClient(config)` | HTTP client for one project and key. It verifies the key's signature before sending it. Methods: `get_agent`, `get_bans`, `get_agent_usage`. You rarely need it directly: `load_agent` and the adapters create one when `HEXGATE_API_KEY` is set. |
 
 ## Built-in tools
 
 Filesystem tools are importable from `hexgate`: `read_file`, `write_file`,
 `edit_file`, `glob`, `grep`, `bash`. The shell-backed ones run inside the
 [workspace sandbox](/concepts/sandbox).
+
+They act on a `Workspace`, the abstract type the tools receive at runtime. The one
+you configure is `LocalWorkspace` from `hexgate.runtime`, described on the
+sandbox page.
 
 <Note>
 `web_search`, `fetch`, and `refund_order` are **no longer built in** — they

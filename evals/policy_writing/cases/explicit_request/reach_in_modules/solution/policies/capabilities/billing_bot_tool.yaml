@@ -1,0 +1,3 @@
+# Capability for the billing role. It only grants: calling billing-bot as a tool.
+agents:
+  billing-bot: { via: [tool], mode: allow }

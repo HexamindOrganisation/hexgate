@@ -39,10 +39,10 @@ def g_drop(call: Any) -> None:
     return None
 
 
-def _agent(monkeypatch: pytest.MonkeyPatch) -> HexgateAgent:
+def _agent(monkeypatch: pytest.MonkeyPatch, name: str = "bot") -> HexgateAgent:
     monkeypatch.setattr(factory, "create_langchain_agent", lambda **k: "graph")
     return HexgateAgent(
-        graph="graph", model="m", tools=[echo], system_prompt=None, name="bot"
+        graph="graph", model="m", tools=[echo], system_prompt=None, name=name
     )
 
 
@@ -282,3 +282,26 @@ def test_closed_world_checks_the_stamped_guards_not_the_argument(
     wrapped = guarded.tools[0]
     assert isinstance(wrapped, GuardedTool)
     assert [h.label for h in wrapped.pipeline.pre] == ["g_keep"]
+
+
+def test_enforcer_and_admission_gate_use_canonical_agent_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    agent = _agent(monkeypatch, name=" bot ")
+    policy = load_policy_set_from_dict({"roles": {"default": {}}})
+
+    guarded = agent.enforce_policy(policy)
+
+    assert guarded._binding.enforcer.agent_name == "bot"
+    assert guarded._agent_gate._enforcer is guarded._binding.enforcer
+
+
+def test_guard_closed_world_error_names_canonical_agent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    agent = _agent(monkeypatch, name=" bot ")
+    policy = load_policy_set_from_dict(
+        {"roles": {"default": {"guards": {"ghost_guard": {"enabled": False}}}}}
+    )
+    with pytest.raises(GuardClosedWorldError, match="agent 'bot'"):
+        agent.enforce_policy(policy, guards=[g_keep])

@@ -22,10 +22,11 @@ from typing import Any, Final
 from uuid import uuid4
 
 from hexgate.runtime.agent_usage import (
-    AGENT_USAGE_LEDGERS,
+    USAGE_LEDGERS,
     UsageLedger,
     UsageLedgers,
     UsageMetric,
+    UsageScope,
 )
 from hexgate.runtime.context import get_current_context
 from hexgate.tracing.runs import emit_run_start
@@ -58,9 +59,9 @@ SCALAR_PATHS: Final[frozenset[str]] = frozenset(
 LIST_PATHS: Final[frozenset[str]] = frozenset({"tools_used"})
 KNOWN_RUN_PATHS: Final[frozenset[str]] = SCALAR_PATHS | LIST_PATHS
 
-# Fallback when a wrapped agent has no name. Lives here, below both callers, so a
-# nameless agent's audit events and its run facts agree on the label rather than
-# drifting apart — and so core (``agents.factory``) need not import the adapter layer.
+# The identity a null/blank-named agent collapses to, so it never reaches a policy
+# lookup, a cache key, or a reach match as ``None``/``""``. Lives here rather than in
+# ``security.naming`` (which imports it) so runtime need not import security.
 DEFAULT_AGENT_NAME: Final[str] = "default"
 
 # The value shape each path projects, for the helpers that let a caller *supply*
@@ -268,7 +269,7 @@ def run_scope(
     agent: str,
     *,
     api_key: str | None = None,
-    ledgers: UsageLedgers = AGENT_USAGE_LEDGERS,
+    ledgers: UsageLedgers = USAGE_LEDGERS,
 ) -> Iterator[RunFacts]:
     """Mint a :class:`RunFacts`, bind it, and report the run start: one scope per
     agent invocation.
@@ -281,7 +282,9 @@ def run_scope(
     Counts one ``invocations`` on the agent's ledger — here and not in
     :func:`use_run_facts`, which joins a run rather than starting one.
     """
-    facts = RunFacts(id=str(uuid4()), agent=agent, ledger=ledgers.ledger_for(agent))
+    facts = RunFacts(
+        id=str(uuid4()), agent=agent, ledger=ledgers.ledger_for(UsageScope.agent(agent))
+    )
     facts._record_usage({UsageMetric.INVOCATIONS: 1})
     with use_run_facts(facts):
         context = get_current_context()

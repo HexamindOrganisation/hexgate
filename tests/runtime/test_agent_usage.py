@@ -2,29 +2,35 @@
 
 Every failure here is silent — a window reading low fails a quota open, a missing
 key fails it closed — so these tests pin the rounding, retention and registry
-semantics PR 2b and PR 6 build on.
+semantics the ``agent_usage.*`` namespace and PR 6 build on.
 """
 
 from __future__ import annotations
 
 import threading
 import time
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
 from hexgate.runtime.agent_usage import (
-    AGENT_USAGE_LEDGERS,
     FINE_BUCKET_SECONDS,
     FINE_RETENTION_SECONDS,
     HOUR_BUCKET_SECONDS,
+    KNOWN_AGENT_USAGE_PATHS,
     MAX_WINDOW_SECONDS,
     MINUTE_BUCKET_SECONDS,
+    USAGE_LEDGERS,
+    USAGE_WINDOWS,
     BucketSeries,
     UsageLedger,
     UsageLedgers,
     UsageMetric,
+    UsageScope,
+    UsageScopeKind,
+    combined_namespace,
+    ledger_namespace,
     new_usage_ledger,
 )
 from hexgate.runtime.run_facts import KNOWN_RUN_PATHS
@@ -268,36 +274,328 @@ def test_the_default_clock_follows_a_patched_monotonic(
 def test_a_disabled_registry_hands_out_no_ledger() -> None:
     ledgers = UsageLedgers(new_usage_ledger)
 
-    assert not ledgers.enabled
-    assert ledgers.ledger_for("a") is None
+    assert not ledgers.is_enabled(UsageScopeKind.AGENT)
+    assert ledgers.ledger_for(UsageScope.agent("a")) is None
 
 
 def test_an_enabled_registry_keeps_one_ledger_per_agent() -> None:
     ledgers = UsageLedgers(new_usage_ledger)
-    ledgers.enable()
-    ledgers.enable()
+    ledgers.enable(UsageScopeKind.AGENT)
+    ledgers.enable(UsageScopeKind.AGENT)
 
-    first = ledgers.ledger_for("a")
+    first = ledgers.ledger_for(UsageScope.agent("a"))
     assert first is not None
-    assert ledgers.ledger_for("a") is first
-    assert ledgers.ledger_for("b") is not first
-    assert ledgers.enabled
+    assert ledgers.ledger_for(UsageScope.agent("a")) is first
+    assert ledgers.ledger_for(UsageScope.agent("b")) is not first
+    assert ledgers.is_enabled(UsageScopeKind.AGENT)
 
 
 def test_a_concurrent_first_lookup_yields_one_ledger() -> None:
     ledgers = UsageLedgers(new_usage_ledger)
-    ledgers.enable()
+    ledgers.enable(UsageScopeKind.AGENT)
+    scope = UsageScope.agent("a")
 
     with ThreadPoolExecutor(max_workers=_WRITERS) as pool:
-        found = list(pool.map(lambda _: ledgers.ledger_for("a"), range(_WRITERS * 4)))
+        found = list(pool.map(lambda _: ledgers.ledger_for(scope), range(_WRITERS * 4)))
 
     assert len({id(ledger) for ledger in found}) == 1
 
 
 def test_the_process_registry_is_disabled_at_import() -> None:
-    """Pins the roadmap's "inert on main" invariant until PR 2b enables it."""
-    assert AGENT_USAGE_LEDGERS.enabled is False
+    """Only an enforcer over a usage policy enables it, and tests inject their own
+    registry. Failing here means a test leaked into the process one."""
+    assert not any(USAGE_LEDGERS.is_enabled(kind) for kind in UsageScopeKind)
+
+
+def test_scopes_of_different_kinds_with_one_key_get_different_ledgers() -> None:
+    ledgers = UsageLedgers(new_usage_ledger)
+    ledgers.enable(UsageScopeKind.AGENT)
+    ledgers.enable(UsageScopeKind.USER)
+
+    agent = ledgers.ledger_for(UsageScope.agent("alice"))
+    user = ledgers.ledger_for(UsageScope(UsageScopeKind.USER, "alice"))
+
+    assert agent is not None
+    assert user is not None
+    assert agent is not user
+
+
+def test_enabling_agents_leaves_users_off() -> None:
+    ledgers = UsageLedgers(new_usage_ledger)
+    ledgers.enable(UsageScopeKind.AGENT)
+
+    assert ledgers.is_enabled(UsageScopeKind.USER) is False
+    assert ledgers.ledger_for(UsageScope(UsageScopeKind.USER, "u")) is None
+
+
+def test_usage_scope_is_a_value_and_prints_its_kind() -> None:
+    assert UsageScope.agent("b") == UsageScope(UsageScopeKind.AGENT, "b")
+    assert hash(UsageScope.agent("b")) == hash(UsageScope(UsageScopeKind.AGENT, "b"))
+    assert str(UsageScope.agent("b")) == "agent 'b'"
 
 
 def test_metrics_share_their_names_with_run_paths() -> None:
     assert set(UsageMetric) - {UsageMetric.INVOCATIONS} <= KNOWN_RUN_PATHS
+
+
+# ---------------------------------------------------------------------------
+# Path registry and namespace
+# ---------------------------------------------------------------------------
+
+_HOUR = 3_600.0
+_TICK_SECONDS = 60.0
+_METRICS = (
+    "invocations",
+    "tool_calls",
+    "denials",
+    "llm_calls",
+    "input_tokens",
+    "output_tokens",
+    "total_tokens",
+)
+_WINDOWS = ("5m", "1h", "24h", "7d", "30d")
+
+
+class _WindowCountingLedger(UsageLedger):
+    def __init__(self, ledger: UsageLedger) -> None:
+        self._inner = ledger
+        self.reads: list[list[float]] = []
+
+    def within_each(
+        self, windows: Iterable[float]
+    ) -> dict[float, dict[UsageMetric, int]]:
+        windows = list(windows)
+        self.reads.append(sorted(set(windows)))
+        return self._inner.within_each(windows)
+
+
+class _CountingClock(_TickingClock):
+    """Counts its reads, and moves far enough per read that a second one would
+    put the windows at different instants."""
+
+    def __init__(self) -> None:
+        super().__init__(_START, tick=_TICK_SECONDS)
+        self.reads = 0
+
+    def __call__(self) -> float:
+        self.reads += 1
+        return super().__call__()
+
+
+def _recorded_ledger(amounts: Mapping[UsageMetric, int]) -> UsageLedger:
+    ledger = new_usage_ledger(clock=_FakeClock())
+    ledger.record(amounts)
+    return ledger
+
+
+def test_the_registry_is_every_metric_over_every_window() -> None:
+    expected = {f"{metric}_{window}" for metric in _METRICS for window in _WINDOWS}
+
+    assert len(expected) == 35
+    assert KNOWN_AGENT_USAGE_PATHS == expected
+
+
+def test_no_window_outlasts_the_ledger() -> None:
+    assert max(USAGE_WINDOWS.values()) <= MAX_WINDOW_SECONDS
+
+
+def test_every_window_is_read_from_a_tier_that_retains_it() -> None:
+    ledger = new_usage_ledger(clock=_FakeClock())
+
+    for seconds in USAGE_WINDOWS.values():
+        assert ledger._covering(seconds).retention >= seconds
+
+
+def test_the_namespace_holds_exactly_the_requested_paths() -> None:
+    ledger = _recorded_ledger(
+        {UsageMetric.INPUT_TOKENS: 3, UsageMetric.OUTPUT_TOKENS: 4}
+    )
+
+    namespace = ledger_namespace(ledger, ["total_tokens_1h", "invocations_5m"])
+
+    assert namespace == {"total_tokens_1h": 7, "invocations_5m": 0}
+
+
+def test_the_namespace_reads_each_window_once() -> None:
+    ledger = _WindowCountingLedger(_recorded_ledger(_ONE_TOOL_CALL))
+
+    ledger_namespace(ledger, ["tool_calls_1h", "denials_1h", "tool_calls_24h"])
+
+    assert ledger.reads == [[_HOUR, _DAY]]
+
+
+def test_the_namespace_reads_every_window_at_one_instant() -> None:
+    clock = _CountingClock()
+    ledger = new_usage_ledger(clock=clock)
+    ledger.record(_ONE_TOOL_CALL)
+    clock.reads = 0
+
+    namespace = ledger_namespace(ledger, ["tool_calls_5m", "tool_calls_1h"])
+
+    assert clock.reads == 1
+    assert namespace["tool_calls_5m"] <= namespace["tool_calls_1h"]
+
+
+def test_the_namespace_rejects_an_unregistered_path() -> None:
+    ledger = _recorded_ledger(_ONE_TOOL_CALL)
+
+    with pytest.raises(KeyError):
+        ledger_namespace(ledger, ["tool_call_1h"])
+
+
+_TWO_INVOCATIONS = {UsageMetric.INVOCATIONS: 2, UsageMetric.TOOL_CALLS: 2}
+_IN_RUN_PATHS = ["invocations_5m", "invocations_1h", "tool_calls_1h"]
+
+
+@pytest.mark.parametrize(
+    ("run_age", "expected"),
+    [
+        (None, {"invocations_5m": 2, "invocations_1h": 2, "tool_calls_1h": 2}),
+        (10.0, {"invocations_5m": 1, "invocations_1h": 1, "tool_calls_1h": 2}),
+        # Older than 5 m: its invocation has aged out of that window, not of 1 h.
+        (400.0, {"invocations_5m": 2, "invocations_1h": 1, "tool_calls_1h": 2}),
+    ],
+    ids=["outside-a-run", "young-run", "run-older-than-a-window"],
+)
+def test_the_current_run_is_left_out_of_windows_still_holding_it(
+    run_age: float | None, expected: dict[str, int]
+) -> None:
+    ledger = _recorded_ledger(_TWO_INVOCATIONS)
+
+    namespace = ledger_namespace(ledger, _IN_RUN_PATHS, current_run_age=run_age)
+
+    assert namespace == expected
+
+
+def test_leaving_out_an_unrecorded_run_never_reads_negative() -> None:
+    """A run opened before the ledger was enabled never recorded its invocation."""
+    ledger = new_usage_ledger(clock=_FakeClock())
+
+    assert ledger_namespace(ledger, ["invocations_1h"], current_run_age=1.0) == {
+        "invocations_1h": 0
+    }
+
+
+# ---------------------------------------------------------------------------
+# combined_namespace: the platform snapshot plus the local term
+# ---------------------------------------------------------------------------
+
+_MARGIN = 30.0
+_FETCHED_AT = _START + _HOUR
+
+
+class _SinceCountingLedger(UsageLedger):
+    def __init__(self, ledger: UsageLedger) -> None:
+        self._inner = ledger
+        self.reads: list[float] = []
+
+    def since(self, instant: float) -> dict[UsageMetric, int]:
+        self.reads.append(instant)
+        return self._inner.since(instant)
+
+
+def _ledger_at(
+    clock: _FakeClock, *events: tuple[float, Mapping[UsageMetric, int]]
+) -> UsageLedger:
+    ledger = new_usage_ledger(clock=clock)
+    for at, amounts in events:
+        clock.now = at
+        ledger.record(amounts)
+    clock.now = _FETCHED_AT
+    return ledger
+
+
+def _combine(
+    ledger: UsageLedger,
+    platform: Mapping[str, int],
+    *,
+    current_run_age: float | None = None,
+) -> dict[str, int]:
+    return combined_namespace(
+        ledger,
+        platform,
+        since=_FETCHED_AT - _MARGIN,
+        current_run_age=current_run_age,
+    )
+
+
+def test_the_combined_namespace_adds_local_usage_to_each_platform_value() -> None:
+    ledger = _ledger_at(_FakeClock(), (_FETCHED_AT - 1, {UsageMetric.TOOL_CALLS: 2}))
+
+    namespace = _combine(ledger, {"tool_calls_1h": 5, "tool_calls_5m": 1})
+
+    assert namespace == {"tool_calls_1h": 7, "tool_calls_5m": 3}
+
+
+@pytest.mark.parametrize(
+    ("recorded_before_fetch", "expected"),
+    [(10.0, 5), (40.0, 4)],
+    ids=["inside-the-margin", "before-the-margin"],
+)
+def test_the_cut_off_reaches_back_by_the_ingest_margin(
+    recorded_before_fetch: float, expected: int
+) -> None:
+    """G7: an own event still in the pipeline at fetch time is counted locally."""
+    ledger = _ledger_at(
+        _FakeClock(),
+        (_FETCHED_AT - recorded_before_fetch, {UsageMetric.INVOCATIONS: 1}),
+    )
+
+    assert _combine(ledger, {"invocations_1h": 4}) == {"invocations_1h": expected}
+
+
+def test_combined_total_tokens_add_local_input_and_output() -> None:
+    ledger = _ledger_at(
+        _FakeClock(),
+        (_FETCHED_AT, {UsageMetric.INPUT_TOKENS: 3, UsageMetric.OUTPUT_TOKENS: 4}),
+    )
+
+    assert _combine(ledger, {"total_tokens_24h": 100}) == {"total_tokens_24h": 107}
+
+
+def test_the_combined_namespace_reads_the_ledger_once() -> None:
+    ledger = _SinceCountingLedger(_ledger_at(_FakeClock()))
+
+    _combine(ledger, {"tool_calls_5m": 0, "denials_1h": 0, "invocations_30d": 0})
+
+    assert ledger.reads == [_FETCHED_AT - _MARGIN]
+
+
+@pytest.mark.parametrize(
+    ("run_age", "expected"),
+    [(None, 6), (0.0, 5)],
+    ids=["outside-a-run", "run-in-the-local-term"],
+)
+def test_a_run_opened_after_the_cut_off_is_left_out_of_the_local_term(
+    run_age: float | None, expected: int
+) -> None:
+    ledger = _ledger_at(_FakeClock(), (_FETCHED_AT, {UsageMetric.INVOCATIONS: 1}))
+
+    namespace = _combine(ledger, {"invocations_1h": 5}, current_run_age=run_age)
+
+    assert namespace == {"invocations_1h": expected}
+
+
+@pytest.mark.parametrize(
+    ("run_age", "expected"),
+    [(_MARGIN + 1, 4), (_HOUR, 5)],
+    ids=["run-older-than-the-cut-off", "run-older-than-the-window"],
+)
+def test_a_run_opened_before_the_cut_off_is_left_out_of_the_platform_term(
+    run_age: float, expected: int
+) -> None:
+    """The platform value already holds the run (a mid-run refresh): it must read
+    as it did at admission, not one higher."""
+    ledger = _ledger_at(_FakeClock())
+
+    namespace = _combine(ledger, {"invocations_1h": 5}, current_run_age=run_age)
+
+    assert namespace == {"invocations_1h": expected}
+
+
+def test_the_combined_namespace_never_reads_negative() -> None:
+    ledger = _ledger_at(_FakeClock())
+
+    assert _combine(ledger, {"invocations_1h": 0}, current_run_age=0.0) == {
+        "invocations_1h": 0
+    }

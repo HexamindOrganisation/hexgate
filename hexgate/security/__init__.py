@@ -95,6 +95,7 @@ from hexgate.security.models import (
     SkillPolicy,
     SkillVia,
     ToolPolicy,
+    UsagePolicy,
     agent_target_key,
     is_skill_key,
     skill_key,
@@ -160,11 +161,13 @@ from hexgate.security.source import (
     YamlPolicySource,
 )
 from hexgate.security.testing import (
+    agent_usage_namespace,
     assert_allows,
     assert_denies,
     assert_needs_approval,
     run_namespace,
 )
+from hexgate.security.usage_inputs import NO_USAGE, UsageInputs
 from hexgate.security.wasm_engine import (
     DEFAULT_ENTRYPOINT,
     RegoVerdict,
@@ -232,12 +235,14 @@ __all__ = [
     "C",
     "PolicyBuilder",
     "RolePolicyBuilder",
+    "agent_usage_namespace",
     "assert_allows",
     "assert_denies",
     "assert_needs_approval",
     "run_namespace",
     "BaseToolPolicy",
     "GuardRule",
+    "UsagePolicy",
     "PolicyBinding",
     "PolicyBindingError",
     "ResolvedPolicy",
@@ -277,6 +282,8 @@ __all__ = [
     "WasmPolicy",
     "DecisionOutcome",
     "PolicyEngine",
+    "NO_USAGE",
+    "UsageInputs",
     "Verdict",
     "authorize_tool_call",
     "authorize_tool_call_wasm",

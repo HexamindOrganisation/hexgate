@@ -14,9 +14,13 @@ from pydantic import BaseModel
 from hexgate.adapters.langchain.usage import HexgateUsageCallbackHandler
 from hexgate.agents import factory
 from hexgate.agents.factory import HexgateAgent
-from hexgate.runtime import HexgateContext
+from hexgate.cloud.client import HexgateClient, HexgateConfig
+from hexgate.runtime import HexgateContext, get_run_facts
+from hexgate.runtime import run_facts as run_facts_mod
 from hexgate.runtime.context import get_current_context
+from hexgate.security.policy_set import load_policy_set_from_dict
 from hexgate.tracing import usage as tracing_usage_mod
+from tests.agents.helpers import run_once
 
 
 class FakeAgent:
@@ -613,14 +617,15 @@ class _CallbackFiringGraph:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("name", ["my-agent", " my-agent "])
 async def test_usage_handler_emits_with_agent_name(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, name: str
 ) -> None:
     fake_sender = _FakeSender()
     monkeypatch.setattr(
         tracing_usage_mod, "configure_usage_sender", lambda api_key=None: fake_sender
     )
-    agent, _ = _make_hexgate_agent(name="my-agent", graph=_CallbackFiringGraph())
+    agent, _ = _make_hexgate_agent(name=name, graph=_CallbackFiringGraph())
 
     await agent.ainvoke({"messages": []}, config={})
 
@@ -628,6 +633,129 @@ async def test_usage_handler_emits_with_agent_name(
     assert event.agent_name == "my-agent"
     assert event.input_tokens == 10
     assert event.output_tokens == 20
+
+
+_EXPLICIT_KEY = "k-explicit"
+
+
+def _keyed_client() -> HexgateClient:
+    return HexgateClient(
+        HexgateConfig(base_url="https://other.example", api_key=_EXPLICIT_KEY)
+    )
+
+
+def _record_usage_sender_keys(monkeypatch: pytest.MonkeyPatch) -> list[str | None]:
+    keys: list[str | None] = []
+
+    def fake_configure(api_key: str | None = None) -> _FakeSender:
+        keys.append(api_key)
+        return _FakeSender()
+
+    monkeypatch.setattr(tracing_usage_mod, "configure_usage_sender", fake_configure)
+    return keys
+
+
+@pytest.mark.asyncio
+async def test_usage_handler_emits_on_the_attached_clients_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    keys = _record_usage_sender_keys(monkeypatch)
+    agent, _ = _make_hexgate_agent(graph=_CallbackFiringGraph())
+    agent.hexgate_client = _keyed_client()
+
+    await agent.ainvoke({"messages": []}, config={})
+
+    assert keys == [_EXPLICIT_KEY]
+
+
+@pytest.mark.asyncio
+async def test_usage_handler_key_survives_with_tools(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    keys = _record_usage_sender_keys(monkeypatch)
+    graph = _CallbackFiringGraph()
+    monkeypatch.setattr(factory, "create_langchain_agent", lambda **k: graph)
+    agent, _ = _make_hexgate_agent(graph=graph)
+    agent.hexgate_client = _keyed_client()
+
+    rebuilt = agent.with_tools([])
+    await rebuilt.ainvoke({"messages": []}, config={})
+
+    assert rebuilt._usage_handler.api_key == _EXPLICIT_KEY
+    assert keys == [_EXPLICIT_KEY]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["ainvoke", "astream_events"])
+@pytest.mark.parametrize("attached", [True, False], ids=["client", "no-client"])
+async def test_run_start_follows_the_attached_client(
+    monkeypatch: pytest.MonkeyPatch, method: str, attached: bool
+) -> None:
+    keys: list[str | None] = []
+
+    def fake_emit_run_start(*_args: Any, api_key: str | None = None, **_k: Any) -> None:
+        keys.append(api_key)
+
+    monkeypatch.setattr(run_facts_mod, "emit_run_start", fake_emit_run_start)
+    agent, _ = _make_hexgate_agent(graph=_RunFactsRecordingGraph())
+    if attached:
+        agent.hexgate_client = _keyed_client()
+
+    await run_once(agent, method)
+
+    assert keys == [_EXPLICIT_KEY if attached else None]
+
+
+class _RunFactsRecordingGraph:
+    """Records the run_scope agent name visible while the graph runs."""
+
+    def __init__(self) -> None:
+        self.agents: list[str] = []
+
+    async def ainvoke(self, payload: dict, config: Any = None) -> dict:
+        self.agents.append(get_run_facts().agent)
+        return {"messages": ["ok"]}
+
+    async def astream_events(
+        self, payload: dict, config: Any = None, version: str = "v2"
+    ) -> Any:
+        self.agents.append(get_run_facts().agent)
+        yield {"event": "one"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["ainvoke", "astream_events"])
+@pytest.mark.parametrize(
+    ("name", "expected"),
+    [(" billing ", "billing"), ("   ", "default"), (None, "default")],
+)
+async def test_run_scope_uses_canonical_agent_name(
+    method: str, name: str | None, expected: str
+) -> None:
+    graph = _RunFactsRecordingGraph()
+    agent, _ = _make_hexgate_agent(name=name, graph=graph)
+
+    await run_once(agent, method)
+
+    assert graph.agents == [expected]
+
+
+@pytest.mark.asyncio
+async def test_run_scope_name_matches_enforcer_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The ledger key (run_scope's name) must equal the enforcer's agent_name, which
+    agent_usage.* (#314) relies on to look the ledger up."""
+    graph = _RunFactsRecordingGraph()
+    monkeypatch.setattr(factory, "create_langchain_agent", lambda **k: graph)
+    agent, _ = _make_hexgate_agent(name=" billing ", graph=graph)
+    guarded = agent.enforce_policy(
+        load_policy_set_from_dict({"roles": {"default": {}}})
+    )
+
+    await guarded.ainvoke({"messages": []}, config={})
+
+    assert graph.agents == [guarded._binding.enforcer.agent_name]
 
 
 @pytest.mark.asyncio

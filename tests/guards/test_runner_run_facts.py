@@ -20,6 +20,7 @@ from hexgate.runtime.agent_usage import (
     MAX_WINDOW_SECONDS,
     UsageLedgers,
     UsageMetric,
+    UsageScopeKind,
     new_usage_ledger,
 )
 from hexgate.runtime.run_facts import RunFacts, run_scope
@@ -458,7 +459,7 @@ async def test_concurrent_runs_do_not_share_facts() -> None:
 async def test_agent_usage_ledger_matches_run_facts(path: str) -> None:
     """``agent_usage.tool_calls`` means exactly what ``run.tool_calls`` means."""
     ledgers = UsageLedgers(new_usage_ledger)
-    ledgers.enable()
+    ledgers.enable(UsageScopeKind.AGENT)
 
     with run_scope("a", ledgers=ledgers) as facts:
         await _drive(path, enforcer=FakeEnforcer())

@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Final, Protocol, runtime_checkable
 
+from hexgate.security.usage_inputs import NO_USAGE, UsageInputs
 from hexgate.tracing import semconv
 
 
@@ -59,7 +60,8 @@ class PolicyEngine(Protocol):
     pydantic engine) and :class:`~hexgate.security.bundle.PolicyBundle`
     (the WASM engine). The two are interchangeable from
     :class:`~hexgate.security.enforcer.PolicyEnforcer`'s point of view —
-    it depends on this protocol, not on either concrete type.
+    it depends on this protocol, not on either concrete type. ``usage``
+    carries every cross-run usage root; an engine forwards it whole.
     """
 
     def evaluate(
@@ -70,6 +72,7 @@ class PolicyEngine(Protocol):
         args: Mapping[str, Any],
         attributes: Mapping[str, Any] | None = None,
         run: Mapping[str, Any] | None = None,
+        usage: UsageInputs = NO_USAGE,
     ) -> Verdict: ...
 
     def declares_admission(self) -> bool:
@@ -104,6 +107,14 @@ class PolicyEngine(Protocol):
         skill-gated (skill keys are otherwise closed-world). A pydantic engine
         derives it from the resolved policy; a WASM bundle reads it from its signed
         manifest."""
+        ...
+
+    def agent_usage_paths(self) -> frozenset[str]:
+        """Every ``agent_usage.*`` path (without the root) this policy references.
+
+        Empty means the enforcer builds no namespace and the process records no
+        usage. A pydantic engine derives it from the resolved policy; a WASM bundle
+        reads it from its signed manifest, like the ``declares_*`` flags."""
         ...
 
 
@@ -322,6 +333,9 @@ class Decision:
     # UUID, not caller data); absent from ``as_error_payload`` like
     # ``attributes`` — the model must not learn how close it is to its budget.
     run: RunAttribution = DETACHED_RUN
+    # How the agent_usage.* namespace was built (UsageState value); None when the
+    # policy references none. Audit-only, absent from as_error_payload like run.
+    usage_state: str | None = None
 
     @classmethod
     def from_verdict(
@@ -335,6 +349,7 @@ class Decision:
         arguments: dict[str, Any] | None = None,
         attributes: dict[str, Any] | None = None,
         run: RunAttribution = DETACHED_RUN,
+        usage_state: str | None = None,
     ) -> "Decision":
         """Lift an engine :class:`Verdict` into a host-facing decision, stamping
         on the context the engine doesn't know."""
@@ -351,6 +366,7 @@ class Decision:
             arguments=arguments,
             attributes=attributes,
             run=run,
+            usage_state=usage_state,
         )
 
     @property

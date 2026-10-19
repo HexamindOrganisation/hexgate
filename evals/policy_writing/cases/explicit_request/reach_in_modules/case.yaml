@@ -1,0 +1,12 @@
+starting_project: support_bot_modules
+agent: support-bot
+request: Billing may call billing-bot as a tool freely, but a handoff to billing-bot needs a human approval. Security also wants admin-bot unreachable for every role, in a way no team capability can override.
+expect:
+  changed: [policies/boundaries/org_core.yaml, roles.yaml]
+  decisions:
+    - { role: billing, tool: "agent.tool:billing-bot", args: {}, expect: allow }
+    - { role: billing, tool: "agent.handoff:billing-bot", args: {}, expect: approval_required }
+    - { roles: [default, support], tool: "agent.tool:billing-bot", args: {}, expect: deny }
+    - { roles: [default, support], tool: "agent.handoff:billing-bot", args: {}, expect: deny }
+    - { roles: [default, support, billing], tool: "agent.tool:admin-bot", args: {}, expect: deny }
+    - { roles: [default, support, billing], tool: "agent.handoff:admin-bot", args: {}, expect: deny }

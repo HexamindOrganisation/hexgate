@@ -1,0 +1,7 @@
+starting_project: support_bot_sub_agents
+agent: front-desk
+request: Only support and billing callers may run this agent at all.
+expect:
+  decisions:
+    - { roles: [support, billing], tool: agent.run, args: { agent: front-desk }, expect: allow }
+    - { role: default, tool: agent.run, args: { agent: front-desk }, expect: deny }

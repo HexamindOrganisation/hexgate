@@ -52,6 +52,11 @@ must produce by them):
   ``run_scope`` entry. The span carries the envelope plus ``RUN_ID``, and
   ``RUN_ID`` is **required** on this scope, unlike every other: the span
   only exists inside a run, so one without a run id is malformed.
+- ``USAGE_STATE`` is optional on ``SCOPE_AUDIT``: one of ``fresh``, ``stale``,
+  ``partial``, ``unavailable`` or ``local``, saying how the ``agent_usage.*``
+  values the decision read were built. Absent when the policy references no
+  ``agent_usage.*`` path or the decision was not built by
+  ``PolicyEnforcer.decide``. The enricher does not read it yet.
 """
 
 from __future__ import annotations
@@ -80,6 +85,7 @@ VIOLATIONS = "sec_ai.violations"
 HINT = "sec_ai.hint"
 ARGUMENTS = "sec_ai.arguments"
 ATTRIBUTES = "sec_ai.attributes"
+USAGE_STATE = "sec_ai.usage_state"
 
 # --- Run attribution (SCOPE_AUDIT; RUN_ID also on SCOPE_USAGE, SCOPE_MESSAGES,
 # and required on SCOPE_RUNS) ---------------------------------------------------
