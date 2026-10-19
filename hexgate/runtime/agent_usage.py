@@ -1,11 +1,11 @@
-"""Process-local usage per agent — the local term of ``agent_usage.*``.
+"""Process-local usage per scope (agents today) — the local term of the usage namespaces.
 
-Counts what *this process* did for each agent, in time buckets, so a policy can read
+Counts what *this process* did for each scope, in time buckets, so a policy can read
 "invocations in the last hour" without a network call. Recorded from ``RunFacts``, so
 each metric is counted on the same line as its ``run.*`` twin.
 
-Inert until :meth:`UsageLedgers.enable`: a process whose policy references no
-``agent_usage.*`` path never creates a ledger.
+Each kind is inert until :meth:`UsageLedgers.enable`: a process whose policy references
+no ``agent_usage.*`` path never creates a ledger.
 """
 
 from __future__ import annotations
@@ -39,6 +39,29 @@ class OnUnavailable(StrEnum):
 
     ALLOW = "allow"  # ledger-only values: zeros plus this process (G3)
     DENY = "deny"  # the value is absent, so its constraints fail closed
+
+
+class UsageScopeKind(StrEnum):
+    """Whose usage a ledger or snapshot counts."""
+
+    AGENT = "agent"
+    USER = "user"
+
+
+@dataclass(frozen=True, slots=True)
+class UsageScope:
+    """One counted subject: the key of every ledger, snapshot and fetch."""
+
+    kind: UsageScopeKind
+    key: str
+
+    @classmethod
+    def agent(cls, name: str) -> UsageScope:
+        return cls(UsageScopeKind.AGENT, name)
+
+    def __str__(self) -> str:
+        # Every usage log line formats a scope through this.
+        return f"{self.kind} {self.key!r}"
 
 
 _SECONDS_PER_MINUTE: Final = 60
@@ -317,31 +340,32 @@ def _metric_value(totals: Mapping[UsageMetric, int], metric: str) -> int:
 
 
 class UsageLedgers:
-    """The process's ledgers by agent name. Off until :meth:`enable`, then on for
-    good, so a later policy re-adding a usage path finds its history intact."""
+    """The process's ledgers by scope. Each scope kind is off until :meth:`enable`,
+    then on for good, so a later policy re-adding a usage path finds its history
+    intact. Kinds switch independently: enabling agents never counts users."""
 
     def __init__(self, ledger_factory: Callable[[], UsageLedger]) -> None:
         self._ledger_factory = ledger_factory
-        self._enabled = False
-        self._ledgers: dict[str, UsageLedger] = {}
+        self._enabled: frozenset[UsageScopeKind] = frozenset()
+        self._ledgers: dict[UsageScope, UsageLedger] = {}
         self._lock = threading.Lock()
 
-    @property
-    def enabled(self) -> bool:
-        return self._enabled
+    def is_enabled(self, kind: UsageScopeKind) -> bool:
+        return kind in self._enabled
 
-    def enable(self) -> None:
-        self._enabled = True
+    def enable(self, kind: UsageScopeKind) -> None:
+        with self._lock:
+            self._enabled |= {kind}
 
-    def ledger_for(self, agent: str) -> UsageLedger | None:
-        """``agent``'s ledger, created on first use; ``None`` while disabled."""
-        if not self._enabled:
+    def ledger_for(self, scope: UsageScope) -> UsageLedger | None:
+        """``scope``'s ledger, created on first use; ``None`` while its kind is off."""
+        if scope.kind not in self._enabled:
             return None
         with self._lock:
-            ledger = self._ledgers.get(agent)
+            ledger = self._ledgers.get(scope)
             if ledger is None:
-                ledger = self._ledgers[agent] = self._ledger_factory()
+                ledger = self._ledgers[scope] = self._ledger_factory()
             return ledger
 
 
-AGENT_USAGE_LEDGERS: Final[UsageLedgers] = UsageLedgers(new_usage_ledger)
+USAGE_LEDGERS: Final[UsageLedgers] = UsageLedgers(new_usage_ledger)
