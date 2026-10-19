@@ -1,11 +1,6 @@
 import { useState } from "react";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
-import {
-  api,
-  type TopUser,
-  type TopUsersWindow,
-  type UsageMetric,
-} from "@/lib/api";
+import { api, type TopUsersWindow, type UsageMetric } from "@/lib/api";
 import type { SetUsageFilters, UsageFilters } from "@/lib/usage-filters";
 import { BarRow, BreakdownCardShell } from "@/components/ui/breakdown-card";
 
@@ -91,7 +86,7 @@ export function TopUsersCard({
   // Already ranked and limited by the server: no client-side sort.
   const rows: Row[] = q.isError
     ? []
-    : (q.data?.users ?? []).map((u: TopUser) => ({
+    : (q.data?.users ?? []).map((u) => ({
         key: u.user_id,
         value: u.value,
       }));
