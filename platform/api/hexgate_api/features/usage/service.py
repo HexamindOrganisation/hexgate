@@ -21,7 +21,7 @@ from hexgate_api.features.usage.paths import UsageMetric, UsageWindowSpec
 USAGE_MINUTE_TABLE: Final = "usage_minute"
 USAGE_MINUTE_USER_TABLE: Final = "usage_minute_user"
 # Code-owned SQL per metric. No request string ever reaches the SQL text.
-_METRIC_SQL: Final[Mapping[UsageMetric, str]] = MappingProxyType(
+METRIC_SQL: Final[Mapping[UsageMetric, str]] = MappingProxyType(
     {
         UsageMetric.INVOCATIONS: "invocations",
         UsageMetric.TOOL_CALLS: "tool_calls",
@@ -96,7 +96,7 @@ def build_usage_query(
         for i, seconds in enumerate(dict.fromkeys(s.window_seconds for s in specs))
     }
     columns = ",\n".join(
-        f"    sumIf({_METRIC_SQL[spec.metric]}, "
+        f"    sumIf({METRIC_SQL[spec.metric]}, "
         f"{_window_start_filter(window_params[spec.window_seconds])}) "
         f"AS {_VALUE_ALIAS_PREFIX}{i}"
         for i, spec in enumerate(specs)

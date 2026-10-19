@@ -1,5 +1,6 @@
 """HTTP contract of GET /v1/agents/{name}/usage — the server half of PR 6's wire
-contract — and of POST /v1/usage/users:read, the server half of U5's. Fixtures
+contract — of POST /v1/usage/users:read, the server half of U5's, and of the
+dashboard's GET /v1/projects/{id}/usage/top-users. Fixtures
 mirror tests/features/bans/test_bans.py."""
 
 from __future__ import annotations
@@ -22,7 +23,8 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from hexgate_api.constants import DEFAULT_ORG_ID
 from hexgate_api.core import keystore as keystore_mod
 from hexgate_api.core.ids import new_id
-from hexgate_api.deps.clickhouse import clickhouse_getter
+from hexgate_api.deps.clickhouse import clickhouse_getter, require_clickhouse
+from hexgate_api.deps.org import require_org_member
 from hexgate_api.deps.tokens import require_project
 from hexgate_api.features.usage import router as usage_router
 from hexgate_api.features.usage.service import (
@@ -656,3 +658,115 @@ def test_a_failed_read_is_recorded_as_a_failure(
     _user_usage(client, ["invocations_1h"])
 
     assert user_stats.records == [(True, True)]
+
+
+# ---------------------------------------------------------------------------
+# GET /v1/projects/{project_id}/usage/top-users: the dashboard ranking
+# ---------------------------------------------------------------------------
+
+_TOP_USERS_PATH = f"/v1/projects/{_PROJECT}/usage/top-users"
+_BLOCKED_POOL_PREFIX = "usage-test-blocked-user-pool"
+
+
+@pytest.fixture
+def dashboard_anonymous(
+    anonymous_client: TestClient, fake_clickhouse: MagicMock
+) -> TestClient:
+    """Cookie auth runs for real; ClickHouse is the fake."""
+    app.dependency_overrides[require_clickhouse] = lambda: fake_clickhouse
+    return anonymous_client
+
+
+@pytest.fixture
+def dashboard(
+    dashboard_anonymous: TestClient, fake_clickhouse: MagicMock
+) -> TestClient:
+    app.dependency_overrides[require_org_member] = lambda: MagicMock()
+    fake_clickhouse.query.return_value.result_rows = [(_USER, 50), ("bob", 30)]
+    return dashboard_anonymous
+
+
+def test_top_users_without_a_session_is_401(
+    dashboard_anonymous: TestClient, fake_clickhouse: MagicMock
+) -> None:
+    r = dashboard_anonymous.get(_TOP_USERS_PATH)
+
+    assert r.status_code == 401
+    fake_clickhouse.query.assert_not_called()
+
+
+def test_top_users_answers_the_ranking_and_is_never_stored(
+    dashboard: TestClient,
+) -> None:
+    r = dashboard.get(_TOP_USERS_PATH, params={"window": "7d", "metric": "denials"})
+
+    assert r.status_code == 200, r.text
+    assert r.json() == {
+        "window": "7d",
+        "metric": "denials",
+        "users": [{"user_id": _USER, "value": 50}, {"user_id": "bob", "value": 30}],
+    }
+    assert r.headers["Cache-Control"] == "private, no-store"
+
+
+def test_top_users_defaults_reach_the_query(
+    dashboard: TestClient, fake_clickhouse: MagicMock
+) -> None:
+    r = dashboard.get(_TOP_USERS_PATH)
+
+    assert r.status_code == 200, r.text
+    assert (r.json()["window"], r.json()["metric"]) == ("24h", "total_tokens")
+    sql = fake_clickhouse.query.call_args.args[0]
+    params = fake_clickhouse.query.call_args.kwargs["parameters"]
+    assert "sum(input_tokens + output_tokens)" in sql
+    assert params == {"project_id": _PROJECT, "window": 86_400, "limit": 10}
+
+
+@pytest.mark.parametrize(
+    "params",
+    [{"window": "90d"}, {"metric": "cost_usd"}, {"limit": 0}, {"limit": 51}],
+)
+def test_top_users_rejects_a_bad_query_with_422(
+    dashboard: TestClient, fake_clickhouse: MagicMock, params: dict[str, object]
+) -> None:
+    r = dashboard.get(_TOP_USERS_PATH, params=params)
+
+    assert r.status_code == 422
+    fake_clickhouse.query.assert_not_called()
+
+
+def test_a_failed_top_users_read_is_503_and_logs_no_message(
+    dashboard: TestClient,
+    fake_clickhouse: MagicMock,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """G10: a ClickHouse message can quote a bound value."""
+    quoted = "value quoted by clickhouse"
+    fake_clickhouse.query.side_effect = DatabaseError(quoted)
+
+    with caplog.at_level("WARNING", logger=usage_router.__name__):
+        r = dashboard.get(_TOP_USERS_PATH)
+
+    assert r.status_code == 503
+    assert r.headers["Retry-After"] == "5"
+    assert "DatabaseError" in caplog.text
+    assert quoted not in caplog.text
+
+
+def test_top_users_never_touches_the_sdk_user_pool_or_stats(
+    dashboard: TestClient,
+) -> None:
+    """G9: dashboard tabs must not queue SDK user reads or move their read rate."""
+    released = threading.Event()
+    stats = MagicMock()
+    with ThreadPoolExecutor(1, thread_name_prefix=_BLOCKED_POOL_PREFIX) as pool:
+        pool.submit(released.wait, _RELEASE_SECONDS)
+        app.dependency_overrides[get_user_usage_executor] = lambda: pool
+        app.dependency_overrides[get_user_read_stats] = lambda: stats
+        try:
+            r = dashboard.get(_TOP_USERS_PATH)
+        finally:
+            released.set()
+
+    assert r.status_code == 200, r.text
+    stats.record.assert_not_called()

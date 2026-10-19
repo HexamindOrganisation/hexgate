@@ -1,5 +1,5 @@
-"""SDK-facing read of ``agent_usage.*`` and ``user_usage.*`` windows; the project
-comes from the bearer."""
+"""SDK reads of ``agent_usage.*`` and ``user_usage.*`` windows (bearer; the project
+comes from it), and the dashboard's top-users ranking (cookie)."""
 
 import asyncio
 import logging
@@ -18,12 +18,18 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from hexgate_api.core.clickhouse import server_error_code
 from hexgate_api.core.db import get_session
-from hexgate_api.deps.clickhouse import clickhouse_getter, clickhouse_unavailable
+from hexgate_api.deps.clickhouse import (
+    clickhouse_getter,
+    clickhouse_unavailable,
+    require_clickhouse,
+)
+from hexgate_api.deps.org import require_org_member
 from hexgate_api.deps.tokens import require_project
 from hexgate_api.features.agents.service import get_agent
 from hexgate_api.schemas import USER_ID_MAX_LENGTH
 from hexgate_api.features.usage.paths import (
     InvalidUsagePaths,
+    UsageMetric,
     UsageWindowSpec,
     parse_usage_path_list,
     parse_usage_paths,
@@ -46,6 +52,13 @@ from hexgate_api.features.usage.stats import (
     UsageReadStats,
     get_agent_read_stats,
     get_user_read_stats,
+)
+from hexgate_api.features.usage.top_users import (
+    TOP_USERS_DEFAULT_LIMIT,
+    TOP_USERS_MAX_LIMIT,
+    TOP_USERS_WINDOW_SECONDS,
+    TopUsersWindow,
+    read_top_users,
 )
 
 _log = logging.getLogger(__name__)
@@ -95,6 +108,19 @@ class UsageRead(BaseModel):
 
     as_of: datetime
     values: dict[str, int]
+
+
+class TopUserRead(BaseModel):
+    user_id: str
+    value: int
+
+
+class TopUsersRead(BaseModel):
+    """Ranked by ``value`` descending; users at 0 are left out."""
+
+    window: TopUsersWindow
+    metric: UsageMetric
+    users: list[TopUserRead]
 
 
 class UserUsageQuery(BaseModel):
@@ -164,6 +190,47 @@ async def api_read_user_usage(
     )
     response.headers["Cache-Control"] = USER_USAGE_CACHE_CONTROL
     return read
+
+
+@router.get(
+    "/projects/{project_id}/usage/top-users",
+    response_model=TopUsersRead,
+    dependencies=[Depends(require_org_member)],
+    tags=["usage"],
+)
+async def api_top_users(
+    project_id: str,
+    response: Response,
+    window: TopUsersWindow = "24h",
+    metric: UsageMetric = UsageMetric.TOTAL_TOKENS,
+    limit: int = Query(TOP_USERS_DEFAULT_LIMIT, ge=1, le=TOP_USERS_MAX_LIMIT),
+    clickhouse_client: Client = Depends(require_clickhouse),
+) -> TopUsersRead:
+    """Dashboard ranking of the project's end users across every agent. Runs on
+    the default thread pool, never the SDK user-read pool (README G9)."""
+    try:
+        users = await asyncio.to_thread(
+            read_top_users,
+            clickhouse_client,
+            project_id,
+            TOP_USERS_WINDOW_SECONDS[window],
+            metric,
+            limit,
+        )
+    except ClickHouseError as exc:
+        _log.warning(
+            "top users read failed for project %s: %s (clickhouse code %s)",
+            project_id,
+            type(exc).__name__,
+            server_error_code(exc),
+        )
+        raise clickhouse_unavailable(_USAGE_UNAVAILABLE) from exc
+    response.headers["Cache-Control"] = USER_USAGE_CACHE_CONTROL
+    return TopUsersRead(
+        window=window,
+        metric=metric,
+        users=[TopUserRead(user_id=u.user_id, value=u.value) for u in users],
+    )
 
 
 def _check_user_id(user_id: str) -> None:
