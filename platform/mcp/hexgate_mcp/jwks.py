@@ -1,4 +1,4 @@
-"""The platform API's public signing keys, fetched from its JWKS and cached.
+"""The platform API's OAuth public key, fetched from its JWKS and cached.
 
 The server holds no key of its own. Keys are cached for ten minutes. A `kid`
 not in the cache triggers one refetch, so a rotated key is picked up without
