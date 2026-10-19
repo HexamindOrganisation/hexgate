@@ -72,7 +72,12 @@ from hexgate.security.models import (
     is_agent_via_key,
     is_skill_key,
 )
-from hexgate.security.usage_inputs import NO_USAGE, UsageInputs
+from hexgate.security.usage_inputs import (
+    AGENT_USAGE_ROOT,
+    NO_USAGE,
+    USER_USAGE_ROOT,
+    UsageInputs,
+)
 
 DEFAULT_ROLE_NAME = "default"
 
@@ -101,9 +106,8 @@ _FILE_LEVEL_KEYS = frozenset(
 # rejected like any other stray key, but with advice that leads to a loadable policy.
 _AGENT_LEVEL_KEYS = frozenset({"guards", USAGE_FIELD})
 
-_ROOTED_PATH_SEGMENTS = (
-    2  # run.*, agent_usage.* and user_usage.* are flat: <root>.<name>
-)
+# run.*, agent_usage.* and user_usage.* are flat: <root>.<name>
+_ROOTED_PATH_SEGMENTS = 2
 _ORDERED_OPS = frozenset({"<", "<=", ">", ">="})
 # ==/!= excluded: list equality is well-defined, just not useful here.
 _SCALAR_ONLY_OPS = _ORDERED_OPS | {"in", "not in"}
@@ -387,13 +391,13 @@ def _run_root(scalar_paths: frozenset[str], list_paths: frozenset[str]) -> _Path
 
 _RUN = _run_root(SCALAR_PATHS, LIST_PATHS)
 _AGENT_USAGE = _PathRoot(
-    "agent_usage",
+    AGENT_USAGE_ROOT,
     KNOWN_AGENT_USAGE_PATHS,
     frozenset(),
     vocabulary=AGENT_USAGE_VOCABULARY,
 )
 _USER_USAGE = _PathRoot(
-    "user_usage",
+    USER_USAGE_ROOT,
     KNOWN_USER_USAGE_PATHS,
     frozenset(),
     vocabulary=USER_USAGE_VOCABULARY,

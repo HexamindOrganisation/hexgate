@@ -71,6 +71,7 @@ from hexgate.security.testing import (
     run_namespace,
     user_usage_namespace,
 )
+from hexgate.security.usage_inputs import AGENT_USAGE_ROOT, USER_USAGE_ROOT
 
 # Same schema ``HexgateContext.attributes`` enforces at runtime, so a bag the
 # simulator accepts is a bag production can actually produce — including the
@@ -1012,7 +1013,7 @@ def _resolve_agent_usage(raw: str) -> dict[str, int]:
     return _resolve_namespace_flag(
         _AGENT_USAGE_FLAG,
         raw,
-        root="agent_usage",
+        root=AGENT_USAGE_ROOT,
         known=KNOWN_AGENT_USAGE_PATHS,
         vocabulary=AGENT_USAGE_VOCABULARY,
         build=agent_usage_namespace,
@@ -1024,7 +1025,7 @@ def _resolve_user_usage(raw: str) -> dict[str, int]:
     return _resolve_namespace_flag(
         _USER_USAGE_FLAG,
         raw,
-        root="user_usage",
+        root=USER_USAGE_ROOT,
         known=KNOWN_USER_USAGE_PATHS,
         vocabulary=USER_USAGE_VOCABULARY,
         build=user_usage_namespace,

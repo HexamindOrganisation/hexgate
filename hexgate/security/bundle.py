@@ -33,13 +33,16 @@ from hexgate.runtime.agent_usage import (
 )
 from hexgate.security.decision import Verdict
 from hexgate.security.signing import SignatureError, verify_bytes
-from hexgate.security.usage_inputs import NO_USAGE, UsageInputs
+from hexgate.security.usage_inputs import (
+    AGENT_USAGE_ROOT,
+    NO_USAGE,
+    USER_USAGE_ROOT,
+    UsageInputs,
+)
 from hexgate.security.wasm_engine import WasmPolicy
 
 _log = logging.getLogger(__name__)
 
-_AGENT_USAGE_KEY = "agent_usage"
-_USER_USAGE_KEY = "user_usage"
 _USAGE_KEY = "usage"
 _ON_UNAVAILABLE_KEY = "on_unavailable"
 
@@ -354,12 +357,12 @@ class PolicyBundle:
     def agent_usage_paths(self) -> frozenset[str]:
         """Read the referenced ``agent_usage.*`` paths from the signed manifest.
         Absent (a usage-free policy, or an older bundle) reads empty."""
-        return self._manifest_usage_paths(_AGENT_USAGE_KEY, KNOWN_AGENT_USAGE_PATHS)
+        return self._manifest_usage_paths(AGENT_USAGE_ROOT, KNOWN_AGENT_USAGE_PATHS)
 
     def user_usage_paths(self) -> frozenset[str]:
         """As :meth:`agent_usage_paths`, for ``user_usage.*``. A bundle built before
         the root existed has no key, so its user constraints fail closed."""
-        return self._manifest_usage_paths(_USER_USAGE_KEY, KNOWN_USER_USAGE_PATHS)
+        return self._manifest_usage_paths(USER_USAGE_ROOT, KNOWN_USER_USAGE_PATHS)
 
     def _manifest_usage_paths(self, key: str, known: frozenset[str]) -> frozenset[str]:
         """Paths this SDK doesn't know (a bundle built by a newer one) are dropped, so
@@ -537,9 +540,9 @@ def build_signed_bundle(
         manifest["guards"] = guard_stance
     # Omitted when empty for the same reason: a usage-free policy's bytes must not move.
     if usage_paths:
-        manifest[_AGENT_USAGE_KEY] = sorted(usage_paths)
+        manifest[AGENT_USAGE_ROOT] = sorted(usage_paths)
     if user_usage_paths:
-        manifest[_USER_USAGE_KEY] = sorted(user_usage_paths)
+        manifest[USER_USAGE_ROOT] = sorted(user_usage_paths)
     # Omitted at the default, so a usage-free policy's manifest bytes don't move.
     if on_unavailable is not OnUnavailable.ALLOW:
         manifest[_USAGE_KEY] = {_ON_UNAVAILABLE_KEY: on_unavailable.value}

@@ -23,6 +23,7 @@ from hexgate.audit import AuditEvent, configure
 from hexgate.config.env import platform_of
 from hexgate.runtime.agent_usage import (
     USAGE_LEDGERS,
+    UsageLedger,
     UsageLedgers,
     UsageScope,
     UsageScopeKind,
@@ -123,6 +124,14 @@ _ON_UNAVAILABLE_METHOD = "usage_on_unavailable"
 def _on_unavailable_of(engine: PolicyEngine) -> OnUnavailable:
     read = getattr(engine, _ON_UNAVAILABLE_METHOD, None)
     return read() if read is not None else OnUnavailable.ALLOW
+
+
+def _current_run_age(
+    run_ledger: UsageLedger | None, ledger: UsageLedger, run: Mapping[str, Any]
+) -> float | None:
+    """The age of the run being decided inside, if it recorded itself on ``ledger``;
+    ``ledger_namespace`` then leaves that run out of ``invocations_*``."""
+    return run[_RUN_ELAPSED] if run_ledger is ledger else None
 
 
 def _anonymous_user_usage(
@@ -317,8 +326,7 @@ class PolicyEnforcer:
         # Inside a run that recorded its invocation on this ledger (not a parent's,
         # not DETACHED, not one opened before the ledgers were enabled), so that
         # invocation is left out of invocations_*, as it was at admission.
-        in_own_run = facts.ledger is ledger
-        current_run_age = run[_RUN_ELAPSED] if in_own_run else None
+        current_run_age = _current_run_age(facts.ledger, ledger, run)
         if self._usage_source is None:
             return local_reading(
                 ledger, bound.usage_paths, current_run_age=current_run_age
@@ -353,8 +361,7 @@ class PolicyEnforcer:
             return None
         # The run's user is fixed at run entry, so a context entered for another user
         # inside the run reads that user's ledger without leaving this run out.
-        in_own_run = facts.user_ledger is ledger
-        current_run_age = run[_RUN_ELAPSED] if in_own_run else None
+        current_run_age = _current_run_age(facts.user_ledger, ledger, run)
         return ledger_namespace(ledger, paths, current_run_age=current_run_age)
 
     def record(

@@ -34,10 +34,10 @@ a module). This module runs over a **successfully linked** bundle and reports th
 - **unknown-skill** — a ``skills:`` rule names a skill the manifest doesn't
   declare. Only checked when a manifest is supplied and lists the skills.
 - **unknown-root** — a constraint path that no call ever sets: its root isn't
-  ``args`` / ``ctx`` / ``run`` / ``agent_usage`` / ``user_usage``, or it dots into the ``role`` /
-  ``tool`` string. Manifest-free.
-- **negated-usage-cap** — an ``agent_usage.*`` or ``user_usage.*`` path under an odd number of
-  ``not`` (a boundary deny counts as one). Under ``usage.on_unavailable: deny``
+  ``args`` / ``ctx`` / ``run`` / ``agent_usage`` / ``user_usage``, or it dots
+  into the ``role`` / ``tool`` string. Manifest-free.
+- **negated-usage-cap** — an ``agent_usage.*`` or ``user_usage.*`` path under
+  an odd number of ``not`` (a boundary deny counts as one). Under ``usage.on_unavailable: deny``
   a missing value makes it true, so the cap passes. Manifest-free.
 
 :func:`analyze_policy` is the one entry point over a resolved ``PolicySet``: every
@@ -1443,9 +1443,9 @@ def _unknown_root_lint(
 def _negated_usage_caps(
     policy_set: PolicySet, *, source: str | None
 ) -> list[PolicyLint]:
-    """``agent_usage.*`` or ``user_usage.*`` paths under an odd number of ``not``, as errors. Only
-    under ``on_unavailable: deny``: under ``allow`` every known path holds a
-    ledger value, so nothing is missing."""
+    """``agent_usage.*`` or ``user_usage.*`` paths under an odd number of
+    ``not``, as errors. Only under ``on_unavailable: deny``: under ``allow``
+    every known path holds a ledger value, so nothing is missing."""
     if policy_set.usage_on_unavailable() is not OnUnavailable.DENY:
         return []
     roles = _reported_roles(policy_set)
@@ -1486,9 +1486,9 @@ def _module_negated_usage_caps(
 
 
 def _negated_usage_paths(groups: Iterable[tuple[list[str], bool]]) -> set[str]:
-    """Each ``agent_usage.*`` or ``user_usage.*`` path read under an odd number of ``not`` over
-    ``(constraints, negated)`` groups: the uses :func:`_missing_refs` grades
-    ``error``."""
+    """Each ``agent_usage.*`` or ``user_usage.*`` path read under an odd
+    number of ``not`` over ``(constraints, negated)`` groups: the uses
+    :func:`_missing_refs` grades ``error``."""
     return {
         path
         for constraints, negated in groups
