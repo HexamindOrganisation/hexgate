@@ -107,6 +107,10 @@ class RunFacts:
     # This agent's process-wide ledger, bound at run_scope entry; None while
     # agent_usage.* is off, and always on DETACHED. Shared across runs of the agent.
     ledger: UsageLedger | None = field(default=None, repr=False, compare=False)
+    # The context user's process-wide ledger, bound at run_scope entry; None for an
+    # anonymous run, while user_usage.* is off, and on DETACHED. Shared across every
+    # agent's runs for that user.
+    user_ledger: UsageLedger | None = field(default=None, repr=False, compare=False)
     # Monotonic, not wall clock: an NTP step backwards would un-block a run that had
     # already exceeded its budget. The lambda matters — a bare ``time.monotonic``
     # reference binds at class definition while :meth:`as_namespace` resolves it at
@@ -183,9 +187,10 @@ class RunFacts:
         )
 
     def _record_usage(self, amounts: dict[UsageMetric, int]) -> None:
-        # After the caller's lock is released, so the two locks never nest.
-        if self.ledger is not None:
-            self.ledger.record(amounts)
+        # After the caller's lock is released, so the locks never nest.
+        for ledger in (self.ledger, self.user_ledger):
+            if ledger is not None:
+                ledger.record(amounts)
 
     def as_namespace(self, tool_name: str) -> dict[str, Any]:
         """The ``run`` mapping the policy grammar evaluates for a decision on
@@ -279,20 +284,25 @@ def run_scope(
     ``HexgateContext.__aenter__``, which may wrap several. ``api_key`` picks the
     sender for the ``run_start`` span; ``None`` falls back to ``HEXGATE_API_KEY``.
 
-    Counts one ``invocations`` on the agent's ledger — here and not in
+    Counts one ``invocations`` on the agent's ledger and, for a named user, on the
+    user's — here and not in
     :func:`use_run_facts`, which joins a run rather than starting one.
     """
+    context = get_current_context()
+    user_id = context.user_id if context is not None else ""
     facts = RunFacts(
-        id=str(uuid4()), agent=agent, ledger=ledgers.ledger_for(UsageScope.agent(agent))
+        id=str(uuid4()),
+        agent=agent,
+        ledger=ledgers.ledger_for(UsageScope.agent(agent)),
+        user_ledger=ledgers.ledger_for(UsageScope.user(user_id)) if user_id else None,
     )
     facts._record_usage({UsageMetric.INVOCATIONS: 1})
     with use_run_facts(facts):
-        context = get_current_context()
         emit_run_start(
             agent,
             facts.id,
             session_id=(context.session_id or "") if context is not None else "",
-            user_id=context.user_id if context is not None else "",
+            user_id=user_id,
             api_key=api_key,
         )
         yield facts
