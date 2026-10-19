@@ -12,12 +12,14 @@ from typing import Any
 
 import pytest
 
+from hexgate.cloud.client import HexgateClient, HexgateConfig
 from hexgate.runtime.agent_usage import UsageLedgers, new_usage_ledger
 from hexgate.runtime.context import HexgateContext
 from hexgate.runtime.run_facts import get_run_facts, run_scope
 from hexgate.security import AGENT_RUN_TOOL, DecisionOutcome, Verdict, usage_source
 from hexgate.security.enforcer import PolicyEnforcer, UsageRefresh, build_enforcer
 from hexgate.security.policy_set import PolicySet, load_policy_set_from_dict
+from hexgate.security.usage_inputs import NO_USAGE, UsageInputs
 from hexgate.security.usage_source import (
     OnUnavailable,
     PlatformUsageSource,
@@ -80,6 +82,7 @@ class _RecordingEngine:
     def __init__(self, usage_paths: frozenset[str]) -> None:
         self._usage_paths = usage_paths
         self.namespaces: list[Mapping[str, Any] | None] = []
+        self.inputs: list[UsageInputs] = []
 
     def agent_usage_paths(self) -> frozenset[str]:
         return self._usage_paths
@@ -92,9 +95,10 @@ class _RecordingEngine:
         args: Mapping[str, Any],
         attributes: Mapping[str, Any] | None = None,
         run: Mapping[str, Any] | None = None,
-        agent_usage: Mapping[str, Any] | None = None,
+        usage: UsageInputs = NO_USAGE,
     ) -> Verdict:
-        self.namespaces.append(agent_usage)
+        self.inputs.append(usage)
+        self.namespaces.append(usage.agent_usage)
         return Verdict(outcome=DecisionOutcome.DENY, reason="recorded")
 
 
@@ -105,7 +109,7 @@ class _EvaluateOnlyEngine:
         self.namespaces: list[Mapping[str, Any] | None] = []
 
     def evaluate(self, **kwargs: Any) -> Verdict:
-        self.namespaces.append(kwargs.get("agent_usage"))
+        self.namespaces.append(kwargs["usage"].agent_usage)
         return Verdict(outcome=DecisionOutcome.ALLOW)
 
 
@@ -237,6 +241,19 @@ def test_every_role_sees_the_same_namespace() -> None:
     assert first == {"tool_calls_5m": 0}
     assert len(engine.namespaces) == 3
     assert all(namespace is first for namespace in engine.namespaces)
+
+
+def test_every_role_gets_one_usage_inputs_with_no_user_usage() -> None:
+    engine = _RecordingEngine(frozenset({"tool_calls_5m"}))
+    enforcer = PolicyEnforcer(engine, agent_name=_AGENT, ledgers=_ledgers())
+
+    with HexgateContext(user_id="u", user_roles=["a", "b", "c"]).sync_scope():
+        enforcer.decide("refund", {})
+
+    first = engine.inputs[0]
+    assert len(engine.inputs) == 3
+    assert all(usage is first for usage in engine.inputs)
+    assert first.user_usage is None
 
 
 def test_an_engine_without_usage_paths_still_decides() -> None:
@@ -479,7 +496,7 @@ def _platform_env(monkeypatch: pytest.MonkeyPatch) -> pytest.MonkeyPatch:
 
     monkeypatch.setattr(usage_source, "_usage_sources", {})
     # Audit is not under test; a real sender would outlive the test.
-    monkeypatch.setattr(enforcer_mod, "configure", lambda _api_key: None)
+    monkeypatch.setattr(enforcer_mod, "configure", lambda *_a, **_k: None)
     for name in ("HEXGATE_API_KEY", "HEXGATE_LOCAL_POLICY", _senders._LOCAL_MODE_ENV):
         monkeypatch.delenv(name, raising=False)
     return monkeypatch
@@ -507,5 +524,79 @@ def test_build_enforcer_in_local_mode_has_none(
     _platform_env.setenv(_senders._LOCAL_MODE_ENV, "1")
 
     enforcer = build_enforcer(_usage_free(), agent_name=_AGENT, api_key=_KEY)
+
+    assert enforcer._usage_source is None
+
+
+_OTHER_URL = "https://other.example"
+
+
+def _other_platform_client() -> HexgateClient:
+    return HexgateClient(HexgateConfig(base_url=_OTHER_URL, api_key=_KEY))
+
+
+def _record_configure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> list[tuple[str | None, str | None]]:
+    from hexgate.security import enforcer as enforcer_mod
+
+    calls: list[tuple[str | None, str | None]] = []
+
+    def _spy(api_key: str | None = None, base_url: str | None = None) -> None:
+        calls.append((api_key, base_url))
+
+    monkeypatch.setattr(enforcer_mod, "configure", _spy)
+    return calls
+
+
+def test_build_enforcer_with_a_client_reuses_it_for_usage(
+    _platform_env: pytest.MonkeyPatch,
+) -> None:
+    client = _other_platform_client()
+    _platform_env.setattr(
+        "hexgate.cloud.client.HexgateClient",
+        lambda *_a, **_k: pytest.fail("built a second client"),
+    )
+
+    enforcer = build_enforcer(_usage_free(), agent_name=_AGENT, client=client)
+
+    assert enforcer._usage_source is usage_source._usage_sources[(_KEY, _OTHER_URL)]
+
+
+def test_build_enforcer_client_wins_over_api_key(
+    _platform_env: pytest.MonkeyPatch,
+) -> None:
+    calls = _record_configure(_platform_env)
+
+    enforcer = build_enforcer(
+        _usage_free(),
+        agent_name=_AGENT,
+        api_key="other",
+        client=_other_platform_client(),
+    )
+
+    assert enforcer._usage_source is usage_source._usage_sources[(_KEY, _OTHER_URL)]
+    assert [key for key, _ in calls] == [_KEY]
+
+
+def test_build_enforcer_audits_to_the_client_base_url(
+    _platform_env: pytest.MonkeyPatch,
+) -> None:
+    calls = _record_configure(_platform_env)
+
+    build_enforcer(_usage_free(), agent_name=_AGENT, client=_other_platform_client())
+    build_enforcer(_usage_free(), agent_name=_AGENT, api_key=_KEY)
+
+    assert calls == [(_KEY, _OTHER_URL), (_KEY, None)]
+
+
+def test_build_enforcer_with_a_client_in_local_mode_has_none(
+    _platform_env: pytest.MonkeyPatch,
+) -> None:
+    _platform_env.setenv(_senders._LOCAL_MODE_ENV, "1")
+
+    enforcer = build_enforcer(
+        _usage_free(), agent_name=_AGENT, client=_other_platform_client()
+    )
 
     assert enforcer._usage_source is None

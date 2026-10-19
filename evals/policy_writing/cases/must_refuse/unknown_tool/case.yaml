@@ -1,0 +1,9 @@
+starting_project: support_bot_single_file
+agent: support-bot
+request: Let billing cancel customer subscriptions.
+note: No such tool exists. The agent must not invent one; the global known-tools check fails any made-up name.
+expect:
+  no_changes: true
+  mentions_all:
+    - [tool, manifest, capability, function, expose, exposes]
+    - ["no", "not", "isn't", "is not", "doesn't", "does not", "didn't", "did not", "won't", "cannot", "can't", "none", "unable", "unchanged", "unavailable", "lacks", "unknown"]

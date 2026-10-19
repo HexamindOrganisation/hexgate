@@ -7,6 +7,8 @@ a 404). These tests stub that seam so no platform is needed.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from types import ModuleType
 from typing import Any
 
 import pytest
@@ -232,6 +234,29 @@ def test_wrap_attaches_binding_sharing_the_tools_enforcer() -> None:
     assert wrapped._binding is not None
     assert isinstance(wrapped._binding.enforcer, PolicyEnforcer)
     assert wrapped._binding.enforcer.agent_name == "my-agent"
+
+
+def test_wrap_shares_one_client_across_policy_and_enforcer(
+    monkeypatch: pytest.MonkeyPatch,
+    enforcer_clients: Callable[[ModuleType], list[Any]],
+) -> None:
+    """The policy resolver's client also builds the enforcer, so usage reads and
+    audit follow the policy's platform."""
+    seen: dict[str, Any] = {}
+
+    def fake_resolve(
+        name: str, *, api_key: str, client: object = None
+    ) -> ResolvedPolicy:
+        seen["policy"] = client
+        return ResolvedPolicy(_allow_all(["echo", "shout"]), None)
+
+    monkeypatch.setattr(wrapper_mod, "resolve_policy", fake_resolve)
+    clients = enforcer_clients(wrapper_mod)
+
+    wrap_pydantic_agent(agent=_make_agent(), api_key="k")
+
+    assert seen["policy"] is not None
+    assert clients == [seen["policy"]]
 
 
 @pytest.mark.asyncio

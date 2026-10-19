@@ -1146,7 +1146,7 @@ wheels = [
 
 [[package]]
 name = "hexgate"
-version = "0.3.2"
+version = "0.3.3"
 source = { editable = "../../" }
 dependencies = [
     { name = "bashlex" },
@@ -1185,6 +1185,7 @@ requires-dist = [
     { name = "google-adk", specifier = ">=1.14" },
     { name = "google-genai", specifier = ">=1.0" },
     { name = "httpx", specifier = ">=0.28.1" },
+    { name = "inspect-ai", marker = "extra == 'evals'", specifier = "==0.3.278" },
     { name = "ipykernel", marker = "extra == 'dev'" },
     { name = "jupyter", marker = "extra == 'dev'" },
     { name = "langchain", specifier = ">=1.2.15" },
@@ -1212,7 +1213,7 @@ requires-dist = [
     { name = "wasmtime", specifier = ">=20.0" },
     { name = "websockets", specifier = ">=13.0" },
 ]
-provides-extras = ["dev"]
+provides-extras = ["dev", "evals"]
 
 [[package]]
 name = "hexgate-api"
@@ -1229,11 +1230,13 @@ dependencies = [
     { name = "fastapi-users", extra = ["sqlalchemy"] },
     { name = "greenlet" },
     { name = "hexgate" },
+    { name = "httpx" },
     { name = "httpx-oauth" },
     { name = "jinja2" },
     { name = "opentelemetry-proto" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
+    { name = "pyjwt", extra = ["crypto"] },
     { name = "python-dotenv" },
     { name = "resend" },
     { name = "sqlmodel" },
@@ -1263,11 +1266,13 @@ requires-dist = [
     { name = "fastapi-users", extras = ["sqlalchemy"], specifier = ">=14.0" },
     { name = "greenlet", specifier = ">=3.0" },
     { name = "hexgate", editable = "../../" },
+    { name = "httpx", specifier = ">=0.27" },
     { name = "httpx-oauth", specifier = ">=0.16" },
     { name = "jinja2", specifier = ">=3.1.6" },
     { name = "opentelemetry-proto", specifier = ">=1.41" },
     { name = "pydantic", specifier = ">=2.9" },
     { name = "pydantic-settings", specifier = ">=2.5" },
+    { name = "pyjwt", extras = ["crypto"], specifier = ">=2.10" },
     { name = "python-dotenv", specifier = ">=1.1.1" },
     { name = "resend", specifier = ">=2.4" },
     { name = "sqlmodel", specifier = ">=0.0.22" },

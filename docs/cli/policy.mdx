@@ -1,6 +1,6 @@
 ---
 title: "hexgate policy"
-description: "validate, show-rego, test, build, keygen — policy authoring CLI."
+description: "validate, show-rego, test, build, keygen, resolve, check — policy authoring CLI."
 ---
 
 The `hexgate policy` subcommands author, inspect, and compile policies without a
@@ -27,8 +27,18 @@ hexgate policy test policy.yaml --roles support,billing --tool refund_order \
 # Compile a bundle: writes {stem}.yaml + .rego + .wasm + .bundle.json
 hexgate policy build policy.yaml --out ./bundle
 
+# Sign it with a local key: also writes {stem}.bundle.json.sig
+hexgate policy build policy.yaml --out ./bundle --sign-key ./keys/dev.private
+
 # Generate an Ed25519 keypair for signing bundles
 hexgate policy keygen --out ./keys/dev          # → dev.private (0600) + dev.public
+hexgate policy keygen --out ./keys/dev --force  # overwrite an existing pair
+
+# Link a policies/ module tree into the one policy the engines enforce
+hexgate policy resolve --dir .
+
+# Lint the same tree for grants that never fire, duplicates and drift
+hexgate policy check --dir .
 ```
 
 ## Prerequisite — `opa`
@@ -150,3 +160,113 @@ hexgate policy test policy.yaml --role billing --tool refund_order \
 
 A `ctx.*` key you don't pass is treated as missing and fails closed, exactly as
 at runtime when the request scope omits it.
+
+## Testing `run.*` and `agent_usage.*` rules
+
+`--run-facts` feeds `run.*` constraints (this run's counters) and
+`--agent-usage` feeds `agent_usage.*` constraints (this agent across runs). Both
+take a JSON object, and a path you don't pass reads zero, as on a run's first
+call or in a fresh process. That is how you dry-run a limit at its threshold:
+
+```bash
+hexgate policy test policy.yaml --role default --tool send_email \
+    --run-facts '{"tool_calls": 20}'
+
+hexgate policy test policy.yaml --role default --tool agent.run \
+    --args '{"agent": "billing"}' --agent-usage '{"invocations_1h": 100}'
+```
+
+See [constraints](/policy/constraints) for the paths each one exposes.
+
+## Policy modules: `resolve` and `check`
+
+A project can split its policy into modules under `policies/`: boundaries in
+`policies/boundaries/` set ceilings and denies, capabilities in
+`policies/capabilities/` grant. The linker folds them into one effective policy
+(fences intersect, grants union, denies win), and that policy is what compiles to
+Rego and WASM. Two commands work on the tree.
+
+### `resolve`: see what will be enforced
+
+`resolve` links the modules and prints the effective policy, with the layers it
+read and any grant a ceiling shadows. With this tree:
+
+```yaml
+# policies/boundaries/org.yaml
+default_policy: { mode: deny }
+tools:
+  refund_order:
+    mode: allow
+    constraints:
+      - args.amount <= 500
+```
+
+```yaml
+# policies/capabilities/support.yaml
+tools:
+  refund_order: { mode: allow }
+  send_email: { mode: allow }
+```
+
+```text
+$ hexgate policy resolve --dir .
+
+[default] layers (resolution order):
+  [boundary  ] org  (policies/boundaries/org.yaml)
+  [capability] support  (policies/capabilities/support.yaml)
+  shadowed (ineligible under a ceiling):
+    send_email  ← org (policies/boundaries/org.yaml)
+version: 1
+inherits: []
+is_mixin: false
+default_policy:
+  mode: deny
+  constraints: []
+constraints: []
+tools:
+  refund_order:
+    mode: allow
+    constraints:
+    - args.amount <= 500
+consts: {}
+admission: null
+agents: {}
+skills: {}
+_resolved: true
+```
+
+`send_email` is granted by `support` but the `org` ceiling never lists it, so it
+is shadowed and absent from the result.
+
+| Flag | What it does |
+|---|---|
+| `--dir PATH` | Repo root holding the `policies/` tree (default: the current directory). |
+| `--file PATH` | Resolve one file written in the module authoring format (the one with boundary, reach and import blocks) instead of a tree. A plain `policy.yaml` like the ones above fails with a link error. Can't be combined with `--dir`. |
+| `--agent NAME` | The executing agent to resolve for, which selects that agent's column. |
+| `--role NAME` | Print only this role's effective policy. Without it, a project with a `roles.yaml` prints every role. |
+| `-o PATH`, `--output PATH` | Write the effective policy YAML to a file instead of stdout. |
+
+### `check`: lint the modules
+
+`check` links the same tree and reports mistakes that don't stop it from
+composing. On the tree above:
+
+```text
+$ hexgate policy check --dir .
+  (drift checks skipped — pass --manifest to enable them)
+! [dead-grant] [default] 'support' grants 'send_email' but boundary 'org' (a ceiling) never permits it — this grant never fires (policies/capabilities/support.yaml)
+```
+
+It reports a capability grant a ceiling makes dead, a duplicate grant, and a
+constraint path no call sets. With `--manifest`, it also reports rules on a tool,
+skill or argument the agent's code doesn't have, as `validate` does.
+
+| Flag | What it does |
+|---|---|
+| `--dir PATH` | Repo root holding the `policies/` tree (default: the current directory). |
+| `--role NAME` | Only lint this role, plus project-level lints. |
+| `--manifest PATH` | The agent's manifest JSON. Turns on the drift checks. |
+| `--max-severity LEVEL` | Exit non-zero when any lint is at or above this level (default `error`). A dead grant is a `warning`, so the run above exits 0, and exits 1 with `--max-severity warning`. A tree that fails to link exits 1. |
+
+Use `check --max-severity warning` in CI to keep dead and duplicate grants out of
+the tree.

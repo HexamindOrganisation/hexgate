@@ -1,6 +1,6 @@
 from datetime import date, datetime, timezone
 from enum import StrEnum
-from typing import Annotated, Any, Literal, Optional
+from typing import Annotated, Any, Final, Literal, Optional
 from uuid import UUID
 
 from pydantic import (
@@ -756,6 +756,11 @@ class AgentManifestView(BaseModel):
 # --- Audit event ingest ------------------------------------------------------
 
 
+# Characters, as pydantic counts them. The usage read caps user_id at the same limit,
+# so every id ingest accepts can be read back.
+USER_ID_MAX_LENGTH: Final = 256
+
+
 class AuditEnvelope(BaseModel):
     """Wire envelope shared by every audit event type.
 
@@ -768,7 +773,7 @@ class AuditEnvelope(BaseModel):
     occurred_at: datetime
     agent_name: str = Field(min_length=1, max_length=256)
     session_id: str = Field(default="", max_length=128)
-    user_id: str = Field(default="", max_length=256)
+    user_id: str = Field(default="", max_length=USER_ID_MAX_LENGTH)
 
     @field_validator("occurred_at")
     @classmethod

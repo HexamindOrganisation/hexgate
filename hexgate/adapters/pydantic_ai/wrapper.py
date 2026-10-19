@@ -94,7 +94,7 @@ def wrap_pydantic_agent(
     client = HexgateClient(HexgateConfig.from_env(api_key=resolved_key))
     resolved = resolve_policy(agent_name, api_key=resolved_key, client=client)
     enforcer = build_enforcer(
-        resolved.engine, agent_name=agent_name, api_key=resolved_key
+        resolved.engine, agent_name=agent_name, api_key=resolved_key, client=client
     )
     warn_if_admission_unenforced(
         resolved.engine, framework="pydantic_ai", agent_name=agent_name
