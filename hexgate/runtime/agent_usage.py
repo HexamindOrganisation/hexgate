@@ -137,8 +137,8 @@ AGENT_USAGE_VOCABULARY: Final = (
 )
 
 USER_CACHE_ENV: Final = "HEXGATE_USAGE_USER_CACHE"
-# End users whose usage one process keeps. A full ledger is ~118 KB, so this bounds
-# user ledgers at ~1.2 GB.
+# End users whose usage one process keeps. Every ledger preallocates its buckets,
+# ~118 KB each, so this bounds user ledgers at ~1.2 GB.
 DEFAULT_USER_CACHE_SIZE: Final = 10_000
 
 
@@ -229,8 +229,9 @@ class BucketSeries:
 
 
 class UsageLedger:
-    """One agent's usage in this process. Reads return every :class:`UsageMetric`,
-    zero when unused, so a reader never meets a missing key."""
+    """One :class:`UsageScope`'s usage in this process, an agent's or an end user's.
+    Reads return every :class:`UsageMetric`, zero when unused, so a reader never
+    meets a missing key."""
 
     def __init__(self, series: Sequence[BucketSeries], clock: Clock) -> None:
         """``series`` is finest first; a read uses the finest one whose retention
