@@ -220,6 +220,30 @@ def test_inside_the_run_the_cap_reads_as_at_admission() -> None:
             assert enforcer.decide("refund", {}).allowed
 
 
+def test_a_nested_admission_counts_the_enclosing_run() -> None:
+    ledgers = _ledgers()
+    parent = PolicyEnforcer(_user_admission_cap(1), agent_name=_AGENT, ledgers=ledgers)
+    child = PolicyEnforcer(
+        _user_admission_cap(1), agent_name=_OTHER_AGENT, ledgers=ledgers
+    )
+
+    with _context(_ALICE).sync_scope():
+        assert parent.decide(AGENT_RUN_TOOL, {"agent": _AGENT}).allowed
+        with run_scope(_AGENT, ledgers=ledgers):
+            assert not child.decide(AGENT_RUN_TOOL, {"agent": _OTHER_AGENT}).allowed
+
+
+def test_an_agent_admitted_inside_its_own_run_counts_that_run() -> None:
+    ledgers = _ledgers()
+    enforcer = PolicyEnforcer(
+        _agent_admission_cap(1), agent_name=_AGENT, ledgers=ledgers
+    )
+
+    assert enforcer.decide(AGENT_RUN_TOOL, {"agent": _AGENT}).allowed
+    with run_scope(_AGENT, ledgers=ledgers):
+        assert not enforcer.decide(AGENT_RUN_TOOL, {"agent": _AGENT}).allowed
+
+
 def test_another_users_context_inside_the_run_reads_that_user() -> None:
     ledgers = _ledgers()
     engine = _RecordingEngine(frozenset({_INVOCATIONS}))

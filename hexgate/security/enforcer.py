@@ -38,6 +38,7 @@ from hexgate.security.decision import (
     RunAttribution,
     combine_role_verdicts,
 )
+from hexgate.security.models import AGENT_RUN_TOOL
 from hexgate.security.usage_inputs import UsageInputs
 from hexgate.security.usage_source import (
     OnUnavailable,
@@ -127,11 +128,20 @@ def _on_unavailable_of(engine: PolicyEngine) -> OnUnavailable:
 
 
 def _current_run_age(
-    run_ledger: UsageLedger | None, ledger: UsageLedger, run: Mapping[str, Any]
+    run_ledger: UsageLedger | None,
+    ledger: UsageLedger,
+    run: Mapping[str, Any],
+    *,
+    admitting: bool,
 ) -> float | None:
     """The age of the run being decided inside, if it recorded itself on ``ledger``;
-    ``ledger_namespace`` then leaves that run out of ``invocations_*``."""
-    return run[_RUN_ELAPSED] if run_ledger is ledger else None
+    ``ledger_namespace`` then leaves that run out of ``invocations_*``.
+
+    Never while admitting: the run being admitted isn't recorded yet, and the
+    current run is an enclosing parent whose invocation must still count."""
+    if admitting or run_ledger is not ledger:
+        return None
+    return run[_RUN_ELAPSED]
 
 
 def _anonymous_user_usage(
@@ -272,10 +282,13 @@ class PolicyEnforcer:
         # Feeds the usage namespaces. Read once per decision, like run.*, so roles
         # can't disagree about anyone's usage. None for a root the policy doesn't
         # reference.
-        reading = self._usage_reading(bound, facts, run_snapshot)
+        admitting = tool_name == AGENT_RUN_TOOL
+        reading = self._usage_reading(bound, facts, run_snapshot, admitting=admitting)
         usage = UsageInputs(
             agent_usage=reading.namespace if reading is not None else None,
-            user_usage=self._user_usage(bound, facts, run_snapshot, context),
+            user_usage=self._user_usage(
+                bound, facts, run_snapshot, context, admitting=admitting
+            ),
         )
 
         verdict, deciding_role = combine_role_verdicts(
@@ -313,10 +326,15 @@ class PolicyEnforcer:
         return decision
 
     def _usage_reading(
-        self, bound: _BoundPolicy, facts: RunFacts, run: Mapping[str, Any]
+        self,
+        bound: _BoundPolicy,
+        facts: RunFacts,
+        run: Mapping[str, Any],
+        *,
+        admitting: bool,
     ) -> UsageReading | None:
         # By agent name, not RunFacts: admission is decided before run_scope opens,
-        # while RunFacts is still DETACHED and carries no ledger.
+        # while RunFacts is DETACHED or belongs to an enclosing parent run.
         if not bound.usage_paths:
             return None
         scope = UsageScope.agent(self.agent_name)
@@ -326,7 +344,9 @@ class PolicyEnforcer:
         # Inside a run that recorded its invocation on this ledger (not a parent's,
         # not DETACHED, not one opened before the ledgers were enabled), so that
         # invocation is left out of invocations_*, as it was at admission.
-        current_run_age = _current_run_age(facts.ledger, ledger, run)
+        current_run_age = _current_run_age(
+            facts.ledger, ledger, run, admitting=admitting
+        )
         if self._usage_source is None:
             return local_reading(
                 ledger, bound.usage_paths, current_run_age=current_run_age
@@ -345,6 +365,8 @@ class PolicyEnforcer:
         facts: RunFacts,
         run: Mapping[str, Any],
         context: HexgateContext | None,
+        *,
+        admitting: bool,
     ) -> dict[str, int] | None:
         """The ``user_usage.*`` namespace for the context's user, from this process's
         ledger alone, whether or not a platform is configured: the platform can't
@@ -361,7 +383,9 @@ class PolicyEnforcer:
             return None
         # The run's user is fixed at run entry, so a context entered for another user
         # inside the run reads that user's ledger without leaving this run out.
-        current_run_age = _current_run_age(facts.user_ledger, ledger, run)
+        current_run_age = _current_run_age(
+            facts.user_ledger, ledger, run, admitting=admitting
+        )
         return ledger_namespace(ledger, paths, current_run_age=current_run_age)
 
     def record(
