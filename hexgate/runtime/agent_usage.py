@@ -401,7 +401,7 @@ class UsageLedgers:
         self._user_capacity = 0
         # Rebound, never mutated, so a test can restore it by attribute.
         self._enabled: frozenset[UsageScopeKind] = frozenset()
-        self._ledgers: dict[UsageScope, UsageLedger] = {}
+        self._agent_ledgers: dict[UsageScope, UsageLedger] = {}
         self._user_ledgers: OrderedDict[UsageScope, UsageLedger] = OrderedDict()
         self._lock = threading.Lock()
 
@@ -421,9 +421,9 @@ class UsageLedgers:
         with self._lock:
             if scope.kind is UsageScopeKind.USER:
                 return self._user_ledger_locked(scope)
-            ledger = self._ledgers.get(scope)
+            ledger = self._agent_ledgers.get(scope)
             if ledger is None:
-                ledger = self._ledgers[scope] = self._ledger_factory()
+                ledger = self._agent_ledgers[scope] = self._ledger_factory()
             return ledger
 
     def _user_ledger_locked(self, scope: UsageScope) -> UsageLedger:
