@@ -34,9 +34,9 @@ a module). This module runs over a **successfully linked** bundle and reports th
 - **unknown-skill** — a ``skills:`` rule names a skill the manifest doesn't
   declare. Only checked when a manifest is supplied and lists the skills.
 - **unknown-root** — a constraint path that no call ever sets: its root isn't
-  ``args`` / ``ctx`` / ``run`` / ``agent_usage``, or it dots into the ``role`` /
+  ``args`` / ``ctx`` / ``run`` / ``agent_usage`` / ``user_usage``, or it dots into the ``role`` /
   ``tool`` string. Manifest-free.
-- **negated-usage-cap** — an ``agent_usage.*`` path under an odd number of
+- **negated-usage-cap** — an ``agent_usage.*`` or ``user_usage.*`` path under an odd number of
   ``not`` (a boundary deny counts as one). Under ``usage.on_unavailable: deny``
   a missing value makes it true, so the cap passes. Manifest-free.
 
@@ -93,6 +93,7 @@ from hexgate.security.modules import (
 from hexgate.security.naming import canonical_skill_name
 from hexgate.security.network import EGRESS_TOOL_ARGS
 from hexgate.security.policy_set import DEFAULT_ROLE_NAME, PolicySet, PolicySetError
+from hexgate.security.usage_inputs import AGENT_USAGE_ROOT, USER_USAGE_ROOT
 
 if TYPE_CHECKING:  # avoid importing the manifest package eagerly
     from hexgate.manifest.models import AgentManifest
@@ -128,7 +129,7 @@ _NOT_AN_AGENT = "not registered, and not a sub-agent any manifest names"
 _ROOT_PREFIXES = (
     ", ".join(f"{root}." for root in PATH_ROOTS[:-1]) + f" or {PATH_ROOTS[-1]}."
 )
-_AGENT_USAGE_ROOT = "agent_usage"
+_USAGE_ROOTS = frozenset({AGENT_USAGE_ROOT, USER_USAGE_ROOT})
 
 
 @dataclass(frozen=True)
@@ -1442,7 +1443,7 @@ def _unknown_root_lint(
 def _negated_usage_caps(
     policy_set: PolicySet, *, source: str | None
 ) -> list[PolicyLint]:
-    """``agent_usage.*`` paths under an odd number of ``not``, as errors. Only
+    """``agent_usage.*`` or ``user_usage.*`` paths under an odd number of ``not``, as errors. Only
     under ``on_unavailable: deny``: under ``allow`` every known path holds a
     ledger value, so nothing is missing."""
     if policy_set.usage_on_unavailable() is not OnUnavailable.DENY:
@@ -1485,7 +1486,7 @@ def _module_negated_usage_caps(
 
 
 def _negated_usage_paths(groups: Iterable[tuple[list[str], bool]]) -> set[str]:
-    """Each ``agent_usage.*`` path read under an odd number of ``not`` over
+    """Each ``agent_usage.*`` or ``user_usage.*`` path read under an odd number of ``not`` over
     ``(constraints, negated)`` groups: the uses :func:`_missing_refs` grades
     ``error``."""
     return {
@@ -1497,8 +1498,8 @@ def _negated_usage_paths(groups: Iterable[tuple[list[str], bool]]) -> set[str]:
 
 
 def _usage_path(path: tuple[str, ...]) -> str | None:
-    """``path`` dotted, if it reads an ``agent_usage`` value."""
-    if len(path) < 2 or path[0] != _AGENT_USAGE_ROOT:
+    """``path`` dotted, if it reads a cross-run usage value (either root)."""
+    if len(path) < 2 or path[0] not in _USAGE_ROOTS:
         return None
     return ".".join(path)
 

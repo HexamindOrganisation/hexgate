@@ -43,6 +43,8 @@ import yaml
 from hexgate.runtime.agent_usage import (
     AGENT_USAGE_VOCABULARY,
     KNOWN_AGENT_USAGE_PATHS,
+    KNOWN_USER_USAGE_PATHS,
+    USER_USAGE_VOCABULARY,
     OnUnavailable,
 )
 from hexgate.runtime.run_facts import LIST_PATHS, SCALAR_PATHS
@@ -99,7 +101,9 @@ _FILE_LEVEL_KEYS = frozenset(
 # rejected like any other stray key, but with advice that leads to a loadable policy.
 _AGENT_LEVEL_KEYS = frozenset({"guards", USAGE_FIELD})
 
-_ROOTED_PATH_SEGMENTS = 2  # run.* and agent_usage.* are flat: <root>.<name>
+_ROOTED_PATH_SEGMENTS = (
+    2  # run.*, agent_usage.* and user_usage.* are flat: <root>.<name>
+)
 _ORDERED_OPS = frozenset({"<", "<=", ">", ">="})
 # ==/!= excluded: list equality is well-defined, just not useful here.
 _SCALAR_ONLY_OPS = _ORDERED_OPS | {"in", "not in"}
@@ -137,6 +141,7 @@ class PolicySet:
         _validate_const_refs(policies)
         _validate_path_refs(policies, _RUN)
         self._agent_usage_paths = _validate_path_refs(policies, _AGENT_USAGE)
+        self._user_usage_paths = _validate_path_refs(policies, _USER_USAGE)
         self._on_unavailable = _agent_on_unavailable(policies)
         self._policies = policies
         self._aliased_default = aliased_default
@@ -171,8 +176,8 @@ class PolicySet:
 
         Resolves the role's policy and runs the pydantic engine. ``attributes``
         feed the ``ctx.*`` constraint namespace, ``run`` the ``run.*`` one and
-        ``usage`` the usage roots (``agent_usage.*``); the role still selects the
-        policy bucket (``policy_for``) on its own."""
+        ``usage`` the usage roots (``agent_usage.*``, ``user_usage.*``); the role
+        still selects the policy bucket (``policy_for``) on its own."""
         from hexgate.security.policy import evaluate_tool_call
 
         return evaluate_tool_call(
@@ -232,8 +237,13 @@ class PolicySet:
         admission and reach constraints count."""
         return self._agent_usage_paths
 
+    def user_usage_paths(self) -> frozenset[str]:
+        """Every ``user_usage.*`` path (without the root) any role references,
+        derived like :meth:`agent_usage_paths`."""
+        return self._user_usage_paths
+
     def usage_on_unavailable(self) -> OnUnavailable:
-        """The agent's fail mode for ``agent_usage.*`` (one value, checked at load)."""
+        """The agent's fail mode for both usage roots (one value, checked at load)."""
         return self._on_unavailable
 
     def guard_stance(self) -> dict[str, dict] | None:
@@ -381,6 +391,12 @@ _AGENT_USAGE = _PathRoot(
     KNOWN_AGENT_USAGE_PATHS,
     frozenset(),
     vocabulary=AGENT_USAGE_VOCABULARY,
+)
+_USER_USAGE = _PathRoot(
+    "user_usage",
+    KNOWN_USER_USAGE_PATHS,
+    frozenset(),
+    vocabulary=USER_USAGE_VOCABULARY,
 )
 
 

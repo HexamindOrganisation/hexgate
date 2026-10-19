@@ -32,7 +32,12 @@ from hexgate.runtime.context import ContextAttributeValue
 if TYPE_CHECKING:
     from hexgate.manifest.models import AgentManifest
     from hexgate.security.analyzer import PolicyLint
-from hexgate.runtime.agent_usage import AGENT_USAGE_VOCABULARY, KNOWN_AGENT_USAGE_PATHS
+from hexgate.runtime.agent_usage import (
+    AGENT_USAGE_VOCABULARY,
+    KNOWN_AGENT_USAGE_PATHS,
+    KNOWN_USER_USAGE_PATHS,
+    USER_USAGE_VOCABULARY,
+)
 from hexgate.runtime.roles import distinct_roles, resolve_role_set
 from hexgate.runtime.run_facts import KNOWN_RUN_PATHS
 from hexgate.security import (
@@ -61,7 +66,11 @@ from hexgate.security import (
     verdict_from_rego,
 )
 from hexgate.security.constraints import ConstraintParseError, parse_constraint
-from hexgate.security.testing import agent_usage_namespace, run_namespace
+from hexgate.security.testing import (
+    agent_usage_namespace,
+    run_namespace,
+    user_usage_namespace,
+)
 
 # Same schema ``HexgateContext.attributes`` enforces at runtime, so a bag the
 # simulator accepts is a bag production can actually produce — including the
@@ -262,6 +271,15 @@ def add_parser(subparsers: argparse._SubParsersAction) -> None:
             "Agent usage as a JSON object, exposed to agent_usage.* constraints "
             "(e.g. '{\"invocations_1h\": 99}'). Unset paths read zero, matching "
             "a fresh process. Defaults to {}."
+        ),
+    )
+    p_test.add_argument(
+        "--user-usage",
+        default="{}",
+        help=(
+            "One end user's usage across agents as a JSON object, exposed to "
+            "user_usage.* constraints (e.g. '{\"invocations_1h\": 49}'). Unset paths "
+            "read zero, matching a user this process hasn't seen. Defaults to {}."
         ),
     )
     p_test.add_argument(
@@ -915,10 +933,11 @@ def _main_test(args: argparse.Namespace) -> int:
     try:
         run = _resolve_run_facts(getattr(args, "run_facts", "{}"), args.tool)
         agent_usage = _resolve_agent_usage(getattr(args, "agent_usage", "{}"))
+        user_usage = _resolve_user_usage(getattr(args, "user_usage", "{}"))
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
         return 1
-    usage = UsageInputs(agent_usage=agent_usage)
+    usage = UsageInputs(agent_usage=agent_usage, user_usage=user_usage)
 
     try:
         policy_set = load_policy_set_from_dict(payload)
@@ -971,6 +990,7 @@ def _main_test(args: argparse.Namespace) -> int:
 
 _RUN_FACTS_FLAG = "--run-facts"
 _AGENT_USAGE_FLAG = "--agent-usage"
+_USER_USAGE_FLAG = "--user-usage"
 
 
 def _resolve_run_facts(raw: str, tool: str) -> dict[str, Any]:
@@ -996,6 +1016,18 @@ def _resolve_agent_usage(raw: str) -> dict[str, int]:
         known=KNOWN_AGENT_USAGE_PATHS,
         vocabulary=AGENT_USAGE_VOCABULARY,
         build=agent_usage_namespace,
+    )
+
+
+def _resolve_user_usage(raw: str) -> dict[str, int]:
+    """Parse ``--user-usage`` as :func:`_resolve_agent_usage` parses its flag."""
+    return _resolve_namespace_flag(
+        _USER_USAGE_FLAG,
+        raw,
+        root="user_usage",
+        known=KNOWN_USER_USAGE_PATHS,
+        vocabulary=USER_USAGE_VOCABULARY,
+        build=user_usage_namespace,
     )
 
 

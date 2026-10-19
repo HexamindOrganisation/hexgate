@@ -39,6 +39,7 @@ def _py_outcome(
     attributes: dict | None,
     run: dict | None = None,
     agent_usage: dict | None = None,
+    user_usage: dict | None = None,
 ) -> str:
     ps = load_policy_set_from_dict(policy)
     # Route through PolicySet.evaluate (the real engine entry) so role/tool are
@@ -49,7 +50,7 @@ def _py_outcome(
         args=args,
         attributes=attributes,
         run=run,
-        usage=UsageInputs(agent_usage=agent_usage),
+        usage=UsageInputs(agent_usage=agent_usage, user_usage=user_usage),
     ).outcome.value
 
 
@@ -66,6 +67,7 @@ def _wasm_outcome(
     attributes: dict | None,
     run: dict | None = None,
     agent_usage: dict | None = None,
+    user_usage: dict | None = None,
 ) -> str:
     wasm = _wasm_bytes(compile_to_rego(policy))
     d = WasmPolicy.from_bytes(wasm).decide(
@@ -74,7 +76,7 @@ def _wasm_outcome(
         args=args,
         ctx=attributes,
         run=run,
-        usage=UsageInputs(agent_usage=agent_usage),
+        usage=UsageInputs(agent_usage=agent_usage, user_usage=user_usage),
     )
     if d.allow:
         return "allow"
@@ -93,9 +95,12 @@ def _assert_parity(
     attributes: dict | None = None,
     run: dict | None = None,
     agent_usage: dict | None = None,
+    user_usage: dict | None = None,
 ) -> None:
-    py = _py_outcome(policy, role, tool, args, attributes, run, agent_usage)
-    wasm = _wasm_outcome(policy, role, tool, args, attributes, run, agent_usage)
+    py = _py_outcome(policy, role, tool, args, attributes, run, agent_usage, user_usage)
+    wasm = _wasm_outcome(
+        policy, role, tool, args, attributes, run, agent_usage, user_usage
+    )
     assert py == wasm, f"engine divergence {role}/{tool}/{args}: py={py} wasm={wasm}"
     assert py == expect, f"wrong outcome {role}/{tool}/{args}: {py} (want {expect})"
 
@@ -1006,6 +1011,107 @@ def test_agent_usage_missing_key_fails_closed_both_engines(call: tuple) -> None:
 def test_agent_usage_none_namespace_fails_closed_both_engines() -> None:
     tool, args = _ADMISSION
     _assert_parity(_AGENT_USAGE_POLICY, "default", tool, args, "deny", agent_usage=None)
+
+
+# ---------------------------------------------------------------------------
+# user_usage.* — the same vocabulary under a second root
+#
+# The Rego compiler is root-generic, so these are the only proof that the new
+# root reaches input.user_usage on the WASM side as it does in pydantic.
+# ---------------------------------------------------------------------------
+
+_USER_USAGE_POLICY = {
+    "version": 1,
+    "roles": {
+        "default": {
+            "consts": {"daily": 1000},
+            "constraints": ["user_usage.denials_5m < 5"],
+            "admission": {
+                "mode": "allow",
+                "constraints": ["user_usage.invocations_1h < 3"],
+            },
+            "tools": {
+                "summarise": {
+                    "mode": "allow",
+                    "constraints": ["user_usage.total_tokens_24h <= consts.daily"],
+                },
+            },
+        }
+    },
+}
+
+
+@pytest.mark.parametrize(
+    ("call", "usage", "expect"),
+    [
+        (_ADMISSION, {"invocations_1h": 2}, "allow"),
+        (_ADMISSION, {"invocations_1h": 3}, "deny"),
+        (_ADMISSION, {"invocations_1h": "2"}, "deny"),  # str vs num → fail closed
+        (_SUMMARISE, {"total_tokens_24h": 1000}, "allow"),
+        (_SUMMARISE, {"total_tokens_24h": 1001}, "deny"),
+        (_SUMMARISE, {"denials_5m": 5}, "deny"),
+        (_ADMISSION, {"denials_5m": 5}, "deny"),
+    ],
+)
+def test_user_usage_parity(call: tuple, usage: dict, expect: str) -> None:
+    tool, args = call
+    _assert_parity(
+        _USER_USAGE_POLICY,
+        "default",
+        tool,
+        args,
+        expect,
+        user_usage={**_QUIET_USAGE, **usage},
+    )
+
+
+@pytest.mark.parametrize("call", [_ADMISSION, _SUMMARISE], ids=["admission", "tool"])
+def test_user_usage_missing_key_fails_closed_both_engines(call: tuple) -> None:
+    tool, args = call
+    _assert_parity(_USER_USAGE_POLICY, "default", tool, args, "deny", user_usage={})
+
+
+def test_user_usage_none_namespace_fails_closed_both_engines() -> None:
+    tool, args = _ADMISSION
+    _assert_parity(_USER_USAGE_POLICY, "default", tool, args, "deny", user_usage=None)
+
+
+def test_agent_usage_does_not_feed_user_usage_on_either_engine() -> None:
+    tool, args = _ADMISSION
+    _assert_parity(
+        _USER_USAGE_POLICY, "default", tool, args, "deny", agent_usage=_QUIET_USAGE
+    )
+
+
+_BOTH_ROOTS_POLICY = {
+    "admission": {
+        "mode": "allow",
+        "constraints": [
+            "agent_usage.invocations_1h < 1000",
+            "user_usage.invocations_1h < 50",
+        ],
+    }
+}
+
+
+@pytest.mark.parametrize(
+    ("agent", "user", "expect"),
+    [(10, 10, "allow"), (10, 50, "deny"), (1000, 10, "deny")],
+    ids=["both-under", "user-over", "agent-over"],
+)
+def test_both_roots_are_checked_on_both_engines(
+    agent: int, user: int, expect: str
+) -> None:
+    tool, args = _ADMISSION
+    _assert_parity(
+        _BOTH_ROOTS_POLICY,
+        "default",
+        tool,
+        args,
+        expect,
+        agent_usage={"invocations_1h": agent},
+        user_usage={"invocations_1h": user},
+    )
 
 
 # ---------------------------------------------------------------------------

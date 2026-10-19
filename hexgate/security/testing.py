@@ -22,6 +22,13 @@ and an ``agent_usage.*`` cap via :func:`agent_usage_namespace`:
         policy, "agent.run", {"agent": "a"},
         agent_usage=agent_usage_namespace(invocations_1h=100),
     )
+
+and a ``user_usage.*`` cap via :func:`user_usage_namespace`:
+
+    assert_denies(
+        policy, "agent.run", {"agent": "a"},
+        user_usage=user_usage_namespace(invocations_1h=50),
+    )
 """
 
 from __future__ import annotations
@@ -42,7 +49,11 @@ from hexgate.security.decision import DecisionOutcome
 from hexgate.security.models import AgentPolicy
 from hexgate.security.policy import evaluate_tool_call
 from hexgate.security.policy_set import PolicySet
-from hexgate.security.usage_inputs import UsageInputs
+from hexgate.security.usage_inputs import (
+    AGENT_USAGE_ROOT,
+    USER_USAGE_ROOT,
+    UsageInputs,
+)
 
 Policy = AgentPolicy | PolicySet
 
@@ -94,20 +105,30 @@ def agent_usage_namespace(**paths: int) -> dict[str, int]:
     Supplied values win over both. Raises on an unregistered name or a value that
     is not a non-negative int, for the same reason :func:`run_namespace` does.
     """
+    return _usage_namespace(AGENT_USAGE_ROOT, paths)
+
+
+def user_usage_namespace(**paths: int) -> dict[str, int]:
+    """A ``user_usage`` namespace, built as :func:`agent_usage_namespace` is: one end
+    user's usage across agents, with every unset path reading zero."""
+    return _usage_namespace(USER_USAGE_ROOT, paths)
+
+
+def _usage_namespace(root: str, paths: Mapping[str, int]) -> dict[str, int]:
+    # Both roots share one vocabulary, so the agent registry validates either.
     unknown = sorted(set(paths) - KNOWN_AGENT_USAGE_PATHS)
     if unknown:
         raise ValueError(
-            f"unknown agent_usage.* path(s) {unknown} "
+            f"unknown {root}.* path(s) {unknown} "
             f"(this build knows: {AGENT_USAGE_VOCABULARY})"
         )
     for name, value in paths.items():
         if not _matches_run_type(value, int):
             raise ValueError(
-                f"agent_usage.{name} expects int, got "
-                f"{type(value).__name__} ({value!r})"
+                f"{root}.{name} expects int, got {type(value).__name__} ({value!r})"
             )
         if value < _MIN_USAGE_COUNT:
-            raise ValueError(f"agent_usage.{name} is a count, got {value}")
+            raise ValueError(f"{root}.{name} is a count, got {value}")
     namespace = {**dict.fromkeys(KNOWN_AGENT_USAGE_PATHS, 0), **paths}
     for metric in UsageMetric:
         _carry_into_wider_windows(namespace, paths, metric)
@@ -236,13 +257,15 @@ def _check(
     attributes: dict[str, Any] | None,
     run: Mapping[str, Any] | None,
     agent_usage: Mapping[str, Any] | None,
+    user_usage: Mapping[str, Any] | None,
     expected: DecisionOutcome,
 ) -> None:
-    # A fresh run and process, so an unset run.* or agent_usage.* cap reads zero
-    # instead of failing closed.
+    # A fresh run and process, so an unset run.* or usage cap reads zero instead of
+    # failing closed.
     resolved_run = run if run is not None else _zeroed_run(tool)
     usage = UsageInputs(
-        agent_usage=agent_usage if agent_usage is not None else agent_usage_namespace()
+        agent_usage=agent_usage if agent_usage is not None else agent_usage_namespace(),
+        user_usage=user_usage if user_usage is not None else user_usage_namespace(),
     )
     actual = _outcome(policy, tool, args, role, attributes, resolved_run, usage)
     if actual is not expected:
@@ -262,15 +285,26 @@ def assert_allows(
     attributes: dict[str, Any] | None = None,
     run: Mapping[str, Any] | None = None,
     agent_usage: Mapping[str, Any] | None = None,
+    user_usage: Mapping[str, Any] | None = None,
 ) -> None:
     """Assert the policy ALLOWS this call.
 
     ``attributes``, ``run`` and ``agent_usage`` feed ``ctx.*``, ``run.*`` and
     ``agent_usage.*`` constraints; ``run`` defaults to a freshly-started run and
     ``agent_usage`` to a fresh process — see :func:`run_namespace` and
-    :func:`agent_usage_namespace` to set them."""
+    :func:`agent_usage_namespace` to set them — and ``user_usage`` feeds
+    ``user_usage.*``, defaulting to a user this process hasn't seen
+    (:func:`user_usage_namespace`)."""
     _check(
-        policy, tool, args, role, attributes, run, agent_usage, DecisionOutcome.ALLOW
+        policy,
+        tool,
+        args,
+        role,
+        attributes,
+        run,
+        agent_usage,
+        user_usage,
+        DecisionOutcome.ALLOW,
     )
 
 
@@ -283,9 +317,20 @@ def assert_denies(
     attributes: dict[str, Any] | None = None,
     run: Mapping[str, Any] | None = None,
     agent_usage: Mapping[str, Any] | None = None,
+    user_usage: Mapping[str, Any] | None = None,
 ) -> None:
     """Assert the policy DENIES this call."""
-    _check(policy, tool, args, role, attributes, run, agent_usage, DecisionOutcome.DENY)
+    _check(
+        policy,
+        tool,
+        args,
+        role,
+        attributes,
+        run,
+        agent_usage,
+        user_usage,
+        DecisionOutcome.DENY,
+    )
 
 
 def assert_needs_approval(
@@ -297,6 +342,7 @@ def assert_needs_approval(
     attributes: dict[str, Any] | None = None,
     run: Mapping[str, Any] | None = None,
     agent_usage: Mapping[str, Any] | None = None,
+    user_usage: Mapping[str, Any] | None = None,
 ) -> None:
     """Assert the policy routes this call to approval."""
     _check(
@@ -307,5 +353,6 @@ def assert_needs_approval(
         attributes,
         run,
         agent_usage,
+        user_usage,
         DecisionOutcome.NEEDS_APPROVAL,
     )

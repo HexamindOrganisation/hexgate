@@ -1657,3 +1657,95 @@ def test_test_rejects_a_bad_agent_usage(
     assert rc == 1
     assert message in err
     assert "DENY" not in out
+
+
+# ---------------------------------------------------------------------------
+# `policy test --user-usage` — dry-running one end user's quota
+# ---------------------------------------------------------------------------
+
+
+_USER_USAGE_GATED_POLICY = """\
+version: 1
+admission:
+  mode: allow
+  constraints:
+    - user_usage.invocations_1h < 50
+"""
+
+
+def _user_usage_gated(tmp_path: Path) -> str:
+    p = tmp_path / "user_usage.yaml"
+    p.write_text(_USER_USAGE_GATED_POLICY, encoding="utf-8")
+    return str(p)
+
+
+def test_test_defaults_to_an_unseen_user(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert _test_admission(_user_usage_gated(tmp_path)) == 0
+    assert "ALLOW" in capsys.readouterr().out
+
+
+def test_test_user_usage_fires_the_cap(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    rc = _test_admission(
+        _user_usage_gated(tmp_path), user_usage='{"invocations_1h": 50}'
+    )
+
+    assert rc == 1
+    out = capsys.readouterr().out
+    assert "DENY" in out
+    assert "user_usage.invocations_1h < 50" in out
+
+
+def test_test_agent_usage_does_not_feed_user_usage(tmp_path: Path) -> None:
+    rc = _test_admission(
+        _user_usage_gated(tmp_path), agent_usage='{"invocations_1h": 99}'
+    )
+
+    assert rc == 0
+
+
+@needs_opa
+@pytest.mark.parametrize(("usage", "expected"), [("49", 0), ("50", 1)])
+def test_test_user_usage_agrees_across_engines(
+    tmp_path: Path, usage: str, expected: int
+) -> None:
+    source = _user_usage_gated(tmp_path)
+    codes = [
+        _test_admission(
+            source, user_usage=f'{{"invocations_1h": {usage}}}', engine=engine
+        )
+        for engine in ("pydantic", "wasm")
+    ]
+
+    assert codes == [expected, expected]
+
+
+@pytest.mark.parametrize(
+    ("raw", "message"),
+    [
+        ("not json", "--user-usage is not valid JSON"),
+        ("[1]", "--user-usage must be a JSON object (dict)"),
+        (
+            '{"invocation_1h": 1}',
+            "--user-usage has unknown user_usage.* path(s) ['invocation_1h']",
+        ),
+        (
+            '{"invocations_1h": "1"}',
+            "--user-usage has an invalid value: user_usage.invocations_1h",
+        ),
+        ('{"invocations_1h": -1}', "--user-usage has an invalid value"),
+    ],
+    ids=["non-json", "non-object", "unknown-path", "wrong-type", "negative"],
+)
+def test_test_rejects_a_bad_user_usage(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], raw: str, message: str
+) -> None:
+    rc = _test_admission(_user_usage_gated(tmp_path), user_usage=raw)
+
+    out, err = capsys.readouterr()
+    assert rc == 1
+    assert message in err
+    assert "DENY" not in out

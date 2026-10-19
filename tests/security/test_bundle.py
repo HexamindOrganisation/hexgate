@@ -495,6 +495,56 @@ def test_an_unknown_manifest_path_is_dropped_with_a_warning(
     assert "tool_calls_2h" in caplog.text
 
 
+_USER_USAGE_YAML = (
+    "version: 1\nroles:\n  default:\n"
+    "    constraints: ['user_usage.tool_calls_5m < 10']\n"
+    "    admission:\n      mode: allow\n"
+    "      constraints: ['user_usage.invocations_1h < 50']\n"
+)
+
+
+def test_build_signed_bundle_records_the_user_usage_paths_sorted() -> None:
+    sb = build_signed_bundle(_USER_USAGE_YAML, compile_wasm=False)
+
+    assert sb.manifest["user_usage"] == ["invocations_1h", "tool_calls_5m"]
+    assert "agent_usage" not in sb.manifest
+    assert _manifest_only_bundle(sb.manifest).user_usage_paths() == {
+        "invocations_1h",
+        "tool_calls_5m",
+    }
+
+
+@pytest.mark.parametrize("source", [_USAGE_YAML, _DEMO_YAML], ids=["agent", "free"])
+def test_a_bundle_without_user_paths_has_no_user_usage_key(source: str) -> None:
+    sb = build_signed_bundle(source, compile_wasm=False)
+
+    assert b"user_usage" not in sb.manifest_bytes
+
+
+def test_a_pre_user_usage_bundle_reads_no_user_paths() -> None:
+    """A platform on an older SDK signs no ``user_usage`` key, so the enforcer
+    supplies no user namespace and those constraints fail closed."""
+    bundle = _manifest_only_bundle({"version": 1, "agent_usage": ["invocations_1h"]})
+
+    assert bundle.user_usage_paths() == frozenset()
+    assert bundle.agent_usage_paths() == {"invocations_1h"}
+
+
+def test_an_unknown_user_manifest_path_is_dropped_with_a_warning(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    bundle = _manifest_only_bundle(
+        {"version": 1, "user_usage": ["invocations_1h", "tool_calls_2h"]}
+    )
+
+    with caplog.at_level(logging.WARNING, logger="hexgate.security.bundle"):
+        paths = bundle.user_usage_paths()
+
+    assert paths == {"invocations_1h"}
+    assert "user_usage.*" in caplog.text
+    assert "tool_calls_2h" in caplog.text
+
+
 @needs_opa
 def test_an_enforcer_over_a_bundle_with_an_unknown_path_still_decides() -> None:
     from hexgate.runtime.agent_usage import (

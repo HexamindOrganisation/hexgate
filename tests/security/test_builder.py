@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from hexgate.runtime.agent_usage import KNOWN_AGENT_USAGE_PATHS
+from hexgate.runtime.agent_usage import KNOWN_AGENT_USAGE_PATHS, KNOWN_USER_USAGE_PATHS
 from hexgate.runtime.run_facts import KNOWN_RUN_PATHS, RUN_PATH_TYPES, RunFacts
 from hexgate.security import (
     AGENT_RUN_TOOL,
@@ -18,6 +18,7 @@ from hexgate.security import (
     assert_denies,
     assert_needs_approval,
     run_namespace,
+    user_usage_namespace,
 )
 from hexgate.security.constraints import ConstraintParseError
 
@@ -504,3 +505,74 @@ def test_an_admission_cap_asserts_against_supplied_usage() -> None:
 
 def test_an_unset_usage_cap_reads_a_fresh_process() -> None:
     assert_allows(_admission_cap(1), AGENT_RUN_TOOL, {"agent": "a"})
+
+
+def _user_admission_cap(limit: int) -> AgentPolicy:
+    return AgentPolicy.model_validate(
+        {
+            "admission": {
+                "mode": "allow",
+                "constraints": [f"user_usage.invocations_1h < {limit}"],
+            }
+        }
+    )
+
+
+def test_user_usage_namespace_zero_fills_every_registered_path() -> None:
+    namespace = user_usage_namespace()
+
+    assert set(namespace) == KNOWN_USER_USAGE_PATHS
+    assert set(namespace.values()) == {0}
+
+
+def test_user_usage_namespace_rejects_an_unregistered_path() -> None:
+    with pytest.raises(ValueError, match=r"unknown user_usage\.\* path"):
+        user_usage_namespace(invocation_1h=1)
+
+
+@pytest.mark.parametrize("value", [True, "3", 3.0], ids=["bool", "str", "float"])
+def test_user_usage_namespace_rejects_a_non_int(value: object) -> None:
+    with pytest.raises(ValueError, match=r"user_usage\.invocations_1h expects int"):
+        user_usage_namespace(invocations_1h=value)
+
+
+def test_user_usage_namespace_rejects_a_negative_count() -> None:
+    with pytest.raises(ValueError, match=r"user_usage\.invocations_1h is a count"):
+        user_usage_namespace(invocations_1h=-1)
+
+
+def test_user_usage_namespace_derives_total_tokens() -> None:
+    namespace = user_usage_namespace(input_tokens_1h=100, output_tokens_1h=50)
+
+    assert namespace["total_tokens_1h"] == 150
+    assert namespace["total_tokens_24h"] == 150
+
+
+def test_a_user_cap_asserts_against_supplied_usage() -> None:
+    policy = _user_admission_cap(50)
+
+    assert_denies(
+        policy,
+        AGENT_RUN_TOOL,
+        {"agent": "a"},
+        user_usage=user_usage_namespace(invocations_1h=50),
+    )
+    assert_allows(
+        policy,
+        AGENT_RUN_TOOL,
+        {"agent": "a"},
+        user_usage=user_usage_namespace(invocations_1h=49),
+    )
+
+
+def test_agent_usage_does_not_feed_a_user_cap() -> None:
+    assert_allows(
+        _user_admission_cap(50),
+        AGENT_RUN_TOOL,
+        {"agent": "a"},
+        agent_usage=agent_usage_namespace(invocations_1h=99),
+    )
+
+
+def test_an_unset_user_cap_reads_a_user_this_process_has_not_seen() -> None:
+    assert_allows(_user_admission_cap(1), AGENT_RUN_TOOL, {"agent": "a"})

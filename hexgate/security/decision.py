@@ -117,6 +117,11 @@ class PolicyEngine(Protocol):
         reads it from its signed manifest, like the ``declares_*`` flags."""
         ...
 
+    def user_usage_paths(self) -> frozenset[str]:
+        """Every ``user_usage.*`` path (without the root) this policy references.
+        Empty means the enforcer reads no user namespace and counts no user."""
+        ...
+
 
 # Over the platform's ``DecisionEvent.reason`` max_length the audit event is
 # rejected outright, losing the record for the calls most worth keeping.
