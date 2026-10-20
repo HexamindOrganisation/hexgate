@@ -151,9 +151,9 @@ function HexNode({ id, data }: NodeProps<Node<NodeData>>) {
     <div className="relative" style={{ width: HEX_W, height: HEX_H }}>
       <Handle type="target" position={Position.Left} style={centerHandle} />
       <svg
-        width="136"
-        height="118"
-        viewBox="0 0 136 118"
+        width={HEX_W}
+        height={HEX_H}
+        viewBox={`0 0 ${HEX_W} ${HEX_H}`}
         className="absolute inset-0"
         style={{
           // color-mix (not a hex-alpha suffix) so the glow alpha works with the
@@ -207,24 +207,22 @@ function HexNode({ id, data }: NodeProps<Node<NodeData>>) {
   );
 }
 
-/** Verdict-colored bezier edge with a small kind/via label. Deny + handoff
- * render dashed; a denied edge is dimmed. */
-// Stop the visible path at the target node's border so the arrowhead sits on
-// the edge, not hidden under the node centre.
-const ARROW_GAP = 60;
+// End the visible path just off the target hex's side tip (the path arrives
+// level), so the arrowhead sits on the border, not under the node.
+const ARROW_GAP = HEX_W / 2 + 4;
 
 type EdgeGeometry = { path: string; labelX: number; labelY: number };
 
 /** Through any bend points with horizontal tangents, so an edge leaves and
- * enters its nodes level and runs level through each lane. The label sits on
- * the first bend, or midway when there is none. */
+ * enters its nodes level and runs level through each lane. The label sits
+ * midway along the bends. */
 function bentPath(points: { x: number; y: number }[]): EdgeGeometry {
   const last = points[points.length - 1];
   const before = points[points.length - 2];
-  const dist = Math.hypot(last.x - before.x, last.y - before.y) || 1;
+  // Arrive at the tip facing the side the edge comes from.
   const end = {
-    x: last.x - ((last.x - before.x) / dist) * ARROW_GAP,
-    y: last.y - ((last.y - before.y) / dist) * ARROW_GAP,
+    x: last.x + (before.x > last.x ? ARROW_GAP : -ARROW_GAP),
+    y: last.y,
   };
   const pts = [...points.slice(0, -1), end];
   let path = `M${pts[0].x},${pts[0].y}`;
@@ -234,13 +232,17 @@ function bentPath(points: { x: number; y: number }[]): EdgeGeometry {
     const mx = (p.x + q.x) / 2;
     path += ` C${mx},${p.y} ${mx},${q.y} ${q.x},${q.y}`;
   }
-  const mid =
-    points.length > 2
-      ? points[1]
-      : { x: (pts[0].x + end.x) / 2, y: (pts[0].y + end.y) / 2 };
+  // Midway along the bends, or along the line when there are none.
+  const via = points.length > 2 ? points.slice(1, -1) : [pts[0], end];
+  const mid = {
+    x: via.reduce((a, p) => a + p.x, 0) / via.length,
+    y: via.reduce((a, p) => a + p.y, 0) / via.length,
+  };
   return { path, labelX: mid.x, labelY: mid.y };
 }
 
+/** Verdict-colored routed edge with a small kind/via label. Deny + handoff
+ * render dashed; a denied edge is dimmed. */
 function PolicyEdge({
   id,
   source,
@@ -337,7 +339,10 @@ function PolicyEdge({
 /** A column heading; it pans and zooms with the graph. */
 function ColumnLabel({ data }: NodeProps<Node<NodeData>>) {
   return (
-    <div className="w-[136px] text-center font-mono text-[13px] font-medium uppercase tracking-wider text-muted-foreground">
+    <div
+      style={{ width: HEX_W }}
+      className="text-center font-mono text-[13px] font-medium uppercase tracking-wider text-muted-foreground"
+    >
       {data.label}
     </div>
   );
@@ -585,31 +590,9 @@ function PolicyFlow({ graph }: { graph: PolicyGraph }) {
     return { out, inc };
   }, [graph]);
 
-  // Each node's distance from a root (a node with no incoming edge — a role, or
-  // an ungoverned entry). Staggers the flow animation so dots ripple outward
-  // role → agent → tool.
-  const depth = useMemo(() => {
-    const d = new Map<string, number>();
-    const q = graph.nodes
-      .filter((n) => (adj.inc.get(n.id) ?? []).length === 0)
-      .map((n) => {
-        d.set(n.id, 0);
-        return n.id;
-      });
-    for (let h = 0; h < q.length; h++) {
-      const u = q[h];
-      const du = d.get(u) ?? 0;
-      for (const v of adj.out.get(u) ?? [])
-        if (!d.has(v)) {
-          d.set(v, du + 1);
-          q.push(v);
-        }
-    }
-    graph.nodes.forEach((n) => {
-      if (!d.has(n.id)) d.set(n.id, 0);
-    });
-    return d;
-  }, [graph, adj]);
+  // Each node's column staggers the flow animation, so dots ripple outward
+  // role → agent → tool in the order the columns show.
+  const depth = useMemo(() => new Map(Object.entries(lay.col)), [lay]);
 
   // Provided via context so it never rebuilds the nodes/edges arrays (which
   // would flash the graph).
@@ -746,7 +729,12 @@ function PolicyFlow({ graph }: { graph: PolicyGraph }) {
           setSelected(graph.edges[idx] ?? null);
         }}
         onNodeClick={(_, node) => {
-          if (node.type === "column") return;
+          // A heading is part of the canvas: clicking it clears, like the pane.
+          if (node.type === "column") {
+            setSelected(null);
+            setPinned(null);
+            return;
+          }
           setPinned((p) => (p === node.id ? null : node.id));
         }}
         onPaneClick={() => {

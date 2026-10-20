@@ -13,6 +13,8 @@ export const COL_W = 300;
 export const ROW_H = 150;
 /** Height of a bend slot: a lane an edge passes through. */
 const BEND_H = 32;
+/** Gap between edges that join the same two nodes. */
+const SPREAD = 24;
 
 type Point = { x: number; y: number };
 
@@ -95,23 +97,24 @@ export function layeredLayout(graph: PolicyGraph): LayeredLayout {
 
   const prev = new Map<string, string[]>();
   const next = new Map<string, string[]>();
-  const bendIds: Record<number, string[]> = {};
+  const bendIds: Record<number, { id: string; c: number }[]> = {};
   graph.edges.forEach((e, i) => {
     const a = col[e.source];
     const b = col[e.target];
-    if (a == null || b == null) return;
+    // Same-column edges loop beside the column; they don't order it.
+    if (a == null || b == null || a === b) return;
     // A chain source → slot → … → target, one slot per crossed column.
     const step = b > a ? 1 : -1;
     const chain = [e.source];
-    if (Math.abs(b - a) > 1) {
-      for (let c = a + step; c !== b; c += step) {
-        const id = `bend:${i}:${c}`;
-        layers[c].push(id);
-        chain.push(id);
-      }
+    const slots: { id: string; c: number }[] = [];
+    for (let c = a + step; c !== b; c += step) {
+      const id = `bend:${i}:${c}`;
+      layers[c].push(id);
+      slots.push({ id, c });
+      chain.push(id);
     }
     chain.push(e.target);
-    if (chain.length > 2) bendIds[i] = chain.slice(1, -1);
+    bendIds[i] = slots;
     for (let k = 1; k < chain.length; k++) {
       // Left-to-right neighbours, whichever way the edge points.
       const [l, r] =
@@ -159,29 +162,50 @@ export function layeredLayout(graph: PolicyGraph): LayeredLayout {
   for (const n of graph.nodes) {
     pos[n.id] = { x: col[n.id] * COL_W, y: y.get(n.id)! };
   }
+  // Edges joining the same two nodes (either way) fan apart by SPREAD.
+  const pairKey = (e: { source: string; target: string }) =>
+    [e.source, e.target].sort().join("\u0000");
+  const pairSize = new Map<string, number>();
+  for (const e of graph.edges) {
+    pairSize.set(pairKey(e), (pairSize.get(pairKey(e)) ?? 0) + 1);
+  }
+  const pairSeen = new Map<string, number>();
   const bends: LayeredLayout["bends"] = {};
   graph.edges.forEach((e, i) => {
     const s = pos[e.source];
     const t = pos[e.target];
     if (!s || !t) return;
-    const out = s.x + COL_W * 0.4;
-    bends[i] =
-      e.source === e.target
-        ? // A self-loop: out to the right and back.
-          [{ x: out, y: s.y - ROW_H / 3 }]
-        : col[e.source] === col[e.target]
-          ? // Same column: loop out to the right, between the columns.
-            [{ x: out, y: (s.y + t.y) / 2 }]
-          : (bendIds[i] ?? []).map((id) => ({
-              x: Number(id.split(":")[2]) * COL_W,
-              y: y.get(id)!,
-            }));
+    const key = pairKey(e);
+    const j = pairSeen.get(key) ?? 0;
+    pairSeen.set(key, j + 1);
+    const n = pairSize.get(key)!;
+    const spread = (j - (n - 1) / 2) * SPREAD;
+    // Loops run down a lane halfway to the next column, clear of the hexes.
+    const out = s.x + COL_W / 2 + spread;
+    if (e.source === e.target) {
+      bends[i] = [
+        { x: out, y: s.y - ROW_H / 4 },
+        { x: out, y: s.y + ROW_H / 4 },
+      ];
+    } else if (col[e.source] === col[e.target]) {
+      bends[i] = [
+        { x: out, y: s.y },
+        { x: out, y: t.y },
+      ];
+    } else if (bendIds[i]?.length) {
+      bends[i] = bendIds[i].map(({ id, c }) => ({
+        x: c * COL_W,
+        y: y.get(id)!,
+      }));
+    } else {
+      bends[i] =
+        n > 1 ? [{ x: (s.x + t.x) / 2, y: (s.y + t.y) / 2 + spread }] : [];
+    }
   });
 
   // Titles by position (tools are always last); bend-only columns get none.
   const columns = layers.flatMap((layer, c) => {
-    const nodes = layer.filter((id) => !id.startsWith("bend:"));
-    if (nodes.length === 0) return [];
+    if (!layer.some((id) => !id.startsWith("bend:"))) return [];
     const title =
       c === 0
         ? "Caller roles"
@@ -190,7 +214,8 @@ export function layeredLayout(graph: PolicyGraph): LayeredLayout {
           : c === 1
             ? "Agents"
             : `Agents · hop ${c - 1}`;
-    const top = Math.min(...nodes.map((id) => y.get(id)! - ROW_H / 2));
+    // Lanes count, so a heading never sits on an edge.
+    const top = Math.min(...layer.map((id) => y.get(id)! - height(id) / 2));
     return [{ title, x: c * COL_W, top }];
   });
   return { pos, col, columns, bends };

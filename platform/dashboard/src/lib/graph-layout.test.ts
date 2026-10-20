@@ -147,7 +147,48 @@ describe("layeredLayout", () => {
     );
     const { col, pos, bends } = layeredLayout(g);
     expect(col.a).toBe(col.b);
-    expect(bends[2][0].x).toBeGreaterThan(pos.a.x);
+    // Down a lane halfway to the next column, clear of the hexes (136 wide).
+    expect(bends[2]).toEqual([
+      { x: pos.a.x + COL_W / 2, y: pos.a.y },
+      { x: pos.a.x + COL_W / 2, y: pos.b.y },
+    ]);
+  });
+
+  it("fans apart edges joining the same two nodes", () => {
+    // a calls t and reaches it as a tool: two curves, not one on another.
+    const g = graph(
+      [
+        ["r", "role"],
+        ["a", "agent"],
+        ["b", "agent"],
+        ["t", "tool"],
+      ],
+      [
+        edge("r", "a", "admission"),
+        edge("a", "t", "call"),
+        { ...edge("a", "t", "reach"), via: "tool" },
+      ],
+    );
+    const { bends } = layeredLayout(g);
+    expect(bends[1]).toHaveLength(1);
+    expect(bends[2]).toHaveLength(1);
+    expect(bends[1][0].y).not.toBe(bends[2][0].y);
+    // A lone edge between adjacent columns needs no bend.
+    expect(bends[0]).toEqual([]);
+  });
+
+  it("keeps headings above any lane in their column", () => {
+    const g = graph(
+      [
+        ["a", "agent"],
+        ["b", "agent"],
+        ["t", "tool"],
+      ],
+      [edge("a", "b", "reach"), edge("a", "t", "call")],
+    );
+    const { columns, bends } = layeredLayout(g);
+    const hop = columns.find((c) => c.title === "Agents · hop 1")!;
+    expect(hop.top).toBeLessThanOrEqual(bends[1][0].y - 16);
   });
 
   it("orders a column by its neighbours to avoid crossings", () => {

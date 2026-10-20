@@ -378,11 +378,13 @@ describe("PolicyGraphDialog", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("labels the columns and ignores clicks on them", async () => {
+  it("labels the columns; clicking one clears like the canvas", async () => {
     stubGraph(GRAPH);
     renderDialog();
     const heading = await screen.findByText("Caller roles");
     expect(screen.getByText("Agents · hop 1")).toBeInTheDocument();
+    await userEvent.click(screen.getByTestId("node-agent:supervisor"));
+    expect(screen.getByRole("complementary")).toBeInTheDocument();
     await userEvent.click(heading);
     expect(screen.queryByRole("complementary")).toBeNull();
   });
