@@ -4,7 +4,7 @@ import type { ChartSeries } from "@/components/ui/charts";
 // Shared palette (--semantic-* tokens). Separate module so charts.tsx exports
 // only components (react-refresh).
 export const CHART_COLORS = {
-  allow: "hsl(var(--semantic-allow))",
+  allow: "hsl(var(--semantic-allow-soft))",
   deny: "hsl(var(--semantic-deny))",
   needs_approval: "hsl(var(--semantic-approval))",
   primary: "hsl(var(--primary))",

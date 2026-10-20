@@ -23,7 +23,7 @@ export function ActiveFilterChips<F extends object>({
   if (!active.length) return null;
   return (
     <div className="mb-4 flex flex-wrap items-center gap-1.5">
-      <span className="text-[11.5px] text-muted-foreground">Filters</span>
+      <span className="text-caption text-muted-foreground">Filters</span>
       {active.map((k) => (
         <Badge key={String(k)} className="gap-1 pr-1 text-muted-foreground">
           {String(k)}:{" "}

@@ -26,9 +26,34 @@
   --color-input: hsl(var(--input));
   --color-ring: hsl(var(--ring));
 
+  /* Main buttons: near-black in light, near-white in dark. Blue (--primary)
+     is kept for links, focus and selection. */
+  --color-action: hsl(var(--action));
+  --color-action-foreground: hsl(var(--action-foreground));
+  /* Health only ("Connected", "Enforcing") — never an allow decision. */
+  --color-success: hsl(var(--success));
+
   --color-allow: hsl(var(--semantic-allow));
   --color-deny: hsl(var(--semantic-deny));
   --color-approval: hsl(var(--semantic-approval));
+  /* Quiet fills: chart bars for allow, tinted grounds for deny/approval. */
+  --color-allow-soft: hsl(var(--semantic-allow-soft));
+  --color-deny-soft: hsl(var(--semantic-deny-soft));
+  --color-approval-soft: hsl(var(--semantic-approval-soft));
+
+  /* Named type scale — use these instead of one-off text-[Npx] sizes. */
+  --text-caption: 11.5px;
+  --text-caption--line-height: 1rem;
+  --text-meta: 12.5px;
+  --text-meta--line-height: 1.125rem;
+  --text-body-sm: 13.5px;
+  --text-body-sm--line-height: 1.25rem;
+  --text-body: 15px;
+  --text-body--line-height: 1.5rem;
+  --text-title-sm: 20px;
+  --text-title-sm--line-height: 1.75rem;
+  --text-title: 30px;
+  --text-title--line-height: 2.25rem;
 
   /* The code-pane surface — matches the always-dark CodeMirror ground
      (#0a0d14, see PolicyEditor/theme.ts) so the tabs/toolbar read as one
@@ -45,34 +70,41 @@
 }
 
 :root {
-  --radius: 0.5rem;
+  /* lg = 10px (controls md = 8px), xl = 14px (panels). */
+  --radius: 0.625rem;
 
-  --background: 210 40% 98%;
-  --foreground: 222 47% 11%;
+  --background: 220 20% 97%;
+  --foreground: 223 36% 11%;
   --card: 0 0% 100%;
-  --card-foreground: 222 47% 11%;
+  --card-foreground: 223 36% 11%;
   --popover: 0 0% 100%;
-  --popover-foreground: 222 47% 11%;
+  --popover-foreground: 223 36% 11%;
   --primary: 226 70% 52%;
-  --primary-foreground: 210 40% 98%;
-  --secondary: 210 40% 94%;
-  --secondary-foreground: 222 47% 11%;
-  --muted: 210 40% 94%;
-  --muted-foreground: 215 16% 47%;
-  --accent: 210 40% 94%;
-  --accent-foreground: 222 47% 11%;
-  --destructive: 0 70% 50%;
-  --destructive-foreground: 210 40% 98%;
-  --border: 215 20% 88%;
-  --input: 215 20% 88%;
+  --primary-foreground: 0 0% 100%;
+  --secondary: 220 18% 94%;
+  --secondary-foreground: 223 36% 11%;
+  --muted: 220 18% 94%;
+  --muted-foreground: 217 12% 42%;
+  --accent: 220 18% 94%;
+  --accent-foreground: 223 36% 11%;
+  --destructive: 14 84% 43%;
+  --destructive-foreground: 0 0% 100%;
+  --border: 218 17% 91%;
+  --input: 218 17% 91%;
   --ring: 226 70% 52%;
 
-  --semantic-allow: 142 71% 45%;
-  --semantic-allow-soft: 142 50% 20%;
-  --semantic-deny: 0 72% 58%;
-  --semantic-deny-soft: 0 50% 22%;
-  --semantic-approval: 38 92% 55%;
-  --semantic-approval-soft: 38 60% 22%;
+  --action: 223 36% 11%;
+  --action-foreground: 0 0% 100%;
+  --success: 154 67% 37%;
+
+  /* Deny is the only loud colour; allow is a quiet neutral that still reads
+     as text (~4.5:1 on white). */
+  --semantic-allow: 214 16% 49%;
+  --semantic-allow-soft: 214 26% 83%;
+  --semantic-deny: 14 84% 43%;
+  --semantic-deny-soft: 17 85% 92%;
+  --semantic-approval: 39 82% 49%;
+  --semantic-approval-soft: 39 86% 89%;
 
   /* Code-pane ground — mode-aware so `bg-editor` surfaces (tabs/tree/inspector)
      track the CodeMirror editor and read correctly under theme-aware text in
@@ -116,32 +148,37 @@
 }
 
 .dark {
-  --background: 222 33% 5%;
-  --foreground: 210 40% 96%;
-  --card: 222 28% 8%;
-  --card-foreground: 210 40% 96%;
-  --popover: 222 28% 8%;
-  --popover-foreground: 210 40% 96%;
-  --primary: 226 78% 65%;
-  --primary-foreground: 222 33% 5%;
-  --secondary: 222 20% 14%;
-  --secondary-foreground: 210 40% 96%;
-  --muted: 222 20% 12%;
-  --muted-foreground: 215 20% 60%;
-  --accent: 222 20% 14%;
-  --accent-foreground: 210 40% 96%;
-  --destructive: 0 72% 58%;
-  --destructive-foreground: 210 40% 96%;
-  --border: 222 20% 16%;
-  --input: 222 20% 16%;
-  --ring: 226 78% 65%;
+  /* Blue-black, not grey. */
+  --background: 220 29% 6%;
+  --foreground: 218 33% 93%;
+  --card: 221 31% 10%;
+  --card-foreground: 218 33% 93%;
+  --popover: 221 31% 10%;
+  --popover-foreground: 218 33% 93%;
+  --primary: 225 81% 69%;
+  --primary-foreground: 220 29% 6%;
+  --secondary: 224 30% 15%;
+  --secondary-foreground: 218 33% 93%;
+  --muted: 224 30% 15%;
+  --muted-foreground: 218 15% 66%;
+  --accent: 224 30% 15%;
+  --accent-foreground: 218 33% 93%;
+  --destructive: 14 76% 53%;
+  --destructive-foreground: 220 29% 6%;
+  --border: 220 23% 18%;
+  --input: 220 23% 18%;
+  --ring: 225 81% 69%;
 
-  --semantic-allow: 142 71% 45%;
-  --semantic-allow-soft: 142 50% 20%;
-  --semantic-deny: 0 72% 58%;
-  --semantic-deny-soft: 0 50% 22%;
-  --semantic-approval: 38 92% 55%;
-  --semantic-approval-soft: 38 60% 22%;
+  --action: 218 33% 93%;
+  --action-foreground: 220 29% 6%;
+  --success: 152 58% 48%;
+
+  --semantic-allow: 217 15% 62%;
+  --semantic-allow-soft: 217 24% 23%;
+  --semantic-deny: 14 76% 53%;
+  --semantic-deny-soft: 14 49% 15%;
+  --semantic-approval: 39 86% 59%;
+  --semantic-approval-soft: 37 57% 15%;
 
   /* Code-pane ground — dark variant (matches the dark CodeMirror editor). */
   --editor: 222 33% 6%;
@@ -175,10 +212,20 @@
   --call-3: #199e70;
 }
 
-/* ── Accent scheme (blue default / plum) ──────────────────────────────────
-   The scheme axis only swaps the accent hue (226 blue → 313 plum); the mode
-   axis above owns every neutral. Applied via `data-scheme="plum"` on <html>.
-   Per-mode so plum has its own light and dark accent, mirroring blue. */
+/* ── Accent scheme ─────────────────────────────────────────────────────────
+   The scheme axis only swaps the accent (--primary/--ring); the mode axis
+   above owns every neutral and decision colour. Applied via `data-scheme` on
+   <html>; blue is the :root/.dark default. Keep in sync with SCHEME_ACCENTS
+   in lib/theme.ts. No red, amber or green: those mean deny, approval and
+   connected. */
+[data-scheme="violet"] {
+  --primary: 254 71% 59%;
+  --ring: 254 71% 59%;
+}
+.dark[data-scheme="violet"] {
+  --primary: 252 85% 74%;
+  --ring: 252 85% 74%;
+}
 [data-scheme="plum"] {
   --primary: 313 62% 48%;
   --ring: 313 62% 48%;
@@ -186,6 +233,22 @@
 .dark[data-scheme="plum"] {
   --primary: 313 75% 68%;
   --ring: 313 75% 68%;
+}
+[data-scheme="teal"] {
+  --primary: 180 81% 29%;
+  --ring: 180 81% 29%;
+}
+.dark[data-scheme="teal"] {
+  --primary: 179 52% 50%;
+  --ring: 179 52% 50%;
+}
+[data-scheme="graphite"] {
+  --primary: 219 17% 30%;
+  --ring: 219 17% 30%;
+}
+.dark[data-scheme="graphite"] {
+  --primary: 217 18% 76%;
+  --ring: 217 18% 76%;
 }
 
 @layer base {

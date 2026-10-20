@@ -65,7 +65,7 @@ function KV({
   muted?: boolean;
 }) {
   return (
-    <div className="grid grid-cols-[116px_1fr] items-baseline gap-2.5 py-[5px] text-[12.5px]">
+    <div className="grid grid-cols-[116px_1fr] items-baseline gap-2.5 py-[5px] text-meta">
       <div className="text-muted-foreground">{k}</div>
       <div
         className={`break-words ${mono ? "font-mono text-xs" : ""} ${muted ? "text-muted-foreground" : "text-foreground"}`}
@@ -235,7 +235,7 @@ function DetailDrawer({
                 : "No reason recorded.")}
             {e.error_type && (
               <span
-                className={`mt-1.5 block font-mono text-[11.5px] ${tone.text}`}
+                className={`mt-1.5 block font-mono text-caption ${tone.text}`}
               >
                 error_type: {e.error_type}
               </span>
@@ -248,7 +248,7 @@ function DetailDrawer({
                 {e.violations.map((v) => (
                   <span
                     key={v}
-                    className="rounded-md bg-deny/15 px-2 py-[3px] font-mono text-[11.5px] text-deny"
+                    className="rounded-md bg-deny/15 px-2 py-[3px] font-mono text-caption text-deny"
                   >
                     {v}
                   </span>
@@ -304,7 +304,7 @@ function DetailDrawer({
           </DrawerSection>
 
           <DrawerSection label="Arguments">
-            <pre className="m-0 whitespace-pre-wrap rounded-lg border border-border bg-muted p-3 font-mono text-[11.5px] leading-relaxed text-foreground">
+            <pre className="m-0 whitespace-pre-wrap rounded-lg border border-border bg-muted p-3 font-mono text-caption leading-relaxed text-foreground">
               {argStr}
             </pre>
           </DrawerSection>
@@ -326,7 +326,7 @@ function DetailDrawer({
 
           {attrStr && (
             <DrawerSection label="Context attributes">
-              <pre className="m-0 whitespace-pre-wrap rounded-lg border border-border bg-muted p-3 font-mono text-[11.5px] leading-relaxed text-foreground">
+              <pre className="m-0 whitespace-pre-wrap rounded-lg border border-border bg-muted p-3 font-mono text-caption leading-relaxed text-foreground">
                 {attrStr}
               </pre>
             </DrawerSection>

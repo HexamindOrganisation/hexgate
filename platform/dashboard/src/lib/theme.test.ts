@@ -1,6 +1,9 @@
+/// <reference types="node" />
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { applyTheme, isDark, useTheme } from "./theme";
+import { readFileSync } from "node:fs";
+
+import { applyTheme, isDark, SCHEME_ACCENTS, SCHEMES, useTheme } from "./theme";
 
 function stubPrefersDark(matches: boolean) {
   vi.stubGlobal(
@@ -59,5 +62,39 @@ describe("useTheme store", () => {
     // restore for other tests sharing the module-level store
     useTheme.getState().setMode("dark");
     useTheme.getState().setScheme("blue");
+  });
+});
+
+describe("SCHEME_ACCENTS", () => {
+  // The swatches read SCHEME_ACCENTS; the real token comes from index.css.
+  // They must agree or a dot shows a colour the app never paints.
+  // Read from disk: Vitest stubs CSS imports, `?raw` included.
+  const css = readFileSync("src/index.css", "utf8");
+  const primaryIn = (selector: string): string | undefined => {
+    const start = css.indexOf(`\n${selector} {`);
+    if (start < 0) return undefined;
+    const block = css.slice(start, css.indexOf("}", start));
+    return /--primary: ([^;]+);/.exec(block)?.[1];
+  };
+
+  it("lists every scheme in the picker", () => {
+    expect(SCHEMES.map((s) => s.id).sort()).toEqual(
+      Object.keys(SCHEME_ACCENTS).sort(),
+    );
+  });
+
+  it.each(SCHEMES.filter((s) => s.id !== "blue").map((s) => s.id))(
+    "%s matches its index.css token block in both modes",
+    (id) => {
+      expect(primaryIn(`[data-scheme="${id}"]`)).toBe(SCHEME_ACCENTS[id].light);
+      expect(primaryIn(`.dark[data-scheme="${id}"]`)).toBe(
+        SCHEME_ACCENTS[id].dark,
+      );
+    },
+  );
+
+  it("blue matches the :root and .dark defaults", () => {
+    expect(primaryIn(":root")).toBe(SCHEME_ACCENTS.blue.light);
+    expect(primaryIn(".dark")).toBe(SCHEME_ACCENTS.blue.dark);
   });
 });
