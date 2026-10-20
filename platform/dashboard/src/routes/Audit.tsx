@@ -30,7 +30,7 @@ import {
   type AuditFilters as Filters,
   useAuditFilters,
 } from "@/lib/audit-filters";
-import { RANGE_LABEL, rangeDays } from "@/lib/date-range";
+import { rangeDays, rangePhrase } from "@/lib/date-range";
 import { fmtTs } from "@/components/audit/fmt";
 import { LlmMessagesSection } from "@/components/audit/messages";
 import {
@@ -580,9 +580,7 @@ export function AuditPage() {
   // Nothing recorded in the range and nothing filtered out: show next steps
   // instead of a wall of zeros.
   const showOnboarding = optionsQ.isSuccess && rangeTotal === 0 && !hasFilters;
-  const rangePhrase = f.start_date
-    ? "in the selected range"
-    : `in the last ${RANGE_LABEL[f.range]}`;
+  const rangeText = rangePhrase(f.range, f.start_date);
   const related = (relatedQ.data?.rows ?? [])
     .filter((r) => r.event_id !== sel?.event_id)
     .slice(0, 6);
@@ -622,8 +620,8 @@ export function AuditPage() {
                   {counts.total.toLocaleString()}
                 </span>{" "}
                 {scopeFiltered
-                  ? `decisions match these filters ${rangePhrase}`
-                  : `policy decisions ${rangePhrase} for `}
+                  ? `decisions match these filters ${rangeText}`
+                  : `policy decisions ${rangeText} for `}
                 {!scopeFiltered && (
                   <span className="font-mono text-foreground">
                     {projectName}
