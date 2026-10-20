@@ -372,7 +372,7 @@ interface RoleMode {
   mode: PolicyMatrixCell["mode"] | undefined;
   /** The engine's condition text, when the cell is constrained. */
   constraint: string | null;
-  /** Not listed for the role: its default applies. */
+  /** The policy lists the tool for no role: every chip is a fallback. */
   defaulted: boolean;
 }
 
