@@ -80,10 +80,17 @@ describe("audit filters in the URL", () => {
     }
   });
 
-  it("shows a lone end date as a custom range, never a hidden filter", () => {
-    const f = fromAuditSearch(new URLSearchParams("range=30d&to=2026-06-01"))!;
-    expect(f.customMode).toBe(true);
-    expect(f.end_date).not.toBeNull();
+  it("ignores a lone or reversed end date rather than hide a filter", () => {
+    const lone = fromAuditSearch(
+      new URLSearchParams("range=30d&to=2026-06-01"),
+    )!;
+    expect(lone.end_date).toBeNull();
+    expect(lone.customMode).toBe(false);
+    const reversed = fromAuditSearch(
+      new URLSearchParams("from=2026-06-10&to=2026-06-01"),
+    )!;
+    expect(reversed.start_date).not.toBeNull();
+    expect(reversed.end_date).toBeNull();
   });
 
   it("keeps params that aren't Audit filters", () => {

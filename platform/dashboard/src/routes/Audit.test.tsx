@@ -35,13 +35,16 @@ import { renderWithProviders } from "@/test/render";
 
 /** The filters Audit last showed (its URL, mirrored in the store). */
 const currentFilters = (): AuditFilters =>
-  fromAuditSearch(new URLSearchParams(useAuditFilters.getState().lastSearch)) ??
-  EMPTY_AUDIT_FILTERS;
+  fromAuditSearch(
+    new URLSearchParams(useAuditFilters.getState().lastSearch[PROJECT] ?? ""),
+  ) ?? EMPTY_AUDIT_FILTERS;
 
 /** Make `patch` the remembered view, which a bare /audit reopens. */
 const seedFilters = (patch: Partial<AuditFilters>) =>
   useAuditFilters.setState({
-    lastSearch: toAuditSearch({ ...EMPTY_AUDIT_FILTERS, ...patch }).toString(),
+    lastSearch: {
+      [PROJECT]: toAuditSearch({ ...EMPTY_AUDIT_FILTERS, ...patch }).toString(),
+    },
   });
 
 const PROJECT = "p1";
@@ -344,7 +347,7 @@ describe("AuditPage", () => {
       useActive.setState({ activeOrgId: "org-1", activeProjectId: PROJECT });
       // The filter store is module-global — reset so a filter dialled in
       // by test A doesn't narrow test B's queries.
-      useAuditFilters.setState({ lastSearch: "", pageKey: "", pageLimit: 40 });
+      useAuditFilters.setState({ lastSearch: {}, pageKey: "", pageLimit: 40 });
     });
     messageRows = () => MESSAGES;
   });
