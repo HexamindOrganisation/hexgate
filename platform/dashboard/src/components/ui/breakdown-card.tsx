@@ -120,7 +120,7 @@ export function BreakdownCardShell<
         </Select>
       </div>
       <div
-        className={`grid flex-1 content-start gap-x-8 ${columns === 2 ? "grid-cols-2" : "grid-cols-1"}`}
+        className={`grid flex-1 gap-x-8 ${columns === 2 ? "grid-cols-2" : "grid-cols-1 content-start"}`}
       >
         {rows.length ? (
           rows.map((row) => {

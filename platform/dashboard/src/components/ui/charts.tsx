@@ -97,7 +97,7 @@ export function StackedBars({
   // carries the full time.
   const spansDays =
     buckets.length > 1 &&
-    buckets[0].label.toDateString() !== buckets.at(-1)!.label.toDateString();
+    +buckets.at(-1)!.label - +buckets[0].label > 30 * 36e5;
   const tick = (b: ChartBucket) =>
     b.mode === "hour" && !spansDays
       ? b.label
@@ -118,6 +118,21 @@ export function StackedBars({
           month: "short",
           day: "numeric",
         });
+  // Each non-zero segment keeps a few pixels, so a handful of denials next
+  // to thousands of allows still shows without hovering.
+  const MIN_SEGMENT = 3;
+  const barHeight = (b: ChartBucket) =>
+    Math.max(
+      (b.total / max) * height,
+      series.filter((s) => (b.values[s.key] ?? 0) > 0).length * MIN_SEGMENT,
+    );
+  // Keep the readout inside the card at the edges.
+  const tipAnchor = (i: number) =>
+    i < buckets.length / 4
+      ? "left-0"
+      : i >= (buckets.length * 3) / 4
+        ? "right-0"
+        : "left-1/2 -translate-x-1/2";
   const describe = (b: ChartBucket) =>
     `${full(b)}: ${b.total.toLocaleString()} total, ` +
     series.map((s) => `${b.values[s.key] ?? 0} ${s.label}`).join(", ");
@@ -149,7 +164,7 @@ export function StackedBars({
                 the tallest bar never passes the top line. */}
             <div
               className={`flex flex-col-reverse overflow-hidden rounded-t-[3px] transition-opacity ${hover !== null && hover !== i ? "opacity-60" : ""}`}
-              style={{ height: (b.total / max) * height }}
+              style={{ height: barHeight(b) }}
             >
               {series.map((s) => {
                 const v = b.values[s.key] ?? 0;
@@ -157,23 +172,32 @@ export function StackedBars({
                   <div
                     key={s.key}
                     className="border-t border-card first:border-t-0"
-                    style={{ flexGrow: v, flexBasis: 0, background: s.color }}
+                    style={{
+                      flexGrow: v,
+                      flexBasis: 0,
+                      minHeight: MIN_SEGMENT,
+                      background: s.color,
+                    }}
                   />
                 ) : null;
               })}
             </div>
             {hover === i && (
-              <div className="pointer-events-none absolute bottom-full left-1/2 z-10 mb-2 -translate-x-1/2 whitespace-nowrap rounded-lg border border-border bg-popover px-2.5 py-1.5 text-xs shadow-md">
-                <div className="font-medium">{full(b)}</div>
-                {[...series].reverse().map((s) => (
-                  <div key={s.key} className="flex items-center gap-1.5">
-                    <span className={`size-2 rounded-sm ${s.swatchClass}`} />
-                    <span className="text-muted-foreground">{s.label}</span>
-                    <span className="ml-auto pl-3 font-mono">
-                      {(b.values[s.key] ?? 0).toLocaleString()}
-                    </span>
-                  </div>
-                ))}
+              <div
+                className={`pointer-events-none absolute bottom-full z-10 mb-2 whitespace-nowrap ${tipAnchor(i)}`}
+              >
+                <div className="rounded-lg border border-border bg-popover px-2.5 py-1.5 text-xs shadow-md">
+                  <div className="font-medium">{full(b)}</div>
+                  {[...series].reverse().map((s) => (
+                    <div key={s.key} className="flex items-center gap-1.5">
+                      <span className={`size-2 rounded-sm ${s.swatchClass}`} />
+                      <span className="text-muted-foreground">{s.label}</span>
+                      <span className="ml-auto pl-3 font-mono">
+                        {(b.values[s.key] ?? 0).toLocaleString()}
+                      </span>
+                    </div>
+                  ))}
+                </div>
               </div>
             )}
           </div>
