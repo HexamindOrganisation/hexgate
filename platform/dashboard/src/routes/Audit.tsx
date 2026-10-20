@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { Filter, Lightbulb, X } from "lucide-react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import {
   api,
   type AuditDecisionRow,
@@ -28,6 +28,8 @@ import {
 } from "@/components/audit/chart-tokens";
 import {
   type AuditFilters as Filters,
+  fromAuditSearch,
+  toAuditSearch,
   useAuditFilters,
 } from "@/lib/audit-filters";
 import { rangeDays, rangePhrase } from "@/lib/date-range";
@@ -423,6 +425,30 @@ export function AuditPage() {
   // ephemeral and stays local.
   const f = useAuditFilters((s) => s.filters);
   const setF = useAuditFilters((s) => s.setFilters);
+  // Two-way sync with the URL. A navigation that carries filters (a link
+  // from Home or Agents, a reload, a shared URL) replaces the session's;
+  // otherwise the page writes its filters to the URL so they can be shared.
+  const [params, setParams] = useSearchParams();
+  const search = params.toString();
+  const lastSearch = useRef<string | null>(null);
+  useEffect(() => {
+    if (search !== lastSearch.current) {
+      lastSearch.current = search;
+      const fromUrl = fromAuditSearch(new URLSearchParams(search));
+      if (
+        fromUrl &&
+        toAuditSearch(fromUrl).toString() !== toAuditSearch(f).toString()
+      ) {
+        setF(() => fromUrl);
+        return;
+      }
+    }
+    const want = toAuditSearch(f).toString();
+    if (want !== search) {
+      lastSearch.current = want;
+      setParams(want, { replace: true });
+    }
+  }, [search, f, setF, setParams]);
   const tableLimit = useAuditFilters((s) => s.tableLimit);
   const loadMore = useAuditFilters((s) => s.loadMore);
   const [sel, setSel] = useState<AuditDecisionRow | null>(null);

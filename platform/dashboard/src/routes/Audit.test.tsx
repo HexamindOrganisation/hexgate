@@ -404,6 +404,29 @@ describe("AuditPage", () => {
     ).toBe(false);
   });
 
+  it("applies filters carried by the URL, replacing the session's", async () => {
+    useAuditFilters.setState((st) => ({
+      filters: { ...st.filters, tool: "leftover" },
+    }));
+    const calls = stubFetch();
+    renderWithProviders(<AuditPage />, {
+      initialRoute: "/audit?range=24h&agent=agent-x",
+    });
+    await waitFor(() => {
+      const f = useAuditFilters.getState().filters;
+      expect(f.agent).toBe("agent-x");
+      expect(f.range).toBe("24h");
+      expect(f.tool).toBe("");
+    });
+    await waitFor(() =>
+      expect(
+        calls.some(
+          (u) => u.includes("/audit/decisions") && u.includes("agent=agent-x"),
+        ),
+      ).toBe(true),
+    );
+  });
+
   it("reads the range in one sentence: total and deny rate", async () => {
     stubFetch();
     renderWithProviders(<AuditPage />);
