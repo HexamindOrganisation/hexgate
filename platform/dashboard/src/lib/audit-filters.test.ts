@@ -5,7 +5,10 @@ import {
   auditUrl,
   EMPTY_AUDIT_FILTERS,
   fromAuditSearch,
+  pageLimitFor,
   toAuditSearch,
+  useAuditFilters,
+  withAuditFilters,
 } from "./audit-filters";
 
 describe("audit filters in the URL", () => {
@@ -67,5 +70,36 @@ describe("audit filters in the URL", () => {
     expect(f.range).toBe("30d");
     expect(f.outcome).toBe("");
     expect(f.start_date).toBeNull();
+  });
+
+  it("ignores range names inherited from Object.prototype", () => {
+    for (const r of ["constructor", "toString", "__proto__"]) {
+      expect(fromAuditSearch(new URLSearchParams({ range: r }))!.range).toBe(
+        "30d",
+      );
+    }
+  });
+
+  it("shows a lone end date as a custom range, never a hidden filter", () => {
+    const f = fromAuditSearch(new URLSearchParams("range=30d&to=2026-06-01"))!;
+    expect(f.customMode).toBe(true);
+    expect(f.end_date).not.toBeNull();
+  });
+
+  it("keeps params that aren't Audit filters", () => {
+    const next = withAuditFilters(new URLSearchParams("present=1&agent=old"), {
+      agent: "new",
+    });
+    expect(next.get("present")).toBe("1");
+    expect(next.get("agent")).toBe("new");
+  });
+});
+
+describe("paging", () => {
+  it("belongs to one view; any other starts at the first page", () => {
+    useAuditFilters.getState().loadMore("range=7d");
+    const s = useAuditFilters.getState();
+    expect(pageLimitFor(s, "range=7d")).toBe(80);
+    expect(pageLimitFor(s, "range=24h")).toBe(40);
   });
 });

@@ -8,7 +8,6 @@ import { act, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useActive } from "@/lib/active";
-import { EMPTY_AUDIT_FILTERS, useAuditFilters } from "@/lib/audit-filters";
 import type { GuardDefinition, SkillDefinition } from "@/lib/api";
 import { AgentsPage } from "@/routes/Agents";
 import { renderWithProviders } from "@/test/render";
@@ -131,7 +130,6 @@ describe("AgentsPage — ban tie-in", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
-    useAuditFilters.setState({ filters: EMPTY_AUDIT_FILTERS });
   });
 
   it("shows an admin a ban-agent link pointing at the prefilled /bans route", async () => {
