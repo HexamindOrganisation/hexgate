@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { PolicyGraph, PolicyGraphEdge } from "./api";
-import { COL_W, layeredLayout } from "./graph-layout";
+import { COL_W, HEX_W, ROW_H, layeredLayout } from "./graph-layout";
 
 const edge = (
   source: string,
@@ -49,7 +49,7 @@ describe("layeredLayout", () => {
     expect(col).toEqual({ r: 0, a: 1, b: 2, t: 3, m: 3 });
     expect(pos.b.x).toBe(2 * COL_W);
     // Each heading sits on its own column's top node.
-    expect(columns[0].top).toBe(pos.r.y - 75);
+    expect(columns[0].top).toBe(pos.r.y - ROW_H / 2);
     expect(columns.map((c) => c.title)).toEqual([
       "Caller roles",
       "Agents",
@@ -147,11 +147,40 @@ describe("layeredLayout", () => {
     );
     const { col, pos, bends } = layeredLayout(g);
     expect(col.a).toBe(col.b);
-    // Down a lane halfway to the next column, clear of the hexes (136 wide).
+    // Down a lane just clear of the hexes' side tips.
+    const lane = bends[2][0].x;
+    expect(lane).toBeGreaterThan(pos.a.x + HEX_W / 2);
     expect(bends[2]).toEqual([
-      { x: pos.a.x + COL_W / 2, y: pos.a.y },
-      { x: pos.a.x + COL_W / 2, y: pos.b.y },
+      { x: lane, y: pos.a.y },
+      { x: lane, y: pos.b.y },
     ]);
+  });
+
+  it("gives each loop in a column its own lane", () => {
+    const g = graph(
+      [
+        ["r", "role"],
+        ["a", "agent"],
+        ["b", "agent"],
+        ["c", "agent"],
+      ],
+      [
+        edge("r", "a", "admission"),
+        edge("r", "b", "admission"),
+        edge("r", "c", "admission"),
+        edge("a", "c", "reach"),
+        edge("b", "c", "reach"),
+        edge("a", "a", "reach"),
+      ],
+    );
+    const { pos, bends } = layeredLayout(g);
+    const lanes = [3, 4, 5].map((i) => bends[i][0].x);
+    expect(new Set(lanes).size).toBe(3);
+    // All between the column's hexes and the next column's.
+    for (const x of lanes) {
+      expect(x).toBeGreaterThan(pos.a.x + HEX_W / 2);
+      expect(x).toBeLessThan(pos.a.x + COL_W - HEX_W / 2);
+    }
   });
 
   it("fans apart edges joining the same two nodes", () => {
