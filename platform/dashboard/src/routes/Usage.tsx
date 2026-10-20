@@ -5,7 +5,7 @@ import { NoProjectEmptyState } from "@/components/NoProjectEmptyState";
 import { DashboardRangePicker } from "@/components/ui/dashboard-range-picker";
 import { StatStrip } from "@/components/ui/stat-strip";
 import { displayNoValue, scopeNoValue } from "@/components/audit/chart-tokens";
-import { RANGE_LABEL, rangeDays } from "@/lib/date-range";
+import { rangeDays, rangePhrase } from "@/lib/date-range";
 import {
   UsageActiveChips,
   UsageBreakdownCard,
@@ -63,11 +63,16 @@ export function UsagePage() {
   const rangeTotal = options?.totals.calls ?? 0;
 
   const nDays = rangeDays(f.range, f.start_date, f.end_date);
+  const hourly = !f.start_date && f.range === "24h";
   // `fmt` overrides the plain count (e.g. compact tokens).
-  const avgLabel = (count: number, fmt?: (n: number) => string) =>
-    !f.start_date && f.range === "24h"
-      ? `${fmt ? fmt(count / 24) : (count / 24).toFixed(1)}/hr avg`
-      : `${fmt ? fmt(count / nDays) : (count / nDays).toFixed(0)}/day avg`;
+  const avgLabel = (count: number, fmt?: (n: number) => string) => {
+    const per = hourly ? count / 24 : count / nDays;
+    const show =
+      fmt ??
+      ((n: number) =>
+        n.toLocaleString("en-US", { maximumFractionDigits: hourly ? 1 : 0 }));
+    return `${show(per)}/${hourly ? "hr" : "day"} avg`;
+  };
   const inputPct = totals.total_tokens
     ? Math.round((totals.input_tokens / totals.total_tokens) * 100)
     : 0;
@@ -84,15 +89,14 @@ export function UsagePage() {
       <PageHeader
         title="Usage"
         description={
-          totals.calls > 0 && !summaryQ.isPlaceholderData ? (
+          totals.calls > 0 ? (
             <>
               <span className="font-semibold text-foreground">
                 {fmtTokens(totals.total_tokens)} tokens
               </span>{" "}
-              over {totals.calls.toLocaleString()} model calls{" "}
-              {f.start_date
-                ? "in the selected range"
-                : `in the last ${RANGE_LABEL[f.range]}`}
+              over {totals.calls.toLocaleString()} model{" "}
+              {totals.calls === 1 ? "call" : "calls"}{" "}
+              {rangePhrase(f.range, f.start_date)}
               {scopeFiltered ? (
                 " matching these filters"
               ) : (

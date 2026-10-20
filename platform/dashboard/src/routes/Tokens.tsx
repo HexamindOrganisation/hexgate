@@ -355,6 +355,7 @@ export function TokensPage() {
             </thead>
             <tbody>
               {tokens.data.map((t) => {
+                const stale = isStaleKey(t, keysFetchedAt);
                 const isTest = t.masked.startsWith("fty_test_");
                 return (
                   <tr
@@ -366,9 +367,7 @@ export function TokensPage() {
                         <KeyRound className="size-3.5 text-muted-foreground" />
                         <span className="font-medium">{t.name}</span>
                         {isTest && <Badge variant="approval">test</Badge>}
-                        {isStaleKey(t, keysFetchedAt) && (
-                          <Badge variant="outline">stale</Badge>
-                        )}
+                        {stale && <Badge variant="outline">stale</Badge>}
                       </span>
                     </td>
                     <td className="px-5 py-3">
@@ -405,9 +404,7 @@ export function TokensPage() {
                     <td
                       className={cn(
                         "px-5 py-3",
-                        isStaleKey(t, keysFetchedAt)
-                          ? "text-approval"
-                          : "text-muted-foreground",
+                        stale ? "text-approval" : "text-muted-foreground",
                       )}
                     >
                       {formatRelative(t.last_used_at)}
