@@ -1,7 +1,7 @@
 /**
- * PlaygroundPage UI tests — the modern chat surface: composer sends, the agent
- * turn shows tool steps + the thinking loader, decisions float as a deck, and
- * the acting-as control lists roles. The live hook, project scope, resolved
+ * PlaygroundPage UI tests — the chat surface: composer sends, the agent turn
+ * shows inline decision cards + the thinking loader, session settings set the
+ * acting roles, and the accent stays inside the Playground. The live hook, project scope, resolved
  * policy, and agent fetch are all mocked so we exercise the view in isolation.
  */
 
@@ -15,6 +15,7 @@ import type {
   ToolCall,
 } from "@/lib/playground";
 import { renderWithProviders } from "@/test/render";
+import { usePlaygroundPrefs } from "@/lib/playground_prefs";
 
 const sendChat = vi.fn();
 const reset = vi.fn();
@@ -24,7 +25,9 @@ let mockState: PlaygroundState;
 vi.mock("@/lib/active", () => ({
   useProjectScoped: () => ({ status: "ready", projectId: "p1" }),
 }));
-vi.mock("@/lib/playground", () => ({
+vi.mock("@/lib/playground", async (importActual) => ({
+  // The real buildChatFrame drives the settings' context preview.
+  ...(await importActual<typeof import("@/lib/playground")>()),
   usePlayground: () => ({
     state: mockState,
     sendChat,
@@ -94,7 +97,22 @@ beforeAll(() => {
   Element.prototype.scrollTo = vi.fn();
 });
 
-afterEach(() => vi.clearAllMocks());
+afterEach(() => {
+  vi.clearAllMocks();
+  usePlaygroundPrefs.setState({ accent: "", names: {} });
+});
+
+function turnWith(tools: ToolCall[]): PlaygroundState["messages"] {
+  return [
+    { id: "u1", role: "user", content: "refund order A-1001" },
+    {
+      id: "a1",
+      role: "assistant",
+      content: "Done.",
+      turn: { id: "a1", streaming: false, text: "Done.", reasoning: "", tools },
+    },
+  ];
+}
 
 describe("PlaygroundPage", () => {
   it("sends the composer text on Enter", async () => {
@@ -111,32 +129,49 @@ describe("PlaygroundPage", () => {
   it("offers the acting-as control and the agent status", () => {
     mockState = baseState();
     renderWithProviders(<PlaygroundPage />);
-    // The acting identity (name + role) is edited from the bottom-left chip.
-    expect(screen.getByTitle("Edit acting name & role")).toBeInTheDocument();
+    // The acting identity (name + role) sits in the composer.
+    // The first role (policy order) is active to start.
+    expect(screen.getByTitle(/acting as/i)).toHaveTextContent(
+      "playground·billing",
+    );
     expect(screen.getByText("billing-bot")).toBeInTheDocument();
     expect(screen.getByText("connected")).toBeInTheDocument();
   });
 
-  it("renders the agent turn's tool steps", () => {
+  it("renders tool calls inline, opening failures by default", () => {
     mockState = baseState({
-      messages: [
-        { id: "u1", role: "user", content: "refund order A-1001" },
-        {
-          id: "a1",
-          role: "assistant",
-          content: "Done.",
-          turn: {
-            id: "a1",
-            streaming: false,
-            text: "Done.",
-            reasoning: "",
-            tools: [tool()],
-          },
-        },
-      ],
+      messages: turnWith([
+        tool({ id: "t1", name: "lookup_order", args: { id: "A-1001" } }),
+        tool({
+          id: "t2",
+          state: "failed",
+          args: { amount: 400 },
+          outputSummary: "denied: args.amount <= 50",
+        }),
+      ]),
     });
     renderWithProviders(<PlaygroundPage />);
-    expect(screen.getByText("refund_order")).toBeInTheDocument();
+    const [allowed, failed] = screen.getAllByRole("button", {
+      expanded: undefined,
+      name: /lookup_order|refund_order/,
+    });
+    expect(allowed).toHaveTextContent('Allowedlookup_order(id="A-1001")');
+    expect(allowed).toHaveAttribute("aria-expanded", "false");
+    expect(failed).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByText(/denied: args.amount <= 50/)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Open in audit" })).toHaveAttribute(
+      "href",
+      expect.stringContaining("tool=refund_order"),
+    );
+  });
+
+  it("expands an allowed call on click", async () => {
+    mockState = baseState({
+      messages: turnWith([tool({ outputSummary: "refunded $40" })]),
+    });
+    renderWithProviders(<PlaygroundPage />);
+    await userEvent.click(screen.getByRole("button", { name: /refund_order/ }));
+    expect(screen.getByText(/refunded \$40/)).toBeInTheDocument();
   });
 
   it("shows the thinking loader while a turn streams with no text yet", () => {
@@ -160,70 +195,61 @@ describe("PlaygroundPage", () => {
     expect(screen.getByRole("status")).toHaveTextContent(/thinking/i);
   });
 
-  it("floats the decision deck with a running count", () => {
+  it("sums up the session's decisions in the top bar", () => {
     mockState = baseState({
-      decisions: [tool({ id: "d1" }), tool({ id: "d2", name: "send_email" })],
+      decisions: [tool({ id: "d1" }), tool({ id: "d2", state: "failed" })],
     });
     renderWithProviders(<PlaygroundPage />);
-    // The deck's count badge and the pile cards render the decisions.
-    expect(
-      screen.getByRole("button", { name: /2 policy decisions/i }),
-    ).toBeInTheDocument();
+    expect(screen.getByText(/2 decisions · 1 failed/)).toBeInTheDocument();
   });
 
-  it("pins the decision deck open on click (touch/keyboard reachable)", async () => {
-    mockState = baseState({ decisions: [tool({ id: "d1" })] });
+  it("applies roles from session settings to the next message", async () => {
+    mockState = baseState();
     renderWithProviders(<PlaygroundPage />);
-    const handle = screen.getByRole("button", { name: /1 policy decisions/i });
-    expect(handle).toHaveAttribute("aria-expanded", "false");
-    await userEvent.click(handle);
-    expect(handle).toHaveAttribute("aria-expanded", "true");
-  });
-
-  it("hides the deck while an approval is pending so Approve stays clickable", () => {
-    mockState = baseState({
-      decisions: [tool({ id: "d1" })],
-      pendingApprovals: [approval()],
+    await userEvent.click(screen.getByRole("button", { name: "Settings" }));
+    const dialog = screen.getByRole("dialog", { name: "Session settings" });
+    await userEvent.type(screen.getByPlaceholderText("playground"), "maya");
+    await userEvent.click(screen.getByRole("button", { name: "support" }));
+    // The preview shows exactly what rides with the next turn.
+    expect(dialog).toHaveTextContent('"user":"maya"');
+    expect(dialog).toHaveTextContent('"roles":["billing","support"]');
+    await userEvent.click(screen.getByRole("button", { name: "Apply" }));
+    await userEvent.type(
+      screen.getByLabelText("Message the agent"),
+      "hi{Enter}",
+    );
+    expect(sendChat).toHaveBeenCalledWith("hi", {
+      roles: ["billing", "support"],
+      name: "maya",
     });
+  });
+
+  it("drops the draft on Cancel", async () => {
+    mockState = baseState();
     renderWithProviders(<PlaygroundPage />);
-    expect(
-      screen.queryByRole("button", { name: /policy decisions/i }),
-    ).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Settings" }));
+    await userEvent.click(screen.getByRole("button", { name: "billing" }));
+    await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.getByTitle(/acting as/i)).toHaveTextContent("billing");
+  });
+
+  it("paints the accent on the Playground only, not the page", () => {
+    usePlaygroundPrefs.setState({ accent: "rose" });
+    mockState = baseState();
+    const { container } = renderWithProviders(<PlaygroundPage />);
+    const root = container.querySelector<HTMLElement>("[style*='--primary']");
+    expect(root?.style.getPropertyValue("--action")).toMatch(/^340 /);
+    expect(document.documentElement.style.getPropertyValue("--primary")).toBe(
+      "",
+    );
+  });
+
+  it("asks for approvals above the composer", () => {
+    mockState = baseState({ pendingApprovals: [approval()] });
+    renderWithProviders(<PlaygroundPage />);
     expect(
       screen.getByRole("button", { name: /approve/i }),
     ).toBeInTheDocument();
-  });
-
-  it("mutes the deck while the composer has text so it can't cover Send", async () => {
-    mockState = baseState({ decisions: [tool({ id: "d1" })] });
-    renderWithProviders(<PlaygroundPage />);
-    // Visible while the composer is empty …
-    expect(
-      screen.getByRole("button", { name: /1 policy decisions/i }),
-    ).toBeInTheDocument();
-    await userEvent.type(
-      screen.getByLabelText("Message the agent"),
-      "refund it",
-    );
-    // … muted (aria-hidden) once there's text to send, so a Send click can't
-    // land on the deck instead.
-    expect(
-      screen.queryByRole("button", { name: /policy decisions/i }),
-    ).not.toBeInTheDocument();
-  });
-
-  it("takes the muted deck handle out of the tab order (a11y)", () => {
-    // aria-hidden hides it from getByRole, so query the DOM to prove the handle
-    // is disabled — not a focusable control inside an aria-hidden subtree.
-    mockState = baseState({
-      decisions: [tool({ id: "d1" })],
-      pendingApprovals: [approval()],
-    });
-    const { container } = renderWithProviders(<PlaygroundPage />);
-    const handle = container.querySelector(
-      'button[aria-label*="policy decisions"]',
-    );
-    expect(handle).toBeDisabled();
   });
 
   it("keeps a docs link reachable mid-session, not just on the empty state", () => {
