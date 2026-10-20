@@ -9,8 +9,14 @@
 
 import type { PolicyGraph } from "./api";
 
+/** A node's box (the graph's hexagon); positions are node centres. */
+export const HEX_W = 136;
+export const HEX_H = 118;
+/** Column pitch and row pitch; both leave room for lanes beside the hexes. */
 export const COL_W = 300;
 export const ROW_H = 150;
+/** First loop lane right of a column's centre, clear of the hex's side tip. */
+const LOOP_X = HEX_W / 2 + 16;
 /** Height of a bend slot: a lane an edge passes through. */
 const BEND_H = 32;
 /** Gap between edges that join the same two nodes. */
@@ -170,6 +176,11 @@ export function layeredLayout(graph: PolicyGraph): LayeredLayout {
     pairSize.set(pairKey(e), (pairSize.get(pairKey(e)) ?? 0) + 1);
   }
   const pairSeen = new Map<string, number>();
+  // Each loop (same column, or self) gets its own lane beside its column,
+  // so unrelated loops never share a vertical run. Lanes wrap if a column
+  // has more loops than fit before the next column.
+  const lanesFit = Math.floor((COL_W - HEX_W / 2 - LOOP_X) / SPREAD);
+  const loopLanes = new Map<number, number>();
   const bends: LayeredLayout["bends"] = {};
   graph.edges.forEach((e, i) => {
     const s = pos[e.source];
@@ -180,14 +191,19 @@ export function layeredLayout(graph: PolicyGraph): LayeredLayout {
     pairSeen.set(key, j + 1);
     const n = pairSize.get(key)!;
     const spread = (j - (n - 1) / 2) * SPREAD;
-    // Loops run down a lane halfway to the next column, clear of the hexes.
-    const out = s.x + COL_W / 2 + spread;
+    const loop = col[e.source] === col[e.target];
+    let out = 0;
+    if (loop) {
+      const k = loopLanes.get(col[e.source]) ?? 0;
+      loopLanes.set(col[e.source], k + 1);
+      out = s.x + LOOP_X + (k % lanesFit) * SPREAD;
+    }
     if (e.source === e.target) {
       bends[i] = [
         { x: out, y: s.y - ROW_H / 4 },
         { x: out, y: s.y + ROW_H / 4 },
       ];
-    } else if (col[e.source] === col[e.target]) {
+    } else if (loop) {
       bends[i] = [
         { x: out, y: s.y },
         { x: out, y: t.y },

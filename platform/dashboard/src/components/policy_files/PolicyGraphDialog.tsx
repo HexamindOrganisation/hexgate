@@ -22,7 +22,7 @@ import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { usePolicyGraph } from "@/lib/policy_files";
 import type { PolicyGraph, PolicyGraphEdge } from "@/lib/api";
 import { cn } from "@/lib/utils";
-import { layeredLayout } from "@/lib/graph-layout";
+import { HEX_H, HEX_W, layeredLayout } from "@/lib/graph-layout";
 
 // Verdict → edge color (green allow, amber approval, red deny) — mid-tone
 // hexes that read on both the light and dark graph ground.
@@ -91,10 +91,6 @@ type EdgeData = Pick<
   bends?: { x: number; y: number }[];
 };
 
-// HexNode's box; layout positions are node centres.
-const HEX_W = 136;
-const HEX_H = 118;
-
 // The hover-focus state is passed through CONTEXT, not through node/edge data,
 // so the nodes/edges arrays stay stable on hover — recomputing them (and the
 // per-edge markerEnd) made React Flow regenerate markers and flash the graph.
@@ -105,7 +101,7 @@ type FocusValue = {
   hoverNode: string | null;
   hoverEdge: number | null;
   // `animate` turns on the flowing-dot animation; `depth` is each node's
-  // distance from a root (role), used to stagger the flow outward.
+  // column (role → agent hops → tool), used to stagger the flow outward.
   animate: boolean;
   depth: Map<string, number>;
 };
@@ -442,7 +438,7 @@ function NodePanel({
   return (
     <aside
       aria-label={`${node.kind} ${node.label}`}
-      className="max-h-[60vh] w-72 overflow-y-auto rounded-lg border border-border bg-card/95 p-3 font-mono text-[11px] text-foreground shadow-xl backdrop-blur"
+      className="max-h-[45vh] w-72 overflow-y-auto rounded-lg border border-border bg-card/95 p-3 font-mono text-[11px] text-foreground shadow-xl backdrop-blur"
     >
       <div className="flex items-start justify-between gap-2">
         <div>
@@ -801,57 +797,8 @@ function PolicyFlow({ graph }: { graph: PolicyGraph }) {
               onClose={() => setPinned(null)}
             />
           )}
-        </Panel>
-        <Panel position="top-left">
-          <div className="flex flex-wrap gap-3 rounded-lg border border-border bg-card/90 px-3 py-2 font-mono text-[10px] text-muted-foreground backdrop-blur">
-            {(["allow", "approval_required", "deny"] as const).map((v) => (
-              <span key={v} className="inline-flex items-center gap-1.5">
-                <i
-                  className="inline-block h-2 w-4 rounded"
-                  style={{ background: VERDICT[v] }}
-                />
-                {verdictLabel(v)}
-              </span>
-            ))}
-            <span className="text-muted-foreground/40">·</span>
-            <span>
-              {pinned
-                ? "focused — click empty space to reset"
-                : "click a node to trace its paths"}
-            </span>
-          </div>
-        </Panel>
-        {warnings.length > 0 && (
-          <Panel position="bottom-center">
-            <div className="max-w-[560px] rounded-lg border border-deny/50 bg-deny/10 px-3 py-2 font-mono text-[10.5px] text-deny shadow-xl backdrop-blur">
-              <div className="mb-1.5 flex items-center gap-1.5 font-semibold text-deny">
-                <AlertTriangle size={12} />
-                review carefully · {warnings.length} constraint-bypass path
-                {warnings.length > 1 ? "s" : ""}
-              </div>
-              <div className="space-y-1">
-                {warnings.slice(0, 3).map((w, i) => (
-                  <button
-                    key={i}
-                    onClick={() => setPinned(w.toolId)}
-                    className="block w-full text-left leading-relaxed hover:text-deny"
-                  >
-                    <b className="text-deny">{w.strict}</b> can delegate to{" "}
-                    <b className="text-deny">{w.loose}</b> to call{" "}
-                    <b className="text-deny">{w.tool}</b> beyond its own limit
-                    <span className="text-muted-foreground">
-                      {" "}
-                      — {w.strict}: {w.strictC.join(" ∧ ") || "no limit"} ·{" "}
-                      {w.loose}: {w.looseC.join(" ∧ ") || "no limit"}
-                    </span>
-                  </button>
-                ))}
-              </div>
-            </div>
-          </Panel>
-        )}
-        {selected && (
-          <Panel position="bottom-right">
+          {/* Stacked under the node panel so the two never overlap. */}
+          {selected && (
             <div className="w-64 rounded-lg border border-border bg-card/95 p-3 font-mono text-[11px] text-foreground shadow-xl backdrop-blur">
               <div className="mb-2 flex items-center justify-between">
                 <VerdictTag verdict={selected.verdict} />
@@ -899,6 +846,54 @@ function PolicyFlow({ graph }: { graph: PolicyGraph }) {
                   no constraints
                 </div>
               )}
+            </div>
+          )}
+        </Panel>
+        <Panel position="top-left">
+          <div className="flex flex-wrap gap-3 rounded-lg border border-border bg-card/90 px-3 py-2 font-mono text-[10px] text-muted-foreground backdrop-blur">
+            {(["allow", "approval_required", "deny"] as const).map((v) => (
+              <span key={v} className="inline-flex items-center gap-1.5">
+                <i
+                  className="inline-block h-2 w-4 rounded"
+                  style={{ background: VERDICT[v] }}
+                />
+                {verdictLabel(v)}
+              </span>
+            ))}
+            <span className="text-muted-foreground/40">·</span>
+            <span>
+              {pinned
+                ? "focused — click empty space to reset"
+                : "click a node to trace its paths"}
+            </span>
+          </div>
+        </Panel>
+        {warnings.length > 0 && (
+          <Panel position="bottom-center">
+            <div className="max-w-[560px] rounded-lg border border-deny/50 bg-deny/10 px-3 py-2 font-mono text-[10.5px] text-deny shadow-xl backdrop-blur">
+              <div className="mb-1.5 flex items-center gap-1.5 font-semibold text-deny">
+                <AlertTriangle size={12} />
+                review carefully · {warnings.length} constraint-bypass path
+                {warnings.length > 1 ? "s" : ""}
+              </div>
+              <div className="space-y-1">
+                {warnings.slice(0, 3).map((w, i) => (
+                  <button
+                    key={i}
+                    onClick={() => setPinned(w.toolId)}
+                    className="block w-full text-left leading-relaxed hover:text-deny"
+                  >
+                    <b className="text-deny">{w.strict}</b> can delegate to{" "}
+                    <b className="text-deny">{w.loose}</b> to call{" "}
+                    <b className="text-deny">{w.tool}</b> beyond its own limit
+                    <span className="text-muted-foreground">
+                      {" "}
+                      — {w.strict}: {w.strictC.join(" ∧ ") || "no limit"} ·{" "}
+                      {w.loose}: {w.looseC.join(" ∧ ") || "no limit"}
+                    </span>
+                  </button>
+                ))}
+              </div>
             </div>
           </Panel>
         )}
