@@ -360,8 +360,12 @@ def bucket_minutes_for_timedelta(delta: timedelta) -> int:
         return 1440
 
 
+def _zero_outcomes() -> dict[str, int]:
+    return {e.value: 0 for e in AuditOutcome}
+
+
 def _zero_counts() -> dict[str, int]:
-    return {"all": 0, **{e.value: 0 for e in AuditOutcome}}
+    return {"all": 0, **_zero_outcomes()}
 
 
 def _scope(
@@ -598,18 +602,20 @@ def timeseries(
     # Keyed by epoch seconds, the same grid toStartOfInterval uses.
     points: dict[int, dict] = {}
     for t, outcome, n in result.result_rows:
+        # The driver returns DateTime64(3, 'UTC') as a NAIVE datetime holding
+        # UTC; stamp it, or timestamp() reads it in the host's local zone and
+        # the JSON carries no offset.
+        if t.tzinfo is None:
+            t = t.replace(tzinfo=timezone.utc)
         point = points.setdefault(int(t.timestamp()), {"bucket": t, **_zero_outcomes()})
         if outcome in point:
             point[outcome] = int(n)
     if "start_date" in params:
         window = (params["start_date"], params["end_date"])
     else:
-        window = (params["since"], datetime.now(timezone.utc))
+        # The snapshot the query bound, not a second clock read.
+        window = (params["since"], params["since"] + timedelta(hours=since_hours))
     return _fill_buckets(points, *window, bucket_minutes)
-
-
-def _zero_outcomes() -> dict[str, int]:
-    return {e.value: 0 for e in AuditOutcome}
 
 
 def _fill_buckets(

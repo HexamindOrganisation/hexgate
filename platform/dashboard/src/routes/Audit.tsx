@@ -518,16 +518,17 @@ export function AuditPage() {
 
   // The server returns every bucket in the window (empty ones as zeros), so
   // the width is the gap between any two neighbours.
+  // null with fewer than two buckets: too few to tell the width.
   const bucketMinutes = useMemo(() => {
     const d = tsQ.data;
-    if (!d || d.length < 2) return 1440;
+    if (!d || d.length < 2) return null;
     return Math.round((+new Date(d[1].bucket) - +new Date(d[0].bucket)) / 6e4);
   }, [tsQ.data]);
   const days: ChartBucket[] = useMemo(
     () =>
       (tsQ.data ?? []).map((p) => ({
         label: new Date(p.bucket),
-        mode: bucketMinutes >= 1440 ? "day" : "hour",
+        mode: (bucketMinutes ?? 0) >= 1440 ? "day" : "hour",
         values: {
           allow: p.allow,
           deny: p.deny,
@@ -771,7 +772,16 @@ export function AuditPage() {
               <Card className="p-5">
                 <div className="mb-5 flex flex-wrap items-baseline justify-between gap-2">
                   <h2 className="text-body font-semibold">
-                    Decisions per {bucketUnit(bucketMinutes)}
+                    {bucketMinutes === null
+                      ? "Decisions over time"
+                      : `Decisions per ${bucketUnit(bucketMinutes)}`}
+                    {/* Server day buckets are UTC days; say so, since the
+                        log below groups by local day. */}
+                    {bucketMinutes !== null && bucketMinutes >= 1440 && (
+                      <span className="ml-1.5 text-meta font-normal text-muted-foreground">
+                        UTC
+                      </span>
+                    )}
                   </h2>
                   <div className="flex gap-3.5 text-xs text-muted-foreground">
                     {[...OUTCOME_SERIES].reverse().map((s) => (
@@ -784,7 +794,7 @@ export function AuditPage() {
                     ))}
                   </div>
                 </div>
-                {days.length ? (
+                {days.some((d) => d.total > 0) ? (
                   <StackedBars buckets={days} series={OUTCOME_SERIES} />
                 ) : (
                   <div className="flex h-52 items-center justify-center text-meta text-muted-foreground">
