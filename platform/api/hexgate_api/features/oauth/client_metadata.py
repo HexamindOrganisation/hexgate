@@ -36,9 +36,11 @@ MAX_DOCUMENT_BYTES = 16 * 1024
 # FETCH_TIMEOUT_SECONDS.
 _CONNECT_TIMEOUT_SECONDS = 1.0
 
-# Hosts an http client_id may name when insecure client ids are allowed
-# (dev and tests only, so a client on the developer's machine can log in).
-_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+# Loopback hostnames, unbracketed as urlsplit gives them. An http client_id
+# may name one when insecure client ids are allowed (dev and tests only, so a
+# client on the developer's machine can log in), and client_cache.py lets a
+# redirect_uri on one name any port.
+LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 
 # getaddrinfo can hold its thread long past FETCH_TIMEOUT_SECONDS. A pool of
 # its own keeps a stuck resolver from starving asyncio.to_thread elsewhere in
@@ -114,7 +116,7 @@ def _parse_client_id(client_id: str, allow_insecure_localhost: bool) -> SplitRes
     if url.scheme == "https" or (
         allow_insecure_localhost
         and url.scheme == "http"
-        and url.hostname in _LOOPBACK_HOSTS
+        and url.hostname in LOOPBACK_HOSTS
     ):
         return url
     raise ClientMetadataError("client_id must be an https URL")
