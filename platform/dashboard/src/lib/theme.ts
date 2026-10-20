@@ -28,7 +28,7 @@ export const SCHEME_ACCENTS: Record<Scheme, { light: string; dark: string }> = {
   violet: { light: "254 71% 59%", dark: "252 85% 74%" },
   plum: { light: "313 62% 48%", dark: "313 75% 68%" },
   teal: { light: "180 81% 29%", dark: "179 52% 50%" },
-  graphite: { light: "219 17% 30%", dark: "217 18% 76%" },
+  graphite: { light: "218 16% 45%", dark: "217 18% 76%" },
 };
 
 /** Display order and labels for the accent picker. */
@@ -57,7 +57,7 @@ export const useTheme = create<ThemeState>()(
   persist(
     (set) => ({
       // Default to dark/blue — the app's established look — so existing users
-      // see no change until they opt into light or plum.
+      // see no change until they opt into light or another accent.
       mode: "dark",
       scheme: "blue",
       setMode: (mode) => set({ mode }),

@@ -36,8 +36,9 @@
   --color-allow: hsl(var(--semantic-allow));
   --color-deny: hsl(var(--semantic-deny));
   --color-approval: hsl(var(--semantic-approval));
-  /* Quiet fills: chart bars for allow, tinted grounds for deny/approval. */
+  /* *-soft: tinted grounds behind a label. allow-fill: the quiet chart bar. */
   --color-allow-soft: hsl(var(--semantic-allow-soft));
+  --color-allow-fill: hsl(var(--semantic-allow-fill));
   --color-deny-soft: hsl(var(--semantic-deny-soft));
   --color-approval-soft: hsl(var(--semantic-approval-soft));
 
@@ -100,7 +101,8 @@
   /* Deny is the only loud colour; allow is a quiet neutral that still reads
      as text (~4.5:1 on white). */
   --semantic-allow: 214 16% 49%;
-  --semantic-allow-soft: 214 22% 74%;
+  --semantic-allow-soft: 214 30% 94%;
+  --semantic-allow-fill: 214 22% 74%;
   --semantic-deny: 14 84% 43%;
   --semantic-deny-soft: 17 85% 92%;
   --semantic-approval: 39 82% 49%;
@@ -174,7 +176,8 @@
   --success: 152 58% 48%;
 
   --semantic-allow: 217 15% 62%;
-  --semantic-allow-soft: 217 20% 32%;
+  --semantic-allow-soft: 217 24% 16%;
+  --semantic-allow-fill: 217 20% 32%;
   --semantic-deny: 14 76% 53%;
   --semantic-deny-soft: 14 49% 15%;
   --semantic-approval: 39 86% 59%;
@@ -243,8 +246,8 @@
   --ring: 179 52% 50%;
 }
 [data-scheme="graphite"] {
-  --primary: 219 17% 30%;
-  --ring: 219 17% 30%;
+  --primary: 218 16% 45%;
+  --ring: 218 16% 45%;
 }
 .dark[data-scheme="graphite"] {
   --primary: 217 18% 76%;

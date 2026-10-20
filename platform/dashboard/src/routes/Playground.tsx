@@ -755,7 +755,7 @@ function DecisionDeck({
 
 function verdictColor(state: ToolCall["state"]) {
   return state === "completed"
-    ? "text-allow"
+    ? "text-success"
     : state === "failed"
       ? "text-deny"
       : "text-approval";
@@ -932,7 +932,7 @@ function ApprovalPromptCard({
         </Button>
         <Button
           size="sm"
-          className="h-7 gap-1.5 bg-action text-xs text-action-foreground hover:bg-action/85"
+          className="h-7 gap-1.5 text-xs"
           onClick={() => onDecide(request.decision_id, true)}
         >
           <Check className="size-3" />

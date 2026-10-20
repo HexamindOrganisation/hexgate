@@ -1,6 +1,7 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { applyTheme, isDark, SCHEME_ACCENTS, SCHEMES, useTheme } from "./theme";
+import { FONT_SIZES } from "./utils";
 
 function stubPrefersDark(matches: boolean) {
   vi.stubGlobal(
@@ -62,22 +63,31 @@ describe("useTheme store", () => {
   });
 });
 
+// index.css, read from disk: Vitest stubs CSS imports, `?raw` included. Node
+// modules load by name so the app tsconfig needn't pull in Node types; the
+// path hangs off this file so neither the cwd nor the separator matters.
+let css = "";
+beforeAll(async () => {
+  const [fsMod, pathMod] = ["node:fs", "node:path"];
+  const { readFileSync } = await import(/* @vite-ignore */ fsMod);
+  const { dirname, join } = await import(/* @vite-ignore */ pathMod);
+  const here = expect.getState().testPath;
+  if (!here) throw new Error("vitest did not report this test's path");
+  css = readFileSync(join(dirname(here), "..", "index.css"), "utf8");
+});
+
+describe("FONT_SIZES", () => {
+  it("names every --text-* size declared in index.css", () => {
+    const declared = [
+      ...css.matchAll(/^\s*--text-([a-z]+(?:-[a-z]+)*): /gm),
+    ].map((m) => m[1]);
+    expect([...FONT_SIZES].sort()).toEqual([...new Set(declared)].sort());
+  });
+});
+
 describe("SCHEME_ACCENTS", () => {
   // The swatches read SCHEME_ACCENTS; the real token comes from index.css.
   // They must agree or a dot shows a colour the app never paints.
-  // Read from disk: Vitest stubs CSS imports, `?raw` included. node:fs is
-  // loaded by name so the app tsconfig needn't pull in Node types, and the
-  // path hangs off this file so the cwd doesn't matter.
-  let css = "";
-  beforeAll(async () => {
-    const fs = "node:fs";
-    const { readFileSync } = await import(/* @vite-ignore */ fs);
-    const here = expect.getState().testPath ?? "";
-    css = readFileSync(
-      here.replace(/lib\/theme\.test\.ts$/, "index.css"),
-      "utf8",
-    );
-  });
   const primaryIn = (selector: string): string | undefined => {
     const start = css.indexOf(`\n${selector} {`);
     if (start < 0) return undefined;
