@@ -31,13 +31,14 @@ MAX_PATHS_PER_REQUEST: Final = 64  # the SDK can ask for at most 35
 PATH_SEPARATOR: Final = ","
 _NO_PATHS: Final = "no paths requested"
 
+_WINDOW_PATTERN: Final = r"(?P<count>[1-9][0-9]{0,6})(?P<unit>[mhd])"
+_WINDOW_RE: Final = re.compile(_WINDOW_PATTERN)
 _PATH_RE: Final = re.compile(
-    rf"(?P<metric>{'|'.join(m.value for m in UsageMetric)})"
-    r"_(?P<count>[1-9][0-9]{0,6})(?P<unit>[mhd])"
+    rf"(?P<metric>{'|'.join(m.value for m in UsageMetric)})_{_WINDOW_PATTERN}"
 )
+_WINDOW_GRAMMAR: Final = "<N><m|h|d> between 1m and 30d"
 USAGE_PATH_GRAMMAR: Final = (
-    f"<metric>_<N><m|h|d> between 1m and 30d; metrics: "
-    f"{', '.join(m.value for m in UsageMetric)}"
+    f"<metric>_{_WINDOW_GRAMMAR}; metrics: {', '.join(m.value for m in UsageMetric)}"
 )
 
 
@@ -56,10 +57,22 @@ def parse_usage_path(path: str) -> UsageWindowSpec:
     match = _PATH_RE.fullmatch(path)
     if match is None:
         raise _invalid_path(path)
-    seconds = int(match["count"]) * _SECONDS_PER_UNIT[match["unit"]]
+    seconds = _seconds(match)
     if not MIN_WINDOW_SECONDS <= seconds <= MAX_WINDOW_SECONDS:
         raise _invalid_path(path)
     return UsageWindowSpec(UsageMetric(match["metric"]), seconds)
+
+
+def parse_window_seconds(window: str) -> int:
+    """``7d`` -> 604800, under the same grammar and bounds as a path's window."""
+    match = _WINDOW_RE.fullmatch(window)
+    if match is None or not MIN_WINDOW_SECONDS <= _seconds(match) <= MAX_WINDOW_SECONDS:
+        raise ValueError(f"{window!r}: expected {_WINDOW_GRAMMAR}")
+    return _seconds(match)
+
+
+def _seconds(match: re.Match[str]) -> int:
+    return int(match["count"]) * _SECONDS_PER_UNIT[match["unit"]]
 
 
 def parse_usage_paths(raw: str) -> dict[str, UsageWindowSpec]:

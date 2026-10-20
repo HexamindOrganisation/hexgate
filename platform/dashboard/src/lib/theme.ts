@@ -16,6 +16,24 @@ import { createJSONStorage, persist } from "zustand/middleware";
 export type Mode = "light" | "dark" | "system";
 export type Scheme = "blue" | "plum";
 
+/**
+ * The two built-in accent schemes as `--primary` HSL channels, per palette —
+ * the single source of truth mirroring the token blocks in index.css. Both the
+ * sidebar scheme swatches and the Playground's Blue/Plum accent presets read
+ * from here, so they agree with the real CSS token in light AND dark (a preset
+ * that hardcoded one mode's value wouldn't match the built-in in the other).
+ */
+export const SCHEME_ACCENTS: Record<Scheme, { light: string; dark: string }> = {
+  blue: { light: "226 70% 52%", dark: "226 78% 65%" },
+  plum: { light: "313 62% 48%", dark: "313 75% 68%" },
+};
+
+/** The `--primary` channels for a scheme in the currently-resolved palette. */
+export function schemeAccent(scheme: Scheme, dark: boolean): string {
+  const a = SCHEME_ACCENTS[scheme];
+  return dark ? a.dark : a.light;
+}
+
 interface ThemeState {
   mode: Mode;
   scheme: Scheme;
