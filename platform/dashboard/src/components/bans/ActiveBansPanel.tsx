@@ -51,7 +51,7 @@ export function ActiveBansPanel({
   }
 
   return (
-    <div className="overflow-hidden rounded-lg border border-border border-l-2 border-l-destructive/50 bg-card">
+    <div className="overflow-hidden rounded-xl border border-border bg-card">
       <div className="flex items-center gap-2 border-b border-border px-5 py-3.5">
         <ShieldAlert className="size-4 text-destructive" />
         <span className="text-sm font-medium">Active bans</span>

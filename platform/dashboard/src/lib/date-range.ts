@@ -7,6 +7,14 @@
 
 export type Range = "24h" | "7d" | "30d" | "90d";
 
+/** "the last …" wording for a preset range. */
+export const RANGE_LABEL: Record<Range, string> = {
+  "24h": "24 hours",
+  "7d": "7 days",
+  "30d": "30 days",
+  "90d": "90 days",
+};
+
 export const RANGE_DAYS: Record<Range, number> = {
   "24h": 1,
   "7d": 7,

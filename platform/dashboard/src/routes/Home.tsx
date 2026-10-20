@@ -35,11 +35,11 @@ import {
   useAuditFilters,
 } from "@/lib/audit-filters";
 import { fmtTokens } from "@/lib/format";
+import { isStaleKey, STALE_KEY_DAYS } from "@/lib/keys";
 import { cn } from "@/lib/utils";
 
 const LIVE_MS = 15_000;
 const SLOW_MS = 60_000;
-const STALE_KEY_DAYS = 30;
 const ATTENTION_BURSTS = 2;
 
 function greeting(now = new Date()): string {
@@ -182,12 +182,7 @@ function deriveAttention({
       to: "/agents",
     });
   }
-  // A never-used key only counts once it is itself 30 days old.
-  const stale = tokens.filter(
-    (t) =>
-      keysFetchedAt - +new Date(t.last_used_at ?? t.created_at) >
-      STALE_KEY_DAYS * 864e5,
-  );
+  const stale = tokens.filter((t) => isStaleKey(t, keysFetchedAt));
   if (stale.length) {
     out.push({
       key: "keys",
