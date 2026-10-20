@@ -2,7 +2,6 @@ import { act, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useActive } from "@/lib/active";
-import { EMPTY_AUDIT_FILTERS, useAuditFilters } from "@/lib/audit-filters";
 import { HomePage } from "@/routes/Home";
 import { renderWithProviders } from "@/test/render";
 
@@ -101,7 +100,6 @@ describe("HomePage", () => {
   });
   afterEach(() => {
     vi.restoreAllMocks();
-    useAuditFilters.setState({ filters: EMPTY_AUDIT_FILTERS });
   });
 
   it("leads with Open audit and today's numbers", async () => {

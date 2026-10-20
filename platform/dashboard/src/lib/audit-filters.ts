@@ -1,14 +1,11 @@
 /**
- * Audit-page filter + paging state.
+ * Audit-page filters and paging.
  *
- * Zustand (like ``useActive``) rather than page-local ``useState`` so the
- * slice the user dialled in survives navigating away and back within the
- * session — deliberately NOT ``persist``-ed: a stale filter from last week
- * silently narrowing today's audit view would read as missing data.
- *
- * Folding ``tableLimit`` into the same store lets ``setFilters`` reset
- * paging atomically — any filter change starts the table back at page one,
- * without the page component wiring that invariant by hand.
+ * The URL is the source of truth for the filters (see routes/Audit.tsx):
+ * links, reloads and new tabs open the same slice. This store only keeps
+ * the last view's query string, so a bare /audit (the sidebar) reopens it,
+ * and how many rows that view has loaded. Not persisted: a filter from last
+ * week silently narrowing today's view would read as missing data.
  */
 
 import { endOfDay, format, isValid, parse, startOfDay } from "date-fns";
@@ -50,20 +47,37 @@ const PAGE_SIZE = 40;
 const MAX_LIMIT = 200;
 
 interface AuditFilterState {
-  filters: AuditFilters;
-  tableLimit: number;
-  setFilters: SetAuditFilters;
-  loadMore: () => void;
+  /** Query string of the last Audit view; a bare /audit reopens it. */
+  lastSearch: string;
+  remember: (search: string) => void;
+  /** Rows loaded for the view `pageKey` — any other view starts at one page. */
+  pageKey: string;
+  pageLimit: number;
+  loadMore: (key: string) => void;
 }
 
 export const useAuditFilters = create<AuditFilterState>()((set) => ({
-  filters: EMPTY_AUDIT_FILTERS,
-  tableLimit: PAGE_SIZE,
-  setFilters: (updater) =>
-    set((s) => ({ filters: updater(s.filters), tableLimit: PAGE_SIZE })),
-  loadMore: () =>
-    set((s) => ({ tableLimit: Math.min(s.tableLimit + PAGE_SIZE, MAX_LIMIT) })),
+  lastSearch: "",
+  remember: (search) => set({ lastSearch: search }),
+  pageKey: "",
+  pageLimit: PAGE_SIZE,
+  loadMore: (key) =>
+    set((s) => ({
+      pageKey: key,
+      pageLimit: Math.min(
+        (s.pageKey === key ? s.pageLimit : PAGE_SIZE) + PAGE_SIZE,
+        MAX_LIMIT,
+      ),
+    })),
 }));
+
+/** Rows to show for view `key`. */
+export function pageLimitFor(
+  s: Pick<AuditFilterState, "pageKey" | "pageLimit">,
+  key: string,
+): number {
+  return s.pageKey === key ? s.pageLimit : PAGE_SIZE;
+}
 
 // ——— URL form ————————————————————————————————————————————————————————
 // Audit's filters live in its URL (see routes/Audit.tsx), so a link, a
@@ -98,7 +112,7 @@ export function fromAuditSearch(p: URLSearchParams): AuditFilters | null {
   if (!URL_KEYS.some((k) => p.has(k))) return null;
   const f: AuditFilters = { ...EMPTY_AUDIT_FILTERS };
   const range = p.get("range");
-  if (range && range in RANGE_DAYS) f.range = range as Range;
+  if (range && Object.hasOwn(RANGE_DAYS, range)) f.range = range as Range;
   for (const k of TEXT_KEYS) f[k] = p.get(k) ?? "";
   const outcome = p.get("outcome");
   if (outcome && (OUTCOMES as readonly string[]).includes(outcome))
@@ -107,8 +121,21 @@ export function fromAuditSearch(p: URLSearchParams): AuditFilters | null {
   const to = parseDay(p.get("to"));
   if (from) f.start_date = startOfDay(from);
   if (to) f.end_date = endOfDay(to);
-  f.customMode = p.get("custom") === "1" || !!from;
+  // Any date makes it a custom range, so a date filter is never hidden.
+  f.customMode = p.get("custom") === "1" || !!from || !!to;
   return f;
+}
+
+/** `prev` with its Audit filter keys replaced by `f`'s; any other param
+ * (e.g. `present`) is kept. */
+export function withAuditFilters(
+  prev: URLSearchParams,
+  f: Partial<AuditFilters>,
+): URLSearchParams {
+  const next = new URLSearchParams(prev);
+  for (const k of URL_KEYS) next.delete(k);
+  toAuditSearch(f).forEach((v, k) => next.set(k, v));
+  return next;
 }
 
 /** A link into Audit showing exactly `f` (everything else at defaults). */
