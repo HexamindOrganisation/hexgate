@@ -6,7 +6,7 @@
  */
 
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { screen } from "@testing-library/react";
+import { fireEvent, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import type {
@@ -222,6 +222,27 @@ describe("PlaygroundPage", () => {
       roles: ["billing", "support"],
       name: "maya",
     });
+  });
+
+  it("doesn't send on the Enter that confirms an IME candidate", () => {
+    mockState = baseState();
+    renderWithProviders(<PlaygroundPage />);
+    const box = screen.getByLabelText("Message the agent");
+    fireEvent.change(box, { target: { value: "返金" } });
+    fireEvent.keyDown(box, { key: "Enter", isComposing: true });
+    expect(sendChat).not.toHaveBeenCalled();
+    fireEvent.keyDown(box, { key: "Enter" });
+    expect(sendChat).toHaveBeenCalledTimes(1);
+  });
+
+  it("says which policy decides for the roles picked", async () => {
+    mockState = baseState();
+    renderWithProviders(<PlaygroundPage />);
+    await userEvent.click(screen.getByRole("button", { name: "Settings" }));
+    const dialog = screen.getByRole("dialog", { name: "Session settings" });
+    expect(dialog).toHaveTextContent("That role's policy decides");
+    await userEvent.click(screen.getByRole("button", { name: "billing" }));
+    expect(dialog).toHaveTextContent("No role selected");
   });
 
   it("drops the draft on Cancel", async () => {
