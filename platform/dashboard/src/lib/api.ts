@@ -359,7 +359,28 @@ export interface PolicyFileDraft {
 export interface PolicyPreviewResponse {
   /** The effective policy per role, or null when the draft doesn't compose. */
   resolved: ResolvedPolicy | null;
+  /** The draft's roles x tools matrix, or null when it doesn't compose. */
+  matrix: PolicyMatrix | null;
   lints: PolicyLint[];
+}
+
+/** One role's standing authorisation for one tool, as the engine decides it.
+ * `constraint` is the composed condition (role-wide fence first); null on a
+ * deny. Mirrors platform/api/schemas.py PolicyMatrixCell. */
+export interface PolicyMatrixCell {
+  mode: "allow" | "approval" | "deny";
+  constraint: string | null;
+}
+
+/** Roles x tools for one agent's resolved policy. `cells[tool][role]` covers
+ * every listed tool; `defaults[role]` is the fallback for an ordinary tool
+ * outside `tools` (reserved `agent.*` keys are always deny). */
+export interface PolicyMatrix {
+  roles: string[];
+  tools: string[];
+  cells: Record<string, Record<string, PolicyMatrixCell>>;
+  defaults: Record<string, PolicyMatrixCell>;
+  aliased_default: string | null;
 }
 
 export type PolicyTestOutcome = "allow" | "deny" | "approval_required";
@@ -968,6 +989,11 @@ export const api = {
     request<{ roles: ResolvedPolicy }>(
       `/v1/projects/${projectId}/policy/resolve${qs({ role, agent })}`,
     ).then((r) => r.roles),
+
+  getPolicyMatrix: (projectId: string, agent?: string) =>
+    request<PolicyMatrix>(
+      `/v1/projects/${projectId}/policy/matrix${qs({ agent })}`,
+    ),
 
   checkPolicy: (projectId: string) =>
     request<{ ok: boolean; lints: PolicyLint[] }>(

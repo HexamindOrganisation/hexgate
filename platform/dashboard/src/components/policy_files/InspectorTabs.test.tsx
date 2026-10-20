@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
-import type { PolicyLint, ResolvedPolicy } from "@/lib/api";
+import type { PolicyLint, PolicyMatrix, ResolvedPolicy } from "@/lib/api";
 import { InspectorTabs } from "./InspectorTabs";
 import { renderWithProviders } from "@/test/render";
 
@@ -24,6 +24,19 @@ const RESOLVED: ResolvedPolicy = {
   },
 };
 
+const MATRIX: PolicyMatrix = {
+  roles: ["support"],
+  tools: ["read_ticket", "refund"],
+  cells: {
+    read_ticket: { support: { mode: "allow", constraint: null } },
+    refund: {
+      support: { mode: "approval", constraint: "args.amount <= 100" },
+    },
+  },
+  defaults: { support: { mode: "deny", constraint: null } },
+  aliased_default: null,
+};
+
 const noop = () => undefined;
 
 function renderInspector(
@@ -33,6 +46,7 @@ function renderInspector(
     <InspectorTabs
       projectId="p1"
       resolved={RESOLVED}
+      matrix={MATRIX}
       lints={[]}
       draft={null}
       resolves
@@ -59,15 +73,19 @@ describe("InspectorTabs", () => {
     ).toBeInTheDocument();
     // Constrained cells say so to screen readers and show the rules on hover.
     const refund = screen.getByRole("button", {
-      name: /approval, 1 constraints/,
+      name: /approval, constrained/,
     });
     expect(refund).toHaveAttribute("title", "args.amount <= 100");
+    // Tools the policy doesn't list fall back per role.
+    expect(
+      screen.getByText(/Tools not listed: support deny/),
+    ).toBeInTheDocument();
   });
 
   it("drills from a grid cell into the role's table", async () => {
     renderInspector();
     await userEvent.click(
-      screen.getByRole("button", { name: /approval, 1 constraints/ }),
+      screen.getByRole("button", { name: /approval, constrained/ }),
     );
     expect(screen.getByText("args.amount <= 100")).toBeInTheDocument();
   });
@@ -136,7 +154,19 @@ describe("InspectorTabs", () => {
         },
       },
     };
-    renderInspector({ resolved });
+    const tools = [
+      "agent.run",
+      "agent.handoff:billing_bot",
+      "mcp-kb-search",
+      "read_ticket",
+    ];
+    const allow = { support: { mode: "allow", constraint: null } } as const;
+    const matrix: PolicyMatrix = {
+      ...MATRIX,
+      tools,
+      cells: Object.fromEntries(tools.map((t) => [t, allow])),
+    };
+    renderInspector({ resolved, matrix });
     // agent.run → admission; agent.handoff:X → reach target + "handoff";
     // mcp-X → the name without the prefix. Raw agent.* keys never render.
     expect(screen.getByText("start this agent")).toBeInTheDocument();

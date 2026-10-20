@@ -98,17 +98,30 @@ function stubFetch(role: string, manifest: unknown = MANIFEST) {
           return manifest === "error"
             ? new Response("boom", { status: 500 })
             : json([manifest]);
-        case `/v1/projects/${PROJECT}/policy/resolve`:
-          return json({
-            roles: {
-              support: {
-                default_policy: { mode: "deny" },
-                tools: {
-                  refund: { mode: "allow", constraints: ["args.amount <= 50"] },
-                },
-              },
-              guest: { default_policy: { mode: "deny" }, tools: {} },
+        case `/v1/projects/${PROJECT}/policy-files`:
+          return json([
+            {
+              name: "policy.yaml",
+              content: "",
+              content_hash: "h",
+              updated_at: "2026-01-01T00:00:00Z",
             },
+          ]);
+        case `/v1/projects/${PROJECT}/policy/matrix`:
+          return json({
+            roles: ["guest", "support"],
+            tools: ["refund"],
+            cells: {
+              refund: {
+                guest: { mode: "deny", constraint: null },
+                support: { mode: "allow", constraint: "args.amount <= 50" },
+              },
+            },
+            defaults: {
+              guest: { mode: "deny", constraint: null },
+              support: { mode: "deny", constraint: null },
+            },
+            aliased_default: null,
           });
         case `/v1/projects/${PROJECT}/audit/summary`:
           return json({
@@ -174,15 +187,22 @@ describe("AgentsPage — ban tie-in", () => {
             description: "",
             input_schema: { type: "object", properties: {}, required: [] },
           },
+          {
+            name: "lookup",
+            description: "",
+            input_schema: { type: "object", properties: {}, required: [] },
+          },
         ],
       },
     });
     renderWithProviders(<AgentsPage />, { initialRoute: "/agents" });
+    // The engine's condition text rides on the chip.
     expect(
-      await screen.findByTitle("support: allowed with constraints"),
+      await screen.findByTitle("support: args.amount <= 50"),
     ).toHaveTextContent("support allow*");
+    // A manifest tool the policy doesn't list takes each role's default.
     expect(
-      screen.getByTitle("guest: not listed, default applies"),
+      screen.getAllByTitle("guest: not listed, default applies")[0],
     ).toHaveTextContent("guest deny");
   });
 

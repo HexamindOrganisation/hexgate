@@ -8,11 +8,17 @@ import {
   Network,
 } from "lucide-react";
 
-import type { PolicyFileDraft, PolicyLint, ResolvedPolicy } from "@/lib/api";
+import type {
+  PolicyFileDraft,
+  PolicyLint,
+  PolicyMatrix,
+  ResolvedPolicy,
+} from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { PolicyGraphDialog } from "./PolicyGraphDialog";
 import { TestPanel } from "./TestPanel";
 import { cn } from "@/lib/utils";
+import { MATRIX_MODE_TONE } from "@/lib/policy_files";
 
 type Tab = "resolved" | "lints" | "test";
 
@@ -71,6 +77,7 @@ function classifyTool(key: string): {
 export function InspectorTabs({
   projectId,
   resolved,
+  matrix,
   lints,
   draft,
   resolves,
@@ -82,6 +89,8 @@ export function InspectorTabs({
 }: {
   projectId: string;
   resolved: ResolvedPolicy | undefined | null;
+  /** Engine-tabulated roles x tools for the same draft-or-saved policy. */
+  matrix: PolicyMatrix | undefined | null;
   lints: PolicyLint[];
   draft: PolicyFileDraft | null;
   resolves: boolean;
@@ -152,6 +161,7 @@ export function InspectorTabs({
         {tab === "resolved" && (
           <ResolvedTab
             resolved={resolved}
+            matrix={matrix}
             resolves={resolves}
             modular={modular}
             roleNames={roleNames}
@@ -217,6 +227,7 @@ function TabButton({
 
 function ResolvedTab({
   resolved,
+  matrix,
   resolves,
   modular,
   roleNames,
@@ -225,6 +236,7 @@ function ResolvedTab({
   onInspectAgentChange,
 }: {
   resolved: ResolvedPolicy | undefined | null;
+  matrix: PolicyMatrix | undefined | null;
   resolves: boolean;
   modular: boolean;
   roleNames: string[];
@@ -233,7 +245,7 @@ function ResolvedTab({
   onInspectAgentChange: (agent: string) => void;
 }) {
   const [role, setRole] = useState<string>("");
-  const [view, setView] = useState<"grid" | "table" | "yaml">("grid");
+  const [view, setView] = useState<ResolvedView>("grid");
   const active = roleNames.includes(role) ? role : (roleNames[0] ?? "");
 
   if (!modular || !resolves || !resolved || roleNames.length === 0) {
@@ -263,8 +275,7 @@ function ResolvedTab({
           <ViewSwitch view={view} onChange={setView} />
         </div>
         <ResolvedGrid
-          resolved={resolved}
-          roleNames={roleNames}
+          matrix={matrix}
           onPick={(r) => {
             setRole(r);
             setView("table");
@@ -435,26 +446,22 @@ function ViewSwitch({
   );
 }
 
-const CELL_TONE: Record<string, string> = {
-  allow: "bg-muted text-foreground",
-  deny: "bg-deny/15 text-deny",
-  approval_required: "bg-approval/15 text-approval",
-};
-
-/** Tools × roles. A tool a role doesn't list falls to that role's default,
- * shown faded so granted and defaulted cells read apart. */
+/** Tools x roles, as the engine tabulates them (server-side
+ * `hexgate.security.matrix`), so a cell never reads a grant the engine won't
+ * enforce: reserved keys deny when unlisted, role-wide constraints count. */
 function ResolvedGrid({
-  resolved,
-  roleNames,
+  matrix,
   onPick,
 }: {
-  resolved: ResolvedPolicy;
-  roleNames: string[];
+  matrix: PolicyMatrix | undefined | null;
   onPick: (role: string) => void;
 }) {
-  const keys = [
-    ...new Set(roleNames.flatMap((r) => Object.keys(resolved[r]?.tools ?? {}))),
-  ]
+  if (!matrix) {
+    return (
+      <p className="px-3 py-4 text-xs text-muted-foreground">Loading grid…</p>
+    );
+  }
+  const rows = matrix.tools
     .map((name) => ({ name, ...classifyTool(name) }))
     .sort(
       (a, b) =>
@@ -469,7 +476,7 @@ function ResolvedGrid({
             <th className="sticky left-0 top-0 z-10 border-b border-border bg-card px-3 py-2 text-left font-medium text-muted-foreground">
               Tool
             </th>
-            {roleNames.map((r) => (
+            {matrix.roles.map((r) => (
               <th
                 key={r}
                 className="sticky top-0 border-b border-border bg-card px-2 py-2 text-center font-mono font-medium"
@@ -480,7 +487,7 @@ function ResolvedGrid({
           </tr>
         </thead>
         <tbody>
-          {keys.map(({ name, label, tag }) => (
+          {rows.map(({ name, label, tag }) => (
             <tr key={name}>
               <th
                 scope="row"
@@ -493,10 +500,8 @@ function ResolvedGrid({
                   </span>
                 )}
               </th>
-              {roleNames.map((r) => {
-                const tp = resolved[r]?.tools?.[name];
-                const mode = tp?.mode ?? resolved[r]?.default_policy?.mode;
-                const constraints = tp?.constraints ?? [];
+              {matrix.roles.map((r) => {
+                const cell = matrix.cells[name]?.[r];
                 return (
                   <td
                     key={r}
@@ -505,28 +510,21 @@ function ResolvedGrid({
                     <button
                       type="button"
                       onClick={() => onPick(r)}
-                      title={
-                        tp
-                          ? constraints.length
-                            ? constraints.join("\n")
-                            : undefined
-                          : `not listed: ${r}'s default`
-                      }
+                      title={cell?.constraint ?? undefined}
                       className={cn(
                         "w-full rounded px-1.5 py-0.5 font-medium",
-                        mode ? CELL_TONE[mode] : "text-muted-foreground",
-                        !tp && "opacity-50",
+                        cell
+                          ? MATRIX_MODE_TONE[cell.mode]
+                          : "text-muted-foreground",
                       )}
                     >
-                      {mode === "approval_required"
-                        ? "approval"
-                        : (mode ?? "—")}
-                      {constraints.length > 0 && (
-                        <span className="sr-only">
-                          , {constraints.length} constraints
-                        </span>
+                      {cell?.mode ?? "—"}
+                      {cell?.constraint && (
+                        <>
+                          <span aria-hidden> *</span>
+                          <span className="sr-only">, constrained</span>
+                        </>
                       )}
-                      {constraints.length > 0 && <span aria-hidden> *</span>}
                     </button>
                   </td>
                 );
@@ -536,8 +534,13 @@ function ResolvedGrid({
         </tbody>
       </table>
       <p className="px-3 py-2 text-[11px] text-muted-foreground">
-        * constrained (hover for the rules) · faded: not listed, the role's
-        default applies
+        * constrained (hover for the condition). Tools not listed:{" "}
+        {matrix.roles
+          .map((r) => `${r} ${matrix.defaults[r]?.mode ?? "deny"}`)
+          .join(" · ")}
+        .
+        {matrix.aliased_default &&
+          ` "default" mirrors ${matrix.aliased_default} (none declared).`}
       </p>
     </div>
   );
