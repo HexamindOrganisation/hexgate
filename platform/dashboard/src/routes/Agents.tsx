@@ -65,9 +65,7 @@ export function AgentsPage() {
 
   const active = manifests.data?.find((m) => m.name === selectedName);
   // 24h activity per agent; shares Home's cache entry.
-  // Not polled here: the page is mostly static; Home keeps the shared
-  // entry fresh and a focus or remount refetches it.
-  const summary = useAuditSummary24h(scope.projectId);
+  const summary = useAuditSummary24h(scope.projectId, { poll: true });
   const byAgent = useMemo(
     () => new Map(summary.data?.by_agent.map((r) => [r.key, r])),
     [summary.data],
@@ -141,14 +139,18 @@ export function AgentsPage() {
                         ? pluralise(a.manifest.tools?.length ?? 0, "tool")
                         : "not registered"}
                       {calls !== undefined &&
-                        ` · ${calls.toLocaleString()} calls in 24h`}
+                        ` · ${pluralise(calls, "call")} in 24h`}
                     </span>
                   </button>
                 );
               })
             ) : (
               <div className="px-4 py-5 text-meta text-muted-foreground">
-                No agents yet.
+                No agents yet. Register one with{" "}
+                <span className="font-mono text-foreground">
+                  hexgate register
+                </span>
+                .
               </div>
             )}
           </nav>
@@ -293,7 +295,8 @@ export function AgentsPage() {
             <ManifestView agent={active} />
           </div>
         ) : (
-          manifests.isSuccess && (
+          manifests.isSuccess &&
+          manifests.data.length > 0 && (
             <Card className="grid place-items-center p-12 text-sm text-muted-foreground">
               No agents to inspect.
             </Card>

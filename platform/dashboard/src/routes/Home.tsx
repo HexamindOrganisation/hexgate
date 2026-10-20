@@ -160,7 +160,7 @@ function deriveAttention({
       key: "approvals",
       icon: <Hourglass />,
       tone: "bg-approval/15 text-approval",
-      title: `${n} ${n === 1 ? "call" : "calls"} sent for approval in the last 24 hours`,
+      title: `${pluralise(n, "call")} sent for approval in the last 24 hours`,
       sub: "Gated by policy rather than allowed or denied outright",
       cta: "Review",
       to: "/audit",
