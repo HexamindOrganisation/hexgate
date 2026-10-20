@@ -843,6 +843,46 @@ def test_timeseries_bucket_uses_since_hours_when_no_dates() -> None:
     assert client.query.call_args.kwargs["parameters"]["bucket"] == 60
 
 
+def test_timeseries_fills_empty_buckets_across_the_window() -> None:
+    # 7-day window → 360-min buckets; two sparse hits must come back with
+    # every empty bucket between and around them as zeros.
+    client = _timeseries_client()
+    start = datetime(2026, 10, 1, 0, 0, tzinfo=timezone.utc)
+    end = datetime(2026, 10, 2, 23, 59, tzinfo=timezone.utc)
+    client.query.return_value.result_rows = [
+        (datetime(2026, 10, 1, 6, tzinfo=timezone.utc), "deny", 3),
+        (datetime(2026, 10, 2, 12, tzinfo=timezone.utc), "allow", 5),
+    ]
+    pts = audit.timeseries(
+        client,
+        project_id="p1",
+        since_hours=24,
+        start_date=start,
+        end_date=end + timedelta(days=5),
+    )
+    buckets = [p["bucket"] for p in pts]
+    assert buckets == sorted(buckets)
+    steps = {(b - a).total_seconds() for a, b in zip(buckets, buckets[1:])}
+    assert steps == {6 * 3600}
+    by_t = {p["bucket"]: p for p in pts}
+    assert by_t[datetime(2026, 10, 1, 6, tzinfo=timezone.utc)]["deny"] == 3
+    assert by_t[datetime(2026, 10, 2, 12, tzinfo=timezone.utc)]["allow"] == 5
+    assert by_t[datetime(2026, 10, 1, 12, tzinfo=timezone.utc)] == {
+        "bucket": datetime(2026, 10, 1, 12, tzinfo=timezone.utc),
+        "allow": 0,
+        "deny": 0,
+        "needs_approval": 0,
+    }
+
+
+def test_timeseries_fills_a_rolling_window_up_to_now() -> None:
+    client = _timeseries_client()
+    pts = audit.timeseries(client, project_id="p1", since_hours=24)
+    # 24h at 60-min buckets: the bucket holding `since` through the current one.
+    assert 24 <= len(pts) <= 25
+    assert all(p["deny"] == 0 for p in pts)
+
+
 # ---------------------------------------------------------------------------
 # summarize() — GROUPING SETS row classification
 # ---------------------------------------------------------------------------
