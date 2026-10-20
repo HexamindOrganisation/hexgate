@@ -30,7 +30,7 @@ import {
   type AuditFilters as Filters,
   useAuditFilters,
 } from "@/lib/audit-filters";
-import { rangeDays } from "@/lib/date-range";
+import { RANGE_LABEL, rangeDays } from "@/lib/date-range";
 import { fmtTs } from "@/components/audit/fmt";
 import { LlmMessagesSection } from "@/components/audit/messages";
 import {
@@ -582,12 +582,7 @@ export function AuditPage() {
   const showOnboarding = optionsQ.isSuccess && rangeTotal === 0 && !hasFilters;
   const rangePhrase = f.start_date
     ? "in the selected range"
-    : {
-        "24h": "in the last 24 hours",
-        "7d": "in the last 7 days",
-        "30d": "in the last 30 days",
-        "90d": "in the last 90 days",
-      }[f.range];
+    : `in the last ${RANGE_LABEL[f.range]}`;
   const related = (relatedQ.data?.rows ?? [])
     .filter((r) => r.event_id !== sel?.event_id)
     .slice(0, 6);
