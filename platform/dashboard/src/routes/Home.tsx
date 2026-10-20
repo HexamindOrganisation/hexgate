@@ -31,7 +31,7 @@ export function HomePage() {
   const scope = useProjectScoped();
 
   if (scope.status === "no-project") {
-    return <NoProjectEmptyState resource="overview" />;
+    return <NoProjectEmptyState resource="project overview" />;
   }
 
   return (
