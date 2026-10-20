@@ -111,7 +111,8 @@ describe("PlaygroundPage", () => {
   it("offers the acting-as control and the agent status", () => {
     mockState = baseState();
     renderWithProviders(<PlaygroundPage />);
-    expect(screen.getByText("acting as")).toBeInTheDocument();
+    // The acting identity (name + role) is edited from the bottom-left chip.
+    expect(screen.getByTitle("Edit acting name & role")).toBeInTheDocument();
     expect(screen.getByText("billing-bot")).toBeInTheDocument();
     expect(screen.getByText("connected")).toBeInTheDocument();
   });
