@@ -18,6 +18,7 @@ import {
   ScrollText,
   Settings2,
   Files,
+  House,
   Sun,
   Users,
   type LucideIcon,
@@ -38,6 +39,7 @@ import { CreateProjectDialog } from "@/components/CreateProjectDialog";
 import { PreviewBanner } from "@/components/PreviewBanner";
 import { VerifyEmailBanner } from "@/components/VerifyEmailBanner";
 import { useActive } from "@/lib/active";
+import { useBans } from "@/lib/bans";
 import { useLogout, useUser } from "@/lib/auth";
 import { useOrgs } from "@/lib/orgs";
 import { useProjects } from "@/lib/projects";
@@ -105,19 +107,48 @@ function useActiveBootstrap(): void {
   ]);
 }
 
-// The core product features. Org/account admin lives in the settings space
-// (see `settingsLinks`), reached from the account menu — not this sidebar.
-const workspaceLinks = [
-  { to: "/agents", label: "Agents", icon: Bot },
-  { to: "/policies", label: "Policies", icon: Files },
-  { to: "/graph", label: "Graph", icon: Network },
-  { to: "/playground", label: "Playground", icon: MessageSquareCode },
-  { to: "/audit", label: "Audit", icon: ScrollText },
-  { to: "/usage", label: "Usage", icon: BarChart3 },
-  { to: "/bans", label: "Bans", icon: Ban },
-  // One word, like every other entry here.
-  { to: "/ai-act", label: "Governance", icon: Scale },
-  { to: "/tokens", label: "API keys", icon: KeyRound },
+interface NavLinkDef {
+  to: string;
+  label: string;
+  icon: LucideIcon;
+  end?: boolean;
+}
+
+interface NavGroup {
+  /** Section heading; omitted for the top group (Home). */
+  label?: string;
+  links: NavLinkDef[];
+}
+
+// The core product features, grouped by job. Org/account admin lives in the
+// settings space (see `settingsLinks`), reached from the account menu.
+const workspaceGroups: NavGroup[] = [
+  { links: [{ to: "/", label: "Home", icon: House, end: true }] },
+  {
+    label: "Build",
+    links: [
+      { to: "/agents", label: "Agents", icon: Bot },
+      { to: "/policies", label: "Policies", icon: Files },
+      { to: "/graph", label: "Graph", icon: Network },
+      { to: "/playground", label: "Playground", icon: MessageSquareCode },
+    ],
+  },
+  {
+    label: "Monitor",
+    links: [
+      { to: "/audit", label: "Audit", icon: ScrollText },
+      { to: "/usage", label: "Usage", icon: BarChart3 },
+    ],
+  },
+  {
+    label: "Control",
+    links: [
+      { to: "/bans", label: "Bans", icon: Ban },
+      // One word, like every other entry here.
+      { to: "/ai-act", label: "Governance", icon: Scale },
+      { to: "/tokens", label: "API keys", icon: KeyRound },
+    ],
+  },
 ];
 
 /** Whether a path belongs to the settings space (its own sidebar). Uses a
@@ -145,7 +176,7 @@ function settingsOrgId(
 
 /** The settings-space sidebar. Member/settings links need the active org, so
  * they're built per-render; omitted when no org is selected. */
-function settingsLinks(activeOrgId: string | null) {
+function settingsLinks(activeOrgId: string | null): NavLinkDef[] {
   return [
     { to: "/orgs", label: "Organizations", icon: Building2, end: true },
     ...(activeOrgId
@@ -172,6 +203,7 @@ function NavItem({
   icon: Icon,
   end,
   badge,
+  badgeTone,
   status,
   collapsed,
 }: {
@@ -180,6 +212,8 @@ function NavItem({
   icon: LucideIcon;
   end?: boolean;
   badge?: string;
+  /** `deny` for counts that need attention (active bans). */
+  badgeTone?: "deny";
   status?: string;
   collapsed?: boolean;
 }) {
@@ -190,25 +224,40 @@ function NavItem({
       title={collapsed ? label : undefined}
       className={({ isActive }) =>
         cn(
-          "flex h-9 items-center rounded-md text-sm transition-colors",
-          collapsed ? "justify-center px-0" : "justify-between px-2",
+          "flex h-9 items-center rounded-lg text-sm transition-colors",
+          collapsed ? "justify-center px-0" : "justify-between px-2.5",
           isActive
-            ? "bg-primary/15 text-primary font-medium"
-            : "text-muted-foreground hover:bg-accent hover:text-foreground",
+            ? "bg-card font-semibold text-foreground shadow-xs ring-1 ring-border"
+            : "font-medium text-muted-foreground hover:bg-accent hover:text-foreground",
         )
       }
     >
-      <span className="flex items-center gap-2.5">
-        <Icon className="size-4 shrink-0" />
-        {!collapsed && label}
-      </span>
-      {!collapsed && badge && (
-        <span className="text-[11px] text-muted-foreground">{badge}</span>
-      )}
-      {!collapsed && status && (
-        <span className="rounded-full bg-success/15 px-1.5 py-0.5 text-[10px] font-medium text-success">
-          {status}
-        </span>
+      {({ isActive }) => (
+        <>
+          <span className="flex items-center gap-2.5">
+            <Icon
+              className={cn("size-4 shrink-0", isActive && "text-primary")}
+            />
+            {!collapsed && label}
+          </span>
+          {!collapsed && badge && (
+            <span
+              className={cn(
+                "grid h-[18px] min-w-[18px] place-items-center rounded-full px-1.5 text-[11px] font-semibold",
+                badgeTone === "deny"
+                  ? "bg-deny/15 text-deny"
+                  : "bg-muted text-muted-foreground",
+              )}
+            >
+              {badge}
+            </span>
+          )}
+          {!collapsed && status && (
+            <span className="rounded-full bg-success/15 px-1.5 py-0.5 text-[10px] font-medium text-success">
+              {status}
+            </span>
+          )}
+        </>
       )}
     </NavLink>
   );
@@ -234,9 +283,16 @@ export function AppShell() {
   const activeOrgId = useActive((s) => s.activeOrgId);
   // Scope the settings links to the URL's org (falling back to the active one)
   // so a refresh/deep-link to /orgs/:id/... keeps the sidebar on that org.
-  const links = inSettings
-    ? settingsLinks(settingsOrgId(pathname, activeOrgId))
-    : workspaceLinks;
+  const groups: NavGroup[] = inSettings
+    ? [{ links: settingsLinks(settingsOrgId(pathname, activeOrgId)) }]
+    : workspaceGroups;
+  // Active bans need attention, so the nav shows their count.
+  const activeProjectId = useActive((s) => s.activeProjectId);
+  const bans = useBans(inSettings ? null : activeProjectId);
+  const badges: Record<string, { badge: string; badgeTone: "deny" }> = bans.data
+    ?.length
+    ? { "/bans": { badge: String(bans.data.length), badgeTone: "deny" } }
+    : {};
 
   // The workspace create-dialogs live here, not in OrgProjectSwitcher, so
   // collapsing the sidebar (which unmounts the switcher trigger) can't unmount
@@ -280,11 +336,11 @@ export function AppShell() {
     <div className="flex h-screen bg-background text-foreground">
       <aside
         className={cn(
-          // No hard right border — the card-vs-background shade separates the
-          // sidebar from the content (VSCode "shades, not rules"). The whole
-          // shell lives in the sidebar (switcher on top, account on the
-          // bottom) so the content column reclaims the old header's height.
-          "flex flex-col bg-card transition-[width] duration-200",
+          // Same ground as the page plus a hairline, so the active item can
+          // sit on it as a raised card. The whole shell lives in the sidebar
+          // (switcher on top, account on the bottom), so the content column
+          // reclaims the old header's height.
+          "flex flex-col border-r border-border bg-background transition-[width] duration-200",
           sidebarCollapsed ? "w-14" : "w-[240px]",
         )}
       >
@@ -301,7 +357,7 @@ export function AppShell() {
               {inSettings ? (
                 <button
                   type="button"
-                  onClick={() => navigate("/agents")}
+                  onClick={() => navigate("/")}
                   className="flex items-center gap-2 rounded-md px-2 py-1.5 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 >
                   <ArrowLeft className="size-4" />
@@ -335,16 +391,30 @@ export function AppShell() {
           {inSettings && sidebarCollapsed && (
             <div className="mb-0.5 flex flex-col gap-0.5">
               <NavItem
-                to="/agents"
+                to="/"
                 label="Back to workspace"
                 icon={ArrowLeft}
                 collapsed
               />
             </div>
           )}
-          <div className="flex flex-col gap-0.5">
-            {links.map((l) => (
-              <NavItem key={l.to} {...l} collapsed={sidebarCollapsed} />
+          <div className="flex flex-col gap-4">
+            {groups.map((g, i) => (
+              <div key={g.label ?? i} className="flex flex-col gap-0.5">
+                {g.label && !sidebarCollapsed && (
+                  <div className="px-2.5 pb-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                    {g.label}
+                  </div>
+                )}
+                {g.links.map((l) => (
+                  <NavItem
+                    key={l.to}
+                    {...l}
+                    {...badges[l.to]}
+                    collapsed={sidebarCollapsed}
+                  />
+                ))}
+              </div>
             ))}
           </div>
         </nav>
