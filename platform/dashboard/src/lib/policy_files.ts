@@ -21,6 +21,7 @@ import {
 import { useActive } from "./active";
 import {
   api,
+  ApiError,
   type PolicyFileDraft,
   type PolicyFileRead,
   type PolicyMatrixCell,
@@ -77,7 +78,8 @@ export function usePolicyMatrix(
     queryFn: () => api.getPolicyMatrix(projectId as string, agent, tools),
     // Classic (non-compose) projects have no matrix; don't fire the 422.
     enabled: !!projectId && enabled,
-    retry: false,
+    // A policy that doesn't compose stays a 422; retry only transient errors.
+    retry: (n, err) => !(err instanceof ApiError && err.status < 500) && n < 2,
   });
 }
 
