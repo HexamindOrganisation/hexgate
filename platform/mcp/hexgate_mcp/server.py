@@ -13,6 +13,7 @@ from hexgate_mcp.auth import JwksTokenVerifier
 from hexgate_mcp.jwks import JwksCache
 from hexgate_mcp.scopes import OAUTH_SCOPES
 from hexgate_mcp.settings import Settings
+from hexgate_mcp.tools import reference
 
 
 async def health(_: Request) -> JSONResponse:
@@ -38,6 +39,7 @@ def build_app(settings: Settings, http: httpx.AsyncClient) -> Starlette:
     )
     mcp = FastMCP(
         "hexgate",
+        instructions=reference.INSTRUCTIONS,
         token_verifier=verifier,
         auth=auth,
         stateless_http=True,
@@ -50,6 +52,7 @@ def build_app(settings: Settings, http: httpx.AsyncClient) -> Starlette:
         ),
     )
     mcp.custom_route("/health", methods=["GET"], include_in_schema=False)(health)
+    reference.register(mcp)
     app = mcp.streamable_http_app()
     _advertise_scopes(app, auth)
     return app
