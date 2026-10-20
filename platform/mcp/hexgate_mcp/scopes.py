@@ -1,7 +1,7 @@
 """The OAuth scope registry, copied from the API.
 
 Copied rather than imported: this package never imports ``hexgate_api``.
-tests/test_scopes.py fails when the two lists drift.
+tests/test_api_constants.py fails when the two lists drift.
 """
 
 # platform/api/hexgate_api/constants.py OAUTH_SCOPES

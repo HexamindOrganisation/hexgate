@@ -73,6 +73,7 @@ async def test_when_iss_or_aud_mismatch_then_logged_as_warning(
     verifier, key, overrides, caplog
 ):
     respx.get(JWKS_URL).respond(json=jwks(key))
+    caplog.set_level(logging.INFO, logger="hexgate_mcp.auth")
 
     assert await verifier.verify_token(key.mint(**overrides)) is None
     assert [r.levelno for r in caplog.records] == [logging.WARNING]
