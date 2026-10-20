@@ -18,11 +18,6 @@ import { DashboardRangePicker } from "@/components/ui/dashboard-range-picker";
 import { type ChartBucket, StackedBars } from "@/components/ui/charts";
 import { StatStrip } from "@/components/ui/stat-strip";
 import { AuditOnboarding } from "@/components/audit/onboarding";
-import {
-  bucketMinutesFor,
-  fillBuckets,
-  timeWindow,
-} from "@/components/audit/buckets";
 import { type Counts, DecisionBadge } from "@/components/audit/charts";
 import {
   displayNoValue,
@@ -55,7 +50,7 @@ function bucketUnit(minutes: number): string {
     return minutes === 1440 ? "day" : `${minutes / 1440} days`;
   if (minutes % 60 === 0)
     return minutes === 60 ? "hour" : `${minutes / 60} hours`;
-  return `${minutes} minutes`;
+  return minutes === 1 ? "minute" : `${minutes} minutes`;
 }
 
 const fmtFull = (d: Date) =>
@@ -521,21 +516,16 @@ export function AuditPage() {
       }
     : ZERO_COUNTS;
 
-  // The server sizes buckets by span (e.g. 6 h over 7 days) and omits empty
-  // ones; mirror its rule and refill the gaps.
-  const { from: winFrom, to: winTo } = useMemo(
-    () => timeWindow(f.range, f.start_date, f.end_date),
-    // Recomputed with each fetch so "now" follows the 30s refresh.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [f.range, f.start_date, f.end_date, tsQ.dataUpdatedAt],
-  );
-  const bucketMinutes = bucketMinutesFor(+winTo - +winFrom);
+  // The server returns every bucket in the window (empty ones as zeros), so
+  // the width is the gap between any two neighbours.
+  const bucketMinutes = useMemo(() => {
+    const d = tsQ.data;
+    if (!d || d.length < 2) return 1440;
+    return Math.round((+new Date(d[1].bucket) - +new Date(d[0].bucket)) / 6e4);
+  }, [tsQ.data]);
   const days: ChartBucket[] = useMemo(
     () =>
-      (tsQ.data
-        ? fillBuckets(tsQ.data, winFrom, winTo, bucketMinutes)
-        : []
-      ).map((p) => ({
+      (tsQ.data ?? []).map((p) => ({
         label: new Date(p.bucket),
         mode: bucketMinutes >= 1440 ? "day" : "hour",
         values: {
@@ -545,7 +535,7 @@ export function AuditPage() {
         },
         total: p.allow + p.deny + p.needs_approval,
       })),
-    [tsQ.data, winFrom, winTo, bucketMinutes],
+    [tsQ.data, bucketMinutes],
   );
   const spark = useMemo(
     () => ({

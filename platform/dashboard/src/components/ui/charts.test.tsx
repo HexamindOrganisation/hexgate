@@ -15,7 +15,7 @@ describe("StackedBars", () => {
         series={SERIES}
         buckets={[
           {
-            label: new Date(2026, 9, 14),
+            label: new Date(Date.UTC(2026, 9, 14)),
             mode: "day",
             values: { allow: 46, deny: 22 },
             total: 68,

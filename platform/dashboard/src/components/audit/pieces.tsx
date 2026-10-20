@@ -1,4 +1,5 @@
 import { useMemo, useState, type ComponentType } from "react";
+import { isToday, isYesterday } from "date-fns";
 import {
   Ban,
   Check,
@@ -340,17 +341,15 @@ function argsPreview(args: unknown): string {
   return parts.length ? clip(`(${parts.join(", ")})`, 160) : "";
 }
 
-function dayLabel(d: Date, now = new Date()): string {
-  const day = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate());
-  const diff = Math.round((+day(now) - +day(d)) / 864e5);
+function dayLabel(d: Date): string {
   const date = d.toLocaleDateString("en-US", {
     weekday: "short",
     month: "short",
     day: "numeric",
   });
-  return diff === 0
+  return isToday(d)
     ? `Today · ${date}`
-    : diff === 1
+    : isYesterday(d)
       ? `Yesterday · ${date}`
       : date;
 }
@@ -377,10 +376,13 @@ export function EventsTable({
 }) {
   // Rows arrive newest first, so consecutive runs share a day.
   const groups: { label: string; rows: AuditDecisionRow[] }[] = [];
+  let lastDay = "";
   for (const r of rows) {
-    const label = dayLabel(new Date(r.occurred_at));
-    if (groups.at(-1)?.label === label) groups.at(-1)!.rows.push(r);
-    else groups.push({ label, rows: [r] });
+    const d = new Date(r.occurred_at);
+    const day = d.toDateString();
+    if (day === lastDay) groups.at(-1)!.rows.push(r);
+    else groups.push({ label: dayLabel(d), rows: [r] });
+    lastDay = day;
   }
   return (
     <Card className="overflow-hidden p-0">

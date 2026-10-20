@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from collections import deque
 from collections.abc import Sequence
 
@@ -569,8 +569,10 @@ def timeseries(
     start_date: datetime | None = None,
     end_date: datetime | None = None,
 ) -> list[dict]:
-    """Per-bucket outcome counts, ordered by bucket. Sparse: empty buckets are
-    omitted. Returns ``[{bucket, allow, deny, needs_approval}]``."""
+    """Per-bucket outcome counts, ordered by bucket, one point for every
+    bucket in the window (empty ones as zeros), so a quiet stretch reads as a
+    gap and the client never has to re-derive the bucketing. Returns
+    ``[{bucket, allow, deny, needs_approval}]``."""
     where, params = _scope(
         project_id,
         since_hours,
@@ -593,14 +595,39 @@ def timeseries(
         "GROUP BY t, outcome ORDER BY t"
     )
     result = client.query(ts_sql, parameters=params)
-    points: dict[object, dict] = {}
+    # Keyed by epoch seconds, the same grid toStartOfInterval uses.
+    points: dict[int, dict] = {}
     for t, outcome, n in result.result_rows:
-        point = points.setdefault(
-            t, {"bucket": t, **{e.value: 0 for e in AuditOutcome}}
-        )
+        point = points.setdefault(int(t.timestamp()), {"bucket": t, **_zero_outcomes()})
         if outcome in point:
             point[outcome] = int(n)
-    return [points[t] for t in sorted(points)]
+    if "start_date" in params:
+        window = (params["start_date"], params["end_date"])
+    else:
+        window = (params["since"], datetime.now(timezone.utc))
+    return _fill_buckets(points, *window, bucket_minutes)
+
+
+def _zero_outcomes() -> dict[str, int]:
+    return {e.value: 0 for e in AuditOutcome}
+
+
+def _fill_buckets(
+    points: dict[int, dict], start: datetime, end: datetime, bucket_minutes: int
+) -> list[dict]:
+    """Every epoch-aligned bucket from ``start``'s to ``end``, zeros where the
+    query found nothing. Points outside the grid are kept, never dropped."""
+    step = bucket_minutes * 60
+    t = int(start.timestamp()) // step * step
+    last = int(end.timestamp())
+    filled = dict(points)
+    while t <= last:
+        filled.setdefault(
+            t,
+            {"bucket": datetime.fromtimestamp(t, timezone.utc), **_zero_outcomes()},
+        )
+        t += step
+    return [filled[k] for k in sorted(filled)]
 
 
 # run_id rides along so the detail drawer can scope the transcript read for

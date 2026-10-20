@@ -104,7 +104,11 @@ export function StackedBars({
           .toLocaleTimeString("en-US", { hour: "numeric", hour12: true })
           .replace(" ", "")
           .toLowerCase()
-      : b.label.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+      : b.label.toLocaleDateString("en-US", {
+          month: "short",
+          day: "numeric",
+          timeZone: b.mode === "day" ? "UTC" : undefined,
+        });
   const full = (b: ChartBucket) =>
     b.mode === "hour"
       ? b.label.toLocaleString("en-US", {
@@ -113,10 +117,13 @@ export function StackedBars({
           hour: "numeric",
           minute: "2-digit",
         })
-      : b.label.toLocaleDateString("en-US", {
+      : // Day buckets start at UTC midnight; label them in UTC so a user
+        // west of UTC doesn't see every bar one day early.
+        b.label.toLocaleDateString("en-US", {
           weekday: "short",
           month: "short",
           day: "numeric",
+          timeZone: "UTC",
         });
   // Each non-zero segment keeps a few pixels, so a handful of denials next
   // to thousands of allows still shows without hovering.
@@ -140,7 +147,7 @@ export function StackedBars({
   return (
     <div className="w-full">
       <div
-        className="relative flex items-end gap-[3px] border-b border-border pt-5"
+        className={`relative flex items-end border-b border-border pt-5 ${buckets.length > 60 ? "gap-px" : "gap-[3px]"}`}
         style={{ height: height + 20 }}
         onMouseLeave={() => setHover(null)}
       >
