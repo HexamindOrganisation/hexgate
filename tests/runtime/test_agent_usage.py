@@ -318,7 +318,7 @@ def test_scopes_of_different_kinds_with_one_key_get_different_ledgers() -> None:
     ledgers.enable(UsageScopeKind.USER)
 
     agent = ledgers.ledger_for(UsageScope.agent("alice"))
-    user = ledgers.ledger_for(UsageScope(UsageScopeKind.USER, "alice"))
+    user = ledgers.ledger_for(UsageScope.user("alice"))
 
     assert agent is not None
     assert user is not None
@@ -330,7 +330,7 @@ def test_enabling_agents_leaves_users_off() -> None:
     ledgers.enable(UsageScopeKind.AGENT)
 
     assert ledgers.is_enabled(UsageScopeKind.USER) is False
-    assert ledgers.ledger_for(UsageScope(UsageScopeKind.USER, "u")) is None
+    assert ledgers.ledger_for(UsageScope.user("u")) is None
 
 
 def test_usage_scope_is_a_value_and_prints_its_kind() -> None:
