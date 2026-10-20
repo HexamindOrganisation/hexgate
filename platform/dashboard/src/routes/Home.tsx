@@ -1,6 +1,6 @@
 import { useMemo, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { formatDistanceToNowStrict } from "date-fns";
+import { endOfDay, startOfDay } from "date-fns";
 import {
   ArrowRight,
   Bot,
@@ -13,42 +13,53 @@ import {
 import { Link } from "react-router-dom";
 
 import { NoProjectEmptyState } from "@/components/NoProjectEmptyState";
+import { rankAnomalies } from "@/components/audit/anomalies";
 import { OUTCOME_SERIES } from "@/components/audit/chart-tokens";
 import { argsPreview } from "@/components/audit/fmt";
 import { OutcomeLabel } from "@/components/audit/pieces";
+import { formatRelative } from "@/components/bans/format";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { type ChartBucket, StackedBars } from "@/components/ui/charts";
 import { PageHeader } from "@/components/ui/page-header";
 import { useProjectScoped } from "@/lib/active";
-import { api } from "@/lib/api";
+import {
+  api,
+  type AgentManifestView,
+  type AuditAnomaly,
+  type AuditSummary,
+  type TokenListItem,
+} from "@/lib/api";
+import {
+  type AuditFilters,
+  EMPTY_AUDIT_FILTERS,
+  useAuditFilters,
+} from "@/lib/audit-filters";
+import { fmtTokens } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 const LIVE_MS = 15_000;
+const SLOW_MS = 60_000;
 const STALE_KEY_DAYS = 30;
+const ATTENTION_BURSTS = 2;
 
 function greeting(now = new Date()): string {
   const h = now.getHours();
   return h < 12 ? "Good morning" : h < 18 ? "Good afternoon" : "Good evening";
 }
 
-const compact = (n: number) =>
-  Intl.NumberFormat("en-US", { notation: "compact" }).format(n);
-
 /** A titled card with an optional link in its header. */
 function Panel({
   title,
   aside,
   children,
-  className,
 }: {
   title: ReactNode;
   aside?: ReactNode;
   children: ReactNode;
-  className?: string;
 }) {
   return (
-    <Card className={cn("overflow-hidden p-0", className)}>
+    <Card className="overflow-hidden p-0">
       <div className="flex items-center gap-3 border-b border-border px-5 py-3.5">
         <h2 className="text-body font-semibold">{title}</h2>
         {aside && <div className="ml-auto">{aside}</div>}
@@ -69,6 +80,14 @@ function PanelLink({ to, children }: { to: string; children: ReactNode }) {
   );
 }
 
+/** The state line a panel shows instead of data: loading, failed, or empty.
+ * Never reads as "all clear" before the data has actually arrived. */
+function PanelNote({ children }: { children: ReactNode }) {
+  return (
+    <div className="px-5 py-6 text-meta text-muted-foreground">{children}</div>
+  );
+}
+
 interface Attention {
   key: string;
   icon: ReactNode;
@@ -77,12 +96,113 @@ interface Attention {
   sub: ReactNode;
   cta: string;
   to: string;
+  /** Audit filters to open with; replaces whatever was dialled in before. */
+  filters?: Partial<AuditFilters>;
+}
+
+function deriveAttention({
+  anomalies,
+  totals,
+  agents,
+  tokens,
+  keysFetchedAt,
+}: {
+  anomalies: AuditAnomaly[];
+  totals: AuditSummary["totals"] | undefined;
+  agents: AgentManifestView[];
+  tokens: TokenListItem[];
+  keysFetchedAt: number;
+}): Attention[] {
+  const out: Attention[] = [];
+  const ranked = rankAnomalies(anomalies);
+  for (const a of ranked.slice(0, ATTENTION_BURSTS)) {
+    out.push({
+      key: `anomaly-${a.user_id}-${a.first_seen}`,
+      icon: <TriangleAlert />,
+      tone: "bg-deny/15 text-deny",
+      title: (
+        <>
+          Denial burst from <span className="font-mono">{a.user_id}</span>
+        </>
+      ),
+      sub: `${a.deny} of ${a.all} calls denied · ${formatRelative(a.last_seen)}`,
+      cta: "Inspect",
+      to: "/audit",
+      filters: {
+        customMode: true,
+        start_date: startOfDay(new Date(a.first_seen)),
+        end_date: endOfDay(new Date(a.last_seen)),
+        user: a.user_id,
+      },
+    });
+  }
+  if (ranked.length > ATTENTION_BURSTS) {
+    const more = ranked.length - ATTENTION_BURSTS;
+    out.push({
+      key: "anomaly-more",
+      icon: <TriangleAlert />,
+      tone: "bg-deny/15 text-deny",
+      title: `${more} more denial ${more === 1 ? "burst" : "bursts"} this week`,
+      sub: "Ranked by severity and deny rate on Audit",
+      cta: "Open audit",
+      to: "/audit",
+      filters: { range: "7d" },
+    });
+  }
+  if (totals?.needs_approval) {
+    const n = totals.needs_approval;
+    out.push({
+      key: "approvals",
+      icon: <Hourglass />,
+      tone: "bg-approval/15 text-approval",
+      title: `${n} ${n === 1 ? "call" : "calls"} sent for approval in the last 24 hours`,
+      sub: "Gated by policy rather than allowed or denied outright",
+      cta: "Review",
+      to: "/audit",
+      filters: { range: "24h", outcome: "needs_approval" },
+    });
+  }
+  const unregistered = agents.filter((a) => !a.manifest);
+  if (unregistered.length) {
+    out.push({
+      key: "unregistered",
+      icon: <Bot />,
+      tone: "bg-primary/15 text-primary",
+      title: `${unregistered.length} ${unregistered.length === 1 ? "agent has" : "agents have"} no registered manifest`,
+      sub: unregistered.map((a) => a.name).join(", "),
+      cta: "Agents",
+      to: "/agents",
+    });
+  }
+  // A never-used key only counts once it is itself 30 days old.
+  const stale = tokens.filter(
+    (t) =>
+      keysFetchedAt - +new Date(t.last_used_at ?? t.created_at) >
+      STALE_KEY_DAYS * 864e5,
+  );
+  if (stale.length) {
+    out.push({
+      key: "keys",
+      icon: <KeyRound />,
+      tone: "bg-muted text-foreground",
+      title: `${stale.length} API ${stale.length === 1 ? "key" : "keys"} unused for ${STALE_KEY_DAYS}+ days`,
+      sub: stale.map((t) => t.name).join(", "),
+      cta: "Review keys",
+      to: "/tokens",
+    });
+  }
+  return out;
 }
 
 export function HomePage() {
   const scope = useProjectScoped();
   const pid = scope.projectId;
   const on = !!pid;
+  const setAuditFilters = useAuditFilters((s) => s.setFilters);
+  // Links into Audit start from a clean slate, so a filter left over from
+  // an earlier visit can't hide what the link points at.
+  const openAudit = (filters: Partial<AuditFilters> = {}) =>
+    setAuditFilters(() => ({ ...EMPTY_AUDIT_FILTERS, ...filters }));
 
   const summaryQ = useQuery({
     queryKey: ["audit", "summary", pid, { window: "24h" }],
@@ -94,7 +214,7 @@ export function HomePage() {
     queryKey: ["audit", "ts", pid, { window: "7d" }],
     enabled: on,
     queryFn: () => api.getAuditTimeseries({ window: "7d" }, pid!),
-    refetchInterval: 60_000,
+    refetchInterval: SLOW_MS,
   });
   const feedQ = useQuery({
     queryKey: ["audit", "list", pid, { window: "24h", limit: 7 }],
@@ -106,11 +226,13 @@ export function HomePage() {
     queryKey: ["audit", "anomalies", pid, { window: "7d" }],
     enabled: on,
     queryFn: () => api.getAuditAnomalies({ window: "7d" }, pid!),
+    refetchInterval: SLOW_MS,
   });
   const agentsQ = useQuery({
     queryKey: ["agent-manifests", pid],
     enabled: on,
     queryFn: () => api.listAgentManifests(pid!),
+    refetchInterval: SLOW_MS,
   });
   // Keys and usage are best-effort: a member without access just doesn't
   // get those rows.
@@ -119,23 +241,43 @@ export function HomePage() {
     enabled: on,
     queryFn: () => api.listTokens(pid!),
     retry: false,
+    refetchInterval: SLOW_MS,
   });
   const usageQ = useQuery({
     queryKey: ["usage", "summary", pid, { window: "24h" }],
     enabled: on,
     queryFn: () => api.getLlmUsageSummary({ window: "24h" }, pid!),
     retry: false,
+    refetchInterval: SLOW_MS,
   });
 
   const totals = summaryQ.data?.totals;
   const denyRate =
     totals && totals.all ? ((totals.deny / totals.all) * 100).toFixed(1) : null;
+  const agents = useMemo(() => agentsQ.data ?? [], [agentsQ.data]);
 
-  // 7d comes back in 6-hour buckets; roll them up to UTC days.
-  const week: ChartBucket[] = useMemo(() => {
+  const attention = useMemo(
+    () =>
+      deriveAttention({
+        anomalies: anomaliesQ.data ?? [],
+        totals,
+        agents,
+        tokens: tokensQ.data ?? [],
+        keysFetchedAt: tokensQ.dataUpdatedAt,
+      }),
+    [anomaliesQ.data, totals, agents, tokensQ.data, tokensQ.dataUpdatedAt],
+  );
+  // Attention needs the signals that can raise an alarm; until they land
+  // (or if they fail) it must not claim the coast is clear.
+  const attentionPending = anomaliesQ.isPending || summaryQ.isPending;
+  const attentionFailed = anomaliesQ.isError || summaryQ.isError;
+
+  // 7d comes back in 6-hour buckets; roll them up to UTC days (the window
+  // touches 8 of them, the first and last partly).
+  const week = useMemo(() => {
     const byDay = new Map<string, ChartBucket>();
     for (const p of weekQ.data ?? []) {
-      const day = p.bucket.slice(0, 10);
+      const day = new Date(p.bucket).toISOString().slice(0, 10);
       const b = byDay.get(day) ?? {
         label: new Date(`${day}T00:00:00Z`),
         mode: "day" as const,
@@ -148,90 +290,26 @@ export function HomePage() {
       b.total += p.allow + p.deny + p.needs_approval;
       byDay.set(day, b);
     }
-    return [...byDay.values()].slice(-7);
+    const buckets = [...byDay.values()];
+    const sum = (k: "deny" | "needs_approval") =>
+      buckets.reduce((s, b) => s + b.values[k], 0);
+    return {
+      buckets,
+      all: buckets.reduce((s, b) => s + b.total, 0),
+      deny: sum("deny"),
+      appr: sum("needs_approval"),
+    };
   }, [weekQ.data]);
-  const weekTotals = week.reduce(
-    (s, b) => ({
-      all: s.all + b.total,
-      deny: s.deny + b.values.deny,
-      appr: s.appr + b.values.needs_approval,
-    }),
-    { all: 0, deny: 0, appr: 0 },
-  );
 
-  const agents = agentsQ.data ?? [];
-  const byAgent = new Map(summaryQ.data?.by_agent.map((r) => [r.key, r]));
+  const byAgent = useMemo(
+    () => new Map(summaryQ.data?.by_agent.map((r) => [r.key, r])),
+    [summaryQ.data],
+  );
   const maxAgentCalls = Math.max(
     ...agents.map((a) => byAgent.get(a.name)?.all ?? 0),
     1,
   );
   const lastDecision = feedQ.data?.rows[0]?.occurred_at;
-
-  const attention: Attention[] = [];
-  for (const a of [...(anomaliesQ.data ?? [])]
-    .sort(
-      (x, y) => Number(y.severity === "high") - Number(x.severity === "high"),
-    )
-    .slice(0, 2)) {
-    attention.push({
-      key: `anomaly-${a.user_id}-${a.first_seen}`,
-      icon: <TriangleAlert />,
-      tone: "bg-deny/15 text-deny",
-      title: (
-        <>
-          Denial burst from <span className="font-mono">{a.user_id}</span>
-        </>
-      ),
-      sub: `${a.deny} of ${a.all} calls denied · ${formatDistanceToNowStrict(new Date(a.last_seen))} ago`,
-      cta: "Inspect",
-      to: "/audit",
-    });
-  }
-  if (totals?.needs_approval) {
-    attention.push({
-      key: "approvals",
-      icon: <Hourglass />,
-      tone: "bg-approval/15 text-approval",
-      title: `${totals.needs_approval} ${totals.needs_approval === 1 ? "call" : "calls"} sent for approval today`,
-      sub: "Gated by policy rather than allowed or denied outright",
-      cta: "Review",
-      to: "/audit",
-    });
-  }
-  const unregistered = agents.filter((a) => !a.manifest);
-  if (unregistered.length) {
-    attention.push({
-      key: "unregistered",
-      icon: <Bot />,
-      tone: "bg-primary/15 text-primary",
-      title: `${unregistered.length} ${unregistered.length === 1 ? "agent has" : "agents have"} no registered manifest`,
-      sub: unregistered.map((a) => a.name).join(", "),
-      cta: "Agents",
-      to: "/agents",
-    });
-  }
-  // "Now" is when the keys were fetched, so render stays pure.
-  const staleKeys = useMemo(
-    () =>
-      (tokensQ.data ?? []).filter(
-        (t) =>
-          !t.last_used_at ||
-          tokensQ.dataUpdatedAt - +new Date(t.last_used_at) >
-            STALE_KEY_DAYS * 864e5,
-      ),
-    [tokensQ.data, tokensQ.dataUpdatedAt],
-  );
-  if (staleKeys.length) {
-    attention.push({
-      key: "keys",
-      icon: <KeyRound />,
-      tone: "bg-muted text-foreground",
-      title: `${staleKeys.length} API ${staleKeys.length === 1 ? "key" : "keys"} unused for ${STALE_KEY_DAYS}+ days`,
-      sub: staleKeys.map((t) => t.name).join(", "),
-      cta: "Review keys",
-      to: "/tokens",
-    });
-  }
 
   if (scope.status === "no-project") {
     return <NoProjectEmptyState resource="project overview" />;
@@ -245,16 +323,17 @@ export function HomePage() {
         description={
           scope.projectName && (
             <>
-              {agents.length} {agents.length === 1 ? "agent" : "agents"} in{" "}
+              {agentsQ.isSuccess && (
+                <>
+                  {agents.length} {agents.length === 1 ? "agent" : "agents"}{" "}
+                  in{" "}
+                </>
+              )}
               <span className="font-mono text-foreground">
                 {scope.projectName}
               </span>
               {lastDecision && (
-                <>
-                  {" "}
-                  · last decision{" "}
-                  {formatDistanceToNowStrict(new Date(lastDecision))} ago
-                </>
+                <> · last decision {formatRelative(lastDecision)}</>
               )}
             </>
           )
@@ -265,7 +344,7 @@ export function HomePage() {
               <Link to="/policies">Edit policies</Link>
             </Button>
             <Button asChild className="gap-1.5">
-              <Link to="/audit">
+              <Link to="/audit" onClick={() => openAudit()}>
                 <ScrollText className="size-4" />
                 Open audit
               </Link>
@@ -287,69 +366,81 @@ export function HomePage() {
             </>
           }
         >
-          {attention.length ? (
-            attention.map((t) => (
-              <Link
-                key={t.key}
-                to={t.to}
-                className="grid grid-cols-[32px_minmax(0,1fr)_auto] items-center gap-3.5 border-t border-border/60 px-5 py-3.5 first:border-t-0 hover:bg-accent/50"
+          {attention.map((t) => (
+            <Link
+              key={t.key}
+              to={t.to}
+              onClick={t.filters ? () => openAudit(t.filters) : undefined}
+              className="grid grid-cols-[32px_minmax(0,1fr)_auto] items-center gap-3.5 border-t border-border/60 px-5 py-3.5 first:border-t-0 hover:bg-accent/50"
+            >
+              <span
+                className={cn(
+                  "grid size-8 place-items-center rounded-lg [&_svg]:size-4",
+                  t.tone,
+                )}
               >
-                <span
-                  className={cn(
-                    "grid size-8 place-items-center rounded-lg [&_svg]:size-4",
-                    t.tone,
-                  )}
-                >
-                  {t.icon}
+                {t.icon}
+              </span>
+              <span className="min-w-0">
+                <span className="block text-sm font-semibold">{t.title}</span>
+                <span className="block truncate text-meta text-muted-foreground">
+                  {t.sub}
                 </span>
-                <span className="min-w-0">
-                  <span className="block text-sm font-semibold">{t.title}</span>
-                  <span className="block truncate text-meta text-muted-foreground">
-                    {t.sub}
-                  </span>
-                </span>
-                <span className="flex items-center gap-1 text-meta font-medium text-primary">
-                  {t.cta}
-                  <ArrowRight className="size-3.5" />
-                </span>
-              </Link>
-            ))
+              </span>
+              <span className="flex items-center gap-1 text-meta font-medium text-primary">
+                {t.cta}
+                <ArrowRight className="size-3.5" />
+              </span>
+            </Link>
+          ))}
+          {attentionFailed ? (
+            <PanelNote>
+              Couldn't load every signal, so this list may be incomplete.
+            </PanelNote>
+          ) : attentionPending ? (
+            <PanelNote>Checking…</PanelNote>
           ) : (
-            <div className="flex items-center gap-3 px-5 py-6 text-meta text-muted-foreground">
-              <CircleCheck className="size-5 text-success" />
-              Nothing needs a look right now.
-            </div>
+            !attention.length && (
+              <div className="flex items-center gap-3 px-5 py-6 text-meta text-muted-foreground">
+                <CircleCheck className="size-5 text-success" />
+                Nothing needs a look right now.
+              </div>
+            )
           )}
         </Panel>
 
-        <Panel title="Today" aside={<PanelLink to="/usage">Usage</PanelLink>}>
+        <Panel
+          title="Last 24 hours"
+          aside={<PanelLink to="/usage">Usage</PanelLink>}
+        >
           <div className="grid grid-cols-2 [&>*:nth-child(-n+2)]:border-b [&>*:nth-child(even)]:border-l [&>*]:border-border/60">
             {[
               {
                 label: "Decisions",
-                value: totals ? totals.all.toLocaleString() : "—",
-                sub: "last 24 hours",
+                value: totals?.all.toLocaleString(),
+                sub: summaryQ.isError ? "couldn't load" : "all outcomes",
               },
               {
                 label: "Denied",
-                value: totals ? totals.deny.toLocaleString() : "—",
+                value: totals?.deny.toLocaleString(),
                 sub: denyRate ? `${denyRate}% deny rate` : "—",
                 cls: "text-deny",
               },
               {
                 label: "Needs approval",
-                value: totals ? totals.needs_approval.toLocaleString() : "—",
+                value: totals?.needs_approval.toLocaleString(),
                 sub: "sent for approval",
                 cls: "text-approval",
               },
               {
                 label: "Tokens",
-                value: usageQ.data
-                  ? compact(usageQ.data.totals.total_tokens)
-                  : "—",
+                value:
+                  usageQ.data && fmtTokens(usageQ.data.totals.total_tokens),
                 sub: usageQ.data
                   ? `across ${usageQ.data.totals.calls.toLocaleString()} model calls`
-                  : "usage unavailable",
+                  : usageQ.isError
+                    ? "usage unavailable"
+                    : "—",
               },
             ].map((s) => (
               <div key={s.label} className="flex flex-col gap-1.5 px-5 py-4">
@@ -359,10 +450,10 @@ export function HomePage() {
                 <span
                   className={cn(
                     "text-[28px] font-semibold leading-none tracking-tight tabular-nums",
-                    s.cls,
+                    s.value !== undefined && s.cls,
                   )}
                 >
-                  {s.value}
+                  {s.value ?? "—"}
                 </span>
                 <span className="text-meta text-muted-foreground">{s.sub}</span>
               </div>
@@ -384,20 +475,20 @@ export function HomePage() {
           }
           aside={<PanelLink to="/audit">View all</PanelLink>}
         >
-          {feedQ.data?.rows.length ? (
+          {feedQ.isPending ? (
+            <PanelNote>Loading…</PanelNote>
+          ) : feedQ.isError ? (
+            <PanelNote>Couldn't load recent decisions.</PanelNote>
+          ) : feedQ.data.rows.length ? (
             feedQ.data.rows.map((r) => (
               <Link
                 key={r.event_id}
                 to="/audit"
-                className="grid grid-cols-[56px_84px_minmax(0,1fr)_110px] items-center gap-3 border-t border-border/60 px-5 py-2.5 text-meta first:border-t-0 hover:bg-accent/50"
+                onClick={() => openAudit({ range: "24h" })}
+                className="grid grid-cols-[64px_84px_minmax(0,1fr)_110px] items-center gap-3 border-t border-border/60 px-5 py-2.5 text-meta first:border-t-0 hover:bg-accent/50"
               >
                 <span className="font-mono text-xs text-muted-foreground">
-                  {formatDistanceToNowStrict(new Date(r.occurred_at), {
-                    roundingMethod: "floor",
-                  })
-                    .replace(/ seconds?/, "s")
-                    .replace(/ minutes?/, "m")
-                    .replace(/ hours?/, "h")}
+                  {formatRelative(r.occurred_at)}
                 </span>
                 <OutcomeLabel d={r.outcome} />
                 <span className="truncate font-mono">
@@ -412,12 +503,12 @@ export function HomePage() {
               </Link>
             ))
           ) : (
-            <div className="px-5 py-6 text-meta text-muted-foreground">
+            <PanelNote>
               No decisions in the last 24 hours.{" "}
               <Link to="/audit" className="text-primary hover:underline">
                 Getting started
               </Link>
-            </div>
+            </PanelNote>
           )}
         </Panel>
 
@@ -425,7 +516,11 @@ export function HomePage() {
           title="Agents"
           aside={<PanelLink to="/agents">Manage</PanelLink>}
         >
-          {agents.length ? (
+          {agentsQ.isPending ? (
+            <PanelNote>Loading…</PanelNote>
+          ) : agentsQ.isError ? (
+            <PanelNote>Couldn't load agents.</PanelNote>
+          ) : agents.length ? (
             agents.map((a) => {
               const row = byAgent.get(a.name);
               return (
@@ -449,7 +544,7 @@ export function HomePage() {
                       <span className="font-semibold text-foreground">
                         {row?.all ?? 0}
                       </span>{" "}
-                      today
+                      in 24h
                       {!!row?.deny && (
                         <span className="text-deny"> · {row.deny} denied</span>
                       )}
@@ -467,10 +562,10 @@ export function HomePage() {
               );
             })
           ) : (
-            <div className="px-5 py-6 text-meta text-muted-foreground">
+            <PanelNote>
               No agents yet. Register one with{" "}
               <span className="font-mono">hexgate register</span>.
-            </div>
+            </PanelNote>
           )}
         </Panel>
       </div>
@@ -485,16 +580,28 @@ export function HomePage() {
           </>
         }
         aside={
-          <span className="text-meta text-muted-foreground">
-            {weekTotals.all.toLocaleString()} decisions ·{" "}
-            {weekTotals.deny.toLocaleString()} denied ·{" "}
-            {weekTotals.appr.toLocaleString()} sent for approval
-          </span>
+          weekQ.isSuccess && (
+            <span className="text-meta text-muted-foreground">
+              {week.all.toLocaleString()} decisions ·{" "}
+              {week.deny.toLocaleString()} denied · {week.appr.toLocaleString()}{" "}
+              sent for approval
+            </span>
+          )
         }
       >
         <div className="p-5">
-          {weekTotals.all > 0 ? (
-            <StackedBars buckets={week} series={OUTCOME_SERIES} height={120} />
+          {weekQ.isPending ? (
+            <div className="h-28 text-meta text-muted-foreground">Loading…</div>
+          ) : weekQ.isError ? (
+            <div className="h-28 text-meta text-muted-foreground">
+              Couldn't load the week.
+            </div>
+          ) : week.all > 0 ? (
+            <StackedBars
+              buckets={week.buckets}
+              series={OUTCOME_SERIES}
+              height={120}
+            />
           ) : (
             <div className="flex h-28 items-center justify-center text-meta text-muted-foreground">
               No decisions this week.

@@ -32,6 +32,7 @@ import { Sparkline } from "@/components/ui/charts";
 import { cn } from "@/lib/utils";
 import { BreakdownCardShell } from "@/components/ui/breakdown-card";
 import { BreakdownBar, type BreakdownDatum } from "./charts";
+import { rankAnomalies } from "./anomalies";
 import { argsPreview, fmtClock } from "./fmt";
 import { OUT_LABEL, OUT_SWATCH, OUTCOME_SERIES } from "./chart-tokens";
 
@@ -531,17 +532,7 @@ export function AnomaliesCard({
   onBanUser?: (userId: string) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
-  // The API orders by user; rank by severity, then deny rate, so the
-  // folded tail never hides a worse burst.
-  const ranked = useMemo(
-    () =>
-      [...rows].sort(
-        (a, b) =>
-          Number(b.severity === "high") - Number(a.severity === "high") ||
-          b.deny_rate - a.deny_rate,
-      ),
-    [rows],
-  );
+  const ranked = useMemo(() => rankAnomalies(rows), [rows]);
   const shown = expanded ? ranked : ranked.slice(0, ANOMALIES_SHOWN);
   return (
     <section aria-label="Anomalies" className="space-y-2">
