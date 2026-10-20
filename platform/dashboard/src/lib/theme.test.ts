@@ -95,12 +95,6 @@ describe("SCHEME_ACCENTS", () => {
     return /--primary: ([^;]+);/.exec(block)?.[1];
   };
 
-  it("lists every scheme in the picker", () => {
-    expect(SCHEMES.map((s) => s.id).sort()).toEqual(
-      Object.keys(SCHEME_ACCENTS).sort(),
-    );
-  });
-
   it.each(SCHEMES.filter((s) => s.id !== "blue").map((s) => s.id))(
     "%s matches its index.css token block in both modes",
     (id) => {

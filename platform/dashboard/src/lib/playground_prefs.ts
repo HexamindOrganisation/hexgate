@@ -23,10 +23,10 @@ interface PlaygroundPrefs {
   setName: (projectId: string, name: string) => void;
 }
 
-/** v0 preset value → its v1 equivalent (old dark blue, old fixed violet). */
+/** v0 preset value → its v1 equivalent (old dark blue; old fixed violet → dark, the default mode). */
 const LEGACY_ACCENTS: Record<string, string> = {
   "226 78% 65%": SCHEME_ACCENTS.blue.dark,
-  "262 70% 58%": SCHEME_ACCENTS.violet.light,
+  "262 70% 58%": SCHEME_ACCENTS.violet.dark,
 };
 
 export const usePlaygroundPrefs = create<PlaygroundPrefs>()(

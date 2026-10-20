@@ -1,7 +1,7 @@
 /**
  * App theme: two independent axes.
  *   - `mode`   — light / dark / system (system follows prefers-color-scheme).
- *   - `scheme` — accent: blue (default), violet, plum, teal or graphite.
+ *   - `scheme` — accent: blue (default), indigo, violet, plum or teal.
  *
  * Persisted per-device (localStorage) and applied to <html> as the `.dark`
  * class + a `data-scheme` attribute, which the token blocks in index.css key
@@ -14,7 +14,7 @@ import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 
 export type Mode = "light" | "dark" | "system";
-export type Scheme = "blue" | "violet" | "plum" | "teal" | "graphite";
+export type Scheme = "blue" | "indigo" | "violet" | "plum" | "teal";
 
 /**
  * The built-in accent schemes as `--primary` HSL channels, per palette —
@@ -23,22 +23,23 @@ export type Scheme = "blue" | "violet" | "plum" | "teal" | "graphite";
  * from here, so they agree with the real CSS token in light AND dark (a preset
  * that hardcoded one mode's value wouldn't match the built-in in the other).
  */
-export const SCHEME_ACCENTS: Record<Scheme, { light: string; dark: string }> = {
-  blue: { light: "226 70% 52%", dark: "225 81% 69%" },
-  violet: { light: "254 71% 59%", dark: "252 85% 74%" },
-  plum: { light: "313 62% 48%", dark: "313 75% 68%" },
-  teal: { light: "180 81% 29%", dark: "179 52% 50%" },
-  graphite: { light: "218 16% 45%", dark: "217 18% 76%" },
-};
-
-/** Display order and labels for the accent picker. */
-export const SCHEMES: { id: Scheme; label: string }[] = [
-  { id: "blue", label: "Blue" },
-  { id: "violet", label: "Violet" },
-  { id: "plum", label: "Plum" },
-  { id: "teal", label: "Teal" },
-  { id: "graphite", label: "Graphite" },
+/** Picker order, labels and `--primary` channels per palette. */
+export const SCHEMES: {
+  id: Scheme;
+  label: string;
+  light: string;
+  dark: string;
+}[] = [
+  { id: "blue", label: "Blue", light: "226 70% 52%", dark: "225 81% 69%" },
+  { id: "indigo", label: "Indigo", light: "236 48% 42%", dark: "234 70% 76%" },
+  { id: "violet", label: "Violet", light: "254 71% 59%", dark: "252 85% 74%" },
+  { id: "plum", label: "Plum", light: "313 62% 48%", dark: "313 75% 68%" },
+  { id: "teal", label: "Teal", light: "180 81% 29%", dark: "179 52% 50%" },
 ];
+
+export const SCHEME_ACCENTS = Object.fromEntries(
+  SCHEMES.map(({ id, light, dark }) => [id, { light, dark }]),
+) as Record<Scheme, { light: string; dark: string }>;
 
 /** The `--primary` channels for a scheme in the currently-resolved palette. */
 export function schemeAccent(scheme: Scheme, dark: boolean): string {

@@ -13,7 +13,7 @@ describe("playground prefs migration", () => {
       names: { p1: "Maya" },
     });
     expect(migrate({ accent: "262 70% 58%", names: {} }, 0)).toMatchObject({
-      accent: SCHEME_ACCENTS.violet.light,
+      accent: SCHEME_ACCENTS.violet.dark,
     });
   });
 
