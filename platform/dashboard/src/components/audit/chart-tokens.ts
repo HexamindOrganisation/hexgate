@@ -21,7 +21,7 @@ export const OUT_LABEL: Record<AuditOutcome, string> = {
 // Legend-swatch background classes. Static map — Tailwind's scanner can't
 // see interpolated class names like `bg-${k}`.
 export const OUT_SWATCH: Record<AuditOutcome, string> = {
-  allow: "bg-allow",
+  allow: "bg-allow-soft",
   deny: "bg-deny",
   needs_approval: "bg-approval",
 };

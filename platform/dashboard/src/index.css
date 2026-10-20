@@ -100,7 +100,7 @@
   /* Deny is the only loud colour; allow is a quiet neutral that still reads
      as text (~4.5:1 on white). */
   --semantic-allow: 214 16% 49%;
-  --semantic-allow-soft: 214 26% 83%;
+  --semantic-allow-soft: 214 22% 74%;
   --semantic-deny: 14 84% 43%;
   --semantic-deny-soft: 17 85% 92%;
   --semantic-approval: 39 82% 49%;
@@ -174,7 +174,7 @@
   --success: 152 58% 48%;
 
   --semantic-allow: 217 15% 62%;
-  --semantic-allow-soft: 217 24% 23%;
+  --semantic-allow-soft: 217 20% 32%;
   --semantic-deny: 14 76% 53%;
   --semantic-deny-soft: 14 49% 15%;
   --semantic-approval: 39 86% 59%;

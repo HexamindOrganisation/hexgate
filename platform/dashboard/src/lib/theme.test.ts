@@ -1,7 +1,4 @@
-/// <reference types="node" />
-import { afterEach, describe, expect, it, vi } from "vitest";
-
-import { readFileSync } from "node:fs";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { applyTheme, isDark, SCHEME_ACCENTS, SCHEMES, useTheme } from "./theme";
 
@@ -68,8 +65,19 @@ describe("useTheme store", () => {
 describe("SCHEME_ACCENTS", () => {
   // The swatches read SCHEME_ACCENTS; the real token comes from index.css.
   // They must agree or a dot shows a colour the app never paints.
-  // Read from disk: Vitest stubs CSS imports, `?raw` included.
-  const css = readFileSync("src/index.css", "utf8");
+  // Read from disk: Vitest stubs CSS imports, `?raw` included. node:fs is
+  // loaded by name so the app tsconfig needn't pull in Node types, and the
+  // path hangs off this file so the cwd doesn't matter.
+  let css = "";
+  beforeAll(async () => {
+    const fs = "node:fs";
+    const { readFileSync } = await import(/* @vite-ignore */ fs);
+    const here = expect.getState().testPath ?? "";
+    css = readFileSync(
+      here.replace(/lib\/theme\.test\.ts$/, "index.css"),
+      "utf8",
+    );
+  });
   const primaryIn = (selector: string): string | undefined => {
     const start = css.indexOf(`\n${selector} {`);
     if (start < 0) return undefined;
