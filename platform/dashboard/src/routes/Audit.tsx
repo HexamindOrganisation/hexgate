@@ -18,10 +18,16 @@ import { DashboardRangePicker } from "@/components/ui/dashboard-range-picker";
 import { type ChartBucket, StackedBars } from "@/components/ui/charts";
 import { StatStrip } from "@/components/ui/stat-strip";
 import { AuditOnboarding } from "@/components/audit/onboarding";
+import {
+  bucketMinutesFor,
+  fillBuckets,
+  timeWindow,
+} from "@/components/audit/buckets";
 import { type Counts, DecisionBadge } from "@/components/audit/charts";
 import {
   displayNoValue,
   OUT_LABEL,
+  OUT_SWATCH,
   OUTCOME_SERIES,
   scopeNoValue,
 } from "@/components/audit/chart-tokens";
@@ -515,16 +521,21 @@ export function AuditPage() {
       }
     : ZERO_COUNTS;
 
-  // The server sizes buckets by span (e.g. 6 h over 7 days), so read the
-  // width off the data rather than the preset.
-  const bucketMinutes = useMemo(() => {
-    const d = tsQ.data;
-    if (!d || d.length < 2) return 1440;
-    return Math.round((+new Date(d[1].bucket) - +new Date(d[0].bucket)) / 6e4);
-  }, [tsQ.data]);
+  // The server sizes buckets by span (e.g. 6 h over 7 days) and omits empty
+  // ones; mirror its rule and refill the gaps.
+  const { from: winFrom, to: winTo } = useMemo(
+    () => timeWindow(f.range, f.start_date, f.end_date),
+    // Recomputed with each fetch so "now" follows the 30s refresh.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [f.range, f.start_date, f.end_date, tsQ.dataUpdatedAt],
+  );
+  const bucketMinutes = bucketMinutesFor(+winTo - +winFrom);
   const days: ChartBucket[] = useMemo(
     () =>
-      (tsQ.data ?? []).map((p) => ({
+      (tsQ.data
+        ? fillBuckets(tsQ.data, winFrom, winTo, bucketMinutes)
+        : []
+      ).map((p) => ({
         label: new Date(p.bucket),
         mode: bucketMinutes >= 1440 ? "day" : "hour",
         values: {
@@ -534,7 +545,7 @@ export function AuditPage() {
         },
         total: p.allow + p.deny + p.needs_approval,
       })),
-    [tsQ.data, bucketMinutes],
+    [tsQ.data, winFrom, winTo, bucketMinutes],
   );
   const spark = useMemo(
     () => ({
@@ -697,7 +708,7 @@ export function AuditPage() {
                 {
                   key: "deny",
                   label: "Denied",
-                  swatchClass: "bg-deny",
+                  swatchClass: OUT_SWATCH.deny,
                   value: counts.deny.toLocaleString(),
                   valueClass: "text-deny",
                   sub: `${denyRate}% deny rate`,
@@ -709,7 +720,7 @@ export function AuditPage() {
                 {
                   key: "needs_approval",
                   label: "Needs approval",
-                  swatchClass: "bg-approval",
+                  swatchClass: OUT_SWATCH.needs_approval,
                   value: counts.needs_approval.toLocaleString(),
                   valueClass: "text-approval",
                   sub: `${apprPct}% of decisions`,
@@ -721,7 +732,7 @@ export function AuditPage() {
                 {
                   key: "allow",
                   label: "Allowed",
-                  swatchClass: "bg-allow-fill",
+                  swatchClass: OUT_SWATCH.allow,
                   value: counts.allow.toLocaleString(),
                   sub: `${allowPct}% of decisions`,
                   spark: spark.allow,
@@ -731,16 +742,16 @@ export function AuditPage() {
                 },
               ]}
               split={[
-                { key: "deny", value: counts.deny, className: "bg-deny" },
+                { key: "deny", value: counts.deny, className: OUT_SWATCH.deny },
                 {
                   key: "needs_approval",
                   value: counts.needs_approval,
-                  className: "bg-approval",
+                  className: OUT_SWATCH.needs_approval,
                 },
                 {
                   key: "allow",
                   value: counts.allow,
-                  className: "bg-allow-fill",
+                  className: OUT_SWATCH.allow,
                 },
               ]}
             />

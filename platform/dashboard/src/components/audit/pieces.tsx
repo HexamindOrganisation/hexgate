@@ -31,7 +31,8 @@ import { Sparkline } from "@/components/ui/charts";
 import { cn } from "@/lib/utils";
 import { BreakdownCardShell } from "@/components/ui/breakdown-card";
 import { BreakdownBar, type BreakdownDatum } from "./charts";
-import { OUT_LABEL, OUTCOME_SERIES } from "./chart-tokens";
+import { fmtClock } from "./fmt";
+import { OUT_LABEL, OUT_SWATCH, OUTCOME_SERIES } from "./chart-tokens";
 
 // Map a server breakdown row ({key, all, ...}) to the chart datum ({total, ...}).
 const toDatum = (r: AuditBreakdownRow): BreakdownDatum => ({
@@ -309,43 +310,35 @@ function RolesCell({ roles }: { roles: string[] }) {
 }
 
 // ————————————————————————————————————————————— Events table
-const OUTCOME_TONE: Record<AuditOutcome, { text: string; swatch: string }> = {
-  deny: { text: "text-deny", swatch: "bg-deny" },
-  needs_approval: { text: "text-approval", swatch: "bg-approval" },
-  allow: { text: "text-muted-foreground", swatch: "bg-allow-fill" },
+const OUTCOME_TEXT: Record<AuditOutcome, string> = {
+  deny: "text-deny",
+  needs_approval: "text-approval",
+  allow: "text-muted-foreground",
 };
 
 /** Swatch + label; the log's quiet alternative to the pill badge. */
 function OutcomeLabel({ d }: { d: AuditOutcome }) {
-  const t = OUTCOME_TONE[d];
   return (
-    <span className={cn("flex items-center gap-1.5 font-semibold", t.text)}>
-      <span className={cn("size-2 shrink-0 rounded-sm", t.swatch)} />
+    <span
+      className={cn("flex items-center gap-1.5 font-semibold", OUTCOME_TEXT[d])}
+    >
+      <span className={cn("size-2 shrink-0 rounded-sm", OUT_SWATCH[d])} />
       {OUT_LABEL[d]}
     </span>
   );
 }
 
-/** `(k=v, …)` for the log row; the drawer shows the full arguments. */
+/** `(k=v, …)` for the log row, capped so a huge argument can't flood the
+ * DOM; the drawer shows the full arguments. */
 function argsPreview(args: unknown): string {
   if (args == null || typeof args !== "object") return "";
-  const parts = Object.entries(args as Record<string, unknown>).map(
-    ([k, v]) => `${k}=${JSON.stringify(v)}`,
-  );
-  return parts.length ? `(${parts.join(", ")})` : "";
+  const clip = (t: string, n: number) =>
+    t.length > n ? t.slice(0, n - 1) + "…" : t;
+  const parts = Object.entries(args as Record<string, unknown>)
+    .slice(0, 6)
+    .map(([k, v]) => `${k}=${clip(JSON.stringify(v) ?? "", 40)}`);
+  return parts.length ? clip(`(${parts.join(", ")})`, 160) : "";
 }
-
-// h23, not hour12:false: Chromium renders midnight as "24:mm" with the latter.
-// Milliseconds kept so calls within one second stay apart.
-const fmtTime = (d: Date) =>
-  d.toLocaleTimeString("en-US", {
-    hourCycle: "h23",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  }) +
-  "." +
-  String(d.getMilliseconds()).padStart(3, "0");
 
 function dayLabel(d: Date, now = new Date()): string {
   const day = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate());
@@ -443,7 +436,7 @@ export function EventsTable({
                   )}
                 >
                   <span className="font-mono text-xs text-muted-foreground">
-                    {fmtTime(new Date(e.occurred_at))}
+                    {fmtClock(new Date(e.occurred_at))}
                   </span>
                   <OutcomeLabel d={e.outcome} />
                   <span className="truncate font-mono">
@@ -516,7 +509,7 @@ function fmtBurst(first: string, last: string): string {
     d.toLocaleTimeString("en-US", {
       hour: "2-digit",
       minute: "2-digit",
-      hour12: false,
+      hourCycle: "h23",
     });
   return date(f) === date(l)
     ? `${date(f)}, ${time(f)} → ${time(l)}`
@@ -548,7 +541,18 @@ export function AnomaliesCard({
   onBanUser?: (userId: string) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
-  const shown = expanded ? rows : rows.slice(0, ANOMALIES_SHOWN);
+  // The API orders by user; rank by severity, then deny rate, so the
+  // folded tail never hides a worse burst.
+  const ranked = useMemo(
+    () =>
+      [...rows].sort(
+        (a, b) =>
+          Number(b.severity === "high") - Number(a.severity === "high") ||
+          b.deny_rate - a.deny_rate,
+      ),
+    [rows],
+  );
+  const shown = expanded ? ranked : ranked.slice(0, ANOMALIES_SHOWN);
   return (
     <section aria-label="Anomalies" className="space-y-2">
       <div className="flex items-center gap-3 text-caption font-semibold uppercase tracking-wider text-muted-foreground">

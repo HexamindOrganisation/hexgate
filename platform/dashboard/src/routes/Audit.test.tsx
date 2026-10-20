@@ -1154,6 +1154,22 @@ describe("AuditPage", () => {
       expect(screen.getByText("e")).toBeInTheDocument();
     });
 
+    it("never folds a high-severity burst behind medium ones", async () => {
+      stubFetch([
+        ...["a", "b", "c"].map((u) => ({
+          ...ANOMALY,
+          user_id: u,
+          severity: "medium" as const,
+        })),
+        { ...ANOMALY, user_id: "zed" },
+      ]);
+      renderWithProviders(<AuditPage />);
+      expect(await screen.findByText("zed")).toBeInTheDocument();
+      expect(
+        screen.getByRole("button", { name: "Show 1 more" }),
+      ).toBeInTheDocument();
+    });
+
     it("renders a Medium badge for medium-severity anomalies", async () => {
       stubFetch([{ ...ANOMALY, severity: "medium" }]);
       renderWithProviders(<AuditPage />);
