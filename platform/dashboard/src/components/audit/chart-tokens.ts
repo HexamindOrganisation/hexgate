@@ -50,20 +50,17 @@ export const OUTCOME_SERIES: ChartSeries[] = [
     label: OUT_LABEL.allow,
     color: CHART_COLORS.allow,
     swatchClass: OUT_SWATCH.allow,
-    fillOpacity: 0.7,
   },
   {
     key: "needs_approval",
     label: OUT_LABEL.needs_approval,
     color: CHART_COLORS.needs_approval,
     swatchClass: OUT_SWATCH.needs_approval,
-    fillOpacity: 0.4,
   },
   {
     key: "deny",
     label: OUT_LABEL.deny,
     color: CHART_COLORS.deny,
     swatchClass: OUT_SWATCH.deny,
-    fillOpacity: 0.55,
   },
 ];
