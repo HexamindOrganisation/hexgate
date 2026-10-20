@@ -4,7 +4,7 @@ import type { ChartSeries } from "@/components/ui/charts";
 // Shared palette (--semantic-* tokens). Separate module so charts.tsx exports
 // only components (react-refresh).
 export const CHART_COLORS = {
-  allow: "hsl(var(--semantic-allow-soft))",
+  allow: "hsl(var(--semantic-allow-fill))",
   deny: "hsl(var(--semantic-deny))",
   needs_approval: "hsl(var(--semantic-approval))",
   primary: "hsl(var(--primary))",
@@ -21,7 +21,7 @@ export const OUT_LABEL: Record<AuditOutcome, string> = {
 // Legend-swatch background classes. Static map — Tailwind's scanner can't
 // see interpolated class names like `bg-${k}`.
 export const OUT_SWATCH: Record<AuditOutcome, string> = {
-  allow: "bg-allow-soft",
+  allow: "bg-allow-fill",
   deny: "bg-deny",
   needs_approval: "bg-approval",
 };
@@ -50,7 +50,7 @@ export const OUTCOME_SERIES: ChartSeries[] = [
     label: OUT_LABEL.allow,
     color: CHART_COLORS.allow,
     swatchClass: OUT_SWATCH.allow,
-    fillOpacity: 0.16,
+    fillOpacity: 0.7,
   },
   {
     key: "needs_approval",

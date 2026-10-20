@@ -7,7 +7,7 @@
  *
  * The surface (`background`) is `hsl(var(--editor))`, which is mode-aware, so
  * the editor ground tracks the `bg-editor` panes around it. Caret/selection use
- * `hsl(var(--primary))`, so the blue/plum accent flows through automatically.
+ * `hsl(var(--primary))`, so the chosen accent flows through automatically.
  * Semantic `.cm-policy-*` colors come from `--semantic-*`, matching the badges.
  */
 import { EditorView } from "@codemirror/view";
@@ -50,7 +50,7 @@ const recolor = (map: Record<string, string>) =>
   }));
 
 // Chrome overrides per mode. Caret/selection use the accent var so they follow
-// the blue/plum scheme; the background is the mode-aware editor surface.
+// the accent scheme; the background is the mode-aware editor surface.
 const darkChrome = {
   foreground: "#f8f8f2",
   gutterForeground: "#4a5261",
@@ -87,7 +87,7 @@ function base(
 }
 
 /** Editor chrome (content padding) + semantic decoration colors, mode-agnostic
- * (the `.cm-policy-*` colors are semantic vars, same in both modes). */
+ * (the `.cm-policy-*` colors are semantic vars that resolve per mode). */
 const chromeAndDecorationsTheme = EditorView.theme({
   ".cm-content": { padding: "12px 16px" },
   ".cm-scroller": { fontFamily: "var(--font-mono)" },
