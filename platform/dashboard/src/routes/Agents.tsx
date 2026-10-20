@@ -27,7 +27,7 @@ import { DOC_PATHS } from "@/lib/docs";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { PageHeader } from "@/components/ui/page-header";
-import { useAuditFilters } from "@/lib/audit-filters";
+import { auditUrl } from "@/lib/audit-filters";
 import { useAgentActivity24h } from "@/lib/audit-summary";
 import { pluralise } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -65,7 +65,6 @@ export function AgentsPage() {
   // 24h activity per agent; shares Home's cache entry.
   const { summary, activityOf } = useAgentActivity24h(scope.projectId);
   const activeActivity = active ? activityOf(active.name) : null;
-  const openAudit = useAuditFilters((st) => st.openAudit);
   const canManageBans = useCanManageBans();
 
   if (scope.status === "no-project") {
@@ -209,12 +208,7 @@ export function AgentsPage() {
                     size="sm"
                     className="gap-1.5"
                   >
-                    <Link
-                      to="/audit"
-                      onClick={() =>
-                        openAudit({ agent: active.name, range: "24h" })
-                      }
-                    >
+                    <Link to={auditUrl({ agent: active.name, range: "24h" })}>
                       <ScrollText className="size-3.5" />
                       View decisions
                     </Link>

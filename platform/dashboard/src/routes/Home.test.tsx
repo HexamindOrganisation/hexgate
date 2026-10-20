@@ -1,8 +1,6 @@
 import { act, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import userEvent from "@testing-library/user-event";
-
 import { useActive } from "@/lib/active";
 import { EMPTY_AUDIT_FILTERS, useAuditFilters } from "@/lib/audit-filters";
 import { HomePage } from "@/routes/Home";
@@ -121,6 +119,7 @@ describe("HomePage", () => {
     renderWithProviders(<HomePage />);
     expect(
       await screen.findByRole("link", { name: /Open audit/ }),
+      // Reopens Audit as the user left it; only deep links reset.
     ).toHaveAttribute("href", "/audit");
     await waitFor(() =>
       expect(screen.getByText("7.3% deny rate")).toBeInTheDocument(),
@@ -168,10 +167,7 @@ describe("HomePage", () => {
     expect(screen.queryByText("fresh")).not.toBeInTheDocument();
   });
 
-  it("opens Audit filtered to the burst, not with stale filters", async () => {
-    useAuditFilters.setState((st) => ({
-      filters: { ...st.filters, agent: "billing" },
-    }));
+  it("links a burst to Audit filtered to its user and days", async () => {
     stub({
       "/v1/projects/p1/audit/anomalies": [
         {
@@ -185,13 +181,12 @@ describe("HomePage", () => {
         },
       ],
     });
-    const user = userEvent.setup();
     renderWithProviders(<HomePage />);
-    await user.click(await screen.findByText("u_8f2c41"));
-    const f = useAuditFilters.getState().filters;
-    expect(f.user).toBe("u_8f2c41");
-    expect(f.agent).toBe("");
-    expect(f.customMode).toBe(true);
+    const link = (await screen.findByText("u_8f2c41")).closest("a")!;
+    const params = new URL(link.getAttribute("href")!, "http://x").searchParams;
+    expect(params.get("user")).toBe("u_8f2c41");
+    expect(params.get("from")).not.toBeNull();
+    expect(params.get("agent")).toBeNull();
   });
 
   it("does not call it all clear while signals are still loading", async () => {
