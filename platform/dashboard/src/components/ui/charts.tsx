@@ -93,27 +93,48 @@ export function StackedBars({
       ...new Set(Array.from({ length: want }, (_, i) => Math.round(i * step))),
     ];
   })();
-  const fmt = (b: ChartBucket) =>
-    b.mode === "hour"
+  // Sub-day buckets over several days tick by date; the tooltip always
+  // carries the full time.
+  const spansDays =
+    buckets.length > 1 &&
+    buckets[0].label.toDateString() !== buckets.at(-1)!.label.toDateString();
+  const tick = (b: ChartBucket) =>
+    b.mode === "hour" && !spansDays
       ? b.label
           .toLocaleTimeString("en-US", { hour: "numeric", hour12: true })
           .replace(" ", "")
           .toLowerCase()
       : b.label.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  const full = (b: ChartBucket) =>
+    b.mode === "hour"
+      ? b.label.toLocaleString("en-US", {
+          month: "short",
+          day: "numeric",
+          hour: "numeric",
+          minute: "2-digit",
+        })
+      : b.label.toLocaleDateString("en-US", {
+          weekday: "short",
+          month: "short",
+          day: "numeric",
+        });
   const describe = (b: ChartBucket) =>
-    `${fmt(b)}: ${b.total.toLocaleString()} total, ` +
+    `${full(b)}: ${b.total.toLocaleString()} total, ` +
     series.map((s) => `${b.values[s.key] ?? 0} ${s.label}`).join(", ");
 
   return (
     <div className="w-full">
       <div
-        className="relative flex items-end gap-[3px] border-b border-border"
-        style={{ height }}
+        className="relative flex items-end gap-[3px] border-b border-border pt-5"
+        style={{ height: height + 20 }}
         onMouseLeave={() => setHover(null)}
       >
-        <div className="pointer-events-none absolute inset-x-0 top-0 border-t border-dashed border-border" />
-        <div className="pointer-events-none absolute inset-x-0 top-1/2 border-t border-dashed border-border" />
-        <span className="absolute -top-4 right-0 font-mono text-[11px] text-muted-foreground">
+        <div className="pointer-events-none absolute inset-x-0 top-5 border-t border-dashed border-border" />
+        <div
+          className="pointer-events-none absolute inset-x-0 border-t border-dashed border-border"
+          style={{ top: 20 + height / 2 }}
+        />
+        <span className="absolute right-0 top-0 font-mono text-[11px] text-muted-foreground">
           {max.toLocaleString()}
         </span>
         {buckets.map((b, i) => (
@@ -124,25 +145,26 @@ export function StackedBars({
             onMouseEnter={() => setHover(i)}
             className="relative flex h-full min-w-0 flex-1 flex-col justify-end"
           >
+            {/* The bar is sized to the bucket total; segments share it, so
+                the tallest bar never passes the top line. */}
             <div
-              className={`flex flex-col-reverse gap-px overflow-hidden rounded-t-[3px] transition-opacity ${hover !== null && hover !== i ? "opacity-60" : ""}`}
+              className={`flex flex-col-reverse overflow-hidden rounded-t-[3px] transition-opacity ${hover !== null && hover !== i ? "opacity-60" : ""}`}
+              style={{ height: (b.total / max) * height }}
             >
               {series.map((s) => {
                 const v = b.values[s.key] ?? 0;
                 return v ? (
                   <div
                     key={s.key}
-                    style={{
-                      height: `${(v / max) * height}px`,
-                      background: s.color,
-                    }}
+                    className="border-t border-card first:border-t-0"
+                    style={{ flexGrow: v, flexBasis: 0, background: s.color }}
                   />
                 ) : null;
               })}
             </div>
             {hover === i && (
               <div className="pointer-events-none absolute bottom-full left-1/2 z-10 mb-2 -translate-x-1/2 whitespace-nowrap rounded-lg border border-border bg-popover px-2.5 py-1.5 text-xs shadow-md">
-                <div className="font-medium">{fmt(b)}</div>
+                <div className="font-medium">{full(b)}</div>
                 {[...series].reverse().map((s) => (
                   <div key={s.key} className="flex items-center gap-1.5">
                     <span className={`size-2 rounded-sm ${s.swatchClass}`} />
@@ -161,10 +183,18 @@ export function StackedBars({
         {ticks.map((i) => (
           <span
             key={i}
-            className="absolute -translate-x-1/2 whitespace-nowrap first:translate-x-0 last:-translate-x-full"
-            style={{ left: `${((i + 0.5) / buckets.length) * 100}%` }}
+            className={
+              buckets.length === 1
+                ? "absolute left-1/2 -translate-x-1/2 whitespace-nowrap"
+                : "absolute -translate-x-1/2 whitespace-nowrap first:translate-x-0 last:-translate-x-full"
+            }
+            style={
+              buckets.length === 1
+                ? undefined
+                : { left: `${((i + 0.5) / buckets.length) * 100}%` }
+            }
           >
-            {fmt(buckets[i])}
+            {tick(buckets[i])}
           </span>
         ))}
       </div>
