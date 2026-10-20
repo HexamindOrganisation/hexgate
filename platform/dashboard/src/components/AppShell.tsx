@@ -566,7 +566,7 @@ function AppearanceControl() {
             onClick={() => setMode(m)}
             className={cn(
               "flex h-7 items-center justify-center gap-1.5 rounded-md text-xs font-medium text-muted-foreground transition-colors hover:text-foreground",
-              mode === m && "bg-card text-foreground shadow-xs",
+              mode === m && "bg-raised text-foreground shadow-xs",
             )}
           >
             <Icon className="size-3.5" />

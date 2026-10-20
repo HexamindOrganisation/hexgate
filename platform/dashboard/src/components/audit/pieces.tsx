@@ -103,21 +103,21 @@ export function FilterBar({
         </ToggleGroupItem>
         <ToggleGroupItem
           value="allow"
-          className="text-allow data-[state=on]:bg-allow/15 data-[state=on]:text-allow"
+          className="text-allow data-[state=on]:text-allow"
         >
           <Check className="size-3" strokeWidth={2} />
           allow
         </ToggleGroupItem>
         <ToggleGroupItem
           value="deny"
-          className="text-deny data-[state=on]:bg-deny/15 data-[state=on]:text-deny"
+          className="text-deny data-[state=on]:text-deny"
         >
           <X className="size-3" strokeWidth={2} />
           deny
         </ToggleGroupItem>
         <ToggleGroupItem
           value="needs_approval"
-          className="text-approval data-[state=on]:bg-approval/15 data-[state=on]:text-approval"
+          className="text-approval data-[state=on]:text-approval"
         >
           <CircleDashed className="size-3" strokeWidth={2} />
           approval
