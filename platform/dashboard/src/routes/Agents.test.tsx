@@ -116,10 +116,17 @@ function stubFetch(role: string, manifest: unknown = MANIFEST) {
                 guest: { mode: "deny", constraint: null },
                 support: { mode: "allow", constraint: "args.amount <= 50" },
               },
+              // An unlisted manifest tool: the server's fallback cells.
+              ...(url.searchParams.getAll("tool").includes("lookup") && {
+                lookup: {
+                  guest: { mode: "deny", constraint: null },
+                  support: { mode: "allow", constraint: "user.tier == 1" },
+                },
+              }),
             },
             defaults: {
               guest: { mode: "deny", constraint: null },
-              support: { mode: "deny", constraint: null },
+              support: { mode: "allow", constraint: "user.tier == 1" },
             },
             aliased_default: null,
           });
@@ -200,10 +207,14 @@ describe("AgentsPage — ban tie-in", () => {
     expect(
       await screen.findByTitle("support: args.amount <= 50"),
     ).toHaveTextContent("support allow*");
-    // A manifest tool the policy doesn't list takes each role's default.
+    // A manifest tool the policy doesn't list takes the engine's fallback,
+    // role-wide constraint included.
     expect(
-      screen.getAllByTitle("guest: not listed, default applies")[0],
+      screen.getByTitle("guest: not listed, default applies"),
     ).toHaveTextContent("guest deny");
+    expect(
+      screen.getByTitle("support: not listed, default applies, user.tier == 1"),
+    ).toHaveTextContent("support allow*");
   });
 
   it("shows the agent's last 24 hours", async () => {

@@ -77,10 +77,16 @@ export function AgentsPage() {
   // Only projects with a policy.yaml compose; others have no matrix.
   const policyFiles = usePolicyFiles(scope.projectId);
   const modular = !!policyFiles.data?.some((f) => f.name === ENTRY_FILE);
+  // Manifest tools the policy doesn't list get the engine's fallback too.
+  const toolNames = useMemo(
+    () => active?.manifest?.tools?.map((t) => t.name) ?? [],
+    [active],
+  );
   const matrix = usePolicyMatrix(
     scope.projectId,
     active?.name ?? "",
     modular && !!active,
+    toolNames,
   ).data;
   const roleModes = useMemo(() => {
     if (!matrix) return undefined;
@@ -89,9 +95,9 @@ export function AgentsPage() {
         const cell = matrix.cells[tool]?.[role];
         return {
           role,
-          mode: (cell ?? matrix.defaults[role])?.mode,
+          mode: cell?.mode,
           constraint: cell?.constraint ?? null,
-          defaulted: !cell,
+          defaulted: !matrix.tools.includes(tool),
         };
       });
   }, [matrix]);
@@ -562,6 +568,12 @@ function SystemPromptSection({
   );
 }
 
+function chipTitle(r: RoleMode): string | undefined {
+  const notes = [r.defaulted && "not listed, default applies", r.constraint];
+  const text = notes.filter(Boolean).join(", ");
+  return text ? `${r.role}: ${text}` : undefined;
+}
+
 function ToolRow({
   tool,
   roles,
@@ -578,13 +590,7 @@ function ToolRow({
             {roles.map((r) => (
               <span
                 key={r.role}
-                title={
-                  r.defaulted
-                    ? `${r.role}: not listed, default applies`
-                    : r.constraint
-                      ? `${r.role}: ${r.constraint}`
-                      : undefined
-                }
+                title={chipTitle(r)}
                 className={cn(
                   "rounded-md px-2 py-0.5 text-[11px] font-medium",
                   r.mode ? MATRIX_MODE_TONE[r.mode] : "text-muted-foreground",
