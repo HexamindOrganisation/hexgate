@@ -27,10 +27,10 @@ import {
   scopeNoValue,
 } from "@/components/audit/chart-tokens";
 import {
-  type AuditFilters as Filters,
   EMPTY_AUDIT_FILTERS,
   fromAuditSearch,
   pageLimitFor,
+  type SetAuditFilters,
   toAuditSearch,
   useAuditFilters,
   withAuditFilters,
@@ -128,7 +128,7 @@ function DetailDrawer({
   projectId: string | null;
   onClose: () => void;
   onSelect: (e: AuditDecisionRow) => void;
-  setF: (u: (p: Filters) => Filters) => void;
+  setF: SetAuditFilters;
 }) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
@@ -427,7 +427,9 @@ export function AuditPage() {
   // a shared URL opens the same slice and the first render already queries
   // it. A bare /audit (the sidebar) is redirected to the last view.
   const [params, setParams] = useSearchParams();
-  const lastSearch = useAuditFilters((s) => s.lastSearch);
+  const lastSearch = useAuditFilters(
+    (s) => (projectId && s.lastSearch[projectId]) || "",
+  );
   const remember = useAuditFilters((s) => s.remember);
   const urlFilters = useMemo(() => fromAuditSearch(params), [params]);
   const f = useMemo(
@@ -439,17 +441,22 @@ export function AuditPage() {
   );
   const viewKey = toAuditSearch(f).toString();
   useEffect(() => {
-    if (urlFilters) remember(viewKey);
-    else setParams((prev) => withAuditFilters(prev, f), { replace: true });
-  }, [urlFilters, viewKey, f, remember, setParams]);
+    // Rewrite a bare /audit to the last view, and a malformed URL to what
+    // the page actually shows, so a copied link matches the screen.
+    // Wait for the project: the remembered view is per project.
+    if (!projectId) return;
+    if (params.toString() !== withAuditFilters(params, f).toString())
+      setParams((prev) => withAuditFilters(prev, f), { replace: true });
+    if (urlFilters) remember(projectId, viewKey);
+  }, [urlFilters, viewKey, f, params, projectId, remember, setParams]);
   // Calls in one event compose: each builds on the previous one's result,
   // not on the render's `f`.
   const latest = useRef(f);
   useEffect(() => {
     latest.current = f;
   }, [f]);
-  const setF = useCallback(
-    (update: (p: Filters) => Filters) => {
+  const setF: SetAuditFilters = useCallback(
+    (update) => {
       latest.current = update(latest.current);
       const next = latest.current;
       setParams((prev) => withAuditFilters(prev, next), { replace: true });

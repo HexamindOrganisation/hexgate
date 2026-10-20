@@ -47,9 +47,11 @@ const PAGE_SIZE = 40;
 const MAX_LIMIT = 200;
 
 interface AuditFilterState {
-  /** Query string of the last Audit view; a bare /audit reopens it. */
-  lastSearch: string;
-  remember: (search: string) => void;
+  /** Query string of the last Audit view per project; a bare /audit
+   * reopens the active project's. */
+  lastSearch: Record<string, string>;
+  /** Record the current view; a different view also restarts paging. */
+  remember: (projectId: string, search: string) => void;
   /** Rows loaded for the view `pageKey` — any other view starts at one page. */
   pageKey: string;
   pageLimit: number;
@@ -57,8 +59,17 @@ interface AuditFilterState {
 }
 
 export const useAuditFilters = create<AuditFilterState>()((set) => ({
-  lastSearch: "",
-  remember: (search) => set({ lastSearch: search }),
+  lastSearch: {},
+  remember: (projectId, search) =>
+    set((s) =>
+      s.lastSearch[projectId] === search
+        ? s
+        : {
+            lastSearch: { ...s.lastSearch, [projectId]: search },
+            pageKey: "",
+            pageLimit: PAGE_SIZE,
+          },
+    ),
   pageKey: "",
   pageLimit: PAGE_SIZE,
   loadMore: (key) =>
@@ -118,11 +129,12 @@ export function fromAuditSearch(p: URLSearchParams): AuditFilters | null {
   if (outcome && (OUTCOMES as readonly string[]).includes(outcome))
     f.outcome = outcome as AuditOutcome;
   const from = parseDay(p.get("from"));
-  const to = parseDay(p.get("to"));
+  // An end only counts with a start before it: the page shows a custom range
+  // by its start, so a lone or reversed end would be a hidden filter.
+  const to = from && parseDay(p.get("to"));
   if (from) f.start_date = startOfDay(from);
-  if (to) f.end_date = endOfDay(to);
-  // Any date makes it a custom range, so a date filter is never hidden.
-  f.customMode = p.get("custom") === "1" || !!from || !!to;
+  if (to && to >= from) f.end_date = endOfDay(to);
+  f.customMode = p.get("custom") === "1" || !!from;
   return f;
 }
 
