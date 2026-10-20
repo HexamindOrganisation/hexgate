@@ -318,7 +318,7 @@ const OUTCOME_TEXT: Record<AuditOutcome, string> = {
 };
 
 /** Swatch + label; the log's quiet alternative to the pill badge. */
-function OutcomeLabel({ d }: { d: AuditOutcome }) {
+export function OutcomeLabel({ d }: { d: AuditOutcome }) {
   return (
     <span
       className={cn("flex items-center gap-1.5 font-semibold", OUTCOME_TEXT[d])}
@@ -331,7 +331,7 @@ function OutcomeLabel({ d }: { d: AuditOutcome }) {
 
 /** `(k=v, …)` for the log row, capped so a huge argument can't flood the
  * DOM; the drawer shows the full arguments. */
-function argsPreview(args: unknown): string {
+export function argsPreview(args: unknown): string {
   if (args == null || typeof args !== "object") return "";
   const clip = (t: string, n: number) =>
     t.length > n ? t.slice(0, n - 1) + "…" : t;
