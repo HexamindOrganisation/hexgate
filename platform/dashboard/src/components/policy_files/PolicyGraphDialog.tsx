@@ -85,7 +85,15 @@ type NodeData = { label: string; kind: string };
 type EdgeData = Pick<
   PolicyGraphEdge,
   "kind" | "via" | "verdict" | "constraints" | "roles"
->;
+> & {
+  /** Points the edge passes through (layout coordinates), so it routes
+   * around nodes it doesn't touch. */
+  bends?: { x: number; y: number }[];
+};
+
+// HexNode's box; layout positions are node centres.
+const HEX_W = 136;
+const HEX_H = 118;
 
 // The hover-focus state is passed through CONTEXT, not through node/edge data,
 // so the nodes/edges arrays stay stable on hover — recomputing them (and the
@@ -140,7 +148,7 @@ function HexNode({ id, data }: NodeProps<Node<NodeData>>) {
   const tag = dim ? DIM.tag : k.tag;
   const glow = hovered ? 20 : dim ? 0 : 6;
   return (
-    <div className="relative" style={{ width: 136, height: 118 }}>
+    <div className="relative" style={{ width: HEX_W, height: HEX_H }}>
       <Handle type="target" position={Position.Left} style={centerHandle} />
       <svg
         width="136"
@@ -201,6 +209,38 @@ function HexNode({ id, data }: NodeProps<Node<NodeData>>) {
 
 /** Verdict-colored bezier edge with a small kind/via label. Deny + handoff
  * render dashed; a denied edge is dimmed. */
+// Stop the visible path at the target node's border so the arrowhead sits on
+// the edge, not hidden under the node centre.
+const ARROW_GAP = 60;
+
+type EdgeGeometry = { path: string; labelX: number; labelY: number };
+
+/** Through any bend points with horizontal tangents, so an edge leaves and
+ * enters its nodes level and runs level through each lane. The label sits on
+ * the first bend, or midway when there is none. */
+function bentPath(points: { x: number; y: number }[]): EdgeGeometry {
+  const last = points[points.length - 1];
+  const before = points[points.length - 2];
+  const dist = Math.hypot(last.x - before.x, last.y - before.y) || 1;
+  const end = {
+    x: last.x - ((last.x - before.x) / dist) * ARROW_GAP,
+    y: last.y - ((last.y - before.y) / dist) * ARROW_GAP,
+  };
+  const pts = [...points.slice(0, -1), end];
+  let path = `M${pts[0].x},${pts[0].y}`;
+  for (let k = 1; k < pts.length; k++) {
+    const p = pts[k - 1];
+    const q = pts[k];
+    const mx = (p.x + q.x) / 2;
+    path += ` C${mx},${p.y} ${mx},${q.y} ${q.x},${q.y}`;
+  }
+  const mid =
+    points.length > 2
+      ? points[1]
+      : { x: (pts[0].x + end.x) / 2, y: (pts[0].y + end.y) / 2 };
+  return { path, labelX: mid.x, labelY: mid.y };
+}
+
 function PolicyEdge({
   id,
   source,
@@ -217,31 +257,11 @@ function PolicyEdge({
   const dimmed = focus.activeEdges ? !focus.activeEdges.has(idx) : false;
   const hovered = focus.hoverEdge === idx;
   const inFocus = focus.activeEdges ? focus.activeEdges.has(idx) : true;
-  const dx = targetX - sourceX;
-  const dy = targetY - sourceY;
-  const dist = Math.hypot(dx, dy) || 1;
-  const ux = dx / dist;
-  const uy = dy / dist;
-  // Stop the visible path at the target node's border so the arrowhead sits on
-  // the edge, not hidden under the node center.
-  const gap = 60;
-  const tX = targetX - ux * gap;
-  const tY = targetY - uy * gap;
-  // A cubic bezier bowed perpendicular to the line. The bow side alternates by
-  // the edge's index parity, so parallel-ish edges don't all curve the same way
-  // (and a reversed pair bows the other side, since its direction flips).
-  const side = idx % 2 === 0 ? 1 : -1;
-  const nx = -uy * side;
-  const ny = ux * side;
-  const bow = 0.16 * dist;
-  const c1x = sourceX + (tX - sourceX) / 3 + nx * bow;
-  const c1y = sourceY + (tY - sourceY) / 3 + ny * bow;
-  const c2x = sourceX + (2 * (tX - sourceX)) / 3 + nx * bow;
-  const c2y = sourceY + (2 * (tY - sourceY)) / 3 + ny * bow;
-  const path = `M${sourceX},${sourceY} C${c1x},${c1y} ${c2x},${c2y} ${tX},${tY}`;
-  // Label at the bezier midpoint, B(0.5).
-  const labelX = 0.125 * sourceX + 0.375 * c1x + 0.375 * c2x + 0.125 * tX;
-  const labelY = 0.125 * sourceY + 0.375 * c1y + 0.375 * c2y + 0.125 * tY;
+  const { path, labelX, labelY } = bentPath([
+    { x: sourceX, y: sourceY },
+    ...(data?.bends ?? []),
+    { x: targetX, y: targetY },
+  ]);
   const color = VERDICT[data?.verdict ?? "allow"] ?? "#8a93a3";
   const dashed = data?.verdict === "deny" || data?.via === "handoff";
   const label =
@@ -332,18 +352,25 @@ const COLUMN_PREFIX = "column:";
 const verdictLabel = (v: string) =>
   v === "approval_required" ? "approval" : v;
 
-function VerdictTag({ edge }: { edge: PolicyGraphEdge }) {
+/** A verdict chip; `constraints` add a "*" with the conditions on hover. */
+function VerdictTag({
+  verdict,
+  constraints = [],
+}: {
+  verdict: string;
+  constraints?: string[];
+}) {
   return (
     <span
       className="shrink-0 rounded px-1.5 py-0.5 text-[9px] uppercase tracking-wider"
-      title={edge.constraints.join(" ∧ ") || undefined}
+      title={constraints.join(" ∧ ") || undefined}
       style={{
-        color: VERDICT[edge.verdict],
-        border: `1px solid ${VERDICT[edge.verdict]}66`,
+        color: VERDICT[verdict],
+        border: `1px solid ${VERDICT[verdict]}66`,
       }}
     >
-      {verdictLabel(edge.verdict)}
-      {edge.constraints.length > 0 && " *"}
+      {verdictLabel(verdict)}
+      {constraints.length > 0 && " *"}
     </span>
   );
 }
@@ -373,7 +400,7 @@ function EdgeList({
                 <span className="text-muted-foreground"> · {e.via}</span>
               )}
             </span>
-            <VerdictTag edge={e} />
+            <VerdictTag verdict={e.verdict} constraints={e.constraints} />
           </li>
         ))}
       </ul>
@@ -651,23 +678,25 @@ function PolicyFlow({ graph }: { graph: PolicyGraph }) {
     };
   }, [pinned, hover, graph, adj]);
 
-  // Stable across hover (depend only on graph/pos), so React Flow doesn't
-  // regenerate markers or thrash edge mouse events.
+  // Stable across hover (depend only on graph and its layout), so React Flow
+  // doesn't regenerate markers or thrash edge mouse events.
   const nodes: Node<NodeData>[] = useMemo(
     () => [
       ...lay.columns.map((c, i) => ({
         id: `${COLUMN_PREFIX}${i}`,
         type: "column",
-        position: { x: c.x, y: -90 },
+        position: { x: c.x - HEX_W / 2, y: c.top - 40 },
         data: { label: c.title, kind: "column" },
         draggable: false,
         selectable: false,
-        style: { pointerEvents: "none" as const },
       })),
       ...graph.nodes.map((n) => ({
         id: n.id,
         type: "hex",
-        position: lay.pos[n.id] ?? { x: 0, y: 0 },
+        position: {
+          x: (lay.pos[n.id]?.x ?? 0) - HEX_W / 2,
+          y: (lay.pos[n.id]?.y ?? 0) - HEX_H / 2,
+        },
         data: { label: n.label, kind: n.kind },
         draggable: false,
       })),
@@ -694,9 +723,10 @@ function PolicyFlow({ graph }: { graph: PolicyGraph }) {
           verdict: e.verdict,
           constraints: e.constraints,
           roles: e.roles,
+          bends: lay.bends[i],
         },
       })),
-    [graph],
+    [graph, lay],
   );
 
   const ctxValue = useMemo<FocusValue>(
@@ -792,7 +822,7 @@ function PolicyFlow({ graph }: { graph: PolicyGraph }) {
                   className="inline-block h-2 w-4 rounded"
                   style={{ background: VERDICT[v] }}
                 />
-                {v === "approval_required" ? "approval" : v}
+                {verdictLabel(v)}
               </span>
             ))}
             <span className="text-muted-foreground/40">·</span>
@@ -836,17 +866,7 @@ function PolicyFlow({ graph }: { graph: PolicyGraph }) {
           <Panel position="bottom-right">
             <div className="w-64 rounded-lg border border-border bg-card/95 p-3 font-mono text-[11px] text-foreground shadow-xl backdrop-blur">
               <div className="mb-2 flex items-center justify-between">
-                <span
-                  className="rounded px-1.5 py-0.5 text-[9px] uppercase tracking-wider"
-                  style={{
-                    color: VERDICT[selected.verdict],
-                    border: `1px solid ${VERDICT[selected.verdict]}66`,
-                  }}
-                >
-                  {selected.verdict === "approval_required"
-                    ? "approval"
-                    : selected.verdict}
-                </span>
+                <VerdictTag verdict={selected.verdict} />
                 <button
                   onClick={() => setSelected(null)}
                   className="text-muted-foreground hover:text-foreground"

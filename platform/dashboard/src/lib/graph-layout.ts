@@ -1,6 +1,9 @@
 /**
  * Layered layout for the policy graph: roles, then agents (one column per
- * reach hop, so agent-as-tool chains read left to right), then tools.
+ * permitted reach hop, so agent-as-tool chains read left to right), then
+ * tools. An edge that spans columns bends through a reserved slot in each
+ * column it crosses, and one within a column loops out to its right, so no
+ * edge runs under a node it doesn't touch.
  * Pure and deterministic, so it's testable without React Flow.
  */
 
@@ -8,137 +11,187 @@ import type { PolicyGraph } from "./api";
 
 export const COL_W = 300;
 export const ROW_H = 150;
+/** Height of a bend slot: a lane an edge passes through. */
+const BEND_H = 32;
+
+type Point = { x: number; y: number };
 
 export interface LayeredLayout {
-  pos: Record<string, { x: number; y: number }>;
+  /** Centre of each node. */
+  pos: Record<string, Point>;
   /** Column index per node. */
   col: Record<string, number>;
-  /** Heading and x per non-empty column, left to right. */
-  columns: { title: string; x: number }[];
+  /** Heading, x and top of each non-empty column, left to right. */
+  columns: { title: string; x: number; top: number }[];
+  /** Bend points per edge index (empty for adjacent columns). */
+  bends: Record<number, Point[]>;
 }
 
-/** Column per node: roles 0, agents 1 + their shortest reach depth, tools
- * and MCP servers after the deepest agent. */
-function columnsOf(graph: PolicyGraph): Record<string, number> {
-  const agents = graph.nodes.filter((n) => n.kind === "agent");
-  const reach = graph.edges.filter((e) => e.kind === "reach");
-  const out = new Map<string, string[]>();
-  for (const e of reach)
-    out.set(e.source, [...(out.get(e.source) ?? []), e.target]);
-  const reached = new Set(reach.map((e) => e.target));
-  // Entry agents: nobody reaches them. A pure cycle has none, so all start.
-  let roots = agents.filter((a) => !reached.has(a.id)).map((a) => a.id);
-  if (roots.length === 0) roots = agents.map((a) => a.id);
+const push = <K, V>(m: Map<K, V[]>, k: K, v: V) => {
+  const a = m.get(k);
+  if (a) a.push(v);
+  else m.set(k, [v]);
+};
 
-  // Shortest hop count (BFS), so a cycle can't push a column out forever.
-  const depth = new Map<string, number>(roots.map((id) => [id, 0]));
-  const queue = [...roots];
-  for (let i = 0; i < queue.length; i++) {
-    const u = queue[i];
-    for (const v of out.get(u) ?? []) {
-      if (!depth.has(v)) {
-        depth.set(v, depth.get(u)! + 1);
-        queue.push(v);
+/** Column per node — roles 0, agents 1 + their shortest permitted reach
+ * depth, tools and MCP servers last — and the column count. */
+function columnsOf(graph: PolicyGraph): {
+  col: Record<string, number>;
+  nCols: number;
+} {
+  const agents = graph.nodes.filter((n) => n.kind === "agent").map((n) => n.id);
+  // Only a permitted reach delegates; a self-loop adds no hop.
+  const out = new Map<string, string[]>();
+  const reached = new Set<string>();
+  for (const e of graph.edges) {
+    if (e.kind !== "reach" || e.verdict === "deny" || e.source === e.target)
+      continue;
+    push(out, e.source, e.target);
+    reached.add(e.target);
+  }
+  const admitted = new Set(
+    graph.edges
+      .filter((e) => e.kind === "admission" && e.verdict !== "deny")
+      .map((e) => e.target),
+  );
+
+  // BFS from entry agents (admitted, or reached by nobody); then from any
+  // agent still unplaced (a cycle nothing enters), so every agent lands.
+  const depth = new Map<string, number>();
+  const bfs = (seeds: string[]) => {
+    const queue = seeds.filter((id) => !depth.has(id));
+    for (const id of queue) depth.set(id, 0);
+    for (let i = 0; i < queue.length; i++) {
+      for (const v of out.get(queue[i]) ?? []) {
+        if (!depth.has(v)) {
+          depth.set(v, depth.get(queue[i])! + 1);
+          queue.push(v);
+        }
       }
     }
-  }
+  };
+  bfs(agents.filter((id) => admitted.has(id) || !reached.has(id)));
+  for (const id of agents) if (!depth.has(id)) bfs([id]);
 
-  const maxAgent = Math.max(0, ...agents.map((a) => depth.get(a.id) ?? 0));
+  const maxAgent = Math.max(0, ...agents.map((id) => depth.get(id)!));
   const col: Record<string, number> = {};
   for (const n of graph.nodes) {
     col[n.id] =
       n.kind === "role"
         ? 0
         : n.kind === "agent"
-          ? 1 + (depth.get(n.id) ?? 0)
+          ? 1 + depth.get(n.id)!
           : 2 + maxAgent;
   }
-  return col;
-}
-
-/** Mean row of a node's neighbours in `rows`, or its own row if it has none. */
-function barycenter(
-  id: string,
-  neighbours: Map<string, string[]>,
-  rows: Map<string, number>,
-  fallback: number,
-): number {
-  const ys = (neighbours.get(id) ?? [])
-    .map((n) => rows.get(n))
-    .filter((y): y is number => y != null);
-  return ys.length ? ys.reduce((a, b) => a + b, 0) / ys.length : fallback;
+  return { col, nCols: maxAgent + 3 };
 }
 
 export function layeredLayout(graph: PolicyGraph): LayeredLayout {
-  const col = columnsOf(graph);
-  // Fixed shape: roles, agent hops, tools — even when a column is empty.
-  const nCols =
-    Math.max(
-      1,
-      ...graph.nodes.filter((n) => n.kind === "agent").map((n) => col[n.id]),
-    ) + 2;
+  const { col, nCols } = columnsOf(graph);
 
-  // Initial order: as the server listed them, which is stable.
+  // Each column holds nodes and bend slots, in the server's (stable) order.
   const layers: string[][] = Array.from({ length: nCols }, () => []);
   for (const n of graph.nodes) layers[col[n.id]].push(n.id);
 
   const prev = new Map<string, string[]>();
   const next = new Map<string, string[]>();
-  for (const e of graph.edges) {
-    next.set(e.source, [...(next.get(e.source) ?? []), e.target]);
-    prev.set(e.target, [...(prev.get(e.target) ?? []), e.source]);
-  }
-  const rowsOf = () => {
-    const rows = new Map<string, number>();
-    for (const layer of layers) layer.forEach((id, i) => rows.set(id, i));
-    return rows;
+  const bendIds: Record<number, string[]> = {};
+  graph.edges.forEach((e, i) => {
+    const a = col[e.source];
+    const b = col[e.target];
+    if (a == null || b == null) return;
+    // A chain source → slot → … → target, one slot per crossed column.
+    const step = b > a ? 1 : -1;
+    const chain = [e.source];
+    if (Math.abs(b - a) > 1) {
+      for (let c = a + step; c !== b; c += step) {
+        const id = `bend:${i}:${c}`;
+        layers[c].push(id);
+        chain.push(id);
+      }
+    }
+    chain.push(e.target);
+    if (chain.length > 2) bendIds[i] = chain.slice(1, -1);
+    for (let k = 1; k < chain.length; k++) {
+      // Left-to-right neighbours, whichever way the edge points.
+      const [l, r] =
+        step > 0 ? [chain[k - 1], chain[k]] : [chain[k], chain[k - 1]];
+      push(next, l, r);
+      push(prev, r, l);
+    }
+  });
+
+  const height = (id: string) => (id.startsWith("bend:") ? BEND_H : ROW_H);
+  const colHeight = (layer: string[]) =>
+    layer.reduce((h, id) => h + height(id), 0);
+  // Centre y per node, each column centred on the tallest.
+  const tallest = Math.max(ROW_H, ...layers.map(colHeight));
+  const y = new Map<string, number>();
+  const place = (c: number) => {
+    let at = (tallest - colHeight(layers[c])) / 2;
+    for (const id of layers[c]) {
+      y.set(id, at + height(id) / 2);
+      at += height(id);
+    }
   };
-  // Barycenter sweeps (down then up) to cut edge crossings.
+  layers.forEach((_, c) => place(c));
+
+  // Barycenter sweeps (down then up) on on-screen y, to cut crossings.
   for (let sweep = 0; sweep < 4; sweep++) {
     const down = sweep % 2 === 0;
-    const order = down
-      ? layers.map((_, i) => i).slice(1)
-      : layers
-          .map((_, i) => i)
-          .slice(0, -1)
-          .reverse();
-    for (const c of order) {
-      const rows = rowsOf();
-      const keyed = layers[c].map((id, i) => ({
-        id,
-        k: barycenter(id, down ? prev : next, rows, i),
-        i,
-      }));
+    const order = layers.map((_, c) => c);
+    const cols = down ? order.slice(1) : order.slice(0, -1).reverse();
+    for (const c of cols) {
+      const keyed = layers[c].map((id, i) => {
+        const ys = ((down ? prev : next).get(id) ?? []).map((n) => y.get(n)!);
+        const k = ys.length
+          ? ys.reduce((s, v) => s + v, 0) / ys.length
+          : y.get(id)!;
+        return { id, k, i };
+      });
       keyed.sort((a, b) => a.k - b.k || a.i - b.i);
       layers[c] = keyed.map((x) => x.id);
+      place(c);
     }
   }
 
-  // Centre each column on the tallest one.
-  const tallest = Math.max(1, ...layers.map((l) => l.length));
   const pos: LayeredLayout["pos"] = {};
-  layers.forEach((layer, c) => {
-    const top = ((tallest - layer.length) * ROW_H) / 2;
-    layer.forEach((id, i) => (pos[id] = { x: c * COL_W, y: top + i * ROW_H }));
+  for (const n of graph.nodes) {
+    pos[n.id] = { x: col[n.id] * COL_W, y: y.get(n.id)! };
+  }
+  const bends: LayeredLayout["bends"] = {};
+  graph.edges.forEach((e, i) => {
+    const s = pos[e.source];
+    const t = pos[e.target];
+    if (!s || !t) return;
+    const out = s.x + COL_W * 0.4;
+    bends[i] =
+      e.source === e.target
+        ? // A self-loop: out to the right and back.
+          [{ x: out, y: s.y - ROW_H / 3 }]
+        : col[e.source] === col[e.target]
+          ? // Same column: loop out to the right, between the columns.
+            [{ x: out, y: (s.y + t.y) / 2 }]
+          : (bendIds[i] ?? []).map((id) => ({
+              x: Number(id.split(":")[2]) * COL_W,
+              y: y.get(id)!,
+            }));
   });
 
-  // Titles by position (tools are always last); empty columns get none.
-  const columns = layers.flatMap((layer, c) =>
-    layer.length === 0
-      ? []
-      : [
-          {
-            title:
-              c === 0
-                ? "Caller roles"
-                : c === nCols - 1
-                  ? "Tools"
-                  : c === 1
-                    ? "Agents"
-                    : `Agents · hop ${c - 1}`,
-            x: c * COL_W,
-          },
-        ],
-  );
-  return { pos, col, columns };
+  // Titles by position (tools are always last); bend-only columns get none.
+  const columns = layers.flatMap((layer, c) => {
+    const nodes = layer.filter((id) => !id.startsWith("bend:"));
+    if (nodes.length === 0) return [];
+    const title =
+      c === 0
+        ? "Caller roles"
+        : c === nCols - 1
+          ? "Tools"
+          : c === 1
+            ? "Agents"
+            : `Agents · hop ${c - 1}`;
+    const top = Math.min(...nodes.map((id) => y.get(id)! - ROW_H / 2));
+    return [{ title, x: c * COL_W, top }];
+  });
+  return { pos, col, columns, bends };
 }
