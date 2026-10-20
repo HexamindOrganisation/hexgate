@@ -19,9 +19,8 @@ import { cn } from "@/lib/utils";
  * projects nested) in a single dropdown. "+ New project" /
  * "+ New organization" footer actions open the corresponding dialogs.
  *
- * Renders as a two-line block — project name on top, org name beneath — so
- * the project reads as the primary context (OpenAI-style) even though one
- * dropdown still switches both.
+ * Renders as a card: the org as a small caption above the project name, which
+ * is the larger, primary line even though one dropdown switches both.
  *
  * Two state pieces:
  *   - which orgs/projects exist (from React Query)

@@ -294,7 +294,9 @@ export function AppShell() {
   const canManageBans = useCanManageBans();
   const scope = useProjectScoped();
   const bans = useBans(
-    !inSettings && canManageBans && scope.status === "ready"
+    // projectName is only set once the id is found in the projects list, so
+    // a stale (deleted) persisted id never gets polled.
+    !inSettings && canManageBans && scope.projectName !== null
       ? scope.projectId
       : null,
     { live: true },
@@ -406,6 +408,7 @@ export function AppShell() {
             <div className="mb-0.5 flex flex-col gap-0.5">
               <NavItem
                 to="/"
+                end
                 label="Back to workspace"
                 icon={ArrowLeft}
                 collapsed
