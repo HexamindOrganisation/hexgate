@@ -1,7 +1,10 @@
 import { act, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import userEvent from "@testing-library/user-event";
+
 import { useActive } from "@/lib/active";
+import { useAuditFilters } from "@/lib/audit-filters";
 import { HomePage } from "@/routes/Home";
 import { renderWithProviders } from "@/test/render";
 
@@ -109,7 +112,7 @@ describe("HomePage", () => {
     await waitFor(() =>
       expect(screen.getByText("7.3% deny rate")).toBeInTheDocument(),
     );
-    expect(screen.getByText("743K")).toBeInTheDocument();
+    expect(screen.getByText("743.0K")).toBeInTheDocument();
     expect(screen.getByText(/refund_order/)).toBeInTheDocument();
   });
 
@@ -127,15 +130,78 @@ describe("HomePage", () => {
         },
       ],
       "/v1/projects/p1/tokens": [
-        { id: "t1", name: "ci-staging", last_used_at: "2026-01-01T00:00:00Z" },
+        {
+          id: "t1",
+          name: "ci-staging",
+          created_at: "2025-12-01T00:00:00Z",
+          last_used_at: "2026-01-01T00:00:00Z",
+        },
+        // Minted a moment ago and never used: not stale.
+        {
+          id: "t2",
+          name: "fresh",
+          created_at: new Date(NOW - 6e4).toISOString(),
+          last_used_at: null,
+        },
       ],
     });
     renderWithProviders(<HomePage />);
     expect(await screen.findByText("u_8f2c41")).toBeInTheDocument();
     expect(
-      screen.getByText("1 call sent for approval today"),
+      screen.getByText("1 call sent for approval in the last 24 hours"),
     ).toBeInTheDocument();
     expect(screen.getByText(/1 API key unused/)).toBeInTheDocument();
+    expect(screen.getByText("ci-staging")).toBeInTheDocument();
+    expect(screen.queryByText("fresh")).not.toBeInTheDocument();
+  });
+
+  it("opens Audit filtered to the burst, not with stale filters", async () => {
+    useAuditFilters.setState((st) => ({
+      filters: { ...st.filters, agent: "billing" },
+    }));
+    stub({
+      "/v1/projects/p1/audit/anomalies": [
+        {
+          user_id: "u_8f2c41",
+          severity: "high",
+          deny: 19,
+          all: 22,
+          deny_rate: 0.86,
+          first_seen: new Date(NOW - 36e5).toISOString(),
+          last_seen: new Date(NOW - 18e5).toISOString(),
+        },
+      ],
+    });
+    const user = userEvent.setup();
+    renderWithProviders(<HomePage />);
+    await user.click(await screen.findByText("u_8f2c41"));
+    const f = useAuditFilters.getState().filters;
+    expect(f.user).toBe("u_8f2c41");
+    expect(f.agent).toBe("");
+    expect(f.customMode).toBe(true);
+  });
+
+  it("does not call it all clear while signals are still loading", async () => {
+    stub();
+    vi.mocked(window.fetch).mockImplementation(async (input) => {
+      const path = new URL(String(input), "http://x").pathname;
+      if (path.endsWith("/audit/anomalies")) return new Promise(() => {});
+      const body =
+        path === "/v1/orgs"
+          ? [ORG]
+          : path === "/v1/orgs/o1/projects"
+            ? [PROJECT]
+            : null;
+      return new Response(JSON.stringify(body), {
+        status: body ? 200 : 404,
+        headers: { "Content-Type": "application/json" },
+      });
+    });
+    renderWithProviders(<HomePage />);
+    expect(await screen.findByText("Checking…")).toBeInTheDocument();
+    expect(
+      screen.queryByText("Nothing needs a look right now."),
+    ).not.toBeInTheDocument();
   });
 
   it("says so when nothing needs a look", async () => {
