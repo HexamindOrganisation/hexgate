@@ -1,4 +1,4 @@
-import { Check, ChevronsUpDown, FolderPlus, Plus } from "lucide-react";
+import { Check, ChevronsUpDown, FolderPlus, Hexagon, Plus } from "lucide-react";
 
 import {
   DropdownMenu,
@@ -63,22 +63,25 @@ export function OrgProjectSwitcher({
         <button
           type="button"
           className={cn(
-            "flex w-full flex-col gap-0.5 rounded-md px-2 py-1 text-left",
+            "flex w-full items-center gap-2.5 rounded-xl border border-border bg-card p-1.5 text-left",
             "transition-colors hover:bg-accent",
             "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
           )}
         >
-          <span className="flex w-full items-center gap-1">
-            <span className="truncate text-sm font-medium text-foreground">
+          <span className="grid size-8 shrink-0 place-items-center rounded-lg bg-action text-action-foreground">
+            <Hexagon className="size-4" strokeWidth={2} />
+          </span>
+          <span className="flex min-w-0 flex-1 flex-col">
+            {label.org && (
+              <span className="truncate text-caption text-muted-foreground">
+                {label.org}
+              </span>
+            )}
+            <span className="truncate font-mono text-[13px] font-medium text-foreground">
               {label.project}
             </span>
-            <ChevronsUpDown className="ml-auto size-3 shrink-0 text-muted-foreground" />
           </span>
-          {label.org && (
-            <span className="truncate text-xs text-muted-foreground">
-              {label.org}
-            </span>
-          )}
+          <ChevronsUpDown className="size-3.5 shrink-0 text-muted-foreground" />
         </button>
       </DropdownMenuTrigger>
 

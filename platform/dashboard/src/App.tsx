@@ -1,4 +1,4 @@
-import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
+import { BrowserRouter, Route, Routes } from "react-router-dom";
 
 import { AppShell } from "@/components/AppShell";
 import { ProtectedRoute } from "@/components/ProtectedRoute";
@@ -11,6 +11,7 @@ import { ConnectedAppsPage } from "@/routes/ConnectedApps";
 import { ForgotPasswordPage } from "@/routes/ForgotPassword";
 import { GraphPage } from "@/routes/Graph";
 import { CONSENT_PATH } from "@/lib/oauth_consent";
+import { HomePage } from "@/routes/Home";
 import { OAuthConsentPage } from "@/routes/OAuthConsent";
 import { OrgMembersPage } from "@/routes/OrgMembers";
 import { OrgSettingsPage } from "@/routes/OrgSettings";
@@ -71,7 +72,7 @@ export default function App() {
             </ProtectedRoute>
           }
         >
-          <Route index element={<Navigate to="/agents" replace />} />
+          <Route index element={<HomePage />} />
           <Route path="agents" element={<AgentsPage />} />
           <Route path="policies" element={<PoliciesPage />} />
           <Route path="graph" element={<GraphPage />} />
