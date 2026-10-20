@@ -98,6 +98,18 @@ function stubFetch(role: string, manifest: unknown = MANIFEST) {
           return manifest === "error"
             ? new Response("boom", { status: 500 })
             : json([manifest]);
+        case `/v1/projects/${PROJECT}/policy/resolve`:
+          return json({
+            roles: {
+              support: {
+                default_policy: { mode: "deny" },
+                tools: {
+                  refund: { mode: "allow", constraints: ["args.amount <= 50"] },
+                },
+              },
+              guest: { default_policy: { mode: "deny" }, tools: {} },
+            },
+          });
         case `/v1/projects/${PROJECT}/audit/summary`:
           return json({
             totals: { all: 15, allow: 10, deny: 4, needs_approval: 1 },
@@ -149,6 +161,29 @@ describe("AgentsPage — ban tie-in", () => {
     const params = new URL(href, "http://x").searchParams;
     expect(params.get("agent")).toBe("support_bot");
     expect(params.get("range")).toBe("24h");
+  });
+
+  it("shows how each role treats each tool", async () => {
+    stubFetch("admin", {
+      ...MANIFEST,
+      manifest: {
+        ...MANIFEST.manifest,
+        tools: [
+          {
+            name: "refund",
+            description: "",
+            input_schema: { type: "object", properties: {}, required: [] },
+          },
+        ],
+      },
+    });
+    renderWithProviders(<AgentsPage />, { initialRoute: "/agents" });
+    expect(
+      await screen.findByTitle("support: allowed with constraints"),
+    ).toHaveTextContent("support allow*");
+    expect(
+      screen.getByTitle("guest: not listed, default applies"),
+    ).toHaveTextContent("guest deny");
   });
 
   it("shows the agent's last 24 hours", async () => {

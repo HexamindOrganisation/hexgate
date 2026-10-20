@@ -49,10 +49,26 @@ function renderInspector(
 afterEach(() => vi.restoreAllMocks());
 
 describe("InspectorTabs", () => {
-  it("renders a role's tools with mode badges in the Resolved tab", () => {
+  it("opens Resolved on a tools × roles grid", () => {
     renderInspector();
-    expect(screen.getByText("read_ticket")).toBeInTheDocument();
-    expect(screen.getByText("refund")).toBeInTheDocument();
+    expect(
+      screen.getByRole("columnheader", { name: "support" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("rowheader", { name: "read_ticket" }),
+    ).toBeInTheDocument();
+    // Constrained cells say so to screen readers and show the rules on hover.
+    const refund = screen.getByRole("button", {
+      name: /approval, 1 constraints/,
+    });
+    expect(refund).toHaveAttribute("title", "args.amount <= 100");
+  });
+
+  it("drills from a grid cell into the role's table", async () => {
+    renderInspector();
+    await userEvent.click(
+      screen.getByRole("button", { name: /approval, 1 constraints/ }),
+    );
     expect(screen.getByText("args.amount <= 100")).toBeInTheDocument();
   });
 
