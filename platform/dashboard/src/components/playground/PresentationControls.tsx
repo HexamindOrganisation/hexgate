@@ -11,8 +11,8 @@ import { schemeAccent, useIsDark, useTheme, SCHEMES } from "@/lib/theme";
 import { hslChannelsToHex } from "@/lib/color";
 import {
   PLAYGROUND_ACCENTS,
+  accentVars,
   resolveAccent,
-  usePlaygroundAccent,
   usePlaygroundPrefs,
 } from "@/lib/playground_prefs";
 import { PRESENT_URL, usePresentMode } from "@/lib/present";
@@ -39,7 +39,7 @@ export function AccentPicker() {
     (accent.startsWith("#")
       ? accent
       : hslChannelsToHex(current ?? schemeAccent(appScheme, dark)));
-  const vars = usePlaygroundAccent();
+  const vars = accentVars(current);
   const commitDraft = () => {
     if (draft !== null) {
       setAccent(draft);
@@ -98,7 +98,12 @@ export function AccentPicker() {
             />
           ))}
         </div>
-        <label className="mt-3 flex cursor-pointer items-center justify-between gap-2 rounded-md border border-border px-3 py-2 text-xs text-muted-foreground">
+        <label
+          className={cn(
+            "mt-3 flex cursor-pointer items-center justify-between gap-2 rounded-md border px-3 py-2 text-xs text-muted-foreground",
+            selected.startsWith("#") ? "border-foreground" : "border-border",
+          )}
+        >
           Custom
           <span className="flex items-center gap-2 font-mono text-foreground">
             {hex.toUpperCase()}

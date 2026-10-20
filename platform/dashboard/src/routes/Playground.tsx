@@ -119,17 +119,26 @@ function PlaygroundLive({ projectId }: { projectId: string }) {
   }, [resolved.data, agent]);
 
   // On an agent switch, keep whichever roles the new one still defines, else
-  // fall back to its first role.
+  // fall back to its first role, unless the user chose "no role". Keyed on
+  // the names, so a refetch with the same roles changes nothing.
+  const choseNoRole = useRef(false);
+  const roleKey = roleOptions.join("\u0000");
   useEffect(() => {
-    if (roleOptions.length === 0) {
+    const options = roleKey ? roleKey.split("\u0000") : [];
+    if (options.length === 0) {
       setActiveRoles([]);
       return;
     }
     setActiveRoles((prev) => {
-      const kept = prev.filter((r) => roleOptions.includes(r));
-      return kept.length ? kept : [roleOptions[0]];
+      const kept = prev.filter((r) => options.includes(r));
+      if (kept.length) return kept;
+      return choseNoRole.current && prev.length === 0 ? [] : [options[0]];
     });
-  }, [roleOptions]);
+  }, [roleKey]);
+  const applyRoles = (roles: string[]) => {
+    choseNoRole.current = roles.length === 0;
+    setActiveRoles(roles);
+  };
 
   // Whether the user was pinned to the bottom BEFORE the latest update — read
   // from the scroll handler, not measured post-render (a tall append or a
@@ -190,6 +199,7 @@ function PlaygroundLive({ projectId }: { projectId: string }) {
             agentName={state.agentName}
             online={state.agentOnline}
             relayConnected={state.connected}
+            present={present}
           />
         </div>
         <div className="flex items-center gap-1">
@@ -296,7 +306,7 @@ function PlaygroundLive({ projectId }: { projectId: string }) {
         projectId={projectId}
         roleOptions={roleOptions}
         activeRoles={activeRoles}
-        onApply={setActiveRoles}
+        onApply={applyRoles}
         onReset={reset}
         canReset={!empty}
       />
@@ -327,10 +337,12 @@ function AgentStatus({
   agentName,
   online,
   relayConnected,
+  present,
 }: {
   agentName: string | null;
   online: boolean;
   relayConnected: boolean;
+  present: boolean;
 }) {
   const pill =
     "flex items-center gap-2 rounded-full border border-border px-3 py-1.5 text-xs";
@@ -348,6 +360,9 @@ function AgentStatus({
   return (
     <Link
       to="/agents"
+      // Full screen is a demo tab: don't navigate away from it.
+      target={present ? "_blank" : undefined}
+      rel={present ? "noopener" : undefined}
       className={cn(pill, "transition-colors hover:bg-accent")}
     >
       <Bot className="size-3.5 text-primary" />
@@ -492,10 +507,10 @@ function Composer({
             onSubmit();
           }
         }}
-        rows={2}
+        rows={1}
         placeholder={`Message ${agentName ?? "the agent"}…`}
         aria-label="Message the agent"
-        className="block max-h-48 w-full resize-none bg-transparent px-1 text-sm focus:outline-none [field-sizing:content]"
+        className="block min-h-12 max-h-48 w-full resize-none bg-transparent px-1 text-sm focus:outline-none [field-sizing:content]"
       />
       <div className="mt-2 flex items-center justify-between gap-2">
         {identity}
@@ -706,7 +721,8 @@ function DecisionCard({
               {JSON.stringify(call.args, null, 2)}
             </pre>
           )}
-          {agentName && (
+          {/* No audit row exists until the call ends. */}
+          {agentName && call.state !== "started" && (
             <Link
               to={auditUrl({ agent: agentName, tool: call.name, range: "24h" })}
               // Full screen is a demo tab: don't navigate away from it.
@@ -855,7 +871,8 @@ function ApprovalPromptCard({
         </Button>
         <Button
           size="sm"
-          className="h-7 gap-1.5 text-xs"
+          // A decision colour, never the Playground accent.
+          className="h-7 gap-1.5 bg-success text-xs text-white hover:bg-success/90"
           onClick={() => onDecide(request.decision_id, true)}
         >
           <Check className="size-3" />
