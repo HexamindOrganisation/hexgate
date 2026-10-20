@@ -427,6 +427,21 @@ describe("AuditPage", () => {
     );
   });
 
+  it("a bare /audit reopens the last view", async () => {
+    useAuditFilters.setState((st) => ({
+      filters: { ...st.filters, agent: "agent-y" },
+    }));
+    const calls = stubFetch();
+    renderWithProviders(<AuditPage />, { initialRoute: "/audit" });
+    await waitFor(() =>
+      expect(
+        calls.some(
+          (u) => u.includes("/audit/decisions") && u.includes("agent=agent-y"),
+        ),
+      ).toBe(true),
+    );
+  });
+
   it("reads the range in one sentence: total and deny rate", async () => {
     stubFetch();
     renderWithProviders(<AuditPage />);
@@ -1044,25 +1059,11 @@ describe("AuditPage", () => {
       ).not.toBeInTheDocument();
     });
 
-    it("dates set in the store render as the formatted range in the picker button", async () => {
+    it("dates in the URL render as the formatted range in the picker button", async () => {
       stubFetch();
-      const user = userEvent.setup();
-      renderWithProviders(<AuditPage />);
-
-      await screen.findByText("blocked by policy");
-      await user.click(screen.getByText("Custom"));
-
-      act(() => {
-        useAuditFilters.setState((s) => ({
-          ...s,
-          filters: {
-            ...s.filters,
-            start_date: new Date(2026, 5, 1),
-            end_date: new Date(2026, 5, 15),
-          },
-        }));
+      renderWithProviders(<AuditPage />, {
+        initialRoute: "/audit?range=30d&custom=1&from=2026-06-01&to=2026-06-15",
       });
-
       await screen.findByRole("button", { name: /Jun 1, 2026 → Jun 15, 2026/ });
     });
 

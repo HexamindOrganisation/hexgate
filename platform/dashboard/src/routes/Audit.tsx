@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { Filter, Lightbulb, X } from "lucide-react";
 import { useNavigate, useSearchParams } from "react-router-dom";
@@ -423,32 +423,39 @@ export function AuditPage() {
   // Filter + paging state lives in a zustand store (see lib/audit-filters)
   // so the dialled-in slice survives route switches; drawer selection is
   // ephemeral and stays local.
-  const f = useAuditFilters((s) => s.filters);
-  const setF = useAuditFilters((s) => s.setFilters);
-  // Two-way sync with the URL. A navigation that carries filters (a link
-  // from Home or Agents, a reload, a shared URL) replaces the session's;
-  // otherwise the page writes its filters to the URL so they can be shared.
+  // The URL is the source of truth for the filters, so a link, a reload or
+  // a shared URL opens the same slice and the first render already queries
+  // it. The store only remembers the last view for a bare /audit (the
+  // sidebar), which is redirected to it.
   const [params, setParams] = useSearchParams();
-  const search = params.toString();
-  const lastSearch = useRef<string | null>(null);
+  const urlFilters = useMemo(() => fromAuditSearch(params), [params]);
+  const remembered = useAuditFilters((s) => s.filters);
+  const remember = useAuditFilters((s) => s.setFilters);
+  const f = urlFilters ?? remembered;
+  // Calls in one event compose: each builds on the previous one's result,
+  // not on the render's `f`.
+  const latest = useRef(f);
   useEffect(() => {
-    if (search !== lastSearch.current) {
-      lastSearch.current = search;
-      const fromUrl = fromAuditSearch(new URLSearchParams(search));
-      if (
-        fromUrl &&
-        toAuditSearch(fromUrl).toString() !== toAuditSearch(f).toString()
-      ) {
-        setF(() => fromUrl);
-        return;
-      }
+    latest.current = f;
+  }, [f]);
+  const setF = useCallback(
+    (update: (p: Filters) => Filters) => {
+      latest.current = update(latest.current);
+      setParams(toAuditSearch(latest.current), { replace: true });
+    },
+    [setParams],
+  );
+  useEffect(() => {
+    if (!urlFilters) {
+      setParams(toAuditSearch(remembered), { replace: true });
+    } else if (
+      toAuditSearch(urlFilters).toString() !==
+      toAuditSearch(remembered).toString()
+    ) {
+      // Also resets paging: a new slice starts at the first page.
+      remember(() => urlFilters);
     }
-    const want = toAuditSearch(f).toString();
-    if (want !== search) {
-      lastSearch.current = want;
-      setParams(want, { replace: true });
-    }
-  }, [search, f, setF, setParams]);
+  }, [urlFilters, remembered, remember, setParams]);
   const tableLimit = useAuditFilters((s) => s.tableLimit);
   const loadMore = useAuditFilters((s) => s.loadMore);
   const [sel, setSel] = useState<AuditDecisionRow | null>(null);
