@@ -9,6 +9,8 @@ import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from jwt.algorithms import OKPAlgorithm
 
+from hexgate_mcp.auth import ACCESS_TOKEN_TYPE
+
 ISSUER = "https://app.hexgate.test"
 RESOURCE = "https://app.hexgate.test/mcp"
 API_URL = "http://api.internal:8000"
@@ -25,7 +27,9 @@ class SigningKey:
         public = OKPAlgorithm.to_jwk(self.private.public_key(), as_dict=True)
         return {**public, "kid": self.kid, "use": "sig"}
 
-    def mint(self, *, kid: str | None = None, **overrides: Any) -> str:
+    def mint(
+        self, *, kid: str | None = None, typ: str = ACCESS_TOKEN_TYPE, **overrides: Any
+    ) -> str:
         now = int(time.time())
         claims = {
             "iss": ISSUER,
@@ -44,7 +48,7 @@ class SigningKey:
             claims,
             self.private,
             algorithm="EdDSA",
-            headers={"kid": kid or self.kid},
+            headers={"kid": kid or self.kid, "typ": typ},
         )
 
 

@@ -5,17 +5,17 @@ import {
   ArrowUp,
   Bot,
   Check,
-  ChevronDown,
   CircleDashed,
-  RefreshCcw,
   RadioReceiver,
+  RefreshCcw,
+  Settings2,
   ShieldAlert,
-  UserCog,
   Wrench,
   X,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import {
   Popover,
   PopoverContent,
@@ -27,6 +27,12 @@ import {
   type ChatMessage,
   type ToolCall,
 } from "@/lib/playground";
+import {
+  AccentStyle,
+  PresentationControls,
+  ROUND_BTN,
+} from "@/components/playground/PresentationControls";
+import { usePresentMode } from "@/lib/present";
 import { DocsLink } from "@/components/DocsLink";
 import { DOC_PATHS } from "@/lib/docs";
 import { api, type AgentRead } from "@/lib/api";
@@ -34,6 +40,7 @@ import { useProjectScoped } from "@/lib/active";
 import { NoProjectEmptyState } from "@/components/NoProjectEmptyState";
 import { parseRolesFromPolicy } from "@/lib/policy";
 import { useResolvedPolicy } from "@/lib/policy_files";
+import { usePlaygroundPrefs } from "@/lib/playground_prefs";
 import { cn } from "@/lib/utils";
 
 export function PlaygroundPage() {
@@ -63,6 +70,12 @@ function PlaygroundLive({ projectId }: { projectId: string }) {
   // A set, not a scalar: the enforcer evaluates every role the caller carries,
   // so the playground has to be able to reproduce a multi-role caller.
   const [activeRoles, setActiveRoles] = useState<string[]>([]);
+  // Full-screen presentation mode (own tab, no app sidebar — see AppShell). The
+  // playground drops its breakout margins and swaps "open in tab" for a close.
+  // The accent + acting-name prefs are subscribed inside the controls that edit
+  // them (AccentStyle/AccentPicker, IdentityChip) rather than here, so dragging
+  // the colour picker or typing a name doesn't re-render the whole transcript.
+  const present = usePresentMode();
   const transcriptRef = useRef<HTMLDivElement>(null);
 
   // Fetch the serving agent so we know which roles are available. Roles are a
@@ -126,43 +139,64 @@ function PlaygroundLive({ projectId }: { projectId: string }) {
     el?.scrollTo({ top: el.scrollHeight });
   }, [state.messages]);
 
+  // In presentation mode the serve process still holds the rehearsal history
+  // from the tab this was opened from — `hexgate serve` keeps one chat history
+  // per connection, so a fresh-looking full-screen tab would still have the
+  // agent see those turns. Reset the session once on connect so the demo truly
+  // starts clean.
+  const didPresentReset = useRef(false);
+  useEffect(() => {
+    if (present && state.connected && !didPresentReset.current) {
+      didPresentReset.current = true;
+      reset();
+    }
+  }, [present, state.connected, reset]);
+
   function submit() {
     const text = composer.trim();
     if (!text) return;
     // Re-pin to the bottom so the sent turn and its streamed reply are visible
     // even if the user had scrolled up to re-read an earlier turn.
     atBottomRef.current = true;
-    sendChat(text, activeRoles.length ? { roles: activeRoles } : undefined);
+    // Read the acting name imperatively (not a subscription) so typing it never
+    // re-renders the transcript; sendChat trims it and omits an empty identity.
+    const name = usePlaygroundPrefs.getState().names[projectId] ?? "";
+    sendChat(text, { roles: activeRoles, name });
     setComposer("");
   }
 
   const empty = state.messages.length === 0;
 
   return (
-    <div className="-mx-8 -my-6 relative flex h-screen flex-col overflow-hidden bg-background">
+    <div
+      className={cn(
+        "relative flex h-screen flex-col overflow-hidden bg-background",
+        !present && "-mx-8 -my-6",
+      )}
+    >
       <GooFilter />
+      <AccentStyle />
 
-      {/* Status, mixed into the top corners over the chat — no side panel. */}
+      {/* Status + controls, mixed into the top corners over the chat. */}
       <div className="pointer-events-none absolute inset-x-0 top-0 z-20 flex items-start justify-between gap-3 px-4 py-3">
-        <AgentStatus
-          agentName={state.agentName}
-          online={state.agentOnline}
-          relayConnected={state.connected}
-        />
+        {/* Top-left: the served agent. The acting role is edited from the
+            bottom-left identity chip (which also carries the acting name). */}
         <div className="pointer-events-auto flex items-center gap-2">
-          {roleOptions.length > 0 && (
-            <ActingAsControl
-              roleOptions={roleOptions}
-              activeRoles={activeRoles}
-              setActiveRoles={setActiveRoles}
-            />
-          )}
+          <AgentStatus
+            agentName={state.agentName}
+            online={state.agentOnline}
+            relayConnected={state.connected}
+          />
+        </div>
+        {/* Top-right: presentation controls — open in a tab, theme, accent, reset. */}
+        <div className="pointer-events-auto flex items-center gap-2">
+          <PresentationControls />
           <button
             type="button"
             onClick={reset}
             disabled={empty}
             title="Reset session"
-            className="grid size-8 place-items-center rounded-full border border-border/60 bg-card/70 text-muted-foreground backdrop-blur transition-colors hover:bg-accent hover:text-foreground disabled:opacity-40"
+            className={cn(ROUND_BTN, "disabled:opacity-40")}
           >
             <RefreshCcw className="size-3.5" />
           </button>
@@ -222,6 +256,15 @@ function PlaygroundLive({ projectId }: { projectId: string }) {
       <DecisionDeck
         decisions={state.decisions}
         muted={state.pendingApprovals.length > 0 || composer.trim().length > 0}
+      />
+
+      {/* Bottom-left: who you're acting as (name + role), with a gear that opens
+          an editor for both — the name rides into the agent's HexgateContext. */}
+      <IdentityChip
+        projectId={projectId}
+        roleOptions={roleOptions}
+        activeRoles={activeRoles}
+        setActiveRoles={setActiveRoles}
       />
 
       {/* Persistent docs affordance — a subtle icon+label pill kept in the
@@ -290,7 +333,15 @@ function AgentStatus({
   );
 }
 
-function ActingAsControl({
+function roleLabel(activeRoles: string[]): string {
+  if (activeRoles.length === 0) return "default";
+  if (activeRoles.length === 1) return activeRoles[0];
+  return `${activeRoles[0]} +${activeRoles.length - 1}`;
+}
+
+/** The role multi-select + explainer, shared by the top-left "acting as"
+ * dropdown and the bottom-left identity editor. */
+function RoleCheckboxList({
   roleOptions,
   activeRoles,
   setActiveRoles,
@@ -299,78 +350,119 @@ function ActingAsControl({
   activeRoles: string[];
   setActiveRoles: React.Dispatch<React.SetStateAction<string[]>>;
 }) {
-  const label =
-    activeRoles.length === 0
-      ? "default"
-      : activeRoles.length === 1
-        ? activeRoles[0]
-        : `${activeRoles[0]} +${activeRoles.length - 1}`;
   return (
-    <Popover>
-      <PopoverTrigger asChild>
-        <button
-          type="button"
-          className="flex items-center gap-1.5 rounded-full border border-border/60 bg-card/70 px-3 py-1.5 text-xs backdrop-blur transition-colors hover:bg-accent"
-        >
-          <UserCog className="size-3.5 text-primary" />
-          <span className="text-muted-foreground">acting as</span>
-          <span className="max-w-[24vw] truncate font-mono font-medium">
-            {label}
-          </span>
-          <ChevronDown className="size-3 text-muted-foreground" />
-        </button>
-      </PopoverTrigger>
-      <PopoverContent align="end" className="w-60 p-2">
-        <div className="mb-1 px-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-          Acting as
-        </div>
-        <div className="flex flex-col gap-0.5">
-          {roleOptions.map((role) => (
-            <label
-              key={role}
-              className="flex cursor-pointer items-center gap-2 rounded px-1.5 py-1 font-mono text-sm hover:bg-accent"
-            >
-              <input
-                type="checkbox"
-                checked={activeRoles.includes(role)}
-                onChange={(e) =>
-                  setActiveRoles((prev) =>
-                    e.target.checked
-                      ? // Re-derive so the emitted order is the policy's, not
-                        // the click order.
-                        roleOptions.filter(
-                          (r) => r === role || prev.includes(r),
-                        )
-                      : prev.filter((r) => r !== role),
-                  )
-                }
-                className="size-3.5 accent-primary"
-              />
-              {role}
-            </label>
-          ))}
-        </div>
-        <p className="mt-2 border-t border-border/60 px-1 pt-2 text-[11px] leading-snug text-muted-foreground">
-          {activeRoles.length ? (
-            <>
-              Each turn attenuates the token with{" "}
-              <span className="font-mono">
-                {activeRoles.map((r) => `role("${r}")`).join(", ")}
-              </span>
-              .{" "}
-              {activeRoles.length > 1
-                ? "The most permissive outcome across roles wins."
-                : "That role's bundle decides which tools fire."}
-            </>
+    <>
+      <div className="flex flex-col gap-0.5">
+        {roleOptions.map((role) => (
+          <label
+            key={role}
+            className="flex cursor-pointer items-center gap-2 rounded px-1.5 py-1 font-mono text-sm hover:bg-accent"
+          >
+            <input
+              type="checkbox"
+              checked={activeRoles.includes(role)}
+              onChange={(e) =>
+                setActiveRoles((prev) =>
+                  e.target.checked
+                    ? // Re-derive so the emitted order is the policy's, not
+                      // the click order.
+                      roleOptions.filter((r) => r === role || prev.includes(r))
+                    : prev.filter((r) => r !== role),
+                )
+              }
+              className="size-3.5 accent-primary"
+            />
+            {role}
+          </label>
+        ))}
+      </div>
+      <p className="mt-2 border-t border-border/60 px-1 pt-2 text-[11px] leading-snug text-muted-foreground">
+        {activeRoles.length ? (
+          <>
+            Each turn attenuates the token with{" "}
+            <span className="font-mono">
+              {activeRoles.map((r) => `role("${r}")`).join(", ")}
+            </span>
+            .{" "}
+            {activeRoles.length > 1
+              ? "The most permissive outcome across roles wins."
+              : "That role's bundle decides which tools fire."}
+          </>
+        ) : (
+          <>
+            No role — the turn runs unroled and the{" "}
+            <span className="font-mono">default</span> policy decides.
+          </>
+        )}
+      </p>
+    </>
+  );
+}
+
+/** Bottom-left identity: shows "{name} · {role}" with a gear that opens an editor
+ * for the acting name (→ HexgateContext) and the role(s). Subscribes to the
+ * acting name itself (keyed per project) so typing it re-renders only this chip,
+ * not the transcript. */
+function IdentityChip({
+  projectId,
+  roleOptions,
+  activeRoles,
+  setActiveRoles,
+}: {
+  projectId: string;
+  roleOptions: string[];
+  activeRoles: string[];
+  setActiveRoles: React.Dispatch<React.SetStateAction<string[]>>;
+}) {
+  const name = usePlaygroundPrefs((s) => s.names[projectId] ?? "");
+  const setName = usePlaygroundPrefs((s) => s.setName);
+  return (
+    <div className="pointer-events-auto absolute bottom-24 left-4 z-20 sm:bottom-6 sm:left-6">
+      <Popover>
+        <PopoverTrigger asChild>
+          <button
+            type="button"
+            title="Edit acting name & role"
+            className="flex max-w-[70vw] items-center gap-2 rounded-full border border-border/60 bg-card/70 px-3 py-1.5 text-xs backdrop-blur transition-colors hover:bg-accent"
+          >
+            <Settings2 className="size-3.5 shrink-0 text-primary" />
+            <span className="truncate font-mono font-medium">
+              {name.trim() || "anonymous"}
+            </span>
+            <span className="text-muted-foreground">·</span>
+            <span className="truncate font-mono text-muted-foreground">
+              {roleLabel(activeRoles)}
+            </span>
+          </button>
+        </PopoverTrigger>
+        <PopoverContent align="start" side="top" className="w-64 p-2">
+          <div className="mb-1 px-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+            Acting as
+          </div>
+          <Input
+            value={name}
+            onChange={(e) => setName(projectId, e.target.value)}
+            placeholder="name (optional)"
+            className="h-8 font-mono text-sm"
+          />
+          <p className="mb-2 mt-1 px-1 text-[11px] leading-snug text-muted-foreground">
+            Rides into the agent's{" "}
+            <span className="font-mono">HexgateContext</span> as the caller id.
+          </p>
+          {roleOptions.length > 0 ? (
+            <RoleCheckboxList
+              roleOptions={roleOptions}
+              activeRoles={activeRoles}
+              setActiveRoles={setActiveRoles}
+            />
           ) : (
-            <>
-              No role — the turn runs unroled and the{" "}
-              <span className="font-mono">default</span> policy decides.
-            </>
+            <p className="px-1 text-[11px] text-muted-foreground">
+              No roles on the served agent yet.
+            </p>
           )}
-        </p>
-      </PopoverContent>
-    </Popover>
+        </PopoverContent>
+      </Popover>
+    </div>
   );
 }
 

@@ -80,11 +80,14 @@ KNOWN_COMMANDS: set[str] = set()
 KNOWN_FLAGS: set[str] = set()
 KNOWN_EXPORTS: set[str] = set()
 KNOWN_ENV_VARS = {
-    # Read by the platform usage source (#331), which nothing calls yet:
-    # document them when agent_usage.* counts come from the platform.
+    # Read by the platform usage source; documented in policy/constraints.mdx
+    # but not yet in reference/environment.mdx.
     "HEXGATE_USAGE_MAX_STALENESS_SECONDS",
     "HEXGATE_USAGE_REFRESH_SECONDS",
     "HEXGATE_USAGE_SYNC_AFTER_SECONDS",
+    # Sizes the user usage ledgers, which stay off until a policy can reference
+    # user_usage.*: document it with that namespace.
+    "HEXGATE_USAGE_USER_CACHE",
 }
 
 ENV_VAR = re.compile(r"HEXGATE_[A-Z0-9_]*[A-Z0-9]")

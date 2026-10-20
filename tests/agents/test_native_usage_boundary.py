@@ -7,6 +7,7 @@ tests/agents/test_create_agent_binding.py does; the usage source is a spy.
 
 from __future__ import annotations
 
+from collections import OrderedDict
 from typing import Any
 
 import pytest
@@ -174,7 +175,9 @@ def events(monkeypatch: pytest.MonkeyPatch) -> list[object]:
     )
     # A usage policy enables the process ledger registry for good; restore it.
     monkeypatch.setattr(USAGE_LEDGERS, "_enabled", frozenset())
-    monkeypatch.setattr(USAGE_LEDGERS, "_ledgers", {})
+    monkeypatch.setattr(USAGE_LEDGERS, "_agent_ledgers", {})
+    monkeypatch.setattr(USAGE_LEDGERS, "_user_ledgers", OrderedDict())
+    monkeypatch.setattr(USAGE_LEDGERS, "_user_capacity", USAGE_LEDGERS._user_capacity)
     return log
 
 
