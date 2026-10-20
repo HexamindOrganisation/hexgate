@@ -1,13 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
-import {
-  Activity,
-  Check,
-  CircleDashed,
-  Filter,
-  Lightbulb,
-  X,
-} from "lucide-react";
+import { Filter, Lightbulb, X } from "lucide-react";
 import { endOfDay, startOfDay } from "date-fns";
 import { useNavigate } from "react-router-dom";
 import {
@@ -22,7 +15,9 @@ import { NoProjectEmptyState } from "@/components/NoProjectEmptyState";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { DashboardRangePicker } from "@/components/ui/dashboard-range-picker";
-import { AreaChart, type ChartBucket, Donut } from "@/components/ui/charts";
+import { type ChartBucket, StackedBars } from "@/components/ui/charts";
+import { StatStrip } from "@/components/ui/stat-strip";
+import { AuditOnboarding } from "@/components/audit/onboarding";
 import { type Counts, DecisionBadge } from "@/components/audit/charts";
 import {
   displayNoValue,
@@ -43,7 +38,6 @@ import {
   BreakdownCard,
   EventsTable,
   FilterBar,
-  KpiCard,
 } from "@/components/audit/pieces";
 import { PageHeader } from "@/components/ui/page-header";
 
@@ -555,6 +549,25 @@ export function AuditPage() {
 
   const options = optionsQ.data;
   const rangeTotal = options?.totals.all ?? 0;
+  const hasFilters = !!(
+    f.agent ||
+    f.role ||
+    f.tool ||
+    f.user ||
+    f.outcome ||
+    f.start_date
+  );
+  // Nothing recorded in the range and nothing filtered out: show next steps
+  // instead of a wall of zeros.
+  const showOnboarding = optionsQ.isSuccess && rangeTotal === 0 && !hasFilters;
+  const rangePhrase = f.start_date
+    ? "in the selected range"
+    : {
+        "24h": "in the last 24 hours",
+        "7d": "in the last 7 days",
+        "30d": "in the last 30 days",
+        "90d": "in the last 90 days",
+      }[f.range];
   const related = (relatedQ.data?.rows ?? [])
     .filter((r) => r.event_id !== sel?.event_id)
     .slice(0, 6);
@@ -586,12 +599,35 @@ export function AuditPage() {
         <PageHeader
           title="Audit"
           description={
+            counts.total > 0 ? (
+              <>
+                <span className="font-semibold text-foreground">
+                  {counts.total.toLocaleString()}
+                </span>{" "}
+                policy decisions {rangePhrase} for{" "}
+                <span className="font-mono text-foreground">{projectName}</span>
+                . Deny rate{" "}
+                <span className="font-semibold text-deny">{denyRate}%</span>.
+              </>
+            ) : (
+              <>
+                Every policy decision for project{" "}
+                <span className="font-mono text-foreground">{projectName}</span>
+              </>
+            )
+          }
+          actions={
             <>
-              Every policy decision for project{" "}
-              <span className="font-mono text-foreground">{projectName}</span>
+              <span
+                className="flex items-center gap-1.5 text-meta text-muted-foreground"
+                title="Refreshes every 30 seconds"
+              >
+                <span className="size-1.5 rounded-full bg-success" />
+                Live
+              </span>
+              <DashboardRangePicker f={f} setF={setF} />
             </>
           }
-          actions={<DashboardRangePicker f={f} setF={setF} />}
         />
 
         <FilterBar
@@ -605,132 +641,152 @@ export function AuditPage() {
         />
         <ActiveChips f={f} setF={setF} />
 
-        <div className="mb-4 grid grid-cols-4 gap-4">
-          <KpiCard
-            label="Decisions"
-            icon={Activity}
-            value={counts.total.toLocaleString()}
-            sub={avgLabel}
-            spark={spark.total}
-            sparkColor="hsl(var(--primary))"
-            showSpark
+        {showOnboarding ? (
+          <AuditOnboarding
+            onWiden={
+              f.range !== "90d" || f.start_date
+                ? () =>
+                    setF((p) => ({
+                      ...p,
+                      range: "90d",
+                      customMode: false,
+                      start_date: null,
+                      end_date: null,
+                    }))
+                : undefined
+            }
           />
-          <KpiCard
-            label="Allowed"
-            icon={Check}
-            value={counts.allow.toLocaleString()}
-            color="allow"
-            sub={`${allowPct}% of decisions`}
-            spark={spark.allow}
-            sparkColor="hsl(var(--semantic-allow))"
-            showSpark
-            onClick={() => setOutcome("allow")}
-            active={f.outcome === "allow"}
-          />
-          <KpiCard
-            label="Denied"
-            icon={X}
-            value={counts.deny.toLocaleString()}
-            color="deny"
-            sub={`${denyRate}% deny rate`}
-            spark={spark.deny}
-            sparkColor="hsl(var(--semantic-deny))"
-            showSpark
-            onClick={() => setOutcome("deny")}
-            active={f.outcome === "deny"}
-          />
-          <KpiCard
-            label="Needs approval"
-            icon={CircleDashed}
-            value={counts.needs_approval.toLocaleString()}
-            color="approval"
-            sub={`${apprPct}% of decisions`}
-            spark={spark.needs_approval}
-            sparkColor="hsl(var(--semantic-approval))"
-            showSpark
-            onClick={() => setOutcome("needs_approval")}
-            active={f.outcome === "needs_approval"}
-          />
-        </div>
-
-        <div className="mb-4 grid grid-cols-[1.55fr_1fr] gap-4">
-          <Card className="p-6">
-            <div className="mb-3.5 flex items-center justify-between">
-              <div className="text-[13px] font-medium text-muted-foreground">
-                Decisions over time
-              </div>
-              <div className="flex gap-3.5 text-[11px] text-muted-foreground">
-                {OUTCOME_SERIES.map((s) => (
-                  <span key={s.key} className="flex items-center gap-1.5">
-                    <span className={`size-2 rounded-sm ${s.swatchClass}`} />
-                    {s.label}
-                  </span>
-                ))}
-              </div>
-            </div>
-            {days.length ? (
-              <AreaChart buckets={days} series={OUTCOME_SERIES} />
-            ) : (
-              <div className="flex h-60 items-center justify-center text-[13px] text-muted-foreground">
-                No decisions in this range.
-              </div>
-            )}
-          </Card>
-          <Card className="p-6">
-            <div className="mb-4 text-[13px] font-medium text-muted-foreground">
-              Outcome breakdown
-            </div>
-            <Donut
-              values={{ ...counts }}
-              total={counts.total}
-              series={OUTCOME_SERIES}
-              caption="decisions"
+        ) : (
+          <div className="space-y-4">
+            <StatStrip
+              stats={[
+                {
+                  key: "total",
+                  label: "Decisions",
+                  value: counts.total.toLocaleString(),
+                  sub: avgLabel,
+                  spark: spark.total,
+                  sparkColor: "hsl(var(--muted-foreground))",
+                },
+                {
+                  key: "deny",
+                  label: "Denied",
+                  swatchClass: "bg-deny",
+                  value: counts.deny.toLocaleString(),
+                  valueClass: "text-deny",
+                  sub: `${denyRate}% deny rate`,
+                  spark: spark.deny,
+                  sparkColor: "hsl(var(--semantic-deny))",
+                  onClick: () => setOutcome("deny"),
+                  active: f.outcome === "deny",
+                },
+                {
+                  key: "needs_approval",
+                  label: "Needs approval",
+                  swatchClass: "bg-approval",
+                  value: counts.needs_approval.toLocaleString(),
+                  valueClass: "text-approval",
+                  sub: `${apprPct}% of decisions`,
+                  spark: spark.needs_approval,
+                  sparkColor: "hsl(var(--semantic-approval))",
+                  onClick: () => setOutcome("needs_approval"),
+                  active: f.outcome === "needs_approval",
+                },
+                {
+                  key: "allow",
+                  label: "Allowed",
+                  swatchClass: "bg-allow-fill",
+                  value: counts.allow.toLocaleString(),
+                  sub: `${allowPct}% of decisions`,
+                  spark: spark.allow,
+                  sparkColor: "hsl(var(--semantic-allow))",
+                  onClick: () => setOutcome("allow"),
+                  active: f.outcome === "allow",
+                },
+              ]}
+              split={[
+                { key: "deny", value: counts.deny, className: "bg-deny" },
+                {
+                  key: "needs_approval",
+                  value: counts.needs_approval,
+                  className: "bg-approval",
+                },
+                {
+                  key: "allow",
+                  value: counts.allow,
+                  className: "bg-allow-fill",
+                },
+              ]}
             />
-          </Card>
-        </div>
 
-        {!!anomaliesQ.data?.length && (
-          <div className="mb-4">
-            <AnomaliesCard
-              rows={anomaliesQ.data}
-              onRowClick={(from, to, userId) =>
-                setF((p) => ({
-                  ...p,
-                  customMode: true,
-                  start_date: startOfDay(from),
-                  end_date: endOfDay(to),
-                  user: userId,
-                }))
-              }
-              onBanUser={
-                canManageBans
-                  ? (userId) =>
-                      navigate(`/bans?ban_user=${encodeURIComponent(userId)}`)
-                  : undefined
-              }
+            {!!anomaliesQ.data?.length && (
+              <AnomaliesCard
+                rows={anomaliesQ.data}
+                onRowClick={(from, to, userId) =>
+                  setF((p) => ({
+                    ...p,
+                    customMode: true,
+                    start_date: startOfDay(from),
+                    end_date: endOfDay(to),
+                    user: userId,
+                  }))
+                }
+                onBanUser={
+                  canManageBans
+                    ? (userId) =>
+                        navigate(`/bans?ban_user=${encodeURIComponent(userId)}`)
+                    : undefined
+                }
+              />
+            )}
+
+            <div className="grid gap-4 lg:grid-cols-[minmax(0,1.7fr)_minmax(0,1fr)]">
+              <Card className="p-5">
+                <div className="mb-5 flex flex-wrap items-baseline justify-between gap-2">
+                  <h2 className="text-body font-semibold">
+                    {f.range === "24h" && !f.start_date
+                      ? "Decisions per hour"
+                      : "Decisions per day"}
+                  </h2>
+                  <div className="flex gap-3.5 text-xs text-muted-foreground">
+                    {[...OUTCOME_SERIES].reverse().map((s) => (
+                      <span key={s.key} className="flex items-center gap-1.5">
+                        <span
+                          className={`size-2 rounded-sm ${s.swatchClass}`}
+                        />
+                        {s.label}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+                {days.length ? (
+                  <StackedBars buckets={days} series={OUTCOME_SERIES} />
+                ) : (
+                  <div className="flex h-52 items-center justify-center text-meta text-muted-foreground">
+                    No decisions in this range.
+                  </div>
+                )}
+              </Card>
+              <BreakdownCard
+                byTool={summary?.by_tool ?? []}
+                byAgent={summary?.by_agent ?? []}
+                byRole={summary?.by_role.map(displayNoValue) ?? []}
+                f={f}
+                setF={setF}
+              />
+            </div>
+
+            <EventsTable
+              rows={listQ.data?.rows ?? []}
+              total={listQ.data?.total ?? 0}
+              onSelect={setSel}
+              selectedId={sel?.event_id}
+              onLoadMore={loadMore}
+              loadingMore={listQ.isFetching}
+              onExport={exportJsonl}
             />
           </div>
         )}
-
-        <div className="mb-4">
-          <BreakdownCard
-            byTool={summary?.by_tool ?? []}
-            byAgent={summary?.by_agent ?? []}
-            byRole={summary?.by_role.map(displayNoValue) ?? []}
-            f={f}
-            setF={setF}
-          />
-        </div>
-
-        <EventsTable
-          rows={listQ.data?.rows ?? []}
-          total={listQ.data?.total ?? 0}
-          onSelect={setSel}
-          selectedId={sel?.event_id}
-          onLoadMore={loadMore}
-          loadingMore={listQ.isFetching}
-          onExport={exportJsonl}
-        />
       </div>
 
       <DetailDrawer

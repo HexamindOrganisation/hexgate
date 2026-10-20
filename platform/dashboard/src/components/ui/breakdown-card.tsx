@@ -71,6 +71,7 @@ export function BreakdownCardShell<
   onFilterChange,
   emptyMessage,
   legend,
+  columns = 2,
 }: {
   dims: { id: Dim; label: string }[];
   dim: Dim;
@@ -87,6 +88,8 @@ export function BreakdownCardShell<
   onFilterChange: (next: string) => void;
   emptyMessage: string;
   legend: ReactNode;
+  /** Bar grid columns; 1 when the card sits in a narrow column. */
+  columns?: 1 | 2;
 }) {
   return (
     <Card className="flex flex-col p-6">
@@ -116,7 +119,9 @@ export function BreakdownCardShell<
           </SelectContent>
         </Select>
       </div>
-      <div className="grid flex-1 grid-cols-2 gap-x-8">
+      <div
+        className={`grid flex-1 content-start gap-x-8 ${columns === 2 ? "grid-cols-2" : "grid-cols-1"}`}
+      >
         {rows.length ? (
           rows.map((row) => {
             const active = !activeFilterValue || activeFilterValue === row.key;
