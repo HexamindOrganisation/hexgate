@@ -621,19 +621,22 @@ def timeseries(
 def _fill_buckets(
     points: dict[int, dict], start: datetime, end: datetime, bucket_minutes: int
 ) -> list[dict]:
-    """Every epoch-aligned bucket from ``start``'s to ``end``, zeros where the
-    query found nothing. Points outside the grid are kept, never dropped."""
+    """Every epoch-aligned bucket from ``start``'s to ``end``'s, zeros where
+    the query found nothing. Stops at now: a bucket that hasn't started is not
+    a quiet one. Points outside the grid are kept, never dropped."""
     step = bucket_minutes * 60
+    start, end = (
+        d if d.tzinfo else d.replace(tzinfo=timezone.utc) for d in (start, end)
+    )
     t = int(start.timestamp()) // step * step
-    last = int(end.timestamp())
-    filled = dict(points)
+    last = int(min(end, datetime.now(timezone.utc)).timestamp())
     while t <= last:
-        filled.setdefault(
+        points.setdefault(
             t,
             {"bucket": datetime.fromtimestamp(t, timezone.utc), **_zero_outcomes()},
         )
         t += step
-    return [filled[k] for k in sorted(filled)]
+    return [points[k] for k in sorted(points)]
 
 
 # run_id rides along so the detail drawer can scope the transcript read for

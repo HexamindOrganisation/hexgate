@@ -844,11 +844,11 @@ def test_timeseries_bucket_uses_since_hours_when_no_dates() -> None:
 
 
 def test_timeseries_fills_empty_buckets_across_the_window() -> None:
-    # 7-day window → 360-min buckets; two sparse hits must come back with
-    # every empty bucket between and around them as zeros.
+    # A just-under-7-day window → 360-min buckets; two sparse hits must come
+    # back with every empty bucket between and around them as zeros.
     client = _timeseries_client()
     start = datetime(2026, 10, 1, 0, 0, tzinfo=timezone.utc)
-    end = datetime(2026, 10, 2, 23, 59, tzinfo=timezone.utc)
+    end = start + timedelta(days=6, hours=23)
     client.query.return_value.result_rows = [
         (datetime(2026, 10, 1, 6), "deny", 3),
         (datetime(2026, 10, 2, 12), "allow", 5),
@@ -858,7 +858,7 @@ def test_timeseries_fills_empty_buckets_across_the_window() -> None:
         project_id="p1",
         since_hours=24,
         start_date=start,
-        end_date=end + timedelta(days=5),
+        end_date=end,
     )
     buckets = [p["bucket"] for p in pts]
     assert buckets == sorted(buckets)
@@ -899,11 +899,25 @@ def test_timeseries_stamps_naive_driver_datetimes_as_utc() -> None:
     assert steps == {6 * 3600}
 
 
+def test_timeseries_does_not_fill_buckets_that_have_not_started() -> None:
+    client = _timeseries_client()
+    now = datetime.now(timezone.utc)
+    pts = audit.timeseries(
+        client,
+        project_id="p1",
+        since_hours=24,
+        start_date=now - timedelta(hours=20),
+        end_date=now + timedelta(minutes=5),
+    )
+    assert all(p["bucket"] <= now for p in pts)
+
+
 def test_timeseries_fills_a_rolling_window_up_to_now() -> None:
     client = _timeseries_client()
     pts = audit.timeseries(client, project_id="p1", since_hours=24)
-    # 24h at 60-min buckets: the bucket holding `since` through the current one.
-    assert 24 <= len(pts) <= 25
+    # 24h at 60-min buckets: the bucket holding `since` through the current
+    # one, i.e. 25 unless `since` sits exactly on the hour.
+    assert len(pts) == 25 or datetime.now(timezone.utc).minute == 0
     assert all(p["deny"] == 0 for p in pts)
 
 
