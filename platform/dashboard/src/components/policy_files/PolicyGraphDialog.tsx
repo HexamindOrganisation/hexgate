@@ -22,6 +22,7 @@ import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { usePolicyGraph } from "@/lib/policy_files";
 import type { PolicyGraph, PolicyGraphEdge } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import { layeredLayout } from "@/lib/graph-layout";
 
 // Verdict → edge color (green allow, amber approval, red deny) — mid-tone
 // hexes that read on both the light and dark graph ground.
@@ -313,74 +314,150 @@ function PolicyEdge({
   );
 }
 
-const nodeTypes = { hex: HexNode };
-const edgeTypes = { policy: PolicyEdge };
-
-/** Force-directed layout (Fruchterman–Reingold): every node repels every other
- * and each edge pulls its endpoints together, so the graph relaxes into a
- * spread, uncluttered arrangement instead of dense columns. Deterministic — a
- * fixed golden-angle seed + fixed iteration count — so it doesn't jitter between
- * renders; nodes stay draggable afterwards. */
-function layout(graph: PolicyGraph): Record<string, { x: number; y: number }> {
-  const N = graph.nodes.length;
-  const pos = graph.nodes.map((_, i) => {
-    const a = i * 2.399963; // golden angle → an even, deterministic spiral seed
-    const r = 40 + 26 * Math.sqrt(i);
-    return { x: Math.cos(a) * r, y: Math.sin(a) * r };
-  });
-  const index: Record<string, number> = {};
-  graph.nodes.forEach((n, i) => (index[n.id] = i));
-  const links = graph.edges
-    .map((e) => [index[e.source], index[e.target]] as const)
-    .filter(([s, t]) => s != null && t != null);
-
-  const k = 300; // ideal node separation (hexes are ~136px wide)
-  const ITER = 420;
-  let temp = k * 1.4;
-  const cool = temp / (ITER + 1);
-
-  for (let it = 0; it < ITER; it++) {
-    const disp = pos.map(() => ({ x: 0, y: 0 }));
-    for (let i = 0; i < N; i++) {
-      for (let j = i + 1; j < N; j++) {
-        let dx = pos[i].x - pos[j].x;
-        let dy = pos[i].y - pos[j].y;
-        const d = Math.hypot(dx, dy) || 0.01;
-        const f = (k * k) / d; // repulsion
-        dx = (dx / d) * f;
-        dy = (dy / d) * f;
-        disp[i].x += dx;
-        disp[i].y += dy;
-        disp[j].x -= dx;
-        disp[j].y -= dy;
-      }
-    }
-    for (const [s, t] of links) {
-      let dx = pos[s].x - pos[t].x;
-      let dy = pos[s].y - pos[t].y;
-      const d = Math.hypot(dx, dy) || 0.01;
-      const f = (d * d) / k; // attraction
-      dx = (dx / d) * f;
-      dy = (dy / d) * f;
-      disp[s].x -= dx;
-      disp[s].y -= dy;
-      disp[t].x += dx;
-      disp[t].y += dy;
-    }
-    for (let i = 0; i < N; i++) {
-      const d = Math.hypot(disp[i].x, disp[i].y) || 0.01;
-      pos[i].x += (disp[i].x / d) * Math.min(d, temp); // capped by temperature
-      pos[i].y += (disp[i].y / d) * Math.min(d, temp);
-    }
-    temp -= cool; // cool down
-  }
-
-  const out: Record<string, { x: number; y: number }> = {};
-  graph.nodes.forEach((n, i) => (out[n.id] = pos[i]));
-  return out;
+/** A column heading; it pans and zooms with the graph. */
+function ColumnLabel({ data }: NodeProps<Node<NodeData>>) {
+  return (
+    <div className="w-[136px] text-center font-mono text-[13px] font-medium uppercase tracking-wider text-muted-foreground">
+      {data.label}
+    </div>
+  );
 }
 
+const nodeTypes = { hex: HexNode, column: ColumnLabel };
+const edgeTypes = { policy: PolicyEdge };
+
 const nodeLabel = (id: string) => id.slice(id.indexOf(":") + 1);
+const COLUMN_PREFIX = "column:";
+
+const verdictLabel = (v: string) =>
+  v === "approval_required" ? "approval" : v;
+
+function VerdictTag({ edge }: { edge: PolicyGraphEdge }) {
+  return (
+    <span
+      className="shrink-0 rounded px-1.5 py-0.5 text-[9px] uppercase tracking-wider"
+      title={edge.constraints.join(" ∧ ") || undefined}
+      style={{
+        color: VERDICT[edge.verdict],
+        border: `1px solid ${VERDICT[edge.verdict]}66`,
+      }}
+    >
+      {verdictLabel(edge.verdict)}
+      {edge.constraints.length > 0 && " *"}
+    </span>
+  );
+}
+
+/** One list in the side panel: the far end of each edge plus its verdict. */
+function EdgeList({
+  title,
+  edges,
+  end,
+}: {
+  title: string;
+  edges: PolicyGraphEdge[];
+  end: "source" | "target";
+}) {
+  if (edges.length === 0) return null;
+  return (
+    <div className="mt-3">
+      <div className="mb-1 text-[10px] uppercase tracking-wider text-muted-foreground">
+        {title}
+      </div>
+      <ul className="space-y-1">
+        {edges.map((e, i) => (
+          <li key={i} className="flex items-center justify-between gap-2">
+            <span className="truncate">
+              {nodeLabel(e[end])}
+              {e.kind === "reach" && (
+                <span className="text-muted-foreground"> · {e.via}</span>
+              )}
+            </span>
+            <VerdictTag edge={e} />
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+/** What the pinned node reaches, and who reaches it. */
+function NodePanel({
+  graph,
+  id,
+  onClose,
+}: {
+  graph: PolicyGraph;
+  id: string;
+  onClose: () => void;
+}) {
+  const node = graph.nodes.find((n) => n.id === id);
+  if (!node) return null;
+  const from = graph.edges.filter((e) => e.source === id);
+  const to = graph.edges.filter((e) => e.target === id);
+  const calls = from.filter((e) => e.kind === "call");
+  const open = calls.filter((e) => e.verdict !== "deny");
+  const summary =
+    node.kind === "agent"
+      ? `Calls ${open.length} of ${calls.length} tools — ${
+          open.filter((e) => e.constraints.length > 0).length
+        } with constraints, ${
+          open.filter((e) => e.verdict === "approval_required").length
+        } behind approval.`
+      : node.kind === "role"
+        ? `Admitted by ${from.filter((e) => e.verdict !== "deny").length} of ${from.length} agents.`
+        : `Callable by ${to.filter((e) => e.verdict !== "deny").length} of ${to.length} agents.`;
+  return (
+    <aside
+      aria-label={`${node.kind} ${node.label}`}
+      className="max-h-[60vh] w-72 overflow-y-auto rounded-lg border border-border bg-card/95 p-3 font-mono text-[11px] text-foreground shadow-xl backdrop-blur"
+    >
+      <div className="flex items-start justify-between gap-2">
+        <div>
+          <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
+            {KIND[node.kind]?.label ?? node.kind}
+          </div>
+          <div className="text-sm">{node.label}</div>
+        </div>
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="Close details"
+          className="text-muted-foreground hover:text-foreground"
+        >
+          <X size={13} />
+        </button>
+      </div>
+      <p className="mt-1 font-sans text-xs text-muted-foreground">{summary}</p>
+      {node.kind === "agent" && (
+        <>
+          <EdgeList
+            title="Admitted roles"
+            edges={to.filter((e) => e.kind === "admission")}
+            end="source"
+          />
+          <EdgeList
+            title="Reached by"
+            edges={to.filter((e) => e.kind === "reach")}
+            end="source"
+          />
+          <EdgeList title="Tools" edges={calls} end="target" />
+          <EdgeList
+            title="Reaches"
+            edges={from.filter((e) => e.kind === "reach")}
+            end="target"
+          />
+        </>
+      )}
+      {node.kind === "role" && (
+        <EdgeList title="Agents" edges={from} end="target" />
+      )}
+      {(node.kind === "tool" || node.kind === "mcp") && (
+        <EdgeList title="Called by" edges={to} end="source" />
+      )}
+    </aside>
+  );
+}
 
 type BypassWarning = {
   toolId: string;
@@ -463,7 +540,7 @@ function PolicyFlow({ graph }: { graph: PolicyGraph }) {
   );
   const [pinned, setPinned] = useState<string | null>(null);
   const [animate, setAnimate] = useState(false);
-  const pos = useMemo(() => layout(graph), [graph]);
+  const lay = useMemo(() => layeredLayout(graph), [graph]);
   const warnings = useMemo(() => bypassWarnings(graph), [graph]);
 
   // Directed adjacency (out + in) for transitive reachability.
@@ -577,15 +654,25 @@ function PolicyFlow({ graph }: { graph: PolicyGraph }) {
   // Stable across hover (depend only on graph/pos), so React Flow doesn't
   // regenerate markers or thrash edge mouse events.
   const nodes: Node<NodeData>[] = useMemo(
-    () =>
-      graph.nodes.map((n) => ({
+    () => [
+      ...lay.columns.map((c, i) => ({
+        id: `${COLUMN_PREFIX}${i}`,
+        type: "column",
+        position: { x: c.x, y: -90 },
+        data: { label: c.title, kind: "column" },
+        draggable: false,
+        selectable: false,
+        style: { pointerEvents: "none" as const },
+      })),
+      ...graph.nodes.map((n) => ({
         id: n.id,
         type: "hex",
-        position: pos[n.id] ?? { x: 0, y: 0 },
+        position: lay.pos[n.id] ?? { x: 0, y: 0 },
         data: { label: n.label, kind: n.kind },
         draggable: false,
       })),
-    [graph, pos],
+    ],
+    [graph, lay],
   );
 
   const edges: Edge<EdgeData>[] = useMemo(
@@ -628,14 +715,17 @@ function PolicyFlow({ graph }: { graph: PolicyGraph }) {
           const idx = Number(edge.id.slice(1));
           setSelected(graph.edges[idx] ?? null);
         }}
-        onNodeClick={(_, node) =>
-          setPinned((p) => (p === node.id ? null : node.id))
-        }
+        onNodeClick={(_, node) => {
+          if (node.type === "column") return;
+          setPinned((p) => (p === node.id ? null : node.id));
+        }}
         onPaneClick={() => {
           setSelected(null);
           setPinned(null);
         }}
-        onNodeMouseEnter={(_, node) => setHover({ node: node.id })}
+        onNodeMouseEnter={(_, node) => {
+          if (node.type !== "column") setHover({ node: node.id });
+        }}
         onNodeMouseLeave={() => setHover(null)}
         onEdgeMouseEnter={(_, edge) =>
           setHover({ edge: Number(edge.id.slice(1)) })
@@ -668,7 +758,7 @@ function PolicyFlow({ graph }: { graph: PolicyGraph }) {
             borderRadius: 8,
           }}
         />
-        <Panel position="top-right">
+        <Panel position="top-right" className="flex flex-col items-end gap-2">
           <button
             onClick={() => setAnimate((a) => !a)}
             className={cn(
@@ -686,6 +776,13 @@ function PolicyFlow({ graph }: { graph: PolicyGraph }) {
             <Play size={12} />
             {animate ? "Animating…" : "Animate flow"}
           </button>
+          {pinned && (
+            <NodePanel
+              graph={graph}
+              id={pinned}
+              onClose={() => setPinned(null)}
+            />
+          )}
         </Panel>
         <Panel position="top-left">
           <div className="flex flex-wrap gap-3 rounded-lg border border-border bg-card/90 px-3 py-2 font-mono text-[10px] text-muted-foreground backdrop-blur">
