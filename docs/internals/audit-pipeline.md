@@ -742,9 +742,10 @@ TTL minute + INTERVAL 35 DAY
 #### `usage_minute_user` — per-minute usage per end user
 
 The rollup behind `user_usage.*` windows, and the source of
-`POST /v1/usage/users:read`. A mechanical copy of `usage_minute` with the key
-column swapped and anonymous rows filtered out, pinned by
-`platform/api/tests/core/test_usage_minute_sql.py`.
+`POST /v1/usage/users:read` and of the dashboard's
+`GET /v1/projects/{project_id}/usage/top-users` ranking. A mechanical copy of
+`usage_minute` with the key column swapped and anonymous rows filtered out,
+pinned by `platform/api/tests/core/test_usage_minute_sql.py`.
 
 ```sql
 CREATE TABLE hexgate_audit.usage_minute_user
@@ -807,8 +808,10 @@ HTTP ingest uses the single-row `insert_decision`, whose settings are:
 - **`user_id` in the usage rollup.** `usage_minute_user` keeps `user_id`, often
   an email, for 35 days (TTL). An erasure request needs `ALTER TABLE
   hexgate_audit.usage_minute_user DELETE WHERE user_id = …` alongside the raw
-  tables. The read endpoint takes `user_id` in a POST body, never in the URL,
-  so it never reaches proxy or access logs.
+  tables. The SDK read takes `user_id` in a POST body, never in the URL, so it
+  never reaches proxy or access logs. The dashboard's top-users route takes no
+  `user_id` and returns them to org members only, with
+  `Cache-Control: private, no-store`.
 - **`arguments` carries tool inputs** (paths, payloads, possibly PII). It is
   transmitted to the platform and stored (compressed) for up to 180 days. The
   default `base_url` is **plaintext `http://localhost:8000`**; production

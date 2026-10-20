@@ -13,7 +13,7 @@ from hexgate_api.core.clickhouse import SchemaOutOfDate
 from hexgate_api.features.usage import service
 from hexgate_api.features.usage.paths import UsageMetric, UsageWindowSpec
 from hexgate_api.features.usage.service import (
-    _METRIC_SQL,
+    METRIC_SQL,
     AGENT_ROLLUP,
     QUERY_SETTINGS,
     USER_ROLLUP,
@@ -152,7 +152,7 @@ def test_each_rollup_reads_its_key_column() -> None:
 
 
 def test_every_metric_has_its_sql() -> None:
-    assert set(_METRIC_SQL) == set(UsageMetric)
+    assert set(METRIC_SQL) == set(UsageMetric)
 
 
 # ---------------------------------------------------------------------------

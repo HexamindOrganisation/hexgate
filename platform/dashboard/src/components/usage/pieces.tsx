@@ -85,22 +85,21 @@ export function UsageActiveChips({
   );
 }
 
-// ————————————————————————————————————————————— Breakdown bar (single
-// volume metric, no outcome mix — unlike audit/charts.tsx's BreakdownBar)
-function UsageBar({
-  row,
+// ————————————————————————————————————————————— Breakdown bar (one volume
+// value per row, no outcome mix — unlike audit/charts.tsx's BreakdownBar)
+export function UsageBar({
+  label,
+  value,
   max,
-  metric,
   active,
   onClick,
 }: {
-  row: LlmInvocationBreakdownRow;
+  label: string;
+  value: number;
   max: number;
-  metric: "total_tokens" | "calls";
   active?: boolean;
   onClick?: () => void;
 }) {
-  const value = row[metric];
   const widthPct = max ? (value / max) * 100 : 0;
   return (
     <BarRow
@@ -109,7 +108,7 @@ function UsageBar({
       widthPct={widthPct}
       header={
         <>
-          <span className="truncate font-mono">{row.key}</span>
+          <span className="truncate font-mono">{label}</span>
           <span className="shrink-0 text-foreground">
             {value.toLocaleString()}
           </span>
@@ -177,9 +176,9 @@ export function UsageBreakdownCard({
       onFilterChange={(v) => setF((p) => ({ ...p, [fkey]: v }))}
       renderRow={(row, { active, onClick }) => (
         <UsageBar
-          row={row}
+          label={row.key}
+          value={row[metric]}
           max={max}
-          metric={metric}
           active={active}
           onClick={onClick}
         />

@@ -15,6 +15,7 @@ from hexgate_api.features.usage.paths import (
     parse_usage_path,
     parse_usage_path_list,
     parse_usage_paths,
+    parse_window_seconds,
 )
 
 USER_USAGE_ROOT = "user_usage"
@@ -70,6 +71,19 @@ def test_a_bad_path_is_rejected_with_the_grammar(path: str) -> None:
         parse_usage_path(path)
 
     assert USAGE_PATH_GRAMMAR in str(exc.value)
+
+
+@pytest.mark.parametrize(
+    ("window", "seconds"), [("1m", 60), ("24h", 86_400), ("30d", 30 * 86_400)]
+)
+def test_a_bare_window_parses_to_seconds(window: str, seconds: int) -> None:
+    assert parse_window_seconds(window) == seconds
+
+
+@pytest.mark.parametrize("window", ["31d", "0h", "1w", "invocations_1h", ""])
+def test_a_bad_bare_window_is_rejected(window: str) -> None:
+    with pytest.raises(ValueError, match="expected"):
+        parse_window_seconds(window)
 
 
 @pytest.mark.parametrize("raw", ["", "invocations_1h,,denials_1h", "invocations_1h,"])
