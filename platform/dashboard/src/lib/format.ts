@@ -1,6 +1,6 @@
 /** "1 tool", "3 tools". */
 export function pluralise(count: number, noun: string): string {
-  return `${count} ${noun}${count === 1 ? "" : "s"}`;
+  return `${count.toLocaleString()} ${noun}${count === 1 ? "" : "s"}`;
 }
 
 /** Compact token counts (1.25M / 84.6K) — raw counts run into the millions
