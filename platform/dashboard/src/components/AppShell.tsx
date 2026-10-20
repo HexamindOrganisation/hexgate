@@ -38,8 +38,8 @@ import { CreateOrgDialog } from "@/components/CreateOrgDialog";
 import { CreateProjectDialog } from "@/components/CreateProjectDialog";
 import { PreviewBanner } from "@/components/PreviewBanner";
 import { VerifyEmailBanner } from "@/components/VerifyEmailBanner";
-import { useActive } from "@/lib/active";
-import { useBans } from "@/lib/bans";
+import { useActive, useProjectScoped } from "@/lib/active";
+import { useBans, useCanManageBans } from "@/lib/bans";
 import { useLogout, useUser } from "@/lib/auth";
 import { useOrgs } from "@/lib/orgs";
 import { useProjects } from "@/lib/projects";
@@ -112,6 +112,8 @@ interface NavLinkDef {
   label: string;
   icon: LucideIcon;
   end?: boolean;
+  /** Which live count, if any, this link shows. */
+  count?: "activeBans";
 }
 
 interface NavGroup {
@@ -143,7 +145,7 @@ const workspaceGroups: NavGroup[] = [
   {
     label: "Control",
     links: [
-      { to: "/bans", label: "Bans", icon: Ban },
+      { to: "/bans", label: "Bans", icon: Ban, count: "activeBans" },
       // One word, like every other entry here.
       { to: "/ai-act", label: "Governance", icon: Scale },
       { to: "/tokens", label: "API keys", icon: KeyRound },
@@ -203,7 +205,6 @@ function NavItem({
   icon: Icon,
   end,
   badge,
-  badgeTone,
   status,
   collapsed,
 }: {
@@ -211,9 +212,8 @@ function NavItem({
   label: string;
   icon: LucideIcon;
   end?: boolean;
-  badge?: string;
-  /** `deny` for counts that need attention (active bans). */
-  badgeTone?: "deny";
+  /** A count that needs attention; `noun` names it for the accessible label. */
+  badge?: { value: number; noun: string };
   status?: string;
   collapsed?: boolean;
 }) {
@@ -222,6 +222,7 @@ function NavItem({
       to={to}
       end={end}
       title={collapsed ? label : undefined}
+      aria-label={badge ? `${label}, ${badge.value} ${badge.noun}` : undefined}
       className={({ isActive }) =>
         cn(
           "flex h-9 items-center rounded-lg text-sm transition-colors",
@@ -234,22 +235,24 @@ function NavItem({
     >
       {({ isActive }) => (
         <>
-          <span className="flex items-center gap-2.5">
+          <span className="relative flex items-center gap-2.5">
             <Icon
               className={cn("size-4 shrink-0", isActive && "text-primary")}
             />
             {!collapsed && label}
+            {/* Collapsed: a dot on the icon keeps the signal visible. */}
+            {collapsed && badge && (
+              <span className="absolute -top-0.5 left-3 size-2 rounded-full bg-deny ring-2 ring-background" />
+            )}
           </span>
-          {!collapsed && badge && (
+          {badge && (
             <span
               className={cn(
-                "grid h-[18px] min-w-[18px] place-items-center rounded-full px-1.5 text-[11px] font-semibold",
-                badgeTone === "deny"
-                  ? "bg-deny/15 text-deny"
-                  : "bg-muted text-muted-foreground",
+                "grid h-[18px] min-w-[18px] place-items-center rounded-full bg-deny/15 px-1.5 text-[11px] font-semibold text-deny",
+                collapsed && "sr-only",
               )}
             >
-              {badge}
+              {badge.value}
             </span>
           )}
           {!collapsed && status && (
@@ -286,13 +289,24 @@ export function AppShell() {
   const groups: NavGroup[] = inSettings
     ? [{ links: settingsLinks(settingsOrgId(pathname, activeOrgId)) }]
     : workspaceGroups;
-  // Active bans need attention, so the nav shows their count.
-  const activeProjectId = useActive((s) => s.activeProjectId);
-  const bans = useBans(inSettings ? null : activeProjectId);
-  const badges: Record<string, { badge: string; badgeTone: "deny" }> = bans.data
-    ?.length
-    ? { "/bans": { badge: String(bans.data.length), badgeTone: "deny" } }
-    : {};
+  // Active bans need attention, so the nav shows their count. Admin-only
+  // endpoint, and only once the project scope has resolved.
+  const canManageBans = useCanManageBans();
+  const scope = useProjectScoped();
+  const bans = useBans(
+    !inSettings && canManageBans && scope.status === "ready"
+      ? scope.projectId
+      : null,
+    { live: true },
+  );
+  const counts: Record<
+    NonNullable<NavLinkDef["count"]>,
+    { value: number; noun: string } | undefined
+  > = {
+    activeBans: bans.data?.length
+      ? { value: bans.data.length, noun: "active bans" }
+      : undefined,
+  };
 
   // The workspace create-dialogs live here, not in OrgProjectSwitcher, so
   // collapsing the sidebar (which unmounts the switcher trigger) can't unmount
@@ -406,11 +420,11 @@ export function AppShell() {
                     {g.label}
                   </div>
                 )}
-                {g.links.map((l) => (
+                {g.links.map(({ count, ...l }) => (
                   <NavItem
                     key={l.to}
                     {...l}
-                    {...badges[l.to]}
+                    badge={count && counts[count]}
                     collapsed={sidebarCollapsed}
                   />
                 ))}

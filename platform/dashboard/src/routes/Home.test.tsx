@@ -40,7 +40,6 @@ describe("HomePage", () => {
       expect(screen.getByText("support-bot")).toBeInTheDocument(),
     );
     const links = screen.getAllByRole("link");
-    expect(links[0]).toHaveAttribute("href", "/audit");
     expect(links.map((l) => l.getAttribute("href"))).toEqual([
       "/audit",
       "/policies",
