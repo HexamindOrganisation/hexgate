@@ -7,9 +7,10 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
-import { useIsDark, useTheme, SCHEMES } from "@/lib/theme";
+import { schemeAccent, useIsDark, useTheme, SCHEMES } from "@/lib/theme";
 import { hslChannelsToHex } from "@/lib/color";
 import {
+  accentVars,
   PLAYGROUND_ACCENTS,
   resolveAccent,
   usePlaygroundPrefs,
@@ -28,12 +29,17 @@ export function AccentPicker() {
   const dark = useIsDark();
   const appScheme = useTheme((s) => s.scheme);
   const current = resolveAccent(accent, dark);
+  // An id that no longer resolves (a removed preset) reads as "Same as app".
+  const selected = current ? accent : "";
   // Draft hex for the native picker, committed on blur so dragging the slider
   // doesn't write localStorage on every move.
   const [draft, setDraft] = useState<string | null>(null);
   const hex =
     draft ??
-    (accent.startsWith("#") ? accent : hslChannelsToHex(current ?? ""));
+    (accent.startsWith("#")
+      ? accent
+      : hslChannelsToHex(current ?? schemeAccent(appScheme, dark)));
+  const vars = accentVars(current);
   const appLabel = SCHEMES.find((s) => s.id === appScheme)?.label ?? "Blue";
   return (
     <Popover>
@@ -50,7 +56,8 @@ export function AccentPicker() {
           />
         </button>
       </PopoverTrigger>
-      <PopoverContent align="end" className="w-72 p-4">
+      {/* Portalled out of the Playground, so it carries the accent itself. */}
+      <PopoverContent align="end" className="w-72 p-4" style={vars}>
         <div className="text-sm font-medium">Playground accent</div>
         <p className="mt-1 text-xs leading-snug text-muted-foreground">
           Only the Playground changes — handy for matching a customer's brand in
@@ -60,10 +67,10 @@ export function AccentPicker() {
           <button
             type="button"
             onClick={() => setAccent("")}
-            aria-pressed={accent === ""}
+            aria-pressed={selected === ""}
             className={cn(
               "rounded-full border border-dashed border-border px-2.5 py-1 text-xs",
-              accent === "" && "border-solid border-foreground",
+              selected === "" && "border-solid border-foreground",
             )}
           >
             Same as app
@@ -74,11 +81,11 @@ export function AccentPicker() {
               type="button"
               title={p.label}
               aria-label={p.label}
-              aria-pressed={accent === p.id}
+              aria-pressed={selected === p.id}
               onClick={() => setAccent(p.id)}
               className={cn(
                 "size-6 rounded-full ring-offset-2 ring-offset-popover transition",
-                accent === p.id && "ring-2 ring-foreground",
+                selected === p.id && "ring-2 ring-foreground",
               )}
               style={{ backgroundColor: `hsl(${dark ? p.dark : p.light})` }}
             />

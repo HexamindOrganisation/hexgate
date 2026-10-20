@@ -70,7 +70,6 @@ function PlaygroundLive({ projectId }: { projectId: string }) {
   });
   const [composer, setComposer] = useState("");
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const accent = usePlaygroundAccent();
   const [agent, setAgent] = useState<AgentRead | null>(null);
   // A set, not a scalar: the enforcer evaluates every role the caller carries,
   // so the playground has to be able to reproduce a multi-role caller.
@@ -172,12 +171,11 @@ function PlaygroundLive({ projectId }: { projectId: string }) {
   const empty = state.messages.length === 0;
 
   return (
-    <div
+    <AccentScope
       className={cn(
         "relative flex h-screen flex-col overflow-hidden bg-background",
         !present && "-mx-8 -my-6",
       )}
-      style={accent}
     >
       <GooFilter />
 
@@ -302,11 +300,28 @@ function PlaygroundLive({ projectId }: { projectId: string }) {
         onReset={reset}
         canReset={!empty}
       />
+    </AccentScope>
+  );
+}
+
+/** Owns the accent subscription so changing it repaints this wrapper, not the
+ * transcript; its children are elements made by the parent. */
+function AccentScope({
+  className,
+  children,
+}: {
+  className: string;
+  children: React.ReactNode;
+}) {
+  const accent = usePlaygroundAccent();
+  return (
+    <div className={className} style={accent}>
+      {children}
     </div>
   );
 }
 
-// ── Top-corner status ───────────────────────────────────────────────────────
+// ── Agent status ────────────────────────────────────────────────────────────
 
 function AgentStatus({
   agentName,
@@ -318,7 +333,7 @@ function AgentStatus({
   relayConnected: boolean;
 }) {
   const pill =
-    "pointer-events-auto flex items-center gap-2 rounded-full border border-border/60 bg-card/70 px-3 py-1.5 text-xs backdrop-blur";
+    "flex items-center gap-2 rounded-full border border-border px-3 py-1.5 text-xs";
   if (!agentName) {
     return (
       <div className={cn(pill, "text-muted-foreground")}>
@@ -462,7 +477,8 @@ function Composer({
         value={value}
         onChange={(e) => onChange(e.target.value)}
         onKeyDown={(e) => {
-          if (e.key === "Enter" && !e.shiftKey) {
+          // Enter confirming an IME candidate isn't a send.
+          if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
             e.preventDefault();
             onSubmit();
           }

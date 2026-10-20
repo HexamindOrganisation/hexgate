@@ -40,33 +40,40 @@ export function SessionSettings({
   canReset: boolean;
 }) {
   const accent = usePlaygroundAccent();
+  // A fresh draft per opening, kept mounted while the dialog animates out.
+  const [session, setSession] = useState(0);
+  const [wasOpen, setWasOpen] = useState(open);
+  if (open !== wasOpen) {
+    setWasOpen(open);
+    if (open) setSession((n) => n + 1);
+  }
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       {/* Portalled out of the Playground, so it carries the accent itself. */}
       <DialogContent className="max-w-lg" style={accent}>
-        {open && (
-          <SettingsForm
-            projectId={projectId}
-            roleOptions={roleOptions}
-            activeRoles={activeRoles}
-            onApply={(roles) => {
-              onApply(roles);
-              onOpenChange(false);
-            }}
-            onCancel={() => onOpenChange(false)}
-            onReset={() => {
-              onReset();
-              onOpenChange(false);
-            }}
-            canReset={canReset}
-          />
-        )}
+        <SettingsForm
+          key={session}
+          projectId={projectId}
+          roleOptions={roleOptions}
+          activeRoles={activeRoles}
+          onApply={(roles) => {
+            // The agent may have changed while the dialog was open.
+            onApply(roles.filter((r) => roleOptions.includes(r)));
+            onOpenChange(false);
+          }}
+          onCancel={() => onOpenChange(false)}
+          onReset={() => {
+            onReset();
+            onOpenChange(false);
+          }}
+          canReset={canReset}
+        />
       </DialogContent>
     </Dialog>
   );
 }
 
-/** Mounted per opening, so the draft starts from the applied values. */
+/** Keyed per opening, so the draft starts from the applied values. */
 function SettingsForm({
   projectId,
   roleOptions,
@@ -156,7 +163,9 @@ function SettingsForm({
             <p className="text-xs text-muted-foreground">
               {roles.length > 1
                 ? "The most permissive outcome across these roles wins."
-                : "No role selected means the default policy decides."}
+                : roles.length === 1
+                  ? "That role's policy decides which tools run."
+                  : "No role selected means the default policy decides."}
             </p>
           </>
         ) : (
