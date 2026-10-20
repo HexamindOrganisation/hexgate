@@ -15,6 +15,11 @@ export const RANGE_LABEL: Record<Range, string> = {
   "90d": "90 days",
 };
 
+/** "in the last 7 days", or "in the selected range" for custom dates. */
+export function rangePhrase(range: Range, start: Date | null): string {
+  return start ? "in the selected range" : `in the last ${RANGE_LABEL[range]}`;
+}
+
 export const RANGE_DAYS: Record<Range, number> = {
   "24h": 1,
   "7d": 7,

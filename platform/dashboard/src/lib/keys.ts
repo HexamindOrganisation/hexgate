@@ -6,6 +6,6 @@ export const STALE_KEY_DAYS = 30;
  * minted a minute ago is not stale. */
 export function isStaleKey(t: TokenListItem, now: number): boolean {
   return (
-    now - +new Date(t.last_used_at ?? t.created_at) > STALE_KEY_DAYS * 864e5
+    now - +new Date(t.last_used_at ?? t.created_at) >= STALE_KEY_DAYS * 864e5
   );
 }
