@@ -230,9 +230,22 @@ describe("PlaygroundPage", () => {
     const box = screen.getByLabelText("Message the agent");
     fireEvent.change(box, { target: { value: "返金" } });
     fireEvent.keyDown(box, { key: "Enter", isComposing: true });
+    // Safari: the confirming Enter comes as keyCode 229, not isComposing.
+    fireEvent.keyDown(box, { key: "Enter", keyCode: 229 });
     expect(sendChat).not.toHaveBeenCalled();
     fireEvent.keyDown(box, { key: "Enter" });
     expect(sendChat).toHaveBeenCalledTimes(1);
+  });
+
+  it("names the default caller when nothing identifies the turn", async () => {
+    mockState = baseState();
+    renderWithProviders(<PlaygroundPage />);
+    await userEvent.click(screen.getByRole("button", { name: "Settings" }));
+    await userEvent.click(screen.getByRole("button", { name: "billing" }));
+    await userEvent.click(screen.getByRole("button", { name: "Apply" }));
+    expect(screen.getByTitle(/acting as/i)).toHaveTextContent(
+      /^ddefault caller$/,
+    );
   });
 
   it("says which policy decides for the roles picked", async () => {

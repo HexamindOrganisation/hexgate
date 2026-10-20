@@ -395,6 +395,8 @@ function IdentityChip({
   onClick: () => void;
 }) {
   const name = usePlaygroundPrefs((s) => s.names[projectId] ?? "").trim();
+  // Mirrors buildChatFrame: no name and no role sends no identity at all.
+  const caller = name || (activeRoles.length ? "playground" : "default caller");
   return (
     <button
       type="button"
@@ -403,11 +405,15 @@ function IdentityChip({
       className="flex max-w-[60%] items-center gap-2 rounded-full border border-border px-2 py-1 text-xs transition-colors hover:bg-accent"
     >
       <span className="grid size-5 shrink-0 place-items-center rounded-full bg-primary/15 text-[10px] font-semibold uppercase text-primary">
-        {(name || "p")[0]}
+        {caller[0]}
       </span>
-      <span className="truncate">{name || "playground"}</span>
-      <span className="text-muted-foreground">·</span>
-      <span className="truncate font-mono">{roleLabel(activeRoles)}</span>
+      <span className="truncate">{caller}</span>
+      {activeRoles.length > 0 && (
+        <>
+          <span className="text-muted-foreground">·</span>
+          <span className="truncate font-mono">{roleLabel(activeRoles)}</span>
+        </>
+      )}
       <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
     </button>
   );
@@ -477,8 +483,11 @@ function Composer({
         value={value}
         onChange={(e) => onChange(e.target.value)}
         onKeyDown={(e) => {
-          // Enter confirming an IME candidate isn't a send.
-          if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+          // Enter confirming an IME candidate isn't a send (Safari reports
+          // it as keyCode 229 rather than isComposing).
+          const composing =
+            e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229;
+          if (e.key === "Enter" && !e.shiftKey && !composing) {
             e.preventDefault();
             onSubmit();
           }
@@ -548,7 +557,12 @@ function MessageView({
               </div>
             )}
             {turn!.tools.map((t) => (
-              <DecisionCard key={t.id} call={t} agentName={agentName} />
+              <DecisionCard
+                key={t.id}
+                call={t}
+                agentName={agentName}
+                present={present}
+              />
             ))}
           </div>
         )}
@@ -645,9 +659,11 @@ function callSignature(call: ToolCall): string {
 function DecisionCard({
   call,
   agentName,
+  present,
 }: {
   call: ToolCall;
   agentName: string | null;
+  present: boolean;
 }) {
   const [open, setOpen] = useState<boolean | null>(null);
   const shown = open ?? call.state === "failed";
@@ -693,6 +709,9 @@ function DecisionCard({
           {agentName && (
             <Link
               to={auditUrl({ agent: agentName, tool: call.name, range: "24h" })}
+              // Full screen is a demo tab: don't navigate away from it.
+              target={present ? "_blank" : undefined}
+              rel={present ? "noopener" : undefined}
               className="inline-block font-medium text-primary hover:underline"
             >
               Open in audit
