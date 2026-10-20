@@ -233,7 +233,7 @@ function ResolvedTab({
   onInspectAgentChange: (agent: string) => void;
 }) {
   const [role, setRole] = useState<string>("");
-  const [view, setView] = useState<"table" | "yaml">("table");
+  const [view, setView] = useState<"grid" | "table" | "yaml">("grid");
   const active = roleNames.includes(role) ? role : (roleNames[0] ?? "");
 
   if (!modular || !resolves || !resolved || roleNames.length === 0) {
@@ -244,6 +244,32 @@ function ResolvedTab({
             ? "The policy doesn't compose. See the Lints tab."
             : "Add a policy.yaml with grants to see the composed policy. (Classic projects enforce each agent's own policy.)"}
         </p>
+      </div>
+    );
+  }
+
+  if (view === "grid") {
+    return (
+      <div className="h-full flex flex-col">
+        <AgentPicker
+          inspectAgent={inspectAgent}
+          agentNames={agentNames}
+          onChange={onInspectAgentChange}
+        />
+        <div className="flex items-center justify-between gap-2 px-3 py-2 border-b border-border">
+          <span className="text-[11px] text-muted-foreground">
+            Every role, side by side. Click a cell for its role's detail.
+          </span>
+          <ViewSwitch view={view} onChange={setView} />
+        </div>
+        <ResolvedGrid
+          resolved={resolved}
+          roleNames={roleNames}
+          onPick={(r) => {
+            setRole(r);
+            setView("table");
+          }}
+        />
       </div>
     );
   }
@@ -263,24 +289,11 @@ function ResolvedTab({
 
   return (
     <div className="h-full flex flex-col">
-      {/* Which executing agent's column to inspect. "*" is the generic view; a
-          named agent shows its own composed policy (a sub-agent it may reach, a
-          capability it's denied). The options are every agent the entry declares,
-          plus the current value if it's since been removed. */}
-      <div className="flex items-center gap-2 px-3 py-1.5 border-b border-border/60 text-[11px]">
-        <span className="text-muted-foreground">Agent</span>
-        <select
-          value={inspectAgent}
-          onChange={(e) => onInspectAgentChange(e.target.value)}
-          className="w-40 rounded border border-border bg-background px-1.5 py-0.5 font-mono text-[11px]"
-        >
-          {Array.from(new Set(["*", ...agentNames, inspectAgent])).map((a) => (
-            <option key={a} value={a}>
-              {a === "*" ? "* (generic)" : a}
-            </option>
-          ))}
-        </select>
-      </div>
+      <AgentPicker
+        inspectAgent={inspectAgent}
+        agentNames={agentNames}
+        onChange={onInspectAgentChange}
+      />
       <div className="flex items-center justify-between gap-2 px-3 py-2 border-b border-border">
         <div className="flex flex-wrap items-center gap-1 min-w-0">
           {roleNames.map((r) => (
@@ -298,22 +311,7 @@ function ResolvedTab({
             </button>
           ))}
         </div>
-        <div className="flex items-center rounded-md border border-border p-0.5 shrink-0">
-          {(["table", "yaml"] as const).map((v) => (
-            <button
-              key={v}
-              onClick={() => setView(v)}
-              className={cn(
-                "rounded px-2 py-0.5 text-[11px] font-medium capitalize transition-colors",
-                view === v
-                  ? "bg-primary text-primary-foreground"
-                  : "text-muted-foreground hover:text-foreground",
-              )}
-            >
-              {v}
-            </button>
-          ))}
-        </div>
+        <ViewSwitch view={view} onChange={setView} />
       </div>
       {view === "yaml" ? (
         <div className="flex-1 overflow-auto scrollbar-thin p-3">
@@ -373,6 +371,174 @@ function ResolvedTab({
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+/** Which executing agent's column to inspect. "*" is the generic view; a
+ * named agent shows its own composed policy (a sub-agent it may reach, a
+ * capability it's denied). The options are every agent the entry declares,
+ * plus the current value if it's since been removed. */
+function AgentPicker({
+  inspectAgent,
+  agentNames,
+  onChange,
+}: {
+  inspectAgent: string;
+  agentNames: string[];
+  onChange: (agent: string) => void;
+}) {
+  return (
+    <div className="flex items-center gap-2 px-3 py-1.5 border-b border-border/60 text-[11px]">
+      <span className="text-muted-foreground">Agent</span>
+      <select
+        value={inspectAgent}
+        onChange={(e) => onChange(e.target.value)}
+        className="w-40 rounded border border-border bg-background px-1.5 py-0.5 font-mono text-[11px]"
+      >
+        {Array.from(new Set(["*", ...agentNames, inspectAgent])).map((a) => (
+          <option key={a} value={a}>
+            {a === "*" ? "* (generic)" : a}
+          </option>
+        ))}
+      </select>
+    </div>
+  );
+}
+
+type ResolvedView = "grid" | "table" | "yaml";
+
+function ViewSwitch({
+  view,
+  onChange,
+}: {
+  view: ResolvedView;
+  onChange: (v: ResolvedView) => void;
+}) {
+  return (
+    <div className="flex items-center rounded-md border border-border p-0.5 shrink-0">
+      {(["grid", "table", "yaml"] as const).map((v) => (
+        <button
+          key={v}
+          onClick={() => onChange(v)}
+          className={cn(
+            "rounded px-2 py-0.5 text-[11px] font-medium capitalize transition-colors",
+            view === v
+              ? "bg-primary text-primary-foreground"
+              : "text-muted-foreground hover:text-foreground",
+          )}
+        >
+          {v}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+const CELL_TONE: Record<string, string> = {
+  allow: "bg-muted text-foreground",
+  deny: "bg-deny/15 text-deny",
+  approval_required: "bg-approval/15 text-approval",
+};
+
+/** Tools × roles. A tool a role doesn't list falls to that role's default,
+ * shown faded so granted and defaulted cells read apart. */
+function ResolvedGrid({
+  resolved,
+  roleNames,
+  onPick,
+}: {
+  resolved: ResolvedPolicy;
+  roleNames: string[];
+  onPick: (role: string) => void;
+}) {
+  const keys = [
+    ...new Set(roleNames.flatMap((r) => Object.keys(resolved[r]?.tools ?? {}))),
+  ]
+    .map((name) => ({ name, ...classifyTool(name) }))
+    .sort(
+      (a, b) =>
+        _KIND_ORDER[a.kind] - _KIND_ORDER[b.kind] ||
+        a.label.localeCompare(b.label),
+    );
+  return (
+    <div className="flex-1 overflow-auto scrollbar-thin">
+      <table className="w-full border-separate border-spacing-0 text-xs">
+        <thead>
+          <tr>
+            <th className="sticky left-0 top-0 z-10 border-b border-border bg-card px-3 py-2 text-left font-medium text-muted-foreground">
+              Tool
+            </th>
+            {roleNames.map((r) => (
+              <th
+                key={r}
+                className="sticky top-0 border-b border-border bg-card px-2 py-2 text-center font-mono font-medium"
+              >
+                {r}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {keys.map(({ name, label, tag }) => (
+            <tr key={name}>
+              <th
+                scope="row"
+                className="sticky left-0 border-b border-border/50 bg-card px-3 py-1.5 text-left font-mono font-normal"
+              >
+                {label}
+                {tag && (
+                  <span className="ml-1.5 rounded bg-muted px-1 py-0.5 text-[9px] uppercase tracking-wider text-muted-foreground">
+                    {tag}
+                  </span>
+                )}
+              </th>
+              {roleNames.map((r) => {
+                const tp = resolved[r]?.tools?.[name];
+                const mode = tp?.mode ?? resolved[r]?.default_policy?.mode;
+                const constraints = tp?.constraints ?? [];
+                return (
+                  <td
+                    key={r}
+                    className="border-b border-border/50 px-1.5 py-1 text-center"
+                  >
+                    <button
+                      type="button"
+                      onClick={() => onPick(r)}
+                      title={
+                        tp
+                          ? constraints.length
+                            ? constraints.join("\n")
+                            : undefined
+                          : `not listed: ${r}'s default`
+                      }
+                      className={cn(
+                        "w-full rounded px-1.5 py-0.5 font-medium",
+                        mode ? CELL_TONE[mode] : "text-muted-foreground",
+                        !tp && "opacity-50",
+                      )}
+                    >
+                      {mode === "approval_required"
+                        ? "approval"
+                        : (mode ?? "—")}
+                      {constraints.length > 0 && (
+                        <span className="sr-only">
+                          , {constraints.length} constraints
+                        </span>
+                      )}
+                      {constraints.length > 0 && <span aria-hidden> *</span>}
+                    </button>
+                  </td>
+                );
+              })}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <p className="px-3 py-2 text-[11px] text-muted-foreground">
+        * constrained (hover for the rules) · faded: not listed, the role's
+        default applies
+      </p>
     </div>
   );
 }

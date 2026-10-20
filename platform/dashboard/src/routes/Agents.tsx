@@ -66,6 +66,29 @@ export function AgentsPage() {
   const active = manifests.data?.find((m) => m.name === selectedName);
   // 24h activity per agent; shares Home's cache entry.
   const summary = useAuditSummary24h(scope.projectId, { poll: true });
+  // The composed policy for the selected agent, every role in one call.
+  const resolvedQ = useQuery({
+    queryKey: ["policy", "resolve", scope.projectId, active?.name],
+    enabled: !!scope.projectId && !!active,
+    queryFn: () =>
+      api.resolvePolicy(scope.projectId as string, undefined, active!.name),
+    retry: false,
+  });
+  const roleModes = useMemo(() => {
+    const resolved = resolvedQ.data;
+    if (!resolved) return undefined;
+    const roles = Object.keys(resolved).sort();
+    return (tool: string): RoleMode[] =>
+      roles.map((role) => {
+        const tp = resolved[role]?.tools?.[tool];
+        return {
+          role,
+          mode: tp?.mode ?? resolved[role]?.default_policy?.mode,
+          constrained: (tp?.constraints?.length ?? 0) > 0,
+          defaulted: !tp,
+        };
+      });
+  }, [resolvedQ.data]);
   const byAgent = useMemo(
     () => new Map(summary.data?.by_agent.map((r) => [r.key, r])),
     [summary.data],
@@ -286,7 +309,7 @@ export function AgentsPage() {
                 )
               )}
             </Card>
-            <ManifestView agent={active} />
+            <ManifestView agent={active} roleModes={roleModes} />
           </div>
         ) : (
           manifests.isSuccess &&
@@ -301,12 +324,19 @@ export function AgentsPage() {
   );
 }
 
-function ManifestView({ agent }: { agent: AgentManifestView }) {
+function ManifestView({
+  agent,
+  roleModes,
+}: {
+  agent: AgentManifestView;
+  roleModes?: (tool: string) => RoleMode[];
+}) {
   return (
     <div className="space-y-4">
       <ToolsSection
         tools={agent.manifest?.tools ?? []}
         unregistered={agent.manifest === null}
+        roleModes={roleModes}
       />
       <GuardsSection
         guards={agent.manifest?.guards ?? null}
@@ -324,12 +354,23 @@ function ManifestView({ agent }: { agent: AgentManifestView }) {
   );
 }
 
+/** How each role treats one tool, from the composed policy. */
+interface RoleMode {
+  role: string;
+  mode: string | undefined;
+  constrained: boolean;
+  /** Not listed for the role: its default applies. */
+  defaulted: boolean;
+}
+
 function ToolsSection({
   tools,
   unregistered,
+  roleModes,
 }: {
   tools: ToolDefinition[];
   unregistered: boolean;
+  roleModes?: (tool: string) => RoleMode[];
 }) {
   return (
     <section className="rounded-xl border border-border bg-card">
@@ -349,7 +390,7 @@ function ToolsSection({
       ) : (
         <ul className="divide-y divide-border">
           {tools.map((t) => (
-            <ToolRow key={t.name} tool={t} />
+            <ToolRow key={t.name} tool={t} roles={roleModes?.(t.name)} />
           ))}
         </ul>
       )}
@@ -514,11 +555,48 @@ function SystemPromptSection({
   );
 }
 
-function ToolRow({ tool }: { tool: ToolDefinition }) {
+const ROLE_TONE: Record<string, string> = {
+  allow: "bg-muted text-foreground",
+  deny: "bg-deny/15 text-deny",
+  approval_required: "bg-approval/15 text-approval",
+};
+
+function ToolRow({
+  tool,
+  roles,
+}: {
+  tool: ToolDefinition;
+  roles?: RoleMode[];
+}) {
   return (
     <li className="px-5 py-4 space-y-2">
-      <div className="flex items-baseline gap-3">
+      <div className="flex flex-wrap items-baseline gap-3">
         <span className="font-mono text-sm text-foreground">{tool.name}</span>
+        {roles && roles.length > 0 && (
+          <span className="ml-auto flex flex-wrap gap-1.5">
+            {roles.map((r) => (
+              <span
+                key={r.role}
+                title={
+                  r.defaulted
+                    ? `${r.role}: not listed, default applies`
+                    : r.constrained
+                      ? `${r.role}: allowed with constraints`
+                      : undefined
+                }
+                className={cn(
+                  "rounded-md px-2 py-0.5 text-[11px] font-medium",
+                  r.mode ? ROLE_TONE[r.mode] : "text-muted-foreground",
+                  r.defaulted && "opacity-50",
+                )}
+              >
+                <span className="font-mono">{r.role}</span>{" "}
+                {r.mode === "approval_required" ? "approval" : (r.mode ?? "—")}
+                {r.constrained && "*"}
+              </span>
+            ))}
+          </span>
+        )}
       </div>
       {tool.description?.trim() ? (
         <p className="text-xs text-muted-foreground">{tool.description}</p>
