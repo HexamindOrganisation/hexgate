@@ -15,7 +15,7 @@ import logging
 from dataclasses import asdict
 from typing import TYPE_CHECKING
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from hexgate_api.core.db import get_session
@@ -510,18 +510,20 @@ async def api_resolve_policy(
 async def api_policy_matrix(
     project_id: str,
     agent: str = service.DEFAULT_AGENT,
+    tool: list[str] = Query(default=[]),
     _user: User = Depends(require_org_member),
     session: AsyncSession = Depends(get_session),
 ) -> PolicyMatrixResponse:
     """Roles x tools for one executing agent (``agent``, default ``"*"``), each
     cell resolved by the engine's own fallback and constraint composition — the
-    same tabulation the AI Act report evidences. 422 if the policy can't be
+    same tabulation the AI Act report evidences. Each ``tool`` the policy
+    doesn't list also gets its fallback cells. 422 if the policy can't be
     composed."""
     try:
         result = await service.resolve_auto(session, project_id, agent=agent)
     except service.compose_error_types() as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return PolicyMatrixResponse(**service.matrix_json(result))
+    return PolicyMatrixResponse(**service.matrix_json(result, tool))
 
 
 @router.get("/projects/{project_id}/policy/check", tags=["policy"])

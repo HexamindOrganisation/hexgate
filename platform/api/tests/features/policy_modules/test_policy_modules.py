@@ -157,6 +157,25 @@ def test_matrix_tabulates_roles_by_tools_with_the_engine_fallback(
     assert set(body["defaults"]) == set(body["roles"])
 
 
+def test_matrix_answers_unlisted_tools_with_the_engine_fallback(
+    client: TestClient,
+) -> None:
+    pid = _project(client)
+    _seed_bundle(client, pid)
+    listed = client.get(f"/v1/projects/{pid}/policy/matrix").json()
+
+    body = client.get(
+        f"/v1/projects/{pid}/policy/matrix",
+        params={"tool": ["lookup_order", "agent.run", "refund_order"]},
+    ).json()
+    # Extra tools get cells but don't join the grid's rows.
+    assert body["tools"] == listed["tools"]
+    assert body["cells"]["refund_order"] == listed["cells"]["refund_order"]
+    assert body["cells"]["lookup_order"] == body["defaults"]
+    # Reserved keys are closed-world: deny whatever the role default says.
+    assert all(c["mode"] == "deny" for c in body["cells"]["agent.run"].values())
+
+
 def test_matrix_is_422_when_the_policy_does_not_compose(client: TestClient) -> None:
     pid = _project(client)
     _put_module(client, pid, "capability", "bad", "tools:\n  x: { mode: deny }\n")

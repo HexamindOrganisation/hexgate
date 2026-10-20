@@ -70,10 +70,11 @@ export function usePolicyMatrix(
   projectId: string | null,
   agent: string,
   enabled = true,
+  tools: string[] = [],
 ) {
   return useQuery({
-    queryKey: ["policy-resolve", projectId, "matrix", agent] as const,
-    queryFn: () => api.getPolicyMatrix(projectId as string, agent),
+    queryKey: ["policy-resolve", projectId, "matrix", agent, tools] as const,
+    queryFn: () => api.getPolicyMatrix(projectId as string, agent, tools),
     // Classic (non-compose) projects have no matrix; don't fire the 422.
     enabled: !!projectId && enabled,
     retry: false,

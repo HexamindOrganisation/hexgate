@@ -68,6 +68,18 @@ function classifyTool(key: string): {
   return { kind: "tool", label: key };
 }
 
+/** Classified rows, grouped plain tools, MCP, reach, then admission (the
+ * agent.* keys read last), each group by label. Classifies each key once. */
+function sortToolRows(names: string[]) {
+  return names
+    .map((name) => ({ name, ...classifyTool(name) }))
+    .sort(
+      (a, b) =>
+        _KIND_ORDER[a.kind] - _KIND_ORDER[b.kind] ||
+        a.label.localeCompare(b.label),
+    );
+}
+
 /**
  * Right pane: the composed policy (Resolved), analyzer lints (Lints), and the
  * decision tester (Test), plus a policy-graph launcher. Resolved + Lints
@@ -287,15 +299,10 @@ function ResolvedTab({
 
   const policy = resolved[active];
   const tools = policy?.tools ?? {};
-  // Classify each key once (not per comparison + again per render), then group
-  // plain tools, then MCP, reach, and admission — the agent.* keys read last.
-  const rows = Object.keys(tools)
-    .map((name) => ({ name, ...classifyTool(name), tp: tools[name] }))
-    .sort(
-      (a, b) =>
-        _KIND_ORDER[a.kind] - _KIND_ORDER[b.kind] ||
-        a.label.localeCompare(b.label),
-    );
+  const rows = sortToolRows(Object.keys(tools)).map((r) => ({
+    ...r,
+    tp: tools[r.name],
+  }));
   const defaultMode = policy?.default_policy?.mode;
 
   return (
@@ -456,18 +463,19 @@ function ResolvedGrid({
   matrix: PolicyMatrix | undefined | null;
   onPick: (role: string) => void;
 }) {
+  if (matrix === null) {
+    return (
+      <p className="px-3 py-4 text-xs text-muted-foreground">
+        Couldn't load the grid. The table and YAML views still work.
+      </p>
+    );
+  }
   if (!matrix) {
     return (
       <p className="px-3 py-4 text-xs text-muted-foreground">Loading grid…</p>
     );
   }
-  const rows = matrix.tools
-    .map((name) => ({ name, ...classifyTool(name) }))
-    .sort(
-      (a, b) =>
-        _KIND_ORDER[a.kind] - _KIND_ORDER[b.kind] ||
-        a.label.localeCompare(b.label),
-    );
+  const rows = sortToolRows(matrix.tools);
   return (
     <div className="flex-1 overflow-auto scrollbar-thin">
       <table className="w-full border-separate border-spacing-0 text-xs">
@@ -501,7 +509,8 @@ function ResolvedGrid({
                 )}
               </th>
               {matrix.roles.map((r) => {
-                const cell = matrix.cells[name]?.[r];
+                // Complete for every listed tool (server contract).
+                const cell = matrix.cells[name][r];
                 return (
                   <td
                     key={r}
@@ -510,16 +519,14 @@ function ResolvedGrid({
                     <button
                       type="button"
                       onClick={() => onPick(r)}
-                      title={cell?.constraint ?? undefined}
+                      title={cell.constraint ?? undefined}
                       className={cn(
                         "w-full rounded px-1.5 py-0.5 font-medium",
-                        cell
-                          ? MATRIX_MODE_TONE[cell.mode]
-                          : "text-muted-foreground",
+                        MATRIX_MODE_TONE[cell.mode],
                       )}
                     >
-                      {cell?.mode ?? "—"}
-                      {cell?.constraint && (
+                      {cell.mode}
+                      {cell.constraint && (
                         <>
                           <span aria-hidden> *</span>
                           <span className="sr-only">, constrained</span>
@@ -536,7 +543,10 @@ function ResolvedGrid({
       <p className="px-3 py-2 text-[11px] text-muted-foreground">
         * constrained (hover for the condition). Tools not listed:{" "}
         {matrix.roles
-          .map((r) => `${r} ${matrix.defaults[r]?.mode ?? "deny"}`)
+          .map((r) => {
+            const d = matrix.defaults[r];
+            return `${r} ${d.mode}${d.constraint ? ` (if ${d.constraint})` : ""}`;
+          })
           .join(" · ")}
         .
         {matrix.aliased_default &&

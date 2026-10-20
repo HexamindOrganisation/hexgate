@@ -990,10 +990,20 @@ export const api = {
       `/v1/projects/${projectId}/policy/resolve${qs({ role, agent })}`,
     ).then((r) => r.roles),
 
-  getPolicyMatrix: (projectId: string, agent?: string) =>
-    request<PolicyMatrix>(
-      `/v1/projects/${projectId}/policy/matrix${qs({ agent })}`,
-    ),
+  /** `tools` the policy doesn't list come back in `cells` with the engine's
+   * fallback (reserved keys deny), but not in `tools`. */
+  getPolicyMatrix: (
+    projectId: string,
+    agent?: string,
+    tools: string[] = [],
+  ) => {
+    const search = new URLSearchParams(agent ? { agent } : {});
+    for (const t of tools) search.append("tool", t);
+    const str = search.toString();
+    return request<PolicyMatrix>(
+      `/v1/projects/${projectId}/policy/matrix${str ? `?${str}` : ""}`,
+    );
+  },
 
   checkPolicy: (projectId: string) =>
     request<{ ok: boolean; lints: PolicyLint[] }>(
