@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/table";
 import { useActive } from "@/lib/active";
 import { useOrgs, type OrgWithRole, type Role } from "@/lib/orgs";
+import { PageHeader } from "@/components/ui/page-header";
 
 /**
  * `/orgs` — list every organization the caller belongs to with their
@@ -41,21 +42,16 @@ export function OrgsPage() {
 
   return (
     <div className="mx-auto max-w-5xl space-y-6">
-      <header className="flex items-end justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">
-            Organizations
-          </h1>
-          <p className="text-sm text-muted-foreground">
-            All organizations you belong to. Roles determine what you can
-            change.
-          </p>
-        </div>
-        <Button onClick={() => setCreateOpen(true)}>
-          <Plus className="h-4 w-4" />
-          Create organization
-        </Button>
-      </header>
+      <PageHeader
+        title="Organizations"
+        description="All organizations you belong to. Roles determine what you can change."
+        actions={
+          <Button onClick={() => setCreateOpen(true)}>
+            <Plus className="h-4 w-4" />
+            Create organization
+          </Button>
+        }
+      />
 
       <div className="rounded-lg border border-border bg-card">
         {orgsQuery.isLoading && (

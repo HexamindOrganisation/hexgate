@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 
 import { NoProjectEmptyState } from "@/components/NoProjectEmptyState";
 import { useProjectScoped } from "@/lib/active";
+import { PageHeader } from "@/components/ui/page-header";
 
 // Starting points until the full overview (needs attention, today, live
 // decisions) lands. Audit leads: it is where the day's work is.
@@ -36,17 +37,19 @@ export function HomePage() {
 
   return (
     <div className="mx-auto max-w-[1240px]">
-      <header className="mb-6">
-        <h1 className="text-title font-semibold tracking-tight">Home</h1>
-        {scope.projectName && (
-          <p className="mt-1.5 text-body text-muted-foreground">
-            Overview of{" "}
-            <span className="font-mono text-foreground">
-              {scope.projectName}
-            </span>
-          </p>
-        )}
-      </header>
+      <PageHeader
+        title="Home"
+        description={
+          scope.projectName && (
+            <>
+              Overview of{" "}
+              <span className="font-mono text-foreground">
+                {scope.projectName}
+              </span>
+            </>
+          )
+        }
+      />
       <div className="grid gap-4 md:grid-cols-3">
         {SHORTCUTS.map(({ to, icon: Icon, title, body }) => (
           <Link

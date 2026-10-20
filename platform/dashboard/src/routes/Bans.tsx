@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { Ban, BookOpen, Plus, ShieldAlert } from "lucide-react";
+import { BookOpen, Plus, ShieldAlert } from "lucide-react";
 
 import { NoProjectEmptyState } from "@/components/NoProjectEmptyState";
 import { Button } from "@/components/ui/button";
@@ -13,6 +13,7 @@ import {
   type CreateBanInitial,
 } from "@/components/bans/CreateBanDialog";
 import { BAN_DOCS_URL, PROPAGATION_HINT } from "@/components/bans/constants";
+import { PageHeader } from "@/components/ui/page-header";
 
 /** Non-admin block. Both ban reads (`GET …/bans` and the ban-enforcement
  * feed) are `require_project_admin` server-side, so members can't list at
@@ -96,7 +97,7 @@ export function BansPage() {
   if (scope.status === "no-project") {
     return (
       <div className="mx-auto max-w-[1400px]">
-        <h1 className="text-2xl font-semibold tracking-tight">Bans</h1>
+        <PageHeader title="Bans" />
         <NoProjectEmptyState resource="bans" />
       </div>
     );
@@ -107,41 +108,37 @@ export function BansPage() {
   return (
     <div className="mx-auto max-w-[1400px] space-y-5">
       {/* Region A — header (§9.3) */}
-      <div className="flex items-start justify-between gap-6">
-        <div>
-          <h1 className="flex items-center gap-2.5 text-2xl font-semibold tracking-tight">
-            <Ban className="size-6 text-destructive" />
-            Bans
-          </h1>
-          <p className="mt-2 max-w-[620px] text-sm text-muted-foreground">
+      <PageHeader
+        title="Bans"
+        description={
+          <>
             Stop an agent or a user from running — overrides every policy. Takes
             effect on {PROPAGATION_HINT}; a run already in progress isn't
             interrupted.
-          </p>
-        </div>
-        <div className="flex flex-shrink-0 items-center gap-2">
-          <Button
-            asChild
-            variant="ghost"
-            className="gap-2 text-muted-foreground"
-          >
-            <a href={BAN_DOCS_URL} target="_blank" rel="noreferrer">
-              <BookOpen className="size-4" />
-              Ban docs
-            </a>
-          </Button>
-          {canManage && projectId && (
+          </>
+        }
+        actions={
+          <>
             <Button
-              variant="destructive"
-              className="gap-2"
-              onClick={openCreate}
+              asChild
+              variant="ghost"
+              className="gap-2 text-muted-foreground"
             >
-              <Plus className="size-4" />
-              Create ban
+              <a href={BAN_DOCS_URL} target="_blank" rel="noreferrer">
+                <BookOpen className="size-4" />
+                Ban docs
+              </a>
             </Button>
-          )}
-        </div>
-      </div>
+            {/* The default (dark) action: red is reserved for deny. */}
+            {canManage && projectId && (
+              <Button className="gap-2" onClick={openCreate}>
+                <Plus className="size-4" />
+                Create ban
+              </Button>
+            )}
+          </>
+        }
+      />
 
       {!projectId ? (
         <div className="p-12 text-center text-sm text-muted-foreground">
