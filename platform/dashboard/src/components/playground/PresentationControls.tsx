@@ -10,9 +10,9 @@ import {
 import { schemeAccent, useIsDark, useTheme, SCHEMES } from "@/lib/theme";
 import { hslChannelsToHex } from "@/lib/color";
 import {
-  accentVars,
   PLAYGROUND_ACCENTS,
   resolveAccent,
+  usePlaygroundAccent,
   usePlaygroundPrefs,
 } from "@/lib/playground_prefs";
 import { PRESENT_URL, usePresentMode } from "@/lib/present";
@@ -39,10 +39,17 @@ export function AccentPicker() {
     (accent.startsWith("#")
       ? accent
       : hslChannelsToHex(current ?? schemeAccent(appScheme, dark)));
-  const vars = accentVars(current);
+  const vars = usePlaygroundAccent();
+  const commitDraft = () => {
+    if (draft !== null) {
+      setAccent(draft);
+      setDraft(null);
+    }
+  };
   const appLabel = SCHEMES.find((s) => s.id === appScheme)?.label ?? "Blue";
   return (
-    <Popover>
+    // Closing the popover unmounts the input before it blurs: commit then.
+    <Popover onOpenChange={(o) => !o && commitDraft()}>
       <PopoverTrigger asChild>
         <button
           type="button"
@@ -100,12 +107,7 @@ export function AccentPicker() {
               value={hex}
               aria-label="Custom accent"
               onChange={(e) => setDraft(e.target.value)}
-              onBlur={() => {
-                if (draft !== null) {
-                  setAccent(draft);
-                  setDraft(null);
-                }
-              }}
+              onBlur={commitDraft}
               className="size-5 cursor-pointer rounded border border-border bg-transparent p-0"
             />
           </span>

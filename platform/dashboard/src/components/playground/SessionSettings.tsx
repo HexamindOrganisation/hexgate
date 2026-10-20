@@ -57,8 +57,10 @@ export function SessionSettings({
           roleOptions={roleOptions}
           activeRoles={activeRoles}
           onApply={(roles) => {
-            // The agent may have changed while the dialog was open.
-            onApply(roles.filter((r) => roleOptions.includes(r)));
+            // The agent may have changed while the dialog was open: keep the
+            // roles it still has, else its current roles, never a silent [].
+            const kept = roles.filter((r) => roleOptions.includes(r));
+            onApply(kept.length || !roles.length ? kept : activeRoles);
             onOpenChange(false);
           }}
           onCancel={() => onOpenChange(false)}
