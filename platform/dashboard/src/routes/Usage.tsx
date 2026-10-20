@@ -1,17 +1,11 @@
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
-import {
-  Activity,
-  ArrowDownToLine,
-  ArrowUpFromLine,
-  Sigma,
-} from "lucide-react";
 import { api } from "@/lib/api";
 import { useProjectScoped } from "@/lib/active";
 import { NoProjectEmptyState } from "@/components/NoProjectEmptyState";
 import { DashboardRangePicker } from "@/components/ui/dashboard-range-picker";
-import { KpiCard } from "@/components/audit/pieces";
+import { StatStrip } from "@/components/ui/stat-strip";
 import { displayNoValue, scopeNoValue } from "@/components/audit/chart-tokens";
-import { rangeDays } from "@/lib/date-range";
+import { RANGE_LABEL, rangeDays } from "@/lib/date-range";
 import {
   UsageActiveChips,
   UsageBreakdownCard,
@@ -65,13 +59,15 @@ export function UsagePage() {
     total_tokens: 0,
   };
   const options = optionsQ.data;
+  const scopeFiltered = !!(f.agent || f.model || f.user);
   const rangeTotal = options?.totals.calls ?? 0;
 
   const nDays = rangeDays(f.range, f.start_date, f.end_date);
-  const avgLabel = (count: number) =>
+  // `fmt` overrides the plain count (e.g. compact tokens).
+  const avgLabel = (count: number, fmt?: (n: number) => string) =>
     !f.start_date && f.range === "24h"
-      ? `${(count / 24).toFixed(1)}/hr avg`
-      : `${(count / nDays).toFixed(0)}/day avg`;
+      ? `${fmt ? fmt(count / 24) : (count / 24).toFixed(1)}/hr avg`
+      : `${fmt ? fmt(count / nDays) : (count / nDays).toFixed(0)}/day avg`;
   const inputPct = totals.total_tokens
     ? Math.round((totals.input_tokens / totals.total_tokens) * 100)
     : 0;
@@ -88,10 +84,34 @@ export function UsagePage() {
       <PageHeader
         title="Usage"
         description={
-          <>
-            LLM token usage for project{" "}
-            <span className="font-mono text-foreground">{projectName}</span>
-          </>
+          totals.calls > 0 && !summaryQ.isPlaceholderData ? (
+            <>
+              <span className="font-semibold text-foreground">
+                {fmtTokens(totals.total_tokens)} tokens
+              </span>{" "}
+              over {totals.calls.toLocaleString()} model calls{" "}
+              {f.start_date
+                ? "in the selected range"
+                : `in the last ${RANGE_LABEL[f.range]}`}
+              {scopeFiltered ? (
+                " matching these filters"
+              ) : (
+                <>
+                  {" "}
+                  for{" "}
+                  <span className="font-mono text-foreground">
+                    {projectName}
+                  </span>
+                </>
+              )}
+              .
+            </>
+          ) : (
+            <>
+              LLM token usage for project{" "}
+              <span className="font-mono text-foreground">{projectName}</span>
+            </>
+          )
         }
         actions={<DashboardRangePicker f={f} setF={setF} />}
       />
@@ -107,30 +127,50 @@ export function UsagePage() {
       />
       <UsageActiveChips f={f} setF={setF} />
 
-      <div className="mb-4 grid grid-cols-4 gap-4">
-        <KpiCard
-          label="Calls"
-          icon={Activity}
-          value={totals.calls.toLocaleString()}
-          sub={avgLabel(totals.calls)}
-        />
-        <KpiCard
-          label="Input tokens"
-          icon={ArrowDownToLine}
-          value={fmtTokens(totals.input_tokens)}
-          sub={`${inputPct}% of total`}
-        />
-        <KpiCard
-          label="Output tokens"
-          icon={ArrowUpFromLine}
-          value={fmtTokens(totals.output_tokens)}
-          sub={`${outputPct}% of total`}
-        />
-        <KpiCard
-          label="Total tokens"
-          icon={Sigma}
-          value={fmtTokens(totals.total_tokens)}
-          sub={avgLabel(totals.total_tokens)}
+      <div className="mb-4">
+        <StatStrip
+          stats={[
+            {
+              key: "calls",
+              label: "Model calls",
+              value: totals.calls.toLocaleString(),
+              sub: avgLabel(totals.calls),
+            },
+            {
+              key: "input",
+              label: "Input tokens",
+              swatchClass: "bg-primary/40",
+              value: fmtTokens(totals.input_tokens),
+              sub: `${inputPct}% of total`,
+            },
+            {
+              key: "output",
+              label: "Output tokens",
+              swatchClass: "bg-primary",
+              value: fmtTokens(totals.output_tokens),
+              sub: `${outputPct}% of total`,
+            },
+            {
+              key: "total",
+              label: "Total tokens",
+              value: fmtTokens(totals.total_tokens),
+              sub: avgLabel(totals.total_tokens, (n) =>
+                fmtTokens(Math.round(n)),
+              ),
+            },
+          ]}
+          split={[
+            {
+              key: "input",
+              value: totals.input_tokens,
+              className: "bg-primary/40",
+            },
+            {
+              key: "output",
+              value: totals.output_tokens,
+              className: "bg-primary",
+            },
+          ]}
         />
       </div>
 
