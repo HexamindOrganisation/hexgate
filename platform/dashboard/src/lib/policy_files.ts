@@ -19,7 +19,12 @@ import {
 } from "@tanstack/react-query";
 
 import { useActive } from "./active";
-import { api, type PolicyFileDraft, type PolicyFileRead } from "./api";
+import {
+  api,
+  type PolicyFileDraft,
+  type PolicyFileRead,
+  type PolicyMatrixCell,
+} from "./api";
 import { referencesImport, rewriteImportPath } from "./imports";
 import { useOrgs } from "./orgs";
 
@@ -49,6 +54,29 @@ export function usePolicyFiles(projectId: string | null) {
     queryFn: () => api.listPolicyFiles(projectId as string),
     enabled: !!projectId,
     staleTime: 30_000,
+  });
+}
+
+/** Chip / cell colours for an engine matrix mode. */
+export const MATRIX_MODE_TONE: Record<PolicyMatrixCell["mode"], string> = {
+  allow: "bg-muted text-foreground",
+  deny: "bg-deny/15 text-deny",
+  approval: "bg-approval/15 text-approval",
+};
+
+/** Roles x tools for one executing agent, as the engine tabulates it. Keyed
+ * under "policy-resolve" so a save's `invalidateDerived` refreshes it too. */
+export function usePolicyMatrix(
+  projectId: string | null,
+  agent: string,
+  enabled = true,
+) {
+  return useQuery({
+    queryKey: ["policy-resolve", projectId, "matrix", agent] as const,
+    queryFn: () => api.getPolicyMatrix(projectId as string, agent),
+    // Classic (non-compose) projects have no matrix; don't fire the 422.
+    enabled: !!projectId && enabled,
+    retry: false,
   });
 }
 

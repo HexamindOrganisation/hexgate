@@ -1,5 +1,11 @@
 import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
+import {
+  MATRIX_MODE_TONE,
+  usePolicyFiles,
+  usePolicyMatrix,
+} from "@/lib/policy_files";
+import { ENTRY_FILE } from "@/lib/file_tree";
 import { useAgentSelection } from "@/lib/agent_param";
 import {
   Ban,
@@ -15,6 +21,7 @@ import {
   type AgentManifestView,
   type GuardDefinition,
   type InputSchema,
+  type PolicyMatrixCell,
   type SkillDefinition,
   type SkillResources,
   type ToolDefinition,
@@ -66,29 +73,28 @@ export function AgentsPage() {
   const active = manifests.data?.find((m) => m.name === selectedName);
   // 24h activity per agent; shares Home's cache entry.
   const summary = useAuditSummary24h(scope.projectId, { poll: true });
-  // The composed policy for the selected agent, every role in one call.
-  const resolvedQ = useQuery({
-    queryKey: ["policy", "resolve", scope.projectId, active?.name],
-    enabled: !!scope.projectId && !!active,
-    queryFn: () =>
-      api.resolvePolicy(scope.projectId as string, undefined, active!.name),
-    retry: false,
-  });
+  // Roles x tools for the selected agent, as the engine tabulates them.
+  // Only projects with a policy.yaml compose; others have no matrix.
+  const policyFiles = usePolicyFiles(scope.projectId);
+  const modular = !!policyFiles.data?.some((f) => f.name === ENTRY_FILE);
+  const matrix = usePolicyMatrix(
+    scope.projectId,
+    active?.name ?? "",
+    modular && !!active,
+  ).data;
   const roleModes = useMemo(() => {
-    const resolved = resolvedQ.data;
-    if (!resolved) return undefined;
-    const roles = Object.keys(resolved).sort();
+    if (!matrix) return undefined;
     return (tool: string): RoleMode[] =>
-      roles.map((role) => {
-        const tp = resolved[role]?.tools?.[tool];
+      matrix.roles.map((role) => {
+        const cell = matrix.cells[tool]?.[role];
         return {
           role,
-          mode: tp?.mode ?? resolved[role]?.default_policy?.mode,
-          constrained: (tp?.constraints?.length ?? 0) > 0,
-          defaulted: !tp,
+          mode: (cell ?? matrix.defaults[role])?.mode,
+          constraint: cell?.constraint ?? null,
+          defaulted: !cell,
         };
       });
-  }, [resolvedQ.data]);
+  }, [matrix]);
   const byAgent = useMemo(
     () => new Map(summary.data?.by_agent.map((r) => [r.key, r])),
     [summary.data],
@@ -357,8 +363,9 @@ function ManifestView({
 /** How each role treats one tool, from the composed policy. */
 interface RoleMode {
   role: string;
-  mode: string | undefined;
-  constrained: boolean;
+  mode: PolicyMatrixCell["mode"] | undefined;
+  /** The engine's condition text, when the cell is constrained. */
+  constraint: string | null;
   /** Not listed for the role: its default applies. */
   defaulted: boolean;
 }
@@ -555,12 +562,6 @@ function SystemPromptSection({
   );
 }
 
-const ROLE_TONE: Record<string, string> = {
-  allow: "bg-muted text-foreground",
-  deny: "bg-deny/15 text-deny",
-  approval_required: "bg-approval/15 text-approval",
-};
-
 function ToolRow({
   tool,
   roles,
@@ -580,19 +581,18 @@ function ToolRow({
                 title={
                   r.defaulted
                     ? `${r.role}: not listed, default applies`
-                    : r.constrained
-                      ? `${r.role}: allowed with constraints`
+                    : r.constraint
+                      ? `${r.role}: ${r.constraint}`
                       : undefined
                 }
                 className={cn(
                   "rounded-md px-2 py-0.5 text-[11px] font-medium",
-                  r.mode ? ROLE_TONE[r.mode] : "text-muted-foreground",
+                  r.mode ? MATRIX_MODE_TONE[r.mode] : "text-muted-foreground",
                   r.defaulted && "opacity-50",
                 )}
               >
-                <span className="font-mono">{r.role}</span>{" "}
-                {r.mode === "approval_required" ? "approval" : (r.mode ?? "—")}
-                {r.constrained && "*"}
+                <span className="font-mono">{r.role}</span> {r.mode ?? "—"}
+                {r.constraint && "*"}
               </span>
             ))}
           </span>
