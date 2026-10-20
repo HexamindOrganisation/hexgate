@@ -154,7 +154,9 @@ class ClientMetadataCache:
                 client_id,
                 type(exc.__cause__ or exc).__name__,
             )
-            self._documents.put(client_id, stale, FAILURE_TTL_SECONDS)
+            # Never past stale_until, even when the last retry falls just before it.
+            ttl = min(FAILURE_TTL_SECONDS, stale.stale_until - self._clock())
+            self._documents.put(client_id, stale, ttl)
             return stale.metadata
         else:
             stale_until = self._clock() + DOCUMENT_TTL_SECONDS + MAX_STALE_SECONDS
@@ -171,8 +173,19 @@ def _checked(client_id: str, document: dict[str, Any]) -> ClientMetadata:
         raise ClientMetadataError(
             "client metadata document's client_id does not match its URL"
         )
+    # A metadata document is public, so its client can hold no secret: the
+    # token endpoint can only authenticate it as "none" (with PKCE). Any other
+    # method would pass /authorize and consent, then fail every /token call.
+    if document.get("token_endpoint_auth_method", "none") not in ("none", None):
+        raise ClientMetadataError(
+            "client metadata document's token_endpoint_auth_method must be none"
+        )
+    if document.get("client_secret") is not None:
+        raise ClientMetadataError("client metadata document carries a client_secret")
     try:
-        metadata = ClientMetadata.model_validate(document)
+        metadata = ClientMetadata.model_validate(
+            {**document, "token_endpoint_auth_method": "none"}
+        )
     except ValidationError as exc:
         fields = sorted({str(error["loc"][0]) for error in exc.errors()})
         raise ClientMetadataError(

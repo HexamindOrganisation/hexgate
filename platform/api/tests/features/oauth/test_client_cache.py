@@ -83,6 +83,7 @@ async def test_get_happy_path(cache, serves):
 
     assert metadata.client_id == CLIENT_ID
     assert metadata.redirect_uris == [AnyUrl("http://localhost/cb")]
+    assert metadata.token_endpoint_auth_method == "none"
     assert fetches.insecure_flags == [False]
 
 
@@ -99,9 +100,18 @@ async def test_when_document_names_another_client_id_then_refused(cache, serves)
         ({"redirect_uris": None}, "no redirect_uris"),
         ({"redirect_uris": []}, "invalid fields: redirect_uris"),
         ({"redirect_uris": ["not a url"]}, "invalid fields: redirect_uris"),
-        ({"token_endpoint_auth_method": "magic"}, "token_endpoint_auth_method"),
+        ({"token_endpoint_auth_method": "private_key_jwt"}, "must be none"),
+        ({"token_endpoint_auth_method": "client_secret_post"}, "must be none"),
+        ({"client_secret": "s3cret"}, "carries a client_secret"),
     ],
-    ids=["null-redirects", "no-redirects", "bad-redirect", "bad-auth-method"],
+    ids=[
+        "null-redirects",
+        "no-redirects",
+        "bad-redirect",
+        "private-key-jwt",
+        "client-secret-post",
+        "client-secret",
+    ],
 )
 async def test_when_document_invalid_then_refused(cache, serves, fields, message):
     serves(lambda _: _document(**fields))
@@ -214,7 +224,8 @@ async def test_when_stale_for_an_hour_then_refused(cache, serves, clock):
     clock.now = DOCUMENT_TTL_SECONDS + MAX_STALE_SECONDS - 1
     await cache.get(CLIENT_ID)
 
-    clock.now += FAILURE_TTL_SECONDS
+    # The re-arm lasts until the limit only, not a full minute past it.
+    clock.now = DOCUMENT_TTL_SECONDS + MAX_STALE_SECONDS
     for _ in range(2):
         with pytest.raises(ClientMetadataError, match="timed out"):
             await cache.get(CLIENT_ID)
